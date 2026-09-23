@@ -6,7 +6,7 @@
 
 [![Status: Concept / Active Development](https://img.shields.io/badge/Status-Concept%20%2F%20WIP-orange.svg)](#status)
 [![VRAM Target](https://img.shields.io/badge/VRAM-2--4GB-green.svg)](#overview)
-[![Paper](https://img.shields.io/badge/Paper-GCSO%20Whitepaper-blue.svg)](./docs/paper/ja/GCSO_JP.md)
+[![Paper](https://img.shields.io/badge/Paper-GCSO%20Whitepaper-blue.svg)](./docs/paper/ja/GCSO.md)
 [![License: MIT / Apache-2.0](https://img.shields.io/badge/License-MIT%20%2F%20Apache--2.0-blue.svg)](#license)
 
 **LiminiKa** は、VRAM 2〜4GBの極小・低リソースローカル環境において、自律的かつ長期的なキャラクターペルソナとの対話を可能にする軽量コアエンジンと、そのための宣言的対話言語（DSL）の構想・開発プロジェクトです。
@@ -46,7 +46,7 @@ LiminiKaのバックボーンには、幾何学・数理的に定式化された
 
 🔬 **学術・技術論文（ホワイトペーパー）はこちら:**
 
-より詳細な理論、C-ABIインターフェース仕様、アルゴリズム定式化については [GCSO_JP.md](./docs/paper/ja/GCSO.md)をご参照ください。
+より詳細な理論、C-ABIインターフェース仕様、アルゴリズム定式化については [GCSO.md](./docs/paper/ja/GCSO.md)をご参照ください。
 
 ---
 
@@ -159,7 +159,7 @@ LiminiKa/
 ## 開発ロードマップ (Roadmap)
 
 * [x] **Phase 1: アーキテクチャ・数理モデルの定式化**
-  * GCSO Whitepaper ([GCSO_JP.md](./docs/paper/ja/GCSO.md))の策定
+  * GCSO Whitepaper ([GCSO.md](./docs/paper/ja/GCSO.md))の策定
 
 * [ ] **Phase 2: プロトタイプ & PoC実装**
   * C/C++ / CUDA による基本 DPSR カーネルの検証
