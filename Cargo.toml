@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "src/dsl",
+    "src/cli",
+]
+resolver = "2"

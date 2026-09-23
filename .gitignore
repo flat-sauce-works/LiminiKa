@@ -1,0 +1,91 @@
+# ===================================================================
+# LiminiKa Project .gitignore
+# Core Engine: Geometric Cellular Sheaf Orchestrator (GCSO)
+# ===================================================================
+
+# -------------------------------------------------------------------
+# Rust Build Artifacts & Cargo
+# -------------------------------------------------------------------
+/target/
+**/*.rs.bk
+Cargo.lock.minor
+
+# -------------------------------------------------------------------
+# C / C++ / CUDA Build Artifacts & CMake
+# -------------------------------------------------------------------
+/build/
+/cmake-build-*/
+/bin/
+/lib/
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+*.exp
+*.exe
+
+# -------------------------------------------------------------------
+# LLM Model Weights, Datasets, & Adapters (Large Files)
+# -------------------------------------------------------------------
+*.bin
+*.safetensors
+*.gguf
+*.ggml
+*.pt
+*.pth
+*.onnx
+models/
+weights/
+adapters/
+
+# -------------------------------------------------------------------
+# LiminiKa / GCSO Runtime State & Binary Containers
+# -------------------------------------------------------------------
+*.gcso
+*.gcsopack
+containers/
+deployments/
+
+# -------------------------------------------------------------------
+# Environment Variables & Secret Configuration
+# -------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# -------------------------------------------------------------------
+# Logs & Temporary Files
+# -------------------------------------------------------------------
+*.log
+/logs/
+/tmp/
+/temp/
+
+# -------------------------------------------------------------------
+# OS & Editor Specific Files
+# -------------------------------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# IDEs & Editors
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*~
