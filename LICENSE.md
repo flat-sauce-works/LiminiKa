@@ -14,3 +14,9 @@ You can select whichever license best fits your project needs.
 All documentation, text, and educational content are licensed under:
 
 - **Creative Commons Attribution 4.0 International (CC BY 4.0)** (see [LICENSE-CC-BY-4.0](LICENSE-CC-BY-4.0))
+
+---
+
+By submitting a pull request or contribution, you agree that your work will be licensed under the project's respective open-source licenses listed above.
+
+---
