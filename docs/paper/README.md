@@ -9,7 +9,7 @@ This directory contains the whitepaper and technical documentation for **GCSO (G
 | Document | Language | Link | Description |
 | :--- | :--- | :--- | :--- |
 | **GCSO Whitepaper (English)** | English | [en/GCSO.md](./en/GCSO.md) | Architecture Proposal & Mathematical Formulation |
-| **GCSO Whitepaper (Japanese)** | Japanese | [ja/GCSO.md](./ja/GCSO.md) | Architecture Proposal & Mathematical Formulation (Original) |
+| **GCSO Whitepaper (Japanese)** | Japanese | [ja/GCSO.md](./ja/GCSO.md) | Architecture Proposal & Mathematical Formulation |
 
 ---
 
