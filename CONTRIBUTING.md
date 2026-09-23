@@ -7,7 +7,7 @@ We warmly welcome all contributions, including bug reports, documentation update
 
 For detailed guidelines on code style, Git workflow, and architecture boundaries, please refer to:
 
-👉 **[Development Guidelines (docs/dev/guidelines.md)](docs/dev/guidelines.md)**
+👉 **[Development Guidelines](docs/dev/guidelines.md)**
 
 ## Quick Tips for Submitting PRs
 
