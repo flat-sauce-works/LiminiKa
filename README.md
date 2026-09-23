@@ -1,19 +1,19 @@
 # LiminiKa
 
-[English](README.md) | [Japanese](README_JP.md)
+[English](README.md) | [Japanese](README_ja.md)
 
 > **A lightweight local LLM core engine and DSL for long-term dialogue—bridging boundaries to connect with non-real entities.**
 
 [![Status: Concept / Active Development](https://img.shields.io/badge/Status-Concept%20%2F%20WIP-orange.svg)](#status)
 [![VRAM Target](https://img.shields.io/badge/VRAM-2--4GB-green.svg)](#overview)
-[![Paper](https://img.shields.io/badge/Paper-GCSO%20Whitepaper-blue.svg)](./docs/paper/en/GCSO_EN.md)
+[![Paper](https://img.shields.io/badge/Paper-GCSO%20Whitepaper-blue.svg)](./docs/paper/en/GCSO.md)
 [![License: MIT / Apache-2.0](https://img.shields.io/badge/License-MIT%20%2F%20Apache--2.0-blue.svg)](#license)
 
 **LiminiKa** is a conceptual and development project for a lightweight core engine and declarative dialogue domain-specific language (DSL) that enables autonomous, long-term dialogue with character personas in ultra-small, low-resource local environments with 2–4 GB VRAM.
 
 To address challenges such as attention saturation, physical context length limits, and hallucinations, it adopts the **GCSO (Geometric Cellular Sheaf Orchestrator)** architecture. This architecture integrates Dynamic Phase-Shifted RoPE (DPSR), sheaf-theoretic obstruction class control, and environment-mediated decentralized control (stigmergy) inspired by ant pheromone behaviors.
 
-> ⚠️ **Current Status**: This project is currently in the stage of **architectural design, mathematical model formulation ([GCSO Whitepaper](./docs/paper/en/GCSO_EN.md)), and active implementation of the core runtime and DSL parser (WIP)**.
+> ⚠️ **Current Status**: This project is currently in the stage of **architectural design, mathematical model formulation ([GCSO Whitepaper](./docs/paper/en/GCSO.md)), and active implementation of the core runtime and DSL parser (WIP)**.
 
 ---
 
@@ -28,7 +28,7 @@ Without forcefully rewriting model weights, LiminiKa dynamically steers the late
 As a result, even in standard local environments like gaming PCs or MacBooks (2–4 GB+ VRAM), users can engage in long-term dialogue—spanning days or months—while maintaining contextual memory and persona consistency, all without exhausting VRAM.
 
 > 📘 **Mathematical & Theoretical Specification (Whitepaper)**
-> Details on the mathematical formulation and low-layer control architecture underpinning this project are published in the whitepaper [Geometric Cellular Sheaf Orchestrator (GCSO)](./docs/paper/en/GCSO_EN.md) . Please refer to it as needed.
+> Details on the mathematical formulation and low-layer control architecture underpinning this project are published in the whitepaper [Geometric Cellular Sheaf Orchestrator (GCSO)](./docs/paper/en/GCSO.md) . Please refer to it as needed.
 
 ---
 
@@ -47,7 +47,7 @@ Separately manages conversation context as anchor memory (I-Cache) and phase mot
 
 🔬 **Academic & Technical Paper (Whitepaper):**
 
-For more detailed theory, C-ABI interface specifications, and algorithmic formulations, please refer to [GCSO_EN.md](./docs/paper/en/GCSO_EN.md) .
+For more detailed theory, C-ABI interface specifications, and algorithmic formulations, please refer to [GCSO.md](./docs/paper/en/GCSO.md) .
 
 ---
 
@@ -147,13 +147,13 @@ LiminiKa/
 │   │   └── en/             # English Documentation
 │   └── paper/              # Papers & Specifications (Whitepaper)
 │       ├── ja/ 
-│       │   └── GCSO_JP.md  # GCSO Architecture Whitepaper (Japanese)
+│       │   └── GCSO.md     # GCSO Architecture Whitepaper (Japanese)
 │       └── en/
-│           └── GCSO_EN.md  # GCSO Architecture Whitepaper (English)
+│           └── GCSO.md     # GCSO Architecture Whitepaper (English)
 ├── src/                    # Core Runtime & DSL Parser Implementation (WIP)
 ├── examples/               # DSL Sample Code (WIP)
 ├── README.md               # English README (Default)
-└── README_JP.md            # Japanese README
+└── README_ja.md            # Japanese README
 
 ```
 
@@ -162,7 +162,7 @@ LiminiKa/
 ## Development Roadmap
 
 * [x] **Phase 1: Architecture & Mathematical Model Formulation**
-  * Formulation of the [GCSO Whitepaper (GCSO_EN.md)](./docs/paper/en/GCSO_EN.md)
+  * Formulation of the [GCSO Whitepaper (GCSO.md)](./docs/paper/en/GCSO.md)
 
 * [ ] **Phase 2: Prototype & PoC Implementation**
   * Validation of basic DPSR kernels in C/C++ / CUDA
