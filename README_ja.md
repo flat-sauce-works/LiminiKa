@@ -1,6 +1,6 @@
 # LiminiKa
 
-[English](README.md) | [Japanese](README_JP.md)
+[English](README.md) | [Japanese](README_ja.md)
 
 > **境界（Limina）を超え、幻想と繋がるためのローカルLLM長期対話コアエンジン & DSL**
 
@@ -13,7 +13,7 @@
 
 アテンションの飽和やコンテキスト長の物理的制限、ハルシネーションといった課題に対し、幾何学的位相変調（DPSR）、層論的障害類制御、アリのフェロモン行動に着想を得た環境媒介型分散制御（スティグマジー）を統合した **GCSO (Geometric Cellular Sheaf Orchestrator)** アーキテクチャを採用しています。
 
-> ⚠️ **現在のステータス**: 本プロジェクトは現在、**アーキテクチャ設計・数理モデルの定式化（[GCSO Whitepaper](./docs/paper/ja/GCSO_JP.md)）、コアランタイムおよびDSLパーサーの実装を進めている段階（WIP）** です。
+> ⚠️ **現在のステータス**: 本プロジェクトは現在、**アーキテクチャ設計・数理モデルの定式化（[GCSO Whitepaper](./docs/paper/ja/GCSO.md)）、コアランタイムおよびDSLパーサーの実装を進めている段階（WIP）** です。
 
 ---
 
@@ -27,7 +27,7 @@ LiminiKaは、モデルの重みを無理に書き換えることなく、ロー
 これにより、一般的なゲーミングPCやMacBookなどのローカル環境（VRAM 2〜4GB〜）でもメモリやVRAMを圧迫することなく、**何日・何ヶ月にもわたるキャラクターとの文脈・記憶・人格の一貫性を維持した対話体験** が可能になります。
 
 > 📘 **数理・理論仕様書（Whitepaper）**  
-> 本プロジェクトの基盤となる数理的定式化や低レイヤー制御アーキテクチャの詳細は、ホワイトペーパー [Geometric Cellular Sheaf Orchestrator (GCSO)](./docs/paper/ja/GCSO_JP.md) にて公開しています。必要に応じてご参照ください。
+> 本プロジェクトの基盤となる数理的定式化や低レイヤー制御アーキテクチャの詳細は、ホワイトペーパー [Geometric Cellular Sheaf Orchestrator (GCSO)](./docs/paper/ja/GCSO.md) にて公開しています。必要に応じてご参照ください。
 
 ---
 
@@ -46,7 +46,7 @@ LiminiKaのバックボーンには、幾何学・数理的に定式化された
 
 🔬 **学術・技術論文（ホワイトペーパー）はこちら:**
 
-より詳細な理論、C-ABIインターフェース仕様、アルゴリズム定式化については [GCSO_JP.md](./docs/paper/ja/GCSO_JP.md)をご参照ください。
+より詳細な理論、C-ABIインターフェース仕様、アルゴリズム定式化については [GCSO_JP.md](./docs/paper/ja/GCSO.md)をご参照ください。
 
 ---
 
@@ -144,13 +144,13 @@ LiminiKa/
 │   │   └── en/             # 英語版ドキュメント
 │   └── paper/              # 論文・仕様書（Whitepaper）
 │       ├── ja/ 
-│       │   └── GCSO_JP.md  # GCSO アーキテクチャ・ホワイトペーパー（日本語）
+│       │   └── GCSO.md     # GCSO アーキテクチャ・ホワイトペーパー（日本語）
 │       └── en/
-│           └── GCSO_EN.md  # GCSO アーキテクチャ・ホワイトペーパー (英語)
+│           └── GCSO.md     # GCSO アーキテクチャ・ホワイトペーパー (英語)
 ├── src/                    # コアランタイム & DSL パーサー実装 (WIP)
 ├── examples/               # DSL サンプルコード (WIP)
 ├── README.md               # 英語版 README (Default)
-└── README_JP.md            # 日本語版 README
+└── README_ja.md            # 日本語版 README
 
 ```
 
@@ -159,7 +159,7 @@ LiminiKa/
 ## 開発ロードマップ (Roadmap)
 
 * [x] **Phase 1: アーキテクチャ・数理モデルの定式化**
-  * GCSO Whitepaper ([GCSO_JP.md](./docs/paper/ja/GCSO_JP.md))の策定
+  * GCSO Whitepaper ([GCSO_JP.md](./docs/paper/ja/GCSO.md))の策定
 
 * [ ] **Phase 2: プロトタイプ & PoC実装**
   * C/C++ / CUDA による基本 DPSR カーネルの検証
