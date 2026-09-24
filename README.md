@@ -183,11 +183,11 @@ LiminiKa is an **experimental, proof-of-concept (PoC) project** born out of pers
 
 ### 💬 Discussions & Forks
 * **Discussions & Ideas (Warmly Welcome!):**  
-  Feel free to join the **[Discussions]** to share ideas, ask questions about the mathematical model, or propose alternative architectural approaches.
+  Feel free to join the **[Discussions](https://github.com/flat-sauce-works/LiminiKa/discussions)** to share ideas, ask questions about the mathematical model, or propose alternative architectural approaches.
 * **Forks & Independent Experiments:**  
   You are more than welcome to **fork** this repository, test your own math/kernel implementations, or build custom personas and DSL extensions.
 * **Pull Requests (PRs):**  
-  As I am currently building the initial core architecture and module layout, please open an **Issue** or start a thread in **Discussions** before submitting large code PRs to avoid conflicting work.
+  As I am currently building the initial core architecture and module layout, please open an **[Issues](https://github.com/flat-sauce-works/LiminiKa/issues)** or start a thread in **[Discussions](https://github.com/flat-sauce-works/LiminiKa/discussions)** before submitting large code PRs to avoid conflicting work.
 
 ### ⚠️ Technical Disclaimer
 * This project prioritizes **exploration and proof-of-concept (PoC) implementation** over complete academic rigor.
