@@ -194,7 +194,7 @@ LiminiKa は、個人としての情熱とアーキテクチャ探求から生�
 * **フォーク & 独立した実験：**
 本リポジトリを自由にフォーク（Fork）し、独自の数理モデル/カーネル実装のテストや、カスタムペルソナ・DSL拡張機能の構築を行うことを心から歓迎します。
 * **プルリクエスト（PR）：**
-現在、初期のコアアーキテクチャおよびモジュールレイアウトの構築を進めています。作業の衝突を防ぐため、大きなコード変更を伴うPRを送信する前に、**[Issues](https://github.com/flat-sauce-works/LiminiKa/issues)** を作成するか **[Discussions](https://github.com/flat-sauce-works/LiminiKa/discussions)** でスレッドを開始してください。
+現在、初期のコアアーキテクチャおよびモジュールレイアウトの構築を進めています。作業の衝突を防ぐため、大きなコード変更を伴うPRを送信する前に、**[Issues](https://github.com/flat-sauce-works/LiminiKa/issues)** の作成か **[Discussions](https://github.com/flat-sauce-works/LiminiKa/discussions)** でのご相談をお願いいたします。
 
 ### ⚠️ 技術的免責事項 (Technical Disclaimer)
 
