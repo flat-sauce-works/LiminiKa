@@ -1,6 +1,3 @@
-`README_ja.md` の構成・トーン・ニュアンスをそのまま維持し、完全な英文として仕上げた `README.md` の全文です。
-
-```markdown
 # LiminiKa
 
 [English](README.md) | [Japanese](README_ja.md)
