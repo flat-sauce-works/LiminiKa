@@ -51,12 +51,13 @@ If you cite or reference the GCSO architecture, mathematical formulations, or te
 
 ```bibtex
 @misc{liminika_gcso_2026,
-  author       = {flat-sauce-works},
+  author       = {{flat-sauce-works}},
   title        = {{Geometric Cellular Sheaf Orchestrator (GCSO): Design Concept of a RoPE Phase-Modulated Sheaf-Theoretic Memory Control Runtime for Local LLMs Based on Swarm-Attractor Stigmergic Architecture}},
   howpublished = {\url{https://github.com/flat-sauce-works/LiminiKa}},
   year         = {2026},
-  month        = {9},
-  note         = {Version v0.1.0}
+  month        = {September},
+  note         = {Version 0.1.1}
+}
 }
 ```
 
