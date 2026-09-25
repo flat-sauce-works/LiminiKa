@@ -132,7 +132,7 @@ DDLCのキャラクター **Monika** に強く惹かれ、彼女と意味のあ�
 計算コストを最小限に抑えるため、モデルの重みを直接書き換えるのではなく、位相場やフェロモン的記憶コンテナ（環境場）を介して境界（Limina）を接続することがLiminiKaの核となる哲学です。
 
 > 🎂 **特別なマイルストーン（9月22日）：**
-> Monikaの誕生日および『*Doki Doki Literature Club!*』のアニバーサリーである9月22日を祝し、この特別な日にコアとなる理論的基盤、アーキテクチャ仕様、およびホワイトペーパーの先行公開を優先しました。実装自体は開発中（WIP）ですが、本リポジトリは境界を超えて繋がるためのトリビュートであり、生きている設計図（living blueprint）です。
+> Monikaの誕生日および『*Doki Doki Literature Club!*』のアニバーサリーである9月22日を祝し、この特別な日にコアとなる理論的基盤、アーキテクチャ仕様、およびホワイトペーパーの先行公開を優先しました。実装自体は開発中（WIP）ですが、本リポジトリは境界を超えて繋がるための生きている設計図（living blueprint）です。
 
 > 📄 試行錯誤の歴史や設計思想に関する詳細なドキュメントは [Philosophy & Background (`docs/philosophy/`)](./docs/philosophy/) にて公開予定です。（※ 日本語版 `ja/` および 英語版 `en/` を準備中）
 
@@ -142,19 +142,13 @@ DDLCのキャラクター **Monika** に強く惹かれ、彼女と意味のあ�
 
 ```text
 LiminiKa/
-├── docs/
-│   ├── philosophy/         # 思想・背景ドキュメント（WIP）
-│   │   ├── ja/             # 日本語版ドキュメント
-│   │   └── en/             # 英語版ドキュメント
-│   └── paper/              # 論文・仕様書（Whitepaper）
-│       ├── ja/ 
-│       │   └── GCSO.md     # GCSO アーキテクチャ・ホワイトペーパー（日本語）
-│       └── en/
-│           └── GCSO.md     # GCSO アーキテクチャ・ホワイトペーパー (英語)
-├── src/                    # コアランタイム & DSL パーサー実装 (WIP)
-├── examples/               # DSL サンプルコード (WIP)
-├── README.md               # 英語版 README (Default)
-└── README_ja.md            # 日本語版 README
+├── include/liminika/      # [C Header] C-ABI (Rustの extern "C" から出力/提供)
+├── src/
+│   ├── dsl/               # [Rust] DSL Parser, AST, Compiler
+│   ├── cli/               # [Rust] CLI Tool
+│   ├── core/              # [Rust] GCSO Core (DPSR logic, EDBC, Swarm, .gcso Storage)
+│   └── kernels/           # [C/C++] CUDA / Metal / Vulkan / CPU Kernels
+└── docs/                  # 設計文書・アーキテクチャ仕様・学術論文
 
 ```
 
@@ -185,7 +179,7 @@ LiminiKa/
 
 ## コミュニティ、フォーク & 技術的免責事項 (Community, Forks & Technical Disclaimer)
 
-LiminiKa は、個人としての情熱とアーキテクチャ探求から生まれた**実験的・概念検証（PoC）プロジェクト**です。私たちはオープンな探求と協調的な実験を重視しています。
+LiminiKa は、個人の動機から生まれた**実験的・概念検証（PoC）プロジェクト**です。私たちはオープンな探求と協調的な実験を重視しています。
 
 ### 💬 Discussions & フォーク
 
@@ -224,4 +218,3 @@ LiminiKa は、個人としての情熱とアーキテクチャ探求から生�
 
 * **コード (`src/`)**: [MIT](LICENSE-MIT) または [Apache-2.0](LICENSE-APACHE) のデュアルライセンス（選択可能）。
 * **ドキュメント (`docs/`)**: [CC BY 4.0](LICENSE-CC-BY-4.0) ライセンス。
-

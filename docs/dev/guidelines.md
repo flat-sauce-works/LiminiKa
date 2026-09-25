@@ -1,179 +1,88 @@
 # Development Guidelines
 
-This document outlines a lightweight set of guidelines for the LiminiKa project. Designed for solo development and open-source collaboration, it aims to serve as a helpful guide rather than a strict set of rules—prioritizing developer comfort, creative freedom, and mutual respect over rigid enforcement.
+Welcome to the LiminiKa development guidelines! This document provides a light, welcoming, and low-pressure framework for working on LiminiKa.
+
+LiminiKa was born as a casual, experimental project. Our primary goal is to maintain a relaxed, comfortable, and pressure-free space where anyone can experiment, test ideas, and contribute at their own pace. The **only essential, non-negotiable requirement** is maintaining clean licensing and intellectual property safety.
 
 ---
 
 ## 1. Core Principles
 
-* **Progress over Perfection**: Don't worry about writing perfectly clean code from day one. Prioritize building working prototypes (PoC) and experimental ideas, then refactor later when needed.
-* **Respect Every Contribution**: Whether it's a bug report, documentation fix, question, or experimental PR, all contributions and ideas are warmly welcomed and appreciated.
-* **Rely on Automation**: Avoid manual formatting. Standard CI workflows (`.github/workflows/ci.yml`) automatically handle build, linting, and formatting checks.
-* **Write for Your Future Self & Collaborators**: Leave brief inline notes when implementing complex logic or mathematical models (especially within GCSO modules).
-* **Keep FFI Boundaries Safe**: Since LiminiKa bridges C++ cores and Rust via C-ABI, pay extra attention when modifying files under `include/liminika/` or `src/dsl/src/ffi/`. Always verify ABI compatibility before pushing changes.
+* 🛡️ **Clean Licensing & IP Safety (The Primary Requirement)**: Keeping the codebase strictly free of third-party copyright issues and incompatible licenses is our only strictly enforced rule.
+* ☕ **No Pressure & Relaxed Workspace**: We intentionally avoid rigid processes, deadlines, or formal expectations. Feel free to work whenever and however you like.
+* 🛠️ **Freedom of Tooling & Workflow**: Use whatever editors, environments, or tools you feel most comfortable with. There are no restrictions on your personal workflow.
+* 🤝 **Welcoming Communication**: Questions, ideas, documentation tweaks, and PRs are warmly welcomed in **either English or Japanese**.
+* 🌐 **English Code Comments**: Please write in-code comments in English to keep the codebase consistent and globally accessible.
+* ⚙️ **Automated Checks via CI**: Formatting and basic checks are automated via GitHub Actions (`.github/workflows/ci.yml`). Don't worry about local lint perfection—just push your work and let CI handle it.
 
 ---
 
-## 2. Git Workflow
+## 2. License Compliance & Clean Code (The Only Strict Rule)
 
-For everyday development, feel free to **commit directly to the `develop` branch**.
+To protect LiminiKa and its users, all committed code must be completely free of incompatible licenses or third-party copyrighted code.
 
-> ⚠️ **Note on Direct Commits & CI Health ("Fix-it-first" Guidelines)**: Rapid iteration means things will occasionally break—and that is completely fine! Failing a CI check is never something to worry about or feel bad about. While we encourage testing locally when convenient, these guidelines are just helpful habits, not rigid rules. If `develop` turns red, simply fix it whenever you have time before stacking new features.
+### What is NOT Allowed
 
-### Branch Structure & Protection
+* **No Copyleft Code**: Do **NOT** copy, paste, or directly port code snippets from repositories or sources licensed under Copyleft terms (e.g., **GPL, AGPL, SSPL**).
+* **No Proprietary or Restrictive Code**: Do **NOT** include code under commercial/proprietary licenses, Non-Commercial restrictions (e.g., **CC-BY-NC**), or unknown terms.
 
-* **`develop` (Primary Workspace)**: The main branch for daily development and quick iterations. Direct commits are allowed here. Branch protection is kept minimal to maintain solo development velocity.
-* **`main` (Stable Release)**: Reserved for working milestones. Merges into `main` require stable, passing builds. Strict branch protection rules are enforced here to prevent direct accidental pushes.
+### Permissive Code & Workflow Freedom
 
-### Temporary Branches & PRs (Optional)
-
-When attempting larger features, risky refactoring, or submitting a PR, creating temporary branches is recommended:
-
-* **`feat/xxx`** : New features or experiments (e.g., `feat/dpsr-kernel`)
-* **`fix/xxx`**  : Bug fixes (e.g., `fix/abi-header`)
-* **`docs/xxx`** : Documentation updates (e.g., `docs/update-readme`)
-
-> 💡 **For Collaborators:** If you plan to work on significant architectural changes or new features, opening an Issue or starting a thread in GitHub Discussions beforehand is greatly appreciated to avoid overlapping effort!
-
-### Commit Messages (Recommended)
-
-Using simple prefixes helps keep the history readable, though it is not strictly enforced:
-
-* `feat:` A new feature
-* `fix:` A bug fix
-* `docs:` Documentation changes
-* `refactor:` Code changes that neither fix a bug nor add a feature
-* `style:` Formatting adjustments (`cargo fmt`, etc.)
-* `chore:` Maintenance tasks (updating configs, dependencies, etc.)
-
-*(Example: `feat: Add basic parser for LiminiKa DSL`)*
-
----
-
-## 3. Naming Conventions
-
-To maintain readability and cross-platform consistency across different operating systems (Linux, macOS, Windows):
-
-* **Prefer `snake_case` for filenames**: Lowercase `snake_case` is recommended for standard source files, headers, scripts, and documentation (e.g., `c_abi_spec.md`, `gcso_abi.h`).
-* **Tooling & Ecosystem Exceptions**: Standard names mandated or universally expected by tools and platforms should follow their respective conventions (e.g., `CMakeLists.txt`, `Cargo.toml`, `LICENSE-MIT`, `README.md`, or canonical paper titles like `GCSO.md`).
-* **Guideline over Rule**: This is a flexible recommendation aimed at preventing file-path issues, not a rigid constraint that should hinder rapid experimentation.
-
----
-
-## 4. Code Style & Formatting
-
-Formatting checks are automatically verified by CI. Manual formatting is not required, but running these tools locally before pushing is recommended.
-
-> 💡 **Editor Integration Note**: A `.clang-format` file is placed in the repository root. Editor extensions (VS Code, CLion, Neovim, etc.) can automatically format C/C++ files on save using this config. Rust formatting relies on standard `cargo fmt` without requiring any custom `rustfmt.toml`.
-
-### Rust (`src/dsl/`, `src/cli/`)
-
-* **Formatter**: Follows standard Rust community conventions (`cargo fmt`). No project-specific `rustfmt.toml` is used to minimize maintenance overhead.
-* **Linter**: CI enforces strict warnings as errors for `clippy`. Run the check locally to catch common issues early.
+* All third-party dependencies must strictly use permissive licenses compatible with **MIT / Apache-2.0** (e.g., MIT, Apache-2.0, BSD, zlib).
+* Ensure that all committed code represents original or permissively licensed work.
 
 ```bash
-cargo fmt                                             # Auto-format Rust code
-cargo clippy --workspace --all-targets -- -D warnings # Linter (matching CI checks)
-
-```
-
-### C / C++ / GPU Kernels (`src/core/`, `src/kernels/`, `include/`)
-
-Formatting rules are governed by the root `.clang-format` file. A target is integrated into CMake for convenience:
-
-```bash
-# Format C/C++/CUDA/Metal files via CMake target
-cmake --build build --target format
-
-# (Alternative) Direct script / command execution
-find include src/core src/kernels -type f \( -name "*.h" -o -name "*.hpp" -o -name "*.cpp" -o -name "*.cu" -o -name "*.metal" \) -exec clang-format -i {} +
+# Automated Rust dependency license check
+cargo deny check licenses
 
 ```
 
 ---
 
-## 5. C-ABI / Memory Layout Safety Checklist
+## 3. Git & Branching Workflow
 
-Because LiminiKa bridges C++ core implementations and Rust DSL via C-ABI, modifying shared definitions requires extra caution:
+To keep development lightweight, allow maintainers to iterate quickly, and prevent frustrating merge conflicts for everyone, we use a simple branching structure.
 
-When modifying files under `include/liminika/` or `src/dsl/src/ffi/`:
+### Branch Roles
 
-1. **Check Alignment & Struct Packing**: Verify memory alignment and type definitions in `include/liminika/types.h` (e.g., Q7 fixed-point representation).
-2. **Run Dual Test Suites**: Ensure both native C++ tests and Rust FFI bindings pass locally:
+* **`main` (Stable Releases)**: Holds stable, tagged release states. Direct pushes are restricted (Pull Requests required).
+* **`develop` (Integration Branch)**: The primary integration branch for ongoing work. Direct pushes to `develop` are allowed for maintainers to support fast personal iteration.
+
+### How to Contribute (Preventing Merge Conflicts)
+
+To make sure you can work comfortably on your own ideas without worrying about merge conflicts on `develop`:
+
+1. **Use a Personal Branch or Fork**: Non-maintainer contributions should always be developed on a personal feature branch (e.g., `feature/my-idea`) or from a personal fork.
+2. **Experiment Freely**: Feel free to commit and push WIP (Work In Progress) code on your branch. Broken builds during active experimentation are completely normal!
+3. **Open a PR to `develop**`: When you're ready to share your work, open a Pull Request targeting the `develop` branch.
+
+### Low-Friction PR Expectations
+
+* **No Lengthy PR Descriptions Required**: A single sentence explaining what was changed is more than enough.
+* **Draft / WIP PRs Welcome**: Feel free to open a Draft PR anytime to share progress or get early feedback, without any pressure to finish immediately.
+
+---
+
+## 4. Local Quick-Start Cheatsheet (Optional)
+
+CI automatically handles formatting and checks upon push. If you want to run quick local checks for your own convenience, here is a reference:
+
+### Rust Crates (`src/dsl/`, `src/cli/`)
 
 ```bash
-ctest --test-dir build     # Run C++ Core unit tests
-cargo test --workspace     # Run Rust DSL & FFI integration tests
+cargo check --workspace                               # Fast syntax & type check
+cargo fmt --all                                       # Auto-format all Rust code
+cargo clippy --workspace --all-targets -- -D warnings # Run linter
+cargo test --workspace                                # Run test suite
 
 ```
 
----
-
-## 6. Directory Layout Guide
-
-When adding new files, place them according to the repository structure:
-
-* **Public C-ABI Headers**: `include/liminika/` (GCSO ABI definitions and types)
-* **C/C++ Core Engine (GCSO Modules)**: `src/core/` (`abi/`, `edbc/`, `dpsr/`, `swarm/`, `srl/`, `storage/`, `math/`)
-* **GPU/CPU Acceleration Kernels**: `src/kernels/` (`common/`, `cuda/`, `metal/`, `vulkan/`, `cpu/`)
-* **Rust DSL Parser & Compiler**: `src/dsl/`
-* **Command Line Interface (CLI)**: `src/cli/`
-* **Documentation**: `docs/`
-* Whitepaper: `docs/paper/` (`ja/`, `en/`)
-* Philosophy: `docs/philosophy/` (`ja/`, `en/`)
-* Architecture & Specs: `docs/architecture/`
-* Developer Guides: `docs/dev/`
-* Roadmap & Tasks: `docs/roadmap/`
-
-
-* **Examples & DSL Scripts**: `examples/` (`c_api/`, `dsl/`)
-* **Test Suite**: `tests/` (`core/`, `ffi/`, `fixtures/`)
-* **Benchmarks**: `benches/`
-
----
-
-## 7. Licensing for Contributions
-
-By contributing to LiminiKa, you agree that your contributions will be licensed as follows:
-
-* **Code (`src/`, `include/`, `examples/`, `tests/`, `benches/`)**: Dual-licensed under **MIT** or **Apache-2.0**.
-* **Documentation (`docs/`, `*.md`)**: Licensed under **CC BY 4.0**.
-
-*By submitting a pull request, patch, or contribution, you explicitly agree that your work will be covered by the project's respective open-source licenses listed above (Inbound = Outbound Licensing).*
-
----
-
-## 8. Quick Command Cheatsheet
-
-**Daily Workflow (Working directly on `develop`):**
+### C/C++ Core & Kernels (`src/core/`, `src/kernels/`)
 
 ```bash
-git checkout develop
-# ... make changes ...
-
-# 1. Auto-format & Lint code
-cargo fmt
-cargo clippy --workspace --all-targets -- -D warnings
-cmake --build build --target format
-
-# 2. Run test suites
-cargo test --workspace
-ctest --test-dir build
-
-# 3. Commit and push
-git add .
-git commit -m "feat: Add xxx"
-
-```
-
-**Creating a temporary branch for risky experiments or PRs:**
-
-```bash
-git checkout develop
-git checkout -b feat/my-experiment
-# ... work and complete experiment ...
-git checkout develop
-git merge feat/my-experiment
-git branch -d feat/my-experiment  # Clean up temporary branch
+cmake -B build -S .                                   # Configure CMake build directory
+cmake --build build                                   # Build C/C++ targets
+ctest --test-dir build                                # Run C/C++ unit tests
+clang-format -i include/**/*.h src/core/**/*.cpp      # Auto-format C/C++ code
 
 ```
