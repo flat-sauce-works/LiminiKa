@@ -10,16 +10,56 @@ permissions:
   contents: write
 
 jobs:
+  # Path filtering job to detect modified file locations
+  changes:
+    name: Detect Changed Paths
+    runs-on: ubuntu-latest
+    outputs:
+      cpp: ${{ steps.filter.outputs.cpp }}
+      rust: ${{ steps.filter.outputs.rust }}
+      license: ${{ steps.filter.outputs.license }}
+      meta: ${{ steps.filter.outputs.meta }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Filter path changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            cpp:
+              - 'include/**'
+              - 'src/kernels/**'
+              - 'CMakeLists.txt'
+              - '.clang-format'
+              - '.github/workflows/ci.yml'
+            rust:
+              - 'src/cli/**'
+              - 'src/core/**'
+              - 'src/dsl/**'
+              - 'tests/**'
+              - 'benches/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'deny.toml'
+              - '.github/workflows/ci.yml'
+            license:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'deny.toml'
+              - 'LICENSE*'
+              - '.github/workflows/ci.yml'
+            meta:
+              - 'CITATION.cff'
+              - '.github/workflows/ci.yml'
+
   # Job 1: C/C++ Build, Format & Auto-commit
   cpp-build-format:
     name: C/C++ Build & Format Check
+    needs: changes
+    if: ${{ needs.changes.outputs.cpp == 'true' }}
     runs-on: ubuntu-latest
-    paths:
-      - "include/**"
-      - "src/kernels/**"
-      - "CMakeLists.txt"
-      - ".clang-format"
-      - ".github/workflows/ci.yml"
 
     steps:
       - name: Checkout repository
@@ -57,17 +97,9 @@ jobs:
   # Job 2: Rust Compilation, Linting & Unit Testing
   rust-check:
     name: Rust (Formatting, Lint & Test)
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-latest
-    paths:
-      - "src/cli/**"
-      - "src/core/**"
-      - "src/dsl/**"
-      - "tests/**"
-      - "benches/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "deny.toml"
-      - ".github/workflows/ci.yml"
 
     steps:
       - name: Checkout repository
@@ -87,16 +119,12 @@ jobs:
       - name: Run Rust tests
         run: cargo test --workspace
 
-  # Job 3: Fast License & Dependency Security Check via cargo-deny-action
+  # Job 3: License & Dependency Security Check
   license-safety-check:
     name: License & Dependency Safety
+    needs: changes
+    if: ${{ needs.changes.outputs.license == 'true' }}
     runs-on: ubuntu-latest
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "deny.toml"
-      - "LICENSE*"
-      - ".github/workflows/ci.yml"
 
     steps:
       - name: Checkout repository
@@ -110,10 +138,9 @@ jobs:
   # Job 4: Metadata & Citation Validation
   meta-citation-check:
     name: Validate Meta & Citation Files
+    needs: changes
+    if: ${{ needs.changes.outputs.meta == 'true' }}
     runs-on: ubuntu-latest
-    paths:
-      - "CITATION.cff"
-      - ".github/workflows/ci.yml"
 
     steps:
       - name: Checkout repository
