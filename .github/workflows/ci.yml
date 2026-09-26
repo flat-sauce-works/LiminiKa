@@ -104,15 +104,17 @@ jobs:
       - name: Auto-format C/C++ files
         run: |
           TARGET_DIRS="include src/kernels examples tests"
-          EXISTING_DIRS=""
+          FILES=""
           for d in $TARGET_DIRS; do
             if [ -d "$d" ]; then
-              EXISTING_DIRS="$EXISTING_DIRS $d"
+              FOUND=$(find "$d" -type f \( -name "*.h" -o -name "*.hpp" -o -name "*.c" -o -name "*.cpp" -o -name "*.cu" -o -name "*.metal" \) ! -name ".gitkeep" 2>/dev/null || true)
+              if [ -n "$FOUND" ]; then
+                FILES="$FILES $FOUND"
+              fi
             fi
           done
-          if [ -n "$EXISTING_DIRS" ]; then
-            find $EXISTING_DIRS -type f \( -name "*.h" -o -name "*.hpp" -o -name "*.c" -o -name "*.cpp" -o -name "*.cu" -o -name "*.metal" \) \
-              ! -name ".gitkeep" -exec clang-format -i {} +
+          if [ -n "$FILES" ]; then
+            clang-format -i $FILES
           fi
 
       - name: Commit format changes if any
@@ -146,7 +148,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate CITATION.cff
-        uses: citation-file-format/cffconvert-github-action@v2
+      - name: Setup Python environment
+        uses: actions/setup-python@v5
         with:
-          args: "--validate"
+          python-version: '3.x'
+
+      - name: Install cffconvert
+        run: pip install cffconvert
+
+      - name: Validate CITATION.cff
+        run: cffconvert --validate

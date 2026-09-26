@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Include directories
 include_directories(include)
 
-# Enable CTest and register a dummy passing test for CI
+# Enable CTest and register a dummy passing test for initial skeleton phase
 enable_testing()
 add_test(NAME liminika_dummy_test COMMAND ${CMAKE_COMMAND} -E true)
 
