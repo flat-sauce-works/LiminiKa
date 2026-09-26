@@ -8,10 +8,11 @@
 # -------------------------------------------------------------------
 /target/
 **/*.rs.bk
-Cargo.lock.minor
+*.profraw
+*.profdata
 
 # -------------------------------------------------------------------
-# C / C++ / CUDA Build Artifacts & CMake
+# C / C++ / CUDA Build Artifacts, CMake & Toolchains
 # -------------------------------------------------------------------
 /build/
 /cmake-build-*/
@@ -27,6 +28,23 @@ Cargo.lock.minor
 *.exp
 *.exe
 
+# CMake Generated Files
+CMakeCache.txt
+CMakeFiles/
+CMakeAutoGen/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+
+# Ninja Build Files
+.ninja_deps
+.ninja_log
+build.ninja
+
+# Build Caches & Tooling
+.ccache/
+compile_commands.json
+
 # -------------------------------------------------------------------
 # LLM Model Weights, Datasets, & Adapters (Large Files)
 # -------------------------------------------------------------------
@@ -37,17 +55,23 @@ Cargo.lock.minor
 *.pt
 *.pth
 *.onnx
-models/
-weights/
-adapters/
+models/*
+!models/.gitkeep
+weights/*
+!weights/.gitkeep
+adapters/*
+!adapters/.gitkeep
 
 # -------------------------------------------------------------------
 # LiminiKa / GCSO Runtime State & Binary Containers
 # -------------------------------------------------------------------
 *.gcso
 *.gcsopack
-containers/
-deployments/
+*.sta
+containers/*
+!containers/.gitkeep
+deployments/*
+!deployments/.gitkeep
 
 # -------------------------------------------------------------------
 # Environment Variables & Secret Configuration
@@ -68,7 +92,7 @@ deployments/
 /temp/
 
 # -------------------------------------------------------------------
-# OS & Editor Specific Files
+# OS, IDEs & Language Server Caches
 # -------------------------------------------------------------------
 # macOS
 .DS_Store
@@ -80,12 +104,14 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
-# IDEs & Editors
+# IDEs, Editors & LSP Caches
 .vscode/
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
 .idea/
+.clangd/
+.cache/
 *.swp
 *.swo
 *~
