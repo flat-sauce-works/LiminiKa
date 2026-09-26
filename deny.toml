@@ -1,4 +1,4 @@
-# deny.toml (Place in project root)
+# deny.toml (Project root)
 
 [licenses]
 # Ignore licensing checks for private workspace crates

@@ -1,6 +1,14 @@
 [workspace]
 members = [
+    "src/core",
     "src/dsl",
     "src/cli",
 ]
 resolver = "2"
+
+[workspace.package]
+version = "0.1.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["flat-sauce-works"]
+repository = "https://github.com/flat-sauce-works/LiminiKa"

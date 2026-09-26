@@ -1,0 +1,22 @@
+[package]
+name = "liminika-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "liminika_core"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[features]
+default = []
+cuda = []
+metal = []
+vulkan = []
+
+[build-dependencies]
+# Build script dependency for C/C++ compilation
+cc = "1.0"
+
+[dependencies]
+# Core runtime dependencies will be added here
