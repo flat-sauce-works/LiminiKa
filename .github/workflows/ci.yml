@@ -10,9 +10,16 @@ permissions:
   contents: write
 
 jobs:
+  # Job 1: C/C++ Build, Format & Auto-commit
   cpp-build-format:
     name: C/C++ Build & Format Check
     runs-on: ubuntu-latest
+    paths:
+      - "include/**"
+      - "src/kernels/**"
+      - "CMakeLists.txt"
+      - ".clang-format"
+      - ".github/workflows/ci.yml"
 
     steps:
       - name: Checkout repository
@@ -23,7 +30,7 @@ jobs:
       - name: Install build tools and clang-format
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake clang-format Ninja-build
+          sudo apt-get install -y cmake clang-format ninja-build
 
       - name: Configure CMake
         run: |
@@ -47,43 +54,20 @@ jobs:
           commit_message: "style(format): auto-format C/C++ codebase via CI [skip ci]"
           file_pattern: "include/* src/kernels/*"
 
-  meta-citation-check:
-    name: Validate Meta & Citation Files
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Validate CITATION.cff
-        run: |
-          python -c "import yaml; yaml.safe_load(open('CITATION.cff'))"
-
-  license-safety-check:
-    name: License & Dependency Safety
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
-
-      - name: Check license compliance
-        run: cargo deny check licenses
-
+  # Job 2: Rust Compilation, Linting & Unit Testing
   rust-check:
     name: Rust (Formatting, Lint & Test)
     runs-on: ubuntu-latest
+    paths:
+      - "src/cli/**"
+      - "src/core/**"
+      - "src/dsl/**"
+      - "tests/**"
+      - "benches/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+      - ".github/workflows/ci.yml"
 
     steps:
       - name: Checkout repository
@@ -102,3 +86,47 @@ jobs:
 
       - name: Run Rust tests
         run: cargo test --workspace
+
+  # Job 3: Fast License & Dependency Security Check via cargo-deny-action
+  license-safety-check:
+    name: License & Dependency Safety
+    runs-on: ubuntu-latest
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+      - "LICENSE*"
+      - ".github/workflows/ci.yml"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run cargo-deny check
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --workspace
+
+  # Job 4: Metadata & Citation Validation
+  meta-citation-check:
+    name: Validate Meta & Citation Files
+    runs-on: ubuntu-latest
+    paths:
+      - "CITATION.cff"
+      - ".github/workflows/ci.yml"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Validate CITATION.cff
+        run: |
+          python -c "import yaml; yaml.safe_load(open('CITATION.cff'))"
