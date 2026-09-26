@@ -216,5 +216,5 @@ We are currently constructing the initial core architecture and module layout. T
 
 ## License
 
-* **Code (`src/`)**: Dual-licensed under [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE) (user's choice).
-* **Documentation (`docs/`)**: [CC BY 4.0](LICENSE-CC-BY-4.0) License.
+* **Code**: Dual-licensed under [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE) (user's choice).
+* **Documentation**: [CC BY 4.0](LICENSE-CC-BY-4.0) License.

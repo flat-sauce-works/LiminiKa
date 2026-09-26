@@ -216,5 +216,5 @@ LiminiKa は、個人の動機から生まれた**実験的・概念検証（PoC
 
 ## ライセンス (License)
 
-* **コード (`src/`)**: [MIT](LICENSE-MIT) または [Apache-2.0](LICENSE-APACHE) のデュアルライセンス（選択可能）。
-* **ドキュメント (`docs/`)**: [CC BY 4.0](LICENSE-CC-BY-4.0) ライセンス。
+* **コード**: [MIT](LICENSE-MIT) または [Apache-2.0](LICENSE-APACHE) のデュアルライセンス（選択可能）。
+* **ドキュメント**: [CC BY 4.0](LICENSE-CC-BY-4.0) ライセンス。
