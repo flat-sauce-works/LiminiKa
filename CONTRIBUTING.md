@@ -1,55 +1,49 @@
 # Contributing to LiminiKa
 
-Welcome, and thank you for considering contributing to LiminiKa!
+LiminiKa is an asynchronous research and development project focused on local LLM geometries and runtime architectures. Development is structured around a low-pressure, friction-free model. 
 
-LiminiKa is an experimental, low-pressure project. Our goal is to maintain a flexible and comfortable space where anyone can experiment, test ideas, and contribute at their own pace—without formal deadlines, strict expectations, or rigid process requirements.
-
-Whether you are fixing a typo, testing a feature, or optimizing a kernel, all contributions are warmly welcomed.
+Work can be submitted in any state, left incomplete, or picked up by others at any time. There are no deadlines, maintenance obligations, or code-review formalities.
 
 ---
 
-## Flexible & Low-Pressure Workflow
+## Intellectual Property & License Boundaries (Mandatory)
 
-Contributing to LiminiKa is designed to be simple and friction-free. Aside from maintaining **Clean Licensing & IP Safety** (detailed below), feel free to work in whatever way suits you best:
+To keep the repository permanently open, legally unencumbered, and safe for downstream use, maintaining strict IP cleanliness is our only non-negotiable requirement.
 
-* 🌿 **Low Friction**: PR descriptions can be as simple as a single sentence. Small fixes, single-line cleanups, and documentation tweaks are always welcome.
-* 🛠️ **Draft & WIP PRs Encouraged**: Feel free to open a Draft PR early to test ideas, trigger CI builds, or collect early feedback. There is no pressure to finish quickly or complete every draft.
-* 🤖 **Automated Checks via CI**: Local formatting and linting perfection are not required. GitHub Actions workflows will handle style checks automatically upon push.
-* 💬 **Bilingual Communication**: Feel free to participate in Issues, PR comments, and Discussions in **either English or Japanese**. *(Note: Please write **in-code comments in English** to maintain codebase consistency).*
+### Submission Agreement
+By submitting a Pull Request to this repository, you agree that your contributions will be licensed as follows:
+* **Code contributions**: Dual-licensed under **MIT OR Apache-2.0**.
+* **Documentation contributions**: Licensed under **CC BY 4.0**.
 
----
+### Prohibited Sources
+Do not submit, adapt, or derive code from:
+* **Copyleft Licenses**: GPL, LGPL, AGPL, SSPL, or any licenses requiring reciprocal derivative terms.
+* **Non-Commercial / Restrictive Terms**: Any code containing non-commercial clauses (e.g., CC-BY-NC), proprietary source code, or reverse-engineered binaries.
+* **Ambiguous Origins**: Code with unclear or missing licensing information.
 
-## License Compliance & IP Safety (The Primary Requirement)
+All code must be your original work or sourced strictly from permissively licensed projects (MIT, Apache-2.0, BSD, ISC, Zlib).
 
-To protect the project and its contributors from legal uncertainties, **maintaining clean licensing and intellectual property (IP) integrity is our primary requirement**.
-
-### What to Keep Clean
-* **No Copyleft Code**: Please do **NOT** copy, paste, port, or adapt code from repositories or sources bound by Copyleft terms (e.g., **GPL, AGPL, SSPL**).
-* **No Proprietary, Restrictive, or Decompiled Code**: Please do **NOT** submit code derived from proprietary software, sources with unknown licensing terms, non-commercial restrictions (e.g., **CC-BY-NC**), or reverse-engineered binaries.
-* **Clean & Permissive Provenance**: Ensure all contributed code is either your original creation or strictly derived from permissively licensed sources compatible with **MIT / Apache-2.0**.
-
-### Contribution Licensing & Dependencies
-* **Dual-Licensing Agreement**: By submitting a Pull Request, you agree that your code contributions will be dual-licensed under **MIT OR Apache-2.0**, and documentation under **CC BY 4.0**.
-* **Dependencies**: If introducing new third-party dependencies (`Cargo.toml` or `CMakeLists.txt`), please verify that their licenses are strictly permissive. You can check Rust dependencies locally via `cargo deny check licenses`.
+### Dependencies
+Any new dependencies added to `Cargo.toml` or `CMakeLists.txt` must strictly adhere to permissive licenses. Rust dependencies are automatically verified via `cargo-deny` in CI.
 
 ---
 
-## Development Guidelines & Workflow
+## Asynchronous Workflow Guidelines
 
-For details on project architecture, coding guidelines, and repository design, please see:
-
-👉 **[Development Guidelines](docs/dev/guidelines.md)**
-
-### Target Branch
-* Please target your Pull Requests to the **`develop`** branch (our primary integration branch).
+* **Target Branch**: All Pull Requests should target the **`develop`** branch.
+* **Minimal PR Descriptions**: A single sentence explaining what was changed or attempted is sufficient.
+* **Draft & Experimental Work**: Feel free to open Draft PRs at any time to run CI tests or save partial progress. You are under no obligation to finish or maintain submitted work.
+* **Failing CI Checks (Red Status)**: A failing CI build is not treated as an error, rejection, or failure. It simply indicates an unfinished state. PRs with failing checks may sit indefinitely until someone else chooses to address them.
+* **Automated Formatting**: CI automatically formats C/C++ source files. If a formatting commit is added by CI to your PR branch, simply run `git pull` if you intend to continue working locally.
+* **Bilingual Discussions**: Issues, PR comments, and Discussions are welcome in either **English or Japanese**. *(Technical comments inside source code should remain in English for codebase uniformity).*
 
 ---
 
-## Quick Start Commands (Optional)
+## Reference Commands (Optional)
 
-Running checks locally is completely optional—CI runs them automatically. If you wish to run checks locally for your own convenience:
+Running tests or linters locally before submitting a PR is entirely optional. Validation is handled automatically by CI. The commands below are provided solely for local reference:
 
-* **Rust (DSL & CLI)**:
+### Rust Workspace
 
 ```bash
 cargo check --workspace
@@ -60,7 +54,7 @@ cargo deny check licenses
 
 ```
 
-* **C/C++ Core & Kernels**:
+### C/C++ Core & Kernels
 
 ```bash
 cmake -B build -S .
@@ -72,6 +66,6 @@ ctest --test-dir build
 
 ---
 
-## Planning Major Changes?
+## Technical & Architectural Proposals
 
-> 💡 If you are considering a major structural refactoring or a large feature, opening an Issue or starting a thread in [GitHub Discussions](https://github.com/flat-sauce-works/LiminiKa/discussions) beforehand is recommended. It helps align overall direction and saves time, though casual PRs are always welcome as well.
+For major architectural adjustments or structural redesigns, opening an Issue or a thread in [GitHub Discussions](https://github.com/flat-sauce-works/LiminiKa/discussions) is recommended to align technical directions, though exploratory PRs are always welcome.
