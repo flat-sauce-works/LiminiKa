@@ -21,12 +21,6 @@ allow = [
     "Unlicense",
 ]
 
-# Explicitly deny copyleft licenses to enforce guidelines
-copyleft = "deny"
-
-# Deny crates without explicit licensing information
-unlicensed = "deny"
-
 # License detection confidence threshold (0.0 to 1.0)
 confidence-threshold = 0.8
 
@@ -41,9 +35,6 @@ wildcards = "deny"
 highlight = "all"
 
 [advisories]
-# Deny crates with known security vulnerabilities (RUSTSEC)
-vulnerability = "deny"
-
 # Scope for unmaintained dependency warnings ("all", "workspace", "transitive", or "none")
 unmaintained = "all"
 
@@ -59,7 +50,6 @@ unknown-git = "deny"
 
 # Explicitly allow standard crates.io index (Alias, Git, and Sparse indices)
 allow-registry = [
-    "crates-io",
     "https://github.com/rust-lang/crates.io-index",
     "https://index.crates.io/",
 ]
