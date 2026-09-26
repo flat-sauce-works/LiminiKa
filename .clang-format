@@ -1,10 +1,155 @@
-BasedOnStyle: Google
-Language: Cpp
-ColumnLimit: 100
-IndentWidth: 4
-TabWidth: 4
-UseTab: Never
-AccessModifierOffset: -2
-AllowShortFunctionsOnASingleLine: Inline
-PointerAlignment: Left
-IncludeBlocks: Regroup
+name: CI Workflow
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+permissions:
+  contents: write
+
+jobs:
+  # Job 1: C/C++ Build, Format & Auto-commit
+  cpp-build-format:
+    name: C/C++ Build & Format Check
+    runs-on: ubuntu-latest
+    # Trigger only when C/C++ files, headers, or CMake configurations are modified
+    paths:
+      - "include/**"
+      - "src/kernels/**"
+      - "CMakeLists.txt"
+      - ".clang-format"
+      - ".github/workflows/ci.yml"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install build tools and clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang-format Ninja-build
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -S . -GNinja
+
+      - name: Execute automatic clang-format
+        run: |
+          cmake --build build --target format
+
+      - name: Build C/C++ targets
+        run: |
+          cmake --build build
+
+      - name: Run C/C++ unit tests
+        run: |
+          ctest --test-dir build --output-on-failure
+
+      - name: Auto-commit formatted code
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style(format): auto-format C/C++ codebase via CI [skip ci]"
+          file_pattern: "include/* src/kernels/*"
+
+  # Job 2: Rust Compilation, Linting & Unit Testing
+  rust-check:
+    name: Rust (Formatting, Lint & Test)
+    runs-on: ubuntu-latest
+    # Trigger only when Rust codebase or dependencies are modified
+    paths:
+      - "src/cli/**"
+      - "src/core/**"
+      - "src/dsl/**"
+      - "tests/**"
+      - "benches/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+      - ".github/workflows/ci.yml"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --workspace
+
+  # Job 3: License & Dependency Security Check
+  license-safety-check:
+    name: License & Dependency Safety
+    runs-on: ubuntu-latest
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+      - "LICENSE*"
+      - ".github/workflows/ci.yml"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Check license compliance
+        run: cargo deny check licenses
+
+  # Job 4: Metadata & Citation Validation
+  meta-citation-check:
+    name: Validate Meta & Citation Files
+    runs-on: ubuntu-latest
+    paths:
+      - "CITATION.cff"
+      - ".github/workflows/ci.yml"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate CITATION.cff
+        run: |
+          python -c "import yaml; yaml.safe_load(open('CITATION.cff'))"
+
+  # Job 5: Documentation Integrity Check
+  docs-check:
+    name: Documentation Link & Format Validation
+    runs-on: ubuntu-latest
+    paths:
+      - "docs/**"
+      - "**.md"
+      - ".github/workflows/ci.yml"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check markdown broken links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --verbose --no-progress './**.md' './docs/**/*.md'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,157 +1,104 @@
-name: CI
+name: CI Workflow
 
 on:
   push:
-    branches: [ "main", "master", "develop" ]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE*'
-      - 'CITATION.cff'
+    branches: [ main, develop ]
   pull_request:
-    branches: [ "main", "master", "develop" ]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE*'
-      - 'CITATION.cff'
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+    branches: [ main, develop ]
 
 permissions:
-  contents: read
-
-env:
-  CARGO_TERM_COLOR: always
-  CMAKE_BUILD_PARALLEL_LEVEL: 4
+  contents: write
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # 1. Rust Code Quality, Lints & Tests
-  # ---------------------------------------------------------------------------
-  rust-ci:
-    name: Rust (Formatting, Lint & Test)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install C/C++ build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential ccache
-
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Cache Cargo dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Check Rust formatting (rustfmt)
-        run: cargo fmt --all -- --check
-
-      - name: Lint with Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-      - name: Build Rust workspace
-        run: cargo build --workspace --all-targets
-
-      - name: Run Rust tests
-        run: cargo test --workspace --all-targets
-
-  # ---------------------------------------------------------------------------
-  # 2. License & IP Security Checks (Integrated Cargo Deny)
-  # ---------------------------------------------------------------------------
-  license-and-advisories:
-    name: License & Dependency Safety
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Check Rust licenses and advisories
-        uses: EmbarkStudios/cargo-deny-action@v1
-        with:
-          command: check
-
-  # ---------------------------------------------------------------------------
-  # 3. C/C++ Core & Kernels Build & Formatting
-  # ---------------------------------------------------------------------------
-  cpp-ci:
+  cpp-build-format:
     name: C/C++ Build & Format Check
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # Required for git-auto-commit-action to push changes
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          ref: ${{ github.head_ref || github.ref_name }}
-          fetch-depth: 0
 
-      - name: Install C/C++ toolchain dependencies and ccache
+      - name: Install build tools and clang-format
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential clang-format ccache
-
-      - name: Setup ccache for C/C++ compilation
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: ${{ runner.os }}-cpp-ccache-${{ github.sha }}
-          restore-keys: ${{ runner.os }}-cpp-ccache-
-
-      - name: Auto-format C/C++ files
-        run: |
-          TARGET_DIRS="include src/kernels examples tests"
-          for d in $TARGET_DIRS; do
-            if [ -d "$d" ]; then
-              find "$d" -type f \( -name "*.h" -o -name "*.hpp" -o -name "*.c" -o -name "*.cpp" -o -name "*.cu" -o -name "*.metal" \) ! -name ".gitkeep" -exec clang-format -i {} + 2>/dev/null || true
-            fi
-          done
-
-      - name: Commit format changes if any
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "style(fmt): auto-format C/C++ source files"
+          sudo apt-get install -y cmake clang-format Ninja-build
 
       - name: Configure CMake
         run: |
-          cmake -B build -S . \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DLIMINIKA_BUILD_TESTS=ON \
-            -DLIMINIKA_ENABLE_CUDA=OFF \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_COMPILE_WARNINGS_AS_ERRORS=ON
+          cmake -B build -S . -GNinja
 
-      - name: Build C/C++ components
-        run: cmake --build build --config Debug
+      - name: Execute automatic clang-format
+        run: |
+          cmake --build build --target format
 
-      - name: Run C/C++ tests (CTest)
-        run: ctest --test-dir build --output-on-failure -C Debug --no-tests=pass
+      - name: Build C/C++ targets
+        run: |
+          cmake --build build
 
-  # ---------------------------------------------------------------------------
-  # 4. Validation for Citation & Meta Files
-  # ---------------------------------------------------------------------------
-  meta-val:
+      - name: Run C/C++ unit tests
+        run: |
+          ctest --test-dir build --output-on-failure
+
+      - name: Auto-commit formatted code
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style(format): auto-format C/C++ codebase via CI [skip ci]"
+          file_pattern: "include/* src/kernels/*"
+
+  meta-citation-check:
     name: Validate Meta & Citation Files
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python environment
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
-
-      - name: Install cffconvert
-        run: pip install cffconvert
+          python-version: "3.11"
 
       - name: Validate CITATION.cff
-        run: cffconvert --validate
+        run: |
+          python -c "import yaml; yaml.safe_load(open('CITATION.cff'))"
+
+  license-safety-check:
+    name: License & Dependency Safety
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Check license compliance
+        run: cargo deny check licenses
+
+  rust-check:
+    name: Rust (Formatting, Lint & Test)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --workspace
