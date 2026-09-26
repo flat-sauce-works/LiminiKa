@@ -16,7 +16,7 @@ fn main() {
 
     // Safely compile C/C++ kernel sources only if files are registered
     let has_sources = false;
-    
+
     // Example:
     // if std::path::Path::new("src/kernels/cpu/example.cpp").exists() {
     //     build.file("src/kernels/cpu/example.cpp");

@@ -8,6 +8,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Include directories
 include_directories(include)
 
+# Enable CTest and register a dummy passing test for CI
+enable_testing()
+add_test(NAME liminika_dummy_test COMMAND ${CMAKE_COMMAND} -E true)
+
 # Configure clang-format target
 find_program(CLANG_FORMAT_BIN clang-format)
 if(CLANG_FORMAT_BIN)

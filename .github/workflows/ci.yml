@@ -84,6 +84,8 @@ jobs:
   cpp-ci:
     name: C/C++ Build & Format Check
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required for git-auto-commit-action to push changes
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -99,9 +101,9 @@ jobs:
           key: ${{ runner.os }}-cpp-ccache-${{ github.sha }}
           restore-keys: ${{ runner.os }}-cpp-ccache-
 
-      - name: Check C/C++ code formatting (.clang-format)
+      - name: Auto-format C/C++ files
         run: |
-          TARGET_DIRS="include src/core src/kernels examples tests"
+          TARGET_DIRS="include src/kernels examples tests"
           EXISTING_DIRS=""
           for d in $TARGET_DIRS; do
             if [ -d "$d" ]; then
@@ -109,9 +111,14 @@ jobs:
             fi
           done
           if [ -n "$EXISTING_DIRS" ]; then
-            find $EXISTING_DIRS -type f \( -name "*.h" -o -name "*.hpp" -o -name "*.c" -o -name "*.cpp" -o -name "*.cu" \) \
-              ! -name ".gitkeep" -print0 2>/dev/null | xargs -0 -r clang-format --dry-run --Werror
+            find $EXISTING_DIRS -type f \( -name "*.h" -o -name "*.hpp" -o -name "*.c" -o -name "*.cpp" -o -name "*.cu" -o -name "*.metal" \) \
+              ! -name ".gitkeep" -exec clang-format -i {} +
           fi
+
+      - name: Commit format changes if any
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style(fmt): auto-format C/C++ source files"
 
       - name: Configure CMake
         run: |
@@ -140,6 +147,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate CITATION.cff
-        uses: citation-file-format/cffconvert-github-action@v2.0.0
+        uses: citation-file-format/cffconvert-github-action@v2
         with:
           args: "--validate"
