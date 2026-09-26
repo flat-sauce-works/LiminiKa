@@ -44,8 +44,8 @@ highlight = "all"
 # Deny crates with known security vulnerabilities (RUSTSEC)
 vulnerability = "deny"
 
-# Warn if a dependency is marked as unmaintained
-unmaintained = "warn"
+# Scope for unmaintained dependency warnings ("all", "workspace", "transitive", or "none")
+unmaintained = "all"
 
 # Warn if a crate version has been yanked from crates.io
 yanked = "warn"
