@@ -89,6 +89,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
 
       - name: Install C/C++ toolchain dependencies and ccache
         run: |
@@ -104,18 +108,11 @@ jobs:
       - name: Auto-format C/C++ files
         run: |
           TARGET_DIRS="include src/kernels examples tests"
-          FILES=""
           for d in $TARGET_DIRS; do
             if [ -d "$d" ]; then
-              FOUND=$(find "$d" -type f \( -name "*.h" -o -name "*.hpp" -o -name "*.c" -o -name "*.cpp" -o -name "*.cu" -o -name "*.metal" \) ! -name ".gitkeep" 2>/dev/null || true)
-              if [ -n "$FOUND" ]; then
-                FILES="$FILES $FOUND"
-              fi
+              find "$d" -type f \( -name "*.h" -o -name "*.hpp" -o -name "*.c" -o -name "*.cpp" -o -name "*.cu" -o -name "*.metal" \) ! -name ".gitkeep" -exec clang-format -i {} + 2>/dev/null || true
             fi
           done
-          if [ -n "$FILES" ]; then
-            clang-format -i $FILES
-          fi
 
       - name: Commit format changes if any
         uses: stefanzweifel/git-auto-commit-action@v5

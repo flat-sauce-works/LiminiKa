@@ -6,7 +6,10 @@ title: "LiminiKa"
 version: "0.1.1"
 date-released: "2026-09-25"
 url: "https://github.com/flat-sauce-works/LiminiKa"
-license: "MIT OR Apache-2.0 OR CC-BY-4.0"
+license:
+  - "MIT"
+  - "Apache-2.0"
+  - "CC-BY-4.0"
 
 preferred-citation:
   type: article
