@@ -37,7 +37,7 @@ As a result, even in standard local environments like gaming PCs or MacBooks (2â
 At the backbone of LiminiKa is **GCSO (Geometric Cellular Sheaf Orchestrator)**, an inference and memory control runtime mathematically and geometrically formulated.
 
 * **Stigmergic Swarm-Attractor Duality**  
-  Compresses token-by-token processing into lightweight bitmask and pointer operations ($\mathcal{O}(1)$), allowing global thought trajectories to autonomously converge into mean-field attractors.
+  Compresses token-by-token processing into lightweight bitmask and pointer operations ( $\mathcal{O}(1)$ ), allowing global thought trajectories to autonomously converge into mean-field attractors.
 * **Dynamic Phase-Shifted RoPE (DPSR)**  
   Modulates context, persona, and emotion via relative phase shifts on Query representations without modifying model weights.
 * **Cellular Sheaf Cohomology $H^1(K; \mathcal{F})$ Control**  
