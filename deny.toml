@@ -31,6 +31,9 @@ multiple-versions = "warn"
 # Deny wildcard dependency specifications (e.g., crate = "*") for build reproducibility
 wildcards = "deny"
 
+# Allow local path dependencies within the workspace (e.g., { path = "../core" })
+allow-wildcard-paths = true
+
 # Highlight all duplicate crates in output
 highlight = "all"
 
