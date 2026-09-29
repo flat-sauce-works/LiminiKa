@@ -202,7 +202,8 @@ static_assert(alignof(gcso_pointer_trail_t) == 128, "Align mismatch: gcso_pointe
 static_assert(sizeof(gcso_config_t) == 64, "Size mismatch: gcso_config_t");
 static_assert(sizeof(gcso_snapshot_header_t) == 128, "Size mismatch: gcso_snapshot_header_t");
 static_assert(sizeof(gcso_daes_slot_t) == 64, "Size mismatch: gcso_daes_slot_t");
-static_assert(sizeof(gcso_pprc_keyframe_header_t) == 64, "Size mismatch: gcso_pprc_keyframe_header_t");
+static_assert(sizeof(gcso_pprc_keyframe_header_t) == 64,
+              "Size mismatch: gcso_pprc_keyframe_header_t");
 static_assert(sizeof(gcso_pspm_config_t) == 32, "Size mismatch: gcso_pspm_config_t");
 static_assert(sizeof(gcso_edbc_state_t) == 64, "Size mismatch: gcso_edbc_state_t");
 static_assert(sizeof(gcso_srl_descriptor_t) == 64, "Size mismatch: gcso_srl_descriptor_t");
