@@ -1,4 +1,4 @@
-// src/core/gcso_core.cpp
+# SPDX-License-Identifier: MIT OR Apache-2.0
 #include "liminika/gcso_config.h"
 
 namespace liminika {

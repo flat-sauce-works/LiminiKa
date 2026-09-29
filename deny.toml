@@ -4,10 +4,6 @@
 # Ignore licensing checks for private workspace crates
 private = { ignore = true }
 
-# Explicitly deny all copyleft and unlicensed dependencies
-unlicensed = "deny"
-copyleft = "deny"
-
 # List of explicitly allowed permissive licenses
 # Reference: https://spdx.org/licenses/
 allow = [

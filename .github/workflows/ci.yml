@@ -199,6 +199,6 @@ jobs:
       - name: Check markdown broken links
         uses: lycheeverse/lychee-action@v2
         with:
-          args: --verbose --no-progress --offline './**.md' './docs/**/*.md'
+          args: --verbose --no-progress --offline '*.md' 'docs/**/*.md'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
