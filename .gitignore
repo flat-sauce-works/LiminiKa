@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # ===================================================================
 # LiminiKa Project .gitignore
 # Core Engine: Geometric Cellular Sheaf Orchestrator (GCSO)
@@ -12,9 +13,10 @@
 *.profdata
 
 # -------------------------------------------------------------------
-# C / C++ / CUDA Build Artifacts, CMake & Toolchains
+# C / C++ / CUDA / GPU Build Artifacts, CMake & Toolchains
 # -------------------------------------------------------------------
 /build/
+/build*/
 /cmake-build-*/
 /bin/
 /lib/
@@ -27,6 +29,14 @@
 *.lib
 *.exp
 *.exe
+
+# GPU Compute Artifacts (CUDA / Vulkan / Metal)
+*.ptx
+*.cubin
+*.fatbin
+*.spv
+*.air
+*.metallib
 
 # CMake Generated Files
 CMakeCache.txt
@@ -67,6 +77,7 @@ adapters/*
 # -------------------------------------------------------------------
 *.gcso
 *.gcsopack
+*.gcsocore
 *.sta
 containers/*
 !containers/.gitkeep

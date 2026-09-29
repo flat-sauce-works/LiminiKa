@@ -1,4 +1,5 @@
-# https://editorconfig.org
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Top-most EditorConfig file
 root = true
 
 # Default settings for all files
@@ -16,6 +17,10 @@ indent_size = 2
 
 [CMakeLists.txt]
 indent_size = 2
+
+# LiminiKa DSL Source Files
+[*.lmnk]
+indent_size = 4
 
 # Force tab indentation for Makefiles
 [Makefile]

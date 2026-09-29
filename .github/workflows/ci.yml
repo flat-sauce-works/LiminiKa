@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 name: CI Workflow
 
 on:
@@ -10,7 +11,6 @@ permissions:
   contents: write
 
 jobs:
-  # Job 0: Path filtering to detect modified file locations
   changes:
     name: Detect Changed Paths
     runs-on: ubuntu-latest
@@ -19,6 +19,7 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       license: ${{ steps.filter.outputs.license }}
       meta: ${{ steps.filter.outputs.meta }}
+      docs: ${{ steps.filter.outputs.docs }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -31,10 +32,14 @@ jobs:
             cpp:
               - 'include/**'
               - 'src/kernels/**'
-              - 'CMakeLists.txt'
+              - 'examples/**'
+              - 'tests/**'
+              - '**/CMakeLists.txt'
               - '.clang-format'
               - '.github/workflows/ci.yml'
             rust:
+              - 'include/**'
+              - 'src/kernels/**'
               - 'src/cli/**'
               - 'src/core/**'
               - 'src/dsl/**'
@@ -53,8 +58,11 @@ jobs:
             meta:
               - 'CITATION.cff'
               - '.github/workflows/ci.yml'
+            docs:
+              - 'docs/**'
+              - '**.md'
+              - '.github/workflows/ci.yml'
 
-  # Job 1: C/C++ Build, Format & Safe Auto-commit
   cpp-build-format:
     name: C/C++ Build & Format Check
     needs: changes
@@ -62,7 +70,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout the head branch of the Pull Request so formatting commits target the correct ref
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -73,15 +80,31 @@ jobs:
       - name: Install build tools and clang-format
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake clang-format ninja-build
+          sudo apt-get install -y cmake clang-format ninja-build build-essential
 
       - name: Configure CMake
         run: |
           cmake -B build -S . -GNinja
 
+      - name: Verify C/C++ format compliance
+        run: |
+          cmake --build build --target format-check
+        continue-on-error: true
+
       - name: Execute automatic clang-format
         run: |
           cmake --build build --target format
+
+      - name: Auto-commit formatted code (Safe for Fork PRs)
+        uses: stefanzweifel/git-auto-commit-action@v5
+        continue-on-error: true
+        with:
+          commit_message: "style(format): auto-format C/C++ codebase via CI [skip ci]"
+          file_pattern: |
+            include/**
+            src/kernels/**
+            examples/**
+            tests/**
 
       - name: Build C/C++ targets
         run: |
@@ -91,17 +114,6 @@ jobs:
         run: |
           ctest --test-dir build --output-on-failure
 
-      # Auto-commit formatted code.
-      # Note: Forked PRs do not have write permissions for GITHUB_TOKEN due to GitHub security restrictions.
-      # `continue-on-error: true` ensures that failure to push on forked PRs will not cause the overall CI job to fail.
-      - name: Auto-commit formatted code (Safe for Fork PRs)
-        uses: stefanzweifel/git-auto-commit-action@v5
-        continue-on-error: true
-        with:
-          commit_message: "style(format): auto-format C/C++ codebase via CI [skip ci]"
-          file_pattern: "include/* src/kernels/*"
-
-  # Job 2: Rust Compilation, Linting & Unit Testing
   rust-check:
     name: Rust (Formatting, Lint & Test)
     needs: changes
@@ -112,13 +124,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install C/C++ build tools for build.rs compilation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build build-essential
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
+      - name: Enable Rust caching
+        uses: Swatinem/rust-cache@v2
+
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
+
+      - name: Fast check Rust workspace
+        run: cargo check --workspace --all-targets
 
       - name: Run cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -126,7 +149,6 @@ jobs:
       - name: Run Rust tests
         run: cargo test --workspace
 
-  # Job 3: License & Dependency Security Check
   license-safety-check:
     name: License & Dependency Safety
     needs: changes
@@ -142,7 +164,6 @@ jobs:
         with:
           arguments: --workspace
 
-  # Job 4: Metadata & Citation Validation
   meta-citation-check:
     name: Validate Meta & Citation Files
     needs: changes
@@ -164,3 +185,20 @@ jobs:
       - name: Validate CITATION.cff
         run: |
           python -c "import yaml; yaml.safe_load(open('CITATION.cff'))"
+
+  docs-check:
+    name: Documentation Integrity & Link Check
+    needs: changes
+    if: ${{ needs.changes.outputs.docs == 'true' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check markdown broken links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --verbose --no-progress --offline './**.md' './docs/**/*.md'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

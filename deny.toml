@@ -1,8 +1,12 @@
-# deny.toml (Project root)
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 [licenses]
 # Ignore licensing checks for private workspace crates
 private = { ignore = true }
+
+# Explicitly deny all copyleft and unlicensed dependencies
+unlicensed = "deny"
+copyleft = "deny"
 
 # List of explicitly allowed permissive licenses
 # Reference: https://spdx.org/licenses/
@@ -19,6 +23,7 @@ allow = [
     "Zlib",
     "0BSD",
     "Unlicense",
+    "BSL-1.0",
 ]
 
 # License detection confidence threshold (0.0 to 1.0)
@@ -55,6 +60,7 @@ unknown-git = "deny"
 allow-registry = [
     "https://github.com/rust-lang/crates.io-index",
     "https://index.crates.io/",
+    "sparse+https://index.crates.io/",
 ]
 
 allow-git = []
