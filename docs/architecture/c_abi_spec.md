@@ -1,1053 +1,913 @@
-# GCSO C-ABI Specification (`c_abi_spec.md`)
+# C-ABI Specification: Geometric Cellular Sheaf Orchestrator (GCSO)
 
-This document defines the C-ABI (Application Binary Interface) specifications for the **GCSO (Geometric Cellular Sheaf Orchestrator)** core runtime within the LiminiKa project.
+## 1. Architectural Worldview & Terminology Mapping (Alias Index)
 
-The C-ABI serves as the explicit, non-intrusive boundary layer connecting high-level orchestrators (Rust Core / LiminiKa DSL Compiler) and low-level compute kernels (C++20 / CUDA / Metal / Vulkan / CPU), as well as enabling direct sidecar integration with third-party inference engines (e.g., llama.cpp, vLLM, TensorRT-LLM).
+### 1.1 Intuitive Alias & Terminology Mapping Index
 
----
-
-## 1. General Principles
-
-1. **Permissive & Clean IP Compliance & Isolation Boundary**
-   * All code interfaces, exported headers, C/C++ implementations, build scripts, and test snippets strictly adhere to permissive dual-licensing (**MIT OR Apache-2.0** for source code and headers, **CC BY 4.0** for specification documentation).
-   * Clean-room implementation is strictly enforced: no source code, proprietary algorithms, internal header structures, or routines from copyleft projects (GPL, LGPL, AGPL, SSPL) or third-party inference engines (llama.cpp, vLLM, Hugging Face transformers, etc.) are copied, ported, referenced, or adapted.
-   * To prevent license contamination and build dependency coupling, GCSO headers never `#include` or reference third-party inference engine header files. All sidecar integrations operate strictly via raw pointer tables (`GCSOSidecarTable`).
-   * Every header file, source file, export macro, and code snippet must explicitly declare `// SPDX-License-Identifier: MIT OR Apache-2.0` in its header comment block.
-   * Runtime engine functions remain completely model-agnostic, operating strictly on raw tensor memory buffers without embedded dependencies on proprietary weight binaries or model-specific licensing restrictions.
-
-2. **Action Hub & Pointer-Chain Stigmergy (Intelligence as a Chain of Pointers & Attractor Steering)**
-   * The GCSO runtime operates under the core philosophical premise that **intelligence emerges from structured chains of pointers**.
-   * Directly executing macro cellular sheaf operations or full Hodge decompositions on every token step introduces prohibitive computational overhead for target environments (2–4 GB VRAM). To bypass this while retaining the ability to link hallucination boundaries across phase spaces, GCSO treats the execution trajectory of pointers within the Sidecar Pointer Table (`GCSOSidecarTable`: SPT) as **Bottom-Up Stigmergy**.
-   * As pointer operations transition during token decoding, their trajectories leave lightweight environmental traces in the Stigmergic Medium (`stigmergic_medium_ptr`). Higher-level macro rules observe these trajectory traces and steer the pointers into target Attractor Basins via lock-free atomic pointer swapping (`next_spt`, `phase_offsets_q7`), or apply Phase-Conjugate Repulsion to escape spurious local minima without locking the Hot Path, achieving complex topological steering at $\mathcal{O}(1)$ execution cost.
-   * Binding to a third-party host inference engine (via raw tensor pointers like `query_ptr`, `key_ptr`, `logits_ptr`) represents merely *one specific execution action slot* within this broader action hub. Individual tensor pointer slots in `GCSOSidecarTable` are optional; if set to `NULL`, the runtime gracefully skips that specific execution action (no-op) and returns `GCSO_SUCCESS` without error.
-
-3. **C++20 Standard Baseline with Cross-Platform & Restricted Environment Resilience**
-   * Modern C++20 features (such as `std::atomic_ref`, `std::bit_cast`, compile-time concepts, `constexpr`, and `[[likely]]` / `[[unlikely]]` attribute specifiers) form the primary implementation baseline for low-level compute kernels and FFI bridges.
-   * To guarantee seamless integration across legacy environments, C11 FFI layers, restricted embedded toolchains, and varied compilers (GCC, Clang, MSVC, NVCC, Metal Shader Compiler), all platform-dependent extensions are encapsulated using universal macro abstractions (`GCSO_ALIGNAS`, `GCSO_NOEXCEPT`, `GCSO_CONSTEXPR`, `GCSO_NODISCARD`, `GCSO_INLINE`, `GCSO_RESTRICT`, `GCSO_LIKELY`, `GCSO_UNLIKELY`).
-   * When performing lock-free pointer swaps across thread or FFI boundaries, memory ordering strictly observes Acquire-Release semantics via C++20 `std::atomic_ref` (where `__cpp_lib_atomic_ref` is available) or C11 `<stdatomic.h>` / atomic intrinsics.
-
-4. **Fractal Multi-Granularity Cascading (Nano / Micro / Mezzo / Macro Layers)**
-   * The `GCSOSidecarTable` functions as a fractal node bridging execution granularities and bottom-up trajectory steering:
-     * **Nano Level (`GCSO_GRANULARITY_NANO = 0`)**: Evaluates in-register RIPA clamping and updates local bitmasks within 32-thread warps.
-     * **Micro Level (`GCSO_GRANULARITY_MICRO = 1`)**: Performs $\mathcal{O}(1)$ SPT index lookups (`gcso_spt_hash_slot_index`), fused DPSR phase additions, and warp bitmask reductions recorded in `local_state_mask`.
-     * **Mezzo Level (`GCSO_GRANULARITY_MEZZO = 2`)**: Aggregates PagedBlock states across 16–32 token chunks via hierarchical bit-tree operations propagating through `parent_spt` / `child_spt_array`.
-     * **Macro Level (`GCSO_GRANULARITY_MACRO = 3`)**: Asynchronously evaluates Moving Z-Score entropy ( $\tilde{H}$ ), tracking pointer trajectories as bottom-up stigmergic environment updates (`GCSO_ACTION_ID_STIGMERGIC_TRACE`) and triggering atomic pointer swaps on lower-level SPT nodes (`GCSO_ACTION_ID_ATTRACTOR_STEER`, `GCSO_ACTION_ID_PHASE_CONJUGATE_REPEL`) to steer global trajectories toward target attractors without locking the Hot Path.
-   * To prevent stack overflow and deadlock caused by circular pointer links in dynamic environments, cascade evaluation functions strictly enforce a maximum recursion/traversal depth (`GCSO_MAX_CASCADE_DEPTH = 16`).
-
-5. **Zero-Allocation in the Hot Path, 64-bit Assumptions & Cache-Line Alignment**
-   * Functions invoked during the per-token decoding loop (Hot Path) must never execute dynamic memory allocations (`malloc`, `free`, `new`, `delete`), OS blocking system calls, or thread instantiation.
-   * All working memory buffers, Sidecar Pointer Table (SPT) lookups, and phase rotation arrays must be completely pre-allocated and bound during the Cold Path initialization phase.
-   * `GCSOSidecarTable` is strictly structured to an exact 128-byte layout with 64-byte alignment (matching 2 CPU/GPU cache lines) on 64-bit architectures (x86_64, AArch64), completely preventing cache-line splits and false sharing during high-speed thread-warp traversals. Layout integrity is validated at compile-time via C11 `_Static_assert` / C++20 `static_assert`.
-   * On successful execution paths, Hot Path functions must complete without writing to Thread-Local Storage (TLS) or modifying global error state to prevent unnecessary memory bus traffic and L1/L2 cache-line invalidation.
-
-6. **Exception Boundary Safety, Explicit Ownership & Symbol Visibility**
-   * All C API exports are wrapped in `extern "C"` blocks, declared with explicit calling conventions via `GCSO_CALL`, and exported using the `GCSO_API` visibility macro.
-   * C++20 ABI implementations must be declared `noexcept` via `GCSO_NOEXCEPT`. Internal C++ exceptions must be caught using `try-catch` blocks, setting thread-local error messages via `gcso_set_last_error_message()`, and mapping to appropriate `GCSOStatus` error codes before crossing FFI boundaries.
-   * Mandatory input arguments receiving `NULL` when non-null is required must return `GCSO_ERROR_NULL_POINTER` safely without causing undefined behavior. Unaligned pointer inputs must return `GCSO_ERROR_UNALIGNED_POINTER`.
-   * Rust FFI entry points invoking C-ABI routines must wrap executions with `std::panic::catch_unwind` to catch unwinding panics across language boundaries and map them to `GCSO_ERROR_PANIC_CAUGHT`.
-   * Every opaque handle allocated by C/C++ must have a dedicated, paired free function (e.g., `gcso_context_free`, `gcso_edbc_free`, `gcso_container_close`, `gcso_swarm_cell_free`, `gcso_spt_unbind`). All free functions safely accept `NULL` pointers as no-ops, returning `GCSO_SUCCESS`.
-
-7. **Header File Structure**
-   * The specifications in this document correspond directly to public headers under `include/liminika/`:
-     * `include/liminika/gcso_types.h`: Primitive types, cross-platform/C++20 macros, status codes, error setters/getters/clearers, SPT integrated action hub definitions, initialization macros, and opaque handle declarations.
-     * `include/liminika/gcso_config.h`: Configuration parameters and layout specifications (`GCSOConfig`).
-     * `include/liminika/gcso_abi.h`: Main C-ABI function prototypes and exported symbol declarations.
+| GCSO Theoretical Concept | Practical Engineering Alias | Primary System Role & Functional Description |
+| --- | --- | --- |
+| **Cellular Sheaf Cohomology Obstruction $H^1(K; \mathcal{F})$** | **Context Hallucination Lock-in Detector** | Detects topological loop disconnects and non-factual generation lock-in states from token activation residuals. |
+| **Phase-Conjugate Attractor Repulsion** | **Anti-Hallucination Vector Repulser** | Flips false local minima energy valleys into repulsive potential peaks using anti-phase markers ($-\boldsymbol{\Delta\theta}$). |
+| **Stigmergic Swarm-Attractor Duality** | **Pointer-Trace Dynamic Memory Convergence** | Replaces heavy online matrix differential solves with $\mathcal{O}(1)$ micro bitwise/pointer updates that converge to global attractors. |
+| **Dynamic Phase-Shifted RoPE (DPSR)** | **Zero-Weight Context Phase Modulator** | Applies dynamic relative phase rotation to Query/Key attention registers without modifying base weight tensors in VRAM. |
+| **Quantization-Discretized Phase Steering (QDPS)** | **Discrete Phase Rotation Filter** | Cuts off phase rotation steps falling below the minimum discretization step ($\Delta\theta_{\mathrm{min\_step}}$) on quantized grids. |
+| **Sidecar Pointer Table (SPT) / Action Hub** | **$\mathcal{O}(1)$ Hot-Path Pointer Dispatcher** | Executes constant-time tagged pointer transitions, creating persistent memory trails for intelligence routing. |
+| **Entropy-Driven Decoding Branch Controller (EDBC)** | **Dynamic Decoding Switchboard** | Monitors entropy flux ($\tilde{H}$) across layers to trigger potential-driven sampling or phase-conjugate repulsion at critical points. |
+| **Dynamic Adaptive Extension Scratchpad (DAES)** | **Multi-Layer Dynamic Adaptive Scratchpad** | Reuses 64B cacheline memory as an in-place telemetry ledger, $\mathcal{O}(1)$ bypass shortcut table, and dynamic parameter auto-tuner. |
+| **Predictive Phase-Motion & Residual Compensation (PPRC)** | **Instant-Replay Keyframe KV Cache** | Structures KV caches into I-Frames (Anchors) and P-Frames (Phase Motion), enabling zero-forward latency history seek. |
+| **Sparse Residual Adapter Layer (SRL)** | **Dynamic Rank-1 Outer Product Adapter** | Provides lightweight FP8 outer product corrections ($\mathbf{u}\mathbf{v}^T$) to supplement non-linear model capacities. |
+| **LoRA-to-Phase SVD Converter (L2P-SVD)** | **Training-Free Adapter Phase Projector** | Projects fine-tuned LoRA matrices via SVD into phase profiles and Rank-1 SRL vectors without gradient training. |
+| **Zero-Overhead In-Memory Mapped Storage (ZIMMS)** | **Zero-Copy Memory-Mapped Engine** | Provides zero-copy memory-mapped file access and direct DMA stream buffers for `.gcso` unified binary containers. |
+| **Phase-Steered Parallel Multi-head (PSPM) Router** | **Sub-Head Phase Group Allocator** | Dynamically routes attention heads into Fact, Logic, and Explore sub-groups in a single forward pass. |
 
 ---
 
-## 2. Macro Definitions, Types & Status Codes (`gcso_types.h`)
+### 1.2 Multi-Layer Execution Topology & Dynamic Layer-Adaptive Hierarchy
 
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-
-#ifndef LIMINIKA_GCSO_TYPES_H
-#define LIMINIKA_GCSO_TYPES_H
-
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-
-#if defined(_WIN32) || defined(__CYGWIN__)
-  #if defined(GCSO_BUILD_DLL)
-    #define GCSO_API __declspec(dllexport)
-  #else
-    #define GCSO_API __declspec(dllimport)
-  #endif
-  #define GCSO_CALL __stdcall
-#else
-  #if defined(__GNUC__) && __GNUC__ >= 4
-    #define GCSO_API __attribute__((visibility("default")))
-  #else
-    #define GCSO_API
-  #endif
-  #define GCSO_CALL
-#endif
-
-// Check for C++20 baseline
-#if defined(__cplusplus)
-  #if __cplusplus >= 202002L || (defined(_MSVC_LANG) && _MSVC_LANG >= 202002L)
-    #define GCSO_CPP20_OR_LATER 1
-  #endif
-#endif
-
-// Cross-language alignment, constexpr, branch prediction, and exception compatibility macros for C11 and C++20
-#ifdef __cplusplus
-  #define GCSO_NOEXCEPT noexcept
-  #define GCSO_ALIGNAS(x) alignas(x)
-  #define GCSO_CONSTEXPR constexpr
-  #if defined(GCSO_CPP20_OR_LATER)
-    #define GCSO_LIKELY(x)   (x) [[likely]]
-    #define GCSO_UNLIKELY(x) (x) [[unlikely]]
-    #define GCSO_NODISCARD   [[nodiscard]]
-  #else
-    #if defined(__GNUC__) || defined(__clang__)
-      #define GCSO_LIKELY(x)   (__builtin_expect(!!(x), 1))
-      #define GCSO_UNLIKELY(x) (__builtin_expect(!!(x), 0))
-    #else
-      #define GCSO_LIKELY(x)   (x)
-      #define GCSO_UNLIKELY(x) (x)
-    #endif
-    #if __cplusplus >= 201703L || (defined(_MSVC_LANG) && _MSVC_LANG >= 201703L)
-      #define GCSO_NODISCARD [[nodiscard]]
-    #else
-      #define GCSO_NODISCARD
-    #endif
-  #endif
-  #if defined(_MSC_VER)
-    #define GCSO_INLINE __forceinline
-    #define GCSO_RESTRICT __restrict
-  #else
-    #define GCSO_INLINE inline __attribute__((always_inline))
-    #define GCSO_RESTRICT __restrict__
-  #endif
-#else
-  #define GCSO_NOEXCEPT
-  #define GCSO_CONSTEXPR
-  #define GCSO_NODISCARD
-  #if defined(__GNUC__) || defined(__clang__)
-    #define GCSO_LIKELY(x)   (__builtin_expect(!!(x), 1))
-    #define GCSO_UNLIKELY(x) (__builtin_expect(!!(x), 0))
-    #define GCSO_INLINE inline __attribute__((always_inline))
-    #define GCSO_RESTRICT __restrict__
-  #elif defined(_MSC_VER)
-    #define GCSO_LIKELY(x)   (x)
-    #define GCSO_UNLIKELY(x) (x)
-    #define GCSO_INLINE __forceinline
-    #define GCSO_RESTRICT __restrict
-  #else
-    #define GCSO_LIKELY(x)   (x)
-    #define GCSO_UNLIKELY(x) (x)
-    #define GCSO_INLINE inline
-    #define GCSO_RESTRICT
-  #endif
-  #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-    #include <stdalign.h>
-    #define GCSO_ALIGNAS(x) alignas(x)
-  #elif defined(_MSC_VER)
-    #define GCSO_ALIGNAS(x) __declspec(align(x))
-  #elif defined(__GNUC__) || defined(__clang__)
-    #define GCSO_ALIGNAS(x) __attribute__((aligned(x)))
-  #else
-    #define GCSO_ALIGNAS(x)
-  #endif
-#endif
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#define GCSO_ABI_VERSION_MAJOR 0
-#define GCSO_ABI_VERSION_MINOR 2
-#define GCSO_ABI_VERSION_PATCH 6
-
-#define GCSO_MAKE_VERSION(major, minor, patch) \
-    (((uint32_t)(major) << 16) | ((uint32_t)(minor) << 8) | ((uint32_t)(patch)))
-
-#define GCSO_ABI_VERSION_COMBINED \
-    GCSO_MAKE_VERSION(GCSO_ABI_VERSION_MAJOR, GCSO_ABI_VERSION_MINOR, GCSO_ABI_VERSION_PATCH)
-
-#define GCSO_SPT_STRUCT_VERSION 1U
-#define GCSO_MAX_CASCADE_DEPTH  16U
-
-#define GCSO_Q7_SCALE 0.0078125f // 1.0f / 128.0f (Q7 Fixed-point scale factor beta_Q7)
-#define GCSO_MAX_HEAD_DIM 256
-#define GCSO_PAGED_BLOCK_SIZE 32
-#define GCSO_SPT_MAX_SLOTS 256
-
-// Granularity Level Definitions for Fractal Multi-Layer Structure
-#define GCSO_GRANULARITY_NANO  0U // Warp / SIMD Level
-#define GCSO_GRANULARITY_MICRO 1U // Token / PagedBlock Level
-#define GCSO_GRANULARITY_MEZZO 2U // Chunk / Cellular Hub Level
-#define GCSO_GRANULARITY_MACRO 3U // Session / Attractor Level
-
-// Action ID Bitmask Flags for Action Hub Dispatch (Can be bitwise OR-ed together)
-#define GCSO_ACTION_ID_NOP                   0x0000U
-#define GCSO_ACTION_ID_DPSR_STEERING        0x0001U
-#define GCSO_ACTION_ID_LOGIT_SHIFT          0x0002U
-#define GCSO_ACTION_ID_PSPM_ROUTING         0x0004U
-#define GCSO_ACTION_ID_SRL_UPDATE           0x0008U
-#define GCSO_ACTION_ID_STIGMERGIC_TRACE      0x0010U // Bottom-up pointer trajectory trace
-#define GCSO_ACTION_ID_ATTRACTOR_STEER       0x0020U // Dynamic attractor basin steering
-#define GCSO_ACTION_ID_PHASE_CONJUGATE_REPEL 0x0040U // Anti-phase repulsion for hallucinatory local minima
-#define GCSO_ACTION_ID_DNP_PACKET_SYNC      0x0100U
-#define GCSO_ACTION_ID_USER_CUSTOM_BASE      0x1000U // Reserved base for custom DSL user actions
-
-// Tensor Data Type Enumeration for Multi-Precision Host Engines
-typedef uint16_t gcso_tensor_type_t;
-#define GCSO_TENSOR_TYPE_FP32  0U
-#define GCSO_TENSOR_TYPE_FP16  1U
-#define GCSO_TENSOR_TYPE_BF16  2U
-#define GCSO_TENSOR_TYPE_FP8   3U
-
-typedef int8_t   gcso_q7_t;      // Q7 fixed-point phase offset representation
-typedef uint32_t gcso_slot_id_t; // Sidecar Pointer Table (SPT) slot index
-
-// Execution Outcome Status Codes (Underlying type uint32_t for ABI stability)
-typedef uint32_t GCSOStatus;
-typedef uint32_t LiminiKaStatus; // Unified standard type alias for backwards compatibility
-
-#define GCSO_SUCCESS                         0U
-#define GCSO_ERROR_INVALID_ARGUMENT          1U
-#define GCSO_ERROR_OUT_OF_MEMORY             2U
-#define GCSO_ERROR_BUFFER_TOO_SMALL          3U
-#define GCSO_ERROR_NOT_INITIALIZED           4U
-#define GCSO_ERROR_PANIC_CAUGHT              5U
-#define GCSO_ERROR_INTERNAL_EXCEPTION        6U
-#define GCSO_ERROR_IO_FAILURE                7U
-#define GCSO_ERROR_UNSUPPORTED_HARDWARE      8U
-#define GCSO_ERROR_ABI_MISMATCH              9U
-#define GCSO_ERROR_NULL_POINTER              10U
-#define GCSO_ERROR_INVALID_STATE             11U
-#define GCSO_ERROR_SIDECAR_NOT_BOUND         12U
-#define GCSO_ERROR_ALIGNMENT_MISMATCH        13U
-#define GCSO_ERROR_CONTAINER_CORRUPT         14U
-#define GCSO_ERROR_UNALIGNED_POINTER         15U
-#define GCSO_ERROR_ACTION_DISPATCH_FAILED    16U
-#define GCSO_ERROR_RECURSION_LIMIT_EXCEEDED  17U // Exceeded GCSO_MAX_CASCADE_DEPTH limit
-#define GCSO_ERROR_ATOMIC_SWAP_FAILED        18U // Atomic lock-free pointer swap operation failed
-#define GCSO_ERROR_OUT_OF_RANGE              19U // Index or memory offset out of range
-#define GCSO_ERROR_KEY_NOT_FOUND             20U // Target key or track not found in container
-
-// Forward declaration for chained SPT nodes
-typedef struct GCSOSidecarTable GCSOSidecarTable;
-
-// Action Dispatch Function Pointer Hook Prototype
-typedef GCSOStatus (GCSO_CALL *GCSOActionDispatchFn)(
-    GCSOSidecarTable* spt,
-    uint32_t action_id,
-    void* action_payload,
-    void* user_data
-);
-
-// Local Micro/Mezzo Evaluation Hook Prototype
-typedef GCSOStatus (GCSO_CALL *GCSOEvalDispatchFn)(
-    const GCSOSidecarTable* spt,
-    uint64_t state_flags,
-    float* out_score
-);
-
-// Sidecar Pointer Table (SPT) - Integrated Action Hub & Fractal Node Layout
-// Exactly 128 bytes with 64-byte alignment (2 Cache Lines on 64-bit architectures)
-typedef struct GCSO_ALIGNAS(64) GCSOSidecarTable {
-    // --- [Block 1: Host Inference Action Tensor Slots] (32 bytes, Offset 0..31) ---
-    union {
-        struct {
-            void*           query_ptr;             // Host engine Query tensor buffer pointer (8 bytes, Offset 0)
-            void*           key_ptr;               // Host engine Key tensor buffer pointer (8 bytes, Offset 8)
-            void*           value_ptr;             // Host engine Value tensor buffer pointer (8 bytes, Offset 16)
-            void*           logits_ptr;            // Host engine Logit output buffer pointer (8 bytes, Offset 24)
-        };
-        void*               action_slots[4];       // Generic action slot array for versatile hub access (32 bytes, Offset 0..31)
-    };
-
-    // --- [Block 2: Phase Steering & Stigmergic Hub Slot] (32 bytes, Offset 32..63) ---
-    const int8_t*           phase_offsets_q7;      // Q7 phase offset lookup buffer (atomic pointer swap target) (8 bytes, Offset 32)
-    void*                   stigmergic_medium_ptr; // Pointer to Stigmergic Medium / .gcso Container Hub (8 bytes, Offset 40)
-    uint32_t                stride_layer;          // Byte stride between layer activations (4 bytes, Offset 48)
-    uint32_t                num_phase_slots;       // Valid slots count in phase_offsets_q7 buffer (4 bytes, Offset 52)
-    uint16_t                struct_version;        // SPT layout version identifier (2 bytes, Offset 56)
-    uint16_t                tensor_data_type;      // Tensor data precision (gcso_tensor_type_t) (2 bytes, Offset 58)
-    uint16_t                stride_head;           // Byte stride between query head activations (2 bytes, Offset 60)
-    uint16_t                stride_kv_head;        // Byte stride between KV head activations for GQA (2 bytes, Offset 62)
-
-    // --- [Block 3: Dispatch Hooks & Atomic State] (32 bytes, Offset 64..95) ---
-    uint32_t                granularity_level;     // Granularity Tier: 0=Nano, 1=Micro, 2=Mezzo, 3=Macro (4 bytes, Offset 64)
-    uint32_t                num_children;          // Number of active child SPT nodes in child_spt_array (4 bytes, Offset 68)
-    GCSOActionDispatchFn    action_dispatch_fn;    // Event dispatch hook function pointer (8 bytes, Offset 72)
-    GCSOEvalDispatchFn      eval_dispatch_fn;      // Local macro evaluation function pointer (8 bytes, Offset 80)
-    uint64_t                local_state_mask;      // Atomic bitmask recording local evaluation state (8 bytes, Offset 88)
-
-    // --- [Block 4: Fractal Cascade & Pointer Chain Hub] (32 bytes, Offset 96..127) ---
-    GCSOSidecarTable*       next_spt;              // Next SPT node in horizontal chain (atomic pointer swap target) (8 bytes, Offset 96)
-    GCSOSidecarTable*       parent_spt;            // Pointer to parent macro SPT node (8 bytes, Offset 104)
-    GCSOSidecarTable**      child_spt_array;       // Pointer to array of child micro SPT node pointers (8 bytes, Offset 112)
-    void*                   user_data;             // User context passed to dispatch hooks (8 bytes, Offset 120)
-} GCSOSidecarTable;
-
-// Static compile-time verification of struct layout (128 bytes size, 64 bytes alignment)
-#ifdef __cplusplus
-  static_assert(sizeof(GCSOSidecarTable) == 128, "GCSOSidecarTable size must be exactly 128 bytes");
-  static_assert(alignof(GCSOSidecarTable) == 64, "GCSOSidecarTable alignment must be exactly 64 bytes");
-#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-  _Static_assert(sizeof(GCSOSidecarTable) == 128, "GCSOSidecarTable size must be exactly 128 bytes");
-  _Static_assert(_Alignof(GCSOSidecarTable) == 64, "GCSOSidecarTable alignment must be exactly 64 bytes");
-#endif
-
-// Default Static Initialization Macro for GCSOSidecarTable
-#define GCSO_SIDECAR_TABLE_INIT { \
-    { { NULL, NULL, NULL, NULL } }, \
-    NULL, NULL, 0U, 0U,             \
-    GCSO_SPT_STRUCT_VERSION,        \
-    GCSO_TENSOR_TYPE_FP16,          \
-    0U, 0U,                         \
-    GCSO_GRANULARITY_MICRO,         \
-    0U, NULL, NULL, 0ULL,           \
-    NULL, NULL, NULL, NULL          \
-}
-
-// Opaque handle declarations
-typedef struct GCSOContext GCSOContext;
-typedef struct GCSOEdbcState GCSOEdbcState;
-typedef struct GCSOContainer GCSOContainer;
-typedef struct GCSOSwarmCell GCSOSwarmCell;
-
-// Thread-local error string accessors
-GCSO_API const char* GCSO_CALL gcso_get_last_error_message(void) GCSO_NOEXCEPT;
-GCSO_API void        GCSO_CALL gcso_set_last_error_message(const char* msg) GCSO_NOEXCEPT;
-GCSO_API void        GCSO_CALL gcso_clear_last_error_message(void) GCSO_NOEXCEPT;
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif // LIMINIKA_GCSO_TYPES_H
+```text
++-----------------------------------------------------------------------------------+
+|               High-Level Runtime (Rust Core / LiminiKa DSL / CLI)                 |
++-----------------------------------------------------------------------------------+
+                                         │
+                   [C11 / C++20 C-ABI Boundary Barrier Layer]
+                                         │
++-----------------------------------------------------------------------------------+
+| [Macro Level] Cold Path / Attractor Field & EDBC Control                          |
+|   - Primary Endpoint: System Prompt (Natural Language) as Anchor Attractor        |
+|   - Moving Z-Score Entropy (H~) & Pitchfork Bifurcation Evaluation                |
+|   - Dynamic Persona Patch Application & Dyadic Ultrametric Barrier                |
+|   - ZIMMS Memory-Mapped Storage (.gcso Container Serialization / Restoration)     |
+|   - Cohomological Obstruction Class H^1(K; F) & Phase-Conjugate Repulsion         |
+|   - Bottom-Up Attractor Crystallization from Aggregated Pointer Trails            |
+|   - Layer-Adaptive DAES Role: Autonomous Self-Tuning Parameter Optimizer          |
+|   - Layer-Adaptive EDBC Role: Pitchfork Bifurcation & Energy-Guided Decoding      |
++-----------------------------------------------------------------------------------+
+                                         ▲
+                                         │ (Cascading Lower Aggregates & Attractor Pulls)
++-----------------------------------------------------------------------------------+
+| [Mezzo Level] Inter-Block Coordination (Cellular Layer-Hub / Swarm)               |
+|   - PagedBlock (16-32 Tokens) Aggregate Processing & Skip-Hop Synchronization     |
+|   - Buffered Bit-Tree Reduction & Interlinking Hallucinated Trails                |
+|   - Memory Pushout Alignment & Stigmergic Offloading to Disk                      |
+|   - PPRC Keyframe Seek & Variable GOP Frame Indexing                              |
+|   - Layer-Adaptive DAES Role: Block-Level Hit-Rate Aggregator & Cache Indexer     |
+|   - Layer-Adaptive EDBC Role: Sliding-Window Entropy Rate Integrator (Phi_M)      |
++-----------------------------------------------------------------------------------+
+                                         ▲
+                                         │ (Cascading Pointer Trails & Stigmergic Traces)
++-----------------------------------------------------------------------------------+
+| [Micro Level] Hot Path / Action Hub (Sidecar Pointer Table - SPT)                 |
+|   - Intelligence as Pointer Chains: O(1) Tagged Pointer Transitions               |
+|   - Bottom-Up Stigmergy: Connect Cellular Hallucinations & Pull Trails to Anchor  |
+|   - Extensible Payload Mapping (user_data / cluster_id / target_anchor_id)        |
+|   - Lazy Phase Unwrapping & Query-Only Relative Phase Shift                       |
+|   - Hash Slot 256 Indexing & Local Swarm Cell Step Execution                      |
+|   - PSPM Sub-Head Group Routing & SRL Dynamic Rank-1 Adapter Integration          |
+|   - Layer-Adaptive DAES Role: O(1) Fast-Path Shortcut Lookup & Bypass Table       |
+|   - Layer-Adaptive EDBC Role: Token Z-Score Entropy Calculation                   |
++-----------------------------------------------------------------------------------+
+                                         ▲
+                                         │ (Warp / SIMD Bitmask & Register Cascade)
++-----------------------------------------------------------------------------------+
+| [Nano Level] In-Kernel Hot Path (C++20 / CUDA / Metal / Vulkan Kernels)           |
+|   - Dynamic Phase-Shifted RoPE (DPSR) & RIPA tanh Angle Clamping                  |
+|   - QDPS Quantization-Discretized Phase Steering & Step Thresholding              |
+|   - Slerp Norm-Guarded Stabilization & Fused Logit Phase Shift                    |
+|   - Isotropic Block-Diagonal Scaling & Sparse Residual Adapter Layer (SRL)        |
+|   - Branchless SIMD Bitmask Operations & Warp Register Shuffle                    |
+|   - Speculative Bit-Level Phase Prefetching                                       |
+|   - Layer-Adaptive DAES Role: Lock-Free In-Register Ring Ledger Push              |
+|   - Layer-Adaptive EDBC Role: Warp-Level 1st-Order Entropy Surge Detection        |
++-----------------------------------------------------------------------------------+
+                                         │
+        [ Dynamic Adaptive Extension Scratchpad (DAES) Multi-Layer Dynamic Barrier ]
+                                         │
++-----------------------------------------------------------------------------------+
+| [DAES Multi-Layer Dynamic Engine] In-Memory Scratchpad & Layer Adaptation         |
+|   - Dynamic Data Structure: In-Place Ring Buffer, Fast-Path Shortcuts & Counters  |
+|   - Dynamic Mode 0: Local Fast-Path Shortcut & Multi-Layer Telemetry Scratchpad   |
+|   - Dynamic Mode 1: External Distributed Network Plugin Slot (GCSO-DNP)           |
+|   - Dynamic Mode 2: Multi-GPU / Inter-Process Shared Memory Buffer Slot           |
++-----------------------------------------------------------------------------------+
 
 ```
 
 ---
 
-## 3. Configuration Struct & Memory Layout (`gcso_config.h`)
+### 1.3 Execution Responsibility & Dynamic Data Cascade Matrix
 
-To guarantee binary compatibility across C11, C++20, Rust FFI, and sidecar host applications, `GCSOConfig` includes an explicit `struct_version` at Offset 0 (set to `GCSO_CONFIG_STRUCT_VERSION`), accompanied by explicit padding (`_reserved[9]` from Offset 39 to 47) to guarantee an exact 48-byte layout with 8-byte alignment, supporting GQA (`num_kv_heads`) and SRL FFN dimensions (`ffn_dim`).
+| Layer Level | Compute Granularity | Local Execution (Micro Computation) | Local Control (Macro Evaluation) | Data Cascade Output | DAES Multi-Layer Behavior | EDBC Multi-Layer Behavior |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Macro Level** | Session / Attractor Field | Asynchronous AOT phase base updating, L2P-SVD projection & ZIMMS file mapping | Moving Z-Score Entropy ($\tilde{H}$), Pitchfork Bifurcation tracking & Cohomology $H^1(K; \mathcal{F})$ | Atomic global phase parameters, System Prompt Anchors & Macro Attractor Clusters | Evaluates telemetry ring to auto-tune PSPM ratios, RIPA clamps & EDBC thresholds | Drives Pitchfork Bifurcation & Energy-Guided Decoding transitions |
+| **Mezzo Level** | Chunk / PagedBlock (16–32 Tokens) | Skip-Hop Bus inter-layer topology updates & PPRC I/P-Frame Seek | Buffered Bit-Tree Reduction, Interlinking Hallucinated Trails & Gershgorin Upper Bounds | Aggregated block phase status & Keyframe Indices | Aggregates block-level cache hit-rate metrics across token ranges | Tracks Sliding-Window Entropy Rate Integrator ($\Phi_M(t)$) |
+| **Micro Level** | Per-Token / Action Hub (SPT) | $\mathcal{O}(1)$ Tagged Pointer lookup, PSPM Sub-Head Routing & Dynamic Shortcut Lookup | Bitmask reduction, SRL Rank-1 gating & Trail pulling toward Anchor Attractors | Pointer Trail, Q7 Phase delta & Adapter Residuals | Operates $\mathcal{O}(1)$ Fast-Path Bypass Table to skip redundant evaluations | Computes Token Z-Score Entropy ($\tilde{H}$) from activation distance |
+| **Nano Level** | Thread-Warp / SIMD Lane | Branchless bitwise ops, Q7 addition in register shuffle & QDPS grid filtering | In-register RIPA $\tanh$ clamping, Speculative Phase Prefetch & immediate steering | Warp bitmask & Fused RoPE angles | Pushes lock-free profiling telemetry into scratchpad ring buffer | Detects 1st-order local entropy surge via Warp Shuffle |
 
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
+---
 
-#ifndef LIMINIKA_GCSO_CONFIG_H
-#define LIMINIKA_GCSO_CONFIG_H
+### 1.4 Core Architectural Pillars & Layer-Adaptive Behaviors
 
-#include "gcso_types.h"
+| Pillar Name | Target Layer | Primary Memory & Execution Guarantee |
+| --- | --- | --- |
+| **Intelligence as Pointer Chains** | Micro / Hot Path | $\mathcal{O}(1)$ cacheline-friendly tagged pointer layout. Zero dynamic allocation in Hot Path. Pointer transitions represent the fundamental primitive of intelligence. |
+| **Bottom-Up Stigmergy & Attractor Crystallization** | Micro $\to$ Macro | Pointer processing trails bridge cellular hallucinations, accumulating stigmergic density to macro-crystallize into latent Anchor Attractors or pull trails toward existing anchors. |
+| **Phase-Conjugate Repulsion via Pointer Traces** | Micro $\to$ Macro | When cellular hallucinations hit false local minima, anti-phase markers ($-\boldsymbol{\Delta\theta}$) are stamped onto pointer trails, converting energy valleys into repulsive potential peaks. |
+| **Quantization-Discretized Phase Steering (QDPS)** | Nano / Micro | Discrete steering filter eliminating phase updates below discretization threshold ($\Delta\theta_{\mathrm{min\_step}}$) to prevent grid oscillation under 1.5–3.5 bit weights. |
+| **Multi-Layer Self-Adaptive System Components** | All Layers (Nano–Macro) | High-level components (DAES, EDBC) dynamically change their internal execution role depending on whether they are accessed at Nano, Micro, Mezzo, or Macro levels. |
+| **System Prompt Anchor Endpoint** | Macro / Cold Path | Natural language system prompts projected into phase space as primary baseline Anchor Attractors. |
+| **Descriptor-Based ABI & Facade** | Boundary | Unified Facade pattern via context handles. APIs accept descriptors with `struct_size` and `abi_version` validation. |
+| **Unified Binary Persistence (ZIMMS)** | Boundary / Storage | Action Hub pointer chains, Attractor Field states, PPRC keyframes, SRL weights, and DAES state unified into `.gcso` container via zero-copy mmap. |
+| **Polyfilled Compatibility Baseline** | Boundary | Standard C11 / C++20 compilation baseline with fallback polyfill macros (`GCSO_RESTRICT`, `GCSO_NOEXCEPT`, `GCSO_ALIGNAS`). |
+| **Zero-Alloc Exception Isolation** | Boundary / Hot Path | Boundary exception protection (`try-catch`) and `catch_unwind` on Rust FFI. Non-aliased (`GCSO_RESTRICT`) aligned memory. |
+| **PSPM Single-Pass Head Steering** | Nano / Micro | Single-pass head-group phase steering supporting Fact, Logic, and Explore sub-head routing. |
+| **PPRC Keyframe KV Compression** | Mezzo / Storage | Temporal Key-Frame KV cache compression via Variable GOP Structures, decoupling Fact Anchors (I-Cache) and Phase Motion (P-Cache). |
+| **Dynamic Adaptive Extension Scratchpad (DAES)** | DAES Layer | Reuses 64B extension memory as a dynamic in-place scratchpad data structure (Telemetry Ledger / Fast-Path Bypass Table / DNP Slot) for zero-alloc hot-path acceleration and self-optimization. |
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+---
 
-#define GCSO_CONFIG_STRUCT_VERSION GCSO_ABI_VERSION_COMBINED
+## 2. Intelligence as Pointer Chains & Bottom-Up Attractor Dynamics
 
-typedef struct GCSO_ALIGNAS(8) GCSOConfig {
-    uint32_t struct_version;      // Offset 0, Size 4 (GCSO_CONFIG_STRUCT_VERSION check)
-    uint32_t num_layers;          // Offset 4, Size 4
-    uint32_t num_heads;           // Offset 8, Size 4 (Query heads count)
-    uint32_t num_kv_heads;        // Offset 12, Size 4 (Key/Value heads count for GQA)
-    uint32_t head_dim;            // Offset 16, Size 4 (d_head, must be an even number)
-    uint32_t ffn_dim;             // Offset 20, Size 4 (FFN intermediate dim for SRL)
-    uint32_t max_context_length;  // Offset 24, Size 4
-    uint32_t vocab_size;          // Offset 28, Size 4 (Model vocabulary size)
-    float    ripa_clamp_rad;      // Offset 32, Size 4 (RIPA limit, default ~0.087 rad)
-    uint8_t  enable_srl;          // Offset 36, Size 1 (1 = true, 0 = false)
-    uint8_t  enable_edbc;         // Offset 37, Size 1 (1 = true, 0 = false)
-    uint8_t  enable_sidecar_mode; // Offset 38, Size 1 (1 = true, 0 = false)
-    uint8_t  _reserved[9];        // Offset 39, Size 9 (Explicit padding for 48-byte struct alignment)
-} GCSOConfig;
+### 2.1 Pointer-Chain Intelligence & Action Hub (SPT) Conceptual Flow
 
-// Static compile-time verification of GCSOConfig layout (48 bytes size, 8 bytes alignment)
-#ifdef __cplusplus
-  static_assert(sizeof(GCSOConfig) == 48, "GCSOConfig size must be exactly 48 bytes");
-  static_assert(alignof(GCSOConfig) == 8, "GCSOConfig alignment must be exactly 8 bytes");
-#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-  _Static_assert(sizeof(GCSOConfig) == 48, "GCSOConfig size must be exactly 48 bytes");
-  _Static_assert(_Alignof(GCSOConfig) == 8, "GCSOConfig alignment must be exactly 8 bytes");
-#endif
+Micro-level pointer transitions build a persistent Stigmergic Trail Map in the Action Hub (SPT). Micro pointer trails (`linked_trail_id`) continuously accumulate stigmergic density ( $\rho_{\mathrm{stigmergy}}$ ). When density passes the pull threshold, an attractor pull force ( $F_{\mathrm{pull}}$ ) emerges to steer active pointer chains toward macro anchor attractors. High-density trails autonomously crystallize in phase space as new dynamic latent attractors without updating base model weights.
 
-// Default Static Initialization Macro for GCSOConfig
-#define GCSO_CONFIG_INIT { \
-    GCSO_CONFIG_STRUCT_VERSION, \
-    0U, 0U, 0U, 0U, 0U, 0U, 0U, \
-    0.0872664626f,              \
-    0U, 0U, 0U,                 \
-    {0}                         \
-}
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif // LIMINIKA_GCSO_CONFIG_H
+```text
+[ Micro Cellular Hallucinations ] ──(Link Pointer Trails)──> [ Action Hub (SPT) Pointer Trail Map ]
+                                                                      │
+                                                                (Stigmergic Density
+                                                                 Accumulation & Pull)
+                                                                      │
+                                                                      ▼
+[ Bottom-Up Macro Attractor ] <───(Phase Crystallization)───────[ Attractor Field ]
+  (Self-Organized Phase Field)                                        ▲
+                                                                      │ (Attractor Pull Force F_pull)
+[ System Prompt Anchor Attractor ] ───────────────────────────────────┘
+  (Primary Baseline Endpoint)
 
 ```
 
 ---
 
-## 4. C-ABI Function References (`gcso_abi.h`)
+### 2.2 Pointer Trail to Attractor Life-Cycle Matrix
 
-### 4.1 System Utilities & Versioning [Cold Path]
+| Stage Name | Execution Layer | Trigger Condition | Memory & Topological Operation |
+| --- | --- | --- | --- |
+| **Pointer Step** | Micro / Action Hub | Token transition execution | Writes 64-bit Tagged Pointer transition and updates Q7 phase delta in `gcso_pointer_trail_t`. |
+| **Stigmergic Trace** | Micro / Mezzo | Repeated trail traversal | Increases `stigmergic_density` and links adjacent trails via `linked_trail_id`. |
+| **QDPS Grid Filter** | Nano / Micro | Phase angle update evaluation | Evaluates $\vert\Delta\theta\vert \ge \Delta\theta_{\mathrm{min\_step}}$. If below threshold, rounds to 0 to prevent quantization noise. |
+| **Attractor Pull** | Micro $\leftarrow$ Macro | `stigmergic_density > tau_pull` | Applies `attractor_pull_force` $F_{\mathrm{pull}}$ to steer active pointer chain toward `target_anchor_id`. |
+| **Phase-Conjugate Repulsion** | Micro $\to$ Macro | Cohomological obstruction $H^1(K; \mathcal{F})$ | Marks pointer trail with anti-phase delta ($-\boldsymbol{\Delta\theta}$), flipping local minimum into a repulsive peak. |
+| **Macro Crystallization** | Macro / Attractor Field | `stigmergic_density > tau_crystal` | Instantiates a new dynamic Anchor Attractor in phase space, converting high-density pointer trails into a persistent macro attractor. |
 
-#### `gcso_get_version`
+---
 
-Retrieves the runtime major, minor, and patch version numbers.
+### 2.3 QDPS (Quantization-Discretized Phase Steering) Resolution Grid Topology
 
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API void GCSO_CALL gcso_get_version(
-    uint32_t* major,              // [out] Major version
-    uint32_t* minor,              // [out] Minor version
-    uint32_t* patch               // [out] Patch version
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_check_abi_version`
-
-Verifies compatibility between the caller and runtime ABI versions.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_check_abi_version(
-    uint32_t major,               // [in] Expected major version
-    uint32_t minor                // [in] Expected minor version
-) GCSO_NOEXCEPT;
+```text
+[ Continuous Phase Delta Input (dTheta) ]
+                   │
+                   ▼
+  ┌─────────────────────────────────┐
+  │  Magnitude Check: |dTheta|      │
+  └────────────────┬────────────────┘
+                   │
+         ┌─────────┴─────────┐
+         │                   │
+  [ < dTheta_min_step ]  [ >= dTheta_min_step ]
+         │                   │
+         ▼                   ▼
+  ┌─────────────┐     ┌───────────────────────────────────┐
+  │ Cutoff to 0 │     │ Quantized Step Rounding           │
+  │ (No-Op)     │     │ dTheta_q = round(dTheta / Step)   │
+  └─────────────┘     └─────────────────┬─────────────────┘
+                                        │
+                                        ▼
+                      ┌───────────────────────────────────┐
+                      │ Apply to DPSR Register Shuffle    │
+                      └───────────────────────────────────┘
 
 ```
 
 ---
 
-### 4.2 Lifecycle & Configuration [Cold Path]
+## 3. Subsystem Architectural Dynamics & State Machines
 
-#### `gcso_init`
+### 3.1 EDBC Entropy-Driven Decoding & Pitchfork Bifurcation State Machine
 
-Initializes the GCSO runtime environment and pre-allocates execution buffers for standalone or sidecar mode.
+The Entropy-Driven Decoding Branch Controller (EDBC) monitors activation entropy ( $\tilde{H}$ ) across execution layers, switching decoding paths without dynamic allocation.
 
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_init(
-    const GCSOConfig* config,   // [in]  Pointer to runtime configuration
-    GCSOContext**     out_ctx   // [out] Pointer to allocated GCSOContext handle
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_context_free`
-
-Destroys the GCSO runtime environment and releases all allocated memory. Accepts `NULL` gracefully as a no-op returning `GCSO_SUCCESS`.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_context_free(
-    GCSOContext* ctx            // [in, nullable] Handle to destroy
-) GCSO_NOEXCEPT;
-
-```
-
----
-
-### 4.3 Dynamic Phase-Shifted RoPE (DPSR) Kernels & Tensor Operations [Nano / Micro Hot Path Execution]
-
-> **Strict Rule**: All functions in Section 4.3 execute inside the hot path decoding loop and must operate with **zero dynamic allocations (`malloc`/`free`/`new`/`delete`)** and **zero blocking system calls**. Successful execution paths must not write to TLS. If `query_ptr` or required tensor pointers are `NULL`, functions return `GCSO_SUCCESS` immediately as a safe no-op.
-
-#### `gcso_dpsr_init` [Cold Path]
-
-Initializes internal DPSR execution pipelines and binds pre-allocated memory buffers.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_dpsr_init(
-    GCSOContext*      ctx,      // [in, out] Active GCSO context
-    const GCSOConfig* config    // [in]      Configuration reference
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_dpsr_apply_phase_steering` [Nano / Micro Hot Path]
-
-Applies relative phase shift (Lazy Phase Unwrapping) inline to Query tensor registers of standalone or sidecar host engines.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_dpsr_apply_phase_steering(
-    GCSOContext*     ctx,             // [in, out] Active context
-    void*            query_ptr,       // [in, out, nullable] Query tensor buffer
-    const gcso_q7_t* phase_delta_q7,  // [in]      Q7 phase differential array
-    uint32_t         seq_len,         // [in]      Sequence length
-    uint32_t         layer_idx,       // [in]      Target layer index
-    uint32_t         head_idx         // [in]      Target head index
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_dpsr_apply_phase_steering_safe` [Nano / Micro Hot Path]
-
-Applies Restricted Inline Phase Alignment (RIPA) with $\tanh$ soft-clamping restricted to low-frequency channels ($d_{\mathrm{head}}/4$).
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_dpsr_apply_phase_steering_safe(
-    GCSOContext*     ctx,             // [in, out] Active context
-    void*            query_ptr,       // [in, out, nullable] Query tensor buffer
-    const gcso_q7_t* phase_delta_q7,  // [in]      Q7 phase differential array
-    float            clamp_threshold, // [in]      RIPA clamp rad threshold
-    uint32_t         layer_idx,       // [in]      Target layer index
-    uint32_t         head_idx         // [in]      Target head index
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_dpsr_lazy_unwrap_override` [Micro Hot Path]
-
-Overrides cumulative context phase delta on Query tensors without re-rotating KV cache vectors.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_dpsr_lazy_unwrap_override(
-    GCSOContext*     ctx,                     // [in, out] Active context
-    void*            query_ptr,               // [in, out, nullable] Query tensor buffer
-    const gcso_q7_t* context_accum_phase_q7, // [in]      Accumulated context phase
-    uint32_t         layer_idx,               // [in]      Target layer index
-    uint32_t         head_idx                 // [in]      Target head index
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_dpsr_apply_soft_phase_damping` [Micro Hot Path]
-
-Applies soft phase damping to mitigate output divergence during phase transitions.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_dpsr_apply_soft_phase_damping(
-    GCSOContext* ctx,           // [in, out] Active context
-    void*        query_ptr,     // [in, out, nullable] Query tensor buffer
-    float        damping_factor,// [in]      Damping scale [0.0, 1.0]
-    uint32_t     layer_idx,     // [in]      Target layer index
-    uint32_t     head_idx       // [in]      Target head index
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_dpsr_slerp_norm_guard_stable` [Micro Hot Path]
-
-Executes norm-guarded Slerp (Spherical Linear Interpolation) stabilization on phase vectors to prevent numeric underflow/overflow.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_dpsr_slerp_norm_guard_stable(
-    const float* phase_a,       // [in]  Input phase vector A
-    const float* phase_b,       // [in]  Input phase vector B
-    float        t,             // [in]  Interpolation factor [0.0, 1.0]
-    float*       out_phase,     // [out] Interpolated phase vector
-    uint32_t     dim            // [in]  Dimension
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_dpsr_fused_logit_shift` [Micro Hot Path]
-
-Applies fused phase shift directly to logit output registers of the host engine immediately preceding token sampling.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_dpsr_fused_logit_shift(
-    void*            logits,          // [in, out, nullable] Logit buffer
-    const gcso_q7_t* phase_delta_q7,  // [in]      Q7 phase shift array
-    uint32_t         vocab_size       // [in]      Vocabulary size
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_dpsr_compute_procrustes_phase_delta` [Cold Path]
-
-Computes the optimal phase rotation matrix alignment delta ( $\Delta\boldsymbol{\theta}$ ) via Procrustes analysis on latent manifolds.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_dpsr_compute_procrustes_phase_delta(
-    const float* src_matrix,    // [in]  Source tensor matrix
-    const float* tgt_matrix,    // [in]  Target tensor matrix
-    uint32_t     rows,          // [in]  Matrix rows
-    uint32_t     cols,          // [in]  Matrix columns
-    gcso_q7_t*   out_delta_q7   // [out] Computed Q7 phase delta
-) GCSO_NOEXCEPT;
+```text
+               ┌──────────────────────────────────────────────────┐
+               │         NORMAL_ENTROPY_MODE (Default)            │
+               │   - Standard Nucleus / Dynamic Sampling          │
+               │   - Low Phase Distortions                        │
+               └──────────────────────┬───────────────────────────┘
+                                      │
+            [ Z-Score Entropy H~ > Tau_Bifurcation ]
+                                      │
+                                      ▼
+               ┌──────────────────────────────────────────────────┐
+               │          PITCHFORK_BIFURCATION_MODE              │
+               │   - Split Exploration & Logic Sub-Heads          │
+               │   - Apply Dual Phase Rotation Angle (+/- dTheta) │
+               └──────────────────────┬───────────────────────────┘
+                                      │
+     ┌────────────────────────────────┴────────────────────────────────┐
+     │                                                                 │
+[ Cohomological Obstruction Class ]                [ Entropy Normalizes H~ <= Tau_Bifurcation ]
+     │                                                                 │
+     ▼                                                                 ▼
+┌──────────────────────────────────────────┐      ┌──────────────────────────────────────────┐
+│      PHASE_CONJUGATE_REPULSION_MODE      │      │          NORMAL_ENTROPY_MODE             │
+│  - Inject Anti-Phase Shift (-dTheta)     │      │  - Merge Sub-Heads & Recalibrate Phase   │
+│  - Convert Minimum to Potential Peak     │      └──────────────────────────────────────────┘
+└────────────────────┬─────────────────────┘
+                     │
+         [ Energy Valley Overcome ]
+                     │
+                     ▼
+┌──────────────────────────────────────────┐
+│             RECOVERY_COMPLETE            │
+│  - Resume Normal Trajectory Steering     │
+└──────────────────────────────────────────┘
 
 ```
 
 ---
 
-### 4.4 Sidecar Pointer Table (SPT) Action Hub & Swarm Stigmergic Operations [Micro / Mezzo / Macro Path]
-
-#### `gcso_spt_validate` [Cold Path / Sidecar Validation]
-
-Validates that all action slots, host engine tensor pointers, and phase offset arrays in `GCSOSidecarTable` satisfy 64-byte alignment and 128-byte size boundaries before binding. Optional tensor pointers set to `NULL` are validated as valid no-op slots.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_spt_validate(
-    const GCSOSidecarTable* spt // [in] Pointer table configuration to validate
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_spt_bind` [Cold Path / Sidecar Setup]
-
-Binds an external sidecar host engine's buffer pointers and action hooks to the Sidecar Pointer Table (SPT) Action Hub for zero-copy phase steering and pointer chaining.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_spt_bind(
-    GCSOContext*            ctx,      // [in, out] Active context
-    const GCSOSidecarTable* spt_in,   // [in]      Host engine binding configuration
-    GCSOSidecarTable**      out_spt   // [out]     Allocated Sidecar Pointer Table handle
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_spt_dispatch_action` [Micro / Macro Action Hub Dispatch]
-
-Dispatches an action through the Integrated Action Hub (SPT) by traversing the pointer chain or invoking registered `action_dispatch_fn` hooks in $\mathcal{O}(1)$ time.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_spt_dispatch_action(
-    GCSOSidecarTable* spt,            // [in] Active Integrated Action Hub node
-    uint32_t          action_id,      // [in] Bitmask flag for target action (e.g., GCSO_ACTION_ID_DPSR_STEERING)
-    void*             action_payload  // [in, nullable] Payload associated with action
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_spt_atomic_swap_next` [Macro Attractor Steering / Lock-Free Hot-Path Update]
-
-Executes an atomic lock-free pointer swap on `next_spt` observing Acquire-Release semantics (via C++20 `std::atomic_ref`), redirecting the execution trajectory without locking the Hot Path thread.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_spt_atomic_swap_next(
-    GCSOSidecarTable* spt,            // [in, out] Active SPT node
-    GCSOSidecarTable* new_next_spt    // [in, nullable] Target next SPT node pointer
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_spt_atomic_swap_phase` [Macro Attractor Steering / Lock-Free Hot-Path Update]
-
-Executes an atomic lock-free pointer swap on `phase_offsets_q7` observing Acquire-Release semantics (via C++20 `std::atomic_ref`), instantly modulating active phase vectors across tokens.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_spt_atomic_swap_phase(
-    GCSOSidecarTable* spt,            // [in, out] Active SPT node
-    const int8_t*     new_phase_q7    // [in, nullable] Target Q7 phase offset array pointer
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_spt_trace_stigmergic_trajectory` [Micro / Macro Bottom-Up Stigmergy Trace]
-
-Aggregates pointer traversal steps through `GCSOSidecarTable` nodes during execution into a 64-bit trajectory hash and writes it into the environmental memory (Stigmergic Medium) in $\mathcal{O}(1)$ without allocating memory.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_spt_trace_stigmergic_trajectory(
-    GCSOSidecarTable* spt,            // [in] Active SPT node
-    uint64_t*         out_traj_hash   // [out] Computed 64-bit trajectory hash ID
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_spt_deposit_stigmergic_trace` [Micro / Macro Bottom-Up Pheromone Deposit]
-
-Directly deposits a stigmergic trajectory trace and pheromone intensity weight into `stigmergic_medium_ptr` in $\mathcal{O}(1)$, reflecting micro execution steps as environmental field updates.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_spt_deposit_stigmergic_trace(
-    GCSOSidecarTable* spt,            // [in, out] Active SPT node
-    uint64_t          trajectory_hash,// [in]      Computed 64-bit trajectory hash ID
-    float             trace_weight,   // [in]      Pheromone deposit intensity weight [0.0, 1.0]
-    uint32_t          decay_factor    // [in]      Evaporation decay rate parameter
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_spt_steer_to_attractor` [Macro Attractor Basin Steering]
-
-Performs atomic lock-free pointer swaps on `next_spt` or `phase_offsets_q7` based on target attractor potential values, pulling micro pointer execution trajectories into macro attraction basins.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_spt_steer_to_attractor(
-    GCSOSidecarTable* spt,             // [in, out] Active SPT node
-    uint64_t          attractor_hash,  // [in] Target attractor trajectory ID
-    float             attract_gain     // [in] Attraction gain scale [0.0, 1.0]
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_spt_repel_from_hallucination` [Macro Phase-Conjugate Repulsion]
-
-Applies Phase-Conjugate Attractor Repulsion ( $-\boldsymbol{\Delta\theta}_{\mathrm{hallucination}}$ ) when a spurious local minimum (hallucination) is detected, flipping the potential valley into a repulsive peak to guide pointer trajectories away without altering weights.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_spt_repel_from_hallucination(
-    GCSOSidecarTable* spt,             // [in, out] Active SPT node
-    uint64_t          hallucination_id,// [in] Target spurious local minimum ID
-    float             repel_gain       // [in] Repulsion strength scale [0.0, 1.0]
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_spt_cascade_eval` [Mezzo / Macro Bottom-Up Evaluation]
-
-Cascades local micro state masks through the fractal SPT pointer tree (`parent_spt`), executing `eval_dispatch_fn` to perform lock-free state reductions up to the macro layer. Traversal recursion depth is bounded by `GCSO_MAX_CASCADE_DEPTH` to prevent stack overflows.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_spt_cascade_eval(
-    GCSOSidecarTable* spt,            // [in] Active SPT node
-    uint64_t          local_flags,    // [in] Micro evaluation flags
-    float*            out_macro_score // [out] Aggregated macro score
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_spt_unbind` [Cold Path / Sidecar Teardown]
-
-Unbinds and releases the Sidecar Pointer Table (SPT) handle without invalidating referenced host engine memory buffers. Accepts `NULL` gracefully as a no-op returning `GCSO_SUCCESS`.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_spt_unbind(
-    GCSOSidecarTable* spt             // [in, nullable] Handle to unbind
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_swarm_cell_create` [Cold Path]
-
-Allocates and initializes a new Swarm Cell instance for cellular topology management.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_swarm_cell_create(
-    uint32_t        cell_id,    // [in]  Identifier for the swarm cell
-    GCSOSwarmCell** out_cell    // [out] Allocated GCSOSwarmCell handle
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_swarm_cell_chunk_step` [Micro / Mezzo Path]
-
-Processes micro activation chunk steps for localized cellular topology coordinator execution.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_swarm_cell_chunk_step(
-    GCSOContext*  ctx,            // [in, out] Active context
-    uint32_t      chunk_id,       // [in]      Target activation chunk ID
-    const float*  in_activations, // [in]      Activation buffer
-    size_t        activation_len  // [in]      Length of activation array
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_swarm_hub_reduce_bit_tree` [Mezzo Path]
-
-Performs hierarchical bit-tree reduction across cellular hub blocks, cascading state up to parent hubs via `parent_spt`.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_swarm_hub_reduce_bit_tree(
-    GCSOContext* ctx,           // [in, out] Active context
-    uint64_t*    bit_tree_ptr,  // [in, out] Bit-tree structure buffer
-    uint32_t     tree_depth     // [in]      Depth of the bit-tree
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_swarm_cell_state_update_express` [Micro Path]
-
-Executes expedited non-blocking state updates for cellular swarm agents.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_swarm_cell_state_update_express(
-    GCSOSwarmCell* cell,        // [in, out] Swarm cell instance
-    uint32_t       state_flags  // [in]      Express state flags
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_swarm_paged_block_warp_bitmask` [Nano / Micro Path]
-
-Executes warp-cooperative PagedBlock bitmask reduction and updates local swarm cell state in $\mathcal{O}(1)$.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_swarm_paged_block_warp_bitmask(
-    GCSOContext* ctx,                  // [in, out] Active context
-    uint32_t     block_id,             // [in]      PagedBlock ID
-    uint64_t     in_bitmask,           // [in]      Input warp bitmask
-    uint64_t*    out_reduced_bitmask   // [out]     Reduced bitmask output
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_spt_hash_slot_index` [Nano / Micro Path]
-
-Computes $\mathcal{O}(1)$ index lookup into Sidecar Pointer Table (SPT) for phase offsets and action chain targets.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API gcso_slot_id_t GCSO_CALL gcso_spt_hash_slot_index(
-    uint32_t layer_idx,         // [in] Layer index
-    uint32_t head_idx,          // [in] Head index
-    uint32_t token_pos          // [in] Token sequence position
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_swarm_cell_free` [Cold Path]
-
-Frees the allocated Swarm Cell instance handle. Accepts `NULL` gracefully as a no-op returning `GCSO_SUCCESS`.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_swarm_cell_free(
-    GCSOSwarmCell* swarm        // [in, nullable] Handle to destroy
-) GCSO_NOEXCEPT;
+### 3.2 PPRC Keyframe KV Cache & Temporal Motion Delta Lifecycle
+
+PPRC decouples Key-Value cache storage into sparse Fact Anchors (I-Frames) and continuous Phase Motion Deltas (P-Frames), enabling zero-forward latency context seeks.
+
+```text
+[ Context Input Stream ] ───> [ Token Entropy Evaluation ]
+                                      │
+                     ┌────────────────┴────────────────┐
+                     │                                 │
+           [ Keyframe Trigger (I-Frame) ]    [ Delta Token Step (P-Frame) ]
+                     │                                 │
+                     ▼                                 ▼
+         ┌───────────────────────┐         ┌───────────────────────┐
+         │  I-Frame KV Cache     │         │  P-Frame Motion Cache │
+         │  - Full Key Vector    │         │  - Phase Delta dTheta │
+         │  - High Precision FP16│         │  - Q7 Quantized Delta │
+         └───────────┬───────────┘         └───────────┬───────────┘
+                     │                                 │
+                     └────────────────┬────────────────┘
+                                      │
+                                      ▼
+                        ┌───────────────────────────┐
+                        │  Zero-Forward Latency     │
+                        │  Keyframe Reconstruction  │
+                        └───────────────────────────┘
 
 ```
 
 ---
 
-### 4.5 EDBC & Dynamic Entropy Control [Macro Evaluation Path]
+### 3.3 DAES Polymorphic Dynamic Scratchpad & Mode Switch State Machine
 
-#### `gcso_edbc_init` [Cold Path]
+DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad in Mode 0, as an FFI boundary extension handle for distributed networks in Mode 1, or as a shared IPC memory slot in Mode 2.
 
-Initializes EDBC state and Sliding-Window Entropy Rate Integrator.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_edbc_init(
-    const GCSOConfig* config,   // [in]  Configuration reference
-    GCSOEdbcState**   out_edbc   // [out] Allocated GCSOEdbcState handle
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_edbc_eval_stateful` [Macro Path]
-
-Evaluates Moving Z-Score Normalized Attention Entropy ( $\tilde{H}$ ) and determines branch routing (Exploration vs Convergence).
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_edbc_eval_stateful(
-    GCSOEdbcState* edbc,                  // [in, out] Active EDBC state
-    const void*    logits_ptr,            // [in, nullable] Logits buffer
-    uint32_t       vocab_size,            // [in]      Vocabulary size
-    float*         out_normalized_entropy,// [out]     Computed entropy (\tilde{H})
-    bool*          out_trigger_tunneling  // [out]     Metastable transition flag
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_edbc_cvoid_eval_dyadic128` [Macro Path]
-
-Evaluates Coherent Vector Alignment Metric ( $\mathcal{C}_{\mathrm{void}}$ ) across 128-bit Dyadic key structures.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_edbc_cvoid_eval_dyadic128(
-    GCSOEdbcState* edbc,            // [in, out] Active EDBC state
-    const uint64_t dyadic_key[2],   // [in]      128-bit Dyadic key
-    float*         out_cvoid_score  // [out]     Resulting alignment score
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_edbc_cvoid_eval_barrier` [Macro Path]
-
-Evaluates the Eyring-Kramers potential barrier deformation model for metastable state transitions.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_edbc_cvoid_eval_barrier(
-    GCSOEdbcState* edbc,            // [in, out] Active EDBC state
-    float          cvoid_score,     // [in]      Current C_void score
-    float*         out_barrier_h    // [out]     Computed potential barrier height
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_edbc_free` [Cold Path]
-
-Frees the allocated EDBC state controller context. Accepts `NULL` gracefully as a no-op returning `GCSO_SUCCESS`.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_edbc_free(
-    GCSOEdbcState* edbc          // [in, nullable] Handle to destroy
-) GCSO_NOEXCEPT;
+```text
++-----------------------------------------------------------------------------------+
+|                        Core GCSO Runtime Execution Engine                         |
+|   (Context Facade / Action Hub / Attractor Field / DPSR / SRL / EDBC / Storage)   |
++-----------------------------------------------------------------------------------+
+                                         │
+                      [ DAES Polymorphic Execution Barrier ]
+                                         │
+     ┌───────────────────────────────────┼───────────────────────────────────┐
+     │ (Mode 0: Default)                 │ (Mode 1: Network Plugin)          │ (Mode 2: Shared Buffer)
+     ▼                                   ▼                                   ▼
++-------------------------+   +-------------------------+   +-------------------------+
+| [DAES Scratchpad Engine]|   | [GCSO-DNP Plugin Engine]|   | [Shared IPC Memory Slot]|
+| - Fast-Path Bypass Table|   | - Remote Node Sync      |   | - Multi-GPU Shared Ring |
+| - Telemetry Ring Ledger |   | - Dynamic Network Frame |   | - Process Interop Queue |
+| - Auto-Tuner (PSPM/RIPA)|   | - Repulsion Callbacks   |   | - Lock-Free IPC Sync    |
++-------------------------+   +-------------------------+   +-------------------------+
 
 ```
 
 ---
 
-### 4.6 Sparse Residual Adapter Layer (SRL) Operations [Micro / Hot Path Execution]
+### 3.4 L2P-SVD & SRL Dynamic Rank-1 Adapter Lifecycle & Mapping Flow
 
-#### `gcso_srl_dynamic_mlp_gate_eval` [Micro Hot Path]
-
-Evaluates Dynamic Rank-1 Sparse Residual Adapter Layer (SRL) vector transformations.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_srl_dynamic_mlp_gate_eval(
-    GCSOContext* ctx,             // [in, out] Active context
-    const float* in_activation,   // [in]      Input activation array
-    const float* vector_u,        // [in]      FP8 Vector U
-    const float* vector_v,        // [in]      FP8 Vector V
-    const float* scale_s,         // [in]      Gain scale vector S
-    float*       out_activation,  // [out]     Output activation array
-    uint32_t     dim_in,          // [in]      Input dimension
-    uint32_t     dim_out          // [in]      Output dimension
-) GCSO_NOEXCEPT;
+```text
+[ Fine-Tuned LoRA Weights (W_A, W_B) ] ───(L2P-SVD Projection)───> [ First-Order SVD: U * Sigma * V^T ]
+                                                                                   │
+                                                                                   ▼
+[ SRL Outer Product Vectors (u, v) & Gain (s) ] <───(Extract Principal Component)──┘
+                      │
+                      ▼
+[ Hot Path In-Kernel Execution: y = W_base * x + s (*) (u * (v^T * x)) ]
 
 ```
 
 ---
 
-### 4.7 `.gcso` Container, Memory, Persona & Sidecar Attachment Operations [Cold Path & Async I/O]
+## 4. Header Topology & Polyfill Specification
 
-#### `gcso_container_open_mmap` [Cold Path]
+### 4.1 Header Module Inclusion Network
 
-Opens `.gcso` binary file or sidecar package via memory-mapping (Zero-Overhead In-Memory Mapped Storage: ZIMMS).
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_container_open_mmap(
-    const char*     file_path,      // [in]  Path to .gcso container or .gcsopack file
-    GCSOContainer** out_container   // [out] Opened container handle
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_container_get_track` [Cold Path]
-
-Retrieves a reference to a specific track (`CORE`, `I-CACHE`, `P-CACHE`, `SNAPSHOT`) from an opened container.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_container_get_track(
-    GCSOContainer*  container,      // [in]  Opened container
-    const char*     track_name,     // [in]  Track name string
-    const uint8_t** out_data_ptr,   // [out] Pointer to track binary data
-    size_t*         out_data_len    // [out] Track data byte length
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_pprc_seek_to_token` [Cold Path]
-
-Performs Zero-Forward Latency Seek (Instantaneous Replay) by restoring phase motion vectors from P-Cache.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_pprc_seek_to_token(
-    GCSOContext*   ctx,             // [in, out] Active context
-    GCSOContainer* container,       // [in]      Opened container
-    uint32_t       target_token_pos // [in]      Target seek index
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_mem_pushout_align` [Cold Path]
-
-Aligns memory layout offsets for Direct-DMA Ring-Buffer offloading.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_mem_pushout_align(
-    GCSOContext* ctx,               // [in, out] Active context
-    size_t       alignment_bytes    // [in]      Alignment boundary (e.g., 64, 128)
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_mem_stigmergic_offload` [Cold Path]
-
-Offloads inactive KV phase traces directly into environmental memory containers.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_mem_stigmergic_offload(
-    GCSOContext*   ctx,             // [in, out] Active context
-    GCSOContainer* container        // [in, out] Target memory container
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_persona_apply_patch` [Cold Path]
-
-Applies dynamic persona profile patches onto the active runtime context or sidecar host engine.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_persona_apply_patch(
-    GCSOContext*   ctx,             // [in, out] Active context
-    const uint8_t* patch_data,      // [in]      Binary patch buffer
-    size_t         patch_len        // [in]      Patch size in bytes
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_dnp_dispatch_packet` [Cold Path]
-
-Dispatches a Dynamic Node Protocol (GCSO-DNP) packet for swarm topology synchronization.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_dnp_dispatch_packet(
-    GCSOContext*   ctx,             // [in, out] Active context
-    const uint8_t* packet_buf,      // [in]      Serialized DNP packet
-    size_t         packet_len       // [in]      Packet byte size
-) GCSO_NOEXCEPT;
-
-```
-
-#### `gcso_container_close` [Cold Path]
-
-Unmaps and closes an opened `.gcso` container or sidecar file. Accepts `NULL` gracefully as a no-op returning `GCSO_SUCCESS`.
-
-```c
-// SPDX-License-Identifier: MIT OR Apache-2.0
-GCSO_API GCSOStatus GCSO_CALL gcso_container_close(
-    GCSOContainer* container        // [in, nullable] Container handle to destroy
-) GCSO_NOEXCEPT;
+```text
+  +-----------------------------------+
+  |   include/liminika/gcso_config.h  |  <-- Versioning, Export Visibility, C++20/C11 Polyfills
+  +-----------------------------------+
+                    ▲
+                    │ #include
+  +-----------------------------------+
+  |   include/liminika/gcso_types.h   |  <-- POD Struct Layouts, Enums, Handles, Alignment
+  +-----------------------------------+
+                    ▲
+                    │ #include
+  +-----------------------------------+
+  |    include/liminika/gcso_abi.h    |  <-- Exported C-ABI Function Contracts & Facade API
+  +-----------------------------------+
 
 ```
 
 ---
 
-### 4.8 Sidecar Integration Lifecycle & Integrated Action Hooks
+### 4.2 Compatibility & Polyfill Feature Mapping
 
-When integrated as a sidecar middleware alongside external inference engines (e.g., llama.cpp), execution follows a strict 5-stage non-intrusive lifecycle centered around the Action Hub:
+| Feature / Macro Keyword | Target C++ Standard | Target C Standard | ABI Binary Guarantee |
+| --- | --- | --- | --- |
+| `GCSO_EXTERN_C` | `extern "C"` Linkage Block | Standard C Linkage | Prevents C++ name mangling across FFI boundaries. |
+| `GCSO_API` | Symbol Export Attribute | Symbol Export Attribute | Ensures explicit symbol export visibility in shared libraries. |
+| `GCSO_CALL` | Standard C Calling Convention | Standard C Calling Convention | Enforces standard C calling convention across language boundaries. |
+| `GCSO_NOEXCEPT` | `noexcept` Keyword | Exception-Free Attribute | Guarantees exception non-propagation across FFI layer. |
+| `GCSO_NODISCARD` | `[[nodiscard]]` Attribute | Warn Unused Attribute | Enforces status code checks at function call sites. |
+| `GCSO_LIKELY / UNLIKELY` | `[[likely]] / [[unlikely]]` | `__builtin_expect` / Empty | Optimizes branch prediction for hot/cold path routing. |
+| `GCSO_ALIGNAS(n)` | `alignas(n)` Specifier | Alignment Attribute | Enforces strict memory boundary alignment ($n \in \{4, 16, 32, 64, 128\}$). |
+| `GCSO_RESTRICT` | `__restrict` | `restrict` Qualifier | Asserts non-aliasing pointers for SIMD vectorization. |
+| `GCSO_STATIC_ASSERT` | `static_assert(c, m)` | `_Static_assert(c, m)` | Enforces compile-time layout and size verification. |
 
-1. **Initialization Phase [Cold Path]**:
-Call `gcso_init()` with `enable_sidecar_mode = 1`. Validate host engine buffers and action slots via `gcso_spt_validate()`, then bind Query/Key/Value/Logit pointers, event dispatch hooks, and evaluation hooks to the SPT via `gcso_spt_bind()`.
-2. **Query RoPE Execution Hook [Nano / Micro Hot Path]**:
-Immediately prior to computing dot-product attention in each Transformer layer, invoke `gcso_dpsr_apply_phase_steering_safe()`. If `query_ptr` is bound, this performs in-place Q7 phase additions ( $\boldsymbol{\Delta\theta}$ ) on Query registers in $\mathcal{O}(1)$ without modifying KV cache vectors or host engine weight memory. If `query_ptr` is `NULL`, the hook safely skips steering without error.
-3. **LM Head Logit Shift Hook [Micro Hot Path]**:
-Prior to token sampling at the final layer, invoke `gcso_dpsr_fused_logit_shift()`. If `logits_ptr` is bound, this steers logit distributions according to persona profiles. If `logits_ptr` is `NULL`, it safely returns `GCSO_SUCCESS`.
-4. **Post-Step Entropy Evaluation, Stigmergic Trace & Attractor Steering [Micro / Macro Path]**:
-After token output, pass logits to `gcso_edbc_eval_stateful()` to update Moving Z-Score entropy $\tilde{H}$. Record pointer execution steps into the Stigmergic Medium via `gcso_spt_trace_stigmergic_trajectory()` or deposit trace weights via `gcso_spt_deposit_stigmergic_trace()`. If an entropy surge or hallucinatory local minimum is detected, trigger `gcso_spt_steer_to_attractor()`, `gcso_spt_repel_from_hallucination()`, or perform atomic lock-free pointer swaps (`gcso_spt_atomic_swap_next` / `gcso_spt_atomic_swap_phase`) to redirect pointer chain trajectories into target attractor basins or apply phase-conjugate repulsion (`GCSO_ACTION_ID_PHASE_CONJUGATE_REPEL`).
-5. **Teardown Phase [Cold Path]**:
-Upon session termination, invoke `gcso_spt_unbind()` to gracefully unbind handles without freeing host engine memory, followed by `gcso_context_free()`.
+---
+
+### 4.3 Hardware Execution Granularity Matrix
+
+| Hardware Target Backend | Hardware Register Primitive | SIMD / Subgroup Granularity | In-Kernel Hot Path Optimization Strategy |
+| --- | --- | --- | --- |
+| **NVIDIA CUDA** | `__shfl_xor_sync`, `__popc` | 32 Threads (Warp) | Register Shuffle Q7 Phase Addition, QDPS thresholding, Warp PagedBitmask reduction & DAES Ring Ledger push. |
+| **Apple Metal** | `simd_shuffle_xor`, `simd_sum` | 32 Threads (Simdgroup) | Metal Shading Language threadgroup memory zero-copy phase rotation & Fast-Path index lookup. |
+| **Vulkan Compute** | `subgroupShuffleXor`, `subgroupBallot` | 16 / 32 / 64 Threads | Subgroup-wide bitwise phase prefetching, barrier-free reduction & DAES Scratchpad update. |
+| **CPU AVX-512 / AVX2** | `_mm512_shuffle_epi8`, `_mm256_add_epi8` | 16 / 32 / 64 Bytes | Branchless vector Q7 phase offset addition, Slerp norm guard & Ring Ledger logging. |
+
+---
+
+## 5. Data Layout & Memory Topology Specification
+
+### 5.1 Primitive Types & Opaque Handles Matrix
+
+| Type Name | Underlying Primitive | Binary Role & Ownership |
+| --- | --- | --- |
+| `gcso_q7_t` | Signed 8-bit Integer | Fixed-point Q7 phase representation ($\beta_{\mathrm{Q7}} = 1/128$, range $-1.0 \sim +0.9921875$). |
+| `gcso_status_t` | Signed 32-bit Integer | Standardized 32-bit status code for 1:1 cross-language FFI mapping. |
+| `gcso_capability_flags_t` | Unsigned 64-bit Integer | Bitmask matrix defining active feature caps, DAES mode, and extension slots. |
+| `gcso_context_handle_t` | Opaque Pointer | Opaque handle for Unified Runtime Context Facade. |
+| `gcso_action_hub_handle_t` | Opaque Pointer | Opaque handle for Hot-Path Tagged Pointer Table (Action Hub / SPT). |
+| `gcso_attractor_field_handle_t` | Opaque Pointer | Opaque handle for Macro Target Attractor Field. |
+| `gcso_dpsr_kernel_handle_t` | Opaque Pointer | Opaque handle for DPSR Phase Steering Engine. |
+| `gcso_srl_adapter_handle_t` | Opaque Pointer | Opaque handle for Sparse Residual Adapter Layer. |
+| `gcso_edbc_controller_handle_t` | Opaque Pointer | Opaque handle for Dynamic Entropy Decoding Branch Controller. |
+| `gcso_container_handle_t` | Opaque Pointer | Opaque handle for `.gcso` Memory-Mapped Storage. |
+| `gcso_pspm_router_handle_t` | Opaque Pointer | Opaque handle for Phase-Steered Parallel Multi-head Router. |
+| `gcso_daes_slot_handle_t` | Opaque Pointer | Opaque handle for registered DAES modules or plugin extensions. |
+
+---
+
+### 5.2 Status Classification Matrix (`gcso_status_t`)
+
+| Status Identifier | Numeric Value | Classification | Operational Meaning & Recovery Strategy |
+| --- | --- | --- | --- |
+| `GCSO_SUCCESS` | `0` | Success | Operation completed without errors. |
+| `GCSO_ERROR_INVALID_ARGUMENT` | `-1` | Parameter Error | Out-of-bounds parameter or invalid flag passed. |
+| `GCSO_ERROR_OUT_OF_MEMORY` | `-2` | Memory Allocation | Allocation failed during Cold Path creation. |
+| `GCSO_ERROR_BUFFER_TOO_SMALL` | `-3` | Buffer Constraints | Output buffer capacity insufficient for query. |
+| `GCSO_ERROR_PANIC_CAUGHT` | `-4` | FFI Safety Barrier | Intercepted internal exception or panic at FFI boundary. |
+| `GCSO_ERROR_NULL_POINTER` | `-5` | Pointer Validation | Mandatory pointer argument was NULL. |
+| `GCSO_ERROR_INVALID_STATE` | `-6` | Lifecycle State | Operation requested on uninitialized or closed state. |
+| `GCSO_ERROR_VERSION_MISMATCH` | `-7` | ABI Verification | Descriptor `struct_size` or ABI version incompatible. |
+| `GCSO_ERROR_MISALIGNED_POINTER` | `-8` | Memory Alignment | Buffer violates required SIMD or cacheline alignment. |
+| `GCSO_ERROR_IO_FAILURE` | `-9` | Storage Persistence | System I/O or memory mapping failed. |
+| `GCSO_ERROR_ACTION_HUB_FULL` | `-10` | Resource Capacity | Action Hub slot table capacity exceeded. |
+| `GCSO_ERROR_NOT_IMPLEMENTED` | `-11` | PoC Boundary | Feature or kernel backend not implemented in current build. |
+| `GCSO_ERROR_ATTRACTOR_NOT_FOUND` | `-20` | Attractor Search | Requested anchor ID missing in attractor field. |
+| `GCSO_ERROR_DPSR_PHASE_OVERFLOW` | `-30` | Kernel Safety | Phase angle accumulation exceeded safety bound. |
+| `GCSO_ERROR_QDPS_UNDERFLOW` | `-31` | QDPS Steering | Phase update step fell below minimum step threshold $\Delta\theta_{\mathrm{min\_step}}$. |
+| `GCSO_ERROR_EDBC_SINGULARITY` | `-40` | Dynamic Math | Logarithmic singularity encountered in entropy calculation. |
+| `GCSO_ERROR_CONTAINER_CORRUPTED` | `-50` | Storage Checksum | `.gcso` file header checksum or structure invalid. |
+| `GCSO_ERROR_ZIMMS_MAPPING_FAILED` | `-51` | ZIMMS Engine | Zero-copy mmap or Direct DMA memory buffer mapping failed. |
+| `GCSO_ERROR_PSPM_ROUTING_FAILED` | `-60` | PSPM Router | Head group phase allocation failed or head index invalid. |
+| `GCSO_ERROR_PPRC_SEEK_FAILED` | `-70` | Keyframe Indexing | Keyframe indexing corrupt or token out of bounds. |
+| `GCSO_ERROR_OBSTRUCTION_UNRESOLVED` | `-80` | Sheaf Cohomology | Cohomological obstruction class cannot be reduced by scalar potential. |
+| `GCSO_ERROR_EXTENSION_NOT_LOADED` | `-90` | DAES Layer | Requested extension plugin or acceleration mode is inactive. |
+| `GCSO_ERROR_DAES_SCRATCHPAD_FULL` | `-91` | DAES Layer | Fast-Path shortcut table or Telemetry Ring Buffer capacity reached. |
+
+---
+
+### 5.3 Anchor Classification Matrix (`gcso_anchor_type_t`)
+
+| Enumerator Value | Numeric Code | Phase Trajectory Steering Role |
+| --- | --- | --- |
+| `GCSO_ANCHOR_TYPE_SYSTEM_PROMPT` | `0` | Natural language prompt anchor projected into phase space (Primary Endpoint). |
+| `GCSO_ANCHOR_TYPE_EMBEDDING` | `1` | Dense feature vector anchor in latent space. |
+| `GCSO_ANCHOR_TYPE_PHASE_REPULSE` | `2` | Anti-phase repulsion vector for hallucination suppression. |
+| `GCSO_ANCHOR_TYPE_TOPOLOGICAL` | `3` | Manifold topological anchor for hierarchical tree structures. |
+| `GCSO_ANCHOR_TYPE_CRYSTALLIZED` | `4` | Self-organized macro anchor crystallized bottom-up from high-density pointer trails. |
+
+---
+
+### 5.4 Binary Memory Layout Specifications
+
+#### A. Tagged Pointer Layout (64-bit Unsigned Integer)
+
+```text
+ 63          56 55          48 47                                              0
++--------------+--------------+-------------------------------------------------+
+| Phase State  |  Tag Bits    |               Raw Address Pointer               |
+|   (8 bits)   |   (8 bits)   |                    (48 bits)                    |
++--------------+--------------+-------------------------------------------------+
+
+```
+
+| Field Identifier | Bit Range | Mask Bit Pattern | Encoding / Masking Rules |
+| --- | --- | --- | --- |
+| `Raw Address` | 0–47 | `0x0000FFFFFFFFFFFF` | Canonical 48-bit virtual address pointer. Unpack via bitwise AND. |
+| `Tag Bits` | 48–55 | `0x00FF000000000000` | Domain or AST node classification identifier. Shift right by 48. |
+| `Phase State` | 56–63 | `0xFF00000000000000` | Quantized phase state index. Shift right by 56. |
+
+---
+
+#### B. Paged Block Bitmask Layout (`gcso_paged_bitmask_t`)
+
+* **Size**: 32 Bytes | **Alignment**: 32 Bytes (SIMD AVX-256 / Warp Aligned)
+
+```text
+ 0                      64                     128                    192                   255
++----------------------+----------------------+----------------------+----------------------+
+|       bits[0]        |       bits[1]        |       bits[2]        |       bits[3]        |
+|  (64-bit Unsigned)   |  (64-bit Unsigned)   |  (64-bit Unsigned)   |  (64-bit Unsigned)   |
++----------------------+----------------------+----------------------+----------------------+
+
+```
+
+---
+
+#### C. Stigmergic Pointer Trail Layout (`gcso_pointer_trail_t`)
+
+* **Size**: 128 Bytes (2 Cache Lines) | **Alignment**: 128 Bytes
+
+```text
+ Offset (Bytes)
+  0  +-----------------------------------------------------------------+
+     | current_ptr (64-bit Unsigned Tagged Pointer)                    |
+  8  +-----------------------------------------------------------------+
+     | previous_ptr (64-bit Unsigned Tagged Pointer)                   |
+ 16  +-----------------------------------------------------------------+
+     | user_data (Extensible Payload: 64-bit Unsigned)                 |
+ 24  +-------------------------------+---------------------------------+
+     | transition_cost (Signed 32)   | step_count (Unsigned 32)        |
+ 32  +-------------------------------+---------------------------------+
+     | stigmergic_density (Float 32) | target_anchor_id (Unsigned 32)  |
+ 40  +-------------------------------+---------------------------------+
+     | cluster_id (Unsigned 32)      | linked_trail_id (Unsigned 32)   |
+ 48  +-------------------------------+---------------------------------+
+     | attractor_pull_force (F32)    | flags (Unsigned 32)             |
+ 56  +-----------------------------------------------------------------+
+     | accumulated_phase_delta[64] (gcso_q7_t Array: 64 Bytes)         |
+120  +-----------------------------------------------------------------+
+     | reserved_padding[8] (Unsigned 8-bit Array: Padding to 128 B)    |
+128  +-----------------------------------------------------------------+
+
+```
+
+---
+
+#### D. Base Configuration Layout (`gcso_config_t`)
+
+* **Size**: 64 Bytes | **Alignment**: 4 Bytes
+
+| Offset | Field Identifier | Type Category | Operational Role / Invariant State |
+| --- | --- | --- | --- |
+| `0` | `head_dim` | Unsigned 32 | Attention head dimension (Must be even, e.g., 128). |
+| `4` | `num_heads` | Unsigned 32 | Total number of attention heads. |
+| `8` | `paged_block_size` | Unsigned 32 | Tokens per paged block (16 or 32). |
+| `12` | `q7_phase_scale` | Float 32 | Q7 scale factor ($\beta_{\mathrm{Q7}} = 1.0 / 128.0$). |
+| `16` | `ripa_clamp_max_rad` | Float 32 | RIPA soft-bounded phase limit in radians (Default: $5^\circ \approx 0.087$). |
+| `20` | `qdps_min_step_rad` | Float 32 | QDPS quantization threshold angle below which phase steering is cut off. |
+| `24` | `entropy_singularity_eps` | Float 32 | Singularity prevention clamp ($\epsilon_{\mathrm{log}} = 10^{-12}$). |
+| `28` | `max_prompt_anchors` | Unsigned 32 | Maximum allowed system prompt anchors. |
+| `32` | `action_hub_capacity` | Unsigned 32 | Slot capacity of Action Hub (SPT) tagged pointer table. |
+| `36` | `enable_cuda_warp_shuffle` | Unsigned 8 | Enable GPU Warp Shuffle inline evaluation. |
+| `37` | `enable_zero_alloc_strict` | Unsigned 8 | Enforce Hot-Path zero dynamic allocation checks. |
+| `38` | `daes_mode` | Unsigned 8 | DAES Slot Mode (`0` = Dynamic Scratchpad, `1` = Dynamic Plugin, `2` = Shared Buffer). |
+| `39` | `reserved_flags` | Unsigned 8 | Alignment padding. |
+| `40` | `reserved[24]` | Unsigned 8 Array | Reserved for future ABI core extensions. |
+
+---
+
+#### E. Container Snapshot Header Layout (`gcso_snapshot_header_t`)
+
+* **Size**: 128 Bytes | **Alignment**: 64 Bytes
+
+| Offset | Field Identifier | Type Category | Binary Purpose & Validation Role |
+| --- | --- | --- | --- |
+| `0` | `magic` | Unsigned 32 | Magic Constant (`0x4F534347` = ASCII `"GCSO"`). |
+| `4` | `version` | Unsigned 32 | ABI Version Identifier (`0x00020000` = v2.0.0). |
+| `8` | `total_size` | Unsigned 64 | Total byte size of container payload. |
+| `16` | `action_hub_offset` | Unsigned 64 | Byte offset to Action Hub binary payload. |
+| `24` | `attractor_field_offset` | Unsigned 64 | Byte offset to Attractor Field payload. |
+| `32` | `dpsr_state_offset` | Unsigned 64 | Byte offset to DPSR kernel state payload. |
+| `40` | `srl_state_offset` | Unsigned 64 | Byte offset to SRL adapter payload. |
+| `48` | `edbc_state_offset` | Unsigned 64 | Byte offset to EDBC controller payload. |
+| `56` | `checksum_crc32` | Unsigned 32 | CRC32 integrity checksum over payload. |
+| `60` | `daes_slot_offset` | Unsigned 32 | Byte offset to DAES binary state/telemetry section. |
+| `64` | `timestamp_epoch_sec` | Unsigned 64 | Container creation timestamp (Epoch seconds). |
+| `72` | `reserved_padding[56]` | Unsigned 8 Array | Extension padding to 128 bytes. |
+
+---
+
+#### F. Dynamic Adaptive Extension Scratchpad (DAES) Memory Layout (`gcso_daes_slot_t`)
+
+* **Size**: 64 Bytes (1 Cacheline) | **Alignment**: 64 Bytes
+
+```text
+ Mode 0: Telemetry & Fast-Path Dynamic Scratchpad Layout (Default)
+ Offset (Bytes)
+  0  +-------------------------------+----------------------------------+
+     | mode = 0 (Unsigned 32)        | telemetry_ring_head (Unsigned 16)|
+  4  +-------------------------------+----------------------------------+
+     | telemetry_ring_tail (U16)     | cache_hit_count (Unsigned 32)    |
+  8  +-------------------------------+----------------------------------+
+     | fast_path_bypass_mask (U64)   | auto_tune_flags (Unsigned 32)    |
+ 20  +------------------------------------------------------------------+
+     | fast_path_shortcuts[4] (Four 64-bit Tagged Pointer Shortcuts)    |
+ 52  +------------------------------------------------------------------+
+     | telemetry_mini_ledger[12] (Fixed-size byte ring for profiling)   |
+ 64  +------------------------------------------------------------------+
+
+ Mode 1: External Plugin / GCSO-DNP Slot Layout
+ Offset (Bytes)
+  0  +-------------------------------+---------------------------------+
+     | mode = 1 (Unsigned 32)        | plugin_version (Unsigned 32)    |
+  8  +-----------------------------------------------------------------+
+     | capability_mask (Unsigned 64)                                   |
+ 16  +-----------------------------------------------------------------+
+     | reserved_payload_offset (Unsigned 64)                           |
+ 24  +-----------------------------------------------------------------+
+     | plugin_context_ptr (Unsigned 64)                                |
+ 32  +-----------------------------------------------------------------+
+     | reserved_padding[32] (Unsigned 8-bit Array)                     |
+ 64  +-----------------------------------------------------------------+
+
+ Mode 2: Shared IPC Memory Slot Layout
+ Offset (Bytes)
+  0  +-------------------------------+---------------------------------+
+     | mode = 2 (Unsigned 32)        | shared_memory_key (Unsigned 32) |
+  8  +-----------------------------------------------------------------+
+     | ring_buffer_ipc_offset (Unsigned 64)                            |
+ 16  +-----------------------------------------------------------------+
+     | lockfree_sync_atomic_counter (Unsigned 64)                      |
+ 24  +-----------------------------------------------------------------+
+     | reserved_padding[40] (Unsigned 8-bit Array)                     |
+ 64  +-----------------------------------------------------------------+
+
+```
+
+---
+
+#### G. PPRC Keyframe Header, PSPM, EDBC, SRL & ZIMMS Layouts
+
+##### PPRC Keyframe Header Layout (`gcso_pprc_keyframe_header_t`)
+
+* **Size**: 64 Bytes | **Alignment**: 32 Bytes
+
+| Offset | Field Identifier | Type Category | Keyframe Storage Role |
+| --- | --- | --- | --- |
+| `0` | `frame_type` | Unsigned 32 | Frame Classification (`0` = I-Frame Anchor, `1` = P-Frame Motion Delta). |
+| `4` | `token_index` | Unsigned 32 | Absolute token position sequence index. |
+| `8` | `gop_length` | Unsigned 32 | Dynamic entropy-driven GOP length. |
+| `12` | `composite_vector_length` | Float 32 | Resultant vector length $\bar{R}_c$ in circular statistics. |
+| `16` | `von_mises_kappa` | Float 32 | Concentration parameter $\kappa_c$ of phase residual distribution. |
+| `20` | `sparse_scalar_residual` | Float 32 | Compression residual scalar gain $s_t$. |
+| `24` | `icache_payload_offset` | Unsigned 64 | Offset to Fact Anchor Key Cache payload. |
+| `32` | `pcache_payload_offset` | Unsigned 64 | Offset to Phase Motion Delta payload. |
+| `40` | `reserved[24]` | Unsigned 8 Array | Alignment padding to 64 bytes. |
+
+---
+
+##### PSPM Router Configuration Layout (`gcso_pspm_config_t`)
+
+* **Size**: 32 Bytes | **Alignment**: 16 Bytes
+
+| Offset | Field Identifier | Type Category | Sub-Head Group Allocation |
+| --- | --- | --- | --- |
+| `0` | `num_fact_heads` | Unsigned 16 | Number of heads allocated to Fact sub-group. |
+| `2` | `num_logic_heads` | Unsigned 16 | Number of heads allocated to Logic sub-group. |
+| `4` | `num_explore_heads` | Unsigned 16 | Number of heads allocated to Explore sub-group. |
+| `6` | `flags` | Unsigned 16 | Routing flags & single-pass execution mode. |
+| `8` | `fact_phase_gain` | Float 32 | Phase scale factor for Fact sub-heads. |
+| `12` | `logic_phase_gain` | Float 32 | Phase scale factor for Logic sub-heads. |
+| `16` | `explore_phase_gain` | Float 32 | Phase scale factor for Explore sub-heads. |
+| `20` | `reserved[12]` | Unsigned 8 Array | Reserved for future router parameters. |
+
+---
+
+##### EDBC Dynamic Controller State Layout (`gcso_edbc_state_t`)
+
+* **Size**: 64 Bytes | **Alignment**: 32 Bytes
+
+| Offset | Field Identifier | Type Category | State Tracking Role |
+| --- | --- | --- | --- |
+| `0` | `moving_z_entropy` | Float 32 | Moving average normalized Z-score entropy $\tilde{H}$. |
+| `4` | `bifurcation_threshold` | Float 32 | Z-score threshold $\tau_{\mathrm{bifurcation}}$ triggering branch split. |
+| `8` | `singularity_eps` | Float 32 | Logarithmic singularity safety guard $\epsilon_{\mathrm{log}}$. |
+| `12` | `sliding_entropy_rate` | Float 32 | Sliding-window entropy rate integrator $\Phi_M(t)$. |
+| `16` | `repulsion_gain` | Float 32 | Scaling gain for anti-phase repulsion pulse ($-\boldsymbol{\Delta\theta}$). |
+| `20` | `sample_temperature` | Float 32 | Energy-guided dynamic temperature value. |
+| `24` | `active_branch_mode` | Unsigned 32 | Enum code (`0` = Normal, `1` = Bifurcation, `2` = Repulsion). |
+| `28` | `reserved[36]` | Unsigned 8 Array | Extension padding to 64 bytes. |
+
+---
+
+##### SRL Dynamic Rank-1 Descriptor Layout (`gcso_srl_descriptor_t`)
+
+* **Size**: 64 Bytes | **Alignment**: 32 Bytes
+
+| Offset | Field Identifier | Type Category | Operational Purpose |
+| --- | --- | --- | --- |
+| `0` | `layer_idx` | Unsigned 32 | Target Transformer layer index for Rank-1 insertion. |
+| `4` | `rank` | Unsigned 32 | Rank parameter (Fixed to `1` for SRL). |
+| `8` | `u_vector_ptr` | Unsigned 64 | Pointer to FP8/FP16 column vector $\mathbf{u}$. |
+| `16` | `v_vector_ptr` | Unsigned 64 | Pointer to FP8/FP16 row vector $\mathbf{v}$. |
+| `24` | `gain_scalar_ptr` | Unsigned 64 | Pointer to FP32 diagonal gain vector $\mathbf{s}$. |
+| `32` | `scale_factor` | Float 32 | Global scaling multiplier for Rank-1 product. |
+| `36` | `flags` | Unsigned 32 | Flags defining FP8 format and dynamic activation state. |
+| `40` | `reserved[24]` | Unsigned 8 Array | Extension padding to 64 bytes. |
+
+---
+
+##### ZIMMS Memory Mapping Descriptor Layout (`gcso_zimms_descriptor_t`)
+
+* **Size**: 64 Bytes | **Alignment**: 32 Bytes
+
+| Offset | Field Identifier | Type Category | Memory Mapping Role |
+| --- | --- | --- | --- |
+| `0` | `mapped_address` | Unsigned 64 | Virtual memory address returned by zero-copy `mmap`. |
+| `8` | `file_size_bytes` | Unsigned 64 | Total byte length of mapped `.gcso` file. |
+| `16` | `dma_buffer_handle` | Unsigned 64 | Direct DMA ring-buffer handle for async page streaming. |
+| `24` | `flags` | Unsigned 32 | Protection & mapping flags (`PROT_READ`, `MAP_SHARED`, etc.). |
+| `28` | `fd_handle` | Signed 32 | Operating system file descriptor integer. |
+| `32` | `reserved[32]` | Unsigned 8 Array | Extension padding to 64 bytes. |
+
+---
+
+### 5.5 Memory Lifetime & Allocation Topology
+
+```text
+[ Caller / Host Layer ]
+       │
+       │ Allocates Descriptor on Stack / Heap
+       ▼
+[ ABI Facade Boundary ] ────── Create Function Call ───────┐
+                                                           ▼
+                                         [ Internal Managed Heap / ZIMMS mmap ]
+                                         ├── Context Facade Object
+                                         ├── Action Hub Slot Table (SPT)
+                                         ├── Attractor Field Anchors
+                                         ├── DPSR Kernel State
+                                         ├── SRL Adapter Tables (Rank-1 Vectors)
+                                         ├── EDBC History Buffers
+                                         ├── PSPM Router Table
+                                         └── DAES Dynamic Scratchpad Buffer
+       │                                                   │
+       │ Reads/Writes Hot-Path Data (Zero Alloc)           │
+       ▼                                                   ▼
+[ Output Buffers / Pointers ] ◄── Destroy Function Call ───┘
+ (Caller Allocated & Passed)     (Deallocates All Internal Structures / Unmaps ZIMMS)
+
+```
+
+---
+
+## 6. Functional C-ABI Interface Specifications
+
+### 6.1 System & Capability Query Interface Matrix
+
+| API Identifier | Operational Target | Compute Complexity | Memory Constraint | Operational Summary |
+| --- | --- | --- | --- | --- |
+| `gcso_abi_get_version` | System Query | $\mathcal{O}(1)$ | **Zero Allocation** | Retrieves major, minor, patch ABI versions. |
+| `gcso_abi_get_version_string` | System Query | $\mathcal{O}(1)$ | **Zero Allocation** | Returns static version string pointer. |
+| `gcso_status_to_string` | System Query | $\mathcal{O}(1)$ | **Zero Allocation** | Converts status code to static descriptive string. |
+| `gcso_abi_query_capability` | System Query | $\mathcal{O}(1)$ | **Zero Allocation** | Queries active hardware/kernel capability flags. |
+| `gcso_config_init_default` | Core Config | $\mathcal{O}(1)$ | **Zero Allocation** | Initializes configuration descriptor with default parameters. |
+
+---
+
+### 6.2 High-Level Runtime Context Facade Interface Matrix
+
+| API Identifier | Execution Path | Parameter Ownership & Constraints | Operational Summary |
+| --- | --- | --- | --- |
+| `gcso_context_create` | Cold Path | Input descriptor, output context handle pointer | Allocates runtime context handle and initializes sub-components. |
+| `gcso_context_reset` | Cold Path | Context handle | Resets phase accumulators and trails without freeing allocated tables. |
+| `gcso_context_set_system_prompt_anchor` | Cold Path | Context handle, UTF-8 text string, weight float | **Primary Endpoint**: Registers natural language prompt as Anchor Attractor. |
+| `gcso_context_step_token` | **Hot Path** | Context handle, non-aliased tensors, trail output | Executed per token. Applies inline DPSR, QDPS step checks, SRL evaluation, EDBC tracking, and DAES Telemetry in a zero-alloc loop. |
+| `gcso_context_serialize` | Cold Path | Context handle, output buffer pointer, capacity pointer | Two-pass serialization of Action Hub, Attractors, and DAES state into `.gcso` binary. |
+| `gcso_context_deserialize` | Cold Path | Input buffer pointer, buffer size, output context handle pointer | Restores full runtime state snapshot from `.gcso` binary container payload. |
+| `gcso_context_destroy` | Cold Path | Context handle (Allows `NULL` as no-op) | Safely deallocates context and all child components. |
+
+---
+
+### 6.3 Action Hub, Stigmergic Pointer Trail & DAES Acceleration Matrix
+
+| API Identifier | Target Layer | Compute Complexity | Memory Allocation Rule | Operational Summary |
+| --- | --- | --- | --- | --- |
+| `gcso_action_hub_step_pointer` | Micro | $\mathcal{O}(1)$ | **Zero Allocation** | Executes $\mathcal{O}(1)$ Tagged Pointer transitions in Action Hub sidecar table (SPT). |
+| `gcso_action_hub_hash_slot256_index` | Micro | $\mathcal{O}(1)$ | **Zero Allocation** | Computes direct 256-slot hash index for pointer trail caching. |
+| `gcso_swarm_cell_chunk_step` | Micro | $\mathcal{O}(1)$ | **Zero Allocation** | Updates local cellular swarm cell state across token chunk boundaries. |
+| `gcso_action_hub_pull_trail_to_attractor` | Micro | $\mathcal{O}(1)$ | **Zero Allocation** | Applies attractor pull force $F_{\mathrm{pull}}$ to pointer trails bottom-up toward anchor. |
+| `gcso_action_hub_link_hallucinated_trails` | Micro | $\mathcal{O}(1)$ | **Zero Allocation** | Links cellular hallucinated trails into contiguous stigmergic trace graphs. |
+| `gcso_action_hub_reduce_bit_tree` | Mezzo | $\mathcal{O}(1)$ | **Zero Allocation** | Reduces block-level bit-tree structures across multi-head PagedBlocks. |
+| `gcso_action_hub_paged_block_warp_bitmask` | Mezzo | $\mathcal{O}(1)$ | **Zero Allocation** | Evaluates SIMD/Warp bitmask reduction over PagedBlock KV caches. |
+| `gcso_daes_fast_path_lookup` | Micro Hot Path | $\mathcal{O}(1)$ | **Zero Allocation** | Executes $\mathcal{O}(1)$ fast-path bypass lookup in DAES dynamic scratchpad. |
+| `gcso_daes_telemetry_push` | Nano Hot Path | $\mathcal{O}(1)$ | **Zero Allocation** | Pushes profiling metrics to DAES telemetry ring ledger in zero-alloc mode. |
+| `gcso_daes_set_mode` | DAES Layer | $\mathcal{O}(1)$ | **Zero Allocation** | Configures DAES slot operating mode (`0` = Scratchpad, `1` = Plugin, `2` = Shared IPC Buffer). |
+| `gcso_daes_evaluate_auto_tune` | DAES Layer | $\mathcal{O}(1)$ | **Zero Allocation** | Processes Telemetry Ring Ledger to derive optimized PSPM routing ratios, RIPA bounds & EDBC thresholds. |
+
+---
+
+### 6.4 DPSR Kernel Steering, QDPS, PSPM & SRL Adapter Matrix
+
+| API Identifier | Operational Target | Invariants & Mathematical Constraints | Memory Allocation Rule |
+| --- | --- | --- | --- |
+| `gcso_dpsr_apply_phase_steering` | Nano Hot Path | Inline Query-Only phase rotation ($\theta_{m,i} \to \theta_{m,i} + \Delta\theta_i$). Non-overlapping Q/K tensors. | **Zero Allocation** |
+| `gcso_dpsr_apply_phase_steering_safe` | Nano Hot Path | Applies RIPA soft-bounded $\tanh$ clamping ( $\Delta\theta_{\mathrm{safe}} = \theta_{\max} \tanh(\Delta\theta/\theta_{\max})$ ) on low-frequency channels. | **Zero Allocation** |
+| `gcso_qdps_filter_step` | Nano Hot Path | Evaluates minimum step threshold $\Delta\theta_{\mathrm{min\_step}}$. Cuts off updates below threshold to prevent quantization jitter. | **Zero Allocation** |
+| `gcso_dpsr_lazy_unwrap_override` | Micro Hot Path | Applies relative phase difference against context accumulator on Query tensor. | **Zero Allocation** |
+| `gcso_dpsr_slerp_norm_guard_stable` | Nano Hot Path | Executes norm-guarded Slerp phase stabilization on state vectors. | **Zero Allocation** |
+| `gcso_dpsr_fused_logit_shift` | Nano Hot Path | Fused inline logit phase shift prior to Softmax layer. | **Zero Allocation** |
+| `gcso_pspm_dispatch_single_pass` | Nano Hot Path | Dispatches PSPM head-group phase profiles in a single forward pass. | **Zero Allocation** |
+| `gcso_srl_eval_rank1` | Micro Hot Path | Evaluates SRL Dynamic Rank-1 outer product ( $\mathbf{y} = W\mathbf{x} + \mathbf{s} \odot (\mathbf{u}(\mathbf{v}^T \mathbf{x}))$ ). | **Zero Allocation** |
+| `gcso_l2p_svd_project_lora` | Cold Path | Computes SVD on input LoRA matrices ($W_A, W_B$) to output Rank-1 SRL vectors ($\mathbf{u}, \mathbf{v}$) and phase profiles. | Cold Path Alloc Allowed |
+
+---
+
+### 6.5 Attractor Field, Stigmergic Aggregation & ZIMMS Storage Matrix
+
+| API Identifier | Target Layer | Phase Modulation & Attractor Steering Role |
+| --- | --- | --- |
+| `gcso_attractor_field_add_anchor` | Macro | Registers topological anchor point in attractor field. |
+| `gcso_attractor_field_add_system_prompt_anchor` | Macro | Maps natural language system prompt text as primary Anchor Attractor. |
+| `gcso_attractor_field_add_embedding_anchor` | Macro | Maps dense feature embedding vector as continuous attractor anchor. |
+| `gcso_attractor_field_inject_phase_repulsion` | Macro | Injects phase-conjugate repulsion vector ($-\boldsymbol{\Delta\theta}$) to flip spurious local minima into repulsive potential peaks. |
+| `gcso_attractor_field_aggregate_bottom_up` | Macro | Aggregates high-density pointer trails bottom-up to macro-crystallize new dynamic anchors. |
+| `gcso_persona_apply_patch` | Macro | Dynamic application of persona phase modulation patches without altering base weights. |
+| `gcso_zimms_open_mmap` | Storage / ZIMMS | Maps `.gcso` container payload into memory space using zero-copy `mmap`. |
+| `gcso_zimms_close_mmap` | Storage / ZIMMS | Unmaps zero-copy ZIMMS memory handle and releases Direct DMA resources. |
+
+---
+
+## 7. Architectural Execution Sequence Diagrams
+
+### 7.1 Hot-Path Token Step Execution & DAES Fast-Path Bypass
+
+```text
+User / CLI           Rust Core / FFI               C-ABI Boundary                Hot-Path Kernel
+   │                       │                               │                             │
+   │─── step_token() ─────>│                               │                             │
+   │                       │─── gcso_context_step_token ──>│                             │
+   │                       │    (GCSO_RESTRICT Pointers)   │─── DAES Fast-Path Lookup ──>│ (O(1) Shortcut)
+   │                       │                               │─── QDPS Step Filter ───────>│ (Threshold Check)
+   │                       │                               │─── Inline DPSR Phase ──────>│ (Register Shuffle)
+   │                       │                               │    (RIPA tanh Clamping)     │
+   │                       │                               │─── PSPM Single-Pass Router> │ (Sub-Head Routing)
+   │                       │                               │─── SRL Rank-1 Eval ────────>│ (Outer Product)
+   │                       │                               │─── EDBC Entropy Eval ──────>│ (Z-Score H~)
+   │                       │                               │─── DAES Telemetry Push ────>│ (Ring Ledger)
+   │                       │                               │                             │
+   │                       │<── GCSO_SUCCESS ──────────────│<── Trail & Status Output ───│
+   │<── Token Result ──────│                               │                             │
+
+```
+
+---
+
+### 7.2 Pointer Chain Stigmergy to Bottom-Up Attractor Crystallization & Pull Loop
+
+```text
+Action Hub (SPT)           Stigmergic Density Evaluator    Macro Attractor Field       EDBC / Persona Controller
+       │                                │                            │                           │
+       │── Step Tagged Pointers ───────>│                            │                           │
+       │   (Update Pointer Trails)      │                            │                           │
+       │                                │── Accumulate Stigmergy ───>│                           │
+       │                                │ (rho_stigmergy > threshold)│                           │
+       │                                │                            │── Pull Trails to Anchor ─>│ (Attractor Pull F_pull)
+       │                                │                            │                           │
+       │                                │                            │── Macro-Crystallize ─────>│ (Self-Organize New
+       │                                │                            │   Bifurcated Attractor    │  Dynamic Anchor)
+       │                                │                            │                           │
+       │<── Dynamic Shortcut in DAES ───┼----------------------------┼---------------------------┘
+
+```
+
+---
+
+### 7.3 Dynamic Self-Optimization & Multi-Layer Auto-Tuning Loop
+
+```text
+Hot-Path Kernel (Nano)       DAES Scratchpad Ledger      EDBC / Macro Controller     PSPM / DPSR Kernel
+       │                           │                              │                         │
+       │── Record Telemetry ──────>│                              │                         │
+       │   (Hit/Miss, Phase Surge) │                              │                         │
+       │                           │                              │                         │
+       │                           │── Evaluate Auto-Tune ───────>│                         │
+       │                           │   (Read Ring Ledger)         │                         │
+       │                           │                              │── Update Sub-Head Ratio>│ (Fact/Logic/Explore)
+       │                           │── Adjust RIPA Clamps ───────>│ (Dynamic Angle Max)     │
+       │                           │                              │                         │
+       │<── Fast-Path Shortcut ────┼------------------------------┴-------------------------┘
+       │    Updated (O(1) Bypass)  │
+
+```
+
+---
+
+### 7.4 Cohomological Repulsion Pulse Injection & L2P-SVD Hot-Swap Flow
+
+```text
+Hot-Path Kernel             EDBC Controller           Sheaf Cohomology Evaluator    Attractor Field / SRL Engine
+       │                           │                              │                        │
+       │── Token Step Result ─────>│                              │                        │
+       │                           │── Evaluate Entropy H~ ──────>│                        │
+       │                           │   (Check Singularity & H~)   │                        │
+       │                           │                              │── Compute Residual ───>│
+       │                           │                              │   r_obs in im(delta0)┴ │
+       │                           │                              │                        │
+       │                           │<── Cohomological Obstruction ┼────────────────────────┤
+       │                           │    Class H^1(K; F) Detected  │                        │
+       │                           │                                                       │
+       │                           │── Inject Phase Repulsion Pulse (-delta theta) ───────>│ (Flip Local Minima
+       │                           │                                                       │  to Repulsive Peak)
+       │                           │── Hot-Swap L2P-SVD Rank-1 Vectors (u, v) ────────────>│ (Attach SRL Adapter)
+
+```
+
+---
+
+## 8. ABI Verification & Boundary Safety Constraints
+
+### 8.1 Memory Layout Alignment & Size Verification Matrix
+
+| Structure Identifier | Exact Size (Bytes) | Alignment Invariant | Mandatory Offset Constraints |
+| --- | --- | --- | --- |
+| `gcso_paged_bitmask_t` | 32 | 32 Bytes (SIMD) | `bits`: Offset 0 |
+| `gcso_pointer_trail_t` | 128 | 128 Bytes (Cacheline) | `current_ptr`: Offset 0, `user_data`: Offset 16, `accumulated_phase_delta`: Offset 56 |
+| `gcso_config_t` | 64 | 4 Bytes | `head_dim`: Offset 0, `qdps_min_step_rad`: Offset 20, `daes_mode`: Offset 38 |
+| `gcso_snapshot_header_t` | 128 | 64 Bytes | `magic`: Offset 0, `checksum_crc32`: Offset 56, `timestamp_epoch_sec`: Offset 64 |
+| `gcso_pprc_keyframe_header_t` | 64 | 32 Bytes | `frame_type`: Offset 0, `icache_payload_offset`: Offset 24, `pcache_payload_offset`: Offset 32 |
+| `gcso_pspm_config_t` | 32 | 16 Bytes | `num_fact_heads`: Offset 0, `fact_phase_gain`: Offset 8 |
+| `gcso_edbc_state_t` | 64 | 32 Bytes | `moving_z_entropy`: Offset 0, `active_branch_mode`: Offset 24 |
+| `gcso_srl_descriptor_t` | 64 | 32 Bytes | `layer_idx`: Offset 0, `u_vector_ptr`: Offset 8, `v_vector_ptr`: Offset 16 |
+| `gcso_zimms_descriptor_t` | 64 | 32 Bytes | `mapped_address`: Offset 0, `file_size_bytes`: Offset 8 |
+| `gcso_descriptor_header_t` | 8 | 4 Bytes | `struct_size`: Offset 0, `abi_version`: Offset 4 |
+| `gcso_daes_slot_t` | 64 | 64 Bytes (Cacheline) | `mode`: Offset 0, `fast_path_shortcuts`: Offset 20 |
+
+---
+
+### 8.2 FFI Memory Isolation & Exception Boundary
+
+```text
+  [ Rust DSL / Core Runtime ]
+               │
+  (FFI Boundary: std::panic::catch_unwind)
+               │  Intercepts Rust panics -> returns GCSO_ERROR_PANIC_CAUGHT
+               ▼
+   [ C11 / C++20 C-ABI Entry ]  <-- Exception-Free Barrier & Standard Calling Convention
+               │
+  (C++ Boundary: try-catch Exception Interception -> returns GCSO_ERROR_PANIC_CAUGHT)
+               ▼
+  [ C++20 / CUDA / Metal Core Kernels ]
+
+```
+
+1. **Opaque Pointer Encapsulation & Facade Pattern**: Internal runtime structures are strictly shielded behind opaque handles and exposed via Facade design patterns. Direct internal struct access across FFI is prohibited.
+2. **C++ Exception Boundary**: All ABI entry points isolate C++ exceptions via exception interception blocks (`try-catch`), returning `GCSO_ERROR_PANIC_CAUGHT`.
+3. **Rust Panic Unwinding Boundary (`catch_unwind`)**: All Rust callbacks or FFI exports wrap execution in `std::panic::catch_unwind` to prevent panics from unwinding across C-ABI boundaries.
+4. **Zero-Allocation Hot Path**: Hot Path entry points execute zero dynamic allocations. Pointers must adhere to strict alignment constraints and non-aliasing rules (`GCSO_RESTRICT`).
+5. **Safe Memory Deallocation**: All deallocation functions safely handle `NULL` pointers as no-ops, returning `GCSO_SUCCESS`.
+
+---
+
+### 8.3 Safety Assertions & Invariant Matrix
+
+| Invariant Category | Verification Mechanism | Runtime Action / Status Output |
+| --- | --- | --- |
+| **Zero Allocation Enforcement** | Custom allocator tracking in unit tests | Hot-path allocations trigger immediate runtime status error `GCSO_ERROR_INVALID_STATE`. |
+| **Memory Alignment Assertions** | FFI boundary memory pointer check | Misaligned input tensors return `GCSO_ERROR_MISALIGNED_POINTER`. |
+| **RIPA Angle Bounds** | In-register $\tanh$ soft clamping | Phase overflow soft-clamped to `ripa_clamp_max_rad` bounds in register shuffle. |
+| **QDPS Resolution Threshold** | Magnitude evaluation against $\Delta\theta_{\mathrm{min\_step}}$ | Sub-threshold updates rounded to zero or return `GCSO_ERROR_QDPS_UNDERFLOW`. |
+| **Descriptor Compatibility** | `struct_size` and `abi_version` header check | Mismatched descriptor layouts trigger `GCSO_ERROR_VERSION_MISMATCH`. |
+| **ZIMMS Zero-Copy Mapping** | Page boundary alignment and file descriptor check | Unaligned offset or failed mmap triggers status `GCSO_ERROR_ZIMMS_MAPPING_FAILED`. |
+| **DAES Dynamic Bounds** | In-place ring head/tail mask modulo checks | Out-of-bounds telemetry writes trigger status `GCSO_ERROR_DAES_SCRATCHPAD_FULL`. |
