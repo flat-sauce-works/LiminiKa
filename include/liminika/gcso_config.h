@@ -1,3 +1,4 @@
+// name: include/liminika/gcso_config.h
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 #ifndef LIMINIKA_GCSO_CONFIG_H
@@ -8,7 +9,8 @@
 
 #ifdef __cplusplus
 #define GCSO_EXTERN_C extern "C"
-#define GCSO_EXTERN_C_BEGIN extern "C" {
+#define GCSO_EXTERN_C_BEGIN \
+    extern "C" {
 #define GCSO_EXTERN_C_END }
 #else
 #define GCSO_EXTERN_C
@@ -17,21 +19,21 @@
 #endif
 
 #if defined(_WIN32) || defined(__CYGWIN__)
-  #if defined(GCSO_BUILD_DLL)
-    #define GCSO_API __declspec(dllexport)
-  #elif defined(GCSO_USE_DLL)
-    #define GCSO_API __declspec(dllimport)
-  #else
-    #define GCSO_API
-  #endif
-  #define GCSO_CALL __cdecl
+#if defined(GCSO_BUILD_DLL)
+#define GCSO_API __declspec(dllexport)
+#elif defined(GCSO_USE_DLL)
+#define GCSO_API __declspec(dllimport)
 #else
-  #if defined(__GNUC__) && __GNUC__ >= 4
-    #define GCSO_API __attribute__((visibility("default")))
-  #else
-    #define GCSO_API
-  #endif
-  #define GCSO_CALL
+#define GCSO_API
+#endif
+#define GCSO_CALL __cdecl
+#else
+#if defined(__GNUC__) && __GNUC__ >= 4
+#define GCSO_API __attribute__((visibility("default")))
+#else
+#define GCSO_API
+#endif
+#define GCSO_CALL
 #endif
 
 #ifdef __cplusplus
@@ -48,15 +50,12 @@
 #define GCSO_NODISCARD
 #endif
 
-#if defined(__cplusplus) && __cplusplus >= 202002L
-#define GCSO_LIKELY [[likely]]
-#define GCSO_UNLIKELY [[unlikely]]
-#elif defined(__GNUC__) || defined(__clang__)
-#define GCSO_LIKELY
-#define GCSO_UNLIKELY
+#if defined(__GNUC__) || defined(__clang__)
+#define GCSO_LIKELY(x) __builtin_expect(!!(x), 1)
+#define GCSO_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #else
-#define GCSO_LIKELY
-#define GCSO_UNLIKELY
+#define GCSO_LIKELY(x) (x)
+#define GCSO_UNLIKELY(x) (x)
 #endif
 
 #ifdef __cplusplus

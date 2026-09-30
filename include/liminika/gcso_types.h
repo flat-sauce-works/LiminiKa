@@ -1,3 +1,4 @@
+// name: include/liminika/gcso_types.h
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 #ifndef LIMINIKA_GCSO_TYPES_H
@@ -7,10 +8,15 @@
 
 GCSO_EXTERN_C_BEGIN
 
-// Signed 8-bit fixed-point Q7 type for phase representation
+// Quantized 7-bit signed fixed-point integer (scale beta_Q7 = 1/128)
 typedef int8_t gcso_q7_t;
 
-// Standardized 32-bit status code for FFI mapping
+// 64-bit feature bitmask capability flags
+typedef uint64_t gcso_capability_flags_t;
+
+/**
+ * @brief Standardized 32-bit status return codes for 1:1 cross-language FFI mapping.
+ */
 typedef enum gcso_status {
     GCSO_SUCCESS = 0,
     GCSO_ERROR_INVALID_ARGUMENT = -1,
@@ -34,23 +40,13 @@ typedef enum gcso_status {
     GCSO_ERROR_PPRC_SEEK_FAILED = -70,
     GCSO_ERROR_OBSTRUCTION_UNRESOLVED = -80,
     GCSO_ERROR_EXTENSION_NOT_LOADED = -90,
-    GCSO_ERROR_DAES_SCRATCHPAD_FULL = -91
+    GCSO_ERROR_DAES_SCRATCHPAD_FULL = -91,
+    GCSO_ERROR_UNKNOWN = -0x7FFFFFFF
 } gcso_status_t;
 
-typedef uint64_t gcso_capability_flags_t;
-
-// Opaque context handles
-typedef struct gcso_context_impl* gcso_context_handle_t;
-typedef struct gcso_action_hub_impl* gcso_action_hub_handle_t;
-typedef struct gcso_attractor_field_impl* gcso_attractor_field_handle_t;
-typedef struct gcso_dpsr_kernel_impl* gcso_dpsr_kernel_handle_t;
-typedef struct gcso_srl_adapter_impl* gcso_srl_adapter_handle_t;
-typedef struct gcso_edbc_controller_impl* gcso_edbc_controller_handle_t;
-typedef struct gcso_container_impl* gcso_container_handle_t;
-typedef struct gcso_pspm_router_impl* gcso_pspm_router_handle_t;
-typedef struct gcso_daes_slot_impl* gcso_daes_slot_handle_t;
-
-// Anchor classifications
+/**
+ * @brief Classification types for topological attractor field anchors.
+ */
 typedef enum gcso_anchor_type {
     GCSO_ANCHOR_TYPE_SYSTEM_PROMPT = 0,
     GCSO_ANCHOR_TYPE_EMBEDDING = 1,
@@ -59,21 +55,27 @@ typedef enum gcso_anchor_type {
     GCSO_ANCHOR_TYPE_CRYSTALLIZED = 4
 } gcso_anchor_type_t;
 
-// Descriptor header for layout validation
+/**
+ * @brief Descriptor header for size and ABI version validation.
+ */
 typedef struct GCSO_ALIGNAS(4) gcso_descriptor_header {
     uint32_t struct_size;
     uint32_t abi_version;
 } gcso_descriptor_header_t;
 
-// Paged block bitmask layout (32 Bytes, SIMD aligned)
+/**
+ * @brief 256-bit bitmask layout aligned to 32 bytes for Warp/SIMD reductions.
+ */
 typedef struct GCSO_ALIGNAS(32) gcso_paged_bitmask {
     uint64_t bits[4];
 } gcso_paged_bitmask_t;
 
-// Stigmergic pointer trail layout (128 Bytes, Cacheline aligned)
+/**
+ * @brief Stigmergic pointer trail structure aligned to 128 bytes (2 cache lines).
+ */
 typedef struct GCSO_ALIGNAS(128) gcso_pointer_trail {
     uint64_t current_ptr;
-    uint64_t previous_ptr;
+    uint64_t prev_ptr;
     uint64_t user_data;
     int32_t transition_cost;
     uint32_t step_count;
@@ -87,8 +89,24 @@ typedef struct GCSO_ALIGNAS(128) gcso_pointer_trail {
     uint8_t reserved_padding[8];
 } gcso_pointer_trail_t;
 
-// Base runtime configuration layout (64 Bytes)
-typedef struct GCSO_ALIGNAS(4) gcso_config {
+/**
+ * @brief Dynamic Adaptive Extension Scratchpad (DAES) slot layout (64 bytes).
+ */
+typedef struct GCSO_ALIGNAS(64) gcso_daes_slot {
+    uint32_t mode;
+    uint16_t telemetry_ring_head;
+    uint16_t telemetry_ring_tail;
+    uint32_t cache_hit_count;
+    uint32_t auto_tune_flags;
+    uint64_t fast_path_bypass_mask;
+    uint64_t fast_path_shortcuts[4];
+    uint8_t telemetry_mini_ledger[8];
+} gcso_daes_slot_t;
+
+/**
+ * @brief Global configuration descriptor structure aligned to 16 bytes (64 bytes total).
+ */
+typedef struct GCSO_ALIGNAS(16) gcso_config {
     uint32_t head_dim;
     uint32_t num_heads;
     uint32_t paged_block_size;
@@ -105,7 +123,63 @@ typedef struct GCSO_ALIGNAS(4) gcso_config {
     uint8_t reserved[24];
 } gcso_config_t;
 
-// Container snapshot header layout (128 Bytes)
+/**
+ * @brief Dynamic entropy controller state tracking structure (64 bytes).
+ */
+typedef struct GCSO_ALIGNAS(32) gcso_edbc_state {
+    float moving_z_entropy;
+    float bifurcation_threshold;
+    float singularity_eps;
+    float sliding_entropy_rate;
+    float repulsion_gain;
+    float sample_temperature;
+    uint32_t active_branch_mode;
+    uint8_t reserved[36];
+} gcso_edbc_state_t;
+
+/**
+ * @brief Zero-copy memory mapped storage descriptor (64 bytes).
+ */
+typedef struct GCSO_ALIGNAS(32) gcso_zimms_descriptor {
+    uint64_t mapped_address;
+    uint64_t file_size_bytes;
+    uint64_t dma_buffer_handle;
+    uint32_t flags;
+    int32_t fd_handle;
+    uint8_t reserved[32];
+} gcso_zimms_descriptor_t;
+
+/**
+ * @brief Sub-head group router configuration descriptor (32 bytes).
+ */
+typedef struct GCSO_ALIGNAS(16) gcso_pspm_config {
+    uint16_t num_fact_heads;
+    uint16_t num_logic_heads;
+    uint16_t num_explore_heads;
+    uint16_t flags;
+    float fact_phase_gain;
+    float logic_phase_gain;
+    float explore_phase_gain;
+    uint8_t reserved[12];
+} gcso_pspm_config_t;
+
+/**
+ * @brief Sparse Residual Adapter Layer (SRL) Rank-1 descriptor (64 bytes).
+ */
+typedef struct GCSO_ALIGNAS(32) gcso_srl_descriptor {
+    uint32_t layer_idx;
+    uint32_t rank;
+    uint64_t u_vector_ptr;
+    uint64_t v_vector_ptr;
+    uint64_t gain_scalar_ptr;
+    float scale_factor;
+    uint32_t flags;
+    uint8_t reserved[24];
+} gcso_srl_descriptor_t;
+
+/**
+ * @brief Unified binary snapshot container header structure (128 bytes).
+ */
 typedef struct GCSO_ALIGNAS(64) gcso_snapshot_header {
     uint32_t magic;
     uint32_t version;
@@ -121,19 +195,9 @@ typedef struct GCSO_ALIGNAS(64) gcso_snapshot_header {
     uint8_t reserved_padding[56];
 } gcso_snapshot_header_t;
 
-// Dynamic Adaptive Extension Scratchpad layout (64 Bytes)
-typedef struct GCSO_ALIGNAS(64) gcso_daes_slot {
-    uint32_t mode;
-    uint16_t telemetry_ring_head;
-    uint16_t telemetry_ring_tail;
-    uint32_t cache_hit_count;
-    uint32_t auto_tune_flags;
-    uint64_t fast_path_bypass_mask;
-    uint64_t fast_path_shortcuts[4];
-    uint8_t telemetry_mini_ledger[8];
-} gcso_daes_slot_t;
-
-// PPRC Keyframe header layout (64 Bytes)
+/**
+ * @brief PPRC Keyframe KV cache index header structure (64 bytes).
+ */
 typedef struct GCSO_ALIGNAS(32) gcso_pprc_keyframe_header {
     uint32_t frame_type;
     uint32_t token_index;
@@ -146,68 +210,30 @@ typedef struct GCSO_ALIGNAS(32) gcso_pprc_keyframe_header {
     uint8_t reserved[24];
 } gcso_pprc_keyframe_header_t;
 
-// PSPM router config layout (32 Bytes)
-typedef struct GCSO_ALIGNAS(16) gcso_pspm_config {
-    uint16_t num_fact_heads;
-    uint16_t num_logic_heads;
-    uint16_t num_explore_heads;
-    uint16_t flags;
-    float fact_phase_gain;
-    float logic_phase_gain;
-    float explore_phase_gain;
-    uint8_t reserved[12];
-} gcso_pspm_config_t;
+// Opaque Facade Handles
+typedef struct gcso_context_opaque* gcso_context_handle_t;
+typedef struct gcso_container_opaque* gcso_container_handle_t;
+typedef struct gcso_action_hub_opaque* gcso_action_hub_handle_t;
+typedef struct gcso_daes_slot_opaque* gcso_daes_slot_handle_t;
+typedef struct gcso_attractor_field_opaque* gcso_attractor_field_handle_t;
+typedef struct gcso_edbc_controller_opaque* gcso_edbc_controller_handle_t;
+typedef struct gcso_dpsr_kernel_opaque* gcso_dpsr_kernel_handle_t;
+typedef struct gcso_pspm_router_opaque* gcso_pspm_router_handle_t;
+typedef struct gcso_srl_adapter_opaque* gcso_srl_adapter_handle_t;
 
-// EDBC state layout (64 Bytes)
-typedef struct GCSO_ALIGNAS(32) gcso_edbc_state {
-    float moving_z_entropy;
-    float bifurcation_threshold;
-    float singularity_eps;
-    float sliding_entropy_rate;
-    float repulsion_gain;
-    float sample_temperature;
-    uint32_t active_branch_mode;
-    uint8_t reserved[36];
-} gcso_edbc_state_t;
-
-// SRL descriptor layout (64 Bytes)
-typedef struct GCSO_ALIGNAS(32) gcso_srl_descriptor {
-    uint32_t layer_idx;
-    uint32_t rank;
-    uint64_t u_vector_ptr;
-    uint64_t v_vector_ptr;
-    uint64_t gain_scalar_ptr;
-    float scale_factor;
-    uint32_t flags;
-    uint8_t reserved[24];
-} gcso_srl_descriptor_t;
-
-// ZIMMS descriptor layout (64 Bytes)
-typedef struct GCSO_ALIGNAS(32) gcso_zimms_descriptor {
-    uint64_t mapped_address;
-    uint64_t file_size_bytes;
-    uint64_t dma_buffer_handle;
-    uint32_t flags;
-    int32_t fd_handle;
-    uint8_t reserved[32];
-} gcso_zimms_descriptor_t;
-
-// Compile-time structure size and alignment assertions
-#ifdef __cplusplus
-static_assert(sizeof(gcso_descriptor_header_t) == 8, "Size mismatch: gcso_descriptor_header_t");
-static_assert(sizeof(gcso_paged_bitmask_t) == 32, "Size mismatch: gcso_paged_bitmask_t");
-static_assert(alignof(gcso_paged_bitmask_t) == 32, "Align mismatch: gcso_paged_bitmask_t");
-static_assert(sizeof(gcso_pointer_trail_t) == 128, "Size mismatch: gcso_pointer_trail_t");
-static_assert(alignof(gcso_pointer_trail_t) == 128, "Align mismatch: gcso_pointer_trail_t");
-static_assert(sizeof(gcso_config_t) == 64, "Size mismatch: gcso_config_t");
-static_assert(sizeof(gcso_snapshot_header_t) == 128, "Size mismatch: gcso_snapshot_header_t");
-static_assert(sizeof(gcso_daes_slot_t) == 64, "Size mismatch: gcso_daes_slot_t");
-static_assert(sizeof(gcso_pprc_keyframe_header_t) == 64, "Size mismatch: gcso_pprc_keyframe_header_t");
-static_assert(sizeof(gcso_pspm_config_t) == 32, "Size mismatch: gcso_pspm_config_t");
-static_assert(sizeof(gcso_edbc_state_t) == 64, "Size mismatch: gcso_edbc_state_t");
-static_assert(sizeof(gcso_srl_descriptor_t) == 64, "Size mismatch: gcso_srl_descriptor_t");
-static_assert(sizeof(gcso_zimms_descriptor_t) == 64, "Size mismatch: gcso_zimms_descriptor_t");
-#endif
+// Static Assertions for Layout Invariants
+GCSO_STATIC_ASSERT(sizeof(gcso_q7_t) == 1, "gcso_q7_t must be 1 byte");
+GCSO_STATIC_ASSERT(sizeof(gcso_descriptor_header_t) == 8, "gcso_descriptor_header_t must be 8 bytes");
+GCSO_STATIC_ASSERT(sizeof(gcso_paged_bitmask_t) == 32, "gcso_paged_bitmask_t must be 32 bytes");
+GCSO_STATIC_ASSERT(sizeof(gcso_pointer_trail_t) == 128, "gcso_pointer_trail_t must be 128 bytes");
+GCSO_STATIC_ASSERT(sizeof(gcso_daes_slot_t) == 64, "gcso_daes_slot_t must be 64 bytes");
+GCSO_STATIC_ASSERT(sizeof(gcso_config_t) == 64, "gcso_config_t must be 64 bytes");
+GCSO_STATIC_ASSERT(sizeof(gcso_edbc_state_t) == 64, "gcso_edbc_state_t must be 64 bytes");
+GCSO_STATIC_ASSERT(sizeof(gcso_zimms_descriptor_t) == 64, "gcso_zimms_descriptor_t must be 64 bytes");
+GCSO_STATIC_ASSERT(sizeof(gcso_pspm_config_t) == 32, "gcso_pspm_config_t must be 32 bytes");
+GCSO_STATIC_ASSERT(sizeof(gcso_srl_descriptor_t) == 64, "gcso_srl_descriptor_t must be 64 bytes");
+GCSO_STATIC_ASSERT(sizeof(gcso_snapshot_header_t) == 128, "gcso_snapshot_header_t must be 128 bytes");
+GCSO_STATIC_ASSERT(sizeof(gcso_pprc_keyframe_header_t) == 64, "gcso_pprc_keyframe_header_t must be 64 bytes");
 
 GCSO_EXTERN_C_END
 

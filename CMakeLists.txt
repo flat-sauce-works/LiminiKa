@@ -1,3 +1,4 @@
+# name: CMakeLists.txt
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 cmake_minimum_required(VERSION 3.18)
@@ -120,7 +121,3 @@ if(CLANG_FORMAT_BIN)
         )
     endif()
 endif()
-
-# Interface target to maintain compatibility with subprojects
-add_library(liminika_dummy_kernels INTERFACE)
-target_link_libraries(liminika_dummy_kernels INTERFACE liminika_headers)

@@ -7,15 +7,15 @@
 | GCSO Theoretical Concept | Practical Engineering Alias | Primary System Role & Functional Description |
 | --- | --- | --- |
 | **Cellular Sheaf Cohomology Obstruction $H^1(K; \mathcal{F})$** | **Context Hallucination Lock-in Detector** | Detects topological loop disconnects and non-factual generation lock-in states from token activation residuals. |
-| **Phase-Conjugate Attractor Repulsion** | **Anti-Hallucination Vector Repulser** | Flips false local minima energy valleys into repulsive potential peaks using anti-phase markers ($-\boldsymbol{\Delta\theta}$). |
+| **Phase-Conjugate Attractor Repulsion** | **Anti-Hallucination Vector Repulser** | Flips false local minima energy valleys into repulsive potential peaks using anti-phase markers ( $-\boldsymbol{\Delta\theta}$ ). |
 | **Stigmergic Swarm-Attractor Duality** | **Pointer-Trace Dynamic Memory Convergence** | Replaces heavy online matrix differential solves with $\mathcal{O}(1)$ micro bitwise/pointer updates that converge to global attractors. |
 | **Dynamic Phase-Shifted RoPE (DPSR)** | **Zero-Weight Context Phase Modulator** | Applies dynamic relative phase rotation to Query/Key attention registers without modifying base weight tensors in VRAM. |
-| **Quantization-Discretized Phase Steering (QDPS)** | **Discrete Phase Rotation Filter** | Cuts off phase rotation steps falling below the minimum discretization step ($\Delta\theta_{\mathrm{min\_step}}$) on quantized grids. |
+| **Quantization-Discretized Phase Steering (QDPS)** | **Discrete Phase Rotation Filter** | Cuts off phase rotation steps falling below the minimum discretization step ( $\Delta\theta_{\mathrm{min\_step}}$ ) on quantized grids. |
 | **Sidecar Pointer Table (SPT) / Action Hub** | **$\mathcal{O}(1)$ Hot-Path Pointer Dispatcher** | Executes constant-time tagged pointer transitions, creating persistent memory trails for intelligence routing. |
-| **Entropy-Driven Decoding Branch Controller (EDBC)** | **Dynamic Decoding Switchboard** | Monitors entropy flux ($\tilde{H}$) across layers to trigger potential-driven sampling or phase-conjugate repulsion at critical points. |
+| **Entropy-Driven Decoding Branch Controller (EDBC)** | **Dynamic Decoding Switchboard** | Monitors entropy flux ( $\tilde{H}$ ) across layers to trigger potential-driven sampling or phase-conjugate repulsion at critical points. |
 | **Dynamic Adaptive Extension Scratchpad (DAES)** | **Multi-Layer Dynamic Adaptive Scratchpad** | Reuses 64B cacheline memory as an in-place telemetry ledger, $\mathcal{O}(1)$ bypass shortcut table, and dynamic parameter auto-tuner. |
 | **Predictive Phase-Motion & Residual Compensation (PPRC)** | **Instant-Replay Keyframe KV Cache** | Structures KV caches into I-Frames (Anchors) and P-Frames (Phase Motion), enabling zero-forward latency history seek. |
-| **Sparse Residual Adapter Layer (SRL)** | **Dynamic Rank-1 Outer Product Adapter** | Provides lightweight FP8 outer product corrections ($\mathbf{u}\mathbf{v}^T$) to supplement non-linear model capacities. |
+| **Sparse Residual Adapter Layer (SRL)** | **Dynamic Rank-1 Outer Product Adapter** | Provides lightweight FP8 outer product corrections ( $\mathbf{u}\mathbf{v}^T$ ) to supplement non-linear model capacities. |
 | **LoRA-to-Phase SVD Converter (L2P-SVD)** | **Training-Free Adapter Phase Projector** | Projects fine-tuned LoRA matrices via SVD into phase profiles and Rank-1 SRL vectors without gradient training. |
 | **Zero-Overhead In-Memory Mapped Storage (ZIMMS)** | **Zero-Copy Memory-Mapped Engine** | Provides zero-copy memory-mapped file access and direct DMA stream buffers for `.gcso` unified binary containers. |
 | **Phase-Steered Parallel Multi-head (PSPM) Router** | **Sub-Head Phase Group Allocator** | Dynamically routes attention heads into Fact, Logic, and Explore sub-groups in a single forward pass. |
@@ -90,6 +90,7 @@
 |   - Dynamic Mode 2: Multi-GPU / Inter-Process Shared Memory Buffer Slot           |
 +-----------------------------------------------------------------------------------+
 
+
 ```
 
 ---
@@ -99,8 +100,8 @@
 | Layer Level | Compute Granularity | Local Execution (Micro Computation) | Local Control (Macro Evaluation) | Data Cascade Output | DAES Multi-Layer Behavior | EDBC Multi-Layer Behavior |
 | --- | --- | --- | --- | --- | --- | --- |
 | **Macro Level** | Session / Attractor Field | Asynchronous AOT phase base updating, L2P-SVD projection & ZIMMS file mapping | Moving Z-Score Entropy ($\tilde{H}$), Pitchfork Bifurcation tracking & Cohomology $H^1(K; \mathcal{F})$ | Atomic global phase parameters, System Prompt Anchors & Macro Attractor Clusters | Evaluates telemetry ring to auto-tune PSPM ratios, RIPA clamps & EDBC thresholds | Drives Pitchfork Bifurcation & Energy-Guided Decoding transitions |
-| **Mezzo Level** | Chunk / PagedBlock (16–32 Tokens) | Skip-Hop Bus inter-layer topology updates & PPRC I/P-Frame Seek | Buffered Bit-Tree Reduction, Interlinking Hallucinated Trails & Gershgorin Upper Bounds | Aggregated block phase status & Keyframe Indices | Aggregates block-level cache hit-rate metrics across token ranges | Tracks Sliding-Window Entropy Rate Integrator ($\Phi_M(t)$) |
-| **Micro Level** | Per-Token / Action Hub (SPT) | $\mathcal{O}(1)$ Tagged Pointer lookup, PSPM Sub-Head Routing & Dynamic Shortcut Lookup | Bitmask reduction, SRL Rank-1 gating & Trail pulling toward Anchor Attractors | Pointer Trail, Q7 Phase delta & Adapter Residuals | Operates $\mathcal{O}(1)$ Fast-Path Bypass Table to skip redundant evaluations | Computes Token Z-Score Entropy ($\tilde{H}$) from activation distance |
+| **Mezzo Level** | Chunk / PagedBlock (16–32 Tokens) | Skip-Hop Bus inter-layer topology updates & PPRC I/P-Frame Seek | Buffered Bit-Tree Reduction, Interlinking Hallucinated Trails & Gershgorin Upper Bounds | Aggregated block phase status & Keyframe Indices | Aggregates block-level cache hit-rate metrics across token ranges | Tracks Sliding-Window Entropy Rate Integrator ( $\Phi_M(t)$ ) |
+| **Micro Level** | Per-Token / Action Hub (SPT) | $\mathcal{O}(1)$ Tagged Pointer lookup, PSPM Sub-Head Routing & Dynamic Shortcut Lookup | Bitmask reduction, SRL Rank-1 gating & Trail pulling toward Anchor Attractors | Pointer Trail, Q7 Phase delta & Adapter Residuals | Operates $\mathcal{O}(1)$ Fast-Path Bypass Table to skip redundant evaluations | Computes Token Z-Score Entropy ( $\tilde{H}$ ) from activation distance |
 | **Nano Level** | Thread-Warp / SIMD Lane | Branchless bitwise ops, Q7 addition in register shuffle & QDPS grid filtering | In-register RIPA $\tanh$ clamping, Speculative Phase Prefetch & immediate steering | Warp bitmask & Fused RoPE angles | Pushes lock-free profiling telemetry into scratchpad ring buffer | Detects 1st-order local entropy surge via Warp Shuffle |
 
 ---
@@ -112,7 +113,7 @@
 | **Intelligence as Pointer Chains** | Micro / Hot Path | $\mathcal{O}(1)$ cacheline-friendly tagged pointer layout. Zero dynamic allocation in Hot Path. Pointer transitions represent the fundamental primitive of intelligence. |
 | **Bottom-Up Stigmergy & Attractor Crystallization** | Micro $\to$ Macro | Pointer processing trails bridge cellular hallucinations, accumulating stigmergic density to macro-crystallize into latent Anchor Attractors or pull trails toward existing anchors. |
 | **Phase-Conjugate Repulsion via Pointer Traces** | Micro $\to$ Macro | When cellular hallucinations hit false local minima, anti-phase markers ($-\boldsymbol{\Delta\theta}$) are stamped onto pointer trails, converting energy valleys into repulsive potential peaks. |
-| **Quantization-Discretized Phase Steering (QDPS)** | Nano / Micro | Discrete steering filter eliminating phase updates below discretization threshold ($\Delta\theta_{\mathrm{min\_step}}$) to prevent grid oscillation under 1.5–3.5 bit weights. |
+| **Quantization-Discretized Phase Steering (QDPS)** | Nano / Micro | Discrete steering filter eliminating phase updates below discretization threshold ( $\Delta\theta_{\mathrm{min\_step}}$ ) to prevent grid oscillation under 1.5–3.5 bit weights. |
 | **Multi-Layer Self-Adaptive System Components** | All Layers (Nano–Macro) | High-level components (DAES, EDBC) dynamically change their internal execution role depending on whether they are accessed at Nano, Micro, Mezzo, or Macro levels. |
 | **System Prompt Anchor Endpoint** | Macro / Cold Path | Natural language system prompts projected into phase space as primary baseline Anchor Attractors. |
 | **Descriptor-Based ABI & Facade** | Boundary | Unified Facade pattern via context handles. APIs accept descriptors with `struct_size` and `abi_version` validation. |
@@ -143,6 +144,7 @@ Micro-level pointer transitions build a persistent Stigmergic Trail Map in the A
                                                                       │ (Attractor Pull Force F_pull)
 [ System Prompt Anchor Attractor ] ───────────────────────────────────┘
   (Primary Baseline Endpoint)
+
 
 ```
 
@@ -185,6 +187,7 @@ Micro-level pointer transitions build a persistent Stigmergic Trail Map in the A
                       ┌───────────────────────────────────┐
                       │ Apply to DPSR Register Shuffle    │
                       └───────────────────────────────────┘
+
 
 ```
 
@@ -231,6 +234,7 @@ The Entropy-Driven Decoding Branch Controller (EDBC) monitors activation entropy
 │  - Resume Normal Trajectory Steering     │
 └──────────────────────────────────────────┘
 
+
 ```
 
 ---
@@ -261,6 +265,7 @@ PPRC decouples Key-Value cache storage into sparse Fact Anchors (I-Frames) and c
                         │  Keyframe Reconstruction  │
                         └───────────────────────────┘
 
+
 ```
 
 ---
@@ -287,6 +292,7 @@ DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad i
 | - Auto-Tuner (PSPM/RIPA)|   | - Repulsion Callbacks   |   | - Lock-Free IPC Sync    |
 +-------------------------+   +-------------------------+   +-------------------------+
 
+
 ```
 
 ---
@@ -301,6 +307,7 @@ DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad i
                       │
                       ▼
 [ Hot Path In-Kernel Execution: y = W_base * x + s (*) (u * (v^T * x)) ]
+
 
 ```
 
@@ -324,6 +331,7 @@ DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad i
   +-----------------------------------+
   |    include/liminika/gcso_abi.h    |  <-- Exported C-ABI Function Contracts & Facade API
   +-----------------------------------+
+
 
 ```
 
@@ -362,7 +370,7 @@ DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad i
 
 | Type Name | Underlying Primitive | Binary Role & Ownership |
 | --- | --- | --- |
-| `gcso_q7_t` | Signed 8-bit Integer | Fixed-point Q7 phase representation ($\beta_{\mathrm{Q7}} = 1/128$, range $-1.0 \sim +0.9921875$). |
+| `gcso_q7_t` | Signed 8-bit Integer | Fixed-point Q7 phase representation ( $\beta_{\mathrm{Q7}} = 1/128$, range $-1.0 \sim +0.9921875$ ). |
 | `gcso_status_t` | Signed 32-bit Integer | Standardized 32-bit status code for 1:1 cross-language FFI mapping. |
 | `gcso_capability_flags_t` | Unsigned 64-bit Integer | Bitmask matrix defining active feature caps, DAES mode, and extension slots. |
 | `gcso_context_handle_t` | Opaque Pointer | Opaque handle for Unified Runtime Context Facade. |
@@ -430,6 +438,7 @@ DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad i
 |   (8 bits)   |   (8 bits)   |                    (48 bits)                    |
 +--------------+--------------+-------------------------------------------------+
 
+
 ```
 
 | Field Identifier | Bit Range | Mask Bit Pattern | Encoding / Masking Rules |
@@ -451,6 +460,7 @@ DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad i
 |  (64-bit Unsigned)   |  (64-bit Unsigned)   |  (64-bit Unsigned)   |  (64-bit Unsigned)   |
 +----------------------+----------------------+----------------------+----------------------+
 
+
 ```
 
 ---
@@ -464,7 +474,7 @@ DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad i
   0  +-----------------------------------------------------------------+
      | current_ptr (64-bit Unsigned Tagged Pointer)                    |
   8  +-----------------------------------------------------------------+
-     | previous_ptr (64-bit Unsigned Tagged Pointer)                   |
+     | prev_ptr (64-bit Unsigned Tagged Pointer)                       |
  16  +-----------------------------------------------------------------+
      | user_data (Extensible Payload: 64-bit Unsigned)                 |
  24  +-------------------------------+---------------------------------+
@@ -481,6 +491,7 @@ DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad i
      | reserved_padding[8] (Unsigned 8-bit Array: Padding to 128 B)    |
 128  +-----------------------------------------------------------------+
 
+
 ```
 
 ---
@@ -494,10 +505,10 @@ DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad i
 | `0` | `head_dim` | Unsigned 32 | Attention head dimension (Must be even, e.g., 128). |
 | `4` | `num_heads` | Unsigned 32 | Total number of attention heads. |
 | `8` | `paged_block_size` | Unsigned 32 | Tokens per paged block (16 or 32). |
-| `12` | `q7_phase_scale` | Float 32 | Q7 scale factor ($\beta_{\mathrm{Q7}} = 1.0 / 128.0$). |
+| `12` | `q7_phase_scale` | Float 32 | Q7 scale factor ( $\beta_{\mathrm{Q7}} = 1.0 / 128.0$ ). |
 | `16` | `ripa_clamp_max_rad` | Float 32 | RIPA soft-bounded phase limit in radians (Default: $5^\circ \approx 0.087$). |
 | `20` | `qdps_min_step_rad` | Float 32 | QDPS quantization threshold angle below which phase steering is cut off. |
-| `24` | `entropy_singularity_eps` | Float 32 | Singularity prevention clamp ($\epsilon_{\mathrm{log}} = 10^{-12}$). |
+| `24` | `entropy_singularity_eps` | Float 32 | Singularity prevention clamp ( $\epsilon_{\mathrm{log}} = 10^{-12}$ ). |
 | `28` | `max_prompt_anchors` | Unsigned 32 | Maximum allowed system prompt anchors. |
 | `32` | `action_hub_capacity` | Unsigned 32 | Slot capacity of Action Hub (SPT) tagged pointer table. |
 | `36` | `enable_cuda_warp_shuffle` | Unsigned 8 | Enable GPU Warp Shuffle inline evaluation. |
@@ -541,11 +552,13 @@ DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad i
   4  +-------------------------------+----------------------------------+
      | telemetry_ring_tail (U16)     | cache_hit_count (Unsigned 32)    |
   8  +-------------------------------+----------------------------------+
-     | fast_path_bypass_mask (U64)   | auto_tune_flags (Unsigned 32)    |
- 20  +------------------------------------------------------------------+
+     | auto_tune_flags (Unsigned 32)| fast_path_bypass_mask (U64)       |
+ 16  +------------------------------------------------------------------+
+     | fast_path_bypass_mask (Unsigned 64 continued)                    |
+ 24  +------------------------------------------------------------------+
      | fast_path_shortcuts[4] (Four 64-bit Tagged Pointer Shortcuts)    |
- 52  +------------------------------------------------------------------+
-     | telemetry_mini_ledger[12] (Fixed-size byte ring for profiling)   |
+ 56  +------------------------------------------------------------------+
+     | telemetry_mini_ledger[8] (Fixed-size byte ring for profiling)    |
  64  +------------------------------------------------------------------+
 
  Mode 1: External Plugin / GCSO-DNP Slot Layout
@@ -573,6 +586,7 @@ DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad i
  24  +-----------------------------------------------------------------+
      | reserved_padding[40] (Unsigned 8-bit Array)                     |
  64  +-----------------------------------------------------------------+
+
 
 ```
 
@@ -625,7 +639,7 @@ DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad i
 | `4` | `bifurcation_threshold` | Float 32 | Z-score threshold $\tau_{\mathrm{bifurcation}}$ triggering branch split. |
 | `8` | `singularity_eps` | Float 32 | Logarithmic singularity safety guard $\epsilon_{\mathrm{log}}$. |
 | `12` | `sliding_entropy_rate` | Float 32 | Sliding-window entropy rate integrator $\Phi_M(t)$. |
-| `16` | `repulsion_gain` | Float 32 | Scaling gain for anti-phase repulsion pulse ($-\boldsymbol{\Delta\theta}$). |
+| `16` | `repulsion_gain` | Float 32 | Scaling gain for anti-phase repulsion pulse ( $-\boldsymbol{\Delta\theta}$ ). |
 | `20` | `sample_temperature` | Float 32 | Energy-guided dynamic temperature value. |
 | `24` | `active_branch_mode` | Unsigned 32 | Enum code (`0` = Normal, `1` = Bifurcation, `2` = Repulsion). |
 | `28` | `reserved[36]` | Unsigned 8 Array | Extension padding to 64 bytes. |
@@ -687,6 +701,7 @@ DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad i
        ▼                                                   ▼
 [ Output Buffers / Pointers ] ◄── Destroy Function Call ───┘
  (Caller Allocated & Passed)     (Deallocates All Internal Structures / Unmaps ZIMMS)
+
 
 ```
 
@@ -750,7 +765,7 @@ DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad i
 | `gcso_dpsr_fused_logit_shift` | Nano Hot Path | Fused inline logit phase shift prior to Softmax layer. | **Zero Allocation** |
 | `gcso_pspm_dispatch_single_pass` | Nano Hot Path | Dispatches PSPM head-group phase profiles in a single forward pass. | **Zero Allocation** |
 | `gcso_srl_eval_rank1` | Micro Hot Path | Evaluates SRL Dynamic Rank-1 outer product ( $\mathbf{y} = W\mathbf{x} + \mathbf{s} \odot (\mathbf{u}(\mathbf{v}^T \mathbf{x}))$ ). | **Zero Allocation** |
-| `gcso_l2p_svd_project_lora` | Cold Path | Computes SVD on input LoRA matrices ($W_A, W_B$) to output Rank-1 SRL vectors ($\mathbf{u}, \mathbf{v}$) and phase profiles. | Cold Path Alloc Allowed |
+| `gcso_l2p_svd_project_lora` | Cold Path | Computes SVD on input LoRA matrices ( $W_A, W_B$ ) to output Rank-1 SRL vectors ( $\mathbf{u}, \mathbf{v}$ ) and phase profiles. | Cold Path Alloc Allowed |
 
 ---
 
@@ -761,7 +776,7 @@ DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad i
 | `gcso_attractor_field_add_anchor` | Macro | Registers topological anchor point in attractor field. |
 | `gcso_attractor_field_add_system_prompt_anchor` | Macro | Maps natural language system prompt text as primary Anchor Attractor. |
 | `gcso_attractor_field_add_embedding_anchor` | Macro | Maps dense feature embedding vector as continuous attractor anchor. |
-| `gcso_attractor_field_inject_phase_repulsion` | Macro | Injects phase-conjugate repulsion vector ($-\boldsymbol{\Delta\theta}$) to flip spurious local minima into repulsive potential peaks. |
+| `gcso_attractor_field_inject_phase_repulsion` | Macro | Injects phase-conjugate repulsion vector ( $-\boldsymbol{\Delta\theta}$ ) to flip spurious local minima into repulsive potential peaks. |
 | `gcso_attractor_field_aggregate_bottom_up` | Macro | Aggregates high-density pointer trails bottom-up to macro-crystallize new dynamic anchors. |
 | `gcso_persona_apply_patch` | Macro | Dynamic application of persona phase modulation patches without altering base weights. |
 | `gcso_zimms_open_mmap` | Storage / ZIMMS | Maps `.gcso` container payload into memory space using zero-copy `mmap`. |
@@ -790,6 +805,7 @@ User / CLI           Rust Core / FFI               C-ABI Boundary               
    │                       │<── GCSO_SUCCESS ──────────────│<── Trail & Status Output ───│
    │<── Token Result ──────│                               │                             │
 
+
 ```
 
 ---
@@ -810,6 +826,7 @@ Action Hub (SPT)           Stigmergic Density Evaluator    Macro Attractor Field
        │                                │                            │                           │
        │<── Dynamic Shortcut in DAES ───┼----------------------------┼---------------------------┘
 
+
 ```
 
 ---
@@ -829,6 +846,7 @@ Hot-Path Kernel (Nano)       DAES Scratchpad Ledger      EDBC / Macro Controller
        │                           │                              │                         │
        │<── Fast-Path Shortcut ────┼------------------------------┴-------------------------┘
        │    Updated (O(1) Bypass)  │
+
 
 ```
 
@@ -852,6 +870,7 @@ Hot-Path Kernel             EDBC Controller           Sheaf Cohomology Evaluator
        │                           │                                                       │  to Repulsive Peak)
        │                           │── Hot-Swap L2P-SVD Rank-1 Vectors (u, v) ────────────>│ (Attach SRL Adapter)
 
+
 ```
 
 ---
@@ -872,7 +891,7 @@ Hot-Path Kernel             EDBC Controller           Sheaf Cohomology Evaluator
 | `gcso_srl_descriptor_t` | 64 | 32 Bytes | `layer_idx`: Offset 0, `u_vector_ptr`: Offset 8, `v_vector_ptr`: Offset 16 |
 | `gcso_zimms_descriptor_t` | 64 | 32 Bytes | `mapped_address`: Offset 0, `file_size_bytes`: Offset 8 |
 | `gcso_descriptor_header_t` | 8 | 4 Bytes | `struct_size`: Offset 0, `abi_version`: Offset 4 |
-| `gcso_daes_slot_t` | 64 | 64 Bytes (Cacheline) | `mode`: Offset 0, `fast_path_shortcuts`: Offset 20 |
+| `gcso_daes_slot_t` | 64 | 64 Bytes (Cacheline) | `mode`: Offset 0, `fast_path_shortcuts`: Offset 24 |
 
 ---
 
@@ -889,6 +908,7 @@ Hot-Path Kernel             EDBC Controller           Sheaf Cohomology Evaluator
   (C++ Boundary: try-catch Exception Interception -> returns GCSO_ERROR_PANIC_CAUGHT)
                ▼
   [ C++20 / CUDA / Metal Core Kernels ]
+
 
 ```
 
