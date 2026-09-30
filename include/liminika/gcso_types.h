@@ -223,17 +223,21 @@ typedef struct gcso_srl_adapter_opaque* gcso_srl_adapter_handle_t;
 
 // Static Assertions for Layout Invariants
 GCSO_STATIC_ASSERT(sizeof(gcso_q7_t) == 1, "gcso_q7_t must be 1 byte");
-GCSO_STATIC_ASSERT(sizeof(gcso_descriptor_header_t) == 8, "gcso_descriptor_header_t must be 8 bytes");
+GCSO_STATIC_ASSERT(sizeof(gcso_descriptor_header_t) == 8,
+                   "gcso_descriptor_header_t must be 8 bytes");
 GCSO_STATIC_ASSERT(sizeof(gcso_paged_bitmask_t) == 32, "gcso_paged_bitmask_t must be 32 bytes");
 GCSO_STATIC_ASSERT(sizeof(gcso_pointer_trail_t) == 128, "gcso_pointer_trail_t must be 128 bytes");
 GCSO_STATIC_ASSERT(sizeof(gcso_daes_slot_t) == 64, "gcso_daes_slot_t must be 64 bytes");
 GCSO_STATIC_ASSERT(sizeof(gcso_config_t) == 64, "gcso_config_t must be 64 bytes");
 GCSO_STATIC_ASSERT(sizeof(gcso_edbc_state_t) == 64, "gcso_edbc_state_t must be 64 bytes");
-GCSO_STATIC_ASSERT(sizeof(gcso_zimms_descriptor_t) == 64, "gcso_zimms_descriptor_t must be 64 bytes");
+GCSO_STATIC_ASSERT(sizeof(gcso_zimms_descriptor_t) == 64,
+                   "gcso_zimms_descriptor_t must be 64 bytes");
 GCSO_STATIC_ASSERT(sizeof(gcso_pspm_config_t) == 32, "gcso_pspm_config_t must be 32 bytes");
 GCSO_STATIC_ASSERT(sizeof(gcso_srl_descriptor_t) == 64, "gcso_srl_descriptor_t must be 64 bytes");
-GCSO_STATIC_ASSERT(sizeof(gcso_snapshot_header_t) == 128, "gcso_snapshot_header_t must be 128 bytes");
-GCSO_STATIC_ASSERT(sizeof(gcso_pprc_keyframe_header_t) == 64, "gcso_pprc_keyframe_header_t must be 64 bytes");
+GCSO_STATIC_ASSERT(sizeof(gcso_snapshot_header_t) == 128,
+                   "gcso_snapshot_header_t must be 128 bytes");
+GCSO_STATIC_ASSERT(sizeof(gcso_pprc_keyframe_header_t) == 64,
+                   "gcso_pprc_keyframe_header_t must be 64 bytes");
 
 GCSO_EXTERN_C_END
 
