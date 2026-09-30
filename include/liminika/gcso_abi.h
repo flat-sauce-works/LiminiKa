@@ -80,7 +80,8 @@ gcso_context_create(const gcso_config_t* GCSO_RESTRICT config,
 GCSO_API gcso_status_t GCSO_CALL gcso_context_reset(gcso_context_handle_t context) GCSO_NOEXCEPT;
 
 /**
- * @brief Primary Baseline Endpoint: Projects natural language system prompt text as an Anchor Attractor.
+ * @brief Primary Baseline Endpoint: Projects natural language system prompt text as an Anchor
+ * Attractor.
  * @param context Active context handle.
  * @param prompt_text Null-terminated UTF-8 system prompt string.
  * @param weight Attractor pull force scale.
@@ -273,7 +274,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_set_mode(gcso_daes_slot_t* GCSO_RESTR
                                                     uint32_t mode) GCSO_NOEXCEPT;
 
 /**
- * @brief Evaluates telemetry ledger to auto-tune PSPM routing ratios, RIPA bounds & EDBC thresholds.
+ * @brief Evaluates telemetry ledger to auto-tune PSPM routing ratios, RIPA bounds & EDBC
+ * thresholds.
  * @param slot Const DAES slot structure pointer.
  * @param config_out Pointer to receive updated auto-tuned configuration structure.
  * @return GCSO_SUCCESS or error code.
@@ -317,7 +319,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering(
     size_t num_heads) GCSO_NOEXCEPT;
 
 /**
- * @brief Applies RIPA soft-bounded tanh clamping on low-frequency channels (upper d_head / 4 dimensions).
+ * @brief Applies RIPA soft-bounded tanh clamping on low-frequency channels (upper d_head / 4
+ * dimensions).
  * @param query_tensor 32-byte aligned query tensor buffer.
  * @param phase_deltas Q7 quantized phase delta array.
  * @param head_dim Head dimension size.
@@ -341,7 +344,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_qdps_filter_step(gcso_q7_t* GCSO_RESTRICT 
                                                        float min_step_rad) GCSO_NOEXCEPT;
 
 /**
- * @brief Lazy Phase Unwrapping: Applies relative phase shift against context accumulator on Query side.
+ * @brief Lazy Phase Unwrapping: Applies relative phase shift against context accumulator on Query
+ * side.
  * @param query_tensor 32-byte aligned target query tensor.
  * @param context_accum Cumulative context phase vector.
  * @param head_dim Head dimension.
@@ -512,7 +516,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_embedding_anchor(
     uint32_t* GCSO_RESTRICT anchor_id_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Injects phase-conjugate repulsion vector (-dTheta) to flip spurious local minima into repulsive peaks.
+ * @brief Injects phase-conjugate repulsion vector (-dTheta) to flip spurious local minima into
+ * repulsive peaks.
  * @param context Active runtime context handle.
  * @param repulsion_deltas Q7 anti-phase array.
  * @param num_heads Total head count.
