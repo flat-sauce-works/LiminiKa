@@ -1,0 +1,204 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+name: CI Workflow
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+permissions:
+  contents: write
+
+jobs:
+  changes:
+    name: Detect Changed Paths
+    runs-on: ubuntu-latest
+    outputs:
+      cpp: ${{ steps.filter.outputs.cpp }}
+      rust: ${{ steps.filter.outputs.rust }}
+      license: ${{ steps.filter.outputs.license }}
+      meta: ${{ steps.filter.outputs.meta }}
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Filter path changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            cpp:
+              - 'include/**'
+              - 'src/kernels/**'
+              - 'examples/**'
+              - 'tests/**'
+              - '**/CMakeLists.txt'
+              - '.clang-format'
+              - '.github/workflows/ci.yml'
+            rust:
+              - 'include/**'
+              - 'src/kernels/**'
+              - 'src/cli/**'
+              - 'src/core/**'
+              - 'src/dsl/**'
+              - 'tests/**'
+              - 'benches/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'deny.toml'
+              - '.github/workflows/ci.yml'
+            license:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'deny.toml'
+              - 'LICENSE*'
+              - '.github/workflows/ci.yml'
+            meta:
+              - 'CITATION.cff'
+              - '.github/workflows/ci.yml'
+            docs:
+              - 'docs/**'
+              - '**.md'
+              - '.github/workflows/ci.yml'
+
+  cpp-build-format:
+    name: C/C++ Build & Format Check
+    needs: changes
+    if: ${{ needs.changes.outputs.cpp == 'true' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+
+      - name: Install build tools and clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang-format ninja-build build-essential
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -S . -GNinja
+
+      - name: Verify C/C++ format compliance
+        run: |
+          cmake --build build --target format-check
+        continue-on-error: true
+
+      - name: Execute automatic clang-format
+        run: |
+          cmake --build build --target format
+
+      - name: Auto-commit formatted code (Safe for Fork PRs)
+        uses: stefanzweifel/git-auto-commit-action@v5
+        continue-on-error: true
+        with:
+          commit_message: "style(format): auto-format C/C++ codebase via CI [skip ci]"
+          file_pattern: |
+            include/**
+            src/kernels/**
+            examples/**
+            tests/**
+
+      - name: Build C/C++ targets
+        run: |
+          cmake --build build
+
+      - name: Run C/C++ unit tests
+        run: |
+          ctest --test-dir build --output-on-failure
+
+  rust-check:
+    name: Rust (Formatting, Lint & Test)
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install C/C++ build tools for build.rs compilation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build build-essential
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Enable Rust caching
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Fast check Rust workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Run cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --workspace
+
+  license-safety-check:
+    name: License & Dependency Safety
+    needs: changes
+    if: ${{ needs.changes.outputs.license == 'true' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run cargo-deny check
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --workspace
+
+  meta-citation-check:
+    name: Validate Meta & Citation Files
+    needs: changes
+    if: ${{ needs.changes.outputs.meta == 'true' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Validate CITATION.cff
+        run: |
+          python -c "import yaml; yaml.safe_load(open('CITATION.cff'))"
+
+  docs-check:
+    name: Documentation Integrity & Link Check
+    needs: changes
+    if: ${{ needs.changes.outputs.docs == 'true' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check markdown broken links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --verbose --no-progress --offline '*.md' 'docs/**/*.md'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

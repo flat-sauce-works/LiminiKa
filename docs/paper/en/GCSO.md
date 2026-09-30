@@ -491,7 +491,7 @@ In this framework, the cellular layer (micro) and attractor field (macro) are in
 
 #### Dual-Branch Control Procedure and Local Solution Repulsion Synergy
 
-1. **Entropy Flux Signal Evaluation ($\Phi _ M(t)$):**
+1. **Entropy Flux Signal Evaluation ( $\Phi _ M(t)$ ):**
 
 EDBC evaluates phase transition critical points.
 

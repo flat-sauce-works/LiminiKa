@@ -1,0 +1,128 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# ===================================================================
+# LiminiKa Project .gitignore
+# Core Engine: Geometric Cellular Sheaf Orchestrator (GCSO)
+# ===================================================================
+
+# -------------------------------------------------------------------
+# Rust Build Artifacts & Cargo
+# -------------------------------------------------------------------
+/target/
+**/*.rs.bk
+*.profraw
+*.profdata
+
+# -------------------------------------------------------------------
+# C / C++ / CUDA / GPU Build Artifacts, CMake & Toolchains
+# -------------------------------------------------------------------
+/build/
+/build*/
+/cmake-build-*/
+/bin/
+/lib/
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+*.exp
+*.exe
+
+# GPU Compute Artifacts (CUDA / Vulkan / Metal)
+*.ptx
+*.cubin
+*.fatbin
+*.spv
+*.air
+*.metallib
+
+# CMake Generated Files
+CMakeCache.txt
+CMakeFiles/
+CMakeAutoGen/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+
+# Ninja Build Files
+.ninja_deps
+.ninja_log
+build.ninja
+
+# Build Caches & Tooling
+.ccache/
+compile_commands.json
+
+# -------------------------------------------------------------------
+# LLM Model Weights, Datasets, & Adapters (Large Files)
+# -------------------------------------------------------------------
+*.bin
+*.safetensors
+*.gguf
+*.ggml
+*.pt
+*.pth
+*.onnx
+models/*
+!models/.gitkeep
+weights/*
+!weights/.gitkeep
+adapters/*
+!adapters/.gitkeep
+
+# -------------------------------------------------------------------
+# LiminiKa / GCSO Runtime State & Binary Containers
+# -------------------------------------------------------------------
+*.gcso
+*.gcsopack
+*.gcsocore
+*.sta
+containers/*
+!containers/.gitkeep
+deployments/*
+!deployments/.gitkeep
+
+# -------------------------------------------------------------------
+# Environment Variables & Secret Configuration
+# -------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# -------------------------------------------------------------------
+# Logs & Temporary Files
+# -------------------------------------------------------------------
+*.log
+/logs/
+/tmp/
+/temp/
+
+# -------------------------------------------------------------------
+# OS, IDEs & Language Server Caches
+# -------------------------------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# IDEs, Editors & LSP Caches
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.idea/
+.clangd/
+.cache/
+*.swp
+*.swo
+*~

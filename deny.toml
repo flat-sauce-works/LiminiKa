@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[licenses]
+# Ignore licensing checks for private workspace crates
+private = { ignore = true }
+
+# List of explicitly allowed permissive licenses
+# Reference: https://spdx.org/licenses/
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "ISC",
+    "CC0-1.0",
+    "Zlib",
+    "0BSD",
+    "Unlicense",
+    "BSL-1.0",
+]
+
+# License detection confidence threshold (0.0 to 1.0)
+confidence-threshold = 0.8
+
+[bans]
+# Warn if multiple versions of the same crate are pulled in
+multiple-versions = "warn"
+
+# Deny wildcard dependency specifications (e.g., crate = "*") for build reproducibility
+wildcards = "deny"
+
+# Allow local path dependencies within the workspace (e.g., { path = "../core" })
+allow-wildcard-paths = true
+
+# Highlight all duplicate crates in output
+highlight = "all"
+
+[advisories]
+# Scope for unmaintained dependency warnings ("all", "workspace", "transitive", or "none")
+unmaintained = "all"
+
+# Warn if a crate version has been yanked from crates.io
+yanked = "warn"
+
+[sources]
+# Deny dependencies from unknown third-party registries
+unknown-registry = "deny"
+
+# Deny dependencies from unknown Git repositories
+unknown-git = "deny"
+
+# Explicitly allow standard crates.io index (Alias, Git, and Sparse indices)
+allow-registry = [
+    "https://github.com/rust-lang/crates.io-index",
+    "https://index.crates.io/",
+    "sparse+https://index.crates.io/",
+]
+
+allow-git = []
