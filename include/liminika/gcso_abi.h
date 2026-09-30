@@ -20,11 +20,9 @@ GCSO_EXTERN_C_BEGIN
  * @param patch Pointer to store the patch version number.
  */
 <<<<<<< HEAD
-GCSO_API void GCSO_CALL gcso_abi_get_version(
-    uint32_t* GCSO_RESTRICT major,
-    uint32_t* GCSO_RESTRICT minor,
-    uint32_t* GCSO_RESTRICT patch
-) GCSO_NOEXCEPT;
+GCSO_API void GCSO_CALL gcso_abi_get_version(uint32_t* GCSO_RESTRICT major,
+                                             uint32_t* GCSO_RESTRICT minor,
+                                             uint32_t* GCSO_RESTRICT patch) GCSO_NOEXCEPT;
 =======
 // System & Capability Query Interface
 GCSO_API void GCSO_CALL gcso_abi_get_version(uint32_t* GCSO_RESTRICT major,
@@ -94,9 +92,7 @@ gcso_context_create(const gcso_config_t* GCSO_RESTRICT config,
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
 <<<<<<< HEAD
-GCSO_API gcso_status_t GCSO_CALL gcso_context_reset(
-    gcso_context_handle_t context
-) GCSO_NOEXCEPT;
+GCSO_API gcso_status_t GCSO_CALL gcso_context_reset(gcso_context_handle_t context) GCSO_NOEXCEPT;
 =======
 GCSO_API GCSO_NODISCARD const char* GCSO_CALL gcso_status_to_string(gcso_status_t status)
     GCSO_NOEXCEPT;
@@ -173,9 +169,7 @@ gcso_context_deserialize(const uint8_t* GCSO_RESTRICT buffer, size_t buffer_size
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
 <<<<<<< HEAD
-GCSO_API gcso_status_t GCSO_CALL gcso_context_destroy(
-    gcso_context_handle_t context
-) GCSO_NOEXCEPT;
+GCSO_API gcso_status_t GCSO_CALL gcso_context_destroy(gcso_context_handle_t context) GCSO_NOEXCEPT;
 =======
 GCSO_API gcso_status_t GCSO_CALL
 gcso_context_serialize(gcso_context_handle_t context, uint8_t* GCSO_RESTRICT buffer,

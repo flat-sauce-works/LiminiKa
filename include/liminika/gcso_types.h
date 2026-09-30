@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 #ifndef LIMINIKA_GCSO_TYPES_H
-#define LIMINIKA_GCSO_TYPES_H
+    #define LIMINIKA_GCSO_TYPES_H
 
-#include "liminika/gcso_config.h"
+    #include "liminika/gcso_config.h"
 
 GCSO_EXTERN_C_BEGIN
 
@@ -236,8 +236,10 @@ GCSO_STATIC_ASSERT(sizeof(gcso_zimms_descriptor_t) == 64,
 GCSO_STATIC_ASSERT(sizeof(gcso_pspm_config_t) == 32, "gcso_pspm_config_t must be 32 bytes");
 GCSO_STATIC_ASSERT(sizeof(gcso_srl_descriptor_t) == 64, "gcso_srl_descriptor_t must be 64 bytes");
 <<<<<<< HEAD
-GCSO_STATIC_ASSERT(sizeof(gcso_snapshot_header_t) == 128, "gcso_snapshot_header_t must be 128 bytes");
-GCSO_STATIC_ASSERT(sizeof(gcso_pprc_keyframe_header_t) == 64, "gcso_pprc_keyframe_header_t must be 64 bytes");
+GCSO_STATIC_ASSERT(sizeof(gcso_snapshot_header_t) == 128,
+                   "gcso_snapshot_header_t must be 128 bytes");
+GCSO_STATIC_ASSERT(sizeof(gcso_pprc_keyframe_header_t) == 64,
+                   "gcso_pprc_keyframe_header_t must be 64 bytes");
 =======
 // EDBC state layout (64 Bytes)
 typedef struct GCSO_ALIGNAS(32) gcso_edbc_state {
@@ -273,8 +275,8 @@ typedef struct GCSO_ALIGNAS(32) gcso_zimms_descriptor {
     uint8_t reserved[32];
 } gcso_zimms_descriptor_t;
 
-// Compile-time structure size and alignment assertions
-#ifdef __cplusplus
+            // Compile-time structure size and alignment assertions
+            #ifdef __cplusplus
 static_assert(sizeof(gcso_descriptor_header_t) == 8, "Size mismatch: gcso_descriptor_header_t");
 static_assert(sizeof(gcso_paged_bitmask_t) == 32, "Size mismatch: gcso_paged_bitmask_t");
 static_assert(alignof(gcso_paged_bitmask_t) == 32, "Align mismatch: gcso_paged_bitmask_t");
@@ -289,7 +291,7 @@ static_assert(sizeof(gcso_pspm_config_t) == 32, "Size mismatch: gcso_pspm_config
 static_assert(sizeof(gcso_edbc_state_t) == 64, "Size mismatch: gcso_edbc_state_t");
 static_assert(sizeof(gcso_srl_descriptor_t) == 64, "Size mismatch: gcso_srl_descriptor_t");
 static_assert(sizeof(gcso_zimms_descriptor_t) == 64, "Size mismatch: gcso_zimms_descriptor_t");
-#endif
+            #endif
 >>>>>>> 631dd2990e7e914074e1e2e891e7b8af8ac59c1c
 =======
 GCSO_STATIC_ASSERT(sizeof(gcso_snapshot_header_t) == 128,
@@ -300,4 +302,4 @@ GCSO_STATIC_ASSERT(sizeof(gcso_pprc_keyframe_header_t) == 64,
 
 GCSO_EXTERN_C_END
 
-#endif // LIMINIKA_GCSO_TYPES_H
+    #endif // LIMINIKA_GCSO_TYPES_H
