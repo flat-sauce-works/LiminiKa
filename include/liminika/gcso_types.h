@@ -221,6 +221,7 @@ typedef struct gcso_dpsr_kernel_opaque* gcso_dpsr_kernel_handle_t;
 typedef struct gcso_pspm_router_opaque* gcso_pspm_router_handle_t;
 typedef struct gcso_srl_adapter_opaque* gcso_srl_adapter_handle_t;
 
+<<<<<<< HEAD
 // Static Assertions for Layout Invariants
 GCSO_STATIC_ASSERT(sizeof(gcso_q7_t) == 1, "gcso_q7_t must be 1 byte");
 GCSO_STATIC_ASSERT(sizeof(gcso_descriptor_header_t) == 8, "gcso_descriptor_header_t must be 8 bytes");
@@ -234,6 +235,59 @@ GCSO_STATIC_ASSERT(sizeof(gcso_pspm_config_t) == 32, "gcso_pspm_config_t must be
 GCSO_STATIC_ASSERT(sizeof(gcso_srl_descriptor_t) == 64, "gcso_srl_descriptor_t must be 64 bytes");
 GCSO_STATIC_ASSERT(sizeof(gcso_snapshot_header_t) == 128, "gcso_snapshot_header_t must be 128 bytes");
 GCSO_STATIC_ASSERT(sizeof(gcso_pprc_keyframe_header_t) == 64, "gcso_pprc_keyframe_header_t must be 64 bytes");
+=======
+// EDBC state layout (64 Bytes)
+typedef struct GCSO_ALIGNAS(32) gcso_edbc_state {
+    float moving_z_entropy;
+    float bifurcation_threshold;
+    float singularity_eps;
+    float sliding_entropy_rate;
+    float repulsion_gain;
+    float sample_temperature;
+    uint32_t active_branch_mode;
+    uint8_t reserved[36];
+} gcso_edbc_state_t;
+
+// SRL descriptor layout (64 Bytes)
+typedef struct GCSO_ALIGNAS(32) gcso_srl_descriptor {
+    uint32_t layer_idx;
+    uint32_t rank;
+    uint64_t u_vector_ptr;
+    uint64_t v_vector_ptr;
+    uint64_t gain_scalar_ptr;
+    float scale_factor;
+    uint32_t flags;
+    uint8_t reserved[24];
+} gcso_srl_descriptor_t;
+
+// ZIMMS descriptor layout (64 Bytes)
+typedef struct GCSO_ALIGNAS(32) gcso_zimms_descriptor {
+    uint64_t mapped_address;
+    uint64_t file_size_bytes;
+    uint64_t dma_buffer_handle;
+    uint32_t flags;
+    int32_t fd_handle;
+    uint8_t reserved[32];
+} gcso_zimms_descriptor_t;
+
+// Compile-time structure size and alignment assertions
+#ifdef __cplusplus
+static_assert(sizeof(gcso_descriptor_header_t) == 8, "Size mismatch: gcso_descriptor_header_t");
+static_assert(sizeof(gcso_paged_bitmask_t) == 32, "Size mismatch: gcso_paged_bitmask_t");
+static_assert(alignof(gcso_paged_bitmask_t) == 32, "Align mismatch: gcso_paged_bitmask_t");
+static_assert(sizeof(gcso_pointer_trail_t) == 128, "Size mismatch: gcso_pointer_trail_t");
+static_assert(alignof(gcso_pointer_trail_t) == 128, "Align mismatch: gcso_pointer_trail_t");
+static_assert(sizeof(gcso_config_t) == 64, "Size mismatch: gcso_config_t");
+static_assert(sizeof(gcso_snapshot_header_t) == 128, "Size mismatch: gcso_snapshot_header_t");
+static_assert(sizeof(gcso_daes_slot_t) == 64, "Size mismatch: gcso_daes_slot_t");
+static_assert(sizeof(gcso_pprc_keyframe_header_t) == 64,
+              "Size mismatch: gcso_pprc_keyframe_header_t");
+static_assert(sizeof(gcso_pspm_config_t) == 32, "Size mismatch: gcso_pspm_config_t");
+static_assert(sizeof(gcso_edbc_state_t) == 64, "Size mismatch: gcso_edbc_state_t");
+static_assert(sizeof(gcso_srl_descriptor_t) == 64, "Size mismatch: gcso_srl_descriptor_t");
+static_assert(sizeof(gcso_zimms_descriptor_t) == 64, "Size mismatch: gcso_zimms_descriptor_t");
+#endif
+>>>>>>> 631dd2990e7e914074e1e2e891e7b8af8ac59c1c
 
 GCSO_EXTERN_C_END
 
