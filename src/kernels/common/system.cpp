@@ -10,8 +10,8 @@
 
 namespace liminika {
 
-// Static string literal defining the current GCSO C-ABI release version (v2.0.0 conforming strictly to c_abi_spec.md).
-constexpr const char* GCSO_KERNEL_VERSION_STRING = "2.0.0";
+// Static string literal defining the current GCSO C-ABI release version.
+constexpr const char* GCSO_KERNEL_VERSION_STRING = "0.1.1";
 
 } // namespace liminika
 

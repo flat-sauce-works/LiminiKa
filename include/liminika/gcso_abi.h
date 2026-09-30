@@ -8,6 +8,7 @@
 
 GCSO_EXTERN_C_BEGIN
 
+<<<<<<< HEAD
 // ===================================================================
 // 1. System & Capability Query Interface
 // ===================================================================
@@ -18,9 +19,21 @@ GCSO_EXTERN_C_BEGIN
  * @param minor Pointer to store the minor version number.
  * @param patch Pointer to store the patch version number.
  */
+<<<<<<< HEAD
 GCSO_API void GCSO_CALL gcso_abi_get_version(uint32_t* GCSO_RESTRICT major,
                                              uint32_t* GCSO_RESTRICT minor,
                                              uint32_t* GCSO_RESTRICT patch) GCSO_NOEXCEPT;
+=======
+// System & Capability Query Interface
+GCSO_API void GCSO_CALL gcso_abi_get_version(uint32_t* GCSO_RESTRICT major,
+                                             uint32_t* GCSO_RESTRICT minor,
+                                             uint32_t* GCSO_RESTRICT patch) GCSO_NOEXCEPT;
+>>>>>>> 631dd2990e7e914074e1e2e891e7b8af8ac59c1c
+=======
+GCSO_API void GCSO_CALL gcso_abi_get_version(uint32_t* GCSO_RESTRICT major,
+                                             uint32_t* GCSO_RESTRICT minor,
+                                             uint32_t* GCSO_RESTRICT patch) GCSO_NOEXCEPT;
+>>>>>>> 073c96b9ba43a51e79e76a2ea8e74feffeea69ee
 
 /**
  * @brief Returns the static semantic version string literal for the GCSO kernel engine.
@@ -28,6 +41,7 @@ GCSO_API void GCSO_CALL gcso_abi_get_version(uint32_t* GCSO_RESTRICT major,
  */
 GCSO_NODISCARD GCSO_API const char* GCSO_CALL gcso_abi_get_version_string(void) GCSO_NOEXCEPT;
 
+<<<<<<< HEAD
 /**
  * @brief Converts a gcso_status_t error code into its corresponding literal string representation.
  * @param status Status code enum value.
@@ -77,7 +91,28 @@ gcso_context_create(const gcso_config_t* GCSO_RESTRICT config,
  * @param context Handle to the active runtime context.
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
+<<<<<<< HEAD
 GCSO_API gcso_status_t GCSO_CALL gcso_context_reset(gcso_context_handle_t context) GCSO_NOEXCEPT;
+=======
+GCSO_API GCSO_NODISCARD const char* GCSO_CALL gcso_status_to_string(gcso_status_t status)
+    GCSO_NOEXCEPT;
+
+GCSO_API gcso_status_t GCSO_CALL
+gcso_abi_query_capability(gcso_capability_flags_t* GCSO_RESTRICT flags) GCSO_NOEXCEPT;
+
+GCSO_API gcso_status_t GCSO_CALL gcso_config_init_default(gcso_config_t* GCSO_RESTRICT config)
+    GCSO_NOEXCEPT;
+
+// High-Level Runtime Context Facade Interface
+GCSO_API gcso_status_t GCSO_CALL
+gcso_context_create(const gcso_config_t* GCSO_RESTRICT config,
+                    gcso_context_handle_t* GCSO_RESTRICT context_out) GCSO_NOEXCEPT;
+
+GCSO_API gcso_status_t GCSO_CALL gcso_context_reset(gcso_context_handle_t context) GCSO_NOEXCEPT;
+>>>>>>> 631dd2990e7e914074e1e2e891e7b8af8ac59c1c
+=======
+GCSO_API gcso_status_t GCSO_CALL gcso_context_reset(gcso_context_handle_t context) GCSO_NOEXCEPT;
+>>>>>>> 073c96b9ba43a51e79e76a2ea8e74feffeea69ee
 
 /**
  * @brief Primary Baseline Endpoint: Projects natural language system prompt text as an Anchor
@@ -105,6 +140,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_step_token(
     gcso_context_handle_t context, uint32_t token_id, float* GCSO_RESTRICT query_tensor,
     float* GCSO_RESTRICT key_tensor, gcso_pointer_trail_t* GCSO_RESTRICT trail_out) GCSO_NOEXCEPT;
 
+<<<<<<< HEAD
 /**
  * @brief Serializes runtime state into a binary .gcso snapshot format.
  * @param context Active runtime context handle.
@@ -132,7 +168,22 @@ gcso_context_deserialize(const uint8_t* GCSO_RESTRICT buffer, size_t buffer_size
  * @param context Runtime context handle to free (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
+<<<<<<< HEAD
 GCSO_API gcso_status_t GCSO_CALL gcso_context_destroy(gcso_context_handle_t context) GCSO_NOEXCEPT;
+=======
+GCSO_API gcso_status_t GCSO_CALL
+gcso_context_serialize(gcso_context_handle_t context, uint8_t* GCSO_RESTRICT buffer,
+                       size_t* GCSO_RESTRICT buffer_size) GCSO_NOEXCEPT;
+
+GCSO_API gcso_status_t GCSO_CALL
+gcso_context_deserialize(const uint8_t* GCSO_RESTRICT buffer, size_t buffer_size,
+                         gcso_context_handle_t* GCSO_RESTRICT context_out) GCSO_NOEXCEPT;
+
+GCSO_API gcso_status_t GCSO_CALL gcso_context_destroy(gcso_context_handle_t context) GCSO_NOEXCEPT;
+>>>>>>> 631dd2990e7e914074e1e2e891e7b8af8ac59c1c
+=======
+GCSO_API gcso_status_t GCSO_CALL gcso_context_destroy(gcso_context_handle_t context) GCSO_NOEXCEPT;
+>>>>>>> 073c96b9ba43a51e79e76a2ea8e74feffeea69ee
 
 /**
  * @brief Destroys a container handle and releases mapped storage resources.
