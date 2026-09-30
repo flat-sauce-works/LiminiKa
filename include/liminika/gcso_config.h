@@ -9,6 +9,7 @@
 
 #ifdef __cplusplus
 <<<<<<< HEAD
+<<<<<<< HEAD
 #define GCSO_EXTERN_C extern "C"
 #define GCSO_EXTERN_C_BEGIN \
     extern "C" {
@@ -18,6 +19,11 @@
     #define GCSO_EXTERN_C_BEGIN extern "C" {
     #define GCSO_EXTERN_C_END }
 >>>>>>> 631dd2990e7e914074e1e2e891e7b8af8ac59c1c
+=======
+    #define GCSO_EXTERN_C extern "C"
+    #define GCSO_EXTERN_C_BEGIN extern "C" {
+    #define GCSO_EXTERN_C_END }
+>>>>>>> 073c96b9ba43a51e79e76a2ea8e74feffeea69ee
 #else
     #define GCSO_EXTERN_C
     #define GCSO_EXTERN_C_BEGIN
@@ -25,6 +31,7 @@
 #endif
 
 #if defined(_WIN32) || defined(__CYGWIN__)
+<<<<<<< HEAD
 <<<<<<< HEAD
 #if defined(GCSO_BUILD_DLL)
 #define GCSO_API __declspec(dllexport)
@@ -51,13 +58,27 @@
     #endif
     #define GCSO_CALL __cdecl
 #else
+=======
+    #if defined(GCSO_BUILD_DLL)
+        #define GCSO_API __declspec(dllexport)
+    #elif defined(GCSO_USE_DLL)
+        #define GCSO_API __declspec(dllimport)
+    #else
+        #define GCSO_API
+    #endif
+    #define GCSO_CALL __cdecl
+#else
+>>>>>>> 073c96b9ba43a51e79e76a2ea8e74feffeea69ee
     #if defined(__GNUC__) && __GNUC__ >= 4
         #define GCSO_API __attribute__((visibility("default")))
     #else
         #define GCSO_API
     #endif
     #define GCSO_CALL
+<<<<<<< HEAD
 >>>>>>> 631dd2990e7e914074e1e2e891e7b8af8ac59c1c
+=======
+>>>>>>> 073c96b9ba43a51e79e76a2ea8e74feffeea69ee
 #endif
 
 #ifdef __cplusplus
@@ -76,9 +97,10 @@
 
 <<<<<<< HEAD
 #if defined(__GNUC__) || defined(__clang__)
-#define GCSO_LIKELY(x) __builtin_expect(!!(x), 1)
-#define GCSO_UNLIKELY(x) __builtin_expect(!!(x), 0)
+    #define GCSO_LIKELY(x) __builtin_expect(!!(x), 1)
+    #define GCSO_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #else
+<<<<<<< HEAD
 #define GCSO_LIKELY(x) (x)
 #define GCSO_UNLIKELY(x) (x)
 =======
@@ -92,6 +114,10 @@
     #define GCSO_LIKELY
     #define GCSO_UNLIKELY
 >>>>>>> 631dd2990e7e914074e1e2e891e7b8af8ac59c1c
+=======
+    #define GCSO_LIKELY(x) (x)
+    #define GCSO_UNLIKELY(x) (x)
+>>>>>>> 073c96b9ba43a51e79e76a2ea8e74feffeea69ee
 #endif
 
 #ifdef __cplusplus
