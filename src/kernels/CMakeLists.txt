@@ -26,7 +26,7 @@ endif()
 set(KERNEL_COMMON_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/common/system.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/common/runtime_context.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/common/action_hub.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/common/spt_action_hub.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/common/dpsr_kernel.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/common/attractor_edbc.cpp"
 )
