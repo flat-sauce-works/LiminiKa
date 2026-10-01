@@ -1,4 +1,4 @@
-// name: src/kernels/common/action_hub.cpp
+// name: src/kernels/common/spt_action_hub.cpp
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 #include "gcso_internal.h"
