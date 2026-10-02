@@ -14,19 +14,83 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Security: Principle of Least Privilege (Read-only by default for all jobs)
 permissions:
-  contents: write
+  contents: read
 
 defaults:
   run:
     shell: bash
 
 jobs:
-  changes:
-    name: Detect Changed Paths
-    # Prevent infinite workflow triggers caused by bot commits
+  # =========================================================================
+  # 1. AUTO-FORMAT CODEBASE BEFORE TESTING
+  # =========================================================================
+  auto-format:
+    name: Auto-Format Codebase Before Testing
     if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Granted strictly for committing formatted code back to repository
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install clang-format & Python formatters
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format python3-autopep8
+
+      - name: Format Rust codebase
+        run: cargo fmt --all
+
+      - name: Format C/C++ & GPU Kernel codebase
+        run: |
+          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
+          find . $EXCLUDE_DIRS -prune -o \( \
+            -name "*.h" -o -name "*.hpp" -o -name "*.inl" -o \
+            -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
+            -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o \
+            -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
+            -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o \
+            -name "*.hip" -o -name "*.cl" \
+          \) -type f -size +0c ! -name ".gitkeep" -exec clang-format -i {} + 2>/dev/null || true
+
+      - name: Format Python codebase
+        run: |
+          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
+          find . $EXCLUDE_DIRS -prune -o -name "*.py" -type f -size +0c -exec autopep8 --in-place --aggressive --aggressive {} + 2>/dev/null || true
+
+      - name: Commit formatting changes if needed
+        # Security: Prevent workflow failures on fork PRs where write permissions are restricted
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: stefanzweifel/git-auto-commit-action@v5
+        continue-on-error: true
+        with:
+          commit_message: "style(ci): auto-format codebase before testing [skip ci]"
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"
+
+  # =========================================================================
+  # 2. PATH CHANGED DETECTION
+  # =========================================================================
+  changes:
+    name: Detect Changed Paths
+    needs: auto-format
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       cpp: ${{ steps.filter.outputs.cpp }}
       rust: ${{ steps.filter.outputs.rust }}
@@ -38,6 +102,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
 
       - name: Filter path changes
         id: filter
@@ -123,113 +189,109 @@ jobs:
               - '**/*.md'
               - '.github/workflows/**'
 
-  auto-format:
-    name: Auto-Format C/C++ & Rust Codebase
-    needs: changes
-    if: ${{ (needs.changes.outputs.cpp == 'true' || needs.changes.outputs.rust == 'true') }}
+  # =========================================================================
+  # 3. LICENSE & DEPENDENCY SAFETY CHECK (STRICT PERMISSIVE GUARANTEE)
+  # =========================================================================
+  license-safety-check:
+    name: License & Dependency Safety
+    needs: [auto-format, changes]
+    if: ${{ always() && !cancelled() && (needs.changes.outputs.license == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref || github.ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Rust toolchain
-        if: ${{ needs.changes.outputs.rust == 'true' }}
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
 
-      - name: Install clang-format
-        if: ${{ needs.changes.outputs.cpp == 'true' }}
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      - name: Run cargo-deny check (Licenses, Bans, Advisories, Sources)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-format
-
-      - name: Auto-format Rust files
-        if: ${{ needs.changes.outputs.rust == 'true' }}
-        run: cargo fmt --all || true
-
-      - name: Auto-format C/C++ & GPU Kernel files
-        if: ${{ needs.changes.outputs.cpp == 'true' }}
-        run: |
-          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
-          TARGET_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
-            -name "*.h" -o -name "*.hpp" -o -name "*.inl" -o \
-            -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
-            -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o \
-            -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
-            -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o \
-            -name "*.hip" -o -name "*.cl" \
-          \) -type f -size +0c ! -name ".gitkeep" -print 2>/dev/null || true)
-
-          if [ -n "$TARGET_FILES" ]; then
-            echo "$TARGET_FILES" | xargs clang-format -i
-          fi
-
-      - name: Commit formatting changes if needed
-        uses: stefanzweifel/git-auto-commit-action@v5
-        continue-on-error: true
-        with:
-          commit_message: "style(ci): auto-format C/C++ and Rust codebase [skip ci]"
-          commit_user_name: "github-actions[bot]"
-          commit_user_email: "github-actions[bot]@users.noreply.github.com"
-
-  cpp-format:
-    name: C/C++ & GPU Kernel Format Check
-    needs: [changes, auto-format]
-    if: ${{ always() && !failure() && (needs.changes.outputs.cpp == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref || github.ref }}
-
-      - name: Install clang-format
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-format
-
-      - name: Verify C/C++ & GPU Kernel Formatting (clang-format)
-        run: |
-          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
-          TARGET_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
-            -name "*.h" -o -name "*.hpp" -o -name "*.inl" -o \
-            -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
-            -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o \
-            -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
-            -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o \
-            -name "*.hip" -o -name "*.cl" \
-          \) -type f -size +0c ! -name ".gitkeep" -print 2>/dev/null || true)
-
-          if [ -n "$TARGET_FILES" ]; then
-            echo "$TARGET_FILES" | xargs clang-format --dry-run --Werror
-            echo "Formatting check passed for all non-empty C/C++ and GPU kernel files."
+          if [ -f "deny.toml" ]; then
+            cargo deny check --workspace
           else
-            echo "No C/C++ or GPU kernel source files found to format check."
+            echo "No deny.toml found; skipping cargo-deny check."
           fi
 
+      - name: Scan Copyleft & Non-Permissive License Keywords
+        run: |
+          echo "Scanning codebase for strict permissive compliance (blocking Copyleft/Non-Commercial)..."
+          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
+          
+          # Check for forbidden copyleft / non-commercial license identifiers in source/build files (excluding docs & deny.toml)
+          FORBIDDEN_PATTERNS="GPL-1.0|GPL-2.0|GPL-3.0|LGPL-2.1|LGPL-3.0|AGPL-3.0|SSPL-1.0|CC-BY-NC|MPL-1.1|MPL-2.0|EPL-1.0|EPL-2.0|CDDL-1.0|EUPL-1.1|EUPL-1.2|PolyForm|CPAL-1.0|Watcom-1.0"
+          FOUND_VIOLATIONS=$(find . $EXCLUDE_DIRS -prune -o -type f -size +0c ! -name "deny.toml" ! -name "ci.yml" ! -name "*.md" -exec grep -E -H -n "$FORBIDDEN_PATTERNS" {} + 2>/dev/null || true)
+
+          if [ -n "$FOUND_VIOLATIONS" ]; then
+            echo "Error: Copyleft or non-permissive license keywords detected in codebase:"
+            echo "$FOUND_VIOLATIONS"
+            exit 1
+          fi
+          echo "No non-permissive license keywords detected."
+
+      - name: Verify SPDX License Headers in Source Files
+        run: |
+          echo "Checking SPDX License Headers in non-empty source files..."
+          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
+          
+          # Check C/C++/Rust/Metal/CUDA source files using // comment pattern
+          SLASH_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
+            -name "*.rs" -o -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
+            -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
+            -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o -name "*.hip" -o -name "*.cl" -o \
+            -name "*.h" -o -name "*.hpp" -o -name "*.inl" \
+          \) -type f -size +0c ! -name ".gitkeep" -exec grep -L "SPDX-License-Identifier: MIT OR Apache-2.0" {} + 2>/dev/null || true)
+
+          # Check Python/CMake/YAML/Shell/DSL files using # comment pattern
+          HASH_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
+            -name "*.py" -o -name "*.lmnk" -o -name "*.sh" -o -name "CMakeLists.txt" -o -name "*.cmake" -o \
+            -name "*.yml" -o -name "*.yaml" \
+          \) -type f -size +0c ! -name ".gitkeep" -exec grep -L "SPDX-License-Identifier: MIT OR Apache-2.0" {} + 2>/dev/null || true)
+
+          MISSING_FILES=""
+          if [ -n "$SLASH_FILES" ]; then MISSING_FILES="$SLASH_FILES"; fi
+          if [ -n "$HASH_FILES" ]; then MISSING_FILES="$(printf "%s\n%s" "$MISSING_FILES" "$HASH_FILES" | sed '/^$/d')"; fi
+
+          if [ -n "$MISSING_FILES" ]; then
+            echo "Error: The following non-empty source files are missing valid SPDX license headers:"
+            echo "$MISSING_FILES"
+            exit 1
+          fi
+          echo "All non-empty source files contain valid SPDX headers."
+
+  # =========================================================================
+  # 4. C/C++ & GPU KERNELS BUILD MATRIX
+  # =========================================================================
   cpp-build-matrix:
     name: C/C++ & GPU Kernels Build (${{ matrix.os }})
-    needs: [changes, auto-format, cpp-format]
-    if: ${{ always() && !failure() && (needs.changes.outputs.cpp == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    needs: [auto-format, changes]
+    if: ${{ always() && !cancelled() && (needs.changes.outputs.cpp == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref || github.ref }}
+
+      - name: Setup CUDA Toolkit (Linux)
+        if: runner.os == 'Linux'
+        uses: jimmy-wei/setup-cuda@v2
+        with:
+          cuda-version: '12.2.0'
 
       - name: Setup MSVC Developer Command Prompt (Windows)
         if: runner.os == 'Windows'
@@ -239,17 +301,17 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build clang cmake libclang-dev ccache vulkan-tools shaderc glslang-tools
+          sudo apt-get install -y ninja-build clang clang-format cmake libclang-dev ccache vulkan-tools shaderc glslang-tools
 
       - name: Install Build Dependencies & Cache Tools (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install ninja cmake ccache || true
+          brew install ninja cmake ccache clang-format || true
 
       - name: Install Build Dependencies & Cache Tools (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install ninja ccache --no-progress || true
+          choco install ninja ccache llvm --no-progress || true
 
       - name: Setup Compiler Cache
         uses: hendrikmuhs/ccache-action@v1.2
@@ -313,7 +375,7 @@ jobs:
             echo "No Metal shader files found to compile."
           fi
 
-      - name: Validate CUDA Kernel Code (if nvcc present)
+      - name: Validate CUDA Kernel Code (via nvcc)
         if: runner.os == 'Linux'
         run: |
           if command -v nvcc >/dev/null 2>&1; then
@@ -381,15 +443,20 @@ jobs:
             echo "Build directory does not exist; skipping test execution."
           fi
 
+  # =========================================================================
+  # 5. RUST WORKSPACE CHECK & TEST MATRIX
+  # =========================================================================
   rust-check-matrix:
     name: Rust Workspace (${{ matrix.os }})
-    needs: [changes, auto-format]
-    if: ${{ always() && !failure() && (needs.changes.outputs.rust == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    needs: [auto-format, changes]
+    if: ${{ always() && !cancelled() && (needs.changes.outputs.rust == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -422,12 +489,11 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Setup cargo-nextest
+        uses: taiki-e/install-action@cargo-nextest
+
       - name: Enable Rust caching
         uses: Swatinem/rust-cache@v2
-
-      - name: Verify Rust Formatting (Ubuntu only)
-        if: runner.os == 'Linux'
-        run: cargo fmt --all -- --check
 
       - name: Fast check Rust workspace (Default, No-Default & All Features)
         run: |
@@ -466,18 +532,23 @@ jobs:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --workspace --no-deps --all-features --locked
 
-      - name: Run Rust workspace unit, integration, doctest & zero-alloc tests
+      - name: Run Rust workspace unit, integration, & zero-alloc tests via nextest
         run: |
           if [ -f "Cargo.toml" ]; then
             cargo test --workspace --doc --all-features --locked
-            cargo test --workspace --all-targets --all-features --locked -- --nocapture
+            cargo nextest run --workspace --all-targets --all-features --locked
           fi
 
+  # =========================================================================
+  # 6. DSL SPEC & EXAMPLES VALIDATION
+  # =========================================================================
   dsl-validation:
     name: Validate DSL Spec & Examples
-    needs: [changes, auto-format]
-    if: ${{ always() && !failure() && (needs.changes.outputs.dsl == 'true' || needs.changes.outputs.rust == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    needs: [auto-format, changes]
+    if: ${{ always() && !cancelled() && (needs.changes.outputs.dsl == 'true' || needs.changes.outputs.rust == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -494,12 +565,7 @@ jobs:
       - name: Build DSL package & CLI parser
         run: |
           if [ -f "Cargo.toml" ]; then
-            if cargo metadata --format-version 1 2>/dev/null | grep -qE '"name":"(liminika-cli|liminika)"'; then
-              cargo build --workspace --locked
-            else
-              echo "liminika CLI binary not yet registered in Cargo workspace. Checking full workspace..."
-              cargo build --workspace --locked
-            fi
+            cargo build --workspace --locked
           fi
 
       - name: Validate Example DSL files
@@ -520,11 +586,16 @@ jobs:
             echo "No DSL (.lmnk) files found to validate."
           fi
 
+  # =========================================================================
+  # 7. PYTHON SCRIPT SYNTAX VERIFICATION
+  # =========================================================================
   python-check:
     name: Python Script Syntax Verification
-    needs: changes
-    if: ${{ needs.changes.outputs.python == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    needs: [auto-format, changes]
+    if: ${{ always() && !cancelled() && (needs.changes.outputs.python == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -558,59 +629,16 @@ jobs:
             fi
           fi
 
-  license-safety-check:
-    name: License & Dependency Safety
-    needs: changes
-    if: ${{ needs.changes.outputs.license == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref || github.ref }}
-
-      - name: Run cargo-deny check
-        uses: EmbarkStudios/cargo-deny-action@v2
-        if: hashFiles('deny.toml') != ''
-        with:
-          arguments: --workspace
-
-      - name: Verify SPDX License Headers in Source Files
-        run: |
-          echo "Checking SPDX License Headers in non-empty source files..."
-          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
-          
-          # Check C/C++/Rust/Metal/CUDA source files using // comment pattern
-          SLASH_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
-            -name "*.rs" -o -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
-            -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
-            -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o -name "*.hip" -o -name "*.cl" -o \
-            -name "*.h" -o -name "*.hpp" -o -name "*.inl" \
-          \) -type f -size +0c ! -name ".gitkeep" -exec grep -L "SPDX-License-Identifier: MIT OR Apache-2.0" {} + 2>/dev/null || true)
-
-          # Check Python/CMake/YAML/Shell/DSL files using # comment pattern
-          HASH_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
-            -name "*.py" -o -name "*.lmnk" -o -name "*.sh" -o -name "CMakeLists.txt" -o -name "*.cmake" -o \
-            -name "*.yml" -o -name "*.yaml" \
-          \) -type f -size +0c ! -name ".gitkeep" -exec grep -L "SPDX-License-Identifier: MIT OR Apache-2.0" {} + 2>/dev/null || true)
-
-          MISSING_FILES=""
-          if [ -n "$SLASH_FILES" ]; then MISSING_FILES="$SLASH_FILES"; fi
-          if [ -n "$HASH_FILES" ]; then MISSING_FILES="$(printf "%s\n%s" "$MISSING_FILES" "$HASH_FILES" | sed '/^$/d')"; fi
-
-          if [ -n "$MISSING_FILES" ]; then
-            echo "Error: The following non-empty source files are missing valid SPDX license headers:"
-            echo "$MISSING_FILES"
-            exit 1
-          fi
-          echo "All non-empty source files contain valid SPDX headers."
-
+  # =========================================================================
+  # 8. META & CITATION VALIDATION
+  # =========================================================================
   meta-citation-check:
     name: Validate Meta & Citation Files
-    needs: changes
-    if: ${{ needs.changes.outputs.meta == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    needs: [auto-format, changes]
+    if: ${{ always() && !cancelled() && (needs.changes.outputs.meta == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -636,11 +664,16 @@ jobs:
             echo "CITATION.cff file not present; skipping check."
           fi
 
+  # =========================================================================
+  # 9. DOCUMENTATION INTEGRITY & LINK CHECK
+  # =========================================================================
   docs-check:
     name: Documentation Integrity & Link Check
-    needs: changes
-    if: ${{ needs.changes.outputs.docs == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    needs: [auto-format, changes]
+    if: ${{ always() && !cancelled() && (needs.changes.outputs.docs == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
