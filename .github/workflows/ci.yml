@@ -181,7 +181,7 @@ jobs:
   cpp-format:
     name: C/C++ & GPU Kernel Format Check
     needs: [changes, auto-format]
-    if: ${{ always() && !failed() && (needs.changes.outputs.cpp == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ always() && !failure() && (needs.changes.outputs.cpp == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
 
     steps:
@@ -217,7 +217,7 @@ jobs:
   cpp-build-matrix:
     name: C/C++ & GPU Kernels Build (${{ matrix.os }})
     needs: [changes, cpp-format]
-    if: ${{ always() && !failed() && (needs.changes.outputs.cpp == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ always() && !failure() && (needs.changes.outputs.cpp == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     strategy:
       fail-fast: false
       matrix:
@@ -383,7 +383,7 @@ jobs:
   rust-check-matrix:
     name: Rust Workspace (${{ matrix.os }})
     needs: [changes, auto-format]
-    if: ${{ always() && !failed() && (needs.changes.outputs.rust == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ always() && !failure() && (needs.changes.outputs.rust == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     strategy:
       fail-fast: false
       matrix:
@@ -465,7 +465,7 @@ jobs:
   dsl-validation:
     name: Validate DSL Spec & Examples
     needs: [changes, auto-format]
-    if: ${{ always() && !failed() && (needs.changes.outputs.dsl == 'true' || needs.changes.outputs.rust == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ always() && !failure() && (needs.changes.outputs.dsl == 'true' || needs.changes.outputs.rust == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
 
     steps:
