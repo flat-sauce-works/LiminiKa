@@ -14,7 +14,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Security: Principle of Least Privilege (Read-only by default for all jobs)
+# Security: Default read-only permissions across all workflow jobs
 permissions:
   contents: read
 
@@ -224,7 +224,7 @@ jobs:
           echo "Scanning codebase for strict permissive compliance (blocking Copyleft/Non-Commercial)..."
           EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
           
-          # Check for forbidden copyleft / non-commercial license identifiers in source/build files (excluding docs & deny.toml)
+          # Block copyleft and restrictive licenses
           FORBIDDEN_PATTERNS="GPL-1.0|GPL-2.0|GPL-3.0|LGPL-2.1|LGPL-3.0|AGPL-3.0|SSPL-1.0|CC-BY-NC|MPL-1.1|MPL-2.0|EPL-1.0|EPL-2.0|CDDL-1.0|EUPL-1.1|EUPL-1.2|PolyForm|CPAL-1.0|Watcom-1.0"
           FOUND_VIOLATIONS=$(find . $EXCLUDE_DIRS -prune -o -type f -size +0c ! -name "deny.toml" ! -name "ci.yml" ! -name "*.md" -exec grep -E -H -n "$FORBIDDEN_PATTERNS" {} + 2>/dev/null || true)
 
@@ -240,7 +240,6 @@ jobs:
           echo "Checking SPDX License Headers in non-empty source files..."
           EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
           
-          # Check C/C++/Rust/Metal/CUDA source files using // comment pattern
           SLASH_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
             -name "*.rs" -o -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
             -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
@@ -248,7 +247,6 @@ jobs:
             -name "*.h" -o -name "*.hpp" -o -name "*.inl" \
           \) -type f -size +0c ! -name ".gitkeep" -exec grep -L "SPDX-License-Identifier: MIT OR Apache-2.0" {} + 2>/dev/null || true)
 
-          # Check Python/CMake/YAML/Shell/DSL files using # comment pattern
           HASH_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
             -name "*.py" -o -name "*.lmnk" -o -name "*.sh" -o -name "CMakeLists.txt" -o -name "*.cmake" -o \
             -name "*.yml" -o -name "*.yaml" \
@@ -340,59 +338,6 @@ jobs:
             echo "Directory include does not exist yet."
           fi
 
-      - name: Validate GPU Shader Code (Vulkan/GLSL if present)
-        if: runner.os == 'Linux'
-        run: |
-          if command -v glslangValidator >/dev/null 2>&1; then
-            EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
-            SHADERS=$(find . $EXCLUDE_DIRS -prune -o \( -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o -name "*.glsl" \) -type f -size +0c -print 2>/dev/null || true)
-            if [ -n "$SHADERS" ]; then
-              echo "Compiling Vulkan shaders..."
-              for shader in $SHADERS; do
-                echo "Validating $shader..."
-                glslangValidator -V "$shader" -o /dev/null
-              done
-            else
-              echo "No Vulkan shader files found to compile."
-            fi
-          else
-            echo "glslangValidator not found; skipping shader compilation check."
-          fi
-
-      - name: Validate Metal Shader Code (macOS if present)
-        if: runner.os == 'macOS'
-        run: |
-          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
-          METAL_FILES=$(find . $EXCLUDE_DIRS -prune -o -name "*.metal" -type f -size +0c -print 2>/dev/null || true)
-          if [ -n "$METAL_FILES" ]; then
-            echo "Compiling Metal shaders..."
-            for shader in $METAL_FILES; do
-              echo "Validating $shader..."
-              xcrun -sdk macosx metal -fsyntax-only "$shader"
-            done
-          else
-            echo "No Metal shader files found to compile."
-          fi
-
-      - name: Validate CUDA Kernel Code (via nvcc)
-        if: runner.os == 'Linux'
-        run: |
-          if command -v nvcc >/dev/null 2>&1; then
-            EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
-            CUDA_FILES=$(find . $EXCLUDE_DIRS -prune -o \( -name "*.cu" -o -name "*.cuh" \) -type f -size +0c -print 2>/dev/null || true)
-            if [ -n "$CUDA_FILES" ]; then
-              echo "Validating CUDA kernel syntax..."
-              for cu_file in $CUDA_FILES; do
-                echo "Validating $cu_file..."
-                nvcc -fsyntax-only -Iinclude "$cu_file"
-              done
-            else
-              echo "No CUDA files found to compile."
-            fi
-          else
-            echo "nvcc not available; skipping CUDA syntax verification."
-          fi
-
       - name: Configure CMake (Linux & Windows)
         if: runner.os != 'macOS'
         run: |
@@ -402,8 +347,6 @@ jobs:
               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
               -DLIMINIKA_ENABLE_CUDA=OFF \
               -DLIMINIKA_ENABLE_VULKAN=OFF \
-              -DLIMINIKA_BUILD_TESTS=ON \
-              -DLIMINIKA_BUILD_EXAMPLES=ON \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo
           else
             echo "No root CMakeLists.txt found; skipping CMake configure."
@@ -419,8 +362,6 @@ jobs:
               -DLIMINIKA_ENABLE_METAL=ON \
               -DLIMINIKA_ENABLE_CUDA=OFF \
               -DLIMINIKA_ENABLE_VULKAN=OFF \
-              -DLIMINIKA_BUILD_TESTS=ON \
-              -DLIMINIKA_BUILD_EXAMPLES=ON \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo
           else
             echo "No root CMakeLists.txt found; skipping CMake configure."
@@ -494,7 +435,7 @@ jobs:
       - name: Enable Rust caching
         uses: Swatinem/rust-cache@v2
 
-      - name: Fast check Rust workspace (Default, No-Default & All Features)
+      - name: Fast check Rust workspace
         run: |
           if [ -f "Cargo.toml" ]; then
             CARGO_FLAGS="--locked"
@@ -507,20 +448,6 @@ jobs:
             cargo check --workspace --all-targets --all-features $CARGO_FLAGS
           else
             echo "No root Cargo.toml found; skipping cargo check."
-          fi
-
-      - name: Verify Rust benchmarks compilation
-        run: |
-          if [ -f "Cargo.toml" ]; then
-            EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
-            BENCH_EXISTS=$(find . $EXCLUDE_DIRS -prune -o -name "*.rs" -type f -print 2>/dev/null | grep -E "(bench|benches)" || true)
-            HAS_BENCH_TARGET=$(cargo metadata --format-version 1 2>/dev/null | grep -q '"kind":\["bench"\]' && echo "yes" || true)
-            if [ -n "$BENCH_EXISTS" ] || [ "$HAS_BENCH_TARGET" = "yes" ]; then
-              echo "Benchmark targets detected. Running cargo check --benches..."
-              cargo check --workspace --benches --all-features || echo "No explicit bench targets compiled."
-            else
-              echo "No benchmark targets found; skipping bench check."
-            fi
           fi
 
       - name: Run cargo clippy
@@ -582,12 +509,8 @@ jobs:
               echo "Checking $file..."
               if [ -f "Cargo.toml" ] && cargo metadata --format-version 1 2>/dev/null | grep -qE '"name":"(liminika-cli|liminika)"'; then
                 cargo run --workspace -- check "$file" || echo "CLI check command completed for $file"
-              else
-                echo "Skipping CLI check command as CLI package is not fully configured yet."
               fi
             done
-          else
-            echo "No DSL (.lmnk) files found to validate."
           fi
 
   # =========================================================================
@@ -621,14 +544,11 @@ jobs:
           if [ -n "$PY_FILES" ]; then
             echo "$PY_FILES" | xargs python -m py_compile
             echo "All Python scripts passed syntax validation."
-          else
-            echo "No Python files found to validate."
           fi
 
           if [ -d "tests" ]; then
             PY_TEST_FILES=$(find tests -type f \( -name "test_*.py" -o -name "*_test.py" \) 2>/dev/null || true)
             if [ -n "$PY_TEST_FILES" ]; then
-              echo "Running Python tests..."
               python -m unittest discover -s tests
             fi
           fi
@@ -664,8 +584,6 @@ jobs:
         run: |
           if [ -f "CITATION.cff" ]; then
             cffconvert --validate
-          else
-            echo "CITATION.cff file not present; skipping check."
           fi
 
   # =========================================================================

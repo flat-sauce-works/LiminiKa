@@ -39,6 +39,7 @@ if(MSVC)
         $<$<COMPILE_LANGUAGE:C,CXX>:/utf-8>
         $<$<COMPILE_LANGUAGE:CXX>:/permissive->
         $<$<COMPILE_LANGUAGE:CXX>:/EHsc>
+        $<$<COMPILE_LANGUAGE:C,CXX>:/wd4324> # Suppress structure alignment padding warning C4324
         # Restrict /O2 strictly to Release and RelWithDebInfo configs to eliminate MSVC D8016 (/RTC1 conflict)
         $<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>>:/O2>
     )
