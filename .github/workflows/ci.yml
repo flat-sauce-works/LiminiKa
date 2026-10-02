@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 defaults:
   run:
@@ -121,10 +121,65 @@ jobs:
               - '**/*.md'
               - '.github/workflows/**'
 
+  auto-format:
+    name: Auto-Format C/C++ & Rust Codebase
+    needs: changes
+    if: ${{ (needs.changes.outputs.cpp == 'true' || needs.changes.outputs.rust == 'true') && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust toolchain
+        if: ${{ needs.changes.outputs.rust == 'true' }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install clang-format
+        if: ${{ needs.changes.outputs.cpp == 'true' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+
+      - name: Auto-format Rust files
+        if: ${{ needs.changes.outputs.rust == 'true' }}
+        run: cargo fmt --all
+
+      - name: Auto-format C/C++ & GPU Kernel files
+        if: ${{ needs.changes.outputs.cpp == 'true' }}
+        run: |
+          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
+          TARGET_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
+            -name "*.h" -o -name "*.hpp" -o -name "*.inl" -o \
+            -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
+            -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o \
+            -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
+            -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o \
+            -name "*.hip" -o -name "*.cl" \
+          \) -type f -size +0c ! -name ".gitkeep" -print)
+
+          if [ -n "$TARGET_FILES" ]; then
+            echo "$TARGET_FILES" | xargs clang-format -i
+          fi
+
+      - name: Commit formatting changes if needed
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style(ci): auto-format C/C++ and Rust codebase"
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"
+
   cpp-format:
     name: C/C++ & GPU Kernel Format Check
-    needs: changes
-    if: ${{ needs.changes.outputs.cpp == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    needs: [changes, auto-format]
+    if: ${{ always() && !failed() && (needs.changes.outputs.cpp == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
 
     steps:
@@ -158,7 +213,7 @@ jobs:
   cpp-build-matrix:
     name: C/C++ & GPU Kernels Build (${{ matrix.os }})
     needs: [changes, cpp-format]
-    if: ${{ needs.changes.outputs.cpp == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ always() && !failed() && (needs.changes.outputs.cpp == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     strategy:
       fail-fast: false
       matrix:
@@ -321,8 +376,8 @@ jobs:
 
   rust-check-matrix:
     name: Rust Workspace (${{ matrix.os }})
-    needs: changes
-    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    needs: [changes, auto-format]
+    if: ${{ always() && !failed() && (needs.changes.outputs.rust == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     strategy:
       fail-fast: false
       matrix:
@@ -401,8 +456,8 @@ jobs:
 
   dsl-validation:
     name: Validate DSL Spec & Examples
-    needs: changes
-    if: ${{ needs.changes.outputs.dsl == 'true' || needs.changes.outputs.rust == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    needs: [changes, auto-format]
+    if: ${{ always() && !failed() && (needs.changes.outputs.dsl == 'true' || needs.changes.outputs.rust == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
 
     steps:
