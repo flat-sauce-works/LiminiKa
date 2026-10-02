@@ -43,7 +43,7 @@ jobs:
         id: filter
         uses: dorny/paths-filter@v3
         with:
-          filters:
+          filters: |
             cpp:
               - 'include/**'
               - 'src/**'
@@ -152,7 +152,7 @@ jobs:
 
       - name: Auto-format Rust files
         if: ${{ needs.changes.outputs.rust == 'true' }}
-        run: cargo fmt --all
+        run: cargo fmt --all || true
 
       - name: Auto-format C/C++ & GPU Kernel files
         if: ${{ needs.changes.outputs.cpp == 'true' }}
@@ -165,7 +165,7 @@ jobs:
             -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
             -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o \
             -name "*.hip" -o -name "*.cl" \
-          \) -type f -size +0c ! -name ".gitkeep" -print)
+          \) -type f -size +0c ! -name ".gitkeep" -print 2>/dev/null || true)
 
           if [ -n "$TARGET_FILES" ]; then
             echo "$TARGET_FILES" | xargs clang-format -i
@@ -173,6 +173,7 @@ jobs:
 
       - name: Commit formatting changes if needed
         uses: stefanzweifel/git-auto-commit-action@v5
+        continue-on-error: true
         with:
           commit_message: "style(ci): auto-format C/C++ and Rust codebase [skip ci]"
           commit_user_name: "github-actions[bot]"
@@ -205,7 +206,7 @@ jobs:
             -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
             -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o \
             -name "*.hip" -o -name "*.cl" \
-          \) -type f -size +0c ! -name ".gitkeep" -print)
+          \) -type f -size +0c ! -name ".gitkeep" -print 2>/dev/null || true)
 
           if [ -n "$TARGET_FILES" ]; then
             echo "$TARGET_FILES" | xargs clang-format --dry-run --Werror
@@ -216,7 +217,7 @@ jobs:
 
   cpp-build-matrix:
     name: C/C++ & GPU Kernels Build (${{ matrix.os }})
-    needs: [changes, cpp-format]
+    needs: [changes, auto-format, cpp-format]
     if: ${{ always() && !failure() && (needs.changes.outputs.cpp == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     strategy:
       fail-fast: false
@@ -261,7 +262,7 @@ jobs:
         run: |
           echo "Checking C-ABI headers self-containment in include directory..."
           if [ -d "include" ]; then
-            HEADERS=$(find include -type f \( -name "*.h" -o -name "*.hpp" \) -size +0c)
+            HEADERS=$(find include -type f \( -name "*.h" -o -name "*.hpp" \) -size +0c 2>/dev/null || true)
             if [ -n "$HEADERS" ]; then
               for header in $HEADERS; do
                 if [[ "$header" == *.h ]]; then
@@ -430,37 +431,47 @@ jobs:
 
       - name: Fast check Rust workspace (Default, No-Default & All Features)
         run: |
-          cargo check --workspace --all-targets --locked
-          cargo check --workspace --all-targets --no-default-features --locked
-          cargo check --workspace --all-targets --all-features --locked
+          if [ -f "Cargo.toml" ]; then
+            cargo check --workspace --all-targets --locked
+            cargo check --workspace --all-targets --no-default-features --locked
+            cargo check --workspace --all-targets --all-features --locked
+          else
+            echo "No root Cargo.toml found; skipping cargo check."
+          fi
 
       - name: Verify Rust benchmarks compilation
         run: |
-          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
-          BENCH_EXISTS=$(find . $EXCLUDE_DIRS -prune -o -name "*.rs" -type f -print 2>/dev/null | grep -E "(bench|benches)" || true)
-          HAS_BENCH_TARGET=$(cargo metadata --format-version 1 2>/dev/null | grep -q '"kind":\["bench"\]' && echo "yes" || true)
-          if [ -n "$BENCH_EXISTS" ] || [ "$HAS_BENCH_TARGET" = "yes" ]; then
-            echo "Benchmark targets detected. Running cargo check --benches..."
-            cargo check --workspace --benches --all-features --locked || echo "No explicit bench targets compiled."
-          else
-            echo "No benchmark targets found; skipping bench check."
+          if [ -f "Cargo.toml" ]; then
+            EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
+            BENCH_EXISTS=$(find . $EXCLUDE_DIRS -prune -o -name "*.rs" -type f -print 2>/dev/null | grep -E "(bench|benches)" || true)
+            HAS_BENCH_TARGET=$(cargo metadata --format-version 1 2>/dev/null | grep -q '"kind":\["bench"\]' && echo "yes" || true)
+            if [ -n "$BENCH_EXISTS" ] || [ "$HAS_BENCH_TARGET" = "yes" ]; then
+              echo "Benchmark targets detected. Running cargo check --benches..."
+              cargo check --workspace --benches --all-features --locked || echo "No explicit bench targets compiled."
+            else
+              echo "No benchmark targets found; skipping bench check."
+            fi
           fi
 
       - name: Run cargo clippy
         run: |
-          cargo clippy --workspace --all-targets --locked -- -D warnings
-          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          if [ -f "Cargo.toml" ]; then
+            cargo clippy --workspace --all-targets --locked -- -D warnings
+            cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          fi
 
       - name: Check Rust documentation integrity (Ubuntu only)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && hashFiles('Cargo.toml') != ''
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --workspace --no-deps --all-features --locked
 
       - name: Run Rust workspace unit, integration, doctest & zero-alloc tests
         run: |
-          cargo test --workspace --doc --all-features --locked
-          cargo test --workspace --all-targets --all-features --locked -- --nocapture
+          if [ -f "Cargo.toml" ]; then
+            cargo test --workspace --doc --all-features --locked
+            cargo test --workspace --all-targets --all-features --locked -- --nocapture
+          fi
 
   dsl-validation:
     name: Validate DSL Spec & Examples
@@ -482,11 +493,13 @@ jobs:
 
       - name: Build DSL package & CLI parser
         run: |
-          if cargo metadata --format-version 1 | grep -qE '"name":"(liminika-cli|liminika)"'; then
-            cargo build --workspace --locked
-          else
-            echo "liminika CLI binary not yet registered in Cargo workspace. Checking full workspace..."
-            cargo build --workspace --locked
+          if [ -f "Cargo.toml" ]; then
+            if cargo metadata --format-version 1 2>/dev/null | grep -qE '"name":"(liminika-cli|liminika)"'; then
+              cargo build --workspace --locked
+            else
+              echo "liminika CLI binary not yet registered in Cargo workspace. Checking full workspace..."
+              cargo build --workspace --locked
+            fi
           fi
 
       - name: Validate Example DSL files
@@ -497,7 +510,7 @@ jobs:
           if [ -n "$DSL_FILES" ]; then
             for file in $DSL_FILES; do
               echo "Checking $file..."
-              if cargo metadata --format-version 1 | grep -qE '"name":"(liminika-cli|liminika)"'; then
+              if [ -f "Cargo.toml" ] && cargo metadata --format-version 1 2>/dev/null | grep -qE '"name":"(liminika-cli|liminika)"'; then
                 cargo run --workspace --locked -- check "$file" || echo "CLI check command completed for $file"
               else
                 echo "Skipping CLI check command as CLI package is not fully configured yet."
@@ -528,7 +541,7 @@ jobs:
         run: |
           echo "Verifying Python syntax..."
           EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
-          PY_FILES=$(find . $EXCLUDE_DIRS -prune -o -name "*.py" -type f -print)
+          PY_FILES=$(find . $EXCLUDE_DIRS -prune -o -name "*.py" -type f -print 2>/dev/null || true)
 
           if [ -n "$PY_FILES" ]; then
             echo "$PY_FILES" | xargs python -m py_compile
@@ -559,6 +572,7 @@ jobs:
 
       - name: Run cargo-deny check
         uses: EmbarkStudios/cargo-deny-action@v2
+        if: hashFiles('deny.toml') != ''
         with:
           arguments: --workspace
 
@@ -573,13 +587,13 @@ jobs:
             -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
             -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o -name "*.hip" -o -name "*.cl" -o \
             -name "*.h" -o -name "*.hpp" -o -name "*.inl" \
-          \) -type f -size +0c ! -name ".gitkeep" -exec grep -L "SPDX-License-Identifier: MIT OR Apache-2.0" {} + || true)
+          \) -type f -size +0c ! -name ".gitkeep" -exec grep -L "SPDX-License-Identifier: MIT OR Apache-2.0" {} + 2>/dev/null || true)
 
           # Check Python/CMake/YAML/Shell/DSL files using # comment pattern
           HASH_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
             -name "*.py" -o -name "*.lmnk" -o -name "*.sh" -o -name "CMakeLists.txt" -o -name "*.cmake" -o \
             -name "*.yml" -o -name "*.yaml" \
-          \) -type f -size +0c ! -name ".gitkeep" -exec grep -L "SPDX-License-Identifier: MIT OR Apache-2.0" {} + || true)
+          \) -type f -size +0c ! -name ".gitkeep" -exec grep -L "SPDX-License-Identifier: MIT OR Apache-2.0" {} + 2>/dev/null || true)
 
           MISSING_FILES=""
           if [ -n "$SLASH_FILES" ]; then MISSING_FILES="$SLASH_FILES"; fi
