@@ -680,7 +680,7 @@ pub unsafe extern "C" fn gcso_context_serialize(
         }
         std::ptr::write_bytes(buffer, 0, required);
         let header_ptr = buffer.cast::<gcso_snapshot_header_t>();
-        (*header_ptr).magic = 0x4F53_4347;   // ASCII "GCSO"
+        (*header_ptr).magic = 0x4F53_4347; // ASCII "GCSO"
         (*header_ptr).version = 0x0002_0000; // ABI Version 2.0.0 per c_abi_spec.md
         (*header_ptr).total_size = required as u64;
         (*header_ptr).timestamp_epoch_sec = 1_774_900_000;

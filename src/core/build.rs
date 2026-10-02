@@ -60,9 +60,18 @@ fn main() {
     let mut cfg = cmake::Config::new(&kernels_dir);
     cfg.define("CMAKE_POSITION_INDEPENDENT_CODE", "ON")
         .define("BUILD_SHARED_LIBS", "OFF")
-        .define("LIMINIKA_ENABLE_CUDA", if enable_cuda { "ON" } else { "OFF" })
-        .define("LIMINIKA_ENABLE_VULKAN", if enable_vulkan { "ON" } else { "OFF" })
-        .define("LIMINIKA_ENABLE_METAL", if enable_metal { "ON" } else { "OFF" });
+        .define(
+            "LIMINIKA_ENABLE_CUDA",
+            if enable_cuda { "ON" } else { "OFF" },
+        )
+        .define(
+            "LIMINIKA_ENABLE_VULKAN",
+            if enable_vulkan { "ON" } else { "OFF" },
+        )
+        .define(
+            "LIMINIKA_ENABLE_METAL",
+            if enable_metal { "ON" } else { "OFF" },
+        );
 
     let dst = cfg.build();
 
