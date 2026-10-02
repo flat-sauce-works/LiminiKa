@@ -14,7 +14,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Security: Enforce strict read-only permissions across all jobs by default
 permissions:
   contents: read
 
@@ -31,7 +30,7 @@ jobs:
     if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Granted strictly for committing formatted code back
+      contents: write
 
     steps:
       - name: Checkout repository
