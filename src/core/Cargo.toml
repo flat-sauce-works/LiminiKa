@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 [package]
 name = "liminika-core"
 version.workspace = true
@@ -14,9 +16,10 @@ cuda = []
 metal = []
 vulkan = []
 
-[build-dependencies]
-# Build script dependency for C/C++ compilation
-cc = "1.0"
-
 [dependencies]
-# Core runtime dependencies will be added here
+# Runtime dependencies go here (keep empty if zero-dependency in hot path)
+
+[build-dependencies]
+# Build script dependencies for C/C++ compilation via CMake or CC
+cc = "1.0"
+cmake = "0.1"

@@ -215,7 +215,7 @@ jobs:
       - name: Run cargo-deny check (Licenses, Bans, Advisories, Sources)
         run: |
           if [ -f "deny.toml" ]; then
-            cargo deny check --workspace
+            cargo deny check
           else
             echo "No deny.toml found; skipping cargo-deny check."
           fi
@@ -289,9 +289,9 @@ jobs:
 
       - name: Setup CUDA Toolkit (Linux)
         if: runner.os == 'Linux'
-        uses: jimmy-wei/setup-cuda@v2
+        uses: Jimver/cuda-toolkit@v0.2.21
         with:
-          cuda-version: '12.2.0'
+          cuda: '12.2.0'
 
       - name: Setup MSVC Developer Command Prompt (Windows)
         if: runner.os == 'Windows'
