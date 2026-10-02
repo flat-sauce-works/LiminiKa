@@ -24,6 +24,8 @@ defaults:
 jobs:
   changes:
     name: Detect Changed Paths
+    # Prevent infinite workflow triggers caused by bot commits
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     outputs:
       cpp: ${{ steps.filter.outputs.cpp }}
@@ -124,7 +126,7 @@ jobs:
   auto-format:
     name: Auto-Format C/C++ & Rust Codebase
     needs: changes
-    if: ${{ (needs.changes.outputs.cpp == 'true' || needs.changes.outputs.rust == 'true') && github.event_name == 'pull_request' }}
+    if: ${{ (needs.changes.outputs.cpp == 'true' || needs.changes.outputs.rust == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -133,7 +135,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
+          ref: ${{ github.head_ref || github.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Rust toolchain
@@ -172,7 +174,7 @@ jobs:
       - name: Commit formatting changes if needed
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "style(ci): auto-format C/C++ and Rust codebase"
+          commit_message: "style(ci): auto-format C/C++ and Rust codebase [skip ci]"
           commit_user_name: "github-actions[bot]"
           commit_user_email: "github-actions[bot]@users.noreply.github.com"
 
@@ -185,6 +187,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
 
       - name: Install clang-format
         run: |
@@ -223,6 +227,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
 
       - name: Setup MSVC Developer Command Prompt (Windows)
         if: runner.os == 'Windows'
@@ -387,6 +393,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
 
       - name: Install C/C++ & LLVM Dependencies for FFI/Bindgen (Linux)
         if: runner.os == 'Linux'
@@ -463,6 +471,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -506,6 +516,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -542,6 +554,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
 
       - name: Run cargo-deny check
         uses: EmbarkStudios/cargo-deny-action@v2
@@ -587,6 +601,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -615,6 +631,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
 
       - name: Check markdown broken links
         uses: lycheeverse/lychee-action@v2
