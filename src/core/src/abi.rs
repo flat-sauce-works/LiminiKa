@@ -327,11 +327,7 @@ static GCSO_ABI_VERSION: &[u8] = b"2.0.0\0";
 /// # Safety
 /// Pointers must be valid, non-null writable memory locations aligned to `u32`.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_abi_get_version(
-    major: *mut u32,
-    minor: *mut u32,
-    patch: *mut u32,
-) {
+pub unsafe extern "C" fn gcso_abi_get_version(major: *mut u32, minor: *mut u32, patch: *mut u32) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         if is_aligned(major) {
             unsafe { *major = 2 };
@@ -612,7 +608,7 @@ pub unsafe extern "C" fn gcso_context_serialize(
         }
         std::ptr::write_bytes(buffer, 0, required);
         let header_ptr = buffer.cast::<gcso_snapshot_header_t>();
-        (*header_ptr).magic = 0x4F53_4347;   // ASCII "GCSO"
+        (*header_ptr).magic = 0x4F53_4347; // ASCII "GCSO"
         (*header_ptr).version = 0x0002_0000; // ABI Version 2.0.0 per c_abi_spec.md
         (*header_ptr).total_size = required as u64;
         (*header_ptr).timestamp_epoch_sec = 1_774_900_000;
@@ -930,9 +926,7 @@ pub unsafe extern "C" fn gcso_action_hub_destroy(hub: GcsoActionHubHandle) -> Gc
 /// # Safety
 /// `slot_out` must be a valid non-null pointer aligned to handle size.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_daes_slot_create(
-    slot_out: *mut GcsoDaesSlotHandle,
-) -> GcsoStatus {
+pub unsafe extern "C" fn gcso_daes_slot_create(slot_out: *mut GcsoDaesSlotHandle) -> GcsoStatus {
     if slot_out.is_null() {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -1003,10 +997,7 @@ pub unsafe extern "C" fn gcso_daes_telemetry_push(
 /// # Safety
 /// `slot` must be a valid non-null pointer aligned to 64 bytes.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_daes_set_mode(
-    slot: *mut gcso_daes_slot_t,
-    mode: u32,
-) -> GcsoStatus {
+pub unsafe extern "C" fn gcso_daes_set_mode(slot: *mut gcso_daes_slot_t, mode: u32) -> GcsoStatus {
     if slot.is_null() {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -1453,7 +1444,11 @@ pub unsafe extern "C" fn gcso_pspm_dispatch_single_pass(
         for val in q_slice.iter_mut().skip(fact_elems).take(logic_elems) {
             *val *= cfg.logic_phase_gain;
         }
-        for val in q_slice.iter_mut().skip(fact_elems + logic_elems).take(explore_elems) {
+        for val in q_slice
+            .iter_mut()
+            .skip(fact_elems + logic_elems)
+            .take(explore_elems)
+        {
             *val *= cfg.explore_phase_gain;
         }
 
