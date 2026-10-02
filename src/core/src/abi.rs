@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! C-ABI interface definitions and FFI boundary safety primitives for the GCSO core engine.
+//! C-ABI interface definitions, structural layouts, and FFI boundary safety primitives for GCSO core engine.
 
 #![allow(non_camel_case_types)]
 #![allow(clippy::missing_safety_doc)]
@@ -127,7 +127,7 @@ pub struct gcso_paged_bitmask_t {
 
 /// Stigmergic pointer trail structure aligned to 128 bytes (2 cache lines).
 #[repr(C, align(128))]
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct gcso_pointer_trail_t {
     pub current_ptr: u64,
     pub prev_ptr: u64,
@@ -142,6 +142,27 @@ pub struct gcso_pointer_trail_t {
     pub flags: u32,
     pub accumulated_phase_delta: [gcso_q7_t; 64],
     pub reserved_padding: [u8; 8],
+}
+
+impl Default for gcso_pointer_trail_t {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            current_ptr: 0,
+            prev_ptr: 0,
+            user_data: 0,
+            transition_cost: 0,
+            step_count: 0,
+            stigmergic_density: 0.0,
+            target_anchor_id: 0,
+            cluster_id: 0,
+            linked_trail_id: 0,
+            attractor_pull_force: 0.0,
+            flags: 0,
+            accumulated_phase_delta: [0; 64],
+            reserved_padding: [0; 8],
+        }
+    }
 }
 
 /// Dynamic Adaptive Extension Scratchpad (DAES) slot layout (64 bytes).
@@ -180,7 +201,7 @@ pub struct gcso_config_t {
 
 /// Dynamic entropy controller state tracking structure (64 bytes).
 #[repr(C, align(32))]
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct gcso_edbc_state_t {
     pub moving_z_entropy: f32,
     pub bifurcation_threshold: f32,
@@ -192,9 +213,25 @@ pub struct gcso_edbc_state_t {
     pub reserved: [u8; 36],
 }
 
+impl Default for gcso_edbc_state_t {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            moving_z_entropy: 0.0,
+            bifurcation_threshold: 0.0,
+            singularity_eps: 0.0,
+            sliding_entropy_rate: 0.0,
+            repulsion_gain: 0.0,
+            sample_temperature: 0.0,
+            active_branch_mode: 0,
+            reserved: [0; 36],
+        }
+    }
+}
+
 /// Zero-copy memory mapped storage descriptor (64 bytes).
 #[repr(C, align(32))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct gcso_zimms_descriptor_t {
     pub mapped_address: u64,
     pub file_size_bytes: u64,
@@ -202,6 +239,20 @@ pub struct gcso_zimms_descriptor_t {
     pub flags: u32,
     pub fd_handle: i32,
     pub reserved: [u8; 32],
+}
+
+impl Default for gcso_zimms_descriptor_t {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            mapped_address: 0,
+            file_size_bytes: 0,
+            dma_buffer_handle: 0,
+            flags: 0,
+            fd_handle: -1,
+            reserved: [0; 32],
+        }
+    }
 }
 
 /// Sub-head group router configuration descriptor (32 bytes).
@@ -234,7 +285,7 @@ pub struct gcso_srl_descriptor_t {
 
 /// Unified binary snapshot container header structure (128 bytes).
 #[repr(C, align(64))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct gcso_snapshot_header_t {
     pub magic: u32,
     pub version: u32,
@@ -248,6 +299,26 @@ pub struct gcso_snapshot_header_t {
     pub daes_slot_offset: u32,
     pub timestamp_epoch_sec: u64,
     pub reserved_padding: [u8; 56],
+}
+
+impl Default for gcso_snapshot_header_t {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            magic: 0,
+            version: 0,
+            total_size: 0,
+            action_hub_offset: 0,
+            attractor_field_offset: 0,
+            dpsr_state_offset: 0,
+            srl_state_offset: 0,
+            edbc_state_offset: 0,
+            checksum_crc32: 0,
+            daes_slot_offset: 0,
+            timestamp_epoch_sec: 0,
+            reserved_padding: [0; 56],
+        }
+    }
 }
 
 /// PPRC Keyframe KV cache index header structure (64 bytes).
@@ -422,7 +493,7 @@ pub unsafe extern "C" fn gcso_abi_query_capability(flags: *mut u64) -> GcsoStatu
     res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
 }
 
-/// Initialize a `gcso_config_t` structure strictly conforming to c_abi_spec.md Section 5.4.D.
+/// Initialize a `gcso_config_t` structure strictly conforming to c_abi_spec.md.
 ///
 /// # Safety
 /// `config` must be a non-null, writable pointer to a `gcso_config_t` structure aligned to 16 bytes.
@@ -613,7 +684,7 @@ pub unsafe extern "C" fn gcso_context_serialize(
         std::ptr::write_bytes(buffer, 0, required);
         let header_ptr = buffer.cast::<gcso_snapshot_header_t>();
         (*header_ptr).magic = 0x4F53_4347;   // ASCII "GCSO"
-        (*header_ptr).version = 0x0002_0000; // ABI Version 2.0.0 per c_abi_spec.md
+        (*header_ptr).version = 0x0002_0000; // ABI Version 2.0.0
         (*header_ptr).total_size = required as u64;
         (*header_ptr).timestamp_epoch_sec = 1_774_900_000;
         *buffer_size = required;
@@ -761,7 +832,6 @@ pub unsafe extern "C" fn gcso_action_hub_step_pointer(
 }
 
 /// Compute direct 256-slot hash index for 64-bit pointer trail caching using SplitMix64.
-/// Conforms strictly to C++ implementation in `spt_action_hub.cpp`.
 ///
 /// # Safety
 /// Safe to call with any 64-bit integer pointer value.
@@ -1940,85 +2010,5 @@ pub unsafe extern "C" fn gcso_edbc_controller_destroy(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
-}
-
-// ===================================================================
-// 6. Persona Patch & ZIMMS Storage Mechanics Interface
-// ===================================================================
-
-/// Apply persona phase modulation patch dynamically.
-///
-/// # Safety
-/// `context` and `patch_data` must be non-null valid pointers aligned to type boundaries.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_persona_apply_patch(
-    context: GcsoContextHandle,
-    patch_data: *const u8,
-    patch_size: usize,
-) -> GcsoStatus {
-    if context.is_null() || patch_data.is_null() {
-        return GCSO_ERROR_NULL_POINTER;
-    }
-    if !is_aligned(context) {
-        return GCSO_ERROR_MISALIGNED_POINTER;
-    }
-    if patch_size == 0 {
-        return GCSO_ERROR_INVALID_ARGUMENT;
-    }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
-}
-
-/// Map binary snapshot file using zero-copy memory mapping.
-///
-/// # Safety
-/// `file_path` and `zimms_out` must be non-null pointers aligned to descriptor boundaries.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_zimms_open_mmap(
-    file_path: *const c_char,
-    zimms_out: *mut gcso_zimms_descriptor_t,
-) -> GcsoStatus {
-    if file_path.is_null() || zimms_out.is_null() {
-        return GCSO_ERROR_NULL_POINTER;
-    }
-    if !is_aligned(zimms_out) {
-        return GCSO_ERROR_MISALIGNED_POINTER;
-    }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        if *file_path == 0 {
-            return GCSO_ERROR_INVALID_ARGUMENT;
-        }
-        *zimms_out = gcso_zimms_descriptor_t {
-            mapped_address: 0x1000_0000,
-            file_size_bytes: 4096,
-            dma_buffer_handle: 0,
-            flags: 0,
-            fd_handle: 3,
-            reserved: [0; 32],
-        };
-        GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
-}
-
-/// Unmap zero-copy memory mapped descriptor.
-///
-/// # Safety
-/// `zimms_desc` must be a valid non-null pointer aligned to descriptor boundaries.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_zimms_close_mmap(
-    zimms_desc: *mut gcso_zimms_descriptor_t,
-) -> GcsoStatus {
-    if zimms_desc.is_null() {
-        return GCSO_SUCCESS;
-    }
-    if !is_aligned(zimms_desc) {
-        return GCSO_ERROR_MISALIGNED_POINTER;
-    }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        *zimms_desc = gcso_zimms_descriptor_t::default();
-        GCSO_SUCCESS
-    }));
     res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
 }
