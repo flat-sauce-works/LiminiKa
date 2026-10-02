@@ -991,9 +991,7 @@ pub unsafe extern "C" fn gcso_action_hub_destroy(hub: GcsoActionHubHandle) -> Gc
 /// # Safety
 /// `slot_out` must be non-null and aligned to handle size.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_daes_slot_create(
-    slot_out: *mut GcsoDaesSlotHandle,
-) -> GcsoStatus {
+pub unsafe extern "C" fn gcso_daes_slot_create(slot_out: *mut GcsoDaesSlotHandle) -> GcsoStatus {
     if slot_out.is_null() {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -1064,10 +1062,7 @@ pub unsafe extern "C" fn gcso_daes_telemetry_push(
 /// # Safety
 /// `slot` must be a valid non-null aligned pointer.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_daes_set_mode(
-    slot: *mut gcso_daes_slot_t,
-    mode: u32,
-) -> GcsoStatus {
+pub unsafe extern "C" fn gcso_daes_set_mode(slot: *mut gcso_daes_slot_t, mode: u32) -> GcsoStatus {
     if slot.is_null() {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -1431,11 +1426,7 @@ pub unsafe extern "C" fn gcso_l2p_svd_project_lora(
     srl_out: *mut gcso_srl_descriptor_t,
     phase_profile_out: *mut gcso_q7_t,
 ) -> GcsoStatus {
-    if lora_a.is_null()
-        || lora_b.is_null()
-        || srl_out.is_null()
-        || phase_profile_out.is_null()
-    {
+    if lora_a.is_null() || lora_b.is_null() || srl_out.is_null() || phase_profile_out.is_null() {
         return GCSO_ERROR_NULL_POINTER;
     }
     if !is_aligned(lora_a)
@@ -1615,7 +1606,9 @@ pub unsafe extern "C" fn gcso_attractor_field_aggregate_bottom_up(
 /// # Safety
 /// Safe no-op if `field` is NULL. Returns `GCSO_ERROR_MISALIGNED_POINTER` if non-null and unaligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_attractor_field_destroy(field: GcsoAttractorFieldHandle) -> GcsoStatus {
+pub unsafe extern "C" fn gcso_attractor_field_destroy(
+    field: GcsoAttractorFieldHandle,
+) -> GcsoStatus {
     if field.is_null() {
         return GCSO_SUCCESS;
     }
