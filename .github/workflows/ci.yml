@@ -14,7 +14,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Security: Default read-only permissions across all workflow jobs
+# Security: Enforce strict read-only permissions by default across all jobs
 permissions:
   contents: read
 
@@ -222,9 +222,7 @@ jobs:
       - name: Scan Copyleft & Non-Permissive License Keywords
         run: |
           echo "Scanning codebase for strict permissive compliance (blocking Copyleft/Non-Commercial)..."
-          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
-          
-          # Block copyleft and restrictive licenses
+          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"          
           FORBIDDEN_PATTERNS="GPL-1.0|GPL-2.0|GPL-3.0|LGPL-2.1|LGPL-3.0|AGPL-3.0|SSPL-1.0|CC-BY-NC|MPL-1.1|MPL-2.0|EPL-1.0|EPL-2.0|CDDL-1.0|EUPL-1.1|EUPL-1.2|PolyForm|CPAL-1.0|Watcom-1.0"
           FOUND_VIOLATIONS=$(find . $EXCLUDE_DIRS -prune -o -type f -size +0c ! -name "deny.toml" ! -name "ci.yml" ! -name "*.md" -exec grep -E -H -n "$FORBIDDEN_PATTERNS" {} + 2>/dev/null || true)
 
@@ -238,8 +236,7 @@ jobs:
       - name: Verify SPDX License Headers in Source Files
         run: |
           echo "Checking SPDX License Headers in non-empty source files..."
-          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
-          
+          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"          
           SLASH_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
             -name "*.rs" -o -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
             -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
@@ -438,10 +435,11 @@ jobs:
       - name: Fast check Rust workspace
         run: |
           if [ -f "Cargo.toml" ]; then
-            CARGO_FLAGS="--locked"
-            if ! cargo check --workspace --all-targets --locked 2>/dev/null; then
-              echo "Warning: Cargo.lock is out of sync with Cargo.toml. Falling back without --locked..."
-              CARGO_FLAGS=""
+            CARGO_FLAGS=""
+            if cargo check --workspace --all-targets --locked 2>/dev/null; then
+              CARGO_FLAGS="--locked"
+            else
+              echo "Warning: Cargo.lock is out of sync with Cargo.toml. Running without --locked..."
             fi
             cargo check --workspace --all-targets $CARGO_FLAGS
             cargo check --workspace --all-targets --no-default-features $CARGO_FLAGS
@@ -540,7 +538,6 @@ jobs:
           echo "Verifying Python syntax..."
           EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
           PY_FILES=$(find . $EXCLUDE_DIRS -prune -o -name "*.py" -type f -print 2>/dev/null || true)
-
           if [ -n "$PY_FILES" ]; then
             echo "$PY_FILES" | xargs python -m py_compile
             echo "All Python scripts passed syntax validation."
