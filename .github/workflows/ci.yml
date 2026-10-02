@@ -14,7 +14,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Security: Enforce strict read-only permissions by default across all jobs
+# Security: Enforce strict read-only permissions across all jobs by default
 permissions:
   contents: read
 
@@ -31,7 +31,7 @@ jobs:
     if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Granted strictly for committing formatted code back to repository
+      contents: write # Granted strictly for committing formatted code back
 
     steps:
       - name: Checkout repository
@@ -295,7 +295,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build clang clang-format cmake libclang-dev ccache vulkan-tools shaderc glslang-tools
+          sudo apt-get install -y ninja-build clang clang-format cmake libclang-dev ccache vulkan-tools libshaderc-dev glslang-tools
 
       - name: Install Build Dependencies & Cache Tools (macOS)
         if: runner.os == 'macOS'
