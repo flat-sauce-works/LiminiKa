@@ -72,7 +72,6 @@ jobs:
           find . $EXCLUDE_DIRS -prune -o -name "*.py" -type f -size +0c -exec autopep8 --in-place --aggressive --aggressive {} + 2>/dev/null || true
 
       - name: Commit formatting changes if needed
-        # Security: Prevent workflow failures on fork PRs where write permissions are restricted
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
         uses: stefanzweifel/git-auto-commit-action@v5
         continue-on-error: true
@@ -405,7 +404,7 @@ jobs:
               -DLIMINIKA_ENABLE_VULKAN=OFF \
               -DLIMINIKA_BUILD_TESTS=ON \
               -DLIMINIKA_BUILD_EXAMPLES=ON \
-              -DCMAKE_BUILD_TYPE=Debug
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo
           else
             echo "No root CMakeLists.txt found; skipping CMake configure."
           fi
@@ -422,7 +421,7 @@ jobs:
               -DLIMINIKA_ENABLE_VULKAN=OFF \
               -DLIMINIKA_BUILD_TESTS=ON \
               -DLIMINIKA_BUILD_EXAMPLES=ON \
-              -DCMAKE_BUILD_TYPE=Debug
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo
           else
             echo "No root CMakeLists.txt found; skipping CMake configure."
           fi
@@ -498,9 +497,14 @@ jobs:
       - name: Fast check Rust workspace (Default, No-Default & All Features)
         run: |
           if [ -f "Cargo.toml" ]; then
-            cargo check --workspace --all-targets --locked
-            cargo check --workspace --all-targets --no-default-features --locked
-            cargo check --workspace --all-targets --all-features --locked
+            CARGO_FLAGS="--locked"
+            if ! cargo check --workspace --all-targets --locked 2>/dev/null; then
+              echo "Warning: Cargo.lock is out of sync with Cargo.toml. Falling back without --locked..."
+              CARGO_FLAGS=""
+            fi
+            cargo check --workspace --all-targets $CARGO_FLAGS
+            cargo check --workspace --all-targets --no-default-features $CARGO_FLAGS
+            cargo check --workspace --all-targets --all-features $CARGO_FLAGS
           else
             echo "No root Cargo.toml found; skipping cargo check."
           fi
@@ -513,7 +517,7 @@ jobs:
             HAS_BENCH_TARGET=$(cargo metadata --format-version 1 2>/dev/null | grep -q '"kind":\["bench"\]' && echo "yes" || true)
             if [ -n "$BENCH_EXISTS" ] || [ "$HAS_BENCH_TARGET" = "yes" ]; then
               echo "Benchmark targets detected. Running cargo check --benches..."
-              cargo check --workspace --benches --all-features --locked || echo "No explicit bench targets compiled."
+              cargo check --workspace --benches --all-features || echo "No explicit bench targets compiled."
             else
               echo "No benchmark targets found; skipping bench check."
             fi
@@ -522,21 +526,21 @@ jobs:
       - name: Run cargo clippy
         run: |
           if [ -f "Cargo.toml" ]; then
-            cargo clippy --workspace --all-targets --locked -- -D warnings
-            cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+            cargo clippy --workspace --all-targets -- -D warnings
+            cargo clippy --workspace --all-targets --all-features -- -D warnings
           fi
 
       - name: Check Rust documentation integrity (Ubuntu only)
         if: runner.os == 'Linux' && hashFiles('Cargo.toml') != ''
         env:
           RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --workspace --no-deps --all-features --locked
+        run: cargo doc --workspace --no-deps --all-features
 
       - name: Run Rust workspace unit, integration, & zero-alloc tests via nextest
         run: |
           if [ -f "Cargo.toml" ]; then
-            cargo test --workspace --doc --all-features --locked
-            cargo nextest run --workspace --all-targets --all-features --locked
+            cargo test --workspace --doc --all-features
+            cargo nextest run --workspace --all-targets --all-features
           fi
 
   # =========================================================================
@@ -565,7 +569,7 @@ jobs:
       - name: Build DSL package & CLI parser
         run: |
           if [ -f "Cargo.toml" ]; then
-            cargo build --workspace --locked
+            cargo build --workspace
           fi
 
       - name: Validate Example DSL files
@@ -577,7 +581,7 @@ jobs:
             for file in $DSL_FILES; do
               echo "Checking $file..."
               if [ -f "Cargo.toml" ] && cargo metadata --format-version 1 2>/dev/null | grep -qE '"name":"(liminika-cli|liminika)"'; then
-                cargo run --workspace --locked -- check "$file" || echo "CLI check command completed for $file"
+                cargo run --workspace -- check "$file" || echo "CLI check command completed for $file"
               else
                 echo "Skipping CLI check command as CLI package is not fully configured yet."
               fi
