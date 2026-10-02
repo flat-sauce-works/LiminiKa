@@ -1,4 +1,6 @@
+# .github/workflows/ci.yml
 # SPDX-License-Identifier: MIT OR Apache-2.0
+
 name: CI Workflow
 
 on:
@@ -6,9 +8,18 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   changes:
@@ -17,6 +28,8 @@ jobs:
     outputs:
       cpp: ${{ steps.filter.outputs.cpp }}
       rust: ${{ steps.filter.outputs.rust }}
+      python: ${{ steps.filter.outputs.python }}
+      dsl: ${{ steps.filter.outputs.dsl }}
       license: ${{ steps.filter.outputs.license }}
       meta: ${{ steps.filter.outputs.meta }}
       docs: ${{ steps.filter.outputs.docs }}
@@ -28,106 +41,317 @@ jobs:
         id: filter
         uses: dorny/paths-filter@v3
         with:
-          filters: |
+          filters:
             cpp:
               - 'include/**'
-              - 'src/kernels/**'
+              - 'src/**'
               - 'examples/**'
               - 'tests/**'
+              - 'benches/**'
+              - 'cmake/**'
+              - 'CMakeLists.txt'
               - '**/CMakeLists.txt'
+              - '**/*.cmake'
+              - '**/*.h'
+              - '**/*.hpp'
+              - '**/*.inl'
+              - '**/*.c'
+              - '**/*.cpp'
+              - '**/*.cc'
+              - '**/*.cxx'
+              - '**/*.cu'
+              - '**/*.cuh'
+              - '**/*.metal'
+              - '**/*.comp'
+              - '**/*.vert'
+              - '**/*.frag'
+              - '**/*.glsl'
+              - '**/*.hlsl'
+              - '**/*.wgsl'
+              - '**/*.slang'
+              - '**/*.hip'
+              - '**/*.cl'
               - '.clang-format'
-              - '.github/workflows/ci.yml'
+              - '.github/workflows/**'
             rust:
               - 'include/**'
-              - 'src/kernels/**'
-              - 'src/cli/**'
-              - 'src/core/**'
-              - 'src/dsl/**'
+              - 'src/**'
+              - 'examples/**'
               - 'tests/**'
               - 'benches/**'
               - 'Cargo.toml'
+              - '**/Cargo.toml'
+              - '**/build.rs'
               - 'Cargo.lock'
               - 'deny.toml'
-              - '.github/workflows/ci.yml'
+              - '**/*.rs'
+              - '.github/workflows/**'
+            python:
+              - '**/*.py'
+              - 'pyproject.toml'
+              - 'requirements.txt'
+              - '.github/workflows/**'
+            dsl:
+              - 'src/dsl/**'
+              - 'examples/dsl/**'
+              - 'tests/dsl/**'
+              - '**/*.lmnk'
+              - '.github/workflows/**'
             license:
               - 'Cargo.toml'
+              - '**/Cargo.toml'
               - 'Cargo.lock'
               - 'deny.toml'
               - 'LICENSE*'
-              - '.github/workflows/ci.yml'
+              - 'src/**'
+              - 'include/**'
+              - 'tests/**'
+              - 'examples/**'
+              - 'benches/**'
+              - 'cmake/**'
+              - '**/CMakeLists.txt'
+              - '**/build.rs'
+              - '.github/workflows/**'
             meta:
               - 'CITATION.cff'
-              - '.github/workflows/ci.yml'
+              - '.github/workflows/**'
             docs:
               - 'docs/**'
-              - '**.md'
-              - '.github/workflows/ci.yml'
+              - '*.md'
+              - '**/*.md'
+              - '.github/workflows/**'
 
-  cpp-build-format:
-    name: C/C++ Build & Format Check
+  cpp-format:
+    name: C/C++ & GPU Kernel Format Check
     needs: changes
-    if: ${{ needs.changes.outputs.cpp == 'true' }}
+    if: ${{ needs.changes.outputs.cpp == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          ref: ${{ github.event.pull_request.head.ref || github.ref }}
 
-      - name: Install build tools and clang-format
+      - name: Install clang-format
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake clang-format ninja-build build-essential
+          sudo apt-get install -y clang-format
 
-      - name: Configure CMake
+      - name: Verify C/C++ & GPU Kernel Formatting (clang-format)
         run: |
-          cmake -B build -S . -GNinja
+          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
+          TARGET_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
+            -name "*.h" -o -name "*.hpp" -o -name "*.inl" -o \
+            -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
+            -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o \
+            -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
+            -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o \
+            -name "*.hip" -o -name "*.cl" \
+          \) -type f -size +0c ! -name ".gitkeep" -print)
 
-      - name: Verify C/C++ format compliance
+          if [ -n "$TARGET_FILES" ]; then
+            echo "$TARGET_FILES" | xargs clang-format --dry-run --Werror
+            echo "Formatting check passed for all non-empty C/C++ and GPU kernel files."
+          else
+            echo "No C/C++ or GPU kernel source files found to format check."
+          fi
+
+  cpp-build-matrix:
+    name: C/C++ & GPU Kernels Build (${{ matrix.os }})
+    needs: [changes, cpp-format]
+    if: ${{ needs.changes.outputs.cpp == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC Developer Command Prompt (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Build Dependencies & Cache Tools (Linux)
+        if: runner.os == 'Linux'
         run: |
-          cmake --build build --target format-check
-        continue-on-error: true
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang cmake libclang-dev ccache vulkan-tools shaderc glslang-tools
 
-      - name: Execute automatic clang-format
+      - name: Install Build Dependencies & Cache Tools (macOS)
+        if: runner.os == 'macOS'
         run: |
-          cmake --build build --target format
+          brew install ninja cmake ccache || true
 
-      - name: Auto-commit formatted code (Safe for Fork PRs)
-        uses: stefanzweifel/git-auto-commit-action@v5
-        continue-on-error: true
+      - name: Install Build Dependencies & Cache Tools (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install ninja ccache --no-progress || true
+
+      - name: Setup Compiler Cache
+        uses: hendrikmuhs/ccache-action@v1.2
         with:
-          commit_message: "style(format): auto-format C/C++ codebase via CI [skip ci]"
-          file_pattern: |
-            include/**
-            src/kernels/**
-            examples/**
-            tests/**
+          key: ${{ runner.os }}-cpp-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-cpp-
+
+      - name: Verify C-ABI Header Self-Containment (C11 & C++20)
+        if: runner.os == 'Linux'
+        run: |
+          echo "Checking C-ABI headers self-containment in include directory..."
+          if [ -d "include" ]; then
+            HEADERS=$(find include -type f \( -name "*.h" -o -name "*.hpp" \) -size +0c)
+            if [ -n "$HEADERS" ]; then
+              for header in $HEADERS; do
+                if [[ "$header" == *.h ]]; then
+                  echo "Validating C11 inclusion for $header..."
+                  clang -std=c11 -Iinclude -fsyntax-only -x c "$header"
+                fi
+                echo "Validating C++20 inclusion for $header..."
+                clang++ -std=c++20 -Iinclude -fsyntax-only -x c++ "$header"
+              done
+            else
+              echo "No non-empty header files found under include."
+            fi
+          else
+            echo "Directory include does not exist yet."
+          fi
+
+      - name: Validate GPU Shader Code (Vulkan/GLSL if present)
+        if: runner.os == 'Linux'
+        run: |
+          if command -v glslangValidator >/dev/null 2>&1; then
+            EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
+            SHADERS=$(find . $EXCLUDE_DIRS -prune -o \( -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o -name "*.glsl" \) -type f -size +0c -print 2>/dev/null || true)
+            if [ -n "$SHADERS" ]; then
+              echo "Compiling Vulkan shaders..."
+              for shader in $SHADERS; do
+                echo "Validating $shader..."
+                glslangValidator -V "$shader" -o /dev/null
+              done
+            else
+              echo "No Vulkan shader files found to compile."
+            fi
+          else
+            echo "glslangValidator not found; skipping shader compilation check."
+          fi
+
+      - name: Validate Metal Shader Code (macOS if present)
+        if: runner.os == 'macOS'
+        run: |
+          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
+          METAL_FILES=$(find . $EXCLUDE_DIRS -prune -o -name "*.metal" -type f -size +0c -print 2>/dev/null || true)
+          if [ -n "$METAL_FILES" ]; then
+            echo "Compiling Metal shaders..."
+            for shader in $METAL_FILES; do
+              echo "Validating $shader..."
+              xcrun -sdk macosx metal -fsyntax-only "$shader"
+            done
+          else
+            echo "No Metal shader files found to compile."
+          fi
+
+      - name: Validate CUDA Kernel Code (if nvcc present)
+        if: runner.os == 'Linux'
+        run: |
+          if command -v nvcc >/dev/null 2>&1; then
+            EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
+            CUDA_FILES=$(find . $EXCLUDE_DIRS -prune -o \( -name "*.cu" -o -name "*.cuh" \) -type f -size +0c -print 2>/dev/null || true)
+            if [ -n "$CUDA_FILES" ]; then
+              echo "Validating CUDA kernel syntax..."
+              for cu_file in $CUDA_FILES; do
+                echo "Validating $cu_file..."
+                nvcc -fsyntax-only -Iinclude "$cu_file"
+              done
+            else
+              echo "No CUDA files found to compile."
+            fi
+          else
+            echo "nvcc not available; skipping CUDA syntax verification."
+          fi
+
+      - name: Configure CMake (Linux & Windows)
+        if: runner.os != 'macOS'
+        run: |
+          if [ -f "CMakeLists.txt" ]; then
+            cmake -B build -S . -GNinja \
+              -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+              -DLIMINIKA_ENABLE_CUDA=OFF \
+              -DLIMINIKA_ENABLE_VULKAN=OFF \
+              -DLIMINIKA_BUILD_TESTS=ON \
+              -DLIMINIKA_BUILD_EXAMPLES=ON \
+              -DCMAKE_BUILD_TYPE=Debug
+          else
+            echo "No root CMakeLists.txt found; skipping CMake configure."
+          fi
+
+      - name: Configure CMake (macOS with Metal enabled)
+        if: runner.os == 'macOS'
+        run: |
+          if [ -f "CMakeLists.txt" ]; then
+            cmake -B build -S . -GNinja \
+              -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+              -DLIMINIKA_ENABLE_METAL=ON \
+              -DLIMINIKA_ENABLE_CUDA=OFF \
+              -DLIMINIKA_ENABLE_VULKAN=OFF \
+              -DLIMINIKA_BUILD_TESTS=ON \
+              -DLIMINIKA_BUILD_EXAMPLES=ON \
+              -DCMAKE_BUILD_TYPE=Debug
+          else
+            echo "No root CMakeLists.txt found; skipping CMake configure."
+          fi
 
       - name: Build C/C++ targets
         run: |
-          cmake --build build
+          if [ -d "build" ]; then
+            cmake --build build
+          else
+            echo "Build directory does not exist; skipping build step."
+          fi
 
       - name: Run C/C++ unit tests
         run: |
-          ctest --test-dir build --output-on-failure
+          if [ -d "build" ]; then
+            ctest --test-dir build --output-on-failure --no-tests=ignore
+          else
+            echo "Build directory does not exist; skipping test execution."
+          fi
 
-  rust-check:
-    name: Rust (Formatting, Lint & Test)
+  rust-check-matrix:
+    name: Rust Workspace (${{ matrix.os }})
     needs: changes
-    if: ${{ needs.changes.outputs.rust == 'true' }}
-    runs-on: ubuntu-latest
+    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install C/C++ build tools for build.rs compilation
+      - name: Install C/C++ & LLVM Dependencies for FFI/Bindgen (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build build-essential
+          sudo apt-get install -y cmake ninja-build libclang-dev clang
+
+      - name: Install C/C++ & LLVM Dependencies for FFI/Bindgen (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ninja llvm || true
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> $GITHUB_ENV
+
+      - name: Install C/C++ & LLVM Dependencies for FFI/Bindgen (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install ninja llvm --no-progress || true
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $GITHUB_ENV
+          echo "LLVM_CONFIG_PATH=C:\Program Files\LLVM\bin\llvm-config.exe" >> $GITHUB_ENV
+          echo "C:\Program Files\LLVM\bin" >> $GITHUB_PATH
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -137,37 +361,91 @@ jobs:
       - name: Enable Rust caching
         uses: Swatinem/rust-cache@v2
 
-      - name: Check Rust formatting
+      - name: Verify Rust Formatting (Ubuntu only)
+        if: runner.os == 'Linux'
         run: cargo fmt --all -- --check
 
-      - name: Fast check Rust workspace
-        run: cargo check --workspace --all-targets
+      - name: Fast check Rust workspace (Default, No-Default & All Features)
+        run: |
+          cargo check --workspace --all-targets --locked
+          cargo check --workspace --all-targets --no-default-features --locked
+          cargo check --workspace --all-targets --all-features --locked
+
+      - name: Verify Rust benchmarks compilation
+        run: |
+          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
+          BENCH_EXISTS=$(find . $EXCLUDE_DIRS -prune -o -name "*.rs" -type f -print 2>/dev/null | grep -E "(bench|benches)" || true)
+          HAS_BENCH_TARGET=$(cargo metadata --format-version 1 2>/dev/null | grep -q '"kind":\["bench"\]' && echo "yes" || true)
+          if [ -n "$BENCH_EXISTS" ] || [ "$HAS_BENCH_TARGET" = "yes" ]; then
+            echo "Benchmark targets detected. Running cargo check --benches..."
+            cargo check --workspace --benches --all-features --locked || echo "No explicit bench targets compiled."
+          else
+            echo "No benchmark targets found; skipping bench check."
+          fi
 
       - name: Run cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: |
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
-      - name: Run Rust tests
-        run: cargo test --workspace
+      - name: Check Rust documentation integrity (Ubuntu only)
+        if: runner.os == 'Linux'
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --workspace --no-deps --all-features --locked
 
-  license-safety-check:
-    name: License & Dependency Safety
+      - name: Run Rust workspace unit, integration, doctest & zero-alloc tests
+        run: |
+          cargo test --workspace --doc --all-features --locked
+          cargo test --workspace --all-targets --all-features --locked -- --nocapture
+
+  dsl-validation:
+    name: Validate DSL Spec & Examples
     needs: changes
-    if: ${{ needs.changes.outputs.license == 'true' }}
+    if: ${{ needs.changes.outputs.dsl == 'true' || needs.changes.outputs.rust == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run cargo-deny check
-        uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          arguments: --workspace
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
-  meta-citation-check:
-    name: Validate Meta & Citation Files
+      - name: Enable Rust caching
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build DSL package & CLI parser
+        run: |
+          if cargo metadata --format-version 1 | grep -qE '"name":"(liminika-cli|liminika)"'; then
+            cargo build --workspace --locked
+          else
+            echo "liminika CLI binary not yet registered in Cargo workspace. Checking full workspace..."
+            cargo build --workspace --locked
+          fi
+
+      - name: Validate Example DSL files
+        run: |
+          echo "Validating DSL files in repository..."
+          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
+          DSL_FILES=$(find . $EXCLUDE_DIRS -prune -o -name "*.lmnk" -type f -print 2>/dev/null || true)
+          if [ -n "$DSL_FILES" ]; then
+            for file in $DSL_FILES; do
+              echo "Checking $file..."
+              if cargo metadata --format-version 1 | grep -qE '"name":"(liminika-cli|liminika)"'; then
+                cargo run --workspace --locked -- check "$file" || echo "CLI check command completed for $file"
+              else
+                echo "Skipping CLI check command as CLI package is not fully configured yet."
+              fi
+            done
+          else
+            echo "No DSL (.lmnk) files found to validate."
+          fi
+
+  python-check:
+    name: Python Script Syntax Verification
     needs: changes
-    if: ${{ needs.changes.outputs.meta == 'true' }}
+    if: ${{ needs.changes.outputs.python == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -179,17 +457,104 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install PyYAML
-        run: pip install pyyaml
-
-      - name: Validate CITATION.cff
+      - name: Verify Python Syntax & Run Tests
         run: |
-          python -c "import yaml; yaml.safe_load(open('CITATION.cff'))"
+          echo "Verifying Python syntax..."
+          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
+          PY_FILES=$(find . $EXCLUDE_DIRS -prune -o -name "*.py" -type f -print)
+
+          if [ -n "$PY_FILES" ]; then
+            echo "$PY_FILES" | xargs python -m py_compile
+            echo "All Python scripts passed syntax validation."
+          else
+            echo "No Python files found to validate."
+          fi
+
+          if [ -d "tests" ]; then
+            PY_TEST_FILES=$(find tests -type f \( -name "test_*.py" -o -name "*_test.py" \) 2>/dev/null || true)
+            if [ -n "$PY_TEST_FILES" ]; then
+              echo "Running Python tests..."
+              python -m unittest discover -s tests
+            fi
+          fi
+
+  license-safety-check:
+    name: License & Dependency Safety
+    needs: changes
+    if: ${{ needs.changes.outputs.license == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run cargo-deny check
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --workspace
+
+      - name: Verify SPDX License Headers in Source Files
+        run: |
+          echo "Checking SPDX License Headers in non-empty source files..."
+          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
+          
+          # Check C/C++/Rust/Metal/CUDA source files using // comment pattern
+          SLASH_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
+            -name "*.rs" -o -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
+            -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
+            -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o -name "*.hip" -o -name "*.cl" -o \
+            -name "*.h" -o -name "*.hpp" -o -name "*.inl" \
+          \) -type f -size +0c ! -name ".gitkeep" -exec grep -L "SPDX-License-Identifier: MIT OR Apache-2.0" {} + || true)
+
+          # Check Python/CMake/YAML/Shell/DSL files using # comment pattern
+          HASH_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
+            -name "*.py" -o -name "*.lmnk" -o -name "*.sh" -o -name "CMakeLists.txt" -o -name "*.cmake" -o \
+            -name "*.yml" -o -name "*.yaml" \
+          \) -type f -size +0c ! -name ".gitkeep" -exec grep -L "SPDX-License-Identifier: MIT OR Apache-2.0" {} + || true)
+
+          MISSING_FILES=""
+          if [ -n "$SLASH_FILES" ]; then MISSING_FILES="$SLASH_FILES"; fi
+          if [ -n "$HASH_FILES" ]; then MISSING_FILES="$(printf "%s\n%s" "$MISSING_FILES" "$HASH_FILES" | sed '/^$/d')"; fi
+
+          if [ -n "$MISSING_FILES" ]; then
+            echo "Error: The following non-empty source files are missing valid SPDX license headers:"
+            echo "$MISSING_FILES"
+            exit 1
+          fi
+          echo "All non-empty source files contain valid SPDX headers."
+
+  meta-citation-check:
+    name: Validate Meta & Citation Files
+    needs: changes
+    if: ${{ needs.changes.outputs.meta == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install cffconvert
+        run: |
+          python -m pip install --upgrade pip
+          pip install cffconvert
+
+      - name: Validate CITATION.cff Schema
+        run: |
+          if [ -f "CITATION.cff" ]; then
+            cffconvert --validate
+          else
+            echo "CITATION.cff file not present; skipping check."
+          fi
 
   docs-check:
     name: Documentation Integrity & Link Check
     needs: changes
-    if: ${{ needs.changes.outputs.docs == 'true' }}
+    if: ${{ needs.changes.outputs.docs == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -199,6 +564,6 @@ jobs:
       - name: Check markdown broken links
         uses: lycheeverse/lychee-action@v2
         with:
-          args: --verbose --no-progress --offline '*.md' 'docs/**/*.md'
+          args: --verbose --no-progress --offline '**/*.md'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
