@@ -2,6 +2,19 @@
 
 use std::env;
 use std::path::PathBuf;
+use std::process::Command;
+
+/// Checks whether the CUDA compiler (`nvcc`) or relevant environment variables are available on the host system.
+fn is_nvcc_available() -> bool {
+    if env::var("CUDA_PATH").is_ok() || env::var("CUDAToolkit_ROOT").is_ok() {
+        return true;
+    }
+    Command::new("nvcc")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -16,19 +29,32 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LIMINIKA_ENABLE_VULKAN");
     println!("cargo:rerun-if-env-changed=LIMINIKA_ENABLE_METAL");
 
-    // Evaluate hardware acceleration backend enablement via Cargo features or env vars
-    let enable_cuda = cfg!(feature = "cuda")
-        || env::var("LIMINIKA_ENABLE_CUDA")
-            .map(|v| v == "1" || v == "ON" || v == "true")
-            .unwrap_or(false);
-    let enable_vulkan = cfg!(feature = "vulkan")
-        || env::var("LIMINIKA_ENABLE_VULKAN")
-            .map(|v| v == "1" || v == "ON" || v == "true")
-            .unwrap_or(false);
-    let enable_metal = cfg!(feature = "metal")
-        || env::var("LIMINIKA_ENABLE_METAL")
-            .map(|v| v == "1" || v == "ON" || v == "true")
-            .unwrap_or(false);
+    // Evaluate CUDA backend enablement.
+    // Prioritize explicit LIMINIKA_ENABLE_CUDA environment variable override.
+    // Fallback to cargo feature "cuda" ONLY IF nvcc/CUDA Toolkit is present on the system.
+    let enable_cuda = match env::var("LIMINIKA_ENABLE_CUDA") {
+        Ok(v) => {
+            let lower = v.to_lowercase();
+            lower == "1" || lower == "on" || lower == "true"
+        }
+        Err(_) => cfg!(feature = "cuda") && is_nvcc_available(),
+    };
+
+    let enable_vulkan = match env::var("LIMINIKA_ENABLE_VULKAN") {
+        Ok(v) => {
+            let lower = v.to_lowercase();
+            lower == "1" || lower == "on" || lower == "true"
+        }
+        Err(_) => cfg!(feature = "vulkan"),
+    };
+
+    let enable_metal = match env::var("LIMINIKA_ENABLE_METAL") {
+        Ok(v) => {
+            let lower = v.to_lowercase();
+            lower == "1" || lower == "on" || lower == "true"
+        }
+        Err(_) => cfg!(target_os = "macos") || cfg!(feature = "metal"),
+    };
 
     // Configure CMake build options with explicit ON/OFF flags
     let mut cfg = cmake::Config::new(&kernels_dir);
