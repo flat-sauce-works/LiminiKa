@@ -398,11 +398,7 @@ static GCSO_ABI_VERSION: &[u8] = b"2.0.0\0";
 /// # Safety
 /// Pointers must be valid, non-null writable memory locations aligned to `u32`.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_abi_get_version(
-    major: *mut u32,
-    minor: *mut u32,
-    patch: *mut u32,
-) {
+pub unsafe extern "C" fn gcso_abi_get_version(major: *mut u32, minor: *mut u32, patch: *mut u32) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         if is_aligned(major) {
             unsafe { *major = 2 };
@@ -684,7 +680,7 @@ pub unsafe extern "C" fn gcso_context_serialize(
         std::ptr::write_bytes(buffer, 0, required);
         let header_ptr = buffer.cast::<gcso_snapshot_header_t>();
         (*header_ptr).magic = 0x4F53_4347;   // ASCII "GCSO"
-        (*header_ptr).version = 0x0002_0000; // ABI Version 2.0.0
+        (*header_ptr).version = 0x0002_0000; // ABI Version 2.0.0 per c_abi_spec.md
         (*header_ptr).total_size = required as u64;
         (*header_ptr).timestamp_epoch_sec = 1_774_900_000;
         *buffer_size = required;
@@ -1000,9 +996,7 @@ pub unsafe extern "C" fn gcso_action_hub_destroy(hub: GcsoActionHubHandle) -> Gc
 /// # Safety
 /// `slot_out` must be a valid non-null pointer aligned to handle size.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_daes_slot_create(
-    slot_out: *mut GcsoDaesSlotHandle,
-) -> GcsoStatus {
+pub unsafe extern "C" fn gcso_daes_slot_create(slot_out: *mut GcsoDaesSlotHandle) -> GcsoStatus {
     if slot_out.is_null() {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -1073,10 +1067,7 @@ pub unsafe extern "C" fn gcso_daes_telemetry_push(
 /// # Safety
 /// `slot` must be a valid non-null pointer aligned to 64 bytes.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_daes_set_mode(
-    slot: *mut gcso_daes_slot_t,
-    mode: u32,
-) -> GcsoStatus {
+pub unsafe extern "C" fn gcso_daes_set_mode(slot: *mut gcso_daes_slot_t, mode: u32) -> GcsoStatus {
     if slot.is_null() {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -1523,7 +1514,11 @@ pub unsafe extern "C" fn gcso_pspm_dispatch_single_pass(
         for val in q_slice.iter_mut().skip(fact_elems).take(logic_elems) {
             *val *= cfg.logic_phase_gain;
         }
-        for val in q_slice.iter_mut().skip(fact_elems + logic_elems).take(explore_elems) {
+        for val in q_slice
+            .iter_mut()
+            .skip(fact_elems + logic_elems)
+            .take(explore_elems)
+        {
             *val *= cfg.explore_phase_gain;
         }
 
@@ -1815,60 +1810,12 @@ pub unsafe extern "C" fn gcso_attractor_field_add_embedding_anchor(
     res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
 }
 
-/// Inject phase-conjugate repulsion vector.
-///
-/// # Safety
-/// `context` and `repulsion_deltas` must be valid non-null pointers aligned to type boundary.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_attractor_field_inject_phase_repulsion(
-    context: GcsoContextHandle,
-    repulsion_deltas: *const gcso_q7_t,
-    num_heads: usize,
-    gain: f32,
-) -> GcsoStatus {
-    if context.is_null() || repulsion_deltas.is_null() {
-        return GCSO_ERROR_NULL_POINTER;
-    }
-    if !is_aligned(context) || !is_aligned(repulsion_deltas) {
-        return GCSO_ERROR_MISALIGNED_POINTER;
-    }
-    if num_heads == 0 || gain.is_nan() || gain.is_infinite() {
-        return GCSO_ERROR_INVALID_ARGUMENT;
-    }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
-}
-
-/// Aggregate pointer trails bottom-up to crystallize dynamic anchors.
-///
-/// # Safety
-/// `context` and `new_anchor_count_out` must be valid non-null pointers aligned to type boundaries.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_attractor_field_aggregate_bottom_up(
-    context: GcsoContextHandle,
-    new_anchor_count_out: *mut u32,
-) -> GcsoStatus {
-    if context.is_null() || new_anchor_count_out.is_null() {
-        return GCSO_ERROR_NULL_POINTER;
-    }
-    if !is_aligned(context) || !is_aligned(new_anchor_count_out) {
-        return GCSO_ERROR_MISALIGNED_POINTER;
-    }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        *new_anchor_count_out = 0;
-        GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
-}
-
-/// Destroy attractor field instance.
+/// Destroy Attractor Field instance.
 ///
 /// # Safety
 /// Safe no-op if `field` is NULL. Returns `GCSO_ERROR_MISALIGNED_POINTER` if non-null and unaligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_attractor_field_destroy(
-    field: GcsoAttractorFieldHandle,
-) -> GcsoStatus {
+pub unsafe extern "C" fn gcso_attractor_field_destroy(field: GcsoAttractorFieldHandle) -> GcsoStatus {
     if field.is_null() {
         return GCSO_SUCCESS;
     }
@@ -1879,19 +1826,18 @@ pub unsafe extern "C" fn gcso_attractor_field_destroy(
     res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
 }
 
-/// Allocate EDBC controller instance.
+/// Create EDBC controller instance.
 ///
 /// # Safety
-/// `initial_state` and `controller_out` must be non-null pointers aligned to 32 bytes and handle size.
+/// `controller_out` must be a non-null valid pointer aligned to handle size.
 #[no_mangle]
 pub unsafe extern "C" fn gcso_edbc_controller_create(
-    initial_state: *const gcso_edbc_state_t,
     controller_out: *mut GcsoEdbcControllerHandle,
 ) -> GcsoStatus {
-    if initial_state.is_null() || controller_out.is_null() {
+    if controller_out.is_null() {
         return GCSO_ERROR_NULL_POINTER;
     }
-    if !is_aligned(initial_state) || !is_aligned(controller_out) {
+    if !is_aligned(controller_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     let res = catch_unwind(AssertUnwindSafe(|| unsafe {
@@ -1901,95 +1847,33 @@ pub unsafe extern "C" fn gcso_edbc_controller_create(
     res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
 }
 
-/// Evaluate EDBC stateful entropy and pitchfork bifurcation mode.
+/// Evaluate EDBC bifurcation status and dynamic entropy state.
 ///
 /// # Safety
-/// `controller` handle and `state_out` must be valid non-null pointers aligned to type boundary.
-/// Returns `GCSO_ERROR_EDBC_SINGULARITY` if `token_z_score` is NaN or Infinite.
+/// `state` and `bifurcated_out` must be valid non-null pointers aligned to 32 bytes and 4 bytes respectively.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_edbc_eval_stateful(
-    controller: GcsoEdbcControllerHandle,
-    token_z_score: f32,
-    state_out: *mut gcso_edbc_state_t,
+pub unsafe extern "C" fn gcso_edbc_evaluate_bifurcation(
+    state: *mut gcso_edbc_state_t,
+    bifurcated_out: *mut u32,
 ) -> GcsoStatus {
-    if controller.is_null() || state_out.is_null() {
+    if state.is_null() || bifurcated_out.is_null() {
         return GCSO_ERROR_NULL_POINTER;
     }
-    if !is_aligned(controller) || !is_aligned(state_out) {
+    if !is_aligned(state) || !is_aligned(bifurcated_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
-    }
-    if token_z_score.is_nan() || token_z_score.is_infinite() {
-        return GCSO_ERROR_EDBC_SINGULARITY;
-    }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
-}
-
-/// Compute CVoid Coherent Vector Alignment Metric.
-///
-/// # Safety
-/// `key_vector` and `void_score_out` must be non-null pointers.
-/// `key_vector` must be 32-byte aligned.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_cvoid_eval_dyadic128(
-    key_vector: *const f32,
-    dim: usize,
-    void_score_out: *mut f32,
-) -> GcsoStatus {
-    if key_vector.is_null() || void_score_out.is_null() {
-        return GCSO_ERROR_NULL_POINTER;
-    }
-    if !is_aligned_to(key_vector, 32) || !is_aligned(void_score_out) {
-        return GCSO_ERROR_MISALIGNED_POINTER;
-    }
-    if dim == 0 {
-        return GCSO_ERROR_INVALID_ARGUMENT;
     }
     let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        let keys = std::slice::from_raw_parts(key_vector, dim);
-        let mut sum_sq = 0.0f32;
-        for &k in keys {
-            sum_sq += k * k;
-        }
-        if sum_sq.is_nan() || sum_sq.is_infinite() {
+        let st = &mut *state;
+        if st.moving_z_entropy.is_nan() || st.moving_z_entropy.is_infinite() {
             return GCSO_ERROR_EDBC_SINGULARITY;
         }
-        *void_score_out = sum_sq / (dim as f32);
-        GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
-}
-
-/// Evaluate Eyring-Kramers potential barrier height value: Delta_V = tau_eff / (void_score + eps).
-///
-/// # Safety
-/// `barrier_out` must be a valid non-null pointer aligned to `f32`.
-/// Returns `GCSO_ERROR_EDBC_SINGULARITY` if inputs are NaN/Inf or `tau_eff <= 0.0`.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_cvoid_eval_barrier(
-    void_score: f32,
-    tau_eff: f32,
-    barrier_out: *mut f32,
-) -> GcsoStatus {
-    if barrier_out.is_null() {
-        return GCSO_ERROR_NULL_POINTER;
-    }
-    if !is_aligned(barrier_out) {
-        return GCSO_ERROR_MISALIGNED_POINTER;
-    }
-    if void_score.is_nan()
-        || tau_eff.is_nan()
-        || void_score.is_infinite()
-        || tau_eff.is_infinite()
-        || tau_eff <= 0.0
-    {
-        return GCSO_ERROR_EDBC_SINGULARITY;
-    }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        let eps = 1e-6f32;
-        let safe_void = void_score.max(0.0);
-        let denom = safe_void + eps;
-        *barrier_out = tau_eff / denom;
+        if st.moving_z_entropy > st.bifurcation_threshold {
+            *bifurcated_out = 1;
+            st.active_branch_mode = 1;
+        } else {
+            *bifurcated_out = 0;
+            st.active_branch_mode = 0;
+        }
         GCSO_SUCCESS
     }));
     res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
@@ -2007,6 +1891,25 @@ pub unsafe extern "C" fn gcso_edbc_controller_destroy(
         return GCSO_SUCCESS;
     }
     if !is_aligned(controller) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
+    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+}
+
+/// Enforce CVoid Obstruction Barrier during beam expansion.
+///
+/// # Safety
+/// `context` must be a valid aligned runtime handle.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_cvoid_barrier_enforce(
+    context: GcsoContextHandle,
+    _candidate_id: u32,
+) -> GcsoStatus {
+    if context.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(context) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
