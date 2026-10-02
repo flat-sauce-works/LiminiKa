@@ -1,29 +1,28 @@
-use std::env;
+// src/core/build.rs
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+use std::path::PathBuf;
 
 fn main() {
-    // Re-run build script if kernel files or headers change
-    println!("cargo:rerun-if-changed=src/kernels");
-    println!("cargo:rerun-if-changed=include");
+    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let repo_root = manifest_dir.join("../..");
 
-    let mut build = cc::Build::new();
-    build.cpp(true);
-    build.include("include");
+    // Rerun triggers
+    println!("cargo:rerun-if-changed=../../include/liminika/");
+    println!("cargo:rerun-if-changed=../../src/kernels/");
 
-    // Check if CUDA feature is enabled for liminika-core
-    if env::var("CARGO_FEATURE_CUDA").is_ok() {
-        // CUDA build configurations will be inserted here
-    }
+    // Build C++ Kernels via CMake
+    let dst = cmake::Config::new(repo_root.join("src/kernels"))
+        .define("CMAKE_POSITION_INDEPENDENT_CODE", "ON")
+        .build();
 
-    // Safely compile C/C++ kernel sources only if files are registered
-    let has_sources = false;
+    println!("cargo:rustc-link-search=native={}/lib", dst.display());
+    println!("cargo:rustc-link-search=native={}/lib64", dst.display());
+    println!("cargo:rustc-link-lib=static=liminika_kernels_cpu");
 
-    // Example:
-    // if std::path::Path::new("src/kernels/cpu/example.cpp").exists() {
-    //     build.file("src/kernels/cpu/example.cpp");
-    //     has_sources = true;
-    // }
-
-    if has_sources {
-        build.compile("liminika_kernels");
-    }
+    // Link C++ Standard Library
+    #[cfg(target_os = "macos")]
+    println!("cargo:rustc-link-lib=c++");
+    #[cfg(not(target_os = "macos"))]
+    println!("cargo:rustc-link-lib=stdc++");
 }
