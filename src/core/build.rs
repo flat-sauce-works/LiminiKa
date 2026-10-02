@@ -9,43 +9,56 @@ fn main() {
     let kernels_dir = repo_root.join("src/kernels");
     let include_dir = repo_root.join("include");
 
-    // Re-run build script if any included headers or C++ kernel sources change
+    // Re-run build script if included headers, sources, or build flags change
     println!("cargo:rerun-if-changed={}", include_dir.display());
     println!("cargo:rerun-if-changed={}", kernels_dir.display());
+    println!("cargo:rerun-if-env-changed=LIMINIKA_ENABLE_CUDA");
+    println!("cargo:rerun-if-env-changed=LIMINIKA_ENABLE_VULKAN");
+    println!("cargo:rerun-if-env-changed=LIMINIKA_ENABLE_METAL");
 
-    // Configure CMake build options based on active Cargo features
+    // Evaluate hardware acceleration backend enablement via Cargo features or env vars
+    let enable_cuda = cfg!(feature = "cuda")
+        || env::var("LIMINIKA_ENABLE_CUDA")
+            .map(|v| v == "1" || v == "ON" || v == "true")
+            .unwrap_or(false);
+    let enable_vulkan = cfg!(feature = "vulkan")
+        || env::var("LIMINIKA_ENABLE_VULKAN")
+            .map(|v| v == "1" || v == "ON" || v == "true")
+            .unwrap_or(false);
+    let enable_metal = cfg!(feature = "metal")
+        || env::var("LIMINIKA_ENABLE_METAL")
+            .map(|v| v == "1" || v == "ON" || v == "true")
+            .unwrap_or(false);
+
+    // Configure CMake build options with explicit ON/OFF flags
     let mut cfg = cmake::Config::new(&kernels_dir);
     cfg.define("CMAKE_POSITION_INDEPENDENT_CODE", "ON")
-        .define("BUILD_SHARED_LIBS", "OFF");
-
-    #[cfg(feature = "cuda")]
-    cfg.define("LIMINIKA_ENABLE_CUDA", "ON");
-
-    #[cfg(feature = "vulkan")]
-    cfg.define("LIMINIKA_ENABLE_VULKAN", "ON");
-
-    #[cfg(feature = "metal")]
-    cfg.define("LIMINIKA_ENABLE_METAL", "ON");
+        .define("BUILD_SHARED_LIBS", "OFF")
+        .define("LIMINIKA_ENABLE_CUDA", if enable_cuda { "ON" } else { "OFF" })
+        .define("LIMINIKA_ENABLE_VULKAN", if enable_vulkan { "ON" } else { "OFF" })
+        .define("LIMINIKA_ENABLE_METAL", if enable_metal { "ON" } else { "OFF" });
 
     let dst = cfg.build();
 
-    // Export linker search paths (supporting both lib and lib64 layout structures)
+    // Export linker search paths for native target library layouts
     println!("cargo:rustc-link-search=native={}/lib", dst.display());
     println!("cargo:rustc-link-search=native={}/lib64", dst.display());
 
-    // Link C++ core kernel library
+    // Link C++ CPU core kernel static library unconditionally
     println!("cargo:rustc-link-lib=static=liminika_kernels_cpu");
 
-    #[cfg(feature = "cuda")]
-    println!("cargo:rustc-link-lib=static=liminika_kernels_cuda");
+    // Conditionally link target acceleration static libraries
+    if enable_cuda {
+        println!("cargo:rustc-link-lib=static=liminika_kernels_cuda");
+    }
+    if enable_vulkan {
+        println!("cargo:rustc-link-lib=static=liminika_kernels_vulkan");
+    }
+    if enable_metal {
+        println!("cargo:rustc-link-lib=static=liminika_kernels_metal");
+    }
 
-    #[cfg(feature = "vulkan")]
-    println!("cargo:rustc-link-lib=static=liminika_kernels_vulkan");
-
-    #[cfg(feature = "metal")]
-    println!("cargo:rustc-link-lib=static=liminika_kernels_metal");
-
-    // Link native C++ runtime library based on target operating system
+    // Link system C++ standard library based on target operating system
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     match target_os.as_str() {
         "macos" => {

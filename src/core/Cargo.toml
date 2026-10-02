@@ -17,9 +17,8 @@ metal = []
 vulkan = []
 
 [dependencies]
-# Runtime dependencies go here (keep empty if zero-dependency in hot path)
+# Hot-path zero-dependency runtime requirements
 
 [build-dependencies]
-# Build script dependencies for C/C++ compilation via CMake or CC
 cc = "1.0"
 cmake = "0.1"

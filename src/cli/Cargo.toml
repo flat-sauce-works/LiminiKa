@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 [package]
 name = "liminika-cli"
 version.workspace = true
@@ -8,6 +10,12 @@ publish = false
 [[bin]]
 name = "liminika"
 path = "src/main.rs"
+
+[features]
+default = []
+cuda = ["liminika-core/cuda"]
+metal = ["liminika-core/metal"]
+vulkan = ["liminika-core/vulkan"]
 
 [dependencies]
 liminika-core = { path = "../core" }
