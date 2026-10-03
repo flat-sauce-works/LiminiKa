@@ -378,14 +378,14 @@ const _: () = {
 #[inline]
 #[must_use]
 fn is_aligned<T>(ptr: *const T) -> bool {
-    !ptr.is_null() && ((ptr as usize) % std::mem::align_of::<T>() == 0)
+    !ptr.is_null() && (ptr as usize).is_multiple_of(std::mem::align_of::<T>())
 }
 
 /// Helper function to check pointer alignment for a specific custom alignment requirement.
 #[inline]
 #[must_use]
 fn is_aligned_to<T>(ptr: *const T, align: usize) -> bool {
-    !ptr.is_null() && (align != 0) && ((ptr as usize) % align == 0)
+    !ptr.is_null() && (align != 0) && (ptr as usize).is_multiple_of(align)
 }
 
 /// Static version string constant for FFI boundary checks matching ABI v2.0.0.
@@ -565,7 +565,7 @@ pub unsafe extern "C" fn gcso_context_create(
 
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
         if (*config).head_dim == 0
-            || (*config).head_dim % 2 != 0
+            || !(*config).head_dim.is_multiple_of(2)
             || (*config).num_heads == 0
             || (*config).num_heads > 64
         {
@@ -1134,7 +1134,7 @@ pub unsafe extern "C" fn gcso_dpsr_kernel_create(
     if !is_aligned(kernel_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    if head_dim == 0 || head_dim % 2 != 0 || num_heads == 0 {
+    if head_dim == 0 || !head_dim.is_multiple_of(2) || num_heads == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     let res = catch_unwind(AssertUnwindSafe(|| unsafe {
@@ -1161,7 +1161,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering(
     if !is_aligned_to(query_tensor, 32) || !is_aligned(phase_deltas) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    if head_dim == 0 || head_dim % 2 != 0 || num_heads == 0 {
+    if head_dim == 0 || !head_dim.is_multiple_of(2) || num_heads == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
@@ -1186,7 +1186,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_safe(
     if !is_aligned_to(query_tensor, 32) || !is_aligned(phase_deltas) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    if head_dim == 0 || head_dim % 2 != 0 || num_heads == 0 || max_rad <= 0.0 {
+    if head_dim == 0 || !head_dim.is_multiple_of(2) || num_heads == 0 || max_rad <= 0.0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
@@ -1233,7 +1233,7 @@ pub unsafe extern "C" fn gcso_dpsr_lazy_unwrap_override(
     if !is_aligned_to(query_tensor, 32) || !is_aligned_to(context_accum, 32) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    if head_dim == 0 || head_dim % 2 != 0 || num_heads == 0 {
+    if head_dim == 0 || !head_dim.is_multiple_of(2) || num_heads == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
@@ -1342,7 +1342,7 @@ pub unsafe extern "C" fn gcso_pspm_dispatch_single_pass(
     if !is_aligned_to(query_tensor, 32) || !is_aligned(pspm_cfg) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    if head_dim == 0 || head_dim % 2 != 0 {
+    if head_dim == 0 || !head_dim.is_multiple_of(2) {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
