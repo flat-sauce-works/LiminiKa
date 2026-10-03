@@ -62,10 +62,16 @@
 #endif
 
 /* Explicit Memory Alignment Macros */
-#ifdef __cplusplus
+#if defined(__cplusplus)
     #define GCSO_ALIGNAS(n) alignas(n)
-#else
+#elif defined(__GNUC__) || defined(__clang__)
+    #define GCSO_ALIGNAS(n) __attribute__((aligned(n)))
+#elif defined(_MSC_VER)
+    #define GCSO_ALIGNAS(n) __declspec(align(n))
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
     #define GCSO_ALIGNAS(n) _Alignas(n)
+#else
+    #define GCSO_ALIGNAS(n)
 #endif
 
 /* Pointer Non-Aliasing Restrict Qualifier */

@@ -1,4 +1,4 @@
-# name: CMakeLists.txt
+# CMakeLists.txt
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 cmake_minimum_required(VERSION 3.18)
@@ -15,6 +15,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Enable Position Independent Code (PIC) globally for Rust FFI dynamic/static linking
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Default to RelWithDebInfo if no build type is specified (Prevents unoptimized/conflicting flags)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Choose the type of build." FORCE)
+endif()
+
 # Optional GPU backend compilation switches for future kernel integrations
 option(LIMINIKA_ENABLE_CUDA "Enable CUDA kernel integration" OFF)
 option(LIMINIKA_ENABLE_VULKAN "Enable Vulkan compute kernel integration" OFF)
@@ -26,7 +31,7 @@ if(LIMINIKA_ENABLE_CUDA)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 endif()
 
-# Enforce strict compiler warnings and execution flags bounded by C/CXX languages
+# Enforce strict compiler warnings and configuration-aware optimization flags
 if(MSVC)
     add_compile_options(
         $<$<COMPILE_LANGUAGE:C,CXX>:/W4>
@@ -34,6 +39,9 @@ if(MSVC)
         $<$<COMPILE_LANGUAGE:C,CXX>:/utf-8>
         $<$<COMPILE_LANGUAGE:CXX>:/permissive->
         $<$<COMPILE_LANGUAGE:CXX>:/EHsc>
+        $<$<COMPILE_LANGUAGE:C,CXX>:/wd4324> # Suppress structure alignment padding warning C4324
+        # Restrict /O2 strictly to Release and RelWithDebInfo configs to eliminate MSVC D8016 (/RTC1 conflict)
+        $<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>>:/O2>
     )
 else()
     add_compile_options(
@@ -42,6 +50,8 @@ else()
         $<$<COMPILE_LANGUAGE:C,CXX>:-Werror>
         $<$<COMPILE_LANGUAGE:C,CXX>:-pedantic>
         $<$<COMPILE_LANGUAGE:C>:-Wstrict-prototypes>
+        # Apply maximum optimization only in release/relwithdebinfo builds
+        $<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>>:-O3>
     )
 endif()
 

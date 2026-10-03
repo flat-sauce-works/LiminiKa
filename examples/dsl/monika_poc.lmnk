@@ -1,0 +1,12 @@
+// examples/dsl/monika_poc.lmnk
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+persona Monika extends "presets/persona/limina_base" {
+    attractors {
+        attract "docs/poetry_classics.md" @ 0.8
+    }
+}
+
+session LiteratureClub using Monika {
+    mode = creative_exploration
+}
