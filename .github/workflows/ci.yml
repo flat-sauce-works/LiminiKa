@@ -53,6 +53,11 @@ jobs:
       - name: Format Rust codebase
         run: cargo fmt --all
 
+      - name: Sync Cargo.lock with Cargo.toml
+        run: |
+          if [ -f "Cargo.toml" ]; then
+            cargo check --workspace --all-targets || true
+
       - name: Format C/C++ & GPU Kernel codebase
         run: |
           EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"

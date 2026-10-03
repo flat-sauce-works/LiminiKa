@@ -1,3 +1,4 @@
+# src/kernels/CMakeLists.txt
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 # -------------------------------------------------------------------
@@ -19,6 +20,14 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 option(LIMINIKA_ENABLE_CUDA "Enable CUDA compute backend" OFF)
 option(LIMINIKA_ENABLE_VULKAN "Enable Vulkan compute backend" OFF)
 option(LIMINIKA_ENABLE_METAL "Enable Metal compute backend" OFF)
+
+# Platform restriction guard for Metal backend
+if(LIMINIKA_ENABLE_METAL)
+    if(NOT APPLE)
+        message(STATUS "Metal backend is restricted to Apple platforms. Disabling LIMINIKA_ENABLE_METAL.")
+        set(LIMINIKA_ENABLE_METAL OFF CACHE BOOL "Enable Metal compute backend" FORCE)
+    endif()
+endif()
 
 # Header interface target for C-ABI layout definitions
 if(NOT TARGET liminika_headers)
@@ -115,8 +124,8 @@ if(LIMINIKA_ENABLE_VULKAN)
     endif()
 endif()
 
-# Optional Metal compute backend integration
-if(LIMINIKA_ENABLE_METAL)
+# Optional Metal compute backend integration (Restricted to Apple platforms)
+if(LIMINIKA_ENABLE_METAL AND APPLE)
     file(GLOB_RECURSE KERNEL_METAL_SOURCES
         CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/metal/*.cpp"

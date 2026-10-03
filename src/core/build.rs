@@ -1,3 +1,4 @@
+// src/core/build.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use std::env;
@@ -22,6 +23,10 @@ fn main() {
     let kernels_dir = repo_root.join("src/kernels");
     let include_dir = repo_root.join("include");
 
+    // Evaluate target OS to restrict platform-specific backends
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let is_apple = target_os == "macos" || target_os == "ios";
+
     // Re-run build script if included headers, sources, or build flags change
     println!("cargo:rerun-if-changed={}", include_dir.display());
     println!("cargo:rerun-if-changed={}", kernels_dir.display());
@@ -29,7 +34,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LIMINIKA_ENABLE_VULKAN");
     println!("cargo:rerun-if-env-changed=LIMINIKA_ENABLE_METAL");
 
-    // Evaluate CUDA backend enablement.
+    // Evaluate CUDA backend enablement
     let enable_cuda = match env::var("LIMINIKA_ENABLE_CUDA") {
         Ok(v) => {
             let lower = v.to_lowercase();
@@ -46,13 +51,15 @@ fn main() {
         Err(_) => cfg!(feature = "vulkan"),
     };
 
-    let enable_metal = match env::var("LIMINIKA_ENABLE_METAL") {
-        Ok(v) => {
-            let lower = v.to_lowercase();
-            lower == "1" || lower == "on" || lower == "true"
-        }
-        Err(_) => cfg!(target_os = "macos") || cfg!(feature = "metal"),
-    };
+    // Strict platform guard: Metal is enabled ONLY on Apple target platforms
+    let enable_metal = is_apple
+        && match env::var("LIMINIKA_ENABLE_METAL") {
+            Ok(v) => {
+                let lower = v.to_lowercase();
+                lower == "1" || lower == "on" || lower == "true"
+            }
+            Err(_) => cfg!(target_os = "macos") || cfg!(feature = "metal"),
+        };
 
     // Configure CMake build options with explicit ON/OFF flags
     let mut cfg = cmake::Config::new(&kernels_dir);
@@ -89,14 +96,13 @@ fn main() {
     if enable_vulkan {
         println!("cargo:rustc-link-lib=static=liminika_kernels_vulkan");
     }
-    if enable_metal {
+    if enable_metal && is_apple {
         println!("cargo:rustc-link-lib=static=liminika_kernels_metal");
     }
 
     // Link system C++ standard library based on target operating system
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     match target_os.as_str() {
-        "macos" => {
+        "macos" | "ios" => {
             println!("cargo:rustc-link-lib=c++");
         }
         "windows" => {
