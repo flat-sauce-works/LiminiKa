@@ -57,6 +57,7 @@ jobs:
         run: |
           if [ -f "Cargo.toml" ]; then
             cargo check --workspace --all-targets || true
+          fi
 
       - name: Format C/C++ & GPU Kernel codebase
         run: |
