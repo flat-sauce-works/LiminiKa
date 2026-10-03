@@ -30,8 +30,6 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LIMINIKA_ENABLE_METAL");
 
     // Evaluate CUDA backend enablement.
-    // Prioritize explicit LIMINIKA_ENABLE_CUDA environment variable override.
-    // Fallback to cargo feature "cuda" ONLY IF nvcc/CUDA Toolkit is present on the system.
     let enable_cuda = match env::var("LIMINIKA_ENABLE_CUDA") {
         Ok(v) => {
             let lower = v.to_lowercase();
@@ -75,9 +73,11 @@ fn main() {
 
     let dst = cfg.build();
 
-    // Export linker search paths for native target library layouts
+    // Export linker search paths for native target library layouts across different build generators
     println!("cargo:rustc-link-search=native={}/lib", dst.display());
     println!("cargo:rustc-link-search=native={}/lib64", dst.display());
+    println!("cargo:rustc-link-search=native={}/build", dst.display());
+    println!("cargo:rustc-link-search=native={}", dst.display());
 
     // Link C++ CPU core kernel static library unconditionally
     println!("cargo:rustc-link-lib=static=liminika_kernels_cpu");

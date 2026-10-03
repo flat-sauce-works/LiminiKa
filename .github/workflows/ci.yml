@@ -59,7 +59,7 @@ jobs:
           find . $EXCLUDE_DIRS -prune -o \( \
             -name "*.h" -o -name "*.hpp" -o -name "*.inl" -o \
             -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
-            -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o \
+            -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.mm" -o \
             -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
             -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o \
             -name "*.hip" -o -name "*.cl" \
@@ -128,6 +128,7 @@ jobs:
               - '**/*.cu'
               - '**/*.cuh'
               - '**/*.metal'
+              - '**/*.mm'
               - '**/*.comp'
               - '**/*.vert'
               - '**/*.frag'
@@ -238,7 +239,8 @@ jobs:
           EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"          
           SLASH_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
             -name "*.rs" -o -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
-            -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
+            -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.mm" -o \
+            -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
             -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o -name "*.hip" -o -name "*.cl" -o \
             -name "*.h" -o -name "*.hpp" -o -name "*.inl" \
           \) -type f -size +0c ! -name ".gitkeep" -exec grep -L "SPDX-License-Identifier: MIT OR Apache-2.0" {} + 2>/dev/null || true)
@@ -294,7 +296,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build clang clang-format cmake libclang-dev ccache vulkan-tools libshaderc-dev glslang-tools
+          sudo apt-get install -y ninja-build clang clang-format cmake libclang-dev ccache vulkan-tools libvulkan-dev glslang-tools libshaderc-dev
 
       - name: Install Build Dependencies & Cache Tools (macOS)
         if: runner.os == 'macOS'
@@ -334,8 +336,23 @@ jobs:
             echo "Directory include does not exist yet."
           fi
 
-      - name: Configure CMake (Linux & Windows)
-        if: runner.os != 'macOS'
+      - name: Configure CMake (Linux with Vulkan enabled)
+        if: runner.os == 'Linux'
+        run: |
+          if [ -f "CMakeLists.txt" ]; then
+            cmake -B build -S . -GNinja \
+              -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+              -DLIMINIKA_ENABLE_VULKAN=ON \
+              -DLIMINIKA_ENABLE_CUDA=OFF \
+              -DLIMINIKA_ENABLE_METAL=OFF \
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          else
+            echo "No root CMakeLists.txt found; skipping CMake configure."
+          fi
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
         run: |
           if [ -f "CMakeLists.txt" ]; then
             cmake -B build -S . -GNinja \
@@ -343,6 +360,7 @@ jobs:
               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
               -DLIMINIKA_ENABLE_CUDA=OFF \
               -DLIMINIKA_ENABLE_VULKAN=OFF \
+              -DLIMINIKA_ENABLE_METAL=OFF \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo
           else
             echo "No root CMakeLists.txt found; skipping CMake configure."
@@ -404,7 +422,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libclang-dev clang
+          sudo apt-get install -y cmake ninja-build libclang-dev clang libvulkan-dev glslang-tools libshaderc-dev
 
       - name: Install C/C++ & LLVM Dependencies for FFI/Bindgen (macOS)
         if: runner.os == 'macOS'
@@ -431,7 +449,46 @@ jobs:
       - name: Enable Rust caching
         uses: Swatinem/rust-cache@v2
 
-      - name: Fast check Rust workspace
+      - name: Fast check Rust workspace (Linux with Vulkan enabled)
+        if: runner.os == 'Linux'
+        env:
+          LIMINIKA_ENABLE_VULKAN: "1"
+        run: |
+          if [ -f "Cargo.toml" ]; then
+            CARGO_FLAGS=""
+            if cargo check --workspace --all-targets --locked 2>/dev/null; then
+              CARGO_FLAGS="--locked"
+            else
+              echo "Warning: Cargo.lock is out of sync with Cargo.toml. Running without --locked..."
+            fi
+            cargo check --workspace --all-targets $CARGO_FLAGS
+            cargo check --workspace --all-targets --no-default-features $CARGO_FLAGS
+            cargo check --workspace --all-targets --all-features $CARGO_FLAGS
+          else
+            echo "No root Cargo.toml found; skipping cargo check."
+          fi
+
+      - name: Fast check Rust workspace (macOS with Metal enabled)
+        if: runner.os == 'macOS'
+        env:
+          LIMINIKA_ENABLE_METAL: "1"
+        run: |
+          if [ -f "Cargo.toml" ]; then
+            CARGO_FLAGS=""
+            if cargo check --workspace --all-targets --locked 2>/dev/null; then
+              CARGO_FLAGS="--locked"
+            else
+              echo "Warning: Cargo.lock is out of sync with Cargo.toml. Running without --locked..."
+            fi
+            cargo check --workspace --all-targets $CARGO_FLAGS
+            cargo check --workspace --all-targets --no-default-features $CARGO_FLAGS
+            cargo check --workspace --all-targets --all-features $CARGO_FLAGS
+          else
+            echo "No root Cargo.toml found; skipping cargo check."
+          fi
+
+      - name: Fast check Rust workspace (Windows)
+        if: runner.os == 'Windows'
         run: |
           if [ -f "Cargo.toml" ]; then
             CARGO_FLAGS=""
