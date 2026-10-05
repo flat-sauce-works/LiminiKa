@@ -4,10 +4,9 @@
 //! Safe Rust wrapper for Dynamic Phase-Shifted RoPE (DPSR) and RIPA phase steering operations.
 
 use crate::abi::{
-    gcso_dpsr_apply_phase_steering, gcso_dpsr_apply_phase_steering_safe,
-    gcso_dpsr_kernel_create, gcso_dpsr_kernel_destroy, gcso_dpsr_lazy_unwrap_override,
-    gcso_qdps_filter_step, gcso_q7_t, GcsoDpsrKernelHandle, GcsoStatus, GCSO_ERROR_INVALID_ARGUMENT,
-    GCSO_SUCCESS,
+    gcso_dpsr_apply_phase_steering, gcso_dpsr_apply_phase_steering_safe, gcso_dpsr_kernel_create,
+    gcso_dpsr_kernel_destroy, gcso_dpsr_lazy_unwrap_override, gcso_q7_t, gcso_qdps_filter_step,
+    GcsoDpsrKernelHandle, GcsoStatus, GCSO_ERROR_INVALID_ARGUMENT, GCSO_SUCCESS,
 };
 
 /// Safe RAII wrapper around the C-ABI DPSR kernel handle.
@@ -136,7 +135,8 @@ impl DpsrKernel {
         context_accum: &[f32],
     ) -> Result<(), GcsoStatus> {
         let expected_query_len = (self.head_dim as usize) * (self.num_heads as usize);
-        if query_tensor.len() < expected_query_len || context_accum.len() < (self.num_heads as usize)
+        if query_tensor.len() < expected_query_len
+            || context_accum.len() < (self.num_heads as usize)
         {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
