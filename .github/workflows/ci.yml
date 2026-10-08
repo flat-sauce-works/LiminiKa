@@ -478,6 +478,7 @@ jobs:
         if: runner.os == 'macOS'
         env:
           LIMINIKA_ENABLE_METAL: "1"
+          LIMINIKA_ENABLE_VULKAN: "0"
         run: |
           if [ -f "Cargo.toml" ]; then
             CARGO_FLAGS=""
@@ -495,6 +496,8 @@ jobs:
 
       - name: Fast check Rust workspace (Windows)
         if: runner.os == 'Windows'
+        env:
+          LIMINIKA_ENABLE_VULKAN: "0"
         run: |
           if [ -f "Cargo.toml" ]; then
             CARGO_FLAGS=""

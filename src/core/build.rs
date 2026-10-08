@@ -27,6 +27,28 @@ fn is_nvcc_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Checks whether Vulkan SDK or vulkaninfo runtime is available on the target environment.
+fn is_vulkan_available() -> bool {
+    if env::var("VULKAN_SDK").is_ok() {
+        return true;
+    }
+
+    // Check system32 vulkan runtime on Windows target
+    if cfg!(target_os = "windows") {
+        if let Ok(windir) = env::var("WINDIR") {
+            let vulkan_dll = PathBuf::from(windir).join("System32").join("vulkan-1.dll");
+            if vulkan_dll.exists() {
+                return true;
+            }
+        }
+    }
+
+    Command::new("vulkaninfo")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
 /// Helper function to parse boolean environment variables.
 fn parse_bool_env(var_name: &str) -> Option<bool> {
     env::var(var_name).ok().map(|v| {
@@ -63,7 +85,7 @@ fn main() {
         .unwrap_or_else(|| env::var("CARGO_FEATURE_CUDA").is_ok() && is_nvcc_available());
 
     let enable_vulkan = parse_bool_env("LIMINIKA_ENABLE_VULKAN")
-        .unwrap_or_else(|| env::var("CARGO_FEATURE_VULKAN").is_ok());
+        .unwrap_or_else(|| env::var("CARGO_FEATURE_VULKAN").is_ok() && is_vulkan_available());
 
     // Metal is strictly restricted to Apple target platforms
     let enable_metal = is_apple
