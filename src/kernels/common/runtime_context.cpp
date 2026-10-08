@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 #include "gcso_internal.h"
+#include "liminika/gcso_config.h"
 
 #include <cstring>
 #include <exception>
@@ -139,7 +140,6 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_set_system_prompt_anchor(
             return GCSO_ERROR_INVALID_STATE;
         }
 
-        // Boundary Check: Ensure registered prompt anchors do not exceed configured limits
         if (GCSO_UNLIKELY(impl->prompt_anchor_count >= impl->config.max_prompt_anchors)) {
             return GCSO_ERROR_ACTION_HUB_FULL;
         }
@@ -197,7 +197,6 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_step_token(
                 return GCSO_ERROR_MISALIGNED_POINTER;
             }
 
-            // Step 1: QDPS Grid Filtering - cutoff updates below min_step_rad
             const gcso_status_t qdps_status = gcso_qdps_filter_step(
                 impl->accumulated_phase,
                 impl->num_heads,
@@ -207,7 +206,6 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_step_token(
                 return qdps_status;
             }
 
-            // Step 2: RIPA Soft-Bounded Phase Steering on low-frequency channels
             const gcso_status_t status = gcso_dpsr_apply_phase_steering_safe(
                 query_tensor,
                 impl->accumulated_phase,
@@ -220,7 +218,6 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_step_token(
             }
         }
 
-        // Step 3: Populate 128-byte Stigmergic Pointer Trail output in O(1) time
         if (trail_out != nullptr) {
             if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(trail_out) % alignof(gcso_pointer_trail_t) != 0)) {
                 return GCSO_ERROR_MISALIGNED_POINTER;
@@ -243,9 +240,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_step_token(
 /**
  * @brief Serializes runtime state into binary .gcso snapshot format.
  *
- * Two-Pass Serialization Pattern:
- * - If buffer is NULL, populates required byte count into buffer_size and returns GCSO_SUCCESS.
- * - If buffer_size is insufficient, populates required size and returns GCSO_ERROR_BUFFER_TOO_SMALL.
+ * Synchronized with GCSO_ABI_VERSION_HEX (0x00000101) for ABI v0.1.1.
  *
  * @param context Active runtime context handle.
  * @param buffer Target byte buffer (pass NULL to query required size).
@@ -282,8 +277,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_serialize(
         std::memset(buffer, 0, required_bytes);
 
         auto* header = reinterpret_cast<gcso_snapshot_header_t*>(buffer);
-        header->magic = 0x4F534347;   // ASCII "GCSO"
-        header->version = 0x00020000; // ABI Version 2.0.0 per c_abi_spec.md
+        header->magic = 0x4F534347;             // ASCII "GCSO"
+        header->version = GCSO_ABI_VERSION_HEX; // Unified ABI version 0.1.1 (0x00000101)
         header->total_size = static_cast<uint64_t>(required_bytes);
 
         const uint64_t payload_base = sizeof(gcso_snapshot_header_t);
@@ -308,13 +303,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_serialize(
 /**
  * @brief Restores runtime context state from deserialized binary .gcso snapshot.
  *
- * Validates container magic header (0x4F534347 "GCSO"), ABI version compatibility (0x00020000),
+ * Validates container magic header (0x4F534347 "GCSO"), ABI version compatibility (0x00000101),
  * size boundaries, and CRC32 payload checksum before allocating state.
  *
  * @param buffer Memory-mapped or allocated input snapshot buffer.
  * @param buffer_size Byte size of input snapshot buffer.
  * @param context_out Pointer to receive restored context handle.
- * @return GCSO_SUCCESS or GCSO_ERROR_CONTAINER_CORRUPTED.
+ * @return GCSO_SUCCESS or GCSO_ERROR_CONTAINER_CORRUPTED / GCSO_ERROR_VERSION_MISMATCH.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_context_deserialize(
     const uint8_t* GCSO_RESTRICT buffer,
@@ -339,7 +334,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_deserialize(
         if (header->magic != 0x4F534347) {
             return GCSO_ERROR_CONTAINER_CORRUPTED;
         }
-        if (header->version != 0x00020000) {
+        if (header->version != GCSO_ABI_VERSION_HEX) {
             return GCSO_ERROR_VERSION_MISMATCH;
         }
 

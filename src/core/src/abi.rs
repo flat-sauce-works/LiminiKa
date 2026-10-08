@@ -27,6 +27,31 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::traits::{AlignedSlice32, AlignedSliceMut32};
 
+/// Unified GCSO C-ABI Major Version Component (0.1.1).
+pub const GCSO_ABI_VERSION_MAJOR: u32 = 0;
+
+/// Unified GCSO C-ABI Minor Version Component (0.1.1).
+pub const GCSO_ABI_VERSION_MINOR: u32 = 1;
+
+/// Unified GCSO C-ABI Patch Version Component (0.1.1).
+pub const GCSO_ABI_VERSION_PATCH: u32 = 1;
+
+/// Hexadecimal Representation of Unified ABI Version 0.1.1 (`0x00000101`).
+pub const GCSO_ABI_VERSION_HEX: u32 = 0x0000_0101;
+
+/// String Representation of Unified ABI Version 0.1.1.
+pub const GCSO_ABI_VERSION_STRING: &str = "0.1.1";
+
+/// Validates C-ABI snapshot header version against core version invariant (`0x00000101`).
+#[inline]
+pub fn validate_abi_version(version_hex: u32) -> Result<(), gcso_status_t> {
+    if version_hex == GCSO_ABI_VERSION_HEX {
+        Ok(())
+    } else {
+        Err(gcso_status_t::GCSO_ERROR_VERSION_MISMATCH)
+    }
+}
+
 /// Helper macro to catch unwinding panics and safely bridge execution into C-ABI error status codes.
 ///
 /// Supports using the `?` operator on `Result<T, GcsoStatus>` inside the expression block.
@@ -460,9 +485,9 @@ pub struct gcso_srl_descriptor_t {
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct gcso_snapshot_header_t {
-    /// Format identifier magic constant (0x4F534347 = "GCSO").
+    /// Format identifier magic constant (`0x4F534347` = `"GCSO"`).
     pub magic: u32,
-    /// Snapshot ABI version (0x00000101 = 0.1.1).
+    /// Snapshot ABI version (`0x00000101` = v0.1.1).
     pub version: u32,
     /// Total binary size of file payload in bytes.
     pub total_size: u64,
@@ -491,7 +516,7 @@ impl Default for gcso_snapshot_header_t {
     fn default() -> Self {
         Self {
             magic: 0,
-            version: 0,
+            version: GCSO_ABI_VERSION_HEX,
             total_size: 0,
             action_hub_offset: 0,
             attractor_field_offset: 0,
@@ -595,13 +620,13 @@ static GCSO_ABI_VERSION: &[u8] = b"0.1.1\0";
 pub unsafe extern "C" fn gcso_abi_get_version(major: *mut u32, minor: *mut u32, patch: *mut u32) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         if is_aligned(major) {
-            unsafe { *major = 0 };
+            unsafe { *major = GCSO_ABI_VERSION_MAJOR };
         }
         if is_aligned(minor) {
-            unsafe { *minor = 1 };
+            unsafe { *minor = GCSO_ABI_VERSION_MINOR };
         }
         if is_aligned(patch) {
-            unsafe { *patch = 1 };
+            unsafe { *patch = GCSO_ABI_VERSION_PATCH };
         }
     }));
 }
@@ -861,7 +886,7 @@ pub unsafe extern "C" fn gcso_context_step_token(
     })
 }
 
-/// Serialize runtime state into binary format.
+/// Serialize runtime state into binary format conforming to GCSO ABI v0.1.1.
 ///
 /// # Safety
 /// `context` and `buffer_size` must be non-null pointers aligned to structure/type boundary.
@@ -894,8 +919,8 @@ pub unsafe extern "C" fn gcso_context_serialize(
             }
             ptr::write_bytes(buffer, 0, required);
             let header_ptr = buffer.cast::<gcso_snapshot_header_t>();
-            (*header_ptr).magic = 0x4F53_4347;
-            (*header_ptr).version = 0x0000_0101;
+            (*header_ptr).magic = 0x4F53_4347; // ASCII "GCSO"
+            (*header_ptr).version = GCSO_ABI_VERSION_HEX; // 0x00000101 (v0.1.1)
             (*header_ptr).total_size = required as u64;
             (*header_ptr).timestamp_epoch_sec = 1_774_900_000;
             *buffer_size = required;
@@ -904,7 +929,7 @@ pub unsafe extern "C" fn gcso_context_serialize(
     })
 }
 
-/// Deserialize binary snapshot to restore runtime state.
+/// Deserialize binary snapshot to restore runtime state with ABI v0.1.1 verification.
 ///
 /// # Safety
 /// `buffer` and `context_out` must be valid non-null pointers aligned to respective boundaries.
@@ -928,9 +953,7 @@ pub unsafe extern "C" fn gcso_context_deserialize(
         if header.magic != 0x4F53_4347 {
             return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
         }
-        if header.version != 0x0000_0101 {
-            return Err(GCSO_ERROR_VERSION_MISMATCH);
-        }
+        validate_abi_version(header.version)?;
         unsafe { *context_out = ptr::null_mut() };
         Ok(GCSO_SUCCESS)
     })

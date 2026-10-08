@@ -17,6 +17,13 @@
     #define GCSO_EXTERN_C_END
 #endif
 
+/* Unified GCSO C-ABI Versioning (0.1.1) */
+#define GCSO_ABI_VERSION_MAJOR 0
+#define GCSO_ABI_VERSION_MINOR 1
+#define GCSO_ABI_VERSION_PATCH 1
+#define GCSO_ABI_VERSION_HEX   0x00000101
+#define GCSO_ABI_VERSION_STRING "0.1.1"
+
 /* Dynamic Link Library Import/Export Macros */
 #if defined(_WIN32) || defined(__CYGWIN__)
     #if defined(GCSO_BUILD_DLL)
