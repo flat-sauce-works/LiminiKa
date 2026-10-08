@@ -24,7 +24,7 @@ use core::slice;
 #[cfg(feature = "std")]
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use crate::traits::{AlignedSlice16, AlignedSlice32, AlignedSliceMut32};
+use crate::traits::{AlignedSlice32, AlignedSliceMut32};
 
 /// Helper macro to catch unwinding panics and safely bridge execution into C-ABI error status codes.
 ///
@@ -45,32 +45,59 @@ macro_rules! ffi_boundary {
 /// Status code returned across the C-ABI FFI boundary.
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct GcsoStatus(pub i32);
+pub struct GcsoStatus(
+    /// Inner signed 32-bit integer status code.
+    pub i32,
+);
 
+/// Operation completed successfully.
 pub const GCSO_SUCCESS: GcsoStatus = GcsoStatus(0);
+/// Invalid argument or parameter passed to C-ABI function.
 pub const GCSO_ERROR_INVALID_ARGUMENT: GcsoStatus = GcsoStatus(-1);
+/// Memory allocation failure or capacity limit reached.
 pub const GCSO_ERROR_OUT_OF_MEMORY: GcsoStatus = GcsoStatus(-2);
+/// Destination buffer size is insufficient.
 pub const GCSO_ERROR_BUFFER_TOO_SMALL: GcsoStatus = GcsoStatus(-3);
+/// Unhandled internal Rust panic caught at FFI boundary.
 pub const GCSO_ERROR_PANIC_CAUGHT: GcsoStatus = GcsoStatus(-4);
+/// Unexpected NULL pointer supplied for required parameter.
 pub const GCSO_ERROR_NULL_POINTER: GcsoStatus = GcsoStatus(-5);
+/// Context or object is in an invalid state for requested operation.
 pub const GCSO_ERROR_INVALID_STATE: GcsoStatus = GcsoStatus(-6);
+/// Binary snapshot or ABI version mismatch detected.
 pub const GCSO_ERROR_VERSION_MISMATCH: GcsoStatus = GcsoStatus(-7);
+/// Pointer passed across FFI boundary violates required memory alignment.
 pub const GCSO_ERROR_MISALIGNED_POINTER: GcsoStatus = GcsoStatus(-8);
+/// Input/output or storage operation failure.
 pub const GCSO_ERROR_IO_FAILURE: GcsoStatus = GcsoStatus(-9);
+/// Action Hub table capacity fully saturated.
 pub const GCSO_ERROR_ACTION_HUB_FULL: GcsoStatus = GcsoStatus(-10);
+/// Feature or compute backend functionality not implemented.
 pub const GCSO_ERROR_NOT_IMPLEMENTED: GcsoStatus = GcsoStatus(-11);
 
+/// Target attractor anchor not found in topological field.
 pub const GCSO_ERROR_ATTRACTOR_NOT_FOUND: GcsoStatus = GcsoStatus(-20);
+/// DPSR phase angle delta exceeded allowable rotation range.
 pub const GCSO_ERROR_DPSR_PHASE_OVERFLOW: GcsoStatus = GcsoStatus(-30);
+/// QDPS quantization step fell below minimal threshold.
 pub const GCSO_ERROR_QDPS_UNDERFLOW: GcsoStatus = GcsoStatus(-31);
+/// EDBC entropy controller encountered numerical singularity.
 pub const GCSO_ERROR_EDBC_SINGULARITY: GcsoStatus = GcsoStatus(-40);
+/// Binary snapshot container header or payload corrupted.
 pub const GCSO_ERROR_CONTAINER_CORRUPTED: GcsoStatus = GcsoStatus(-50);
+/// ZIMMS zero-copy memory mapping or DMA allocation failed.
 pub const GCSO_ERROR_ZIMMS_MAPPING_FAILED: GcsoStatus = GcsoStatus(-51);
+/// PSPM sub-head group phase routing evaluation failed.
 pub const GCSO_ERROR_PSPM_ROUTING_FAILED: GcsoStatus = GcsoStatus(-60);
+/// PPRC keyframe index lookup or seek operation failed.
 pub const GCSO_ERROR_PPRC_SEEK_FAILED: GcsoStatus = GcsoStatus(-70);
+/// Unresolved topological obstruction encountered during path step.
 pub const GCSO_ERROR_OBSTRUCTION_UNRESOLVED: GcsoStatus = GcsoStatus(-80);
+/// Dynamic extension module not loaded or initialized in DAES slot.
 pub const GCSO_ERROR_EXTENSION_NOT_LOADED: GcsoStatus = GcsoStatus(-90);
+/// DAES dynamic scratchpad workspace fully occupied.
 pub const GCSO_ERROR_DAES_SCRATCHPAD_FULL: GcsoStatus = GcsoStatus(-91);
+/// Unknown internal system error.
 pub const GCSO_ERROR_UNKNOWN: GcsoStatus = GcsoStatus(-0x7FFF_FFFF);
 
 impl From<GcsoStatus> for Result<(), GcsoStatus> {
@@ -94,49 +121,71 @@ impl From<Result<(), GcsoStatus>> for GcsoStatus {
     }
 }
 
-/// C-ABI type alias for status codes.
+/// C-ABI type alias for status codes matching C headers.
 pub type gcso_status_t = GcsoStatus;
 
-/// Quantized 7-bit signed fixed-point integer (scale beta_Q7 = 1/128).
+/// Quantized 7-bit signed fixed-point integer (scale beta_Q7 = pi / 128).
 pub type gcso_q7_t = i8;
 
 /// 64-bit capability flags bitmask type.
 pub type gcso_capability_flags_t = u64;
 
-/// Opaque handles passed across C-ABI boundary (Thin Pointers).
+/// Opaque handle to runtime context instance.
 pub type GcsoContextHandle = *mut core::ffi::c_void;
+/// Opaque handle to container instance.
 pub type GcsoContainerHandle = *mut core::ffi::c_void;
+/// Opaque handle to Action Hub instance.
 pub type GcsoActionHubHandle = *mut core::ffi::c_void;
+/// Opaque handle to DAES slot instance.
 pub type GcsoDaesSlotHandle = *mut core::ffi::c_void;
+/// Opaque handle to Attractor Field instance.
 pub type GcsoAttractorFieldHandle = *mut core::ffi::c_void;
+/// Opaque handle to EDBC controller instance.
 pub type GcsoEdbcControllerHandle = *mut core::ffi::c_void;
+/// Opaque handle to DPSR kernel instance.
 pub type GcsoDpsrKernelHandle = *mut core::ffi::c_void;
+/// Opaque handle to PSPM router instance.
 pub type GcsoPspmRouterHandle = *mut core::ffi::c_void;
+/// Opaque handle to SRL adapter instance.
 pub type GcsoSrlAdapterHandle = *mut core::ffi::c_void;
 
-/// C-ABI type aliases for opaque handles matching C headers.
+/// C-ABI type alias for context handle.
 pub type gcso_context_handle_t = GcsoContextHandle;
+/// C-ABI type alias for container handle.
 pub type gcso_container_handle_t = GcsoContainerHandle;
+/// C-ABI type alias for Action Hub handle.
 pub type gcso_action_hub_handle_t = GcsoActionHubHandle;
+/// C-ABI type alias for DAES slot handle.
 pub type gcso_daes_slot_handle_t = GcsoDaesSlotHandle;
+/// C-ABI type alias for Attractor Field handle.
 pub type gcso_attractor_field_handle_t = GcsoAttractorFieldHandle;
+/// C-ABI type alias for EDBC controller handle.
 pub type gcso_edbc_controller_handle_t = GcsoEdbcControllerHandle;
+/// C-ABI type alias for DPSR kernel handle.
 pub type gcso_dpsr_kernel_handle_t = GcsoDpsrKernelHandle;
+/// C-ABI type alias for PSPM router handle.
 pub type gcso_pspm_router_handle_t = GcsoPspmRouterHandle;
+/// C-ABI type alias for SRL adapter handle.
 pub type gcso_srl_adapter_handle_t = GcsoSrlAdapterHandle;
 
 /// Classification types for topological attractor field anchors.
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum GcsoAnchorType {
+    /// System prompt text anchor.
     SystemPrompt = 0,
+    /// Dense feature embedding vector anchor.
     Embedding = 1,
+    /// Phase-conjugate repulsion anchor.
     PhaseRepulse = 2,
+    /// Topological knot/attractor anchor.
     Topological = 3,
+    /// Crystallized invariant anchor.
     Crystallized = 4,
 }
 
 impl GcsoAnchorType {
+    /// Convert raw `u32` value to `GcsoAnchorType` enum variant if valid.
     #[inline]
     #[must_use]
     pub fn from_u32(val: u32) -> Option<Self> {
@@ -151,20 +200,27 @@ impl GcsoAnchorType {
     }
 }
 
-/// C-ABI type alias for anchor types.
+/// C-ABI type alias for anchor type.
 pub type gcso_anchor_type_t = u32;
 
+/// System prompt string anchor descriptor type.
 pub const GCSO_ANCHOR_TYPE_SYSTEM_PROMPT: gcso_anchor_type_t = 0;
+/// Feature embedding anchor descriptor type.
 pub const GCSO_ANCHOR_TYPE_EMBEDDING: gcso_anchor_type_t = 1;
+/// Phase repulsion anchor descriptor type.
 pub const GCSO_ANCHOR_TYPE_PHASE_REPULSE: gcso_anchor_type_t = 2;
+/// Topological knot anchor descriptor type.
 pub const GCSO_ANCHOR_TYPE_TOPOLOGICAL: gcso_anchor_type_t = 3;
+/// Crystallized invariant anchor descriptor type.
 pub const GCSO_ANCHOR_TYPE_CRYSTALLIZED: gcso_anchor_type_t = 4;
 
 /// Descriptor header for size and ABI version validation.
 #[repr(C, align(4))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct gcso_descriptor_header_t {
+    /// Size of structure in bytes.
     pub struct_size: u32,
+    /// ABI version bitmask.
     pub abi_version: u32,
 }
 
@@ -172,6 +228,7 @@ pub struct gcso_descriptor_header_t {
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct gcso_paged_bitmask_t {
+    /// Four 64-bit word array storing 256 execution flags.
     pub bits: [u64; 4],
 }
 
@@ -179,18 +236,31 @@ pub struct gcso_paged_bitmask_t {
 #[repr(C, align(128))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct gcso_pointer_trail_t {
+    /// Current tagged memory pointer address.
     pub current_ptr: u64,
+    /// Previous tagged memory pointer address.
     pub prev_ptr: u64,
+    /// Opaque caller payload data.
     pub user_data: u64,
+    /// Accumulated graph edge traversal cost.
     pub transition_cost: i32,
+    /// Total path execution steps taken.
     pub step_count: u32,
+    /// Local trail density value for cellular swarm routing.
     pub stigmergic_density: f32,
+    /// Identifier of target attractor anchor point.
     pub target_anchor_id: u32,
+    /// Active topological cluster identifier.
     pub cluster_id: u32,
+    /// Linked adjacent trail identifier.
     pub linked_trail_id: u32,
+    /// Gravitational pull force exerted by nearby attractor.
     pub attractor_pull_force: f32,
+    /// Execution status bitmask flags.
     pub flags: u32,
+    /// Accumulated Q7 phase rotation state across 64 heads.
     pub accumulated_phase_delta: [gcso_q7_t; 64],
+    /// Alignment padding to guarantee 128-byte boundary.
     pub reserved_padding: [u8; 8],
 }
 
@@ -219,13 +289,21 @@ impl Default for gcso_pointer_trail_t {
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct gcso_daes_slot_t {
+    /// Active extension execution mode.
     pub mode: u32,
+    /// Ring buffer head write index.
     pub telemetry_ring_head: u16,
+    /// Ring buffer tail read index.
     pub telemetry_ring_tail: u16,
+    /// Total fast-path lookup cache hits.
     pub cache_hit_count: u32,
+    /// Flags configuring auto-tuning behavior.
     pub auto_tune_flags: u32,
+    /// Bitmask specifying fast-path bypass criteria.
     pub fast_path_bypass_mask: u64,
+    /// Cached jump pointers for accelerated execution.
     pub fast_path_shortcuts: [u64; 4],
+    /// Circular ledger array storing recent telemetry codes.
     pub telemetry_mini_ledger: [u8; 8],
 }
 
@@ -233,19 +311,33 @@ pub struct gcso_daes_slot_t {
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct gcso_config_t {
+    /// Dimension per attention head (must be even).
     pub head_dim: u32,
+    /// Total number of attention heads (<= 64).
     pub num_heads: u32,
+    /// Block size for paged KV cache allocation.
     pub paged_block_size: u32,
+    /// Floating-point scale factor for Q7 phase values.
     pub q7_phase_scale: f32,
+    /// Maximum allowed rotation angle for RIPA clamping (radians).
     pub ripa_clamp_max_rad: f32,
+    /// Minimum rotation angle threshold for QDPS filtering (radians).
     pub qdps_min_step_rad: f32,
+    /// Epsilon constant to prevent singularity in entropy calculation.
     pub entropy_singularity_eps: f32,
+    /// Maximum supported prompt anchor points in field.
     pub max_prompt_anchors: u32,
+    /// Maximum capacity of Action Hub table.
     pub action_hub_capacity: u32,
+    /// Enable CUDA warp shuffle instructions if supported.
     pub enable_cuda_warp_shuffle: u8,
+    /// Strict enforcement of zero dynamic allocations on hot path.
     pub enable_zero_alloc_strict: u8,
+    /// Initial operational mode for DAES scratchpad.
     pub daes_mode: u8,
+    /// Reserved configuration flags.
     pub reserved_flags: u8,
+    /// Reserved space for future expansion.
     pub reserved: [u8; 24],
 }
 
@@ -253,13 +345,21 @@ pub struct gcso_config_t {
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct gcso_edbc_state_t {
+    /// Moving Z-score measure of current attention entropy.
     pub moving_z_entropy: f32,
+    /// Z-score threshold triggering path bifurcation.
     pub bifurcation_threshold: f32,
+    /// Numerical safety threshold for singularity detection.
     pub singularity_eps: f32,
+    /// Rate of change of sliding window entropy.
     pub sliding_entropy_rate: f32,
+    /// Gain factor for phase repulsion forces.
     pub repulsion_gain: f32,
+    /// Current sampling temperature modifier.
     pub sample_temperature: f32,
+    /// Active execution branch selection mode.
     pub active_branch_mode: u32,
+    /// Reserved space for alignment and future parameters.
     pub reserved: [u8; 36],
 }
 
@@ -283,11 +383,17 @@ impl Default for gcso_edbc_state_t {
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct gcso_zimms_descriptor_t {
+    /// Memory address of virtual memory region.
     pub mapped_address: u64,
+    /// Total file length in bytes.
     pub file_size_bytes: u64,
+    /// Direct Memory Access (DMA) handle.
     pub dma_buffer_handle: u64,
+    /// Memory mapping attribute flags.
     pub flags: u32,
+    /// Low-level operating system file descriptor.
     pub fd_handle: i32,
+    /// Reserved space for future extension.
     pub reserved: [u8; 32],
 }
 
@@ -309,13 +415,21 @@ impl Default for gcso_zimms_descriptor_t {
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct gcso_pspm_config_t {
+    /// Number of attention heads allocated for factual processing.
     pub num_fact_heads: u16,
+    /// Number of attention heads allocated for logical reasoning.
     pub num_logic_heads: u16,
+    /// Number of attention heads allocated for exploratory sampling.
     pub num_explore_heads: u16,
+    /// Bitmask flags controlling routing logic.
     pub flags: u16,
+    /// Steering gain applied to factual head group.
     pub fact_phase_gain: f32,
+    /// Steering gain applied to logical head group.
     pub logic_phase_gain: f32,
+    /// Steering gain applied to exploratory head group.
     pub explore_phase_gain: f32,
+    /// Reserved padding for 16-byte alignment.
     pub reserved: [u8; 12],
 }
 
@@ -323,13 +437,21 @@ pub struct gcso_pspm_config_t {
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct gcso_srl_descriptor_t {
+    /// Index of target transformer layer.
     pub layer_idx: u32,
+    /// Rank of low-rank adapter (fixed to 1 for SRL).
     pub rank: u32,
+    /// Raw pointer to left projection vector U.
     pub u_vector_ptr: u64,
+    /// Raw pointer to right projection vector V.
     pub v_vector_ptr: u64,
+    /// Raw pointer to scalar gain factor array.
     pub gain_scalar_ptr: u64,
+    /// Scaling multiplier for residual injection.
     pub scale_factor: f32,
+    /// Flags indicating update mode and precision.
     pub flags: u32,
+    /// Reserved space for future alignment requirements.
     pub reserved: [u8; 24],
 }
 
@@ -337,17 +459,29 @@ pub struct gcso_srl_descriptor_t {
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct gcso_snapshot_header_t {
+    /// Format identifier magic constant (0x4F534347 = "GCSO").
     pub magic: u32,
+    /// Snapshot ABI version (0x00000101 = 0.1.1).
     pub version: u32,
+    /// Total binary size of file payload in bytes.
     pub total_size: u64,
+    /// Offset to Action Hub table section.
     pub action_hub_offset: u64,
+    /// Offset to Attractor Field section.
     pub attractor_field_offset: u64,
+    /// Offset to DPSR state section.
     pub dpsr_state_offset: u64,
+    /// Offset to SRL state section.
     pub srl_state_offset: u64,
+    /// Offset to EDBC controller state section.
     pub edbc_state_offset: u64,
+    /// CRC32 checksum over snapshot payload.
     pub checksum_crc32: u32,
+    /// Offset to DAES scratchpad state section.
     pub daes_slot_offset: u32,
+    /// Epoch timestamp of serialization.
     pub timestamp_epoch_sec: u64,
+    /// Padding to enforce 128-byte size and 64-byte alignment.
     pub reserved_padding: [u8; 56],
 }
 
@@ -375,14 +509,23 @@ impl Default for gcso_snapshot_header_t {
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct gcso_pprc_keyframe_header_t {
+    /// Frame classification (0 = Keyframe, 1 = Delta).
     pub frame_type: u32,
+    /// Absolute token index in sequence.
     pub token_index: u32,
+    /// Distance between consecutive keyframes.
     pub gop_length: u32,
+    /// Length of combined direction phase vector.
     pub composite_vector_length: f32,
+    /// Concentration parameter for von Mises distribution.
     pub von_mises_kappa: f32,
+    /// Scalar residual magnitude for sparse updates.
     pub sparse_scalar_residual: f32,
+    /// Offset to Intrinsic Phase Cache (ICache) data.
     pub icache_payload_offset: u64,
+    /// Offset to Position Phase Cache (PCache) data.
     pub pcache_payload_offset: u64,
+    /// Reserved space for future extension.
     pub reserved: [u8; 24],
 }
 
@@ -436,14 +579,14 @@ pub fn is_aligned_to<T>(ptr: *const T, align: usize) -> bool {
     !ptr.is_null() && align != 0 && align.is_power_of_two() && (ptr as usize) % align == 0
 }
 
-/// Static version string constant for FFI boundary checks matching ABI v2.0.0.
-static GCSO_ABI_VERSION: &[u8] = b"2.0.0\0";
+/// Static version string constant for FFI boundary checks matching ABI v0.1.1.
+static GCSO_ABI_VERSION: &[u8] = b"0.1.1\0";
 
 // ===================================================================
 // 1. System & Capability Query Interface
 // ===================================================================
 
-/// Retrieve numeric components of the GCSO C-ABI version (v2.0.0).
+/// Retrieve numeric components of the GCSO C-ABI version (v0.1.1).
 ///
 /// # Safety
 /// Pointers must be valid, non-null writable memory locations aligned to `u32`.
@@ -451,18 +594,18 @@ static GCSO_ABI_VERSION: &[u8] = b"2.0.0\0";
 pub unsafe extern "C" fn gcso_abi_get_version(major: *mut u32, minor: *mut u32, patch: *mut u32) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         if is_aligned(major) {
-            unsafe { *major = 2 };
+            unsafe { *major = 0 };
         }
         if is_aligned(minor) {
-            unsafe { *minor = 0 };
+            unsafe { *minor = 1 };
         }
         if is_aligned(patch) {
-            unsafe { *patch = 0 };
+            unsafe { *patch = 1 };
         }
     }));
 }
 
-/// Retrieve the static C-ABI version string ("2.0.0").
+/// Retrieve the static C-ABI version string ("0.1.1").
 ///
 /// # Safety
 /// Returns a valid null-terminated C string pointer that remains valid for the process lifetime.
@@ -519,6 +662,7 @@ pub unsafe extern "C" fn gcso_abi_query_capability(flags: *mut u64) -> GcsoStatu
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
+        #[allow(unused_mut)]
         let mut caps = 0x01u64; // Base CPU capability flag
         #[cfg(feature = "cuda")]
         {
@@ -750,7 +894,7 @@ pub unsafe extern "C" fn gcso_context_serialize(
             ptr::write_bytes(buffer, 0, required);
             let header_ptr = buffer.cast::<gcso_snapshot_header_t>();
             (*header_ptr).magic = 0x4F53_4347;
-            (*header_ptr).version = 0x0002_0000;
+            (*header_ptr).version = 0x0000_0101;
             (*header_ptr).total_size = required as u64;
             (*header_ptr).timestamp_epoch_sec = 1_774_900_000;
             *buffer_size = required;
@@ -783,7 +927,7 @@ pub unsafe extern "C" fn gcso_context_deserialize(
         if header.magic != 0x4F53_4347 {
             return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
         }
-        if header.version != 0x0002_0000 {
+        if header.version != 0x0000_0101 {
             return Err(GCSO_ERROR_VERSION_MISMATCH);
         }
         unsafe { *context_out = ptr::null_mut() };

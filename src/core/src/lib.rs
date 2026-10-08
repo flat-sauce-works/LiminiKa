@@ -23,14 +23,32 @@ extern crate std;
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
-// Core architecture module declarations
+// ===================================================================
+// Core Architecture Module Declarations
+// ===================================================================
+
+/// C-ABI bindings, FFI safety barriers, and status codes.
 pub mod abi;
+
+/// Dynamic Phase Steering and RIPA rotation routines for Hot Path execution.
 pub mod dpsr;
+
+/// Dynamic Entropy-Driven Decoding Branch Controller (EDBC) implementation.
 pub mod edbc;
+
+/// Mathematical primitives, geometric group operations, and Chebyshev spectral filtering.
 pub mod math;
+
+/// Sparse Residual Adapter Layer (SRL) logic and dynamic adapters.
 pub mod srl;
+
+/// Unified container storage and memory-mapped persistence (ZIMMS).
 pub mod storage;
+
+/// Cellular swarm coordination, Sidecar Pointer Table (SPT), and stigmergic routines.
 pub mod swarm;
+
+/// Core system contracts, traits, and alignment guarantees (Ground Truth).
 pub mod traits;
 
 // ===================================================================
