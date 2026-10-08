@@ -542,8 +542,13 @@ mod tests {
     #[test]
     fn test_qdps_filter() {
         let engine = DpsrEngine::new(128, 4).unwrap();
-        let mut raw_phases: [gcso_q7_t; 16] = [1, 5, -2, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        let mut aligned = AlignedSliceMut16::new(&mut raw_phases).unwrap();
+
+        // Enforce 16-byte alignment using repr(align(16))
+        #[repr(align(16))]
+        struct AlignedPhases([gcso_q7_t; 16]);
+
+        let mut raw_buf = AlignedPhases([1, 5, -2, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let mut aligned = AlignedSliceMut16::new(&mut raw_buf.0).unwrap();
 
         // 5 * Q7_PHASE_SCALE is ~0.122 rad
         assert!(engine.qdps_filter_step(&mut aligned, 0.1).is_ok());

@@ -79,6 +79,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LIMINIKA_ENABLE_CUDA");
     println!("cargo:rerun-if-env-changed=LIMINIKA_ENABLE_VULKAN");
     println!("cargo:rerun-if-env-changed=LIMINIKA_ENABLE_METAL");
+    println!("cargo:rerun-if-env-changed=VULKAN_SDK");
 
     // Evaluate GPU backend feature flags and env overrides
     let enable_cuda = parse_bool_env("LIMINIKA_ENABLE_CUDA")
@@ -147,13 +148,39 @@ fn main() {
 
     if enable_vulkan {
         println!("cargo:rustc-link-lib=static=liminika_kernels_vulkan");
+        let mut vulkan_lib_found = false;
+
         if let Ok(vulkan_sdk) = env::var("VULKAN_SDK") {
             println!("cargo:rustc-link-search=native={}/lib", vulkan_sdk);
             if is_windows {
                 println!("cargo:rustc-link-search=native={}/Lib", vulkan_sdk);
             }
+            vulkan_lib_found = true;
         }
-        println!("cargo:rustc-link-lib=dylib=vulkan");
+
+        // Search standard Windows Vulkan SDK installation directories if VULKAN_SDK is unset
+        if is_windows && !vulkan_lib_found {
+            if let Ok(program_files) = env::var("ProgramFiles") {
+                let vulkan_base = PathBuf::from(program_files).join("VulkanSDK");
+                if vulkan_base.exists() {
+                    if let Ok(entries) = std::fs::read_dir(vulkan_base) {
+                        for entry in entries.flatten() {
+                            let lib_path = entry.path().join("Lib");
+                            if lib_path.exists() {
+                                println!("cargo:rustc-link-search=native={}", lib_path.display());
+                                vulkan_lib_found = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Only link vulkan dylib if SDK import library path is explicitly available
+        if vulkan_lib_found || !is_windows {
+            println!("cargo:rustc-link-lib=dylib=vulkan");
+        }
     }
 
     if enable_metal && is_apple {
