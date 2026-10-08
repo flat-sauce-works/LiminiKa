@@ -27,9 +27,9 @@ use crate::traits::{AlignedSlice16, AlignedSlice32, AlignedSliceMut32};
 #[macro_export]
 macro_rules! ffi_boundary {
     ($body:expr) => {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<$crate::abi::GcsoStatus, $crate::abi::GcsoStatus> {
-            $body
-        })) {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || -> Result<$crate::abi::GcsoStatus, $crate::abi::GcsoStatus> { $body },
+        )) {
             Ok(Ok(status)) => status,
             Ok(Err(err_status)) => err_status,
             Err(_) => $crate::abi::GCSO_ERROR_PANIC_CAUGHT,
