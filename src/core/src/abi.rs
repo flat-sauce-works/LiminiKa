@@ -48,7 +48,7 @@ pub fn validate_abi_version(version_hex: u32) -> Result<(), gcso_status_t> {
     if version_hex == GCSO_ABI_VERSION_HEX {
         Ok(())
     } else {
-        Err(gcso_status_t::GCSO_ERROR_VERSION_MISMATCH)
+        Err(GCSO_ERROR_VERSION_MISMATCH)
     }
 }
 
