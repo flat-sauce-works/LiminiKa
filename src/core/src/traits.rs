@@ -331,6 +331,13 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
         Ok(Self { slice })
     }
 
+    /// Returns the underlying immutable slice reference.
+    #[inline(always)]
+    #[must_use]
+    pub fn as_slice(&self) -> &[T] {
+        self.slice
+    }
+
     /// Returns the underlying mutable slice reference.
     #[inline(always)]
     #[must_use]
@@ -632,14 +639,28 @@ impl<'a, T, const ALIGN: usize> TryFrom<&'a mut [T]> for AlignedSliceMut<'a, T, 
     }
 }
 
-/// Type aliases for standardized alignment requirements (16B DPSR, 32B SIMD, 64B Cacheline, 128B Dual Cacheline).
+/// 16-byte aligned immutable slice wrapper for DPSR phase steering arrays.
 pub type AlignedSlice16<'a, T> = AlignedSlice<'a, T, 16>;
+
+/// 16-byte aligned mutable slice wrapper for DPSR phase steering arrays.
 pub type AlignedSliceMut16<'a, T> = AlignedSliceMut<'a, T, 16>;
+
+/// 32-byte aligned immutable slice wrapper for SIMD/AVX vectors and tensor buffers.
 pub type AlignedSlice32<'a, T> = AlignedSlice<'a, T, 32>;
+
+/// 32-byte aligned mutable slice wrapper for SIMD/AVX vectors and tensor buffers.
 pub type AlignedSliceMut32<'a, T> = AlignedSliceMut<'a, T, 32>;
+
+/// 64-byte aligned immutable slice wrapper for CPU/GPU cache line structures.
 pub type AlignedSlice64<'a, T> = AlignedSlice<'a, T, 64>;
+
+/// 64-byte aligned mutable slice wrapper for CPU/GPU cache line structures.
 pub type AlignedSliceMut64<'a, T> = AlignedSliceMut<'a, T, 64>;
+
+/// 128-byte aligned immutable slice wrapper for dual cache line pointer trails.
 pub type AlignedSlice128<'a, T> = AlignedSlice<'a, T, 128>;
+
+/// 128-byte aligned mutable slice wrapper for dual cache line pointer trails.
 pub type AlignedSliceMut128<'a, T> = AlignedSliceMut<'a, T, 128>;
 
 /// Helper function to check pointer alignment for a generic custom byte boundary.

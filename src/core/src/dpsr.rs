@@ -543,7 +543,7 @@ mod tests {
         // 5 * Q7_PHASE_SCALE is ~0.122 rad
         assert!(engine.qdps_filter_step(&mut aligned, 0.1).is_ok());
 
-        let result = aligned.as_slice();
+        let result = aligned.as_ref();
         assert_eq!(result[0], 0); // Filtered out (< 0.1 rad)
         assert_eq!(result[1], 5); // Retained
         assert_eq!(result[2], 0); // Filtered out
