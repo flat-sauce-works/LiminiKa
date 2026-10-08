@@ -255,16 +255,16 @@ GCSO_STATIC_ASSERT(sizeof(gcso_snapshot_header_t) == 128, "gcso_snapshot_header_
 GCSO_STATIC_ASSERT(sizeof(gcso_pprc_keyframe_header_t) == 64, "gcso_pprc_keyframe_header_t size mismatch");
 
 /* Static Assertions for Alignment Invariants Matching traits.rs / abi.rs */
-GCSO_STATIC_ASSERT(alignof(gcso_paged_bitmask_t) == 32, "gcso_paged_bitmask_t alignment mismatch");
-GCSO_STATIC_ASSERT(alignof(gcso_pointer_trail_t) == 128, "gcso_pointer_trail_t alignment mismatch");
-GCSO_STATIC_ASSERT(alignof(gcso_daes_slot_t) == 64, "gcso_daes_slot_t alignment mismatch");
-GCSO_STATIC_ASSERT(alignof(gcso_config_t) == 16, "gcso_config_t alignment mismatch");
-GCSO_STATIC_ASSERT(alignof(gcso_edbc_state_t) == 32, "gcso_edbc_state_t alignment mismatch");
-GCSO_STATIC_ASSERT(alignof(gcso_zimms_descriptor_t) == 32, "gcso_zimms_descriptor_t alignment mismatch");
-GCSO_STATIC_ASSERT(alignof(gcso_pspm_config_t) == 16, "gcso_pspm_config_t alignment mismatch");
-GCSO_STATIC_ASSERT(alignof(gcso_srl_descriptor_t) == 32, "gcso_srl_descriptor_t alignment mismatch");
-GCSO_STATIC_ASSERT(alignof(gcso_snapshot_header_t) == 64, "gcso_snapshot_header_t alignment mismatch");
-GCSO_STATIC_ASSERT(alignof(gcso_pprc_keyframe_header_t) == 32, "gcso_pprc_keyframe_header_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_paged_bitmask_t) == 32, "gcso_paged_bitmask_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_pointer_trail_t) == 128, "gcso_pointer_trail_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_daes_slot_t) == 64, "gcso_daes_slot_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_config_t) == 16, "gcso_config_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_edbc_state_t) == 32, "gcso_edbc_state_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_zimms_descriptor_t) == 32, "gcso_zimms_descriptor_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_pspm_config_t) == 16, "gcso_pspm_config_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_srl_descriptor_t) == 32, "gcso_srl_descriptor_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_snapshot_header_t) == 64, "gcso_snapshot_header_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_pprc_keyframe_header_t) == 32, "gcso_pprc_keyframe_header_t alignment mismatch");
 
 /* Static Assertions for Exact Field Offsets Matching Rust abi.rs */
 GCSO_STATIC_ASSERT(offsetof(gcso_pointer_trail_t, accumulated_phase_delta) == 56,

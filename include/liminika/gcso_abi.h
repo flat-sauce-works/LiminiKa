@@ -444,7 +444,7 @@ gcso_pspm_router_create(const gcso_pspm_config_t* GCSO_RESTRICT config,
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_pspm_dispatch_single_pass(
     float* GCSO_RESTRICT query_tensor, const gcso_pspm_config_t* GCSO_RESTRICT pspm_cfg,
-    size_size head_dim) GCSO_NOEXCEPT;
+    size_t head_dim) GCSO_NOEXCEPT;
 
 /**
  * @brief Destroys a PSPM router instance.

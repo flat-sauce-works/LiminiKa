@@ -57,10 +57,7 @@
 #endif
 
 /* Branch Prediction Optimization Hints */
-#if defined(__cplusplus) && __cplusplus >= 202002L
-    #define GCSO_LIKELY(x) (x) [[likely]]
-    #define GCSO_UNLIKELY(x) (x) [[unlikely]]
-#elif defined(__GNUC__) || defined(__clang__)
+#if defined(__GNUC__) || defined(__clang__)
     #define GCSO_LIKELY(x) __builtin_expect(!!(x), 1)
     #define GCSO_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #else
@@ -68,17 +65,22 @@
     #define GCSO_UNLIKELY(x) (x)
 #endif
 
-/* Explicit Memory Alignment Macros */
+/* Explicit Memory Alignment & Query Macros */
 #if defined(__cplusplus)
     #define GCSO_ALIGNAS(n) alignas(n)
+    #define GCSO_ALIGNOF(type) alignof(type)
 #elif defined(_MSC_VER)
     #define GCSO_ALIGNAS(n) __declspec(align(n))
+    #define GCSO_ALIGNOF(type) __alignof(type)
 #elif defined(__GNUC__) || defined(__clang__)
     #define GCSO_ALIGNAS(n) __attribute__((aligned(n)))
+    #define GCSO_ALIGNOF(type) __alignof__(type)
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
     #define GCSO_ALIGNAS(n) _Alignas(n)
+    #define GCSO_ALIGNOF(type) _Alignof(type)
 #else
     #define GCSO_ALIGNAS(n)
+    #define GCSO_ALIGNOF(type) sizeof(type)
 #endif
 
 /* Pointer Non-Aliasing Restrict Qualifier */
