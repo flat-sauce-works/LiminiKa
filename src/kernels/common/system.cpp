@@ -12,12 +12,11 @@ GCSO_EXTERN_C_BEGIN
 
 /**
  * @brief Retrieves the numeric version identifiers for the GCSO C-ABI.
- * Synchronized with unified macros in gcso_config.h (v0.1.1).
  *
- * @param major Pointer to store the major version number (0).
- * @param minor Pointer to store the minor version number (1).
- * @param patch Pointer to store the patch version number (1).
- * @return GCSO_SUCCESS or error code.
+ * @param major Pointer to store the major version number.
+ * @param minor Pointer to store the minor version number.
+ * @param patch Pointer to store the patch version number.
+ * @return GCSO_SUCCESS on success, or appropriate error code on failure.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_abi_get_version(
     uint32_t* GCSO_RESTRICT major,
@@ -33,11 +32,14 @@ GCSO_API gcso_status_t GCSO_CALL gcso_abi_get_version(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
 
-    *major = GCSO_ABI_VERSION_MAJOR;
-    *minor = GCSO_ABI_VERSION_MINOR;
-    *patch = GCSO_ABI_VERSION_PATCH;
-
-    return GCSO_SUCCESS;
+    try {
+        *major = GCSO_ABI_VERSION_MAJOR;
+        *minor = GCSO_ABI_VERSION_MINOR;
+        *patch = GCSO_ABI_VERSION_PATCH;
+        return GCSO_SUCCESS;
+    } catch (...) {
+        return GCSO_ERROR_PANIC_CAUGHT;
+    }
 }
 
 /**
@@ -153,7 +155,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_abi_query_capability(
  *
  * Configures optimal parameters for 2-4GB VRAM execution targets, setting default head dimensions (128),
  * head counts (32), paged block sizes (32 tokens), RIPA soft-clamp bounds (5 degrees = 0.087266 rad), and
- * QDPS minimum step thresholds (0.01 rad) to avoid grid jitter under ultra-low quantization.
+ * qdps minimum step thresholds (0.01 rad) to avoid grid jitter under ultra-low quantization.
  *
  * @param config Pointer to user-allocated configuration descriptor to populate.
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER / GCSO_ERROR_MISALIGNED_POINTER.

@@ -1,4 +1,4 @@
-# src/kernels/CMakeLists.txt
+# name: src/kernels/CMakeLists.txt
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 # -------------------------------------------------------------------
@@ -79,7 +79,7 @@ if(LIMINIKA_ENABLE_METAL)
 endif()
 
 if(MSVC)
-    target_compile_options(liminika_kernels_cpu PRIVATE /W4 /O2 /permissive- /utf-8)
+    target_compile_options(liminika_kernels_cpu PRIVATE /W4 /O2 /EHsc /wd4324 /permissive- /utf-8)
 else()
     target_compile_options(liminika_kernels_cpu PRIVATE -Wall -Wextra -O3 -fstrict-aliasing)
 endif()
