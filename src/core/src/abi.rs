@@ -1220,9 +1220,7 @@ pub unsafe extern "C" fn gcso_daes_slot_create(slot_out: *mut GcsoDaesSlotHandle
 /// # Safety
 /// `slot` must be a valid non-null aligned pointer.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_daes_reset_telemetry(
-    slot: *mut gcso_daes_slot_t,
-) -> GcsoStatus {
+pub unsafe extern "C" fn gcso_daes_reset_telemetry(slot: *mut gcso_daes_slot_t) -> GcsoStatus {
     if slot.is_null() {
         return GCSO_ERROR_NULL_POINTER;
     }
