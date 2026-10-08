@@ -11,14 +11,14 @@
 GCSO_EXTERN_C_BEGIN
 
 /**
- * @brief Retrieves the numeric version identifiers for the GCSO C-ABI.
+ * @brief Retrieves the numeric version identifiers for the GCSO C-ABI (v0.1.1).
  *
  * @param major Pointer to store the major version number.
  * @param minor Pointer to store the minor version number.
  * @param patch Pointer to store the patch version number.
- * @return GCSO_SUCCESS on success, or appropriate error code on failure.
+ * @return GCSO_SUCCESS, GCSO_ERROR_NULL_POINTER, or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_abi_get_version(
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_abi_get_version(
     uint32_t* GCSO_RESTRICT major,
     uint32_t* GCSO_RESTRICT minor,
     uint32_t* GCSO_RESTRICT patch

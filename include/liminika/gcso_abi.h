@@ -13,18 +13,19 @@ GCSO_EXTERN_C_BEGIN
 // ===================================================================
 
 /**
- * @brief Retrieves the numeric version components of the GCSO C-ABI (v2.0.0).
+ * @brief Retrieves the numeric version identifiers for the GCSO C-ABI (v0.1.1).
  * @param major Pointer to store the major version number (aligned to uint32_t).
  * @param minor Pointer to store the minor version number (aligned to uint32_t).
  * @param patch Pointer to store the patch version number (aligned to uint32_t).
+ * @return GCSO_SUCCESS, GCSO_ERROR_NULL_POINTER, or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API void GCSO_CALL gcso_abi_get_version(uint32_t* GCSO_RESTRICT major,
-                                             uint32_t* GCSO_RESTRICT minor,
-                                             uint32_t* GCSO_RESTRICT patch) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
+gcso_abi_get_version(uint32_t* GCSO_RESTRICT major, uint32_t* GCSO_RESTRICT minor,
+                     uint32_t* GCSO_RESTRICT patch) GCSO_NOEXCEPT;
 
 /**
- * @brief Returns the static semantic version string literal for the GCSO kernel engine.
- * @return Const pointer to null-terminated static version string ("2.0.0").
+ * @brief Returns the static semantic version string literal for the GCSO kernel engine ("0.1.1").
+ * @return Const pointer to null-terminated static version string.
  */
 GCSO_NODISCARD GCSO_API const char* GCSO_CALL gcso_abi_get_version_string(void) GCSO_NOEXCEPT;
 

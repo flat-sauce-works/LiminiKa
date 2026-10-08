@@ -617,18 +617,26 @@ static GCSO_ABI_VERSION: &[u8] = b"0.1.1\0";
 /// # Safety
 /// Pointers must be valid, non-null writable memory locations aligned to `u32`.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_abi_get_version(major: *mut u32, minor: *mut u32, patch: *mut u32) {
-    let _ = catch_unwind(AssertUnwindSafe(|| {
-        if is_aligned(major) {
-            unsafe { *major = GCSO_ABI_VERSION_MAJOR };
+pub unsafe extern "C" fn gcso_abi_get_version(
+    major: *mut u32,
+    minor: *mut u32,
+    patch: *mut u32,
+) -> GcsoStatus {
+    if major.is_null() || minor.is_null() || patch.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(major) || !is_aligned(minor) || !is_aligned(patch) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+
+    ffi_boundary!({
+        unsafe {
+            *major = GCSO_ABI_VERSION_MAJOR;
+            *minor = GCSO_ABI_VERSION_MINOR;
+            *patch = GCSO_ABI_VERSION_PATCH;
         }
-        if is_aligned(minor) {
-            unsafe { *minor = GCSO_ABI_VERSION_MINOR };
-        }
-        if is_aligned(patch) {
-            unsafe { *patch = GCSO_ABI_VERSION_PATCH };
-        }
-    }));
+        Ok(GCSO_SUCCESS)
+    })
 }
 
 /// Retrieve the static C-ABI version string ("0.1.1").
