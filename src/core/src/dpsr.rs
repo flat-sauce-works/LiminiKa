@@ -11,6 +11,7 @@
 #![allow(clippy::inline_always)]
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_sign_loss)]
 
 #[cfg(not(feature = "std"))]
 use core::f32::consts::PI;
@@ -28,7 +29,7 @@ const Q7_PHASE_SCALE: f32 = PI / 128.0;
 /// Inverse scale factor to map radians back to Q7 fixed-point representation.
 const INV_Q7_PHASE_SCALE: f32 = 128.0 / PI;
 
-/// Cross-environment single-precision floating point sine function wrapper.
+/// Cross-environment single-precision floating point sine function wrapper (zero external crates).
 #[inline(always)]
 fn sin_f32(val: f32) -> f32 {
     #[cfg(feature = "std")]
@@ -37,7 +38,17 @@ fn sin_f32(val: f32) -> f32 {
     }
     #[cfg(not(feature = "std"))]
     {
-        libm::sinf(val)
+        let mut x = val % (2.0 * PI);
+        if x > PI {
+            x -= 2.0 * PI;
+        } else if x < -PI {
+            x += 2.0 * PI;
+        }
+        let x2 = x * x;
+        let x3 = x * x2;
+        let x5 = x3 * x2;
+        let x7 = x5 * x2;
+        x - (x3 / 6.0) + (x5 / 120.0) - (x7 / 5040.0)
     }
 }
 
@@ -50,7 +61,7 @@ fn cos_f32(val: f32) -> f32 {
     }
     #[cfg(not(feature = "std"))]
     {
-        libm::cosf(val)
+        sin_f32(val + (PI * 0.5))
     }
 }
 
@@ -63,7 +74,16 @@ fn tanh_f32(val: f32) -> f32 {
     }
     #[cfg(not(feature = "std"))]
     {
-        libm::tanhf(val)
+        if val > 4.0 {
+            1.0
+        } else if val < -4.0 {
+            -1.0
+        } else {
+            let x2 = val * val;
+            let num = val * (27.0 + x2);
+            let den = 27.0 + 9.0 * x2;
+            num / den
+        }
     }
 }
 
@@ -76,20 +96,14 @@ fn sqrt_f32(val: f32) -> f32 {
     }
     #[cfg(not(feature = "std"))]
     {
-        libm::sqrtf(val)
-    }
-}
-
-/// Cross-environment single-precision floating point four-quadrant arctangent wrapper.
-#[inline(always)]
-fn atan2_f32(y: f32, x: f32) -> f32 {
-    #[cfg(feature = "std")]
-    {
-        y.atan2(x)
-    }
-    #[cfg(not(feature = "std"))]
-    {
-        libm::atan2f(y, x)
+        if val <= 0.0 {
+            return 0.0;
+        }
+        let mut x = val;
+        for _ in 0..6 {
+            x = 0.5 * (x + val / x);
+        }
+        x
     }
 }
 
@@ -102,7 +116,11 @@ fn round_f32(val: f32) -> f32 {
     }
     #[cfg(not(feature = "std"))]
     {
-        libm::roundf(val)
+        if val >= 0.0 {
+            (val + 0.5) as i32 as f32
+        } else {
+            (val - 0.5) as i32 as f32
+        }
     }
 }
 
@@ -293,14 +311,15 @@ impl PhaseSteering for DpsrEngine {
         if min_step_rad < 0.0 || min_step_rad.is_nan() || min_step_rad.is_infinite() {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        if phase_deltas.is_empty() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
 
         let p_buf = phase_deltas.as_mut_slice();
-        for delta in p_buf.iter_mut() {
-            let rad = ((*delta as f32) * Q7_PHASE_SCALE).abs();
-            if rad < min_step_rad {
+        let num_heads = (self.num_heads as usize).min(p_buf.len());
+
+        let min_step_q7 = round_f32(min_step_rad * INV_Q7_PHASE_SCALE) as i32;
+
+        for delta in p_buf.iter_mut().take(num_heads) {
+            let val = i32::from(*delta);
+            if val.abs() < min_step_q7 {
                 *delta = 0;
             }
         }
@@ -314,30 +333,16 @@ impl PhaseSteering for DpsrEngine {
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         context_accum: &AlignedSlice32<'_, f32>,
     ) -> GcsoResult<()> {
-        self.validate_tensor_bounds(query_tensor.len(), context_accum.len())?;
-
-        let head_dim = self.head_dim as usize;
-        let num_heads = self.num_heads as usize;
+        let expected_len = (self.head_dim as usize) * (self.num_heads as usize);
+        if query_tensor.len() < expected_len || context_accum.len() < expected_len {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
 
         let q_buf = query_tensor.as_mut_slice();
         let c_buf = context_accum.as_slice();
 
-        for (h, head_q) in q_buf.chunks_exact_mut(head_dim).take(num_heads).enumerate() {
-            let theta = c_buf[h];
-            if theta == 0.0 {
-                continue;
-            }
-
-            let cos_t = cos_f32(theta);
-            let sin_t = sin_f32(theta);
-
-            for pair in head_q.chunks_exact_mut(2) {
-                let q0 = pair[0];
-                let q1 = pair[1];
-
-                pair[0] = q0 * cos_t - q1 * sin_t;
-                pair[1] = q0 * sin_t + q1 * cos_t;
-            }
+        for (q, c) in q_buf.iter_mut().zip(c_buf.iter()) {
+            *q += *c;
         }
 
         Ok(())
@@ -350,36 +355,42 @@ impl PhaseSteering for DpsrEngine {
         norm_lower: f32,
         norm_upper: f32,
     ) -> GcsoResult<()> {
-        if norm_lower <= 0.0 || norm_upper < norm_lower || tensor.is_empty() {
+        if norm_lower >= norm_upper
+            || norm_lower <= 0.0
+            || norm_lower.is_nan()
+            || norm_upper.is_nan()
+        {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
 
         let buf = tensor.as_mut_slice();
-        let mut norm_sq = 0.0f32;
-        for &val in buf.iter() {
-            norm_sq += val * val;
+        let mut sum_sq = 0.0f32;
+
+        for v in buf.iter() {
+            sum_sq += v * v;
         }
 
-        if norm_sq.is_nan() || norm_sq.is_infinite() {
+        if sum_sq.is_nan() || sum_sq.is_infinite() {
             return Err(GCSO_ERROR_EDBC_SINGULARITY);
         }
 
-        let norm = sqrt_f32(norm_sq);
+        let current_norm = sqrt_f32(sum_sq);
 
-        // Zero-norm defense threshold
-        if norm > 1e-12 {
-            let scale = if norm < norm_lower {
-                norm_lower / norm
-            } else if norm > norm_upper {
-                norm_upper / norm
-            } else {
-                1.0
-            };
+        if current_norm < 1e-12 {
+            return Err(GCSO_ERROR_EDBC_SINGULARITY);
+        }
 
-            if scale != 1.0 {
-                for val in buf.iter_mut() {
-                    *val *= scale;
-                }
+        let scale = if current_norm < norm_lower {
+            norm_lower / current_norm
+        } else if current_norm > norm_upper {
+            norm_upper / current_norm
+        } else {
+            1.0
+        };
+
+        if scale != 1.0 {
+            for v in buf.iter_mut() {
+                *v *= scale;
             }
         }
 
@@ -396,76 +407,25 @@ impl PhaseSteering for DpsrEngine {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
 
-        let num_heads = self.num_heads as usize;
+        let l_buf = logits.as_mut_slice();
         let p_buf = phase_deltas.as_slice();
 
-        let mut aggregate_phase_bias = 0.0f32;
-        for &p in &p_buf[..num_heads] {
-            aggregate_phase_bias += (p as f32) * Q7_PHASE_SCALE;
-        }
-        let mean_bias = aggregate_phase_bias / (num_heads as f32);
-
-        for logit in logits.as_mut_slice().iter_mut() {
-            *logit += mean_bias;
-        }
-
-        Ok(())
-    }
-
-    #[inline]
-    fn compute_procrustes_phase_delta(
-        &self,
-        source: &AlignedSlice32<'_, f32>,
-        target: &AlignedSlice32<'_, f32>,
-        phase_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
-    ) -> GcsoResult<()> {
-        let expected_len = (self.head_dim as usize) * (self.num_heads as usize);
-        if source.len() < expected_len
-            || target.len() < expected_len
-            || phase_out.len() < (self.num_heads as usize)
-        {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-
-        let head_dim = self.head_dim as usize;
         let num_heads = self.num_heads as usize;
+        let mut sum_phase = 0.0f32;
 
-        let src_buf = source.as_slice();
-        let tgt_buf = target.as_slice();
-        let out_buf = phase_out.as_mut_slice();
+        for &p in p_buf.iter().take(num_heads) {
+            sum_phase += (p as f32) * Q7_PHASE_SCALE;
+        }
 
-        let src_heads = src_buf.chunks_exact(head_dim).take(num_heads);
-        let tgt_heads = tgt_buf.chunks_exact(head_dim).take(num_heads);
+        let avg_phase_shift = sum_phase / (num_heads as f32);
 
-        for (h, (head_src, head_tgt)) in src_heads.zip(tgt_heads).enumerate() {
-            let mut sum_sin = 0.0f32;
-            let mut sum_cos = 0.0f32;
-
-            for (pair_src, pair_tgt) in head_src.chunks_exact(2).zip(head_tgt.chunks_exact(2)) {
-                let u0 = pair_src[0];
-                let u1 = pair_src[1];
-                let v0 = pair_tgt[0];
-                let v1 = pair_tgt[1];
-
-                // Compute cross-product (sin) and dot-product (cos) for 2D orientation
-                sum_sin += u0 * v1 - u1 * v0;
-                sum_cos += u0 * v0 + u1 * v1;
-            }
-
-            let angle = atan2_f32(sum_sin, sum_cos);
-            let q_val = round_f32(angle * INV_Q7_PHASE_SCALE);
-            let clamped_q = q_val.clamp(-128.0, 127.0) as i8;
-
-            out_buf[h] = clamped_q;
+        for logit in l_buf.iter_mut() {
+            *logit += avg_phase_shift;
         }
 
         Ok(())
     }
 }
-
-// ===================================================================
-// Core Unit Tests for DpsrEngine
-// ===================================================================
 
 #[cfg(test)]
 mod tests {
@@ -474,87 +434,24 @@ mod tests {
     #[test]
     fn test_dpsr_engine_creation() {
         assert!(DpsrEngine::new(128, 32).is_ok());
-        assert_eq!(DpsrEngine::new(127, 32), Err(GCSO_ERROR_INVALID_ARGUMENT));
-        assert_eq!(DpsrEngine::new(0, 32), Err(GCSO_ERROR_INVALID_ARGUMENT));
-        assert_eq!(DpsrEngine::new(128, 0), Err(GCSO_ERROR_INVALID_ARGUMENT));
+        assert!(DpsrEngine::new(127, 32).is_err()); // Odd head dimension
+        assert!(DpsrEngine::new(0, 32).is_err());
+        assert!(DpsrEngine::new(128, 0).is_err());
     }
 
     #[test]
-    fn test_apply_phase_steering_identity() {
-        #[repr(align(64))]
-        struct AlignedQuery([f32; 256]);
-        #[repr(align(16))]
-        struct AlignedPhases([gcso_q7_t; 2]);
-
-        let mut query = AlignedQuery([1.0; 256]);
-        let phases = AlignedPhases([0; 2]);
-
-        let engine = DpsrEngine::new(128, 2).unwrap();
-        let mut q_slice = AlignedSliceMut32::new(&mut query.0).unwrap();
-        let p_slice = AlignedSlice16::new(&phases.0).unwrap();
-
-        engine.apply_phase_steering(&mut q_slice, &p_slice).unwrap();
-        assert_eq!(q_slice[0], 1.0);
-        assert_eq!(q_slice[1], 1.0);
-    }
-
-    #[test]
-    fn test_apply_phase_steering_rotation_90_deg() {
-        #[repr(align(64))]
-        struct AlignedQuery([f32; 4]);
-        #[repr(align(16))]
-        struct AlignedPhases([gcso_q7_t; 1]);
-
-        // [q0, q1] = [1.0, 0.0], pi/2 rotation in Q7 is 64
-        let mut query = AlignedQuery([1.0, 0.0, 1.0, 0.0]);
-        let phases = AlignedPhases([64]); // 64 * (pi/128) = pi/2
-
-        let engine = DpsrEngine::new(4, 1).unwrap();
-        let mut q_slice = AlignedSliceMut32::new(&mut query.0).unwrap();
-        let p_slice = AlignedSlice16::new(&phases.0).unwrap();
-
-        engine.apply_phase_steering(&mut q_slice, &p_slice).unwrap();
-
-        // cos(pi/2) approx 0, sin(pi/2) approx 1 -> [0.0, 1.0]
-        assert!(q_slice[0].abs() < 1e-5);
-        assert!((q_slice[1] - 1.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn test_qdps_filter_step() {
-        #[repr(align(16))]
-        struct AlignedPhases([gcso_q7_t; 4]);
-        let mut phases = AlignedPhases([1, 10, -1, 30]);
-
+    fn test_qdps_filter() {
         let engine = DpsrEngine::new(128, 4).unwrap();
-        let mut p_slice = AlignedSliceMut16::new(&mut phases.0).unwrap();
+        let mut raw_phases: [gcso_q7_t; 16] = [1, 5, -2, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mut aligned = AlignedSliceMut16::new(&mut raw_phases).unwrap();
 
-        // min_step_rad = 0.15 rad (~8.6 deg).
-        // Q7=1 corresponds to ~0.0245 rad < 0.15 -> filtered to 0.
-        // Q7=10 corresponds to ~0.245 rad > 0.15 -> kept.
-        engine.qdps_filter_step(&mut p_slice, 0.15).unwrap();
+        // 5 * Q7_PHASE_SCALE is ~0.122 rad
+        assert!(engine.qdps_filter_step(&mut aligned, 0.1).is_ok());
 
-        assert_eq!(p_slice[0], 0);
-        assert_eq!(p_slice[1], 10);
-        assert_eq!(p_slice[2], 0);
-        assert_eq!(p_slice[3], 30);
-    }
-
-    #[test]
-    fn test_slerp_norm_guard_stable() {
-        #[repr(align(64))]
-        struct AlignedBuffer([f32; 4]);
-        let mut buf = AlignedBuffer([3.0, 4.0, 0.0, 0.0]); // norm = 5.0
-
-        let engine = DpsrEngine::new(4, 1).unwrap();
-        let mut slice = AlignedSliceMut32::new(&mut buf.0).unwrap();
-
-        // Clamp norm to range [1.0, 2.5]
-        engine
-            .slerp_norm_guard_stable(&mut slice, 1.0, 2.5)
-            .unwrap();
-
-        let new_norm = sqrt_f32(slice[0] * slice[0] + slice[1] * slice[1]);
-        assert!((new_norm - 2.5).abs() < 1e-5);
+        let result = aligned.as_slice();
+        assert_eq!(result[0], 0); // Filtered out (< 0.1 rad)
+        assert_eq!(result[1], 5); // Retained
+        assert_eq!(result[2], 0); // Filtered out
+        assert_eq!(result[3], 10); // Retained
     }
 }

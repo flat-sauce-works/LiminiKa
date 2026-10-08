@@ -473,12 +473,12 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if index range is out of bounds.
     /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if subslice start address is misaligned.
     #[inline(always)]
-    pub fn subslice_mut(&mut self, range: Range<usize>) -> GcsoResult<Self> {
+    pub fn subslice_mut(&mut self, range: Range<usize>) -> GcsoResult<AlignedSliceMut<'_, T, ALIGN>> {
         let sub = self
             .slice
             .get_mut(range)
             .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
-        Self::new(sub)
+        AlignedSliceMut::new(sub)
     }
 
     /// Splits the mutable slice at the given index if the right subslice satisfies alignment constraints.

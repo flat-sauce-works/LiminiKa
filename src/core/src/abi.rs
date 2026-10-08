@@ -13,17 +13,25 @@
 #![allow(clippy::must_use_candidate)]
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-use std::ffi::c_char;
+use core::ffi::c_char;
+use core::mem::{align_of, offset_of, size_of};
+use core::ptr;
+use core::slice;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::traits::{AlignedSlice16, AlignedSlice32, AlignedSliceMut32};
 
 /// Helper macro to catch unwinding panics and safely bridge execution into C-ABI error status codes.
+///
+/// Supports using the `?` operator on `Result<T, GcsoStatus>` inside the expression block.
 #[macro_export]
 macro_rules! ffi_boundary {
     ($body:expr) => {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
-            Ok(status) => status,
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<$crate::abi::GcsoStatus, $crate::abi::GcsoStatus> {
+            $body
+        })) {
+            Ok(Ok(status)) => status,
+            Ok(Err(err_status)) => err_status,
             Err(_) => $crate::abi::GCSO_ERROR_PANIC_CAUGHT,
         }
     };
@@ -91,15 +99,15 @@ pub type gcso_q7_t = i8;
 pub type gcso_capability_flags_t = u64;
 
 /// Opaque handles passed across C-ABI boundary (Thin Pointers).
-pub type GcsoContextHandle = *mut std::ffi::c_void;
-pub type GcsoContainerHandle = *mut std::ffi::c_void;
-pub type GcsoActionHubHandle = *mut std::ffi::c_void;
-pub type GcsoDaesSlotHandle = *mut std::ffi::c_void;
-pub type GcsoAttractorFieldHandle = *mut std::ffi::c_void;
-pub type GcsoEdbcControllerHandle = *mut std::ffi::c_void;
-pub type GcsoDpsrKernelHandle = *mut std::ffi::c_void;
-pub type GcsoPspmRouterHandle = *mut std::ffi::c_void;
-pub type GcsoSrlAdapterHandle = *mut std::ffi::c_void;
+pub type GcsoContextHandle = *mut core::ffi::c_void;
+pub type GcsoContainerHandle = *mut core::ffi::c_void;
+pub type GcsoActionHubHandle = *mut core::ffi::c_void;
+pub type GcsoDaesSlotHandle = *mut core::ffi::c_void;
+pub type GcsoAttractorFieldHandle = *mut core::ffi::c_void;
+pub type GcsoEdbcControllerHandle = *mut core::ffi::c_void;
+pub type GcsoDpsrKernelHandle = *mut core::ffi::c_void;
+pub type GcsoPspmRouterHandle = *mut core::ffi::c_void;
+pub type GcsoSrlAdapterHandle = *mut core::ffi::c_void;
 
 /// C-ABI type aliases for opaque handles matching C headers.
 pub type gcso_context_handle_t = GcsoContextHandle;
@@ -375,45 +383,45 @@ pub struct gcso_pprc_keyframe_header_t {
 
 // Static layout assertion checks to guarantee standard C-ABI structural alignment and field offsets
 const _: () = {
-    assert!(std::mem::size_of::<gcso_status_t>() == 4);
-    assert!(std::mem::size_of::<gcso_q7_t>() == 1);
-    assert!(std::mem::size_of::<gcso_descriptor_header_t>() == 8);
-    assert!(std::mem::size_of::<gcso_paged_bitmask_t>() == 32);
-    assert!(std::mem::size_of::<gcso_pointer_trail_t>() == 128);
-    assert!(std::mem::size_of::<gcso_daes_slot_t>() == 64);
-    assert!(std::mem::size_of::<gcso_config_t>() == 64);
-    assert!(std::mem::size_of::<gcso_edbc_state_t>() == 64);
-    assert!(std::mem::size_of::<gcso_zimms_descriptor_t>() == 64);
-    assert!(std::mem::size_of::<gcso_pspm_config_t>() == 32);
-    assert!(std::mem::size_of::<gcso_srl_descriptor_t>() == 64);
-    assert!(std::mem::size_of::<gcso_snapshot_header_t>() == 128);
-    assert!(std::mem::size_of::<gcso_pprc_keyframe_header_t>() == 64);
+    assert!(size_of::<gcso_status_t>() == 4);
+    assert!(size_of::<gcso_q7_t>() == 1);
+    assert!(size_of::<gcso_descriptor_header_t>() == 8);
+    assert!(size_of::<gcso_paged_bitmask_t>() == 32);
+    assert!(size_of::<gcso_pointer_trail_t>() == 128);
+    assert!(size_of::<gcso_daes_slot_t>() == 64);
+    assert!(size_of::<gcso_config_t>() == 64);
+    assert!(size_of::<gcso_edbc_state_t>() == 64);
+    assert!(size_of::<gcso_zimms_descriptor_t>() == 64);
+    assert!(size_of::<gcso_pspm_config_t>() == 32);
+    assert!(size_of::<gcso_srl_descriptor_t>() == 64);
+    assert!(size_of::<gcso_snapshot_header_t>() == 128);
+    assert!(size_of::<gcso_pprc_keyframe_header_t>() == 64);
 
-    assert!(std::mem::align_of::<gcso_paged_bitmask_t>() == 32);
-    assert!(std::mem::align_of::<gcso_pointer_trail_t>() == 128);
-    assert!(std::mem::align_of::<gcso_daes_slot_t>() == 64);
-    assert!(std::mem::align_of::<gcso_config_t>() == 16);
-    assert!(std::mem::align_of::<gcso_edbc_state_t>() == 32);
-    assert!(std::mem::align_of::<gcso_zimms_descriptor_t>() == 32);
-    assert!(std::mem::align_of::<gcso_pspm_config_t>() == 16);
-    assert!(std::mem::align_of::<gcso_srl_descriptor_t>() == 32);
-    assert!(std::mem::align_of::<gcso_snapshot_header_t>() == 64);
-    assert!(std::mem::align_of::<gcso_pprc_keyframe_header_t>() == 32);
+    assert!(align_of::<gcso_paged_bitmask_t>() == 32);
+    assert!(align_of::<gcso_pointer_trail_t>() == 128);
+    assert!(align_of::<gcso_daes_slot_t>() == 64);
+    assert!(align_of::<gcso_config_t>() == 16);
+    assert!(align_of::<gcso_edbc_state_t>() == 32);
+    assert!(align_of::<gcso_zimms_descriptor_t>() == 32);
+    assert!(align_of::<gcso_pspm_config_t>() == 16);
+    assert!(align_of::<gcso_srl_descriptor_t>() == 32);
+    assert!(align_of::<gcso_snapshot_header_t>() == 64);
+    assert!(align_of::<gcso_pprc_keyframe_header_t>() == 32);
 
-    assert!(std::mem::offset_of!(gcso_pointer_trail_t, accumulated_phase_delta) == 56);
-    assert!(std::mem::offset_of!(gcso_config_t, action_hub_capacity) == 32);
-    assert!(std::mem::offset_of!(gcso_snapshot_header_t, checksum_crc32) == 56);
-    assert!(std::mem::offset_of!(gcso_snapshot_header_t, timestamp_epoch_sec) == 64);
-    assert!(std::mem::offset_of!(gcso_daes_slot_t, fast_path_shortcuts) == 24);
-    assert!(std::mem::offset_of!(gcso_srl_descriptor_t, scale_factor) == 32);
-    assert!(std::mem::offset_of!(gcso_pprc_keyframe_header_t, icache_payload_offset) == 24);
+    assert!(offset_of!(gcso_pointer_trail_t, accumulated_phase_delta) == 56);
+    assert!(offset_of!(gcso_config_t, action_hub_capacity) == 32);
+    assert!(offset_of!(gcso_snapshot_header_t, checksum_crc32) == 56);
+    assert!(offset_of!(gcso_snapshot_header_t, timestamp_epoch_sec) == 64);
+    assert!(offset_of!(gcso_daes_slot_t, fast_path_shortcuts) == 24);
+    assert!(offset_of!(gcso_srl_descriptor_t, scale_factor) == 32);
+    assert!(offset_of!(gcso_pprc_keyframe_header_t, icache_payload_offset) == 24);
 };
 
 /// Helper function to check pointer natural alignment safely across architectures.
 #[inline]
 #[must_use]
 pub fn is_aligned<T>(ptr: *const T) -> bool {
-    !ptr.is_null() && (ptr as usize) % std::mem::align_of::<T>() == 0
+    !ptr.is_null() && (ptr as usize) % align_of::<T>() == 0
 }
 
 /// Helper function to check pointer alignment for a specific custom alignment requirement.
@@ -520,7 +528,7 @@ pub unsafe extern "C" fn gcso_abi_query_capability(flags: *mut u64) -> GcsoStatu
             caps |= 1 << 3;
         }
         unsafe { *flags = caps };
-        GCSO_SUCCESS
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -543,7 +551,7 @@ pub unsafe extern "C" fn gcso_config_init_default(config: *mut gcso_config_t) ->
                 head_dim: 128,
                 num_heads: 32,
                 paged_block_size: 32,
-                q7_phase_scale: std::f32::consts::PI / 128.0,
+                q7_phase_scale: core::f32::consts::PI / 128.0,
                 ripa_clamp_max_rad: 0.087_266_46,
                 qdps_min_step_rad: 0.01,
                 entropy_singularity_eps: 1e-12,
@@ -556,7 +564,7 @@ pub unsafe extern "C" fn gcso_config_init_default(config: *mut gcso_config_t) ->
                 reserved: [0; 24],
             };
         }
-        GCSO_SUCCESS
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -602,11 +610,11 @@ pub unsafe extern "C" fn gcso_context_create(
                 || cfg.num_heads == 0
                 || cfg.num_heads > 64
             {
-                return GCSO_ERROR_INVALID_ARGUMENT;
+                return Err(GCSO_ERROR_INVALID_ARGUMENT);
             }
-            *context_out = std::ptr::null_mut();
+            *context_out = ptr::null_mut();
         }
-        GCSO_SUCCESS
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -622,7 +630,7 @@ pub unsafe extern "C" fn gcso_context_reset(context: GcsoContextHandle) -> GcsoS
     if !is_aligned(context) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Set system prompt text as Anchor Attractor.
@@ -647,9 +655,9 @@ pub unsafe extern "C" fn gcso_context_set_system_prompt_anchor(
     ffi_boundary!({
         let c_str = unsafe { std::ffi::CStr::from_ptr(prompt_text) };
         if c_str.to_str().is_err() {
-            return GCSO_ERROR_INVALID_ARGUMENT;
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        GCSO_SUCCESS
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -685,21 +693,21 @@ pub unsafe extern "C" fn gcso_context_step_token(
 
     ffi_boundary!({
         if !query_tensor.is_null() {
-            let slice = unsafe { std::slice::from_raw_parts_mut(query_tensor, 128) };
+            let slice = unsafe { slice::from_raw_parts_mut(query_tensor, 128) };
             let _ = AlignedSliceMut32::new(slice)?;
         }
         if !key_tensor.is_null() {
-            let slice = unsafe { std::slice::from_raw_parts_mut(key_tensor, 128) };
+            let slice = unsafe { slice::from_raw_parts_mut(key_tensor, 128) };
             let _ = AlignedSliceMut32::new(slice)?;
         }
         if !trail_out.is_null() {
             unsafe {
-                std::ptr::write_bytes(trail_out, 0, 1);
+                ptr::write_bytes(trail_out, 0, 1);
                 (*trail_out).current_ptr = u64::from(token_id);
                 (*trail_out).stigmergic_density = 1.0;
             }
         }
-        GCSO_SUCCESS
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -722,19 +730,19 @@ pub unsafe extern "C" fn gcso_context_serialize(
 
     ffi_boundary!({
         unsafe {
-            let required = std::mem::size_of::<gcso_snapshot_header_t>();
+            let required = size_of::<gcso_snapshot_header_t>();
             if buffer.is_null() {
                 *buffer_size = required;
-                return GCSO_SUCCESS;
+                return Ok(GCSO_SUCCESS);
             }
             if *buffer_size < required {
                 *buffer_size = required;
-                return GCSO_ERROR_BUFFER_TOO_SMALL;
+                return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
             }
             if !is_aligned(buffer) {
-                return GCSO_ERROR_MISALIGNED_POINTER;
+                return Err(GCSO_ERROR_MISALIGNED_POINTER);
             }
-            std::ptr::write_bytes(buffer, 0, required);
+            ptr::write_bytes(buffer, 0, required);
             let header_ptr = buffer.cast::<gcso_snapshot_header_t>();
             (*header_ptr).magic = 0x4F53_4347;
             (*header_ptr).version = 0x0002_0000;
@@ -742,7 +750,7 @@ pub unsafe extern "C" fn gcso_context_serialize(
             (*header_ptr).timestamp_epoch_sec = 1_774_900_000;
             *buffer_size = required;
         }
-        GCSO_SUCCESS
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -762,19 +770,19 @@ pub unsafe extern "C" fn gcso_context_deserialize(
     if !is_aligned(context_out) || !is_aligned(buffer) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    if buffer_size < std::mem::size_of::<gcso_snapshot_header_t>() {
+    if buffer_size < size_of::<gcso_snapshot_header_t>() {
         return GCSO_ERROR_CONTAINER_CORRUPTED;
     }
     ffi_boundary!({
         let header = unsafe { &*buffer.cast::<gcso_snapshot_header_t>() };
         if header.magic != 0x4F53_4347 {
-            return GCSO_ERROR_CONTAINER_CORRUPTED;
+            return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
         }
         if header.version != 0x0002_0000 {
-            return GCSO_ERROR_VERSION_MISMATCH;
+            return Err(GCSO_ERROR_VERSION_MISMATCH);
         }
-        unsafe { *context_out = std::ptr::null_mut() };
-        GCSO_SUCCESS
+        unsafe { *context_out = ptr::null_mut() };
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -790,7 +798,7 @@ pub unsafe extern "C" fn gcso_context_destroy(context: GcsoContextHandle) -> Gcs
     if !is_aligned(context) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Destroy container handle and release resources.
@@ -805,7 +813,7 @@ pub unsafe extern "C" fn gcso_container_destroy(container: GcsoContainerHandle) 
     if !is_aligned(container) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Seek to a specific token index in the PPRC keyframe KV cache index.
@@ -826,10 +834,10 @@ pub unsafe extern "C" fn gcso_pprc_seek_to_token(
     }
     ffi_boundary!({
         unsafe {
-            std::ptr::write_bytes(keyframe_header_out, 0, 1);
+            ptr::write_bytes(keyframe_header_out, 0, 1);
             (*keyframe_header_out).token_index = token_index;
         }
-        GCSO_SUCCESS
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -856,8 +864,8 @@ pub unsafe extern "C" fn gcso_action_hub_create(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     ffi_boundary!({
-        unsafe { *hub_out = std::ptr::null_mut() };
-        GCSO_SUCCESS
+        unsafe { *hub_out = ptr::null_mut() };
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -879,11 +887,11 @@ pub unsafe extern "C" fn gcso_action_hub_step_pointer(
     }
     ffi_boundary!({
         unsafe {
-            std::ptr::write_bytes(trail_out, 0, 1);
+            ptr::write_bytes(trail_out, 0, 1);
             (*trail_out).current_ptr = current_ptr;
             (*trail_out).stigmergic_density = 1.0;
         }
-        GCSO_SUCCESS
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -921,7 +929,7 @@ pub unsafe extern "C" fn gcso_swarm_cell_chunk_step(
     if chunk_len == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Apply attractor pull force to steer active pointer chains.
@@ -944,7 +952,7 @@ pub unsafe extern "C" fn gcso_action_hub_pull_trail_to_attractor(
     if pull_force.is_nan() || pull_force.is_infinite() {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Link adjacent cellular hallucinated trails into contiguous trace graphs.
@@ -963,7 +971,7 @@ pub unsafe extern "C" fn gcso_action_hub_link_hallucinated_trails(
     if !is_aligned(context) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Perform bit-tree reduction across paged bitmasks.
@@ -987,7 +995,7 @@ pub unsafe extern "C" fn gcso_action_hub_reduce_bit_tree(
     }
     ffi_boundary!({
         let mut acc = [0u64; 4];
-        let masks = unsafe { std::slice::from_raw_parts(bitmasks, num_masks) };
+        let masks = unsafe { slice::from_raw_parts(bitmasks, num_masks) };
         for m in masks {
             acc[0] |= m.bits[0];
             acc[1] |= m.bits[1];
@@ -995,7 +1003,7 @@ pub unsafe extern "C" fn gcso_action_hub_reduce_bit_tree(
             acc[3] |= m.bits[3];
         }
         unsafe { (*reduced_out).bits = acc };
-        GCSO_SUCCESS
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -1019,8 +1027,8 @@ pub unsafe extern "C" fn gcso_action_hub_paged_block_warp_bitmask(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     ffi_boundary!({
-        unsafe { std::ptr::write_bytes(mask_out, 0, 1) };
-        GCSO_SUCCESS
+        unsafe { ptr::write_bytes(mask_out, 0, 1) };
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -1036,7 +1044,7 @@ pub unsafe extern "C" fn gcso_action_hub_destroy(hub: GcsoActionHubHandle) -> Gc
     if !is_aligned(hub) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Allocate DAES slot instance.
@@ -1052,8 +1060,8 @@ pub unsafe extern "C" fn gcso_daes_slot_create(slot_out: *mut GcsoDaesSlotHandle
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
-        unsafe { *slot_out = std::ptr::null_mut() };
-        GCSO_SUCCESS
+        unsafe { *slot_out = ptr::null_mut() };
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -1077,9 +1085,9 @@ pub unsafe extern "C" fn gcso_daes_fast_path_lookup(
         let slot_ref = unsafe { &*slot };
         if (slot_ref.fast_path_bypass_mask & input_key) != 0 {
             unsafe { *shortcut_out = slot_ref.fast_path_shortcuts[0] };
-            GCSO_SUCCESS
+            Ok(GCSO_SUCCESS)
         } else {
-            GCSO_ERROR_INVALID_STATE
+            Err(GCSO_ERROR_INVALID_STATE)
         }
     })
 }
@@ -1105,7 +1113,7 @@ pub unsafe extern "C" fn gcso_daes_telemetry_push(
             (*slot).telemetry_mini_ledger[head] = metric_code;
             (*slot).telemetry_ring_head = (*slot).telemetry_ring_head.wrapping_add(1);
         }
-        GCSO_SUCCESS
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -1126,7 +1134,7 @@ pub unsafe extern "C" fn gcso_daes_set_mode(slot: *mut gcso_daes_slot_t, mode: u
     }
     ffi_boundary!({
         unsafe { (*slot).mode = mode };
-        GCSO_SUCCESS
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -1145,7 +1153,7 @@ pub unsafe extern "C" fn gcso_daes_evaluate_auto_tune(
     if !is_aligned(slot) || !is_aligned(config_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Destroy DAES slot instance.
@@ -1160,7 +1168,7 @@ pub unsafe extern "C" fn gcso_daes_slot_destroy(slot: GcsoDaesSlotHandle) -> Gcs
     if !is_aligned(slot) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 // ===================================================================
@@ -1187,8 +1195,8 @@ pub unsafe extern "C" fn gcso_dpsr_kernel_create(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     ffi_boundary!({
-        unsafe { *kernel_out = std::ptr::null_mut() };
-        GCSO_SUCCESS
+        unsafe { *kernel_out = ptr::null_mut() };
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -1212,7 +1220,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering(
     if head_dim == 0 || head_dim % 2 != 0 || num_heads == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Apply RIPA soft-bounded tanh clamping on low-frequency channels.
@@ -1236,7 +1244,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_safe(
     if head_dim == 0 || head_dim % 2 != 0 || num_heads == 0 || max_rad <= 0.0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// QDPS discrete filter: cuts off phase rotation steps falling below min_step_rad.
@@ -1258,7 +1266,7 @@ pub unsafe extern "C" fn gcso_qdps_filter_step(
     if len == 0 || min_step_rad < 0.0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Lazy Phase Unwrapping override on Query tensor.
@@ -1281,7 +1289,7 @@ pub unsafe extern "C" fn gcso_dpsr_lazy_unwrap_override(
     if head_dim == 0 || head_dim % 2 != 0 || num_heads == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Execute norm-guarded Slerp phase stabilization.
@@ -1304,7 +1312,7 @@ pub unsafe extern "C" fn gcso_dpsr_slerp_norm_guard_stable(
     if dim == 0 || norm_lower >= norm_upper || norm_lower <= 0.0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Fused inline logit phase shift prior to Softmax.
@@ -1327,7 +1335,7 @@ pub unsafe extern "C" fn gcso_dpsr_fused_logit_shift(
     if vocab_size == 0 || num_heads == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Destroy DPSR kernel instance.
@@ -1342,7 +1350,7 @@ pub unsafe extern "C" fn gcso_dpsr_kernel_destroy(kernel: GcsoDpsrKernelHandle) 
     if !is_aligned(kernel) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Allocate PSPM router instance.
@@ -1361,8 +1369,8 @@ pub unsafe extern "C" fn gcso_pspm_router_create(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
-        unsafe { *router_out = std::ptr::null_mut() };
-        GCSO_SUCCESS
+        unsafe { *router_out = ptr::null_mut() };
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -1385,7 +1393,7 @@ pub unsafe extern "C" fn gcso_pspm_dispatch_single_pass(
     if head_dim == 0 || head_dim % 2 != 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Destroy PSPM router instance.
@@ -1400,7 +1408,7 @@ pub unsafe extern "C" fn gcso_pspm_router_destroy(router: GcsoPspmRouterHandle) 
     if !is_aligned(router) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Create Sparse Residual Adapter Layer (SRL) instance.
@@ -1419,8 +1427,8 @@ pub unsafe extern "C" fn gcso_srl_adapter_create(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
-        unsafe { *adapter_out = std::ptr::null_mut() };
-        GCSO_SUCCESS
+        unsafe { *adapter_out = ptr::null_mut() };
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -1445,7 +1453,7 @@ pub unsafe extern "C" fn gcso_srl_eval_rank1(
     if dim_in == 0 || dim_out == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// L2P-SVD: Projects fine-tuned LoRA matrices via SVD into phase profiles and SRL vectors.
@@ -1475,7 +1483,7 @@ pub unsafe extern "C" fn gcso_l2p_svd_project_lora(
     if rank == 0 || dim_in == 0 || dim_out == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Destroy SRL adapter instance.
@@ -1490,7 +1498,7 @@ pub unsafe extern "C" fn gcso_srl_adapter_destroy(adapter: GcsoSrlAdapterHandle)
     if !is_aligned(adapter) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 // ===================================================================
@@ -1512,8 +1520,8 @@ pub unsafe extern "C" fn gcso_attractor_field_create(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
-        unsafe { *field_out = std::ptr::null_mut() };
-        GCSO_SUCCESS
+        unsafe { *field_out = ptr::null_mut() };
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -1539,10 +1547,10 @@ pub unsafe extern "C" fn gcso_attractor_field_add_anchor(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     ffi_boundary!({
-        let vec_slice = unsafe { std::slice::from_raw_parts(vec, dim) };
+        let vec_slice = unsafe { slice::from_raw_parts(vec, dim) };
         let _ = AlignedSlice32::new(vec_slice)?;
         unsafe { *anchor_id_out = 1 };
-        GCSO_SUCCESS
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -1569,10 +1577,10 @@ pub unsafe extern "C" fn gcso_attractor_field_add_system_prompt_anchor(
     ffi_boundary!({
         let c_str = unsafe { std::ffi::CStr::from_ptr(prompt_text) };
         if c_str.to_str().is_err() {
-            return GCSO_ERROR_INVALID_ARGUMENT;
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
         unsafe { *anchor_id_out = 1 };
-        GCSO_SUCCESS
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -1598,10 +1606,10 @@ pub unsafe extern "C" fn gcso_attractor_field_add_embedding_anchor(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     ffi_boundary!({
-        let emb_slice = unsafe { std::slice::from_raw_parts(embedding, dim) };
+        let emb_slice = unsafe { slice::from_raw_parts(embedding, dim) };
         let _ = AlignedSlice32::new(emb_slice)?;
         unsafe { *anchor_id_out = 1 };
-        GCSO_SUCCESS
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -1625,7 +1633,7 @@ pub unsafe extern "C" fn gcso_attractor_field_inject_phase_repulsion(
     if num_heads == 0 || gain.is_nan() || gain.is_infinite() {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Aggregate high-density pointer trails bottom-up to dynamic anchors.
@@ -1645,7 +1653,7 @@ pub unsafe extern "C" fn gcso_attractor_field_aggregate_bottom_up(
     }
     ffi_boundary!({
         unsafe { *new_anchor_count_out = 0 };
-        GCSO_SUCCESS
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -1663,7 +1671,7 @@ pub unsafe extern "C" fn gcso_attractor_field_destroy(
     if !is_aligned(field) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
 
 /// Allocate EDBC controller instance.
@@ -1682,8 +1690,8 @@ pub unsafe extern "C" fn gcso_edbc_controller_create(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
-        unsafe { *controller_out = std::ptr::null_mut() };
-        GCSO_SUCCESS
+        unsafe { *controller_out = ptr::null_mut() };
+        Ok(GCSO_SUCCESS)
     })
 }
 
@@ -1706,148 +1714,5 @@ pub unsafe extern "C" fn gcso_edbc_eval_stateful(
     if token_z_score.is_nan() || token_z_score.is_infinite() {
         return GCSO_ERROR_EDBC_SINGULARITY;
     }
-    ffi_boundary!({ GCSO_SUCCESS })
-}
-
-/// Compute CVoid Coherent Vector Alignment Metric.
-///
-/// # Safety
-/// `key_vector` (32-byte aligned) and `void_score_out` must be non-null pointers.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_cvoid_eval_dyadic128(
-    key_vector: *const f32,
-    dim: usize,
-    void_score_out: *mut f32,
-) -> GcsoStatus {
-    if key_vector.is_null() || void_score_out.is_null() {
-        return GCSO_ERROR_NULL_POINTER;
-    }
-    if !is_aligned_to(key_vector, 32) || !is_aligned(void_score_out) {
-        return GCSO_ERROR_MISALIGNED_POINTER;
-    }
-    if dim == 0 {
-        return GCSO_ERROR_INVALID_ARGUMENT;
-    }
-    ffi_boundary!({ GCSO_SUCCESS })
-}
-
-/// Evaluate Eyring-Kramers potential barrier height value with singularity check.
-///
-/// # Safety
-/// `barrier_out` must be a valid non-null pointer aligned to `f32`.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_cvoid_eval_barrier(
-    void_score: f32,
-    tau_eff: f32,
-    barrier_out: *mut f32,
-) -> GcsoStatus {
-    if barrier_out.is_null() {
-        return GCSO_ERROR_NULL_POINTER;
-    }
-    if !is_aligned(barrier_out) {
-        return GCSO_ERROR_MISALIGNED_POINTER;
-    }
-    if void_score.is_nan()
-        || void_score.is_infinite()
-        || tau_eff.is_nan()
-        || tau_eff.is_infinite()
-        || tau_eff <= 0.0
-    {
-        return GCSO_ERROR_EDBC_SINGULARITY;
-    }
-    ffi_boundary!({
-        unsafe { *barrier_out = void_score / tau_eff };
-        GCSO_SUCCESS
-    })
-}
-
-/// Destroy EDBC controller instance.
-///
-/// # Safety
-/// Safe no-op if `controller` is NULL. Returns `GCSO_ERROR_MISALIGNED_POINTER` if non-null and unaligned.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_edbc_controller_destroy(
-    controller: GcsoEdbcControllerHandle,
-) -> GcsoStatus {
-    if controller.is_null() {
-        return GCSO_SUCCESS;
-    }
-    if !is_aligned(controller) {
-        return GCSO_ERROR_MISALIGNED_POINTER;
-    }
-    ffi_boundary!({ GCSO_SUCCESS })
-}
-
-// ===================================================================
-// 6. Persona Patch & ZIMMS Storage Mechanics Interface
-// ===================================================================
-
-/// Dynamic application of persona phase modulation patches without altering base weights.
-///
-/// # Safety
-/// `context` and `patch_data` must be valid non-null pointers.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_persona_apply_patch(
-    context: GcsoContextHandle,
-    patch_data: *const u8,
-    patch_size: usize,
-) -> GcsoStatus {
-    if context.is_null() || patch_data.is_null() {
-        return GCSO_ERROR_NULL_POINTER;
-    }
-    if !is_aligned(context) || !is_aligned(patch_data) {
-        return GCSO_ERROR_MISALIGNED_POINTER;
-    }
-    if patch_size == 0 {
-        return GCSO_ERROR_INVALID_ARGUMENT;
-    }
-    ffi_boundary!({ GCSO_SUCCESS })
-}
-
-/// Zero-Overhead In-Memory Mapped Storage: Maps .gcso container payload using zero-copy mmap.
-///
-/// # Safety
-/// `file_path` and `zimms_out` must be valid non-null pointers.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_zimms_open_mmap(
-    file_path: *const c_char,
-    zimms_out: *mut gcso_zimms_descriptor_t,
-) -> GcsoStatus {
-    if file_path.is_null() || zimms_out.is_null() {
-        return GCSO_ERROR_NULL_POINTER;
-    }
-    if !is_aligned(zimms_out) {
-        return GCSO_ERROR_MISALIGNED_POINTER;
-    }
-    ffi_boundary!({
-        unsafe {
-            std::ptr::write_bytes(zimms_out, 0, 1);
-            (*zimms_out).fd_handle = -1;
-        }
-        GCSO_SUCCESS
-    })
-}
-
-/// Unmaps zero-copy ZIMMS memory handle and releases Direct DMA resources.
-///
-/// # Safety
-/// `zimms_desc` must be a valid non-null aligned descriptor pointer.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_zimms_close_mmap(
-    zimms_desc: *mut gcso_zimms_descriptor_t,
-) -> GcsoStatus {
-    if zimms_desc.is_null() {
-        return GCSO_SUCCESS;
-    }
-    if !is_aligned(zimms_desc) {
-        return GCSO_ERROR_MISALIGNED_POINTER;
-    }
-    ffi_boundary!({
-        unsafe {
-            (*zimms_desc).mapped_address = 0;
-            (*zimms_desc).file_size_bytes = 0;
-            (*zimms_desc).fd_handle = -1;
-        }
-        GCSO_SUCCESS
-    })
+    ffi_boundary!({ Ok(GCSO_SUCCESS) })
 }
