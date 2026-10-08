@@ -36,11 +36,11 @@ pub mod traits;
 
 // Re-export Ground Truth contracts, memory alignment wrappers, and core traits
 pub use traits::{
-    AlignedSlice, AlignedSlice16, AlignedSlice32, AlignedSlice64, AlignedSlice128,
-    AlignedSliceMut, AlignedSliceMut16, AlignedSliceMut32, AlignedSliceMut64, AlignedSliceMut128,
-    AttractorField, DaesScratchpad, EntropyEvaluator, GcsoResult, GcsoRuntimeContext,
-    HotPathExecutionEngine, L2pSvdProjector, PersonaPatcher, PhaseSteering, PointerActionHub,
-    PprcCache, PspmRouter, SrlAdapter, SwarmCellChunk, SystemCapabilityQuery, ZimmsStorage,
+    AlignedSlice, AlignedSlice128, AlignedSlice16, AlignedSlice32, AlignedSlice64, AlignedSliceMut,
+    AlignedSliceMut128, AlignedSliceMut16, AlignedSliceMut32, AlignedSliceMut64, AttractorField,
+    DaesScratchpad, EntropyEvaluator, GcsoResult, GcsoRuntimeContext, HotPathExecutionEngine,
+    L2pSvdProjector, PersonaPatcher, PhaseSteering, PointerActionHub, PprcCache, PspmRouter,
+    SrlAdapter, SwarmCellChunk, SystemCapabilityQuery, ZimmsStorage,
 };
 
 // Re-export C-ABI status codes, primitive aliases, and layout structs

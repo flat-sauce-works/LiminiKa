@@ -474,7 +474,10 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if subslice start address is misaligned.
     #[inline(always)]
     pub fn subslice_mut(&mut self, range: Range<usize>) -> GcsoResult<Self> {
-        let sub = self.slice.get_mut(range).ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        let sub = self
+            .slice
+            .get_mut(range)
+            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
         Self::new(sub)
     }
 
@@ -879,11 +882,7 @@ pub trait PointerActionHub: Send + Sync {
     ///
     /// # Errors
     /// Returns `GCSO_ERROR_INVALID_STATE` if action hub state is invalid.
-    fn link_hallucinated_trails(
-        &mut self,
-        src_trail_id: u32,
-        dst_trail_id: u32,
-    ) -> GcsoResult<()>;
+    fn link_hallucinated_trails(&mut self, src_trail_id: u32, dst_trail_id: u32) -> GcsoResult<()>;
 
     /// Performs bit-tree reduction across 32-byte aligned paged bitmasks in $\mathcal{O}(1)$ time.
     ///
@@ -926,31 +925,19 @@ pub trait DaesScratchpad: Send + Sync {
     ///
     /// # Errors
     /// Returns `GCSO_ERROR_INVALID_STATE` if slot operating mode is not 0.
-    fn fast_path_lookup(
-        &self,
-        slot: &gcso_daes_slot_t,
-        input_key: u64,
-    ) -> GcsoResult<u64>;
+    fn fast_path_lookup(&self, slot: &gcso_daes_slot_t, input_key: u64) -> GcsoResult<u64>;
 
     /// Pushes profiling metric byte code into the DAES telemetry ring ledger in-place.
     ///
     /// # Errors
     /// Returns `GCSO_ERROR_NULL_POINTER` if `slot` is uninitialized.
-    fn telemetry_push(
-        &mut self,
-        slot: &mut gcso_daes_slot_t,
-        metric_code: u8,
-    ) -> GcsoResult<()>;
+    fn telemetry_push(&mut self, slot: &mut gcso_daes_slot_t, metric_code: u8) -> GcsoResult<()>;
 
     /// Sets the operating mode of the DAES slot (`0` = Scratchpad, `1` = Plugin, `2` = Shared IPC Buffer).
     ///
     /// # Errors
     /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if mode exceeds 2.
-    fn set_mode(
-        &mut self,
-        slot: &mut gcso_daes_slot_t,
-        mode: u32,
-    ) -> GcsoResult<()>;
+    fn set_mode(&mut self, slot: &mut gcso_daes_slot_t, mode: u32) -> GcsoResult<()>;
 
     /// Evaluates telemetry ledger to auto-tune PSPM ratios, RIPA clamps, and EDBC thresholds.
     ///
@@ -972,11 +959,7 @@ pub trait SwarmCellChunk: Send + Sync {
     ///
     /// # Errors
     /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `chunk_len` is 0.
-    fn step_chunk(
-        &mut self,
-        mask: &gcso_paged_bitmask_t,
-        chunk_len: u32,
-    ) -> GcsoResult<()>;
+    fn step_chunk(&mut self, mask: &gcso_paged_bitmask_t, chunk_len: u32) -> GcsoResult<()>;
 }
 
 /// Hot-path trait for Sub-Head Phase Group Allocation (PSPM Router) (**Nano / Micro Level**).
@@ -1177,11 +1160,7 @@ pub trait ZimmsStorage: Send + Sync {
     ///
     /// # Errors
     /// Returns `GCSO_ERROR_BUFFER_TOO_SMALL` if output buffer size is insufficient.
-    fn serialize_snapshot(
-        &self,
-        buffer: &mut [u8],
-        required_size: &mut usize,
-    ) -> GcsoResult<()>;
+    fn serialize_snapshot(&self, buffer: &mut [u8], required_size: &mut usize) -> GcsoResult<()>;
 
     /// Deserializes binary snapshot buffer to restore context state.
     ///
@@ -1208,10 +1187,7 @@ pub trait ZimmsStorage: Send + Sync {
     ///
     /// # Errors
     /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if descriptor is invalid.
-    fn close_mmap(
-        &mut self,
-        descriptor: &mut gcso_zimms_descriptor_t,
-    ) -> GcsoResult<()>;
+    fn close_mmap(&mut self, descriptor: &mut gcso_zimms_descriptor_t) -> GcsoResult<()>;
 }
 
 // ===================================================================

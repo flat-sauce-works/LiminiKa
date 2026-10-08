@@ -435,11 +435,7 @@ static GCSO_ABI_VERSION: &[u8] = b"2.0.0\0";
 /// # Safety
 /// Pointers must be valid, non-null writable memory locations aligned to `u32`.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_abi_get_version(
-    major: *mut u32,
-    minor: *mut u32,
-    patch: *mut u32,
-) {
+pub unsafe extern "C" fn gcso_abi_get_version(major: *mut u32, minor: *mut u32, patch: *mut u32) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         if is_aligned(major) {
             unsafe { *major = 2 };

@@ -17,12 +17,9 @@ use core::f32::consts::PI;
 #[cfg(feature = "std")]
 use std::f32::consts::PI;
 
-use crate::abi::{
-    gcso_q7_t, GcsoStatus, GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT,
-};
+use crate::abi::{gcso_q7_t, GcsoStatus, GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT};
 use crate::traits::{
-    AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32, GcsoResult,
-    PhaseSteering,
+    AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32, GcsoResult, PhaseSteering,
 };
 
 /// Scale factor for Q7 quantized phase representation (beta_Q7 = pi / 128).
@@ -126,7 +123,10 @@ impl DpsrEngine {
         if head_dim == 0 || (head_dim % 2 != 0) || num_heads == 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        Ok(Self { head_dim, num_heads })
+        Ok(Self {
+            head_dim,
+            num_heads,
+        })
     }
 
     /// Helper method to validate tensor buffer lengths against configured head parameters.
@@ -550,7 +550,9 @@ mod tests {
         let mut slice = AlignedSliceMut32::new(&mut buf.0).unwrap();
 
         // Clamp norm to range [1.0, 2.5]
-        engine.slerp_norm_guard_stable(&mut slice, 1.0, 2.5).unwrap();
+        engine
+            .slerp_norm_guard_stable(&mut slice, 1.0, 2.5)
+            .unwrap();
 
         let new_norm = sqrt_f32(slice[0] * slice[0] + slice[1] * slice[1]);
         assert!((new_norm - 2.5).abs() < 1e-5);
