@@ -14,6 +14,8 @@
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::must_use_candidate)]
 #![allow(clippy::inline_always)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::manual_slice_size_calculation)]
 
 use core::ops::{Deref, DerefMut, Index, IndexMut, Range};
 use core::slice;
@@ -164,7 +166,7 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
         if elem_size == 0 || self.slice.is_empty() {
             return &[];
         }
-        let byte_len = self.slice.len() * elem_size;
+        let byte_len = core::mem::size_of_val(self.slice);
         // SAFETY: T is Sized and initialized memory can be viewed safely as raw bytes.
         unsafe { slice::from_raw_parts(self.slice.as_ptr().cast::<u8>(), byte_len) }
     }
@@ -443,7 +445,7 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
         if elem_size == 0 || self.slice.is_empty() {
             return;
         }
-        let byte_len = self.slice.len() * elem_size;
+        let byte_len = core::mem::size_of_val(self.slice);
         // SAFETY: Raw byte zeroing over initialized T slice memory.
         unsafe {
             core::ptr::write_bytes(self.slice.as_mut_ptr().cast::<u8>(), 0, byte_len);
@@ -460,7 +462,7 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
         if elem_size == 0 || self.slice.is_empty() {
             return &mut [];
         }
-        let byte_len = self.slice.len() * elem_size;
+        let byte_len = core::mem::size_of_val(self.slice);
         // SAFETY: T is Sized and initialized memory can be viewed safely as mutable bytes.
         unsafe { slice::from_raw_parts_mut(self.slice.as_mut_ptr().cast::<u8>(), byte_len) }
     }
@@ -1153,6 +1155,7 @@ pub trait L2pSvdProjector: Send + Sync {
     ///
     /// # Errors
     /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if dimensions, rank, or outputs are invalid.
+    #[allow(clippy::too_many_arguments)]
     fn project_lora(
         &self,
         lora_a: &AlignedSlice32<'_, f32>,
@@ -1254,10 +1257,10 @@ mod tests {
     fn test_aligned_slice_mut_zero_out() {
         #[repr(align(64))]
         struct AlignedBuffer([f32; 32]);
-        let mut buf = AlignedBuffer([3.14; 32]);
+        let mut buf = AlignedBuffer([2.5; 32]);
 
         let mut slice_mut = AlignedSliceMut32::new(&mut buf.0).unwrap();
-        assert_eq!(slice_mut[0], 3.14);
+        assert_eq!(slice_mut[0], 2.5);
 
         slice_mut.zero_out();
         assert_eq!(slice_mut[0], 0.0);
