@@ -18,7 +18,7 @@ use core::f32::consts::PI;
 #[cfg(feature = "std")]
 use std::f32::consts::PI;
 
-use crate::abi::{gcso_q7_t, GcsoStatus, GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT};
+use crate::abi::{gcso_q7_t, GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT};
 use crate::traits::{
     AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32, GcsoResult, PhaseSteering,
 };
@@ -120,6 +120,44 @@ fn round_f32(val: f32) -> f32 {
             (val + 0.5) as i32 as f32
         } else {
             (val - 0.5) as i32 as f32
+        }
+    }
+}
+
+/// Cross-environment single-precision floating point atan2 wrapper.
+#[inline(always)]
+fn atan2_f32(y: f32, x: f32) -> f32 {
+    #[cfg(feature = "std")]
+    {
+        y.atan2(x)
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        if x == 0.0 {
+            if y > 0.0 {
+                PI * 0.5
+            } else if y < 0.0 {
+                -PI * 0.5
+            } else {
+                0.0
+            }
+        } else {
+            let ax = if x < 0.0 { -x } else { x };
+            let ay = if y < 0.0 { -y } else { y };
+            let (min_val, max_val) = if ax < ay { (ax, ay) } else { (ay, ax) };
+            let ratio = min_val / max_val;
+            let r2 = ratio * ratio;
+            let mut angle = ratio * (0.999_866_3 - 0.330_299_5 * r2 + 0.180_141 * r2 * r2 - 0.085_133_ * r2 * r2 * r2);
+            if ax < ay {
+                angle = (PI * 0.5) - angle;
+            }
+            if x < 0.0 {
+                angle = PI - angle;
+            }
+            if y < 0.0 {
+                angle = -angle;
+            }
+            angle
         }
     }
 }
@@ -421,6 +459,61 @@ impl PhaseSteering for DpsrEngine {
 
         for logit in l_buf.iter_mut() {
             *logit += avg_phase_shift;
+        }
+
+        Ok(())
+    }
+
+    /// Computes the Orthogonal Procrustes phase delta in SO(2)^(d/2) subspace.
+    /// Maps continuous 2D vector rotations to Q7 quantized phase representation.
+    #[inline]
+    fn compute_procrustes_phase_delta(
+        &self,
+        source: &AlignedSlice32<'_, f32>,
+        target: &AlignedSlice32<'_, f32>,
+        phase_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
+    ) -> GcsoResult<()> {
+        let src_slice = source.as_slice();
+        let tgt_slice = target.as_slice();
+        let out_slice = phase_out.as_mut_slice();
+
+        let head_dim = self.head_dim as usize;
+        let num_heads = self.num_heads as usize;
+        let expected_tensor_len = head_dim * num_heads;
+
+        if src_slice.len() < expected_tensor_len
+            || tgt_slice.len() < expected_tensor_len
+            || out_slice.len() < num_heads
+        {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+
+        for h in 0..num_heads {
+            let src_head = &src_slice[h * head_dim..(h + 1) * head_dim];
+            let tgt_head = &tgt_slice[h * head_dim..(h + 1) * head_dim];
+
+            let mut sum_cos = 0.0f32;
+            let mut sum_sin = 0.0f32;
+
+            for pair_idx in 0..(head_dim / 2) {
+                let u_x = src_head[pair_idx * 2];
+                let u_y = src_head[pair_idx * 2 + 1];
+                let v_x = tgt_head[pair_idx * 2];
+                let v_y = tgt_head[pair_idx * 2 + 1];
+
+                // Inner product and determinant for SO(2) phase delta: arg(v * conj(u))
+                sum_cos += u_x * v_x + u_y * v_y;
+                sum_sin += u_x * v_y - u_y * v_x;
+            }
+
+            let norm_sq = sum_cos * sum_cos + sum_sin * sum_sin;
+            if norm_sq > 1e-12 {
+                let theta = atan2_f32(sum_sin, sum_cos);
+                let q7_val = round_f32((theta / PI) * 128.0) as i32;
+                out_slice[h] = q7_val.clamp(-128, 127) as i8;
+            } else {
+                out_slice[h] = 0;
+            }
         }
 
         Ok(())

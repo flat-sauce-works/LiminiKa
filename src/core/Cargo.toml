@@ -12,7 +12,8 @@ name = "liminika_core"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [features]
-default = []
+default = ["std"]
+std = []
 cuda = []
 metal = []
 vulkan = []

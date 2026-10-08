@@ -20,6 +20,9 @@
 #[cfg(feature = "std")]
 extern crate std;
 
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
 // Core architecture module declarations
 pub mod abi;
 pub mod dpsr;
