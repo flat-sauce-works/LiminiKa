@@ -8,54 +8,47 @@
 #include <cstring>
 #include <exception>
 
-namespace liminika {
-
-// Static string literal defining the current GCSO C-ABI release version.
-constexpr const char* GCSO_KERNEL_VERSION_STRING = "0.1.1";
-
-} // namespace liminika
-
 GCSO_EXTERN_C_BEGIN
 
 /**
- * @brief Retrieves the numeric version identifiers for the GCSO C-ABI.
- * Conforms strictly to ABI version 2.0.0 specified in c_abi_spec.md and gcso_snapshot_header_t (0x00020000).
+ * @brief Retrieves the numeric version identifiers for the GCSO C-ABI (v0.1.1).
  *
- * Verifies output pointer alignment and populates semantic versioning fields safely.
- *
- * @param major Pointer to store the major version number (2).
- * @param minor Pointer to store the minor version number (0).
- * @param patch Pointer to store the patch version number (0).
+ * @param major Pointer to store the major version number.
+ * @param minor Pointer to store the minor version number.
+ * @param patch Pointer to store the patch version number.
+ * @return GCSO_SUCCESS, GCSO_ERROR_NULL_POINTER, or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API void GCSO_CALL gcso_abi_get_version(
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_abi_get_version(
     uint32_t* GCSO_RESTRICT major,
     uint32_t* GCSO_RESTRICT minor,
     uint32_t* GCSO_RESTRICT patch
 ) GCSO_NOEXCEPT {
-    if (major != nullptr) {
-        if (GCSO_LIKELY(reinterpret_cast<uintptr_t>(major) % alignof(uint32_t) == 0)) {
-            *major = 2;
-        }
+    if (GCSO_UNLIKELY(major == nullptr || minor == nullptr || patch == nullptr)) {
+        return GCSO_ERROR_NULL_POINTER;
     }
-    if (minor != nullptr) {
-        if (GCSO_LIKELY(reinterpret_cast<uintptr_t>(minor) % alignof(uint32_t) == 0)) {
-            *minor = 0;
-        }
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(major) % alignof(uint32_t) != 0 ||
+                      reinterpret_cast<uintptr_t>(minor) % alignof(uint32_t) != 0 ||
+                      reinterpret_cast<uintptr_t>(patch) % alignof(uint32_t) != 0)) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    if (patch != nullptr) {
-        if (GCSO_LIKELY(reinterpret_cast<uintptr_t>(patch) % alignof(uint32_t) == 0)) {
-            *patch = 0;
-        }
+
+    try {
+        *major = GCSO_ABI_VERSION_MAJOR;
+        *minor = GCSO_ABI_VERSION_MINOR;
+        *patch = GCSO_ABI_VERSION_PATCH;
+        return GCSO_SUCCESS;
+    } catch (...) {
+        return GCSO_ERROR_PANIC_CAUGHT;
     }
 }
 
 /**
- * @brief Returns the static semantic version string literal for the GCSO kernel engine ("2.0.0").
+ * @brief Returns the static semantic version string literal for the GCSO kernel engine ("0.1.1").
  *
  * @return Const pointer to null-terminated static version string.
  */
 GCSO_NODISCARD GCSO_API const char* GCSO_CALL gcso_abi_get_version_string(void) GCSO_NOEXCEPT {
-    return liminika::GCSO_KERNEL_VERSION_STRING;
+    return GCSO_ABI_VERSION_STRING;
 }
 
 /**
@@ -158,11 +151,11 @@ GCSO_API gcso_status_t GCSO_CALL gcso_abi_query_capability(
 }
 
 /**
- * @brief Populates default settings for a gcso_config_t structure strictly conforming to c_abi_spec.md Section 5.4.D.
+ * @brief Populates default settings for a gcso_config_t structure strictly conforming to c_abi_spec.md.
  *
  * Configures optimal parameters for 2-4GB VRAM execution targets, setting default head dimensions (128),
  * head counts (32), paged block sizes (32 tokens), RIPA soft-clamp bounds (5 degrees = 0.087266 rad), and
- * QDPS minimum step thresholds (0.01 rad) to avoid grid jitter under ultra-low quantization.
+ * qdps minimum step thresholds (0.01 rad) to avoid grid jitter under ultra-low quantization.
  *
  * @param config Pointer to user-allocated configuration descriptor to populate.
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER / GCSO_ERROR_MISALIGNED_POINTER.

@@ -17,6 +17,13 @@
     #define GCSO_EXTERN_C_END
 #endif
 
+/* Unified GCSO C-ABI Versioning (0.1.1) */
+#define GCSO_ABI_VERSION_MAJOR 0
+#define GCSO_ABI_VERSION_MINOR 1
+#define GCSO_ABI_VERSION_PATCH 1
+#define GCSO_ABI_VERSION_HEX   0x00000101
+#define GCSO_ABI_VERSION_STRING "0.1.1"
+
 /* Dynamic Link Library Import/Export Macros */
 #if defined(_WIN32) || defined(__CYGWIN__)
     #if defined(GCSO_BUILD_DLL)
@@ -36,7 +43,7 @@
     #define GCSO_CALL
 #endif
 
-/* Exception-safety Macro for FFI Boundaries */
+/* Exception-Safety Macro for FFI Boundaries */
 #ifdef __cplusplus
     #define GCSO_NOEXCEPT noexcept
 #else
@@ -46,8 +53,12 @@
 /* Warn Unused Result Macro */
 #if defined(__cplusplus) && __cplusplus >= 201703L
     #define GCSO_NODISCARD [[nodiscard]]
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+    #define GCSO_NODISCARD [[nodiscard]]
 #elif defined(__GNUC__) || defined(__clang__)
     #define GCSO_NODISCARD __attribute__((warn_unused_result))
+#elif defined(_MSC_VER)
+    #define GCSO_NODISCARD _Check_return_
 #else
     #define GCSO_NODISCARD
 #endif
@@ -61,17 +72,22 @@
     #define GCSO_UNLIKELY(x) (x)
 #endif
 
-/* Explicit Memory Alignment Macros */
+/* Explicit Memory Alignment & Query Macros */
 #if defined(__cplusplus)
     #define GCSO_ALIGNAS(n) alignas(n)
-#elif defined(__GNUC__) || defined(__clang__)
-    #define GCSO_ALIGNAS(n) __attribute__((aligned(n)))
+    #define GCSO_ALIGNOF(type) alignof(type)
 #elif defined(_MSC_VER)
     #define GCSO_ALIGNAS(n) __declspec(align(n))
+    #define GCSO_ALIGNOF(type) __alignof(type)
+#elif defined(__GNUC__) || defined(__clang__)
+    #define GCSO_ALIGNAS(n) __attribute__((aligned(n)))
+    #define GCSO_ALIGNOF(type) __alignof__(type)
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
     #define GCSO_ALIGNAS(n) _Alignas(n)
+    #define GCSO_ALIGNOF(type) _Alignof(type)
 #else
     #define GCSO_ALIGNAS(n)
+    #define GCSO_ALIGNOF(type) sizeof(type)
 #endif
 
 /* Pointer Non-Aliasing Restrict Qualifier */
@@ -86,12 +102,23 @@
 #endif
 
 /* Compile-time Static Assertion Macro */
-#ifdef __cplusplus
-    #define GCSO_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
-#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-    #define GCSO_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
-#else
-    #define GCSO_STATIC_ASSERT(cond, msg)
+#if defined(__cplusplus)
+    #if __cplusplus >= 201103L
+        #define GCSO_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+    #endif
+#elif defined(__STDC_VERSION__)
+    #if __STDC_VERSION__ >= 202311L
+        #define GCSO_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+    #elif __STDC_VERSION__ >= 201112L
+        #define GCSO_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+    #endif
+#endif
+
+#ifndef GCSO_STATIC_ASSERT
+    #define GCSO_CONCAT_IMPL(x, y) x##y
+    #define GCSO_CONCAT(x, y) GCSO_CONCAT_IMPL(x, y)
+    #define GCSO_STATIC_ASSERT(cond, msg) \
+        typedef char GCSO_CONCAT(gcso_static_assert_typedef_, __LINE__)[(cond) ? 1 : -1]
 #endif
 
 #endif // LIMINIKA_GCSO_CONFIG_H

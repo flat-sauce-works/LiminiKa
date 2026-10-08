@@ -1,20 +1,60 @@
-// src/core/build.rs
+// name: src/core/build.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Checks whether the CUDA compiler (`nvcc`) or relevant environment variables are available on the host system.
+/// Checks whether the CUDA compiler (`nvcc`) or relevant CUDA SDK environment variables exist.
 fn is_nvcc_available() -> bool {
-    if env::var("CUDA_PATH").is_ok() || env::var("CUDAToolkit_ROOT").is_ok() {
-        return true;
+    let cuda_env_vars = [
+        "CUDA_PATH",
+        "CUDA_ROOT",
+        "CUDA_TOOLKIT_ROOT_DIR",
+        "CUDAToolkit_ROOT",
+    ];
+
+    for var in &cuda_env_vars {
+        if env::var(var).is_ok() {
+            return true;
+        }
     }
+
     Command::new("nvcc")
         .arg("--version")
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+/// Checks whether Vulkan SDK or vulkaninfo runtime is available on the target environment.
+fn is_vulkan_available() -> bool {
+    if env::var("VULKAN_SDK").is_ok() {
+        return true;
+    }
+
+    // Check system32 vulkan runtime on Windows target
+    if cfg!(target_os = "windows") {
+        if let Ok(windir) = env::var("WINDIR") {
+            let vulkan_dll = PathBuf::from(windir).join("System32").join("vulkan-1.dll");
+            if vulkan_dll.exists() {
+                return true;
+            }
+        }
+    }
+
+    Command::new("vulkaninfo")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+/// Helper function to parse boolean environment variables.
+fn parse_bool_env(var_name: &str) -> Option<bool> {
+    env::var(var_name).ok().map(|v| {
+        let lower = v.to_lowercase();
+        lower == "1" || lower == "on" || lower == "true"
+    })
 }
 
 fn main() {
@@ -23,47 +63,49 @@ fn main() {
     let kernels_dir = repo_root.join("src/kernels");
     let include_dir = repo_root.join("include");
 
-    // Evaluate target OS to restrict platform-specific backends
+    // Target configuration evaluation for cross-compilation safety
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let is_apple = target_os == "macos" || target_os == "ios";
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
 
-    // Re-run build script if included headers, sources, or build flags change
+    let is_apple = target_os == "macos" || target_os == "ios";
+    let is_windows = target_os == "windows";
+
+    // Track build script and native directory dependencies
+    println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={}", include_dir.display());
     println!("cargo:rerun-if-changed={}", kernels_dir.display());
     println!("cargo:rerun-if-env-changed=LIMINIKA_ENABLE_CUDA");
     println!("cargo:rerun-if-env-changed=LIMINIKA_ENABLE_VULKAN");
     println!("cargo:rerun-if-env-changed=LIMINIKA_ENABLE_METAL");
+    println!("cargo:rerun-if-env-changed=VULKAN_SDK");
 
-    // Evaluate CUDA backend enablement
-    let enable_cuda = match env::var("LIMINIKA_ENABLE_CUDA") {
-        Ok(v) => {
-            let lower = v.to_lowercase();
-            lower == "1" || lower == "on" || lower == "true"
-        }
-        Err(_) => cfg!(feature = "cuda") && is_nvcc_available(),
-    };
+    // Evaluate GPU backend feature flags and env overrides
+    let enable_cuda = parse_bool_env("LIMINIKA_ENABLE_CUDA")
+        .unwrap_or_else(|| env::var("CARGO_FEATURE_CUDA").is_ok() && is_nvcc_available());
 
-    let enable_vulkan = match env::var("LIMINIKA_ENABLE_VULKAN") {
-        Ok(v) => {
-            let lower = v.to_lowercase();
-            lower == "1" || lower == "on" || lower == "true"
-        }
-        Err(_) => cfg!(feature = "vulkan"),
-    };
+    let enable_vulkan = parse_bool_env("LIMINIKA_ENABLE_VULKAN")
+        .unwrap_or_else(|| env::var("CARGO_FEATURE_VULKAN").is_ok() && is_vulkan_available());
 
-    // Strict platform guard: Metal is enabled ONLY on Apple target platforms
+    // Metal is strictly restricted to Apple target platforms
     let enable_metal = is_apple
-        && match env::var("LIMINIKA_ENABLE_METAL") {
-            Ok(v) => {
-                let lower = v.to_lowercase();
-                lower == "1" || lower == "on" || lower == "true"
-            }
-            Err(_) => cfg!(target_os = "macos") || cfg!(feature = "metal"),
-        };
+        && parse_bool_env("LIMINIKA_ENABLE_METAL")
+            .unwrap_or_else(|| env::var("CARGO_FEATURE_METAL").is_ok() || target_os == "macos");
 
-    // Configure CMake build options with explicit ON/OFF flags
+    // Configure CMake build configuration
     let mut cfg = cmake::Config::new(&kernels_dir);
-    cfg.define("CMAKE_POSITION_INDEPENDENT_CODE", "ON")
+
+    // Map Cargo profile to CMake build type
+    let cmake_build_type = match profile.as_str() {
+        "release" | "bench" => "Release",
+        "min-size-rel" => "MinSizeRel",
+        "rel-with-deb-info" => "RelWithDebInfo",
+        _ => "Debug",
+    };
+
+    cfg.define("CMAKE_BUILD_TYPE", cmake_build_type)
+        .define("CMAKE_POSITION_INDEPENDENT_CODE", "ON")
         .define("BUILD_SHARED_LIBS", "OFF")
         .define(
             "LIMINIKA_ENABLE_CUDA",
@@ -78,35 +120,86 @@ fn main() {
             if enable_metal { "ON" } else { "OFF" },
         );
 
+    // Forward target architecture to CMake if cross-compiling
+    if !target_arch.is_empty() {
+        cfg.define("LIMINIKA_TARGET_ARCH", &target_arch);
+    }
+
     let dst = cfg.build();
 
-    // Export linker search paths for native target library layouts across different build generators
+    // Export linker search paths across platform generator defaults
     println!("cargo:rustc-link-search=native={}/lib", dst.display());
     println!("cargo:rustc-link-search=native={}/lib64", dst.display());
     println!("cargo:rustc-link-search=native={}/build", dst.display());
     println!("cargo:rustc-link-search=native={}", dst.display());
 
-    // Link C++ CPU core kernel static library unconditionally
+    // Link CPU core kernel library
     println!("cargo:rustc-link-lib=static=liminika_kernels_cpu");
 
-    // Conditionally link target acceleration static libraries
+    // Conditionally link backend acceleration static libraries and SDK frameworks
     if enable_cuda {
         println!("cargo:rustc-link-lib=static=liminika_kernels_cuda");
-    }
-    if enable_vulkan {
-        println!("cargo:rustc-link-lib=static=liminika_kernels_vulkan");
-    }
-    if enable_metal && is_apple {
-        println!("cargo:rustc-link-lib=static=liminika_kernels_metal");
+        if let Ok(cuda_path) = env::var("CUDA_PATH") {
+            println!("cargo:rustc-link-search=native={}/lib/x64", cuda_path);
+            println!("cargo:rustc-link-search=native={}/lib64", cuda_path);
+        }
+        println!("cargo:rustc-link-lib=dylib=cudart");
     }
 
-    // Link system C++ standard library based on target operating system
+    if enable_vulkan {
+        println!("cargo:rustc-link-lib=static=liminika_kernels_vulkan");
+        let mut vulkan_lib_found = false;
+
+        if let Ok(vulkan_sdk) = env::var("VULKAN_SDK") {
+            println!("cargo:rustc-link-search=native={}/lib", vulkan_sdk);
+            if is_windows {
+                println!("cargo:rustc-link-search=native={}/Lib", vulkan_sdk);
+            }
+            vulkan_lib_found = true;
+        }
+
+        // Search standard Windows Vulkan SDK installation directories if VULKAN_SDK is unset
+        if is_windows && !vulkan_lib_found {
+            if let Ok(program_files) = env::var("ProgramFiles") {
+                let vulkan_base = PathBuf::from(program_files).join("VulkanSDK");
+                if vulkan_base.exists() {
+                    if let Ok(entries) = std::fs::read_dir(vulkan_base) {
+                        for entry in entries.flatten() {
+                            let lib_path = entry.path().join("Lib");
+                            if lib_path.exists() {
+                                println!("cargo:rustc-link-search=native={}", lib_path.display());
+                                vulkan_lib_found = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Only link vulkan dylib if SDK import library path is explicitly available
+        if vulkan_lib_found || !is_windows {
+            println!("cargo:rustc-link-lib=dylib=vulkan");
+        }
+    }
+
+    if enable_metal && is_apple {
+        println!("cargo:rustc-link-lib=static=liminika_kernels_metal");
+        println!("cargo:rustc-link-lib=framework=Metal");
+        println!("cargo:rustc-link-lib=framework=Foundation");
+        println!("cargo:rustc-link-lib=framework=CoreGraphics");
+    }
+
+    // Standard C++ runtime linkage strategy per target OS and toolchain
     match target_os.as_str() {
         "macos" | "ios" => {
             println!("cargo:rustc-link-lib=c++");
         }
         "windows" => {
-            // MSVC manages C++ runtime linkage implicitly
+            if target_env == "gnu" {
+                println!("cargo:rustc-link-lib=stdc++");
+            }
+            // MSVC target manages C++ runtime linkage implicitly
         }
         _ => {
             println!("cargo:rustc-link-lib=stdc++");

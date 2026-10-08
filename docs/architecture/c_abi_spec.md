@@ -526,7 +526,7 @@ DAES reuses a single 64-byte cacheline block as an active in-memory scratchpad i
 | Offset | Field Identifier | Type Category | Binary Purpose & Validation Role |
 | --- | --- | --- | --- |
 | `0` | `magic` | Unsigned 32 | Magic Constant (`0x4F534347` = ASCII `"GCSO"`). |
-| `4` | `version` | Unsigned 32 | ABI Version Identifier (`0x00020000` = v2.0.0). |
+| `4` | `version` | Unsigned 32 | ABI Version Identifier (`0x00000101` = v0.1.1). |
 | `8` | `total_size` | Unsigned 64 | Total byte size of container payload. |
 | `16` | `action_hub_offset` | Unsigned 64 | Byte offset to Action Hub binary payload. |
 | `24` | `attractor_field_offset` | Unsigned 64 | Byte offset to Attractor Field payload. |

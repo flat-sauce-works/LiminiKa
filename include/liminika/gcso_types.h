@@ -4,6 +4,8 @@
 #ifndef LIMINIKA_GCSO_TYPES_H
 #define LIMINIKA_GCSO_TYPES_H
 
+#include <stddef.h>
+#include <stdint.h>
 #include "liminika/gcso_config.h"
 
 GCSO_EXTERN_C_BEGIN
@@ -210,34 +212,83 @@ typedef struct GCSO_ALIGNAS(32) gcso_pprc_keyframe_header {
     uint8_t reserved[24];
 } gcso_pprc_keyframe_header_t;
 
-/* Opaque Facade Handles */
+/* Opaque Handle Forward Declarations for Strongly-Typed C/C++ Compilers */
+struct gcso_context_opaque;
 typedef struct gcso_context_opaque* gcso_context_handle_t;
+
+struct gcso_container_opaque;
 typedef struct gcso_container_opaque* gcso_container_handle_t;
+
+struct gcso_action_hub_opaque;
 typedef struct gcso_action_hub_opaque* gcso_action_hub_handle_t;
+
+struct gcso_daes_slot_opaque;
 typedef struct gcso_daes_slot_opaque* gcso_daes_slot_handle_t;
+
+struct gcso_attractor_field_opaque;
 typedef struct gcso_attractor_field_opaque* gcso_attractor_field_handle_t;
+
+struct gcso_edbc_controller_opaque;
 typedef struct gcso_edbc_controller_opaque* gcso_edbc_controller_handle_t;
+
+struct gcso_dpsr_kernel_opaque;
 typedef struct gcso_dpsr_kernel_opaque* gcso_dpsr_kernel_handle_t;
+
+struct gcso_pspm_router_opaque;
 typedef struct gcso_pspm_router_opaque* gcso_pspm_router_handle_t;
+
+struct gcso_srl_adapter_opaque;
 typedef struct gcso_srl_adapter_opaque* gcso_srl_adapter_handle_t;
 
-/* Static Assertions for Layout Invariants */
-GCSO_STATIC_ASSERT(sizeof(gcso_q7_t) == 1, "gcso_q7_t must be 1 byte");
-GCSO_STATIC_ASSERT(sizeof(gcso_descriptor_header_t) == 8,
-                   "gcso_descriptor_header_t must be 8 bytes");
-GCSO_STATIC_ASSERT(sizeof(gcso_paged_bitmask_t) == 32, "gcso_paged_bitmask_t must be 32 bytes");
-GCSO_STATIC_ASSERT(sizeof(gcso_pointer_trail_t) == 128, "gcso_pointer_trail_t must be 128 bytes");
-GCSO_STATIC_ASSERT(sizeof(gcso_daes_slot_t) == 64, "gcso_daes_slot_t must be 64 bytes");
-GCSO_STATIC_ASSERT(sizeof(gcso_config_t) == 64, "gcso_config_t must be 64 bytes");
-GCSO_STATIC_ASSERT(sizeof(gcso_edbc_state_t) == 64, "gcso_edbc_state_t must be 64 bytes");
-GCSO_STATIC_ASSERT(sizeof(gcso_zimms_descriptor_t) == 64,
-                   "gcso_zimms_descriptor_t must be 64 bytes");
-GCSO_STATIC_ASSERT(sizeof(gcso_pspm_config_t) == 32, "gcso_pspm_config_t must be 32 bytes");
-GCSO_STATIC_ASSERT(sizeof(gcso_srl_descriptor_t) == 64, "gcso_srl_descriptor_t must be 64 bytes");
-GCSO_STATIC_ASSERT(sizeof(gcso_snapshot_header_t) == 128,
-                   "gcso_snapshot_header_t must be 128 bytes");
-GCSO_STATIC_ASSERT(sizeof(gcso_pprc_keyframe_header_t) == 64,
-                   "gcso_pprc_keyframe_header_t must be 64 bytes");
+/* Static Assertions for Size Invariants Matching traits.rs / abi.rs */
+GCSO_STATIC_ASSERT(sizeof(gcso_q7_t) == 1, "gcso_q7_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_descriptor_header_t) == 8, "gcso_descriptor_header_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_paged_bitmask_t) == 32, "gcso_paged_bitmask_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_pointer_trail_t) == 128, "gcso_pointer_trail_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_daes_slot_t) == 64, "gcso_daes_slot_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_config_t) == 64, "gcso_config_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_edbc_state_t) == 64, "gcso_edbc_state_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_zimms_descriptor_t) == 64, "gcso_zimms_descriptor_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_pspm_config_t) == 32, "gcso_pspm_config_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_srl_descriptor_t) == 64, "gcso_srl_descriptor_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_snapshot_header_t) == 128, "gcso_snapshot_header_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_pprc_keyframe_header_t) == 64, "gcso_pprc_keyframe_header_t size mismatch");
+
+/* Static Assertions for Alignment Invariants Matching traits.rs / abi.rs */
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_paged_bitmask_t) == 32, "gcso_paged_bitmask_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_pointer_trail_t) == 128, "gcso_pointer_trail_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_daes_slot_t) == 64, "gcso_daes_slot_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_config_t) == 16, "gcso_config_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_edbc_state_t) == 32, "gcso_edbc_state_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_zimms_descriptor_t) == 32, "gcso_zimms_descriptor_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_pspm_config_t) == 16, "gcso_pspm_config_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_srl_descriptor_t) == 32, "gcso_srl_descriptor_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_snapshot_header_t) == 64, "gcso_snapshot_header_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_pprc_keyframe_header_t) == 32, "gcso_pprc_keyframe_header_t alignment mismatch");
+
+/* Static Assertions for Exact Field Offsets Matching Rust abi.rs */
+GCSO_STATIC_ASSERT(offsetof(gcso_pointer_trail_t, accumulated_phase_delta) == 56,
+                   "gcso_pointer_trail_t::accumulated_phase_delta offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_config_t, action_hub_capacity) == 32,
+                   "gcso_config_t::action_hub_capacity offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_snapshot_header_t, checksum_crc32) == 56,
+                   "gcso_snapshot_header_t::checksum_crc32 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_snapshot_header_t, timestamp_epoch_sec) == 64,
+                   "gcso_snapshot_header_t::timestamp_epoch_sec offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_daes_slot_t, fast_path_shortcuts) == 24,
+                   "gcso_daes_slot_t::fast_path_shortcuts offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_daes_slot_t, telemetry_mini_ledger) == 56,
+                   "gcso_daes_slot_t::telemetry_mini_ledger offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_srl_descriptor_t, scale_factor) == 32,
+                   "gcso_srl_descriptor_t::scale_factor offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_pprc_keyframe_header_t, icache_payload_offset) == 24,
+                   "gcso_pprc_keyframe_header_t::icache_payload_offset offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_edbc_state_t, active_branch_mode) == 24,
+                   "gcso_edbc_state_t::active_branch_mode offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_zimms_descriptor_t, fd_handle) == 28,
+                   "gcso_zimms_descriptor_t::fd_handle offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_pspm_config_t, fact_phase_gain) == 8,
+                   "gcso_pspm_config_t::fact_phase_gain offset mismatch");
 
 GCSO_EXTERN_C_END
 
