@@ -147,7 +147,9 @@ fn atan2_f32(y: f32, x: f32) -> f32 {
             let (min_val, max_val) = if ax < ay { (ax, ay) } else { (ay, ax) };
             let ratio = min_val / max_val;
             let r2 = ratio * ratio;
-            let mut angle = ratio * (0.999_866_3 - 0.330_299_5 * r2 + 0.180_141 * r2 * r2 - 0.085_133_ * r2 * r2 * r2);
+            let mut angle = ratio
+                * (0.999_866_3 - 0.330_299_5 * r2 + 0.180_141 * r2 * r2
+                    - 0.085_133_ * r2 * r2 * r2);
             if ax < ay {
                 angle = (PI * 0.5) - angle;
             }
