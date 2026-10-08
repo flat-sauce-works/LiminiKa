@@ -18,6 +18,7 @@ metal = []
 vulkan = []
 
 [dependencies]
-# Hot-path zero-dependency runtime requirements
+
+[build-dependencies]
 cc = "1.0"
 cmake = "0.1"
