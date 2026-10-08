@@ -12,6 +12,9 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_sign_loss)]
+#![allow(clippy::manual_is_multiple_of)]
+#![allow(clippy::chunks_exact_to_as_chunks)]
+#![allow(clippy::implicit_saturating_sub)]
 
 #[cfg(not(feature = "std"))]
 use core::f32::consts::PI;
@@ -178,7 +181,7 @@ impl DpsrEngine {
     /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `head_dim` is odd, zero, or `num_heads` is zero.
     #[inline]
     pub fn new(head_dim: u32, num_heads: u32) -> GcsoResult<Self> {
-        if head_dim == 0 || (head_dim % 2 != 0) || num_heads == 0 {
+        if head_dim == 0 || !head_dim.is_multiple_of(2) || num_heads == 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
         Ok(Self {
@@ -232,7 +235,8 @@ impl PhaseSteering for DpsrEngine {
             let cos_t = cos_f32(theta);
             let sin_t = sin_f32(theta);
 
-            for pair in head_q.chunks_exact_mut(2) {
+            let (pairs, _) = head_q.as_chunks_mut::<2>();
+            for pair in pairs {
                 let q0 = pair[0];
                 let q1 = pair[1];
 
@@ -273,7 +277,10 @@ impl PhaseSteering for DpsrEngine {
             let cos_t = cos_f32(theta);
             let sin_t = sin_f32(theta);
 
-            for (pair_q, pair_k) in head_q.chunks_exact_mut(2).zip(head_k.chunks_exact_mut(2)) {
+            let (pairs_q, _) = head_q.as_chunks_mut::<2>();
+            let (pairs_k, _) = head_k.as_chunks_mut::<2>();
+
+            for (pair_q, pair_k) in pairs_q.iter_mut().zip(pairs_k.iter_mut()) {
                 // Modulate Query
                 let q0 = pair_q[0];
                 let q1 = pair_q[1];
@@ -309,11 +316,7 @@ impl PhaseSteering for DpsrEngine {
 
         // RIPA restriction: restrict phase steering strictly to upper d_head / 4 dimensions (d_head / 8 pairs)
         let low_freq_pairs = (head_dim / 8).max(1);
-        let start_pair = if pairs_per_head > low_freq_pairs {
-            pairs_per_head - low_freq_pairs
-        } else {
-            0
-        };
+        let start_pair = pairs_per_head.saturating_sub(low_freq_pairs);
 
         let q_buf = query_tensor.as_mut_slice();
         let p_buf = phase_deltas.as_slice();
@@ -330,7 +333,9 @@ impl PhaseSteering for DpsrEngine {
             let cos_t = cos_f32(theta);
             let sin_t = sin_f32(theta);
 
-            for pair in head_q.chunks_exact_mut(2).skip(start_pair) {
+            let (pairs, _) = head_q.as_chunks_mut::<2>();
+
+            for pair in pairs.iter_mut().skip(start_pair) {
                 let q0 = pair[0];
                 let q1 = pair[1];
 

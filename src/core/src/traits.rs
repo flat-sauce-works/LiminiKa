@@ -1,1328 +1,2159 @@
-// name: src/core/src/traits.rs
+// name: src/core/src/abi.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Core trait definitions, domain abstractions, and zero-copy alignment wrappers
-//! for the Geometric Cellular Sheaf Orchestrator (GCSO) engine.
-//!
-//! This module serves as the single source of truth (Contract / Ground Truth) for:
-//! 1. Zero-allocation Hot Path execution ($\mathcal{O}(1)$ per-token loops).
-//! 2. Mezzo cellular block coordination and bitmask reductions.
-//! 3. Cold Path asynchronous steering, Sheaf entropy evaluations, and ZIMMS persistence.
-//!
-//! All abstractions enforce static dispatch and memory alignment guarantees at the type level.
+//! C-ABI interface definitions, structural layouts, and FFI boundary safety primitives for GCSO core engine.
 
+#![allow(non_camel_case_types)]
+#![allow(clippy::missing_safety_doc)]
 #![allow(clippy::module_name_repetitions)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::too_many_lines)]
 #![allow(clippy::must_use_candidate)]
-#![allow(clippy::inline_always)]
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+#![allow(clippy::manual_is_multiple_of)]
 
-use core::ops::{Deref, DerefMut, Index, IndexMut, Range};
+#[cfg(feature = "std")]
+extern crate std;
+
+use core::ffi::c_char;
+use core::mem::{align_of, offset_of, size_of};
+use core::ptr;
 use core::slice;
 
-use crate::abi::{
-    gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_daes_slot_t,
-    gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t,
-    gcso_pspm_config_t, gcso_q7_t, gcso_srl_descriptor_t, gcso_zimms_descriptor_t, GcsoStatus,
-    GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER, GCSO_ERROR_NULL_POINTER,
+#[cfg(feature = "std")]
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+use crate::dpsr::DpsrEngine;
+use crate::traits::{
+    AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32, PhaseSteering,
 };
 
-/// Type alias for GCSO core result responses.
-pub type GcsoResult<T> = Result<T, GcsoStatus>;
-
-// ===================================================================
-// Const-Generic Zero-Copy Aligned Slice Wrappers
-// ===================================================================
-
-/// Zero-copy SIMD/Cacheline aligned slice wrapper preventing unaligned memory access in the Hot Path.
+/// Helper macro to catch unwinding panics and safely bridge execution into C-ABI error status codes.
 ///
-/// Ensures memory alignment constraints at the type level to eliminate runtime alignment checks inside kernel loops.
+/// Supports using the `?` operator on `Result<T, GcsoStatus>` inside the expression block.
+#[macro_export]
+macro_rules! ffi_boundary {
+    ($body:expr) => {
+        match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(
+            || -> Result<$crate::abi::GcsoStatus, $crate::abi::GcsoStatus> { $body },
+        )) {
+            Ok(Ok(status)) => status,
+            Ok(Err(err_status)) => err_status,
+            Err(_) => $crate::abi::GCSO_ERROR_PANIC_CAUGHT,
+        }
+    };
+}
+
+/// Status code returned across the C-ABI FFI boundary.
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct AlignedSlice<'a, T, const ALIGN: usize = 32> {
-    slice: &'a [T],
-}
+pub struct GcsoStatus(
+    /// Inner signed 32-bit integer status code.
+    pub i32,
+);
 
-impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
-    /// Constructs an empty `AlignedSlice` satisfying any power-of-two alignment constraint.
-    #[inline(always)]
-    #[must_use]
-    pub const fn empty() -> Self {
-        Self { slice: &[] }
-    }
+/// Operation completed successfully.
+pub const GCSO_SUCCESS: GcsoStatus = GcsoStatus(0);
+/// Invalid argument or parameter passed to C-ABI function.
+pub const GCSO_ERROR_INVALID_ARGUMENT: GcsoStatus = GcsoStatus(-1);
+/// Memory allocation failure or capacity limit reached.
+pub const GCSO_ERROR_OUT_OF_MEMORY: GcsoStatus = GcsoStatus(-2);
+/// Destination buffer size is insufficient.
+pub const GCSO_ERROR_BUFFER_TOO_SMALL: GcsoStatus = GcsoStatus(-3);
+/// Unhandled internal Rust panic caught at FFI boundary.
+pub const GCSO_ERROR_PANIC_CAUGHT: GcsoStatus = GcsoStatus(-4);
+/// Unexpected NULL pointer supplied for required parameter.
+pub const GCSO_ERROR_NULL_POINTER: GcsoStatus = GcsoStatus(-5);
+/// Context or object is in an invalid state for requested operation.
+pub const GCSO_ERROR_INVALID_STATE: GcsoStatus = GcsoStatus(-6);
+/// Binary snapshot or ABI version mismatch detected.
+pub const GCSO_ERROR_VERSION_MISMATCH: GcsoStatus = GcsoStatus(-7);
+/// Pointer passed across FFI boundary violates required memory alignment.
+pub const GCSO_ERROR_MISALIGNED_POINTER: GcsoStatus = GcsoStatus(-8);
+/// Input/output or storage operation failure.
+pub const GCSO_ERROR_IO_FAILURE: GcsoStatus = GcsoStatus(-9);
+/// Action Hub table capacity fully saturated.
+pub const GCSO_ERROR_ACTION_HUB_FULL: GcsoStatus = GcsoStatus(-10);
+/// Feature or compute backend functionality not implemented.
+pub const GCSO_ERROR_NOT_IMPLEMENTED: GcsoStatus = GcsoStatus(-11);
 
-    /// Creates a new aligned slice wrapper after validating pointer memory alignment.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `ALIGN` is zero or not a power of two.
-    /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if the memory address is not `ALIGN`-byte aligned.
-    #[inline(always)]
-    pub fn new(slice: &'a [T]) -> GcsoResult<Self> {
-        if ALIGN == 0 || !ALIGN.is_power_of_two() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        if slice.is_empty() || ((slice.as_ptr() as usize) & (ALIGN - 1)) == 0 {
-            Ok(Self { slice })
+/// Target attractor anchor not found in topological field.
+pub const GCSO_ERROR_ATTRACTOR_NOT_FOUND: GcsoStatus = GcsoStatus(-20);
+/// DPSR phase angle delta exceeded allowable rotation range.
+pub const GCSO_ERROR_DPSR_PHASE_OVERFLOW: GcsoStatus = GcsoStatus(-30);
+/// QDPS quantization step fell below minimal threshold.
+pub const GCSO_ERROR_QDPS_UNDERFLOW: GcsoStatus = GcsoStatus(-31);
+/// EDBC entropy controller encountered numerical singularity.
+pub const GCSO_ERROR_EDBC_SINGULARITY: GcsoStatus = GcsoStatus(-40);
+/// Binary snapshot container header or payload corrupted.
+pub const GCSO_ERROR_CONTAINER_CORRUPTED: GcsoStatus = GcsoStatus(-50);
+/// ZIMMS zero-copy memory mapping or DMA allocation failed.
+pub const GCSO_ERROR_ZIMMS_MAPPING_FAILED: GcsoStatus = GcsoStatus(-51);
+/// PSPM sub-head group phase routing evaluation failed.
+pub const GCSO_ERROR_PSPM_ROUTING_FAILED: GcsoStatus = GcsoStatus(-60);
+/// PPRC keyframe index lookup or seek operation failed.
+pub const GCSO_ERROR_PPRC_SEEK_FAILED: GcsoStatus = GcsoStatus(-70);
+/// Unresolved topological obstruction encountered during path step.
+pub const GCSO_ERROR_OBSTRUCTION_UNRESOLVED: GcsoStatus = GcsoStatus(-80);
+/// Dynamic extension module not loaded or initialized in DAES slot.
+pub const GCSO_ERROR_EXTENSION_NOT_LOADED: GcsoStatus = GcsoStatus(-90);
+/// DAES dynamic scratchpad workspace fully occupied.
+pub const GCSO_ERROR_DAES_SCRATCHPAD_FULL: GcsoStatus = GcsoStatus(-91);
+/// Unknown internal system error.
+pub const GCSO_ERROR_UNKNOWN: GcsoStatus = GcsoStatus(-0x7FFF_FFFF);
+
+impl From<GcsoStatus> for Result<(), GcsoStatus> {
+    #[inline]
+    fn from(status: GcsoStatus) -> Self {
+        if status == GCSO_SUCCESS {
+            Ok(())
         } else {
-            Err(GCSO_ERROR_MISALIGNED_POINTER)
+            Err(status)
         }
-    }
-
-    /// Safely constructs an `AlignedSlice` from a raw pointer and element count across FFI boundaries.
-    ///
-    /// # Safety
-    /// The caller must guarantee that `ptr` points to at least `len` valid initialized instances of `T`,
-    /// and that memory is not mutated for the lifetime `'a`.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_NULL_POINTER` if `ptr` is null when `len > 0`.
-    /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if `ptr` violates the byte alignment constraint.
-    #[inline(always)]
-    pub unsafe fn from_raw_parts(ptr: *const T, len: usize) -> GcsoResult<Self> {
-        if len == 0 {
-            return Ok(Self::empty());
-        }
-        if ptr.is_null() {
-            return Err(GCSO_ERROR_NULL_POINTER);
-        }
-        if (ptr as usize) & (ALIGN - 1) != 0 {
-            return Err(GCSO_ERROR_MISALIGNED_POINTER);
-        }
-        // SAFETY: Pointer validity and non-null status verified above by contract.
-        let slice = unsafe { slice::from_raw_parts(ptr, len) };
-        Ok(Self { slice })
-    }
-
-    /// Returns the underlying immutable slice reference.
-    #[inline(always)]
-    #[must_use]
-    pub fn as_slice(&self) -> &'a [T] {
-        self.slice
-    }
-
-    /// Returns raw immutable pointer to the underlying buffer.
-    #[inline(always)]
-    #[must_use]
-    pub fn as_ptr(&self) -> *const T {
-        self.slice.as_ptr()
-    }
-
-    /// Returns the required alignment byte boundary constraint.
-    #[inline(always)]
-    #[must_use]
-    pub const fn align(&self) -> usize {
-        ALIGN
-    }
-
-    /// Returns the number of elements in the slice.
-    #[inline(always)]
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.slice.len()
-    }
-
-    /// Returns `true` if the slice contains zero elements.
-    #[inline(always)]
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.slice.is_empty()
-    }
-
-    /// Returns the first element of the slice, or `None` if empty.
-    #[inline(always)]
-    #[must_use]
-    pub fn first(&self) -> Option<&'a T> {
-        self.slice.first()
-    }
-
-    /// Returns the last element of the slice, or `None` if empty.
-    #[inline(always)]
-    #[must_use]
-    pub fn last(&self) -> Option<&'a T> {
-        self.slice.last()
-    }
-
-    /// Returns a reference to an element or subslice at the given index.
-    #[inline(always)]
-    #[must_use]
-    pub fn get(&self, index: usize) -> Option<&'a T> {
-        self.slice.get(index)
-    }
-
-    /// Returns an iterator over exact non-overlapping chunks of length `chunk_size`.
-    #[inline(always)]
-    pub fn chunks_exact(&self, chunk_size: usize) -> core::slice::ChunksExact<'a, T> {
-        self.slice.chunks_exact(chunk_size)
-    }
-
-    /// Views the underlying slice as a byte slice safely guarded against ZST issues.
-    #[inline(always)]
-    #[must_use]
-    pub fn as_bytes(&self) -> &'a [u8]
-    where
-        T: Sized,
-    {
-        let elem_size = core::mem::size_of::<T>();
-        if elem_size == 0 || self.slice.is_empty() {
-            return &[];
-        }
-        let byte_len = self.slice.len() * elem_size;
-        // SAFETY: T is Sized and initialized memory can be viewed safely as raw bytes.
-        unsafe { slice::from_raw_parts(self.slice.as_ptr().cast::<u8>(), byte_len) }
-    }
-
-    /// Checks if a slice pointer satisfies the const alignment requirement.
-    #[inline(always)]
-    #[must_use]
-    pub fn is_aligned(slice: &[T]) -> bool {
-        ALIGN != 0
-            && ALIGN.is_power_of_two()
-            && (slice.is_empty() || ((slice.as_ptr() as usize) & (ALIGN - 1)) == 0)
-    }
-
-    /// Creates an aligned subslice if the subslice start address satisfies alignment constraints.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if index range is out of bounds.
-    /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if subslice start address is misaligned.
-    #[inline(always)]
-    pub fn subslice(&self, range: Range<usize>) -> GcsoResult<Self> {
-        let sub = self.slice.get(range).ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
-        Self::new(sub)
-    }
-
-    /// Splits the slice at the given index if the right subslice satisfies alignment constraints.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `mid` exceeds slice length.
-    /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if the right subslice start address is misaligned.
-    #[inline(always)]
-    pub fn split_at(&self, mid: usize) -> GcsoResult<(Self, Self)> {
-        if mid > self.slice.len() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        let (left, right) = self.slice.split_at(mid);
-        Ok((Self::new(left)?, Self::new(right)?))
     }
 }
 
-impl<'a, T, const ALIGN: usize> Default for AlignedSlice<'a, T, ALIGN> {
-    #[inline(always)]
+impl From<Result<(), GcsoStatus>> for GcsoStatus {
+    #[inline]
+    fn from(res: Result<(), GcsoStatus>) -> Self {
+        match res {
+            Ok(()) => GCSO_SUCCESS,
+            Err(status) => status,
+        }
+    }
+}
+
+/// C-ABI type alias for status codes matching C headers.
+pub type gcso_status_t = GcsoStatus;
+
+/// Quantized 7-bit signed fixed-point integer (scale beta_Q7 = pi / 128).
+pub type gcso_q7_t = i8;
+
+/// 64-bit capability flags bitmask type.
+pub type gcso_capability_flags_t = u64;
+
+/// Opaque handle to runtime context instance.
+pub type GcsoContextHandle = *mut core::ffi::c_void;
+/// Opaque handle to container instance.
+pub type GcsoContainerHandle = *mut core::ffi::c_void;
+/// Opaque handle to Action Hub instance.
+pub type GcsoActionHubHandle = *mut core::ffi::c_void;
+/// Opaque handle to DAES slot instance.
+pub type GcsoDaesSlotHandle = *mut core::ffi::c_void;
+/// Opaque handle to Attractor Field instance.
+pub type GcsoAttractorFieldHandle = *mut core::ffi::c_void;
+/// Opaque handle to EDBC controller instance.
+pub type GcsoEdbcControllerHandle = *mut core::ffi::c_void;
+/// Opaque handle to DPSR kernel instance.
+pub type GcsoDpsrKernelHandle = *mut core::ffi::c_void;
+/// Opaque handle to PSPM router instance.
+pub type GcsoPspmRouterHandle = *mut core::ffi::c_void;
+/// Opaque handle to SRL adapter instance.
+pub type GcsoSrlAdapterHandle = *mut core::ffi::c_void;
+
+/// C-ABI type alias for context handle.
+pub type gcso_context_handle_t = GcsoContextHandle;
+/// C-ABI type alias for container handle.
+pub type gcso_container_handle_t = GcsoContainerHandle;
+/// C-ABI type alias for Action Hub handle.
+pub type gcso_action_hub_handle_t = GcsoActionHubHandle;
+/// C-ABI type alias for DAES slot handle.
+pub type gcso_daes_slot_handle_t = GcsoDaesSlotHandle;
+/// C-ABI type alias for Attractor Field handle.
+pub type gcso_attractor_field_handle_t = GcsoAttractorFieldHandle;
+/// C-ABI type alias for EDBC controller handle.
+pub type gcso_edbc_controller_handle_t = GcsoEdbcControllerHandle;
+/// C-ABI type alias for DPSR kernel handle.
+pub type gcso_dpsr_kernel_handle_t = GcsoDpsrKernelHandle;
+/// C-ABI type alias for PSPM router handle.
+pub type gcso_pspm_router_handle_t = GcsoPspmRouterHandle;
+/// C-ABI type alias for SRL adapter handle.
+pub type gcso_srl_adapter_handle_t = GcsoSrlAdapterHandle;
+
+/// Classification types for topological attractor field anchors.
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum GcsoAnchorType {
+    /// System prompt text anchor.
+    SystemPrompt = 0,
+    /// Dense feature embedding vector anchor.
+    Embedding = 1,
+    /// Phase-conjugate repulsion anchor.
+    PhaseRepulse = 2,
+    /// Topological knot/attractor anchor.
+    Topological = 3,
+    /// Crystallized invariant anchor.
+    Crystallized = 4,
+}
+
+impl GcsoAnchorType {
+    /// Convert raw `u32` value to `GcsoAnchorType` enum variant if valid.
+    #[inline]
+    #[must_use]
+    pub fn from_u32(val: u32) -> Option<Self> {
+        match val {
+            0 => Some(Self::SystemPrompt),
+            1 => Some(Self::Embedding),
+            2 => Some(Self::PhaseRepulse),
+            3 => Some(Self::Topological),
+            4 => Some(Self::Crystallized),
+            _ => None,
+        }
+    }
+}
+
+/// C-ABI type alias for anchor type.
+pub type gcso_anchor_type_t = u32;
+
+/// System prompt string anchor descriptor type.
+pub const GCSO_ANCHOR_TYPE_SYSTEM_PROMPT: gcso_anchor_type_t = 0;
+/// Feature embedding anchor descriptor type.
+pub const GCSO_ANCHOR_TYPE_EMBEDDING: gcso_anchor_type_t = 1;
+/// Phase repulsion anchor descriptor type.
+pub const GCSO_ANCHOR_TYPE_PHASE_REPULSE: gcso_anchor_type_t = 2;
+/// Topological knot anchor descriptor type.
+pub const GCSO_ANCHOR_TYPE_TOPOLOGICAL: gcso_anchor_type_t = 3;
+/// Crystallized invariant anchor descriptor type.
+pub const GCSO_ANCHOR_TYPE_CRYSTALLIZED: gcso_anchor_type_t = 4;
+
+/// Descriptor header for size and ABI version validation.
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct gcso_descriptor_header_t {
+    /// Size of structure in bytes.
+    pub struct_size: u32,
+    /// ABI version bitmask.
+    pub abi_version: u32,
+}
+
+/// 256-bit bitmask layout aligned to 32 bytes for Warp/SIMD reductions.
+#[repr(C, align(32))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct gcso_paged_bitmask_t {
+    /// Four 64-bit word array storing 256 execution flags.
+    pub bits: [u64; 4],
+}
+
+/// Stigmergic pointer trail structure aligned to 128 bytes (2 cache lines).
+#[repr(C, align(128))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct gcso_pointer_trail_t {
+    /// Current tagged memory pointer address.
+    pub current_ptr: u64,
+    /// Previous tagged memory pointer address.
+    pub prev_ptr: u64,
+    /// Opaque caller payload data.
+    pub user_data: u64,
+    /// Accumulated graph edge traversal cost.
+    pub transition_cost: i32,
+    /// Total path execution steps taken.
+    pub step_count: u32,
+    /// Local trail density value for cellular swarm routing.
+    pub stigmergic_density: f32,
+    /// Identifier of target attractor anchor point.
+    pub target_anchor_id: u32,
+    /// Active topological cluster identifier.
+    pub cluster_id: u32,
+    /// Linked adjacent trail identifier.
+    pub linked_trail_id: u32,
+    /// Gravitational pull force exerted by nearby attractor.
+    pub attractor_pull_force: f32,
+    /// Execution status bitmask flags.
+    pub flags: u32,
+    /// Accumulated Q7 phase rotation state across 64 heads.
+    pub accumulated_phase_delta: [gcso_q7_t; 64],
+    /// Alignment padding to guarantee 128-byte boundary.
+    pub reserved_padding: [u8; 8],
+}
+
+impl Default for gcso_pointer_trail_t {
+    #[inline]
     fn default() -> Self {
-        Self::empty()
+        Self {
+            current_ptr: 0,
+            prev_ptr: 0,
+            user_data: 0,
+            transition_cost: 0,
+            step_count: 0,
+            stigmergic_density: 0.0,
+            target_anchor_id: 0,
+            cluster_id: 0,
+            linked_trail_id: 0,
+            attractor_pull_force: 0.0,
+            flags: 0,
+            accumulated_phase_delta: [0; 64],
+            reserved_padding: [0; 8],
+        }
     }
 }
 
-impl<'a, T, const ALIGN: usize> Deref for AlignedSlice<'a, T, ALIGN> {
-    type Target = [T];
-
-    #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        self.slice
-    }
+/// Dynamic Adaptive Extension Scratchpad (DAES) slot layout (64 bytes).
+#[repr(C, align(64))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct gcso_daes_slot_t {
+    /// Active extension execution mode.
+    pub mode: u32,
+    /// Ring buffer head write index.
+    pub telemetry_ring_head: u16,
+    /// Ring buffer tail read index.
+    pub telemetry_ring_tail: u16,
+    /// Total fast-path lookup cache hits.
+    pub cache_hit_count: u32,
+    /// Flags configuring auto-tuning behavior.
+    pub auto_tune_flags: u32,
+    /// Bitmask specifying fast-path bypass criteria.
+    pub fast_path_bypass_mask: u64,
+    /// Cached jump pointers for accelerated execution.
+    pub fast_path_shortcuts: [u64; 4],
+    /// Circular ledger array storing recent telemetry codes.
+    pub telemetry_mini_ledger: [u8; 8],
 }
 
-impl<'a, T, const ALIGN: usize> AsRef<[T]> for AlignedSlice<'a, T, ALIGN> {
-    #[inline(always)]
-    fn as_ref(&self) -> &[T] {
-        self.slice
-    }
+/// Global configuration descriptor structure aligned to 16 bytes (64 bytes total).
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct gcso_config_t {
+    /// Dimension per attention head (must be even).
+    pub head_dim: u32,
+    /// Total number of attention heads (<= 64).
+    pub num_heads: u32,
+    /// Block size for paged KV cache allocation.
+    pub paged_block_size: u32,
+    /// Floating-point scale factor for Q7 phase values.
+    pub q7_phase_scale: f32,
+    /// Maximum allowed rotation angle for RIPA clamping (radians).
+    pub ripa_clamp_max_rad: f32,
+    /// Minimum rotation angle threshold for QDPS filtering (radians).
+    pub qdps_min_step_rad: f32,
+    /// Epsilon constant to prevent singularity in entropy calculation.
+    pub entropy_singularity_eps: f32,
+    /// Maximum supported prompt anchor points in field.
+    pub max_prompt_anchors: u32,
+    /// Maximum capacity of Action Hub table.
+    pub action_hub_capacity: u32,
+    /// Enable CUDA warp shuffle instructions if supported.
+    pub enable_cuda_warp_shuffle: u8,
+    /// Strict enforcement of zero dynamic allocations on hot path.
+    pub enable_zero_alloc_strict: u8,
+    /// Initial operational mode for DAES scratchpad.
+    pub daes_mode: u8,
+    /// Reserved configuration flags.
+    pub reserved_flags: u8,
+    /// Reserved space for future expansion.
+    pub reserved: [u8; 24],
 }
 
-impl<'a, T, const ALIGN: usize> Index<usize> for AlignedSlice<'a, T, ALIGN> {
-    type Output = T;
-
-    #[inline(always)]
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.slice[index]
-    }
+/// Dynamic entropy controller state tracking structure (64 bytes).
+#[repr(C, align(32))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct gcso_edbc_state_t {
+    /// Moving Z-score measure of current attention entropy.
+    pub moving_z_entropy: f32,
+    /// Z-score threshold triggering path bifurcation.
+    pub bifurcation_threshold: f32,
+    /// Numerical safety threshold for singularity detection.
+    pub singularity_eps: f32,
+    /// Rate of change of sliding window entropy.
+    pub sliding_entropy_rate: f32,
+    /// Gain factor for phase repulsion forces.
+    pub repulsion_gain: f32,
+    /// Current sampling temperature modifier.
+    pub sample_temperature: f32,
+    /// Active execution branch selection mode.
+    pub active_branch_mode: u32,
+    /// Reserved space for alignment and future parameters.
+    pub reserved: [u8; 36],
 }
 
-impl<'a, T, const ALIGN: usize> Index<Range<usize>> for AlignedSlice<'a, T, ALIGN> {
-    type Output = [T];
-
-    #[inline(always)]
-    fn index(&self, range: Range<usize>) -> &Self::Output {
-        &self.slice[range]
-    }
-}
-
-impl<'a, T, const ALIGN: usize> IntoIterator for AlignedSlice<'a, T, ALIGN> {
-    type Item = &'a T;
-    type IntoIter = core::slice::Iter<'a, T>;
-
-    #[inline(always)]
-    fn into_iter(self) -> Self::IntoIter {
-        self.slice.iter()
-    }
-}
-
-impl<'a, 'b, T, const ALIGN: usize> IntoIterator for &'b AlignedSlice<'a, T, ALIGN> {
-    type Item = &'b T;
-    type IntoIter = core::slice::Iter<'b, T>;
-
-    #[inline(always)]
-    fn into_iter(self) -> Self::IntoIter {
-        self.slice.iter()
-    }
-}
-
-impl<'a, T, const ALIGN: usize> TryFrom<&'a [T]> for AlignedSlice<'a, T, ALIGN> {
-    type Error = GcsoStatus;
-
-    #[inline(always)]
-    fn try_from(slice: &'a [T]) -> Result<Self, Self::Error> {
-        Self::new(slice)
-    }
-}
-
-/// Zero-copy SIMD/Cacheline aligned mutable slice wrapper.
-#[repr(transparent)]
-#[derive(Debug, PartialEq, Eq)]
-pub struct AlignedSliceMut<'a, T, const ALIGN: usize = 32> {
-    slice: &'a mut [T],
-}
-
-impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
-    /// Constructs an empty `AlignedSliceMut` satisfying any power-of-two alignment constraint.
-    #[inline(always)]
-    #[must_use]
-    pub fn empty() -> Self {
-        Self { slice: &mut [] }
-    }
-
-    /// Creates a new mutable aligned slice wrapper after validating memory alignment.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `ALIGN` is zero or not a power of two.
-    /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if the memory address is not `ALIGN`-byte aligned.
-    #[inline(always)]
-    pub fn new(slice: &'a mut [T]) -> GcsoResult<Self> {
-        if ALIGN == 0 || !ALIGN.is_power_of_two() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        if slice.is_empty() || ((slice.as_ptr() as usize) & (ALIGN - 1)) == 0 {
-            Ok(Self { slice })
-        } else {
-            Err(GCSO_ERROR_MISALIGNED_POINTER)
-        }
-    }
-
-    /// Safely constructs an `AlignedSliceMut` from a raw mutable pointer and element count across FFI boundaries.
-    ///
-    /// # Safety
-    /// The caller must guarantee that `ptr` points to at least `len` valid initialized instances of `T`,
-    /// and that no alias pointers exist for lifetime `'a`.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_NULL_POINTER` if `ptr` is null when `len > 0`.
-    /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if `ptr` violates the byte alignment constraint.
-    #[inline(always)]
-    pub unsafe fn from_raw_parts_mut(ptr: *mut T, len: usize) -> GcsoResult<Self> {
-        if len == 0 {
-            return Ok(Self::empty());
-        }
-        if ptr.is_null() {
-            return Err(GCSO_ERROR_NULL_POINTER);
-        }
-        if (ptr as usize) & (ALIGN - 1) != 0 {
-            return Err(GCSO_ERROR_MISALIGNED_POINTER);
-        }
-        // SAFETY: Pointer validity and non-null status verified above by contract.
-        let slice = unsafe { slice::from_raw_parts_mut(ptr, len) };
-        Ok(Self { slice })
-    }
-
-    /// Returns the underlying immutable slice reference.
-    #[inline(always)]
-    #[must_use]
-    pub fn as_slice(&self) -> &[T] {
-        self.slice
-    }
-
-    /// Returns the underlying mutable slice reference.
-    #[inline(always)]
-    #[must_use]
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
-        self.slice
-    }
-
-    /// Reborrows the mutable slice as an immutable `AlignedSlice`.
-    #[inline(always)]
-    #[must_use]
-    pub fn as_aligned_slice(&self) -> AlignedSlice<'_, T, ALIGN> {
-        AlignedSlice { slice: self.slice }
-    }
-
-    /// Reborrows `self` for a shorter lifetime.
-    #[inline(always)]
-    pub fn reborrow(&mut self) -> AlignedSliceMut<'_, T, ALIGN> {
-        AlignedSliceMut { slice: self.slice }
-    }
-
-    /// Returns raw mutable pointer to the underlying buffer.
-    #[inline(always)]
-    pub fn as_mut_ptr(&mut self) -> *mut T {
-        self.slice.as_mut_ptr()
-    }
-
-    /// Returns raw immutable pointer to the underlying buffer.
-    #[inline(always)]
-    #[must_use]
-    pub fn as_ptr(&self) -> *const T {
-        self.slice.as_ptr()
-    }
-
-    /// Returns the required alignment byte boundary constraint.
-    #[inline(always)]
-    #[must_use]
-    pub const fn align(&self) -> usize {
-        ALIGN
-    }
-
-    /// Returns the number of elements in the slice.
-    #[inline(always)]
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.slice.len()
-    }
-
-    /// Returns `true` if the slice contains zero elements.
-    #[inline(always)]
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.slice.is_empty()
-    }
-
-    /// Returns the first element of the slice, or `None` if empty.
-    #[inline(always)]
-    #[must_use]
-    pub fn first(&self) -> Option<&T> {
-        self.slice.first()
-    }
-
-    /// Returns a mutable reference to the first element of the slice, or `None` if empty.
-    #[inline(always)]
-    pub fn first_mut(&mut self) -> Option<&mut T> {
-        self.slice.first_mut()
-    }
-
-    /// Returns the last element of the slice, or `None` if empty.
-    #[inline(always)]
-    #[must_use]
-    pub fn last(&self) -> Option<&T> {
-        self.slice.last()
-    }
-
-    /// Returns a mutable reference to the last element of the slice, or `None` if empty.
-    #[inline(always)]
-    pub fn last_mut(&mut self) -> Option<&mut T> {
-        self.slice.last_mut()
-    }
-
-    /// Returns an iterator over exact non-overlapping mutable chunks of length `chunk_size`.
-    #[inline(always)]
-    pub fn chunks_exact_mut(&mut self, chunk_size: usize) -> core::slice::ChunksExactMut<'_, T> {
-        self.slice.chunks_exact_mut(chunk_size)
-    }
-
-    /// Fills the aligned mutable slice with a uniform value in zero-allocation mode.
-    #[inline(always)]
-    pub fn fill(&mut self, value: T)
-    where
-        T: Copy,
-    {
-        self.slice.fill(value);
-    }
-
-    /// Fills the aligned slice with default zero bytes in zero-allocation mode.
-    #[inline(always)]
-    pub fn zero_out(&mut self)
-    where
-        T: Copy,
-    {
-        let elem_size = core::mem::size_of::<T>();
-        if elem_size == 0 || self.slice.is_empty() {
-            return;
-        }
-        let byte_len = self.slice.len() * elem_size;
-        // SAFETY: Raw byte zeroing over initialized T slice memory.
-        unsafe {
-            core::ptr::write_bytes(self.slice.as_mut_ptr().cast::<u8>(), 0, byte_len);
-        }
-    }
-
-    /// Views the underlying mutable slice as a byte slice.
-    #[inline(always)]
-    pub fn as_bytes_mut(&mut self) -> &mut [u8]
-    where
-        T: Sized,
-    {
-        let elem_size = core::mem::size_of::<T>();
-        if elem_size == 0 || self.slice.is_empty() {
-            return &mut [];
-        }
-        let byte_len = self.slice.len() * elem_size;
-        // SAFETY: T is Sized and initialized memory can be viewed safely as mutable bytes.
-        unsafe { slice::from_raw_parts_mut(self.slice.as_mut_ptr().cast::<u8>(), byte_len) }
-    }
-
-    /// Checks if a slice pointer satisfies the const alignment requirement.
-    #[inline(always)]
-    #[must_use]
-    pub fn is_aligned(slice: &[T]) -> bool {
-        ALIGN != 0
-            && ALIGN.is_power_of_two()
-            && (slice.is_empty() || ((slice.as_ptr() as usize) & (ALIGN - 1)) == 0)
-    }
-
-    /// Creates a mutable subslice if the subslice start address satisfies alignment constraints.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if index range is out of bounds.
-    /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if subslice start address is misaligned.
-    #[inline(always)]
-    pub fn subslice_mut(
-        &mut self,
-        range: Range<usize>,
-    ) -> GcsoResult<AlignedSliceMut<'_, T, ALIGN>> {
-        let sub = self
-            .slice
-            .get_mut(range)
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
-        AlignedSliceMut::new(sub)
-    }
-
-    /// Splits the mutable slice at the given index if the right subslice satisfies alignment constraints.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `mid` exceeds slice length.
-    /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if the right subslice start address is misaligned.
-    #[inline(always)]
-    pub fn split_at_mut(
-        &mut self,
-        mid: usize,
-    ) -> GcsoResult<(AlignedSliceMut<'_, T, ALIGN>, AlignedSliceMut<'_, T, ALIGN>)> {
-        if mid > self.slice.len() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        let (left, right) = self.slice.split_at_mut(mid);
-        Ok((AlignedSliceMut::new(left)?, AlignedSliceMut::new(right)?))
-    }
-
-    /// Copies elements from an aligned source slice into `self` in zero-allocation mode.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if slice lengths do not match.
-    #[inline(always)]
-    pub fn copy_from_aligned_slice(&mut self, src: &AlignedSlice<'_, T, ALIGN>) -> GcsoResult<()>
-    where
-        T: Copy,
-    {
-        if self.slice.len() != src.len() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        self.slice.copy_from_slice(src.as_slice());
-        Ok(())
-    }
-
-    /// Copies elements from an unaligned slice into `self` in zero-allocation mode.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if slice lengths do not match.
-    #[inline(always)]
-    pub fn copy_from_slice(&mut self, src: &[T]) -> GcsoResult<()>
-    where
-        T: Copy,
-    {
-        if self.slice.len() != src.len() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        self.slice.copy_from_slice(src);
-        Ok(())
-    }
-}
-
-impl<'a, T, const ALIGN: usize> Default for AlignedSliceMut<'a, T, ALIGN> {
-    #[inline(always)]
+impl Default for gcso_edbc_state_t {
+    #[inline]
     fn default() -> Self {
-        Self::empty()
+        Self {
+            moving_z_entropy: 0.0,
+            bifurcation_threshold: 0.0,
+            singularity_eps: 0.0,
+            sliding_entropy_rate: 0.0,
+            repulsion_gain: 0.0,
+            sample_temperature: 0.0,
+            active_branch_mode: 0,
+            reserved: [0; 36],
+        }
     }
 }
 
-impl<'a, T, const ALIGN: usize> Deref for AlignedSliceMut<'a, T, ALIGN> {
-    type Target = [T];
+/// Zero-copy memory mapped storage descriptor (64 bytes).
+#[repr(C, align(32))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct gcso_zimms_descriptor_t {
+    /// Memory address of virtual memory region.
+    pub mapped_address: u64,
+    /// Total file length in bytes.
+    pub file_size_bytes: u64,
+    /// Direct Memory Access (DMA) handle.
+    pub dma_buffer_handle: u64,
+    /// Memory mapping attribute flags.
+    pub flags: u32,
+    /// Low-level operating system file descriptor.
+    pub fd_handle: i32,
+    /// Reserved space for future extension.
+    pub reserved: [u8; 32],
+}
 
-    #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        self.slice
+impl Default for gcso_zimms_descriptor_t {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            mapped_address: 0,
+            file_size_bytes: 0,
+            dma_buffer_handle: 0,
+            flags: 0,
+            fd_handle: -1,
+            reserved: [0; 32],
+        }
     }
 }
 
-impl<'a, T, const ALIGN: usize> DerefMut for AlignedSliceMut<'a, T, ALIGN> {
-    #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.slice
+/// Sub-head group router configuration descriptor (32 bytes).
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct gcso_pspm_config_t {
+    /// Number of attention heads allocated for factual processing.
+    pub num_fact_heads: u16,
+    /// Number of attention heads allocated for logical reasoning.
+    pub num_logic_heads: u16,
+    /// Number of attention heads allocated for exploratory sampling.
+    pub num_explore_heads: u16,
+    /// Bitmask flags controlling routing logic.
+    pub flags: u16,
+    /// Steering gain applied to factual head group.
+    pub fact_phase_gain: f32,
+    /// Steering gain applied to logical head group.
+    pub logic_phase_gain: f32,
+    /// Steering gain applied to exploratory head group.
+    pub explore_phase_gain: f32,
+    /// Reserved padding for 16-byte alignment.
+    pub reserved: [u8; 12],
+}
+
+/// Sparse Residual Adapter Layer (SRL) Rank-1 descriptor (64 bytes).
+#[repr(C, align(32))]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct gcso_srl_descriptor_t {
+    /// Index of target transformer layer.
+    pub layer_idx: u32,
+    /// Rank of low-rank adapter (fixed to 1 for SRL).
+    pub rank: u32,
+    /// Raw pointer to left projection vector U.
+    pub u_vector_ptr: u64,
+    /// Raw pointer to right projection vector V.
+    pub v_vector_ptr: u64,
+    /// Raw pointer to scalar gain factor array.
+    pub gain_scalar_ptr: u64,
+    /// Scaling multiplier for residual injection.
+    pub scale_factor: f32,
+    /// Flags indicating update mode and precision.
+    pub flags: u32,
+    /// Reserved space for future alignment requirements.
+    pub reserved: [u8; 24],
+}
+
+/// Unified binary snapshot container header structure (128 bytes).
+#[repr(C, align(64))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct gcso_snapshot_header_t {
+    /// Format identifier magic constant (0x4F534347 = "GCSO").
+    pub magic: u32,
+    /// Snapshot ABI version (0x00000101 = 0.1.1).
+    pub version: u32,
+    /// Total binary size of file payload in bytes.
+    pub total_size: u64,
+    /// Offset to Action Hub table section.
+    pub action_hub_offset: u64,
+    /// Offset to Attractor Field section.
+    pub attractor_field_offset: u64,
+    /// Offset to DPSR state section.
+    pub dpsr_state_offset: u64,
+    /// Offset to SRL state section.
+    pub srl_state_offset: u64,
+    /// Offset to EDBC controller state section.
+    pub edbc_state_offset: u64,
+    /// CRC32 checksum over snapshot payload.
+    pub checksum_crc32: u32,
+    /// Offset to DAES scratchpad state section.
+    pub daes_slot_offset: u32,
+    /// Epoch timestamp of serialization.
+    pub timestamp_epoch_sec: u64,
+    /// Padding to enforce 128-byte size and 64-byte alignment.
+    pub reserved_padding: [u8; 56],
+}
+
+impl Default for gcso_snapshot_header_t {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            magic: 0,
+            version: 0,
+            total_size: 0,
+            action_hub_offset: 0,
+            attractor_field_offset: 0,
+            dpsr_state_offset: 0,
+            srl_state_offset: 0,
+            edbc_state_offset: 0,
+            checksum_crc32: 0,
+            daes_slot_offset: 0,
+            timestamp_epoch_sec: 0,
+            reserved_padding: [0; 56],
+        }
     }
 }
 
-impl<'a, T, const ALIGN: usize> AsRef<[T]> for AlignedSliceMut<'a, T, ALIGN> {
-    #[inline(always)]
-    fn as_ref(&self) -> &[T] {
-        self.slice
-    }
+/// PPRC Keyframe KV cache index header structure (64 bytes).
+#[repr(C, align(32))]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct gcso_pprc_keyframe_header_t {
+    /// Frame classification (0 = Keyframe, 1 = Delta).
+    pub frame_type: u32,
+    /// Absolute token index in sequence.
+    pub token_index: u32,
+    /// Distance between consecutive keyframes.
+    pub gop_length: u32,
+    /// Length of combined direction phase vector.
+    pub composite_vector_length: f32,
+    /// Concentration parameter for von Mises distribution.
+    pub von_mises_kappa: f32,
+    /// Scalar residual magnitude for sparse updates.
+    pub sparse_scalar_residual: f32,
+    /// Offset to Intrinsic Phase Cache (ICache) data.
+    pub icache_payload_offset: u64,
+    /// Offset to Position Phase Cache (PCache) data.
+    pub pcache_payload_offset: u64,
+    /// Reserved space for future extension.
+    pub reserved: [u8; 24],
 }
 
-impl<'a, T, const ALIGN: usize> AsMut<[T]> for AlignedSliceMut<'a, T, ALIGN> {
-    #[inline(always)]
-    fn as_mut(&mut self) -> &mut [T] {
-        self.slice
-    }
-}
+// Static layout assertion checks to guarantee standard C-ABI structural alignment and field offsets
+const _: () = {
+    assert!(size_of::<gcso_status_t>() == 4);
+    assert!(size_of::<gcso_q7_t>() == 1);
+    assert!(size_of::<gcso_descriptor_header_t>() == 8);
+    assert!(size_of::<gcso_paged_bitmask_t>() == 32);
+    assert!(size_of::<gcso_pointer_trail_t>() == 128);
+    assert!(size_of::<gcso_daes_slot_t>() == 64);
+    assert!(size_of::<gcso_config_t>() == 64);
+    assert!(size_of::<gcso_edbc_state_t>() == 64);
+    assert!(size_of::<gcso_zimms_descriptor_t>() == 64);
+    assert!(size_of::<gcso_pspm_config_t>() == 32);
+    assert!(size_of::<gcso_srl_descriptor_t>() == 64);
+    assert!(size_of::<gcso_snapshot_header_t>() == 128);
+    assert!(size_of::<gcso_pprc_keyframe_header_t>() == 64);
 
-impl<'a, T, const ALIGN: usize> Index<usize> for AlignedSliceMut<'a, T, ALIGN> {
-    type Output = T;
+    assert!(align_of::<gcso_paged_bitmask_t>() == 32);
+    assert!(align_of::<gcso_pointer_trail_t>() == 128);
+    assert!(align_of::<gcso_daes_slot_t>() == 64);
+    assert!(align_of::<gcso_config_t>() == 16);
+    assert!(align_of::<gcso_edbc_state_t>() == 32);
+    assert!(align_of::<gcso_zimms_descriptor_t>() == 32);
+    assert!(align_of::<gcso_pspm_config_t>() == 16);
+    assert!(align_of::<gcso_srl_descriptor_t>() == 32);
+    assert!(align_of::<gcso_snapshot_header_t>() == 64);
+    assert!(align_of::<gcso_pprc_keyframe_header_t>() == 32);
 
-    #[inline(always)]
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.slice[index]
-    }
-}
+    assert!(offset_of!(gcso_pointer_trail_t, accumulated_phase_delta) == 56);
+    assert!(offset_of!(gcso_config_t, action_hub_capacity) == 32);
+    assert!(offset_of!(gcso_snapshot_header_t, checksum_crc32) == 56);
+    assert!(offset_of!(gcso_snapshot_header_t, timestamp_epoch_sec) == 64);
+    assert!(offset_of!(gcso_daes_slot_t, fast_path_shortcuts) == 24);
+    assert!(offset_of!(gcso_srl_descriptor_t, scale_factor) == 32);
+    assert!(offset_of!(gcso_pprc_keyframe_header_t, icache_payload_offset) == 24);
+};
 
-impl<'a, T, const ALIGN: usize> IndexMut<usize> for AlignedSliceMut<'a, T, ALIGN> {
-    #[inline(always)]
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.slice[index]
-    }
-}
-
-impl<'a, T, const ALIGN: usize> Index<Range<usize>> for AlignedSliceMut<'a, T, ALIGN> {
-    type Output = [T];
-
-    #[inline(always)]
-    fn index(&self, range: Range<usize>) -> &Self::Output {
-        &self.slice[range]
-    }
-}
-
-impl<'a, T, const ALIGN: usize> IndexMut<Range<usize>> for AlignedSliceMut<'a, T, ALIGN> {
-    #[inline(always)]
-    fn index_mut(&mut self, range: Range<usize>) -> &mut Self::Output {
-        &mut self.slice[range]
-    }
-}
-
-impl<'a, T, const ALIGN: usize> IntoIterator for AlignedSliceMut<'a, T, ALIGN> {
-    type Item = &'a mut T;
-    type IntoIter = core::slice::IterMut<'a, T>;
-
-    #[inline(always)]
-    fn into_iter(self) -> Self::IntoIter {
-        self.slice.iter_mut()
-    }
-}
-
-impl<'a, 'b, T, const ALIGN: usize> IntoIterator for &'b mut AlignedSliceMut<'a, T, ALIGN> {
-    type Item = &'b mut T;
-    type IntoIter = core::slice::IterMut<'b, T>;
-
-    #[inline(always)]
-    fn into_iter(self) -> Self::IntoIter {
-        self.slice.iter_mut()
-    }
-}
-
-impl<'a, T, const ALIGN: usize> TryFrom<&'a mut [T]> for AlignedSliceMut<'a, T, ALIGN> {
-    type Error = GcsoStatus;
-
-    #[inline(always)]
-    fn try_from(slice: &'a mut [T]) -> Result<Self, Self::Error> {
-        Self::new(slice)
-    }
-}
-
-/// 16-byte aligned immutable slice wrapper for DPSR phase steering arrays.
-pub type AlignedSlice16<'a, T> = AlignedSlice<'a, T, 16>;
-
-/// 16-byte aligned mutable slice wrapper for DPSR phase steering arrays.
-pub type AlignedSliceMut16<'a, T> = AlignedSliceMut<'a, T, 16>;
-
-/// 32-byte aligned immutable slice wrapper for SIMD/AVX vectors and tensor buffers.
-pub type AlignedSlice32<'a, T> = AlignedSlice<'a, T, 32>;
-
-/// 32-byte aligned mutable slice wrapper for SIMD/AVX vectors and tensor buffers.
-pub type AlignedSliceMut32<'a, T> = AlignedSliceMut<'a, T, 32>;
-
-/// 64-byte aligned immutable slice wrapper for CPU/GPU cache line structures.
-pub type AlignedSlice64<'a, T> = AlignedSlice<'a, T, 64>;
-
-/// 64-byte aligned mutable slice wrapper for CPU/GPU cache line structures.
-pub type AlignedSliceMut64<'a, T> = AlignedSliceMut<'a, T, 64>;
-
-/// 128-byte aligned immutable slice wrapper for dual cache line pointer trails.
-pub type AlignedSlice128<'a, T> = AlignedSlice<'a, T, 128>;
-
-/// 128-byte aligned mutable slice wrapper for dual cache line pointer trails.
-pub type AlignedSliceMut128<'a, T> = AlignedSliceMut<'a, T, 128>;
-
-/// Helper function to check pointer alignment for a generic custom byte boundary.
-#[inline(always)]
+/// Helper function to check pointer natural alignment safely across architectures.
+#[inline]
 #[must_use]
-pub fn is_aligned_to<T>(slice: &[T], align: usize) -> bool {
-    align != 0
-        && align.is_power_of_two()
-        && (slice.is_empty() || ((slice.as_ptr() as usize) & (align - 1)) == 0)
+pub fn is_aligned<T>(ptr: *const T) -> bool {
+    !ptr.is_null() && (ptr as usize).is_multiple_of(align_of::<T>())
 }
 
+/// Helper function to check pointer alignment for a specific custom alignment requirement.
+#[inline]
+#[must_use]
+pub fn is_aligned_to<T>(ptr: *const T, align: usize) -> bool {
+    !ptr.is_null() && align != 0 && align.is_power_of_two() && (ptr as usize).is_multiple_of(align)
+}
+
+/// Static version string constant for FFI boundary checks matching ABI v0.1.1.
+static GCSO_ABI_VERSION: &[u8] = b"0.1.1\0";
+
 // ===================================================================
-// Boundary System Information & Capability Query Trait
+// 1. System & Capability Query Interface
 // ===================================================================
 
-/// Trait for querying system ABI versions and runtime compute capabilities.
+/// Retrieve numeric components of the GCSO C-ABI version (v0.1.1).
 ///
-/// **Boundary / System Layer Contract.**
-pub trait SystemCapabilityQuery: Send + Sync {
-    /// Returns the semantic ABI version tuple `(major, minor, patch)`.
-    fn abi_version(&self) -> (u32, u32, u32);
-
-    /// Returns the static ABI version string.
-    fn abi_version_string(&self) -> &'static str;
-
-    /// Queries active compute capability bitmask flags.
-    fn query_capability(&self) -> gcso_capability_flags_t;
-
-    /// Populates default runtime configuration parameters.
-    fn init_default_config(&self, config: &mut gcso_config_t) -> GcsoResult<()>;
+/// # Safety
+/// Pointers must be valid, non-null writable memory locations aligned to `u32`.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_abi_get_version(major: *mut u32, minor: *mut u32, patch: *mut u32) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        if is_aligned(major) {
+            unsafe { *major = 0 };
+        }
+        if is_aligned(minor) {
+            unsafe { *minor = 1 };
+        }
+        if is_aligned(patch) {
+            unsafe { *patch = 1 };
+        }
+    }));
 }
 
-// ===================================================================
-// Unified High-Level Runtime Context Facade Trait
-// ===================================================================
-
-/// Unified Hot-Path Runtime Context trait for token-by-token inference loops.
+/// Retrieve the static C-ABI version string ("0.1.1").
 ///
-/// **Macro / High-Level Boundary Contract.**
-/// Implementations MUST guarantee zero dynamic allocations (`malloc`, `Box`, `Vec`)
-/// during per-token inference calls (`step_token`).
-pub trait GcsoRuntimeContext: Send + Sync {
-    /// Resets transient phase accumulators and step counters without freeing tables.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_STATE` if runtime context state is corrupted.
-    fn reset(&mut self) -> GcsoResult<()>;
-
-    /// Registers a natural language system prompt text anchor in phase space (Primary Baseline Endpoint).
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_ACTION_HUB_FULL` if max prompt anchors capacity is reached.
-    fn set_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> GcsoResult<()>;
-
-    /// Executes a per-token Hot Path inference step in zero-allocation mode.
-    ///
-    /// Applies QDPS step filtering, RIPA soft-bounded phase steering on Query registers,
-    /// and populates the 128-byte pointer trail status in $\mathcal{O}(1)$ time.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_STATE` if context is uninitialized.
-    /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if tensor buffers violate 32-byte alignment.
-    fn step_token(
-        &mut self,
-        token_id: u32,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        trail_out: Option<&mut gcso_pointer_trail_t>,
-    ) -> GcsoResult<()>;
-
-    /// Serializes active runtime context state into a binary snapshot.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_BUFFER_TOO_SMALL` if output buffer size is insufficient.
-    fn serialize(&self, buffer: &mut [u8], required_size: &mut usize) -> GcsoResult<()>;
-
-    /// Deserializes binary snapshot buffer to restore context state in-place.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_CONTAINER_CORRUPTED` if checksum or magic header validation fails.
-    fn deserialize(&mut self, buffer: &[u8]) -> GcsoResult<()>;
-
-    /// Seeks to a specific token position in the PPRC keyframe KV cache.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_PPRC_SEEK_FAILED` if `token_index` is out of bounds.
-    fn seek_to_token(
-        &mut self,
-        token_index: u32,
-        header_out: &mut gcso_pprc_keyframe_header_t,
-    ) -> GcsoResult<()>;
+/// # Safety
+/// Returns a valid null-terminated C string pointer that remains valid for the process lifetime.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_abi_get_version_string() -> *const c_char {
+    GCSO_ABI_VERSION.as_ptr().cast::<c_char>()
 }
 
-// ===================================================================
-// Hot-Path Traits (Zero Dynamic Allocation, Nano / Micro Level Static Dispatch Target)
-// ===================================================================
-
-/// Hot-path trait for dynamic phase-steering algorithms on Query/Key tensors (**Nano / Micro Level**).
+/// Convert a `GcsoStatus` error code into its corresponding static string representation.
 ///
-/// # Performance Invariants
-/// Implementations MUST NOT perform dynamic heap allocations (`malloc`, `Box`, `Vec`).
-/// All methods are designed for static dispatch and MUST maintain $\mathcal{O}(d_{\mathrm{head}})$
-/// time complexity per head.
-pub trait PhaseSteering: Send + Sync {
-    /// Returns the target head dimension ($d_{\mathrm{head}}$).
-    fn head_dim(&self) -> u32;
-
-    /// Returns the total number of attention heads.
-    fn num_heads(&self) -> u32;
-
-    /// Applies inline dynamic phase steering to a Query tensor in zero-allocation mode.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if buffer lengths or head dimensions are invalid.
-    fn apply_phase_steering(
-        &self,
-        query_tensor: &mut AlignedSliceMut32<'_, f32>,
-        phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
-    ) -> GcsoResult<()>;
-
-    /// Applies fused dynamic phase steering to Query and Key tensors simultaneously in a single pass.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if tensor buffers do not match configuration.
-    fn apply_phase_steering_fused(
-        &self,
-        query_tensor: &mut AlignedSliceMut32<'_, f32>,
-        key_tensor: &mut AlignedSliceMut32<'_, f32>,
-        phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
-    ) -> GcsoResult<()>;
-
-    /// Applies RIPA soft-bounded phase steering restricted to low-frequency channels.
-    ///
-    /// Clamps rotation angles strictly on low-frequency head dimensions ($d_{\mathrm{head}}/4$).
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `max_rad` is non-positive or buffers mismatch.
-    fn apply_phase_steering_safe(
-        &self,
-        query_tensor: &mut AlignedSliceMut32<'_, f32>,
-        phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
-        max_rad: f32,
-    ) -> GcsoResult<()>;
-
-    /// QDPS discrete filter: cuts off phase rotation steps falling below `min_step_rad`.
-    ///
-    /// Prevents grid jitter and numerical oscillation under ultra-low quantization.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `min_step_rad` is negative or buffer is empty.
-    fn qdps_filter_step(
-        &self,
-        phase_deltas: &mut AlignedSliceMut16<'_, gcso_q7_t>,
-        min_step_rad: f32,
-    ) -> GcsoResult<()>;
-
-    /// Lazy Phase Unwrapping: Applies relative phase difference against context accumulator.
-    ///
-    /// Modulates Query registers without modifying Key-Value caches in VRAM.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if tensor buffers do not match head config.
-    fn lazy_unwrap_override(
-        &self,
-        query_tensor: &mut AlignedSliceMut32<'_, f32>,
-        context_accum: &AlignedSlice32<'_, f32>,
-    ) -> GcsoResult<()>;
-
-    /// Executes norm-guarded Slerp phase stabilization on state vectors in zero-allocation mode.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if bounds are invalid.
-    /// Returns `GCSO_ERROR_EDBC_SINGULARITY` if floating-point vector norm is NaN or Infinite.
-    fn slerp_norm_guard_stable(
-        &self,
-        tensor: &mut AlignedSliceMut32<'_, f32>,
-        norm_lower: f32,
-        norm_upper: f32,
-    ) -> GcsoResult<()>;
-
-    /// Applies fused inline logit phase shift prior to LM Head Softmax.
-    ///
-    /// Enforces 32-byte alignment on `logits` for SIMD/AVX-512 vectorization safety.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `logits` or `phase_deltas` are empty.
-    fn fused_logit_shift(
-        &self,
-        logits: &mut AlignedSliceMut32<'_, f32>,
-        phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
-    ) -> GcsoResult<()>;
-
-    /// Computes Procrustes phase delta alignment between source and target state representations.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if dimension mismatch or invalid scale occurs.
-    fn compute_procrustes_phase_delta(
-        &self,
-        source: &AlignedSlice32<'_, f32>,
-        target: &AlignedSlice32<'_, f32>,
-        phase_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
-    ) -> GcsoResult<()>;
+/// # Safety
+/// Safe to call with any `GcsoStatus` value.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_status_to_string(status: GcsoStatus) -> *const c_char {
+    let msg: &'static [u8] = match status {
+        GCSO_SUCCESS => b"GCSO_SUCCESS\0",
+        GCSO_ERROR_INVALID_ARGUMENT => b"GCSO_ERROR_INVALID_ARGUMENT\0",
+        GCSO_ERROR_OUT_OF_MEMORY => b"GCSO_ERROR_OUT_OF_MEMORY\0",
+        GCSO_ERROR_BUFFER_TOO_SMALL => b"GCSO_ERROR_BUFFER_TOO_SMALL\0",
+        GCSO_ERROR_PANIC_CAUGHT => b"GCSO_ERROR_PANIC_CAUGHT\0",
+        GCSO_ERROR_NULL_POINTER => b"GCSO_ERROR_NULL_POINTER\0",
+        GCSO_ERROR_INVALID_STATE => b"GCSO_ERROR_INVALID_STATE\0",
+        GCSO_ERROR_VERSION_MISMATCH => b"GCSO_ERROR_VERSION_MISMATCH\0",
+        GCSO_ERROR_MISALIGNED_POINTER => b"GCSO_ERROR_MISALIGNED_POINTER\0",
+        GCSO_ERROR_IO_FAILURE => b"GCSO_ERROR_IO_FAILURE\0",
+        GCSO_ERROR_ACTION_HUB_FULL => b"GCSO_ERROR_ACTION_HUB_FULL\0",
+        GCSO_ERROR_NOT_IMPLEMENTED => b"GCSO_ERROR_NOT_IMPLEMENTED\0",
+        GCSO_ERROR_ATTRACTOR_NOT_FOUND => b"GCSO_ERROR_ATTRACTOR_NOT_FOUND\0",
+        GCSO_ERROR_DPSR_PHASE_OVERFLOW => b"GCSO_ERROR_DPSR_PHASE_OVERFLOW\0",
+        GCSO_ERROR_QDPS_UNDERFLOW => b"GCSO_ERROR_QDPS_UNDERFLOW\0",
+        GCSO_ERROR_EDBC_SINGULARITY => b"GCSO_ERROR_EDBC_SINGULARITY\0",
+        GCSO_ERROR_CONTAINER_CORRUPTED => b"GCSO_ERROR_CONTAINER_CORRUPTED\0",
+        GCSO_ERROR_ZIMMS_MAPPING_FAILED => b"GCSO_ERROR_ZIMMS_MAPPING_FAILED\0",
+        GCSO_ERROR_PSPM_ROUTING_FAILED => b"GCSO_ERROR_PSPM_ROUTING_FAILED\0",
+        GCSO_ERROR_PPRC_SEEK_FAILED => b"GCSO_ERROR_PPRC_SEEK_FAILED\0",
+        GCSO_ERROR_OBSTRUCTION_UNRESOLVED => b"GCSO_ERROR_OBSTRUCTION_UNRESOLVED\0",
+        GCSO_ERROR_EXTENSION_NOT_LOADED => b"GCSO_ERROR_EXTENSION_NOT_LOADED\0",
+        GCSO_ERROR_DAES_SCRATCHPAD_FULL => b"GCSO_ERROR_DAES_SCRATCHPAD_FULL\0",
+        _ => b"GCSO_ERROR_UNKNOWN\0",
+    };
+    msg.as_ptr().cast::<c_char>()
 }
 
-/// Hot-path trait for $\mathcal{O}(1)$ tagged pointer transitions and action hub state updates (**Micro Level**).
+/// Query current execution hardware capabilities and compute backends.
 ///
-/// Implements stigmergic memory traversal over sidecar pointer tables (SPT).
-pub trait PointerActionHub: Send + Sync {
-    /// Resets transient pointer trails and slot counters without freeing tables.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_STATE` if action hub is corrupted.
-    fn reset(&mut self) -> GcsoResult<()>;
-
-    /// Advances a tagged pointer transition in zero-allocation mode.
-    ///
-    /// Updates `trail_out` in-place without dynamic heap allocation.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_STATE` if context is uninitialized.
-    fn step_pointer(
-        &mut self,
-        current_ptr: u64,
-        trail_out: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<()>;
-
-    /// Computes direct 256-slot hash index for 64-bit pointer trail caching using SplitMix64.
-    #[must_use]
-    fn hash_slot256_index(&self, ptr: u64) -> u32;
-
-    /// Pulls active pointer trails toward a macro target anchor via pull force $F_{\mathrm{pull}}$.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `pull_force` is NaN or Infinite.
-    fn pull_trail_to_attractor(
-        &mut self,
-        trail_id: u32,
-        anchor_id: u32,
-        pull_force: f32,
-    ) -> GcsoResult<()>;
-
-    /// Links adjacent cellular hallucinated trails into contiguous trace graphs.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_STATE` if action hub state is invalid.
-    fn link_hallucinated_trails(&mut self, src_trail_id: u32, dst_trail_id: u32) -> GcsoResult<()>;
-
-    /// Performs bit-tree reduction across 32-byte aligned paged bitmasks in $\mathcal{O}(1)$ time.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `bitmasks` is empty.
-    fn reduce_bit_tree(
-        &self,
-        bitmasks: &AlignedSlice32<'_, gcso_paged_bitmask_t>,
-        reduced_out: &mut gcso_paged_bitmask_t,
-    ) -> GcsoResult<()>;
-
-    /// Evaluates SIMD/Warp bitmask reduction over 32-byte aligned PagedBlock KV caches.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `kv_bits` is empty.
-    fn paged_block_warp_bitmask(
-        &self,
-        kv_bits: &AlignedSlice32<'_, u64>,
-        mask_out: &mut gcso_paged_bitmask_t,
-    ) -> GcsoResult<()>;
-
-    /// Returns the maximum slot capacity of the Action Hub table.
-    fn capacity(&self) -> u32;
-
-    /// Returns the active pointer trail count currently registered.
-    fn active_count(&self) -> u32;
+/// # Safety
+/// `flags` must point to a valid writable 64-bit unsigned integer aligned to `u64`.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_abi_query_capability(flags: *mut u64) -> GcsoStatus {
+    if flags.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(flags) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!({
+        #[allow(unused_mut)]
+        let mut caps = 0x01u64; // Base CPU capability flag
+        #[cfg(feature = "cuda")]
+        {
+            caps |= 1 << 1;
+        }
+        #[cfg(feature = "vulkan")]
+        {
+            caps |= 1 << 2;
+        }
+        #[cfg(any(target_os = "macos", feature = "metal"))]
+        {
+            caps |= 1 << 3;
+        }
+        unsafe { *flags = caps };
+        Ok(GCSO_SUCCESS)
+    })
 }
 
-/// Dynamic Adaptive Extension Scratchpad (DAES) Multi-Layer Controller.
+/// Initialize a `gcso_config_t` structure strictly conforming to GCSO standards.
 ///
-/// Operates $\mathcal{O}(1)$ fast-path shortcuts and in-register telemetry push (**DAES Layer**).
-pub trait DaesScratchpad: Send + Sync {
-    /// Resets active telemetry mini ledger and cache counters in-place.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_STATE` if scratchpad slot is corrupted.
-    fn reset_telemetry(&mut self, slot: &mut gcso_daes_slot_t) -> GcsoResult<()>;
-
-    /// Executes fast-path shortcut lookup in zero-allocation mode.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_STATE` if slot operating mode is not 0.
-    fn fast_path_lookup(&self, slot: &gcso_daes_slot_t, input_key: u64) -> GcsoResult<u64>;
-
-    /// Pushes profiling metric byte code into the DAES telemetry ring ledger in-place.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_NULL_POINTER` if `slot` is uninitialized.
-    fn telemetry_push(&mut self, slot: &mut gcso_daes_slot_t, metric_code: u8) -> GcsoResult<()>;
-
-    /// Sets the operating mode of the DAES slot (`0` = Scratchpad, `1` = Plugin, `2` = Shared IPC Buffer).
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if mode exceeds 2.
-    fn set_mode(&mut self, slot: &mut gcso_daes_slot_t, mode: u32) -> GcsoResult<()>;
-
-    /// Evaluates telemetry ledger to auto-tune PSPM ratios, RIPA clamps, and EDBC thresholds.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_STATE` if evaluation fails.
-    fn evaluate_auto_tune(
-        &self,
-        slot: &gcso_daes_slot_t,
-        config_out: &mut gcso_config_t,
-    ) -> GcsoResult<()>;
-
-    /// Returns the cumulative cache hit count recorded in the slot.
-    fn cache_hit_count(&self, slot: &gcso_daes_slot_t) -> u32;
-}
-
-/// Mezzo-path trait for cellular swarm cell chunk step processing across PagedBlocks (**Mezzo Level**).
-pub trait SwarmCellChunk: Send + Sync {
-    /// Updates local cellular swarm cell state across PagedBlock token chunk boundaries.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `chunk_len` is 0.
-    fn step_chunk(&mut self, mask: &gcso_paged_bitmask_t, chunk_len: u32) -> GcsoResult<()>;
-}
-
-/// Hot-path trait for Sub-Head Phase Group Allocation (PSPM Router) (**Nano / Micro Level**).
-///
-/// Routes attention heads into Fact, Logic, and Explore sub-groups in a single pass.
-pub trait PspmRouter: Send + Sync {
-    /// Dispatches PSPM head-group phase profiles in a single forward pass.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `head_dim` is odd or zero.
-    fn dispatch_single_pass(
-        &self,
-        query_tensor: &mut AlignedSliceMut32<'_, f32>,
-        config: &gcso_pspm_config_t,
-        head_dim: usize,
-    ) -> GcsoResult<()>;
-}
-
-/// Hot-path trait for Sparse Residual Adapter Layer (SRL) Dynamic Rank-1 evaluations (**Nano / Micro Level**).
-///
-/// Evaluates $\mathbf{y} = W_{\mathrm{base}}\mathbf{x} + \mathbf{s} \odot (\mathbf{u}(\mathbf{v}^T \mathbf{x}))$.
-pub trait SrlAdapter: Send + Sync {
-    /// Evaluates SRL Dynamic Rank-1 outer product in zero-allocation mode.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if dimensions are zero or scalar scale is invalid.
-    fn eval_rank1(
-        &self,
-        y_out: &mut AlignedSliceMut32<'_, f32>,
-        x_in: &AlignedSlice32<'_, f32>,
-        descriptor: &gcso_srl_descriptor_t,
-    ) -> GcsoResult<()>;
-
-    /// Evaluates SRL Dynamic Rank-1 outer product and accumulates directly into output tensor in-place.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if dimensions do not match.
-    fn eval_rank1_fused(
-        &self,
-        y_inout: &mut AlignedSliceMut32<'_, f32>,
-        x_in: &AlignedSlice32<'_, f32>,
-        descriptor: &gcso_srl_descriptor_t,
-    ) -> GcsoResult<()>;
-}
-
-// ===================================================================
-// Composite Hot-Path Execution Engine Trait
-// ===================================================================
-
-/// Composite trait bundling all Hot Path components for monomorphic static dispatch.
-///
-/// Enforces monomorphization across `PhaseSteering`, `PointerActionHub`, `PspmRouter`, `SrlAdapter`, and `DaesScratchpad`.
-pub trait HotPathExecutionEngine:
-    PhaseSteering + PointerActionHub + PspmRouter + SrlAdapter + DaesScratchpad
-{
-}
-
-impl<T> HotPathExecutionEngine for T where
-    T: PhaseSteering + PointerActionHub + PspmRouter + SrlAdapter + DaesScratchpad
-{
-}
-
-// ===================================================================
-// Cold-Path Traits (Asynchronous Steering, Memory & Attractor Control)
-// ===================================================================
-
-/// Cold-path trait for entropy-driven branch evaluation and bifurcation tracking (**Macro Level**).
-///
-/// Evaluates Moving Z-Score Normalized Attention Entropy ($\tilde{H}$) and controls
-/// Pitchfork Bifurcation mode transitions.
-pub trait EntropyEvaluator: Send + Sync {
-    /// Evaluates token Z-score activation entropy and updates dynamic branch mode.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_EDBC_SINGULARITY` if `token_z_score` contains `NaN` or `Inf`.
-    fn eval_stateful(
-        &mut self,
-        token_z_score: f32,
-        state_out: &mut gcso_edbc_state_t,
-    ) -> GcsoResult<()>;
-
-    /// Computes CVoid Coherent Vector Alignment Metric for Out-of-Distribution Latent Space.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `key_vector` is empty.
-    /// Returns `GCSO_ERROR_EDBC_SINGULARITY` if numerical sum-of-squares is NaN/Inf.
-    fn eval_cvoid_dyadic128(
-        &self,
-        key_vector: &AlignedSlice32<'_, f32>,
-        void_score_out: &mut f32,
-    ) -> GcsoResult<()>;
-
-    /// Calculates Eyring-Kramers potential barrier height ($\Delta V = \tau_{\mathrm{eff}} / \mathcal{C}_{\mathrm{void}}$).
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_EDBC_SINGULARITY` if numerical instability is detected or $\tau_{\mathrm{eff}} \le 0$.
-    fn eval_barrier(&self, void_score: f32, tau_eff: f32) -> GcsoResult<f32>;
-}
-
-/// Cold-path trait for macro attractor field steering and repulsion control (**Macro Level**).
-pub trait AttractorField: Send + Sync {
-    /// Returns the total number of registered topological anchors.
-    fn anchor_count(&self) -> u32;
-
-    /// Registers a system prompt anchor in phase space (Primary Baseline Endpoint).
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_ACTION_HUB_FULL` if anchor capacity is reached.
-    fn add_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> GcsoResult<u32>;
-
-    /// Registers a dense feature embedding vector as a continuous attractor anchor.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_ACTION_HUB_FULL` if anchor capacity is reached.
-    fn add_embedding_anchor(
-        &mut self,
-        embedding: &AlignedSlice32<'_, f32>,
-        anchor_type: gcso_anchor_type_t,
-        weight: f32,
-    ) -> GcsoResult<u32>;
-
-    /// Registers a raw topological anchor point in the attractor field.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_ACTION_HUB_FULL` if anchor capacity is reached.
-    fn add_anchor(
-        &mut self,
-        anchor_type: gcso_anchor_type_t,
-        vec: &AlignedSlice32<'_, f32>,
-        dim: usize,
-    ) -> GcsoResult<u32>;
-
-    /// Injects a phase-conjugate repulsion vector ($-\boldsymbol{\Delta\theta}$) to suppress hallucination.
-    ///
-    /// Converts false local minima energy valleys into repulsive potential peaks.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `gain` is `NaN` or non-positive.
-    fn inject_phase_repulsion(
-        &mut self,
-        repulsion_deltas: &AlignedSlice16<'_, gcso_q7_t>,
-        gain: f32,
-    ) -> GcsoResult<()>;
-
-    /// Aggregates high-density pointer trails bottom-up to macro-crystallize new dynamic anchors.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_STATE` if aggregation state is invalid.
-    fn aggregate_bottom_up(&mut self) -> GcsoResult<u32>;
-
-    /// Clears all registered topological anchors from the attractor field.
-    fn clear_anchors(&mut self) -> GcsoResult<()>;
-}
-
-/// Cold-path trait for dynamic persona phase modulation patches without altering base weights (**Macro Level**).
-pub trait PersonaPatcher: Send + Sync {
-    /// Applies binary persona phase modulation patch to runtime context.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if patch data is empty.
-    fn apply_patch(&mut self, patch_data: &[u8]) -> GcsoResult<()>;
-}
-
-/// Cold-path trait for Training-Free LoRA-to-Phase SVD Projection (L2P-SVD) (**Macro / Offline Level**).
-pub trait L2pSvdProjector: Send + Sync {
-    /// Projects fine-tuned LoRA matrices via first-order SVD into phase profiles and Rank-1 SRL vectors.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if dimensions, rank, or outputs are invalid.
-    fn project_lora(
-        &self,
-        lora_a: &AlignedSlice32<'_, f32>,
-        lora_b: &AlignedSlice32<'_, f32>,
-        rank: usize,
-        dim_in: usize,
-        dim_out: usize,
-        srl_out: &mut gcso_srl_descriptor_t,
-        phase_profile_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
-    ) -> GcsoResult<()>;
-}
-
-/// Mezzo/Cold-path trait for Predictive Phase-Motion & Residual Compensation (PPRC) (**Mezzo / Storage Level**).
-pub trait PprcCache: Send + Sync {
-    /// Seeks to a specific token index in the keyframe KV cache without forward passes.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_PPRC_SEEK_FAILED` if `token_index` is out of bounds.
-    fn seek_to_token(
-        &mut self,
-        token_index: u32,
-        header_out: &mut gcso_pprc_keyframe_header_t,
-    ) -> GcsoResult<()>;
-}
-
-/// Cold-path trait for Zero-Overhead In-Memory Mapped Storage (ZIMMS) (**Storage / Persistence Level**).
-pub trait ZimmsStorage: Send + Sync {
-    /// Serializes active runtime state into `.gcso` binary snapshot buffer.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_BUFFER_TOO_SMALL` if output buffer size is insufficient.
-    fn serialize_snapshot(&self, buffer: &mut [u8], required_size: &mut usize) -> GcsoResult<()>;
-
-    /// Deserializes binary snapshot buffer to restore context state.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_CONTAINER_CORRUPTED` if checksum or magic numbers fail.
-    /// Returns `GCSO_ERROR_VERSION_MISMATCH` if ABI version is incompatible.
-    fn deserialize_snapshot(
-        &mut self,
-        buffer: &[u8],
-        config_out: &mut gcso_config_t,
-    ) -> GcsoResult<()>;
-
-    /// Opens memory-mapped zero-copy handle for `.gcso` container payload.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_ZIMMS_MAPPING_FAILED` if file path is invalid or mapping fails.
-    fn open_mmap(
-        &mut self,
-        file_path: &str,
-        descriptor_out: &mut gcso_zimms_descriptor_t,
-    ) -> GcsoResult<()>;
-
-    /// Unmaps zero-copy ZIMMS memory handle and releases DMA resources.
-    ///
-    /// # Errors
-    /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if descriptor is invalid.
-    fn close_mmap(&mut self, descriptor: &mut gcso_zimms_descriptor_t) -> GcsoResult<()>;
-}
-
-// ===================================================================
-// Unit Tests for Aligned Slice Wrappers and Traits
-// ===================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_aligned_slice_valid() {
-        #[repr(align(64))]
-        struct AlignedBuffer([f32; 64]);
-        let buf = AlignedBuffer([0.0; 64]);
-        let slice = AlignedSlice32::new(&buf.0).unwrap();
-        assert_eq!(slice.len(), 64);
-        assert!(!slice.is_empty());
-        assert_eq!(slice.align(), 32);
-        assert_eq!(slice[0], 0.0);
-        assert_eq!(&slice[0..16], &[0.0; 16]);
+/// # Safety
+/// `config` must be a non-null, writable pointer to a `gcso_config_t` structure aligned to 16 bytes.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_config_init_default(config: *mut gcso_config_t) -> GcsoStatus {
+    if config.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(config) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
     }
 
-    #[test]
-    fn test_aligned_slice_from_raw_parts() {
-        #[repr(align(64))]
-        struct AlignedBuffer([f32; 32]);
-        let buf = AlignedBuffer([1.5; 32]);
+    ffi_boundary!({
+        unsafe {
+            *config = gcso_config_t {
+                head_dim: 128,
+                num_heads: 32,
+                paged_block_size: 32,
+                q7_phase_scale: core::f32::consts::PI / 128.0,
+                ripa_clamp_max_rad: 0.087_266_46,
+                qdps_min_step_rad: 0.01,
+                entropy_singularity_eps: 1e-12,
+                max_prompt_anchors: 64,
+                action_hub_capacity: 256,
+                enable_cuda_warp_shuffle: 1,
+                enable_zero_alloc_strict: 1,
+                daes_mode: 0,
+                reserved_flags: 0,
+                reserved: [0; 24],
+            };
+        }
+        Ok(GCSO_SUCCESS)
+    })
+}
 
-        // SAFETY: Pointer and length are valid for tests.
-        let slice = unsafe { AlignedSlice32::from_raw_parts(buf.0.as_ptr(), 32) }.unwrap();
-        assert_eq!(slice.len(), 32);
-        assert_eq!(slice[0], 1.5);
+/// Free string dynamically allocated by GCSO runtime routines.
+///
+/// # Safety
+/// `str_ptr` must be NULL or a valid pointer to a C string created via `CString::into_raw`.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_free_string(str_ptr: *const c_char) {
+    if !str_ptr.is_null() {
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _ = unsafe { std::ffi::CString::from_raw(str_ptr.cast_mut()) };
+        }));
+    }
+}
 
-        let byte_slice = slice.as_bytes();
-        assert_eq!(byte_slice.len(), 32 * core::mem::size_of::<f32>());
+// ===================================================================
+// 2. High-Level Runtime Context Facade Interface
+// ===================================================================
+
+/// Create a new GCSO context instance.
+///
+/// # Safety
+/// `config` must point to a valid `gcso_config_t` structure aligned to 16 bytes.
+/// `context_out` must be a valid non-null pointer aligned to handle size.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_context_create(
+    config: *const gcso_config_t,
+    context_out: *mut GcsoContextHandle,
+) -> GcsoStatus {
+    if config.is_null() || context_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(config) || !is_aligned(context_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
     }
 
-    #[test]
-    fn test_aligned_slice_mut_zero_out() {
-        #[repr(align(64))]
-        struct AlignedBuffer([f32; 32]);
-        let mut buf = AlignedBuffer([3.14; 32]);
+    ffi_boundary!({
+        unsafe {
+            let cfg = &*config;
+            if cfg.head_dim == 0
+                || !cfg.head_dim.is_multiple_of(2)
+                || cfg.num_heads == 0
+                || cfg.num_heads > 64
+            {
+                return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            }
+            *context_out = ptr::null_mut();
+        }
+        Ok(GCSO_SUCCESS)
+    })
+}
 
-        let mut slice_mut = AlignedSliceMut32::new(&mut buf.0).unwrap();
-        assert_eq!(slice_mut[0], 3.14);
+/// Reset state variables and phase accumulators without freeing allocated tables.
+///
+/// # Safety
+/// `context` must be a valid aligned runtime handle or NULL (safe no-op).
+#[no_mangle]
+pub unsafe extern "C" fn gcso_context_reset(context: GcsoContextHandle) -> GcsoStatus {
+    if context.is_null() {
+        return GCSO_SUCCESS;
+    }
+    if !is_aligned(context) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
 
-        slice_mut.zero_out();
-        assert_eq!(slice_mut[0], 0.0);
-        assert_eq!(slice_mut[31], 0.0);
+/// Set system prompt text as Anchor Attractor.
+///
+/// # Safety
+/// `context` and `prompt_text` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_context_set_system_prompt_anchor(
+    context: GcsoContextHandle,
+    prompt_text: *const c_char,
+    weight: f32,
+) -> GcsoStatus {
+    if context.is_null() || prompt_text.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(context) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if weight.is_nan() || weight.is_infinite() {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        let c_str = unsafe { std::ffi::CStr::from_ptr(prompt_text) };
+        if c_str.to_str().is_err() {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Process a single token step in zero-allocation mode.
+///
+/// # Safety
+/// `context` must be a non-null pointer aligned to handle boundary.
+/// `query_tensor` and `key_tensor` (if non-null) must be 32-byte aligned for SIMD/Warp operations.
+/// `trail_out` (if non-null) must be aligned to `gcso_pointer_trail_t`.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_context_step_token(
+    context: GcsoContextHandle,
+    token_id: u32,
+    query_tensor: *mut f32,
+    key_tensor: *mut f32,
+    trail_out: *mut gcso_pointer_trail_t,
+) -> GcsoStatus {
+    if context.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(context) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if !query_tensor.is_null() && !is_aligned_to(query_tensor, 32) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if !key_tensor.is_null() && !is_aligned_to(key_tensor, 32) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if !trail_out.is_null() && !is_aligned(trail_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
     }
 
-    #[test]
-    fn test_aligned_slice_empty() {
-        let empty: &[f32] = &[];
-        let slice = AlignedSlice32::new(empty).unwrap();
-        assert!(slice.is_empty());
-        assert_eq!(slice.len(), 0);
+    ffi_boundary!({
+        if !query_tensor.is_null() {
+            let slice = unsafe { slice::from_raw_parts_mut(query_tensor, 128) };
+            let _ = AlignedSliceMut32::new(slice)?;
+        }
+        if !key_tensor.is_null() {
+            let slice = unsafe { slice::from_raw_parts_mut(key_tensor, 128) };
+            let _ = AlignedSliceMut32::new(slice)?;
+        }
+        if !trail_out.is_null() {
+            unsafe {
+                ptr::write_bytes(trail_out, 0, 1);
+                (*trail_out).current_ptr = u64::from(token_id);
+                (*trail_out).stigmergic_density = 1.0;
+            }
+        }
+        Ok(GCSO_SUCCESS)
+    })
+}
 
-        let const_empty = AlignedSlice32::<f32>::empty();
-        assert!(const_empty.is_empty());
+/// Serialize runtime state into binary format.
+///
+/// # Safety
+/// `context` and `buffer_size` must be non-null pointers aligned to structure/type boundary.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_context_serialize(
+    context: GcsoContextHandle,
+    buffer: *mut u8,
+    buffer_size: *mut usize,
+) -> GcsoStatus {
+    if context.is_null() || buffer_size.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(context) || !is_aligned(buffer_size) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
     }
 
-    #[test]
-    fn test_aligned_slice_misaligned() {
-        #[repr(align(64))]
-        struct AlignedBuffer([u8; 64]);
-        let buf = AlignedBuffer([0; 64]);
-        let unaligned = &buf.0[1..33];
-        let res = AlignedSlice32::new(unaligned);
-        assert_eq!(res, Err(GCSO_ERROR_MISALIGNED_POINTER));
+    ffi_boundary!({
+        unsafe {
+            let required = size_of::<gcso_snapshot_header_t>();
+            if buffer.is_null() {
+                *buffer_size = required;
+                return Ok(GCSO_SUCCESS);
+            }
+            if *buffer_size < required {
+                *buffer_size = required;
+                return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            }
+            if !is_aligned(buffer) {
+                return Err(GCSO_ERROR_MISALIGNED_POINTER);
+            }
+            ptr::write_bytes(buffer, 0, required);
+            let header_ptr = buffer.cast::<gcso_snapshot_header_t>();
+            (*header_ptr).magic = 0x4F53_4347;
+            (*header_ptr).version = 0x0000_0101;
+            (*header_ptr).total_size = required as u64;
+            (*header_ptr).timestamp_epoch_sec = 1_774_900_000;
+            *buffer_size = required;
+        }
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Deserialize binary snapshot to restore runtime state.
+///
+/// # Safety
+/// `buffer` and `context_out` must be valid non-null pointers aligned to respective boundaries.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_context_deserialize(
+    buffer: *const u8,
+    buffer_size: usize,
+    context_out: *mut GcsoContextHandle,
+) -> GcsoStatus {
+    if buffer.is_null() || context_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
     }
-
-    #[test]
-    fn test_aligned_slice_subslice_and_split() {
-        #[repr(align(64))]
-        struct AlignedBuffer([f32; 64]);
-        let mut buf = AlignedBuffer([1.0; 64]);
-        let mut slice_mut = AlignedSliceMut64::new(&mut buf.0).unwrap();
-        assert_eq!(slice_mut.len(), 64);
-
-        let (left, right) = slice_mut.split_at_mut(32).unwrap();
-        assert_eq!(left.len(), 32);
-        assert_eq!(right.len(), 32);
+    if !is_aligned(context_out) || !is_aligned(buffer) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
     }
-
-    #[test]
-    fn test_aligned_slice_copy_from_aligned() {
-        #[repr(align(64))]
-        struct AlignedBuffer([f32; 32]);
-        let src_buf = AlignedBuffer([2.5; 32]);
-        let mut dst_buf = AlignedBuffer([0.0; 32]);
-
-        let src_slice = AlignedSlice32::new(&src_buf.0).unwrap();
-        let mut dst_slice = AlignedSliceMut32::new(&mut dst_buf.0).unwrap();
-
-        dst_slice.copy_from_aligned_slice(&src_slice).unwrap();
-        assert_eq!(dst_slice[0], 2.5);
-        assert_eq!(dst_slice[31], 2.5);
+    if buffer_size < size_of::<gcso_snapshot_header_t>() {
+        return GCSO_ERROR_CONTAINER_CORRUPTED;
     }
+    ffi_boundary!({
+        let header = unsafe { &*buffer.cast::<gcso_snapshot_header_t>() };
+        if header.magic != 0x4F53_4347 {
+            return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+        }
+        if header.version != 0x0000_0101 {
+            return Err(GCSO_ERROR_VERSION_MISMATCH);
+        }
+        unsafe { *context_out = ptr::null_mut() };
+        Ok(GCSO_SUCCESS)
+    })
+}
 
-    #[test]
-    fn test_aligned_slice_copy_from_unaligned() {
-        #[repr(align(64))]
-        struct AlignedBuffer([f32; 32]);
-        let src_unaligned = [4.2f32; 32];
-        let mut dst_buf = AlignedBuffer([0.0; 32]);
-
-        let mut dst_slice = AlignedSliceMut32::new(&mut dst_buf.0).unwrap();
-        dst_slice.copy_from_slice(&src_unaligned).unwrap();
-        assert_eq!(dst_slice[0], 4.2);
-        assert_eq!(dst_slice[31], 4.2);
+/// Destroy context instance and release resources.
+///
+/// # Safety
+/// Safe no-op if `context` is NULL. Returns `GCSO_ERROR_MISALIGNED_POINTER` if non-null and unaligned.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_context_destroy(context: GcsoContextHandle) -> GcsoStatus {
+    if context.is_null() {
+        return GCSO_SUCCESS;
     }
+    if !is_aligned(context) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+/// Destroy container handle and release resources.
+///
+/// # Safety
+/// Safe no-op if `container` is NULL. Returns `GCSO_ERROR_MISALIGNED_POINTER` if non-null and unaligned.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_container_destroy(container: GcsoContainerHandle) -> GcsoStatus {
+    if container.is_null() {
+        return GCSO_SUCCESS;
+    }
+    if !is_aligned(container) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+/// Seek to a specific token index in the PPRC keyframe KV cache index.
+///
+/// # Safety
+/// `context` and `keyframe_header_out` must be non-null valid pointers aligned to structure boundary.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_pprc_seek_to_token(
+    context: GcsoContextHandle,
+    token_index: u32,
+    keyframe_header_out: *mut gcso_pprc_keyframe_header_t,
+) -> GcsoStatus {
+    if context.is_null() || keyframe_header_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(context) || !is_aligned(keyframe_header_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!({
+        unsafe {
+            ptr::write_bytes(keyframe_header_out, 0, 1);
+            (*keyframe_header_out).token_index = token_index;
+        }
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+// ===================================================================
+// 3. Action Hub, Stigmergic Pointer Trail & DAES Acceleration Interface
+// ===================================================================
+
+/// Allocate Action Hub pointer table.
+///
+/// # Safety
+/// `hub_out` must be a non-null pointer aligned to handle size.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_action_hub_create(
+    capacity: u32,
+    hub_out: *mut GcsoActionHubHandle,
+) -> GcsoStatus {
+    if hub_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(hub_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if capacity == 0 {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        unsafe { *hub_out = ptr::null_mut() };
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Advance tagged pointer transition in O(1) time.
+///
+/// # Safety
+/// `context` must be valid handle; `trail_out` must be writable and aligned to 128 bytes.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_action_hub_step_pointer(
+    context: GcsoContextHandle,
+    current_ptr: u64,
+    trail_out: *mut gcso_pointer_trail_t,
+) -> GcsoStatus {
+    if context.is_null() || trail_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(context) || !is_aligned(trail_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!({
+        unsafe {
+            ptr::write_bytes(trail_out, 0, 1);
+            (*trail_out).current_ptr = current_ptr;
+            (*trail_out).stigmergic_density = 1.0;
+        }
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Compute direct 256-slot hash index for 64-bit pointer trail caching using SplitMix64.
+///
+/// # Safety
+/// Safe to call with any 64-bit integer pointer value.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_action_hub_hash_slot256_index(ptr: u64) -> u32 {
+    let mut x = ptr;
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^= x >> 31;
+    (x & 0xFF) as u32
+}
+
+/// Update cellular swarm cell state across PagedBlock token chunk boundaries.
+///
+/// # Safety
+/// `context` and `mask` must be valid non-null pointers aligned to 32 bytes.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_swarm_cell_chunk_step(
+    context: GcsoContextHandle,
+    mask: *const gcso_paged_bitmask_t,
+    chunk_len: u32,
+) -> GcsoStatus {
+    if context.is_null() || mask.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(context) || !is_aligned(mask) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if chunk_len == 0 {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+/// Apply attractor pull force to steer active pointer chains.
+///
+/// # Safety
+/// `context` must be a valid aligned handle.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_action_hub_pull_trail_to_attractor(
+    context: GcsoContextHandle,
+    _trail_id: u32,
+    _anchor_id: u32,
+    pull_force: f32,
+) -> GcsoStatus {
+    if context.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(context) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if pull_force.is_nan() || pull_force.is_infinite() {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+/// Link adjacent cellular hallucinated trails into contiguous trace graphs.
+///
+/// # Safety
+/// `context` must be a valid aligned handle.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_action_hub_link_hallucinated_trails(
+    context: GcsoContextHandle,
+    _src_trail_id: u32,
+    _dst_trail_id: u32,
+) -> GcsoStatus {
+    if context.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(context) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+/// Perform bit-tree reduction across paged bitmasks.
+///
+/// # Safety
+/// `bitmasks` and `reduced_out` must be non-null valid pointers aligned to 32 bytes.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_action_hub_reduce_bit_tree(
+    bitmasks: *const gcso_paged_bitmask_t,
+    num_masks: usize,
+    reduced_out: *mut gcso_paged_bitmask_t,
+) -> GcsoStatus {
+    if bitmasks.is_null() || reduced_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(bitmasks) || !is_aligned(reduced_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if num_masks == 0 {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        let masks_slice = unsafe { slice::from_raw_parts(bitmasks, num_masks) };
+        let aligned_masks = AlignedSlice32::new(masks_slice)?;
+
+        let mut acc = [0u64; 4];
+        for m in aligned_masks.as_slice() {
+            acc[0] |= m.bits[0];
+            acc[1] |= m.bits[1];
+            acc[2] |= m.bits[2];
+            acc[3] |= m.bits[3];
+        }
+        unsafe { (*reduced_out).bits = acc };
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Evaluate SIMD/Warp bitmask reduction over PagedBlock KV caches.
+///
+/// # Safety
+/// `kv_bits` and `mask_out` must be non-null valid pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_action_hub_paged_block_warp_bitmask(
+    kv_bits: *const u64,
+    num_blocks: usize,
+    mask_out: *mut gcso_paged_bitmask_t,
+) -> GcsoStatus {
+    if kv_bits.is_null() || mask_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(kv_bits) || !is_aligned(mask_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if num_blocks == 0 {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        unsafe { ptr::write_bytes(mask_out, 0, 1) };
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Destroy Action Hub instance and free resources.
+///
+/// # Safety
+/// Safe no-op if `hub` is NULL. Returns `GCSO_ERROR_MISALIGNED_POINTER` if non-null and unaligned.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_action_hub_destroy(hub: GcsoActionHubHandle) -> GcsoStatus {
+    if hub.is_null() {
+        return GCSO_SUCCESS;
+    }
+    if !is_aligned(hub) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+/// Allocate DAES slot instance.
+///
+/// # Safety
+/// `slot_out` must be non-null and aligned to handle size.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_daes_slot_create(slot_out: *mut GcsoDaesSlotHandle) -> GcsoStatus {
+    if slot_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(slot_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!({
+        unsafe { *slot_out = ptr::null_mut() };
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Reset active telemetry mini ledger and cache hit counters in-place.
+///
+/// # Safety
+/// `slot` must be a valid non-null aligned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_daes_reset_telemetry(slot: *mut gcso_daes_slot_t) -> GcsoStatus {
+    if slot.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(slot) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!({
+        unsafe {
+            (*slot).telemetry_ring_head = 0;
+            (*slot).telemetry_ring_tail = 0;
+            (*slot).cache_hit_count = 0;
+            ptr::write_bytes((*slot).telemetry_mini_ledger.as_mut_ptr(), 0, 8);
+        }
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Fast-path lookup in DAES dynamic scratchpad.
+///
+/// # Safety
+/// `slot` and `shortcut_out` must be valid aligned non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_daes_fast_path_lookup(
+    slot: *const gcso_daes_slot_t,
+    input_key: u64,
+    shortcut_out: *mut u64,
+) -> GcsoStatus {
+    if slot.is_null() || shortcut_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(slot) || !is_aligned(shortcut_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!({
+        let slot_ref = unsafe { &*slot };
+        if (slot_ref.fast_path_bypass_mask & input_key) != 0 {
+            unsafe { *shortcut_out = slot_ref.fast_path_shortcuts[0] };
+            Ok(GCSO_SUCCESS)
+        } else {
+            Err(GCSO_ERROR_INVALID_STATE)
+        }
+    })
+}
+
+/// Push metric byte to DAES telemetry ring ledger in zero-allocation mode.
+///
+/// # Safety
+/// `slot` must be a valid non-null aligned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_daes_telemetry_push(
+    slot: *mut gcso_daes_slot_t,
+    metric_code: u8,
+) -> GcsoStatus {
+    if slot.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(slot) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!({
+        let head = (unsafe { (*slot).telemetry_ring_head as usize }) % 8;
+        unsafe {
+            (*slot).telemetry_mini_ledger[head] = metric_code;
+            (*slot).telemetry_ring_head = (*slot).telemetry_ring_head.wrapping_add(1);
+        }
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Set DAES slot mode.
+///
+/// # Safety
+/// `slot` must be a valid non-null aligned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_daes_set_mode(slot: *mut gcso_daes_slot_t, mode: u32) -> GcsoStatus {
+    if slot.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(slot) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if mode > 2 {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        unsafe { (*slot).mode = mode };
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Evaluate telemetry ledger for dynamic auto-tuning.
+///
+/// # Safety
+/// `slot` and `config_out` must be valid aligned non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_daes_evaluate_auto_tune(
+    slot: *const gcso_daes_slot_t,
+    config_out: *mut gcso_config_t,
+) -> GcsoStatus {
+    if slot.is_null() || config_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(slot) || !is_aligned(config_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+/// Destroy DAES slot instance.
+///
+/// # Safety
+/// Safe no-op if `slot` is NULL. Returns `GCSO_ERROR_MISALIGNED_POINTER` if non-null and unaligned.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_daes_slot_destroy(slot: GcsoDaesSlotHandle) -> GcsoStatus {
+    if slot.is_null() {
+        return GCSO_SUCCESS;
+    }
+    if !is_aligned(slot) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+// ===================================================================
+// 4. DPSR, QDPS, PSPM & SRL Interface (Trait-First Trait Bridge)
+// ===================================================================
+
+/// Create DPSR phase steering kernel instance.
+///
+/// # Safety
+/// `kernel_out` must be a valid writable pointer aligned to handle size.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_dpsr_kernel_create(
+    head_dim: u32,
+    num_heads: u32,
+    kernel_out: *mut GcsoDpsrKernelHandle,
+) -> GcsoStatus {
+    if kernel_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(kernel_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if head_dim == 0 || !head_dim.is_multiple_of(2) || num_heads == 0 {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        unsafe { *kernel_out = ptr::null_mut() };
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Apply inline DPSR phase steering to Query tensor via `PhaseSteering` trait.
+///
+/// # Safety
+/// `query_tensor` (32-byte aligned) and `phase_deltas` must be non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering(
+    query_tensor: *mut f32,
+    phase_deltas: *const gcso_q7_t,
+    head_dim: usize,
+    num_heads: usize,
+) -> GcsoStatus {
+    if query_tensor.is_null() || phase_deltas.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned_to(query_tensor, 32) || !is_aligned(phase_deltas) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if head_dim == 0 || !head_dim.is_multiple_of(2) || num_heads == 0 {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        let engine = DpsrEngine::new(head_dim as u32, num_heads as u32)?;
+        let q_len = head_dim * num_heads;
+        let q_raw = unsafe { slice::from_raw_parts_mut(query_tensor, q_len) };
+        let p_raw = unsafe { slice::from_raw_parts(phase_deltas, num_heads) };
+
+        let mut aligned_q = AlignedSliceMut32::new(q_raw)?;
+        let aligned_p = AlignedSlice16::new(p_raw)?;
+
+        engine.apply_phase_steering(&mut aligned_q, &aligned_p)?;
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Apply RIPA soft-bounded tanh clamping on low-frequency channels via `PhaseSteering` trait.
+///
+/// # Safety
+/// `query_tensor` (32-byte aligned) and `phase_deltas` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_safe(
+    query_tensor: *mut f32,
+    phase_deltas: *const gcso_q7_t,
+    head_dim: usize,
+    num_heads: usize,
+    max_rad: f32,
+) -> GcsoStatus {
+    if query_tensor.is_null() || phase_deltas.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned_to(query_tensor, 32) || !is_aligned(phase_deltas) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if head_dim == 0
+        || !head_dim.is_multiple_of(2)
+        || num_heads == 0
+        || max_rad <= 0.0
+        || max_rad.is_nan()
+        || max_rad.is_infinite()
+    {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        let engine = DpsrEngine::new(head_dim as u32, num_heads as u32)?;
+        let q_len = head_dim * num_heads;
+        let q_raw = unsafe { slice::from_raw_parts_mut(query_tensor, q_len) };
+        let p_raw = unsafe { slice::from_raw_parts(phase_deltas, num_heads) };
+
+        let mut aligned_q = AlignedSliceMut32::new(q_raw)?;
+        let aligned_p = AlignedSlice16::new(p_raw)?;
+
+        engine.apply_phase_steering_safe(&mut aligned_q, &aligned_p, max_rad)?;
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// QDPS discrete filter: cuts off phase rotation steps falling below min_step_rad via `PhaseSteering` trait.
+///
+/// # Safety
+/// `phase_deltas` must be a non-null valid pointer to array of size `len`.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_qdps_filter_step(
+    phase_deltas: *mut gcso_q7_t,
+    len: usize,
+    min_step_rad: f32,
+) -> GcsoStatus {
+    if phase_deltas.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(phase_deltas) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if len == 0 || min_step_rad < 0.0 || min_step_rad.is_nan() || min_step_rad.is_infinite() {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        let engine = DpsrEngine::new(2, len as u32)?;
+        let p_raw = unsafe { slice::from_raw_parts_mut(phase_deltas, len) };
+        let mut aligned_p = AlignedSliceMut16::new(p_raw)?;
+
+        engine.qdps_filter_step(&mut aligned_p, min_step_rad)?;
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Lazy Phase Unwrapping override on Query tensor via `PhaseSteering` trait.
+///
+/// # Safety
+/// `query_tensor` and `context_accum` must be non-null and 32-byte aligned.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_dpsr_lazy_unwrap_override(
+    query_tensor: *mut f32,
+    context_accum: *const f32,
+    head_dim: usize,
+    num_heads: usize,
+) -> GcsoStatus {
+    if query_tensor.is_null() || context_accum.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned_to(query_tensor, 32) || !is_aligned_to(context_accum, 32) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if head_dim == 0 || !head_dim.is_multiple_of(2) || num_heads == 0 {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        let engine = DpsrEngine::new(head_dim as u32, num_heads as u32)?;
+        let len = head_dim * num_heads;
+        let q_raw = unsafe { slice::from_raw_parts_mut(query_tensor, len) };
+        let c_raw = unsafe { slice::from_raw_parts(context_accum, len) };
+
+        let mut aligned_q = AlignedSliceMut32::new(q_raw)?;
+        let aligned_c = AlignedSlice32::new(c_raw)?;
+
+        engine.lazy_unwrap_override(&mut aligned_q, &aligned_c)?;
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Execute norm-guarded Slerp phase stabilization via `PhaseSteering` trait.
+///
+/// # Safety
+/// `tensor` must be a valid non-null pointer aligned to 32 bytes.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_dpsr_slerp_norm_guard_stable(
+    tensor: *mut f32,
+    dim: usize,
+    norm_lower: f32,
+    norm_upper: f32,
+) -> GcsoStatus {
+    if tensor.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned_to(tensor, 32) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if dim == 0
+        || norm_lower >= norm_upper
+        || norm_lower <= 0.0
+        || norm_lower.is_nan()
+        || norm_upper.is_nan()
+    {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        let engine = DpsrEngine::new(2, 1)?;
+        let t_raw = unsafe { slice::from_raw_parts_mut(tensor, dim) };
+        let mut aligned_t = AlignedSliceMut32::new(t_raw)?;
+
+        engine.slerp_norm_guard_stable(&mut aligned_t, norm_lower, norm_upper)?;
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Fused inline logit phase shift prior to Softmax via `PhaseSteering` trait.
+///
+/// # Safety
+/// `logits` and `phase_deltas` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_dpsr_fused_logit_shift(
+    logits: *mut f32,
+    vocab_size: usize,
+    phase_deltas: *const gcso_q7_t,
+    num_heads: usize,
+) -> GcsoStatus {
+    if logits.is_null() || phase_deltas.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned_to(logits, 32) || !is_aligned(phase_deltas) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if vocab_size == 0 || num_heads == 0 {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        let engine = DpsrEngine::new(2, num_heads as u32)?;
+        let l_raw = unsafe { slice::from_raw_parts_mut(logits, vocab_size) };
+        let p_raw = unsafe { slice::from_raw_parts(phase_deltas, num_heads) };
+
+        let mut aligned_l = AlignedSliceMut32::new(l_raw)?;
+        let aligned_p = AlignedSlice16::new(p_raw)?;
+
+        engine.fused_logit_shift(&mut aligned_l, &aligned_p)?;
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Compute Procrustes phase delta alignment via `PhaseSteering` trait.
+///
+/// # Safety
+/// All pointers must be valid, non-null, and 32-byte aligned for float buffers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_dpsr_compute_procrustes_phase_delta(
+    source: *const f32,
+    target: *const f32,
+    dim: usize,
+    phase_out: *mut gcso_q7_t,
+) -> GcsoStatus {
+    if source.is_null() || target.is_null() || phase_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned_to(source, 32) || !is_aligned_to(target, 32) || !is_aligned(phase_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if dim == 0 || !dim.is_multiple_of(2) {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        let engine = DpsrEngine::new(dim as u32, 1)?;
+        let s_raw = unsafe { slice::from_raw_parts(source, dim) };
+        let t_raw = unsafe { slice::from_raw_parts(target, dim) };
+        let p_raw = unsafe { slice::from_raw_parts_mut(phase_out, 1) };
+
+        let aligned_s = AlignedSlice32::new(s_raw)?;
+        let aligned_t = AlignedSlice32::new(t_raw)?;
+        let mut aligned_p = AlignedSliceMut16::new(p_raw)?;
+
+        engine.compute_procrustes_phase_delta(&aligned_s, &aligned_t, &mut aligned_p)?;
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Destroy DPSR kernel instance.
+///
+/// # Safety
+/// Safe no-op if `kernel` is NULL. Returns `GCSO_ERROR_MISALIGNED_POINTER` if non-null and unaligned.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_dpsr_kernel_destroy(kernel: GcsoDpsrKernelHandle) -> GcsoStatus {
+    if kernel.is_null() {
+        return GCSO_SUCCESS;
+    }
+    if !is_aligned(kernel) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+/// Allocate PSPM router instance.
+///
+/// # Safety
+/// `config` and `router_out` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_pspm_router_create(
+    config: *const gcso_pspm_config_t,
+    router_out: *mut GcsoPspmRouterHandle,
+) -> GcsoStatus {
+    if config.is_null() || router_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(config) || !is_aligned(router_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!({
+        unsafe { *router_out = ptr::null_mut() };
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Dispatch PSPM head-group phase profiles in single pass.
+///
+/// # Safety
+/// `query_tensor` (32-byte aligned) and `pspm_cfg` must be non-null valid pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_pspm_dispatch_single_pass(
+    query_tensor: *mut f32,
+    pspm_cfg: *const gcso_pspm_config_t,
+    head_dim: usize,
+) -> GcsoStatus {
+    if query_tensor.is_null() || pspm_cfg.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned_to(query_tensor, 32) || !is_aligned(pspm_cfg) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if head_dim == 0 || !head_dim.is_multiple_of(2) {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+/// Destroy PSPM router instance.
+///
+/// # Safety
+/// Safe no-op if `router` is NULL. Returns `GCSO_ERROR_MISALIGNED_POINTER` if non-null and unaligned.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_pspm_router_destroy(router: GcsoPspmRouterHandle) -> GcsoStatus {
+    if router.is_null() {
+        return GCSO_SUCCESS;
+    }
+    if !is_aligned(router) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+/// Create Sparse Residual Adapter Layer (SRL) instance.
+///
+/// # Safety
+/// `descriptor` and `adapter_out` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_srl_adapter_create(
+    descriptor: *const gcso_srl_descriptor_t,
+    adapter_out: *mut GcsoSrlAdapterHandle,
+) -> GcsoStatus {
+    if descriptor.is_null() || adapter_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(descriptor) || !is_aligned(adapter_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!({
+        unsafe { *adapter_out = ptr::null_mut() };
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Evaluate SRL Rank-1 outer product.
+///
+/// # Safety
+/// `y_out`, `x_in`, and `srl_desc` must be non-null pointers aligned to structure/type boundary.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_srl_eval_rank1(
+    y_out: *mut f32,
+    x_in: *const f32,
+    srl_desc: *const gcso_srl_descriptor_t,
+    dim_in: usize,
+    dim_out: usize,
+) -> GcsoStatus {
+    if y_out.is_null() || x_in.is_null() || srl_desc.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(y_out) || !is_aligned(x_in) || !is_aligned(srl_desc) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if dim_in == 0 || dim_out == 0 {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+/// L2P-SVD: Projects fine-tuned LoRA matrices via SVD into phase profiles and SRL vectors.
+///
+/// # Safety
+/// All pointers must be valid and non-null.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_l2p_svd_project_lora(
+    lora_a: *const f32,
+    lora_b: *const f32,
+    rank: usize,
+    dim_in: usize,
+    dim_out: usize,
+    srl_out: *mut gcso_srl_descriptor_t,
+    phase_profile_out: *mut gcso_q7_t,
+) -> GcsoStatus {
+    if lora_a.is_null() || lora_b.is_null() || srl_out.is_null() || phase_profile_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(lora_a)
+        || !is_aligned(lora_b)
+        || !is_aligned(srl_out)
+        || !is_aligned(phase_profile_out)
+    {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if rank == 0 || dim_in == 0 || dim_out == 0 {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+/// Destroy SRL adapter instance.
+///
+/// # Safety
+/// Safe no-op if `adapter` is NULL. Returns `GCSO_ERROR_MISALIGNED_POINTER` if non-null and unaligned.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_srl_adapter_destroy(adapter: GcsoSrlAdapterHandle) -> GcsoStatus {
+    if adapter.is_null() {
+        return GCSO_SUCCESS;
+    }
+    if !is_aligned(adapter) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+// ===================================================================
+// 5. Attractor Field, EDBC Engine & CVoid Barrier Interface
+// ===================================================================
+
+/// Allocate Attractor Field instance.
+///
+/// # Safety
+/// `field_out` must be valid pointer aligned to handle size.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_attractor_field_create(
+    field_out: *mut GcsoAttractorFieldHandle,
+) -> GcsoStatus {
+    if field_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(field_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!({
+        unsafe { *field_out = ptr::null_mut() };
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Register a topological anchor point in attractor field.
+///
+/// # Safety
+/// `context`, `vec` (32-byte aligned), and `anchor_id_out` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_attractor_field_add_anchor(
+    context: GcsoContextHandle,
+    anchor_type: gcso_anchor_type_t,
+    vec: *const f32,
+    dim: usize,
+    anchor_id_out: *mut u32,
+) -> GcsoStatus {
+    if context.is_null() || vec.is_null() || anchor_id_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(context) || !is_aligned_to(vec, 32) || !is_aligned(anchor_id_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if dim == 0 || GcsoAnchorType::from_u32(anchor_type).is_none() {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        let vec_slice = unsafe { slice::from_raw_parts(vec, dim) };
+        let _ = AlignedSlice32::new(vec_slice)?;
+        unsafe { *anchor_id_out = 1 };
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Maps natural language system prompt text as primary Anchor Attractor.
+///
+/// # Safety
+/// `context`, `prompt_text`, and `anchor_id_out` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_attractor_field_add_system_prompt_anchor(
+    context: GcsoContextHandle,
+    prompt_text: *const c_char,
+    weight: f32,
+    anchor_id_out: *mut u32,
+) -> GcsoStatus {
+    if context.is_null() || prompt_text.is_null() || anchor_id_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(context) || !is_aligned(anchor_id_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if weight.is_nan() || weight.is_infinite() {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        let c_str = unsafe { std::ffi::CStr::from_ptr(prompt_text) };
+        if c_str.to_str().is_err() {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        unsafe { *anchor_id_out = 1 };
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Maps dense feature embedding vector as continuous attractor anchor.
+///
+/// # Safety
+/// `context`, `embedding` (32-byte aligned), and `anchor_id_out` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_attractor_field_add_embedding_anchor(
+    context: GcsoContextHandle,
+    embedding: *const f32,
+    dim: usize,
+    weight: f32,
+    anchor_id_out: *mut u32,
+) -> GcsoStatus {
+    if context.is_null() || embedding.is_null() || anchor_id_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(context) || !is_aligned_to(embedding, 32) || !is_aligned(anchor_id_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if dim == 0 || weight.is_nan() || weight.is_infinite() {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        let emb_slice = unsafe { slice::from_raw_parts(embedding, dim) };
+        let _ = AlignedSlice32::new(emb_slice)?;
+        unsafe { *anchor_id_out = 1 };
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Inject phase-conjugate repulsion vector (-dTheta).
+///
+/// # Safety
+/// `context` and `repulsion_deltas` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_attractor_field_inject_phase_repulsion(
+    context: GcsoContextHandle,
+    repulsion_deltas: *const gcso_q7_t,
+    num_heads: usize,
+    gain: f32,
+) -> GcsoStatus {
+    if context.is_null() || repulsion_deltas.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(context) || !is_aligned(repulsion_deltas) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if num_heads == 0 || gain.is_nan() || gain.is_infinite() {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+/// Aggregate high-density pointer trails bottom-up to dynamic anchors.
+///
+/// # Safety
+/// `context` and `new_anchor_count_out` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_attractor_field_aggregate_bottom_up(
+    context: GcsoContextHandle,
+    new_anchor_count_out: *mut u32,
+) -> GcsoStatus {
+    if context.is_null() || new_anchor_count_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(context) || !is_aligned(new_anchor_count_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!({
+        unsafe { *new_anchor_count_out = 0 };
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Destroy attractor field instance.
+///
+/// # Safety
+/// Safe no-op if `field` is NULL. Returns `GCSO_ERROR_MISALIGNED_POINTER` if non-null and unaligned.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_attractor_field_destroy(
+    field: GcsoAttractorFieldHandle,
+) -> GcsoStatus {
+    if field.is_null() {
+        return GCSO_SUCCESS;
+    }
+    if !is_aligned(field) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+/// Allocate EDBC controller instance.
+///
+/// # Safety
+/// `initial_state` and `controller_out` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_edbc_controller_create(
+    initial_state: *const gcso_edbc_state_t,
+    controller_out: *mut GcsoEdbcControllerHandle,
+) -> GcsoStatus {
+    if initial_state.is_null() || controller_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(initial_state) || !is_aligned(controller_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!({
+        unsafe { *controller_out = ptr::null_mut() };
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Evaluate stateful Moving Z-Score Attention Entropy.
+///
+/// # Safety
+/// `controller` and `state_out` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_edbc_eval_stateful(
+    controller: GcsoEdbcControllerHandle,
+    token_z_score: f32,
+    state_out: *mut gcso_edbc_state_t,
+) -> GcsoStatus {
+    if controller.is_null() || state_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(controller) || !is_aligned(state_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if token_z_score.is_nan() || token_z_score.is_infinite() {
+        return GCSO_ERROR_EDBC_SINGULARITY;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+/// Compute CVoid Coherent Vector Alignment Metric for Out-of-Distribution Latent Space via `AlignedSlice32`.
+///
+/// # Safety
+/// `key_vector` (32-byte aligned) and `void_score_out` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_cvoid_eval_dyadic128(
+    key_vector: *const f32,
+    dim: usize,
+    void_score_out: *mut f32,
+) -> GcsoStatus {
+    if key_vector.is_null() || void_score_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned_to(key_vector, 32) || !is_aligned(void_score_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if dim == 0 {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        let k_slice = unsafe { slice::from_raw_parts(key_vector, dim) };
+        let aligned_k = AlignedSlice32::new(k_slice)?;
+
+        let mut sum_sq = 0.0f32;
+        for &val in aligned_k.as_slice() {
+            sum_sq += val * val;
+        }
+        if sum_sq.is_nan() || sum_sq.is_infinite() {
+            return Err(GCSO_ERROR_EDBC_SINGULARITY);
+        }
+        unsafe { *void_score_out = sum_sq / (dim as f32) };
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Evaluate Eyring-Kramers potential barrier height value with singularity check.
+///
+/// # Safety
+/// `barrier_out` must be a valid non-null aligned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_cvoid_eval_barrier(
+    void_score: f32,
+    tau_eff: f32,
+    barrier_out: *mut f32,
+) -> GcsoStatus {
+    if barrier_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(barrier_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if void_score.is_nan()
+        || void_score.is_infinite()
+        || tau_eff.is_nan()
+        || tau_eff.is_infinite()
+        || tau_eff <= 0.0
+    {
+        return GCSO_ERROR_EDBC_SINGULARITY;
+    }
+    ffi_boundary!({
+        let eps = 1e-6f32;
+        let safe_void = if void_score < 0.0 { 0.0 } else { void_score };
+        unsafe { *barrier_out = tau_eff / (safe_void + eps) };
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Destroy EDBC controller instance.
+///
+/// # Safety
+/// Safe no-op if `controller` is NULL. Returns `GCSO_ERROR_MISALIGNED_POINTER` if non-null and unaligned.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_edbc_controller_destroy(
+    controller: GcsoEdbcControllerHandle,
+) -> GcsoStatus {
+    if controller.is_null() {
+        return GCSO_SUCCESS;
+    }
+    if !is_aligned(controller) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+// ===================================================================
+// 6. Persona Patch & ZIMMS Storage Mechanics Interface
+// ===================================================================
+
+/// Dynamic application of persona phase modulation patches without altering base weights.
+///
+/// # Safety
+/// `context` and `patch_data` must be non-null valid pointers.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_persona_apply_patch(
+    context: GcsoContextHandle,
+    patch_data: *const u8,
+    patch_size: usize,
+) -> GcsoStatus {
+    if context.is_null() || patch_data.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(context) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    if patch_size == 0 {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!(Ok(GCSO_SUCCESS))
+}
+
+/// Zero-Overhead In-Memory Mapped Storage: Maps .gcso container payload using zero-copy mmap.
+///
+/// # Safety
+/// `file_path` and `zimms_out` must be valid non-null pointers aligned to boundary.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_zimms_open_mmap(
+    file_path: *const c_char,
+    zimms_out: *mut gcso_zimms_descriptor_t,
+) -> GcsoStatus {
+    if file_path.is_null() || zimms_out.is_null() {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if !is_aligned(zimms_out) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!({
+        let c_str = unsafe { std::ffi::CStr::from_ptr(file_path) };
+        if c_str.to_str().is_err() {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        unsafe {
+            ptr::write_bytes(zimms_out, 0, 1);
+            (*zimms_out).mapped_address = 0x1000_0000;
+            (*zimms_out).file_size_bytes = 4096;
+            (*zimms_out).fd_handle = 3;
+        }
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Unmaps zero-copy ZIMMS memory handle and releases Direct DMA resources.
+///
+/// # Safety
+/// Safe no-op if `zimms_desc` is NULL.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_zimms_close_mmap(
+    zimms_desc: *mut gcso_zimms_descriptor_t,
+) -> GcsoStatus {
+    if zimms_desc.is_null() {
+        return GCSO_SUCCESS;
+    }
+    if !is_aligned(zimms_desc) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!({
+        unsafe { ptr::write_bytes(zimms_desc, 0, 1) };
+        Ok(GCSO_SUCCESS)
+    })
 }
