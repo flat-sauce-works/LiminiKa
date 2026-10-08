@@ -1,3 +1,4 @@
+// name: src/core/src/abi.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! C-ABI interface definitions, structural layouts, and FFI boundary safety primitives for GCSO core engine.
@@ -14,6 +15,19 @@
 
 use std::ffi::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+
+use crate::traits::{AlignedSlice16, AlignedSlice32, AlignedSliceMut32};
+
+/// Helper macro to catch unwinding panics and safely bridge execution into C-ABI error status codes.
+#[macro_export]
+macro_rules! ffi_boundary {
+    ($body:expr) => {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
+            Ok(status) => status,
+            Err(_) => $crate::abi::GCSO_ERROR_PANIC_CAUGHT,
+        }
+    };
+}
 
 /// Status code returned across the C-ABI FFI boundary.
 #[repr(transparent)]
@@ -46,6 +60,27 @@ pub const GCSO_ERROR_EXTENSION_NOT_LOADED: GcsoStatus = GcsoStatus(-90);
 pub const GCSO_ERROR_DAES_SCRATCHPAD_FULL: GcsoStatus = GcsoStatus(-91);
 pub const GCSO_ERROR_UNKNOWN: GcsoStatus = GcsoStatus(-0x7FFF_FFFF);
 
+impl From<GcsoStatus> for Result<(), GcsoStatus> {
+    #[inline]
+    fn from(status: GcsoStatus) -> Self {
+        if status == GCSO_SUCCESS {
+            Ok(())
+        } else {
+            Err(status)
+        }
+    }
+}
+
+impl From<Result<(), GcsoStatus>> for GcsoStatus {
+    #[inline]
+    fn from(res: Result<(), GcsoStatus>) -> Self {
+        match res {
+            Ok(()) => GCSO_SUCCESS,
+            Err(status) => status,
+        }
+    }
+}
+
 /// C-ABI type alias for status codes.
 pub type gcso_status_t = GcsoStatus;
 
@@ -55,7 +90,7 @@ pub type gcso_q7_t = i8;
 /// 64-bit capability flags bitmask type.
 pub type gcso_capability_flags_t = u64;
 
-/// Opaque handles passed across C-ABI.
+/// Opaque handles passed across C-ABI boundary (Thin Pointers).
 pub type GcsoContextHandle = *mut std::ffi::c_void;
 pub type GcsoContainerHandle = *mut std::ffi::c_void;
 pub type GcsoActionHubHandle = *mut std::ffi::c_void;
@@ -340,8 +375,8 @@ pub struct gcso_pprc_keyframe_header_t {
 
 // Static layout assertion checks to guarantee standard C-ABI structural alignment and field offsets
 const _: () = {
-    assert!(std::mem::size_of::<GcsoStatus>() == 4);
-    assert!(std::mem::size_of::<GcsoAnchorType>() == 4);
+    assert!(std::mem::size_of::<gcso_status_t>() == 4);
+    assert!(std::mem::size_of::<gcso_q7_t>() == 1);
     assert!(std::mem::size_of::<gcso_descriptor_header_t>() == 8);
     assert!(std::mem::size_of::<gcso_paged_bitmask_t>() == 32);
     assert!(std::mem::size_of::<gcso_pointer_trail_t>() == 128);
@@ -377,15 +412,15 @@ const _: () = {
 /// Helper function to check pointer natural alignment safely across architectures.
 #[inline]
 #[must_use]
-fn is_aligned<T>(ptr: *const T) -> bool {
-    !ptr.is_null() && (ptr as usize).is_multiple_of(std::mem::align_of::<T>())
+pub fn is_aligned<T>(ptr: *const T) -> bool {
+    !ptr.is_null() && (ptr as usize) % std::mem::align_of::<T>() == 0
 }
 
 /// Helper function to check pointer alignment for a specific custom alignment requirement.
 #[inline]
 #[must_use]
-fn is_aligned_to<T>(ptr: *const T, align: usize) -> bool {
-    !ptr.is_null() && (align != 0) && (ptr as usize).is_multiple_of(align)
+pub fn is_aligned_to<T>(ptr: *const T, align: usize) -> bool {
+    !ptr.is_null() && align != 0 && align.is_power_of_two() && (ptr as usize) % align == 0
 }
 
 /// Static version string constant for FFI boundary checks matching ABI v2.0.0.
@@ -400,7 +435,11 @@ static GCSO_ABI_VERSION: &[u8] = b"2.0.0\0";
 /// # Safety
 /// Pointers must be valid, non-null writable memory locations aligned to `u32`.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_abi_get_version(major: *mut u32, minor: *mut u32, patch: *mut u32) {
+pub unsafe extern "C" fn gcso_abi_get_version(
+    major: *mut u32,
+    minor: *mut u32,
+    patch: *mut u32,
+) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         if is_aligned(major) {
             unsafe { *major = 2 };
@@ -470,8 +509,7 @@ pub unsafe extern "C" fn gcso_abi_query_capability(flags: *mut u64) -> GcsoStatu
     if !is_aligned(flags) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| {
-        #[allow(unused_mut)]
+    ffi_boundary!({
         let mut caps = 0x01u64; // Base CPU capability flag
         #[cfg(feature = "cuda")]
         {
@@ -487,8 +525,7 @@ pub unsafe extern "C" fn gcso_abi_query_capability(flags: *mut u64) -> GcsoStatu
         }
         unsafe { *flags = caps };
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Initialize a `gcso_config_t` structure strictly conforming to GCSO standards.
@@ -504,7 +541,7 @@ pub unsafe extern "C" fn gcso_config_init_default(config: *mut gcso_config_t) ->
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
+    ffi_boundary!({
         unsafe {
             *config = gcso_config_t {
                 head_dim: 128,
@@ -524,9 +561,7 @@ pub unsafe extern "C" fn gcso_config_init_default(config: *mut gcso_config_t) ->
             };
         }
         GCSO_SUCCESS
-    }));
-
-    result.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Free string dynamically allocated by GCSO runtime routines.
@@ -563,19 +598,20 @@ pub unsafe extern "C" fn gcso_context_create(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
 
-    let result = catch_unwind(AssertUnwindSafe(|| unsafe {
-        if (*config).head_dim == 0
-            || !(*config).head_dim.is_multiple_of(2)
-            || (*config).num_heads == 0
-            || (*config).num_heads > 64
-        {
-            return GCSO_ERROR_INVALID_ARGUMENT;
+    ffi_boundary!({
+        unsafe {
+            let cfg = &*config;
+            if cfg.head_dim == 0
+                || cfg.head_dim % 2 != 0
+                || cfg.num_heads == 0
+                || cfg.num_heads > 64
+            {
+                return GCSO_ERROR_INVALID_ARGUMENT;
+            }
+            *context_out = std::ptr::null_mut();
         }
-        *context_out = std::ptr::null_mut();
         GCSO_SUCCESS
-    }));
-
-    result.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Reset state variables and phase accumulators without freeing allocated tables.
@@ -590,8 +626,7 @@ pub unsafe extern "C" fn gcso_context_reset(context: GcsoContextHandle) -> GcsoS
     if !is_aligned(context) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Set system prompt text as Anchor Attractor.
@@ -602,7 +637,7 @@ pub unsafe extern "C" fn gcso_context_reset(context: GcsoContextHandle) -> GcsoS
 pub unsafe extern "C" fn gcso_context_set_system_prompt_anchor(
     context: GcsoContextHandle,
     prompt_text: *const c_char,
-    _weight: f32,
+    weight: f32,
 ) -> GcsoStatus {
     if context.is_null() || prompt_text.is_null() {
         return GCSO_ERROR_NULL_POINTER;
@@ -610,8 +645,16 @@ pub unsafe extern "C" fn gcso_context_set_system_prompt_anchor(
     if !is_aligned(context) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    if weight.is_nan() || weight.is_infinite() {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    ffi_boundary!({
+        let c_str = unsafe { std::ffi::CStr::from_ptr(prompt_text) };
+        if c_str.to_str().is_err() {
+            return GCSO_ERROR_INVALID_ARGUMENT;
+        }
+        GCSO_SUCCESS
+    })
 }
 
 /// Process a single token step in zero-allocation mode.
@@ -623,7 +666,7 @@ pub unsafe extern "C" fn gcso_context_set_system_prompt_anchor(
 #[no_mangle]
 pub unsafe extern "C" fn gcso_context_step_token(
     context: GcsoContextHandle,
-    _token_id: u32,
+    token_id: u32,
     query_tensor: *mut f32,
     key_tensor: *mut f32,
     trail_out: *mut gcso_pointer_trail_t,
@@ -644,8 +687,24 @@ pub unsafe extern "C" fn gcso_context_step_token(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
 
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({
+        if !query_tensor.is_null() {
+            let slice = unsafe { std::slice::from_raw_parts_mut(query_tensor, 128) };
+            let _ = AlignedSliceMut32::new(slice)?;
+        }
+        if !key_tensor.is_null() {
+            let slice = unsafe { std::slice::from_raw_parts_mut(key_tensor, 128) };
+            let _ = AlignedSliceMut32::new(slice)?;
+        }
+        if !trail_out.is_null() {
+            unsafe {
+                std::ptr::write_bytes(trail_out, 0, 1);
+                (*trail_out).current_ptr = u64::from(token_id);
+                (*trail_out).stigmergic_density = 1.0;
+            }
+        }
+        GCSO_SUCCESS
+    })
 }
 
 /// Serialize runtime state into binary format.
@@ -665,29 +724,30 @@ pub unsafe extern "C" fn gcso_context_serialize(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
 
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        let required = std::mem::size_of::<gcso_snapshot_header_t>();
-        if buffer.is_null() {
+    ffi_boundary!({
+        unsafe {
+            let required = std::mem::size_of::<gcso_snapshot_header_t>();
+            if buffer.is_null() {
+                *buffer_size = required;
+                return GCSO_SUCCESS;
+            }
+            if *buffer_size < required {
+                *buffer_size = required;
+                return GCSO_ERROR_BUFFER_TOO_SMALL;
+            }
+            if !is_aligned(buffer) {
+                return GCSO_ERROR_MISALIGNED_POINTER;
+            }
+            std::ptr::write_bytes(buffer, 0, required);
+            let header_ptr = buffer.cast::<gcso_snapshot_header_t>();
+            (*header_ptr).magic = 0x4F53_4347;
+            (*header_ptr).version = 0x0002_0000;
+            (*header_ptr).total_size = required as u64;
+            (*header_ptr).timestamp_epoch_sec = 1_774_900_000;
             *buffer_size = required;
-            return GCSO_SUCCESS;
         }
-        if *buffer_size < required {
-            *buffer_size = required;
-            return GCSO_ERROR_BUFFER_TOO_SMALL;
-        }
-        if !is_aligned(buffer) {
-            return GCSO_ERROR_MISALIGNED_POINTER;
-        }
-        std::ptr::write_bytes(buffer, 0, required);
-        let header_ptr = buffer.cast::<gcso_snapshot_header_t>();
-        (*header_ptr).magic = 0x4F53_4347;
-        (*header_ptr).version = 0x0002_0000;
-        (*header_ptr).total_size = required as u64;
-        (*header_ptr).timestamp_epoch_sec = 1_774_900_000;
-        *buffer_size = required;
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Deserialize binary snapshot to restore runtime state.
@@ -709,18 +769,17 @@ pub unsafe extern "C" fn gcso_context_deserialize(
     if buffer_size < std::mem::size_of::<gcso_snapshot_header_t>() {
         return GCSO_ERROR_CONTAINER_CORRUPTED;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        let header = &*buffer.cast::<gcso_snapshot_header_t>();
+    ffi_boundary!({
+        let header = unsafe { &*buffer.cast::<gcso_snapshot_header_t>() };
         if header.magic != 0x4F53_4347 {
             return GCSO_ERROR_CONTAINER_CORRUPTED;
         }
         if header.version != 0x0002_0000 {
             return GCSO_ERROR_VERSION_MISMATCH;
         }
-        *context_out = std::ptr::null_mut();
+        unsafe { *context_out = std::ptr::null_mut() };
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Destroy context instance and release resources.
@@ -735,8 +794,7 @@ pub unsafe extern "C" fn gcso_context_destroy(context: GcsoContextHandle) -> Gcs
     if !is_aligned(context) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Destroy container handle and release resources.
@@ -751,8 +809,7 @@ pub unsafe extern "C" fn gcso_container_destroy(container: GcsoContainerHandle) 
     if !is_aligned(container) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Seek to a specific token index in the PPRC keyframe KV cache index.
@@ -771,12 +828,13 @@ pub unsafe extern "C" fn gcso_pprc_seek_to_token(
     if !is_aligned(context) || !is_aligned(keyframe_header_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        std::ptr::write_bytes(keyframe_header_out, 0, 1);
-        (*keyframe_header_out).token_index = token_index;
+    ffi_boundary!({
+        unsafe {
+            std::ptr::write_bytes(keyframe_header_out, 0, 1);
+            (*keyframe_header_out).token_index = token_index;
+        }
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 // ===================================================================
@@ -801,11 +859,10 @@ pub unsafe extern "C" fn gcso_action_hub_create(
     if capacity == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        *hub_out = std::ptr::null_mut();
+    ffi_boundary!({
+        unsafe { *hub_out = std::ptr::null_mut() };
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Advance tagged pointer transition in O(1) time.
@@ -815,7 +872,7 @@ pub unsafe extern "C" fn gcso_action_hub_create(
 #[no_mangle]
 pub unsafe extern "C" fn gcso_action_hub_step_pointer(
     context: GcsoContextHandle,
-    _current_ptr: u64,
+    current_ptr: u64,
     trail_out: *mut gcso_pointer_trail_t,
 ) -> GcsoStatus {
     if context.is_null() || trail_out.is_null() {
@@ -824,8 +881,14 @@ pub unsafe extern "C" fn gcso_action_hub_step_pointer(
     if !is_aligned(context) || !is_aligned(trail_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({
+        unsafe {
+            std::ptr::write_bytes(trail_out, 0, 1);
+            (*trail_out).current_ptr = current_ptr;
+            (*trail_out).stigmergic_density = 1.0;
+        }
+        GCSO_SUCCESS
+    })
 }
 
 /// Compute direct 256-slot hash index for 64-bit pointer trail caching using SplitMix64.
@@ -862,8 +925,7 @@ pub unsafe extern "C" fn gcso_swarm_cell_chunk_step(
     if chunk_len == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Apply attractor pull force to steer active pointer chains.
@@ -886,8 +948,7 @@ pub unsafe extern "C" fn gcso_action_hub_pull_trail_to_attractor(
     if pull_force.is_nan() || pull_force.is_infinite() {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Link adjacent cellular hallucinated trails into contiguous trace graphs.
@@ -906,8 +967,7 @@ pub unsafe extern "C" fn gcso_action_hub_link_hallucinated_trails(
     if !is_aligned(context) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Perform bit-tree reduction across paged bitmasks.
@@ -929,19 +989,18 @@ pub unsafe extern "C" fn gcso_action_hub_reduce_bit_tree(
     if num_masks == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
+    ffi_boundary!({
         let mut acc = [0u64; 4];
-        let masks = std::slice::from_raw_parts(bitmasks, num_masks);
+        let masks = unsafe { std::slice::from_raw_parts(bitmasks, num_masks) };
         for m in masks {
             acc[0] |= m.bits[0];
             acc[1] |= m.bits[1];
             acc[2] |= m.bits[2];
             acc[3] |= m.bits[3];
         }
-        (*reduced_out).bits = acc;
+        unsafe { (*reduced_out).bits = acc };
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Evaluate SIMD/Warp bitmask reduction over PagedBlock KV caches.
@@ -963,11 +1022,10 @@ pub unsafe extern "C" fn gcso_action_hub_paged_block_warp_bitmask(
     if num_blocks == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        std::ptr::write_bytes(mask_out, 0, 1);
+    ffi_boundary!({
+        unsafe { std::ptr::write_bytes(mask_out, 0, 1) };
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Destroy Action Hub instance and free resources.
@@ -982,8 +1040,7 @@ pub unsafe extern "C" fn gcso_action_hub_destroy(hub: GcsoActionHubHandle) -> Gc
     if !is_aligned(hub) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Allocate DAES slot instance.
@@ -998,11 +1055,10 @@ pub unsafe extern "C" fn gcso_daes_slot_create(slot_out: *mut GcsoDaesSlotHandle
     if !is_aligned(slot_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        *slot_out = std::ptr::null_mut();
+    ffi_boundary!({
+        unsafe { *slot_out = std::ptr::null_mut() };
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Fast-path lookup in DAES dynamic scratchpad.
@@ -1021,16 +1077,15 @@ pub unsafe extern "C" fn gcso_daes_fast_path_lookup(
     if !is_aligned(slot) || !is_aligned(shortcut_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        let slot_ref = &*slot;
+    ffi_boundary!({
+        let slot_ref = unsafe { &*slot };
         if (slot_ref.fast_path_bypass_mask & input_key) != 0 {
-            *shortcut_out = slot_ref.fast_path_shortcuts[0];
+            unsafe { *shortcut_out = slot_ref.fast_path_shortcuts[0] };
             GCSO_SUCCESS
         } else {
             GCSO_ERROR_INVALID_STATE
         }
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Push metric byte to DAES telemetry ring ledger in zero-allocation mode.
@@ -1048,13 +1103,14 @@ pub unsafe extern "C" fn gcso_daes_telemetry_push(
     if !is_aligned(slot) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        let head = ((*slot).telemetry_ring_head as usize) % 8;
-        (*slot).telemetry_mini_ledger[head] = metric_code;
-        (*slot).telemetry_ring_head = (*slot).telemetry_ring_head.wrapping_add(1);
+    ffi_boundary!({
+        let head = (unsafe { (*slot).telemetry_ring_head as usize }) % 8;
+        unsafe {
+            (*slot).telemetry_mini_ledger[head] = metric_code;
+            (*slot).telemetry_ring_head = (*slot).telemetry_ring_head.wrapping_add(1);
+        }
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Set DAES slot mode.
@@ -1072,11 +1128,10 @@ pub unsafe extern "C" fn gcso_daes_set_mode(slot: *mut gcso_daes_slot_t, mode: u
     if mode > 2 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        (*slot).mode = mode;
+    ffi_boundary!({
+        unsafe { (*slot).mode = mode };
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Evaluate telemetry ledger for dynamic auto-tuning.
@@ -1094,8 +1149,7 @@ pub unsafe extern "C" fn gcso_daes_evaluate_auto_tune(
     if !is_aligned(slot) || !is_aligned(config_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Destroy DAES slot instance.
@@ -1110,8 +1164,7 @@ pub unsafe extern "C" fn gcso_daes_slot_destroy(slot: GcsoDaesSlotHandle) -> Gcs
     if !is_aligned(slot) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 // ===================================================================
@@ -1134,14 +1187,13 @@ pub unsafe extern "C" fn gcso_dpsr_kernel_create(
     if !is_aligned(kernel_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    if head_dim == 0 || !head_dim.is_multiple_of(2) || num_heads == 0 {
+    if head_dim == 0 || head_dim % 2 != 0 || num_heads == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        *kernel_out = std::ptr::null_mut();
+    ffi_boundary!({
+        unsafe { *kernel_out = std::ptr::null_mut() };
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Apply inline DPSR phase steering to Query tensor.
@@ -1161,11 +1213,10 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering(
     if !is_aligned_to(query_tensor, 32) || !is_aligned(phase_deltas) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    if head_dim == 0 || !head_dim.is_multiple_of(2) || num_heads == 0 {
+    if head_dim == 0 || head_dim % 2 != 0 || num_heads == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Apply RIPA soft-bounded tanh clamping on low-frequency channels.
@@ -1186,11 +1237,10 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_safe(
     if !is_aligned_to(query_tensor, 32) || !is_aligned(phase_deltas) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    if head_dim == 0 || !head_dim.is_multiple_of(2) || num_heads == 0 || max_rad <= 0.0 {
+    if head_dim == 0 || head_dim % 2 != 0 || num_heads == 0 || max_rad <= 0.0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// QDPS discrete filter: cuts off phase rotation steps falling below min_step_rad.
@@ -1212,8 +1262,7 @@ pub unsafe extern "C" fn gcso_qdps_filter_step(
     if len == 0 || min_step_rad < 0.0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Lazy Phase Unwrapping override on Query tensor.
@@ -1233,11 +1282,10 @@ pub unsafe extern "C" fn gcso_dpsr_lazy_unwrap_override(
     if !is_aligned_to(query_tensor, 32) || !is_aligned_to(context_accum, 32) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    if head_dim == 0 || !head_dim.is_multiple_of(2) || num_heads == 0 {
+    if head_dim == 0 || head_dim % 2 != 0 || num_heads == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Execute norm-guarded Slerp phase stabilization.
@@ -1260,8 +1308,7 @@ pub unsafe extern "C" fn gcso_dpsr_slerp_norm_guard_stable(
     if dim == 0 || norm_lower >= norm_upper || norm_lower <= 0.0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Fused inline logit phase shift prior to Softmax.
@@ -1284,8 +1331,7 @@ pub unsafe extern "C" fn gcso_dpsr_fused_logit_shift(
     if vocab_size == 0 || num_heads == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Destroy DPSR kernel instance.
@@ -1300,8 +1346,7 @@ pub unsafe extern "C" fn gcso_dpsr_kernel_destroy(kernel: GcsoDpsrKernelHandle) 
     if !is_aligned(kernel) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Allocate PSPM router instance.
@@ -1319,11 +1364,10 @@ pub unsafe extern "C" fn gcso_pspm_router_create(
     if !is_aligned(config) || !is_aligned(router_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        *router_out = std::ptr::null_mut();
+    ffi_boundary!({
+        unsafe { *router_out = std::ptr::null_mut() };
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Dispatch PSPM head-group phase profiles in single pass.
@@ -1342,11 +1386,10 @@ pub unsafe extern "C" fn gcso_pspm_dispatch_single_pass(
     if !is_aligned_to(query_tensor, 32) || !is_aligned(pspm_cfg) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    if head_dim == 0 || !head_dim.is_multiple_of(2) {
+    if head_dim == 0 || head_dim % 2 != 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Destroy PSPM router instance.
@@ -1361,8 +1404,7 @@ pub unsafe extern "C" fn gcso_pspm_router_destroy(router: GcsoPspmRouterHandle) 
     if !is_aligned(router) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Create Sparse Residual Adapter Layer (SRL) instance.
@@ -1380,11 +1422,10 @@ pub unsafe extern "C" fn gcso_srl_adapter_create(
     if !is_aligned(descriptor) || !is_aligned(adapter_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        *adapter_out = std::ptr::null_mut();
+    ffi_boundary!({
+        unsafe { *adapter_out = std::ptr::null_mut() };
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Evaluate SRL Rank-1 outer product.
@@ -1408,8 +1449,7 @@ pub unsafe extern "C" fn gcso_srl_eval_rank1(
     if dim_in == 0 || dim_out == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// L2P-SVD: Projects fine-tuned LoRA matrices via SVD into phase profiles and SRL vectors.
@@ -1439,8 +1479,7 @@ pub unsafe extern "C" fn gcso_l2p_svd_project_lora(
     if rank == 0 || dim_in == 0 || dim_out == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Destroy SRL adapter instance.
@@ -1455,8 +1494,7 @@ pub unsafe extern "C" fn gcso_srl_adapter_destroy(adapter: GcsoSrlAdapterHandle)
     if !is_aligned(adapter) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 // ===================================================================
@@ -1477,11 +1515,10 @@ pub unsafe extern "C" fn gcso_attractor_field_create(
     if !is_aligned(field_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        *field_out = std::ptr::null_mut();
+    ffi_boundary!({
+        unsafe { *field_out = std::ptr::null_mut() };
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Register a topological anchor point in attractor field.
@@ -1505,8 +1542,12 @@ pub unsafe extern "C" fn gcso_attractor_field_add_anchor(
     if dim == 0 || GcsoAnchorType::from_u32(anchor_type).is_none() {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({
+        let vec_slice = unsafe { std::slice::from_raw_parts(vec, dim) };
+        let _ = AlignedSlice32::new(vec_slice)?;
+        unsafe { *anchor_id_out = 1 };
+        GCSO_SUCCESS
+    })
 }
 
 /// Maps natural language system prompt text as primary Anchor Attractor.
@@ -1529,8 +1570,14 @@ pub unsafe extern "C" fn gcso_attractor_field_add_system_prompt_anchor(
     if weight.is_nan() || weight.is_infinite() {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({
+        let c_str = unsafe { std::ffi::CStr::from_ptr(prompt_text) };
+        if c_str.to_str().is_err() {
+            return GCSO_ERROR_INVALID_ARGUMENT;
+        }
+        unsafe { *anchor_id_out = 1 };
+        GCSO_SUCCESS
+    })
 }
 
 /// Maps dense feature embedding vector as continuous attractor anchor.
@@ -1554,8 +1601,12 @@ pub unsafe extern "C" fn gcso_attractor_field_add_embedding_anchor(
     if dim == 0 || weight.is_nan() || weight.is_infinite() {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({
+        let emb_slice = unsafe { std::slice::from_raw_parts(embedding, dim) };
+        let _ = AlignedSlice32::new(emb_slice)?;
+        unsafe { *anchor_id_out = 1 };
+        GCSO_SUCCESS
+    })
 }
 
 /// Inject phase-conjugate repulsion vector (-dTheta).
@@ -1578,8 +1629,7 @@ pub unsafe extern "C" fn gcso_attractor_field_inject_phase_repulsion(
     if num_heads == 0 || gain.is_nan() || gain.is_infinite() {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Aggregate high-density pointer trails bottom-up to dynamic anchors.
@@ -1597,8 +1647,10 @@ pub unsafe extern "C" fn gcso_attractor_field_aggregate_bottom_up(
     if !is_aligned(context) || !is_aligned(new_anchor_count_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({
+        unsafe { *new_anchor_count_out = 0 };
+        GCSO_SUCCESS
+    })
 }
 
 /// Destroy attractor field instance.
@@ -1615,8 +1667,7 @@ pub unsafe extern "C" fn gcso_attractor_field_destroy(
     if !is_aligned(field) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Allocate EDBC controller instance.
@@ -1634,11 +1685,10 @@ pub unsafe extern "C" fn gcso_edbc_controller_create(
     if !is_aligned(initial_state) || !is_aligned(controller_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        *controller_out = std::ptr::null_mut();
+    ffi_boundary!({
+        unsafe { *controller_out = std::ptr::null_mut() };
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Evaluate stateful Moving Z-Score Attention Entropy.
@@ -1660,8 +1710,7 @@ pub unsafe extern "C" fn gcso_edbc_eval_stateful(
     if token_z_score.is_nan() || token_z_score.is_infinite() {
         return GCSO_ERROR_EDBC_SINGULARITY;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Compute CVoid Coherent Vector Alignment Metric.
@@ -1683,8 +1732,7 @@ pub unsafe extern "C" fn gcso_cvoid_eval_dyadic128(
     if dim == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Evaluate Eyring-Kramers potential barrier height value with singularity check.
@@ -1711,11 +1759,10 @@ pub unsafe extern "C" fn gcso_cvoid_eval_barrier(
     {
         return GCSO_ERROR_EDBC_SINGULARITY;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        *barrier_out = void_score / tau_eff;
+    ffi_boundary!({
+        unsafe { *barrier_out = void_score / tau_eff };
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Destroy EDBC controller instance.
@@ -1732,8 +1779,7 @@ pub unsafe extern "C" fn gcso_edbc_controller_destroy(
     if !is_aligned(controller) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 // ===================================================================
@@ -1759,8 +1805,7 @@ pub unsafe extern "C" fn gcso_persona_apply_patch(
     if patch_size == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| GCSO_SUCCESS));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    ffi_boundary!({ GCSO_SUCCESS })
 }
 
 /// Zero-Overhead In-Memory Mapped Storage: Maps .gcso container payload using zero-copy mmap.
@@ -1778,12 +1823,13 @@ pub unsafe extern "C" fn gcso_zimms_open_mmap(
     if !is_aligned(zimms_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        std::ptr::write_bytes(zimms_out, 0, 1);
-        (*zimms_out).fd_handle = -1;
+    ffi_boundary!({
+        unsafe {
+            std::ptr::write_bytes(zimms_out, 0, 1);
+            (*zimms_out).fd_handle = -1;
+        }
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }
 
 /// Unmaps zero-copy ZIMMS memory handle and releases Direct DMA resources.
@@ -1800,11 +1846,12 @@ pub unsafe extern "C" fn gcso_zimms_close_mmap(
     if !is_aligned(zimms_desc) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    let res = catch_unwind(AssertUnwindSafe(|| unsafe {
-        (*zimms_desc).mapped_address = 0;
-        (*zimms_desc).file_size_bytes = 0;
-        (*zimms_desc).fd_handle = -1;
+    ffi_boundary!({
+        unsafe {
+            (*zimms_desc).mapped_address = 0;
+            (*zimms_desc).file_size_bytes = 0;
+            (*zimms_desc).fd_handle = -1;
+        }
         GCSO_SUCCESS
-    }));
-    res.unwrap_or(GCSO_ERROR_PANIC_CAUGHT)
+    })
 }

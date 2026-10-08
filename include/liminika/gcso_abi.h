@@ -13,10 +13,10 @@ GCSO_EXTERN_C_BEGIN
 // ===================================================================
 
 /**
- * @brief Retrieves the numeric version of the GCSO C-ABI.
- * @param major Pointer to store the major version number.
- * @param minor Pointer to store the minor version number.
- * @param patch Pointer to store the patch version number.
+ * @brief Retrieves the numeric version components of the GCSO C-ABI (v2.0.0).
+ * @param major Pointer to store the major version number (aligned to uint32_t).
+ * @param minor Pointer to store the minor version number (aligned to uint32_t).
+ * @param patch Pointer to store the patch version number (aligned to uint32_t).
  */
 GCSO_API void GCSO_CALL gcso_abi_get_version(uint32_t* GCSO_RESTRICT major,
                                              uint32_t* GCSO_RESTRICT minor,
@@ -24,7 +24,7 @@ GCSO_API void GCSO_CALL gcso_abi_get_version(uint32_t* GCSO_RESTRICT major,
 
 /**
  * @brief Returns the static semantic version string literal for the GCSO kernel engine.
- * @return Const pointer to null-terminated version string.
+ * @return Const pointer to null-terminated static version string ("2.0.0").
  */
 GCSO_NODISCARD GCSO_API const char* GCSO_CALL gcso_abi_get_version_string(void) GCSO_NOEXCEPT;
 
@@ -46,17 +46,17 @@ gcso_abi_query_capability(gcso_capability_flags_t* GCSO_RESTRICT flags) GCSO_NOE
 
 /**
  * @brief Initializes a gcso_config_t structure with standard hardware and model defaults.
- * @param config Pointer to the user-allocated configuration descriptor to populate.
- * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER.
+ * @param config Pointer to the user-allocated configuration descriptor to populate (16-byte aligned).
+ * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER / GCSO_ERROR_MISALIGNED_POINTER.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_config_init_default(gcso_config_t* GCSO_RESTRICT config)
     GCSO_NOEXCEPT;
 
 /**
  * @brief Safely frees a dynamically allocated string returned by GCSO APIs.
- * @param str Const string pointer to free (safe no-op if NULL).
+ * @param str_ptr Const string pointer to free (safe no-op if NULL).
  */
-GCSO_API void GCSO_CALL gcso_free_string(const char* str) GCSO_NOEXCEPT;
+GCSO_API void GCSO_CALL gcso_free_string(const char* str_ptr) GCSO_NOEXCEPT;
 
 // ===================================================================
 // 2. High-Level Runtime Context Facade Interface
@@ -64,7 +64,8 @@ GCSO_API void GCSO_CALL gcso_free_string(const char* str) GCSO_NOEXCEPT;
 
 /**
  * @brief Allocates and initializes a new GCSO execution context facade instance.
- * @param config Pointer to initialized runtime configuration structure.
+ * Corresponds to GcsoRuntimeContext trait in traits.rs.
+ * @param config Pointer to initialized runtime configuration structure (16-byte aligned).
  * @param context_out Pointer to receive the opaque runtime context handle.
  * @return GCSO_SUCCESS or error code.
  */
@@ -74,14 +75,13 @@ gcso_context_create(const gcso_config_t* GCSO_RESTRICT config,
 
 /**
  * @brief Resets transient state variables and phase accumulators without freeing allocated tables.
- * @param context Handle to the active runtime context.
+ * @param context Handle to the active runtime context (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_context_reset(gcso_context_handle_t context) GCSO_NOEXCEPT;
 
 /**
- * @brief Primary Baseline Endpoint: Projects natural language system prompt text as an Anchor
- * Attractor.
+ * @brief Primary Baseline Endpoint: Projects natural language system prompt text as an Anchor Attractor.
  * @param context Active context handle.
  * @param prompt_text Null-terminated UTF-8 system prompt string.
  * @param weight Attractor pull force scale.
@@ -93,12 +93,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_set_system_prompt_anchor(
 
 /**
  * @brief Executes per-token Hot Path inference step in zero-allocation mode.
- * Applies DPSR phase steering, QDPS step filtering, and updates pointer trails.
+ * Applies DPSR phase steering, QDPS step filtering, and updates pointer trails in O(1) time.
+ * Invariant: Must guarantee zero dynamic heap allocations during execution.
  * @param context Active runtime context handle.
  * @param token_id Input token sequence ID.
- * @param query_tensor 32-byte aligned query tensor buffer to modulate in-place.
- * @param key_tensor 32-byte aligned key tensor buffer.
- * @param trail_out Pointer to receive updated 128-byte pointer trail status.
+ * @param query_tensor 32-byte aligned query tensor buffer to modulate in-place (size: head_dim * num_heads).
+ * @param key_tensor 32-byte aligned key tensor buffer (size: head_dim * num_heads).
+ * @param trail_out Pointer to receive updated 128-byte pointer trail status (128-byte aligned).
  * @return GCSO_SUCCESS or error code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_context_step_token(
@@ -128,6 +129,18 @@ gcso_context_deserialize(const uint8_t* GCSO_RESTRICT buffer, size_t buffer_size
                          gcso_context_handle_t* GCSO_RESTRICT context_out) GCSO_NOEXCEPT;
 
 /**
+ * @brief Seeks to a specific token index in the PPRC keyframe KV cache.
+ * Corresponds to PprcCache trait in traits.rs.
+ * @param context Active context handle.
+ * @param token_index Target token index to seek to.
+ * @param keyframe_header_out Pointer to receive resulting keyframe header structure (32-byte aligned).
+ * @return GCSO_SUCCESS or error code.
+ */
+GCSO_API gcso_status_t GCSO_CALL gcso_pprc_seek_to_token(
+    gcso_context_handle_t context, uint32_t token_index,
+    gcso_pprc_keyframe_header_t* GCSO_RESTRICT keyframe_header_out) GCSO_NOEXCEPT;
+
+/**
  * @brief Destroys a GCSO runtime context instance and releases associated memory.
  * @param context Runtime context handle to free (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
@@ -148,6 +161,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_container_destroy(gcso_container_handle_t 
 
 /**
  * @brief Allocates an Action Hub (Sidecar Pointer Table) instance.
+ * Corresponds to PointerActionHub trait in traits.rs.
  * @param capacity Slot capacity count for tagged pointers.
  * @param hub_out Pointer to receive allocated action hub handle.
  * @return GCSO_SUCCESS or error code.
@@ -157,9 +171,10 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_create(
 
 /**
  * @brief Advances a 64-bit tagged pointer transition in O(1) time within the Action Hub.
+ * Zero-allocation guarantee in Hot Path.
  * @param context Active runtime context handle.
  * @param current_ptr Encoded 64-bit tagged pointer address.
- * @param trail_out Pointer to receive updated pointer trail structure.
+ * @param trail_out Pointer to receive updated pointer trail structure (128-byte aligned).
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL
@@ -167,7 +182,7 @@ gcso_action_hub_step_pointer(gcso_context_handle_t context, uint64_t current_ptr
                              gcso_pointer_trail_t* GCSO_RESTRICT trail_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Computes direct 256-slot hash index for 64-bit pointer trail caching.
+ * @brief Computes direct 256-slot hash index for 64-bit pointer trail caching using SplitMix64.
  * @param ptr Raw 64-bit pointer address.
  * @return 8-bit hash index (0 to 255).
  */
@@ -175,8 +190,9 @@ GCSO_API uint32_t GCSO_CALL gcso_action_hub_hash_slot256_index(uint64_t ptr) GCS
 
 /**
  * @brief Updates local cellular swarm cell state across PagedBlock token chunk boundaries.
+ * Corresponds to SwarmCellChunk trait in traits.rs.
  * @param context Active context handle.
- * @param mask Paged bitmask structure pointer.
+ * @param mask Paged bitmask structure pointer (32-byte aligned).
  * @param chunk_len Sequence length of target chunk.
  * @return GCSO_SUCCESS or error status code.
  */
@@ -208,9 +224,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_link_hallucinated_trails(
 
 /**
  * @brief Performs hierarchical bit-tree reduction across paged block bitmasks.
- * @param bitmasks Array of input paged bitmasks.
+ * @param bitmasks Array of input paged bitmasks (32-byte aligned).
  * @param num_masks Number of masks in input array.
- * @param reduced_out Pointer to receive reduced bitmask result.
+ * @param reduced_out Pointer to receive reduced bitmask result (32-byte aligned).
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_reduce_bit_tree(
@@ -219,9 +235,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_reduce_bit_tree(
 
 /**
  * @brief Evaluates SIMD/Warp bitmask reduction over PagedBlock KV caches.
- * @param kv_bits Raw uint64_t array of block key-value bit patterns.
+ * @param kv_bits Raw uint64_t array of block key-value bit patterns (32-byte aligned).
  * @param num_blocks Total number of KV blocks to process.
- * @param mask_out Pointer to store generated paged bitmask.
+ * @param mask_out Pointer to store generated paged bitmask (32-byte aligned).
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_paged_block_warp_bitmask(
@@ -237,7 +253,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_destroy(gcso_action_hub_handle_
     GCSO_NOEXCEPT;
 
 /**
- * @brief Allocates and initializes a DAES (Dynamic Adaptive Extension Scratchpad) slot.
+ * @brief Allocates and initializes a DAES slot.
+ * Corresponds to DaesScratchpad trait in traits.rs.
  * @param slot_out Pointer to receive allocated DAES slot handle.
  * @return GCSO_SUCCESS or error status code.
  */
@@ -245,8 +262,16 @@ GCSO_API gcso_status_t GCSO_CALL
 gcso_daes_slot_create(gcso_daes_slot_handle_t* GCSO_RESTRICT slot_out) GCSO_NOEXCEPT;
 
 /**
+ * @brief Resets active DAES telemetry mini ledger and cache hit counters in-place.
+ * @param slot Target DAES slot structure pointer to reset (64-byte aligned).
+ * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER.
+ */
+GCSO_API gcso_status_t GCSO_CALL
+gcso_daes_reset_telemetry(gcso_daes_slot_t* GCSO_RESTRICT slot) GCSO_NOEXCEPT;
+
+/**
  * @brief Executes O(1) fast-path shortcut lookup in DAES dynamic scratchpad.
- * @param slot Pointer to DAES slot structure.
+ * @param slot Pointer to DAES slot structure (64-byte aligned).
  * @param input_key Raw key address to look up.
  * @param shortcut_out Pointer to store bypassed address result.
  * @return GCSO_SUCCESS or GCSO_ERROR_INVALID_STATE.
@@ -257,7 +282,7 @@ gcso_daes_fast_path_lookup(const gcso_daes_slot_t* GCSO_RESTRICT slot, uint64_t 
 
 /**
  * @brief Pushes profiling metric bytes to the DAES telemetry ring ledger in zero-allocation mode.
- * @param slot Target DAES slot structure pointer.
+ * @param slot Target DAES slot structure pointer (64-byte aligned).
  * @param metric_code Metric identifier byte code.
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER.
  */
@@ -266,7 +291,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_telemetry_push(gcso_daes_slot_t* GCSO
 
 /**
  * @brief Sets the DAES slot operating mode (0 = Scratchpad, 1 = Plugin, 2 = Shared IPC Buffer).
- * @param slot Pointer to DAES slot structure.
+ * @param slot Pointer to DAES slot structure (64-byte aligned).
  * @param mode Desired mode index (0, 1, or 2).
  * @return GCSO_SUCCESS or GCSO_ERROR_INVALID_ARGUMENT.
  */
@@ -274,10 +299,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_set_mode(gcso_daes_slot_t* GCSO_RESTR
                                                     uint32_t mode) GCSO_NOEXCEPT;
 
 /**
- * @brief Evaluates telemetry ledger to auto-tune PSPM routing ratios, RIPA bounds & EDBC
- * thresholds.
- * @param slot Const DAES slot structure pointer.
- * @param config_out Pointer to receive updated auto-tuned configuration structure.
+ * @brief Evaluates telemetry ledger to auto-tune PSPM routing ratios, RIPA bounds & EDBC thresholds.
+ * @param slot Const DAES slot structure pointer (64-byte aligned).
+ * @param config_out Pointer to receive updated auto-tuned configuration structure (16-byte aligned).
  * @return GCSO_SUCCESS or error code.
  */
 GCSO_API gcso_status_t GCSO_CALL
@@ -297,6 +321,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_slot_destroy(gcso_daes_slot_handle_t 
 
 /**
  * @brief Creates a DPSR phase steering kernel instance.
+ * Corresponds to PhaseSteering trait in traits.rs.
  * @param head_dim Attention head dimension (must be even).
  * @param num_heads Total number of attention heads.
  * @param kernel_out Pointer to receive created kernel handle.
@@ -308,9 +333,10 @@ gcso_dpsr_kernel_create(uint32_t head_dim, uint32_t num_heads,
 
 /**
  * @brief Applies inline DPSR phase rotation to Query tensor registers.
+ * Lie Group Invariant: Commutative with standard RoPE in SO(2)^(d_head / 2).
  * @param query_tensor 32-byte aligned query tensor buffer.
- * @param phase_deltas Q7 quantized phase delta array.
- * @param head_dim Head dimension size.
+ * @param phase_deltas Q7 quantized phase delta array per head (Aligned 16-byte).
+ * @param head_dim Head dimension size (must be even).
  * @param num_heads Total head count.
  * @return GCSO_SUCCESS or error status code.
  */
@@ -319,11 +345,10 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering(
     size_t num_heads) GCSO_NOEXCEPT;
 
 /**
- * @brief Applies RIPA soft-bounded tanh clamping on low-frequency channels (upper d_head / 4
- * dimensions).
+ * @brief Applies RIPA soft-bounded tanh clamping on low-frequency channels (upper d_head / 4 dimensions).
  * @param query_tensor 32-byte aligned query tensor buffer.
- * @param phase_deltas Q7 quantized phase delta array.
- * @param head_dim Head dimension size.
+ * @param phase_deltas Q7 quantized phase delta array (Aligned 16-byte).
+ * @param head_dim Head dimension size (must be even).
  * @param num_heads Total head count.
  * @param max_rad Maximum allowed phase limit in radians.
  * @return GCSO_SUCCESS or error status code.
@@ -334,7 +359,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_safe(
 
 /**
  * @brief QDPS discrete filter: cuts off phase rotation steps falling below min_step_rad.
- * @param phase_deltas Q7 phase array to filter in-place.
+ * @param phase_deltas Q7 phase array to filter in-place (Aligned 16-byte).
  * @param len Array element count.
  * @param min_step_rad Minimum step threshold angle in radians.
  * @return GCSO_SUCCESS or error status code.
@@ -344,11 +369,10 @@ GCSO_API gcso_status_t GCSO_CALL gcso_qdps_filter_step(gcso_q7_t* GCSO_RESTRICT 
                                                        float min_step_rad) GCSO_NOEXCEPT;
 
 /**
- * @brief Lazy Phase Unwrapping: Applies relative phase shift against context accumulator on Query
- * side.
+ * @brief Lazy Phase Unwrapping: Applies relative phase shift against context accumulator on Query side.
  * @param query_tensor 32-byte aligned target query tensor.
- * @param context_accum Cumulative context phase vector.
- * @param head_dim Head dimension.
+ * @param context_accum Cumulative context phase vector (32-byte aligned).
+ * @param head_dim Head dimension (must be even).
  * @param num_heads Head count.
  * @return GCSO_SUCCESS or error status code.
  */
@@ -358,7 +382,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_lazy_unwrap_override(
 
 /**
  * @brief Executes norm-guarded Slerp phase stabilization on state vectors.
- * @param tensor Vector tensor buffer to normalize in-place.
+ * @param tensor Vector tensor buffer to normalize in-place (32-byte aligned).
  * @param dim Total vector length.
  * @param norm_lower Minimum allowed L2 norm bound.
  * @param norm_upper Maximum allowed L2 norm bound.
@@ -370,15 +394,27 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_slerp_norm_guard_stable(float* GCSO_R
 
 /**
  * @brief Fused inline logit phase shift prior to LM Head Softmax.
- * @param logits Logit score vector buffer.
+ * @param logits Logit score vector buffer (32-byte aligned).
  * @param vocab_size Vocabulary dimension.
- * @param phase_deltas Q7 phase deltas.
+ * @param phase_deltas Q7 phase deltas (Aligned 16-byte).
  * @param num_heads Head count.
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_fused_logit_shift(
     float* GCSO_RESTRICT logits, size_t vocab_size, const gcso_q7_t* GCSO_RESTRICT phase_deltas,
     size_t num_heads) GCSO_NOEXCEPT;
+
+/**
+ * @brief Computes Procrustes phase delta alignment between source and target state representations.
+ * @param source 32-byte aligned source feature vector.
+ * @param target 32-byte aligned target feature vector.
+ * @param dim Total vector dimension size.
+ * @param phase_out Output Q7 phase delta array buffer to store computed profile (Aligned 16-byte).
+ * @return GCSO_SUCCESS or error status code.
+ */
+GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_compute_procrustes_phase_delta(
+    const float* GCSO_RESTRICT source, const float* GCSO_RESTRICT target, size_t dim,
+    gcso_q7_t* GCSO_RESTRICT phase_out) GCSO_NOEXCEPT;
 
 /**
  * @brief Destroys a DPSR kernel instance.
@@ -389,8 +425,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_kernel_destroy(gcso_dpsr_kernel_handl
     GCSO_NOEXCEPT;
 
 /**
- * @brief Allocates a PSPM (Phase-Steered Parallel Multi-head) router instance.
- * @param config PSPM router configuration pointer.
+ * @brief Allocates a PSPM router instance.
+ * Corresponds to PspmRouter trait in traits.rs.
+ * @param config PSPM router configuration pointer (16-byte aligned).
  * @param router_out Pointer to receive allocated router handle.
  * @return GCSO_SUCCESS or error status code.
  */
@@ -401,13 +438,13 @@ gcso_pspm_router_create(const gcso_pspm_config_t* GCSO_RESTRICT config,
 /**
  * @brief Dispatches PSPM head-group phase profiles (Fact, Logic, Explore) in a single pass.
  * @param query_tensor 32-byte aligned query tensor buffer.
- * @param pspm_cfg PSPM routing configuration.
- * @param head_dim Head dimension.
+ * @param pspm_cfg PSPM routing configuration (16-byte aligned).
+ * @param head_dim Head dimension (must be even).
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_pspm_dispatch_single_pass(
     float* GCSO_RESTRICT query_tensor, const gcso_pspm_config_t* GCSO_RESTRICT pspm_cfg,
-    size_t head_dim) GCSO_NOEXCEPT;
+    size_size head_dim) GCSO_NOEXCEPT;
 
 /**
  * @brief Destroys a PSPM router instance.
@@ -419,7 +456,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_router_destroy(gcso_pspm_router_handl
 
 /**
  * @brief Creates a Sparse Residual Adapter Layer (SRL) instance.
- * @param descriptor Pointer to SRL descriptor.
+ * Corresponds to SrlAdapter trait in traits.rs.
+ * @param descriptor Pointer to SRL descriptor (32-byte aligned).
  * @param adapter_out Pointer to receive allocated adapter handle.
  * @return GCSO_SUCCESS or error status code.
  */
@@ -429,9 +467,10 @@ gcso_srl_adapter_create(const gcso_srl_descriptor_t* GCSO_RESTRICT descriptor,
 
 /**
  * @brief Evaluates SRL Dynamic Rank-1 outer product: y = W_base*x + s (*) (u * (v^T * x)).
- * @param y_out Output vector buffer to accumulate into in-place.
- * @param x_in Input vector buffer.
- * @param srl_desc SRL descriptor structure pointer.
+ * Zero-allocation guarantee in Hot Path.
+ * @param y_out Output vector buffer to accumulate into in-place (32-byte aligned).
+ * @param x_in Input vector buffer (32-byte aligned).
+ * @param srl_desc SRL descriptor structure pointer (32-byte aligned).
  * @param dim_in Input dimension.
  * @param dim_out Output dimension.
  * @return GCSO_SUCCESS or error status code.
@@ -443,13 +482,14 @@ gcso_srl_eval_rank1(float* GCSO_RESTRICT y_out, const float* GCSO_RESTRICT x_in,
 
 /**
  * @brief L2P-SVD: Projects fine-tuned LoRA matrices via SVD into phase profiles and SRL vectors.
- * @param lora_a Pointer to LoRA A matrix buffer.
- * @param lora_b Pointer to LoRA B matrix buffer.
+ * Corresponds to L2pSvdProjector trait in traits.rs.
+ * @param lora_a Pointer to LoRA A matrix buffer (32-byte aligned).
+ * @param lora_b Pointer to LoRA B matrix buffer (32-byte aligned).
  * @param rank Rank size of input LoRA.
  * @param dim_in Input dimension.
- * @param dim_out Output dimension.
- * @param srl_out Output SRL descriptor structure to populate.
- * @param phase_profile_out Output Q7 phase profile array pointer.
+ * @param dim_out Output dimension (must be even).
+ * @param srl_out Output SRL descriptor structure to populate (32-byte aligned).
+ * @param phase_profile_out Output Q7 phase profile array pointer (Aligned 16-byte).
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_l2p_svd_project_lora(
@@ -471,6 +511,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_srl_adapter_destroy(gcso_srl_adapter_handl
 
 /**
  * @brief Allocates an Attractor Field instance.
+ * Corresponds to AttractorField trait in traits.rs.
  * @param field_out Pointer to receive allocated field handle.
  * @return GCSO_SUCCESS or error status code.
  */
@@ -516,10 +557,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_embedding_anchor(
     uint32_t* GCSO_RESTRICT anchor_id_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Injects phase-conjugate repulsion vector (-dTheta) to flip spurious local minima into
- * repulsive peaks.
+ * @brief Injects phase-conjugate repulsion vector (-dTheta) to flip spurious local minima into repulsive peaks.
  * @param context Active runtime context handle.
- * @param repulsion_deltas Q7 anti-phase array.
+ * @param repulsion_deltas Q7 anti-phase array (Aligned 16-byte).
  * @param num_heads Total head count.
  * @param gain Repulsion strength multiplier.
  * @return GCSO_SUCCESS or error status code.
@@ -547,7 +587,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_destroy(gcso_attractor_fie
 
 /**
  * @brief Allocates an EDBC (Entropy-Driven Decoding Branch Controller) instance.
- * @param initial_state Pointer to initial state configuration structure.
+ * Corresponds to EntropyEvaluator trait in traits.rs.
+ * @param initial_state Pointer to initial state configuration structure (32-byte aligned).
  * @param controller_out Pointer to receive allocated controller handle.
  * @return GCSO_SUCCESS or error status code.
  */
@@ -559,7 +600,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_edbc_controller_create(
  * @brief Evaluates Moving Z-Score Normalized Attention Entropy H~ and pitchfork bifurcation mode.
  * @param controller Controller handle.
  * @param token_z_score Floating-point activation Z-score.
- * @param state_out Output state structure pointer.
+ * @param state_out Output state structure pointer (32-byte aligned).
  * @return GCSO_SUCCESS or GCSO_ERROR_EDBC_SINGULARITY (if NaN/Inf detected).
  */
 GCSO_API gcso_status_t GCSO_CALL
@@ -601,6 +642,7 @@ gcso_edbc_controller_destroy(gcso_edbc_controller_handle_t controller) GCSO_NOEX
 
 /**
  * @brief Dynamic application of persona phase modulation patches without altering base weights.
+ * Corresponds to PersonaPatcher trait in traits.rs.
  * @param context Active runtime context handle.
  * @param patch_data Pointer to binary patch buffer.
  * @param patch_size Size of binary patch in bytes.
@@ -612,8 +654,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_persona_apply_patch(gcso_context_handle_t 
 
 /**
  * @brief Zero-Overhead In-Memory Mapped Storage: Maps .gcso container payload using zero-copy mmap.
+ * Corresponds to ZimmsStorage trait in traits.rs.
  * @param file_path Null-terminated path string to target .gcso file.
- * @param zimms_out Descriptor structure pointer to populate.
+ * @param zimms_out Descriptor structure pointer to populate (32-byte aligned).
  * @return GCSO_SUCCESS or GCSO_ERROR_ZIMMS_MAPPING_FAILED.
  */
 GCSO_API gcso_status_t GCSO_CALL
@@ -622,7 +665,7 @@ gcso_zimms_open_mmap(const char* GCSO_RESTRICT file_path,
 
 /**
  * @brief Unmaps zero-copy ZIMMS memory handle and releases Direct DMA resources.
- * @param zimms_desc Descriptor structure pointer to clear.
+ * @param zimms_desc Descriptor structure pointer to clear (32-byte aligned).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
 GCSO_API gcso_status_t GCSO_CALL

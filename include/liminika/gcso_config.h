@@ -36,7 +36,7 @@
     #define GCSO_CALL
 #endif
 
-/* Exception-safety Macro for FFI Boundaries */
+/* Exception-Safety Macro for FFI Boundaries */
 #ifdef __cplusplus
     #define GCSO_NOEXCEPT noexcept
 #else
@@ -46,14 +46,21 @@
 /* Warn Unused Result Macro */
 #if defined(__cplusplus) && __cplusplus >= 201703L
     #define GCSO_NODISCARD [[nodiscard]]
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+    #define GCSO_NODISCARD [[nodiscard]]
 #elif defined(__GNUC__) || defined(__clang__)
     #define GCSO_NODISCARD __attribute__((warn_unused_result))
+#elif defined(_MSC_VER)
+    #define GCSO_NODISCARD _Check_return_
 #else
     #define GCSO_NODISCARD
 #endif
 
 /* Branch Prediction Optimization Hints */
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(__cplusplus) && __cplusplus >= 202002L
+    #define GCSO_LIKELY(x) (x) [[likely]]
+    #define GCSO_UNLIKELY(x) (x) [[unlikely]]
+#elif defined(__GNUC__) || defined(__clang__)
     #define GCSO_LIKELY(x) __builtin_expect(!!(x), 1)
     #define GCSO_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #else
@@ -64,10 +71,10 @@
 /* Explicit Memory Alignment Macros */
 #if defined(__cplusplus)
     #define GCSO_ALIGNAS(n) alignas(n)
-#elif defined(__GNUC__) || defined(__clang__)
-    #define GCSO_ALIGNAS(n) __attribute__((aligned(n)))
 #elif defined(_MSC_VER)
     #define GCSO_ALIGNAS(n) __declspec(align(n))
+#elif defined(__GNUC__) || defined(__clang__)
+    #define GCSO_ALIGNAS(n) __attribute__((aligned(n)))
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
     #define GCSO_ALIGNAS(n) _Alignas(n)
 #else
@@ -86,12 +93,23 @@
 #endif
 
 /* Compile-time Static Assertion Macro */
-#ifdef __cplusplus
-    #define GCSO_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
-#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-    #define GCSO_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
-#else
-    #define GCSO_STATIC_ASSERT(cond, msg)
+#if defined(__cplusplus)
+    #if __cplusplus >= 201103L
+        #define GCSO_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+    #endif
+#elif defined(__STDC_VERSION__)
+    #if __STDC_VERSION__ >= 202311L
+        #define GCSO_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+    #elif __STDC_VERSION__ >= 201112L
+        #define GCSO_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+    #endif
+#endif
+
+#ifndef GCSO_STATIC_ASSERT
+    #define GCSO_CONCAT_IMPL(x, y) x##y
+    #define GCSO_CONCAT(x, y) GCSO_CONCAT_IMPL(x, y)
+    #define GCSO_STATIC_ASSERT(cond, msg) \
+        typedef char GCSO_CONCAT(gcso_static_assert_typedef_, __LINE__)[(cond) ? 1 : -1]
 #endif
 
 #endif // LIMINIKA_GCSO_CONFIG_H
