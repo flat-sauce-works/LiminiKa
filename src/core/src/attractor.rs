@@ -120,7 +120,9 @@ impl AttractorAnchor {
             };
             // Linear-rational decay approximation for no_std efficiency: 1 / (1 + dt / half_life)
             let temporal_decay = 1.0 / (1.0 + (dt / half_life));
-            let base_energy = self.weight.mul_add(self.pull_force, self.stigmergic_density);
+            let base_energy = self
+                .weight
+                .mul_add(self.pull_force, self.stigmergic_density);
             base_energy * temporal_decay
         }
     }
@@ -785,7 +787,9 @@ mod tests {
     #[test]
     fn test_bottom_up_crystallization() {
         let mut engine = AttractorFieldEngine::new(0, 10);
-        let _id = engine.add_system_prompt_anchor("Trail Anchor", 1.0).unwrap();
+        let _id = engine
+            .add_system_prompt_anchor("Trail Anchor", 1.0)
+            .unwrap();
 
         // Increase stigmergic density beyond threshold
         engine.anchors[0].stigmergic_density = 3.0;
@@ -809,7 +813,9 @@ mod tests {
         let slice_knowledge = AlignedSlice32::new(&buf_knowledge.0).unwrap();
         let slice_persona = AlignedSlice32::new(&buf_persona.0).unwrap();
 
-        assert!(space.register_knowledge_source_anchor(&slice_knowledge, 2.0).is_ok());
+        assert!(space
+            .register_knowledge_source_anchor(&slice_knowledge, 2.0)
+            .is_ok());
         assert!(space
             .register_persona_patch_anchor(&slice_persona, 1.5)
             .is_ok());
