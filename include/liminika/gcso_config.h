@@ -95,10 +95,11 @@
 /*
  * Explicit Memory Alignment Macros for C11 (-std=c11) and C++20 (-std=c++20).
  * GCSO_ALIGN_PREFIX and GCSO_ALIGN_SUFFIX guarantee valid C11 and C++20 alignment placement.
+ * Note: alignas, _Alignas, and __declspec(align) must be placed as prefixes, while __attribute__((aligned)) is a suffix.
  */
 #if defined(__cplusplus)
-    #define GCSO_ALIGN_PREFIX(n)
-    #define GCSO_ALIGN_SUFFIX(n) alignas(n)
+    #define GCSO_ALIGN_PREFIX(n) alignas(n)
+    #define GCSO_ALIGN_SUFFIX(n)
     #define GCSO_ALIGNAS(n) alignas(n)
     #define GCSO_ALIGNOF(type) alignof(type)
 #elif defined(_MSC_VER)

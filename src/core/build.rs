@@ -293,7 +293,7 @@ fn main() {
         .define("LIMINIKA_ENABLE_SVE", if has_sve { "ON" } else { "OFF" })
         .define("LIMINIKA_ENABLE_RVV", if has_rvv { "ON" } else { "OFF" });
 
-    // Enforce strict C++ compiler warning and encoding flags based on toolchain
+    // Enforce strict C++ compiler warning and encoding flags based on toolchain and target architecture
     if is_msvc {
         cfg.cxxflag("/W4")
             .cxxflag("/O2")
@@ -303,10 +303,13 @@ fn main() {
             .cxxflag("/Zc:preprocessor")
             .cxxflag("/Zc:inline");
 
-        if has_avx512 {
-            cfg.cxxflag("/arch:AVX512");
-        } else if has_avx2 {
-            cfg.cxxflag("/arch:AVX2");
+        // Conditionally apply architecture-specific SIMD flags for MSVC
+        if target_arch == "x86_64" {
+            if has_avx512 {
+                cfg.cxxflag("/arch:AVX512");
+            } else if has_avx2 {
+                cfg.cxxflag("/arch:AVX2");
+            }
         }
     } else {
         cfg.cxxflag("-Wall")
@@ -317,16 +320,19 @@ fn main() {
             .cxxflag("-O3")
             .cxxflag("-fstrict-aliasing");
 
-        if has_avx512 {
-            cfg.cxxflag("-mavx512f")
-                .cxxflag("-mavx512bw")
-                .cxxflag("-mavx512dq");
-        } else if has_avx2 {
-            cfg.cxxflag("-mavx2").cxxflag("-mfma");
-        }
-
-        if has_sve {
-            cfg.cxxflag("-march=armv8-a+sve");
+        // Conditionally apply architecture-specific SIMD flags to prevent cross-compilation errors
+        if target_arch == "x86_64" {
+            if has_avx512 {
+                cfg.cxxflag("-mavx512f")
+                    .cxxflag("-mavx512bw")
+                    .cxxflag("-mavx512dq");
+            } else if has_avx2 {
+                cfg.cxxflag("-mavx2").cxxflag("-mfma");
+            }
+        } else if target_arch == "aarch64" {
+            if has_sve {
+                cfg.cxxflag("-march=armv8-a+sve");
+            }
         }
     }
 

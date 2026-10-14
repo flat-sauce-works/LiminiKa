@@ -73,33 +73,36 @@ typedef enum gcso_anchor_type GCSO_ENUM_UNDERLYING(uint32_t) {
 /**
  * @brief Descriptor header for size and ABI version validation.
  */
-typedef struct GCSO_ALIGNAS(4) gcso_descriptor_header {
+struct GCSO_ALIGN_PREFIX(4) gcso_descriptor_header {
     uint32_t struct_size;
     uint32_t abi_version;
-} gcso_descriptor_header_t;
+} GCSO_ALIGN_SUFFIX(4);
+typedef struct gcso_descriptor_header gcso_descriptor_header_t;
 
 /**
  * @brief Strongly-typed aligned raw memory buffer descriptor.
  * Total size is 32 bytes (16-byte aligned, explicit 8-byte padding).
  */
-typedef struct GCSO_ALIGNAS(16) gcso_raw_buffer {
+struct GCSO_ALIGN_PREFIX(16) gcso_raw_buffer {
     uint8_t* GCSO_RESTRICT data_ptr;
     size_t size_bytes;
     size_t alignment_bytes;
     uint8_t reserved_padding[8];
-} gcso_raw_buffer_t;
+} GCSO_ALIGN_SUFFIX(16);
+typedef struct gcso_raw_buffer gcso_raw_buffer_t;
 
 /**
  * @brief 256-bit bitmask layout aligned to 32 bytes for Warp/SIMD reductions.
  */
-typedef struct GCSO_ALIGNAS(32) gcso_paged_bitmask {
+struct GCSO_ALIGN_PREFIX(32) gcso_paged_bitmask {
     uint64_t bits[GCSO_PAGED_BITMASK_WORDS];
-} gcso_paged_bitmask_t;
+} GCSO_ALIGN_SUFFIX(32);
+typedef struct gcso_paged_bitmask gcso_paged_bitmask_t;
 
 /**
  * @brief Stigmergic pointer trail structure aligned to 128 bytes (2 cache lines).
  */
-typedef struct GCSO_ALIGNAS(128) gcso_pointer_trail {
+struct GCSO_ALIGN_PREFIX(128) gcso_pointer_trail {
     uint64_t current_ptr;
     uint64_t prev_ptr;
     uint64_t user_data;
@@ -113,12 +116,13 @@ typedef struct GCSO_ALIGNAS(128) gcso_pointer_trail {
     uint32_t flags;
     gcso_q7_t accumulated_phase_delta[GCSO_Q7_PHASE_ARRAY_LEN];
     uint8_t reserved_padding[8];
-} gcso_pointer_trail_t;
+} GCSO_ALIGN_SUFFIX(128);
+typedef struct gcso_pointer_trail gcso_pointer_trail_t;
 
 /**
  * @brief Dynamic Adaptive Extension Scratchpad (DAES) slot layout (64 bytes).
  */
-typedef struct GCSO_ALIGNAS(64) gcso_daes_slot {
+struct GCSO_ALIGN_PREFIX(64) gcso_daes_slot {
     uint32_t mode;
     uint16_t telemetry_ring_head;
     uint16_t telemetry_ring_tail;
@@ -127,12 +131,13 @@ typedef struct GCSO_ALIGNAS(64) gcso_daes_slot {
     uint64_t fast_path_bypass_mask;
     uint64_t fast_path_shortcuts[GCSO_DAES_SHORTCUTS_LEN];
     uint8_t telemetry_mini_ledger[GCSO_DAES_MINI_LEDGER_LEN];
-} gcso_daes_slot_t;
+} GCSO_ALIGN_SUFFIX(64);
+typedef struct gcso_daes_slot gcso_daes_slot_t;
 
 /**
  * @brief Global configuration descriptor structure aligned to 16 bytes (64 bytes total).
  */
-typedef struct GCSO_ALIGNAS(16) gcso_config {
+struct GCSO_ALIGN_PREFIX(16) gcso_config {
     uint32_t head_dim;
     uint32_t num_heads;
     uint32_t paged_block_size;
@@ -147,12 +152,13 @@ typedef struct GCSO_ALIGNAS(16) gcso_config {
     uint8_t daes_mode;
     uint8_t reserved_flags;
     uint8_t reserved[24];
-} gcso_config_t;
+} GCSO_ALIGN_SUFFIX(16);
+typedef struct gcso_config gcso_config_t;
 
 /**
  * @brief Dynamic entropy controller state tracking structure (64 bytes).
  */
-typedef struct GCSO_ALIGNAS(32) gcso_edbc_state {
+struct GCSO_ALIGN_PREFIX(32) gcso_edbc_state {
     float moving_z_entropy;
     float bifurcation_threshold;
     float singularity_eps;
@@ -161,24 +167,26 @@ typedef struct GCSO_ALIGNAS(32) gcso_edbc_state {
     float sample_temperature;
     uint32_t active_branch_mode;
     uint8_t reserved[36];
-} gcso_edbc_state_t;
+} GCSO_ALIGN_SUFFIX(32);
+typedef struct gcso_edbc_state gcso_edbc_state_t;
 
 /**
  * @brief Zero-copy memory mapped storage descriptor (64 bytes).
  */
-typedef struct GCSO_ALIGNAS(32) gcso_zimms_descriptor {
+struct GCSO_ALIGN_PREFIX(32) gcso_zimms_descriptor {
     uint64_t mapped_address;
     uint64_t file_size_bytes;
     uint64_t dma_buffer_handle;
     uint32_t flags;
     int32_t fd_handle;
     uint8_t reserved[32];
-} gcso_zimms_descriptor_t;
+} GCSO_ALIGN_SUFFIX(32);
+typedef struct gcso_zimms_descriptor gcso_zimms_descriptor_t;
 
 /**
  * @brief Sub-head group router configuration descriptor (32 bytes).
  */
-typedef struct GCSO_ALIGNAS(16) gcso_pspm_config {
+struct GCSO_ALIGN_PREFIX(16) gcso_pspm_config {
     uint16_t num_fact_heads;
     uint16_t num_logic_heads;
     uint16_t num_explore_heads;
@@ -187,12 +195,13 @@ typedef struct GCSO_ALIGNAS(16) gcso_pspm_config {
     float logic_phase_gain;
     float explore_phase_gain;
     uint8_t reserved[12];
-} gcso_pspm_config_t;
+} GCSO_ALIGN_SUFFIX(16);
+typedef struct gcso_pspm_config gcso_pspm_config_t;
 
 /**
  * @brief Sparse Residual Adapter Layer (SRL) Rank-1 descriptor (64 bytes).
  */
-typedef struct GCSO_ALIGNAS(32) gcso_srl_descriptor {
+struct GCSO_ALIGN_PREFIX(32) gcso_srl_descriptor {
     uint32_t layer_idx;
     uint32_t rank;
     uint64_t u_vector_ptr;
@@ -201,12 +210,13 @@ typedef struct GCSO_ALIGNAS(32) gcso_srl_descriptor {
     float scale_factor;
     uint32_t flags;
     uint8_t reserved[24];
-} gcso_srl_descriptor_t;
+} GCSO_ALIGN_SUFFIX(32);
+typedef struct gcso_srl_descriptor gcso_srl_descriptor_t;
 
 /**
  * @brief Unified binary snapshot container header structure (128 bytes).
  */
-typedef struct GCSO_ALIGNAS(64) gcso_snapshot_header {
+struct GCSO_ALIGN_PREFIX(64) gcso_snapshot_header {
     uint32_t magic;
     uint32_t version;
     uint64_t total_size;
@@ -219,12 +229,13 @@ typedef struct GCSO_ALIGNAS(64) gcso_snapshot_header {
     uint32_t daes_slot_offset;
     uint64_t timestamp_epoch_sec;
     uint8_t reserved_padding[56];
-} gcso_snapshot_header_t;
+} GCSO_ALIGN_SUFFIX(64);
+typedef struct gcso_snapshot_header gcso_snapshot_header_t;
 
 /**
  * @brief PPRC Keyframe KV cache index header structure (64 bytes).
  */
-typedef struct GCSO_ALIGNAS(32) gcso_pprc_keyframe_header {
+struct GCSO_ALIGN_PREFIX(32) gcso_pprc_keyframe_header {
     uint32_t frame_type;
     uint32_t token_index;
     uint32_t gop_length;
@@ -234,7 +245,8 @@ typedef struct GCSO_ALIGNAS(32) gcso_pprc_keyframe_header {
     uint64_t icache_payload_offset;
     uint64_t pcache_payload_offset;
     uint8_t reserved[24];
-} gcso_pprc_keyframe_header_t;
+} GCSO_ALIGN_SUFFIX(32);
+typedef struct gcso_pprc_keyframe_header gcso_pprc_keyframe_header_t;
 
 /*
  * Strongly-Typed Opaque Handles eliminating generic raw `c_void` / `void*` pointers.
