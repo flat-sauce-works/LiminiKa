@@ -941,11 +941,7 @@ pub unsafe extern "C" fn gcso_context_create(
     ffi_boundary!({
         // SAFETY: Pointer config is non-null and aligned as checked above.
         let cfg = unsafe { &*config };
-        if cfg.head_dim == 0
-            || cfg.head_dim % 2 != 0
-            || cfg.num_heads == 0
-            || cfg.num_heads > 64
-        {
+        if cfg.head_dim == 0 || cfg.head_dim % 2 != 0 || cfg.num_heads == 0 || cfg.num_heads > 64 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
         // SAFETY: Pointer context_out is non-null and aligned as checked above.
