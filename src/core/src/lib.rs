@@ -318,7 +318,7 @@ impl RuntimeContext {
         let edbc = EdbcEngine::new(edbc_state);
 
         let mut daes_slot = gcso_daes_slot_t::default();
-        daes_slot.mode = config.raw.daes_mode as u32;
+        daes_slot.mode = u32::from(config.raw.daes_mode);
 
         Ok(Self {
             config,
@@ -474,6 +474,7 @@ impl RuntimeContext {
         let daes_off = edbc_off + edbc_size;
 
         let header_ptr = buffer.as_mut_ptr().cast::<gcso_snapshot_header_t>();
+        // SAFETY: buffer is validated to have capacity for at least total_required bytes.
         unsafe {
             (*header_ptr).magic = 0x4F53_4347; // ASCII "GCSO"
             (*header_ptr).version = crate::abi::GCSO_ABI_VERSION_HEX; // 0x00000101 (v0.1.1)
@@ -497,6 +498,7 @@ impl RuntimeContext {
         let edbc_ptr = buffer[edbc_off..daes_off]
             .as_mut_ptr()
             .cast::<gcso_edbc_state_t>();
+        // SAFETY: edbc_off to daes_off range contains size_of::<gcso_edbc_state_t>() valid memory.
         unsafe {
             *edbc_ptr = edbc_state;
         }
@@ -504,6 +506,7 @@ impl RuntimeContext {
         let daes_ptr = buffer[daes_off..total_required]
             .as_mut_ptr()
             .cast::<gcso_daes_slot_t>();
+        // SAFETY: daes_off to total_required range contains size_of::<gcso_daes_slot_t>() valid memory.
         unsafe {
             *daes_ptr = self.daes_slot;
         }
@@ -523,6 +526,7 @@ impl RuntimeContext {
         if buffer.len() < header_size {
             return Err(crate::abi::GCSO_ERROR_CONTAINER_CORRUPTED);
         }
+        // SAFETY: buffer contains at least header_size bytes and valid alignment.
         let header = unsafe { &*buffer.as_ptr().cast::<gcso_snapshot_header_t>() };
         if header.magic != 0x4F53_4347 {
             return Err(crate::abi::GCSO_ERROR_CONTAINER_CORRUPTED);
@@ -555,6 +559,7 @@ impl RuntimeContext {
         let edbc_size = core::mem::size_of::<gcso_edbc_state_t>();
         if buffer.len() >= edbc_off + edbc_size {
             let edbc_ptr = buffer[edbc_off..].as_ptr().cast::<gcso_edbc_state_t>();
+            // SAFETY: buffer contains at least edbc_size bytes at edbc_off offset.
             let edbc_st = unsafe { *edbc_ptr };
             self.edbc = EdbcEngine::new(edbc_st);
         }
@@ -562,6 +567,7 @@ impl RuntimeContext {
         let daes_size = core::mem::size_of::<gcso_daes_slot_t>();
         if buffer.len() >= daes_off + daes_size {
             let daes_ptr = buffer[daes_off..].as_ptr().cast::<gcso_daes_slot_t>();
+            // SAFETY: buffer contains at least daes_size bytes at daes_off offset.
             self.daes_slot = unsafe { *daes_ptr };
         }
 
@@ -586,7 +592,7 @@ impl SystemCapabilityQuery for RuntimeContext {
 
     #[inline]
     fn query_capability(&self) -> gcso_capability_flags_t {
-        let mut caps = 0x01u64; // Base CPU capability
+        let caps = 0x01u64; // Base CPU capability
         #[cfg(any(feature = "cuda", has_kernel_cuda))]
         {
             caps |= 1 << 1;
@@ -618,7 +624,7 @@ impl GcsoRuntimeContext for RuntimeContext {
         self.active_trail_count = 0;
         self.repulsion_gain = 0.0;
         self.daes_slot = gcso_daes_slot_t::default();
-        self.daes_slot.mode = self.config.raw.daes_mode as u32;
+        self.daes_slot.mode = u32::from(self.config.raw.daes_mode);
         Ok(())
     }
 
@@ -1077,8 +1083,9 @@ impl PspmRouter for RuntimeContext {
         if head_dim == 0 || (head_dim % 2 != 0) {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
-        let total_heads =
-            (config.num_fact_heads + config.num_logic_heads + config.num_explore_heads) as usize;
+        let total_heads = usize::from(config.num_fact_heads)
+            + usize::from(config.num_logic_heads)
+            + usize::from(config.num_explore_heads);
         let expected_len = head_dim
             .checked_mul(total_heads)
             .ok_or(crate::abi::GCSO_ERROR_INVALID_ARGUMENT)?;
@@ -1087,8 +1094,8 @@ impl PspmRouter for RuntimeContext {
         }
 
         let q_slice = query_tensor.as_mut_slice();
-        let fact_end = (config.num_fact_heads as usize) * head_dim;
-        let logic_end = fact_end + (config.num_logic_heads as usize) * head_dim;
+        let fact_end = usize::from(config.num_fact_heads) * head_dim;
+        let logic_end = fact_end + usize::from(config.num_logic_heads) * head_dim;
 
         if config.fact_phase_gain != 1.0 && fact_end > 0 {
             for val in &mut q_slice[..fact_end] {
@@ -1140,7 +1147,9 @@ impl SrlAdapter for RuntimeContext {
 
         let x_slice = x_in.as_slice();
         let y_slice = y_out.as_mut_slice();
+        // SAFETY: u_ptr points to valid memory with dim_out elements and is non-null/aligned.
         let u_slice = unsafe { core::slice::from_raw_parts(u_ptr, dim_out) };
+        // SAFETY: v_ptr points to valid memory with dim_in elements and is non-null/aligned.
         let v_slice = unsafe { core::slice::from_raw_parts(v_ptr, dim_in) };
 
         let mut v_dot_x = 0.0f32;
@@ -1151,6 +1160,7 @@ impl SrlAdapter for RuntimeContext {
         let scale = descriptor.scale_factor * v_dot_x;
 
         if !gain_ptr.is_null() && crate::abi::is_aligned(gain_ptr) {
+            // SAFETY: gain_ptr points to valid memory with dim_out elements and is non-null/aligned.
             let g_slice = unsafe { core::slice::from_raw_parts(gain_ptr, dim_out) };
             for i in 0..dim_out {
                 y_slice[i] = scale * u_slice[i] * g_slice[i];
@@ -1191,7 +1201,9 @@ impl SrlAdapter for RuntimeContext {
 
         let x_slice = x_in.as_slice();
         let y_slice = y_inout.as_mut_slice();
+        // SAFETY: u_ptr points to valid memory with dim_out elements and is non-null/aligned.
         let u_slice = unsafe { core::slice::from_raw_parts(u_ptr, dim_out) };
+        // SAFETY: v_ptr points to valid memory with dim_in elements and is non-null/aligned.
         let v_slice = unsafe { core::slice::from_raw_parts(v_ptr, dim_in) };
 
         let mut v_dot_x = 0.0f32;
@@ -1202,6 +1214,7 @@ impl SrlAdapter for RuntimeContext {
         let scale = descriptor.scale_factor * v_dot_x;
 
         if !gain_ptr.is_null() && crate::abi::is_aligned(gain_ptr) {
+            // SAFETY: gain_ptr points to valid memory with dim_out elements and is non-null/aligned.
             let g_slice = unsafe { core::slice::from_raw_parts(gain_ptr, dim_out) };
             for i in 0..dim_out {
                 y_slice[i] += scale * u_slice[i] * g_slice[i];

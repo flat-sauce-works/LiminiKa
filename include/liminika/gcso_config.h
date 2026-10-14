@@ -92,20 +92,33 @@
     #define GCSO_UNLIKELY(x) (x)
 #endif
 
-/* Explicit Memory Alignment & Query Macros */
+/*
+ * Explicit Memory Alignment Macros for C11 (-std=c11) and C++20 (-std=c++20).
+ * GCSO_ALIGN_PREFIX and GCSO_ALIGN_SUFFIX guarantee valid C11 and C++20 alignment placement.
+ */
 #if defined(__cplusplus)
+    #define GCSO_ALIGN_PREFIX(n)
+    #define GCSO_ALIGN_SUFFIX(n) alignas(n)
     #define GCSO_ALIGNAS(n) alignas(n)
     #define GCSO_ALIGNOF(type) alignof(type)
 #elif defined(_MSC_VER)
+    #define GCSO_ALIGN_PREFIX(n) __declspec(align(n))
+    #define GCSO_ALIGN_SUFFIX(n)
     #define GCSO_ALIGNAS(n) __declspec(align(n))
     #define GCSO_ALIGNOF(type) __alignof(type)
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+    #define GCSO_ALIGN_PREFIX(n) _Alignas(n)
+    #define GCSO_ALIGN_SUFFIX(n)
     #define GCSO_ALIGNAS(n) _Alignas(n)
     #define GCSO_ALIGNOF(type) _Alignof(type)
 #elif defined(__GNUC__) || defined(__clang__)
+    #define GCSO_ALIGN_PREFIX(n)
+    #define GCSO_ALIGN_SUFFIX(n) __attribute__((aligned(n)))
     #define GCSO_ALIGNAS(n) __attribute__((aligned(n)))
     #define GCSO_ALIGNOF(type) __alignof__(type)
 #else
+    #define GCSO_ALIGN_PREFIX(n)
+    #define GCSO_ALIGN_SUFFIX(n)
     #define GCSO_ALIGNAS(n)
     #define GCSO_ALIGNOF(type) sizeof(type)
 #endif

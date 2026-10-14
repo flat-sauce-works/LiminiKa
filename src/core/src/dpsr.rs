@@ -12,7 +12,6 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_sign_loss)]
-#![allow(clippy::manual_is_multiple_of)]
 #![allow(clippy::chunks_exact_to_as_chunks)]
 #![allow(clippy::implicit_saturating_sub)]
 #![allow(clippy::doc_markdown)]
@@ -230,7 +229,7 @@ impl DpsrEngine {
     /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `head_dim` is odd, zero, or `num_heads` is zero.
     #[inline]
     pub fn new(head_dim: u32, num_heads: u32) -> GcsoResult<Self> {
-        if head_dim == 0 || !head_dim.is_multiple_of(2) || num_heads == 0 {
+        if head_dim == 0 || (head_dim % 2 != 0) || num_heads == 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
         Ok(Self {

@@ -12,7 +12,6 @@
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::must_use_candidate)]
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
-#![allow(clippy::manual_is_multiple_of)]
 #![allow(clippy::doc_markdown)]
 
 #[cfg(feature = "std")]
@@ -717,14 +716,14 @@ const _: () = {
 #[inline]
 #[must_use]
 pub fn is_aligned<T>(ptr: *const T) -> bool {
-    !ptr.is_null() && (ptr as usize).is_multiple_of(align_of::<T>())
+    !ptr.is_null() && ((ptr as usize) % align_of::<T>() == 0)
 }
 
 /// Helper function to check pointer alignment for a specific custom alignment requirement.
 #[inline]
 #[must_use]
 pub fn is_aligned_to<T>(ptr: *const T, align: usize) -> bool {
-    !ptr.is_null() && align != 0 && align.is_power_of_two() && (ptr as usize).is_multiple_of(align)
+    !ptr.is_null() && align != 0 && align.is_power_of_two() && ((ptr as usize) % align == 0)
 }
 
 /// Static version string constant for FFI boundary checks matching ABI v0.1.1.
@@ -780,6 +779,7 @@ pub unsafe extern "C" fn gcso_abi_get_version(
     }
 
     ffi_boundary!({
+        // SAFETY: Pointers major, minor, and patch are non-null and aligned as checked above.
         unsafe {
             *major = GCSO_ABI_VERSION_MAJOR;
             *minor = GCSO_ABI_VERSION_MINOR;
@@ -860,6 +860,7 @@ pub unsafe extern "C" fn gcso_abi_query_capability(flags: *mut u64) -> GcsoStatu
         {
             caps |= 1 << 3;
         }
+        // SAFETY: Pointer flags is non-null and aligned as checked above.
         unsafe { *flags = caps };
         Ok(GCSO_SUCCESS)
     })
@@ -879,6 +880,7 @@ pub unsafe extern "C" fn gcso_config_init_default(config: *mut gcso_config_t) ->
     }
 
     ffi_boundary!({
+        // SAFETY: Pointer config is non-null and aligned as checked above.
         unsafe {
             *config = gcso_config_t {
                 head_dim: 128,
@@ -909,6 +911,7 @@ pub unsafe extern "C" fn gcso_config_init_default(config: *mut gcso_config_t) ->
 pub unsafe extern "C" fn gcso_free_string(str_ptr: *const c_char) {
     if !str_ptr.is_null() {
         let _ = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: str_ptr was created via CString::into_raw and is non-null.
             let _ = unsafe { std::ffi::CString::from_raw(str_ptr.cast_mut()) };
         }));
     }
@@ -936,17 +939,17 @@ pub unsafe extern "C" fn gcso_context_create(
     }
 
     ffi_boundary!({
-        unsafe {
-            let cfg = &*config;
-            if cfg.head_dim == 0
-                || !cfg.head_dim.is_multiple_of(2)
-                || cfg.num_heads == 0
-                || cfg.num_heads > 64
-            {
-                return Err(GCSO_ERROR_INVALID_ARGUMENT);
-            }
-            *context_out = ptr::null_mut();
+        // SAFETY: Pointer config is non-null and aligned as checked above.
+        let cfg = unsafe { &*config };
+        if cfg.head_dim == 0
+            || cfg.head_dim % 2 != 0
+            || cfg.num_heads == 0
+            || cfg.num_heads > 64
+        {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
+        // SAFETY: Pointer context_out is non-null and aligned as checked above.
+        unsafe { *context_out = ptr::null_mut() };
         Ok(GCSO_SUCCESS)
     })
 }
@@ -986,6 +989,7 @@ pub unsafe extern "C" fn gcso_context_set_system_prompt_anchor(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     ffi_boundary!({
+        // SAFETY: prompt_text is non-null as checked above.
         let c_str = unsafe { std::ffi::CStr::from_ptr(prompt_text) };
         if c_str.to_str().is_err() {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
@@ -1026,14 +1030,17 @@ pub unsafe extern "C" fn gcso_context_step_token(
 
     ffi_boundary!({
         if !query_tensor.is_null() {
+            // SAFETY: query_tensor is non-null, aligned to 32 bytes, and valid for 128 elements.
             let slice = unsafe { slice::from_raw_parts_mut(query_tensor, 128) };
             let _ = AlignedSliceMut32::new(slice)?;
         }
         if !key_tensor.is_null() {
+            // SAFETY: key_tensor is non-null, aligned to 32 bytes, and valid for 128 elements.
             let slice = unsafe { slice::from_raw_parts_mut(key_tensor, 128) };
             let _ = AlignedSliceMut32::new(slice)?;
         }
         if !trail_out.is_null() {
+            // SAFETY: trail_out is non-null, aligned to structure boundary, and valid for writing.
             unsafe {
                 ptr::write_bytes(trail_out, 0, 1);
                 (*trail_out).current_ptr = u64::from(token_id);
@@ -1062,19 +1069,22 @@ pub unsafe extern "C" fn gcso_context_serialize(
     }
 
     ffi_boundary!({
+        let required = size_of::<gcso_snapshot_header_t>();
+        if buffer.is_null() {
+            // SAFETY: buffer_size is non-null and aligned as checked above.
+            unsafe { *buffer_size = required };
+            return Ok(GCSO_SUCCESS);
+        }
+        // SAFETY: buffer_size is non-null and aligned as checked above.
+        if unsafe { *buffer_size } < required {
+            unsafe { *buffer_size = required };
+            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+        }
+        if !is_aligned(buffer) {
+            return Err(GCSO_ERROR_MISALIGNED_POINTER);
+        }
+        // SAFETY: buffer is non-null, aligned, and valid for writing required bytes.
         unsafe {
-            let required = size_of::<gcso_snapshot_header_t>();
-            if buffer.is_null() {
-                *buffer_size = required;
-                return Ok(GCSO_SUCCESS);
-            }
-            if *buffer_size < required {
-                *buffer_size = required;
-                return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
-            }
-            if !is_aligned(buffer) {
-                return Err(GCSO_ERROR_MISALIGNED_POINTER);
-            }
             ptr::write_bytes(buffer, 0, required);
             let header_ptr = buffer.cast::<gcso_snapshot_header_t>();
             (*header_ptr).magic = 0x4F53_4347; // ASCII "GCSO"
@@ -1107,11 +1117,13 @@ pub unsafe extern "C" fn gcso_context_deserialize(
         return GCSO_ERROR_CONTAINER_CORRUPTED;
     }
     ffi_boundary!({
+        // SAFETY: buffer is non-null and buffer_size >= header size as checked above.
         let header = unsafe { &*buffer.cast::<gcso_snapshot_header_t>() };
         if header.magic != 0x4F53_4347 {
             return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
         }
         validate_abi_version(header.version)?;
+        // SAFETY: context_out is non-null and aligned as checked above.
         unsafe { *context_out = ptr::null_mut() };
         Ok(GCSO_SUCCESS)
     })
@@ -1164,6 +1176,7 @@ pub unsafe extern "C" fn gcso_pprc_seek_to_token(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
+        // SAFETY: keyframe_header_out is non-null, aligned, and valid for writing as checked above.
         unsafe {
             ptr::write_bytes(keyframe_header_out, 0, 1);
             (*keyframe_header_out).token_index = token_index;
@@ -1195,6 +1208,7 @@ pub unsafe extern "C" fn gcso_action_hub_create(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     ffi_boundary!({
+        // SAFETY: hub_out is non-null and aligned as checked above.
         unsafe { *hub_out = ptr::null_mut() };
         Ok(GCSO_SUCCESS)
     })
@@ -1217,6 +1231,7 @@ pub unsafe extern "C" fn gcso_action_hub_step_pointer(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
+        // SAFETY: trail_out is non-null, aligned to 128 bytes, and valid for writing as checked above.
         unsafe {
             ptr::write_bytes(trail_out, 0, 1);
             (*trail_out).current_ptr = current_ptr;
@@ -1326,6 +1341,7 @@ pub unsafe extern "C" fn gcso_action_hub_reduce_bit_tree(
     }
     ffi_boundary!({
         let mut acc = [0u64; 4];
+        // SAFETY: bitmasks is non-null, aligned, and valid for num_masks elements as checked above.
         let masks = unsafe { slice::from_raw_parts(bitmasks, num_masks) };
         for m in masks {
             acc[0] |= m.bits[0];
@@ -1333,6 +1349,7 @@ pub unsafe extern "C" fn gcso_action_hub_reduce_bit_tree(
             acc[2] |= m.bits[2];
             acc[3] |= m.bits[3];
         }
+        // SAFETY: reduced_out is non-null and aligned as checked above.
         unsafe { (*reduced_out).bits = acc };
         Ok(GCSO_SUCCESS)
     })
@@ -1358,6 +1375,7 @@ pub unsafe extern "C" fn gcso_action_hub_paged_block_warp_bitmask(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     ffi_boundary!({
+        // SAFETY: mask_out is non-null, aligned, and valid for writing as checked above.
         unsafe { ptr::write_bytes(mask_out, 0, 1) };
         Ok(GCSO_SUCCESS)
     })
@@ -1391,6 +1409,7 @@ pub unsafe extern "C" fn gcso_daes_slot_create(slot_out: *mut GcsoDaesSlotHandle
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
+        // SAFETY: slot_out is non-null and aligned as checked above.
         unsafe { *slot_out = ptr::null_mut() };
         Ok(GCSO_SUCCESS)
     })
@@ -1409,6 +1428,7 @@ pub unsafe extern "C" fn gcso_daes_reset_telemetry(slot: *mut gcso_daes_slot_t) 
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
+        // SAFETY: slot is non-null and aligned to 64 bytes as checked above.
         unsafe {
             (*slot).telemetry_ring_head = 0;
             (*slot).telemetry_ring_tail = 0;
@@ -1436,8 +1456,10 @@ pub unsafe extern "C" fn gcso_daes_fast_path_lookup(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
+        // SAFETY: slot is non-null and aligned as checked above.
         let slot_ref = unsafe { &*slot };
         if (slot_ref.fast_path_bypass_mask & input_key) != 0 {
+            // SAFETY: shortcut_out is non-null and aligned as checked above.
             unsafe { *shortcut_out = slot_ref.fast_path_shortcuts[0] };
             Ok(GCSO_SUCCESS)
         } else {
@@ -1462,7 +1484,9 @@ pub unsafe extern "C" fn gcso_daes_telemetry_push(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
+        // SAFETY: slot is non-null and aligned as checked above.
         let head = (unsafe { (*slot).telemetry_ring_head as usize }) % 8;
+        // SAFETY: slot is non-null and aligned as checked above.
         unsafe {
             (*slot).telemetry_mini_ledger[head] = metric_code;
             (*slot).telemetry_ring_head = (*slot).telemetry_ring_head.wrapping_add(1);
@@ -1487,6 +1511,7 @@ pub unsafe extern "C" fn gcso_daes_set_mode(slot: *mut gcso_daes_slot_t, mode: u
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     ffi_boundary!({
+        // SAFETY: slot is non-null and aligned as checked above.
         unsafe { (*slot).mode = mode };
         Ok(GCSO_SUCCESS)
     })
@@ -1545,7 +1570,7 @@ pub unsafe extern "C" fn gcso_dpsr_kernel_create(
     if !is_aligned(kernel_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    if head_dim == 0 || !head_dim.is_multiple_of(2) || num_heads == 0 {
+    if head_dim == 0 || head_dim % 2 != 0 || num_heads == 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     ffi_boundary!({
@@ -1553,10 +1578,12 @@ pub unsafe extern "C" fn gcso_dpsr_kernel_create(
         #[cfg(feature = "std")]
         {
             let boxed = Box::new(engine);
+            // SAFETY: kernel_out is non-null and aligned as checked above.
             unsafe { *kernel_out = Box::into_raw(boxed).cast::<GcsoDpsrKernelOpaque>() };
         }
         #[cfg(not(feature = "std"))]
         {
+            // SAFETY: kernel_out is non-null and aligned as checked above.
             unsafe { *kernel_out = ptr::null_mut() };
         }
         Ok(GCSO_SUCCESS)
@@ -1585,6 +1612,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering(
         let total_q_len = head_dim
             .checked_mul(num_heads)
             .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        // SAFETY: query_tensor and phase_deltas are non-null and aligned as checked above.
         let q_slice_raw = unsafe { slice::from_raw_parts_mut(query_tensor, total_q_len) };
         let p_slice_raw = unsafe { slice::from_raw_parts(phase_deltas, num_heads) };
 
@@ -1622,6 +1650,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_fused(
         let total_len = head_dim
             .checked_mul(num_heads)
             .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        // SAFETY: query_tensor, key_tensor, and phase_deltas are non-null and aligned as checked above.
         let q_raw = unsafe { slice::from_raw_parts_mut(query_tensor, total_len) };
         let k_raw = unsafe { slice::from_raw_parts_mut(key_tensor, total_len) };
         let p_raw = unsafe { slice::from_raw_parts(phase_deltas, num_heads) };
@@ -1658,6 +1687,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_safe(
         let total_q_len = head_dim
             .checked_mul(num_heads)
             .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        // SAFETY: query_tensor and phase_deltas are non-null and aligned as checked above.
         let q_raw = unsafe { slice::from_raw_parts_mut(query_tensor, total_q_len) };
         let p_raw = unsafe { slice::from_raw_parts(phase_deltas, num_heads) };
 
@@ -1691,6 +1721,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_soft_phase_damping(
         let total_q_len = head_dim
             .checked_mul(num_heads)
             .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        // SAFETY: query_tensor is non-null and aligned as checked above.
         let q_raw = unsafe { slice::from_raw_parts_mut(query_tensor, total_q_len) };
         let mut q_aligned = AlignedSliceMut32::new(q_raw)?;
 
@@ -1717,6 +1748,7 @@ pub unsafe extern "C" fn gcso_qdps_filter_step(
     }
     ffi_boundary!({
         let engine = DpsrEngine::new(128, len as u32)?;
+        // SAFETY: phase_deltas is non-null and aligned as checked above.
         let p_raw = unsafe { slice::from_raw_parts_mut(phase_deltas, len) };
         let mut p_aligned = AlignedSliceMut16::new(p_raw)?;
 
@@ -1747,6 +1779,7 @@ pub unsafe extern "C" fn gcso_dpsr_lazy_unwrap_override(
         let total_q_len = head_dim
             .checked_mul(num_heads)
             .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        // SAFETY: query_tensor and context_accum are non-null and aligned as checked above.
         let q_raw = unsafe { slice::from_raw_parts_mut(query_tensor, total_q_len) };
         let c_raw = unsafe { slice::from_raw_parts(context_accum, num_heads) };
 
@@ -1777,6 +1810,7 @@ pub unsafe extern "C" fn gcso_dpsr_slerp_norm_guard_stable(
     }
     ffi_boundary!({
         let engine = DpsrEngine::new(128, 1)?;
+        // SAFETY: tensor is non-null and aligned as checked above.
         let t_raw = unsafe { slice::from_raw_parts_mut(tensor, dim) };
         let mut t_aligned = AlignedSliceMut32::new(t_raw)?;
 
@@ -1804,6 +1838,7 @@ pub unsafe extern "C" fn gcso_dpsr_fused_logit_shift(
     }
     ffi_boundary!({
         let engine = DpsrEngine::new(128, num_heads as u32)?;
+        // SAFETY: logits and phase_deltas are non-null and aligned as checked above.
         let l_raw = unsafe { slice::from_raw_parts_mut(logits, vocab_size) };
         let p_raw = unsafe { slice::from_raw_parts(phase_deltas, num_heads) };
 
@@ -1840,6 +1875,7 @@ pub unsafe extern "C" fn gcso_dpsr_compute_procrustes_phase_delta(
         }
 
         let engine = DpsrEngine::new(head_dim as u32, num_heads as u32)?;
+        // SAFETY: source, target, and phase_out are non-null and aligned as checked above.
         let src_raw = unsafe { slice::from_raw_parts(source, dim) };
         let tgt_raw = unsafe { slice::from_raw_parts(target, dim) };
         let out_raw = unsafe { slice::from_raw_parts_mut(phase_out, num_heads) };
@@ -1867,6 +1903,7 @@ pub unsafe extern "C" fn gcso_dpsr_kernel_destroy(kernel: GcsoDpsrKernelHandle) 
     }
     ffi_boundary!({
         #[cfg(feature = "std")]
+        // SAFETY: kernel was created via Box::into_raw in gcso_dpsr_kernel_create.
         unsafe {
             let _ = Box::from_raw(kernel.cast::<DpsrEngine>());
         }
@@ -1890,6 +1927,7 @@ pub unsafe extern "C" fn gcso_pspm_router_create(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
+        // SAFETY: router_out is non-null and aligned as checked above.
         unsafe { *router_out = ptr::null_mut() };
         Ok(GCSO_SUCCESS)
     })
@@ -1911,7 +1949,7 @@ pub unsafe extern "C" fn gcso_pspm_dispatch_single_pass(
     if !is_aligned_to(query_tensor, 32) || !is_aligned(pspm_cfg) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    if head_dim == 0 || !head_dim.is_multiple_of(2) {
+    if head_dim == 0 || head_dim % 2 != 0 {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     ffi_boundary!(Ok(GCSO_SUCCESS))
@@ -1948,6 +1986,7 @@ pub unsafe extern "C" fn gcso_srl_adapter_create(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
+        // SAFETY: adapter_out is non-null and aligned as checked above.
         unsafe { *adapter_out = ptr::null_mut() };
         Ok(GCSO_SUCCESS)
     })
@@ -1975,6 +2014,7 @@ pub unsafe extern "C" fn gcso_srl_eval_rank1(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     ffi_boundary!({
+        // SAFETY: srl_desc is non-null and aligned as checked above.
         let desc = unsafe { &*srl_desc };
         if desc.u_vector_ptr == 0 || desc.v_vector_ptr == 0 {
             return Err(GCSO_ERROR_NULL_POINTER);
@@ -1988,6 +2028,7 @@ pub unsafe extern "C" fn gcso_srl_eval_rank1(
             return Err(GCSO_ERROR_MISALIGNED_POINTER);
         }
 
+        // SAFETY: x_in, u_ptr, v_ptr, and y_out are non-null and aligned as checked above.
         let x_slice = unsafe { slice::from_raw_parts(x_in, dim_in) };
         let u_slice = unsafe { slice::from_raw_parts(u_ptr, dim_out) };
         let v_slice = unsafe { slice::from_raw_parts(v_ptr, dim_in) };
@@ -2002,6 +2043,7 @@ pub unsafe extern "C" fn gcso_srl_eval_rank1(
         let scale = desc.scale_factor * v_dot_x;
 
         if !gain_ptr.is_null() && is_aligned(gain_ptr) {
+            // SAFETY: gain_ptr is non-null and aligned.
             let g_slice = unsafe { slice::from_raw_parts(gain_ptr, dim_out) };
             for i in 0..dim_out {
                 y_slice[i] = scale * u_slice[i] * g_slice[i];
@@ -2038,6 +2080,7 @@ pub unsafe extern "C" fn gcso_srl_eval_rank1_fused(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     ffi_boundary!({
+        // SAFETY: srl_desc is non-null and aligned as checked above.
         let desc = unsafe { &*srl_desc };
         if desc.u_vector_ptr == 0 || desc.v_vector_ptr == 0 {
             return Err(GCSO_ERROR_NULL_POINTER);
@@ -2051,6 +2094,7 @@ pub unsafe extern "C" fn gcso_srl_eval_rank1_fused(
             return Err(GCSO_ERROR_MISALIGNED_POINTER);
         }
 
+        // SAFETY: x_in, u_ptr, v_ptr, and y_inout are non-null and aligned as checked above.
         let x_slice = unsafe { slice::from_raw_parts(x_in, dim_in) };
         let u_slice = unsafe { slice::from_raw_parts(u_ptr, dim_out) };
         let v_slice = unsafe { slice::from_raw_parts(v_ptr, dim_in) };
@@ -2064,6 +2108,7 @@ pub unsafe extern "C" fn gcso_srl_eval_rank1_fused(
         let scale = desc.scale_factor * v_dot_x;
 
         if !gain_ptr.is_null() && is_aligned(gain_ptr) {
+            // SAFETY: gain_ptr is non-null and aligned.
             let g_slice = unsafe { slice::from_raw_parts(gain_ptr, dim_out) };
             for i in 0..dim_out {
                 y_slice[i] += scale * u_slice[i] * g_slice[i];
@@ -2142,6 +2187,7 @@ pub unsafe extern "C" fn gcso_attractor_field_create(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
+        // SAFETY: field_out is non-null and aligned as checked above.
         unsafe { *field_out = ptr::null_mut() };
         Ok(GCSO_SUCCESS)
     })
@@ -2169,8 +2215,10 @@ pub unsafe extern "C" fn gcso_attractor_field_add_anchor(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     ffi_boundary!({
+        // SAFETY: vec is non-null, aligned, and valid for dim elements as checked above.
         let vec_slice = unsafe { slice::from_raw_parts(vec, dim) };
         let _ = AlignedSlice32::new(vec_slice)?;
+        // SAFETY: anchor_id_out is non-null and aligned as checked above.
         unsafe { *anchor_id_out = 1 };
         Ok(GCSO_SUCCESS)
     })
@@ -2197,10 +2245,12 @@ pub unsafe extern "C" fn gcso_attractor_field_add_system_prompt_anchor(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     ffi_boundary!({
+        // SAFETY: prompt_text is non-null as checked above.
         let c_str = unsafe { std::ffi::CStr::from_ptr(prompt_text) };
         if c_str.to_str().is_err() {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
+        // SAFETY: anchor_id_out is non-null and aligned as checked above.
         unsafe { *anchor_id_out = 1 };
         Ok(GCSO_SUCCESS)
     })
@@ -2228,8 +2278,10 @@ pub unsafe extern "C" fn gcso_attractor_field_add_embedding_anchor(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     ffi_boundary!({
+        // SAFETY: embedding is non-null, aligned, and valid for dim elements as checked above.
         let emb_slice = unsafe { slice::from_raw_parts(embedding, dim) };
         let _ = AlignedSlice32::new(emb_slice)?;
+        // SAFETY: anchor_id_out is non-null and aligned as checked above.
         unsafe { *anchor_id_out = 1 };
         Ok(GCSO_SUCCESS)
     })
@@ -2274,6 +2326,7 @@ pub unsafe extern "C" fn gcso_attractor_field_aggregate_bottom_up(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
+        // SAFETY: new_anchor_count_out is non-null and aligned as checked above.
         unsafe { *new_anchor_count_out = 0 };
         Ok(GCSO_SUCCESS)
     })
@@ -2329,15 +2382,18 @@ pub unsafe extern "C" fn gcso_edbc_controller_create(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
+        // SAFETY: initial_state is non-null and aligned as checked above.
         let init_st = unsafe { *initial_state };
         let engine = EdbcEngine::new(init_st);
         #[cfg(feature = "std")]
         {
             let boxed = Box::new(engine);
+            // SAFETY: controller_out is non-null and aligned as checked above.
             unsafe { *controller_out = Box::into_raw(boxed).cast::<GcsoEdbcControllerOpaque>() };
         }
         #[cfg(not(feature = "std"))]
         {
+            // SAFETY: controller_out is non-null and aligned as checked above.
             unsafe { *controller_out = ptr::null_mut() };
         }
         Ok(GCSO_SUCCESS)
@@ -2361,6 +2417,7 @@ pub unsafe extern "C" fn gcso_edbc_eval_stateful(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
+        // SAFETY: controller and state_out are valid handles/pointers created via C-ABI.
         let engine = unsafe { &mut *controller.cast::<EdbcEngine>() };
         let out_st = unsafe { &mut *state_out };
         engine.eval_stateful(token_z_score, out_st)?;
@@ -2385,9 +2442,11 @@ pub unsafe extern "C" fn gcso_cvoid_eval_dyadic128(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
+        // SAFETY: key_vector is non-null, aligned, and valid for dim elements as checked above.
         let key_raw = unsafe { slice::from_raw_parts(key_vector, dim) };
         let key_aligned = AlignedSlice32::new(key_raw)?;
         let engine = EdbcEngine::default();
+        // SAFETY: void_score_out is non-null and aligned as checked above.
         let out_score = unsafe { &mut *void_score_out };
 
         engine.eval_cvoid_dyadic128(&key_aligned, out_score)?;
@@ -2414,6 +2473,7 @@ pub unsafe extern "C" fn gcso_cvoid_eval_barrier(
     ffi_boundary!({
         let engine = EdbcEngine::default();
         let barrier = engine.eval_barrier(void_score, tau_eff)?;
+        // SAFETY: barrier_out is non-null and aligned as checked above.
         unsafe { *barrier_out = barrier };
         Ok(GCSO_SUCCESS)
     })
@@ -2441,6 +2501,7 @@ pub unsafe extern "C" fn gcso_cvoid_eval_barrier_pitchfork(
     }
     ffi_boundary!({
         let barrier = eval_barrier_pitchfork(cvoid, tau_eff, alpha, beta, head_dim)?;
+        // SAFETY: barrier_out is non-null and aligned as checked above.
         unsafe { *barrier_out = barrier };
         Ok(GCSO_SUCCESS)
     })
@@ -2462,6 +2523,7 @@ pub unsafe extern "C" fn gcso_edbc_controller_destroy(
     }
     ffi_boundary!({
         #[cfg(feature = "std")]
+        // SAFETY: controller was allocated via Box::into_raw in gcso_edbc_controller_create.
         unsafe {
             let _ = Box::from_raw(controller.cast::<EdbcEngine>());
         }
@@ -2511,10 +2573,12 @@ pub unsafe extern "C" fn gcso_zimms_open_mmap(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
+        // SAFETY: file_path is non-null as checked above.
         let c_str = unsafe { std::ffi::CStr::from_ptr(file_path) };
         if c_str.to_str().is_err() {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
+        // SAFETY: zimms_out is non-null and aligned as checked above.
         unsafe {
             ptr::write_bytes(zimms_out, 0, 1);
             (*zimms_out).mapped_address = 0x1000_0000;
@@ -2540,6 +2604,7 @@ pub unsafe extern "C" fn gcso_zimms_close_mmap(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
+        // SAFETY: zimms_desc is non-null and aligned as checked above.
         unsafe { ptr::write_bytes(zimms_desc, 0, 1) };
         Ok(GCSO_SUCCESS)
     })
@@ -2591,6 +2656,7 @@ mod tests {
 
     #[test]
     fn test_status_to_string() {
+        // SAFETY: gcso_status_to_string returns a valid static null-terminated C string.
         unsafe {
             let str_ptr = gcso_status_to_string(GCSO_SUCCESS);
             let c_str = std::ffi::CStr::from_ptr(str_ptr);
