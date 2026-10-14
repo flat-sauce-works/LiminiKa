@@ -178,38 +178,55 @@ pub type gcso_capability_flags_t = u64;
 // Strongly-Typed Opaque Handles replacing generic untyped pointers
 // ===================================================================
 
+/// Opaque context runtime handle structure.
 #[repr(C)]
 pub struct GcsoContextOpaque {
     _private: [u8; 0],
 }
+
+/// Opaque binary snapshot container structure.
 #[repr(C)]
 pub struct GcsoContainerOpaque {
     _private: [u8; 0],
 }
+
+/// Opaque Action Hub pointer table structure.
 #[repr(C)]
 pub struct GcsoActionHubOpaque {
     _private: [u8; 0],
 }
+
+/// Opaque DAES extension scratchpad slot structure.
 #[repr(C)]
 pub struct GcsoDaesSlotOpaque {
     _private: [u8; 0],
 }
+
+/// Opaque Attractor Field topological anchor structure.
 #[repr(C)]
 pub struct GcsoAttractorFieldOpaque {
     _private: [u8; 0],
 }
+
+/// Opaque EDBC entropy controller state structure.
 #[repr(C)]
 pub struct GcsoEdbcControllerOpaque {
     _private: [u8; 0],
 }
+
+/// Opaque DPSR phase steering kernel structure.
 #[repr(C)]
 pub struct GcsoDpsrKernelOpaque {
     _private: [u8; 0],
 }
+
+/// Opaque PSPM sub-head group router structure.
 #[repr(C)]
 pub struct GcsoPspmRouterOpaque {
     _private: [u8; 0],
 }
+
+/// Opaque SRL adapter layer structure.
 #[repr(C)]
 pub struct GcsoSrlAdapterOpaque {
     _private: [u8; 0],
