@@ -76,10 +76,11 @@ macro_rules! ffi_boundary {
         };
 
         #[cfg(not(feature = "std"))]
-        let status = match (|| -> Result<$crate::abi::GcsoStatus, $crate::abi::GcsoStatus> { $body })() {
-            Ok(status) => status,
-            Err(err_status) => err_status,
-        };
+        let status =
+            match (|| -> Result<$crate::abi::GcsoStatus, $crate::abi::GcsoStatus> { $body })() {
+                Ok(status) => status,
+                Err(err_status) => err_status,
+            };
 
         status
     }};

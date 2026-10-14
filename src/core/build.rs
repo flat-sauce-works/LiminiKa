@@ -194,18 +194,16 @@ fn main() {
 
     // Evaluate GPU backend feature flags and environment variable overrides
     let cuda_explicit = parse_bool_env("LIMINIKA_ENABLE_CUDA");
-    let enable_cuda = cuda_explicit.unwrap_or_else(|| {
-        env::var("CARGO_FEATURE_CUDA").is_ok() && is_nvcc_available()
-    });
+    let enable_cuda = cuda_explicit
+        .unwrap_or_else(|| env::var("CARGO_FEATURE_CUDA").is_ok() && is_nvcc_available());
 
     if cuda_explicit == Some(true) && !is_nvcc_available() {
         println!("cargo:warning=LIMINIKA_ENABLE_CUDA is set to true, but CUDA compiler (nvcc) was not detected.");
     }
 
     let vulkan_explicit = parse_bool_env("LIMINIKA_ENABLE_VULKAN");
-    let enable_vulkan = vulkan_explicit.unwrap_or_else(|| {
-        env::var("CARGO_FEATURE_VULKAN").is_ok() && is_vulkan_available()
-    });
+    let enable_vulkan = vulkan_explicit
+        .unwrap_or_else(|| env::var("CARGO_FEATURE_VULKAN").is_ok() && is_vulkan_available());
 
     if vulkan_explicit == Some(true) && !is_vulkan_available() {
         println!("cargo:warning=LIMINIKA_ENABLE_VULKAN is set to true, but Vulkan SDK / runtime was not detected.");
@@ -213,23 +211,22 @@ fn main() {
 
     let metal_explicit = parse_bool_env("LIMINIKA_ENABLE_METAL");
     let enable_metal = is_apple
-        && metal_explicit.unwrap_or_else(|| {
-            env::var("CARGO_FEATURE_METAL").is_ok() || target_os == "macos"
-        });
+        && metal_explicit
+            .unwrap_or_else(|| env::var("CARGO_FEATURE_METAL").is_ok() || target_os == "macos");
 
     // Detect CPU SIMD features from Cargo feature flags or compiler target_features
-    let has_avx2 = env::var("CARGO_FEATURE_AVX2").is_ok()
-        || has_target_feature(&target_features, "avx2");
+    let has_avx2 =
+        env::var("CARGO_FEATURE_AVX2").is_ok() || has_target_feature(&target_features, "avx2");
     let has_avx512 = env::var("CARGO_FEATURE_AVX512").is_ok()
         || has_target_feature(&target_features, "avx512f")
         || has_target_feature(&target_features, "avx512");
     let has_neon = env::var("CARGO_FEATURE_NEON").is_ok()
         || has_target_feature(&target_features, "neon")
         || (target_arch == "aarch64" && is_apple);
-    let has_sve = env::var("CARGO_FEATURE_SVE").is_ok()
-        || has_target_feature(&target_features, "sve");
-    let has_rvv = env::var("CARGO_FEATURE_RVV").is_ok()
-        || has_target_feature(&target_features, "v");
+    let has_sve =
+        env::var("CARGO_FEATURE_SVE").is_ok() || has_target_feature(&target_features, "sve");
+    let has_rvv =
+        env::var("CARGO_FEATURE_RVV").is_ok() || has_target_feature(&target_features, "v");
 
     // Emit custom Rust conditional compilation flags based on backend availability
     if enable_cuda {
@@ -287,26 +284,14 @@ fn main() {
             "LIMINIKA_ENABLE_METAL",
             if enable_metal { "ON" } else { "OFF" },
         )
-        .define(
-            "LIMINIKA_ENABLE_AVX2",
-            if has_avx2 { "ON" } else { "OFF" },
-        )
+        .define("LIMINIKA_ENABLE_AVX2", if has_avx2 { "ON" } else { "OFF" })
         .define(
             "LIMINIKA_ENABLE_AVX512",
             if has_avx512 { "ON" } else { "OFF" },
         )
-        .define(
-            "LIMINIKA_ENABLE_NEON",
-            if has_neon { "ON" } else { "OFF" },
-        )
-        .define(
-            "LIMINIKA_ENABLE_SVE",
-            if has_sve { "ON" } else { "OFF" },
-        )
-        .define(
-            "LIMINIKA_ENABLE_RVV",
-            if has_rvv { "ON" } else { "OFF" },
-        );
+        .define("LIMINIKA_ENABLE_NEON", if has_neon { "ON" } else { "OFF" })
+        .define("LIMINIKA_ENABLE_SVE", if has_sve { "ON" } else { "OFF" })
+        .define("LIMINIKA_ENABLE_RVV", if has_rvv { "ON" } else { "OFF" });
 
     // Enforce strict C++ compiler warning and encoding flags based on toolchain
     if is_msvc {
@@ -333,7 +318,9 @@ fn main() {
             .cxxflag("-fstrict-aliasing");
 
         if has_avx512 {
-            cfg.cxxflag("-mavx512f").cxxflag("-mavx512bw").cxxflag("-mavx512dq");
+            cfg.cxxflag("-mavx512f")
+                .cxxflag("-mavx512bw")
+                .cxxflag("-mavx512dq");
         } else if has_avx2 {
             cfg.cxxflag("-mavx2").cxxflag("-mfma");
         }

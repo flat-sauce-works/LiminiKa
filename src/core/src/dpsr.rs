@@ -24,8 +24,7 @@ use std::f32::consts::PI;
 
 use crate::abi::{gcso_q7_t, GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT};
 use crate::traits::{
-    AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32, GcsoResult,
-    PhaseSteering,
+    AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32, GcsoResult, PhaseSteering,
 };
 
 /// Scale factor for Q7 quantized phase representation (beta_Q7 = pi / 128).
@@ -112,16 +111,14 @@ fn sincos_f32(val: f32) -> (f32, f32) {
                 + x2 * (-0.166_666_67
                     + x2 * (0.008_333_334
                         + x2 * (-0.000_198_412_7
-                            + x2 * (0.000_002_755_732
-                                + x2 * -0.000_000_025_052_108)))));
+                            + x2 * (0.000_002_755_732 + x2 * -0.000_000_025_052_108)))));
 
         // Horner's scheme polynomial for cos(x) on [-PI/2, PI/2]
         let cos_poly = 1.0
             + x2 * (-0.5
                 + x2 * (0.041_666_668
                     + x2 * (-0.001_388_888_9
-                        + x2 * (0.000_024_801_587
-                            + x2 * -0.000_000_275_573_19))));
+                        + x2 * (0.000_024_801_587 + x2 * -0.000_000_275_573_19))));
 
         (sign_sin * sin_poly, sign_cos * cos_poly)
     }
@@ -634,10 +631,7 @@ impl PhaseSteering for DpsrEngine {
         norm_lower: f32,
         norm_upper: f32,
     ) -> GcsoResult<()> {
-        if norm_lower > norm_upper
-            || norm_lower < 0.0
-            || norm_lower.is_nan()
-            || norm_upper.is_nan()
+        if norm_lower > norm_upper || norm_lower < 0.0 || norm_lower.is_nan() || norm_upper.is_nan()
         {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }

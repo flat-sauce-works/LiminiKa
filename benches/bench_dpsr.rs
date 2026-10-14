@@ -9,7 +9,8 @@ use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criteri
 use liminika_core::abi::gcso_q7_t;
 use liminika_core::dpsr::DpsrEngine;
 use liminika_core::traits::{
-    AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32, AlignedSliceMut64, AlignedSliceMut128, PhaseSteering,
+    AlignedSlice16, AlignedSlice32, AlignedSliceMut128, AlignedSliceMut16, AlignedSliceMut32,
+    AlignedSliceMut64, PhaseSteering,
 };
 use std::alloc::{alloc, dealloc, Layout};
 use std::hint::black_box;
@@ -27,8 +28,11 @@ impl AlignedHeapBuffer {
         let layout = Layout::from_size_align(len * std::mem::size_of::<f32>(), align)
             .expect("Invalid layout for AlignedHeapBuffer");
         let ptr = unsafe { alloc(layout) as *mut f32 };
-        assert!(!ptr.is_null(), "Heap allocation failed for AlignedHeapBuffer");
-        
+        assert!(
+            !ptr.is_null(),
+            "Heap allocation failed for AlignedHeapBuffer"
+        );
+
         // Initialize buffer with valid non-zero values to prevent singularity errors
         unsafe {
             let slice = std::slice::from_raw_parts_mut(ptr, len);
@@ -76,7 +80,10 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
 
         // 1. Alignment Comparison: Unaligned vs 32B vs 64B vs 128B Cacheline Boundaries
         group.bench_with_input(
-            BenchmarkId::new("apply_phase_steering_unaligned_baseline", format!("{}x{}", head_dim, num_heads)),
+            BenchmarkId::new(
+                "apply_phase_steering_unaligned_baseline",
+                format!("{}x{}", head_dim, num_heads),
+            ),
             &(head_dim, num_heads),
             |b, _| {
                 let mut q_vec = vec![1.0f32; total_elements.max(16384)];
@@ -84,7 +91,8 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
 
                 b.iter(|| {
                     let q_slice_32 = AlignedSliceMut32::new(&mut q_vec[..total_elements]);
-                    let p_slice = AlignedSlice16::new(&phase_data.0[..(num_heads as usize)]).unwrap();
+                    let p_slice =
+                        AlignedSlice16::new(&phase_data.0[..(num_heads as usize)]).unwrap();
 
                     if let Ok(mut slice) = q_slice_32 {
                         engine
@@ -98,7 +106,10 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
         );
 
         group.bench_with_input(
-            BenchmarkId::new("apply_phase_steering_32b", format!("{}x{}", head_dim, num_heads)),
+            BenchmarkId::new(
+                "apply_phase_steering_32b",
+                format!("{}x{}", head_dim, num_heads),
+            ),
             &(head_dim, num_heads),
             |b, _| {
                 let mut q_data = AlignedHeapBuffer::new(16384, 32, 1.0f32);
@@ -106,8 +117,10 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
 
                 b.iter(|| {
                     let slice_mut = q_data.as_mut_slice();
-                    let mut q_slice = AlignedSliceMut32::new(&mut slice_mut[..total_elements]).unwrap();
-                    let p_slice = AlignedSlice16::new(&phase_data.0[..(num_heads as usize)]).unwrap();
+                    let mut q_slice =
+                        AlignedSliceMut32::new(&mut slice_mut[..total_elements]).unwrap();
+                    let p_slice =
+                        AlignedSlice16::new(&phase_data.0[..(num_heads as usize)]).unwrap();
 
                     engine
                         .apply_phase_steering(black_box(&mut q_slice), black_box(&p_slice))
@@ -117,7 +130,10 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
         );
 
         group.bench_with_input(
-            BenchmarkId::new("apply_phase_steering_64b", format!("{}x{}", head_dim, num_heads)),
+            BenchmarkId::new(
+                "apply_phase_steering_64b",
+                format!("{}x{}", head_dim, num_heads),
+            ),
             &(head_dim, num_heads),
             |b, _| {
                 let mut q_data = AlignedHeapBuffer::new(16384, 64, 1.0f32);
@@ -125,8 +141,10 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
 
                 b.iter(|| {
                     let slice_mut = q_data.as_mut_slice();
-                    let mut q_slice = AlignedSliceMut64::new(&mut slice_mut[..total_elements]).unwrap();
-                    let p_slice = AlignedSlice16::new(&phase_data.0[..(num_heads as usize)]).unwrap();
+                    let mut q_slice =
+                        AlignedSliceMut64::new(&mut slice_mut[..total_elements]).unwrap();
+                    let p_slice =
+                        AlignedSlice16::new(&phase_data.0[..(num_heads as usize)]).unwrap();
                     let mut q_slice_32 = AlignedSliceMut32::new(q_slice.as_mut_slice()).unwrap();
 
                     engine
@@ -137,7 +155,10 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
         );
 
         group.bench_with_input(
-            BenchmarkId::new("apply_phase_steering_128b", format!("{}x{}", head_dim, num_heads)),
+            BenchmarkId::new(
+                "apply_phase_steering_128b",
+                format!("{}x{}", head_dim, num_heads),
+            ),
             &(head_dim, num_heads),
             |b, _| {
                 let mut q_data = AlignedHeapBuffer::new(16384, 128, 1.0f32);
@@ -145,8 +166,10 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
 
                 b.iter(|| {
                     let slice_mut = q_data.as_mut_slice();
-                    let mut q_slice = AlignedSliceMut128::new(&mut slice_mut[..total_elements]).unwrap();
-                    let p_slice = AlignedSlice16::new(&phase_data.0[..(num_heads as usize)]).unwrap();
+                    let mut q_slice =
+                        AlignedSliceMut128::new(&mut slice_mut[..total_elements]).unwrap();
+                    let p_slice =
+                        AlignedSlice16::new(&phase_data.0[..(num_heads as usize)]).unwrap();
                     let mut q_slice_32 = AlignedSliceMut32::new(q_slice.as_mut_slice()).unwrap();
 
                     engine
@@ -158,7 +181,10 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
 
         // 2. Fused Query & Key Phase Steering
         group.bench_with_input(
-            BenchmarkId::new("apply_phase_steering_fused", format!("{}x{}", head_dim, num_heads)),
+            BenchmarkId::new(
+                "apply_phase_steering_fused",
+                format!("{}x{}", head_dim, num_heads),
+            ),
             &(head_dim, num_heads),
             |b, _| {
                 let mut q_data = AlignedHeapBuffer::new(16384, 32, 1.0f32);
@@ -168,9 +194,12 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
                 b.iter(|| {
                     let q_slice_mut = q_data.as_mut_slice();
                     let k_slice_mut = k_data.as_mut_slice();
-                    let mut q_slice = AlignedSliceMut32::new(&mut q_slice_mut[..total_elements]).unwrap();
-                    let mut k_slice = AlignedSliceMut32::new(&mut k_slice_mut[..total_elements]).unwrap();
-                    let p_slice = AlignedSlice16::new(&phase_data.0[..(num_heads as usize)]).unwrap();
+                    let mut q_slice =
+                        AlignedSliceMut32::new(&mut q_slice_mut[..total_elements]).unwrap();
+                    let mut k_slice =
+                        AlignedSliceMut32::new(&mut k_slice_mut[..total_elements]).unwrap();
+                    let p_slice =
+                        AlignedSlice16::new(&phase_data.0[..(num_heads as usize)]).unwrap();
 
                     engine
                         .apply_phase_steering_fused(
@@ -185,7 +214,10 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
 
         // 3. RIPA Low-Frequency Bounded Steering
         group.bench_with_input(
-            BenchmarkId::new("apply_phase_steering_safe_ripa", format!("{}x{}", head_dim, num_heads)),
+            BenchmarkId::new(
+                "apply_phase_steering_safe_ripa",
+                format!("{}x{}", head_dim, num_heads),
+            ),
             &(head_dim, num_heads),
             |b, _| {
                 let mut q_data = AlignedHeapBuffer::new(16384, 32, 1.0f32);
@@ -194,8 +226,10 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
 
                 b.iter(|| {
                     let slice_mut = q_data.as_mut_slice();
-                    let mut q_slice = AlignedSliceMut32::new(&mut slice_mut[..total_elements]).unwrap();
-                    let p_slice = AlignedSlice16::new(&phase_data.0[..(num_heads as usize)]).unwrap();
+                    let mut q_slice =
+                        AlignedSliceMut32::new(&mut slice_mut[..total_elements]).unwrap();
+                    let p_slice =
+                        AlignedSlice16::new(&phase_data.0[..(num_heads as usize)]).unwrap();
 
                     engine
                         .apply_phase_steering_safe(
@@ -210,7 +244,10 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
 
         // 4. Lazy Phase Unwrapping
         group.bench_with_input(
-            BenchmarkId::new("lazy_unwrap_override", format!("{}x{}", head_dim, num_heads)),
+            BenchmarkId::new(
+                "lazy_unwrap_override",
+                format!("{}x{}", head_dim, num_heads),
+            ),
             &(head_dim, num_heads),
             |b, _| {
                 let mut q_data = AlignedHeapBuffer::new(16384, 32, 1.0f32);
@@ -219,8 +256,10 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
                 b.iter(|| {
                     let q_slice_mut = q_data.as_mut_slice();
                     let c_slice_mut = context_accum.as_mut_slice();
-                    let mut q_slice = AlignedSliceMut32::new(&mut q_slice_mut[..total_elements]).unwrap();
-                    let c_slice = AlignedSlice32::new(&c_slice_mut[..(num_heads as usize)]).unwrap();
+                    let mut q_slice =
+                        AlignedSliceMut32::new(&mut q_slice_mut[..total_elements]).unwrap();
+                    let c_slice =
+                        AlignedSlice32::new(&c_slice_mut[..(num_heads as usize)]).unwrap();
 
                     engine
                         .lazy_unwrap_override(black_box(&mut q_slice), black_box(&c_slice))
@@ -242,10 +281,12 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
             |b, &n| {
                 b.iter_batched(
                     || {
-                        AlignedQ7Buffer([1, 5, -2, 10, -128, 4, 0, 15, 2, 3, 4, 5, 6, 7, 8, 9,
-                                         1, 5, -2, 10, -128, 4, 0, 15, 2, 3, 4, 5, 6, 7, 8, 9,
-                                         2, 4, 6, 8, -10, -20, 30, 40, 1, 2, 3, 4, 5, 6, 7, 8,
-                                         9, 10, 11, 12, 13, 14, 15, 16, 1, 2, 3, 4, 5, 6, 7, 8])
+                        AlignedQ7Buffer([
+                            1, 5, -2, 10, -128, 4, 0, 15, 2, 3, 4, 5, 6, 7, 8, 9, 1, 5, -2, 10,
+                            -128, 4, 0, 15, 2, 3, 4, 5, 6, 7, 8, 9, 2, 4, 6, 8, -10, -20, 30, 40,
+                            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 1, 2, 3, 4, 5,
+                            6, 7, 8,
+                        ])
                     },
                     |mut phase_buf| {
                         let mut p_slice = AlignedSliceMut16::new(&mut phase_buf.0[..n]).unwrap();
@@ -284,7 +325,9 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
     // 7. Fused Logit Shift (Vocabulary scale: 32k, 64k & 128k)
     let mut logits_buf = AlignedHeapBuffer::new(131072, 32, 1.0f32);
     for &vocab_size in &[32000usize, 64000usize, 128000usize] {
-        group.throughput(Throughput::Bytes((vocab_size * core::mem::size_of::<f32>()) as u64));
+        group.throughput(Throughput::Bytes(
+            (vocab_size * core::mem::size_of::<f32>()) as u64,
+        ));
         group.bench_with_input(
             BenchmarkId::new("dpsr_fused_logit_shift_vocab", vocab_size),
             &vocab_size,
@@ -293,7 +336,8 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
 
                 b.iter(|| {
                     let logits_slice_mut = logits_buf.as_mut_slice();
-                    let mut logits_slice = AlignedSliceMut32::new(&mut logits_slice_mut[..v_size]).unwrap();
+                    let mut logits_slice =
+                        AlignedSliceMut32::new(&mut logits_slice_mut[..v_size]).unwrap();
                     let p_slice = AlignedSlice16::new(&phase_data.0).unwrap();
 
                     default_engine

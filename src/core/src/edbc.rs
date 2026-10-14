@@ -424,7 +424,11 @@ impl EntropyEvaluator for EdbcEngine {
             return Err(GCSO_ERROR_EDBC_SINGULARITY);
         }
 
-        let token_z_safe = if token_z_score < 0.0 { 0.0 } else { token_z_score };
+        let token_z_safe = if token_z_score < 0.0 {
+            0.0
+        } else {
+            token_z_score
+        };
         let prev_entropy = self.state.moving_z_entropy;
         let new_entropy =
             (1.0 - EMA_ALPHA_ENTROPY) * prev_entropy + EMA_ALPHA_ENTROPY * token_z_safe;

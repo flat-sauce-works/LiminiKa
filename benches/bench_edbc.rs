@@ -25,8 +25,11 @@ impl AlignedHeapBuffer {
         let layout = Layout::from_size_align(len * std::mem::size_of::<f32>(), align)
             .expect("Invalid layout for AlignedHeapBuffer");
         let ptr = unsafe { alloc(layout) as *mut f32 };
-        assert!(!ptr.is_null(), "Heap allocation failed for AlignedHeapBuffer");
-        
+        assert!(
+            !ptr.is_null(),
+            "Heap allocation failed for AlignedHeapBuffer"
+        );
+
         unsafe {
             let slice = std::slice::from_raw_parts_mut(ptr, len);
             slice.fill(initial_val);
@@ -75,7 +78,7 @@ fn bench_edbc_operations(c: &mut Criterion) {
         let mut engine = EdbcEngine::default();
         let mut out_state = gcso_edbc_state_t::default();
         let boundary_oscillation = [
-            1.48f32, 1.52, 1.49, 1.51, 1.48, 1.53, 1.50, 1.47, 1.52, 1.50
+            1.48f32, 1.52, 1.49, 1.51, 1.48, 1.53, 1.50, 1.47, 1.52, 1.50,
         ];
 
         b.iter(|| {
@@ -92,8 +95,8 @@ fn bench_edbc_operations(c: &mut Criterion) {
         let mut engine = EdbcEngine::default();
         let mut out_state = gcso_edbc_state_t::default();
         let stimulus_sequence = [
-            0.4f32, 0.6, 1.2, 1.8, 2.5, 4.0, 5.2, 3.1, 1.5, 0.8, 0.3, 0.5,
-            2.1, 3.8, 4.5, 1.1, 0.2, 0.9, 2.8, 4.9, 3.5, 1.9, 0.7, 0.4
+            0.4f32, 0.6, 1.2, 1.8, 2.5, 4.0, 5.2, 3.1, 1.5, 0.8, 0.3, 0.5, 2.1, 3.8, 4.5, 1.1, 0.2,
+            0.9, 2.8, 4.9, 3.5, 1.9, 0.7, 0.4,
         ];
 
         b.iter(|| {

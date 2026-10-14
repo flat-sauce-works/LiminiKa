@@ -298,7 +298,10 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
     #[inline(always)]
     #[must_use]
     pub fn is_aligned_ptr(ptr: *const T) -> bool {
-        ALIGN != 0 && ALIGN.is_power_of_two() && !ptr.is_null() && ((ptr as usize) & (ALIGN - 1)) == 0
+        ALIGN != 0
+            && ALIGN.is_power_of_two()
+            && !ptr.is_null()
+            && ((ptr as usize) & (ALIGN - 1)) == 0
     }
 
     /// Creates an aligned subslice if the subslice start address satisfies alignment constraints.
@@ -686,7 +689,10 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     #[inline(always)]
     #[must_use]
     pub fn is_aligned_ptr(ptr: *const T) -> bool {
-        ALIGN != 0 && ALIGN.is_power_of_two() && !ptr.is_null() && ((ptr as usize) & (ALIGN - 1)) == 0
+        ALIGN != 0
+            && ALIGN.is_power_of_two()
+            && !ptr.is_null()
+            && ((ptr as usize) & (ALIGN - 1)) == 0
     }
 
     /// Creates a mutable subslice if the subslice start address satisfies alignment constraints.

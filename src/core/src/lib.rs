@@ -60,12 +60,12 @@ pub mod traits;
 // ===================================================================
 
 pub use crate::traits::{
-    AlignedSlice, AlignedSlice128, AlignedSlice16, AlignedSlice256, AlignedSlice32, AlignedSlice512,
-    AlignedSlice64, AlignedSliceMut, AlignedSliceMut128, AlignedSliceMut16, AlignedSliceMut256,
-    AlignedSliceMut32, AlignedSliceMut512, AlignedSliceMut64, AttractorField, DaesScratchpad,
-    EntropyEvaluator, GcsoResult, GcsoRuntimeContext, HotPathExecutionEngine, L2pSvdProjector,
-    PersonaPatcher, PhaseSteering, PointerActionHub, PprcCache, PspmRouter, SrlAdapter,
-    SwarmCellChunk, SystemCapabilityQuery, ZimmsStorage,
+    AlignedSlice, AlignedSlice128, AlignedSlice16, AlignedSlice256, AlignedSlice32,
+    AlignedSlice512, AlignedSlice64, AlignedSliceMut, AlignedSliceMut128, AlignedSliceMut16,
+    AlignedSliceMut256, AlignedSliceMut32, AlignedSliceMut512, AlignedSliceMut64, AttractorField,
+    DaesScratchpad, EntropyEvaluator, GcsoResult, GcsoRuntimeContext, HotPathExecutionEngine,
+    L2pSvdProjector, PersonaPatcher, PhaseSteering, PointerActionHub, PprcCache, PspmRouter,
+    SrlAdapter, SwarmCellChunk, SystemCapabilityQuery, ZimmsStorage,
 };
 
 pub use crate::abi::{
@@ -267,7 +267,8 @@ impl Config {
         if !self.raw.qdps_min_step_rad.is_finite() || self.raw.qdps_min_step_rad < 0.0 {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
-        if !self.raw.entropy_singularity_eps.is_finite() || self.raw.entropy_singularity_eps <= 0.0 {
+        if !self.raw.entropy_singularity_eps.is_finite() || self.raw.entropy_singularity_eps <= 0.0
+        {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
         if self.raw.max_prompt_anchors == 0 || self.raw.action_hub_capacity == 0 {
@@ -493,12 +494,16 @@ impl RuntimeContext {
         ctx_buf[16..20].copy_from_slice(&self.last_prompt_weight.to_le_bytes());
 
         let edbc_state = self.edbc.state();
-        let edbc_ptr = buffer[edbc_off..daes_off].as_mut_ptr().cast::<gcso_edbc_state_t>();
+        let edbc_ptr = buffer[edbc_off..daes_off]
+            .as_mut_ptr()
+            .cast::<gcso_edbc_state_t>();
         unsafe {
             *edbc_ptr = edbc_state;
         }
 
-        let daes_ptr = buffer[daes_off..total_required].as_mut_ptr().cast::<gcso_daes_slot_t>();
+        let daes_ptr = buffer[daes_off..total_required]
+            .as_mut_ptr()
+            .cast::<gcso_daes_slot_t>();
         unsafe {
             *daes_ptr = self.daes_slot;
         }
@@ -539,9 +544,12 @@ impl RuntimeContext {
         if buffer.len() >= action_hub_off + 20 {
             let ctx_buf = &buffer[action_hub_off..];
             self.step_counter = u64::from_le_bytes(ctx_buf[..8].try_into().unwrap_or([0; 8]));
-            self.active_trail_count = u32::from_le_bytes(ctx_buf[8..12].try_into().unwrap_or([0; 4]));
-            self.prompt_anchor_count = u32::from_le_bytes(ctx_buf[12..16].try_into().unwrap_or([0; 4]));
-            self.last_prompt_weight = f32::from_le_bytes(ctx_buf[16..20].try_into().unwrap_or([0; 4]));
+            self.active_trail_count =
+                u32::from_le_bytes(ctx_buf[8..12].try_into().unwrap_or([0; 4]));
+            self.prompt_anchor_count =
+                u32::from_le_bytes(ctx_buf[12..16].try_into().unwrap_or([0; 4]));
+            self.last_prompt_weight =
+                f32::from_le_bytes(ctx_buf[16..20].try_into().unwrap_or([0; 4]));
         }
 
         let edbc_size = core::mem::size_of::<gcso_edbc_state_t>();
@@ -687,7 +695,8 @@ impl PhaseSteering for RuntimeContext {
         key_tensor: &mut AlignedSliceMut32<'_, f32>,
         phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
     ) -> Result<()> {
-        self.dpsr.apply_phase_steering_fused(query_tensor, key_tensor, phase_deltas)
+        self.dpsr
+            .apply_phase_steering_fused(query_tensor, key_tensor, phase_deltas)
     }
 
     #[inline]
@@ -697,7 +706,8 @@ impl PhaseSteering for RuntimeContext {
         phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
         max_rad: f32,
     ) -> Result<()> {
-        self.dpsr.apply_phase_steering_safe(query_tensor, phase_deltas, max_rad)
+        self.dpsr
+            .apply_phase_steering_safe(query_tensor, phase_deltas, max_rad)
     }
 
     #[inline]
@@ -706,7 +716,8 @@ impl PhaseSteering for RuntimeContext {
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         damping_factor: f32,
     ) -> Result<()> {
-        self.dpsr.apply_soft_phase_damping(query_tensor, damping_factor)
+        self.dpsr
+            .apply_soft_phase_damping(query_tensor, damping_factor)
     }
 
     #[inline]
@@ -734,7 +745,8 @@ impl PhaseSteering for RuntimeContext {
         norm_lower: f32,
         norm_upper: f32,
     ) -> Result<()> {
-        self.dpsr.slerp_norm_guard_stable(tensor, norm_lower, norm_upper)
+        self.dpsr
+            .slerp_norm_guard_stable(tensor, norm_lower, norm_upper)
     }
 
     #[inline]
@@ -753,7 +765,8 @@ impl PhaseSteering for RuntimeContext {
         target: &AlignedSlice32<'_, f32>,
         phase_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
     ) -> Result<()> {
-        self.dpsr.compute_procrustes_phase_delta(source, target, phase_out)
+        self.dpsr
+            .compute_procrustes_phase_delta(source, target, phase_out)
     }
 }
 
@@ -790,7 +803,8 @@ impl EntropyEvaluator for RuntimeContext {
         beta: f32,
         head_dim: u32,
     ) -> Result<f32> {
-        self.edbc.eval_barrier_pitchfork(cvoid, tau_eff, alpha, beta, head_dim)
+        self.edbc
+            .eval_barrier_pitchfork(cvoid, tau_eff, alpha, beta, head_dim)
     }
 }
 
@@ -1063,8 +1077,11 @@ impl PspmRouter for RuntimeContext {
         if head_dim == 0 || (head_dim % 2 != 0) {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
-        let total_heads = (config.num_fact_heads + config.num_logic_heads + config.num_explore_heads) as usize;
-        let expected_len = head_dim.checked_mul(total_heads).ok_or(crate::abi::GCSO_ERROR_INVALID_ARGUMENT)?;
+        let total_heads =
+            (config.num_fact_heads + config.num_logic_heads + config.num_explore_heads) as usize;
+        let expected_len = head_dim
+            .checked_mul(total_heads)
+            .ok_or(crate::abi::GCSO_ERROR_INVALID_ARGUMENT)?;
         if query_tensor.len() < expected_len {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -1278,10 +1295,10 @@ impl ZimmsStorage for RuntimeContext {
     fn get_track_offset(&self, track_id: u32) -> Result<u64> {
         let header_size = core::mem::size_of::<gcso_snapshot_header_t>() as u64;
         match track_id {
-            0 => Ok(header_size),                             // CORE track
-            1 => Ok(header_size + 1024),                      // I-CACHE track
-            2 => Ok(header_size + 2048),                      // P-CACHE track
-            3 => Ok(header_size + 3072),                      // SNAPSHOT track
+            0 => Ok(header_size),        // CORE track
+            1 => Ok(header_size + 1024), // I-CACHE track
+            2 => Ok(header_size + 2048), // P-CACHE track
+            3 => Ok(header_size + 3072), // SNAPSHOT track
             _ => Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT),
         }
     }
@@ -1293,14 +1310,6 @@ impl ZimmsStorage for RuntimeContext {
 
 /// Convenient prelude module importing essential GCSO traits, types, and alignment wrappers.
 pub mod prelude {
-    pub use crate::traits::{
-        AlignedSlice, AlignedSlice128, AlignedSlice16, AlignedSlice256, AlignedSlice32, AlignedSlice512,
-        AlignedSlice64, AlignedSliceMut, AlignedSliceMut128, AlignedSliceMut16, AlignedSliceMut256,
-        AlignedSliceMut32, AlignedSliceMut512, AlignedSliceMut64, AttractorField, DaesScratchpad,
-        EntropyEvaluator, GcsoResult, GcsoRuntimeContext, HotPathExecutionEngine, L2pSvdProjector,
-        PersonaPatcher, PhaseSteering, PointerActionHub, PprcCache, PspmRouter, SrlAdapter,
-        SwarmCellChunk, SystemCapabilityQuery, ZimmsStorage,
-    };
     pub use crate::abi::{
         gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_daes_slot_t,
         gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t,
@@ -1310,6 +1319,14 @@ pub mod prelude {
     };
     pub use crate::dpsr::DpsrEngine;
     pub use crate::edbc::EdbcEngine;
+    pub use crate::traits::{
+        AlignedSlice, AlignedSlice128, AlignedSlice16, AlignedSlice256, AlignedSlice32,
+        AlignedSlice512, AlignedSlice64, AlignedSliceMut, AlignedSliceMut128, AlignedSliceMut16,
+        AlignedSliceMut256, AlignedSliceMut32, AlignedSliceMut512, AlignedSliceMut64,
+        AttractorField, DaesScratchpad, EntropyEvaluator, GcsoResult, GcsoRuntimeContext,
+        HotPathExecutionEngine, L2pSvdProjector, PersonaPatcher, PhaseSteering, PointerActionHub,
+        PprcCache, PspmRouter, SrlAdapter, SwarmCellChunk, SystemCapabilityQuery, ZimmsStorage,
+    };
     pub use crate::{Config, Result, RuntimeContext};
 }
 
@@ -1356,7 +1373,10 @@ mod tests {
         assert!(config.validate().is_ok());
 
         let invalid_config = config.with_head_dim(127);
-        assert_eq!(invalid_config.validate(), Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT));
+        assert_eq!(
+            invalid_config.validate(),
+            Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT)
+        );
     }
 
     #[test]
@@ -1364,7 +1384,9 @@ mod tests {
         let config = Config::new();
         let mut ctx = RuntimeContext::new(config).unwrap();
 
-        assert!(ctx.set_system_prompt_anchor("System prompt anchor test", 1.0).is_ok());
+        assert!(ctx
+            .set_system_prompt_anchor("System prompt anchor test", 1.0)
+            .is_ok());
         assert_eq!(ctx.prompt_anchor_count(), 1);
 
         let mut trail = gcso_pointer_trail_t::default();
@@ -1377,7 +1399,9 @@ mod tests {
         assert!(required_size > 0);
 
         let mut buffer = alloc::vec![0u8; required_size];
-        assert!(ctx.serialize_to_bytes(&mut buffer, &mut required_size).is_ok());
+        assert!(ctx
+            .serialize_to_bytes(&mut buffer, &mut required_size)
+            .is_ok());
 
         let mut restored_ctx = RuntimeContext::new(config).unwrap();
         assert!(restored_ctx.deserialize_from_bytes(&buffer).is_ok());
@@ -1407,7 +1431,10 @@ mod tests {
         assert!(ctx.open_mmap("test.gcso", &mut desc).is_ok());
         assert_eq!(desc.fd_handle, 3);
 
-        assert_eq!(ctx.get_track_offset(0).unwrap(), core::mem::size_of::<gcso_snapshot_header_t>() as u64);
+        assert_eq!(
+            ctx.get_track_offset(0).unwrap(),
+            core::mem::size_of::<gcso_snapshot_header_t>() as u64
+        );
         assert!(ctx.close_mmap(&mut desc).is_ok());
     }
 }
