@@ -34,6 +34,9 @@ extern crate alloc;
 /// C-ABI bindings, FFI safety barriers, and status codes.
 pub mod abi;
 
+/// Dynamic Attractor Field Engine, Multi-Domain Space, and Accumulator Pressure Dynamics.
+pub mod attractor;
+
 /// Dynamic Phase Steering and RIPA rotation routines for Hot Path execution.
 pub mod dpsr;
 
@@ -46,18 +49,34 @@ pub mod math;
 /// Sparse Residual Adapter Layer (SRL) logic and dynamic adapters.
 pub mod srl;
 
-/// Unified container storage and memory-mapped persistence (ZIMMS).
-pub mod zimms;
-
 /// Cellular swarm coordination, Sidecar Pointer Table (SPT), and stigmergic routines.
 pub mod swarm;
 
 /// Core system contracts, traits, and alignment guarantees (Ground Truth).
 pub mod traits;
 
+/// Unified container storage and memory-mapped persistence (ZIMMS).
+pub mod zimms;
+
 // ===================================================================
 // Primary Re-exports for Ergonomics & Ground Truth Alignment
 // ===================================================================
+
+pub use crate::abi::{
+    gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_daes_slot_t,
+    gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t,
+    gcso_pspm_config_t, gcso_q7_t, gcso_snapshot_header_t, gcso_srl_descriptor_t,
+    gcso_tagged_ptr_t, gcso_zimms_descriptor_t, GcsoStatus, GCSO_SUCCESS,
+};
+
+pub use crate::attractor::{
+    AttractorAnchor, AttractorFieldEngine, MultiAttractorSpace, DOMAIN_KNOWLEDGE, DOMAIN_PERSONA,
+    DOMAIN_PHASE_REPULSION, DOMAIN_SYSTEM_BASELINE, DOMAIN_USER_INTERACTION,
+    MAX_ANCHORS_PER_FIELD, MAX_ATTRACTOR_DOMAINS, MAX_EMBEDDING_DIM,
+};
+
+pub use crate::dpsr::DpsrEngine;
+pub use crate::edbc::EdbcEngine;
 
 pub use crate::traits::{
     AlignedSlice, AlignedSlice128, AlignedSlice16, AlignedSlice256, AlignedSlice32,
@@ -67,16 +86,6 @@ pub use crate::traits::{
     L2pSvdProjector, PersonaPatcher, PhaseSteering, PointerActionHub, PprcCache, PspmRouter,
     SrlAdapter, SwarmCellChunk, SystemCapabilityQuery, ZimmsStorage,
 };
-
-pub use crate::abi::{
-    gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_daes_slot_t,
-    gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t,
-    gcso_pspm_config_t, gcso_q7_t, gcso_snapshot_header_t, gcso_srl_descriptor_t,
-    gcso_tagged_ptr_t, gcso_zimms_descriptor_t, GcsoStatus, GCSO_SUCCESS,
-};
-
-pub use crate::dpsr::DpsrEngine;
-pub use crate::edbc::EdbcEngine;
 
 /// Convenient crate-level result type alias for GCSO operations.
 pub type Result<T> = GcsoResult<T>;
@@ -284,23 +293,18 @@ impl Config {
     }
 }
 
-/// High-level safe Rust runtime context wrapper fully integrating DPSR, EDBC, Action Hub, DAES, Attractor Field,
-/// L2P-SVD Projector, and ZIMMS Storage routines.
+/// High-level safe Rust runtime context wrapper fully integrating DPSR, EDBC, Action Hub, DAES, Multi-Domain
+/// Attractor Space, L2P-SVD Projector, and ZIMMS Storage routines.
 #[derive(Debug)]
 pub struct RuntimeContext {
     config: Config,
     dpsr: DpsrEngine,
     edbc: EdbcEngine,
+    attractor_space: MultiAttractorSpace,
     daes_slot: gcso_daes_slot_t,
     step_counter: u64,
-    /// Track registered system prompt anchors for state tracking.
-    prompt_anchor_count: u32,
-    /// Last registered prompt anchor weight.
-    last_prompt_weight: f32,
     /// Active pointer trail entry tracking table.
     active_trail_count: u32,
-    /// Phase repulsion gain scalar.
-    repulsion_gain: f32,
 }
 
 impl RuntimeContext {
@@ -315,7 +319,11 @@ impl RuntimeContext {
         let mut edbc_state = gcso_edbc_state_t::default();
         edbc_state.singularity_eps = config.raw.entropy_singularity_eps;
         edbc_state.bifurcation_threshold = 1.5;
-        let edbc = EdbcEngine::new(edbc_state);
+        let mut edbc = EdbcEngine::new(edbc_state);
+        edbc.set_hysteresis_band(config.hysteresis_band);
+        edbc.set_tau_flux(config.tau_flux);
+
+        let attractor_space = MultiAttractorSpace::new();
 
         let mut daes_slot = gcso_daes_slot_t::default();
         daes_slot.mode = u32::from(config.raw.daes_mode);
@@ -324,12 +332,10 @@ impl RuntimeContext {
             config,
             dpsr,
             edbc,
+            attractor_space,
             daes_slot,
             step_counter: 0,
-            prompt_anchor_count: 0,
-            last_prompt_weight: 1.0,
             active_trail_count: 0,
-            repulsion_gain: 0.0,
         })
     }
 
@@ -354,6 +360,20 @@ impl RuntimeContext {
         &mut self.edbc
     }
 
+    /// Returns a reference to the Multi-Domain Attractor Space.
+    #[inline(always)]
+    #[must_use]
+    pub const fn attractor_space(&self) -> &MultiAttractorSpace {
+        &self.attractor_space
+    }
+
+    /// Returns a mutable reference to the Multi-Domain Attractor Space.
+    #[inline(always)]
+    #[must_use]
+    pub fn attractor_space_mut(&mut self) -> &mut MultiAttractorSpace {
+        &mut self.attractor_space
+    }
+
     /// Returns a reference to the active DAES slot structure.
     #[inline(always)]
     #[must_use]
@@ -375,13 +395,6 @@ impl RuntimeContext {
         self.step_counter
     }
 
-    /// Returns the number of registered prompt anchors.
-    #[inline(always)]
-    #[must_use]
-    pub const fn prompt_anchor_count(&self) -> u32 {
-        self.prompt_anchor_count
-    }
-
     /// Returns the active pointer trail count in the Action Hub.
     #[inline(always)]
     #[must_use]
@@ -390,7 +403,7 @@ impl RuntimeContext {
     }
 
     /// Executes a safe per-token step fully integrating DPSR phase steering (fused or standard),
-    /// EDBC entropy evaluation, and pointer trail status population in zero-allocation mode.
+    /// EDBC entropy evaluation, Multi-Domain Attractor superposition, and pointer trail status population in zero-allocation mode.
     #[inline]
     pub fn step_token_with_zscore(
         &mut self,
@@ -415,6 +428,7 @@ impl RuntimeContext {
         self.edbc.eval_stateful(token_z_score, &mut state_out)?;
 
         self.step_counter = self.step_counter.wrapping_add(1);
+        self.attractor_space.advance_step();
 
         if let Some(trail) = trail_out {
             trail.prev_ptr = trail.current_ptr;
@@ -422,6 +436,13 @@ impl RuntimeContext {
             trail.step_count = self.step_counter as u32;
             trail.stigmergic_density = 1.0;
             trail.flags = state_out.active_branch_mode;
+
+            let mut composite_phase = [0i8; 64];
+            let total_pull = self
+                .attractor_space
+                .evaluate_multi_domain_superposition(trail, &mut composite_phase);
+            trail.attractor_pull_force = total_pull;
+            trail.accumulated_phase_delta = composite_phase;
         }
 
         Ok(())
@@ -491,8 +512,10 @@ impl RuntimeContext {
         let ctx_buf = &mut buffer[action_hub_off..edbc_off];
         ctx_buf[..8].copy_from_slice(&self.step_counter.to_le_bytes());
         ctx_buf[8..12].copy_from_slice(&self.active_trail_count.to_le_bytes());
-        ctx_buf[12..16].copy_from_slice(&self.prompt_anchor_count.to_le_bytes());
-        ctx_buf[16..20].copy_from_slice(&self.last_prompt_weight.to_le_bytes());
+        let sys_anchors = self.attractor_space.system_field.active_count();
+        ctx_buf[12..16].copy_from_slice(&sys_anchors.to_le_bytes());
+        let rep_gain = self.attractor_space.system_field.repulsion_gain;
+        ctx_buf[16..20].copy_from_slice(&rep_gain.to_le_bytes());
 
         let edbc_state = self.edbc.state();
         let edbc_ptr = buffer[edbc_off..daes_off]
@@ -550,10 +573,6 @@ impl RuntimeContext {
             self.step_counter = u64::from_le_bytes(ctx_buf[..8].try_into().unwrap_or([0; 8]));
             self.active_trail_count =
                 u32::from_le_bytes(ctx_buf[8..12].try_into().unwrap_or([0; 4]));
-            self.prompt_anchor_count =
-                u32::from_le_bytes(ctx_buf[12..16].try_into().unwrap_or([0; 4]));
-            self.last_prompt_weight =
-                f32::from_le_bytes(ctx_buf[16..20].try_into().unwrap_or([0; 4]));
         }
 
         let edbc_size = core::mem::size_of::<gcso_edbc_state_t>();
@@ -562,6 +581,8 @@ impl RuntimeContext {
             // SAFETY: buffer contains at least edbc_size bytes at edbc_off offset.
             let edbc_st = unsafe { *edbc_ptr };
             self.edbc = EdbcEngine::new(edbc_st);
+            self.edbc.set_hysteresis_band(self.config.hysteresis_band);
+            self.edbc.set_tau_flux(self.config.tau_flux);
         }
 
         let daes_size = core::mem::size_of::<gcso_daes_slot_t>();
@@ -592,20 +613,10 @@ impl SystemCapabilityQuery for RuntimeContext {
 
     #[inline]
     fn query_capability(&self) -> gcso_capability_flags_t {
-        let caps = 0x01u64; // Base CPU capability
-        #[cfg(any(feature = "cuda", has_kernel_cuda))]
-        {
-            caps |= 1 << 1;
-        }
-        #[cfg(any(feature = "vulkan", has_kernel_vulkan))]
-        {
-            caps |= 1 << 2;
-        }
-        #[cfg(any(target_os = "macos", feature = "metal", has_kernel_metal))]
-        {
-            caps |= 1 << 3;
-        }
-        caps
+        cfg!(feature = "cuda") as u64 * (1 << 1)
+            | cfg!(feature = "vulkan") as u64 * (1 << 2)
+            | (cfg!(target_os = "macos") || cfg!(feature = "metal")) as u64 * (1 << 3)
+            | 0x01u64 // Base CPU capability
     }
 
     #[inline]
@@ -620,9 +631,8 @@ impl GcsoRuntimeContext for RuntimeContext {
     fn reset(&mut self) -> Result<()> {
         self.edbc.reset();
         self.step_counter = 0;
-        self.prompt_anchor_count = 0;
         self.active_trail_count = 0;
-        self.repulsion_gain = 0.0;
+        self.attractor_space.clear_all_domains()?;
         self.daes_slot = gcso_daes_slot_t::default();
         self.daes_slot.mode = u32::from(self.config.raw.daes_mode);
         Ok(())
@@ -630,14 +640,9 @@ impl GcsoRuntimeContext for RuntimeContext {
 
     #[inline]
     fn set_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> Result<()> {
-        if prompt.is_empty() || weight.is_nan() || weight.is_infinite() {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        if self.prompt_anchor_count >= self.config.raw.max_prompt_anchors {
-            return Err(crate::abi::GCSO_ERROR_ACTION_HUB_FULL);
-        }
-        self.prompt_anchor_count = self.prompt_anchor_count.wrapping_add(1);
-        self.last_prompt_weight = weight;
+        self.attractor_space
+            .system_field
+            .add_system_prompt_anchor(prompt, weight)?;
         Ok(())
     }
 
@@ -979,73 +984,59 @@ impl SwarmCellChunk for RuntimeContext {
 impl AttractorField for RuntimeContext {
     #[inline]
     fn anchor_count(&self) -> u32 {
-        self.prompt_anchor_count
+        self.attractor_space.system_field.active_count()
     }
 
     #[inline]
     fn add_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> Result<u32> {
-        self.set_system_prompt_anchor(prompt, weight)?;
-        Ok(self.prompt_anchor_count)
+        self.attractor_space
+            .system_field
+            .add_system_prompt_anchor(prompt, weight)
     }
 
     #[inline]
     fn add_embedding_anchor(
         &mut self,
-        _embedding: &AlignedSlice32<'_, f32>,
-        _anchor_type: gcso_anchor_type_t,
+        embedding: &AlignedSlice32<'_, f32>,
+        anchor_type: gcso_anchor_type_t,
         weight: f32,
     ) -> Result<u32> {
-        if weight.is_nan() || weight.is_infinite() {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        if self.prompt_anchor_count >= self.config.raw.max_prompt_anchors {
-            return Err(crate::abi::GCSO_ERROR_ACTION_HUB_FULL);
-        }
-        self.prompt_anchor_count = self.prompt_anchor_count.wrapping_add(1);
-        self.last_prompt_weight = weight;
-        Ok(self.prompt_anchor_count)
+        self.attractor_space
+            .system_field
+            .add_embedding_anchor(embedding, anchor_type, weight)
     }
 
     #[inline]
     fn add_anchor(
         &mut self,
-        _anchor_type: gcso_anchor_type_t,
-        _vec: &AlignedSlice32<'_, f32>,
+        anchor_type: gcso_anchor_type_t,
+        vec: &AlignedSlice32<'_, f32>,
         dim: usize,
     ) -> Result<u32> {
-        if dim == 0 {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        if self.prompt_anchor_count >= self.config.raw.max_prompt_anchors {
-            return Err(crate::abi::GCSO_ERROR_ACTION_HUB_FULL);
-        }
-        self.prompt_anchor_count = self.prompt_anchor_count.wrapping_add(1);
-        Ok(self.prompt_anchor_count)
+        self.attractor_space
+            .system_field
+            .add_anchor(anchor_type, vec, dim)
     }
 
     #[inline]
     fn inject_phase_repulsion(
         &mut self,
-        _repulsion_deltas: &AlignedSlice16<'_, gcso_q7_t>,
+        repulsion_deltas: &AlignedSlice16<'_, gcso_q7_t>,
         gain: f32,
     ) -> Result<()> {
-        if gain.is_nan() || gain.is_infinite() || gain <= 0.0 {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        self.repulsion_gain = gain;
-        Ok(())
+        self.attractor_space
+            .system_field
+            .inject_phase_repulsion(repulsion_deltas, gain)
     }
 
     #[inline]
     fn aggregate_bottom_up(&mut self) -> Result<u32> {
-        Ok(0)
+        self.attractor_space.system_field.aggregate_bottom_up()
     }
 
     #[inline]
     fn clear_anchors(&mut self) -> Result<()> {
-        self.prompt_anchor_count = 0;
-        self.last_prompt_weight = 1.0;
-        Ok(())
+        self.attractor_space.system_field.clear_anchors()
     }
 }
 
@@ -1330,6 +1321,11 @@ pub mod prelude {
         gcso_tagged_ptr_t, gcso_zimms_descriptor_t, GcsoStatus, GCSO_ABI_VERSION_HEX,
         GCSO_ABI_VERSION_STRING, GCSO_SUCCESS,
     };
+    pub use crate::attractor::{
+        AttractorAnchor, AttractorFieldEngine, MultiAttractorSpace, DOMAIN_KNOWLEDGE,
+        DOMAIN_PERSONA, DOMAIN_PHASE_REPULSION, DOMAIN_SYSTEM_BASELINE, DOMAIN_USER_INTERACTION,
+        MAX_ANCHORS_PER_FIELD, MAX_ATTRACTOR_DOMAINS, MAX_EMBEDDING_DIM,
+    };
     pub use crate::dpsr::DpsrEngine;
     pub use crate::edbc::EdbcEngine;
     pub use crate::traits::{
@@ -1400,7 +1396,7 @@ mod tests {
         assert!(ctx
             .set_system_prompt_anchor("System prompt anchor test", 1.0)
             .is_ok());
-        assert_eq!(ctx.prompt_anchor_count(), 1);
+        assert_eq!(ctx.anchor_count(), 1);
 
         let mut trail = gcso_pointer_trail_t::default();
         assert!(ctx.step_token(42, None, None, Some(&mut trail)).is_ok());
@@ -1419,7 +1415,20 @@ mod tests {
         let mut restored_ctx = RuntimeContext::new(config).unwrap();
         assert!(restored_ctx.deserialize_from_bytes(&buffer).is_ok());
         assert_eq!(restored_ctx.step_counter(), 1);
-        assert_eq!(restored_ctx.prompt_anchor_count(), 1);
+        assert_eq!(restored_ctx.anchor_count(), 1);
+    }
+
+    #[test]
+    fn test_runtime_context_system_capability_query() {
+        let config = Config::new();
+        let ctx = RuntimeContext::new(config).unwrap();
+
+        let (maj, min, pat) = ctx.abi_version();
+        assert_eq!((maj, min, pat), (0, 1, 1));
+        assert_eq!(ctx.abi_version_string(), "0.1.1");
+
+        let caps = ctx.query_capability();
+        assert_ne!(caps & 0x01, 0); // Base CPU capability present
     }
 
     #[test]

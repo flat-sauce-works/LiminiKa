@@ -25,10 +25,9 @@
 #![allow(clippy::too_many_lines)]
 
 use crate::abi::{
-    gcso_anchor_type_t, gcso_pointer_trail_t, gcso_q7_t, GcsoStatus, GCSO_ANCHOR_TYPE_CRYSTALLIZED,
-    GCSO_ANCHOR_TYPE_EMBEDDING, GCSO_ANCHOR_TYPE_PHASE_REPULSE, GCSO_ANCHOR_TYPE_SYSTEM_PROMPT,
-    GCSO_ANCHOR_TYPE_TOPOLOGICAL, GCSO_ERROR_ACTION_HUB_FULL, GCSO_ERROR_ATTRACTOR_NOT_FOUND,
-    GCSO_ERROR_INVALID_ARGUMENT, GCSO_SUCCESS,
+    gcso_anchor_type_t, gcso_pointer_trail_t, gcso_q7_t, GCSO_ANCHOR_TYPE_CRYSTALLIZED,
+    GCSO_ANCHOR_TYPE_EMBEDDING, GCSO_ANCHOR_TYPE_SYSTEM_PROMPT, GCSO_ANCHOR_TYPE_TOPOLOGICAL,
+    GCSO_ERROR_ACTION_HUB_FULL, GCSO_ERROR_INVALID_ARGUMENT,
 };
 use crate::traits::{AlignedSlice16, AlignedSlice32, AttractorField, GcsoResult};
 
@@ -117,7 +116,7 @@ impl AttractorAnchor {
             let half_life = if self.half_life_steps == 0 {
                 1000.0
             } else {
-                f32::from(self.half_life_steps)
+                self.half_life_steps as f32
             };
             // Linear-rational decay approximation for no_std efficiency: 1 / (1 + dt / half_life)
             let temporal_decay = 1.0 / (1.0 + (dt / half_life));
@@ -743,7 +742,7 @@ mod tests {
         let id2 = engine
             .add_embedding_anchor(&slice, GCSO_ANCHOR_TYPE_EMBEDDING, 0.5)
             .unwrap();
-        let id3 = engine.add_system_prompt_anchor("Anchor 3", 2.0).unwrap();
+        let _id3 = engine.add_system_prompt_anchor("Anchor 3", 2.0).unwrap();
 
         assert_eq!(engine.active_count(), 3);
         assert!(engine.is_saturated());
