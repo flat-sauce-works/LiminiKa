@@ -214,19 +214,27 @@ fn main() {
         && metal_explicit
             .unwrap_or_else(|| env::var("CARGO_FEATURE_METAL").is_ok() || target_os == "macos");
 
-    // Detect CPU SIMD features from Cargo feature flags or compiler target_features
-    let has_avx2 =
-        env::var("CARGO_FEATURE_AVX2").is_ok() || has_target_feature(&target_features, "avx2");
-    let has_avx512 = env::var("CARGO_FEATURE_AVX512").is_ok()
-        || has_target_feature(&target_features, "avx512f")
-        || has_target_feature(&target_features, "avx512");
-    let has_neon = env::var("CARGO_FEATURE_NEON").is_ok()
-        || has_target_feature(&target_features, "neon")
-        || (target_arch == "aarch64" && is_apple);
-    let has_sve =
-        env::var("CARGO_FEATURE_SVE").is_ok() || has_target_feature(&target_features, "sve");
-    let has_rvv =
-        env::var("CARGO_FEATURE_RVV").is_ok() || has_target_feature(&target_features, "v");
+    // Detect CPU SIMD features conditionally according to target architecture to prevent cross-compilation & cross-architecture flag leaking
+    let is_x86_64 = target_arch == "x86_64";
+    let is_aarch64 = target_arch == "aarch64";
+    let is_riscv64 = target_arch == "riscv64";
+
+    let has_avx2 = is_x86_64
+        && (env::var("CARGO_FEATURE_AVX2").is_ok()
+            || has_target_feature(&target_features, "avx2"));
+    let has_avx512 = is_x86_64
+        && (env::var("CARGO_FEATURE_AVX512").is_ok()
+            || has_target_feature(&target_features, "avx512f")
+            || has_target_feature(&target_features, "avx512"));
+    let has_neon = is_aarch64
+        && (env::var("CARGO_FEATURE_NEON").is_ok()
+            || has_target_feature(&target_features, "neon")
+            || is_apple);
+    let has_sve = is_aarch64
+        && !is_apple
+        && (env::var("CARGO_FEATURE_SVE").is_ok() || has_target_feature(&target_features, "sve"));
+    let has_rvv = is_riscv64
+        && (env::var("CARGO_FEATURE_RVV").is_ok() || has_target_feature(&target_features, "v"));
 
     // Emit custom Rust conditional compilation flags based on backend availability
     if enable_cuda {
@@ -329,10 +337,8 @@ fn main() {
             } else if has_avx2 {
                 cfg.cxxflag("-mavx2").cxxflag("-mfma");
             }
-        } else if target_arch == "aarch64" {
-            if has_sve {
-                cfg.cxxflag("-march=armv8-a+sve");
-            }
+        } else if target_arch == "aarch64" && has_sve {
+            cfg.cxxflag("-march=armv8-a+sve");
         }
     }
 
