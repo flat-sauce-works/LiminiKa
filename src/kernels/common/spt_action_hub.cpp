@@ -16,7 +16,7 @@ GCSO_EXTERN_C_BEGIN
 // ===================================================================
 
 /**
- * @brief Allocates an Action Hub (Sidecar Pointer Table - SPT) instance.
+ * @brief Allocates an Action Hub (Sidecar Pointer Table - SPT) instance using strongly-typed handles.
  *
  * Cold Path Execution: Uses gcso_aligned_new for 32-byte alignment.
  *
@@ -39,17 +39,16 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_create(
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        auto* impl = gcso_aligned_new<gcso_action_hub_impl>();
-        if (GCSO_UNLIKELY(impl == nullptr)) {
+        auto* hub = gcso_aligned_new<gcso_action_hub_opaque>();
+        if (GCSO_UNLIKELY(hub == nullptr)) {
             return GCSO_ERROR_OUT_OF_MEMORY;
         }
-        std::memset(impl, 0, sizeof(gcso_action_hub_impl));
-        impl->capacity = capacity;
-        impl->active_count = 0;
-        impl->last_trail_ptr = 0;
-        impl->is_active = true;
+        hub->capacity = capacity;
+        hub->active_count = 0;
+        hub->last_trail_ptr = 0;
+        hub->is_active = true;
 
-        *hub_out = reinterpret_cast<gcso_action_hub_handle_t>(impl);
+        *hub_out = hub;
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -77,26 +76,25 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_step_pointer(
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_impl) != 0 ||
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
                           reinterpret_cast<uintptr_t>(trail_out) % alignof(gcso_pointer_trail_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        auto* ctx_impl = reinterpret_cast<gcso_context_impl*>(context);
-        if (GCSO_UNLIKELY(!ctx_impl->is_initialized)) {
+        if (GCSO_UNLIKELY(!context->is_initialized)) {
             return GCSO_ERROR_INVALID_STATE;
         }
 
-        const uint64_t previous = ctx_impl->last_ptr;
-        ctx_impl->step_count++;
-        ctx_impl->last_ptr = current_ptr;
+        const uint64_t previous = context->last_ptr;
+        context->step_count++;
+        context->last_ptr = current_ptr;
 
         std::memset(trail_out, 0, sizeof(gcso_pointer_trail_t));
         trail_out->current_ptr = current_ptr;
         trail_out->prev_ptr = previous;
-        trail_out->step_count = static_cast<uint32_t>(ctx_impl->step_count & 0xFFFFFFFFULL);
+        trail_out->step_count = static_cast<uint32_t>(context->step_count & 0xFFFFFFFFULL);
         trail_out->stigmergic_density = 1.0f;
-        std::memcpy(trail_out->accumulated_phase_delta, ctx_impl->accumulated_phase, sizeof(ctx_impl->accumulated_phase));
+        std::memcpy(trail_out->accumulated_phase_delta, context->accumulated_phase, sizeof(context->accumulated_phase));
 
         return GCSO_SUCCESS;
     } catch (...) {
@@ -145,17 +143,16 @@ GCSO_API gcso_status_t GCSO_CALL gcso_swarm_cell_chunk_step(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_impl) != 0 ||
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
                           reinterpret_cast<uintptr_t>(mask) % alignof(gcso_paged_bitmask_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
-        (void)mask;
-        auto* ctx_impl = reinterpret_cast<gcso_context_impl*>(context);
-        if (GCSO_UNLIKELY(!ctx_impl->is_initialized)) {
+
+        if (GCSO_UNLIKELY(!context->is_initialized)) {
             return GCSO_ERROR_INVALID_STATE;
         }
 
-        ctx_impl->step_count += chunk_len;
+        context->step_count += chunk_len;
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -187,21 +184,20 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_pull_trail_to_attractor(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_impl) != 0)) {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
-        auto* ctx_impl = reinterpret_cast<gcso_context_impl*>(context);
-        if (GCSO_UNLIKELY(!ctx_impl->is_initialized)) {
+        if (GCSO_UNLIKELY(!context->is_initialized)) {
             return GCSO_ERROR_INVALID_STATE;
         }
 
         const uint32_t idx = trail_id % 64;
-        const float current_val = static_cast<float>(ctx_impl->accumulated_phase[idx]);
+        const float current_val = static_cast<float>(context->accumulated_phase[idx]);
         const float target_val = current_val + pull_force * static_cast<float>(anchor_id % 8);
         const float rounded_val = std::round(target_val);
         const float clamped_val = std::clamp(rounded_val, -128.0f, 127.0f);
 
-        ctx_impl->accumulated_phase[idx] = static_cast<gcso_q7_t>(clamped_val);
+        context->accumulated_phase[idx] = static_cast<gcso_q7_t>(clamped_val);
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -225,17 +221,16 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_link_hallucinated_trails(
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_impl) != 0)) {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
-        auto* ctx_impl = reinterpret_cast<gcso_context_impl*>(context);
-        if (GCSO_UNLIKELY(!ctx_impl->is_initialized)) {
+        if (GCSO_UNLIKELY(!context->is_initialized)) {
             return GCSO_ERROR_INVALID_STATE;
         }
 
         const uint32_t src_idx = src_trail_id % 64;
         const uint32_t dst_idx = dst_trail_id % 64;
-        ctx_impl->accumulated_phase[src_idx] = ctx_impl->accumulated_phase[dst_idx];
+        context->accumulated_phase[src_idx] = context->accumulated_phase[dst_idx];
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -326,8 +321,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_paged_block_warp_bitmask(
 }
 
 /**
- * @brief Destroys an Action Hub instance.
- * Safe No-Op: Accepts NULL pointers safely returning GCSO_SUCCESS.
+ * @brief Destroys an Action Hub instance. Safe No-Op if NULL.
  *
  * @param hub Action hub handle to destroy (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
@@ -338,12 +332,11 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_destroy(
     if (GCSO_UNLIKELY(hub == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(hub) % alignof(gcso_action_hub_impl) != 0)) {
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(hub) % alignof(gcso_action_hub_opaque) != 0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
-        auto* impl = reinterpret_cast<gcso_action_hub_impl*>(hub);
-        gcso_aligned_delete(impl);
+        gcso_aligned_delete(hub);
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -355,7 +348,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_destroy(
 // ===================================================================
 
 /**
- * @brief Allocates and initializes a DAES slot instance.
+ * @brief Allocates and initializes a DAES slot instance using strongly-typed handles.
  *
  * @param slot_out Pointer to receive allocated DAES slot handle.
  * @return GCSO_SUCCESS or error status code.
@@ -371,13 +364,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_slot_create(
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        auto* impl = gcso_aligned_new<gcso_daes_slot_t>();
-        if (GCSO_UNLIKELY(impl == nullptr)) {
+        auto* slot = gcso_aligned_new<gcso_daes_slot_t>();
+        if (GCSO_UNLIKELY(slot == nullptr)) {
             return GCSO_ERROR_OUT_OF_MEMORY;
         }
-        std::memset(impl, 0, sizeof(gcso_daes_slot_t));
+        std::memset(slot, 0, sizeof(gcso_daes_slot_t));
 
-        *slot_out = reinterpret_cast<gcso_daes_slot_handle_t>(impl);
+        *slot_out = reinterpret_cast<gcso_daes_slot_handle_t>(slot);
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -412,7 +405,6 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_fast_path_lookup(
             return GCSO_ERROR_INVALID_STATE;
         }
 
-        // Dynamically compute target shortcut slot index via O(1) hashing across the 4 DAES shortcut registers
         const uint32_t slot_idx = gcso_action_hub_hash_slot256_index(input_key) % 4;
         const uint64_t shortcut = slot->fast_path_shortcuts[slot_idx];
 
@@ -523,8 +515,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_evaluate_auto_tune(
 }
 
 /**
- * @brief Destroys a DAES slot instance.
- * Safe No-Op: Accepts NULL pointers safely returning GCSO_SUCCESS.
+ * @brief Destroys a DAES slot instance. Safe No-Op if NULL.
  *
  * @param slot Handle to DAES slot instance (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
@@ -539,8 +530,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_slot_destroy(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
-        auto* impl = reinterpret_cast<gcso_daes_slot_t*>(slot);
-        gcso_aligned_delete(impl);
+        gcso_aligned_delete(reinterpret_cast<gcso_daes_slot_t*>(slot));
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;

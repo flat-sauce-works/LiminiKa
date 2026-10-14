@@ -8,8 +8,11 @@
 //! 1. Zero-allocation Hot Path execution ($\mathcal{O}(1)$ per-token loops).
 //! 2. Mezzo cellular block coordination and bitmask reductions.
 //! 3. Cold Path asynchronous steering, Sheaf entropy evaluations, and ZIMMS persistence.
+//! 4. Hardware-aligned slice boundaries (16B, 32B, 64B, 128B, 256B, 512B) for AVX-512
+//!    and GPU Tensor Core Direct-DMA Zero-Copy memory transfers.
 //!
-//! All abstractions enforce static dispatch and memory alignment guarantees at the type level.
+//! All dynamic `cvoid` / raw pointer indirections have been fully replaced with
+//! strongly-typed domain opaque handles and memory-aligned slice wrappers.
 
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::must_use_candidate)]
@@ -17,8 +20,11 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::manual_slice_size_calculation)]
 
-use core::ops::{Deref, DerefMut, Index, IndexMut, Range};
-use core::slice;
+use core::ops::{
+    Deref, DerefMut, Index, IndexMut, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo,
+    RangeToInclusive,
+};
+use core::slice::{self, SliceIndex};
 
 use crate::abi::{
     gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_daes_slot_t,
@@ -31,8 +37,94 @@ use crate::abi::{
 pub type GcsoResult<T> = Result<T, GcsoStatus>;
 
 // ===================================================================
+// Strongly-Typed Opaque Handle Mapping Definitions (Replacing untyped cvoid)
+// ===================================================================
+
+/// Strongly-typed opaque context facade structure matching C-ABI.
+#[repr(C)]
+pub struct GcsoContextOpaque {
+    _private: [u8; 0],
+}
+
+/// Strongly-typed opaque snapshot container structure matching C-ABI.
+#[repr(C)]
+pub struct GcsoContainerOpaque {
+    _private: [u8; 0],
+}
+
+/// Strongly-typed opaque Sidecar Pointer Table (Action Hub) structure matching C-ABI.
+#[repr(C)]
+pub struct GcsoActionHubOpaque {
+    _private: [u8; 0],
+}
+
+/// Strongly-typed opaque Dynamic Adaptive Extension Scratchpad slot structure matching C-ABI.
+#[repr(C)]
+pub struct GcsoDaesSlotOpaque {
+    _private: [u8; 0],
+}
+
+/// Strongly-typed opaque topological Attractor Field structure matching C-ABI.
+#[repr(C)]
+pub struct GcsoAttractorFieldOpaque {
+    _private: [u8; 0],
+}
+
+/// Strongly-typed opaque Entropy-Driven Decoding Branch Controller structure matching C-ABI.
+#[repr(C)]
+pub struct GcsoEdbcControllerOpaque {
+    _private: [u8; 0],
+}
+
+/// Strongly-typed opaque DPSR phase steering kernel structure matching C-ABI.
+#[repr(C)]
+pub struct GcsoDpsrKernelOpaque {
+    _private: [u8; 0],
+}
+
+/// Strongly-typed opaque Phase-Steered Parallel Multi-head router structure matching C-ABI.
+#[repr(C)]
+pub struct GcsoPspmRouterOpaque {
+    _private: [u8; 0],
+}
+
+/// Strongly-typed opaque Sparse Residual Adapter Layer structure matching C-ABI.
+#[repr(C)]
+pub struct GcsoSrlAdapterOpaque {
+    _private: [u8; 0],
+}
+
+/// Strongly-typed handle to runtime context instance.
+pub type GcsoContextHandle = *mut GcsoContextOpaque;
+/// Strongly-typed handle to container instance.
+pub type GcsoContainerHandle = *mut GcsoContainerOpaque;
+/// Strongly-typed handle to Action Hub instance.
+pub type GcsoActionHubHandle = *mut GcsoActionHubOpaque;
+/// Strongly-typed handle to DAES slot instance.
+pub type GcsoDaesSlotHandle = *mut GcsoDaesSlotOpaque;
+/// Strongly-typed handle to Attractor Field instance.
+pub type GcsoAttractorFieldHandle = *mut GcsoAttractorFieldOpaque;
+/// Strongly-typed handle to EDBC controller instance.
+pub type GcsoEdbcControllerHandle = *mut GcsoEdbcControllerOpaque;
+/// Strongly-typed handle to DPSR kernel instance.
+pub type GcsoDpsrKernelHandle = *mut GcsoDpsrKernelOpaque;
+/// Strongly-typed handle to PSPM router instance.
+pub type GcsoPspmRouterHandle = *mut GcsoPspmRouterOpaque;
+/// Strongly-typed handle to SRL adapter instance.
+pub type GcsoSrlAdapterHandle = *mut GcsoSrlAdapterOpaque;
+
+// ===================================================================
 // Const-Generic Zero-Copy Aligned Slice Wrappers
 // ===================================================================
+
+/// Const-generic helper to perform compile-time power-of-two alignment assertions.
+struct AlignCheck<const ALIGN: usize>;
+impl<const ALIGN: usize> AlignCheck<ALIGN> {
+    const VALID: () = assert!(
+        ALIGN > 0 && ALIGN.is_power_of_two(),
+        "ALIGN constraint must be a non-zero power of two"
+    );
+}
 
 /// Zero-copy SIMD/Cacheline aligned slice wrapper preventing unaligned memory access in the Hot Path.
 ///
@@ -48,24 +140,32 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
     #[inline(always)]
     #[must_use]
     pub const fn empty() -> Self {
+        let () = AlignCheck::<ALIGN>::VALID;
         Self { slice: &[] }
     }
 
     /// Creates a new aligned slice wrapper after validating pointer memory alignment.
     ///
     /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `ALIGN` is zero or not a power of two.
     /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if the memory address is not `ALIGN`-byte aligned.
     #[inline(always)]
     pub fn new(slice: &'a [T]) -> GcsoResult<Self> {
-        if ALIGN == 0 || !ALIGN.is_power_of_two() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
+        let () = AlignCheck::<ALIGN>::VALID;
         if slice.is_empty() || ((slice.as_ptr() as usize) & (ALIGN - 1)) == 0 {
             Ok(Self { slice })
         } else {
             Err(GCSO_ERROR_MISALIGNED_POINTER)
         }
+    }
+
+    /// Creates a new aligned slice wrapper from a single reference after validating memory alignment.
+    ///
+    /// # Errors
+    /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if the memory address is not `ALIGN`-byte aligned.
+    #[inline(always)]
+    pub fn from_ref(value: &'a T) -> GcsoResult<Self> {
+        let slice = slice::from_ref(value);
+        Self::new(slice)
     }
 
     /// Safely constructs an `AlignedSlice` from a raw pointer and element count across FFI boundaries.
@@ -79,6 +179,7 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
     /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if `ptr` violates the byte alignment constraint.
     #[inline(always)]
     pub unsafe fn from_raw_parts(ptr: *const T, len: usize) -> GcsoResult<Self> {
+        let () = AlignCheck::<ALIGN>::VALID;
         if len == 0 {
             return Ok(Self::empty());
         }
@@ -97,6 +198,13 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
     #[inline(always)]
     #[must_use]
     pub fn as_slice(&self) -> &'a [T] {
+        self.slice
+    }
+
+    /// Consumes the wrapper and returns the underlying immutable slice reference with lifetime `'a`.
+    #[inline(always)]
+    #[must_use]
+    pub fn into_slice(self) -> &'a [T] {
         self.slice
     }
 
@@ -149,6 +257,12 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
         self.slice.get(index)
     }
 
+    /// Returns an iterator over the aligned slice elements.
+    #[inline(always)]
+    pub fn iter(&self) -> core::slice::Iter<'a, T> {
+        self.slice.iter()
+    }
+
     /// Returns an iterator over exact non-overlapping chunks of length `chunk_size`.
     #[inline(always)]
     pub fn chunks_exact(&self, chunk_size: usize) -> core::slice::ChunksExact<'a, T> {
@@ -180,13 +294,23 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
             && (slice.is_empty() || ((slice.as_ptr() as usize) & (ALIGN - 1)) == 0)
     }
 
+    /// Checks if a raw pointer satisfies the const alignment requirement and is non-null.
+    #[inline(always)]
+    #[must_use]
+    pub fn is_aligned_ptr(ptr: *const T) -> bool {
+        ALIGN != 0 && ALIGN.is_power_of_two() && !ptr.is_null() && ((ptr as usize) & (ALIGN - 1)) == 0
+    }
+
     /// Creates an aligned subslice if the subslice start address satisfies alignment constraints.
     ///
     /// # Errors
     /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if index range is out of bounds.
     /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if subslice start address is misaligned.
     #[inline(always)]
-    pub fn subslice(&self, range: Range<usize>) -> GcsoResult<Self> {
+    pub fn subslice<R>(&self, range: R) -> GcsoResult<Self>
+    where
+        R: SliceIndex<[T], Output = [T]>,
+    {
         let sub = self.slice.get(range).ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
         Self::new(sub)
     }
@@ -247,6 +371,51 @@ impl<'a, T, const ALIGN: usize> Index<Range<usize>> for AlignedSlice<'a, T, ALIG
     }
 }
 
+impl<'a, T, const ALIGN: usize> Index<RangeFrom<usize>> for AlignedSlice<'a, T, ALIGN> {
+    type Output = [T];
+
+    #[inline(always)]
+    fn index(&self, range: RangeFrom<usize>) -> &Self::Output {
+        &self.slice[range]
+    }
+}
+
+impl<'a, T, const ALIGN: usize> Index<RangeTo<usize>> for AlignedSlice<'a, T, ALIGN> {
+    type Output = [T];
+
+    #[inline(always)]
+    fn index(&self, range: RangeTo<usize>) -> &Self::Output {
+        &self.slice[range]
+    }
+}
+
+impl<'a, T, const ALIGN: usize> Index<RangeFull> for AlignedSlice<'a, T, ALIGN> {
+    type Output = [T];
+
+    #[inline(always)]
+    fn index(&self, range: RangeFull) -> &Self::Output {
+        &self.slice[range]
+    }
+}
+
+impl<'a, T, const ALIGN: usize> Index<RangeInclusive<usize>> for AlignedSlice<'a, T, ALIGN> {
+    type Output = [T];
+
+    #[inline(always)]
+    fn index(&self, range: RangeInclusive<usize>) -> &Self::Output {
+        &self.slice[range]
+    }
+}
+
+impl<'a, T, const ALIGN: usize> Index<RangeToInclusive<usize>> for AlignedSlice<'a, T, ALIGN> {
+    type Output = [T];
+
+    #[inline(always)]
+    fn index(&self, range: RangeToInclusive<usize>) -> &Self::Output {
+        &self.slice[range]
+    }
+}
+
 impl<'a, T, const ALIGN: usize> IntoIterator for AlignedSlice<'a, T, ALIGN> {
     type Item = &'a T;
     type IntoIter = core::slice::Iter<'a, T>;
@@ -288,24 +457,32 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     #[inline(always)]
     #[must_use]
     pub fn empty() -> Self {
+        let () = AlignCheck::<ALIGN>::VALID;
         Self { slice: &mut [] }
     }
 
     /// Creates a new mutable aligned slice wrapper after validating memory alignment.
     ///
     /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `ALIGN` is zero or not a power of two.
     /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if the memory address is not `ALIGN`-byte aligned.
     #[inline(always)]
     pub fn new(slice: &'a mut [T]) -> GcsoResult<Self> {
-        if ALIGN == 0 || !ALIGN.is_power_of_two() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
+        let () = AlignCheck::<ALIGN>::VALID;
         if slice.is_empty() || ((slice.as_ptr() as usize) & (ALIGN - 1)) == 0 {
             Ok(Self { slice })
         } else {
             Err(GCSO_ERROR_MISALIGNED_POINTER)
         }
+    }
+
+    /// Creates a new mutable aligned slice wrapper from a single mutable reference after validating alignment.
+    ///
+    /// # Errors
+    /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if the memory address is not `ALIGN`-byte aligned.
+    #[inline(always)]
+    pub fn from_mut(value: &'a mut T) -> GcsoResult<Self> {
+        let slice = slice::from_mut(value);
+        Self::new(slice)
     }
 
     /// Safely constructs an `AlignedSliceMut` from a raw mutable pointer and element count across FFI boundaries.
@@ -319,6 +496,7 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if `ptr` violates the byte alignment constraint.
     #[inline(always)]
     pub unsafe fn from_raw_parts_mut(ptr: *mut T, len: usize) -> GcsoResult<Self> {
+        let () = AlignCheck::<ALIGN>::VALID;
         if len == 0 {
             return Ok(Self::empty());
         }
@@ -347,6 +525,13 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
         self.slice
     }
 
+    /// Consumes the wrapper and returns the underlying mutable slice reference with lifetime `'a`.
+    #[inline(always)]
+    #[must_use]
+    pub fn into_mut_slice(self) -> &'a mut [T] {
+        self.slice
+    }
+
     /// Reborrows the mutable slice as an immutable `AlignedSlice`.
     #[inline(always)]
     #[must_use]
@@ -354,10 +539,19 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
         AlignedSlice { slice: self.slice }
     }
 
+    /// Consumes `self` and converts it into an immutable `AlignedSlice` with lifetime `'a`.
+    #[inline(always)]
+    #[must_use]
+    pub fn into_aligned_slice(self) -> AlignedSlice<'a, T, ALIGN> {
+        AlignedSlice { slice: self.slice }
+    }
+
     /// Reborrows `self` for a shorter lifetime.
     #[inline(always)]
     pub fn reborrow(&mut self) -> AlignedSliceMut<'_, T, ALIGN> {
-        AlignedSliceMut { slice: self.slice }
+        AlignedSliceMut {
+            slice: &mut *self.slice,
+        }
     }
 
     /// Returns raw mutable pointer to the underlying buffer.
@@ -420,6 +614,18 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
         self.slice.last_mut()
     }
 
+    /// Returns an immutable iterator over the aligned mutable slice.
+    #[inline(always)]
+    pub fn iter(&self) -> core::slice::Iter<'_, T> {
+        self.slice.iter()
+    }
+
+    /// Returns a mutable iterator over the aligned mutable slice.
+    #[inline(always)]
+    pub fn iter_mut(&mut self) -> core::slice::IterMut<'_, T> {
+        self.slice.iter_mut()
+    }
+
     /// Returns an iterator over exact non-overlapping mutable chunks of length `chunk_size`.
     #[inline(always)]
     pub fn chunks_exact_mut(&mut self, chunk_size: usize) -> core::slice::ChunksExactMut<'_, T> {
@@ -476,16 +682,23 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
             && (slice.is_empty() || ((slice.as_ptr() as usize) & (ALIGN - 1)) == 0)
     }
 
+    /// Checks if a raw pointer satisfies the const alignment requirement and is non-null.
+    #[inline(always)]
+    #[must_use]
+    pub fn is_aligned_ptr(ptr: *const T) -> bool {
+        ALIGN != 0 && ALIGN.is_power_of_two() && !ptr.is_null() && ((ptr as usize) & (ALIGN - 1)) == 0
+    }
+
     /// Creates a mutable subslice if the subslice start address satisfies alignment constraints.
     ///
     /// # Errors
     /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if index range is out of bounds.
     /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if subslice start address is misaligned.
     #[inline(always)]
-    pub fn subslice_mut(
-        &mut self,
-        range: Range<usize>,
-    ) -> GcsoResult<AlignedSliceMut<'_, T, ALIGN>> {
+    pub fn subslice_mut<R>(&mut self, range: R) -> GcsoResult<AlignedSliceMut<'_, T, ALIGN>>
+    where
+        R: SliceIndex<[T], Output = [T]>,
+    {
         let sub = self
             .slice
             .get_mut(range)
@@ -612,6 +825,88 @@ impl<'a, T, const ALIGN: usize> IndexMut<Range<usize>> for AlignedSliceMut<'a, T
     }
 }
 
+impl<'a, T, const ALIGN: usize> Index<RangeFrom<usize>> for AlignedSliceMut<'a, T, ALIGN> {
+    type Output = [T];
+
+    #[inline(always)]
+    fn index(&self, range: RangeFrom<usize>) -> &Self::Output {
+        &self.slice[range]
+    }
+}
+
+impl<'a, T, const ALIGN: usize> IndexMut<RangeFrom<usize>> for AlignedSliceMut<'a, T, ALIGN> {
+    #[inline(always)]
+    fn index_mut(&mut self, range: RangeFrom<usize>) -> &mut Self::Output {
+        &mut self.slice[range]
+    }
+}
+
+impl<'a, T, const ALIGN: usize> Index<RangeTo<usize>> for AlignedSliceMut<'a, T, ALIGN> {
+    type Output = [T];
+
+    #[inline(always)]
+    fn index(&self, range: RangeTo<usize>) -> &Self::Output {
+        &self.slice[range]
+    }
+}
+
+impl<'a, T, const ALIGN: usize> IndexMut<RangeTo<usize>> for AlignedSliceMut<'a, T, ALIGN> {
+    #[inline(always)]
+    fn index_mut(&mut self, range: RangeTo<usize>) -> &mut Self::Output {
+        &mut self.slice[range]
+    }
+}
+
+impl<'a, T, const ALIGN: usize> Index<RangeFull> for AlignedSliceMut<'a, T, ALIGN> {
+    type Output = [T];
+
+    #[inline(always)]
+    fn index(&self, range: RangeFull) -> &Self::Output {
+        &self.slice[range]
+    }
+}
+
+impl<'a, T, const ALIGN: usize> IndexMut<RangeFull> for AlignedSliceMut<'a, T, ALIGN> {
+    #[inline(always)]
+    fn index_mut(&mut self, range: RangeFull) -> &mut Self::Output {
+        &mut self.slice[range]
+    }
+}
+
+impl<'a, T, const ALIGN: usize> Index<RangeInclusive<usize>> for AlignedSliceMut<'a, T, ALIGN> {
+    type Output = [T];
+
+    #[inline(always)]
+    fn index(&self, range: RangeInclusive<usize>) -> &Self::Output {
+        &self.slice[range]
+    }
+}
+
+impl<'a, T, const ALIGN: usize> IndexMut<RangeInclusive<usize>> for AlignedSliceMut<'a, T, ALIGN> {
+    #[inline(always)]
+    fn index_mut(&mut self, range: RangeInclusive<usize>) -> &mut Self::Output {
+        &mut self.slice[range]
+    }
+}
+
+impl<'a, T, const ALIGN: usize> Index<RangeToInclusive<usize>> for AlignedSliceMut<'a, T, ALIGN> {
+    type Output = [T];
+
+    #[inline(always)]
+    fn index(&self, range: RangeToInclusive<usize>) -> &Self::Output {
+        &self.slice[range]
+    }
+}
+
+impl<'a, T, const ALIGN: usize> IndexMut<RangeToInclusive<usize>>
+    for AlignedSliceMut<'a, T, ALIGN>
+{
+    #[inline(always)]
+    fn index_mut(&mut self, range: RangeToInclusive<usize>) -> &mut Self::Output {
+        &mut self.slice[range]
+    }
+}
+
 impl<'a, T, const ALIGN: usize> IntoIterator for AlignedSliceMut<'a, T, ALIGN> {
     type Item = &'a mut T;
     type IntoIter = core::slice::IterMut<'a, T>;
@@ -641,6 +936,10 @@ impl<'a, T, const ALIGN: usize> TryFrom<&'a mut [T]> for AlignedSliceMut<'a, T, 
     }
 }
 
+// ===================================================================
+// Type Aliases for Standard SIMD, Cacheline, and GPU Memory Alignment Boundaries
+// ===================================================================
+
 /// 16-byte aligned immutable slice wrapper for DPSR phase steering arrays.
 pub type AlignedSlice16<'a, T> = AlignedSlice<'a, T, 16>;
 
@@ -664,6 +963,18 @@ pub type AlignedSlice128<'a, T> = AlignedSlice<'a, T, 128>;
 
 /// 128-byte aligned mutable slice wrapper for dual cache line pointer trails.
 pub type AlignedSliceMut128<'a, T> = AlignedSliceMut<'a, T, 128>;
+
+/// 256-byte aligned immutable slice wrapper for AVX-512 and GPU Tensor Core tile boundaries.
+pub type AlignedSlice256<'a, T> = AlignedSlice<'a, T, 256>;
+
+/// 256-byte aligned mutable slice wrapper for AVX-512 and GPU Tensor Core tile boundaries.
+pub type AlignedSliceMut256<'a, T> = AlignedSliceMut<'a, T, 256>;
+
+/// 512-byte aligned immutable slice wrapper for GPU Tensor Core matrix page and Direct-DMA memory transfers.
+pub type AlignedSlice512<'a, T> = AlignedSlice<'a, T, 512>;
+
+/// 512-byte aligned mutable slice wrapper for GPU Tensor Core matrix page and Direct-DMA memory transfers.
+pub type AlignedSliceMut512<'a, T> = AlignedSliceMut<'a, T, 512>;
 
 /// Helper function to check pointer alignment for a generic custom byte boundary.
 #[inline(always)]
@@ -807,6 +1118,16 @@ pub trait PhaseSteering: Send + Sync {
         max_rad: f32,
     ) -> GcsoResult<()>;
 
+    /// Applies soft phase damping to smooth out transient phase rotation spikes in zero-allocation mode.
+    ///
+    /// # Errors
+    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `damping_factor` is negative or non-finite.
+    fn apply_soft_phase_damping(
+        &self,
+        query_tensor: &mut AlignedSliceMut32<'_, f32>,
+        damping_factor: f32,
+    ) -> GcsoResult<()>;
+
     /// QDPS discrete filter: cuts off phase rotation steps falling below `min_step_rad`.
     ///
     /// Prevents grid jitter and numerical oscillation under ultra-low quantization.
@@ -892,6 +1213,16 @@ pub trait PointerActionHub: Send + Sync {
     /// Computes direct 256-slot hash index for 64-bit pointer trail caching using SplitMix64.
     #[must_use]
     fn hash_slot256_index(&self, ptr: u64) -> u32;
+
+    /// Updates cellular state for a trail directly with phase delta in fast-path express mode.
+    ///
+    /// # Errors
+    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `trail_id` is invalid.
+    fn update_cellular_state_express(
+        &mut self,
+        trail_id: u32,
+        phase_delta: gcso_q7_t,
+    ) -> GcsoResult<()>;
 
     /// Pulls active pointer trails toward a macro target anchor via pull force $F_{\mathrm{pull}}$.
     ///
@@ -1067,7 +1398,7 @@ pub trait EntropyEvaluator: Send + Sync {
         state_out: &mut gcso_edbc_state_t,
     ) -> GcsoResult<()>;
 
-    /// Computes CVoid Coherent Vector Alignment Metric for Out-of-Distribution Latent Space.
+    /// Computes cvoid Coherent Vector Alignment Metric for Out-of-Distribution Latent Space.
     ///
     /// # Errors
     /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `key_vector` is empty.
@@ -1083,6 +1414,20 @@ pub trait EntropyEvaluator: Send + Sync {
     /// # Errors
     /// Returns `GCSO_ERROR_EDBC_SINGULARITY` if numerical instability is detected or $\tau_{\mathrm{eff}} \le 0$.
     fn eval_barrier(&self, void_score: f32, tau_eff: f32) -> GcsoResult<f32>;
+
+    /// Evaluates scale-invariant Pitchfork Bifurcation potential barrier height ($\Delta V$) according to
+    /// GCSO Whitepaper Lemma 3.1: $\Delta V = \frac{\alpha^2 (\mathcal{C}_{\mathrm{void}} - \tau_{\mathrm{eff}})^2}{4 \beta d_{\mathrm{head}}}$.
+    ///
+    /// # Errors
+    /// Returns `GCSO_ERROR_EDBC_SINGULARITY` if parameters evaluate to `NaN` or `Inf`, or if `head_dim` is zero.
+    fn eval_barrier_pitchfork(
+        &self,
+        cvoid: f32,
+        tau_eff: f32,
+        alpha: f32,
+        beta: f32,
+        head_dim: u32,
+    ) -> GcsoResult<f32>;
 }
 
 /// Cold-path trait for macro attractor field steering and repulsion control (**Macro Level**).
@@ -1215,15 +1560,35 @@ pub trait ZimmsStorage: Send + Sync {
     /// # Errors
     /// Returns `GCSO_ERROR_MISALIGNED_POINTER` if descriptor is invalid.
     fn close_mmap(&mut self, descriptor: &mut gcso_zimms_descriptor_t) -> GcsoResult<()>;
+
+    /// Retrieves byte offset for a specific track (`CORE`, `I-CACHE`, `P-CACHE`, `SNAPSHOT`) in `.gcso` container.
+    ///
+    /// # Errors
+    /// Returns `GCSO_ERROR_CONTAINER_CORRUPTED` if track header is invalid.
+    fn get_track_offset(&self, track_id: u32) -> GcsoResult<u64>;
 }
 
 // ===================================================================
-// Unit Tests for Aligned Slice Wrappers and Traits
+// Unit Tests for Aligned Slice Wrappers, Opaque Handles, and Traits
 // ===================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_opaque_handles_type_safety() {
+        use core::mem::size_of;
+        assert_eq!(size_of::<GcsoContextHandle>(), size_of::<*mut ()>());
+        assert_eq!(size_of::<GcsoContainerHandle>(), size_of::<*mut ()>());
+        assert_eq!(size_of::<GcsoActionHubHandle>(), size_of::<*mut ()>());
+        assert_eq!(size_of::<GcsoDaesSlotHandle>(), size_of::<*mut ()>());
+        assert_eq!(size_of::<GcsoAttractorFieldHandle>(), size_of::<*mut ()>());
+        assert_eq!(size_of::<GcsoEdbcControllerHandle>(), size_of::<*mut ()>());
+        assert_eq!(size_of::<GcsoDpsrKernelHandle>(), size_of::<*mut ()>());
+        assert_eq!(size_of::<GcsoPspmRouterHandle>(), size_of::<*mut ()>());
+        assert_eq!(size_of::<GcsoSrlAdapterHandle>(), size_of::<*mut ()>());
+    }
 
     #[test]
     fn test_aligned_slice_valid() {
@@ -1236,6 +1601,28 @@ mod tests {
         assert_eq!(slice.align(), 32);
         assert_eq!(slice[0], 0.0);
         assert_eq!(&slice[0..16], &[0.0; 16]);
+        assert_eq!(&slice[16..], &[0.0; 48]);
+    }
+
+    #[test]
+    fn test_aligned_slice_from_ref() {
+        #[repr(align(32))]
+        struct AlignedVal(f32);
+        let val = AlignedVal(42.0);
+        let slice = AlignedSlice32::from_ref(&val.0).unwrap();
+        assert_eq!(slice.len(), 1);
+        assert_eq!(slice[0], 42.0);
+    }
+
+    #[test]
+    fn test_aligned_slice_mut_from_mut() {
+        #[repr(align(32))]
+        struct AlignedVal(f32);
+        let mut val = AlignedVal(10.0);
+        let mut slice_mut = AlignedSliceMut32::from_mut(&mut val.0).unwrap();
+        assert_eq!(slice_mut[0], 10.0);
+        slice_mut[0] = 99.0;
+        assert_eq!(val.0, 99.0);
     }
 
     #[test]
@@ -1248,6 +1635,7 @@ mod tests {
         let slice = unsafe { AlignedSlice32::from_raw_parts(buf.0.as_ptr(), 32) }.unwrap();
         assert_eq!(slice.len(), 32);
         assert_eq!(slice[0], 1.5);
+        assert!(AlignedSlice32::<f32>::is_aligned_ptr(buf.0.as_ptr()));
 
         let byte_slice = slice.as_bytes();
         assert_eq!(byte_slice.len(), 32 * core::mem::size_of::<f32>());
@@ -1286,19 +1674,31 @@ mod tests {
         let unaligned = &buf.0[1..33];
         let res = AlignedSlice32::new(unaligned);
         assert_eq!(res, Err(GCSO_ERROR_MISALIGNED_POINTER));
+        assert!(!AlignedSlice32::<u8>::is_aligned_ptr(unaligned.as_ptr()));
     }
 
     #[test]
-    fn test_aligned_slice_subslice_and_split() {
+    fn test_aligned_slice_generic_subslice_and_split() {
         #[repr(align(64))]
         struct AlignedBuffer([f32; 64]);
         let mut buf = AlignedBuffer([1.0; 64]);
         let mut slice_mut = AlignedSliceMut64::new(&mut buf.0).unwrap();
         assert_eq!(slice_mut.len(), 64);
 
+        // Test generic range slicing
+        let sub_from = slice_mut.subslice_mut(32..).unwrap();
+        assert_eq!(sub_from.len(), 32);
+
+        let sub_to = slice_mut.subslice_mut(..32).unwrap();
+        assert_eq!(sub_to.len(), 32);
+
         let (left, right) = slice_mut.split_at_mut(32).unwrap();
         assert_eq!(left.len(), 32);
         assert_eq!(right.len(), 32);
+
+        // Test into_aligned_slice conversion
+        let immut_sub = right.into_aligned_slice();
+        assert_eq!(immut_sub.len(), 32);
     }
 
     #[test]
@@ -1327,5 +1727,30 @@ mod tests {
         dst_slice.copy_from_slice(&src_unaligned).unwrap();
         assert_eq!(dst_slice[0], 4.2);
         assert_eq!(dst_slice[31], 4.2);
+    }
+
+    #[test]
+    fn test_aligned_slice_256_and_512() {
+        #[repr(align(256))]
+        struct Aligned256Buffer([f32; 64]);
+        #[repr(align(512))]
+        struct Aligned512Buffer([f32; 128]);
+
+        let buf_256 = Aligned256Buffer([1.25; 64]);
+        let mut buf_512 = Aligned512Buffer([2.50; 128]);
+
+        let slice_256 = AlignedSlice256::new(&buf_256.0).unwrap();
+        assert_eq!(slice_256.align(), 256);
+        assert_eq!(slice_256.len(), 64);
+        assert_eq!(slice_256[0], 1.25);
+
+        let mut slice_mut_512 = AlignedSliceMut512::new(&mut buf_512.0).unwrap();
+        assert_eq!(slice_mut_512.align(), 512);
+        assert_eq!(slice_mut_512.len(), 128);
+        assert_eq!(slice_mut_512[0], 2.50);
+
+        slice_mut_512.zero_out();
+        assert_eq!(slice_mut_512[0], 0.0);
+        assert_eq!(slice_mut_512[127], 0.0);
     }
 }

@@ -34,15 +34,15 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_create(
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        auto* impl = gcso_aligned_new<gcso_attractor_field_impl>();
-        if (GCSO_UNLIKELY(impl == nullptr)) {
+        auto* field = gcso_aligned_new<gcso_attractor_field_opaque>();
+        if (GCSO_UNLIKELY(field == nullptr)) {
             return GCSO_ERROR_OUT_OF_MEMORY;
         }
-        impl->anchor_count = 0;
-        std::memset(impl->anchors, 0, sizeof(impl->anchors));
-        impl->is_active = true;
+        field->anchor_count = 0;
+        std::memset(field->anchors, 0, sizeof(field->anchors));
+        field->is_active = true;
 
-        *field_out = reinterpret_cast<gcso_attractor_field_handle_t>(impl);
+        *field_out = field;
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -72,18 +72,17 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_anchor(
     try {
         (void)anchor_type;
         (void)dim;
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_impl) != 0 ||
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
                           reinterpret_cast<uintptr_t>(vec) % 32 != 0 ||
                           reinterpret_cast<uintptr_t>(anchor_id_out) % alignof(uint32_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
-        auto* ctx_impl = reinterpret_cast<gcso_context_impl*>(context);
-        if (GCSO_UNLIKELY(ctx_impl->prompt_anchor_count >= ctx_impl->config.max_prompt_anchors)) {
+        if (GCSO_UNLIKELY(context->prompt_anchor_count >= context->config.max_prompt_anchors)) {
             return GCSO_ERROR_ACTION_HUB_FULL;
         }
         static std::atomic<uint32_t> global_anchor_seq{1};
         *anchor_id_out = global_anchor_seq.fetch_add(1, std::memory_order_relaxed);
-        ctx_impl->prompt_anchor_count++;
+        context->prompt_anchor_count++;
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -111,17 +110,16 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_system_prompt_anchor(
     try {
         (void)prompt_text;
         (void)weight;
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_impl) != 0 ||
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
                           reinterpret_cast<uintptr_t>(anchor_id_out) % alignof(uint32_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
-        auto* ctx_impl = reinterpret_cast<gcso_context_impl*>(context);
-        if (GCSO_UNLIKELY(ctx_impl->prompt_anchor_count >= ctx_impl->config.max_prompt_anchors)) {
+        if (GCSO_UNLIKELY(context->prompt_anchor_count >= context->config.max_prompt_anchors)) {
             return GCSO_ERROR_ACTION_HUB_FULL;
         }
         static std::atomic<uint32_t> prompt_anchor_seq{100};
         *anchor_id_out = prompt_anchor_seq.fetch_add(1, std::memory_order_relaxed);
-        ctx_impl->prompt_anchor_count++;
+        context->prompt_anchor_count++;
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -152,18 +150,17 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_embedding_anchor(
         (void)embedding;
         (void)dim;
         (void)weight;
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_impl) != 0 ||
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
                           reinterpret_cast<uintptr_t>(embedding) % 32 != 0 ||
                           reinterpret_cast<uintptr_t>(anchor_id_out) % alignof(uint32_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
-        auto* ctx_impl = reinterpret_cast<gcso_context_impl*>(context);
-        if (GCSO_UNLIKELY(ctx_impl->prompt_anchor_count >= ctx_impl->config.max_prompt_anchors)) {
+        if (GCSO_UNLIKELY(context->prompt_anchor_count >= context->config.max_prompt_anchors)) {
             return GCSO_ERROR_ACTION_HUB_FULL;
         }
         static std::atomic<uint32_t> emb_anchor_seq{1000};
         *anchor_id_out = emb_anchor_seq.fetch_add(1, std::memory_order_relaxed);
-        ctx_impl->prompt_anchor_count++;
+        context->prompt_anchor_count++;
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -173,13 +170,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_embedding_anchor(
 /**
  * @brief Injects phase-conjugate repulsion vector (-dTheta) to flip spurious local minima into repulsive peaks.
  *
- * Phase-Conjugate Attractor Repulsion Rationale:
- * When cellular hallucinations hit false local minima in complementary space, anti-phase markers (-dTheta)
- * are stamped into phase space. This flips energy "valleys" into repulsive "potential peaks", guiding global
- * trajectories autonomously back toward legitimate target attractors without modifying model weights.
- *
  * Uses explicit std::round before clamping to preserve Q7 fixed-point quantization accuracy.
- * Includes NaN/Inf validation guards on repulsion gain.
  *
  * @param context Active runtime context handle.
  * @param repulsion_deltas Q7 anti-phase array.
@@ -200,19 +191,18 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_inject_phase_repulsion(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_impl) != 0 ||
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
                           reinterpret_cast<uintptr_t>(repulsion_deltas) % alignof(gcso_q7_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
-        auto* ctx_impl = reinterpret_cast<gcso_context_impl*>(context);
         const size_t apply_heads = std::min(num_heads, static_cast<size_t>(64));
         for (size_t h = 0; h < apply_heads; ++h) {
             const float rep_val = -gain * static_cast<float>(repulsion_deltas[h]);
-            const float target_val = static_cast<float>(ctx_impl->accumulated_phase[h]) + rep_val;
+            const float target_val = static_cast<float>(context->accumulated_phase[h]) + rep_val;
             const float rounded_val = std::round(target_val);
             const float clamped_val = std::clamp(rounded_val, -128.0f, 127.0f);
 
-            ctx_impl->accumulated_phase[h] = static_cast<gcso_q7_t>(clamped_val);
+            context->accumulated_phase[h] = static_cast<gcso_q7_t>(clamped_val);
         }
         return GCSO_SUCCESS;
     } catch (...) {
@@ -235,12 +225,11 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_aggregate_bottom_up(
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_impl) != 0 ||
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
                           reinterpret_cast<uintptr_t>(new_anchor_count_out) % alignof(uint32_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
-        auto* ctx_impl = reinterpret_cast<gcso_context_impl*>(context);
-        *new_anchor_count_out = ctx_impl->prompt_anchor_count;
+        *new_anchor_count_out = context->prompt_anchor_count;
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -259,12 +248,11 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_destroy(
     if (GCSO_UNLIKELY(field == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(field) % alignof(gcso_attractor_field_impl) != 0)) {
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(field) % alignof(gcso_attractor_field_opaque) != 0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
-        auto* impl = reinterpret_cast<gcso_attractor_field_impl*>(field);
-        gcso_aligned_delete(impl);
+        gcso_aligned_delete(field);
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -295,21 +283,21 @@ GCSO_API gcso_status_t GCSO_CALL gcso_edbc_controller_create(
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        auto* impl = gcso_aligned_new<gcso_edbc_controller_impl>();
-        if (GCSO_UNLIKELY(impl == nullptr)) {
+        auto* controller = gcso_aligned_new<gcso_edbc_controller_opaque>();
+        if (GCSO_UNLIKELY(controller == nullptr)) {
             return GCSO_ERROR_OUT_OF_MEMORY;
         }
-        std::memcpy(&impl->state, initial_state, sizeof(gcso_edbc_state_t));
+        std::memcpy(&controller->state, initial_state, sizeof(gcso_edbc_state_t));
 
-        if (impl->state.bifurcation_threshold <= 0.0f) {
-            impl->state.bifurcation_threshold = 1.5f;
+        if (controller->state.bifurcation_threshold <= 0.0f) {
+            controller->state.bifurcation_threshold = 1.5f;
         }
-        if (impl->state.singularity_eps <= 0.0f) {
-            impl->state.singularity_eps = 1e-12f;
+        if (controller->state.singularity_eps <= 0.0f) {
+            controller->state.singularity_eps = 1e-12f;
         }
-        impl->is_active = true;
+        controller->is_active = true;
 
-        *controller_out = reinterpret_cast<gcso_edbc_controller_handle_t>(impl);
+        *controller_out = controller;
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -323,8 +311,6 @@ GCSO_API gcso_status_t GCSO_CALL gcso_edbc_controller_create(
  * - Mode 0: NORMAL_ENTROPY_MODE (Standard Convergence Mode)
  * - Mode 1: PITCHFORK_BIFURCATION_MODE (Pitchfork Exploration Mode)
  * - Mode 2: PHASE_CONJUGATE_REPULSION_MODE (Repulsion Mode)
- *
- * Checks for NaN/Inf activation singularities to return GCSO_ERROR_EDBC_SINGULARITY safely.
  *
  * @param controller Controller handle.
  * @param token_z_score Floating-point activation Z-score.
@@ -343,28 +329,27 @@ GCSO_API gcso_status_t GCSO_CALL gcso_edbc_eval_stateful(
         return GCSO_ERROR_EDBC_SINGULARITY;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(controller) % alignof(gcso_edbc_controller_impl) != 0 ||
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(controller) % alignof(gcso_edbc_controller_opaque) != 0 ||
                           reinterpret_cast<uintptr_t>(state_out) % alignof(gcso_edbc_state_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
-        auto* impl = reinterpret_cast<gcso_edbc_controller_impl*>(controller);
 
         constexpr float alpha = 0.1f;
-        const float prev_entropy = impl->state.moving_z_entropy;
+        const float prev_entropy = controller->state.moving_z_entropy;
         const float new_entropy = (1.0f - alpha) * prev_entropy + alpha * token_z_score;
 
-        impl->state.sliding_entropy_rate = new_entropy - prev_entropy;
-        impl->state.moving_z_entropy = new_entropy;
+        controller->state.sliding_entropy_rate = new_entropy - prev_entropy;
+        controller->state.moving_z_entropy = new_entropy;
 
-        if (impl->state.moving_z_entropy > impl->state.bifurcation_threshold * 1.5f && impl->state.sliding_entropy_rate > 0.5f) {
-            impl->state.active_branch_mode = 2; // PHASE_CONJUGATE_REPULSION_MODE
-        } else if (impl->state.moving_z_entropy > impl->state.bifurcation_threshold) {
-            impl->state.active_branch_mode = 1; // PITCHFORK_BIFURCATION_MODE
+        if (controller->state.moving_z_entropy > controller->state.bifurcation_threshold * 1.5f && controller->state.sliding_entropy_rate > 0.5f) {
+            controller->state.active_branch_mode = 2; // PHASE_CONJUGATE_REPULSION_MODE
+        } else if (controller->state.moving_z_entropy > controller->state.bifurcation_threshold) {
+            controller->state.active_branch_mode = 1; // PITCHFORK_BIFURCATION_MODE
         } else {
-            impl->state.active_branch_mode = 0; // NORMAL_ENTROPY_MODE
+            controller->state.active_branch_mode = 0; // NORMAL_ENTROPY_MODE
         }
 
-        std::memcpy(state_out, &impl->state, sizeof(gcso_edbc_state_t));
+        std::memcpy(state_out, &controller->state, sizeof(gcso_edbc_state_t));
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -375,7 +360,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_edbc_eval_stateful(
  * @brief Computes CVoid Coherent Vector Alignment Metric for Out-of-Distribution Latent Space.
  *
  * Evaluates the L2 norm of key vector states to score alignment with the latent manifold.
- * Includes NaN/Inf checks to return GCSO_ERROR_EDBC_SINGULARITY upon detecting numerical corruption.
+ * Utilizes 4 independent accumulators over 8-element SIMD chunks to maximize ILP and FMA pipeline utilization.
  *
  * @param key_vector 32-byte aligned key tensor vector.
  * @param dim Vector dimension.
@@ -399,10 +384,35 @@ GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_dyadic128(
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        float sum_sq = 0.0f;
-        for (size_t i = 0; i < dim; ++i) {
-            sum_sq += key_vector[i] * key_vector[i];
+        float sum_sq0 = 0.0f;
+        float sum_sq1 = 0.0f;
+        float sum_sq2 = 0.0f;
+        float sum_sq3 = 0.0f;
+
+        size_t i = 0;
+        const size_t simd_dim = dim & ~static_cast<size_t>(7);
+        for (; i < simd_dim; i += 8) {
+            const float v0 = key_vector[i + 0]; const float v1 = key_vector[i + 1];
+            const float v2 = key_vector[i + 2]; const float v3 = key_vector[i + 3];
+            const float v4 = key_vector[i + 4]; const float v5 = key_vector[i + 5];
+            const float v6 = key_vector[i + 6]; const float v7 = key_vector[i + 7];
+
+            sum_sq0 += v0 * v0;
+            sum_sq1 += v1 * v1;
+            sum_sq2 += v2 * v2;
+            sum_sq3 += v3 * v3;
+            sum_sq0 += v4 * v4;
+            sum_sq1 += v5 * v5;
+            sum_sq2 += v6 * v6;
+            sum_sq3 += v7 * v7;
         }
+
+        float sum_sq = (sum_sq0 + sum_sq1) + (sum_sq2 + sum_sq3);
+        for (; i < dim; ++i) {
+            const float v = key_vector[i];
+            sum_sq += v * v;
+        }
+
         if (GCSO_UNLIKELY(std::isnan(sum_sq) || std::isinf(sum_sq))) {
             return GCSO_ERROR_EDBC_SINGULARITY;
         }
@@ -416,10 +426,6 @@ GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_dyadic128(
 
 /**
  * @brief Evaluates Eyring-Kramers potential barrier height: Delta_V = tau_eff / (void_score + eps).
- *
- * Physical Formula:
- * Calculates the stochastic transition potential barrier Delta_V across metastable states.
- * Returns GCSO_ERROR_EDBC_SINGULARITY if inputs contain NaN/Inf or non-positive temperature values.
  *
  * @param void_score Raw void score.
  * @param tau_eff Effective threshold temperature.
@@ -467,12 +473,11 @@ GCSO_API gcso_status_t GCSO_CALL gcso_edbc_controller_destroy(
     if (GCSO_UNLIKELY(controller == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(controller) % alignof(gcso_edbc_controller_impl) != 0)) {
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(controller) % alignof(gcso_edbc_controller_opaque) != 0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
-        auto* impl = reinterpret_cast<gcso_edbc_controller_impl*>(controller);
-        gcso_aligned_delete(impl);
+        gcso_aligned_delete(controller);
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -503,16 +508,15 @@ GCSO_API gcso_status_t GCSO_CALL gcso_persona_apply_patch(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_impl) != 0)) {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
-        auto* ctx_impl = reinterpret_cast<gcso_context_impl*>(context);
-        if (GCSO_UNLIKELY(!ctx_impl->is_initialized)) {
+        if (GCSO_UNLIKELY(!context->is_initialized)) {
             return GCSO_ERROR_INVALID_STATE;
         }
 
-        const size_t copy_bytes = std::min(patch_size, sizeof(ctx_impl->accumulated_phase));
-        std::memcpy(ctx_impl->accumulated_phase, patch_data, copy_bytes);
+        const size_t copy_bytes = std::min(patch_size, sizeof(context->accumulated_phase));
+        std::memcpy(context->accumulated_phase, patch_data, copy_bytes);
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;

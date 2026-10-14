@@ -11,7 +11,7 @@ namespace {
 
 /**
  * @brief Computes a CRC32 checksum over payload buffers for .gcso container verification.
- * Optimized with explicit ternary evaluation to prevent sign conversion warnings under MSVC /W4.
+ * Lookup-free bitwise CRC32 calculation optimized for ultra-low footprint without cache pollution.
  *
  * @param data Byte pointer to payload buffer.
  * @param len Length of byte payload in bytes.
@@ -58,23 +58,23 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_create(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        auto* impl = gcso_aligned_new<gcso_context_impl>();
-        if (GCSO_UNLIKELY(impl == nullptr)) {
+        auto* ctx = gcso_aligned_new<gcso_context_opaque>();
+        if (GCSO_UNLIKELY(ctx == nullptr)) {
             return GCSO_ERROR_OUT_OF_MEMORY;
         }
 
-        std::memcpy(&impl->config, config, sizeof(gcso_config_t));
-        impl->active_token_id = 0;
-        impl->prompt_anchor_count = 0;
-        impl->head_dim = config->head_dim;
-        impl->num_heads = config->num_heads;
-        impl->step_count = 0;
-        impl->last_ptr = 0;
-        std::memset(impl->accumulated_phase, 0, sizeof(impl->accumulated_phase));
-        impl->is_initialized = true;
-        impl->is_active = true;
+        std::memcpy(&ctx->config, config, sizeof(gcso_config_t));
+        ctx->active_token_id = 0;
+        ctx->prompt_anchor_count = 0;
+        ctx->head_dim = config->head_dim;
+        ctx->num_heads = config->num_heads;
+        ctx->step_count = 0;
+        ctx->last_ptr = 0;
+        std::memset(ctx->accumulated_phase, 0, sizeof(ctx->accumulated_phase));
+        ctx->is_initialized = true;
+        ctx->is_active = true;
 
-        *context_out = reinterpret_cast<gcso_context_handle_t>(impl);
+        *context_out = ctx;
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -94,16 +94,15 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_reset(
     if (GCSO_UNLIKELY(context == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_impl) != 0)) {
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
-        auto* impl = reinterpret_cast<gcso_context_impl*>(context);
-        impl->active_token_id = 0;
-        impl->prompt_anchor_count = 0;
-        impl->step_count = 0;
-        impl->last_ptr = 0;
-        std::memset(impl->accumulated_phase, 0, sizeof(impl->accumulated_phase));
+        context->active_token_id = 0;
+        context->prompt_anchor_count = 0;
+        context->step_count = 0;
+        context->last_ptr = 0;
+        std::memset(context->accumulated_phase, 0, sizeof(context->accumulated_phase));
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -131,20 +130,19 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_set_system_prompt_anchor(
     if (GCSO_UNLIKELY(context == nullptr || prompt_text == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_impl) != 0)) {
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
-        auto* impl = reinterpret_cast<gcso_context_impl*>(context);
-        if (GCSO_UNLIKELY(!impl->is_initialized)) {
+        if (GCSO_UNLIKELY(!context->is_initialized)) {
             return GCSO_ERROR_INVALID_STATE;
         }
 
-        if (GCSO_UNLIKELY(impl->prompt_anchor_count >= impl->config.max_prompt_anchors)) {
+        if (GCSO_UNLIKELY(context->prompt_anchor_count >= context->config.max_prompt_anchors)) {
             return GCSO_ERROR_ACTION_HUB_FULL;
         }
 
-        impl->prompt_anchor_count++;
+        context->prompt_anchor_count++;
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -174,17 +172,16 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_step_token(
     if (GCSO_UNLIKELY(context == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_impl) != 0)) {
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
-        auto* impl = reinterpret_cast<gcso_context_impl*>(context);
-        if (GCSO_UNLIKELY(!impl->is_initialized)) {
+        if (GCSO_UNLIKELY(!context->is_initialized)) {
             return GCSO_ERROR_INVALID_STATE;
         }
 
-        impl->active_token_id = token_id;
-        impl->step_count++;
+        context->active_token_id = token_id;
+        context->step_count++;
 
         if (key_tensor != nullptr) {
             if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(key_tensor) % 32 != 0)) {
@@ -198,9 +195,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_step_token(
             }
 
             const gcso_status_t qdps_status = gcso_qdps_filter_step(
-                impl->accumulated_phase,
-                impl->num_heads,
-                impl->config.qdps_min_step_rad
+                context->accumulated_phase,
+                context->num_heads,
+                context->config.qdps_min_step_rad
             );
             if (GCSO_UNLIKELY(qdps_status != GCSO_SUCCESS)) {
                 return qdps_status;
@@ -208,10 +205,10 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_step_token(
 
             const gcso_status_t status = gcso_dpsr_apply_phase_steering_safe(
                 query_tensor,
-                impl->accumulated_phase,
-                impl->head_dim,
-                impl->num_heads,
-                impl->config.ripa_clamp_max_rad
+                context->accumulated_phase,
+                context->head_dim,
+                context->num_heads,
+                context->config.ripa_clamp_max_rad
             );
             if (GCSO_UNLIKELY(status != GCSO_SUCCESS)) {
                 return status;
@@ -224,13 +221,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_step_token(
             }
             std::memset(trail_out, 0, sizeof(gcso_pointer_trail_t));
             trail_out->current_ptr = static_cast<uint64_t>(token_id);
-            trail_out->prev_ptr = impl->last_ptr;
-            trail_out->step_count = static_cast<uint32_t>(impl->step_count & 0xFFFFFFFFULL);
+            trail_out->prev_ptr = context->last_ptr;
+            trail_out->step_count = static_cast<uint32_t>(context->step_count & 0xFFFFFFFFULL);
             trail_out->stigmergic_density = 1.0f;
-            std::memcpy(trail_out->accumulated_phase_delta, impl->accumulated_phase, sizeof(impl->accumulated_phase));
+            std::memcpy(trail_out->accumulated_phase_delta, context->accumulated_phase, sizeof(context->accumulated_phase));
         }
 
-        impl->last_ptr = static_cast<uint64_t>(token_id);
+        context->last_ptr = static_cast<uint64_t>(token_id);
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -255,12 +252,12 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_serialize(
     if (GCSO_UNLIKELY(context == nullptr || buffer_size == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_impl) != 0 ||
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
                       reinterpret_cast<uintptr_t>(buffer_size) % alignof(size_t) != 0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
-        const size_t required_bytes = sizeof(gcso_snapshot_header_t) + sizeof(gcso_context_impl);
+        const size_t required_bytes = sizeof(gcso_snapshot_header_t) + sizeof(gcso_context_opaque);
         if (buffer == nullptr) {
             *buffer_size = required_bytes;
             return GCSO_SUCCESS;
@@ -273,7 +270,6 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_serialize(
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        auto* impl = reinterpret_cast<gcso_context_impl*>(context);
         std::memset(buffer, 0, required_bytes);
 
         auto* header = reinterpret_cast<gcso_snapshot_header_t*>(buffer);
@@ -282,16 +278,16 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_serialize(
         header->total_size = static_cast<uint64_t>(required_bytes);
 
         const uint64_t payload_base = sizeof(gcso_snapshot_header_t);
-        header->action_hub_offset = payload_base + offsetof(gcso_context_impl, last_ptr);
-        header->attractor_field_offset = payload_base + offsetof(gcso_context_impl, prompt_anchor_count);
-        header->dpsr_state_offset = payload_base + offsetof(gcso_context_impl, accumulated_phase);
-        header->srl_state_offset = payload_base + offsetof(gcso_context_impl, config);
-        header->edbc_state_offset = payload_base + offsetof(gcso_context_impl, step_count);
-        header->daes_slot_offset = static_cast<uint32_t>(payload_base + offsetof(gcso_context_impl, active_token_id));
+        header->action_hub_offset = payload_base + offsetof(gcso_context_opaque, last_ptr);
+        header->attractor_field_offset = payload_base + offsetof(gcso_context_opaque, prompt_anchor_count);
+        header->dpsr_state_offset = payload_base + offsetof(gcso_context_opaque, accumulated_phase);
+        header->srl_state_offset = payload_base + offsetof(gcso_context_opaque, config);
+        header->edbc_state_offset = payload_base + offsetof(gcso_context_opaque, step_count);
+        header->daes_slot_offset = static_cast<uint32_t>(payload_base + offsetof(gcso_context_opaque, active_token_id));
         header->timestamp_epoch_sec = 1774900000ULL;
 
-        std::memcpy(buffer + sizeof(gcso_snapshot_header_t), impl, sizeof(gcso_context_impl));
-        header->checksum_crc32 = compute_crc32(buffer + sizeof(gcso_snapshot_header_t), sizeof(gcso_context_impl));
+        std::memcpy(buffer + sizeof(gcso_snapshot_header_t), context, sizeof(gcso_context_opaque));
+        header->checksum_crc32 = compute_crc32(buffer + sizeof(gcso_snapshot_header_t), sizeof(gcso_context_opaque));
 
         *buffer_size = required_bytes;
         return GCSO_SUCCESS;
@@ -338,7 +334,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_deserialize(
             return GCSO_ERROR_VERSION_MISMATCH;
         }
 
-        const size_t expected_payload_size = sizeof(gcso_context_impl);
+        const size_t expected_payload_size = sizeof(gcso_context_opaque);
         if (buffer_size < sizeof(gcso_snapshot_header_t) + expected_payload_size ||
             header->total_size > buffer_size ||
             header->total_size < sizeof(gcso_snapshot_header_t) + expected_payload_size) {
@@ -350,21 +346,21 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_deserialize(
             return GCSO_ERROR_CONTAINER_CORRUPTED;
         }
 
-        auto* impl = gcso_aligned_new<gcso_context_impl>();
-        if (GCSO_UNLIKELY(impl == nullptr)) {
+        auto* ctx = gcso_aligned_new<gcso_context_opaque>();
+        if (GCSO_UNLIKELY(ctx == nullptr)) {
             return GCSO_ERROR_OUT_OF_MEMORY;
         }
 
-        std::memcpy(impl, buffer + sizeof(gcso_snapshot_header_t), sizeof(gcso_context_impl));
-        if (GCSO_UNLIKELY(impl->head_dim == 0 || (impl->head_dim % 2 != 0) ||
-                          impl->num_heads == 0 || impl->num_heads > 64)) {
-            gcso_aligned_delete(impl);
+        std::memcpy(ctx, buffer + sizeof(gcso_snapshot_header_t), sizeof(gcso_context_opaque));
+        if (GCSO_UNLIKELY(ctx->head_dim == 0 || (ctx->head_dim % 2 != 0) ||
+                          ctx->num_heads == 0 || ctx->num_heads > 64)) {
+            gcso_aligned_delete(ctx);
             return GCSO_ERROR_CONTAINER_CORRUPTED;
         }
-        impl->is_initialized = true;
-        impl->is_active = true;
+        ctx->is_initialized = true;
+        ctx->is_active = true;
 
-        *context_out = reinterpret_cast<gcso_context_handle_t>(impl);
+        *context_out = ctx;
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -383,12 +379,11 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_destroy(
     if (GCSO_UNLIKELY(context == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_impl) != 0)) {
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
-        auto* impl = reinterpret_cast<gcso_context_impl*>(context);
-        gcso_aligned_delete(impl);
+        gcso_aligned_delete(context);
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -407,12 +402,11 @@ GCSO_API gcso_status_t GCSO_CALL gcso_container_destroy(
     if (GCSO_UNLIKELY(container == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(container) % alignof(gcso_container_impl) != 0)) {
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(container) % alignof(gcso_container_opaque) != 0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
-        auto* impl = reinterpret_cast<gcso_container_impl*>(container);
-        gcso_aligned_delete(impl);
+        gcso_aligned_delete(container);
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;

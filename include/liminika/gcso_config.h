@@ -4,8 +4,16 @@
 #ifndef LIMINIKA_GCSO_CONFIG_H
 #define LIMINIKA_GCSO_CONFIG_H
 
-#include <stddef.h>
-#include <stdint.h>
+#if defined(__cplusplus)
+    #include <cstddef>
+    #include <cstdint>
+#else
+    #include <stddef.h>
+    #include <stdint.h>
+    #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+        #include <stdalign.h>
+    #endif
+#endif
 
 #ifdef __cplusplus
     #define GCSO_EXTERN_C extern "C"
@@ -18,10 +26,10 @@
 #endif
 
 /* Unified GCSO C-ABI Versioning (0.1.1) */
-#define GCSO_ABI_VERSION_MAJOR 0
-#define GCSO_ABI_VERSION_MINOR 1
-#define GCSO_ABI_VERSION_PATCH 1
-#define GCSO_ABI_VERSION_HEX   0x00000101
+#define GCSO_ABI_VERSION_MAJOR 0U
+#define GCSO_ABI_VERSION_MINOR 1U
+#define GCSO_ABI_VERSION_PATCH 1U
+#define GCSO_ABI_VERSION_HEX   0x00000101U
 #define GCSO_ABI_VERSION_STRING "0.1.1"
 
 /* Dynamic Link Library Import/Export Macros */
@@ -57,13 +65,25 @@
     #define GCSO_NODISCARD [[nodiscard]]
 #elif defined(__GNUC__) || defined(__clang__)
     #define GCSO_NODISCARD __attribute__((warn_unused_result))
-#elif defined(_MSC_VER)
+#elif defined(_MSC_VER) && _MSC_VER >= 1700
     #define GCSO_NODISCARD _Check_return_
 #else
     #define GCSO_NODISCARD
 #endif
 
-/* Branch Prediction Optimization Hints */
+/* Inline Optimization Macros for Hot Path Functions */
+#if defined(_MSC_VER)
+    #define GCSO_INLINE __inline
+    #define GCSO_ALWAYS_INLINE __forceinline
+#elif defined(__GNUC__) || defined(__clang__)
+    #define GCSO_INLINE inline
+    #define GCSO_ALWAYS_INLINE inline __attribute__((always_inline))
+#else
+    #define GCSO_INLINE inline
+    #define GCSO_ALWAYS_INLINE inline
+#endif
+
+/* Branch Prediction Optimization Hints (Expression-compatible) */
 #if defined(__GNUC__) || defined(__clang__)
     #define GCSO_LIKELY(x) __builtin_expect(!!(x), 1)
     #define GCSO_UNLIKELY(x) __builtin_expect(!!(x), 0)
@@ -79,12 +99,12 @@
 #elif defined(_MSC_VER)
     #define GCSO_ALIGNAS(n) __declspec(align(n))
     #define GCSO_ALIGNOF(type) __alignof(type)
-#elif defined(__GNUC__) || defined(__clang__)
-    #define GCSO_ALIGNAS(n) __attribute__((aligned(n)))
-    #define GCSO_ALIGNOF(type) __alignof__(type)
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
     #define GCSO_ALIGNAS(n) _Alignas(n)
     #define GCSO_ALIGNOF(type) _Alignof(type)
+#elif defined(__GNUC__) || defined(__clang__)
+    #define GCSO_ALIGNAS(n) __attribute__((aligned(n)))
+    #define GCSO_ALIGNOF(type) __alignof__(type)
 #else
     #define GCSO_ALIGNAS(n)
     #define GCSO_ALIGNOF(type) sizeof(type)
@@ -101,20 +121,23 @@
     #define GCSO_RESTRICT
 #endif
 
-/* Compile-time Static Assertion Macro */
-#if defined(__cplusplus)
-    #if __cplusplus >= 201103L
-        #define GCSO_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
-    #endif
-#elif defined(__STDC_VERSION__)
-    #if __STDC_VERSION__ >= 202311L
-        #define GCSO_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
-    #elif __STDC_VERSION__ >= 201112L
-        #define GCSO_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
-    #endif
+/* Strongly-Typed Enum Underlying Type Macro for C++ / C Compatibility */
+#if defined(__cplusplus) && __cplusplus >= 201103L
+    #define GCSO_ENUM_UNDERLYING(type) : type
+#else
+    #define GCSO_ENUM_UNDERLYING(type)
 #endif
 
-#ifndef GCSO_STATIC_ASSERT
+/* Compile-time Static Assertion Macro */
+#if defined(__cplusplus)
+    #define GCSO_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+    #define GCSO_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+    #define GCSO_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#elif defined(_MSC_VER) && _MSC_VER >= 1600
+    #define GCSO_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#else
     #define GCSO_CONCAT_IMPL(x, y) x##y
     #define GCSO_CONCAT(x, y) GCSO_CONCAT_IMPL(x, y)
     #define GCSO_STATIC_ASSERT(cond, msg) \

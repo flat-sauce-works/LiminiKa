@@ -11,7 +11,7 @@
 GCSO_EXTERN_C_BEGIN
 
 /**
- * @brief Creates a DPSR phase steering kernel instance.
+ * @brief Creates a DPSR phase steering kernel instance using strongly-typed opaque handles.
  *
  * Cold Path Execution: Allocates memory aligned to 16 bytes. Validates that head_dim is even
  * for strict compliance with 2D SO(2) planar decomposition.
@@ -37,15 +37,15 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_kernel_create(
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        auto* impl = gcso_aligned_new<gcso_dpsr_kernel_impl>();
-        if (GCSO_UNLIKELY(impl == nullptr)) {
+        auto* kernel = gcso_aligned_new<gcso_dpsr_kernel_opaque>();
+        if (GCSO_UNLIKELY(kernel == nullptr)) {
             return GCSO_ERROR_OUT_OF_MEMORY;
         }
-        impl->head_dim = head_dim;
-        impl->num_heads = num_heads;
-        impl->is_active = true;
+        kernel->head_dim = head_dim;
+        kernel->num_heads = num_heads;
+        kernel->is_active = true;
 
-        *kernel_out = reinterpret_cast<gcso_dpsr_kernel_handle_t>(impl);
+        *kernel_out = kernel;
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -55,9 +55,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_kernel_create(
 /**
  * @brief Applies inline DPSR phase rotation to Query tensor registers.
  *
- * Hot Path Guarantee: Zero dynamic memory allocations.
- * Performs 2D SO(2) planar rotations on paired float elements across all head dimensions:
- * [q0', q1']^T = [cos(theta) -sin(theta); sin(theta) cos(theta)] * [q0, q1]^T
+ * Hot Path Guarantee: Zero dynamic memory allocations. Unrolls loops over 4-pair (8-float) chunks
+ * to maximize Instruction-Level Parallelism (ILP) and FMA pipeline utilization.
  *
  * Lie Group Invariant: Abides strictly by SO(2)^(d_head/2) commutativity with standard RoPE.
  *
@@ -97,10 +96,29 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering(
             const float sin_t = std::sin(theta);
             float* GCSO_RESTRICT head_q = query_tensor + (h * head_dim);
 
-            for (size_t k = 0; k < pairs_per_head; ++k) {
-                const float q0 = head_q[2 * k];
+            // Unroll 4 pairs (8 floats) per iteration for maximum vector pipeline utilization
+            size_t k = 0;
+            const size_t simd_pairs = pairs_per_head & ~static_cast<size_t>(3);
+            for (; k < simd_pairs; k += 4) {
+                const float q0 = head_q[2 * k + 0]; const float q1 = head_q[2 * k + 1];
+                const float q2 = head_q[2 * k + 2]; const float q3 = head_q[2 * k + 3];
+                const float q4 = head_q[2 * k + 4]; const float q5 = head_q[2 * k + 5];
+                const float q6 = head_q[2 * k + 6]; const float q7 = head_q[2 * k + 7];
+
+                head_q[2 * k + 0] = q0 * cos_t - q1 * sin_t;
+                head_q[2 * k + 1] = q0 * sin_t + q1 * cos_t;
+                head_q[2 * k + 2] = q2 * cos_t - q3 * sin_t;
+                head_q[2 * k + 3] = q2 * sin_t + q3 * cos_t;
+                head_q[2 * k + 4] = q4 * cos_t - q5 * sin_t;
+                head_q[2 * k + 5] = q4 * sin_t + q5 * cos_t;
+                head_q[2 * k + 6] = q6 * cos_t - q7 * sin_t;
+                head_q[2 * k + 7] = q6 * sin_t + q7 * cos_t;
+            }
+
+            for (; k < pairs_per_head; ++k) {
+                const float q0 = head_q[2 * k + 0];
                 const float q1 = head_q[2 * k + 1];
-                head_q[2 * k]     = q0 * cos_t - q1 * sin_t;
+                head_q[2 * k + 0] = q0 * cos_t - q1 * sin_t;
                 head_q[2 * k + 1] = q0 * sin_t + q1 * cos_t;
             }
         }
@@ -115,10 +133,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering(
  *
  * Mathematical & Physical Rationale:
  * In standard RoPE encoding, rotation frequencies follow theta_k = 10000^(-2k/d). Higher pair indices
- * k correspond to lower frequencies (longer wavelength components) maintaining core context structure.
+ * k correspond to lower frequencies maintaining core context structure.
  * RIPA restricts phase modulation strictly to the upper d_head / 4 dimensions (the top d_head / 8 pairs,
- * starting from start_k = pairs_per_head - low_freq_pairs up to pairs_per_head). This prevents distortion
- * of high-frequency channels that carry exact token syntax.
+ * starting from start_k = pairs_per_head - low_freq_pairs up to pairs_per_head).
  *
  * Soft Clamping Formula: theta_safe = max_rad * tanh(theta / max_rad)
  *
@@ -151,8 +168,6 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_safe(
         constexpr float q7_scale = 3.14159265358979323846f / 128.0f;
         const size_t pairs_per_head = head_dim / 2;
 
-        // RIPA Constraint: Restrict phase steering strictly to low-frequency upper d_head/4 dimensions
-        // (head_dim / 8 pair indices at the top end of pairs_per_head)
         const size_t low_freq_pairs = std::max(static_cast<size_t>(1), head_dim / 8);
         const size_t start_k = (pairs_per_head > low_freq_pairs) ? (pairs_per_head - low_freq_pairs) : 0;
 
@@ -170,10 +185,30 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_safe(
             const float sin_t = std::sin(theta);
             float* GCSO_RESTRICT head_q = query_tensor + (h * head_dim);
 
-            for (size_t k = start_k; k < pairs_per_head; ++k) {
-                const float q0 = head_q[2 * k];
+            size_t k = start_k;
+            const size_t remaining_pairs = pairs_per_head - start_k;
+            const size_t simd_pairs = start_k + (remaining_pairs & ~static_cast<size_t>(3));
+
+            for (; k < simd_pairs; k += 4) {
+                const float q0 = head_q[2 * k + 0]; const float q1 = head_q[2 * k + 1];
+                const float q2 = head_q[2 * k + 2]; const float q3 = head_q[2 * k + 3];
+                const float q4 = head_q[2 * k + 4]; const float q5 = head_q[2 * k + 5];
+                const float q6 = head_q[2 * k + 6]; const float q7 = head_q[2 * k + 7];
+
+                head_q[2 * k + 0] = q0 * cos_t - q1 * sin_t;
+                head_q[2 * k + 1] = q0 * sin_t + q1 * cos_t;
+                head_q[2 * k + 2] = q2 * cos_t - q3 * sin_t;
+                head_q[2 * k + 3] = q2 * sin_t + q3 * cos_t;
+                head_q[2 * k + 4] = q4 * cos_t - q5 * sin_t;
+                head_q[2 * k + 5] = q4 * sin_t + q5 * cos_t;
+                head_q[2 * k + 6] = q6 * cos_t - q7 * sin_t;
+                head_q[2 * k + 7] = q6 * sin_t + q7 * cos_t;
+            }
+
+            for (; k < pairs_per_head; ++k) {
+                const float q0 = head_q[2 * k + 0];
                 const float q1 = head_q[2 * k + 1];
-                head_q[2 * k]     = q0 * cos_t - q1 * sin_t;
+                head_q[2 * k + 0] = q0 * cos_t - q1 * sin_t;
                 head_q[2 * k + 1] = q0 * sin_t + q1 * cos_t;
             }
         }
@@ -186,7 +221,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_safe(
 /**
  * @brief QDPS discrete filter: cuts off phase rotation steps falling below min_step_rad.
  *
- * Prevents grid jitter and numerical oscillation under ultra-low quantization constraints (1.5-3.5 bits).
+ * Pre-evaluates integer Q7 thresholds to execute zero-overhead integer domain comparisons in the hot loop.
  *
  * @param phase_deltas Q7 phase array to filter in-place.
  * @param len Array element count.
@@ -208,10 +243,20 @@ GCSO_API gcso_status_t GCSO_CALL gcso_qdps_filter_step(
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(phase_deltas) % alignof(gcso_q7_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
+
         constexpr float q7_scale = 3.14159265358979323846f / 128.0f;
+        const int32_t min_step_q7 = static_cast<int32_t>(std::ceil(min_step_rad / q7_scale));
+
+        if (min_step_q7 <= 0) {
+            return GCSO_SUCCESS;
+        }
+        if (min_step_q7 > 127) {
+            std::memset(phase_deltas, 0, len * sizeof(gcso_q7_t));
+            return GCSO_SUCCESS;
+        }
+
         for (size_t i = 0; i < len; ++i) {
-            const float rad = std::abs(static_cast<float>(phase_deltas[i]) * q7_scale);
-            if (rad < min_step_rad) {
+            if (std::abs(static_cast<int32_t>(phase_deltas[i])) < min_step_q7) {
                 phase_deltas[i] = 0;
             }
         }
@@ -261,10 +306,28 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_lazy_unwrap_override(
             const float sin_t = std::sin(theta);
             float* GCSO_RESTRICT head_q = query_tensor + (h * head_dim);
 
-            for (size_t k = 0; k < pairs_per_head; ++k) {
-                const float q0 = head_q[2 * k];
+            size_t k = 0;
+            const size_t simd_pairs = pairs_per_head & ~static_cast<size_t>(3);
+            for (; k < simd_pairs; k += 4) {
+                const float q0 = head_q[2 * k + 0]; const float q1 = head_q[2 * k + 1];
+                const float q2 = head_q[2 * k + 2]; const float q3 = head_q[2 * k + 3];
+                const float q4 = head_q[2 * k + 4]; const float q5 = head_q[2 * k + 5];
+                const float q6 = head_q[2 * k + 6]; const float q7 = head_q[2 * k + 7];
+
+                head_q[2 * k + 0] = q0 * cos_t - q1 * sin_t;
+                head_q[2 * k + 1] = q0 * sin_t + q1 * cos_t;
+                head_q[2 * k + 2] = q2 * cos_t - q3 * sin_t;
+                head_q[2 * k + 3] = q2 * sin_t + q3 * cos_t;
+                head_q[2 * k + 4] = q4 * cos_t - q5 * sin_t;
+                head_q[2 * k + 5] = q4 * sin_t + q5 * cos_t;
+                head_q[2 * k + 6] = q6 * cos_t - q7 * sin_t;
+                head_q[2 * k + 7] = q6 * sin_t + q7 * cos_t;
+            }
+
+            for (; k < pairs_per_head; ++k) {
+                const float q0 = head_q[2 * k + 0];
                 const float q1 = head_q[2 * k + 1];
-                head_q[2 * k]     = q0 * cos_t - q1 * sin_t;
+                head_q[2 * k + 0] = q0 * cos_t - q1 * sin_t;
                 head_q[2 * k + 1] = q0 * sin_t + q1 * cos_t;
             }
         }
@@ -277,9 +340,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_lazy_unwrap_override(
 /**
  * @brief Executes norm-guarded Slerp phase stabilization on state vectors.
  *
- * Prevents gradient explosion or activation collapse during cumulative phase rotations
- * by clamping vector L2 norms into [norm_lower, norm_upper] bounds.
- * Includes zero-norm defense and NaN/Inf detection returning GCSO_ERROR_EDBC_SINGULARITY to prevent collapse.
+ * Utilizes 4 independent accumulators to unroll L2 norm computation, maximizing instruction-level parallelism.
  *
  * @param tensor Vector tensor buffer to normalize in-place.
  * @param dim Total vector length.
@@ -304,22 +365,60 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_slerp_norm_guard_stable(
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        float norm_sq = 0.0f;
-        for (size_t i = 0; i < dim; ++i) {
+        float sum_sq0 = 0.0f;
+        float sum_sq1 = 0.0f;
+        float sum_sq2 = 0.0f;
+        float sum_sq3 = 0.0f;
+
+        size_t i = 0;
+        const size_t simd_len = dim & ~static_cast<size_t>(7);
+        for (; i < simd_len; i += 8) {
+            sum_sq0 += tensor[i + 0] * tensor[i + 0];
+            sum_sq1 += tensor[i + 1] * tensor[i + 1];
+            sum_sq2 += tensor[i + 2] * tensor[i + 2];
+            sum_sq3 += tensor[i + 3] * tensor[i + 3];
+            sum_sq0 += tensor[i + 4] * tensor[i + 4];
+            sum_sq1 += tensor[i + 5] * tensor[i + 5];
+            sum_sq2 += tensor[i + 6] * tensor[i + 6];
+            sum_sq3 += tensor[i + 7] * tensor[i + 7];
+        }
+
+        float norm_sq = (sum_sq0 + sum_sq1) + (sum_sq2 + sum_sq3);
+        for (; i < dim; ++i) {
             norm_sq += tensor[i] * tensor[i];
         }
+
         const float norm = std::sqrt(norm_sq);
         if (GCSO_UNLIKELY(std::isnan(norm) || std::isinf(norm))) {
             return GCSO_ERROR_EDBC_SINGULARITY;
         }
 
-        // Zero-norm defense: rescale only if norm is strictly above floating-point epsilon
-        if (norm < norm_lower && norm > 1e-12f) {
-            const float scale = norm_lower / norm;
-            for (size_t i = 0; i < dim; ++i) tensor[i] *= scale;
-        } else if (norm > norm_upper && norm > 1e-12f) {
-            const float scale = norm_upper / norm;
-            for (size_t i = 0; i < dim; ++i) tensor[i] *= scale;
+        if (norm < 1e-12f) {
+            return GCSO_SUCCESS;
+        }
+
+        float scale = 1.0f;
+        if (norm < norm_lower) {
+            scale = norm_lower / norm;
+        } else if (norm > norm_upper) {
+            scale = norm_upper / norm;
+        }
+
+        if (std::abs(scale - 1.0f) > 1e-6f) {
+            size_t j = 0;
+            for (; j < simd_len; j += 8) {
+                tensor[j + 0] *= scale;
+                tensor[j + 1] *= scale;
+                tensor[j + 2] *= scale;
+                tensor[j + 3] *= scale;
+                tensor[j + 4] *= scale;
+                tensor[j + 5] *= scale;
+                tensor[j + 6] *= scale;
+                tensor[j + 7] *= scale;
+            }
+            for (; j < dim; ++j) {
+                tensor[j] *= scale;
+            }
         }
         return GCSO_SUCCESS;
     } catch (...) {
@@ -361,7 +460,19 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_fused_logit_shift(
         }
         const float mean_bias = aggregate_phase_bias / static_cast<float>(num_heads);
 
-        for (size_t v = 0; v < vocab_size; ++v) {
+        size_t v = 0;
+        const size_t simd_vocab = vocab_size & ~static_cast<size_t>(7);
+        for (; v < simd_vocab; v += 8) {
+            logits[v + 0] += mean_bias;
+            logits[v + 1] += mean_bias;
+            logits[v + 2] += mean_bias;
+            logits[v + 3] += mean_bias;
+            logits[v + 4] += mean_bias;
+            logits[v + 5] += mean_bias;
+            logits[v + 6] += mean_bias;
+            logits[v + 7] += mean_bias;
+        }
+        for (; v < vocab_size; ++v) {
             logits[v] += mean_bias;
         }
         return GCSO_SUCCESS;
@@ -382,12 +493,11 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_kernel_destroy(
     if (GCSO_UNLIKELY(kernel == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(kernel) % alignof(gcso_dpsr_kernel_impl) != 0)) {
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(kernel) % alignof(gcso_dpsr_kernel_opaque) != 0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
-        auto* impl = reinterpret_cast<gcso_dpsr_kernel_impl*>(kernel);
-        gcso_aligned_delete(impl);
+        gcso_aligned_delete(kernel);
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -414,14 +524,14 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_router_create(
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        auto* impl = gcso_aligned_new<gcso_pspm_router_impl>();
-        if (GCSO_UNLIKELY(impl == nullptr)) {
+        auto* router = gcso_aligned_new<gcso_pspm_router_opaque>();
+        if (GCSO_UNLIKELY(router == nullptr)) {
             return GCSO_ERROR_OUT_OF_MEMORY;
         }
-        std::memcpy(&impl->config, config, sizeof(gcso_pspm_config_t));
-        impl->is_active = true;
+        std::memcpy(&router->config, config, sizeof(gcso_pspm_config_t));
+        router->is_active = true;
 
-        *router_out = reinterpret_cast<gcso_pspm_router_handle_t>(impl);
+        *router_out = router;
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -464,18 +574,54 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_dispatch_single_pass(
         const size_t logic_elems = logic_heads * head_dim;
         const size_t explore_elems = explore_heads * head_dim;
 
-        for (size_t i = 0; i < fact_elems; ++i) {
+        size_t i = 0;
+        const size_t fact_simd = fact_elems & ~static_cast<size_t>(7);
+        for (; i < fact_simd; i += 8) {
+            query_tensor[i + 0] *= pspm_cfg->fact_phase_gain;
+            query_tensor[i + 1] *= pspm_cfg->fact_phase_gain;
+            query_tensor[i + 2] *= pspm_cfg->fact_phase_gain;
+            query_tensor[i + 3] *= pspm_cfg->fact_phase_gain;
+            query_tensor[i + 4] *= pspm_cfg->fact_phase_gain;
+            query_tensor[i + 5] *= pspm_cfg->fact_phase_gain;
+            query_tensor[i + 6] *= pspm_cfg->fact_phase_gain;
+            query_tensor[i + 7] *= pspm_cfg->fact_phase_gain;
+        }
+        for (; i < fact_elems; ++i) {
             query_tensor[i] *= pspm_cfg->fact_phase_gain;
         }
 
         float* GCSO_RESTRICT logic_q = query_tensor + fact_elems;
-        for (size_t i = 0; i < logic_elems; ++i) {
-            logic_q[i] *= pspm_cfg->logic_phase_gain;
+        size_t j = 0;
+        const size_t logic_simd = logic_elems & ~static_cast<size_t>(7);
+        for (; j < logic_simd; j += 8) {
+            logic_q[j + 0] *= pspm_cfg->logic_phase_gain;
+            logic_q[j + 1] *= pspm_cfg->logic_phase_gain;
+            logic_q[j + 2] *= pspm_cfg->logic_phase_gain;
+            logic_q[j + 3] *= pspm_cfg->logic_phase_gain;
+            logic_q[j + 4] *= pspm_cfg->logic_phase_gain;
+            logic_q[j + 5] *= pspm_cfg->logic_phase_gain;
+            logic_q[j + 6] *= pspm_cfg->logic_phase_gain;
+            logic_q[j + 7] *= pspm_cfg->logic_phase_gain;
+        }
+        for (; j < logic_elems; ++j) {
+            logic_q[j] *= pspm_cfg->logic_phase_gain;
         }
 
         float* GCSO_RESTRICT explore_q = query_tensor + fact_elems + logic_elems;
-        for (size_t i = 0; i < explore_elems; ++i) {
-            explore_q[i] *= pspm_cfg->explore_phase_gain;
+        size_t k = 0;
+        const size_t explore_simd = explore_elems & ~static_cast<size_t>(7);
+        for (; k < explore_simd; k += 8) {
+            explore_q[k + 0] *= pspm_cfg->explore_phase_gain;
+            explore_q[k + 1] *= pspm_cfg->explore_phase_gain;
+            explore_q[k + 2] *= pspm_cfg->explore_phase_gain;
+            explore_q[k + 3] *= pspm_cfg->explore_phase_gain;
+            explore_q[k + 4] *= pspm_cfg->explore_phase_gain;
+            explore_q[k + 5] *= pspm_cfg->explore_phase_gain;
+            explore_q[k + 6] *= pspm_cfg->explore_phase_gain;
+            explore_q[k + 7] *= pspm_cfg->explore_phase_gain;
+        }
+        for (; k < explore_elems; ++k) {
+            explore_q[k] *= pspm_cfg->explore_phase_gain;
         }
 
         return GCSO_SUCCESS;
@@ -496,12 +642,11 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_router_destroy(
     if (GCSO_UNLIKELY(router == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(router) % alignof(gcso_pspm_router_impl) != 0)) {
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(router) % alignof(gcso_pspm_router_opaque) != 0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
-        auto* impl = reinterpret_cast<gcso_pspm_router_impl*>(router);
-        gcso_aligned_delete(impl);
+        gcso_aligned_delete(router);
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -528,14 +673,14 @@ GCSO_API gcso_status_t GCSO_CALL gcso_srl_adapter_create(
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        auto* impl = gcso_aligned_new<gcso_srl_adapter_impl>();
-        if (GCSO_UNLIKELY(impl == nullptr)) {
+        auto* adapter = gcso_aligned_new<gcso_srl_adapter_opaque>();
+        if (GCSO_UNLIKELY(adapter == nullptr)) {
             return GCSO_ERROR_OUT_OF_MEMORY;
         }
-        std::memcpy(&impl->descriptor, descriptor, sizeof(gcso_srl_descriptor_t));
-        impl->is_active = true;
+        std::memcpy(&adapter->descriptor, descriptor, sizeof(gcso_srl_descriptor_t));
+        adapter->is_active = true;
 
-        *adapter_out = reinterpret_cast<gcso_srl_adapter_handle_t>(impl);
+        *adapter_out = adapter;
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -591,17 +736,59 @@ GCSO_API gcso_status_t GCSO_CALL gcso_srl_eval_rank1(
             }
         }
 
-        float v_dot_x = 0.0f;
-        for (size_t i = 0; i < dim_in; ++i) {
+        float v_dot_x0 = 0.0f;
+        float v_dot_x1 = 0.0f;
+        float v_dot_x2 = 0.0f;
+        float v_dot_x3 = 0.0f;
+
+        size_t i = 0;
+        const size_t simd_in = dim_in & ~static_cast<size_t>(7);
+        for (; i < simd_in; i += 8) {
+            v_dot_x0 += vector_v[i + 0] * x_in[i + 0];
+            v_dot_x1 += vector_v[i + 1] * x_in[i + 1];
+            v_dot_x2 += vector_v[i + 2] * x_in[i + 2];
+            v_dot_x3 += vector_v[i + 3] * x_in[i + 3];
+            v_dot_x0 += vector_v[i + 4] * x_in[i + 4];
+            v_dot_x1 += vector_v[i + 5] * x_in[i + 5];
+            v_dot_x2 += vector_v[i + 6] * x_in[i + 6];
+            v_dot_x3 += vector_v[i + 7] * x_in[i + 7];
+        }
+
+        float v_dot_x = (v_dot_x0 + v_dot_x1) + (v_dot_x2 + v_dot_x3);
+        for (; i < dim_in; ++i) {
             v_dot_x += vector_v[i] * x_in[i];
         }
+
         const float scaled_dot = srl_desc->scale_factor * v_dot_x;
+        size_t j = 0;
+        const size_t simd_out = dim_out & ~static_cast<size_t>(7);
+
         if (gain_s != nullptr) {
-            for (size_t j = 0; j < dim_out; ++j) {
+            for (; j < simd_out; j += 8) {
+                y_out[j + 0] += gain_s[j + 0] * scaled_dot * vector_u[j + 0];
+                y_out[j + 1] += gain_s[j + 1] * scaled_dot * vector_u[j + 1];
+                y_out[j + 2] += gain_s[j + 2] * scaled_dot * vector_u[j + 2];
+                y_out[j + 3] += gain_s[j + 3] * scaled_dot * vector_u[j + 3];
+                y_out[j + 4] += gain_s[j + 4] * scaled_dot * vector_u[j + 4];
+                y_out[j + 5] += gain_s[j + 5] * scaled_dot * vector_u[j + 5];
+                y_out[j + 6] += gain_s[j + 6] * scaled_dot * vector_u[j + 6];
+                y_out[j + 7] += gain_s[j + 7] * scaled_dot * vector_u[j + 7];
+            }
+            for (; j < dim_out; ++j) {
                 y_out[j] += gain_s[j] * scaled_dot * vector_u[j];
             }
         } else {
-            for (size_t j = 0; j < dim_out; ++j) {
+            for (; j < simd_out; j += 8) {
+                y_out[j + 0] += scaled_dot * vector_u[j + 0];
+                y_out[j + 1] += scaled_dot * vector_u[j + 1];
+                y_out[j + 2] += scaled_dot * vector_u[j + 2];
+                y_out[j + 3] += scaled_dot * vector_u[j + 3];
+                y_out[j + 4] += scaled_dot * vector_u[j + 4];
+                y_out[j + 5] += scaled_dot * vector_u[j + 5];
+                y_out[j + 6] += scaled_dot * vector_u[j + 6];
+                y_out[j + 7] += scaled_dot * vector_u[j + 7];
+            }
+            for (; j < dim_out; ++j) {
                 y_out[j] += scaled_dot * vector_u[j];
             }
         }
@@ -691,12 +878,11 @@ GCSO_API gcso_status_t GCSO_CALL gcso_srl_adapter_destroy(
     if (GCSO_UNLIKELY(adapter == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(adapter) % alignof(gcso_srl_adapter_impl) != 0)) {
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(adapter) % alignof(gcso_srl_adapter_opaque) != 0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
-        auto* impl = reinterpret_cast<gcso_srl_adapter_impl*>(adapter);
-        gcso_aligned_delete(impl);
+        gcso_aligned_delete(adapter);
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;

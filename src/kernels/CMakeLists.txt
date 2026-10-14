@@ -4,10 +4,11 @@
 # -------------------------------------------------------------------
 # LiminiKa GCSO Kernels Build Configuration
 # Targets: C11 / C++20 CPU, CUDA, Metal, and Vulkan Compute Kernels
+# Unified Version: 0.1.1
 # -------------------------------------------------------------------
 
 cmake_minimum_required(VERSION 3.18)
-project(liminika_kernels LANGUAGES C CXX)
+project(liminika_kernels VERSION 0.1.1 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -16,10 +17,22 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Default symbol visibility flags to prevent internal symbol leakage across dynamic boundaries
+set(CMAKE_C_VISIBILITY_PRESET hidden)
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
+
 # Option definitions for target hardware backends
 option(LIMINIKA_ENABLE_CUDA "Enable CUDA compute backend" OFF)
 option(LIMINIKA_ENABLE_VULKAN "Enable Vulkan compute backend" OFF)
 option(LIMINIKA_ENABLE_METAL "Enable Metal compute backend" OFF)
+
+# Option definitions for target CPU SIMD vector extensions
+option(LIMINIKA_ENABLE_AVX2 "Enable AVX2 SIMD instructions" OFF)
+option(LIMINIKA_ENABLE_AVX512 "Enable AVX-512 SIMD instructions" OFF)
+option(LIMINIKA_ENABLE_NEON "Enable ARM Neon SIMD instructions" OFF)
+option(LIMINIKA_ENABLE_SVE "Enable ARM SVE SIMD instructions" OFF)
+option(LIMINIKA_ENABLE_RVV "Enable RISC-V Vector SIMD instructions" OFF)
 
 # Platform restriction guard for Metal backend
 if(LIMINIKA_ENABLE_METAL)
@@ -78,10 +91,40 @@ if(LIMINIKA_ENABLE_METAL)
     target_compile_definitions(liminika_kernels_cpu PRIVATE LIMINIKA_ENABLE_METAL)
 endif()
 
+# Scoped SIMD compile definitions and compiler options
+if(LIMINIKA_ENABLE_AVX2)
+    target_compile_definitions(liminika_kernels_cpu PRIVATE LIMINIKA_ENABLE_AVX2)
+endif()
+if(LIMINIKA_ENABLE_AVX512)
+    target_compile_definitions(liminika_kernels_cpu PRIVATE LIMINIKA_ENABLE_AVX512)
+endif()
+if(LIMINIKA_ENABLE_NEON)
+    target_compile_definitions(liminika_kernels_cpu PRIVATE LIMINIKA_ENABLE_NEON)
+endif()
+if(LIMINIKA_ENABLE_SVE)
+    target_compile_definitions(liminika_kernels_cpu PRIVATE LIMINIKA_ENABLE_SVE)
+endif()
+if(LIMINIKA_ENABLE_RVV)
+    target_compile_definitions(liminika_kernels_cpu PRIVATE LIMINIKA_ENABLE_RVV)
+endif()
+
 if(MSVC)
-    target_compile_options(liminika_kernels_cpu PRIVATE /W4 /O2 /EHsc /wd4324 /permissive- /utf-8)
+    target_compile_options(liminika_kernels_cpu PRIVATE /W4 /O2 /EHsc /wd4324 /permissive- /utf-8 /Zc:preprocessor /Zc:inline)
+    if(LIMINIKA_ENABLE_AVX512)
+        target_compile_options(liminika_kernels_cpu PRIVATE /arch:AVX512)
+    elseif(LIMINIKA_ENABLE_AVX2)
+        target_compile_options(liminika_kernels_cpu PRIVATE /arch:AVX2)
+    endif()
 else()
-    target_compile_options(liminika_kernels_cpu PRIVATE -Wall -Wextra -O3 -fstrict-aliasing)
+    target_compile_options(liminika_kernels_cpu PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wno-unused-parameter -O3 -fstrict-aliasing)
+    if(LIMINIKA_ENABLE_AVX512)
+        target_compile_options(liminika_kernels_cpu PRIVATE -mavx512f -mavx512bw -mavx512dq)
+    elseif(LIMINIKA_ENABLE_AVX2)
+        target_compile_options(liminika_kernels_cpu PRIVATE -mavx2 -mfma)
+    endif()
+    if(LIMINIKA_ENABLE_SVE)
+        target_compile_options(liminika_kernels_cpu PRIVATE -march=armv8-a+sve)
+    endif()
 endif()
 
 list(APPEND INSTALL_TARGET_LIST liminika_kernels_cpu)

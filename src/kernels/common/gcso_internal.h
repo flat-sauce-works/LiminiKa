@@ -68,14 +68,15 @@ inline void gcso_aligned_delete(T* ptr) GCSO_NOEXCEPT {
 }
 
 // ===================================================================
-// Internal Opaque Implementation Structures for GCSO Kernel Engine
+// Strongly-Typed Internal Opaque Implementation Structures
+// Directly matching C-ABI opaque struct prototypes without generic c_void
 // ===================================================================
 
 /**
- * @brief Internal runtime execution context layout.
+ * @brief Internal runtime execution context layout (matching gcso_context_opaque).
  * Aligned to 64 bytes to fit CPU/GPU cache line boundaries without false sharing.
  */
-struct GCSO_ALIGNAS(64) gcso_context_impl {
+struct GCSO_ALIGNAS(64) gcso_context_opaque {
     gcso_config_t config;              ///< Global execution configuration snapshot.
     uint32_t active_token_id;          ///< Active token sequence ID in decoding step.
     uint32_t prompt_anchor_count;      ///< Number of registered system prompt anchors.
@@ -89,10 +90,10 @@ struct GCSO_ALIGNAS(64) gcso_context_impl {
 };
 
 /**
- * @brief Internal Action Hub (Sidecar Pointer Table - SPT) implementation structure.
+ * @brief Internal Action Hub layout (matching gcso_action_hub_opaque).
  * Aligned to 32 bytes for optimized vector lookup and cacheline efficiency.
  */
-struct GCSO_ALIGNAS(32) gcso_action_hub_impl {
+struct GCSO_ALIGNAS(32) gcso_action_hub_opaque {
     uint32_t capacity;         ///< Maximum tagged pointer slot capacity.
     uint32_t active_count;     ///< Current active pointer trail count.
     uint64_t last_trail_ptr;   ///< Address of most recently transitioned pointer trail.
@@ -100,59 +101,69 @@ struct GCSO_ALIGNAS(32) gcso_action_hub_impl {
 };
 
 /**
- * @brief Internal Attractor Field implementation structure.
+ * @brief Internal Attractor Field layout (matching gcso_attractor_field_opaque).
  * Aligned to 32 bytes for topological anchor management.
  */
-struct GCSO_ALIGNAS(32) gcso_attractor_field_impl {
+struct GCSO_ALIGNAS(32) gcso_attractor_field_opaque {
     uint32_t anchor_count;    ///< Total number of active topological anchors.
     uint8_t anchors[256];     ///< Static feature space allocation for anchor vectors.
     bool is_active;           ///< Lifecycle state flag.
 };
 
 /**
- * @brief Internal Dynamic Phase-Shifted RoPE (DPSR) kernel state structure.
+ * @brief Internal Dynamic Phase-Shifted RoPE kernel state (matching gcso_dpsr_kernel_opaque).
  * Aligned to 16 bytes.
  */
-struct GCSO_ALIGNAS(16) gcso_dpsr_kernel_impl {
+struct GCSO_ALIGNAS(16) gcso_dpsr_kernel_opaque {
     uint32_t head_dim;   ///< Target attention head dimension.
     uint32_t num_heads;  ///< Total number of attention heads.
     bool is_active;      ///< Lifecycle state flag.
 };
 
 /**
- * @brief Internal Phase-Steered Parallel Multi-head (PSPM) router structure.
+ * @brief Internal Phase-Steered Parallel Multi-head router (matching gcso_pspm_router_opaque).
  * Aligned to 16 bytes.
  */
-struct GCSO_ALIGNAS(16) gcso_pspm_router_impl {
+struct GCSO_ALIGNAS(16) gcso_pspm_router_opaque {
     gcso_pspm_config_t config;   ///< Sub-head group allocation configuration.
     bool is_active;              ///< Lifecycle state flag.
 };
 
 /**
- * @brief Internal Sparse Residual Adapter Layer (SRL) instance layout.
+ * @brief Internal Sparse Residual Adapter Layer layout (matching gcso_srl_adapter_opaque).
  * Aligned to 32 bytes.
  */
-struct GCSO_ALIGNAS(32) gcso_srl_adapter_impl {
+struct GCSO_ALIGNAS(32) gcso_srl_adapter_opaque {
     gcso_srl_descriptor_t descriptor;   ///< Rank-1 outer product descriptor layout.
     bool is_active;                     ///< Lifecycle state flag.
 };
 
 /**
- * @brief Internal Entropy-Driven Decoding Branch Controller (EDBC) layout.
+ * @brief Internal Entropy-Driven Decoding Branch Controller layout (matching gcso_edbc_controller_opaque).
  * Aligned to 32 bytes.
  */
-struct GCSO_ALIGNAS(32) gcso_edbc_controller_impl {
+struct GCSO_ALIGNAS(32) gcso_edbc_controller_opaque {
     gcso_edbc_state_t state;   ///< Active dynamic entropy controller state tracking.
     bool is_active;            ///< Lifecycle state flag.
 };
 
 /**
- * @brief Internal binary container instance layout.
+ * @brief Internal binary container instance layout (matching gcso_container_opaque).
  * Aligned to 16 bytes.
  */
-struct GCSO_ALIGNAS(16) gcso_container_impl {
+struct GCSO_ALIGNAS(16) gcso_container_opaque {
     uint32_t container_id;   ///< Unique identifier for binary snapshot handle.
     bool is_active;          ///< Lifecycle state flag.
 };
+
+// Internal implementation aliases for strict backward layout compatibility
+using gcso_context_impl = gcso_context_opaque;
+using gcso_action_hub_impl = gcso_action_hub_opaque;
+using gcso_attractor_field_impl = gcso_attractor_field_opaque;
+using gcso_dpsr_kernel_impl = gcso_dpsr_kernel_opaque;
+using gcso_pspm_router_impl = gcso_pspm_router_opaque;
+using gcso_srl_adapter_impl = gcso_srl_adapter_opaque;
+using gcso_edbc_controller_impl = gcso_edbc_controller_opaque;
+using gcso_container_impl = gcso_container_opaque;
 
 #endif // LIMINIKA_GCSO_INTERNAL_H

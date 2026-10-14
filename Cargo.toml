@@ -1,3 +1,4 @@
+# name: Cargo.toml
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 [workspace]
@@ -11,6 +12,39 @@ resolver = "2"
 [workspace.package]
 version = "0.1.1"
 edition = "2021"
+rust-version = "1.80"
 license = "MIT OR Apache-2.0"
 authors = ["flat-sauce-works"]
 repository = "https://github.com/flat-sauce-works/LiminiKa"
+readme = "README.md"
+keywords = ["llm", "gcso", "sheaf-theory", "zero-alloc", "c-abi"]
+categories = ["science", "embedded", "no-std", "hardware-support"]
+
+[workspace.dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)', 'cfg(has_kernel_cuda)', 'cfg(has_kernel_vulkan)', 'cfg(has_kernel_metal)', 'cfg(has_simd_avx2)', 'cfg(has_simd_avx512)', 'cfg(has_simd_neon)', 'cfg(has_simd_sve)', 'cfg(has_simd_rvv)'] }
+
+[workspace.lints.clippy]
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+inline_always = "allow"
+undocumented_unsafe_blocks = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+overflow-checks = false
+strip = true
+
+[profile.bench]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+overflow-checks = false

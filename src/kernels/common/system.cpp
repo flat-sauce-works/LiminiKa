@@ -151,7 +151,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_abi_query_capability(
 }
 
 /**
- * @brief Populates default settings for a gcso_config_t structure strictly conforming to c_abi_spec.md.
+ * @brief Populates default settings for a gcso_config_t structure strictly conforming to GCSO standards.
  *
  * Configures optimal parameters for 2-4GB VRAM execution targets, setting default head dimensions (128),
  * head counts (32), paged block sizes (32 tokens), RIPA soft-clamp bounds (5 degrees = 0.087266 rad), and
