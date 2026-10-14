@@ -220,8 +220,7 @@ fn main() {
     let is_riscv64 = target_arch == "riscv64";
 
     let has_avx2 = is_x86_64
-        && (env::var("CARGO_FEATURE_AVX2").is_ok()
-            || has_target_feature(&target_features, "avx2"));
+        && (env::var("CARGO_FEATURE_AVX2").is_ok() || has_target_feature(&target_features, "avx2"));
     let has_avx512 = is_x86_64
         && (env::var("CARGO_FEATURE_AVX512").is_ok()
             || has_target_feature(&target_features, "avx512f")
