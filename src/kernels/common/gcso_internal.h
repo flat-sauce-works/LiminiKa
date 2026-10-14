@@ -4,72 +4,103 @@
 #ifndef LIMINIKA_GCSO_INTERNAL_H
 #define LIMINIKA_GCSO_INTERNAL_H
 
-#include "liminika/gcso_abi.h"
+// Mandatory C-ABI public headers (Required order: config -> types -> abi)
 #include "liminika/gcso_config.h"
 #include "liminika/gcso_types.h"
+#include "liminika/gcso_abi.h"
 
+// Standard C++20 headers
+#include <algorithm>
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <new>
+#include <type_traits>
 #include <utility>
 
 // ===================================================================
-// Over-aligned Safe Memory Allocation Helpers (C++17/C++20)
+// Over-aligned Safe Memory Allocation Helpers (C++20)
 // ===================================================================
 
 /**
- * @brief Safely allocates and constructs an over-aligned structure using std::align_val_t.
+ * @brief Allocates and constructs an over-aligned heap object safely in zero-allocation failure mode.
  *
- * Guarantees strict compliance with alignas(16), alignas(32), alignas(64), and alignas(128)
- * memory boundary requirements across heterogeneous architectures without throwing exceptions
- * across FFI boundaries. Explicitly deallocates memory if object construction throws an exception
- * to prevent resource leaks.
+ * Enforces C++20 std::align_val_t over-alignment constraints and returns nullptr on failure without throwing exceptions.
  *
- * @tparam T Structure type to allocate.
- * @tparam Args Argument types forwarded to constructor.
- * @param args Arguments forwarded to constructor.
- * @return Pointer to allocated and initialized object, or nullptr on allocation failure.
+ * @tparam T Object type to instantiate.
+ * @tparam Args Constructor argument pack types.
+ * @param args Constructor arguments forwarded to object initializer.
+ * @return Pointer to allocated and initialized object, or nullptr if allocation fails.
  */
 template <typename T, typename... Args>
-inline T* gcso_aligned_new(Args&&... args) GCSO_NOEXCEPT {
-    void* ptr = ::operator new(sizeof(T), std::align_val_t{alignof(T)}, std::nothrow);
-    if (GCSO_UNLIKELY(ptr == nullptr)) {
-        return nullptr;
-    }
+GCSO_NODISCARD GCSO_INLINE T* gcso_aligned_new(Args&&... args) GCSO_NOEXCEPT {
     try {
-        return new (ptr) T(std::forward<Args>(args)...);
+        constexpr std::size_t req_align = alignof(T) > sizeof(void*) ? alignof(T) : alignof(std::max_align_t);
+        void* ptr = ::operator new(sizeof(T), std::align_val_t(req_align), std::nothrow);
+        if (GCSO_UNLIKELY(ptr == nullptr)) {
+            return nullptr;
+        }
+        return ::new (ptr) T(std::forward<Args>(args)...);
     } catch (...) {
-        ::operator delete(ptr, std::align_val_t{alignof(T)}, std::nothrow);
         return nullptr;
     }
 }
 
 /**
- * @brief Safely destroys and deallocates an over-aligned structure using std::align_val_t.
+ * @brief Safely destroys and deallocates an over-aligned heap object created via gcso_aligned_new.
  *
- * Suppresses destructor exceptions to strictly maintain the GCSO_NOEXCEPT contract across
- * C-ABI and Rust FFI boundaries. Guarantees that memory is unconditionally freed even if
- * the object's destructor throws an exception.
+ * Suppresses destructor exceptions to strictly maintain the GCSO_NOEXCEPT contract across FFI boundaries.
  *
- * @tparam T Structure type to destroy.
- * @param ptr Pointer to instance to deallocate. Safe no-op if nullptr.
+ * @tparam T Object type to destroy.
+ * @param ptr Pointer to instance to deallocate (safe no-op if nullptr).
  */
 template <typename T>
-inline void gcso_aligned_delete(T* ptr) GCSO_NOEXCEPT {
-    if (GCSO_UNLIKELY(ptr == nullptr)) {
-        return;
+GCSO_INLINE void gcso_aligned_delete(T* ptr) GCSO_NOEXCEPT {
+    if (GCSO_LIKELY(ptr != nullptr)) {
+        constexpr std::size_t req_align = alignof(T) > sizeof(void*) ? alignof(T) : alignof(std::max_align_t);
+        try {
+            ptr->~T();
+        } catch (...) {
+            // Suppress destructor exceptions across FFI boundary
+        }
+        ::operator delete(ptr, std::align_val_t(req_align), std::nothrow);
     }
-    try {
-        ptr->~T();
-    } catch (...) {
-        // Suppress any destruction exceptions to preserve GCSO_NOEXCEPT contract across FFI
+}
+
+/**
+ * @brief Checks if a given raw memory pointer satisfies a specified byte alignment requirement.
+ *
+ * @tparam T Pointer underlying element type.
+ * @param ptr Memory address pointer to validate.
+ * @param align_bytes Required alignment boundary in bytes (must be non-zero power of two).
+ * @return True if non-null and correctly aligned; false otherwise.
+ */
+template <typename T>
+GCSO_NODISCARD GCSO_INLINE bool gcso_is_aligned(const T* ptr, std::size_t align_bytes) GCSO_NOEXCEPT {
+    if (GCSO_UNLIKELY(ptr == nullptr || align_bytes == 0 || (align_bytes & (align_bytes - 1)) != 0)) {
+        return false;
     }
-    // Deallocate memory unconditionally using std::nothrow to ensure no resource leaks
-    ::operator delete(ptr, std::align_val_t{alignof(T)}, std::nothrow);
+    return (reinterpret_cast<std::uintptr_t>(ptr) % align_bytes) == 0;
+}
+
+/**
+ * @brief Performs lock-free atomic pointer comparison and swap for zero-copy state transitions.
+ *
+ * @tparam T Target pointer underlying type.
+ * @param target Atomic reference pointer to exchange.
+ * @param expected Pointer value expected to be held in target.
+ * @param desired Pointer value to store in target upon match.
+ * @return True if CAS operation succeeded; false otherwise.
+ */
+template <typename T>
+GCSO_INLINE bool gcso_atomic_ptr_swap(std::atomic<T*>& target, T* expected, T* desired) GCSO_NOEXCEPT {
+    return target.compare_exchange_strong(expected, desired, std::memory_order_acq_rel, std::memory_order_acquire);
 }
 
 // ===================================================================
 // Strongly-Typed Internal Opaque Implementation Structures
-// Directly matching C-ABI opaque struct prototypes without generic c_void
+// Direct concrete definitions matching C-ABI handle pointer prototypes
 // ===================================================================
 
 /**

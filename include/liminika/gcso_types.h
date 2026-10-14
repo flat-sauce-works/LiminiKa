@@ -4,14 +4,6 @@
 #ifndef LIMINIKA_GCSO_TYPES_H
 #define LIMINIKA_GCSO_TYPES_H
 
-#if defined(__cplusplus)
-    #include <cstddef>
-    #include <cstdint>
-#else
-    #include <stddef.h>
-    #include <stdint.h>
-#endif
-
 #include "liminika/gcso_config.h"
 
 GCSO_EXTERN_C_BEGIN

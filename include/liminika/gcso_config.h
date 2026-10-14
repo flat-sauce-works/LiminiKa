@@ -4,12 +4,12 @@
 #ifndef LIMINIKA_GCSO_CONFIG_H
 #define LIMINIKA_GCSO_CONFIG_H
 
-#include <stddef.h>
-#include <stdint.h>
-
-#ifdef __cplusplus
+#if defined(__cplusplus)
     #include <cstddef>
     #include <cstdint>
+#else
+    #include <stddef.h>
+    #include <stdint.h>
 #endif
 
 // ===================================================================
@@ -47,6 +47,15 @@
     #define GCSO_CALL __stdcall
 #else
     #define GCSO_CALL
+#endif
+
+// ===================================================================
+// Enum Underlying Type Specification Macro for C/C++ Compatibility
+// ===================================================================
+#if defined(__cplusplus)
+    #define GCSO_ENUM_UNDERLYING(type) : type
+#else
+    #define GCSO_ENUM_UNDERLYING(type)
 #endif
 
 // ===================================================================
@@ -94,6 +103,15 @@
     #define GCSO_FORCE_INLINE __attribute__((always_inline)) GCSO_INLINE
 #else
     #define GCSO_FORCE_INLINE GCSO_INLINE
+#endif
+
+/* Branch prediction likelihood annotations */
+#if defined(__GNUC__) || defined(__clang__)
+    #define GCSO_LIKELY(x)   __builtin_expect(!!(x), 1)
+    #define GCSO_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+    #define GCSO_LIKELY(x)   (x)
+    #define GCSO_UNLIKELY(x) (x)
 #endif
 
 /* Nodiscard attribute */
