@@ -7,6 +7,16 @@
 #include "liminika/gcso_config.h"
 #include "liminika/gcso_types.h"
 
+// ===================================================================
+// 0. Version Identifiers (Unified C-ABI v0.1.1 Specification)
+// ===================================================================
+
+#define GCSO_ABI_VERSION_MAJOR  0U
+#define GCSO_ABI_VERSION_MINOR  1U
+#define GCSO_ABI_VERSION_PATCH  1U
+#define GCSO_ABI_VERSION_HEX    0x00000101U
+#define GCSO_ABI_VERSION_STRING "0.1.1"
+
 GCSO_EXTERN_C_BEGIN
 
 // ===================================================================

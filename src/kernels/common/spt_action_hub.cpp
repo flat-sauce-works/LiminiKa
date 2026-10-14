@@ -433,9 +433,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_telemetry_push(
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(slot) % alignof(gcso_daes_slot_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
-        const uint16_t idx = slot->telemetry_ring_head % 8;
+        const uint16_t idx = static_cast<uint16_t>(slot->telemetry_ring_head % 8);
         slot->telemetry_mini_ledger[idx] = metric_code;
-        slot->telemetry_ring_head = (slot->telemetry_ring_head + 1) % 8;
+        slot->telemetry_ring_head = static_cast<uint16_t>((slot->telemetry_ring_head + 1) % 8);
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
