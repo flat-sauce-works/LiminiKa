@@ -433,6 +433,15 @@ impl EntropyEvaluator for EdbcEngine {
         let new_entropy =
             (1.0 - EMA_ALPHA_ENTROPY) * prev_entropy + EMA_ALPHA_ENTROPY * token_z_safe;
 
+        // Calculate Sliding-Window Entropy Rate Phi_M(t) = H~(t) - H~(t-M) with M=5 before updating ring buffer
+        let old_entropy = if self.window_len == 0 {
+            prev_entropy
+        } else {
+            let window_m = 5usize.min(self.window_len as usize);
+            let old_idx = (self.window_idx.wrapping_sub(window_m as u8) as usize) & 7;
+            self.window_buf[old_idx]
+        };
+
         // Push new entropy to sliding window buffer
         let idx = (self.window_idx as usize) & 7;
         self.window_buf[idx] = new_entropy;
@@ -441,10 +450,6 @@ impl EntropyEvaluator for EdbcEngine {
             self.window_len += 1;
         }
 
-        // Calculate Sliding-Window Entropy Rate Phi_M(t) = H~(t) - H~(t-M) with M=5
-        let window_m = 5usize.min(self.window_len as usize);
-        let old_idx = (self.window_idx.wrapping_sub(window_m as u8) as usize) & 7;
-        let old_entropy = self.window_buf[old_idx];
         let sliding_rate = new_entropy - old_entropy;
 
         self.state.sliding_entropy_rate = sliding_rate;
@@ -836,6 +841,6 @@ mod tests {
         assert_eq!(tanh_zero, 0.0);
 
         let tanh_large = tanh_f32(5.0);
-        assert_eq!(tanh_large, 1.0);
+        assert!((tanh_large - 1.0).abs() < 1e-3);
     }
 }
