@@ -1132,8 +1132,7 @@ pub unsafe extern "C" fn gcso_context_deserialize(
     }
     ffi_boundary!({
         // SAFETY: Use read_unaligned to safely parse snapshot headers from byte slices.
-        let header =
-            unsafe { ptr::read_unaligned(buffer.cast::<gcso_snapshot_header_t>()) };
+        let header = unsafe { ptr::read_unaligned(buffer.cast::<gcso_snapshot_header_t>()) };
         if header.magic != 0x4F53_4347 {
             return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
         }
