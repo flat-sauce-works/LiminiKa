@@ -1075,7 +1075,7 @@ pub unsafe extern "C" fn gcso_context_serialize(
     }
 
     ffi_boundary!({
-        let required = size_of::<gcso_snapshot_header_t>();
+        let required = 320usize; // Total aligned snapshot payload size
         if buffer.is_null() {
             // SAFETY: buffer_size pointer is verified non-null and aligned above.
             unsafe { *buffer_size = required };
@@ -1088,17 +1088,23 @@ pub unsafe extern "C" fn gcso_context_serialize(
             unsafe { *buffer_size = required };
             return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
         }
-        if !is_aligned(buffer) {
-            return Err(GCSO_ERROR_MISALIGNED_POINTER);
-        }
-        // SAFETY: buffer is validated non-null, aligned, and large enough to hold header payload.
+
+        // SAFETY: buffer is validated non-null and large enough to hold header payload. Use write_unaligned for unaligned byte slices.
         unsafe {
             ptr::write_bytes(buffer, 0, required);
-            let header_ptr = buffer.cast::<gcso_snapshot_header_t>();
-            (*header_ptr).magic = 0x4F53_4347; // ASCII "GCSO"
-            (*header_ptr).version = GCSO_ABI_VERSION_HEX; // 0x00000101 (v0.1.1)
-            (*header_ptr).total_size = required as u64;
-            (*header_ptr).timestamp_epoch_sec = 1_774_900_000;
+            let mut header = gcso_snapshot_header_t::default();
+            header.magic = 0x4F53_4347; // ASCII "GCSO"
+            header.version = GCSO_ABI_VERSION_HEX; // 0x00000101 (v0.1.1)
+            header.total_size = required as u64;
+            header.action_hub_offset = 128;
+            header.attractor_field_offset = 128;
+            header.dpsr_state_offset = 192;
+            header.srl_state_offset = 192;
+            header.edbc_state_offset = 192;
+            header.daes_slot_offset = 256;
+            header.timestamp_epoch_sec = 1_774_900_000;
+
+            ptr::write_unaligned(buffer.cast::<gcso_snapshot_header_t>(), header);
             *buffer_size = required;
         }
         Ok(GCSO_SUCCESS)
@@ -1118,15 +1124,16 @@ pub unsafe extern "C" fn gcso_context_deserialize(
     if buffer.is_null() || context_out.is_null() {
         return GCSO_ERROR_NULL_POINTER;
     }
-    if !is_aligned(context_out) || !is_aligned(buffer) {
+    if !is_aligned(context_out) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     if buffer_size < size_of::<gcso_snapshot_header_t>() {
         return GCSO_ERROR_CONTAINER_CORRUPTED;
     }
     ffi_boundary!({
-        // SAFETY: buffer is validated non-null, aligned, and buffer_size >= header size.
-        let header = unsafe { &*buffer.cast::<gcso_snapshot_header_t>() };
+        // SAFETY: Use read_unaligned to safely parse snapshot headers from byte slices.
+        let header =
+            unsafe { ptr::read_unaligned(buffer.cast::<gcso_snapshot_header_t>()) };
         if header.magic != 0x4F53_4347 {
             return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
         }

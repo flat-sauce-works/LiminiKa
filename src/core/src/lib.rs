@@ -476,12 +476,12 @@ impl RuntimeContext {
     /// Returns `GCSO_ERROR_BUFFER_TOO_SMALL` if output buffer size is insufficient.
     #[inline]
     pub fn serialize_to_bytes(&self, buffer: &mut [u8], required_size: &mut usize) -> Result<()> {
-        let header_size = core::mem::size_of::<gcso_snapshot_header_t>();
-        let edbc_size = core::mem::size_of::<gcso_edbc_state_t>();
-        let daes_size = core::mem::size_of::<gcso_daes_slot_t>();
-        let context_data_size = 24usize;
+        let header_size = core::mem::size_of::<gcso_snapshot_header_t>(); // 128 bytes
+        let edbc_size = core::mem::size_of::<gcso_edbc_state_t>(); // 64 bytes
+        let daes_size = core::mem::size_of::<gcso_daes_slot_t>(); // 64 bytes
+        let context_data_size = 64usize; // Padded to 64 bytes for strict 64-byte alignment
 
-        let total_required = header_size + context_data_size + edbc_size + daes_size;
+        let total_required = header_size + context_data_size + edbc_size + daes_size; // 320 bytes
 
         if buffer.is_empty() {
             *required_size = total_required;
@@ -494,23 +494,28 @@ impl RuntimeContext {
 
         buffer[..total_required].fill(0);
 
-        let action_hub_off = header_size;
-        let edbc_off = action_hub_off + context_data_size;
-        let daes_off = edbc_off + edbc_size;
+        let action_hub_off = header_size; // 128
+        let edbc_off = action_hub_off + context_data_size; // 192
+        let daes_off = edbc_off + edbc_size; // 256
 
-        let header_ptr = buffer.as_mut_ptr().cast::<gcso_snapshot_header_t>();
-        // SAFETY: buffer is validated to have capacity for at least total_required bytes.
+        let mut header = gcso_snapshot_header_t::default();
+        header.magic = 0x4F53_4347; // ASCII "GCSO"
+        header.version = crate::abi::GCSO_ABI_VERSION_HEX; // 0x00000101 (v0.1.1)
+        header.total_size = total_required as u64;
+        header.action_hub_offset = action_hub_off as u64;
+        header.attractor_field_offset = action_hub_off as u64;
+        header.dpsr_state_offset = edbc_off as u64;
+        header.srl_state_offset = edbc_off as u64;
+        header.edbc_state_offset = edbc_off as u64;
+        header.daes_slot_offset = daes_off as u32;
+        header.timestamp_epoch_sec = 1_774_900_000;
+
+        // SAFETY: Use write_unaligned to prevent misaligned pointer dereferences on u8 buffers.
         unsafe {
-            (*header_ptr).magic = 0x4F53_4347; // ASCII "GCSO"
-            (*header_ptr).version = crate::abi::GCSO_ABI_VERSION_HEX; // 0x00000101 (v0.1.1)
-            (*header_ptr).total_size = total_required as u64;
-            (*header_ptr).action_hub_offset = action_hub_off as u64;
-            (*header_ptr).attractor_field_offset = action_hub_off as u64;
-            (*header_ptr).dpsr_state_offset = edbc_off as u64;
-            (*header_ptr).srl_state_offset = edbc_off as u64;
-            (*header_ptr).edbc_state_offset = edbc_off as u64;
-            (*header_ptr).daes_slot_offset = daes_off as u32;
-            (*header_ptr).timestamp_epoch_sec = 1_774_900_000;
+            core::ptr::write_unaligned(
+                buffer.as_mut_ptr().cast::<gcso_snapshot_header_t>(),
+                header,
+            );
         }
 
         let ctx_buf = &mut buffer[action_hub_off..edbc_off];
@@ -522,20 +527,20 @@ impl RuntimeContext {
         ctx_buf[16..20].copy_from_slice(&rep_gain.to_le_bytes());
 
         let edbc_state = self.edbc.state();
-        let edbc_ptr = buffer[edbc_off..daes_off]
-            .as_mut_ptr()
-            .cast::<gcso_edbc_state_t>();
-        // SAFETY: edbc_off to daes_off range contains size_of::<gcso_edbc_state_t>() valid memory.
+        // SAFETY: Use write_unaligned to populate aligned sections in unaligned byte slices safely.
         unsafe {
-            *edbc_ptr = edbc_state;
-        }
-
-        let daes_ptr = buffer[daes_off..total_required]
-            .as_mut_ptr()
-            .cast::<gcso_daes_slot_t>();
-        // SAFETY: daes_off to total_required range contains size_of::<gcso_daes_slot_t>() valid memory.
-        unsafe {
-            *daes_ptr = self.daes_slot;
+            core::ptr::write_unaligned(
+                buffer[edbc_off..daes_off]
+                    .as_mut_ptr()
+                    .cast::<gcso_edbc_state_t>(),
+                edbc_state,
+            );
+            core::ptr::write_unaligned(
+                buffer[daes_off..total_required]
+                    .as_mut_ptr()
+                    .cast::<gcso_daes_slot_t>(),
+                self.daes_slot,
+            );
         }
 
         *required_size = total_required;
@@ -553,8 +558,9 @@ impl RuntimeContext {
         if buffer.len() < header_size {
             return Err(crate::abi::GCSO_ERROR_CONTAINER_CORRUPTED);
         }
-        // SAFETY: buffer contains at least header_size bytes and valid alignment.
-        let header = unsafe { &*buffer.as_ptr().cast::<gcso_snapshot_header_t>() };
+        // SAFETY: Use read_unaligned to safely parse snapshot headers from arbitrary slice addresses.
+        let header =
+            unsafe { core::ptr::read_unaligned(buffer.as_ptr().cast::<gcso_snapshot_header_t>()) };
         if header.magic != 0x4F53_4347 {
             return Err(crate::abi::GCSO_ERROR_CONTAINER_CORRUPTED);
         }
@@ -581,9 +587,10 @@ impl RuntimeContext {
 
         let edbc_size = core::mem::size_of::<gcso_edbc_state_t>();
         if buffer.len() >= edbc_off + edbc_size {
-            let edbc_ptr = buffer[edbc_off..].as_ptr().cast::<gcso_edbc_state_t>();
-            // SAFETY: buffer contains at least edbc_size bytes at edbc_off offset.
-            let edbc_st = unsafe { *edbc_ptr };
+            // SAFETY: Use read_unaligned to prevent alignment panics on unaligned byte slices.
+            let edbc_st = unsafe {
+                core::ptr::read_unaligned(buffer[edbc_off..].as_ptr().cast::<gcso_edbc_state_t>())
+            };
             self.edbc = EdbcEngine::new(edbc_st);
             self.edbc.set_hysteresis_band(self.config.hysteresis_band);
             self.edbc.set_tau_flux(self.config.tau_flux);
@@ -591,9 +598,11 @@ impl RuntimeContext {
 
         let daes_size = core::mem::size_of::<gcso_daes_slot_t>();
         if buffer.len() >= daes_off + daes_size {
-            let daes_ptr = buffer[daes_off..].as_ptr().cast::<gcso_daes_slot_t>();
-            // SAFETY: buffer contains at least daes_size bytes at daes_off offset.
-            self.daes_slot = unsafe { *daes_ptr };
+            // SAFETY: Use read_unaligned to safely parse slot structure from byte buffer.
+            let daes_st = unsafe {
+                core::ptr::read_unaligned(buffer[daes_off..].as_ptr().cast::<gcso_daes_slot_t>())
+            };
+            self.daes_slot = daes_st;
         }
 
         Ok(())
