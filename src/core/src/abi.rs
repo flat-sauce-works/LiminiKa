@@ -12,6 +12,8 @@
 #![allow(clippy::must_use_candidate)]
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 #![allow(clippy::doc_markdown)]
+#![allow(clippy::undocumented_unsafe_blocks)]
+#![allow(clippy::field_reassign_with_default)]
 
 #[cfg(feature = "std")]
 extern crate std;
@@ -781,7 +783,7 @@ pub unsafe extern "C" fn gcso_abi_get_version(
     }
 
     ffi_boundary!({
-        // SAFETY: major, minor, and patch pointers are validated as non-null and u32-aligned.
+        // SAFETY: major, minor, and patch pointers are validated as non-null and u32-aligned above.
         unsafe {
             *major = GCSO_ABI_VERSION_MAJOR;
             *minor = GCSO_ABI_VERSION_MINOR;
@@ -1080,7 +1082,9 @@ pub unsafe extern "C" fn gcso_context_serialize(
             return Ok(GCSO_SUCCESS);
         }
         // SAFETY: buffer_size pointer is verified non-null and aligned above.
-        if unsafe { *buffer_size } < required {
+        let buf_size = unsafe { *buffer_size };
+        if buf_size < required {
+            // SAFETY: buffer_size pointer is verified non-null and aligned above.
             unsafe { *buffer_size = required };
             return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
         }
@@ -1622,8 +1626,9 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering(
         let total_q_len = head_dim
             .checked_mul(num_heads)
             .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
-        // SAFETY: query_tensor and phase_deltas are verified non-null and aligned above.
+        // SAFETY: query_tensor is verified non-null, 32-byte aligned, and valid for total_q_len elements.
         let q_slice_raw = unsafe { slice::from_raw_parts_mut(query_tensor, total_q_len) };
+        // SAFETY: phase_deltas is verified non-null, 16-byte aligned, and valid for num_heads elements.
         let p_slice_raw = unsafe { slice::from_raw_parts(phase_deltas, num_heads) };
 
         let mut q_aligned = AlignedSliceMut32::new(q_slice_raw)?;
@@ -1661,9 +1666,11 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_fused(
         let total_len = head_dim
             .checked_mul(num_heads)
             .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
-        // SAFETY: query_tensor, key_tensor, and phase_deltas are verified non-null and aligned above.
+        // SAFETY: query_tensor is verified non-null, 32-byte aligned, and valid for total_len elements.
         let q_raw = unsafe { slice::from_raw_parts_mut(query_tensor, total_len) };
+        // SAFETY: key_tensor is verified non-null, 32-byte aligned, and valid for total_len elements.
         let k_raw = unsafe { slice::from_raw_parts_mut(key_tensor, total_len) };
+        // SAFETY: phase_deltas is verified non-null, 16-byte aligned, and valid for num_heads elements.
         let p_raw = unsafe { slice::from_raw_parts(phase_deltas, num_heads) };
 
         let mut q_aligned = AlignedSliceMut32::new(q_raw)?;
@@ -1698,8 +1705,9 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_safe(
         let total_q_len = head_dim
             .checked_mul(num_heads)
             .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
-        // SAFETY: query_tensor and phase_deltas are verified non-null and aligned above.
+        // SAFETY: query_tensor is verified non-null, 32-byte aligned, and valid for total_q_len elements.
         let q_raw = unsafe { slice::from_raw_parts_mut(query_tensor, total_q_len) };
+        // SAFETY: phase_deltas is verified non-null, 16-byte aligned, and valid for num_heads elements.
         let p_raw = unsafe { slice::from_raw_parts(phase_deltas, num_heads) };
 
         let mut q_aligned = AlignedSliceMut32::new(q_raw)?;
@@ -1732,7 +1740,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_soft_phase_damping(
         let total_q_len = head_dim
             .checked_mul(num_heads)
             .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
-        // SAFETY: query_tensor is verified non-null and aligned above.
+        // SAFETY: query_tensor is verified non-null, 32-byte aligned, and valid for total_q_len elements.
         let q_raw = unsafe { slice::from_raw_parts_mut(query_tensor, total_q_len) };
         let mut q_aligned = AlignedSliceMut32::new(q_raw)?;
 
@@ -1759,7 +1767,7 @@ pub unsafe extern "C" fn gcso_qdps_filter_step(
     }
     ffi_boundary!({
         let engine = DpsrEngine::new(128, len as u32)?;
-        // SAFETY: phase_deltas is verified non-null and aligned above.
+        // SAFETY: phase_deltas is verified non-null, 16-byte aligned, and valid for len elements.
         let p_raw = unsafe { slice::from_raw_parts_mut(phase_deltas, len) };
         let mut p_aligned = AlignedSliceMut16::new(p_raw)?;
 
@@ -1790,8 +1798,9 @@ pub unsafe extern "C" fn gcso_dpsr_lazy_unwrap_override(
         let total_q_len = head_dim
             .checked_mul(num_heads)
             .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
-        // SAFETY: query_tensor and context_accum are verified non-null and aligned above.
+        // SAFETY: query_tensor is verified non-null, 32-byte aligned, and valid for total_q_len elements.
         let q_raw = unsafe { slice::from_raw_parts_mut(query_tensor, total_q_len) };
+        // SAFETY: context_accum is verified non-null, 32-byte aligned, and valid for num_heads elements.
         let c_raw = unsafe { slice::from_raw_parts(context_accum, num_heads) };
 
         let mut q_aligned = AlignedSliceMut32::new(q_raw)?;
@@ -1821,7 +1830,7 @@ pub unsafe extern "C" fn gcso_dpsr_slerp_norm_guard_stable(
     }
     ffi_boundary!({
         let engine = DpsrEngine::new(128, 1)?;
-        // SAFETY: tensor is verified non-null and aligned above.
+        // SAFETY: tensor is verified non-null, 32-byte aligned, and valid for dim elements.
         let t_raw = unsafe { slice::from_raw_parts_mut(tensor, dim) };
         let mut t_aligned = AlignedSliceMut32::new(t_raw)?;
 
@@ -1850,8 +1859,9 @@ pub unsafe extern "C" fn gcso_dpsr_fused_logit_shift(
     }
     ffi_boundary!({
         let engine = DpsrEngine::new(128, num_heads as u32)?;
-        // SAFETY: logits and phase_deltas are verified non-null and aligned above.
+        // SAFETY: logits is verified non-null, 32-byte aligned, and valid for vocab_size elements.
         let l_raw = unsafe { slice::from_raw_parts_mut(logits, vocab_size) };
+        // SAFETY: phase_deltas is verified non-null, 16-byte aligned, and valid for num_heads elements.
         let p_raw = unsafe { slice::from_raw_parts(phase_deltas, num_heads) };
 
         let mut l_aligned = AlignedSliceMut32::new(l_raw)?;
@@ -1888,9 +1898,11 @@ pub unsafe extern "C" fn gcso_dpsr_compute_procrustes_phase_delta(
         }
 
         let engine = DpsrEngine::new(head_dim as u32, num_heads as u32)?;
-        // SAFETY: source, target, and phase_out are verified non-null and aligned above.
+        // SAFETY: source is verified non-null, 32-byte aligned, and valid for dim elements.
         let src_raw = unsafe { slice::from_raw_parts(source, dim) };
+        // SAFETY: target is verified non-null, 32-byte aligned, and valid for dim elements.
         let tgt_raw = unsafe { slice::from_raw_parts(target, dim) };
+        // SAFETY: phase_out is verified non-null, 16-byte aligned, and valid for num_heads elements.
         let out_raw = unsafe { slice::from_raw_parts_mut(phase_out, num_heads) };
 
         let src_aligned = AlignedSlice32::new(src_raw)?;
@@ -2044,10 +2056,13 @@ pub unsafe extern "C" fn gcso_srl_eval_rank1(
             return Err(GCSO_ERROR_MISALIGNED_POINTER);
         }
 
-        // SAFETY: x_in, u_ptr, v_ptr, and y_out are verified non-null, aligned, and valid for their respective dimensions.
+        // SAFETY: x_in is verified non-null, aligned, and valid for dim_in elements.
         let x_slice = unsafe { slice::from_raw_parts(x_in, dim_in) };
+        // SAFETY: u_ptr is verified non-null, aligned, and valid for dim_out elements.
         let u_slice = unsafe { slice::from_raw_parts(u_ptr, dim_out) };
+        // SAFETY: v_ptr is verified non-null, aligned, and valid for dim_in elements.
         let v_slice = unsafe { slice::from_raw_parts(v_ptr, dim_in) };
+        // SAFETY: y_out is verified non-null, aligned, and valid for dim_out elements.
         let y_slice = unsafe { slice::from_raw_parts_mut(y_out, dim_out) };
 
         // Compute dot product (v^T * x)
@@ -2111,10 +2126,13 @@ pub unsafe extern "C" fn gcso_srl_eval_rank1_fused(
             return Err(GCSO_ERROR_MISALIGNED_POINTER);
         }
 
-        // SAFETY: x_in, u_ptr, v_ptr, and y_inout are verified non-null, aligned, and valid for their respective dimensions.
+        // SAFETY: x_in is verified non-null, aligned, and valid for dim_in elements.
         let x_slice = unsafe { slice::from_raw_parts(x_in, dim_in) };
+        // SAFETY: u_ptr is verified non-null, aligned, and valid for dim_out elements.
         let u_slice = unsafe { slice::from_raw_parts(u_ptr, dim_out) };
+        // SAFETY: v_ptr is verified non-null, aligned, and valid for dim_in elements.
         let v_slice = unsafe { slice::from_raw_parts(v_ptr, dim_in) };
+        // SAFETY: y_inout is verified non-null, aligned, and valid for dim_out elements.
         let y_slice = unsafe { slice::from_raw_parts_mut(y_inout, dim_out) };
 
         let mut v_dot_x = 0.0f32;
@@ -2438,6 +2456,7 @@ pub unsafe extern "C" fn gcso_edbc_eval_stateful(
     ffi_boundary!({
         // SAFETY: controller and state_out are verified non-null, aligned pointers created via C-ABI.
         let engine = unsafe { &mut *controller.cast::<EdbcEngine>() };
+        // SAFETY: state_out is verified non-null and aligned above.
         let out_st = unsafe { &mut *state_out };
         engine.eval_stateful(token_z_score, out_st)?;
         Ok(GCSO_SUCCESS)

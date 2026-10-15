@@ -315,34 +315,36 @@ impl AttractorFieldEngine {
             self.next_anchor_id = 1;
         }
 
-        let slot = &mut self.anchors[slot_idx];
-        *slot = AttractorAnchor::default();
-        slot.id = anchor_id;
-        slot.anchor_type = anchor_type;
-        slot.weight = weight;
-        slot.pull_force = 1.0;
-        slot.stigmergic_density = 1.0;
-        slot.last_active_step = self.step_counter;
-        slot.half_life_steps = 1000;
-        slot.is_active = 1;
-        slot.is_crystallized = u8::from(is_crystallized);
-        slot.domain_id = self.domain_id;
+        let mut new_anchor = AttractorAnchor {
+            id: anchor_id,
+            anchor_type,
+            weight,
+            pull_force: 1.0,
+            stigmergic_density: 1.0,
+            last_active_step: self.step_counter,
+            half_life_steps: 1000,
+            is_active: 1,
+            is_crystallized: u8::from(is_crystallized),
+            domain_id: self.domain_id,
+            ..Default::default()
+        };
 
         if let Some(emb) = embedding {
             let copy_len = emb.len().min(MAX_EMBEDDING_DIM);
             if copy_len > 0 {
-                slot.vector_data[..copy_len].copy_from_slice(&emb.as_slice()[..copy_len]);
-                slot.vector_dim = copy_len as u16;
+                new_anchor.vector_data[..copy_len].copy_from_slice(&emb.as_slice()[..copy_len]);
+                new_anchor.vector_dim = copy_len as u16;
 
                 // Generate initial phase profile from embedding dimensions safely
-                for (h, delta) in slot.phase_deltas.iter_mut().enumerate() {
-                    let sample_val = slot.vector_data[h % copy_len];
+                for (h, delta) in new_anchor.phase_deltas.iter_mut().enumerate() {
+                    let sample_val = new_anchor.vector_data[h % copy_len];
                     let q7_val = (sample_val * 128.0) as i32;
                     *delta = q7_val.clamp(-128, 127) as i8;
                 }
             }
         }
 
+        self.anchors[slot_idx] = new_anchor;
         Ok(anchor_id)
     }
 
@@ -715,13 +717,15 @@ mod tests {
 
     #[test]
     fn test_attractor_anchor_energy_score_and_decay() {
-        let mut anchor = AttractorAnchor::default();
-        anchor.is_active = 1;
-        anchor.weight = 2.0;
-        anchor.pull_force = 1.5;
-        anchor.stigmergic_density = 1.0;
-        anchor.last_active_step = 0;
-        anchor.half_life_steps = 100;
+        let anchor = AttractorAnchor {
+            is_active: 1,
+            weight: 2.0,
+            pull_force: 1.5,
+            stigmergic_density: 1.0,
+            last_active_step: 0,
+            half_life_steps: 100,
+            ..Default::default()
+        };
 
         // At dt = 0: 2.0 * 1.5 + 1.0 = 4.0
         assert!((anchor.compute_energy_score(0) - 4.0).abs() < 1e-5);

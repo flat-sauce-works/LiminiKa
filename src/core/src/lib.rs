@@ -316,17 +316,21 @@ impl RuntimeContext {
     pub fn new(config: Config) -> Result<Self> {
         config.validate()?;
         let dpsr = DpsrEngine::new(config.raw.head_dim, config.raw.num_heads)?;
-        let mut edbc_state = gcso_edbc_state_t::default();
-        edbc_state.singularity_eps = config.raw.entropy_singularity_eps;
-        edbc_state.bifurcation_threshold = 1.5;
+        let edbc_state = gcso_edbc_state_t {
+            singularity_eps: config.raw.entropy_singularity_eps,
+            bifurcation_threshold: 1.5,
+            ..Default::default()
+        };
         let mut edbc = EdbcEngine::new(edbc_state);
         edbc.set_hysteresis_band(config.hysteresis_band);
         edbc.set_tau_flux(config.tau_flux);
 
         let attractor_space = MultiAttractorSpace::new();
 
-        let mut daes_slot = gcso_daes_slot_t::default();
-        daes_slot.mode = u32::from(config.raw.daes_mode);
+        let daes_slot = gcso_daes_slot_t {
+            mode: u32::from(config.raw.daes_mode),
+            ..Default::default()
+        };
 
         Ok(Self {
             config,
@@ -459,7 +463,7 @@ impl RuntimeContext {
         mut trail_out: Option<&mut gcso_pointer_trail_t>,
     ) -> Result<()> {
         for &token_id in token_ids {
-            let trail_ref = trail_out.as_mut().map(|t| &mut **t);
+            let trail_ref = trail_out.as_deref_mut();
             self.step_token(token_id, None, None, trail_ref)?;
         }
         Ok(())
@@ -613,9 +617,9 @@ impl SystemCapabilityQuery for RuntimeContext {
 
     #[inline]
     fn query_capability(&self) -> gcso_capability_flags_t {
-        cfg!(feature = "cuda") as u64 * (1 << 1)
-            | cfg!(feature = "vulkan") as u64 * (1 << 2)
-            | (cfg!(target_os = "macos") || cfg!(feature = "metal")) as u64 * (1 << 3)
+        (cfg!(feature = "cuda") as u64 * (1 << 1))
+            | (cfg!(feature = "vulkan") as u64 * (1 << 2))
+            | (((cfg!(target_os = "macos") || cfg!(feature = "metal")) as u64) * (1 << 3))
             | 0x01u64 // Base CPU capability
     }
 

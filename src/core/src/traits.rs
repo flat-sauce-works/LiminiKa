@@ -396,8 +396,8 @@ impl<'a, T, const ALIGN: usize> Index<RangeFull> for AlignedSlice<'a, T, ALIGN> 
     type Output = [T];
 
     #[inline(always)]
-    fn index(&self, range: RangeFull) -> &Self::Output {
-        &self.slice[range]
+    fn index(&self, _range: RangeFull) -> &Self::Output {
+        self.slice
     }
 }
 
@@ -867,15 +867,15 @@ impl<'a, T, const ALIGN: usize> Index<RangeFull> for AlignedSliceMut<'a, T, ALIG
     type Output = [T];
 
     #[inline(always)]
-    fn index(&self, range: RangeFull) -> &Self::Output {
-        &self.slice[range]
+    fn index(&self, _range: RangeFull) -> &Self::Output {
+        self.slice
     }
 }
 
 impl<'a, T, const ALIGN: usize> IndexMut<RangeFull> for AlignedSliceMut<'a, T, ALIGN> {
     #[inline(always)]
-    fn index_mut(&mut self, range: RangeFull) -> &mut Self::Output {
-        &mut self.slice[range]
+    fn index_mut(&mut self, _range: RangeFull) -> &mut Self::Output {
+        self.slice
     }
 }
 
