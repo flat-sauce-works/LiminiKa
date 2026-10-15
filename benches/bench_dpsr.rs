@@ -382,7 +382,14 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
             let mut q_slice = AlignedSliceMut32::new(q_data.as_mut_slice()).unwrap();
             let p_slice = AlignedSlice16::new(&phase_data.0).unwrap();
 
-            default_default_engine_step(&default_engine, &mut q_slice, &p_slice, damping_factor, norm_lower, norm_upper);
+            default_default_engine_step(
+                &default_engine,
+                &mut q_slice,
+                &p_slice,
+                damping_factor,
+                norm_lower,
+                norm_upper,
+            );
         });
     });
 
