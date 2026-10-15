@@ -499,7 +499,7 @@ impl RuntimeContext {
         let daes_off = edbc_off + edbc_size; // 256
 
         let header = gcso_snapshot_header_t {
-            magic: 0x4F53_4347, // ASCII "GCSO"
+            magic: 0x4F53_4347,                        // ASCII "GCSO"
             version: crate::abi::GCSO_ABI_VERSION_HEX, // 0x00000101 (v0.1.1)
             total_size: total_required as u64,
             action_hub_offset: action_hub_off as u64,

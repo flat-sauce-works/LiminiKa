@@ -1093,7 +1093,7 @@ pub unsafe extern "C" fn gcso_context_serialize(
         unsafe {
             ptr::write_bytes(buffer, 0, required);
             let header = gcso_snapshot_header_t {
-                magic: 0x4F53_4347, // ASCII "GCSO"
+                magic: 0x4F53_4347,            // ASCII "GCSO"
                 version: GCSO_ABI_VERSION_HEX, // 0x00000101 (v0.1.1)
                 total_size: required as u64,
                 action_hub_offset: 128,
