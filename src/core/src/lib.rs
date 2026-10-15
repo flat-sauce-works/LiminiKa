@@ -585,6 +585,19 @@ impl RuntimeContext {
             self.step_counter = u64::from_le_bytes(ctx_buf[..8].try_into().unwrap_or([0; 8]));
             self.active_trail_count =
                 u32::from_le_bytes(ctx_buf[8..12].try_into().unwrap_or([0; 4]));
+            let sys_anchors =
+                u32::from_le_bytes(ctx_buf[12..16].try_into().unwrap_or([0; 4]));
+            let rep_gain =
+                f32::from_le_bytes(ctx_buf[16..20].try_into().unwrap_or([0; 4]));
+
+            self.attractor_space.system_field.repulsion_gain = rep_gain;
+            let _ = self.attractor_space.system_field.clear_anchors();
+            for _ in 0..sys_anchors {
+                let _ = self
+                    .attractor_space
+                    .system_field
+                    .add_system_prompt_anchor("restored_anchor", 1.0);
+            }
         }
 
         let edbc_size = core::mem::size_of::<gcso_edbc_state_t>();
