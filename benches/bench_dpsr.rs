@@ -27,6 +27,7 @@ impl AlignedHeapBuffer {
     fn new(len: usize, align: usize, initial_val: f32) -> Self {
         let layout = Layout::from_size_align(len * std::mem::size_of::<f32>(), align)
             .expect("Invalid layout for AlignedHeapBuffer");
+        // SAFETY: `layout` is guaranteed to have non-zero size and valid power-of-two alignment.
         let ptr = unsafe { alloc(layout) as *mut f32 };
         assert!(
             !ptr.is_null(),
@@ -34,6 +35,7 @@ impl AlignedHeapBuffer {
         );
 
         // Initialize buffer with valid non-zero values to prevent singularity errors
+        // SAFETY: `ptr` is verified non-null above and points to a newly allocated memory region valid for `len` f32 elements.
         unsafe {
             let slice = std::slice::from_raw_parts_mut(ptr, len);
             slice.fill(initial_val);
@@ -45,12 +47,14 @@ impl AlignedHeapBuffer {
     /// Access the buffer as a mutable slice.
     #[inline(always)]
     fn as_mut_slice(&mut self) -> &mut [f32] {
+        // SAFETY: `self.ptr` points to a valid heap allocation of `self.len` f32 elements and is guaranteed non-null.
         unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
     }
 }
 
 impl Drop for AlignedHeapBuffer {
     fn drop(&mut self) {
+        // SAFETY: `self.ptr` was allocated with `self.layout` using `alloc` and is deallocated exactly once on drop.
         unsafe {
             dealloc(self.ptr as *mut u8, self.layout);
         }
@@ -378,23 +382,35 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
             let mut q_slice = AlignedSliceMut32::new(q_data.as_mut_slice()).unwrap();
             let p_slice = AlignedSlice16::new(&phase_data.0).unwrap();
 
-            default_engine
-                .apply_phase_steering(black_box(&mut q_slice), black_box(&p_slice))
-                .unwrap();
-            default_engine
-                .apply_soft_phase_damping(black_box(&mut q_slice), black_box(damping_factor))
-                .unwrap();
-            default_engine
-                .slerp_norm_guard_stable(
-                    black_box(&mut q_slice),
-                    black_box(norm_lower),
-                    black_box(norm_upper),
-                )
-                .unwrap();
+            default_default_engine_step(&default_engine, &mut q_slice, &p_slice, damping_factor, norm_lower, norm_upper);
         });
     });
 
     group.finish();
+}
+
+#[inline(always)]
+fn default_default_engine_step(
+    default_engine: &DpsrEngine,
+    q_slice: &mut AlignedSliceMut32<'_, f32>,
+    p_slice: &AlignedSlice16<'_, gcso_q7_t>,
+    damping_factor: f32,
+    norm_lower: f32,
+    norm_upper: f32,
+) {
+    default_engine
+        .apply_phase_steering(black_box(q_slice), black_box(p_slice))
+        .unwrap();
+    default_engine
+        .apply_soft_phase_damping(black_box(q_slice), black_box(damping_factor))
+        .unwrap();
+    default_engine
+        .slerp_norm_guard_stable(
+            black_box(q_slice),
+            black_box(norm_lower),
+            black_box(norm_upper),
+        )
+        .unwrap();
 }
 
 criterion_group!(benches, bench_dpsr_steering_operations);

@@ -24,12 +24,14 @@ impl AlignedHeapBuffer {
     fn new(len: usize, align: usize, initial_val: f32) -> Self {
         let layout = Layout::from_size_align(len * std::mem::size_of::<f32>(), align)
             .expect("Invalid layout for AlignedHeapBuffer");
+        // SAFETY: `layout` is guaranteed to have non-zero size and valid power-of-two alignment.
         let ptr = unsafe { alloc(layout) as *mut f32 };
         assert!(
             !ptr.is_null(),
             "Heap allocation failed for AlignedHeapBuffer"
         );
 
+        // SAFETY: `ptr` is verified non-null above and points to a newly allocated memory region valid for `len` f32 elements.
         unsafe {
             let slice = std::slice::from_raw_parts_mut(ptr, len);
             slice.fill(initial_val);
@@ -41,12 +43,14 @@ impl AlignedHeapBuffer {
     /// Access the buffer as a mutable slice.
     #[inline(always)]
     fn as_mut_slice(&mut self) -> &mut [f32] {
+        // SAFETY: `self.ptr` points to a valid heap allocation of `self.len` f32 elements and is guaranteed non-null.
         unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
     }
 }
 
 impl Drop for AlignedHeapBuffer {
     fn drop(&mut self) {
+        // SAFETY: `self.ptr` was allocated with `self.layout` using `alloc` and is deallocated exactly once on drop.
         unsafe {
             dealloc(self.ptr as *mut u8, self.layout);
         }
