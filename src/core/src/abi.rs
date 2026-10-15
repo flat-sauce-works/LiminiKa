@@ -1092,17 +1092,19 @@ pub unsafe extern "C" fn gcso_context_serialize(
         // SAFETY: buffer is validated non-null and large enough to hold header payload. Use write_unaligned for unaligned byte slices.
         unsafe {
             ptr::write_bytes(buffer, 0, required);
-            let mut header = gcso_snapshot_header_t::default();
-            header.magic = 0x4F53_4347; // ASCII "GCSO"
-            header.version = GCSO_ABI_VERSION_HEX; // 0x00000101 (v0.1.1)
-            header.total_size = required as u64;
-            header.action_hub_offset = 128;
-            header.attractor_field_offset = 128;
-            header.dpsr_state_offset = 192;
-            header.srl_state_offset = 192;
-            header.edbc_state_offset = 192;
-            header.daes_slot_offset = 256;
-            header.timestamp_epoch_sec = 1_774_900_000;
+            let header = gcso_snapshot_header_t {
+                magic: 0x4F53_4347, // ASCII "GCSO"
+                version: GCSO_ABI_VERSION_HEX, // 0x00000101 (v0.1.1)
+                total_size: required as u64,
+                action_hub_offset: 128,
+                attractor_field_offset: 128,
+                dpsr_state_offset: 192,
+                srl_state_offset: 192,
+                edbc_state_offset: 192,
+                daes_slot_offset: 256,
+                timestamp_epoch_sec: 1_774_900_000,
+                ..Default::default()
+            };
 
             ptr::write_unaligned(buffer.cast::<gcso_snapshot_header_t>(), header);
             *buffer_size = required;

@@ -498,17 +498,19 @@ impl RuntimeContext {
         let edbc_off = action_hub_off + context_data_size; // 192
         let daes_off = edbc_off + edbc_size; // 256
 
-        let mut header = gcso_snapshot_header_t::default();
-        header.magic = 0x4F53_4347; // ASCII "GCSO"
-        header.version = crate::abi::GCSO_ABI_VERSION_HEX; // 0x00000101 (v0.1.1)
-        header.total_size = total_required as u64;
-        header.action_hub_offset = action_hub_off as u64;
-        header.attractor_field_offset = action_hub_off as u64;
-        header.dpsr_state_offset = edbc_off as u64;
-        header.srl_state_offset = edbc_off as u64;
-        header.edbc_state_offset = edbc_off as u64;
-        header.daes_slot_offset = daes_off as u32;
-        header.timestamp_epoch_sec = 1_774_900_000;
+        let header = gcso_snapshot_header_t {
+            magic: 0x4F53_4347, // ASCII "GCSO"
+            version: crate::abi::GCSO_ABI_VERSION_HEX, // 0x00000101 (v0.1.1)
+            total_size: total_required as u64,
+            action_hub_offset: action_hub_off as u64,
+            attractor_field_offset: action_hub_off as u64,
+            dpsr_state_offset: edbc_off as u64,
+            srl_state_offset: edbc_off as u64,
+            edbc_state_offset: edbc_off as u64,
+            daes_slot_offset: daes_off as u32,
+            timestamp_epoch_sec: 1_774_900_000,
+            ..Default::default()
+        };
 
         // SAFETY: Use write_unaligned to prevent misaligned pointer dereferences on u8 buffers.
         unsafe {
