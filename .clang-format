@@ -1,5 +1,5 @@
-# SPDX-License-Identifier: MIT OR Apache-2.0
----
+# name: .clang-format | SPDX-License-Identifier: MIT OR Apache-2.0
+
 Language: Cpp
 BasedOnStyle: LLVM
 AccessModifierOffset: -2
@@ -21,6 +21,7 @@ AlwaysBreakBeforeMultilineStrings: false
 AlwaysBreakTemplateDeclarations: Yes
 BinPackArguments: true
 BinPackParameters: true
+
 BraceWrapping:
   AfterCaseLabel: false
   AfterClass: false
@@ -38,6 +39,7 @@ BraceWrapping:
   SplitEmptyFunction: true
   SplitEmptyRecord: true
   SplitEmptyNamespace: true
+
 BreakBeforeBinaryOperators: None
 BreakBeforeBraces: Attach
 BreakBeforeInheritanceComma: false
@@ -56,20 +58,20 @@ PointerAlignment: Left
 DisableFormat: false
 ExperimentalAutoDetectBinPacking: false
 FixNamespaceComments: true
-ForEachMacros:
-  - 'foreach'
-  - 'Q_FOREACH'
-  - 'BOOST_FOREACH'
-IncludeBlocks: Regroup
-IncludeCategories:
-  - Regex: '^["<]liminika/.*'
-    Priority: 1
-  - Regex: '^<.*\.h>'
-    Priority: 2
-  - Regex: '^<.*'
-    Priority: 3
-  - Regex: '.*'
-    Priority: 4
+ForEachMacros: ['foreach', 'Q_FOREACH', 'BOOST_FOREACH']
+IncludeBlocks: Preserve
+
+IncludeCategories: [
+  { Regex: '^["<]liminika/gcso_config\.h[">]', Priority: 1 },
+  { Regex: '^["<]liminika/gcso_types\.h[">]', Priority: 2 },
+  { Regex: '^["<]liminika/gcso_abi\.h[">]', Priority: 3 },
+  { Regex: '^["<]liminika/.*', Priority: 4 },
+  { Regex: '^"gcso_internal\.h"', Priority: 5 },
+  { Regex: '^<.*\.h>', Priority: 6 },
+  { Regex: '^<.*', Priority: 7 },
+  { Regex: '.*', Priority: 8 }
+]
+
 IndentCaseLabels: true
 IndentExternBlock: NoIndent
 IndentPPDirectives: BeforeHash
@@ -88,7 +90,8 @@ PenaltyBreakTemplateDeclaration: 10
 PenaltyExcessCharacter: 1000000
 PenaltyReturnTypeOnItsOwnLine: 60
 ReflowComments: true
-SortIncludes: true
+
+SortIncludes: CaseSensitive
 SortUsingDeclarations: true
 SpaceAfterCStyleCast: false
 SpaceAfterTemplateKeyword: true

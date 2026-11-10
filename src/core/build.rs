@@ -15,7 +15,8 @@ use std::process::Command;
 
 /// List of valid file extensions tracked for Cargo re-run checking.
 const TRACKED_EXTENSIONS: &[&str] = &[
-    "h", "hpp", "c", "cpp", "cu", "cuh", "metal", "mm", "glsl", "spv", "txt", "cmake",
+    "h", "hpp", "inl", "c", "cpp", "cc", "cxx", "cu", "cuh", "metal", "mm", "comp", "vert",
+    "frag", "glsl", "hlsl", "wgsl", "slang", "hip", "cl", "spv", "txt", "cmake",
 ];
 
 /// Registers all custom cfg identifiers to prevent `unexpected_cfgs` warnings on Rust 1.80+.
@@ -176,6 +177,11 @@ fn main() {
         "LIMINIKA_ENABLE_CUDA",
         "LIMINIKA_ENABLE_VULKAN",
         "LIMINIKA_ENABLE_METAL",
+        "LIMINIKA_ENABLE_AVX2",
+        "LIMINIKA_ENABLE_AVX512",
+        "LIMINIKA_ENABLE_NEON",
+        "LIMINIKA_ENABLE_SVE",
+        "LIMINIKA_ENABLE_RVV",
         "LIMINIKA_CUDA_ARCH",
         "CUDA_ARCHITECTURES",
         "VULKAN_SDK",
@@ -220,20 +226,30 @@ fn main() {
     let is_riscv64 = target_arch == "riscv64";
 
     let has_avx2 = is_x86_64
-        && (env::var("CARGO_FEATURE_AVX2").is_ok() || has_target_feature(&target_features, "avx2"));
+        && parse_bool_env("LIMINIKA_ENABLE_AVX2").unwrap_or_else(|| {
+            env::var("CARGO_FEATURE_AVX2").is_ok() || has_target_feature(&target_features, "avx2")
+        });
     let has_avx512 = is_x86_64
-        && (env::var("CARGO_FEATURE_AVX512").is_ok()
-            || has_target_feature(&target_features, "avx512f")
-            || has_target_feature(&target_features, "avx512"));
+        && parse_bool_env("LIMINIKA_ENABLE_AVX512").unwrap_or_else(|| {
+            env::var("CARGO_FEATURE_AVX512").is_ok()
+                || has_target_feature(&target_features, "avx512f")
+                || has_target_feature(&target_features, "avx512")
+        });
     let has_neon = is_aarch64
-        && (env::var("CARGO_FEATURE_NEON").is_ok()
-            || has_target_feature(&target_features, "neon")
-            || is_apple);
+        && parse_bool_env("LIMINIKA_ENABLE_NEON").unwrap_or_else(|| {
+            env::var("CARGO_FEATURE_NEON").is_ok()
+                || has_target_feature(&target_features, "neon")
+                || is_apple
+        });
     let has_sve = is_aarch64
         && !is_apple
-        && (env::var("CARGO_FEATURE_SVE").is_ok() || has_target_feature(&target_features, "sve"));
+        && parse_bool_env("LIMINIKA_ENABLE_SVE").unwrap_or_else(|| {
+            env::var("CARGO_FEATURE_SVE").is_ok() || has_target_feature(&target_features, "sve")
+        });
     let has_rvv = is_riscv64
-        && (env::var("CARGO_FEATURE_RVV").is_ok() || has_target_feature(&target_features, "v"));
+        && parse_bool_env("LIMINIKA_ENABLE_RVV").unwrap_or_else(|| {
+            env::var("CARGO_FEATURE_RVV").is_ok() || has_target_feature(&target_features, "v")
+        });
 
     // Emit custom Rust conditional compilation flags based on backend availability
     if enable_cuda {
@@ -332,12 +348,16 @@ fn main() {
             if has_avx512 {
                 cfg.cxxflag("-mavx512f")
                     .cxxflag("-mavx512bw")
-                    .cxxflag("-mavx512dq");
+                    .cxxflag("-mavx512dq")
+                    .cxxflag("-mavx512vl")
+                    .cxxflag("-mfma");
             } else if has_avx2 {
                 cfg.cxxflag("-mavx2").cxxflag("-mfma");
             }
         } else if target_arch == "aarch64" && has_sve {
             cfg.cxxflag("-march=armv8-a+sve");
+        } else if target_arch == "riscv64" && has_rvv {
+            cfg.cxxflag("-march=rv64gcv");
         }
     }
 

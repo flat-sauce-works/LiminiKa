@@ -9,6 +9,10 @@
 #include <cstring>
 #include <exception>
 
+#if defined(__AVX2__)
+    #include <immintrin.h>
+#endif
+
 GCSO_EXTERN_C_BEGIN
 
 // ===================================================================
@@ -69,9 +73,10 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_anchor(
     if (GCSO_UNLIKELY(context == nullptr || vec == nullptr || anchor_id_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
+    if (GCSO_UNLIKELY(dim == 0 || static_cast<uint32_t>(anchor_type) > static_cast<uint32_t>(GCSO_ANCHOR_TYPE_CRYSTALLIZED))) {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
     try {
-        (void)anchor_type;
-        (void)dim;
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
                           reinterpret_cast<uintptr_t>(vec) % 32 != 0 ||
                           reinterpret_cast<uintptr_t>(anchor_id_out) % alignof(uint32_t) != 0)) {
@@ -107,9 +112,10 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_system_prompt_anchor(
     if (GCSO_UNLIKELY(context == nullptr || prompt_text == nullptr || anchor_id_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
+    if (GCSO_UNLIKELY(std::isnan(weight) || std::isinf(weight))) {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
     try {
-        (void)prompt_text;
-        (void)weight;
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
                           reinterpret_cast<uintptr_t>(anchor_id_out) % alignof(uint32_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
@@ -146,10 +152,10 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_embedding_anchor(
     if (GCSO_UNLIKELY(context == nullptr || embedding == nullptr || anchor_id_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
+    if (GCSO_UNLIKELY(dim == 0 || std::isnan(weight) || std::isinf(weight))) {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
     try {
-        (void)embedding;
-        (void)dim;
-        (void)weight;
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
                           reinterpret_cast<uintptr_t>(embedding) % 32 != 0 ||
                           reinterpret_cast<uintptr_t>(anchor_id_out) % alignof(uint32_t) != 0)) {
@@ -359,8 +365,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_edbc_eval_stateful(
 /**
  * @brief Computes CVoid Coherent Vector Alignment Metric for Out-of-Distribution Latent Space.
  *
- * Evaluates the L2 norm of key vector states to score alignment with the latent manifold.
- * Utilizes 4 independent accumulators over 8-element SIMD chunks to maximize ILP and FMA pipeline utilization.
+ * Evaluates the mean squared energy of key vector states across 128-byte dyadic cacheline pairs.
+ * Uses 4 independent 256-bit AVX2 FMA accumulators (32 floats = 128 bytes per loop iteration)
+ * when compiled with AVX2 support.
  *
  * @param key_vector 32-byte aligned key tensor vector.
  * @param dim Vector dimension.
@@ -384,12 +391,56 @@ GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_dyadic128(
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
+        size_t i = 0;
+        float sum_sq = 0.0f;
+
+#if defined(__AVX2__)
+        __m256 acc0 = _mm256_setzero_ps();
+        __m256 acc1 = _mm256_setzero_ps();
+        __m256 acc2 = _mm256_setzero_ps();
+        __m256 acc3 = _mm256_setzero_ps();
+
+        const size_t vec32_dim = dim & ~static_cast<size_t>(31);
+        for (; i < vec32_dim; i += 32) {
+            const __m256 v0 = _mm256_load_ps(key_vector + i + 0);
+            const __m256 v1 = _mm256_load_ps(key_vector + i + 8);
+            const __m256 v2 = _mm256_load_ps(key_vector + i + 16);
+            const __m256 v3 = _mm256_load_ps(key_vector + i + 24);
+        #if defined(__FMA__)
+            acc0 = _mm256_fmadd_ps(v0, v0, acc0);
+            acc1 = _mm256_fmadd_ps(v1, v1, acc1);
+            acc2 = _mm256_fmadd_ps(v2, v2, acc2);
+            acc3 = _mm256_fmadd_ps(v3, v3, acc3);
+        #else
+            acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(v0, v0));
+            acc1 = _mm256_add_ps(acc1, _mm256_mul_ps(v1, v1));
+            acc2 = _mm256_add_ps(acc2, _mm256_mul_ps(v2, v2));
+            acc3 = _mm256_add_ps(acc3, _mm256_mul_ps(v3, v3));
+        #endif
+        }
+
+        const size_t vec8_dim = dim & ~static_cast<size_t>(7);
+        for (; i < vec8_dim; i += 8) {
+            const __m256 v0 = _mm256_load_ps(key_vector + i);
+        #if defined(__FMA__)
+            acc0 = _mm256_fmadd_ps(v0, v0, acc0);
+        #else
+            acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(v0, v0));
+        #endif
+        }
+
+        const __m256 sum256 = _mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3));
+        const __m128 sum128 = _mm_add_ps(_mm256_castps256_ps128(sum256), _mm256_extractf128_ps(sum256, 1));
+        const __m128 shuf = _mm_movehdup_ps(sum128);
+        const __m128 sums = _mm_add_ps(sum128, shuf);
+        const __m128 shuf2 = _mm_movehl_ps(shuf, sums);
+        sum_sq = _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+#else
         float sum_sq0 = 0.0f;
         float sum_sq1 = 0.0f;
         float sum_sq2 = 0.0f;
         float sum_sq3 = 0.0f;
 
-        size_t i = 0;
         const size_t simd_dim = dim & ~static_cast<size_t>(7);
         for (; i < simd_dim; i += 8) {
             const float v0 = key_vector[i + 0]; const float v1 = key_vector[i + 1];
@@ -406,8 +457,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_dyadic128(
             sum_sq2 += v6 * v6;
             sum_sq3 += v7 * v7;
         }
+        sum_sq = (sum_sq0 + sum_sq1) + (sum_sq2 + sum_sq3);
+#endif
 
-        float sum_sq = (sum_sq0 + sum_sq1) + (sum_sq2 + sum_sq3);
         for (; i < dim; ++i) {
             const float v = key_vector[i];
             sum_sq += v * v;
@@ -445,7 +497,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_barrier(
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        if (GCSO_UNLIKELY(std::isnan(void_score) || std::isnan(tau_eff) || 
+        if (GCSO_UNLIKELY(std::isnan(void_score) || std::isnan(tau_eff) ||
                           std::isinf(void_score) || std::isinf(tau_eff) || tau_eff <= 0.0f)) {
             return GCSO_ERROR_EDBC_SINGULARITY;
         }

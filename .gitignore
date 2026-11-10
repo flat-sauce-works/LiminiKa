@@ -1,3 +1,4 @@
+# name: .gitignore
 # SPDX-License-Identifier: MIT OR Apache-2.0
 # ===================================================================
 # LiminiKa Project .gitignore
@@ -5,12 +6,22 @@
 # ===================================================================
 
 # -------------------------------------------------------------------
-# Rust Build Artifacts & Cargo
+# VSCodeCounter & Code Analysis Tools
+# -------------------------------------------------------------------
+.VSCodeCounter/
+.VSCodeCounter*/
+
+# -------------------------------------------------------------------
+# Rust Build Artifacts, Cargo, Coverage & Benchmarks
 # -------------------------------------------------------------------
 /target/
 **/*.rs.bk
 *.profraw
 *.profdata
+*.lprof
+/coverage/
+*.gcov
+cargo-timing*.html
 
 # -------------------------------------------------------------------
 # C / C++ / CUDA / GPU Build Artifacts, CMake & Toolchains
@@ -30,13 +41,18 @@
 *.exp
 *.exe
 
-# GPU Compute Artifacts (CUDA / Vulkan / Metal)
+# GPU Compute Artifacts & Compiler Caches (CUDA / Vulkan / Metal / ROCm)
 *.ptx
 *.cubin
 *.fatbin
 *.spv
 *.air
 *.metallib
+*.bc
+.nv/
+.metal-cache/
+.vk-cache/
+.hip-cache/
 
 # CMake Generated Files
 CMakeCache.txt
@@ -56,7 +72,25 @@ build.ninja
 compile_commands.json
 
 # -------------------------------------------------------------------
-# LLM Model Weights, Datasets, & Adapters (Large Files)
+# Python Tooling, Test Fixtures & Virtual Environments
+# -------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+/dist/
+/sdist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+ENV/
+env/
+
+# -------------------------------------------------------------------
+# LLM Model Weights, Datasets, & Adapters (Large Binary Files)
 # -------------------------------------------------------------------
 *.bin
 *.safetensors
@@ -65,12 +99,16 @@ compile_commands.json
 *.pt
 *.pth
 *.onnx
+*.ot
+*.tflite
 models/*
 !models/.gitkeep
 weights/*
 !weights/.gitkeep
 adapters/*
 !adapters/.gitkeep
+datasets/*
+!datasets/.gitkeep
 
 # -------------------------------------------------------------------
 # LiminiKa / GCSO Runtime State & Binary Containers
@@ -83,6 +121,8 @@ containers/*
 !containers/.gitkeep
 deployments/*
 !deployments/.gitkeep
+snapshots/*
+!snapshots/.gitkeep
 
 # -------------------------------------------------------------------
 # Environment Variables & Secret Configuration
@@ -120,9 +160,13 @@ Desktop.ini
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
+!.vscode/extensions.json
 .idea/
 .clangd/
 .cache/
+.zed/
+.helix/
+.fleet/
 *.swp
 *.swo
 *~

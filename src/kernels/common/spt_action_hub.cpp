@@ -9,6 +9,10 @@
 #include <cstring>
 #include <exception>
 
+#if defined(__AVX2__)
+    #include <immintrin.h>
+#endif
+
 GCSO_EXTERN_C_BEGIN
 
 // ===================================================================
@@ -58,9 +62,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_create(
 /**
  * @brief Advances a 64-bit tagged pointer transition in O(1) time within the Action Hub.
  *
- * Hot Path Guarantee: Zero dynamic allocations. Modifies trail_out structure in-place.
- * Encodes current and previous pointer states, increments step counter, and copies
- * active Q7 phase deltas into the 128-byte trail layout.
+ * Hot Path Guarantee: Zero dynamic allocations. Modifies trail_out structure in-place
+ * without redundant double-writes to the 64-byte accumulated_phase_delta array.
  *
  * @param context Active runtime context handle.
  * @param current_ptr Encoded 64-bit tagged pointer address.
@@ -89,12 +92,19 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_step_pointer(
         context->step_count++;
         context->last_ptr = current_ptr;
 
-        std::memset(trail_out, 0, sizeof(gcso_pointer_trail_t));
         trail_out->current_ptr = current_ptr;
         trail_out->prev_ptr = previous;
+        trail_out->user_data = 0;
+        trail_out->transition_cost = 0;
         trail_out->step_count = static_cast<uint32_t>(context->step_count & 0xFFFFFFFFULL);
         trail_out->stigmergic_density = 1.0f;
+        trail_out->target_anchor_id = 0;
+        trail_out->cluster_id = 0;
+        trail_out->linked_trail_id = 0;
+        trail_out->attractor_pull_force = 0.0f;
+        trail_out->flags = 0;
         std::memcpy(trail_out->accumulated_phase_delta, context->accumulated_phase, sizeof(context->accumulated_phase));
+        std::memset(trail_out->reserved_padding, 0, sizeof(trail_out->reserved_padding));
 
         return GCSO_SUCCESS;
     } catch (...) {
@@ -238,14 +248,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_link_hallucinated_trails(
 }
 
 /**
- * @brief Performs hierarchical bit-tree reduction across paged block bitmasks in O(1) time.
+ * @brief Performs hierarchical bit-tree reduction across paged block bitmasks in O(1) time per mask.
  *
- * Applies bitwise AND operations across 256-bit PagedBlock bitmasks to evaluate set intersection
- * of active attention blocks without memory reallocations.
+ * Uses single-instruction 256-bit AVX2 vector AND (_mm256_and_si256) when compiled with AVX2 support.
  *
- * @param bitmasks Array of input paged bitmasks.
+ * @param bitmasks Array of input paged bitmasks (32-byte aligned).
  * @param num_masks Number of masks in input array.
- * @param reduced_out Pointer to receive reduced bitmask result.
+ * @param reduced_out Pointer to receive reduced bitmask result (32-byte aligned).
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_reduce_bit_tree(
@@ -265,6 +274,14 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_reduce_bit_tree(
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
+#if defined(__AVX2__)
+        __m256i acc = _mm256_load_si256(reinterpret_cast<const __m256i*>(&bitmasks[0]));
+        for (size_t i = 1; i < num_masks; ++i) {
+            const __m256i m = _mm256_load_si256(reinterpret_cast<const __m256i*>(&bitmasks[i]));
+            acc = _mm256_and_si256(acc, m);
+        }
+        _mm256_store_si256(reinterpret_cast<__m256i*>(reduced_out), acc);
+#else
         reduced_out->bits[0] = bitmasks[0].bits[0];
         reduced_out->bits[1] = bitmasks[0].bits[1];
         reduced_out->bits[2] = bitmasks[0].bits[2];
@@ -276,6 +293,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_reduce_bit_tree(
             reduced_out->bits[2] &= bitmasks[i].bits[2];
             reduced_out->bits[3] &= bitmasks[i].bits[3];
         }
+#endif
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -308,10 +326,21 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_paged_block_warp_bitmask(
                           reinterpret_cast<uintptr_t>(mask_out) % alignof(gcso_paged_bitmask_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
-        std::memset(mask_out, 0, sizeof(gcso_paged_bitmask_t));
 
-        for (size_t i = 0; i < num_blocks; ++i) {
-            const size_t word_idx = i % 4;
+        size_t i = 0;
+#if defined(__AVX2__)
+        __m256i acc = _mm256_setzero_si256();
+        const size_t vec_blocks = num_blocks & ~static_cast<size_t>(3);
+        for (; i < vec_blocks; i += 4) {
+            const __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(kv_bits + i));
+            acc = _mm256_or_si256(acc, v);
+        }
+        _mm256_store_si256(reinterpret_cast<__m256i*>(mask_out), acc);
+#else
+        std::memset(mask_out, 0, sizeof(gcso_paged_bitmask_t));
+#endif
+        for (; i < num_blocks; ++i) {
+            const size_t word_idx = i & 3U;
             mask_out->bits[word_idx] |= kv_bits[i];
         }
         return GCSO_SUCCESS;
@@ -378,6 +407,33 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_slot_create(
 }
 
 /**
+ * @brief Resets active DAES telemetry mini ledger and cache hit counters in-place.
+ *
+ * @param slot Target DAES slot structure pointer to reset (64-byte aligned).
+ * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER / GCSO_ERROR_MISALIGNED_POINTER.
+ */
+GCSO_API gcso_status_t GCSO_CALL gcso_daes_reset_telemetry(
+    gcso_daes_slot_t* GCSO_RESTRICT slot
+) GCSO_NOEXCEPT {
+    if (GCSO_UNLIKELY(slot == nullptr)) {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    try {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(slot) % alignof(gcso_daes_slot_t) != 0)) {
+            return GCSO_ERROR_MISALIGNED_POINTER;
+        }
+        slot->telemetry_ring_head = 0;
+        slot->telemetry_ring_tail = 0;
+        slot->cache_hit_count = 0;
+        slot->auto_tune_flags = 0;
+        std::memset(slot->telemetry_mini_ledger, 0, sizeof(slot->telemetry_mini_ledger));
+        return GCSO_SUCCESS;
+    } catch (...) {
+        return GCSO_ERROR_PANIC_CAUGHT;
+    }
+}
+
+/**
  * @brief Executes O(1) fast-path shortcut lookup in DAES dynamic scratchpad.
  *
  * Mode Check: Operates in Mode 0 (Fast-Path & Telemetry Scratchpad Mode).
@@ -405,7 +461,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_fast_path_lookup(
             return GCSO_ERROR_INVALID_STATE;
         }
 
-        const uint32_t slot_idx = gcso_action_hub_hash_slot256_index(input_key) % 4;
+        const uint32_t slot_idx = gcso_action_hub_hash_slot256_index(input_key) & 3U;
         const uint64_t shortcut = slot->fast_path_shortcuts[slot_idx];
 
         *shortcut_out = (shortcut != 0) ? shortcut : input_key;
@@ -433,9 +489,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_telemetry_push(
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(slot) % alignof(gcso_daes_slot_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
-        const uint16_t idx = static_cast<uint16_t>(slot->telemetry_ring_head % 8);
+        const uint16_t idx = static_cast<uint16_t>(slot->telemetry_ring_head & 7U);
         slot->telemetry_mini_ledger[idx] = metric_code;
-        slot->telemetry_ring_head = static_cast<uint16_t>((slot->telemetry_ring_head + 1) % 8);
+        slot->telemetry_ring_head = static_cast<uint16_t>((slot->telemetry_ring_head + 1U) & 7U);
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;

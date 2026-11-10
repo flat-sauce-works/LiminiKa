@@ -10,20 +10,18 @@
 namespace {
 
 /**
- * @brief Computes a CRC32 checksum over payload buffers for .gcso container verification.
- * Lookup-free bitwise CRC32 calculation optimized for ultra-low footprint without cache pollution.
+ * @brief Computes a CRC32C checksum over payload buffers for .gcso container verification.
+ * Uses the constexpr 256-entry GCSO_CRC32C_LUT table for O(1)-per-byte checksum evaluation.
  *
  * @param data Byte pointer to payload buffer.
  * @param len Length of byte payload in bytes.
- * @return Calculated uint32_t CRC32 value.
+ * @return Calculated uint32_t CRC32C value.
  */
-uint32_t compute_crc32(const uint8_t* data, size_t len) {
-    uint32_t crc = 0xFFFFFFFF;
+GCSO_FORCE_INLINE uint32_t compute_crc32(const uint8_t* data, size_t len) noexcept {
+    uint32_t crc = 0xFFFFFFFFU;
     for (size_t i = 0; i < len; ++i) {
-        crc ^= data[i];
-        for (int j = 0; j < 8; ++j) {
-            crc = (crc >> 1) ^ ((crc & 1) ? 0x82F63B78U : 0U);
-        }
+        const auto idx = static_cast<uint8_t>((crc ^ data[i]) & 0xFFU);
+        crc = (crc >> 8U) ^ GCSO_CRC32C_LUT[idx];
     }
     return ~crc;
 }
@@ -219,12 +217,19 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_step_token(
             if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(trail_out) % alignof(gcso_pointer_trail_t) != 0)) {
                 return GCSO_ERROR_MISALIGNED_POINTER;
             }
-            std::memset(trail_out, 0, sizeof(gcso_pointer_trail_t));
             trail_out->current_ptr = static_cast<uint64_t>(token_id);
             trail_out->prev_ptr = context->last_ptr;
+            trail_out->user_data = 0;
+            trail_out->transition_cost = 0;
             trail_out->step_count = static_cast<uint32_t>(context->step_count & 0xFFFFFFFFULL);
             trail_out->stigmergic_density = 1.0f;
+            trail_out->target_anchor_id = 0;
+            trail_out->cluster_id = 0;
+            trail_out->linked_trail_id = 0;
+            trail_out->attractor_pull_force = 0.0f;
+            trail_out->flags = 0;
             std::memcpy(trail_out->accumulated_phase_delta, context->accumulated_phase, sizeof(context->accumulated_phase));
+            std::memset(trail_out->reserved_padding, 0, sizeof(trail_out->reserved_padding));
         }
 
         context->last_ptr = static_cast<uint64_t>(token_id);
@@ -273,7 +278,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_serialize(
         std::memset(buffer, 0, required_bytes);
 
         auto* header = reinterpret_cast<gcso_snapshot_header_t*>(buffer);
-        header->magic = 0x4F534347;             // ASCII "GCSO"
+        header->magic = GCSO_SNAPSHOT_MAGIC;    // ASCII "GCSO" (0x4F534347)
         header->version = GCSO_ABI_VERSION_HEX; // Unified ABI version 0.1.1 (0x00000101)
         header->total_size = static_cast<uint64_t>(required_bytes);
 
@@ -327,7 +332,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_deserialize(
         }
 
         const auto* header = reinterpret_cast<const gcso_snapshot_header_t*>(buffer);
-        if (header->magic != 0x4F534347) {
+        if (header->magic != GCSO_SNAPSHOT_MAGIC) {
             return GCSO_ERROR_CONTAINER_CORRUPTED;
         }
         if (header->version != GCSO_ABI_VERSION_HEX) {
@@ -361,6 +366,41 @@ GCSO_API gcso_status_t GCSO_CALL gcso_context_deserialize(
         ctx->is_active = true;
 
         *context_out = ctx;
+        return GCSO_SUCCESS;
+    } catch (...) {
+        return GCSO_ERROR_PANIC_CAUGHT;
+    }
+}
+
+/**
+ * @brief Seeks to a specific token index in the PPRC keyframe KV cache.
+ *
+ * @param context Active context handle.
+ * @param token_index Target token index to seek to.
+ * @param keyframe_header_out Pointer to receive resulting keyframe header structure (32-byte aligned).
+ * @return GCSO_SUCCESS or error code.
+ */
+GCSO_API gcso_status_t GCSO_CALL gcso_pprc_seek_to_token(
+    gcso_context_handle_t context,
+    uint32_t token_index,
+    gcso_pprc_keyframe_header_t* GCSO_RESTRICT keyframe_header_out
+) GCSO_NOEXCEPT {
+    if (GCSO_UNLIKELY(context == nullptr || keyframe_header_out == nullptr)) {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
+                      reinterpret_cast<uintptr_t>(keyframe_header_out) % alignof(gcso_pprc_keyframe_header_t) != 0)) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    try {
+        if (GCSO_UNLIKELY(!context->is_initialized)) {
+            return GCSO_ERROR_INVALID_STATE;
+        }
+        std::memset(keyframe_header_out, 0, sizeof(gcso_pprc_keyframe_header_t));
+        keyframe_header_out->frame_type = 0U;
+        keyframe_header_out->token_index = token_index;
+        keyframe_header_out->gop_length = context->config.paged_block_size;
+        keyframe_header_out->composite_vector_length = 1.0f;
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;

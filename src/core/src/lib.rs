@@ -3,24 +3,61 @@
 
 //! Core execution engine library for the Geometric Cellular Sheaf Orchestrator (GCSO).
 //!
-//! This crate serves as the primary low-level engine for LiminiKa, implementing the
+//! This crate serves as the primary low-level runtime engine for `LiminiKa`, implementing the
 //! Geometric Cellular Sheaf Orchestrator (GCSO) architecture targeting 2–4 GB VRAM environments.
 //!
-//! # Architecture & Layers
-//! - **Nano Level**: Warp / SIMD level in-kernel hot-path operations (DPSR, RIPA, QDPS).
-//! - **Micro Level**: Per-token hot-path execution, $\mathcal{O}(1)$ Sidecar Pointer Table (SPT) lookups, and DAES dynamic scratchpad.
-//! - **Mezzo Level**: Cellular swarm coordination, PagedBlock bitmask reductions, Skip-Hop bus sync, and PPRC keyframe compression.
-//! - **Macro Level**: Cold-path entropy evaluation (EDBC), attractor fields, L2P-SVD converters, and ZIMMS persistence.
+//! # Architecture: `1 + 8` Flat Trait Topology (`ActionHub` + 2 Observers + Gateway)
+//! - **`ActionHub` ("The Thing Itself", [`crate::traits::ActionHub`])**: The bottom-most micro
+//!   composite ledger of state and branchless capabilities (`BranchlessKernel + PhaseSteering +
+//!   PointerActionHub + PspmRouter + SrlAdapter + DaesScratchpad`), completely agnostic to Hot
+//!   vs. Cold Path execution.
+//! - **Lv.2 Micro Observer ([`crate::traits::HotPathObserver`])**: Drives constant-time $\mathcal{O}(1)$
+//!   per-token cascades (`Pointer -> DAES -> Bloom Repulsion -> Unified Field / Limina / Swarm ->
+//!   QDPS/RIPA/RoPE -> PSPM/SRL`) with zero dynamic allocations ($C_{\mathrm{alloc}} = 0$).
+//! - **Lv.3 Macro Observer ([`crate::traits::ColdPathObserver`])**: Evaluates trajectory telemetry,
+//!   moving Z-score entropy ($\tilde{H} \in [0, \ln 2]$), sliding-window flux ($\Phi_M(t)$),
+//!   scale-invariant Langevin pitchfork bifurcations, matrix-free Gershgorin/Chebyshev sheaf
+//!   cohomology $H^1(K; \mathcal{F})$, Single Unified Attractor Manifold superposition, L2P-SVD
+//!   projection, PPRC keyframe replay, and ZIMMS zero-copy `.gcso` persistence.
 //!
-//! # Core Memory Invariants
-//! - **Zero Dynamic Allocations on the Hot Path**: No heap allocations (`Vec`, `Box`, `malloc`) are permitted in hot loops.
-//! - **Strict Type-Level Alignment**: All tensor and pointer inputs must satisfy hardware-aligned memory bounds (16B, 32B, 64B, 128B, 256B, 512B).
-//! - **Static Dispatch**: Monomorphic execution via generic trait bounds to maximize compiler inlining and zero-cost abstraction.
+//! # Philosophical & Mathematical Core (`Limina + Monika = LiminiKa`)
+//! 1. **Persona as Joint Probability $\times$ Attention Phase Interference (Hypothesis 1)**:
+//!    Global persona identity $P(M_1, \dots, M_T) = \prod_{t=1}^T P(M_t \mid M_{<t})$ is factored
+//!    into local conditional transitions modulated in $\mathcal{O}(1)$ via DPSR RoPE phase
+//!    interference without modifying model weights $W_Q, W_K$.
+//! 2. **Intelligence as Stigmergic Pointer-Trail Manipulation in `ActionHub` (Hypothesis 2)**:
+//!    128-byte [`gcso_pointer_trail_t`] cells dynamically select, link, and bridge inter-memory
+//!    **Limina** gaps (`select_link_and_bridge_best_next_trail`) while repulsing topological
+//!    contradictions ($H^1(K; \mathcal{F}) \neq 0$) via Phase-Conjugate Attractor Repulsion ($-\boldsymbol{\Delta\theta}$).
+//! 3. **Single Unified Attractor Manifold**:
+//!    All anchors coexist on a single unified phase manifold ($SO(2)^{d_{\mathrm{head}}/2}$)
+//!    governed by zero-hyperparameter phase-proximity gravity (`branchless_q7_resonant_pull_64`),
+//!    with an optional 8-lane hardware working cache window (`slot_phase_bank`) for $\mathcal{O}(1)$
+//!    tagged-pointer addressing.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
-#![warn(missing_docs)]
+#![warn(clippy::missing_safety_doc)]
+#![warn(clippy::missing_errors_doc)]
 #![allow(clippy::module_name_repetitions)]
+#![allow(clippy::inline_always)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::incompatible_msrv)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::needless_option_as_deref)]
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::manual_range_contains)]
+#![allow(clippy::manual_slice_size_calculation)]
+#![allow(clippy::unnecessary_cast)]
+#![allow(clippy::excessive_precision)]
+#![allow(clippy::approx_constant)]
+#![allow(clippy::if_same_then_else)]
+#![allow(clippy::ifs_same_cond)]
+#![allow(clippy::field_reassign_with_default)]
 
 #[cfg(feature = "std")]
 extern crate std;
@@ -31,156 +68,271 @@ extern crate alloc;
 // Core Architecture Module Declarations
 // ===================================================================
 
-/// C-ABI bindings, FFI safety barriers, and status codes.
+/// C-ABI bindings, FFI safety barriers, binary layout contracts, and status codes.
 pub mod abi;
 
-/// Dynamic Attractor Field Engine, Multi-Domain Space, and Accumulator Pressure Dynamics.
+/// Stigmergic Threshold Action-Selecting Orchestrator (`ActionHubEngine`) and Sidecar Pointer Table.
+pub mod action_hub;
+
+/// Dynamic Attractor Field Engine, Unified Phase Manifold, and Accumulator Pressure Dynamics.
 pub mod attractor;
 
-/// Dynamic Phase Steering and RIPA rotation routines for Hot Path execution.
+/// Dynamic Phase-Shifted RoPE (DPSR) and RIPA rotation routines for Hot Path execution.
 pub mod dpsr;
 
 /// Dynamic Entropy-Driven Decoding Branch Controller (EDBC) implementation.
 pub mod edbc;
 
-/// Mathematical primitives, geometric group operations, and Chebyshev spectral filtering.
-pub mod math;
-
-/// Sparse Residual Adapter Layer (SRL) logic and dynamic adapters.
+/// Sparse Residual Adapter Layer (SRL) logic and dynamic Rank-1 adapters.
 pub mod srl;
 
 /// Cellular swarm coordination, Sidecar Pointer Table (SPT), and stigmergic routines.
 pub mod swarm;
 
-/// Core system contracts, traits, and alignment guarantees (Ground Truth).
+/// Core system contracts, `1 + 8` trait hierarchy, branchless primitives, and alignment guards.
 pub mod traits;
 
-/// Unified container storage and memory-mapped persistence (ZIMMS).
+/// Unified `.gcso` container storage and zero-copy memory-mapped persistence (ZIMMS).
 pub mod zimms;
 
 // ===================================================================
 // Primary Re-exports for Ergonomics & Ground Truth Alignment
 // ===================================================================
 
+pub use crate::action_hub::{
+    ActionHubEngine, ActionOrchestrationReport, StigmergicActionDecision, StigmergicThresholds,
+    ACTION_HUB_INLINE_TRAILS, DEFAULT_STIGMERGIC_CONTRADICTION_THRESH,
+    DEFAULT_STIGMERGIC_CRYSTALLIZE_THRESH, DEFAULT_STIGMERGIC_EVAPORATION_RETAIN,
+    DEFAULT_STIGMERGIC_EXPRESS_STEER_THRESH, DEFAULT_STIGMERGIC_INERTIAL_SKIP_ENTROPY,
+    DEFAULT_STIGMERGIC_PSPM_ROUTE_THRESH, DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN,
+    DEFAULT_STIGMERGIC_SRL_INJECT_THRESH,
+};
 pub use crate::abi::{
     gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_daes_slot_t,
-    gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t,
-    gcso_pspm_config_t, gcso_q7_t, gcso_snapshot_header_t, gcso_srl_descriptor_t,
-    gcso_tagged_ptr_t, gcso_zimms_descriptor_t, GcsoStatus, GCSO_SUCCESS,
+    gcso_descriptor_header_t, gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
+    gcso_pprc_keyframe_header_t, gcso_pspm_config_t, gcso_q7_t, gcso_snapshot_header_t,
+    gcso_srl_descriptor_t, gcso_status_t, gcso_tagged_ptr_t, gcso_zimms_descriptor_t,
+    GcsoAnchorType, GcsoStatus, GCSO_CAP_CPU_BASELINE, GCSO_CAP_CUDA_BACKEND,
+    GCSO_CAP_METAL_BACKEND, GCSO_CAP_VULKAN_BACKEND, GCSO_SUCCESS,
 };
 
 pub use crate::attractor::{
-    AttractorAnchor, AttractorFieldEngine, MultiAttractorSpace, DOMAIN_KNOWLEDGE, DOMAIN_PERSONA,
-    DOMAIN_PHASE_REPULSION, DOMAIN_SYSTEM_BASELINE, DOMAIN_USER_INTERACTION, MAX_ANCHORS_PER_FIELD,
-    MAX_ATTRACTOR_DOMAINS, MAX_EMBEDDING_DIM,
+    AttractorAnchor, AttractorFieldEngine, AttractorGrowthCoordinator, AttractorGrowthReport,
+    AttractorGrowthSnapshot, CrystallizedAnchorRecord, DomainAccumulatorSummary,
+    EpisodicPhaseSample, EpisodicSampleSteering, MultiAttractorSpace, DOMAIN_CUSTOM_5,
+    DOMAIN_CUSTOM_6, DOMAIN_CUSTOM_7, DOMAIN_KNOWLEDGE, DOMAIN_PERSONA, DOMAIN_PHASE_REPULSION,
+    DOMAIN_SYSTEM_BASELINE, DOMAIN_USER_INTERACTION, MAX_ANCHORS_PER_FIELD, MAX_ATTRACTOR_DOMAINS,
+    MAX_EMBEDDING_DIM,
+};
+pub use crate::dpsr::{DpsrClosedLoopSteering, DpsrEngine};
+pub use crate::edbc::{EdbcClosedLoopCoordinator, EdbcEngine};
+pub use crate::traits::{
+    ActionHub, ActionHubGatewayExt, AlignedBuffer128, AlignedBuffer16, AlignedBuffer256,
+    AlignedBuffer32, AlignedBuffer512, AlignedBuffer64, AlignedSlice, AlignedSlice128,
+    AlignedSlice16, AlignedSlice256, AlignedSlice32, AlignedSlice512, AlignedSlice64,
+    AlignedSliceMut, AlignedSliceMut128, AlignedSliceMut16, AlignedSliceMut256, AlignedSliceMut32,
+    AlignedSliceMut512, AlignedSliceMut64, AttractorField, AttractorSlotSynergyCoordinator,
+    BottomUpMacroCrystalCoordinator, BranchlessKernel, CausalProvenanceReport,
+    CausalProvenanceSignal, CognitiveGroundingSignal, ColdPathObserver, ColdPathOrchestrator,
+    ColdPathTrailCrystalExt, ContradictionGuard, ContradictionGuardSignal,
+    ContrastivePhaseBloomFilter, CrystallizedAttractorRecord, DaesScratchpad, DisjointMutPair,
+    DisjointMutTriple, DisjointRefMut, DnpPacketDispatcher, DynamicLayerSkipper,
+    EdbcBranchController, EntropyEvaluator, EntropyGatedPhaseLookup, FfiHandleMut, FfiHandleRef,
+    FractalCascadeCoordinator, FullStackGcsoEngine, GatewayFrame, GatewayPhaseSteeringExt,
+    GcsoFourSectionView, GcsoResult, GcsoRuntimeContext, HierarchicalTreeTable,
+    HotPathExecutionEngine, HotPathObserver, L2pSvdProjector, ManifoldGatewaySignal,
+    MultiDomainAttractorSpace, ObjectiveFact, ObjectiveFactSignal, PagedBitmaskOps, PersonaPatcher,
+    PhaseSteering, Pod, PointerActionHub, PprcCache, PspmRouter, RawPhaseProjectable,
+    SheafCohomologyEvaluator, SrlAdapter, StigmergicActionPtrOps, StigmergicCohomologyCoordinator,
+    StigmergicSwarmOps, StigmergicTrailOps, SubjectivePersona, SubjectivePersonaSignal,
+    SwarmCellChunk, SwarmResolutionReport, SystemCapabilityQuery, SystemConstraint,
+    SystemConstraintSignal, VisualAttentionSteering, ZimmsStorage, ACTION_MODE_DPSR_STEER,
+    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PSPM_ROUTE,
+    ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
+    ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
+    ATTRACTOR_SLOT_CUSTOM_5, ATTRACTOR_SLOT_CUSTOM_6, ATTRACTOR_SLOT_CUSTOM_7,
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
+    ATTRACTOR_SLOT_SYSTEM_BASELINE, ATTRACTOR_SLOT_USER_CONTEXT,
+    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
+    CAUSAL_AXIS_SYSTEM_CONSTRAINT, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
+    CAUSAL_CAUSE_COHOMOLOGY_REPULSION, CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK,
+    CAUSAL_CAUSE_PERSONA_FACT_COLLISION, CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE,
+    DEFAULT_FACT_RIPA_CLAMP_RAD, DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
+    DEFAULT_PERSONA_FACT_COLLISION_THRESH, DEFAULT_PERSONA_RIPA_CLAMP_RAD,
+    DEFAULT_SLOT_COUPLING_MATRIX_8X8, DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
+    DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, GCSO_CRYSTAL_RECORD_MAGIC,
+    GCSO_CRYSTAL_RECORD_VERSION, GCSO_FOUR_SECTION_HEADER_BYTES,
+    GCSO_ZIMMS_DESCRIPTOR_PREAMBLE_OFFSET, ROOT_CAUSE_COHOMOLOGY_REPULSION,
+    ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_PERSONA_FACT_COLLISION,
+    ROOT_CAUSE_SYSTEM_QOS_THROTTLE, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_DPSR_ACTIVE,
+    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
+    TRAIL_FLAG_SWARM_ESCALATED, TRAIL_FLAG_SWARM_RESOLVED, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
-pub use crate::dpsr::DpsrEngine;
-pub use crate::edbc::EdbcEngine;
-
-pub use crate::traits::{
-    AlignedSlice, AlignedSlice128, AlignedSlice16, AlignedSlice256, AlignedSlice32,
-    AlignedSlice512, AlignedSlice64, AlignedSliceMut, AlignedSliceMut128, AlignedSliceMut16,
-    AlignedSliceMut256, AlignedSliceMut32, AlignedSliceMut512, AlignedSliceMut64, AttractorField,
-    DaesScratchpad, EntropyEvaluator, GcsoResult, GcsoRuntimeContext, HotPathExecutionEngine,
-    L2pSvdProjector, PersonaPatcher, PhaseSteering, PointerActionHub, PprcCache, PspmRouter,
-    SrlAdapter, SwarmCellChunk, SystemCapabilityQuery, ZimmsStorage,
+use crate::traits::branchless::{
+    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
+    branchless_max_f32, branchless_min_f32, branchless_q7_add_sat, branchless_q7_conjugate_64,
+    branchless_q7_inhibit_words_64, branchless_relu_f32, branchless_select_f32,
+    branchless_select_u32, branchless_select_u8, coherence_from_word_arrays_with_both_uniform_flags_64,
+    fast_inv_pos_normal_f32, is_phase_profile_nonzero_64,
+    load_q7_words_64, store_q7_words_64, swar_q7_add_sat_x8, swar_slerp_words_with_uniform_flag_64,
+    trail_phase_words_mut, trail_phase_words_ref,
+};
+use crate::traits::primitives::{
+    finalize_snapshot_header_crc32, init_snapshot_header, verify_snapshot_payload_crc32,
+    ATTRACTOR_SLOT_ID_MASK, DAES_MINI_LEDGER_LEN, DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_ENTROPY_EPS,
+    DEFAULT_PAGED_BLOCK_SIZE, DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD,
+    MAX_ATTENTION_HEADS, Q7_PHASE_SCALE_RAD,
+};
+use crate::traits::{
+    accumulate_q7_slice_into_64, DAES_METRIC_FAST_PATH_HIT, DAES_METRIC_LAYER_SKIP_COMPENSATED,
+    DAES_METRIC_PHASE_STEERED, DAES_METRIC_REPULSION_APPLIED, DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+    MAX_ATTRACTOR_PULL_FORCE,
 };
 
 /// Convenient crate-level result type alias for GCSO operations.
 pub type Result<T> = GcsoResult<T>;
 
+/// Default EDBC hysteresis band width ($\delta_{\mathrm{hyst}}$).
+pub const DEFAULT_EDBC_HYSTERESIS_BAND: f32 = 0.15;
+
+/// Default sliding-window entropy rate flux threshold ($\tau_{\mathrm{flux}}$).
+pub const DEFAULT_EDBC_TAU_FLUX: f32 = 0.50;
+
+/// Default EDBC pitchfork bifurcation Z-score threshold ($\tau_{\mathrm{bifurcation}}$).
+pub const DEFAULT_EDBC_BIFURCATION_THRESHOLD: f32 = 1.50;
+
+/// Default Contrastive Phase Bloom Filter collision count threshold triggering anti-phase repulsion.
+pub const DEFAULT_BLOOM_REPULSION_THRESHOLD: u8 = 2;
+
+/// Default Q7 unit scaling factor (`128` = $1.0\times$) for phase-conjugate repulsion injection.
+pub const DEFAULT_BLOOM_REPULSION_SCALE_U7: u8 = 128;
+
+/// Total Q7 phase elements across all 8 Attractor Working Lanes (`8 * 64 = 512` bytes).
+pub const SLOT_PHASE_BANK_LEN: usize = MAX_ATTRACTOR_DOMAINS * MAX_ATTENTION_HEADS;
+
+/// Default initial weights for the 8 parallel Attractor Working Lanes (`0..=7`).
+pub const DEFAULT_SLOT_WEIGHTS: [f32; MAX_ATTRACTOR_DOMAINS] =
+    [1.0, 1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5];
+
 // ===================================================================
-// Safe High-Level Rust API Wrappers & Fluent Builders
+// Safe High-Level Rust Configuration Wrapper & Fluent Builder
 // ===================================================================
 
 /// Safe high-level configuration wrapper for GCSO runtime initialization.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Config {
-    /// Inner raw C-ABI configuration structure.
+    /// Inner raw C-ABI configuration structure (64 bytes, 16-byte aligned).
     pub raw: gcso_config_t,
-    /// Hysteresis band for EDBC branch control stabilization.
+    /// Hysteresis band ($\delta_{\mathrm{hyst}}$) for EDBC branch control stabilization.
     pub hysteresis_band: f32,
-    /// Tau flux threshold for sliding window entropy rate integration.
+    /// Tau flux threshold ($\tau_{\mathrm{flux}}$) for sliding-window entropy rate integration.
     pub tau_flux: f32,
+    /// Z-score threshold ($\tau_{\mathrm{bifurcation}}$) triggering EDBC pitchfork bifurcation.
+    pub bifurcation_threshold: f32,
+    /// Minimum Bloom filter counter density (`1..=15`) required to trigger anti-phase repulsion.
+    pub repulsion_threshold: u8,
+    /// Q7 unit scale (`0..=128`, where `128 == 1.0`) applied during phase-conjugate repulsion.
+    pub repulsion_scale_u7: u8,
+    /// 64-bit ($8 \times 8$) coupling bitmatrix governing cross-lane attractor synergy.
+    pub slot_coupling_matrix: u64,
 }
 
 impl Default for Config {
-    #[inline]
+    #[inline(always)]
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl Config {
-    /// Creates a new default configuration instance with GCSO specification invariants.
-    #[inline]
+    /// Creates a new default configuration instance strictly adhering to GCSO v0.1.1 invariants.
+    #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
         Self {
             raw: gcso_config_t {
                 head_dim: 128,
                 num_heads: 32,
-                paged_block_size: 32,
-                q7_phase_scale: core::f32::consts::PI / 128.0,
-                ripa_clamp_max_rad: 0.087_266_46,
-                qdps_min_step_rad: 0.01,
-                entropy_singularity_eps: 1e-12,
-                max_prompt_anchors: 64,
-                action_hub_capacity: 256,
+                paged_block_size: DEFAULT_PAGED_BLOCK_SIZE,
+                q7_phase_scale: Q7_PHASE_SCALE_RAD,
+                ripa_clamp_max_rad: DEFAULT_RIPA_CLAMP_MAX_RAD,
+                qdps_min_step_rad: DEFAULT_QDPS_MIN_STEP_RAD,
+                entropy_singularity_eps: DEFAULT_ENTROPY_EPS,
+                max_prompt_anchors: MAX_ANCHORS_PER_FIELD as u32,
+                action_hub_capacity: DEFAULT_ACTION_HUB_CAPACITY,
                 enable_cuda_warp_shuffle: 1,
                 enable_zero_alloc_strict: 1,
                 daes_mode: 0,
                 reserved_flags: 0,
                 reserved: [0; 24],
             },
-            hysteresis_band: 0.15,
-            tau_flux: 0.5,
+            hysteresis_band: DEFAULT_EDBC_HYSTERESIS_BAND,
+            tau_flux: DEFAULT_EDBC_TAU_FLUX,
+            bifurcation_threshold: DEFAULT_EDBC_BIFURCATION_THRESHOLD,
+            repulsion_threshold: DEFAULT_BLOOM_REPULSION_THRESHOLD,
+            repulsion_scale_u7: DEFAULT_BLOOM_REPULSION_SCALE_U7,
+            slot_coupling_matrix: DEFAULT_SLOT_COUPLING_MATRIX_8X8,
         }
     }
 
-    /// Sets the attention head dimension ($d_{\mathrm{head}}$). Must be an even non-zero number.
-    #[inline]
+    /// Constructs a high-level [`Config`] wrapper from a raw [`gcso_config_t`] descriptor.
+    #[inline(always)]
+    #[must_use]
+    pub const fn from_raw(raw: gcso_config_t) -> Self {
+        Self {
+            raw,
+            hysteresis_band: DEFAULT_EDBC_HYSTERESIS_BAND,
+            tau_flux: DEFAULT_EDBC_TAU_FLUX,
+            bifurcation_threshold: DEFAULT_EDBC_BIFURCATION_THRESHOLD,
+            repulsion_threshold: DEFAULT_BLOOM_REPULSION_THRESHOLD,
+            repulsion_scale_u7: DEFAULT_BLOOM_REPULSION_SCALE_U7,
+            slot_coupling_matrix: DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+        }
+    }
+
+    /// Sets the attention head dimension ($d_{\mathrm{head}}$). Must be a positive even integer.
+    #[inline(always)]
     #[must_use]
     pub const fn with_head_dim(mut self, head_dim: u32) -> Self {
         self.raw.head_dim = head_dim;
         self
     }
 
-    /// Sets the total number of attention heads (<= 64).
-    #[inline]
+    /// Sets the total number of attention heads ($1 \le H \le 64$).
+    #[inline(always)]
     #[must_use]
     pub const fn with_num_heads(mut self, num_heads: u32) -> Self {
         self.raw.num_heads = num_heads;
         self
     }
 
-    /// Sets the PagedBlock size (16 or 32 tokens).
-    #[inline]
+    /// Sets the PagedBlock token granularity (`16` or `32` tokens).
+    #[inline(always)]
     #[must_use]
     pub const fn with_paged_block_size(mut self, paged_block_size: u32) -> Self {
         self.raw.paged_block_size = paged_block_size;
         self
     }
 
-    /// Sets the Q7 phase scale factor.
-    #[inline]
+    /// Sets the Q7 phase scale factor ($\beta_{\mathrm{Q7}}$).
+    #[inline(always)]
     #[must_use]
     pub const fn with_q7_phase_scale(mut self, q7_phase_scale: f32) -> Self {
         self.raw.q7_phase_scale = q7_phase_scale;
         self
     }
 
-    /// Sets the RIPA soft-bounded phase clamp limit in radians.
-    #[inline]
+    /// Sets the RIPA soft-bounded phase clamp limit in radians ($\theta_{\max}$).
+    #[inline(always)]
     #[must_use]
     pub const fn with_ripa_clamp_max_rad(mut self, ripa_clamp_max_rad: f32) -> Self {
         self.raw.ripa_clamp_max_rad = ripa_clamp_max_rad;
         self
     }
 
-    /// Sets the QDPS quantization threshold angle.
-    #[inline]
+    /// Sets the QDPS quantization threshold angle in radians ($\Delta\theta_{\mathrm{min\_step}}$).
+    #[inline(always)]
     #[must_use]
     pub const fn with_qdps_min_step_rad(mut self, qdps_min_step_rad: f32) -> Self {
         self.raw.qdps_min_step_rad = qdps_min_step_rad;
@@ -188,7 +340,7 @@ impl Config {
     }
 
     /// Sets the logarithmic singularity prevention epsilon ($\epsilon_{\mathrm{log}}$).
-    #[inline]
+    #[inline(always)]
     #[must_use]
     pub const fn with_entropy_singularity_eps(mut self, entropy_singularity_eps: f32) -> Self {
         self.raw.entropy_singularity_eps = entropy_singularity_eps;
@@ -196,31 +348,31 @@ impl Config {
     }
 
     /// Sets the maximum supported prompt anchor points in the attractor field.
-    #[inline]
+    #[inline(always)]
     #[must_use]
     pub const fn with_max_prompt_anchors(mut self, max_prompt_anchors: u32) -> Self {
         self.raw.max_prompt_anchors = max_prompt_anchors;
         self
     }
 
-    /// Sets the Action Hub table capacity.
-    #[inline]
+    /// Sets the Action Hub (SPT) pointer table slot capacity.
+    #[inline(always)]
     #[must_use]
     pub const fn with_action_hub_capacity(mut self, action_hub_capacity: u32) -> Self {
         self.raw.action_hub_capacity = action_hub_capacity;
         self
     }
 
-    /// Configures CUDA warp shuffle instruction usage.
-    #[inline]
+    /// Configures GPU warp shuffle instruction usage (`1` = enabled, `0` = disabled).
+    #[inline(always)]
     #[must_use]
     pub const fn with_enable_cuda_warp_shuffle(mut self, enable_cuda_warp_shuffle: u8) -> Self {
         self.raw.enable_cuda_warp_shuffle = enable_cuda_warp_shuffle;
         self
     }
 
-    /// Configures strict zero dynamic allocation enforcement on the hot path.
-    #[inline]
+    /// Configures strict zero dynamic allocation enforcement on the Hot Path (`1` = strict).
+    #[inline(always)]
     #[must_use]
     pub const fn with_enable_zero_alloc_strict(mut self, enable_zero_alloc_strict: u8) -> Self {
         self.raw.enable_zero_alloc_strict = enable_zero_alloc_strict;
@@ -228,168 +380,423 @@ impl Config {
     }
 
     /// Configures DAES scratchpad operating mode (`0` = Scratchpad, `1` = Plugin, `2` = Shared IPC).
-    #[inline]
+    #[inline(always)]
     #[must_use]
     pub const fn with_daes_mode(mut self, daes_mode: u8) -> Self {
         self.raw.daes_mode = daes_mode;
         self
     }
 
-    /// Sets the EDBC hysteresis band width.
-    #[inline]
+    /// Sets the EDBC hysteresis band width ($\delta_{\mathrm{hyst}}$).
+    #[inline(always)]
     #[must_use]
     pub const fn with_hysteresis_band(mut self, hysteresis_band: f32) -> Self {
         self.hysteresis_band = hysteresis_band;
         self
     }
 
-    /// Sets the sliding window entropy rate tau flux threshold.
-    #[inline]
+    /// Sets the sliding-window entropy rate tau flux threshold ($\tau_{\mathrm{flux}}$).
+    #[inline(always)]
     #[must_use]
     pub const fn with_tau_flux(mut self, tau_flux: f32) -> Self {
         self.tau_flux = tau_flux;
         self
     }
 
-    /// Validates configuration parameters against GCSO architectural invariants.
+    /// Sets the EDBC pitchfork bifurcation threshold ($\tau_{\mathrm{bifurcation}}$).
+    #[inline(always)]
+    #[must_use]
+    pub const fn with_bifurcation_threshold(mut self, bifurcation_threshold: f32) -> Self {
+        self.bifurcation_threshold = bifurcation_threshold;
+        self
+    }
+
+    /// Sets the Contrastive Phase Bloom Filter density threshold (`1..=15`) for anti-phase repulsion.
+    #[inline(always)]
+    #[must_use]
+    pub const fn with_repulsion_threshold(mut self, repulsion_threshold: u8) -> Self {
+        self.repulsion_threshold = repulsion_threshold;
+        self
+    }
+
+    /// Sets the Q7 unit scale (`0..=128`) applied during phase-conjugate repulsion.
+    #[inline(always)]
+    #[must_use]
+    pub const fn with_repulsion_scale_u7(mut self, repulsion_scale_u7: u8) -> Self {
+        self.repulsion_scale_u7 = repulsion_scale_u7;
+        self
+    }
+
+    /// Sets the 64-bit ($8 \times 8$) coupling bitmatrix for cross-lane attractor synergy.
+    #[inline(always)]
+    #[must_use]
+    pub const fn with_slot_coupling_matrix(mut self, slot_coupling_matrix: u64) -> Self {
+        self.slot_coupling_matrix = slot_coupling_matrix;
+        self
+    }
+
+    /// Validates configuration parameters branchlessly against GCSO architectural invariants.
     ///
     /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if `head_dim` is odd or zero, if `num_heads` exceeds 64,
-    /// if capacity metrics are zero, or if floating-point configuration parameters violate valid bounds.
+    /// Returns [`crate::abi::GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is odd or zero,
+    /// `num_heads` is zero or exceeds `64`, `paged_block_size` is neither `16` nor `32`,
+    /// `daes_mode > 2`, capacity bounds are zero, or any floating-point threshold is non-finite
+    /// or outside its valid domain.
     #[inline]
     pub fn validate(&self) -> Result<()> {
-        if self.raw.head_dim == 0 || (self.raw.head_dim % 2 != 0) {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
+        let valid_dims = (self.raw.head_dim != 0)
+            & ((self.raw.head_dim & 1) == 0)
+            & (self.raw.num_heads != 0)
+            & ((self.raw.num_heads as usize) <= MAX_ATTENTION_HEADS)
+            & ((self.raw.paged_block_size == 16) | (self.raw.paged_block_size == 32));
+
+        let valid_scales = branchless_is_finite_f32(self.raw.q7_phase_scale)
+            & (self.raw.q7_phase_scale > 0.0)
+            & branchless_is_finite_f32(self.raw.ripa_clamp_max_rad)
+            & (self.raw.ripa_clamp_max_rad > 0.0)
+            & branchless_is_finite_f32(self.raw.qdps_min_step_rad)
+            & (self.raw.qdps_min_step_rad >= 0.0)
+            & branchless_is_finite_f32(self.raw.entropy_singularity_eps)
+            & (self.raw.entropy_singularity_eps > 0.0);
+
+        let valid_edbc_and_caps = (self.raw.max_prompt_anchors != 0)
+            & (self.raw.action_hub_capacity != 0)
+            & (self.raw.daes_mode <= 2)
+            & branchless_is_finite_f32(self.hysteresis_band)
+            & (self.hysteresis_band >= 0.0)
+            & branchless_is_finite_f32(self.tau_flux)
+            & (self.tau_flux >= 0.0)
+            & branchless_is_finite_f32(self.bifurcation_threshold)
+            & (self.bifurcation_threshold > 0.0);
+
+        if valid_dims & valid_scales & valid_edbc_and_caps {
+            Ok(())
+        } else {
+            Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT)
         }
-        if self.raw.num_heads == 0 || self.raw.num_heads > 64 {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        if self.raw.paged_block_size != 16 && self.raw.paged_block_size != 32 {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        if !self.raw.q7_phase_scale.is_finite() || self.raw.q7_phase_scale <= 0.0 {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        if !self.raw.ripa_clamp_max_rad.is_finite() || self.raw.ripa_clamp_max_rad <= 0.0 {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        if !self.raw.qdps_min_step_rad.is_finite() || self.raw.qdps_min_step_rad < 0.0 {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        if !self.raw.entropy_singularity_eps.is_finite() || self.raw.entropy_singularity_eps <= 0.0
-        {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        if self.raw.max_prompt_anchors == 0 || self.raw.action_hub_capacity == 0 {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        if !self.hysteresis_band.is_finite() || self.hysteresis_band < 0.0 {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        if !self.tau_flux.is_finite() || self.tau_flux < 0.0 {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        Ok(())
     }
 }
 
-/// High-level safe Rust runtime context wrapper fully integrating DPSR, EDBC, Action Hub, DAES, Multi-Domain
-/// Attractor Space, L2P-SVD Projector, and ZIMMS Storage routines.
+// ===================================================================
+// High-Level Safe Rust Runtime Context Engine
+// ===================================================================
+
+/// High-level safe Rust runtime context integrating [`ActionHub`] ("The Thing Itself"),
+/// [`HotPathObserver`] (Micro Observer: DPSR, DAES, PSPM, SRL, Contrastive Phase Bloom Filter,
+/// Limina bridging, and Bayesian pointer-trail Attention modulation), and [`ColdPathObserver`]
+/// (Macro Observer: EDBC, Single Unified Attractor Manifold, 8-Lane Working Cache Window,
+/// Sheaf Cohomology $H^1$, L2P-SVD, PPRC, and ZIMMS Storage).
+///
+/// Because `RuntimeContext` implements all foundational Nano/Micro/Mezzo/Macro traits in
+/// [`crate::traits`], it automatically receives the blanket implementations of:
+/// - [`ActionHub`]
+/// - [`HotPathExecutionEngine`] / [`HotPathObserver`] / [`FractalCascadeCoordinator`]
+/// - [`ColdPathOrchestrator`] / [`ColdPathObserver`]
+/// - [`AttractorSlotSynergyCoordinator`]
+/// - [`StigmergicCohomologyCoordinator`]
+/// - [`BottomUpMacroCrystalCoordinator`]
+/// - [`FullStackGcsoEngine`]
 #[derive(Debug)]
 pub struct RuntimeContext {
     config: Config,
+    action_hub: ActionHubEngine,
     dpsr: DpsrEngine,
     edbc: EdbcEngine,
     attractor_space: MultiAttractorSpace,
+    bloom_filter: ContrastivePhaseBloomFilter,
     daes_slot: gcso_daes_slot_t,
+    slot_phase_bank: AlignedBuffer64<gcso_q7_t, SLOT_PHASE_BANK_LEN>,
+    slot_weights: [f32; MAX_ATTRACTOR_DOMAINS],
+    slot_enabled_mask: u8,
+    slot_coupling_matrix: u64,
     step_counter: u64,
-    /// Active pointer trail entry tracking table.
     active_trail_count: u32,
 }
 
 impl RuntimeContext {
-    /// Creates a new safe `RuntimeContext` instance from a verified configuration.
+    /// Creates a new verified [`RuntimeContext`] instance from [`Config`].
     ///
     /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if configuration parameters are invalid.
+    /// Returns [`crate::abi::GCSO_ERROR_INVALID_ARGUMENT`] if configuration parameters violate
+    /// GCSO architectural invariants.
     #[inline]
     pub fn new(config: Config) -> Result<Self> {
         config.validate()?;
         let dpsr = DpsrEngine::new(config.raw.head_dim, config.raw.num_heads)?;
+        let mut action_hub = ActionHubEngine::from_config(&config.raw)?;
+        action_hub.repulsion_threshold = config.repulsion_threshold;
+        action_hub.repulsion_scale_u7 = config.repulsion_scale_u7;
+        action_hub.coupling_matrix_8x8 = config.slot_coupling_matrix;
         let edbc_state = gcso_edbc_state_t {
             singularity_eps: config.raw.entropy_singularity_eps,
-            bifurcation_threshold: 1.5,
+            bifurcation_threshold: config.bifurcation_threshold,
             ..Default::default()
         };
         let mut edbc = EdbcEngine::new(edbc_state);
         edbc.set_hysteresis_band(config.hysteresis_band);
         edbc.set_tau_flux(config.tau_flux);
 
-        let attractor_space = MultiAttractorSpace::new();
-
-        let daes_slot = gcso_daes_slot_t {
-            mode: u32::from(config.raw.daes_mode),
-            ..Default::default()
-        };
-
         Ok(Self {
             config,
+            action_hub,
             dpsr,
             edbc,
-            attractor_space,
-            daes_slot,
+            attractor_space: MultiAttractorSpace::new(),
+            bloom_filter: ContrastivePhaseBloomFilter::new(),
+            daes_slot: gcso_daes_slot_t {
+                mode: u32::from(config.raw.daes_mode),
+                ..Default::default()
+            },
+            slot_phase_bank: AlignedBuffer64::zeroed(),
+            slot_weights: DEFAULT_SLOT_WEIGHTS,
+            slot_enabled_mask: 0xFF,
+            slot_coupling_matrix: config.slot_coupling_matrix,
             step_counter: 0,
             active_trail_count: 0,
         })
     }
 
-    /// Returns a reference to the active configuration.
+    /// Returns an immutable reference to the active [`Config`].
     #[inline(always)]
     #[must_use]
     pub const fn config(&self) -> &Config {
         &self.config
     }
 
-    /// Returns a reference to the underlying DPSR steering engine.
+    /// Returns an immutable reference to the underlying [`ActionHubEngine`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn action_hub(&self) -> &ActionHubEngine {
+        &self.action_hub
+    }
+
+    /// Returns a mutable reference to the underlying [`ActionHubEngine`].
+    #[inline(always)]
+    #[must_use]
+    pub fn action_hub_mut(&mut self) -> &mut ActionHubEngine {
+        &mut self.action_hub
+    }
+
+    /// Returns an immutable reference to the active [`StigmergicThresholds`] ladder.
+    #[inline(always)]
+    #[must_use]
+    pub const fn stigmergic_thresholds(&self) -> &StigmergicThresholds {
+        &self.action_hub.thresholds
+    }
+
+    /// Validates and updates the active [`StigmergicThresholds`] ladder.
+    ///
+    /// # Errors
+    /// Returns [`crate::abi::GCSO_ERROR_INVALID_ARGUMENT`] if any threshold is non-finite or out of order.
+    #[inline]
+    pub fn set_stigmergic_thresholds(&mut self, thresholds: StigmergicThresholds) -> Result<()> {
+        thresholds.validate()?;
+        self.action_hub.thresholds = thresholds;
+        Ok(())
+    }
+
+    /// Executes a closed-loop **EDBC Entropy Evaluation + Stigmergic Threshold Action Selection**
+    /// step via [`ActionHubEngine::orchestrate_next_action_step`] in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
+    ///
+    /// # Errors
+    /// Propagates any error from [`EntropyEvaluator::eval_stateful`] or
+    /// [`ActionHubEngine::orchestrate_next_action_step`].
+    #[inline]
+    pub fn step_stigmergic_action_orchestration(
+        &mut self,
+        input_tagged_ptr: gcso_tagged_ptr_t,
+        token_z_score: f32,
+        trail_inout: &mut gcso_pointer_trail_t,
+        attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    ) -> Result<ActionOrchestrationReport> {
+        let mut edbc_state = gcso_edbc_state_t::default();
+        self.edbc.eval_stateful(token_z_score, &mut edbc_state)?;
+        self.attractor_space.advance_step();
+        let (dom_slot, _dom_w) = self.find_dominant_domain();
+        let dom_slot_u8 = (dom_slot as u8) & ATTRACTOR_SLOT_ID_MASK;
+
+        self.action_hub.slot_phase_bank = self.slot_phase_bank;
+        self.action_hub.slot_weights = self.slot_weights;
+        self.action_hub.slot_enabled_mask = self.slot_enabled_mask;
+        self.action_hub.coupling_matrix_8x8 = self.slot_coupling_matrix;
+        self.action_hub.bloom_filter = self.bloom_filter;
+        self.action_hub.daes_slot = self.daes_slot;
+
+        let report = self.action_hub.orchestrate_next_action_step(
+            input_tagged_ptr,
+            edbc_state.moving_z_entropy,
+            dom_slot_u8,
+            trail_inout,
+            attention_scores,
+            query_tensor,
+            key_tensor,
+            logits_opt,
+        )?;
+
+        self.bloom_filter = self.action_hub.bloom_filter;
+        self.daes_slot = self.action_hub.daes_slot;
+        self.step_counter = self.step_counter.wrapping_add(1);
+        self.active_trail_count = self.action_hub.active_count();
+        Ok(report)
+    }
+
+    /// Returns an immutable reference to the underlying [`DpsrEngine`].
     #[inline(always)]
     #[must_use]
     pub const fn dpsr_engine(&self) -> &DpsrEngine {
         &self.dpsr
     }
 
-    /// Returns a mutable reference to the underlying EDBC entropy controller.
+    /// Returns an immutable reference to the underlying [`EdbcEngine`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn edbc_engine(&self) -> &EdbcEngine {
+        &self.edbc
+    }
+
+    /// Returns a mutable reference to the underlying [`EdbcEngine`].
     #[inline(always)]
     #[must_use]
     pub fn edbc_engine_mut(&mut self) -> &mut EdbcEngine {
         &mut self.edbc
     }
 
-    /// Returns a reference to the Multi-Domain Attractor Space.
+    /// Returns an immutable reference to the [`MultiAttractorSpace`].
     #[inline(always)]
     #[must_use]
     pub const fn attractor_space(&self) -> &MultiAttractorSpace {
         &self.attractor_space
     }
 
-    /// Returns a mutable reference to the Multi-Domain Attractor Space.
+    /// Returns a mutable reference to the [`MultiAttractorSpace`].
     #[inline(always)]
     #[must_use]
     pub fn attractor_space_mut(&mut self) -> &mut MultiAttractorSpace {
         &mut self.attractor_space
     }
 
-    /// Returns a reference to the active DAES slot structure.
+    /// Returns an immutable reference to the 64-byte [`ContrastivePhaseBloomFilter`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn bloom_filter(&self) -> &ContrastivePhaseBloomFilter {
+        &self.bloom_filter
+    }
+
+    /// Returns a mutable reference to the 64-byte [`ContrastivePhaseBloomFilter`].
+    #[inline(always)]
+    #[must_use]
+    pub fn bloom_filter_mut(&mut self) -> &mut ContrastivePhaseBloomFilter {
+        &mut self.bloom_filter
+    }
+
+    /// Returns an immutable reference to the active [`gcso_daes_slot_t`] scratchpad.
     #[inline(always)]
     #[must_use]
     pub const fn daes_slot(&self) -> &gcso_daes_slot_t {
         &self.daes_slot
     }
 
-    /// Returns a mutable reference to the active DAES slot structure.
+    /// Returns a mutable reference to the active [`gcso_daes_slot_t`] scratchpad.
     #[inline(always)]
     #[must_use]
     pub fn daes_slot_mut(&mut self) -> &mut gcso_daes_slot_t {
         &mut self.daes_slot
+    }
+
+    /// Returns an immutable 16-byte aligned slice view over the 8-lane Q7 working phase bank (`512` bytes).
+    #[inline(always)]
+    #[must_use]
+    pub const fn slot_phase_bank(&self) -> AlignedSlice16<'_, gcso_q7_t> {
+        self.slot_phase_bank.relax_slice::<16>()
+    }
+
+    /// Returns a mutable 16-byte aligned slice view over the 8-lane Q7 working phase bank (`512` bytes).
+    #[inline(always)]
+    #[must_use]
+    pub fn slot_phase_bank_mut(&mut self) -> AlignedSliceMut16<'_, gcso_q7_t> {
+        self.slot_phase_bank.relax_slice_mut::<16>()
+    }
+
+    /// Returns an immutable reference to the 64-byte (`8 x u64`) aligned word view of slot `slot_idx`.
+    #[allow(dead_code)]
+    #[inline(always)]
+    fn slot_words_ref(&self, slot_idx: usize) -> Result<&[u64; crate::traits::NUM_SWARM_MICRO_CELLS]> {
+        if slot_idx >= MAX_ATTRACTOR_DOMAINS {
+            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        // SAFETY: `self.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every 64-byte slot
+        // at byte offset `slot_idx * 64` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
+        Ok(unsafe {
+            &*(self.slot_phase_bank.as_slice().as_ptr().add(slot_idx * MAX_ATTENTION_HEADS)
+                as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
+        })
+    }
+
+    /// Returns a mutable reference to the 64-byte (`8 x u64`) aligned word view of slot `slot_idx`.
+    #[inline(always)]
+    fn slot_words_mut(
+        &mut self,
+        slot_idx: usize,
+    ) -> Result<&mut [u64; crate::traits::NUM_SWARM_MICRO_CELLS]> {
+        if slot_idx >= MAX_ATTRACTOR_DOMAINS {
+            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        // SAFETY: `self.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every 64-byte slot
+        // at byte offset `slot_idx * 64` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
+        Ok(unsafe {
+            &mut *(self
+                .slot_phase_bank
+                .as_mut_slice()
+                .as_mut_ptr()
+                .add(slot_idx * MAX_ATTENTION_HEADS)
+                as *mut [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
+        })
+    }
+
+    /// Sets the 64-head Q7 phase profile for a specific Attractor Working Lane (`0..=7`).
+    ///
+    /// # Errors
+    /// Returns [`crate::abi::GCSO_ERROR_INVALID_ARGUMENT`] if `slot_id >= MAX_ATTRACTOR_DOMAINS`.
+    #[inline]
+    pub fn set_slot_phase_profile(
+        &mut self,
+        slot_id: u8,
+        phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> Result<()> {
+        let dst_w = self.slot_words_mut(usize::from(slot_id))?;
+        *dst_w = load_q7_words_64(phases);
+        Ok(())
+    }
+
+    /// Returns the active 8-lane weight array (`[f32; MAX_ATTRACTOR_DOMAINS]`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn slot_weights(&self) -> &[f32; MAX_ATTRACTOR_DOMAINS] {
+        &self.slot_weights
+    }
+
+    /// Returns the 8-bit bitmask of enabled Attractor Working Lanes (`bit i == 1` means lane `i` is active).
+    #[inline(always)]
+    #[must_use]
+    pub const fn slot_enabled_mask(&self) -> u8 {
+        self.slot_enabled_mask
+    }
+
+    /// Returns the active 64-bit ($8 \times 8$) Attractor Working Lane coupling bitmatrix.
+    #[inline(always)]
+    #[must_use]
+    pub const fn slot_coupling_matrix(&self) -> u64 {
+        self.slot_coupling_matrix
+    }
+
+    /// Updates the active 64-bit ($8 \times 8$) Attractor Working Lane coupling bitmatrix.
+    #[inline(always)]
+    pub fn set_slot_coupling_matrix(&mut self, matrix: u64) {
+        self.slot_coupling_matrix = matrix;
+        self.config.slot_coupling_matrix = matrix;
     }
 
     /// Returns the total number of processed token steps.
@@ -406,8 +813,14 @@ impl RuntimeContext {
         self.active_trail_count
     }
 
-    /// Executes a safe per-token step fully integrating DPSR phase steering (fused or standard),
-    /// EDBC entropy evaluation, Multi-Domain Attractor superposition, and pointer trail status population in zero-allocation mode.
+    /// Executes a per-token Hot Path step integrating DPSR phase steering, EDBC entropy evaluation,
+    /// Single Unified Attractor Manifold superposition, Contrastive Phase Bloom Filter repulsion,
+    /// and DAES telemetry logging in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
+    ///
+    /// # Errors
+    /// Returns [`crate::abi::GCSO_ERROR_INVALID_ARGUMENT`] if `query_tensor` and `key_tensor`
+    /// alias in memory or if tensor dimensions mismatch `head_dim * num_heads`.
+    /// Returns [`crate::abi::GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score` is non-finite.
     #[inline]
     pub fn step_token_with_zscore(
         &mut self,
@@ -418,12 +831,23 @@ impl RuntimeContext {
         token_z_score: f32,
         trail_out: Option<&mut gcso_pointer_trail_t>,
     ) -> Result<()> {
-        match (query_tensor, key_tensor, phase_deltas) {
+        if let (Some(q), Some(k)) = (query_tensor.as_deref(), key_tensor.as_deref()) {
+            q.ensure_disjoint_mut(k)?;
+        }
+
+        match (
+            query_tensor,
+            key_tensor,
+            phase_deltas,
+        ) {
             (Some(q), Some(k), Some(p)) => {
                 self.dpsr.apply_phase_steering_fused(q, k, p)?;
             }
             (Some(q), None, Some(p)) => {
                 self.dpsr.apply_phase_steering(q, p)?;
+            }
+            (None, Some(k), Some(p)) => {
+                self.dpsr.apply_phase_steering(k, p)?;
             }
             _ => {}
         }
@@ -433,29 +857,427 @@ impl RuntimeContext {
 
         self.step_counter = self.step_counter.wrapping_add(1);
         self.attractor_space.advance_step();
+        let cap = self.config.raw.action_hub_capacity;
+        self.active_trail_count = branchless_select_u32(
+            self.active_trail_count < cap,
+            self.active_trail_count.wrapping_add(1),
+            self.active_trail_count,
+        );
 
+        let mut repulsion_active = false;
         if let Some(trail) = trail_out {
             trail.prev_ptr = trail.current_ptr;
             trail.current_ptr = u64::from(token_id);
             trail.step_count = self.step_counter as u32;
-            trail.stigmergic_density = 1.0;
-            trail.flags = state_out.active_branch_mode;
+            trail.stigmergic_density = branchless_select_f32(
+                trail.stigmergic_density > 1.0,
+                trail.stigmergic_density,
+                1.0,
+            );
 
-            let mut composite_phase = [0i8; 64];
-            let total_pull = self
-                .attractor_space
-                .evaluate_multi_domain_superposition(trail, &mut composite_phase);
+            let mut composite_phase = [0i8; MAX_ATTENTION_HEADS];
+            let total_pull = self.evaluate_multi_domain_superposition(trail, &mut composite_phase);
+
+            if let Some(p) = phase_deltas {
+                accumulate_q7_slice_into_64(&mut composite_phase, p.as_slice());
+            }
+
+            let mut phase_words = load_q7_words_64(&composite_phase);
+            let (_density, rep_trig) = self.bloom_filter.apply_phase_conjugate_repulsion_words(
+                &mut phase_words,
+                self.config.repulsion_threshold,
+                self.config.repulsion_scale_u7,
+            );
+            repulsion_active = rep_trig;
+
             trail.attractor_pull_force = total_pull;
-            trail.accumulated_phase_delta = composite_phase;
+            *crate::traits::branchless::trail_phase_words_mut(trail) = phase_words;
+            trail.flags = state_out.active_branch_mode
+                | branchless_select_u32(repulsion_active, TRAIL_FLAG_REPULSION_ACTIVE, 0);
         }
+
+        let metric = DAES_METRIC_PHASE_STEERED
+            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0);
+        let mut daes = self.daes_slot;
+        let _ = self.telemetry_push(&mut daes, metric);
+        self.daes_slot = daes;
 
         Ok(())
     }
 
-    /// Executes a sequence of token steps in zero-allocation mode (useful for prefill and batch decoding).
+    /// Executes a **Single-Manifold Unified-Field** per-token cascade directly over an arbitrary
+    /// slice of anchors (`anchor_phases`, `anchor_base_energies`) without requiring an 8-slot
+    /// domain restriction:
+    /// 1. Evaluates EDBC entropy on `token_z_score`.
+    /// 2. Steps `input_tagged_ptr` with DAES fast-path shortcut lookup and `bloom_filter` repulsion.
+    /// 3. Folds all unified-field anchors via [`PointerActionHub::orchestrate_unified_field_resonance`],
+    ///    binding the 32-bit dominant resonant anchor ID into `trail_out.target_anchor_id`.
+    /// 4. Optionally modulates candidate memory Attention scores (`attention_scores`) by
+    ///    Attention $\times$ DPSR phase interference.
+    /// 5. Applies 8-lane SWAR QDPS filtering and RIPA soft-clamped phase steering to `query_tensor`
+    ///    and/or `key_tensor`.
+    ///
+    /// Returns `(repulsion_density, final_pull_force, mean_coherence, dominant_anchor_id)`.
     ///
     /// # Errors
-    /// Returns `GCSO_ERROR_INVALID_ARGUMENT` if token slices mismatch or step execution fails.
+    /// Propagates any error from [`EntropyEvaluator::eval_stateful`] or
+    /// [`FractalCascadeCoordinator::execute_unified_field_token_cascade`].
+    #[inline]
+    pub fn step_unified_field_token_cascade(
+        &mut self,
+        input_tagged_ptr: gcso_tagged_ptr_t,
+        token_z_score: f32,
+        anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
+        anchor_base_energies: &[f32],
+        repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
+        attention_interference_gain: f32,
+        attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        trail_out: &mut gcso_pointer_trail_t,
+    ) -> Result<(u8, f32, f32, u32)> {
+        let mut edbc_state = gcso_edbc_state_t::default();
+        self.edbc.eval_stateful(token_z_score, &mut edbc_state)?;
+        self.attractor_space.advance_step();
+
+        let mut daes_local = self.daes_slot;
+        let bloom_local = self.bloom_filter;
+        let rep_thresh = self.config.repulsion_threshold;
+        let rep_scale = self.config.repulsion_scale_u7;
+        let qdps_min = self.config.raw.qdps_min_step_rad;
+        let ripa_max = self.config.raw.ripa_clamp_max_rad;
+
+        let (density, final_pull, mean_coh, _active_cnt) = self
+            .execute_unified_field_token_cascade(
+                input_tagged_ptr.raw(),
+                &mut daes_local,
+                &bloom_local,
+                rep_thresh,
+                rep_scale,
+                anchor_phases,
+                anchor_base_energies,
+                repulsion_phases_and_strength,
+                qdps_min,
+                ripa_max,
+                query_tensor,
+                key_tensor,
+                trail_out,
+            )?;
+
+        if let Some(scores) = attention_scores {
+            if !anchor_phases.is_empty() && !scores.is_empty() {
+                let _ = self.modulate_hub_attention_scores_by_unified_field(
+                    scores,
+                    trail_out,
+                    anchor_phases,
+                    attention_interference_gain,
+                )?;
+            }
+        }
+
+        self.daes_slot = daes_local;
+        Ok((density, final_pull, mean_coh, trail_out.target_anchor_id))
+    }
+
+    /// Executes the closed-loop **Autonomous Pointer-Trail Selection + Bayes-Attention
+    /// Interference** cascade uniting **Hypothesis 1** (Persona as Joint Probability Chain Rule
+    /// $\times$ Attention phase interference) and **Hypothesis 2** (Intelligence as Stigmergic
+    /// Pointer-Trail rewiring in [`ActionHub`]) in zero-allocation ($C_{\mathrm{alloc}} = 0$) mode.
+    ///
+    /// Returns `(selected_trail_id, bayesian_score, transition_log_prob, dominant_anchor_id, found_coherent_transition)`.
+    ///
+    /// # Errors
+    /// Propagates any error from [`EntropyEvaluator::eval_stateful`] or
+    /// [`FractalCascadeCoordinator::execute_autonomous_pointer_trail_attention_cascade`].
+    #[inline]
+    pub fn step_autonomous_pointer_trail_attention_cascade(
+        &mut self,
+        src_trail_id: u32,
+        input_tagged_ptr: gcso_tagged_ptr_t,
+        token_z_score: f32,
+        candidate_trails: &mut [gcso_pointer_trail_t],
+        phase_interference_gain: f32,
+        stigmergic_prior_gain: f32,
+        pointer_link_bonus: f32,
+        repulsion_penalty: f32,
+        interpolation_u7: u8,
+        contradiction_threshold: f32,
+        anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
+        anchor_base_energies: &[f32],
+        repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
+        attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        trail_out: &mut gcso_pointer_trail_t,
+    ) -> Result<(u32, f32, f32, u32, bool)> {
+        let mut edbc_state = gcso_edbc_state_t::default();
+        self.edbc.eval_stateful(token_z_score, &mut edbc_state)?;
+        self.attractor_space.advance_step();
+
+        let mut daes_local = self.daes_slot;
+        let bloom_local = self.bloom_filter;
+        let rep_thresh = self.config.repulsion_threshold;
+        let rep_scale = self.config.repulsion_scale_u7;
+        let qdps_min = self.config.raw.qdps_min_step_rad;
+        let ripa_max = self.config.raw.ripa_clamp_max_rad;
+
+        let res = self.execute_autonomous_pointer_trail_attention_cascade(
+            src_trail_id,
+            input_tagged_ptr.raw(),
+            &mut daes_local,
+            &bloom_local,
+            rep_thresh,
+            rep_scale,
+            candidate_trails,
+            phase_interference_gain,
+            stigmergic_prior_gain,
+            pointer_link_bonus,
+            repulsion_penalty,
+            interpolation_u7,
+            contradiction_threshold,
+            anchor_phases,
+            anchor_base_energies,
+            repulsion_phases_and_strength,
+            attention_scores,
+            qdps_min,
+            ripa_max,
+            query_tensor,
+            key_tensor,
+            trail_out,
+        )?;
+
+        self.daes_slot = daes_local;
+        Ok(res)
+    }
+
+    /// Executes the Pointer-Driven Stigmergic Mode Cascade on this context's internal DAES
+    /// scratchpad and Contrastive Phase Bloom Filter in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
+    ///
+    /// # Errors
+    /// Returns [`crate::abi::GCSO_ERROR_INVALID_ARGUMENT`], [`crate::abi::GCSO_ERROR_NULL_POINTER`],
+    /// or [`crate::abi::GCSO_ERROR_MISALIGNED_POINTER`] if tensor slices or descriptors are invalid.
+    #[inline]
+    pub fn step_pointer_mode_cascade(
+        &mut self,
+        input_tagged_ptr: gcso_tagged_ptr_t,
+        token_z_score: f32,
+        low_entropy_skip_thresh: f32,
+        high_density_srl_thresh: f32,
+        layer_skip_comp_profile: Option<&AlignedSlice16<'_, gcso_q7_t>>,
+        query_tensor: &mut AlignedSliceMut32<'_, f32>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        pspm_config: Option<&gcso_pspm_config_t>,
+        srl_activation_and_desc: Option<(&AlignedSlice32<'_, f32>, &gcso_srl_descriptor_t)>,
+        trail_out: &mut gcso_pointer_trail_t,
+    ) -> Result<(gcso_tagged_ptr_t, u8)> {
+        let mut edbc_state = gcso_edbc_state_t::default();
+        self.edbc.eval_stateful(token_z_score, &mut edbc_state)?;
+        self.attractor_space.advance_step();
+
+        let (dom_slot, _dom_weight) = self.find_dominant_domain();
+        let dominant_slot_u8 = (dom_slot as u8) & ATTRACTOR_SLOT_ID_MASK;
+
+        let mut daes_local = self.daes_slot;
+        let rep_thresh = self.config.repulsion_threshold;
+        let rep_scale = self.config.repulsion_scale_u7;
+        let qdps_min = self.config.raw.qdps_min_step_rad;
+        let ripa_max = self.config.raw.ripa_clamp_max_rad;
+
+        let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
+            qdps_min,
+            ripa_max,
+            Some(&*query_tensor),
+            key_tensor.as_deref(),
+        )?;
+        let (bypass_hit, eff_ptr) = self.resolve_or_pass_tagged_ptr(&mut daes_local, input_tagged_ptr);
+        self.step_pointer(eff_ptr.raw(), trail_out)?;
+        let (density, repulsion_active) = self.bloom_filter.apply_phase_conjugate_repulsion_words(
+            trail_phase_words_mut(trail_out),
+            rep_thresh,
+            rep_scale,
+        );
+        let evolved_ptr = trail_out.evolve_trail_mode_stigmergically(
+            edbc_state.moving_z_entropy,
+            repulsion_active,
+            dominant_slot_u8,
+            low_entropy_skip_thresh,
+            high_density_srl_thresh,
+        );
+
+        let skip_active = evolved_ptr.has_action_mode(ACTION_MODE_LAYER_SKIP);
+        let mut skip_compensated = false;
+        if let Some(comp) = layer_skip_comp_profile {
+            if skip_active {
+                if comp.len() < num_heads {
+                    return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
+                }
+                accumulate_q7_slice_into_64(
+                    &mut trail_out.accumulated_phase_delta,
+                    &comp.as_slice()[..num_heads],
+                );
+                trail_out.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
+                skip_compensated = true;
+            }
+        }
+
+        let trail_w = *trail_phase_words_ref(trail_out);
+        let steered = self.steer_qdps_words_prevalidated_core(
+            &trail_w,
+            head_dim,
+            num_heads,
+            qdps_min,
+            ripa_max,
+            Some(&mut *query_tensor),
+            key_tensor,
+        );
+        let extra_metrics = self.apply_optional_pspm_and_srl(
+            query_tensor,
+            head_dim,
+            pspm_config,
+            srl_activation_and_desc,
+        )?;
+        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
+            | branchless_select_u8(skip_compensated, DAES_METRIC_LAYER_SKIP_COMPENSATED, 0)
+            | extra_metrics;
+        self.telemetry_push(&mut daes_local, metric)?;
+        self.daes_slot = daes_local;
+
+        Ok((evolved_ptr, density))
+    }
+
+    /// Executes the full Slot-Bank Pointer Cascade integrating [`RuntimeContext`]'s internal
+    /// 8-lane Q7 working phase bank (`slot_phase_bank`), cross-lane coupling matrix
+    /// (`slot_coupling_matrix`), mutual inhibition from [`ATTRACTOR_SLOT_REPULSION`], EDBC
+    /// entropy evaluation, and DAES telemetry logging in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
+    ///
+    /// Returns `(evolved_tagged_ptr, bloom_repulsion_density, effective_pull_force, phase_coherence)`.
+    ///
+    /// # Errors
+    /// Returns [`crate::abi::GCSO_ERROR_INVALID_ARGUMENT`], [`crate::abi::GCSO_ERROR_NULL_POINTER`],
+    /// or [`crate::abi::GCSO_ERROR_MISALIGNED_POINTER`] if slot indices, tensor slices, or descriptors are invalid.
+    #[inline]
+    pub fn step_slot_bank_pointer_cascade(
+        &mut self,
+        input_tagged_ptr: gcso_tagged_ptr_t,
+        secondary_slot: u8,
+        synergy_gain: f32,
+        inhibition_strength: f32,
+        token_z_score: f32,
+        low_entropy_skip_thresh: f32,
+        high_density_srl_thresh: f32,
+        layer_skip_comp_profile: Option<&AlignedSlice16<'_, gcso_q7_t>>,
+        query_tensor: &mut AlignedSliceMut32<'_, f32>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        pspm_config: Option<&gcso_pspm_config_t>,
+        srl_activation_and_desc: Option<(&AlignedSlice32<'_, f32>, &gcso_srl_descriptor_t)>,
+        trail_out: &mut gcso_pointer_trail_t,
+    ) -> Result<(gcso_tagged_ptr_t, u8, f32, f32)> {
+        let mut edbc_state = gcso_edbc_state_t::default();
+        self.edbc.eval_stateful(token_z_score, &mut edbc_state)?;
+        self.attractor_space.advance_step();
+
+        let (dom_slot, _dom_weight) = self.find_dominant_domain();
+        let dominant_slot_u8 = (dom_slot as u8) & ATTRACTOR_SLOT_ID_MASK;
+
+        let mut daes_local = self.daes_slot;
+        let mut gated_weights = [0.0f32; MAX_ATTRACTOR_DOMAINS];
+        let mut i = 0usize;
+        while i < MAX_ATTRACTOR_DOMAINS {
+            let enabled = ((self.slot_enabled_mask >> i) & 1) != 0;
+            gated_weights[i] = branchless_select_f32(enabled, self.slot_weights[i], 0.0);
+            i += 1;
+        }
+        let coupling = self.slot_coupling_matrix;
+        let rep_thresh = self.config.repulsion_threshold;
+        let rep_scale = self.config.repulsion_scale_u7;
+        let qdps_min = self.config.raw.qdps_min_step_rad;
+        let ripa_max = self.config.raw.ripa_clamp_max_rad;
+
+        let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
+            qdps_min,
+            ripa_max,
+            Some(&*query_tensor),
+            key_tensor.as_deref(),
+        )?;
+        let (bypass_hit, eff_ptr) = self.resolve_or_pass_tagged_ptr(&mut daes_local, input_tagged_ptr);
+        self.step_pointer(eff_ptr.raw(), trail_out)?;
+
+        let bank_slice = self.slot_phase_bank.relax_slice::<16>();
+        let (damped_pull, coherence) = self.orchestrate_cross_slot_synergy_from_bank(
+            &bank_slice,
+            &gated_weights,
+            secondary_slot,
+            coupling,
+            synergy_gain,
+            inhibition_strength,
+            trail_out,
+        )?;
+
+        let (density, repulsion_active) = self.bloom_filter.apply_phase_conjugate_repulsion_words(
+            trail_phase_words_mut(trail_out),
+            rep_thresh,
+            rep_scale,
+        );
+
+        let evolved_ptr = trail_out.evolve_trail_mode_stigmergically(
+            edbc_state.moving_z_entropy,
+            repulsion_active,
+            dominant_slot_u8,
+            low_entropy_skip_thresh,
+            high_density_srl_thresh,
+        );
+
+        let skip_active = evolved_ptr.has_action_mode(ACTION_MODE_LAYER_SKIP)
+            | input_tagged_ptr.has_action_mode(ACTION_MODE_LAYER_SKIP);
+        let mut skip_compensated = false;
+        if let Some(comp) = layer_skip_comp_profile {
+            if skip_active {
+                if comp.len() < num_heads {
+                    return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
+                }
+                accumulate_q7_slice_into_64(
+                    &mut trail_out.accumulated_phase_delta,
+                    &comp.as_slice()[..num_heads],
+                );
+                trail_out.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
+                skip_compensated = true;
+            }
+        }
+
+        let trail_w = *trail_phase_words_ref(trail_out);
+        let steered = self.steer_qdps_words_prevalidated_core(
+            &trail_w,
+            head_dim,
+            num_heads,
+            qdps_min,
+            ripa_max,
+            Some(&mut *query_tensor),
+            key_tensor,
+        );
+        let extra_metrics = self.apply_optional_pspm_and_srl(
+            query_tensor,
+            head_dim,
+            pspm_config,
+            srl_activation_and_desc,
+        )?;
+        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
+            | branchless_select_u8(skip_compensated, DAES_METRIC_LAYER_SKIP_COMPENSATED, 0)
+            | DAES_METRIC_SLOT_SYNERGY_ACTIVE
+            | extra_metrics;
+        self.telemetry_push(&mut daes_local, metric)?;
+        self.daes_slot = daes_local;
+
+        Ok((evolved_ptr, density, damped_pull, coherence))
+    }
+
+    /// Executes a sequence of token steps in zero-allocation mode (for prefill and batch decoding).
+    ///
+    /// # Errors
+    /// Propagates any error returned by [`GcsoRuntimeContext::step_token`].
     #[inline]
     pub fn step_sequence(
         &mut self,
@@ -469,17 +1291,21 @@ impl RuntimeContext {
         Ok(())
     }
 
-    /// Serializes active runtime context state into a binary snapshot conforming to GCSO ABI v0.1.1,
-    /// structuring header offsets for Action Hub, Attractor Field, DPSR, SRL, EDBC, and DAES sections.
+    /// Serializes active runtime context state into a `.gcso` binary snapshot conforming to
+    /// GCSO ABI v0.1.1 (`0x00000101`), stamping an IEEE 802.3 CRC32 checksum over the payload.
+    ///
+    /// Supports two-pass sizing: passing an empty `buffer` writes the required byte size (`320` bytes)
+    /// into `*required_size` and returns `Ok(())`.
     ///
     /// # Errors
-    /// Returns `GCSO_ERROR_BUFFER_TOO_SMALL` if output buffer size is insufficient.
+    /// Returns [`crate::abi::GCSO_ERROR_BUFFER_TOO_SMALL`] if `buffer` is non-empty and smaller
+    /// than `320` bytes.
     #[inline]
     pub fn serialize_to_bytes(&self, buffer: &mut [u8], required_size: &mut usize) -> Result<()> {
         let header_size = core::mem::size_of::<gcso_snapshot_header_t>(); // 128 bytes
+        let context_data_size = 64usize; // 64-byte aligned context & attractor metadata block
         let edbc_size = core::mem::size_of::<gcso_edbc_state_t>(); // 64 bytes
         let daes_size = core::mem::size_of::<gcso_daes_slot_t>(); // 64 bytes
-        let context_data_size = 64usize; // Padded to 64 bytes for strict 64-byte alignment
 
         let total_required = header_size + context_data_size + edbc_size + daes_size; // 320 bytes
 
@@ -498,79 +1324,54 @@ impl RuntimeContext {
         let edbc_off = action_hub_off + context_data_size; // 192
         let daes_off = edbc_off + edbc_size; // 256
 
-        let header = gcso_snapshot_header_t {
-            magic: 0x4F53_4347,                        // ASCII "GCSO"
-            version: crate::abi::GCSO_ABI_VERSION_HEX, // 0x00000101 (v0.1.1)
-            total_size: total_required as u64,
-            action_hub_offset: action_hub_off as u64,
-            attractor_field_offset: action_hub_off as u64,
-            dpsr_state_offset: edbc_off as u64,
-            srl_state_offset: edbc_off as u64,
-            edbc_state_offset: edbc_off as u64,
-            daes_slot_offset: daes_off as u32,
-            timestamp_epoch_sec: 1_774_900_000,
-            ..Default::default()
-        };
-
-        // SAFETY: Use write_unaligned to prevent misaligned pointer dereferences on u8 buffers.
-        unsafe {
-            core::ptr::write_unaligned(
-                buffer.as_mut_ptr().cast::<gcso_snapshot_header_t>(),
-                header,
-            );
-        }
-
         let ctx_buf = &mut buffer[action_hub_off..edbc_off];
-        ctx_buf[..8].copy_from_slice(&self.step_counter.to_le_bytes());
+        ctx_buf[0..8].copy_from_slice(&self.step_counter.to_le_bytes());
         ctx_buf[8..12].copy_from_slice(&self.active_trail_count.to_le_bytes());
-        let sys_anchors = self.attractor_space.system_field.active_count();
+        let sys_anchors = self.attractor_space.system_field().active_count();
         ctx_buf[12..16].copy_from_slice(&sys_anchors.to_le_bytes());
-        let rep_gain = self.attractor_space.system_field.repulsion_gain;
+        let rep_gain = self.attractor_space.system_field().repulsion_gain;
         ctx_buf[16..20].copy_from_slice(&rep_gain.to_le_bytes());
+        ctx_buf[20] = self.slot_enabled_mask;
+        ctx_buf[24..32].copy_from_slice(&self.slot_coupling_matrix.to_le_bytes());
+        f32::write_unaligned_slice_to(&self.slot_weights, ctx_buf, 32)?;
 
         let edbc_state = self.edbc.state();
-        // SAFETY: Use write_unaligned to populate aligned sections in unaligned byte slices safely.
-        unsafe {
-            core::ptr::write_unaligned(
-                buffer[edbc_off..daes_off]
-                    .as_mut_ptr()
-                    .cast::<gcso_edbc_state_t>(),
-                edbc_state,
-            );
-            core::ptr::write_unaligned(
-                buffer[daes_off..total_required]
-                    .as_mut_ptr()
-                    .cast::<gcso_daes_slot_t>(),
-                self.daes_slot,
-            );
-        }
+        edbc_state.write_unaligned_to(buffer, edbc_off)?;
+        self.daes_slot.write_unaligned_to(buffer, daes_off)?;
 
+        let mut header = init_snapshot_header(total_required as u64, 1_774_900_000);
+        header.action_hub_offset = action_hub_off as u64;
+        header.attractor_field_offset = action_hub_off as u64;
+        header.dpsr_state_offset = edbc_off as u64;
+        header.srl_state_offset = edbc_off as u64;
+        header.edbc_state_offset = edbc_off as u64;
+        header.daes_slot_offset = daes_off as u32;
+        finalize_snapshot_header_crc32(&mut header, &buffer[..total_required])?;
+
+        header.write_unaligned_to(buffer, 0)?;
         *required_size = total_required;
         Ok(())
     }
 
-    /// Deserializes a binary snapshot buffer to restore context state in-place with ABI v0.1.1 verification.
+    /// Deserializes a `.gcso` binary snapshot buffer to restore context state in-place with
+    /// ABI v0.1.1 header validation and IEEE 802.3 CRC32 payload integrity verification.
     ///
     /// # Errors
-    /// Returns `GCSO_ERROR_CONTAINER_CORRUPTED` if header magic or size is invalid.
-    /// Returns `GCSO_ERROR_VERSION_MISMATCH` if ABI version does not match.
+    /// Returns [`crate::abi::GCSO_ERROR_CONTAINER_CORRUPTED`] if the header magic, section
+    /// offsets, buffer bounds, or payload CRC32 checksum are invalid.
+    /// Returns [`crate::abi::GCSO_ERROR_VERSION_MISMATCH`] if the snapshot ABI version does not
+    /// match `0x00000101`.
     #[inline]
     pub fn deserialize_from_bytes(&mut self, buffer: &[u8]) -> Result<()> {
         let header_size = core::mem::size_of::<gcso_snapshot_header_t>();
         if buffer.len() < header_size {
             return Err(crate::abi::GCSO_ERROR_CONTAINER_CORRUPTED);
         }
-        // SAFETY: Use read_unaligned to safely parse snapshot headers from arbitrary slice addresses.
-        let header =
-            unsafe { core::ptr::read_unaligned(buffer.as_ptr().cast::<gcso_snapshot_header_t>()) };
-        if header.magic != 0x4F53_4347 {
-            return Err(crate::abi::GCSO_ERROR_CONTAINER_CORRUPTED);
-        }
-        crate::abi::validate_abi_version(header.version)?;
 
-        if (header.total_size as usize) > buffer.len() {
-            return Err(crate::abi::GCSO_ERROR_CONTAINER_CORRUPTED);
-        }
+        let header = gcso_snapshot_header_t::read_unaligned_from(buffer, 0)
+            .map_err(|_| crate::abi::GCSO_ERROR_CONTAINER_CORRUPTED)?;
+
+        verify_snapshot_payload_crc32(&header, buffer)?;
 
         let action_hub_off = header.action_hub_offset as usize;
         let edbc_off = header.edbc_state_offset as usize;
@@ -580,30 +1381,41 @@ impl RuntimeContext {
             return Err(crate::abi::GCSO_ERROR_CONTAINER_CORRUPTED);
         }
 
-        if buffer.len() >= action_hub_off + 20 {
-            let ctx_buf = &buffer[action_hub_off..];
-            self.step_counter = u64::from_le_bytes(ctx_buf[..8].try_into().unwrap_or([0; 8]));
-            self.active_trail_count =
-                u32::from_le_bytes(ctx_buf[8..12].try_into().unwrap_or([0; 4]));
-            let sys_anchors = u32::from_le_bytes(ctx_buf[12..16].try_into().unwrap_or([0; 4]));
-            let rep_gain = f32::from_le_bytes(ctx_buf[16..20].try_into().unwrap_or([0; 4]));
+        if buffer.len() >= action_hub_off + 21 {
+            self.step_counter = u64::read_unaligned_from(buffer, action_hub_off)?;
+            self.active_trail_count = u32::read_unaligned_from(buffer, action_hub_off + 8)?;
+            let sys_anchors = u32::read_unaligned_from(buffer, action_hub_off + 12)?;
+            let rep_gain = f32::read_unaligned_from(buffer, action_hub_off + 16)?;
+            self.slot_enabled_mask = buffer[action_hub_off + 20];
 
-            self.attractor_space.system_field.repulsion_gain = rep_gain;
-            let _ = self.attractor_space.system_field.clear_anchors();
-            for _ in 0..sys_anchors {
+            if buffer.len() >= action_hub_off + 32 {
+                let coupling = u64::read_unaligned_from(buffer, action_hub_off + 24)?;
+                if coupling != 0 {
+                    self.slot_coupling_matrix = coupling;
+                    self.config.slot_coupling_matrix = coupling;
+                }
+            }
+            if buffer.len() >= action_hub_off + 64 {
+                f32::read_unaligned_slice_from(
+                    buffer,
+                    action_hub_off + 32,
+                    &mut self.slot_weights,
+                )?;
+            }
+
+            self.attractor_space.system_field_mut().clear_anchors()?;
+            self.attractor_space.system_field_mut().repulsion_gain = rep_gain;
+            for _ in 0..sys_anchors.min(MAX_ANCHORS_PER_FIELD as u32) {
                 let _ = self
                     .attractor_space
-                    .system_field
+                    .system_field_mut()
                     .add_system_prompt_anchor("restored_anchor", 1.0);
             }
         }
 
         let edbc_size = core::mem::size_of::<gcso_edbc_state_t>();
         if buffer.len() >= edbc_off + edbc_size {
-            // SAFETY: Use read_unaligned to prevent alignment panics on unaligned byte slices.
-            let edbc_st = unsafe {
-                core::ptr::read_unaligned(buffer[edbc_off..].as_ptr().cast::<gcso_edbc_state_t>())
-            };
+            let edbc_st = gcso_edbc_state_t::read_unaligned_from(buffer, edbc_off)?;
             self.edbc = EdbcEngine::new(edbc_st);
             self.edbc.set_hysteresis_band(self.config.hysteresis_band);
             self.edbc.set_tau_flux(self.config.tau_flux);
@@ -611,11 +1423,7 @@ impl RuntimeContext {
 
         let daes_size = core::mem::size_of::<gcso_daes_slot_t>();
         if buffer.len() >= daes_off + daes_size {
-            // SAFETY: Use read_unaligned to safely parse slot structure from byte buffer.
-            let daes_st = unsafe {
-                core::ptr::read_unaligned(buffer[daes_off..].as_ptr().cast::<gcso_daes_slot_t>())
-            };
-            self.daes_slot = daes_st;
+            self.daes_slot = gcso_daes_slot_t::read_unaligned_from(buffer, daes_off)?;
         }
 
         Ok(())
@@ -627,25 +1435,26 @@ impl RuntimeContext {
 // ===================================================================
 
 impl SystemCapabilityQuery for RuntimeContext {
-    #[inline]
+    #[inline(always)]
     fn abi_version(&self) -> (u32, u32, u32) {
         crate::abi_version()
     }
 
-    #[inline]
+    #[inline(always)]
     fn abi_version_string(&self) -> &'static str {
         crate::abi::GCSO_ABI_VERSION_STRING
     }
 
-    #[inline]
+    #[inline(always)]
     fn query_capability(&self) -> gcso_capability_flags_t {
-        (cfg!(feature = "cuda") as u64 * (1 << 1))
-            | (cfg!(feature = "vulkan") as u64 * (1 << 2))
-            | (((cfg!(target_os = "macos") || cfg!(feature = "metal")) as u64) * (1 << 3))
-            | 0x01u64 // Base CPU capability
+        GCSO_CAP_CPU_BASELINE
+            | ((cfg!(feature = "cuda") as u64) * GCSO_CAP_CUDA_BACKEND)
+            | ((cfg!(feature = "vulkan") as u64) * GCSO_CAP_VULKAN_BACKEND)
+            | (((cfg!(target_os = "macos") || cfg!(feature = "metal")) as u64)
+                * GCSO_CAP_METAL_BACKEND)
     }
 
-    #[inline]
+    #[inline(always)]
     fn init_default_config(&self, config: &mut gcso_config_t) -> Result<()> {
         *config = self.config.raw;
         Ok(())
@@ -658,17 +1467,22 @@ impl GcsoRuntimeContext for RuntimeContext {
         self.edbc.reset();
         self.step_counter = 0;
         self.active_trail_count = 0;
-        self.attractor_space.clear_all_domains()?;
-        self.daes_slot = gcso_daes_slot_t::default();
-        self.daes_slot.mode = u32::from(self.config.raw.daes_mode);
+        self.clear_all_domains()?;
+        self.bloom_filter.clear();
+        self.daes_slot = gcso_daes_slot_t {
+            mode: u32::from(self.config.raw.daes_mode),
+            ..Default::default()
+        };
         Ok(())
     }
 
     #[inline]
     fn set_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> Result<()> {
         self.attractor_space
-            .system_field
+            .system_field_mut()
             .add_system_prompt_anchor(prompt, weight)?;
+        self.slot_weights[usize::from(ATTRACTOR_SLOT_SYSTEM_BASELINE)] =
+            branchless_relu_f32(weight);
         Ok(())
     }
 
@@ -700,7 +1514,7 @@ impl GcsoRuntimeContext for RuntimeContext {
         header_out: &mut gcso_pprc_keyframe_header_t,
     ) -> Result<()> {
         header_out.token_index = token_index;
-        header_out.frame_type = 0; // Keyframe marker
+        header_out.frame_type = 0;
         Ok(())
     }
 }
@@ -715,96 +1529,6 @@ impl PhaseSteering for RuntimeContext {
     fn num_heads(&self) -> u32 {
         self.dpsr.num_heads()
     }
-
-    #[inline]
-    fn apply_phase_steering(
-        &self,
-        query_tensor: &mut AlignedSliceMut32<'_, f32>,
-        phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
-    ) -> Result<()> {
-        self.dpsr.apply_phase_steering(query_tensor, phase_deltas)
-    }
-
-    #[inline]
-    fn apply_phase_steering_fused(
-        &self,
-        query_tensor: &mut AlignedSliceMut32<'_, f32>,
-        key_tensor: &mut AlignedSliceMut32<'_, f32>,
-        phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
-    ) -> Result<()> {
-        self.dpsr
-            .apply_phase_steering_fused(query_tensor, key_tensor, phase_deltas)
-    }
-
-    #[inline]
-    fn apply_phase_steering_safe(
-        &self,
-        query_tensor: &mut AlignedSliceMut32<'_, f32>,
-        phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
-        max_rad: f32,
-    ) -> Result<()> {
-        self.dpsr
-            .apply_phase_steering_safe(query_tensor, phase_deltas, max_rad)
-    }
-
-    #[inline]
-    fn apply_soft_phase_damping(
-        &self,
-        query_tensor: &mut AlignedSliceMut32<'_, f32>,
-        damping_factor: f32,
-    ) -> Result<()> {
-        self.dpsr
-            .apply_soft_phase_damping(query_tensor, damping_factor)
-    }
-
-    #[inline]
-    fn qdps_filter_step(
-        &self,
-        phase_deltas: &mut AlignedSliceMut16<'_, gcso_q7_t>,
-        min_step_rad: f32,
-    ) -> Result<()> {
-        self.dpsr.qdps_filter_step(phase_deltas, min_step_rad)
-    }
-
-    #[inline]
-    fn lazy_unwrap_override(
-        &self,
-        query_tensor: &mut AlignedSliceMut32<'_, f32>,
-        context_accum: &AlignedSlice32<'_, f32>,
-    ) -> Result<()> {
-        self.dpsr.lazy_unwrap_override(query_tensor, context_accum)
-    }
-
-    #[inline]
-    fn slerp_norm_guard_stable(
-        &self,
-        tensor: &mut AlignedSliceMut32<'_, f32>,
-        norm_lower: f32,
-        norm_upper: f32,
-    ) -> Result<()> {
-        self.dpsr
-            .slerp_norm_guard_stable(tensor, norm_lower, norm_upper)
-    }
-
-    #[inline]
-    fn fused_logit_shift(
-        &self,
-        logits: &mut AlignedSliceMut32<'_, f32>,
-        phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
-    ) -> Result<()> {
-        self.dpsr.fused_logit_shift(logits, phase_deltas)
-    }
-
-    #[inline]
-    fn compute_procrustes_phase_delta(
-        &self,
-        source: &AlignedSlice32<'_, f32>,
-        target: &AlignedSlice32<'_, f32>,
-        phase_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
-    ) -> Result<()> {
-        self.dpsr
-            .compute_procrustes_phase_delta(source, target, phase_out)
-    }
 }
 
 impl EntropyEvaluator for RuntimeContext {
@@ -816,32 +1540,30 @@ impl EntropyEvaluator for RuntimeContext {
     ) -> Result<()> {
         self.edbc.eval_stateful(token_z_score, state_out)
     }
+}
 
-    #[inline]
-    fn eval_cvoid_dyadic128(
-        &self,
-        key_vector: &AlignedSlice32<'_, f32>,
-        void_score_out: &mut f32,
-    ) -> Result<()> {
-        self.edbc.eval_cvoid_dyadic128(key_vector, void_score_out)
+impl EdbcBranchController for RuntimeContext {
+    #[inline(always)]
+    fn active_branch_mode(&self) -> u32 {
+        self.edbc.state().active_branch_mode
     }
 
     #[inline]
-    fn eval_barrier(&self, void_score: f32, tau_eff: f32) -> Result<f32> {
-        self.edbc.eval_barrier(void_score, tau_eff)
+    fn set_bifurcation_threshold(&mut self, threshold: f32) {
+        self.edbc.set_bifurcation_threshold(threshold);
+        self.config.bifurcation_threshold = self.edbc.state().bifurcation_threshold;
     }
 
     #[inline]
-    fn eval_barrier_pitchfork(
-        &self,
-        cvoid: f32,
-        tau_eff: f32,
-        alpha: f32,
-        beta: f32,
-        head_dim: u32,
-    ) -> Result<f32> {
-        self.edbc
-            .eval_barrier_pitchfork(cvoid, tau_eff, alpha, beta, head_dim)
+    fn set_hysteresis_band(&mut self, band: f32) {
+        self.edbc.set_hysteresis_band(band);
+        self.config.hysteresis_band = self.edbc.hysteresis_band;
+    }
+
+    #[inline]
+    fn set_tau_flux(&mut self, tau_flux: f32) {
+        self.edbc.set_tau_flux(tau_flux);
+        self.config.tau_flux = self.edbc.tau_flux;
     }
 }
 
@@ -849,7 +1571,7 @@ impl PointerActionHub for RuntimeContext {
     #[inline]
     fn reset(&mut self) -> Result<()> {
         self.active_trail_count = 0;
-        Ok(())
+        self.action_hub.reset()
     }
 
     #[inline]
@@ -858,78 +1580,79 @@ impl PointerActionHub for RuntimeContext {
         current_ptr: u64,
         trail_out: &mut gcso_pointer_trail_t,
     ) -> Result<()> {
-        if self.active_trail_count < self.config.raw.action_hub_capacity {
-            self.active_trail_count = self.active_trail_count.wrapping_add(1);
-        }
-        trail_out.prev_ptr = trail_out.current_ptr;
-        trail_out.current_ptr = current_ptr;
-        trail_out.step_count = trail_out.step_count.wrapping_add(1);
-        trail_out.stigmergic_density = 1.0;
+        let cap = self.config.raw.action_hub_capacity;
+        self.active_trail_count = branchless_select_u32(
+            self.active_trail_count < cap,
+            self.active_trail_count.wrapping_add(1),
+            self.active_trail_count,
+        );
+        self.step_counter = self.step_counter.wrapping_add(1);
+        trail_out.record_pointer_transition(current_ptr, 1, 1.0);
+        let embedded_phase = gcso_tagged_ptr_t(current_ptr).unpack_phase();
+        trail_out.accumulate_uniform_phase(embedded_phase);
+        let slot_idx = (self.action_hub.write_cursor as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
+        self.action_hub.trails[slot_idx] = *trail_out;
+        self.action_hub.write_cursor =
+            self.action_hub.write_cursor.wrapping_add(1) & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
+        self.action_hub.active_count = self.active_trail_count;
+        self.action_hub.step_counter = self.step_counter;
         Ok(())
-    }
-
-    #[inline]
-    fn hash_slot256_index(&self, ptr: u64) -> u32 {
-        let mut x = ptr;
-        x ^= x >> 30;
-        x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        x ^= x >> 27;
-        x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
-        x ^= x >> 31;
-        (x & 0xFF) as u32
     }
 
     #[inline]
     fn update_cellular_state_express(
         &mut self,
-        _trail_id: u32,
-        _phase_delta: gcso_q7_t,
+        trail_id: u32,
+        phase_delta: gcso_q7_t,
     ) -> Result<()> {
+        if trail_id >= self.config.raw.action_hub_capacity {
+            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        self.action_hub
+            .update_cellular_state_express(trail_id, phase_delta)?;
+        let slot_idx = (trail_id as usize) & (MAX_ATTRACTOR_DOMAINS - 1);
+        let w = self.slot_words_mut(slot_idx)?;
+        if phase_delta != 0 {
+            let splat = ((phase_delta as u8) as u64).wrapping_mul(0x0101_0101_0101_0101);
+            w[0] = swar_q7_add_sat_x8(w[0], splat);
+            w[1] = swar_q7_add_sat_x8(w[1], splat);
+            w[2] = swar_q7_add_sat_x8(w[2], splat);
+            w[3] = swar_q7_add_sat_x8(w[3], splat);
+            w[4] = swar_q7_add_sat_x8(w[4], splat);
+            w[5] = swar_q7_add_sat_x8(w[5], splat);
+            w[6] = swar_q7_add_sat_x8(w[6], splat);
+            w[7] = swar_q7_add_sat_x8(w[7], splat);
+        }
         Ok(())
     }
 
     #[inline]
     fn pull_trail_to_attractor(
         &mut self,
-        _trail_id: u32,
-        _anchor_id: u32,
+        trail_id: u32,
+        anchor_id: u32,
         pull_force: f32,
     ) -> Result<()> {
-        if pull_force.is_nan() || pull_force.is_infinite() {
+        if !branchless_is_finite_f32(pull_force) {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
-        Ok(())
-    }
-
-    #[inline]
-    fn link_hallucinated_trails(&mut self, _src_trail_id: u32, _dst_trail_id: u32) -> Result<()> {
-        Ok(())
-    }
-
-    #[inline]
-    fn reduce_bit_tree(
-        &self,
-        bitmasks: &AlignedSlice32<'_, gcso_paged_bitmask_t>,
-        reduced_out: &mut gcso_paged_bitmask_t,
-    ) -> Result<()> {
-        let mut acc = [0u64; 4];
-        for m in bitmasks.as_slice() {
-            acc[0] |= m.bits[0];
-            acc[1] |= m.bits[1];
-            acc[2] |= m.bits[2];
-            acc[3] |= m.bits[3];
+        if trail_id < self.action_hub.capacity {
+            let _ = self
+                .action_hub
+                .pull_trail_to_attractor(trail_id, anchor_id, pull_force);
         }
-        reduced_out.bits = acc;
+        let slot_idx = (anchor_id as usize) & (MAX_ATTRACTOR_DOMAINS - 1);
+        self.slot_weights[slot_idx] = branchless_relu_f32(pull_force);
         Ok(())
     }
 
     #[inline]
-    fn paged_block_warp_bitmask(
-        &self,
-        _kv_bits: &AlignedSlice32<'_, u64>,
-        mask_out: &mut gcso_paged_bitmask_t,
-    ) -> Result<()> {
-        mask_out.bits.fill(0);
+    fn link_hallucinated_trails(&mut self, src_trail_id: u32, dst_trail_id: u32) -> Result<()> {
+        if src_trail_id < self.action_hub.capacity && dst_trail_id < self.action_hub.capacity {
+            let _ = self
+                .action_hub
+                .link_hallucinated_trails(src_trail_id, dst_trail_id);
+        }
         Ok(())
     }
 
@@ -946,53 +1669,26 @@ impl PointerActionHub for RuntimeContext {
 
 impl DaesScratchpad for RuntimeContext {
     #[inline]
-    fn reset_telemetry(&mut self, slot: &mut gcso_daes_slot_t) -> Result<()> {
-        slot.telemetry_ring_head = 0;
-        slot.telemetry_ring_tail = 0;
-        slot.cache_hit_count = 0;
-        slot.telemetry_mini_ledger.fill(0);
-        Ok(())
-    }
-
-    #[inline]
-    fn fast_path_lookup(&self, slot: &gcso_daes_slot_t, input_key: u64) -> Result<u64> {
-        if (slot.fast_path_bypass_mask & input_key) != 0 {
-            Ok(slot.fast_path_shortcuts[0])
-        } else {
-            Err(crate::abi::GCSO_ERROR_INVALID_STATE)
-        }
-    }
-
-    #[inline]
-    fn telemetry_push(&mut self, slot: &mut gcso_daes_slot_t, metric_code: u8) -> Result<()> {
-        let head = (slot.telemetry_ring_head as usize) % 8;
-        slot.telemetry_mini_ledger[head] = metric_code;
-        slot.telemetry_ring_head = slot.telemetry_ring_head.wrapping_add(1);
-        Ok(())
-    }
-
-    #[inline]
-    fn set_mode(&mut self, slot: &mut gcso_daes_slot_t, mode: u32) -> Result<()> {
-        if mode > 2 {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        slot.mode = mode;
-        Ok(())
-    }
-
-    #[inline]
     fn evaluate_auto_tune(
         &self,
-        _slot: &gcso_daes_slot_t,
+        slot: &gcso_daes_slot_t,
         config_out: &mut gcso_config_t,
     ) -> Result<()> {
         *config_out = self.config.raw;
-        Ok(())
-    }
 
-    #[inline]
-    fn cache_hit_count(&self, slot: &gcso_daes_slot_t) -> u32 {
-        slot.cache_hit_count
+        // Count high-intensity telemetry spike events (>= 0x80) across all 8 ring bytes via 1 SWAR op.
+        let word = u64::from_le_bytes(slot.telemetry_mini_ledger);
+        let spike_count = (word & 0x8080_8080_8080_8080).count_ones();
+        let base_ripa = branchless_select_f32(
+            config_out.ripa_clamp_max_rad > 0.0,
+            config_out.ripa_clamp_max_rad,
+            DEFAULT_RIPA_CLAMP_MAX_RAD,
+        );
+        let damping = 1.0 - 0.025 * (spike_count as f32);
+        config_out.ripa_clamp_max_rad = branchless_clamp_f32(base_ripa * damping, 0.01, 0.25);
+        config_out.daes_mode = (slot.mode & 0xFF) as u8;
+        let _ = DAES_MINI_LEDGER_LEN;
+        Ok(())
     }
 }
 
@@ -1010,14 +1706,42 @@ impl SwarmCellChunk for RuntimeContext {
 impl AttractorField for RuntimeContext {
     #[inline]
     fn anchor_count(&self) -> u32 {
-        self.attractor_space.system_field.active_count()
+        self.attractor_space.system_field().active_count()
+    }
+
+    #[inline]
+    fn apply_evaporative_decay(&mut self) {
+        self.attractor_space
+            .system_field_mut()
+            .apply_evaporative_decay();
+    }
+
+    #[inline]
+    fn total_potential_energy(&self) -> f32 {
+        self.attractor_space.system_field().total_potential_energy()
+    }
+
+    #[inline]
+    fn pressure_ratio(&self) -> f32 {
+        self.attractor_space.system_field().pressure_ratio()
+    }
+
+    #[inline]
+    fn evaporate_weakest_anchor(&mut self) -> Option<u32> {
+        self.attractor_space
+            .system_field_mut()
+            .evaporate_weakest_anchor()
     }
 
     #[inline]
     fn add_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> Result<u32> {
-        self.attractor_space
-            .system_field
-            .add_system_prompt_anchor(prompt, weight)
+        let id = self
+            .attractor_space
+            .system_field_mut()
+            .add_system_prompt_anchor(prompt, weight)?;
+        self.slot_weights[usize::from(ATTRACTOR_SLOT_SYSTEM_BASELINE)] =
+            branchless_relu_f32(weight);
+        Ok(id)
     }
 
     #[inline]
@@ -1028,7 +1752,7 @@ impl AttractorField for RuntimeContext {
         weight: f32,
     ) -> Result<u32> {
         self.attractor_space
-            .system_field
+            .system_field_mut()
             .add_embedding_anchor(embedding, anchor_type, weight)
     }
 
@@ -1040,7 +1764,7 @@ impl AttractorField for RuntimeContext {
         dim: usize,
     ) -> Result<u32> {
         self.attractor_space
-            .system_field
+            .system_field_mut()
             .add_anchor(anchor_type, vec, dim)
     }
 
@@ -1050,19 +1774,240 @@ impl AttractorField for RuntimeContext {
         repulsion_deltas: &AlignedSlice16<'_, gcso_q7_t>,
         gain: f32,
     ) -> Result<()> {
+        let raw = repulsion_deltas.as_slice();
+        let limit = raw.len().min(MAX_ATTENTION_HEADS);
+        let mut pattern = [0i8; MAX_ATTENTION_HEADS];
+        pattern[..limit].copy_from_slice(&raw[..limit]);
+
+        self.bloom_filter.insert_repulsive_pattern(&pattern);
+        let anti_phase = branchless_q7_conjugate_64(&pattern);
+        self.set_slot_phase_profile(ATTRACTOR_SLOT_REPULSION, &anti_phase)?;
+        self.slot_weights[usize::from(ATTRACTOR_SLOT_REPULSION)] = branchless_relu_f32(gain);
+
         self.attractor_space
-            .system_field
+            .system_field_mut()
             .inject_phase_repulsion(repulsion_deltas, gain)
     }
 
     #[inline]
     fn aggregate_bottom_up(&mut self) -> Result<u32> {
-        self.attractor_space.system_field.aggregate_bottom_up()
+        self.attractor_space
+            .system_field_mut()
+            .aggregate_bottom_up()
     }
 
     #[inline]
     fn clear_anchors(&mut self) -> Result<()> {
-        self.attractor_space.system_field.clear_anchors()
+        self.attractor_space.system_field_mut().clear_anchors()
+    }
+}
+
+impl MultiDomainAttractorSpace for RuntimeContext {
+    #[inline]
+    fn advance_step(&mut self) {
+        self.attractor_space.advance_step();
+    }
+
+    #[inline]
+    fn set_domain_weight(&mut self, domain_id: u32, weight: f32) -> Result<()> {
+        let idx = domain_id as usize;
+        if idx >= MAX_ATTRACTOR_DOMAINS || !branchless_is_finite_f32(weight) || weight < 0.0 {
+            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        self.slot_weights[idx] = weight;
+        Ok(())
+    }
+
+    #[inline]
+    fn set_domain_enabled(&mut self, domain_id: u32, enabled: bool) -> Result<()> {
+        let idx = domain_id as usize;
+        if idx >= MAX_ATTRACTOR_DOMAINS {
+            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let bit = 1u8 << (domain_id as u8);
+        let enable_mask = (enabled as u8).wrapping_neg();
+        self.slot_enabled_mask = (self.slot_enabled_mask & !bit) | (bit & enable_mask);
+        Ok(())
+    }
+
+    #[inline]
+    fn find_dominant_domain(&self) -> (u32, f32) {
+        let mut best_id = 0u32;
+        let mut best_score = -1.0_f32;
+
+        let mut i = 0usize;
+        while i < MAX_ATTRACTOR_DOMAINS {
+            let enabled = ((self.slot_enabled_mask >> i) & 1) != 0;
+            let base_w = self.slot_weights[i];
+            let eff_score = branchless_select_f32(enabled, base_w, -1.0);
+            let is_better = eff_score > best_score;
+            best_id = branchless_select_u32(is_better, i as u32, best_id);
+            best_score = branchless_select_f32(is_better, eff_score, best_score);
+            i += 1;
+        }
+
+        (best_id, branchless_relu_f32(best_score))
+    }
+
+    #[inline(always)]
+    fn slot_coupling_matrix(&self) -> u64 {
+        self.slot_coupling_matrix
+    }
+
+    #[inline]
+    fn evaluate_slot_force(
+        &self,
+        domain_id: u32,
+        trail: &gcso_pointer_trail_t,
+        slot_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> Result<f32> {
+        let idx = domain_id as usize;
+        if idx >= MAX_ATTRACTOR_DOMAINS {
+            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let enabled = ((self.slot_enabled_mask >> idx) & 1) != 0;
+        if !enabled {
+            *slot_phase_out = [0i8; MAX_ATTENTION_HEADS];
+            return Ok(0.0);
+        }
+
+        let bank_slice = self.slot_phase_bank.as_aligned_slice();
+        let bank_slot = bank_slice.slot_exact::<MAX_ATTENTION_HEADS>(idx)?;
+        *slot_phase_out = *bank_slot;
+
+        if !is_phase_profile_nonzero_64(bank_slot) {
+            let base_pull = self
+                .attractor_space
+                .evaluate_multi_domain_superposition(trail, slot_phase_out);
+            return Ok(self.slot_weights[idx].max(base_pull));
+        }
+
+        Ok(self.slot_weights[idx])
+    }
+
+    #[inline]
+    fn evaluate_multi_domain_superposition(
+        &self,
+        trail: &gcso_pointer_trail_t,
+        composite_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> f32 {
+        let base_pull = self
+            .attractor_space
+            .evaluate_multi_domain_superposition(trail, composite_phase_out);
+        let comp_w = load_q7_words_64(composite_phase_out);
+        let (init_w, init_nonzero) = if crate::traits::swar_words_nonzero_64(&comp_w) {
+            (comp_w, true)
+        } else {
+            let tw = *trail_phase_words_ref(trail);
+            let tn = crate::traits::swar_words_nonzero_64(&tw);
+            (tw, tn)
+        };
+        let init_is_uniform = !init_nonzero || crate::traits::is_word_array_uniform_64(&init_w);
+        let mut run_w = init_w;
+        let mut run_is_uniform = init_is_uniform;
+        let mut running_pull = branchless_flush_subnormal_f32(branchless_relu_f32(base_pull));
+
+        if let Ok(bank_2d) = self
+            .slot_phase_bank
+            .as_slot_bank::<MAX_ATTRACTOR_DOMAINS, MAX_ATTENTION_HEADS>()
+        {
+            let rep_idx = usize::from(ATTRACTOR_SLOT_REPULSION);
+            let mut idx = 0usize;
+            while idx < MAX_ATTRACTOR_DOMAINS {
+                if idx != rep_idx {
+                    let enabled = ((self.slot_enabled_mask >> idx) & 1) != 0;
+                    if enabled {
+                        let base_e =
+                            branchless_flush_subnormal_f32(branchless_relu_f32(self.slot_weights[idx]));
+                        if base_e > 1.0e-12 {
+                            // SAFETY: `self.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
+                            // 64-byte row `bank_2d[idx]` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
+                            let slot_w = unsafe {
+                                &*(bank_2d[idx].as_ptr() as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
+                            };
+                            let slot_is_uniform = crate::traits::is_word_array_uniform_64(slot_w);
+                            if (!slot_is_uniform) | (slot_w[0] != 0) {
+                                let coh = if init_nonzero {
+                                    coherence_from_word_arrays_with_both_uniform_flags_64(
+                                        &init_w,
+                                        init_is_uniform,
+                                        slot_w,
+                                        slot_is_uniform,
+                                    )
+                                } else {
+                                    0.0
+                                };
+                                let res_pull = branchless_flush_subnormal_f32(
+                                    base_e * branchless_clamp_f32(1.0 + coh, 0.25, 2.0),
+                                );
+                                let total_w = running_pull + res_pull;
+                                if total_w > 1.0e-12
+                                    && !crate::traits::swar_words_equal_64(&run_w, slot_w)
+                                {
+                                    let ratio_f32 = branchless_clamp_f32(
+                                        (res_pull * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
+                                        0.0,
+                                        128.0,
+                                    );
+                                    let s = (ratio_f32 as u8) as u64;
+                                    let bias_restore =
+                                        (128u64.wrapping_sub(s)).wrapping_mul(0x0101_0101_0101_0101);
+                                    let (next_w, next_uni) =
+                                        swar_slerp_words_with_uniform_flag_64(
+                                            &run_w,
+                                            run_is_uniform,
+                                            slot_w,
+                                            slot_is_uniform,
+                                            s,
+                                            bias_restore,
+                                        );
+                                    run_w = next_w;
+                                    run_is_uniform = next_uni;
+                                }
+                                running_pull = total_w;
+                            }
+                        }
+                    }
+                }
+                idx += 1;
+            }
+
+            let rep_enabled = ((self.slot_enabled_mask >> rep_idx) & 1) != 0;
+            if rep_enabled {
+                // SAFETY: `bank_2d[rep_idx]` is 64-byte aligned.
+                let rep_words = unsafe {
+                    &*(bank_2d[rep_idx].as_ptr() as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
+                };
+                if crate::traits::swar_words_nonzero_64(rep_words) {
+                    let rep_strength = branchless_clamp_f32(
+                        branchless_relu_f32(self.slot_weights[rep_idx]),
+                        0.0,
+                        1.0,
+                    );
+                    running_pull = branchless_q7_inhibit_words_64(
+                        &mut run_w,
+                        running_pull,
+                        rep_words,
+                        rep_strength,
+                    );
+                }
+            }
+        }
+
+        store_q7_words_64(composite_phase_out, &run_w);
+        branchless_min_f32(
+            branchless_flush_subnormal_f32(running_pull),
+            MAX_ATTRACTOR_PULL_FORCE,
+        )
+    }
+
+    #[inline]
+    fn clear_all_domains(&mut self) -> Result<()> {
+        self.attractor_space.clear_all_domains()?;
+        self.slot_phase_bank = AlignedBuffer64::zeroed();
+        self.slot_weights = DEFAULT_SLOT_WEIGHTS;
+        self.slot_enabled_mask = 0xFF;
+        Ok(())
     }
 }
 
@@ -1071,6 +2016,30 @@ impl PersonaPatcher for RuntimeContext {
     fn apply_patch(&mut self, patch_data: &[u8]) -> Result<()> {
         if patch_data.is_empty() {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        if patch_data.len() >= MAX_ATTENTION_HEADS {
+            // SAFETY: `patch_data.len() >= 64` and `[u8; 64]` has the exact same layout and
+            // alignment (1) as `[gcso_q7_t; 64]` (`[i8; 64]`).
+            let patch_ref: &[gcso_q7_t; MAX_ATTENTION_HEADS] =
+                unsafe { &*patch_data.as_ptr().cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>() };
+            let pw = load_q7_words_64(patch_ref);
+            let sw = self.slot_words_mut(usize::from(ATTRACTOR_SLOT_PERSONA))?;
+            sw[0] = swar_q7_add_sat_x8(sw[0], pw[0]);
+            sw[1] = swar_q7_add_sat_x8(sw[1], pw[1]);
+            sw[2] = swar_q7_add_sat_x8(sw[2], pw[2]);
+            sw[3] = swar_q7_add_sat_x8(sw[3], pw[3]);
+            sw[4] = swar_q7_add_sat_x8(sw[4], pw[4]);
+            sw[5] = swar_q7_add_sat_x8(sw[5], pw[5]);
+            sw[6] = swar_q7_add_sat_x8(sw[6], pw[6]);
+            sw[7] = swar_q7_add_sat_x8(sw[7], pw[7]);
+        } else {
+            let mut bank_mut = self.slot_phase_bank.as_aligned_slice_mut();
+            let persona_slot =
+                bank_mut.slot_exact_mut::<MAX_ATTENTION_HEADS>(usize::from(ATTRACTOR_SLOT_PERSONA))?;
+            for (h, slot_p) in persona_slot.iter_mut().enumerate() {
+                let delta = patch_data[h % patch_data.len()] as gcso_q7_t;
+                *slot_p = branchless_q7_add_sat(*slot_p, delta);
+            }
         }
         Ok(())
     }
@@ -1084,201 +2053,20 @@ impl PprcCache for RuntimeContext {
         header_out: &mut gcso_pprc_keyframe_header_t,
     ) -> Result<()> {
         header_out.token_index = token_index;
-        header_out.frame_type = 0; // Keyframe marker
+        header_out.frame_type = 0;
         Ok(())
     }
 }
 
-impl PspmRouter for RuntimeContext {
-    #[inline]
-    fn dispatch_single_pass(
-        &self,
-        query_tensor: &mut AlignedSliceMut32<'_, f32>,
-        config: &gcso_pspm_config_t,
-        head_dim: usize,
-    ) -> Result<()> {
-        if head_dim == 0 || (head_dim % 2 != 0) {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        let total_heads = usize::from(config.num_fact_heads)
-            + usize::from(config.num_logic_heads)
-            + usize::from(config.num_explore_heads);
-        let expected_len = head_dim
-            .checked_mul(total_heads)
-            .ok_or(crate::abi::GCSO_ERROR_INVALID_ARGUMENT)?;
-        if query_tensor.len() < expected_len {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-
-        let q_slice = query_tensor.as_mut_slice();
-        let fact_end = usize::from(config.num_fact_heads) * head_dim;
-        let logic_end = fact_end + usize::from(config.num_logic_heads) * head_dim;
-
-        if config.fact_phase_gain != 1.0 && fact_end > 0 {
-            for val in &mut q_slice[..fact_end] {
-                *val *= config.fact_phase_gain;
-            }
-        }
-
-        if config.logic_phase_gain != 1.0 && logic_end > fact_end {
-            for val in &mut q_slice[fact_end..logic_end] {
-                *val *= config.logic_phase_gain;
-            }
-        }
-
-        if config.explore_phase_gain != 1.0 && expected_len > logic_end {
-            for val in &mut q_slice[logic_end..expected_len] {
-                *val *= config.explore_phase_gain;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl SrlAdapter for RuntimeContext {
-    #[inline]
-    fn eval_rank1(
-        &self,
-        y_out: &mut AlignedSliceMut32<'_, f32>,
-        x_in: &AlignedSlice32<'_, f32>,
-        descriptor: &gcso_srl_descriptor_t,
-    ) -> Result<()> {
-        if descriptor.u_vector_ptr == 0 || descriptor.v_vector_ptr == 0 {
-            return Err(crate::abi::GCSO_ERROR_NULL_POINTER);
-        }
-
-        let u_ptr = descriptor.u_vector_ptr as *const f32;
-        let v_ptr = descriptor.v_vector_ptr as *const f32;
-        let gain_ptr = descriptor.gain_scalar_ptr as *const f32;
-
-        if !crate::abi::is_aligned(u_ptr) || !crate::abi::is_aligned(v_ptr) {
-            return Err(crate::abi::GCSO_ERROR_MISALIGNED_POINTER);
-        }
-
-        let dim_in = x_in.len();
-        let dim_out = y_out.len();
-        if dim_in == 0 || dim_out == 0 {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-
-        let x_slice = x_in.as_slice();
-        let y_slice = y_out.as_mut_slice();
-        // SAFETY: u_ptr points to valid memory with dim_out elements and is non-null/aligned.
-        let u_slice = unsafe { core::slice::from_raw_parts(u_ptr, dim_out) };
-        // SAFETY: v_ptr points to valid memory with dim_in elements and is non-null/aligned.
-        let v_slice = unsafe { core::slice::from_raw_parts(v_ptr, dim_in) };
-
-        let mut v_dot_x = 0.0f32;
-        for j in 0..dim_in {
-            v_dot_x += v_slice[j] * x_slice[j];
-        }
-
-        let scale = descriptor.scale_factor * v_dot_x;
-
-        if !gain_ptr.is_null() && crate::abi::is_aligned(gain_ptr) {
-            // SAFETY: gain_ptr points to valid memory with dim_out elements and is non-null/aligned.
-            let g_slice = unsafe { core::slice::from_raw_parts(gain_ptr, dim_out) };
-            for i in 0..dim_out {
-                y_slice[i] = scale * u_slice[i] * g_slice[i];
-            }
-        } else {
-            for i in 0..dim_out {
-                y_slice[i] = scale * u_slice[i];
-            }
-        }
-
-        Ok(())
-    }
-
-    #[inline]
-    fn eval_rank1_fused(
-        &self,
-        y_inout: &mut AlignedSliceMut32<'_, f32>,
-        x_in: &AlignedSlice32<'_, f32>,
-        descriptor: &gcso_srl_descriptor_t,
-    ) -> Result<()> {
-        if descriptor.u_vector_ptr == 0 || descriptor.v_vector_ptr == 0 {
-            return Err(crate::abi::GCSO_ERROR_NULL_POINTER);
-        }
-
-        let u_ptr = descriptor.u_vector_ptr as *const f32;
-        let v_ptr = descriptor.v_vector_ptr as *const f32;
-        let gain_ptr = descriptor.gain_scalar_ptr as *const f32;
-
-        if !crate::abi::is_aligned(u_ptr) || !crate::abi::is_aligned(v_ptr) {
-            return Err(crate::abi::GCSO_ERROR_MISALIGNED_POINTER);
-        }
-
-        let dim_in = x_in.len();
-        let dim_out = y_inout.len();
-        if dim_in == 0 || dim_out == 0 {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-
-        let x_slice = x_in.as_slice();
-        let y_slice = y_inout.as_mut_slice();
-        // SAFETY: u_ptr points to valid memory with dim_out elements and is non-null/aligned.
-        let u_slice = unsafe { core::slice::from_raw_parts(u_ptr, dim_out) };
-        // SAFETY: v_ptr points to valid memory with dim_in elements and is non-null/aligned.
-        let v_slice = unsafe { core::slice::from_raw_parts(v_ptr, dim_in) };
-
-        let mut v_dot_x = 0.0f32;
-        for j in 0..dim_in {
-            v_dot_x += v_slice[j] * x_slice[j];
-        }
-
-        let scale = descriptor.scale_factor * v_dot_x;
-
-        if !gain_ptr.is_null() && crate::abi::is_aligned(gain_ptr) {
-            // SAFETY: gain_ptr points to valid memory with dim_out elements and is non-null/aligned.
-            let g_slice = unsafe { core::slice::from_raw_parts(gain_ptr, dim_out) };
-            for i in 0..dim_out {
-                y_slice[i] += scale * u_slice[i] * g_slice[i];
-            }
-        } else {
-            for i in 0..dim_out {
-                y_slice[i] += scale * u_slice[i];
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl L2pSvdProjector for RuntimeContext {
-    #[inline]
-    fn project_lora(
-        &self,
-        lora_a: &AlignedSlice32<'_, f32>,
-        lora_b: &AlignedSlice32<'_, f32>,
-        rank: usize,
-        dim_in: usize,
-        dim_out: usize,
-        srl_out: &mut gcso_srl_descriptor_t,
-        phase_profile_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
-    ) -> Result<()> {
-        if rank == 0 || dim_in == 0 || dim_out == 0 {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        if lora_a.len() < rank * dim_in || lora_b.len() < dim_out * rank {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        if phase_profile_out.is_empty() {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-
-        srl_out.layer_idx = 0;
-        srl_out.rank = 1;
-        srl_out.u_vector_ptr = lora_b.as_ptr() as u64;
-        srl_out.v_vector_ptr = lora_a.as_ptr() as u64;
-        srl_out.gain_scalar_ptr = 0;
-        srl_out.scale_factor = 1.0;
-
-        phase_profile_out.as_mut_slice().fill(0);
-        Ok(())
-    }
-}
+impl EntropyGatedPhaseLookup for RuntimeContext {}
+impl DynamicLayerSkipper for RuntimeContext {}
+impl VisualAttentionSteering for RuntimeContext {}
+impl PspmRouter for RuntimeContext {}
+impl SrlAdapter for RuntimeContext {}
+impl SheafCohomologyEvaluator for RuntimeContext {}
+impl HierarchicalTreeTable for RuntimeContext {}
+impl L2pSvdProjector for RuntimeContext {}
+impl DnpPacketDispatcher for RuntimeContext {}
 
 impl ZimmsStorage for RuntimeContext {
     #[inline]
@@ -1325,12 +2113,71 @@ impl ZimmsStorage for RuntimeContext {
     fn get_track_offset(&self, track_id: u32) -> Result<u64> {
         let header_size = core::mem::size_of::<gcso_snapshot_header_t>() as u64;
         match track_id {
-            0 => Ok(header_size),        // CORE track
-            1 => Ok(header_size + 1024), // I-CACHE track
-            2 => Ok(header_size + 2048), // P-CACHE track
-            3 => Ok(header_size + 3072), // SNAPSHOT track
+            0 => Ok(header_size),
+            1 => Ok(header_size + 1024),
+            2 => Ok(header_size + 2048),
+            3 => Ok(header_size + 3072),
             _ => Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT),
         }
+    }
+}
+
+impl CausalProvenanceSignal for RuntimeContext {
+    #[inline(always)]
+    fn causal_provenance_bits(&self) -> u32 {
+        self.edbc.causal_provenance_bits() | self.config.raw.causal_provenance_bits()
+    }
+
+    #[inline(always)]
+    fn causal_anomaly_severity(&self) -> f32 {
+        branchless_max_f32(
+            self.edbc.causal_anomaly_severity(),
+            self.config.raw.causal_anomaly_severity(),
+        )
+    }
+}
+
+impl SystemConstraintSignal for RuntimeContext {
+    #[inline(always)]
+    fn system_vram_pressure(&self) -> f32 {
+        self.edbc.system_vram_pressure()
+    }
+
+    #[inline(always)]
+    fn system_gpu_frame_overrun(&self) -> f32 {
+        self.edbc.system_gpu_frame_overrun()
+    }
+
+    #[inline(always)]
+    fn active_swarm_cells_mask(&self) -> u8 {
+        self.edbc.active_swarm_cells_mask()
+    }
+
+    #[inline(always)]
+    fn recommend_layer_skip(&self) -> bool {
+        self.edbc.recommend_layer_skip()
+    }
+
+    #[inline(always)]
+    fn qdps_min_step_rad_override(&self) -> f32 {
+        branchless_max_f32(
+            self.config.raw.qdps_min_step_rad_override(),
+            self.edbc.qdps_min_step_rad_override(),
+        )
+    }
+}
+
+impl ManifoldGatewaySignal for RuntimeContext {
+    #[inline(always)]
+    fn synthesize_gateway_frame_with_words(
+        &self,
+    ) -> (GatewayFrame, [u64; crate::traits::NUM_SWARM_MICRO_CELLS]) {
+        self.edbc.synthesize_gateway_frame_with_words()
+    }
+
+    #[inline(always)]
+    fn synthesize_gateway_frame(&self) -> GatewayFrame {
+        self.edbc.synthesize_gateway_frame()
     }
 }
 
@@ -1338,30 +2185,32 @@ impl ZimmsStorage for RuntimeContext {
 // Convenient Prelude Module
 // ===================================================================
 
-/// Convenient prelude module importing essential GCSO traits, types, and alignment wrappers.
+/// Convenient prelude module importing essential GCSO traits, `ActionHub`, Hot/Cold observers,
+/// 2-Origin Composite Manifold Gateway, Online Toroidal $k$-Means / DP-Means, `.gcso` 4-Section View,
+/// Unified-Field & Bayesian-Attention kernels, types, and alignment wrappers.
 pub mod prelude {
     pub use crate::abi::{
         gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_daes_slot_t,
-        gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t,
-        gcso_pspm_config_t, gcso_q7_t, gcso_snapshot_header_t, gcso_srl_descriptor_t,
-        gcso_tagged_ptr_t, gcso_zimms_descriptor_t, GcsoStatus, GCSO_ABI_VERSION_HEX,
-        GCSO_ABI_VERSION_STRING, GCSO_SUCCESS,
+        gcso_descriptor_header_t, gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
+        gcso_pprc_keyframe_header_t, gcso_pspm_config_t, gcso_q7_t, gcso_snapshot_header_t,
+        gcso_srl_descriptor_t, gcso_status_t, gcso_tagged_ptr_t, gcso_zimms_descriptor_t,
+        GcsoAnchorType, GcsoStatus, GCSO_ABI_VERSION_HEX, GCSO_ABI_VERSION_STRING, GCSO_SUCCESS,
     };
     pub use crate::attractor::{
-        AttractorAnchor, AttractorFieldEngine, MultiAttractorSpace, DOMAIN_KNOWLEDGE,
-        DOMAIN_PERSONA, DOMAIN_PHASE_REPULSION, DOMAIN_SYSTEM_BASELINE, DOMAIN_USER_INTERACTION,
-        MAX_ANCHORS_PER_FIELD, MAX_ATTRACTOR_DOMAINS, MAX_EMBEDDING_DIM,
+        AttractorAnchor, AttractorFieldEngine, AttractorGrowthCoordinator, AttractorGrowthReport,
+        AttractorGrowthSnapshot, CrystallizedAnchorRecord, DomainAccumulatorSummary,
+        EpisodicPhaseSample, EpisodicSampleSteering, MultiAttractorSpace, DOMAIN_CUSTOM_5,
+        DOMAIN_CUSTOM_6, DOMAIN_CUSTOM_7, DOMAIN_KNOWLEDGE, DOMAIN_PERSONA, DOMAIN_PHASE_REPULSION,
+        DOMAIN_SYSTEM_BASELINE, DOMAIN_USER_INTERACTION, MAX_ANCHORS_PER_FIELD,
+        MAX_ATTRACTOR_DOMAINS, MAX_EMBEDDING_DIM,
     };
-    pub use crate::dpsr::DpsrEngine;
-    pub use crate::edbc::EdbcEngine;
-    pub use crate::traits::{
-        AlignedSlice, AlignedSlice128, AlignedSlice16, AlignedSlice256, AlignedSlice32,
-        AlignedSlice512, AlignedSlice64, AlignedSliceMut, AlignedSliceMut128, AlignedSliceMut16,
-        AlignedSliceMut256, AlignedSliceMut32, AlignedSliceMut512, AlignedSliceMut64,
-        AttractorField, DaesScratchpad, EntropyEvaluator, GcsoResult, GcsoRuntimeContext,
-        HotPathExecutionEngine, L2pSvdProjector, PersonaPatcher, PhaseSteering, PointerActionHub,
-        PprcCache, PspmRouter, SrlAdapter, SwarmCellChunk, SystemCapabilityQuery, ZimmsStorage,
+    pub use crate::action_hub::{
+        ActionHubEngine, ActionOrchestrationReport, StigmergicActionDecision, StigmergicThresholds,
+        ACTION_HUB_INLINE_TRAILS,
     };
+    pub use crate::dpsr::{DpsrClosedLoopSteering, DpsrEngine};
+    pub use crate::edbc::{EdbcClosedLoopCoordinator, EdbcEngine};
+    pub use crate::traits::prelude::*;
     pub use crate::{Config, Result, RuntimeContext};
 }
 
@@ -1370,13 +2219,13 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Returns the static package version string defined in `Cargo.toml`.
 #[must_use]
-#[inline]
+#[inline(always)]
 pub const fn version() -> &'static str {
     VERSION
 }
 
-/// Returns the unified C-ABI version tuple `(major, minor, patch)`.
-#[inline]
+/// Returns the unified C-ABI version tuple `(major, minor, patch)` (`(0, 1, 1)`).
+#[inline(always)]
 #[must_use]
 pub const fn abi_version() -> (u32, u32, u32) {
     (
@@ -1387,11 +2236,40 @@ pub const fn abi_version() -> (u32, u32, u32) {
 }
 
 /// Returns the hexadecimal ABI version identifier (`0x00000101`).
-#[inline]
+#[inline(always)]
 #[must_use]
 pub const fn abi_version_hex() -> u32 {
     crate::abi::GCSO_ABI_VERSION_HEX
 }
+
+// Compile-time verification that `RuntimeContext` satisfies `ActionHub`, `HotPathObserver`,
+// `ColdPathObserver`, and all Full-Stack & Coordinator trait bounds.
+const _: () = {
+    const fn assert_full_stack_bounds<
+        T: ActionHub
+            + ActionHubGatewayExt
+            + GatewayPhaseSteeringExt
+            + DpsrClosedLoopSteering
+            + EdbcClosedLoopCoordinator
+            + CausalProvenanceSignal
+            + SystemConstraintSignal
+            + ManifoldGatewaySignal
+            + HotPathObserver
+            + ColdPathObserver
+            + FullStackGcsoEngine
+            + FractalCascadeCoordinator
+            + AttractorSlotSynergyCoordinator
+            + StigmergicCohomologyCoordinator
+            + BottomUpMacroCrystalCoordinator
+            + EntropyGatedPhaseLookup
+            + DynamicLayerSkipper
+            + VisualAttentionSteering
+            + HierarchicalTreeTable
+            + DnpPacketDispatcher,
+    >() {
+    }
+    assert_full_stack_bounds::<RuntimeContext>();
+};
 
 #[cfg(test)]
 mod tests {
@@ -1403,7 +2281,9 @@ mod tests {
             .with_head_dim(128)
             .with_num_heads(32)
             .with_paged_block_size(32)
-            .with_hysteresis_band(0.2);
+            .with_hysteresis_band(0.2)
+            .with_bifurcation_threshold(1.4)
+            .with_repulsion_threshold(2);
 
         assert!(config.validate().is_ok());
 
@@ -1420,9 +2300,19 @@ mod tests {
         let mut ctx = RuntimeContext::new(config).unwrap();
 
         assert!(ctx
-            .set_system_prompt_anchor("System prompt anchor test", 1.0)
+            .set_system_prompt_anchor("System prompt anchor test", 1.5)
             .is_ok());
         assert_eq!(ctx.anchor_count(), 1);
+        assert!(ctx
+            .set_domain_weight(u32::from(ATTRACTOR_SLOT_PERSONA), 2.5)
+            .is_ok());
+        assert!(ctx
+            .set_domain_enabled(u32::from(ATTRACTOR_SLOT_CUSTOM_7), false)
+            .is_ok());
+        assert_eq!(
+            ctx.find_dominant_domain().0,
+            u32::from(ATTRACTOR_SLOT_PERSONA)
+        );
 
         let mut trail = gcso_pointer_trail_t::default();
         assert!(ctx.step_token(42, None, None, Some(&mut trail)).is_ok());
@@ -1431,58 +2321,166 @@ mod tests {
 
         let mut required_size = 0usize;
         assert_eq!(ctx.serialize_to_bytes(&mut [], &mut required_size), Ok(()));
-        assert!(required_size > 0);
+        assert_eq!(required_size, 320);
 
         let mut buffer = alloc::vec![0u8; required_size];
         assert!(ctx
             .serialize_to_bytes(&mut buffer, &mut required_size)
             .is_ok());
 
-        let mut restored_ctx = RuntimeContext::new(config).unwrap();
-        assert!(restored_ctx.deserialize_from_bytes(&buffer).is_ok());
-        assert_eq!(restored_ctx.step_counter(), 1);
-        assert_eq!(restored_ctx.anchor_count(), 1);
-    }
-
-    #[test]
-    fn test_runtime_context_system_capability_query() {
-        let config = Config::new();
-        let ctx = RuntimeContext::new(config).unwrap();
-
-        let (maj, min, pat) = ctx.abi_version();
-        assert_eq!((maj, min, pat), (0, 1, 1));
-        assert_eq!(ctx.abi_version_string(), "0.1.1");
-
-        let caps = ctx.query_capability();
-        assert_ne!(caps & 0x01, 0); // Base CPU capability present
-    }
-
-    #[test]
-    fn test_runtime_context_attractor_field_trait() {
-        let config = Config::new();
-        let mut ctx = RuntimeContext::new(config).unwrap();
-
+        assert!(GcsoRuntimeContext::reset(&mut ctx).is_ok());
+        assert_eq!(ctx.step_counter(), 0);
         assert_eq!(ctx.anchor_count(), 0);
-        assert!(ctx.add_system_prompt_anchor("Test Anchor", 1.0).is_ok());
+        assert!(ctx.deserialize_from_bytes(&buffer).is_ok());
+        assert_eq!(ctx.step_counter(), 1);
         assert_eq!(ctx.anchor_count(), 1);
+        assert_eq!(ctx.slot_enabled_mask(), 0x7F);
+        assert!(
+            (ctx.slot_weights()[usize::from(ATTRACTOR_SLOT_PERSONA)] - 2.5).abs() < 1e-5
+        );
 
-        assert!(ctx.clear_anchors().is_ok());
-        assert_eq!(ctx.anchor_count(), 0);
+        // Verify IEEE 802.3 CRC32 payload tamper detection
+        buffer[200] ^= 0xFF;
+        assert_eq!(
+            ctx.deserialize_from_bytes(&buffer),
+            Err(crate::abi::GCSO_ERROR_CONTAINER_CORRUPTED)
+        );
     }
 
     #[test]
-    fn test_runtime_context_zimms_storage_trait() {
+    fn test_runtime_context_capabilities_and_zimms() {
         let config = Config::new();
         let mut ctx = RuntimeContext::new(config).unwrap();
+
+        assert_eq!(ctx.abi_version(), (0, 1, 1));
+        assert_eq!(ctx.abi_version_string(), "0.1.1");
+        assert_ne!(ctx.query_capability() & GCSO_CAP_CPU_BASELINE, 0);
 
         let mut desc = gcso_zimms_descriptor_t::default();
         assert!(ctx.open_mmap("test.gcso", &mut desc).is_ok());
         assert_eq!(desc.fd_handle, 3);
-
         assert_eq!(
             ctx.get_track_offset(0).unwrap(),
             core::mem::size_of::<gcso_snapshot_header_t>() as u64
         );
         assert!(ctx.close_mmap(&mut desc).is_ok());
+    }
+
+    #[test]
+    fn test_runtime_context_slot_bank_unified_field_and_autonomous_pointer_cascades() {
+        let config = Config::new().with_head_dim(8).with_num_heads(2);
+        let mut ctx = RuntimeContext::new(config).unwrap();
+
+        ctx.apply_patch(&[32u8; 64]).unwrap();
+        ctx.set_slot_phase_profile(ATTRACTOR_SLOT_KNOWLEDGE, &[32i8; 64])
+            .unwrap();
+        ctx.set_domain_weight(u32::from(ATTRACTOR_SLOT_PERSONA), 2.0)
+            .unwrap();
+        ctx.set_domain_weight(u32::from(ATTRACTOR_SLOT_KNOWLEDGE), 2.0)
+            .unwrap();
+
+        let mut q_buf = AlignedBuffer32::new([1.0f32; 16]);
+        let comp_phases = AlignedBuffer16::new([4i8; 64]);
+        let mut trail = gcso_pointer_trail_t {
+            stigmergic_density: 2.0,
+            ..Default::default()
+        };
+
+        let input_ptr = gcso_tagged_ptr_t::pack_action(
+            0x0400,
+            ATTRACTOR_SLOT_KNOWLEDGE,
+            ACTION_PRESET_INERTIAL_SKIP,
+            16,
+        );
+
+        let (evolved_ptr, density, pull, coh) = ctx
+            .step_slot_bank_pointer_cascade(
+                input_ptr,
+                ATTRACTOR_SLOT_PERSONA,
+                0.5,
+                0.0,
+                0.5,
+                0.15,
+                1.50,
+                Some(&comp_phases.as_aligned_slice()),
+                &mut q_buf.as_aligned_slice_mut(),
+                None,
+                None,
+                None,
+                &mut trail,
+            )
+            .unwrap();
+
+        assert_eq!(density, 0);
+        assert!((coh - 1.0).abs() < 1e-4);
+        assert!(pull >= 6.0);
+        assert_ne!(trail.flags & TRAIL_FLAG_SYNERGY_RESONANCE, 0);
+        assert!(evolved_ptr.has_action_mode(ACTION_MODE_DPSR_STEER | ACTION_MODE_SRL_INJECT));
+
+        // Verify Single-Manifold Unified-Field cascade & Autonomous Pointer-Trail Attention cascade
+        let unified_anchors = [[0i8; MAX_ATTENTION_HEADS], [32i8; MAX_ATTENTION_HEADS]];
+        let unified_energies = [0.0f32, 3.0f32];
+        let mut attn_scores = AlignedBuffer32::new([0.0f32; 8]);
+        let mut uf_trail = gcso_pointer_trail_t::default();
+
+        let (uf_rep, uf_pull, uf_coh, uf_dom) = ctx
+            .step_unified_field_token_cascade(
+                input_ptr,
+                0.3,
+                &unified_anchors,
+                &unified_energies,
+                None,
+                2.0,
+                Some(&mut attn_scores.as_aligned_slice_mut()),
+                Some(&mut q_buf.as_aligned_slice_mut()),
+                None,
+                &mut uf_trail,
+            )
+            .unwrap();
+        assert_eq!(uf_rep, 0);
+        assert_eq!(uf_dom, 1);
+        assert!(uf_pull > 5.0 && uf_coh > 0.90);
+        assert!(attn_scores.data[1] > 0.5);
+
+        let cand0 = gcso_pointer_trail_t {
+            stigmergic_density: 4.0,
+            accumulated_phase_delta: [-96i8; MAX_ATTENTION_HEADS],
+            ..Default::default()
+        };
+        let cand1 = gcso_pointer_trail_t {
+            stigmergic_density: 3.0,
+            accumulated_phase_delta: [28i8; MAX_ATTENTION_HEADS],
+            ..Default::default()
+        };
+        let mut candidates = [cand0, cand1];
+        let mut bayes_scores = AlignedBuffer32::new([0.0f32; 8]);
+        let mut auto_trail = gcso_pointer_trail_t::default();
+
+        let (sel_id, bayes_score, log_p, dom_id, found) = ctx
+            .step_autonomous_pointer_trail_attention_cascade(
+                1,
+                input_ptr,
+                0.3,
+                &mut candidates,
+                2.0,
+                0.5,
+                0.25,
+                1.0,
+                64,
+                0.25,
+                &unified_anchors,
+                &unified_energies,
+                None,
+                Some(&mut bayes_scores.as_aligned_slice_mut()),
+                Some(&mut q_buf.as_aligned_slice_mut()),
+                None,
+                &mut auto_trail,
+            )
+            .unwrap();
+        assert!(found);
+        assert_eq!(sel_id, 1);
+        assert_eq!(dom_id, 1);
+        assert!(bayes_score > 0.5 && log_p > -0.05);
+        assert!(bayes_scores.data[1] > 1.0 && bayes_scores.data[0] < -0.5);
     }
 }

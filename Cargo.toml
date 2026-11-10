@@ -3,9 +3,9 @@
 
 [workspace]
 members = [
-    "src/core",
-    "src/dsl",
-    "src/cli",
+  "src/core",
+  "src/dsl",
+  "src/cli",
 ]
 resolver = "2"
 
@@ -14,6 +14,7 @@ version = "0.1.1"
 edition = "2021"
 rust-version = "1.80"
 license = "MIT OR Apache-2.0"
+
 authors = ["flat-sauce-works"]
 repository = "https://github.com/flat-sauce-works/LiminiKa"
 readme = "README.md"
@@ -47,3 +48,4 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 overflow-checks = false
+debug = false

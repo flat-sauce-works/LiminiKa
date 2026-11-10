@@ -1,6 +1,5 @@
 # name: src/kernels/CMakeLists.txt
 # SPDX-License-Identifier: MIT OR Apache-2.0
-
 # -------------------------------------------------------------------
 # LiminiKa GCSO Kernels Build Configuration
 # Targets: C11 / C++20 CPU, CUDA, Metal, and Vulkan Compute Kernels
@@ -84,9 +83,11 @@ set_target_properties(liminika_kernels_cpu PROPERTIES POSITION_INDEPENDENT_CODE 
 if(LIMINIKA_ENABLE_CUDA)
     target_compile_definitions(liminika_kernels_cpu PRIVATE LIMINIKA_ENABLE_CUDA)
 endif()
+
 if(LIMINIKA_ENABLE_VULKAN)
     target_compile_definitions(liminika_kernels_cpu PRIVATE LIMINIKA_ENABLE_VULKAN)
 endif()
+
 if(LIMINIKA_ENABLE_METAL)
     target_compile_definitions(liminika_kernels_cpu PRIVATE LIMINIKA_ENABLE_METAL)
 endif()
@@ -95,15 +96,19 @@ endif()
 if(LIMINIKA_ENABLE_AVX2)
     target_compile_definitions(liminika_kernels_cpu PRIVATE LIMINIKA_ENABLE_AVX2)
 endif()
+
 if(LIMINIKA_ENABLE_AVX512)
     target_compile_definitions(liminika_kernels_cpu PRIVATE LIMINIKA_ENABLE_AVX512)
 endif()
+
 if(LIMINIKA_ENABLE_NEON)
     target_compile_definitions(liminika_kernels_cpu PRIVATE LIMINIKA_ENABLE_NEON)
 endif()
+
 if(LIMINIKA_ENABLE_SVE)
     target_compile_definitions(liminika_kernels_cpu PRIVATE LIMINIKA_ENABLE_SVE)
 endif()
+
 if(LIMINIKA_ENABLE_RVV)
     target_compile_definitions(liminika_kernels_cpu PRIVATE LIMINIKA_ENABLE_RVV)
 endif()
@@ -121,16 +126,25 @@ else()
     target_compile_options(liminika_kernels_cpu PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wno-unused-parameter -O3 -fstrict-aliasing)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|x64")
         if(LIMINIKA_ENABLE_AVX512)
-            target_compile_options(liminika_kernels_cpu PRIVATE -mavx512f -mavx512bw -mavx512dq)
+            target_compile_options(liminika_kernels_cpu PRIVATE -mavx512f -mavx512bw -mavx512dq -mavx512vl -mfma)
         elseif(LIMINIKA_ENABLE_AVX2)
             target_compile_options(liminika_kernels_cpu PRIVATE -mavx2 -mfma)
         endif()
     endif()
+
     if(LIMINIKA_ENABLE_SVE)
         if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm|ARM64")
             target_compile_options(liminika_kernels_cpu PRIVATE -march=armv8-a+sve)
         else()
             message(STATUS "SVE flag skipped: CMAKE_SYSTEM_PROCESSOR is not ARM (${CMAKE_SYSTEM_PROCESSOR}).")
+        endif()
+    endif()
+
+    if(LIMINIKA_ENABLE_RVV)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "riscv64|riscv")
+            target_compile_options(liminika_kernels_cpu PRIVATE -march=rv64gcv)
+        else()
+            message(STATUS "RVV flag skipped: CMAKE_SYSTEM_PROCESSOR is not RISC-V (${CMAKE_SYSTEM_PROCESSOR}).")
         endif()
     endif()
 endif()
@@ -151,6 +165,8 @@ if(LIMINIKA_ENABLE_CUDA)
             target_compile_definitions(liminika_kernels_cuda PRIVATE LIMINIKA_ENABLE_CUDA)
             set_target_properties(liminika_kernels_cuda PROPERTIES
                 CUDA_STANDARD 20
+                CUDA_STANDARD_REQUIRED ON
+                CUDA_EXTENSIONS OFF
                 POSITION_INDEPENDENT_CODE ON
             )
             list(APPEND INSTALL_TARGET_LIST liminika_kernels_cuda)
@@ -171,6 +187,11 @@ if(LIMINIKA_ENABLE_VULKAN)
         target_compile_definitions(liminika_kernels_vulkan PRIVATE LIMINIKA_ENABLE_VULKAN)
         target_compile_features(liminika_kernels_vulkan PUBLIC c_std_11 cxx_std_20)
         set_target_properties(liminika_kernels_vulkan PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        if(MSVC)
+            target_compile_options(liminika_kernels_vulkan PRIVATE /W4 /O2 /EHsc /wd4324 /permissive- /utf-8 /Zc:preprocessor /Zc:inline)
+        else()
+            target_compile_options(liminika_kernels_vulkan PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wno-unused-parameter -O3 -fstrict-aliasing)
+        endif()
         list(APPEND INSTALL_TARGET_LIST liminika_kernels_vulkan)
     endif()
 endif()
@@ -188,6 +209,7 @@ if(LIMINIKA_ENABLE_METAL AND APPLE)
         target_compile_definitions(liminika_kernels_metal PRIVATE LIMINIKA_ENABLE_METAL)
         target_compile_features(liminika_kernels_metal PUBLIC cxx_std_20)
         set_target_properties(liminika_kernels_metal PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        target_compile_options(liminika_kernels_metal PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wno-unused-parameter -O3 -fstrict-aliasing)
         list(APPEND INSTALL_TARGET_LIST liminika_kernels_metal)
     endif()
 endif()

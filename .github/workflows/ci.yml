@@ -56,13 +56,13 @@ jobs:
       - name: Sync Cargo.lock with Cargo.toml
         run: |
           if [ -f "Cargo.toml" ]; then
-            cargo check --workspace --all-targets || true
+            cargo update --workspace --offline 2>/dev/null || cargo generate-lockfile 2>/dev/null || true
           fi
 
       - name: Format C/C++ & GPU Kernel codebase
         run: |
-          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
-          find . $EXCLUDE_DIRS -prune -o \( \
+          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \) )
+          find . "${EXCLUDE_ARGS[@]}" -prune -o \( \
             -name "*.h" -o -name "*.hpp" -o -name "*.inl" -o \
             -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
             -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.mm" -o \
@@ -73,8 +73,8 @@ jobs:
 
       - name: Format Python codebase
         run: |
-          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
-          find . $EXCLUDE_DIRS -prune -o -name "*.py" -type f -size +0c -exec autopep8 --in-place --aggressive --aggressive {} + 2>/dev/null || true
+          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \) )
+          find . "${EXCLUDE_ARGS[@]}" -prune -o -name "*.py" -type f -size +0c -exec autopep8 --in-place --max-line-length 120 {} + 2>/dev/null || true
 
       - name: Commit formatting changes if needed
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
@@ -160,6 +160,7 @@ jobs:
               - '**/*.rs'
               - '.github/workflows/**'
             python:
+              - 'scripts/**'
               - '**/*.py'
               - 'pyproject.toml'
               - 'requirements.txt'
@@ -178,6 +179,7 @@ jobs:
               - 'LICENSE*'
               - 'src/**'
               - 'include/**'
+              - 'scripts/**'
               - 'tests/**'
               - 'examples/**'
               - 'benches/**'
@@ -228,9 +230,9 @@ jobs:
       - name: Scan Copyleft & Non-Permissive License Keywords
         run: |
           echo "Scanning codebase for strict permissive compliance (blocking Copyleft/Non-Commercial)..."
-          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"          
+          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \) )
           FORBIDDEN_PATTERNS="GPL-1.0|GPL-2.0|GPL-3.0|LGPL-2.1|LGPL-3.0|AGPL-3.0|SSPL-1.0|CC-BY-NC|MPL-1.1|MPL-2.0|EPL-1.0|EPL-2.0|CDDL-1.0|EUPL-1.1|EUPL-1.2|PolyForm|CPAL-1.0|Watcom-1.0"
-          FOUND_VIOLATIONS=$(find . $EXCLUDE_DIRS -prune -o -type f -size +0c ! -name "deny.toml" ! -name "ci.yml" ! -name "*.md" -exec grep -E -H -n "$FORBIDDEN_PATTERNS" {} + 2>/dev/null || true)
+          FOUND_VIOLATIONS=$(find . "${EXCLUDE_ARGS[@]}" -prune -o -type f -size +0c ! -name "deny.toml" ! -name "ci.yml" ! -name "*.md" -exec grep -E -H -n "$FORBIDDEN_PATTERNS" {} + 2>/dev/null || true)
 
           if [ -n "$FOUND_VIOLATIONS" ]; then
             echo "Error: Copyleft or non-permissive license keywords detected in codebase:"
@@ -242,8 +244,8 @@ jobs:
       - name: Verify SPDX License Headers in Source Files
         run: |
           echo "Checking SPDX License Headers in non-empty source files..."
-          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"          
-          SLASH_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
+          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \) )
+          SLASH_FILES=$(find . "${EXCLUDE_ARGS[@]}" -prune -o \( \
             -name "*.rs" -o -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
             -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.mm" -o \
             -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
@@ -251,7 +253,7 @@ jobs:
             -name "*.h" -o -name "*.hpp" -o -name "*.inl" \
           \) -type f -size +0c ! -name ".gitkeep" -exec grep -L "SPDX-License-Identifier: MIT OR Apache-2.0" {} + 2>/dev/null || true)
 
-          HASH_FILES=$(find . $EXCLUDE_DIRS -prune -o \( \
+          HASH_FILES=$(find . "${EXCLUDE_ARGS[@]}" -prune -o \( \
             -name "*.py" -o -name "*.lmnk" -o -name "*.sh" -o -name "CMakeLists.txt" -o -name "*.cmake" -o \
             -name "*.yml" -o -name "*.yaml" \
           \) -type f -size +0c ! -name ".gitkeep" -exec grep -L "SPDX-License-Identifier: MIT OR Apache-2.0" {} + 2>/dev/null || true)
@@ -288,12 +290,6 @@ jobs:
         with:
           ref: ${{ github.head_ref || github.ref }}
 
-      - name: Setup CUDA Toolkit (Linux)
-        if: runner.os == 'Linux'
-        uses: Jimver/cuda-toolkit@v0.2.21
-        with:
-          cuda: '12.2.0'
-
       - name: Setup MSVC Developer Command Prompt (Windows)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
@@ -320,7 +316,7 @@ jobs:
           key: ${{ runner.os }}-cpp-${{ github.sha }}
           restore-keys: ${{ runner.os }}-cpp-
 
-      - name: Verify C-ABI Header Self-Containment (C11 & C++20)
+      - name: Verify C-ABI Header Self-Containment & Layout Static Assertions (C11 & C++20)
         if: runner.os == 'Linux'
         run: |
           echo "Checking C-ABI headers self-containment in include directory..."
@@ -329,11 +325,11 @@ jobs:
             if [ -n "$HEADERS" ]; then
               for header in $HEADERS; do
                 if [[ "$header" == *.h ]]; then
-                  echo "Validating C11 inclusion for $header..."
-                  clang -std=c11 -Iinclude -fsyntax-only -x c "$header"
+                  echo "Validating strict C11 inclusion for $header..."
+                  clang -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -fsyntax-only -x c "$header"
                 fi
-                echo "Validating C++20 inclusion for $header..."
-                clang++ -std=c++20 -Iinclude -fsyntax-only -x c++ "$header"
+                echo "Validating strict C++20 inclusion for $header..."
+                clang++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -Iinclude -fsyntax-only -x c++ "$header"
               done
             else
               echo "No non-empty header files found under include."
@@ -342,7 +338,7 @@ jobs:
             echo "Directory include does not exist yet."
           fi
 
-      - name: Configure CMake (Linux with Vulkan enabled)
+      - name: Configure CMake (Linux with Vulkan & AVX2 enabled)
         if: runner.os == 'Linux'
         run: |
           if [ -f "CMakeLists.txt" ]; then
@@ -350,6 +346,7 @@ jobs:
               -DCMAKE_C_COMPILER_LAUNCHER=ccache \
               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
               -DLIMINIKA_ENABLE_VULKAN=ON \
+              -DLIMINIKA_ENABLE_AVX2=ON \
               -DLIMINIKA_ENABLE_CUDA=OFF \
               -DLIMINIKA_ENABLE_METAL=OFF \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo
@@ -357,13 +354,14 @@ jobs:
             echo "No root CMakeLists.txt found; skipping CMake configure."
           fi
 
-      - name: Configure CMake (Windows)
+      - name: Configure CMake (Windows with AVX2 enabled)
         if: runner.os == 'Windows'
         run: |
           if [ -f "CMakeLists.txt" ]; then
             cmake -B build -S . -GNinja \
               -DCMAKE_C_COMPILER_LAUNCHER=ccache \
               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+              -DLIMINIKA_ENABLE_AVX2=ON \
               -DLIMINIKA_ENABLE_CUDA=OFF \
               -DLIMINIKA_ENABLE_VULKAN=OFF \
               -DLIMINIKA_ENABLE_METAL=OFF \
@@ -372,7 +370,7 @@ jobs:
             echo "No root CMakeLists.txt found; skipping CMake configure."
           fi
 
-      - name: Configure CMake (macOS with Metal enabled)
+      - name: Configure CMake (macOS with Metal & NEON enabled)
         if: runner.os == 'macOS'
         run: |
           if [ -f "CMakeLists.txt" ]; then
@@ -380,6 +378,7 @@ jobs:
               -DCMAKE_C_COMPILER_LAUNCHER=ccache \
               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
               -DLIMINIKA_ENABLE_METAL=ON \
+              -DLIMINIKA_ENABLE_NEON=ON \
               -DLIMINIKA_ENABLE_CUDA=OFF \
               -DLIMINIKA_ENABLE_VULKAN=OFF \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo
@@ -513,11 +512,22 @@ jobs:
             echo "No root Cargo.toml found; skipping cargo check."
           fi
 
-      - name: Run cargo clippy
+      - name: Run cargo clippy (default, no_std, and all-features)
         run: |
           if [ -f "Cargo.toml" ]; then
+            cargo clippy --workspace --all-targets --no-default-features -- -D warnings
             cargo clippy --workspace --all-targets -- -D warnings
             cargo clippy --workspace --all-targets --all-features -- -D warnings
+          fi
+
+      - name: Run cargo clippy & AVX2/FMA SIMD verification (x86_64 Linux)
+        if: runner.os == 'Linux'
+        env:
+          RUSTFLAGS: "-C target-feature=+avx2,+fma"
+        run: |
+          if [ -f "Cargo.toml" ]; then
+            cargo clippy --workspace --all-targets --all-features -- -D warnings
+            cargo nextest run --workspace --lib --bins --tests --all-features
           fi
 
       - name: Check Rust documentation integrity (Ubuntu only)
@@ -565,8 +575,8 @@ jobs:
       - name: Validate Example DSL files
         run: |
           echo "Validating DSL files in repository..."
-          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
-          DSL_FILES=$(find . $EXCLUDE_DIRS -prune -o -name "*.lmnk" -type f -print 2>/dev/null || true)
+          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \) )
+          DSL_FILES=$(find . "${EXCLUDE_ARGS[@]}" -prune -o -name "*.lmnk" -type f -print 2>/dev/null || true)
           if [ -n "$DSL_FILES" ]; then
             for file in $DSL_FILES; do
               echo "Checking $file..."
@@ -577,7 +587,7 @@ jobs:
           fi
 
   # =========================================================================
-  # 7. PYTHON SCRIPT SYNTAX VERIFICATION
+  # 7. PYTHON SCRIPT SYNTAX & CLI VERIFICATION
   # =========================================================================
   python-check:
     name: Python Script Syntax Verification
@@ -598,14 +608,21 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Verify Python Syntax & Run Tests
+      - name: Verify Python Syntax, CLI Smoke Checks & Unit Tests
         run: |
           echo "Verifying Python syntax..."
-          EXCLUDE_DIRS="\( -name target -o -name build* -o -name cmake-build* -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \)"
-          PY_FILES=$(find . $EXCLUDE_DIRS -prune -o -name "*.py" -type f -print 2>/dev/null || true)
+          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \) )
+          PY_FILES=$(find . "${EXCLUDE_ARGS[@]}" -prune -o -name "*.py" -type f -print 2>/dev/null || true)
           if [ -n "$PY_FILES" ]; then
             echo "$PY_FILES" | xargs python -m py_compile
             echo "All Python scripts passed syntax validation."
+          fi
+
+          if [ -f "scripts/generate_bench_report.py" ]; then
+            python scripts/generate_bench_report.py --help >/dev/null
+          fi
+          if [ -f "scripts/run_benchmarks.py" ]; then
+            python scripts/run_benchmarks.py --help >/dev/null
           fi
 
           if [ -d "tests" ]; then
@@ -668,6 +685,6 @@ jobs:
       - name: Check markdown broken links
         uses: lycheeverse/lychee-action@v2
         with:
-          args: --verbose --no-progress --offline '**/*.md'
+          args: --verbose --no-progress --offline --exclude ".*target/criterion.*" '**/*.md'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

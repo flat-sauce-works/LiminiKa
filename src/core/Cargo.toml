@@ -14,9 +14,13 @@ categories.workspace = true
 description = "Core execution engine library for the Geometric Cellular Sheaf Orchestrator (GCSO)"
 readme = "../../README.md"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lib]
 name = "liminika_core"
-crate-type = ["lib", "cdylib", "staticlib"]
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [features]
 default = ["std"]

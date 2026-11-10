@@ -1,6 +1,6 @@
 # Geometric Cellular Sheaf Orchestrator (GCSO): Swarm-Attractor Stigmergic Architecture に基づくローカル LLM 向け RoPE 位相変調・層論的記憶制御ランタイムの設計構想
 
-> Note: 本ドキュメントは、システムアーキテクチャと数理的定式化を提示する技術提案書 (Architecture Proposal / Whitepaper) である。
+> 本ドキュメントは概念的なアーキテクチャ提案書です。登場する数学的概念（セルラー層や力学系など）は、厳密な形式証明としてではなく、「局所的なハルシネーションと事実状態がいかに1つの同じ位相空間の上で繋がっているか」をモデル化するためのメタファーとして使用されています。
 
 ---
 

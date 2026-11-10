@@ -24,6 +24,45 @@
 #endif
 
 // ===================================================================
+// Target Architecture & Hardware SIMD Detection Macros
+// ===================================================================
+#if defined(__x86_64__) || defined(_M_X64)
+    #define GCSO_ARCH_X86_64 1
+#else
+    #define GCSO_ARCH_X86_64 0
+#endif
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+    #define GCSO_ARCH_ARM64 1
+#else
+    #define GCSO_ARCH_ARM64 0
+#endif
+
+#if defined(__AVX2__) || defined(LIMINIKA_ENABLE_AVX2)
+    #define GCSO_HAS_AVX2 1
+#else
+    #define GCSO_HAS_AVX2 0
+#endif
+
+#if defined(__FMA__)
+    #define GCSO_HAS_FMA 1
+#else
+    #define GCSO_HAS_FMA 0
+#endif
+
+#if defined(__AVX512F__) || defined(LIMINIKA_ENABLE_AVX512)
+    #define GCSO_HAS_AVX512 1
+#else
+    #define GCSO_HAS_AVX512 0
+#endif
+
+#if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(LIMINIKA_ENABLE_NEON)
+    #define GCSO_HAS_NEON 1
+#else
+    #define GCSO_HAS_NEON 0
+#endif
+
+// ===================================================================
 // API Export / Import Visibility Definitions
 // ===================================================================
 #if defined(_WIN32) || defined(__CYGWIN__)
@@ -52,7 +91,7 @@
 // ===================================================================
 // Enum Underlying Type Specification Macro for C/C++ Compatibility
 // ===================================================================
-#if defined(__cplusplus)
+#if defined(__cplusplus) || (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L)
     #define GCSO_ENUM_UNDERLYING(type) : type
 #else
     #define GCSO_ENUM_UNDERLYING(type)
@@ -149,7 +188,11 @@
     #define GCSO_ALIGN_PREFIX(n)
     #define GCSO_ALIGN_SUFFIX(n) __attribute__((aligned(n)))
     #define GCSO_ALIGNAS(n) __attribute__((aligned(n)))
-    #define GCSO_ALIGNOF(type) __alignof__(type)
+    #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+        #define GCSO_ALIGNOF(type) _Alignof(type)
+    #else
+        #define GCSO_ALIGNOF(type) __alignof__(type)
+    #endif
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
     #define GCSO_ALIGN_PREFIX(n)
     #define GCSO_ALIGN_SUFFIX(n) _Alignas(n)

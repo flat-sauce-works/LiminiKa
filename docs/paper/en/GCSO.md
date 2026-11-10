@@ -1,6 +1,6 @@
 # Geometric Cellular Sheaf Orchestrator (GCSO): Design Concept of a RoPE Phase-Modulated Sheaf-Theoretic Memory Control Runtime for Local LLMs Based on Swarm-Attractor Stigmergic Architecture
 
-> Note: This document is an architecture proposal/whitepaper presenting a system architecture and mathematical formulation.
+> Note: This document is a conceptual architecture proposal. Mathematical concepts (such as cellular sheaves and dynamical systems) are used here as **heuristic design metaphors** to model how local hallucinations and factual states connect across a single unified phase space, rather than as strict formal proofs.
 
 ---
 

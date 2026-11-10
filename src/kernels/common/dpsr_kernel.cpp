@@ -8,6 +8,131 @@
 #include <cstring>
 #include <exception>
 
+#if defined(__AVX2__)
+    #include <immintrin.h>
+#endif
+
+namespace {
+
+/**
+ * @brief Applies a planar SO(2) rotation (cos_t, sin_t) to `num_pairs` 2D pairs starting at `head_ptr`.
+ * Uses AVX2 4-pair (8-float) vectorization when compiled with AVX2/FMA support.
+ */
+GCSO_FORCE_INLINE void rotate_planar_pairs_inplace(
+    float* GCSO_RESTRICT head_ptr,
+    size_t start_pair,
+    size_t end_pair,
+    float cos_t,
+    float sin_t
+) noexcept {
+    size_t k = start_pair;
+    const size_t remaining_pairs = end_pair - start_pair;
+    const size_t simd_end = start_pair + (remaining_pairs & ~static_cast<size_t>(3));
+
+#if defined(__AVX2__)
+    const __m256 v_cos = _mm256_set1_ps(cos_t);
+    const __m256 v_sin = _mm256_set1_ps(sin_t);
+    for (; k < simd_end; k += 4) {
+        float* const p = head_ptr + (2 * k);
+        const __m256 v_q = _mm256_loadu_ps(p);
+        const __m256 v_q_swap = _mm256_permute_ps(v_q, 0xB1);
+        const __m256 v_sin_term = _mm256_mul_ps(v_q_swap, v_sin);
+    #if defined(__FMA__)
+        const __m256 v_out = _mm256_fmaddsub_ps(v_q, v_cos, v_sin_term);
+    #else
+        const __m256 v_out = _mm256_addsub_ps(_mm256_mul_ps(v_q, v_cos), v_sin_term);
+    #endif
+        _mm256_storeu_ps(p, v_out);
+    }
+#else
+    for (; k < simd_end; k += 4) {
+        const float q0 = head_ptr[2 * k + 0]; const float q1 = head_ptr[2 * k + 1];
+        const float q2 = head_ptr[2 * k + 2]; const float q3 = head_ptr[2 * k + 3];
+        const float q4 = head_ptr[2 * k + 4]; const float q5 = head_ptr[2 * k + 5];
+        const float q6 = head_ptr[2 * k + 6]; const float q7 = head_ptr[2 * k + 7];
+
+        head_ptr[2 * k + 0] = q0 * cos_t - q1 * sin_t;
+        head_ptr[2 * k + 1] = q0 * sin_t + q1 * cos_t;
+        head_ptr[2 * k + 2] = q2 * cos_t - q3 * sin_t;
+        head_ptr[2 * k + 3] = q2 * sin_t + q3 * cos_t;
+        head_ptr[2 * k + 4] = q4 * cos_t - q5 * sin_t;
+        head_ptr[2 * k + 5] = q4 * sin_t + q5 * cos_t;
+        head_ptr[2 * k + 6] = q6 * cos_t - q7 * sin_t;
+        head_ptr[2 * k + 7] = q6 * sin_t + q7 * cos_t;
+    }
+#endif
+
+    for (; k < end_pair; ++k) {
+        const float q0 = head_ptr[2 * k + 0];
+        const float q1 = head_ptr[2 * k + 1];
+        head_ptr[2 * k + 0] = q0 * cos_t - q1 * sin_t;
+        head_ptr[2 * k + 1] = q0 * sin_t + q1 * cos_t;
+    }
+}
+
+/**
+ * @brief Applies lockstep planar SO(2) rotation (cos_t, sin_t) simultaneously to Query and Key heads.
+ */
+GCSO_FORCE_INLINE void rotate_planar_pairs_fused_qk_inplace(
+    float* GCSO_RESTRICT head_q,
+    float* GCSO_RESTRICT head_k,
+    size_t start_pair,
+    size_t end_pair,
+    float cos_t,
+    float sin_t
+) noexcept {
+    size_t k = start_pair;
+    const size_t remaining_pairs = end_pair - start_pair;
+    const size_t simd_end = start_pair + (remaining_pairs & ~static_cast<size_t>(3));
+
+#if defined(__AVX2__)
+    const __m256 v_cos = _mm256_set1_ps(cos_t);
+    const __m256 v_sin = _mm256_set1_ps(sin_t);
+    for (; k < simd_end; k += 4) {
+        float* const pq = head_q + (2 * k);
+        float* const pk = head_k + (2 * k);
+        const __m256 vq = _mm256_loadu_ps(pq);
+        const __m256 vk = _mm256_loadu_ps(pk);
+        const __m256 vq_swap = _mm256_permute_ps(vq, 0xB1);
+        const __m256 vk_swap = _mm256_permute_ps(vk, 0xB1);
+        const __m256 vq_sin = _mm256_mul_ps(vq_swap, v_sin);
+        const __m256 vk_sin = _mm256_mul_ps(vk_swap, v_sin);
+    #if defined(__FMA__)
+        const __m256 vq_out = _mm256_fmaddsub_ps(vq, v_cos, vq_sin);
+        const __m256 vk_out = _mm256_fmaddsub_ps(vk, v_cos, vk_sin);
+    #else
+        const __m256 vq_out = _mm256_addsub_ps(_mm256_mul_ps(vq, v_cos), vq_sin);
+        const __m256 vk_out = _mm256_addsub_ps(_mm256_mul_ps(vk, v_cos), vk_sin);
+    #endif
+        _mm256_storeu_ps(pq, vq_out);
+        _mm256_storeu_ps(pk, vk_out);
+    }
+#else
+    for (; k < simd_end; k += 4) {
+        for (size_t u = 0; u < 4; ++u) {
+            const size_t idx = 2 * (k + u);
+            const float q0 = head_q[idx + 0]; const float q1 = head_q[idx + 1];
+            const float k0 = head_k[idx + 0]; const float k1 = head_k[idx + 1];
+            head_q[idx + 0] = q0 * cos_t - q1 * sin_t;
+            head_q[idx + 1] = q0 * sin_t + q1 * cos_t;
+            head_k[idx + 0] = k0 * cos_t - k1 * sin_t;
+            head_k[idx + 1] = k0 * sin_t + k1 * cos_t;
+        }
+    }
+#endif
+
+    for (; k < end_pair; ++k) {
+        const float q0 = head_q[2 * k + 0]; const float q1 = head_q[2 * k + 1];
+        const float k0 = head_k[2 * k + 0]; const float k1 = head_k[2 * k + 1];
+        head_q[2 * k + 0] = q0 * cos_t - q1 * sin_t;
+        head_q[2 * k + 1] = q0 * sin_t + q1 * cos_t;
+        head_k[2 * k + 0] = k0 * cos_t - k1 * sin_t;
+        head_k[2 * k + 1] = k0 * sin_t + k1 * cos_t;
+    }
+}
+
+} // namespace
+
 GCSO_EXTERN_C_BEGIN
 
 /**
@@ -55,8 +180,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_kernel_create(
 /**
  * @brief Applies inline DPSR phase rotation to Query tensor registers.
  *
- * Hot Path Guarantee: Zero dynamic memory allocations. Unrolls loops over 4-pair (8-float) chunks
- * to maximize Instruction-Level Parallelism (ILP) and FMA pipeline utilization.
+ * Hot Path Guarantee: Zero dynamic memory allocations and zero transcendental libm calls via
+ * O(1) GCSO_Q7_COS_SIN_LUT lookup and 4-pair SIMD unrolling.
  *
  * Lie Group Invariant: Abides strictly by SO(2)^(d_head/2) commutativity with standard RoPE.
  *
@@ -84,43 +209,73 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering(
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        constexpr float q7_scale = 3.14159265358979323846f / 128.0f;
         const size_t pairs_per_head = head_dim / 2;
+        uint8_t last_q_u8 = 0U;
+        float cos_t = 1.0f;
+        float sin_t = 0.0f;
 
         for (size_t h = 0; h < num_heads; ++h) {
-            const float theta = static_cast<float>(phase_deltas[h]) * q7_scale;
-            if (theta == 0.0f) {
+            const auto q_u8 = static_cast<uint8_t>(phase_deltas[h]);
+            if (q_u8 == 0U) {
                 continue;
             }
-            const float cos_t = std::cos(theta);
-            const float sin_t = std::sin(theta);
+            if (q_u8 != last_q_u8) {
+                last_q_u8 = q_u8;
+                const auto entry = GCSO_Q7_COS_SIN_LUT.entries[q_u8];
+                cos_t = entry.cos_val;
+                sin_t = entry.sin_val;
+            }
             float* GCSO_RESTRICT head_q = query_tensor + (h * head_dim);
+            rotate_planar_pairs_inplace(head_q, 0, pairs_per_head, cos_t, sin_t);
+        }
+        return GCSO_SUCCESS;
+    } catch (...) {
+        return GCSO_ERROR_PANIC_CAUGHT;
+    }
+}
 
-            // Unroll 4 pairs (8 floats) per iteration for maximum vector pipeline utilization
-            size_t k = 0;
-            const size_t simd_pairs = pairs_per_head & ~static_cast<size_t>(3);
-            for (; k < simd_pairs; k += 4) {
-                const float q0 = head_q[2 * k + 0]; const float q1 = head_q[2 * k + 1];
-                const float q2 = head_q[2 * k + 2]; const float q3 = head_q[2 * k + 3];
-                const float q4 = head_q[2 * k + 4]; const float q5 = head_q[2 * k + 5];
-                const float q6 = head_q[2 * k + 6]; const float q7 = head_q[2 * k + 7];
+/**
+ * @brief Applies lockstep fused DPSR phase rotation to Query and Key tensor registers in a single pass.
+ */
+GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_fused(
+    float* GCSO_RESTRICT query_tensor,
+    float* GCSO_RESTRICT key_tensor,
+    const gcso_q7_t* GCSO_RESTRICT phase_deltas,
+    size_t head_dim,
+    size_t num_heads
+) GCSO_NOEXCEPT {
+    if (GCSO_UNLIKELY(query_tensor == nullptr || key_tensor == nullptr || phase_deltas == nullptr)) {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if (GCSO_UNLIKELY(head_dim == 0 || (head_dim % 2 != 0) || num_heads == 0 || query_tensor == key_tensor)) {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    try {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(query_tensor) % 32 != 0 ||
+                          reinterpret_cast<uintptr_t>(key_tensor) % 32 != 0 ||
+                          reinterpret_cast<uintptr_t>(phase_deltas) % alignof(gcso_q7_t) != 0)) {
+            return GCSO_ERROR_MISALIGNED_POINTER;
+        }
 
-                head_q[2 * k + 0] = q0 * cos_t - q1 * sin_t;
-                head_q[2 * k + 1] = q0 * sin_t + q1 * cos_t;
-                head_q[2 * k + 2] = q2 * cos_t - q3 * sin_t;
-                head_q[2 * k + 3] = q2 * sin_t + q3 * cos_t;
-                head_q[2 * k + 4] = q4 * cos_t - q5 * sin_t;
-                head_q[2 * k + 5] = q4 * sin_t + q5 * cos_t;
-                head_q[2 * k + 6] = q6 * cos_t - q7 * sin_t;
-                head_q[2 * k + 7] = q6 * sin_t + q7 * cos_t;
+        const size_t pairs_per_head = head_dim / 2;
+        uint8_t last_q_u8 = 0U;
+        float cos_t = 1.0f;
+        float sin_t = 0.0f;
+
+        for (size_t h = 0; h < num_heads; ++h) {
+            const auto q_u8 = static_cast<uint8_t>(phase_deltas[h]);
+            if (q_u8 == 0U) {
+                continue;
             }
-
-            for (; k < pairs_per_head; ++k) {
-                const float q0 = head_q[2 * k + 0];
-                const float q1 = head_q[2 * k + 1];
-                head_q[2 * k + 0] = q0 * cos_t - q1 * sin_t;
-                head_q[2 * k + 1] = q0 * sin_t + q1 * cos_t;
+            if (q_u8 != last_q_u8) {
+                last_q_u8 = q_u8;
+                const auto entry = GCSO_Q7_COS_SIN_LUT.entries[q_u8];
+                cos_t = entry.cos_val;
+                sin_t = entry.sin_val;
             }
+            float* GCSO_RESTRICT head_q = query_tensor + (h * head_dim);
+            float* GCSO_RESTRICT head_k = key_tensor + (h * head_dim);
+            rotate_planar_pairs_fused_qk_inplace(head_q, head_k, 0, pairs_per_head, cos_t, sin_t);
         }
         return GCSO_SUCCESS;
     } catch (...) {
@@ -167,50 +322,236 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_safe(
 
         constexpr float q7_scale = 3.14159265358979323846f / 128.0f;
         const size_t pairs_per_head = head_dim / 2;
-
         const size_t low_freq_pairs = std::max(static_cast<size_t>(1), head_dim / 8);
         const size_t start_k = (pairs_per_head > low_freq_pairs) ? (pairs_per_head - low_freq_pairs) : 0;
+        const bool is_default_ripa = std::abs(max_rad - 0.0872664626f) <= 1e-5f;
+
+        uint8_t last_q_u8 = 0U;
+        float cos_t = 1.0f;
+        float sin_t = 0.0f;
 
         for (size_t h = 0; h < num_heads; ++h) {
-            float theta = static_cast<float>(phase_deltas[h]) * q7_scale;
-            if (max_rad > 0.0f) {
-                theta = max_rad * std::tanh(theta / max_rad);
-            }
-
-            if (theta == 0.0f) {
+            const auto q_u8 = static_cast<uint8_t>(phase_deltas[h]);
+            if (q_u8 == 0U) {
                 continue;
             }
+            if (q_u8 != last_q_u8) {
+                last_q_u8 = q_u8;
+                if (is_default_ripa) {
+                    const auto entry = GCSO_Q7_DEFAULT_RIPA_COS_SIN_LUT.entries[q_u8];
+                    cos_t = entry.cos_val;
+                    sin_t = entry.sin_val;
+                } else if (max_rad > 0.0f) {
+                    const float raw_theta = static_cast<float>(phase_deltas[h]) * q7_scale;
+                    const float theta = max_rad * std::tanh(raw_theta / max_rad);
+                    cos_t = std::cos(theta);
+                    sin_t = std::sin(theta);
+                } else {
+                    const auto entry = GCSO_Q7_COS_SIN_LUT.entries[q_u8];
+                    cos_t = entry.cos_val;
+                    sin_t = entry.sin_val;
+                }
+            }
 
-            const float cos_t = std::cos(theta);
-            const float sin_t = std::sin(theta);
             float* GCSO_RESTRICT head_q = query_tensor + (h * head_dim);
+            rotate_planar_pairs_inplace(head_q, start_k, pairs_per_head, cos_t, sin_t);
+        }
+        return GCSO_SUCCESS;
+    } catch (...) {
+        return GCSO_ERROR_PANIC_CAUGHT;
+    }
+}
 
-            size_t k = start_k;
-            const size_t remaining_pairs = pairs_per_head - start_k;
-            const size_t simd_pairs = start_k + (remaining_pairs & ~static_cast<size_t>(3));
+/**
+ * @brief Applies RIPA soft-bounded phase steering to both Query and Key tensors in a single fused pass.
+ */
+GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_fused_safe(
+    float* GCSO_RESTRICT query_tensor,
+    float* GCSO_RESTRICT key_tensor,
+    const gcso_q7_t* GCSO_RESTRICT phase_deltas,
+    size_t head_dim,
+    size_t num_heads,
+    float max_rad
+) GCSO_NOEXCEPT {
+    if (GCSO_UNLIKELY(query_tensor == nullptr || key_tensor == nullptr || phase_deltas == nullptr)) {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if (GCSO_UNLIKELY(head_dim == 0 || (head_dim % 2 != 0) || num_heads == 0 ||
+                      query_tensor == key_tensor || std::isnan(max_rad) || std::isinf(max_rad))) {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    try {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(query_tensor) % 32 != 0 ||
+                          reinterpret_cast<uintptr_t>(key_tensor) % 32 != 0 ||
+                          reinterpret_cast<uintptr_t>(phase_deltas) % alignof(gcso_q7_t) != 0)) {
+            return GCSO_ERROR_MISALIGNED_POINTER;
+        }
 
-            for (; k < simd_pairs; k += 4) {
-                const float q0 = head_q[2 * k + 0]; const float q1 = head_q[2 * k + 1];
-                const float q2 = head_q[2 * k + 2]; const float q3 = head_q[2 * k + 3];
-                const float q4 = head_q[2 * k + 4]; const float q5 = head_q[2 * k + 5];
-                const float q6 = head_q[2 * k + 6]; const float q7 = head_q[2 * k + 7];
+        constexpr float q7_scale = 3.14159265358979323846f / 128.0f;
+        const size_t pairs_per_head = head_dim / 2;
+        const size_t low_freq_pairs = std::max(static_cast<size_t>(1), head_dim / 8);
+        const size_t start_k = (pairs_per_head > low_freq_pairs) ? (pairs_per_head - low_freq_pairs) : 0;
+        const bool is_default_ripa = std::abs(max_rad - 0.0872664626f) <= 1e-5f;
 
-                head_q[2 * k + 0] = q0 * cos_t - q1 * sin_t;
-                head_q[2 * k + 1] = q0 * sin_t + q1 * cos_t;
-                head_q[2 * k + 2] = q2 * cos_t - q3 * sin_t;
-                head_q[2 * k + 3] = q2 * sin_t + q3 * cos_t;
-                head_q[2 * k + 4] = q4 * cos_t - q5 * sin_t;
-                head_q[2 * k + 5] = q4 * sin_t + q5 * cos_t;
-                head_q[2 * k + 6] = q6 * cos_t - q7 * sin_t;
-                head_q[2 * k + 7] = q6 * sin_t + q7 * cos_t;
+        uint8_t last_q_u8 = 0U;
+        float cos_t = 1.0f;
+        float sin_t = 0.0f;
+
+        for (size_t h = 0; h < num_heads; ++h) {
+            const auto q_u8 = static_cast<uint8_t>(phase_deltas[h]);
+            if (q_u8 == 0U) {
+                continue;
+            }
+            if (q_u8 != last_q_u8) {
+                last_q_u8 = q_u8;
+                if (is_default_ripa) {
+                    const auto entry = GCSO_Q7_DEFAULT_RIPA_COS_SIN_LUT.entries[q_u8];
+                    cos_t = entry.cos_val;
+                    sin_t = entry.sin_val;
+                } else if (max_rad > 0.0f) {
+                    const float raw_theta = static_cast<float>(phase_deltas[h]) * q7_scale;
+                    const float theta = max_rad * std::tanh(raw_theta / max_rad);
+                    cos_t = std::cos(theta);
+                    sin_t = std::sin(theta);
+                } else {
+                    const auto entry = GCSO_Q7_COS_SIN_LUT.entries[q_u8];
+                    cos_t = entry.cos_val;
+                    sin_t = entry.sin_val;
+                }
             }
 
-            for (; k < pairs_per_head; ++k) {
-                const float q0 = head_q[2 * k + 0];
-                const float q1 = head_q[2 * k + 1];
-                head_q[2 * k + 0] = q0 * cos_t - q1 * sin_t;
-                head_q[2 * k + 1] = q0 * sin_t + q1 * cos_t;
-            }
+            float* GCSO_RESTRICT head_q = query_tensor + (h * head_dim);
+            float* GCSO_RESTRICT head_k = key_tensor + (h * head_dim);
+            rotate_planar_pairs_fused_qk_inplace(head_q, head_k, start_k, pairs_per_head, cos_t, sin_t);
+        }
+        return GCSO_SUCCESS;
+    } catch (...) {
+        return GCSO_ERROR_PANIC_CAUGHT;
+    }
+}
+
+/**
+ * @brief Applies S^1 geodesic RIPA soft-bounded phase steering to a Query tensor.
+ */
+GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_geodesic_safe(
+    float* GCSO_RESTRICT query_tensor,
+    const gcso_q7_t* GCSO_RESTRICT phase_deltas,
+    size_t head_dim,
+    size_t num_heads,
+    float max_rad
+) GCSO_NOEXCEPT {
+    return gcso_dpsr_apply_phase_steering_safe(query_tensor, phase_deltas, head_dim, num_heads, max_rad);
+}
+
+/**
+ * @brief Applies pointer-gated RIPA phase steering (honoring ACTION_MODE_LAYER_SKIP & REPULSION_GUARD).
+ */
+GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_pointer_gated_phase_steering_safe(
+    uint64_t tagged_ptr,
+    float* GCSO_RESTRICT query_tensor,
+    const gcso_q7_t* GCSO_RESTRICT phase_deltas,
+    size_t head_dim,
+    size_t num_heads,
+    float max_rad
+) GCSO_NOEXCEPT {
+    if (GCSO_UNLIKELY(query_tensor == nullptr || phase_deltas == nullptr)) {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    const uint8_t tag = gcso_tagged_ptr_unpack_tag_inline(tagged_ptr);
+    const uint8_t action_mode = tag & GCSO_ACTION_MODE_ALL_MASK;
+    if ((action_mode & GCSO_ACTION_MODE_LAYER_SKIP) != 0U ||
+        (action_mode & GCSO_ACTION_MODE_PHASE_STEER) == 0U) {
+        if (GCSO_UNLIKELY(head_dim == 0 || (head_dim % 2 != 0) || num_heads == 0 ||
+                          std::isnan(max_rad) || std::isinf(max_rad))) {
+            return GCSO_ERROR_INVALID_ARGUMENT;
+        }
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(query_tensor) % 32 != 0 ||
+                          reinterpret_cast<uintptr_t>(phase_deltas) % alignof(gcso_q7_t) != 0)) {
+            return GCSO_ERROR_MISALIGNED_POINTER;
+        }
+        return GCSO_SUCCESS;
+    }
+    return gcso_dpsr_apply_phase_steering_safe(query_tensor, phase_deltas, head_dim, num_heads, max_rad);
+}
+
+/**
+ * @brief Applies pointer-gated fused QK RIPA phase steering in a single pass.
+ */
+GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_pointer_gated_phase_steering_fused_safe(
+    uint64_t tagged_ptr,
+    float* GCSO_RESTRICT query_tensor,
+    float* GCSO_RESTRICT key_tensor,
+    const gcso_q7_t* GCSO_RESTRICT phase_deltas,
+    size_t head_dim,
+    size_t num_heads,
+    float max_rad
+) GCSO_NOEXCEPT {
+    if (GCSO_UNLIKELY(query_tensor == nullptr || key_tensor == nullptr || phase_deltas == nullptr)) {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    const uint8_t tag = gcso_tagged_ptr_unpack_tag_inline(tagged_ptr);
+    const uint8_t action_mode = tag & GCSO_ACTION_MODE_ALL_MASK;
+    if ((action_mode & GCSO_ACTION_MODE_LAYER_SKIP) != 0U ||
+        (action_mode & GCSO_ACTION_MODE_PHASE_STEER) == 0U) {
+        if (GCSO_UNLIKELY(head_dim == 0 || (head_dim % 2 != 0) || num_heads == 0 ||
+                          query_tensor == key_tensor || std::isnan(max_rad) || std::isinf(max_rad))) {
+            return GCSO_ERROR_INVALID_ARGUMENT;
+        }
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(query_tensor) % 32 != 0 ||
+                          reinterpret_cast<uintptr_t>(key_tensor) % 32 != 0 ||
+                          reinterpret_cast<uintptr_t>(phase_deltas) % alignof(gcso_q7_t) != 0)) {
+            return GCSO_ERROR_MISALIGNED_POINTER;
+        }
+        return GCSO_SUCCESS;
+    }
+    return gcso_dpsr_apply_phase_steering_fused_safe(
+        query_tensor, key_tensor, phase_deltas, head_dim, num_heads, max_rad);
+}
+
+/**
+ * @brief Applies soft exponential phase damping across Query tensor channels.
+ */
+GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_soft_phase_damping(
+    float* GCSO_RESTRICT query_tensor,
+    size_t head_dim,
+    size_t num_heads,
+    float damping_factor
+) GCSO_NOEXCEPT {
+    if (GCSO_UNLIKELY(query_tensor == nullptr)) {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if (GCSO_UNLIKELY(head_dim == 0 || (head_dim % 2 != 0) || num_heads == 0 ||
+                      std::isnan(damping_factor) || std::isinf(damping_factor) ||
+                      damping_factor < 0.0f || damping_factor > 1.0f)) {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    try {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(query_tensor) % 32 != 0)) {
+            return GCSO_ERROR_MISALIGNED_POINTER;
+        }
+        const size_t total_elems = head_dim * num_heads;
+        size_t i = 0;
+        const size_t simd_len = total_elems & ~static_cast<size_t>(7);
+#if defined(__AVX2__)
+        const __m256 v_damp = _mm256_set1_ps(damping_factor);
+        for (; i < simd_len; i += 8) {
+            const __m256 v_q = _mm256_load_ps(query_tensor + i);
+            _mm256_store_ps(query_tensor + i, _mm256_mul_ps(v_q, v_damp));
+        }
+#else
+        for (; i < simd_len; i += 8) {
+            query_tensor[i + 0] *= damping_factor;
+            query_tensor[i + 1] *= damping_factor;
+            query_tensor[i + 2] *= damping_factor;
+            query_tensor[i + 3] *= damping_factor;
+            query_tensor[i + 4] *= damping_factor;
+            query_tensor[i + 5] *= damping_factor;
+            query_tensor[i + 6] *= damping_factor;
+            query_tensor[i + 7] *= damping_factor;
+        }
+#endif
+        for (; i < total_elems; ++i) {
+            query_tensor[i] *= damping_factor;
         }
         return GCSO_SUCCESS;
     } catch (...) {
@@ -256,7 +597,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_qdps_filter_step(
         }
 
         for (size_t i = 0; i < len; ++i) {
-            if (std::abs(static_cast<int32_t>(phase_deltas[i])) < min_step_q7) {
+            const int32_t val = static_cast<int32_t>(phase_deltas[i]);
+            const int32_t abs_val = val < 0 ? -val : val;
+            if (abs_val < min_step_q7) {
                 phase_deltas[i] = 0;
             }
         }
@@ -305,31 +648,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_lazy_unwrap_override(
             const float cos_t = std::cos(theta);
             const float sin_t = std::sin(theta);
             float* GCSO_RESTRICT head_q = query_tensor + (h * head_dim);
-
-            size_t k = 0;
-            const size_t simd_pairs = pairs_per_head & ~static_cast<size_t>(3);
-            for (; k < simd_pairs; k += 4) {
-                const float q0 = head_q[2 * k + 0]; const float q1 = head_q[2 * k + 1];
-                const float q2 = head_q[2 * k + 2]; const float q3 = head_q[2 * k + 3];
-                const float q4 = head_q[2 * k + 4]; const float q5 = head_q[2 * k + 5];
-                const float q6 = head_q[2 * k + 6]; const float q7 = head_q[2 * k + 7];
-
-                head_q[2 * k + 0] = q0 * cos_t - q1 * sin_t;
-                head_q[2 * k + 1] = q0 * sin_t + q1 * cos_t;
-                head_q[2 * k + 2] = q2 * cos_t - q3 * sin_t;
-                head_q[2 * k + 3] = q2 * sin_t + q3 * cos_t;
-                head_q[2 * k + 4] = q4 * cos_t - q5 * sin_t;
-                head_q[2 * k + 5] = q4 * sin_t + q5 * cos_t;
-                head_q[2 * k + 6] = q6 * cos_t - q7 * sin_t;
-                head_q[2 * k + 7] = q6 * sin_t + q7 * cos_t;
-            }
-
-            for (; k < pairs_per_head; ++k) {
-                const float q0 = head_q[2 * k + 0];
-                const float q1 = head_q[2 * k + 1];
-                head_q[2 * k + 0] = q0 * cos_t - q1 * sin_t;
-                head_q[2 * k + 1] = q0 * sin_t + q1 * cos_t;
-            }
+            rotate_planar_pairs_inplace(head_q, 0, pairs_per_head, cos_t, sin_t);
         }
         return GCSO_SUCCESS;
     } catch (...) {
@@ -454,14 +773,21 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_fused_logit_shift(
         }
 
         constexpr float q7_scale = 3.14159265358979323846f / 128.0f;
-        float aggregate_phase_bias = 0.0f;
+        int32_t sum_q7 = 0;
         for (size_t h = 0; h < num_heads; ++h) {
-            aggregate_phase_bias += static_cast<float>(phase_deltas[h]) * q7_scale;
+            sum_q7 += static_cast<int32_t>(phase_deltas[h]);
         }
-        const float mean_bias = aggregate_phase_bias / static_cast<float>(num_heads);
+        const float mean_bias = (static_cast<float>(sum_q7) * q7_scale) / static_cast<float>(num_heads);
 
         size_t v = 0;
         const size_t simd_vocab = vocab_size & ~static_cast<size_t>(7);
+#if defined(__AVX2__)
+        const __m256 v_bias = _mm256_set1_ps(mean_bias);
+        for (; v < simd_vocab; v += 8) {
+            const __m256 v_log = _mm256_load_ps(logits + v);
+            _mm256_store_ps(logits + v, _mm256_add_ps(v_log, v_bias));
+        }
+#else
         for (; v < simd_vocab; v += 8) {
             logits[v + 0] += mean_bias;
             logits[v + 1] += mean_bias;
@@ -472,8 +798,74 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_fused_logit_shift(
             logits[v + 6] += mean_bias;
             logits[v + 7] += mean_bias;
         }
+#endif
         for (; v < vocab_size; ++v) {
             logits[v] += mean_bias;
+        }
+        return GCSO_SUCCESS;
+    } catch (...) {
+        return GCSO_ERROR_PANIC_CAUGHT;
+    }
+}
+
+/**
+ * @brief Computes Procrustes phase delta alignment between source and target state representations.
+ *
+ * Evaluates 2D planar cross-products and dot-products across adjacent pairs (2k, 2k+1) and quantizes
+ * the resulting relative phase angles via atan2 into Q7 fixed-point values [-128, 127].
+ *
+ * @param source 32-byte aligned source feature vector.
+ * @param target 32-byte aligned target feature vector.
+ * @param dim Total vector dimension size (must be even and >= 2).
+ * @param phase_out Output Q7 phase delta array buffer to store computed profile (Aligned 16-byte).
+ * @return GCSO_SUCCESS or error status code.
+ */
+GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_compute_procrustes_phase_delta(
+    const float* GCSO_RESTRICT source,
+    const float* GCSO_RESTRICT target,
+    size_t dim,
+    gcso_q7_t* GCSO_RESTRICT phase_out
+) GCSO_NOEXCEPT {
+    if (GCSO_UNLIKELY(source == nullptr || target == nullptr || phase_out == nullptr)) {
+        return GCSO_ERROR_NULL_POINTER;
+    }
+    if (GCSO_UNLIKELY(dim == 0 || (dim % 2 != 0))) {
+        return GCSO_ERROR_INVALID_ARGUMENT;
+    }
+    try {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(source) % 32 != 0 ||
+                          reinterpret_cast<uintptr_t>(target) % 32 != 0 ||
+                          reinterpret_cast<uintptr_t>(phase_out) % alignof(gcso_q7_t) != 0)) {
+            return GCSO_ERROR_MISALIGNED_POINTER;
+        }
+
+        constexpr float inv_q7_scale = 128.0f / 3.14159265358979323846f;
+        const size_t num_heads = std::min(dim / 2, static_cast<size_t>(GCSO_Q7_PHASE_ARRAY_LEN));
+        const size_t pairs_per_head = std::max(static_cast<size_t>(1), (dim / 2) / num_heads);
+
+        for (size_t h = 0; h < num_heads; ++h) {
+            const size_t pair_start = h * pairs_per_head;
+            const size_t pair_end = std::min(pair_start + pairs_per_head, dim / 2);
+            float dot_sum = 0.0f;
+            float cross_sum = 0.0f;
+            for (size_t p = pair_start; p < pair_end; ++p) {
+                const float sx = source[2 * p + 0];
+                const float sy = source[2 * p + 1];
+                const float tx = target[2 * p + 0];
+                const float ty = target[2 * p + 1];
+                dot_sum += sx * tx + sy * ty;
+                cross_sum += sx * ty - sy * tx;
+            }
+            if ( GCSO_UNLIKELY(std::isnan(dot_sum) || std::isnan(cross_sum) ||
+                               std::isinf(dot_sum) || std::isinf(cross_sum)) ) {
+                return GCSO_ERROR_EDBC_SINGULARITY;
+            }
+            const float angle = (std::abs(dot_sum) < 1e-12f && std::abs(cross_sum) < 1e-12f)
+                                    ? 0.0f
+                                    : std::atan2(cross_sum, dot_sum);
+            int32_t q_val = static_cast<int32_t>(std::round(angle * inv_q7_scale));
+            q_val = std::clamp(q_val, -128, 127);
+            phase_out[h] = static_cast<gcso_q7_t>(q_val);
         }
         return GCSO_SUCCESS;
     } catch (...) {
@@ -796,6 +1188,19 @@ GCSO_API gcso_status_t GCSO_CALL gcso_srl_eval_rank1(
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
     }
+}
+
+/**
+ * @brief Evaluates in-place fused SRL Dynamic Rank-1 outer product accumulation.
+ */
+GCSO_API gcso_status_t GCSO_CALL gcso_srl_eval_rank1_fused(
+    float* GCSO_RESTRICT y_inout,
+    const float* GCSO_RESTRICT x_in,
+    const gcso_srl_descriptor_t* GCSO_RESTRICT srl_desc,
+    size_t dim_in,
+    size_t dim_out
+) GCSO_NOEXCEPT {
+    return gcso_srl_eval_rank1(y_inout, x_in, srl_desc, dim_in, dim_out);
 }
 
 /**
