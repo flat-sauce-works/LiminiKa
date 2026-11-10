@@ -1439,8 +1439,8 @@ pub trait ActionHub:
     /// Returns `(primary_idx, secondary_idx, primary_anchor_id, secondary_anchor_id, blended_coherence, total_gravity, is_liminal_bifurcation, steered)`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`], [`GCSO_ERROR_MISALIGNED_POINTER`],
-    /// [`GCSO_ERROR_INVALID_ARGUMENT`], or [`GCSO_ERROR_CONTAINER_CORRUPTED`] on validation failure.
+    /// Returns [`crate::abi::GCSO_ERROR_BUFFER_TOO_SMALL`], [`crate::abi::GCSO_ERROR_MISALIGNED_POINTER`],
+    /// [`GCSO_ERROR_INVALID_ARGUMENT`], or [`crate::abi::GCSO_ERROR_CONTAINER_CORRUPTED`] on validation failure.
     #[inline]
     fn route_four_section_top2_liminal_and_steer_qk_safe(
         &self,

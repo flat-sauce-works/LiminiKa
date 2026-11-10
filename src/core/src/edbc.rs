@@ -153,7 +153,7 @@ pub const MAX_VALID_TOKEN_Z_SCORE: f32 = DEFAULT_MAX_VALID_Z_SCORE;
 const INV_LN_2: f32 = 1.0 / LN_2;
 
 /// Evaluates the conditional transition log-probability $\ln P(M_t \mid M_{t-1}) = \ln(0.5(1 + c))$
-/// using the 1-lookup identity $\ln(1 + c) - \ln 2$ ([`fast_ln_1p_bounded_f32`], `0` divisions)
+/// using the 1-lookup identity $\ln(1 + c) - \ln 2$ (`fast_ln_1p_bounded_f32`, `0` divisions)
 /// whenever $c \ge 0$, falling back to [`branchless_ln_f32`] only when $c < 0$.
 #[inline(always)]
 #[must_use]
@@ -249,7 +249,7 @@ pub const fn compute_sparse_surrogate_entropy(p_max: f32, p_2nd: f32, _eps: f32)
 
 /// Computes Moving Z-Score Normalized Attention Entropy ($\tilde{H}$) incorporating
 /// surrogate entropy and inter-layer activation cosine distance variance in **strictly
-/// constant-time mode (`0` branches, `0 fdiv`)** via [`fast_inv_pos_normal_f32`] and
+/// constant-time mode (`0` branches, `0 fdiv`)** via `fast_inv_pos_normal_f32` and
 /// [`tanh_lut_eval_nonneg`] (Eq. 3.1).
 #[inline(always)]
 pub const fn compute_moving_z_score_entropy(
@@ -1378,7 +1378,7 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
 /// Applies Pitchfork Metastable Tunneling phase perturbation (`Lemma 3.1`) directly to
 /// register-resident `words_inout: &mut [u64; NUM_SWARM_MICRO_CELLS]` and writes only the
 /// perturbed exploration cells (`explore_head_start..MAX_ATTENTION_HEADS`) back to `phases_inout`,
-/// eliminating Store-to-Load Forwarding reload stalls in [`step_edbc_tunneling_and_select_bayesian_core`].
+/// eliminating Store-to-Load Forwarding reload stalls in `step_edbc_tunneling_and_select_bayesian_core`.
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 fn inject_metastable_tunneling_perturbation_in_words_64(
@@ -1969,7 +1969,7 @@ pub trait EdbcClosedLoopCoordinator:
 {
     /// Computes the mean-square $\mathcal{C}_{\mathrm{void}}$ latent energy alongside the
     /// normalized $\ell_1 / \ell_2$ coherence ratio in a single AVX2 pass (`sum_abs_and_sq_f32_simd8`)
-    /// with zero hardware `fdiv` instructions via [`fast_inv_len_f32`].
+    /// with zero hardware `fdiv` instructions via `fast_inv_len_f32`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `key_vector` is empty.
@@ -2325,10 +2325,10 @@ pub trait EdbcClosedLoopCoordinator:
     /// combined with **EDBC Pitchfork Metastable Tunneling & Bayesian Pointer-Trail Rewiring**:
     /// 1. **Coarse Step ($\mathcal{O}(K)$ Macro Centroid Routing)**: Routes `src_trail` to the
     ///    highest-gravity coherent macro centroid $k^*$ in `macro_centroids` via
-    ///    [`CrystallizedAttractorRecord::route_coarse_to_fine_trail_with_words_64`], Slerp-pulling
+    ///    `CrystallizedAttractorRecord::route_coarse_to_fine_trail_with_words_64`, Slerp-pulling
     ///    `src_trail` by `coarse_pull_u7`.
     /// 2. **Fine Step ($\mathcal{O}(M)$ + Pitchfork Tunneling)**: Passes `macro_anchor_id` and
-    ///    register-resident `bridged_w` directly into [`step_edbc_tunneling_and_select_bayesian_core`]
+    ///    register-resident `bridged_w` directly into `step_edbc_tunneling_and_select_bayesian_core`
     ///    so candidates stamped with `macro_anchor_id` receive the macro-cluster link alignment bonus
     ///    in a single pass without any separate pre-alignment scan over `candidate_trails`.
     ///
@@ -2452,11 +2452,11 @@ pub trait EdbcClosedLoopCoordinator:
     /// united with **EDBC Pitchfork Metastable Tunneling & Bayesian Pointer-Trail Rewiring**:
     /// 1. **Coarse Step ($\mathcal{O}(K)$ Top-2 Liminal Centroid Routing)**: Routes `src_trail` to
     ///    the top-2 macro centroids `(idx1, idx2, aid1, aid2)` in `macro_centroids` via
-    ///    [`CrystallizedAttractorRecord::route_top2_liminal_centroids_with_words_64`], interpolating
+    ///    `CrystallizedAttractorRecord::route_top2_liminal_centroids_with_words_64`, interpolating
     ///    onto the Limina geodesic midpoint when `(grav1 - grav2) <= bifurcation_margin * grav1`.
     /// 2. **Fine Step ($\mathcal{O}(M)$ + Pitchfork Tunneling)**: Evaluates stateful EDBC entropy,
     ///    injects Pitchfork metastable tunneling perturbation when in Bifurcation mode, and selects/rewires
-    ///    the optimal candidate trail via [`step_edbc_tunneling_and_select_bayesian_core`].
+    ///    the optimal candidate trail via `step_edbc_tunneling_and_select_bayesian_core`.
     ///
     /// Returns `(edbc_state, evolved_ptr, idx1, idx2, aid1, aid2, is_liminal, selected_trail_id, bayesian_score, transition_log_prob, tunneling_x_star, found_coherent)`.
     ///
@@ -4127,7 +4127,7 @@ impl EntropyEvaluator for EdbcEngine {
     /// Calculates Eyring-Kramers potential barrier height:
     /// $\Delta V = \min\left(\frac{\tau_{\mathrm{eff}}}{\max(0, \mathcal{C}_{\mathrm{void}}) + \epsilon_{\mathrm{log}}}, \Delta V_{\max}\right)$
     /// in division-free (`0 fdiv`) mode, clamping `denom` to `F32_MIN_POSITIVE_NORMAL` and
-    /// evaluating [`fast_inv_pos_normal_f32`] to eliminate subnormal-branch jitter near epsilon singularities.
+    /// evaluating `fast_inv_pos_normal_f32` to eliminate subnormal-branch jitter near epsilon singularities.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if inputs are non-finite or `tau_eff <= 0.0`.

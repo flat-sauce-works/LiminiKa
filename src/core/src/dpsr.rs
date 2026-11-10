@@ -124,7 +124,7 @@ pub const Q7_PHASE_SCALE: f32 = Q7_PHASE_SCALE_RAD;
 const SWAR_SPLAT_BYTE_64: u64 = 0x0101_0101_0101_0101;
 
 /// Evaluates the conditional transition log-probability $\ln P(M_t \mid M_{t-1}) = \ln(0.5(1 + c))$
-/// using the 1-lookup identity $\ln(1 + c) - \ln 2$ ([`fast_ln_1p_bounded_f32`], `0` divisions)
+/// using the 1-lookup identity $\ln(1 + c) - \ln 2$ (`fast_ln_1p_bounded_f32`, `0` divisions)
 /// whenever $c \ge 0$, falling back to [`branchless_ln_f32`] only when $c < 0$.
 #[inline(always)]
 #[must_use]
@@ -201,7 +201,7 @@ const fn filter_qdps_words_64(
 }
 
 /// Filters 8 register-resident `u64` SWAR words (`raw_words`) via 8-lane SWAR QDPS (`min_step_rad`)
-/// and steers `query_tensor` (and optional `key_tensor`) via [`steer_from_swar_words_core_safe`]
+/// and steers `query_tensor` (and optional `key_tensor`) via `steer_from_swar_words_core_safe`
 /// without reloading `trail.accumulated_phase_delta` from memory.
 #[inline(always)]
 fn filter_qdps_and_steer_from_words_64(
@@ -1019,7 +1019,7 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
     /// Executes closed-loop 8-Cell SWAR Micro-Swarm consensus on `trail` against `target_phases`
     /// via [`StigmergicSwarmOps::try_resolve_action_in_swarm_to_words`] and steers `query_tensor`
     /// (and optionally `key_tensor`) directly from the 8 returned `u64` SWAR registers via
-    /// [`steer_from_swar_words_core_safe`] without reloading `trail.accumulated_phase_delta`.
+    /// `steer_from_swar_words_core_safe` without reloading `trail.accumulated_phase_delta`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `num_heads > MAX_ATTENTION_HEADS`,
@@ -1646,7 +1646,7 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
 
     /// Combines **Order-Invariant Single-Manifold Unified-Field Resonance**, **RIPA Q/K Phase
     /// Steering**, optional **Register-Resident $SO(2)$-Fused PSPM Sub-Head Pseudo-MoE**
-    /// ([`dispatch_fused_ripa_and_pspm_words_core`], eliminating the 64-byte `phase_buf`
+    /// (`dispatch_fused_ripa_and_pspm_words_core`, eliminating the 64-byte `phase_buf`
     /// stack spill), and optional **Multiplicative Inverse-Temperature Logit Scaling**
     /// ($\beta_{\mathrm{eff}} = \mathrm{clamp}(1.0 + \gamma \mathcal{C}_{\mathrm{phase}}, 0.25, 4.0)$)
     /// without requiring a 512-byte 8-slot phase bank.
@@ -1857,7 +1857,7 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
     /// constant-time 8-lane SWAR gain scaling (`swar_q7_scale_u7_x8`) and QDPS step filtering
     /// (`swar_q7_qdps_filter_x8`), accumulates circularly into `trail.accumulated_phase_delta`
     /// (`swar_q7_circular_add_x8`), and steers `query_tensor` in-place via
-    /// [`steer_from_swar_words_core_safe`].
+    /// `steer_from_swar_words_core_safe`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `num_heads > MAX_ATTENTION_HEADS`,
@@ -1974,7 +1974,7 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
 
     /// Bridges the inter-memory **Limina** transition from `prev_memory_trail` ($M_{t-1}$) to
     /// `curr_trail` ($M_t$) via [`StigmergicTrailOps::bridge_liminal_hallucinated_trail`],
-    /// filters `curr_trail.accumulated_phase_delta` in registers via [`filter_qdps_and_steer_from_phases_64`],
+    /// filters `curr_trail.accumulated_phase_delta` in registers via `filter_qdps_and_steer_from_phases_64`,
     /// steers `query_tensor` (and optional `key_tensor`) with RIPA soft-clamping, and optionally
     /// modulates candidate memory pre-Softmax Attention scores (`attention_scores`) by
     /// Attention $\times$ DPSR phase interference.
@@ -2303,7 +2303,7 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
     /// a [`GatewayFrame`], or a [`CrystallizedAttractorRecord`]), folds its resonant 64-head phase
     /// and 48-bit ZIMMS tagged pointer into `trail` in 8 register-resident `u64` SWAR words,
     /// executes $SO(2)$ group-closure fused RIPA + PSPM sub-head routing on `query_tensor` when
-    /// `ACTION_MODE_PSPM_ROUTE` is active (or standard RIPA steering via [`steer_from_swar_words_core_safe`]),
+    /// `ACTION_MODE_PSPM_ROUTE` is active (or standard RIPA steering via `steer_from_swar_words_core_safe`),
     /// and optionally scales `logits_opt` by `frame.effective_inv_temp`.
     ///
     /// Returns `(GatewayFrame, CausalProvenanceReport)`.
@@ -2504,7 +2504,7 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
     }
 
     /// Executes **Top-2 Liminal Macro-to-Micro Bifurcation Routing ($\mathcal{O}(K) \to \mathcal{O}(M_{\mathrm{local}})$)**
-    /// uniting [`CrystallizedAttractorRecord::route_top2_liminal_centroids_with_words_64`] with dual-basin
+    /// uniting `CrystallizedAttractorRecord::route_top2_liminal_centroids_with_words_64` with dual-basin
     /// (`aid1 | aid2`) Bayesian pointer-trail rewiring and RIPA phase steering.
     ///
     /// When `is_liminal` is triggered (the top-2 macro centroids lie within `bifurcation_margin`),

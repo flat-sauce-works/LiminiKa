@@ -3563,7 +3563,7 @@ impl CrystallizedAttractorRecord {
     }
 
     /// Synthesizes any [`ManifoldGatewaySignal`] via [`ManifoldGatewaySignal::synthesize_gateway_frame_with_words`]
-    /// and executes [`Self::step_online_toroidal_kmeans_frame_with_words_64`] on `centroids` without reloading phase words.
+    /// and executes `Self::step_online_toroidal_kmeans_frame_with_words_64` on `centroids` without reloading phase words.
     #[inline(always)]
     pub fn step_online_toroidal_kmeans_signal_64<S: ManifoldGatewaySignal + ?Sized>(
         centroids: &mut [Self], signal: &S, split_coherence_thresh: f32, trail_opt: Option<&mut gcso_pointer_trail_t>,

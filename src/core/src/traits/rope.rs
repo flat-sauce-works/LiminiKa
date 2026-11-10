@@ -24,16 +24,16 @@
 //!   and (4) sequential 32-float unrolled `Q`/`K` rotation (`apply_phase_steering_slice_with_sincos`) when
 //!   `q_run.len() >= 128` (`512B`) to eliminate 2-stream 4KB page-offset Load-Store Queue aliasing.
 //! - **Zero-Arithmetic Direct 256-Entry LUT Fast Path in PSPM Sub-Head Routing**: When
-//!   `is_default_ripa && gain_u7 == 128 && pulse_q7 == 0`, [`rotate_pspm_subgroup_with_slot_phases`]
-//!   and [`rotate_fused_ripa_pspm_subgroup_words`] select [`Q7_GEODESIC_DEFAULT_RIPA_SINCOS_REF`] or
-//!   [`Q7_DEFAULT_RIPA_SINCOS_REF`] outside the head loop and index `lut[(slot_q7 as u8) as usize]`
+//!   `is_default_ripa && gain_u7 == 128 && pulse_q7 == 0`, `rotate_pspm_subgroup_with_slot_phases`
+//!   and `rotate_fused_ripa_pspm_subgroup_words` select `Q7_GEODESIC_DEFAULT_RIPA_SINCOS_REF` or
+//!   `Q7_DEFAULT_RIPA_SINCOS_REF` outside the head loop and index `lut[(slot_q7 as u8) as usize]`
 //!   directly with zero per-head integer folding/scaling arithmetic and zero cache-branch jitter.
 //! - **Single-Evaluation $SO(2)$ Group-Closure RIPA + PSPM Fusion**: Because both RIPA and PSPM
-//!   operate on the upper low-frequency quarter `rot_dim`, [`dispatch_fused_ripa_words_and_pspm_profiles_core`]
+//!   operate on the upper low-frequency quarter `rot_dim`, `dispatch_fused_ripa_words_and_pspm_profiles_core`
 //!   fuses $\mathbf{R}(\theta_{\mathrm{ripa}})\mathbf{R}(\theta_{\mathrm{pspm}}) = \mathbf{R}(\theta_{\mathrm{ripa}} + \theta_{\mathrm{pspm}})$
-//!   via [`eval_fused_ripa_pspm_sincos_q7_fast`] (evaluating the trigonometric polynomial once per
+//!   via `eval_fused_ripa_pspm_sincos_q7_fast` (evaluating the trigonometric polynomial once per
 //!   head instead of twice on custom RIPA clamps) and caches consecutive head `(sin, cos)` pairs.
-//! - **Zero-Jitter Micro-Swarm Quorum Pre-Pass & Constant-Time Damping**: [`steer_from_swar_words_core_safe`]
+//! - **Zero-Jitter Micro-Swarm Quorum Pre-Pass & Constant-Time Damping**: `steer_from_swar_words_core_safe`
 //!   resolves `quorum_mask` and `unresolved_damping_u7` in a branchless 8-word SWAR pre-pass, and
 //!   [`PhaseSteering::apply_soft_phase_damping`] executes unconditional AVX2 subnormal-flushed scaling.
 
@@ -444,7 +444,7 @@ unsafe fn apply_phase_steering_nonuniform_avx2_ptr(
 
 /// Rotates `t_slice` across `num_heads` heads when `p_slice` is already known to be non-uniform
 /// (or when called directly after a caller-level uniformity check in fused QK / QKV kernels),
-/// delegating on AVX2 to the 4-register frameless leaf [`apply_phase_steering_nonuniform_avx2_ptr`].
+/// delegating on AVX2 to the 4-register frameless leaf `apply_phase_steering_nonuniform_avx2_ptr`.
 #[inline(always)]
 fn apply_phase_steering_nonuniform_slice_core(
     t_slice: &mut [f32],
@@ -1272,7 +1272,7 @@ fn apply_phase_steering_slice_with_sincos(
 
 /// Rotates `q_slice` and `k_slice` in lockstep across `num_heads` heads using pre-unpacked
 /// `sincos_heads`, sharing 1 `(vc, vs)` broadcast per head across both Q and K via
-/// [`avx2_rotate_so2_pair_block32`] (`0` 4KB page-offset aliasing stalls, `50%` fewer broadcasts).
+/// `avx2_rotate_so2_pair_block32` (`0` 4KB page-offset aliasing stalls, `50%` fewer broadcasts).
 #[inline(always)]
 fn apply_phase_steering_pair_slice_with_sincos(
     q_slice: &mut [f32],
@@ -1361,7 +1361,7 @@ fn apply_phase_steering_pair_slice_with_sincos(
 }
 
 /// Rotates `q_slice` and `k_slice` across `num_heads` heads using load-first 8-float lockstep
-/// [`avx2_rotate_so2_pair_block32`] (`<= 5` live YMM registers `ymm0..ymm4`, zero Windows x64
+/// `avx2_rotate_so2_pair_block32` (`<= 5` live YMM registers `ymm0..ymm4`, zero Windows x64
 /// `xmm6..xmm15` stack spills, zero 4KB Load-Store Queue page-offset aliasing stalls, 2-head
 /// unrolling on compact shapes, and branch-free inner blocks on `head_dim == 128`).
 #[inline(never)]
@@ -1666,7 +1666,7 @@ fn apply_phase_steering_pair_slice_core(
 }
 
 /// Rotates `q_slice`, `k_slice`, and `v_slice` across `num_heads` heads using register-spill-free
-/// [`avx2_rotate_so2_triple_block32`] (`<= 5` live YMM registers, zero Windows x64 `xmm6..xmm15`
+/// `avx2_rotate_so2_triple_block32` (`<= 5` live YMM registers, zero Windows x64 `xmm6..xmm15`
 /// stack spills, zero 3-way 4K Load-Store Queue aliasing stalls, and 1 LUT lookup + broadcast
 /// shared across all three tensors per head).
 #[inline(never)]
@@ -5262,7 +5262,7 @@ pub trait PhaseSteering: BranchlessKernel {
     /// $S^1$ geodesic using hoisted-bias 8-word SWAR (`swar_slerp_words_with_bias_64`, fast-pathing
     /// endpoints and word-uniform profiles), applies register-fused QDPS step filtering
     /// (`min_step_rad`), and steers `query_tensor` (and optional `key_tensor`) via
-    /// [`steer_from_swar_words_core_safe`].
+    /// `steer_from_swar_words_core_safe`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `num_heads > MAX_ATTENTION_HEADS`,
@@ -5538,7 +5538,7 @@ pub trait PhaseSteering: BranchlessKernel {
     }
 
     /// Applies subnormal-safe and near-identity-guarded multiplicative phase damping in-place across `tensor`
-    /// using [`sanitize_inplace_gain_f32`] and unconditional 32-float unrolled AVX2 scaling
+    /// using `sanitize_inplace_gain_f32` and unconditional 32-float unrolled AVX2 scaling
     /// (`scale_f32_slice_unrolled8`).
     ///
     /// Guarantees exact binary dyadic reversibility (e.g., alternating `0.5` and `2.0` produces zero
@@ -5651,7 +5651,7 @@ pub trait PhaseSteering: BranchlessKernel {
     }
 
     /// Applies underflow-resilient SLERP norm stabilization across `tensor` using
-    /// [`norm_l2_underflow_resilient_f32`] and division-free [`branchless_inv_pos_f32`].
+    /// `norm_l2_underflow_resilient_f32` and division-free [`branchless_inv_pos_f32`].
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `tensor` is empty or `target_norm <= 0.0` /
@@ -6561,7 +6561,7 @@ const fn build_pspm_eff_words_64(
 
 /// Loads only the active 8-byte SWAR cells from `fact_phases`, `logic_phases`, and `explore_phases`
 /// (`8` `u64` loads total instead of `24` `u64` loads across three full 64-byte arrays) and applies
-/// [`compute_pspm_eff_word_x8`] in registers.
+/// `compute_pspm_eff_word_x8` in registers.
 #[inline(always)]
 #[must_use]
 fn build_pspm_eff_words_from_profiles_64(
@@ -6743,7 +6743,7 @@ fn eval_fused_ripa_pspm_pair_u8(
 /// Rotates `t_slice` across `0..total_heads` when `base_ripa_words` is byte-uniform (`b_u8`) and
 /// the 3 PSPM subgroups (`0..fact_h`, `fact_h..logic_end`, `logic_end..total_heads`) each have
 /// constant effective Q7 bytes `(f_u8, l_u8, e_u8)`, coalescing adjacent subgroups when their
-/// effective bytes match (`1..=3` calls to [`rotate_ripa_upper_heads_uniform_sincos`]).
+/// effective bytes match (`1..=3` calls to `rotate_ripa_upper_heads_uniform_sincos`).
 #[inline(always)]
 fn rotate_fused_ripa_and_pspm_uniform_subgroups(
     t_slice: &mut [f32],
@@ -8023,7 +8023,7 @@ pub(crate) fn dispatch_fused_ripa_words_and_pspm_profiles_core(
 /// Fuses **RIPA Phase Steering** (`base_ripa_phases`, `base_ripa_max_rad`) and
 /// **PSPM Upper-Quarter ($d_{\mathrm{head}}/4$) Sub-Head Routing** into a **single memory pass**
 /// over `tensor` by loading `base_ripa_phases` into 8 `u64` SWAR registers and delegating to
-/// [`dispatch_fused_ripa_words_and_pspm_profiles_core`].
+/// `dispatch_fused_ripa_words_and_pspm_profiles_core`.
 #[inline(always)]
 pub(crate) fn dispatch_fused_ripa_and_pspm_profiles_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,

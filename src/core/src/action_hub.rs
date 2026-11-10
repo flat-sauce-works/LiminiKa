@@ -167,7 +167,7 @@ const DEFAULT_HUB_SLOT_WEIGHTS: [f32; MAX_ATTRACTOR_DOMAINS] =
     [1.0, 1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5];
 
 /// Evaluates conditional transition log-probability $\ln P(M_t \mid M_{t-1}) = \ln(0.5(1 + c))$
-/// using the 1-lookup identity $\ln(1 + c) - \ln 2$ ([`fast_ln_1p_bounded_f32`], `0` divisions)
+/// using the 1-lookup identity $\ln(1 + c) - \ln 2$ (`fast_ln_1p_bounded_f32`, `0` divisions)
 /// whenever $c \ge 0$, falling back to [`branchless_ln_f32`] only when $c < 0$.
 #[inline(always)]
 #[must_use]
@@ -931,7 +931,7 @@ impl ActionHubEngine {
     /// 2. Advances `trail_inout` pointer & accumulates embedded Q7 phase.
     /// 3. Evaluates `self.bloom_filter` contrastive anti-phase repulsion (`apply_phase_conjugate_repulsion_words`).
     /// 4. Scans populated inline trails `self.trails[..active_len]` via
-    ///    [`select_rewire_bridge_and_modulate_with_preloaded_words_64`] to select the highest-scoring
+    ///    `select_rewire_bridge_and_modulate_with_preloaded_words_64` to select the highest-scoring
     ///    non-contradictory trail $j^*$ under the Bayes-Attention transition score, rewires
     ///    `trail_inout.linked_trail_id = j^*`, bridges the inter-memory **Limina** gap via $S^1$
     ///    geodesic SLERP, and optionally modulates `attention_scores` in-place.

@@ -16,7 +16,7 @@
 //! - **1:1 Binary Layout Parity**: Compile-time `size_of`, `align_of`, and `offset_of` verification
 //!   matching C headers in `include/liminika/` (`c_abi_spec.md` Section 8.1).
 //! - **Exception & Panic Isolation**: [`ffi_boundary!`] intercepts unwinding Rust panics
-//!   (`catch_unwind`) and translates them into [`GCSO_ERROR_PANIC_CAUGHT`].
+//!   (`catch_unwind`) and translates them into `GCSO_ERROR_PANIC_CAUGHT`.
 //! - **Type-Driven Alignment & `GCSO_RESTRICT` Non-Aliasing**: All raw pointers crossing FFI
 //!   boundaries are validated via [`AlignedSlice16`], [`AlignedSlice32`], [`AlignedSliceMut16`],
 //!   [`AlignedSliceMut32`], [`DisjointMutPair`], [`DisjointRefMut`], [`FfiHandleRef`], and
@@ -1063,7 +1063,7 @@ impl RawPhaseProjectable for AbiF32EmbeddingRef<'_> {
 /// Private zero-copy borrowed [`ContrastivePhaseBloomFilter`] guard wrapper inside `abi.rs`
 /// implementing [`CausalProvenanceSignal`], [`CognitiveGroundingSignal`], and
 /// [`ContradictionGuardSignal`] without colliding with blanket implementations on
-/// [`ContradictionGuard`] in `gateway.rs`. Note: [`BranchlessKernel`] is automatically
+/// [`ContradictionGuard`] in `gateway.rs`. Note: `BranchlessKernel` is automatically
 /// provided via the universal blanket `impl<T: ?Sized> BranchlessKernel for T {}` in `branchless.rs`.
 #[derive(Clone, Copy)]
 struct AbiBorrowedBloomGuard<'a> {
@@ -4853,7 +4853,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_geodesic_safe(
     })
 }
 
-/// Applies RIPA soft-bounded phase steering gated branchlessly by [`ACTION_MODE_DPSR_STEER`]
+/// Applies RIPA soft-bounded phase steering gated branchlessly by `ACTION_MODE_DPSR_STEER`
 /// and the embedded Q7 phase offset inside `tagged_ptr`.
 ///
 /// # Safety
@@ -4889,7 +4889,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_pointer_gated_phase_steering_safe(
 }
 
 /// Applies fused Query + Key RIPA soft-bounded phase steering gated branchlessly by
-/// [`ACTION_MODE_DPSR_STEER`] and the embedded Q7 phase offset inside `tagged_ptr`.
+/// `ACTION_MODE_DPSR_STEER` and the embedded Q7 phase offset inside `tagged_ptr`.
 ///
 /// # Safety
 /// Pointers must satisfy non-null, 32B/16B alignment, bounds, and `GCSO_RESTRICT` invariants.

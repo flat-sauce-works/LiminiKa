@@ -1390,7 +1390,7 @@ pub trait AttractorField: BranchlessKernel + Send + Sync {
     /// Evaluates **Zero-Hyperparameter Unified-Field Superposition** across an arbitrary slice of
     /// anchors (`anchor_phases`, `anchor_base_energies`) on the single phase manifold in strictly
     /// constant time (`0` data-dependent branches on `base_e > 0.0`, `0 fdiv`) via
-    /// [`branchless_q7_unified_field_fold_64`], followed by branchless 8-lane SWAR repulsion subtraction.
+    /// [`super::branchless_q7_unified_field_fold_64`], followed by branchless 8-lane SWAR repulsion subtraction.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `anchor_phases.len() != anchor_base_energies.len()`.
@@ -2802,7 +2802,7 @@ pub trait ZimmsStorage: BranchlessKernel + Send + Sync {
         Ok(&container_bytes[start..end])
     }
 
-    /// Extracts a hardware-aligned zero-copy [`AlignedSlice<'a, T, ALIGN>`] of `elem_count` elements
+    /// Extracts a hardware-aligned zero-copy [`AlignedSlice`] (`AlignedSlice<'a, T, ALIGN>`) of `elem_count` elements
     /// for `track_id` (`0..=3`) directly from a ZIMMS memory-mapped `.gcso` container buffer.
     ///
     /// # Errors

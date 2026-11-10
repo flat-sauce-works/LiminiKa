@@ -1117,7 +1117,7 @@ pub(crate) const CRYSTAL_CRC32_DEFAULT_W5_FINAL_CONTRIB: u32 =
 pub(crate) const CRYSTAL_CRC32_RBAR_ONE_FINAL_CONTRIB: u32 =
     crc32_step_l6(crc32_slice16_indep_hi1_u32(0x3F80_0000u32));
 
-/// Exact IEEE-754 `f32::to_bits()` representation of [`VON_MISES_KAPPA_AT_MAX_R`] ($\bar{R}_c \ge 0.995$).
+/// Exact IEEE-754 `f32::to_bits()` representation of `VON_MISES_KAPPA_AT_MAX_R` ($\bar{R}_c \ge 0.995$).
 pub(crate) const VON_MISES_KAPPA_AT_MAX_R_BITS: u32 = VON_MISES_KAPPA_AT_MAX_R.to_bits();
 
 /// Pre-shifted final 128B GF(2) CRC32 contribution $L^5(\text{dep\_lo0}(\text{VON\_MISES\_KAPPA\_AT\_MAX\_R\_BITS}))$
@@ -1517,7 +1517,7 @@ pub(crate) const fn crc32_step_block64_words(crc: u32, w: &[u64; 8]) -> u32 {
 
 /// Computes the IEEE 802.3 CRC32 checksum over 16 little-endian 64-bit words (128 bytes) using
 /// GF(2) parallel $2 \times 64\text{B}$ tree folding (`L^4(block0) ^ block1`), cutting the serial
-/// dependency depth from 8 stages down to 2 and leveraging [`CRC32_UNIFORM64_ZERO_SEED_REF`].
+/// dependency depth from 8 stages down to 2 and leveraging `CRC32_UNIFORM64_ZERO_SEED_REF`.
 #[inline]
 #[must_use]
 pub const fn branchless_crc32_128b_words(w: &[u64; 16]) -> u32 {
@@ -1543,7 +1543,7 @@ const fn load_u64_le_bytes_at(bytes: &[u8], i: usize) -> u64 {
 }
 
 /// Incrementally updates an IEEE 802.3 CRC32 checksum (`crc_seed`) over `bytes` using the
-/// 64B-aligned 16KB Slice-by-16 [`CRC32_IEEE_SLICE16_LUT`] table and GF(2) $2 \times 64\text{B}$ /
+/// 64B-aligned 16KB Slice-by-16 `CRC32_IEEE_SLICE16_LUT` table and GF(2) $2 \times 64\text{B}$ /
 /// $2 \times 32\text{B}$ parallel tree reduction (`crc32_step_block64_words` + `crc32_step_l4`).
 #[inline]
 pub const fn branchless_update_crc32_ieee(crc_seed: u32, bytes: &[u8]) -> u32 {
@@ -1666,7 +1666,7 @@ pub(crate) const LN_1P_LUT_257: AlignedLut257<(f32, f32)> = {
 pub(crate) const LN_1P_LUT_257_REF: &[(f32, f32); 257] = &LN_1P_LUT_257.0;
 
 /// Fast branchless natural logarithm $\ln(1 + \rho)$ for bounded non-negative density $\rho \in [0, 16]$
-/// using [`LN_1P_LUT_257`] and 2nd-order Taylor interpolation (`0` branches, `0` NR reciprocals).
+/// using `LN_1P_LUT_257` and 2nd-order Taylor interpolation (`0` branches, `0` NR reciprocals).
 #[inline(always)]
 pub(crate) const fn fast_ln_1p_bounded_f32(rho_clamped: f32) -> f32 {
     let clamped = branchless_clamp_f32(rho_clamped, 0.0, 16.0);
@@ -2207,7 +2207,7 @@ pub const fn branchless_sincos_q7_geodesic_ripa_default_lut(phase_q7: gcso_q7_t)
 }
 
 /// Evaluates the signed RIPA-clamped radian angle $\Delta\theta_{\mathrm{safe}} = \mathrm{sgn}(q_7)\cdot |\theta_{\max}| \cdot \tanh(|q_7|\cdot s)$
-/// using the 257-entry [`TANH_LUT_257`] table.
+/// using the 257-entry `TANH_LUT_257` table.
 #[inline(always)]
 pub(crate) const fn eval_ripa_clamped_theta_rad_preinv(
     phase_q7: gcso_q7_t,
@@ -2394,7 +2394,7 @@ const VON_MISES_KAPPA_2ZONE_REF: &[[f32; 257]; 2] = &VON_MISES_KAPPA_2ZONE_LUT.0
 
 /// Branchless sigmoidal-blended von Mises concentration parameter $\kappa_c$ from $\bar{R}_c \in [0, 1)$,
 /// evaluated in strictly constant time (`0` Newton-Raphson divisions, `0` Padé `tanh` evaluations)
-/// via [`VON_MISES_KAPPA_2ZONE_LUT`] with a 1-cycle ceiling return for $\bar{R}_c \ge 0.995$.
+/// via `VON_MISES_KAPPA_2ZONE_LUT` with a 1-cycle ceiling return for $\bar{R}_c \ge 0.995$.
 #[inline(always)]
 pub const fn branchless_von_mises_kappa(r_bar: f32) -> f32 {
     if r_bar >= VON_MISES_KAPPA_MAX_R {
@@ -3254,7 +3254,7 @@ pub(crate) unsafe fn avx2_u64x8_to_vec64(
     }
 }
 
-/// Moves a `&[u64; 8]` word array into two 256-bit YMM registers `(v0, v1)` via [`avx2_u64x8_to_vec64`]
+/// Moves a `&[u64; 8]` word array into two 256-bit YMM registers `(v0, v1)` via `avx2_u64x8_to_vec64`
 /// without triggering a 4-to-1 Store-to-Load Forwarding stall.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
@@ -3267,7 +3267,7 @@ pub(crate) unsafe fn avx2_words64_to_vec64(
 
 /// Moves a `&[u64; 8]` word array into two 256-bit YMM registers `(v0, v1)` using a single
 /// `vpxor` or `vmovq + vpbroadcastq` when `w_is_uniform` is `true` (`1..2` instructions vs `10`
-/// Port-5 inserts), or [`avx2_words64_to_vec64`] when heterogeneous.
+/// Port-5 inserts), or `avx2_words64_to_vec64` when heterogeneous.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 pub(crate) unsafe fn avx2_words64_to_vec64_with_uniform(
@@ -5352,7 +5352,7 @@ pub fn modulate_attention_scores_by_bayesian_trails_64(
 }
 
 /// Accumulates 8 biased `(sin_q14 + 16384, cos_q14 + 16384)` pairs from a single `u64` word `w`
-/// into a single `u64` register using [`Q7_FULL_SINCOS_BIASED_U64_LUT`] in strictly constant time
+/// into a single `u64` register using `Q7_FULL_SINCOS_BIASED_U64_LUT` in strictly constant time
 /// (`0` data-dependent branches).
 #[inline(always)]
 const fn sum_sincos_biased_u64_from_word(w: u64) -> u64 {
@@ -6961,7 +6961,7 @@ pub(crate) const fn eval_geodesic_ripa_sincos_q7_fast(
 /// Evaluates the $SO(2)$-composed $(\sin(\theta_{\mathrm{base}} + \theta_{\mathrm{pspm}}), \cos(\theta_{\mathrm{base}} + \theta_{\mathrm{pspm}}))$
 /// for a single attention head, using two 1-cycle LUT loads when both RIPA clamps equal
 /// [`DEFAULT_RIPA_CLAMP_MAX_RAD`], or summing the two `tanh`-clamped radian angles and evaluating
-/// [`sincos_ripa_poly`] **once** instead of twice when custom RIPA clamps are active.
+/// `sincos_ripa_poly` **once** instead of twice when custom RIPA clamps are active.
 #[inline(always)]
 pub(crate) const fn eval_fused_ripa_pspm_sincos_q7_fast(
     base_q7: gcso_q7_t,
@@ -8078,7 +8078,7 @@ pub(crate) fn dot_f32_unrolled4(a: &[f32], b: &[f32], len: usize) -> f32 {
 
 /// Evaluates the underflow-resilient L2 norm $(\|\mathbf{x}\|_2, \mathrm{is\_finite})$,
 /// pre-detecting subnormal-square risk (`0.0 < |buf[0]| < 1.0e-18`) to bypass x86 subnormal
-/// microcode traps and using AVX2 [`sum_sq_scaled_f32_simd8`] for $2^{64}$ rescue.
+/// microcode traps and using AVX2 `sum_sq_scaled_f32_simd8` for $2^{64}$ rescue.
 #[inline(always)]
 pub(crate) fn norm_l2_underflow_resilient_f32(buf: &[f32]) -> (f32, bool) {
     let len = buf.len();
@@ -8819,7 +8819,7 @@ pub(crate) unsafe fn avx2_rotate_so2_dispatch(
 
 /// Bank-conflict-free 64B cache-line-staged 2-tensor (`Q`, `K`) AVX2 $SO(2)$ 32-float block rotation.
 ///
-/// Rotates the two 64-byte cache lines of `qp` (`+0..+64B` and `+64..+128B`) via [`avx2_rotate_so2_block32`]
+/// Rotates the two 64-byte cache lines of `qp` (`+0..+64B` and `+64..+128B`) via `avx2_rotate_so2_block32`
 /// before rotating `kp` with the same register-resident `(v_cos, v_sin)`. Pairing `p0` (`+0B`, bit 5 = 0)
 /// and `p1` (`+32B`, bit 5 = 1) inside each 64-byte cache line issues dual 256-bit loads to opposite L1D
 /// 32B cache banks rather than colliding `qp` and `kp` at identical 4KB page offsets `(qp ^ kp) & 0xFFF == 0`,

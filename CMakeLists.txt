@@ -1,372 +1,185 @@
 # name: CMakeLists.txt
-
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-
-
 cmake_minimum_required(VERSION 3.18)
-
 project(LiminiKa VERSION 0.1.1 LANGUAGES C CXX)
 
-
-
 # Enforce C11 and C++20 specifications for GCSO C-ABI and Kernel execution
-
 set(CMAKE_C_STANDARD 11)
-
 set(CMAKE_C_STANDARD_REQUIRED ON)
-
-
-
 set(CMAKE_CXX_STANDARD 20)
-
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-
-
 # Enable Position Independent Code (PIC) globally for Rust FFI dynamic/static linking
-
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-
-
-# Default to RelWithDebInfo if no build type is specified (Prevents unoptimized/conflicting flags)
-
+# Default to RelWithDebInfo if no build type is specified
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-
-  set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Choose the type of build." FORCE)
-
+    set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Choose the type of build." FORCE)
 endif()
-
-
 
 # Optional GPU backend compilation switches
-
 option(LIMINIKA_ENABLE_CUDA "Enable CUDA kernel integration" OFF)
-
 option(LIMINIKA_ENABLE_VULKAN "Enable Vulkan compute kernel integration" OFF)
-
 option(LIMINIKA_ENABLE_METAL "Enable Metal compute kernel integration" OFF)
 
-
-
 # Optional CPU SIMD vector extension switches (synchronized with src/core/build.rs & CI)
-
 option(LIMINIKA_ENABLE_AVX2 "Enable AVX2 SIMD instructions" OFF)
-
 option(LIMINIKA_ENABLE_AVX512 "Enable AVX-512 SIMD instructions" OFF)
-
 option(LIMINIKA_ENABLE_NEON "Enable ARM Neon SIMD instructions" OFF)
-
 option(LIMINIKA_ENABLE_SVE "Enable ARM SVE SIMD instructions" OFF)
-
 option(LIMINIKA_ENABLE_RVV "Enable RISC-V Vector SIMD instructions" OFF)
 
-
-
 if(LIMINIKA_ENABLE_METAL AND NOT APPLE)
-
-  message(STATUS "Metal backend is restricted to Apple platforms. Disabling LIMINIKA_ENABLE_METAL.")
-
-  set(LIMINIKA_ENABLE_METAL OFF CACHE BOOL "Enable Metal compute kernel integration" FORCE)
-
+    message(STATUS "Metal backend is restricted to Apple platforms. Disabling LIMINIKA_ENABLE_METAL.")
+    set(LIMINIKA_ENABLE_METAL OFF CACHE BOOL "Enable Metal compute kernel integration" FORCE)
 endif()
-
-
 
 if(LIMINIKA_ENABLE_CUDA)
-
-  enable_language(CUDA OPTIONAL)
-
-  if(CMAKE_CUDA_COMPILER_LOADED)
-
-    set(CMAKE_CUDA_STANDARD 20)
-
-    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-
-    set(CMAKE_CUDA_EXTENSIONS OFF)
-
-  endif()
-
+    enable_language(CUDA OPTIONAL)
+    if(CMAKE_CUDA_COMPILER_LOADED)
+        set(CMAKE_CUDA_STANDARD 20)
+        set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+        set(CMAKE_CUDA_EXTENSIONS OFF)
+    endif()
 endif()
 
-
-
-# Enforce strict compiler warnings, 16MiB main-thread stack size, and SIMD flags without generator expressions
-
+# Enforce strict compiler warnings, 16MiB main-thread stack size, and SIMD flags
 if(MSVC)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W4 /WX /utf-8 /Zc:preprocessor /Zc:inline /wd4324")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4 /WX /utf-8 /permissive- /EHsc /Zc:preprocessor /Zc:inline /wd4324")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /O2")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2")
+    set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} /O2")
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} /O2")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:16777216")
 
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W4 /WX /utf-8 /Zc:preprocessor /Zc:inline /wd4324")
-
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4 /WX /utf-8 /permissive- /EHsc /Zc:preprocessor /Zc:inline /wd4324")
-
-  set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /O2")
-
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2")
-
-  set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} /O2")
-
-  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} /O2")
-
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:16777216")
-
-
-
-  if(CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64|x64")
-
-    if(LIMINIKA_ENABLE_AVX512)
-
-      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /arch:AVX512")
-
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX512")
-
-    elseif(LIMINIKA_ENABLE_AVX2)
-
-      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /arch:AVX2")
-
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX2")
-
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64|x64")
+        if(LIMINIKA_ENABLE_AVX512)
+            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /arch:AVX512")
+            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX512")
+        elseif(LIMINIKA_ENABLE_AVX2)
+            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /arch:AVX2")
+            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX2")
+        endif()
     endif()
-
-  endif()
-
 else()
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror -Wpedantic -Wconversion -Wno-unused-parameter -Wstrict-prototypes")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror -Wpedantic -Wconversion -Wno-unused-parameter")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -fstrict-aliasing")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -fstrict-aliasing")
+    set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} -O3 -fstrict-aliasing")
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -O3 -fstrict-aliasing")
 
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror -Wpedantic -Wconversion -Wno-unused-parameter -Wstrict-prototypes")
-
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror -Wpedantic -Wconversion -Wno-unused-parameter")
-
-  set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -fstrict-aliasing")
-
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -fstrict-aliasing")
-
-  set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} -O3 -fstrict-aliasing")
-
-  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -O3 -fstrict-aliasing")
-
-
-
-  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|x64")
-
-    if(LIMINIKA_ENABLE_AVX512)
-
-      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx512f -mavx512bw -mavx512dq -mavx512vl -mfma")
-
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx512f -mavx512bw -mavx512dq -mavx512vl -mfma")
-
-    elseif(LIMINIKA_ENABLE_AVX2)
-
-      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx2 -mfma")
-
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mfma")
-
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|x64")
+        if(LIMINIKA_ENABLE_AVX512)
+            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx512f -mavx512bw -mavx512dq -mavx512vl -mfma")
+            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx512f -mavx512bw -mavx512dq -mavx512vl -mfma")
+        elseif(LIMINIKA_ENABLE_AVX2)
+            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx2 -mfma")
+            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mfma")
+        endif()
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64" AND LIMINIKA_ENABLE_SVE AND NOT APPLE)
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=armv8-a+sve")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8-a+sve")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "riscv64" AND LIMINIKA_ENABLE_RVV)
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=rv64gcv")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=rv64gcv")
     endif()
-
-  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64" AND LIMINIKA_ENABLE_SVE AND NOT APPLE)
-
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=armv8-a+sve")
-
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8-a+sve")
-
-  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "riscv64" AND LIMINIKA_ENABLE_RVV)
-
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=rv64gcv")
-
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=rv64gcv")
-
-  endif()
-
 endif()
-
-
 
 # Define global header target for LiminiKa C-ABI and propagate SIMD preprocessor definitions
-
 if(NOT TARGET liminika_headers)
-
-  add_library(liminika_headers INTERFACE)
-
-  target_include_directories(liminika_headers INTERFACE
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/include"
-
-  )
-
-  if(LIMINIKA_ENABLE_AVX2)
-
-    target_compile_definitions(liminika_headers INTERFACE LIMINIKA_ENABLE_AVX2=1)
-
-  endif()
-
-  if(LIMINIKA_ENABLE_AVX512)
-
-    target_compile_definitions(liminika_headers INTERFACE LIMINIKA_ENABLE_AVX512=1)
-
-  endif()
-
-  if(LIMINIKA_ENABLE_NEON)
-
-    target_compile_definitions(liminika_headers INTERFACE LIMINIKA_ENABLE_NEON=1)
-
-  endif()
-
-  if(LIMINIKA_ENABLE_SVE)
-
-    target_compile_definitions(liminika_headers INTERFACE LIMINIKA_ENABLE_SVE=1)
-
-  endif()
-
-  if(LIMINIKA_ENABLE_RVV)
-
-    target_compile_definitions(liminika_headers INTERFACE LIMINIKA_ENABLE_RVV=1)
-
-  endif()
-
+    add_library(liminika_headers INTERFACE)
+    target_include_directories(liminika_headers INTERFACE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+    if(LIMINIKA_ENABLE_AVX2)
+        target_compile_definitions(liminika_headers INTERFACE LIMINIKA_ENABLE_AVX2=1)
+    endif()
+    if(LIMINIKA_ENABLE_AVX512)
+        target_compile_definitions(liminika_headers INTERFACE LIMINIKA_ENABLE_AVX512=1)
+    endif()
+    if(LIMINIKA_ENABLE_NEON)
+        target_compile_definitions(liminika_headers INTERFACE LIMINIKA_ENABLE_NEON=1)
+    endif()
+    if(LIMINIKA_ENABLE_SVE)
+        target_compile_definitions(liminika_headers INTERFACE LIMINIKA_ENABLE_SVE=1)
+    endif()
+    if(LIMINIKA_ENABLE_RVV)
+        target_compile_definitions(liminika_headers INTERFACE LIMINIKA_ENABLE_RVV=1)
+    endif()
 endif()
-
-
 
 # Enable CTest and register baseline C-ABI test target
-
 enable_testing()
-
 add_test(NAME liminika_dummy_test COMMAND ${CMAKE_COMMAND} -E true)
 
-
-
 # Include kernels subdirectory if CMakeLists.txt exists
-
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/CMakeLists.txt")
-
-  add_subdirectory(src/kernels)
-
+    add_subdirectory(src/kernels)
 endif()
-
-
 
 # Include examples subdirectory if CMakeLists.txt exists
-
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/CMakeLists.txt")
-
-  add_subdirectory(examples)
-
+    add_subdirectory(examples)
 endif()
-
-
 
 # Include tests subdirectory if CMakeLists.txt exists
-
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
-
-  add_subdirectory(tests)
-
+    add_subdirectory(tests)
 endif()
-
-
 
 # Configure clang-format target for automatic code formatting in CI/local environments
-
 find_program(CLANG_FORMAT_BIN clang-format)
-
 if(CLANG_FORMAT_BIN)
-
-  file(GLOB_RECURSE ALL_CXX_SOURCE_FILES
-
-    CONFIGURE_DEPENDS
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/include/*.inl"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/include/*.c"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cpp"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cc"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cxx"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cu"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cuh"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.metal"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.mm"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.h"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.hpp"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.inl"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.c"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/examples/*.c"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/examples/*.cpp"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/examples/*.cc"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/examples/*.h"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/examples/*.hpp"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cc"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.c"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.h"
-
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.hpp"
-
-  )
-
-
-
-  if(ALL_CXX_SOURCE_FILES)
-
-    add_custom_target(format
-
-      COMMAND ${CLANG_FORMAT_BIN} -i -style=file ${ALL_CXX_SOURCE_FILES}
-
-      COMMENT "Running clang-format on C/C++ source files..."
-
+    file(GLOB_RECURSE ALL_CXX_SOURCE_FILES
+        CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/include/*.inl"
+        "${CMAKE_CURRENT_SOURCE_DIR}/include/*.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cxx"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cu"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cuh"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.metal"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.mm"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.inl"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/examples/*.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/examples/*.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/examples/*.cc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/examples/*.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/examples/*.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.hpp"
     )
 
-    add_custom_target(format-check
-
-      COMMAND ${CLANG_FORMAT_BIN} --dry-run --Werror -style=file ${ALL_CXX_SOURCE_FILES}
-
-      COMMENT "Checking C/C++ code formatting with clang-format..."
-
-    )
-
-  else()
-
-    add_custom_target(format
-
-      COMMAND ${CMAKE_COMMAND} -E echo "No C/C++ source files found for formatting."
-
-      COMMENT "Skipping clang-format (no matching source files)..."
-
-    )
-
-    add_custom_target(format-check
-
-      COMMAND ${CMAKE_COMMAND} -E echo "No C/C++ source files found for formatting check."
-
-      COMMENT "Skipping clang-format check (no matching source files)..."
-
-    )
-
-  endif()
-
+    if(ALL_CXX_SOURCE_FILES)
+        add_custom_target(format
+            COMMAND ${CLANG_FORMAT_BIN} -i -style=file ${ALL_CXX_SOURCE_FILES}
+            COMMENT "Running clang-format on C/C++ source files..."
+        )
+        add_custom_target(format-check
+            COMMAND ${CLANG_FORMAT_BIN} --dry-run --Werror -style=file ${ALL_CXX_SOURCE_FILES}
+            COMMENT "Checking C/C++ code formatting with clang-format..."
+        )
+    else()
+        add_custom_target(format
+            COMMAND ${CMAKE_COMMAND} -E echo "No C/C++ source files found for formatting."
+            COMMENT "Skipping clang-format (no matching source files)..."
+        )
+        add_custom_target(format-check
+            COMMAND ${CMAKE_COMMAND} -E echo "No C/C++ source files found for formatting check."
+            COMMENT "Skipping clang-format check (no matching source files)..."
+        )
+    endif()
 endif()
-
