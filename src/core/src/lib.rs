@@ -58,6 +58,8 @@
 #![allow(clippy::if_same_then_else)]
 #![allow(clippy::ifs_same_cond)]
 #![allow(clippy::field_reassign_with_default)]
+#![allow(clippy::undocumented_unsafe_blocks)]
+#![allow(clippy::needless_return)]
 
 #[cfg(feature = "std")]
 extern crate std;

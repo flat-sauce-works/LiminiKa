@@ -57,7 +57,7 @@ if(MSVC)
     $<$<COMPILE_LANGUAGE:C,CXX>:/Zc:preprocessor>
     $<$<COMPILE_LANGUAGE:C,CXX>:/Zc:inline>
     $<$<COMPILE_LANGUAGE:C,CXX>:/wd4324>
-    $<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<OR:$CONFIG:Release,$CONFIG:RelWithDebInfo>>:/O2>
+    $<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>>:/O2>
   )
 else()
   add_compile_options(
@@ -68,8 +68,8 @@ else()
     $<$<COMPILE_LANGUAGE:C,CXX>:-Wconversion>
     $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-unused-parameter>
     $<$<COMPILE_LANGUAGE:C>:-Wstrict-prototypes>
-    $<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<OR:$CONFIG:Release,$CONFIG:RelWithDebInfo>>:-O3>
-    $<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<OR:$CONFIG:Release,$CONFIG:RelWithDebInfo>>:-fstrict-aliasing>
+    $<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>>:-O3>
+    $<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>>:-fstrict-aliasing>
   )
 endif()
 

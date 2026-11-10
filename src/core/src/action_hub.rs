@@ -1770,7 +1770,7 @@ mod tests {
         let mut logits = AlignedBuffer32::new([2.0f32; 8]);
         let mut scores = AlignedBuffer32::new([0.0f32; 8]);
         let mut active_trail = gcso_pointer_trail_t {
-            stigmergic_density: 1.6,
+            stigmergic_density: 1.2,
             accumulated_phase_delta: [24i8; MAX_ATTENTION_HEADS],
             ..Default::default()
         };
