@@ -17,7 +17,7 @@
 // ===================================================================
 #ifdef __cplusplus
     #define GCSO_EXTERN_C_BEGIN extern "C" {
-    #define GCSO_EXTERN_C_END   }
+    #define GCSO_EXTERN_C_END }
 #else
     #define GCSO_EXTERN_C_BEGIN
     #define GCSO_EXTERN_C_END
@@ -146,10 +146,10 @@
 
 /* Branch prediction likelihood annotations */
 #if defined(__GNUC__) || defined(__clang__)
-    #define GCSO_LIKELY(x)   __builtin_expect(!!(x), 1)
+    #define GCSO_LIKELY(x) __builtin_expect(!!(x), 1)
     #define GCSO_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #else
-    #define GCSO_LIKELY(x)   (x)
+    #define GCSO_LIKELY(x) (x)
     #define GCSO_UNLIKELY(x) (x)
 #endif
 
@@ -213,11 +213,14 @@
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
     #define GCSO_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
 #elif defined(_MSC_VER)
-    #define GCSO_STATIC_ASSERT(cond, msg) typedef char gcso_static_assert_##__LINE__[(cond) ? 1 : -1]
+    #define GCSO_STATIC_ASSERT(cond, msg) \
+        typedef char gcso_static_assert_##__LINE__[(cond) ? 1 : -1]
 #elif defined(__GNUC__) || defined(__clang__)
-    #define GCSO_STATIC_ASSERT(cond, msg) typedef char gcso_static_assert_##__LINE__[(cond) ? 1 : -1] __attribute__((unused))
+    #define GCSO_STATIC_ASSERT(cond, msg) \
+        typedef char gcso_static_assert_##__LINE__[(cond) ? 1 : -1] __attribute__((unused))
 #else
-    #define GCSO_STATIC_ASSERT(cond, msg) typedef char gcso_static_assert_##__LINE__[(cond) ? 1 : -1]
+    #define GCSO_STATIC_ASSERT(cond, msg) \
+        typedef char gcso_static_assert_##__LINE__[(cond) ? 1 : -1]
 #endif
 
 #endif /* LIMINIKA_GCSO_CONFIG_H */

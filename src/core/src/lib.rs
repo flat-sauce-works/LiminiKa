@@ -99,14 +99,6 @@ pub mod zimms;
 // Primary Re-exports for Ergonomics & Ground Truth Alignment
 // ===================================================================
 
-pub use crate::action_hub::{
-    ActionHubEngine, ActionOrchestrationReport, StigmergicActionDecision, StigmergicThresholds,
-    ACTION_HUB_INLINE_TRAILS, DEFAULT_STIGMERGIC_CONTRADICTION_THRESH,
-    DEFAULT_STIGMERGIC_CRYSTALLIZE_THRESH, DEFAULT_STIGMERGIC_EVAPORATION_RETAIN,
-    DEFAULT_STIGMERGIC_EXPRESS_STEER_THRESH, DEFAULT_STIGMERGIC_INERTIAL_SKIP_ENTROPY,
-    DEFAULT_STIGMERGIC_PSPM_ROUTE_THRESH, DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN,
-    DEFAULT_STIGMERGIC_SRL_INJECT_THRESH,
-};
 pub use crate::abi::{
     gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_daes_slot_t,
     gcso_descriptor_header_t, gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
@@ -114,6 +106,14 @@ pub use crate::abi::{
     gcso_srl_descriptor_t, gcso_status_t, gcso_tagged_ptr_t, gcso_zimms_descriptor_t,
     GcsoAnchorType, GcsoStatus, GCSO_CAP_CPU_BASELINE, GCSO_CAP_CUDA_BACKEND,
     GCSO_CAP_METAL_BACKEND, GCSO_CAP_VULKAN_BACKEND, GCSO_SUCCESS,
+};
+pub use crate::action_hub::{
+    ActionHubEngine, ActionOrchestrationReport, StigmergicActionDecision, StigmergicThresholds,
+    ACTION_HUB_INLINE_TRAILS, DEFAULT_STIGMERGIC_CONTRADICTION_THRESH,
+    DEFAULT_STIGMERGIC_CRYSTALLIZE_THRESH, DEFAULT_STIGMERGIC_EVAPORATION_RETAIN,
+    DEFAULT_STIGMERGIC_EXPRESS_STEER_THRESH, DEFAULT_STIGMERGIC_INERTIAL_SKIP_ENTROPY,
+    DEFAULT_STIGMERGIC_PSPM_ROUTE_THRESH, DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN,
+    DEFAULT_STIGMERGIC_SRL_INJECT_THRESH,
 };
 
 pub use crate::attractor::{
@@ -152,16 +152,15 @@ pub use crate::traits::{
     ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
     ATTRACTOR_SLOT_CUSTOM_5, ATTRACTOR_SLOT_CUSTOM_6, ATTRACTOR_SLOT_CUSTOM_7,
     ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
-    ATTRACTOR_SLOT_SYSTEM_BASELINE, ATTRACTOR_SLOT_USER_CONTEXT,
-    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
-    CAUSAL_AXIS_SYSTEM_CONSTRAINT, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
-    CAUSAL_CAUSE_COHOMOLOGY_REPULSION, CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK,
-    CAUSAL_CAUSE_PERSONA_FACT_COLLISION, CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE,
-    DEFAULT_FACT_RIPA_CLAMP_RAD, DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
-    DEFAULT_PERSONA_FACT_COLLISION_THRESH, DEFAULT_PERSONA_RIPA_CLAMP_RAD,
-    DEFAULT_SLOT_COUPLING_MATRIX_8X8, DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
-    DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, GCSO_CRYSTAL_RECORD_MAGIC,
-    GCSO_CRYSTAL_RECORD_VERSION, GCSO_FOUR_SECTION_HEADER_BYTES,
+    ATTRACTOR_SLOT_SYSTEM_BASELINE, ATTRACTOR_SLOT_USER_CONTEXT, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA, CAUSAL_AXIS_SYSTEM_CONSTRAINT,
+    CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
+    CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, CAUSAL_CAUSE_PERSONA_FACT_COLLISION,
+    CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, DEFAULT_FACT_RIPA_CLAMP_RAD,
+    DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO, DEFAULT_PERSONA_FACT_COLLISION_THRESH,
+    DEFAULT_PERSONA_RIPA_CLAMP_RAD, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+    DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
+    GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION, GCSO_FOUR_SECTION_HEADER_BYTES,
     GCSO_ZIMMS_DESCRIPTOR_PREAMBLE_OFFSET, ROOT_CAUSE_COHOMOLOGY_REPULSION,
     ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_PERSONA_FACT_COLLISION,
     ROOT_CAUSE_SYSTEM_QOS_THROTTLE, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_DPSR_ACTIVE,
@@ -173,10 +172,10 @@ use crate::traits::branchless::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
     branchless_max_f32, branchless_min_f32, branchless_q7_add_sat, branchless_q7_conjugate_64,
     branchless_q7_inhibit_words_64, branchless_relu_f32, branchless_select_f32,
-    branchless_select_u32, branchless_select_u8, coherence_from_word_arrays_with_both_uniform_flags_64,
-    fast_inv_pos_normal_f32, is_phase_profile_nonzero_64,
-    load_q7_words_64, store_q7_words_64, swar_q7_add_sat_x8, swar_slerp_words_with_uniform_flag_64,
-    trail_phase_words_mut, trail_phase_words_ref,
+    branchless_select_u32, branchless_select_u8,
+    coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_pos_normal_f32,
+    is_phase_profile_nonzero_64, load_q7_words_64, store_q7_words_64, swar_q7_add_sat_x8,
+    swar_slerp_words_with_uniform_flag_64, trail_phase_words_mut, trail_phase_words_ref,
 };
 use crate::traits::primitives::{
     finalize_snapshot_header_crc32, init_snapshot_header, verify_snapshot_payload_crc32,
@@ -723,14 +722,21 @@ impl RuntimeContext {
     /// Returns an immutable reference to the 64-byte (`8 x u64`) aligned word view of slot `slot_idx`.
     #[allow(dead_code)]
     #[inline(always)]
-    fn slot_words_ref(&self, slot_idx: usize) -> Result<&[u64; crate::traits::NUM_SWARM_MICRO_CELLS]> {
+    fn slot_words_ref(
+        &self,
+        slot_idx: usize,
+    ) -> Result<&[u64; crate::traits::NUM_SWARM_MICRO_CELLS]> {
         if slot_idx >= MAX_ATTRACTOR_DOMAINS {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
         // SAFETY: `self.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every 64-byte slot
         // at byte offset `slot_idx * 64` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
         Ok(unsafe {
-            &*(self.slot_phase_bank.as_slice().as_ptr().add(slot_idx * MAX_ATTENTION_HEADS)
+            &*(self
+                .slot_phase_bank
+                .as_slice()
+                .as_ptr()
+                .add(slot_idx * MAX_ATTENTION_HEADS)
                 as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
         })
     }
@@ -835,11 +841,7 @@ impl RuntimeContext {
             q.ensure_disjoint_mut(k)?;
         }
 
-        match (
-            query_tensor,
-            key_tensor,
-            phase_deltas,
-        ) {
+        match (query_tensor, key_tensor, phase_deltas) {
             (Some(q), Some(k), Some(p)) => {
                 self.dpsr.apply_phase_steering_fused(q, k, p)?;
             }
@@ -1089,7 +1091,8 @@ impl RuntimeContext {
             Some(&*query_tensor),
             key_tensor.as_deref(),
         )?;
-        let (bypass_hit, eff_ptr) = self.resolve_or_pass_tagged_ptr(&mut daes_local, input_tagged_ptr);
+        let (bypass_hit, eff_ptr) =
+            self.resolve_or_pass_tagged_ptr(&mut daes_local, input_tagged_ptr);
         self.step_pointer(eff_ptr.raw(), trail_out)?;
         let (density, repulsion_active) = self.bloom_filter.apply_phase_conjugate_repulsion_words(
             trail_phase_words_mut(trail_out),
@@ -1201,7 +1204,8 @@ impl RuntimeContext {
             Some(&*query_tensor),
             key_tensor.as_deref(),
         )?;
-        let (bypass_hit, eff_ptr) = self.resolve_or_pass_tagged_ptr(&mut daes_local, input_tagged_ptr);
+        let (bypass_hit, eff_ptr) =
+            self.resolve_or_pass_tagged_ptr(&mut daes_local, input_tagged_ptr);
         self.step_pointer(eff_ptr.raw(), trail_out)?;
 
         let bank_slice = self.slot_phase_bank.relax_slice::<16>();
@@ -1917,13 +1921,15 @@ impl MultiDomainAttractorSpace for RuntimeContext {
                 if idx != rep_idx {
                     let enabled = ((self.slot_enabled_mask >> idx) & 1) != 0;
                     if enabled {
-                        let base_e =
-                            branchless_flush_subnormal_f32(branchless_relu_f32(self.slot_weights[idx]));
+                        let base_e = branchless_flush_subnormal_f32(branchless_relu_f32(
+                            self.slot_weights[idx],
+                        ));
                         if base_e > 1.0e-12 {
                             // SAFETY: `self.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
                             // 64-byte row `bank_2d[idx]` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
                             let slot_w = unsafe {
-                                &*(bank_2d[idx].as_ptr() as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
+                                &*(bank_2d[idx].as_ptr()
+                                    as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
                             };
                             let slot_is_uniform = crate::traits::is_word_array_uniform_64(slot_w);
                             if (!slot_is_uniform) | (slot_w[0] != 0) {
@@ -1950,17 +1956,16 @@ impl MultiDomainAttractorSpace for RuntimeContext {
                                         128.0,
                                     );
                                     let s = (ratio_f32 as u8) as u64;
-                                    let bias_restore =
-                                        (128u64.wrapping_sub(s)).wrapping_mul(0x0101_0101_0101_0101);
-                                    let (next_w, next_uni) =
-                                        swar_slerp_words_with_uniform_flag_64(
-                                            &run_w,
-                                            run_is_uniform,
-                                            slot_w,
-                                            slot_is_uniform,
-                                            s,
-                                            bias_restore,
-                                        );
+                                    let bias_restore = (128u64.wrapping_sub(s))
+                                        .wrapping_mul(0x0101_0101_0101_0101);
+                                    let (next_w, next_uni) = swar_slerp_words_with_uniform_flag_64(
+                                        &run_w,
+                                        run_is_uniform,
+                                        slot_w,
+                                        slot_is_uniform,
+                                        s,
+                                        bias_restore,
+                                    );
                                     run_w = next_w;
                                     run_is_uniform = next_uni;
                                 }
@@ -1976,7 +1981,8 @@ impl MultiDomainAttractorSpace for RuntimeContext {
             if rep_enabled {
                 // SAFETY: `bank_2d[rep_idx]` is 64-byte aligned.
                 let rep_words = unsafe {
-                    &*(bank_2d[rep_idx].as_ptr() as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
+                    &*(bank_2d[rep_idx].as_ptr()
+                        as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
                 };
                 if crate::traits::swar_words_nonzero_64(rep_words) {
                     let rep_strength = branchless_clamp_f32(
@@ -2020,8 +2026,11 @@ impl PersonaPatcher for RuntimeContext {
         if patch_data.len() >= MAX_ATTENTION_HEADS {
             // SAFETY: `patch_data.len() >= 64` and `[u8; 64]` has the exact same layout and
             // alignment (1) as `[gcso_q7_t; 64]` (`[i8; 64]`).
-            let patch_ref: &[gcso_q7_t; MAX_ATTENTION_HEADS] =
-                unsafe { &*patch_data.as_ptr().cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>() };
+            let patch_ref: &[gcso_q7_t; MAX_ATTENTION_HEADS] = unsafe {
+                &*patch_data
+                    .as_ptr()
+                    .cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>()
+            };
             let pw = load_q7_words_64(patch_ref);
             let sw = self.slot_words_mut(usize::from(ATTRACTOR_SLOT_PERSONA))?;
             sw[0] = swar_q7_add_sat_x8(sw[0], pw[0]);
@@ -2034,8 +2043,8 @@ impl PersonaPatcher for RuntimeContext {
             sw[7] = swar_q7_add_sat_x8(sw[7], pw[7]);
         } else {
             let mut bank_mut = self.slot_phase_bank.as_aligned_slice_mut();
-            let persona_slot =
-                bank_mut.slot_exact_mut::<MAX_ATTENTION_HEADS>(usize::from(ATTRACTOR_SLOT_PERSONA))?;
+            let persona_slot = bank_mut
+                .slot_exact_mut::<MAX_ATTENTION_HEADS>(usize::from(ATTRACTOR_SLOT_PERSONA))?;
             for (h, slot_p) in persona_slot.iter_mut().enumerate() {
                 let delta = patch_data[h % patch_data.len()] as gcso_q7_t;
                 *slot_p = branchless_q7_add_sat(*slot_p, delta);
@@ -2196,6 +2205,10 @@ pub mod prelude {
         gcso_srl_descriptor_t, gcso_status_t, gcso_tagged_ptr_t, gcso_zimms_descriptor_t,
         GcsoAnchorType, GcsoStatus, GCSO_ABI_VERSION_HEX, GCSO_ABI_VERSION_STRING, GCSO_SUCCESS,
     };
+    pub use crate::action_hub::{
+        ActionHubEngine, ActionOrchestrationReport, StigmergicActionDecision, StigmergicThresholds,
+        ACTION_HUB_INLINE_TRAILS,
+    };
     pub use crate::attractor::{
         AttractorAnchor, AttractorFieldEngine, AttractorGrowthCoordinator, AttractorGrowthReport,
         AttractorGrowthSnapshot, CrystallizedAnchorRecord, DomainAccumulatorSummary,
@@ -2203,10 +2216,6 @@ pub mod prelude {
         DOMAIN_CUSTOM_6, DOMAIN_CUSTOM_7, DOMAIN_KNOWLEDGE, DOMAIN_PERSONA, DOMAIN_PHASE_REPULSION,
         DOMAIN_SYSTEM_BASELINE, DOMAIN_USER_INTERACTION, MAX_ANCHORS_PER_FIELD,
         MAX_ATTRACTOR_DOMAINS, MAX_EMBEDDING_DIM,
-    };
-    pub use crate::action_hub::{
-        ActionHubEngine, ActionOrchestrationReport, StigmergicActionDecision, StigmergicThresholds,
-        ACTION_HUB_INLINE_TRAILS,
     };
     pub use crate::dpsr::{DpsrClosedLoopSteering, DpsrEngine};
     pub use crate::edbc::{EdbcClosedLoopCoordinator, EdbcEngine};
@@ -2335,9 +2344,7 @@ mod tests {
         assert_eq!(ctx.step_counter(), 1);
         assert_eq!(ctx.anchor_count(), 1);
         assert_eq!(ctx.slot_enabled_mask(), 0x7F);
-        assert!(
-            (ctx.slot_weights()[usize::from(ATTRACTOR_SLOT_PERSONA)] - 2.5).abs() < 1e-5
-        );
+        assert!((ctx.slot_weights()[usize::from(ATTRACTOR_SLOT_PERSONA)] - 2.5).abs() < 1e-5);
 
         // Verify IEEE 802.3 CRC32 payload tamper detection
         buffer[200] ^= 0xFF;

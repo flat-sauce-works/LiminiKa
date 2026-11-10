@@ -20,7 +20,8 @@ GCSO_EXTERN_C_BEGIN
 // ===================================================================
 
 /**
- * @brief Allocates an Action Hub (Sidecar Pointer Table - SPT) instance using strongly-typed handles.
+ * @brief Allocates an Action Hub (Sidecar Pointer Table - SPT) instance using strongly-typed
+ * handles.
  *
  * Cold Path Execution: Uses gcso_aligned_new for 32-byte alignment.
  *
@@ -29,9 +30,7 @@ GCSO_EXTERN_C_BEGIN
  * @return GCSO_SUCCESS or appropriate error code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_create(
-    uint32_t capacity,
-    gcso_action_hub_handle_t* GCSO_RESTRICT hub_out
-) GCSO_NOEXCEPT {
+    uint32_t capacity, gcso_action_hub_handle_t* GCSO_RESTRICT hub_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(hub_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -39,7 +38,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_create(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(hub_out) % alignof(gcso_action_hub_handle_t) != 0)) {
+        if (GCSO_UNLIKELY(
+                reinterpret_cast<uintptr_t>(hub_out) % alignof(gcso_action_hub_handle_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
@@ -70,17 +70,16 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_create(
  * @param trail_out Pointer to receive updated 128-byte pointer trail structure.
  * @return GCSO_SUCCESS or error status code.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_step_pointer(
-    gcso_context_handle_t context,
-    uint64_t current_ptr,
-    gcso_pointer_trail_t* GCSO_RESTRICT trail_out
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_action_hub_step_pointer(gcso_context_handle_t context, uint64_t current_ptr,
+                             gcso_pointer_trail_t* GCSO_RESTRICT trail_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(context == nullptr || trail_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
-                          reinterpret_cast<uintptr_t>(trail_out) % alignof(gcso_pointer_trail_t) != 0)) {
+        if (GCSO_UNLIKELY(
+                reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
+                reinterpret_cast<uintptr_t>(trail_out) % alignof(gcso_pointer_trail_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
@@ -103,7 +102,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_step_pointer(
         trail_out->linked_trail_id = 0;
         trail_out->attractor_pull_force = 0.0f;
         trail_out->flags = 0;
-        std::memcpy(trail_out->accumulated_phase_delta, context->accumulated_phase, sizeof(context->accumulated_phase));
+        std::memcpy(trail_out->accumulated_phase_delta, context->accumulated_phase,
+                    sizeof(context->accumulated_phase));
         std::memset(trail_out->reserved_padding, 0, sizeof(trail_out->reserved_padding));
 
         return GCSO_SUCCESS;
@@ -121,9 +121,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_step_pointer(
  * @param ptr Raw 64-bit pointer address.
  * @return 8-bit hash index (0 to 255).
  */
-GCSO_API uint32_t GCSO_CALL gcso_action_hub_hash_slot256_index(
-    uint64_t ptr
-) GCSO_NOEXCEPT {
+GCSO_API uint32_t GCSO_CALL gcso_action_hub_hash_slot256_index(uint64_t ptr) GCSO_NOEXCEPT {
     uint64_t x = ptr;
     x ^= x >> 30;
     x *= 0xbf58476d1ce4e5b9ULL;
@@ -142,10 +140,8 @@ GCSO_API uint32_t GCSO_CALL gcso_action_hub_hash_slot256_index(
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_swarm_cell_chunk_step(
-    gcso_context_handle_t context,
-    const gcso_paged_bitmask_t* GCSO_RESTRICT mask,
-    uint32_t chunk_len
-) GCSO_NOEXCEPT {
+    gcso_context_handle_t context, const gcso_paged_bitmask_t* GCSO_RESTRICT mask,
+    uint32_t chunk_len) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(context == nullptr || mask == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -153,7 +149,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_swarm_cell_chunk_step(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) !=
+                              0 ||
                           reinterpret_cast<uintptr_t>(mask) % alignof(gcso_paged_bitmask_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
@@ -181,12 +178,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_swarm_cell_chunk_step(
  * @param pull_force Floating-point pull force scale factor.
  * @return GCSO_SUCCESS or error status code.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_pull_trail_to_attractor(
-    gcso_context_handle_t context,
-    uint32_t trail_id,
-    uint32_t anchor_id,
-    float pull_force
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_action_hub_pull_trail_to_attractor(gcso_context_handle_t context, uint32_t trail_id,
+                                        uint32_t anchor_id, float pull_force) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(context == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -194,7 +188,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_pull_trail_to_attractor(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0)) {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) !=
+                          0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
         if (GCSO_UNLIKELY(!context->is_initialized)) {
@@ -223,15 +218,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_pull_trail_to_attractor(
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_link_hallucinated_trails(
-    gcso_context_handle_t context,
-    uint32_t src_trail_id,
-    uint32_t dst_trail_id
-) GCSO_NOEXCEPT {
+    gcso_context_handle_t context, uint32_t src_trail_id, uint32_t dst_trail_id) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(context == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0)) {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) !=
+                          0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
         if (GCSO_UNLIKELY(!context->is_initialized)) {
@@ -248,9 +241,11 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_link_hallucinated_trails(
 }
 
 /**
- * @brief Performs hierarchical bit-tree reduction across paged block bitmasks in O(1) time per mask.
+ * @brief Performs hierarchical bit-tree reduction across paged block bitmasks in O(1) time per
+ * mask.
  *
- * Uses single-instruction 256-bit AVX2 vector AND (_mm256_and_si256) when compiled with AVX2 support.
+ * Uses single-instruction 256-bit AVX2 vector AND (_mm256_and_si256) when compiled with AVX2
+ * support.
  *
  * @param bitmasks Array of input paged bitmasks (32-byte aligned).
  * @param num_masks Number of masks in input array.
@@ -258,10 +253,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_link_hallucinated_trails(
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_reduce_bit_tree(
-    const gcso_paged_bitmask_t* GCSO_RESTRICT bitmasks,
-    size_t num_masks,
-    gcso_paged_bitmask_t* GCSO_RESTRICT reduced_out
-) GCSO_NOEXCEPT {
+    const gcso_paged_bitmask_t* GCSO_RESTRICT bitmasks, size_t num_masks,
+    gcso_paged_bitmask_t* GCSO_RESTRICT reduced_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(bitmasks == nullptr || reduced_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -269,8 +262,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_reduce_bit_tree(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(bitmasks) % alignof(gcso_paged_bitmask_t) != 0 ||
-                          reinterpret_cast<uintptr_t>(reduced_out) % alignof(gcso_paged_bitmask_t) != 0)) {
+        if (GCSO_UNLIKELY(
+                reinterpret_cast<uintptr_t>(bitmasks) % alignof(gcso_paged_bitmask_t) != 0 ||
+                reinterpret_cast<uintptr_t>(reduced_out) % alignof(gcso_paged_bitmask_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
@@ -311,10 +305,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_reduce_bit_tree(
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_paged_block_warp_bitmask(
-    const uint64_t* GCSO_RESTRICT kv_bits,
-    size_t num_blocks,
-    gcso_paged_bitmask_t* GCSO_RESTRICT mask_out
-) GCSO_NOEXCEPT {
+    const uint64_t* GCSO_RESTRICT kv_bits, size_t num_blocks,
+    gcso_paged_bitmask_t* GCSO_RESTRICT mask_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(kv_bits == nullptr || mask_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -323,7 +315,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_paged_block_warp_bitmask(
     }
     try {
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(kv_bits) % alignof(uint64_t) != 0 ||
-                          reinterpret_cast<uintptr_t>(mask_out) % alignof(gcso_paged_bitmask_t) != 0)) {
+                          reinterpret_cast<uintptr_t>(mask_out) % alignof(gcso_paged_bitmask_t) !=
+                              0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
@@ -355,9 +348,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_paged_block_warp_bitmask(
  * @param hub Action hub handle to destroy (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_destroy(
-    gcso_action_hub_handle_t hub
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_destroy(gcso_action_hub_handle_t hub)
+    GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(hub == nullptr)) {
         return GCSO_SUCCESS;
     }
@@ -382,14 +374,14 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_destroy(
  * @param slot_out Pointer to receive allocated DAES slot handle.
  * @return GCSO_SUCCESS or error status code.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_daes_slot_create(
-    gcso_daes_slot_handle_t* GCSO_RESTRICT slot_out
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_daes_slot_create(gcso_daes_slot_handle_t* GCSO_RESTRICT slot_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(slot_out) % alignof(gcso_daes_slot_handle_t) != 0)) {
+        if (GCSO_UNLIKELY(
+                reinterpret_cast<uintptr_t>(slot_out) % alignof(gcso_daes_slot_handle_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
@@ -412,9 +404,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_slot_create(
  * @param slot Target DAES slot structure pointer to reset (64-byte aligned).
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER / GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_daes_reset_telemetry(
-    gcso_daes_slot_t* GCSO_RESTRICT slot
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL gcso_daes_reset_telemetry(gcso_daes_slot_t* GCSO_RESTRICT slot)
+    GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -437,18 +428,17 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_reset_telemetry(
  * @brief Executes O(1) fast-path shortcut lookup in DAES dynamic scratchpad.
  *
  * Mode Check: Operates in Mode 0 (Fast-Path & Telemetry Scratchpad Mode).
- * Calculates hash slot index from input key across the 4 shortcut registers in the DAES 64B cacheline slot.
+ * Calculates hash slot index from input key across the 4 shortcut registers in the DAES 64B
+ * cacheline slot.
  *
  * @param slot Pointer to DAES slot structure.
  * @param input_key Raw key address to look up.
  * @param shortcut_out Pointer to store bypassed address result.
  * @return GCSO_SUCCESS or GCSO_ERROR_INVALID_STATE.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_daes_fast_path_lookup(
-    const gcso_daes_slot_t* GCSO_RESTRICT slot,
-    uint64_t input_key,
-    uint64_t* GCSO_RESTRICT shortcut_out
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_daes_fast_path_lookup(const gcso_daes_slot_t* GCSO_RESTRICT slot, uint64_t input_key,
+                           uint64_t* GCSO_RESTRICT shortcut_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot == nullptr || shortcut_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -478,10 +468,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_fast_path_lookup(
  * @param metric_code Metric identifier byte code.
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_daes_telemetry_push(
-    gcso_daes_slot_t* GCSO_RESTRICT slot,
-    uint8_t metric_code
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL gcso_daes_telemetry_push(gcso_daes_slot_t* GCSO_RESTRICT slot,
+                                                          uint8_t metric_code) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -505,10 +493,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_telemetry_push(
  * @param mode Desired mode index (0, 1, or 2).
  * @return GCSO_SUCCESS or GCSO_ERROR_INVALID_ARGUMENT.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_daes_set_mode(
-    gcso_daes_slot_t* GCSO_RESTRICT slot,
-    uint32_t mode
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL gcso_daes_set_mode(gcso_daes_slot_t* GCSO_RESTRICT slot,
+                                                    uint32_t mode) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -527,7 +513,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_set_mode(
 }
 
 /**
- * @brief Evaluates telemetry ledger to auto-tune PSPM routing ratios, RIPA bounds & EDBC thresholds.
+ * @brief Evaluates telemetry ledger to auto-tune PSPM routing ratios, RIPA bounds & EDBC
+ * thresholds.
  *
  * Self-Optimization Loop: Analyzes cache hit counts from DAES scratchpad to adaptively adjust
  * minimum QDPS step thresholds and maximum RIPA clamp bounds in runtime config.
@@ -536,10 +523,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_set_mode(
  * @param config_out Pointer to receive updated auto-tuned configuration structure.
  * @return GCSO_SUCCESS or error code.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_daes_evaluate_auto_tune(
-    const gcso_daes_slot_t* GCSO_RESTRICT slot,
-    gcso_config_t* GCSO_RESTRICT config_out
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_daes_evaluate_auto_tune(const gcso_daes_slot_t* GCSO_RESTRICT slot,
+                             gcso_config_t* GCSO_RESTRICT config_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot == nullptr || config_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -576,9 +562,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_evaluate_auto_tune(
  * @param slot Handle to DAES slot instance (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_daes_slot_destroy(
-    gcso_daes_slot_handle_t slot
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL gcso_daes_slot_destroy(gcso_daes_slot_handle_t slot)
+    GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot == nullptr)) {
         return GCSO_SUCCESS;
     }

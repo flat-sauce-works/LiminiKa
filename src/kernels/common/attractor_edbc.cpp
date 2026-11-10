@@ -27,14 +27,15 @@ GCSO_EXTERN_C_BEGIN
  * @param field_out Pointer to receive allocated field handle.
  * @return GCSO_SUCCESS or appropriate error code.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_create(
-    gcso_attractor_field_handle_t* GCSO_RESTRICT field_out
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_attractor_field_create(gcso_attractor_field_handle_t* GCSO_RESTRICT field_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(field_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(field_out) % alignof(gcso_attractor_field_handle_t) != 0)) {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(field_out) %
+                              alignof(gcso_attractor_field_handle_t) !=
+                          0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
@@ -64,20 +65,18 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_create(
  * @return GCSO_SUCCESS or appropriate error code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_anchor(
-    gcso_context_handle_t context,
-    gcso_anchor_type_t anchor_type,
-    const float* GCSO_RESTRICT vec,
-    size_t dim,
-    uint32_t* GCSO_RESTRICT anchor_id_out
-) GCSO_NOEXCEPT {
+    gcso_context_handle_t context, gcso_anchor_type_t anchor_type, const float* GCSO_RESTRICT vec,
+    size_t dim, uint32_t* GCSO_RESTRICT anchor_id_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(context == nullptr || vec == nullptr || anchor_id_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
-    if (GCSO_UNLIKELY(dim == 0 || static_cast<uint32_t>(anchor_type) > static_cast<uint32_t>(GCSO_ANCHOR_TYPE_CRYSTALLIZED))) {
+    if (GCSO_UNLIKELY(dim == 0 || static_cast<uint32_t>(anchor_type) >
+                                      static_cast<uint32_t>(GCSO_ANCHOR_TYPE_CRYSTALLIZED))) {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) !=
+                              0 ||
                           reinterpret_cast<uintptr_t>(vec) % 32 != 0 ||
                           reinterpret_cast<uintptr_t>(anchor_id_out) % alignof(uint32_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
@@ -104,11 +103,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_anchor(
  * @return GCSO_SUCCESS or appropriate error code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_system_prompt_anchor(
-    gcso_context_handle_t context,
-    const char* GCSO_RESTRICT prompt_text,
-    float weight,
-    uint32_t* GCSO_RESTRICT anchor_id_out
-) GCSO_NOEXCEPT {
+    gcso_context_handle_t context, const char* GCSO_RESTRICT prompt_text, float weight,
+    uint32_t* GCSO_RESTRICT anchor_id_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(context == nullptr || prompt_text == nullptr || anchor_id_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -116,7 +112,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_system_prompt_anchor(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) !=
+                              0 ||
                           reinterpret_cast<uintptr_t>(anchor_id_out) % alignof(uint32_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
@@ -143,12 +140,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_system_prompt_anchor(
  * @return GCSO_SUCCESS or appropriate error code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_embedding_anchor(
-    gcso_context_handle_t context,
-    const float* GCSO_RESTRICT embedding,
-    size_t dim,
-    float weight,
-    uint32_t* GCSO_RESTRICT anchor_id_out
-) GCSO_NOEXCEPT {
+    gcso_context_handle_t context, const float* GCSO_RESTRICT embedding, size_t dim, float weight,
+    uint32_t* GCSO_RESTRICT anchor_id_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(context == nullptr || embedding == nullptr || anchor_id_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -156,7 +149,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_embedding_anchor(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) !=
+                              0 ||
                           reinterpret_cast<uintptr_t>(embedding) % 32 != 0 ||
                           reinterpret_cast<uintptr_t>(anchor_id_out) % alignof(uint32_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
@@ -174,7 +168,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_embedding_anchor(
 }
 
 /**
- * @brief Injects phase-conjugate repulsion vector (-dTheta) to flip spurious local minima into repulsive peaks.
+ * @brief Injects phase-conjugate repulsion vector (-dTheta) to flip spurious local minima into
+ * repulsive peaks.
  *
  * Uses explicit std::round before clamping to preserve Q7 fixed-point quantization accuracy.
  *
@@ -185,11 +180,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_embedding_anchor(
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_inject_phase_repulsion(
-    gcso_context_handle_t context,
-    const gcso_q7_t* GCSO_RESTRICT repulsion_deltas,
-    size_t num_heads,
-    float gain
-) GCSO_NOEXCEPT {
+    gcso_context_handle_t context, const gcso_q7_t* GCSO_RESTRICT repulsion_deltas,
+    size_t num_heads, float gain) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(context == nullptr || repulsion_deltas == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -197,8 +189,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_inject_phase_repulsion(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
-                          reinterpret_cast<uintptr_t>(repulsion_deltas) % alignof(gcso_q7_t) != 0)) {
+        if (GCSO_UNLIKELY(
+                reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
+                reinterpret_cast<uintptr_t>(repulsion_deltas) % alignof(gcso_q7_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
         const size_t apply_heads = std::min(num_heads, static_cast<size_t>(64));
@@ -224,15 +217,14 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_inject_phase_repulsion(
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_aggregate_bottom_up(
-    gcso_context_handle_t context,
-    uint32_t* GCSO_RESTRICT new_anchor_count_out
-) GCSO_NOEXCEPT {
+    gcso_context_handle_t context, uint32_t* GCSO_RESTRICT new_anchor_count_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(context == nullptr || new_anchor_count_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
-                          reinterpret_cast<uintptr_t>(new_anchor_count_out) % alignof(uint32_t) != 0)) {
+        if (GCSO_UNLIKELY(
+                reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
+                reinterpret_cast<uintptr_t>(new_anchor_count_out) % alignof(uint32_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
         *new_anchor_count_out = context->prompt_anchor_count;
@@ -248,13 +240,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_aggregate_bottom_up(
  * @param field Attractor field handle to destroy (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_destroy(
-    gcso_attractor_field_handle_t field
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_destroy(gcso_attractor_field_handle_t field)
+    GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(field == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(field) % alignof(gcso_attractor_field_opaque) != 0)) {
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(field) % alignof(gcso_attractor_field_opaque) !=
+                      0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
@@ -278,14 +270,16 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_destroy(
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_edbc_controller_create(
     const gcso_edbc_state_t* GCSO_RESTRICT initial_state,
-    gcso_edbc_controller_handle_t* GCSO_RESTRICT controller_out
-) GCSO_NOEXCEPT {
+    gcso_edbc_controller_handle_t* GCSO_RESTRICT controller_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(initial_state == nullptr || controller_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(initial_state) % alignof(gcso_edbc_state_t) != 0 ||
-                          reinterpret_cast<uintptr_t>(controller_out) % alignof(gcso_edbc_controller_handle_t) != 0)) {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(initial_state) % alignof(gcso_edbc_state_t) !=
+                              0 ||
+                          reinterpret_cast<uintptr_t>(controller_out) %
+                                  alignof(gcso_edbc_controller_handle_t) !=
+                              0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
@@ -323,11 +317,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_edbc_controller_create(
  * @param state_out Output state structure pointer.
  * @return GCSO_SUCCESS or GCSO_ERROR_EDBC_SINGULARITY (if NaN/Inf detected).
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_edbc_eval_stateful(
-    gcso_edbc_controller_handle_t controller,
-    float token_z_score,
-    gcso_edbc_state_t* GCSO_RESTRICT state_out
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_edbc_eval_stateful(gcso_edbc_controller_handle_t controller, float token_z_score,
+                        gcso_edbc_state_t* GCSO_RESTRICT state_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(controller == nullptr || state_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -335,8 +327,10 @@ GCSO_API gcso_status_t GCSO_CALL gcso_edbc_eval_stateful(
         return GCSO_ERROR_EDBC_SINGULARITY;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(controller) % alignof(gcso_edbc_controller_opaque) != 0 ||
-                          reinterpret_cast<uintptr_t>(state_out) % alignof(gcso_edbc_state_t) != 0)) {
+        if (GCSO_UNLIKELY(
+                reinterpret_cast<uintptr_t>(controller) % alignof(gcso_edbc_controller_opaque) !=
+                    0 ||
+                reinterpret_cast<uintptr_t>(state_out) % alignof(gcso_edbc_state_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
@@ -347,7 +341,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_edbc_eval_stateful(
         controller->state.sliding_entropy_rate = new_entropy - prev_entropy;
         controller->state.moving_z_entropy = new_entropy;
 
-        if (controller->state.moving_z_entropy > controller->state.bifurcation_threshold * 1.5f && controller->state.sliding_entropy_rate > 0.5f) {
+        if (controller->state.moving_z_entropy > controller->state.bifurcation_threshold * 1.5f &&
+            controller->state.sliding_entropy_rate > 0.5f) {
             controller->state.active_branch_mode = 2; // PHASE_CONJUGATE_REPULSION_MODE
         } else if (controller->state.moving_z_entropy > controller->state.bifurcation_threshold) {
             controller->state.active_branch_mode = 1; // PITCHFORK_BIFURCATION_MODE
@@ -374,11 +369,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_edbc_eval_stateful(
  * @param void_score_out Pointer to receive computed void score result.
  * @return GCSO_SUCCESS or error status code.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_dyadic128(
-    const float* GCSO_RESTRICT key_vector,
-    size_t dim,
-    float* GCSO_RESTRICT void_score_out
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_cvoid_eval_dyadic128(const float* GCSO_RESTRICT key_vector, size_t dim,
+                          float* GCSO_RESTRICT void_score_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(key_vector == nullptr || void_score_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -406,31 +399,32 @@ GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_dyadic128(
             const __m256 v1 = _mm256_load_ps(key_vector + i + 8);
             const __m256 v2 = _mm256_load_ps(key_vector + i + 16);
             const __m256 v3 = _mm256_load_ps(key_vector + i + 24);
-        #if defined(__FMA__)
+    #if defined(__FMA__)
             acc0 = _mm256_fmadd_ps(v0, v0, acc0);
             acc1 = _mm256_fmadd_ps(v1, v1, acc1);
             acc2 = _mm256_fmadd_ps(v2, v2, acc2);
             acc3 = _mm256_fmadd_ps(v3, v3, acc3);
-        #else
+    #else
             acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(v0, v0));
             acc1 = _mm256_add_ps(acc1, _mm256_mul_ps(v1, v1));
             acc2 = _mm256_add_ps(acc2, _mm256_mul_ps(v2, v2));
             acc3 = _mm256_add_ps(acc3, _mm256_mul_ps(v3, v3));
-        #endif
+    #endif
         }
 
         const size_t vec8_dim = dim & ~static_cast<size_t>(7);
         for (; i < vec8_dim; i += 8) {
             const __m256 v0 = _mm256_load_ps(key_vector + i);
-        #if defined(__FMA__)
+    #if defined(__FMA__)
             acc0 = _mm256_fmadd_ps(v0, v0, acc0);
-        #else
+    #else
             acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(v0, v0));
-        #endif
+    #endif
         }
 
         const __m256 sum256 = _mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3));
-        const __m128 sum128 = _mm_add_ps(_mm256_castps256_ps128(sum256), _mm256_extractf128_ps(sum256, 1));
+        const __m128 sum128 =
+            _mm_add_ps(_mm256_castps256_ps128(sum256), _mm256_extractf128_ps(sum256, 1));
         const __m128 shuf = _mm_movehdup_ps(sum128);
         const __m128 sums = _mm_add_ps(sum128, shuf);
         const __m128 shuf2 = _mm_movehl_ps(shuf, sums);
@@ -443,10 +437,14 @@ GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_dyadic128(
 
         const size_t simd_dim = dim & ~static_cast<size_t>(7);
         for (; i < simd_dim; i += 8) {
-            const float v0 = key_vector[i + 0]; const float v1 = key_vector[i + 1];
-            const float v2 = key_vector[i + 2]; const float v3 = key_vector[i + 3];
-            const float v4 = key_vector[i + 4]; const float v5 = key_vector[i + 5];
-            const float v6 = key_vector[i + 6]; const float v7 = key_vector[i + 7];
+            const float v0 = key_vector[i + 0];
+            const float v1 = key_vector[i + 1];
+            const float v2 = key_vector[i + 2];
+            const float v3 = key_vector[i + 3];
+            const float v4 = key_vector[i + 4];
+            const float v5 = key_vector[i + 5];
+            const float v6 = key_vector[i + 6];
+            const float v7 = key_vector[i + 7];
 
             sum_sq0 += v0 * v0;
             sum_sq1 += v1 * v1;
@@ -485,10 +483,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_dyadic128(
  * @return GCSO_SUCCESS or GCSO_ERROR_EDBC_SINGULARITY.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_barrier(
-    float void_score,
-    float tau_eff,
-    float* GCSO_RESTRICT barrier_out
-) GCSO_NOEXCEPT {
+    float void_score, float tau_eff, float* GCSO_RESTRICT barrier_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(barrier_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -497,8 +492,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_barrier(
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        if (GCSO_UNLIKELY(std::isnan(void_score) || std::isnan(tau_eff) ||
-                          std::isinf(void_score) || std::isinf(tau_eff) || tau_eff <= 0.0f)) {
+        if (GCSO_UNLIKELY(std::isnan(void_score) || std::isnan(tau_eff) || std::isinf(void_score) ||
+                          std::isinf(tau_eff) || tau_eff <= 0.0f)) {
             return GCSO_ERROR_EDBC_SINGULARITY;
         }
 
@@ -519,13 +514,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_barrier(
  * @param controller Controller handle to destroy (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_edbc_controller_destroy(
-    gcso_edbc_controller_handle_t controller
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_edbc_controller_destroy(gcso_edbc_controller_handle_t controller) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(controller == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(controller) % alignof(gcso_edbc_controller_opaque) != 0)) {
+    if (GCSO_UNLIKELY(
+            reinterpret_cast<uintptr_t>(controller) % alignof(gcso_edbc_controller_opaque) != 0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
@@ -548,11 +543,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_edbc_controller_destroy(
  * @param patch_size Size of binary patch in bytes.
  * @return GCSO_SUCCESS or error status code.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_persona_apply_patch(
-    gcso_context_handle_t context,
-    const uint8_t* GCSO_RESTRICT patch_data,
-    size_t patch_size
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL gcso_persona_apply_patch(gcso_context_handle_t context,
+                                                          const uint8_t* GCSO_RESTRICT patch_data,
+                                                          size_t patch_size) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(context == nullptr || patch_data == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -560,7 +553,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_persona_apply_patch(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0)) {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) !=
+                          0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
         if (GCSO_UNLIKELY(!context->is_initialized)) {
@@ -582,10 +576,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_persona_apply_patch(
  * @param zimms_out Descriptor structure pointer to populate.
  * @return GCSO_SUCCESS or GCSO_ERROR_ZIMMS_MAPPING_FAILED.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_zimms_open_mmap(
-    const char* GCSO_RESTRICT file_path,
-    gcso_zimms_descriptor_t* GCSO_RESTRICT zimms_out
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_zimms_open_mmap(const char* GCSO_RESTRICT file_path,
+                     gcso_zimms_descriptor_t* GCSO_RESTRICT zimms_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(file_path == nullptr || zimms_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -593,7 +586,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_zimms_open_mmap(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(zimms_out) % alignof(gcso_zimms_descriptor_t) != 0)) {
+        if (GCSO_UNLIKELY(
+                reinterpret_cast<uintptr_t>(zimms_out) % alignof(gcso_zimms_descriptor_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
         std::memset(zimms_out, 0, sizeof(gcso_zimms_descriptor_t));
@@ -613,14 +607,14 @@ GCSO_API gcso_status_t GCSO_CALL gcso_zimms_open_mmap(
  * @param zimms_desc Descriptor structure pointer to clear.
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_zimms_close_mmap(
-    gcso_zimms_descriptor_t* GCSO_RESTRICT zimms_desc
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_zimms_close_mmap(gcso_zimms_descriptor_t* GCSO_RESTRICT zimms_desc) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(zimms_desc == nullptr)) {
         return GCSO_SUCCESS;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(zimms_desc) % alignof(gcso_zimms_descriptor_t) != 0)) {
+        if (GCSO_UNLIKELY(
+                reinterpret_cast<uintptr_t>(zimms_desc) % alignof(gcso_zimms_descriptor_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
         std::memset(zimms_desc, 0, sizeof(gcso_zimms_descriptor_t));

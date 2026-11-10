@@ -23,65 +23,65 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 /* ===================================================================
  * Domain Constant & Bitmask Identifiers (ABI v0.1.1)
  * =================================================================== */
-#define GCSO_SNAPSHOT_MAGIC                 0x4F534347U /* "GCSO" in ASCII */
-#define GCSO_CRYSTAL_RECORD_MAGIC           0x4C545343U /* "CSTL" in ASCII */
-#define GCSO_CRYSTAL_RECORD_VERSION         0x00000101U /* Unified v0.1.1 */
-#define GCSO_FOUR_SECTION_HEADER_BYTES      192U
-#define GCSO_Q7_PHASE_ARRAY_LEN             64U
-#define GCSO_BLOOM_FILTER_COUNTERS_LEN      64U
-#define GCSO_DAES_SHORTCUTS_LEN             4U
-#define GCSO_DAES_MINI_LEDGER_LEN           8U
-#define GCSO_PAGED_BITMASK_WORDS            4U
+#define GCSO_SNAPSHOT_MAGIC 0x4F534347U         /* "GCSO" in ASCII */
+#define GCSO_CRYSTAL_RECORD_MAGIC 0x4C545343U   /* "CSTL" in ASCII */
+#define GCSO_CRYSTAL_RECORD_VERSION 0x00000101U /* Unified v0.1.1 */
+#define GCSO_FOUR_SECTION_HEADER_BYTES 192U
+#define GCSO_Q7_PHASE_ARRAY_LEN 64U
+#define GCSO_BLOOM_FILTER_COUNTERS_LEN 64U
+#define GCSO_DAES_SHORTCUTS_LEN 4U
+#define GCSO_DAES_MINI_LEDGER_LEN 8U
+#define GCSO_PAGED_BITMASK_WORDS 4U
 
 /* Hardware Capability Bitmask Constants */
-#define GCSO_CAP_CPU_BASELINE               (1ULL << 0)
-#define GCSO_CAP_CUDA_BACKEND               (1ULL << 1)
-#define GCSO_CAP_VULKAN_BACKEND             (1ULL << 2)
-#define GCSO_CAP_METAL_BACKEND              (1ULL << 3)
+#define GCSO_CAP_CPU_BASELINE (1ULL << 0)
+#define GCSO_CAP_CUDA_BACKEND (1ULL << 1)
+#define GCSO_CAP_VULKAN_BACKEND (1ULL << 2)
+#define GCSO_CAP_METAL_BACKEND (1ULL << 3)
 
 /* 64-Bit Tagged Pointer Masks & Bit Shifts */
-#define GCSO_TAGGED_PTR_ADDR_MASK           0x0000FFFFFFFFFFFFULL
-#define GCSO_TAGGED_PTR_TAG_MASK            0x00FF000000000000ULL
-#define GCSO_TAGGED_PTR_PHASE_MASK          0xFF00000000000000ULL
-#define GCSO_TAGGED_PTR_TAG_SHIFT           48U
-#define GCSO_TAGGED_PTR_PHASE_SHIFT         56U
+#define GCSO_TAGGED_PTR_ADDR_MASK 0x0000FFFFFFFFFFFFULL
+#define GCSO_TAGGED_PTR_TAG_MASK 0x00FF000000000000ULL
+#define GCSO_TAGGED_PTR_PHASE_MASK 0xFF00000000000000ULL
+#define GCSO_TAGGED_PTR_TAG_SHIFT 48U
+#define GCSO_TAGGED_PTR_PHASE_SHIFT 56U
 
 /* 3-Bit Attractor Working Lane Slot Identifiers (0..7) */
 #define GCSO_ATTRACTOR_SLOT_SYSTEM_BASELINE 0U
-#define GCSO_ATTRACTOR_SLOT_PERSONA         1U
-#define GCSO_ATTRACTOR_SLOT_KNOWLEDGE       2U
-#define GCSO_ATTRACTOR_SLOT_REPULSION       3U
-#define GCSO_ATTRACTOR_SLOT_SPATIAL         4U
-#define GCSO_ATTRACTOR_SLOT_TEMPORAL        5U
-#define GCSO_ATTRACTOR_SLOT_USER_INTENT     6U
-#define GCSO_ATTRACTOR_SLOT_CRYSTALLIZED    7U
-#define GCSO_ATTRACTOR_SLOT_ID_MASK         0x07U
+#define GCSO_ATTRACTOR_SLOT_PERSONA 1U
+#define GCSO_ATTRACTOR_SLOT_KNOWLEDGE 2U
+#define GCSO_ATTRACTOR_SLOT_REPULSION 3U
+#define GCSO_ATTRACTOR_SLOT_SPATIAL 4U
+#define GCSO_ATTRACTOR_SLOT_TEMPORAL 5U
+#define GCSO_ATTRACTOR_SLOT_USER_INTENT 6U
+#define GCSO_ATTRACTOR_SLOT_CRYSTALLIZED 7U
+#define GCSO_ATTRACTOR_SLOT_ID_MASK 0x07U
 
 /* 5-Bit Action Mode Execution Flags */
-#define GCSO_ACTION_MODE_PHASE_STEER        0x01U
-#define GCSO_ACTION_MODE_PSPM_ROUTE         0x02U
-#define GCSO_ACTION_MODE_SRL_INJECT         0x04U
-#define GCSO_ACTION_MODE_REPULSION_GUARD    0x08U
-#define GCSO_ACTION_MODE_LAYER_SKIP         0x10U
-#define GCSO_ACTION_MODE_ALL_MASK           0x1FU
+#define GCSO_ACTION_MODE_PHASE_STEER 0x01U
+#define GCSO_ACTION_MODE_PSPM_ROUTE 0x02U
+#define GCSO_ACTION_MODE_SRL_INJECT 0x04U
+#define GCSO_ACTION_MODE_REPULSION_GUARD 0x08U
+#define GCSO_ACTION_MODE_LAYER_SKIP 0x10U
+#define GCSO_ACTION_MODE_ALL_MASK 0x1FU
 
 /* Pointer Trail Status Flags */
-#define GCSO_TRAIL_FLAG_REPULSION_ACTIVE       0x00000001U
-#define GCSO_TRAIL_FLAG_SYNERGY_RESONANCE      0x00000002U
-#define GCSO_TRAIL_FLAG_INERTIAL_SKIP_ACTIVE   0x00000004U
+#define GCSO_TRAIL_FLAG_REPULSION_ACTIVE 0x00000001U
+#define GCSO_TRAIL_FLAG_SYNERGY_RESONANCE 0x00000002U
+#define GCSO_TRAIL_FLAG_INERTIAL_SKIP_ACTIVE 0x00000004U
 #define GCSO_TRAIL_FLAG_CRYSTALLIZED_CANDIDATE 0x00000008U
-#define GCSO_TRAIL_FLAG_LIMINAL_BEAT_ACTIVE    0x00000010U
+#define GCSO_TRAIL_FLAG_LIMINAL_BEAT_ACTIVE 0x00000010U
 
 /* 4-Axis Causal Provenance Bitflags & Root Cause Codes */
-#define GCSO_CAUSAL_AXIS_SYSTEM_CONSTRAINT  (1U << 0)
-#define GCSO_CAUSAL_AXIS_OBJECTIVE_FACT     (1U << 1)
+#define GCSO_CAUSAL_AXIS_SYSTEM_CONSTRAINT (1U << 0)
+#define GCSO_CAUSAL_AXIS_OBJECTIVE_FACT (1U << 1)
 #define GCSO_CAUSAL_AXIS_SUBJECTIVE_PERSONA (1U << 2)
 #define GCSO_CAUSAL_AXIS_CONTRADICTION_GUARD (1U << 3)
 
-#define GCSO_ROOT_CAUSE_NOMINAL             0U
-#define GCSO_ROOT_CAUSE_SYSTEM_THROTTLE     1U
-#define GCSO_ROOT_CAUSE_FACT_DOMINANT       2U
-#define GCSO_ROOT_CAUSE_PERSONA_DOMINANT    3U
+#define GCSO_ROOT_CAUSE_NOMINAL 0U
+#define GCSO_ROOT_CAUSE_SYSTEM_THROTTLE 1U
+#define GCSO_ROOT_CAUSE_FACT_DOMINANT 2U
+#define GCSO_ROOT_CAUSE_PERSONA_DOMINANT 3U
 #define GCSO_ROOT_CAUSE_FACT_PERSONA_CONFLICT 4U
 #define GCSO_ROOT_CAUSE_BLOOM_CONTRADICTION 5U
 #define GCSO_ROOT_CAUSE_COHOMOLOGY_OBSTRUCTION 6U
@@ -89,7 +89,7 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 /**
  * @brief Standardized 32-bit status return codes for 1:1 cross-language FFI mapping.
  */
-typedef enum gcso_status GCSO_ENUM_UNDERLYING(int32_t) {
+typedef enum gcso_status GCSO_ENUM_UNDERLYING(int32_t){
     GCSO_SUCCESS = 0,
     GCSO_ERROR_INVALID_ARGUMENT = -1,
     GCSO_ERROR_OUT_OF_MEMORY = -2,
@@ -113,32 +113,24 @@ typedef enum gcso_status GCSO_ENUM_UNDERLYING(int32_t) {
     GCSO_ERROR_OBSTRUCTION_UNRESOLVED = -80,
     GCSO_ERROR_EXTENSION_NOT_LOADED = -90,
     GCSO_ERROR_DAES_SCRATCHPAD_FULL = -91,
-    GCSO_ERROR_UNKNOWN = -0x7FFFFFFF
-} gcso_status_t;
+    GCSO_ERROR_UNKNOWN = -0x7FFFFFFF} gcso_status_t;
 
 /**
  * @brief Classification types for topological attractor field anchors.
  */
-typedef enum gcso_anchor_type GCSO_ENUM_UNDERLYING(uint32_t) {
-    GCSO_ANCHOR_TYPE_SYSTEM_PROMPT = 0,
-    GCSO_ANCHOR_TYPE_EMBEDDING = 1,
-    GCSO_ANCHOR_TYPE_PHASE_REPULSE = 2,
-    GCSO_ANCHOR_TYPE_TOPOLOGICAL = 3,
-    GCSO_ANCHOR_TYPE_CRYSTALLIZED = 4
-} gcso_anchor_type_t;
+typedef enum gcso_anchor_type GCSO_ENUM_UNDERLYING(uint32_t){
+    GCSO_ANCHOR_TYPE_SYSTEM_PROMPT = 0, GCSO_ANCHOR_TYPE_EMBEDDING = 1,
+    GCSO_ANCHOR_TYPE_PHASE_REPULSE = 2, GCSO_ANCHOR_TYPE_TOPOLOGICAL = 3,
+    GCSO_ANCHOR_TYPE_CRYSTALLIZED = 4} gcso_anchor_type_t;
 
 /**
  * @brief 7-regime stigmergic action decisions matching Rust StigmergicActionDecision.
  */
-typedef enum gcso_stigmergic_action_decision GCSO_ENUM_UNDERLYING(uint8_t) {
-    GCSO_DECISION_INERTIAL_LAYER_SKIP = 0,
-    GCSO_DECISION_EXPRESS_PHASE_STEER = 1,
-    GCSO_DECISION_PSPM_SUB_HEAD_ROUTE = 2,
-    GCSO_DECISION_FULL_ORCHESTRATION_SRL = 3,
-    GCSO_DECISION_REPULSION_ESCAPE = 4,
-    GCSO_DECISION_CRYSTALLIZE_MACRO_BASIN = 5,
-    GCSO_DECISION_ESCALATE_COLD_PATH = 6
-} gcso_stigmergic_action_decision_enum_t;
+typedef enum gcso_stigmergic_action_decision GCSO_ENUM_UNDERLYING(uint8_t){
+    GCSO_DECISION_INERTIAL_LAYER_SKIP = 0, GCSO_DECISION_EXPRESS_PHASE_STEER = 1,
+    GCSO_DECISION_PSPM_SUB_HEAD_ROUTE = 2, GCSO_DECISION_FULL_ORCHESTRATION_SRL = 3,
+    GCSO_DECISION_REPULSION_ESCAPE = 4,    GCSO_DECISION_CRYSTALLIZE_MACRO_BASIN = 5,
+    GCSO_DECISION_ESCALATE_COLD_PATH = 6} gcso_stigmergic_action_decision_enum_t;
 
 /**
  * @brief Descriptor header for size and ABI version validation.
@@ -319,7 +311,8 @@ struct GCSO_ALIGN_PREFIX(32) gcso_pprc_keyframe_header {
 typedef struct gcso_pprc_keyframe_header gcso_pprc_keyframe_header_t;
 
 /**
- * @brief Stigmergic threshold configuration governing pheromone dynamics & 7-regime selection (32 bytes).
+ * @brief Stigmergic threshold configuration governing pheromone dynamics & 7-regime selection (32
+ * bytes).
  */
 struct GCSO_ALIGN_PREFIX(32) gcso_stigmergic_thresholds {
     float evaporation_retain;
@@ -480,7 +473,8 @@ GCSO_STATIC_ASSERT(sizeof(gcso_status_t) == 4, "gcso_status_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_anchor_type_t) == 4, "gcso_anchor_type_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_q7_t) == 1, "gcso_q7_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_tagged_ptr_t) == 8, "gcso_tagged_ptr_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_stigmergic_action_decision_t) == 1, "gcso_stigmergic_action_decision_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_stigmergic_action_decision_t) == 1,
+                   "gcso_stigmergic_action_decision_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_descriptor_header_t) == 8, "gcso_descriptor_header_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_raw_buffer_t) == 32, "gcso_raw_buffer_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_paged_bitmask_t) == 32, "gcso_paged_bitmask_t size mismatch");
@@ -492,34 +486,54 @@ GCSO_STATIC_ASSERT(sizeof(gcso_zimms_descriptor_t) == 64, "gcso_zimms_descriptor
 GCSO_STATIC_ASSERT(sizeof(gcso_pspm_config_t) == 32, "gcso_pspm_config_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_srl_descriptor_t) == 64, "gcso_srl_descriptor_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_snapshot_header_t) == 128, "gcso_snapshot_header_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_pprc_keyframe_header_t) == 64, "gcso_pprc_keyframe_header_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_stigmergic_thresholds_t) == 32, "gcso_stigmergic_thresholds_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_action_orchestration_report_t) == 32, "gcso_action_orchestration_report_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_swarm_resolution_report_t) == 16, "gcso_swarm_resolution_report_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_pprc_keyframe_header_t) == 64,
+                   "gcso_pprc_keyframe_header_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_stigmergic_thresholds_t) == 32,
+                   "gcso_stigmergic_thresholds_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_action_orchestration_report_t) == 32,
+                   "gcso_action_orchestration_report_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_swarm_resolution_report_t) == 16,
+                   "gcso_swarm_resolution_report_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_gateway_frame_t) == 128, "gcso_gateway_frame_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_causal_provenance_report_t) == 16, "gcso_causal_provenance_report_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_crystallized_attractor_record_t) == 128, "gcso_crystallized_attractor_record_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_contrastive_bloom_filter_t) == 64, "gcso_contrastive_bloom_filter_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_causal_provenance_report_t) == 16,
+                   "gcso_causal_provenance_report_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_crystallized_attractor_record_t) == 128,
+                   "gcso_crystallized_attractor_record_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_contrastive_bloom_filter_t) == 64,
+                   "gcso_contrastive_bloom_filter_t size mismatch");
 
 /* Static Assertions for Alignment Invariants Matching traits.rs / abi.rs */
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_raw_buffer_t) == 16, "gcso_raw_buffer_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_paged_bitmask_t) == 32, "gcso_paged_bitmask_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_pointer_trail_t) == 128, "gcso_pointer_trail_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_paged_bitmask_t) == 32,
+                   "gcso_paged_bitmask_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_pointer_trail_t) == 128,
+                   "gcso_pointer_trail_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_daes_slot_t) == 64, "gcso_daes_slot_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_config_t) == 16, "gcso_config_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_edbc_state_t) == 32, "gcso_edbc_state_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_zimms_descriptor_t) == 32, "gcso_zimms_descriptor_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_zimms_descriptor_t) == 32,
+                   "gcso_zimms_descriptor_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_pspm_config_t) == 16, "gcso_pspm_config_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_srl_descriptor_t) == 32, "gcso_srl_descriptor_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_snapshot_header_t) == 64, "gcso_snapshot_header_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_pprc_keyframe_header_t) == 32, "gcso_pprc_keyframe_header_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_stigmergic_thresholds_t) == 32, "gcso_stigmergic_thresholds_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_action_orchestration_report_t) == 32, "gcso_action_orchestration_report_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_swarm_resolution_report_t) == 16, "gcso_swarm_resolution_report_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_gateway_frame_t) == 64, "gcso_gateway_frame_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_causal_provenance_report_t) == 16, "gcso_causal_provenance_report_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_crystallized_attractor_record_t) == 64, "gcso_crystallized_attractor_record_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_contrastive_bloom_filter_t) == 64, "gcso_contrastive_bloom_filter_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_srl_descriptor_t) == 32,
+                   "gcso_srl_descriptor_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_snapshot_header_t) == 64,
+                   "gcso_snapshot_header_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_pprc_keyframe_header_t) == 32,
+                   "gcso_pprc_keyframe_header_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_stigmergic_thresholds_t) == 32,
+                   "gcso_stigmergic_thresholds_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_action_orchestration_report_t) == 32,
+                   "gcso_action_orchestration_report_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_swarm_resolution_report_t) == 16,
+                   "gcso_swarm_resolution_report_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_gateway_frame_t) == 64,
+                   "gcso_gateway_frame_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_causal_provenance_report_t) == 16,
+                   "gcso_causal_provenance_report_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_crystallized_attractor_record_t) == 64,
+                   "gcso_crystallized_attractor_record_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_contrastive_bloom_filter_t) == 64,
+                   "gcso_contrastive_bloom_filter_t alignment mismatch");
 
 /* Static Assertions for Exact Field Offsets Matching Rust abi.rs & traits.rs */
 GCSO_STATIC_ASSERT(offsetof(gcso_descriptor_header_t, struct_size) == 0,
@@ -561,8 +575,7 @@ GCSO_STATIC_ASSERT(offsetof(gcso_pointer_trail_t, accumulated_phase_delta) == 56
 GCSO_STATIC_ASSERT(offsetof(gcso_pointer_trail_t, reserved_padding) == 120,
                    "gcso_pointer_trail_t::reserved_padding offset mismatch");
 
-GCSO_STATIC_ASSERT(offsetof(gcso_daes_slot_t, mode) == 0,
-                   "gcso_daes_slot_t::mode offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_daes_slot_t, mode) == 0, "gcso_daes_slot_t::mode offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_daes_slot_t, telemetry_ring_head) == 4,
                    "gcso_daes_slot_t::telemetry_ring_head offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_daes_slot_t, telemetry_ring_tail) == 6,

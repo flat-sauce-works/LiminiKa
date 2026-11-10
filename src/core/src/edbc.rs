@@ -69,21 +69,19 @@ use crate::abi::{
 use crate::traits::aligned::{AlignedSlice32, AlignedSliceMut32};
 use crate::traits::branchless::{
     branchless_abs_f32, branchless_clamp_f32, branchless_eyring_kramers_escape,
-    branchless_flush_subnormal_f32, branchless_is_finite_f32,
-    branchless_ln_f32, branchless_max_f32, branchless_min_f32,
-    branchless_phase_coherence_inv_temp_scale, branchless_popcount_rsqrt_u32,
-    branchless_q7_add_sat,
+    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_ln_f32,
+    branchless_max_f32, branchless_min_f32, branchless_phase_coherence_inv_temp_scale,
+    branchless_popcount_rsqrt_u32, branchless_q7_add_sat,
     branchless_q7_unified_field_fold_words_with_init_weight_64, branchless_rad_to_q7,
     branchless_relu_f32, branchless_rsqrt_f32, branchless_sanitize_z_score_f32,
     branchless_select_f32, branchless_select_q7, branchless_select_u32, branchless_select_u64,
-    branchless_select_u8, branchless_splitmix64, branchless_sqrt_f32, tanh_lut_eval_nonneg,
-    coherence_from_word_arrays_with_both_uniform_flags_64,
-    fast_inv_len_f32, fast_inv_pos_normal_f32,
-    fast_ln_1p_bounded_f32, is_word_array_uniform_64, load_q7_words_64, trail_phase_words_mut,
-    trail_phase_words_ref,
+    branchless_select_u8, branchless_splitmix64, branchless_sqrt_f32,
+    coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_len_f32,
+    fast_inv_pos_normal_f32, fast_ln_1p_bounded_f32, is_word_array_uniform_64, load_q7_words_64,
     scale_f32_slice_unrolled8, store_q7_word_at, store_q7_words_64, sum_abs_and_sq_f32_simd8,
-    sum_sq_f32_simd8, swar_q7_add_sat_x8, swar_q7_neg_sat_x8,
-    DEFAULT_MAX_VALID_Z_SCORE, F32_MIN_POSITIVE_NORMAL, Q7_FULL_COS_REF,
+    sum_sq_f32_simd8, swar_q7_add_sat_x8, swar_q7_neg_sat_x8, tanh_lut_eval_nonneg,
+    trail_phase_words_mut, trail_phase_words_ref, DEFAULT_MAX_VALID_Z_SCORE,
+    F32_MIN_POSITIVE_NORMAL, Q7_FULL_COS_REF,
 };
 use crate::traits::cold_path::{
     EdbcBranchController, EntropyEvaluator, HierarchicalTreeTable, SheafCohomologyEvaluator,
@@ -208,8 +206,7 @@ pub const fn compute_sparse_surrogate_entropy(p_max: f32, p_2nd: f32, _eps: f32)
     const C6: f32 = 1.0 / 132.0;
     const C7: f32 = 1.0 / 182.0;
     const C8: f32 = 1.0 / 240.0;
-    const C9_TAIL: f32 =
-        MAX_SURROGATE_ENTROPY_LN2 - (C1 + C2 + C3 + C4 + C5 + C6 + C7 + C8);
+    const C9_TAIL: f32 = MAX_SURROGATE_ENTROPY_LN2 - (C1 + C2 + C3 + C4 + C5 + C6 + C7 + C8);
 
     let p_2nd_clean = branchless_relu_f32(p_2nd);
     let raw_sum = p_max + p_2nd_clean;
@@ -265,9 +262,8 @@ pub const fn compute_moving_z_score_entropy(
     gamma_mod: f32,
 ) -> f32 {
     let valid_h = (h_surrogate > 0.0) & branchless_is_finite_f32(h_surrogate);
-    let valid_inputs = valid_h
-        & branchless_is_finite_f32(cosine_dist)
-        & branchless_is_finite_f32(mu_dist);
+    let valid_inputs =
+        valid_h & branchless_is_finite_f32(cosine_dist) & branchless_is_finite_f32(mu_dist);
     let raw_diff = cosine_dist - mu_dist;
     let pos_diff = branchless_select_f32(
         valid_inputs & (raw_diff > 0.0) & branchless_is_finite_f32(raw_diff),
@@ -303,7 +299,11 @@ pub const fn compute_moving_z_score_entropy(
     // (`0` divisions, `0` Newton-Raphson reciprocals).
     let d_cosine_hat = tanh_lut_eval_nonneg(alpha_safe * relu_z);
     let h_tilde = branchless_flush_subnormal_f32(h_surrogate * (1.0 + gamma_safe * d_cosine_hat));
-    branchless_select_f32(valid_inputs & branchless_is_finite_f32(h_tilde), h_tilde, 0.0)
+    branchless_select_f32(
+        valid_inputs & branchless_is_finite_f32(h_tilde),
+        h_tilde,
+        0.0,
+    )
 }
 
 /// Evaluates scale-invariant Pitchfork Bifurcation potential barrier height
@@ -372,8 +372,7 @@ const fn eval_temperature_for_mode(
     if mode == EDBC_MODE_NORMAL_ENTROPY {
         return safe_base;
     }
-    let norm_h =
-        branchless_clamp_f32(branchless_relu_f32(moving_z_entropy) * INV_LN_2, 0.0, 1.0);
+    let norm_h = branchless_clamp_f32(branchless_relu_f32(moving_z_entropy) * INV_LN_2, 0.0, 1.0);
     let candidate = if mode == EDBC_MODE_PITCHFORK_BIFURCATION {
         let escape_p = branchless_eyring_kramers_escape(cvoid_score, tau_eff, alpha, beta, d0);
         safe_base * (1.0 + 0.35 * escape_p * norm_h)
@@ -422,16 +421,15 @@ fn bridge_and_eval_liminal_trail_chain_single_pass(
         // eliminating all per-hop GPR-to-YMM (`vpinsrq`) and scalar 8-lane SWAR scale/diff loops.
         return unsafe {
             use core::arch::x86_64::{
-                _mm256_add_epi8, _mm256_and_si256, _mm256_broadcastb_epi8,
-                _mm256_castsi256_si128, _mm256_max_epi8, _mm256_mulhrs_epi16, _mm256_or_si256,
-                _mm256_set1_epi16, _mm256_set1_epi8, _mm256_setzero_si256, _mm256_slli_epi16,
-                _mm256_sub_epi8, _mm256_testz_si256, _mm256_xor_si256, _mm_cvtsi128_si32,
+                _mm256_add_epi8, _mm256_and_si256, _mm256_broadcastb_epi8, _mm256_castsi256_si128,
+                _mm256_max_epi8, _mm256_mulhrs_epi16, _mm256_or_si256, _mm256_set1_epi16,
+                _mm256_set1_epi8, _mm256_setzero_si256, _mm256_slli_epi16, _mm256_sub_epi8,
+                _mm256_testz_si256, _mm256_xor_si256, _mm_cvtsi128_si32,
             };
             // Load `(v_first0, v_first1)` via 64-bit word moves (`avx2_words64_to_vec64`) rather than
             // `_mm256_loadu_si256` at byte offset 56 (which straddles the 64B cache-line boundary
             // and triggers a 4-to-1 Store-to-Load Forwarding stall after 64-bit GPR trail resets).
-            let (v_first0, v_first1) =
-                crate::traits::branchless::avx2_words64_to_vec64(&first_w);
+            let (v_first0, v_first1) = crate::traits::branchless::avx2_words64_to_vec64(&first_w);
             let mut v_prev0 = v_first0;
             let mut v_prev1 = v_first1;
             let mut prev_cur_ptr = trail_chain[0].current_ptr;
@@ -487,8 +485,7 @@ fn bridge_and_eval_liminal_trail_chain_single_pass(
                         } else if t_s == 0 {
                             (pre_c, false, v_prev0, v_prev1, 1.0_f32, true)
                         } else if diff_is_byte_uni {
-                            let st_i8 =
-                                ((((b0_u8 as i8) as i32) * (t_s as i32) + 64) >> 7) as i8;
+                            let st_i8 = ((((b0_u8 as i8) as i32) * (t_s as i32) + 64) >> 7) as i8;
                             if st_i8 == 0 {
                                 (pre_c, false, v_prev0, v_prev1, 1.0_f32, true)
                             } else {
@@ -644,258 +641,228 @@ fn bridge_and_eval_liminal_trail_chain_single_pass(
         };
         let bias_restore = (128u64.wrapping_sub(t_s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
 
-    let first_is_uniform = is_word_array_uniform_64(&first_w);
-    let mut prev_w = first_w;
-    let mut prev_is_uniform = first_is_uniform;
-    let mut prev_cur_ptr = trail_chain[0].current_ptr;
-    let mut prev_step_count = trail_chain[0].step_count;
-    let mut prev_target_anchor_id = trail_chain[0].target_anchor_id;
-    let mut prev_pull_force = trail_chain[0].attractor_pull_force;
-    let mut joint_log_prob = 0.0_f32;
-    let mut coboundary_defect_sum = 0.0_f32;
-    let mut repulsed_count = 0u32;
+        let first_is_uniform = is_word_array_uniform_64(&first_w);
+        let mut prev_w = first_w;
+        let mut prev_is_uniform = first_is_uniform;
+        let mut prev_cur_ptr = trail_chain[0].current_ptr;
+        let mut prev_step_count = trail_chain[0].step_count;
+        let mut prev_target_anchor_id = trail_chain[0].target_anchor_id;
+        let mut prev_pull_force = trail_chain[0].attractor_pull_force;
+        let mut joint_log_prob = 0.0_f32;
+        let mut coboundary_defect_sum = 0.0_f32;
+        let mut repulsed_count = 0u32;
 
-    let mut idx = 1usize;
-    while idx < len {
-        let curr_trail = &mut trail_chain[idx];
-        let s = *trail_phase_words_ref(curr_trail);
-        let (pre_coh, contradiction, out_w, out_is_uniform, post_coh) =
-            if (s[0] == prev_w[0]) && swar_words_equal_64(&s, &prev_w) {
-                (1.0_f32, false, s, prev_is_uniform, 1.0_f32)
-            } else {
-                let d0 = swar_q7_circular_diff_x8(s[0], prev_w[0]);
-                let d1 = swar_q7_circular_diff_x8(s[1], prev_w[1]);
-                let d2 = swar_q7_circular_diff_x8(s[2], prev_w[2]);
-                let d3 = swar_q7_circular_diff_x8(s[3], prev_w[3]);
-                let d4 = swar_q7_circular_diff_x8(s[4], prev_w[4]);
-                let d5 = swar_q7_circular_diff_x8(s[5], prev_w[5]);
-                let d6 = swar_q7_circular_diff_x8(s[6], prev_w[6]);
-                let d7 = swar_q7_circular_diff_x8(s[7], prev_w[7]);
-                let s_is_uniform = is_word_array_uniform_64(&s);
-                let both_uni = prev_is_uniform && s_is_uniform;
-                let diff_is_uniform = both_uni
-                    || ((d0 == d1)
-                        && ((((d0 ^ d2) | (d0 ^ d3)) | ((d0 ^ d4) | (d0 ^ d5)))
-                            | ((d0 ^ d6) | (d0 ^ d7)))
-                            == 0);
-                let diff_is_byte_uniform =
-                    diff_is_uniform && (d0 == d0.rotate_right(8));
-                let pre_c = if diff_is_byte_uniform {
-                    branchless_cos_q7(d0 as gcso_q7_t)
+        let mut idx = 1usize;
+        while idx < len {
+            let curr_trail = &mut trail_chain[idx];
+            let s = *trail_phase_words_ref(curr_trail);
+            let (pre_coh, contradiction, out_w, out_is_uniform, post_coh) =
+                if (s[0] == prev_w[0]) && swar_words_equal_64(&s, &prev_w) {
+                    (1.0_f32, false, s, prev_is_uniform, 1.0_f32)
                 } else {
-                    coherence_from_diff_words_64(d0, d1, d2, d3, d4, d5, d6, d7)
-                };
-                let contr = pre_c < -safe_contradiction;
-                let (ow, ow_uni, post_c) = if contr {
-                    let nw = if s_is_uniform {
-                        [swar_q7_neg_sat_x8(s[0]); 8]
+                    let d0 = swar_q7_circular_diff_x8(s[0], prev_w[0]);
+                    let d1 = swar_q7_circular_diff_x8(s[1], prev_w[1]);
+                    let d2 = swar_q7_circular_diff_x8(s[2], prev_w[2]);
+                    let d3 = swar_q7_circular_diff_x8(s[3], prev_w[3]);
+                    let d4 = swar_q7_circular_diff_x8(s[4], prev_w[4]);
+                    let d5 = swar_q7_circular_diff_x8(s[5], prev_w[5]);
+                    let d6 = swar_q7_circular_diff_x8(s[6], prev_w[6]);
+                    let d7 = swar_q7_circular_diff_x8(s[7], prev_w[7]);
+                    let s_is_uniform = is_word_array_uniform_64(&s);
+                    let both_uni = prev_is_uniform && s_is_uniform;
+                    let diff_is_uniform = both_uni
+                        || ((d0 == d1)
+                            && ((((d0 ^ d2) | (d0 ^ d3)) | ((d0 ^ d4) | (d0 ^ d5)))
+                                | ((d0 ^ d6) | (d0 ^ d7)))
+                                == 0);
+                    let diff_is_byte_uniform = diff_is_uniform && (d0 == d0.rotate_right(8));
+                    let pre_c = if diff_is_byte_uniform {
+                        branchless_cos_q7(d0 as gcso_q7_t)
                     } else {
-                        [
-                            swar_q7_neg_sat_x8(s[0]),
-                            swar_q7_neg_sat_x8(s[1]),
-                            swar_q7_neg_sat_x8(s[2]),
-                            swar_q7_neg_sat_x8(s[3]),
-                            swar_q7_neg_sat_x8(s[4]),
-                            swar_q7_neg_sat_x8(s[5]),
-                            swar_q7_neg_sat_x8(s[6]),
-                            swar_q7_neg_sat_x8(s[7]),
-                        ]
+                        coherence_from_diff_words_64(d0, d1, d2, d3, d4, d5, d6, d7)
                     };
-                    let pc = coherence_from_word_arrays_with_both_uniform_flags_64(
-                        &nw,
-                        s_is_uniform,
-                        &prev_w,
-                        prev_is_uniform,
-                    );
-                    (nw, s_is_uniform, pc)
-                } else if t_s >= 128 {
-                    (s, s_is_uniform, pre_c)
-                } else if t_s == 0 {
-                    (prev_w, prev_is_uniform, 1.0_f32)
-                } else if diff_is_uniform {
-                    let st0 = swar_q7_scale_le128_with_bias_x8(
-                        d0,
-                        t_s,
-                        bias_restore,
-                    );
-                    if st0 == 0 {
-                        (prev_w, prev_is_uniform, 1.0_f32)
-                    } else {
-                        let nw = if prev_is_uniform {
-                            [swar_q7_circular_add_x8(prev_w[0], st0); 8]
+                    let contr = pre_c < -safe_contradiction;
+                    let (ow, ow_uni, post_c) = if contr {
+                        let nw = if s_is_uniform {
+                            [swar_q7_neg_sat_x8(s[0]); 8]
                         } else {
                             [
-                                swar_q7_circular_add_x8(prev_w[0], st0),
-                                swar_q7_circular_add_x8(prev_w[1], st0),
-                                swar_q7_circular_add_x8(prev_w[2], st0),
-                                swar_q7_circular_add_x8(prev_w[3], st0),
-                                swar_q7_circular_add_x8(prev_w[4], st0),
-                                swar_q7_circular_add_x8(prev_w[5], st0),
-                                swar_q7_circular_add_x8(prev_w[6], st0),
-                                swar_q7_circular_add_x8(prev_w[7], st0),
+                                swar_q7_neg_sat_x8(s[0]),
+                                swar_q7_neg_sat_x8(s[1]),
+                                swar_q7_neg_sat_x8(s[2]),
+                                swar_q7_neg_sat_x8(s[3]),
+                                swar_q7_neg_sat_x8(s[4]),
+                                swar_q7_neg_sat_x8(s[5]),
+                                swar_q7_neg_sat_x8(s[6]),
+                                swar_q7_neg_sat_x8(s[7]),
                             ]
                         };
-                        let pc = if diff_is_byte_uniform {
-                            branchless_cos_q7(st0 as gcso_q7_t)
-                        } else {
-                            coherence_from_diff_words_64(st0, st0, st0, st0, st0, st0, st0, st0)
-                        };
-                        (nw, prev_is_uniform, pc)
-                    }
-                } else {
-                    let st0 = swar_q7_scale_le128_with_bias_x8(
-                        d0,
-                        t_s,
-                        bias_restore,
-                    );
-                    let st1 = swar_q7_scale_le128_with_bias_x8(
-                        d1,
-                        t_s,
-                        bias_restore,
-                    );
-                    let st2 = swar_q7_scale_le128_with_bias_x8(
-                        d2,
-                        t_s,
-                        bias_restore,
-                    );
-                    let st3 = swar_q7_scale_le128_with_bias_x8(
-                        d3,
-                        t_s,
-                        bias_restore,
-                    );
-                    let st4 = swar_q7_scale_le128_with_bias_x8(
-                        d4,
-                        t_s,
-                        bias_restore,
-                    );
-                    let st5 = swar_q7_scale_le128_with_bias_x8(
-                        d5,
-                        t_s,
-                        bias_restore,
-                    );
-                    let st6 = swar_q7_scale_le128_with_bias_x8(
-                        d6,
-                        t_s,
-                        bias_restore,
-                    );
-                    let st7 = swar_q7_scale_le128_with_bias_x8(
-                        d7,
-                        t_s,
-                        bias_restore,
-                    );
-                    if (((st0 | st1) | (st2 | st3)) | ((st4 | st5) | (st6 | st7))) == 0 {
+                        let pc = coherence_from_word_arrays_with_both_uniform_flags_64(
+                            &nw,
+                            s_is_uniform,
+                            &prev_w,
+                            prev_is_uniform,
+                        );
+                        (nw, s_is_uniform, pc)
+                    } else if t_s >= 128 {
+                        (s, s_is_uniform, pre_c)
+                    } else if t_s == 0 {
                         (prev_w, prev_is_uniform, 1.0_f32)
-                    } else {
-                        let nw = [
-                            swar_q7_circular_add_x8(prev_w[0], st0),
-                            swar_q7_circular_add_x8(prev_w[1], st1),
-                            swar_q7_circular_add_x8(prev_w[2], st2),
-                            swar_q7_circular_add_x8(prev_w[3], st3),
-                            swar_q7_circular_add_x8(prev_w[4], st4),
-                            swar_q7_circular_add_x8(prev_w[5], st5),
-                            swar_q7_circular_add_x8(prev_w[6], st6),
-                            swar_q7_circular_add_x8(prev_w[7], st7),
-                        ];
-                        let nw_uni = is_word_array_uniform_64(&nw);
-                        let pc = if nw_uni && prev_is_uniform {
-                            branchless_cos_q7(st0 as gcso_q7_t)
+                    } else if diff_is_uniform {
+                        let st0 = swar_q7_scale_le128_with_bias_x8(d0, t_s, bias_restore);
+                        if st0 == 0 {
+                            (prev_w, prev_is_uniform, 1.0_f32)
                         } else {
-                            coherence_from_diff_words_64(st0, st1, st2, st3, st4, st5, st6, st7)
-                        };
-                        (nw, nw_uni, pc)
-                    }
+                            let nw = if prev_is_uniform {
+                                [swar_q7_circular_add_x8(prev_w[0], st0); 8]
+                            } else {
+                                [
+                                    swar_q7_circular_add_x8(prev_w[0], st0),
+                                    swar_q7_circular_add_x8(prev_w[1], st0),
+                                    swar_q7_circular_add_x8(prev_w[2], st0),
+                                    swar_q7_circular_add_x8(prev_w[3], st0),
+                                    swar_q7_circular_add_x8(prev_w[4], st0),
+                                    swar_q7_circular_add_x8(prev_w[5], st0),
+                                    swar_q7_circular_add_x8(prev_w[6], st0),
+                                    swar_q7_circular_add_x8(prev_w[7], st0),
+                                ]
+                            };
+                            let pc = if diff_is_byte_uniform {
+                                branchless_cos_q7(st0 as gcso_q7_t)
+                            } else {
+                                coherence_from_diff_words_64(st0, st0, st0, st0, st0, st0, st0, st0)
+                            };
+                            (nw, prev_is_uniform, pc)
+                        }
+                    } else {
+                        let st0 = swar_q7_scale_le128_with_bias_x8(d0, t_s, bias_restore);
+                        let st1 = swar_q7_scale_le128_with_bias_x8(d1, t_s, bias_restore);
+                        let st2 = swar_q7_scale_le128_with_bias_x8(d2, t_s, bias_restore);
+                        let st3 = swar_q7_scale_le128_with_bias_x8(d3, t_s, bias_restore);
+                        let st4 = swar_q7_scale_le128_with_bias_x8(d4, t_s, bias_restore);
+                        let st5 = swar_q7_scale_le128_with_bias_x8(d5, t_s, bias_restore);
+                        let st6 = swar_q7_scale_le128_with_bias_x8(d6, t_s, bias_restore);
+                        let st7 = swar_q7_scale_le128_with_bias_x8(d7, t_s, bias_restore);
+                        if (((st0 | st1) | (st2 | st3)) | ((st4 | st5) | (st6 | st7))) == 0 {
+                            (prev_w, prev_is_uniform, 1.0_f32)
+                        } else {
+                            let nw = [
+                                swar_q7_circular_add_x8(prev_w[0], st0),
+                                swar_q7_circular_add_x8(prev_w[1], st1),
+                                swar_q7_circular_add_x8(prev_w[2], st2),
+                                swar_q7_circular_add_x8(prev_w[3], st3),
+                                swar_q7_circular_add_x8(prev_w[4], st4),
+                                swar_q7_circular_add_x8(prev_w[5], st5),
+                                swar_q7_circular_add_x8(prev_w[6], st6),
+                                swar_q7_circular_add_x8(prev_w[7], st7),
+                            ];
+                            let nw_uni = is_word_array_uniform_64(&nw);
+                            let pc = if nw_uni && prev_is_uniform {
+                                branchless_cos_q7(st0 as gcso_q7_t)
+                            } else {
+                                coherence_from_diff_words_64(st0, st1, st2, st3, st4, st5, st6, st7)
+                            };
+                            (nw, nw_uni, pc)
+                        }
+                    };
+                    *trail_phase_words_mut(curr_trail) = ow;
+                    (pre_c, contr, ow, ow_uni, post_c)
                 };
-                *trail_phase_words_mut(curr_trail) = ow;
-                (pre_c, contr, ow, ow_uni, post_c)
-            };
 
-        curr_trail.prev_ptr = prev_cur_ptr;
-        curr_trail.step_count = prev_step_count.wrapping_add(1);
-        let inherit_anchor = (curr_trail.target_anchor_id == 0) & (!contradiction);
-        curr_trail.target_anchor_id = branchless_select_u32(
-            inherit_anchor,
-            prev_target_anchor_id,
-            curr_trail.target_anchor_id,
-        );
-        curr_trail.cluster_id = branchless_select_u32(
-            inherit_anchor & (prev_target_anchor_id != 0),
-            prev_target_anchor_id,
-            curr_trail.cluster_id,
-        );
-
-        let cur_ptr = gcso_tagged_ptr_t(curr_trail.current_ptr);
-        let rep_ptr = cur_ptr
-            .with_action_and_slot(
-                ATTRACTOR_SLOT_REPULSION,
-                cur_ptr.action_mode_flags() | ACTION_PRESET_REPULSION_ESCAPE,
-            )
-            .conjugate_phase();
-        curr_trail.current_ptr = branchless_select_u64(contradiction, rep_ptr.raw(), cur_ptr.raw());
-
-        let cur_rho =
-            branchless_flush_subnormal_f32(branchless_relu_f32(curr_trail.stigmergic_density));
-        let pos_rho = cur_rho + 0.25 * (1.0 + branchless_relu_f32(pre_coh));
-        let neg_rho = cur_rho * 0.5;
-        curr_trail.stigmergic_density = branchless_min_f32(
-            branchless_flush_subnormal_f32(branchless_select_f32(contradiction, neg_rho, pos_rho)),
-            MAX_STIGMERGIC_DENSITY,
-        );
-
-        let prev_pull = branchless_flush_subnormal_f32(branchless_relu_f32(prev_pull_force));
-        let cur_pull =
-            branchless_flush_subnormal_f32(branchless_relu_f32(curr_trail.attractor_pull_force));
-        let bridged_pull =
-            cur_pull + 0.5 * prev_pull * branchless_clamp_f32(1.0 + pre_coh, 0.25, 2.0);
-        curr_trail.attractor_pull_force = branchless_min_f32(
-            branchless_flush_subnormal_f32(branchless_select_f32(
-                contradiction,
-                cur_pull * 0.5,
-                bridged_pull,
-            )),
-            MAX_ATTRACTOR_PULL_FORCE,
-        );
-
-        let is_resonant = (!contradiction) & (pre_coh > 0.25);
-        curr_trail.flags |= branchless_select_u32(is_resonant, TRAIL_FLAG_SYNERGY_RESONANCE, 0)
-            | branchless_select_u32(
-                contradiction,
-                TRAIL_FLAG_REPULSION_ACTIVE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
-                0,
+            curr_trail.prev_ptr = prev_cur_ptr;
+            curr_trail.step_count = prev_step_count.wrapping_add(1);
+            let inherit_anchor = (curr_trail.target_anchor_id == 0) & (!contradiction);
+            curr_trail.target_anchor_id = branchless_select_u32(
+                inherit_anchor,
+                prev_target_anchor_id,
+                curr_trail.target_anchor_id,
+            );
+            curr_trail.cluster_id = branchless_select_u32(
+                inherit_anchor & (prev_target_anchor_id != 0),
+                prev_target_anchor_id,
+                curr_trail.cluster_id,
             );
 
-        if contradiction {
-            bloom_filter.insert_repulsive_pattern_words_weighted(&out_w, 1);
-            repulsed_count = repulsed_count.wrapping_add(1);
+            let cur_ptr = gcso_tagged_ptr_t(curr_trail.current_ptr);
+            let rep_ptr = cur_ptr
+                .with_action_and_slot(
+                    ATTRACTOR_SLOT_REPULSION,
+                    cur_ptr.action_mode_flags() | ACTION_PRESET_REPULSION_ESCAPE,
+                )
+                .conjugate_phase();
+            curr_trail.current_ptr =
+                branchless_select_u64(contradiction, rep_ptr.raw(), cur_ptr.raw());
+
+            let cur_rho =
+                branchless_flush_subnormal_f32(branchless_relu_f32(curr_trail.stigmergic_density));
+            let pos_rho = cur_rho + 0.25 * (1.0 + branchless_relu_f32(pre_coh));
+            let neg_rho = cur_rho * 0.5;
+            curr_trail.stigmergic_density = branchless_min_f32(
+                branchless_flush_subnormal_f32(branchless_select_f32(
+                    contradiction,
+                    neg_rho,
+                    pos_rho,
+                )),
+                MAX_STIGMERGIC_DENSITY,
+            );
+
+            let prev_pull = branchless_flush_subnormal_f32(branchless_relu_f32(prev_pull_force));
+            let cur_pull = branchless_flush_subnormal_f32(branchless_relu_f32(
+                curr_trail.attractor_pull_force,
+            ));
+            let bridged_pull =
+                cur_pull + 0.5 * prev_pull * branchless_clamp_f32(1.0 + pre_coh, 0.25, 2.0);
+            curr_trail.attractor_pull_force = branchless_min_f32(
+                branchless_flush_subnormal_f32(branchless_select_f32(
+                    contradiction,
+                    cur_pull * 0.5,
+                    bridged_pull,
+                )),
+                MAX_ATTRACTOR_PULL_FORCE,
+            );
+
+            let is_resonant = (!contradiction) & (pre_coh > 0.25);
+            curr_trail.flags |= branchless_select_u32(is_resonant, TRAIL_FLAG_SYNERGY_RESONANCE, 0)
+                | branchless_select_u32(
+                    contradiction,
+                    TRAIL_FLAG_REPULSION_ACTIVE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
+                    0,
+                );
+
+            if contradiction {
+                bloom_filter.insert_repulsive_pattern_words_weighted(&out_w, 1);
+                repulsed_count = repulsed_count.wrapping_add(1);
+            }
+
+            if post_coh < 0.999_999 {
+                joint_log_prob += fast_transition_log_prob_from_coh(post_coh);
+                coboundary_defect_sum += branchless_relu_f32(0.5 * (1.0 - post_coh));
+            }
+
+            prev_w = out_w;
+            prev_is_uniform = out_is_uniform;
+            prev_cur_ptr = curr_trail.current_ptr;
+            prev_step_count = curr_trail.step_count;
+            prev_target_anchor_id = curr_trail.target_anchor_id;
+            prev_pull_force = curr_trail.attractor_pull_force;
+            idx += 1;
         }
 
-        if post_coh < 0.999_999 {
-            joint_log_prob += fast_transition_log_prob_from_coh(post_coh);
-            coboundary_defect_sum += branchless_relu_f32(0.5 * (1.0 - post_coh));
-        }
-
-        prev_w = out_w;
-        prev_is_uniform = out_is_uniform;
-        prev_cur_ptr = curr_trail.current_ptr;
-        prev_step_count = curr_trail.step_count;
-        prev_target_anchor_id = curr_trail.target_anchor_id;
-        prev_pull_force = curr_trail.attractor_pull_force;
-        idx += 1;
-    }
-
-    let mean_step_defect = coboundary_defect_sum * fast_inv_len_f32(len - 1);
-    let loop_coh = if (first_w[0] == prev_w[0]) && swar_words_equal_64(&first_w, &prev_w) {
-        1.0_f32
-    } else {
-        coherence_from_word_arrays_with_both_uniform_flags_64(
-            &first_w,
-            first_is_uniform,
-            &prev_w,
-            prev_is_uniform,
-        )
-    };
-    let loop_defect = branchless_relu_f32(0.5 * (1.0 - loop_coh));
-    let holonomy_energy = branchless_flush_subnormal_f32(0.5 * (mean_step_defect + loop_defect));
-    let is_obstructed = holonomy_energy > branchless_relu_f32(obstruction_threshold);
+        let mean_step_defect = coboundary_defect_sum * fast_inv_len_f32(len - 1);
+        let loop_coh = if (first_w[0] == prev_w[0]) && swar_words_equal_64(&first_w, &prev_w) {
+            1.0_f32
+        } else {
+            coherence_from_word_arrays_with_both_uniform_flags_64(
+                &first_w,
+                first_is_uniform,
+                &prev_w,
+                prev_is_uniform,
+            )
+        };
+        let loop_defect = branchless_relu_f32(0.5 * (1.0 - loop_coh));
+        let holonomy_energy =
+            branchless_flush_subnormal_f32(0.5 * (mean_step_defect + loop_defect));
+        let is_obstructed = holonomy_energy > branchless_relu_f32(obstruction_threshold);
 
         Ok((
             branchless_flush_subnormal_f32(joint_log_prob),
@@ -946,8 +913,7 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
         branchless_flush_subnormal_f32(branchless_relu_f32(phase_interference_gain) * rsqrt_d);
     let clean_eta = branchless_flush_subnormal_f32(branchless_relu_f32(stigmergic_prior_gain));
     let clean_link = branchless_flush_subnormal_f32(branchless_relu_f32(pointer_link_bonus));
-    let safe_thresh =
-        branchless_clamp_f32(branchless_abs_f32(contradiction_threshold), 0.0, 1.0);
+    let safe_thresh = branchless_clamp_f32(branchless_abs_f32(contradiction_threshold), 0.0, 1.0);
     let clean_penalty = branchless_flush_subnormal_f32(branchless_relu_f32(repulsion_penalty));
 
     let src_w = match preloaded_src_w_opt {
@@ -957,8 +923,7 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
     let src_is_uniform = is_word_array_uniform_64(&src_w);
     let src_w0 = src_w[0];
     let src_b0 = (src_w0 & 0xFF) as u8;
-    let src_is_byte_uniform =
-        src_is_uniform & (src_w0 == src_w0.rotate_right(8));
+    let src_is_byte_uniform = src_is_uniform & (src_w0 == src_w0.rotate_right(8));
     let cur_linked_id = src_trail.linked_trail_id;
     let prune_non_macro = macro_anchor_id != 0;
 
@@ -1013,14 +978,10 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
                 let cw0 = cand_w[0];
                 if cw0 == src_w[0] {
                     1.0
-                } else if src_is_byte_uniform
-                    && (cw0 == cw0.rotate_right(8))
-                {
+                } else if src_is_byte_uniform && (cw0 == cw0.rotate_right(8)) {
                     Q7_FULL_COS_REF[src_b0.wrapping_sub(cw0 as u8) as usize]
                 } else {
-                    coherence_from_word_arrays_with_both_uniform_flags_64(
-                        src_w, true, cand_w, true,
-                    )
+                    coherence_from_word_arrays_with_both_uniform_flags_64(src_w, true, cand_w, true)
                 }
             } else {
                 coherence_from_word_arrays_with_both_uniform_flags_64(
@@ -1110,9 +1071,7 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
         let coh = if cand_eq_src {
             1.0
         } else if cand_is_uniform {
-            if src_is_byte_uniform
-                && (cw0 == cw0.rotate_right(8))
-            {
+            if src_is_byte_uniform && (cw0 == cw0.rotate_right(8)) {
                 Q7_FULL_COS_REF[src_b0.wrapping_sub(cw0 as u8) as usize]
             } else {
                 coherence_from_word_arrays_with_both_uniform_flags_64(&src_w, true, cand_w, true)
@@ -1184,7 +1143,8 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
                                 let (vc0, vc1) = if cand_vc_loaded {
                                     cand_vc
                                 } else {
-                                    let cp = cand.accumulated_phase_delta.as_ptr().cast::<__m256i>();
+                                    let cp =
+                                        cand.accumulated_phase_delta.as_ptr().cast::<__m256i>();
                                     let v0 = _mm256_loadu_si256(cp);
                                     let v1 = _mm256_loadu_si256(cp.add(1));
                                     cand_vc = (v0, v1);
@@ -1225,8 +1185,7 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
         } else {
             0.0
         };
-        let bayes_delta =
-            branchless_flush_subnormal_f32(phase_scale * coh + eff_prior_link);
+        let bayes_delta = branchless_flush_subnormal_f32(phase_scale * coh + eff_prior_link);
 
         if let Some(ref mut scores) = attention_scores_opt {
             if idx < scores.len() {
@@ -1285,22 +1244,25 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
             if !best_cand_is_uniform {
                 if s > 0 && s < 128 {
                     unsafe {
-                        use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_storeu_si256};
+                        use core::arch::x86_64::{
+                            __m256i, _mm256_loadu_si256, _mm256_storeu_si256,
+                        };
                         let (bvc0, bvc1) = if best_vc_valid {
                             (best_vc0, best_vc1)
                         } else {
                             let bp = dst_trail.accumulated_phase_delta.as_ptr().cast::<__m256i>();
                             (_mm256_loadu_si256(bp), _mm256_loadu_si256(bp.add(1)))
                         };
-                        let (vr0, vr1) = crate::traits::branchless::avx2_slerp_vec64(
-                            vs0,
-                            vs1,
-                            bvc0,
-                            bvc1,
-                            s,
-                        );
-                        let sp = src_trail.accumulated_phase_delta.as_mut_ptr().cast::<__m256i>();
-                        let dp = dst_trail.accumulated_phase_delta.as_mut_ptr().cast::<__m256i>();
+                        let (vr0, vr1) =
+                            crate::traits::branchless::avx2_slerp_vec64(vs0, vs1, bvc0, bvc1, s);
+                        let sp = src_trail
+                            .accumulated_phase_delta
+                            .as_mut_ptr()
+                            .cast::<__m256i>();
+                        let dp = dst_trail
+                            .accumulated_phase_delta
+                            .as_mut_ptr()
+                            .cast::<__m256i>();
                         _mm256_storeu_si256(sp, vr0);
                         _mm256_storeu_si256(sp.add(1), vr1);
                         _mm256_storeu_si256(dp, vr0);
@@ -1324,7 +1286,8 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
                     } else if s >= 128 {
                         *trail_phase_words_mut(src_trail) = best_w;
                     } else {
-                        let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+                        let bias_restore =
+                            (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
                         let bw = crate::traits::swar_slerp_words_with_uniform_flag_64(
                             &src_w,
                             src_is_uniform,
@@ -1348,7 +1311,8 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
                     } else if s >= 128 {
                         *trail_phase_words_mut(src_trail) = best_w;
                     } else {
-                        let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+                        let bias_restore =
+                            (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
                         let bw = crate::traits::swar_slerp_words_with_uniform_flag_64(
                             &src_w,
                             src_is_uniform,
@@ -1395,14 +1359,12 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
             src_trail.cluster_id = inherited_id;
             dst_trail.cluster_id = inherited_id;
         }
-        src_trail.flags = (src_trail.flags
-            | TRAIL_FLAG_SYNERGY_RESONANCE
-            | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE)
-            & !TRAIL_FLAG_REPULSION_ACTIVE;
-        dst_trail.flags = (dst_trail.flags
-            | TRAIL_FLAG_SYNERGY_RESONANCE
-            | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE)
-            & !TRAIL_FLAG_REPULSION_ACTIVE;
+        src_trail.flags =
+            (src_trail.flags | TRAIL_FLAG_SYNERGY_RESONANCE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE)
+                & !TRAIL_FLAG_REPULSION_ACTIVE;
+        dst_trail.flags =
+            (dst_trail.flags | TRAIL_FLAG_SYNERGY_RESONANCE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE)
+                & !TRAIL_FLAG_REPULSION_ACTIVE;
 
         let transition_lp = fast_transition_log_prob_from_coh(best_coh);
         (best_id, best_score, transition_lp, true)
@@ -1529,7 +1491,15 @@ fn step_edbc_tunneling_and_select_bayesian_core<E: EdbcClosedLoopCoordinator + ?
     win_w_opt: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
     bloom_filter: &mut ContrastivePhaseBloomFilter,
     mut attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
-) -> GcsoResult<(gcso_edbc_state_t, gcso_tagged_ptr_t, u32, f32, f32, f32, bool)> {
+) -> GcsoResult<(
+    gcso_edbc_state_t,
+    gcso_tagged_ptr_t,
+    u32,
+    f32,
+    f32,
+    f32,
+    bool,
+)> {
     let mut st = gcso_edbc_state_t::default();
     engine.eval_stateful(token_z_score, &mut st)?;
     let bif_thresh = branchless_select_f32(
@@ -1714,7 +1684,8 @@ fn step_via_gateway_frame_with_words_core<
     let sliding_entropy_rate = raw_st.sliding_entropy_rate;
     let singularity_eps = raw_st.singularity_eps;
     let bif_thresh = branchless_select_f32(
-        (raw_st.bifurcation_threshold > 0.0) & branchless_is_finite_f32(raw_st.bifurcation_threshold),
+        (raw_st.bifurcation_threshold > 0.0)
+            & branchless_is_finite_f32(raw_st.bifurcation_threshold),
         raw_st.bifurcation_threshold,
         DEFAULT_BIFURCATION_THRESHOLD,
     );
@@ -1740,8 +1711,7 @@ fn step_via_gateway_frame_with_words_core<
     );
     let final_rep_gain = LUT_REPULSION_GAIN[(final_mode as usize).min(2)];
 
-    let cur_pull =
-        branchless_flush_subnormal_f32(branchless_relu_f32(trail.attractor_pull_force));
+    let cur_pull = branchless_flush_subnormal_f32(branchless_relu_f32(trail.attractor_pull_force));
     let gw_pull = branchless_flush_subnormal_f32(branchless_relu_f32(frame.effective_energy));
     let total_pull = cur_pull + gw_pull;
     let has_cur_pull = cur_pull > 1.0e-12;
@@ -1800,9 +1770,8 @@ fn step_via_gateway_frame_with_words_core<
                                 crate::traits::branchless::avx2_words64_to_vec64_with_uniform(
                                     gw_w, gw_uni,
                                 );
-                            let (vr0, vr1) = crate::traits::branchless::avx2_slerp_vec64(
-                                vc0, vc1, vg0, vg1, s,
-                            );
+                            let (vr0, vr1) =
+                                crate::traits::branchless::avx2_slerp_vec64(vc0, vc1, vg0, vg1, s);
                             let (vf0, vf1) = if qdps_step > 1 {
                                 qdps_filtered_in_vec = true;
                                 crate::traits::branchless::avx2_qdps_filter_vec64(
@@ -1833,10 +1802,7 @@ fn step_via_gateway_frame_with_words_core<
         }
     };
 
-    if (qdps_step > 1)
-        & (!qdps_filtered_in_vec)
-        & has_cur_pull
-        & (!next_eq_gw)
+    if (qdps_step > 1) & (!qdps_filtered_in_vec) & has_cur_pull & (!next_eq_gw)
         && (!swar_words_equal_64(&next_w, gw_w))
     {
         next_w = filter_qdps_words_in_registers_64(&next_w, qdps_step);
@@ -1862,8 +1828,7 @@ fn step_via_gateway_frame_with_words_core<
     trail.prev_ptr = trail.current_ptr;
     trail.step_count = trail.step_count.wrapping_add(1);
     trail.attractor_pull_force = branchless_min_f32(total_pull, MAX_ATTRACTOR_PULL_FORCE);
-    let cur_rho =
-        branchless_flush_subnormal_f32(branchless_relu_f32(trail.stigmergic_density));
+    let cur_rho = branchless_flush_subnormal_f32(branchless_relu_f32(trail.stigmergic_density));
     let next_rho = branchless_select_f32(
         repulsion_triggered,
         cur_rho * 0.5,
@@ -1948,8 +1913,7 @@ fn step_via_gateway_frame_with_words_core<
     } else if (evolved_ptr.action_mode_flags() & ACTION_MODE_LAYER_SKIP) != 0
         && (evolved_ptr.action_mode_flags() & ACTION_MODE_DPSR_STEER) == 0
     {
-        report.provenance_bits |=
-            CAUSAL_AXIS_SYSTEM_CONSTRAINT | CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE;
+        report.provenance_bits |= CAUSAL_AXIS_SYSTEM_CONSTRAINT | CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE;
         if report.dominant_cause_code == ROOT_CAUSE_NOMINAL {
             report.dominant_cause_code = ROOT_CAUSE_SYSTEM_QOS_THROTTLE;
         }
@@ -2227,8 +2191,7 @@ pub trait EdbcClosedLoopCoordinator:
             *trail_phase_words_mut(trail) = folded_w;
             trail.target_anchor_id = dom_idx;
             trail.cluster_id = dom_idx;
-            trail.attractor_pull_force =
-                branchless_min_f32(total_weight, MAX_ATTRACTOR_PULL_FORCE);
+            trail.attractor_pull_force = branchless_min_f32(total_weight, MAX_ATTRACTOR_PULL_FORCE);
         }
 
         let mut st = gcso_edbc_state_t::default();
@@ -2300,7 +2263,15 @@ pub trait EdbcClosedLoopCoordinator:
         high_density_srl_thresh: f32,
         bloom_filter: &mut ContrastivePhaseBloomFilter,
         attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(gcso_edbc_state_t, gcso_tagged_ptr_t, u32, f32, f32, f32, bool)> {
+    ) -> GcsoResult<(
+        gcso_edbc_state_t,
+        gcso_tagged_ptr_t,
+        u32,
+        f32,
+        f32,
+        f32,
+        bool,
+    )> {
         if candidate_trails.is_empty()
             || explore_head_start > MAX_ATTENTION_HEADS
             || !branchless_is_finite_f32(phase_interference_gain)
@@ -2430,32 +2401,39 @@ pub trait EdbcClosedLoopCoordinator:
         let has_win_centroid =
             macro_idx < macro_centroids.len() && macro_centroids[macro_idx].sample_count > 0;
 
-        let (st, evolved_ptr, selected_id, bayes_score, transition_log_prob, tunneling_x_star, found_coherent) =
-            step_edbc_tunneling_and_select_bayesian_core(
-                self,
-                src_trail,
-                Some(bridged_w),
-                candidate_trails,
-                token_z_score,
-                cvoid_score,
-                alpha,
-                beta,
-                d0,
-                head_dim,
-                explore_head_start,
-                phase_interference_gain,
-                stigmergic_prior_gain,
-                pointer_link_bonus,
-                repulsion_penalty,
-                fine_interpolation_u7,
-                contradiction_threshold,
-                high_density_srl_thresh,
-                macro_anchor_id,
-                0,
-                has_win_centroid.then_some(&win_w),
-                bloom_filter,
-                attention_scores,
-            )?;
+        let (
+            st,
+            evolved_ptr,
+            selected_id,
+            bayes_score,
+            transition_log_prob,
+            tunneling_x_star,
+            found_coherent,
+        ) = step_edbc_tunneling_and_select_bayesian_core(
+            self,
+            src_trail,
+            Some(bridged_w),
+            candidate_trails,
+            token_z_score,
+            cvoid_score,
+            alpha,
+            beta,
+            d0,
+            head_dim,
+            explore_head_start,
+            phase_interference_gain,
+            stigmergic_prior_gain,
+            pointer_link_bonus,
+            repulsion_penalty,
+            fine_interpolation_u7,
+            contradiction_threshold,
+            high_density_srl_thresh,
+            macro_anchor_id,
+            0,
+            has_win_centroid.then_some(&win_w),
+            bloom_filter,
+            attention_scores,
+        )?;
 
         Ok((
             st,
@@ -2555,32 +2533,39 @@ pub trait EdbcClosedLoopCoordinator:
         let has_win_centroid =
             idx1 < macro_centroids.len() && macro_centroids[idx1].sample_count > 0;
 
-        let (st, evolved_ptr, selected_id, bayes_score, transition_log_prob, tunneling_x_star, found_coherent) =
-            step_edbc_tunneling_and_select_bayesian_core(
-                self,
-                src_trail,
-                Some(bridged_w),
-                candidate_trails,
-                token_z_score,
-                cvoid_score,
-                alpha,
-                beta,
-                d0,
-                head_dim,
-                explore_head_start,
-                phase_interference_gain,
-                stigmergic_prior_gain,
-                pointer_link_bonus,
-                repulsion_penalty,
-                fine_interpolation_u7,
-                contradiction_threshold,
-                high_density_srl_thresh,
-                aid1,
-                branchless_select_u32(is_liminal, aid2, 0),
-                has_win_centroid.then_some(&w1),
-                bloom_filter,
-                attention_scores,
-            )?;
+        let (
+            st,
+            evolved_ptr,
+            selected_id,
+            bayes_score,
+            transition_log_prob,
+            tunneling_x_star,
+            found_coherent,
+        ) = step_edbc_tunneling_and_select_bayesian_core(
+            self,
+            src_trail,
+            Some(bridged_w),
+            candidate_trails,
+            token_z_score,
+            cvoid_score,
+            alpha,
+            beta,
+            d0,
+            head_dim,
+            explore_head_start,
+            phase_interference_gain,
+            stigmergic_prior_gain,
+            pointer_link_bonus,
+            repulsion_penalty,
+            fine_interpolation_u7,
+            contradiction_threshold,
+            high_density_srl_thresh,
+            aid1,
+            branchless_select_u32(is_liminal, aid2, 0),
+            has_win_centroid.then_some(&w1),
+            bloom_filter,
+            attention_scores,
+        )?;
 
         Ok((
             st,
@@ -3641,8 +3626,7 @@ impl EdbcEngine {
 
         let to_bif = ((current_mode == EDBC_MODE_NORMAL_ENTROPY) & cond_bif_up)
             | ((current_mode == EDBC_MODE_PHASE_CONJUGATE_REPULSION) & cond_repulse_down);
-        let mid_mode =
-            branchless_select_u32(to_bif, EDBC_MODE_PITCHFORK_BIFURCATION, current_mode);
+        let mid_mode = branchless_select_u32(to_bif, EDBC_MODE_PITCHFORK_BIFURCATION, current_mode);
         let next_mode = branchless_select_u32(
             cond_repulse_up,
             EDBC_MODE_PHASE_CONJUGATE_REPULSION,
@@ -4012,7 +3996,8 @@ impl EdbcEngine {
     /// Returns `true` when the EDBC controller recommends inertial layer skipping (`ACTION_MODE_LAYER_SKIP`).
     #[inline(always)]
     pub const fn requests_inertial_layer_skip(&self) -> bool {
-        self.evaluate_adaptive_compute_and_gop_budget(0, 4, 32, 0.12).2
+        self.evaluate_adaptive_compute_and_gop_budget(0, 4, 32, 0.12)
+            .2
     }
 }
 
@@ -4029,8 +4014,11 @@ impl CausalProvenanceSignal for EdbcEngine {
 
     #[inline(always)]
     fn causal_anomaly_severity(&self) -> f32 {
-        let h_sev =
-            branchless_clamp_f32(branchless_relu_f32(self.state.moving_z_entropy) * 0.25, 0.0, 1.0);
+        let h_sev = branchless_clamp_f32(
+            branchless_relu_f32(self.state.moving_z_entropy) * 0.25,
+            0.0,
+            1.0,
+        );
         let rep_sev = branchless_select_f32(
             self.state.active_branch_mode == EDBC_MODE_PHASE_CONJUGATE_REPULSION,
             0.85,
@@ -4043,12 +4031,20 @@ impl CausalProvenanceSignal for EdbcEngine {
 impl SystemConstraintSignal for EdbcEngine {
     #[inline(always)]
     fn system_vram_pressure(&self) -> f32 {
-        branchless_clamp_f32(branchless_relu_f32(self.state.moving_z_entropy) * 0.25, 0.0, 1.0)
+        branchless_clamp_f32(
+            branchless_relu_f32(self.state.moving_z_entropy) * 0.25,
+            0.0,
+            1.0,
+        )
     }
 
     #[inline(always)]
     fn system_gpu_frame_overrun(&self) -> f32 {
-        branchless_clamp_f32(branchless_relu_f32(self.state.sliding_entropy_rate), 0.0, 1.0)
+        branchless_clamp_f32(
+            branchless_relu_f32(self.state.sliding_entropy_rate),
+            0.0,
+            1.0,
+        )
     }
 
     #[inline(always)]

@@ -73,9 +73,7 @@ use crate::abi::{
     gcso_config_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t,
     gcso_tagged_ptr_t, GCSO_ERROR_INVALID_ARGUMENT,
 };
-use crate::traits::aligned::{
-    AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut32,
-};
+use crate::traits::aligned::{AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut32};
 use crate::traits::branchless::{
     branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
     branchless_is_finite_f32, branchless_ln_f32, branchless_max_f32, branchless_min_f32,
@@ -84,20 +82,20 @@ use crate::traits::branchless::{
     branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
     coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_len_f32,
     fast_ln_1p_bounded_f32, is_word_array_uniform_64, load_q7_words_64,
-    procrustes_q7_words_64_simd, scale_f32_slice_unrolled8,
-    swar_q7_circular_add_x8, swar_q7_neg_sat_x8, swar_q7_qdps_filter_x8,
-    swar_q7_scale_le128_with_bias_x8, swar_slerp_words_with_uniform_flag_64, trail_phase_words_mut,
-    trail_phase_words_ref, Q7_FULL_COS_REF,
+    procrustes_q7_words_64_simd, scale_f32_slice_unrolled8, swar_q7_circular_add_x8,
+    swar_q7_neg_sat_x8, swar_q7_qdps_filter_x8, swar_q7_scale_le128_with_bias_x8,
+    swar_slerp_words_with_uniform_flag_64, trail_phase_words_mut, trail_phase_words_ref,
+    Q7_FULL_COS_REF,
 };
 use crate::traits::gateway::{
     CausalProvenanceReport, CrystallizedAttractorRecord, GatewayFrame, ManifoldGatewaySignal,
     DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
 };
 use crate::traits::primitives::{
-    GcsoResult, Pod, ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP,
-    ACTION_MODE_PSPM_ROUTE, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_REPULSION,
-    DEFAULT_ENTROPY_EPS, DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD,
-    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
+    GcsoResult, Pod, ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PSPM_ROUTE,
+    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_REPULSION, DEFAULT_ENTROPY_EPS,
+    DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD, MAX_ATTENTION_HEADS,
+    MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
 };
 use crate::traits::rope::{
     dispatch_fused_ripa_and_pspm_words_core, steer_from_swar_words_core_safe, DynamicLayerSkipper,
@@ -298,9 +296,7 @@ fn finish_constant_time_swarm_qdps_and_steer(
         filt_w
     };
 
-    if !evolved_ptr.has_action_mode(ACTION_MODE_DPSR_STEER)
-        || !swar_words_nonzero_64(&eff_words)
-    {
+    if !evolved_ptr.has_action_mode(ACTION_MODE_DPSR_STEER) || !swar_words_nonzero_64(&eff_words) {
         return;
     }
 
@@ -335,7 +331,11 @@ fn steer_gateway_signal_core_safe<
     query_tensor: &mut AlignedSliceMut32<'_, f32>,
     mut key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
     logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-) -> GcsoResult<(GatewayFrame, CausalProvenanceReport, [u64; NUM_SWARM_MICRO_CELLS])> {
+) -> GcsoResult<(
+    GatewayFrame,
+    CausalProvenanceReport,
+    [u64; NUM_SWARM_MICRO_CELLS],
+)> {
     let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
     let report = frame.to_causal_report();
     let (head_dim, num_heads) = validate_closed_loop_tensors(
@@ -348,8 +348,11 @@ fn steer_gateway_signal_core_safe<
     trail.prev_ptr = trail.current_ptr;
     trail.current_ptr = frame.tagged_ptr;
     let has_frame_anchor = frame.target_anchor_id != 0;
-    trail.target_anchor_id =
-        branchless_select_u32(has_frame_anchor, frame.target_anchor_id, trail.target_anchor_id);
+    trail.target_anchor_id = branchless_select_u32(
+        has_frame_anchor,
+        frame.target_anchor_id,
+        trail.target_anchor_id,
+    );
     trail.cluster_id = branchless_select_u32(
         has_frame_anchor,
         frame.target_anchor_id,
@@ -512,17 +515,14 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
         branchless_flush_subnormal_f32(branchless_relu_f32(phase_interference_gain) * rsqrt_d);
     let clean_eta = branchless_flush_subnormal_f32(branchless_relu_f32(stigmergic_prior_gain));
     let clean_link = branchless_flush_subnormal_f32(branchless_relu_f32(pointer_link_bonus));
-    let safe_thresh =
-        branchless_clamp_f32(branchless_abs_f32(contradiction_threshold), 0.0, 1.0);
+    let safe_thresh = branchless_clamp_f32(branchless_abs_f32(contradiction_threshold), 0.0, 1.0);
     let clean_penalty = branchless_flush_subnormal_f32(branchless_relu_f32(repulsion_penalty));
     let cur_linked_id = src_trail.linked_trail_id;
     let self_is_uniform = is_word_array_uniform_64(&self_w);
     let self_w0 = self_w[0];
     let self_b0 = (self_w0 & 0xFF) as u8;
-    let self_is_byte_uniform =
-        self_is_uniform & (self_w0 == self_w0.rotate_right(8));
-    let mut scores_slice_opt = attention_scores
-        .map(AlignedSliceMut32::as_mut_slice);
+    let self_is_byte_uniform = self_is_uniform & (self_w0 == self_w0.rotate_right(8));
+    let mut scores_slice_opt = attention_scores.map(AlignedSliceMut32::as_mut_slice);
     let prune_non_macro = primary_macro_anchor_id != 0;
 
     #[inline(always)]
@@ -577,9 +577,7 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
                 let cw0 = cand_w[0];
                 if cw0 == self_w[0] {
                     1.0
-                } else if self_is_byte_uniform
-                    && (cw0 == cw0.rotate_right(8))
-                {
+                } else if self_is_byte_uniform && (cw0 == cw0.rotate_right(8)) {
                     Q7_FULL_COS_REF[self_b0.wrapping_sub(cw0 as u8) as usize]
                 } else {
                     coherence_from_word_arrays_with_both_uniform_flags_64(
@@ -671,9 +669,7 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
         let coh = if cand_eq_self {
             1.0
         } else if cand_is_uniform {
-            if self_is_byte_uniform
-                && (cw0 == cw0.rotate_right(8))
-            {
+            if self_is_byte_uniform && (cw0 == cw0.rotate_right(8)) {
                 Q7_FULL_COS_REF[self_b0.wrapping_sub(cw0 as u8) as usize]
             } else {
                 coherence_from_word_arrays_with_both_uniform_flags_64(&self_w, true, cand_w, true)
@@ -737,7 +733,9 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
                     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                     {
                         unsafe {
-                            use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
+                            use core::arch::x86_64::{
+                                __m256i, _mm256_loadu_si256, _mm256_sub_epi8,
+                            };
                             let (vc0, vc1) = if cand_vc_loaded {
                                 cand_vc
                             } else {
@@ -779,14 +777,12 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
         } else {
             0.0
         };
-        let bayes_delta =
-            branchless_flush_subnormal_f32(phase_scale * coh + eff_prior_link);
+        let bayes_delta = branchless_flush_subnormal_f32(phase_scale * coh + eff_prior_link);
 
         if let Some(ref mut scores) = scores_slice_opt {
             if idx < scores.len() {
                 let penalty = branchless_select_f32(is_coherent, 0.0, clean_penalty);
-                scores[idx] =
-                    branchless_flush_subnormal_f32(scores[idx] + bayes_delta - penalty);
+                scores[idx] = branchless_flush_subnormal_f32(scores[idx] + bayes_delta - penalty);
             }
         }
 
@@ -854,7 +850,9 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
                 if eff_s > 0 && eff_s < 128 {
                     qdps_done = true;
                     self_w = unsafe {
-                        use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_storeu_si256};
+                        use core::arch::x86_64::{
+                            __m256i, _mm256_loadu_si256, _mm256_storeu_si256,
+                        };
                         let (bvc0, bvc1) = if best_vc_valid {
                             (best_vc0, best_vc1)
                         } else {
@@ -862,14 +860,16 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
                             (_mm256_loadu_si256(bp), _mm256_loadu_si256(bp.add(1)))
                         };
                         let (vr0, vr1) = crate::traits::branchless::avx2_slerp_vec64(
-                            vs0,
-                            vs1,
-                            bvc0,
-                            bvc1,
-                            eff_s,
+                            vs0, vs1, bvc0, bvc1, eff_s,
                         );
-                        let sp = src_trail.accumulated_phase_delta.as_mut_ptr().cast::<__m256i>();
-                        let dp = dst_trail.accumulated_phase_delta.as_mut_ptr().cast::<__m256i>();
+                        let sp = src_trail
+                            .accumulated_phase_delta
+                            .as_mut_ptr()
+                            .cast::<__m256i>();
+                        let dp = dst_trail
+                            .accumulated_phase_delta
+                            .as_mut_ptr()
+                            .cast::<__m256i>();
                         _mm256_storeu_si256(sp, vr0);
                         _mm256_storeu_si256(sp.add(1), vr1);
                         _mm256_storeu_si256(dp, vr0);
@@ -1354,11 +1354,9 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
         let self_is_uniform = is_word_array_uniform_64(&self_w);
         let self_w0 = self_w[0];
         let self_b0 = (self_w0 & 0xFF) as u8;
-        let self_is_byte_uniform =
-            self_is_uniform & (self_w0 == self_w0.rotate_right(8));
+        let self_is_byte_uniform = self_is_uniform & (self_w0 == self_w0.rotate_right(8));
         let cur_linked_id = src_trail.linked_trail_id;
-        let mut scores_slice_opt = attention_scores
-            .map(AlignedSliceMut32::as_mut_slice);
+        let mut scores_slice_opt = attention_scores.map(AlignedSliceMut32::as_mut_slice);
 
         let mut best_id = cur_linked_id;
         let mut best_idx = 0usize;
@@ -1401,9 +1399,7 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
             let coh = if cand_eq_self {
                 1.0
             } else if cand_is_uniform {
-                if self_is_byte_uniform
-                    && (cw0 == cw0.rotate_right(8))
-                {
+                if self_is_byte_uniform && (cw0 == cw0.rotate_right(8)) {
                     Q7_FULL_COS_REF[self_b0.wrapping_sub(cw0 as u8) as usize]
                 } else {
                     coherence_from_word_arrays_with_both_uniform_flags_64(
@@ -1444,8 +1440,7 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
             } else {
                 0.0
             };
-            let bayes_delta =
-                branchless_flush_subnormal_f32(phase_scale * coh + eff_prior_link);
+            let bayes_delta = branchless_flush_subnormal_f32(phase_scale * coh + eff_prior_link);
 
             if let Some(ref mut scores) = scores_slice_opt {
                 if idx < scores.len() {
@@ -1494,22 +1489,27 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
                     if eff_s > 0 && eff_s < 128 {
                         qdps_done = true;
                         self_w = unsafe {
-                            use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_storeu_si256};
+                            use core::arch::x86_64::{
+                                __m256i, _mm256_loadu_si256, _mm256_storeu_si256,
+                            };
                             let (bvc0, bvc1) = if best_vc_valid {
                                 (best_vc0, best_vc1)
                             } else {
-                                let bp = dst_trail.accumulated_phase_delta.as_ptr().cast::<__m256i>();
+                                let bp =
+                                    dst_trail.accumulated_phase_delta.as_ptr().cast::<__m256i>();
                                 (_mm256_loadu_si256(bp), _mm256_loadu_si256(bp.add(1)))
                             };
                             let (vr0, vr1) = crate::traits::branchless::avx2_slerp_vec64(
-                                vs0,
-                                vs1,
-                                bvc0,
-                                bvc1,
-                                eff_s,
+                                vs0, vs1, bvc0, bvc1, eff_s,
                             );
-                            let sp = src_trail.accumulated_phase_delta.as_mut_ptr().cast::<__m256i>();
-                            let dp = dst_trail.accumulated_phase_delta.as_mut_ptr().cast::<__m256i>();
+                            let sp = src_trail
+                                .accumulated_phase_delta
+                                .as_mut_ptr()
+                                .cast::<__m256i>();
+                            let dp = dst_trail
+                                .accumulated_phase_delta
+                                .as_mut_ptr()
+                                .cast::<__m256i>();
                             _mm256_storeu_si256(sp, vr0);
                             _mm256_storeu_si256(sp.add(1), vr1);
                             _mm256_storeu_si256(dp, vr0);
@@ -1801,15 +1801,7 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
                 if let Some(k) = key_tensor.as_deref_mut() {
                     if filt_nonzero {
                         steer_from_swar_words_core_safe(
-                            &filt_w,
-                            0xFF,
-                            128,
-                            head_dim,
-                            num_heads,
-                            false,
-                            max_rad,
-                            k,
-                            None,
+                            &filt_w, 0xFF, 128, head_dim, num_heads, false, max_rad, k, None,
                         );
                     }
                 }
@@ -1920,7 +1912,9 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
         } else {
             branchless_rad_to_qdps_step_u8(min_step_rad)
         };
-        let active_cells = num_heads.div_ceil(HEADS_PER_SWARM_CELL).min(NUM_SWARM_MICRO_CELLS);
+        let active_cells = num_heads
+            .div_ceil(HEADS_PER_SWARM_CELL)
+            .min(NUM_SWARM_MICRO_CELLS);
         let is_unit_gain = clean_gain == 128;
         let is_bypass_step = step_u8 <= 1;
 
@@ -2213,9 +2207,7 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
                 0,
             );
 
-        if let (Some(scores), Some(anchors)) =
-            (attention_scores, memory_anchor_phases)
-        {
+        if let (Some(scores), Some(anchors)) = (attention_scores, memory_anchor_phases) {
             if !anchors.is_empty() && !scores.is_empty() {
                 if !branchless_is_finite_f32(attention_interference_gain) {
                     return Err(GCSO_ERROR_INVALID_ARGUMENT);
@@ -2240,7 +2232,9 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
                         {
                             // SAFETY: `anchors[i]` is 64 bytes (`2 * __m256i`) and `vo0, vo1` hold `out_w`.
                             unsafe {
-                                use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
+                                use core::arch::x86_64::{
+                                    __m256i, _mm256_loadu_si256, _mm256_sub_epi8,
+                                };
                                 let ap = anchors[i].as_ptr().cast::<__m256i>();
                                 let va0 = _mm256_loadu_si256(ap);
                                 let va1 = _mm256_loadu_si256(ap.add(1));
@@ -2474,28 +2468,29 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
         let has_win_centroid =
             macro_idx < macro_centroids.len() && macro_centroids[macro_idx].sample_count > 0;
 
-        let (best_id, out_score, trans_lp, found) = route_macro_aligned_bayesian_trails_and_steer_core(
-            self_w,
-            &win_w,
-            has_win_centroid,
-            macro_anchor_id,
-            0,
-            src_trail,
-            candidate_trails,
-            head_dim,
-            num_heads,
-            phase_interference_gain,
-            stigmergic_prior_gain,
-            pointer_link_bonus,
-            repulsion_penalty,
-            fine_interpolation_u7,
-            contradiction_threshold,
-            min_step_rad,
-            max_rad,
-            attention_scores,
-            query_tensor,
-            key_tensor,
-        );
+        let (best_id, out_score, trans_lp, found) =
+            route_macro_aligned_bayesian_trails_and_steer_core(
+                self_w,
+                &win_w,
+                has_win_centroid,
+                macro_anchor_id,
+                0,
+                src_trail,
+                candidate_trails,
+                head_dim,
+                num_heads,
+                phase_interference_gain,
+                stigmergic_prior_gain,
+                pointer_link_bonus,
+                repulsion_penalty,
+                fine_interpolation_u7,
+                contradiction_threshold,
+                min_step_rad,
+                max_rad,
+                attention_scores,
+                query_tensor,
+                key_tensor,
+            );
 
         Ok((
             macro_idx,
@@ -2567,39 +2562,32 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
             idx1 < macro_centroids.len() && macro_centroids[idx1].sample_count > 0;
         let secondary_aid = branchless_select_u32(is_liminal, aid2, 0);
 
-        let (best_id, out_score, trans_lp, found) = route_macro_aligned_bayesian_trails_and_steer_core(
-            self_w,
-            &w1,
-            has_win_centroid,
-            aid1,
-            secondary_aid,
-            src_trail,
-            candidate_trails,
-            head_dim,
-            num_heads,
-            phase_interference_gain,
-            stigmergic_prior_gain,
-            pointer_link_bonus,
-            repulsion_penalty,
-            fine_interpolation_u7,
-            contradiction_threshold,
-            min_step_rad,
-            max_rad,
-            attention_scores,
-            query_tensor,
-            key_tensor,
-        );
+        let (best_id, out_score, trans_lp, found) =
+            route_macro_aligned_bayesian_trails_and_steer_core(
+                self_w,
+                &w1,
+                has_win_centroid,
+                aid1,
+                secondary_aid,
+                src_trail,
+                candidate_trails,
+                head_dim,
+                num_heads,
+                phase_interference_gain,
+                stigmergic_prior_gain,
+                pointer_link_bonus,
+                repulsion_penalty,
+                fine_interpolation_u7,
+                contradiction_threshold,
+                min_step_rad,
+                max_rad,
+                attention_scores,
+                query_tensor,
+                key_tensor,
+            );
 
         Ok((
-            idx1,
-            idx2,
-            aid1,
-            aid2,
-            is_liminal,
-            best_id,
-            out_score,
-            trans_lp,
-            found,
+            idx1, idx2, aid1, aid2, is_liminal, best_id, out_score, trans_lp, found,
         ))
     }
 
@@ -2723,8 +2711,11 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
         )?;
 
         let has_frame_anchor = frame.target_anchor_id != 0;
-        trail.target_anchor_id =
-            branchless_select_u32(has_frame_anchor, frame.target_anchor_id, trail.target_anchor_id);
+        trail.target_anchor_id = branchless_select_u32(
+            has_frame_anchor,
+            frame.target_anchor_id,
+            trail.target_anchor_id,
+        );
         trail.cluster_id = branchless_select_u32(
             has_frame_anchor,
             frame.target_anchor_id,
@@ -3794,14 +3785,17 @@ mod tests {
         assert!(branch_logits.data[0] > 1.9);
 
         let sys_sig = SystemConstraint::new((), 0.20, 0.05, 0xFF);
-        let fact_sig =
-            ObjectiveFact::new("RAG fact: zero-allocation Rust kernel", 3.0, 0x0024_0000, 88);
+        let fact_sig = ObjectiveFact::new(
+            "RAG fact: zero-allocation Rust kernel",
+            3.0,
+            0x0024_0000,
+            88,
+        );
         let pers_sig =
             SubjectivePersona::new("Analytical co-architect persona", 2.0, 0x0000_9000, 12);
         let mut crystal =
             CrystallizedAttractorRecord::new_empty(88, ATTRACTOR_SLOT_KNOWLEDGE, 0x0024_0000);
-        let mut gw_logits =
-            AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
+        let mut gw_logits = AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
 
         let (gw_frame, gw_report, grav_mass) = engine
             .steer_and_crystallize_gateway_signal_safe(

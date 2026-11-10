@@ -58,11 +58,10 @@
 use core::mem::{align_of, offset_of, size_of};
 
 use crate::abi::{
-    gcso_anchor_type_t, gcso_pointer_trail_t, gcso_q7_t, gcso_tagged_ptr_t,
-    GCSO_ABI_VERSION_HEX, GCSO_ANCHOR_TYPE_CRYSTALLIZED, GCSO_ANCHOR_TYPE_EMBEDDING,
-    GCSO_ANCHOR_TYPE_PHASE_REPULSE, GCSO_ANCHOR_TYPE_SYSTEM_PROMPT, GCSO_ANCHOR_TYPE_TOPOLOGICAL,
-    GCSO_ERROR_ACTION_HUB_FULL, GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT,
-    GCSO_ERROR_VERSION_MISMATCH,
+    gcso_anchor_type_t, gcso_pointer_trail_t, gcso_q7_t, gcso_tagged_ptr_t, GCSO_ABI_VERSION_HEX,
+    GCSO_ANCHOR_TYPE_CRYSTALLIZED, GCSO_ANCHOR_TYPE_EMBEDDING, GCSO_ANCHOR_TYPE_PHASE_REPULSE,
+    GCSO_ANCHOR_TYPE_SYSTEM_PROMPT, GCSO_ANCHOR_TYPE_TOPOLOGICAL, GCSO_ERROR_ACTION_HUB_FULL,
+    GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_VERSION_MISMATCH,
 };
 use crate::traits::aligned::{
     AlignedBuffer16, AlignedBuffer32, AlignedSlice, AlignedSlice16, AlignedSlice32,
@@ -71,18 +70,17 @@ use crate::traits::aligned::{
 use crate::traits::branchless::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_inv_pos_f32,
     branchless_is_finite_f32, branchless_max_f32, branchless_min_f32,
-    branchless_phase_coherence_inv_temp_scale,
-    branchless_q7_conjugate_64, branchless_q7_inhibit_words_64, branchless_q7_resonant_pull_64,
+    branchless_phase_coherence_inv_temp_scale, branchless_q7_conjugate_64,
+    branchless_q7_inhibit_words_64, branchless_q7_resonant_pull_64,
     branchless_q7_synergy_fuse_words_64, branchless_rad_to_qdps_step_u8, branchless_relu_f32,
     branchless_select_f32, branchless_select_i32, branchless_select_u32, branchless_select_u8,
     branchless_splitmix64, branchless_von_mises_kappa, circular_r_bar_from_words_64,
     circular_resultant_from_words_64, coherence_from_word_arrays_64,
     coherence_from_word_arrays_with_both_uniform_flags_64, crc32_block64_zero_seed_words,
-    crc32_step_block64_words, crc32_step_l16, crc32_step_l32, crc32_step_l8,
-    fast_inv_len_f32, fast_inv_pos_normal_f32, is_phase_profile_nonzero_64,
-    is_word_array_uniform_64, load_q7_words_64, store_q7_word_at, store_q7_words_64,
-    swar_q7_qdps_filter_words_64, swar_q7_scale_le128_with_bias_x8, swar_q7_sub_sat_x8,
-    trail_phase_words_ref, Q7_FULL_COS_REF,
+    crc32_step_block64_words, crc32_step_l16, crc32_step_l32, crc32_step_l8, fast_inv_len_f32,
+    fast_inv_pos_normal_f32, is_phase_profile_nonzero_64, is_word_array_uniform_64,
+    load_q7_words_64, store_q7_word_at, store_q7_words_64, swar_q7_qdps_filter_words_64,
+    swar_q7_scale_le128_with_bias_x8, swar_q7_sub_sat_x8, trail_phase_words_ref, Q7_FULL_COS_REF,
 };
 use crate::traits::cold_path::{
     AttractorField, ColdPathTrailCrystalExt, MultiDomainAttractorSpace, PersonaPatcher,
@@ -154,15 +152,15 @@ pub const fn hash_bytes_to_q7_phases(
         i += 8;
     }
     while i < len {
-        seed = branchless_splitmix64(
-            seed ^ (bytes[i] as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
-        );
+        seed = branchless_splitmix64(seed ^ (bytes[i] as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
         i += 1;
     }
     let mut out = [0i8; MAX_ATTENTION_HEADS];
     let mut w = 0usize;
     while w < 8 {
-        seed = branchless_splitmix64(seed.wrapping_add((w as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)));
+        seed = branchless_splitmix64(
+            seed.wrapping_add((w as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)),
+        );
         let shifted = (seed >> 1) & 0x7F7F_7F7F_7F7F_7F7F;
         let signed_w = shifted ^ (seed & 0x8080_8080_8080_8080);
         store_q7_word_at(&mut out, w * 8, signed_w);
@@ -185,9 +183,7 @@ const fn hash_prompt_to_q7_phases(
 /// in branchless `const fn` mode.
 #[inline]
 #[must_use]
-pub const fn project_f32_slice_to_q7_phases(
-    embedding: &[f32],
-) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+pub const fn project_f32_slice_to_q7_phases(embedding: &[f32]) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
     let mut out = [0i8; MAX_ATTENTION_HEADS];
     let len = embedding.len();
     if len == 0 {
@@ -850,8 +846,11 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
     ) -> AttractorGrowthReport {
         let coords = self.sample_phase_coords(domain_salt);
         let raw_mass = branchless_flush_subnormal_f32(branchless_relu_f32(self.sample_mass()));
-        let prior =
-            branchless_clamp_f32(branchless_relu_f32(self.sample_coherence_prior()), 0.25, 1.0);
+        let prior = branchless_clamp_f32(
+            branchless_relu_f32(self.sample_coherence_prior()),
+            0.25,
+            1.0,
+        );
         let effective_mass = branchless_flush_subnormal_f32(raw_mass * prior);
         let coord_w = load_q7_words_64(&coords);
         let has_signal = (effective_mass > 1.0e-9) & words_any_nonzero_64(&coord_w);
@@ -870,8 +869,7 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
             MAX_STIGMERGIC_DENSITY,
         );
 
-        let r_bar =
-            circular_r_bar_from_words_64(trail_phase_words_ref(trail_inout));
+        let r_bar = circular_r_bar_from_words_64(trail_phase_words_ref(trail_inout));
         let kappa = branchless_von_mises_kappa(r_bar);
         let _ = trail_inout.evaluate_crystallization_candidacy(
             crystallize_density_thresh,
@@ -967,12 +965,12 @@ pub trait AttractorGrowthCoordinator: AttractorField + PersonaPatcher {
             return Ok(report);
         }
 
-        let should_crystallize = (trail_inout.flags
-            & crate::traits::telemetry::TRAIL_FLAG_CRYSTALLIZED_CANDIDATE)
-            != 0;
+        let should_crystallize =
+            (trail_inout.flags & crate::traits::telemetry::TRAIL_FLAG_CRYSTALLIZED_CANDIDATE) != 0;
         if should_crystallize {
-            let emb16 =
-                AlignedBuffer32::new(q7_phases_to_embedding16(&trail_inout.accumulated_phase_delta));
+            let emb16 = AlignedBuffer32::new(q7_phases_to_embedding16(
+                &trail_inout.accumulated_phase_delta,
+            ));
             let mass = branchless_max_f32(
                 branchless_flush_subnormal_f32(branchless_relu_f32(sample.sample_mass())),
                 1.0,
@@ -1089,10 +1087,7 @@ pub trait AttractorGrowthCoordinator: AttractorField + PersonaPatcher {
             rope_w = swar_q7_qdps_filter_words_64(&rope_w, step_u8);
             store_q7_words_64(rope_deltas_out, &rope_w);
         }
-        let coh = coherence_from_word_arrays_64(
-            trail_phase_words_ref(trail_inout),
-            &rope_w,
-        );
+        let coh = coherence_from_word_arrays_64(trail_phase_words_ref(trail_inout), &rope_w);
         let beta_eff = self.eval_growth_precision_inv_temp(&report, coh, inv_temp_base_gain);
         Ok((report, beta_eff))
     }
@@ -1190,7 +1185,12 @@ impl CrystallizedAnchorRecord {
     pub const fn phase_words_ref(&self) -> &[u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
         // SAFETY: `CrystallizedAnchorRecord` is `#[repr(C, align(64))]` and `phase_deltas` is at offset 0
         // (64-byte aligned, >= 8-byte alignment of `u64`), with identical size (64 bytes) and `Pod` validity.
-        unsafe { &*(self.phase_deltas.as_ptr().cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>()) }
+        unsafe {
+            &*(self
+                .phase_deltas
+                .as_ptr()
+                .cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>())
+        }
     }
 
     /// Mutably borrows `self.phase_deltas` (`offset 0` of `#[repr(C, align(64))]`
@@ -1200,7 +1200,12 @@ impl CrystallizedAnchorRecord {
     pub const fn phase_words_mut(&mut self) -> &mut [u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
         // SAFETY: `CrystallizedAnchorRecord` is `#[repr(C, align(64))]` and `phase_deltas` is at offset 0
         // (64-byte aligned, >= 8-byte alignment of `u64`), with identical size (64 bytes) and `Pod` validity.
-        unsafe { &mut *(self.phase_deltas.as_mut_ptr().cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>()) }
+        unsafe {
+            &mut *(self
+                .phase_deltas
+                .as_mut_ptr()
+                .cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>())
+        }
     }
 
     /// All-zero 128-byte empty record constant enabling 512-byte GF(2) $L^{32}$ zero-block skipping
@@ -1473,7 +1478,12 @@ impl AttractorGrowthSnapshot {
     pub const fn persona_words_ref(&self) -> &[u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
         // SAFETY: `AttractorGrowthSnapshot` is `#[repr(C, align(64))]` and `persona_phase_profile`
         // is at byte offset 64 (64-byte aligned, >= 8-byte alignment of `u64`).
-        unsafe { &*(self.persona_phase_profile.as_ptr().cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>()) }
+        unsafe {
+            &*(self
+                .persona_phase_profile
+                .as_ptr()
+                .cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>())
+        }
     }
 
     /// Borrows `self.repulsion_phase_deltas` (`offset 128` of `#[repr(C, align(64))]`
@@ -1483,7 +1493,12 @@ impl AttractorGrowthSnapshot {
     pub const fn repulsion_words_ref(&self) -> &[u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
         // SAFETY: `AttractorGrowthSnapshot` is `#[repr(C, align(64))]` and `repulsion_phase_deltas`
         // is at byte offset 128 (64-byte aligned, >= 8-byte alignment of `u64`).
-        unsafe { &*(self.repulsion_phase_deltas.as_ptr().cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>()) }
+        unsafe {
+            &*(self
+                .repulsion_phase_deltas
+                .as_ptr()
+                .cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>())
+        }
     }
 
     /// Constructs an empty, header-initialized `AttractorGrowthSnapshot` stamped with magic `"GCSO"`
@@ -1904,7 +1919,10 @@ impl ManifoldGatewaySignal for AttractorAnchor {
         &self,
     ) -> (GatewayFrame, [u64; crate::traits::NUM_SWARM_MICRO_CELLS]) {
         if self.is_active == 0 {
-            return (GatewayFrame::zeroed(), [0u64; crate::traits::NUM_SWARM_MICRO_CELLS]);
+            return (
+                GatewayFrame::zeroed(),
+                [0u64; crate::traits::NUM_SWARM_MICRO_CELLS],
+            );
         }
         CrystallizedAnchorRecord::from_anchor(self).synthesize_gateway_frame_with_words()
     }
@@ -1926,7 +1944,12 @@ impl AttractorAnchor {
     pub const fn phase_words_ref(&self) -> &[u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
         // SAFETY: `AttractorAnchor` is `#[repr(C, align(32))]` and `phase_deltas` is at byte offset 32
         // (32-byte aligned, >= 8-byte alignment of `u64`), with identical size (64 bytes) and `Pod` validity.
-        unsafe { &*(self.phase_deltas.as_ptr().cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>()) }
+        unsafe {
+            &*(self
+                .phase_deltas
+                .as_ptr()
+                .cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>())
+        }
     }
 
     /// Mutably borrows `self.phase_deltas` (`offset 32` of `#[repr(C, align(32))]`
@@ -1936,7 +1959,12 @@ impl AttractorAnchor {
     pub const fn phase_words_mut(&mut self) -> &mut [u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
         // SAFETY: `AttractorAnchor` is `#[repr(C, align(32))]` and `phase_deltas` is at byte offset 32
         // (32-byte aligned, >= 8-byte alignment of `u64`), with identical size (64 bytes) and `Pod` validity.
-        unsafe { &mut *(self.phase_deltas.as_mut_ptr().cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>()) }
+        unsafe {
+            &mut *(self
+                .phase_deltas
+                .as_mut_ptr()
+                .cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>())
+        }
     }
 
     /// Computes composite potential energy score with division-free (`0 fdiv`) branchless
@@ -2059,7 +2087,12 @@ impl AttractorFieldEngine {
     pub const fn repulsion_words_ref(&self) -> &[u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
         // SAFETY: `AttractorFieldEngine` is `#[repr(C, align(64))]` and `repulsion_phase_deltas`
         // is at byte offset 40976 (`40976 % 16 == 0`, >= 8-byte alignment of `u64`).
-        unsafe { &*(self.repulsion_phase_deltas.as_ptr().cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>()) }
+        unsafe {
+            &*(self
+                .repulsion_phase_deltas
+                .as_ptr()
+                .cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>())
+        }
     }
 
     /// Creates a new `AttractorFieldEngine` instance for a specific working lane.
@@ -2449,8 +2482,7 @@ impl AttractorFieldEngine {
         };
         let init_w0 = init_w[0];
         let init_b0 = (init_w0 & 0xFF) as u8;
-        let init_is_byte_uniform =
-            init_is_uniform & (init_w0 == init_w0.rotate_right(8));
+        let init_is_byte_uniform = init_is_uniform & (init_w0 == init_w0.rotate_right(8));
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
         let mut run_w = *init_w;
         let mut run_is_uniform = init_is_uniform;
@@ -2478,12 +2510,14 @@ impl AttractorFieldEngine {
             if anchor.is_active != 0 {
                 remaining -= 1;
                 let energy = anchor.compute_energy_score(self.step_counter);
-                let base_pull =
-                    branchless_relu_f32(anchor.weight) * branchless_relu_f32(anchor.pull_force) * energy;
+                let base_pull = branchless_relu_f32(anchor.weight)
+                    * branchless_relu_f32(anchor.pull_force)
+                    * energy;
                 if base_pull > 1.0e-12 {
                     let anc_w = anchor.phase_words_ref();
-                    let check_anc_uni =
-                        (init_nonzero & init_is_uniform) | (running_pull <= 1.0e-12) | run_is_uniform;
+                    let check_anc_uni = (init_nonzero & init_is_uniform)
+                        | (running_pull <= 1.0e-12)
+                        | run_is_uniform;
                     let anc_is_uniform = if check_anc_uni {
                         is_word_array_uniform_64(anc_w)
                     } else {
@@ -2500,9 +2534,7 @@ impl AttractorFieldEngine {
                         let eff_coh = if init_nonzero & (aw0 != 0) {
                             if aw0 == init_w0 {
                                 1.0
-                            } else if init_is_byte_uniform
-                                && (aw0 == aw0.rotate_right(8))
-                            {
+                            } else if init_is_byte_uniform && (aw0 == aw0.rotate_right(8)) {
                                 Q7_FULL_COS_REF[init_b0.wrapping_sub(aw0 as u8) as usize]
                             } else {
                                 coherence_from_word_arrays_with_both_uniform_flags_64(
@@ -2533,12 +2565,13 @@ impl AttractorFieldEngine {
                                 } else if s > 0 {
                                     let bias_restore = (128u64.wrapping_sub(s))
                                         .wrapping_mul(0x0101_0101_0101_0101);
-                                    run_w0 = crate::traits::branchless::swar_slerp_word_unchecked_x8(
-                                        run_w0,
-                                        aw0,
-                                        s,
-                                        bias_restore,
-                                    );
+                                    run_w0 =
+                                        crate::traits::branchless::swar_slerp_word_unchecked_x8(
+                                            run_w0,
+                                            aw0,
+                                            s,
+                                            bias_restore,
+                                        );
                                 }
                             }
                             running_pull = total_w;
@@ -2579,9 +2612,7 @@ impl AttractorFieldEngine {
                             if init_is_uniform & anc_is_uniform {
                                 if aw0 == init_w0 {
                                     1.0
-                                } else if init_is_byte_uniform
-                                    && (aw0 == aw0.rotate_right(8))
-                                {
+                                } else if init_is_byte_uniform && (aw0 == aw0.rotate_right(8)) {
                                     Q7_FULL_COS_REF[init_b0.wrapping_sub(aw0 as u8) as usize]
                                 } else {
                                     coherence_from_word_arrays_with_both_uniform_flags_64(
@@ -2671,8 +2702,8 @@ impl AttractorFieldEngine {
                                     128.0,
                                 );
                                 let s = (ratio_f32 as u8) as u64;
-                                let bias_restore = (128u64.wrapping_sub(s))
-                                    .wrapping_mul(0x0101_0101_0101_0101);
+                                let bias_restore =
+                                    (128u64.wrapping_sub(s)).wrapping_mul(0x0101_0101_0101_0101);
                                 let (next_w, next_uni) =
                                     crate::traits::branchless::swar_slerp_words_with_uniform_flag_64(
                                         &run_w,
@@ -2701,9 +2732,12 @@ impl AttractorFieldEngine {
             unsafe { crate::traits::branchless::avx2_vec64_to_words64(vr0, vr1) }
         };
 
-        let rep_scale_u7 =
-            (branchless_clamp_f32(branchless_relu_f32(self.repulsion_gain), 0.0, 1.0) * 128.0 + 0.5)
-                as u8;
+        let rep_scale_u7 = (branchless_clamp_f32(
+            branchless_relu_f32(self.repulsion_gain),
+            0.0,
+            1.0,
+        ) * 128.0
+            + 0.5) as u8;
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
         let run_is_uniform = if rep_scale_u7 > 0 {
             run_is_uniform || is_word_array_uniform_64(&run_w)
@@ -3068,7 +3102,11 @@ impl PersonaPatcher for AttractorFieldEngine {
         let len = patch_data.len();
         if len >= MAX_ATTENTION_HEADS {
             // SAFETY: `patch_data.len() >= 64` and `[u8; 64]` has identical size and alignment (1) as `[gcso_q7_t; 64]`.
-            let patch_ref = unsafe { &*patch_data.as_ptr().cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>() };
+            let patch_ref = unsafe {
+                &*patch_data
+                    .as_ptr()
+                    .cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>()
+            };
             phases = *patch_ref;
         } else {
             for (h, slot) in phases.iter_mut().enumerate() {
@@ -3370,14 +3408,15 @@ impl MultiAttractorSpace {
 
         let rep_field = &self.fields[DOMAIN_PHASE_REPULSION as usize];
         let rep_w_gain = branchless_relu_f32(self.domain_weights[DOMAIN_PHASE_REPULSION as usize]);
-        let (rep_words, rep_pull) =
-            if ((rep_field.active_count > 0) | (rep_field.repulsion_gain > 0.0)) & (rep_w_gain > 0.0)
-            {
-                let (rw, rp) = rep_field.evaluate_composite_attractor_force_words(init_w, init_nonzero);
-                (rw, rp * rep_w_gain)
-            } else {
-                ([0u64; 8], 0.0_f32)
-            };
+        let (rep_words, rep_pull) = if ((rep_field.active_count > 0)
+            | (rep_field.repulsion_gain > 0.0))
+            & (rep_w_gain > 0.0)
+        {
+            let (rw, rp) = rep_field.evaluate_composite_attractor_force_words(init_w, init_nonzero);
+            (rw, rp * rep_w_gain)
+        } else {
+            ([0u64; 8], 0.0_f32)
+        };
         let mut total_pull = 0.0_f32;
         for (idx, field) in self.fields.iter().enumerate() {
             let enabled = (self.active_domains_mask & (1 << idx)) != 0;
@@ -3539,15 +3578,15 @@ impl MultiAttractorSpace {
     ) -> ([u64; 8], f32) {
         let rep_field = &self.fields[DOMAIN_PHASE_REPULSION as usize];
         let rep_w_gain = branchless_relu_f32(self.domain_weights[DOMAIN_PHASE_REPULSION as usize]);
-        let (rep_words, rep_pull) =
-            if ((rep_field.active_count > 0) | (rep_field.repulsion_gain > 0.0)) & (rep_w_gain > 0.0)
-            {
-                let (rw, rp) =
-                    rep_field.evaluate_composite_attractor_force_words(init_w, init_nonzero);
-                (rw, rp * rep_w_gain)
-            } else {
-                ([0u64; 8], 0.0_f32)
-            };
+        let (rep_words, rep_pull) = if ((rep_field.active_count > 0)
+            | (rep_field.repulsion_gain > 0.0))
+            & (rep_w_gain > 0.0)
+        {
+            let (rw, rp) = rep_field.evaluate_composite_attractor_force_words(init_w, init_nonzero);
+            (rw, rp * rep_w_gain)
+        } else {
+            ([0u64; 8], 0.0_f32)
+        };
 
         let mut running_w = [0u64; 8];
         let mut running_pull = 0.0_f32;
@@ -4096,7 +4135,11 @@ impl PersonaPatcher for MultiAttractorSpace {
         let len = patch_data.len();
         if len >= MAX_ATTENTION_HEADS {
             // SAFETY: `patch_data.len() >= 64` and `[u8; 64]` has identical size and alignment (1) as `[gcso_q7_t; 64]`.
-            let patch_ref = unsafe { &*patch_data.as_ptr().cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>() };
+            let patch_ref = unsafe {
+                &*patch_data
+                    .as_ptr()
+                    .cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>()
+            };
             phases = *patch_ref;
         } else {
             for (h, slot) in phases.iter_mut().enumerate() {
@@ -4334,9 +4377,6 @@ mod tests {
         assert_eq!(zero_copy_snap.magic, GCSO_SNAPSHOT_MAGIC_U32);
         assert!(zero_copy_snap.active_anchor_count >= 1);
         assert!(zero_copy_snap.composite_kappa > 0.0);
-        assert_eq!(
-            space.total_unified_anchor_count(),
-            expected_unified_count
-        );
+        assert_eq!(space.total_unified_anchor_count(), expected_unified_count);
     }
 }

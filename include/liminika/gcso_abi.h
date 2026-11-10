@@ -11,10 +11,10 @@
 // 0. Version Identifiers (Unified C-ABI v0.1.1 Specification)
 // ===================================================================
 
-#define GCSO_ABI_VERSION_MAJOR  0U
-#define GCSO_ABI_VERSION_MINOR  1U
-#define GCSO_ABI_VERSION_PATCH  1U
-#define GCSO_ABI_VERSION_HEX    0x00000101U
+#define GCSO_ABI_VERSION_MAJOR 0U
+#define GCSO_ABI_VERSION_MINOR 1U
+#define GCSO_ABI_VERSION_PATCH 1U
+#define GCSO_ABI_VERSION_HEX 0x00000101U
 #define GCSO_ABI_VERSION_STRING "0.1.1"
 
 GCSO_EXTERN_C_BEGIN
@@ -62,7 +62,8 @@ gcso_abi_query_capability(gcso_capability_flags_t* GCSO_RESTRICT flags) GCSO_NOE
 /**
  * @brief Initializes a gcso_config_t structure with standard hardware and model defaults.
  * Corresponds to SystemCapabilityQuery trait in traits.rs.
- * @param config Pointer to the user-allocated configuration descriptor to populate (16-byte aligned).
+ * @param config Pointer to the user-allocated configuration descriptor to populate (16-byte
+ * aligned).
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER / GCSO_ERROR_MISALIGNED_POINTER.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
@@ -95,12 +96,12 @@ gcso_context_create(const gcso_config_t* GCSO_RESTRICT config,
  * @param context Handle to the active runtime context (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_context_reset(gcso_context_handle_t context) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_context_reset(gcso_context_handle_t context)
+    GCSO_NOEXCEPT;
 
 /**
- * @brief Primary Baseline Endpoint: Projects natural language system prompt text as an Anchor Attractor.
- * Corresponds to GcsoRuntimeContext::set_system_prompt_anchor in traits.rs.
+ * @brief Primary Baseline Endpoint: Projects natural language system prompt text as an Anchor
+ * Attractor. Corresponds to GcsoRuntimeContext::set_system_prompt_anchor in traits.rs.
  * @param context Active context handle.
  * @param prompt_text Null-terminated UTF-8 system prompt string.
  * @param weight Attractor pull force scale.
@@ -117,7 +118,8 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_context_set_system_prompt_a
  * Invariant: Must guarantee zero dynamic heap allocations during execution.
  * @param context Active runtime context handle.
  * @param token_id Input token sequence ID.
- * @param query_tensor 32-byte aligned query tensor buffer to modulate in-place (size: head_dim * num_heads).
+ * @param query_tensor 32-byte aligned query tensor buffer to modulate in-place (size: head_dim *
+ * num_heads).
  * @param key_tensor 32-byte aligned key tensor buffer (size: head_dim * num_heads).
  * @param trail_out Pointer to receive updated 128-byte pointer trail status (128-byte aligned).
  * @return GCSO_SUCCESS or error code.
@@ -155,7 +157,8 @@ gcso_context_deserialize(const uint8_t* GCSO_RESTRICT buffer, size_t buffer_size
  * Corresponds to PprcCache / GcsoRuntimeContext::seek_to_token in traits.rs.
  * @param context Active context handle.
  * @param token_index Target token index to seek to.
- * @param keyframe_header_out Pointer to receive resulting keyframe header structure (32-byte aligned).
+ * @param keyframe_header_out Pointer to receive resulting keyframe header structure (32-byte
+ * aligned).
  * @return GCSO_SUCCESS or error code.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_pprc_seek_to_token(
@@ -210,7 +213,8 @@ gcso_action_hub_step_pointer(gcso_context_handle_t context, uint64_t current_ptr
  * @param ptr Raw 64-bit pointer address.
  * @return 8-bit hash index (0 to 255).
  */
-GCSO_NODISCARD GCSO_API uint32_t GCSO_CALL gcso_action_hub_hash_slot256_index(uint64_t ptr) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API uint32_t GCSO_CALL gcso_action_hub_hash_slot256_index(uint64_t ptr)
+    GCSO_NOEXCEPT;
 
 /**
  * @brief Updates local cellular swarm cell state across PagedBlock token chunk boundaries.
@@ -331,10 +335,11 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_daes_set_mode(gcso_daes_slot_t* GCSO_RESTRICT slot, uint32_t mode) GCSO_NOEXCEPT;
 
 /**
- * @brief Evaluates telemetry ledger to auto-tune PSPM routing ratios, RIPA bounds & EDBC thresholds.
- * Corresponds to DaesScratchpad::evaluate_auto_tune in traits.rs.
+ * @brief Evaluates telemetry ledger to auto-tune PSPM routing ratios, RIPA bounds & EDBC
+ * thresholds. Corresponds to DaesScratchpad::evaluate_auto_tune in traits.rs.
  * @param slot Const DAES slot structure pointer (64-byte aligned).
- * @param config_out Pointer to receive updated auto-tuned configuration structure (16-byte aligned).
+ * @param config_out Pointer to receive updated auto-tuned configuration structure (16-byte
+ * aligned).
  * @return GCSO_SUCCESS or error code.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
@@ -379,8 +384,8 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering(
     size_t num_heads) GCSO_NOEXCEPT;
 
 /**
- * @brief Applies RIPA soft-bounded tanh clamping on low-frequency channels (upper d_head / 4 dimensions).
- * Corresponds to PhaseSteering::apply_phase_steering_safe in traits.rs.
+ * @brief Applies RIPA soft-bounded tanh clamping on low-frequency channels (upper d_head / 4
+ * dimensions). Corresponds to PhaseSteering::apply_phase_steering_safe in traits.rs.
  * @param query_tensor 32-byte aligned query tensor buffer.
  * @param phase_deltas Q7 quantized phase delta array (Aligned 16-byte).
  * @param head_dim Head dimension size (must be even).
@@ -400,13 +405,12 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_s
  * @param min_step_rad Minimum step threshold angle in radians.
  * @return GCSO_SUCCESS or error status code.
  */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_qdps_filter_step(gcso_q7_t* GCSO_RESTRICT phase_deltas, size_t len,
-                      float min_step_rad) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_qdps_filter_step(
+    gcso_q7_t* GCSO_RESTRICT phase_deltas, size_t len, float min_step_rad) GCSO_NOEXCEPT;
 
 /**
- * @brief Lazy Phase Unwrapping: Applies relative phase shift against context accumulator on Query side.
- * Corresponds to PhaseSteering::lazy_unwrap_override in traits.rs.
+ * @brief Lazy Phase Unwrapping: Applies relative phase shift against context accumulator on Query
+ * side. Corresponds to PhaseSteering::lazy_unwrap_override in traits.rs.
  * @param query_tensor 32-byte aligned target query tensor.
  * @param context_accum Cumulative context phase vector (32-byte aligned).
  * @param head_dim Head dimension (must be even).
@@ -601,8 +605,8 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_embeddi
     uint32_t* GCSO_RESTRICT anchor_id_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Injects phase-conjugate repulsion vector (-dTheta) to flip spurious local minima into repulsive peaks.
- * Corresponds to AttractorField::inject_phase_repulsion in traits.rs.
+ * @brief Injects phase-conjugate repulsion vector (-dTheta) to flip spurious local minima into
+ * repulsive peaks. Corresponds to AttractorField::inject_phase_repulsion in traits.rs.
  * @param context Active runtime context handle.
  * @param repulsion_deltas Q7 anti-phase array (Aligned 16-byte).
  * @param num_heads Total head count.
@@ -731,8 +735,8 @@ gcso_zimms_close_mmap(gcso_zimms_descriptor_t* GCSO_RESTRICT zimms_desc) GCSO_NO
  * @brief Inline branchless helper packing a 48-bit canonical address, 8-bit domain/action tag,
  * and Q7 phase offset into a 64-bit tagged pointer word.
  */
-static GCSO_FORCE_INLINE gcso_tagged_ptr_t gcso_tagged_ptr_pack_inline(
-    uint64_t raw_addr, uint8_t tag, gcso_q7_t phase) GCSO_NOEXCEPT {
+static GCSO_FORCE_INLINE gcso_tagged_ptr_t
+gcso_tagged_ptr_pack_inline(uint64_t raw_addr, uint8_t tag, gcso_q7_t phase) GCSO_NOEXCEPT {
     const uint64_t addr = raw_addr & GCSO_TAGGED_PTR_ADDR_MASK;
     const uint64_t tag_bits = ((uint64_t)tag) << GCSO_TAGGED_PTR_TAG_SHIFT;
     const uint64_t phase_bits = ((uint64_t)((uint8_t)phase)) << GCSO_TAGGED_PTR_PHASE_SHIFT;
@@ -742,72 +746,73 @@ static GCSO_FORCE_INLINE gcso_tagged_ptr_t gcso_tagged_ptr_pack_inline(
 /**
  * @brief Inline branchless helper unpacking the 48-bit canonical address from a tagged pointer.
  */
-static GCSO_FORCE_INLINE uint64_t gcso_tagged_ptr_unpack_addr_inline(
-    gcso_tagged_ptr_t ptr) GCSO_NOEXCEPT {
+static GCSO_FORCE_INLINE uint64_t gcso_tagged_ptr_unpack_addr_inline(gcso_tagged_ptr_t ptr)
+    GCSO_NOEXCEPT {
     return ptr & GCSO_TAGGED_PTR_ADDR_MASK;
 }
 
 /**
  * @brief Inline branchless helper unpacking the 8-bit tag from a tagged pointer.
  */
-static GCSO_FORCE_INLINE uint8_t gcso_tagged_ptr_unpack_tag_inline(
-    gcso_tagged_ptr_t ptr) GCSO_NOEXCEPT {
+static GCSO_FORCE_INLINE uint8_t gcso_tagged_ptr_unpack_tag_inline(gcso_tagged_ptr_t ptr)
+    GCSO_NOEXCEPT {
     return (uint8_t)((ptr & GCSO_TAGGED_PTR_TAG_MASK) >> GCSO_TAGGED_PTR_TAG_SHIFT);
 }
 
 /**
  * @brief Inline branchless helper unpacking the Q7 phase offset from a tagged pointer.
  */
-static GCSO_FORCE_INLINE gcso_q7_t gcso_tagged_ptr_unpack_phase_inline(
-    gcso_tagged_ptr_t ptr) GCSO_NOEXCEPT {
+static GCSO_FORCE_INLINE gcso_q7_t gcso_tagged_ptr_unpack_phase_inline(gcso_tagged_ptr_t ptr)
+    GCSO_NOEXCEPT {
     return (gcso_q7_t)((uint8_t)(ptr >> GCSO_TAGGED_PTR_PHASE_SHIFT));
 }
 
 /**
- * @brief Packs a 48-bit canonical address, 8-bit tag, and Q7 phase offset into a 64-bit tagged pointer.
+ * @brief Packs a 48-bit canonical address, 8-bit tag, and Q7 phase offset into a 64-bit tagged
+ * pointer.
  */
-GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL
-gcso_tagged_ptr_pack(uint64_t raw_addr, uint8_t tag, gcso_q7_t phase) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL gcso_tagged_ptr_pack(uint64_t raw_addr, uint8_t tag,
+                                                                gcso_q7_t phase) GCSO_NOEXCEPT;
 
 /**
  * @brief Unpacks the 48-bit canonical address from a 64-bit tagged pointer.
  */
-GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL
-gcso_tagged_ptr_unpack_addr(uint64_t ptr) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL gcso_tagged_ptr_unpack_addr(uint64_t ptr) GCSO_NOEXCEPT;
 
 /**
  * @brief Unpacks the 8-bit domain/action tag from a 64-bit tagged pointer.
  */
-GCSO_NODISCARD GCSO_API uint8_t GCSO_CALL
-gcso_tagged_ptr_unpack_tag(uint64_t ptr) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API uint8_t GCSO_CALL gcso_tagged_ptr_unpack_tag(uint64_t ptr) GCSO_NOEXCEPT;
 
 /**
  * @brief Unpacks the 8-bit Q7 phase state from a 64-bit tagged pointer.
  */
-GCSO_NODISCARD GCSO_API gcso_q7_t GCSO_CALL
-gcso_tagged_ptr_unpack_phase(uint64_t ptr) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API gcso_q7_t GCSO_CALL gcso_tagged_ptr_unpack_phase(uint64_t ptr)
+    GCSO_NOEXCEPT;
 
 /**
- * @brief Packs a 48-bit address, 3-bit Attractor Slot ID, 5-bit Action Mode mask, and Q7 phase into a tagged pointer.
+ * @brief Packs a 48-bit address, 3-bit Attractor Slot ID, 5-bit Action Mode mask, and Q7 phase into
+ * a tagged pointer.
  */
-GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL gcso_tagged_ptr_pack_action(
-    uint64_t raw_addr, uint8_t attractor_slot, uint8_t action_mode_flags,
-    gcso_q7_t phase) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL
+gcso_tagged_ptr_pack_action(uint64_t raw_addr, uint8_t attractor_slot, uint8_t action_mode_flags,
+                            gcso_q7_t phase) GCSO_NOEXCEPT;
 
 /**
  * @brief Extracts the 5-bit Action Mode mask from a 64-bit tagged pointer.
  */
-GCSO_NODISCARD GCSO_API uint8_t GCSO_CALL
-gcso_tagged_ptr_unpack_action_mode(uint64_t ptr) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API uint8_t GCSO_CALL gcso_tagged_ptr_unpack_action_mode(uint64_t ptr)
+    GCSO_NOEXCEPT;
 
 /**
  * @brief Extracts the 3-bit Target Attractor Working Lane ID (0..7) from a 64-bit tagged pointer.
  */
-GCSO_NODISCARD GCSO_API uint8_t GCSO_CALL
-gcso_tagged_ptr_unpack_attractor_slot(uint64_t ptr) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API uint8_t GCSO_CALL gcso_tagged_ptr_unpack_attractor_slot(uint64_t ptr)
+    GCSO_NOEXCEPT;
 
 /**
- * @brief Evolves a 64-bit tagged pointer's Action Mode flags and Target Attractor Slot in O(1) time.
+ * @brief Evolves a 64-bit tagged pointer's Action Mode flags and Target Attractor Slot in O(1)
+ * time.
  */
 GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL gcso_tagged_ptr_evolve_mode_stigmergically(
     uint64_t ptr, float stigmergic_density, float entropy_h_tilde, uint8_t repulsion_triggered,
@@ -821,14 +826,16 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_config_validate(const gcso_config_t* GCSO_RESTRICT config) GCSO_NOEXCEPT;
 
 /**
- * @brief Applies lockstep fused DPSR phase rotation to Query and Key tensor registers in a single pass.
+ * @brief Applies lockstep fused DPSR phase rotation to Query and Key tensor registers in a single
+ * pass.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_fused(
     float* GCSO_RESTRICT query_tensor, float* GCSO_RESTRICT key_tensor,
     const gcso_q7_t* GCSO_RESTRICT phase_deltas, size_t head_dim, size_t num_heads) GCSO_NOEXCEPT;
 
 /**
- * @brief Applies RIPA soft-bounded phase steering to both Query and Key tensors in a single fused pass.
+ * @brief Applies RIPA soft-bounded phase steering to both Query and Key tensors in a single fused
+ * pass.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_fused_safe(
     float* GCSO_RESTRICT query_tensor, float* GCSO_RESTRICT key_tensor,
@@ -839,11 +846,12 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_f
  * @brief Applies S^1 geodesic RIPA soft-bounded phase steering to a Query tensor.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_geodesic_safe(
-    float* GCSO_RESTRICT query_tensor, const gcso_q7_t* GCSO_RESTRICT phase_deltas,
-    size_t head_dim, size_t num_heads, float max_rad) GCSO_NOEXCEPT;
+    float* GCSO_RESTRICT query_tensor, const gcso_q7_t* GCSO_RESTRICT phase_deltas, size_t head_dim,
+    size_t num_heads, float max_rad) GCSO_NOEXCEPT;
 
 /**
- * @brief Applies pointer-gated RIPA phase steering (honoring ACTION_MODE_LAYER_SKIP & REPULSION_GUARD).
+ * @brief Applies pointer-gated RIPA phase steering (honoring ACTION_MODE_LAYER_SKIP &
+ * REPULSION_GUARD).
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_pointer_gated_phase_steering_safe(
     uint64_t tagged_ptr, float* GCSO_RESTRICT query_tensor,
@@ -854,47 +862,50 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_pointer_gated_ph
  * @brief Applies pointer-gated fused QK RIPA phase steering in a single pass.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_dpsr_apply_pointer_gated_phase_steering_fused_safe(
-    uint64_t tagged_ptr, float* GCSO_RESTRICT query_tensor, float* GCSO_RESTRICT key_tensor,
-    const gcso_q7_t* GCSO_RESTRICT phase_deltas, size_t head_dim, size_t num_heads,
-    float max_rad) GCSO_NOEXCEPT;
+gcso_dpsr_apply_pointer_gated_phase_steering_fused_safe(uint64_t tagged_ptr,
+                                                        float* GCSO_RESTRICT query_tensor,
+                                                        float* GCSO_RESTRICT key_tensor,
+                                                        const gcso_q7_t* GCSO_RESTRICT phase_deltas,
+                                                        size_t head_dim, size_t num_heads,
+                                                        float max_rad) GCSO_NOEXCEPT;
 
 /**
  * @brief Applies soft exponential phase damping across Query tensor channels.
  */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_soft_phase_damping(
-    float* GCSO_RESTRICT query_tensor, size_t head_dim, size_t num_heads,
-    float damping_factor) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
+gcso_dpsr_apply_soft_phase_damping(float* GCSO_RESTRICT query_tensor, size_t head_dim,
+                                   size_t num_heads, float damping_factor) GCSO_NOEXCEPT;
 
 /**
  * @brief Evaluates in-place fused SRL Dynamic Rank-1 outer product accumulation.
  */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_srl_eval_rank1_fused(
-    float* GCSO_RESTRICT y_inout, const float* GCSO_RESTRICT x_in,
-    const gcso_srl_descriptor_t* GCSO_RESTRICT srl_desc, size_t dim_in,
-    size_t dim_out) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
+gcso_srl_eval_rank1_fused(float* GCSO_RESTRICT y_inout, const float* GCSO_RESTRICT x_in,
+                          const gcso_srl_descriptor_t* GCSO_RESTRICT srl_desc, size_t dim_in,
+                          size_t dim_out) GCSO_NOEXCEPT;
 
 /**
  * @brief Projects an arbitrary byte slice into a 64-head Q7 phase profile via 64-bit SWAR mixing.
  */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_gateway_project_bytes_to_q7_64(
-    const uint8_t* GCSO_RESTRICT bytes, size_t byte_len,
-    gcso_q7_t* GCSO_RESTRICT phases_out) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
+gcso_gateway_project_bytes_to_q7_64(const uint8_t* GCSO_RESTRICT bytes, size_t byte_len,
+                                    gcso_q7_t* GCSO_RESTRICT phases_out) GCSO_NOEXCEPT;
 
 /**
  * @brief Projects a dense f32 embedding slice into a 64-head Q7 phase profile via planar atan2.
  */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_gateway_project_f32_to_q7_64(
-    const float* GCSO_RESTRICT values, size_t num_values, float gain,
-    gcso_q7_t* GCSO_RESTRICT phases_out) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
+gcso_gateway_project_f32_to_q7_64(const float* GCSO_RESTRICT values, size_t num_values, float gain,
+                                  gcso_q7_t* GCSO_RESTRICT phases_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Synthesizes a 128-byte 2-Origin Composite Manifold Gateway frame and 4-Axis Causal Provenance report.
+ * @brief Synthesizes a 128-byte 2-Origin Composite Manifold Gateway frame and 4-Axis Causal
+ * Provenance report.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_gateway_synthesize_multi_origin_frame(
     float vram_pressure, float gpu_frame_overrun, uint8_t active_swarm_cell_mask,
-    uint8_t recommend_layer_skip, const gcso_q7_t* GCSO_RESTRICT fact_phases,
-    float fact_confidence, uint64_t fact_zimms_offset48, uint32_t fact_anchor_id,
+    uint8_t recommend_layer_skip, const gcso_q7_t* GCSO_RESTRICT fact_phases, float fact_confidence,
+    uint64_t fact_zimms_offset48, uint32_t fact_anchor_id,
     const gcso_q7_t* GCSO_RESTRICT persona_phases, float persona_strength,
     uint64_t persona_zimms_offset48, uint32_t persona_anchor_id,
     const gcso_contrastive_bloom_filter_t* GCSO_RESTRICT bloom_filter_opt,
@@ -903,13 +914,14 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_gateway_synthesize_multi_or
     gcso_causal_provenance_report_t* GCSO_RESTRICT report_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Executes Online Toroidal k-Means / DP-Means E+M step over K crystallized attractor centroids.
+ * @brief Executes Online Toroidal k-Means / DP-Means E+M step over K crystallized attractor
+ * centroids.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_attractor_step_online_toroidal_kmeans(
     gcso_crystallized_attractor_record_t* GCSO_RESTRICT centroids_inout, size_t num_centroids,
     const gcso_gateway_frame_t* GCSO_RESTRICT frame, float split_coherence_threshold,
-    gcso_pointer_trail_t* GCSO_RESTRICT trail_inout, size_t* GCSO_RESTRICT assigned_centroid_idx_out,
-    float* GCSO_RESTRICT assigned_coherence_out,
+    gcso_pointer_trail_t* GCSO_RESTRICT trail_inout,
+    size_t* GCSO_RESTRICT assigned_centroid_idx_out, float* GCSO_RESTRICT assigned_coherence_out,
     float* GCSO_RESTRICT updated_gravity_mass_out) GCSO_NOEXCEPT;
 
 /**
@@ -922,7 +934,8 @@ gcso_action_hub_route_coarse_to_fine_and_steer_qk_safe(
     uint8_t pull_step_u7, float min_step_rad, float* GCSO_RESTRICT query_tensor,
     float* GCSO_RESTRICT key_tensor, size_t head_dim, size_t num_heads,
     size_t* GCSO_RESTRICT winning_centroid_idx_out, uint32_t* GCSO_RESTRICT selected_anchor_id_out,
-    float* GCSO_RESTRICT centroid_coherence_out, float* GCSO_RESTRICT gravity_pull_out) GCSO_NOEXCEPT;
+    float* GCSO_RESTRICT centroid_coherence_out,
+    float* GCSO_RESTRICT gravity_pull_out) GCSO_NOEXCEPT;
 
 /**
  * @brief Serializes a 4-section .gcso unified binary container in zero-copy aligned layout.

@@ -38,9 +38,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_vulkan_query_capability(
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_vulkan_dpsr_phase_steering_dispatch(
-    float* GCSO_RESTRICT query_tensor,
-    const gcso_q7_t* GCSO_RESTRICT phase_deltas,
-    size_t head_dim,
+    float* GCSO_RESTRICT query_tensor, const gcso_q7_t* GCSO_RESTRICT phase_deltas, size_t head_dim,
     size_t num_heads) GCSO_NOEXCEPT {
     if (query_tensor == nullptr || phase_deltas == nullptr) {
         return GCSO_ERROR_NULL_POINTER;
@@ -65,10 +63,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_vulkan_dpsr_phase_steering_dispatch(
  * @param mask_out Output paged bitmask structure.
  * @return GCSO_SUCCESS or error status code.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_vulkan_paged_block_bitmask_reduce(
-    const uint64_t* GCSO_RESTRICT kv_bits,
-    size_t num_blocks,
-    gcso_paged_bitmask_t* GCSO_RESTRICT mask_out) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_vulkan_paged_block_bitmask_reduce(const uint64_t* GCSO_RESTRICT kv_bits, size_t num_blocks,
+                                       gcso_paged_bitmask_t* GCSO_RESTRICT mask_out) GCSO_NOEXCEPT {
     if (kv_bits == nullptr || mask_out == nullptr) {
         return GCSO_ERROR_NULL_POINTER;
     }

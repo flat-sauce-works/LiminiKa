@@ -56,8 +56,8 @@ use std::boxed::Box;
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use core::arch::x86_64::{
-    _mm256_castsi256_pd, _mm256_cmpeq_epi64, _mm256_load_si256, _mm256_loadu_si256,
-    _mm256_movemask_pd, _mm256_or_si256, _mm256_setzero_si256, _mm256_store_si256, __m256i,
+    __m256i, _mm256_castsi256_pd, _mm256_cmpeq_epi64, _mm256_load_si256, _mm256_loadu_si256,
+    _mm256_movemask_pd, _mm256_or_si256, _mm256_setzero_si256, _mm256_store_si256,
 };
 use core::ffi::{c_char, CStr};
 use core::fmt;
@@ -65,9 +65,7 @@ use core::mem::{align_of, offset_of, size_of};
 use core::ptr;
 use core::slice;
 
-use crate::action_hub::{
-    ActionHubEngine, ActionOrchestrationReport, StigmergicThresholds,
-};
+use crate::action_hub::{ActionHubEngine, ActionOrchestrationReport, StigmergicThresholds};
 use crate::dpsr::DpsrEngine;
 use crate::edbc::{eval_barrier_pitchfork, EdbcEngine};
 use crate::traits::aligned::{
@@ -82,19 +80,18 @@ use crate::traits::branchless::{
     branchless_q7_resonant_pull_64, branchless_q7_synergy_fuse_64,
     branchless_q7_unified_field_fold_words_with_init_weight_64, branchless_relu_f32,
     branchless_select_f32, branchless_select_u32, branchless_select_u8, branchless_splitmix64,
-    branchless_sqrt_f32, fast_ln_1p_bounded_f32, load_q7_words_64, trail_phase_words_mut,
-    trail_phase_words_ref,
+    branchless_sqrt_f32, fast_ln_1p_bounded_f32, load_q7_words_64,
     modulate_attention_scores_by_phase_bank_64, scale_f32_slice_unrolled8, store_q7_words_64,
-    sum_sq_f32_simd8, swar_slerp_words_with_bias_64,
+    sum_sq_f32_simd8, swar_slerp_words_with_bias_64, trail_phase_words_mut, trail_phase_words_ref,
 };
 use crate::traits::cold_path::{EntropyEvaluator, L2pSvdProjector, SystemCapabilityQuery};
 use crate::traits::gateway::{
     project_bytes_swar_to_words_64, project_f32_slice_to_q7_64, project_f32_slice_to_words_64,
     synthesize_multi_origin_gateway_frame_with_words, CausalProvenanceReport,
-    CausalProvenanceSignal, CognitiveGroundingSignal, ContradictionGuard,
-    ContradictionGuardSignal, CrystallizedAttractorRecord, GatewayFrame, GcsoFourSectionView,
-    ManifoldGatewaySignal, ObjectiveFact, RawPhaseProjectable, SubjectivePersona,
-    SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD, GCSO_FOUR_SECTION_HEADER_BYTES,
+    CausalProvenanceSignal, CognitiveGroundingSignal, ContradictionGuard, ContradictionGuardSignal,
+    CrystallizedAttractorRecord, GatewayFrame, GcsoFourSectionView, ManifoldGatewaySignal,
+    ObjectiveFact, RawPhaseProjectable, SubjectivePersona, SystemConstraint,
+    CAUSAL_AXIS_CONTRADICTION_GUARD, GCSO_FOUR_SECTION_HEADER_BYTES,
 };
 use crate::traits::primitives::{
     init_snapshot_header, is_slot_pair_coupled, pack_action_slot_tag, raw_byte_ranges_overlap,
@@ -337,15 +334,60 @@ macro_rules! define_opaque_handles {
 }
 
 define_opaque_handles!(
-    (GcsoContextOpaque, GcsoContextHandle, gcso_context_handle_t, "Opaque runtime context handle (`gcso_context_handle_t`)."),
-    (GcsoContainerOpaque, GcsoContainerHandle, gcso_container_handle_t, "Opaque `.gcso` binary snapshot container handle (`gcso_container_handle_t`)."),
-    (GcsoActionHubOpaque, GcsoActionHubHandle, gcso_action_hub_handle_t, "Opaque Action Hub (Sidecar Pointer Table) handle (`gcso_action_hub_handle_t`)."),
-    (GcsoDaesSlotOpaque, GcsoDaesSlotHandle, gcso_daes_slot_handle_t, "Opaque DAES extension scratchpad slot handle (`gcso_daes_slot_handle_t`)."),
-    (GcsoAttractorFieldOpaque, GcsoAttractorFieldHandle, gcso_attractor_field_handle_t, "Opaque Macro Attractor Field handle (`gcso_attractor_field_handle_t`)."),
-    (GcsoEdbcControllerOpaque, GcsoEdbcControllerHandle, gcso_edbc_controller_handle_t, "Opaque EDBC entropy controller handle (`gcso_edbc_controller_handle_t`)."),
-    (GcsoDpsrKernelOpaque, GcsoDpsrKernelHandle, gcso_dpsr_kernel_handle_t, "Opaque DPSR phase steering kernel handle (`gcso_dpsr_kernel_handle_t`)."),
-    (GcsoPspmRouterOpaque, GcsoPspmRouterHandle, gcso_pspm_router_handle_t, "Opaque PSPM sub-head group router handle (`gcso_pspm_router_handle_t`)."),
-    (GcsoSrlAdapterOpaque, GcsoSrlAdapterHandle, gcso_srl_adapter_handle_t, "Opaque SRL Rank-1 adapter layer handle (`gcso_srl_adapter_handle_t`)."),
+    (
+        GcsoContextOpaque,
+        GcsoContextHandle,
+        gcso_context_handle_t,
+        "Opaque runtime context handle (`gcso_context_handle_t`)."
+    ),
+    (
+        GcsoContainerOpaque,
+        GcsoContainerHandle,
+        gcso_container_handle_t,
+        "Opaque `.gcso` binary snapshot container handle (`gcso_container_handle_t`)."
+    ),
+    (
+        GcsoActionHubOpaque,
+        GcsoActionHubHandle,
+        gcso_action_hub_handle_t,
+        "Opaque Action Hub (Sidecar Pointer Table) handle (`gcso_action_hub_handle_t`)."
+    ),
+    (
+        GcsoDaesSlotOpaque,
+        GcsoDaesSlotHandle,
+        gcso_daes_slot_handle_t,
+        "Opaque DAES extension scratchpad slot handle (`gcso_daes_slot_handle_t`)."
+    ),
+    (
+        GcsoAttractorFieldOpaque,
+        GcsoAttractorFieldHandle,
+        gcso_attractor_field_handle_t,
+        "Opaque Macro Attractor Field handle (`gcso_attractor_field_handle_t`)."
+    ),
+    (
+        GcsoEdbcControllerOpaque,
+        GcsoEdbcControllerHandle,
+        gcso_edbc_controller_handle_t,
+        "Opaque EDBC entropy controller handle (`gcso_edbc_controller_handle_t`)."
+    ),
+    (
+        GcsoDpsrKernelOpaque,
+        GcsoDpsrKernelHandle,
+        gcso_dpsr_kernel_handle_t,
+        "Opaque DPSR phase steering kernel handle (`gcso_dpsr_kernel_handle_t`)."
+    ),
+    (
+        GcsoPspmRouterOpaque,
+        GcsoPspmRouterHandle,
+        gcso_pspm_router_handle_t,
+        "Opaque PSPM sub-head group router handle (`gcso_pspm_router_handle_t`)."
+    ),
+    (
+        GcsoSrlAdapterOpaque,
+        GcsoSrlAdapterHandle,
+        gcso_srl_adapter_handle_t,
+        "Opaque SRL Rank-1 adapter layer handle (`gcso_srl_adapter_handle_t`)."
+    ),
 );
 
 /// Classification types for topological attractor field anchors (Section 5.3).
@@ -800,7 +842,9 @@ const _: () = {
     assert!(size_of::<gcso_status_t>() == 4);
     assert!(size_of::<gcso_q7_t>() == 1);
     assert!(size_of::<gcso_tagged_ptr_t>() == 8);
-    assert!(size_of::<gcso_descriptor_header_t>() == 8 && align_of::<gcso_descriptor_header_t>() == 4);
+    assert!(
+        size_of::<gcso_descriptor_header_t>() == 8 && align_of::<gcso_descriptor_header_t>() == 4
+    );
     assert!(size_of::<gcso_paged_bitmask_t>() == 32 && align_of::<gcso_paged_bitmask_t>() == 32);
     assert!(size_of::<gcso_pointer_trail_t>() == 128 && align_of::<gcso_pointer_trail_t>() == 128);
     assert!(size_of::<gcso_daes_slot_t>() == 64 && align_of::<gcso_daes_slot_t>() == 64);
@@ -814,16 +858,32 @@ const _: () = {
     );
     assert!(size_of::<gcso_config_t>() == 64 && align_of::<gcso_config_t>() == 16);
     assert!(size_of::<gcso_edbc_state_t>() == 64 && align_of::<gcso_edbc_state_t>() == 32);
-    assert!(size_of::<gcso_zimms_descriptor_t>() == 64 && align_of::<gcso_zimms_descriptor_t>() == 32);
+    assert!(
+        size_of::<gcso_zimms_descriptor_t>() == 64 && align_of::<gcso_zimms_descriptor_t>() == 32
+    );
     assert!(size_of::<gcso_pspm_config_t>() == 32 && align_of::<gcso_pspm_config_t>() == 16);
     assert!(size_of::<gcso_srl_descriptor_t>() == 64 && align_of::<gcso_srl_descriptor_t>() == 32);
-    assert!(size_of::<gcso_snapshot_header_t>() == 128 && align_of::<gcso_snapshot_header_t>() == 64);
-    assert!(size_of::<gcso_pprc_keyframe_header_t>() == 64 && align_of::<gcso_pprc_keyframe_header_t>() == 32);
+    assert!(
+        size_of::<gcso_snapshot_header_t>() == 128 && align_of::<gcso_snapshot_header_t>() == 64
+    );
+    assert!(
+        size_of::<gcso_pprc_keyframe_header_t>() == 64
+            && align_of::<gcso_pprc_keyframe_header_t>() == 32
+    );
     assert!(size_of::<SwarmResolutionReport>() == 16 && align_of::<SwarmResolutionReport>() == 16);
     assert!(size_of::<gcso_gateway_frame_t>() == 128 && align_of::<gcso_gateway_frame_t>() == 64);
-    assert!(size_of::<gcso_causal_provenance_report_t>() == 16 && align_of::<gcso_causal_provenance_report_t>() == 16);
-    assert!(size_of::<gcso_crystallized_attractor_record_t>() == 128 && align_of::<gcso_crystallized_attractor_record_t>() == 64);
-    assert!(size_of::<gcso_contrastive_bloom_filter_t>() == 64 && align_of::<gcso_contrastive_bloom_filter_t>() == 64);
+    assert!(
+        size_of::<gcso_causal_provenance_report_t>() == 16
+            && align_of::<gcso_causal_provenance_report_t>() == 16
+    );
+    assert!(
+        size_of::<gcso_crystallized_attractor_record_t>() == 128
+            && align_of::<gcso_crystallized_attractor_record_t>() == 64
+    );
+    assert!(
+        size_of::<gcso_contrastive_bloom_filter_t>() == 64
+            && align_of::<gcso_contrastive_bloom_filter_t>() == 64
+    );
     assert!(offset_of!(gcso_descriptor_header_t, struct_size) == 0);
     assert!(offset_of!(gcso_descriptor_header_t, abi_version) == 4);
     assert!(offset_of!(gcso_paged_bitmask_t, bits) == 0);
@@ -1018,11 +1078,8 @@ impl<'a> AbiBorrowedBloomGuard<'a> {
         _obstruction_threshold: f32,
         bloom_repulsion_threshold: u8,
     ) -> Self {
-        let safe_bloom = branchless_select_u8(
-            bloom_repulsion_threshold > 0,
-            bloom_repulsion_threshold,
-            1,
-        );
+        let safe_bloom =
+            branchless_select_u8(bloom_repulsion_threshold > 0, bloom_repulsion_threshold, 1);
         Self {
             bloom,
             bloom_repulsion_threshold: safe_bloom,
@@ -1083,7 +1140,8 @@ impl ContradictionGuardSignal for AbiBorrowedBloomGuard<'_> {
         let density = if self.bloom.is_empty() {
             0
         } else {
-            self.bloom.query_repulsive_density_from_words(candidate_words)
+            self.bloom
+                .query_repulsive_density_from_words(candidate_words)
         };
         let bloom_hit = density >= self.bloom_repulsion_threshold;
         branchless_select_f32(
@@ -1116,13 +1174,9 @@ unsafe fn synthesize_multi_origin_generic_with_words<
 ) -> GcsoResult<(GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS])> {
     // SAFETY: `FfiHandleRef::from_raw_opt` validates non-nullness and alignment of `bloom_filter_opt`.
     let bloom_ref_opt = unsafe { FfiHandleRef::from_raw_opt(bloom_filter_opt)? };
-    let sys_sig = SystemConstraint::new(
-        (),
-        vram_pressure,
-        gpu_frame_overrun,
-        active_swarm_cell_mask,
-    )
-    .with_layer_skip(recommend_layer_skip != 0);
+    let sys_sig =
+        SystemConstraint::new((), vram_pressure, gpu_frame_overrun, active_swarm_cell_mask)
+            .with_layer_skip(recommend_layer_skip != 0);
     Ok(match bloom_ref_opt {
         Some(b_ref) => {
             let guard = AbiBorrowedBloomGuard::new(
@@ -1779,8 +1833,7 @@ fn steer_crystallized_records_with_optional_bloom_safe(
                     .with_action_and_slot(ATTRACTOR_SLOT_REPULSION, rep_mode)
                     .conjugate_phase()
                     .raw();
-                trail_inout.flags |=
-                    TRAIL_FLAG_REPULSION_ACTIVE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE;
+                trail_inout.flags |= TRAIL_FLAG_REPULSION_ACTIVE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE;
             }
         }
     }
@@ -1894,11 +1947,9 @@ fn bridge_trail_words_slerp_u7(
     if interpolation_u7 > 0 {
         let cand_w = load_q7_words_64(cand_phases);
         if !swar_words_equal_64(&steer_words, &cand_w) {
-            let s_u64 =
-                branchless_select_u8(interpolation_u7 > 128, 128, interpolation_u7) as u64;
+            let s_u64 = branchless_select_u8(interpolation_u7 > 128, 128, interpolation_u7) as u64;
             let bias_restore = (128u64.wrapping_sub(s_u64)).wrapping_mul(0x0101_0101_0101_0101);
-            steer_words =
-                swar_slerp_words_with_bias_64(&steer_words, &cand_w, s_u64, bias_restore);
+            steer_words = swar_slerp_words_with_bias_64(&steer_words, &cand_w, s_u64, bias_restore);
             *trail_phase_words_mut(src_trail) = steer_words;
         }
     }
@@ -2250,8 +2301,12 @@ pub unsafe extern "C" fn gcso_context_create(
 ) -> GcsoStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
-        let (cfg, mut out_handle) =
-            unsafe { (FfiHandleRef::from_raw(config)?, FfiHandleMut::from_raw(context_out)?) };
+        let (cfg, mut out_handle) = unsafe {
+            (
+                FfiHandleRef::from_raw(config)?,
+                FfiHandleMut::from_raw(context_out)?,
+            )
+        };
 
         if cfg.head_dim == 0
             || (cfg.head_dim & 1) != 0
@@ -2414,8 +2469,7 @@ pub unsafe extern "C" fn gcso_context_deserialize(
         validate_snapshot_header(&header, in_bytes.len())?;
         if header.checksum_crc32 != 0 {
             let hdr_size = size_of::<gcso_snapshot_header_t>();
-            let computed =
-                branchless_crc32_ieee(&in_bytes[hdr_size..(header.total_size as usize)]);
+            let computed = branchless_crc32_ieee(&in_bytes[hdr_size..(header.total_size as usize)]);
             if computed != header.checksum_crc32 {
                 return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
             }
@@ -2471,7 +2525,8 @@ pub unsafe extern "C" fn gcso_container_write_crystallized_records_zero_copy(
                 slice::from_raw_parts_mut(out_bytes, required),
             )
         };
-        let written = CrystallizedAttractorRecord::write_records_to_zimms_bytes(rec_slice, dst_slice)?;
+        let written =
+            CrystallizedAttractorRecord::write_records_to_zimms_bytes(rec_slice, dst_slice)?;
         *size_io = written;
         Ok(GCSO_SUCCESS)
     })
@@ -2495,7 +2550,8 @@ pub unsafe extern "C" fn gcso_container_verify_crystallized_records_zero_copy(
         }
         // SAFETY: `zimms_bytes` is non-null.
         let bytes = unsafe { slice::from_raw_parts(zimms_bytes, byte_len) };
-        let recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(bytes, num_records)?;
+        let recs =
+            CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(bytes, num_records)?;
         // SAFETY: `FfiHandleMut::from_raw_opt` validates optional output pointer.
         if let Some(mut rp_out) = unsafe { FfiHandleMut::from_raw_opt(records_ptr_out)? } {
             *rp_out = if recs.is_empty() {
@@ -2954,8 +3010,7 @@ pub unsafe extern "C" fn gcso_container_map_route_coarse_to_fine_and_steer_four_
                         .with_action_and_slot(ATTRACTOR_SLOT_REPULSION, rep_mode)
                         .conjugate_phase()
                         .raw();
-                    src_trail.flags |=
-                        TRAIL_FLAG_REPULSION_ACTIVE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE;
+                    src_trail.flags |= TRAIL_FLAG_REPULSION_ACTIVE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE;
                 }
             }
         }
@@ -3145,7 +3200,10 @@ pub unsafe extern "C" fn gcso_action_hub_orchestrate_stigmergic_step_safe(
                     if attention_scores_inout.is_null() || num_scores == 0 {
                         None
                     } else {
-                        AlignedSliceMut32::from_raw_parts_mut_opt(attention_scores_inout, num_scores)?
+                        AlignedSliceMut32::from_raw_parts_mut_opt(
+                            attention_scores_inout,
+                            num_scores,
+                        )?
                     },
                     AlignedSliceMut32::from_raw_parts_mut_opt(query_tensor, total_len)?,
                 ),
@@ -4546,8 +4604,12 @@ pub unsafe extern "C" fn gcso_daes_fast_path_lookup(
 ) -> GcsoStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
-        let (slot_ref, mut out_val) =
-            unsafe { (FfiHandleRef::from_raw(slot)?, FfiHandleMut::from_raw(shortcut_out)?) };
+        let (slot_ref, mut out_val) = unsafe {
+            (
+                FfiHandleRef::from_raw(slot)?,
+                FfiHandleMut::from_raw(shortcut_out)?,
+            )
+        };
 
         *out_val = AbiDaesDispatcher.fast_path_lookup(&slot_ref, input_key)?;
         Ok(GCSO_SUCCESS)
@@ -4596,8 +4658,12 @@ pub unsafe extern "C" fn gcso_daes_evaluate_auto_tune(
 ) -> GcsoStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
-        let (slot_ref, mut cfg_mut) =
-            unsafe { (FfiHandleRef::from_raw(slot)?, FfiHandleMut::from_raw(config_out)?) };
+        let (slot_ref, mut cfg_mut) = unsafe {
+            (
+                FfiHandleRef::from_raw(slot)?,
+                FfiHandleMut::from_raw(config_out)?,
+            )
+        };
 
         AbiDaesDispatcher.evaluate_auto_tune(&slot_ref, &mut cfg_mut)?;
         Ok(GCSO_SUCCESS)
@@ -6003,8 +6069,12 @@ pub unsafe extern "C" fn gcso_pspm_router_create(
 ) -> GcsoStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
-        let (_cfg, mut out_handle) =
-            unsafe { (FfiHandleRef::from_raw(config)?, FfiHandleMut::from_raw(router_out)?) };
+        let (_cfg, mut out_handle) = unsafe {
+            (
+                FfiHandleRef::from_raw(config)?,
+                FfiHandleMut::from_raw(router_out)?,
+            )
+        };
         *out_handle = ptr::null_mut();
         Ok(GCSO_SUCCESS)
     })
@@ -6193,8 +6263,12 @@ pub unsafe extern "C" fn gcso_l2p_svd_project_lora(
         }
 
         // SAFETY: Validated non-null and 4B aligned above.
-        let (a_slice, b_slice) =
-            unsafe { (slice::from_raw_parts(lora_a, a_len), slice::from_raw_parts(lora_b, b_len)) };
+        let (a_slice, b_slice) = unsafe {
+            (
+                slice::from_raw_parts(lora_a, a_len),
+                slice::from_raw_parts(lora_b, b_len),
+            )
+        };
 
         let norm_u_sq = if rank == 1 {
             sum_sq_f32_simd8(&b_slice[..dim_out])
@@ -6504,8 +6578,11 @@ pub unsafe extern "C" fn gcso_attractor_steer_trail_unified_field(
             ))
         };
 
-        let (pull, mean_coh, act_cnt) =
-            trail.apply_unified_field_anchor_slice_resonance(anchors_slice, energies_slice, rep_opt);
+        let (pull, mean_coh, act_cnt) = trail.apply_unified_field_anchor_slice_resonance(
+            anchors_slice,
+            energies_slice,
+            rep_opt,
+        );
         trail.sync_flags_with_current_ptr();
 
         // SAFETY: `write_opt_out` validates optional output pointers.
@@ -6727,7 +6804,10 @@ pub unsafe extern "C" fn gcso_attractor_eval_cross_slot_synergy(
         // SAFETY: Validated non-null and disjoint above.
         let ((ref_a, ref_b), out_arr) = unsafe {
             (
-                (ref_phase64_from_raw(phases_a)?, ref_phase64_from_raw(phases_b)?),
+                (
+                    ref_phase64_from_raw(phases_a)?,
+                    ref_phase64_from_raw(phases_b)?,
+                ),
                 mut_phase64_from_raw(fused_phases_out)?,
             )
         };
@@ -6762,7 +6842,8 @@ pub unsafe extern "C" fn gcso_attractor_apply_mutual_slot_inhibition(
     ffi_boundary!({
         validate_ptr(target_phases_inout)?;
         validate_ptr(inhibitor_phases)?;
-        if !branchless_is_finite_f32(target_weight) || !branchless_is_finite_f32(inhibition_strength)
+        if !branchless_is_finite_f32(target_weight)
+            || !branchless_is_finite_f32(inhibition_strength)
         {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -7114,7 +7195,9 @@ impl_stateless_handle_destroy!(
 mod tests {
     use super::*;
     use crate::action_hub::StigmergicActionDecision;
-    use crate::traits::aligned::{AlignedBuffer128, AlignedBuffer16, AlignedBuffer32, AlignedBuffer64};
+    use crate::traits::aligned::{
+        AlignedBuffer128, AlignedBuffer16, AlignedBuffer32, AlignedBuffer64,
+    };
     use crate::traits::gateway::DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE;
     use crate::traits::primitives::{
         ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP,
@@ -7231,8 +7314,12 @@ mod tests {
         kv_words[19] = 99;
         let mut warp_mask = gcso_paged_bitmask_t::default();
         let masks_in = [
-            gcso_paged_bitmask_t { bits: [0b0101, 0, 0, 0] },
-            gcso_paged_bitmask_t { bits: [0b1010, 1, 0, 0] },
+            gcso_paged_bitmask_t {
+                bits: [0b0101, 0, 0, 0],
+            },
+            gcso_paged_bitmask_t {
+                bits: [0b1010, 1, 0, 0],
+            },
         ];
         let mut reduced_mask = gcso_paged_bitmask_t::default();
 
@@ -7265,7 +7352,10 @@ mod tests {
             );
         }
         assert_eq!(y_out.data, [40.0f32; 4]);
-        assert_eq!(warp_mask.bits[0], (1u64 << 0) | (1u64 << 3) | (1u64 << 15) | (1u64 << 19));
+        assert_eq!(
+            warp_mask.bits[0],
+            (1u64 << 0) | (1u64 << 3) | (1u64 << 15) | (1u64 << 19)
+        );
         assert_eq!(reduced_mask.bits[0], 0b1111);
         assert_eq!(reduced_mask.bits[1], 1);
     }

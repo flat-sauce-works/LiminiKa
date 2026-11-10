@@ -15,8 +15,8 @@ use std::process::Command;
 
 /// List of valid file extensions tracked for Cargo re-run checking.
 const TRACKED_EXTENSIONS: &[&str] = &[
-    "h", "hpp", "inl", "c", "cpp", "cc", "cxx", "cu", "cuh", "metal", "mm", "comp", "vert",
-    "frag", "glsl", "hlsl", "wgsl", "slang", "hip", "cl", "spv", "txt", "cmake",
+    "h", "hpp", "inl", "c", "cpp", "cc", "cxx", "cu", "cuh", "metal", "mm", "comp", "vert", "frag",
+    "glsl", "hlsl", "wgsl", "slang", "hip", "cl", "spv", "txt", "cmake",
 ];
 
 /// Registers all custom cfg identifiers to prevent `unexpected_cfgs` warnings on Rust 1.80+.

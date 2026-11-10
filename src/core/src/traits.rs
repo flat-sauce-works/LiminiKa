@@ -121,22 +121,21 @@ pub use self::aligned::{
 };
 pub use self::branchless::{
     branchless_abs_f32, branchless_atan2_f32, branchless_atan2_to_q7_fast, branchless_clamp_f32,
-    branchless_copysign_f32, branchless_cos_q7, branchless_crc32_128b_words,
-    branchless_crc32_ieee, branchless_exp_f32,
-    branchless_eyring_kramers_escape, branchless_flush_subnormal_f32,
+    branchless_copysign_f32, branchless_cos_q7, branchless_crc32_128b_words, branchless_crc32_ieee,
+    branchless_exp_f32, branchless_eyring_kramers_escape, branchless_flush_subnormal_f32,
     branchless_hysteresis_quantize_depth, branchless_inv_pos_f32, branchless_is_finite_f32,
     branchless_is_nan_f32, branchless_lerp_f32, branchless_ln_f32, branchless_max_f32,
     branchless_min_f32, branchless_phase_coherence_inv_temp_scale,
     branchless_phase_proximity_gravity_f32, branchless_project_f32_slice_to_q7_64,
     branchless_q7_abs_u8, branchless_q7_accumulate_64, branchless_q7_add_sat,
     branchless_q7_attention_score_delta_64, branchless_q7_bayesian_attention_score_delta_64,
-    branchless_q7_circular_diff, branchless_q7_circular_lerp,
-    branchless_q7_circular_resultant_64, branchless_q7_circular_weighted_step_64,
-    branchless_q7_coherence_64, branchless_q7_coherence_and_resultant_64,
-    branchless_q7_conjugate_64, branchless_q7_fold_s1_geodesic, branchless_q7_gravity_fold_64,
-    branchless_q7_inhibit_64, branchless_q7_inhibit_words_64, branchless_q7_neg_sat,
-    branchless_q7_qdps_filter_64, branchless_q7_resonant_pull_64, branchless_q7_scale_64,
-    branchless_q7_scale_u7, branchless_q7_slerp_64, branchless_q7_sub_64, branchless_q7_sub_sat,
+    branchless_q7_circular_diff, branchless_q7_circular_lerp, branchless_q7_circular_resultant_64,
+    branchless_q7_circular_weighted_step_64, branchless_q7_coherence_64,
+    branchless_q7_coherence_and_resultant_64, branchless_q7_conjugate_64,
+    branchless_q7_fold_s1_geodesic, branchless_q7_gravity_fold_64, branchless_q7_inhibit_64,
+    branchless_q7_inhibit_words_64, branchless_q7_neg_sat, branchless_q7_qdps_filter_64,
+    branchless_q7_resonant_pull_64, branchless_q7_scale_64, branchless_q7_scale_u7,
+    branchless_q7_slerp_64, branchless_q7_sub_64, branchless_q7_sub_sat,
     branchless_q7_synergy_fuse_64, branchless_q7_synergy_fuse_words_64, branchless_q7_to_rad,
     branchless_q7_transition_log_prob_64, branchless_q7_transition_log_prob_words_64,
     branchless_q7_unified_field_fold_64, branchless_q7_unified_field_fold_with_init_weight_64,
@@ -158,20 +157,18 @@ pub use self::branchless::{
     coherence_from_diff_words_64, coherence_from_word_arrays_64,
     coherence_from_word_arrays_with_both_uniform_flags_64,
     coherence_from_word_arrays_with_uniform_flag_64, is_phase_profile_nonzero_64,
-    is_word_array_uniform_64,
-    load_q7_words_64, modulate_attention_scores_by_bayesian_trails_64,
+    is_word_array_uniform_64, load_q7_words_64, modulate_attention_scores_by_bayesian_trails_64,
     modulate_attention_scores_by_phase_bank_64, store_q7_words_64, sum_abs_and_sq_f32_simd8,
     sum_abs_sq_and_max_f32_simd8, sum_sq_f32_simd8, swar_q7_abs_u8_x8, swar_q7_add_sat_x4,
     swar_q7_add_sat_x8, swar_q7_avg_round_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
     swar_q7_fold_s1_geodesic_x8, swar_q7_geodesic_slerp_x8, swar_q7_mean_i8_from_words_64,
     swar_q7_neg_sat_x4, swar_q7_neg_sat_x8, swar_q7_pack_x8, swar_q7_qdps_filter_words_64,
-    swar_q7_qdps_filter_x8, swar_q7_scale_le128_with_bias_x8,
-    swar_q7_scale_u7_x8, swar_q7_sub_sat_x4, swar_q7_sub_sat_x8, swar_q7_unpack_x8,
-    swar_slerp_word_unchecked_x8, swar_slerp_word_with_bias_x8, swar_slerp_words_with_bias_64,
-    swar_slerp_words_with_uniform_flag_64,
-    swar_u8_add_sat_x8, swar_u8_halve_decay_x8, swar_u8_max_x8, swar_u8_mean_round_x8,
-    swar_u8_nonzero_count_x8, swar_u8_sub_sat_x8, swar_u8_sum_x8, trail_phase_words_mut,
-    trail_phase_words_ref, BranchlessKernel,
+    swar_q7_qdps_filter_x8, swar_q7_scale_le128_with_bias_x8, swar_q7_scale_u7_x8,
+    swar_q7_sub_sat_x4, swar_q7_sub_sat_x8, swar_q7_unpack_x8, swar_slerp_word_unchecked_x8,
+    swar_slerp_word_with_bias_x8, swar_slerp_words_with_bias_64,
+    swar_slerp_words_with_uniform_flag_64, swar_u8_add_sat_x8, swar_u8_halve_decay_x8,
+    swar_u8_max_x8, swar_u8_mean_round_x8, swar_u8_nonzero_count_x8, swar_u8_sub_sat_x8,
+    swar_u8_sum_x8, trail_phase_words_mut, trail_phase_words_ref, BranchlessKernel,
     DEFAULT_MAX_VALID_Z_SCORE, DEFAULT_PHASE_GRAVITY_EPS, DEFAULT_RIPA_Q7_TO_NORM_SCALE,
     F32_MIN_POSITIVE_NORMAL, MAX_PHASE_INTERFERENCE_INV_TEMP, MIN_PHASE_INTERFERENCE_INV_TEMP,
 };
@@ -436,9 +433,9 @@ pub(crate) fn fuse_lazy_unwrap_and_qdps_from_words_64(
     let limit = num_heads.min(MAX_ATTENTION_HEADS).min(context_slice.len());
 
     if limit == MAX_ATTENTION_HEADS {
-        if let Ok(c_arr) = <&[gcso_q7_t; MAX_ATTENTION_HEADS]>::try_from(
-            &context_slice[..MAX_ATTENTION_HEADS],
-        ) {
+        if let Ok(c_arr) =
+            <&[gcso_q7_t; MAX_ATTENTION_HEADS]>::try_from(&context_slice[..MAX_ATTENTION_HEADS])
+        {
             let c_w = load_q7_words_64(c_arr);
             let raw_w = if fold_geodesic {
                 [
@@ -615,7 +612,13 @@ pub trait ActionHub:
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
         trail_out: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<(bool, gcso_tagged_ptr_t, u8, bool, [u64; NUM_SWARM_MICRO_CELLS])> {
+    ) -> GcsoResult<(
+        bool,
+        gcso_tagged_ptr_t,
+        u8,
+        bool,
+        [u64; NUM_SWARM_MICRO_CELLS],
+    )> {
         let (bypass_hit, effective_ptr) = self.resolve_or_pass_tagged_ptr(daes_slot, input_ptr);
         self.step_pointer(effective_ptr.raw(), trail_out)?;
 
@@ -1163,14 +1166,7 @@ pub trait ActionHub:
             false
         };
         Ok((
-            idx1,
-            idx2,
-            aid1,
-            aid2,
-            eff_coh,
-            tot_grav,
-            is_liminal,
-            steered,
+            idx1, idx2, aid1, aid2, eff_coh, tot_grav, is_liminal, steered,
         ))
     }
 
@@ -1236,8 +1232,7 @@ pub trait ActionHub:
                 src_trail,
                 coarse_pull_u7,
             );
-        let has_win_centroid =
-            macro_idx < centroids.len() && centroids[macro_idx].sample_count > 0;
+        let has_win_centroid = macro_idx < centroids.len() && centroids[macro_idx].sample_count > 0;
 
         let (selected_id, bayes_score, _mean_coh, _coh_cnt, found, raw_w) = self
             .select_rewire_bridge_and_modulate_hub_with_preloaded_words_64(
@@ -1353,11 +1348,8 @@ pub trait ActionHub:
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
 
-        let steer_w = load_validated_four_section_trail_words_64(
-            zimms_bytes,
-            trail_idx,
-            &frame.phase_deltas,
-        );
+        let steer_w =
+            load_validated_four_section_trail_words_64(zimms_bytes, trail_idx, &frame.phase_deltas);
         let steered = self.steer_qdps_words_prevalidated_core(
             &steer_w,
             head_dim,
@@ -1488,7 +1480,19 @@ pub trait ActionHub:
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
 
-        let (idx1, idx2, aid1, aid2, eff_coh, tot_grav, is_liminal, raw_w, fact_w, logic_w, updated_ptr) = {
+        let (
+            idx1,
+            idx2,
+            aid1,
+            aid2,
+            eff_coh,
+            tot_grav,
+            is_liminal,
+            raw_w,
+            fact_w,
+            logic_w,
+            updated_ptr,
+        ) = {
             let (prefix_bytes, trails_and_tail) = zimms_bytes.split_at_mut(off_trails);
             let crystals_ref = CrystallizedAttractorRecord::slice_from_bytes_at(
                 prefix_bytes,
@@ -1538,11 +1542,7 @@ pub trait ActionHub:
 
         let metric_code = branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
             | branchless_select_u8(pspm_routed, DAES_METRIC_PSPM_ROUTED, 0)
-            | branchless_select_u8(
-                (aid1 != 0) | is_liminal,
-                DAES_METRIC_SLOT_SYNERGY_ACTIVE,
-                0,
-            );
+            | branchless_select_u8((aid1 != 0) | is_liminal, DAES_METRIC_SLOT_SYNERGY_ACTIVE, 0);
         let _ = GcsoFourSectionView::update_four_section_daes_in_place(
             zimms_bytes,
             &header,
@@ -1558,14 +1558,7 @@ pub trait ActionHub:
         )?;
 
         Ok((
-            idx1,
-            idx2,
-            aid1,
-            aid2,
-            eff_coh,
-            tot_grav,
-            is_liminal,
-            steered,
+            idx1, idx2, aid1, aid2, eff_coh, tot_grav, is_liminal, steered,
         ))
     }
 
@@ -2012,17 +2005,17 @@ pub mod prelude {
         branchless_toroidal_centroid_step_words_64,
         branchless_toroidal_centroid_step_words_with_coh_64, branchless_update_crc32_ieee,
         branchless_von_mises_kappa, circular_r_bar_from_words_64, circular_resultant_from_words_64,
-        coherence_from_diff_words_64, coherence_from_word_arrays_64,
-        is_phase_profile_nonzero_64, is_word_array_uniform_64,
-        load_q7_words_64, modulate_attention_scores_by_bayesian_trails_64,
+        coherence_from_diff_words_64, coherence_from_word_arrays_64, is_phase_profile_nonzero_64,
+        is_word_array_uniform_64, load_q7_words_64,
+        modulate_attention_scores_by_bayesian_trails_64,
         modulate_attention_scores_by_phase_bank_64, store_q7_words_64, sum_abs_and_sq_f32_simd8,
         sum_abs_sq_and_max_f32_simd8, sum_sq_f32_simd8, swar_q7_circular_add_x8,
         swar_q7_fold_s1_geodesic_x8, swar_q7_geodesic_slerp_x8, swar_q7_mean_i8_from_words_64,
-        swar_q7_qdps_filter_words_64, swar_q7_scale_le128_with_bias_x8, swar_slerp_word_unchecked_x8,
-        swar_slerp_word_with_bias_x8, swar_slerp_words_with_bias_64, swar_u8_add_sat_x8,
-        swar_u8_halve_decay_x8, swar_u8_max_x8, swar_u8_mean_round_x8, swar_u8_nonzero_count_x8,
-        swar_u8_sub_sat_x8, swar_u8_sum_x8, trail_phase_words_mut, trail_phase_words_ref,
-        BranchlessKernel, DEFAULT_MAX_VALID_Z_SCORE,
+        swar_q7_qdps_filter_words_64, swar_q7_scale_le128_with_bias_x8,
+        swar_slerp_word_unchecked_x8, swar_slerp_word_with_bias_x8, swar_slerp_words_with_bias_64,
+        swar_u8_add_sat_x8, swar_u8_halve_decay_x8, swar_u8_max_x8, swar_u8_mean_round_x8,
+        swar_u8_nonzero_count_x8, swar_u8_sub_sat_x8, swar_u8_sum_x8, trail_phase_words_mut,
+        trail_phase_words_ref, BranchlessKernel, DEFAULT_MAX_VALID_Z_SCORE,
         DEFAULT_PHASE_GRAVITY_EPS, DEFAULT_RIPA_Q7_TO_NORM_SCALE, F32_MIN_POSITIVE_NORMAL,
         MAX_PHASE_INTERFERENCE_INV_TEMP, MIN_PHASE_INTERFERENCE_INV_TEMP,
     };
@@ -2088,10 +2081,9 @@ pub mod prelude {
         DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS, DEFAULT_BLOOM_MAX_MASS_THRESHOLD,
         DEFAULT_SWARM_QUORUM_THRESHOLD, DEFAULT_SWARM_TOLERANCE_Q7, HEADS_PER_SWARM_CELL,
         MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS,
-        TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_DPSR_ACTIVE,
-        TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
-        TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SWARM_ESCALATED, TRAIL_FLAG_SWARM_RESOLVED,
-        TRAIL_FLAG_SYNERGY_RESONANCE,
+        TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_DPSR_ACTIVE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
+        TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SWARM_ESCALATED,
+        TRAIL_FLAG_SWARM_RESOLVED, TRAIL_FLAG_SYNERGY_RESONANCE,
     };
     pub use super::ActionHub;
 }
@@ -2451,7 +2443,9 @@ mod tests {
 
         let mut mask = gcso_paged_bitmask_t::default();
         <gcso_paged_bitmask_t as telemetry::PagedBitmaskOps>::set_bit_branchless(&mut mask, 7);
-        assert!(<gcso_paged_bitmask_t as telemetry::PagedBitmaskOps>::test_bit_branchless(&mask, 7));
+        assert!(
+            <gcso_paged_bitmask_t as telemetry::PagedBitmaskOps>::test_bit_branchless(&mask, 7)
+        );
 
         let deg = AlignedBuffer32::new([1.0f32, 3.0, 2.0, 0.5]);
         let lmax =
@@ -2781,7 +2775,16 @@ mod tests {
         assert_eq!(fs_aid, 303);
         assert!(fs_coh > 0.90 && fs_grav > 1.0 && fs_steered);
 
-        let (lim_idx1, lim_idx2, lim_aid1, lim_aid2, lim_fs_coh, lim_fs_grav, lim_fs_bif, lim_fs_steered) = hub
+        let (
+            lim_idx1,
+            lim_idx2,
+            lim_aid1,
+            lim_aid2,
+            lim_fs_coh,
+            lim_fs_grav,
+            lim_fs_bif,
+            lim_fs_steered,
+        ) = hub
             .route_four_section_top2_liminal_and_steer_qk_safe(
                 &mut container_buf.data[..written],
                 1,
@@ -2802,7 +2805,10 @@ mod tests {
             GcsoFourSectionView::from_zimms_bytes_zero_copy(&container_buf.data[..written])
                 .unwrap();
         assert_eq!(mapped_view.trails[1].cluster_id, lim_aid1);
-        assert_ne!(mapped_view.trails[1].flags & TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, 0);
+        assert_ne!(
+            mapped_view.trails[1].flags & TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
+            0
+        );
 
         let mut logits = AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0]);
         let (t_coh, inv_temp) = hub

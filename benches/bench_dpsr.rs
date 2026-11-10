@@ -21,7 +21,9 @@
 //!   (`16x64, 32x32, 64x16, 128x8, 256x4, 512x2`) in `extreme_head_dim` so Criterion's `lines.svg`
 //!   draws a clean, monotonic vectorization curve.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput};
+use criterion::{
+    criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
+};
 use liminika_core::abi::{
     gcso_daes_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t,
     gcso_tagged_ptr_t,
@@ -162,10 +164,7 @@ impl<T: Copy, const ALIGN: usize> AlignedHeapBuffer<T, ALIGN> {
         assert!(prefix_len <= self.len);
         // SAFETY: `self.data_ptr` satisfies `ALIGN` and is valid for `prefix_len <= self.len` elements.
         unsafe {
-            AlignedSlice::new_unchecked(std::slice::from_raw_parts(
-                self.data_ptr,
-                prefix_len,
-            ))
+            AlignedSlice::new_unchecked(std::slice::from_raw_parts(self.data_ptr, prefix_len))
         }
     }
 
@@ -263,7 +262,8 @@ const fn make_heterogeneous_slot_bank_512(base_shift: gcso_q7_t) -> [gcso_q7_t; 
     let mut out = [0i8; 512];
     let mut s = 0usize;
     while s < 8 {
-        let slot_arr = make_heterogeneous_q7_phases_with_offset(base_shift.wrapping_add(slot_shifts[s]));
+        let slot_arr =
+            make_heterogeneous_q7_phases_with_offset(base_shift.wrapping_add(slot_shifts[s]));
         let base = s * 64;
         let mut h = 0usize;
         while h < 64 {
@@ -278,7 +278,12 @@ const fn make_heterogeneous_slot_bank_512(base_shift: gcso_q7_t) -> [gcso_q7_t; 
 /// Initializes `(src, tgt)` f32 tensors with realistic non-collinear 2D sub-channel pairs per
 /// head so orthogonal Procrustes phase extraction (`atan2(S_h, C_h)`) yields non-zero per-head
 /// phase deltas rather than degenerate zero cross-terms (`1.2 * 0.8 - 1.2 * 0.8 == 0.0`).
-fn init_non_collinear_procrustes_tensors(src: &mut [f32], tgt: &mut [f32], head_dim: usize, num_heads: usize) {
+fn init_non_collinear_procrustes_tensors(
+    src: &mut [f32],
+    tgt: &mut [f32],
+    head_dim: usize,
+    num_heads: usize,
+) {
     for h in 0..num_heads {
         let angle = 0.18f32 + (h as f32) * 0.035f32;
         let (s_ang, c_ang) = angle.sin_cos();
@@ -572,7 +577,11 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
                 q_slice.as_mut_slice().fill(1.0f32);
                 for _ in 0..8 {
                     engine
-                        .apply_phase_steering_safe(&mut q_slice, &p_slice, DEFAULT_RIPA_CLAMP_MAX_RAD)
+                        .apply_phase_steering_safe(
+                            &mut q_slice,
+                            &p_slice,
+                            DEFAULT_RIPA_CLAMP_MAX_RAD,
+                        )
                         .unwrap();
                 }
 
@@ -1253,12 +1262,14 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
         q_slice.as_mut_slice().fill(1.0f32);
-        let mut slot_bank = AlignedBuffer64::<gcso_q7_t, 512>::new(make_heterogeneous_slot_bank_512(24));
+        let mut slot_bank =
+            AlignedBuffer64::<gcso_q7_t, 512>::new(make_heterogeneous_slot_bank_512(24));
         let persona_base = usize::from(ATTRACTOR_SLOT_PERSONA) * 64;
         let persona_aligned = make_heterogeneous_q7_phases_with_offset(28);
         let persona_divergent = make_heterogeneous_q7_phases_with_offset(-96);
         slot_bank.data[persona_base..persona_base + 56].copy_from_slice(&persona_aligned[..56]);
-        slot_bank.data[persona_base + 56..persona_base + 64].copy_from_slice(&persona_divergent[56..64]);
+        slot_bank.data[persona_base + 56..persona_base + 64]
+            .copy_from_slice(&persona_divergent[56..64]);
         let knowledge_base = usize::from(ATTRACTOR_SLOT_KNOWLEDGE) * 64;
         slot_bank.data[knowledge_base..knowledge_base + 64]
             .copy_from_slice(&make_heterogeneous_q7_phases_with_offset(30));
@@ -1310,81 +1321,78 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
     });
 
     // 2D. Hypothesis 1 x Hypothesis 2: Bayesian Pointer-Trail Selection, Rewiring, Score Modulation & RIPA Steering
-    group.bench_function(
-        "bayesian_pointer_trail_select_rewire_and_steer_64h",
-        |b| {
-            let mut q_slice = shared_q_arena
-                .as_aligned_prefix_mut(total_elements)
-                .relax_alignment::<32>();
-            q_slice.as_mut_slice().fill(1.0f32);
-            let mut attn_scores = AlignedBuffer32::new([0.0f32; 8]);
-            let base_src = gcso_pointer_trail_t {
-                current_ptr: gcso_tagged_ptr_t::pack_action(
-                    0x3400,
-                    ATTRACTOR_SLOT_PERSONA,
-                    ACTION_PRESET_EXPRESS_PHASE,
-                    16,
-                )
-                .raw(),
-                stigmergic_density: 1.5,
-                attractor_pull_force: 2.0,
-                linked_trail_id: 2,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
+    group.bench_function("bayesian_pointer_trail_select_rewire_and_steer_64h", |b| {
+        let mut q_slice = shared_q_arena
+            .as_aligned_prefix_mut(total_elements)
+            .relax_alignment::<32>();
+        q_slice.as_mut_slice().fill(1.0f32);
+        let mut attn_scores = AlignedBuffer32::new([0.0f32; 8]);
+        let base_src = gcso_pointer_trail_t {
+            current_ptr: gcso_tagged_ptr_t::pack_action(
+                0x3400,
+                ATTRACTOR_SLOT_PERSONA,
+                ACTION_PRESET_EXPRESS_PHASE,
+                16,
+            )
+            .raw(),
+            stigmergic_density: 1.5,
+            attractor_pull_force: 2.0,
+            linked_trail_id: 2,
+            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
+            ..Default::default()
+        };
+        let base_candidates = [
+            gcso_pointer_trail_t {
+                stigmergic_density: 4.0,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-96),
                 ..Default::default()
-            };
-            let base_candidates = [
-                gcso_pointer_trail_t {
-                    stigmergic_density: 4.0,
-                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-96),
-                    ..Default::default()
-                },
-                gcso_pointer_trail_t {
-                    stigmergic_density: 2.0,
-                    target_anchor_id: 11,
-                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(24),
-                    ..Default::default()
-                },
-                gcso_pointer_trail_t {
-                    stigmergic_density: 3.5,
-                    target_anchor_id: 29,
-                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(30),
-                    ..Default::default()
-                },
-                gcso_pointer_trail_t {
-                    stigmergic_density: 1.2,
-                    target_anchor_id: 7,
-                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(12),
-                    ..Default::default()
-                },
-            ];
-            let mut candidates = base_candidates;
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 2.0,
+                target_anchor_id: 11,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(24),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 3.5,
+                target_anchor_id: 29,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(30),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 1.2,
+                target_anchor_id: 7,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(12),
+                ..Default::default()
+            },
+        ];
+        let mut candidates = base_candidates;
 
-            let mut src_trail = base_src;
+        let mut src_trail = base_src;
 
-            b.iter(|| {
-                reset_trail_fast(&mut src_trail, &base_src);
-                reset_trail_fast(&mut candidates[2], &base_candidates[2]);
-                attn_scores.data = [0.0f32; 8];
-                let mut scores_mut = attn_scores.as_aligned_slice_mut();
-                let res = engine
-                    .select_rewire_and_steer_bayesian_with_defaults(
-                        black_box(&mut src_trail),
-                        black_box(&mut candidates),
-                        black_box(2.0f32),
-                        black_box(0.5f32),
-                        black_box(0.25f32),
-                        black_box(1.0f32),
-                        black_box(64u8),
-                        black_box(0.25f32),
-                        black_box(Some(&mut scores_mut)),
-                        black_box(&mut q_slice),
-                        None,
-                    )
-                    .unwrap();
-                black_box((res, scores_mut.as_slice()[2], q_slice.as_slice()[0]));
-            });
-        },
-    );
+        b.iter(|| {
+            reset_trail_fast(&mut src_trail, &base_src);
+            reset_trail_fast(&mut candidates[2], &base_candidates[2]);
+            attn_scores.data = [0.0f32; 8];
+            let mut scores_mut = attn_scores.as_aligned_slice_mut();
+            let res = engine
+                .select_rewire_and_steer_bayesian_with_defaults(
+                    black_box(&mut src_trail),
+                    black_box(&mut candidates),
+                    black_box(2.0f32),
+                    black_box(0.5f32),
+                    black_box(0.25f32),
+                    black_box(1.0f32),
+                    black_box(64u8),
+                    black_box(0.25f32),
+                    black_box(Some(&mut scores_mut)),
+                    black_box(&mut q_slice),
+                    None,
+                )
+                .unwrap();
+            black_box((res, scores_mut.as_slice()[2], q_slice.as_slice()[0]));
+        });
+    });
 
     // 2E. Limina Inter-Memory Bridging + Attention x DPSR Score Modulation
     group.bench_function(
@@ -1538,7 +1546,8 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
         q_slice.as_mut_slice().fill(1.0f32);
-        let mut slot_bank = AlignedBuffer64::<gcso_q7_t, 512>::new(make_heterogeneous_slot_bank_512(12));
+        let mut slot_bank =
+            AlignedBuffer64::<gcso_q7_t, 512>::new(make_heterogeneous_slot_bank_512(12));
         slot_bank.data[64..128].copy_from_slice(&make_heterogeneous_q7_phases_with_offset(24));
         slot_bank.data[128..192].copy_from_slice(&make_heterogeneous_q7_phases_with_offset(-18));
         let bank_slice = slot_bank.relax_slice::<16>();
@@ -1576,7 +1585,8 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
         q_slice.as_mut_slice().fill(1.0f32);
-        let mut slot_bank = AlignedBuffer64::<gcso_q7_t, 512>::new(make_heterogeneous_slot_bank_512(116));
+        let mut slot_bank =
+            AlignedBuffer64::<gcso_q7_t, 512>::new(make_heterogeneous_slot_bank_512(116));
         slot_bank.data[64..128].copy_from_slice(&make_heterogeneous_q7_phases_with_offset(24));
         slot_bank.data[128..192].copy_from_slice(&make_heterogeneous_q7_phases_with_offset(-18));
         let bank_slice = slot_bank.relax_slice::<16>();
@@ -1609,124 +1619,130 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
     });
 
     // 5C. Single-Manifold Unified-Field + PSPM Sub-Head Pseudo-MoE + Inverse-Temperature Logit Sharpening
-    group.bench_function(
-        "unified_field_pspm_and_inv_temp_logit_sharpen_64h",
-        |b| {
-            let mut q_slice = shared_q_arena
-                .as_aligned_prefix_mut(total_elements)
-                .relax_alignment::<32>();
-            q_slice.as_mut_slice().fill(1.0f32);
-            let mut temp_logits =
-                AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
-            let unified_anchors = [make_heterogeneous_q7_phases_with_offset(-96), make_heterogeneous_q7_phases_with_offset(32)];
-            let unified_energies = [0.2f32, 3.0f32];
-            let pspm_cfg = gcso_pspm_config_t {
-                num_fact_heads: 32,
-                num_logic_heads: 24,
-                num_explore_heads: 8,
-                fact_phase_gain: 1.0,
-                logic_phase_gain: 1.0,
-                explore_phase_gain: 1.0,
-                ..Default::default()
-            };
-            let base_trail = gcso_pointer_trail_t {
-                current_ptr: 0x3800,
-                stigmergic_density: 1.4,
-                attractor_pull_force: 1.5,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
-                ..Default::default()
-            };
+    group.bench_function("unified_field_pspm_and_inv_temp_logit_sharpen_64h", |b| {
+        let mut q_slice = shared_q_arena
+            .as_aligned_prefix_mut(total_elements)
+            .relax_alignment::<32>();
+        q_slice.as_mut_slice().fill(1.0f32);
+        let mut temp_logits =
+            AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
+        let unified_anchors = [
+            make_heterogeneous_q7_phases_with_offset(-96),
+            make_heterogeneous_q7_phases_with_offset(32),
+        ];
+        let unified_energies = [0.2f32, 3.0f32];
+        let pspm_cfg = gcso_pspm_config_t {
+            num_fact_heads: 32,
+            num_logic_heads: 24,
+            num_explore_heads: 8,
+            fact_phase_gain: 1.0,
+            logic_phase_gain: 1.0,
+            explore_phase_gain: 1.0,
+            ..Default::default()
+        };
+        let base_trail = gcso_pointer_trail_t {
+            current_ptr: 0x3800,
+            stigmergic_density: 1.4,
+            attractor_pull_force: 1.5,
+            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
+            ..Default::default()
+        };
 
-            let mut trail = base_trail;
+        let mut trail = base_trail;
 
-            b.iter(|| {
-                reset_trail_fast(&mut trail, &base_trail);
-                temp_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
-                let mut logits_mut = temp_logits.as_aligned_slice_mut();
-                let res = engine
-                    .steer_unified_field_pspm_and_inv_temperature_safe(
-                        black_box(&mut trail),
-                        black_box(&unified_anchors),
-                        black_box(&unified_energies),
-                        black_box(None),
-                        black_box(Some((&pspm_cfg, 8i8))),
-                        black_box(Some((&mut logits_mut, 0.75f32))),
-                        black_box(0.01f32),
-                        black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
-                        black_box(&mut q_slice),
-                        None,
-                    )
-                    .unwrap();
-                black_box((res, logits_mut.as_slice()[0], q_slice.as_slice()[0]));
-            });
-        },
-    );
+        b.iter(|| {
+            reset_trail_fast(&mut trail, &base_trail);
+            temp_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
+            let mut logits_mut = temp_logits.as_aligned_slice_mut();
+            let res = engine
+                .steer_unified_field_pspm_and_inv_temperature_safe(
+                    black_box(&mut trail),
+                    black_box(&unified_anchors),
+                    black_box(&unified_energies),
+                    black_box(None),
+                    black_box(Some((&pspm_cfg, 8i8))),
+                    black_box(Some((&mut logits_mut, 0.75f32))),
+                    black_box(0.01f32),
+                    black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
+                    black_box(&mut q_slice),
+                    None,
+                )
+                .unwrap();
+            black_box((res, logits_mut.as_slice()[0], q_slice.as_slice()[0]));
+        });
+    });
 
     // 5D. 2-Origin Composite Manifold Gateway + SO(2)-Fused RIPA/PSPM Steering + `.gcso` Crystallization
-    group.bench_function(
-        "gateway_signal_steer_and_crystallize_attractor_64h",
-        |b| {
-            let mut q_slice = shared_q_arena
-                .as_aligned_prefix_mut(total_elements)
-                .relax_alignment::<32>();
-            q_slice.as_mut_slice().fill(1.0f32);
-            let mut gw_logits =
-                AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
-            let sys_sig = SystemConstraint::new((), 0.20, 0.05, 0xFF);
-            let fact_sig = ObjectiveFact::new(make_heterogeneous_q7_phases_with_offset(28), 3.0, 0x0024_0000, 88);
-            let pers_sig =
-                SubjectivePersona::new(make_heterogeneous_q7_phases_with_offset(30), 2.0, 0x0000_9000, 12);
-            let composite_signal = (&sys_sig, &fact_sig, &pers_sig);
-            let mut base_crystal =
-                CrystallizedAttractorRecord::new_empty(88, ATTRACTOR_SLOT_KNOWLEDGE, 0x0024_0000);
-            let _ = base_crystal.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(26), 2.0);
-            let base_trail = gcso_pointer_trail_t {
-                stigmergic_density: 1.2,
-                attractor_pull_force: 1.5,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
-                ..Default::default()
-            };
+    group.bench_function("gateway_signal_steer_and_crystallize_attractor_64h", |b| {
+        let mut q_slice = shared_q_arena
+            .as_aligned_prefix_mut(total_elements)
+            .relax_alignment::<32>();
+        q_slice.as_mut_slice().fill(1.0f32);
+        let mut gw_logits = AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
+        let sys_sig = SystemConstraint::new((), 0.20, 0.05, 0xFF);
+        let fact_sig = ObjectiveFact::new(
+            make_heterogeneous_q7_phases_with_offset(28),
+            3.0,
+            0x0024_0000,
+            88,
+        );
+        let pers_sig = SubjectivePersona::new(
+            make_heterogeneous_q7_phases_with_offset(30),
+            2.0,
+            0x0000_9000,
+            12,
+        );
+        let composite_signal = (&sys_sig, &fact_sig, &pers_sig);
+        let mut base_crystal =
+            CrystallizedAttractorRecord::new_empty(88, ATTRACTOR_SLOT_KNOWLEDGE, 0x0024_0000);
+        let _ =
+            base_crystal.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(26), 2.0);
+        let base_trail = gcso_pointer_trail_t {
+            stigmergic_density: 1.2,
+            attractor_pull_force: 1.5,
+            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+            ..Default::default()
+        };
 
-            let mut trail = base_trail;
-            let mut crystal = base_crystal;
-            for _ in 0..8 {
-                reset_trail_fast(&mut trail, &base_trail);
-                reset_crystal_fast(&mut crystal, &base_crystal);
-                gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
-                let mut logits_mut = gw_logits.as_aligned_slice_mut();
-                let _ = engine
-                    .steer_and_crystallize_gateway_signal_safe(
-                        &composite_signal,
-                        &mut trail,
-                        &mut crystal,
-                        64u8,
-                        &mut q_slice,
-                        None,
-                        Some(&mut logits_mut),
-                    )
-                    .unwrap();
-            }
+        let mut trail = base_trail;
+        let mut crystal = base_crystal;
+        for _ in 0..8 {
+            reset_trail_fast(&mut trail, &base_trail);
+            reset_crystal_fast(&mut crystal, &base_crystal);
+            gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
+            let mut logits_mut = gw_logits.as_aligned_slice_mut();
+            let _ = engine
+                .steer_and_crystallize_gateway_signal_safe(
+                    &composite_signal,
+                    &mut trail,
+                    &mut crystal,
+                    64u8,
+                    &mut q_slice,
+                    None,
+                    Some(&mut logits_mut),
+                )
+                .unwrap();
+        }
 
-            b.iter(|| {
-                reset_trail_fast(&mut trail, &base_trail);
-                reset_crystal_fast(&mut crystal, &base_crystal);
-                gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
-                let mut logits_mut = gw_logits.as_aligned_slice_mut();
-                let res = engine
-                    .steer_and_crystallize_gateway_signal_safe(
-                        black_box(&composite_signal),
-                        black_box(&mut trail),
-                        black_box(&mut crystal),
-                        black_box(64u8),
-                        black_box(&mut q_slice),
-                        None,
-                        black_box(Some(&mut logits_mut)),
-                    )
-                    .unwrap();
-                black_box((res, logits_mut.as_slice()[0], q_slice.as_slice()[0]));
-            });
-        },
-    );
+        b.iter(|| {
+            reset_trail_fast(&mut trail, &base_trail);
+            reset_crystal_fast(&mut crystal, &base_crystal);
+            gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
+            let mut logits_mut = gw_logits.as_aligned_slice_mut();
+            let res = engine
+                .steer_and_crystallize_gateway_signal_safe(
+                    black_box(&composite_signal),
+                    black_box(&mut trail),
+                    black_box(&mut crystal),
+                    black_box(64u8),
+                    black_box(&mut q_slice),
+                    None,
+                    black_box(Some(&mut logits_mut)),
+                )
+                .unwrap();
+            black_box((res, logits_mut.as_slice()[0], q_slice.as_slice()[0]));
+        });
+    });
 
     // 5E. Full End-to-End 2-Origin Gateway -> 8-Cell Swarm -> Bayesian Trail Rewire -> PSPM -> `.gcso` Crystallization
     group.bench_function(
@@ -1740,14 +1756,24 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
                 AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
             let mut attn_scores = AlignedBuffer32::new([0.0f32; 8]);
             let sys_sig = SystemConstraint::new((), 0.20, 0.05, 0xFF);
-            let fact_sig = ObjectiveFact::new(make_heterogeneous_q7_phases_with_offset(28), 3.0, 0x0024_0000, 88);
-            let pers_sig =
-                SubjectivePersona::new(make_heterogeneous_q7_phases_with_offset(30), 2.0, 0x0000_9000, 12);
+            let fact_sig = ObjectiveFact::new(
+                make_heterogeneous_q7_phases_with_offset(28),
+                3.0,
+                0x0024_0000,
+                88,
+            );
+            let pers_sig = SubjectivePersona::new(
+                make_heterogeneous_q7_phases_with_offset(30),
+                2.0,
+                0x0000_9000,
+                12,
+            );
             let composite_signal = (&sys_sig, &fact_sig, &pers_sig);
             let bloom = ContrastivePhaseBloomFilter::new();
             let mut base_crystal =
                 CrystallizedAttractorRecord::new_empty(88, ATTRACTOR_SLOT_KNOWLEDGE, 0x0024_0000);
-            let _ = base_crystal.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(26), 2.0);
+            let _ = base_crystal
+                .absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(26), 2.0);
             let base_trail = gcso_pointer_trail_t {
                 stigmergic_density: 1.5,
                 attractor_pull_force: 2.0,
@@ -1891,12 +1917,11 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
                 reset_trail_fast(&mut trail, &base_trail);
                 gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
                 let mut logits_mut = gw_logits.as_aligned_slice_mut();
-                let zero_copy_recs =
-                    CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
-                        &zimms_buf.data,
-                        4usize,
-                    )
-                    .unwrap();
+                let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
+                    &zimms_buf.data,
+                    4usize,
+                )
+                .unwrap();
                 let _ = engine
                     .steer_gateway_signal_safe(
                         zero_copy_recs,
@@ -1934,154 +1959,143 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
     );
 
     // 5K. Top-2 Liminal Macro-to-Micro Bifurcation Routing (O(K=4) Top-2 Centroids -> Dual-Cluster Fine Selection) + RIPA Steering
-    group.bench_function(
-        "top2_liminal_bifurcation_route_and_steer_64h",
-        |b| {
-            let mut q_slice = shared_q_arena
-                .as_aligned_prefix_mut(total_elements)
-                .relax_alignment::<32>();
-            q_slice.as_mut_slice().fill(1.0f32);
-            let centroids: [CrystallizedAttractorRecord; 4] = [
-                {
-                    let mut rec = CrystallizedAttractorRecord::new_empty(
-                        100,
-                        ATTRACTOR_SLOT_KNOWLEDGE,
-                        0x0010_0000,
-                    );
-                    let _ = rec.absorb_sample_point_64(
-                        &make_heterogeneous_q7_phases_with_offset(-70),
-                        2.0,
-                    );
-                    rec
-                },
-                {
-                    let mut rec = CrystallizedAttractorRecord::new_empty(
-                        200,
-                        ATTRACTOR_SLOT_KNOWLEDGE,
-                        0x0011_0000,
-                    );
-                    let _ = rec.absorb_sample_point_64(
-                        &make_heterogeneous_q7_phases_with_offset(24),
-                        3.0,
-                    );
-                    rec
-                },
-                {
-                    let mut rec = CrystallizedAttractorRecord::new_empty(
-                        300,
-                        ATTRACTOR_SLOT_PERSONA,
-                        0x0012_0000,
-                    );
-                    let _ = rec.absorb_sample_point_64(
-                        &make_heterogeneous_q7_phases_with_offset(28),
-                        2.9,
-                    );
-                    rec
-                },
-                {
-                    let mut rec = CrystallizedAttractorRecord::new_empty(
-                        400,
-                        ATTRACTOR_SLOT_KNOWLEDGE,
-                        0x0013_0000,
-                    );
-                    let _ = rec.absorb_sample_point_64(
-                        &make_heterogeneous_q7_phases_with_offset(-45),
-                        1.5,
-                    );
-                    rec
-                },
-            ];
-            let base_src = gcso_pointer_trail_t {
-                stigmergic_density: 1.5,
-                attractor_pull_force: 2.0,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+    group.bench_function("top2_liminal_bifurcation_route_and_steer_64h", |b| {
+        let mut q_slice = shared_q_arena
+            .as_aligned_prefix_mut(total_elements)
+            .relax_alignment::<32>();
+        q_slice.as_mut_slice().fill(1.0f32);
+        let centroids: [CrystallizedAttractorRecord; 4] = [
+            {
+                let mut rec = CrystallizedAttractorRecord::new_empty(
+                    100,
+                    ATTRACTOR_SLOT_KNOWLEDGE,
+                    0x0010_0000,
+                );
+                let _ =
+                    rec.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(-70), 2.0);
+                rec
+            },
+            {
+                let mut rec = CrystallizedAttractorRecord::new_empty(
+                    200,
+                    ATTRACTOR_SLOT_KNOWLEDGE,
+                    0x0011_0000,
+                );
+                let _ =
+                    rec.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(24), 3.0);
+                rec
+            },
+            {
+                let mut rec = CrystallizedAttractorRecord::new_empty(
+                    300,
+                    ATTRACTOR_SLOT_PERSONA,
+                    0x0012_0000,
+                );
+                let _ =
+                    rec.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(28), 2.9);
+                rec
+            },
+            {
+                let mut rec = CrystallizedAttractorRecord::new_empty(
+                    400,
+                    ATTRACTOR_SLOT_KNOWLEDGE,
+                    0x0013_0000,
+                );
+                let _ =
+                    rec.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(-45), 1.5);
+                rec
+            },
+        ];
+        let base_src = gcso_pointer_trail_t {
+            stigmergic_density: 1.5,
+            attractor_pull_force: 2.0,
+            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+            ..Default::default()
+        };
+        let base_candidates = [
+            gcso_pointer_trail_t {
+                stigmergic_density: 2.5,
+                cluster_id: 100,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-70),
                 ..Default::default()
-            };
-            let base_candidates = [
-                gcso_pointer_trail_t {
-                    stigmergic_density: 2.5,
-                    cluster_id: 100,
-                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-70),
-                    ..Default::default()
-                },
-                gcso_pointer_trail_t {
-                    stigmergic_density: 3.1,
-                    target_anchor_id: 200,
-                    cluster_id: 200,
-                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(24),
-                    ..Default::default()
-                },
-                gcso_pointer_trail_t {
-                    stigmergic_density: 3.6,
-                    target_anchor_id: 300,
-                    cluster_id: 300,
-                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
-                    ..Default::default()
-                },
-                gcso_pointer_trail_t {
-                    stigmergic_density: 1.8,
-                    cluster_id: 400,
-                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-45),
-                    ..Default::default()
-                },
-            ];
-            let mut candidates = base_candidates;
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 3.1,
+                target_anchor_id: 200,
+                cluster_id: 200,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(24),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 3.6,
+                target_anchor_id: 300,
+                cluster_id: 300,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 1.8,
+                cluster_id: 400,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-45),
+                ..Default::default()
+            },
+        ];
+        let mut candidates = base_candidates;
 
-            let mut src_trail = base_src;
-            for _ in 0..8 {
-                reset_trail_fast(&mut src_trail, &base_src);
-                reset_trail_fast(&mut candidates[1], &base_candidates[1]);
-                reset_trail_fast(&mut candidates[2], &base_candidates[2]);
-                let _ = engine
-                    .route_top2_liminal_and_steer_bayesian_trails_safe(
-                        &centroids,
-                        64u8,
-                        0.20f32,
-                        &mut src_trail,
-                        &mut candidates,
-                        2.0f32,
-                        0.5f32,
-                        0.25f32,
-                        0.50f32,
-                        64u8,
-                        0.25f32,
-                        0.01f32,
-                        DEFAULT_RIPA_CLAMP_MAX_RAD,
-                        None,
-                        &mut q_slice,
-                        None,
-                    )
-                    .unwrap();
-            }
+        let mut src_trail = base_src;
+        for _ in 0..8 {
+            reset_trail_fast(&mut src_trail, &base_src);
+            reset_trail_fast(&mut candidates[1], &base_candidates[1]);
+            reset_trail_fast(&mut candidates[2], &base_candidates[2]);
+            let _ = engine
+                .route_top2_liminal_and_steer_bayesian_trails_safe(
+                    &centroids,
+                    64u8,
+                    0.20f32,
+                    &mut src_trail,
+                    &mut candidates,
+                    2.0f32,
+                    0.5f32,
+                    0.25f32,
+                    0.50f32,
+                    64u8,
+                    0.25f32,
+                    0.01f32,
+                    DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    None,
+                    &mut q_slice,
+                    None,
+                )
+                .unwrap();
+        }
 
-            b.iter(|| {
-                reset_trail_fast(&mut src_trail, &base_src);
-                reset_trail_fast(&mut candidates[1], &base_candidates[1]);
-                reset_trail_fast(&mut candidates[2], &base_candidates[2]);
-                let res = engine
-                    .route_top2_liminal_and_steer_bayesian_trails_safe(
-                        black_box(&centroids),
-                        black_box(64u8),
-                        black_box(0.20f32),
-                        black_box(&mut src_trail),
-                        black_box(&mut candidates),
-                        black_box(2.0f32),
-                        black_box(0.5f32),
-                        black_box(0.25f32),
-                        black_box(0.50f32),
-                        black_box(64u8),
-                        black_box(0.25f32),
-                        black_box(0.01f32),
-                        black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
-                        None,
-                        black_box(&mut q_slice),
-                        None,
-                    )
-                    .unwrap();
-                black_box((res, src_trail.linked_trail_id, q_slice.as_slice()[0]));
-            });
-        },
-    );
+        b.iter(|| {
+            reset_trail_fast(&mut src_trail, &base_src);
+            reset_trail_fast(&mut candidates[1], &base_candidates[1]);
+            reset_trail_fast(&mut candidates[2], &base_candidates[2]);
+            let res = engine
+                .route_top2_liminal_and_steer_bayesian_trails_safe(
+                    black_box(&centroids),
+                    black_box(64u8),
+                    black_box(0.20f32),
+                    black_box(&mut src_trail),
+                    black_box(&mut candidates),
+                    black_box(2.0f32),
+                    black_box(0.5f32),
+                    black_box(0.25f32),
+                    black_box(0.50f32),
+                    black_box(64u8),
+                    black_box(0.25f32),
+                    black_box(0.01f32),
+                    black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
+                    None,
+                    black_box(&mut q_slice),
+                    None,
+                )
+                .unwrap();
+            black_box((res, src_trail.linked_trail_id, q_slice.as_slice()[0]));
+        });
+    });
 
     // 5L. Online Toroidal k-Means Centroid Basin Consolidation (Merge & Prune 8 Centroids on SO(2)^64)
     group.throughput(Throughput::Elements(8));
@@ -2104,11 +2118,13 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
                     6 => 10i8,
                     _ => -15i8,
                 };
-                let mass = if i == 7 { 0.01f32 } else { 2.5f32 + (i as f32) * 0.2 };
-                let _ = rec.absorb_sample_point_64(
-                    &make_heterogeneous_q7_phases_with_offset(shift),
-                    mass,
-                );
+                let mass = if i == 7 {
+                    0.01f32
+                } else {
+                    2.5f32 + (i as f32) * 0.2
+                };
+                let _ = rec
+                    .absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(shift), mass);
                 rec
             });
 
@@ -2164,246 +2180,249 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
 
     // 5G. Register-Resident Zero-Copy Crystallized Ensemble Steering (Bypassing GatewayFrame Synthesis)
     group.throughput(Throughput::Bytes(tensor_bytes as u64));
-    group.bench_function(
-        "zero_copy_register_crystallized_ensemble_steer_64h",
-        |b| {
-            let mut q_slice = shared_q_arena
-                .as_aligned_prefix_mut(total_elements)
-                .relax_alignment::<32>();
-            q_slice.as_mut_slice().fill(1.0f32);
-            let records: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
-                let mut rec = CrystallizedAttractorRecord::new_empty(
-                    (i as u32) + 40,
-                    ATTRACTOR_SLOT_KNOWLEDGE,
-                    0x0018_0000 + ((i as u64) << 12),
-                );
-                let _ = rec.absorb_sample_point_64(
-                    &make_heterogeneous_q7_phases_with_offset(22 + (i as i8) * 3),
-                    2.5 + (i as f32) * 0.5,
-                );
-                rec
-            });
-            let base_trail = gcso_pointer_trail_t {
-                stigmergic_density: 1.2,
-                attractor_pull_force: 1.5,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
-                ..Default::default()
-            };
+    group.bench_function("zero_copy_register_crystallized_ensemble_steer_64h", |b| {
+        let mut q_slice = shared_q_arena
+            .as_aligned_prefix_mut(total_elements)
+            .relax_alignment::<32>();
+        q_slice.as_mut_slice().fill(1.0f32);
+        let records: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
+            let mut rec = CrystallizedAttractorRecord::new_empty(
+                (i as u32) + 40,
+                ATTRACTOR_SLOT_KNOWLEDGE,
+                0x0018_0000 + ((i as u64) << 12),
+            );
+            let _ = rec.absorb_sample_point_64(
+                &make_heterogeneous_q7_phases_with_offset(22 + (i as i8) * 3),
+                2.5 + (i as f32) * 0.5,
+            );
+            rec
+        });
+        let base_trail = gcso_pointer_trail_t {
+            stigmergic_density: 1.2,
+            attractor_pull_force: 1.5,
+            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+            ..Default::default()
+        };
 
-            let mut trail = base_trail;
-            for _ in 0..8 {
-                reset_trail_fast(&mut trail, &base_trail);
-                let _ = engine
-                    .steer_crystallized_ensemble_zero_copy_safe(
-                        &records,
-                        &mut trail,
-                        0.01f32,
-                        DEFAULT_RIPA_CLAMP_MAX_RAD,
-                        &mut q_slice,
-                        None,
-                    )
-                    .unwrap();
-            }
+        let mut trail = base_trail;
+        for _ in 0..8 {
+            reset_trail_fast(&mut trail, &base_trail);
+            let _ = engine
+                .steer_crystallized_ensemble_zero_copy_safe(
+                    &records,
+                    &mut trail,
+                    0.01f32,
+                    DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    &mut q_slice,
+                    None,
+                )
+                .unwrap();
+        }
 
-            b.iter(|| {
-                reset_trail_fast(&mut trail, &base_trail);
-                let res = engine
-                    .steer_crystallized_ensemble_zero_copy_safe(
-                        black_box(&records),
-                        black_box(&mut trail),
-                        black_box(0.01f32),
-                        black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
-                        black_box(&mut q_slice),
-                        None,
-                    )
-                    .unwrap();
-                black_box((res, trail.target_anchor_id, q_slice.as_slice()[0]));
-            });
-        },
-    );
+        b.iter(|| {
+            reset_trail_fast(&mut trail, &base_trail);
+            let res = engine
+                .steer_crystallized_ensemble_zero_copy_safe(
+                    black_box(&records),
+                    black_box(&mut trail),
+                    black_box(0.01f32),
+                    black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
+                    black_box(&mut q_slice),
+                    None,
+                )
+                .unwrap();
+            black_box((res, trail.target_anchor_id, q_slice.as_slice()[0]));
+        });
+    });
 
     // 5H. Classical Online Toroidal k-Means / DP-Means E+M Closed-Loop Gateway Steering (K = 4 Centroids)
-    group.bench_function(
-        "online_toroidal_kmeans_gateway_steer_4centroids_64h",
-        |b| {
-            let mut q_slice = shared_q_arena
-                .as_aligned_prefix_mut(total_elements)
-                .relax_alignment::<32>();
-            q_slice.as_mut_slice().fill(1.0f32);
-            let mut gw_logits =
-                AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
-            let sys_sig = SystemConstraint::new((), 0.15, 0.05, 0xFF);
-            let fact_sig = ObjectiveFact::new(make_heterogeneous_q7_phases_with_offset(28), 3.0, 0x0024_0000, 88);
-            let pers_sig =
-                SubjectivePersona::new(make_heterogeneous_q7_phases_with_offset(30), 2.0, 0x0000_9000, 12);
-            let composite_signal = (&sys_sig, &fact_sig, &pers_sig);
-            let base_centroids: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
-                let mut rec = CrystallizedAttractorRecord::new_empty(
-                    (i as u32) + 10,
-                    ATTRACTOR_SLOT_KNOWLEDGE,
-                    0x0010_0000 + ((i as u64) << 12),
-                );
-                let _ = rec.absorb_sample_point_64(
-                    &make_heterogeneous_q7_phases_with_offset(16 + (i as i8) * 6),
-                    2.0 + (i as f32) * 0.5,
-                );
-                rec
-            });
-            let base_trail = gcso_pointer_trail_t {
-                stigmergic_density: 1.4,
-                attractor_pull_force: 1.5,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
-                ..Default::default()
-            };
-            let mut centroids = base_centroids;
-            let mut trail = base_trail;
-            for _ in 0..8 {
-                reset_trail_fast(&mut trail, &base_trail);
-                reset_crystal_fast(&mut centroids[2], &base_centroids[2]);
-                gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
-                let mut logits_mut = gw_logits.as_aligned_slice_mut();
-                let _ = engine
-                    .steer_and_kmeans_crystallize_gateway_signal_safe(
-                        &composite_signal,
-                        &mut trail,
-                        &mut centroids,
-                        DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
-                        64u8,
-                        &mut q_slice,
-                        None,
-                        Some(&mut logits_mut),
-                    )
-                    .unwrap();
-            }
+    group.bench_function("online_toroidal_kmeans_gateway_steer_4centroids_64h", |b| {
+        let mut q_slice = shared_q_arena
+            .as_aligned_prefix_mut(total_elements)
+            .relax_alignment::<32>();
+        q_slice.as_mut_slice().fill(1.0f32);
+        let mut gw_logits = AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
+        let sys_sig = SystemConstraint::new((), 0.15, 0.05, 0xFF);
+        let fact_sig = ObjectiveFact::new(
+            make_heterogeneous_q7_phases_with_offset(28),
+            3.0,
+            0x0024_0000,
+            88,
+        );
+        let pers_sig = SubjectivePersona::new(
+            make_heterogeneous_q7_phases_with_offset(30),
+            2.0,
+            0x0000_9000,
+            12,
+        );
+        let composite_signal = (&sys_sig, &fact_sig, &pers_sig);
+        let base_centroids: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
+            let mut rec = CrystallizedAttractorRecord::new_empty(
+                (i as u32) + 10,
+                ATTRACTOR_SLOT_KNOWLEDGE,
+                0x0010_0000 + ((i as u64) << 12),
+            );
+            let _ = rec.absorb_sample_point_64(
+                &make_heterogeneous_q7_phases_with_offset(16 + (i as i8) * 6),
+                2.0 + (i as f32) * 0.5,
+            );
+            rec
+        });
+        let base_trail = gcso_pointer_trail_t {
+            stigmergic_density: 1.4,
+            attractor_pull_force: 1.5,
+            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+            ..Default::default()
+        };
+        let mut centroids = base_centroids;
+        let mut trail = base_trail;
+        for _ in 0..8 {
+            reset_trail_fast(&mut trail, &base_trail);
+            reset_crystal_fast(&mut centroids[2], &base_centroids[2]);
+            gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
+            let mut logits_mut = gw_logits.as_aligned_slice_mut();
+            let _ = engine
+                .steer_and_kmeans_crystallize_gateway_signal_safe(
+                    &composite_signal,
+                    &mut trail,
+                    &mut centroids,
+                    DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
+                    64u8,
+                    &mut q_slice,
+                    None,
+                    Some(&mut logits_mut),
+                )
+                .unwrap();
+        }
 
-            b.iter(|| {
-                reset_trail_fast(&mut trail, &base_trail);
-                reset_crystal_fast(&mut centroids[2], &base_centroids[2]);
-                gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
-                let mut logits_mut = gw_logits.as_aligned_slice_mut();
-                let res = engine
-                    .steer_and_kmeans_crystallize_gateway_signal_safe(
-                        black_box(&composite_signal),
-                        black_box(&mut trail),
-                        black_box(&mut centroids),
-                        black_box(DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE),
-                        black_box(64u8),
-                        black_box(&mut q_slice),
-                        None,
-                        black_box(Some(&mut logits_mut)),
-                    )
-                    .unwrap();
-                black_box((res, trail.cluster_id, q_slice.as_slice()[0]));
-            });
-        },
-    );
+        b.iter(|| {
+            reset_trail_fast(&mut trail, &base_trail);
+            reset_crystal_fast(&mut centroids[2], &base_centroids[2]);
+            gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
+            let mut logits_mut = gw_logits.as_aligned_slice_mut();
+            let res = engine
+                .steer_and_kmeans_crystallize_gateway_signal_safe(
+                    black_box(&composite_signal),
+                    black_box(&mut trail),
+                    black_box(&mut centroids),
+                    black_box(DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE),
+                    black_box(64u8),
+                    black_box(&mut q_slice),
+                    None,
+                    black_box(Some(&mut logits_mut)),
+                )
+                .unwrap();
+            black_box((res, trail.cluster_id, q_slice.as_slice()[0]));
+        });
+    });
 
     // 5I. Coarse-to-Fine Macro-to-Micro Routing (O(K=4) Centroids -> O(M_local=1) Candidate Trail) + RIPA Steering
-    group.bench_function(
-        "coarse_to_fine_macro_to_micro_routing_and_steer_64h",
-        |b| {
-            let mut q_slice = shared_q_arena
-                .as_aligned_prefix_mut(total_elements)
-                .relax_alignment::<32>();
-            q_slice.as_mut_slice().fill(1.0f32);
-            let centroids: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
-                let mut rec = CrystallizedAttractorRecord::new_empty(
-                    ((i as u32) + 1) * 100,
-                    ATTRACTOR_SLOT_KNOWLEDGE,
-                    0x0010_0000 + ((i as u64) << 12),
-                );
-                let _ = rec.absorb_sample_point_64(
-                    &make_heterogeneous_q7_phases_with_offset(if i == 2 { 28i8 } else { -60 + (i as i8) * 20 }),
-                    3.0,
-                );
-                rec
-            });
-            let base_src = gcso_pointer_trail_t {
-                stigmergic_density: 1.5,
-                attractor_pull_force: 2.0,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+    group.bench_function("coarse_to_fine_macro_to_micro_routing_and_steer_64h", |b| {
+        let mut q_slice = shared_q_arena
+            .as_aligned_prefix_mut(total_elements)
+            .relax_alignment::<32>();
+        q_slice.as_mut_slice().fill(1.0f32);
+        let centroids: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
+            let mut rec = CrystallizedAttractorRecord::new_empty(
+                ((i as u32) + 1) * 100,
+                ATTRACTOR_SLOT_KNOWLEDGE,
+                0x0010_0000 + ((i as u64) << 12),
+            );
+            let _ = rec.absorb_sample_point_64(
+                &make_heterogeneous_q7_phases_with_offset(if i == 2 {
+                    28i8
+                } else {
+                    -60 + (i as i8) * 20
+                }),
+                3.0,
+            );
+            rec
+        });
+        let base_src = gcso_pointer_trail_t {
+            stigmergic_density: 1.5,
+            attractor_pull_force: 2.0,
+            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+            ..Default::default()
+        };
+        let base_candidates = [
+            gcso_pointer_trail_t {
+                stigmergic_density: 3.0,
+                cluster_id: 100,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-60),
                 ..Default::default()
-            };
-            let base_candidates = [
-                gcso_pointer_trail_t {
-                    stigmergic_density: 3.0,
-                    cluster_id: 100,
-                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-60),
-                    ..Default::default()
-                },
-                gcso_pointer_trail_t {
-                    stigmergic_density: 2.5,
-                    cluster_id: 200,
-                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-40),
-                    ..Default::default()
-                },
-                gcso_pointer_trail_t {
-                    stigmergic_density: 3.5,
-                    target_anchor_id: 300,
-                    cluster_id: 300,
-                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(29),
-                    ..Default::default()
-                },
-                gcso_pointer_trail_t {
-                    stigmergic_density: 1.8,
-                    cluster_id: 400,
-                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(0),
-                    ..Default::default()
-                },
-            ];
-            let mut candidates = base_candidates;
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 2.5,
+                cluster_id: 200,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-40),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 3.5,
+                target_anchor_id: 300,
+                cluster_id: 300,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(29),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 1.8,
+                cluster_id: 400,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(0),
+                ..Default::default()
+            },
+        ];
+        let mut candidates = base_candidates;
 
-            let mut src_trail = base_src;
-            for _ in 0..8 {
-                reset_trail_fast(&mut src_trail, &base_src);
-                reset_trail_fast(&mut candidates[2], &base_candidates[2]);
-                let _ = engine
-                    .route_coarse_to_fine_and_steer_bayesian_trails_safe(
-                        &centroids,
-                        64u8,
-                        &mut src_trail,
-                        &mut candidates,
-                        2.0f32,
-                        0.5f32,
-                        0.25f32,
-                        0.50f32,
-                        64u8,
-                        0.25f32,
-                        0.01f32,
-                        DEFAULT_RIPA_CLAMP_MAX_RAD,
-                        None,
-                        &mut q_slice,
-                        None,
-                    )
-                    .unwrap();
-            }
+        let mut src_trail = base_src;
+        for _ in 0..8 {
+            reset_trail_fast(&mut src_trail, &base_src);
+            reset_trail_fast(&mut candidates[2], &base_candidates[2]);
+            let _ = engine
+                .route_coarse_to_fine_and_steer_bayesian_trails_safe(
+                    &centroids,
+                    64u8,
+                    &mut src_trail,
+                    &mut candidates,
+                    2.0f32,
+                    0.5f32,
+                    0.25f32,
+                    0.50f32,
+                    64u8,
+                    0.25f32,
+                    0.01f32,
+                    DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    None,
+                    &mut q_slice,
+                    None,
+                )
+                .unwrap();
+        }
 
-            b.iter(|| {
-                reset_trail_fast(&mut src_trail, &base_src);
-                reset_trail_fast(&mut candidates[2], &base_candidates[2]);
-                let res = engine
-                    .route_coarse_to_fine_and_steer_bayesian_trails_safe(
-                        black_box(&centroids),
-                        black_box(64u8),
-                        black_box(&mut src_trail),
-                        black_box(&mut candidates),
-                        black_box(2.0f32),
-                        black_box(0.5f32),
-                        black_box(0.25f32),
-                        black_box(0.50f32),
-                        black_box(64u8),
-                        black_box(0.25f32),
-                        black_box(0.01f32),
-                        black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
-                        None,
-                        black_box(&mut q_slice),
-                        None,
-                    )
-                    .unwrap();
-                black_box((res, src_trail.linked_trail_id, q_slice.as_slice()[0]));
-            });
-        },
-    );
+        b.iter(|| {
+            reset_trail_fast(&mut src_trail, &base_src);
+            reset_trail_fast(&mut candidates[2], &base_candidates[2]);
+            let res = engine
+                .route_coarse_to_fine_and_steer_bayesian_trails_safe(
+                    black_box(&centroids),
+                    black_box(64u8),
+                    black_box(&mut src_trail),
+                    black_box(&mut candidates),
+                    black_box(2.0f32),
+                    black_box(0.5f32),
+                    black_box(0.25f32),
+                    black_box(0.50f32),
+                    black_box(64u8),
+                    black_box(0.25f32),
+                    black_box(0.01f32),
+                    black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
+                    None,
+                    black_box(&mut q_slice),
+                    None,
+                )
+                .unwrap();
+            black_box((res, src_trail.linked_trail_id, q_slice.as_slice()[0]));
+        });
+    });
 
     // 5J. 4-Section `.gcso` (ZIMMS) Zero-Copy Container Map + Register-Resident Ensemble Steering
     group.bench_function(
@@ -2704,9 +2723,7 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
         let phase_data = AlignedQ7Buffer([127i8; 64]);
         let p_slice = AlignedSlice16::new(&phase_data.0[..32]).unwrap();
         for _ in 0..8 {
-            engine
-                .apply_phase_steering(&mut q_slice, &p_slice)
-                .unwrap();
+            engine.apply_phase_steering(&mut q_slice, &p_slice).unwrap();
         }
 
         b.iter(|| {
@@ -2726,9 +2743,7 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
         let phase_data = AlignedQ7Buffer([0i8; 64]);
         let p_slice = AlignedSlice16::new(&phase_data.0[..32]).unwrap();
         for _ in 0..8 {
-            engine
-                .apply_phase_steering(&mut q_slice, &p_slice)
-                .unwrap();
+            engine.apply_phase_steering(&mut q_slice, &p_slice).unwrap();
         }
 
         b.iter(|| {
@@ -2860,11 +2875,7 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
                 let mut ctx_mut = ctx_accum.as_aligned_slice_mut();
                 for _ in 0..cascade_steps {
                     engine
-                        .accumulate_context_phases_circular_q7(
-                            &mut ctx_mut,
-                            &del_slice,
-                            step_rad,
-                        )
+                        .accumulate_context_phases_circular_q7(&mut ctx_mut, &del_slice, step_rad)
                         .unwrap();
                 }
             }

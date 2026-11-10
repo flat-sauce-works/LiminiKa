@@ -15,16 +15,12 @@
 namespace {
 
 /**
- * @brief Applies a planar SO(2) rotation (cos_t, sin_t) to `num_pairs` 2D pairs starting at `head_ptr`.
- * Uses AVX2 4-pair (8-float) vectorization when compiled with AVX2/FMA support.
+ * @brief Applies a planar SO(2) rotation (cos_t, sin_t) to `num_pairs` 2D pairs starting at
+ * `head_ptr`. Uses AVX2 4-pair (8-float) vectorization when compiled with AVX2/FMA support.
  */
-GCSO_FORCE_INLINE void rotate_planar_pairs_inplace(
-    float* GCSO_RESTRICT head_ptr,
-    size_t start_pair,
-    size_t end_pair,
-    float cos_t,
-    float sin_t
-) noexcept {
+GCSO_FORCE_INLINE void rotate_planar_pairs_inplace(float* GCSO_RESTRICT head_ptr, size_t start_pair,
+                                                   size_t end_pair, float cos_t,
+                                                   float sin_t) noexcept {
     size_t k = start_pair;
     const size_t remaining_pairs = end_pair - start_pair;
     const size_t simd_end = start_pair + (remaining_pairs & ~static_cast<size_t>(3));
@@ -46,10 +42,14 @@ GCSO_FORCE_INLINE void rotate_planar_pairs_inplace(
     }
 #else
     for (; k < simd_end; k += 4) {
-        const float q0 = head_ptr[2 * k + 0]; const float q1 = head_ptr[2 * k + 1];
-        const float q2 = head_ptr[2 * k + 2]; const float q3 = head_ptr[2 * k + 3];
-        const float q4 = head_ptr[2 * k + 4]; const float q5 = head_ptr[2 * k + 5];
-        const float q6 = head_ptr[2 * k + 6]; const float q7 = head_ptr[2 * k + 7];
+        const float q0 = head_ptr[2 * k + 0];
+        const float q1 = head_ptr[2 * k + 1];
+        const float q2 = head_ptr[2 * k + 2];
+        const float q3 = head_ptr[2 * k + 3];
+        const float q4 = head_ptr[2 * k + 4];
+        const float q5 = head_ptr[2 * k + 5];
+        const float q6 = head_ptr[2 * k + 6];
+        const float q7 = head_ptr[2 * k + 7];
 
         head_ptr[2 * k + 0] = q0 * cos_t - q1 * sin_t;
         head_ptr[2 * k + 1] = q0 * sin_t + q1 * cos_t;
@@ -71,16 +71,13 @@ GCSO_FORCE_INLINE void rotate_planar_pairs_inplace(
 }
 
 /**
- * @brief Applies lockstep planar SO(2) rotation (cos_t, sin_t) simultaneously to Query and Key heads.
+ * @brief Applies lockstep planar SO(2) rotation (cos_t, sin_t) simultaneously to Query and Key
+ * heads.
  */
-GCSO_FORCE_INLINE void rotate_planar_pairs_fused_qk_inplace(
-    float* GCSO_RESTRICT head_q,
-    float* GCSO_RESTRICT head_k,
-    size_t start_pair,
-    size_t end_pair,
-    float cos_t,
-    float sin_t
-) noexcept {
+GCSO_FORCE_INLINE void rotate_planar_pairs_fused_qk_inplace(float* GCSO_RESTRICT head_q,
+                                                            float* GCSO_RESTRICT head_k,
+                                                            size_t start_pair, size_t end_pair,
+                                                            float cos_t, float sin_t) noexcept {
     size_t k = start_pair;
     const size_t remaining_pairs = end_pair - start_pair;
     const size_t simd_end = start_pair + (remaining_pairs & ~static_cast<size_t>(3));
@@ -111,8 +108,10 @@ GCSO_FORCE_INLINE void rotate_planar_pairs_fused_qk_inplace(
     for (; k < simd_end; k += 4) {
         for (size_t u = 0; u < 4; ++u) {
             const size_t idx = 2 * (k + u);
-            const float q0 = head_q[idx + 0]; const float q1 = head_q[idx + 1];
-            const float k0 = head_k[idx + 0]; const float k1 = head_k[idx + 1];
+            const float q0 = head_q[idx + 0];
+            const float q1 = head_q[idx + 1];
+            const float k0 = head_k[idx + 0];
+            const float k1 = head_k[idx + 1];
             head_q[idx + 0] = q0 * cos_t - q1 * sin_t;
             head_q[idx + 1] = q0 * sin_t + q1 * cos_t;
             head_k[idx + 0] = k0 * cos_t - k1 * sin_t;
@@ -122,8 +121,10 @@ GCSO_FORCE_INLINE void rotate_planar_pairs_fused_qk_inplace(
 #endif
 
     for (; k < end_pair; ++k) {
-        const float q0 = head_q[2 * k + 0]; const float q1 = head_q[2 * k + 1];
-        const float k0 = head_k[2 * k + 0]; const float k1 = head_k[2 * k + 1];
+        const float q0 = head_q[2 * k + 0];
+        const float q1 = head_q[2 * k + 1];
+        const float k0 = head_k[2 * k + 0];
+        const float k1 = head_k[2 * k + 1];
         head_q[2 * k + 0] = q0 * cos_t - q1 * sin_t;
         head_q[2 * k + 1] = q0 * sin_t + q1 * cos_t;
         head_k[2 * k + 0] = k0 * cos_t - k1 * sin_t;
@@ -146,11 +147,9 @@ GCSO_EXTERN_C_BEGIN
  * @param kernel_out Pointer to receive created kernel handle.
  * @return GCSO_SUCCESS or appropriate error code.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_kernel_create(
-    uint32_t head_dim,
-    uint32_t num_heads,
-    gcso_dpsr_kernel_handle_t* GCSO_RESTRICT kernel_out
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_dpsr_kernel_create(uint32_t head_dim, uint32_t num_heads,
+                        gcso_dpsr_kernel_handle_t* GCSO_RESTRICT kernel_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(kernel_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -158,7 +157,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_kernel_create(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(kernel_out) % alignof(gcso_dpsr_kernel_handle_t) != 0)) {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(kernel_out) %
+                              alignof(gcso_dpsr_kernel_handle_t) !=
+                          0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
@@ -192,11 +193,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_kernel_create(
  * @return GCSO_SUCCESS or appropriate error code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering(
-    float* GCSO_RESTRICT query_tensor,
-    const gcso_q7_t* GCSO_RESTRICT phase_deltas,
-    size_t head_dim,
-    size_t num_heads
-) GCSO_NOEXCEPT {
+    float* GCSO_RESTRICT query_tensor, const gcso_q7_t* GCSO_RESTRICT phase_deltas, size_t head_dim,
+    size_t num_heads) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(query_tensor == nullptr || phase_deltas == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -235,19 +233,18 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering(
 }
 
 /**
- * @brief Applies lockstep fused DPSR phase rotation to Query and Key tensor registers in a single pass.
+ * @brief Applies lockstep fused DPSR phase rotation to Query and Key tensor registers in a single
+ * pass.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_fused(
-    float* GCSO_RESTRICT query_tensor,
-    float* GCSO_RESTRICT key_tensor,
-    const gcso_q7_t* GCSO_RESTRICT phase_deltas,
-    size_t head_dim,
-    size_t num_heads
-) GCSO_NOEXCEPT {
-    if (GCSO_UNLIKELY(query_tensor == nullptr || key_tensor == nullptr || phase_deltas == nullptr)) {
+    float* GCSO_RESTRICT query_tensor, float* GCSO_RESTRICT key_tensor,
+    const gcso_q7_t* GCSO_RESTRICT phase_deltas, size_t head_dim, size_t num_heads) GCSO_NOEXCEPT {
+    if (GCSO_UNLIKELY(query_tensor == nullptr || key_tensor == nullptr ||
+                      phase_deltas == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
-    if (GCSO_UNLIKELY(head_dim == 0 || (head_dim % 2 != 0) || num_heads == 0 || query_tensor == key_tensor)) {
+    if (GCSO_UNLIKELY(head_dim == 0 || (head_dim % 2 != 0) || num_heads == 0 ||
+                      query_tensor == key_tensor)) {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
@@ -287,10 +284,10 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_fused(
  * @brief Applies RIPA soft-bounded tanh clamping restricted strictly to low-frequency channels.
  *
  * Mathematical & Physical Rationale:
- * In standard RoPE encoding, rotation frequencies follow theta_k = 10000^(-2k/d). Higher pair indices
- * k correspond to lower frequencies maintaining core context structure.
- * RIPA restricts phase modulation strictly to the upper d_head / 4 dimensions (the top d_head / 8 pairs,
- * starting from start_k = pairs_per_head - low_freq_pairs up to pairs_per_head).
+ * In standard RoPE encoding, rotation frequencies follow theta_k = 10000^(-2k/d). Higher pair
+ * indices k correspond to lower frequencies maintaining core context structure. RIPA restricts
+ * phase modulation strictly to the upper d_head / 4 dimensions (the top d_head / 8 pairs, starting
+ * from start_k = pairs_per_head - low_freq_pairs up to pairs_per_head).
  *
  * Soft Clamping Formula: theta_safe = max_rad * tanh(theta / max_rad)
  *
@@ -302,16 +299,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_fused(
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_safe(
-    float* GCSO_RESTRICT query_tensor,
-    const gcso_q7_t* GCSO_RESTRICT phase_deltas,
-    size_t head_dim,
-    size_t num_heads,
-    float max_rad
-) GCSO_NOEXCEPT {
+    float* GCSO_RESTRICT query_tensor, const gcso_q7_t* GCSO_RESTRICT phase_deltas, size_t head_dim,
+    size_t num_heads, float max_rad) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(query_tensor == nullptr || phase_deltas == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
-    if (GCSO_UNLIKELY(head_dim == 0 || (head_dim % 2 != 0) || num_heads == 0 || std::isnan(max_rad) || std::isinf(max_rad))) {
+    if (GCSO_UNLIKELY(head_dim == 0 || (head_dim % 2 != 0) || num_heads == 0 ||
+                      std::isnan(max_rad) || std::isinf(max_rad))) {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
@@ -323,7 +317,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_safe(
         constexpr float q7_scale = 3.14159265358979323846f / 128.0f;
         const size_t pairs_per_head = head_dim / 2;
         const size_t low_freq_pairs = std::max(static_cast<size_t>(1), head_dim / 8);
-        const size_t start_k = (pairs_per_head > low_freq_pairs) ? (pairs_per_head - low_freq_pairs) : 0;
+        const size_t start_k =
+            (pairs_per_head > low_freq_pairs) ? (pairs_per_head - low_freq_pairs) : 0;
         const bool is_default_ripa = std::abs(max_rad - 0.0872664626f) <= 1e-5f;
 
         uint8_t last_q_u8 = 0U;
@@ -363,17 +358,15 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_safe(
 }
 
 /**
- * @brief Applies RIPA soft-bounded phase steering to both Query and Key tensors in a single fused pass.
+ * @brief Applies RIPA soft-bounded phase steering to both Query and Key tensors in a single fused
+ * pass.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_fused_safe(
-    float* GCSO_RESTRICT query_tensor,
-    float* GCSO_RESTRICT key_tensor,
-    const gcso_q7_t* GCSO_RESTRICT phase_deltas,
-    size_t head_dim,
-    size_t num_heads,
-    float max_rad
-) GCSO_NOEXCEPT {
-    if (GCSO_UNLIKELY(query_tensor == nullptr || key_tensor == nullptr || phase_deltas == nullptr)) {
+    float* GCSO_RESTRICT query_tensor, float* GCSO_RESTRICT key_tensor,
+    const gcso_q7_t* GCSO_RESTRICT phase_deltas, size_t head_dim, size_t num_heads,
+    float max_rad) GCSO_NOEXCEPT {
+    if (GCSO_UNLIKELY(query_tensor == nullptr || key_tensor == nullptr ||
+                      phase_deltas == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     if (GCSO_UNLIKELY(head_dim == 0 || (head_dim % 2 != 0) || num_heads == 0 ||
@@ -390,7 +383,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_fused_safe(
         constexpr float q7_scale = 3.14159265358979323846f / 128.0f;
         const size_t pairs_per_head = head_dim / 2;
         const size_t low_freq_pairs = std::max(static_cast<size_t>(1), head_dim / 8);
-        const size_t start_k = (pairs_per_head > low_freq_pairs) ? (pairs_per_head - low_freq_pairs) : 0;
+        const size_t start_k =
+            (pairs_per_head > low_freq_pairs) ? (pairs_per_head - low_freq_pairs) : 0;
         const bool is_default_ripa = std::abs(max_rad - 0.0872664626f) <= 1e-5f;
 
         uint8_t last_q_u8 = 0U;
@@ -422,7 +416,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_fused_safe(
 
             float* GCSO_RESTRICT head_q = query_tensor + (h * head_dim);
             float* GCSO_RESTRICT head_k = key_tensor + (h * head_dim);
-            rotate_planar_pairs_fused_qk_inplace(head_q, head_k, start_k, pairs_per_head, cos_t, sin_t);
+            rotate_planar_pairs_fused_qk_inplace(head_q, head_k, start_k, pairs_per_head, cos_t,
+                                                 sin_t);
         }
         return GCSO_SUCCESS;
     } catch (...) {
@@ -434,26 +429,20 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_fused_safe(
  * @brief Applies S^1 geodesic RIPA soft-bounded phase steering to a Query tensor.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_geodesic_safe(
-    float* GCSO_RESTRICT query_tensor,
-    const gcso_q7_t* GCSO_RESTRICT phase_deltas,
-    size_t head_dim,
-    size_t num_heads,
-    float max_rad
-) GCSO_NOEXCEPT {
-    return gcso_dpsr_apply_phase_steering_safe(query_tensor, phase_deltas, head_dim, num_heads, max_rad);
+    float* GCSO_RESTRICT query_tensor, const gcso_q7_t* GCSO_RESTRICT phase_deltas, size_t head_dim,
+    size_t num_heads, float max_rad) GCSO_NOEXCEPT {
+    return gcso_dpsr_apply_phase_steering_safe(query_tensor, phase_deltas, head_dim, num_heads,
+                                               max_rad);
 }
 
 /**
- * @brief Applies pointer-gated RIPA phase steering (honoring ACTION_MODE_LAYER_SKIP & REPULSION_GUARD).
+ * @brief Applies pointer-gated RIPA phase steering (honoring ACTION_MODE_LAYER_SKIP &
+ * REPULSION_GUARD).
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_pointer_gated_phase_steering_safe(
-    uint64_t tagged_ptr,
-    float* GCSO_RESTRICT query_tensor,
-    const gcso_q7_t* GCSO_RESTRICT phase_deltas,
-    size_t head_dim,
-    size_t num_heads,
-    float max_rad
-) GCSO_NOEXCEPT {
+    uint64_t tagged_ptr, float* GCSO_RESTRICT query_tensor,
+    const gcso_q7_t* GCSO_RESTRICT phase_deltas, size_t head_dim, size_t num_heads,
+    float max_rad) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(query_tensor == nullptr || phase_deltas == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -471,22 +460,19 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_pointer_gated_phase_steering_sa
         }
         return GCSO_SUCCESS;
     }
-    return gcso_dpsr_apply_phase_steering_safe(query_tensor, phase_deltas, head_dim, num_heads, max_rad);
+    return gcso_dpsr_apply_phase_steering_safe(query_tensor, phase_deltas, head_dim, num_heads,
+                                               max_rad);
 }
 
 /**
  * @brief Applies pointer-gated fused QK RIPA phase steering in a single pass.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_pointer_gated_phase_steering_fused_safe(
-    uint64_t tagged_ptr,
-    float* GCSO_RESTRICT query_tensor,
-    float* GCSO_RESTRICT key_tensor,
-    const gcso_q7_t* GCSO_RESTRICT phase_deltas,
-    size_t head_dim,
-    size_t num_heads,
-    float max_rad
-) GCSO_NOEXCEPT {
-    if (GCSO_UNLIKELY(query_tensor == nullptr || key_tensor == nullptr || phase_deltas == nullptr)) {
+    uint64_t tagged_ptr, float* GCSO_RESTRICT query_tensor, float* GCSO_RESTRICT key_tensor,
+    const gcso_q7_t* GCSO_RESTRICT phase_deltas, size_t head_dim, size_t num_heads,
+    float max_rad) GCSO_NOEXCEPT {
+    if (GCSO_UNLIKELY(query_tensor == nullptr || key_tensor == nullptr ||
+                      phase_deltas == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     const uint8_t tag = gcso_tagged_ptr_unpack_tag_inline(tagged_ptr);
@@ -494,7 +480,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_pointer_gated_phase_steering_fu
     if ((action_mode & GCSO_ACTION_MODE_LAYER_SKIP) != 0U ||
         (action_mode & GCSO_ACTION_MODE_PHASE_STEER) == 0U) {
         if (GCSO_UNLIKELY(head_dim == 0 || (head_dim % 2 != 0) || num_heads == 0 ||
-                          query_tensor == key_tensor || std::isnan(max_rad) || std::isinf(max_rad))) {
+                          query_tensor == key_tensor || std::isnan(max_rad) ||
+                          std::isinf(max_rad))) {
             return GCSO_ERROR_INVALID_ARGUMENT;
         }
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(query_tensor) % 32 != 0 ||
@@ -504,19 +491,16 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_pointer_gated_phase_steering_fu
         }
         return GCSO_SUCCESS;
     }
-    return gcso_dpsr_apply_phase_steering_fused_safe(
-        query_tensor, key_tensor, phase_deltas, head_dim, num_heads, max_rad);
+    return gcso_dpsr_apply_phase_steering_fused_safe(query_tensor, key_tensor, phase_deltas,
+                                                     head_dim, num_heads, max_rad);
 }
 
 /**
  * @brief Applies soft exponential phase damping across Query tensor channels.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_soft_phase_damping(
-    float* GCSO_RESTRICT query_tensor,
-    size_t head_dim,
-    size_t num_heads,
-    float damping_factor
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_dpsr_apply_soft_phase_damping(float* GCSO_RESTRICT query_tensor, size_t head_dim,
+                                   size_t num_heads, float damping_factor) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(query_tensor == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -562,22 +546,22 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_soft_phase_damping(
 /**
  * @brief QDPS discrete filter: cuts off phase rotation steps falling below min_step_rad.
  *
- * Pre-evaluates integer Q7 thresholds to execute zero-overhead integer domain comparisons in the hot loop.
+ * Pre-evaluates integer Q7 thresholds to execute zero-overhead integer domain comparisons in the
+ * hot loop.
  *
  * @param phase_deltas Q7 phase array to filter in-place.
  * @param len Array element count.
  * @param min_step_rad Minimum step threshold angle in radians.
  * @return GCSO_SUCCESS or error status code.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_qdps_filter_step(
-    gcso_q7_t* GCSO_RESTRICT phase_deltas,
-    size_t len,
-    float min_step_rad
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL gcso_qdps_filter_step(gcso_q7_t* GCSO_RESTRICT phase_deltas,
+                                                       size_t len,
+                                                       float min_step_rad) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(phase_deltas == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
-    if (GCSO_UNLIKELY(len == 0 || std::isnan(min_step_rad) || std::isinf(min_step_rad) || min_step_rad < 0.0f)) {
+    if (GCSO_UNLIKELY(len == 0 || std::isnan(min_step_rad) || std::isinf(min_step_rad) ||
+                      min_step_rad < 0.0f)) {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
@@ -610,10 +594,12 @@ GCSO_API gcso_status_t GCSO_CALL gcso_qdps_filter_step(
 }
 
 /**
- * @brief Lazy Phase Unwrapping: Applies relative SO(2) phase rotations against context accumulator on Query side.
+ * @brief Lazy Phase Unwrapping: Applies relative SO(2) phase rotations against context accumulator
+ * on Query side.
  *
- * Corrected Geometrical Behavior: Executes planar 2D SO(2) rotations based on context phase accumulation
- * instead of linear vector additions, maintaining SO(2)^(d_head/2) Lie Group invariants per c_abi_spec.md.
+ * Corrected Geometrical Behavior: Executes planar 2D SO(2) rotations based on context phase
+ * accumulation instead of linear vector additions, maintaining SO(2)^(d_head/2) Lie Group
+ * invariants per c_abi_spec.md.
  *
  * @param query_tensor 32-byte aligned target query tensor.
  * @param context_accum Cumulative context phase angle vector per head in radians.
@@ -622,11 +608,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_qdps_filter_step(
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_lazy_unwrap_override(
-    float* GCSO_RESTRICT query_tensor,
-    const float* GCSO_RESTRICT context_accum,
-    size_t head_dim,
-    size_t num_heads
-) GCSO_NOEXCEPT {
+    float* GCSO_RESTRICT query_tensor, const float* GCSO_RESTRICT context_accum, size_t head_dim,
+    size_t num_heads) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(query_tensor == nullptr || context_accum == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -659,7 +642,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_lazy_unwrap_override(
 /**
  * @brief Executes norm-guarded Slerp phase stabilization on state vectors.
  *
- * Utilizes 4 independent accumulators to unroll L2 norm computation, maximizing instruction-level parallelism.
+ * Utilizes 4 independent accumulators to unroll L2 norm computation, maximizing instruction-level
+ * parallelism.
  *
  * @param tensor Vector tensor buffer to normalize in-place.
  * @param dim Total vector length.
@@ -667,12 +651,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_lazy_unwrap_override(
  * @param norm_upper Maximum allowed L2 norm bound.
  * @return GCSO_SUCCESS or error status code.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_slerp_norm_guard_stable(
-    float* GCSO_RESTRICT tensor,
-    size_t dim,
-    float norm_lower,
-    float norm_upper
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_slerp_norm_guard_stable(float* GCSO_RESTRICT tensor,
+                                                                   size_t dim, float norm_lower,
+                                                                   float norm_upper) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(tensor == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -755,11 +736,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_slerp_norm_guard_stable(
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_fused_logit_shift(
-    float* GCSO_RESTRICT logits,
-    size_t vocab_size,
-    const gcso_q7_t* GCSO_RESTRICT phase_deltas,
-    size_t num_heads
-) GCSO_NOEXCEPT {
+    float* GCSO_RESTRICT logits, size_t vocab_size, const gcso_q7_t* GCSO_RESTRICT phase_deltas,
+    size_t num_heads) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(logits == nullptr || phase_deltas == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -777,7 +755,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_fused_logit_shift(
         for (size_t h = 0; h < num_heads; ++h) {
             sum_q7 += static_cast<int32_t>(phase_deltas[h]);
         }
-        const float mean_bias = (static_cast<float>(sum_q7) * q7_scale) / static_cast<float>(num_heads);
+        const float mean_bias =
+            (static_cast<float>(sum_q7) * q7_scale) / static_cast<float>(num_heads);
 
         size_t v = 0;
         const size_t simd_vocab = vocab_size & ~static_cast<size_t>(7);
@@ -811,8 +790,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_fused_logit_shift(
 /**
  * @brief Computes Procrustes phase delta alignment between source and target state representations.
  *
- * Evaluates 2D planar cross-products and dot-products across adjacent pairs (2k, 2k+1) and quantizes
- * the resulting relative phase angles via atan2 into Q7 fixed-point values [-128, 127].
+ * Evaluates 2D planar cross-products and dot-products across adjacent pairs (2k, 2k+1) and
+ * quantizes the resulting relative phase angles via atan2 into Q7 fixed-point values [-128, 127].
  *
  * @param source 32-byte aligned source feature vector.
  * @param target 32-byte aligned target feature vector.
@@ -821,11 +800,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_fused_logit_shift(
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_compute_procrustes_phase_delta(
-    const float* GCSO_RESTRICT source,
-    const float* GCSO_RESTRICT target,
-    size_t dim,
-    gcso_q7_t* GCSO_RESTRICT phase_out
-) GCSO_NOEXCEPT {
+    const float* GCSO_RESTRICT source, const float* GCSO_RESTRICT target, size_t dim,
+    gcso_q7_t* GCSO_RESTRICT phase_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(source == nullptr || target == nullptr || phase_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -856,8 +832,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_compute_procrustes_phase_delta(
                 dot_sum += sx * tx + sy * ty;
                 cross_sum += sx * ty - sy * tx;
             }
-            if ( GCSO_UNLIKELY(std::isnan(dot_sum) || std::isnan(cross_sum) ||
-                               std::isinf(dot_sum) || std::isinf(cross_sum)) ) {
+            if (GCSO_UNLIKELY(std::isnan(dot_sum) || std::isnan(cross_sum) || std::isinf(dot_sum) ||
+                              std::isinf(cross_sum))) {
                 return GCSO_ERROR_EDBC_SINGULARITY;
             }
             const float angle = (std::abs(dot_sum) < 1e-12f && std::abs(cross_sum) < 1e-12f)
@@ -879,13 +855,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_compute_procrustes_phase_delta(
  * @param kernel Kernel handle to destroy (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_kernel_destroy(
-    gcso_dpsr_kernel_handle_t kernel
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_kernel_destroy(gcso_dpsr_kernel_handle_t kernel)
+    GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(kernel == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(kernel) % alignof(gcso_dpsr_kernel_opaque) != 0)) {
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(kernel) % alignof(gcso_dpsr_kernel_opaque) !=
+                      0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
@@ -903,16 +879,17 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_kernel_destroy(
  * @param router_out Pointer to receive allocated router handle.
  * @return GCSO_SUCCESS or error status code.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_pspm_router_create(
-    const gcso_pspm_config_t* GCSO_RESTRICT config,
-    gcso_pspm_router_handle_t* GCSO_RESTRICT router_out
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_pspm_router_create(const gcso_pspm_config_t* GCSO_RESTRICT config,
+                        gcso_pspm_router_handle_t* GCSO_RESTRICT router_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(config == nullptr || router_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(config) % alignof(gcso_pspm_config_t) != 0 ||
-                          reinterpret_cast<uintptr_t>(router_out) % alignof(gcso_pspm_router_handle_t) != 0)) {
+                          reinterpret_cast<uintptr_t>(router_out) %
+                                  alignof(gcso_pspm_router_handle_t) !=
+                              0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
@@ -933,8 +910,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_router_create(
 /**
  * @brief Dispatches PSPM head-group phase profiles in a single pass.
  *
- * Single-Pass Head Group Ensembling: Splits attention heads into Fact, Logic, and Explore sub-groups,
- * applying unique phase profile gains in a single forward pass without parameter duplication.
+ * Single-Pass Head Group Ensembling: Splits attention heads into Fact, Logic, and Explore
+ * sub-groups, applying unique phase profile gains in a single forward pass without parameter
+ * duplication.
  *
  * @param query_tensor 32-byte aligned query tensor buffer.
  * @param pspm_cfg PSPM routing configuration.
@@ -942,10 +920,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_router_create(
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_pspm_dispatch_single_pass(
-    float* GCSO_RESTRICT query_tensor,
-    const gcso_pspm_config_t* GCSO_RESTRICT pspm_cfg,
-    size_t head_dim
-) GCSO_NOEXCEPT {
+    float* GCSO_RESTRICT query_tensor, const gcso_pspm_config_t* GCSO_RESTRICT pspm_cfg,
+    size_t head_dim) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(query_tensor == nullptr || pspm_cfg == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -954,7 +930,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_dispatch_single_pass(
     }
     try {
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(query_tensor) % 32 != 0 ||
-                          reinterpret_cast<uintptr_t>(pspm_cfg) % alignof(gcso_pspm_config_t) != 0)) {
+                          reinterpret_cast<uintptr_t>(pspm_cfg) % alignof(gcso_pspm_config_t) !=
+                              0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
@@ -1028,13 +1005,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_dispatch_single_pass(
  * @param router Router handle to destroy (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_pspm_router_destroy(
-    gcso_pspm_router_handle_t router
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL gcso_pspm_router_destroy(gcso_pspm_router_handle_t router)
+    GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(router == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(router) % alignof(gcso_pspm_router_opaque) != 0)) {
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(router) % alignof(gcso_pspm_router_opaque) !=
+                      0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
@@ -1052,16 +1029,17 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_router_destroy(
  * @param adapter_out Pointer to receive allocated adapter handle.
  * @return GCSO_SUCCESS or error status code.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_srl_adapter_create(
-    const gcso_srl_descriptor_t* GCSO_RESTRICT descriptor,
-    gcso_srl_adapter_handle_t* GCSO_RESTRICT adapter_out
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_srl_adapter_create(const gcso_srl_descriptor_t* GCSO_RESTRICT descriptor,
+                        gcso_srl_adapter_handle_t* GCSO_RESTRICT adapter_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(descriptor == nullptr || adapter_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(descriptor) % alignof(gcso_srl_descriptor_t) != 0 ||
-                          reinterpret_cast<uintptr_t>(adapter_out) % alignof(gcso_srl_adapter_handle_t) != 0)) {
+        if (GCSO_UNLIKELY(
+                reinterpret_cast<uintptr_t>(descriptor) % alignof(gcso_srl_descriptor_t) != 0 ||
+                reinterpret_cast<uintptr_t>(adapter_out) % alignof(gcso_srl_adapter_handle_t) !=
+                    0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
@@ -1090,29 +1068,31 @@ GCSO_API gcso_status_t GCSO_CALL gcso_srl_adapter_create(
  * @param dim_out Output vector dimension.
  * @return GCSO_SUCCESS or error status code.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_srl_eval_rank1(
-    float* GCSO_RESTRICT y_out,
-    const float* GCSO_RESTRICT x_in,
-    const gcso_srl_descriptor_t* GCSO_RESTRICT srl_desc,
-    size_t dim_in,
-    size_t dim_out
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_srl_eval_rank1(float* GCSO_RESTRICT y_out, const float* GCSO_RESTRICT x_in,
+                    const gcso_srl_descriptor_t* GCSO_RESTRICT srl_desc, size_t dim_in,
+                    size_t dim_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(y_out == nullptr || x_in == nullptr || srl_desc == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
-    if (GCSO_UNLIKELY(dim_in == 0 || dim_out == 0 || std::isnan(srl_desc->scale_factor) || std::isinf(srl_desc->scale_factor))) {
+    if (GCSO_UNLIKELY(dim_in == 0 || dim_out == 0 || std::isnan(srl_desc->scale_factor) ||
+                      std::isinf(srl_desc->scale_factor))) {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(y_out) % 32 != 0 ||
                           reinterpret_cast<uintptr_t>(x_in) % 32 != 0 ||
-                          reinterpret_cast<uintptr_t>(srl_desc) % alignof(gcso_srl_descriptor_t) != 0)) {
+                          reinterpret_cast<uintptr_t>(srl_desc) % alignof(gcso_srl_descriptor_t) !=
+                              0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        const auto* GCSO_RESTRICT vector_u = reinterpret_cast<const float*>(static_cast<uintptr_t>(srl_desc->u_vector_ptr));
-        const auto* GCSO_RESTRICT vector_v = reinterpret_cast<const float*>(static_cast<uintptr_t>(srl_desc->v_vector_ptr));
-        const auto* GCSO_RESTRICT gain_s   = reinterpret_cast<const float*>(static_cast<uintptr_t>(srl_desc->gain_scalar_ptr));
+        const auto* GCSO_RESTRICT vector_u =
+            reinterpret_cast<const float*>(static_cast<uintptr_t>(srl_desc->u_vector_ptr));
+        const auto* GCSO_RESTRICT vector_v =
+            reinterpret_cast<const float*>(static_cast<uintptr_t>(srl_desc->v_vector_ptr));
+        const auto* GCSO_RESTRICT gain_s =
+            reinterpret_cast<const float*>(static_cast<uintptr_t>(srl_desc->gain_scalar_ptr));
 
         if (GCSO_UNLIKELY(vector_u == nullptr || vector_v == nullptr)) {
             return GCSO_ERROR_NULL_POINTER;
@@ -1193,13 +1173,10 @@ GCSO_API gcso_status_t GCSO_CALL gcso_srl_eval_rank1(
 /**
  * @brief Evaluates in-place fused SRL Dynamic Rank-1 outer product accumulation.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_srl_eval_rank1_fused(
-    float* GCSO_RESTRICT y_inout,
-    const float* GCSO_RESTRICT x_in,
-    const gcso_srl_descriptor_t* GCSO_RESTRICT srl_desc,
-    size_t dim_in,
-    size_t dim_out
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_srl_eval_rank1_fused(float* GCSO_RESTRICT y_inout, const float* GCSO_RESTRICT x_in,
+                          const gcso_srl_descriptor_t* GCSO_RESTRICT srl_desc, size_t dim_in,
+                          size_t dim_out) GCSO_NOEXCEPT {
     return gcso_srl_eval_rank1(y_inout, x_in, srl_desc, dim_in, dim_out);
 }
 
@@ -1221,14 +1198,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_srl_eval_rank1_fused(
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_l2p_svd_project_lora(
-    const float* GCSO_RESTRICT lora_a,
-    const float* GCSO_RESTRICT lora_b,
-    size_t rank,
-    size_t dim_in,
-    size_t dim_out,
-    gcso_srl_descriptor_t* GCSO_RESTRICT srl_out,
-    gcso_q7_t* GCSO_RESTRICT phase_profile_out
-) GCSO_NOEXCEPT {
+    const float* GCSO_RESTRICT lora_a, const float* GCSO_RESTRICT lora_b, size_t rank,
+    size_t dim_in, size_t dim_out, gcso_srl_descriptor_t* GCSO_RESTRICT srl_out,
+    gcso_q7_t* GCSO_RESTRICT phase_profile_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(lora_a == nullptr || lora_b == nullptr || srl_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -1238,7 +1210,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_l2p_svd_project_lora(
     try {
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(lora_a) % 32 != 0 ||
                           reinterpret_cast<uintptr_t>(lora_b) % 32 != 0 ||
-                          reinterpret_cast<uintptr_t>(srl_out) % alignof(gcso_srl_descriptor_t) != 0)) {
+                          reinterpret_cast<uintptr_t>(srl_out) % alignof(gcso_srl_descriptor_t) !=
+                              0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
@@ -1249,7 +1222,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_l2p_svd_project_lora(
         srl_out->rank = 1;
 
         if (phase_profile_out != nullptr) {
-            if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(phase_profile_out) % alignof(gcso_q7_t) != 0)) {
+            if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(phase_profile_out) % alignof(gcso_q7_t) !=
+                              0)) {
                 return GCSO_ERROR_MISALIGNED_POINTER;
             }
             constexpr float inv_q7_scale = 128.0f / 3.14159265358979323846f;
@@ -1260,8 +1234,10 @@ GCSO_API gcso_status_t GCSO_CALL gcso_l2p_svd_project_lora(
                 const float u1 = lora_b[(2 * k + 1) * rank];
                 const float angle = std::atan2(u1, u0);
                 int32_t q_val = static_cast<int32_t>(std::round(angle * inv_q7_scale));
-                if (q_val > 127) q_val = 127;
-                if (q_val < -128) q_val = -128;
+                if (q_val > 127)
+                    q_val = 127;
+                if (q_val < -128)
+                    q_val = -128;
                 phase_profile_out[k] = static_cast<gcso_q7_t>(q_val);
             }
         }
@@ -1277,13 +1253,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_l2p_svd_project_lora(
  * @param adapter Adapter handle to destroy (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_srl_adapter_destroy(
-    gcso_srl_adapter_handle_t adapter
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL gcso_srl_adapter_destroy(gcso_srl_adapter_handle_t adapter)
+    GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(adapter == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(adapter) % alignof(gcso_srl_adapter_opaque) != 0)) {
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(adapter) % alignof(gcso_srl_adapter_opaque) !=
+                      0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {

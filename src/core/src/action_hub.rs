@@ -420,12 +420,14 @@ impl StigmergicThresholds {
             branchless_clamp_f32(phase_coherence, -1.0, 1.0),
             0.0,
         );
-        let contradict_thresh =
-            branchless_clamp_f32(branchless_abs_f32(self.contradiction_coherence_thresh), 0.0, 1.0);
+        let contradict_thresh = branchless_clamp_f32(
+            branchless_abs_f32(self.contradiction_coherence_thresh),
+            0.0,
+            1.0,
+        );
         let is_repulsed = repulsion_triggered | (coh < -contradict_thresh);
 
-        let is_low_entropy_skip =
-            (!is_repulsed) & (h_tilde <= self.inertial_skip_entropy_thresh);
+        let is_low_entropy_skip = (!is_repulsed) & (h_tilde <= self.inertial_skip_entropy_thresh);
         let ge_steer = rho >= self.express_steer_density_thresh;
         let ge_pspm = (rho >= self.pspm_route_density_thresh) | (h_tilde >= 0.55);
         let ge_srl = rho >= self.srl_inject_density_thresh;
@@ -470,11 +472,8 @@ impl StigmergicThresholds {
         let decision = StigmergicActionDecision::from_u8(disc);
         let mode_flags = decision.action_mode_flags();
         let clean_pref_slot = preferred_slot & ATTRACTOR_SLOT_ID_MASK;
-        let target_slot = branchless_select_u8(
-            is_repulsed,
-            ATTRACTOR_SLOT_REPULSION,
-            clean_pref_slot,
-        );
+        let target_slot =
+            branchless_select_u8(is_repulsed, ATTRACTOR_SLOT_REPULSION, clean_pref_slot);
 
         let extra_flags = branchless_select_u32(
             (mode_flags & ACTION_MODE_DPSR_STEER) != 0,
@@ -888,8 +887,11 @@ impl ActionHubEngine {
         phase_coherence: f32,
         contradiction_repulsed: bool,
     ) -> (u32, f32) {
-        let retain =
-            branchless_clamp_f32(branchless_relu_f32(self.thresholds.evaporation_retain), 0.0, 1.0);
+        let retain = branchless_clamp_f32(
+            branchless_relu_f32(self.thresholds.evaporation_retain),
+            0.0,
+            1.0,
+        );
         let active_len = self.inline_active_len();
         let mut i = 0usize;
         while i < active_len {
@@ -982,9 +984,8 @@ impl ActionHubEngine {
             trail_inout.accumulate_uniform_phase(embedded_phase);
         }
 
-        let (bloom_density, bloom_repulsed) = self
-            .bloom_filter
-            .apply_phase_conjugate_repulsion_words(
+        let (bloom_density, bloom_repulsed) =
+            self.bloom_filter.apply_phase_conjugate_repulsion_words(
                 trail_phase_words_mut(trail_inout),
                 self.repulsion_threshold,
                 self.repulsion_scale_u7,
@@ -1129,28 +1130,13 @@ impl ActionHubEngine {
                 if swar_words_nonzero_64(&swar_w) {
                     if let Some(ref mut q) = query_tensor {
                         steer_from_swar_words_core_safe(
-                            &swar_w,
-                            0xFF,
-                            128,
-                            head_dim,
-                            num_heads,
-                            false,
-                            ripa_clamp,
-                            q,
+                            &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, q,
                             key_tensor,
                         );
                         steered = true;
                     } else if let Some(ref mut k) = key_tensor {
                         steer_from_swar_words_core_safe(
-                            &swar_w,
-                            0xFF,
-                            128,
-                            head_dim,
-                            num_heads,
-                            false,
-                            ripa_clamp,
-                            k,
-                            None,
+                            &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, k, None,
                         );
                         steered = true;
                     }
@@ -1206,28 +1192,12 @@ impl ActionHubEngine {
                                 reserved: [0; 12],
                             };
                             dispatch_fused_ripa_and_pspm_words_core(
-                                q,
-                                &swar_w,
-                                ripa_clamp,
-                                &pspm_cfg,
-                                &swar_w,
-                                &swar_w,
-                                &swar_w,
-                                ripa_clamp,
-                                0,
-                                head_dim,
-                                true,
+                                q, &swar_w, ripa_clamp, &pspm_cfg, &swar_w, &swar_w, &swar_w,
+                                ripa_clamp, 0, head_dim, true,
                             )?;
                             if let Some(ref mut k) = key_tensor {
                                 steer_from_swar_words_core_safe(
-                                    &swar_w,
-                                    0xFF,
-                                    128,
-                                    head_dim,
-                                    num_heads,
-                                    false,
-                                    ripa_clamp,
-                                    k,
+                                    &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, k,
                                     None,
                                 );
                             }
@@ -1395,11 +1365,7 @@ impl DaesScratchpad for ActionHubEngine {
         let word = u64::from_le_bytes(slot.telemetry_mini_ledger);
         let spike_count = (word & 0x8080_8080_8080_8080).count_ones();
         let ripa_max = self.dpsr.ripa_clamp_max_rad();
-        let base_ripa = branchless_select_f32(
-            ripa_max > 0.0,
-            ripa_max,
-            DEFAULT_RIPA_CLAMP_MAX_RAD,
-        );
+        let base_ripa = branchless_select_f32(ripa_max > 0.0, ripa_max, DEFAULT_RIPA_CLAMP_MAX_RAD);
         let damping = 1.0 - 0.025 * (spike_count as f32);
         config_out.head_dim = self.dpsr.head_dim();
         config_out.num_heads = self.dpsr.num_heads();
@@ -1606,9 +1572,7 @@ impl crate::traits::SystemConstraintSignal for ActionHubEngine {
 
 impl ManifoldGatewaySignal for ActionHubEngine {
     #[inline]
-    fn synthesize_gateway_frame_with_words(
-        &self,
-    ) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
         let idx = (self.last_selected_trail_id as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
         let active_trail = &self.trails[idx];
         let words = *trail_phase_words_ref(active_trail);
@@ -1679,9 +1643,7 @@ impl ManifoldGatewaySignal for ActionHubEngine {
 
 const _: () = {
     assert!(size_of::<StigmergicActionDecision>() == 1);
-    assert!(
-        size_of::<StigmergicThresholds>() == 32 && align_of::<StigmergicThresholds>() == 32
-    );
+    assert!(size_of::<StigmergicThresholds>() == 32 && align_of::<StigmergicThresholds>() == 32);
     assert!(
         size_of::<ActionOrchestrationReport>() == 32
             && align_of::<ActionOrchestrationReport>() == 32
@@ -1783,13 +1745,9 @@ mod tests {
 
     #[test]
     fn test_action_hub_engine_stigmergic_orchestration_and_gateway_kmeans() {
-        let mut hub = ActionHubEngine::with_dimensions_and_thresholds(
-            8,
-            2,
-            16,
-            StigmergicThresholds::new(),
-        )
-        .unwrap();
+        let mut hub =
+            ActionHubEngine::with_dimensions_and_thresholds(8, 2, 16, StigmergicThresholds::new())
+                .unwrap();
 
         // Populate an inline candidate trail
         let mut t0 = gcso_pointer_trail_t {

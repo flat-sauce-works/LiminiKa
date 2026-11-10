@@ -12,89 +12,73 @@
 GCSO_EXTERN_C_BEGIN
 
 /**
- * @brief Packs a 48-bit canonical address, 8-bit tag, and Q7 phase offset into a 64-bit tagged pointer.
+ * @brief Packs a 48-bit canonical address, 8-bit tag, and Q7 phase offset into a 64-bit tagged
+ * pointer.
  */
-GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL gcso_tagged_ptr_pack(
-    uint64_t raw_addr,
-    uint8_t tag,
-    gcso_q7_t phase
-) GCSO_NOEXCEPT {
+GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL gcso_tagged_ptr_pack(uint64_t raw_addr, uint8_t tag,
+                                                                gcso_q7_t phase) GCSO_NOEXCEPT {
     return gcso_tagged_ptr_pack_inline(raw_addr, tag, phase);
 }
 
 /**
  * @brief Unpacks the 48-bit canonical address from a 64-bit tagged pointer.
  */
-GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL gcso_tagged_ptr_unpack_addr(
-    uint64_t ptr
-) GCSO_NOEXCEPT {
+GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL gcso_tagged_ptr_unpack_addr(uint64_t ptr) GCSO_NOEXCEPT {
     return gcso_tagged_ptr_unpack_addr_inline(ptr);
 }
 
 /**
  * @brief Unpacks the 8-bit domain/action tag from a 64-bit tagged pointer.
  */
-GCSO_NODISCARD GCSO_API uint8_t GCSO_CALL gcso_tagged_ptr_unpack_tag(
-    uint64_t ptr
-) GCSO_NOEXCEPT {
+GCSO_NODISCARD GCSO_API uint8_t GCSO_CALL gcso_tagged_ptr_unpack_tag(uint64_t ptr) GCSO_NOEXCEPT {
     return gcso_tagged_ptr_unpack_tag_inline(ptr);
 }
 
 /**
  * @brief Unpacks the 8-bit Q7 phase state from a 64-bit tagged pointer.
  */
-GCSO_NODISCARD GCSO_API gcso_q7_t GCSO_CALL gcso_tagged_ptr_unpack_phase(
-    uint64_t ptr
-) GCSO_NOEXCEPT {
+GCSO_NODISCARD GCSO_API gcso_q7_t GCSO_CALL gcso_tagged_ptr_unpack_phase(uint64_t ptr)
+    GCSO_NOEXCEPT {
     return gcso_tagged_ptr_unpack_phase_inline(ptr);
 }
 
 /**
- * @brief Packs a 48-bit address, 3-bit Attractor Slot ID, 5-bit Action Mode mask, and Q7 phase into a tagged pointer.
+ * @brief Packs a 48-bit address, 3-bit Attractor Slot ID, 5-bit Action Mode mask, and Q7 phase into
+ * a tagged pointer.
  */
-GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL gcso_tagged_ptr_pack_action(
-    uint64_t raw_addr,
-    uint8_t attractor_slot,
-    uint8_t action_mode_flags,
-    gcso_q7_t phase
-) GCSO_NOEXCEPT {
-    const auto tag = static_cast<uint8_t>(
-        ((attractor_slot & GCSO_ATTRACTOR_SLOT_ID_MASK) << 5U) |
-        (action_mode_flags & GCSO_ACTION_MODE_ALL_MASK)
-    );
+GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL
+gcso_tagged_ptr_pack_action(uint64_t raw_addr, uint8_t attractor_slot, uint8_t action_mode_flags,
+                            gcso_q7_t phase) GCSO_NOEXCEPT {
+    const auto tag = static_cast<uint8_t>(((attractor_slot & GCSO_ATTRACTOR_SLOT_ID_MASK) << 5U) |
+                                          (action_mode_flags & GCSO_ACTION_MODE_ALL_MASK));
     return gcso_tagged_ptr_pack_inline(raw_addr, tag, phase);
 }
 
 /**
  * @brief Extracts the 5-bit Action Mode mask from a 64-bit tagged pointer.
  */
-GCSO_NODISCARD GCSO_API uint8_t GCSO_CALL gcso_tagged_ptr_unpack_action_mode(
-    uint64_t ptr
-) GCSO_NOEXCEPT {
+GCSO_NODISCARD GCSO_API uint8_t GCSO_CALL gcso_tagged_ptr_unpack_action_mode(uint64_t ptr)
+    GCSO_NOEXCEPT {
     return static_cast<uint8_t>(gcso_tagged_ptr_unpack_tag_inline(ptr) & GCSO_ACTION_MODE_ALL_MASK);
 }
 
 /**
  * @brief Extracts the 3-bit Target Attractor Working Lane ID (0..7) from a 64-bit tagged pointer.
  */
-GCSO_NODISCARD GCSO_API uint8_t GCSO_CALL gcso_tagged_ptr_unpack_attractor_slot(
-    uint64_t ptr
-) GCSO_NOEXCEPT {
-    return static_cast<uint8_t>((gcso_tagged_ptr_unpack_tag_inline(ptr) >> 5U) & GCSO_ATTRACTOR_SLOT_ID_MASK);
+GCSO_NODISCARD GCSO_API uint8_t GCSO_CALL gcso_tagged_ptr_unpack_attractor_slot(uint64_t ptr)
+    GCSO_NOEXCEPT {
+    return static_cast<uint8_t>((gcso_tagged_ptr_unpack_tag_inline(ptr) >> 5U) &
+                                GCSO_ATTRACTOR_SLOT_ID_MASK);
 }
 
 /**
- * @brief Evolves a 64-bit tagged pointer's Action Mode flags and Target Attractor Slot in O(1) time.
+ * @brief Evolves a 64-bit tagged pointer's Action Mode flags and Target Attractor Slot in O(1)
+ * time.
  */
 GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL gcso_tagged_ptr_evolve_mode_stigmergically(
-    uint64_t ptr,
-    float stigmergic_density,
-    float entropy_h_tilde,
-    uint8_t repulsion_triggered,
-    uint8_t dominant_attractor_slot,
-    float low_entropy_skip_thresh,
-    float high_density_srl_thresh
-) GCSO_NOEXCEPT {
+    uint64_t ptr, float stigmergic_density, float entropy_h_tilde, uint8_t repulsion_triggered,
+    uint8_t dominant_attractor_slot, float low_entropy_skip_thresh,
+    float high_density_srl_thresh) GCSO_NOEXCEPT {
     const uint64_t addr = gcso_tagged_ptr_unpack_addr_inline(ptr);
     gcso_q7_t phase = gcso_tagged_ptr_unpack_phase_inline(ptr);
 
@@ -103,20 +87,14 @@ GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL gcso_tagged_ptr_evolve_mode_stigmergi
 
     if (repulsion_triggered != 0U) {
         slot = GCSO_ATTRACTOR_SLOT_REPULSION;
-        mode = static_cast<uint8_t>(
-            GCSO_ACTION_MODE_PHASE_STEER |
-            GCSO_ACTION_MODE_PSPM_ROUTE |
-            GCSO_ACTION_MODE_REPULSION_GUARD
-        );
+        mode = static_cast<uint8_t>(GCSO_ACTION_MODE_PHASE_STEER | GCSO_ACTION_MODE_PSPM_ROUTE |
+                                    GCSO_ACTION_MODE_REPULSION_GUARD);
         phase = (phase == -128) ? static_cast<gcso_q7_t>(127) : static_cast<gcso_q7_t>(-phase);
     } else if (entropy_h_tilde < low_entropy_skip_thresh && stigmergic_density >= 0.80f) {
         mode = GCSO_ACTION_MODE_LAYER_SKIP;
     } else if (stigmergic_density >= high_density_srl_thresh) {
-        mode = static_cast<uint8_t>(
-            GCSO_ACTION_MODE_PHASE_STEER |
-            GCSO_ACTION_MODE_PSPM_ROUTE |
-            GCSO_ACTION_MODE_SRL_INJECT
-        );
+        mode = static_cast<uint8_t>(GCSO_ACTION_MODE_PHASE_STEER | GCSO_ACTION_MODE_PSPM_ROUTE |
+                                    GCSO_ACTION_MODE_SRL_INJECT);
     } else if (stigmergic_density >= 0.50f || entropy_h_tilde >= 0.35f) {
         mode = static_cast<uint8_t>(GCSO_ACTION_MODE_PHASE_STEER | GCSO_ACTION_MODE_PSPM_ROUTE);
     }
@@ -132,11 +110,9 @@ GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL gcso_tagged_ptr_evolve_mode_stigmergi
  * @param patch Pointer to store the patch version number.
  * @return GCSO_SUCCESS, GCSO_ERROR_NULL_POINTER, or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_abi_get_version(
-    uint32_t* GCSO_RESTRICT major,
-    uint32_t* GCSO_RESTRICT minor,
-    uint32_t* GCSO_RESTRICT patch
-) GCSO_NOEXCEPT {
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
+gcso_abi_get_version(uint32_t* GCSO_RESTRICT major, uint32_t* GCSO_RESTRICT minor,
+                     uint32_t* GCSO_RESTRICT patch) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(major == nullptr || minor == nullptr || patch == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -173,7 +149,8 @@ GCSO_NODISCARD GCSO_API const char* GCSO_CALL gcso_abi_get_version_string(void) 
  * @param status Status code enum value.
  * @return Const pointer to descriptive static string representation.
  */
-GCSO_NODISCARD GCSO_API const char* GCSO_CALL gcso_status_to_string(gcso_status_t status) GCSO_NOEXCEPT {
+GCSO_NODISCARD GCSO_API const char* GCSO_CALL gcso_status_to_string(gcso_status_t status)
+    GCSO_NOEXCEPT {
     switch (status) {
         case GCSO_SUCCESS:
             return "GCSO_SUCCESS";
@@ -233,9 +210,8 @@ GCSO_NODISCARD GCSO_API const char* GCSO_CALL gcso_status_to_string(gcso_status_
  * @param flags Pointer to store 64-bit bitmask capability flags.
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER / GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_abi_query_capability(
-    gcso_capability_flags_t* GCSO_RESTRICT flags
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL
+gcso_abi_query_capability(gcso_capability_flags_t* GCSO_RESTRICT flags) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(flags == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -265,18 +241,19 @@ GCSO_API gcso_status_t GCSO_CALL gcso_abi_query_capability(
 }
 
 /**
- * @brief Populates default settings for a gcso_config_t structure strictly conforming to GCSO standards.
+ * @brief Populates default settings for a gcso_config_t structure strictly conforming to GCSO
+ * standards.
  *
- * Configures optimal parameters for 2-4GB VRAM execution targets, setting default head dimensions (128),
- * head counts (32), paged block sizes (32 tokens), RIPA soft-clamp bounds (5 degrees = 0.087266 rad), and
- * qdps minimum step thresholds (0.01 rad) to avoid grid jitter under ultra-low quantization.
+ * Configures optimal parameters for 2-4GB VRAM execution targets, setting default head dimensions
+ * (128), head counts (32), paged block sizes (32 tokens), RIPA soft-clamp bounds (5 degrees =
+ * 0.087266 rad), and qdps minimum step thresholds (0.01 rad) to avoid grid jitter under ultra-low
+ * quantization.
  *
  * @param config Pointer to user-allocated configuration descriptor to populate.
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER / GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_config_init_default(
-    gcso_config_t* GCSO_RESTRICT config
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL gcso_config_init_default(gcso_config_t* GCSO_RESTRICT config)
+    GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(config == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -307,9 +284,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_config_init_default(
 /**
  * @brief Validates a gcso_config_t descriptor against GCSO v0.1.1 architectural invariants.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_config_validate(
-    const gcso_config_t* GCSO_RESTRICT config
-) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL gcso_config_validate(const gcso_config_t* GCSO_RESTRICT config)
+    GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(config == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -318,24 +294,20 @@ GCSO_API gcso_status_t GCSO_CALL gcso_config_validate(
     }
     try {
         const bool valid_dims =
-            (config->head_dim != 0U) &&
-            ((config->head_dim & 1U) == 0U) &&
-            (config->num_heads != 0U) &&
-            (config->num_heads <= GCSO_Q7_PHASE_ARRAY_LEN) &&
+            (config->head_dim != 0U) && ((config->head_dim & 1U) == 0U) &&
+            (config->num_heads != 0U) && (config->num_heads <= GCSO_Q7_PHASE_ARRAY_LEN) &&
             (config->paged_block_size == 16U || config->paged_block_size == 32U);
         const bool valid_scales =
             std::isfinite(config->q7_phase_scale) && (config->q7_phase_scale > 0.0f) &&
             std::isfinite(config->ripa_clamp_max_rad) && (config->ripa_clamp_max_rad > 0.0f) &&
             std::isfinite(config->qdps_min_step_rad) && (config->qdps_min_step_rad >= 0.0f) &&
-            std::isfinite(config->entropy_singularity_eps) && (config->entropy_singularity_eps > 0.0f);
-        const bool valid_caps =
-            (config->max_prompt_anchors != 0U) &&
-            (config->action_hub_capacity != 0U) &&
-            (config->daes_mode <= 2U);
+            std::isfinite(config->entropy_singularity_eps) &&
+            (config->entropy_singularity_eps > 0.0f);
+        const bool valid_caps = (config->max_prompt_anchors != 0U) &&
+                                (config->action_hub_capacity != 0U) && (config->daes_mode <= 2U);
 
-        return (valid_dims && valid_scales && valid_caps)
-                   ? GCSO_SUCCESS
-                   : GCSO_ERROR_INVALID_ARGUMENT;
+        return (valid_dims && valid_scales && valid_caps) ? GCSO_SUCCESS
+                                                          : GCSO_ERROR_INVALID_ARGUMENT;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
     }
@@ -348,9 +320,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_config_validate(
  *
  * @param str Const string pointer to free (safe no-op if NULL).
  */
-GCSO_API void GCSO_CALL gcso_free_string(
-    const char* str
-) GCSO_NOEXCEPT {
+GCSO_API void GCSO_CALL gcso_free_string(const char* str) GCSO_NOEXCEPT {
     if (str != nullptr) {
         std::free(const_cast<char*>(str));
     }
