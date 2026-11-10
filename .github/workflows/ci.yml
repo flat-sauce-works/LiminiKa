@@ -20,6 +20,8 @@ permissions:
 defaults:
   run:
     shell: bash
+  env:
+  RUST_MIN_STACK: "16777216"
 
 jobs:
   # =========================================================================
