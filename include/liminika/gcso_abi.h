@@ -187,8 +187,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_container_close(gcso_container_handle_t ha
 /**
  * @brief Inline compatibility alias forwarding gcso_container_destroy to gcso_container_close.
  */
-static GCSO_FORCE_INLINE gcso_status_t
-gcso_container_destroy(gcso_container_handle_t container) GCSO_NOEXCEPT {
+static GCSO_FORCE_INLINE gcso_status_t gcso_container_destroy(gcso_container_handle_t container)
+    GCSO_NOEXCEPT {
     return gcso_container_close(container);
 }
 
@@ -264,8 +264,8 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_bridge_liminal_t
     const gcso_pointer_trail_t* GCSO_RESTRICT prev_trail,
     gcso_pointer_trail_t* GCSO_RESTRICT curr_trail_inout, uint8_t interpolation_u7,
     float contradiction_threshold, float* GCSO_RESTRICT coherence_out,
-    float* GCSO_RESTRICT log_prob_out, uint8_t* GCSO_RESTRICT contradiction_repulsed_out)
-    GCSO_NOEXCEPT;
+    float* GCSO_RESTRICT log_prob_out,
+    uint8_t* GCSO_RESTRICT contradiction_repulsed_out) GCSO_NOEXCEPT;
 
 /**
  * @brief Scans candidate memory trails, selects the optimal coherent trail maximizing the
@@ -929,10 +929,9 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_barrier(
  * @brief Evaluates scale-invariant Pitchfork Bifurcation potential barrier height (Whitepaper Lemma
  * 3.1).
  */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_cvoid_eval_barrier_pitchfork(float cvoid, float tau_eff, float alpha, float beta,
-                                  uint32_t head_dim, float* GCSO_RESTRICT barrier_out)
-    GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_barrier_pitchfork(
+    float cvoid, float tau_eff, float alpha, float beta, uint32_t head_dim,
+    float* GCSO_RESTRICT barrier_out) GCSO_NOEXCEPT;
 
 /**
  * @brief Destroys an EDBC controller instance.
@@ -1371,9 +1370,8 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_container_write_four_sectio
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_container_verify_four_section_with_reports_zero_copy(
     const uint8_t* GCSO_RESTRICT zimms_bytes, size_t byte_len,
-    gcso_zimms_descriptor_t* GCSO_RESTRICT zimms_desc_out,
-    size_t* GCSO_RESTRICT num_crystals_out, size_t* GCSO_RESTRICT num_trails_out,
-    size_t* GCSO_RESTRICT num_reports_out,
+    gcso_zimms_descriptor_t* GCSO_RESTRICT zimms_desc_out, size_t* GCSO_RESTRICT num_crystals_out,
+    size_t* GCSO_RESTRICT num_trails_out, size_t* GCSO_RESTRICT num_reports_out,
     const gcso_crystallized_attractor_record_t** GCSO_RESTRICT crystals_ptr_out,
     const gcso_pointer_trail_t** GCSO_RESTRICT trails_ptr_out,
     const gcso_contrastive_bloom_filter_t** GCSO_RESTRICT bloom_ptr_out,
