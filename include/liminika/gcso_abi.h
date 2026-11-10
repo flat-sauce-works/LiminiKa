@@ -178,19 +178,19 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_pprc_seek_to_token(
 GCSO_API gcso_status_t GCSO_CALL gcso_context_destroy(gcso_context_handle_t context) GCSO_NOEXCEPT;
 
 /**
- * @brief Closes an open .gcso binary container handle (exported symbol in abi.rs).
+ * @brief Destroys a container handle and releases mapped storage resources (C++ kernel symbol).
+ * @param container Container handle to destroy (safe no-op if NULL).
+ * @return GCSO_SUCCESS or error status code.
+ */
+GCSO_API gcso_status_t GCSO_CALL gcso_container_destroy(gcso_container_handle_t container)
+    GCSO_NOEXCEPT;
+
+/**
+ * @brief Closes an open .gcso binary container handle (Rust core symbol).
  * @param handle Container handle to close (safe no-op if NULL).
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_container_close(gcso_container_handle_t handle) GCSO_NOEXCEPT;
-
-/**
- * @brief Inline compatibility alias forwarding gcso_container_destroy to gcso_container_close.
- */
-static GCSO_FORCE_INLINE gcso_status_t gcso_container_destroy(gcso_container_handle_t container)
-    GCSO_NOEXCEPT {
-    return gcso_container_close(container);
-}
 
 // ===================================================================
 // 3. Action Hub, Stigmergic Pointer Trail & DAES Acceleration Interface
@@ -264,8 +264,8 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_bridge_liminal_t
     const gcso_pointer_trail_t* GCSO_RESTRICT prev_trail,
     gcso_pointer_trail_t* GCSO_RESTRICT curr_trail_inout, uint8_t interpolation_u7,
     float contradiction_threshold, float* GCSO_RESTRICT coherence_out,
-    float* GCSO_RESTRICT log_prob_out,
-    uint8_t* GCSO_RESTRICT contradiction_repulsed_out) GCSO_NOEXCEPT;
+    float* GCSO_RESTRICT log_prob_out, uint8_t* GCSO_RESTRICT contradiction_repulsed_out)
+    GCSO_NOEXCEPT;
 
 /**
  * @brief Scans candidate memory trails, selects the optimal coherent trail maximizing the
@@ -929,9 +929,10 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_barrier(
  * @brief Evaluates scale-invariant Pitchfork Bifurcation potential barrier height (Whitepaper Lemma
  * 3.1).
  */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_barrier_pitchfork(
-    float cvoid, float tau_eff, float alpha, float beta, uint32_t head_dim,
-    float* GCSO_RESTRICT barrier_out) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
+gcso_cvoid_eval_barrier_pitchfork(float cvoid, float tau_eff, float alpha, float beta,
+                                  uint32_t head_dim, float* GCSO_RESTRICT barrier_out)
+    GCSO_NOEXCEPT;
 
 /**
  * @brief Destroys an EDBC controller instance.
@@ -959,14 +960,13 @@ gcso_persona_apply_patch(gcso_context_handle_t context, const uint8_t* GCSO_REST
 
 /**
  * @brief Zero-Overhead In-Memory Mapped Storage: Maps .gcso container payload using zero-copy mmap.
- * Corresponds to ZimmsStorage::open_mmap in traits.rs / abi.rs.
+ * Corresponds to ZimmsStorage::open_mmap in traits.rs and attractor_edbc.cpp.
  * @param file_path Null-terminated path string to target .gcso file.
- * @param flags Memory protection and mapping attribute flags.
  * @param zimms_out Descriptor structure pointer to populate (32-byte aligned).
  * @return GCSO_SUCCESS or GCSO_ERROR_ZIMMS_MAPPING_FAILED.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_zimms_open_mmap(const char* GCSO_RESTRICT file_path, uint32_t flags,
+gcso_zimms_open_mmap(const char* GCSO_RESTRICT file_path,
                      gcso_zimms_descriptor_t* GCSO_RESTRICT zimms_out) GCSO_NOEXCEPT;
 
 /**
@@ -1370,8 +1370,9 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_container_write_four_sectio
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_container_verify_four_section_with_reports_zero_copy(
     const uint8_t* GCSO_RESTRICT zimms_bytes, size_t byte_len,
-    gcso_zimms_descriptor_t* GCSO_RESTRICT zimms_desc_out, size_t* GCSO_RESTRICT num_crystals_out,
-    size_t* GCSO_RESTRICT num_trails_out, size_t* GCSO_RESTRICT num_reports_out,
+    gcso_zimms_descriptor_t* GCSO_RESTRICT zimms_desc_out,
+    size_t* GCSO_RESTRICT num_crystals_out, size_t* GCSO_RESTRICT num_trails_out,
+    size_t* GCSO_RESTRICT num_reports_out,
     const gcso_crystallized_attractor_record_t** GCSO_RESTRICT crystals_ptr_out,
     const gcso_pointer_trail_t** GCSO_RESTRICT trails_ptr_out,
     const gcso_contrastive_bloom_filter_t** GCSO_RESTRICT bloom_ptr_out,

@@ -94,33 +94,23 @@ endif()
 
 
 
-# Enforce strict compiler warnings, 16MiB main-thread stack size, and SIMD flags
+# Enforce strict compiler warnings, 16MiB main-thread stack size, and SIMD flags without generator expressions
 
 if(MSVC)
 
-  add_compile_options(
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W4 /WX /utf-8 /Zc:preprocessor /Zc:inline /wd4324")
 
-    $<$<COMPILE_LANGUAGE:C,CXX>:/W4>
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4 /WX /utf-8 /permissive- /EHsc /Zc:preprocessor /Zc:inline /wd4324")
 
-    $<$<COMPILE_LANGUAGE:C,CXX>:/WX>
+  set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /O2")
 
-    $<$<COMPILE_LANGUAGE:C,CXX>:/utf-8>
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2")
 
-    $<$<COMPILE_LANGUAGE:CXX>:/permissive->
+  set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} /O2")
 
-    $<$<COMPILE_LANGUAGE:CXX>:/EHsc>
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} /O2")
 
-    $<$<COMPILE_LANGUAGE:C,CXX>:/Zc:preprocessor>
-
-    $<$<COMPILE_LANGUAGE:C,CXX>:/Zc:inline>
-
-    $<$<COMPILE_LANGUAGE:C,CXX>:/wd4324>
-
-    $<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<OR:$CONFIG:Release,$CONFIG:RelWithDebInfo>>:/O2>
-
-  )
-
-  add_link_options(/STACK:16777216)
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:16777216")
 
 
 
@@ -128,11 +118,15 @@ if(MSVC)
 
     if(LIMINIKA_ENABLE_AVX512)
 
-      add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/arch:AVX512>)
+      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /arch:AVX512")
+
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX512")
 
     elseif(LIMINIKA_ENABLE_AVX2)
 
-      add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/arch:AVX2>)
+      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /arch:AVX2")
+
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX2")
 
     endif()
 
@@ -140,67 +134,47 @@ if(MSVC)
 
 else()
 
-  add_compile_options(
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror -Wpedantic -Wconversion -Wno-unused-parameter -Wstrict-prototypes")
 
-    $<$<COMPILE_LANGUAGE:C,CXX>:-Wall>
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror -Wpedantic -Wconversion -Wno-unused-parameter")
 
-    $<$<COMPILE_LANGUAGE:C,CXX>:-Wextra>
+  set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -fstrict-aliasing")
 
-    $<$<COMPILE_LANGUAGE:C,CXX>:-Werror>
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -fstrict-aliasing")
 
-    $<$<COMPILE_LANGUAGE:C,CXX>:-Wpedantic>
+  set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} -O3 -fstrict-aliasing")
 
-    $<$<COMPILE_LANGUAGE:C,CXX>:-Wconversion>
-
-    $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-unused-parameter>
-
-    $<$<COMPILE_LANGUAGE:C>:-Wstrict-prototypes>
-
-    $<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<OR:$CONFIG:Release,$CONFIG:RelWithDebInfo>>:-O3>
-
-    $<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<OR:$CONFIG:Release,$CONFIG:RelWithDebInfo>>:-fstrict-aliasing>
-
-  )
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -O3 -fstrict-aliasing")
 
 
 
-  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|x64")
 
     if(LIMINIKA_ENABLE_AVX512)
 
-      add_compile_options(
+      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx512f -mavx512bw -mavx512dq -mavx512vl -mfma")
 
-        $<$<COMPILE_LANGUAGE:C,CXX>:-mavx512f>
-
-        $<$<COMPILE_LANGUAGE:C,CXX>:-mavx512bw>
-
-        $<$<COMPILE_LANGUAGE:C,CXX>:-mavx512dq>
-
-        $<$<COMPILE_LANGUAGE:C,CXX>:-mavx512vl>
-
-        $<$<COMPILE_LANGUAGE:C,CXX>:-mfma>
-
-      )
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx512f -mavx512bw -mavx512dq -mavx512vl -mfma")
 
     elseif(LIMINIKA_ENABLE_AVX2)
 
-      add_compile_options(
+      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx2 -mfma")
 
-        $<$<COMPILE_LANGUAGE:C,CXX>:-mavx2>
-
-        $<$<COMPILE_LANGUAGE:C,CXX>:-mfma>
-
-      )
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mfma")
 
     endif()
 
   elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64" AND LIMINIKA_ENABLE_SVE AND NOT APPLE)
 
-    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-march=armv8-a+sve>)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=armv8-a+sve")
+
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8-a+sve")
 
   elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "riscv64" AND LIMINIKA_ENABLE_RVV)
 
-    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-march=rv64gcv>)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=rv64gcv")
+
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=rv64gcv")
 
   endif()
 
@@ -216,25 +190,39 @@ if(NOT TARGET liminika_headers)
 
   target_include_directories(liminika_headers INTERFACE
 
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-
-    $<INSTALL_INTERFACE:include>
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
 
   )
 
-  target_compile_definitions(liminika_headers INTERFACE
+  if(LIMINIKA_ENABLE_AVX2)
 
-    $<$BOOL:\${LIMINIKA\_ENABLE\_AVX2}:LIMINIKA_ENABLE_AVX2=1>
+    target_compile_definitions(liminika_headers INTERFACE LIMINIKA_ENABLE_AVX2=1)
 
-    $<$BOOL:\${LIMINIKA\_ENABLE\_AVX512}:LIMINIKA_ENABLE_AVX512=1>
+  endif()
 
-    $<$BOOL:\${LIMINIKA\_ENABLE\_NEON}:LIMINIKA_ENABLE_NEON=1>
+  if(LIMINIKA_ENABLE_AVX512)
 
-    $<$BOOL:\${LIMINIKA\_ENABLE\_SVE}:LIMINIKA_ENABLE_SVE=1>
+    target_compile_definitions(liminika_headers INTERFACE LIMINIKA_ENABLE_AVX512=1)
 
-    $<$BOOL:\${LIMINIKA\_ENABLE\_RVV}:LIMINIKA_ENABLE_RVV=1>
+  endif()
 
-  )
+  if(LIMINIKA_ENABLE_NEON)
+
+    target_compile_definitions(liminika_headers INTERFACE LIMINIKA_ENABLE_NEON=1)
+
+  endif()
+
+  if(LIMINIKA_ENABLE_SVE)
+
+    target_compile_definitions(liminika_headers INTERFACE LIMINIKA_ENABLE_SVE=1)
+
+  endif()
+
+  if(LIMINIKA_ENABLE_RVV)
+
+    target_compile_definitions(liminika_headers INTERFACE LIMINIKA_ENABLE_RVV=1)
+
+  endif()
 
 endif()
 
