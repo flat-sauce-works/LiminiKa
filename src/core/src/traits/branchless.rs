@@ -4901,35 +4901,121 @@ pub fn branchless_q7_gravity_fold_64(
         anchor_phases.len(),
         anchor_gravity_masses.len(),
     );
+    if count == 0 {
+        *folded_phases_out = *query_phases;
+        return (0.0, 0.0, 0, 0);
+    }
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
-        if count > 0 {
-            // SAFETY: Guarded by `target_feature = "avx2"`. Executes 64-head coherence and
-            // geodesic SLERP directly in two 256-bit YMM registers (`vr0, vr1`).
-            return unsafe {
-                use core::arch::x86_64::{
-                    _mm256_or_si256, _mm256_sub_epi8, _mm256_testz_si256,
-                };
-                let q_w = load_q7_words_64(query_phases);
-                let q_uni = is_word_array_uniform_64(&q_w);
-                let (vq0, vq1) = avx2_words64_to_vec64_with_uniform(&q_w, q_uni);
-                let q_or = _mm256_or_si256(vq0, vq1);
-                let q_nonzero = _mm256_testz_si256(q_or, q_or) == 0;
-                let mut vr0 = vq0;
-                let mut vr1 = vq1;
-                let mut running_pull = 0.0_f32;
-                let mut weighted_coh_sum = 0.0_f32;
-                let mut best_pull = 0.0_f32;
-                let mut dominant_idx = 0u32;
-                let mut active_count = 0u32;
-                let mut idx = 0usize;
-                while idx < count {
-                    let mass = branchless_flush_subnormal_f32(branchless_relu_f32(
-                        anchor_gravity_masses[idx],
-                    ));
-                    if mass > 1.0e-12 {
-                        let b_w = load_q7_words_64(&anchor_phases[idx]);
-                        let (vb0, vb1) = avx2_words64_to_vec64(&b_w);
+        // SAFETY: Guarded by `target_feature = "avx2"`. Fast-paths word-uniform anchors directly in
+        // a single 64-bit GPR (`r_w0`) with zero YMM loads/extractions, and transitions to two
+        // 256-bit YMM registers (`vr0, vr1`) via direct `_mm256_loadu_si256` when non-uniform.
+        return unsafe {
+            use core::arch::x86_64::{
+                __m256i, _mm256_loadu_si256, _mm256_or_si256, _mm256_set1_epi64x, _mm256_sub_epi8,
+                _mm256_testz_si256,
+            };
+            let q_w = load_q7_words_64(query_phases);
+            let q_uni = is_word_array_uniform_64(&q_w);
+            let q_w0 = q_w[0];
+            let q_b0 = (q_w0 & 0xFF) as u8;
+            let q_is_byte_uniform = q_uni & (q_w0 == q_w0.rotate_right(8));
+            let q_nonzero = if q_uni {
+                q_w0 != 0
+            } else {
+                (((q_w[0] | q_w[1]) | (q_w[2] | q_w[3])) | ((q_w[4] | q_w[5]) | (q_w[6] | q_w[7])))
+                    != 0
+            };
+            let mut vq_vecs: Option<(__m256i, __m256i)> = if q_uni {
+                None
+            } else {
+                Some(avx2_words64_to_vec64_with_uniform(&q_w, false))
+            };
+            let mut r_uni = q_uni;
+            let mut r_w0 = q_w0;
+            let mut vr_vecs: Option<(__m256i, __m256i)> = vq_vecs;
+            let mut running_pull = 0.0_f32;
+            let mut weighted_coh_sum = 0.0_f32;
+            let mut best_pull = 0.0_f32;
+            let mut dominant_idx = 0u32;
+            let mut active_count = 0u32;
+            let mut idx = 0usize;
+            while idx < count {
+                let mass =
+                    branchless_flush_subnormal_f32(branchless_relu_f32(anchor_gravity_masses[idx]));
+                if mass > 1.0e-12 {
+                    let check_b_uni =
+                        (running_pull <= 1.0e-12) | (r_uni & (q_uni | !q_nonzero));
+                    let mut b_w = [0u64; 8];
+                    let b_uni = if check_b_uni {
+                        b_w = load_q7_words_64(&anchor_phases[idx]);
+                        is_word_array_uniform_64(&b_w)
+                    } else {
+                        false
+                    };
+                    if b_uni & r_uni & (q_uni | !q_nonzero) {
+                        let bw0 = b_w[0];
+                        let coh = if !(q_nonzero & (bw0 != 0)) {
+                            0.0
+                        } else if bw0 == q_w0 {
+                            1.0
+                        } else if q_is_byte_uniform && (bw0 == bw0.rotate_right(8)) {
+                            Q7_FULL_COS_REF[q_b0.wrapping_sub(bw0 as u8) as usize]
+                        } else {
+                            coherence_from_word_arrays_with_both_uniform_flags_64(
+                                &q_w, true, &b_w, true,
+                            )
+                        };
+                        let grav_pull =
+                            branchless_phase_proximity_gravity_f32(mass, coh, softening_eps);
+                        if grav_pull > 1.0e-12 {
+                            let is_better = grav_pull > best_pull;
+                            let total_w = running_pull + grav_pull;
+                            if running_pull <= 1.0e-12 {
+                                r_w0 = bw0;
+                            } else if r_w0 != bw0 {
+                                let ratio_f32 = branchless_clamp_f32(
+                                    (grav_pull * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
+                                    0.0,
+                                    128.0,
+                                );
+                                let s = (ratio_f32 as u8) as u64;
+                                if s >= 128 {
+                                    r_w0 = bw0;
+                                } else if s > 0 {
+                                    let bias_restore =
+                                        (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+                                    r_w0 = swar_slerp_word_unchecked_x8(r_w0, bw0, s, bias_restore);
+                                }
+                            }
+                            running_pull = total_w;
+                            weighted_coh_sum += grav_pull * coh;
+                            best_pull = branchless_select_f32(is_better, grav_pull, best_pull);
+                            dominant_idx =
+                                branchless_select_u32(is_better, idx as u32, dominant_idx);
+                            active_count = active_count.wrapping_add(1);
+                        }
+                    } else {
+                        let (vq0, vq1) = match vq_vecs {
+                            Some(v) => v,
+                            None => {
+                                let z = _mm256_set1_epi64x(q_w0 as i64);
+                                let v = (z, z);
+                                vq_vecs = Some(v);
+                                v
+                            }
+                        };
+                        let (mut vr0, mut vr1) = match vr_vecs {
+                            Some(v) if !r_uni => v,
+                            _ => {
+                                let rz = _mm256_set1_epi64x(r_w0 as i64);
+                                (rz, rz)
+                            }
+                        };
+                        r_uni = false;
+                        let b_ptr = anchor_phases[idx].as_ptr().cast::<__m256i>();
+                        let vb0 = _mm256_loadu_si256(b_ptr);
+                        let vb1 = _mm256_loadu_si256(b_ptr.add(1));
                         let b_or = _mm256_or_si256(vb0, vb1);
                         let coh = if q_nonzero && _mm256_testz_si256(b_or, b_or) == 0 {
                             avx2_coherence_from_diff_vec64(
@@ -4945,21 +5031,33 @@ pub fn branchless_q7_gravity_fold_64(
                             let is_better = grav_pull > best_pull;
                             let total_w = running_pull + grav_pull;
                             if running_pull <= 1.0e-12 {
-                                vr0 = vb0;
-                                vr1 = vb1;
-                            } else {
-                                let ratio_f32 = branchless_clamp_f32(
-                                    (grav_pull * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
-                                    0.0,
-                                    128.0,
-                                );
-                                let s = (ratio_f32 as u8) as u64;
-                                if s >= 128 {
-                                    vr0 = vb0;
-                                    vr1 = vb1;
-                                } else if s > 0 {
-                                    (vr0, vr1) = avx2_slerp_vec64(vr0, vr1, vb0, vb1, s);
+                                if b_uni {
+                                    r_w0 = b_w[0];
+                                    r_uni = true;
+                                } else {
+                                    vr_vecs = Some((vb0, vb1));
                                 }
+                            } else {
+                                let vd0 = _mm256_sub_epi8(vb0, vr0);
+                                let vd1 = _mm256_sub_epi8(vb1, vr1);
+                                let diff_or = _mm256_or_si256(vd0, vd1);
+                                if _mm256_testz_si256(diff_or, diff_or) == 0 {
+                                    let ratio_f32 = branchless_clamp_f32(
+                                        (grav_pull * fast_inv_pos_normal_f32(total_w)) * 128.0
+                                            + 0.5,
+                                        0.0,
+                                        128.0,
+                                    );
+                                    let s = (ratio_f32 as u8) as u64;
+                                    if s >= 128 {
+                                        vr0 = vb0;
+                                        vr1 = vb1;
+                                    } else if s > 0 {
+                                        (vr0, vr1) =
+                                            avx2_slerp_from_diff_vec64(vr0, vr1, vd0, vd1, s);
+                                    }
+                                }
+                                vr_vecs = Some((vr0, vr1));
                             }
                             running_pull = total_w;
                             weighted_coh_sum += grav_pull * coh;
@@ -4967,117 +5065,135 @@ pub fn branchless_q7_gravity_fold_64(
                             dominant_idx =
                                 branchless_select_u32(is_better, idx as u32, dominant_idx);
                             active_count = active_count.wrapping_add(1);
+                        } else {
+                            vr_vecs = Some((vr0, vr1));
                         }
                     }
-                    idx += 1;
                 }
-                let out_w = avx2_vec64_to_words64(vr0, vr1);
-                store_q7_words_64(folded_phases_out, &out_w);
-                let has_pull = (active_count > 0) & (running_pull > 1.0e-12);
-                let inv_pull =
-                    fast_inv_pos_normal_f32(branchless_select_f32(has_pull, running_pull, 1.0));
-                let mean_coh = branchless_select_f32(
-                    has_pull,
-                    branchless_clamp_f32(weighted_coh_sum * inv_pull, -1.0, 1.0),
-                    0.0,
-                );
-                (
-                    branchless_flush_subnormal_f32(running_pull),
-                    mean_coh,
-                    dominant_idx,
-                    active_count,
-                )
+                idx += 1;
+            }
+            let out_w = if r_uni {
+                [r_w0; 8]
+            } else if let Some((vr0, vr1)) = vr_vecs {
+                avx2_vec64_to_words64(vr0, vr1)
+            } else {
+                [r_w0; 8]
             };
-        }
+            store_q7_words_64(folded_phases_out, &out_w);
+            let has_pull = (active_count > 0) & (running_pull > 1.0e-12);
+            let inv_pull =
+                fast_inv_pos_normal_f32(branchless_select_f32(has_pull, running_pull, 1.0));
+            let mean_coh = branchless_select_f32(
+                has_pull,
+                branchless_clamp_f32(weighted_coh_sum * inv_pull, -1.0, 1.0),
+                0.0,
+            );
+            (
+                branchless_flush_subnormal_f32(running_pull),
+                mean_coh,
+                dominant_idx,
+                active_count,
+            )
+        };
     }
-    let q = load_q7_words_64(query_phases);
-    let q_is_uniform = is_word_array_uniform_64(&q);
-    let q_nonzero = if q_is_uniform {
-        q[0] != 0
-    } else {
-        (((q[0] | q[1]) | (q[2] | q[3])) | ((q[4] | q[5]) | (q[6] | q[7]))) != 0
-    };
-    let mut r = q;
-    let mut r_is_uniform = q_is_uniform;
-    let mut running_pull = 0.0_f32;
-    let mut weighted_coh_sum = 0.0_f32;
-    let mut best_pull = 0.0_f32;
-    let mut dominant_idx = 0u32;
-    let mut active_count = 0u32;
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    {
+        let q = load_q7_words_64(query_phases);
+        let q_is_uniform = is_word_array_uniform_64(&q);
+        let q_nonzero = if q_is_uniform {
+            q[0] != 0
+        } else {
+            (((q[0] | q[1]) | (q[2] | q[3])) | ((q[4] | q[5]) | (q[6] | q[7]))) != 0
+        };
+        let mut r = q;
+        let mut r_is_uniform = q_is_uniform;
+        let mut running_pull = 0.0_f32;
+        let mut weighted_coh_sum = 0.0_f32;
+        let mut best_pull = 0.0_f32;
+        let mut dominant_idx = 0u32;
+        let mut active_count = 0u32;
 
-    let mut idx = 0usize;
-    while idx < count {
-        let mass =
-            branchless_flush_subnormal_f32(branchless_relu_f32(anchor_gravity_masses[idx]));
-        if mass > 1.0e-12 {
-            let b = load_q7_words_64(&anchor_phases[idx]);
-            let b_is_uniform = is_word_array_uniform_64(&b);
-            let b_nonzero = if b_is_uniform {
-                b[0] != 0
-            } else {
-                (((b[0] | b[1]) | (b[2] | b[3])) | ((b[4] | b[5]) | (b[6] | b[7]))) != 0
-            };
-            let coh = if q_nonzero & b_nonzero {
-                coherence_from_word_arrays_with_both_uniform_flags_64(
-                    &q,
-                    q_is_uniform,
-                    &b,
-                    b_is_uniform,
-                )
-            } else {
-                0.0
-            };
-            let grav_pull = branchless_phase_proximity_gravity_f32(mass, coh, softening_eps);
-            if grav_pull > 1.0e-12 {
-                let is_better = grav_pull > best_pull;
-                let total_w = running_pull + grav_pull;
-                if running_pull <= 1.0e-12 {
-                    r = b;
-                    r_is_uniform = b_is_uniform;
+        let mut idx = 0usize;
+        while idx < count {
+            let mass =
+                branchless_flush_subnormal_f32(branchless_relu_f32(anchor_gravity_masses[idx]));
+            if mass > 1.0e-12 {
+                let b = load_q7_words_64(&anchor_phases[idx]);
+                let need_b_uni =
+                    (q_nonzero & q_is_uniform) | (running_pull <= 1.0e-12) | r_is_uniform;
+                let b_is_uniform = if need_b_uni {
+                    is_word_array_uniform_64(&b)
                 } else {
-                    let ratio_f32 = branchless_clamp_f32(
-                        (grav_pull * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
-                        0.0,
-                        128.0,
-                    );
-                    let s = (ratio_f32 as u8) as u64;
-                    let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-                    let (next_r, next_uni) = swar_slerp_words_with_uniform_flag_64(
-                        &r,
-                        r_is_uniform,
+                    false
+                };
+                let b_nonzero = if b_is_uniform {
+                    b[0] != 0
+                } else {
+                    (((b[0] | b[1]) | (b[2] | b[3])) | ((b[4] | b[5]) | (b[6] | b[7]))) != 0
+                };
+                let coh = if q_nonzero & b_nonzero {
+                    coherence_from_word_arrays_with_both_uniform_flags_64(
+                        &q,
+                        q_is_uniform,
                         &b,
                         b_is_uniform,
-                        s,
-                        bias_restore,
-                    );
-                    r = next_r;
-                    r_is_uniform = next_uni;
+                    )
+                } else {
+                    0.0
+                };
+                let grav_pull = branchless_phase_proximity_gravity_f32(mass, coh, softening_eps);
+                if grav_pull > 1.0e-12 {
+                    let is_better = grav_pull > best_pull;
+                    let total_w = running_pull + grav_pull;
+                    if running_pull <= 1.0e-12 {
+                        r = b;
+                        r_is_uniform = b_is_uniform;
+                    } else {
+                        let ratio_f32 = branchless_clamp_f32(
+                            (grav_pull * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
+                            0.0,
+                            128.0,
+                        );
+                        let s = (ratio_f32 as u8) as u64;
+                        let bias_restore =
+                            (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+                        let (next_r, next_uni) = swar_slerp_words_with_uniform_flag_64(
+                            &r,
+                            r_is_uniform,
+                            &b,
+                            b_is_uniform,
+                            s,
+                            bias_restore,
+                        );
+                        r = next_r;
+                        r_is_uniform = next_uni;
+                    }
+
+                    running_pull = total_w;
+                    weighted_coh_sum += grav_pull * coh;
+                    best_pull = branchless_select_f32(is_better, grav_pull, best_pull);
+                    dominant_idx = branchless_select_u32(is_better, idx as u32, dominant_idx);
+                    active_count = active_count.wrapping_add(1);
                 }
-
-                running_pull = total_w;
-                weighted_coh_sum += grav_pull * coh;
-                best_pull = branchless_select_f32(is_better, grav_pull, best_pull);
-                dominant_idx = branchless_select_u32(is_better, idx as u32, dominant_idx);
-                active_count = active_count.wrapping_add(1);
             }
+            idx += 1;
         }
-        idx += 1;
-    }
 
-    store_q7_words_64(folded_phases_out, &r);
-    let has_pull = running_pull > 1.0e-12;
-    let inv_pull = fast_inv_pos_normal_f32(branchless_select_f32(has_pull, running_pull, 1.0));
-    let mean_coh = branchless_select_f32(
-        has_pull,
-        branchless_clamp_f32(weighted_coh_sum * inv_pull, -1.0, 1.0),
-        0.0,
-    );
-    (
-        branchless_flush_subnormal_f32(running_pull),
-        mean_coh,
-        dominant_idx,
-        active_count,
-    )
+        store_q7_words_64(folded_phases_out, &r);
+        let has_pull = running_pull > 1.0e-12;
+        let inv_pull = fast_inv_pos_normal_f32(branchless_select_f32(has_pull, running_pull, 1.0));
+        let mean_coh = branchless_select_f32(
+            has_pull,
+            branchless_clamp_f32(weighted_coh_sum * inv_pull, -1.0, 1.0),
+            0.0,
+        );
+        (
+            branchless_flush_subnormal_f32(running_pull),
+            mean_coh,
+            dominant_idx,
+            active_count,
+        )
+    }
 }
 
 /// Evaluates the conditional transition coherence $\mathcal{C}_{\mathrm{phase}}(M_{t-1}, M_t) \in [-1.0, 1.0]$
@@ -5209,9 +5325,19 @@ pub fn modulate_attention_scores_by_phase_bank_64(
     let eff_scale =
         branchless_flush_subnormal_f32(branchless_relu_f32(interference_gain) * rsqrt_d);
 
+    let q_w0 = q[0];
+    let q_b0 = (q_w0 & 0xFF) as u8;
+    let q_is_byte_uniform = q_is_uniform & (q_w0 == q_w0.rotate_right(8));
     let mut coh_sum = 0.0_f32;
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    let (vq0, vq1) = unsafe { avx2_words64_to_vec64_with_uniform(&q, q_is_uniform) };
+    let mut vq_vecs: Option<(
+        core::arch::x86_64::__m256i,
+        core::arch::x86_64::__m256i,
+    )> = if q_is_uniform {
+        None
+    } else {
+        Some(unsafe { avx2_words64_to_vec64_with_uniform(&q, false) })
+    };
     for (score_slot, key_p) in attention_scores[..count]
         .iter_mut()
         .zip(key_anchor_phases[..count].iter())
@@ -5221,11 +5347,29 @@ pub fn modulate_attention_scores_by_phase_bank_64(
             if q_is_uniform {
                 let kw = load_q7_words_64(key_p);
                 if is_word_array_uniform_64(&kw) {
-                    coherence_from_word_arrays_with_both_uniform_flags_64(&q, true, &kw, true)
+                    let kw0 = kw[0];
+                    if kw0 == q_w0 {
+                        1.0
+                    } else if q_is_byte_uniform && (kw0 == kw0.rotate_right(8)) {
+                        Q7_FULL_COS_REF[q_b0.wrapping_sub(kw0 as u8) as usize]
+                    } else {
+                        coherence_from_word_arrays_with_both_uniform_flags_64(&q, true, &kw, true)
+                    }
                 } else {
                     unsafe {
-                        use core::arch::x86_64::_mm256_sub_epi8;
-                        let (vk0, vk1) = avx2_words64_to_vec64(&kw);
+                        use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_set1_epi64x, _mm256_sub_epi8};
+                        let (vq0, vq1) = match vq_vecs {
+                            Some(v) => v,
+                            None => {
+                                let z = _mm256_set1_epi64x(q_w0 as i64);
+                                let v = (z, z);
+                                vq_vecs = Some(v);
+                                v
+                            }
+                        };
+                        let kp = key_p.as_ptr().cast::<__m256i>();
+                        let vk0 = _mm256_loadu_si256(kp);
+                        let vk1 = _mm256_loadu_si256(kp.add(1));
                         avx2_coherence_from_diff_vec64(
                             _mm256_sub_epi8(vq0, vk0),
                             _mm256_sub_epi8(vq1, vk1),
@@ -5233,10 +5377,12 @@ pub fn modulate_attention_scores_by_phase_bank_64(
                     }
                 }
             } else {
-                let kw = load_q7_words_64(key_p);
                 unsafe {
-                    use core::arch::x86_64::_mm256_sub_epi8;
-                    let (vk0, vk1) = avx2_words64_to_vec64(&kw);
+                    use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
+                    let (vq0, vq1) = vq_vecs.unwrap_or_else(|| avx2_words64_to_vec64_with_uniform(&q, false));
+                    let kp = key_p.as_ptr().cast::<__m256i>();
+                    let vk0 = _mm256_loadu_si256(kp);
+                    let vk1 = _mm256_loadu_si256(kp.add(1));
                     avx2_coherence_from_diff_vec64(
                         _mm256_sub_epi8(vq0, vk0),
                         _mm256_sub_epi8(vq1, vk1),
@@ -5245,11 +5391,21 @@ pub fn modulate_attention_scores_by_phase_bank_64(
             }
         };
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-        let coh = coherence_from_word_arrays_with_uniform_flag_64(
-            &q,
-            q_is_uniform,
-            &load_q7_words_64(key_p),
-        );
+        let coh = {
+            let kw = load_q7_words_64(key_p);
+            if q_is_uniform && is_word_array_uniform_64(&kw) {
+                let kw0 = kw[0];
+                if kw0 == q_w0 {
+                    1.0
+                } else if q_is_byte_uniform && (kw0 == kw0.rotate_right(8)) {
+                    Q7_FULL_COS_REF[q_b0.wrapping_sub(kw0 as u8) as usize]
+                } else {
+                    coherence_from_word_arrays_with_both_uniform_flags_64(&q, true, &kw, true)
+                }
+            } else {
+                coherence_from_word_arrays_with_both_uniform_flags_64(&q, q_is_uniform, &kw, false)
+            }
+        };
         *score_slot = branchless_flush_subnormal_f32(*score_slot + eff_scale * coh);
         coh_sum += coh;
     }
@@ -5281,8 +5437,18 @@ pub fn modulate_attention_scores_by_bayesian_trails_64(
 
     let q = load_q7_words_64(query_phases);
     let q_is_uniform = is_word_array_uniform_64(&q);
+    let q_w0 = q[0];
+    let q_b0 = (q_w0 & 0xFF) as u8;
+    let q_is_byte_uniform = q_is_uniform & (q_w0 == q_w0.rotate_right(8));
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    let (vq0, vq1) = unsafe { avx2_words64_to_vec64_with_uniform(&q, q_is_uniform) };
+    let mut vq_vecs: Option<(
+        core::arch::x86_64::__m256i,
+        core::arch::x86_64::__m256i,
+    )> = if q_is_uniform {
+        None
+    } else {
+        Some(unsafe { avx2_words64_to_vec64_with_uniform(&q, false) })
+    };
     let safe_dim = branchless_select_u32(head_dim > 0, head_dim, 128);
     let rsqrt_d = if safe_dim <= 256 {
         POPCOUNT_RSQRT_LUT_257_REF[safe_dim as usize]
@@ -5308,11 +5474,29 @@ pub fn modulate_attention_scores_by_bayesian_trails_64(
             if q_is_uniform {
                 let kw = load_q7_words_64(&key_anchor_phases[idx]);
                 if is_word_array_uniform_64(&kw) {
-                    coherence_from_word_arrays_with_both_uniform_flags_64(&q, true, &kw, true)
+                    let kw0 = kw[0];
+                    if kw0 == q_w0 {
+                        1.0
+                    } else if q_is_byte_uniform && (kw0 == kw0.rotate_right(8)) {
+                        Q7_FULL_COS_REF[q_b0.wrapping_sub(kw0 as u8) as usize]
+                    } else {
+                        coherence_from_word_arrays_with_both_uniform_flags_64(&q, true, &kw, true)
+                    }
                 } else {
                     unsafe {
-                        use core::arch::x86_64::_mm256_sub_epi8;
-                        let (vk0, vk1) = avx2_words64_to_vec64(&kw);
+                        use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_set1_epi64x, _mm256_sub_epi8};
+                        let (vq0, vq1) = match vq_vecs {
+                            Some(v) => v,
+                            None => {
+                                let z = _mm256_set1_epi64x(q_w0 as i64);
+                                let v = (z, z);
+                                vq_vecs = Some(v);
+                                v
+                            }
+                        };
+                        let kp = key_anchor_phases[idx].as_ptr().cast::<__m256i>();
+                        let vk0 = _mm256_loadu_si256(kp);
+                        let vk1 = _mm256_loadu_si256(kp.add(1));
                         avx2_coherence_from_diff_vec64(
                             _mm256_sub_epi8(vq0, vk0),
                             _mm256_sub_epi8(vq1, vk1),
@@ -5320,10 +5504,12 @@ pub fn modulate_attention_scores_by_bayesian_trails_64(
                     }
                 }
             } else {
-                let kw = load_q7_words_64(&key_anchor_phases[idx]);
                 unsafe {
-                    use core::arch::x86_64::_mm256_sub_epi8;
-                    let (vk0, vk1) = avx2_words64_to_vec64(&kw);
+                    use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
+                    let (vq0, vq1) = vq_vecs.unwrap_or_else(|| avx2_words64_to_vec64_with_uniform(&q, false));
+                    let kp = key_anchor_phases[idx].as_ptr().cast::<__m256i>();
+                    let vk0 = _mm256_loadu_si256(kp);
+                    let vk1 = _mm256_loadu_si256(kp.add(1));
                     avx2_coherence_from_diff_vec64(
                         _mm256_sub_epi8(vq0, vk0),
                         _mm256_sub_epi8(vq1, vk1),
@@ -5332,11 +5518,21 @@ pub fn modulate_attention_scores_by_bayesian_trails_64(
             }
         };
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-        let coh = coherence_from_word_arrays_with_uniform_flag_64(
-            &q,
-            q_is_uniform,
-            &load_q7_words_64(&key_anchor_phases[idx]),
-        );
+        let coh = {
+            let kw = load_q7_words_64(&key_anchor_phases[idx]);
+            if q_is_uniform && is_word_array_uniform_64(&kw) {
+                let kw0 = kw[0];
+                if kw0 == q_w0 {
+                    1.0
+                } else if q_is_byte_uniform && (kw0 == kw0.rotate_right(8)) {
+                    Q7_FULL_COS_REF[q_b0.wrapping_sub(kw0 as u8) as usize]
+                } else {
+                    coherence_from_word_arrays_with_both_uniform_flags_64(&q, true, &kw, true)
+                }
+            } else {
+                coherence_from_word_arrays_with_both_uniform_flags_64(&q, q_is_uniform, &kw, false)
+            }
+        };
         let attn_delta = branchless_flush_subnormal_f32(eff_interf_scale * coh);
         let clean_rho = branchless_clamp_f32(
             branchless_flush_subnormal_f32(branchless_relu_f32(key_stigmergic_densities[idx])),

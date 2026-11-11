@@ -1317,8 +1317,9 @@ impl RuntimeContext {
                                 &*(bank_2d[idx].as_ptr()
                                     as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
                             };
-                            let slot_is_uniform = crate::traits::is_word_array_uniform_64(slot_w);
-                            if (!slot_is_uniform) | (slot_w[0] != 0) {
+                            if crate::traits::swar_words_nonzero_64(slot_w) {
+                                let slot_is_uniform =
+                                    crate::traits::is_word_array_uniform_64(slot_w);
                                 let coh = if init_nonzero {
                                     coherence_from_word_arrays_with_both_uniform_flags_64(
                                         &init_w,

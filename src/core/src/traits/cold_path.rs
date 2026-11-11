@@ -2577,17 +2577,14 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
 
         for delta in pcache_motion_deltas {
             let dw = load_q7_words_64(delta);
-            let next_w = [
-                swar_q7_circular_add_x8(cur_w[0], dw[0]),
-                swar_q7_circular_add_x8(cur_w[1], dw[1]),
-                swar_q7_circular_add_x8(cur_w[2], dw[2]),
-                swar_q7_circular_add_x8(cur_w[3], dw[3]),
-                swar_q7_circular_add_x8(cur_w[4], dw[4]),
-                swar_q7_circular_add_x8(cur_w[5], dw[5]),
-                swar_q7_circular_add_x8(cur_w[6], dw[6]),
-                swar_q7_circular_add_x8(cur_w[7], dw[7]),
-            ];
-            let (coh, log_p) = branchless_q7_transition_log_prob_words_64(&cur_w, &next_w);
+            // Because `next_w = cur_w (+) dw` in Z_256^64 and cos(-d) = cos(d), the transition
+            // coherence C(cur_w, next_w) depends purely on `dw` against zero, avoiding a
+            // tentative 8-word addition + 8-word subtraction before checking repulsion.
+            let coh = super::branchless::coherence_from_diff_words_64(
+                dw[0], dw[1], dw[2], dw[3], dw[4], dw[5], dw[6], dw[7],
+            );
+            let cond_prob = branchless_clamp_f32(0.5 * (1.0 + coh), DEFAULT_ENTROPY_EPS, 1.0);
+            let log_p = branchless_flush_subnormal_f32(super::branchless::branchless_ln_f32(cond_prob));
             if coh < -safe_thresh {
                 cur_w = [
                     swar_q7_circular_add_x8(cur_w[0], swar_q7_neg_sat_x8(dw[0])),
@@ -2601,7 +2598,16 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
                 ];
                 repulsed_count = repulsed_count.wrapping_add(1);
             } else {
-                cur_w = next_w;
+                cur_w = [
+                    swar_q7_circular_add_x8(cur_w[0], dw[0]),
+                    swar_q7_circular_add_x8(cur_w[1], dw[1]),
+                    swar_q7_circular_add_x8(cur_w[2], dw[2]),
+                    swar_q7_circular_add_x8(cur_w[3], dw[3]),
+                    swar_q7_circular_add_x8(cur_w[4], dw[4]),
+                    swar_q7_circular_add_x8(cur_w[5], dw[5]),
+                    swar_q7_circular_add_x8(cur_w[6], dw[6]),
+                    swar_q7_circular_add_x8(cur_w[7], dw[7]),
+                ];
             }
             joint_log_prob += log_p;
         }

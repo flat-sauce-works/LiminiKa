@@ -512,9 +512,10 @@ fn bridge_and_eval_liminal_trail_chain_single_pass(
                             }
                         }
                     };
+                let mut stored_ow = [0u64; 8];
                 if store_out {
-                    *trail_phase_words_mut(curr_trail) =
-                        crate::traits::branchless::avx2_vec64_to_words64(v_out0, v_out1);
+                    stored_ow = crate::traits::branchless::avx2_vec64_to_words64(v_out0, v_out1);
+                    *trail_phase_words_mut(curr_trail) = stored_ow;
                 }
 
                 curr_trail.prev_ptr = prev_cur_ptr;
@@ -581,8 +582,7 @@ fn bridge_and_eval_liminal_trail_chain_single_pass(
                         );
 
                 if contradiction {
-                    let ow = crate::traits::branchless::avx2_vec64_to_words64(v_out0, v_out1);
-                    bloom_filter.insert_repulsive_pattern_words_weighted(&ow, 1);
+                    bloom_filter.insert_repulsive_pattern_words_weighted(&stored_ow, 1);
                     repulsed_count = repulsed_count.wrapping_add(1);
                 }
 
@@ -651,24 +651,30 @@ fn bridge_and_eval_liminal_trail_chain_single_pass(
                 if (s[0] == prev_w[0]) && swar_words_equal_64(&s, &prev_w) {
                     (1.0_f32, false, s, prev_is_uniform, 1.0_f32)
                 } else {
-                    let d0 = swar_q7_circular_diff_x8(s[0], prev_w[0]);
-                    let d1 = swar_q7_circular_diff_x8(s[1], prev_w[1]);
-                    let d2 = swar_q7_circular_diff_x8(s[2], prev_w[2]);
-                    let d3 = swar_q7_circular_diff_x8(s[3], prev_w[3]);
-                    let d4 = swar_q7_circular_diff_x8(s[4], prev_w[4]);
-                    let d5 = swar_q7_circular_diff_x8(s[5], prev_w[5]);
-                    let d6 = swar_q7_circular_diff_x8(s[6], prev_w[6]);
-                    let d7 = swar_q7_circular_diff_x8(s[7], prev_w[7]);
                     let s_is_uniform = is_word_array_uniform_64(&s);
                     let both_uni = prev_is_uniform && s_is_uniform;
-                    let diff_is_uniform = both_uni
-                        || ((d0 == d1)
-                            && ((((d0 ^ d2) | (d0 ^ d3)) | ((d0 ^ d4) | (d0 ^ d5)))
-                                | ((d0 ^ d6) | (d0 ^ d7)))
-                                == 0);
+                    let d0 = swar_q7_circular_diff_x8(s[0], prev_w[0]);
+                    let (d1, d2, d3, d4, d5, d6, d7, diff_is_uniform) = if both_uni {
+                        (d0, d0, d0, d0, d0, d0, d0, true)
+                    } else {
+                        let w1 = swar_q7_circular_diff_x8(s[1], prev_w[1]);
+                        let w2 = swar_q7_circular_diff_x8(s[2], prev_w[2]);
+                        let w3 = swar_q7_circular_diff_x8(s[3], prev_w[3]);
+                        let w4 = swar_q7_circular_diff_x8(s[4], prev_w[4]);
+                        let w5 = swar_q7_circular_diff_x8(s[5], prev_w[5]);
+                        let w6 = swar_q7_circular_diff_x8(s[6], prev_w[6]);
+                        let w7 = swar_q7_circular_diff_x8(s[7], prev_w[7]);
+                        let d_uni = (d0 == w1)
+                            && ((((d0 ^ w2) | (d0 ^ w3)) | ((d0 ^ w4) | (d0 ^ w5)))
+                                | ((d0 ^ w6) | (d0 ^ w7)))
+                                == 0;
+                        (w1, w2, w3, w4, w5, w6, w7, d_uni)
+                    };
                     let diff_is_byte_uniform = diff_is_uniform && (d0 == d0.rotate_right(8));
                     let pre_c = if diff_is_byte_uniform {
                         branchless_cos_q7(d0 as gcso_q7_t)
+                    } else if diff_is_uniform {
+                        crate::traits::branchless::coherence_from_uniform_diff_word_x8(d0)
                     } else {
                         coherence_from_diff_words_64(d0, d1, d2, d3, d4, d5, d6, d7)
                     };

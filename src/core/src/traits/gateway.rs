@@ -2981,9 +2981,10 @@ impl CrystallizedAttractorRecord {
         let sample_is_byte_uniform =
             sample_is_uniform & (sample_w0 == sample_w0.rotate_right(8));
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-        let (va0, va1) = unsafe {
-            super::branchless::avx2_words64_to_vec64_with_uniform(sample_words, sample_is_uniform)
-        };
+        let mut va_vecs: Option<(
+            core::arch::x86_64::__m256i,
+            core::arch::x86_64::__m256i,
+        )> = None;
         let mut best_idx = 0usize;
         let mut best_coh = -2.0_f32;
         let mut best_mass = 0.0_f32;
@@ -3039,6 +3040,17 @@ impl CrystallizedAttractorRecord {
                                 // 4-to-1 narrow-store-to-wide-load STLF stalls.
                                 unsafe {
                                     use core::arch::x86_64::_mm256_sub_epi8;
+                                    let (va0, va1) = match va_vecs {
+                                        Some(v) => v,
+                                        None => {
+                                            let v = super::branchless::avx2_words64_to_vec64_with_uniform(
+                                                sample_words,
+                                                sample_is_uniform,
+                                            );
+                                            va_vecs = Some(v);
+                                            v
+                                        }
+                                    };
                                     let (vb0, vb1) =
                                         super::branchless::avx2_words64_to_vec64_with_uniform(
                                             cw, c_uni,
@@ -3101,6 +3113,17 @@ impl CrystallizedAttractorRecord {
                                 // SAFETY: `rec.phase_profile` is 64-byte aligned and AVX2 is enabled.
                                 unsafe {
                                     use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
+                                    let (va0, va1) = match va_vecs {
+                                        Some(v) => v,
+                                        None => {
+                                            let v = super::branchless::avx2_words64_to_vec64_with_uniform(
+                                                sample_words,
+                                                sample_is_uniform,
+                                            );
+                                            va_vecs = Some(v);
+                                            v
+                                        }
+                                    };
                                     let ptr = rec.phase_profile.as_ptr().cast::<__m256i>();
                                     let vb0 = _mm256_loadu_si256(ptr);
                                     let vb1 = _mm256_loadu_si256(ptr.add(1));
@@ -3212,24 +3235,6 @@ impl CrystallizedAttractorRecord {
             weakest_idx,
             any_active,
         )
-    }
-
-    #[inline(always)]
-    #[must_use]
-    fn find_nearest_toroidal_centroid_words_and_profile_64(
-        centroids: &[Self],
-        sample_words: &[u64; NUM_SWARM_MICRO_CELLS],
-    ) -> (
-        usize,
-        f32,
-        f32,
-        Option<usize>,
-        usize,
-        [u64; NUM_SWARM_MICRO_CELLS],
-    ) {
-        let (best_idx, best_coh, best_mass, first_empty, weakest_idx, best_w, _, _, _) =
-            Self::find_nearest_toroidal_centroid_with_cache_64(centroids, sample_words, None);
-        (best_idx, best_coh, best_mass, first_empty, weakest_idx, best_w)
     }
 
     /// **Classical Online Toroidal $k$-Means E-Step ($\mathcal{O}(K)$ 64-Bit SWAR Nearest-Centroid Search)**:
@@ -4466,9 +4471,10 @@ impl CrystallizedAttractorRecord {
         let trail_is_byte_uniform =
             trail_is_uniform & (trail_w0 == trail_w0.rotate_right(8));
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-        let (va0, va1) = unsafe {
-            super::branchless::avx2_words64_to_vec64_with_uniform(&trail_w, trail_is_uniform)
-        };
+        let mut va_vecs: Option<(
+            core::arch::x86_64::__m256i,
+            core::arch::x86_64::__m256i,
+        )> = None;
         let mut byte_uni1 = false;
         let mut idx2 = 0usize;
         let mut coh2 = -2.0_f32;
@@ -4531,6 +4537,17 @@ impl CrystallizedAttractorRecord {
                     let c_val = {
                         unsafe {
                             use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
+                            let (va0, va1) = match va_vecs {
+                                Some(v) => v,
+                                None => {
+                                    let v = super::branchless::avx2_words64_to_vec64_with_uniform(
+                                        &trail_w,
+                                        trail_is_uniform,
+                                    );
+                                    va_vecs = Some(v);
+                                    v
+                                }
+                            };
                             let ptr = rec.phase_profile.as_ptr().cast::<__m256i>();
                             let vb0 = _mm256_loadu_si256(ptr);
                             let vb1 = _mm256_loadu_si256(ptr.add(1));
@@ -4745,8 +4762,17 @@ impl CrystallizedAttractorRecord {
         head_dim: u32, phase_interference_gain: f32, stigmergic_prior_gain: f32, pointer_link_bonus: f32,
         cluster_bonus_gain: f32, contradiction_threshold: f32) -> (usize, u32, f32, f32, bool) {
         let self_w = *trail_phase_words_ref(src_trail);
-        let (win_k, _win_coh, _win_grav, _empty_opt, _weak_idx, win_w) =
-            Self::find_nearest_toroidal_centroid_words_and_profile_64(centroids, &self_w);
+        let (
+            win_k,
+            _win_coh,
+            _win_grav,
+            _empty_opt,
+            _weak_idx,
+            win_w,
+            self_is_uniform,
+            win_uni_from_estep,
+            _,
+        ) = Self::find_nearest_toroidal_centroid_with_cache_64(centroids, &self_w, None);
         let has_win_centroid = !centroids.is_empty() && centroids[win_k].sample_count > 0;
 
         let macro_anchor_id = if has_win_centroid {
@@ -4778,7 +4804,6 @@ impl CrystallizedAttractorRecord {
         let clean_cluster_bonus = branchless_flush_subnormal_f32(branchless_relu_f32(cluster_bonus_gain));
         let safe_thresh = branchless_clamp_f32(branchless_abs_f32(contradiction_threshold), 0.0, 1.0);
         let cur_linked_id = src_trail.linked_trail_id;
-        let self_is_uniform = is_word_array_uniform_64(&self_w);
         let self_w0 = self_w[0];
         let self_b0 = (self_w0 & 0xFF) as u8;
         let self_is_byte_uniform =
@@ -4867,6 +4892,8 @@ impl CrystallizedAttractorRecord {
                         win_eq_self = swar_words_equal_64(&self_w, &win_w);
                         win_is_uniform = if win_eq_self {
                             self_is_uniform
+                        } else if self_is_uniform {
+                            win_uni_from_estep
                         } else {
                             is_word_array_uniform_64(&win_w)
                         };
@@ -5011,7 +5038,7 @@ impl CrystallizedAttractorRecord {
             unsafe {
                 use core::arch::x86_64::{
                     __m256i, _mm256_loadu_si256, _mm256_or_si256, _mm256_set1_epi64x,
-                    _mm256_sub_epi8, _mm256_testz_si256, _mm256_xor_si256,
+                    _mm256_sub_epi8, _mm256_testz_si256,
                 };
                 let mut init_vecs: Option<(__m256i, __m256i)> = if init_is_uniform {
                     None
@@ -5150,10 +5177,9 @@ impl CrystallizedAttractorRecord {
                                         acc_vecs = Some((acc_v0, acc_v1));
                                     }
                                 } else {
-                                    let diff_or = _mm256_or_si256(
-                                        _mm256_xor_si256(acc_v0, rv0),
-                                        _mm256_xor_si256(acc_v1, rv1),
-                                    );
+                                    let diff0 = _mm256_sub_epi8(rv0, acc_v0);
+                                    let diff1 = _mm256_sub_epi8(rv1, acc_v1);
+                                    let diff_or = _mm256_or_si256(diff0, diff1);
                                     if _mm256_testz_si256(diff_or, diff_or) == 0 {
                                         let safe_tot =
                                             branchless_select_f32(new_tot > 1.0e-12, new_tot, 1.0);
@@ -5167,7 +5193,9 @@ impl CrystallizedAttractorRecord {
                                             acc_v1 = rv1;
                                         } else if s_u64 > 0 {
                                             (acc_v0, acc_v1) =
-                                                avx2_slerp_vec64(acc_v0, acc_v1, rv0, rv1, s_u64);
+                                                super::branchless::avx2_slerp_from_diff_vec64(
+                                                    acc_v0, acc_v1, diff0, diff1, s_u64,
+                                                );
                                         }
                                     }
                                     acc_vecs = Some((acc_v0, acc_v1));

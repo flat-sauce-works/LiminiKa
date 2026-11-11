@@ -2024,8 +2024,12 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
             };
             let p_words = *trail_phase_words_ref(prev_memory_trail);
             let s_words = *trail_phase_words_ref(curr_trail);
-            let (vp0, vp1) = crate::traits::branchless::avx2_words64_to_vec64(&p_words);
-            let (vs0, vs1) = crate::traits::branchless::avx2_words64_to_vec64(&s_words);
+            let p_uni = is_word_array_uniform_64(&p_words);
+            let s_uni = is_word_array_uniform_64(&s_words);
+            let (vp0, vp1) =
+                crate::traits::branchless::avx2_words64_to_vec64_with_uniform(&p_words, p_uni);
+            let (vs0, vs1) =
+                crate::traits::branchless::avx2_words64_to_vec64_with_uniform(&s_words, s_uni);
             let vd0 = _mm256_sub_epi8(vs0, vp0);
             let vd1 = _mm256_sub_epi8(vs1, vp1);
             let vd_or = _mm256_or_si256(vd0, vd1);

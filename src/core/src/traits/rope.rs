@@ -99,7 +99,7 @@ use super::branchless::{
     swar_q7_qdps_filter_x8,
     swar_q7_scale_le128_with_bias_x8, swar_q7_scale_le128_x8, swar_q7_scale_u7_x8,
     swar_qdps_filter_q7_slice_in_place,
-    swar_slerp_words_with_bias_64, swar_sub_sat_q7_slices, swar_u8_sum_x8, BranchlessKernel,
+    swar_sub_sat_q7_slices, swar_u8_sum_x8, BranchlessKernel,
     DEFAULT_RIPA_Q7_TO_NORM_SCALE, F32_MIN_POSITIVE_NORMAL, Q7_DEFAULT_RIPA_SINCOS_REF,
     Q7_FULL_COS_I16_REF, Q7_FUSED_SELF_DEFAULT_RIPA_SINCOS_REF,
     Q7_FUSED_SELF_GEODESIC_RIPA_SINCOS_REF, Q7_GEODESIC_DEFAULT_RIPA_SINCOS_REF,
@@ -5039,24 +5039,7 @@ pub trait PhaseSteering: BranchlessKernel {
             );
 
         let step_u8 = branchless_rad_to_qdps_step_u8(min_step_rad);
-        let swar_words = if step_u8 <= 1 {
-            if step_u8 > 127 {
-                [0u64; NUM_SWARM_CELLS]
-            } else {
-                raw_words
-            }
-        } else {
-            [
-                swar_q7_qdps_filter_x8(raw_words[0], step_u8),
-                swar_q7_qdps_filter_x8(raw_words[1], step_u8),
-                swar_q7_qdps_filter_x8(raw_words[2], step_u8),
-                swar_q7_qdps_filter_x8(raw_words[3], step_u8),
-                swar_q7_qdps_filter_x8(raw_words[4], step_u8),
-                swar_q7_qdps_filter_x8(raw_words[5], step_u8),
-                swar_q7_qdps_filter_x8(raw_words[6], step_u8),
-                swar_q7_qdps_filter_x8(raw_words[7], step_u8),
-            ]
-        };
+        let swar_words = swar_q7_qdps_filter_words_64(&raw_words, step_u8);
 
         steer_from_swar_words_core_safe(
             &swar_words,
@@ -5392,22 +5375,42 @@ pub trait PhaseSteering: BranchlessKernel {
 
         let wa = load_q7_words_64(a_arr);
         let wb = load_q7_words_64(b_arr);
-        let swar_words = {
-            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-            {
-                if s == 0 {
-                    swar_q7_qdps_filter_words_64(&wa, step_u8)
-                } else if s >= 128 {
-                    swar_q7_qdps_filter_words_64(&wb, step_u8)
-                } else if is_word_array_uniform_64(&wa) && is_word_array_uniform_64(&wb) {
-                    let slerped = swar_slerp_words_with_bias_64(&wa, &wb, s, bias_restore);
-                    swar_q7_qdps_filter_words_64(&slerped, step_u8)
+        let swar_words = if s == 0 {
+            swar_q7_qdps_filter_words_64(&wa, step_u8)
+        } else if s >= 128 {
+            swar_q7_qdps_filter_words_64(&wb, step_u8)
+        } else {
+            let a_uni = is_word_array_uniform_64(&wa);
+            let b_uni = if a_uni {
+                is_word_array_uniform_64(&wb)
+            } else {
+                false
+            };
+            if a_uni & b_uni {
+                let w0 = super::branchless::swar_slerp_word_unchecked_x8(
+                    wa[0],
+                    wb[0],
+                    s,
+                    bias_restore,
+                );
+                let fw0 = if step_u8 <= 1 {
+                    w0
+                } else if step_u8 > 127 {
+                    0
                 } else {
+                    swar_q7_qdps_filter_x8(w0, step_u8)
+                };
+                [fw0; NUM_SWARM_CELLS]
+            } else {
+                #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+                {
                     // SAFETY: `target_feature = "avx2"` is enabled; fuses 64-head geodesic SLERP and QDPS filter in 2 YMM registers.
                     unsafe {
-                        let (va0, va1) = super::branchless::avx2_words64_to_vec64(&wa);
+                        let (va0, va1) =
+                            super::branchless::avx2_words64_to_vec64_with_uniform(&wa, a_uni);
                         let (vb0, vb1) = super::branchless::avx2_words64_to_vec64(&wb);
-                        let (vr0, vr1) = super::branchless::avx2_slerp_vec64(va0, va1, vb0, vb1, s);
+                        let (vr0, vr1) =
+                            super::branchless::avx2_slerp_vec64(va0, va1, vb0, vb1, s);
                         let (vf0, vf1) = if step_u8 <= 1 {
                             (vr0, vr1)
                         } else if step_u8 > 127 {
@@ -5419,11 +5422,12 @@ pub trait PhaseSteering: BranchlessKernel {
                         super::branchless::avx2_vec64_to_words64(vf0, vf1)
                     }
                 }
-            }
-            #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-            {
-                let slerped = swar_slerp_words_with_bias_64(&wa, &wb, s, bias_restore);
-                swar_q7_qdps_filter_words_64(&slerped, step_u8)
+                #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+                {
+                    let slerped =
+                        super::branchless::swar_slerp_words_with_bias_64(&wa, &wb, s, bias_restore);
+                    swar_q7_qdps_filter_words_64(&slerped, step_u8)
+                }
             }
         };
 

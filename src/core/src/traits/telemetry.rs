@@ -612,7 +612,9 @@ const fn precompute_swarm_step_params(
 #[must_use]
 unsafe fn avx2_subswarm_resolve_words_64(
     cur_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    cur_is_uniform: bool,
     tgt_base_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    tgt_is_uniform: bool,
     use_explicit_tgt: bool,
     ptr_phase_splat: u64,
     active_cell_mask: u8,
@@ -635,9 +637,13 @@ unsafe fn avx2_subswarm_resolve_words_64(
         };
         use core::arch::x86_64::_mm256_testz_si256;
         let _ = core::mem::size_of::<__m256i>();
-        let (vc0, vc1) = crate::traits::branchless::avx2_words64_to_vec64(cur_w);
+        let (vc0, vc1) =
+            crate::traits::branchless::avx2_words64_to_vec64_with_uniform(cur_w, cur_is_uniform);
         let (vt0, vt1) = if use_explicit_tgt {
-            crate::traits::branchless::avx2_words64_to_vec64(tgt_base_w)
+            crate::traits::branchless::avx2_words64_to_vec64_with_uniform(
+                tgt_base_w,
+                tgt_is_uniform,
+            )
         } else {
             let v_splat = _mm256_set1_epi64x(ptr_phase_splat as i64);
             (v_splat, v_splat)
@@ -731,7 +737,9 @@ unsafe fn avx2_subswarm_resolve_words_64(
 #[must_use]
 fn swar_subswarm_resolve_words_64(
     cur_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    cur_is_uniform: bool,
     tgt_base_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    tgt_is_uniform: bool,
     use_explicit_tgt: bool,
     ptr_phase_splat: u64,
     active_cell_mask: u8,
@@ -745,7 +753,9 @@ fn swar_subswarm_resolve_words_64(
         return unsafe {
             avx2_subswarm_resolve_words_64(
                 cur_w,
+                cur_is_uniform,
                 tgt_base_w,
+                tgt_is_uniform,
                 use_explicit_tgt,
                 ptr_phase_splat,
                 active_cell_mask,
@@ -755,6 +765,8 @@ fn swar_subswarm_resolve_words_64(
             )
         };
     }
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    let _ = (cur_is_uniform, tgt_is_uniform);
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
         let (gain_s, gain_bias, gain_gt_128, qdps_thresh_x8, qdps_valid_mask) =
@@ -2531,7 +2543,8 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
     ) -> (f32, f32, bool) {
         let p = trail_phase_words_ref(prev_memory_trail);
         let s = trail_phase_words_ref(self);
-        let both_uni = is_word_array_uniform_64(p) && is_word_array_uniform_64(s);
+        let p_uni = is_word_array_uniform_64(p);
+        let both_uni = p_uni && is_word_array_uniform_64(s);
         let d0 = swar_q7_circular_diff_x8(s[0], p[0]);
         let safe_thresh =
             branchless_clamp_f32(branchless_abs_f32(contradiction_threshold), 0.0, 1.0);
@@ -2570,7 +2583,8 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
                         _mm256_max_epi8, _mm256_or_si256, _mm256_set1_epi8, _mm256_setzero_si256,
                         _mm256_sub_epi8, _mm256_testz_si256,
                     };
-                    let (vp0, vp1) = super::branchless::avx2_words64_to_vec64(p);
+                    let (vp0, vp1) =
+                        super::branchless::avx2_words64_to_vec64_with_uniform(p, p_uni);
                     let (vs0, vs1) = super::branchless::avx2_words64_to_vec64(s);
                     let vd0 = _mm256_sub_epi8(vs0, vp0);
                     let vd1 = _mm256_sub_epi8(vs1, vp1);
@@ -3708,43 +3722,62 @@ impl gcso_pointer_trail_t {
         {
             quorum_mask = 0xFF;
             residual_sum = 0;
+        } else if active_cell_mask == 0 {
+            quorum_mask = 0xFF;
+            residual_sum = 0;
         } else {
             let cur_is_uniform = is_word_array_uniform_64(&cur_w);
             let tgt_is_uniform = (!use_explicit_tgt) || is_word_array_uniform_64(&tgt_base_w);
-            if (active_cell_mask == 0xFF) & cur_is_uniform & tgt_is_uniform {
-            let cw0 = cur_w[0];
-            let tw0 = branchless_select_u64(use_explicit_tgt, tgt_base_w[0], ptr_phase_splat);
-            if cw0 == tw0 {
-                quorum_mask = 0xFF;
-                residual_sum = 0;
+            if cur_is_uniform & tgt_is_uniform {
+                let cw0 = cur_w[0];
+                let tw0 = branchless_select_u64(use_explicit_tgt, tgt_base_w[0], ptr_phase_splat);
+                if cw0 == tw0 {
+                    quorum_mask = 0xFF;
+                    residual_sum = 0;
+                } else {
+                    let (gain_s, gain_bias, gain_gt_128, qdps_thresh_x8, qdps_valid_mask) =
+                        precompute_swarm_step_params(step_gain_u7, qdps_min_step_q7);
+                    let (stepped_w0, cell_res, cell_ok) = swar_subswarm_resolve_with_bias_x8(
+                        cw0,
+                        tw0,
+                        gain_s,
+                        gain_bias,
+                        gain_gt_128,
+                        qdps_thresh_x8,
+                        qdps_valid_mask,
+                        tolerance_q7,
+                    );
+                    if active_cell_mask == 0xFF {
+                        next_words = [stepped_w0; NUM_SWARM_MICRO_CELLS];
+                        quorum_mask = branchless_select_u8(cell_ok, 0xFF, 0x00);
+                        residual_sum = u32::from(cell_res) << 3;
+                    } else {
+                        let mut c = 0usize;
+                        while c < NUM_SWARM_MICRO_CELLS {
+                            next_words[c] = branchless_select_u64(
+                                ((active_cell_mask >> c) & 1) != 0,
+                                stepped_w0,
+                                cw0,
+                            );
+                            c += 1;
+                        }
+                        quorum_mask = branchless_select_u8(cell_ok, 0xFF, !active_cell_mask);
+                        residual_sum = u32::from(cell_res) * active_cell_mask.count_ones();
+                    }
+                }
             } else {
-                let (gain_s, gain_bias, gain_gt_128, qdps_thresh_x8, qdps_valid_mask) =
-                    precompute_swarm_step_params(step_gain_u7, qdps_min_step_q7);
-                let (stepped_w0, cell_res, cell_ok) = swar_subswarm_resolve_with_bias_x8(
-                    cw0,
-                    tw0,
-                    gain_s,
-                    gain_bias,
-                    gain_gt_128,
-                    qdps_thresh_x8,
-                    qdps_valid_mask,
+                let (nw, qm, rsum) = swar_subswarm_resolve_words_64(
+                    &cur_w,
+                    cur_is_uniform,
+                    &tgt_base_w,
+                    tgt_is_uniform,
+                    use_explicit_tgt,
+                    ptr_phase_splat,
+                    active_cell_mask,
+                    step_gain_u7,
+                    qdps_min_step_q7,
                     tolerance_q7,
                 );
-                next_words = [stepped_w0; NUM_SWARM_MICRO_CELLS];
-                quorum_mask = branchless_select_u8(cell_ok, 0xFF, 0x00);
-                residual_sum = u32::from(cell_res) << 3;
-            }
-        } else {
-            let (nw, qm, rsum) = swar_subswarm_resolve_words_64(
-                &cur_w,
-                &tgt_base_w,
-                use_explicit_tgt,
-                ptr_phase_splat,
-                active_cell_mask,
-                step_gain_u7,
-                qdps_min_step_q7,
-                tolerance_q7,
-            );
                 next_words = nw;
                 quorum_mask = qm;
                 residual_sum = rsum;
