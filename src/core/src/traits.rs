@@ -12,38 +12,38 @@
 //! (`HotPathObserver` and `ColdPathObserver`)** and the **single composite gateway (`ManifoldGatewaySignal`)**
 //! across a flat 8-submodule DAG:
 //! - **Lv.0 Foundation**:
-//!   - [`primitives`]: C-ABI v0.1.1 (`0x00000101`) constants, [`Pod`] safety contract, branchless
+//!   - `primitives`: C-ABI v0.1.1 (`0x00000101`) constants, [`Pod`] safety contract, branchless
 //!     IEEE 802.3 CRC32, 5-bit `ACTION_MODE_*` & 3-bit working-lane `ATTRACTOR_SLOT_*` tag codecs,
 //!     $8 \times 8$ slot coupling bitmatrix helpers, and lifetime-bound [`FfiHandleRef`] / [`FfiHandleMut`].
-//!   - [`aligned`]: Const-generic [`AlignedSlice`] / [`AlignedSliceMut`] (`16..512`B), $\mathcal{O}(1)$
+//!   - `aligned`: Const-generic [`AlignedSlice`] / [`AlignedSliceMut`] (`16..512`B), $\mathcal{O}(1)$
 //!     2D slot bank & Micro-Swarm chunk accessors, [`DisjointRefMut`] / [`DisjointMutPair`] /
 //!     [`DisjointMutTriple`] (`GCSO_RESTRICT`), and stack-allocated `AlignedBuffer16..512`.
-//!   - [`branchless`]: [`BranchlessKernel`] constant-time marker trait, `#![no_std]` bitwise
+//!   - `branchless`: [`BranchlessKernel`] constant-time marker trait, `#![no_std]` bitwise
 //!     multiplexers, 64B-aligned 256-entry LUT trig, `0-fdiv` `branchless_inv_pos_f32` /
 //!     `branchless_sqrt_f32` / `branchless_rsqrt_f32`, 4/8-lane SWAR Q7 & `u8` algebra,
 //!     64-head Single Unified Attractor Manifold & Bayesian-Attention phase algebra, and
 //!     unified AVX2/SSE2 SIMD kernels ($SO(2)$ rotation, 8-head `sincos`, Procrustes, tree reductions).
 //! - **Lv.1 Pure Capability Lists (Registered into [`ActionHub`])**:
-//!   - [`rope`]: [`PhaseSteering`], [`EntropyGatedPhaseLookup`], [`DynamicLayerSkipper`],
+//!   - `rope`: [`PhaseSteering`], [`EntropyGatedPhaseLookup`], [`DynamicLayerSkipper`],
 //!     [`PspmRouter`], [`SrlAdapter`], and [`VisualAttentionSteering`].
-//!   - [`telemetry`]: [`PagedBitmaskOps`], [`ContrastivePhaseBloomFilter`],
+//!   - `telemetry`: [`PagedBitmaskOps`], [`ContrastivePhaseBloomFilter`],
 //!     [`StigmergicActionPtrOps`], [`StigmergicTrailOps`], [`StigmergicSwarmOps`],
 //!     [`DaesScratchpad`], and [`SwarmResolutionReport`].
-//! - **Lv.2 Micro Observer ([`hot_path`])**:
+//! - **Lv.2 Micro Observer (`hot_path`)**:
 //!   - [`PointerActionHub`], [`SwarmCellChunk`], and blanket-implemented [`HotPathExecutionEngine`] /
 //!     [`HotPathObserver`] / [`FractalCascadeCoordinator`] observing [`ActionHub`] as a constant-time
 //!     $\mathcal{O}(1)$ pointer-to-RoPE execution pipeline over the Single Unified Attractor Manifold.
-//! - **Lv.3 Macro Observer & Composite Gateway ([`cold_path`] & [`gateway`])**:
-//!   - [`cold_path`]: [`EntropyEvaluator`], [`EdbcBranchController`], [`SheafCohomologyEvaluator`],
+//! - **Lv.3 Macro Observer & Composite Gateway (`cold_path` & `gateway`)**:
+//!   - `cold_path`: [`EntropyEvaluator`], [`EdbcBranchController`], [`SheafCohomologyEvaluator`],
 //!     [`HierarchicalTreeTable`], [`AttractorField`], [`MultiDomainAttractorSpace`],
 //!     [`PersonaPatcher`], [`L2pSvdProjector`], [`PprcCache`], [`DnpPacketDispatcher`],
 //!     [`ZimmsStorage`], [`ColdPathTrailCrystalExt`], and blanket-implemented macro coordinators
 //!     ([`ColdPathOrchestrator`], [`ColdPathObserver`], [`AttractorSlotSynergyCoordinator`],
 //!     [`StigmergicCohomologyCoordinator`], [`BottomUpMacroCrystalCoordinator`],
 //!     [`FullStackGcsoEngine`]).
-//!   - [`gateway`]: 2-Origin Supertrait Hierarchy ([`CausalProvenanceSignal`] ->
-//!     [`SystemConstraintSignal`] x [`CognitiveGroundingSignal`] [[`ObjectiveFactSignal`],
-//!     [`SubjectivePersonaSignal`], [`ContradictionGuardSignal`]]), Single Composite Gateway
+//!   - `gateway`: 2-Origin Supertrait Hierarchy ([`CausalProvenanceSignal`] ->
+//!     [`SystemConstraintSignal`] x [`CognitiveGroundingSignal`] \[[`ObjectiveFactSignal`],
+//!     [`SubjectivePersonaSignal`], [`ContradictionGuardSignal`]\]), Single Composite Gateway
 //!     ([`ManifoldGatewaySignal`], [`GatewayFrame`], [`GatewayPhaseSteeringExt`],
 //!     [`ActionHubGatewayExt`]), Classical Online Toroidal $k$-Means / DP-Means Macro Clustering,
 //!     Top-2 Liminal Bifurcation Routing, and `.gcso` 4-section zero-copy crystallized attractor
