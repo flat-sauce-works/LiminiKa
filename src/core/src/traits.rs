@@ -437,6 +437,19 @@ pub(crate) fn fuse_lazy_unwrap_and_qdps_from_words_64(
             <&[gcso_q7_t; MAX_ATTENTION_HEADS]>::try_from(&context_slice[..MAX_ATTENTION_HEADS])
         {
             let c_w = load_q7_words_64(c_arr);
+            if is_word_array_uniform_64(q_w) && is_word_array_uniform_64(&c_w) {
+                let raw0 = if fold_geodesic {
+                    swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(q_w[0], c_w[0]))
+                } else {
+                    swar_q7_sub_sat_x8(q_w[0], c_w[0])
+                };
+                let filt0 = if min_step_q7 <= 1 {
+                    raw0
+                } else {
+                    swar_q7_qdps_filter_x8(raw0, min_step_q7)
+                };
+                return [filt0; NUM_SWARM_MICRO_CELLS];
+            }
             let raw_w = if fold_geodesic {
                 [
                     swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(q_w[0], c_w[0])),

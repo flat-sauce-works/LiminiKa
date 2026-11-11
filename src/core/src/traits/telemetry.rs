@@ -45,10 +45,9 @@ use super::branchless::{
     branchless_is_finite_f32,
     branchless_ln_f32, branchless_max_f32, branchless_min_f32,
     branchless_phase_proximity_gravity_f32, branchless_popcount_rsqrt_u32,
-    branchless_q7_accumulate_64, branchless_q7_bayesian_attention_score_delta_64,
-    branchless_q7_circular_resultant_64, branchless_q7_circular_weighted_step_64,
-    branchless_q7_coherence_64, branchless_q7_inhibit_64,
+    branchless_q7_circular_weighted_step_64,
     branchless_q7_inhibit_words_64, branchless_q7_resonant_pull_64,
+    circular_resultant_from_words_64, coherence_from_word_arrays_64,
     branchless_q7_synergy_fuse_words_64,
     branchless_q7_unified_field_fold_words_with_flags_64,
     branchless_q7_unified_field_fold_words_with_init_weight_64, branchless_relu_f32,
@@ -59,7 +58,6 @@ use super::branchless::{
     fast_inv_len_f32,
     fast_ln_1p_bounded_f32, is_word_array_uniform_64, load_q7_word_at, load_q7_words_64,
     trail_phase_words_mut, trail_phase_words_ref,
-    store_q7_word_at,
     store_q7_words_64, swar_q7_abs_u8_x8, swar_q7_add_sat_x8, swar_q7_avg_round_x8,
     swar_q7_circular_diff_x8, swar_q7_neg_sat_x8, swar_q7_scale_le128_with_bias_x8,
     swar_slerp_words_with_bias_64, swar_slerp_words_with_uniform_flag_64, swar_u8_add_sat_x8,
@@ -2151,7 +2149,16 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
 
     #[inline(always)]
     fn accumulate_phase_vector(&mut self, delta_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) {
-        branchless_q7_accumulate_64(&mut self.accumulated_phase_delta, delta_phases);
+        let d = load_q7_words_64(delta_phases);
+        let w = trail_phase_words_mut(self);
+        w[0] = swar_q7_add_sat_x8(w[0], d[0]);
+        w[1] = swar_q7_add_sat_x8(w[1], d[1]);
+        w[2] = swar_q7_add_sat_x8(w[2], d[2]);
+        w[3] = swar_q7_add_sat_x8(w[3], d[3]);
+        w[4] = swar_q7_add_sat_x8(w[4], d[4]);
+        w[5] = swar_q7_add_sat_x8(w[5], d[5]);
+        w[6] = swar_q7_add_sat_x8(w[6], d[6]);
+        w[7] = swar_q7_add_sat_x8(w[7], d[7]);
     }
 
     #[inline(always)]
@@ -2313,13 +2320,13 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
 
     #[inline(always)]
     fn phase_coherence_with(&self, slot_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> f32 {
-        branchless_q7_coherence_64(&self.accumulated_phase_delta, slot_phases)
+        coherence_from_word_arrays_64(trail_phase_words_ref(self), &load_q7_words_64(slot_phases))
     }
 
     #[inline(always)]
     fn evaluate_trail_circular_stats_and_gravity(&self) -> (f32, gcso_q7_t, f32, f32) {
         let (r_bar, mean_q7, kappa) =
-            branchless_q7_circular_resultant_64(&self.accumulated_phase_delta);
+            circular_resultant_from_words_64(trail_phase_words_ref(self));
         let gravity = branchless_phase_proximity_gravity_f32(
             self.stigmergic_density,
             r_bar,
@@ -2688,18 +2695,29 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         contradiction_threshold: f32,
     ) -> (f32, f32, bool) {
         let is_linked = (self.linked_trail_id != 0) & (self.linked_trail_id == candidate_trail_id);
-        let (coh, total_score) = branchless_q7_bayesian_attention_score_delta_64(
-            &self.accumulated_phase_delta,
-            &candidate_trail.accumulated_phase_delta,
-            candidate_trail.stigmergic_density,
-            is_linked,
+        let (phase_scale, clean_eta, clean_link, safe_thresh) = precompute_bayesian_trail_scales(
             head_dim,
             phase_interference_gain,
             stigmergic_prior_gain,
             pointer_link_bonus,
+            contradiction_threshold,
         );
-        let safe_thresh =
-            branchless_clamp_f32(branchless_abs_f32(contradiction_threshold), 0.0, 1.0);
+        let coh = coherence_from_word_arrays_64(
+            trail_phase_words_ref(self),
+            trail_phase_words_ref(candidate_trail),
+        );
+        let attn_delta = branchless_flush_subnormal_f32(phase_scale * coh);
+        let clean_rho = branchless_clamp_f32(
+            branchless_flush_subnormal_f32(branchless_relu_f32(
+                candidate_trail.stigmergic_density,
+            )),
+            0.0,
+            MAX_STIGMERGIC_DENSITY,
+        );
+        let prior_delta =
+            branchless_flush_subnormal_f32(clean_eta * fast_ln_1p_bounded_f32(clean_rho));
+        let link_delta = branchless_select_f32(is_linked, clean_link, 0.0);
+        let total_score = branchless_flush_subnormal_f32(attn_delta + prior_delta + link_delta);
         let cand_not_repulsed = (candidate_trail.flags & TRAIL_FLAG_REPULSION_ACTIVE) == 0;
         let is_coherent = (coh >= -safe_thresh) & cand_not_repulsed;
         (total_score, coh, is_coherent)
@@ -3037,10 +3055,12 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         inhibitor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         inhibition_strength: f32,
     ) -> f32 {
-        let raw_damped = branchless_q7_inhibit_64(
-            &mut self.accumulated_phase_delta,
-            self.attractor_pull_force,
-            inhibitor_phases,
+        let cur_pull = self.attractor_pull_force;
+        let inh_w = load_q7_words_64(inhibitor_phases);
+        let raw_damped = branchless_q7_inhibit_words_64(
+            trail_phase_words_mut(self),
+            cur_pull,
+            &inh_w,
             inhibition_strength,
         );
         let damped_pull = branchless_min_f32(
@@ -4000,17 +4020,13 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
     #[inline(always)]
     fn extract_subswarm_word(&self, cell_idx: usize) -> u64 {
         let safe_cell = cell_idx & (NUM_SWARM_MICRO_CELLS - 1);
-        load_q7_word_at(&self.accumulated_phase_delta, safe_cell * HEADS_PER_SWARM_CELL)
+        trail_phase_words_ref(self)[safe_cell]
     }
 
     #[inline(always)]
     fn write_subswarm_word(&mut self, cell_idx: usize, word: u64) {
         let safe_cell = cell_idx & (NUM_SWARM_MICRO_CELLS - 1);
-        store_q7_word_at(
-            &mut self.accumulated_phase_delta,
-            safe_cell * HEADS_PER_SWARM_CELL,
-            word,
-        );
+        trail_phase_words_mut(self)[safe_cell] = word;
     }
 
     #[inline(always)]
@@ -4074,11 +4090,12 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
             let (gain_s, gain_bias, gain_gt_128, qdps_thresh_x8, qdps_valid_mask) =
                 precompute_swarm_step_params(eff_gain, qdps_min_step_q7);
 
+            let self_w = trail_phase_words_mut(self);
             while unresolved != 0 {
                 let cell = unresolved.trailing_zeros() as usize;
                 unresolved &= unresolved - 1;
                 let base = cell * HEADS_PER_SWARM_CELL;
-                let cur_w = load_q7_word_at(&self.accumulated_phase_delta, base);
+                let cur_w = self_w[cell];
                 let donor_w = load_q7_word_at(donor_phases, base);
                 let (candidate_w, _res, cell_resolved) = swar_subswarm_resolve_with_bias_x8(
                     cur_w,
@@ -4090,7 +4107,7 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
                     qdps_valid_mask,
                     tolerance_q7,
                 );
-                store_q7_word_at(&mut self.accumulated_phase_delta, base, candidate_w);
+                self_w[cell] = candidate_w;
                 quorum_mask |= (cell_resolved as u8) << cell;
             }
         }
@@ -4190,11 +4207,12 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
             let qdps_thresh_x8 = ((qdps_min_step_q7 & 0x7F) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
             let qdps_valid_mask = ((qdps_min_step_q7 <= 127) as u64).wrapping_neg();
 
+            let self_w = trail_phase_words_mut(self);
             while unresolved != 0 {
                 let cell = unresolved.trailing_zeros() as usize;
                 unresolved &= unresolved - 1;
                 let base = cell * HEADS_PER_SWARM_CELL;
-                let cur_w = load_q7_word_at(&self.accumulated_phase_delta, base);
+                let cur_w = self_w[cell];
                 let slot_coupled = ((coupled_row >> cell) & 1) != 0;
                 let slot_w = branchless_relu_f32(slot_weights[cell]);
                 let use_neighbor = slot_coupled & (slot_w > 1.0e-6);
@@ -4228,7 +4246,7 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
                     qdps_valid_mask,
                     tolerance_q7,
                 );
-                store_q7_word_at(&mut self.accumulated_phase_delta, base, candidate_w);
+                self_w[cell] = candidate_w;
                 quorum_mask |= (cell_resolved as u8) << cell;
             }
         }
@@ -4432,21 +4450,21 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
         let peer_quorum = peer_trail.swarm_quorum_mask();
         let combined_quorum = self_quorum | peer_quorum;
 
+        let peer_w = trail_phase_words_ref(peer_trail);
+        let self_w = trail_phase_words_mut(self);
         let mut cell = 0usize;
         while cell < NUM_SWARM_MICRO_CELLS {
-            let base = cell * HEADS_PER_SWARM_CELL;
             let s_ok = ((self_quorum >> cell) & 1) != 0;
             let p_ok = ((peer_quorum >> cell) & 1) != 0;
-            let s_w = load_q7_word_at(&self.accumulated_phase_delta, base);
-            let p_w = load_q7_word_at(&peer_trail.accumulated_phase_delta, base);
+            let s_w = self_w[cell];
+            let p_w = peer_w[cell];
             let avg_w = swar_q7_avg_round_x8(s_w, p_w);
             let adopt_w = branchless_select_u64(p_ok, p_w, s_w);
-            let fused_w = branchless_select_u64(
+            self_w[cell] = branchless_select_u64(
                 s_ok & p_ok,
                 avg_w,
                 branchless_select_u64(s_ok, s_w, adopt_w),
             );
-            store_q7_word_at(&mut self.accumulated_phase_delta, base, fused_w);
             cell += 1;
         }
 

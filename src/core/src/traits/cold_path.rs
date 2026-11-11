@@ -1367,23 +1367,46 @@ pub trait AttractorField: BranchlessKernel + Send + Sync {
         domain_salt: u32,
     ) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
         let bytes = prompt.as_bytes();
-        let mut seed = 0xCBF2_9CE4_8422_2325_u64 ^ (u64::from(domain_salt) << 32);
+        let len = bytes.len();
+        let mut seed =
+            0xCBF2_9CE4_8422_2325_u64 ^ (u64::from(domain_salt) << 32) ^ (len as u64);
         let mut i = 0usize;
-        while i < bytes.len() {
-            seed = branchless_splitmix64(
-                seed ^ u64::from(bytes[i]).wrapping_mul(0x9E37_79B9_7F4A_7C15),
-            );
-            i += 1;
+        while i + 8 <= len {
+            let w = u64::from_le_bytes([
+                bytes[i],
+                bytes[i + 1],
+                bytes[i + 2],
+                bytes[i + 3],
+                bytes[i + 4],
+                bytes[i + 5],
+                bytes[i + 6],
+                bytes[i + 7],
+            ]);
+            seed = branchless_splitmix64(seed ^ w.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            i += 8;
         }
-        let mut out = [0i8; MAX_ATTENTION_HEADS];
+        if i < len {
+            let mut tail = 0u64;
+            let mut shift = 0u32;
+            while i < len {
+                tail |= u64::from(bytes[i]) << shift;
+                shift += 8;
+                i += 1;
+            }
+            seed = branchless_splitmix64(seed ^ tail.wrapping_mul(0xBF58_476D_1CE4_E5B9));
+        }
+        let mut words = [0u64; 8];
         let mut w = 0usize;
         while w < 8 {
-            seed = branchless_splitmix64(seed.wrapping_add((w as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)));
+            seed = branchless_splitmix64(
+                seed.wrapping_add((w as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)),
+            );
             let shifted = (seed >> 1) & 0x7F7F_7F7F_7F7F_7F7F;
-            let signed_w = shifted ^ (seed & 0x8080_8080_8080_8080);
-            store_q7_word_at(&mut out, w * 8, signed_w);
+            words[w] = shifted ^ (seed & 0x8080_8080_8080_8080);
             w += 1;
         }
+        let mut out = [0i8; MAX_ATTENTION_HEADS];
+        store_q7_words_64(&mut out, &words);
         out
     }
 
@@ -1407,7 +1430,7 @@ pub trait AttractorField: BranchlessKernel + Send + Sync {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
 
-        let ref_w = load_q7_words_64(&trail.accumulated_phase_delta);
+        let ref_w = *trail_phase_words_ref(trail);
         let (mut comp_w, total_pull, _mean_coh, _dom_idx, _act_cnt) =
             branchless_q7_unified_field_fold_words_with_init_weight_64(
                 &ref_w,
@@ -1505,7 +1528,7 @@ pub trait AttractorField: BranchlessKernel + Send + Sync {
         trail: &gcso_pointer_trail_t,
         composite_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> GcsoResult<f32> {
-        composite_phase_out.copy_from_slice(&trail.accumulated_phase_delta);
+        store_q7_words_64(composite_phase_out, trail_phase_words_ref(trail));
         let safe_pull = branchless_min_f32(
             branchless_flush_subnormal_f32(branchless_relu_f32(trail.attractor_pull_force)),
             MAX_ATTRACTOR_PULL_FORCE,
@@ -1695,7 +1718,7 @@ pub trait MultiDomainAttractorSpace: BranchlessKernel + Send + Sync {
         let mut pulls = [0.0_f32; MAX_ATTRACTOR_DOMAINS];
         let mut max_pull = 0.0_f32;
         let mut scratch_phase = [0i8; MAX_ATTENTION_HEADS];
-        let ref_w = load_q7_words_64(&reference_trail.accumulated_phase_delta);
+        let ref_w = *trail_phase_words_ref(reference_trail);
         let ref_is_uniform = is_word_array_uniform_64(&ref_w);
         let ref_nonzero = if ref_is_uniform {
             ref_w[0] != 0
@@ -1808,7 +1831,7 @@ pub trait MultiDomainAttractorSpace: BranchlessKernel + Send + Sync {
         }
 
         if running_pull <= 0.0 {
-            *composite_phase_out = trail.accumulated_phase_delta;
+            store_q7_words_64(composite_phase_out, trail_phase_words_ref(trail));
             return Ok(0.0);
         }
 
@@ -2082,7 +2105,7 @@ pub trait PersonaPatcher: BranchlessKernel + Send + Sync {
                     let tw = *trail_phase_words_ref(trail);
                     let w0 = tw[0];
                     if is_word_array_uniform_64(&tw) {
-                        if w0 == (w0 & 0xFF).wrapping_mul(0x0101_0101_0101_0101) {
+                        if w0 == w0.rotate_right(8) {
                             let (s, c) = branchless_sincos_q7(w0 as gcso_q7_t);
                             uniform_s += w * s;
                             uniform_c += w * c;
@@ -3563,7 +3586,7 @@ pub trait ColdPathObserver:
                 explore_head_start,
             )?;
         } else if next_mode == 2 {
-            bloom_filter.insert_repulsive_pattern(&trail_out.accumulated_phase_delta);
+            bloom_filter.insert_repulsive_pattern_words_weighted(trail_phase_words_ref(trail_out), 1);
             trail_out.flags |= TRAIL_FLAG_REPULSION_ACTIVE;
         }
 

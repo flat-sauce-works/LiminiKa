@@ -1371,7 +1371,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
         let frame = self.synthesize_gateway_frame();
-        let words = load_q7_words_64(&frame.phase_deltas);
+        let words = *frame.phase_words_ref();
         (frame, words)
     }
 
@@ -3451,7 +3451,7 @@ impl CrystallizedAttractorRecord {
             let mut c = 0usize;
             while c < k_len {
                 if centroids[c].sample_count > 0 {
-                    let cw = load_q7_words_64(&centroids[c].phase_profile);
+                    let cw = *centroids[c].phase_words_ref();
                     word_cache[c] = cw;
                     if is_word_array_uniform_64(&cw) {
                         let bit = 1u16 << c;
@@ -4016,7 +4016,7 @@ impl CrystallizedAttractorRecord {
                     if a_merged {
                         let words_changed = !swar_words_equal_64(&w_a, &orig_w_a);
                         if words_changed {
-                            store_q7_words_64(&mut centroids[a].phase_profile, &w_a);
+                            *centroids[a].phase_words_mut() = w_a;
                         }
                         centroids[a].stamp_or_update_absorption_crc32(
                             prev_crc,
@@ -4053,13 +4053,13 @@ impl CrystallizedAttractorRecord {
             let mut a = 0usize;
             while a < k_len {
                 if centroids[a].sample_count > 0 && centroids[a].phase_gravity_mass > 1.0e-12 {
-                    let orig_w_a = load_q7_words_64(&centroids[a].phase_profile);
+                    let orig_w_a = *centroids[a].phase_words_ref();
                     let mut w_a = orig_w_a;
                     let mut a_merged = false;
                     let mut b = a + 1;
                     while b < k_len {
                         if centroids[b].sample_count > 0 && centroids[b].phase_gravity_mass > 1.0e-12 {
-                            let w_b = load_q7_words_64(&centroids[b].phase_profile);
+                            let w_b = *centroids[b].phase_words_ref();
                             let coh = coherence_from_word_arrays_64(&w_a, &w_b);
                             if coh >= safe_merge {
                                 let b_aid = centroids[b].anchor_id;
@@ -4093,7 +4093,7 @@ impl CrystallizedAttractorRecord {
                     }
                     if a_merged {
                         if !swar_words_equal_64(&w_a, &orig_w_a) {
-                            store_q7_words_64(&mut centroids[a].phase_profile, &w_a);
+                            *centroids[a].phase_words_mut() = w_a;
                         }
                         centroids[a].stamp_crc32_with_words(&w_a);
                         if a < 64 { dirty_mask &= !(1u64 << a); }
@@ -4233,12 +4233,12 @@ impl CrystallizedAttractorRecord {
                     tot_samples = tot_samples.saturating_add(rec_i.sample_count);
                     sum_r += rec_i.resultant_r_bar;
                     sum_kappa += rec_i.von_mises_kappa;
-                    let w_i = load_q7_words_64(&rec_i.phase_profile);
+                    let w_i = *rec_i.phase_words_ref();
                     let mut j = i + 1;
                     while j < k_len {
                         let rec_j = &centroids[j];
                         if rec_j.sample_count > 0 && rec_j.phase_gravity_mass > 1.0e-12 {
-                            let w_j = load_q7_words_64(&rec_j.phase_profile);
+                            let w_j = *rec_j.phase_words_ref();
                             let coh = coherence_from_word_arrays_64(&w_i, &w_j);
                             max_pair_coh = branchless_select_f32((!has_pair) | (coh > max_pair_coh), coh, max_pair_coh);
                             has_pair = true;

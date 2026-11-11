@@ -1014,6 +1014,10 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
     let (vs0, vs1) = unsafe {
         crate::traits::branchless::avx2_words64_to_vec64_with_uniform(&src_w, src_is_uniform)
     };
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    let mut win_vec_opt: Option<(core::arch::x86_64::__m256i, core::arch::x86_64::__m256i)> = None;
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    let mut best_vec_opt: Option<(core::arch::x86_64::__m256i, core::arch::x86_64::__m256i)> = None;
 
     let mut idx = 0usize;
     while idx < cand_len {
@@ -1045,6 +1049,11 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
         } else {
             src_is_uniform && is_word_array_uniform_64(cand_w)
         };
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+        let mut cand_vec_opt: Option<(
+            core::arch::x86_64::__m256i,
+            core::arch::x86_64::__m256i,
+        )> = None;
         let coh = if cand_eq_src {
             1.0
         } else if cand_is_uniform {
@@ -1059,6 +1068,7 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
                 unsafe {
                     use core::arch::x86_64::_mm256_sub_epi8;
                     let (vc0, vc1) = crate::traits::branchless::avx2_words64_to_vec64(cand_w);
+                    cand_vec_opt = Some((vc0, vc1));
                     crate::traits::branchless::avx2_coherence_from_diff_vec64(
                         _mm256_sub_epi8(vs0, vc0),
                         _mm256_sub_epi8(vs1, vc1),
@@ -1087,6 +1097,15 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
                         win_eq_src = swar_words_equal_64(&src_w, win_w);
                         if !win_eq_src {
                             win_is_uniform = is_word_array_uniform_64(win_w);
+                            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+                            {
+                                win_vec_opt = Some(unsafe {
+                                    crate::traits::branchless::avx2_words64_to_vec64_with_uniform(
+                                        win_w,
+                                        win_is_uniform,
+                                    )
+                                });
+                            }
                         }
                         win_meta_evaluated = true;
                     }
@@ -1101,13 +1120,25 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
                         {
                             unsafe {
                                 use core::arch::x86_64::_mm256_sub_epi8;
-                                let (vw0, vw1) =
-                                    crate::traits::branchless::avx2_words64_to_vec64_with_uniform(
-                                        win_w,
-                                        win_is_uniform,
-                                    );
-                                let (vc0, vc1) =
-                                    crate::traits::branchless::avx2_words64_to_vec64(cand_w);
+                                let (vw0, vw1) = match win_vec_opt {
+                                    Some(v) => v,
+                                    None => {
+                                        crate::traits::branchless::avx2_words64_to_vec64_with_uniform(
+                                            win_w,
+                                            win_is_uniform,
+                                        )
+                                    }
+                                };
+                                let (vc0, vc1) = match cand_vec_opt {
+                                    Some(v) => v,
+                                    None => {
+                                        let v = crate::traits::branchless::avx2_words64_to_vec64(
+                                            cand_w,
+                                        );
+                                        cand_vec_opt = Some(v);
+                                        v
+                                    }
+                                };
                                 crate::traits::branchless::avx2_coherence_from_diff_vec64(
                                     _mm256_sub_epi8(vw0, vc0),
                                     _mm256_sub_epi8(vw1, vc1),
@@ -1159,12 +1190,20 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
             best_coh = coh;
             best_cand_is_uniform = cand_is_uniform;
             best_cand_eq_src = cand_eq_src;
+            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+            {
+                best_vec_opt = cand_vec_opt;
+            }
         }
         found_valid |= is_coherent;
         idx += 1;
     }
 
     if prune_non_macro & (!found_valid) {
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+        {
+            best_vec_opt = None;
+        }
         fallback_scan_unpruned_candidates_edbc_cold(
             &src_w,
             src_is_uniform,
@@ -1195,9 +1234,12 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
             if !best_cand_is_uniform {
                 if s > 0 && s < 128 {
                     unsafe {
-                        let (bvc0, bvc1) = crate::traits::branchless::avx2_words64_to_vec64(
-                            trail_phase_words_ref(dst_trail),
-                        );
+                        let (bvc0, bvc1) = match best_vec_opt {
+                            Some(v) => v,
+                            None => crate::traits::branchless::avx2_words64_to_vec64(
+                                trail_phase_words_ref(dst_trail),
+                            ),
+                        };
                         let (vr0, vr1) =
                             crate::traits::branchless::avx2_slerp_vec64(vs0, vs1, bvc0, bvc1, s);
                         let bridged_w = crate::traits::branchless::avx2_vec64_to_words64(vr0, vr1);

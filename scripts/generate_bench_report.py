@@ -1661,6 +1661,18 @@ def generate_markdown_report(
 
     fastest_bench = min(eval_pool, key=lambda x: x["mean_ns"]) if eval_pool else None
     slowest_bench = max(eval_pool, key=lambda x: x["mean_ns"]) if eval_pool else None
+    single_token_hotpath_pool = [
+        b
+        for b in eval_pool
+        if b.get("ns_per_token") is None
+        and b["category"] in ("micro_hotpath_kernel", "swarm_and_stigmergy")
+        and (b.get("tp_count") is None or b.get("tp_count", 0) <= 65_536)
+    ]
+    upper_single_token_bench = (
+        max(single_token_hotpath_pool, key=lambda x: x["mean_ns"])
+        if single_token_hotpath_pool
+        else None
+    )
 
     high_variance_benchmarks = [
         b
@@ -1754,12 +1766,28 @@ def generate_markdown_report(
 
     if fastest_bench:
         md_lines.append(
-            f"- **⚡ Fastest Core Hot-Path Kernel**: `{fastest_bench['group']} / {fastest_bench['name']}` (**{fastest_bench['mean_formatted']}**)"
+            f"- **⚡ Fastest Core Hot-Path Kernel (Single-Step)**: `{fastest_bench['group']} / {fastest_bench['name']}` (**{fastest_bench['mean_formatted']}**)"
+        )
+    if upper_single_token_bench:
+        frame_60fps_pct = (upper_single_token_bench["mean_ns"] / 16_666_666.67) * 100.0
+        md_lines.append(
+            f"- **🎯 Real-Time 1-Token Hot-Path Ceiling (Single-Step Decode / Game Coexistence)**: `{upper_single_token_bench['group']} / {upper_single_token_bench['name']}` (**{upper_single_token_bench['mean_formatted']}** — `{frame_60fps_pct:.4f}%` of a 16.67 ms 60 FPS frame budget)"
         )
     if slowest_bench:
-        md_lines.append(
-            f"- **🐢 Slowest / Maximum Scale Core Workload**: `{slowest_bench['group']} / {slowest_bench['name']}` (**{slowest_bench['mean_formatted']}**)"
-        )
+        tok_cnt = extract_token_count(slowest_bench["name"])
+        ns_per_tok = slowest_bench.get("ns_per_token")
+        tp_str = slowest_bench.get("throughput", "N/A")
+        if tok_cnt and ns_per_tok:
+            tok_per_sec = 1_000_000_000.0 / ns_per_tok if ns_per_tok > 0.0 else 0.0
+            tp_suffix = f", **{tp_str}**" if tp_str and tp_str != "N/A" else ""
+            md_lines.append(
+                f"- **🏋️ Largest Bulk Stress / Multi-Token Prefill Workload (Batch Scale)**: `{slowest_bench['group']} / {slowest_bench['name']}` (**{format_time(ns_per_tok)}/token amortized** · `{tok_per_sec / 1_000_000.0:.2f}M tok/s`{tp_suffix}; `{slowest_bench['mean_formatted']}` total across `{tok_cnt:,}` tokens)"
+            )
+        else:
+            tp_suffix = f" ({tp_str})" if tp_str and tp_str != "N/A" else ""
+            md_lines.append(
+                f"- **🏋️ Largest Bulk Stress / Endurance Workload (Macro Scale)**: `{slowest_bench['group']} / {slowest_bench['name']}` (**{slowest_bench['mean_formatted']}**{tp_suffix})"
+            )
 
     md_lines.extend(
         [
