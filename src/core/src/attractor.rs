@@ -3833,6 +3833,10 @@ impl MultiAttractorSpace {
         dst_bytes: &mut [u8],
         offset: usize,
     ) -> GcsoResult<usize> {
+        if let Ok(snap_mut) = AttractorGrowthSnapshot::from_bytes_mut_at(dst_bytes, offset) {
+            let _ = self.export_growth_snapshot(reference_trail, snap_mut);
+            return Ok(size_of::<AttractorGrowthSnapshot>());
+        }
         let mut snap = AttractorGrowthSnapshot::new();
         let _ = self.export_growth_snapshot(reference_trail, &mut snap);
         snap.write_unaligned_to(dst_bytes, offset)?;
@@ -3868,6 +3872,10 @@ impl MultiAttractorSpace {
         src_bytes: &[u8],
         offset: usize,
     ) -> GcsoResult<AttractorGrowthSnapshot> {
+        if let Ok(snap_ref) = AttractorGrowthSnapshot::from_bytes_verified_at(src_bytes, offset) {
+            self.restore_from_growth_snapshot(snap_ref)?;
+            return Ok(*snap_ref);
+        }
         let snap = AttractorGrowthSnapshot::read_unaligned_from(src_bytes, offset)?;
         self.restore_from_growth_snapshot(&snap)?;
         Ok(snap)

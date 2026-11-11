@@ -70,7 +70,7 @@ use super::telemetry::{
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 use super::{
-    accumulate_q7_slice_into_64, fuse_lazy_unwrap_and_qdps_from_words_64,
+    accumulate_q7_slice_into_words_64, fuse_lazy_unwrap_and_qdps_from_words_64,
     rad_to_qdps_min_step_q7_u8, swar_words_equal_64, swar_words_nonzero_64, ActionHub,
 };
 use crate::abi::{
@@ -2134,7 +2134,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
 
     /// Executes a **Layer-Skip Phase-Compensated** token cascade (Section 4.1): accumulates
     /// `skipped_layer_deltas` into `trail_out.accumulated_phase_delta` when `skip_layer` is active
-    /// (`accumulate_q7_slice_into_64`), filters via 8-lane SWAR QDPS, and steers `query_tensor`
+    /// (`accumulate_q7_slice_into_words_64`), filters via 8-lane SWAR QDPS, and steers `query_tensor`
     /// and/or `key_tensor`.
     ///
     /// # Errors
@@ -2175,12 +2175,12 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
                 trail_out,
             )?;
         if skip_layer {
-            accumulate_q7_slice_into_64(
-                &mut trail_out.accumulated_phase_delta,
+            accumulate_q7_slice_into_words_64(
+                &mut cur_w,
                 &skipped_layer_deltas.as_slice()[..num_heads],
             );
+            *trail_phase_words_mut(trail_out) = cur_w;
             trail_out.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
-            cur_w = *trail_phase_words_ref(trail_out);
         }
         let steered = self.steer_qdps_words_prevalidated_core(
             &cur_w,

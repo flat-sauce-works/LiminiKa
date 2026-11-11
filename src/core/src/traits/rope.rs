@@ -66,8 +66,8 @@ use core::slice;
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use super::branchless::{
-    avx2_hsum_ps, avx2_rotate_so2_block32, avx2_rotate_so2_pair_block32,
-    avx2_rotate_so2_triple_block32,
+    avx2_build_so2_2d_xy_vecs, avx2_hsum_ps, avx2_rotate_so2_2d_xy_slice_with_vecs,
+    avx2_rotate_so2_block32, avx2_rotate_so2_pair_block32, avx2_rotate_so2_triple_block32,
 };
 use super::aligned::{
     AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut, AlignedSliceMut16,
@@ -4501,16 +4501,19 @@ pub trait PhaseSteering: BranchlessKernel {
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
         if num_heads >= 32 {
             // SAFETY: `q_p` and `c_p` have length `num_heads >= 32`, and AVX2 is enabled.
+            // Extracts `vo` directly into 64-bit GPR words (`eff_words[cell_base..cell_base + 4]`)
+            // via `vextracti128` + `vmovq` + `vpextrq` to eliminate the 256-bit-store-to-64-bit-load
+            // Store-to-Load Forwarding (STLF) stall in `store_q7_words_64` and `steer_from_swar_words_core_safe`.
             unsafe {
                 use core::arch::x86_64::{
                     __m256i, _mm256_abs_epi8, _mm256_add_epi8, _mm256_and_si256,
-                    _mm256_blendv_epi8, _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_max_epu8,
-                    _mm256_set1_epi8, _mm256_setzero_si256, _mm256_storeu_si256, _mm256_sub_epi8,
-                    _mm256_xor_si256,
+                    _mm256_blendv_epi8, _mm256_castsi256_si128, _mm256_cmpeq_epi8,
+                    _mm256_extracti128_si256, _mm256_loadu_si256, _mm256_max_epu8,
+                    _mm256_set1_epi8, _mm256_setzero_si256, _mm256_sub_epi8, _mm256_xor_si256,
+                    _mm_cvtsi128_si64, _mm_extract_epi64,
                 };
                 let qp = q_p.as_ptr().cast::<__m256i>();
                 let cp = c_p.as_ptr().cast::<__m256i>();
-                let ew_ptr = eff_words.as_mut_ptr().cast::<__m256i>();
                 let v_128 = _mm256_set1_epi8(-128);
                 let v_thresh = _mm256_set1_epi8(step_u8 as i8);
                 while h + 32 <= num_heads {
@@ -4531,7 +4534,13 @@ pub trait PhaseSteering: BranchlessKernel {
                         let keep = _mm256_cmpeq_epi8(_mm256_max_epu8(vabs, v_thresh), vabs);
                         _mm256_and_si256(vf, keep)
                     };
-                    _mm256_storeu_si256(ew_ptr.add(off), vo);
+                    let lo128 = _mm256_castsi256_si128(vo);
+                    let hi128 = _mm256_extracti128_si256(vo, 1);
+                    let cell_base = off << 2;
+                    eff_words[cell_base] = _mm_cvtsi128_si64(lo128) as u64;
+                    eff_words[cell_base + 1] = _mm_extract_epi64(lo128, 1) as u64;
+                    eff_words[cell_base + 2] = _mm_cvtsi128_si64(hi128) as u64;
+                    eff_words[cell_base + 3] = _mm_extract_epi64(hi128, 1) as u64;
                     h += 32;
                 }
             }
@@ -9339,6 +9348,26 @@ pub trait VisualAttentionSteering: BranchlessKernel {
     ) -> GcsoResult<u32> {
         let (sin_x, cos_x) = branchless_sincos_q7(phase_x_q7);
         let (sin_y, cos_y) = branchless_sincos_q7(phase_y_q7);
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+        {
+            // SAFETY: `target_feature = "avx2"` is enabled; hoists `(v_cos, v_sin)` construction
+            // once outside the 256-patch bitmask scan.
+            let (v_cos, v_sin) = unsafe { avx2_build_so2_2d_xy_vecs(sin_x, cos_x, sin_y, cos_y) };
+            return steer_visual_grid_bitmask_core(
+                grid_tensor,
+                active_patch_mask,
+                patch_stride_elems,
+                num_patches,
+                4,
+                |patch_slice| {
+                    // SAFETY: `target_feature = "avx2"` is enabled and `patch_slice` is valid.
+                    unsafe {
+                        avx2_rotate_so2_2d_xy_slice_with_vecs(patch_slice, v_cos, v_sin);
+                    }
+                },
+            );
+        }
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
         steer_visual_grid_bitmask_core(
             grid_tensor,
             active_patch_mask,

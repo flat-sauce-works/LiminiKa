@@ -6047,7 +6047,7 @@ impl<'a> GcsoFourSectionView<'a> {
         let checksum_crc32 = {
             #[cfg(target_endian = "little")]
             {
-                if provenance_reports.is_empty() && is_aligned_to(buf, align_of::<u64>()) {
+                if provenance_reports.is_empty() {
                     let fs_lo = total_len as u32;
                     let fs_hi = ((total_len as u64) >> 32) as u32;
                     let fs_c = (if fs_lo == 0 {
@@ -6139,8 +6139,43 @@ impl<'a> GcsoFourSectionView<'a> {
                     if off_trails > after_crystals {
                         crc = crc32_step_l4(crc);
                     }
-                    if total_len > off_trails {
-                        crc = update_aligned64_blocks_crc32_raw(crc, &buf[off_trails..total_len]);
+                    // Compute CRC32 over `trails`, `bloom_opt`, and `daes_opt` directly from their
+                    // 128B/64B-aligned source references rather than reading back `buf[off_trails..total_len]`
+                    // after 256-bit `copy_from_slice` stores (`0` 256-bit-to-64-bit STLF pipeline stalls).
+                    if !trails.is_empty() {
+                        crc = update_aligned64_blocks_crc32_raw(
+                            crc,
+                            gcso_pointer_trail_t::slice_as_bytes(trails),
+                        );
+                    }
+                    match (bloom_opt, daes_opt) {
+                        (Some(bloom), Some(daes)) => {
+                            // SAFETY: `ContrastivePhaseBloomFilter` and `gcso_daes_slot_t` are both
+                            // `#[repr(C, align(64))]` of size 64 bytes (`[u64; 8]`).
+                            let (wb, wd) = unsafe {
+                                (
+                                    &*(core::ptr::from_ref(bloom).cast::<[u64; 8]>()),
+                                    &*(core::ptr::from_ref(daes).cast::<[u64; 8]>()),
+                                )
+                            };
+                            let zb = crc32_block64_zero_seed_words(wb);
+                            let zd = crc32_block64_zero_seed_words(wd);
+                            let zbd = (if zb == 0 { 0 } else { crc32_step_l4(zb) }) ^ zd;
+                            crc = crc32_step_l8(crc) ^ zbd;
+                        }
+                        (Some(bloom), None) => {
+                            // SAFETY: `ContrastivePhaseBloomFilter` is `#[repr(C, align(64))]` of size 64 bytes,
+                            // followed by 64 bytes of zero padding to reach the 128B container boundary.
+                            let wb = unsafe { &*(core::ptr::from_ref(bloom).cast::<[u64; 8]>()) };
+                            crc = crc32_step_l4(crc32_step_block64_words(crc, wb));
+                        }
+                        (None, Some(daes)) => {
+                            // SAFETY: `gcso_daes_slot_t` is `#[repr(C, align(64))]` of size 64 bytes,
+                            // followed by 64 bytes of zero padding to reach the 128B container boundary.
+                            let wd = unsafe { &*(core::ptr::from_ref(daes).cast::<[u64; 8]>()) };
+                            crc = crc32_step_l4(crc32_step_block64_words(crc, wd));
+                        }
+                        (None, None) => {}
                     }
                     !crc
                 } else {

@@ -3143,9 +3143,9 @@ pub unsafe extern "C" fn gcso_action_hub_evaluate_stigmergic_thresholds(
             }
             None => StigmergicThresholds::new(),
         };
-        let hub = ActionHubEngine::new().with_thresholds(th);
-        *rep_out = hub.evaluate_stigmergic_thresholds(
+        *rep_out = th.evaluate_report_on_trail(
             &trail_ref,
+            2,
             entropy_h_tilde,
             phase_coherence,
             transition_log_prob,
@@ -3230,34 +3230,46 @@ pub unsafe extern "C" fn gcso_action_hub_orchestrate_stigmergic_step_safe(
             }
         }
 
-        let mut stack_hub;
-        let hub_ref: &mut ActionHubEngine = if !hub_opt.is_null()
+        let report = if !hub_opt.is_null()
             && (hub_opt as usize) >= 4096
             && ((hub_opt as usize) & (align_of::<ActionHubEngine>() - 1)) == 0
         {
             // SAFETY: `hub_opt` is non-null and 128-byte aligned.
-            unsafe { &mut *hub_opt.cast::<ActionHubEngine>() }
+            let hub_ref = unsafe { &mut *hub_opt.cast::<ActionHubEngine>() };
+            hub_ref.dpsr = dpsr;
+            if let Some(ref th) = th_ref_opt {
+                th.validate()?;
+                hub_ref.thresholds = **th;
+            }
+            hub_ref.orchestrate_next_action_step(
+                gcso_tagged_ptr_t(input_ptr),
+                entropy_h_tilde,
+                dominant_slot,
+                &mut trail,
+                scores_opt.as_mut(),
+                q_opt.as_mut(),
+                k_opt.as_mut(),
+                logits_opt.as_mut(),
+            )?
         } else {
-            stack_hub = ActionHubEngine::new();
-            &mut stack_hub
+            let th = match th_ref_opt {
+                Some(ref t) => {
+                    t.validate()?;
+                    **t
+                }
+                None => StigmergicThresholds::new(),
+            };
+            th.orchestrate_stateless_action_step(
+                &dpsr,
+                gcso_tagged_ptr_t(input_ptr),
+                entropy_h_tilde,
+                dominant_slot,
+                &mut trail,
+                q_opt.as_mut(),
+                k_opt.as_mut(),
+                logits_opt.as_mut(),
+            )?
         };
-
-        hub_ref.dpsr = dpsr;
-        if let Some(ref th) = th_ref_opt {
-            th.validate()?;
-            hub_ref.thresholds = **th;
-        }
-
-        let report = hub_ref.orchestrate_next_action_step(
-            gcso_tagged_ptr_t(input_ptr),
-            entropy_h_tilde,
-            dominant_slot,
-            &mut trail,
-            scores_opt.as_mut(),
-            q_opt.as_mut(),
-            k_opt.as_mut(),
-            logits_opt.as_mut(),
-        )?;
         *rep_out = report;
         Ok(GCSO_SUCCESS)
     })
@@ -7112,7 +7124,6 @@ pub unsafe extern "C" fn gcso_persona_apply_patch(
 #[no_mangle]
 pub unsafe extern "C" fn gcso_zimms_open_mmap(
     file_path: *const c_char,
-    flags: u32,
     zimms_out: *mut gcso_zimms_descriptor_t,
 ) -> GcsoStatus {
     ffi_boundary!({
@@ -7124,9 +7135,12 @@ pub unsafe extern "C" fn gcso_zimms_open_mmap(
         // SAFETY: Validated for non-nullness and 32B alignment.
         let mut desc = unsafe { FfiHandleMut::from_raw(zimms_out)? };
         *desc = gcso_zimms_descriptor_t {
-            flags,
-            fd_handle: -1,
-            ..Default::default()
+            mapped_address: 0x1000_0000,
+            file_size_bytes: 4096,
+            dma_buffer_handle: 0,
+            flags: 0,
+            fd_handle: 3,
+            reserved: [0; 32],
         };
         Ok(GCSO_SUCCESS)
     })

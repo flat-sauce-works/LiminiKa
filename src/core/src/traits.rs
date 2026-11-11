@@ -251,7 +251,7 @@ pub use self::telemetry::{
 
 use core::mem::size_of;
 
-use self::branchless::{load_q7_x8_slice, store_q7_x8_slice};
+use self::branchless::load_q7_x8_slice;
 use self::rope::{
     dispatch_fused_ripa_and_pspm_words_core, ripa_upper_rot_dim,
     rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words, steer_from_swar_words_core_safe,
@@ -340,49 +340,45 @@ pub(crate) const fn filter_qdps_words_in_registers_64(
     swar_q7_qdps_filter_words_64(raw_words, min_step_q7)
 }
 
-/// Accumulates a variable-length Q7 slice (`delta_slice`) into a 64-head Q7 array (`acc`)
-/// using safe 8-lane SWAR saturating addition (`swar_q7_add_sat_x8`).
+/// Accumulates up to 64 Q7 phase deltas from `delta_slice` directly into an 8-word (`[u64; 8]`)
+/// register-resident SWAR phase array using 8-lane saturating addition (`swar_q7_add_sat_x8`),
+/// eliminating 64-byte stack buffer spills and Store-to-Load Forwarding (STLF) reload stalls.
 #[inline(always)]
-pub(crate) fn accumulate_q7_slice_into_64(
-    acc: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+pub(crate) fn accumulate_q7_slice_into_words_64(
+    acc_words: &mut [u64; NUM_SWARM_MICRO_CELLS],
     delta_slice: &[gcso_q7_t],
 ) {
     let limit = delta_slice.len().min(MAX_ATTENTION_HEADS);
     if limit == MAX_ATTENTION_HEADS {
-        let a_w = load_q7_words_64(acc);
-        let out_w = [
-            swar_q7_add_sat_x8(a_w[0], load_q7_x8_slice(delta_slice, 0)),
-            swar_q7_add_sat_x8(a_w[1], load_q7_x8_slice(delta_slice, 8)),
-            swar_q7_add_sat_x8(a_w[2], load_q7_x8_slice(delta_slice, 16)),
-            swar_q7_add_sat_x8(a_w[3], load_q7_x8_slice(delta_slice, 24)),
-            swar_q7_add_sat_x8(a_w[4], load_q7_x8_slice(delta_slice, 32)),
-            swar_q7_add_sat_x8(a_w[5], load_q7_x8_slice(delta_slice, 40)),
-            swar_q7_add_sat_x8(a_w[6], load_q7_x8_slice(delta_slice, 48)),
-            swar_q7_add_sat_x8(a_w[7], load_q7_x8_slice(delta_slice, 56)),
-        ];
-        store_q7_words_64(acc, &out_w);
+        acc_words[0] = swar_q7_add_sat_x8(acc_words[0], load_q7_x8_slice(delta_slice, 0));
+        acc_words[1] = swar_q7_add_sat_x8(acc_words[1], load_q7_x8_slice(delta_slice, 8));
+        acc_words[2] = swar_q7_add_sat_x8(acc_words[2], load_q7_x8_slice(delta_slice, 16));
+        acc_words[3] = swar_q7_add_sat_x8(acc_words[3], load_q7_x8_slice(delta_slice, 24));
+        acc_words[4] = swar_q7_add_sat_x8(acc_words[4], load_q7_x8_slice(delta_slice, 32));
+        acc_words[5] = swar_q7_add_sat_x8(acc_words[5], load_q7_x8_slice(delta_slice, 40));
+        acc_words[6] = swar_q7_add_sat_x8(acc_words[6], load_q7_x8_slice(delta_slice, 48));
+        acc_words[7] = swar_q7_add_sat_x8(acc_words[7], load_q7_x8_slice(delta_slice, 56));
         return;
     }
 
-    let mut h = 0usize;
-    while h + 16 <= limit {
-        let a0 = load_q7_x8_slice(acc, h);
-        let b0 = load_q7_x8_slice(delta_slice, h);
-        let a1 = load_q7_x8_slice(acc, h + 8);
-        let b1 = load_q7_x8_slice(delta_slice, h + 8);
-        store_q7_x8_slice(acc, h, swar_q7_add_sat_x8(a0, b0));
-        store_q7_x8_slice(acc, h + 8, swar_q7_add_sat_x8(a1, b1));
-        h += 16;
+    let full_words = limit >> 3;
+    let mut w_idx = 0usize;
+    while w_idx < full_words {
+        acc_words[w_idx] =
+            swar_q7_add_sat_x8(acc_words[w_idx], load_q7_x8_slice(delta_slice, w_idx << 3));
+        w_idx += 1;
     }
-    while h + 8 <= limit {
-        let a_w = load_q7_x8_slice(acc, h);
-        let b_w = load_q7_x8_slice(delta_slice, h);
-        store_q7_x8_slice(acc, h, swar_q7_add_sat_x8(a_w, b_w));
-        h += 8;
-    }
-    while h < limit {
-        acc[h] = branchless_q7_add_sat(acc[h], delta_slice[h]);
-        h += 1;
+    let rem = limit & 7;
+    if rem != 0 {
+        let base_h = full_words << 3;
+        let mut tail_bytes = [0u8; 8];
+        let mut lane = 0usize;
+        while lane < rem {
+            tail_bytes[lane] = delta_slice[base_h + lane] as u8;
+            lane += 1;
+        }
+        let delta_w = u64::from_le_bytes(tail_bytes);
+        acc_words[full_words] = swar_q7_add_sat_x8(acc_words[full_words], delta_w);
     }
 }
 

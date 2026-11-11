@@ -186,9 +186,9 @@ use crate::traits::primitives::{
     MAX_ATTENTION_HEADS, Q7_PHASE_SCALE_RAD,
 };
 use crate::traits::{
-    accumulate_q7_slice_into_64, DAES_METRIC_FAST_PATH_HIT, DAES_METRIC_LAYER_SKIP_COMPENSATED,
-    DAES_METRIC_PHASE_STEERED, DAES_METRIC_REPULSION_APPLIED, DAES_METRIC_SLOT_SYNERGY_ACTIVE,
-    MAX_ATTRACTOR_PULL_FORCE,
+    accumulate_q7_slice_into_words_64, DAES_METRIC_FAST_PATH_HIT,
+    DAES_METRIC_LAYER_SKIP_COMPENSATED, DAES_METRIC_PHASE_STEERED, DAES_METRIC_REPULSION_APPLIED,
+    DAES_METRIC_SLOT_SYNERGY_ACTIVE, MAX_ATTRACTOR_PULL_FORCE,
 };
 
 /// Convenient crate-level result type alias for GCSO operations.
@@ -504,14 +504,6 @@ pub struct RuntimeContext {
     dpsr: DpsrEngine,
     edbc: EdbcEngine,
     attractor_space: MultiAttractorSpace,
-    bloom_filter: ContrastivePhaseBloomFilter,
-    daes_slot: gcso_daes_slot_t,
-    slot_phase_bank: AlignedBuffer64<gcso_q7_t, SLOT_PHASE_BANK_LEN>,
-    slot_weights: [f32; MAX_ATTRACTOR_DOMAINS],
-    slot_enabled_mask: u8,
-    slot_coupling_matrix: u64,
-    step_counter: u64,
-    active_trail_count: u32,
 }
 
 impl RuntimeContext {
@@ -528,6 +520,8 @@ impl RuntimeContext {
         action_hub.repulsion_threshold = config.repulsion_threshold;
         action_hub.repulsion_scale_u7 = config.repulsion_scale_u7;
         action_hub.coupling_matrix_8x8 = config.slot_coupling_matrix;
+        action_hub.slot_weights = DEFAULT_SLOT_WEIGHTS;
+        action_hub.slot_enabled_mask = 0xFF;
         let edbc_state = gcso_edbc_state_t {
             singularity_eps: config.raw.entropy_singularity_eps,
             bifurcation_threshold: config.bifurcation_threshold,
@@ -543,17 +537,6 @@ impl RuntimeContext {
             dpsr,
             edbc,
             attractor_space: MultiAttractorSpace::new(),
-            bloom_filter: ContrastivePhaseBloomFilter::new(),
-            daes_slot: gcso_daes_slot_t {
-                mode: u32::from(config.raw.daes_mode),
-                ..Default::default()
-            },
-            slot_phase_bank: AlignedBuffer64::zeroed(),
-            slot_weights: DEFAULT_SLOT_WEIGHTS,
-            slot_enabled_mask: 0xFF,
-            slot_coupling_matrix: config.slot_coupling_matrix,
-            step_counter: 0,
-            active_trail_count: 0,
         })
     }
 
@@ -619,14 +602,7 @@ impl RuntimeContext {
         let (dom_slot, _dom_w) = self.find_dominant_domain();
         let dom_slot_u8 = (dom_slot as u8) & ATTRACTOR_SLOT_ID_MASK;
 
-        self.action_hub.slot_phase_bank = self.slot_phase_bank;
-        self.action_hub.slot_weights = self.slot_weights;
-        self.action_hub.slot_enabled_mask = self.slot_enabled_mask;
-        self.action_hub.coupling_matrix_8x8 = self.slot_coupling_matrix;
-        self.action_hub.bloom_filter = self.bloom_filter;
-        self.action_hub.daes_slot = self.daes_slot;
-
-        let report = self.action_hub.orchestrate_next_action_step(
+        self.action_hub.orchestrate_next_action_step(
             input_tagged_ptr,
             edbc_state.moving_z_entropy,
             dom_slot_u8,
@@ -635,13 +611,7 @@ impl RuntimeContext {
             query_tensor,
             key_tensor,
             logits_opt,
-        )?;
-
-        self.bloom_filter = self.action_hub.bloom_filter;
-        self.daes_slot = self.action_hub.daes_slot;
-        self.step_counter = self.step_counter.wrapping_add(1);
-        self.active_trail_count = self.action_hub.active_count();
-        Ok(report)
+        )
     }
 
     /// Returns an immutable reference to the underlying [`DpsrEngine`].
@@ -683,42 +653,42 @@ impl RuntimeContext {
     #[inline(always)]
     #[must_use]
     pub const fn bloom_filter(&self) -> &ContrastivePhaseBloomFilter {
-        &self.bloom_filter
+        &self.action_hub.bloom_filter
     }
 
     /// Returns a mutable reference to the 64-byte [`ContrastivePhaseBloomFilter`].
     #[inline(always)]
     #[must_use]
     pub fn bloom_filter_mut(&mut self) -> &mut ContrastivePhaseBloomFilter {
-        &mut self.bloom_filter
+        &mut self.action_hub.bloom_filter
     }
 
     /// Returns an immutable reference to the active [`gcso_daes_slot_t`] scratchpad.
     #[inline(always)]
     #[must_use]
     pub const fn daes_slot(&self) -> &gcso_daes_slot_t {
-        &self.daes_slot
+        &self.action_hub.daes_slot
     }
 
     /// Returns a mutable reference to the active [`gcso_daes_slot_t`] scratchpad.
     #[inline(always)]
     #[must_use]
     pub fn daes_slot_mut(&mut self) -> &mut gcso_daes_slot_t {
-        &mut self.daes_slot
+        &mut self.action_hub.daes_slot
     }
 
     /// Returns an immutable 16-byte aligned slice view over the 8-lane Q7 working phase bank (`512` bytes).
     #[inline(always)]
     #[must_use]
     pub const fn slot_phase_bank(&self) -> AlignedSlice16<'_, gcso_q7_t> {
-        self.slot_phase_bank.relax_slice::<16>()
+        self.action_hub.slot_phase_bank.relax_slice::<16>()
     }
 
     /// Returns a mutable 16-byte aligned slice view over the 8-lane Q7 working phase bank (`512` bytes).
     #[inline(always)]
     #[must_use]
     pub fn slot_phase_bank_mut(&mut self) -> AlignedSliceMut16<'_, gcso_q7_t> {
-        self.slot_phase_bank.relax_slice_mut::<16>()
+        self.action_hub.slot_phase_bank.relax_slice_mut::<16>()
     }
 
     /// Returns an immutable reference to the 64-byte (`8 x u64`) aligned word view of slot `slot_idx`.
@@ -731,10 +701,11 @@ impl RuntimeContext {
         if slot_idx >= MAX_ATTRACTOR_DOMAINS {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
-        // SAFETY: `self.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every 64-byte slot
-        // at byte offset `slot_idx * 64` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
+        // SAFETY: `self.action_hub.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
+        // 64-byte slot at byte offset `slot_idx * 64` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
         Ok(unsafe {
             &*(self
+                .action_hub
                 .slot_phase_bank
                 .as_slice()
                 .as_ptr()
@@ -752,10 +723,11 @@ impl RuntimeContext {
         if slot_idx >= MAX_ATTRACTOR_DOMAINS {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
-        // SAFETY: `self.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every 64-byte slot
-        // at byte offset `slot_idx * 64` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
+        // SAFETY: `self.action_hub.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
+        // 64-byte slot at byte offset `slot_idx * 64` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
         Ok(unsafe {
             &mut *(self
+                .action_hub
                 .slot_phase_bank
                 .as_mut_slice()
                 .as_mut_ptr()
@@ -783,27 +755,27 @@ impl RuntimeContext {
     #[inline(always)]
     #[must_use]
     pub const fn slot_weights(&self) -> &[f32; MAX_ATTRACTOR_DOMAINS] {
-        &self.slot_weights
+        &self.action_hub.slot_weights
     }
 
     /// Returns the 8-bit bitmask of enabled Attractor Working Lanes (`bit i == 1` means lane `i` is active).
     #[inline(always)]
     #[must_use]
     pub const fn slot_enabled_mask(&self) -> u8 {
-        self.slot_enabled_mask
+        self.action_hub.slot_enabled_mask
     }
 
     /// Returns the active 64-bit ($8 \times 8$) Attractor Working Lane coupling bitmatrix.
     #[inline(always)]
     #[must_use]
     pub const fn slot_coupling_matrix(&self) -> u64 {
-        self.slot_coupling_matrix
+        self.action_hub.coupling_matrix_8x8
     }
 
     /// Updates the active 64-bit ($8 \times 8$) Attractor Working Lane coupling bitmatrix.
     #[inline(always)]
     pub fn set_slot_coupling_matrix(&mut self, matrix: u64) {
-        self.slot_coupling_matrix = matrix;
+        self.action_hub.coupling_matrix_8x8 = matrix;
         self.config.slot_coupling_matrix = matrix;
     }
 
@@ -811,14 +783,14 @@ impl RuntimeContext {
     #[inline(always)]
     #[must_use]
     pub const fn step_counter(&self) -> u64 {
-        self.step_counter
+        self.action_hub.step_counter
     }
 
     /// Returns the active pointer trail count in the Action Hub.
     #[inline(always)]
     #[must_use]
     pub const fn active_trail_count(&self) -> u32 {
-        self.active_trail_count
+        self.action_hub.active_count
     }
 
     /// Executes a per-token Hot Path step integrating DPSR phase steering, EDBC entropy evaluation,
@@ -859,20 +831,19 @@ impl RuntimeContext {
         let mut state_out = gcso_edbc_state_t::default();
         self.edbc.eval_stateful(token_z_score, &mut state_out)?;
 
-        self.step_counter = self.step_counter.wrapping_add(1);
+        let next_step = self.action_hub.step_counter.wrapping_add(1);
+        self.action_hub.step_counter = next_step;
         self.attractor_space.advance_step();
         let cap = self.config.raw.action_hub_capacity;
-        self.active_trail_count = branchless_select_u32(
-            self.active_trail_count < cap,
-            self.active_trail_count.wrapping_add(1),
-            self.active_trail_count,
-        );
+        let cur_active = self.action_hub.active_count;
+        self.action_hub.active_count =
+            branchless_select_u32(cur_active < cap, cur_active.wrapping_add(1), cur_active);
 
         let mut repulsion_active = false;
         if let Some(trail) = trail_out {
             trail.prev_ptr = trail.current_ptr;
             trail.current_ptr = u64::from(token_id);
-            trail.step_count = self.step_counter as u32;
+            trail.step_count = next_step as u32;
             trail.stigmergic_density = branchless_select_f32(
                 trail.stigmergic_density > 1.0,
                 trail.stigmergic_density,
@@ -883,16 +854,16 @@ impl RuntimeContext {
                 self.evaluate_multi_domain_superposition_words(trail);
 
             if let Some(p) = phase_deltas {
-                let mut composite_phase = [0i8; MAX_ATTENTION_HEADS];
-                store_q7_words_64(&mut composite_phase, &phase_words);
-                accumulate_q7_slice_into_64(&mut composite_phase, p.as_slice());
-                phase_words = load_q7_words_64(&composite_phase);
+                accumulate_q7_slice_into_words_64(&mut phase_words, p.as_slice());
             }
-            let (_density, rep_trig) = self.bloom_filter.apply_phase_conjugate_repulsion_words(
-                &mut phase_words,
-                self.config.repulsion_threshold,
-                self.config.repulsion_scale_u7,
-            );
+            let (_density, rep_trig) = self
+                .action_hub
+                .bloom_filter
+                .apply_phase_conjugate_repulsion_words(
+                    &mut phase_words,
+                    self.config.repulsion_threshold,
+                    self.config.repulsion_scale_u7,
+                );
             repulsion_active = rep_trig;
 
             trail.attractor_pull_force = total_pull;
@@ -903,9 +874,7 @@ impl RuntimeContext {
 
         let metric = DAES_METRIC_PHASE_STEERED
             | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0);
-        let mut daes = self.daes_slot;
-        let _ = self.telemetry_push(&mut daes, metric);
-        self.daes_slot = daes;
+        self.action_hub.daes_slot.push_telemetry_metric(metric);
 
         Ok(())
     }
@@ -945,8 +914,8 @@ impl RuntimeContext {
         self.edbc.eval_stateful(token_z_score, &mut edbc_state)?;
         self.attractor_space.advance_step();
 
-        let mut daes_local = self.daes_slot;
-        let bloom_local = self.bloom_filter;
+        let mut daes_local = self.action_hub.daes_slot;
+        let bloom_local = self.action_hub.bloom_filter;
         let rep_thresh = self.config.repulsion_threshold;
         let rep_scale = self.config.repulsion_scale_u7;
         let qdps_min = self.config.raw.qdps_min_step_rad;
@@ -980,7 +949,7 @@ impl RuntimeContext {
             }
         }
 
-        self.daes_slot = daes_local;
+        self.action_hub.daes_slot = daes_local;
         Ok((density, final_pull, mean_coh, trail_out.target_anchor_id))
     }
 
@@ -1019,8 +988,8 @@ impl RuntimeContext {
         self.edbc.eval_stateful(token_z_score, &mut edbc_state)?;
         self.attractor_space.advance_step();
 
-        let mut daes_local = self.daes_slot;
-        let bloom_local = self.bloom_filter;
+        let mut daes_local = self.action_hub.daes_slot;
+        let bloom_local = self.action_hub.bloom_filter;
         let rep_thresh = self.config.repulsion_threshold;
         let rep_scale = self.config.repulsion_scale_u7;
         let qdps_min = self.config.raw.qdps_min_step_rad;
@@ -1051,7 +1020,7 @@ impl RuntimeContext {
             trail_out,
         )?;
 
-        self.daes_slot = daes_local;
+        self.action_hub.daes_slot = daes_local;
         Ok(res)
     }
 
@@ -1082,7 +1051,6 @@ impl RuntimeContext {
         let (dom_slot, _dom_weight) = self.find_dominant_domain();
         let dominant_slot_u8 = (dom_slot as u8) & ATTRACTOR_SLOT_ID_MASK;
 
-        let mut daes_local = self.daes_slot;
         let rep_thresh = self.config.repulsion_threshold;
         let rep_scale = self.config.repulsion_scale_u7;
         let qdps_min = self.config.raw.qdps_min_step_rad;
@@ -1094,14 +1062,19 @@ impl RuntimeContext {
             Some(&*query_tensor),
             key_tensor.as_deref(),
         )?;
-        let (bypass_hit, eff_ptr) =
-            self.resolve_or_pass_tagged_ptr(&mut daes_local, input_tagged_ptr);
+        let (bypass_hit, eff_ptr) = self
+            .action_hub
+            .daes_slot
+            .resolve_or_pass_in_place(input_tagged_ptr);
         self.step_pointer(eff_ptr.raw(), trail_out)?;
-        let (density, repulsion_active) = self.bloom_filter.apply_phase_conjugate_repulsion_words(
-            trail_phase_words_mut(trail_out),
-            rep_thresh,
-            rep_scale,
-        );
+        let (density, repulsion_active) = self
+            .action_hub
+            .bloom_filter
+            .apply_phase_conjugate_repulsion_words(
+                trail_phase_words_mut(trail_out),
+                rep_thresh,
+                rep_scale,
+            );
         let evolved_ptr = trail_out.evolve_trail_mode_stigmergically(
             edbc_state.moving_z_entropy,
             repulsion_active,
@@ -1110,6 +1083,7 @@ impl RuntimeContext {
             high_density_srl_thresh,
         );
 
+        let mut trail_w = *trail_phase_words_ref(trail_out);
         let skip_active = evolved_ptr.has_action_mode(ACTION_MODE_LAYER_SKIP);
         let mut skip_compensated = false;
         if let Some(comp) = layer_skip_comp_profile {
@@ -1117,16 +1091,13 @@ impl RuntimeContext {
                 if comp.len() < num_heads {
                     return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
                 }
-                accumulate_q7_slice_into_64(
-                    &mut trail_out.accumulated_phase_delta,
-                    &comp.as_slice()[..num_heads],
-                );
+                accumulate_q7_slice_into_words_64(&mut trail_w, &comp.as_slice()[..num_heads]);
+                *trail_phase_words_mut(trail_out) = trail_w;
                 trail_out.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
                 skip_compensated = true;
             }
         }
 
-        let trail_w = *trail_phase_words_ref(trail_out);
         let steered = self.steer_qdps_words_prevalidated_core(
             &trail_w,
             head_dim,
@@ -1147,8 +1118,7 @@ impl RuntimeContext {
             | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
             | branchless_select_u8(skip_compensated, DAES_METRIC_LAYER_SKIP_COMPENSATED, 0)
             | extra_metrics;
-        self.telemetry_push(&mut daes_local, metric)?;
-        self.daes_slot = daes_local;
+        self.action_hub.daes_slot.push_telemetry_metric(metric);
 
         Ok((evolved_ptr, density))
     }
@@ -1187,15 +1157,16 @@ impl RuntimeContext {
         let (dom_slot, _dom_weight) = self.find_dominant_domain();
         let dominant_slot_u8 = (dom_slot as u8) & ATTRACTOR_SLOT_ID_MASK;
 
-        let mut daes_local = self.daes_slot;
         let mut gated_weights = [0.0f32; MAX_ATTRACTOR_DOMAINS];
+        let mask = self.action_hub.slot_enabled_mask;
+        let weights = &self.action_hub.slot_weights;
         let mut i = 0usize;
         while i < MAX_ATTRACTOR_DOMAINS {
-            let enabled = ((self.slot_enabled_mask >> i) & 1) != 0;
-            gated_weights[i] = branchless_select_f32(enabled, self.slot_weights[i], 0.0);
+            let enabled = ((mask >> i) & 1) != 0;
+            gated_weights[i] = branchless_select_f32(enabled, weights[i], 0.0);
             i += 1;
         }
-        let coupling = self.slot_coupling_matrix;
+        let coupling = self.action_hub.coupling_matrix_8x8;
         let rep_thresh = self.config.repulsion_threshold;
         let rep_scale = self.config.repulsion_scale_u7;
         let qdps_min = self.config.raw.qdps_min_step_rad;
@@ -1207,11 +1178,13 @@ impl RuntimeContext {
             Some(&*query_tensor),
             key_tensor.as_deref(),
         )?;
-        let (bypass_hit, eff_ptr) =
-            self.resolve_or_pass_tagged_ptr(&mut daes_local, input_tagged_ptr);
+        let (bypass_hit, eff_ptr) = self
+            .action_hub
+            .daes_slot
+            .resolve_or_pass_in_place(input_tagged_ptr);
         self.step_pointer(eff_ptr.raw(), trail_out)?;
 
-        let bank_slice = self.slot_phase_bank.relax_slice::<16>();
+        let bank_slice = self.action_hub.slot_phase_bank.relax_slice::<16>();
         let (damped_pull, coherence) = self.orchestrate_cross_slot_synergy_from_bank(
             &bank_slice,
             &gated_weights,
@@ -1222,11 +1195,14 @@ impl RuntimeContext {
             trail_out,
         )?;
 
-        let (density, repulsion_active) = self.bloom_filter.apply_phase_conjugate_repulsion_words(
-            trail_phase_words_mut(trail_out),
-            rep_thresh,
-            rep_scale,
-        );
+        let (density, repulsion_active) = self
+            .action_hub
+            .bloom_filter
+            .apply_phase_conjugate_repulsion_words(
+                trail_phase_words_mut(trail_out),
+                rep_thresh,
+                rep_scale,
+            );
 
         let evolved_ptr = trail_out.evolve_trail_mode_stigmergically(
             edbc_state.moving_z_entropy,
@@ -1236,6 +1212,7 @@ impl RuntimeContext {
             high_density_srl_thresh,
         );
 
+        let mut trail_w = *trail_phase_words_ref(trail_out);
         let skip_active = evolved_ptr.has_action_mode(ACTION_MODE_LAYER_SKIP)
             | input_tagged_ptr.has_action_mode(ACTION_MODE_LAYER_SKIP);
         let mut skip_compensated = false;
@@ -1244,16 +1221,13 @@ impl RuntimeContext {
                 if comp.len() < num_heads {
                     return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
                 }
-                accumulate_q7_slice_into_64(
-                    &mut trail_out.accumulated_phase_delta,
-                    &comp.as_slice()[..num_heads],
-                );
+                accumulate_q7_slice_into_words_64(&mut trail_w, &comp.as_slice()[..num_heads]);
+                *trail_phase_words_mut(trail_out) = trail_w;
                 trail_out.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
                 skip_compensated = true;
             }
         }
 
-        let trail_w = *trail_phase_words_ref(trail_out);
         let steered = self.steer_qdps_words_prevalidated_core(
             &trail_w,
             head_dim,
@@ -1275,8 +1249,7 @@ impl RuntimeContext {
             | branchless_select_u8(skip_compensated, DAES_METRIC_LAYER_SKIP_COMPENSATED, 0)
             | DAES_METRIC_SLOT_SYNERGY_ACTIVE
             | extra_metrics;
-        self.telemetry_push(&mut daes_local, metric)?;
-        self.daes_slot = daes_local;
+        self.action_hub.daes_slot.push_telemetry_metric(metric);
 
         Ok((evolved_ptr, density, damped_pull, coherence))
     }
@@ -1323,20 +1296,22 @@ impl RuntimeContext {
         let mut running_pull = branchless_flush_subnormal_f32(branchless_relu_f32(base_pull));
 
         if let Ok(bank_2d) = self
+            .action_hub
             .slot_phase_bank
             .as_slot_bank::<MAX_ATTRACTOR_DOMAINS, MAX_ATTENTION_HEADS>()
         {
             let rep_idx = usize::from(ATTRACTOR_SLOT_REPULSION);
+            let enabled_mask = self.action_hub.slot_enabled_mask;
+            let weights = &self.action_hub.slot_weights;
             let mut idx = 0usize;
             while idx < MAX_ATTRACTOR_DOMAINS {
                 if idx != rep_idx {
-                    let enabled = ((self.slot_enabled_mask >> idx) & 1) != 0;
+                    let enabled = ((enabled_mask >> idx) & 1) != 0;
                     if enabled {
-                        let base_e = branchless_flush_subnormal_f32(branchless_relu_f32(
-                            self.slot_weights[idx],
-                        ));
+                        let base_e =
+                            branchless_flush_subnormal_f32(branchless_relu_f32(weights[idx]));
                         if base_e > 1.0e-12 {
-                            // SAFETY: `self.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
+                            // SAFETY: `self.action_hub.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
                             // 64-byte row `bank_2d[idx]` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
                             let slot_w = unsafe {
                                 &*(bank_2d[idx].as_ptr()
@@ -1388,7 +1363,7 @@ impl RuntimeContext {
                 idx += 1;
             }
 
-            let rep_enabled = ((self.slot_enabled_mask >> rep_idx) & 1) != 0;
+            let rep_enabled = ((enabled_mask >> rep_idx) & 1) != 0;
             if rep_enabled {
                 // SAFETY: `bank_2d[rep_idx]` is 64-byte aligned.
                 let rep_words = unsafe {
@@ -1396,11 +1371,8 @@ impl RuntimeContext {
                         as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
                 };
                 if crate::traits::swar_words_nonzero_64(rep_words) {
-                    let rep_strength = branchless_clamp_f32(
-                        branchless_relu_f32(self.slot_weights[rep_idx]),
-                        0.0,
-                        1.0,
-                    );
+                    let rep_strength =
+                        branchless_clamp_f32(branchless_relu_f32(weights[rep_idx]), 0.0, 1.0);
                     running_pull = branchless_q7_inhibit_words_64(
                         &mut run_w,
                         running_pull,
@@ -1452,19 +1424,21 @@ impl RuntimeContext {
         let daes_off = edbc_off + edbc_size; // 256
 
         let ctx_buf = &mut buffer[action_hub_off..edbc_off];
-        ctx_buf[0..8].copy_from_slice(&self.step_counter.to_le_bytes());
-        ctx_buf[8..12].copy_from_slice(&self.active_trail_count.to_le_bytes());
+        ctx_buf[0..8].copy_from_slice(&self.action_hub.step_counter.to_le_bytes());
+        ctx_buf[8..12].copy_from_slice(&self.action_hub.active_count.to_le_bytes());
         let sys_anchors = self.attractor_space.system_field().active_count();
         ctx_buf[12..16].copy_from_slice(&sys_anchors.to_le_bytes());
         let rep_gain = self.attractor_space.system_field().repulsion_gain;
         ctx_buf[16..20].copy_from_slice(&rep_gain.to_le_bytes());
-        ctx_buf[20] = self.slot_enabled_mask;
-        ctx_buf[24..32].copy_from_slice(&self.slot_coupling_matrix.to_le_bytes());
-        f32::write_unaligned_slice_to(&self.slot_weights, ctx_buf, 32)?;
+        ctx_buf[20] = self.action_hub.slot_enabled_mask;
+        ctx_buf[24..32].copy_from_slice(&self.action_hub.coupling_matrix_8x8.to_le_bytes());
+        f32::write_unaligned_slice_to(&self.action_hub.slot_weights, ctx_buf, 32)?;
 
         let edbc_state = self.edbc.state();
         edbc_state.write_unaligned_to(buffer, edbc_off)?;
-        self.daes_slot.write_unaligned_to(buffer, daes_off)?;
+        self.action_hub
+            .daes_slot
+            .write_unaligned_to(buffer, daes_off)?;
 
         let mut header = init_snapshot_header(total_required as u64, 1_774_900_000);
         header.action_hub_offset = action_hub_off as u64;
@@ -1509,16 +1483,16 @@ impl RuntimeContext {
         }
 
         if buffer.len() >= action_hub_off + 21 {
-            self.step_counter = u64::read_unaligned_from(buffer, action_hub_off)?;
-            self.active_trail_count = u32::read_unaligned_from(buffer, action_hub_off + 8)?;
+            self.action_hub.step_counter = u64::read_unaligned_from(buffer, action_hub_off)?;
+            self.action_hub.active_count = u32::read_unaligned_from(buffer, action_hub_off + 8)?;
             let sys_anchors = u32::read_unaligned_from(buffer, action_hub_off + 12)?;
             let rep_gain = f32::read_unaligned_from(buffer, action_hub_off + 16)?;
-            self.slot_enabled_mask = buffer[action_hub_off + 20];
+            self.action_hub.slot_enabled_mask = buffer[action_hub_off + 20];
 
             if buffer.len() >= action_hub_off + 32 {
                 let coupling = u64::read_unaligned_from(buffer, action_hub_off + 24)?;
                 if coupling != 0 {
-                    self.slot_coupling_matrix = coupling;
+                    self.action_hub.coupling_matrix_8x8 = coupling;
                     self.config.slot_coupling_matrix = coupling;
                 }
             }
@@ -1526,7 +1500,7 @@ impl RuntimeContext {
                 f32::read_unaligned_slice_from(
                     buffer,
                     action_hub_off + 32,
-                    &mut self.slot_weights,
+                    &mut self.action_hub.slot_weights,
                 )?;
             }
 
@@ -1550,7 +1524,7 @@ impl RuntimeContext {
 
         let daes_size = core::mem::size_of::<gcso_daes_slot_t>();
         if buffer.len() >= daes_off + daes_size {
-            self.daes_slot = gcso_daes_slot_t::read_unaligned_from(buffer, daes_off)?;
+            self.action_hub.daes_slot = gcso_daes_slot_t::read_unaligned_from(buffer, daes_off)?;
         }
 
         Ok(())
@@ -1592,11 +1566,10 @@ impl GcsoRuntimeContext for RuntimeContext {
     #[inline]
     fn reset(&mut self) -> Result<()> {
         self.edbc.reset();
-        self.step_counter = 0;
-        self.active_trail_count = 0;
+        self.action_hub.reset()?;
         self.clear_all_domains()?;
-        self.bloom_filter.clear();
-        self.daes_slot = gcso_daes_slot_t {
+        self.action_hub.bloom_filter.clear();
+        self.action_hub.daes_slot = gcso_daes_slot_t {
             mode: u32::from(self.config.raw.daes_mode),
             ..Default::default()
         };
@@ -1608,7 +1581,7 @@ impl GcsoRuntimeContext for RuntimeContext {
         self.attractor_space
             .system_field_mut()
             .add_system_prompt_anchor(prompt, weight)?;
-        self.slot_weights[usize::from(ATTRACTOR_SLOT_SYSTEM_BASELINE)] =
+        self.action_hub.slot_weights[usize::from(ATTRACTOR_SLOT_SYSTEM_BASELINE)] =
             branchless_relu_f32(weight);
         Ok(())
     }
@@ -1697,7 +1670,6 @@ impl EdbcBranchController for RuntimeContext {
 impl PointerActionHub for RuntimeContext {
     #[inline]
     fn reset(&mut self) -> Result<()> {
-        self.active_trail_count = 0;
         self.action_hub.reset()
     }
 
@@ -1708,12 +1680,10 @@ impl PointerActionHub for RuntimeContext {
         trail_out: &mut gcso_pointer_trail_t,
     ) -> Result<()> {
         let cap = self.config.raw.action_hub_capacity;
-        self.active_trail_count = branchless_select_u32(
-            self.active_trail_count < cap,
-            self.active_trail_count.wrapping_add(1),
-            self.active_trail_count,
-        );
-        self.step_counter = self.step_counter.wrapping_add(1);
+        let cur_active = self.action_hub.active_count;
+        self.action_hub.active_count =
+            branchless_select_u32(cur_active < cap, cur_active.wrapping_add(1), cur_active);
+        self.action_hub.step_counter = self.action_hub.step_counter.wrapping_add(1);
         trail_out.record_pointer_transition(current_ptr, 1, 1.0);
         let embedded_phase = gcso_tagged_ptr_t(current_ptr).unpack_phase();
         trail_out.accumulate_uniform_phase(embedded_phase);
@@ -1721,8 +1691,6 @@ impl PointerActionHub for RuntimeContext {
         ActionHubEngine::copy_trail_to_slot_fast(&mut self.action_hub.trails[slot_idx], trail_out);
         self.action_hub.write_cursor =
             self.action_hub.write_cursor.wrapping_add(1) & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
-        self.action_hub.active_count = self.active_trail_count;
-        self.action_hub.step_counter = self.step_counter;
         Ok(())
     }
 
@@ -1736,21 +1704,7 @@ impl PointerActionHub for RuntimeContext {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
         self.action_hub
-            .update_cellular_state_express(trail_id, phase_delta)?;
-        let slot_idx = (trail_id as usize) & (MAX_ATTRACTOR_DOMAINS - 1);
-        let w = self.slot_words_mut(slot_idx)?;
-        if phase_delta != 0 {
-            let splat = ((phase_delta as u8) as u64).wrapping_mul(0x0101_0101_0101_0101);
-            w[0] = swar_q7_add_sat_x8(w[0], splat);
-            w[1] = swar_q7_add_sat_x8(w[1], splat);
-            w[2] = swar_q7_add_sat_x8(w[2], splat);
-            w[3] = swar_q7_add_sat_x8(w[3], splat);
-            w[4] = swar_q7_add_sat_x8(w[4], splat);
-            w[5] = swar_q7_add_sat_x8(w[5], splat);
-            w[6] = swar_q7_add_sat_x8(w[6], splat);
-            w[7] = swar_q7_add_sat_x8(w[7], splat);
-        }
-        Ok(())
+            .update_cellular_state_express(trail_id, phase_delta)
     }
 
     #[inline]
@@ -1764,12 +1718,13 @@ impl PointerActionHub for RuntimeContext {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
         if trail_id < self.action_hub.capacity {
-            let _ = self
-                .action_hub
-                .pull_trail_to_attractor(trail_id, anchor_id, pull_force);
+            self.action_hub
+                .pull_trail_to_attractor(trail_id, anchor_id, pull_force)?;
+        } else {
+            let slot_idx = (anchor_id as usize) & (MAX_ATTRACTOR_DOMAINS - 1);
+            self.action_hub.slot_weights[slot_idx] =
+                branchless_min_f32(branchless_relu_f32(pull_force), MAX_ATTRACTOR_PULL_FORCE);
         }
-        let slot_idx = (anchor_id as usize) & (MAX_ATTRACTOR_DOMAINS - 1);
-        self.slot_weights[slot_idx] = branchless_relu_f32(pull_force);
         Ok(())
     }
 
@@ -1790,7 +1745,7 @@ impl PointerActionHub for RuntimeContext {
 
     #[inline(always)]
     fn active_count(&self) -> u32 {
-        self.active_trail_count
+        self.action_hub.active_count
     }
 }
 
@@ -1825,7 +1780,10 @@ impl SwarmCellChunk for RuntimeContext {
         if chunk_len == 0 {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
-        self.step_counter = self.step_counter.wrapping_add(u64::from(chunk_len));
+        self.action_hub.step_counter = self
+            .action_hub
+            .step_counter
+            .wrapping_add(u64::from(chunk_len));
         Ok(())
     }
 }
@@ -1866,7 +1824,7 @@ impl AttractorField for RuntimeContext {
             .attractor_space
             .system_field_mut()
             .add_system_prompt_anchor(prompt, weight)?;
-        self.slot_weights[usize::from(ATTRACTOR_SLOT_SYSTEM_BASELINE)] =
+        self.action_hub.slot_weights[usize::from(ATTRACTOR_SLOT_SYSTEM_BASELINE)] =
             branchless_relu_f32(weight);
         Ok(id)
     }
@@ -1906,10 +1864,13 @@ impl AttractorField for RuntimeContext {
         let mut pattern = [0i8; MAX_ATTENTION_HEADS];
         pattern[..limit].copy_from_slice(&raw[..limit]);
 
-        self.bloom_filter.insert_repulsive_pattern(&pattern);
+        self.action_hub
+            .bloom_filter
+            .insert_repulsive_pattern(&pattern);
         let anti_phase = branchless_q7_conjugate_64(&pattern);
         self.set_slot_phase_profile(ATTRACTOR_SLOT_REPULSION, &anti_phase)?;
-        self.slot_weights[usize::from(ATTRACTOR_SLOT_REPULSION)] = branchless_relu_f32(gain);
+        self.action_hub.slot_weights[usize::from(ATTRACTOR_SLOT_REPULSION)] =
+            branchless_relu_f32(gain);
 
         self.attractor_space
             .system_field_mut()
@@ -1941,7 +1902,7 @@ impl MultiDomainAttractorSpace for RuntimeContext {
         if idx >= MAX_ATTRACTOR_DOMAINS || !branchless_is_finite_f32(weight) || weight < 0.0 {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
-        self.slot_weights[idx] = weight;
+        self.action_hub.slot_weights[idx] = weight;
         Ok(())
     }
 
@@ -1953,7 +1914,8 @@ impl MultiDomainAttractorSpace for RuntimeContext {
         }
         let bit = 1u8 << (domain_id as u8);
         let enable_mask = (enabled as u8).wrapping_neg();
-        self.slot_enabled_mask = (self.slot_enabled_mask & !bit) | (bit & enable_mask);
+        self.action_hub.slot_enabled_mask =
+            (self.action_hub.slot_enabled_mask & !bit) | (bit & enable_mask);
         Ok(())
     }
 
@@ -1961,11 +1923,13 @@ impl MultiDomainAttractorSpace for RuntimeContext {
     fn find_dominant_domain(&self) -> (u32, f32) {
         let mut best_id = 0u32;
         let mut best_score = -1.0_f32;
+        let mask = self.action_hub.slot_enabled_mask;
+        let weights = &self.action_hub.slot_weights;
 
         let mut i = 0usize;
         while i < MAX_ATTRACTOR_DOMAINS {
-            let enabled = ((self.slot_enabled_mask >> i) & 1) != 0;
-            let base_w = self.slot_weights[i];
+            let enabled = ((mask >> i) & 1) != 0;
+            let base_w = weights[i];
             let eff_score = branchless_select_f32(enabled, base_w, -1.0);
             let is_better = eff_score > best_score;
             best_id = branchless_select_u32(is_better, i as u32, best_id);
@@ -1978,7 +1942,7 @@ impl MultiDomainAttractorSpace for RuntimeContext {
 
     #[inline(always)]
     fn slot_coupling_matrix(&self) -> u64 {
-        self.slot_coupling_matrix
+        self.action_hub.coupling_matrix_8x8
     }
 
     #[inline]
@@ -1992,23 +1956,23 @@ impl MultiDomainAttractorSpace for RuntimeContext {
         if idx >= MAX_ATTRACTOR_DOMAINS {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
-        let enabled = ((self.slot_enabled_mask >> idx) & 1) != 0;
+        let enabled = ((self.action_hub.slot_enabled_mask >> idx) & 1) != 0;
         if !enabled {
             *slot_phase_out = [0i8; MAX_ATTENTION_HEADS];
             return Ok(0.0);
         }
 
-        let bank_slice = self.slot_phase_bank.as_aligned_slice();
+        let bank_slice = self.action_hub.slot_phase_bank.as_aligned_slice();
         let bank_slot = bank_slice.slot_exact::<MAX_ATTENTION_HEADS>(idx)?;
         if is_phase_profile_nonzero_64(bank_slot) {
             *slot_phase_out = *bank_slot;
-            return Ok(self.slot_weights[idx]);
+            return Ok(self.action_hub.slot_weights[idx]);
         }
 
         let base_pull = self
             .attractor_space
             .evaluate_multi_domain_superposition(trail, slot_phase_out);
-        Ok(self.slot_weights[idx].max(base_pull))
+        Ok(self.action_hub.slot_weights[idx].max(base_pull))
     }
 
     #[inline]
@@ -2025,9 +1989,9 @@ impl MultiDomainAttractorSpace for RuntimeContext {
     #[inline]
     fn clear_all_domains(&mut self) -> Result<()> {
         self.attractor_space.clear_all_domains()?;
-        self.slot_phase_bank = AlignedBuffer64::zeroed();
-        self.slot_weights = DEFAULT_SLOT_WEIGHTS;
-        self.slot_enabled_mask = 0xFF;
+        self.action_hub.slot_phase_bank = AlignedBuffer64::zeroed();
+        self.action_hub.slot_weights = DEFAULT_SLOT_WEIGHTS;
+        self.action_hub.slot_enabled_mask = 0xFF;
         Ok(())
     }
 }
@@ -2057,7 +2021,7 @@ impl PersonaPatcher for RuntimeContext {
             sw[6] = swar_q7_add_sat_x8(sw[6], pw[6]);
             sw[7] = swar_q7_add_sat_x8(sw[7], pw[7]);
         } else {
-            let mut bank_mut = self.slot_phase_bank.as_aligned_slice_mut();
+            let mut bank_mut = self.action_hub.slot_phase_bank.as_aligned_slice_mut();
             let persona_slot = bank_mut
                 .slot_exact_mut::<MAX_ATTENTION_HEADS>(usize::from(ATTRACTOR_SLOT_PERSONA))?;
             for (h, slot_p) in persona_slot.iter_mut().enumerate() {

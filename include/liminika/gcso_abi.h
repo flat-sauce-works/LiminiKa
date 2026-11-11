@@ -1020,6 +1020,37 @@ static GCSO_FORCE_INLINE gcso_q7_t gcso_tagged_ptr_unpack_phase_inline(gcso_tagg
 }
 
 /**
+ * @brief Inline branchless helper packing a 48-bit canonical address, 3-bit Attractor Slot ID,
+ * 5-bit Action Mode mask, and Q7 phase offset into a 64-bit tagged pointer word.
+ */
+static GCSO_FORCE_INLINE gcso_tagged_ptr_t gcso_tagged_ptr_pack_action_inline(
+    uint64_t raw_addr, uint8_t attractor_slot, uint8_t action_mode_flags,
+    gcso_q7_t phase) GCSO_NOEXCEPT {
+    const uint8_t tag = (uint8_t)(((attractor_slot & GCSO_ATTRACTOR_SLOT_ID_MASK)
+                                   << GCSO_TAG_ATTRACTOR_SLOT_SHIFT) |
+                                  (action_mode_flags & GCSO_TAG_ACTION_MODE_MASK));
+    return gcso_tagged_ptr_pack_inline(raw_addr, tag, phase);
+}
+
+/**
+ * @brief Inline branchless helper extracting the 5-bit Action Mode mask from a tagged pointer.
+ */
+static GCSO_FORCE_INLINE uint8_t gcso_tagged_ptr_unpack_action_mode_inline(gcso_tagged_ptr_t ptr)
+    GCSO_NOEXCEPT {
+    return (uint8_t)(gcso_tagged_ptr_unpack_tag_inline(ptr) & GCSO_TAG_ACTION_MODE_MASK);
+}
+
+/**
+ * @brief Inline branchless helper extracting the 3-bit Target Attractor Slot ID (0..7) from a
+ * tagged pointer.
+ */
+static GCSO_FORCE_INLINE uint8_t gcso_tagged_ptr_unpack_attractor_slot_inline(gcso_tagged_ptr_t ptr)
+    GCSO_NOEXCEPT {
+    return (uint8_t)((gcso_tagged_ptr_unpack_tag_inline(ptr) >> GCSO_TAG_ATTRACTOR_SLOT_SHIFT) &
+                     GCSO_ATTRACTOR_SLOT_ID_MASK);
+}
+
+/**
  * @brief Packs a 48-bit canonical address, 8-bit tag, and Q7 phase offset into a 64-bit tagged
  * pointer.
  */

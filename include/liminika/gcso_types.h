@@ -173,13 +173,16 @@ typedef enum gcso_anchor_type GCSO_ENUM_UNDERLYING(uint32_t){
     GCSO_ANCHOR_TYPE_CRYSTALLIZED = 4} gcso_anchor_type_t;
 
 /**
- * @brief 7-regime stigmergic action decisions matching Rust StigmergicActionDecision.
+ * @brief 7-regime stigmergic action decisions matching Rust StigmergicActionDecision (0..=6).
  */
 typedef enum gcso_stigmergic_action_decision GCSO_ENUM_UNDERLYING(uint8_t){
-    GCSO_DECISION_INERTIAL_LAYER_SKIP = 0, GCSO_DECISION_EXPRESS_PHASE_STEER = 1,
-    GCSO_DECISION_PSPM_SUB_HEAD_ROUTE = 2, GCSO_DECISION_FULL_ORCHESTRATION_SRL = 3,
-    GCSO_DECISION_REPULSION_ESCAPE = 4,    GCSO_DECISION_CRYSTALLIZE_MACRO_BASIN = 5,
-    GCSO_DECISION_ESCALATE_COLD_PATH = 6} gcso_stigmergic_action_decision_enum_t;
+    GCSO_DECISION_PASSIVE_SIDECAR = 0,
+    GCSO_DECISION_INERTIAL_LAYER_SKIP = 1,
+    GCSO_DECISION_EXPRESS_PHASE_STEER = 2,
+    GCSO_DECISION_PSPM_SUB_HEAD_ROUTE = 3,
+    GCSO_DECISION_FULL_ORCHESTRATION_SRL = 4,
+    GCSO_DECISION_CRYSTALLIZE_MACRO_BASIN = 5,
+    GCSO_DECISION_REPULSION_ESCAPE = 6} gcso_stigmergic_action_decision_enum_t;
 
 /**
  * @brief Descriptor header for size and ABI version validation.

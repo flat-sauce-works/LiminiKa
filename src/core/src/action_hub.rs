@@ -109,7 +109,7 @@ use crate::traits::primitives::{
     ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
     ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR,
     ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION,
-    DAES_MINI_LEDGER_LEN, DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_ENTROPY_EPS,
+    DAES_MINI_LEDGER_LEN, DAES_SHORTCUT_SLOTS, DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_ENTROPY_EPS,
     DEFAULT_RIPA_CLAMP_MAX_RAD, DEFAULT_SLOT_COUPLING_MATRIX_8X8, MAX_ATTENTION_HEADS,
     MAX_ATTRACTOR_DOMAINS,
 };
@@ -195,23 +195,23 @@ pub enum StigmergicActionDecision {
     /// trail density $\rho < \tau_{\mathrm{steer}}$ and entropy $\tilde{H} > \tau_{\mathrm{skip}}$.
     #[default]
     PassiveSidecar = 0,
-    /// Low-entropy laminar bypass or QoS throttle (`ACTION_PRESET_INERTIAL_SKIP = 0x11`):
+    /// Low-entropy laminar bypass or QoS throttle (`ACTION_PRESET_INERTIAL_SKIP = 0x03`):
     /// $\tilde{H} \le \tau_{\mathrm{skip}}$ with no repulsion active.
     InertialLayerSkip = 1,
     /// Single-pass RIPA soft-clamped RoPE phase steering (`ACTION_PRESET_EXPRESS_PHASE = 0x01`):
     /// $\tau_{\mathrm{steer}} \le \rho < \tau_{\mathrm{pspm}}$.
     ExpressPhaseSteer = 2,
-    /// $SO(2)$-fused RIPA + PSPM (`Fact / Logic / Explore`) Sub-Head Pseudo-MoE routing (`0x03`):
+    /// $SO(2)$-fused RIPA + PSPM (`Fact / Logic / Explore`) Sub-Head Pseudo-MoE routing (`0x09`):
     /// $\tau_{\mathrm{pspm}} \le \rho < \tau_{\mathrm{srl}}$ or high bifurcation entropy.
     PspmSubHeadRoute = 3,
     /// Full $SO(2)$-fused RIPA + PSPM + Dynamic Rank-1 SRL residual injection
-    /// (`ACTION_PRESET_FULL_ORCHESTRATION = 0x07`): $\tau_{\mathrm{srl}} \le \rho < \tau_{\mathrm{crystal}}$.
+    /// (`ACTION_PRESET_FULL_ORCHESTRATION = 0x19`): $\tau_{\mathrm{srl}} \le \rho < \tau_{\mathrm{crystal}}$.
     FullOrchestrationSrl = 4,
     /// Super-saturated coherent basin promotion (`ACTION_PRESET_FULL_ORCHESTRATION` +
     /// `TRAIL_FLAG_CRYSTALLIZED_CANDIDATE`): $\rho \ge \tau_{\mathrm{crystal}}$ and
     /// $\mathcal{C}_{\mathrm{phase}} \ge \tau_{\mathrm{merge}}$.
     CrystallizeMacroBasin = 5,
-    /// Phase-conjugate anti-phase repulsion escape (`ACTION_PRESET_REPULSION_ESCAPE = 0x09` on
+    /// Phase-conjugate anti-phase repulsion escape (`ACTION_PRESET_REPULSION_ESCAPE = 0x0D` on
     /// `ATTRACTOR_SLOT_REPULSION`): triggered when $\mathcal{C}_{\mathrm{phase}} < -\tau_{\mathrm{contradict}}$
     /// or Contrastive Phase Bloom Filter density $\ge \tau_{\mathrm{bloom}}$.
     RepulsionEscape = 6,
@@ -495,6 +495,289 @@ impl StigmergicThresholds {
 
         (decision, mode_flags, target_slot, extra_flags)
     }
+
+    /// Evaluates the 7-regime stigmergic threshold ladder on `trail` and returns the 32-byte
+    /// [`ActionOrchestrationReport`] directly from this 32-byte [`StigmergicThresholds`] descriptor
+    /// (`0` bytes of [`ActionHubEngine`] stack allocation).
+    #[inline(always)]
+    #[must_use]
+    pub const fn evaluate_report_on_trail(
+        &self,
+        trail: &gcso_pointer_trail_t,
+        repulsion_threshold: u8,
+        entropy_h_tilde: f32,
+        phase_coherence: f32,
+        transition_log_prob: f32,
+        selected_trail_id: u32,
+        bloom_repulsion_density: u8,
+        dominant_slot: u8,
+    ) -> ActionOrchestrationReport {
+        let repulsion_triggered = ((bloom_repulsion_density >= repulsion_threshold)
+            & (bloom_repulsion_density > 0))
+            | ((trail.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0);
+        let cur_ptr = gcso_tagged_ptr_t(trail.current_ptr);
+        let embedded_slot = unpack_attractor_slot_from_tag(cur_ptr.unpack_tag());
+        let pref_slot = branchless_select_u8(
+            dominant_slot < (MAX_ATTRACTOR_DOMAINS as u8),
+            dominant_slot,
+            embedded_slot,
+        );
+        let (decision, mode_flags, target_slot, _extra_flags) = self.select_action_decision(
+            trail.stigmergic_density,
+            entropy_h_tilde,
+            phase_coherence,
+            repulsion_triggered,
+            pref_slot,
+        );
+        let base_evolved = gcso_tagged_ptr_t::pack(
+            cur_ptr.unpack_addr(),
+            pack_action_slot_tag(target_slot, mode_flags),
+            cur_ptr.unpack_phase(),
+        );
+        let evolved_ptr = branchless_select_u64(
+            decision as u8 == StigmergicActionDecision::RepulsionEscape as u8,
+            base_evolved.conjugate_phase().raw(),
+            base_evolved.raw(),
+        );
+
+        ActionOrchestrationReport {
+            evolved_ptr,
+            updated_density: trail.stigmergic_density,
+            phase_coherence,
+            transition_log_prob,
+            selected_trail_id,
+            dominant_anchor_id: trail.target_anchor_id,
+            decision: decision as u8,
+            action_mode_flags: mode_flags,
+            target_slot,
+            bloom_repulsion_density,
+        }
+    }
+
+    /// Executes a stateless one-shot stigmergic orchestration step directly from `self` and `dpsr`
+    /// without allocating a 2,816-byte [`ActionHubEngine`] on the stack (`0` stack table zero-init).
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `query_tensor`, `key_tensor`, or `logits_opt`
+    /// alias or have invalid dimensions.
+    #[inline]
+    pub fn orchestrate_stateless_action_step(
+        &self,
+        dpsr: &DpsrEngine,
+        input_ptr: gcso_tagged_ptr_t,
+        entropy_h_tilde: f32,
+        dominant_slot: u8,
+        trail_inout: &mut gcso_pointer_trail_t,
+        mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        mut key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        mut logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    ) -> GcsoResult<ActionOrchestrationReport> {
+        let qdps_min_rad = dpsr.qdps_min_step_rad();
+        let ripa_clamp = dpsr.ripa_clamp_max_rad();
+        let head_dim = dpsr.head_dim() as usize;
+        let num_heads = dpsr.num_heads() as usize;
+        let expected_len = head_dim
+            .checked_mul(num_heads)
+            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        if head_dim == 0
+            || (head_dim & 1) != 0
+            || num_heads == 0
+            || num_heads > MAX_ATTENTION_HEADS
+            || qdps_min_rad < 0.0
+            || !branchless_is_finite_f32(qdps_min_rad)
+            || ripa_clamp <= 0.0
+            || !branchless_is_finite_f32(ripa_clamp)
+        {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        if let Some(ref q_ref) = query_tensor {
+            if q_ref.len() < expected_len {
+                return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            }
+            if let Some(ref k_ref) = key_tensor {
+                if k_ref.len() < expected_len {
+                    return Err(GCSO_ERROR_INVALID_ARGUMENT);
+                }
+                q_ref.ensure_disjoint_mut(k_ref)?;
+            }
+            if let Some(ref l_ref) = logits_opt {
+                q_ref.ensure_disjoint_mut(l_ref)?;
+            }
+        } else if let Some(ref k_ref) = key_tensor {
+            if k_ref.len() < expected_len {
+                return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            }
+            if let Some(ref l_ref) = logits_opt {
+                k_ref.ensure_disjoint_mut(l_ref)?;
+            }
+        }
+
+        trail_inout.record_pointer_transition(input_ptr.raw(), 1, 0.0);
+        let embedded_phase = input_ptr.unpack_phase();
+        if embedded_phase != 0 {
+            trail_inout.accumulate_uniform_phase(embedded_phase);
+        }
+
+        let pref_slot = branchless_select_u8(
+            dominant_slot < (MAX_ATTRACTOR_DOMAINS as u8),
+            dominant_slot,
+            input_ptr.target_attractor_slot(),
+        ) & ATTRACTOR_SLOT_ID_MASK;
+
+        let steer_words = *trail_phase_words_ref(trail_inout);
+        let best_coh = 1.0_f32;
+        let log_prob = 0.0_f32;
+        let selected_id = trail_inout.linked_trail_id;
+
+        let retain = branchless_clamp_f32(branchless_relu_f32(self.evaporation_retain), 0.0, 1.0);
+        let reinf_gain = branchless_relu_f32(self.reinforcement_gain);
+        let base_rho = branchless_flush_subnormal_f32(
+            branchless_relu_f32(trail_inout.stigmergic_density) * retain,
+        );
+        let updated_rho = branchless_min_f32(
+            branchless_flush_subnormal_f32(base_rho + reinf_gain * 2.0),
+            MAX_STIGMERGIC_DENSITY,
+        );
+        trail_inout.stigmergic_density = updated_rho;
+
+        let (decision, mode_flags, target_slot, extra_flags) =
+            self.select_action_decision(updated_rho, entropy_h_tilde, best_coh, false, pref_slot);
+
+        let base_evolved = gcso_tagged_ptr_t::pack(
+            input_ptr.unpack_addr(),
+            pack_action_slot_tag(target_slot, mode_flags),
+            input_ptr.unpack_phase(),
+        );
+        let evolved_ptr = gcso_tagged_ptr_t(branchless_select_u64(
+            decision as u8 == StigmergicActionDecision::RepulsionEscape as u8,
+            base_evolved.conjugate_phase().raw(),
+            base_evolved.raw(),
+        ));
+
+        trail_inout.current_ptr = evolved_ptr.raw();
+        trail_inout.cluster_id = branchless_select_u32(
+            trail_inout.target_anchor_id != 0,
+            trail_inout.target_anchor_id,
+            u32::from(target_slot),
+        );
+        trail_inout.flags = (trail_inout.flags
+            & !(TRAIL_FLAG_REPULSION_ACTIVE | TRAIL_FLAG_INERTIAL_SKIP_ACTIVE))
+            | extra_flags;
+        trail_inout.sync_flags_with_current_ptr();
+
+        let min_step_q7 = rad_to_qdps_min_step_q7_u8(qdps_min_rad);
+        match decision {
+            StigmergicActionDecision::PassiveSidecar
+            | StigmergicActionDecision::InertialLayerSkip => {}
+            StigmergicActionDecision::ExpressPhaseSteer
+            | StigmergicActionDecision::RepulsionEscape => {
+                let swar_w = if min_step_q7 <= 1 {
+                    steer_words
+                } else {
+                    filter_qdps_words_in_registers_64(&steer_words, min_step_q7)
+                };
+                if swar_words_nonzero_64(&swar_w) {
+                    if let Some(ref mut q) = query_tensor {
+                        steer_from_swar_words_core_safe(
+                            &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, q,
+                            key_tensor,
+                        );
+                    } else if let Some(ref mut k) = key_tensor {
+                        steer_from_swar_words_core_safe(
+                            &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, k, None,
+                        );
+                    }
+                }
+            }
+            StigmergicActionDecision::PspmSubHeadRoute
+            | StigmergicActionDecision::FullOrchestrationSrl
+            | StigmergicActionDecision::CrystallizeMacroBasin => {
+                let swar_w = if min_step_q7 <= 1 {
+                    steer_words
+                } else {
+                    filter_qdps_words_in_registers_64(&steer_words, min_step_q7)
+                };
+                if swar_words_nonzero_64(&swar_w) {
+                    if let Some(ref mut q) = query_tensor {
+                        let is_default_ripa = (ripa_clamp.to_bits()
+                            == DEFAULT_RIPA_CLAMP_MAX_RAD.to_bits())
+                            & (num_heads > 0)
+                            & (num_heads <= MAX_ATTENTION_HEADS);
+                        if is_default_ripa {
+                            let rot_dim = ((head_dim >> 2) & !1).max(2).min(head_dim);
+                            if let Some(ref mut k) = key_tensor {
+                                crate::traits::rope::rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words(
+                                    q.as_mut_slice(),
+                                    k.as_mut_slice(),
+                                    &swar_w,
+                                    num_heads,
+                                    head_dim,
+                                    rot_dim,
+                                );
+                            } else {
+                                crate::traits::rope::rotate_fused_self_ripa_and_pspm_default_words(
+                                    q.as_mut_slice(),
+                                    &swar_w,
+                                    num_heads,
+                                    head_dim,
+                                    rot_dim,
+                                    true,
+                                );
+                            }
+                        } else {
+                            let f_heads = (num_heads >> 1) as u16;
+                            let l_heads = (num_heads >> 2) as u16;
+                            let e_heads = (num_heads as u16).saturating_sub(f_heads + l_heads);
+                            let pspm_cfg = gcso_pspm_config_t {
+                                num_fact_heads: f_heads,
+                                num_logic_heads: l_heads,
+                                num_explore_heads: e_heads,
+                                flags: 0,
+                                fact_phase_gain: 1.0,
+                                logic_phase_gain: 1.0,
+                                explore_phase_gain: 1.15,
+                                reserved: [0; 12],
+                            };
+                            dispatch_fused_ripa_and_pspm_words_core(
+                                q, &swar_w, ripa_clamp, &pspm_cfg, &swar_w, &swar_w, &swar_w,
+                                ripa_clamp, 0, head_dim, true,
+                            )?;
+                            if let Some(ref mut k) = key_tensor {
+                                steer_from_swar_words_core_safe(
+                                    &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, k,
+                                    None,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(ref mut logits) = logits_opt {
+            if !logits.is_empty() {
+                let inv_temp = branchless_select_f32(
+                    decision as u8 == StigmergicActionDecision::RepulsionEscape as u8,
+                    0.80,
+                    branchless_clamp_f32(1.0 + 0.15 * branchless_relu_f32(best_coh), 0.75, 1.35),
+                );
+                scale_f32_slice_unrolled8(logits.as_mut_slice(), inv_temp);
+            }
+        }
+
+        Ok(ActionOrchestrationReport {
+            evolved_ptr: evolved_ptr.raw(),
+            updated_density: updated_rho,
+            phase_coherence: best_coh,
+            transition_log_prob: log_prob,
+            selected_trail_id: selected_id,
+            dominant_anchor_id: trail_inout.target_anchor_id,
+            decision: decision as u8,
+            action_mode_flags: mode_flags,
+            target_slot,
+            bloom_repulsion_density: 0,
+        })
+    }
 }
 
 /// 32-byte (`#[repr(C, align(32))]`) [`Pod`] report summarizing the outcome of a single
@@ -546,6 +829,43 @@ impl ActionOrchestrationReport {
 // ===================================================================
 // 2. `ActionHubEngine` — 2,816-Byte L1D-Resident Sidecar Pointer Table
 // ===================================================================
+
+impl gcso_daes_slot_t {
+    /// Executes strictly branchless $\mathcal{O}(1)$ fast-path shortcut lookup directly in-place
+    /// on `self` without copying the 64-byte `gcso_daes_slot_t` onto the stack.
+    #[inline(always)]
+    #[must_use]
+    pub(crate) const fn lookup_fast_path_branchless(&self, input_key: u64) -> (bool, u64) {
+        let mask_hit = ((self.fast_path_bypass_mask & input_key) != 0) & (self.mode == 0);
+        let idx = ((input_key.wrapping_mul(0x9E37_79B9_7F4A_7C15)) >> 62) as usize;
+        let candidate = self.fast_path_shortcuts[idx & (DAES_SHORTCUT_SLOTS - 1)];
+        let fallback = self.fast_path_shortcuts[0];
+        let resolved = branchless_select_u64(candidate != 0, candidate, fallback);
+        let valid_hit = mask_hit & (resolved != 0);
+        (valid_hit, branchless_select_u64(valid_hit, resolved, 0))
+    }
+
+    /// Branchlessly resolves `input_ptr` against `self.fast_path_shortcuts` in-place (`0` stack
+    /// copy, `0` 256-bit-to-64-bit Store-to-Load Forwarding pipeline stall).
+    #[inline(always)]
+    pub(crate) fn resolve_or_pass_in_place(
+        &mut self,
+        input_ptr: gcso_tagged_ptr_t,
+    ) -> (bool, gcso_tagged_ptr_t) {
+        let (hit, shortcut_raw) = self.lookup_fast_path_branchless(input_ptr.raw());
+        self.cache_hit_count = self.cache_hit_count.wrapping_add(u32::from(hit));
+        let eff_raw = branchless_select_u64(hit, shortcut_raw, input_ptr.raw());
+        (hit, gcso_tagged_ptr_t(eff_raw))
+    }
+
+    /// Pushes a profiling metric byte code (`DAES_METRIC_*`) into `self.telemetry_mini_ledger` in-place.
+    #[inline(always)]
+    pub(crate) fn push_telemetry_metric(&mut self, metric_code: u8) {
+        let head = (self.telemetry_ring_head as usize) & (DAES_MINI_LEDGER_LEN - 1);
+        self.telemetry_mini_ledger[head] = metric_code;
+        self.telemetry_ring_head = self.telemetry_ring_head.wrapping_add(1);
+    }
+}
 
 /// Concrete zero-allocation (`#[repr(C, align(128))]`, 2,816-byte [`Pod`]) Sidecar Pointer Table
 /// and **Stigmergic Threshold Action-Selecting Orchestrator** implementing [`ActionHub`] ("The Thing Itself").
@@ -830,47 +1150,16 @@ impl ActionHubEngine {
         bloom_repulsion_density: u8,
         dominant_slot: u8,
     ) -> ActionOrchestrationReport {
-        let repulsion_triggered = ((bloom_repulsion_density >= self.repulsion_threshold)
-            & (bloom_repulsion_density > 0))
-            | ((trail.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0);
-        let cur_ptr = gcso_tagged_ptr_t(trail.current_ptr);
-        let embedded_slot = unpack_attractor_slot_from_tag(cur_ptr.unpack_tag());
-        let pref_slot = branchless_select_u8(
-            dominant_slot < (MAX_ATTRACTOR_DOMAINS as u8),
-            dominant_slot,
-            embedded_slot,
-        );
-        let (decision, mode_flags, target_slot, _extra_flags) =
-            self.thresholds.select_action_decision(
-                trail.stigmergic_density,
-                entropy_h_tilde,
-                phase_coherence,
-                repulsion_triggered,
-                pref_slot,
-            );
-        let base_evolved = gcso_tagged_ptr_t::pack(
-            cur_ptr.unpack_addr(),
-            pack_action_slot_tag(target_slot, mode_flags),
-            cur_ptr.unpack_phase(),
-        );
-        let evolved_ptr = branchless_select_u64(
-            decision as u8 == StigmergicActionDecision::RepulsionEscape as u8,
-            base_evolved.conjugate_phase().raw(),
-            base_evolved.raw(),
-        );
-
-        ActionOrchestrationReport {
-            evolved_ptr,
-            updated_density: trail.stigmergic_density,
+        self.thresholds.evaluate_report_on_trail(
+            trail,
+            self.repulsion_threshold,
+            entropy_h_tilde,
             phase_coherence,
             transition_log_prob,
             selected_trail_id,
-            dominant_anchor_id: trail.target_anchor_id,
-            decision: decision as u8,
-            action_mode_flags: mode_flags,
-            target_slot,
             bloom_repulsion_density,
-        }
+            dominant_slot,
+        )
     }
 
     /// Applies per-step pheromone evaporation ($\rho_j \gets \rho_j \cdot \lambda_{\mathrm{retain}}$)
@@ -925,9 +1214,6 @@ impl ActionHubEngine {
         (slot_idx, next_rho)
     }
 
-    /// Copies `src` into `dst` using width-matched scalar writes and 8-byte aligned 64-bit GPR
-    /// stores (`*trail_phase_words_mut(dst) = *trail_phase_words_ref(src)`) at byte offset `56..120`,
-    /// avoiding unaligned 256-bit `vmovdqu` cache-line splits and 64-bit-to-256-bit STLF stalls.
     /// Copies `src` and pre-loaded `phase_words` into `dst` using width-matched scalar writes and
     /// 8-byte aligned 64-bit GPR stores (`*trail_phase_words_mut(dst) = *phase_words`) at byte
     /// offset `56..120`, avoiding unaligned 256-bit `vmovdqu` cache-line splits, 64-bit-to-256-bit
@@ -1075,8 +1361,7 @@ impl ActionHubEngine {
             }
         }
 
-        let mut daes_local = self.daes_slot;
-        let (bypass_hit, eff_ptr) = self.resolve_or_pass_tagged_ptr(&mut daes_local, input_ptr);
+        let (bypass_hit, eff_ptr) = self.daes_slot.resolve_or_pass_in_place(input_ptr);
 
         self.step_counter = self.step_counter.wrapping_add(1);
         trail_inout.record_pointer_transition(eff_ptr.raw(), 1, 0.0);
@@ -1097,15 +1382,6 @@ impl ActionHubEngine {
             dominant_slot,
             eff_ptr.target_attractor_slot(),
         ) & ATTRACTOR_SLOT_ID_MASK;
-        // SAFETY: `self.slot_phase_bank` is 64B-aligned and `pref_slot < 8`.
-        let pref_slot_w = unsafe {
-            &*(self
-                .slot_phase_bank
-                .as_slice()
-                .as_ptr()
-                .add(usize::from(pref_slot) * MAX_ATTENTION_HEADS)
-                as *const [u64; NUM_SWARM_MICRO_CELLS])
-        };
 
         let active_len = self.inline_active_len();
         let init_w = *trail_phase_words_ref(trail_inout);
@@ -1131,7 +1407,17 @@ impl ActionHubEngine {
             let lp = fast_log_transition_prob(raw_best_coh);
             (sel_id, raw_best_coh, lp, found, bridged_w)
         } else {
-            let slot_coh = if swar_words_nonzero_64(pref_slot_w) {
+            // SAFETY: `self.slot_phase_bank` is 64B-aligned and `pref_slot < 8`.
+            let pref_slot_w = unsafe {
+                &*(self
+                    .slot_phase_bank
+                    .as_slice()
+                    .as_ptr()
+                    .add(usize::from(pref_slot) * MAX_ATTENTION_HEADS)
+                    as *const [u64; NUM_SWARM_MICRO_CELLS])
+            };
+            let pref_enabled = ((self.slot_enabled_mask >> pref_slot) & 1) != 0;
+            let slot_coh = if pref_enabled && swar_words_nonzero_64(pref_slot_w) {
                 coherence_from_word_arrays_64(&init_w, pref_slot_w)
             } else {
                 1.0_f32
@@ -1189,26 +1475,29 @@ impl ActionHubEngine {
             | extra_flags;
         trail_inout.sync_flags_with_current_ptr();
 
-        // Fold coupled working-lane phase profile from `slot_phase_bank[target_slot]` if non-zero:
-        // SAFETY: `self.slot_phase_bank` is 64B-aligned and `target_slot < 8`.
-        let slot_w = unsafe {
-            &*(self
-                .slot_phase_bank
-                .as_slice()
-                .as_ptr()
-                .add(usize::from(target_slot & ATTRACTOR_SLOT_ID_MASK) * MAX_ATTENTION_HEADS)
-                as *const [u64; NUM_SWARM_MICRO_CELLS])
-        };
-        if swar_words_nonzero_64(slot_w) {
-            steer_words[0] = swar_q7_add_sat_x8(steer_words[0], slot_w[0]);
-            steer_words[1] = swar_q7_add_sat_x8(steer_words[1], slot_w[1]);
-            steer_words[2] = swar_q7_add_sat_x8(steer_words[2], slot_w[2]);
-            steer_words[3] = swar_q7_add_sat_x8(steer_words[3], slot_w[3]);
-            steer_words[4] = swar_q7_add_sat_x8(steer_words[4], slot_w[4]);
-            steer_words[5] = swar_q7_add_sat_x8(steer_words[5], slot_w[5]);
-            steer_words[6] = swar_q7_add_sat_x8(steer_words[6], slot_w[6]);
-            steer_words[7] = swar_q7_add_sat_x8(steer_words[7], slot_w[7]);
-            *trail_phase_words_mut(trail_inout) = steer_words;
+        // Fold coupled working-lane phase profile from `slot_phase_bank[target_slot]` if enabled and non-zero:
+        let masked_target_slot = target_slot & ATTRACTOR_SLOT_ID_MASK;
+        if ((self.slot_enabled_mask >> masked_target_slot) & 1) != 0 {
+            // SAFETY: `self.slot_phase_bank` is 64B-aligned and `masked_target_slot < 8`.
+            let slot_w = unsafe {
+                &*(self
+                    .slot_phase_bank
+                    .as_slice()
+                    .as_ptr()
+                    .add(usize::from(masked_target_slot) * MAX_ATTENTION_HEADS)
+                    as *const [u64; NUM_SWARM_MICRO_CELLS])
+            };
+            if swar_words_nonzero_64(slot_w) {
+                steer_words[0] = swar_q7_add_sat_x8(steer_words[0], slot_w[0]);
+                steer_words[1] = swar_q7_add_sat_x8(steer_words[1], slot_w[1]);
+                steer_words[2] = swar_q7_add_sat_x8(steer_words[2], slot_w[2]);
+                steer_words[3] = swar_q7_add_sat_x8(steer_words[3], slot_w[3]);
+                steer_words[4] = swar_q7_add_sat_x8(steer_words[4], slot_w[4]);
+                steer_words[5] = swar_q7_add_sat_x8(steer_words[5], slot_w[5]);
+                steer_words[6] = swar_q7_add_sat_x8(steer_words[6], slot_w[6]);
+                steer_words[7] = swar_q7_add_sat_x8(steer_words[7], slot_w[7]);
+                *trail_phase_words_mut(trail_inout) = steer_words;
+            }
         }
         Self::copy_trail_and_words_to_slot_fast(
             &mut self.trails[stored_slot_idx as usize],
@@ -1334,8 +1623,7 @@ impl ActionHubEngine {
             | branchless_select_u8(skip_compensated, DAES_METRIC_LAYER_SKIP_COMPENSATED, 0)
             | branchless_select_u8(contradiction_repulsed, DAES_METRIC_REPULSION_APPLIED, 0)
             | branchless_select_u8(found_coherent, DAES_METRIC_SLOT_SYNERGY_ACTIVE, 0);
-        let _ = self.telemetry_push(&mut daes_local, metric);
-        self.daes_slot = daes_local;
+        self.daes_slot.push_telemetry_metric(metric);
 
         self.last_selected_trail_id = selected_id;
         self.last_entropy_h_tilde = branchless_select_f32(
