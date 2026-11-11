@@ -913,7 +913,76 @@ impl ActionHubEngine {
         trail_inout.stigmergic_density = next_rho;
 
         let slot_idx = self.write_cursor & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
-        self.trails[slot_idx as usize] = *trail_inout;
+        Self::copy_trail_to_slot_fast(&mut self.trails[slot_idx as usize], trail_inout);
+        self.write_cursor =
+            self.write_cursor.wrapping_add(1) & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
+        let cap = self.capacity;
+        self.active_count = branchless_select_u32(
+            self.active_count < cap,
+            self.active_count.wrapping_add(1),
+            self.active_count,
+        );
+        (slot_idx, next_rho)
+    }
+
+    /// Copies `src` into `dst` using width-matched scalar writes and 8-byte aligned 64-bit GPR
+    /// stores (`*trail_phase_words_mut(dst) = *trail_phase_words_ref(src)`) at byte offset `56..120`,
+    /// avoiding unaligned 256-bit `vmovdqu` cache-line splits and 64-bit-to-256-bit STLF stalls.
+    #[inline(always)]
+    pub(crate) fn copy_trail_to_slot_fast(
+        dst: &mut gcso_pointer_trail_t,
+        src: &gcso_pointer_trail_t,
+    ) {
+        dst.current_ptr = src.current_ptr;
+        dst.prev_ptr = src.prev_ptr;
+        dst.user_data = src.user_data;
+        dst.transition_cost = src.transition_cost;
+        dst.step_count = src.step_count;
+        dst.stigmergic_density = src.stigmergic_density;
+        dst.target_anchor_id = src.target_anchor_id;
+        dst.cluster_id = src.cluster_id;
+        dst.linked_trail_id = src.linked_trail_id;
+        dst.attractor_pull_force = src.attractor_pull_force;
+        dst.flags = src.flags;
+        *trail_phase_words_mut(dst) = *trail_phase_words_ref(src);
+        dst.reserved_padding = src.reserved_padding;
+    }
+
+    /// Applies pheromone evaporation across active inline trails and updates `trail_inout.stigmergic_density`
+    /// in registers without writing `self.trails[slot_idx]` prematurely, returning `(slot_idx, updated_density)`.
+    #[inline(always)]
+    fn evaporate_and_prepare_slot_without_copy(
+        &mut self,
+        trail_inout: &mut gcso_pointer_trail_t,
+        phase_coherence: f32,
+        contradiction_repulsed: bool,
+    ) -> (u32, f32) {
+        let retain = branchless_clamp_f32(
+            branchless_relu_f32(self.thresholds.evaporation_retain),
+            0.0,
+            1.0,
+        );
+        let active_len = self.inline_active_len();
+        let mut i = 0usize;
+        while i < active_len {
+            let decayed = branchless_flush_subnormal_f32(
+                branchless_relu_f32(self.trails[i].stigmergic_density) * retain,
+            );
+            self.trails[i].stigmergic_density = decayed;
+            i += 1;
+        }
+
+        let cur_rho = branchless_flush_subnormal_f32(
+            branchless_relu_f32(trail_inout.stigmergic_density) * retain,
+        );
+        let pos_coh = branchless_clamp_f32(branchless_relu_f32(phase_coherence), 0.0, 1.0);
+        let deposit = branchless_relu_f32(self.thresholds.reinforcement_gain) * (1.0 + pos_coh);
+        let reinforced_rho = branchless_min_f32(cur_rho + deposit, MAX_STIGMERGIC_DENSITY);
+        let damped_rho = branchless_flush_subnormal_f32(cur_rho * 0.5);
+        let next_rho = branchless_select_f32(contradiction_repulsed, damped_rho, reinforced_rho);
+        trail_inout.stigmergic_density = next_rho;
+
+        let slot_idx = self.write_cursor & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
         self.write_cursor =
             self.write_cursor.wrapping_add(1) & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
         let cap = self.capacity;
@@ -1053,7 +1122,11 @@ impl ActionHubEngine {
         }
 
         let (stored_slot_idx, updated_rho) =
-            self.evaporate_and_deposit_pheromone(trail_inout, best_coh, contradiction_repulsed);
+            self.evaporate_and_prepare_slot_without_copy(
+                trail_inout,
+                best_coh,
+                contradiction_repulsed,
+            );
         let (decision, mode_flags, target_slot, extra_flags) =
             self.thresholds.select_action_decision(
                 updated_rho,
@@ -1084,7 +1157,6 @@ impl ActionHubEngine {
             & !(TRAIL_FLAG_REPULSION_ACTIVE | TRAIL_FLAG_INERTIAL_SKIP_ACTIVE))
             | extra_flags;
         trail_inout.sync_flags_with_current_ptr();
-        self.trails[stored_slot_idx as usize] = *trail_inout;
 
         // Fold coupled working-lane phase profile from `slot_phase_bank[target_slot]` if non-zero:
         // SAFETY: `self.slot_phase_bank` is 64B-aligned and `target_slot < 8`.
@@ -1106,9 +1178,8 @@ impl ActionHubEngine {
             steer_words[6] = swar_q7_add_sat_x8(steer_words[6], slot_w[6]);
             steer_words[7] = swar_q7_add_sat_x8(steer_words[7], slot_w[7]);
             *trail_phase_words_mut(trail_inout) = steer_words;
-            self.trails[stored_slot_idx as usize].accumulated_phase_delta =
-                trail_inout.accumulated_phase_delta;
         }
+        Self::copy_trail_to_slot_fast(&mut self.trails[stored_slot_idx as usize], trail_inout);
 
         let mut steered = false;
         let mut pspm_routed = false;
@@ -1413,7 +1484,7 @@ impl PointerActionHub for ActionHubEngine {
         trail_out.sync_flags_with_current_ptr();
 
         let slot_idx = (self.write_cursor as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
-        self.trails[slot_idx] = *trail_out;
+        Self::copy_trail_to_slot_fast(&mut self.trails[slot_idx], trail_out);
         self.write_cursor =
             self.write_cursor.wrapping_add(1) & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
         let cap = self.capacity;
@@ -1598,7 +1669,7 @@ impl ManifoldGatewaySignal for ActionHubEngine {
         let fact_h = num_heads_u8 >> 1;
         let logic_h = num_heads_u8 >> 2;
         let explore_h = num_heads_u8.saturating_sub(fact_h + logic_h);
-        let frame = GatewayFrame {
+        let mut frame = GatewayFrame {
             tagged_ptr: active_trail.current_ptr,
             zimms_section_offset48: cur_tp.unpack_addr(),
             target_anchor_id: active_trail.target_anchor_id,
@@ -1626,8 +1697,9 @@ impl ManifoldGatewaySignal for ActionHubEngine {
             mean_phase_tag_q7: cur_tp.unpack_phase(),
             active_head_count: u16::from(num_heads_u8),
             frame_flags: u16::from(dec == StigmergicActionDecision::RepulsionEscape),
-            phase_deltas: active_trail.accumulated_phase_delta,
+            phase_deltas: [0; MAX_ATTENTION_HEADS],
         };
+        *frame.phase_words_mut() = words;
         (frame, words)
     }
 

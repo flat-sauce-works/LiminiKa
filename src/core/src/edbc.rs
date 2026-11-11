@@ -208,22 +208,19 @@ pub const fn compute_sparse_surrogate_entropy(p_max: f32, p_2nd: f32, _eps: f32)
     const C8: f32 = 1.0 / 240.0;
     const C9_TAIL: f32 = MAX_SURROGATE_ENTROPY_LN2 - (C1 + C2 + C3 + C4 + C5 + C6 + C7 + C8);
 
-    let p_2nd_clean = branchless_relu_f32(p_2nd);
-    let raw_sum = p_max + p_2nd_clean;
-    // In IEEE-754 arithmetic, `p_2nd_clean >= 0.0` (with `NaN` mapped to `0.0` by `branchless_relu_f32`).
-    // If `p_2nd` was `NaN`, `p_2nd_clean > 1.0e-30` is false; if `p_max` or `p_2nd` is `+Inf`,
-    // `raw_sum` is `+Inf` and `branchless_is_finite_f32(raw_sum)` is false. Thus a single finite/normal
-    // check on `raw_sum` covers all IEEE-754 `NaN`/`Inf`/subnormal edge cases in `0` branches!
-    let valid_sum = (p_max > 0.0)
-        & (p_2nd_clean > 1.0e-30)
-        & (raw_sum >= F32_MIN_POSITIVE_NORMAL)
-        & branchless_is_finite_f32(raw_sum);
+    // Issue `raw_sum` and `raw_diff` in parallel at Cycle 0. Whenever `valid_sum` holds
+    // (`p_max > 0.0` and `p_2nd > 1.0e-30`), both inputs are strictly positive and
+    // `raw_sum > 1.0e-30 >> F32_MIN_POSITIVE_NORMAL` automatically.
+    let raw_sum = p_max + p_2nd;
+    let raw_diff = p_max - p_2nd;
+    let valid_sum = (p_max > 0.0) & (p_2nd > 1.0e-30) & (raw_sum < f32::INFINITY);
     let safe_sum = branchless_select_f32(valid_sum, raw_sum, 1.0);
     let inv_sum = fast_inv_pos_normal_f32(safe_sum);
-    let signed_delta = (p_max - p_2nd_clean) * inv_sum;
-    // Since `signed_delta * signed_delta >= 0.0` for all finite floats, only an upper clamp is needed.
-    // Evaluate the 9-term even polynomial via Estrin's parallel binary-tree scheme (`t2 = t * t`, `t4 = t2 * t2`)
-    // to halve serial FMA critical-path depth from 8 stages (32 cycles) down to 4 stages (16 cycles).
+    let signed_delta = raw_diff * inv_sum;
+    // Evaluate the 9-term even polynomial via Estrin's parallel binary-tree scheme (`t2 = t * t`, `t4 = t2 * t2`).
+    // For all `t in [0.0, 0.999_999_9)`, `MAX_SURROGATE_ENTROPY_LN2 - t * poly` lies strictly in
+    // `[1.788e-7, LN2]` (strictly normal and in-bounds), eliminating redundant post-clamp and
+    // `vmovd` subnormal-flush stages from the critical path.
     let t = branchless_min_f32(signed_delta * signed_delta, 1.0);
     let t2 = t * t;
     let t4 = t2 * t2;
@@ -234,23 +231,19 @@ pub const fn compute_sparse_surrogate_entropy(p_max: f32, p_2nd: f32, _eps: f32)
     let q03 = p01 + t2 * p23;
     let q47 = p45 + t2 * p67;
     let poly = (q03 + t4 * q47) + (t4 * t4) * C9_TAIL;
-    let raw_h = branchless_clamp_f32(
-        MAX_SURROGATE_ENTROPY_LN2 - t * poly,
-        0.0,
-        MAX_SURROGATE_ENTROPY_LN2,
-    );
-    let not_pure_greedy = t < 0.999_999_9;
-    branchless_select_f32(
-        valid_sum & not_pure_greedy,
-        branchless_flush_subnormal_f32(raw_h),
-        0.0,
-    )
+    let raw_h = MAX_SURROGATE_ENTROPY_LN2 - t * poly;
+    branchless_select_f32(valid_sum & (t < 0.999_999_9), raw_h, 0.0)
 }
 
 /// Computes Moving Z-Score Normalized Attention Entropy ($\tilde{H}$) incorporating
 /// surrogate entropy and inter-layer activation cosine distance variance in **strictly
 /// constant-time mode (`0` branches, `0 fdiv`)** via `fast_inv_pos_normal_f32` and
 /// [`tanh_lut_eval_nonneg`] (Eq. 3.1).
+///
+/// The inter-layer cosine modulation factor $1 + \gamma_{\mathrm{mod}} \tanh(\alpha_z \operatorname{ReLU}(z_{\mathrm{dist}}))$
+/// is evaluated with zero data dependency on `h_surrogate`, allowing out-of-order CPU execution units
+/// to overlap `fast_inv_pos_normal_f32(eff_sigma)` and `tanh_lut_eval_nonneg` in parallel with
+/// [`compute_sparse_surrogate_entropy`].
 #[inline(always)]
 pub const fn compute_moving_z_score_entropy(
     h_surrogate: f32,
@@ -261,12 +254,10 @@ pub const fn compute_moving_z_score_entropy(
     alpha_z: f32,
     gamma_mod: f32,
 ) -> f32 {
-    let valid_h = (h_surrogate > 0.0) & branchless_is_finite_f32(h_surrogate);
-    let valid_inputs =
-        valid_h & branchless_is_finite_f32(cosine_dist) & branchless_is_finite_f32(mu_dist);
+    let valid_cos = branchless_is_finite_f32(cosine_dist) & branchless_is_finite_f32(mu_dist);
     let raw_diff = cosine_dist - mu_dist;
     let pos_diff = branchless_select_f32(
-        valid_inputs & (raw_diff > 0.0) & branchless_is_finite_f32(raw_diff),
+        valid_cos & (raw_diff > 0.0) & (raw_diff < f32::INFINITY),
         raw_diff,
         0.0,
     );
@@ -294,13 +285,13 @@ pub const fn compute_moving_z_score_entropy(
     let inv_sigma = fast_inv_pos_normal_f32(eff_sigma);
     let z_dist = pos_diff * inv_sigma;
     let relu_z = branchless_min_f32(z_dist, MAX_VALID_TOKEN_Z_SCORE);
-    // Since `alpha_safe >= 0.0` and `relu_z >= 0.0` are already sanitized and non-negative,
-    // evaluate tanh via the 64B-aligned 1KB L1d LUT + 2nd-order analytic ODE Taylor expansion
-    // (`0` divisions, `0` Newton-Raphson reciprocals).
     let d_cosine_hat = tanh_lut_eval_nonneg(alpha_safe * relu_z);
-    let h_tilde = branchless_flush_subnormal_f32(h_surrogate * (1.0 + gamma_safe * d_cosine_hat));
+    let mod_factor = 1.0 + gamma_safe * d_cosine_hat;
+
+    let valid_h = (h_surrogate > 0.0) & branchless_is_finite_f32(h_surrogate);
+    let h_tilde = branchless_flush_subnormal_f32(h_surrogate * mod_factor);
     branchless_select_f32(
-        valid_inputs & branchless_is_finite_f32(h_tilde),
+        valid_h & valid_cos & branchless_is_finite_f32(h_tilde),
         h_tilde,
         0.0,
     )
@@ -1021,18 +1012,10 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
     let mut win_is_uniform = false;
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     let (vs0, vs1) = unsafe {
-        if preloaded_src_w_opt.is_none() {
-            use core::arch::x86_64::{__m256i, _mm256_loadu_si256};
-            let sp = src_trail.accumulated_phase_delta.as_ptr().cast::<__m256i>();
-            (_mm256_loadu_si256(sp), _mm256_loadu_si256(sp.add(1)))
-        } else {
-            crate::traits::branchless::avx2_words64_to_vec64_with_uniform(&src_w, src_is_uniform)
-        }
+        crate::traits::branchless::avx2_words64_to_vec64_with_uniform(&src_w, src_is_uniform)
     };
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     let (mut vw0, mut vw1) = (vs0, vs1);
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    let (mut best_vc0, mut best_vc1, mut best_vc_valid) = (vs0, vs1, false);
 
     let mut idx = 0usize;
     while idx < cand_len {
@@ -1080,10 +1063,8 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
             #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
             {
                 unsafe {
-                    use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
-                    let cp = cand.accumulated_phase_delta.as_ptr().cast::<__m256i>();
-                    let vc0 = _mm256_loadu_si256(cp);
-                    let vc1 = _mm256_loadu_si256(cp.add(1));
+                    use core::arch::x86_64::_mm256_sub_epi8;
+                    let (vc0, vc1) = crate::traits::branchless::avx2_words64_to_vec64(cand_w);
                     cand_vc = (vc0, vc1);
                     cand_vc_loaded = true;
                     crate::traits::branchless::avx2_coherence_from_diff_vec64(
@@ -1137,16 +1118,12 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
                         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                         {
                             unsafe {
-                                use core::arch::x86_64::{
-                                    __m256i, _mm256_loadu_si256, _mm256_sub_epi8,
-                                };
+                                use core::arch::x86_64::_mm256_sub_epi8;
                                 let (vc0, vc1) = if cand_vc_loaded {
                                     cand_vc
                                 } else {
-                                    let cp =
-                                        cand.accumulated_phase_delta.as_ptr().cast::<__m256i>();
-                                    let v0 = _mm256_loadu_si256(cp);
-                                    let v1 = _mm256_loadu_si256(cp.add(1));
+                                    let (v0, v1) =
+                                        crate::traits::branchless::avx2_words64_to_vec64(cand_w);
                                     cand_vc = (v0, v1);
                                     cand_vc_loaded = true;
                                     (v0, v1)
@@ -1202,12 +1179,6 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
             best_coh = coh;
             best_cand_is_uniform = cand_is_uniform;
             best_cand_eq_src = cand_eq_src;
-            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-            {
-                best_vc0 = cand_vc.0;
-                best_vc1 = cand_vc.1;
-                best_vc_valid = cand_vc_loaded;
-            }
         }
         found_valid |= is_coherent;
         idx += 1;
@@ -1244,29 +1215,14 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
             if !best_cand_is_uniform {
                 if s > 0 && s < 128 {
                     unsafe {
-                        use core::arch::x86_64::{
-                            __m256i, _mm256_loadu_si256, _mm256_storeu_si256,
-                        };
-                        let (bvc0, bvc1) = if best_vc_valid {
-                            (best_vc0, best_vc1)
-                        } else {
-                            let bp = dst_trail.accumulated_phase_delta.as_ptr().cast::<__m256i>();
-                            (_mm256_loadu_si256(bp), _mm256_loadu_si256(bp.add(1)))
-                        };
+                        let (bvc0, bvc1) = crate::traits::branchless::avx2_words64_to_vec64(
+                            trail_phase_words_ref(dst_trail),
+                        );
                         let (vr0, vr1) =
                             crate::traits::branchless::avx2_slerp_vec64(vs0, vs1, bvc0, bvc1, s);
-                        let sp = src_trail
-                            .accumulated_phase_delta
-                            .as_mut_ptr()
-                            .cast::<__m256i>();
-                        let dp = dst_trail
-                            .accumulated_phase_delta
-                            .as_mut_ptr()
-                            .cast::<__m256i>();
-                        _mm256_storeu_si256(sp, vr0);
-                        _mm256_storeu_si256(sp.add(1), vr1);
-                        _mm256_storeu_si256(dp, vr0);
-                        _mm256_storeu_si256(dp.add(1), vr1);
+                        let bridged_w = crate::traits::branchless::avx2_vec64_to_words64(vr0, vr1);
+                        *trail_phase_words_mut(src_trail) = bridged_w;
+                        *trail_phase_words_mut(dst_trail) = bridged_w;
                     }
                 } else {
                     let best_w = *trail_phase_words_ref(dst_trail);
@@ -1757,15 +1713,10 @@ fn step_via_gateway_frame_with_words_core<
                         // directly from L1D and converts `gw_w` via register moves (`avx2_words64_to_vec64_with_uniform`)
                         // to eliminate 64B stack copy and 64-bit-to-256-bit Store-to-Load Forwarding (STLF) stalls.
                         let nw = unsafe {
-                            use core::arch::x86_64::{__m256i, _mm256_loadu_si256};
-                            let (vc0, vc1) = if cur_uni {
+                            let (vc0, vc1) =
                                 crate::traits::branchless::avx2_words64_to_vec64_with_uniform(
-                                    cur_w_ref, true,
-                                )
-                            } else {
-                                let cp = trail.accumulated_phase_delta.as_ptr().cast::<__m256i>();
-                                (_mm256_loadu_si256(cp), _mm256_loadu_si256(cp.add(1)))
-                            };
+                                    cur_w_ref, cur_uni,
+                                );
                             let (vg0, vg1) =
                                 crate::traits::branchless::avx2_words64_to_vec64_with_uniform(
                                     gw_w, gw_uni,
@@ -3603,57 +3554,7 @@ impl EdbcEngine {
             alpha_z,
             gamma_mod,
         );
-        let current_mode = self.state.active_branch_mode;
-        let tau = self.state.bifurcation_threshold;
-        let tau_flux = self.tau_flux;
-        let delta = self.hysteresis_band;
-        let next_dwell = self.mode_dwell_steps.saturating_add(1);
-        let min_dwell = self.min_mode_dwell_steps;
-
-        let (new_entropy, sliding_rate, is_first_step) =
-            self.advance_entropy_ring_presanitized(h_tilde);
-
-        let can_relax = next_dwell >= min_dwell;
-        let flux_surge = sliding_rate > (tau_flux + delta);
-        let can_escalate = is_first_step | can_relax | flux_surge;
-        let tau_15 = tau * 1.5;
-
-        let cond_repulse_up = (new_entropy > (tau_15 + delta)) & flux_surge;
-        let cond_bif_up = (new_entropy > (tau + delta)) & (sliding_rate >= -delta) & can_escalate;
-        let cond_norm_down = (new_entropy < (tau - delta)) & can_relax;
-        let cond_repulse_down =
-            ((new_entropy < (tau_15 - delta)) | (sliding_rate < (tau_flux - delta))) & can_relax;
-
-        let to_bif = ((current_mode == EDBC_MODE_NORMAL_ENTROPY) & cond_bif_up)
-            | ((current_mode == EDBC_MODE_PHASE_CONJUGATE_REPULSION) & cond_repulse_down);
-        let mid_mode = branchless_select_u32(to_bif, EDBC_MODE_PITCHFORK_BIFURCATION, current_mode);
-        let next_mode = branchless_select_u32(
-            cond_repulse_up,
-            EDBC_MODE_PHASE_CONJUGATE_REPULSION,
-            branchless_select_u32(cond_norm_down, EDBC_MODE_NORMAL_ENTROPY, mid_mode),
-        );
-
-        let final_dwell = branchless_select_u32(next_mode == current_mode, next_dwell, 1);
-        let mode_idx = (next_mode as usize).min(2);
-        let sample_temp = LUT_SAMPLE_TEMPERATURE[mode_idx];
-        let rep_gain = LUT_REPULSION_GAIN[mode_idx];
-
-        self.state.moving_z_entropy = new_entropy;
-        self.state.sliding_entropy_rate = sliding_rate;
-        self.state.active_branch_mode = next_mode;
-        self.state.sample_temperature = sample_temp;
-        self.state.repulsion_gain = rep_gain;
-        self.mode_dwell_steps = final_dwell;
-        self.step_count = self.step_count.wrapping_add(1);
-
-        state_out.moving_z_entropy = new_entropy;
-        state_out.bifurcation_threshold = tau;
-        state_out.singularity_eps = eps;
-        state_out.sliding_entropy_rate = sliding_rate;
-        state_out.repulsion_gain = rep_gain;
-        state_out.sample_temperature = sample_temp;
-        state_out.active_branch_mode = next_mode;
-        Ok(new_entropy)
+        Ok(self.eval_stateful_finite_into(h_tilde, state_out))
     }
 
     /// Fuses Top-2 Sparse Surrogate Attention Entropy, inter-layer Moving Z-Score normalization,

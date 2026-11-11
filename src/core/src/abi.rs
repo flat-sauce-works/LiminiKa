@@ -3478,7 +3478,7 @@ pub unsafe extern "C" fn gcso_action_hub_select_and_bridge_best_next_trail(
                     *trail_phase_words_mut(dst_trail) = bridged_w;
                 }
             } else {
-                dst_trail.accumulated_phase_delta = src_trail.accumulated_phase_delta;
+                *trail_phase_words_mut(dst_trail) = *trail_phase_words_ref(&src_trail);
             }
             dst_trail.prev_ptr = src_trail.current_ptr;
             dst_trail.step_count = src_trail.step_count.wrapping_add(1);

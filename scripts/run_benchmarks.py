@@ -7,6 +7,11 @@ Executes Rust micro-benchmarks via Cargo with optimal zero-option defaults so
 running `python scripts/run_benchmarks.py` with no arguments automatically
 achieves maximum determinism, lowest CoV/MAD jitter, peak SIMD throughput, and
 generates Criterion's interactive HTML index (`target/criterion/report/index.html`):
+- Clean Core vs. Provisional `.gcso` Separation: the default `standard` profile
+  runs all finalized Core (`DPSR` + `EDBC`) benchmark groups while skipping
+  `Provisional_GCSO_Container` (`--skip Provisional_GCSO_Container`), unless
+  `--include-provisional-gcso`, `--profile provisional-gcso`, or `--profile all`
+  is specified.
 - Two-stage Pre-Compilation & Thermal/IO Settle (`--precompile` enabled by
   default; disable via `--no-precompile`): builds all benchmark binaries via
   `cargo bench --no-run` first, flushes OS filesystem buffers, runs Python GC,
@@ -30,13 +35,9 @@ generates Criterion's interactive HTML index (`target/criterion/report/index.htm
   -C codegen-units=1`.
 - Criterion Noise-Threshold, Settle Window & HTML Index Generation
   (`--noise-threshold 0.025`, `--settle-ms 400`, and `--plot` enabled by default;
-  pass `--noplot` for headless CI): suppresses sub-25ns RDTSC timer-quantum and
+  pass `--noplot` for headless CI): suppresses sub-30ns RDTSC timer-quantum and
   background desktop OS context-switch false alarms while respecting per-group
-  Rust `sample_size` configurations (e.g., `30` samples on 1M-token endurance
-  streams vs `100` on micro-kernels), and ensures
-  Criterion generates `target/criterion/report/index.html` and per-benchmark
-  `report/index.html` pages, prints the resolved HTML index URI at completion,
-  and supports `--open-index` to open the report in the system browser.
+  Rust `sample_size` configurations.
 """
 
 import argparse
@@ -44,6 +45,7 @@ import ctypes
 import gc
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -55,52 +57,64 @@ from typing import cast
 # Pre-defined execution profiles for tailored benchmarking runs
 PROFILES: dict[str, dict[str, str | None]] = {
     "standard": {
-        "description": "Standard full benchmark suite covering DPSR, EDBC, 2-Origin Gateway, Online Toroidal k-Means, Coarse-to-Fine Routing, 4-Section .gcso Zero-Copy, Unified-Field, and Stigmergic Micro-Swarm hot paths",
+        "description": "Finalized Core benchmark suite covering DPSR, EDBC, Online Toroidal k-Means, Coarse-to-Fine Routing, Unified-Field, and Stigmergic Micro-Swarm hot paths (excludes provisional .gcso container benchmarks by default)",
         "filter": None,
+        "skip": "Provisional_GCSO_Container",
+    },
+    "provisional-gcso": {
+        "description": "Isolated pre-v1.0 provisional .gcso / ZIMMS 4-section container serialization, CRC32 verification, and zero-copy mapping benchmarks",
+        "filter": "Provisional_GCSO_Container",
+        "skip": None,
     },
     "quick": {
-        "description": "Fast smoke test run for build validation and core kernel verification",
-        "filter": "steering_32b|safe_ripa|normal_mode|eval_cvoid|swarm_quorum|unified_field|bayesian|gateway|toroidal_kmeans|coarse_to_fine|top2_liminal|merge_and_prune|four_section|gop_budget",
+        "description": "Fast smoke test run for build validation and core DPSR/EDBC kernel verification",
+        "filter": "steering_32b|safe_ripa|normal_mode|eval_cvoid|swarm_quorum|unified_field|bayesian|toroidal_kmeans|coarse_to_fine|top2_liminal|merge_and_prune|gop_budget",
+        "skip": "Provisional_GCSO_Container",
     },
     "ripa": {
         "description": "Focused comparison of RIPA LUT/pre-inverted trig vs Full-Channel RoPE, Swarm Quorum, Unified Field, Slerp, and PSPM Pseudo-MoE",
         "filter": "steering_32b|safe_ripa|swarm_quorum|closed_loop_swarm|unified_field|slot_bank_swarm|slerp_geodesic|pspm_subhead|ripa_extreme",
-    },
-    "gateway-crystallize": {
-        "description": "Focuses on 2-Origin Composite Manifold Gateway (System x Fact/Persona/Guard), Online Toroidal k-Means / DP-Means, Coarse-to-Fine routing, and 4-Section .gcso Zero-Copy Crystallization",
-        "filter": "gateway|crystalliz|toroidal_kmeans|coarse_to_fine|top2_liminal|merge_and_prune|four_section|zimms_zero_copy|unified_field|bayesian|liminal",
+        "skip": "Provisional_GCSO_Container",
     },
     "kmeans-coarse-to-fine": {
-        "description": "Focuses on Classical Online Toroidal k-Means / DP-Means macro clustering, Coarse-to-Fine routing, and 4-Section .gcso Zero-Copy container mapping",
-        "filter": "toroidal_kmeans|coarse_to_fine|top2_liminal|merge_and_prune|four_section|zero_copy_register_crystallized|zimms_zero_copy",
+        "description": "Focuses on Classical Online Toroidal k-Means / DP-Means macro clustering and Coarse-to-Fine routing (8 candidates across 4 centroids)",
+        "filter": "toroidal_kmeans|coarse_to_fine|top2_liminal|merge_and_prune",
+        "skip": "Provisional_GCSO_Container",
     },
     "bayesian-limina": {
         "description": "Focuses on Hypothesis 1 (Joint Probability x Attention phase interference) + Hypothesis 2 (ActionHub Bayesian pointer-trail rewiring, Limina bridging, Unified Field, and Pitchfork Tunneling)",
-        "filter": "bayesian|liminal|unified_field|inv_temp|tunneling|coherence|gateway|coarse_to_fine|top2_liminal",
+        "filter": "bayesian|liminal|unified_field|inv_temp|tunneling|coherence|coarse_to_fine|top2_liminal",
+        "skip": "Provisional_GCSO_Container",
     },
     "swarm-stigmergy": {
-        "description": "Focuses on 8-Cell SWAR Micro-Swarm quorum, Unified-Field Swarm, Bayesian Pointer Rewiring, Limina Bridging, 2-Origin Gateway, Online Toroidal k-Means, Coarse-to-Fine routing, .gcso Crystallization, 8-Slot Bank lateral recruitment, PSPM Pseudo-MoE, Visual Co-Watching, Metastable Tunneling, and Cohomology",
-        "filter": "swarm|quorum|unified_field|bayesian|liminal|gateway|crystalliz|toroidal_kmeans|coarse_to_fine|top2_liminal|merge_and_prune|four_section|inv_temp|slerp|coherence|pspm|visual|pointer|tunneling|cohomology|chebyshev|hodge|qdpt|gop_budget",
+        "description": "Focuses on Core 8-Cell SWAR Micro-Swarm quorum, Unified-Field Swarm, Bayesian Pointer Rewiring, Limina Bridging, Online Toroidal k-Means, Coarse-to-Fine routing, 8-Slot Bank lateral recruitment, PSPM Pseudo-MoE, Visual Co-Watching, Metastable Tunneling, and Cohomology",
+        "filter": "swarm|quorum|unified_field|bayesian|liminal|toroidal_kmeans|coarse_to_fine|top2_liminal|merge_and_prune|inv_temp|slerp|coherence|pspm|visual|pointer|tunneling|cohomology|chebyshev|hodge|qdpt|gop_budget",
+        "skip": "Provisional_GCSO_Container",
     },
     "long-dialogue": {
         "description": "Focuses on long-context endurance, S^1 geodesic phase unwrap, dwell-step anti-chattering, Bloom self-normalization, and multi-turn stream simulations",
         "filter": "long_context|circular|stream|long_dialogue|500k|1m|50k|100k|chattering|dwell|seam_crossing",
+        "skip": "Provisional_GCSO_Container",
     },
     "extreme": {
         "description": "Focuses on extreme stress cases, bit saturation, subnormal rescue, RIPA geodesic clamps, and mathematical singularities",
         "filter": "extreme|edge|saturation|underflow|subnormal|singularity|odd_remainder|spike|prefill",
+        "skip": "Provisional_GCSO_Container",
     },
     "long-horizon-edge": {
         "description": "Combined focus on long-horizon degradation (100K-1M tokens, Bloom self-normalization, seam crossing) and edge-case bottlenecks (subnormals, Q7 saturation, odd remainders)",
         "filter": "long_context|circular|stream|long_dialogue|500k|1m|50k|100k|chattering|dwell|seam_crossing|extreme|edge|saturation|underflow|subnormal|singularity|odd_remainder|spike|prefill",
+        "skip": "Provisional_GCSO_Container",
     },
     "alignment": {
         "description": "Focuses on 32B/128B/256B/512B hardware memory alignment boundary comparisons",
         "filter": "32b|128b|256b|512b",
+        "skip": "Provisional_GCSO_Container",
     },
     "all": {
-        "description": "Full exhaustive execution across all micro, macro, swarm, gateway, k-means, and stress cases",
-        "filter": ".*",
+        "description": "Full exhaustive execution across all Core (DPSR + EDBC) and Provisional (.gcso / ZIMMS) benchmark groups",
+        "filter": None,
+        "skip": None,
     },
 }
 
@@ -163,6 +177,47 @@ def resolve_criterion_dir(project_root: Path, requested_dir: Path) -> Path:
     return requested_dir
 
 
+LEGACY_PROVISIONAL_BENCH_SUBDIRS: tuple[str, ...] = (
+    "gateway_signal_steer_and_crystallize_attractor_64h",
+    "gateway_swarm_bayesian_pspm_and_crystallize_full_64h",
+    "zimms_zero_copy_crystallized_ensemble_gateway_steer_64h",
+    "zero_copy_register_crystallized_ensemble_steer_64h",
+    "four_section_gcso_zero_copy_map_and_register_steer_64h",
+    "step_gateway_signal_and_crystallize_attractor_64h",
+    "step_gateway_4axis_contradiction_guard_and_provenance_64h",
+    "step_crystallized_ensemble_gravity_fold_4records",
+    "zimms_zero_copy_crystallized_ensemble_step_4records",
+    "four_section_gcso_zero_copy_write_verify_and_step_4records",
+)
+
+
+def clean_provisional_criterion_artifacts(
+    project_root: Path, requested_dir: Path, remove_provisional_groups: bool = True
+) -> None:
+    """Remove stale provisional `.gcso` Criterion directories and legacy pre-split subdirectories."""
+    candidate_roots = [
+        requested_dir
+        if requested_dir.is_absolute()
+        else (project_root / requested_dir),
+        project_root / "target" / "criterion",
+        project_root / "src" / "core" / "target" / "criterion",
+    ]
+    for root in candidate_roots:
+        if not root.exists():
+            continue
+        for entry in root.iterdir():
+            if not entry.is_dir():
+                continue
+            if remove_provisional_groups and "provisional_gcso" in entry.name.lower():
+                shutil.rmtree(entry, ignore_errors=True)
+                continue
+            if "provisional_gcso" not in entry.name.lower():
+                for legacy_sub in LEGACY_PROVISIONAL_BENCH_SUBDIRS:
+                    legacy_path = entry / legacy_sub
+                    if legacy_path.exists():
+                        shutil.rmtree(legacy_path, ignore_errors=True)
+
+
 def _discover_linux_primary_physical_cores() -> list[int]:
     """Return sorted primary (non-SMT-sibling) logical CPU IDs on Linux via sysfs topology."""
     cpu_root = Path("/sys/devices/system/cpu")
@@ -213,9 +268,6 @@ def auto_select_optimal_core() -> int | None:
 
     cpu_cnt = os.cpu_count() or 1
     if cpu_cnt >= 8:
-        # Select logical CPU #4 (Physical P-Core #2): guaranteed to be a high-frequency Performance
-        # Core (P-core) on all Intel Hybrid (Alder/Raptor/Arrow Lake) and AMD Zen architectures,
-        # avoiding both Core #0/#1 (Windows DPC/ISR target) and upper logical E-cores!
         return 4
     elif cpu_cnt >= 4:
         return 2
@@ -236,7 +288,8 @@ def apply_process_stabilization(high_priority: bool, pin_core: int | None) -> No
             try:
                 sched_setaffinity = cast(
                     Callable[[int, set[int]], None] | None,
-                    getattr(os, "sched_setaffinity", None),
+                    getattr(os, "sched_getaffinity", None)
+                    and getattr(os, "sched_setaffinity", None),
                 )
                 if callable(sched_setaffinity):
                     sched_setaffinity(0, {int(pin_core)})
@@ -280,9 +333,6 @@ def apply_process_stabilization(high_priority: bool, pin_core: int | None) -> No
                     except (AttributeError, OSError):
                         pass
                     try:
-                        # ControlMask 0x5 = PROCESS_POWER_THROTTLING_EXECUTION_SPEED (0x1)
-                        #                 | PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION (0x4)
-                        # StateMask   0x0 = Disable both EcoQoS E-core demotion and background timer throttling
                         throttling = _WinProcessPowerThrottlingState(
                             Version=1,
                             ControlMask=0x5,
@@ -300,9 +350,11 @@ def apply_process_stabilization(high_priority: bool, pin_core: int | None) -> No
                     except (AttributeError, OSError):
                         pass
                     try:
-                        winmm = getattr(windll, "winmm", None)
-                        if winmm is not None:
-                            winmm.timeBeginPeriod(1)
+                        if pin_core is not None and pin_core >= 0:
+                            thread_handle = kernel32.GetCurrentThread()
+                            kernel32.SetThreadIdealProcessor(
+                                thread_handle, ctypes.c_ulong(int(pin_core))
+                            )
                     except (AttributeError, OSError):
                         pass
             else:
@@ -462,7 +514,7 @@ def main() -> None:
     default_core = auto_select_optimal_core()
 
     parser = argparse.ArgumentParser(
-        description="Unified LiminiKa Benchmark & Report Pipeline Runner (Zero-Option Optimal Defaults & Criterion HTML Index Enabled)"
+        description="Unified LiminiKa Benchmark & Report Pipeline Runner (Core DPSR/EDBC Default + Isolated Provisional .gcso)"
     )
     parser.add_argument(
         "--benchmarks",
@@ -474,7 +526,13 @@ def main() -> None:
         "--profile",
         choices=list(PROFILES.keys()),
         default="standard",
-        help="Select pre-configured benchmarking profile (default: standard)",
+        help="Select pre-configured benchmarking profile (default: standard = Core DPSR + EDBC only)",
+    )
+    parser.add_argument(
+        "--include-provisional-gcso",
+        action="store_true",
+        default=False,
+        help="Also run provisional .gcso / ZIMMS container benchmarks alongside the selected profile",
     )
     parser.add_argument(
         "--filter",
@@ -540,7 +598,7 @@ def main() -> None:
         "--noise-threshold",
         type=float,
         default=0.025,
-        help="Criterion --noise-threshold relative tolerance (default: 0.025 = 2.5%% to suppress sub-25ns RDTSC & background OS scheduler false alarms)",
+        help="Criterion --noise-threshold relative tolerance (default: 0.025 = 2.5%% to suppress sub-30ns RDTSC & background OS scheduler false alarms)",
     )
     parser.add_argument(
         "--settle-ms",
@@ -652,23 +710,29 @@ def main() -> None:
     print_system_diagnostics()
 
     effective_filter = args.filter
+    effective_skip: str | None = None
     if not effective_filter and args.profile in PROFILES:
         effective_filter = PROFILES[args.profile]["filter"]
+        if not args.include_provisional_gcso:
+            effective_skip = PROFILES[args.profile].get("skip")
 
     custom_env = build_optimal_cargo_env(args.native_cpu, args.rustflags)
     resolved_manifest = resolve_manifest_path(project_root, args.manifest_path)
 
     if not args.skip_execution:
+        if not args.dry_run:
+            clean_provisional_criterion_artifacts(
+                project_root,
+                args.criterion_dir,
+                remove_provisional_groups=bool(effective_skip),
+            )
+
         base_cargo_cmd = ["cargo", "bench"]
         if resolved_manifest is not None:
             base_cargo_cmd.extend(["--manifest-path", str(resolved_manifest)])
         for bench_target in args.benchmarks:
             base_cargo_cmd.extend(["--bench", bench_target])
 
-        # Execute Step 0 across ALL CPU cores BEFORE pinning the process to a single core.
-        # Pinning before Step 0 would force parallel rustc/LLVM compilation onto `pin_core`
-        # alone (8x-16x slower build) and concentrate 100% of compiler thermal dissipation
-        # onto the exact physical core about to run Step 1 timing measurements.
         if args.precompile:
             print(
                 "=== Step 0: Pre-Compiling Benchmark Binaries Across All Cores (Separating Build I/O & Thermal Spike from Timing) ==="
@@ -689,7 +753,6 @@ def main() -> None:
                     settle_ms=max(args.settle_ms, 800) if args.settle_ms > 0 else 0
                 )
 
-        # Apply high priority & single-core CPU affinity immediately before Step 1 measurement
         if not args.dry_run:
             apply_process_stabilization(args.high_priority, effective_pin_core)
 
@@ -700,10 +763,14 @@ def main() -> None:
         print(f"Targets    : {', '.join(args.benchmarks)}")
         if effective_filter:
             print(f"Filter     : '{effective_filter}'")
+        if effective_skip:
+            print(f"Skipped    : '{effective_skip}' (Provisional .gcso isolated)")
 
         cargo_args: list[str] = []
         if effective_filter:
             cargo_args.append(effective_filter)
+        if effective_skip:
+            cargo_args.extend(["--skip", effective_skip])
         if args.baseline:
             cargo_args.extend(["--baseline", args.baseline])
         if args.save_baseline:
@@ -719,40 +786,25 @@ def main() -> None:
         if args.noplot:
             cargo_args.append("--noplot")
 
-        try:
-            for idx, bench_target in enumerate(args.benchmarks):
-                if idx > 0 and not args.dry_run:
-                    # Flush Criterion JSON/SVG writeback buffers and allow CPU package thermal
-                    # recovery between benchmark binaries so the first group of the next binary
-                    # is never contaminated by disk I/O or thermal decay from the previous binary.
-                    prepare_host_for_measurement(settle_ms=max(0, args.settle_ms))
+        for idx, bench_target in enumerate(args.benchmarks):
+            if idx > 0 and not args.dry_run:
+                prepare_host_for_measurement(settle_ms=max(0, args.settle_ms))
 
-                target_cmd = ["cargo", "bench"]
-                if resolved_manifest is not None:
-                    target_cmd.extend(["--manifest-path", str(resolved_manifest)])
-                target_cmd.extend(["--bench", bench_target])
-                if cargo_args:
-                    target_cmd.append("--")
-                    target_cmd.extend(cargo_args)
+            target_cmd = ["cargo", "bench"]
+            if resolved_manifest is not None:
+                target_cmd.extend(["--manifest-path", str(resolved_manifest)])
+            target_cmd.extend(["--bench", bench_target])
+            if cargo_args:
+                target_cmd.append("--")
+                target_cmd.extend(cargo_args)
 
-                run_command(
-                    target_cmd,
-                    cwd=project_root,
-                    env=custom_env,
-                    dry_run=args.dry_run,
-                    phase_label=f"Step 1/2: Actual Benchmark Measurement ({idx + 1}/{len(args.benchmarks)}: {bench_target})",
-                )
-        finally:
-            if not args.dry_run and sys.platform == "win32" and args.high_priority:
-                try:
-                    windll = getattr(ctypes, "windll", None)
-                    if (
-                        windll is not None
-                        and getattr(windll, "winmm", None) is not None
-                    ):
-                        windll.winmm.timeEndPeriod(1)
-                except OSError:
-                    pass
+            run_command(
+                target_cmd,
+                cwd=project_root,
+                env=custom_env,
+                dry_run=args.dry_run,
+                phase_label=f"Step 1/2: Actual Benchmark Measurement ({idx + 1}/{len(args.benchmarks)}: {bench_target})",
+            )
 
     report_script = project_root / "scripts" / "generate_bench_report.py"
     if not report_script.exists() and not args.dry_run:

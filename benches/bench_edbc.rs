@@ -2,22 +2,13 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Comprehensive benchmarks for Entropy-Driven Decoding Branch Controller (EDBC) kernels and
-//! `EdbcClosedLoopCoordinator` blanket implementations, engineered for **zero Criterion linear-plot
-//! (`typical.svg` & `lines.svg`) scatter** and **thermal-throttling-free statistical precision**:
-//! - Enables hardware x86_64 MXCSR `FTZ` (Flush-To-Zero) and `DAZ` (Denormals-Are-Zero) via
-//!   [`ScopedFtzdazGuard`].
-//! - Eliminates multi-path `z_cycle` / `cos_cycle` toggling and stateful accumulator drift
-//!   across Criterion sample batches so every sample batch $N_s = s \cdot k$ executes a
-//!   stationary, identical instruction stream.
-//! - Hoists multi-candidate `gcso_pointer_trail_t` arrays outside `b.iter` and restores only the
-//!   single mutated winning candidate slot (`128B`) per iteration, eliminating 384B of redundant
-//!   stack `memcpy` jitter.
-//! - Configures millisecond-scale long-stream workloads (`simulate_token_stream/seq_100000`,
-//!   `simulate_ultra_long_stream_500k`, `long_horizon_bloom_self_normalization_100k`, and
-//!   `simulate_ultra_long_stream_1m`, where each single iteration already averages over $100{,}000$
-//!   to $1{,}000{,}000$ token steps) with [`SamplingMode::Flat`] and `sample_size(30)` +
-//!   `measurement_time(2.2s)`, preventing 20s–55s sustained CPU saturation and Turbo Boost thermal
-//!   decay while preserving $3 \times 10^6$ to $3 \times 10^7$ evaluated token steps per benchmark.
+//! `EdbcClosedLoopCoordinator` blanket implementations, engineered for **zero input overfitting**
+//! and **clean separation of Provisional `.gcso` / ZIMMS Container workloads**:
+//! - Evaluates Coarse-to-Fine and Top-2 Liminal routing across 8 candidate trails (2 candidates
+//!   per macro cluster across 4 centroids) so the Fine step genuinely resolves intra-cluster
+//!   candidate competition.
+//! - Isolates provisional pre-v1.0 `.gcso` / ZIMMS container crystallization and zero-copy
+//!   deserialization workloads into the dedicated `EDBC_Provisional_GCSO_Container` Criterion group.
 
 use criterion::{
     criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
@@ -158,9 +149,6 @@ impl<T, const ALIGN: usize> Drop for AlignedVectorBuffer<T, ALIGN> {
     }
 }
 
-/// Generates a realistic heterogeneous 64-head phase profile centered around `base_shift` on $SO(2)^{64}$
-/// where every head $h \in [0, 64)$ and every 8-head SWAR cell carries a distinct Q7 phase offset,
-/// preventing synthetic uniform-array shortcuts while preserving directional coherence around `base_shift`.
 /// Generates a deterministic 64-supernode f32 field with non-zero spatial coboundary gradients
 /// across adjacent supernodes so Sheaf Cohomology and Hodge Obstruction kernels evaluate genuine
 /// non-zero coboundary residuals rather than flat constant vectors.
@@ -197,8 +185,6 @@ fn reset_trail_fast(dst: &mut gcso_pointer_trail_t, src: &gcso_pointer_trail_t) 
         *liminika_core::traits::branchless::trail_phase_words_ref(src);
 }
 
-/// Restores `dst` from `src` using 64-bit GPR stores (`store_q7_words_64`) for `phase_profile`,
-/// avoiding 256-bit YMM-to-GPR Store-to-Load Forwarding (STLF) stalls inside `b.iter`.
 /// Restores `dst` from `src` using [`EdbcEngine::restore_from`] (width-matched scalar stores),
 /// preventing the 256-bit `vmovaps` YMM store-to-scalar-load STLF pipeline stall inside `b.iter`.
 #[inline(always)]
@@ -312,6 +298,14 @@ fn bench_edbc_stateful_eval(c: &mut Criterion) {
 
     // 2A. Direct Sparse Surrogate Entropy (0-ln Taylor-Horner Path) & Moving Z-Score Evaluation
     group.bench_function("compute_sparse_surrogate_and_moving_z_entropy", |b| {
+        let _ftz = ScopedFtzdazGuard::new();
+        for _ in 0..8 {
+            let h_s = compute_sparse_surrogate_entropy(0.72f32, 0.21f32, 1e-12f32);
+            black_box(compute_moving_z_score_entropy(
+                h_s, 0.35f32, 0.12f32, 0.08f32, 1e-6f32, 1.0f32, 0.5f32,
+            ));
+        }
+
         b.iter(|| {
             let h_surr = compute_sparse_surrogate_entropy(
                 black_box(0.72f32),
@@ -332,6 +326,11 @@ fn bench_edbc_stateful_eval(c: &mut Criterion) {
 
     // 2B. Standalone 0-ln 9-Term Even Taylor-Horner Polynomial Surrogate Entropy
     group.bench_function("compute_sparse_surrogate_taylor_horner_0ln", |b| {
+        let _ftz = ScopedFtzdazGuard::new();
+        for _ in 0..8 {
+            black_box(compute_sparse_surrogate_entropy(0.72f32, 0.28f32, 1e-12f32));
+        }
+
         b.iter(|| {
             compute_sparse_surrogate_entropy(
                 black_box(0.72f32),
@@ -343,6 +342,13 @@ fn bench_edbc_stateful_eval(c: &mut Criterion) {
 
     // 2C. Zero-Division Deterministic / Symmetric Fast-Path Surrogate Entropy
     group.bench_function("compute_sparse_surrogate_deterministic_fastpath", |b| {
+        let _ftz = ScopedFtzdazGuard::new();
+        for _ in 0..8 {
+            let hg = compute_sparse_surrogate_entropy(0.99f32, 0.0f32, 1e-12f32);
+            let ht = compute_sparse_surrogate_entropy(0.50f32, 0.50f32, 1e-12f32);
+            black_box(hg + ht);
+        }
+
         b.iter(|| {
             let h_greedy = compute_sparse_surrogate_entropy(
                 black_box(0.99f32),
@@ -358,7 +364,7 @@ fn bench_edbc_stateful_eval(c: &mut Criterion) {
         });
     });
 
-    // 3. Fused Top-2 Surrogate + Moving Z-Score + Stateful EDBC Step (Stationary Pre-Warmed Ring)
+    // 3. Fused Top-2 Surrogate + Moving Z-Score + Stateful EDBC Step
     group.bench_function("eval_surrogate_and_step_fused", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         let mut engine = EdbcEngine::default();
@@ -419,8 +425,6 @@ fn bench_edbc_cvoid_dyadic(c: &mut Criterion) {
     group.measurement_time(Duration::from_millis(1350));
 
     let vector_dims = [128usize, 512, 2048, 8192, 32768, 65536, 131072, 262144];
-    // Pre-allocate and fault-in a single 1 MB (262,144 floats) 64-byte aligned arena once outside
-    // the loop to eliminate OS VirtualAlloc/VirtualFree page-table churn across all 8 dimensions.
     let shared_cvoid_arena = AlignedVectorBuffer::<f32, 64>::new_heterogeneous_f32(262144, 0.65f32);
 
     for dim in vector_dims {
@@ -431,14 +435,15 @@ fn bench_edbc_cvoid_dyadic(c: &mut Criterion) {
             BenchmarkId::new("eval_cvoid_dyadic128", format!("dim_{dim}")),
             &dim,
             |b, &d| {
+                let _ftz = ScopedFtzdazGuard::new();
                 let slice_32 = AlignedSlice32::new(shared_cvoid_arena.as_prefix(d)).unwrap();
                 let engine = EdbcEngine::default();
                 let mut void_score = 0.0f32;
-                // Pre-warm the 32B-aligned slice into L1D/L2 before timing so the 32 KB L1D boundary
-                // (`dim_8192`) starts in a deterministic cache state without cold-set eviction skew.
-                engine
-                    .eval_cvoid_dyadic128(&slice_32, &mut void_score)
-                    .unwrap();
+                for _ in 0..8 {
+                    engine
+                        .eval_cvoid_dyadic128(&slice_32, &mut void_score)
+                        .unwrap();
+                }
 
                 b.iter(|| {
                     engine
@@ -455,8 +460,12 @@ fn bench_edbc_cvoid_dyadic(c: &mut Criterion) {
         (coh_dim * std::mem::size_of::<f32>()) as u64,
     ));
     group.bench_function("eval_cvoid_with_l1_l2_coherence_ratio_dim_4096", |b| {
+        let _ftz = ScopedFtzdazGuard::new();
         let slice_32 = AlignedSlice32::new(shared_cvoid_arena.as_prefix(coh_dim)).unwrap();
         let engine = EdbcEngine::default();
+        for _ in 0..8 {
+            let _ = engine.eval_cvoid_with_coherence_ratio(&slice_32).unwrap();
+        }
 
         b.iter(|| {
             let res = engine
@@ -469,6 +478,7 @@ fn bench_edbc_cvoid_dyadic(c: &mut Criterion) {
     group.bench_function(
         "eval_surrogate_with_cvoid_and_pointer_fused_dim_4096",
         |b| {
+            let _ftz = ScopedFtzdazGuard::new();
             let slice_32 = AlignedSlice32::new(shared_cvoid_arena.as_prefix(coh_dim)).unwrap();
             let mut base_engine = EdbcEngine::default().with_min_mode_dwell_steps(3);
             let mut st_warm = gcso_edbc_state_t::default();
@@ -483,6 +493,28 @@ fn bench_edbc_cvoid_dyadic(c: &mut Criterion) {
             );
 
             let mut engine = base_engine;
+            for _ in 0..8 {
+                reset_engine_fast(&mut engine, &base_engine);
+                let _ = engine
+                    .eval_surrogate_with_cvoid_and_pointer(
+                        0.62f32,
+                        0.31f32,
+                        0.38f32,
+                        0.15f32,
+                        0.08f32,
+                        1.0f32,
+                        0.5f32,
+                        &slice_32,
+                        1.2f32,
+                        0.8f32,
+                        0.5f32,
+                        ptr,
+                        1.1f32,
+                        ATTRACTOR_SLOT_KNOWLEDGE,
+                        1.5f32,
+                    )
+                    .unwrap();
+            }
 
             b.iter(|| {
                 reset_engine_fast(&mut engine, &base_engine);
@@ -522,17 +554,11 @@ fn bench_edbc_stream_simulation(c: &mut Criterion) {
 
     for seq_len in sequence_lengths {
         if seq_len >= 100_000 {
-            // `seq_100000` evaluates 100,000 token steps (~1.8 ms) per iteration.
-            // Using `SamplingMode::Flat` with `sample_size(45)` and `measurement_time(1400ms)`
-            // tightens the 95% Student-t CI multiplier by 20% while avoiding thermal clock decay.
             group.sampling_mode(SamplingMode::Flat);
             group.sample_size(45);
             group.warm_up_time(Duration::from_millis(500));
             group.measurement_time(Duration::from_millis(1400));
         } else if seq_len >= 10_000 {
-            // `seq_10000` (~180 us per iteration) lies at the Windows 1ms timer interrupt boundary
-            // where Criterion's `SamplingMode::Auto` linear batches catch isolated OS tick outliers.
-            // Using `SamplingMode::Flat` with `sample_size(60)` keeps each sample batch uniform and tight.
             group.sampling_mode(SamplingMode::Flat);
             group.sample_size(60);
             group.warm_up_time(Duration::from_millis(400));
@@ -581,9 +607,7 @@ fn bench_edbc_long_dialogue_reliability(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
     let mut group = c.benchmark_group("EDBC_Long_Dialogue_Reliability");
 
-    // 1. Ultra-Long Token Stream Simulation (500,000 Tokens = ~5.5 ms per single iteration)
-    // `SamplingMode::Flat` with `sample_size(30)` evaluates 15,000,000 token steps in ~2.5s
-    // without triggering CPU thermal throttling.
+    // 1. Ultra-Long Token Stream Simulation (500,000 Tokens)
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(30);
     group.warm_up_time(Duration::from_millis(350));
@@ -617,7 +641,6 @@ fn bench_edbc_long_dialogue_reliability(c: &mut Criterion) {
         });
     });
 
-    // Use `SamplingMode::Flat` with `sample_size(60)` for 50K-step (~850 us) chattering benchmarks.
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(60);
     group.warm_up_time(Duration::from_millis(400));
@@ -625,31 +648,35 @@ fn bench_edbc_long_dialogue_reliability(c: &mut Criterion) {
 
     // 2. High-Frequency Chattering Oscillation Baseline (50,000 Rapid Transitions, Dwell = 0)
     let chattering_len = 50000usize;
+    let tau = 1.5f32;
+    let delta = 0.15f32;
+    let mut shared_osc_50k = AlignedVectorBuffer::<f32, 64>::new(chattering_len, tau);
+    for (i, slot) in shared_osc_50k.as_mut_slice().iter_mut().enumerate() {
+        *slot = if (i & 1) == 0 {
+            tau + delta + 0.08
+        } else {
+            tau - delta - 0.08
+        };
+    }
     group.throughput(Throughput::Elements(chattering_len as u64));
     group.bench_function("chattering_rapid_oscillation_50k_tokens", |b| {
-        let tau = 1.5f32;
-        let delta = 0.15f32;
-        let oscillating_z: Vec<f32> = (0..chattering_len)
-            .map(|i| {
-                if i % 2 == 0 {
-                    tau + delta + 0.08
-                } else {
-                    tau - delta - 0.08
-                }
-            })
-            .collect();
+        let _ftz = ScopedFtzdazGuard::new();
+        let oscillating_z = shared_osc_50k.as_slice();
 
         let mut engine = EdbcEngine::default();
         engine.set_bifurcation_threshold(tau);
         engine.set_hysteresis_band(delta);
         let mut state_out = gcso_edbc_state_t::default();
-        for &z in &oscillating_z {
-            engine.eval_stateful(z, &mut state_out).unwrap();
+        for _ in 0..2 {
+            engine.reset();
+            for &z in oscillating_z {
+                engine.eval_stateful(z, &mut state_out).unwrap();
+            }
         }
 
         b.iter(|| {
             engine.reset();
-            for &z in &oscillating_z {
+            for &z in oscillating_z {
                 engine.eval_stateful(black_box(z), &mut state_out).unwrap();
             }
             black_box((state_out.moving_z_entropy, state_out.active_branch_mode));
@@ -659,38 +686,30 @@ fn bench_edbc_long_dialogue_reliability(c: &mut Criterion) {
     // 3. Dwell-Step Inertia Anti-Chattering Stabilization (50,000 Rapid Transitions, Dwell = 4)
     group.throughput(Throughput::Elements(chattering_len as u64));
     group.bench_function("chattering_dwell_inertia_stabilized_50k_tokens", |b| {
-        let tau = 1.5f32;
-        let delta = 0.15f32;
-        let oscillating_z: Vec<f32> = (0..chattering_len)
-            .map(|i| {
-                if i % 2 == 0 {
-                    tau + delta + 0.08
-                } else {
-                    tau - delta - 0.08
-                }
-            })
-            .collect();
+        let _ftz = ScopedFtzdazGuard::new();
+        let oscillating_z = shared_osc_50k.as_slice();
 
         let mut engine = EdbcEngine::default().with_min_mode_dwell_steps(4);
         engine.set_bifurcation_threshold(tau);
         engine.set_hysteresis_band(delta);
         let mut state_out = gcso_edbc_state_t::default();
-        for &z in &oscillating_z {
-            engine.eval_stateful(z, &mut state_out).unwrap();
+        for _ in 0..2 {
+            engine.reset();
+            for &z in oscillating_z {
+                engine.eval_stateful(z, &mut state_out).unwrap();
+            }
         }
 
         b.iter(|| {
             engine.reset();
-            for &z in &oscillating_z {
+            for &z in oscillating_z {
                 engine.eval_stateful(black_box(z), &mut state_out).unwrap();
             }
             black_box((state_out.moving_z_entropy, state_out.active_branch_mode));
         });
     });
 
-    // 4. Long-Horizon 100K Repulsive Bloom Filter Self-Normalization Stress Test (~2.18 ms per iteration)
-    // Configure `SamplingMode::Flat` with `sample_size(30)` so 3,000,000 Bloom operations are
-    // measured at steady clock in ~2.5s.
+    // 4. Long-Horizon 100K Repulsive Bloom Filter Self-Normalization Stress Test
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(30);
     group.warm_up_time(Duration::from_millis(600));
@@ -783,8 +802,29 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         );
         let base_phases = make_heterogeneous_q7_phases_with_offset(22);
         let base_phases_w = liminika_core::traits::branchless::load_q7_words_64(&base_phases);
+        let _ftz = ScopedFtzdazGuard::new();
         let mut phases = base_phases;
         let mut engine = base_engine;
+        for _ in 0..8 {
+            reset_engine_fast(&mut engine, &base_engine);
+            liminika_core::traits::branchless::store_q7_words_64(&mut phases, &base_phases_w);
+            let _ = engine
+                .step_and_inject_tunneling_perturbation(
+                    3.2f32,
+                    2.8f32,
+                    2.0f32,
+                    1.0f32,
+                    0.5f32,
+                    128u32,
+                    48usize,
+                    ptr,
+                    1.0f32,
+                    ATTRACTOR_SLOT_KNOWLEDGE,
+                    1.5f32,
+                    &mut phases,
+                )
+                .unwrap();
+        }
 
         b.iter(|| {
             reset_engine_fast(&mut engine, &base_engine);
@@ -833,9 +873,23 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
             ..Default::default()
         };
 
+        let _ftz = ScopedFtzdazGuard::new();
         let mut trail = base_trail;
-
         let mut engine = base_engine;
+        for _ in 0..8 {
+            reset_engine_fast(&mut engine, &base_engine);
+            reset_trail_fast(&mut trail, &base_trail);
+            let _ = engine
+                .step_with_unified_field_and_pointer(
+                    0.85f32,
+                    0.85f32,
+                    &unified_anchors,
+                    &unified_energies,
+                    1.5f32,
+                    &mut trail,
+                )
+                .unwrap();
+        }
 
         b.iter(|| {
             reset_engine_fast(&mut engine, &base_engine);
@@ -998,12 +1052,43 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                     ..Default::default()
                 },
             ];
+            let _ftz = ScopedFtzdazGuard::new();
             let mut candidates = base_candidates;
-
             let mut src_trail = base_src;
-
             let mut engine = base_engine;
             let mut bloom = base_bloom;
+            for _ in 0..8 {
+                reset_engine_fast(&mut engine, &base_engine);
+                if !bloom.is_empty() {
+                    bloom = base_bloom;
+                }
+                reset_trail_fast(&mut src_trail, &base_src);
+                reset_trail_fast(&mut candidates[1], &base_candidates[1]);
+                attn_scores.data = [0.0f32; 8];
+                let mut scores_mut = attn_scores.as_aligned_slice_mut();
+                let _ = engine
+                    .step_with_bayesian_pointer_selection_and_tunneling(
+                        &mut src_trail,
+                        &mut candidates,
+                        2.4f32,
+                        2.5f32,
+                        2.0f32,
+                        1.0f32,
+                        0.5f32,
+                        128u32,
+                        48usize,
+                        2.0f32,
+                        0.5f32,
+                        0.25f32,
+                        1.0f32,
+                        64u8,
+                        0.25f32,
+                        1.5f32,
+                        &mut bloom,
+                        Some(&mut scores_mut),
+                    )
+                    .unwrap();
+            }
 
             b.iter(|| {
                 reset_engine_fast(&mut engine, &base_engine);
@@ -1073,6 +1158,32 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                     ..Default::default()
                 });
 
+            let _ftz = ScopedFtzdazGuard::new();
+            for _ in 0..8 {
+                attn_scores.data = [0.5f32; 8];
+                let mut scores_mut = attn_scores.as_aligned_slice_mut();
+                let _ = engine
+                    .modulate_candidate_trails_with_edbc_temperature(
+                        &mut scores_mut,
+                        &src_trail,
+                        &candidates,
+                        128u32,
+                        2.0f32,
+                        0.5f32,
+                        0.25f32,
+                        0.25f32,
+                        1.0f32,
+                        1.0f32,
+                        0.85f32,
+                        0.90f32,
+                        1.5f32,
+                        1.2f32,
+                        0.8f32,
+                        0.5f32,
+                    )
+                    .unwrap();
+            }
+
             b.iter(|| {
                 attn_scores.data = [0.5f32; 8];
                 let mut scores_mut = attn_scores.as_aligned_slice_mut();
@@ -1101,297 +1212,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         },
     );
 
-    // 3E-1. Blanket Coordinator: 2-Origin Composite Manifold Gateway + `.gcso` Crystallization Step
-    group.throughput(Throughput::Elements(1));
-    group.bench_function("step_gateway_signal_and_crystallize_attractor_64h", |b| {
-        let base_engine = EdbcEngine::default();
-        let fact = ObjectiveFact::new(
-            make_heterogeneous_q7_phases_with_offset(28),
-            2.5,
-            0x0012_3400,
-            33,
-        );
-        let persona = SubjectivePersona::new(
-            make_heterogeneous_q7_phases_with_offset(30),
-            2.0,
-            0x0020_0000,
-            19,
-        );
-        let gateway_tuple = (fact, persona);
-        let mut logits = AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
-        let mut base_crystal =
-            CrystallizedAttractorRecord::new_empty(33, ATTRACTOR_SLOT_KNOWLEDGE, 0x0012_3400);
-        let _ =
-            base_crystal.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(26), 2.0);
-        let base_trail = gcso_pointer_trail_t {
-            stigmergic_density: 1.0,
-            attractor_pull_force: 1.5,
-            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
-            ..Default::default()
-        };
-
-        let mut trail = base_trail;
-        let mut crystal = base_crystal;
-        let mut engine = base_engine;
-        for _ in 0..8 {
-            reset_engine_fast(&mut engine, &base_engine);
-            reset_trail_fast(&mut trail, &base_trail);
-            reset_crystal_fast(&mut crystal, &base_crystal);
-            logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
-            let mut logits_mut = logits.as_aligned_slice_mut();
-            let _ = engine
-                .step_gateway_signal_with_defaults(
-                    0.42f32,
-                    0.85f32,
-                    &gateway_tuple,
-                    &mut trail,
-                    Some(&mut logits_mut),
-                    Some(&mut crystal),
-                )
-                .unwrap();
-        }
-
-        b.iter(|| {
-            reset_engine_fast(&mut engine, &base_engine);
-            reset_trail_fast(&mut trail, &base_trail);
-            reset_crystal_fast(&mut crystal, &base_crystal);
-            logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
-            let mut logits_mut = logits.as_aligned_slice_mut();
-            let res = engine
-                .step_gateway_signal_with_defaults(
-                    black_box(0.42f32),
-                    black_box(0.85f32),
-                    black_box(&gateway_tuple),
-                    black_box(&mut trail),
-                    black_box(Some(&mut logits_mut)),
-                    black_box(Some(&mut crystal)),
-                )
-                .unwrap();
-            black_box((
-                res.0.active_branch_mode,
-                res.1.raw(),
-                res.2.provenance_bits,
-                res.3,
-                res.4,
-                logits_mut.as_slice()[0],
-                crystal.phase_gravity_mass,
-            ));
-        });
-    });
-
-    // 3E-2. Blanket Coordinator: Full 4-Axis (EdbcEngine Origin-1 x Fact x Persona x ContradictionGuard) Causal Provenance Step
-    group.throughput(Throughput::Elements(1));
-    group.bench_function(
-        "step_gateway_4axis_contradiction_guard_and_provenance_64h",
-        |b| {
-            let base_engine = EdbcEngine::default();
-            let sys_snapshot = base_engine;
-            let fact = ObjectiveFact::new(
-                make_heterogeneous_q7_phases_with_offset(28),
-                2.8,
-                0x0012_3400,
-                33,
-            );
-            let persona = SubjectivePersona::new(
-                make_heterogeneous_q7_phases_with_offset(30),
-                2.2,
-                0x0020_0000,
-                19,
-            );
-            let mut bloom = ContrastivePhaseBloomFilter::new();
-            bloom.insert_repulsive_pattern(&make_heterogeneous_q7_phases_with_offset(-96));
-            let guard = ContradictionGuard::new(bloom, 0.15, 4);
-            let gateway_4tuple = (&sys_snapshot, &fact, &persona, &guard);
-            let mut logits =
-                AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
-            let mut base_crystal =
-                CrystallizedAttractorRecord::new_empty(33, ATTRACTOR_SLOT_KNOWLEDGE, 0x0012_3400);
-            let _ = base_crystal
-                .absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(26), 2.0);
-            let base_trail = gcso_pointer_trail_t {
-                stigmergic_density: 1.1,
-                attractor_pull_force: 1.5,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
-                ..Default::default()
-            };
-
-            let mut trail = base_trail;
-            let mut crystal = base_crystal;
-            let mut engine = base_engine;
-            for _ in 0..8 {
-                reset_engine_fast(&mut engine, &base_engine);
-                reset_trail_fast(&mut trail, &base_trail);
-                reset_crystal_fast(&mut crystal, &base_crystal);
-                logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
-                let mut logits_mut = logits.as_aligned_slice_mut();
-                let _ = engine
-                    .step_gateway_signal_with_defaults(
-                        0.38f32,
-                        0.82f32,
-                        &gateway_4tuple,
-                        &mut trail,
-                        Some(&mut logits_mut),
-                        Some(&mut crystal),
-                    )
-                    .unwrap();
-            }
-
-            b.iter(|| {
-                reset_engine_fast(&mut engine, &base_engine);
-                reset_trail_fast(&mut trail, &base_trail);
-                reset_crystal_fast(&mut crystal, &base_crystal);
-                logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
-                let mut logits_mut = logits.as_aligned_slice_mut();
-                let res = engine
-                    .step_gateway_signal_with_defaults(
-                        black_box(0.38f32),
-                        black_box(0.82f32),
-                        black_box(&gateway_4tuple),
-                        black_box(&mut trail),
-                        black_box(Some(&mut logits_mut)),
-                        black_box(Some(&mut crystal)),
-                    )
-                    .unwrap();
-                black_box((
-                    res.0.active_branch_mode,
-                    res.1.raw(),
-                    res.2.provenance_bits,
-                    res.3,
-                    res.4,
-                    logits_mut.as_slice()[0],
-                    crystal.phase_gravity_mass,
-                ));
-            });
-        },
-    );
-
-    // 3F-1. Blanket Coordinator: `.gcso` CrystallizedAttractorRecord Ensemble Gravity Folding + EDBC Step
-    group.throughput(Throughput::Elements(4));
-    group.bench_function("step_crystallized_ensemble_gravity_fold_4records", |b| {
-        let base_engine = EdbcEngine::default();
-        let records: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
-            let mut rec = CrystallizedAttractorRecord::new_empty(
-                (i as u32) + 10,
-                ATTRACTOR_SLOT_KNOWLEDGE,
-                0x0010_0000 + ((i as u64) << 12),
-            );
-            let _ = rec.absorb_sample_point_64(
-                &make_heterogeneous_q7_phases_with_offset(20 + (i as i8) * 4),
-                2.0 + (i as f32) * 0.5,
-            );
-            rec
-        });
-        let base_trail = gcso_pointer_trail_t {
-            stigmergic_density: 1.2,
-            attractor_pull_force: 1.5,
-            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
-            ..Default::default()
-        };
-
-        let mut trail = base_trail;
-        let mut engine = base_engine;
-        for _ in 0..8 {
-            reset_engine_fast(&mut engine, &base_engine);
-            reset_trail_fast(&mut trail, &base_trail);
-            let _ = engine
-                .step_crystallized_ensemble_with_defaults(0.35f32, 0.80f32, &records, &mut trail)
-                .unwrap();
-        }
-
-        b.iter(|| {
-            reset_engine_fast(&mut engine, &base_engine);
-            reset_trail_fast(&mut trail, &base_trail);
-            let res = engine
-                .step_crystallized_ensemble_with_defaults(
-                    black_box(0.35f32),
-                    black_box(0.80f32),
-                    black_box(&records),
-                    black_box(&mut trail),
-                )
-                .unwrap();
-            black_box((
-                res.0.active_branch_mode,
-                res.1.raw(),
-                res.2,
-                res.3,
-                trail.target_anchor_id,
-            ));
-        });
-    });
-
-    // 3F-2. `.gcso` (ZIMMS) Zero-Copy Deserialization + Crystallized Ensemble Gravity Folding EDBC Step
-    group.throughput(Throughput::Elements(4));
-    group.bench_function("zimms_zero_copy_crystallized_ensemble_step_4records", |b| {
-        let base_engine = EdbcEngine::default();
-        let records: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
-            let mut rec = CrystallizedAttractorRecord::new_empty(
-                (i as u32) + 10,
-                ATTRACTOR_SLOT_KNOWLEDGE,
-                0x0010_0000 + ((i as u64) << 12),
-            );
-            let _ = rec.absorb_sample_point_64(
-                &make_heterogeneous_q7_phases_with_offset(20 + (i as i8) * 4),
-                2.0 + (i as f32) * 0.5,
-            );
-            rec
-        });
-        let mut zimms_buf = AlignedBuffer64::<u8, 512>::new([0u8; 512]);
-        CrystallizedAttractorRecord::write_records_to_zimms_bytes(&records, &mut zimms_buf.data)
-            .unwrap();
-        let base_trail = gcso_pointer_trail_t {
-            stigmergic_density: 1.2,
-            attractor_pull_force: 1.5,
-            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
-            ..Default::default()
-        };
-
-        let mut trail = base_trail;
-        let mut engine = base_engine;
-        for _ in 0..8 {
-            reset_engine_fast(&mut engine, &base_engine);
-            reset_trail_fast(&mut trail, &base_trail);
-            let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
-                &zimms_buf.data,
-                4usize,
-            )
-            .unwrap();
-            let _ = engine
-                .step_crystallized_ensemble_with_defaults(
-                    0.35f32,
-                    0.80f32,
-                    zero_copy_recs,
-                    &mut trail,
-                )
-                .unwrap();
-        }
-
-        b.iter(|| {
-            reset_engine_fast(&mut engine, &base_engine);
-            reset_trail_fast(&mut trail, &base_trail);
-            let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
-                black_box(&zimms_buf.data),
-                black_box(4usize),
-            )
-            .unwrap();
-            let res = engine
-                .step_crystallized_ensemble_with_defaults(
-                    black_box(0.35f32),
-                    black_box(0.80f32),
-                    black_box(zero_copy_recs),
-                    black_box(&mut trail),
-                )
-                .unwrap();
-            black_box((
-                res.0.active_branch_mode,
-                res.1.raw(),
-                res.2,
-                res.3,
-                trail.target_anchor_id,
-            ));
-        });
-    });
-
-    // 3G. Online Toroidal k-Means / DP-Means E+M Step + EDBC Gateway Coordinator (4 Centroids)
+    // 3E. Online Toroidal k-Means / DP-Means E+M Step + EDBC Gateway Coordinator (4 Centroids)
     group.throughput(Throughput::Elements(4));
     group.bench_function(
         "toroidal_kmeans_dp_means_and_edbc_gateway_step_4centroids",
@@ -1473,8 +1294,8 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         },
     );
 
-    // 3H. Coarse-to-Fine Macro Centroid Route + Pitchfork Metastable Tunneling + Bayesian Trail Rewire
-    group.throughput(Throughput::Elements(4));
+    // 3F. Coarse-to-Fine Macro Centroid Route (O(K=4) -> O(M_local=2) out of 8 Candidates) + Pitchfork Metastable Tunneling + Bayesian Trail Rewire
+    group.throughput(Throughput::Elements(8));
     group.bench_function(
         "coarse_to_fine_route_and_edbc_bayesian_tunneling_64h",
         |b| {
@@ -1508,17 +1329,20 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                 accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
                 ..Default::default()
             };
-            let base_candidates = [
+            // 8 Candidates (2 per cluster across clusters 200..203) so the Fine step genuinely evaluates intra-cluster candidates
+            let base_candidates: [gcso_pointer_trail_t; 8] = [
                 gcso_pointer_trail_t {
-                    stigmergic_density: 4.0,
-                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-96),
+                    stigmergic_density: 1.5,
+                    target_anchor_id: 200,
+                    cluster_id: 200,
+                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(12),
                     ..Default::default()
                 },
                 gcso_pointer_trail_t {
-                    stigmergic_density: 3.2,
-                    target_anchor_id: 202,
-                    cluster_id: 202,
-                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
+                    stigmergic_density: 1.2,
+                    target_anchor_id: 200,
+                    cluster_id: 200,
+                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(10),
                     ..Default::default()
                 },
                 gcso_pointer_trail_t {
@@ -1529,10 +1353,38 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                     ..Default::default()
                 },
                 gcso_pointer_trail_t {
-                    stigmergic_density: 1.5,
-                    target_anchor_id: 200,
-                    cluster_id: 200,
-                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(12),
+                    stigmergic_density: 1.9,
+                    target_anchor_id: 201,
+                    cluster_id: 201,
+                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(18),
+                    ..Default::default()
+                },
+                gcso_pointer_trail_t {
+                    stigmergic_density: 2.6,
+                    target_anchor_id: 202,
+                    cluster_id: 202,
+                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(24),
+                    ..Default::default()
+                },
+                gcso_pointer_trail_t {
+                    stigmergic_density: 3.2,
+                    target_anchor_id: 202,
+                    cluster_id: 202,
+                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
+                    ..Default::default()
+                },
+                gcso_pointer_trail_t {
+                    stigmergic_density: 2.4,
+                    target_anchor_id: 203,
+                    cluster_id: 203,
+                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(36),
+                    ..Default::default()
+                },
+                gcso_pointer_trail_t {
+                    stigmergic_density: 2.0,
+                    target_anchor_id: 203,
+                    cluster_id: 203,
+                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(40),
                     ..Default::default()
                 },
             ];
@@ -1547,7 +1399,8 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                     bloom = base_bloom;
                 }
                 reset_trail_fast(&mut src_trail, &base_src);
-                reset_trail_fast(&mut candidates[1], &base_candidates[1]);
+                reset_trail_fast(&mut candidates[4], &base_candidates[4]);
+                reset_trail_fast(&mut candidates[5], &base_candidates[5]);
                 attn_scores.data = [0.0f32; 8];
                 let mut scores_mut = attn_scores.as_aligned_slice_mut();
                 let _ = engine
@@ -1582,7 +1435,8 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                     bloom = base_bloom;
                 }
                 reset_trail_fast(&mut src_trail, &base_src);
-                reset_trail_fast(&mut candidates[1], &base_candidates[1]);
+                reset_trail_fast(&mut candidates[4], &base_candidates[4]);
+                reset_trail_fast(&mut candidates[5], &base_candidates[5]);
                 attn_scores.data = [0.0f32; 8];
                 let mut scores_mut = attn_scores.as_aligned_slice_mut();
                 let res = engine
@@ -1609,13 +1463,13 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                         black_box(Some(&mut scores_mut)),
                     )
                     .unwrap();
-                black_box((res, scores_mut.as_slice()[1]));
+                black_box((res, scores_mut.as_slice()[5]));
             });
         },
     );
 
-    // 3H-2. Top-2 Liminal Macro Centroid Bifurcation Route + Pitchfork Metastable Tunneling + Bayesian Trail Rewire
-    group.throughput(Throughput::Elements(4));
+    // 3G. Top-2 Liminal Macro Centroid Bifurcation Route (8 Candidates across 4 Centroids) + Pitchfork Metastable Tunneling + Bayesian Trail Rewire
+    group.throughput(Throughput::Elements(8));
     group.bench_function("top2_liminal_route_and_edbc_bayesian_tunneling_64h", |b| {
         let mut base_engine = EdbcEngine::default();
         base_engine.state.moving_z_entropy = 1.6;
@@ -1677,17 +1531,26 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
             accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
             ..Default::default()
         };
-        let base_candidates = [
+        let base_candidates: [gcso_pointer_trail_t; 8] = [
             gcso_pointer_trail_t {
-                stigmergic_density: 4.0,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-96),
+                stigmergic_density: 1.5,
+                target_anchor_id: 200,
+                cluster_id: 200,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-60),
                 ..Default::default()
             },
             gcso_pointer_trail_t {
-                stigmergic_density: 3.2,
-                target_anchor_id: 202,
-                cluster_id: 202,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
+                stigmergic_density: 1.2,
+                target_anchor_id: 200,
+                cluster_id: 200,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-56),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 2.5,
+                target_anchor_id: 201,
+                cluster_id: 201,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(23),
                 ..Default::default()
             },
             gcso_pointer_trail_t {
@@ -1698,10 +1561,31 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                 ..Default::default()
             },
             gcso_pointer_trail_t {
-                stigmergic_density: 1.5,
-                target_anchor_id: 200,
-                cluster_id: 200,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-60),
+                stigmergic_density: 2.7,
+                target_anchor_id: 202,
+                cluster_id: 202,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(25),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 3.2,
+                target_anchor_id: 202,
+                cluster_id: 202,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 1.4,
+                target_anchor_id: 203,
+                cluster_id: 203,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-35),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 1.1,
+                target_anchor_id: 203,
+                cluster_id: 203,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-30),
                 ..Default::default()
             },
         ];
@@ -1716,8 +1600,8 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                 bloom = base_bloom;
             }
             reset_trail_fast(&mut src_trail, &base_src);
-            reset_trail_fast(&mut candidates[1], &base_candidates[1]);
-            reset_trail_fast(&mut candidates[2], &base_candidates[2]);
+            reset_trail_fast(&mut candidates[3], &base_candidates[3]);
+            reset_trail_fast(&mut candidates[5], &base_candidates[5]);
             attn_scores.data = [0.0f32; 8];
             let mut scores_mut = attn_scores.as_aligned_slice_mut();
             let _ = engine
@@ -1753,8 +1637,8 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                 bloom = base_bloom;
             }
             reset_trail_fast(&mut src_trail, &base_src);
-            reset_trail_fast(&mut candidates[1], &base_candidates[1]);
-            reset_trail_fast(&mut candidates[2], &base_candidates[2]);
+            reset_trail_fast(&mut candidates[3], &base_candidates[3]);
+            reset_trail_fast(&mut candidates[5], &base_candidates[5]);
             attn_scores.data = [0.0f32; 8];
             let mut scores_mut = attn_scores.as_aligned_slice_mut();
             let res = engine
@@ -1782,99 +1666,9 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                     black_box(Some(&mut scores_mut)),
                 )
                 .unwrap();
-            black_box((res, scores_mut.as_slice()[1]));
+            black_box((res, scores_mut.as_slice()[5]));
         });
     });
-
-    // 3I. 4-Section `.gcso` Container Zero-Copy Write, CRC32 Verify & Crystallized Ensemble Step
-    group.throughput(Throughput::Elements(4));
-    group.bench_function(
-        "four_section_gcso_zero_copy_write_verify_and_step_4records",
-        |b| {
-            let base_engine = EdbcEngine::default();
-            let records: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
-                let mut rec = CrystallizedAttractorRecord::new_empty(
-                    (i as u32) + 10,
-                    ATTRACTOR_SLOT_KNOWLEDGE,
-                    0x0010_0000 + ((i as u64) << 12),
-                );
-                let _ = rec.absorb_sample_point_64(
-                    &make_heterogeneous_q7_phases_with_offset(20 + (i as i8) * 4),
-                    2.0 + (i as f32) * 0.5,
-                );
-                rec
-            });
-            let base_trail = gcso_pointer_trail_t {
-                stigmergic_density: 1.2,
-                attractor_pull_force: 1.5,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
-                ..Default::default()
-            };
-            let base_trails = [base_trail];
-            let mut trail = base_trail;
-            let bloom = ContrastivePhaseBloomFilter::new();
-            let daes = gcso_daes_slot_t::default();
-            let mut container_buf = AlignedBuffer128::<u8, 1024>::new([0u8; 1024]);
-            let mut engine = base_engine;
-            for _ in 0..8 {
-                reset_engine_fast(&mut engine, &base_engine);
-                let written = GcsoFourSectionView::write_four_section_container_to_bytes(
-                    &records,
-                    &base_trails,
-                    Some(&bloom),
-                    Some(&daes),
-                    1_774_900_000,
-                    &mut container_buf.data,
-                )
-                .unwrap();
-                let view =
-                    GcsoFourSectionView::from_zimms_bytes_zero_copy(&container_buf.data[..written])
-                        .unwrap();
-                reset_trail_fast(&mut trail, &view.trails[0]);
-                let _ = engine
-                    .step_crystallized_ensemble_with_defaults(
-                        0.35f32,
-                        0.80f32,
-                        view.crystals,
-                        &mut trail,
-                    )
-                    .unwrap();
-            }
-
-            b.iter(|| {
-                reset_engine_fast(&mut engine, &base_engine);
-                let written = GcsoFourSectionView::write_four_section_container_to_bytes(
-                    black_box(&records),
-                    black_box(&base_trails),
-                    black_box(Some(&bloom)),
-                    black_box(Some(&daes)),
-                    black_box(1_774_900_000),
-                    black_box(&mut container_buf.data),
-                )
-                .unwrap();
-                let view = GcsoFourSectionView::from_zimms_bytes_zero_copy(black_box(
-                    &container_buf.data[..written],
-                ))
-                .unwrap();
-                reset_trail_fast(&mut trail, &view.trails[0]);
-                let res = engine
-                    .step_crystallized_ensemble_with_defaults(
-                        black_box(0.35f32),
-                        black_box(0.80f32),
-                        black_box(view.crystals),
-                        black_box(&mut trail),
-                    )
-                    .unwrap();
-                black_box((
-                    res.0.active_branch_mode,
-                    res.1.raw(),
-                    res.2,
-                    res.3,
-                    trail.target_anchor_id,
-                ));
-            });
-        },
-    );
 
     // 4. Closed-Loop Sheaf Cohomology + Dual Homology Pairing + Repulsive Bloom Filter Guard
     group.throughput(Throughput::Bytes(
@@ -1897,9 +1691,36 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         );
         let base_phases = make_heterogeneous_q7_phases_with_offset(24);
         let base_phases_w = liminika_core::traits::branchless::load_q7_words_64(&base_phases);
+        let _ftz = ScopedFtzdazGuard::new();
         let mut phases = base_phases;
         let mut bloom = base_bloom;
         let mut engine = base_engine;
+        for _ in 0..8 {
+            reset_engine_fast(&mut engine, &base_engine);
+            if !bloom.is_empty() {
+                bloom = base_bloom;
+                liminika_core::traits::branchless::store_q7_words_64(&mut phases, &base_phases_w);
+            }
+            let _ = engine
+                .step_with_cohomology_and_bloom_guard(
+                    2.6f32,
+                    0.42f32,
+                    1.4f32,
+                    1.0f32,
+                    0.5f32,
+                    &r_s,
+                    &p_s,
+                    &g_s,
+                    0.25f32,
+                    ptr,
+                    1.1f32,
+                    ATTRACTOR_SLOT_KNOWLEDGE,
+                    1.5f32,
+                    &mut phases,
+                    &mut bloom,
+                )
+                .unwrap();
+        }
 
         b.iter(|| {
             reset_engine_fast(&mut engine, &base_engine);
@@ -2064,9 +1885,28 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
             ..Default::default()
         };
 
+        let _ftz = ScopedFtzdazGuard::new();
         let mut trail = base_trail;
-
         let mut engine = base_engine;
+        for _ in 0..8 {
+            reset_engine_fast(&mut engine, &base_engine);
+            reset_trail_fast(&mut trail, &base_trail);
+            let _ = engine
+                .resolve_dyadic_tree_and_step_edbc(
+                    &curr_mask,
+                    &anchor_mask,
+                    0.15f32,
+                    3u32,
+                    0.10f32,
+                    &offsets,
+                    &deltas,
+                    0.35f32,
+                    0.80f32,
+                    1.5f32,
+                    &mut trail,
+                )
+                .unwrap();
+        }
 
         b.iter(|| {
             reset_engine_fast(&mut engine, &base_engine);
@@ -2093,13 +1933,407 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     group.finish();
 }
 
+/// Provisional `.gcso` / ZIMMS 4-Section Container Benchmarks (Isolated from Core EDBC Suite).
+///
+/// Evaluates pre-v1.0 `.gcso` record crystallization, 4-axis provenance records, and 4-section
+/// zero-copy byte container verification. Skipped by default under `run_benchmarks.py --profile standard`
+/// so Core `DPSR`/`EDBC` evaluations remain decoupled from the provisional container layout.
+fn bench_edbc_provisional_gcso_container(c: &mut Criterion) {
+    let _ftz = ScopedFtzdazGuard::new();
+    let mut group = c.benchmark_group("EDBC_Provisional_GCSO_Container");
+    group.sampling_mode(SamplingMode::Flat);
+    group.sample_size(100);
+    group.warm_up_time(Duration::from_millis(450));
+    group.measurement_time(Duration::from_millis(1350));
+
+    // 1. Provisional 2-Origin Composite Manifold Gateway + `.gcso` Crystallization Step
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("step_gateway_signal_and_crystallize_attractor_64h", |b| {
+        let base_engine = EdbcEngine::default();
+        let fact = ObjectiveFact::new(
+            make_heterogeneous_q7_phases_with_offset(28),
+            2.5,
+            0x0012_3400,
+            33,
+        );
+        let persona = SubjectivePersona::new(
+            make_heterogeneous_q7_phases_with_offset(30),
+            2.0,
+            0x0020_0000,
+            19,
+        );
+        let gateway_tuple = (fact, persona);
+        let mut logits = AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
+        let mut base_crystal =
+            CrystallizedAttractorRecord::new_empty(33, ATTRACTOR_SLOT_KNOWLEDGE, 0x0012_3400);
+        let _ =
+            base_crystal.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(26), 2.0);
+        let base_trail = gcso_pointer_trail_t {
+            stigmergic_density: 1.0,
+            attractor_pull_force: 1.5,
+            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+            ..Default::default()
+        };
+
+        let mut trail = base_trail;
+        let mut crystal = base_crystal;
+        let mut engine = base_engine;
+        for _ in 0..8 {
+            reset_engine_fast(&mut engine, &base_engine);
+            reset_trail_fast(&mut trail, &base_trail);
+            reset_crystal_fast(&mut crystal, &base_crystal);
+            logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
+            let mut logits_mut = logits.as_aligned_slice_mut();
+            let _ = engine
+                .step_gateway_signal_with_defaults(
+                    0.42f32,
+                    0.85f32,
+                    &gateway_tuple,
+                    &mut trail,
+                    Some(&mut logits_mut),
+                    Some(&mut crystal),
+                )
+                .unwrap();
+        }
+
+        b.iter(|| {
+            reset_engine_fast(&mut engine, &base_engine);
+            reset_trail_fast(&mut trail, &base_trail);
+            reset_crystal_fast(&mut crystal, &base_crystal);
+            logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
+            let mut logits_mut = logits.as_aligned_slice_mut();
+            let res = engine
+                .step_gateway_signal_with_defaults(
+                    black_box(0.42f32),
+                    black_box(0.85f32),
+                    black_box(&gateway_tuple),
+                    black_box(&mut trail),
+                    black_box(Some(&mut logits_mut)),
+                    black_box(Some(&mut crystal)),
+                )
+                .unwrap();
+            black_box((
+                res.0.active_branch_mode,
+                res.1.raw(),
+                res.2.provenance_bits,
+                res.3,
+                res.4,
+                logits_mut.as_slice()[0],
+                crystal.phase_gravity_mass,
+            ));
+        });
+    });
+
+    // 2. Provisional Full 4-Axis (EdbcEngine Origin-1 x Fact x Persona x ContradictionGuard) Causal Provenance Step
+    group.throughput(Throughput::Elements(1));
+    group.bench_function(
+        "step_gateway_4axis_contradiction_guard_and_provenance_64h",
+        |b| {
+            let base_engine = EdbcEngine::default();
+            let sys_snapshot = base_engine;
+            let fact = ObjectiveFact::new(
+                make_heterogeneous_q7_phases_with_offset(28),
+                2.8,
+                0x0012_3400,
+                33,
+            );
+            let persona = SubjectivePersona::new(
+                make_heterogeneous_q7_phases_with_offset(30),
+                2.2,
+                0x0020_0000,
+                19,
+            );
+            let mut bloom = ContrastivePhaseBloomFilter::new();
+            bloom.insert_repulsive_pattern(&make_heterogeneous_q7_phases_with_offset(-96));
+            let guard = ContradictionGuard::new(bloom, 0.15, 4);
+            let gateway_4tuple = (&sys_snapshot, &fact, &persona, &guard);
+            let mut logits =
+                AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
+            let mut base_crystal =
+                CrystallizedAttractorRecord::new_empty(33, ATTRACTOR_SLOT_KNOWLEDGE, 0x0012_3400);
+            let _ = base_crystal
+                .absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(26), 2.0);
+            let base_trail = gcso_pointer_trail_t {
+                stigmergic_density: 1.1,
+                attractor_pull_force: 1.5,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+                ..Default::default()
+            };
+
+            let mut trail = base_trail;
+            let mut crystal = base_crystal;
+            let mut engine = base_engine;
+            for _ in 0..8 {
+                reset_engine_fast(&mut engine, &base_engine);
+                reset_trail_fast(&mut trail, &base_trail);
+                reset_crystal_fast(&mut crystal, &base_crystal);
+                logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
+                let mut logits_mut = logits.as_aligned_slice_mut();
+                let _ = engine
+                    .step_gateway_signal_with_defaults(
+                        0.38f32,
+                        0.82f32,
+                        &gateway_4tuple,
+                        &mut trail,
+                        Some(&mut logits_mut),
+                        Some(&mut crystal),
+                    )
+                    .unwrap();
+            }
+
+            b.iter(|| {
+                reset_engine_fast(&mut engine, &base_engine);
+                reset_trail_fast(&mut trail, &base_trail);
+                reset_crystal_fast(&mut crystal, &base_crystal);
+                logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
+                let mut logits_mut = logits.as_aligned_slice_mut();
+                let res = engine
+                    .step_gateway_signal_with_defaults(
+                        black_box(0.38f32),
+                        black_box(0.82f32),
+                        black_box(&gateway_4tuple),
+                        black_box(&mut trail),
+                        black_box(Some(&mut logits_mut)),
+                        black_box(Some(&mut crystal)),
+                    )
+                    .unwrap();
+                black_box((
+                    res.0.active_branch_mode,
+                    res.1.raw(),
+                    res.2.provenance_bits,
+                    res.3,
+                    res.4,
+                    logits_mut.as_slice()[0],
+                    crystal.phase_gravity_mass,
+                ));
+            });
+        },
+    );
+
+    // 3. Provisional `.gcso` CrystallizedAttractorRecord Ensemble Gravity Folding + EDBC Step
+    group.throughput(Throughput::Elements(4));
+    group.bench_function("step_crystallized_ensemble_gravity_fold_4records", |b| {
+        let base_engine = EdbcEngine::default();
+        let records: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
+            let mut rec = CrystallizedAttractorRecord::new_empty(
+                (i as u32) + 10,
+                ATTRACTOR_SLOT_KNOWLEDGE,
+                0x0010_0000 + ((i as u64) << 12),
+            );
+            let _ = rec.absorb_sample_point_64(
+                &make_heterogeneous_q7_phases_with_offset(20 + (i as i8) * 4),
+                2.0 + (i as f32) * 0.5,
+            );
+            rec
+        });
+        let base_trail = gcso_pointer_trail_t {
+            stigmergic_density: 1.2,
+            attractor_pull_force: 1.5,
+            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+            ..Default::default()
+        };
+
+        let mut trail = base_trail;
+        let mut engine = base_engine;
+        for _ in 0..8 {
+            reset_engine_fast(&mut engine, &base_engine);
+            reset_trail_fast(&mut trail, &base_trail);
+            let _ = engine
+                .step_crystallized_ensemble_with_defaults(0.35f32, 0.80f32, &records, &mut trail)
+                .unwrap();
+        }
+
+        b.iter(|| {
+            reset_engine_fast(&mut engine, &base_engine);
+            reset_trail_fast(&mut trail, &base_trail);
+            let res = engine
+                .step_crystallized_ensemble_with_defaults(
+                    black_box(0.35f32),
+                    black_box(0.80f32),
+                    black_box(&records),
+                    black_box(&mut trail),
+                )
+                .unwrap();
+            black_box((
+                res.0.active_branch_mode,
+                res.1.raw(),
+                res.2,
+                res.3,
+                trail.target_anchor_id,
+            ));
+        });
+    });
+
+    // 4. Provisional `.gcso` (ZIMMS) Zero-Copy Deserialization + Crystallized Ensemble Gravity Folding EDBC Step
+    group.throughput(Throughput::Elements(4));
+    group.bench_function("zimms_zero_copy_crystallized_ensemble_step_4records", |b| {
+        let base_engine = EdbcEngine::default();
+        let records: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
+            let mut rec = CrystallizedAttractorRecord::new_empty(
+                (i as u32) + 10,
+                ATTRACTOR_SLOT_KNOWLEDGE,
+                0x0010_0000 + ((i as u64) << 12),
+            );
+            let _ = rec.absorb_sample_point_64(
+                &make_heterogeneous_q7_phases_with_offset(20 + (i as i8) * 4),
+                2.0 + (i as f32) * 0.5,
+            );
+            rec
+        });
+        let mut zimms_buf = AlignedBuffer64::<u8, 512>::new([0u8; 512]);
+        CrystallizedAttractorRecord::write_records_to_zimms_bytes(&records, &mut zimms_buf.data)
+            .unwrap();
+        let base_trail = gcso_pointer_trail_t {
+            stigmergic_density: 1.2,
+            attractor_pull_force: 1.5,
+            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+            ..Default::default()
+        };
+
+        let mut trail = base_trail;
+        let mut engine = base_engine;
+        for _ in 0..8 {
+            reset_engine_fast(&mut engine, &base_engine);
+            reset_trail_fast(&mut trail, &base_trail);
+            let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
+                &zimms_buf.data,
+                4usize,
+            )
+            .unwrap();
+            let _ = engine
+                .step_crystallized_ensemble_with_defaults(
+                    0.35f32,
+                    0.80f32,
+                    zero_copy_recs,
+                    &mut trail,
+                )
+                .unwrap();
+        }
+
+        b.iter(|| {
+            reset_engine_fast(&mut engine, &base_engine);
+            reset_trail_fast(&mut trail, &base_trail);
+            let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
+                black_box(&zimms_buf.data),
+                black_box(4usize),
+            )
+            .unwrap();
+            let res = engine
+                .step_crystallized_ensemble_with_defaults(
+                    black_box(0.35f32),
+                    black_box(0.80f32),
+                    black_box(zero_copy_recs),
+                    black_box(&mut trail),
+                )
+                .unwrap();
+            black_box((
+                res.0.active_branch_mode,
+                res.1.raw(),
+                res.2,
+                res.3,
+                trail.target_anchor_id,
+            ));
+        });
+    });
+
+    // 5. Provisional 4-Section `.gcso` Container Zero-Copy Write, CRC32 Verify & Crystallized Ensemble Step
+    group.throughput(Throughput::Elements(4));
+    group.bench_function(
+        "four_section_gcso_zero_copy_write_verify_and_step_4records",
+        |b| {
+            let base_engine = EdbcEngine::default();
+            let records: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
+                let mut rec = CrystallizedAttractorRecord::new_empty(
+                    (i as u32) + 10,
+                    ATTRACTOR_SLOT_KNOWLEDGE,
+                    0x0010_0000 + ((i as u64) << 12),
+                );
+                let _ = rec.absorb_sample_point_64(
+                    &make_heterogeneous_q7_phases_with_offset(20 + (i as i8) * 4),
+                    2.0 + (i as f32) * 0.5,
+                );
+                rec
+            });
+            let base_trail = gcso_pointer_trail_t {
+                stigmergic_density: 1.2,
+                attractor_pull_force: 1.5,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+                ..Default::default()
+            };
+            let base_trails = [base_trail];
+            let mut trail = base_trail;
+            let bloom = ContrastivePhaseBloomFilter::new();
+            let daes = gcso_daes_slot_t::default();
+            let mut container_buf = AlignedBuffer128::<u8, 1024>::new([0u8; 1024]);
+            let mut engine = base_engine;
+            for _ in 0..8 {
+                reset_engine_fast(&mut engine, &base_engine);
+                let written = GcsoFourSectionView::write_four_section_container_to_bytes(
+                    &records,
+                    &base_trails,
+                    Some(&bloom),
+                    Some(&daes),
+                    1_774_900_000,
+                    &mut container_buf.data,
+                )
+                .unwrap();
+                let view =
+                    GcsoFourSectionView::from_zimms_bytes_zero_copy(&container_buf.data[..written])
+                        .unwrap();
+                reset_trail_fast(&mut trail, &view.trails[0]);
+                let _ = engine
+                    .step_crystallized_ensemble_with_defaults(
+                        0.35f32,
+                        0.80f32,
+                        view.crystals,
+                        &mut trail,
+                    )
+                    .unwrap();
+            }
+
+            b.iter(|| {
+                reset_engine_fast(&mut engine, &base_engine);
+                let written = GcsoFourSectionView::write_four_section_container_to_bytes(
+                    black_box(&records),
+                    black_box(&base_trails),
+                    black_box(Some(&bloom)),
+                    black_box(Some(&daes)),
+                    black_box(1_774_900_000),
+                    black_box(&mut container_buf.data),
+                )
+                .unwrap();
+                let view = GcsoFourSectionView::from_zimms_bytes_zero_copy(black_box(
+                    &container_buf.data[..written],
+                ))
+                .unwrap();
+                reset_trail_fast(&mut trail, &view.trails[0]);
+                let res = engine
+                    .step_crystallized_ensemble_with_defaults(
+                        black_box(0.35f32),
+                        black_box(0.80f32),
+                        black_box(view.crystals),
+                        black_box(&mut trail),
+                    )
+                    .unwrap();
+                black_box((
+                    res.0.active_branch_mode,
+                    res.1.raw(),
+                    res.2,
+                    res.3,
+                    trail.target_anchor_id,
+                ));
+            });
+        },
+    );
+
+    group.finish();
+}
+
 fn bench_edbc_extreme_and_edge_cases(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
     let mut group = c.benchmark_group("EDBC_Extreme_And_Edge_Cases");
 
-    // 1. Long-Run Token Stream Simulation (1,000,000 Tokens with Periodic Outliers = ~11 ms per iteration)
-    // Each single `b.iter` call already evaluates 1,000,000 token steps. Using `SamplingMode::Flat`
-    // with `sample_size(30)` captures 30,000,000 steps in ~2.5s before CPU thermal throttling occurs.
+    // 1. Long-Run Token Stream Simulation (1,000,000 Tokens with Periodic Outliers)
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(30);
     group.warm_up_time(Duration::from_millis(600));
@@ -2137,8 +2371,6 @@ fn bench_edbc_extreme_and_edge_cases(c: &mut Criterion) {
         });
     });
 
-    // Keep `SamplingMode::Flat` with `sample_size(80)` for microsecond/nanosecond kernels
-    // so every sample batch runs an identical iteration count without sub-ms `Linear` sample spikes.
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
     group.warm_up_time(Duration::from_millis(450));
@@ -2151,24 +2383,27 @@ fn bench_edbc_extreme_and_edge_cases(c: &mut Criterion) {
         let _ftz = ScopedFtzdazGuard::new();
         let tau = 1.5f32;
         let delta = 0.15f32;
-        let oscillating_z: Vec<f32> = (0..boundary_osc_len)
-            .map(|i| {
-                if i % 2 == 0 {
-                    tau + delta + 0.05
-                } else {
-                    tau - delta - 0.05
-                }
-            })
-            .collect();
+        let mut osc_buf = AlignedVectorBuffer::<f32, 64>::new(boundary_osc_len, tau);
+        for (i, slot) in osc_buf.as_mut_slice().iter_mut().enumerate() {
+            *slot = if (i & 1) == 0 {
+                tau + delta + 0.05
+            } else {
+                tau - delta - 0.05
+            };
+        }
+        let oscillating_z = osc_buf.as_slice();
 
         let mut engine = EdbcEngine::default();
         engine.set_bifurcation_threshold(tau);
         engine.set_hysteresis_band(delta);
         let mut state_out = gcso_edbc_state_t::default();
+        for &z in oscillating_z {
+            engine.eval_stateful(z, &mut state_out).unwrap();
+        }
 
         b.iter(|| {
             engine.reset();
-            for &z in &oscillating_z {
+            for &z in oscillating_z {
                 engine.eval_stateful(black_box(z), &mut state_out).unwrap();
             }
             black_box((state_out.moving_z_entropy, state_out.active_branch_mode));
@@ -2180,21 +2415,26 @@ fn bench_edbc_extreme_and_edge_cases(c: &mut Criterion) {
     group.throughput(Throughput::Elements(spike_stream_len as u64));
     group.bench_function("outlier_and_nonfinite_spike_recovery_stream", |b| {
         let _ftz = ScopedFtzdazGuard::new();
-        let z_scores: Vec<f32> = (0..spike_stream_len)
-            .map(|i| match i & 63 {
+        let mut spike_buf = AlignedVectorBuffer::<f32, 64>::new(spike_stream_len, 0.45f32);
+        for (i, slot) in spike_buf.as_mut_slice().iter_mut().enumerate() {
+            *slot = match i & 63 {
                 16 => 1.0e9f32,
                 32 => f32::INFINITY,
                 48 => f32::NAN,
                 _ => 0.45f32,
-            })
-            .collect();
+            };
+        }
+        let z_scores = spike_buf.as_slice();
 
         let mut engine = EdbcEngine::default();
         let mut state_out = gcso_edbc_state_t::default();
+        for &z in z_scores {
+            let _ = engine.eval_stateful(z, &mut state_out);
+        }
 
         b.iter(|| {
             engine.reset();
-            for &z in &z_scores {
+            for &z in z_scores {
                 let _ = engine.eval_stateful(black_box(z), &mut state_out);
             }
             black_box(state_out.active_branch_mode);
@@ -2265,6 +2505,7 @@ criterion_group!(
     bench_edbc_stream_simulation,
     bench_edbc_long_dialogue_reliability,
     bench_edbc_pointer_tunneling_and_cohomology,
-    bench_edbc_extreme_and_edge_cases
+    bench_edbc_extreme_and_edge_cases,
+    bench_edbc_provisional_gcso_container
 );
 criterion_main!(benches);

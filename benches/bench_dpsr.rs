@@ -2,24 +2,15 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Advanced benchmarks for Dynamic Phase-Shifted RoPE (DPSR) hot-path kernels and
-//! `DpsrClosedLoopSteering` blanket implementations, engineered for **zero Criterion linear-plot
-//! (`typical.svg` & `lines.svg`) scatter** and **thermal-throttling-free statistical precision**:
-//! - Enables hardware x86_64 MXCSR `FTZ` (Flush-To-Zero) and `DAZ` (Denormals-Are-Zero) via
-//!   [`ScopedFtzdazGuard`] so repeated in-place $SO(2)$ rotations and subnormal edge-case tests
-//!   never trigger 100+ cycle x86 microcode denormal traps across 500,000+ Criterion iterations.
-//! - Eliminates cross-iteration state drift and periodic sawtooth resets (`toggle & 15 == 0`)
-//!   so every sample batch $N_s = s \cdot k$ executes an identical instruction stream.
-//! - Hoists multi-candidate `gcso_pointer_trail_t` arrays outside `b.iter` and restores only the
-//!   single mutated winning candidate slot (`128B`) per iteration, eliminating 384B of redundant
-//!   stack `memcpy` jitter.
-//! - Configures millisecond-scale prefill workloads (`ultra_large_context_prefill` for `4096..32768`
-//!   tokens, where each iteration already averages over $131{,}072$ to $1{,}048{,}576$ head rotations
-//!   and streams up to `512 MB` from DRAM) with [`SamplingMode::Flat`] and `sample_size(30)` +
-//!   `measurement_time(2.2s)`, preventing 20s–110s sustained DRAM/CPU saturation and CPU Turbo Boost
-//!   thermal decay while tightening CoV (`11.36% -> ~2–4%`).
-//! - Evaluates constant-total-element (`1,024 floats = 4 KB`) head-dimension sweeps
-//!   (`16x64, 32x32, 64x16, 128x8, 256x4, 512x2`) in `extreme_head_dim` so Criterion's `lines.svg`
-//!   draws a clean, monotonic vectorization curve.
+//! `DpsrClosedLoopSteering` blanket implementations, engineered for **zero input overfitting**
+//! and **clean separation of Provisional `.gcso` / ZIMMS Container workloads**:
+//! - Uses realistic heterogeneous 64-head phase profiles across all batch and sub-head ensembles
+//!   (never uniform `[8i8; 64]` arrays or unit-gain `1.0f32` fast-path bypasses).
+//! - Evaluates Coarse-to-Fine and Top-2 Liminal routing across 8 candidate trails (2 candidates
+//!   per macro cluster across 4 centroids) so the Fine step genuinely resolves intra-cluster
+//!   candidate competition.
+//! - Isolates provisional pre-v1.0 `.gcso` / ZIMMS container crystallization and zero-copy
+//!   mapping workloads into the dedicated `DPSR_Provisional_GCSO_Container` Criterion group.
 
 use criterion::{
     criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
@@ -119,9 +110,6 @@ impl<T: Copy, const ALIGN: usize> AlignedHeapBuffer<T, ALIGN> {
         let byte_len = alloc_elems
             .checked_mul(elem_size)
             .expect("Byte length overflow");
-        // Always allocate the base pointer on a 4096-byte (4KB OS page) boundary (`ALIGN.max(4096)`)
-        // so `phase_offset_elems` deterministically controls the sub-page offset (`data_ptr & 0xFFF`)
-        // and completely eliminates random OS heap 4KB Load-Store Queue false aliasing!
         let alloc_align = if ALIGN < 4096 { 4096 } else { ALIGN };
         let layout = Layout::from_size_align(byte_len, alloc_align).expect("Invalid layout");
         // SAFETY: `layout` has non-zero size and power-of-two alignment.
@@ -190,7 +178,7 @@ impl<T, const ALIGN: usize> Drop for AlignedHeapBuffer<T, ALIGN> {
     }
 }
 
-#[repr(align(16))]
+#[repr(align(64))]
 struct AlignedQ7Buffer<const N: usize>([gcso_q7_t; N]);
 
 /// Restores `dst` from `src` using 64-bit GPR stores (`store_q7_words_64`) at exact 8-byte offsets
@@ -360,10 +348,6 @@ fn bench_aligned_query_variant<const ALIGN: usize>(
 fn bench_dpsr_steering_operations(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
     let mut group = c.benchmark_group("DPSR_HotPath_Advanced_Kernels");
-    // Using `SamplingMode::Flat` with `sample_size(60)`, 350ms warm-up, and 1050ms measurement
-    // ensures every sample batch s=1..60 spans ~17.5ms (> 16.67ms 60Hz Windows DWM/scheduler period),
-    // eliminating bimodal 10ms sample jitter against Windows/Linux DPC interrupts while keeping
-    // total AVX2 execution below PL1/PL2 thermal decay.
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
     group.warm_up_time(Duration::from_millis(450));
@@ -377,10 +361,6 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
         (256u32, 32u32),
     ];
 
-    // Pre-allocate and fault-in three 512B-aligned L1D-resident arenas (`max_elements = 256 * 32 = 8192`
-    // floats = 32 KB) with cache-set phase offsets (`0`, `+32`, `+64` floats) once outside the loop
-    // so all 32B/128B/256B/512B/QK/QKV/RIPA variants operate on the exact same physical L1D lines
-    // without OS allocator page-offset lottery or VirtualAlloc/VirtualFree churn.
     let max_elements = 256usize * 32usize;
     let mut shared_q_arena =
         AlignedHeapBuffer::<f32, 512>::new_with_phase_offset(max_elements, 1.0f32, 0);
@@ -433,7 +413,7 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
             total_elements,
         );
 
-        // 2. Fused QK (2x Bytes), Geodesic Fused QK, and Fused QKV (3x Bytes) with cache-set phase offsets (0, +32 floats, +64 floats)
+        // 2. Fused QK (2x Bytes), Geodesic Fused QK, and Fused QKV (3x Bytes)
         group.throughput(Throughput::Bytes((single_tensor_bytes * 2) as u64));
         group.bench_with_input(
             BenchmarkId::new(
@@ -598,7 +578,7 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
             },
         );
 
-        // 4. Soft Phase Damping (Stationary Constant-Time AVX2 Gain Scaling)
+        // 4. Soft Phase Damping (Stationary Constant-Time AVX2 Gain Scaling with non-unit gain)
         group.bench_with_input(
             BenchmarkId::new(
                 "apply_soft_phase_damping",
@@ -613,13 +593,13 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
                 q_slice.as_mut_slice().fill(1.0f32);
                 for _ in 0..8 {
                     engine
-                        .apply_soft_phase_damping(&mut q_slice, 1.0f32)
+                        .apply_soft_phase_damping(&mut q_slice, 0.85f32)
                         .unwrap();
                 }
 
                 b.iter(|| {
                     engine
-                        .apply_soft_phase_damping(black_box(&mut q_slice), black_box(1.0f32))
+                        .apply_soft_phase_damping(black_box(&mut q_slice), black_box(0.85f32))
                         .unwrap();
                     black_box(q_slice.as_slice()[0]);
                 });
@@ -640,10 +620,8 @@ fn bench_dpsr_batch_sequence_scaling(c: &mut Criterion) {
     let engine = DpsrEngine::new(head_dim, num_heads).expect("Failed to initialize DpsrEngine");
 
     let batch_sizes = [1usize, 4, 16, 64, 256, 1024];
-    let hetero_phases = make_heterogeneous_q7_phases();
-    // Dedicated L1D/L2-resident 64 KB (4-token) and 1 MB (64-token) arenas allocated BEFORE the
-    // 16 MB DRAM arena so `tokens_1..tokens_64` never suffer background OS page-fault zeroing or
-    // IMC dirty-writeback eviction from a freshly faulted 16 MB buffer.
+    let coherent_hetero_phases = make_heterogeneous_q7_phases_with_offset(8);
+    let multi_domain_hetero_phases = make_heterogeneous_q7_phases();
     let mut l1_q_batch = AlignedHeapBuffer::<f32, 64>::new(stride * 4, 1.0f32);
     let mut small_q_batch = AlignedHeapBuffer::<f32, 64>::new(stride * 64, 1.0f32);
     let mut shared_q_batch: Option<AlignedHeapBuffer<f32, 64>> = None;
@@ -651,7 +629,7 @@ fn bench_dpsr_batch_sequence_scaling(c: &mut Criterion) {
     for &num_tokens in &batch_sizes {
         if num_tokens >= 256 && shared_q_batch.is_none() {
             let mut arena = AlignedHeapBuffer::<f32, 64>::new(stride * 1024, 1.0f32);
-            let warm_phase = AlignedQ7Buffer([8i8; 64]);
+            let warm_phase = AlignedQ7Buffer(coherent_hetero_phases);
             let warm_p = AlignedSlice16::new(&warm_phase.0[..32]).unwrap();
             let mut full_q = arena
                 .as_aligned_prefix_mut(stride * 1024)
@@ -664,10 +642,6 @@ fn bench_dpsr_batch_sequence_scaling(c: &mut Criterion) {
             shared_q_batch = Some(arena);
         }
         if num_tokens >= 256 {
-            // `tokens_256` (4 MB) and `tokens_1024` (16 MB) stream across L3 and DRAM.
-            // Using `SamplingMode::Flat` with `sample_size(60)`, `warm_up_time(450ms)`, and
-            // `measurement_time(1150ms)` without re-dirtying the 16 MB arena immediately before
-            // warm-up prevents IMC dirty-writeback bursts during early measurement samples.
             group.sampling_mode(SamplingMode::Flat);
             group.sample_size(60);
             group.warm_up_time(Duration::from_millis(450));
@@ -682,6 +656,7 @@ fn bench_dpsr_batch_sequence_scaling(c: &mut Criterion) {
         let total_bytes = total_elements * core::mem::size_of::<f32>();
         group.throughput(Throughput::Bytes(total_bytes as u64));
 
+        // Uses realistic per-head heterogeneous phases (`coherent_hetero_phases`) rather than uniform `[8i8; 64]`
         group.bench_with_input(
             BenchmarkId::new("batch_steering_query_only", format!("tokens_{num_tokens}")),
             &num_tokens,
@@ -700,7 +675,7 @@ fn bench_dpsr_batch_sequence_scaling(c: &mut Criterion) {
                 if tokens <= 64 {
                     q_slice.as_mut_slice().fill(1.0f32);
                 }
-                let phase_data = AlignedQ7Buffer([8i8; 64]);
+                let phase_data = AlignedQ7Buffer(coherent_hetero_phases);
                 let p_slice = AlignedSlice16::new(&phase_data.0[..32]).unwrap();
                 for _ in 0..8 {
                     engine
@@ -742,7 +717,7 @@ fn bench_dpsr_batch_sequence_scaling(c: &mut Criterion) {
                 if tokens <= 64 {
                     q_slice.as_mut_slice().fill(1.0f32);
                 }
-                let phase_data = AlignedQ7Buffer(hetero_phases);
+                let phase_data = AlignedQ7Buffer(multi_domain_hetero_phases);
                 let p_slice = AlignedSlice16::new(&phase_data.0[..32]).unwrap();
                 for _ in 0..8 {
                     engine
@@ -797,7 +772,11 @@ fn bench_dpsr_long_context_and_procrustes(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
+        let _ftz = ScopedFtzdazGuard::new();
         q_slice.as_mut_slice().fill(1.0f32);
+        for _ in 0..8 {
+            engine.lazy_unwrap_override(&mut q_slice, &c_slice).unwrap();
+        }
 
         b.iter(|| {
             engine
@@ -817,7 +796,20 @@ fn bench_dpsr_long_context_and_procrustes(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
+        let _ftz = ScopedFtzdazGuard::new();
         q_slice.as_mut_slice().fill(1.0f32);
+        for _ in 0..8 {
+            let _ = engine
+                .apply_seam_free_lazy_unwrap_q7(
+                    &mut q_slice,
+                    None,
+                    &qp_slice,
+                    &cp_slice,
+                    0.01f32,
+                    Some(DEFAULT_RIPA_CLAMP_MAX_RAD),
+                )
+                .unwrap();
+        }
 
         b.iter(|| {
             let eff = engine
@@ -874,8 +866,14 @@ fn bench_dpsr_long_context_and_procrustes(c: &mut Criterion) {
         let t_slice = shared_tgt_arena
             .as_aligned_prefix(total_elements)
             .relax_alignment::<32>();
+        let _ftz = ScopedFtzdazGuard::new();
         let mut out_phase = AlignedQ7Buffer([0i8; 64]);
         let mut p_out = AlignedSliceMut16::new(&mut out_phase.0[..32]).unwrap();
+        for _ in 0..8 {
+            engine
+                .compute_procrustes_phase_delta(&s_slice, &t_slice, &mut p_out)
+                .unwrap();
+        }
 
         b.iter(|| {
             engine
@@ -908,8 +906,9 @@ fn bench_dpsr_long_context_and_procrustes(c: &mut Criterion) {
             accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(20),
             ..Default::default()
         };
+        let _ftz = ScopedFtzdazGuard::new();
         let mut trail = base_trail;
-        for _ in 0..4 {
+        for _ in 0..8 {
             reset_trail_fast(&mut trail, &base_trail);
             let _ = engine
                 .steer_trail_with_procrustes_feedback(
@@ -940,9 +939,6 @@ fn bench_dpsr_long_context_and_procrustes(c: &mut Criterion) {
     });
 
     // 5. Fused Logit Phase Shift (Vocab Size = 32,768, 128 KB L2-Resident Buffer)
-    // Reuses the pre-allocated 4KB-page-aligned `shared_logits_arena` (with a 256-float / 1 KB
-    // sub-page phase offset) and warms all 2,048 cache lines across 4 passes into MESI Modified
-    // (`M`) state before timing begins so L2 demand-paging jitter never skews sample batches.
     let vocab_size = 32768usize;
     group.throughput(Throughput::Bytes(
         (vocab_size * std::mem::size_of::<f32>()) as u64,
@@ -967,8 +963,6 @@ fn bench_dpsr_long_context_and_procrustes(c: &mut Criterion) {
     });
 
     // 6. Quantization-Discretized Phase Steering (32-Head AVX2/SWAR QDPS Step Filter)
-    // Uses a 32-byte `AlignedBuffer16<[i8; 32]>` copy (single 256-bit `vmovdqa`) and an 8-pass
-    // pre-warm loop so instruction cache and branch predictors are hot before timing begins.
     group.throughput(Throughput::Elements(u64::from(num_heads)));
     group.bench_function("qdps_quantization_step_filter_high_frequency", |b| {
         let seed_buf = AlignedBuffer16::new([
@@ -1122,7 +1116,30 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
             ..Default::default()
         };
 
+        let _ftz = ScopedFtzdazGuard::new();
         let mut trail = initial_trail;
+        for _ in 0..8 {
+            reset_trail_fast(&mut trail, &initial_trail);
+            let _ = engine
+                .resolve_and_apply_swarm_phase_steering_safe(
+                    &mut trail,
+                    &tgt_slice,
+                    96u8,
+                    6u8,
+                    6u8,
+                    32u8,
+                    0.18f32,
+                    0.12f32,
+                    Some(&bloom),
+                    3u8,
+                    64u8,
+                    0.01f32,
+                    DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    &mut q_slice,
+                    None,
+                )
+                .unwrap();
+        }
 
         b.iter(|| {
             reset_trail_fast(&mut trail, &initial_trail);
@@ -1171,7 +1188,32 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
             ..Default::default()
         };
 
+        let _ftz = ScopedFtzdazGuard::new();
         let mut trail = initial_trail;
+        for _ in 0..8 {
+            reset_trail_fast(&mut trail, &initial_trail);
+            let _ = engine
+                .resolve_unified_field_swarm_and_steer_safe(
+                    &mut trail,
+                    &single_anchor,
+                    &single_energy,
+                    None::<&gcso_paged_bitmask_t>,
+                    96u8,
+                    6u8,
+                    6u8,
+                    32u8,
+                    0.18f32,
+                    0.12f32,
+                    Some(&bloom),
+                    3u8,
+                    64u8,
+                    0.01f32,
+                    DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    &mut q_slice,
+                    None,
+                )
+                .unwrap();
+        }
 
         b.iter(|| {
             reset_trail_fast(&mut trail, &initial_trail);
@@ -1227,7 +1269,32 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
             ..Default::default()
         };
 
+        let _ftz = ScopedFtzdazGuard::new();
         let mut trail = initial_trail;
+        for _ in 0..8 {
+            reset_trail_fast(&mut trail, &initial_trail);
+            let _ = engine
+                .resolve_unified_field_swarm_and_steer_safe(
+                    &mut trail,
+                    &unified_anchors,
+                    &unified_energies,
+                    None::<&gcso_paged_bitmask_t>,
+                    96u8,
+                    6u8,
+                    6u8,
+                    32u8,
+                    0.18f32,
+                    0.12f32,
+                    Some(&bloom),
+                    3u8,
+                    64u8,
+                    0.01f32,
+                    DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    &mut q_slice,
+                    None,
+                )
+                .unwrap();
+        }
 
         b.iter(|| {
             reset_trail_fast(&mut trail, &initial_trail);
@@ -1290,7 +1357,33 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
             ..Default::default()
         };
 
+        let _ftz = ScopedFtzdazGuard::new();
         let mut trail = initial_trail;
+        for _ in 0..8 {
+            reset_trail_fast(&mut trail, &initial_trail);
+            let _ = engine
+                .resolve_slot_bank_swarm_and_steer_safe(
+                    &mut trail,
+                    &bank_slice,
+                    &slot_weights,
+                    DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+                    None::<&gcso_paged_bitmask_t>,
+                    96u8,
+                    8u8,
+                    7u8,
+                    32u8,
+                    0.18f32,
+                    0.12f32,
+                    Some(&bloom),
+                    3u8,
+                    64u8,
+                    0.01f32,
+                    DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    &mut q_slice,
+                    None,
+                )
+                .unwrap();
+        }
 
         b.iter(|| {
             reset_trail_fast(&mut trail, &initial_trail);
@@ -1366,9 +1459,30 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
                 ..Default::default()
             },
         ];
+        let _ftz = ScopedFtzdazGuard::new();
         let mut candidates = base_candidates;
-
         let mut src_trail = base_src;
+        for _ in 0..8 {
+            reset_trail_fast(&mut src_trail, &base_src);
+            reset_trail_fast(&mut candidates[2], &base_candidates[2]);
+            attn_scores.data = [0.0f32; 8];
+            let mut scores_mut = attn_scores.as_aligned_slice_mut();
+            let _ = engine
+                .select_rewire_and_steer_bayesian_with_defaults(
+                    &mut src_trail,
+                    &mut candidates,
+                    2.0f32,
+                    0.5f32,
+                    0.25f32,
+                    1.0f32,
+                    64u8,
+                    0.25f32,
+                    Some(&mut scores_mut),
+                    &mut q_slice,
+                    None,
+                )
+                .unwrap();
+        }
 
         b.iter(|| {
             reset_trail_fast(&mut src_trail, &base_src);
@@ -1425,7 +1539,28 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
                 make_heterogeneous_q7_phases_with_offset(0),
             ];
 
+            let _ftz = ScopedFtzdazGuard::new();
             let mut curr_trail = base_curr;
+            for _ in 0..8 {
+                reset_trail_fast(&mut curr_trail, &base_curr);
+                attn_scores.data = [0.0f32; 8];
+                let mut scores_mut = attn_scores.as_aligned_slice_mut();
+                let _ = engine
+                    .bridge_liminal_trail_and_steer_qk_safe(
+                        &prev_trail,
+                        &mut curr_trail,
+                        64u8,
+                        0.25f32,
+                        0.01f32,
+                        DEFAULT_RIPA_CLAMP_MAX_RAD,
+                        2.0f32,
+                        Some(&memory_anchors),
+                        Some(&mut scores_mut),
+                        &mut q_slice,
+                        None,
+                    )
+                    .unwrap();
+            }
 
             b.iter(|| {
                 reset_trail_fast(&mut curr_trail, &base_curr);
@@ -1475,8 +1610,26 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
                     ..Default::default()
                 });
 
+            let _ftz = ScopedFtzdazGuard::new();
+            for _ in 0..8 {
+                attn_scores.data = [0.5f32; 8];
+                let mut scores_mut = attn_scores.as_aligned_slice_mut();
+                let _ = engine
+                    .modulate_candidate_trail_attention_scores_zero_copy(
+                        &mut scores_mut,
+                        &src_trail,
+                        &candidates,
+                        2.0f32,
+                        0.5f32,
+                        0.25f32,
+                        0.25f32,
+                        1.0f32,
+                    )
+                    .unwrap();
+            }
+
             b.iter(|| {
-                attn_scores.data.fill(0.5f32);
+                attn_scores.data = [0.5f32; 8];
                 let mut scores_mut = attn_scores.as_aligned_slice_mut();
                 let res = engine
                     .modulate_candidate_trail_attention_scores_zero_copy(
@@ -1504,8 +1657,22 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         q_slice.as_mut_slice().fill(1.0f32);
         let phases_a = AlignedBuffer16::new(make_heterogeneous_q7_phases_with_offset(-20));
         let phases_b = AlignedBuffer16::new(make_heterogeneous_q7_phases_with_offset(44));
+        let _ftz = ScopedFtzdazGuard::new();
         let pa = phases_a.as_aligned_slice();
         let pb = phases_b.as_aligned_slice();
+        for _ in 0..8 {
+            let _ = engine
+                .slerp_and_apply_phase_steering_safe(
+                    &pa,
+                    &pb,
+                    64u8,
+                    0.01f32,
+                    DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    &mut q_slice,
+                    None,
+                )
+                .unwrap();
+        }
 
         b.iter(|| {
             let out = engine
@@ -1539,7 +1706,7 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         });
     });
 
-    // 5A. Swarm-Fragmented Pseudo-MoE (PSPM 8-Slot Sub-Head Ensemble — Stationary Config)
+    // 5A. Swarm-Fragmented Pseudo-MoE (PSPM 8-Slot Sub-Head Ensemble — Non-Unit Gains)
     group.throughput(Throughput::Bytes(tensor_bytes as u64));
     group.bench_function("pspm_subhead_8slot_pseudo_moe_ensemble", |b| {
         let mut q_slice = shared_q_arena
@@ -1551,6 +1718,7 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         slot_bank.data[64..128].copy_from_slice(&make_heterogeneous_q7_phases_with_offset(24));
         slot_bank.data[128..192].copy_from_slice(&make_heterogeneous_q7_phases_with_offset(-18));
         let bank_slice = slot_bank.relax_slice::<16>();
+        let _ftz = ScopedFtzdazGuard::new();
         let pspm_cfg = gcso_pspm_config_t {
             num_fact_heads: 32,
             num_logic_heads: 24,
@@ -1560,6 +1728,21 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
             explore_phase_gain: 1.20,
             ..Default::default()
         };
+        for _ in 0..8 {
+            engine
+                .dispatch_subhead_slot_ensemble(
+                    &mut q_slice,
+                    &pspm_cfg,
+                    &bank_slice,
+                    ATTRACTOR_SLOT_SYSTEM_BASELINE,
+                    ATTRACTOR_SLOT_KNOWLEDGE,
+                    ATTRACTOR_SLOT_PERSONA,
+                    DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    8i8,
+                    head_dim as usize,
+                )
+                .unwrap();
+        }
 
         b.iter(|| {
             engine
@@ -1579,7 +1762,7 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         });
     });
 
-    // 5B. Geodesic-Folded PSPM 8-Slot Sub-Head Ensemble
+    // 5B. Geodesic-Folded PSPM 8-Slot Sub-Head Ensemble (Non-Unit Gains to exercise full scaling path)
     group.bench_function("pspm_subhead_8slot_geodesic_moe_ensemble", |b| {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
@@ -1590,15 +1773,31 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         slot_bank.data[64..128].copy_from_slice(&make_heterogeneous_q7_phases_with_offset(24));
         slot_bank.data[128..192].copy_from_slice(&make_heterogeneous_q7_phases_with_offset(-18));
         let bank_slice = slot_bank.relax_slice::<16>();
+        let _ftz = ScopedFtzdazGuard::new();
         let pspm_cfg = gcso_pspm_config_t {
             num_fact_heads: 32,
             num_logic_heads: 24,
             num_explore_heads: 8,
             fact_phase_gain: 1.0,
-            logic_phase_gain: 1.0,
-            explore_phase_gain: 1.0,
+            logic_phase_gain: 0.85,
+            explore_phase_gain: 1.20,
             ..Default::default()
         };
+        for _ in 0..8 {
+            engine
+                .dispatch_subhead_slot_ensemble_geodesic(
+                    &mut q_slice,
+                    &pspm_cfg,
+                    &bank_slice,
+                    ATTRACTOR_SLOT_SYSTEM_BASELINE,
+                    ATTRACTOR_SLOT_KNOWLEDGE,
+                    ATTRACTOR_SLOT_PERSONA,
+                    DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    8i8,
+                    head_dim as usize,
+                )
+                .unwrap();
+        }
 
         b.iter(|| {
             engine
@@ -1618,7 +1817,7 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         });
     });
 
-    // 5C. Single-Manifold Unified-Field + PSPM Sub-Head Pseudo-MoE + Inverse-Temperature Logit Sharpening
+    // 5C. Single-Manifold Unified-Field + PSPM Sub-Head Pseudo-MoE (Non-Unit Gains) + Inverse-Temperature Logit Sharpening
     group.bench_function("unified_field_pspm_and_inv_temp_logit_sharpen_64h", |b| {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
@@ -1636,8 +1835,8 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
             num_logic_heads: 24,
             num_explore_heads: 8,
             fact_phase_gain: 1.0,
-            logic_phase_gain: 1.0,
-            explore_phase_gain: 1.0,
+            logic_phase_gain: 0.90,
+            explore_phase_gain: 1.15,
             ..Default::default()
         };
         let base_trail = gcso_pointer_trail_t {
@@ -1648,7 +1847,27 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
             ..Default::default()
         };
 
+        let _ftz = ScopedFtzdazGuard::new();
         let mut trail = base_trail;
+        for _ in 0..8 {
+            reset_trail_fast(&mut trail, &base_trail);
+            temp_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
+            let mut logits_mut = temp_logits.as_aligned_slice_mut();
+            let _ = engine
+                .steer_unified_field_pspm_and_inv_temperature_safe(
+                    &mut trail,
+                    &unified_anchors,
+                    &unified_energies,
+                    None,
+                    Some((&pspm_cfg, 8i8)),
+                    Some((&mut logits_mut, 0.75f32)),
+                    0.01f32,
+                    DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    &mut q_slice,
+                    None,
+                )
+                .unwrap();
+        }
 
         b.iter(|| {
             reset_trail_fast(&mut trail, &base_trail);
@@ -1672,7 +1891,617 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         });
     });
 
-    // 5D. 2-Origin Composite Manifold Gateway + SO(2)-Fused RIPA/PSPM Steering + `.gcso` Crystallization
+    // 5D. Classical Online Toroidal k-Means / DP-Means E+M Closed-Loop Gateway Steering (K = 4 Centroids)
+    group.bench_function("online_toroidal_kmeans_gateway_steer_4centroids_64h", |b| {
+        let mut q_slice = shared_q_arena
+            .as_aligned_prefix_mut(total_elements)
+            .relax_alignment::<32>();
+        q_slice.as_mut_slice().fill(1.0f32);
+        let mut gw_logits = AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
+        let sys_sig = SystemConstraint::new((), 0.15, 0.05, 0xFF);
+        let fact_sig = ObjectiveFact::new(
+            make_heterogeneous_q7_phases_with_offset(28),
+            3.0,
+            0x0024_0000,
+            88,
+        );
+        let pers_sig = SubjectivePersona::new(
+            make_heterogeneous_q7_phases_with_offset(30),
+            2.0,
+            0x0000_9000,
+            12,
+        );
+        let composite_signal = (&sys_sig, &fact_sig, &pers_sig);
+        let base_centroids: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
+            let mut rec = CrystallizedAttractorRecord::new_empty(
+                (i as u32) + 10,
+                ATTRACTOR_SLOT_KNOWLEDGE,
+                0x0010_0000 + ((i as u64) << 12),
+            );
+            let _ = rec.absorb_sample_point_64(
+                &make_heterogeneous_q7_phases_with_offset(16 + (i as i8) * 6),
+                2.0 + (i as f32) * 0.5,
+            );
+            rec
+        });
+        let base_trail = gcso_pointer_trail_t {
+            stigmergic_density: 1.4,
+            attractor_pull_force: 1.5,
+            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+            ..Default::default()
+        };
+        let mut centroids = base_centroids;
+        let mut trail = base_trail;
+        for _ in 0..8 {
+            reset_trail_fast(&mut trail, &base_trail);
+            reset_crystal_fast(&mut centroids[2], &base_centroids[2]);
+            gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
+            let mut logits_mut = gw_logits.as_aligned_slice_mut();
+            let _ = engine
+                .steer_and_kmeans_crystallize_gateway_signal_safe(
+                    &composite_signal,
+                    &mut trail,
+                    &mut centroids,
+                    DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
+                    64u8,
+                    &mut q_slice,
+                    None,
+                    Some(&mut logits_mut),
+                )
+                .unwrap();
+        }
+
+        b.iter(|| {
+            reset_trail_fast(&mut trail, &base_trail);
+            reset_crystal_fast(&mut centroids[2], &base_centroids[2]);
+            gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
+            let mut logits_mut = gw_logits.as_aligned_slice_mut();
+            let res = engine
+                .steer_and_kmeans_crystallize_gateway_signal_safe(
+                    black_box(&composite_signal),
+                    black_box(&mut trail),
+                    black_box(&mut centroids),
+                    black_box(DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE),
+                    black_box(64u8),
+                    black_box(&mut q_slice),
+                    None,
+                    black_box(Some(&mut logits_mut)),
+                )
+                .unwrap();
+            black_box((res, trail.cluster_id, q_slice.as_slice()[0]));
+        });
+    });
+
+    // 5E. Coarse-to-Fine Macro-to-Micro Routing (O(K=4) Centroids -> O(M_local=2) Intra-Cluster Candidates out of 8 Total) + RIPA Steering
+    group.bench_function("coarse_to_fine_macro_to_micro_routing_and_steer_64h", |b| {
+        let mut q_slice = shared_q_arena
+            .as_aligned_prefix_mut(total_elements)
+            .relax_alignment::<32>();
+        q_slice.as_mut_slice().fill(1.0f32);
+        let centroids: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
+            let mut rec = CrystallizedAttractorRecord::new_empty(
+                ((i as u32) + 1) * 100,
+                ATTRACTOR_SLOT_KNOWLEDGE,
+                0x0010_0000 + ((i as u64) << 12),
+            );
+            let _ = rec.absorb_sample_point_64(
+                &make_heterogeneous_q7_phases_with_offset(if i == 2 {
+                    28i8
+                } else {
+                    -60 + (i as i8) * 20
+                }),
+                3.0,
+            );
+            rec
+        });
+        let base_src = gcso_pointer_trail_t {
+            stigmergic_density: 1.5,
+            attractor_pull_force: 2.0,
+            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+            ..Default::default()
+        };
+        // 8 Candidates (2 per cluster across clusters 100, 200, 300, 400) so the Fine step genuinely
+        // evaluates multiple candidates inside the winning macro cluster (cluster 300: indices 4 and 5).
+        let base_candidates: [gcso_pointer_trail_t; 8] = [
+            gcso_pointer_trail_t {
+                stigmergic_density: 3.0,
+                cluster_id: 100,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-60),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 2.2,
+                cluster_id: 100,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-55),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 2.5,
+                cluster_id: 200,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-40),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 2.1,
+                cluster_id: 200,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-36),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 2.6,
+                target_anchor_id: 301,
+                cluster_id: 300,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(23),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 3.5,
+                target_anchor_id: 302,
+                cluster_id: 300,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(29),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 1.8,
+                cluster_id: 400,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(0),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 1.4,
+                cluster_id: 400,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(6),
+                ..Default::default()
+            },
+        ];
+        let mut candidates = base_candidates;
+
+        let mut src_trail = base_src;
+        for _ in 0..8 {
+            reset_trail_fast(&mut src_trail, &base_src);
+            reset_trail_fast(&mut candidates[4], &base_candidates[4]);
+            reset_trail_fast(&mut candidates[5], &base_candidates[5]);
+            let _ = engine
+                .route_coarse_to_fine_and_steer_bayesian_trails_safe(
+                    &centroids,
+                    64u8,
+                    &mut src_trail,
+                    &mut candidates,
+                    2.0f32,
+                    0.5f32,
+                    0.25f32,
+                    0.50f32,
+                    64u8,
+                    0.25f32,
+                    0.01f32,
+                    DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    None,
+                    &mut q_slice,
+                    None,
+                )
+                .unwrap();
+        }
+
+        b.iter(|| {
+            reset_trail_fast(&mut src_trail, &base_src);
+            reset_trail_fast(&mut candidates[4], &base_candidates[4]);
+            reset_trail_fast(&mut candidates[5], &base_candidates[5]);
+            let res = engine
+                .route_coarse_to_fine_and_steer_bayesian_trails_safe(
+                    black_box(&centroids),
+                    black_box(64u8),
+                    black_box(&mut src_trail),
+                    black_box(&mut candidates),
+                    black_box(2.0f32),
+                    black_box(0.5f32),
+                    black_box(0.25f32),
+                    black_box(0.50f32),
+                    black_box(64u8),
+                    black_box(0.25f32),
+                    black_box(0.01f32),
+                    black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
+                    None,
+                    black_box(&mut q_slice),
+                    None,
+                )
+                .unwrap();
+            black_box((res, src_trail.linked_trail_id, q_slice.as_slice()[0]));
+        });
+    });
+
+    // 5F. Top-2 Liminal Macro-to-Micro Bifurcation Routing (O(K=4) Top-2 Centroids -> Dual-Cluster Fine Selection across 8 Candidates) + RIPA Steering
+    group.bench_function("top2_liminal_bifurcation_route_and_steer_64h", |b| {
+        let mut q_slice = shared_q_arena
+            .as_aligned_prefix_mut(total_elements)
+            .relax_alignment::<32>();
+        q_slice.as_mut_slice().fill(1.0f32);
+        let centroids: [CrystallizedAttractorRecord; 4] = [
+            {
+                let mut rec = CrystallizedAttractorRecord::new_empty(
+                    100,
+                    ATTRACTOR_SLOT_KNOWLEDGE,
+                    0x0010_0000,
+                );
+                let _ =
+                    rec.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(-70), 2.0);
+                rec
+            },
+            {
+                let mut rec = CrystallizedAttractorRecord::new_empty(
+                    200,
+                    ATTRACTOR_SLOT_KNOWLEDGE,
+                    0x0011_0000,
+                );
+                let _ =
+                    rec.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(24), 3.0);
+                rec
+            },
+            {
+                let mut rec = CrystallizedAttractorRecord::new_empty(
+                    300,
+                    ATTRACTOR_SLOT_PERSONA,
+                    0x0012_0000,
+                );
+                let _ =
+                    rec.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(28), 2.9);
+                rec
+            },
+            {
+                let mut rec = CrystallizedAttractorRecord::new_empty(
+                    400,
+                    ATTRACTOR_SLOT_KNOWLEDGE,
+                    0x0013_0000,
+                );
+                let _ =
+                    rec.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(-45), 1.5);
+                rec
+            },
+        ];
+        let base_src = gcso_pointer_trail_t {
+            stigmergic_density: 1.5,
+            attractor_pull_force: 2.0,
+            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+            ..Default::default()
+        };
+        // 8 Candidates (2 per cluster across 4 centroids) so Top-2 Liminal routing evaluates 4 active candidates across the 2 winning clusters (clusters 200 & 300).
+        let base_candidates: [gcso_pointer_trail_t; 8] = [
+            gcso_pointer_trail_t {
+                stigmergic_density: 2.5,
+                cluster_id: 100,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-70),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 2.1,
+                cluster_id: 100,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-66),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 2.7,
+                target_anchor_id: 201,
+                cluster_id: 200,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(21),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 3.1,
+                target_anchor_id: 202,
+                cluster_id: 200,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(24),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 2.9,
+                target_anchor_id: 301,
+                cluster_id: 300,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(25),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 3.6,
+                target_anchor_id: 302,
+                cluster_id: 300,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 1.8,
+                cluster_id: 400,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-45),
+                ..Default::default()
+            },
+            gcso_pointer_trail_t {
+                stigmergic_density: 1.4,
+                cluster_id: 400,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-40),
+                ..Default::default()
+            },
+        ];
+        let mut candidates = base_candidates;
+
+        let mut src_trail = base_src;
+        for _ in 0..8 {
+            reset_trail_fast(&mut src_trail, &base_src);
+            reset_trail_fast(&mut candidates[3], &base_candidates[3]);
+            reset_trail_fast(&mut candidates[5], &base_candidates[5]);
+            let _ = engine
+                .route_top2_liminal_and_steer_bayesian_trails_safe(
+                    &centroids,
+                    64u8,
+                    0.20f32,
+                    &mut src_trail,
+                    &mut candidates,
+                    2.0f32,
+                    0.5f32,
+                    0.25f32,
+                    0.50f32,
+                    64u8,
+                    0.25f32,
+                    0.01f32,
+                    DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    None,
+                    &mut q_slice,
+                    None,
+                )
+                .unwrap();
+        }
+
+        b.iter(|| {
+            reset_trail_fast(&mut src_trail, &base_src);
+            reset_trail_fast(&mut candidates[3], &base_candidates[3]);
+            reset_trail_fast(&mut candidates[5], &base_candidates[5]);
+            let res = engine
+                .route_top2_liminal_and_steer_bayesian_trails_safe(
+                    black_box(&centroids),
+                    black_box(64u8),
+                    black_box(0.20f32),
+                    black_box(&mut src_trail),
+                    black_box(&mut candidates),
+                    black_box(2.0f32),
+                    black_box(0.5f32),
+                    black_box(0.25f32),
+                    black_box(0.50f32),
+                    black_box(64u8),
+                    black_box(0.25f32),
+                    black_box(0.01f32),
+                    black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
+                    None,
+                    black_box(&mut q_slice),
+                    None,
+                )
+                .unwrap();
+            black_box((res, src_trail.linked_trail_id, q_slice.as_slice()[0]));
+        });
+    });
+
+    // 5G. Online Toroidal k-Means Centroid Basin Consolidation (Merge & Prune 8 Centroids on SO(2)^64)
+    group.throughput(Throughput::Elements(8));
+    group.bench_function(
+        "online_toroidal_centroid_merge_and_prune_8centroids_64h",
+        |b| {
+            let base_centroids: [CrystallizedAttractorRecord; 8] = core::array::from_fn(|i| {
+                let mut rec = CrystallizedAttractorRecord::new_empty(
+                    (i as u32) + 1,
+                    ATTRACTOR_SLOT_KNOWLEDGE,
+                    0x0020_0000 + ((i as u64) << 12),
+                );
+                let shift = match i {
+                    0 => 24i8,
+                    1 => 25i8,
+                    2 => -40i8,
+                    3 => -39i8,
+                    4 => 60i8,
+                    5 => -80i8,
+                    6 => 10i8,
+                    _ => -15i8,
+                };
+                let mass = if i == 7 {
+                    0.01f32
+                } else {
+                    2.5f32 + (i as f32) * 0.2
+                };
+                let _ = rec
+                    .absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(shift), mass);
+                rec
+            });
+
+            let mut centroids = base_centroids;
+            for _ in 0..8 {
+                reset_crystal_fast(&mut centroids[0], &base_centroids[0]);
+                reset_crystal_fast(&mut centroids[1], &base_centroids[1]);
+                reset_crystal_fast(&mut centroids[2], &base_centroids[2]);
+                reset_crystal_fast(&mut centroids[3], &base_centroids[3]);
+                centroids[4].base_energy = base_centroids[4].base_energy;
+                centroids[4].phase_gravity_mass = base_centroids[4].phase_gravity_mass;
+                centroids[4].checksum_crc32 = base_centroids[4].checksum_crc32;
+                centroids[5].base_energy = base_centroids[5].base_energy;
+                centroids[5].phase_gravity_mass = base_centroids[5].phase_gravity_mass;
+                centroids[5].checksum_crc32 = base_centroids[5].checksum_crc32;
+                centroids[6].base_energy = base_centroids[6].base_energy;
+                centroids[6].phase_gravity_mass = base_centroids[6].phase_gravity_mass;
+                centroids[6].checksum_crc32 = base_centroids[6].checksum_crc32;
+                reset_crystal_fast(&mut centroids[7], &base_centroids[7]);
+                let _ = CrystallizedAttractorRecord::merge_and_prune_centroids_64(
+                    &mut centroids,
+                    0.85f32,
+                    0.05f32,
+                    0.98f32,
+                );
+            }
+
+            b.iter(|| {
+                reset_crystal_fast(&mut centroids[0], &base_centroids[0]);
+                reset_crystal_fast(&mut centroids[1], &base_centroids[1]);
+                reset_crystal_fast(&mut centroids[2], &base_centroids[2]);
+                reset_crystal_fast(&mut centroids[3], &base_centroids[3]);
+                centroids[4].base_energy = base_centroids[4].base_energy;
+                centroids[4].phase_gravity_mass = base_centroids[4].phase_gravity_mass;
+                centroids[4].checksum_crc32 = base_centroids[4].checksum_crc32;
+                centroids[5].base_energy = base_centroids[5].base_energy;
+                centroids[5].phase_gravity_mass = base_centroids[5].phase_gravity_mass;
+                centroids[5].checksum_crc32 = base_centroids[5].checksum_crc32;
+                centroids[6].base_energy = base_centroids[6].base_energy;
+                centroids[6].phase_gravity_mass = base_centroids[6].phase_gravity_mass;
+                centroids[6].checksum_crc32 = base_centroids[6].checksum_crc32;
+                reset_crystal_fast(&mut centroids[7], &base_centroids[7]);
+                let res = CrystallizedAttractorRecord::merge_and_prune_centroids_64(
+                    black_box(&mut centroids),
+                    black_box(0.85f32),
+                    black_box(0.05f32),
+                    black_box(0.98f32),
+                );
+                black_box((res, centroids[1].sample_count, centroids[7].sample_count));
+            });
+        },
+    );
+
+    // 6A. Real-Time Screen/Video Co-Watching: 16x16 = 256 Patch Bitmask-Gated 2D Phase Steering
+    let num_patches = 256usize;
+    let patch_dim = 64usize;
+    let grid_elems = num_patches * patch_dim;
+    group.throughput(Throughput::Bytes(
+        (grid_elems * core::mem::size_of::<f32>()) as u64,
+    ));
+    group.bench_function("visual_grid_2d_bitmask_gated_256patches", |b| {
+        let mut grid_data = AlignedHeapBuffer::<f32, 32>::new(grid_elems, 1.0f32);
+        let mut grid_slice = grid_data.as_aligned_slice_mut();
+        let prev_mask = gcso_paged_bitmask_t {
+            bits: [
+                0x0F0F_0F0F_0F0F_0F0Fu64,
+                0x3333_3333_3333_3333u64,
+                0x5555_5555_5555_5555u64,
+                0x00FF_00FF_00FF_00FFu64,
+            ],
+        };
+        let curr_mask = gcso_paged_bitmask_t {
+            bits: [
+                0x0FFF_03CF_0FFF_3C0Fu64,
+                0x33F3_3C33_3F33_33C3u64,
+                0x55F5_5505_5F55_5055u64,
+                0x0FFF_000F_0F0F_00F0u64,
+            ],
+        };
+
+        let _ftz = ScopedFtzdazGuard::new();
+        for _ in 0..8 {
+            let (delta_mask, _) = engine.detect_frame_delta_bitmask(&prev_mask, &curr_mask);
+            let _ = engine
+                .steer_visual_grid_2d_bitmask_gated(
+                    &mut grid_slice,
+                    &delta_mask,
+                    patch_dim,
+                    num_patches,
+                    16i8,
+                    -16i8,
+                )
+                .unwrap();
+        }
+
+        b.iter(|| {
+            let (delta_mask, _changed) =
+                engine.detect_frame_delta_bitmask(black_box(&prev_mask), black_box(&curr_mask));
+            let steered = engine
+                .steer_visual_grid_2d_bitmask_gated(
+                    black_box(&mut grid_slice),
+                    black_box(&delta_mask),
+                    black_box(patch_dim),
+                    black_box(num_patches),
+                    black_box(16i8),
+                    black_box(-16i8),
+                )
+                .unwrap();
+            black_box((steered, grid_slice.as_slice()[0]));
+        });
+    });
+
+    // 6B. 3D Spatiotemporal (t, x, y) Bitmask-Gated Video/Voxel Patch Steering
+    let patch_dim_3d = 72usize;
+    let grid_elems_3d = num_patches * patch_dim_3d;
+    group.throughput(Throughput::Bytes(
+        (grid_elems_3d * core::mem::size_of::<f32>()) as u64,
+    ));
+    group.bench_function("visual_grid_3d_txy_bitmask_gated_256patches", |b| {
+        let mut grid_data = AlignedHeapBuffer::<f32, 32>::new(grid_elems_3d, 1.0f32);
+        let mut grid_slice = grid_data.as_aligned_slice_mut();
+        let prev_mask = gcso_paged_bitmask_t {
+            bits: [
+                0x0F0F_0F0F_0F0F_0F0Fu64,
+                0x3333_3333_3333_3333u64,
+                0x5555_5555_5555_5555u64,
+                0x00FF_00FF_00FF_00FFu64,
+            ],
+        };
+        let curr_mask = gcso_paged_bitmask_t {
+            bits: [
+                0x0FFF_03CF_0FFF_3C0Fu64,
+                0x33F3_3C33_3F33_33C3u64,
+                0x55F5_5505_5F55_5055u64,
+                0x0FFF_000F_0F0F_00F0u64,
+            ],
+        };
+
+        let _ftz = ScopedFtzdazGuard::new();
+        for _ in 0..8 {
+            let (delta_mask, _) = engine.detect_frame_delta_bitmask(&prev_mask, &curr_mask);
+            let _ = engine
+                .steer_visual_grid_3d_bitmask_gated(
+                    &mut grid_slice,
+                    &delta_mask,
+                    patch_dim_3d,
+                    num_patches,
+                    8i8,
+                    16i8,
+                    -16i8,
+                )
+                .unwrap();
+        }
+
+        b.iter(|| {
+            let (delta_mask, _changed) =
+                engine.detect_frame_delta_bitmask(black_box(&prev_mask), black_box(&curr_mask));
+            let steered = engine
+                .steer_visual_grid_3d_bitmask_gated(
+                    black_box(&mut grid_slice),
+                    black_box(&delta_mask),
+                    black_box(patch_dim_3d),
+                    black_box(num_patches),
+                    black_box(8i8),
+                    black_box(16i8),
+                    black_box(-16i8),
+                )
+                .unwrap();
+            black_box((steered, grid_slice.as_slice()[0]));
+        });
+    });
+
+    group.finish();
+}
+
+/// Provisional `.gcso` / ZIMMS 4-Section Container Benchmarks (Isolated from Core DPSR Suite).
+///
+/// Evaluates pre-v1.0 `.gcso` record crystallization and 4-section zero-copy byte container mapping.
+/// Skipped by default under `run_benchmarks.py --profile standard` so Core `DPSR`/`EDBC` evaluations
+/// remain decoupled from the provisional container layout prior to v1.0 PPRC video-stream memory integration.
+fn bench_dpsr_provisional_gcso_container(c: &mut Criterion) {
+    let _ftz = ScopedFtzdazGuard::new();
+    let mut group = c.benchmark_group("DPSR_Provisional_GCSO_Container");
+    group.sampling_mode(SamplingMode::Flat);
+    group.sample_size(100);
+    group.warm_up_time(Duration::from_millis(450));
+    group.measurement_time(Duration::from_millis(1400));
+
+    let head_dim = 128u32;
+    let num_heads = 64u32;
+    let total_elements = (head_dim * num_heads) as usize;
+    let tensor_bytes = total_elements * core::mem::size_of::<f32>();
+    let engine = DpsrEngine::new(head_dim, num_heads).expect("Failed 64-head DpsrEngine init");
+    let mut shared_q_arena =
+        AlignedHeapBuffer::<f32, 512>::new_with_phase_offset(total_elements, 1.0f32, 0);
+
+    group.throughput(Throughput::Bytes(tensor_bytes as u64));
+
+    // 1. Provisional 2-Origin Composite Manifold Gateway + SO(2)-Fused RIPA/PSPM Steering + `.gcso` Crystallization
     group.bench_function("gateway_signal_steer_and_crystallize_attractor_64h", |b| {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
@@ -1744,7 +2573,7 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         });
     });
 
-    // 5E. Full End-to-End 2-Origin Gateway -> 8-Cell Swarm -> Bayesian Trail Rewire -> PSPM -> `.gcso` Crystallization
+    // 2. Provisional End-to-End 2-Origin Gateway -> 8-Cell Swarm -> Bayesian Trail Rewire -> PSPM -> `.gcso` Crystallization
     group.bench_function(
         "gateway_swarm_bayesian_pspm_and_crystallize_full_64h",
         |b| {
@@ -1877,7 +2706,7 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         },
     );
 
-    // 5F. `.gcso` (ZIMMS) Zero-Copy Deserialization + Phase-Proximity Gravity Ensemble Gateway Steering
+    // 3. Provisional `.gcso` (ZIMMS) Zero-Copy Deserialization + Phase-Proximity Gravity Ensemble Gateway Steering
     group.bench_function(
         "zimms_zero_copy_crystallized_ensemble_gateway_steer_64h",
         |b| {
@@ -1958,228 +2787,7 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         },
     );
 
-    // 5K. Top-2 Liminal Macro-to-Micro Bifurcation Routing (O(K=4) Top-2 Centroids -> Dual-Cluster Fine Selection) + RIPA Steering
-    group.bench_function("top2_liminal_bifurcation_route_and_steer_64h", |b| {
-        let mut q_slice = shared_q_arena
-            .as_aligned_prefix_mut(total_elements)
-            .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
-        let centroids: [CrystallizedAttractorRecord; 4] = [
-            {
-                let mut rec = CrystallizedAttractorRecord::new_empty(
-                    100,
-                    ATTRACTOR_SLOT_KNOWLEDGE,
-                    0x0010_0000,
-                );
-                let _ =
-                    rec.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(-70), 2.0);
-                rec
-            },
-            {
-                let mut rec = CrystallizedAttractorRecord::new_empty(
-                    200,
-                    ATTRACTOR_SLOT_KNOWLEDGE,
-                    0x0011_0000,
-                );
-                let _ =
-                    rec.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(24), 3.0);
-                rec
-            },
-            {
-                let mut rec = CrystallizedAttractorRecord::new_empty(
-                    300,
-                    ATTRACTOR_SLOT_PERSONA,
-                    0x0012_0000,
-                );
-                let _ =
-                    rec.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(28), 2.9);
-                rec
-            },
-            {
-                let mut rec = CrystallizedAttractorRecord::new_empty(
-                    400,
-                    ATTRACTOR_SLOT_KNOWLEDGE,
-                    0x0013_0000,
-                );
-                let _ =
-                    rec.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(-45), 1.5);
-                rec
-            },
-        ];
-        let base_src = gcso_pointer_trail_t {
-            stigmergic_density: 1.5,
-            attractor_pull_force: 2.0,
-            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
-            ..Default::default()
-        };
-        let base_candidates = [
-            gcso_pointer_trail_t {
-                stigmergic_density: 2.5,
-                cluster_id: 100,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-70),
-                ..Default::default()
-            },
-            gcso_pointer_trail_t {
-                stigmergic_density: 3.1,
-                target_anchor_id: 200,
-                cluster_id: 200,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(24),
-                ..Default::default()
-            },
-            gcso_pointer_trail_t {
-                stigmergic_density: 3.6,
-                target_anchor_id: 300,
-                cluster_id: 300,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
-                ..Default::default()
-            },
-            gcso_pointer_trail_t {
-                stigmergic_density: 1.8,
-                cluster_id: 400,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-45),
-                ..Default::default()
-            },
-        ];
-        let mut candidates = base_candidates;
-
-        let mut src_trail = base_src;
-        for _ in 0..8 {
-            reset_trail_fast(&mut src_trail, &base_src);
-            reset_trail_fast(&mut candidates[1], &base_candidates[1]);
-            reset_trail_fast(&mut candidates[2], &base_candidates[2]);
-            let _ = engine
-                .route_top2_liminal_and_steer_bayesian_trails_safe(
-                    &centroids,
-                    64u8,
-                    0.20f32,
-                    &mut src_trail,
-                    &mut candidates,
-                    2.0f32,
-                    0.5f32,
-                    0.25f32,
-                    0.50f32,
-                    64u8,
-                    0.25f32,
-                    0.01f32,
-                    DEFAULT_RIPA_CLAMP_MAX_RAD,
-                    None,
-                    &mut q_slice,
-                    None,
-                )
-                .unwrap();
-        }
-
-        b.iter(|| {
-            reset_trail_fast(&mut src_trail, &base_src);
-            reset_trail_fast(&mut candidates[1], &base_candidates[1]);
-            reset_trail_fast(&mut candidates[2], &base_candidates[2]);
-            let res = engine
-                .route_top2_liminal_and_steer_bayesian_trails_safe(
-                    black_box(&centroids),
-                    black_box(64u8),
-                    black_box(0.20f32),
-                    black_box(&mut src_trail),
-                    black_box(&mut candidates),
-                    black_box(2.0f32),
-                    black_box(0.5f32),
-                    black_box(0.25f32),
-                    black_box(0.50f32),
-                    black_box(64u8),
-                    black_box(0.25f32),
-                    black_box(0.01f32),
-                    black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
-                    None,
-                    black_box(&mut q_slice),
-                    None,
-                )
-                .unwrap();
-            black_box((res, src_trail.linked_trail_id, q_slice.as_slice()[0]));
-        });
-    });
-
-    // 5L. Online Toroidal k-Means Centroid Basin Consolidation (Merge & Prune 8 Centroids on SO(2)^64)
-    group.throughput(Throughput::Elements(8));
-    group.bench_function(
-        "online_toroidal_centroid_merge_and_prune_8centroids_64h",
-        |b| {
-            let base_centroids: [CrystallizedAttractorRecord; 8] = core::array::from_fn(|i| {
-                let mut rec = CrystallizedAttractorRecord::new_empty(
-                    (i as u32) + 1,
-                    ATTRACTOR_SLOT_KNOWLEDGE,
-                    0x0020_0000 + ((i as u64) << 12),
-                );
-                let shift = match i {
-                    0 => 24i8,
-                    1 => 25i8,
-                    2 => -40i8,
-                    3 => -39i8,
-                    4 => 60i8,
-                    5 => -80i8,
-                    6 => 10i8,
-                    _ => -15i8,
-                };
-                let mass = if i == 7 {
-                    0.01f32
-                } else {
-                    2.5f32 + (i as f32) * 0.2
-                };
-                let _ = rec
-                    .absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(shift), mass);
-                rec
-            });
-
-            let mut centroids = base_centroids;
-            for _ in 0..8 {
-                reset_crystal_fast(&mut centroids[0], &base_centroids[0]);
-                reset_crystal_fast(&mut centroids[1], &base_centroids[1]);
-                reset_crystal_fast(&mut centroids[2], &base_centroids[2]);
-                reset_crystal_fast(&mut centroids[3], &base_centroids[3]);
-                centroids[4].base_energy = base_centroids[4].base_energy;
-                centroids[4].phase_gravity_mass = base_centroids[4].phase_gravity_mass;
-                centroids[4].checksum_crc32 = base_centroids[4].checksum_crc32;
-                centroids[5].base_energy = base_centroids[5].base_energy;
-                centroids[5].phase_gravity_mass = base_centroids[5].phase_gravity_mass;
-                centroids[5].checksum_crc32 = base_centroids[5].checksum_crc32;
-                centroids[6].base_energy = base_centroids[6].base_energy;
-                centroids[6].phase_gravity_mass = base_centroids[6].phase_gravity_mass;
-                centroids[6].checksum_crc32 = base_centroids[6].checksum_crc32;
-                reset_crystal_fast(&mut centroids[7], &base_centroids[7]);
-                let _ = CrystallizedAttractorRecord::merge_and_prune_centroids_64(
-                    &mut centroids,
-                    0.85f32,
-                    0.05f32,
-                    0.98f32,
-                );
-            }
-
-            b.iter(|| {
-                reset_crystal_fast(&mut centroids[0], &base_centroids[0]);
-                reset_crystal_fast(&mut centroids[1], &base_centroids[1]);
-                reset_crystal_fast(&mut centroids[2], &base_centroids[2]);
-                reset_crystal_fast(&mut centroids[3], &base_centroids[3]);
-                centroids[4].base_energy = base_centroids[4].base_energy;
-                centroids[4].phase_gravity_mass = base_centroids[4].phase_gravity_mass;
-                centroids[4].checksum_crc32 = base_centroids[4].checksum_crc32;
-                centroids[5].base_energy = base_centroids[5].base_energy;
-                centroids[5].phase_gravity_mass = base_centroids[5].phase_gravity_mass;
-                centroids[5].checksum_crc32 = base_centroids[5].checksum_crc32;
-                centroids[6].base_energy = base_centroids[6].base_energy;
-                centroids[6].phase_gravity_mass = base_centroids[6].phase_gravity_mass;
-                centroids[6].checksum_crc32 = base_centroids[6].checksum_crc32;
-                reset_crystal_fast(&mut centroids[7], &base_centroids[7]);
-                let res = CrystallizedAttractorRecord::merge_and_prune_centroids_64(
-                    black_box(&mut centroids),
-                    black_box(0.85f32),
-                    black_box(0.05f32),
-                    black_box(0.98f32),
-                );
-                black_box((res, centroids[1].sample_count, centroids[7].sample_count));
-            });
-        },
-    );
-
-    // 5G. Register-Resident Zero-Copy Crystallized Ensemble Steering (Bypassing GatewayFrame Synthesis)
-    group.throughput(Throughput::Bytes(tensor_bytes as u64));
+    // 4. Provisional Register-Resident Zero-Copy Crystallized Ensemble Steering
     group.bench_function("zero_copy_register_crystallized_ensemble_steer_64h", |b| {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
@@ -2235,196 +2843,7 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         });
     });
 
-    // 5H. Classical Online Toroidal k-Means / DP-Means E+M Closed-Loop Gateway Steering (K = 4 Centroids)
-    group.bench_function("online_toroidal_kmeans_gateway_steer_4centroids_64h", |b| {
-        let mut q_slice = shared_q_arena
-            .as_aligned_prefix_mut(total_elements)
-            .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
-        let mut gw_logits = AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
-        let sys_sig = SystemConstraint::new((), 0.15, 0.05, 0xFF);
-        let fact_sig = ObjectiveFact::new(
-            make_heterogeneous_q7_phases_with_offset(28),
-            3.0,
-            0x0024_0000,
-            88,
-        );
-        let pers_sig = SubjectivePersona::new(
-            make_heterogeneous_q7_phases_with_offset(30),
-            2.0,
-            0x0000_9000,
-            12,
-        );
-        let composite_signal = (&sys_sig, &fact_sig, &pers_sig);
-        let base_centroids: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
-            let mut rec = CrystallizedAttractorRecord::new_empty(
-                (i as u32) + 10,
-                ATTRACTOR_SLOT_KNOWLEDGE,
-                0x0010_0000 + ((i as u64) << 12),
-            );
-            let _ = rec.absorb_sample_point_64(
-                &make_heterogeneous_q7_phases_with_offset(16 + (i as i8) * 6),
-                2.0 + (i as f32) * 0.5,
-            );
-            rec
-        });
-        let base_trail = gcso_pointer_trail_t {
-            stigmergic_density: 1.4,
-            attractor_pull_force: 1.5,
-            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
-            ..Default::default()
-        };
-        let mut centroids = base_centroids;
-        let mut trail = base_trail;
-        for _ in 0..8 {
-            reset_trail_fast(&mut trail, &base_trail);
-            reset_crystal_fast(&mut centroids[2], &base_centroids[2]);
-            gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
-            let mut logits_mut = gw_logits.as_aligned_slice_mut();
-            let _ = engine
-                .steer_and_kmeans_crystallize_gateway_signal_safe(
-                    &composite_signal,
-                    &mut trail,
-                    &mut centroids,
-                    DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
-                    64u8,
-                    &mut q_slice,
-                    None,
-                    Some(&mut logits_mut),
-                )
-                .unwrap();
-        }
-
-        b.iter(|| {
-            reset_trail_fast(&mut trail, &base_trail);
-            reset_crystal_fast(&mut centroids[2], &base_centroids[2]);
-            gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
-            let mut logits_mut = gw_logits.as_aligned_slice_mut();
-            let res = engine
-                .steer_and_kmeans_crystallize_gateway_signal_safe(
-                    black_box(&composite_signal),
-                    black_box(&mut trail),
-                    black_box(&mut centroids),
-                    black_box(DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE),
-                    black_box(64u8),
-                    black_box(&mut q_slice),
-                    None,
-                    black_box(Some(&mut logits_mut)),
-                )
-                .unwrap();
-            black_box((res, trail.cluster_id, q_slice.as_slice()[0]));
-        });
-    });
-
-    // 5I. Coarse-to-Fine Macro-to-Micro Routing (O(K=4) Centroids -> O(M_local=1) Candidate Trail) + RIPA Steering
-    group.bench_function("coarse_to_fine_macro_to_micro_routing_and_steer_64h", |b| {
-        let mut q_slice = shared_q_arena
-            .as_aligned_prefix_mut(total_elements)
-            .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
-        let centroids: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
-            let mut rec = CrystallizedAttractorRecord::new_empty(
-                ((i as u32) + 1) * 100,
-                ATTRACTOR_SLOT_KNOWLEDGE,
-                0x0010_0000 + ((i as u64) << 12),
-            );
-            let _ = rec.absorb_sample_point_64(
-                &make_heterogeneous_q7_phases_with_offset(if i == 2 {
-                    28i8
-                } else {
-                    -60 + (i as i8) * 20
-                }),
-                3.0,
-            );
-            rec
-        });
-        let base_src = gcso_pointer_trail_t {
-            stigmergic_density: 1.5,
-            attractor_pull_force: 2.0,
-            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
-            ..Default::default()
-        };
-        let base_candidates = [
-            gcso_pointer_trail_t {
-                stigmergic_density: 3.0,
-                cluster_id: 100,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-60),
-                ..Default::default()
-            },
-            gcso_pointer_trail_t {
-                stigmergic_density: 2.5,
-                cluster_id: 200,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-40),
-                ..Default::default()
-            },
-            gcso_pointer_trail_t {
-                stigmergic_density: 3.5,
-                target_anchor_id: 300,
-                cluster_id: 300,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(29),
-                ..Default::default()
-            },
-            gcso_pointer_trail_t {
-                stigmergic_density: 1.8,
-                cluster_id: 400,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(0),
-                ..Default::default()
-            },
-        ];
-        let mut candidates = base_candidates;
-
-        let mut src_trail = base_src;
-        for _ in 0..8 {
-            reset_trail_fast(&mut src_trail, &base_src);
-            reset_trail_fast(&mut candidates[2], &base_candidates[2]);
-            let _ = engine
-                .route_coarse_to_fine_and_steer_bayesian_trails_safe(
-                    &centroids,
-                    64u8,
-                    &mut src_trail,
-                    &mut candidates,
-                    2.0f32,
-                    0.5f32,
-                    0.25f32,
-                    0.50f32,
-                    64u8,
-                    0.25f32,
-                    0.01f32,
-                    DEFAULT_RIPA_CLAMP_MAX_RAD,
-                    None,
-                    &mut q_slice,
-                    None,
-                )
-                .unwrap();
-        }
-
-        b.iter(|| {
-            reset_trail_fast(&mut src_trail, &base_src);
-            reset_trail_fast(&mut candidates[2], &base_candidates[2]);
-            let res = engine
-                .route_coarse_to_fine_and_steer_bayesian_trails_safe(
-                    black_box(&centroids),
-                    black_box(64u8),
-                    black_box(&mut src_trail),
-                    black_box(&mut candidates),
-                    black_box(2.0f32),
-                    black_box(0.5f32),
-                    black_box(0.25f32),
-                    black_box(0.50f32),
-                    black_box(64u8),
-                    black_box(0.25f32),
-                    black_box(0.01f32),
-                    black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
-                    None,
-                    black_box(&mut q_slice),
-                    None,
-                )
-                .unwrap();
-            black_box((res, src_trail.linked_trail_id, q_slice.as_slice()[0]));
-        });
-    });
-
-    // 5J. 4-Section `.gcso` (ZIMMS) Zero-Copy Container Map + Register-Resident Ensemble Steering
+    // 5. Provisional 4-Section `.gcso` (ZIMMS) Zero-Copy Container Map + Register-Resident Ensemble Steering
     group.bench_function(
         "four_section_gcso_zero_copy_map_and_register_steer_64h",
         |b| {
@@ -2504,94 +2923,6 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         },
     );
 
-    // 6A. Real-Time Screen/Video Co-Watching: 16x16 = 256 Patch Bitmask-Gated 2D Phase Steering
-    let num_patches = 256usize;
-    let patch_dim = 64usize;
-    let grid_elems = num_patches * patch_dim;
-    group.throughput(Throughput::Bytes(
-        (grid_elems * core::mem::size_of::<f32>()) as u64,
-    ));
-    group.bench_function("visual_grid_2d_bitmask_gated_256patches", |b| {
-        let mut grid_data = AlignedHeapBuffer::<f32, 32>::new(grid_elems, 1.0f32);
-        let mut grid_slice = grid_data.as_aligned_slice_mut();
-        let prev_mask = gcso_paged_bitmask_t {
-            bits: [
-                0x0F0F_0F0F_0F0F_0F0Fu64,
-                0x3333_3333_3333_3333u64,
-                0x5555_5555_5555_5555u64,
-                0x00FF_00FF_00FF_00FFu64,
-            ],
-        };
-        let curr_mask = gcso_paged_bitmask_t {
-            bits: [
-                0x0FFF_03CF_0FFF_3C0Fu64,
-                0x33F3_3C33_3F33_33C3u64,
-                0x55F5_5505_5F55_5055u64,
-                0x0FFF_000F_0F0F_00F0u64,
-            ],
-        };
-
-        b.iter(|| {
-            let (delta_mask, _changed) =
-                engine.detect_frame_delta_bitmask(black_box(&prev_mask), black_box(&curr_mask));
-            let steered = engine
-                .steer_visual_grid_2d_bitmask_gated(
-                    black_box(&mut grid_slice),
-                    black_box(&delta_mask),
-                    black_box(patch_dim),
-                    black_box(num_patches),
-                    black_box(16i8),
-                    black_box(-16i8),
-                )
-                .unwrap();
-            black_box((steered, grid_slice.as_slice()[0]));
-        });
-    });
-
-    // 6B. 3D Spatiotemporal (t, x, y) Bitmask-Gated Video/Voxel Patch Steering
-    let patch_dim_3d = 72usize;
-    let grid_elems_3d = num_patches * patch_dim_3d;
-    group.throughput(Throughput::Bytes(
-        (grid_elems_3d * core::mem::size_of::<f32>()) as u64,
-    ));
-    group.bench_function("visual_grid_3d_txy_bitmask_gated_256patches", |b| {
-        let mut grid_data = AlignedHeapBuffer::<f32, 32>::new(grid_elems_3d, 1.0f32);
-        let mut grid_slice = grid_data.as_aligned_slice_mut();
-        let prev_mask = gcso_paged_bitmask_t {
-            bits: [
-                0x0F0F_0F0F_0F0F_0F0Fu64,
-                0x3333_3333_3333_3333u64,
-                0x5555_5555_5555_5555u64,
-                0x00FF_00FF_00FF_00FFu64,
-            ],
-        };
-        let curr_mask = gcso_paged_bitmask_t {
-            bits: [
-                0x0FFF_03CF_0FFF_3C0Fu64,
-                0x33F3_3C33_3F33_33C3u64,
-                0x55F5_5505_5F55_5055u64,
-                0x0FFF_000F_0F0F_00F0u64,
-            ],
-        };
-
-        b.iter(|| {
-            let (delta_mask, _changed) =
-                engine.detect_frame_delta_bitmask(black_box(&prev_mask), black_box(&curr_mask));
-            let steered = engine
-                .steer_visual_grid_3d_bitmask_gated(
-                    black_box(&mut grid_slice),
-                    black_box(&delta_mask),
-                    black_box(patch_dim_3d),
-                    black_box(num_patches),
-                    black_box(8i8),
-                    black_box(16i8),
-                    black_box(-16i8),
-                )
-                .unwrap();
-            black_box((steered, grid_slice.as_slice()[0]));
-        });
-    });
-
     group.finish();
 }
 
@@ -2600,11 +2931,6 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
     let mut group = c.benchmark_group("DPSR_Extreme_And_Edge_Cases");
 
     // 1. Stress Test: Ultra-Large Sequence Scaling (4096..32768 Prefill Context)
-    // Each single iteration of `tokens_4096..32768` already averages over 131,072 to 1,048,576
-    // head rotations (`64 MB` to `512 MB` DRAM streaming). Using `SamplingMode::Flat` with
-    // `sample_size(30)` and `measurement_time(2.2s)` captures 30,000,000+ head rotations at steady
-    // Turbo clock before thermal throttling occurs, cutting wall-clock time from ~25s to ~2.5s
-    // while reducing CoV from 11.36% to ~2–4%.
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(30);
     group.warm_up_time(Duration::from_millis(600));
@@ -2616,8 +2942,6 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
     let stride = (head_dim * num_heads) as usize;
     let single_tok_bytes = stride * core::mem::size_of::<f32>();
     let engine = DpsrEngine::new(head_dim, num_heads).expect("Failed DpsrEngine init");
-    // Pre-allocate and fault-in a single 512 MB (32,768-token) 64-byte aligned arena once outside
-    // the loop to avoid 1.92 GB of repeated OS VirtualAlloc/VirtualFree page-table churn.
     let mut shared_prefill_batch = AlignedHeapBuffer::<f32, 64>::new(stride * 32768, 1.0f32);
 
     for &tokens in &large_contexts {
@@ -2629,9 +2953,6 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
             BenchmarkId::new("ultra_large_context_prefill", format!("tokens_{tokens}")),
             &tokens,
             |b, &t_count| {
-                // Slice directly into the pre-faulted 64-byte cacheline-aligned arena and run
-                // one TLB/DRAM pre-touch pass before Criterion warmup to prevent page-walk and
-                // DRAM thermal throttling spikes on 512 MB (`tokens_32768`).
                 let mut q_slice = shared_prefill_batch
                     .as_aligned_prefix_mut(total_elements)
                     .relax_alignment::<32>();
@@ -2655,22 +2976,14 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
         );
     }
 
-    // Keep `SamplingMode::Flat` with `sample_size(100)` and `measurement_time(1500ms)` for
-    // nanosecond/microsecond-scale kernels so every sample batch runs an identical iteration count
-    // (`df = 99`) without sub-ms `Linear` sample spikes or 60Hz DWM tick boundary aliasing.
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
     group.warm_up_time(Duration::from_millis(450));
     group.measurement_time(Duration::from_millis(1500));
 
-    // Pre-allocate a single 4KB-page-aligned L1D-resident arena (`stride = 4096` floats = 16 KB)
-    // for all micro-benchmarks in `DPSR_Extreme_And_Edge_Cases` so every aspect-ratio and boundary
-    // test operates on the exact same L1D cache sets without allocator page-offset jitter.
     let mut shared_extreme_arena = AlignedHeapBuffer::<f32, 64>::new(stride, 1.5f32);
 
     // 2. Constant-Total-Element (1,024 floats = 4 KB) Head Dimension Aspect-Ratio Sweep
-    // Parameterizing by `h_dim` while keeping `h_dim * n_heads = 1024` constant ensures
-    // Criterion's `lines.svg` plots a smooth, monotonic SIMD vectorization curve!
     let extreme_head_configs = [
         (16u32, 64u32),
         (32u32, 32u32),
@@ -2754,14 +3067,23 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
         });
     });
 
-    // 4. Extreme Phase Spike Noise & Geodesic RIPA Branchless Clamp
+    // 4. Extreme Phase Spike Noise & Geodesic RIPA Branchless Clamp (Heterogeneous Extreme Spikes)
     group.bench_function("ripa_extreme_phase_spike_clamp_branchless", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         let mut q_slice = shared_extreme_arena
             .as_aligned_prefix_mut(stride)
             .relax_alignment::<32>();
         q_slice.as_mut_slice().fill(1.0f32);
-        let phase_data = AlignedQ7Buffer([-128i8; 64]);
+        let mut extreme_spikes = [0i8; 64];
+        for (h, slot) in extreme_spikes.iter_mut().enumerate() {
+            let mag = 127i8.saturating_sub((h & 7) as i8);
+            *slot = if (h & 1) == 0 {
+                if (h & 7) == 0 { -128 } else { -mag }
+            } else {
+                mag
+            };
+        }
+        let phase_data = AlignedQ7Buffer(extreme_spikes);
         let p_slice = AlignedSlice16::new(&phase_data.0[..32]).unwrap();
         for _ in 0..8 {
             engine
@@ -2786,8 +3108,6 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
     });
 
     // 5. True Subnormal Square Rescue (|x| = 1e-22 -> x^2 = 1e-44 < F32_MIN_POSITIVE_NORMAL)
-    // Keeping `target_norm == eq_norm` stationary ensures `tensor_data` stays in the `[1e-22]`
-    // subnormal-square regime on every single iteration!
     group.bench_function("slerp_norm_guard_near_zero_underflow", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         let elem_val = 1.0e-22f32;
@@ -2815,9 +3135,6 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
     });
 
     // 6. Long-Horizon Subnormal Flush & Near-Identity Gain Guard (Stationary Execution Path)
-    // Restores `q_slice[0] = 2.0e-38f32` on every iteration (no `toggle & 15 == 0` sawtooth step!)
-    // so `sanitize_inplace_gain_f32` and `scale_f32_slice_unrolled8` execute an identical
-    // instruction stream on every sample batch.
     group.bench_function("long_horizon_subnormal_damping_guard", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         let mut q_slice = shared_extreme_arena
@@ -2841,8 +3158,6 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
     });
 
     // 7. Long-Horizon 1M-Token S^1 Geodesic Seam Crossing Cascade (1,024 Wrap Crossings)
-    // Hoists `init_ctx` and `ctx_mut` outside the 1,024-step inner loop so slice wrapper construction
-    // is not repeated 1,024 times per iteration.
     let cascade_steps = 1024usize;
     group.throughput(Throughput::Elements(cascade_steps as u64));
     group.bench_function("long_horizon_1m_seam_crossing_cascade", |b| {
@@ -2903,6 +3218,7 @@ criterion_group!(
     bench_dpsr_batch_sequence_scaling,
     bench_dpsr_long_context_and_procrustes,
     bench_dpsr_swarm_pspm_and_visual_cowatching,
-    bench_dpsr_extreme_and_edge_cases
+    bench_dpsr_extreme_and_edge_cases,
+    bench_dpsr_provisional_gcso_container
 );
 criterion_main!(benches);

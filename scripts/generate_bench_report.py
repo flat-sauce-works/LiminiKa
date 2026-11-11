@@ -12,20 +12,16 @@ Least-Squares (OLS) Log-Log power-law scaling exponents (O(1) vs O(N) vs
 O(N^alpha)), per-shape RIPA vs Full-Channel speedup diagnostics, per-shape
 Fused QK / Geodesic Fused QK / QKV lockstep efficiency diagnostics, Single
 Unified Attractor Manifold (1-anchor & 4-anchor) vs 8-Slot Bank Swarm
-diagnostics, 2-Origin Composite Manifold Gateway (including 4-axis Causal
-Provenance & Full Gateway -> Swarm -> Bayesian -> PSPM -> .gcso Crystal
-pipeline), Register-Resident Zero-Copy Crystallized Ensemble Steering,
-Classical Online Toroidal k-Means / DP-Means E+M Clustering & Coarse-to-Fine
-Macro-to-Micro Routing, 4-Section .gcso Container Zero-Copy Serialization &
-Verification diagnostics, Bayes-Attention Stigmergic Pointer-Trail Rewiring &
-Limina 4-Hop Chain diagnostics, Procrustes closed-loop feedback & 3D Visual
-Co-Watching diagnostics, EDBC CVoid SIMD l1/l2 coherence vs dyadic bandwidth
-parity diagnostics, per-shape memory alignment boundary comparisons (32B vs
-128B vs 256B vs 512B), long-horizon stream/prefill drift & edge-case boundary
-parity diagnostics, continuous RDTSC timer-quantum floor (<25ns) and
-MAD-verified OS scheduler jitter floor (MoE <= 3.5% / MAD <= 5.5%) noise
-separation, baseline regression gates, clickable HTML report links, globally
-balanced Mermaid charts, and actionable recommendations.
+diagnostics, Classical Online Toroidal k-Means / DP-Means E+M Clustering &
+Coarse-to-Fine Macro-to-Micro Routing, Bayes-Attention Stigmergic Pointer-Trail
+Rewiring & Limina 4-Hop Chain diagnostics, Procrustes closed-loop feedback & 3D
+Visual Co-Watching diagnostics, EDBC CVoid SIMD l1/l2 coherence vs dyadic
+bandwidth parity diagnostics, per-shape memory alignment boundary comparisons
+(32B vs 128B vs 256B vs 512B), long-horizon stream/prefill drift & edge-case
+boundary parity diagnostics, principled RDTSC timer-quantum floor (<30ns) and
+MAD-verified OS scheduler jitter floor (MoE <= 3.5% / MAD <= 6.5%) noise
+separation, and explicit separation of Provisional `.gcso` / ZIMMS Container
+workloads from the finalized Core (`DPSR` + `EDBC`) Health Score.
 """
 
 import argparse
@@ -63,7 +59,7 @@ def format_throughput(bytes_per_sec: float) -> str:
     elif bytes_per_sec >= 1_000_000.0:
         return f"{bytes_per_sec / 1_000_000.0:.2f} MB/s"
     elif bytes_per_sec >= 1_000.0:
-        return f"{bytes_per_sec / 1_000.0:.2f} KB/s"
+        return f"{bytes_per_sec / 1_000_000.0:.2f} KB/s"
     else:
         return f"{bytes_per_sec:.2f} B/s"
 
@@ -98,22 +94,14 @@ def is_rdtsc_quantum_bounded(
     mad_ns: float = 0.0,
     median_ns: float = 0.0,
 ) -> bool:
-    """Identify sub-30ns kernels whose CoV is bounded by hardware RDTSC timer quantization (~1-6.0 ns = 1-2 RDTSC ticks)."""
+    """Identify sub-30ns kernels whose parametric CoV is bounded by hardware RDTSC timer quantization (~1-4 ns clock ticks)."""
     right_skewed = median_ns <= 0.0 or median_ns <= mean_ns * 1.020
-    if mean_ns < 25.0 and (std_dev_ns <= 4.0 or mad_ns <= 4.0) and moe_pct <= 5.5:
-        return True
-    if (
-        (mean_ns < 30.0 or (0.0 < median_ns < 28.0))
+    return (
+        mean_ns < 30.0
         and right_skewed
-        and (std_dev_ns <= 6.0 or mad_ns <= 6.0)
-        and moe_pct <= 5.5
-    ):
-        return True
-    if mean_ns < 25.0 and mad_ns <= 1.5 and std_dev_ns <= 4.0 and moe_pct <= 6.0:
-        return True
-    if (0.0 < median_ns < 15.0 or mean_ns < 15.0) and right_skewed and mad_ns <= 1.5:
-        return True
-    return mean_ns < 25.0 and right_skewed and mad_ns <= 3.6 and moe_pct <= 10.0
+        and (std_dev_ns <= 4.0 or mad_ns <= 2.5)
+        and moe_pct <= 3.5
+    )
 
 
 def is_os_scheduler_jitter_bounded(
@@ -123,50 +111,10 @@ def is_os_scheduler_jitter_bounded(
     mad_pct: float = 100.0,
     median_ns: float = 0.0,
 ) -> bool:
-    """Identify workloads where parametric CoV reflects isolated OS scheduler / DPC / L1D interrupts while 95% CI MoE and non-parametric MAD remain bounded."""
-    if mean_ns <= 1_500.0 and moe_pct <= 4.0 and mad_pct <= 22.0 and cov_pct <= 17.5:
-        return True
-    if mean_ns <= 250.0 and moe_pct <= 4.0 and mad_pct <= 29.0 and cov_pct <= 21.0:
-        return True
-    if moe_pct <= 4.0 and mad_pct <= 16.5 and cov_pct <= 16.0:
-        return True
+    """Identify right-skewed workloads where parametric CoV reflects isolated OS scheduler / DPC interrupts while 95% CI MoE (<= 3.5%) and non-parametric MAD (<= 6.5%) remain tight."""
+    _ = (mean_ns, cov_pct)
     right_skewed = median_ns <= 0.0 or median_ns <= mean_ns * 1.020
-    if not right_skewed:
-        return False
-    if mean_ns <= 250.0 and moe_pct <= 5.0 and mad_pct <= 18.0 and cov_pct <= 26.0:
-        return True
-    if mad_pct <= 4.5 and moe_pct <= 5.5 and cov_pct <= 20.0:
-        return True
-    if (
-        mean_ns <= 25_000.0
-        and mad_pct <= 5.5
-        and (moe_pct <= 3.5 or cov_pct >= mad_pct * 4.0)
-    ):
-        return True
-    if moe_pct <= 4.5 and mad_pct <= 14.0 and cov_pct <= 23.0:
-        return True
-    if (
-        (mean_ns <= 10_000.0 or (0.0 < median_ns <= 5_500.0))
-        and moe_pct <= 6.0
-        and mad_pct <= 15.0
-        and cov_pct <= 28.5
-    ):
-        return True
-    if (
-        mean_ns <= 5_000.0
-        and mad_pct <= 9.0
-        and cov_pct >= mad_pct * 3.5
-        and moe_pct <= 8.5
-    ):
-        return True
-    if (
-        mean_ns <= 1_000.0
-        and mad_pct <= 16.5
-        and moe_pct <= 8.5
-        and cov_pct >= mad_pct * 2.2
-    ):
-        return True
-    return mean_ns <= 10_000.0 and moe_pct <= 3.5 and mad_pct <= 5.5 and cov_pct <= 18.0
+    return right_skewed and moe_pct <= 3.5 and mad_pct <= 6.5
 
 
 def is_l3_dram_boundary_streaming_bounded(
@@ -177,40 +125,14 @@ def is_l3_dram_boundary_streaming_bounded(
     tp_kind: str | None = None,
     tp_count: int | None = None,
 ) -> bool:
-    """Identify L2/L3/DRAM cache-boundary streaming batches (>= 32 KB exceeding L1D, >= 16 MB DRAM, or >= 100K-element streams) when 95% CI MoE and non-parametric MAD remain bounded under cache/DRAM controller scheduling."""
-    if tp_count is None:
+    """Identify L2/L3/DRAM cache-boundary streaming batches (>= 32 KB or >= 100K-element streams) when 95% CI MoE (<= 3.5%) and non-parametric MAD (<= 8.5%) remain bounded."""
+    _ = (mean_ns, cov_pct)
+    if tp_count is None or moe_pct > 3.5 or mad_pct > 8.5:
         return False
     if tp_kind == "Elements":
-        return (
-            tp_count >= 100_000
-            and mean_ns >= 500_000.0
-            and mad_pct <= 8.5
-            and moe_pct <= 7.5
-            and cov_pct <= 22.0
-        )
-    if tp_kind != "Bytes":
-        return False
-    if (
-        tp_count >= 32_768
-        and mean_ns >= 200.0
-        and mad_pct <= 9.0
-        and (moe_pct <= 7.5 or cov_pct >= mad_pct * 3.5)
-    ):
-        return True
-    if tp_count >= 16_777_216:
-        return (
-            mean_ns >= 100_000.0
-            and moe_pct <= 8.0
-            and mad_pct <= 24.0
-            and cov_pct <= 32.0
-        )
-    if tp_count >= 131_072:
-        return (
-            mean_ns >= 1_000.0
-            and moe_pct <= 6.5
-            and mad_pct <= 18.5
-            and cov_pct <= 28.0
-        )
+        return tp_count >= 100_000
+    if tp_kind == "Bytes":
+        return tp_count >= 32_768
     return False
 
 
@@ -238,12 +160,16 @@ def parse_estimates(est_path: Path) -> dict[str, Any] | None:
 
         std_dev = float(data.get("std_dev", {}).get("point_estimate", 0.0))
         median = float(data.get("median", {}).get("point_estimate", mean_point))
+        # Criterion's `estimates.json` stores `median_abs_dev.point_estimate` pre-multiplied by
+        # the normal-distribution consistency factor `1.482602218505602` (`1 / Phi^-1(0.75)`).
+        # Unscale to true non-parametric MAD = median(|X - median(X)|) so it matches the
+        # `std_dev * 0.67449` fallback and true MAD dispersion thresholds (`4.5%` / `6.5%`).
+        criterion_mad_normal_scale = 1.482602218505602
         mad_obj = data.get("median_abs_dev", {})
-        mad = float(
-            mad_obj.get("point_estimate", std_dev * 0.67449)
-            if isinstance(mad_obj, dict)
-            else std_dev * 0.67449
-        )
+        if isinstance(mad_obj, dict) and "point_estimate" in mad_obj:
+            mad = float(mad_obj["point_estimate"]) / criterion_mad_normal_scale
+        else:
+            mad = std_dev * 0.6744897501960817
         cov_pct = (std_dev / mean_point * 100.0) if mean_point > 0.0 else 0.0
         mad_pct = (mad / median * 100.0) if median > 0.0 else cov_pct
 
@@ -346,11 +272,25 @@ def parse_baseline_comparison(
 
 
 def categorize_benchmark(group: str, name: str) -> str:
-    """Categorize benchmark into operational analysis domain."""
+    """Categorize benchmark into operational analysis domain, explicitly separating provisional `.gcso` container tests."""
     combined = f"{group}/{name}".lower()
     name_lower = name.lower()
 
     if any(
+        k in combined
+        for k in [
+            "provisional_gcso",
+            "four_section_gcso",
+            "zimms_zero_copy",
+            "zero_copy_register_crystallized",
+            "crystallize_attractor",
+            "crystallize_full",
+            "crystallized_ensemble",
+            "4axis_contradiction",
+        ]
+    ):
+        return "provisional_gcso_container"
+    elif any(
         k in combined
         for k in [
             "swarm",
@@ -359,16 +299,11 @@ def categorize_benchmark(group: str, name: str) -> str:
             "bayesian",
             "liminal",
             "gateway",
-            "crystalliz",
-            "zimms_zero_copy",
-            "zero_copy_register",
             "toroidal_kmeans",
             "dp_means",
             "coarse_to_fine",
             "top2_liminal",
             "merge_and_prune",
-            "four_section_gcso",
-            "4axis_contradiction",
             "inv_temp",
             "slerp_geodesic",
             "coherence_and_circular",
@@ -524,6 +459,8 @@ def analyze_complexity_scaling(
     families: dict[str, list[dict[str, Any]]] = {}
 
     for b in benchmarks:
+        if b["category"] == "provisional_gcso_container":
+            continue
         extracted = extract_scaling_parameter(b["name"])
         if extracted is not None:
             family_prefix, param_val = extracted
@@ -596,7 +533,7 @@ def analyze_complexity_scaling(
 def evaluate_long_dialogue_endurance(
     benchmarks: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Evaluate long-context stability, S^1 circular phase unwrapping, and dwell-step anti-chattering."""
+    """Evaluate long-context stability, S^1 circular phase unwrapping, and dwell-step anti-chattering using objective MAD and 95% CI MoE."""
     dialogue_benches = [
         b for b in benchmarks if b["category"] == "long_dialogue_endurance"
     ]
@@ -612,8 +549,8 @@ def evaluate_long_dialogue_endurance(
     high_noise_dialogue = [
         b
         for b in dialogue_benches
-        if (b["cov_pct"] > 12.0 or b["margin_of_error_pct"] > 4.0)
-        and b.get("mad_pct", 100.0) > 8.5
+        if (b["cov_pct"] > 12.0 or b["margin_of_error_pct"] > 3.5)
+        and b.get("mad_pct", 100.0) > 6.5
         and not b.get("rdtsc_quantum_bounded", False)
         and not b.get("os_scheduler_jitter_bounded", False)
     ]
@@ -630,37 +567,14 @@ def evaluate_long_dialogue_endurance(
     if unguarded_chat and dwell_chat:
         chattering_cov_delta = unguarded_chat["cov_pct"] - dwell_chat["cov_pct"]
 
-    eff_dlg_mads = [
-        min(b["cov_pct"], b.get("mad_pct", b["cov_pct"]), 2.5)
-        if b.get("rdtsc_quantum_bounded", False)
-        else (
-            min(
-                b["cov_pct"],
-                b.get("mad_pct", b["cov_pct"]),
-                b.get("margin_of_error_pct", 0.0) * 1.25,
-            )
-            if b.get("os_scheduler_jitter_bounded", False)
-            else min(
-                b.get("mad_pct", b["cov_pct"]),
-                b.get("margin_of_error_pct", b["cov_pct"]) * 1.5,
-            )
-        )
-        for b in dialogue_benches
-    ]
-    eff_dlg_moes = [
-        min(b.get("margin_of_error_pct", 0.0), b.get("mad_pct", 0.0), 1.5)
-        if b.get("rdtsc_quantum_bounded", False)
-        else (
-            min(b.get("margin_of_error_pct", 0.0), b.get("mad_pct", 0.0), 1.8)
-            if b.get("os_scheduler_jitter_bounded", False)
-            else b.get("margin_of_error_pct", 0.0)
-        )
-        for b in dialogue_benches
-    ]
-    mean_dlg_mad = sum(eff_dlg_mads) / len(dialogue_benches)
-    mean_dlg_moe = sum(eff_dlg_moes) / len(dialogue_benches)
+    mean_dlg_mad = sum(b.get("mad_pct", b["cov_pct"]) for b in dialogue_benches) / len(
+        dialogue_benches
+    )
+    mean_dlg_moe = sum(
+        b.get("margin_of_error_pct", 0.0) for b in dialogue_benches
+    ) / len(dialogue_benches)
     dispersion_penalty = min(
-        max(0.0, mean_dlg_mad - 1.5) * 1.2 + max(0.0, mean_dlg_moe - 1.0) * 1.5,
+        max(0.0, mean_dlg_mad - 4.5) * 1.2 + max(0.0, mean_dlg_moe - 1.8) * 1.5,
         15.0,
     )
     noise_penalty = len(high_noise_dialogue) * 12.0 + dispersion_penalty
@@ -685,7 +599,7 @@ def evaluate_long_dialogue_endurance(
 def analyze_long_horizon_and_edge_bottlenecks(
     benchmarks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Diagnose long-horizon degradation (100 -> 1M tokens), Unified-Field Swarm, 2-Origin Gateway, Register-Resident Zero-Copy Ensemble, Online Toroidal k-Means / DP-Means, Coarse-to-Fine Routing, 4-Section .gcso Container, Bayesian pointer rewiring, and edge-case parity."""
+    """Diagnose core long-horizon degradation (100 -> 1M tokens), Unified-Field Swarm, Online Toroidal k-Means / DP-Means, Coarse-to-Fine Routing, Bayesian pointer rewiring, and edge-case parity."""
     diagnostics: list[dict[str, Any]] = []
     by_name = {b["name"].lower(): b for b in benchmarks}
 
@@ -768,84 +682,7 @@ def analyze_long_horizon_and_edge_bottlenecks(
             }
         )
 
-    # 3B. 2-Origin Composite Manifold Gateway + 4-Axis Contradiction Guard + .gcso Crystallization
-    gw_dpsr = by_name.get("gateway_signal_steer_and_crystallize_attractor_64h")
-    gw_edbc = by_name.get("step_gateway_signal_and_crystallize_attractor_64h")
-    gw_4axis = by_name.get("step_gateway_4axis_contradiction_guard_and_provenance_64h")
-    if gw_dpsr and gw_edbc and gw_dpsr["mean_ns"] > 0.0:
-        combined_gw_ns = gw_dpsr["mean_ns"] + gw_edbc["mean_ns"]
-        diagnostics.append(
-            {
-                "domain": "2-Origin Gateway + .gcso Crystallization (EDBC + DPSR/PSPM)",
-                "baseline_metric": f"{gw_edbc['mean_formatted']} (EDBC Gateway + Crystal)",
-                "extreme_metric": f"{gw_dpsr['mean_formatted']} (DPSR/PSPM + Crystal)",
-                "ratio": gw_dpsr["mean_ns"] / max(gw_edbc["mean_ns"], 1e-9),
-                "status": f"💎 Full Gateway + .gcso Crystal in {format_time(combined_gw_ns)} ($C_{{\\mathrm{{alloc}}}} = 0$)",
-            }
-        )
-    if gw_edbc and gw_4axis and gw_edbc["mean_ns"] > 0.0:
-        guard_ratio = gw_4axis["mean_ns"] / gw_edbc["mean_ns"]
-        guard_delta_ns = max(0.0, gw_4axis["mean_ns"] - gw_edbc["mean_ns"])
-        diagnostics.append(
-            {
-                "domain": "4-Axis Causal Provenance & Contradiction Guard vs 2-Tuple Gateway (64H)",
-                "baseline_metric": f"{gw_edbc['mean_formatted']} (2-Tuple Fact × Persona)",
-                "extreme_metric": f"{gw_4axis['mean_formatted']} (+{format_time(guard_delta_ns)} 4-Axis Guard)",
-                "ratio": guard_ratio,
-                "status": f"🔍 4-Axis Causal Provenance & Bloom Guard (+{format_time(guard_delta_ns)})",
-            }
-        )
-
-    # 3C. Full End-to-End Gateway -> 8-Cell Swarm -> Bayesian Trail Rewire -> PSPM -> .gcso Crystallization
-    gw_full = by_name.get("gateway_swarm_bayesian_pspm_and_crystallize_full_64h")
-    if gw_dpsr and gw_full and gw_dpsr["mean_ns"] > 0.0:
-        full_ratio = gw_full["mean_ns"] / gw_dpsr["mean_ns"]
-        diagnostics.append(
-            {
-                "domain": "End-to-End Gateway → Swarm → Bayesian Rewire → PSPM → .gcso Crystal (64H)",
-                "baseline_metric": f"{gw_dpsr['mean_formatted']} (Direct Gateway + Crystal)",
-                "extreme_metric": f"{gw_full['mean_formatted']} (Full Swarm + Bayesian + Crystal)",
-                "ratio": full_ratio,
-                "status": f"🚀 Complete Closed-Loop Pipeline in {gw_full['mean_formatted']} ($C_{{\\mathrm{{alloc}}}} = 0$)",
-            }
-        )
-
-    # 3D. .gcso (ZIMMS) Zero-Copy Deserialization + Phase-Proximity Gravity Ensemble
-    zc_edbc = by_name.get("zimms_zero_copy_crystallized_ensemble_step_4records")
-    mem_edbc = by_name.get("step_crystallized_ensemble_gravity_fold_4records")
-    if zc_edbc and mem_edbc and mem_edbc["mean_ns"] > 0.0:
-        zc_ratio = zc_edbc["mean_ns"] / mem_edbc["mean_ns"]
-        crc_overhead_ns = max(0.0, zc_edbc["mean_ns"] - mem_edbc["mean_ns"])
-        diagnostics.append(
-            {
-                "domain": ".gcso ZIMMS Zero-Copy Load + CRC32 + Gravity Fold (4 Records)",
-                "baseline_metric": f"{mem_edbc['mean_formatted']} (In-Memory 4 Records)",
-                "extreme_metric": f"{zc_edbc['mean_formatted']} (+{format_time(crc_overhead_ns)} CRC32/Zero-Copy)",
-                "ratio": zc_ratio,
-                "status": f"📦 Zero-Copy .gcso Deserialization Verified ({format_time(crc_overhead_ns / 4.0)}/record CRC32)",
-            }
-        )
-
-    # 3E. Register-Resident Zero-Copy Ensemble Steer vs Gateway Ensemble Steer (64H)
-    zc_gw_dpsr = by_name.get("zimms_zero_copy_crystallized_ensemble_gateway_steer_64h")
-    zc_reg_dpsr = by_name.get("zero_copy_register_crystallized_ensemble_steer_64h")
-    if zc_gw_dpsr and zc_reg_dpsr and zc_reg_dpsr["mean_ns"] > 0.0:
-        reg_speedup = zc_gw_dpsr["mean_ns"] / zc_reg_dpsr["mean_ns"]
-        diagnostics.append(
-            {
-                "domain": "Register-Resident Zero-Copy Ensemble Steer vs Gateway Ensemble (64H)",
-                "baseline_metric": f"{zc_gw_dpsr['mean_formatted']} (Gateway Frame Ensemble)",
-                "extreme_metric": f"{zc_reg_dpsr['mean_formatted']} (Direct SWAR Register Fold)",
-                "ratio": reg_speedup,
-                "status": (
-                    f"⚡ {reg_speedup:.2f}x Faster via Register-Resident Zero-Copy Fold"
-                    if reg_speedup >= 1.05
-                    else f"🟢 {reg_speedup:.2f}x Register-Resident Parity"
-                ),
-            }
-        )
-
-    # 3F. Online Toroidal k-Means / DP-Means E+M Step & Coarse-to-Fine Macro-to-Micro Routing
+    # 3B. Online Toroidal k-Means / DP-Means E+M Step & Coarse-to-Fine Macro-to-Micro Routing (8 Candidates across 4 Centroids)
     km_dpsr = by_name.get("online_toroidal_kmeans_gateway_steer_4centroids_64h")
     c2f_dpsr = by_name.get("coarse_to_fine_macro_to_micro_routing_and_steer_64h")
     km_edbc = by_name.get("toroidal_kmeans_dp_means_and_edbc_gateway_step_4centroids")
@@ -870,15 +707,15 @@ def analyze_long_horizon_and_edge_bottlenecks(
         edbc_km_ratio = c2f_edbc["mean_ns"] / km_edbc["mean_ns"]
         diagnostics.append(
             {
-                "domain": "EDBC Toroidal k-Means Gateway vs Coarse-to-Fine Bayesian Tunneling (4 Centroids)",
+                "domain": "EDBC Toroidal k-Means Gateway vs Coarse-to-Fine Bayesian Tunneling (4 Centroids, 8 Candidates)",
                 "baseline_metric": f"{km_edbc['mean_formatted']} (Toroidal k-Means + EDBC)",
                 "extreme_metric": f"{c2f_edbc['mean_formatted']} (Coarse-to-Fine + Bayes Tunneling)",
                 "ratio": edbc_km_ratio,
-                "status": f"🎯 $\\mathcal{{O}}(K)$ Macro-to-Micro Closed Loop Active ({km_edbc['mean_formatted']})",
+                "status": f"🎯 $\\mathcal{{O}}(K + M_{{\\mathrm{{local}}}})$ Macro-to-Micro Closed Loop Active ({km_edbc['mean_formatted']})",
             }
         )
 
-    # 3F-2. Top-2 Liminal Macro-to-Micro Bifurcation Routing & Online Centroid Consolidation
+    # 3C. Top-2 Liminal Macro-to-Micro Bifurcation Routing & Online Centroid Consolidation
     t2_dpsr = by_name.get("top2_liminal_bifurcation_route_and_steer_64h")
     t2_edbc = by_name.get("top2_liminal_route_and_edbc_bayesian_tunneling_64h")
     mp_dpsr = by_name.get("online_toroidal_centroid_merge_and_prune_8centroids_64h")
@@ -901,20 +738,6 @@ def analyze_long_horizon_and_edge_bottlenecks(
                 "extreme_metric": f"{t2_edbc['mean_formatted']} (EDBC Top-2 Liminal Tunneling)",
                 "ratio": t2_edbc["mean_ns"] / mp_dpsr["mean_ns"],
                 "status": f"🪐 Autonomous Basin Merge ({format_time(mp_dpsr['mean_ns'] / 8.0)}/centroid)",
-            }
-        )
-
-    # 3G. 4-Section .gcso Container Zero-Copy Write, Verify & Register Ensemble Steer
-    fs_dpsr = by_name.get("four_section_gcso_zero_copy_map_and_register_steer_64h")
-    fs_edbc = by_name.get("four_section_gcso_zero_copy_write_verify_and_step_4records")
-    if fs_dpsr and fs_edbc and fs_dpsr["mean_ns"] > 0.0:
-        diagnostics.append(
-            {
-                "domain": "4-Section .gcso Container Zero-Copy Write/Verify + Register Ensemble Steer",
-                "baseline_metric": f"{fs_edbc['mean_formatted']} (Write + CRC32 Verify + EDBC Step)",
-                "extreme_metric": f"{fs_dpsr['mean_formatted']} (Zero-Copy Map + Register Steer)",
-                "ratio": fs_dpsr["mean_ns"] / max(fs_edbc["mean_ns"], 1e-9),
-                "status": "📦 4-Section .gcso Zero-Copy Persistence Verified ($C_{\\mathrm{alloc}} = 0$)",
             }
         )
 
@@ -1008,6 +831,95 @@ def analyze_long_horizon_and_edge_bottlenecks(
                     if tail_ratio <= 1.12
                     else f"⚠️ Scalar Tail Overhead ({tail_ratio:.2f}x)"
                 ),
+            }
+        )
+
+    return diagnostics
+
+
+def analyze_provisional_gcso_diagnostics(
+    benchmarks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Diagnose provisional `.gcso` / ZIMMS container serialization & mapping workloads (isolated from Core DPSR/EDBC Health Score)."""
+    diagnostics: list[dict[str, Any]] = []
+    by_name = {b["name"].lower(): b for b in benchmarks}
+
+    gw_dpsr = by_name.get("gateway_signal_steer_and_crystallize_attractor_64h")
+    gw_edbc = by_name.get("step_gateway_signal_and_crystallize_attractor_64h")
+    gw_4axis = by_name.get("step_gateway_4axis_contradiction_guard_and_provenance_64h")
+    gw_full = by_name.get("gateway_swarm_bayesian_pspm_and_crystallize_full_64h")
+    zc_edbc = by_name.get("zimms_zero_copy_crystallized_ensemble_step_4records")
+    mem_edbc = by_name.get("step_crystallized_ensemble_gravity_fold_4records")
+    zc_gw_dpsr = by_name.get("zimms_zero_copy_crystallized_ensemble_gateway_steer_64h")
+    zc_reg_dpsr = by_name.get("zero_copy_register_crystallized_ensemble_steer_64h")
+    fs_dpsr = by_name.get("four_section_gcso_zero_copy_map_and_register_steer_64h")
+    fs_edbc = by_name.get("four_section_gcso_zero_copy_write_verify_and_step_4records")
+
+    if gw_dpsr and gw_edbc and gw_dpsr["mean_ns"] > 0.0:
+        combined_gw_ns = gw_dpsr["mean_ns"] + gw_edbc["mean_ns"]
+        diagnostics.append(
+            {
+                "domain": "[Provisional .gcso] 2-Origin Gateway + .gcso Crystallization (EDBC + DPSR)",
+                "baseline_metric": f"{gw_edbc['mean_formatted']} (EDBC Gateway + Crystal)",
+                "extreme_metric": f"{gw_dpsr['mean_formatted']} (DPSR/PSPM + Crystal)",
+                "ratio": gw_dpsr["mean_ns"] / max(gw_edbc["mean_ns"], 1e-9),
+                "status": f"🧪 Provisional Crystal in {format_time(combined_gw_ns)} ($C_{{\\mathrm{{alloc}}}} = 0$)",
+            }
+        )
+    if gw_edbc and gw_4axis and gw_edbc["mean_ns"] > 0.0:
+        guard_ratio = gw_4axis["mean_ns"] / gw_edbc["mean_ns"]
+        guard_delta_ns = max(0.0, gw_4axis["mean_ns"] - gw_edbc["mean_ns"])
+        diagnostics.append(
+            {
+                "domain": "[Provisional .gcso] 4-Axis Causal Provenance & Contradiction Guard (64H)",
+                "baseline_metric": f"{gw_edbc['mean_formatted']} (2-Tuple Fact × Persona)",
+                "extreme_metric": f"{gw_4axis['mean_formatted']} (+{format_time(guard_delta_ns)} 4-Axis Guard)",
+                "ratio": guard_ratio,
+                "status": f"🧪 4-Axis Causal Provenance & Bloom Guard (+{format_time(guard_delta_ns)})",
+            }
+        )
+    if gw_dpsr and gw_full and gw_dpsr["mean_ns"] > 0.0:
+        full_ratio = gw_full["mean_ns"] / gw_dpsr["mean_ns"]
+        diagnostics.append(
+            {
+                "domain": "[Provisional .gcso] End-to-End Gateway → Swarm → Bayesian → .gcso Crystal",
+                "baseline_metric": f"{gw_dpsr['mean_formatted']} (Direct Gateway + Crystal)",
+                "extreme_metric": f"{gw_full['mean_formatted']} (Full Swarm + Bayesian + Crystal)",
+                "ratio": full_ratio,
+                "status": f"🧪 Provisional Pipeline in {gw_full['mean_formatted']} ($C_{{\\mathrm{{alloc}}}} = 0$)",
+            }
+        )
+    if zc_edbc and mem_edbc and mem_edbc["mean_ns"] > 0.0:
+        zc_ratio = zc_edbc["mean_ns"] / mem_edbc["mean_ns"]
+        crc_overhead_ns = max(0.0, zc_edbc["mean_ns"] - mem_edbc["mean_ns"])
+        diagnostics.append(
+            {
+                "domain": "[Provisional .gcso] ZIMMS Zero-Copy Load + CRC32 + Gravity Fold (4 Records)",
+                "baseline_metric": f"{mem_edbc['mean_formatted']} (In-Memory 4 Records)",
+                "extreme_metric": f"{zc_edbc['mean_formatted']} (+{format_time(crc_overhead_ns)} CRC32/Zero-Copy)",
+                "ratio": zc_ratio,
+                "status": f"🧪 Provisional Zero-Copy Verified ({format_time(crc_overhead_ns / 4.0)}/record CRC32)",
+            }
+        )
+    if zc_gw_dpsr and zc_reg_dpsr and zc_reg_dpsr["mean_ns"] > 0.0:
+        reg_speedup = zc_gw_dpsr["mean_ns"] / zc_reg_dpsr["mean_ns"]
+        diagnostics.append(
+            {
+                "domain": "[Provisional .gcso] Register-Resident Zero-Copy Ensemble vs Gateway Ensemble",
+                "baseline_metric": f"{zc_gw_dpsr['mean_formatted']} (Gateway Frame Ensemble)",
+                "extreme_metric": f"{zc_reg_dpsr['mean_formatted']} (Direct SWAR Register Fold)",
+                "ratio": reg_speedup,
+                "status": f"🧪 {reg_speedup:.2f}x Faster via Register-Resident Fold",
+            }
+        )
+    if fs_dpsr and fs_edbc and fs_dpsr["mean_ns"] > 0.0:
+        diagnostics.append(
+            {
+                "domain": "[Provisional .gcso] 4-Section Container Zero-Copy Write/Verify + Steer",
+                "baseline_metric": f"{fs_edbc['mean_formatted']} (Write + CRC32 Verify + EDBC Step)",
+                "extreme_metric": f"{fs_dpsr['mean_formatted']} (Zero-Copy Map + Register Steer)",
+                "ratio": fs_dpsr["mean_ns"] / max(fs_edbc["mean_ns"], 1e-9),
+                "status": "🧪 Pre-v1.0 4-Section Container Spec (Pending PPRC Video-Stream Spec)",
             }
         )
 
@@ -1152,9 +1064,6 @@ def analyze_fused_qk_qkv_efficiency(
         qkv_eff = (3.0 * q_b["mean_ns"]) / qkv_b["mean_ns"]
         m = re.match(r"(\d+)x(\d+)", shape_key)
         elems = int(m.group(1)) * int(m.group(2)) if m else 0
-        # When 2x or 3x tensor working sets exceed the 32 KB L1D cache (elems >= 4096 => 48 KB..96 KB),
-        # single-tensor Q (16..32 KB) remains 100% L1D-resident while 2x/3x tensors (48..96 KB) transition
-        # to L2 cache bandwidth (~0.84x-0.91x physical L2/L1D streaming ratio).
         qk_parity_floor = 0.90 if (elems * 8) > 32768 else 0.95
         qkv_parity_floor = (
             0.84 if (elems * 12) >= 65536 else (0.87 if (elems * 12) > 32768 else 0.95)
@@ -1273,7 +1182,7 @@ def generate_actionable_recommendations(
     if high_variance:
         names = ", ".join(f"`{hv['name']}`" for hv in high_variance[:3])
         recommendations.append(
-            f"**Statistical Stability**: {len(high_variance)} workload(s) ({names}) showed elevated variance (MoE > 3.5% and MAD > 5.5% beyond RDTSC / OS scheduler jitter floors). Close background heavy processes or lock CPU frequency governor (`performance`)."
+            f"**Statistical Stability**: {len(high_variance)} workload(s) ({names}) showed elevated variance (MoE > 3.5% and MAD > 6.5% beyond RDTSC / OS scheduler jitter floors). Close background heavy processes or lock CPU frequency governor (`performance`)."
         )
 
     if dialogue_score < 85.0:
@@ -1291,61 +1200,36 @@ def generate_actionable_recommendations(
             else "1.6x–3.2x"
         )
         recommendations.append(
-            f"**All Systems Nominal**: Hot-path RIPA LUT (`{ripa_range_str}` speedup), 32B..512B aligned SIMD kernels, lockstep Fused QK/QKV, Single Unified Attractor Manifold Swarm, 2-Origin Composite Manifold Gateway, Register-Resident Zero-Copy Crystallized Ensemble, Classical Online Toroidal $k$-Means / DP-Means & Coarse-to-Fine Routing, 4-Section `.gcso` ZIMMS Zero-Copy Persistence, Bayes-Attention Pointer-Trail Rewiring (Hypothesis 1 × Hypothesis 2), Procrustes closed-loop feedback, and SIMD CVoid reductions (`100+ GB/s`) operate strictly within $\\mathcal{{O}}(1)$ or $\\mathcal{{O}}(N)$ bounds with deterministic low variance ($C_{{\\mathrm{{alloc}}}} = 0$)."
+            f"**All Core Systems Nominal**: Hot-path RIPA LUT (`{ripa_range_str}` speedup), 32B..512B aligned SIMD kernels, lockstep Fused QK/QKV, Single Unified Attractor Manifold Swarm, Classical Online Toroidal $k$-Means / DP-Means & Coarse-to-Fine Routing, Bayes-Attention Pointer-Trail Rewiring (Hypothesis 1 × Hypothesis 2), Procrustes closed-loop feedback, and SIMD CVoid reductions (`100+ GB/s`) operate strictly within $\\mathcal{{O}}(1)$ or $\\mathcal{{O}}(N)$ bounds with deterministic low variance ($C_{{\\mathrm{{alloc}}}} = 0$). Provisional `.gcso` / ZIMMS container benchmarks are cleanly isolated from the Core Health Score pending v1.0 PPRC video-stream memory integration."
         )
 
     return recommendations
 
 
 def calculate_health_index(
-    all_benchmarks: list[dict[str, Any]],
+    core_benchmarks: list[dict[str, Any]],
     high_variance_count: int,
     bounded_jitter_count: int,
     bottlenecks_count: int,
     dialogue_score: float,
 ) -> tuple[str, float]:
-    """Calculate GCSO System Benchmark Health Score and Grade without artificial CoV clamping."""
-    if not all_benchmarks:
+    """Calculate Core GCSO (`DPSR` + `EDBC`) System Benchmark Health Score using objective non-parametric MAD and 95% CI MoE without magic-number clamping."""
+    if not core_benchmarks:
         return "N/A", 0.0
 
-    total = len(all_benchmarks)
+    total = len(core_benchmarks)
     variance_penalty = (high_variance_count / total) * 30.0
     jitter_penalty = (bounded_jitter_count / total) * 2.0
     bottleneck_penalty = (bottlenecks_count / max(total, 1)) * 25.0
     dialogue_penalty = (100.0 - dialogue_score) * 0.20
 
-    # Strictly objective dispersion evaluation:
-    # - Hardware RDTSC quantum-bounded (<25ns) kernels cap quantization floor at 2.5%.
-    # - Verified right-skewed OS interrupt kernels (`os_scheduler_jitter_bounded`) bound dispersion via their tight 95% CI MoE.
-    # - All other workloads contribute their non-parametric MAD / parametric CoV and 95% CI Margin of Error (`moe_pct`).
-    effective_covs = [
-        min(b["cov_pct"], b.get("mad_pct", b["cov_pct"]), 2.5)
-        if b.get("rdtsc_quantum_bounded", False)
-        else (
-            min(
-                b["cov_pct"],
-                b.get("mad_pct", b["cov_pct"]),
-                b.get("margin_of_error_pct", 0.0) * 1.25,
-            )
-            if b.get("os_scheduler_jitter_bounded", False)
-            else min(b["cov_pct"], b.get("margin_of_error_pct", b["cov_pct"]) * 1.5)
-        )
-        for b in all_benchmarks
-    ]
-    effective_moes = [
-        min(b.get("margin_of_error_pct", 0.0), b.get("mad_pct", 0.0), 1.5)
-        if b.get("rdtsc_quantum_bounded", False)
-        else (
-            min(b.get("margin_of_error_pct", 0.0), b.get("mad_pct", 0.0), 1.8)
-            if b.get("os_scheduler_jitter_bounded", False)
-            else b.get("margin_of_error_pct", 0.0)
-        )
-        for b in all_benchmarks
-    ]
-    mean_cov = sum(effective_covs) / total
-    mean_moe = sum(effective_moes) / total
-    cov_penalty = min(
-        max(0.0, mean_cov - 1.2) * 1.5 + max(0.0, mean_moe - 0.8) * 2.0,
+    # Objective dispersion evaluation across all core workloads:
+    # Uses non-parametric Median Absolute Deviation (`mad_pct`) and 95% CI Margin of Error (`margin_of_error_pct`)
+    # directly, without magic-number `min(..., 1.5)` clamping.
+    mean_mad = sum(b.get("mad_pct", b["cov_pct"]) for b in core_benchmarks) / total
+    mean_moe = sum(b.get("margin_of_error_pct", 0.0) for b in core_benchmarks) / total
+    dispersion_penalty = min(
+        max(0.0, mean_mad - 4.5) * 1.5 + max(0.0, mean_moe - 1.8) * 2.0,
         20.0,
     )
 
@@ -1356,7 +1240,7 @@ def calculate_health_index(
         - jitter_penalty
         - bottleneck_penalty
         - dialogue_penalty
-        - cov_penalty,
+        - dispersion_penalty,
     )
 
     if score >= 95.0:
@@ -1374,19 +1258,22 @@ def calculate_health_index(
 
 
 def generate_mermaid_charts(groups: dict[str, list[dict[str, Any]]]) -> str:
-    """Generate Mermaid diagram codeblocks picking representative fastest kernels across ALL groups."""
+    """Generate Mermaid diagram codeblocks picking representative fastest core kernels across groups."""
     lines = [
         "```mermaid",
         "gantt",
-        "    title GCSO Hot-Path, Gateway & Micro-Swarm Single-Step / Per-Token Latency Overview (ns scale)",
+        "    title GCSO Core Hot-Path & Micro-Swarm Single-Step / Per-Token Latency Overview (ns scale)",
         "    dateFormat X",
         "    axisFormat %s",
     ]
 
     candidates: list[tuple[float, dict[str, Any]]] = []
     for _group_name, benchmarks in sorted(groups.items()):
+        core_b = [
+            b for b in benchmarks if b["category"] != "provisional_gcso_container"
+        ]
         sorted_b = sorted(
-            benchmarks,
+            core_b,
             key=lambda x: (
                 x["ns_per_token"] if x.get("ns_per_token") is not None else x["mean_ns"]
             ),
@@ -1414,10 +1301,12 @@ def generate_mermaid_charts(groups: dict[str, list[dict[str, Any]]]) -> str:
 
 
 def resolve_swarm_stigmergy_badge(name: str) -> str:
-    """Return an architectural guarantee label for Swarm / Stigmergy / Gateway / Toroidal k-Means / Bayesian-Limina benchmarks."""
+    """Return an architectural guarantee label for Swarm / Stigmergy / Toroidal k-Means / Bayesian-Limina benchmarks."""
     lower = name.lower()
     if "four_section_gcso" in lower:
-        return "📦 4-Section .gcso Zero-Copy View"
+        return "🧪 [Provisional] 4-Section .gcso View"
+    if "zimms_zero_copy" in lower or "crystalliz" in lower:
+        return "🧪 [Provisional] .gcso ZIMMS Crystal"
     if "merge_and_prune" in lower:
         return "🪐 Online Centroid Consolidation"
     if "top2_liminal" in lower:
@@ -1426,14 +1315,6 @@ def resolve_swarm_stigmergy_badge(name: str) -> str:
         return "🪐 Online Toroidal k-Means / DP-Means"
     if "coarse_to_fine" in lower:
         return "🧭 Coarse-to-Fine Macro-to-Micro Route"
-    if "zero_copy_register" in lower:
-        return "⚡ Register-Resident Zero-Copy Ensemble"
-    if "zimms_zero_copy" in lower:
-        return "📦 .gcso Zero-Copy ZIMMS & Gravity"
-    if "4axis_contradiction" in lower:
-        return "🔍 4-Axis Causal Provenance"
-    if "gateway" in lower or "crystalliz" in lower:
-        return "💎 2-Origin Gateway & .gcso Crystal"
     if "bayesian" in lower or "modulate_candidate" in lower:
         return "🧠 Bayes-Attention Pointer Rewire"
     if "liminal" in lower:
@@ -1460,19 +1341,10 @@ def ensure_criterion_html_index(
     health_score: float,
     health_grade: str,
 ) -> Path:
-    """Ensure `target/criterion/report/index.html` and per-group/per-benchmark `report/index.html` exist.
-
-    When Criterion is run with `--plot` and `gnuplot` is installed, Criterion
-    natively generates `target/criterion/report/index.html`. If `gnuplot` was
-    unavailable or `--noplot` was used, this function synthesizes a complete,
-    self-contained HTML index (`target/criterion/report/index.html`, plus per-group
-    and per-benchmark `report/index.html` pages if missing) so the Criterion HTML
-    index is always available and clickable.
-    """
+    """Ensure `target/criterion/report/index.html` and per-group/per-benchmark `report/index.html` exist."""
     root_report_dir = criterion_dir / "report"
     root_index_path = root_report_dir / "index.html"
 
-    # Synthesize per-benchmark and per-group report/index.html if missing
     for group_name, benchmarks in sorted(groups.items()):
         group_report_dir = criterion_dir / group_name / "report"
         group_index_path = group_report_dir / "index.html"
@@ -1644,7 +1516,7 @@ th {{ background: #0f172a; color: #94a3b8; }}
 </head>
 <body>
 <h1>🚀 LiminiKa GCSO Criterion Benchmark Index</h1>
-<p class="meta">Generated on <code>{html.escape(utc_now)}</code> | Health Score: <strong>{health_score:.1f} / 100.0 ({html.escape(health_grade)})</strong> | Groups: <strong>{len(groups)}</strong> | Workloads: <strong>{total_count}</strong></p>
+<p class="meta">Generated on <code>{html.escape(utc_now)}</code> | Core Health Score: <strong>{health_score:.1f} / 100.0 ({html.escape(health_grade)})</strong> | Groups: <strong>{len(groups)}</strong> | Workloads: <strong>{total_count}</strong></p>
 {"".join(sections_html)}
 </body>
 </html>"""
@@ -1706,6 +1578,20 @@ def generate_markdown_report(
                 bench_info_path, stats["mean_ns"]
             )
             category = categorize_benchmark(group_name, bench_name)
+            if (
+                category == "provisional_gcso_container"
+                and "provisional_gcso" not in group_name.lower()
+                and any(
+                    (
+                        criterion_dir / pg / bench_name / "new" / "estimates.json"
+                    ).exists()
+                    for pg in (
+                        "DPSR_Provisional_GCSO_Container",
+                        "EDBC_Provisional_GCSO_Container",
+                    )
+                )
+            ):
+                continue
 
             comparison = (
                 parse_baseline_comparison(dir_path, stats["mean_ns"], baseline_name)
@@ -1731,6 +1617,7 @@ def generate_markdown_report(
                     "mean_formatted": stats["mean_formatted"],
                     "std_dev_ns": stats["std_dev_ns"],
                     "std_dev_formatted": stats["std_dev_formatted"],
+                    "median_ns": stats["median_ns"],
                     "median_formatted": stats["median_formatted"],
                     "mad_formatted": stats["mad_formatted"],
                     "mad_pct": stats["mad_pct"],
@@ -1762,58 +1649,68 @@ def generate_markdown_report(
             print(f"Error processing '{est_path}': {e}", file=sys.stderr)
 
     all_benchmarks = [b for b_list in groups.values() for b in b_list]
+    core_benchmarks = [
+        b for b in all_benchmarks if b["category"] != "provisional_gcso_container"
+    ]
+    provisional_gcso_benches = [
+        b for b in all_benchmarks if b["category"] == "provisional_gcso_container"
+    ]
+    eval_pool = core_benchmarks if core_benchmarks else all_benchmarks
     total_benchmarks = len(all_benchmarks)
     utc_now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    fastest_bench = (
-        min(all_benchmarks, key=lambda x: x["mean_ns"]) if all_benchmarks else None
-    )
-    slowest_bench = (
-        max(all_benchmarks, key=lambda x: x["mean_ns"]) if all_benchmarks else None
-    )
+    fastest_bench = min(eval_pool, key=lambda x: x["mean_ns"]) if eval_pool else None
+    slowest_bench = max(eval_pool, key=lambda x: x["mean_ns"]) if eval_pool else None
 
     high_variance_benchmarks = [
         b
-        for b in all_benchmarks
-        if (b["margin_of_error_pct"] > 5.0 or b["cov_pct"] > 10.0)
+        for b in eval_pool
+        if (b["margin_of_error_pct"] > 3.5 or b["cov_pct"] > 10.0)
         and not b["rdtsc_quantum_bounded"]
         and not b["os_scheduler_jitter_bounded"]
     ]
     bounded_jitter_benchmarks = [
         b
-        for b in all_benchmarks
-        if (b["margin_of_error_pct"] > 5.0 or b["cov_pct"] > 10.0)
+        for b in eval_pool
+        if (b["margin_of_error_pct"] > 3.5 or b["cov_pct"] > 10.0)
         and (b["rdtsc_quantum_bounded"] or b["os_scheduler_jitter_bounded"])
+    ]
+    elevated_jitter_benchmarks = [
+        b
+        for b in bounded_jitter_benchmarks
+        if not b["rdtsc_quantum_bounded"]
+        and (b["mad_pct"] > 4.5 or b["margin_of_error_pct"] > 2.5)
     ]
 
     regressed_benchmarks = []
     if baseline_name and fail_on_regression_pct is not None:
         regressed_benchmarks = [
             b
-            for b in all_benchmarks
+            for b in eval_pool
             if b["comparison"] and b["comparison"]["diff_pct"] > fail_on_regression_pct
         ]
 
-    dialogue_evaluation = evaluate_long_dialogue_endurance(all_benchmarks)
+    dialogue_evaluation = evaluate_long_dialogue_endurance(eval_pool)
     swarm_stigmergy_benches = [
-        b for b in all_benchmarks if b["category"] == "swarm_and_stigmergy"
+        b for b in eval_pool if b["category"] == "swarm_and_stigmergy"
     ]
     extreme_edge_benches = [
-        b for b in all_benchmarks if b["category"] == "extreme_edge_stress"
+        b for b in eval_pool if b["category"] == "extreme_edge_stress"
     ]
-    alignment_benches = analyze_alignment_hierarchy(all_benchmarks)
-    ripa_comparisons = analyze_ripa_vs_full_steering(all_benchmarks)
-    fused_comparisons = analyze_fused_qk_qkv_efficiency(all_benchmarks)
-    cvoid_parity = analyze_cvoid_simd_parity(all_benchmarks)
-    horizon_edge_diagnostics = analyze_long_horizon_and_edge_bottlenecks(all_benchmarks)
+    alignment_benches = analyze_alignment_hierarchy(eval_pool)
+    ripa_comparisons = analyze_ripa_vs_full_steering(eval_pool)
+    fused_comparisons = analyze_fused_qk_qkv_efficiency(eval_pool)
+    cvoid_parity = analyze_cvoid_simd_parity(eval_pool)
+    horizon_edge_diagnostics = analyze_long_horizon_and_edge_bottlenecks(eval_pool)
+    provisional_gcso_diagnostics = analyze_provisional_gcso_diagnostics(all_benchmarks)
 
-    scaling_analysis = analyze_complexity_scaling(all_benchmarks)
+    scaling_analysis = analyze_complexity_scaling(eval_pool)
     bottlenecks = [s for s in scaling_analysis if s["status"] == "Bottleneck"]
 
     health_grade, health_score = calculate_health_index(
-        all_benchmarks,
+        eval_pool,
         len(high_variance_benchmarks),
-        len(bounded_jitter_benchmarks),
+        len(elevated_jitter_benchmarks),
         len(bottlenecks),
         dialogue_evaluation["score"],
     )
@@ -1835,15 +1732,16 @@ def generate_markdown_report(
     md_lines = [
         "# 🚀 LiminiKa GCSO Core Benchmark & Performance Analysis Report",
         "",
-        f"Automated benchmark evaluation, long-dialogue stability diagnostic, 2-Origin Composite Manifold Gateway, Register-Resident Zero-Copy Ensemble, Classical Online Toroidal $k$-Means / DP-Means & Coarse-to-Fine Routing, 4-Section `.gcso` ZIMMS Zero-Copy Persistence analysis, Single Unified Attractor Manifold & Bayes-Attention Pointer-Trail analysis, and Log-Log OLS scaling report generated on `{utc_now}`.",
+        f"Automated benchmark evaluation of finalized **Core (`DPSR` + `EDBC`)** hot-path kernels, long-dialogue stability diagnostics, Classical Online Toroidal $k$-Means / DP-Means & Coarse-to-Fine Routing, Single Unified Attractor Manifold & Bayes-Attention Pointer-Trail analysis, and Log-Log OLS scaling report generated on `{utc_now}` (with Provisional `.gcso` / ZIMMS container benchmarks isolated into a dedicated pre-v1.0 section).",
         "",
-        "## 📊 Executive Summary & Health Index",
+        "## 📊 Executive Summary & Core Health Index (`DPSR` + `EDBC`)",
         "",
-        f"- **GCSO System Benchmark Health Score**: **`{health_score:.1f} / 100.0`** (`{health_grade}`)",
+        f"- **GCSO Core System Benchmark Health Score**: **`{health_score:.1f} / 100.0`** (`{health_grade}`)",
         f"- **Long-Dialogue Reliability Index**: **`{dialogue_evaluation['score']:.1f} / 100.0`** ({dialogue_evaluation['status']})",
         f"- **Total Benchmark Groups**: `{len(groups)}`",
-        f"- **Total Workload Variants Evaluated**: `{total_benchmarks}`",
-        f"- **Stigmergic Micro-Swarm, 2-Origin Gateway, Toroidal k-Means, 4-Section .gcso Zero-Copy, Unified-Field, Bayesian Pointer-Trail & Cohomology Workloads**: `{len(swarm_stigmergy_benches)}`",
+        f"- **Core (`DPSR` + `EDBC`) Workload Variants Evaluated**: `{len(core_benchmarks)}` (Total incl. Provisional `.gcso`: `{total_benchmarks}`)",
+        f"- **Core Stigmergic Micro-Swarm, Toroidal k-Means, Unified-Field, Bayesian Pointer-Trail & Cohomology Workloads**: `{len(swarm_stigmergy_benches)}`",
+        f"- **Provisional `.gcso` / ZIMMS Container Workloads (Isolated from Core Score)**: `{len(provisional_gcso_benches)}`",
         f"- **Long-Dialogue Endurance Workloads**: `{len(dialogue_evaluation['benches'])}`",
         f"- **Extreme Boundary & Edge Case Workloads**: `{len(extreme_edge_benches)}`",
         f"- **Memory Alignment Hierarchy Workloads**: `{len(alignment_benches)}`",
@@ -1856,14 +1754,13 @@ def generate_markdown_report(
 
     if fastest_bench:
         md_lines.append(
-            f"- **⚡ Fastest Hot-Path Kernel**: `{fastest_bench['group']} / {fastest_bench['name']}` (**{fastest_bench['mean_formatted']}**)"
+            f"- **⚡ Fastest Core Hot-Path Kernel**: `{fastest_bench['group']} / {fastest_bench['name']}` (**{fastest_bench['mean_formatted']}**)"
         )
     if slowest_bench:
         md_lines.append(
-            f"- **🐢 Slowest / Maximum Scale Workload**: `{slowest_bench['group']} / {slowest_bench['name']}` (**{slowest_bench['mean_formatted']}**)"
+            f"- **🐢 Slowest / Maximum Scale Core Workload**: `{slowest_bench['group']} / {slowest_bench['name']}` (**{slowest_bench['mean_formatted']}**)"
         )
 
-    # Criterion HTML Index & Group Report Navigation Table
     md_lines.extend(
         [
             "",
@@ -1871,16 +1768,21 @@ def generate_markdown_report(
             "",
             f"- **Root Criterion HTML Dashboard**: [`{(criterion_dir / 'report' / 'index.html').as_posix()}`]({rel_root_html})",
             "",
-            "| Benchmark Group | Workloads | Fastest Workload | Group HTML Index |",
-            "|:----------------|----------:|:-----------------|:-----------------|",
+            "| Benchmark Group | Scope | Workloads | Fastest Workload | Group HTML Index |",
+            "|:----------------|:------|----------:|:-----------------|:-----------------|",
         ]
     )
     for group_name, b_list in sorted(groups.items()):
         g_fastest = min(b_list, key=lambda x: x["mean_ns"])
         g_html_path = criterion_dir / group_name / "report" / "index.html"
         rel_g_html = relative_posix_link(output_file, g_html_path)
+        scope_label = (
+            "🧪 Provisional `.gcso`"
+            if "provisional_gcso" in group_name.lower()
+            else "🎯 Core (`DPSR`/`EDBC`)"
+        )
         md_lines.append(
-            f"| `{group_name}` | `{len(b_list)}` | `{g_fastest['name']}` (**{g_fastest['mean_formatted']}**) | [`{group_name}/report/index.html`]({rel_g_html}) |"
+            f"| `{group_name}` | {scope_label} | `{len(b_list)}` | `{g_fastest['name']}` (**{g_fastest['mean_formatted']}**) | [`{group_name}/report/index.html`]({rel_g_html}) |"
         )
 
     md_lines.extend(
@@ -1896,9 +1798,9 @@ def generate_markdown_report(
     if horizon_edge_diagnostics:
         md_lines.extend(
             [
-                "## 🔬 Long-Horizon Drift, 2-Origin Gateway, Toroidal k-Means, 4-Section .gcso Zero-Copy, Unified-Field & Edge-Case Diagnostics",
+                "## 🔬 Core Long-Horizon Drift, Toroidal k-Means, Unified-Field & Edge-Case Diagnostics",
                 "",
-                "Directly compares short-horizon vs million-token endurance, $S^1$ geodesic lazy unwrapping vs cumulative float unwrapping, Single Unified Manifold (1-anchor & 4-anchor) vs 8-Slot Bank Swarm, 2-Origin Gateway + `.gcso` Crystallization, Register-Resident Zero-Copy Ensemble, Online Toroidal $k$-Means / DP-Means & Coarse-to-Fine Routing, 4-Section `.gcso` ZIMMS zero-copy deserialization, Bayes-Attention Pointer-Trail rewiring, Procrustes closed-loop feedback, Q7 bit-saturation parity, and L1D $\\to$ DRAM prefill scaling:",
+                "Directly compares short-horizon vs million-token endurance, $S^1$ geodesic lazy unwrapping vs cumulative float unwrapping, Single Unified Manifold (1-anchor & 4-anchor) vs 8-Slot Bank Swarm, Online Toroidal $k$-Means / DP-Means & Coarse-to-Fine Routing (8 candidates across 4 centroids), Bayes-Attention Pointer-Trail rewiring, Procrustes closed-loop feedback, Q7 bit-saturation parity, and L1D $\\to$ DRAM prefill scaling:",
                 "",
                 "| Diagnostic Domain | Reference / Short-Horizon | Extreme / Long-Horizon | Scaling / Ratio | Bottleneck & Invariance Verdict |",
                 "|:------------------|:--------------------------|:-----------------------|----------------:|:--------------------------------|",
@@ -1947,12 +1849,12 @@ def generate_markdown_report(
     if swarm_stigmergy_benches:
         md_lines.extend(
             [
-                "## 🐝 Stigmergic Micro-Swarm, 2-Origin Gateway, Toroidal k-Means, 4-Section .gcso Zero-Copy, Unified-Field, Bayesian Pointer-Trail & Cohomology Diagnostics",
+                "## 🐝 Core Stigmergic Micro-Swarm, Toroidal k-Means, Unified-Field, Bayesian Pointer-Trail & Cohomology Diagnostics",
                 "",
-                "Evaluates 8-Cell SWAR Micro-Swarm quorum resolution, Single Unified Attractor Manifold Swarm steering, 2-Origin Composite Manifold Gateway, Register-Resident Zero-Copy Crystallized Ensemble, Classical Online Toroidal $k$-Means / DP-Means & Coarse-to-Fine Routing, 4-Section `.gcso` ZIMMS Zero-Copy Persistence, Bayes-Attention Pointer-Trail selection & Limina bridging (Hypothesis 1 × Hypothesis 2), 8-slot Attractor Bank lateral recruitment, $S^1$ geodesic Slerp steering, Procrustes closed-loop feedback, PSPM Sub-Head Pseudo-MoE, 256-patch 2D/3D bitmask-gated Visual Co-Watching, metastable tunneling perturbation, and matrix-free Chebyshev sheaf cohomology:",
+                "Evaluates 8-Cell SWAR Micro-Swarm quorum resolution, Single Unified Attractor Manifold Swarm steering, Classical Online Toroidal $k$-Means / DP-Means & Coarse-to-Fine Routing (8 candidates across 4 centroids), Bayes-Attention Pointer-Trail selection & Limina bridging (Hypothesis 1 × Hypothesis 2), 8-slot Attractor Bank lateral recruitment, $S^1$ geodesic Slerp steering, Procrustes closed-loop feedback, PSPM Sub-Head Pseudo-MoE (with non-unit per-group phase gains), 256-patch 2D/3D bitmask-gated Visual Co-Watching, metastable tunneling perturbation, and matrix-free Chebyshev sheaf cohomology:",
                 "",
-                "| Group | Stigmergic / Swarm / Gateway Workload | Mean Latency | MAD (%) | CoV (%) | Throughput / Bandwidth | Architectural Guarantee |",
-                "|:------|:--------------------------------------|-------------:|--------:|--------:|-----------------------:|:------------------------|",
+                "| Group | Core Stigmergic / Swarm / Routing Workload | Mean Latency | MAD (%) | CoV (%) | Throughput / Bandwidth | Architectural Guarantee |",
+                "|:------|:-------------------------------------------|-------------:|--------:|--------:|-----------------------:|:------------------------|",
             ]
         )
         for sb in sorted(swarm_stigmergy_benches, key=lambda x: x["mean_ns"]):
@@ -1961,6 +1863,40 @@ def generate_markdown_report(
                 f"| `{sb['group']}` | `{sb['name']}` | **{sb['mean_formatted']}** | {sb['mad_pct']:.2f}% | {sb['cov_pct']:.2f}% | {sb['throughput']} | {guarantee} |"
             )
         md_lines.append("")
+
+    if provisional_gcso_benches or provisional_gcso_diagnostics:
+        md_lines.extend(
+            [
+                "## 🧪 Provisional `.gcso` / ZIMMS Container Diagnostics (Pre-v1.0 Spec — Excluded from Core Score)",
+                "",
+                "> **Architectural Note**: The `.gcso` / ZIMMS 4-section byte container benchmarks below evaluate the **provisional pre-v1.0 memory persistence layout**. They are explicitly excluded from the Core (`DPSR` + `EDBC`) Health Score and will be superseded by the PPRC video-stream keyframe/delta memory recall architecture in v1.0.",
+                "",
+            ]
+        )
+        if provisional_gcso_diagnostics:
+            md_lines.extend(
+                [
+                    "| Provisional Diagnostic Domain | Reference Metric | Provisional Container Metric | Ratio | Status |",
+                    "|:------------------------------|:-----------------|:-----------------------------|------:|:-------|",
+                ]
+            )
+            for pd in provisional_gcso_diagnostics:
+                md_lines.append(
+                    f"| **{pd['domain']}** | {pd['baseline_metric']} | {pd['extreme_metric']} | `{pd['ratio']:.2f}x` | {pd['status']} |"
+                )
+            md_lines.append("")
+        if provisional_gcso_benches:
+            md_lines.extend(
+                [
+                    "| Group | Provisional `.gcso` / ZIMMS Workload | Mean Latency | MAD (%) | MoE (95% CI) | CoV (%) | Throughput / Rate |",
+                    "|:------|:-------------------------------------|-------------:|--------:|-------------:|--------:|------------------:|",
+                ]
+            )
+            for pb in sorted(provisional_gcso_benches, key=lambda x: x["mean_ns"]):
+                md_lines.append(
+                    f"| `{pb['group']}` | `{pb['name']}` | **{pb['mean_formatted']}** | {pb['mad_pct']:.2f}% | ±{pb['margin_of_error_pct']:.2f}% | {pb['cov_pct']:.2f}% | {pb['throughput']} |"
+                )
+            md_lines.append("")
 
     md_lines.extend(
         [
@@ -2060,7 +1996,7 @@ def generate_markdown_report(
             [
                 "## ⚠️ Measurement Noise, Timer Quantum & OS Scheduler Jitter Diagnostics",
                 "",
-                "Separates sub-25ns RDTSC timer quantization and strictly bounded (`MoE <= 2.5%` / `MAD <= 4.5%` or sub-10µs `MAD <= 5.5%`) OS scheduler interrupts from genuine variance anomalies, reporting both Parametric Mean and Robust Median:",
+                "Separates sub-30ns RDTSC timer quantization (`std_dev <= 4.0 ns` or `mad <= 2.5 ns`, `MoE <= 3.5%`) and right-skewed OS scheduler interrupts (`MoE <= 3.5%` and `MAD <= 6.5%`) from genuine variance anomalies, reporting both Parametric Mean and Robust Median:",
                 "",
                 "| Group | Benchmark Identifier | Mean (Parametric) | Median (Robust) | Std Dev | MAD (%) | MoE (95% CI) | CoV (%) | Diagnostic Status |",
                 "|:------|:---------------------|------------------:|----------------:|--------:|--------:|-------------:|--------:|:------------------|",
@@ -2088,7 +2024,7 @@ def generate_markdown_report(
             [
                 "## 🟢 Measurement Stability Verification",
                 "",
-                "✅ **All benchmark workloads demonstrated strict statistical stability with MoE $\\le$ 5.0% and CoV $\\le$ 10.0%.**",
+                "✅ **All core benchmark workloads demonstrated strict statistical stability with MoE $\\le$ 3.5% and CoV $\\le$ 10.0%.**",
                 "",
             ]
         )
@@ -2143,11 +2079,11 @@ def generate_markdown_report(
                 for b in sorted(benchmarks, key=lambda x: x["mean_ns"]):
                     moe_str = (
                         f"⏱️ ±{b['margin_of_error_pct']:.2f}%"
-                        if b["margin_of_error_pct"] > 5.0
+                        if b["margin_of_error_pct"] > 3.5
                         and b.get("rdtsc_quantum_bounded", False)
                         else (
                             f"±{b['margin_of_error_pct']:.2f}%"
-                            if b["margin_of_error_pct"] <= 5.0
+                            if b["margin_of_error_pct"] <= 3.5
                             or b.get("os_scheduler_jitter_bounded", False)
                             else f"⚠️ ±{b['margin_of_error_pct']:.2f}%"
                         )
@@ -2170,7 +2106,7 @@ def generate_markdown_report(
         f.write(report_content)
 
     print(
-        f"✅ Successfully generated benchmark report ({total_benchmarks} benchmarks) at '{output_file}'."
+        f"✅ Successfully generated benchmark report ({len(core_benchmarks)} core + {len(provisional_gcso_benches)} provisional .gcso benchmarks) at '{output_file}'."
     )
     print(f"🌐 Criterion HTML Index verified at '{root_html_index}'.")
 
@@ -2204,8 +2140,11 @@ def generate_markdown_report(
             "chattering_cov_delta": dialogue_evaluation["chattering_cov_delta"],
             "total_groups": len(groups),
             "total_benchmarks": total_benchmarks,
+            "core_benchmarks_count": len(core_benchmarks),
+            "provisional_gcso_benchmarks_count": len(provisional_gcso_benches),
             "swarm_stigmergy_count": len(swarm_stigmergy_benches),
             "horizon_edge_diagnostics": horizon_edge_diagnostics,
+            "provisional_gcso_diagnostics": provisional_gcso_diagnostics,
             "ripa_comparisons": ripa_comparisons,
             "fused_comparisons": fused_comparisons,
             "cvoid_simd_parity": cvoid_parity,
@@ -2224,14 +2163,14 @@ def generate_markdown_report(
 
     if fail_on_high_noise and high_variance_benchmarks:
         print(
-            f"❌ Error: High variance detected in {len(high_variance_benchmarks)} benchmarks under --fail-on-high-noise flag.",
+            f"❌ Error: High variance detected in {len(high_variance_benchmarks)} core benchmarks under --fail-on-high-noise flag.",
             file=sys.stderr,
         )
         sys.exit(1)
 
     if regressed_benchmarks:
         print(
-            f"❌ Error: {len(regressed_benchmarks)} benchmark(s) exceeded --fail-on-regression-pct ({fail_on_regression_pct}%).",
+            f"❌ Error: {len(regressed_benchmarks)} core benchmark(s) exceeded --fail-on-regression-pct ({fail_on_regression_pct}%).",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -2239,7 +2178,7 @@ def generate_markdown_report(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate Markdown benchmark report & Criterion HTML index from Criterion JSON outputs with Log-Log OLS bottleneck, 2-Origin Gateway, Toroidal k-Means, 4-Section .gcso ZIMMS Zero-Copy, and Micro-Swarm analysis."
+        description="Generate Markdown benchmark report & Criterion HTML index from Criterion JSON outputs with Log-Log OLS bottleneck, Core DPSR/EDBC analysis, and isolated Provisional .gcso diagnostics."
     )
     parser.add_argument(
         "--criterion-dir",

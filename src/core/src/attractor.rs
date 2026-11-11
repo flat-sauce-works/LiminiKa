@@ -2581,9 +2581,10 @@ impl AttractorFieldEngine {
                     }
                     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                     let (va0, va1) = unsafe {
-                        use core::arch::x86_64::{__m256i, _mm256_loadu_si256};
-                        let ap = anchor.phase_deltas.as_ptr().cast::<__m256i>();
-                        (_mm256_loadu_si256(ap), _mm256_loadu_si256(ap.add(1)))
+                        crate::traits::branchless::avx2_words64_to_vec64_with_uniform(
+                            anc_w,
+                            anc_is_uniform,
+                        )
                     };
                     let eff_coh = if init_nonzero & anc_nonzero {
                         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]

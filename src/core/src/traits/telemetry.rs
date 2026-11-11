@@ -386,16 +386,19 @@ unsafe fn eval_candidate_trail_avx2_with_macro_fast(
 ) -> (f32, f32, bool, bool) {
     // SAFETY: Caller guarantees `target_feature = "avx2"`. Keeps `(self_v0, self_v1)` and
     // `(win_v0, win_v1)` hoisted in YMM registers across the candidate loop and loads each
-    // candidate phase profile directly via two 256-bit `vmovdqu` instructions (`0` per-candidate
-    // GPR-to-YMM Port-5 inserts).
+    // candidate's offset-56 phase profile via 8-byte aligned GPR loads (`trail_phase_words_ref`)
+    // to eliminate 64B cache-line splits and 4-to-1 GPR-store-to-YMM-load STLF stalls.
     unsafe {
-        use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
+        use core::arch::x86_64::{_mm256_setzero_si256, _mm256_sub_epi8};
         let cw = trail_phase_words_ref(cand);
         let c_uni = if self_is_uniform {
             is_word_array_uniform_64(cw)
         } else {
             false
         };
+        let mut cv0 = _mm256_setzero_si256();
+        let mut cv1 = _mm256_setzero_si256();
+        let mut cv_loaded = false;
         let coh = if c_uni {
             let cw0 = cw[0];
             if cw0 == self_w[0] {
@@ -408,9 +411,8 @@ unsafe fn eval_candidate_trail_avx2_with_macro_fast(
                 coherence_from_word_arrays_with_both_uniform_flags_64(self_w, true, cw, true)
             }
         } else {
-            let cp = cand.accumulated_phase_delta.as_ptr().cast::<__m256i>();
-            let cv0 = _mm256_loadu_si256(cp);
-            let cv1 = _mm256_loadu_si256(cp.add(1));
+            (cv0, cv1) = super::branchless::avx2_words64_to_vec64(cw);
+            cv_loaded = true;
             super::branchless::avx2_coherence_from_diff_vec64(
                 _mm256_sub_epi8(self_v0, cv0),
                 _mm256_sub_epi8(self_v1, cv1),
@@ -463,9 +465,11 @@ unsafe fn eval_candidate_trail_avx2_with_macro_fast(
                                 ),
                             )
                         } else {
-                            let cp = cand.accumulated_phase_delta.as_ptr().cast::<__m256i>();
-                            let cv0 = _mm256_loadu_si256(cp);
-                            let cv1 = _mm256_loadu_si256(cp.add(1));
+                            if !cv_loaded {
+                                (cv0, cv1) = super::branchless::avx2_words64_to_vec64_with_uniform(
+                                    cw, c_uni,
+                                );
+                            }
                             branchless_relu_f32(super::branchless::avx2_coherence_from_diff_vec64(
                                 _mm256_sub_epi8(*win_v0, cv0),
                                 _mm256_sub_epi8(*win_v1, cv1),
@@ -2067,11 +2071,13 @@ pub(crate) fn select_rewire_bridge_and_modulate_with_preloaded_words_64(
                         .0;
                     } else {
                         // SAFETY: `(self_v0, self_v1)` are already hoisted in YMM registers and AVX2 is enabled.
+                        // Uses 8-byte aligned `best_w` via `avx2_words64_to_vec64_with_uniform` to avoid
+                        // offset-56 64B cache-line splits and 4-to-1 GPR-to-YMM STLF stalls.
                         unsafe {
-                            use core::arch::x86_64::{__m256i, _mm256_loadu_si256};
-                            let b_ptr = best_cand.accumulated_phase_delta.as_ptr().cast::<__m256i>();
-                            let bv0 = _mm256_loadu_si256(b_ptr);
-                            let bv1 = _mm256_loadu_si256(b_ptr.add(1));
+                            let (bv0, bv1) = super::branchless::avx2_words64_to_vec64_with_uniform(
+                                best_w,
+                                best_is_uniform,
+                            );
                             let (rv0, rv1) = super::branchless::avx2_slerp_vec64(
                                 self_v0, self_v1, bv0, bv1, eff_s,
                             );
@@ -2326,19 +2332,64 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         anchor_base_energy: f32,
     ) -> (f32, f32) {
-        let (resonant_pull, coherence) = branchless_q7_resonant_pull_64(
-            &self.accumulated_phase_delta,
-            anchor_phases,
-            anchor_base_energy,
-        );
+        let clean_energy = branchless_flush_subnormal_f32(branchless_relu_f32(anchor_base_energy));
         let cur_pull =
             branchless_flush_subnormal_f32(branchless_relu_f32(self.attractor_pull_force));
-        let new_pull = branchless_q7_circular_weighted_step_64(
-            &mut self.accumulated_phase_delta,
-            cur_pull,
-            anchor_phases,
-            resonant_pull,
-        );
+        if clean_energy <= 1.0e-12 {
+            let _ = (& branchless_q7_resonant_pull_64, &branchless_q7_circular_weighted_step_64);
+            self.attractor_pull_force = branchless_min_f32(cur_pull, MAX_ATTRACTOR_PULL_FORCE);
+            return (0.0, 0.0);
+        }
+        let t_w = *trail_phase_words_ref(self);
+        let b_w = load_q7_words_64(anchor_phases);
+        let t_uni = is_word_array_uniform_64(&t_w);
+        let b_uni = is_word_array_uniform_64(&b_w);
+        let t_nz = if t_uni {
+            t_w[0] != 0
+        } else {
+            (((t_w[0] | t_w[1]) | (t_w[2] | t_w[3])) | ((t_w[4] | t_w[5]) | (t_w[6] | t_w[7]))) != 0
+        };
+        let b_nz = if b_uni {
+            b_w[0] != 0
+        } else {
+            (((b_w[0] | b_w[1]) | (b_w[2] | b_w[3])) | ((b_w[4] | b_w[5]) | (b_w[6] | b_w[7]))) != 0
+        };
+        let coherence = if t_nz & b_nz {
+            coherence_from_word_arrays_with_both_uniform_flags_64(&t_w, t_uni, &b_w, b_uni)
+        } else {
+            0.0
+        };
+        let proximity_gain = branchless_clamp_f32(1.0 + coherence, 0.25, 2.0);
+        let resonant_pull = branchless_flush_subnormal_f32(clean_energy * proximity_gain);
+        let new_pull = cur_pull + resonant_pull;
+        if resonant_pull > 1.0e-12 {
+            if cur_pull <= 1.0e-12 {
+                *trail_phase_words_mut(self) = b_w;
+            } else {
+                let ratio_f32 = branchless_clamp_f32(
+                    (resonant_pull * super::branchless::fast_inv_pos_normal_f32(new_pull)) * 128.0
+                        + 0.5,
+                    0.0,
+                    128.0,
+                );
+                let s = (ratio_f32 as u8) as u64;
+                if s >= 128 {
+                    *trail_phase_words_mut(self) = b_w;
+                } else if s > 0 {
+                    let bias_restore =
+                        (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+                    let (out_w, _) = swar_slerp_words_with_uniform_flag_64(
+                        &t_w,
+                        t_uni,
+                        &b_w,
+                        b_uni,
+                        s,
+                        bias_restore,
+                    );
+                    *trail_phase_words_mut(self) = out_w;
+                }
+            }
+        }
         self.attractor_pull_force = branchless_min_f32(new_pull, MAX_ATTRACTOR_PULL_FORCE);
         let is_resonant = (coherence > 0.25) & (resonant_pull > 0.0);
         let is_liminal = (coherence < -0.10) & (resonant_pull > 0.0);

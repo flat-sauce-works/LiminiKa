@@ -628,8 +628,6 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
     };
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     let (mut vw0, mut vw1) = (vs0, vs1);
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    let (mut best_vc0, mut best_vc1, mut best_vc_valid) = (vs0, vs1, false);
 
     let mut idx = 0usize;
     while idx < cand_len {
@@ -678,10 +676,8 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
             #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
             {
                 unsafe {
-                    use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
-                    let cp = cand.accumulated_phase_delta.as_ptr().cast::<__m256i>();
-                    let vc0 = _mm256_loadu_si256(cp);
-                    let vc1 = _mm256_loadu_si256(cp.add(1));
+                    use core::arch::x86_64::_mm256_sub_epi8;
+                    let (vc0, vc1) = crate::traits::branchless::avx2_words64_to_vec64(cand_w);
                     cand_vc = (vc0, vc1);
                     cand_vc_loaded = true;
                     crate::traits::branchless::avx2_coherence_from_diff_vec64(
@@ -733,15 +729,12 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
                     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                     {
                         unsafe {
-                            use core::arch::x86_64::{
-                                __m256i, _mm256_loadu_si256, _mm256_sub_epi8,
-                            };
+                            use core::arch::x86_64::_mm256_sub_epi8;
                             let (vc0, vc1) = if cand_vc_loaded {
                                 cand_vc
                             } else {
-                                let cp = cand.accumulated_phase_delta.as_ptr().cast::<__m256i>();
-                                let v0 = _mm256_loadu_si256(cp);
-                                let v1 = _mm256_loadu_si256(cp.add(1));
+                                let (v0, v1) =
+                                    crate::traits::branchless::avx2_words64_to_vec64(cand_w);
                                 cand_vc = (v0, v1);
                                 cand_vc_loaded = true;
                                 (v0, v1)
@@ -795,12 +788,6 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
             best_link_term = link_term;
             best_cand_is_uniform = cand_is_uniform;
             best_cand_eq_self = cand_eq_self;
-            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-            {
-                best_vc0 = cand_vc.0;
-                best_vc1 = cand_vc.1;
-                best_vc_valid = cand_vc_loaded;
-            }
         }
         found |= is_coherent;
         idx += 1;
@@ -850,37 +837,23 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
                 if eff_s > 0 && eff_s < 128 {
                     qdps_done = true;
                     self_w = unsafe {
-                        use core::arch::x86_64::{
-                            __m256i, _mm256_loadu_si256, _mm256_storeu_si256,
-                        };
-                        let (bvc0, bvc1) = if best_vc_valid {
-                            (best_vc0, best_vc1)
-                        } else {
-                            let bp = dst_trail.accumulated_phase_delta.as_ptr().cast::<__m256i>();
-                            (_mm256_loadu_si256(bp), _mm256_loadu_si256(bp.add(1)))
-                        };
+                        let (bvc0, bvc1) = crate::traits::branchless::avx2_words64_to_vec64(
+                            trail_phase_words_ref(dst_trail),
+                        );
                         let (vr0, vr1) = crate::traits::branchless::avx2_slerp_vec64(
                             vs0, vs1, bvc0, bvc1, eff_s,
                         );
-                        let sp = src_trail
-                            .accumulated_phase_delta
-                            .as_mut_ptr()
-                            .cast::<__m256i>();
-                        let dp = dst_trail
-                            .accumulated_phase_delta
-                            .as_mut_ptr()
-                            .cast::<__m256i>();
-                        _mm256_storeu_si256(sp, vr0);
-                        _mm256_storeu_si256(sp.add(1), vr1);
-                        _mm256_storeu_si256(dp, vr0);
-                        _mm256_storeu_si256(dp.add(1), vr1);
+                        let bridged_w = crate::traits::branchless::avx2_vec64_to_words64(vr0, vr1);
+                        *trail_phase_words_mut(src_trail) = bridged_w;
+                        *trail_phase_words_mut(dst_trail) = bridged_w;
                         let step_u8 = branchless_rad_to_qdps_step_u8(min_step_rad);
-                        let (vf0, vf1) = if step_u8 > 1 {
-                            crate::traits::branchless::avx2_qdps_filter_vec64(vr0, vr1, step_u8)
+                        if step_u8 > 1 {
+                            let (vf0, vf1) =
+                                crate::traits::branchless::avx2_qdps_filter_vec64(vr0, vr1, step_u8);
+                            crate::traits::branchless::avx2_vec64_to_words64(vf0, vf1)
                         } else {
-                            (vr0, vr1)
-                        };
-                        crate::traits::branchless::avx2_vec64_to_words64(vf0, vf1)
+                            bridged_w
+                        }
                     };
                 } else {
                     let dst_w = *trail_phase_words_ref(dst_trail);
@@ -1368,12 +1341,8 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
         let mut coh_sum = 0.0_f32;
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
         let (vs0, vs1) = unsafe {
-            use core::arch::x86_64::{__m256i, _mm256_loadu_si256};
-            let sp = src_trail.accumulated_phase_delta.as_ptr().cast::<__m256i>();
-            (_mm256_loadu_si256(sp), _mm256_loadu_si256(sp.add(1)))
+            crate::traits::branchless::avx2_words64_to_vec64_with_uniform(&self_w, self_is_uniform)
         };
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-        let (mut best_vc0, mut best_vc1, mut best_vc_valid) = (vs0, vs1, false);
 
         let mut idx = 0usize;
         while idx < cand_len {
@@ -1392,10 +1361,6 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
             } else {
                 self_is_uniform && is_word_array_uniform_64(cand_w)
             };
-            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-            let mut cand_vc = (vs0, vs1);
-            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-            let mut cand_vc_loaded = false;
             let coh = if cand_eq_self {
                 1.0
             } else if cand_is_uniform {
@@ -1410,12 +1375,8 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
                 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                 {
                     unsafe {
-                        use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
-                        let cp = cand.accumulated_phase_delta.as_ptr().cast::<__m256i>();
-                        let vc0 = _mm256_loadu_si256(cp);
-                        let vc1 = _mm256_loadu_si256(cp.add(1));
-                        cand_vc = (vc0, vc1);
-                        cand_vc_loaded = true;
+                        use core::arch::x86_64::_mm256_sub_epi8;
+                        let (vc0, vc1) = crate::traits::branchless::avx2_words64_to_vec64(cand_w);
                         crate::traits::branchless::avx2_coherence_from_diff_vec64(
                             _mm256_sub_epi8(vs0, vc0),
                             _mm256_sub_epi8(vs1, vc1),
@@ -1458,12 +1419,6 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
                 best_coh = coh;
                 best_cand_is_uniform = cand_is_uniform;
                 best_cand_eq_self = cand_eq_self;
-                #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-                {
-                    best_vc0 = cand_vc.0;
-                    best_vc1 = cand_vc.1;
-                    best_vc_valid = cand_vc_loaded;
-                }
             }
             found |= is_coherent;
             coh_sum += coh;
@@ -1489,38 +1444,25 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
                     if eff_s > 0 && eff_s < 128 {
                         qdps_done = true;
                         self_w = unsafe {
-                            use core::arch::x86_64::{
-                                __m256i, _mm256_loadu_si256, _mm256_storeu_si256,
-                            };
-                            let (bvc0, bvc1) = if best_vc_valid {
-                                (best_vc0, best_vc1)
-                            } else {
-                                let bp =
-                                    dst_trail.accumulated_phase_delta.as_ptr().cast::<__m256i>();
-                                (_mm256_loadu_si256(bp), _mm256_loadu_si256(bp.add(1)))
-                            };
+                            let (bvc0, bvc1) = crate::traits::branchless::avx2_words64_to_vec64(
+                                trail_phase_words_ref(dst_trail),
+                            );
                             let (vr0, vr1) = crate::traits::branchless::avx2_slerp_vec64(
                                 vs0, vs1, bvc0, bvc1, eff_s,
                             );
-                            let sp = src_trail
-                                .accumulated_phase_delta
-                                .as_mut_ptr()
-                                .cast::<__m256i>();
-                            let dp = dst_trail
-                                .accumulated_phase_delta
-                                .as_mut_ptr()
-                                .cast::<__m256i>();
-                            _mm256_storeu_si256(sp, vr0);
-                            _mm256_storeu_si256(sp.add(1), vr1);
-                            _mm256_storeu_si256(dp, vr0);
-                            _mm256_storeu_si256(dp.add(1), vr1);
+                            let bridged_w =
+                                crate::traits::branchless::avx2_vec64_to_words64(vr0, vr1);
+                            *trail_phase_words_mut(src_trail) = bridged_w;
+                            *trail_phase_words_mut(dst_trail) = bridged_w;
                             let step_u8 = branchless_rad_to_qdps_step_u8(min_step_rad);
-                            let (vf0, vf1) = if step_u8 > 1 {
-                                crate::traits::branchless::avx2_qdps_filter_vec64(vr0, vr1, step_u8)
+                            if step_u8 > 1 {
+                                let (vf0, vf1) = crate::traits::branchless::avx2_qdps_filter_vec64(
+                                    vr0, vr1, step_u8,
+                                );
+                                crate::traits::branchless::avx2_vec64_to_words64(vf0, vf1)
                             } else {
-                                (vr0, vr1)
-                            };
-                            crate::traits::branchless::avx2_vec64_to_words64(vf0, vf1)
+                                bridged_w
+                            }
                         };
                     } else {
                         let dst_w = *trail_phase_words_ref(dst_trail);
@@ -1931,34 +1873,56 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
             head_dim,
             num_heads,
         );
-        let mut steer_words = [0u64; NUM_SWARM_MICRO_CELLS];
         let mut any_nonzero = 0u64;
         {
             let tw = trail_phase_words_mut(trail);
-            let mut c = 0usize;
-            while c < active_cells {
-                let raw_w = raw_words[c];
-                let scaled_w = if is_unit_gain {
-                    raw_w
-                } else {
-                    swar_q7_scale_le128_with_bias_x8(raw_w, gain_u64, gain_bias)
-                };
-                let filt_w = if is_bypass_step {
-                    scaled_w
-                } else {
-                    swar_q7_qdps_filter_x8(scaled_w, step_u8)
-                };
-                raw_words[c] = filt_w;
-                let nw = swar_q7_circular_add_x8(tw[c], filt_w);
-                tw[c] = nw;
-                steer_words[c] = nw;
-                any_nonzero |= nw;
-                c += 1;
+            if is_unit_gain & is_bypass_step {
+                let mut c = 0usize;
+                while c < active_cells {
+                    let filt_w = raw_words[c];
+                    let nw = swar_q7_circular_add_x8(tw[c], filt_w);
+                    tw[c] = nw;
+                    any_nonzero |= nw;
+                    c += 1;
+                }
+            } else if is_bypass_step {
+                let mut c = 0usize;
+                while c < active_cells {
+                    let filt_w =
+                        swar_q7_scale_le128_with_bias_x8(raw_words[c], gain_u64, gain_bias);
+                    raw_words[c] = filt_w;
+                    let nw = swar_q7_circular_add_x8(tw[c], filt_w);
+                    tw[c] = nw;
+                    any_nonzero |= nw;
+                    c += 1;
+                }
+            } else if is_unit_gain {
+                let mut c = 0usize;
+                while c < active_cells {
+                    let filt_w = swar_q7_qdps_filter_x8(raw_words[c], step_u8);
+                    raw_words[c] = filt_w;
+                    let nw = swar_q7_circular_add_x8(tw[c], filt_w);
+                    tw[c] = nw;
+                    any_nonzero |= nw;
+                    c += 1;
+                }
+            } else {
+                let mut c = 0usize;
+                while c < active_cells {
+                    let scaled_w =
+                        swar_q7_scale_le128_with_bias_x8(raw_words[c], gain_u64, gain_bias);
+                    let filt_w = swar_q7_qdps_filter_x8(scaled_w, step_u8);
+                    raw_words[c] = filt_w;
+                    let nw = swar_q7_circular_add_x8(tw[c], filt_w);
+                    tw[c] = nw;
+                    any_nonzero |= nw;
+                    c += 1;
+                }
             }
         }
         if any_nonzero != 0 {
             steer_from_swar_words_core_safe(
-                &steer_words,
+                trail_phase_words_ref(trail),
                 0xFF,
                 128,
                 head_dim,

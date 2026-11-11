@@ -3046,12 +3046,15 @@ impl CrystallizedAttractorRecord {
                             #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                             let c_val = {
                                 let _ = uni_mask;
-                                // SAFETY: `cw` is a 64-byte `[u64; 8]` array and AVX2 is enabled.
+                                // SAFETY: `cw` is a 64-byte `[u64; 8]` stack cache array updated via
+                                // 64-bit GPR stores; `avx2_words64_to_vec64_with_uniform` avoids
+                                // 4-to-1 narrow-store-to-wide-load STLF stalls.
                                 unsafe {
-                                    use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
-                                    let ptr = cw.as_ptr().cast::<__m256i>();
-                                    let vb0 = _mm256_loadu_si256(ptr);
-                                    let vb1 = _mm256_loadu_si256(ptr.add(1));
+                                    use core::arch::x86_64::_mm256_sub_epi8;
+                                    let (vb0, vb1) =
+                                        super::branchless::avx2_words64_to_vec64_with_uniform(
+                                            cw, c_uni,
+                                        );
                                     super::branchless::avx2_coherence_from_diff_vec64_with_floor(
                                         _mm256_sub_epi8(va0, vb0),
                                         _mm256_sub_epi8(va1, vb1),
@@ -3875,28 +3878,23 @@ impl CrystallizedAttractorRecord {
                                     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                                     {
                                         unsafe {
-                                            use core::arch::x86_64::{
-                                                __m256i, _mm256_loadu_si256, _mm256_sub_epi8,
-                                            };
+                                            use core::arch::x86_64::_mm256_sub_epi8;
                                             if !va_loaded {
-                                                if a_merged {
-                                                    (va0, va1) = avx2_words64_to_vec64(&w_a);
+                                                let cur_a_ref = if a_merged {
+                                                    &w_a
                                                 } else {
-                                                    let pa = centroids[a]
-                                                        .phase_profile
-                                                        .as_ptr()
-                                                        .cast::<__m256i>();
-                                                    va0 = _mm256_loadu_si256(pa);
-                                                    va1 = _mm256_loadu_si256(pa.add(1));
-                                                }
+                                                    centroids[a].phase_words_ref()
+                                                };
+                                                (va0, va1) = super::branchless::avx2_words64_to_vec64_with_uniform(
+                                                    cur_a_ref,
+                                                    a_is_uniform,
+                                                );
                                                 va_loaded = true;
                                             }
-                                            let pb = centroids[b]
-                                                .phase_profile
-                                                .as_ptr()
-                                                .cast::<__m256i>();
-                                            let vb0 = _mm256_loadu_si256(pb);
-                                            let vb1 = _mm256_loadu_si256(pb.add(1));
+                                            let (vb0, vb1) = super::branchless::avx2_words64_to_vec64_with_uniform(
+                                                centroids[b].phase_words_ref(),
+                                                b_is_uniform,
+                                            );
                                             avx2_coherence_from_diff_vec64_with_floor(
                                                 _mm256_sub_epi8(va0, vb0),
                                                 _mm256_sub_epi8(va1, vb1),
@@ -4189,19 +4187,16 @@ impl CrystallizedAttractorRecord {
                         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                         {
                             unsafe {
-                                use core::arch::x86_64::{
-                                    __m256i, _mm256_loadu_si256, _mm256_sub_epi8,
-                                };
+                                use core::arch::x86_64::_mm256_sub_epi8;
                                 if !vi_loaded {
-                                    let pi =
-                                        centroids[idx_i].phase_profile.as_ptr().cast::<__m256i>();
-                                    vi0 = _mm256_loadu_si256(pi);
-                                    vi1 = _mm256_loadu_si256(pi.add(1));
+                                    (vi0, vi1) = super::branchless::avx2_words64_to_vec64_with_uniform(
+                                        w_i, i_uni,
+                                    );
                                     vi_loaded = true;
                                 }
-                                let pj = centroids[idx_j].phase_profile.as_ptr().cast::<__m256i>();
-                                let vj0 = _mm256_loadu_si256(pj);
-                                let vj1 = _mm256_loadu_si256(pj.add(1));
+                                let (vj0, vj1) = super::branchless::avx2_words64_to_vec64_with_uniform(
+                                    w_j, j_uni,
+                                );
                                 avx2_coherence_from_diff_vec64_with_floor(
                                     _mm256_sub_epi8(vi0, vj0),
                                     _mm256_sub_epi8(vi1, vj1),
@@ -4317,20 +4312,14 @@ impl CrystallizedAttractorRecord {
                 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                 {
                     unsafe {
-                        use core::arch::x86_64::{__m256i, _mm256_loadu_si256};
                         let (vt0, vt1) = super::branchless::avx2_words64_to_vec64_with_uniform(
                             trail_w,
                             trail_is_uniform,
                         );
-                        let (vg0, vg1) = if core::ptr::eq(target_w, winner.phase_words_ref()) {
-                            let wp = winner.phase_profile.as_ptr().cast::<__m256i>();
-                            (_mm256_loadu_si256(wp), _mm256_loadu_si256(wp.add(1)))
-                        } else {
-                            super::branchless::avx2_words64_to_vec64_with_uniform(
-                                target_w,
-                                target_is_uniform,
-                            )
-                        };
+                        let (vg0, vg1) = super::branchless::avx2_words64_to_vec64_with_uniform(
+                            target_w,
+                            target_is_uniform,
+                        );
                         let (vb0, vb1) = avx2_slerp_vec64(vt0, vt1, vg0, vg1, s_u64);
                         if winner.zimms_section_offset48 != 0 {
                             scalar_tag_opt =
@@ -4831,6 +4820,12 @@ impl CrystallizedAttractorRecord {
             } else {
                 false
             };
+            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+            let mut c0 = unsafe { core::arch::x86_64::_mm256_setzero_si256() };
+            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+            let mut c1 = unsafe { core::arch::x86_64::_mm256_setzero_si256() };
+            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+            let mut cand_vecs_loaded = false;
             let coh = if cand_is_uniform {
                 let cw0 = cand_w[0];
                 if cw0 == self_w0 {
@@ -4848,10 +4843,9 @@ impl CrystallizedAttractorRecord {
                 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                 {
                     unsafe {
-                        use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
-                        let cp = cand.accumulated_phase_delta.as_ptr().cast::<__m256i>();
-                        let c0 = _mm256_loadu_si256(cp);
-                        let c1 = _mm256_loadu_si256(cp.add(1));
+                        use core::arch::x86_64::_mm256_sub_epi8;
+                        (c0, c1) = avx2_words64_to_vec64(cand_w);
+                        cand_vecs_loaded = true;
                         avx2_coherence_from_diff_vec64(
                             _mm256_sub_epi8(self_v0, c0),
                             _mm256_sub_epi8(self_v1, c1),
@@ -4915,13 +4909,13 @@ impl CrystallizedAttractorRecord {
                                 )
                             } else {
                                 unsafe {
-                                    use core::arch::x86_64::{
-                                        __m256i, _mm256_loadu_si256, _mm256_sub_epi8,
-                                    };
-                                    let cp =
-                                        cand.accumulated_phase_delta.as_ptr().cast::<__m256i>();
-                                    let c0 = _mm256_loadu_si256(cp);
-                                    let c1 = _mm256_loadu_si256(cp.add(1));
+                                    use core::arch::x86_64::_mm256_sub_epi8;
+                                    if !cand_vecs_loaded {
+                                        (c0, c1) = super::branchless::avx2_words64_to_vec64_with_uniform(
+                                            cand_w,
+                                            cand_uni_for_win,
+                                        );
+                                    }
                                     avx2_coherence_from_diff_vec64(
                                         _mm256_sub_epi8(win_v0, c0),
                                         _mm256_sub_epi8(win_v1, c1),

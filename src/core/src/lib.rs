@@ -879,14 +879,15 @@ impl RuntimeContext {
                 1.0,
             );
 
-            let mut composite_phase = [0i8; MAX_ATTENTION_HEADS];
-            let total_pull = self.evaluate_multi_domain_superposition(trail, &mut composite_phase);
+            let mut composite_phase = AlignedBuffer64::new([0i8; MAX_ATTENTION_HEADS]);
+            let total_pull =
+                self.evaluate_multi_domain_superposition(trail, &mut composite_phase.data);
 
             if let Some(p) = phase_deltas {
-                accumulate_q7_slice_into_64(&mut composite_phase, p.as_slice());
+                accumulate_q7_slice_into_64(&mut composite_phase.data, p.as_slice());
             }
 
-            let mut phase_words = load_q7_words_64(&composite_phase);
+            let mut phase_words = load_q7_words_64(&composite_phase.data);
             let (_density, rep_trig) = self.bloom_filter.apply_phase_conjugate_repulsion_words(
                 &mut phase_words,
                 self.config.repulsion_threshold,
@@ -1597,7 +1598,7 @@ impl PointerActionHub for RuntimeContext {
         let embedded_phase = gcso_tagged_ptr_t(current_ptr).unpack_phase();
         trail_out.accumulate_uniform_phase(embedded_phase);
         let slot_idx = (self.action_hub.write_cursor as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
-        self.action_hub.trails[slot_idx] = *trail_out;
+        ActionHubEngine::copy_trail_to_slot_fast(&mut self.action_hub.trails[slot_idx], trail_out);
         self.action_hub.write_cursor =
             self.action_hub.write_cursor.wrapping_add(1) & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
         self.action_hub.active_count = self.active_trail_count;

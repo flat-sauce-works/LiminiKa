@@ -3568,24 +3568,35 @@ pub fn branchless_q7_circular_weighted_step_64(
     let w_run = branchless_flush_subnormal_f32(branchless_relu_f32(running_weight));
     let w_cand = branchless_flush_subnormal_f32(branchless_relu_f32(candidate_weight));
     let total_w = w_run + w_cand;
-    let has_cand = w_cand > 1.0e-12;
-    let s = if !has_cand {
-        0u64
-    } else if w_run <= 1.0e-12 {
-        128u64
-    } else {
-        let ratio_f32 = branchless_clamp_f32(
-            (w_cand * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
-            0.0,
-            128.0,
-        );
-        (ratio_f32 as u8) as u64
-    };
-    let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-    let a = load_q7_words_64(running_phases);
-    let b = load_q7_words_64(candidate_phases);
-    let out_w = swar_slerp_words_with_bias_64(&a, &b, s, bias_restore);
-    store_q7_words_64(running_phases, &out_w);
+    if w_cand <= 1.0e-12 {
+        return total_w;
+    }
+    if w_run <= 1.0e-12 {
+        *running_phases = *candidate_phases;
+        return total_w;
+    }
+    let ratio_f32 = branchless_clamp_f32(
+        (w_cand * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
+        0.0,
+        128.0,
+    );
+    let s = (ratio_f32 as u8) as u64;
+    if s >= 128 {
+        *running_phases = *candidate_phases;
+    } else if s > 0 {
+        let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+        let a = load_q7_words_64(running_phases);
+        let b = load_q7_words_64(candidate_phases);
+        let a_uni = is_word_array_uniform_64(&a);
+        let b_uni = if a_uni {
+            is_word_array_uniform_64(&b)
+        } else {
+            false
+        };
+        let (out_w, _) =
+            swar_slerp_words_with_uniform_flag_64(&a, a_uni, &b, b_uni, s, bias_restore);
+        store_q7_words_64(running_phases, &out_w);
+    }
     total_w
 }
 
@@ -3736,10 +3747,7 @@ unsafe fn avx2_coherence_from_raw_abs_vec64(
         let abs0 = _mm256_min_epu8(raw_abs0, max_127);
         let abs1 = _mm256_min_epu8(raw_abs1, max_127);
 
-        let mask_7 = _mm256_set1_epi8(0x07);
         let mask_15 = _mm256_set1_epi8(0x0F);
-        let r0 = _mm256_and_si256(abs0, mask_7);
-        let r1 = _mm256_and_si256(abs1, mask_7);
         let h0 = _mm256_and_si256(_mm256_srli_epi16(abs0, 3), mask_15);
         let h1 = _mm256_and_si256(_mm256_srli_epi16(abs1, 3), mask_15);
 
@@ -3747,35 +3755,19 @@ unsafe fn avx2_coherence_from_raw_abs_vec64(
             0, -59, 33, 55, 65, -114, 126, 124, 0, -124, -126, 114, -65, -55, -33, 59,
             0, -59, 33, 55, 65, -114, 126, 124, 0, -124, -126, 114, -65, -55, -33, 59,
         );
+        let zero = _mm256_setzero_si256();
+        let sad_lo = _mm256_add_epi64(
+            _mm256_sad_epu8(_mm256_shuffle_epi8(lut_c0_lo, h0), zero),
+            _mm256_sad_epu8(_mm256_shuffle_epi8(lut_c0_lo, h1), zero),
+        );
         let lut_c0_hi = _mm256_setr_epi8(
             -128, 126, 123, 117, 109, 99, 88, 76, 64, 51, 39, 28, 18, 10, 4, 1,
             -128, 126, 123, 117, 109, 99, 88, 76, 64, 51, 39, 28, 18, 10, 4, 1,
         );
-        let lut_nsin_h = _mm256_setr_epi8(
-            0, -25, -49, -71, -90, -106, -117, -125, -127, -125, -117, -106, -90, -71, -49, -25,
-            0, -25, -49, -71, -90, -106, -117, -125, -127, -125, -117, -106, -90, -71, -49, -25,
+        let sad_hi = _mm256_add_epi64(
+            _mm256_sad_epu8(_mm256_shuffle_epi8(lut_c0_hi, h0), zero),
+            _mm256_sad_epu8(_mm256_shuffle_epi8(lut_c0_hi, h1), zero),
         );
-        let lut_ncos_h = _mm256_setr_epi8(
-            -127, -125, -117, -106, -90, -71, -49, -25, 0, 25, 49, 71, 90, 106, 117, 125,
-            -127, -125, -117, -106, -90, -71, -49, -25, 0, 25, 49, 71, 90, 106, 117, 125,
-        );
-        let lut_sin_r = _mm256_setr_epi8(
-            0, 18, 36, 54, 72, 90, 108, 126, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 18, 36, 54, 72, 90, 108, 126, 0, 0, 0, 0, 0, 0, 0, 0,
-        );
-        let lut_omc_r = _mm256_setr_epi8(
-            0, 0, 1, 2, 3, 6, 8, 11, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 1, 2, 3, 6, 8, 11, 0, 0, 0, 0, 0, 0, 0, 0,
-        );
-
-        let zero = _mm256_setzero_si256();
-        let clo0 = _mm256_shuffle_epi8(lut_c0_lo, h0);
-        let clo1 = _mm256_shuffle_epi8(lut_c0_lo, h1);
-        let chi0 = _mm256_shuffle_epi8(lut_c0_hi, h0);
-        let chi1 = _mm256_shuffle_epi8(lut_c0_hi, h1);
-
-        let sad_lo = _mm256_add_epi64(_mm256_sad_epu8(clo0, zero), _mm256_sad_epu8(clo1, zero));
-        let sad_hi = _mm256_add_epi64(_mm256_sad_epu8(chi0, zero), _mm256_sad_epu8(chi1, zero));
         let sad_tot = _mm256_add_epi64(sad_lo, _mm256_slli_epi64(sad_hi, 8));
         let sad_128 = _mm_add_epi64(
             _mm256_castsi256_si128(sad_tot),
@@ -3785,22 +3777,48 @@ unsafe fn avx2_coherence_from_raw_abs_vec64(
             as i32
             - (64 * 16384);
 
-        let nsh0 = _mm256_shuffle_epi8(lut_nsin_h, h0);
-        let nsh1 = _mm256_shuffle_epi8(lut_nsin_h, h1);
-        let nch0 = _mm256_shuffle_epi8(lut_ncos_h, h0);
-        let nch1 = _mm256_shuffle_epi8(lut_ncos_h, h1);
-        let sr0 = _mm256_shuffle_epi8(lut_sin_r, r0);
-        let sr1 = _mm256_shuffle_epi8(lut_sin_r, r1);
-        let or0 = _mm256_shuffle_epi8(lut_omc_r, r0);
-        let or1 = _mm256_shuffle_epi8(lut_omc_r, r1);
+        let mask_7 = _mm256_set1_epi8(0x07);
+        let r0 = _mm256_and_si256(abs0, mask_7);
+        let r1 = _mm256_and_si256(abs1, mask_7);
 
+        let lut_nsin_h = _mm256_setr_epi8(
+            0, -25, -49, -71, -90, -106, -117, -125, -127, -125, -117, -106, -90, -71, -49, -25,
+            0, -25, -49, -71, -90, -106, -117, -125, -127, -125, -117, -106, -90, -71, -49, -25,
+        );
+        let lut_sin_r = _mm256_setr_epi8(
+            0, 18, 36, 54, 72, 90, 108, 126, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 18, 36, 54, 72, 90, 108, 126, 0, 0, 0, 0, 0, 0, 0, 0,
+        );
+        let sin0 = _mm256_maddubs_epi16(
+            _mm256_shuffle_epi8(lut_sin_r, r0),
+            _mm256_shuffle_epi8(lut_nsin_h, h0),
+        );
+        let sin1 = _mm256_maddubs_epi16(
+            _mm256_shuffle_epi8(lut_sin_r, r1),
+            _mm256_shuffle_epi8(lut_nsin_h, h1),
+        );
+
+        let lut_ncos_h = _mm256_setr_epi8(
+            -127, -125, -117, -106, -90, -71, -49, -25, 0, 25, 49, 71, 90, 106, 117, 125,
+            -127, -125, -117, -106, -90, -71, -49, -25, 0, 25, 49, 71, 90, 106, 117, 125,
+        );
+        let lut_omc_r = _mm256_setr_epi8(
+            0, 0, 1, 2, 3, 6, 8, 11, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 1, 2, 3, 6, 8, 11, 0, 0, 0, 0, 0, 0, 0, 0,
+        );
         let corr0 = _mm256_add_epi16(
-            _mm256_maddubs_epi16(sr0, nsh0),
-            _mm256_maddubs_epi16(or0, nch0),
+            sin0,
+            _mm256_maddubs_epi16(
+                _mm256_shuffle_epi8(lut_omc_r, r0),
+                _mm256_shuffle_epi8(lut_ncos_h, h0),
+            ),
         );
         let corr1 = _mm256_add_epi16(
-            _mm256_maddubs_epi16(sr1, nsh1),
-            _mm256_maddubs_epi16(or1, nch1),
+            sin1,
+            _mm256_maddubs_epi16(
+                _mm256_shuffle_epi8(lut_omc_r, r1),
+                _mm256_shuffle_epi8(lut_ncos_h, h1),
+            ),
         );
         let ones16 = _mm256_set1_epi16(1);
         let corr32 = _mm256_add_epi32(
@@ -4880,12 +4898,11 @@ pub fn branchless_q7_gravity_fold_64(
             // geodesic SLERP directly in two 256-bit YMM registers (`vr0, vr1`).
             return unsafe {
                 use core::arch::x86_64::{
-                    __m256i, _mm256_loadu_si256, _mm256_or_si256, _mm256_storeu_si256,
-                    _mm256_sub_epi8, _mm256_testz_si256,
+                    _mm256_or_si256, _mm256_sub_epi8, _mm256_testz_si256,
                 };
-                let qp = query_phases.as_ptr().cast::<__m256i>();
-                let vq0 = _mm256_loadu_si256(qp);
-                let vq1 = _mm256_loadu_si256(qp.add(1));
+                let q_w = load_q7_words_64(query_phases);
+                let q_uni = is_word_array_uniform_64(&q_w);
+                let (vq0, vq1) = avx2_words64_to_vec64_with_uniform(&q_w, q_uni);
                 let q_or = _mm256_or_si256(vq0, vq1);
                 let q_nonzero = _mm256_testz_si256(q_or, q_or) == 0;
                 let mut vr0 = vq0;
@@ -4901,9 +4918,8 @@ pub fn branchless_q7_gravity_fold_64(
                         anchor_gravity_masses[idx],
                     ));
                     if mass > 1.0e-12 {
-                        let bp = anchor_phases[idx].as_ptr().cast::<__m256i>();
-                        let vb0 = _mm256_loadu_si256(bp);
-                        let vb1 = _mm256_loadu_si256(bp.add(1));
+                        let b_w = load_q7_words_64(&anchor_phases[idx]);
+                        let (vb0, vb1) = avx2_words64_to_vec64(&b_w);
                         let b_or = _mm256_or_si256(vb0, vb1);
                         let coh = if q_nonzero && _mm256_testz_si256(b_or, b_or) == 0 {
                             avx2_coherence_from_diff_vec64(
@@ -4945,9 +4961,8 @@ pub fn branchless_q7_gravity_fold_64(
                     }
                     idx += 1;
                 }
-                let out_ptr = folded_phases_out.as_mut_ptr().cast::<__m256i>();
-                _mm256_storeu_si256(out_ptr, vr0);
-                _mm256_storeu_si256(out_ptr.add(1), vr1);
+                let out_w = avx2_vec64_to_words64(vr0, vr1);
+                store_q7_words_64(folded_phases_out, &out_w);
                 let has_pull = (active_count > 0) & (running_pull > 1.0e-12);
                 let inv_pull =
                     fast_inv_pos_normal_f32(branchless_select_f32(has_pull, running_pull, 1.0));
@@ -5186,11 +5201,7 @@ pub fn modulate_attention_scores_by_phase_bank_64(
 
     let mut coh_sum = 0.0_f32;
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    let (vq0, vq1) = unsafe {
-        use core::arch::x86_64::{__m256i, _mm256_loadu_si256};
-        let qp = query_phases.as_ptr().cast::<__m256i>();
-        (_mm256_loadu_si256(qp), _mm256_loadu_si256(qp.add(1)))
-    };
+    let (vq0, vq1) = unsafe { avx2_words64_to_vec64_with_uniform(&q, q_is_uniform) };
     for (score_slot, key_p) in attention_scores[..count]
         .iter_mut()
         .zip(key_anchor_phases[..count].iter())
@@ -5203,10 +5214,8 @@ pub fn modulate_attention_scores_by_phase_bank_64(
                     coherence_from_word_arrays_with_both_uniform_flags_64(&q, true, &kw, true)
                 } else {
                     unsafe {
-                        use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
-                        let kp = key_p.as_ptr().cast::<__m256i>();
-                        let vk0 = _mm256_loadu_si256(kp);
-                        let vk1 = _mm256_loadu_si256(kp.add(1));
+                        use core::arch::x86_64::_mm256_sub_epi8;
+                        let (vk0, vk1) = avx2_words64_to_vec64(&kw);
                         avx2_coherence_from_diff_vec64(
                             _mm256_sub_epi8(vq0, vk0),
                             _mm256_sub_epi8(vq1, vk1),
@@ -5214,11 +5223,10 @@ pub fn modulate_attention_scores_by_phase_bank_64(
                     }
                 }
             } else {
+                let kw = load_q7_words_64(key_p);
                 unsafe {
-                    use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
-                    let kp = key_p.as_ptr().cast::<__m256i>();
-                    let vk0 = _mm256_loadu_si256(kp);
-                    let vk1 = _mm256_loadu_si256(kp.add(1));
+                    use core::arch::x86_64::_mm256_sub_epi8;
+                    let (vk0, vk1) = avx2_words64_to_vec64(&kw);
                     avx2_coherence_from_diff_vec64(
                         _mm256_sub_epi8(vq0, vk0),
                         _mm256_sub_epi8(vq1, vk1),
@@ -5264,11 +5272,7 @@ pub fn modulate_attention_scores_by_bayesian_trails_64(
     let q = load_q7_words_64(query_phases);
     let q_is_uniform = is_word_array_uniform_64(&q);
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    let (vq0, vq1) = unsafe {
-        use core::arch::x86_64::{__m256i, _mm256_loadu_si256};
-        let qp = query_phases.as_ptr().cast::<__m256i>();
-        (_mm256_loadu_si256(qp), _mm256_loadu_si256(qp.add(1)))
-    };
+    let (vq0, vq1) = unsafe { avx2_words64_to_vec64_with_uniform(&q, q_is_uniform) };
     let safe_dim = branchless_select_u32(head_dim > 0, head_dim, 128);
     let rsqrt_d = if safe_dim <= 256 {
         POPCOUNT_RSQRT_LUT_257_REF[safe_dim as usize]
@@ -5297,10 +5301,8 @@ pub fn modulate_attention_scores_by_bayesian_trails_64(
                     coherence_from_word_arrays_with_both_uniform_flags_64(&q, true, &kw, true)
                 } else {
                     unsafe {
-                        use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
-                        let kp = key_anchor_phases[idx].as_ptr().cast::<__m256i>();
-                        let vk0 = _mm256_loadu_si256(kp);
-                        let vk1 = _mm256_loadu_si256(kp.add(1));
+                        use core::arch::x86_64::_mm256_sub_epi8;
+                        let (vk0, vk1) = avx2_words64_to_vec64(&kw);
                         avx2_coherence_from_diff_vec64(
                             _mm256_sub_epi8(vq0, vk0),
                             _mm256_sub_epi8(vq1, vk1),
@@ -5308,11 +5310,10 @@ pub fn modulate_attention_scores_by_bayesian_trails_64(
                     }
                 }
             } else {
+                let kw = load_q7_words_64(&key_anchor_phases[idx]);
                 unsafe {
-                    use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
-                    let kp = key_anchor_phases[idx].as_ptr().cast::<__m256i>();
-                    let vk0 = _mm256_loadu_si256(kp);
-                    let vk1 = _mm256_loadu_si256(kp.add(1));
+                    use core::arch::x86_64::_mm256_sub_epi8;
+                    let (vk0, vk1) = avx2_words64_to_vec64(&kw);
                     avx2_coherence_from_diff_vec64(
                         _mm256_sub_epi8(vq0, vk0),
                         _mm256_sub_epi8(vq1, vk1),
@@ -7085,27 +7086,34 @@ pub fn sum_abs_and_sq_f32_simd8(slice: &[f32]) -> (f32, f32) {
             let mut sq_all = _mm256_setzero_ps();
             let mut i = 0usize;
             while i + 64 <= len {
-                let x0 = _mm256_loadu_ps(ptr.add(i));
-                let x1 = _mm256_loadu_ps(ptr.add(i + 8));
-                let s01 = _mm256_add_ps(_mm256_and_ps(x0, sign_mask), _mm256_and_ps(x1, sign_mask));
-                let q01 = _mm256_add_ps(_mm256_mul_ps(x0, x0), _mm256_mul_ps(x1, x1));
-                let x2 = _mm256_loadu_ps(ptr.add(i + 16));
-                let x3 = _mm256_loadu_ps(ptr.add(i + 24));
-                let s23 = _mm256_add_ps(_mm256_and_ps(x2, sign_mask), _mm256_and_ps(x3, sign_mask));
-                let q23 = _mm256_add_ps(_mm256_mul_ps(x2, x2), _mm256_mul_ps(x3, x3));
-                abs_all = _mm256_add_ps(abs_all, _mm256_add_ps(s01, s23));
-                sq_all = _mm256_add_ps(sq_all, _mm256_add_ps(q01, q23));
-
-                let x4 = _mm256_loadu_ps(ptr.add(i + 32));
-                let x5 = _mm256_loadu_ps(ptr.add(i + 40));
-                let s45 = _mm256_add_ps(_mm256_and_ps(x4, sign_mask), _mm256_and_ps(x5, sign_mask));
-                let q45 = _mm256_add_ps(_mm256_mul_ps(x4, x4), _mm256_mul_ps(x5, x5));
-                let x6 = _mm256_loadu_ps(ptr.add(i + 48));
-                let x7 = _mm256_loadu_ps(ptr.add(i + 56));
-                let s67 = _mm256_add_ps(_mm256_and_ps(x6, sign_mask), _mm256_and_ps(x7, sign_mask));
-                let q67 = _mm256_add_ps(_mm256_mul_ps(x6, x6), _mm256_mul_ps(x7, x7));
-                abs_all = _mm256_add_ps(abs_all, _mm256_add_ps(s45, s67));
-                sq_all = _mm256_add_ps(sq_all, _mm256_add_ps(q45, q67));
+                let a0 = _mm256_and_ps(_mm256_loadu_ps(ptr.add(i)), sign_mask);
+                let a1 = _mm256_and_ps(_mm256_loadu_ps(ptr.add(i + 8)), sign_mask);
+                abs_all = _mm256_add_ps(abs_all, _mm256_add_ps(a0, a1));
+                sq_all = _mm256_add_ps(
+                    sq_all,
+                    _mm256_add_ps(_mm256_mul_ps(a0, a0), _mm256_mul_ps(a1, a1)),
+                );
+                let a2 = _mm256_and_ps(_mm256_loadu_ps(ptr.add(i + 16)), sign_mask);
+                let a3 = _mm256_and_ps(_mm256_loadu_ps(ptr.add(i + 24)), sign_mask);
+                abs_all = _mm256_add_ps(abs_all, _mm256_add_ps(a2, a3));
+                sq_all = _mm256_add_ps(
+                    sq_all,
+                    _mm256_add_ps(_mm256_mul_ps(a2, a2), _mm256_mul_ps(a3, a3)),
+                );
+                let a4 = _mm256_and_ps(_mm256_loadu_ps(ptr.add(i + 32)), sign_mask);
+                let a5 = _mm256_and_ps(_mm256_loadu_ps(ptr.add(i + 40)), sign_mask);
+                abs_all = _mm256_add_ps(abs_all, _mm256_add_ps(a4, a5));
+                sq_all = _mm256_add_ps(
+                    sq_all,
+                    _mm256_add_ps(_mm256_mul_ps(a4, a4), _mm256_mul_ps(a5, a5)),
+                );
+                let a6 = _mm256_and_ps(_mm256_loadu_ps(ptr.add(i + 48)), sign_mask);
+                let a7 = _mm256_and_ps(_mm256_loadu_ps(ptr.add(i + 56)), sign_mask);
+                abs_all = _mm256_add_ps(abs_all, _mm256_add_ps(a6, a7));
+                sq_all = _mm256_add_ps(
+                    sq_all,
+                    _mm256_add_ps(_mm256_mul_ps(a6, a6), _mm256_mul_ps(a7, a7)),
+                );
                 i += 64;
             }
             let rem = len - i;
@@ -7441,44 +7449,32 @@ pub(crate) fn sum_sq_scaled_f32_simd8(slice: &[f32], scale: f32) -> f32 {
             while i + 64 <= len {
                 let v0 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i)), v_scale);
                 let v1 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 8)), v_scale);
+                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v0, v0));
+                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v1, v1));
                 let v2 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 16)), v_scale);
                 let v3 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 24)), v_scale);
-                sq0 = _mm256_add_ps(
-                    sq0,
-                    _mm256_add_ps(_mm256_mul_ps(v0, v0), _mm256_mul_ps(v1, v1)),
-                );
-                sq1 = _mm256_add_ps(
-                    sq1,
-                    _mm256_add_ps(_mm256_mul_ps(v2, v2), _mm256_mul_ps(v3, v3)),
-                );
+                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v2, v2));
+                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v3, v3));
                 let v4 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 32)), v_scale);
                 let v5 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 40)), v_scale);
+                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v4, v4));
+                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v5, v5));
                 let v6 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 48)), v_scale);
                 let v7 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 56)), v_scale);
-                sq0 = _mm256_add_ps(
-                    sq0,
-                    _mm256_add_ps(_mm256_mul_ps(v4, v4), _mm256_mul_ps(v5, v5)),
-                );
-                sq1 = _mm256_add_ps(
-                    sq1,
-                    _mm256_add_ps(_mm256_mul_ps(v6, v6), _mm256_mul_ps(v7, v7)),
-                );
+                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v6, v6));
+                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v7, v7));
                 i += 64;
             }
             let rem = len - i;
             if (rem & 32) != 0 {
                 let v0 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i)), v_scale);
                 let v1 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 8)), v_scale);
+                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v0, v0));
+                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v1, v1));
                 let v2 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 16)), v_scale);
                 let v3 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 24)), v_scale);
-                sq0 = _mm256_add_ps(
-                    sq0,
-                    _mm256_add_ps(_mm256_mul_ps(v0, v0), _mm256_mul_ps(v1, v1)),
-                );
-                sq1 = _mm256_add_ps(
-                    sq1,
-                    _mm256_add_ps(_mm256_mul_ps(v2, v2), _mm256_mul_ps(v3, v3)),
-                );
+                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v2, v2));
+                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v3, v3));
                 i += 32;
             }
             if (rem & 16) != 0 {
@@ -8158,17 +8154,16 @@ pub(crate) fn procrustes_sincos_f32_simd(src_head: &[f32], tgt_head: &[f32]) -> 
         let ps = src_head.as_ptr();
         let pt = tgt_head.as_ptr();
         // SAFETY: `target_feature = "avx2"` is enabled, and `ps`, `pt` are valid for `len` elements.
-        // Delegates 8-float chunks to `avx2_procrustes_head_vec256` (`<= 5` live YMMs, `0` Windows x64 spills).
+        // Delegates 8-float chunks to `avx2_procrustes_head_rc128` (`<= 6` live YMMs, `0` Windows x64 spills).
         unsafe {
             let vec_len = len & !7;
-            let (cos_v, crs_v) = avx2_procrustes_head_vec256(ps, pt, vec_len);
-            let mut sum_cos = avx2_hsum_ps(cos_v);
-            let crs128 = _mm_add_ps(
-                _mm256_castps256_ps128(crs_v),
-                _mm256_extractf128_ps::<1>(crs_v),
+            let rc = avx2_procrustes_head_rc128(ps, pt, vec_len);
+            let sc = _mm_addsub_ps(
+                _mm_shuffle_ps::<0x88>(rc, rc),
+                _mm_shuffle_ps::<0xDD>(rc, rc),
             );
-            let crs64 = _mm_add_ps(crs128, _mm_movehl_ps(crs128, crs128));
-            let mut sum_sin = _mm_cvtss_f32(_mm_sub_ps(crs64, _mm_shuffle_ps::<0x55>(crs64, crs64)));
+            let mut sum_sin = _mm_cvtss_f32(sc);
+            let mut sum_cos = _mm_cvtss_f32(_mm_shuffle_ps::<0x55>(sc, sc));
             let mut i = vec_len;
             while i + 2 <= len {
                 let (ux, uy) = (*ps.add(i), *ps.add(i + 1));
@@ -8197,108 +8192,46 @@ pub(crate) fn procrustes_sincos_f32_simd(src_head: &[f32], tgt_head: &[f32]) -> 
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
-unsafe fn avx2_procrustes_head_vec256(
+unsafe fn avx2_procrustes_head_rc128(
     ps: *const f32,
     pt: *const f32,
     head_dim: usize,
-) -> (core::arch::x86_64::__m256, core::arch::x86_64::__m256) {
+) -> core::arch::x86_64::__m128 {
     // SAFETY: Caller guarantees `target_feature = "avx2"`, `(head_dim & 7) == 0`, and valid pointers.
-    // 32-float-staged loop with 2 accumulators (`cos0`, `crs0`) keeps peak live YMMs <= 5
-    // (`ymm0..ymm4`, zero Windows x64 `xmm6..xmm15` stack saves) and halves loop branch overhead.
+    // Dual-accumulator `(cos0, crs0, cos1, crs1)` halves the 32-float FP add latency chain (`2x` ILP)
+    // while staging 1 `(a_k, b_k)` vector pair at a time (`<= 6` live YMMs `ymm0..ymm5`, `0` Windows x64
+    // `xmm6..xmm15` stack saves), then folds to `[R_even, R_odd, C_even, C_odd]` in a single XMM register.
     unsafe {
-        if head_dim == 64 {
-            let a0 = _mm256_loadu_ps(ps);
-            let b0 = _mm256_loadu_ps(pt);
-            let a1 = _mm256_loadu_ps(ps.add(8));
-            let b1 = _mm256_loadu_ps(pt.add(8));
-            let cos01 = _mm256_add_ps(_mm256_mul_ps(a0, b0), _mm256_mul_ps(a1, b1));
-            let crs01 = _mm256_add_ps(
-                _mm256_mul_ps(a0, _mm256_permute_ps::<0xB1>(b0)),
-                _mm256_mul_ps(a1, _mm256_permute_ps::<0xB1>(b1)),
-            );
-            let a2 = _mm256_loadu_ps(ps.add(16));
-            let b2 = _mm256_loadu_ps(pt.add(16));
-            let a3 = _mm256_loadu_ps(ps.add(24));
-            let b3 = _mm256_loadu_ps(pt.add(24));
-            let mut cos0 = _mm256_add_ps(
-                cos01,
-                _mm256_add_ps(_mm256_mul_ps(a2, b2), _mm256_mul_ps(a3, b3)),
-            );
-            let mut crs0 = _mm256_add_ps(
-                crs01,
-                _mm256_add_ps(
-                    _mm256_mul_ps(a2, _mm256_permute_ps::<0xB1>(b2)),
-                    _mm256_mul_ps(a3, _mm256_permute_ps::<0xB1>(b3)),
-                ),
-            );
-            let a4 = _mm256_loadu_ps(ps.add(32));
-            let b4 = _mm256_loadu_ps(pt.add(32));
-            let a5 = _mm256_loadu_ps(ps.add(40));
-            let b5 = _mm256_loadu_ps(pt.add(40));
-            cos0 = _mm256_add_ps(
-                cos0,
-                _mm256_add_ps(_mm256_mul_ps(a4, b4), _mm256_mul_ps(a5, b5)),
-            );
-            crs0 = _mm256_add_ps(
-                crs0,
-                _mm256_add_ps(
-                    _mm256_mul_ps(a4, _mm256_permute_ps::<0xB1>(b4)),
-                    _mm256_mul_ps(a5, _mm256_permute_ps::<0xB1>(b5)),
-                ),
-            );
-            let a6 = _mm256_loadu_ps(ps.add(48));
-            let b6 = _mm256_loadu_ps(pt.add(48));
-            let a7 = _mm256_loadu_ps(ps.add(56));
-            let b7 = _mm256_loadu_ps(pt.add(56));
-            cos0 = _mm256_add_ps(
-                cos0,
-                _mm256_add_ps(_mm256_mul_ps(a6, b6), _mm256_mul_ps(a7, b7)),
-            );
-            crs0 = _mm256_add_ps(
-                crs0,
-                _mm256_add_ps(
-                    _mm256_mul_ps(a6, _mm256_permute_ps::<0xB1>(b6)),
-                    _mm256_mul_ps(a7, _mm256_permute_ps::<0xB1>(b7)),
-                ),
-            );
-            return (cos0, crs0);
-        }
+        use core::arch::x86_64::{
+            _mm256_castps256_ps128, _mm256_extractf128_ps, _mm_add_ps, _mm_movehl_ps,
+            _mm_movelh_ps,
+        };
         let mut cos0 = _mm256_setzero_ps();
         let mut crs0 = _mm256_setzero_ps();
+        let mut cos1 = _mm256_setzero_ps();
+        let mut crs1 = _mm256_setzero_ps();
         let mut i = 0usize;
         while i + 32 <= head_dim {
             let a0 = _mm256_loadu_ps(ps.add(i));
             let b0 = _mm256_loadu_ps(pt.add(i));
+            cos0 = _mm256_add_ps(cos0, _mm256_mul_ps(a0, b0));
+            crs0 = _mm256_add_ps(crs0, _mm256_mul_ps(a0, _mm256_permute_ps::<0xB1>(b0)));
             let a1 = _mm256_loadu_ps(ps.add(i + 8));
             let b1 = _mm256_loadu_ps(pt.add(i + 8));
-            cos0 = _mm256_add_ps(
-                cos0,
-                _mm256_add_ps(_mm256_mul_ps(a0, b0), _mm256_mul_ps(a1, b1)),
-            );
-            crs0 = _mm256_add_ps(
-                crs0,
-                _mm256_add_ps(
-                    _mm256_mul_ps(a0, _mm256_permute_ps::<0xB1>(b0)),
-                    _mm256_mul_ps(a1, _mm256_permute_ps::<0xB1>(b1)),
-                ),
-            );
+            cos1 = _mm256_add_ps(cos1, _mm256_mul_ps(a1, b1));
+            crs1 = _mm256_add_ps(crs1, _mm256_mul_ps(a1, _mm256_permute_ps::<0xB1>(b1)));
             let a2 = _mm256_loadu_ps(ps.add(i + 16));
             let b2 = _mm256_loadu_ps(pt.add(i + 16));
+            cos0 = _mm256_add_ps(cos0, _mm256_mul_ps(a2, b2));
+            crs0 = _mm256_add_ps(crs0, _mm256_mul_ps(a2, _mm256_permute_ps::<0xB1>(b2)));
             let a3 = _mm256_loadu_ps(ps.add(i + 24));
             let b3 = _mm256_loadu_ps(pt.add(i + 24));
-            cos0 = _mm256_add_ps(
-                cos0,
-                _mm256_add_ps(_mm256_mul_ps(a2, b2), _mm256_mul_ps(a3, b3)),
-            );
-            crs0 = _mm256_add_ps(
-                crs0,
-                _mm256_add_ps(
-                    _mm256_mul_ps(a2, _mm256_permute_ps::<0xB1>(b2)),
-                    _mm256_mul_ps(a3, _mm256_permute_ps::<0xB1>(b3)),
-                ),
-            );
+            cos1 = _mm256_add_ps(cos1, _mm256_mul_ps(a3, b3));
+            crs1 = _mm256_add_ps(crs1, _mm256_mul_ps(a3, _mm256_permute_ps::<0xB1>(b3)));
             i += 32;
         }
+        cos0 = _mm256_add_ps(cos0, cos1);
+        crs0 = _mm256_add_ps(crs0, crs1);
         while i + 8 <= head_dim {
             let s0 = _mm256_loadu_ps(ps.add(i));
             let t0 = _mm256_loadu_ps(pt.add(i));
@@ -8306,7 +8239,15 @@ unsafe fn avx2_procrustes_head_vec256(
             crs0 = _mm256_add_ps(crs0, _mm256_mul_ps(s0, _mm256_permute_ps::<0xB1>(t0)));
             i += 8;
         }
-        (cos0, crs0)
+        let r4 = _mm_add_ps(
+            _mm256_castps256_ps128(crs0),
+            _mm256_extractf128_ps::<1>(crs0),
+        );
+        let c4 = _mm_add_ps(
+            _mm256_castps256_ps128(cos0),
+            _mm256_extractf128_ps::<1>(cos0),
+        );
+        _mm_add_ps(_mm_movelh_ps(r4, c4), _mm_movehl_ps(c4, r4))
     }
 }
 
@@ -8319,40 +8260,60 @@ unsafe fn avx2_procrustes_cell8_sincos_vec256(
     head_dim: usize,
 ) -> (core::arch::x86_64::__m256, core::arch::x86_64::__m256) {
     // SAFETY: Caller guarantees `target_feature = "avx2"` and valid pointer ranges for 8 heads.
-    // Extracts each 2-head pair's `[cos(2p), cos(2p+1)]` (low 64 bits) and `[sin(2p), sin(2p+1)]`
-    // (high 64 bits) directly into `u64` GPRs (`cos_w`, `sin_w`) via `vmovq` + `vpextrq` and
-    // reassembles `(vy, vx)` via `avx2_u64x8_to_vec64`, eliminating 8-to-1 scalar-store-to-YMM-load
-    // Store-to-Load Forwarding (STLF) stalls while holding `0` XMM/YMM registers live across pairs
-    // (`<= 5` live YMMs, `0` Windows x64 `xmm6..xmm15` stack spills).
+    // Packs `[sin0..sin3]` and `[cos0..cos3]` directly in the XMM FP domain via `_mm_shuffle_ps::<0x88/0xDD>`,
+    // stages the lower 128-bit half via exact-width 128-bit `_mm_storeu_ps` -> `_mm_loadu_ps` (`0` STLF
+    // stalls, `0` XMM<->GPR domain transfers), and merges the upper 4 heads via `_mm256_insertf128_ps::<1>`.
     unsafe {
         use core::arch::x86_64::{
-            _mm256_castps256_ps128, _mm256_castsi256_ps, _mm256_extractf128_ps, _mm256_hadd_ps,
-            _mm256_hsub_ps, _mm_add_ps, _mm_castps_si128, _mm_cvtsi128_si64, _mm_extract_epi64,
+            _mm256_castps128_ps256, _mm256_insertf128_ps, _mm_addsub_ps, _mm_loadu_ps,
+            _mm_shuffle_ps, _mm_storeu_ps,
         };
-        let mut cos_w = [0u64; 4];
-        let mut sin_w = [0u64; 4];
-        let mut ps = ps_base.add(off0);
-        let mut pt = pt_base.add(off0);
+        let mut sin_lo_buf = [0.0_f32; 4];
+        let mut cos_lo_buf = [0.0_f32; 4];
+        let ps = ps_base.add(off0);
+        let pt = pt_base.add(off0);
         let step2 = head_dim * 2;
-        let mut pair = 0usize;
-        while pair < 4 {
-            let (c0, r0) = avx2_procrustes_head_vec256(ps, pt, head_dim);
-            let (c1, r1) = avx2_procrustes_head_vec256(ps.add(head_dim), pt.add(head_dim), head_dim);
-            let hcr01 = _mm256_hadd_ps(_mm256_hadd_ps(c0, c1), _mm256_hsub_ps(r0, r1));
-            let s01 = _mm_castps_si128(_mm_add_ps(
-                _mm256_castps256_ps128(hcr01),
-                _mm256_extractf128_ps::<1>(hcr01),
-            ));
-            cos_w[pair] = _mm_cvtsi128_si64(s01) as u64;
-            sin_w[pair] = _mm_extract_epi64::<1>(s01) as u64;
-            ps = ps.add(step2);
-            pt = pt.add(step2);
-            pair += 1;
-        }
-        let (v_sin_i, v_cos_i) = avx2_u64x8_to_vec64(
-            sin_w[0], sin_w[1], sin_w[2], sin_w[3], cos_w[0], cos_w[1], cos_w[2], cos_w[3],
+        let step4 = head_dim * 4;
+
+        let rc0 = avx2_procrustes_head_rc128(ps, pt, head_dim);
+        let rc1 = avx2_procrustes_head_rc128(ps.add(head_dim), pt.add(head_dim), head_dim);
+        let sc01 = _mm_addsub_ps(
+            _mm_shuffle_ps::<0x88>(rc0, rc1),
+            _mm_shuffle_ps::<0xDD>(rc0, rc1),
         );
-        (_mm256_castsi256_ps(v_sin_i), _mm256_castsi256_ps(v_cos_i))
+        let ps2 = ps.add(step2);
+        let pt2 = pt.add(step2);
+        let rc2 = avx2_procrustes_head_rc128(ps2, pt2, head_dim);
+        let rc3 = avx2_procrustes_head_rc128(ps2.add(head_dim), pt2.add(head_dim), head_dim);
+        let sc23 = _mm_addsub_ps(
+            _mm_shuffle_ps::<0x88>(rc2, rc3),
+            _mm_shuffle_ps::<0xDD>(rc2, rc3),
+        );
+        _mm_storeu_ps(sin_lo_buf.as_mut_ptr(), _mm_shuffle_ps::<0x88>(sc01, sc23));
+        _mm_storeu_ps(cos_lo_buf.as_mut_ptr(), _mm_shuffle_ps::<0xDD>(sc01, sc23));
+
+        let ps4 = ps.add(step4);
+        let pt4 = pt.add(step4);
+        let rc4 = avx2_procrustes_head_rc128(ps4, pt4, head_dim);
+        let rc5 = avx2_procrustes_head_rc128(ps4.add(head_dim), pt4.add(head_dim), head_dim);
+        let sc45 = _mm_addsub_ps(
+            _mm_shuffle_ps::<0x88>(rc4, rc5),
+            _mm_shuffle_ps::<0xDD>(rc4, rc5),
+        );
+        let ps6 = ps4.add(step2);
+        let pt6 = pt4.add(step2);
+        let rc6 = avx2_procrustes_head_rc128(ps6, pt6, head_dim);
+        let rc7 = avx2_procrustes_head_rc128(ps6.add(head_dim), pt6.add(head_dim), head_dim);
+        let sc67 = _mm_addsub_ps(
+            _mm_shuffle_ps::<0x88>(rc6, rc7),
+            _mm_shuffle_ps::<0xDD>(rc6, rc7),
+        );
+        let sin_hi = _mm_shuffle_ps::<0x88>(sc45, sc67);
+        let cos_hi = _mm_shuffle_ps::<0xDD>(sc45, sc67);
+        (
+            _mm256_insertf128_ps::<1>(_mm256_castps128_ps256(_mm_loadu_ps(sin_lo_buf.as_ptr())), sin_hi),
+            _mm256_insertf128_ps::<1>(_mm256_castps128_ps256(_mm_loadu_ps(cos_lo_buf.as_ptr())), cos_hi),
+        )
     }
 }
 
