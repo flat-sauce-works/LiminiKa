@@ -1121,12 +1121,11 @@ impl ActionHubEngine {
                 .insert_repulsive_pattern_words_weighted(&steer_words, 1);
         }
 
-        let (stored_slot_idx, updated_rho) =
-            self.evaporate_and_prepare_slot_without_copy(
-                trail_inout,
-                best_coh,
-                contradiction_repulsed,
-            );
+        let (stored_slot_idx, updated_rho) = self.evaporate_and_prepare_slot_without_copy(
+            trail_inout,
+            best_coh,
+            contradiction_repulsed,
+        );
         let (decision, mode_flags, target_slot, extra_flags) =
             self.thresholds.select_action_decision(
                 updated_rho,

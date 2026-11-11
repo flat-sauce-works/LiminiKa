@@ -848,8 +848,9 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
                         *trail_phase_words_mut(dst_trail) = bridged_w;
                         let step_u8 = branchless_rad_to_qdps_step_u8(min_step_rad);
                         if step_u8 > 1 {
-                            let (vf0, vf1) =
-                                crate::traits::branchless::avx2_qdps_filter_vec64(vr0, vr1, step_u8);
+                            let (vf0, vf1) = crate::traits::branchless::avx2_qdps_filter_vec64(
+                                vr0, vr1, step_u8,
+                            );
                             crate::traits::branchless::avx2_vec64_to_words64(vf0, vf1)
                         } else {
                             bridged_w

@@ -3078,7 +3078,11 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
         for (h, slot) in extreme_spikes.iter_mut().enumerate() {
             let mag = 127i8.saturating_sub((h & 7) as i8);
             *slot = if (h & 1) == 0 {
-                if (h & 7) == 0 { -128 } else { -mag }
+                if (h & 7) == 0 {
+                    -128
+                } else {
+                    -mag
+                }
             } else {
                 mag
             };
