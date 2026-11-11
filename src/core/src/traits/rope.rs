@@ -3448,16 +3448,15 @@ fn steer_pair_slice_from_eff_words_core(
                     // rotation shares 1 LUT lookup + broadcast per head across Q and K and separates `store(qp)` from
                     // `load(kp)` by 24 AVX2 instructions at `qp.add(128)` (`0` 4K LSQ false aliasing).
                     unsafe {
-                        let p_ptr = eff_words.as_ptr().cast::<u8>();
                         let mut qp = q_slice.as_mut_ptr().add(96);
                         let mut kp = k_slice.as_mut_ptr().add(96);
                         let mut h = 0usize;
                         while h + 2 <= num_heads {
-                            let wb16 = p_ptr.add(h).cast::<u16>().read_unaligned();
+                            let wb16 = (eff_words[h >> 3] >> ((h & 6) << 3)) as u32;
                             let (s0, c0) = lut[(wb16 as u8) as usize];
                             let vc0 = _mm256_set1_ps(c0);
                             let vs0 = _mm256_set1_ps(s0);
-                            let (s1, c1) = lut[(wb16 >> 8) as usize];
+                            let (s1, c1) = lut[((wb16 >> 8) as u8) as usize];
                             let vc1 = _mm256_set1_ps(c1);
                             let vs1 = _mm256_set1_ps(s1);
                             avx2_rotate_so2_block32(qp, vc0, vs0);
@@ -3469,7 +3468,8 @@ fn steer_pair_slice_from_eff_words_core(
                             h += 2;
                         }
                         while h < num_heads {
-                            let (sin_t, cos_t) = lut[*p_ptr.add(h) as usize];
+                            let b = (eff_words[h >> 3] >> ((h & 7) << 3)) as u8;
+                            let (sin_t, cos_t) = lut[b as usize];
                             let vc = _mm256_set1_ps(cos_t);
                             let vs = _mm256_set1_ps(sin_t);
                             avx2_rotate_so2_block32(qp, vc, vs);
@@ -6209,8 +6209,38 @@ pub trait EntropyGatedPhaseLookup: BranchlessKernel {
                 }
                 let w_b = clean_a * rad_gate_scale;
                 let row = &b_slice[b_idx * num_heads..(b_idx + 1) * num_heads];
-                for (acc_h, &basis_q7) in acc_rad_scaled[..num_heads].iter_mut().zip(row.iter()) {
-                    *acc_h += w_b * f32::from(basis_q7);
+                #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+                {
+                    // SAFETY: `target_feature = "avx2"` is enabled; `acc_rad_scaled` and `row` have `>= num_heads` elements.
+                    unsafe {
+                        use core::arch::x86_64::{
+                            __m128i, _mm256_add_ps, _mm256_cvtepi32_ps, _mm256_cvtepi8_epi32,
+                            _mm256_loadu_ps, _mm256_mul_ps, _mm256_set1_ps, _mm256_storeu_ps,
+                            _mm_loadl_epi64,
+                        };
+                        let vw = _mm256_set1_ps(w_b);
+                        let ap = acc_rad_scaled.as_mut_ptr();
+                        let rp = row.as_ptr();
+                        let mut h = 0usize;
+                        while h + 8 <= num_heads {
+                            let q8 = _mm_loadl_epi64(rp.add(h).cast::<__m128i>());
+                            let qf = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(q8));
+                            let cur = _mm256_loadu_ps(ap.add(h));
+                            _mm256_storeu_ps(ap.add(h), _mm256_add_ps(cur, _mm256_mul_ps(vw, qf)));
+                            h += 8;
+                        }
+                        while h < num_heads {
+                            *ap.add(h) += w_b * f32::from(*rp.add(h));
+                            h += 1;
+                        }
+                    }
+                }
+                #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+                {
+                    for (acc_h, &basis_q7) in acc_rad_scaled[..num_heads].iter_mut().zip(row.iter())
+                    {
+                        *acc_h += w_b * f32::from(basis_q7);
+                    }
                 }
             }
             for (out_q7, &rad) in out_slice.iter_mut().zip(acc_rad_scaled[..num_heads].iter()) {
@@ -7031,25 +7061,42 @@ fn rotate_ripa_lut_words_slice_nonuniform(
         let ptr = t_slice.as_mut_ptr();
         let p_ptr = base_ripa_words.as_ptr().cast::<u8>();
         if head_dim == 128 {
+            #[inline(always)]
+            unsafe fn rot4_128(hp: *mut f32, wb32: u32, lut: &[(f32, f32); 256]) {
+                // SAFETY: Caller guarantees `hp` is valid for 4 heads (`512` floats) and AVX2 is enabled.
+                unsafe {
+                    use core::arch::x86_64::_mm256_set1_ps;
+                    let (s0, c0) = lut[(wb32 as u8) as usize];
+                    avx2_rotate_so2_block32(hp, _mm256_set1_ps(c0), _mm256_set1_ps(s0));
+                    let (s1, c1) = lut[((wb32 >> 8) as u8) as usize];
+                    avx2_rotate_so2_block32(hp.add(128), _mm256_set1_ps(c1), _mm256_set1_ps(s1));
+                    let (s2, c2) = lut[((wb32 >> 16) as u8) as usize];
+                    avx2_rotate_so2_block32(hp.add(256), _mm256_set1_ps(c2), _mm256_set1_ps(s2));
+                    let (s3, c3) = lut[(wb32 >> 24) as usize];
+                    avx2_rotate_so2_block32(hp.add(384), _mm256_set1_ps(c3), _mm256_set1_ps(s3));
+                }
+            }
             // SAFETY: `t_slice` has length `limit * 128` (`rot_dim == 32`, `upper_off == 96`), and AVX2 is enabled.
+            // Stepping by 8 heads (`w64 = base_ripa_words[h >> 3]`) consumes both 32-bit halves in GPRs,
+            // preventing LLVM `ReduceLoadWidth` from emitting offset-`+4` 32-bit loads that trigger STLF stalls.
             unsafe {
                 let mut hp = ptr.add(96);
                 let mut h = 0usize;
-                while h + 4 <= limit {
-                    let wb32 = (base_ripa_words[h >> 3] >> ((h & 4) << 3)) as u32;
-                    let (s0, c0) = self_lut[(wb32 as u8) as usize];
-                    avx2_rotate_so2_block32(hp, _mm256_set1_ps(c0), _mm256_set1_ps(s0));
-                    let (s1, c1) = self_lut[((wb32 >> 8) as u8) as usize];
-                    avx2_rotate_so2_block32(hp.add(128), _mm256_set1_ps(c1), _mm256_set1_ps(s1));
-                    let (s2, c2) = self_lut[((wb32 >> 16) as u8) as usize];
-                    avx2_rotate_so2_block32(hp.add(256), _mm256_set1_ps(c2), _mm256_set1_ps(s2));
-                    let (s3, c3) = self_lut[(wb32 >> 24) as usize];
-                    avx2_rotate_so2_block32(hp.add(384), _mm256_set1_ps(c3), _mm256_set1_ps(s3));
+                while h + 8 <= limit {
+                    let w64 = base_ripa_words[h >> 3];
+                    rot4_128(hp, w64 as u32, self_lut);
+                    rot4_128(hp.add(512), (w64 >> 32) as u32, self_lut);
+                    hp = hp.add(1024);
+                    h += 8;
+                }
+                if h + 4 <= limit {
+                    rot4_128(hp, base_ripa_words[h >> 3] as u32, self_lut);
                     hp = hp.add(512);
                     h += 4;
                 }
                 while h < limit {
-                    let (sin_c, cos_c) = self_lut[*p_ptr.add(h) as usize];
+                    let b = (base_ripa_words[h >> 3] >> ((h & 7) << 3)) as u8;
+                    let (sin_c, cos_c) = self_lut[b as usize];
                     avx2_rotate_so2_block32(hp, _mm256_set1_ps(cos_c), _mm256_set1_ps(sin_c));
                     hp = hp.add(128);
                     h += 1;
@@ -7058,40 +7105,69 @@ fn rotate_ripa_lut_words_slice_nonuniform(
             return;
         }
         if rot_dim == 32 {
+            #[inline(always)]
+            unsafe fn rot4_generic32(
+                hp: *mut f32,
+                wb32: u32,
+                head_dim: usize,
+                step2: usize,
+                step3: usize,
+                lut: &[(f32, f32); 256],
+            ) {
+                // SAFETY: Caller guarantees `hp` is valid for 4 heads and AVX2 is enabled.
+                unsafe {
+                    use core::arch::x86_64::_mm256_set1_ps;
+                    let (s0, c0) = lut[(wb32 as u8) as usize];
+                    avx2_rotate_so2_block32(hp, _mm256_set1_ps(c0), _mm256_set1_ps(s0));
+                    let (s1, c1) = lut[((wb32 >> 8) as u8) as usize];
+                    avx2_rotate_so2_block32(
+                        hp.add(head_dim),
+                        _mm256_set1_ps(c1),
+                        _mm256_set1_ps(s1),
+                    );
+                    let (s2, c2) = lut[((wb32 >> 16) as u8) as usize];
+                    avx2_rotate_so2_block32(hp.add(step2), _mm256_set1_ps(c2), _mm256_set1_ps(s2));
+                    let (s3, c3) = lut[(wb32 >> 24) as usize];
+                    avx2_rotate_so2_block32(hp.add(step3), _mm256_set1_ps(c3), _mm256_set1_ps(s3));
+                }
+            }
             // SAFETY: `t_slice` has length `limit * head_dim`, `rot_dim == 32`, and AVX2 is enabled.
             unsafe {
                 let mut hp = ptr.add(upper_off);
                 let step2 = head_dim * 2;
                 let step3 = head_dim * 3;
                 let step4 = head_dim * 4;
+                let step8 = head_dim * 8;
                 let mut h = 0usize;
-                while h + 4 <= limit {
-                    let wb32 = (base_ripa_words[h >> 3] >> ((h & 4) << 3)) as u32;
-                    let (s0, c0) = self_lut[(wb32 as u8) as usize];
-                    avx2_rotate_so2_block32(hp, _mm256_set1_ps(c0), _mm256_set1_ps(s0));
-                    let (s1, c1) = self_lut[((wb32 >> 8) as u8) as usize];
-                    avx2_rotate_so2_block32(
-                        hp.add(head_dim),
-                        _mm256_set1_ps(c1),
-                        _mm256_set1_ps(s1),
+                while h + 8 <= limit {
+                    let w64 = base_ripa_words[h >> 3];
+                    rot4_generic32(hp, w64 as u32, head_dim, step2, step3, self_lut);
+                    rot4_generic32(
+                        hp.add(step4),
+                        (w64 >> 32) as u32,
+                        head_dim,
+                        step2,
+                        step3,
+                        self_lut,
                     );
-                    let (s2, c2) = self_lut[((wb32 >> 16) as u8) as usize];
-                    avx2_rotate_so2_block32(
-                        hp.add(step2),
-                        _mm256_set1_ps(c2),
-                        _mm256_set1_ps(s2),
-                    );
-                    let (s3, c3) = self_lut[(wb32 >> 24) as usize];
-                    avx2_rotate_so2_block32(
-                        hp.add(step3),
-                        _mm256_set1_ps(c3),
-                        _mm256_set1_ps(s3),
+                    hp = hp.add(step8);
+                    h += 8;
+                }
+                if h + 4 <= limit {
+                    rot4_generic32(
+                        hp,
+                        base_ripa_words[h >> 3] as u32,
+                        head_dim,
+                        step2,
+                        step3,
+                        self_lut,
                     );
                     hp = hp.add(step4);
                     h += 4;
                 }
                 while h < limit {
-                    let (sin_c, cos_c) = self_lut[*p_ptr.add(h) as usize];
+                    let b = (base_ripa_words[h >> 3] >> ((h & 7) << 3)) as u8;
+                    let (sin_c, cos_c) = self_lut[b as usize];
                     avx2_rotate_so2_block32(
                         hp,
                         _mm256_set1_ps(cos_c),
@@ -7114,7 +7190,7 @@ fn rotate_ripa_lut_words_slice_nonuniform(
                 let step2 = head_dim * 2;
                 let mut h = 0usize;
                 while h + 2 <= limit {
-                    let wb16 = u32::from(p_ptr.add(h).cast::<u16>().read_unaligned());
+                    let wb16 = (base_ripa_words[h >> 3] >> ((h & 6) << 3)) as u32;
                     let (s0, c0) = self_lut[(wb16 as u8) as usize];
                     let vc0 = _mm256_set1_ps(c0);
                     let vs0 = _mm256_set1_ps(s0);
@@ -7362,57 +7438,20 @@ fn rotate_fused_ripa_and_pspm_eff_words_core(
                     | ((base_ripa_words[6] ^ pspm_eff_words[6])
                         | (base_ripa_words[7] ^ pspm_eff_words[7])))
                     == 0;
-                // SAFETY: `t_slice` has length `limit * head_dim`, `rot_dim == 32`, and AVX2 is enabled.
-                unsafe {
-                    let mut hp = ptr.add(upper_off);
-                    let step2 = head_dim * 2;
-                    let step3 = head_dim * 3;
-                    let step4 = head_dim * 4;
-                    let mut h = 0usize;
-                    if words_eq {
-                        while h + 4 <= limit {
-                            let wb32 = (base_ripa_words[h >> 3] >> ((h & 4) << 3)) as u32;
-                            let (s0, c0) = self_lut[(wb32 as u8) as usize];
-                            avx2_rotate_so2_block32(hp, _mm256_set1_ps(c0), _mm256_set1_ps(s0));
-                            let (s1, c1) = self_lut[((wb32 >> 8) as u8) as usize];
-                            avx2_rotate_so2_block32(
-                                hp.add(head_dim),
-                                _mm256_set1_ps(c1),
-                                _mm256_set1_ps(s1),
-                            );
-                            let (s2, c2) = self_lut[((wb32 >> 16) as u8) as usize];
-                            avx2_rotate_so2_block32(
-                                hp.add(step2),
-                                _mm256_set1_ps(c2),
-                                _mm256_set1_ps(s2),
-                            );
-                            let (s3, c3) = self_lut[(wb32 >> 24) as usize];
-                            avx2_rotate_so2_block32(
-                                hp.add(step3),
-                                _mm256_set1_ps(c3),
-                                _mm256_set1_ps(s3),
-                            );
-                            hp = hp.add(step4);
-                            h += 4;
-                        }
-                        while h < limit {
-                            let (sin_c, cos_c) =
-                                self_lut[((base_ripa_words[h >> 3] >> ((h & 7) << 3)) as u8) as usize];
-                            avx2_rotate_so2_block32(
-                                hp,
-                                _mm256_set1_ps(cos_c),
-                                _mm256_set1_ps(sin_c),
-                            );
-                            hp = hp.add(head_dim);
-                            h += 1;
-                        }
-                        return;
-                    }
-                    while h + 4 <= limit {
-                        let sh32 = (h & 4) << 3;
-                        let w_idx = h >> 3;
-                        let wb32 = (base_ripa_words[w_idx] >> sh32) as u32;
-                        let ws32 = (pspm_eff_words[w_idx] >> sh32) as u32;
+                #[inline(always)]
+                unsafe fn rot4_fused32(
+                    hp: *mut f32,
+                    wb32: u32,
+                    ws32: u32,
+                    head_dim: usize,
+                    step2: usize,
+                    step3: usize,
+                    lut: &[(f32, f32); 256],
+                    self_lut: &[(f32, f32); 256],
+                ) {
+                    // SAFETY: Caller guarantees `hp` is valid for 4 heads and AVX2 is enabled.
+                    unsafe {
+                        use core::arch::x86_64::_mm256_set1_ps;
                         if wb32 == ws32 {
                             let (s0, c0) = self_lut[(wb32 as u8) as usize];
                             avx2_rotate_so2_block32(hp, _mm256_set1_ps(c0), _mm256_set1_ps(s0));
@@ -7434,9 +7473,7 @@ fn rotate_fused_ripa_and_pspm_eff_words_core(
                                 _mm256_set1_ps(c3),
                                 _mm256_set1_ps(s3),
                             );
-                            hp = hp.add(step4);
-                            h += 4;
-                            continue;
+                            return;
                         }
                         let (sb0, cb0) = lut[(wb32 as u8) as usize];
                         let (sp0, cp0) = lut[(ws32 as u8) as usize];
@@ -7465,6 +7502,95 @@ fn rotate_fused_ripa_and_pspm_eff_words_core(
                             hp.add(step3),
                             _mm256_set1_ps(cb3 * cp3 - sb3 * sp3),
                             _mm256_set1_ps(sb3 * cp3 + cb3 * sp3),
+                        );
+                    }
+                }
+                // SAFETY: `t_slice` has length `limit * head_dim`, `rot_dim == 32`, and AVX2 is enabled.
+                // Stepping by 8 heads (`wb64 = base_ripa_words[h >> 3]`, `ws64 = pspm_eff_words[h >> 3]`)
+                // consumes both 32-bit halves in GPRs, eliminating offset-`+4` 32-bit STLF stalls.
+                unsafe {
+                    let mut hp = ptr.add(upper_off);
+                    let step2 = head_dim * 2;
+                    let step3 = head_dim * 3;
+                    let step4 = head_dim * 4;
+                    let step8 = head_dim * 8;
+                    let mut h = 0usize;
+                    if words_eq {
+                        while h + 8 <= limit {
+                            let w64 = base_ripa_words[h >> 3];
+                            let lo = w64 as u32;
+                            let hi = (w64 >> 32) as u32;
+                            rot4_fused32(hp, lo, lo, head_dim, step2, step3, lut, self_lut);
+                            rot4_fused32(
+                                hp.add(step4),
+                                hi,
+                                hi,
+                                head_dim,
+                                step2,
+                                step3,
+                                lut,
+                                self_lut,
+                            );
+                            hp = hp.add(step8);
+                            h += 8;
+                        }
+                        if h + 4 <= limit {
+                            let wb32 = base_ripa_words[h >> 3] as u32;
+                            rot4_fused32(hp, wb32, wb32, head_dim, step2, step3, lut, self_lut);
+                            hp = hp.add(step4);
+                            h += 4;
+                        }
+                        while h < limit {
+                            let b = (base_ripa_words[h >> 3] >> ((h & 7) << 3)) as u8;
+                            let (sin_c, cos_c) = self_lut[b as usize];
+                            avx2_rotate_so2_block32(
+                                hp,
+                                _mm256_set1_ps(cos_c),
+                                _mm256_set1_ps(sin_c),
+                            );
+                            hp = hp.add(head_dim);
+                            h += 1;
+                        }
+                        return;
+                    }
+                    while h + 8 <= limit {
+                        let w_idx = h >> 3;
+                        let wb64 = base_ripa_words[w_idx];
+                        let ws64 = pspm_eff_words[w_idx];
+                        rot4_fused32(
+                            hp,
+                            wb64 as u32,
+                            ws64 as u32,
+                            head_dim,
+                            step2,
+                            step3,
+                            lut,
+                            self_lut,
+                        );
+                        rot4_fused32(
+                            hp.add(step4),
+                            (wb64 >> 32) as u32,
+                            (ws64 >> 32) as u32,
+                            head_dim,
+                            step2,
+                            step3,
+                            lut,
+                            self_lut,
+                        );
+                        hp = hp.add(step8);
+                        h += 8;
+                    }
+                    if h + 4 <= limit {
+                        let w_idx = h >> 3;
+                        rot4_fused32(
+                            hp,
+                            base_ripa_words[w_idx] as u32,
+                            pspm_eff_words[w_idx] as u32,
+                            head_dim,
+                            step2,
+                            step3,
+                            lut,
+                            self_lut,
                         );
                         hp = hp.add(step4);
                         h += 4;

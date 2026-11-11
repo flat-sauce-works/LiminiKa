@@ -4,9 +4,12 @@
 //! Build script for the Geometric Cellular Sheaf Orchestrator (GCSO) core engine.
 //!
 //! Handles CMake initialization for low-level C++ / GPU kernels (CUDA, Metal, Vulkan),
-//! registers custom `cfg` flags to prevent compiler linter warnings, and links native static libraries.
+//! registers custom `cfg` flags to prevent compiler linter warnings, and links native static libraries
+//! with a resilient direct C++20 compiler fallback when CMake is unavailable on degraded CI runners.
 
 #![allow(missing_docs)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::too_many_lines)]
 
 use std::env;
 use std::fs;
@@ -68,7 +71,16 @@ fn track_directory_changes(dir: &Path) {
     }
 }
 
-/// Checks whether the CUDA compiler (nvcc) or relevant CUDA SDK environment variables exist.
+/// Checks whether `cmake` is available in `PATH`.
+fn is_cmake_available() -> bool {
+    Command::new("cmake")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+/// Checks whether the CUDA compiler (`nvcc`) and relevant CUDA SDK environment variables exist.
 fn is_nvcc_available() -> bool {
     let cuda_env_vars = [
         "CUDA_PATH",
@@ -78,8 +90,13 @@ fn is_nvcc_available() -> bool {
     ];
 
     for var in &cuda_env_vars {
-        if env::var(var).is_ok() {
-            return true;
+        if let Ok(root) = env::var(var) {
+            let root_path = PathBuf::from(root);
+            if root_path.join("bin").join("nvcc").exists()
+                || root_path.join("bin").join("nvcc.exe").exists()
+            {
+                return true;
+            }
         }
     }
 
@@ -90,25 +107,48 @@ fn is_nvcc_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Checks whether Vulkan SDK or vulkaninfo runtime is available on the target environment.
+/// Checks whether the Vulkan development SDK (headers and import library) is available
+/// so CMake `find_package(Vulkan)` and linker `-lvulkan` succeed.
 fn is_vulkan_available() -> bool {
-    if env::var("VULKAN_SDK").is_ok() {
-        return true;
-    }
-
-    if cfg!(target_os = "windows") {
-        if let Ok(windir) = env::var("WINDIR") {
-            let vulkan_dll = PathBuf::from(windir).join("System32").join("vulkan-1.dll");
-            if vulkan_dll.exists() {
-                return true;
-            }
+    if let Ok(sdk) = env::var("VULKAN_SDK") {
+        let sdk_path = PathBuf::from(sdk);
+        if sdk_path
+            .join("Include")
+            .join("vulkan")
+            .join("vulkan.h")
+            .exists()
+            || sdk_path
+                .join("include")
+                .join("vulkan")
+                .join("vulkan.h")
+                .exists()
+        {
+            return true;
         }
     }
 
-    Command::new("vulkaninfo")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    if cfg!(target_os = "windows") {
+        if let Ok(program_files) = env::var("ProgramFiles") {
+            let vulkan_base = PathBuf::from(program_files).join("VulkanSDK");
+            if let Ok(entries) = fs::read_dir(vulkan_base) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.join("Include").join("vulkan").join("vulkan.h").exists()
+                        && p.join("Lib").join("vulkan-1.lib").exists()
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    let unix_headers = [
+        "/usr/include/vulkan/vulkan.h",
+        "/usr/local/include/vulkan/vulkan.h",
+    ];
+    unix_headers.iter().any(|h| Path::new(h).exists())
 }
 
 /// Helper function to parse boolean environment variables.
@@ -131,6 +171,133 @@ fn resolve_cuda_architectures() -> String {
     }
     // Default compute architectures targeting modern GeForce/DataCenter GPUs (Turing, Ampere, Ada, Hopper)
     "75;80;86;89;90".to_string()
+}
+
+/// Collects `.cpp` files in `dir` in deterministic lexicographical order.
+fn collect_cpp_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|d| d.path())).collect();
+        paths.sort();
+        for path in paths {
+            if path.extension().and_then(|s| s.to_str()) == Some("cpp") {
+                out.push(path);
+            }
+        }
+    }
+}
+
+/// Target CPU SIMD capability flags forwarded to the fallback C++20 kernel builder.
+#[derive(Clone, Copy)]
+struct CpuSimdFlags {
+    avx2: bool,
+    avx512: bool,
+    neon: bool,
+    sve: bool,
+    rvv: bool,
+}
+
+/// Fallback builder that compiles `src/kernels/common/*.cpp` and `src/kernels/cpu/*.cpp`
+/// directly into `libliminika_kernels_cpu.a` when `cmake` is unavailable on degraded CI runners.
+fn build_cpu_kernels_fallback(
+    repo_root: &Path,
+    kernels_dir: &Path,
+    target_arch: &str,
+    simd: CpuSimdFlags,
+) -> Option<PathBuf> {
+    let has_avx2 = simd.avx2;
+    let has_avx512 = simd.avx512;
+    let has_neon = simd.neon;
+    let has_sve = simd.sve;
+    let has_rvv = simd.rvv;
+    let out_dir = PathBuf::from(env::var("OUT_DIR").ok()?);
+    let mut cpp_sources = Vec::new();
+    collect_cpp_files(&kernels_dir.join("common"), &mut cpp_sources);
+    collect_cpp_files(&kernels_dir.join("cpu"), &mut cpp_sources);
+    if cpp_sources.is_empty() {
+        return None;
+    }
+
+    let cxx_candidates: Vec<String> = env::var("CXX")
+        .ok()
+        .into_iter()
+        .chain(["c++", "g++", "clang++"].into_iter().map(String::from))
+        .collect();
+    let cxx = cxx_candidates.into_iter().find(|bin| {
+        Command::new(bin)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })?;
+
+    let include_root = repo_root.join("include");
+    let include_common = kernels_dir.join("common");
+    let mut obj_files = Vec::with_capacity(cpp_sources.len());
+
+    for (idx, src) in cpp_sources.iter().enumerate() {
+        let obj_path = out_dir.join(format!("liminika_kernel_{idx}.o"));
+        let mut cmd = Command::new(&cxx);
+        cmd.arg("-std=c++20")
+            .arg("-O3")
+            .arg("-DNDEBUG")
+            .arg("-fPIC")
+            .arg("-fstrict-aliasing")
+            .arg("-Wall")
+            .arg("-Wextra")
+            .arg("-Wpedantic")
+            .arg("-Wconversion")
+            .arg("-Wno-unused-parameter")
+            .arg("-I")
+            .arg(&include_root)
+            .arg("-I")
+            .arg(&include_common);
+
+        if target_arch == "x86_64" {
+            if has_avx512 {
+                cmd.arg("-mavx512f")
+                    .arg("-mavx512bw")
+                    .arg("-mavx512dq")
+                    .arg("-mavx512vl")
+                    .arg("-mfma")
+                    .arg("-DLIMINIKA_ENABLE_AVX512=1")
+                    .arg("-DLIMINIKA_ENABLE_AVX2=1");
+            } else if has_avx2 {
+                cmd.arg("-mavx2")
+                    .arg("-mfma")
+                    .arg("-DLIMINIKA_ENABLE_AVX2=1");
+            }
+        } else if target_arch == "aarch64" {
+            if has_neon {
+                cmd.arg("-DLIMINIKA_ENABLE_NEON=1");
+            }
+            if has_sve {
+                cmd.arg("-march=armv8-a+sve").arg("-DLIMINIKA_ENABLE_SVE=1");
+            }
+        } else if target_arch == "riscv64" && has_rvv {
+            cmd.arg("-march=rv64gcv").arg("-DLIMINIKA_ENABLE_RVV=1");
+        }
+
+        cmd.arg("-c").arg(src).arg("-o").arg(&obj_path);
+        match cmd.status() {
+            Ok(st) if st.success() => obj_files.push(obj_path),
+            _ => return None,
+        }
+    }
+
+    let lib_path = out_dir.join("libliminika_kernels_cpu.a");
+    let _ = fs::remove_file(&lib_path);
+    let ar_bin = env::var("AR").unwrap_or_else(|_| "ar".to_string());
+    let status = Command::new(ar_bin)
+        .arg("crs")
+        .arg(&lib_path)
+        .args(&obj_files)
+        .status()
+        .ok()?;
+    if !status.success() {
+        return None;
+    }
+
+    Some(out_dir)
 }
 
 fn main() {
@@ -212,7 +379,7 @@ fn main() {
         .unwrap_or_else(|| env::var("CARGO_FEATURE_VULKAN").is_ok() && is_vulkan_available());
 
     if vulkan_explicit == Some(true) && !is_vulkan_available() {
-        println!("cargo:warning=LIMINIKA_ENABLE_VULKAN is set to true, but Vulkan SDK / runtime was not detected.");
+        println!("cargo:warning=LIMINIKA_ENABLE_VULKAN is set to true, but Vulkan SDK / headers were not detected.");
     }
 
     let metal_explicit = parse_bool_env("LIMINIKA_ENABLE_METAL");
@@ -277,159 +444,179 @@ fn main() {
         println!("cargo:rustc-cfg=has_simd_rvv");
     }
 
-    // Configure CMake build pipeline with C++20 and strict execution flags
-    let mut cfg = cmake::Config::new(&kernels_dir);
+    if is_cmake_available() {
+        // Configure CMake build pipeline with C++20 and strict execution flags
+        let mut cfg = cmake::Config::new(&kernels_dir);
 
-    let cmake_build_type = match profile.as_str() {
-        "release" | "bench" => "Release",
-        "min-size-rel" => "MinSizeRel",
-        "rel-with-deb-info" => "RelWithDebInfo",
-        _ => "Debug",
-    };
-
-    cfg.define("CMAKE_BUILD_TYPE", cmake_build_type)
-        .define("CMAKE_C_STANDARD", "11")
-        .define("CMAKE_C_STANDARD_REQUIRED", "ON")
-        .define("CMAKE_CXX_STANDARD", "20")
-        .define("CMAKE_CXX_STANDARD_REQUIRED", "ON")
-        .define("CMAKE_CXX_EXTENSIONS", "OFF")
-        .define("CMAKE_POSITION_INDEPENDENT_CODE", "ON")
-        .define("BUILD_SHARED_LIBS", "OFF")
-        .define(
-            "LIMINIKA_ENABLE_CUDA",
-            if enable_cuda { "ON" } else { "OFF" },
-        )
-        .define(
-            "LIMINIKA_ENABLE_VULKAN",
-            if enable_vulkan { "ON" } else { "OFF" },
-        )
-        .define(
-            "LIMINIKA_ENABLE_METAL",
-            if enable_metal { "ON" } else { "OFF" },
-        )
-        .define("LIMINIKA_ENABLE_AVX2", if has_avx2 { "ON" } else { "OFF" })
-        .define(
-            "LIMINIKA_ENABLE_AVX512",
-            if has_avx512 { "ON" } else { "OFF" },
-        )
-        .define("LIMINIKA_ENABLE_NEON", if has_neon { "ON" } else { "OFF" })
-        .define("LIMINIKA_ENABLE_SVE", if has_sve { "ON" } else { "OFF" })
-        .define("LIMINIKA_ENABLE_RVV", if has_rvv { "ON" } else { "OFF" });
-
-    // Enforce strict C++ compiler warning and encoding flags based on toolchain and target architecture
-    if is_msvc {
-        cfg.cxxflag("/W4")
-            .cxxflag("/O2")
-            .cxxflag("/permissive-")
-            .cxxflag("/EHsc")
-            .cxxflag("/utf-8")
-            .cxxflag("/Zc:preprocessor")
-            .cxxflag("/Zc:inline");
-
-        // Conditionally apply architecture-specific SIMD flags for MSVC
-        if target_arch == "x86_64" {
-            if has_avx512 {
-                cfg.cxxflag("/arch:AVX512");
-            } else if has_avx2 {
-                cfg.cxxflag("/arch:AVX2");
-            }
-        }
-    } else {
-        cfg.cxxflag("-Wall")
-            .cxxflag("-Wextra")
-            .cxxflag("-Wpedantic")
-            .cxxflag("-Wconversion")
-            .cxxflag("-Wno-unused-parameter")
-            .cxxflag("-O3")
-            .cxxflag("-fstrict-aliasing");
-
-        // Conditionally apply architecture-specific SIMD flags to prevent cross-compilation errors
-        if target_arch == "x86_64" {
-            if has_avx512 {
-                cfg.cxxflag("-mavx512f")
-                    .cxxflag("-mavx512bw")
-                    .cxxflag("-mavx512dq")
-                    .cxxflag("-mavx512vl")
-                    .cxxflag("-mfma");
-            } else if has_avx2 {
-                cfg.cxxflag("-mavx2").cxxflag("-mfma");
-            }
-        } else if target_arch == "aarch64" && has_sve {
-            cfg.cxxflag("-march=armv8-a+sve");
-        } else if target_arch == "riscv64" && has_rvv {
-            cfg.cxxflag("-march=rv64gcv");
-        }
-    }
-
-    // Configure target system parameters when cross-compiling
-    if host != target {
-        let system_name = match target_os.as_str() {
-            "macos" | "ios" | "visionos" | "tvos" => "Darwin",
-            "windows" => "Windows",
-            "android" => "Android",
-            _ => "Linux",
+        let cmake_build_type = match profile.as_str() {
+            "release" | "bench" => "Release",
+            "min-size-rel" => "MinSizeRel",
+            "rel-with-deb-info" => "RelWithDebInfo",
+            _ => "Debug",
         };
-        cfg.define("CMAKE_SYSTEM_NAME", system_name);
-        cfg.define("CMAKE_SYSTEM_PROCESSOR", &target_arch);
-    }
 
-    // Pass custom CUDA target architectures if enabled
-    if enable_cuda {
-        let cuda_archs = resolve_cuda_architectures();
-        cfg.define("CMAKE_CUDA_ARCHITECTURES", &cuda_archs);
-    }
+        cfg.define("CMAKE_BUILD_TYPE", cmake_build_type)
+            .define("CMAKE_C_STANDARD", "11")
+            .define("CMAKE_C_STANDARD_REQUIRED", "ON")
+            .define("CMAKE_CXX_STANDARD", "20")
+            .define("CMAKE_CXX_STANDARD_REQUIRED", "ON")
+            .define("CMAKE_CXX_EXTENSIONS", "OFF")
+            .define("CMAKE_POSITION_INDEPENDENT_CODE", "ON")
+            .define("BUILD_SHARED_LIBS", "OFF")
+            .define(
+                "LIMINIKA_ENABLE_CUDA",
+                if enable_cuda { "ON" } else { "OFF" },
+            )
+            .define(
+                "LIMINIKA_ENABLE_VULKAN",
+                if enable_vulkan { "ON" } else { "OFF" },
+            )
+            .define(
+                "LIMINIKA_ENABLE_METAL",
+                if enable_metal { "ON" } else { "OFF" },
+            )
+            .define("LIMINIKA_ENABLE_AVX2", if has_avx2 { "ON" } else { "OFF" })
+            .define(
+                "LIMINIKA_ENABLE_AVX512",
+                if has_avx512 { "ON" } else { "OFF" },
+            )
+            .define("LIMINIKA_ENABLE_NEON", if has_neon { "ON" } else { "OFF" })
+            .define("LIMINIKA_ENABLE_SVE", if has_sve { "ON" } else { "OFF" })
+            .define("LIMINIKA_ENABLE_RVV", if has_rvv { "ON" } else { "OFF" });
 
-    if !target_arch.is_empty() {
-        cfg.define("LIMINIKA_TARGET_ARCH", &target_arch);
-    }
+        // Enforce strict C++ compiler warning and encoding flags based on toolchain and target architecture
+        if is_msvc {
+            cfg.cxxflag("/W4")
+                .cxxflag("/O2")
+                .cxxflag("/permissive-")
+                .cxxflag("/EHsc")
+                .cxxflag("/utf-8")
+                .cxxflag("/Zc:preprocessor")
+                .cxxflag("/Zc:inline");
 
-    // Configure MSVC runtime library alignment on Windows MSVC toolchains
-    if is_msvc {
-        cfg.define(
-            "CMAKE_MSVC_RUNTIME_LIBRARY",
-            "MultiThreaded$<$<CONFIG:Debug>:Debug>",
-        );
-    }
+            // Conditionally apply architecture-specific SIMD flags for MSVC
+            if target_arch == "x86_64" {
+                if has_avx512 {
+                    cfg.cxxflag("/arch:AVX512");
+                } else if has_avx2 {
+                    cfg.cxxflag("/arch:AVX2");
+                }
+            }
+        } else {
+            cfg.cxxflag("-Wall")
+                .cxxflag("-Wextra")
+                .cxxflag("-Wpedantic")
+                .cxxflag("-Wconversion")
+                .cxxflag("-Wno-unused-parameter")
+                .cxxflag("-O3")
+                .cxxflag("-fstrict-aliasing");
 
-    let dst = cfg.build();
-
-    // Search all potential output locations across Multi-Config and Single-Config CMake generators
-    let search_paths = [
-        dst.join("lib"),
-        dst.join("lib64"),
-        dst.join("build"),
-        dst.join("Release"),
-        dst.join("Debug"),
-        dst.clone(),
-    ];
-
-    for path in &search_paths {
-        if path.exists() {
-            println!("cargo:rustc-link-search=native={}", path.display());
+            // Conditionally apply architecture-specific SIMD flags to prevent cross-compilation errors
+            if target_arch == "x86_64" {
+                if has_avx512 {
+                    cfg.cxxflag("-mavx512f")
+                        .cxxflag("-mavx512bw")
+                        .cxxflag("-mavx512dq")
+                        .cxxflag("-mavx512vl")
+                        .cxxflag("-mfma");
+                } else if has_avx2 {
+                    cfg.cxxflag("-mavx2").cxxflag("-mfma");
+                }
+            } else if target_arch == "aarch64" && has_sve {
+                cfg.cxxflag("-march=armv8-a+sve");
+            } else if target_arch == "riscv64" && has_rvv {
+                cfg.cxxflag("-march=rv64gcv");
+            }
         }
+
+        // Configure target system parameters when cross-compiling
+        if host != target {
+            let system_name = match target_os.as_str() {
+                "macos" | "ios" | "visionos" | "tvos" => "Darwin",
+                "windows" => "Windows",
+                "android" => "Android",
+                _ => "Linux",
+            };
+            cfg.define("CMAKE_SYSTEM_NAME", system_name);
+            cfg.define("CMAKE_SYSTEM_PROCESSOR", &target_arch);
+        }
+
+        // Pass custom CUDA target architectures if enabled
+        if enable_cuda {
+            let cuda_archs = resolve_cuda_architectures();
+            cfg.define("CMAKE_CUDA_ARCHITECTURES", &cuda_archs);
+        }
+
+        if !target_arch.is_empty() {
+            cfg.define("LIMINIKA_TARGET_ARCH", &target_arch);
+        }
+
+        // Configure MSVC runtime library alignment on Windows MSVC toolchains
+        if is_msvc {
+            cfg.define(
+                "CMAKE_MSVC_RUNTIME_LIBRARY",
+                "MultiThreaded$<$<CONFIG:Debug>:Debug>",
+            );
+        }
+
+        let dst = cfg.build();
+
+        // Search all potential output locations across Multi-Config and Single-Config CMake generators
+        let search_paths = [
+            dst.join("lib"),
+            dst.join("lib64"),
+            dst.join("build"),
+            dst.join("Release"),
+            dst.join("Debug"),
+            dst.clone(),
+        ];
+
+        for path in &search_paths {
+            if path.exists() {
+                println!("cargo:rustc-link-search=native={}", path.display());
+            }
+        }
+    } else if let Some(out_dir) = build_cpu_kernels_fallback(
+        &repo_root,
+        &kernels_dir,
+        &target_arch,
+        CpuSimdFlags {
+            avx2: has_avx2,
+            avx512: has_avx512,
+            neon: has_neon,
+            sve: has_sve,
+            rvv: has_rvv,
+        },
+    ) {
+        println!("cargo:rustc-link-search=native={}", out_dir.display());
+    } else {
+        println!(
+            "cargo:warning=Neither CMake nor a fallback C++20 toolchain succeeded; skipping native kernel link."
+        );
+        return;
     }
 
     // Link CPU core kernel static library
     println!("cargo:rustc-link-lib=static=liminika_kernels_cpu");
 
     // Conditionally link backend acceleration static libraries and SDK frameworks
-    if enable_cuda {
+    if enable_cuda && is_cmake_available() {
         println!("cargo:rustc-link-lib=static=liminika_kernels_cuda");
         if let Ok(cuda_path) = env::var("CUDA_PATH") {
-            println!("cargo:rustc-link-search=native={}/lib/x64", cuda_path);
-            println!("cargo:rustc-link-search=native={}/lib64", cuda_path);
+            println!("cargo:rustc-link-search=native={cuda_path}/lib/x64");
+            println!("cargo:rustc-link-search=native={cuda_path}/lib64");
         }
         println!("cargo:rustc-link-lib=dylib=cudart");
     }
 
-    if enable_vulkan {
+    if enable_vulkan && is_cmake_available() {
         println!("cargo:rustc-link-lib=static=liminika_kernels_vulkan");
         let mut vulkan_lib_found = false;
 
         if let Ok(vulkan_sdk) = env::var("VULKAN_SDK") {
-            println!("cargo:rustc-link-search=native={}/lib", vulkan_sdk);
+            println!("cargo:rustc-link-search=native={vulkan_sdk}/lib");
             if is_windows {
-                println!("cargo:rustc-link-search=native={}/Lib", vulkan_sdk);
+                println!("cargo:rustc-link-search=native={vulkan_sdk}/Lib");
             }
             vulkan_lib_found = true;
         }
@@ -453,11 +640,15 @@ fn main() {
         }
 
         if vulkan_lib_found || !is_windows {
-            println!("cargo:rustc-link-lib=dylib=vulkan");
+            if is_windows {
+                println!("cargo:rustc-link-lib=dylib=vulkan-1");
+            } else {
+                println!("cargo:rustc-link-lib=dylib=vulkan");
+            }
         }
     }
 
-    if enable_metal && is_apple {
+    if enable_metal && is_apple && is_cmake_available() {
         println!("cargo:rustc-link-lib=static=liminika_kernels_metal");
         println!("cargo:rustc-link-lib=framework=Metal");
         println!("cargo:rustc-link-lib=framework=Foundation");

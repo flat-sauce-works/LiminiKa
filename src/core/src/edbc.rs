@@ -3919,8 +3919,10 @@ impl EdbcEngine {
     /// Returns `true` when the EDBC controller recommends inertial layer skipping (`ACTION_MODE_LAYER_SKIP`).
     #[inline(always)]
     pub const fn requests_inertial_layer_skip(&self) -> bool {
-        self.evaluate_adaptive_compute_and_gop_budget(0, 4, 32, 0.12)
-            .2
+        let h_cur = branchless_relu_f32(self.state.moving_z_entropy);
+        (self.state.active_branch_mode == EDBC_MODE_NORMAL_ENTROPY)
+            & (h_cur <= 0.12)
+            & (self.state.sliding_entropy_rate <= self.tau_flux)
     }
 }
 
@@ -3928,8 +3930,10 @@ impl CausalProvenanceSignal for EdbcEngine {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
         let is_rep = self.state.active_branch_mode == EDBC_MODE_PHASE_CONJUGATE_REPULSION;
-        let (_emit_iframe, _gop_len, can_skip, _gate_scale) =
-            self.evaluate_adaptive_compute_and_gop_budget(0, 4, 32, 0.15);
+        let h_cur = branchless_relu_f32(self.state.moving_z_entropy);
+        let can_skip = (self.state.active_branch_mode == EDBC_MODE_NORMAL_ENTROPY)
+            & (h_cur <= 0.15)
+            & (self.state.sliding_entropy_rate <= self.tau_flux);
         CAUSAL_AXIS_SYSTEM_CONSTRAINT
             | branchless_select_u32(is_rep, CAUSAL_CAUSE_COHOMOLOGY_REPULSION, 0)
             | branchless_select_u32(can_skip, CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, 0)

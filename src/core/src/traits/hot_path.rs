@@ -146,13 +146,13 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
     ) -> GcsoResult<(gcso_tagged_ptr_t, u8, bool)> {
         self.step_pointer(input_ptr.raw(), trail_out)?;
 
-        let density = bloom_filter.apply_phase_conjugate_repulsion(
-            &mut trail_out.accumulated_phase_delta,
+        let (density, repulsion_triggered) = bloom_filter.apply_phase_conjugate_repulsion_words(
+            super::branchless::trail_phase_words_mut(trail_out),
             repulsion_threshold,
             repulsion_scale_u7,
         );
-        let repulsion_triggered = (density >= repulsion_threshold) & (density > 0);
 
+        // `evolve_trail_mode_stigmergically` synchronizes routing flags with `current_node_ptr`
         let evolved_ptr = trail_out.evolve_trail_mode_stigmergically(
             entropy_h_tilde,
             repulsion_triggered,
@@ -160,7 +160,6 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
             low_entropy_skip_thresh,
             high_density_srl_thresh,
         );
-        trail_out.sync_flags_with_current_ptr();
         Ok((evolved_ptr, density, repulsion_triggered))
     }
 

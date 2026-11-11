@@ -12,6 +12,13 @@
 //! - Isolates provisional pre-v1.0 `.gcso` / ZIMMS container crystallization and zero-copy
 //!   mapping workloads into the dedicated `DPSR_Provisional_GCSO_Container` Criterion group.
 
+#![allow(missing_docs)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::too_many_lines)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_sign_loss)]
+
 use criterion::{
     criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
 };

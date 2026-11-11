@@ -580,12 +580,27 @@ GCSO_API gcso_status_t GCSO_CALL gcso_qdps_filter_step(gcso_q7_t* GCSO_RESTRICT 
             return GCSO_SUCCESS;
         }
 
-        for (size_t i = 0; i < len; ++i) {
+        size_t i = 0;
+#if defined(__AVX2__)
+        const size_t simd32_len = len & ~static_cast<size_t>(31);
+        const __m256i v_thresh =
+            _mm256_set1_epi8(static_cast<char>(static_cast<int8_t>(min_step_q7)));
+        const __m256i v_max127 = _mm256_set1_epi8(127);
+        for (; i < simd32_len; i += 32) {
+            const __m256i v =
+                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(phase_deltas + i));
+            const __m256i abs_v = _mm256_min_epu8(_mm256_abs_epi8(v), v_max127);
+            const __m256i zero_mask = _mm256_cmpgt_epi8(v_thresh, abs_v);
+            const __m256i filtered = _mm256_andnot_si256(zero_mask, v);
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(phase_deltas + i), filtered);
+        }
+#endif
+        for (; i < len; ++i) {
             const int32_t val = static_cast<int32_t>(phase_deltas[i]);
-            const int32_t abs_val = val < 0 ? -val : val;
-            if (abs_val < min_step_q7) {
-                phase_deltas[i] = 0;
-            }
+            const int32_t sign_mask = val >> 31;
+            const int32_t abs_val = (val ^ sign_mask) - sign_mask;
+            const int32_t keep_mask = -(abs_val >= min_step_q7);
+            phase_deltas[i] = static_cast<gcso_q7_t>(val & keep_mask);
         }
         return GCSO_SUCCESS;
     } catch (...) {
@@ -665,13 +680,54 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_slerp_norm_guard_stable(float* GCSO_R
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
+        size_t i = 0;
+        const size_t simd_len = dim & ~static_cast<size_t>(7);
+        float norm_sq = 0.0f;
+
+#if defined(__AVX2__)
+        __m256 acc0 = _mm256_setzero_ps();
+        __m256 acc1 = _mm256_setzero_ps();
+        __m256 acc2 = _mm256_setzero_ps();
+        __m256 acc3 = _mm256_setzero_ps();
+        const size_t vec32_len = dim & ~static_cast<size_t>(31);
+        for (; i < vec32_len; i += 32) {
+            const __m256 v0 = _mm256_load_ps(tensor + i + 0);
+            const __m256 v1 = _mm256_load_ps(tensor + i + 8);
+            const __m256 v2 = _mm256_load_ps(tensor + i + 16);
+            const __m256 v3 = _mm256_load_ps(tensor + i + 24);
+    #if defined(__FMA__)
+            acc0 = _mm256_fmadd_ps(v0, v0, acc0);
+            acc1 = _mm256_fmadd_ps(v1, v1, acc1);
+            acc2 = _mm256_fmadd_ps(v2, v2, acc2);
+            acc3 = _mm256_fmadd_ps(v3, v3, acc3);
+    #else
+            acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(v0, v0));
+            acc1 = _mm256_add_ps(acc1, _mm256_mul_ps(v1, v1));
+            acc2 = _mm256_add_ps(acc2, _mm256_mul_ps(v2, v2));
+            acc3 = _mm256_add_ps(acc3, _mm256_mul_ps(v3, v3));
+    #endif
+        }
+        for (; i < simd_len; i += 8) {
+            const __m256 v0 = _mm256_load_ps(tensor + i);
+    #if defined(__FMA__)
+            acc0 = _mm256_fmadd_ps(v0, v0, acc0);
+    #else
+            acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(v0, v0));
+    #endif
+        }
+        const __m256 sum256 = _mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3));
+        const __m128 sum128 =
+            _mm_add_ps(_mm256_castps256_ps128(sum256), _mm256_extractf128_ps(sum256, 1));
+        const __m128 shuf = _mm_movehdup_ps(sum128);
+        const __m128 sums = _mm_add_ps(sum128, shuf);
+        const __m128 shuf2 = _mm_movehl_ps(shuf, sums);
+        norm_sq = _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+#else
         float sum_sq0 = 0.0f;
         float sum_sq1 = 0.0f;
         float sum_sq2 = 0.0f;
         float sum_sq3 = 0.0f;
 
-        size_t i = 0;
-        const size_t simd_len = dim & ~static_cast<size_t>(7);
         for (; i < simd_len; i += 8) {
             sum_sq0 += tensor[i + 0] * tensor[i + 0];
             sum_sq1 += tensor[i + 1] * tensor[i + 1];
@@ -682,8 +738,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_slerp_norm_guard_stable(float* GCSO_R
             sum_sq2 += tensor[i + 6] * tensor[i + 6];
             sum_sq3 += tensor[i + 7] * tensor[i + 7];
         }
-
-        float norm_sq = (sum_sq0 + sum_sq1) + (sum_sq2 + sum_sq3);
+        norm_sq = (sum_sq0 + sum_sq1) + (sum_sq2 + sum_sq3);
+#endif
         for (; i < dim; ++i) {
             norm_sq += tensor[i] * tensor[i];
         }
@@ -706,6 +762,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_slerp_norm_guard_stable(float* GCSO_R
 
         if (std::abs(scale - 1.0f) > 1e-6f) {
             size_t j = 0;
+#if defined(__AVX2__)
+            const __m256 v_scale = _mm256_set1_ps(scale);
+            for (; j < simd_len; j += 8) {
+                const __m256 v = _mm256_load_ps(tensor + j);
+                _mm256_store_ps(tensor + j, _mm256_mul_ps(v, v_scale));
+            }
+#else
             for (; j < simd_len; j += 8) {
                 tensor[j + 0] *= scale;
                 tensor[j + 1] *= scale;
@@ -716,6 +779,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_slerp_norm_guard_stable(float* GCSO_R
                 tensor[j + 6] *= scale;
                 tensor[j + 7] *= scale;
             }
+#endif
             for (; j < dim; ++j) {
                 tensor[j] *= scale;
             }
@@ -945,6 +1009,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_dispatch_single_pass(
 
         size_t i = 0;
         const size_t fact_simd = fact_elems & ~static_cast<size_t>(7);
+#if defined(__AVX2__)
+        const __m256 v_fact_gain = _mm256_set1_ps(pspm_cfg->fact_phase_gain);
+        for (; i < fact_simd; i += 8) {
+            _mm256_storeu_ps(query_tensor + i,
+                             _mm256_mul_ps(_mm256_loadu_ps(query_tensor + i), v_fact_gain));
+        }
+#else
         for (; i < fact_simd; i += 8) {
             query_tensor[i + 0] *= pspm_cfg->fact_phase_gain;
             query_tensor[i + 1] *= pspm_cfg->fact_phase_gain;
@@ -955,6 +1026,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_dispatch_single_pass(
             query_tensor[i + 6] *= pspm_cfg->fact_phase_gain;
             query_tensor[i + 7] *= pspm_cfg->fact_phase_gain;
         }
+#endif
         for (; i < fact_elems; ++i) {
             query_tensor[i] *= pspm_cfg->fact_phase_gain;
         }
@@ -962,6 +1034,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_dispatch_single_pass(
         float* GCSO_RESTRICT logic_q = query_tensor + fact_elems;
         size_t j = 0;
         const size_t logic_simd = logic_elems & ~static_cast<size_t>(7);
+#if defined(__AVX2__)
+        const __m256 v_logic_gain = _mm256_set1_ps(pspm_cfg->logic_phase_gain);
+        for (; j < logic_simd; j += 8) {
+            _mm256_storeu_ps(logic_q + j,
+                             _mm256_mul_ps(_mm256_loadu_ps(logic_q + j), v_logic_gain));
+        }
+#else
         for (; j < logic_simd; j += 8) {
             logic_q[j + 0] *= pspm_cfg->logic_phase_gain;
             logic_q[j + 1] *= pspm_cfg->logic_phase_gain;
@@ -972,6 +1051,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_dispatch_single_pass(
             logic_q[j + 6] *= pspm_cfg->logic_phase_gain;
             logic_q[j + 7] *= pspm_cfg->logic_phase_gain;
         }
+#endif
         for (; j < logic_elems; ++j) {
             logic_q[j] *= pspm_cfg->logic_phase_gain;
         }
@@ -979,6 +1059,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_dispatch_single_pass(
         float* GCSO_RESTRICT explore_q = query_tensor + fact_elems + logic_elems;
         size_t k = 0;
         const size_t explore_simd = explore_elems & ~static_cast<size_t>(7);
+#if defined(__AVX2__)
+        const __m256 v_explore_gain = _mm256_set1_ps(pspm_cfg->explore_phase_gain);
+        for (; k < explore_simd; k += 8) {
+            _mm256_storeu_ps(explore_q + k,
+                             _mm256_mul_ps(_mm256_loadu_ps(explore_q + k), v_explore_gain));
+        }
+#else
         for (; k < explore_simd; k += 8) {
             explore_q[k + 0] *= pspm_cfg->explore_phase_gain;
             explore_q[k + 1] *= pspm_cfg->explore_phase_gain;
@@ -989,6 +1076,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_dispatch_single_pass(
             explore_q[k + 6] *= pspm_cfg->explore_phase_gain;
             explore_q[k + 7] *= pspm_cfg->explore_phase_gain;
         }
+#endif
         for (; k < explore_elems; ++k) {
             explore_q[k] *= pspm_cfg->explore_phase_gain;
         }
@@ -1108,13 +1196,59 @@ gcso_srl_eval_rank1(float* GCSO_RESTRICT y_out, const float* GCSO_RESTRICT x_in,
             }
         }
 
+        size_t i = 0;
+        const size_t simd_in = dim_in & ~static_cast<size_t>(7);
+        float v_dot_x = 0.0f;
+
+#if defined(__AVX2__)
+        __m256 acc0 = _mm256_setzero_ps();
+        __m256 acc1 = _mm256_setzero_ps();
+        __m256 acc2 = _mm256_setzero_ps();
+        __m256 acc3 = _mm256_setzero_ps();
+        const size_t vec32_in = dim_in & ~static_cast<size_t>(31);
+        for (; i < vec32_in; i += 32) {
+            const __m256 vv0 = _mm256_load_ps(vector_v + i + 0);
+            const __m256 vx0 = _mm256_load_ps(x_in + i + 0);
+            const __m256 vv1 = _mm256_load_ps(vector_v + i + 8);
+            const __m256 vx1 = _mm256_load_ps(x_in + i + 8);
+            const __m256 vv2 = _mm256_load_ps(vector_v + i + 16);
+            const __m256 vx2 = _mm256_load_ps(x_in + i + 16);
+            const __m256 vv3 = _mm256_load_ps(vector_v + i + 24);
+            const __m256 vx3 = _mm256_load_ps(x_in + i + 24);
+    #if defined(__FMA__)
+            acc0 = _mm256_fmadd_ps(vv0, vx0, acc0);
+            acc1 = _mm256_fmadd_ps(vv1, vx1, acc1);
+            acc2 = _mm256_fmadd_ps(vv2, vx2, acc2);
+            acc3 = _mm256_fmadd_ps(vv3, vx3, acc3);
+    #else
+            acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(vv0, vx0));
+            acc1 = _mm256_add_ps(acc1, _mm256_mul_ps(vv1, vx1));
+            acc2 = _mm256_add_ps(acc2, _mm256_mul_ps(vv2, vx2));
+            acc3 = _mm256_add_ps(acc3, _mm256_mul_ps(vv3, vx3));
+    #endif
+        }
+        for (; i < simd_in; i += 8) {
+            const __m256 vv0 = _mm256_load_ps(vector_v + i);
+            const __m256 vx0 = _mm256_load_ps(x_in + i);
+    #if defined(__FMA__)
+            acc0 = _mm256_fmadd_ps(vv0, vx0, acc0);
+    #else
+            acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(vv0, vx0));
+    #endif
+        }
+        const __m256 sum256 = _mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3));
+        const __m128 sum128 =
+            _mm_add_ps(_mm256_castps256_ps128(sum256), _mm256_extractf128_ps(sum256, 1));
+        const __m128 shuf = _mm_movehdup_ps(sum128);
+        const __m128 sums = _mm_add_ps(sum128, shuf);
+        const __m128 shuf2 = _mm_movehl_ps(shuf, sums);
+        v_dot_x = _mm_cvtss_f32(_mm_add_ss(sums, shuf2));
+#else
         float v_dot_x0 = 0.0f;
         float v_dot_x1 = 0.0f;
         float v_dot_x2 = 0.0f;
         float v_dot_x3 = 0.0f;
 
-        size_t i = 0;
-        const size_t simd_in = dim_in & ~static_cast<size_t>(7);
         for (; i < simd_in; i += 8) {
             v_dot_x0 += vector_v[i + 0] * x_in[i + 0];
             v_dot_x1 += vector_v[i + 1] * x_in[i + 1];
@@ -1125,8 +1259,8 @@ gcso_srl_eval_rank1(float* GCSO_RESTRICT y_out, const float* GCSO_RESTRICT x_in,
             v_dot_x2 += vector_v[i + 6] * x_in[i + 6];
             v_dot_x3 += vector_v[i + 7] * x_in[i + 7];
         }
-
-        float v_dot_x = (v_dot_x0 + v_dot_x1) + (v_dot_x2 + v_dot_x3);
+        v_dot_x = (v_dot_x0 + v_dot_x1) + (v_dot_x2 + v_dot_x3);
+#endif
         for (; i < dim_in; ++i) {
             v_dot_x += vector_v[i] * x_in[i];
         }
@@ -1136,6 +1270,20 @@ gcso_srl_eval_rank1(float* GCSO_RESTRICT y_out, const float* GCSO_RESTRICT x_in,
         const size_t simd_out = dim_out & ~static_cast<size_t>(7);
 
         if (gain_s != nullptr) {
+#if defined(__AVX2__)
+            const __m256 v_scaled = _mm256_set1_ps(scaled_dot);
+            for (; j < simd_out; j += 8) {
+                const __m256 vy = _mm256_load_ps(y_out + j);
+                const __m256 vg = _mm256_load_ps(gain_s + j);
+                const __m256 vu = _mm256_load_ps(vector_u + j);
+                const __m256 vgu = _mm256_mul_ps(vg, vu);
+    #if defined(__FMA__)
+                _mm256_store_ps(y_out + j, _mm256_fmadd_ps(vgu, v_scaled, vy));
+    #else
+                _mm256_store_ps(y_out + j, _mm256_add_ps(vy, _mm256_mul_ps(vgu, v_scaled)));
+    #endif
+            }
+#else
             for (; j < simd_out; j += 8) {
                 y_out[j + 0] += gain_s[j + 0] * scaled_dot * vector_u[j + 0];
                 y_out[j + 1] += gain_s[j + 1] * scaled_dot * vector_u[j + 1];
@@ -1146,10 +1294,23 @@ gcso_srl_eval_rank1(float* GCSO_RESTRICT y_out, const float* GCSO_RESTRICT x_in,
                 y_out[j + 6] += gain_s[j + 6] * scaled_dot * vector_u[j + 6];
                 y_out[j + 7] += gain_s[j + 7] * scaled_dot * vector_u[j + 7];
             }
+#endif
             for (; j < dim_out; ++j) {
                 y_out[j] += gain_s[j] * scaled_dot * vector_u[j];
             }
         } else {
+#if defined(__AVX2__)
+            const __m256 v_scaled = _mm256_set1_ps(scaled_dot);
+            for (; j < simd_out; j += 8) {
+                const __m256 vy = _mm256_load_ps(y_out + j);
+                const __m256 vu = _mm256_load_ps(vector_u + j);
+    #if defined(__FMA__)
+                _mm256_store_ps(y_out + j, _mm256_fmadd_ps(vu, v_scaled, vy));
+    #else
+                _mm256_store_ps(y_out + j, _mm256_add_ps(vy, _mm256_mul_ps(vu, v_scaled)));
+    #endif
+            }
+#else
             for (; j < simd_out; j += 8) {
                 y_out[j + 0] += scaled_dot * vector_u[j + 0];
                 y_out[j + 1] += scaled_dot * vector_u[j + 1];
@@ -1160,6 +1321,7 @@ gcso_srl_eval_rank1(float* GCSO_RESTRICT y_out, const float* GCSO_RESTRICT x_in,
                 y_out[j + 6] += scaled_dot * vector_u[j + 6];
                 y_out[j + 7] += scaled_dot * vector_u[j + 7];
             }
+#endif
             for (; j < dim_out; ++j) {
                 y_out[j] += scaled_dot * vector_u[j];
             }

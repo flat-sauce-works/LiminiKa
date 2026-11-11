@@ -60,7 +60,9 @@ use super::aligned::{
     AlignedSliceMut16, AlignedSliceMut32, AlignedSliceMut64,
 };
 use super::branchless::{
-    branchless_abs_f32, branchless_atan2_f32, branchless_atan2_to_q7_fast, branchless_clamp_f32,
+    atan2_interleaved_pairs_to_q7_word_x8_simd, atan2_to_q7_word_x8_simd, branchless_abs_f32,
+    branchless_atan2_f32,
+    branchless_atan2_to_q7_fast, branchless_clamp_f32,
     branchless_copysign_f32, branchless_eyring_kramers_escape, branchless_flush_subnormal_f32,
     branchless_hysteresis_quantize_depth, branchless_inv_pos_f32, branchless_is_finite_f32,
     branchless_is_nan_f32, branchless_ln_f32, branchless_max_f32, branchless_min_f32,
@@ -2083,8 +2085,8 @@ pub trait PersonaPatcher: BranchlessKernel + Send + Sync {
             candidate = trail.accumulated_phase_delta;
             candidate_words = *trail_phase_words_ref(trail);
         } else {
-            let mut sum_s = [0.0_f32; MAX_ATTENTION_HEADS];
-            let mut sum_c = [0.0_f32; MAX_ATTENTION_HEADS];
+            let mut sum_s = [[0.0_f32; 8]; 8];
+            let mut sum_c = [[0.0_f32; 8]; 8];
             let mut word_s = [0.0_f32; 8];
             let mut word_c = [0.0_f32; 8];
             let mut total_w = 0.0_f32;
@@ -2123,10 +2125,17 @@ pub trait PersonaPatcher: BranchlessKernel + Send + Sync {
                     } else {
                         all_byte_uniform = false;
                         all_word_uniform = false;
-                        for h in 0..MAX_ATTENTION_HEADS {
-                            let (s, c) = branchless_sincos_q7(phases[h]);
-                            sum_s[h] += w * s;
-                            sum_c[h] += w * c;
+                        let mut cell = 0usize;
+                        while cell < 8 {
+                            let base = cell << 3;
+                            let mut lane = 0usize;
+                            while lane < 8 {
+                                let (s, c) = branchless_sincos_q7(phases[base + lane]);
+                                sum_s[cell][lane] += w * s;
+                                sum_c[cell][lane] += w * c;
+                                lane += 1;
+                            }
+                            cell += 1;
                         }
                     }
                 }
@@ -2149,36 +2158,42 @@ pub trait PersonaPatcher: BranchlessKernel + Send + Sync {
                 *profile_out = [branchless_select_q7(keep, q7, 0); MAX_ATTENTION_HEADS];
                 return Ok((r_bar, kappa_c));
             } else if all_word_uniform {
-                let mut w_bytes = [0u8; 8];
+                let mut s_cell = [0.0_f32; 8];
+                let mut c_cell = [0.0_f32; 8];
                 let mut lane = 0usize;
                 while lane < 8 {
-                    let s = word_s[lane] + uniform_s;
-                    let c = word_c[lane] + uniform_c;
-                    let mag_sq = s * s + c * c;
-                    let q7 = branchless_select_q7(
-                        mag_sq > 1.0e-20,
-                        branchless_atan2_to_q7_fast(s, c),
-                        0,
-                    );
-                    w_bytes[lane] = q7 as u8;
+                    s_cell[lane] = word_s[lane] + uniform_s;
+                    c_cell[lane] = word_c[lane] + uniform_c;
                     lane += 1;
                 }
-                let word0 = u64::from_le_bytes(w_bytes);
+                let word0 = atan2_to_q7_word_x8_simd(&s_cell, &c_cell);
                 candidate_words = [word0; 8];
                 store_q7_words_64(&mut candidate, &candidate_words);
             } else {
-                for h in 0..MAX_ATTENTION_HEADS {
-                    let lane = h & 7;
-                    let s = sum_s[h] + word_s[lane] + uniform_s;
-                    let c = sum_c[h] + word_c[lane] + uniform_c;
-                    let mag_sq = s * s + c * c;
-                    candidate[h] = branchless_select_q7(
-                        mag_sq > 1.0e-20,
-                        branchless_atan2_to_q7_fast(s, c),
-                        0,
-                    );
+                let has_word_or_uni = (uniform_s != 0.0)
+                    | (uniform_c != 0.0)
+                    | (word_s != [0.0_f32; 8])
+                    | (word_c != [0.0_f32; 8]);
+                if has_word_or_uni {
+                    let mut cell = 0usize;
+                    while cell < 8 {
+                        let mut lane = 0usize;
+                        while lane < 8 {
+                            sum_s[cell][lane] += word_s[lane] + uniform_s;
+                            sum_c[cell][lane] += word_c[lane] + uniform_c;
+                            lane += 1;
+                        }
+                        cell += 1;
+                    }
                 }
-                candidate_words = load_q7_words_64(&candidate);
+                let mut cw = [0u64; 8];
+                let mut cell = 0usize;
+                while cell < 8 {
+                    cw[cell] = atan2_to_q7_word_x8_simd(&sum_s[cell], &sum_c[cell]);
+                    cell += 1;
+                }
+                candidate_words = cw;
+                store_q7_words_64(&mut candidate, &candidate_words);
             }
         }
 
@@ -2256,13 +2271,42 @@ pub trait L2pSvdProjector: BranchlessKernel + Send + Sync {
 
         let out_phases = phase_profile_out.as_mut_slice();
         let num_heads = out_phases.len();
-        let pairs_per_head = (dim_out / 2).max(1) / num_heads.max(1);
-
-        for (h, phase_slot) in out_phases.iter_mut().enumerate() {
-            let pair_idx = (h * pairs_per_head.max(1)) % (dim_out / 2);
-            let y_comp = b_slice[(pair_idx * 2 + 1) * rank];
-            let x_comp = b_slice[(pair_idx * 2) * rank];
-            *phase_slot = branchless_atan2_to_q7_fast(y_comp, x_comp);
+        let num_pairs = (dim_out / 2).max(1);
+        let step_pairs = (num_pairs / num_heads.max(1)).max(1);
+        let full_cells = num_heads >> 3;
+        let mut cell = 0usize;
+        while cell < full_cells {
+            let h_base = cell << 3;
+            let word = if rank == 1 && step_pairs == 1 && (h_base + 8) <= num_pairs {
+                let base_f32 = h_base << 1;
+                atan2_interleaved_pairs_to_q7_word_x8_simd(&b_slice[base_f32..base_f32 + 16])
+            } else {
+                let mut sin_arr = [0.0_f32; 8];
+                let mut cos_arr = [0.0_f32; 8];
+                let mut lane = 0usize;
+                while lane < 8 {
+                    let pair_idx = ((h_base + lane) * step_pairs) % num_pairs;
+                    let base_idx = (pair_idx << 1) * rank;
+                    cos_arr[lane] = b_slice[base_idx];
+                    sin_arr[lane] = b_slice[base_idx + rank];
+                    lane += 1;
+                }
+                atan2_to_q7_word_x8_simd(&sin_arr, &cos_arr)
+            };
+            let w_bytes = word.to_le_bytes();
+            let mut lane_out = 0usize;
+            while lane_out < 8 {
+                out_phases[h_base + lane_out] = w_bytes[lane_out] as gcso_q7_t;
+                lane_out += 1;
+            }
+            cell += 1;
+        }
+        let mut h = full_cells << 3;
+        while h < num_heads {
+            let pair_idx = (h * step_pairs) % num_pairs;
+            let base_idx = (pair_idx << 1) * rank;
+            out_phases[h] = branchless_atan2_to_q7_fast(b_slice[base_idx + rank], b_slice[base_idx]);
+            h += 1;
         }
 
         Ok(())
@@ -2663,13 +2707,37 @@ pub trait DnpPacketDispatcher: BranchlessKernel + Send + Sync {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
         let src = &packet_payload.as_slice()[..MAX_ATTENTION_HEADS];
-        gcso_q7_t::read_unaligned_slice_from(src, 0, phases_out)?;
-        let raw_crc = crc32_block64_zero_seed_words(&load_q7_words_64(phases_out));
+        let payload_words = [
+            u64::from_le_bytes([src[0], src[1], src[2], src[3], src[4], src[5], src[6], src[7]]),
+            u64::from_le_bytes([
+                src[8], src[9], src[10], src[11], src[12], src[13], src[14], src[15],
+            ]),
+            u64::from_le_bytes([
+                src[16], src[17], src[18], src[19], src[20], src[21], src[22], src[23],
+            ]),
+            u64::from_le_bytes([
+                src[24], src[25], src[26], src[27], src[28], src[29], src[30], src[31],
+            ]),
+            u64::from_le_bytes([
+                src[32], src[33], src[34], src[35], src[36], src[37], src[38], src[39],
+            ]),
+            u64::from_le_bytes([
+                src[40], src[41], src[42], src[43], src[44], src[45], src[46], src[47],
+            ]),
+            u64::from_le_bytes([
+                src[48], src[49], src[50], src[51], src[52], src[53], src[54], src[55],
+            ]),
+            u64::from_le_bytes([
+                src[56], src[57], src[58], src[59], src[60], src[61], src[62], src[63],
+            ]),
+        ];
+        let raw_crc = crc32_block64_zero_seed_words(&payload_words);
         let diff = raw_crc ^ expected_crc32;
         if (diff & 0xFFFF_FF00) != 0 {
             *phases_out = [0i8; MAX_ATTENTION_HEADS];
             return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
         }
+        store_q7_words_64(phases_out, &payload_words);
         Ok((diff & 0xFF) as u8)
     }
 

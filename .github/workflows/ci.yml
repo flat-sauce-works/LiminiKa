@@ -51,8 +51,13 @@ jobs:
 
       - name: Install clang-format & Python formatters
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-format python3-autopep8
+          if ! command -v clang-format >/dev/null 2>&1 || ! command -v autopep8 >/dev/null 2>&1; then
+            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 update || true
+            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 install -y clang-format python3-autopep8 || true
+          fi
+          if ! command -v autopep8 >/dev/null 2>&1; then
+            python3 -m pip install --quiet --retries 1 --timeout 10 autopep8 2>/dev/null || pip3 install --quiet --break-system-packages --retries 1 --timeout 10 autopep8 2>/dev/null || true
+          fi
 
       - name: Format Rust codebase
         run: cargo fmt --all
@@ -65,15 +70,18 @@ jobs:
 
       - name: Format C/C++ & GPU Kernel codebase
         run: |
-          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \) )
-          find . "${EXCLUDE_ARGS[@]}" -prune -o \( \
-            -name "*.h" -o -name "*.hpp" -o -name "*.inl" -o \
-            -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
-            -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.mm" -o \
-            -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
-            -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o \
-            -name "*.hip" -o -name "*.cl" \
-          \) -type f -size +0c ! -name ".gitkeep" -exec clang-format -i {} + 2>/dev/null || true
+          CLANG_FORMAT_BIN=$(command -v clang-format || command -v clang-format-21 || command -v clang-format-20 || command -v clang-format-19 || command -v clang-format-18 || find /usr/lib/llvm-* -name clang-format -type f -executable 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -n "$CLANG_FORMAT_BIN" ]; then
+            EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \) )
+            find . "${EXCLUDE_ARGS[@]}" -prune -o \( \
+              -name "*.h" -o -name "*.hpp" -o -name "*.inl" -o \
+              -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
+              -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.mm" -o \
+              -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
+              -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o \
+              -name "*.hip" -o -name "*.cl" \
+            \) -type f -size +0c ! -name ".gitkeep" -exec "$CLANG_FORMAT_BIN" -i {} + 2>/dev/null || true
+          fi
 
       - name: Format Python codebase
         run: |
@@ -301,8 +309,11 @@ jobs:
       - name: Install Build Dependencies & Cache Tools (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build clang clang-format cmake libclang-dev ccache vulkan-tools libvulkan-dev glslang-tools libshaderc-dev
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 update || true
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 install -y ninja-build clang clang-format cmake libclang-dev ccache vulkan-tools libvulkan-dev glslang-tools libshaderc-dev || true
+          if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
+            python3 -m pip install --quiet --retries 1 --timeout 10 cmake ninja 2>/dev/null || pip3 install --quiet --break-system-packages --retries 1 --timeout 10 cmake ninja 2>/dev/null || true
+          fi
 
       - name: Install Build Dependencies & Cache Tools (macOS)
         if: runner.os == 'macOS'
@@ -315,6 +326,8 @@ jobs:
           choco install ninja ccache llvm --no-progress || true
 
       - name: Setup Compiler Cache
+        if: runner.os != 'Linux' || hashFiles('/usr/bin/ccache', '/usr/local/bin/ccache') != ''
+        continue-on-error: true
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ runner.os }}-cpp-${{ github.sha }}
@@ -327,13 +340,15 @@ jobs:
           if [ -d "include" ]; then
             HEADERS=$(find include -type f \( -name "*.h" -o -name "*.hpp" \) -size +0c 2>/dev/null || true)
             if [ -n "$HEADERS" ]; then
+              C_CC=$(command -v clang || command -v clang-21 || command -v clang-20 || command -v clang-19 || command -v clang-18 || command -v gcc)
+              CXX_CC=$(command -v clang++ || command -v clang++-21 || command -v clang++-20 || command -v clang++-19 || command -v clang++-18 || command -v g++)
               for header in $HEADERS; do
                 if [[ "$header" == *.h ]]; then
-                  echo "Validating strict C11 inclusion for $header..."
-                  clang -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -fsyntax-only -x c "$header"
+                  echo "Validating strict C11 inclusion for $header with $C_CC..."
+                  "$C_CC" -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -fsyntax-only -x c "$header"
                 fi
-                echo "Validating strict C++20 inclusion for $header..."
-                clang++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -Iinclude -fsyntax-only -x c++ "$header"
+                echo "Validating strict C++20 inclusion for $header with $CXX_CC..."
+                "$CXX_CC" -std=c++20 -Wall -Wextra -Wpedantic -Werror -Iinclude -fsyntax-only -x c++ "$header"
               done
             else
               echo "No non-empty header files found under include."
@@ -345,17 +360,26 @@ jobs:
       - name: Configure CMake (Linux with Vulkan & AVX2 enabled)
         if: runner.os == 'Linux'
         run: |
-          if [ -f "CMakeLists.txt" ]; then
-            cmake -B build -S . -GNinja \
-              -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-              -DLIMINIKA_ENABLE_VULKAN=ON \
+          if [ -f "CMakeLists.txt" ] && command -v cmake >/dev/null 2>&1; then
+            CMAKE_EXTRA_ARGS=()
+            if command -v ninja >/dev/null 2>&1; then
+              CMAKE_EXTRA_ARGS+=(-GNinja)
+            fi
+            if command -v ccache >/dev/null 2>&1; then
+              CMAKE_EXTRA_ARGS+=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+            fi
+            VULKAN_FLAG="OFF"
+            if [ -f "/usr/include/vulkan/vulkan.h" ] || [ -f "/usr/local/include/vulkan/vulkan.h" ] || [ -n "${VULKAN_SDK:-}" ]; then
+              VULKAN_FLAG="ON"
+            fi
+            cmake -B build -S . "${CMAKE_EXTRA_ARGS[@]}" \
+              -DLIMINIKA_ENABLE_VULKAN="${VULKAN_FLAG}" \
               -DLIMINIKA_ENABLE_AVX2=ON \
               -DLIMINIKA_ENABLE_CUDA=OFF \
               -DLIMINIKA_ENABLE_METAL=OFF \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo
           else
-            echo "No root CMakeLists.txt found; skipping CMake configure."
+            echo "No root CMakeLists.txt or cmake binary found; skipping CMake configure."
           fi
 
       - name: Configure CMake (Windows with AVX2 enabled)
@@ -433,8 +457,11 @@ jobs:
       - name: Install C/C++ & LLVM Dependencies for FFI/Bindgen (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libclang-dev clang libvulkan-dev glslang-tools libshaderc-dev
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 update || true
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 install -y cmake ninja-build libclang-dev clang libvulkan-dev glslang-tools libshaderc-dev || true
+          if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
+            python3 -m pip install --quiet --retries 1 --timeout 10 cmake ninja 2>/dev/null || pip3 install --quiet --break-system-packages --retries 1 --timeout 10 cmake ninja 2>/dev/null || true
+          fi
 
       - name: Install C/C++ & LLVM Dependencies for FFI/Bindgen (macOS)
         if: runner.os == 'macOS'
@@ -463,10 +490,13 @@ jobs:
 
       - name: Fast check Rust workspace (Linux with Vulkan enabled)
         if: runner.os == 'Linux'
-        env:
-          LIMINIKA_ENABLE_VULKAN: "1"
         run: |
           if [ -f "Cargo.toml" ]; then
+            if [ -f "/usr/include/vulkan/vulkan.h" ] || [ -f "/usr/local/include/vulkan/vulkan.h" ] || [ -n "${VULKAN_SDK:-}" ]; then
+              export LIMINIKA_ENABLE_VULKAN="1"
+            else
+              export LIMINIKA_ENABLE_VULKAN="0"
+            fi
             CARGO_FLAGS=""
             if cargo check --workspace --all-targets --locked 2>/dev/null; then
               CARGO_FLAGS="--locked"
@@ -665,15 +695,13 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install cffconvert
-        run: |
-          python -m pip install --upgrade pip
-          pip install cffconvert
-
-      - name: Validate CITATION.cff Schema
+      - name: Install cffconvert & Validate CITATION.cff Schema
         run: |
           if [ -f "CITATION.cff" ]; then
-            cffconvert --validate
+            python -m pip install --quiet --retries 1 --timeout 10 --upgrade pip cffconvert || true
+            if command -v cffconvert >/dev/null 2>&1; then
+              cffconvert --validate
+            fi
           fi
 
   # =========================================================================

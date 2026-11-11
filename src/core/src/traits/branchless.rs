@@ -1052,7 +1052,12 @@ pub(crate) const fn crc32_update_crystal_stationary_fields_delta(
         direct_xor ^= crc32_crystal_tm44_final_u32(delta_inv_temp_bits);
     }
     if delta_w7_lo != 0 {
-        direct_xor ^= CRC32_CRYSTAL_SLOT_BYTE56_LUT_8[(delta_w7_lo & 7) as usize]
+        let slot_contrib = if (delta_w7_lo & 0xF8) == 0 {
+            CRC32_CRYSTAL_SLOT_BYTE56_LUT_8[(delta_w7_lo & 7) as usize]
+        } else {
+            crc32_step_l4(crc32_slice16_indep_lo1_u32(delta_w7_lo & 0xFF))
+        };
+        direct_xor ^= slot_contrib
             ^ CRC32_CRYSTAL_ACTION_BYTE57_REF[((delta_w7_lo >> 8) & 0xFF) as usize];
     }
     if prov_fast {
@@ -4189,7 +4194,8 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
                     0.0
                 };
                 if clean_energy > 1.0e-12 {
-                    let check_b_uni = r_uni & (t_uni | !trail_nonzero);
+                    let check_b_uni =
+                        (running_weight <= 1.0e-12) | (r_uni & (t_uni | !trail_nonzero));
                     let mut b = [0u64; 8];
                     let b_uni = if check_b_uni {
                         b = load_q7_words_64(&anchor_phases[idx]);
@@ -4589,7 +4595,8 @@ pub fn branchless_q7_unified_field_fold_words_with_init_weight_64(
                 let clean_energy =
                     branchless_flush_subnormal_f32(branchless_relu_f32(anchor_base_energies[idx]));
                 if clean_energy > 1.0e-12 {
-                    let check_b_uni = r_uni & (t_uni | !trail_nonzero);
+                    let check_b_uni =
+                        (running_weight <= 1.0e-12) | (r_uni & (t_uni | !trail_nonzero));
                     let mut b = [0u64; 8];
                     let b_uni = if check_b_uni {
                         b = load_q7_words_64(&anchor_phases[idx]);
@@ -6298,79 +6305,147 @@ pub fn branchless_project_f32_slice_to_q7_64(
     let mut acc = [0.0_f32; MAX_ATTENTION_HEADS];
     let len = values.len();
 
+    let folds = ((len + 63) >> 6) as f32;
+    let inv_folds = clean_gain * fast_inv_pos_normal_f32(folds);
+
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     let rem_start = if len >= MAX_ATTENTION_HEADS {
+        #[inline(always)]
+        unsafe fn avx2_quantize_acc_vec_to_q7_u64(
+            v_acc: core::arch::x86_64::__m256,
+            v_inv_folds: core::arch::x86_64::__m256,
+        ) -> u64 {
+            // SAFETY: `target_feature = "avx2"` is enabled; clamps `v_acc * inv_folds` to `[-PI, PI]`
+            // and quantizes 8 lanes to Q7 `[-128, 127]` in registers (`0` scalar float-to-int loop).
+            unsafe {
+                let rad = _mm256_min_ps(
+                    _mm256_max_ps(_mm256_mul_ps(v_acc, v_inv_folds), _mm256_set1_ps(-PI)),
+                    _mm256_set1_ps(PI),
+                );
+                let scaled = _mm256_mul_ps(rad, _mm256_set1_ps(Q7_PHASE_INV_SCALE_RAD));
+                let sign_bit = _mm256_and_ps(scaled, _mm256_set1_ps(f32::from_bits(0x8000_0000)));
+                let rounded = _mm256_add_ps(
+                    scaled,
+                    _mm256_or_ps(_mm256_set1_ps(0.5_f32), sign_bit),
+                );
+                let vi32 = _mm256_cvttps_epi32(rounded);
+                let p16 = _mm_packs_epi32(
+                    _mm256_castsi256_si128(vi32),
+                    _mm256_extracti128_si256::<1>(vi32),
+                );
+                let p8 = _mm_packs_epi16(p16, p16);
+                _mm_cvtsi128_si64(p8) as u64
+            }
+        }
+
         let ptr = values.as_ptr();
         // SAFETY: `target_feature = "avx2"` is enabled, and `i + 64 <= len` is bounds-checked.
         unsafe {
             let inf_exp = _mm256_set1_epi32(0x7F80_0000);
+            // Pass 1 (lanes 0..32): 4 YMM accumulators (`<= 6` live YMMs, `0` Windows x64 XMM stack spills)
             let mut v0 = _mm256_setzero_ps();
             let mut v1 = _mm256_setzero_ps();
             let mut v2 = _mm256_setzero_ps();
             let mut v3 = _mm256_setzero_ps();
-            let mut v4 = _mm256_setzero_ps();
-            let mut v5 = _mm256_setzero_ps();
-            let mut v6 = _mm256_setzero_ps();
-            let mut v7 = _mm256_setzero_ps();
             let mut i = 0usize;
             while i + 64 <= len {
                 let x0 = _mm256_loadu_ps(ptr.add(i));
-                let x1 = _mm256_loadu_ps(ptr.add(i + 8));
-                let x2 = _mm256_loadu_ps(ptr.add(i + 16));
-                let x3 = _mm256_loadu_ps(ptr.add(i + 24));
-                let x4 = _mm256_loadu_ps(ptr.add(i + 32));
-                let x5 = _mm256_loadu_ps(ptr.add(i + 40));
-                let x6 = _mm256_loadu_ps(ptr.add(i + 48));
-                let x7 = _mm256_loadu_ps(ptr.add(i + 56));
-
                 let nf0 = _mm256_castsi256_ps(_mm256_cmpeq_epi32(
                     _mm256_and_si256(_mm256_castps_si256(x0), inf_exp),
                     inf_exp,
                 ));
+                v0 = _mm256_add_ps(v0, _mm256_andnot_ps(nf0, x0));
+
+                let x1 = _mm256_loadu_ps(ptr.add(i + 8));
                 let nf1 = _mm256_castsi256_ps(_mm256_cmpeq_epi32(
                     _mm256_and_si256(_mm256_castps_si256(x1), inf_exp),
                     inf_exp,
                 ));
+                v1 = _mm256_add_ps(v1, _mm256_andnot_ps(nf1, x1));
+
+                let x2 = _mm256_loadu_ps(ptr.add(i + 16));
                 let nf2 = _mm256_castsi256_ps(_mm256_cmpeq_epi32(
                     _mm256_and_si256(_mm256_castps_si256(x2), inf_exp),
                     inf_exp,
                 ));
+                v2 = _mm256_add_ps(v2, _mm256_andnot_ps(nf2, x2));
+
+                let x3 = _mm256_loadu_ps(ptr.add(i + 24));
                 let nf3 = _mm256_castsi256_ps(_mm256_cmpeq_epi32(
                     _mm256_and_si256(_mm256_castps_si256(x3), inf_exp),
                     inf_exp,
                 ));
+                v3 = _mm256_add_ps(v3, _mm256_andnot_ps(nf3, x3));
+                i += 64;
+            }
+            let has_rem = i < len;
+            let mut w_lo = [0u64; 4];
+            if has_rem {
+                let ap = acc.as_mut_ptr();
+                _mm256_storeu_ps(ap, v0);
+                _mm256_storeu_ps(ap.add(8), v1);
+                _mm256_storeu_ps(ap.add(16), v2);
+                _mm256_storeu_ps(ap.add(24), v3);
+            } else {
+                let v_inv = _mm256_set1_ps(inv_folds);
+                w_lo[0] = avx2_quantize_acc_vec_to_q7_u64(v0, v_inv);
+                w_lo[1] = avx2_quantize_acc_vec_to_q7_u64(v1, v_inv);
+                w_lo[2] = avx2_quantize_acc_vec_to_q7_u64(v2, v_inv);
+                w_lo[3] = avx2_quantize_acc_vec_to_q7_u64(v3, v_inv);
+            }
+
+            // Pass 2 (lanes 32..64): 4 YMM accumulators (`<= 6` live YMMs, `0` Windows x64 XMM stack spills)
+            let mut v4 = _mm256_setzero_ps();
+            let mut v5 = _mm256_setzero_ps();
+            let mut v6 = _mm256_setzero_ps();
+            let mut v7 = _mm256_setzero_ps();
+            let mut j = 0usize;
+            while j + 64 <= len {
+                let x4 = _mm256_loadu_ps(ptr.add(j + 32));
                 let nf4 = _mm256_castsi256_ps(_mm256_cmpeq_epi32(
                     _mm256_and_si256(_mm256_castps_si256(x4), inf_exp),
                     inf_exp,
                 ));
+                v4 = _mm256_add_ps(v4, _mm256_andnot_ps(nf4, x4));
+
+                let x5 = _mm256_loadu_ps(ptr.add(j + 40));
                 let nf5 = _mm256_castsi256_ps(_mm256_cmpeq_epi32(
                     _mm256_and_si256(_mm256_castps_si256(x5), inf_exp),
                     inf_exp,
                 ));
+                v5 = _mm256_add_ps(v5, _mm256_andnot_ps(nf5, x5));
+
+                let x6 = _mm256_loadu_ps(ptr.add(j + 48));
                 let nf6 = _mm256_castsi256_ps(_mm256_cmpeq_epi32(
                     _mm256_and_si256(_mm256_castps_si256(x6), inf_exp),
                     inf_exp,
                 ));
+                v6 = _mm256_add_ps(v6, _mm256_andnot_ps(nf6, x6));
+
+                let x7 = _mm256_loadu_ps(ptr.add(j + 56));
                 let nf7 = _mm256_castsi256_ps(_mm256_cmpeq_epi32(
                     _mm256_and_si256(_mm256_castps_si256(x7), inf_exp),
                     inf_exp,
                 ));
-
-                v0 = _mm256_add_ps(v0, _mm256_andnot_ps(nf0, x0));
-                v1 = _mm256_add_ps(v1, _mm256_andnot_ps(nf1, x1));
-                v2 = _mm256_add_ps(v2, _mm256_andnot_ps(nf2, x2));
-                v3 = _mm256_add_ps(v3, _mm256_andnot_ps(nf3, x3));
-                v4 = _mm256_add_ps(v4, _mm256_andnot_ps(nf4, x4));
-                v5 = _mm256_add_ps(v5, _mm256_andnot_ps(nf5, x5));
-                v6 = _mm256_add_ps(v6, _mm256_andnot_ps(nf6, x6));
                 v7 = _mm256_add_ps(v7, _mm256_andnot_ps(nf7, x7));
-                i += 64;
+                j += 64;
+            }
+            if !has_rem {
+                let v_inv = _mm256_set1_ps(inv_folds);
+                let out_words = [
+                    w_lo[0],
+                    w_lo[1],
+                    w_lo[2],
+                    w_lo[3],
+                    avx2_quantize_acc_vec_to_q7_u64(v4, v_inv),
+                    avx2_quantize_acc_vec_to_q7_u64(v5, v_inv),
+                    avx2_quantize_acc_vec_to_q7_u64(v6, v_inv),
+                    avx2_quantize_acc_vec_to_q7_u64(v7, v_inv),
+                ];
+                store_q7_words_64(&mut out, &out_words);
+                return out;
             }
             let ap = acc.as_mut_ptr();
-            _mm256_storeu_ps(ap, v0);
-            _mm256_storeu_ps(ap.add(8), v1);
-            _mm256_storeu_ps(ap.add(16), v2);
-            _mm256_storeu_ps(ap.add(24), v3);
             _mm256_storeu_ps(ap.add(32), v4);
             _mm256_storeu_ps(ap.add(40), v5);
             _mm256_storeu_ps(ap.add(48), v6);
@@ -6391,8 +6466,6 @@ pub fn branchless_project_f32_slice_to_q7_64(
         i += 1;
     }
 
-    let folds = ((len + 63) >> 6) as f32;
-    let inv_folds = clean_gain * fast_inv_pos_normal_f32(folds);
     let mut h = 0usize;
     while h < MAX_ATTENTION_HEADS {
         let rad = branchless_clamp_f32(acc[h] * inv_folds, -PI, PI);
@@ -8447,6 +8520,55 @@ pub(crate) fn atan2_to_q7_word_x8_simd(sin_arr: &[f32; 8], cos_arr: &[f32; 8]) -
     }
 }
 
+/// Evaluates 8-lane pairwise $\operatorname{atan2}(y_k, x_k)$ directly on 16 interleaved
+/// `[x_0, y_0, x_1, y_1, ..., x_7, y_7]` floats (`interleaved_16.len() >= 16`), deinterleaving
+/// even (`cos`) and odd (`sin`) lanes in AVX2 registers to eliminate 16 scalar stack stores and
+/// 8-to-1 Store-to-Load Forwarding (STLF) pipeline stalls.
+#[inline(always)]
+pub(crate) fn atan2_interleaved_pairs_to_q7_word_x8_simd(interleaved_16: &[f32]) -> u64 {
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    {
+        if interleaved_16.len() >= 16 {
+            // SAFETY: `target_feature = "avx2"` is enabled and `interleaved_16.len() >= 16`.
+            unsafe {
+                let ptr = interleaved_16.as_ptr();
+                let v_lo = _mm256_loadu_ps(ptr);
+                let v_hi = _mm256_loadu_ps(ptr.add(8));
+                let cos_shuf = _mm256_shuffle_ps::<0x88>(v_lo, v_hi);
+                let sin_shuf = _mm256_shuffle_ps::<0xDD>(v_lo, v_hi);
+                let vx = _mm256_castsi256_ps(_mm256_permute4x64_epi64::<0xD8>(
+                    _mm256_castps_si256(cos_shuf),
+                ));
+                let vy = _mm256_castsi256_ps(_mm256_permute4x64_epi64::<0xD8>(
+                    _mm256_castps_si256(sin_shuf),
+                ));
+                return avx2_atan2_to_q7_word_x8_vec(vy, vx);
+            }
+        }
+    }
+    let sin_arr = [
+        interleaved_16[1],
+        interleaved_16[3],
+        interleaved_16[5],
+        interleaved_16[7],
+        interleaved_16[9],
+        interleaved_16[11],
+        interleaved_16[13],
+        interleaved_16[15],
+    ];
+    let cos_arr = [
+        interleaved_16[0],
+        interleaved_16[2],
+        interleaved_16[4],
+        interleaved_16[6],
+        interleaved_16[8],
+        interleaved_16[10],
+        interleaved_16[12],
+        interleaved_16[14],
+    ];
+    atan2_to_q7_word_x8_simd(&sin_arr, &cos_arr)
+}
+
 /// Computes the Orthogonal Procrustes $SO(2)$ phase delta for a single 8-head SWAR cell
 /// (`h_base .. h_base + cell_heads`, where `cell_heads <= 8`), returning the packed 64-bit Q7 SWAR word.
 #[inline(always)]
@@ -9122,13 +9244,24 @@ pub(crate) fn srl_write_outer_product_simd(
                 let vs = _mm256_set1_ps(clean_scale);
                 let mut i = 0usize;
                 while i + 32 <= len_g {
-                    for off in [0usize, 8, 16, 24] {
-                        let prod = _mm256_mul_ps(
-                            _mm256_loadu_ps(pu.add(i + off)),
-                            _mm256_loadu_ps(pg.add(i + off)),
-                        );
-                        _mm256_storeu_ps(py.add(i + off), _mm256_mul_ps(prod, vs));
-                    }
+                    let p0 = _mm256_mul_ps(_mm256_loadu_ps(pu.add(i)), _mm256_loadu_ps(pg.add(i)));
+                    let p1 = _mm256_mul_ps(
+                        _mm256_loadu_ps(pu.add(i + 8)),
+                        _mm256_loadu_ps(pg.add(i + 8)),
+                    );
+                    _mm256_storeu_ps(py.add(i), _mm256_mul_ps(p0, vs));
+                    _mm256_storeu_ps(py.add(i + 8), _mm256_mul_ps(p1, vs));
+
+                    let p2 = _mm256_mul_ps(
+                        _mm256_loadu_ps(pu.add(i + 16)),
+                        _mm256_loadu_ps(pg.add(i + 16)),
+                    );
+                    let p3 = _mm256_mul_ps(
+                        _mm256_loadu_ps(pu.add(i + 24)),
+                        _mm256_loadu_ps(pg.add(i + 24)),
+                    );
+                    _mm256_storeu_ps(py.add(i + 16), _mm256_mul_ps(p2, vs));
+                    _mm256_storeu_ps(py.add(i + 24), _mm256_mul_ps(p3, vs));
                     i += 32;
                 }
                 while i < len_g {
@@ -9158,12 +9291,14 @@ pub(crate) fn srl_write_outer_product_simd(
                 let vs = _mm256_set1_ps(clean_scale);
                 let mut i = 0usize;
                 while i + 32 <= len {
-                    for off in [0usize, 8, 16, 24] {
-                        _mm256_storeu_ps(
-                            py.add(i + off),
-                            _mm256_mul_ps(_mm256_loadu_ps(pu.add(i + off)), vs),
-                        );
-                    }
+                    let u0 = _mm256_loadu_ps(pu.add(i));
+                    let u1 = _mm256_loadu_ps(pu.add(i + 8));
+                    _mm256_storeu_ps(py.add(i), _mm256_mul_ps(u0, vs));
+                    _mm256_storeu_ps(py.add(i + 8), _mm256_mul_ps(u1, vs));
+                    let u2 = _mm256_loadu_ps(pu.add(i + 16));
+                    let u3 = _mm256_loadu_ps(pu.add(i + 24));
+                    _mm256_storeu_ps(py.add(i + 16), _mm256_mul_ps(u2, vs));
+                    _mm256_storeu_ps(py.add(i + 24), _mm256_mul_ps(u3, vs));
                     i += 32;
                 }
                 while i < len {
@@ -9207,19 +9342,45 @@ pub(crate) fn srl_accum_outer_product_simd(
                 let vs = _mm256_set1_ps(clean_scale);
                 let mut i = 0usize;
                 while i + 32 <= len_g {
-                    for off in [0usize, 8, 16, 24] {
-                        let d = _mm256_mul_ps(
-                            _mm256_mul_ps(
-                                _mm256_loadu_ps(pu.add(i + off)),
-                                _mm256_loadu_ps(pg.add(i + off)),
-                            ),
-                            vs,
-                        );
-                        _mm256_storeu_ps(
-                            py.add(i + off),
-                            _mm256_add_ps(_mm256_loadu_ps(py.add(i + off)), d),
-                        );
-                    }
+                    let d0 = _mm256_mul_ps(
+                        _mm256_mul_ps(_mm256_loadu_ps(pu.add(i)), _mm256_loadu_ps(pg.add(i))),
+                        vs,
+                    );
+                    let d1 = _mm256_mul_ps(
+                        _mm256_mul_ps(
+                            _mm256_loadu_ps(pu.add(i + 8)),
+                            _mm256_loadu_ps(pg.add(i + 8)),
+                        ),
+                        vs,
+                    );
+                    _mm256_storeu_ps(py.add(i), _mm256_add_ps(_mm256_loadu_ps(py.add(i)), d0));
+                    _mm256_storeu_ps(
+                        py.add(i + 8),
+                        _mm256_add_ps(_mm256_loadu_ps(py.add(i + 8)), d1),
+                    );
+
+                    let d2 = _mm256_mul_ps(
+                        _mm256_mul_ps(
+                            _mm256_loadu_ps(pu.add(i + 16)),
+                            _mm256_loadu_ps(pg.add(i + 16)),
+                        ),
+                        vs,
+                    );
+                    let d3 = _mm256_mul_ps(
+                        _mm256_mul_ps(
+                            _mm256_loadu_ps(pu.add(i + 24)),
+                            _mm256_loadu_ps(pg.add(i + 24)),
+                        ),
+                        vs,
+                    );
+                    _mm256_storeu_ps(
+                        py.add(i + 16),
+                        _mm256_add_ps(_mm256_loadu_ps(py.add(i + 16)), d2),
+                    );
+                    _mm256_storeu_ps(
+                        py.add(i + 24),
+                        _mm256_add_ps(_mm256_loadu_ps(py.add(i + 24)), d3),
+                    );
                     i += 32;
                 }
                 while i < len_g {
@@ -9249,13 +9410,23 @@ pub(crate) fn srl_accum_outer_product_simd(
                 let vs = _mm256_set1_ps(clean_scale);
                 let mut i = 0usize;
                 while i + 32 <= len {
-                    for off in [0usize, 8, 16, 24] {
-                        let d = _mm256_mul_ps(_mm256_loadu_ps(pu.add(i + off)), vs);
-                        _mm256_storeu_ps(
-                            py.add(i + off),
-                            _mm256_add_ps(_mm256_loadu_ps(py.add(i + off)), d),
-                        );
-                    }
+                    let d0 = _mm256_mul_ps(_mm256_loadu_ps(pu.add(i)), vs);
+                    let d1 = _mm256_mul_ps(_mm256_loadu_ps(pu.add(i + 8)), vs);
+                    _mm256_storeu_ps(py.add(i), _mm256_add_ps(_mm256_loadu_ps(py.add(i)), d0));
+                    _mm256_storeu_ps(
+                        py.add(i + 8),
+                        _mm256_add_ps(_mm256_loadu_ps(py.add(i + 8)), d1),
+                    );
+                    let d2 = _mm256_mul_ps(_mm256_loadu_ps(pu.add(i + 16)), vs);
+                    let d3 = _mm256_mul_ps(_mm256_loadu_ps(pu.add(i + 24)), vs);
+                    _mm256_storeu_ps(
+                        py.add(i + 16),
+                        _mm256_add_ps(_mm256_loadu_ps(py.add(i + 16)), d2),
+                    );
+                    _mm256_storeu_ps(
+                        py.add(i + 24),
+                        _mm256_add_ps(_mm256_loadu_ps(py.add(i + 24)), d3),
+                    );
                     i += 32;
                 }
                 while i < len {

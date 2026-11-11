@@ -62,6 +62,7 @@ use super::branchless::{
     crc32_block64_zero_seed_words, crc32_crystal_zoff16_final_u32,
     crc32_crystal_stamp_contrib_128b, crc32_fold_stamped_crystal_128b,
     crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32, crc32_slice16_indep_hi1_u32,
+    atan2_interleaved_pairs_to_q7_word_x8_simd, atan2_to_q7_word_x8_simd,
     crc32_slice16_indep_lo1_u32, crc32_slice16_step_u64x2,
     crc32_step_block64_words, crc32_step_l16, crc32_step_l3, crc32_step_l32,
     crc32_step_l4, crc32_step_l5, crc32_step_l6, crc32_step_l8,
@@ -82,7 +83,7 @@ use super::branchless::{
     scale_f32_slice_unrolled8, store_q7_words_64,
     swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
     swar_q7_mean_i8_from_words_64, swar_q7_mean_i8_from_words_with_uniform_flag_64,
-    swar_q7_neg_sat_x8, swar_q7_pack_x8, swar_q7_qdps_filter_words_with_uniform_flag_64,
+    swar_q7_neg_sat_x8, swar_q7_qdps_filter_words_with_uniform_flag_64,
     swar_q7_scale_le128_with_bias_x8,
     swar_slerp_words_with_uniform_flag_64, BranchlessKernel,
     DEFAULT_PHASE_GRAVITY_EPS,
@@ -235,11 +236,11 @@ pub const fn project_bytes_swar_to_q7_64(bytes: &[u8]) -> [gcso_q7_t; MAX_ATTENT
 }
 
 /// Projects an `f32` embedding slice directly into 8 register-resident `u64` SWAR words (`[u64; 8]`)
-/// via pairwise $SO(2)$ angles evaluated with [`branchless_atan2_to_q7_fast`], avoiding any 64-byte
-/// stack array roundtrip when synthesizing `ObjectiveFact<&[f32]>` or `SubjectivePersona<&[f32]>`.
+/// via pairwise $SO(2)$ angles evaluated with 8-lane SIMD (`atan2_to_q7_word_x8_simd`), avoiding any
+/// 64-byte stack array roundtrip when synthesizing `ObjectiveFact<&[f32]>` or `SubjectivePersona<&[f32]>`.
 #[inline]
 #[must_use]
-pub const fn project_f32_slice_to_words_64(values: &[f32]) -> [u64; NUM_SWARM_MICRO_CELLS] {
+pub fn project_f32_slice_to_words_64(values: &[f32]) -> [u64; NUM_SWARM_MICRO_CELLS] {
     let n = values.len();
     if n == 0 { return [0u64; NUM_SWARM_MICRO_CELLS]; }
     let mut words = [0u64; NUM_SWARM_MICRO_CELLS];
@@ -247,15 +248,7 @@ pub const fn project_f32_slice_to_words_64(values: &[f32]) -> [u64; NUM_SWARM_MI
         let mut cell = 0usize;
         while cell < NUM_SWARM_MICRO_CELLS {
             let base_i = cell << 4;
-            let q0 = branchless_atan2_to_q7_fast(values[base_i + 1], values[base_i]);
-            let q1 = branchless_atan2_to_q7_fast(values[base_i + 3], values[base_i + 2]);
-            let q2 = branchless_atan2_to_q7_fast(values[base_i + 5], values[base_i + 4]);
-            let q3 = branchless_atan2_to_q7_fast(values[base_i + 7], values[base_i + 6]);
-            let q4 = branchless_atan2_to_q7_fast(values[base_i + 9], values[base_i + 8]);
-            let q5 = branchless_atan2_to_q7_fast(values[base_i + 11], values[base_i + 10]);
-            let q6 = branchless_atan2_to_q7_fast(values[base_i + 13], values[base_i + 12]);
-            let q7 = branchless_atan2_to_q7_fast(values[base_i + 15], values[base_i + 14]);
-            words[cell] = swar_q7_pack_x8(&[q0, q1, q2, q3, q4, q5, q6, q7]);
+            words[cell] = atan2_interleaved_pairs_to_q7_word_x8_simd(&values[base_i..base_i + 16]);
             cell += 1;
         }
         return words;
@@ -280,17 +273,9 @@ pub const fn project_f32_slice_to_words_64(values: &[f32]) -> [u64; NUM_SWARM_MI
             return [quad32 | (quad32 << 32); NUM_SWARM_MICRO_CELLS];
         }
         if n == 16 {
-            let q0 = branchless_atan2_to_q7_fast(values[1], values[0]);
-            let q1 = branchless_atan2_to_q7_fast(values[3], values[2]);
-            let q2 = branchless_atan2_to_q7_fast(values[5], values[4]);
-            let q3 = branchless_atan2_to_q7_fast(values[7], values[6]);
-            let q4 = branchless_atan2_to_q7_fast(values[9], values[8]);
-            let q5 = branchless_atan2_to_q7_fast(values[11], values[10]);
-            let q6 = branchless_atan2_to_q7_fast(values[13], values[12]);
-            let q7 = branchless_atan2_to_q7_fast(values[15], values[14]);
-            return [swar_q7_pack_x8(&[q0, q1, q2, q3, q4, q5, q6, q7]); NUM_SWARM_MICRO_CELLS];
+            let w0 = atan2_interleaved_pairs_to_q7_word_x8_simd(&values[..16]);
+            return [w0; NUM_SWARM_MICRO_CELLS];
         }
-        let mask = n - 1;
         let unique_cells = branchless_select_usize(
             (n >> 4) < NUM_SWARM_MICRO_CELLS,
             n >> 4,
@@ -299,15 +284,7 @@ pub const fn project_f32_slice_to_words_64(values: &[f32]) -> [u64; NUM_SWARM_MI
         let mut cell = 0usize;
         while cell < unique_cells {
             let base_i = cell << 4;
-            let q0 = branchless_atan2_to_q7_fast(values[(base_i + 1) & mask], values[base_i & mask]);
-            let q1 = branchless_atan2_to_q7_fast(values[(base_i + 3) & mask], values[(base_i + 2) & mask]);
-            let q2 = branchless_atan2_to_q7_fast(values[(base_i + 5) & mask], values[(base_i + 4) & mask]);
-            let q3 = branchless_atan2_to_q7_fast(values[(base_i + 7) & mask], values[(base_i + 6) & mask]);
-            let q4 = branchless_atan2_to_q7_fast(values[(base_i + 9) & mask], values[(base_i + 8) & mask]);
-            let q5 = branchless_atan2_to_q7_fast(values[(base_i + 11) & mask], values[(base_i + 10) & mask]);
-            let q6 = branchless_atan2_to_q7_fast(values[(base_i + 13) & mask], values[(base_i + 12) & mask]);
-            let q7 = branchless_atan2_to_q7_fast(values[(base_i + 15) & mask], values[(base_i + 14) & mask]);
-            words[cell] = swar_q7_pack_x8(&[q0, q1, q2, q3, q4, q5, q6, q7]);
+            words[cell] = atan2_interleaved_pairs_to_q7_word_x8_simd(&values[base_i..base_i + 16]);
             cell += 1;
         }
         while cell < NUM_SWARM_MICRO_CELLS {
@@ -319,25 +296,37 @@ pub const fn project_f32_slice_to_words_64(values: &[f32]) -> [u64; NUM_SWARM_MI
     let mut cell = 0usize;
     while cell < NUM_SWARM_MICRO_CELLS {
         let base_h = cell << 3;
-        let q0 = branchless_atan2_to_q7_fast(values[((base_h) << 1 | 1) % n], values[((base_h) << 1) % n]);
-        let q1 = branchless_atan2_to_q7_fast(values[((base_h + 1) << 1 | 1) % n], values[((base_h + 1) << 1) % n]);
-        let q2 = branchless_atan2_to_q7_fast(values[((base_h + 2) << 1 | 1) % n], values[((base_h + 2) << 1) % n]);
-        let q3 = branchless_atan2_to_q7_fast(values[((base_h + 3) << 1 | 1) % n], values[((base_h + 3) << 1) % n]);
-        let q4 = branchless_atan2_to_q7_fast(values[((base_h + 4) << 1 | 1) % n], values[((base_h + 4) << 1) % n]);
-        let q5 = branchless_atan2_to_q7_fast(values[((base_h + 5) << 1 | 1) % n], values[((base_h + 5) << 1) % n]);
-        let q6 = branchless_atan2_to_q7_fast(values[((base_h + 6) << 1 | 1) % n], values[((base_h + 6) << 1) % n]);
-        let q7 = branchless_atan2_to_q7_fast(values[((base_h + 7) << 1 | 1) % n], values[((base_h + 7) << 1) % n]);
-        words[cell] = swar_q7_pack_x8(&[q0, q1, q2, q3, q4, q5, q6, q7]);
+        let sin_arr = [
+            values[((base_h) << 1 | 1) % n],
+            values[((base_h + 1) << 1 | 1) % n],
+            values[((base_h + 2) << 1 | 1) % n],
+            values[((base_h + 3) << 1 | 1) % n],
+            values[((base_h + 4) << 1 | 1) % n],
+            values[((base_h + 5) << 1 | 1) % n],
+            values[((base_h + 6) << 1 | 1) % n],
+            values[((base_h + 7) << 1 | 1) % n],
+        ];
+        let cos_arr = [
+            values[((base_h) << 1) % n],
+            values[((base_h + 1) << 1) % n],
+            values[((base_h + 2) << 1) % n],
+            values[((base_h + 3) << 1) % n],
+            values[((base_h + 4) << 1) % n],
+            values[((base_h + 5) << 1) % n],
+            values[((base_h + 6) << 1) % n],
+            values[((base_h + 7) << 1) % n],
+        ];
+        words[cell] = atan2_to_q7_word_x8_simd(&sin_arr, &cos_arr);
         cell += 1;
     }
     words
 }
 
 /// Projects an `f32` embedding slice into a 64-head Q7 phase profile (`[gcso_q7_t; 64]`) via
-/// pairwise $SO(2)$ angles evaluated with [`branchless_atan2_to_q7_fast`].
+/// pairwise $SO(2)$ angles evaluated with 8-lane SIMD (`atan2_to_q7_word_x8_simd`).
 #[inline]
 #[must_use]
-pub const fn project_f32_slice_to_q7_64(values: &[f32]) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+pub fn project_f32_slice_to_q7_64(values: &[f32]) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
     let words = project_f32_slice_to_words_64(values);
     words_to_q7_array_64(&words)
 }
@@ -2760,7 +2749,6 @@ impl CrystallizedAttractorRecord {
                 & (delta_zoff == 0)
                 & ((delta_rb | delta_kp) == 0)
                 & ((delta_w7 >> 16) == 0)
-                & ((delta_w7 & 0xF8) == 0)
             {
                 self.checksum_crc32 = crc32_update_crystal_stationary_fields_delta(
                     prev_crc,
@@ -4898,27 +4886,26 @@ impl CrystallizedAttractorRecord {
                     } else {
                         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                         {
-                            let cand_uni_for_win = if self_is_uniform {
-                                cand_is_uniform
-                            } else if win_is_uniform {
-                                is_word_array_uniform_64(cand_w)
-                            } else {
-                                false
-                            };
-                            if win_is_uniform & cand_uni_for_win {
+                            if let Some((c0, c1)) = cand_vecs_opt {
+                                unsafe {
+                                    use core::arch::x86_64::_mm256_sub_epi8;
+                                    avx2_coherence_from_diff_vec64(
+                                        _mm256_sub_epi8(win_v0, c0),
+                                        _mm256_sub_epi8(win_v1, c1),
+                                    )
+                                }
+                            } else if win_is_uniform & cand_is_uniform {
                                 coherence_from_word_arrays_with_both_uniform_flags_64(
                                     &win_w, true, cand_w, true,
                                 )
                             } else {
                                 unsafe {
                                     use core::arch::x86_64::_mm256_sub_epi8;
-                                    let (c0, c1) = match cand_vecs_opt {
-                                        Some(v) => v,
-                                        None => super::branchless::avx2_words64_to_vec64_with_uniform(
+                                    let (c0, c1) =
+                                        super::branchless::avx2_words64_to_vec64_with_uniform(
                                             cand_w,
-                                            cand_uni_for_win,
-                                        ),
-                                    };
+                                            cand_is_uniform,
+                                        );
                                     avx2_coherence_from_diff_vec64(
                                         _mm256_sub_epi8(win_v0, c0),
                                         _mm256_sub_epi8(win_v1, c1),
@@ -5040,7 +5027,8 @@ impl CrystallizedAttractorRecord {
                 while i < records.len() {
                     let rec = &records[i];
                     if rec.sample_count > 0 && rec.phase_gravity_mass > 1.0e-12 {
-                        let check_uni = acc_uni & (init_is_uniform | !init_nonzero);
+                        let check_uni =
+                            (tot_pull <= 1.0e-12) | (acc_uni & (init_is_uniform | !init_nonzero));
                         let rec_w = rec.phase_words_ref();
                         let rec_uni = if check_uni {
                             is_word_array_uniform_64(rec_w)
@@ -6043,111 +6031,110 @@ impl<'a> GcsoFourSectionView<'a> {
             zimms_desc.write_unaligned_to(buf, GCSO_ZIMMS_DESCRIPTOR_PREAMBLE_OFFSET)?;
         }
 
-        let hdr_size = size_of::<gcso_snapshot_header_t>();
         let checksum_crc32 = {
             #[cfg(target_endian = "little")]
             {
+                let fs_lo = total_len as u32;
+                let fs_hi = ((total_len as u64) >> 32) as u32;
+                let fs_c = (if fs_lo == 0 {
+                    0
+                } else {
+                    crc32_slice16_indep_lo1_u32(fs_lo)
+                }) ^ (if fs_hi == 0 {
+                    0
+                } else {
+                    crc32_slice16_indep_hi1_u32(fs_hi)
+                });
+                let mut crc = CRC32_ZIMMS_DESC_BASE_SEED
+                    ^ (if fs_c == 0 { 0 } else { crc32_step_l3(fs_c) });
+                #[inline(always)]
+                fn stamped_crystal_crc(
+                    crystals: &[CrystallizedAttractorRecord],
+                    buf: &[u8],
+                    off_crystals: usize,
+                    idx: usize,
+                ) -> u32 {
+                    let r = &crystals[idx];
+                    let valid_hdr = (r.magic == GCSO_CRYSTAL_RECORD_MAGIC)
+                        & (r.version == GCSO_CRYSTAL_RECORD_VERSION);
+                    if valid_hdr && r.checksum_crc32 != 0 {
+                        r.checksum_crc32
+                    } else {
+                        let c_off =
+                            off_crystals + idx * size_of::<CrystallizedAttractorRecord>() + 52;
+                        u32::from_le_bytes([
+                            buf[c_off],
+                            buf[c_off + 1],
+                            buf[c_off + 2],
+                            buf[c_off + 3],
+                        ])
+                    }
+                }
+                let num_crystals = crystals.len();
+                let mut idx = 0usize;
+                while idx + 4 <= num_crystals {
+                    let s0 = crc32_crystal_stamp_contrib_128b(stamped_crystal_crc(
+                        crystals,
+                        buf,
+                        off_crystals,
+                        idx,
+                    ));
+                    let s1 = crc32_crystal_stamp_contrib_128b(stamped_crystal_crc(
+                        crystals,
+                        buf,
+                        off_crystals,
+                        idx + 1,
+                    ));
+                    let s2 = crc32_crystal_stamp_contrib_128b(stamped_crystal_crc(
+                        crystals,
+                        buf,
+                        off_crystals,
+                        idx + 2,
+                    ));
+                    let s3 = crc32_crystal_stamp_contrib_128b(stamped_crystal_crc(
+                        crystals,
+                        buf,
+                        off_crystals,
+                        idx + 3,
+                    ));
+                    let p01 = crc32_step_l8(s0) ^ s1;
+                    let p23 = crc32_step_l8(s2) ^ s3;
+                    crc = crc32_step_l32(crc) ^ crc32_step_l16(p01) ^ p23;
+                    idx += 4;
+                }
+                while idx + 2 <= num_crystals {
+                    let s0 = crc32_crystal_stamp_contrib_128b(stamped_crystal_crc(
+                        crystals,
+                        buf,
+                        off_crystals,
+                        idx,
+                    ));
+                    let s1 = crc32_crystal_stamp_contrib_128b(stamped_crystal_crc(
+                        crystals,
+                        buf,
+                        off_crystals,
+                        idx + 1,
+                    ));
+                    crc = crc32_step_l16(crc) ^ crc32_step_l8(s0) ^ s1;
+                    idx += 2;
+                }
+                if idx < num_crystals {
+                    let rec_crc = stamped_crystal_crc(crystals, buf, off_crystals, idx);
+                    crc = crc32_fold_stamped_crystal_128b(crc, rec_crc);
+                }
+                if off_trails > after_crystals {
+                    crc = crc32_step_l4(crc);
+                }
+                // Compute CRC32 over `trails`, `bloom_opt`, `daes_opt`, and `provenance_reports` directly
+                // from their aligned source references rather than reading back `buf[off_trails..total_len]`
+                // after 256-bit `copy_from_slice` stores (`0` 256-bit-to-64-bit STLF pipeline stalls).
+                if !trails.is_empty() {
+                    crc = update_aligned64_blocks_crc32_raw(
+                        crc,
+                        gcso_pointer_trail_t::slice_as_bytes(trails),
+                    );
+                }
                 if provenance_reports.is_empty() {
-                    let fs_lo = total_len as u32;
-                    let fs_hi = ((total_len as u64) >> 32) as u32;
-                    let fs_c = (if fs_lo == 0 {
-                        0
-                    } else {
-                        crc32_slice16_indep_lo1_u32(fs_lo)
-                    }) ^ (if fs_hi == 0 {
-                        0
-                    } else {
-                        crc32_slice16_indep_hi1_u32(fs_hi)
-                    });
-                    let mut crc = CRC32_ZIMMS_DESC_BASE_SEED
-                        ^ (if fs_c == 0 { 0 } else { crc32_step_l3(fs_c) });
-                    #[inline(always)]
-                    fn stamped_crystal_crc(
-                        crystals: &[CrystallizedAttractorRecord],
-                        buf: &[u8],
-                        off_crystals: usize,
-                        idx: usize,
-                    ) -> u32 {
-                        let r = &crystals[idx];
-                        let valid_hdr = (r.magic == GCSO_CRYSTAL_RECORD_MAGIC)
-                            & (r.version == GCSO_CRYSTAL_RECORD_VERSION);
-                        if valid_hdr && r.checksum_crc32 != 0 {
-                            r.checksum_crc32
-                        } else {
-                            let c_off =
-                                off_crystals + idx * size_of::<CrystallizedAttractorRecord>() + 52;
-                            u32::from_le_bytes([
-                                buf[c_off],
-                                buf[c_off + 1],
-                                buf[c_off + 2],
-                                buf[c_off + 3],
-                            ])
-                        }
-                    }
-                    let num_crystals = crystals.len();
-                    let mut idx = 0usize;
-                    while idx + 4 <= num_crystals {
-                        let s0 = crc32_crystal_stamp_contrib_128b(stamped_crystal_crc(
-                            crystals,
-                            buf,
-                            off_crystals,
-                            idx,
-                        ));
-                        let s1 = crc32_crystal_stamp_contrib_128b(stamped_crystal_crc(
-                            crystals,
-                            buf,
-                            off_crystals,
-                            idx + 1,
-                        ));
-                        let s2 = crc32_crystal_stamp_contrib_128b(stamped_crystal_crc(
-                            crystals,
-                            buf,
-                            off_crystals,
-                            idx + 2,
-                        ));
-                        let s3 = crc32_crystal_stamp_contrib_128b(stamped_crystal_crc(
-                            crystals,
-                            buf,
-                            off_crystals,
-                            idx + 3,
-                        ));
-                        let p01 = crc32_step_l8(s0) ^ s1;
-                        let p23 = crc32_step_l8(s2) ^ s3;
-                        crc = crc32_step_l32(crc) ^ crc32_step_l16(p01) ^ p23;
-                        idx += 4;
-                    }
-                    while idx + 2 <= num_crystals {
-                        let s0 = crc32_crystal_stamp_contrib_128b(stamped_crystal_crc(
-                            crystals,
-                            buf,
-                            off_crystals,
-                            idx,
-                        ));
-                        let s1 = crc32_crystal_stamp_contrib_128b(stamped_crystal_crc(
-                            crystals,
-                            buf,
-                            off_crystals,
-                            idx + 1,
-                        ));
-                        crc = crc32_step_l16(crc) ^ crc32_step_l8(s0) ^ s1;
-                        idx += 2;
-                    }
-                    if idx < num_crystals {
-                        let rec_crc = stamped_crystal_crc(crystals, buf, off_crystals, idx);
-                        crc = crc32_fold_stamped_crystal_128b(crc, rec_crc);
-                    }
-                    if off_trails > after_crystals {
-                        crc = crc32_step_l4(crc);
-                    }
-                    // Compute CRC32 over `trails`, `bloom_opt`, and `daes_opt` directly from their
-                    // 128B/64B-aligned source references rather than reading back `buf[off_trails..total_len]`
-                    // after 256-bit `copy_from_slice` stores (`0` 256-bit-to-64-bit STLF pipeline stalls).
-                    if !trails.is_empty() {
-                        crc = update_aligned64_blocks_crc32_raw(
-                            crc,
-                            gcso_pointer_trail_t::slice_as_bytes(trails),
-                        );
-                    }
                     match (bloom_opt, daes_opt) {
                         (Some(bloom), Some(daes)) => {
                             // SAFETY: `ContrastivePhaseBloomFilter` and `gcso_daes_slot_t` are both
@@ -6177,23 +6164,75 @@ impl<'a> GcsoFourSectionView<'a> {
                         }
                         (None, None) => {}
                     }
-                    !crc
                 } else {
-                    Self::compute_container_crc32_with_stamped_crystals(
-                        buf,
-                        hdr_size,
-                        off_crystals,
-                        crystals.len(),
-                        after_crystals,
-                        total_len,
-                    )
+                    match (bloom_opt, daes_opt) {
+                        (Some(bloom), Some(daes)) => {
+                            // SAFETY: `ContrastivePhaseBloomFilter` and `gcso_daes_slot_t` are 64B-aligned `[u64; 8]`.
+                            let (wb, wd) = unsafe {
+                                (
+                                    &*(core::ptr::from_ref(bloom).cast::<[u64; 8]>()),
+                                    &*(core::ptr::from_ref(daes).cast::<[u64; 8]>()),
+                                )
+                            };
+                            let zb = crc32_block64_zero_seed_words(wb);
+                            let zd = crc32_block64_zero_seed_words(wd);
+                            let zbd = (if zb == 0 { 0 } else { crc32_step_l4(zb) }) ^ zd;
+                            crc = crc32_step_l8(crc) ^ zbd;
+                        }
+                        (Some(bloom), None) => {
+                            // SAFETY: `ContrastivePhaseBloomFilter` is 64B-aligned `[u64; 8]`.
+                            let wb = unsafe { &*(core::ptr::from_ref(bloom).cast::<[u64; 8]>()) };
+                            crc = crc32_step_block64_words(crc, wb);
+                        }
+                        (None, Some(daes)) => {
+                            // SAFETY: `gcso_daes_slot_t` is 64B-aligned `[u64; 8]`.
+                            let wd = unsafe { &*(core::ptr::from_ref(daes).cast::<[u64; 8]>()) };
+                            crc = crc32_step_block64_words(crc, wd);
+                        }
+                        (None, None) => {}
+                    }
+                    // SAFETY: `CausalProvenanceReport` is `#[repr(C, align(16))]` of size 16 bytes (`[u64; 2]`).
+                    let rep_pairs = unsafe {
+                        core::slice::from_raw_parts(
+                            provenance_reports.as_ptr().cast::<[u64; 2]>(),
+                            provenance_reports.len(),
+                        )
+                    };
+                    let mut r_idx = 0usize;
+                    while r_idx + 4 <= rep_pairs.len() {
+                        let p0 = rep_pairs[r_idx];
+                        let p1 = rep_pairs[r_idx + 1];
+                        let p2 = rep_pairs[r_idx + 2];
+                        let p3 = rep_pairs[r_idx + 3];
+                        let blk = [p0[0], p0[1], p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]];
+                        crc = crc32_step_block64_words(crc, &blk);
+                        r_idx += 4;
+                    }
+                    let mut cur_byte_off = off_reports + (r_idx << 4);
+                    if r_idx < rep_pairs.len() {
+                        let mut tail_blk = [0u64; 8];
+                        let mut t_lane = 0usize;
+                        while r_idx < rep_pairs.len() {
+                            let p = rep_pairs[r_idx];
+                            tail_blk[t_lane] = p[0];
+                            tail_blk[t_lane + 1] = p[1];
+                            t_lane += 2;
+                            r_idx += 1;
+                        }
+                        crc = crc32_step_block64_words(crc, &tail_blk);
+                        cur_byte_off += 64;
+                    }
+                    if total_len > cur_byte_off {
+                        crc = crc32_step_l4(crc);
+                    }
                 }
+                !crc
             }
             #[cfg(not(target_endian = "little"))]
             {
                 Self::compute_container_crc32_with_stamped_crystals(
                     buf,
-                    hdr_size,
+                    size_of::<gcso_snapshot_header_t>(),
                     off_crystals,
                     crystals.len(),
                     after_crystals,

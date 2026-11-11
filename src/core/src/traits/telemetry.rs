@@ -53,7 +53,7 @@ use super::branchless::{
     branchless_q7_unified_field_fold_words_with_init_weight_64, branchless_relu_f32,
     branchless_rsqrt_f32, branchless_select_f32, branchless_select_u32, branchless_select_u64,
     branchless_select_u8, branchless_select_usize, branchless_splitmix64, branchless_tanh_f32,
-    coherence_from_diff_words_64, coherence_from_uniform_diff_word_x8,
+    coherence_from_uniform_diff_word_x8,
     coherence_from_word_arrays_with_both_uniform_flags_64,
     fast_inv_len_f32,
     fast_ln_1p_bounded_f32, is_word_array_uniform_64, load_q7_word_at, load_q7_words_64,
@@ -381,7 +381,13 @@ unsafe fn eval_candidate_trail_avx2_with_macro_fast(
     win_v0: &mut core::arch::x86_64::__m256i,
     win_v1: &mut core::arch::x86_64::__m256i,
     clean_cluster_bonus: f32,
-) -> (f32, f32, bool, bool) {
+) -> (
+    f32,
+    f32,
+    bool,
+    bool,
+    Option<(core::arch::x86_64::__m256i, core::arch::x86_64::__m256i)>,
+) {
     // SAFETY: Caller guarantees `target_feature = "avx2"`. Keeps `(self_v0, self_v1)` and
     // `(win_v0, win_v1)` hoisted in YMM registers across the candidate loop and loads each
     // candidate's offset-56 phase profile via 8-byte aligned GPR loads (`trail_phase_words_ref`)
@@ -466,9 +472,13 @@ unsafe fn eval_candidate_trail_avx2_with_macro_fast(
                         } else {
                             let (cv0, cv1) = match cv_opt {
                                 Some(v) => v,
-                                None => super::branchless::avx2_words64_to_vec64_with_uniform(
-                                    cw, c_uni,
-                                ),
+                                None => {
+                                    let v = super::branchless::avx2_words64_to_vec64_with_uniform(
+                                        cw, c_uni,
+                                    );
+                                    cv_opt = Some(v);
+                                    v
+                                }
                             };
                             branchless_relu_f32(super::branchless::avx2_coherence_from_diff_vec64(
                                 _mm256_sub_epi8(*win_v0, cv0),
@@ -486,7 +496,7 @@ unsafe fn eval_candidate_trail_avx2_with_macro_fast(
             0.0
         };
         let bayes_delta = branchless_flush_subnormal_f32((phase_scale * coh) + eff_prior_link);
-        (bayes_delta, coh, is_coherent, c_uni)
+        (bayes_delta, coh, is_coherent, c_uni, cv_opt)
     }
 }
 
@@ -1377,11 +1387,14 @@ impl ContrastivePhaseBloomFilter {
     #[inline(always)]
     #[must_use]
     pub const fn query_repulsive_density_from_words(&self, w: &[u64; 8]) -> u8 {
-        if self.counters[0] == 0 && self.is_empty() {
+        if self.is_empty() {
             return 0;
         }
         let slots = Self::compute_hash_slots_from_words(w);
         let c0 = self.counters[slots[0]];
+        if c0 == 0 {
+            return 0;
+        }
         let c1 = self.counters[slots[1]];
         let c2 = self.counters[slots[2]];
         let c3 = self.counters[slots[3]];
@@ -1964,6 +1977,11 @@ pub(crate) fn select_rewire_bridge_and_modulate_with_preloaded_words_64(
     let mut best_score = -1.0e30_f32;
     let mut best_coh = 0.0_f32;
     let mut best_is_uniform = self_is_uniform;
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    let mut best_vec_opt: Option<(
+        core::arch::x86_64::__m256i,
+        core::arch::x86_64::__m256i,
+    )> = None;
     let mut found_valid = false;
     let mut coh_sum = 0.0_f32;
     let mut coherent_count = 0u32;
@@ -1973,7 +1991,7 @@ pub(crate) fn select_rewire_bridge_and_modulate_with_preloaded_words_64(
         let cand = &candidate_trails[idx];
         let cand_id = idx as u32;
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-        let (bayes_delta, coh, is_coherent, cand_is_uniform) = unsafe {
+        let (bayes_delta, coh, is_coherent, cand_is_uniform, cand_vec_opt) = unsafe {
             eval_candidate_trail_avx2_with_macro_fast(
                 &self_w,
                 self_is_uniform,
@@ -2035,6 +2053,10 @@ pub(crate) fn select_rewire_bridge_and_modulate_with_preloaded_words_64(
             best_score = bayes_delta;
             best_coh = coh;
             best_is_uniform = cand_is_uniform;
+            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+            {
+                best_vec_opt = cand_vec_opt;
+            }
         }
         found_valid |= is_coherent;
         coh_sum += coh;
@@ -2052,55 +2074,59 @@ pub(crate) fn select_rewire_bridge_and_modulate_with_preloaded_words_64(
         ) as u64;
         if eff_s > 0 {
             let best_w = trail_phase_words_ref(best_cand);
-            if eff_s >= 128 {
-                self_w = *best_w;
-            } else {
-                #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-                {
-                    if self_is_uniform & best_is_uniform {
+            if !(self_is_uniform & best_is_uniform & (self_w[0] == best_w[0])) {
+                if eff_s >= 128 {
+                    self_w = *best_w;
+                } else {
+                    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+                    {
+                        if self_is_uniform & best_is_uniform {
+                            let bias_restore =
+                                (128u64.wrapping_sub(eff_s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+                            self_w = swar_slerp_words_with_uniform_flag_64(
+                                &self_w,
+                                true,
+                                best_w,
+                                true,
+                                eff_s,
+                                bias_restore,
+                            )
+                            .0;
+                        } else {
+                            // SAFETY: `(self_v0, self_v1)` and `best_vec_opt` are already hoisted in YMM
+                            // registers across the candidate loop, eliminating post-loop memory reloads.
+                            unsafe {
+                                let (bv0, bv1) = match best_vec_opt {
+                                    Some(v) => v,
+                                    None => super::branchless::avx2_words64_to_vec64_with_uniform(
+                                        best_w,
+                                        best_is_uniform,
+                                    ),
+                                };
+                                let (rv0, rv1) = super::branchless::avx2_slerp_vec64(
+                                    self_v0, self_v1, bv0, bv1, eff_s,
+                                );
+                                self_w = super::branchless::avx2_vec64_to_words64(rv0, rv1);
+                            }
+                        }
+                    }
+                    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+                    {
                         let bias_restore =
                             (128u64.wrapping_sub(eff_s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
                         self_w = swar_slerp_words_with_uniform_flag_64(
                             &self_w,
-                            true,
+                            self_is_uniform,
                             best_w,
-                            true,
+                            best_is_uniform,
                             eff_s,
                             bias_restore,
                         )
                         .0;
-                    } else {
-                        // SAFETY: `(self_v0, self_v1)` are already hoisted in YMM registers and AVX2 is enabled.
-                        // Uses 8-byte aligned `best_w` via `avx2_words64_to_vec64_with_uniform` to avoid
-                        // offset-56 64B cache-line splits and 4-to-1 GPR-to-YMM STLF stalls.
-                        unsafe {
-                            let (bv0, bv1) = super::branchless::avx2_words64_to_vec64_with_uniform(
-                                best_w,
-                                best_is_uniform,
-                            );
-                            let (rv0, rv1) = super::branchless::avx2_slerp_vec64(
-                                self_v0, self_v1, bv0, bv1, eff_s,
-                            );
-                            self_w = super::branchless::avx2_vec64_to_words64(rv0, rv1);
-                        }
                     }
                 }
-                #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-                {
-                    let bias_restore =
-                        (128u64.wrapping_sub(eff_s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-                    self_w = swar_slerp_words_with_uniform_flag_64(
-                        &self_w,
-                        self_is_uniform,
-                        best_w,
-                        best_is_uniform,
-                        eff_s,
-                        bias_restore,
-                    )
-                    .0;
-                }
+                *trail_phase_words_mut(trail) = self_w;
             }
-            *trail_phase_words_mut(trail) = self_w;
         }
 
         let best_anchor_id = best_cand.target_anchor_id;
@@ -2535,75 +2561,129 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
                 (c_val, lp, contr, [w0; 8], w0 != s[0])
             }
         } else {
-            // Single-pass circular differences (M_t - M_{t-1}) across all 8 SWAR words:
-            let d1 = swar_q7_circular_diff_x8(s[1], p[1]);
-            let d2 = swar_q7_circular_diff_x8(s[2], p[2]);
-            let d3 = swar_q7_circular_diff_x8(s[3], p[3]);
-            let d4 = swar_q7_circular_diff_x8(s[4], p[4]);
-            let d5 = swar_q7_circular_diff_x8(s[5], p[5]);
-            let d6 = swar_q7_circular_diff_x8(s[6], p[6]);
-            let d7 = swar_q7_circular_diff_x8(s[7], p[7]);
+            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+            {
+                // SAFETY: `target_feature = "avx2"` is enabled; evaluates 64-head circular difference,
+                // cosine coherence, and geodesic SLERP in two 256-bit YMM registers.
+                unsafe {
+                    use core::arch::x86_64::{
+                        _mm256_max_epi8, _mm256_or_si256, _mm256_set1_epi8, _mm256_setzero_si256,
+                        _mm256_sub_epi8, _mm256_testz_si256,
+                    };
+                    let (vp0, vp1) = super::branchless::avx2_words64_to_vec64(p);
+                    let (vs0, vs1) = super::branchless::avx2_words64_to_vec64(s);
+                    let vd0 = _mm256_sub_epi8(vs0, vp0);
+                    let vd1 = _mm256_sub_epi8(vs1, vp1);
+                    let vd_or = _mm256_or_si256(vd0, vd1);
+                    if _mm256_testz_si256(vd_or, vd_or) != 0 {
+                        (1.0_f32, 0.0_f32, false, *s, false)
+                    } else {
+                        let c_val = super::branchless::avx2_coherence_from_diff_vec64(vd0, vd1);
+                        let prob = branchless_max_f32(0.5 * (1.0 + c_val), 1.0e-6);
+                        let lp = branchless_ln_f32(prob);
+                        let contr = c_val < -safe_thresh;
+                        if contr {
+                            let zero = _mm256_setzero_si256();
+                            let min_m127 = _mm256_set1_epi8(-127);
+                            let r0 = _mm256_sub_epi8(zero, _mm256_max_epi8(vs0, min_m127));
+                            let r1 = _mm256_sub_epi8(zero, _mm256_max_epi8(vs1, min_m127));
+                            (
+                                c_val,
+                                lp,
+                                true,
+                                super::branchless::avx2_vec64_to_words64(r0, r1),
+                                true,
+                            )
+                        } else if t_s >= 128 {
+                            (c_val, lp, false, *s, false)
+                        } else if t_s == 0 {
+                            (c_val, lp, false, *p, true)
+                        } else {
+                            let (r0, r1) = super::branchless::avx2_slerp_from_diff_vec64(
+                                vp0, vp1, vd0, vd1, t_s,
+                            );
+                            (
+                                c_val,
+                                lp,
+                                false,
+                                super::branchless::avx2_vec64_to_words64(r0, r1),
+                                true,
+                            )
+                        }
+                    }
+                }
+            }
+            #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+            {
+                let d1 = swar_q7_circular_diff_x8(s[1], p[1]);
+                let d2 = swar_q7_circular_diff_x8(s[2], p[2]);
+                let d3 = swar_q7_circular_diff_x8(s[3], p[3]);
+                let d4 = swar_q7_circular_diff_x8(s[4], p[4]);
+                let d5 = swar_q7_circular_diff_x8(s[5], p[5]);
+                let d6 = swar_q7_circular_diff_x8(s[6], p[6]);
+                let d7 = swar_q7_circular_diff_x8(s[7], p[7]);
 
-            if ((d0 | d1) | (d2 | d3) | (d4 | d5) | (d6 | d7)) == 0 {
-                (1.0_f32, 0.0_f32, false, *s, false)
-            } else {
-                let c_val = coherence_from_diff_words_64(d0, d1, d2, d3, d4, d5, d6, d7);
-                let prob = branchless_max_f32(0.5 * (1.0 + c_val), 1.0e-6);
-                let lp = branchless_ln_f32(prob);
-                let contr = c_val < -safe_thresh;
-
-                if contr {
-                    let w_arr = [
-                        swar_q7_neg_sat_x8(s[0]),
-                        swar_q7_neg_sat_x8(s[1]),
-                        swar_q7_neg_sat_x8(s[2]),
-                        swar_q7_neg_sat_x8(s[3]),
-                        swar_q7_neg_sat_x8(s[4]),
-                        swar_q7_neg_sat_x8(s[5]),
-                        swar_q7_neg_sat_x8(s[6]),
-                        swar_q7_neg_sat_x8(s[7]),
-                    ];
-                    (c_val, lp, true, w_arr, true)
-                } else if t_s >= 128 {
-                    (c_val, lp, false, *s, false)
-                } else if t_s == 0 {
-                    (c_val, lp, false, *p, true)
+                if ((d0 | d1) | (d2 | d3) | (d4 | d5) | (d6 | d7)) == 0 {
+                    (1.0_f32, 0.0_f32, false, *s, false)
                 } else {
-                    let w_arr = [
-                        swar_q7_circular_add_x8(
-                            p[0],
-                            swar_q7_scale_le128_with_bias_x8(d0, t_s, bias_restore),
-                        ),
-                        swar_q7_circular_add_x8(
-                            p[1],
-                            swar_q7_scale_le128_with_bias_x8(d1, t_s, bias_restore),
-                        ),
-                        swar_q7_circular_add_x8(
-                            p[2],
-                            swar_q7_scale_le128_with_bias_x8(d2, t_s, bias_restore),
-                        ),
-                        swar_q7_circular_add_x8(
-                            p[3],
-                            swar_q7_scale_le128_with_bias_x8(d3, t_s, bias_restore),
-                        ),
-                        swar_q7_circular_add_x8(
-                            p[4],
-                            swar_q7_scale_le128_with_bias_x8(d4, t_s, bias_restore),
-                        ),
-                        swar_q7_circular_add_x8(
-                            p[5],
-                            swar_q7_scale_le128_with_bias_x8(d5, t_s, bias_restore),
-                        ),
-                        swar_q7_circular_add_x8(
-                            p[6],
-                            swar_q7_scale_le128_with_bias_x8(d6, t_s, bias_restore),
-                        ),
-                        swar_q7_circular_add_x8(
-                            p[7],
-                            swar_q7_scale_le128_with_bias_x8(d7, t_s, bias_restore),
-                        ),
-                    ];
-                    (c_val, lp, false, w_arr, true)
+                    let c_val = super::branchless::coherence_from_diff_words_64(d0, d1, d2, d3, d4, d5, d6, d7);
+                    let prob = branchless_max_f32(0.5 * (1.0 + c_val), 1.0e-6);
+                    let lp = branchless_ln_f32(prob);
+                    let contr = c_val < -safe_thresh;
+
+                    if contr {
+                        let w_arr = [
+                            swar_q7_neg_sat_x8(s[0]),
+                            swar_q7_neg_sat_x8(s[1]),
+                            swar_q7_neg_sat_x8(s[2]),
+                            swar_q7_neg_sat_x8(s[3]),
+                            swar_q7_neg_sat_x8(s[4]),
+                            swar_q7_neg_sat_x8(s[5]),
+                            swar_q7_neg_sat_x8(s[6]),
+                            swar_q7_neg_sat_x8(s[7]),
+                        ];
+                        (c_val, lp, true, w_arr, true)
+                    } else if t_s >= 128 {
+                        (c_val, lp, false, *s, false)
+                    } else if t_s == 0 {
+                        (c_val, lp, false, *p, true)
+                    } else {
+                        let w_arr = [
+                            swar_q7_circular_add_x8(
+                                p[0],
+                                swar_q7_scale_le128_with_bias_x8(d0, t_s, bias_restore),
+                            ),
+                            swar_q7_circular_add_x8(
+                                p[1],
+                                swar_q7_scale_le128_with_bias_x8(d1, t_s, bias_restore),
+                            ),
+                            swar_q7_circular_add_x8(
+                                p[2],
+                                swar_q7_scale_le128_with_bias_x8(d2, t_s, bias_restore),
+                            ),
+                            swar_q7_circular_add_x8(
+                                p[3],
+                                swar_q7_scale_le128_with_bias_x8(d3, t_s, bias_restore),
+                            ),
+                            swar_q7_circular_add_x8(
+                                p[4],
+                                swar_q7_scale_le128_with_bias_x8(d4, t_s, bias_restore),
+                            ),
+                            swar_q7_circular_add_x8(
+                                p[5],
+                                swar_q7_scale_le128_with_bias_x8(d5, t_s, bias_restore),
+                            ),
+                            swar_q7_circular_add_x8(
+                                p[6],
+                                swar_q7_scale_le128_with_bias_x8(d6, t_s, bias_restore),
+                            ),
+                            swar_q7_circular_add_x8(
+                                p[7],
+                                swar_q7_scale_le128_with_bias_x8(d7, t_s, bias_restore),
+                            ),
+                        ];
+                        (c_val, lp, false, w_arr, true)
+                    }
                 }
             }
         };
@@ -2769,7 +2849,7 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
                 let mut win_is_uniform = false;
                 let mut win_eq_self = false;
                 let (mut wv0, mut wv1) = (self_v0, self_v1);
-                let (sc, ch, coh_ok, _) = eval_candidate_trail_avx2_with_macro_fast(
+                let (sc, ch, coh_ok, _, _) = eval_candidate_trail_avx2_with_macro_fast(
                     self_w,
                     self_is_uniform,
                     self_is_byte_uniform,
@@ -2881,7 +2961,7 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
                 let mut win_is_uniform = false;
                 let mut win_eq_self = false;
                 let (mut wv0, mut wv1) = (self_v0, self_v1);
-                let (bd, ch, coh_ok, _) = eval_candidate_trail_avx2_with_macro_fast(
+                let (bd, ch, coh_ok, _, _) = eval_candidate_trail_avx2_with_macro_fast(
                     self_w,
                     self_is_uniform,
                     self_is_byte_uniform,
