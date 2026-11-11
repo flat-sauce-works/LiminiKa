@@ -598,7 +598,7 @@ fn unpack_sincos_heads_nonuniform_64(
     while h + 8 <= num_heads {
         let mut w = load_q7_x8_slice(p_slice, h);
         let b0 = (w & 0xFF) as u8;
-        if w == u64::from(b0).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+        if w == w.rotate_right(8) {
             let sc = lut[b0 as usize];
             sincos_out[h] = sc;
             sincos_out[h + 1] = sc;
@@ -2946,7 +2946,7 @@ pub(crate) fn steer_ripa_single_cell_from_word_core(
         };
         let mut w = raw_word;
         let b0 = (w & 0xFF) as u8;
-        if w == (b0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+        if w == w.rotate_right(8) {
             if b0 != 0 {
                 let (sin_t, cos_t) = lut[b0 as usize];
                 rotate_ripa_upper_heads_uniform_sincos(
@@ -3087,7 +3087,7 @@ pub(crate) fn steer_ripa_single_cell_from_word_core(
             raw_word
         };
         let b0 = (w & 0xFF) as u8;
-        if w == (b0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+        if w == w.rotate_right(8) {
             if b0 != 0 {
                 let (sin_t, cos_t) =
                     branchless_sincos_q7_ripa_preinv(b0 as gcso_q7_t, eff_max, q7_to_norm_scale);
@@ -3189,7 +3189,7 @@ fn steer_single_slice_from_eff_words_core(
         if active_uni {
             let w0 = eff_words[0];
             let b0 = (w0 & 0xFF) as u8;
-            if w0 == (b0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+            if w0 == w0.rotate_right(8) {
                 if b0 != 0 {
                     let (sin_t, cos_t) = lut[b0 as usize];
                     if run_mask == _cell_limit_mask {
@@ -3280,7 +3280,7 @@ fn steer_single_slice_from_eff_words_core(
             }
             let w = eff_words[c];
             let b0 = (w & 0xFF) as u8;
-            if w == (b0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+            if w == w.rotate_right(8) {
                 let mut c_end = c + 1;
                 while c_end < NUM_SWARM_CELLS
                     && ((run_mask & (1u8 << c_end)) != 0)
@@ -3317,7 +3317,7 @@ fn steer_single_slice_from_eff_words_core(
         if run_mask == _cell_limit_mask && is_word_array_uniform_64(eff_words) {
             let w0 = eff_words[0];
             let b0 = (w0 & 0xFF) as u8;
-            if w0 == (b0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+            if w0 == w0.rotate_right(8) {
                 if b0 != 0 {
                     let eff_q7 = if fold_geodesic {
                         branchless_q7_fold_s1_geodesic(b0 as gcso_q7_t)
@@ -3342,7 +3342,7 @@ fn steer_single_slice_from_eff_words_core(
             }
             let raw_w = eff_words[c];
             let b0 = (raw_w & 0xFF) as u8;
-            if raw_w == (b0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+            if raw_w == raw_w.rotate_right(8) {
                 let mut c_end = c + 1;
                 while c_end < NUM_SWARM_CELLS
                     && ((run_mask & (1u8 << c_end)) != 0)
@@ -3423,7 +3423,7 @@ fn steer_pair_slice_from_eff_words_core(
             if active_uni {
                 let w0 = eff_words[0];
                 let b0 = (w0 & 0xFF) as u8;
-                if w0 == (b0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+                if w0 == w0.rotate_right(8) {
                     if b0 != 0 {
                         let (sin_t, cos_t) = lut[b0 as usize];
                         rotate_ripa_upper_heads_uniform_sincos(
@@ -3643,7 +3643,7 @@ fn steer_pair_slice_from_eff_words_core(
                 break;
             }
             let b0 = (w & 0xFF) as u8;
-            if w == (b0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+            if w == w.rotate_right(8) {
                 let mut c_end = c + 1;
                 while c_end < NUM_SWARM_CELLS
                     && ((run_mask & (1u8 << c_end)) != 0)
@@ -3801,7 +3801,7 @@ fn steer_pair_slice_from_eff_words_core(
         if run_mask == _cell_limit_mask && is_word_array_uniform_64(eff_words) {
             let w0 = eff_words[0];
             let b0 = (w0 & 0xFF) as u8;
-            if w0 == (b0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+            if w0 == w0.rotate_right(8) {
                 if b0 != 0 {
                     let eff_q7 = if fold_geodesic {
                         branchless_q7_fold_s1_geodesic(b0 as gcso_q7_t)
@@ -3837,7 +3837,7 @@ fn steer_pair_slice_from_eff_words_core(
             }
             let cell_heads = (num_heads - head_start).min(HEADS_PER_CELL);
             let b0 = (w & 0xFF) as u8;
-            if w == (b0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+            if w == w.rotate_right(8) {
                 if b0 != 0 {
                     let q7_i32 = i32::from(b0 as gcso_q7_t);
                     let (sin_t, cos_t) = if q7_i32 == cached_q7 {
@@ -4023,7 +4023,7 @@ fn eval_multi_head_phase_coherence_unrolled4(q_p: &[gcso_q7_t], m_p: &[gcso_q7_t
             prev_dw = 0;
             prev_w_sum = s;
             s
-        } else if dw == (dw & 0xFF).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+        } else if dw == dw.rotate_right(8) {
             let s = i32::from(Q7_FULL_COS_I16_REF[(dw & 0xFF) as usize]) << 3;
             has_prev_dw = true;
             prev_dw = dw;
@@ -6807,7 +6807,7 @@ fn build_pspm_eff_words_from_profiles_64(
 const fn byte_uniform_word_u8(w: &[u64; NUM_SWARM_CELLS]) -> Option<u8> {
     let w0 = w[0];
     let b = (w0 & 0xFF) as u8;
-    if w0 == (b as u64).wrapping_mul(SWAR_SPLAT_BYTE_64) && is_word_array_uniform_64(w) {
+    if w0 == w0.rotate_right(8) && is_word_array_uniform_64(w) {
         Some(b)
     } else {
         None

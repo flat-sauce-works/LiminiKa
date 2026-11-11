@@ -879,15 +879,15 @@ impl RuntimeContext {
                 1.0,
             );
 
-            let mut composite_phase = AlignedBuffer64::new([0i8; MAX_ATTENTION_HEADS]);
-            let total_pull =
-                self.evaluate_multi_domain_superposition(trail, &mut composite_phase.data);
+            let (mut phase_words, total_pull) =
+                self.evaluate_multi_domain_superposition_words(trail);
 
             if let Some(p) = phase_deltas {
-                accumulate_q7_slice_into_64(&mut composite_phase.data, p.as_slice());
+                let mut composite_phase = [0i8; MAX_ATTENTION_HEADS];
+                store_q7_words_64(&mut composite_phase, &phase_words);
+                accumulate_q7_slice_into_64(&mut composite_phase, p.as_slice());
+                phase_words = load_q7_words_64(&composite_phase);
             }
-
-            let mut phase_words = load_q7_words_64(&composite_phase.data);
             let (_density, rep_trig) = self.bloom_filter.apply_phase_conjugate_repulsion_words(
                 &mut phase_words,
                 self.config.repulsion_threshold,
@@ -1296,6 +1296,126 @@ impl RuntimeContext {
             self.step_token(token_id, None, None, trail_ref)?;
         }
         Ok(())
+    }
+
+    /// Evaluates unified multi-domain superposition across both `self.attractor_space` and
+    /// `self.slot_phase_bank` directly in 8 register-resident `u64` SWAR words (`0` intermediate
+    /// 64-byte stack buffers or store-reload round-trips).
+    #[inline]
+    #[must_use]
+    pub(crate) fn evaluate_multi_domain_superposition_words(
+        &self,
+        trail: &gcso_pointer_trail_t,
+    ) -> ([u64; crate::traits::NUM_SWARM_MICRO_CELLS], f32) {
+        let tw = *trail_phase_words_ref(trail);
+        let tn = crate::traits::swar_words_nonzero_64(&tw);
+        let (comp_w, base_pull) = self
+            .attractor_space
+            .evaluate_multi_domain_superposition_words(&tw, tn);
+        let (init_w, init_nonzero) = if crate::traits::swar_words_nonzero_64(&comp_w) {
+            (comp_w, true)
+        } else {
+            (tw, tn)
+        };
+        let init_is_uniform = !init_nonzero || crate::traits::is_word_array_uniform_64(&init_w);
+        let mut run_w = init_w;
+        let mut run_is_uniform = init_is_uniform;
+        let mut running_pull = branchless_flush_subnormal_f32(branchless_relu_f32(base_pull));
+
+        if let Ok(bank_2d) = self
+            .slot_phase_bank
+            .as_slot_bank::<MAX_ATTRACTOR_DOMAINS, MAX_ATTENTION_HEADS>()
+        {
+            let rep_idx = usize::from(ATTRACTOR_SLOT_REPULSION);
+            let mut idx = 0usize;
+            while idx < MAX_ATTRACTOR_DOMAINS {
+                if idx != rep_idx {
+                    let enabled = ((self.slot_enabled_mask >> idx) & 1) != 0;
+                    if enabled {
+                        let base_e = branchless_flush_subnormal_f32(branchless_relu_f32(
+                            self.slot_weights[idx],
+                        ));
+                        if base_e > 1.0e-12 {
+                            // SAFETY: `self.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
+                            // 64-byte row `bank_2d[idx]` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
+                            let slot_w = unsafe {
+                                &*(bank_2d[idx].as_ptr()
+                                    as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
+                            };
+                            let slot_is_uniform = crate::traits::is_word_array_uniform_64(slot_w);
+                            if (!slot_is_uniform) | (slot_w[0] != 0) {
+                                let coh = if init_nonzero {
+                                    coherence_from_word_arrays_with_both_uniform_flags_64(
+                                        &init_w,
+                                        init_is_uniform,
+                                        slot_w,
+                                        slot_is_uniform,
+                                    )
+                                } else {
+                                    0.0
+                                };
+                                let res_pull = branchless_flush_subnormal_f32(
+                                    base_e * branchless_clamp_f32(1.0 + coh, 0.25, 2.0),
+                                );
+                                let total_w = running_pull + res_pull;
+                                if total_w > 1.0e-12
+                                    && !crate::traits::swar_words_equal_64(&run_w, slot_w)
+                                {
+                                    let ratio_f32 = branchless_clamp_f32(
+                                        (res_pull * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
+                                        0.0,
+                                        128.0,
+                                    );
+                                    let s = (ratio_f32 as u8) as u64;
+                                    let bias_restore = (128u64.wrapping_sub(s))
+                                        .wrapping_mul(0x0101_0101_0101_0101);
+                                    let (next_w, next_uni) = swar_slerp_words_with_uniform_flag_64(
+                                        &run_w,
+                                        run_is_uniform,
+                                        slot_w,
+                                        slot_is_uniform,
+                                        s,
+                                        bias_restore,
+                                    );
+                                    run_w = next_w;
+                                    run_is_uniform = next_uni;
+                                }
+                                running_pull = total_w;
+                            }
+                        }
+                    }
+                }
+                idx += 1;
+            }
+
+            let rep_enabled = ((self.slot_enabled_mask >> rep_idx) & 1) != 0;
+            if rep_enabled {
+                // SAFETY: `bank_2d[rep_idx]` is 64-byte aligned.
+                let rep_words = unsafe {
+                    &*(bank_2d[rep_idx].as_ptr()
+                        as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
+                };
+                if crate::traits::swar_words_nonzero_64(rep_words) {
+                    let rep_strength = branchless_clamp_f32(
+                        branchless_relu_f32(self.slot_weights[rep_idx]),
+                        0.0,
+                        1.0,
+                    );
+                    running_pull = branchless_q7_inhibit_words_64(
+                        &mut run_w,
+                        running_pull,
+                        rep_words,
+                        rep_strength,
+                    );
+                }
+            }
+        }
+
+        let clamped_pull = branchless_min_f32(
+            branchless_flush_subnormal_f32(running_pull),
+            MAX_ATTRACTOR_PULL_FORCE,
+        );
+        (run_w, clamped_pull)
     }
 
     /// Serializes active runtime context state into a `.gcso` binary snapshot conforming to
@@ -1880,16 +2000,15 @@ impl MultiDomainAttractorSpace for RuntimeContext {
 
         let bank_slice = self.slot_phase_bank.as_aligned_slice();
         let bank_slot = bank_slice.slot_exact::<MAX_ATTENTION_HEADS>(idx)?;
-        *slot_phase_out = *bank_slot;
-
-        if !is_phase_profile_nonzero_64(bank_slot) {
-            let base_pull = self
-                .attractor_space
-                .evaluate_multi_domain_superposition(trail, slot_phase_out);
-            return Ok(self.slot_weights[idx].max(base_pull));
+        if is_phase_profile_nonzero_64(bank_slot) {
+            *slot_phase_out = *bank_slot;
+            return Ok(self.slot_weights[idx]);
         }
 
-        Ok(self.slot_weights[idx])
+        let base_pull = self
+            .attractor_space
+            .evaluate_multi_domain_superposition(trail, slot_phase_out);
+        Ok(self.slot_weights[idx].max(base_pull))
     }
 
     #[inline]
@@ -1898,116 +2017,9 @@ impl MultiDomainAttractorSpace for RuntimeContext {
         trail: &gcso_pointer_trail_t,
         composite_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> f32 {
-        let base_pull = self
-            .attractor_space
-            .evaluate_multi_domain_superposition(trail, composite_phase_out);
-        let comp_w = load_q7_words_64(composite_phase_out);
-        let (init_w, init_nonzero) = if crate::traits::swar_words_nonzero_64(&comp_w) {
-            (comp_w, true)
-        } else {
-            let tw = *trail_phase_words_ref(trail);
-            let tn = crate::traits::swar_words_nonzero_64(&tw);
-            (tw, tn)
-        };
-        let init_is_uniform = !init_nonzero || crate::traits::is_word_array_uniform_64(&init_w);
-        let mut run_w = init_w;
-        let mut run_is_uniform = init_is_uniform;
-        let mut running_pull = branchless_flush_subnormal_f32(branchless_relu_f32(base_pull));
-
-        if let Ok(bank_2d) = self
-            .slot_phase_bank
-            .as_slot_bank::<MAX_ATTRACTOR_DOMAINS, MAX_ATTENTION_HEADS>()
-        {
-            let rep_idx = usize::from(ATTRACTOR_SLOT_REPULSION);
-            let mut idx = 0usize;
-            while idx < MAX_ATTRACTOR_DOMAINS {
-                if idx != rep_idx {
-                    let enabled = ((self.slot_enabled_mask >> idx) & 1) != 0;
-                    if enabled {
-                        let base_e = branchless_flush_subnormal_f32(branchless_relu_f32(
-                            self.slot_weights[idx],
-                        ));
-                        if base_e > 1.0e-12 {
-                            // SAFETY: `self.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
-                            // 64-byte row `bank_2d[idx]` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
-                            let slot_w = unsafe {
-                                &*(bank_2d[idx].as_ptr()
-                                    as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
-                            };
-                            let slot_is_uniform = crate::traits::is_word_array_uniform_64(slot_w);
-                            if (!slot_is_uniform) | (slot_w[0] != 0) {
-                                let coh = if init_nonzero {
-                                    coherence_from_word_arrays_with_both_uniform_flags_64(
-                                        &init_w,
-                                        init_is_uniform,
-                                        slot_w,
-                                        slot_is_uniform,
-                                    )
-                                } else {
-                                    0.0
-                                };
-                                let res_pull = branchless_flush_subnormal_f32(
-                                    base_e * branchless_clamp_f32(1.0 + coh, 0.25, 2.0),
-                                );
-                                let total_w = running_pull + res_pull;
-                                if total_w > 1.0e-12
-                                    && !crate::traits::swar_words_equal_64(&run_w, slot_w)
-                                {
-                                    let ratio_f32 = branchless_clamp_f32(
-                                        (res_pull * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
-                                        0.0,
-                                        128.0,
-                                    );
-                                    let s = (ratio_f32 as u8) as u64;
-                                    let bias_restore = (128u64.wrapping_sub(s))
-                                        .wrapping_mul(0x0101_0101_0101_0101);
-                                    let (next_w, next_uni) = swar_slerp_words_with_uniform_flag_64(
-                                        &run_w,
-                                        run_is_uniform,
-                                        slot_w,
-                                        slot_is_uniform,
-                                        s,
-                                        bias_restore,
-                                    );
-                                    run_w = next_w;
-                                    run_is_uniform = next_uni;
-                                }
-                                running_pull = total_w;
-                            }
-                        }
-                    }
-                }
-                idx += 1;
-            }
-
-            let rep_enabled = ((self.slot_enabled_mask >> rep_idx) & 1) != 0;
-            if rep_enabled {
-                // SAFETY: `bank_2d[rep_idx]` is 64-byte aligned.
-                let rep_words = unsafe {
-                    &*(bank_2d[rep_idx].as_ptr()
-                        as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
-                };
-                if crate::traits::swar_words_nonzero_64(rep_words) {
-                    let rep_strength = branchless_clamp_f32(
-                        branchless_relu_f32(self.slot_weights[rep_idx]),
-                        0.0,
-                        1.0,
-                    );
-                    running_pull = branchless_q7_inhibit_words_64(
-                        &mut run_w,
-                        running_pull,
-                        rep_words,
-                        rep_strength,
-                    );
-                }
-            }
-        }
-
+        let (run_w, pull) = self.evaluate_multi_domain_superposition_words(trail);
         store_q7_words_64(composite_phase_out, &run_w);
-        branchless_min_f32(
-            branchless_flush_subnormal_f32(running_pull),
-            MAX_ATTRACTOR_PULL_FORCE,
-        )
+        pull
     }
 
     #[inline]

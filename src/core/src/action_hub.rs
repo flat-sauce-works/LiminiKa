@@ -928,10 +928,15 @@ impl ActionHubEngine {
     /// Copies `src` into `dst` using width-matched scalar writes and 8-byte aligned 64-bit GPR
     /// stores (`*trail_phase_words_mut(dst) = *trail_phase_words_ref(src)`) at byte offset `56..120`,
     /// avoiding unaligned 256-bit `vmovdqu` cache-line splits and 64-bit-to-256-bit STLF stalls.
+    /// Copies `src` and pre-loaded `phase_words` into `dst` using width-matched scalar writes and
+    /// 8-byte aligned 64-bit GPR stores (`*trail_phase_words_mut(dst) = *phase_words`) at byte
+    /// offset `56..120`, avoiding unaligned 256-bit `vmovdqu` cache-line splits, 64-bit-to-256-bit
+    /// STLF stalls, and redundant 64-byte reloads from `src`.
     #[inline(always)]
-    pub(crate) fn copy_trail_to_slot_fast(
+    pub(crate) fn copy_trail_and_words_to_slot_fast(
         dst: &mut gcso_pointer_trail_t,
         src: &gcso_pointer_trail_t,
+        phase_words: &[u64; NUM_SWARM_MICRO_CELLS],
     ) {
         dst.current_ptr = src.current_ptr;
         dst.prev_ptr = src.prev_ptr;
@@ -944,8 +949,35 @@ impl ActionHubEngine {
         dst.linked_trail_id = src.linked_trail_id;
         dst.attractor_pull_force = src.attractor_pull_force;
         dst.flags = src.flags;
-        *trail_phase_words_mut(dst) = *trail_phase_words_ref(src);
+        *trail_phase_words_mut(dst) = *phase_words;
         dst.reserved_padding = src.reserved_padding;
+    }
+
+    #[inline(always)]
+    pub(crate) fn copy_trail_to_slot_fast(
+        dst: &mut gcso_pointer_trail_t,
+        src: &gcso_pointer_trail_t,
+    ) {
+        Self::copy_trail_and_words_to_slot_fast(dst, src, trail_phase_words_ref(src));
+    }
+
+    /// Clears a single inline trail slot in-place using width-matched 64-bit GPR stores (`0` YMM
+    /// stores, `0` 256-bit-to-64-bit STLF stalls on subsequent trail reads/writes).
+    #[inline(always)]
+    pub(crate) fn clear_trail_slot_fast(dst: &mut gcso_pointer_trail_t) {
+        dst.current_ptr = 0;
+        dst.prev_ptr = 0;
+        dst.user_data = 0;
+        dst.transition_cost = 0;
+        dst.step_count = 0;
+        dst.stigmergic_density = 0.0;
+        dst.target_anchor_id = 0;
+        dst.cluster_id = 0;
+        dst.linked_trail_id = 0;
+        dst.attractor_pull_force = 0.0;
+        dst.flags = 0;
+        *trail_phase_words_mut(dst) = [0u64; NUM_SWARM_MICRO_CELLS];
+        dst.reserved_padding = [0; 8];
     }
 
     /// Applies pheromone evaporation across active inline trails and updates `trail_inout.stigmergic_density`
@@ -1178,7 +1210,11 @@ impl ActionHubEngine {
             steer_words[7] = swar_q7_add_sat_x8(steer_words[7], slot_w[7]);
             *trail_phase_words_mut(trail_inout) = steer_words;
         }
-        Self::copy_trail_to_slot_fast(&mut self.trails[stored_slot_idx as usize], trail_inout);
+        Self::copy_trail_and_words_to_slot_fast(
+            &mut self.trails[stored_slot_idx as usize],
+            trail_inout,
+            &steer_words,
+        );
 
         let mut steered = false;
         let mut pspm_routed = false;
@@ -1451,7 +1487,12 @@ impl DaesScratchpad for ActionHubEngine {
 impl PointerActionHub for ActionHubEngine {
     #[inline]
     fn reset(&mut self) -> GcsoResult<()> {
-        self.trails = [gcso_pointer_trail_t::default(); ACTION_HUB_INLINE_TRAILS];
+        let active_len = self.inline_active_len();
+        let mut i = 0usize;
+        while i < active_len {
+            Self::clear_trail_slot_fast(&mut self.trails[i]);
+            i += 1;
+        }
         self.active_count = 0;
         self.write_cursor = 0;
         self.step_counter = 0;

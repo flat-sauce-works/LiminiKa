@@ -2844,7 +2844,7 @@ pub const fn swar_q7_qdps_filter_words_with_uniform_flag_64(
             return ([0u64; 8], true);
         }
         let b0 = (w0 & 0xFF) as u8;
-        if w0 == (b0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+        if w0 == w0.rotate_right(8) {
             let abs_b0 = (b0 as i8).unsigned_abs();
             return if abs_b0 >= min_step_q7 {
                 (*w, true)
@@ -3034,7 +3034,7 @@ pub const fn swar_q7_mean_i8_from_words_with_uniform_flag_64(
 ) -> gcso_q7_t {
     if words_is_uniform {
         let w0 = words[0];
-        if w0 == (w0 & 0xFF).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+        if w0 == w0.rotate_right(8) {
             return (w0 & 0xFF) as u8 as gcso_q7_t;
         }
         let signed_sum8 = (swar_u8_sum_x8(w0 ^ SWAR_SIGN_MASK_64) as i32) - (8 * 128);
@@ -3847,7 +3847,7 @@ pub(crate) const fn coherence_from_uniform_diff_word_x8(d0: u64) -> f32 {
     if d0 == 0 {
         return 1.0;
     }
-    if d0 == (d0 & 0xFF).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+    if d0 == d0.rotate_right(8) {
         return Q7_FULL_COS_REF[(d0 & 0xFF) as usize];
     }
     branchless_clamp_f32(
@@ -4169,18 +4169,15 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
             let t_w0 = t[0];
             let t_b0 = (t_w0 & 0xFF) as u8;
             let t_is_byte_uniform =
-                t_uni & (t_w0 == (t_b0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64));
-            let mut vt_ready = !t_uni;
-            let (mut vt0, mut vt1) = if vt_ready {
-                avx2_words64_to_vec64_with_uniform(&t, false)
+                t_uni & (t_w0 == t_w0.rotate_right(8));
+            let mut vt_vecs: Option<(__m256i, __m256i)> = if t_uni {
+                None
             } else {
-                let z = _mm256_set1_epi64x(t_w0 as i64);
-                (z, z)
+                Some(avx2_words64_to_vec64_with_uniform(&t, false))
             };
             let mut r_uni = t_uni;
             let mut r_w0 = t_w0;
-            let mut vr0 = vt0;
-            let mut vr1 = vt1;
+            let mut vr_vecs: Option<(__m256i, __m256i)> = vt_vecs;
             let mut running_weight = init_w;
             let mut anchor_pull_sum = 0.0_f32;
             let mut weighted_coh_sum = 0.0_f32;
@@ -4214,7 +4211,7 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
                         } else if bw0 == t_w0 {
                             1.0
                         } else if t_is_byte_uniform
-                            && (bw0 == ((bw0 & 0xFF) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64))
+                            && (bw0 == bw0.rotate_right(8))
                         {
                             Q7_FULL_COS_REF[t_b0.wrapping_sub(bw0 as u8) as usize]
                         } else {
@@ -4245,8 +4242,8 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
                             } else if s > 0 && r_w0 != bw0 {
                                 let rb0 = (r_w0 & 0xFF) as u8;
                                 let bb0 = (bw0 & 0xFF) as u8;
-                                if r_w0 == (rb0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64)
-                                    && bw0 == (bb0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64)
+                                if r_w0 == r_w0.rotate_right(8)
+                                    && bw0 == bw0.rotate_right(8)
                                 {
                                     let b_lerp = branchless_q7_circular_lerp(
                                         rb0 as gcso_q7_t,
@@ -4293,12 +4290,15 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
                                 )
                             }
                         } else {
-                            if !vt_ready {
-                                let tz = _mm256_set1_epi64x(t_w0 as i64);
-                                vt0 = tz;
-                                vt1 = tz;
-                                vt_ready = true;
-                            }
+                            let (vt0, vt1) = match vt_vecs {
+                                Some(v) => v,
+                                None => {
+                                    let tz = _mm256_set1_epi64x(t_w0 as i64);
+                                    let v = (tz, tz);
+                                    vt_vecs = Some(v);
+                                    v
+                                }
+                            };
                             let b_or = _mm256_or_si256(vb0, vb1);
                             if _mm256_testz_si256(b_or, b_or) != 0 {
                                 0.0
@@ -4322,18 +4322,19 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
                                     r_w0 = b[0];
                                     r_uni = true;
                                 } else {
-                                    vr0 = vb0;
-                                    vr1 = vb1;
+                                    vr_vecs = Some((vb0, vb1));
                                     r_uni = false;
                                 }
                             }
                         } else if is_active {
-                            if r_uni {
-                                let rz = _mm256_set1_epi64x(r_w0 as i64);
-                                vr0 = rz;
-                                vr1 = rz;
-                                r_uni = false;
-                            }
+                            let (mut vr0, mut vr1) = match vr_vecs {
+                                Some(v) if !r_uni => v,
+                                _ => {
+                                    let rz = _mm256_set1_epi64x(r_w0 as i64);
+                                    (rz, rz)
+                                }
+                            };
+                            r_uni = false;
                             let ratio_f32 = branchless_clamp_f32(
                                 (res_pull * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
                                 0.0,
@@ -4345,16 +4346,19 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
                                     r_w0 = b[0];
                                     r_uni = true;
                                 } else {
-                                    vr0 = vb0;
-                                    vr1 = vb1;
+                                    vr_vecs = Some((vb0, vb1));
                                 }
-                            } else if s > 0 {
-                                let diff0 = _mm256_sub_epi8(vb0, vr0);
-                                let diff1 = _mm256_sub_epi8(vb1, vr1);
-                                let diff_or = _mm256_or_si256(diff0, diff1);
-                                if _mm256_testz_si256(diff_or, diff_or) == 0 {
-                                    (vr0, vr1) = avx2_slerp_from_diff_vec64(vr0, vr1, diff0, diff1, s);
+                            } else {
+                                if s > 0 {
+                                    let diff0 = _mm256_sub_epi8(vb0, vr0);
+                                    let diff1 = _mm256_sub_epi8(vb1, vr1);
+                                    let diff_or = _mm256_or_si256(diff0, diff1);
+                                    if _mm256_testz_si256(diff_or, diff_or) == 0 {
+                                        (vr0, vr1) =
+                                            avx2_slerp_from_diff_vec64(vr0, vr1, diff0, diff1, s);
+                                    }
                                 }
+                                vr_vecs = Some((vr0, vr1));
                             }
                         }
 
@@ -4382,8 +4386,10 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
             );
             let out_w = if r_uni {
                 [r_w0; 8]
-            } else {
+            } else if let Some((vr0, vr1)) = vr_vecs {
                 avx2_vec64_to_words64(vr0, vr1)
+            } else {
+                [r_w0; 8]
             };
             (
                 out_w,
@@ -4569,18 +4575,15 @@ pub fn branchless_q7_unified_field_fold_words_with_init_weight_64(
             let t_w0 = t[0];
             let t_b0 = (t_w0 & 0xFF) as u8;
             let t_is_byte_uniform =
-                t_uni & (t_w0 == (t_b0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64));
-            let mut vt_ready = !t_uni;
-            let (mut vt0, mut vt1) = if vt_ready {
-                avx2_words64_to_vec64_with_uniform(&t, false)
+                t_uni & (t_w0 == t_w0.rotate_right(8));
+            let mut vt_vecs: Option<(__m256i, __m256i)> = if t_uni {
+                None
             } else {
-                let z = _mm256_set1_epi64x(t_w0 as i64);
-                (z, z)
+                Some(avx2_words64_to_vec64_with_uniform(&t, false))
             };
             let mut r_uni = t_uni;
             let mut r_w0 = t_w0;
-            let mut vr0 = vt0;
-            let mut vr1 = vt1;
+            let mut vr_vecs: Option<(__m256i, __m256i)> = vt_vecs;
             let mut running_weight = init_w;
             let mut anchor_pull_sum = 0.0_f32;
             let mut weighted_coh_sum = 0.0_f32;
@@ -4608,7 +4611,7 @@ pub fn branchless_q7_unified_field_fold_words_with_init_weight_64(
                         } else if bw0 == t_w0 {
                             1.0
                         } else if t_is_byte_uniform
-                            && (bw0 == ((bw0 & 0xFF) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64))
+                            && (bw0 == bw0.rotate_right(8))
                         {
                             Q7_FULL_COS_REF[t_b0.wrapping_sub(bw0 as u8) as usize]
                         } else {
@@ -4645,18 +4648,23 @@ pub fn branchless_q7_unified_field_fold_words_with_init_weight_64(
                         dominant_idx = branchless_select_u32(is_better, idx as u32, dominant_idx);
                         active_count = active_count.wrapping_add(1);
                     } else {
-                        if !vt_ready {
-                            let z = _mm256_set1_epi64x(t[0] as i64);
-                            vt0 = z;
-                            vt1 = z;
-                            vt_ready = true;
-                        }
-                        if r_uni {
-                            let rz = _mm256_set1_epi64x(r_w0 as i64);
-                            vr0 = rz;
-                            vr1 = rz;
-                            r_uni = false;
-                        }
+                        let (vt0, vt1) = match vt_vecs {
+                            Some(v) => v,
+                            None => {
+                                let z = _mm256_set1_epi64x(t[0] as i64);
+                                let v = (z, z);
+                                vt_vecs = Some(v);
+                                v
+                            }
+                        };
+                        let (mut vr0, mut vr1) = match vr_vecs {
+                            Some(v) if !r_uni => v,
+                            _ => {
+                                let rz = _mm256_set1_epi64x(r_w0 as i64);
+                                (rz, rz)
+                            }
+                        };
+                        r_uni = false;
                         let b_ptr = anchor_phases[idx].as_ptr().cast::<__m256i>();
                         let vb0 = _mm256_loadu_si256(b_ptr);
                         let vb1 = _mm256_loadu_si256(b_ptr.add(1));
@@ -4679,8 +4687,7 @@ pub fn branchless_q7_unified_field_fold_words_with_init_weight_64(
                                 r_w0 = b[0];
                                 r_uni = true;
                             } else {
-                                vr0 = vb0;
-                                vr1 = vb1;
+                                vr_vecs = Some((vb0, vb1));
                             }
                         } else {
                             let vd0 = _mm256_sub_epi8(vb0, vr0);
@@ -4701,6 +4708,7 @@ pub fn branchless_q7_unified_field_fold_words_with_init_weight_64(
                                         avx2_slerp_from_diff_vec64(vr0, vr1, vd0, vd1, s);
                                 }
                             }
+                            vr_vecs = Some((vr0, vr1));
                         }
 
                         running_weight = total_w;
@@ -4724,8 +4732,10 @@ pub fn branchless_q7_unified_field_fold_words_with_init_weight_64(
             );
             let out_w = if r_uni {
                 [r_w0; 8]
-            } else {
+            } else if let Some((vr0, vr1)) = vr_vecs {
                 avx2_vec64_to_words64(vr0, vr1)
+            } else {
+                [r_w0; 8]
             };
             (
                 out_w,
@@ -5541,7 +5551,7 @@ unsafe fn avx2_mean_sincos_from_vec64(
 fn mean_sincos_from_words_with_uniform_flag_64(w: &[u64; 8], w_is_uniform: bool) -> (f32, f32) {
     if w_is_uniform {
         let w0 = w[0];
-        if w0 == (w0 & 0xFF).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+        if w0 == w0.rotate_right(8) {
             return branchless_sincos_q7((w0 & 0xFF) as u8 as gcso_q7_t);
         }
         let p = sum_sincos_biased_u64_from_word(w0);
@@ -5570,7 +5580,7 @@ fn mean_sincos_from_words_with_uniform_flag_64(w: &[u64; 8], w_is_uniform: bool)
 pub fn circular_r_bar_from_words_with_uniform_flag_64(w: &[u64; 8], w_is_uniform: bool) -> f32 {
     if w_is_uniform {
         let w0 = w[0];
-        if w0 == (w0 & 0xFF).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+        if w0 == w0.rotate_right(8) {
             return 1.0;
         }
     }
@@ -5597,7 +5607,7 @@ pub fn circular_resultant_from_words_with_uniform_flag_64(
 ) -> (f32, gcso_q7_t, f32) {
     if w_is_uniform {
         let w0 = w[0];
-        if w0 == (w0 & 0xFF).wrapping_mul(SWAR_SPLAT_BYTE_64) {
+        if w0 == w0.rotate_right(8) {
             let q7 = (w0 & 0xFF) as u8 as gcso_q7_t;
             return (
                 1.0,
@@ -5863,7 +5873,7 @@ pub(crate) fn branchless_toroidal_centroid_step_words_with_coh_uni_and_changed_6
                 swar_q7_circular_add_x8(centroid_words[7], step0),
             ]
         };
-        if step0 == (step0 & 0xFF).wrapping_mul(SWAR_SPLAT_BYTE_64)
+        if step0 == step0.rotate_right(8)
             && prev_r_bar > 0.0
             && prev_kappa > 0.0
         {

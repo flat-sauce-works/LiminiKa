@@ -1814,6 +1814,21 @@ pub struct AttractorAnchor {
 // SAFETY: `AttractorAnchor` is `#[repr(C, align(32))]` with explicit padding and primitive fields where all bit patterns are valid.
 unsafe impl Pod for AttractorAnchor {}
 
+impl AttractorAnchor {
+    /// Deactivates this anchor slot in-place by clearing only its active/crystallized flags,
+    /// ID, and scalar weights (`20` bytes instead of writing a full `640`-byte `AttractorAnchor::default()`),
+    /// eliminating `620` bytes of dead `vector_data` / `phase_deltas` memory traffic per deactivated slot.
+    #[inline(always)]
+    pub const fn deactivate_in_place(&mut self) {
+        self.id = 0;
+        self.weight = 0.0;
+        self.pull_force = 0.0;
+        self.stigmergic_density = 0.0;
+        self.is_active = 0;
+        self.is_crystallized = 0;
+    }
+}
+
 impl Default for AttractorAnchor {
     #[inline(always)]
     fn default() -> Self {
@@ -2269,7 +2284,7 @@ impl AttractorFieldEngine {
                 let current_energy = anchor.compute_energy_score(self.step_counter);
                 if current_energy < min_energy {
                     self.dissipated_energy_total += current_energy;
-                    *anchor = AttractorAnchor::default();
+                    anchor.deactivate_in_place();
                     deactivated_count = deactivated_count.wrapping_add(1);
                 }
             }
@@ -2454,7 +2469,7 @@ impl AttractorFieldEngine {
         {
             let score = self.anchors[slot_idx].compute_energy_score(step);
             self.dissipated_energy_total += score;
-            self.anchors[slot_idx] = AttractorAnchor::default();
+            self.anchors[slot_idx].deactivate_in_place();
             self.active_count = self.active_count.saturating_sub(1);
             true
         } else {
@@ -2490,18 +2505,22 @@ impl AttractorFieldEngine {
         let mut run_w0 = init_w0;
         let mut running_pull = 0.0_f32;
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-        let mut vi_ready = !init_is_uniform;
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-        let (mut vi0, mut vi1) = unsafe {
-            if !init_is_uniform {
+        let mut vi_vecs: Option<(
+            core::arch::x86_64::__m256i,
+            core::arch::x86_64::__m256i,
+        )> = if init_is_uniform {
+            None
+        } else {
+            // SAFETY: Guarded by `target_feature = "avx2"`.
+            Some(unsafe {
                 crate::traits::branchless::avx2_words64_to_vec64_with_uniform(init_w, false)
-            } else {
-                let z = core::arch::x86_64::_mm256_setzero_si256();
-                (z, z)
-            }
+            })
         };
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-        let (mut vr0, mut vr1) = (vi0, vi1);
+        let mut vr_vecs: Option<(
+            core::arch::x86_64::__m256i,
+            core::arch::x86_64::__m256i,
+        )> = vi_vecs;
 
         let mut remaining = self.active_count;
         let mut idx = 0usize;
@@ -2589,18 +2608,19 @@ impl AttractorFieldEngine {
                     let eff_coh = if init_nonzero & anc_nonzero {
                         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                         {
-                            if !vi_ready {
-                                unsafe {
-                                    (vi0, vi1) =
-                                        crate::traits::branchless::avx2_words64_to_vec64_with_uniform(
+                            unsafe {
+                                use core::arch::x86_64::_mm256_sub_epi8;
+                                let (vi0, vi1) = match vi_vecs {
+                                    Some(v) => v,
+                                    None => {
+                                        let v = crate::traits::branchless::avx2_words64_to_vec64_with_uniform(
                                             init_w,
                                             init_is_uniform,
                                         );
-                                }
-                                vi_ready = true;
-                            }
-                            unsafe {
-                                use core::arch::x86_64::_mm256_sub_epi8;
+                                        vi_vecs = Some(v);
+                                        v
+                                    }
+                                };
                                 crate::traits::branchless::avx2_coherence_from_diff_vec64(
                                     _mm256_sub_epi8(vi0, va0),
                                     _mm256_sub_epi8(vi1, va1),
@@ -2646,20 +2666,19 @@ impl AttractorFieldEngine {
                                     run_w0 = anc_w[0];
                                     run_is_uniform = true;
                                 } else {
-                                    vr0 = va0;
-                                    vr1 = va1;
+                                    vr_vecs = Some((va0, va1));
                                     run_is_uniform = false;
                                 }
                             } else {
-                                if run_is_uniform {
-                                    unsafe {
+                                let (mut vr0, mut vr1) = match vr_vecs {
+                                    Some(v) if !run_is_uniform => v,
+                                    _ => unsafe {
                                         let rz =
                                             core::arch::x86_64::_mm256_set1_epi64x(run_w0 as i64);
-                                        vr0 = rz;
-                                        vr1 = rz;
-                                    }
-                                    run_is_uniform = false;
-                                }
+                                        (rz, rz)
+                                    },
+                                };
+                                run_is_uniform = false;
                                 let ratio_f32 = branchless_clamp_f32(
                                     (pull * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
                                     0.0,
@@ -2689,6 +2708,7 @@ impl AttractorFieldEngine {
                                         }
                                     }
                                 }
+                                vr_vecs = Some((vr0, vr1));
                             }
                         }
                         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
@@ -2729,8 +2749,10 @@ impl AttractorFieldEngine {
             *init_w
         } else if run_is_uniform {
             [run_w0; 8]
-        } else {
+        } else if let Some((vr0, vr1)) = vr_vecs {
             unsafe { crate::traits::branchless::avx2_vec64_to_words64(vr0, vr1) }
+        } else {
+            [run_w0; 8]
         };
 
         let rep_scale_u7 = (branchless_clamp_f32(
@@ -2969,7 +2991,7 @@ impl AttractorField for AttractorFieldEngine {
             let anchor_id = anchor.id;
             let existing_score = anchor.compute_energy_score(self.step_counter);
             self.dissipated_energy_total += existing_score;
-            self.anchors[slot_idx] = AttractorAnchor::default();
+            self.anchors[slot_idx].deactivate_in_place();
             self.active_count = self.active_count.saturating_sub(1);
             Some(anchor_id)
         } else {
@@ -3077,7 +3099,7 @@ impl AttractorField for AttractorFieldEngine {
             let mut idx = 0usize;
             while idx < cap {
                 if self.anchors[idx].is_active != 0 {
-                    self.anchors[idx] = AttractorAnchor::default();
+                    self.anchors[idx].deactivate_in_place();
                     remaining -= 1;
                     if remaining == 0 {
                         break;
@@ -3194,12 +3216,19 @@ impl MultiAttractorSpace {
         let mut i = 0usize;
         while i < MAX_ATTRACTOR_DOMAINS {
             let field = &mut self.fields[i];
-            let mut a = 0usize;
-            while a < MAX_ANCHORS_PER_FIELD {
-                field.anchors[a].id = 0;
-                field.anchors[a].is_active = 0;
-                field.anchors[a].is_crystallized = 0;
-                a += 1;
+            let mut rem = field.active_count;
+            if rem > 0 {
+                let mut a = 0usize;
+                while a < MAX_ANCHORS_PER_FIELD {
+                    if field.anchors[a].is_active != 0 {
+                        field.anchors[a].deactivate_in_place();
+                        rem -= 1;
+                        if rem == 0 {
+                            break;
+                        }
+                    }
+                    a += 1;
+                }
             }
             field.active_count = 0;
             field.repulsion_gain = 0.0;
