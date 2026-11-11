@@ -7304,32 +7304,44 @@ pub fn sum_sq_f32_simd8(slice: &[f32]) -> f32 {
             while i + 64 <= len {
                 let v0 = _mm256_loadu_ps(ptr.add(i));
                 let v1 = _mm256_loadu_ps(ptr.add(i + 8));
-                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v0, v0));
-                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v1, v1));
+                sq0 = _mm256_add_ps(
+                    sq0,
+                    _mm256_add_ps(_mm256_mul_ps(v0, v0), _mm256_mul_ps(v1, v1)),
+                );
                 let v2 = _mm256_loadu_ps(ptr.add(i + 16));
                 let v3 = _mm256_loadu_ps(ptr.add(i + 24));
-                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v2, v2));
-                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v3, v3));
+                sq1 = _mm256_add_ps(
+                    sq1,
+                    _mm256_add_ps(_mm256_mul_ps(v2, v2), _mm256_mul_ps(v3, v3)),
+                );
                 let v4 = _mm256_loadu_ps(ptr.add(i + 32));
                 let v5 = _mm256_loadu_ps(ptr.add(i + 40));
-                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v4, v4));
-                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v5, v5));
+                sq0 = _mm256_add_ps(
+                    sq0,
+                    _mm256_add_ps(_mm256_mul_ps(v4, v4), _mm256_mul_ps(v5, v5)),
+                );
                 let v6 = _mm256_loadu_ps(ptr.add(i + 48));
                 let v7 = _mm256_loadu_ps(ptr.add(i + 56));
-                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v6, v6));
-                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v7, v7));
+                sq1 = _mm256_add_ps(
+                    sq1,
+                    _mm256_add_ps(_mm256_mul_ps(v6, v6), _mm256_mul_ps(v7, v7)),
+                );
                 i += 64;
             }
             let rem = len - i;
             if (rem & 32) != 0 {
                 let v0 = _mm256_loadu_ps(ptr.add(i));
                 let v1 = _mm256_loadu_ps(ptr.add(i + 8));
-                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v0, v0));
-                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v1, v1));
+                sq0 = _mm256_add_ps(
+                    sq0,
+                    _mm256_add_ps(_mm256_mul_ps(v0, v0), _mm256_mul_ps(v1, v1)),
+                );
                 let v2 = _mm256_loadu_ps(ptr.add(i + 16));
                 let v3 = _mm256_loadu_ps(ptr.add(i + 24));
-                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v2, v2));
-                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v3, v3));
+                sq1 = _mm256_add_ps(
+                    sq1,
+                    _mm256_add_ps(_mm256_mul_ps(v2, v2), _mm256_mul_ps(v3, v3)),
+                );
                 i += 32;
             }
             if (rem & 16) != 0 {
@@ -7449,32 +7461,44 @@ pub(crate) fn sum_sq_scaled_f32_simd8(slice: &[f32], scale: f32) -> f32 {
             while i + 64 <= len {
                 let v0 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i)), v_scale);
                 let v1 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 8)), v_scale);
-                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v0, v0));
-                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v1, v1));
+                sq0 = _mm256_add_ps(
+                    sq0,
+                    _mm256_add_ps(_mm256_mul_ps(v0, v0), _mm256_mul_ps(v1, v1)),
+                );
                 let v2 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 16)), v_scale);
                 let v3 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 24)), v_scale);
-                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v2, v2));
-                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v3, v3));
+                sq1 = _mm256_add_ps(
+                    sq1,
+                    _mm256_add_ps(_mm256_mul_ps(v2, v2), _mm256_mul_ps(v3, v3)),
+                );
                 let v4 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 32)), v_scale);
                 let v5 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 40)), v_scale);
-                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v4, v4));
-                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v5, v5));
+                sq0 = _mm256_add_ps(
+                    sq0,
+                    _mm256_add_ps(_mm256_mul_ps(v4, v4), _mm256_mul_ps(v5, v5)),
+                );
                 let v6 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 48)), v_scale);
                 let v7 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 56)), v_scale);
-                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v6, v6));
-                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v7, v7));
+                sq1 = _mm256_add_ps(
+                    sq1,
+                    _mm256_add_ps(_mm256_mul_ps(v6, v6), _mm256_mul_ps(v7, v7)),
+                );
                 i += 64;
             }
             let rem = len - i;
             if (rem & 32) != 0 {
                 let v0 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i)), v_scale);
                 let v1 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 8)), v_scale);
-                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v0, v0));
-                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v1, v1));
+                sq0 = _mm256_add_ps(
+                    sq0,
+                    _mm256_add_ps(_mm256_mul_ps(v0, v0), _mm256_mul_ps(v1, v1)),
+                );
                 let v2 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 16)), v_scale);
                 let v3 = _mm256_mul_ps(_mm256_loadu_ps(ptr.add(i + 24)), v_scale);
-                sq0 = _mm256_add_ps(sq0, _mm256_mul_ps(v2, v2));
-                sq1 = _mm256_add_ps(sq1, _mm256_mul_ps(v3, v3));
+                sq1 = _mm256_add_ps(
+                    sq1,
+                    _mm256_add_ps(_mm256_mul_ps(v2, v2), _mm256_mul_ps(v3, v3)),
+                );
                 i += 32;
             }
             if (rem & 16) != 0 {

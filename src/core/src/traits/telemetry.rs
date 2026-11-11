@@ -389,16 +389,17 @@ unsafe fn eval_candidate_trail_avx2_with_macro_fast(
     // candidate's offset-56 phase profile via 8-byte aligned GPR loads (`trail_phase_words_ref`)
     // to eliminate 64B cache-line splits and 4-to-1 GPR-store-to-YMM-load STLF stalls.
     unsafe {
-        use core::arch::x86_64::{_mm256_setzero_si256, _mm256_sub_epi8};
+        use core::arch::x86_64::_mm256_sub_epi8;
         let cw = trail_phase_words_ref(cand);
         let c_uni = if self_is_uniform {
             is_word_array_uniform_64(cw)
         } else {
             false
         };
-        let mut cv0 = _mm256_setzero_si256();
-        let mut cv1 = _mm256_setzero_si256();
-        let mut cv_loaded = false;
+        let mut cv_opt: Option<(
+            core::arch::x86_64::__m256i,
+            core::arch::x86_64::__m256i,
+        )> = None;
         let coh = if c_uni {
             let cw0 = cw[0];
             if cw0 == self_w[0] {
@@ -411,8 +412,8 @@ unsafe fn eval_candidate_trail_avx2_with_macro_fast(
                 coherence_from_word_arrays_with_both_uniform_flags_64(self_w, true, cw, true)
             }
         } else {
-            (cv0, cv1) = super::branchless::avx2_words64_to_vec64(cw);
-            cv_loaded = true;
+            let (cv0, cv1) = super::branchless::avx2_words64_to_vec64(cw);
+            cv_opt = Some((cv0, cv1));
             super::branchless::avx2_coherence_from_diff_vec64(
                 _mm256_sub_epi8(self_v0, cv0),
                 _mm256_sub_epi8(self_v1, cv1),
@@ -465,11 +466,12 @@ unsafe fn eval_candidate_trail_avx2_with_macro_fast(
                                 ),
                             )
                         } else {
-                            if !cv_loaded {
-                                (cv0, cv1) = super::branchless::avx2_words64_to_vec64_with_uniform(
+                            let (cv0, cv1) = match cv_opt {
+                                Some(v) => v,
+                                None => super::branchless::avx2_words64_to_vec64_with_uniform(
                                     cw, c_uni,
-                                );
-                            }
+                                ),
+                            };
                             branchless_relu_f32(super::branchless::avx2_coherence_from_diff_vec64(
                                 _mm256_sub_epi8(*win_v0, cv0),
                                 _mm256_sub_epi8(*win_v1, cv1),

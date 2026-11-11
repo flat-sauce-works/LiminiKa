@@ -2382,16 +2382,14 @@ unsafe fn apply_ripa_default_nonuniform_avx2_ptr(
         if head_dim == 128 {
             let mut hp = ptr.add(96);
             let mut h = 0usize;
-            let mut w64 = 0u64;
+            let aligned8_end = num_heads & !7usize;
             while h + 4 <= num_heads {
-                w64 = if (h & 4) != 0 {
-                    w64 >> 32
-                } else if h + 8 <= num_heads {
-                    core::hint::black_box(p_ptr.add(h).cast::<u64>().read_unaligned())
+                let wb32 = if h < aligned8_end {
+                    let w64 = p_ptr.add(h & !7usize).cast::<u64>().read_unaligned();
+                    (w64 >> ((h & 4) << 3)) as u32
                 } else {
-                    u64::from(p_ptr.add(h).cast::<u32>().read_unaligned())
+                    p_ptr.add(h).cast::<u32>().read_unaligned()
                 };
-                let wb32 = w64 as u32;
                 let (s0, c0) = lut[(wb32 as u8) as usize];
                 avx2_rotate_so2_block32(hp, _mm256_set1_ps(c0), _mm256_set1_ps(s0));
                 let (s1, c1) = lut[((wb32 >> 8) as u8) as usize];
@@ -2417,16 +2415,14 @@ unsafe fn apply_ripa_default_nonuniform_avx2_ptr(
             let step3 = head_dim * 3;
             let step4 = head_dim * 4;
             let mut h = 0usize;
-            let mut w64 = 0u64;
+            let aligned8_end = num_heads & !7usize;
             while h + 4 <= num_heads {
-                w64 = if (h & 4) != 0 {
-                    w64 >> 32
-                } else if h + 8 <= num_heads {
-                    core::hint::black_box(p_ptr.add(h).cast::<u64>().read_unaligned())
+                let wb32 = if h < aligned8_end {
+                    let w64 = p_ptr.add(h & !7usize).cast::<u64>().read_unaligned();
+                    (w64 >> ((h & 4) << 3)) as u32
                 } else {
-                    u64::from(p_ptr.add(h).cast::<u32>().read_unaligned())
+                    p_ptr.add(h).cast::<u32>().read_unaligned()
                 };
-                let wb32 = w64 as u32;
                 let (s0, c0) = lut[(wb32 as u8) as usize];
                 avx2_rotate_so2_block32(hp, _mm256_set1_ps(c0), _mm256_set1_ps(s0));
                 let (s1, c1) = lut[((wb32 >> 8) as u8) as usize];
@@ -4236,6 +4232,32 @@ pub trait PhaseSteering: BranchlessKernel {
         let extra_mask = (gt_128 as u64).wrapping_neg();
 
         let mut i = 0usize;
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+        unsafe {
+            use core::arch::x86_64::{
+                __m256i, _mm256_adds_epi8, _mm256_and_si256, _mm256_loadu_si256,
+                _mm256_mulhrs_epi16, _mm256_or_si256, _mm256_set1_epi16, _mm256_set1_epi8,
+                _mm256_slli_epi16, _mm256_storeu_si256,
+            };
+            let v_s = _mm256_set1_epi16(s_sub as i16);
+            let mask_ff00 = _mm256_set1_epi16(-256i16);
+            let mask_00ff = _mm256_set1_epi16(0x00FFi16);
+            let v_extra = _mm256_set1_epi8(-(gt_128 as i8));
+            let ptr = slice.as_mut_ptr().cast::<__m256i>();
+            while i + 32 <= num_heads {
+                let off = i >> 5;
+                let v = _mm256_loadu_si256(ptr.add(off));
+                let ev = _mm256_mulhrs_epi16(_mm256_slli_epi16(v, 8), v_s);
+                let od = _mm256_mulhrs_epi16(_mm256_and_si256(v, mask_ff00), v_s);
+                let scaled = _mm256_or_si256(
+                    _mm256_and_si256(ev, mask_00ff),
+                    _mm256_slli_epi16(od, 8),
+                );
+                let out = _mm256_adds_epi8(scaled, _mm256_and_si256(v, v_extra));
+                _mm256_storeu_si256(ptr.add(off), out);
+                i += 32;
+            }
+        }
         while i + 16 <= num_heads {
             let w0 = load_q7_x8_slice(slice, i);
             let w1 = load_q7_x8_slice(slice, i + 8);
@@ -4475,11 +4497,49 @@ pub trait PhaseSteering: BranchlessKernel {
         let q_p = &query_phases.as_slice()[..num_heads];
         let c_p = &accumulated_context_phases.as_slice()[..num_heads];
         let mut eff_words = [0u64; NUM_SWARM_CELLS];
+        let mut h = 0usize;
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+        if num_heads >= 32 {
+            // SAFETY: `q_p` and `c_p` have length `num_heads >= 32`, and AVX2 is enabled.
+            unsafe {
+                use core::arch::x86_64::{
+                    __m256i, _mm256_abs_epi8, _mm256_add_epi8, _mm256_and_si256,
+                    _mm256_blendv_epi8, _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_max_epu8,
+                    _mm256_set1_epi8, _mm256_setzero_si256, _mm256_storeu_si256, _mm256_sub_epi8,
+                    _mm256_xor_si256,
+                };
+                let qp = q_p.as_ptr().cast::<__m256i>();
+                let cp = c_p.as_ptr().cast::<__m256i>();
+                let ew_ptr = eff_words.as_mut_ptr().cast::<__m256i>();
+                let v_128 = _mm256_set1_epi8(-128);
+                let v_thresh = _mm256_set1_epi8(step_u8 as i8);
+                while h + 32 <= num_heads {
+                    let off = h >> 5;
+                    let vd = _mm256_sub_epi8(_mm256_loadu_si256(qp.add(off)), _mm256_loadu_si256(cp.add(off)));
+                    let vf = if fold_geodesic {
+                        let m = _mm256_xor_si256(vd, _mm256_add_epi8(vd, vd));
+                        _mm256_blendv_epi8(vd, _mm256_sub_epi8(v_128, vd), m)
+                    } else {
+                        vd
+                    };
+                    let vo = if step_u8 <= 1 {
+                        vf
+                    } else if step_u8 > 127 {
+                        _mm256_setzero_si256()
+                    } else {
+                        let vabs = _mm256_abs_epi8(vf);
+                        let keep = _mm256_cmpeq_epi8(_mm256_max_epu8(vabs, v_thresh), vabs);
+                        _mm256_and_si256(vf, keep)
+                    };
+                    _mm256_storeu_si256(ew_ptr.add(off), vo);
+                    h += 32;
+                }
+            }
+        }
         let mut prev_diff_w = 0u64;
         let mut prev_filt_w = 0u64;
         let mut has_prev_w = false;
 
-        let mut h = 0usize;
         while h + 8 <= num_heads {
             let diff_w =
                 swar_q7_circular_diff_x8(load_q7_x8_slice(q_p, h), load_q7_x8_slice(c_p, h));
@@ -5323,9 +5383,40 @@ pub trait PhaseSteering: BranchlessKernel {
 
         let wa = load_q7_words_64(a_arr);
         let wb = load_q7_words_64(b_arr);
-        let slerped_words = swar_slerp_words_with_bias_64(&wa, &wb, s, bias_restore);
-
-        let swar_words = swar_q7_qdps_filter_words_64(&slerped_words, step_u8);
+        let swar_words = {
+            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+            {
+                if s == 0 {
+                    swar_q7_qdps_filter_words_64(&wa, step_u8)
+                } else if s >= 128 {
+                    swar_q7_qdps_filter_words_64(&wb, step_u8)
+                } else if is_word_array_uniform_64(&wa) && is_word_array_uniform_64(&wb) {
+                    let slerped = swar_slerp_words_with_bias_64(&wa, &wb, s, bias_restore);
+                    swar_q7_qdps_filter_words_64(&slerped, step_u8)
+                } else {
+                    // SAFETY: `target_feature = "avx2"` is enabled; fuses 64-head geodesic SLERP and QDPS filter in 2 YMM registers.
+                    unsafe {
+                        let (va0, va1) = super::branchless::avx2_words64_to_vec64(&wa);
+                        let (vb0, vb1) = super::branchless::avx2_words64_to_vec64(&wb);
+                        let (vr0, vr1) = super::branchless::avx2_slerp_vec64(va0, va1, vb0, vb1, s);
+                        let (vf0, vf1) = if step_u8 <= 1 {
+                            (vr0, vr1)
+                        } else if step_u8 > 127 {
+                            use core::arch::x86_64::_mm256_setzero_si256;
+                            (_mm256_setzero_si256(), _mm256_setzero_si256())
+                        } else {
+                            super::branchless::avx2_qdps_filter_vec64(vr0, vr1, step_u8)
+                        };
+                        super::branchless::avx2_vec64_to_words64(vf0, vf1)
+                    }
+                }
+            }
+            #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+            {
+                let slerped = swar_slerp_words_with_bias_64(&wa, &wb, s, bias_restore);
+                swar_q7_qdps_filter_words_64(&slerped, step_u8)
+            }
+        };
 
         let mut blended = AlignedBuffer16::<gcso_q7_t, MAX_ATTENTION_HEADS>::zeroed();
         store_q7_words_64(&mut blended.data, &swar_words);
@@ -6104,6 +6195,9 @@ pub trait EntropyGatedPhaseLookup: BranchlessKernel {
             let mut acc_rad_scaled = [0.0_f32; MAX_ATTENTION_HEADS];
             for (b_idx, &alpha) in a_slice.iter().enumerate().take(k_bases) {
                 let clean_a = branchless_select_f32(branchless_is_finite_f32(alpha), alpha, 0.0);
+                if clean_a == 0.0 {
+                    continue;
+                }
                 let w_b = clean_a * rad_gate_scale;
                 let row = &b_slice[b_idx * num_heads..(b_idx + 1) * num_heads];
                 for (acc_h, &basis_q7) in acc_rad_scaled[..num_heads].iter_mut().zip(row.iter()) {
@@ -6932,14 +7026,8 @@ fn rotate_ripa_lut_words_slice_nonuniform(
             unsafe {
                 let mut hp = ptr.add(96);
                 let mut h = 0usize;
-                let mut w64 = 0u64;
                 while h + 4 <= limit {
-                    w64 = if (h & 4) != 0 {
-                        w64 >> 32
-                    } else {
-                        core::hint::black_box(base_ripa_words[h >> 3])
-                    };
-                    let wb32 = w64 as u32;
+                    let wb32 = (base_ripa_words[h >> 3] >> ((h & 4) << 3)) as u32;
                     let (s0, c0) = self_lut[(wb32 as u8) as usize];
                     avx2_rotate_so2_block32(hp, _mm256_set1_ps(c0), _mm256_set1_ps(s0));
                     let (s1, c1) = self_lut[((wb32 >> 8) as u8) as usize];
@@ -6968,14 +7056,8 @@ fn rotate_ripa_lut_words_slice_nonuniform(
                 let step3 = head_dim * 3;
                 let step4 = head_dim * 4;
                 let mut h = 0usize;
-                let mut w64 = 0u64;
                 while h + 4 <= limit {
-                    w64 = if (h & 4) != 0 {
-                        w64 >> 32
-                    } else {
-                        core::hint::black_box(base_ripa_words[h >> 3])
-                    };
-                    let wb32 = w64 as u32;
+                    let wb32 = (base_ripa_words[h >> 3] >> ((h & 4) << 3)) as u32;
                     let (s0, c0) = self_lut[(wb32 as u8) as usize];
                     avx2_rotate_so2_block32(hp, _mm256_set1_ps(c0), _mm256_set1_ps(s0));
                     let (s1, c1) = self_lut[((wb32 >> 8) as u8) as usize];
@@ -7279,14 +7361,8 @@ fn rotate_fused_ripa_and_pspm_eff_words_core(
                     let step4 = head_dim * 4;
                     let mut h = 0usize;
                     if words_eq {
-                        let mut wb64 = 0u64;
                         while h + 4 <= limit {
-                            wb64 = if (h & 4) != 0 {
-                                wb64 >> 32
-                            } else {
-                                core::hint::black_box(base_ripa_words[h >> 3])
-                            };
-                            let wb32 = wb64 as u32;
+                            let wb32 = (base_ripa_words[h >> 3] >> ((h & 4) << 3)) as u32;
                             let (s0, c0) = self_lut[(wb32 as u8) as usize];
                             avx2_rotate_so2_block32(hp, _mm256_set1_ps(c0), _mm256_set1_ps(s0));
                             let (s1, c1) = self_lut[((wb32 >> 8) as u8) as usize];
@@ -7323,19 +7399,11 @@ fn rotate_fused_ripa_and_pspm_eff_words_core(
                         }
                         return;
                     }
-                    let mut wb64 = 0u64;
-                    let mut ws64 = 0u64;
                     while h + 4 <= limit {
-                        if (h & 4) != 0 {
-                            wb64 >>= 32;
-                            ws64 >>= 32;
-                        } else {
-                            let w_idx = h >> 3;
-                            wb64 = core::hint::black_box(base_ripa_words[w_idx]);
-                            ws64 = core::hint::black_box(pspm_eff_words[w_idx]);
-                        }
-                        let wb32 = wb64 as u32;
-                        let ws32 = ws64 as u32;
+                        let sh32 = (h & 4) << 3;
+                        let w_idx = h >> 3;
+                        let wb32 = (base_ripa_words[w_idx] >> sh32) as u32;
+                        let ws32 = (pspm_eff_words[w_idx] >> sh32) as u32;
                         if wb32 == ws32 {
                             let (s0, c0) = self_lut[(wb32 as u8) as usize];
                             avx2_rotate_so2_block32(hp, _mm256_set1_ps(c0), _mm256_set1_ps(s0));

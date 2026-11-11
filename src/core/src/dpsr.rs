@@ -626,8 +626,6 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
     let (vs0, vs1) = unsafe {
         crate::traits::branchless::avx2_words64_to_vec64_with_uniform(&self_w, self_is_uniform)
     };
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    let (mut vw0, mut vw1) = (vs0, vs1);
 
     let mut idx = 0usize;
     while idx < cand_len {
@@ -660,10 +658,6 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
         } else {
             self_is_uniform && is_word_array_uniform_64(cand_w)
         };
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-        let mut cand_vc = (vs0, vs1);
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-        let mut cand_vc_loaded = false;
         let coh = if cand_eq_self {
             1.0
         } else if cand_is_uniform {
@@ -678,8 +672,6 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
                 unsafe {
                     use core::arch::x86_64::_mm256_sub_epi8;
                     let (vc0, vc1) = crate::traits::branchless::avx2_words64_to_vec64(cand_w);
-                    cand_vc = (vc0, vc1);
-                    cand_vc_loaded = true;
                     crate::traits::branchless::avx2_coherence_from_diff_vec64(
                         _mm256_sub_epi8(vs0, vc0),
                         _mm256_sub_epi8(vs1, vc1),
@@ -708,16 +700,6 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
                     win_eq_self = swar_words_equal_64(&self_w, win_w);
                     if !win_eq_self {
                         win_is_uniform = is_word_array_uniform_64(win_w);
-                        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-                        unsafe {
-                            let (w0, w1) =
-                                crate::traits::branchless::avx2_words64_to_vec64_with_uniform(
-                                    win_w,
-                                    win_is_uniform,
-                                );
-                            vw0 = w0;
-                            vw1 = w1;
-                        }
                     }
                     win_meta_evaluated = true;
                 }
@@ -730,15 +712,13 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
                     {
                         unsafe {
                             use core::arch::x86_64::_mm256_sub_epi8;
-                            let (vc0, vc1) = if cand_vc_loaded {
-                                cand_vc
-                            } else {
-                                let (v0, v1) =
-                                    crate::traits::branchless::avx2_words64_to_vec64(cand_w);
-                                cand_vc = (v0, v1);
-                                cand_vc_loaded = true;
-                                (v0, v1)
-                            };
+                            let (vw0, vw1) =
+                                crate::traits::branchless::avx2_words64_to_vec64_with_uniform(
+                                    win_w,
+                                    win_is_uniform,
+                                );
+                            let (vc0, vc1) =
+                                crate::traits::branchless::avx2_words64_to_vec64(cand_w);
                             crate::traits::branchless::avx2_coherence_from_diff_vec64(
                                 _mm256_sub_epi8(vw0, vc0),
                                 _mm256_sub_epi8(vw1, vc1),
@@ -848,9 +828,8 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
                         *trail_phase_words_mut(dst_trail) = bridged_w;
                         let step_u8 = branchless_rad_to_qdps_step_u8(min_step_rad);
                         if step_u8 > 1 {
-                            let (vf0, vf1) = crate::traits::branchless::avx2_qdps_filter_vec64(
-                                vr0, vr1, step_u8,
-                            );
+                            let (vf0, vf1) =
+                                crate::traits::branchless::avx2_qdps_filter_vec64(vr0, vr1, step_u8);
                             crate::traits::branchless::avx2_vec64_to_words64(vf0, vf1)
                         } else {
                             bridged_w

@@ -4821,11 +4821,10 @@ impl CrystallizedAttractorRecord {
                 false
             };
             #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-            let mut c0 = unsafe { core::arch::x86_64::_mm256_setzero_si256() };
-            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-            let mut c1 = unsafe { core::arch::x86_64::_mm256_setzero_si256() };
-            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-            let mut cand_vecs_loaded = false;
+            let mut cand_vecs_opt: Option<(
+                core::arch::x86_64::__m256i,
+                core::arch::x86_64::__m256i,
+            )> = None;
             let coh = if cand_is_uniform {
                 let cw0 = cand_w[0];
                 if cw0 == self_w0 {
@@ -4844,8 +4843,8 @@ impl CrystallizedAttractorRecord {
                 {
                     unsafe {
                         use core::arch::x86_64::_mm256_sub_epi8;
-                        (c0, c1) = avx2_words64_to_vec64(cand_w);
-                        cand_vecs_loaded = true;
+                        let (c0, c1) = avx2_words64_to_vec64(cand_w);
+                        cand_vecs_opt = Some((c0, c1));
                         avx2_coherence_from_diff_vec64(
                             _mm256_sub_epi8(self_v0, c0),
                             _mm256_sub_epi8(self_v1, c1),
@@ -4910,12 +4909,13 @@ impl CrystallizedAttractorRecord {
                             } else {
                                 unsafe {
                                     use core::arch::x86_64::_mm256_sub_epi8;
-                                    if !cand_vecs_loaded {
-                                        (c0, c1) = super::branchless::avx2_words64_to_vec64_with_uniform(
+                                    let (c0, c1) = match cand_vecs_opt {
+                                        Some(v) => v,
+                                        None => super::branchless::avx2_words64_to_vec64_with_uniform(
                                             cand_w,
                                             cand_uni_for_win,
-                                        );
-                                    }
+                                        ),
+                                    };
                                     avx2_coherence_from_diff_vec64(
                                         _mm256_sub_epi8(win_v0, c0),
                                         _mm256_sub_epi8(win_v1, c1),
