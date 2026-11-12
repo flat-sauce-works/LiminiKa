@@ -1852,7 +1852,8 @@ pub fn branchless_q7_attention_score_delta_64(
     (coh, branchless_flush_subnormal_f32(clean_gain * rsqrt_d * coh))
 }
 
-/// Evaluates the **Bayes-Attention Stigmergic Logit Delta** uniting **Hypothesis 1** and **Hypothesis 2**
+/// Evaluates the **Bayes-Attention Stigmergic Logit Delta** combining conditional phase-coherence
+/// interference and stigmergic pointer-chain priors
 /// in `const fn` constant time (`0` branches, `0 fdiv`), returning `(phase_coherence, bayesian_logit_delta)`.
 #[inline(always)]
 pub fn branchless_q7_bayesian_attention_score_delta_64(

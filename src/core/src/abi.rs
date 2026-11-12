@@ -3285,7 +3285,7 @@ pub unsafe extern "C" fn gcso_action_hub_bridge_liminal_trails(
     })
 }
 
-/// Realizes **Stigmergic Pointer-Trail Intelligence (Hypothesis 2 $\times$ Hypothesis 1)** across
+/// Performs **Stigmergic Pointer-Chain Selection & Geodesic Bridging** across
 /// the C-ABI boundary in a single pass: scans `num_candidates` candidate memory trails in constant
 /// time per candidate to select the optimal coherent ($H^1(K; \mathcal{F}) = 0$) next trail $j^*$
 /// maximizing the Bayes-Attention transition score, rewires `src_trail_inout.linked_trail_id = j^*`,

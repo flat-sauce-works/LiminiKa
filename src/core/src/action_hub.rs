@@ -4,10 +4,15 @@
 //! Stigmergic Threshold Action-Selecting Orchestrator (`ActionHubEngine`) and Sidecar Pointer
 //! Table (SPT) implementation for the Geometric Cellular Sheaf Orchestrator (GCSO).
 //!
-//! # Architectural Role ("The Thing Itself" — Hypothesis 2 $\times$ Hypothesis 1)
-//! In `LiminiKa` (`GCSO`), intelligence is realized as $\mathcal{O}(1)$ stigmergic pointer-trail
-//! manipulation (`gcso_pointer_trail_t`), pheromone evaporation/reinforcement ($\rho_{\mathrm{stigmergy}}$),
-//! inter-memory **Limina** geodesic bridging, and **threshold-driven next-action selection**:
+//! # Architectural Role (Indirect Pointer-Chain Graph Routing & Stigmergic Action Selection)
+//! Rather than holding all long-term context inside active model weights, `LiminiKa` (`GCSO`)
+//! represents active memory as a lightweight graph of 64-bit tagged pointers (`gcso_tagged_ptr_t`)
+//! and 128-byte pointer trails (`gcso_pointer_trail_t`). The CPU only needs to hold the entry
+//! pointer to a trail memo; each memo stores a 48-bit external ZIMMS storage offset, a 64-head
+//! phase signature, pheromone density ($\rho_{\mathrm{stigmergy}}$), and a `linked_trail_id`
+//! pointing to the next memo in the chain. Traversing these linked memos forms a sparse,
+//! neural-like associative pathway that bridges inter-memory **Limina** gaps and drives
+//! **threshold-driven next-action selection**:
 //!
 //! 1. **Explicit Stigmergic Threshold Ladder ([`StigmergicThresholds`] & [`StigmergicActionDecision`])**:
 //!    Evaluates local trail pheromone density $\rho_{\mathrm{stigmergy}}$, EDBC moving Z-score
@@ -123,12 +128,13 @@ use crate::traits::rope::{
 };
 use crate::traits::telemetry::{
     select_rewire_bridge_and_modulate_with_preloaded_words_64, ContrastivePhaseBloomFilter,
-    DaesScratchpad, StigmergicActionPtrOps, StigmergicTrailOps, DAES_METRIC_FAST_PATH_HIT,
-    DAES_METRIC_LAYER_SKIP_COMPENSATED, DAES_METRIC_PHASE_STEERED, DAES_METRIC_PSPM_ROUTED,
-    DAES_METRIC_REPULSION_APPLIED, DAES_METRIC_SLOT_SYNERGY_ACTIVE, DAES_METRIC_SRL_INJECTED,
-    MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS,
-    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_DPSR_ACTIVE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
-    TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
+    DaesScratchpad, StigmergicActionPtrOps, StigmergicSwarmOps, StigmergicTrailOps,
+    DAES_METRIC_FAST_PATH_HIT, DAES_METRIC_LAYER_SKIP_COMPENSATED, DAES_METRIC_PHASE_STEERED,
+    DAES_METRIC_PSPM_ROUTED, DAES_METRIC_REPULSION_APPLIED, DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+    DAES_METRIC_SRL_INJECTED, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY,
+    NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_DPSR_ACTIVE,
+    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
+    TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 use crate::traits::{
     ActionHub, ActionHubGatewayExt, FractalCascadeCoordinator, GatewayPhaseSteeringExt,
@@ -817,7 +823,7 @@ pub struct ActionOrchestrationReport {
     pub updated_density: f32,
     /// Directional cosine phase coherence $\mathcal{C}_{\mathrm{phase}} \in [-1, 1]$ with the selected trail/centroid.
     pub phase_coherence: f32,
-    /// Conditional transition log-probability $\ln P(M_t \mid M_{t-1}) \le 0$ under Hypothesis 1.
+    /// Conditional transition log-probability $\ln P(M_t \mid M_{t-1}) \le 0$ between linked pointer trails.
     pub transition_log_prob: f32,
     /// Winning candidate trail index $j^*$ selected in the Sidecar Pointer Table.
     pub selected_trail_id: u32,
@@ -849,6 +855,72 @@ impl ActionOrchestrationReport {
     #[must_use]
     pub const fn tagged_ptr(&self) -> gcso_tagged_ptr_t {
         gcso_tagged_ptr_t(self.evolved_ptr)
+    }
+
+    /// Computes the branchless stigmergic emergence potential
+    /// $\Psi_{\mathrm{emerge}} = \rho_{\mathrm{stigmergy}} \cdot \max(0.1, \mathcal{C}_{\mathrm{phase}})$
+    /// quantifying how strongly the Swarm and ZIMMS Attractors have reinforced this action trail.
+    #[inline(always)]
+    #[must_use]
+    pub const fn emergence_potential(&self) -> f32 {
+        let coh_weight = branchless_max_f32(0.1, self.phase_coherence);
+        branchless_flush_subnormal_f32(branchless_relu_f32(self.updated_density) * coh_weight)
+    }
+
+    /// Returns `true` when this orchestration step crossed into an active non-passive regime and
+    /// its [`Self::emergence_potential`] meets or exceeds `min_potential`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_action_emergent(&self, min_potential: f32) -> bool {
+        (self.decision != (StigmergicActionDecision::PassiveSidecar as u8))
+            & (self.emergence_potential() >= min_potential)
+    }
+}
+
+/// Composable receptor trait invoked by [`ActionHubEngine`] when Swarm consensus and ZIMMS
+/// attractor pull elevate a pointer trail's stigmergic pheromone density across an action regime.
+///
+/// Instead of writing ad-hoc `if/else` semantic branches (e.g., `if needs_web_search { ... }`),
+/// external or Cold-Path capabilities (such as asynchronous retrieval, ZIMMS RAG prefetch, or
+/// macro-basin consolidation) implement [`StigmergicActionReceptor`] and are composed into tuples
+/// `(ReceptorA, ReceptorB)` that react when `report.target_slot`, `report.dominant_anchor_id`, and
+/// `report.action_decision()` cross the physical stigmergic threshold.
+pub trait StigmergicActionReceptor {
+    /// Invoked when an [`ActionOrchestrationReport`] emerges from [`ActionHubEngine`] with a
+    /// non-passive [`StigmergicActionDecision`].
+    ///
+    /// # Errors
+    /// Returns a [`GcsoResult`] if the downstream receptor encounters an execution or capacity error.
+    fn on_stigmergic_action_emerged(
+        &mut self,
+        frame: &GatewayFrame,
+        report: &ActionOrchestrationReport,
+        trail: &gcso_pointer_trail_t,
+    ) -> GcsoResult<()>;
+}
+
+impl StigmergicActionReceptor for () {
+    #[inline(always)]
+    fn on_stigmergic_action_emerged(
+        &mut self,
+        _frame: &GatewayFrame,
+        _report: &ActionOrchestrationReport,
+        _trail: &gcso_pointer_trail_t,
+    ) -> GcsoResult<()> {
+        Ok(())
+    }
+}
+
+impl<A: StigmergicActionReceptor, B: StigmergicActionReceptor> StigmergicActionReceptor for (A, B) {
+    #[inline(always)]
+    fn on_stigmergic_action_emerged(
+        &mut self,
+        frame: &GatewayFrame,
+        report: &ActionOrchestrationReport,
+        trail: &gcso_pointer_trail_t,
+    ) -> GcsoResult<()> {
+        self.0.on_stigmergic_action_emerged(frame, report, trail)?;
+        self.1.on_stigmergic_action_emerged(frame, report, trail)
     }
 }
 
@@ -894,7 +966,7 @@ impl gcso_daes_slot_t {
 }
 
 /// Concrete zero-allocation (`#[repr(C, align(128))]`, 2,816-byte [`Pod`]) Sidecar Pointer Table
-/// and **Stigmergic Threshold Action-Selecting Orchestrator** implementing [`ActionHub`] ("The Thing Itself").
+/// and **Stigmergic Threshold Action-Selecting Orchestrator** implementing [`ActionHub`].
 ///
 /// # Memory Layout (2,816 Bytes = `22 x 128B` Cache-Line Pairs, Zero Implicit Padding)
 /// - `0..2048` (`2048B`): `trails: [gcso_pointer_trail_t; 16]` (16 inline 128B pointer trails)
@@ -1689,10 +1761,248 @@ impl ActionHubEngine {
             von_mises_kappa,
         )
     }
+
+    /// Executes the full **Gateway-Origin Trait Composition $\to$ 8-Cell Micro-Swarm Consensus $\to$
+    /// ZIMMS Attractor Basin Pull $\to$ Stigmergic Pheromone Action Selection & Receptor Dispatch**
+    /// closed loop without manual hyperparameter arguments or semantic `if/else` task branching.
+    ///
+    /// 1. Synthesizes `(GatewayFrame, [u64; 8])` from `signal: &S` ([`ManifoldGatewaySignal`]).
+    /// 2. Resolves the 8-cell SWAR Micro-Swarm (`try_resolve_action_in_swarm_from_words`) using
+    ///    autonomous physical parameters derived directly from the [`GatewayFrame`].
+    /// 3. Steps the ZIMMS Online Toroidal $k$-Means / DP-Means attractor basins (`centroids`) and
+    ///    evolves `trail_inout`'s stigmergic pheromone density (`orchestrate_next_action_step_core`).
+    /// 4. Dispatches `receptor.on_stigmergic_action_emerged(&frame, &report, trail_inout)` whenever
+    ///    a non-passive [`StigmergicActionDecision`] emerges from the trail's accumulated density.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `centroids` is empty or tensor slices are invalid.
+    #[inline]
+    pub fn orchestrate_gateway_attractor_swarm_step<S, R>(
+        &mut self,
+        signal: &S,
+        entropy_h_tilde: f32,
+        centroids: &mut [CrystallizedAttractorRecord],
+        trail_inout: &mut gcso_pointer_trail_t,
+        receptor: &mut R,
+        attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    ) -> GcsoResult<(
+        GatewayFrame,
+        ActionOrchestrationReport,
+        usize,
+        u32,
+        f32,
+        bool,
+    )>
+    where
+        S: ManifoldGatewaySignal + ?Sized,
+        R: StigmergicActionReceptor + ?Sized,
+    {
+        if centroids.is_empty() {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let (frame, init_w) = signal.synthesize_gateway_frame_with_words();
+        let (_swarm_rep, swarm_w) = trail_inout.try_resolve_action_in_swarm_from_words(
+            gcso_tagged_ptr_t(frame.tagged_ptr),
+            &init_w,
+            frame.active_swarm_cell_mask,
+            frame.autonomous_swarm_step_gain_u7(),
+            frame.qdps_min_step_q7,
+            frame.autonomous_swarm_tolerance_q7(),
+            frame.autonomous_swarm_quorum_threshold(),
+            entropy_h_tilde,
+            self.thresholds.inertial_skip_entropy_thresh,
+            Some(&self.bloom_filter),
+            3,
+            96,
+        );
+        if frame.target_anchor_id != 0 {
+            trail_inout.target_anchor_id = frame.target_anchor_id;
+        }
+        trail_inout.attractor_pull_force = branchless_min_f32(
+            branchless_max_f32(trail_inout.attractor_pull_force, frame.effective_energy),
+            MAX_ATTRACTOR_PULL_FORCE,
+        );
+
+        let (assigned_idx, assigned_anchor_id, assigned_coh, _updated_mass, spawned_new) =
+            CrystallizedAttractorRecord::step_online_toroidal_kmeans_frame_with_words_64(
+                centroids,
+                &frame,
+                &swarm_w,
+                DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
+                Some(trail_inout),
+            );
+
+        let win_w = *centroids[assigned_idx].phase_words_ref();
+        let report = self.orchestrate_next_action_step_core(
+            gcso_tagged_ptr_t(frame.tagged_ptr),
+            entropy_h_tilde,
+            frame.dominant_slot,
+            trail_inout,
+            attention_scores,
+            query_tensor,
+            key_tensor,
+            logits_opt,
+            false,
+            Some(&win_w),
+        )?;
+
+        if report.action_decision() != StigmergicActionDecision::PassiveSidecar {
+            receptor.on_stigmergic_action_emerged(&frame, &report, trail_inout)?;
+        }
+
+        Ok((
+            frame,
+            report,
+            assigned_idx,
+            assigned_anchor_id,
+            assigned_coh,
+            spawned_new,
+        ))
+    }
+
+    /// Traverses a multi-hop **Indirect Pointer Chain** (`start_trail_idx -> linked_trail_id -> ...`)
+    /// across the inline L1D Sidecar Pointer Table (`self.trails`), accumulating coherent 64-head
+    /// SWAR phase signatures along the pathway, reinforcing traversed memo links, and executing
+    /// stigmergic threshold action selection & RoPE steering from the terminal memo.
+    ///
+    /// Starting from a single entry memo index (`start_trail_idx`), the CPU follows up to
+    /// `max_hops` (`1..=ACTION_HUB_INLINE_TRAILS`) linked memos using a 16-bit visited bitmask
+    /// for $\mathcal{O}(1)$ zero-allocation cycle prevention. Each coherent hop ($\mathcal{C}_{\mathrm{hop}} > 0$)
+    /// contributes its phase delta to `trail_inout` and receives Hebbian/stigmergic pheromone
+    /// reinforcement along the traversed pathway.
+    ///
+    /// Returns `(ActionOrchestrationReport, hops_traversed, terminal_trail_idx, terminal_anchor_id, mean_chain_coherence)`.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `start_trail_idx >= self.inline_active_len()` or
+    /// `max_hops == 0`.
+    #[inline]
+    pub fn traverse_pointer_chain_and_orchestrate(
+        &mut self,
+        start_trail_idx: usize,
+        max_hops: usize,
+        entropy_h_tilde: f32,
+        trail_inout: &mut gcso_pointer_trail_t,
+        attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    ) -> GcsoResult<(ActionOrchestrationReport, u32, usize, u32, f32)> {
+        let active_len = self.inline_active_len();
+        if start_trail_idx >= active_len || max_hops == 0 {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let bounded_hops = branchless_select_usize(
+            max_hops > ACTION_HUB_INLINE_TRAILS,
+            ACTION_HUB_INLINE_TRAILS,
+            max_hops,
+        );
+
+        let mut cur_idx = start_trail_idx;
+        let mut visited_mask: u16 = 0;
+        let mut hops: u32 = 0;
+        let mut coh_sum = 0.0_f32;
+        let mut chain_w = *trail_phase_words_ref(&self.trails[start_trail_idx]);
+        let mut terminal_ptr = gcso_tagged_ptr_t(self.trails[start_trail_idx].current_ptr);
+        let mut terminal_anchor_id = self.trails[start_trail_idx].target_anchor_id;
+        let mut max_chain_rho = self.trails[start_trail_idx].stigmergic_density;
+        let mut max_chain_pull = self.trails[start_trail_idx].attractor_pull_force;
+        let reinf = branchless_relu_f32(self.thresholds.reinforcement_gain) * 0.5;
+
+        let mut step = 0usize;
+        while step < bounded_hops {
+            let bit = 1u16 << (cur_idx & (ACTION_HUB_INLINE_TRAILS - 1));
+            if (visited_mask & bit) != 0 {
+                break;
+            }
+            visited_mask |= bit;
+            hops = hops.wrapping_add(1);
+
+            let node_w = *trail_phase_words_ref(&self.trails[cur_idx]);
+            let hop_coh = if step == 0 {
+                1.0_f32
+            } else {
+                coherence_from_word_arrays_64(&chain_w, &node_w)
+            };
+
+            if hop_coh < -self.thresholds.contradiction_coherence_thresh {
+                break;
+            }
+
+            if step > 0 {
+                chain_w[0] = swar_q7_add_sat_x8(chain_w[0], node_w[0]);
+                chain_w[1] = swar_q7_add_sat_x8(chain_w[1], node_w[1]);
+                chain_w[2] = swar_q7_add_sat_x8(chain_w[2], node_w[2]);
+                chain_w[3] = swar_q7_add_sat_x8(chain_w[3], node_w[3]);
+                chain_w[4] = swar_q7_add_sat_x8(chain_w[4], node_w[4]);
+                chain_w[5] = swar_q7_add_sat_x8(chain_w[5], node_w[5]);
+                chain_w[6] = swar_q7_add_sat_x8(chain_w[6], node_w[6]);
+                chain_w[7] = swar_q7_add_sat_x8(chain_w[7], node_w[7]);
+            }
+
+            coh_sum += hop_coh;
+            let node = &mut self.trails[cur_idx];
+            let boosted_rho = branchless_min_f32(
+                branchless_flush_subnormal_f32(
+                    branchless_relu_f32(node.stigmergic_density)
+                        + reinf * branchless_relu_f32(hop_coh),
+                ),
+                MAX_STIGMERGIC_DENSITY,
+            );
+            node.stigmergic_density = boosted_rho;
+            max_chain_rho = branchless_max_f32(max_chain_rho, boosted_rho);
+            max_chain_pull = branchless_max_f32(max_chain_pull, node.attractor_pull_force);
+            if node.current_ptr != 0 {
+                terminal_ptr = gcso_tagged_ptr_t(node.current_ptr);
+            }
+            if node.target_anchor_id != 0 {
+                terminal_anchor_id = node.target_anchor_id;
+            }
+
+            let next_id = node.linked_trail_id as usize;
+            if next_id >= active_len || next_id == cur_idx {
+                break;
+            }
+            cur_idx = next_id;
+            step += 1;
+        }
+
+        let mean_coh = coh_sum / (hops as f32);
+        *trail_phase_words_mut(trail_inout) = chain_w;
+        trail_inout.stigmergic_density =
+            branchless_max_f32(trail_inout.stigmergic_density, max_chain_rho);
+        trail_inout.attractor_pull_force = branchless_min_f32(
+            branchless_max_f32(trail_inout.attractor_pull_force, max_chain_pull),
+            MAX_ATTRACTOR_PULL_FORCE,
+        );
+        if terminal_anchor_id != 0 {
+            trail_inout.target_anchor_id = terminal_anchor_id;
+        }
+        trail_inout.linked_trail_id = cur_idx as u32;
+
+        let dom_slot = terminal_ptr.target_attractor_slot();
+        let report = self.orchestrate_next_action_step_core(
+            terminal_ptr,
+            entropy_h_tilde,
+            dom_slot,
+            trail_inout,
+            attention_scores,
+            query_tensor,
+            key_tensor,
+            logits_opt,
+            false,
+            Some(&chain_w),
+        )?;
+
+        Ok((report, hops, cur_idx, terminal_anchor_id, mean_coh))
+    }
 }
 
 // ===================================================================
-// 3. Trait Implementations for `ActionHubEngine` ("The Thing Itself")
+// 3. Trait Implementations for `ActionHubEngine`
 // ===================================================================
 
 impl PhaseSteering for ActionHubEngine {
@@ -2221,5 +2531,87 @@ mod tests {
         assert_eq!(hub.resolve_autonomous_rot_dim(0x04, 0xFF, 1.5), 2);
         assert!(gw_rep.updated_density >= 1.8);
         assert!(centroids[0].verify_integrity());
+
+        struct MockExternalSearchReceptor {
+            fired_count: u32,
+            last_anchor_id: u32,
+            last_slot: u8,
+        }
+        impl StigmergicActionReceptor for MockExternalSearchReceptor {
+            fn on_stigmergic_action_emerged(
+                &mut self,
+                _frame: &GatewayFrame,
+                report: &ActionOrchestrationReport,
+                _trail: &gcso_pointer_trail_t,
+            ) -> GcsoResult<()> {
+                if report.is_action_emergent(1.0) {
+                    self.fired_count += 1;
+                    self.last_anchor_id = report.dominant_anchor_id;
+                    self.last_slot = report.target_slot;
+                }
+                Ok(())
+            }
+        }
+
+        let mut search_receptor = MockExternalSearchReceptor {
+            fired_count: 0,
+            last_anchor_id: 0,
+            last_slot: 0,
+        };
+        let (_f2, rep2, _idx2, aid2, _coh2, _sp2) = hub
+            .orchestrate_gateway_attractor_swarm_step(
+                &composite,
+                0.30,
+                &mut centroids,
+                &mut active_trail,
+                &mut search_receptor,
+                None,
+                Some(&mut q_buf.as_aligned_slice_mut()),
+                Some(&mut k_buf.as_aligned_slice_mut()),
+                None,
+            )
+            .unwrap();
+        assert_eq!(search_receptor.fired_count, 1);
+        assert_eq!(search_receptor.last_anchor_id, aid2);
+        assert!(rep2.emergence_potential() > 1.5);
+
+        // Verify multi-hop pointer-chain traversal (trail[0] -> trail[1] -> trail[2])
+        hub.trails[0].linked_trail_id = 1;
+        hub.trails[0].stigmergic_density = 0.8;
+        hub.trails[0].accumulated_phase_delta = [8i8; MAX_ATTENTION_HEADS];
+        hub.trails[1].linked_trail_id = 2;
+        hub.trails[1].stigmergic_density = 1.1;
+        hub.trails[1].accumulated_phase_delta = [10i8; MAX_ATTENTION_HEADS];
+        hub.trails[2].linked_trail_id = 2; // terminal self-link stops traversal cleanly
+        hub.trails[2].stigmergic_density = 1.6;
+        hub.trails[2].target_anchor_id = 777;
+        hub.trails[2].current_ptr = gcso_tagged_ptr_t::pack(
+            0x2000,
+            pack_action_slot_tag(ATTRACTOR_SLOT_PERSONA, ACTION_PRESET_FULL_ORCHESTRATION),
+            12,
+        )
+        .raw();
+        hub.trails[2].accumulated_phase_delta = [12i8; MAX_ATTENTION_HEADS];
+        hub.active_count = 3;
+
+        let mut chain_trail = gcso_pointer_trail_t::default();
+        let (chain_rep, hops, term_idx, term_aid, chain_coh) = hub
+            .traverse_pointer_chain_and_orchestrate(
+                0,
+                8,
+                0.25,
+                &mut chain_trail,
+                None,
+                Some(&mut q_buf.as_aligned_slice_mut()),
+                Some(&mut k_buf.as_aligned_slice_mut()),
+                None,
+            )
+            .unwrap();
+        assert_eq!(hops, 3);
+        assert_eq!(term_idx, 2);
+        assert_eq!(term_aid, 777);
+        assert!(chain_coh > 0.95);
+        assert_eq!(chain_rep.dominant_anchor_id, 777);
+        assert!(hub.trails[1].stigmergic_density > 1.1);
     }
 }

@@ -15,7 +15,7 @@
 //!   that equips [`EdbcEngine`], [`crate::traits::ColdPathObserver`], and
 //!   [`crate::traits::FullStackGcsoEngine`] with:
 //!   1. Single-pass AVX2 $\mathcal{C}_{\mathrm{void}}$ + $\ell_1 / \ell_2$ coherence-ratio evaluation
-//!      (`eval_cvoid_with_coherence_ratio`) and strictly branchless `0-ln` Taylor-Horner
+//!      (`eval_cvoid_with_coherence_ratio`) and strictly branchless `0-ln` Taylor-Estrin
 //!      surrogate-to-Z-score stepping (`eval_surrogate_and_step`).
 //!   2. Single-pass register-chained Limina inter-memory trail-chain cohomology verification under
 //!      the Joint Probability Chain Rule $\sum_t \ln P(M_t \mid M_{t-1})$ with deterministic
@@ -25,9 +25,9 @@
 //!   4. Single-scan closed-loop **Pitchfork Metastable Tunneling + Bayesian Pointer-Trail selection,
 //!      rewiring, Limina bridging & Attention score modulation**
 //!      (`step_with_bayesian_pointer_selection_and_tunneling`,
-//!      `route_coarse_to_fine_and_step_bayesian_tunneling`), uniting **Hypothesis 1**
-//!      (Persona as Joint Probability Chain Rule $\times$ Attention phase interference) and
-//!      **Hypothesis 2** (Intelligence as Stigmergic Pointer-Trail manipulation in `ActionHub`).
+//!      `route_coarse_to_fine_and_step_bayesian_tunneling`), combining sequential conditional
+//!      transition probability ($\sum_t \ln P(M_t \mid M_{t-1})$ $\times$ Attention phase interference)
+//!      with indirect pointer-chain routing in `ActionHub`.
 //!   5. Loop-hoisted zero-copy candidate-trail Bayes-Attention score modulation coupled with EDBC
 //!      energy-guided inverse-temperature scaling (`modulate_candidate_trails_with_edbc_temperature`).
 //!   6. 256-bit dyadic tree QDPT depth resolution and pointer cascading
@@ -166,21 +166,21 @@ const LUT_REPULSION_GAIN: [f32; 3] = [0.0, 0.5, 1.0];
 // ===================================================================
 
 /// Computes normalized Sparse Surrogate Attention Entropy from Top-2 attention probabilities
-/// in `#![no_std]` **strictly constant-time mode (`0` data-dependent branches, `0 fdiv`, `0 ln`)**,
+/// in `#![no_std]` **branchless mode (`0` data-dependent branches, `0 fdiv`, `0 ln`)**,
 /// bounded to $[0, \ln 2]$ (Section 3.1).
 ///
-/// # Mathematical Formulation (9-Term Even Taylor-Horner Series with Exact Endpoint Closure)
+/// # Mathematical Formulation (9-Term Even Taylor-Estrin Series with Exact Endpoint Closure)
 /// Let $\delta = \frac{|p_{\max} - p_{\mathrm{2nd}}|}{p_{\max} + p_{\mathrm{2nd}}} \in [0, 1]$ and
 /// $t = \delta^2 \in [0, 1]$. By expanding $H(\delta) = \ln 2 - \sum_{k=1}^{\infty} \frac{t^k}{2k(2k-1)}$
-/// into a 9-term Horner polynomial where the 9th coefficient absorbs the residual tail
+/// into a 9-term binary-tree Estrin polynomial where the 9th coefficient absorbs the residual tail
 /// $R_9 = \ln 2 - \sum_{k=1}^{8} \frac{1}{2k(2k-1)}$:
 /// - At $t = 0$ ($p_{\max} = p_{\mathrm{2nd}}$): $H(0) = \ln 2$ (`0 ULP` error).
-/// - At $t = 1$ ($p_{\mathrm{2nd}} = 0$): $H(1) = 0.0$ (`0 ULP` error).
-/// - Across all $t \in [0, 1]$: executes the **exact same instruction stream** with zero
-///   conditional jumps, eliminating branch-misprediction and `t <= 0.5625` latency step-jumps in
-///   Criterion linear regression plots!
+/// - At $t = 1$ ($p_{\mathrm{2nd}} \le \varepsilon$): $H(1) = 0.0$ (`0 ULP` error).
+/// - Across all $t \in [0, 1]$: executes a uniform instruction stream using `eps` (defaulting
+///   branchlessly to `1.0e-30` if `eps` is non-finite or below `F32_MIN_POSITIVE_NORMAL`) as the
+///   lower positivity floor for $p_{\mathrm{2nd}}$.
 #[inline(always)]
-pub const fn compute_sparse_surrogate_entropy(p_max: f32, p_2nd: f32, _eps: f32) -> f32 {
+pub const fn compute_sparse_surrogate_entropy(p_max: f32, p_2nd: f32, eps: f32) -> f32 {
     const C1: f32 = 0.5;
     const C2: f32 = 1.0 / 12.0;
     const C3: f32 = 1.0 / 30.0;
@@ -191,19 +191,17 @@ pub const fn compute_sparse_surrogate_entropy(p_max: f32, p_2nd: f32, _eps: f32)
     const C8: f32 = 1.0 / 240.0;
     const C9_TAIL: f32 = MAX_SURROGATE_ENTROPY_LN2 - (C1 + C2 + C3 + C4 + C5 + C6 + C7 + C8);
 
-    // Issue `raw_sum` and `raw_diff` in parallel at Cycle 0. Whenever `valid_sum` holds
-    // (`p_max > 0.0` and `p_2nd > 1.0e-30`), both inputs are strictly positive and
-    // `raw_sum > 1.0e-30 >> F32_MIN_POSITIVE_NORMAL` automatically.
+    let safe_eps = branchless_select_f32(
+        branchless_is_finite_f32(eps) & (eps >= F32_MIN_POSITIVE_NORMAL),
+        eps,
+        1.0e-30,
+    );
     let raw_sum = p_max + p_2nd;
     let raw_diff = p_max - p_2nd;
-    let valid_sum = (p_max > 0.0) & (p_2nd > 1.0e-30) & (raw_sum < f32::INFINITY);
+    let valid_sum = (p_max > 0.0) & (p_2nd > safe_eps) & (raw_sum < f32::INFINITY);
     let safe_sum = branchless_select_f32(valid_sum, raw_sum, 1.0);
     let inv_sum = fast_inv_pos_normal_f32(safe_sum);
     let signed_delta = raw_diff * inv_sum;
-    // Evaluate the 9-term even polynomial via Estrin's parallel binary-tree scheme (`t2 = t * t`, `t4 = t2 * t2`).
-    // For all `t in [0.0, 0.999_999_9)`, `MAX_SURROGATE_ENTROPY_LN2 - t * poly` lies strictly in
-    // `[1.788e-7, LN2]` (strictly normal and in-bounds), eliminating redundant post-clamp and
-    // `vmovd` subnormal-flush stages from the critical path.
     let t = branchless_min_f32(signed_delta * signed_delta, 1.0);
     let t2 = t * t;
     let t4 = t2 * t2;
@@ -1816,8 +1814,8 @@ pub trait EdbcClosedLoopCoordinator:
     }
 
     /// Executes the single-pass closed-loop synthesis of **EDBC Langevin Pitchfork Bifurcation / Tunneling**,
-    /// **Hypothesis 1** (Persona as Joint Probability Chain Rule $\times$ Attention phase interference),
-    /// and **Hypothesis 2** (Intelligence as Stigmergic Pointer-Trail selection & rewiring in `ActionHub`).
+    /// **Sequential Conditional Transition Probability** ($\sum_t \ln P(M_t \mid M_{t-1})$ $\times$ Attention phase interference),
+    /// and **Indirect Pointer-Chain Selection & Rewiring** in `ActionHub`.
     ///
     /// Returns `(edbc_state, evolved_ptr, selected_trail_id, bayesian_score, transition_log_prob, tunneling_x_star, found_coherent)`.
     ///

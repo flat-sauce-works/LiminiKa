@@ -8,9 +8,8 @@
 //! `StigmergicSwarmOps`, `DaesScratchpad`, and `SwarmResolutionReport`) registered into
 //! [`super::ActionHub`] for the Geometric Cellular Sheaf Orchestrator (GCSO).
 //!
-//! All operations execute in strictly constant time (`0` data-dependent early-return branches
-//! on convergence, anchor weights, or filter emptiness, and `0 fdiv` in similarity/synergy
-//! reductions) to guarantee linear Criterion benchmark scaling.
+//! Core inner-loop reductions execute via branchless SWAR bit-parallel arithmetic (`0 fdiv`
+//! in similarity and synergy reductions) with bounded register-resident footprints.
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -1924,7 +1923,8 @@ impl ContrastivePhaseBloomFilter {
     }
 
     /// Queries the minimum collision count (repulsive potential intensity) directly from 8 SWAR words,
-    /// short-circuiting in $\mathcal{O}(1)$ when the 64-byte Bloom filter is empty (`0` 64-bit multiplies).
+    /// short-circuiting when the 64-byte Bloom filter is empty and evaluating the 4-way minimum
+    /// branchlessly across active hash buckets.
     #[inline(always)]
     #[must_use]
     pub const fn query_repulsive_density_from_words(&self, w: &[u64; 8]) -> u8 {
@@ -1933,9 +1933,6 @@ impl ContrastivePhaseBloomFilter {
         }
         let slots = Self::compute_hash_slots_from_words(w);
         let c0 = self.counters[slots[0]];
-        if c0 == 0 {
-            return 0;
-        }
         let c1 = self.counters[slots[1]];
         let c2 = self.counters[slots[2]];
         let c3 = self.counters[slots[3]];
@@ -2779,9 +2776,6 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
 
     #[inline(always)]
     fn accumulate_uniform_phase(&mut self, delta_q7: gcso_q7_t) {
-        if delta_q7 == 0 {
-            return;
-        }
         let splat_u64 = ((delta_q7 as u8) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
         let w = trail_phase_words_mut(self);
         w[0] = swar_q7_add_sat_x8(w[0], splat_u64);

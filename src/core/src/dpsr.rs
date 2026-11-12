@@ -26,9 +26,9 @@
 //!      (`modulate_candidate_trail_attention_scores_zero_copy`).
 //!   3. Single-pass fused **Autonomous Stigmergic Pointer-Trail selection, rewiring, Limina bridging,
 //!      in-place score modulation, and register-resident RIPA steering**
-//!      (`select_rewire_and_steer_bayesian_pointer_trail_safe`), uniting Hypothesis 1 (Persona as
-//!      Joint Probability Chain Rule $\times$ Attention phase interference) and Hypothesis 2
-//!      (Intelligence as Stigmergic Pointer-Trail manipulation in `ActionHub`).
+//!      (`select_rewire_and_steer_bayesian_pointer_trail_safe`), combining sequential conditional
+//!      transition probability ($\prod_t P(M_t \mid M_{<t})$ $\times$ Attention phase interference)
+//!      with indirect pointer-chain routing in `ActionHub`.
 //!   4. Register-resident $SO(2)$ group-closure fused **Unified-Field RIPA + PSPM Sub-Head Pseudo-MoE
 //!      routing + multiplicative inverse-temperature logit sharpening/flattening**
 //!      (`steer_unified_field_pspm_and_inv_temperature_safe`) with zero intermediate stack buffers.
@@ -765,11 +765,9 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
         ))
     }
 
-    /// Realizes the single-pass closed-loop synthesis of **Hypothesis 1** (Persona as Joint
-    /// Probability Chain Rule $P(M_1, \dots, M_T) = \prod_t P(M_t \mid M_{<t})$ $\times$ Attention
-    /// phase interference) and **Hypothesis 2** (Intelligence as Stigmergic Pointer-Trail
-    /// manipulation in `ActionHub`) directly on any `T: PhaseSteering + PspmRouter` in zero-copy,
-    /// zero-allocation ($C_{\mathrm{alloc}} = 0$) mode.
+    /// Combines **Sequential Conditional Transition Probability** ($P(M_1, \dots, M_T) = \prod_t P(M_t \mid M_{<t})$
+    /// $\times$ Attention phase interference) and **Indirect Pointer-Chain Graph Routing** in `ActionHub`
+    /// directly on any `T: PhaseSteering + PspmRouter` in zero-copy, zero-allocation ($C_{\mathrm{alloc}} = 0$) mode.
     ///
     /// Returns `(selected_trail_id, bayesian_score, transition_coherence, transition_log_prob, found_coherent_transition)`.
     ///
@@ -1868,7 +1866,7 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
     }
 
     /// Executes the full end-to-end **2-Origin Composite Gateway $\to$ 8-Cell SWAR Micro-Swarm $\to$
-    /// Hypothesis 1 $\times$ Hypothesis 2 Bayesian Pointer-Trail Selection & Limina Bridging $\to$
+    /// Bayesian Pointer-Chain Selection & Limina Bridging $\to$
     /// Register-Resident $SO(2)$-Fused RIPA/PSPM Steering $\to$ `.gcso` Crystallization** pipeline.
     ///
     /// Returns `(GatewayFrame, CausalProvenanceReport, SwarmResolutionReport, selected_trail_id, found_coherent_trail)`.
@@ -2108,6 +2106,64 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
             selected_trail_id,
             found_coherent,
         ))
+    }
+
+    /// Executes the full **Gateway $\to$ Micro-Swarm $\to$ Bayesian Pointer-Trail $\to$ $SO(2)$
+    /// RoPE Steering $\to$ `.gcso` Crystallization** closed loop with **zero manual tuning
+    /// hyperparameters**, deriving all Swarm, Bayesian, and damping constants autonomously from
+    /// the trait-composed `signal: &S` ([`ManifoldGatewaySignal`]).
+    ///
+    /// Returns `(GatewayFrame, CausalProvenanceReport, SwarmResolutionReport, selected_trail_id, found_coherent_trail)`.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if tensor dimensions or `GCSO_RESTRICT` non-aliasing
+    /// invariants are violated.
+    #[inline(always)]
+    fn steer_gateway_autonomous_safe<S: ManifoldGatewaySignal + ?Sized>(
+        &self,
+        signal: &S,
+        trail: &mut gcso_pointer_trail_t,
+        candidate_trails_opt: Option<&mut [gcso_pointer_trail_t]>,
+        attention_scores_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+        bloom_filter: Option<&ContrastivePhaseBloomFilter>,
+        query_tensor: &mut AlignedSliceMut32<'_, f32>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+        crystal_record_opt: Option<&mut CrystallizedAttractorRecord>,
+    ) -> GcsoResult<(
+        GatewayFrame,
+        CausalProvenanceReport,
+        SwarmResolutionReport,
+        u32,
+        bool,
+    )> {
+        let preview_frame = signal.synthesize_gateway_frame();
+        self.steer_gateway_swarm_bayesian_and_crystallize_safe(
+            &preview_frame,
+            trail,
+            candidate_trails_opt,
+            attention_scores_opt,
+            preview_frame.autonomous_swarm_step_gain_u7(),
+            preview_frame.autonomous_swarm_tolerance_q7(),
+            preview_frame.autonomous_swarm_quorum_threshold(),
+            preview_frame.autonomous_unresolved_damping_u7(),
+            preview_frame.effective_energy,
+            0.15,
+            bloom_filter,
+            3,
+            96,
+            2.0,
+            0.5,
+            0.35,
+            1.0,
+            preview_frame.autonomous_liminal_interpolation_u7(),
+            0.25,
+            0,
+            query_tensor,
+            key_tensor,
+            logits_opt,
+            crystal_record_opt,
+        )
     }
 }
 

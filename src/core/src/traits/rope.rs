@@ -213,10 +213,9 @@ pub(crate) const fn eval_ripa_sincos_with_params(
     }
 }
 
-/// 4-register frameless AVX2 leaf kernel (`rcx = ptr`, `rdx = p_ptr`, `r8 = head_dim`, `r9 = num_heads`
-/// on Windows x64; `rdi, rsi, rdx, rcx` on SysV x64) that rotates `ptr[0..num_heads * head_dim]`
-/// in-place with zero stack argument spills, zero redundant slice bounds-check panic branches,
-/// zero Windows x64 SEH unwind frames, and flat 128-float DSB-locked loops across `128`, `256`, and `512`.
+/// 4-argument AVX2 leaf kernel (`ptr`, `p_ptr`, `head_dim`, `num_heads`) that rotates
+/// `ptr[0..num_heads * head_dim]` in-place using pointer arithmetic to minimize register pressure
+/// and avoid inner-loop slice bounds checks across common head dimensions (`128`, `256`, and `512`).
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(never)]
 unsafe fn apply_phase_steering_nonuniform_avx2_ptr(
@@ -234,8 +233,8 @@ unsafe fn apply_phase_steering_nonuniform_avx2_ptr(
     // for `num_heads` bytes, `head_dim` is even (`>= 2`), and AVX2 is enabled.
     unsafe {
         if head_dim == 128 {
-            // 1 head (`4x avx2_rotate_so2_block32` = `96` AVX2 instructions, ~420B) per iteration
-            // fits strictly inside a single 512B Decoded ICache (DSB) window (`0` MITE decode stalls).
+            // Unroll 1 head (`4x avx2_rotate_so2_block32`) per iteration to keep the inner loop
+            // body compact for instruction-cache / decoded-uop-cache residency.
             let mut hp = ptr;
             let mut h = 0usize;
             while h < num_heads {
@@ -520,10 +519,9 @@ fn apply_phase_steering_nonuniform_slice_core(
     }
 }
 
-/// Rotates `t_slice` across `num_heads` heads in strictly constant time (`0` data-dependent
-/// branches on phase magnitude), coalescing uniform 8-head SWAR words (`w == w.rotate_right(8)`)
-/// so `zero_phase` (`0x00..00`) and `max_saturation` (`0x7F..7F`) share the exact same single-broadcast
-/// AVX2 streaming loop (`1.00x` constant-time ratio).
+/// Rotates `t_slice` across `num_heads` heads without branching on individual phase magnitudes,
+/// coalescing uniform phase profiles (`is_phase_slice_uniform`) into a single-broadcast AVX2
+/// streaming pass when all active heads share the same Q0.7 angle.
 #[inline(never)]
 fn apply_phase_steering_slice_core(
     t_slice: &mut [f32],
@@ -4606,8 +4604,7 @@ pub trait PhaseSteering: BranchlessKernel {
 
     /// Modulates pre-Softmax candidate memory/key Attention scores (`attention_scores[..M]`)
     /// directly in-place by the full **Bayes-Attention Stigmergic Transition Score**
-    /// (uniting Hypothesis 1 Joint Probability $\times$ Attention and Hypothesis 2 `ActionHub`
-    /// Pointer-Trail Manipulation):
+    /// (combining sequential conditional phase interference and `ActionHub` pointer-chain link priors):
     /// $$\Delta z_{t \to j} = \frac{\gamma}{\sqrt{d_{\mathrm{head}}}} \mathcal{C}_{\mathrm{phase}}(\boldsymbol{\theta}_t + \boldsymbol{\Delta\theta}, \boldsymbol{\theta}_j) + \eta \ln(1 + \rho_j) + \lambda_{\mathrm{link}} \mathbb{I}(\mathrm{linked\_trail\_id} == j)$$
     ///
     /// Returns `(mean_phase_coherence, best_post_modulated_candidate_idx)`.

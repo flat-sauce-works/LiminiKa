@@ -748,7 +748,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
         Ok(res)
     }
 
-    /// Realizes **Stigmergic Pointer-Trail Intelligence (Hypothesis 2 $\times$ Hypothesis 1)**:
+    /// Executes **Stigmergic Pointer-Chain Selection & Geodesic Bridging**:
     /// scans `candidate_trails` in constant time per candidate via
     /// [`StigmergicTrailOps::select_and_rewire_best_next_trail`] to find the optimal
     /// non-contradictory ($H^1(K; \mathcal{F}) = 0$) next memory trail $j^*$ maximizing the
@@ -866,8 +866,8 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
     /// loop-hoisted [`StigmergicTrailOps::modulate_candidate_trail_scores_in_place`]:
     /// $$\Delta z_{t \to j} = \frac{\gamma}{\sqrt{d_{\mathrm{head}}}} \mathcal{C}_{\mathrm{phase}}(\boldsymbol{\theta}_t, \boldsymbol{\theta}_j) + \eta \ln(1 + \rho_j) + \lambda_{\mathrm{link}} \mathbb{I}(\mathrm{linked\_trail\_id} == j) - \beta_{\mathrm{rep}} \mathbb{I}(H^1 \neq 0)$$
     ///
-    /// Unites **Hypothesis 1** (Joint Probability Chain Rule $\times$ Attention phase interference)
-    /// and **Hypothesis 2** (`ActionHub` stigmergic pointer-trail graph state) without copying
+    /// Combines sequential conditional phase interference ($\prod_t P(M_t \mid M_{<t})$)
+    /// and `ActionHub` stigmergic pointer-chain graph priors without copying
     /// phase arrays or densities into intermediate buffers.
     ///
     /// Returns `(mean_phase_coherence, best_post_modulated_candidate_id, coherent_candidate_count)`.
@@ -1590,9 +1590,8 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     }
 
     /// Executes a **Limina Bayesian Pointer-Trail + Attention Phase-Interference** token cascade
-    /// uniting **Hypothesis 1** (Persona as Joint Probability Chain Rule $\times$ Attention phase
-    /// interference) and **Hypothesis 2** (Intelligence as Stigmergic Pointer-Trail manipulation
-    /// in [`ActionHub`]):
+    /// combining sequential conditional transition probability ($\prod_t P(M_t \mid M_{<t})$ $\times$
+    /// Attention phase interference) and stigmergic pointer-chain routing in [`ActionHub`]:
     /// 1. Steps `input_ptr` with `daes_slot` shortcut resolution and `bloom_filter` repulsion.
     /// 2. Folds `anchor_phases` and `anchor_base_energies` on the single unified manifold via
     ///    [`PointerActionHub::orchestrate_unified_field_resonance`].
@@ -1712,9 +1711,9 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     }
 
     /// Executes the complete closed-loop **Single-Pass Autonomous Pointer-Trail Selection +
-    /// Bayes-Attention Interference** token cascade uniting **Hypothesis 1** (Persona as Joint
-    /// Probability Chain Rule $\times$ Attention phase interference) and **Hypothesis 2**
-    /// (Intelligence as Stigmergic Pointer-Trail rewiring in [`ActionHub`]) in zero-allocation
+    /// Bayes-Attention Interference** token cascade combining sequential conditional transition
+    /// probability ($\prod_t P(M_t \mid M_{<t})$ $\times$ Attention phase interference) and
+    /// stigmergic pointer-chain rewiring in [`ActionHub`] in zero-allocation
     /// ($C_{\mathrm{alloc}} = 0$) mode:
     /// 1. Resolves `input_ptr` against `daes_slot`, steps `trail_out` (identified by `src_trail_id`),
     ///    and applies `bloom_filter` phase-conjugate repulsion.
