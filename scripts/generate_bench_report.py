@@ -35,6 +35,52 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+# Normal-distribution consistency scale `1 / Phi^-1(0.75)` applied by Criterion to `median_abs_dev`
+CRITERION_MAD_NORMAL_SCALE: float = 1.482602218505602
+NORMAL_STD_TO_MAD_SCALE: float = 0.6744897501960817
+
+# Precompiled regular expressions for zero-overhead benchmark metadata extraction
+_RE_TOKENS_SEQ = re.compile(r"(?:tokens|seq)_(\d+)")
+_RE_K_TOKENS = re.compile(r"_(\d+)k(?:_tokens|$)")
+_RE_M_TOKENS = re.compile(r"_(\d+)m(?:_tokens|$)")
+_RE_DIM_HEADS = re.compile(r"^(.*)_dim_(\d+)_heads_(\d+)$")
+_RE_STD_SCALE = re.compile(r"^(.*)_(tokens|dim|seq)_(\d+)$")
+_RE_SHAPE_SUFFIX = re.compile(r"(\d+x\d+)$")
+_RE_SHAPE_PAIR = re.compile(r"(\d+)x(\d+)")
+_RE_ALIGN_BYTES = re.compile(r"_(32|64|128|256|512)b(?:_|$)")
+_RE_MERMAID_IDENT = re.compile(r"[^a-zA-Z0-9_\-]")
+
+_SYNTHESIZED_HTML_MARKER = "<!-- synthesized-by: generate_bench_report.py -->"
+
+_COMMON_REPORT_CSS = """body { font-family: system-ui, -apple-system, sans-serif; margin: 2rem auto; max-width: 1480px; padding: 0 1.5rem; background: #0f172a; color: #e2e8f0; line-height: 1.5; }
+h1 { margin-bottom: 0.25rem; font-size: 1.75rem; letter-spacing: -0.02em; }
+h2 { margin-top: 0; font-size: 1.22rem; display: flex; align-items: center; gap: 0.5rem; }
+.meta { color: #94a3b8; margin-bottom: 1.25rem; font-size: 0.95rem; }
+a { color: #38bdf8; text-decoration: none; }
+a:hover { text-decoration: underline; }
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.9rem; margin-bottom: 1.5rem; }
+.kpi-card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 1rem 1.15rem; }
+.kpi-label { color: #94a3b8; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem; }
+.kpi-value { font-size: 1.35rem; font-weight: 700; color: #f8fafc; }
+.kpi-sub { color: #64748b; font-size: 0.8rem; margin-top: 0.2rem; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 1.5rem; background: #1e293b; border: 1px solid #334155; padding: 0.75rem 1rem; border-radius: 10px; }
+.search-input { flex: 1; min-width: 260px; background: #0f172a; border: 1px solid #475569; color: #f8fafc; padding: 0.5rem 0.85rem; border-radius: 6px; font-size: 0.92rem; }
+.search-input:focus { outline: none; border-color: #38bdf8; }
+.group-nav { display: flex; flex-wrap: wrap; gap: 0.45rem; }
+.nav-chip { font-size: 0.8rem; background: #0f172a; border: 1px solid #334155; color: #cbd5e1; padding: 0.25rem 0.65rem; border-radius: 999px; }
+.nav-chip:hover { border-color: #38bdf8; color: #38bdf8; text-decoration: none; }
+.group-card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 1.25rem; margin-bottom: 1.5rem; }
+.badge { font-size: 0.8rem; background: #0284c7; color: #fff; padding: 0.15rem 0.6rem; border-radius: 999px; font-weight: 600; }
+.badge-prov { background: #7c3aed; }
+table { border-collapse: collapse; width: 100%; margin-top: 0.75rem; background: #1e293b; border-radius: 8px; overflow: hidden; }
+th, td { padding: 0.6rem 0.85rem; border-bottom: 1px solid #334155; text-align: left; font-size: 0.9rem; vertical-align: middle; }
+th { background: #0f172a; color: #94a3b8; font-weight: 600; }
+tr:hover td { background: rgba(56, 189, 248, 0.05); }
+.lat-cell { min-width: 170px; }
+.lat-bar-wrap { width: 100%; height: 5px; background: #0f172a; border-radius: 999px; margin-top: 0.28rem; overflow: hidden; }
+.lat-bar { height: 100%; background: linear-gradient(90deg, #38bdf8, #818cf8); border-radius: 999px; }
+.plot { margin-top: 1.5rem; background: #ffffff; color: #0f172a; padding: 1rem; border-radius: 8px; }"""
+
 
 def format_time(nanoseconds: float) -> str:
     """Format nanoseconds into human-readable time units."""
@@ -164,12 +210,11 @@ def parse_estimates(est_path: Path) -> dict[str, Any] | None:
         # the normal-distribution consistency factor `1.482602218505602` (`1 / Phi^-1(0.75)`).
         # Unscale to true non-parametric MAD = median(|X - median(X)|) so it matches the
         # `std_dev * 0.67449` fallback and true MAD dispersion thresholds (`4.5%` / `6.5%`).
-        criterion_mad_normal_scale = 1.482602218505602
         mad_obj = data.get("median_abs_dev", {})
         if isinstance(mad_obj, dict) and "point_estimate" in mad_obj:
-            mad = float(mad_obj["point_estimate"]) / criterion_mad_normal_scale
+            mad = float(mad_obj["point_estimate"]) / CRITERION_MAD_NORMAL_SCALE
         else:
-            mad = std_dev * 0.6744897501960817
+            mad = std_dev * NORMAL_STD_TO_MAD_SCALE
         cov_pct = (std_dev / mean_point * 100.0) if mean_point > 0.0 else 0.0
         mad_pct = (mad / median * 100.0) if median > 0.0 else cov_pct
 
@@ -378,18 +423,18 @@ def extract_token_count(name: str) -> int | None:
     if "8cand" in lower or "8centroids" in lower:
         return 8
 
-    match_tok = re.search(r"(?:tokens|seq)_(\d+)", lower)
+    match_tok = _RE_TOKENS_SEQ.search(lower)
     if match_tok:
         val = int(match_tok.group(1))
         return val if val > 1 else None
 
-    match_k_tok = re.search(r"_(\d+)k(?:_tokens|$)", lower)
+    match_k_tok = _RE_K_TOKENS.search(lower)
     if match_k_tok and any(
         k in lower for k in ["stream", "chattering", "bloom", "dialogue"]
     ):
         return int(match_k_tok.group(1)) * 1_000
 
-    match_m_tok = re.search(r"_(\d+)m(?:_tokens|$)", lower)
+    match_m_tok = _RE_M_TOKENS.search(lower)
     if match_m_tok and "stream" in lower:
         return int(match_m_tok.group(1)) * 1_000_000
 
@@ -402,13 +447,13 @@ def extract_scaling_parameter(name: str) -> tuple[str, int] | None:
     if "unwrap" in lower or "vocab" in lower:
         return None
 
-    match_dh = re.search(r"^(.*)_dim_(\d+)_heads_(\d+)$", lower)
+    match_dh = _RE_DIM_HEADS.search(lower)
     if match_dh:
         prefix = f"{match_dh.group(1)}_head_dim"
         head_dim_val = int(match_dh.group(2))
         return prefix, head_dim_val
 
-    match_std = re.search(r"^(.*)_(tokens|dim|seq)_(\d+)$", lower)
+    match_std = _RE_STD_SCALE.search(lower)
     if match_std:
         return f"{match_std.group(1)}_{match_std.group(2)}", int(match_std.group(3))
 
@@ -417,13 +462,19 @@ def extract_scaling_parameter(name: str) -> tuple[str, int] | None:
 
 def extract_shape_key(name: str) -> str:
     """Extract tensor shape suffix such as '128x32' or '256x32' from benchmark name."""
-    match = re.search(r"(\d+x\d+)$", name.lower())
+    match = _RE_SHAPE_SUFFIX.search(name.lower())
     return match.group(1) if match else "default"
+
+
+def shape_elements(shape_key: str) -> int:
+    """Compute total element count (`head_dim * num_heads`) from a shape key like '128x32'."""
+    match = _RE_SHAPE_PAIR.match(shape_key)
+    return int(match.group(1)) * int(match.group(2)) if match else 0
 
 
 def extract_alignment_bytes(name: str) -> int:
     """Extract alignment byte boundary (32, 128, 256, 512) for deterministic sorting."""
-    match = re.search(r"_(32|64|128|256|512)b(?:_|$)", name.lower())
+    match = _RE_ALIGN_BYTES.search(name.lower())
     return int(match.group(1)) if match else 32
 
 
@@ -965,9 +1016,11 @@ def analyze_alignment_hierarchy(
             ab["efficiency_str"] = f"⚠️ {speedup:.2f}x vs 32B ({shape_key})"
 
     def shape_sort_key(item: dict[str, Any]) -> tuple[int, str, int]:
-        m = re.match(r"(\d+)x(\d+)", item["shape_key"])
-        elems = int(m.group(1)) * int(m.group(2)) if m else 0
-        return (elems, item["shape_key"], item["align_bytes"])
+        return (
+            shape_elements(item["shape_key"]),
+            item["shape_key"],
+            item["align_bytes"],
+        )
 
     return sorted(align_benches, key=shape_sort_key)
 
@@ -995,8 +1048,7 @@ def analyze_ripa_vs_full_steering(
         if not full_b or ripa_b["mean_ns"] <= 0.0:
             continue
         speedup = full_b["mean_ns"] / ripa_b["mean_ns"]
-        m = re.match(r"(\d+)x(\d+)", shape_key)
-        elems = int(m.group(1)) * int(m.group(2)) if m else 0
+        elems = shape_elements(shape_key)
         comparisons.append(
             {
                 "shape_key": shape_key,
@@ -1062,8 +1114,7 @@ def analyze_fused_qk_qkv_efficiency(
             else 1.0
         )
         qkv_eff = (3.0 * q_b["mean_ns"]) / qkv_b["mean_ns"]
-        m = re.match(r"(\d+)x(\d+)", shape_key)
-        elems = int(m.group(1)) * int(m.group(2)) if m else 0
+        elems = shape_elements(shape_key)
         qk_parity_floor = 0.90 if (elems * 8) > 32768 else 0.95
         qkv_parity_floor = (
             0.84 if (elems * 12) >= 65536 else (0.87 if (elems * 12) > 32768 else 0.95)
@@ -1290,7 +1341,11 @@ def analyze_sidecar_overhead_budget(
     )
 
     # Representative EDBC per-token hooks (executed 1x per generated token)
-    edbc_stateful = by_name.get("eval_stateful")
+    edbc_stateful = (
+        by_name.get("eval_stateful_normal_mode")
+        or by_name.get("eval_stateful")
+        or by_name.get("eval_stateless_branchless")
+    )
     edbc_closed_loop = (
         by_name.get("coarse_to_fine_route_and_edbc_bayesian_tunneling_64h")
         or by_name.get("toroidal_kmeans_dp_means_and_edbc_gateway_step_4centroids")
@@ -1462,7 +1517,8 @@ def generate_mermaid_charts(groups: dict[str, list[dict[str, Any]]]) -> str:
             if b.get("ns_per_token") is not None
             else b["mean_formatted"]
         )
-        clean_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", f"{b['group']}_{b['name']}")
+        short_group = b["group"].replace("DPSR_", "D_").replace("EDBC_", "E_")
+        clean_name = _RE_MERMAID_IDENT.sub("_", f"{short_group}_{b['name']}")
         scaled_ns = max(1, int(round(eff_ns)))
         lines.append(f"    {clean_name} ({label_time}) :active, 0, {scaled_ns}")
 
@@ -1504,14 +1560,68 @@ def resolve_swarm_stigmergy_badge(name: str) -> str:
     return "🎯 $\\mathcal{O}(1)$ Matrix-Free"
 
 
+def _should_write_synthesized_html(index_path: Path) -> bool:
+    """Return True if `index_path` does not exist or was previously synthesized by this script."""
+    if not index_path.exists():
+        return True
+    try:
+        head_text = index_path.read_text(encoding="utf-8", errors="ignore")[:512]
+        return _SYNTHESIZED_HTML_MARKER in head_text
+    except OSError:
+        return True
+
+
+def _render_html_benchmark_rows(
+    benchmarks: list[dict[str, Any]], from_index_path: Path
+) -> str:
+    """Render HTML `<tr>` rows for a sorted benchmark list with relative links and log-scaled latency bars."""
+    rows_html: list[str] = []
+    sorted_b = sorted(benchmarks, key=lambda x: x["mean_ns"])
+    min_ns = max(0.1, sorted_b[0]["mean_ns"]) if sorted_b else 1.0
+    max_ns = max(min_ns * 1.01, sorted_b[-1]["mean_ns"]) if sorted_b else 10.0
+    log_span = max(1e-6, math.log10(max_ns) - math.log10(min_ns))
+
+    for b in sorted_b:
+        b_idx = b.get("bench_report_index")
+        b_link = (
+            relative_posix_link(from_index_path, b_idx)
+            if isinstance(b_idx, Path)
+            else "#"
+        )
+        cur_ns = max(0.1, b["mean_ns"])
+        if len(sorted_b) == 1:
+            bar_pct = 35.0
+        else:
+            bar_pct = min(
+                100.0,
+                max(
+                    6.0, ((math.log10(cur_ns) - math.log10(min_ns)) / log_span) * 100.0
+                ),
+            )
+        rows_html.append(
+            f'<tr data-bench="{html.escape(b["name"].lower())}"><td class="bench-name"><a href="{html.escape(b_link)}"><code>{html.escape(b["name"])}</code></a></td>'
+            f'<td class="lat-cell"><strong>{html.escape(b["mean_formatted"])}</strong>'
+            f'<div class="lat-bar-wrap"><div class="lat-bar" style="width:{bar_pct:.1f}%"></div></div></td>'
+            f"<td>{html.escape(b['median_formatted'])}</td>"
+            f"<td>{html.escape(b['std_dev_formatted'])}</td>"
+            f"<td>{b['mad_pct']:.2f}%</td>"
+            f"<td>±{b['margin_of_error_pct']:.2f}%</td>"
+            f"<td>{b['cov_pct']:.2f}%</td>"
+            f"<td>{html.escape(b['throughput'])}</td></tr>"
+        )
+    return "".join(rows_html)
+
+
 def ensure_criterion_html_index(
     criterion_dir: Path,
     groups: dict[str, list[dict[str, Any]]],
     utc_now: str,
     health_score: float,
     health_grade: str,
+    sidecar_budget: dict[str, Any] | None = None,
+    dialogue_score: float = 100.0,
 ) -> Path:
-    """Ensure `target/criterion/report/index.html` and per-group/per-benchmark `report/index.html` exist."""
+    """Ensure `target/criterion/report/index.html` and per-group/per-benchmark `report/index.html` exist and stay fresh."""
     root_report_dir = criterion_dir / "report"
     root_index_path = root_report_dir / "index.html"
 
@@ -1524,20 +1634,21 @@ def ensure_criterion_html_index(
             if isinstance(bench_dir, Path):
                 bench_report_dir = bench_dir / "report"
                 bench_index_path = bench_report_dir / "index.html"
-                if not bench_index_path.exists():
+                if _should_write_synthesized_html(bench_index_path):
                     bench_report_dir.mkdir(parents=True, exist_ok=True)
                     svg_links: list[str] = []
-                    for svg_name in [
+                    for svg_name in (
                         "pdf.svg",
                         "violin.svg",
                         "lines.svg",
                         "typical.svg",
                         "MAD.svg",
                         "SD.svg",
-                    ]:
+                    ):
                         if (bench_report_dir / svg_name).exists():
                             svg_links.append(
-                                f'<div class="plot"><h4>{html.escape(svg_name)}</h4><img src="{html.escape(svg_name)}" alt="{html.escape(svg_name)}"/></div>'
+                                f'<div class="plot"><h4>{html.escape(svg_name)}</h4>'
+                                f'<img src="{html.escape(svg_name)}" alt="{html.escape(svg_name)}"/></div>'
                             )
                     plots_html = (
                         "\n".join(svg_links)
@@ -1545,18 +1656,13 @@ def ensure_criterion_html_index(
                         else "<p><em>Raw JSON statistical estimates recorded in <code>../new/estimates.json</code>.</em></p>"
                     )
                     bench_html = f"""<!DOCTYPE html>
+{_SYNTHESIZED_HTML_MARKER}
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
 <title>{html.escape(group_name)} / {html.escape(b["name"])} - Criterion Report</title>
 <style>
-body {{ font-family: system-ui, -apple-system, sans-serif; margin: 2rem; background: #0f172a; color: #e2e8f0; }}
-a {{ color: #38bdf8; text-decoration: none; }}
-a:hover {{ text-decoration: underline; }}
-table {{ border-collapse: collapse; width: 100%; max-width: 900px; margin-top: 1rem; background: #1e293b; border-radius: 8px; overflow: hidden; }}
-th, td {{ padding: 0.75rem 1rem; border-bottom: 1px solid #334155; text-align: left; }}
-th {{ background: #0f172a; color: #94a3b8; }}
-.plot {{ margin-top: 1.5rem; background: #ffffff; color: #0f172a; padding: 1rem; border-radius: 8px; }}
+{_COMMON_REPORT_CSS}
 </style>
 </head>
 <body>
@@ -1577,43 +1683,22 @@ th {{ background: #0f172a; color: #94a3b8; }}
 </html>"""
                     bench_index_path.write_text(bench_html, encoding="utf-8")
 
-        if not group_index_path.exists():
+        if _should_write_synthesized_html(group_index_path):
             group_report_dir.mkdir(parents=True, exist_ok=True)
-            rows_html: list[str] = []
-            for b in sorted(benchmarks, key=lambda x: x["mean_ns"]):
-                b_idx = b.get("bench_report_index")
-                b_link = (
-                    relative_posix_link(group_index_path, b_idx)
-                    if isinstance(b_idx, Path)
-                    else "#"
-                )
-                rows_html.append(
-                    f'<tr><td><a href="{html.escape(b_link)}"><code>{html.escape(b["name"])}</code></a></td>'
-                    f"<td><strong>{html.escape(b['mean_formatted'])}</strong></td>"
-                    f"<td>{html.escape(b['std_dev_formatted'])}</td>"
-                    f"<td>{b['mad_pct']:.2f}%</td>"
-                    f"<td>±{b['margin_of_error_pct']:.2f}%</td>"
-                    f"<td>{b['cov_pct']:.2f}%</td>"
-                    f"<td>{html.escape(b['throughput'])}</td></tr>"
-                )
+            rows_body = _render_html_benchmark_rows(benchmarks, group_index_path)
             group_violin = (
                 '<div class="plot"><img src="violin.svg" alt="violin.svg"/></div>'
                 if (group_report_dir / "violin.svg").exists()
                 else ""
             )
             group_html = f"""<!DOCTYPE html>
+{_SYNTHESIZED_HTML_MARKER}
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
 <title>Group: {html.escape(group_name)} - Criterion Index</title>
 <style>
-body {{ font-family: system-ui, -apple-system, sans-serif; margin: 2rem; background: #0f172a; color: #e2e8f0; }}
-a {{ color: #38bdf8; text-decoration: none; }}
-a:hover {{ text-decoration: underline; }}
-table {{ border-collapse: collapse; width: 100%; margin-top: 1rem; background: #1e293b; border-radius: 8px; overflow: hidden; }}
-th, td {{ padding: 0.65rem 0.9rem; border-bottom: 1px solid #334155; text-align: left; }}
-th {{ background: #0f172a; color: #94a3b8; }}
-.plot {{ margin-top: 1.5rem; background: #ffffff; padding: 1rem; border-radius: 8px; }}
+{_COMMON_REPORT_CSS}
 </style>
 </head>
 <body>
@@ -1621,73 +1706,100 @@ th {{ background: #0f172a; color: #94a3b8; }}
 <p><a href="{relative_posix_link(group_index_path, root_index_path)}">⬅ Back to Root Criterion Index</a></p>
 {group_violin}
 <table>
-<thead><tr><th>Benchmark</th><th>Mean</th><th>Std Dev</th><th>MAD (%)</th><th>MoE (95% CI)</th><th>CoV (%)</th><th>Throughput</th></tr></thead>
+<thead><tr><th>Benchmark</th><th>Mean</th><th>Median</th><th>Std Dev</th><th>MAD (%)</th><th>MoE (95% CI)</th><th>CoV (%)</th><th>Throughput</th></tr></thead>
 <tbody>
-{"".join(rows_html)}
+{rows_body}
 </tbody>
 </table>
 </body>
 </html>"""
             group_index_path.write_text(group_html, encoding="utf-8")
 
-    if not root_index_path.exists():
+    if _should_write_synthesized_html(root_index_path):
         root_report_dir.mkdir(parents=True, exist_ok=True)
         sections_html: list[str] = []
+        nav_chips_html: list[str] = []
         for group_name, benchmarks in sorted(groups.items()):
             group_index_path = criterion_dir / group_name / "report" / "index.html"
             g_link = relative_posix_link(root_index_path, group_index_path)
-            b_rows: list[str] = []
-            for b in sorted(benchmarks, key=lambda x: x["mean_ns"]):
-                b_idx = b.get("bench_report_index")
-                b_link = (
-                    relative_posix_link(root_index_path, b_idx)
-                    if isinstance(b_idx, Path)
-                    else "#"
-                )
-                b_rows.append(
-                    f'<tr><td><a href="{html.escape(b_link)}"><code>{html.escape(b["name"])}</code></a></td>'
-                    f"<td><strong>{html.escape(b['mean_formatted'])}</strong></td>"
-                    f"<td>{html.escape(b['std_dev_formatted'])}</td>"
-                    f"<td>{b['mad_pct']:.2f}%</td>"
-                    f"<td>±{b['margin_of_error_pct']:.2f}%</td>"
-                    f"<td>{b['cov_pct']:.2f}%</td>"
-                    f"<td>{html.escape(b['throughput'])}</td></tr>"
-                )
+            b_rows_body = _render_html_benchmark_rows(benchmarks, root_index_path)
+            is_prov = "provisional_gcso" in group_name.lower()
+            badge_cls = "badge badge-prov" if is_prov else "badge"
+            scope_tag = (
+                "Provisional .gcso" if is_prov else f"{len(benchmarks)} workloads"
+            )
+            group_anchor = f"group-{_RE_MERMAID_IDENT.sub('-', group_name.lower())}"
+            nav_chips_html.append(
+                f'<a class="nav-chip" href="#{html.escape(group_anchor)}">{html.escape(group_name)} ({len(benchmarks)})</a>'
+            )
             sections_html.append(
-                f"""<section class="group-card">
-<h2>📂 <a href="{html.escape(g_link)}">{html.escape(group_name)}</a> <span class="badge">{len(benchmarks)} workloads</span></h2>
+                f"""<section class="group-card" id="{html.escape(group_anchor)}" data-group="{html.escape(group_name.lower())}">
+<h2>📂 <a href="{html.escape(g_link)}">{html.escape(group_name)}</a> <span class="{badge_cls}">{html.escape(scope_tag)}</span></h2>
 <table>
-<thead><tr><th>Benchmark Identifier</th><th>Mean Latency</th><th>Std Dev</th><th>MAD (%)</th><th>MoE (95% CI)</th><th>CoV (%)</th><th>Throughput / Rate</th></tr></thead>
+<thead><tr><th>Benchmark Identifier</th><th>Mean Latency</th><th>Median</th><th>Std Dev</th><th>MAD (%)</th><th>MoE (95% CI)</th><th>CoV (%)</th><th>Throughput / Rate</th></tr></thead>
 <tbody>
-{"".join(b_rows)}
+{b_rows_body}
 </tbody>
 </table>
 </section>"""
             )
 
         total_count = sum(len(v) for v in groups.values())
+        s32_fmt = (
+            sidecar_budget["total_32l_formatted"]
+            if sidecar_budget and sidecar_budget.get("total_32l_ns", 0.0) > 0.0
+            else "N/A"
+        )
+        s32_pct = (
+            f"{sidecar_budget['total_32l_llm_pct']:.4f}% of 15ms LLM"
+            if sidecar_budget and sidecar_budget.get("total_32l_ns", 0.0) > 0.0
+            else "1x EDBC + 32x DPSR"
+        )
+        s16_fmt = (
+            sidecar_budget["total_16l_skip_formatted"]
+            if sidecar_budget and sidecar_budget.get("total_16l_skip_ns", 0.0) > 0.0
+            else "N/A"
+        )
         root_html = f"""<!DOCTYPE html>
+{_SYNTHESIZED_HTML_MARKER}
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
 <title>LiminiKa GCSO Criterion Benchmark Index</title>
 <style>
-body {{ font-family: system-ui, -apple-system, sans-serif; margin: 2rem; background: #0f172a; color: #e2e8f0; }}
-h1 {{ margin-bottom: 0.25rem; }}
-.meta {{ color: #94a3b8; margin-bottom: 1.5rem; }}
-a {{ color: #38bdf8; text-decoration: none; }}
-a:hover {{ text-decoration: underline; }}
-.group-card {{ background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 1.25rem; margin-bottom: 1.5rem; }}
-.badge {{ font-size: 0.85rem; background: #0284c7; color: #fff; padding: 0.15rem 0.6rem; border-radius: 999px; margin-left: 0.5rem; }}
-table {{ border-collapse: collapse; width: 100%; margin-top: 0.75rem; }}
-th, td {{ padding: 0.55rem 0.8rem; border-bottom: 1px solid #334155; text-align: left; font-size: 0.92rem; }}
-th {{ background: #0f172a; color: #94a3b8; }}
+{_COMMON_REPORT_CSS}
 </style>
 </head>
 <body>
 <h1>🚀 LiminiKa GCSO Criterion Benchmark Index</h1>
-<p class="meta">Generated on <code>{html.escape(utc_now)}</code> | Core Health Score: <strong>{health_score:.1f} / 100.0 ({html.escape(health_grade)})</strong> | Groups: <strong>{len(groups)}</strong> | Workloads: <strong>{total_count}</strong></p>
+<p class="meta">Generated on <code>{html.escape(utc_now)}</code> | Non-Invasive <code>#![no_std]</code> Zero-Allocation LLM Sidecar (<code>DPSR</code> + <code>EDBC</code>)</p>
+<div class="kpi-grid">
+  <div class="kpi-card"><div class="kpi-label">Core Health Score</div><div class="kpi-value">{health_score:.1f} / 100.0</div><div class="kpi-sub">{html.escape(health_grade)}</div></div>
+  <div class="kpi-card"><div class="kpi-label">32-Layer Token Sidecar</div><div class="kpi-value">{html.escape(s32_fmt)}</div><div class="kpi-sub">{html.escape(s32_pct)}</div></div>
+  <div class="kpi-card"><div class="kpi-label">QoS Layer-Skip (16L)</div><div class="kpi-value">{html.escape(s16_fmt)}</div><div class="kpi-sub">ACTION_MODE_LAYER_SKIP</div></div>
+  <div class="kpi-card"><div class="kpi-label">Long-Dialogue Index</div><div class="kpi-value">{dialogue_score:.1f} / 100.0</div><div class="kpi-sub">{len(groups)} groups · {total_count} workloads</div></div>
+</div>
+<div class="toolbar">
+  <input type="search" id="bench-filter" class="search-input" placeholder="🔍 Filter benchmarks by name or group (e.g. ripa, toroidal, fused_qk, bayesian)..." oninput="filterBenchmarks(this.value)"/>
+  <div class="group-nav">{"".join(nav_chips_html)}</div>
+</div>
 {"".join(sections_html)}
+<script>
+function filterBenchmarks(q) {{
+  const query = (q || "").trim().toLowerCase();
+  document.querySelectorAll(".group-card").forEach(section => {{
+    const gName = section.getAttribute("data-group") || "";
+    let visibleRows = 0;
+    section.querySelectorAll("tbody tr").forEach(row => {{
+      const bName = row.getAttribute("data-bench") || "";
+      const match = !query || bName.includes(query) || gName.includes(query);
+      row.style.display = match ? "" : "none";
+      if (match) visibleRows++;
+    }});
+    section.style.display = visibleRows > 0 ? "" : "none";
+  }});
+}}
+</script>
 </body>
 </html>"""
         root_index_path.write_text(root_html, encoding="utf-8")
@@ -1695,17 +1807,12 @@ th {{ background: #0f172a; color: #94a3b8; }}
     return root_index_path
 
 
-def generate_markdown_report(
+def collect_criterion_benchmarks(
     criterion_dir: Path,
-    output_file: Path,
-    verbose: bool = False,
-    summary_only: bool = False,
-    fail_on_high_noise: bool = False,
     baseline_name: str | None = None,
-    fail_on_regression_pct: float | None = None,
-    json_summary_out: Path | None = None,
-) -> None:
-    """Scan Criterion directory, ensure Criterion HTML index exists, and write exhaustive Markdown report."""
+    verbose: bool = False,
+) -> dict[str, list[dict[str, Any]]]:
+    """Scan `criterion_dir` for `**/new/estimates.json` and group parsed benchmark records by Criterion group."""
     if not criterion_dir.exists():
         print(
             f"Error: Criterion output directory '{criterion_dir}' not found.",
@@ -1818,6 +1925,191 @@ def generate_markdown_report(
         except (OSError, ValueError, KeyError, TypeError) as e:
             print(f"Error processing '{est_path}': {e}", file=sys.stderr)
 
+    return groups
+
+
+def _render_sidecar_budget_section(sidecar_budget: dict[str, Any]) -> list[str]:
+    """Render the End-to-End Sidecar Overhead Budget Markdown table."""
+    if not sidecar_budget["rows"]:
+        return []
+
+    grad_badge = (
+        "✅ **GRADUATED** (`< 15 µs/tok` — Sidecar overhead is `< 0.10%` of host LLM decode; ready for host LLM integration)"
+        if sidecar_budget["graduated_10us_budget"]
+        else "⚠️ **Tuning In Progress** (Target `< 15 µs/tok` across 32 layers)"
+    )
+    lines = [
+        "",
+        "### 🔌 End-to-End Sidecar Overhead Budget (vs. Host LLM Decode & 60 FPS Game Frame)",
+        "",
+        "To evaluate whether LiminiKa is fast enough as a sidecar, raw nanoseconds must be compared against **(a) the host LLM's single-token decode latency (`~15.0 ms = 15,000,000 ns` on a typical 7B/8B local model)**, **(b) a 60 FPS AAA game frame budget (`16.67 ms = 16,666,667 ns`)**, and **(c) the CPU's physical L1d/L2 memory bandwidth roofline (`~48 GB/s` single-core load+store ceiling)**:",
+        "",
+        f"- **Micro-Optimization Graduation Status**: {grad_badge}",
+        "",
+        "| Sidecar Interception Hook Stage | Invocation Frequency | Measured Latency | % of 15.0 ms Host LLM Token | % of 16.67 ms (60 FPS) Frame | Hardware Roofline / Execution Regime |",
+        "|:--------------------------------|:---------------------|-----------------:|----------------------------:|-----------------------------:|:-------------------------------------|",
+    ]
+    for r in sidecar_budget["rows"]:
+        lines.append(
+            f"| **{r['hook_stage']}** (`{r['benchmark_name']}`) | {r['frequency']} | **{r['latency_formatted']}** | `{r['llm_budget_pct']:.5f}%` | `{r['frame_60fps_pct']:.5f}%` | {r['hw_status']} |"
+        )
+    if sidecar_budget["total_32l_ns"] > 0.0:
+        lines.extend(
+            [
+                f"| **Total 32-Layer LLM Forward Pass (`1× EDBC + 32× DPSR`)** | **Per Generated Token (Full)** | **{sidecar_budget['total_32l_formatted']}** | **`{sidecar_budget['total_32l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_32l_60fps_pct']:.4f}%`** | 🎯 **Negligible Sidecar Overhead (`< 0.1%` of LLM)** |",
+                f"| **Total 32-Layer with `ACTION_MODE_LAYER_SKIP` (`1× EDBC + 16× DPSR`)** | **Per Generated Token (QoS Skip)** | **{sidecar_budget['total_16l_skip_formatted']}** | **`{sidecar_budget['total_16l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_16l_60fps_pct']:.4f}%`** | ⚡ **2× Layer-Skip QoS Coexistence Mode** |",
+            ]
+        )
+    return lines
+
+
+_CATEGORY_LABELS: dict[str, tuple[str, str]] = {
+    "micro_hotpath_kernel": ("⚡ Micro Hot-Path Kernels", "Core (`DPSR`/`EDBC`)"),
+    "swarm_and_stigmergy": (
+        "🐝 Stigmergic Swarm, Toroidal k-Means & Pointer-Trails",
+        "Core (`DPSR`/`EDBC`)",
+    ),
+    "alignment_hierarchy": ("💾 Memory Alignment Hierarchy", "Core (`DPSR`)"),
+    "batch_scaling": ("📦 Multi-Token Batch & Prefill Scaling", "Core (`DPSR`/`EDBC`)"),
+    "long_dialogue_endurance": (
+        "🛡️ Long-Dialogue Endurance (1K–1M Tokens)",
+        "Core (`DPSR`/`EDBC`)",
+    ),
+    "extreme_edge_stress": (
+        "🔥 Extreme Boundary & Singularity Guards",
+        "Core (`DPSR`/`EDBC`)",
+    ),
+    "provisional_gcso_container": (
+        "🧪 Provisional `.gcso` / ZIMMS Container",
+        "Provisional (Pre-v1.0)",
+    ),
+}
+
+
+def _render_category_distribution_section(
+    all_benchmarks: list[dict[str, Any]],
+) -> list[str]:
+    """Render an Operational Domain & Latency Distribution summary table across all benchmark categories."""
+    if not all_benchmarks:
+        return []
+
+    lines = [
+        "",
+        "### 🧭 Operational Domain & Latency Distribution Breakdown",
+        "",
+        "| Operational Domain | Scope | Workloads | Fastest Latency | Median Workload Latency | Max Latency | Mean MAD (%) | Mean MoE (95% CI) | Peak Bandwidth / Rate |",
+        "|:-------------------|:------|----------:|----------------:|------------------------:|------------:|-------------:|------------------:|:----------------------|",
+    ]
+    for cat_key, (cat_title, scope_str) in _CATEGORY_LABELS.items():
+        cat_benches = [b for b in all_benchmarks if b["category"] == cat_key]
+        if not cat_benches:
+            continue
+        sorted_lat = sorted(b["mean_ns"] for b in cat_benches)
+        min_lat = format_time(sorted_lat[0])
+        mid_idx = len(sorted_lat) // 2
+        med_lat = (
+            format_time(sorted_lat[mid_idx])
+            if len(sorted_lat) % 2 == 1
+            else format_time(0.5 * (sorted_lat[mid_idx - 1] + sorted_lat[mid_idx]))
+        )
+        max_lat = format_time(sorted_lat[-1])
+        mean_mad = sum(b["mad_pct"] for b in cat_benches) / len(cat_benches)
+        mean_moe = sum(b["margin_of_error_pct"] for b in cat_benches) / len(cat_benches)
+        best_tp_bench = max(
+            cat_benches, key=lambda x: x.get("raw_rate", 0.0), default=None
+        )
+        peak_tp = (
+            best_tp_bench["throughput"]
+            if best_tp_bench and best_tp_bench.get("raw_rate", 0.0) > 0.0
+            else "O(1) Scalar/SWAR"
+        )
+        lines.append(
+            f"| **{cat_title}** | {scope_str} | `{len(cat_benches)}` | **{min_lat}** | {med_lat} | {max_lat} | `{mean_mad:.2f}%` | `±{mean_moe:.2f}%` | **{peak_tp}** |"
+        )
+    return lines
+
+
+def _render_group_metric_tables(
+    groups: dict[str, list[dict[str, Any]]],
+    criterion_dir: Path,
+    output_file: Path,
+    baseline_name: str | None,
+) -> list[str]:
+    """Render the per-group comprehensive benchmark tables at the bottom of the Markdown report."""
+    lines = ["## 📈 Comprehensive Benchmark Metrics by Group\n"]
+    for group_name, benchmarks in sorted(groups.items()):
+        g_html_path = criterion_dir / group_name / "report" / "index.html"
+        rel_g_html = relative_posix_link(output_file, g_html_path)
+        lines.append(
+            f"### 📂 Benchmark Group: `{group_name}` ([HTML Report]({rel_g_html}))\n"
+        )
+        if baseline_name:
+            lines.append(
+                "| Benchmark Identifier | Current Latency | Std Dev | Throughput | Baseline Latency | Relative Change | HTML |"
+            )
+            lines.append(
+                "|:---------------------|----------------:|--------:|-----------:|-----------------:|:----------------|:----:|"
+            )
+            for b in sorted(benchmarks, key=lambda x: x["mean_ns"]):
+                comp = b["comparison"]
+                base_str = comp["base_mean_formatted"] if comp else "N/A"
+                status_str = comp["status_str"] if comp else "N/A"
+                b_idx = b.get("bench_report_index")
+                rel_b_html = (
+                    relative_posix_link(output_file, b_idx)
+                    if isinstance(b_idx, Path)
+                    else rel_g_html
+                )
+                lines.append(
+                    f"| `{b['name']}` | **{b['mean_formatted']}** | {b['std_dev_formatted']} | {b['throughput']} | {base_str} | {status_str} | [📊]({rel_b_html}) |"
+                )
+        else:
+            lines.append(
+                "| Benchmark Identifier | Mean Execution Time | Std Dev | MAD (%) | MoE (95% CI) | CoV (%) | Throughput / Rate | HTML |"
+            )
+            lines.append(
+                "|:---------------------|--------------------:|--------:|--------:|-------------:|--------:|------------------:|:----:|"
+            )
+            for b in sorted(benchmarks, key=lambda x: x["mean_ns"]):
+                moe_str = (
+                    f"⏱️ ±{b['margin_of_error_pct']:.2f}%"
+                    if b["margin_of_error_pct"] > 3.5
+                    and b.get("rdtsc_quantum_bounded", False)
+                    else (
+                        f"±{b['margin_of_error_pct']:.2f}%"
+                        if b["margin_of_error_pct"] <= 3.5
+                        or b.get("os_scheduler_jitter_bounded", False)
+                        else f"⚠️ ±{b['margin_of_error_pct']:.2f}%"
+                    )
+                )
+                b_idx = b.get("bench_report_index")
+                rel_b_html = (
+                    relative_posix_link(output_file, b_idx)
+                    if isinstance(b_idx, Path)
+                    else rel_g_html
+                )
+                lines.append(
+                    f"| `{b['name']}` | **{b['mean_formatted']}** | {b['std_dev_formatted']} | {b['mad_pct']:.2f}% | {moe_str} | {b['cov_pct']:.2f}% | {b['throughput']} | [📊]({rel_b_html}) |"
+                )
+        lines.append("")
+    return lines
+
+
+def generate_markdown_report(
+    criterion_dir: Path,
+    output_file: Path,
+    verbose: bool = False,
+    summary_only: bool = False,
+    fail_on_high_noise: bool = False,
+    baseline_name: str | None = None,
+    fail_on_regression_pct: float | None = None,
+    json_summary_out: Path | None = None,
+) -> None:
+    """Scan Criterion directory, ensure Criterion HTML index exists, and write exhaustive Markdown report."""
+    groups = collect_criterion_benchmarks(
+        criterion_dir, baseline_name=baseline_name, verbose=verbose
+    )
+
     all_benchmarks = [b for b_list in groups.values() for b in b_list]
     core_benchmarks = [
         b for b in all_benchmarks if b["category"] != "provisional_gcso_container"
@@ -1899,7 +2191,13 @@ def generate_markdown_report(
     sidecar_budget = analyze_sidecar_overhead_budget(eval_pool)
 
     root_html_index = ensure_criterion_html_index(
-        criterion_dir, groups, utc_now, health_score, health_grade
+        criterion_dir,
+        groups,
+        utc_now,
+        health_score,
+        health_grade,
+        sidecar_budget=sidecar_budget,
+        dialogue_score=dialogue_evaluation["score"],
     )
     rel_root_html = relative_posix_link(output_file, root_html_index)
 
@@ -1967,36 +2265,8 @@ def generate_markdown_report(
                 f"- **🏋️ Largest Bulk Stress / Endurance Workload (Macro Scale)**: `{slowest_bench['group']} / {slowest_bench['name']}` (**{slowest_bench['mean_formatted']}**{tp_suffix})"
             )
 
-    if sidecar_budget["rows"]:
-        grad_badge = (
-            "✅ **GRADUATED** (`< 15 µs/tok` — Sidecar overhead is `< 0.10%` of host LLM decode; ready for host LLM integration)"
-            if sidecar_budget["graduated_10us_budget"]
-            else "⚠️ **Tuning In Progress** (Target `< 15 µs/tok` across 32 layers)"
-        )
-        md_lines.extend(
-            [
-                "",
-                "### 🔌 End-to-End Sidecar Overhead Budget (vs. Host LLM Decode & 60 FPS Game Frame)",
-                "",
-                "To evaluate whether LiminiKa is fast enough as a sidecar, raw nanoseconds must be compared against **(a) the host LLM's single-token decode latency (`~15.0 ms = 15,000,000 ns` on a typical 7B/8B local model)**, **(b) a 60 FPS AAA game frame budget (`16.67 ms = 16,666,667 ns`)**, and **(c) the CPU's physical L1d/L2 memory bandwidth roofline (`~48 GB/s` single-core load+store ceiling)**:",
-                "",
-                f"- **Micro-Optimization Graduation Status**: {grad_badge}",
-                "",
-                "| Sidecar Interception Hook Stage | Invocation Frequency | Measured Latency | % of 15.0 ms Host LLM Token | % of 16.67 ms (60 FPS) Frame | Hardware Roofline / Execution Regime |",
-                "|:--------------------------------|:---------------------|-----------------:|----------------------------:|-----------------------------:|:-------------------------------------|",
-            ]
-        )
-        for r in sidecar_budget["rows"]:
-            md_lines.append(
-                f"| **{r['hook_stage']}** (`{r['benchmark_name']}`) | {r['frequency']} | **{r['latency_formatted']}** | `{r['llm_budget_pct']:.5f}%` | `{r['frame_60fps_pct']:.5f}%` | {r['hw_status']} |"
-            )
-        if sidecar_budget["total_32l_ns"] > 0.0:
-            md_lines.extend(
-                [
-                    f"| **Total 32-Layer LLM Forward Pass (`1× EDBC + 32× DPSR`)** | **Per Generated Token (Full)** | **{sidecar_budget['total_32l_formatted']}** | **`{sidecar_budget['total_32l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_32l_60fps_pct']:.4f}%`** | 🎯 **Negligible Sidecar Overhead (`< 0.1%` of LLM)** |",
-                    f"| **Total 32-Layer with `ACTION_MODE_LAYER_SKIP` (`1× EDBC + 16× DPSR`)** | **Per Generated Token (QoS Skip)** | **{sidecar_budget['total_16l_skip_formatted']}** | **`{sidecar_budget['total_16l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_16l_60fps_pct']:.4f}%`** | ⚡ **2× Layer-Skip QoS Coexistence Mode** |",
-                ]
-            )
+    md_lines.extend(_render_sidecar_budget_section(sidecar_budget))
+    md_lines.extend(_render_category_distribution_section(all_benchmarks))
 
     md_lines.extend(
         [
@@ -2294,62 +2564,11 @@ def generate_markdown_report(
     md_lines.append("---\n")
 
     if not summary_only:
-        md_lines.append("## 📈 Comprehensive Benchmark Metrics by Group\n")
-        for group_name, benchmarks in sorted(groups.items()):
-            g_html_path = criterion_dir / group_name / "report" / "index.html"
-            rel_g_html = relative_posix_link(output_file, g_html_path)
-            md_lines.append(
-                f"### 📂 Benchmark Group: `{group_name}` ([HTML Report]({rel_g_html}))\n"
+        md_lines.extend(
+            _render_group_metric_tables(
+                groups, criterion_dir, output_file, baseline_name
             )
-            if baseline_name:
-                md_lines.append(
-                    "| Benchmark Identifier | Current Latency | Std Dev | Throughput | Baseline Latency | Relative Change | HTML |"
-                )
-                md_lines.append(
-                    "|:---------------------|----------------:|--------:|-----------:|-----------------:|:----------------|:----:|"
-                )
-                for b in sorted(benchmarks, key=lambda x: x["mean_ns"]):
-                    comp = b["comparison"]
-                    base_str = comp["base_mean_formatted"] if comp else "N/A"
-                    status_str = comp["status_str"] if comp else "N/A"
-                    b_idx = b.get("bench_report_index")
-                    rel_b_html = (
-                        relative_posix_link(output_file, b_idx)
-                        if isinstance(b_idx, Path)
-                        else rel_g_html
-                    )
-                    md_lines.append(
-                        f"| `{b['name']}` | **{b['mean_formatted']}** | {b['std_dev_formatted']} | {b['throughput']} | {base_str} | {status_str} | [📊]({rel_b_html}) |"
-                    )
-            else:
-                md_lines.append(
-                    "| Benchmark Identifier | Mean Execution Time | Std Dev | MAD (%) | MoE (95% CI) | CoV (%) | Throughput / Rate | HTML |"
-                )
-                md_lines.append(
-                    "|:---------------------|--------------------:|--------:|--------:|-------------:|--------:|------------------:|:----:|"
-                )
-                for b in sorted(benchmarks, key=lambda x: x["mean_ns"]):
-                    moe_str = (
-                        f"⏱️ ±{b['margin_of_error_pct']:.2f}%"
-                        if b["margin_of_error_pct"] > 3.5
-                        and b.get("rdtsc_quantum_bounded", False)
-                        else (
-                            f"±{b['margin_of_error_pct']:.2f}%"
-                            if b["margin_of_error_pct"] <= 3.5
-                            or b.get("os_scheduler_jitter_bounded", False)
-                            else f"⚠️ ±{b['margin_of_error_pct']:.2f}%"
-                        )
-                    )
-                    b_idx = b.get("bench_report_index")
-                    rel_b_html = (
-                        relative_posix_link(output_file, b_idx)
-                        if isinstance(b_idx, Path)
-                        else rel_g_html
-                    )
-                    md_lines.append(
-                        f"| `{b['name']}` | **{b['mean_formatted']}** | {b['std_dev_formatted']} | {b['mad_pct']:.2f}% | {moe_str} | {b['cov_pct']:.2f}% | {b['throughput']} | [📊]({rel_b_html}) |"
-                    )
-            md_lines.append("")
+        )
 
     report_content = "\n".join(md_lines)
 

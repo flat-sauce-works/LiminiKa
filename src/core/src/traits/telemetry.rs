@@ -34,55 +34,44 @@
 #![allow(clippy::approx_constant)]
 #![allow(clippy::if_same_then_else)]
 #![allow(clippy::ifs_same_cond)]
-#![allow(clippy::field_reassign_with_default)]
 
-use core::mem::{align_of, size_of};
-use core::slice;
-
+// Re-export canonical 8-lane SWAR circular phase addition used by Stigmergic & Swarm modules.
 pub use super::branchless::swar_q7_circular_add_x8;
 use super::branchless::{
-    branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
-    branchless_is_finite_f32,
-    branchless_ln_f32, branchless_max_f32, branchless_min_f32,
-    branchless_phase_proximity_gravity_f32, branchless_popcount_rsqrt_u32,
-    branchless_q7_inhibit_words_64,
-    circular_resultant_from_words_64, coherence_from_word_arrays_64,
-    branchless_q7_synergy_fuse_words_64,
-    branchless_q7_unified_field_fold_words_with_flags_64,
+    BranchlessKernel, DEFAULT_PHASE_GRAVITY_EPS, Q7_FULL_COS_REF, SWAR_EVEN_BYTES_64,
+    SWAR_LOW7_MASK_64, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64, branchless_abs_f32,
+    branchless_clamp_f32, branchless_fast_transition_log_prob, branchless_flush_subnormal_f32,
+    branchless_is_finite_f32, branchless_min_f32, branchless_phase_proximity_gravity_f32,
+    branchless_popcount_rsqrt_u32, branchless_q7_inhibit_words_64,
+    branchless_q7_synergy_fuse_words_64, branchless_q7_unified_field_fold_words_with_flags_64,
     branchless_q7_unified_field_fold_words_with_init_weight_64, branchless_relu_f32,
     branchless_rsqrt_f32, branchless_select_f32, branchless_select_u32, branchless_select_u64,
     branchless_select_u8, branchless_select_usize, branchless_splitmix64, branchless_tanh_f32,
-    coherence_from_uniform_diff_word_x8,
-    coherence_from_word_arrays_with_both_uniform_flags_64,
-    fast_inv_len_f32,
-    fast_ln_1p_bounded_f32, is_word_array_uniform_64, load_q7_word_at, load_q7_words_64,
-    trail_phase_words_mut, trail_phase_words_ref,
-    store_q7_words_64, swar_q7_abs_u8_x8, swar_q7_add_sat_x8, swar_q7_avg_round_x8,
-    swar_q7_circular_diff_x8, swar_q7_neg_sat_x8, swar_q7_scale_le128_with_bias_x8,
-    swar_slerp_words_with_bias_64, swar_slerp_words_with_uniform_flag_64, swar_u8_add_sat_x8,
-    swar_u8_halve_decay_x8, swar_u8_max_x8,
-    swar_u8_mean_round_x8, swar_u8_nonzero_count_x8, swar_u8_nonzero_msb_mask,
-    swar_u8_sub_sat_x8, BranchlessKernel, DEFAULT_PHASE_GRAVITY_EPS, Q7_FULL_COS_REF,
+    circular_resultant_from_words_64, coherence_from_uniform_diff_word_x8,
+    coherence_from_word_arrays_64, coherence_from_word_arrays_with_both_uniform_flags_64,
+    fast_inv_len_f32, fast_ln_1p_bounded_f32, is_word_array_uniform_64, load_q7_word_at,
+    load_q7_words_64, store_q7_words_64, swar_q7_abs_u8_x8, swar_q7_add_sat_x8,
+    swar_q7_avg_round_x8, swar_q7_circular_diff_x8, swar_q7_neg_sat_x8,
+    swar_q7_scale_le128_with_bias_x8, swar_slerp_words_with_bias_64,
+    swar_slerp_words_with_uniform_flag_64, swar_u8_add_sat_x8, swar_u8_halve_decay_x8,
+    swar_u8_max_x8, swar_u8_mean_round_x8, swar_u8_nonzero_count_x8, swar_u8_nonzero_msb_mask,
+    swar_u8_sub_sat_x8, swar_words_nonzero_64, trail_phase_words_mut, trail_phase_words_ref,
 };
 use super::primitives::{
+    ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE,
+    ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_REPULSION_ESCAPE,
+    ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION, DAES_MINI_LEDGER_LEN, DAES_SHORTCUT_SLOTS,
+    GcsoResult, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PAGED_BITMASK_BITS, Pod,
     coupled_slot_row_mask, is_slot_pair_coupled, pack_action_slot_tag, unpack_action_mode_from_tag,
-    unpack_attractor_slot_from_tag, GcsoResult, Pod, ACTION_MODE_DPSR_STEER,
-    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PSPM_ROUTE,
-    ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
-    ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK,
-    ATTRACTOR_SLOT_REPULSION, DAES_MINI_LEDGER_LEN, DAES_SHORTCUT_SLOTS, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS, PAGED_BITMASK_BITS,
+    unpack_attractor_slot_from_tag,
 };
 use crate::abi::{
-    gcso_config_t, gcso_daes_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t,
-    gcso_tagged_ptr_t, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE,
+    GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE, gcso_config_t, gcso_daes_slot_t,
+    gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t, gcso_tagged_ptr_t,
 };
-
-const SWAR_SIGN_MASK_64: u64 = 0x8080_8080_8080_8080;
-const SWAR_LOW7_MASK_64: u64 = 0x7F7F_7F7F_7F7F_7F7F;
-const SWAR_EVEN_BYTES_64: u64 = 0x00FF_00FF_00FF_00FF;
-const SWAR_SUM_U16_64: u64 = 0x0001_0001_0001_0001;
-const SWAR_SPLAT_BYTE_64: u64 = 0x0101_0101_0101_0101;
+use core::mem::{align_of, size_of};
+use core::slice;
 
 // ===================================================================
 // 1. Telemetry, Trail, Anti-Saturation & Swarm Quorum Constants
@@ -150,43 +139,7 @@ pub const DAES_METRIC_SLOT_SYNERGY_ACTIVE: u8 = 1 << 7;
 
 #[inline(always)]
 #[must_use]
-const fn swar_u8_pair_sum_u16(w: u64) -> u64 {
-    (w & SWAR_EVEN_BYTES_64).wrapping_add((w >> 8) & SWAR_EVEN_BYTES_64)
-}
-
-#[inline(always)]
-#[must_use]
-const fn swar_total_mass_from_words(w: &[u64; 8]) -> u32 {
-    let s01 = swar_u8_pair_sum_u16(w[0]).wrapping_add(swar_u8_pair_sum_u16(w[1]));
-    let s23 = swar_u8_pair_sum_u16(w[2]).wrapping_add(swar_u8_pair_sum_u16(w[3]));
-    let s45 = swar_u8_pair_sum_u16(w[4]).wrapping_add(swar_u8_pair_sum_u16(w[5]));
-    let s67 = swar_u8_pair_sum_u16(w[6]).wrapping_add(swar_u8_pair_sum_u16(w[7]));
-    let s_all = s01.wrapping_add(s23).wrapping_add(s45.wrapping_add(s67));
-    (s_all.wrapping_mul(SWAR_SUM_U16_64) >> 48) as u32
-}
-
-#[inline(always)]
-#[must_use]
-const fn swar_active_buckets_from_words(w: &[u64; 8]) -> u32 {
-    let nz01 = swar_u8_nonzero_msb_mask(w[0]) | (swar_u8_nonzero_msb_mask(w[1]) >> 1);
-    let nz23 = (swar_u8_nonzero_msb_mask(w[2]) >> 2) | (swar_u8_nonzero_msb_mask(w[3]) >> 3);
-    let nz45 = (swar_u8_nonzero_msb_mask(w[4]) >> 4) | (swar_u8_nonzero_msb_mask(w[5]) >> 5);
-    let nz67 = (swar_u8_nonzero_msb_mask(w[6]) >> 6) | (swar_u8_nonzero_msb_mask(w[7]) >> 7);
-    ((nz01 | nz23) | (nz45 | nz67)).count_ones()
-}
-
-#[inline(always)]
-#[must_use]
-const fn words_any_nonzero_64(w: &[u64; 8]) -> bool {
-    if w[0] != 0 {
-        return true;
-    }
-    (((w[1] | w[2]) | (w[3] | w[4])) | ((w[5] | w[6]) | w[7])) != 0
-}
-
-#[inline(always)]
-#[must_use]
-fn eval_unified_anchor_resonance_words_with_uniform(
+pub(crate) fn eval_unified_anchor_resonance_words_with_uniform(
     init_w: &[u64; 8],
     init_nonzero: bool,
     init_is_uniform: bool,
@@ -201,7 +154,7 @@ fn eval_unified_anchor_resonance_words_with_uniform(
     let anc_nonzero = if anc_is_uniform {
         anc_w[0] != 0
     } else {
-        words_any_nonzero_64(anc_w)
+        swar_words_nonzero_64(anc_w)
     };
     let raw_coh = if init_nonzero & anc_nonzero {
         coherence_from_word_arrays_with_both_uniform_flags_64(
@@ -547,6 +500,33 @@ fn eval_candidate_trail_words_fast(
     (bayes_delta, coh, is_coherent)
 }
 
+#[inline(always)]
+#[must_use]
+const fn swar_u8_pair_sum_u16(w: u64) -> u64 {
+    (w & SWAR_EVEN_BYTES_64).wrapping_add((w >> 8) & SWAR_EVEN_BYTES_64)
+}
+
+#[inline(always)]
+#[must_use]
+const fn swar_total_mass_from_words(w: &[u64; 8]) -> u32 {
+    let s01 = swar_u8_pair_sum_u16(w[0]).wrapping_add(swar_u8_pair_sum_u16(w[1]));
+    let s23 = swar_u8_pair_sum_u16(w[2]).wrapping_add(swar_u8_pair_sum_u16(w[3]));
+    let s45 = swar_u8_pair_sum_u16(w[4]).wrapping_add(swar_u8_pair_sum_u16(w[5]));
+    let s67 = swar_u8_pair_sum_u16(w[6]).wrapping_add(swar_u8_pair_sum_u16(w[7]));
+    let s_all = s01.wrapping_add(s23).wrapping_add(s45.wrapping_add(s67));
+    (s_all.wrapping_mul(SWAR_SUM_U16_64) >> 48) as u32
+}
+
+#[inline(always)]
+#[must_use]
+const fn swar_active_buckets_from_words(w: &[u64; 8]) -> u32 {
+    let nz01 = swar_u8_nonzero_msb_mask(w[0]) | (swar_u8_nonzero_msb_mask(w[1]) >> 1);
+    let nz23 = (swar_u8_nonzero_msb_mask(w[2]) >> 2) | (swar_u8_nonzero_msb_mask(w[3]) >> 3);
+    let nz45 = (swar_u8_nonzero_msb_mask(w[4]) >> 4) | (swar_u8_nonzero_msb_mask(w[5]) >> 5);
+    let nz67 = (swar_u8_nonzero_msb_mask(w[6]) >> 6) | (swar_u8_nonzero_msb_mask(w[7]) >> 7);
+    ((nz01 | nz23) | (nz45 | nz67)).count_ones()
+}
+
 /// Hoisted-invariant 8-head SWAR Micro-Swarm cell resolver using precomputed `gain_s <= 128`,
 /// `gain_bias = (128 - gain_s) * 0x0101_0101_0101_0101`, `qdps_thresh_x8`, and `qdps_valid_mask`.
 /// Eliminates per-cell 64-bit bias/threshold multiplications and bypasses `swar_q7_add_sat_x8`
@@ -610,7 +590,13 @@ const fn precompute_swarm_step_params(
     let gain_bias = (128u64.wrapping_sub(gain_s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
     let qdps_thresh_x8 = ((qdps_min_step_q7 & 0x7F) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
     let qdps_valid_mask = ((qdps_min_step_q7 <= 127) as u64).wrapping_neg();
-    (gain_s, gain_bias, gain_gt_128, qdps_thresh_x8, qdps_valid_mask)
+    (
+        gain_s,
+        gain_bias,
+        gain_gt_128,
+        qdps_thresh_x8,
+        qdps_valid_mask,
+    )
 }
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
@@ -632,6 +618,7 @@ unsafe fn avx2_subswarm_resolve_words_64(
     // in parallel inside two 256-bit YMM registers (`_mm256_mulhi_epi16(d << 8, s << 1)` and `_mm256_sad_epu8`),
     // preserving 100% bit-for-bit identity with `swar_subswarm_resolve_with_bias_x8`.
     unsafe {
+        use core::arch::x86_64::_mm256_testz_si256;
         use core::arch::x86_64::{
             __m256i, _mm256_abs_epi8, _mm256_add_epi64, _mm256_add_epi8, _mm256_adds_epi8,
             _mm256_and_si256, _mm256_castsi256_pd, _mm256_castsi256_si128, _mm256_cmpeq_epi8,
@@ -641,7 +628,6 @@ unsafe fn avx2_subswarm_resolve_words_64(
             _mm256_srli_epi64, _mm256_sub_epi8, _mm_add_epi64, _mm_cvtsi128_si64,
             _mm_unpackhi_epi64,
         };
-        use core::arch::x86_64::_mm256_testz_si256;
         let _ = core::mem::size_of::<__m256i>();
         let (vc0, vc1) =
             crate::traits::branchless::avx2_words64_to_vec64_with_uniform(cur_w, cur_is_uniform);
@@ -719,10 +705,8 @@ unsafe fn avx2_subswarm_resolve_words_64(
                 _mm256_castsi256_si128(r_sum4),
                 _mm256_extracti128_si256(r_sum4, 1),
             );
-            let residual_sum = _mm_cvtsi128_si64(_mm_add_epi64(
-                r_sum2,
-                _mm_unpackhi_epi64(r_sum2, r_sum2),
-            )) as u32;
+            let residual_sum =
+                _mm_cvtsi128_si64(_mm_add_epi64(r_sum2, _mm_unpackhi_epi64(r_sum2, r_sum2))) as u32;
             return (next_words, raw_quorum, residual_sum);
         }
 
@@ -935,7 +919,11 @@ impl PagedBitmaskOps for gcso_paged_bitmask_t {
         let all_zero = z012 & (self.bits[3] == 0);
         let active_w = branchless_select_u64(
             z0,
-            branchless_select_u64(z01, branchless_select_u64(z012, self.bits[3], self.bits[2]), self.bits[1]),
+            branchless_select_u64(
+                z01,
+                branchless_select_u64(z012, self.bits[3], self.bits[2]),
+                self.bits[1],
+            ),
             self.bits[0],
         );
         let base_tz = ((z0 as u32) + (z01 as u32) + (z012 as u32)) << 6;
@@ -954,7 +942,11 @@ impl PagedBitmaskOps for gcso_paged_bitmask_t {
         let all_zero = e321 & (self.bits[0] == 0);
         let active_w = branchless_select_u64(
             e3,
-            branchless_select_u64(e32, branchless_select_u64(e321, self.bits[0], self.bits[1]), self.bits[2]),
+            branchless_select_u64(
+                e32,
+                branchless_select_u64(e321, self.bits[0], self.bits[1]),
+                self.bits[2],
+            ),
             self.bits[3],
         );
         let base_lz = ((e3 as u32) + (e32 as u32) + (e321 as u32)) << 6;
@@ -1235,7 +1227,8 @@ impl StigmergicActionPtrOps for gcso_tagged_ptr_t {
 
         let active_signal = (!self.is_null()) | (self.unpack_phase() != 0) | (clean_rho > 0.0);
         let m_dpsr = branchless_select_u8(active_signal, ACTION_MODE_DPSR_STEER, 0);
-        let can_skip = active_signal & (clean_h <= low_entropy_skip_thresh) & (!repulsion_triggered);
+        let can_skip =
+            active_signal & (clean_h <= low_entropy_skip_thresh) & (!repulsion_triggered);
         let m_skip = branchless_select_u8(can_skip, ACTION_MODE_LAYER_SKIP, 0);
         let m_rep = branchless_select_u8(repulsion_triggered, ACTION_MODE_PHASE_REPULSE, 0);
         let need_pspm = (clean_h > low_entropy_skip_thresh) | repulsion_triggered;
@@ -1321,7 +1314,7 @@ impl ContrastivePhaseBloomFilter {
     #[inline(always)]
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        !words_any_nonzero_64(self.counter_words_ref())
+        !swar_words_nonzero_64(self.counter_words_ref())
     }
 
     /// Halves all 64 8-bit counters in-place (`c_i >>= 1`) using unrolled 8-lane SWAR (`swar_u8_halve_decay_x8`).
@@ -1396,7 +1389,9 @@ impl ContrastivePhaseBloomFilter {
     /// across 4 parallel superscalar multiply lanes in $\mathcal{O}(1)$.
     #[inline(always)]
     #[must_use]
-    pub const fn compute_hash_slots(phase_pattern: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> [usize; 4] {
+    pub const fn compute_hash_slots(
+        phase_pattern: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> [usize; 4] {
         Self::compute_hash_slots_from_words(&load_q7_words_64(phase_pattern))
     }
 
@@ -1472,11 +1467,7 @@ impl ContrastivePhaseBloomFilter {
     /// Records a spurious local minimum phase pattern directly from 8 register-resident `u64` SWAR
     /// words with a custom saturating weight step (`0` stack reload, `0` branches).
     #[inline(always)]
-    pub const fn insert_repulsive_pattern_words_weighted(
-        &mut self,
-        words: &[u64; 8],
-        weight: u8,
-    ) {
+    pub const fn insert_repulsive_pattern_words_weighted(&mut self, words: &[u64; 8], weight: u8) {
         let _ = self.auto_halve_if_saturated(DEFAULT_BLOOM_MAX_MASS_THRESHOLD);
         let slots = Self::compute_hash_slots_from_words(words);
         self.counters[slots[0]] = self.counters[slots[0]].saturating_add(weight);
@@ -2179,6 +2170,59 @@ pub(crate) fn select_rewire_bridge_and_modulate_with_preloaded_words_64(
     )
 }
 
+impl gcso_pointer_trail_t {
+    /// Copies `src` and pre-loaded `phase_words` into `self` using width-matched scalar writes and
+    /// 8-byte aligned 64-bit GPR stores (`*trail_phase_words_mut(self) = *phase_words`) at byte
+    /// offset `56..120`, avoiding unaligned 256-bit `vmovdqu` cache-line splits, 256-bit-to-64-bit
+    /// Store-to-Load Forwarding (STLF) pipeline stalls, and redundant 64-byte reloads from `src`.
+    #[inline(always)]
+    pub fn copy_from_with_words_fast(
+        &mut self,
+        src: &Self,
+        phase_words: &[u64; NUM_SWARM_MICRO_CELLS],
+    ) {
+        self.current_ptr = src.current_ptr;
+        self.prev_ptr = src.prev_ptr;
+        self.user_data = src.user_data;
+        self.transition_cost = src.transition_cost;
+        self.step_count = src.step_count;
+        self.stigmergic_density = src.stigmergic_density;
+        self.target_anchor_id = src.target_anchor_id;
+        self.cluster_id = src.cluster_id;
+        self.linked_trail_id = src.linked_trail_id;
+        self.attractor_pull_force = src.attractor_pull_force;
+        self.flags = src.flags;
+        *trail_phase_words_mut(self) = *phase_words;
+        self.reserved_padding = src.reserved_padding;
+    }
+
+    /// Restores `self` from `src` using width-matched scalar writes and 64-bit GPR stores
+    /// (`*trail_phase_words_mut(self) = *trail_phase_words_ref(src)`), preventing 256-bit YMM-to-GPR
+    /// Store-to-Load Forwarding (STLF) pipeline stalls (`~15–20 cycles`).
+    #[inline(always)]
+    pub fn copy_from_fast(&mut self, src: &Self) {
+        self.copy_from_with_words_fast(src, trail_phase_words_ref(src));
+    }
+
+    /// Clears `self` in-place using width-matched 64-bit GPR stores (`0` YMM stores, `0` STLF stalls).
+    #[inline(always)]
+    pub fn clear_fast(&mut self) {
+        self.current_ptr = 0;
+        self.prev_ptr = 0;
+        self.user_data = 0;
+        self.transition_cost = 0;
+        self.step_count = 0;
+        self.stigmergic_density = 0.0;
+        self.target_anchor_id = 0;
+        self.cluster_id = 0;
+        self.linked_trail_id = 0;
+        self.attractor_pull_force = 0.0;
+        self.flags = 0;
+        *trail_phase_words_mut(self) = [0u64; NUM_SWARM_MICRO_CELLS];
+        self.reserved_padding = [0; 8];
+    }
+}
+
 impl StigmergicTrailOps for gcso_pointer_trail_t {
     #[inline(always)]
     fn record_pointer_transition(&mut self, next_ptr: u64, edge_cost: i32, density_boost: f32) {
@@ -2561,11 +2605,7 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
                 (1.0_f32, 0.0_f32, false, *s, false)
             } else {
                 let c_val = coherence_from_uniform_diff_word_x8(d0);
-                let lp = if c_val >= 1.0 - 1.0e-7 {
-                    0.0_f32
-                } else {
-                    branchless_ln_f32(branchless_max_f32(0.5 * (1.0 + c_val), 1.0e-6))
-                };
+                let lp = branchless_fast_transition_log_prob(c_val);
                 let contr = c_val < -safe_thresh;
                 let w0 = if contr {
                     swar_q7_neg_sat_x8(s[0])
@@ -2601,11 +2641,7 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
                         (1.0_f32, 0.0_f32, false, *s, false)
                     } else {
                         let c_val = super::branchless::avx2_coherence_from_diff_vec64(vd0, vd1);
-                        let lp = if c_val >= 1.0 - 1.0e-7 {
-                            0.0_f32
-                        } else {
-                            branchless_ln_f32(branchless_max_f32(0.5 * (1.0 + c_val), 1.0e-6))
-                        };
+                        let lp = branchless_fast_transition_log_prob(c_val);
                         let contr = c_val < -safe_thresh;
                         if contr {
                             let zero = _mm256_setzero_si256();
@@ -2651,12 +2687,10 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
                 if ((d0 | d1) | (d2 | d3) | (d4 | d5) | (d6 | d7)) == 0 {
                     (1.0_f32, 0.0_f32, false, *s, false)
                 } else {
-                    let c_val = super::branchless::coherence_from_diff_words_64(d0, d1, d2, d3, d4, d5, d6, d7);
-                    let lp = if c_val >= 1.0 - 1.0e-7 {
-                        0.0_f32
-                    } else {
-                        branchless_ln_f32(branchless_max_f32(0.5 * (1.0 + c_val), 1.0e-6))
-                    };
+                    let c_val = super::branchless::coherence_from_diff_words_64(
+                        d0, d1, d2, d3, d4, d5, d6, d7,
+                    );
+                    let lp = branchless_fast_transition_log_prob(c_val);
                     let contr = c_val < -safe_thresh;
 
                     if contr {
@@ -3735,7 +3769,7 @@ impl gcso_pointer_trail_t {
         let ptr_phase_splat = ((ptr_phase as u8) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
         let cur_w = *cur_w;
         let tgt_base_w = *target_words;
-        let tgt_has_explicit = words_any_nonzero_64(&tgt_base_w);
+        let tgt_has_explicit = swar_words_nonzero_64(&tgt_base_w);
         let use_explicit_tgt = tgt_has_explicit | (ptr_phase_splat == 0);
         let mut next_words = cur_w;
         let quorum_mask: u8;
@@ -3822,7 +3856,10 @@ impl gcso_pointer_trail_t {
             repulsion_triggered = rep_active;
         }
 
-        if !(quorum_mask == 0xFF && residual_sum == 0 && !repulsion_triggered && cur_w[0] == next_words[0])
+        if !(quorum_mask == 0xFF
+            && residual_sum == 0
+            && !repulsion_triggered
+            && cur_w[0] == next_words[0])
             && ((cur_w[0] != next_words[0])
                 || (((cur_w[1] ^ next_words[1])
                     | (cur_w[2] ^ next_words[2])
@@ -3922,7 +3959,6 @@ impl gcso_pointer_trail_t {
             next_words,
         )
     }
-
 
     #[inline(always)]
     fn recruit_single_anchor_stragglers_cold(
@@ -4085,14 +4121,10 @@ impl gcso_pointer_trail_t {
                 target_words[cell]
             };
             let donor_weight = branchless_relu_f32(slot_weights[donor_slot]);
-            let eff_gain =
-                ((gain_f32 * branchless_clamp_f32(donor_weight, 0.25, 1.0)) + 0.5) as u8;
+            let eff_gain = ((gain_f32 * branchless_clamp_f32(donor_weight, 0.25, 1.0)) + 0.5) as u8;
             let gain_gt_128 = eff_gain > 128;
-            let gain_s = branchless_select_u8(
-                gain_gt_128,
-                eff_gain.wrapping_sub(128),
-                eff_gain,
-            ) as u64;
+            let gain_s =
+                branchless_select_u8(gain_gt_128, eff_gain.wrapping_sub(128), eff_gain) as u64;
             let gain_bias = (128u64.wrapping_sub(gain_s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
 
             let (cand_next, res_next, ok_next) = swar_subswarm_resolve_with_bias_x8(
@@ -4154,7 +4186,6 @@ impl gcso_pointer_trail_t {
                 | branchless_select_u32(skip_on, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, 0);
         }
     }
-
 }
 
 impl StigmergicSwarmOps for gcso_pointer_trail_t {
@@ -4225,9 +4256,8 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
         let mut unresolved = !prev_quorum;
 
         if unresolved != 0 {
-            let eff_gain =
-                ((f32::from(step_gain_u7) * branchless_clamp_f32(donor_pull, 0.25, 1.0)) + 0.5)
-                    as u8;
+            let eff_gain = ((f32::from(step_gain_u7) * branchless_clamp_f32(donor_pull, 0.25, 1.0))
+                + 0.5) as u8;
             let (gain_s, gain_bias, gain_gt_128, qdps_thresh_x8, qdps_valid_mask) =
                 precompute_swarm_step_params(eff_gain, qdps_min_step_q7);
 
@@ -4283,7 +4313,7 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
         let self_nonzero = if self_is_uniform {
             self_w[0] != 0
         } else {
-            words_any_nonzero_64(&self_w)
+            swar_words_nonzero_64(&self_w)
         };
         let mut best_idx = 0usize;
         let mut best_pull = 0.0_f32;
@@ -4345,7 +4375,8 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
             let primary_slot = usize::from(self.target_attractor_slot() & ATTRACTOR_SLOT_ID_MASK);
             let coupled_row = coupled_slot_row_mask(coupling_matrix_8x8, primary_slot as u32);
             let gain_f32 = f32::from(step_gain_u7);
-            let qdps_thresh_x8 = ((qdps_min_step_q7 & 0x7F) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
+            let qdps_thresh_x8 =
+                ((qdps_min_step_q7 & 0x7F) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
             let qdps_valid_mask = ((qdps_min_step_q7 <= 127) as u64).wrapping_neg();
 
             let self_w = trail_phase_words_mut(self);
@@ -4373,8 +4404,8 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
                 let eff_gain =
                     ((gain_f32 * branchless_clamp_f32(donor_weight, 0.25, 1.0)) + 0.5) as u8;
                 let gain_gt_128 = eff_gain > 128;
-                let gain_s = branchless_select_u8(gain_gt_128, eff_gain.wrapping_sub(128), eff_gain)
-                    as u64;
+                let gain_s =
+                    branchless_select_u8(gain_gt_128, eff_gain.wrapping_sub(128), eff_gain) as u64;
                 let gain_bias = (128u64.wrapping_sub(gain_s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
 
                 let (candidate_w, _res, cell_resolved) = swar_subswarm_resolve_with_bias_x8(
@@ -4463,13 +4494,12 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
         } else if count == 0 {
             ([0u64; NUM_SWARM_MICRO_CELLS], 0.0, 0u32, false)
         } else {
-            let (tw, tp, _mc, did, ac) =
-                branchless_q7_unified_field_fold_words_with_init_weight_64(
-                    &cur_w,
-                    0.0,
-                    anchor_phases,
-                    anchor_base_energies,
-                );
+            let (tw, tp, _mc, did, ac) = branchless_q7_unified_field_fold_words_with_init_weight_64(
+                &cur_w,
+                0.0,
+                anchor_phases,
+                anchor_base_energies,
+            );
             (tw, tp, did, ac > 0)
         };
 
@@ -4610,9 +4640,9 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
         }
 
         let newly_resolved = (combined_quorum & !self_quorum).count_ones();
-        let boosted_rho = branchless_flush_subnormal_f32(branchless_relu_f32(
-            self.stigmergic_density,
-        )) + 0.05 * (newly_resolved as f32);
+        let boosted_rho =
+            branchless_flush_subnormal_f32(branchless_relu_f32(self.stigmergic_density))
+                + 0.05 * (newly_resolved as f32);
         self.stigmergic_density = branchless_min_f32(boosted_rho, MAX_STIGMERGIC_DENSITY);
 
         let safe_req = branchless_select_u8(
@@ -4776,6 +4806,7 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::primitives::ACTION_PRESET_EXPRESS_PHASE;
     use crate::traits::primitives::ATTRACTOR_SLOT_PERSONA;
 
     struct DummyDaes;

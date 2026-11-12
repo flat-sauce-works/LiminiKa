@@ -75,17 +75,18 @@ use crate::abi::{
 };
 use crate::traits::aligned::{AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut32};
 use crate::traits::branchless::{
-    branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
-    branchless_is_finite_f32, branchless_ln_f32, branchless_max_f32, branchless_min_f32,
-    branchless_phase_coherence_inv_temp_scale, branchless_popcount_rsqrt_u32,
+    branchless_abs_f32, branchless_clamp_f32, branchless_fast_transition_log_prob,
+    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_max_f32,
+    branchless_min_f32, branchless_phase_coherence_inv_temp_scale, branchless_popcount_rsqrt_u32,
     branchless_rad_to_qdps_step_u8, branchless_relu_f32, branchless_rsqrt_f32,
     branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
     coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_len_f32,
     fast_ln_1p_bounded_f32, is_word_array_uniform_64, load_q7_words_64,
     procrustes_q7_words_64_simd, scale_f32_slice_unrolled8, swar_q7_circular_add_x8,
-    swar_q7_neg_sat_x8, swar_q7_qdps_filter_x8, swar_q7_scale_le128_with_bias_x8,
-    swar_slerp_words_with_uniform_flag_64, trail_phase_words_mut, trail_phase_words_ref,
-    Q7_FULL_COS_REF,
+    swar_q7_neg_sat_x8, swar_q7_qdps_filter_words_64, swar_q7_qdps_filter_x8,
+    swar_q7_scale_le128_with_bias_x8, swar_slerp_words_with_uniform_flag_64, swar_words_equal_64,
+    swar_words_nonzero_64, trail_phase_words_mut, trail_phase_words_ref, Q7_FULL_COS_REF,
+    SWAR_SPLAT_BYTE_64,
 };
 use crate::traits::gateway::{
     CausalProvenanceReport, CrystallizedAttractorRecord, GatewayFrame, ManifoldGatewaySignal,
@@ -93,9 +94,8 @@ use crate::traits::gateway::{
 };
 use crate::traits::primitives::{
     GcsoResult, Pod, ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PSPM_ROUTE,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_REPULSION, DEFAULT_ENTROPY_EPS,
-    DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
+    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_REPULSION, DEFAULT_QDPS_MIN_STEP_RAD,
+    DEFAULT_RIPA_CLAMP_MAX_RAD, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
 };
 use crate::traits::rope::{
     dispatch_fused_ripa_and_pspm_words_core, steer_from_swar_words_core_safe, DynamicLayerSkipper,
@@ -107,10 +107,6 @@ use crate::traits::telemetry::{
     MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
-use crate::traits::{
-    filter_qdps_words_in_registers_64, swar_words_equal_64, swar_words_nonzero_64,
-};
-
 /// Default attention head dimension ($d_{\mathrm{head}} = 128$) for [`DpsrEngine::default`].
 pub const DEFAULT_DPSR_HEAD_DIM: u32 = 128;
 
@@ -119,25 +115,6 @@ pub const DEFAULT_DPSR_NUM_HEADS: u32 = 32;
 
 /// Scale factor for Q7 quantized phase representation ($\beta_{\mathrm{Q7}} = \pi / 128$).
 pub const Q7_PHASE_SCALE: f32 = Q7_PHASE_SCALE_RAD;
-
-/// 64-bit SWAR byte-splat multiplier (`0x0101_0101_0101_0101`).
-const SWAR_SPLAT_BYTE_64: u64 = 0x0101_0101_0101_0101;
-
-/// Evaluates the conditional transition log-probability $\ln P(M_t \mid M_{t-1}) = \ln(0.5(1 + c))$
-/// using the 1-lookup identity $\ln(1 + c) - \ln 2$ (`fast_ln_1p_bounded_f32`, `0` divisions)
-/// whenever $c \ge 0$, falling back to [`branchless_ln_f32`] only when $c < 0$.
-#[inline(always)]
-#[must_use]
-const fn fast_transition_log_prob_from_coh(coh: f32) -> f32 {
-    if coh >= 0.999_999 {
-        0.0_f32
-    } else if coh >= 0.0 {
-        branchless_flush_subnormal_f32(fast_ln_1p_bounded_f32(coh) - core::f32::consts::LN_2)
-    } else {
-        let cond_prob = branchless_clamp_f32(0.5 * (1.0 + coh), DEFAULT_ENTROPY_EPS, 1.0);
-        branchless_flush_subnormal_f32(branchless_ln_f32(cond_prob))
-    }
-}
 
 // ===================================================================
 // Internal Constant-Time Register-Resident SWAR & SO(2) Fusion Kernels
@@ -196,7 +173,7 @@ const fn filter_qdps_words_64(
     if step_u8 <= 1 {
         *raw_words
     } else {
-        filter_qdps_words_in_registers_64(raw_words, step_u8)
+        swar_q7_qdps_filter_words_64(raw_words, step_u8)
     }
 }
 
@@ -230,7 +207,7 @@ fn filter_qdps_and_steer_from_words_64(
             key_tensor,
         );
     } else {
-        let swar_words = filter_qdps_words_in_registers_64(raw_words, step_u8);
+        let swar_words = swar_q7_qdps_filter_words_64(raw_words, step_u8);
         if (swar_words[0] == 0) && !swar_words_nonzero_64(&swar_words) {
             return;
         }
@@ -973,7 +950,7 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
         dst_trail.target_anchor_id = src_trail.target_anchor_id;
         dst_trail.cluster_id = resolved_cluster_id;
 
-        (best_coh, fast_transition_log_prob_from_coh(best_coh))
+        (best_coh, branchless_fast_transition_log_prob(best_coh))
     } else {
         self_w = [
             swar_q7_neg_sat_x8(self_w[0]),
@@ -1802,7 +1779,7 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
                 if store_out {
                     *trail_phase_words_mut(curr_trail) = ow;
                 }
-                let lp = fast_transition_log_prob_from_coh(c);
+                let lp = branchless_fast_transition_log_prob(c);
                 (c, rep, ow, lp, v_out0, v_out1)
             }
         };
@@ -1899,7 +1876,7 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
                         ),
                     ]
                 };
-                let lp = fast_transition_log_prob_from_coh(c);
+                let lp = branchless_fast_transition_log_prob(c);
                 *trail_phase_words_mut(curr_trail) = ow;
                 (c, rep, ow, lp)
             }

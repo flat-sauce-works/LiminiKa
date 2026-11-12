@@ -74,15 +74,17 @@ use crate::traits::aligned::{
 };
 use crate::traits::branchless::{
     branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_crc32_ieee,
-    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_ln_f32,
+    branchless_fast_transition_log_prob, branchless_flush_subnormal_f32, branchless_is_finite_f32,
     branchless_max_f32, branchless_min_f32, branchless_project_f32_slice_to_q7_64,
     branchless_q7_add_sat, branchless_q7_inhibit_64, branchless_q7_neg_sat,
     branchless_q7_resonant_pull_64, branchless_q7_synergy_fuse_64,
-    branchless_q7_unified_field_fold_words_with_init_weight_64, branchless_relu_f32,
-    branchless_select_f32, branchless_select_u32, branchless_select_u8, branchless_splitmix64,
-    branchless_sqrt_f32, fast_ln_1p_bounded_f32, load_q7_words_64,
+    branchless_q7_unified_field_fold_words_with_init_weight_64, branchless_rad_to_qdps_step_u8,
+    branchless_relu_f32, branchless_select_f32, branchless_select_u32, branchless_select_u8,
+    branchless_splitmix64, branchless_sqrt_f32, load_q7_words_64,
     modulate_attention_scores_by_phase_bank_64, scale_f32_slice_unrolled8, store_q7_words_64,
-    sum_sq_f32_simd8, swar_slerp_words_with_bias_64, trail_phase_words_mut, trail_phase_words_ref,
+    sum_sq_f32_simd8, swar_q7_qdps_filter_words_64, swar_slerp_words_with_bias_64,
+    swar_words_equal_64, swar_words_nonzero_64, trail_phase_words_mut, trail_phase_words_ref,
+    SWAR_SPLAT_BYTE_64,
 };
 use crate::traits::cold_path::{EntropyEvaluator, L2pSvdProjector, SystemCapabilityQuery};
 use crate::traits::gateway::{
@@ -98,8 +100,7 @@ use crate::traits::primitives::{
     unpack_action_mode_from_tag, unpack_attractor_slot_from_tag, validate_snapshot_header,
     FfiHandleMut, FfiHandleRef, GcsoResult, Pod, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PSPM_ROUTE,
     ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION,
-    DEFAULT_ENTROPY_EPS, DEFAULT_RIPA_CLAMP_MAX_RAD, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
-    PAGED_BITMASK_BITS,
+    DEFAULT_RIPA_CLAMP_MAX_RAD, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PAGED_BITMASK_BITS,
 };
 use crate::traits::rope::{
     dispatch_fused_ripa_and_pspm_words_core, steer_from_swar_words_core_safe, PhaseSteering,
@@ -113,11 +114,6 @@ use crate::traits::telemetry::{
     TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
     TRAIL_FLAG_SYNERGY_RESONANCE,
 };
-use crate::traits::{
-    filter_qdps_words_in_registers_64, rad_to_qdps_min_step_q7_u8, swar_words_equal_64,
-    swar_words_nonzero_64,
-};
-
 /// Unified GCSO C-ABI Major Version Component (`0.1.1`).
 pub const GCSO_ABI_VERSION_MAJOR: u32 = 0;
 /// Unified GCSO C-ABI Minor Version Component (`0.1.1`).
@@ -1492,7 +1488,7 @@ fn steer_gateway_frame_with_words_core_safe(
         let swar_words = if frm_nonzero | (frame_ref.qdps_min_step_q7 <= 1) {
             next_w
         } else {
-            filter_qdps_words_in_registers_64(&next_w, frame_ref.qdps_min_step_q7)
+            swar_q7_qdps_filter_words_64(&next_w, frame_ref.qdps_min_step_q7)
         };
         let swar_nonzero = if frm_nonzero {
             true
@@ -1748,7 +1744,7 @@ fn steer_routed_trail_words_qk_safe(
     k_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
 ) {
     if (trail_flags & TRAIL_FLAG_INERTIAL_SKIP_ACTIVE) == 0 {
-        let min_step_q7 = rad_to_qdps_min_step_q7_u8(min_step_rad);
+        let min_step_q7 = branchless_rad_to_qdps_step_u8(min_step_rad);
         let eff_ripa = branchless_select_f32(
             branchless_is_finite_f32(win_clamp_rad) & (win_clamp_rad > 0.0),
             win_clamp_rad,
@@ -1769,7 +1765,7 @@ fn steer_routed_trail_words_qk_safe(
                 );
             }
         } else {
-            let swar_words = filter_qdps_words_in_registers_64(steer_words, min_step_q7);
+            let swar_words = swar_q7_qdps_filter_words_64(steer_words, min_step_q7);
             if (swar_words[0] != 0) || swar_words_nonzero_64(&swar_words) {
                 steer_from_swar_words_core_safe(
                     &swar_words,
@@ -1948,7 +1944,7 @@ fn bridge_trail_words_slerp_u7(
         let cand_w = load_q7_words_64(cand_phases);
         if !swar_words_equal_64(&steer_words, &cand_w) {
             let s_u64 = branchless_select_u8(interpolation_u7 > 128, 128, interpolation_u7) as u64;
-            let bias_restore = (128u64.wrapping_sub(s_u64)).wrapping_mul(0x0101_0101_0101_0101);
+            let bias_restore = (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
             steer_words = swar_slerp_words_with_bias_64(&steer_words, &cand_w, s_u64, bias_restore);
             *trail_phase_words_mut(src_trail) = steer_words;
         }
@@ -3464,17 +3460,7 @@ pub unsafe extern "C" fn gcso_action_hub_select_and_bridge_best_next_trail(
             let dst_idx = (selected_id as usize).min(num_candidates - 1);
             let dst_trail = &mut candidates[dst_idx];
             if !log_prob_out.is_null() {
-                log_prob = if best_coh >= 0.999_999 {
-                    0.0_f32
-                } else if best_coh >= 0.0 {
-                    branchless_flush_subnormal_f32(
-                        fast_ln_1p_bounded_f32(best_coh) - core::f32::consts::LN_2,
-                    )
-                } else {
-                    let cond_prob =
-                        branchless_clamp_f32(0.5 * (1.0 + best_coh), DEFAULT_ENTROPY_EPS, 1.0);
-                    branchless_flush_subnormal_f32(branchless_ln_f32(cond_prob))
-                };
+                log_prob = branchless_fast_transition_log_prob(best_coh);
             }
             if interpolation_u7 > 0 {
                 let src_w = *trail_phase_words_ref(&src_trail);
@@ -3483,7 +3469,7 @@ pub unsafe extern "C" fn gcso_action_hub_select_and_bridge_best_next_trail(
                     let s_u64 =
                         branchless_select_u8(interpolation_u7 > 128, 128, interpolation_u7) as u64;
                     let bias_restore =
-                        (128u64.wrapping_sub(s_u64)).wrapping_mul(0x0101_0101_0101_0101);
+                        (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
                     let bridged_w =
                         swar_slerp_words_with_bias_64(&src_w, &dst_w, s_u64, bias_restore);
                     *trail_phase_words_mut(&mut src_trail) = bridged_w;
@@ -4081,11 +4067,11 @@ pub unsafe extern "C" fn gcso_action_hub_route_coarse_to_fine_bayesian_and_steer
         let mut pspm_routed = false;
 
         if (src_trail.flags & TRAIL_FLAG_INERTIAL_SKIP_ACTIVE) == 0 {
-            let min_step_q7 = rad_to_qdps_min_step_q7_u8(min_step_rad);
+            let min_step_q7 = branchless_rad_to_qdps_step_u8(min_step_rad);
             let swar_words = if min_step_q7 <= 1 {
                 steer_words
             } else {
-                filter_qdps_words_in_registers_64(&steer_words, min_step_q7)
+                swar_q7_qdps_filter_words_64(&steer_words, min_step_q7)
             };
             let swar_nonzero = swar_words_nonzero_64(&swar_words);
             if let Some(ref pspm_cfg) = pspm_ref_opt {

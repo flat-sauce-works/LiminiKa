@@ -51,21 +51,19 @@
 #![allow(clippy::ifs_same_cond)]
 #![allow(clippy::field_reassign_with_default)]
 
-use core::f32::consts::{FRAC_PI_2, LN_2};
-
 pub use super::branchless::{sum_abs_and_sq_f32_simd8, sum_sq_f32_simd8};
-
+use core::f32::consts::{FRAC_PI_2, LN_2};
 use super::aligned::{
     AlignedBuffer16, AlignedSlice, AlignedSlice16, AlignedSlice32, AlignedSlice64,
     AlignedSliceMut16, AlignedSliceMut32, AlignedSliceMut64,
 };
 use super::branchless::{
-    atan2_interleaved_pairs_to_q7_word_x8_simd, atan2_to_q7_word_x8_simd, branchless_abs_f32,
-    branchless_atan2_f32,
-    branchless_atan2_to_q7_fast, branchless_clamp_f32,
-    branchless_copysign_f32, branchless_eyring_kramers_escape, branchless_flush_subnormal_f32,
-    branchless_hysteresis_quantize_depth, branchless_inv_pos_f32, branchless_is_finite_f32,
-    branchless_is_nan_f32, branchless_max_f32, branchless_min_f32,
+    BranchlessKernel, DEFAULT_MAX_VALID_Z_SCORE, atan2_interleaved_pairs_to_q7_word_x8_simd,
+    atan2_to_q7_word_x8_simd, branchless_abs_f32, branchless_atan2_f32,
+    branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_copysign_f32,
+    branchless_eyring_kramers_escape, branchless_fast_transition_log_prob,
+    branchless_flush_subnormal_f32, branchless_hysteresis_quantize_depth, branchless_inv_pos_f32,
+    branchless_is_finite_f32, branchless_is_nan_f32, branchless_max_f32, branchless_min_f32,
     branchless_popcount_rsqrt_u32, branchless_q7_accumulate_64, branchless_q7_add_sat,
     branchless_q7_conjugate_64, branchless_q7_inhibit_64, branchless_q7_inhibit_words_64,
     branchless_q7_qdps_filter_64, branchless_q7_synergy_fuse_64,
@@ -75,46 +73,46 @@ use super::branchless::{
     branchless_select_f32, branchless_select_q7, branchless_select_u32, branchless_select_u8,
     branchless_sincos_q7, branchless_splitmix64, branchless_sqrt_f32, branchless_tanh_f32,
     branchless_von_mises_kappa, chebyshev_deg3_filter_slice_simd8, circular_r_bar_from_words_64,
-    coherence_from_word_arrays_64, coherence_from_word_arrays_with_uniform_flag_64,
-    crc32_block64_zero_seed_words, diff_norm_sq_f32_unrolled4, dot_and_norms_f32_unrolled4,
-    fast_inv_len_f32, fast_inv_pos_normal_f32, hodge_obstruction_and_dual_pairing_f32,
-    is_word_array_uniform_64, load_q7_word_at, load_q7_words_64, max_pos_f32_unrolled4,
-    store_q7_word_at, store_q7_words_64, swar_q7_add_sat_x8, swar_q7_circular_add_x8,
-    swar_q7_fold_s1_geodesic_x8, trail_phase_words_mut, trail_phase_words_ref,
-    swar_q7_neg_sat_x8, swar_q7_qdps_filter_words_64, swar_q7_scale_le128_with_bias_x8,
-    swar_q7_sub_sat_x8, BranchlessKernel, DEFAULT_MAX_VALID_Z_SCORE,
+    coherence_from_diff_words_64, coherence_from_word_arrays_64,
+    coherence_from_word_arrays_with_uniform_flag_64, crc32_block64_zero_seed_words,
+    diff_norm_sq_f32_unrolled4, dot_and_norms_f32_unrolled4, fast_inv_len_f32,
+    fast_inv_pos_normal_f32, hodge_obstruction_and_dual_pairing_f32, is_word_array_uniform_64,
+    load_q7_word_at, load_q7_words_64, max_pos_f32_unrolled4, store_q7_word_at, store_q7_words_64,
+    swar_q7_add_sat_x8, swar_q7_circular_add_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8,
+    swar_q7_qdps_filter_words_64, swar_q7_scale_le128_with_bias_x8, swar_q7_sub_sat_x8,
+    trail_phase_words_mut, trail_phase_words_ref,
 };
 use super::gateway::{
     ActionHubGatewayExt, CausalProvenanceReport, CrystallizedAttractorRecord, GatewayFrame,
     ManifoldGatewaySignal,
 };
-use super::hot_path::{HotPathExecutionEngine, SwarmCellChunk};
 use super::primitives::{
-    finalize_snapshot_header_crc32, is_slot_pair_coupled, pack_action_slot_tag,
-    unpack_action_mode_from_tag, unpack_attractor_slot_from_tag, verify_snapshot_payload_crc32,
-    GcsoResult, Pod, ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION,
+    ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION,
     CHEBYSHEV_COEFF_LEN, DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_ENTROPY_EPS,
     DEFAULT_PAGED_BLOCK_SIZE, DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD,
-    DEFAULT_SLOT_COUPLING_MATRIX_8X8, MAX_ANCHORS_PER_FIELD, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
+    DEFAULT_SLOT_COUPLING_MATRIX_8X8, GcsoResult, MAX_ANCHORS_PER_FIELD, MAX_ATTENTION_HEADS,
+    MAX_ATTRACTOR_DOMAINS, Pod, Q7_PHASE_SCALE_RAD, finalize_snapshot_header_crc32,
+    is_slot_pair_coupled, pack_action_slot_tag, unpack_action_mode_from_tag,
+    unpack_attractor_slot_from_tag, verify_snapshot_payload_crc32,
 };
 use super::telemetry::{
-    eval_bitmask_dyadic_ultrametric, ContrastivePhaseBloomFilter, PagedBitmaskOps,
-    StigmergicActionPtrOps, StigmergicTrailOps, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY,
-    NUM_SWARM_MICRO_CELLS,
-    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
-    TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
+    ContrastivePhaseBloomFilter, PagedBitmaskOps, MAX_ATTRACTOR_PULL_FORCE,
+    MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS,
+    StigmergicActionPtrOps, StigmergicTrailOps, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
+    TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
+    eval_bitmask_dyadic_ultrametric,
 };
 use super::ActionHub;
 use crate::abi::{
-    gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_daes_slot_t,
-    gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t,
-    gcso_q7_t, gcso_snapshot_header_t, gcso_srl_descriptor_t, gcso_tagged_ptr_t,
-    gcso_zimms_descriptor_t, GCSO_ABI_VERSION_MAJOR, GCSO_ABI_VERSION_MINOR,
-    GCSO_ABI_VERSION_PATCH, GCSO_CAP_CPU_BASELINE, GCSO_CAP_CUDA_BACKEND, GCSO_CAP_METAL_BACKEND,
-    GCSO_CAP_VULKAN_BACKEND, GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_CONTAINER_CORRUPTED,
-    GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE,
+    GCSO_ABI_VERSION_MAJOR, GCSO_ABI_VERSION_MINOR, GCSO_ABI_VERSION_PATCH, GCSO_CAP_CPU_BASELINE,
+    GCSO_CAP_CUDA_BACKEND, GCSO_CAP_METAL_BACKEND, GCSO_CAP_VULKAN_BACKEND,
+    GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_EDBC_SINGULARITY,
+    GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE, gcso_anchor_type_t,
+    gcso_capability_flags_t, gcso_config_t, gcso_daes_slot_t, gcso_edbc_state_t,
+    gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t, gcso_q7_t,
+    gcso_snapshot_header_t, gcso_srl_descriptor_t, gcso_tagged_ptr_t, gcso_zimms_descriptor_t,
 };
+use super::hot_path::{HotPathExecutionEngine, SwarmCellChunk};
 
 const BLOCK_NORM_CACHE_CAP: usize = 64;
 
@@ -1684,7 +1682,11 @@ pub trait MultiDomainAttractorSpace: BranchlessKernel + Send + Sync {
         let ref_nonzero = if ref_is_uniform {
             ref_w[0] != 0
         } else {
-            ((ref_w[0] | ref_w[1]) | (ref_w[2] | ref_w[3]) | (ref_w[4] | ref_w[5]) | (ref_w[6] | ref_w[7])) != 0
+            ((ref_w[0] | ref_w[1])
+                | (ref_w[2] | ref_w[3])
+                | (ref_w[4] | ref_w[5])
+                | (ref_w[6] | ref_w[7]))
+                != 0
         };
 
         for (slot_id, pull_slot) in pulls.iter_mut().enumerate() {
@@ -2026,7 +2028,11 @@ pub trait MultiDomainAttractorSpace: BranchlessKernel + Send + Sync {
         trail: &mut gcso_pointer_trail_t,
     ) -> GcsoResult<(f32, f32, u32)> {
         let (pull, coh, neighbors, _words) =
-            self.steer_trail_by_coupled_neighborhood_to_words(synergy_gain, inhibition_strength, trail)?;
+            self.steer_trail_by_coupled_neighborhood_to_words(
+                synergy_gain,
+                inhibition_strength,
+                trail,
+            )?;
         Ok((pull, coh, neighbors))
     }
 }
@@ -2294,7 +2300,8 @@ pub trait L2pSvdProjector: BranchlessKernel + Send + Sync {
         while h < num_heads {
             let pair_idx = (h * step_pairs) % num_pairs;
             let base_idx = (pair_idx << 1) * rank;
-            out_phases[h] = branchless_atan2_to_q7_fast(b_slice[base_idx + rank], b_slice[base_idx]);
+            out_phases[h] =
+                branchless_atan2_to_q7_fast(b_slice[base_idx + rank], b_slice[base_idx]);
             h += 1;
         }
 
@@ -2351,11 +2358,10 @@ pub trait L2pSvdProjector: BranchlessKernel + Send + Sync {
 
 /// Mezzo/Cold-path trait for Predictive Phase-Motion & Residual Compensation (PPRC) (**Mezzo / Storage Level**).
 pub trait PprcCache: BranchlessKernel + Send + Sync {
-    /// Seeks to a specific token index in the keyframe KV cache without forward passes.
+    /// Seeks to `token_index` in the PPRC keyframe cache and populates `header_out`.
     ///
     /// # Errors
-    /// Returns [`crate::abi::GCSO_ERROR_PPRC_SEEK_FAILED`] or [`GCSO_ERROR_INVALID_ARGUMENT`]
-    /// if `token_index` is out of range.
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `token_index` is out of bounds.
     fn seek_to_token(
         &mut self,
         token_index: u32,
@@ -2590,11 +2596,10 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
             // Because `next_w = cur_w (+) dw` in Z_256^64 and cos(-d) = cos(d), the transition
             // coherence C(cur_w, next_w) depends purely on `dw` against zero, avoiding a
             // tentative 8-word addition + 8-word subtraction before checking repulsion.
-            let coh = super::branchless::coherence_from_diff_words_64(
+            let coh = coherence_from_diff_words_64(
                 dw[0], dw[1], dw[2], dw[3], dw[4], dw[5], dw[6], dw[7],
             );
-            let cond_prob = branchless_clamp_f32(0.5 * (1.0 + coh), DEFAULT_ENTROPY_EPS, 1.0);
-            let log_p = branchless_flush_subnormal_f32(super::branchless::branchless_ln_f32(cond_prob));
+            let log_p = branchless_fast_transition_log_prob(coh);
             if coh < -safe_thresh {
                 cur_w = [
                     swar_q7_circular_add_x8(cur_w[0], swar_q7_neg_sat_x8(dw[0])),
@@ -2706,21 +2711,20 @@ pub trait DnpPacketDispatcher: BranchlessKernel + Send + Sync {
     }
 
     /// Verifies and decodes a 64-byte cacheline-aligned GCSO-DNP packet (`packet_payload`) into
-    /// a 64-head Q7 phase/repulsion vector (`phases_out`), returning the recovered 8-bit tag byte.
+    /// 8 register-resident `u64` SWAR words and the recovered 8-bit tag byte.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_STATE`] if `daes_slot.mode != 1`.
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
     /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if the upper 24 bits of the IEEE 802.3 CRC32
     /// checksum do not match `expected_crc32`.
-    #[inline]
-    fn decode_and_verify_dnp_packet(
+    #[inline(always)]
+    fn decode_and_verify_dnp_words(
         &self,
         daes_slot: &gcso_daes_slot_t,
         packet_payload: &AlignedSlice64<'_, u8>,
         expected_crc32: u32,
-        phases_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-    ) -> GcsoResult<u8> {
+    ) -> GcsoResult<([u64; 8], u8)> {
         if daes_slot.mode != 1 {
             return Err(GCSO_ERROR_INVALID_STATE);
         }
@@ -2729,7 +2733,9 @@ pub trait DnpPacketDispatcher: BranchlessKernel + Send + Sync {
         }
         let src = &packet_payload.as_slice()[..MAX_ATTENTION_HEADS];
         let payload_words = [
-            u64::from_le_bytes([src[0], src[1], src[2], src[3], src[4], src[5], src[6], src[7]]),
+            u64::from_le_bytes([
+                src[0], src[1], src[2], src[3], src[4], src[5], src[6], src[7],
+            ]),
             u64::from_le_bytes([
                 src[8], src[9], src[10], src[11], src[12], src[13], src[14], src[15],
             ]),
@@ -2755,11 +2761,39 @@ pub trait DnpPacketDispatcher: BranchlessKernel + Send + Sync {
         let raw_crc = crc32_block64_zero_seed_words(&payload_words);
         let diff = raw_crc ^ expected_crc32;
         if (diff & 0xFFFF_FF00) != 0 {
-            *phases_out = [0i8; MAX_ATTENTION_HEADS];
             return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
         }
-        store_q7_words_64(phases_out, &payload_words);
-        Ok((diff & 0xFF) as u8)
+        Ok((payload_words, (diff & 0xFF) as u8))
+    }
+
+    /// Verifies and decodes a 64-byte cacheline-aligned GCSO-DNP packet (`packet_payload`) into
+    /// a 64-head Q7 phase/repulsion vector (`phases_out`), returning the recovered 8-bit tag byte.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_STATE`] if `daes_slot.mode != 1`.
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
+    /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if the upper 24 bits of the IEEE 802.3 CRC32
+    /// checksum do not match `expected_crc32`.
+    #[inline]
+    fn decode_and_verify_dnp_packet(
+        &self,
+        daes_slot: &gcso_daes_slot_t,
+        packet_payload: &AlignedSlice64<'_, u8>,
+        expected_crc32: u32,
+        phases_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> GcsoResult<u8> {
+        match self.decode_and_verify_dnp_words(daes_slot, packet_payload, expected_crc32) {
+            Ok((payload_words, tag_byte)) => {
+                store_q7_words_64(phases_out, &payload_words);
+                Ok(tag_byte)
+            }
+            Err(err) => {
+                if err == GCSO_ERROR_CONTAINER_CORRUPTED {
+                    *phases_out = [0i8; MAX_ATTENTION_HEADS];
+                }
+                Err(err)
+            }
+        }
     }
 
     /// Verifies a 64-byte GCSO-DNP packet and applies its decoded 64-head phase/repulsion vector
@@ -2777,47 +2811,12 @@ pub trait DnpPacketDispatcher: BranchlessKernel + Send + Sync {
         bloom_filter: Option<&mut ContrastivePhaseBloomFilter>,
         trail: &mut gcso_pointer_trail_t,
     ) -> GcsoResult<(u8, u8, bool)> {
-        if daes_slot.mode != 1 {
-            return Err(GCSO_ERROR_INVALID_STATE);
-        }
-        if packet_payload.len() < MAX_ATTENTION_HEADS {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        let src = &packet_payload.as_slice()[..MAX_ATTENTION_HEADS];
-        let payload_words = [
-            u64::from_le_bytes([src[0], src[1], src[2], src[3], src[4], src[5], src[6], src[7]]),
-            u64::from_le_bytes([
-                src[8], src[9], src[10], src[11], src[12], src[13], src[14], src[15],
-            ]),
-            u64::from_le_bytes([
-                src[16], src[17], src[18], src[19], src[20], src[21], src[22], src[23],
-            ]),
-            u64::from_le_bytes([
-                src[24], src[25], src[26], src[27], src[28], src[29], src[30], src[31],
-            ]),
-            u64::from_le_bytes([
-                src[32], src[33], src[34], src[35], src[36], src[37], src[38], src[39],
-            ]),
-            u64::from_le_bytes([
-                src[40], src[41], src[42], src[43], src[44], src[45], src[46], src[47],
-            ]),
-            u64::from_le_bytes([
-                src[48], src[49], src[50], src[51], src[52], src[53], src[54], src[55],
-            ]),
-            u64::from_le_bytes([
-                src[56], src[57], src[58], src[59], src[60], src[61], src[62], src[63],
-            ]),
-        ];
-        let raw_crc = crc32_block64_zero_seed_words(&payload_words);
-        let diff = raw_crc ^ expected_crc32;
-        if (diff & 0xFFFF_FF00) != 0 {
-            return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
-        }
-        let tag_byte = (diff & 0xFF) as u8;
+        let (payload_words, tag_byte) =
+            self.decode_and_verify_dnp_words(daes_slot, packet_payload, expected_crc32)?;
         let slot_id = unpack_attractor_slot_from_tag(tag_byte);
         let mode_flags = unpack_action_mode_from_tag(tag_byte);
-        let is_repulsion = (slot_id == ATTRACTOR_SLOT_REPULSION)
-            | ((mode_flags & ACTION_MODE_PHASE_REPULSE) != 0);
+        let is_repulsion =
+            (slot_id == ATTRACTOR_SLOT_REPULSION) | ((mode_flags & ACTION_MODE_PHASE_REPULSE) != 0);
 
         if is_repulsion {
             if let Some(bf) = bloom_filter {
@@ -2830,8 +2829,10 @@ pub trait DnpPacketDispatcher: BranchlessKernel + Send + Sync {
                 &payload_words,
                 inhibition_strength,
             );
-            trail.attractor_pull_force =
-                branchless_min_f32(branchless_flush_subnormal_f32(damped), MAX_ATTRACTOR_PULL_FORCE);
+            trail.attractor_pull_force = branchless_min_f32(
+                branchless_flush_subnormal_f32(damped),
+                MAX_ATTRACTOR_PULL_FORCE,
+            );
             trail.flags |= TRAIL_FLAG_REPULSION_ACTIVE;
         } else {
             let tw = trail_phase_words_mut(trail);
@@ -3728,7 +3729,8 @@ pub trait ColdPathObserver:
                 explore_head_start,
             )?;
         } else if next_mode == 2 {
-            bloom_filter.insert_repulsive_pattern_words_weighted(trail_phase_words_ref(trail_out), 1);
+            bloom_filter
+                .insert_repulsive_pattern_words_weighted(trail_phase_words_ref(trail_out), 1);
             trail_out.flags |= TRAIL_FLAG_REPULSION_ACTIVE;
         }
 
@@ -3787,6 +3789,8 @@ impl<T> FullStackGcsoEngine for T where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::primitives::pack_action_slot_tag;
+    use crate::abi::gcso_srl_descriptor_t;
     use crate::traits::primitives::{
         with_slot_pair_coupled_symmetric, ACTION_PRESET_EXPRESS_PHASE,
         ACTION_PRESET_FULL_ORCHESTRATION, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,

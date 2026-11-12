@@ -128,6 +128,8 @@ pub use crate::attractor::{
 };
 pub use crate::dpsr::{DpsrClosedLoopSteering, DpsrEngine};
 pub use crate::edbc::{EdbcClosedLoopCoordinator, EdbcEngine};
+pub use crate::srl::SrlEngine;
+pub use crate::swarm::SwarmEngine;
 pub use crate::traits::{
     ActionHub, ActionHubGatewayExt, AlignedBuffer128, AlignedBuffer16, AlignedBuffer256,
     AlignedBuffer32, AlignedBuffer512, AlignedBuffer64, AlignedSlice, AlignedSlice128,
@@ -169,15 +171,17 @@ pub use crate::traits::{
     TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
     TRAIL_FLAG_SWARM_ESCALATED, TRAIL_FLAG_SWARM_RESOLVED, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
+pub use crate::zimms::ZimmsEngine;
 
 use crate::traits::branchless::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
-    branchless_ln_f32, branchless_max_f32, branchless_min_f32, branchless_q7_add_sat,
+    branchless_clamp_f32, branchless_fast_transition_log_prob, branchless_flush_subnormal_f32,
+    branchless_is_finite_f32, branchless_max_f32, branchless_min_f32, branchless_q7_add_sat,
     branchless_q7_conjugate_64, branchless_q7_inhibit_words_64, branchless_relu_f32,
     branchless_select_f32, branchless_select_u32, branchless_select_u8,
     coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_pos_normal_f32,
     is_phase_profile_nonzero_64, load_q7_words_64, store_q7_words_64, swar_q7_add_sat_x8,
-    swar_slerp_words_with_uniform_flag_64, trail_phase_words_mut, trail_phase_words_ref,
+    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64,
+    trail_phase_words_mut, trail_phase_words_ref, SWAR_SPLAT_BYTE_64,
 };
 use crate::traits::primitives::{
     finalize_snapshot_header_crc32, init_snapshot_header, verify_snapshot_payload_crc32,
@@ -1081,8 +1085,7 @@ impl RuntimeContext {
             self.link_hallucinated_trails(src_trail_id, selected_id)?;
             let dst_idx = (selected_id as usize).min(candidate_trails.len() - 1);
             let dst_trail = &mut candidate_trails[dst_idx];
-            let cond_prob = branchless_clamp_f32(0.5 * (1.0 + best_coh), DEFAULT_ENTROPY_EPS, 1.0);
-            log_prob = branchless_flush_subnormal_f32(branchless_ln_f32(cond_prob));
+            log_prob = branchless_fast_transition_log_prob(best_coh);
             *trail_phase_words_mut(dst_trail) = final_words;
             let dst_has_anchor = dst_trail.target_anchor_id != 0;
             let inherited_anchor = branchless_select_u32(
@@ -1402,11 +1405,11 @@ impl RuntimeContext {
         trail: &gcso_pointer_trail_t,
     ) -> ([u64; crate::traits::NUM_SWARM_MICRO_CELLS], f32) {
         let tw = *trail_phase_words_ref(trail);
-        let tn = crate::traits::swar_words_nonzero_64(&tw);
+        let tn = swar_words_nonzero_64(&tw);
         let (comp_w, base_pull) = self
             .attractor_space
             .evaluate_multi_domain_superposition_words(&tw, tn);
-        let (init_w, init_nonzero) = if crate::traits::swar_words_nonzero_64(&comp_w) {
+        let (init_w, init_nonzero) = if swar_words_nonzero_64(&comp_w) {
             (comp_w, true)
         } else {
             (tw, tn)
@@ -1438,7 +1441,7 @@ impl RuntimeContext {
                                 &*(bank_2d[idx].as_ptr()
                                     as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
                             };
-                            if crate::traits::swar_words_nonzero_64(slot_w) {
+                            if swar_words_nonzero_64(slot_w) {
                                 let slot_is_uniform =
                                     crate::traits::is_word_array_uniform_64(slot_w);
                                 let coh = if init_nonzero {
@@ -1455,17 +1458,15 @@ impl RuntimeContext {
                                     base_e * branchless_clamp_f32(1.0 + coh, 0.25, 2.0),
                                 );
                                 let total_w = running_pull + res_pull;
-                                if total_w > 1.0e-12
-                                    && !crate::traits::swar_words_equal_64(&run_w, slot_w)
-                                {
+                                if total_w > 1.0e-12 && !swar_words_equal_64(&run_w, slot_w) {
                                     let ratio_f32 = branchless_clamp_f32(
                                         (res_pull * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
                                         0.0,
                                         128.0,
                                     );
                                     let s = (ratio_f32 as u8) as u64;
-                                    let bias_restore = (128u64.wrapping_sub(s))
-                                        .wrapping_mul(0x0101_0101_0101_0101);
+                                    let bias_restore =
+                                        (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
                                     let (next_w, next_uni) = swar_slerp_words_with_uniform_flag_64(
                                         &run_w,
                                         run_is_uniform,
@@ -1492,7 +1493,7 @@ impl RuntimeContext {
                     &*(bank_2d[rep_idx].as_ptr()
                         as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
                 };
-                if crate::traits::swar_words_nonzero_64(rep_words) {
+                if swar_words_nonzero_64(rep_words) {
                     let rep_strength =
                         branchless_clamp_f32(branchless_relu_f32(weights[rep_idx]), 0.0, 1.0);
                     running_pull = branchless_q7_inhibit_words_64(
@@ -2329,7 +2330,10 @@ pub mod prelude {
     };
     pub use crate::dpsr::{DpsrClosedLoopSteering, DpsrEngine};
     pub use crate::edbc::{EdbcClosedLoopCoordinator, EdbcEngine};
+    pub use crate::srl::SrlEngine;
+    pub use crate::swarm::SwarmEngine;
     pub use crate::traits::prelude::*;
+    pub use crate::zimms::ZimmsEngine;
     pub use crate::{Config, Result, RuntimeContext};
 }
 

@@ -188,49 +188,18 @@ impl<T, const ALIGN: usize> Drop for AlignedHeapBuffer<T, ALIGN> {
 #[repr(align(64))]
 struct AlignedQ7Buffer<const N: usize>([gcso_q7_t; N]);
 
-/// Restores `dst` from `src` using 64-bit GPR stores (`store_q7_words_64`) at exact 8-byte offsets
-/// (`offset 56..120`), preventing the 256-bit YMM-store-to-64-bit-GPR-load Store-to-Load Forwarding
-/// (STLF) pipeline stall (`~15–20 cycles`) caused by `*dst = *src` 128-byte struct assignment.
+/// Restores `dst` from `src` using [`gcso_pointer_trail_t::copy_from_fast`] (64-bit GPR stores at
+/// offset `56..120`), preventing 256-bit YMM-to-GPR Store-to-Load Forwarding (STLF) pipeline stalls.
 #[inline(always)]
 fn reset_trail_fast(dst: &mut gcso_pointer_trail_t, src: &gcso_pointer_trail_t) {
-    dst.current_ptr = src.current_ptr;
-    dst.prev_ptr = src.prev_ptr;
-    dst.user_data = src.user_data;
-    dst.transition_cost = src.transition_cost;
-    dst.step_count = src.step_count;
-    dst.stigmergic_density = src.stigmergic_density;
-    dst.target_anchor_id = src.target_anchor_id;
-    dst.cluster_id = src.cluster_id;
-    dst.linked_trail_id = src.linked_trail_id;
-    dst.attractor_pull_force = src.attractor_pull_force;
-    dst.flags = src.flags;
-    *liminika_core::traits::branchless::trail_phase_words_mut(dst) =
-        *liminika_core::traits::branchless::trail_phase_words_ref(src);
+    dst.copy_from_fast(src);
 }
 
-/// Restores `dst` from `src` using 64-bit GPR stores (`store_q7_words_64`) for `phase_profile`,
-/// avoiding 256-bit YMM-to-GPR Store-to-Load Forwarding (STLF) stalls inside `b.iter`.
+/// Restores `dst` from `src` using [`CrystallizedAttractorRecord::copy_from_fast`] (64-bit GPR stores
+/// for `phase_profile`), avoiding 256-bit YMM-to-GPR Store-to-Load Forwarding (STLF) stalls.
 #[inline(always)]
 fn reset_crystal_fast(dst: &mut CrystallizedAttractorRecord, src: &CrystallizedAttractorRecord) {
-    dst.magic = src.magic;
-    dst.version = src.version;
-    dst.anchor_id = src.anchor_id;
-    dst.sample_count = src.sample_count;
-    dst.zimms_section_offset48 = src.zimms_section_offset48;
-    dst.base_energy = src.base_energy;
-    dst.resultant_r_bar = src.resultant_r_bar;
-    dst.von_mises_kappa = src.von_mises_kappa;
-    dst.phase_gravity_mass = src.phase_gravity_mass;
-    dst.ripa_clamp_rad = src.ripa_clamp_rad;
-    dst.effective_inv_temp = src.effective_inv_temp;
-    dst.provenance_bits = src.provenance_bits;
-    dst.checksum_crc32 = src.checksum_crc32;
-    dst.dominant_slot = src.dominant_slot;
-    dst.action_mode_flags = src.action_mode_flags;
-    dst.active_swarm_mask = src.active_swarm_mask;
-    dst.dominant_cause_code = src.dominant_cause_code;
-    dst.reserved_align64 = src.reserved_align64;
-    *dst.phase_words_mut() = *src.phase_words_ref();
+    dst.copy_from_fast(src);
 }
 
 /// Realistic heterogeneous 64-head phase profile on the torus $SO(2)^{64}$ where every head

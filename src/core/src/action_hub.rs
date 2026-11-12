@@ -76,7 +76,6 @@
 #![allow(clippy::ifs_same_cond)]
 #![allow(clippy::field_reassign_with_default)]
 
-use core::f32::consts::LN_2;
 use core::mem::{align_of, offset_of, size_of};
 
 use crate::abi::{
@@ -88,12 +87,13 @@ use crate::traits::aligned::{
     AlignedBuffer64, AlignedSlice16, AlignedSliceMut16, AlignedSliceMut32,
 };
 use crate::traits::branchless::{
-    branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
-    branchless_is_finite_f32, branchless_ln_f32, branchless_max_f32, branchless_min_f32,
-    branchless_relu_f32, branchless_select_f32, branchless_select_u32, branchless_select_u64,
-    branchless_select_u8, branchless_select_usize, coherence_from_word_arrays_64,
-    fast_ln_1p_bounded_f32, load_q7_words_64, scale_f32_slice_unrolled8, swar_q7_add_sat_x8,
-    trail_phase_words_mut, trail_phase_words_ref,
+    branchless_abs_f32, branchless_clamp_f32, branchless_fast_transition_log_prob,
+    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_max_f32,
+    branchless_min_f32, branchless_rad_to_qdps_step_u8, branchless_relu_f32, branchless_select_f32,
+    branchless_select_u32, branchless_select_u64, branchless_select_u8, branchless_select_usize,
+    coherence_from_word_arrays_64, load_q7_words_64, scale_f32_slice_unrolled8, swar_q7_add_sat_x8,
+    swar_q7_qdps_filter_words_64, swar_words_nonzero_64, trail_phase_words_mut,
+    trail_phase_words_ref, SWAR_SPLAT_BYTE_64,
 };
 use crate::traits::gateway::{
     CausalProvenanceSignal, CrystallizedAttractorRecord, GatewayFrame, ManifoldGatewaySignal,
@@ -109,7 +109,7 @@ use crate::traits::primitives::{
     ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
     ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR,
     ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION,
-    DAES_MINI_LEDGER_LEN, DAES_SHORTCUT_SLOTS, DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_ENTROPY_EPS,
+    DAES_MINI_LEDGER_LEN, DAES_SHORTCUT_SLOTS, DEFAULT_ACTION_HUB_CAPACITY,
     DEFAULT_RIPA_CLAMP_MAX_RAD, DEFAULT_SLOT_COUPLING_MATRIX_8X8, MAX_ATTENTION_HEADS,
     MAX_ATTRACTOR_DOMAINS,
 };
@@ -127,7 +127,6 @@ use crate::traits::telemetry::{
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 use crate::traits::{
-    filter_qdps_words_in_registers_64, rad_to_qdps_min_step_q7_u8, swar_words_nonzero_64,
     ActionHub, ActionHubGatewayExt, FractalCascadeCoordinator, GatewayPhaseSteeringExt,
     HotPathExecutionEngine, HotPathObserver,
 };
@@ -165,22 +164,6 @@ const HUB_SLOT_BANK_LEN: usize = MAX_ATTRACTOR_DOMAINS * MAX_ATTENTION_HEADS;
 /// Default initial weights for the 8 parallel Attractor Working Lanes (`0..=7`).
 const DEFAULT_HUB_SLOT_WEIGHTS: [f32; MAX_ATTRACTOR_DOMAINS] =
     [1.0, 1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5];
-
-/// Evaluates conditional transition log-probability $\ln P(M_t \mid M_{t-1}) = \ln(0.5(1 + c))$
-/// using the 1-lookup identity $\ln(1 + c) - \ln 2$ (`fast_ln_1p_bounded_f32`, `0` divisions)
-/// whenever $c \ge 0$, falling back to [`branchless_ln_f32`] only when $c < 0$.
-#[inline(always)]
-#[must_use]
-const fn fast_log_transition_prob(coh: f32) -> f32 {
-    if coh >= 0.999_999 {
-        0.0_f32
-    } else if coh >= 0.0 {
-        branchless_flush_subnormal_f32(fast_ln_1p_bounded_f32(coh) - LN_2)
-    } else {
-        let cond_prob = branchless_clamp_f32(0.5 * (1.0 + coh), DEFAULT_ENTROPY_EPS, 1.0);
-        branchless_flush_subnormal_f32(branchless_ln_f32(cond_prob))
-    }
-}
 
 // ===================================================================
 // 1. Stigmergic Action Decision Enum & Threshold Ladder (`Pod`)
@@ -571,7 +554,7 @@ impl StigmergicThresholds {
         let mut steered = false;
         let mut pspm_routed = false;
         let mut skip_compensated = false;
-        let min_step_q7 = rad_to_qdps_min_step_q7_u8(qdps_min_rad);
+        let min_step_q7 = branchless_rad_to_qdps_step_u8(qdps_min_rad);
 
         match decision {
             StigmergicActionDecision::PassiveSidecar => {}
@@ -583,7 +566,7 @@ impl StigmergicThresholds {
                 let swar_w = if min_step_q7 <= 1 {
                     *steer_words
                 } else {
-                    filter_qdps_words_in_registers_64(steer_words, min_step_q7)
+                    swar_q7_qdps_filter_words_64(steer_words, min_step_q7)
                 };
                 if swar_words_nonzero_64(&swar_w) {
                     if let Some(q) = query_tensor {
@@ -606,7 +589,7 @@ impl StigmergicThresholds {
                 let swar_w = if min_step_q7 <= 1 {
                     *steer_words
                 } else {
-                    filter_qdps_words_in_registers_64(steer_words, min_step_q7)
+                    swar_q7_qdps_filter_words_64(steer_words, min_step_q7)
                 };
                 if swar_words_nonzero_64(&swar_w) {
                     if let Some(q) = query_tensor {
@@ -1263,19 +1246,7 @@ impl ActionHubEngine {
         src: &gcso_pointer_trail_t,
         phase_words: &[u64; NUM_SWARM_MICRO_CELLS],
     ) {
-        dst.current_ptr = src.current_ptr;
-        dst.prev_ptr = src.prev_ptr;
-        dst.user_data = src.user_data;
-        dst.transition_cost = src.transition_cost;
-        dst.step_count = src.step_count;
-        dst.stigmergic_density = src.stigmergic_density;
-        dst.target_anchor_id = src.target_anchor_id;
-        dst.cluster_id = src.cluster_id;
-        dst.linked_trail_id = src.linked_trail_id;
-        dst.attractor_pull_force = src.attractor_pull_force;
-        dst.flags = src.flags;
-        *trail_phase_words_mut(dst) = *phase_words;
-        dst.reserved_padding = src.reserved_padding;
+        dst.copy_from_with_words_fast(src, phase_words);
     }
 
     #[inline(always)]
@@ -1283,26 +1254,14 @@ impl ActionHubEngine {
         dst: &mut gcso_pointer_trail_t,
         src: &gcso_pointer_trail_t,
     ) {
-        Self::copy_trail_and_words_to_slot_fast(dst, src, trail_phase_words_ref(src));
+        dst.copy_from_fast(src);
     }
 
     /// Clears a single inline trail slot in-place using width-matched 64-bit GPR stores (`0` YMM
     /// stores, `0` 256-bit-to-64-bit STLF stalls on subsequent trail reads/writes).
     #[inline(always)]
     pub(crate) fn clear_trail_slot_fast(dst: &mut gcso_pointer_trail_t) {
-        dst.current_ptr = 0;
-        dst.prev_ptr = 0;
-        dst.user_data = 0;
-        dst.transition_cost = 0;
-        dst.step_count = 0;
-        dst.stigmergic_density = 0.0;
-        dst.target_anchor_id = 0;
-        dst.cluster_id = 0;
-        dst.linked_trail_id = 0;
-        dst.attractor_pull_force = 0.0;
-        dst.flags = 0;
-        *trail_phase_words_mut(dst) = [0u64; NUM_SWARM_MICRO_CELLS];
-        dst.reserved_padding = [0; 8];
+        dst.clear_fast();
     }
 
     /// Applies pheromone evaporation across active inline trails (skipping `slot_idx`, which is
@@ -1479,7 +1438,7 @@ impl ActionHubEngine {
                     macro_centroid_words,
                     0.25,
                 );
-            let lp = fast_log_transition_prob(raw_best_coh);
+            let lp = branchless_fast_transition_log_prob(raw_best_coh);
             (sel_id, raw_best_coh, lp, found, bridged_w)
         } else {
             // SAFETY: `self.slot_phase_bank` is 64B-aligned and `pref_slot < 8`.
@@ -1497,7 +1456,7 @@ impl ActionHubEngine {
             } else {
                 1.0_f32
             };
-            let lp = fast_log_transition_prob(slot_coh);
+            let lp = branchless_fast_transition_log_prob(slot_coh);
             (
                 trail_inout.linked_trail_id,
                 slot_coh,
@@ -1819,7 +1778,7 @@ impl PointerActionHub for ActionHubEngine {
         self.trails[inline_idx].accumulate_uniform_phase(phase_delta);
         let slot_idx = (trail_id as usize) & (MAX_ATTRACTOR_DOMAINS - 1);
         if phase_delta != 0 {
-            let splat = ((phase_delta as u8) as u64).wrapping_mul(0x0101_0101_0101_0101);
+            let splat = ((phase_delta as u8) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
             // SAFETY: `self.slot_phase_bank` is 64B-aligned and `slot_idx < 8`.
             let w = unsafe {
                 &mut *(self
@@ -1997,7 +1956,7 @@ impl ManifoldGatewaySignal for ActionHubEngine {
             dominant_slot: dom_slot,
             action_mode_flags: mode_flags,
             active_swarm_cell_mask: self.slot_enabled_mask,
-            qdps_min_step_q7: rad_to_qdps_min_step_q7_u8(qdps_min_rad),
+            qdps_min_step_q7: branchless_rad_to_qdps_step_u8(qdps_min_rad),
             pspm_fact_heads: fact_h,
             pspm_logic_heads: logic_h,
             pspm_explore_heads: explore_h,

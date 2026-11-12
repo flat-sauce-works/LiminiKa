@@ -122,10 +122,10 @@ pub use self::aligned::{
 pub use self::branchless::{
     branchless_abs_f32, branchless_atan2_f32, branchless_atan2_to_q7_fast, branchless_clamp_f32,
     branchless_copysign_f32, branchless_cos_q7, branchless_crc32_128b_words, branchless_crc32_ieee,
-    branchless_exp_f32, branchless_eyring_kramers_escape, branchless_flush_subnormal_f32,
-    branchless_hysteresis_quantize_depth, branchless_inv_pos_f32, branchless_is_finite_f32,
-    branchless_is_nan_f32, branchless_lerp_f32, branchless_ln_f32, branchless_max_f32,
-    branchless_min_f32, branchless_phase_coherence_inv_temp_scale,
+    branchless_exp_f32, branchless_eyring_kramers_escape, branchless_fast_transition_log_prob,
+    branchless_flush_subnormal_f32, branchless_hysteresis_quantize_depth, branchless_inv_pos_f32,
+    branchless_is_finite_f32, branchless_is_nan_f32, branchless_lerp_f32, branchless_ln_f32,
+    branchless_max_f32, branchless_min_f32, branchless_phase_coherence_inv_temp_scale,
     branchless_phase_proximity_gravity_f32, branchless_project_f32_slice_to_q7_64,
     branchless_q7_abs_u8, branchless_q7_accumulate_64, branchless_q7_add_sat,
     branchless_q7_attention_score_delta_64, branchless_q7_bayesian_attention_score_delta_64,
@@ -168,9 +168,11 @@ pub use self::branchless::{
     swar_slerp_word_with_bias_x8, swar_slerp_words_with_bias_64,
     swar_slerp_words_with_uniform_flag_64, swar_u8_add_sat_x8, swar_u8_halve_decay_x8,
     swar_u8_max_x8, swar_u8_mean_round_x8, swar_u8_nonzero_count_x8, swar_u8_sub_sat_x8,
-    swar_u8_sum_x8, trail_phase_words_mut, trail_phase_words_ref, BranchlessKernel,
-    DEFAULT_MAX_VALID_Z_SCORE, DEFAULT_PHASE_GRAVITY_EPS, DEFAULT_RIPA_Q7_TO_NORM_SCALE,
-    F32_MIN_POSITIVE_NORMAL, MAX_PHASE_INTERFERENCE_INV_TEMP, MIN_PHASE_INTERFERENCE_INV_TEMP,
+    swar_u8_sum_x8, swar_words_equal_64, swar_words_nonzero_64, trail_phase_words_mut,
+    trail_phase_words_ref, BranchlessKernel, DEFAULT_MAX_VALID_Z_SCORE, DEFAULT_PHASE_GRAVITY_EPS,
+    DEFAULT_RIPA_Q7_TO_NORM_SCALE, F32_MIN_POSITIVE_NORMAL, MAX_PHASE_INTERFERENCE_INV_TEMP,
+    MIN_PHASE_INTERFERENCE_INV_TEMP, SWAR_EVEN_BYTES_64, SWAR_LOW7_MASK_64, SWAR_ODD_BYTES_64,
+    SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64,
 };
 pub use self::cold_path::{
     AttractorField, AttractorSlotSynergyCoordinator, BottomUpMacroCrystalCoordinator,
@@ -266,39 +268,6 @@ use crate::abi::{
 // Core Composite Ledger: `ActionHub` ("The Thing Itself")
 // ===================================================================
 
-/// Converts a non-negative radian step threshold into a ceiling-rounded Q7 integer cutoff
-/// (`0..=128`) in branchless `const fn` mode.
-#[inline(always)]
-#[must_use]
-pub(crate) const fn rad_to_qdps_min_step_q7_u8(qdps_min_step_rad: f32) -> u8 {
-    branchless_rad_to_qdps_step_u8(qdps_min_step_rad)
-}
-
-/// Returns `true` if any of the 8 64-bit SWAR phase words contains a non-zero Q7 lane.
-#[inline(always)]
-#[must_use]
-pub(crate) const fn swar_words_nonzero_64(words: &[u64; NUM_SWARM_MICRO_CELLS]) -> bool {
-    if words[0] != 0 {
-        return true;
-    }
-    (((words[1] | words[2]) | (words[3] | words[4])) | ((words[5] | words[6]) | words[7])) != 0
-}
-
-/// Returns `true` if two 8-word (64-head) SWAR phase profiles are bit-for-bit identical in constant time.
-#[inline(always)]
-#[must_use]
-pub(crate) const fn swar_words_equal_64(
-    a: &[u64; NUM_SWARM_MICRO_CELLS],
-    b: &[u64; NUM_SWARM_MICRO_CELLS],
-) -> bool {
-    if a[0] != b[0] {
-        return false;
-    }
-    ((((a[1] ^ b[1]) | (a[2] ^ b[2])) | ((a[3] ^ b[3]) | (a[4] ^ b[4])))
-        | (((a[5] ^ b[5]) | (a[6] ^ b[6])) | (a[7] ^ b[7])))
-        == 0
-}
-
 /// Loads the 8 register-resident `u64` SWAR phase words of `trails[trail_idx]` directly from an
 /// already-validated 4-section `.gcso` byte slice (`zimms_bytes`) without re-running a second
 /// full-container IEEE 802.3 CRC32 verification pass.
@@ -327,17 +296,6 @@ pub(crate) fn load_validated_four_section_trail_words_64(
         }
     }
     load_q7_words_64(fallback_phases)
-}
-
-/// Filters 8 register-resident `u64` SWAR words (`raw_words`) via 8-lane SWAR QDPS (`min_step_q7`)
-/// in strictly constant time (`0` data-dependent branches) via [`swar_q7_qdps_filter_words_64`].
-#[inline(always)]
-#[must_use]
-pub(crate) const fn filter_qdps_words_in_registers_64(
-    raw_words: &[u64; NUM_SWARM_MICRO_CELLS],
-    min_step_q7: u8,
-) -> [u64; NUM_SWARM_MICRO_CELLS] {
-    swar_q7_qdps_filter_words_64(raw_words, min_step_q7)
 }
 
 /// Accumulates up to 64 Q7 phase deltas from `delta_slice` directly into an 8-word (`[u64; 8]`)
@@ -425,7 +383,7 @@ pub(crate) fn fuse_lazy_unwrap_and_qdps_from_words_64(
     qdps_min_step_rad: f32,
     fold_geodesic: bool,
 ) -> [u64; NUM_SWARM_MICRO_CELLS] {
-    let min_step_q7 = rad_to_qdps_min_step_q7_u8(qdps_min_step_rad);
+    let min_step_q7 = branchless_rad_to_qdps_step_u8(qdps_min_step_rad);
     let limit = num_heads.min(MAX_ATTENTION_HEADS).min(context_slice.len());
 
     if limit == MAX_ATTENTION_HEADS {
@@ -469,7 +427,7 @@ pub(crate) fn fuse_lazy_unwrap_and_qdps_from_words_64(
                     swar_q7_sub_sat_x8(q_w[7], c_w[7]),
                 ]
             };
-            return filter_qdps_words_in_registers_64(&raw_w, min_step_q7);
+            return swar_q7_qdps_filter_words_64(&raw_w, min_step_q7);
         }
     }
 
@@ -691,13 +649,13 @@ pub trait ActionHub:
         let min_step_q7 = if qdps_min_step_rad.to_bits() == 0 {
             0
         } else {
-            rad_to_qdps_min_step_q7_u8(qdps_min_step_rad)
+            branchless_rad_to_qdps_step_u8(qdps_min_step_rad)
         };
         let filtered_buf;
         let swar_words = if min_step_q7 <= 1 {
             raw_words
         } else {
-            filtered_buf = filter_qdps_words_in_registers_64(raw_words, min_step_q7);
+            filtered_buf = swar_q7_qdps_filter_words_64(raw_words, min_step_q7);
             &filtered_buf
         };
         if !swar_words_nonzero_64(swar_words) {
@@ -737,7 +695,7 @@ pub trait ActionHub:
     }
 
     /// Filters 8 register-resident `u64` SWAR words (`raw_words`) via 8-lane SWAR QDPS
-    /// (`filter_qdps_words_in_registers_64`) and steers `query_tensor` and/or `key_tensor`
+    /// (`swar_q7_qdps_filter_words_64`) and steers `query_tensor` and/or `key_tensor`
     /// with RIPA soft-clamping (`ripa_max_rad`) directly from registers (`0` stack store/reload).
     ///
     /// When all 64 heads are cut off to `0` by QDPS (`!swar_words_nonzero_64(&swar_words)`),
@@ -775,7 +733,7 @@ pub trait ActionHub:
     }
 
     /// Loads `raw_phases` into 8 `u64` SWAR registers, applies 8-lane SWAR QDPS step filtering in
-    /// registers (`filter_qdps_words_in_registers_64`), and steers `query_tensor` and/or `key_tensor`
+    /// registers (`swar_q7_qdps_filter_words_64`), and steers `query_tensor` and/or `key_tensor`
     /// with RIPA soft-clamping (`ripa_max_rad`) without writing/reloading an intermediate stack buffer.
     ///
     /// # Errors
@@ -839,13 +797,13 @@ pub trait ActionHub:
         let min_step_q7 = if qdps_min_step_rad.to_bits() == 0 {
             0
         } else {
-            rad_to_qdps_min_step_q7_u8(qdps_min_step_rad)
+            branchless_rad_to_qdps_step_u8(qdps_min_step_rad)
         };
         let filtered_buf;
         let swar_words = if min_step_q7 <= 1 {
             raw_words
         } else {
-            filtered_buf = filter_qdps_words_in_registers_64(raw_words, min_step_q7);
+            filtered_buf = swar_q7_qdps_filter_words_64(raw_words, min_step_q7);
             &filtered_buf
         };
 
@@ -2423,7 +2381,7 @@ mod tests {
 
         let deg = AlignedBuffer32::new([1.0f32, 3.0, 2.0, 0.5]);
         let lmax =
-            <MockActionHubComposite as cold_path::SheafCohomologyEvaluator>::eval_gershgorin_lambda_max(
+            <MockActionHubComposite as SheafCohomologyEvaluator>::eval_gershgorin_lambda_max(
                 &hub,
                 &deg.as_aligned_slice(),
             )

@@ -44,21 +44,21 @@
 
 use super::aligned::{AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32};
 use super::branchless::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
-    branchless_ln_f32, branchless_max_f32, branchless_min_f32,
+    branchless_clamp_f32, branchless_fast_transition_log_prob, branchless_flush_subnormal_f32,
+    branchless_is_finite_f32, branchless_min_f32,
     branchless_phase_coherence_inv_temp_scale, branchless_q7_circular_resultant_64,
-    branchless_q7_slerp_64, branchless_relu_f32, branchless_select_f32, branchless_select_u32,
-    branchless_select_u64, branchless_select_u8, branchless_splitmix64,
-    coherence_from_word_arrays_64, load_q7_words_64, scale_f32_slice_unrolled8,
-    swar_add_sat_q7_slice_in_place, swar_circular_add_and_fold_geodesic_q7_slice_in_place,
-    swar_q7_add_sat_x8, swar_slerp_words_with_bias_64, trail_phase_words_mut,
-    trail_phase_words_ref, BranchlessKernel,
+    branchless_q7_slerp_64, branchless_rad_to_qdps_step_u8, branchless_relu_f32,
+    branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
+    branchless_splitmix64, coherence_from_word_arrays_64, load_q7_words_64,
+    scale_f32_slice_unrolled8, swar_add_sat_q7_slice_in_place,
+    swar_circular_add_and_fold_geodesic_q7_slice_in_place, swar_q7_add_sat_x8,
+    swar_slerp_words_with_bias_64, swar_words_equal_64, swar_words_nonzero_64,
+    trail_phase_words_mut, trail_phase_words_ref, BranchlessKernel, SWAR_SPLAT_BYTE_64,
 };
 use super::gateway::CrystallizedAttractorRecord;
 use super::primitives::{
     GcsoResult, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ATTRACTOR_SLOT_ID_MASK,
-    ATTRACTOR_SLOT_REPULSION, DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
-    PAGED_BITMASK_BITS,
+    ATTRACTOR_SLOT_REPULSION, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PAGED_BITMASK_BITS,
 };
 use super::rope::steer_from_swar_words_core_safe;
 use super::telemetry::{
@@ -72,8 +72,7 @@ use super::telemetry::{
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 use super::{
-    accumulate_q7_slice_into_words_64, fuse_lazy_unwrap_and_qdps_from_words_64,
-    rad_to_qdps_min_step_q7_u8, swar_words_equal_64, swar_words_nonzero_64, ActionHub,
+    accumulate_q7_slice_into_words_64, fuse_lazy_unwrap_and_qdps_from_words_64, ActionHub,
 };
 use crate::abi::{
     gcso_daes_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t,
@@ -378,7 +377,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
         self.step_pointer(input_ptr.raw(), trail_out)?;
-        let qdps_step_q7 = rad_to_qdps_min_step_q7_u8(qdps_min_step_rad);
+        let qdps_step_q7 = branchless_rad_to_qdps_step_u8(qdps_min_step_rad);
         Ok(trail_out.resolve_unified_field_in_swarm_to_words(
             input_ptr,
             anchor_phases,
@@ -624,7 +623,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
         let bank_2d =
             slot_phase_bank.as_slot_bank::<MAX_ATTRACTOR_DOMAINS, MAX_ATTENTION_HEADS>()?;
         self.step_pointer(input_ptr.raw(), trail_out)?;
-        let qdps_step_q7 = rad_to_qdps_min_step_q7_u8(qdps_min_step_rad);
+        let qdps_step_q7 = branchless_rad_to_qdps_step_u8(qdps_min_step_rad);
         Ok(trail_out.resolve_slot_bank_in_swarm_to_words(
             input_ptr,
             bank_2d,
@@ -827,18 +826,13 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
                 *trail_phase_words_mut(dst_trail) = *src_w;
             } else {
                 let dst_w = *trail_phase_words_ref(dst_trail);
-                let bias_restore = (128u64.wrapping_sub(t_s)).wrapping_mul(0x0101_0101_0101_0101);
+                let bias_restore = (128u64.wrapping_sub(t_s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
                 *trail_phase_words_mut(dst_trail) =
                     swar_slerp_words_with_bias_64(src_w, &dst_w, t_s, bias_restore);
             }
         }
 
-        let log_prob = if raw_coh >= 1.0 - 1.0e-7 {
-            0.0_f32
-        } else {
-            let prob = branchless_max_f32(0.5 * (1.0 + raw_coh), 1.0e-6);
-            branchless_ln_f32(prob)
-        };
+        let log_prob = branchless_fast_transition_log_prob(raw_coh);
 
         dst_trail.prev_ptr = src_trail.current_ptr;
         dst_trail.step_count = src_trail.step_count.wrapping_add(1);
@@ -1838,8 +1832,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             self.link_hallucinated_trails(src_trail_id, selected_id)?;
             let dst_idx = (selected_id as usize).min(candidate_trails.len() - 1);
             let dst_trail = &mut candidate_trails[dst_idx];
-            let cond_prob = branchless_clamp_f32(0.5 * (1.0 + best_coh), DEFAULT_ENTROPY_EPS, 1.0);
-            log_prob = branchless_flush_subnormal_f32(branchless_ln_f32(cond_prob));
+            log_prob = branchless_fast_transition_log_prob(best_coh);
             *trail_phase_words_mut(dst_trail) = post_w;
             let dst_has_anchor = dst_trail.target_anchor_id != 0;
             let inherited_anchor = branchless_select_u32(

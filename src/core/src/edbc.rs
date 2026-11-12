@@ -69,7 +69,7 @@ use crate::abi::{
 use crate::traits::aligned::{AlignedSlice32, AlignedSliceMut32};
 use crate::traits::branchless::{
     branchless_abs_f32, branchless_clamp_f32, branchless_eyring_kramers_escape,
-    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_ln_f32,
+    branchless_fast_transition_log_prob, branchless_flush_subnormal_f32, branchless_is_finite_f32,
     branchless_max_f32, branchless_min_f32, branchless_phase_coherence_inv_temp_scale,
     branchless_popcount_rsqrt_u32, branchless_q7_add_sat,
     branchless_q7_unified_field_fold_words_with_init_weight_64, branchless_rad_to_q7,
@@ -79,9 +79,9 @@ use crate::traits::branchless::{
     coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_len_f32,
     fast_inv_pos_normal_f32, fast_ln_1p_bounded_f32, is_word_array_uniform_64, load_q7_words_64,
     scale_f32_slice_unrolled8, store_q7_word_at, store_q7_words_64, sum_abs_and_sq_f32_simd8,
-    sum_sq_f32_simd8, swar_q7_add_sat_x8, swar_q7_neg_sat_x8, tanh_lut_eval_nonneg,
-    trail_phase_words_mut, trail_phase_words_ref, DEFAULT_MAX_VALID_Z_SCORE,
-    F32_MIN_POSITIVE_NORMAL, Q7_FULL_COS_REF,
+    sum_sq_f32_simd8, swar_q7_add_sat_x8, swar_q7_neg_sat_x8, swar_q7_qdps_filter_words_64,
+    swar_words_equal_64, tanh_lut_eval_nonneg, trail_phase_words_mut, trail_phase_words_ref,
+    DEFAULT_MAX_VALID_Z_SCORE, F32_MIN_POSITIVE_NORMAL, Q7_FULL_COS_REF, SWAR_SPLAT_BYTE_64,
 };
 use crate::traits::cold_path::{
     EdbcBranchController, EntropyEvaluator, HierarchicalTreeTable, SheafCohomologyEvaluator,
@@ -106,8 +106,6 @@ use crate::traits::telemetry::{
     TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
     TRAIL_FLAG_SYNERGY_RESONANCE,
 };
-use crate::traits::{filter_qdps_words_in_registers_64, swar_words_equal_64};
-
 /// Normal entropy convergence mode (`Mode 0`: single stable attractor at origin $x^* = 0$).
 pub const EDBC_MODE_NORMAL_ENTROPY: u32 = 0;
 
@@ -152,26 +150,6 @@ pub const MAX_VALID_TOKEN_Z_SCORE: f32 = DEFAULT_MAX_VALID_Z_SCORE;
 /// instructions during normalized entropy scaling.
 const INV_LN_2: f32 = 1.0 / LN_2;
 
-/// Evaluates the conditional transition log-probability $\ln P(M_t \mid M_{t-1}) = \ln(0.5(1 + c))$
-/// using the 1-lookup identity $\ln(1 + c) - \ln 2$ (`fast_ln_1p_bounded_f32`, `0` divisions)
-/// whenever $c \ge 0$, falling back to [`branchless_ln_f32`] only when $c < 0$.
-#[inline(always)]
-#[must_use]
-const fn fast_transition_log_prob_from_coh(coh: f32) -> f32 {
-    if coh >= 0.999_999 {
-        0.0_f32
-    } else if coh >= 0.0 {
-        branchless_flush_subnormal_f32(fast_ln_1p_bounded_f32(coh) - LN_2)
-    } else {
-        let cond_prob = branchless_clamp_f32(0.5 * (1.0 + coh), DEFAULT_ENTROPY_EPS, 1.0);
-        branchless_flush_subnormal_f32(branchless_ln_f32(cond_prob))
-    }
-}
-
-/// Multiplier broadcasting an 8-bit value across all 8 byte lanes of a 64-bit SWAR word.
-const SWAR_SPLAT_BYTE_64: u64 = 0x0101_0101_0101_0101;
-
-/// Upper bound on stigmergic density $\rho_{\mathrm{stigmergy}}$ in Bayesian transition scoring.
 /// Constant Look-Up Table (LUT) for branch mode sample temperatures `[Mode 0, Mode 1, Mode 2]`.
 const LUT_SAMPLE_TEMPERATURE: [f32; 3] = [1.0, 1.2, 1.5];
 
@@ -589,7 +567,7 @@ fn bridge_and_eval_liminal_trail_chain_single_pass(
                 }
 
                 if post_coh < 0.999_999 {
-                    joint_log_prob += fast_transition_log_prob_from_coh(post_coh);
+                    joint_log_prob += branchless_fast_transition_log_prob(post_coh);
                     coboundary_defect_sum += branchless_relu_f32(0.5 * (1.0 - post_coh));
                 }
 
@@ -833,7 +811,7 @@ fn bridge_and_eval_liminal_trail_chain_single_pass(
             }
 
             if post_coh < 0.999_999 {
-                joint_log_prob += fast_transition_log_prob_from_coh(post_coh);
+                joint_log_prob += branchless_fast_transition_log_prob(post_coh);
                 coboundary_defect_sum += branchless_relu_f32(0.5 * (1.0 - post_coh));
             }
 
@@ -1365,7 +1343,7 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
             (dst_trail.flags | TRAIL_FLAG_SYNERGY_RESONANCE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE)
                 & !TRAIL_FLAG_REPULSION_ACTIVE;
 
-        let transition_lp = fast_transition_log_prob_from_coh(best_coh);
+        let transition_lp = branchless_fast_transition_log_prob(best_coh);
         (best_id, best_score, transition_lp, true)
     } else {
         bloom_filter.insert_repulsive_pattern_words_weighted(&src_w, 1);
@@ -1802,7 +1780,7 @@ fn step_via_gateway_frame_with_words_core<
     if (qdps_step > 1) & (!qdps_filtered_in_vec) & has_cur_pull & (!next_eq_gw)
         && (!swar_words_equal_64(&next_w, gw_w))
     {
-        next_w = filter_qdps_words_in_registers_64(&next_w, qdps_step);
+        next_w = swar_q7_qdps_filter_words_64(&next_w, qdps_step);
         next_eq_cur = false;
     }
     if repulsion_triggered & (!frame_repulsion) {

@@ -80,7 +80,9 @@ use crate::traits::branchless::{
     crc32_step_block64_words, crc32_step_l16, crc32_step_l32, crc32_step_l8, fast_inv_len_f32,
     fast_inv_pos_normal_f32, is_phase_profile_nonzero_64, is_word_array_uniform_64,
     load_q7_words_64, store_q7_word_at, store_q7_words_64, swar_q7_qdps_filter_words_64,
-    swar_q7_scale_le128_with_bias_x8, swar_q7_sub_sat_x8, trail_phase_words_ref, Q7_FULL_COS_REF,
+    swar_q7_scale_le128_with_bias_x8, swar_q7_sub_sat_x8, swar_words_nonzero_64,
+    trail_phase_words_ref, Q7_FULL_COS_REF, SWAR_LOW7_MASK_64, SWAR_SIGN_MASK_64,
+    SWAR_SPLAT_BYTE_64,
 };
 use crate::traits::cold_path::{
     AttractorField, ColdPathTrailCrystalExt, MultiDomainAttractorSpace, PersonaPatcher,
@@ -161,8 +163,8 @@ pub const fn hash_bytes_to_q7_phases(
         seed = branchless_splitmix64(
             seed.wrapping_add((w as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)),
         );
-        let shifted = (seed >> 1) & 0x7F7F_7F7F_7F7F_7F7F;
-        let signed_w = shifted ^ (seed & 0x8080_8080_8080_8080);
+        let shifted = (seed >> 1) & SWAR_LOW7_MASK_64;
+        let signed_w = shifted ^ (seed & SWAR_SIGN_MASK_64);
         store_q7_word_at(&mut out, w * 8, signed_w);
         w += 1;
     }
@@ -228,15 +230,6 @@ const fn q7_phases_to_embedding16(phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> 
         i += 1;
     }
     emb
-}
-
-#[inline(always)]
-#[must_use]
-const fn words_any_nonzero_64(w: &[u64; 8]) -> bool {
-    if w[0] != 0 {
-        return true;
-    }
-    ((w[1] | (w[2] | w[3])) | ((w[4] | w[5]) | (w[6] | w[7]))) != 0
 }
 
 // ===================================================================
@@ -774,7 +767,7 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
             let mut w0 = w[0];
             if scale_u7 < 128 {
                 let s = scale_u7 as u64;
-                let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(0x0101_0101_0101_0101);
+                let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
                 w0 = swar_q7_scale_le128_with_bias_x8(w0, s, bias_restore);
             }
             if step_u8 > 1 {
@@ -784,7 +777,7 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
         } else {
             if scale_u7 < 128 {
                 let s = scale_u7 as u64;
-                let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(0x0101_0101_0101_0101);
+                let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
                 w = [
                     swar_q7_scale_le128_with_bias_x8(w[0], s, bias_restore),
                     swar_q7_scale_le128_with_bias_x8(w[1], s, bias_restore),
@@ -853,7 +846,7 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
         );
         let effective_mass = branchless_flush_subnormal_f32(raw_mass * prior);
         let coord_w = load_q7_words_64(&coords);
-        let has_signal = (effective_mass > 1.0e-9) & words_any_nonzero_64(&coord_w);
+        let has_signal = (effective_mass > 1.0e-9) & swar_words_nonzero_64(&coord_w);
         let gated_mass = branchless_select_f32(has_signal, effective_mass, 0.0);
 
         let (resonant_pull, coherence) = if has_signal {
@@ -2634,7 +2627,7 @@ impl AttractorFieldEngine {
                     let anc_nonzero = if anc_is_uniform {
                         anc_w[0] != 0
                     } else {
-                        words_any_nonzero_64(anc_w)
+                        swar_words_nonzero_64(anc_w)
                     };
                     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                     if anc_is_uniform & run_is_uniform & (init_is_uniform | !init_nonzero) {
@@ -2671,8 +2664,8 @@ impl AttractorFieldEngine {
                                 if s >= 128 {
                                     run_w0 = aw0;
                                 } else if s > 0 {
-                                    let bias_restore = (128u64.wrapping_sub(s))
-                                        .wrapping_mul(0x0101_0101_0101_0101);
+                                    let bias_restore =
+                                        (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
                                     run_w0 =
                                         crate::traits::branchless::swar_slerp_word_unchecked_x8(
                                             run_w0,
@@ -2805,7 +2798,8 @@ impl AttractorFieldEngine {
                             if running_pull <= 1.0e-12 {
                                 run_w = *anc_w;
                                 run_is_uniform = anc_is_uniform;
-                            } else if !crate::traits::swar_words_equal_64(&run_w, anc_w) {
+                            } else if !crate::traits::branchless::swar_words_equal_64(&run_w, anc_w)
+                            {
                                 let ratio_f32 = branchless_clamp_f32(
                                     (pull * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
                                     0.0,
@@ -2813,7 +2807,7 @@ impl AttractorFieldEngine {
                                 );
                                 let s = (ratio_f32 as u8) as u64;
                                 let bias_restore =
-                                    (128u64.wrapping_sub(s)).wrapping_mul(0x0101_0101_0101_0101);
+                                    (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
                                 let (next_w, next_uni) =
                                     crate::traits::branchless::swar_slerp_words_with_uniform_flag_64(
                                         &run_w,
@@ -2858,9 +2852,9 @@ impl AttractorFieldEngine {
         };
         if rep_scale_u7 > 0 {
             let rep_w = *self.repulsion_words_ref();
-            if words_any_nonzero_64(&rep_w) {
+            if swar_words_nonzero_64(&rep_w) {
                 let rep_s = rep_scale_u7 as u64;
-                let rep_bias = (128u64.wrapping_sub(rep_s)).wrapping_mul(0x0101_0101_0101_0101);
+                let rep_bias = (128u64.wrapping_sub(rep_s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
                 if is_word_array_uniform_64(&rep_w) {
                     let sc0 = swar_q7_scale_le128_with_bias_x8(rep_w[0], rep_s, rep_bias);
                     if sc0 != 0 {
@@ -2931,7 +2925,7 @@ impl AttractorFieldEngine {
         composite_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let init_w = trail_phase_words_ref(trail);
-        let init_nonzero = (init_w[0] != 0) || words_any_nonzero_64(init_w);
+        let init_nonzero = (init_w[0] != 0) || swar_words_nonzero_64(init_w);
         let (run_w, pull) = self.evaluate_composite_attractor_force_words(init_w, init_nonzero);
         store_q7_words_64(composite_phase_out, &run_w);
         pull
@@ -2947,7 +2941,7 @@ impl AttractorFieldEngine {
         trail: &gcso_pointer_trail_t,
     ) -> (f32, f32, gcso_q7_t, f32) {
         let init_w = trail_phase_words_ref(trail);
-        let init_nonzero = (init_w[0] != 0) || words_any_nonzero_64(init_w);
+        let init_nonzero = (init_w[0] != 0) || swar_words_nonzero_64(init_w);
         let (run_w, pull) = self.evaluate_composite_attractor_force_words(init_w, init_nonzero);
         let (r_bar, mean_q7, kappa) = circular_resultant_from_words_64(&run_w);
         (pull, r_bar, mean_q7, kappa)
@@ -2962,7 +2956,7 @@ impl AttractorFieldEngine {
         snapshot_out: &mut AttractorGrowthSnapshot,
     ) -> u32 {
         let init_w = trail_phase_words_ref(reference_trail);
-        let init_nonzero = (init_w[0] != 0) || words_any_nonzero_64(init_w);
+        let init_nonzero = (init_w[0] != 0) || swar_words_nonzero_64(init_w);
         let (run_w, _pull) = self.evaluate_composite_attractor_force_words(init_w, init_nonzero);
         let prev_clear_end = snapshot_out.init_header_and_persona_from_words(
             self.step_counter,
@@ -3478,7 +3472,7 @@ impl MultiAttractorSpace {
         let mut pulls = [0.0_f32; MAX_ATTRACTOR_DOMAINS];
         let mut max_pull = 0.0_f32;
         let init_w = trail_phase_words_ref(trail);
-        let init_nonzero = (init_w[0] != 0) || words_any_nonzero_64(init_w);
+        let init_nonzero = (init_w[0] != 0) || swar_words_nonzero_64(init_w);
 
         for (idx, field) in self.fields.iter().enumerate() {
             if ((self.active_domains_mask & (1 << idx)) != 0) & (field.active_count > 0) {
@@ -3508,7 +3502,7 @@ impl MultiAttractorSpace {
         lane_pulls_out: &mut [f32; MAX_ATTRACTOR_DOMAINS],
     ) -> f32 {
         let init_w = trail_phase_words_ref(trail);
-        let init_nonzero = (init_w[0] != 0) || words_any_nonzero_64(init_w);
+        let init_nonzero = (init_w[0] != 0) || swar_words_nonzero_64(init_w);
 
         let rep_field = &self.fields[DOMAIN_PHASE_REPULSION as usize];
         let rep_w_gain = branchless_relu_f32(self.domain_weights[DOMAIN_PHASE_REPULSION as usize]);
@@ -3758,7 +3752,7 @@ impl MultiAttractorSpace {
         composite_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let init_w = trail_phase_words_ref(trail);
-        let init_nonzero = (init_w[0] != 0) || words_any_nonzero_64(init_w);
+        let init_nonzero = (init_w[0] != 0) || swar_words_nonzero_64(init_w);
         let (running_w, pull) =
             self.evaluate_multi_domain_superposition_words(init_w, init_nonzero);
         store_q7_words_64(composite_phase_out, &running_w);
@@ -3775,7 +3769,7 @@ impl MultiAttractorSpace {
         snapshot_out: &mut AttractorGrowthSnapshot,
     ) -> u32 {
         let init_w = trail_phase_words_ref(reference_trail);
-        let init_nonzero = (init_w[0] != 0) || words_any_nonzero_64(init_w);
+        let init_nonzero = (init_w[0] != 0) || swar_words_nonzero_64(init_w);
         let (run_w, _pull) = self.evaluate_multi_domain_superposition_words(init_w, init_nonzero);
         let rep_field = &self.fields[DOMAIN_PHASE_REPULSION as usize];
         let prev_clear_end = snapshot_out.init_header_and_persona_from_words(
