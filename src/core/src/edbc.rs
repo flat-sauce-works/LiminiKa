@@ -1269,63 +1269,31 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
         let dst_trail = &mut candidate_trails[best_idx];
         if !best_cand_eq_src {
             let s = branchless_select_u8(interpolation_u7 > 128, 128, interpolation_u7) as u64;
+            #[allow(unused_mut)]
+            let mut handled_avx2 = false;
             #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-            if !best_cand_is_uniform {
-                if s > 0 && s < 128 {
-                    unsafe {
-                        use core::arch::x86_64::_mm256_sub_epi8;
-                        let (bvd0, bvd1) = match best_diff_opt {
-                            Some(vd) => vd,
-                            None => {
-                                let (bvc0, bvc1) = crate::traits::branchless::avx2_words64_to_vec64(
-                                    trail_phase_words_ref(dst_trail),
-                                );
-                                (_mm256_sub_epi8(bvc0, vs0), _mm256_sub_epi8(bvc1, vs1))
-                            }
-                        };
-                        let (vr0, vr1) = crate::traits::branchless::avx2_slerp_from_diff_vec64(
-                            vs0, vs1, bvd0, bvd1, s,
-                        );
-                        let bridged_w = crate::traits::branchless::avx2_vec64_to_words64(vr0, vr1);
-                        *trail_phase_words_mut(src_trail) = bridged_w;
-                        *trail_phase_words_mut(dst_trail) = bridged_w;
-                    }
-                } else {
-                    let best_w = *trail_phase_words_ref(dst_trail);
-                    if !swar_words_equal_64(&src_w, &best_w) {
-                        if s == 0 {
-                            *trail_phase_words_mut(dst_trail) = src_w;
-                        } else {
-                            *trail_phase_words_mut(src_trail) = best_w;
+            if !best_cand_is_uniform && s > 0 && s < 128 {
+                handled_avx2 = true;
+                unsafe {
+                    use core::arch::x86_64::_mm256_sub_epi8;
+                    let (bvd0, bvd1) = match best_diff_opt {
+                        Some(vd) => vd,
+                        None => {
+                            let (bvc0, bvc1) = crate::traits::branchless::avx2_words64_to_vec64(
+                                trail_phase_words_ref(dst_trail),
+                            );
+                            (_mm256_sub_epi8(bvc0, vs0), _mm256_sub_epi8(bvc1, vs1))
                         }
-                    }
-                }
-            } else {
-                let best_w = *trail_phase_words_ref(dst_trail);
-                if !swar_words_equal_64(&src_w, &best_w) {
-                    if s == 0 {
-                        *trail_phase_words_mut(dst_trail) = src_w;
-                    } else if s >= 128 {
-                        *trail_phase_words_mut(src_trail) = best_w;
-                    } else {
-                        let bias_restore =
-                            (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-                        let bw = crate::traits::swar_slerp_words_with_uniform_flag_64(
-                            &src_w,
-                            src_is_uniform,
-                            &best_w,
-                            best_cand_is_uniform,
-                            s,
-                            bias_restore,
-                        )
-                        .0;
-                        *trail_phase_words_mut(src_trail) = bw;
-                        *trail_phase_words_mut(dst_trail) = bw;
-                    }
+                    };
+                    let (vr0, vr1) = crate::traits::branchless::avx2_slerp_from_diff_vec64(
+                        vs0, vs1, bvd0, bvd1, s,
+                    );
+                    let bridged_w = crate::traits::branchless::avx2_vec64_to_words64(vr0, vr1);
+                    *trail_phase_words_mut(src_trail) = bridged_w;
+                    *trail_phase_words_mut(dst_trail) = bridged_w;
                 }
             }
-            #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-            {
+            if !handled_avx2 {
                 let best_w = *trail_phase_words_ref(dst_trail);
                 if !swar_words_equal_64(&src_w, &best_w) {
                     if s == 0 {
