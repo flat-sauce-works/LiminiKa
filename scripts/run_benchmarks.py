@@ -744,7 +744,7 @@ def main() -> None:
     )
 
     # Criterion's `configure_from_args()` accepts a single positive positional regex `[FILTER]`
-    # and does NOT support `libtest`'s `--skip` flag. When `effective_skip` is active, combine
+    # and does not support `libtest`'s `--skip` flag. When `effective_skip` is active, combine
     # `LIMINIKA_RUN_PROVISIONAL_GCSO=0` (in-process group gating in `bench_dpsr.rs`/`bench_edbc.rs`)
     # with an anchored Core-group regex when a sub-profile filter is present.
     effective_filter: str | None

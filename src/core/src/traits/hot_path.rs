@@ -1884,7 +1884,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     /// Executes a **Single-Manifold Unified-Field 8-Cell SWAR Micro-Swarm** token cascade:
     /// resolves the composite phase trajectory of `anchor_phases` and `anchor_base_energies`
     /// across the 8 Micro-Swarm cells via [`PointerActionHub::step_and_resolve_in_unified_field_swarm`]
-    /// and steers ONLY the resolved 8-head cell groups (`report.quorum_mask`) in `query_tensor`
+    /// and steers only the resolved 8-head cell groups (`report.quorum_mask`) in `query_tensor`
     /// and/or `key_tensor`.
     ///
     /// # Errors
@@ -2041,7 +2041,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     /// Executes a **Lazy Phase Unwrap** token cascade (Section 2.3): fuses relative phase
     /// subtraction (`trail_out.accumulated_phase_delta - context_phases`) and 8-lane SWAR QDPS
     /// filtering directly in 64-bit registers (`fuse_lazy_unwrap_and_qdps_words_64`) and rotates
-    /// ONLY `query_tensor` via `steer_from_swar_words_core_safe` (`0` stack buffer allocation,
+    /// only `query_tensor` via `steer_from_swar_words_core_safe` (`0` stack buffer allocation,
     /// `0` historical KV cache mutation).
     ///
     /// # Errors
@@ -2319,7 +2319,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
 
     /// Executes an **8-Cell SWAR Micro-Swarm Quorum-Gated** token cascade: resolves the target
     /// Attractor Slot phase command across the 8 Micro-Swarm cells via
-    /// [`PointerActionHub::step_and_resolve_in_swarm`] and steers ONLY the resolved 8-head cell
+    /// [`PointerActionHub::step_and_resolve_in_swarm`] and steers only the resolved 8-head cell
     /// groups (`report.quorum_mask`) in `query_tensor` and/or `key_tensor` via
     /// [`super::rope::PhaseSteering::apply_swarm_quorum_gated_steering_safe`].
     ///
