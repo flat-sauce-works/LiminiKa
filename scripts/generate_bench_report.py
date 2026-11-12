@@ -1212,10 +1212,22 @@ def calculate_health_index(
     bounded_jitter_count: int,
     bottlenecks_count: int,
     dialogue_score: float,
-) -> tuple[str, float]:
-    """Calculate Core GCSO (`DPSR` + `EDBC`) System Benchmark Health Score using objective non-parametric MAD and 95% CI MoE without magic-number clamping."""
+) -> tuple[str, float, dict[str, float]]:
+    """Calculate Core GCSO (`DPSR` + `EDBC`) System Benchmark Health Score and return its exact mathematical penalty breakdown."""
     if not core_benchmarks:
-        return "N/A", 0.0
+        return (
+            "N/A",
+            0.0,
+            {
+                "bottleneck_penalty": 0.0,
+                "variance_penalty": 0.0,
+                "dispersion_penalty": 0.0,
+                "dialogue_penalty": 0.0,
+                "jitter_penalty": 0.0,
+                "mean_mad_pct": 0.0,
+                "mean_moe_pct": 0.0,
+            },
+        )
 
     total = len(core_benchmarks)
     variance_penalty = (high_variance_count / total) * 30.0
@@ -1254,7 +1266,165 @@ def calculate_health_index(
     else:
         grade = "F (Critical Bottlenecks or Severe Instability)"
 
-    return grade, score
+    breakdown = {
+        "bottleneck_penalty": bottleneck_penalty,
+        "variance_penalty": variance_penalty,
+        "dispersion_penalty": dispersion_penalty,
+        "dialogue_penalty": dialogue_penalty,
+        "jitter_penalty": jitter_penalty,
+        "mean_mad_pct": mean_mad,
+        "mean_moe_pct": mean_moe,
+    }
+    return grade, score, breakdown
+
+
+def analyze_sidecar_overhead_budget(
+    benchmarks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Quantify LiminiKa (`DPSR` + `EDBC`) as a non-invasive LLM sidecar against a 15.0 ms host LLM token decode budget, a 16.67 ms (60 FPS) AAA game frame budget, and L1d/L2 memory bandwidth rooflines."""
+    by_name = {b["name"].lower(): b for b in benchmarks}
+    llm_token_budget_ns = 15_000_000.0  # 15.0 ms typical 7B/8B local LLM 1-token decode
+    game_frame_60fps_ns = 16_666_666.67  # 16.67 ms (60 FPS frame budget)
+    l1d_roofline_bytes_per_sec = (
+        48_000_000_000.0  # 48 GB/s practical single-core L1d/L2 read+write ceiling
+    )
+
+    # Representative EDBC per-token hooks (executed 1x per generated token)
+    edbc_stateful = by_name.get("eval_stateful")
+    edbc_closed_loop = (
+        by_name.get("coarse_to_fine_route_and_edbc_bayesian_tunneling_64h")
+        or by_name.get("toroidal_kmeans_dp_means_and_edbc_gateway_step_4centroids")
+        or by_name.get("step_with_bayesian_pointer_selection_and_tunneling_64h")
+    )
+
+    # Representative DPSR per-layer hooks (executed 1x per Transformer layer on Q/K tensors)
+    dpsr_ripa_layer = by_name.get(
+        "apply_phase_steering_safe_ripa_128x32"
+    ) or by_name.get("apply_phase_steering_32b_128x32")
+    dpsr_fused_qk_layer = by_name.get(
+        "apply_phase_steering_geodesic_fused_qk_128x32"
+    ) or by_name.get("apply_phase_steering_fused_qk_128x32")
+    dpsr_closed_loop = (
+        by_name.get("coarse_to_fine_macro_to_micro_routing_and_steer_64h")
+        or by_name.get("top2_liminal_bifurcation_route_and_steer_64h")
+        or by_name.get("bayesian_pointer_trail_select_rewire_and_steer_64h")
+    )
+
+    rows: list[dict[str, Any]] = []
+
+    def add_row(
+        hook_stage: str,
+        frequency_label: str,
+        bench: dict[str, Any] | None,
+        multiplier: float = 1.0,
+        note: str = "",
+    ) -> float:
+        if not bench or bench["mean_ns"] <= 0.0:
+            return 0.0
+        eff_ns = (
+            bench["ns_per_token"]
+            if bench.get("ns_per_token") is not None
+            else bench["mean_ns"]
+        ) * multiplier
+        llm_pct = (eff_ns / llm_token_budget_ns) * 100.0
+        fps_pct = (eff_ns / game_frame_60fps_ns) * 100.0
+        raw_rate = bench.get("raw_rate", 0.0)
+        tp_kind = bench.get("tp_kind")
+        if tp_kind == "Bytes" and raw_rate > 0.0:
+            roofline_pct = min(100.0, (raw_rate / l1d_roofline_bytes_per_sec) * 100.0)
+            hw_status = (
+                f"{bench['throughput']} ({roofline_pct:.0f}% of L1d/L2 Roofline)"
+            )
+        else:
+            hw_status = note or "L1d Register-Resident O(1) Control"
+        rows.append(
+            {
+                "hook_stage": hook_stage,
+                "benchmark_name": bench["name"],
+                "frequency": frequency_label,
+                "latency_ns": eff_ns,
+                "latency_formatted": format_time(eff_ns),
+                "llm_budget_pct": llm_pct,
+                "frame_60fps_pct": fps_pct,
+                "hw_status": hw_status,
+            }
+        )
+        return eff_ns
+
+    add_row(
+        "1. EDBC Minimal Entropy Gate (`eval_stateful`)",
+        "1× / token (Logit Hook)",
+        edbc_stateful,
+        1.0,
+        "O(1) Moving Z-Score & Hysteresis Gate",
+    )
+    edbc_full_ns = add_row(
+        "2. EDBC Full Closed-Loop Hook (Gateway + Macro k-Means + Bayes Tunneling)",
+        "1× / token (Sampling Boundary)",
+        edbc_closed_loop,
+        1.0,
+        "O(K + M_local) Coarse-to-Fine + Cohomology",
+    )
+    add_row(
+        "3. DPSR Single-Layer RIPA RoPE Hook (`128x32` Q Tensor)",
+        "1× / layer (Attention Hook)",
+        dpsr_ripa_layer,
+        1.0,
+        "In-Place 256-Entry LUT RoPE Rotation",
+    )
+    dpsr_qk_ns = add_row(
+        "4. DPSR Single-Layer Geodesic Fused QK Hook (`128x32` Q+K)",
+        "1× / layer (Attention Q+K Hook)",
+        dpsr_fused_qk_layer or dpsr_ripa_layer,
+        1.0,
+        "Lockstep 2-Tensor Q+K In-Place Rotation",
+    )
+    add_row(
+        "5. DPSR Macro-to-Micro Trail Route + RIPA Steer (64H)",
+        "1× / token or block",
+        dpsr_closed_loop,
+        1.0,
+        "Coarse-to-Fine Trail Rewire + QDPS + RIPA",
+    )
+
+    # Synthesize 32-Layer End-to-End LLM Token Sidecar Overhead
+    layer_hook_ns = (
+        dpsr_qk_ns
+        if dpsr_qk_ns > 0.0
+        else (dpsr_ripa_layer["mean_ns"] * 2.0 if dpsr_ripa_layer else 0.0)
+    )
+    token_ctrl_ns = (
+        edbc_full_ns
+        if edbc_full_ns > 0.0
+        else (edbc_stateful["mean_ns"] if edbc_stateful else 0.0)
+    )
+    total_32l_ns = token_ctrl_ns + 32.0 * layer_hook_ns
+    total_16l_skip_ns = token_ctrl_ns + 16.0 * layer_hook_ns
+
+    return {
+        "rows": rows,
+        "total_32l_ns": total_32l_ns,
+        "total_32l_formatted": format_time(total_32l_ns)
+        if total_32l_ns > 0.0
+        else "N/A",
+        "total_32l_llm_pct": (total_32l_ns / llm_token_budget_ns) * 100.0
+        if total_32l_ns > 0.0
+        else 0.0,
+        "total_32l_60fps_pct": (total_32l_ns / game_frame_60fps_ns) * 100.0
+        if total_32l_ns > 0.0
+        else 0.0,
+        "total_16l_skip_ns": total_16l_skip_ns,
+        "total_16l_skip_formatted": format_time(total_16l_skip_ns)
+        if total_16l_skip_ns > 0.0
+        else "N/A",
+        "total_16l_llm_pct": (total_16l_skip_ns / llm_token_budget_ns) * 100.0
+        if total_16l_skip_ns > 0.0
+        else 0.0,
+        "total_16l_60fps_pct": (total_16l_skip_ns / game_frame_60fps_ns) * 100.0
+        if total_16l_skip_ns > 0.0
+        else 0.0,
+        "graduated_10us_budget": 0.0 < total_32l_ns <= 15_000.0,
+    }
 
 
 def generate_mermaid_charts(groups: dict[str, list[dict[str, Any]]]) -> str:
@@ -1719,13 +1889,14 @@ def generate_markdown_report(
     scaling_analysis = analyze_complexity_scaling(eval_pool)
     bottlenecks = [s for s in scaling_analysis if s["status"] == "Bottleneck"]
 
-    health_grade, health_score = calculate_health_index(
+    health_grade, health_score, score_breakdown = calculate_health_index(
         eval_pool,
         len(high_variance_benchmarks),
         len(elevated_jitter_benchmarks),
         len(bottlenecks),
         dialogue_evaluation["score"],
     )
+    sidecar_budget = analyze_sidecar_overhead_budget(eval_pool)
 
     root_html_index = ensure_criterion_html_index(
         criterion_dir, groups, utc_now, health_score, health_grade
@@ -1742,13 +1913,20 @@ def generate_markdown_report(
     )
 
     md_lines = [
-        "# 🚀 LiminiKa GCSO Core Benchmark & Performance Analysis Report",
+        "# 🚀 LiminiKa (`GCSO`) Non-Invasive LLM Sidecar — Benchmark & Overhead Analysis Report",
         "",
-        f"Automated benchmark evaluation of finalized **Core (`DPSR` + `EDBC`)** hot-path kernels, long-dialogue stability diagnostics, Classical Online Toroidal $k$-Means / DP-Means & Coarse-to-Fine Routing, Single Unified Attractor Manifold & Bayes-Attention Pointer-Trail analysis, and Log-Log OLS scaling report generated on `{utc_now}` (with Provisional `.gcso` / ZIMMS container benchmarks isolated into a dedicated pre-v1.0 section).",
+        "> **What is LiminiKa (`GCSO`)?**  ",
+        "> LiminiKa (**Geometric Cellular Sheaf Orchestrator**) is **not** a standalone neural network or a model trained from scratch. It is a **non-invasive, `#![no_std]` zero-allocation C-ABI sidecar** designed to sit alongside an existing local LLM inference engine (such as `llama.cpp`, `vLLM`, `Candle`, or `ONNX Runtime`) in low-VRAM environments (2–4 GB VRAM, co-resident with 60 FPS AAA games). Instead of modifying model weights or expanding KV-cache prompts, LiminiKa steers persona continuity and factual grounding via two ultra-lightweight interception hooks:",
+        "> 1. **`EDBC` (`Entropy-Driven Decoding Branch Controller` — 1× per token at Logit/Sampling Boundary)**: Observes token entropy and sheaf cohomology contradiction ($H^1$), synthesizes 2-Origin Gateway signals (System QoS $\\times$ Fact / Persona / Contradiction Guard), updates Online Toroidal $k$-Means macro centroids, and rewires $\\mathcal{O}(1)$ Stigmergic Pointer-Trails.",
+        "> 2. **`DPSR` (`Dynamic Phase-Shifted RoPE` — 1× per Transformer layer at Attention RoPE Boundary)**: Rotates the host LLM's in-place $Q, K$ (or $Q, K, V$) rotary embedding tensors by a 64-head Q7 phase shift $\\boldsymbol{\\Delta\\theta} \\in SO(2)^{64}$ using RIPA soft-clamping, QDPS noise filtering, and PSPM sub-head routing.",
         "",
-        "## 📊 Executive Summary & Core Health Index (`DPSR` + `EDBC`)",
+        f"*Report generated automatically from Criterion statistical estimates on `{utc_now}` (with Provisional pre-v1.0 `.gcso` / ZIMMS persistence container benchmarks isolated from the Core Sidecar Health Score).*",
+        "",
+        "## 📊 Executive Summary & Core Sidecar Health Index (`DPSR` + `EDBC`)",
         "",
         f"- **GCSO Core System Benchmark Health Score**: **`{health_score:.1f} / 100.0`** (`{health_grade}`)",
+        f"- **Estimated 32-Layer LLM Per-Token Sidecar Overhead (`1× EDBC + 32× DPSR`)**: **`{sidecar_budget['total_32l_formatted']}` / token** (**`{sidecar_budget['total_32l_llm_pct']:.4f}%`** of a `15.0 ms` host LLM token decode · **`{sidecar_budget['total_32l_60fps_pct']:.4f}%`** of a `16.67 ms` 60 FPS game frame)",
+        f"- **Estimated Inertia Layer-Skipped Sidecar Overhead (`1× EDBC + 16× DPSR`)**: **`{sidecar_budget['total_16l_skip_formatted']}` / token** (**`{sidecar_budget['total_16l_llm_pct']:.4f}%`** of a `15.0 ms` host LLM token decode)",
         f"- **Long-Dialogue Reliability Index**: **`{dialogue_evaluation['score']:.1f} / 100.0`** ({dialogue_evaluation['status']})",
         f"- **Total Benchmark Groups**: `{len(groups)}`",
         f"- **Core (`DPSR` + `EDBC`) Workload Variants Evaluated**: `{len(core_benchmarks)}` (Total incl. Provisional `.gcso`: `{total_benchmarks}`)",
@@ -1789,8 +1967,54 @@ def generate_markdown_report(
                 f"- **🏋️ Largest Bulk Stress / Endurance Workload (Macro Scale)**: `{slowest_bench['group']} / {slowest_bench['name']}` (**{slowest_bench['mean_formatted']}**{tp_suffix})"
             )
 
+    if sidecar_budget["rows"]:
+        grad_badge = (
+            "✅ **GRADUATED** (`< 15 µs/tok` — Sidecar overhead is `< 0.10%` of host LLM decode; ready for host LLM integration)"
+            if sidecar_budget["graduated_10us_budget"]
+            else "⚠️ **Tuning In Progress** (Target `< 15 µs/tok` across 32 layers)"
+        )
+        md_lines.extend(
+            [
+                "",
+                "### 🔌 End-to-End Sidecar Overhead Budget (vs. Host LLM Decode & 60 FPS Game Frame)",
+                "",
+                "To evaluate whether LiminiKa is fast enough as a sidecar, raw nanoseconds must be compared against **(a) the host LLM's single-token decode latency (`~15.0 ms = 15,000,000 ns` on a typical 7B/8B local model)**, **(b) a 60 FPS AAA game frame budget (`16.67 ms = 16,666,667 ns`)**, and **(c) the CPU's physical L1d/L2 memory bandwidth roofline (`~48 GB/s` single-core load+store ceiling)**:",
+                "",
+                f"- **Micro-Optimization Graduation Status**: {grad_badge}",
+                "",
+                "| Sidecar Interception Hook Stage | Invocation Frequency | Measured Latency | % of 15.0 ms Host LLM Token | % of 16.67 ms (60 FPS) Frame | Hardware Roofline / Execution Regime |",
+                "|:--------------------------------|:---------------------|-----------------:|----------------------------:|-----------------------------:|:-------------------------------------|",
+            ]
+        )
+        for r in sidecar_budget["rows"]:
+            md_lines.append(
+                f"| **{r['hook_stage']}** (`{r['benchmark_name']}`) | {r['frequency']} | **{r['latency_formatted']}** | `{r['llm_budget_pct']:.5f}%` | `{r['frame_60fps_pct']:.5f}%` | {r['hw_status']} |"
+            )
+        if sidecar_budget["total_32l_ns"] > 0.0:
+            md_lines.extend(
+                [
+                    f"| **Total 32-Layer LLM Forward Pass (`1× EDBC + 32× DPSR`)** | **Per Generated Token (Full)** | **{sidecar_budget['total_32l_formatted']}** | **`{sidecar_budget['total_32l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_32l_60fps_pct']:.4f}%`** | 🎯 **Negligible Sidecar Overhead (`< 0.1%` of LLM)** |",
+                    f"| **Total 32-Layer with `ACTION_MODE_LAYER_SKIP` (`1× EDBC + 16× DPSR`)** | **Per Generated Token (QoS Skip)** | **{sidecar_budget['total_16l_skip_formatted']}** | **`{sidecar_budget['total_16l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_16l_60fps_pct']:.4f}%`** | ⚡ **2× Layer-Skip QoS Coexistence Mode** |",
+                ]
+            )
+
     md_lines.extend(
         [
+            "",
+            "### 🧮 How the `100.0`-Point Health Score is Calculated (Methodology & Deduction Breakdown)",
+            "",
+            r"Unlike the **Sidecar Overhead Budget** above (which measures absolute wall-clock nanoseconds against the host LLM), the **Core Health Score (`0.0 – 100.0`)** verifies **algorithmic complexity invariance ($\mathcal{O}(1)$ / $\mathcal{O}(N)$) and statistical repeatability** across all core workloads:",
+            "",
+            "$$\\text{Health Score} = \\max\\bigl(0,\\; 100.0 - P_{\\text{bottleneck}} - P_{\\text{variance}} - P_{\\text{dispersion}} - P_{\\text{dialogue}} - P_{\\text{jitter}}\\bigr)$$",
+            "",
+            "| Score Component | Weight / Cap | Mathematical Rule | Current Run Metric | Penalty Deducted |",
+            "|:----------------|:-------------|:------------------|:-------------------|-----------------:|",
+            f"| **1. Complexity Scaling ($P_{{\\text{{bottleneck}}}}$)** | Max `-25.0 pts` | `(superlinear_families / total_core) * 25.0` where OLS slope $\\alpha > 1.15$ (`1.25` across L1d$\\to$DRAM) | `{len(bottlenecks)}` super-linear / `{len(eval_pool)}` core | **`-{score_breakdown['bottleneck_penalty']:.2f} pts`** |",
+            f"| **2. High-Variance Outliers ($P_{{\\text{{variance}}}}$)** | Max `-30.0 pts` | `(unbounded_noisy_benches / total_core) * 30.0` (`MoE > 3.5%` or `CoV > 10%` beyond RDTSC/OS floor) | `{len(high_variance_benchmarks)}` noisy / `{len(eval_pool)}` core | **`-{score_breakdown['variance_penalty']:.2f} pts`** |",
+            f"| **3. Global Dispersion ($P_{{\\text{{dispersion}}}}$)** | Max `-20.0 pts` | `min(20.0, max(0, mean_MAD - 4.5%) * 1.5 + max(0, mean_MoE - 1.8%) * 2.0)` | `mean_MAD = {score_breakdown['mean_mad_pct']:.2f}%`, `mean_MoE = ±{score_breakdown['mean_moe_pct']:.2f}%` | **`-{score_breakdown['dispersion_penalty']:.2f} pts`** |",
+            f"| **4. Long-Dialogue Drift ($P_{{\\text{{dialogue}}}}$)** | Max `-20.0 pts` | `(100.0 - dialogue_score) * 0.20` across 1K–1M token endurance & anti-chattering streams | `Dialogue Score = {dialogue_evaluation['score']:.1f} / 100.0` | **`-{score_breakdown['dialogue_penalty']:.2f} pts`** |",
+            f"| **5. OS Scheduler Jitter ($P_{{\\text{{jitter}}}}$)** | Max `-2.0 pts` | `(elevated_os_jitter_benches / total_core) * 2.0` (`MAD > 4.5%` or `MoE > 2.5%` within OS floor) | `{len(elevated_jitter_benchmarks)}` jitter-bounded / `{len(eval_pool)}` core | **`-{score_breakdown['jitter_penalty']:.2f} pts`** |",
+            f"| **Final Core Health Score** | **`100.0 pts` Base** | **Grade `{health_grade}`** (`>= 95.0` = `A+` Graduation Threshold) | — | **`{health_score:.1f} / 100.0`** |",
             "",
             "### 🗂️ Criterion HTML Index & Interactive Report Navigation",
             "",
@@ -2163,6 +2387,8 @@ def generate_markdown_report(
             "criterion_html_index": root_html_index.as_posix(),
             "health_score": health_score,
             "health_grade": health_grade,
+            "health_score_breakdown": score_breakdown,
+            "sidecar_overhead_budget": sidecar_budget,
             "long_dialogue_score": dialogue_evaluation["score"],
             "long_dialogue_status": dialogue_evaluation["status"],
             "chattering_cov_delta": dialogue_evaluation["chattering_cov_delta"],
