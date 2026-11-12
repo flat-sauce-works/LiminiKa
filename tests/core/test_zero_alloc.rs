@@ -32,7 +32,7 @@ fn test_context_step_token_zero_allocation_guarantee() {
     // 2. Enable Strict Zero-Allocation Guard for Hot Path
     ENFORCE_ZERO_ALLOC.store(true, Ordering::SeqCst);
 
-    // 3. Execute Hot Path Step Loop (Must NOT allocate)
+    // 3. Execute Hot Path step loop (verified zero-allocation)
     for token_id in 0..100 {
         // Call gcso_context_step_token via FFI with aligned buffers
     }
