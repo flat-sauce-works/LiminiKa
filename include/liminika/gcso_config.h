@@ -3,7 +3,8 @@
 
 /**
  * @file gcso_config.h
- * @brief Platform, compiler, SIMD feature-detection, and visibility macros for the LiminiKa GCSO C-ABI.
+ * @brief Platform, compiler, SIMD feature-detection, and visibility macros for the LiminiKa GCSO
+ * C-ABI.
  */
 
 #ifndef LIMINIKA_GCSO_CONFIG_H

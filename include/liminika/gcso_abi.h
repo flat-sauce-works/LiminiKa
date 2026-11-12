@@ -3,7 +3,8 @@
 
 /**
  * @file gcso_abi.h
- * @brief Public C-ABI v0.1.1 declarations for the LiminiKa Geometric Cellular Sheaf Orchestrator (GCSO).
+ * @brief Public C-ABI v0.1.1 declarations for the LiminiKa Geometric Cellular Sheaf Orchestrator
+ * (GCSO).
  *
  * This header defines the stable C11/C++20 FFI surface implemented by `src/core/src/abi.rs`.
  * C-ABI v0.1.1 function prefixes are preserved for binary compatibility and map to the
