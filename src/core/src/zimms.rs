@@ -11,6 +11,22 @@
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::must_use_candidate)]
 #![allow(clippy::inline_always)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::incompatible_msrv)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::needless_option_as_deref)]
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::manual_range_contains)]
+#![allow(clippy::manual_slice_size_calculation)]
+#![allow(clippy::unnecessary_cast)]
+#![allow(clippy::excessive_precision)]
+#![allow(clippy::approx_constant)]
+#![allow(clippy::if_same_then_else)]
+#![allow(clippy::ifs_same_cond)]
+#![allow(clippy::field_reassign_with_default)]
 
 use crate::abi::{
     gcso_config_t, gcso_pprc_keyframe_header_t, gcso_snapshot_header_t, gcso_zimms_descriptor_t,
@@ -21,8 +37,8 @@ use crate::traits::{DnpPacketDispatcher, GcsoResult, Pod, PprcCache, ZimmsStorag
 use core::mem::{align_of, offset_of, size_of};
 
 /// 64-byte cacheline-aligned Plain Old Data (`Pod`) descriptor and execution engine for
-/// Zero-Copy In-Memory Mapped Storage (ZIMMS `.gcso` containers), PPRC keyframe caching,
-/// and DNP 64-byte phase packet dispatch.
+/// Zero-Copy In-Memory Mapped Storage (ZIMMS `.gcso` containers), PPRC keyframe/delta video-stream
+/// memory & persona reproduction, and DNP 64-byte phase packet dispatch.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ZimmsEngine {
@@ -155,12 +171,13 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abi::{gcso_daes_slot_t, gcso_pointer_trail_t};
+    use crate::abi::{gcso_daes_slot_t, gcso_pointer_trail_t, gcso_tagged_ptr_t};
     use crate::traits::aligned::AlignedBuffer64;
-    use crate::traits::primitives::MAX_ATTENTION_HEADS;
+    use crate::traits::primitives::{ATTRACTOR_SLOT_PERSONA, MAX_ATTENTION_HEADS};
+    use crate::traits::CAUSAL_AXIS_SUBJECTIVE_PERSONA;
 
     #[test]
-    fn test_zimms_engine_and_dnp_round_trip() {
+    fn test_zimms_engine_dnp_and_pprc_gop_video_stream_seek() {
         let engine = ZimmsEngine::new(4096, 1);
         assert_eq!(engine.validate(), Ok(()));
 
@@ -220,5 +237,57 @@ mod tests {
         assert!(rep_is_repulsion);
         assert_eq!(rep_trail.accumulated_phase_delta[0], 0);
         assert_ne!(rep_trail.flags, 0);
+
+        // Verify PPRC Video-Codec Style I-Frame / P-Frame GOP Stream & Zero-Forward Latency Seek
+        let anchor_t0 = [16i8; MAX_ATTENTION_HEADS];
+        let state_t1 = [20i8; MAX_ATTENTION_HEADS];
+        let state_t2 = [26i8; MAX_ATTENTION_HEADS];
+
+        let iframe = engine.encode_pprc_iframe_packet(
+            100,
+            3,
+            &anchor_t0,
+            CAUSAL_AXIS_SUBJECTIVE_PERSONA,
+            7,
+            ATTRACTOR_SLOT_PERSONA,
+        );
+        assert_eq!(iframe.verify_integrity(), Ok(()));
+        assert_eq!(iframe.cluster_id(), 7);
+        assert_eq!(iframe.slot_id(), ATTRACTOR_SLOT_PERSONA);
+
+        let pframe1 = engine
+            .encode_pprc_pframe_delta_packet(&anchor_t0, &state_t1, 1)
+            .unwrap();
+        let pframe2 = engine
+            .encode_pprc_pframe_delta_packet(&state_t1, &state_t2, 1)
+            .unwrap();
+        let gop_pframes = [pframe1, pframe2];
+
+        let mut stream_bytes = [0u8; 256];
+        let written = engine
+            .pack_pprc_gop_stream_bytes(&iframe, &gop_pframes, &mut stream_bytes)
+            .unwrap();
+        assert_eq!(written, 256);
+
+        let mut seek_trail = gcso_pointer_trail_t::default();
+        let (lp, r_bar, kappa, v_shift, rep_cnt) = engine
+            .unpack_and_seek_pprc_gop_stream_bytes(
+                &stream_bytes[..written],
+                2,
+                1,
+                0.25,
+                0.1,
+                &mut seek_trail,
+            )
+            .unwrap();
+        assert_eq!(rep_cnt, 0);
+        assert_eq!(seek_trail.accumulated_phase_delta[0], 26);
+        assert_eq!(seek_trail.cluster_id, 7);
+        assert_eq!(
+            (seek_trail.user_data as u32) & CAUSAL_AXIS_SUBJECTIVE_PERSONA,
+            CAUSAL_AXIS_SUBJECTIVE_PERSONA
+        );
+        assert_eq!(gcso_tagged_ptr_t(seek_trail.current_ptr).unpack_addr(), 102);
+        assert!(lp > -0.05 && (r_bar - 1.0).abs() < 1.0e-4 && kappa > 10.0 && v_shift > 0.0);
     }
 }

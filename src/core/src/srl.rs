@@ -12,6 +12,22 @@
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::must_use_candidate)]
 #![allow(clippy::inline_always)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::incompatible_msrv)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::needless_option_as_deref)]
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::manual_range_contains)]
+#![allow(clippy::manual_slice_size_calculation)]
+#![allow(clippy::unnecessary_cast)]
+#![allow(clippy::excessive_precision)]
+#![allow(clippy::approx_constant)]
+#![allow(clippy::if_same_then_else)]
+#![allow(clippy::ifs_same_cond)]
+#![allow(clippy::field_reassign_with_default)]
 
 use crate::abi::{gcso_srl_descriptor_t, GCSO_ERROR_INVALID_ARGUMENT};
 use crate::traits::branchless::{

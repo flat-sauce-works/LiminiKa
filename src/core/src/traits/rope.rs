@@ -120,13 +120,88 @@ const INV_Q14_SCALE_F32: f32 = 1.0 / 16384.0;
 /// `rot_dim = ((head_dim / 4) & !1).max(2)` (even integer in `2..=head_dim`).
 #[inline(always)]
 #[must_use]
-pub(crate) const fn ripa_upper_rot_dim(head_dim: usize) -> usize {
+pub const fn ripa_upper_rot_dim(head_dim: usize) -> usize {
     let quarter_even = (head_dim >> 2) & !1usize;
     let base_rot = if quarter_even >= 2 { quarter_even } else { 2 };
     if base_rot <= head_dim {
         base_rot
     } else {
         head_dim
+    }
+}
+
+/// Computes the **Swarm- & Blanket-Driven Autonomous Frequency Aperture** (`rot_dim`, an even
+/// integer in `2..=head_dim`) without manual hyperparameters:
+/// - **Narrow Fact Aperture ($\frac{1}{8}d_{\mathrm{head}}$)**: Selected when `provenance_bits`
+///   carries Objective Fact grounding (`CAUSAL_AXIS_OBJECTIVE_FACT`, bit `1`) without contradiction
+///   or persona override, or when Toroidal $k$-Means concentration is ultra-sharp ($\kappa_c \ge 6.0$),
+///   preserving high- and mid-frequency syntactic/lexical RoPE channels.
+/// - **Baseline RIPA Aperture ($\frac{1}{4}d_{\mathrm{head}}$)**: Standard upper-quarter rotation
+///   (`ripa_upper_rot_dim(head_dim)`).
+/// - **Expanded Persona / High-Quorum Aperture ($\frac{3}{8}d_{\mathrm{head}}$)**: Selected when
+///   Subjective Persona grounding (`CAUSAL_AXIS_SUBJECTIVE_PERSONA`, bit `2`) resonates with high
+///   Micro-Swarm quorum (`quorum_mask.count_ones() >= 6`) and moderate concentration, allowing
+///   persona voice and cadence to steer mid-frequency syntactic phrasing.
+/// - **Wide Repulsion / Bifurcation Escape Aperture ($\frac{1}{2}d_{\mathrm{head}}$)**: Selected
+///   when Contradiction Guard repulsion (`CAUSAL_AXIS_CONTRADICTION_GUARD`, bit `3`) or an EDBC
+///   entropy surge ($\tilde{H} \ge 0.55$) occurs, rotating the upper half of RoPE frequencies to
+///   escape spurious local minima ($H^1(K; \mathcal{F}) \neq 0$).
+#[inline(always)]
+#[must_use]
+pub const fn resolve_autonomous_swarm_rot_dim(
+    head_dim: usize,
+    provenance_bits: u32,
+    quorum_mask: u8,
+    moving_z_entropy: f32,
+    von_mises_kappa: f32,
+) -> usize {
+    let safe_dim = head_dim & !1usize;
+    if safe_dim <= 2 {
+        return if head_dim >= 2 { 2 } else { head_dim };
+    }
+    let eighth_even = if ((safe_dim >> 3) & !1usize) >= 2 {
+        (safe_dim >> 3) & !1usize
+    } else {
+        2
+    };
+    let quarter_even = if ((safe_dim >> 2) & !1usize) >= 2 {
+        (safe_dim >> 2) & !1usize
+    } else {
+        2
+    };
+    let three_eighths_raw = ((safe_dim * 3) >> 3) & !1usize;
+    let three_eighths_even = if three_eighths_raw >= quarter_even {
+        three_eighths_raw
+    } else {
+        quarter_even
+    };
+    let half_raw = (safe_dim >> 1) & !1usize;
+    let half_even = if half_raw >= quarter_even {
+        half_raw
+    } else {
+        quarter_even
+    };
+
+    let has_contradiction = (provenance_bits & 0x08) != 0;
+    let has_persona = (provenance_bits & 0x04) != 0;
+    let has_fact = (provenance_bits & 0x02) != 0;
+    let entropy_surge = branchless_is_finite_f32(moving_z_entropy) && moving_z_entropy >= 0.55;
+    let high_kappa = branchless_is_finite_f32(von_mises_kappa) && von_mises_kappa >= 6.0;
+    let quorum_cells = quorum_mask.count_ones();
+
+    let raw_rot = if has_contradiction || entropy_surge {
+        half_even
+    } else if has_persona && quorum_cells >= 6 && !high_kappa {
+        three_eighths_even
+    } else if (has_fact && !has_persona) || high_kappa {
+        eighth_even
+    } else {
+        quarter_even
+    };
+    if raw_rot <= safe_dim {
+        raw_rot
+    } else {
+        safe_dim
     }
 }
 
@@ -3411,6 +3486,113 @@ pub trait PhaseSteering: BranchlessKernel {
             max_rad,
         );
         Ok(())
+    }
+
+    /// Resolves the **Swarm- & Blanket-Driven Autonomous Frequency Aperture** (`rot_dim`, even
+    /// integer in `2..=head_dim`) for this engine's `head_dim()` without manual hyperparameters.
+    #[inline(always)]
+    #[must_use]
+    fn resolve_autonomous_rot_dim(
+        &self,
+        provenance_bits: u32,
+        quorum_mask: u8,
+        moving_z_entropy: f32,
+        von_mises_kappa: f32,
+    ) -> usize {
+        resolve_autonomous_swarm_rot_dim(
+            self.head_dim() as usize,
+            provenance_bits,
+            quorum_mask,
+            moving_z_entropy,
+            von_mises_kappa,
+        )
+    }
+
+    /// Applies **Swarm- & Blanket-Driven Autonomous Frequency Aperture Phase Steering**, dynamically
+    /// selecting the upper low-frequency rotation window `rot_dim` ($\frac{1}{8}d_{\mathrm{head}}$,
+    /// $\frac{1}{4}d_{\mathrm{head}}$, $\frac{3}{8}d_{\mathrm{head}}$, or $\frac{1}{2}d_{\mathrm{head}}$)
+    /// from `provenance_bits`, `quorum_mask`, `moving_z_entropy`, and `von_mises_kappa`, and rotating
+    /// `[base + head_dim - rot_dim .. base + head_dim]` of each head with RIPA soft clamping.
+    ///
+    /// Returns the resolved `rot_dim`.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `max_rad <= 0.0`, `max_rad` is non-finite,
+    /// `query_tensor` and `key_tensor` alias, or slice lengths are insufficient.
+    #[inline]
+    fn apply_autonomous_swarm_phase_steering(
+        &self,
+        query_tensor: &mut AlignedSliceMut32<'_, f32>,
+        mut key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
+        max_rad: f32,
+        provenance_bits: u32,
+        quorum_mask: u8,
+        moving_z_entropy: f32,
+        von_mises_kappa: f32,
+    ) -> GcsoResult<usize> {
+        if max_rad <= 0.0 || !branchless_is_finite_f32(max_rad) {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let (head_dim, num_heads, expected_len) = self.validate_head_layout()?;
+        if query_tensor.len() < expected_len || phase_deltas.len() < num_heads {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        if let Some(ref mut k_ref) = key_tensor {
+            query_tensor.ensure_disjoint_mut(k_ref)?;
+            if k_ref.len() < expected_len {
+                return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            }
+        }
+        let rot_dim = resolve_autonomous_swarm_rot_dim(
+            head_dim,
+            provenance_bits,
+            quorum_mask,
+            moving_z_entropy,
+            von_mises_kappa,
+        );
+        let upper_off = head_dim - rot_dim;
+        let (is_default, eff_max, q7_to_norm_scale) = resolve_ripa_norm_params(max_rad);
+        let p_slice = &phase_deltas.as_slice()[..num_heads];
+        let q_slice = &mut query_tensor.as_mut_slice()[..expected_len];
+
+        let mut h = 0usize;
+        if let Some(k_ref) = key_tensor {
+            let k_slice = &mut k_ref.as_mut_slice()[..expected_len];
+            while h < num_heads {
+                let raw_q7 = p_slice[h];
+                if raw_q7 != 0 {
+                    let (sin_t, cos_t) = eval_ripa_sincos_with_params(
+                        raw_q7,
+                        true,
+                        is_default,
+                        eff_max,
+                        q7_to_norm_scale,
+                    );
+                    let base = h * head_dim + upper_off;
+                    rotate_ripa_upper_slice(&mut q_slice[base..base + rot_dim], sin_t, cos_t);
+                    rotate_ripa_upper_slice(&mut k_slice[base..base + rot_dim], sin_t, cos_t);
+                }
+                h += 1;
+            }
+        } else {
+            while h < num_heads {
+                let raw_q7 = p_slice[h];
+                if raw_q7 != 0 {
+                    let (sin_t, cos_t) = eval_ripa_sincos_with_params(
+                        raw_q7,
+                        true,
+                        is_default,
+                        eff_max,
+                        q7_to_norm_scale,
+                    );
+                    let base = h * head_dim + upper_off;
+                    rotate_ripa_upper_slice(&mut q_slice[base..base + rot_dim], sin_t, cos_t);
+                }
+                h += 1;
+            }
+        }
+        Ok(rot_dim)
     }
 
     /// Applies RIPA soft-bounded phase steering to the upper $d_{\mathrm{head}}/4$ low-frequency
@@ -7373,4 +7555,33 @@ mod tests {
         assert!(attn_scores.data[0] > attn_scores.data[1]);
     }
 
+    #[test]
+    fn test_autonomous_swarm_frequency_aperture_steering() {
+        let eng16 = DummyRopeEngine {
+            head_dim: 16,
+            num_heads: 4,
+        };
+        assert_eq!(eng16.resolve_autonomous_rot_dim(0x02, 0xFF, 0.1, 2.0), 2);
+        assert_eq!(eng16.resolve_autonomous_rot_dim(0x00, 0x0F, 0.1, 1.0), 4);
+        assert_eq!(eng16.resolve_autonomous_rot_dim(0x04, 0xFF, 0.2, 1.5), 6);
+        assert_eq!(eng16.resolve_autonomous_rot_dim(0x08, 0xFF, 0.6, 1.0), 8);
+
+        let q_phases = AlignedBuffer16::new([40i8; 64]);
+        let mut q_auto = AlignedBuffer32::new([1.0_f32; 64]);
+        let used_rot = eng16
+            .apply_autonomous_swarm_phase_steering(
+                &mut q_auto.as_aligned_slice_mut(),
+                None,
+                &q_phases.as_aligned_slice(),
+                DEFAULT_RIPA_CLAMP_MAX_RAD,
+                0x04,
+                0xFF,
+                0.2,
+                1.5,
+            )
+            .unwrap();
+        assert_eq!(used_rot, 6);
+        assert_eq!(&q_auto.data[0..10], &[1.0_f32; 10]);
+        assert!((q_auto.data[10] - 1.0).abs() > 1.0e-3);
+    }
 }

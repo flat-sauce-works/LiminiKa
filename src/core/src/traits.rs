@@ -217,24 +217,24 @@ pub use self::primitives::{
     GcsoContainerOpaque, GcsoContextHandle, GcsoContextOpaque, GcsoDaesSlotHandle,
     GcsoDaesSlotOpaque, GcsoDpsrKernelHandle, GcsoDpsrKernelOpaque, GcsoEdbcControllerHandle,
     GcsoEdbcControllerOpaque, GcsoPspmRouterHandle, GcsoPspmRouterOpaque, GcsoResult,
-    GcsoSrlAdapterHandle, GcsoSrlAdapterOpaque, Pod, ACTION_MODE_DPSR_STEER,
-    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PSPM_ROUTE,
-    ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
-    ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
-    ATTRACTOR_SLOT_CUSTOM_5, ATTRACTOR_SLOT_CUSTOM_6, ATTRACTOR_SLOT_CUSTOM_7,
-    ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
-    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, ATTRACTOR_SLOT_USER_CONTEXT,
-    CHEBYSHEV_COEFF_LEN, CHEBYSHEV_FILTER_DEGREE, DAES_MINI_LEDGER_LEN, DAES_SHORTCUT_SLOTS,
-    DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_ENTROPY_EPS, DEFAULT_PAGED_BLOCK_SIZE,
-    DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
-    GCSO_SNAPSHOT_MAGIC_U32, MAX_ANCHORS_PER_FIELD, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
-    MAX_SURROGATE_ENTROPY_LN2, PAGED_BITMASK_BITS, PAGED_BITMASK_WORDS, Q7_MAX, Q7_MIN,
-    Q7_PHASE_INV_SCALE_RAD, Q7_PHASE_SCALE_RAD, Q7_UNIT_SCALE, Q7_ZERO, TAG_ACTION_MODE_MASK,
-    TAG_ATTRACTOR_SLOT_SHIFT,
+    GcsoSrlAdapterHandle, GcsoSrlAdapterOpaque, Pod, PprcKeyframePacket, PprcMotionDeltaPacket,
+    ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE,
+    ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR,
+    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_CUSTOM_5, ATTRACTOR_SLOT_CUSTOM_6,
+    ATTRACTOR_SLOT_CUSTOM_7, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_KNOWLEDGE,
+    ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE,
+    ATTRACTOR_SLOT_USER_CONTEXT, CHEBYSHEV_COEFF_LEN, CHEBYSHEV_FILTER_DEGREE,
+    DAES_MINI_LEDGER_LEN, DAES_SHORTCUT_SLOTS, DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_ENTROPY_EPS,
+    DEFAULT_PAGED_BLOCK_SIZE, DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD,
+    DEFAULT_SLOT_COUPLING_MATRIX_8X8, GCSO_SNAPSHOT_MAGIC_U32, MAX_ANCHORS_PER_FIELD,
+    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, MAX_SURROGATE_ENTROPY_LN2, PAGED_BITMASK_BITS,
+    PAGED_BITMASK_WORDS, Q7_MAX, Q7_MIN, Q7_PHASE_INV_SCALE_RAD, Q7_PHASE_SCALE_RAD, Q7_UNIT_SCALE,
+    Q7_ZERO, TAG_ACTION_MODE_MASK, TAG_ATTRACTOR_SLOT_SHIFT,
 };
 pub use self::rope::{
-    DynamicLayerSkipper, EntropyGatedPhaseLookup, PhaseSteering, PspmRouter, SrlAdapter,
-    VisualAttentionSteering,
+    resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim, DynamicLayerSkipper,
+    EntropyGatedPhaseLookup, PhaseSteering, PspmRouter, SrlAdapter, VisualAttentionSteering,
 };
 pub use self::telemetry::{
     eval_bitmask_dyadic_ultrametric, swar_subswarm_resolve_x8, ContrastivePhaseBloomFilter,
@@ -255,7 +255,7 @@ use core::mem::size_of;
 
 use self::branchless::load_q7_x8_slice;
 use self::rope::{
-    dispatch_fused_ripa_and_pspm_words_core, ripa_upper_rot_dim,
+    dispatch_fused_ripa_and_pspm_words_core,
     rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words, steer_from_swar_words_core_safe,
 };
 pub(crate) use self::telemetry::select_rewire_bridge_and_modulate_with_preloaded_words_64;
@@ -1992,16 +1992,17 @@ pub mod prelude {
         unpack_action_mode_from_tag, unpack_attractor_slot_from_tag, update_crc32_ieee,
         validate_descriptor_header, validate_snapshot_header, verify_snapshot_payload_crc32,
         with_slot_pair_coupled, with_slot_pair_coupled_symmetric, FfiHandleMut, FfiHandleRef,
-        GcsoResult, Pod, ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE,
-        ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
-        ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP,
-        ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_KNOWLEDGE,
-        ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE,
-        ATTRACTOR_SLOT_USER_CONTEXT, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+        GcsoResult, Pod, PprcKeyframePacket, PprcMotionDeltaPacket, ACTION_MODE_DPSR_STEER,
+        ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PSPM_ROUTE,
+        ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
+        ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
+        ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
+        ATTRACTOR_SLOT_SYSTEM_BASELINE, ATTRACTOR_SLOT_USER_CONTEXT,
+        DEFAULT_SLOT_COUPLING_MATRIX_8X8,
     };
     pub use super::rope::{
-        DynamicLayerSkipper, EntropyGatedPhaseLookup, PhaseSteering, PspmRouter, SrlAdapter,
-        VisualAttentionSteering,
+        resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim, DynamicLayerSkipper,
+        EntropyGatedPhaseLookup, PhaseSteering, PspmRouter, SrlAdapter, VisualAttentionSteering,
     };
     pub use super::telemetry::{
         eval_bitmask_dyadic_ultrametric, swar_subswarm_resolve_x8, ContrastivePhaseBloomFilter,
@@ -2092,6 +2093,14 @@ const _: () = {
     assert!(offset_of!(gcso_pprc_keyframe_header_t, frame_type) == 0);
     assert!(offset_of!(gcso_pprc_keyframe_header_t, icache_payload_offset) == 24);
     assert!(offset_of!(gcso_pprc_keyframe_header_t, pcache_payload_offset) == 32);
+
+    assert!(size_of::<PprcKeyframePacket>() == 128);
+    assert!(align_of::<PprcKeyframePacket>() == 64);
+    assert!(offset_of!(PprcKeyframePacket, header) == 0);
+    assert!(offset_of!(PprcKeyframePacket, anchor_phases) == 64);
+    assert!(size_of::<PprcMotionDeltaPacket>() == 64);
+    assert!(align_of::<PprcMotionDeltaPacket>() == 64);
+    assert!(offset_of!(PprcMotionDeltaPacket, motion_deltas) == 0);
 
     assert!(size_of::<gcso_pspm_config_t>() == 32);
     assert!(align_of::<gcso_pspm_config_t>() == 16);

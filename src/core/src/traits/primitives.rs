@@ -681,6 +681,8 @@ impl_pod_for_primitives!(
     gcso_srl_descriptor_t,
     gcso_snapshot_header_t,
     gcso_pprc_keyframe_header_t,
+    PprcKeyframePacket,
+    PprcMotionDeltaPacket,
 );
 
 // SAFETY: Fixed-size arrays of `Pod` elements have contiguous layout with no extra padding traps.
@@ -838,6 +840,198 @@ pub fn verify_snapshot_payload_crc32(
         }
     }
     Ok(())
+}
+
+/// 128-byte cacheline-aligned Plain Old Data (`Pod`) **PPRC Keyframe (I-Frame) Packet** (Section 4.3).
+///
+/// Packs the 64-byte [`gcso_pprc_keyframe_header_t`] metadata header (`offset 0..64`) and the
+/// uncompressed 64-head Q7 phase anchor snapshot (`offset 64..128`) for lightweight video-codec-style
+/// `.gcso` memory & persona streams (Steam Workshop distribution ready).
+///
+/// The 24-byte `header.reserved` field encodes:
+/// - `reserved[0..4]`: Little-endian IEEE 802.3 CRC32 checksum of `anchor_phases`.
+/// - `reserved[4..8]`: Little-endian 32-bit `provenance_bits` causal mask.
+/// - `reserved[8..12]`: Little-endian 32-bit macro Toroidal $k$-Means `cluster_id`.
+/// - `reserved[12]`: 3-bit working-lane `slot_id` (`0..=7`).
+#[repr(C, align(64))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PprcKeyframePacket {
+    /// 64-byte C-ABI v0.1.1 PPRC keyframe index header (`offset 0..64`, `frame_type == 0`).
+    pub header: gcso_pprc_keyframe_header_t,
+    /// 64-head Q7 phase anchor snapshot on $SO(2)^{64}$ (`offset 64..128`).
+    pub anchor_phases: [gcso_q7_t; MAX_ATTENTION_HEADS],
+}
+
+impl Default for PprcKeyframePacket {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            header: gcso_pprc_keyframe_header_t {
+                frame_type: 0,
+                token_index: 0,
+                gop_length: 1,
+                composite_vector_length: 0.0,
+                von_mises_kappa: 0.0,
+                sparse_scalar_residual: 0.0,
+                icache_payload_offset: 0,
+                pcache_payload_offset: 0,
+                reserved: [0; 24],
+            },
+            anchor_phases: [0; MAX_ATTENTION_HEADS],
+        }
+    }
+}
+
+impl PprcKeyframePacket {
+    /// Computes the IEEE 802.3 CRC32 checksum over the 64-head `anchor_phases` payload in `const fn` mode.
+    #[inline(always)]
+    #[must_use]
+    pub const fn compute_anchor_crc32(anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> u32 {
+        let mut raw_bytes = [0u8; MAX_ATTENTION_HEADS];
+        let mut idx = 0usize;
+        while idx < MAX_ATTENTION_HEADS {
+            raw_bytes[idx] = anchor_phases[idx] as u8;
+            idx += 1;
+        }
+        compute_crc32_ieee(&raw_bytes)
+    }
+
+    /// Constructs a 128-byte [`PprcKeyframePacket`] (I-Frame Key Anchor) stamped with IEEE 802.3
+    /// CRC32 integrity protection and causal provenance metadata.
+    #[inline(always)]
+    #[must_use]
+    pub const fn new(
+        token_index: u32,
+        gop_length: u32,
+        composite_vector_length: f32,
+        von_mises_kappa: f32,
+        sparse_scalar_residual: f32,
+        provenance_bits: u32,
+        cluster_id: u32,
+        slot_id: u8,
+        anchor_phases: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> Self {
+        let crc = Self::compute_anchor_crc32(&anchor_phases);
+        let crc_le = crc.to_le_bytes();
+        let prov_le = provenance_bits.to_le_bytes();
+        let cid_le = cluster_id.to_le_bytes();
+        let mut reserved = [0u8; 24];
+        reserved[0] = crc_le[0];
+        reserved[1] = crc_le[1];
+        reserved[2] = crc_le[2];
+        reserved[3] = crc_le[3];
+        reserved[4] = prov_le[0];
+        reserved[5] = prov_le[1];
+        reserved[6] = prov_le[2];
+        reserved[7] = prov_le[3];
+        reserved[8] = cid_le[0];
+        reserved[9] = cid_le[1];
+        reserved[10] = cid_le[2];
+        reserved[11] = cid_le[3];
+        reserved[12] = slot_id & ATTRACTOR_SLOT_ID_MASK;
+
+        Self {
+            header: gcso_pprc_keyframe_header_t {
+                frame_type: 0,
+                token_index,
+                gop_length: if gop_length > 0 { gop_length } else { 1 },
+                composite_vector_length,
+                von_mises_kappa,
+                sparse_scalar_residual,
+                icache_payload_offset: 64,
+                pcache_payload_offset: 128,
+                reserved,
+            },
+            anchor_phases,
+        }
+    }
+
+    /// Extracts the stamped IEEE 802.3 CRC32 checksum of `anchor_phases` from `header.reserved[0..4]`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn payload_crc32(&self) -> u32 {
+        u32::from_le_bytes([
+            self.header.reserved[0],
+            self.header.reserved[1],
+            self.header.reserved[2],
+            self.header.reserved[3],
+        ])
+    }
+
+    /// Extracts the 32-bit `provenance_bits` causal mask from `header.reserved[4..8]`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn provenance_bits(&self) -> u32 {
+        u32::from_le_bytes([
+            self.header.reserved[4],
+            self.header.reserved[5],
+            self.header.reserved[6],
+            self.header.reserved[7],
+        ])
+    }
+
+    /// Extracts the 32-bit Toroidal $k$-Means `cluster_id` from `header.reserved[8..12]`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn cluster_id(&self) -> u32 {
+        u32::from_le_bytes([
+            self.header.reserved[8],
+            self.header.reserved[9],
+            self.header.reserved[10],
+            self.header.reserved[11],
+        ])
+    }
+
+    /// Extracts the 3-bit working-lane `slot_id` (`0..=7`) from `header.reserved[12]`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn slot_id(&self) -> u8 {
+        self.header.reserved[12] & ATTRACTOR_SLOT_ID_MASK
+    }
+
+    /// Verifies that `header.frame_type == 0` (I-Frame) and that the IEEE 802.3 CRC32 checksum of
+    /// `anchor_phases` matches `self.payload_crc32()`.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if `frame_type != 0` or CRC32 verification fails.
+    #[inline(always)]
+    pub const fn verify_integrity(&self) -> GcsoResult<()> {
+        if self.header.frame_type != 0 {
+            return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+        }
+        let expected_crc = self.payload_crc32();
+        if expected_crc != 0 && Self::compute_anchor_crc32(&self.anchor_phases) != expected_crc {
+            return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+        }
+        Ok(())
+    }
+}
+
+/// 64-byte cacheline-aligned Plain Old Data (`Pod`) **PPRC Predictive Motion Delta (P-Frame) Packet** (Section 4.3).
+///
+/// Stores the 64-head inter-step Q7 phase motion vector $\boldsymbol{\Delta\theta}_t \in \mathrm{Q7}^{64}$
+/// (`offset 0..64`) between consecutive steps inside a Variable Group of Pictures (GOP) memory/persona stream.
+#[repr(C, align(64))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PprcMotionDeltaPacket {
+    /// 64-head Q7 predictive phase motion delta vector $\boldsymbol{\Delta\theta}_t$ (`offset 0..64`).
+    pub motion_deltas: [gcso_q7_t; MAX_ATTENTION_HEADS],
+}
+
+impl Default for PprcMotionDeltaPacket {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new([0; MAX_ATTENTION_HEADS])
+    }
+}
+
+impl PprcMotionDeltaPacket {
+    /// Constructs a 64-byte aligned [`PprcMotionDeltaPacket`] from `motion_deltas`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn new(motion_deltas: [gcso_q7_t; MAX_ATTENTION_HEADS]) -> Self {
+        Self { motion_deltas }
+    }
 }
 
 // ===================================================================
@@ -5137,6 +5331,10 @@ const _: () = {
     assert!(coupled_slot_row_mask(DEFAULT_SLOT_COUPLING_MATRIX_8X8, 3) == 0xFF);
     assert!(coupled_slot_count(DEFAULT_SLOT_COUPLING_MATRIX_8X8, 3) == 8);
     assert!(compute_crc32_ieee(b"123456789") == 0xCBF4_3926);
+    assert!(size_of::<PprcKeyframePacket>() == 128);
+    assert!(align_of::<PprcKeyframePacket>() == 64);
+    assert!(size_of::<PprcMotionDeltaPacket>() == 64);
+    assert!(align_of::<PprcMotionDeltaPacket>() == 64);
 };
 
 #[cfg(test)]
