@@ -57,32 +57,8 @@ use super::aligned::{
     AlignedBuffer16, AlignedSlice, AlignedSlice16, AlignedSlice32, AlignedSlice64,
     AlignedSliceMut16, AlignedSliceMut32, AlignedSliceMut64,
 };
-use super::branchless::{
-    BranchlessKernel, DEFAULT_MAX_VALID_Z_SCORE, atan2_interleaved_pairs_to_q7_word_x8_simd,
-    atan2_to_q7_word_x8_simd, branchless_abs_f32, branchless_atan2_f32,
-    branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_copysign_f32,
-    branchless_eyring_kramers_escape, branchless_fast_transition_log_prob,
-    branchless_flush_subnormal_f32, branchless_hysteresis_quantize_depth, branchless_inv_pos_f32,
-    branchless_is_finite_f32, branchless_is_nan_f32, branchless_max_f32, branchless_min_f32,
-    branchless_popcount_rsqrt_u32, branchless_q7_accumulate_64, branchless_q7_add_sat,
-    branchless_q7_conjugate_64, branchless_q7_inhibit_64, branchless_q7_inhibit_words_64,
-    branchless_q7_qdps_filter_64, branchless_q7_synergy_fuse_64,
-    branchless_q7_synergy_fuse_words_64, branchless_q7_transition_log_prob_words_64,
-    branchless_q7_unified_field_fold_words_with_init_weight_64, branchless_rad_to_q7,
-    branchless_relu_f32, branchless_rsqrt_f32, branchless_sanitize_z_score_f32,
-    branchless_select_f32, branchless_select_q7, branchless_select_u32, branchless_select_u8,
-    branchless_sincos_q7, branchless_splitmix64, branchless_sqrt_f32, branchless_tanh_f32,
-    branchless_von_mises_kappa, chebyshev_deg3_filter_slice_simd8, circular_r_bar_from_words_64,
-    circular_resultant_from_words_64, coherence_from_diff_words_64, coherence_from_word_arrays_64,
-    coherence_from_word_arrays_with_uniform_flag_64, crc32_block64_zero_seed_words,
-    diff_norm_sq_f32_unrolled4, dot_and_norms_f32_unrolled4, fast_inv_len_f32,
-    fast_inv_pos_normal_f32, hodge_obstruction_and_dual_pairing_f32, is_word_array_uniform_64,
-    load_q7_word_at, load_q7_words_64, max_pos_f32_unrolled4, store_q7_word_at, store_q7_words_64,
-    swar_q7_add_sat_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
-    swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8,
-    swar_q7_qdps_filter_words_64, swar_q7_scale_le128_with_bias_x8, swar_q7_sub_sat_x8,
-    trail_phase_words_mut, trail_phase_words_ref,
-};
+use super::branchless::{BranchlessKernel, atan2_interleaved_pairs_to_q7_word_x8_simd, atan2_to_q7_word_x8_simd, branchless_fast_transition_log_prob, branchless_q7_inhibit_64, branchless_q7_inhibit_words_64, branchless_q7_synergy_fuse_64, branchless_q7_synergy_fuse_words_64, branchless_q7_transition_log_prob_words_64, branchless_q7_unified_field_fold_words_with_init_weight_64, chebyshev_deg3_filter_slice_simd8, circular_r_bar_from_words_64, circular_resultant_from_words_64, coherence_from_diff_words_64, coherence_from_word_arrays_64, coherence_from_word_arrays_with_uniform_flag_64, diff_norm_sq_f32_unrolled4, dot_and_norms_f32_unrolled4, hodge_obstruction_and_dual_pairing_f32, max_pos_f32_unrolled4};
+use super::primitives::{DEFAULT_MAX_VALID_Z_SCORE, branchless_abs_f32, branchless_atan2_f32, branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_copysign_f32, branchless_eyring_kramers_escape, branchless_flush_subnormal_f32, branchless_hysteresis_quantize_depth, branchless_inv_pos_f32, branchless_is_finite_f32, branchless_is_nan_f32, branchless_max_f32, branchless_min_f32, branchless_popcount_rsqrt_u32, branchless_q7_accumulate_64, branchless_q7_add_sat, branchless_q7_conjugate_64, branchless_q7_qdps_filter_64, branchless_rad_to_q7, branchless_relu_f32, branchless_rsqrt_f32, branchless_sanitize_z_score_f32, branchless_select_f32, branchless_select_q7, branchless_select_u32, branchless_select_u8, branchless_sincos_q7, branchless_splitmix64, branchless_sqrt_f32, branchless_tanh_f32, branchless_von_mises_kappa, crc32_block64_zero_seed_words, fast_inv_len_f32, fast_inv_pos_normal_f32, is_word_array_uniform_64, load_q7_word_at, load_q7_words_64, store_q7_word_at, store_q7_words_64, swar_q7_add_sat_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8, swar_q7_qdps_filter_words_64, swar_q7_scale_le128_with_bias_x8, swar_q7_sub_sat_x8, trail_phase_words_mut, trail_phase_words_ref};
 use super::gateway::{
     ActionHubGatewayExt, CausalProvenanceReport, CrystallizedAttractorRecord, GatewayFrame,
     ManifoldGatewaySignal,

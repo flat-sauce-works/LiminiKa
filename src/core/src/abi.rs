@@ -72,18 +72,11 @@ use crate::traits::aligned::{
     DisjointMutPair, DisjointRefMut,
 };
 use crate::traits::branchless::{
-    branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_crc32_ieee,
-    branchless_fast_transition_log_prob, branchless_flush_subnormal_f32, branchless_is_finite_f32,
-    branchless_max_f32, branchless_min_f32, branchless_project_f32_slice_to_q7_64,
-    branchless_q7_add_sat, branchless_q7_inhibit_64, branchless_q7_neg_sat,
-    branchless_q7_resonant_pull_64, branchless_q7_synergy_fuse_64,
-    branchless_q7_unified_field_fold_words_with_init_weight_64, branchless_rad_to_qdps_step_u8,
-    branchless_relu_f32, branchless_select_f32, branchless_select_u32, branchless_select_u8,
-    branchless_splitmix64, branchless_sqrt_f32, load_q7_words_64,
-    modulate_attention_scores_by_phase_bank_64, scale_f32_slice_unrolled8, store_q7_words_64,
-    sum_sq_f32_simd8, swar_q7_qdps_filter_words_64, swar_slerp_words_with_bias_64,
-    swar_words_equal_64, swar_words_nonzero_64, trail_phase_words_mut, trail_phase_words_ref,
-    SWAR_SPLAT_BYTE_64,
+    branchless_fast_transition_log_prob, branchless_project_f32_slice_to_q7_64,
+    branchless_q7_inhibit_64, branchless_q7_resonant_pull_64, branchless_q7_synergy_fuse_64,
+    branchless_q7_unified_field_fold_words_with_init_weight_64,
+    modulate_attention_scores_by_phase_bank_64, sum_sq_f32_simd8, swar_slerp_words_with_bias_64,
+    swar_words_equal_64, swar_words_nonzero_64,
 };
 use crate::traits::cold_path::{EntropyEvaluator, L2pSvdProjector, SystemCapabilityQuery};
 use crate::traits::gateway::{
@@ -95,11 +88,19 @@ use crate::traits::gateway::{
     CAUSAL_AXIS_CONTRADICTION_GUARD, GCSO_FOUR_SECTION_HEADER_BYTES,
 };
 use crate::traits::primitives::{
+    branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_crc32_ieee,
+    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_min_f32,
+    branchless_q7_add_sat, branchless_q7_neg_sat, branchless_rad_to_qdps_step_u8,
+    branchless_relu_f32, branchless_select_f32, branchless_select_u32, branchless_select_u8,
+    branchless_splitmix64, branchless_sqrt_f32, load_q7_words_64, store_q7_words_64,
+    swar_q7_qdps_filter_words_64, trail_phase_words_mut, trail_phase_words_ref, SWAR_SPLAT_BYTE_64,
+};
+use crate::traits::primitives::{
     init_snapshot_header, is_slot_pair_coupled, pack_action_slot_tag, raw_byte_ranges_overlap,
     unpack_action_mode_from_tag, unpack_attractor_slot_from_tag, validate_snapshot_header,
-    FfiHandleMut, FfiHandleRef, GcsoResult, Pod, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PSPM_ROUTE,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION,
-    DEFAULT_RIPA_CLAMP_MAX_RAD, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PAGED_BITMASK_BITS,
+    FfiHandleMut, FfiHandleRef, GcsoResult, Pod, ACTION_PRESET_REPULSION_ESCAPE,
+    ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION, DEFAULT_RIPA_CLAMP_MAX_RAD,
+    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PAGED_BITMASK_BITS,
 };
 use crate::traits::rope::{
     dispatch_fused_ripa_and_pspm_words_core, steer_from_swar_words_core_safe, PhaseSteering,
@@ -1443,8 +1444,8 @@ fn steer_gateway_frame_with_words_core_safe(
     head_dim: usize,
     num_heads: usize,
     q_aligned: &mut AlignedSliceMut32<'_, f32>,
-    mut k_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    mut logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    k_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
 ) -> GcsoResult<CausalProvenanceReport> {
     if frame_ref.qdps_min_step_rad < 0.0
         || !branchless_is_finite_f32(frame_ref.qdps_min_step_rad)
@@ -1469,114 +1470,17 @@ fn steer_gateway_frame_with_words_core_safe(
     }
     trail.sync_flags_with_current_ptr();
 
-    let frm_nonzero = swar_words_nonzero_64(frm_w);
-    let next_w = if frm_nonzero {
-        *trail_phase_words_mut(trail) = *frm_w;
-        *frm_w
-    } else {
-        *trail_phase_words_ref(trail)
-    };
-    trail.attractor_pull_force = branchless_min_f32(
-        branchless_max_f32(trail.attractor_pull_force, frame_ref.effective_energy),
-        MAX_ATTRACTOR_PULL_FORCE,
-    );
-
-    if (frame_ref.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0 {
-        trail.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
-    } else {
-        let swar_words = if frame_ref.qdps_min_step_q7 <= 1 {
-            next_w
-        } else {
-            swar_q7_qdps_filter_words_64(&next_w, frame_ref.qdps_min_step_q7)
-        };
-        let swar_nonzero = if frm_nonzero & (frame_ref.qdps_min_step_q7 <= 1) {
-            true
-        } else {
-            swar_words_nonzero_64(&swar_words)
-        };
-        let clean_damping =
-            branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
-
-        if (frame_ref.action_mode_flags & ACTION_MODE_PSPM_ROUTE) != 0
-            && frame_ref.active_swarm_cell_mask == 0xFF
-        {
-            if swar_nonzero {
-                let is_default_ripa = (frame_ref.ripa_clamp_rad.to_bits()
-                    == DEFAULT_RIPA_CLAMP_MAX_RAD.to_bits())
-                    & frame_ref.has_unit_pspm_gains()
-                    & (num_heads > 0)
-                    & (num_heads <= MAX_ATTENTION_HEADS);
-                if is_default_ripa {
-                    let rot_dim = frame_ref.resolve_autonomous_rot_dim(head_dim, 0.0, 0.0);
-                    if let Some(ref mut k) = k_opt {
-                        crate::traits::rope::rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words(
-                            q_aligned.as_mut_slice(),
-                            k.as_mut_slice(),
-                            &swar_words,
-                            num_heads,
-                            head_dim,
-                            rot_dim,
-                        );
-                    } else {
-                        crate::traits::rope::rotate_fused_self_ripa_and_pspm_default_words(
-                            q_aligned.as_mut_slice(),
-                            &swar_words,
-                            num_heads,
-                            head_dim,
-                            rot_dim,
-                            true,
-                        );
-                    }
-                } else {
-                    let pspm_cfg = frame_ref.to_pspm_config_for_heads(num_heads);
-                    dispatch_fused_ripa_and_pspm_words_core(
-                        q_aligned,
-                        &swar_words,
-                        frame_ref.ripa_clamp_rad,
-                        &pspm_cfg,
-                        &swar_words,
-                        &swar_words,
-                        &swar_words,
-                        frame_ref.ripa_clamp_rad,
-                        0,
-                        head_dim,
-                        true,
-                    )?;
-                    if let Some(ref mut k) = k_opt {
-                        steer_from_swar_words_core_safe(
-                            &swar_words,
-                            0xFF,
-                            clean_damping,
-                            head_dim,
-                            num_heads,
-                            false,
-                            frame_ref.ripa_clamp_rad,
-                            k,
-                            None,
-                        );
-                    }
-                }
-            }
-        } else if swar_nonzero {
-            steer_from_swar_words_core_safe(
-                &swar_words,
-                frame_ref.active_swarm_cell_mask,
-                clean_damping,
-                head_dim,
-                num_heads,
-                false,
-                frame_ref.ripa_clamp_rad,
-                q_aligned,
-                k_opt,
-            );
-        }
-    }
-
-    if let Some(ref mut logits) = logits_opt {
-        if !logits.is_empty() {
-            scale_f32_slice_unrolled8(logits.as_mut_slice(), frame_ref.effective_inv_temp);
-        }
-    }
+    let _ = crate::traits::gateway::accumulate_trail_and_steer_gateway_words_core(
+        frame_ref,
+        frm_w,
+        trail,
+        unresolved_damping_u7,
+        head_dim,
+        num_heads,
+        Some(q_aligned),
+        k_opt,
+        logits_opt,
+    )?;
 
     Ok(report)
 }

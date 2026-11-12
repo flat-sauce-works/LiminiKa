@@ -817,13 +817,13 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
             16,
         );
         let base_phases = make_heterogeneous_q7_phases_with_offset(22);
-        let base_phases_w = liminika_core::traits::branchless::load_q7_words_64(&base_phases);
+        let base_phases_w = liminika_core::traits::primitives::load_q7_words_64(&base_phases);
         let _ftz = ScopedFtzdazGuard::new();
         let mut phases = base_phases;
         let mut engine = base_engine;
         for _ in 0..8 {
             reset_engine_fast(&mut engine, &base_engine);
-            liminika_core::traits::branchless::store_q7_words_64(&mut phases, &base_phases_w);
+            liminika_core::traits::primitives::store_q7_words_64(&mut phases, &base_phases_w);
             let _ = engine
                 .step_and_inject_tunneling_perturbation(
                     3.2f32,
@@ -844,7 +844,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
 
         b.iter(|| {
             reset_engine_fast(&mut engine, &base_engine);
-            liminika_core::traits::branchless::store_q7_words_64(&mut phases, &base_phases_w);
+            liminika_core::traits::primitives::store_q7_words_64(&mut phases, &base_phases_w);
             let res = engine
                 .step_and_inject_tunneling_perturbation(
                     black_box(3.2f32),
@@ -1702,7 +1702,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
             12,
         );
         let base_phases = make_heterogeneous_q7_phases_with_offset(24);
-        let base_phases_w = liminika_core::traits::branchless::load_q7_words_64(&base_phases);
+        let base_phases_w = liminika_core::traits::primitives::load_q7_words_64(&base_phases);
         let _ftz = ScopedFtzdazGuard::new();
         let mut phases = base_phases;
         let mut bloom = base_bloom;
@@ -1711,7 +1711,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
             reset_engine_fast(&mut engine, &base_engine);
             if !bloom.is_empty() {
                 bloom = base_bloom;
-                liminika_core::traits::branchless::store_q7_words_64(&mut phases, &base_phases_w);
+                liminika_core::traits::primitives::store_q7_words_64(&mut phases, &base_phases_w);
             }
             let _ = engine
                 .step_with_cohomology_and_bloom_guard(
@@ -1738,7 +1738,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
             reset_engine_fast(&mut engine, &base_engine);
             if !bloom.is_empty() {
                 bloom = base_bloom;
-                liminika_core::traits::branchless::store_q7_words_64(&mut phases, &base_phases_w);
+                liminika_core::traits::primitives::store_q7_words_64(&mut phases, &base_phases_w);
             }
             let res = engine
                 .step_with_cohomology_and_bloom_guard(

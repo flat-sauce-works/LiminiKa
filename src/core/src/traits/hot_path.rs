@@ -43,18 +43,8 @@
 #![allow(clippy::field_reassign_with_default)]
 
 use super::aligned::{AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32};
-use super::branchless::{
-    branchless_clamp_f32, branchless_fast_transition_log_prob, branchless_flush_subnormal_f32,
-    branchless_is_finite_f32, branchless_min_f32,
-    branchless_phase_coherence_inv_temp_scale, branchless_q7_circular_resultant_64,
-    branchless_q7_slerp_64, branchless_rad_to_qdps_step_u8, branchless_relu_f32,
-    branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    branchless_splitmix64, coherence_from_word_arrays_64, load_q7_words_64,
-    scale_f32_slice_unrolled8, swar_add_sat_q7_slice_in_place,
-    swar_circular_add_and_fold_geodesic_q7_slice_in_place, swar_q7_add_sat_x8,
-    swar_slerp_words_with_bias_64, swar_words_equal_64, swar_words_nonzero_64,
-    trail_phase_words_mut, trail_phase_words_ref, BranchlessKernel, SWAR_SPLAT_BYTE_64,
-};
+use super::branchless::{branchless_fast_transition_log_prob, branchless_phase_coherence_inv_temp_scale, branchless_q7_circular_resultant_64, branchless_q7_slerp_64, coherence_from_word_arrays_64, scale_f32_slice_unrolled8, swar_slerp_words_with_bias_64, swar_words_equal_64, swar_words_nonzero_64, BranchlessKernel};
+use super::primitives::{branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_min_f32, branchless_rad_to_qdps_step_u8, branchless_relu_f32, branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8, branchless_splitmix64, load_q7_words_64, swar_add_sat_q7_slice_in_place, swar_circular_add_and_fold_geodesic_q7_slice_in_place, swar_q7_add_sat_x8, trail_phase_words_mut, trail_phase_words_ref, SWAR_SPLAT_BYTE_64};
 use super::gateway::CrystallizedAttractorRecord;
 use super::primitives::{
     GcsoResult, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ATTRACTOR_SLOT_ID_MASK,
@@ -148,7 +138,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
         self.step_pointer(input_ptr.raw(), trail_out)?;
 
         let (density, repulsion_triggered) = bloom_filter.apply_phase_conjugate_repulsion_words(
-            super::branchless::trail_phase_words_mut(trail_out),
+            super::primitives::trail_phase_words_mut(trail_out),
             repulsion_threshold,
             repulsion_scale_u7,
         );

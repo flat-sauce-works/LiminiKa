@@ -9,7 +9,7 @@
 //! stigmergic score modulation, Limina transition log-probability, and AVX2 64-head
 //! embedding projection), and strictly constant-time subnormal-flushed lockstep AVX2 SIMD kernels.
 //! Base LUTs, IEEE 802.3 CRC32 tables, scalar selectors, and 8-lane SWAR primitives are
-//! consolidated in [`crate::traits::primitives`] and re-exported here for 100% API compatibility.
+//! defined in [`crate::traits::primitives`].
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -37,89 +37,53 @@
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use core::arch::x86_64::*;
 
-// Re-export all consolidated LUTs, CRC32 primitives, branchless scalar math, and 8-lane SWAR ops.
-pub use super::primitives::{
-    DEFAULT_MAX_VALID_Z_SCORE, DEFAULT_PHASE_GRAVITY_EPS, DEFAULT_RIPA_Q7_TO_NORM_SCALE,
-    F32_MIN_POSITIVE_NORMAL, MAX_PHASE_INTERFERENCE_INV_TEMP, MIN_PHASE_INTERFERENCE_INV_TEMP,
-    SWAR_EVEN_BYTES_64, SWAR_LOW7_MASK_32, SWAR_LOW7_MASK_64, SWAR_ODD_BYTES_64, SWAR_SIGN_MASK_32,
-    SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64, branchless_abs_f32,
-    branchless_atan2_f32, branchless_atan2_to_q7_fast, branchless_clamp_f32,
-    branchless_copysign_f32, branchless_cos_q7, branchless_crc32_128b_words, branchless_crc32_ieee,
-    branchless_exp_f32, branchless_eyring_kramers_escape, branchless_flush_subnormal_f32,
-    branchless_hysteresis_quantize_depth, branchless_inv_pos_f32, branchless_is_finite_f32,
-    branchless_is_nan_f32, branchless_lerp_f32, branchless_ln_f32, branchless_max_f32,
-    branchless_min_f32, branchless_phase_proximity_gravity_f32, branchless_q7_abs_u8,
-    branchless_q7_accumulate_64, branchless_q7_add_sat, branchless_q7_circular_diff,
-    branchless_q7_circular_lerp, branchless_q7_conjugate_64, branchless_q7_fold_s1_geodesic,
-    branchless_q7_neg_sat, branchless_q7_qdps_filter_64, branchless_q7_scale_64,
-    branchless_q7_scale_u7, branchless_q7_sub_64, branchless_q7_sub_sat, branchless_q7_to_rad,
+use super::primitives::{
+    DEFAULT_ENTROPY_EPS, F32_MIN_POSITIVE_NORMAL, INV_64_Q14_F32, INV_8_Q14_F32,
+    MAX_ATTENTION_HEADS, MAX_BAYESIAN_STIGMERGIC_DENSITY, MAX_PHASE_INTERFERENCE_INV_TEMP,
+    MIN_PHASE_INTERFERENCE_INV_TEMP, POPCOUNT_RSQRT_LUT_257_REF, Q14_BIAS_X8_I32,
+    Q7_FULL_COS_I16_REF, Q7_FULL_COS_REF, Q7_FULL_SINCOS_BIASED_U64_REF, SUBNORMAL_SQ_RISK_FLOOR,
+    SWAR_SPLAT_BYTE_64, VON_MISES_KAPPA_AT_MAX_R, branchless_abs_f32, branchless_atan2_f32,
+    branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_crc32_ieee, branchless_exp_f32,
+    branchless_eyring_kramers_escape, branchless_flush_subnormal_f32, branchless_inv_pos_f32,
+    branchless_is_finite_f32, branchless_ln_f32, branchless_max_f32,
+    branchless_phase_proximity_gravity_f32, branchless_q7_add_sat, branchless_q7_circular_diff,
+    branchless_q7_circular_lerp, branchless_q7_fold_s1_geodesic, branchless_q7_neg_sat,
+    branchless_q7_scale_u7, branchless_q7_sub_sat, branchless_q7_to_rad,
     branchless_qdps_filter_q7, branchless_rad_to_q7, branchless_rad_to_qdps_step_u8,
     branchless_relu_f32, branchless_ripa_clamp_rad, branchless_rotate_so2_pair,
     branchless_rotate_so2_pair_scaled, branchless_rsqrt_f32, branchless_sanitize_z_score_f32,
     branchless_select_f32, branchless_select_i32, branchless_select_i64, branchless_select_i8,
     branchless_select_q7, branchless_select_u16, branchless_select_u32, branchless_select_u64,
-    branchless_select_u8, branchless_select_usize, branchless_sigmoid_f32, branchless_signum_f32,
-    branchless_sin_q7, branchless_sincos_f32, branchless_sincos_half_pi_f32, branchless_sincos_q7,
+    branchless_select_u8, branchless_select_usize, branchless_sigmoid_f32, branchless_sincos_f32,
+    branchless_sincos_half_pi_f32, branchless_sincos_q7,
     branchless_sincos_q7_geodesic_ripa_default_lut, branchless_sincos_q7_ripa,
     branchless_sincos_q7_ripa_default_lut, branchless_sincos_q7_ripa_preinv,
-    branchless_smoothstep_f32, branchless_splitmix64, branchless_sqrt_f32, branchless_tanh_f32,
-    branchless_update_crc32_ieee, branchless_von_mises_kappa, crc32_block64_zero_seed_words,
-    is_phase_profile_nonzero_64, is_word_array_uniform_64, load_q7_words_64, store_q7_words_64,
-    swar_q7_abs_u8_x8, swar_q7_add_sat_x4, swar_q7_add_sat_x8, swar_q7_avg_round_x8,
-    swar_q7_circular_add_x8, swar_q7_circular_diff_x8, swar_q7_fold_s1_geodesic_x8,
-    swar_q7_mean_i8_from_words_64, swar_q7_mean_i8_from_words_with_uniform_flag_64,
-    swar_q7_neg_sat_x4, swar_q7_neg_sat_x8, swar_q7_pack_x8, swar_q7_qdps_filter_words_64,
-    swar_q7_qdps_filter_words_with_uniform_flag_64, swar_q7_qdps_filter_x8,
-    swar_q7_scale_le128_with_bias_x8, swar_q7_scale_u7_x8, swar_q7_sub_sat_x4, swar_q7_sub_sat_x8,
-    swar_q7_unpack_x8, swar_u8_add_sat_x8, swar_u8_halve_decay_x8, swar_u8_max_x8,
-    swar_u8_mean_round_x8, swar_u8_nonzero_count_x8, swar_u8_sub_sat_x8, swar_u8_sum_x8,
-    tanh_lut_eval_nonneg, trail_phase_words_mut, trail_phase_words_ref,
+    branchless_splitmix64, branchless_sqrt_f32, branchless_tanh_f32, branchless_von_mises_kappa,
+    fast_inv_len_f32, fast_inv_pos_normal_f32, fast_ln_1p_bounded_f32, fast_sqrt_unit_f32,
+    is_word_array_uniform_64, load_q7_words_64, sanitize_inplace_gain_f32, store_q7_words_64,
+    store_q7_x8_slice, swar_q7_add_sat_x4, swar_q7_add_sat_x8, swar_q7_circular_add_x8,
+    swar_q7_circular_diff_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_mean_i8_from_words_64,
+    swar_q7_neg_sat_x8, swar_q7_qdps_filter_x8, swar_q7_scale_le128_with_bias_x8,
+    swar_q7_scale_u7_x8, swar_q7_sub_sat_x4, swar_q7_sub_sat_x8, swar_u8_add_sat_x8,
+    swar_u8_halve_decay_x8, swar_u8_max_x8, swar_u8_sub_sat_x8,
 };
-#[allow(unused_imports)]
-pub(crate) use super::primitives::{
-    CRC32_CRYSTAL_ACTION_BYTE57_REF, CRC32_CRYSTAL_AID_BYTE0_REF, CRC32_CRYSTAL_AID_BYTE1_REF,
-    CRC32_CRYSTAL_PROV_BYTE0_REF, CRC32_CRYSTAL_PROV_BYTE1_REF, CRC32_CRYSTAL_SC_BYTE0_REF,
-    CRC32_CRYSTAL_SLOT_BYTE56_LUT_8, CRC32_CRYSTAL_ZOFF_BYTE1_REF, CRC32_CRYSTAL_ZOFF_BYTE2_REF,
-    CRC32_CRYSTAL_ZOFF_BYTE3_REF, CRC32_IEEE_SLICE16_REF, CRC32_UNIFORM56_PAD8_ZERO_SEED_REF,
-    CRC32_ZIMMS_DESC_BASE_SEED, CRYSTAL_CRC32_DEFAULT_W5_FINAL_CONTRIB,
-    CRYSTAL_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB, CRYSTAL_CRC32_KAPPA_MAX_FINAL_CONTRIB,
-    CRYSTAL_CRC32_RBAR_ONE_FINAL_CONTRIB, CRYSTAL_CRC32_W0_FINAL_CONTRIB, INV_64_Q14_F32,
-    INV_8_Q14_F32, MAX_BAYESIAN_STIGMERGIC_DENSITY, POPCOUNT_RSQRT_LUT_257,
-    POPCOUNT_RSQRT_LUT_257_REF, Q14_BIAS_X8_I32, Q7_DEFAULT_RIPA_SINCOS_REF, Q7_FULL_COS_I16_REF,
-    Q7_FULL_COS_REF, Q7_FULL_SINCOS_BIASED_U64_LUT, Q7_FULL_SINCOS_BIASED_U64_REF,
-    Q7_FUSED_SELF_DEFAULT_RIPA_SINCOS_REF, Q7_FUSED_SELF_GEODESIC_RIPA_SINCOS_REF,
-    Q7_GEODESIC_DEFAULT_RIPA_SINCOS_LUT_256, Q7_GEODESIC_DEFAULT_RIPA_SINCOS_REF,
-    Q7_SINCOS_LUT_256_REF, SUBNORMAL_SQ_RISK_FLOOR, TANH_LUT_MAX_X, VON_MISES_KAPPA_AT_MAX_R,
-    VON_MISES_KAPPA_AT_MAX_R_BITS, branchless_maturity_scale_u32, branchless_popcount_rsqrt_u32,
-    branchless_q7_default_gravity_from_diff_u8, crc32_crystal_be24_final_u32,
-    crc32_crystal_gm36_final_u32, crc32_crystal_stamp_contrib_128b, crc32_crystal_zoff16_final_u32,
-    crc32_fold_stamped_crystal_128b, crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32,
-    crc32_slice16_indep_hi1_u32, crc32_slice16_indep_lo1_u32, crc32_slice16_step_u64x2,
-    crc32_step_block64_words, crc32_step_l16, crc32_step_l3, crc32_step_l32, crc32_step_l4,
-    crc32_step_l5, crc32_step_l6, crc32_step_l8, crc32_update_crystal_absorption_delta,
-    crc32_update_crystal_energy_and_mass_delta, crc32_update_crystal_stationary_fields_delta,
-    eval_fused_ripa_pspm_sincos_q7_fast, eval_geodesic_ripa_sincos_q7_fast,
-    eval_ripa_sincos_q7_fast, fast_inv_len_f32, fast_inv_pos_normal_f32, fast_ln_1p_bounded_f32,
-    fast_sqrt_unit_f32, load_q7_word_at, load_q7_x8_slice, sanitize_inplace_gain_f32,
-    store_q7_word_at, store_q7_x8_slice, swar_add_sat_q7_slice_in_place,
-    swar_circular_add_and_fold_geodesic_q7_slice_in_place,
-    swar_circular_diff_and_fold_geodesic_q7_slices, swar_circular_diff_q7_slices,
-    swar_fold_s1_geodesic_q7_slice_in_place, swar_q7_scale_le128_x8,
-    swar_qdps_filter_q7_slice_in_place, swar_sub_sat_q7_slices, swar_u8_nonzero_msb_mask,
+#[cfg(test)]
+use super::primitives::{
+    CRC32_UNIFORM56_PAD8_ZERO_SEED_REF, CRYSTAL_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB,
+    CRYSTAL_CRC32_KAPPA_MAX_FINAL_CONTRIB, VON_MISES_KAPPA_AT_MAX_R_BITS,
+    branchless_crc32_128b_words, branchless_update_crc32_ieee, crc32_block64_zero_seed_words,
+    crc32_slice16_dep_lo0, crc32_step_block64_words, crc32_step_l5,
+    eval_fused_ripa_pspm_sincos_q7_fast, eval_ripa_sincos_q7_fast, swar_q7_pack_x8,
+    swar_q7_unpack_x8,
 };
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-#[allow(unused_imports)]
-pub(crate) use super::primitives::Q14_BIAS_X64_I32;
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-#[allow(unused_imports)]
-pub(crate) use super::primitives::avx2_q7_mean_i8_from_vec64;
-use core::f32::consts::{LN_2, PI};
-use super::primitives::{DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS};
+use super::primitives::Q14_BIAS_X64_I32;
 use crate::abi::gcso_q7_t;
+use core::f32::consts::{LN_2, PI};
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use core::f32::consts::FRAC_PI_2;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-use super::primitives::Q7_PHASE_INV_SCALE_RAD;
+use super::primitives::{Q7_PHASE_INV_SCALE_RAD, TANH_LUT_MAX_X};
 
 /// Unchecked 8-lane SWAR shortest-arc $S^1$ geodesic interpolation for `1 <= s <= 127` and
 /// precomputed `bias_restore = (128 - s) * 0x0101_0101_0101_0101` (`0` branches).

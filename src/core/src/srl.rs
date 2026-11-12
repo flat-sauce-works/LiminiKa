@@ -30,10 +30,9 @@
 #![allow(clippy::field_reassign_with_default)]
 
 use crate::abi::{gcso_srl_descriptor_t, GCSO_ERROR_INVALID_ARGUMENT};
-use crate::traits::branchless::{
-    branchless_clamp_f32, branchless_is_finite_f32, circular_r_bar_from_words_64,
-};
+use crate::traits::branchless::circular_r_bar_from_words_64;
 use crate::traits::gateway::project_bytes_swar_to_words_64;
+use crate::traits::primitives::{branchless_clamp_f32, branchless_is_finite_f32};
 use crate::traits::{
     GcsoResult, L2pSvdProjector, PersonaPatcher, Pod, PspmRouter, SrlAdapter,
     VisualAttentionSteering,

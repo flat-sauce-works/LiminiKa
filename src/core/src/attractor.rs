@@ -68,21 +68,10 @@ use crate::traits::aligned::{
     AlignedSliceMut32,
 };
 use crate::traits::branchless::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_inv_pos_f32,
-    branchless_is_finite_f32, branchless_max_f32, branchless_min_f32,
-    branchless_phase_coherence_inv_temp_scale, branchless_q7_conjugate_64,
-    branchless_q7_inhibit_words_64, branchless_q7_resonant_pull_64,
-    branchless_q7_synergy_fuse_words_64, branchless_rad_to_qdps_step_u8, branchless_relu_f32,
-    branchless_select_f32, branchless_select_i32, branchless_select_u32, branchless_select_u8,
-    branchless_splitmix64, branchless_von_mises_kappa, circular_r_bar_from_words_64,
-    circular_resultant_from_words_64, coherence_from_word_arrays_64,
-    coherence_from_word_arrays_with_both_uniform_flags_64, crc32_block64_zero_seed_words,
-    crc32_step_block64_words, crc32_step_l16, crc32_step_l32, crc32_step_l8, fast_inv_len_f32,
-    fast_inv_pos_normal_f32, is_phase_profile_nonzero_64, is_word_array_uniform_64,
-    load_q7_words_64, store_q7_word_at, store_q7_words_64, swar_q7_qdps_filter_words_64,
-    swar_q7_scale_le128_with_bias_x8, swar_q7_sub_sat_x8, swar_words_nonzero_64,
-    trail_phase_words_ref, Q7_FULL_COS_REF, SWAR_LOW7_MASK_64, SWAR_SIGN_MASK_64,
-    SWAR_SPLAT_BYTE_64,
+    branchless_phase_coherence_inv_temp_scale, branchless_q7_inhibit_words_64,
+    branchless_q7_resonant_pull_64, branchless_q7_synergy_fuse_words_64,
+    circular_r_bar_from_words_64, circular_resultant_from_words_64, coherence_from_word_arrays_64,
+    coherence_from_word_arrays_with_both_uniform_flags_64, swar_words_nonzero_64,
 };
 use crate::traits::cold_path::{
     AttractorField, ColdPathTrailCrystalExt, MultiDomainAttractorSpace, PersonaPatcher,
@@ -91,6 +80,18 @@ use crate::traits::gateway::{
     CausalProvenanceSignal, CognitiveGroundingSignal, CrystallizedAttractorRecord, GatewayFrame,
     ManifoldGatewaySignal, SubjectivePersonaSignal, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
     CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, ROOT_CAUSE_NOMINAL,
+};
+use crate::traits::primitives::{
+    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_inv_pos_f32,
+    branchless_is_finite_f32, branchless_max_f32, branchless_min_f32, branchless_q7_conjugate_64,
+    branchless_rad_to_qdps_step_u8, branchless_relu_f32, branchless_select_f32,
+    branchless_select_i32, branchless_select_u32, branchless_select_u8, branchless_splitmix64,
+    branchless_von_mises_kappa, crc32_block64_zero_seed_words, crc32_step_block64_words,
+    crc32_step_l16, crc32_step_l32, crc32_step_l8, fast_inv_len_f32, fast_inv_pos_normal_f32,
+    is_phase_profile_nonzero_64, is_word_array_uniform_64, load_q7_words_64, store_q7_word_at,
+    store_q7_words_64, swar_q7_qdps_filter_words_64, swar_q7_scale_le128_with_bias_x8,
+    swar_q7_sub_sat_x8, trail_phase_words_ref, Q7_FULL_COS_REF, SWAR_LOW7_MASK_64,
+    SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
 };
 use crate::traits::primitives::{
     is_slot_pair_coupled, GcsoResult, Pod, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
@@ -771,7 +772,7 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
                 w0 = swar_q7_scale_le128_with_bias_x8(w0, s, bias_restore);
             }
             if step_u8 > 1 {
-                w0 = crate::traits::branchless::swar_q7_qdps_filter_x8(w0, step_u8);
+                w0 = crate::traits::primitives::swar_q7_qdps_filter_x8(w0, step_u8);
             }
             w = [w0; 8];
         } else {

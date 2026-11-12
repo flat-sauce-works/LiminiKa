@@ -449,7 +449,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_pointer_gated_phase_steering_sa
     const uint8_t tag = gcso_tagged_ptr_unpack_tag_inline(tagged_ptr);
     const uint8_t action_mode = tag & GCSO_ACTION_MODE_ALL_MASK;
     if ((action_mode & GCSO_ACTION_MODE_LAYER_SKIP) != 0U ||
-        (action_mode & GCSO_ACTION_MODE_PHASE_STEER) == 0U) {
+        (action_mode & GCSO_ACTION_MODE_DPSR_STEER) == 0U) {
         if (GCSO_UNLIKELY(head_dim == 0 || (head_dim % 2 != 0) || num_heads == 0 ||
                           std::isnan(max_rad) || std::isinf(max_rad))) {
             return GCSO_ERROR_INVALID_ARGUMENT;
@@ -478,7 +478,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_pointer_gated_phase_steering_fu
     const uint8_t tag = gcso_tagged_ptr_unpack_tag_inline(tagged_ptr);
     const uint8_t action_mode = tag & GCSO_ACTION_MODE_ALL_MASK;
     if ((action_mode & GCSO_ACTION_MODE_LAYER_SKIP) != 0U ||
-        (action_mode & GCSO_ACTION_MODE_PHASE_STEER) == 0U) {
+        (action_mode & GCSO_ACTION_MODE_DPSR_STEER) == 0U) {
         if (GCSO_UNLIKELY(head_dim == 0 || (head_dim % 2 != 0) || num_heads == 0 ||
                           query_tensor == key_tensor || std::isnan(max_rad) ||
                           std::isinf(max_rad))) {

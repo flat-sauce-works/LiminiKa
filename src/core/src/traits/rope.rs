@@ -63,36 +63,8 @@ use super::aligned::{
     AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut, AlignedSliceMut16,
     AlignedSliceMut32, DisjointMutPair, DisjointMutTriple,
 };
-use super::branchless::{
-    BranchlessKernel, DEFAULT_RIPA_Q7_TO_NORM_SCALE, F32_MIN_POSITIVE_NORMAL,
-    Q7_DEFAULT_RIPA_SINCOS_REF, Q7_FULL_COS_I16_REF, Q7_FUSED_SELF_DEFAULT_RIPA_SINCOS_REF,
-    Q7_FUSED_SELF_GEODESIC_RIPA_SINCOS_REF, Q7_GEODESIC_DEFAULT_RIPA_SINCOS_REF,
-    Q7_SINCOS_LUT_256_REF, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, add_scalar_f32_slice_unrolled8,
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_inv_pos_f32,
-    branchless_is_finite_f32, branchless_min_f32, branchless_phase_coherence_inv_temp_scale,
-    branchless_q7_add_sat, branchless_q7_circular_diff, branchless_q7_coherence_and_resultant_64,
-    branchless_q7_fold_s1_geodesic, branchless_q7_scale_u7,
-    branchless_q7_unified_field_fold_words_with_init_weight_64, branchless_qdps_filter_q7,
-    branchless_rad_to_q7, branchless_rad_to_qdps_step_u8, branchless_relu_f32,
-    branchless_rotate_so2_pair_scaled, branchless_select_f32,
-    branchless_select_u32, branchless_select_u8, branchless_sincos_f32,
-    branchless_sincos_q7, branchless_sincos_q7_ripa_preinv, branchless_splitmix64,
-    clamp_angles_ripa_in_place_simd8, coherence_from_word_arrays_64, dot_f32_unrolled4,
-    eval_fused_ripa_pspm_sincos_q7_fast, eval_geodesic_ripa_sincos_q7_fast,
-    eval_ripa_sincos_q7_fast, fast_inv_len_f32, fast_inv_pos_normal_f32, is_word_array_uniform_64,
-    load_q7_words_64, load_q7_x8_slice, modulate_attention_scores_by_bayesian_trails_64,
-    modulate_attention_scores_by_phase_bank_64, norm_l2_underflow_resilient_f32,
-    procrustes_q7_slice_simd, rotate_so2_2d_xy_slice_simd, rotate_so2_3d_txy_slice_simd,
-    rotate_so2_slice_unrolled16, sanitize_inplace_gain_f32, scale_f32_slice_unrolled8,
-    sincos_f32_x8_simd, srl_accum_outer_product_simd, srl_write_outer_product_simd,
-    store_q7_words_64, store_q7_x8_slice, swar_add_sat_q7_slice_in_place,
-    swar_circular_diff_and_fold_geodesic_q7_slices, swar_circular_diff_q7_slices,
-    swar_fold_s1_geodesic_q7_slice_in_place, swar_q7_add_sat_x8, swar_q7_circular_add_x8,
-    swar_q7_circular_diff_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_qdps_filter_words_64,
-    swar_q7_qdps_filter_x8, swar_q7_scale_le128_with_bias_x8, swar_q7_scale_le128_x8,
-    swar_q7_scale_u7_x8, swar_qdps_filter_q7_slice_in_place, swar_sub_sat_q7_slices,
-    swar_u8_sum_x8,
-};
+use super::branchless::{BranchlessKernel, add_scalar_f32_slice_unrolled8, branchless_phase_coherence_inv_temp_scale, branchless_q7_coherence_and_resultant_64, branchless_q7_unified_field_fold_words_with_init_weight_64, clamp_angles_ripa_in_place_simd8, coherence_from_word_arrays_64, dot_f32_unrolled4, modulate_attention_scores_by_bayesian_trails_64, modulate_attention_scores_by_phase_bank_64, norm_l2_underflow_resilient_f32, procrustes_q7_slice_simd, rotate_so2_2d_xy_slice_simd, rotate_so2_3d_txy_slice_simd, rotate_so2_slice_unrolled16, scale_f32_slice_unrolled8, sincos_f32_x8_simd, srl_accum_outer_product_simd, srl_write_outer_product_simd};
+use super::primitives::{DEFAULT_RIPA_Q7_TO_NORM_SCALE, F32_MIN_POSITIVE_NORMAL, Q7_DEFAULT_RIPA_SINCOS_REF, Q7_FULL_COS_I16_REF, Q7_FUSED_SELF_DEFAULT_RIPA_SINCOS_REF, Q7_FUSED_SELF_GEODESIC_RIPA_SINCOS_REF, Q7_GEODESIC_DEFAULT_RIPA_SINCOS_REF, Q7_SINCOS_LUT_256_REF, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_inv_pos_f32, branchless_is_finite_f32, branchless_min_f32, branchless_q7_add_sat, branchless_q7_circular_diff, branchless_q7_fold_s1_geodesic, branchless_q7_scale_u7, branchless_qdps_filter_q7, branchless_rad_to_q7, branchless_rad_to_qdps_step_u8, branchless_relu_f32, branchless_rotate_so2_pair_scaled, branchless_select_f32, branchless_select_u32, branchless_select_u8, branchless_sincos_f32, branchless_sincos_q7, branchless_sincos_q7_ripa_preinv, branchless_splitmix64, eval_fused_ripa_pspm_sincos_q7_fast, eval_geodesic_ripa_sincos_q7_fast, eval_ripa_sincos_q7_fast, fast_inv_len_f32, fast_inv_pos_normal_f32, is_word_array_uniform_64, load_q7_words_64, load_q7_x8_slice, sanitize_inplace_gain_f32, store_q7_words_64, store_q7_x8_slice, swar_add_sat_q7_slice_in_place, swar_circular_diff_and_fold_geodesic_q7_slices, swar_circular_diff_q7_slices, swar_fold_s1_geodesic_q7_slice_in_place, swar_q7_add_sat_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_qdps_filter_words_64, swar_q7_qdps_filter_x8, swar_q7_scale_le128_with_bias_x8, swar_q7_scale_le128_x8, swar_q7_scale_u7_x8, swar_qdps_filter_q7_slice_in_place, swar_sub_sat_q7_slices, swar_u8_sum_x8};
 use super::primitives::{
     ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT,
     DEFAULT_RIPA_CLAMP_MAX_RAD, GcsoResult, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,

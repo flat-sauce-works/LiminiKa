@@ -67,21 +67,12 @@ use crate::abi::{
     GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT,
 };
 use crate::traits::aligned::{AlignedSlice32, AlignedSliceMut32};
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+use crate::traits::branchless::coherence_from_word_arrays_with_both_uniform_flags_64;
 use crate::traits::branchless::{
-    branchless_abs_f32, branchless_clamp_f32, branchless_eyring_kramers_escape,
-    branchless_fast_transition_log_prob, branchless_flush_subnormal_f32, branchless_is_finite_f32,
-    branchless_max_f32, branchless_min_f32, branchless_phase_coherence_inv_temp_scale,
-    branchless_popcount_rsqrt_u32, branchless_q7_add_sat,
-    branchless_q7_unified_field_fold_words_with_init_weight_64, branchless_rad_to_q7,
-    branchless_relu_f32, branchless_rsqrt_f32, branchless_sanitize_z_score_f32,
-    branchless_select_f32, branchless_select_q7, branchless_select_u32, branchless_select_u64,
-    branchless_select_u8, branchless_splitmix64, branchless_sqrt_f32,
-    coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_len_f32,
-    fast_inv_pos_normal_f32, fast_ln_1p_bounded_f32, is_word_array_uniform_64, load_q7_words_64,
-    scale_f32_slice_unrolled8, store_q7_word_at, store_q7_words_64, sum_abs_and_sq_f32_simd8,
-    sum_sq_f32_simd8, swar_q7_add_sat_x8, swar_q7_neg_sat_x8, swar_q7_qdps_filter_words_64,
-    swar_words_equal_64, tanh_lut_eval_nonneg, trail_phase_words_mut, trail_phase_words_ref,
-    DEFAULT_MAX_VALID_Z_SCORE, F32_MIN_POSITIVE_NORMAL, Q7_FULL_COS_REF, SWAR_SPLAT_BYTE_64,
+    branchless_fast_transition_log_prob, branchless_phase_coherence_inv_temp_scale,
+    branchless_q7_unified_field_fold_words_with_init_weight_64, scale_f32_slice_unrolled8,
+    sum_abs_and_sq_f32_simd8, sum_sq_f32_simd8, swar_words_equal_64,
 };
 use crate::traits::cold_path::{
     EdbcBranchController, EntropyEvaluator, HierarchicalTreeTable, SheafCohomologyEvaluator,
@@ -95,16 +86,30 @@ use crate::traits::gateway::{
     CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
     ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
 };
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+use crate::traits::primitives::Q7_FULL_COS_REF;
+use crate::traits::primitives::{
+    branchless_abs_f32, branchless_clamp_f32, branchless_eyring_kramers_escape,
+    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_max_f32,
+    branchless_min_f32, branchless_popcount_rsqrt_u32, branchless_q7_add_sat, branchless_rad_to_q7,
+    branchless_relu_f32, branchless_rsqrt_f32, branchless_sanitize_z_score_f32,
+    branchless_select_f32, branchless_select_q7, branchless_select_u32, branchless_select_u64,
+    branchless_select_u8, branchless_splitmix64, branchless_sqrt_f32, fast_inv_len_f32,
+    fast_inv_pos_normal_f32, is_word_array_uniform_64, load_q7_words_64, store_q7_word_at,
+    store_q7_words_64, swar_q7_add_sat_x8, swar_q7_neg_sat_x8, swar_q7_qdps_filter_words_64,
+    tanh_lut_eval_nonneg, trail_phase_words_mut, trail_phase_words_ref, DEFAULT_MAX_VALID_Z_SCORE,
+    F32_MIN_POSITIVE_NORMAL, SWAR_SPLAT_BYTE_64,
+};
 use crate::traits::primitives::{
     GcsoResult, Pod, ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_PRESET_INERTIAL_SKIP,
     ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION,
     DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS, MAX_SURROGATE_ENTROPY_LN2,
 };
 use crate::traits::telemetry::{
-    ContrastivePhaseBloomFilter, StigmergicActionPtrOps, StigmergicTrailOps,
-    MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS,
-    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
-    TRAIL_FLAG_SYNERGY_RESONANCE,
+    select_and_bridge_macro_aligned_bayesian_trail_core, ContrastivePhaseBloomFilter,
+    StigmergicActionPtrOps, StigmergicTrailOps, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY,
+    NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
+    TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 /// Normal entropy convergence mode (`Mode 0`: single stable attractor at origin $x^* = 0$).
 pub const EDBC_MODE_NORMAL_ENTROPY: u32 = 0;
@@ -605,9 +610,10 @@ fn bridge_and_eval_liminal_trail_chain_single_pass(
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
-        use crate::traits::branchless::{
-            branchless_cos_q7, coherence_from_diff_words_64, swar_q7_circular_add_x8,
-            swar_q7_circular_diff_x8, swar_q7_scale_le128_with_bias_x8,
+        use crate::traits::branchless::coherence_from_diff_words_64;
+        use crate::traits::primitives::{
+            branchless_cos_q7, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
+            swar_q7_scale_le128_with_bias_x8,
         };
         let bias_restore = (128u64.wrapping_sub(t_s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
 
@@ -861,7 +867,7 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
     src_trail: &mut gcso_pointer_trail_t,
     preloaded_src_w_opt: Option<[u64; NUM_SWARM_MICRO_CELLS]>,
     candidate_trails: &mut [gcso_pointer_trail_t],
-    mut attention_scores_opt: Option<&mut [f32]>,
+    attention_scores_opt: Option<&mut [f32]>,
     head_dim: u32,
     phase_interference_gain: f32,
     stigmergic_prior_gain: f32,
@@ -874,454 +880,41 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
     win_w_opt: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
     bloom_filter: &mut ContrastivePhaseBloomFilter,
 ) -> (u32, f32, f32, bool) {
-    let cand_len = candidate_trails.len();
-    if cand_len == 0 {
+    if candidate_trails.is_empty() {
         return (src_trail.linked_trail_id, 0.0, 0.0, false);
     }
-
-    let safe_dim = branchless_select_u32(head_dim > 0, head_dim, 128);
-    let rsqrt_d = if safe_dim <= 256 {
-        branchless_popcount_rsqrt_u32(safe_dim)
-    } else {
-        branchless_rsqrt_f32(safe_dim as f32)
-    };
-    let phase_scale =
-        branchless_flush_subnormal_f32(branchless_relu_f32(phase_interference_gain) * rsqrt_d);
-    let clean_eta = branchless_flush_subnormal_f32(branchless_relu_f32(stigmergic_prior_gain));
-    let clean_link = branchless_flush_subnormal_f32(branchless_relu_f32(pointer_link_bonus));
-    let safe_thresh = branchless_clamp_f32(branchless_abs_f32(contradiction_threshold), 0.0, 1.0);
-    let clean_penalty = branchless_flush_subnormal_f32(branchless_relu_f32(repulsion_penalty));
 
     let src_w = match preloaded_src_w_opt {
         Some(w) => w,
         None => *trail_phase_words_ref(src_trail),
     };
-    let src_is_uniform = is_word_array_uniform_64(&src_w);
-    let src_w0 = src_w[0];
-    let src_b0 = (src_w0 & 0xFF) as u8;
-    let src_is_byte_uniform = src_is_uniform & (src_w0 == src_w0.rotate_right(8));
-    let cur_linked_id = src_trail.linked_trail_id;
-    let prune_non_macro = macro_anchor_id != 0;
+    let outcome = select_and_bridge_macro_aligned_bayesian_trail_core(
+        src_w,
+        win_w_opt,
+        macro_anchor_id,
+        secondary_macro_anchor_id,
+        src_trail,
+        candidate_trails,
+        attention_scores_opt,
+        head_dim,
+        phase_interference_gain,
+        stigmergic_prior_gain,
+        pointer_link_bonus,
+        repulsion_penalty,
+        interpolation_u7,
+        contradiction_threshold,
+        0.0,
+        false,
+    );
 
-    #[inline(always)]
-    #[allow(clippy::too_many_arguments)]
-    fn fallback_scan_unpruned_candidates_edbc_cold(
-        src_w: &[u64; NUM_SWARM_MICRO_CELLS],
-        src_is_uniform: bool,
-        src_is_byte_uniform: bool,
-        src_b0: u8,
-        candidate_trails: &[gcso_pointer_trail_t],
-        attention_scores_opt: &mut Option<&mut [f32]>,
-        macro_anchor_id: u32,
-        secondary_macro_anchor_id: u32,
-        cur_linked_id: u32,
-        phase_scale: f32,
-        clean_eta: f32,
-        clean_penalty: f32,
-        safe_thresh: f32,
-        best_id: &mut u32,
-        best_idx: &mut usize,
-        best_score: &mut f32,
-        best_coh: &mut f32,
-        best_cand_is_uniform: &mut bool,
-        best_cand_eq_src: &mut bool,
-        found_valid: &mut bool,
-    ) {
-        let cand_len = candidate_trails.len();
-        let mut f_idx = 0usize;
-        while f_idx < cand_len {
-            let cand = &candidate_trails[f_idx];
-            let cand_not_repulsed = (cand.flags & TRAIL_FLAG_REPULSION_ACTIVE) == 0;
-            if !cand_not_repulsed {
-                if let Some(ref mut scores) = *attention_scores_opt {
-                    if f_idx < scores.len() {
-                        scores[f_idx] =
-                            branchless_flush_subnormal_f32(scores[f_idx] - clean_penalty);
-                    }
-                }
-                f_idx += 1;
-                continue;
-            }
-            let cand_id = f_idx as u32;
-            let in_c1 = (macro_anchor_id != 0)
-                & ((cand.cluster_id == macro_anchor_id)
-                    | (cand.target_anchor_id == macro_anchor_id));
-            let in_c2 = (secondary_macro_anchor_id != 0)
-                & ((cand.cluster_id == secondary_macro_anchor_id)
-                    | (cand.target_anchor_id == secondary_macro_anchor_id));
-            let was_checked = in_c1
-                | in_c2
-                | (cand.cluster_id == 0)
-                | ((cur_linked_id != 0) & (cur_linked_id == cand_id));
-            if was_checked {
-                f_idx += 1;
-                continue;
-            }
-            let cand_w = trail_phase_words_ref(cand);
-            let cu = src_is_uniform && is_word_array_uniform_64(cand_w);
-            let cand_eq_src = cu && (cand_w[0] == src_w[0]);
-            let coh = if cu {
-                let cw0 = cand_w[0];
-                if cand_eq_src {
-                    1.0
-                } else if src_is_byte_uniform && (cw0 == cw0.rotate_right(8)) {
-                    Q7_FULL_COS_REF[src_b0.wrapping_sub(cw0 as u8) as usize]
-                } else {
-                    coherence_from_word_arrays_with_both_uniform_flags_64(src_w, true, cand_w, true)
-                }
-            } else {
-                coherence_from_word_arrays_with_both_uniform_flags_64(
-                    src_w,
-                    src_is_uniform,
-                    cand_w,
-                    false,
-                )
-            };
-            let prior_term = clean_eta * fast_ln_1p_bounded_f32(cand.stigmergic_density);
-            let is_coherent = coh >= -safe_thresh;
-            let bayes_delta = branchless_flush_subnormal_f32(
-                phase_scale * coh + branchless_select_f32(is_coherent, prior_term, 0.0),
-            );
-            if let Some(ref mut scores) = *attention_scores_opt {
-                if f_idx < scores.len() {
-                    let penalty = branchless_select_f32(is_coherent, 0.0, clean_penalty);
-                    scores[f_idx] =
-                        branchless_flush_subnormal_f32(scores[f_idx] + bayes_delta - penalty);
-                }
-            }
-            let take = is_coherent & ((!*found_valid) | (bayes_delta > *best_score));
-            if take {
-                *best_id = cand_id;
-                *best_idx = f_idx;
-                *best_score = bayes_delta;
-                *best_coh = coh;
-                *best_cand_is_uniform = cu;
-                *best_cand_eq_src = cand_eq_src;
-            }
-            *found_valid |= is_coherent;
-            f_idx += 1;
-        }
-    }
-
-    let mut best_id = cur_linked_id;
-    let mut best_idx = 0usize;
-    let mut best_score = -1.0e30_f32;
-    let mut best_coh = 0.0_f32;
-    let mut best_cand_is_uniform = false;
-    let mut best_cand_eq_src = false;
-    let mut found_valid = false;
-    let mut win_meta_evaluated = false;
-    let mut win_eq_src = false;
-    let mut win_is_uniform = false;
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    let (vs0, vs1) = unsafe {
-        crate::traits::branchless::avx2_words64_to_vec64_with_uniform(&src_w, src_is_uniform)
-    };
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    let mut win_vec_opt: Option<(core::arch::x86_64::__m256i, core::arch::x86_64::__m256i)> = None;
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    let mut best_diff_opt: Option<(core::arch::x86_64::__m256i, core::arch::x86_64::__m256i)> =
-        None;
-    let scores_none = attention_scores_opt.is_none();
-    let has_win_w = win_w_opt.is_some();
-
-    let mut idx = 0usize;
-    while idx < cand_len {
-        let cand = &candidate_trails[idx];
-        let cand_not_repulsed = (cand.flags & TRAIL_FLAG_REPULSION_ACTIVE) == 0;
-        if (!cand_not_repulsed) & scores_none {
-            idx += 1;
-            continue;
-        }
-        let cand_id = idx as u32;
-        let in_c1 = (macro_anchor_id != 0)
-            & ((cand.cluster_id == macro_anchor_id) | (cand.target_anchor_id == macro_anchor_id));
-        let in_c2 = (secondary_macro_anchor_id != 0)
-            & ((cand.cluster_id == secondary_macro_anchor_id)
-                | (cand.target_anchor_id == secondary_macro_anchor_id));
-        let is_macro_aligned = in_c1 | in_c2;
-        let is_unstamped = cand.cluster_id == 0;
-        let is_cur_linked = (cur_linked_id != 0) & (cur_linked_id == cand_id);
-        if prune_non_macro & (!is_macro_aligned) & (!is_unstamped) & (!is_cur_linked) {
-            idx += 1;
-            continue;
-        }
-
-        // Cache-Line-0 Bayesian upper-bound screen: evaluate `prior_term` and `max_link`
-        // from Cache Line 0 (`cand.stigmergic_density` at offset 44) BEFORE touching Cache Line 1
-        // (`cand.accumulated_phase_delta` at offset 56..120).
-        let is_linked = is_cur_linked | is_macro_aligned;
-        let prior_term = if cand_not_repulsed {
-            clean_eta * fast_ln_1p_bounded_f32(cand.stigmergic_density)
-        } else {
-            0.0
-        };
-        if scores_none & found_valid {
-            let max_link = if is_linked | (has_win_w & is_unstamped) {
-                clean_link
-            } else {
-                0.0
-            };
-            if branchless_flush_subnormal_f32(phase_scale + prior_term + max_link) <= best_score {
-                idx += 1;
-                continue;
-            }
-        }
-
-        let cand_w = trail_phase_words_ref(cand);
-        let cw0 = cand_w[0];
-        let cand_eq_src = (cw0 == src_w0) && swar_words_equal_64(&src_w, cand_w);
-        let cand_is_uniform = if cand_eq_src {
-            src_is_uniform
-        } else {
-            src_is_uniform && is_word_array_uniform_64(cand_w)
-        };
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-        let mut cand_vec_opt: Option<(
-            core::arch::x86_64::__m256i,
-            core::arch::x86_64::__m256i,
-        )> = None;
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-        let mut cand_diff_opt: Option<(
-            core::arch::x86_64::__m256i,
-            core::arch::x86_64::__m256i,
-        )> = None;
-        let coh = if cand_eq_src {
-            1.0
-        } else if cand_is_uniform {
-            if src_is_byte_uniform && (cw0 == cw0.rotate_right(8)) {
-                Q7_FULL_COS_REF[src_b0.wrapping_sub(cw0 as u8) as usize]
-            } else {
-                coherence_from_word_arrays_with_both_uniform_flags_64(&src_w, true, cand_w, true)
-            }
-        } else {
-            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-            {
-                unsafe {
-                    use core::arch::x86_64::_mm256_sub_epi8;
-                    let (vc0, vc1) = crate::traits::branchless::avx2_words64_to_vec64(cand_w);
-                    let vd0 = _mm256_sub_epi8(vc0, vs0);
-                    let vd1 = _mm256_sub_epi8(vc1, vs1);
-                    cand_vec_opt = Some((vc0, vc1));
-                    cand_diff_opt = Some((vd0, vd1));
-                    crate::traits::branchless::avx2_coherence_from_diff_vec64(vd0, vd1)
-                }
-            }
-            #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-            {
-                coherence_from_word_arrays_with_both_uniform_flags_64(
-                    &src_w,
-                    src_is_uniform,
-                    cand_w,
-                    false,
-                )
-            }
-        };
-        let is_coherent = (coh >= -safe_thresh) & cand_not_repulsed;
-        let eff_prior_link = if is_coherent {
-            let link_term = if is_linked {
-                clean_link
-            } else if is_unstamped {
-                if scores_none
-                    & found_valid
-                    & (branchless_flush_subnormal_f32(phase_scale * coh + prior_term + clean_link)
-                        <= best_score)
-                {
-                    0.0
-                } else if let Some(win_w) = win_w_opt {
-                    if !win_meta_evaluated {
-                        win_eq_src = swar_words_equal_64(&src_w, win_w);
-                        if !win_eq_src {
-                            win_is_uniform = is_word_array_uniform_64(win_w);
-                            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-                            {
-                                win_vec_opt = Some(unsafe {
-                                    crate::traits::branchless::avx2_words64_to_vec64_with_uniform(
-                                        win_w,
-                                        win_is_uniform,
-                                    )
-                                });
-                            }
-                        }
-                        win_meta_evaluated = true;
-                    }
-                    let win_coh = if win_eq_src {
-                        coh
-                    } else if cand_is_uniform && win_is_uniform {
-                        coherence_from_word_arrays_with_both_uniform_flags_64(
-                            win_w, true, cand_w, true,
-                        )
-                    } else {
-                        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-                        {
-                            unsafe {
-                                use core::arch::x86_64::_mm256_sub_epi8;
-                                let (vw0, vw1) = match win_vec_opt {
-                                    Some(v) => v,
-                                    None => {
-                                        crate::traits::branchless::avx2_words64_to_vec64_with_uniform(
-                                            win_w,
-                                            win_is_uniform,
-                                        )
-                                    }
-                                };
-                                let (vc0, vc1) = match cand_vec_opt {
-                                    Some(v) => v,
-                                    None => {
-                                        crate::traits::branchless::avx2_words64_to_vec64_with_uniform(
-                                            cand_w,
-                                            cand_is_uniform,
-                                        )
-                                    }
-                                };
-                                crate::traits::branchless::avx2_coherence_from_diff_vec64(
-                                    _mm256_sub_epi8(vw0, vc0),
-                                    _mm256_sub_epi8(vw1, vc1),
-                                )
-                            }
-                        }
-                        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-                        {
-                            let cand_uni_for_win = if src_is_uniform {
-                                cand_is_uniform
-                            } else if win_is_uniform {
-                                is_word_array_uniform_64(cand_w)
-                            } else {
-                                false
-                            };
-                            coherence_from_word_arrays_with_both_uniform_flags_64(
-                                win_w,
-                                win_is_uniform,
-                                cand_w,
-                                cand_uni_for_win,
-                            )
-                        }
-                    };
-                    clean_link * branchless_relu_f32(win_coh)
-                } else {
-                    0.0
-                }
-            } else {
-                0.0
-            };
-            prior_term + link_term
-        } else {
-            0.0
-        };
-        let bayes_delta = branchless_flush_subnormal_f32(phase_scale * coh + eff_prior_link);
-
-        if let Some(ref mut scores) = attention_scores_opt {
-            if idx < scores.len() {
-                let penalty = branchless_select_f32(is_coherent, 0.0, clean_penalty);
-                scores[idx] = branchless_flush_subnormal_f32(scores[idx] + bayes_delta - penalty);
-            }
-        }
-
-        let take = is_coherent & ((!found_valid) | (bayes_delta > best_score));
-        if take {
-            best_id = cand_id;
-            best_idx = idx;
-            best_score = bayes_delta;
-            best_coh = coh;
-            best_cand_is_uniform = cand_is_uniform;
-            best_cand_eq_src = cand_eq_src;
-            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-            {
-                best_diff_opt = cand_diff_opt;
-            }
-        }
-        found_valid |= is_coherent;
-        idx += 1;
-    }
-
-    if prune_non_macro & (!found_valid) {
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-        {
-            best_diff_opt = None;
-        }
-        fallback_scan_unpruned_candidates_edbc_cold(
-            &src_w,
-            src_is_uniform,
-            src_is_byte_uniform,
-            src_b0,
-            candidate_trails,
-            &mut attention_scores_opt,
-            macro_anchor_id,
-            secondary_macro_anchor_id,
-            cur_linked_id,
-            phase_scale,
-            clean_eta,
-            clean_penalty,
-            safe_thresh,
-            &mut best_id,
-            &mut best_idx,
-            &mut best_score,
-            &mut best_coh,
-            &mut best_cand_is_uniform,
-            &mut best_cand_eq_src,
-            &mut found_valid,
-        );
-    }
-
-    if found_valid {
-        src_trail.linked_trail_id = best_id;
-        let dst_trail = &mut candidate_trails[best_idx];
-        if !best_cand_eq_src {
-            let s = branchless_select_u8(interpolation_u7 > 128, 128, interpolation_u7) as u64;
-            #[allow(unused_mut)]
-            let mut handled_avx2 = false;
-            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-            if !best_cand_is_uniform && s > 0 && s < 128 {
-                handled_avx2 = true;
-                unsafe {
-                    use core::arch::x86_64::_mm256_sub_epi8;
-                    let (bvd0, bvd1) = match best_diff_opt {
-                        Some(vd) => vd,
-                        None => {
-                            let (bvc0, bvc1) = crate::traits::branchless::avx2_words64_to_vec64(
-                                trail_phase_words_ref(dst_trail),
-                            );
-                            (_mm256_sub_epi8(bvc0, vs0), _mm256_sub_epi8(bvc1, vs1))
-                        }
-                    };
-                    let (vr0, vr1) = crate::traits::branchless::avx2_slerp_from_diff_vec64(
-                        vs0, vs1, bvd0, bvd1, s,
-                    );
-                    let bridged_w = crate::traits::branchless::avx2_vec64_to_words64(vr0, vr1);
-                    *trail_phase_words_mut(src_trail) = bridged_w;
-                    *trail_phase_words_mut(dst_trail) = bridged_w;
-                }
-            }
-            if !handled_avx2 {
-                let best_w = *trail_phase_words_ref(dst_trail);
-                if !swar_words_equal_64(&src_w, &best_w) {
-                    if s == 0 {
-                        *trail_phase_words_mut(dst_trail) = src_w;
-                    } else if s >= 128 {
-                        *trail_phase_words_mut(src_trail) = best_w;
-                    } else {
-                        let bias_restore =
-                            (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-                        let bw = crate::traits::swar_slerp_words_with_uniform_flag_64(
-                            &src_w,
-                            src_is_uniform,
-                            &best_w,
-                            best_cand_is_uniform,
-                            s,
-                            bias_restore,
-                        )
-                        .0;
-                        *trail_phase_words_mut(src_trail) = bw;
-                        *trail_phase_words_mut(dst_trail) = bw;
-                    }
-                }
-            }
-        }
-
+    if outcome.found_valid {
+        let dst_trail = &mut candidate_trails[outcome.best_idx];
         let cur_rho =
             branchless_flush_subnormal_f32(branchless_relu_f32(src_trail.stigmergic_density));
         src_trail.stigmergic_density = branchless_min_f32(
-            branchless_flush_subnormal_f32(cur_rho + 0.25 * (1.0 + branchless_relu_f32(best_coh))),
+            branchless_flush_subnormal_f32(
+                cur_rho + 0.25 * (1.0 + branchless_relu_f32(outcome.best_coh)),
+            ),
             MAX_STIGMERGIC_DENSITY,
         );
 
@@ -1331,7 +924,8 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
             branchless_flush_subnormal_f32(branchless_relu_f32(src_trail.attractor_pull_force));
         src_trail.attractor_pull_force = branchless_min_f32(
             branchless_flush_subnormal_f32(
-                self_pull + 0.5 * cand_pull * branchless_clamp_f32(1.0 + best_coh, 0.25, 2.0),
+                self_pull
+                    + 0.5 * cand_pull * branchless_clamp_f32(1.0 + outcome.best_coh, 0.25, 2.0),
             ),
             MAX_ATTRACTOR_PULL_FORCE,
         );
@@ -1364,12 +958,12 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
             (dst_trail.flags | TRAIL_FLAG_SYNERGY_RESONANCE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE)
                 & !TRAIL_FLAG_REPULSION_ACTIVE;
 
-        let transition_lp = branchless_fast_transition_log_prob(best_coh);
-        (best_id, best_score, transition_lp, true)
+        let transition_lp = branchless_fast_transition_log_prob(outcome.best_coh);
+        (outcome.best_id, outcome.best_score, transition_lp, true)
     } else {
         bloom_filter.insert_repulsive_pattern_words_weighted(&src_w, 1);
         src_trail.stamp_phase_conjugate_repulsion();
-        (best_id, 0.0, 0.0, false)
+        (outcome.best_id, 0.0, 0.0, false)
     }
 }
 

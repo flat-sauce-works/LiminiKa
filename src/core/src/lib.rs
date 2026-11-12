@@ -176,14 +176,16 @@ pub use crate::traits::{
 pub use crate::zimms::ZimmsEngine;
 
 use crate::traits::branchless::{
-    branchless_clamp_f32, branchless_fast_transition_log_prob, branchless_flush_subnormal_f32,
-    branchless_is_finite_f32, branchless_max_f32, branchless_min_f32, branchless_q7_add_sat,
-    branchless_q7_conjugate_64, branchless_q7_inhibit_words_64, branchless_relu_f32,
-    branchless_select_f32, branchless_select_u32, branchless_select_u8,
-    coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_pos_normal_f32,
-    is_phase_profile_nonzero_64, load_q7_words_64, store_q7_words_64, swar_q7_add_sat_x8,
-    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64,
-    trail_phase_words_mut, trail_phase_words_ref, SWAR_SPLAT_BYTE_64,
+    branchless_fast_transition_log_prob, branchless_q7_inhibit_words_64,
+    coherence_from_word_arrays_with_both_uniform_flags_64, swar_slerp_words_with_uniform_flag_64,
+    swar_words_equal_64, swar_words_nonzero_64,
+};
+use crate::traits::primitives::{
+    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
+    branchless_max_f32, branchless_min_f32, branchless_q7_add_sat, branchless_q7_conjugate_64,
+    branchless_relu_f32, branchless_select_f32, branchless_select_u32, branchless_select_u8,
+    fast_inv_pos_normal_f32, is_phase_profile_nonzero_64, load_q7_words_64, store_q7_words_64,
+    swar_q7_add_sat_x8, trail_phase_words_mut, trail_phase_words_ref, SWAR_SPLAT_BYTE_64,
 };
 use crate::traits::primitives::{
     finalize_snapshot_header_crc32, init_snapshot_header, verify_snapshot_payload_crc32,
@@ -873,7 +875,7 @@ impl RuntimeContext {
             repulsion_active = rep_trig;
 
             trail.attractor_pull_force = total_pull;
-            *crate::traits::branchless::trail_phase_words_mut(trail) = phase_words;
+            *crate::traits::primitives::trail_phase_words_mut(trail) = phase_words;
             trail.flags = state_out.active_branch_mode
                 | branchless_select_u32(repulsion_active, TRAIL_FLAG_REPULSION_ACTIVE, 0);
         }
@@ -1657,7 +1659,7 @@ impl RuntimeContext {
 }
 
 // ===================================================================
-// Trait Implementations for Ground Truth (traits.rs) Compliance
+// Trait Implementations for Core Architecture (`crate::traits`) Compliance
 // ===================================================================
 
 impl SystemCapabilityQuery for RuntimeContext {
@@ -2300,7 +2302,7 @@ impl ManifoldGatewaySignal for RuntimeContext {
             frame.active_swarm_cell_mask &= self.active_swarm_cells_mask();
             frame.qdps_min_step_rad = self.qdps_min_step_rad_override();
             frame.qdps_min_step_q7 =
-                crate::traits::branchless::branchless_rad_to_qdps_step_u8(frame.qdps_min_step_rad);
+                crate::traits::primitives::branchless_rad_to_qdps_step_u8(frame.qdps_min_step_rad);
             if self.recommend_layer_skip() {
                 frame.action_mode_flags |= ACTION_MODE_LAYER_SKIP;
             }

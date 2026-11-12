@@ -1024,7 +1024,9 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let deltas_64 = AlignedBuffer16::new(make_heterogeneous_q7_phases_with_offset(24));
         let d_slice = deltas_64.as_aligned_slice();
         let ptr = gcso_tagged_ptr_t::pack_action(
@@ -1068,7 +1070,9 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let deltas_64 = AlignedBuffer16::new(make_heterogeneous_q7_phases_with_offset(24));
         let d_slice = deltas_64.as_aligned_slice();
         let ptr = gcso_tagged_ptr_t::pack_action(
@@ -1112,7 +1116,9 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let tgt_64 = AlignedBuffer16::new(make_heterogeneous_q7_phases_with_offset(32));
         let tgt_slice = tgt_64.as_aligned_slice();
         let bloom = ContrastivePhaseBloomFilter::new();
@@ -1184,7 +1190,9 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let single_anchor = [make_heterogeneous_q7_phases_with_offset(30)];
         let single_energy = [3.0f32];
         let bloom = ContrastivePhaseBloomFilter::new();
@@ -1260,7 +1268,9 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let unified_anchors = [
             make_heterogeneous_q7_phases_with_offset(-64),
             make_heterogeneous_q7_phases_with_offset(28),
@@ -1341,7 +1351,9 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let mut slot_bank =
             AlignedBuffer64::<gcso_q7_t, 512>::new(make_heterogeneous_slot_bank_512(24));
         let persona_base = usize::from(ATTRACTOR_SLOT_PERSONA) * 64;
@@ -1431,7 +1443,9 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let mut attn_scores = AlignedBuffer32::new([0.0f32; 8]);
         let base_src = gcso_pointer_trail_t {
             current_ptr: gcso_tagged_ptr_t::pack_action(
@@ -1667,7 +1681,9 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let phases_a = AlignedBuffer16::new(make_heterogeneous_q7_phases_with_offset(-20));
         let phases_b = AlignedBuffer16::new(make_heterogeneous_q7_phases_with_offset(44));
         let _ftz = ScopedFtzdazGuard::new();
@@ -1725,7 +1741,9 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let mut slot_bank =
             AlignedBuffer64::<gcso_q7_t, 512>::new(make_heterogeneous_slot_bank_512(12));
         slot_bank.data[64..128].copy_from_slice(&make_heterogeneous_q7_phases_with_offset(24));
@@ -1780,7 +1798,9 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let mut slot_bank =
             AlignedBuffer64::<gcso_q7_t, 512>::new(make_heterogeneous_slot_bank_512(116));
         slot_bank.data[64..128].copy_from_slice(&make_heterogeneous_q7_phases_with_offset(24));
@@ -1835,7 +1855,9 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let mut temp_logits =
             AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
         let unified_anchors = [
@@ -1909,7 +1931,9 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let mut gw_logits = AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
         let sys_sig = SystemConstraint::new((), 0.15, 0.05, 0xFF);
         let fact_sig = ObjectiveFact::new(
@@ -1990,7 +2014,9 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let centroids: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
             let mut rec = CrystallizedAttractorRecord::new_empty(
                 ((i as u32) + 1) * 100,
@@ -2125,7 +2151,9 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let centroids: [CrystallizedAttractorRecord; 4] = [
             {
                 let mut rec = CrystallizedAttractorRecord::new_empty(
@@ -2490,7 +2518,9 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let deltas_64 = AlignedBuffer16::new(make_heterogeneous_q7_phases_with_offset(24));
         let d_slice = deltas_64.as_aligned_slice();
         let _ftz = ScopedFtzdazGuard::new();
@@ -2561,7 +2591,9 @@ fn bench_dpsr_provisional_gcso_container(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let mut gw_logits = AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
         let sys_sig = SystemConstraint::new((), 0.20, 0.05, 0xFF);
         let fact_sig = ObjectiveFact::new(
@@ -2847,7 +2879,9 @@ fn bench_dpsr_provisional_gcso_container(c: &mut Criterion) {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
-        q_slice.as_mut_slice().fill(1.0f32);
+        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+        }
         let records: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
             let mut rec = CrystallizedAttractorRecord::new_empty(
                 (i as u32) + 40,
@@ -3227,14 +3261,14 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
             .relax_alignment::<32>();
         q_slice.as_mut_slice().fill(1.0f32);
         let init_ctx = make_heterogeneous_q7_phases_with_offset(110);
-        let init_ctx_w = liminika_core::traits::branchless::load_q7_words_64(&init_ctx);
+        let init_ctx_w = liminika_core::traits::primitives::load_q7_words_64(&init_ctx);
         let mut ctx_accum = AlignedBuffer16::new(init_ctx);
         let step_deltas = AlignedBuffer16::new(make_heterogeneous_q7_phases_with_offset(29));
         let q_phases = AlignedBuffer16::new(make_heterogeneous_q7_phases_with_offset(-96));
         let del_slice = step_deltas.as_aligned_slice();
         let qp_slice = q_phases.as_aligned_slice();
         for _ in 0..4 {
-            liminika_core::traits::branchless::store_q7_words_64(&mut ctx_accum.data, &init_ctx_w);
+            liminika_core::traits::primitives::store_q7_words_64(&mut ctx_accum.data, &init_ctx_w);
             let mut ctx_mut = ctx_accum.as_aligned_slice_mut();
             for _ in 0..cascade_steps {
                 engine
@@ -3244,7 +3278,7 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
         }
 
         b.iter(|| {
-            liminika_core::traits::branchless::store_q7_words_64(&mut ctx_accum.data, &init_ctx_w);
+            liminika_core::traits::primitives::store_q7_words_64(&mut ctx_accum.data, &init_ctx_w);
             let step_rad = black_box(0.01f32);
             {
                 let mut ctx_mut = ctx_accum.as_aligned_slice_mut();

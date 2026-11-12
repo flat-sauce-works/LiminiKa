@@ -30,45 +30,8 @@
 #![allow(clippy::field_reassign_with_default)]
 use core::mem::{align_of, offset_of, size_of};
 use super::aligned::{AlignedSlice, AlignedSlice32, AlignedSliceMut32, is_aligned_to};
-use super::branchless::{
-    BranchlessKernel, CRC32_CRYSTAL_ACTION_BYTE57_REF, CRC32_CRYSTAL_AID_BYTE0_REF,
-    CRC32_CRYSTAL_AID_BYTE1_REF, CRC32_CRYSTAL_PROV_BYTE0_REF, CRC32_CRYSTAL_PROV_BYTE1_REF,
-    CRC32_CRYSTAL_SC_BYTE0_REF, CRC32_CRYSTAL_SLOT_BYTE56_LUT_8, CRC32_CRYSTAL_ZOFF_BYTE1_REF,
-    CRC32_CRYSTAL_ZOFF_BYTE2_REF, CRC32_CRYSTAL_ZOFF_BYTE3_REF, CRC32_IEEE_SLICE16_REF,
-    CRC32_ZIMMS_DESC_BASE_SEED,
-    CRYSTAL_CRC32_DEFAULT_W5_FINAL_CONTRIB, CRYSTAL_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB,
-    CRYSTAL_CRC32_KAPPA_MAX_FINAL_CONTRIB, CRYSTAL_CRC32_RBAR_ONE_FINAL_CONTRIB,
-    CRYSTAL_CRC32_W0_FINAL_CONTRIB, DEFAULT_PHASE_GRAVITY_EPS, Q7_FULL_COS_REF, SWAR_LOW7_MASK_64,
-    SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, VON_MISES_KAPPA_AT_MAX_R_BITS,
-    atan2_interleaved_pairs_to_q7_word_x8_simd, atan2_to_q7_word_x8_simd, branchless_abs_f32,
-    branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_crc32_ieee,
-    branchless_flush_subnormal_f32, branchless_inv_pos_f32, branchless_is_finite_f32,
-    branchless_lerp_f32, branchless_maturity_scale_u32, branchless_max_f32, branchless_min_f32,
-    branchless_phase_coherence_inv_temp_scale, branchless_phase_proximity_gravity_f32,
-    branchless_popcount_rsqrt_u32, branchless_q7_circular_resultant_64,
-    branchless_q7_coherence_64, branchless_q7_default_gravity_from_diff_u8,
-    branchless_rad_to_qdps_step_u8, branchless_relu_f32, branchless_rsqrt_f32,
-    branchless_select_f32, branchless_select_i8, branchless_select_u32, branchless_select_u64,
-    branchless_select_u8, branchless_select_usize, branchless_sincos_q7_ripa, branchless_splitmix64,
-    branchless_toroidal_centroid_step_words_with_coh_and_uni_64,
-    branchless_toroidal_centroid_step_words_with_coh_uni_and_changed_64,
-    coherence_above_floor_from_word_arrays_64, coherence_from_uniform_words_x8,
-    coherence_from_word_arrays_with_both_uniform_flags_64,
-    crc32_block64_zero_seed_words, crc32_crystal_be24_final_u32, crc32_crystal_gm36_final_u32,
-    crc32_crystal_stamp_contrib_128b, crc32_crystal_zoff16_final_u32,
-    crc32_fold_stamped_crystal_128b, crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32,
-    crc32_slice16_indep_hi1_u32, crc32_slice16_indep_lo1_u32, crc32_slice16_step_u64x2,
-    crc32_step_block64_words, crc32_step_l16, crc32_step_l3, crc32_step_l32, crc32_step_l4,
-    crc32_step_l5, crc32_step_l6, crc32_step_l8, crc32_update_crystal_absorption_delta,
-    crc32_update_crystal_energy_and_mass_delta, crc32_update_crystal_stationary_fields_delta,
-    fast_inv_len_f32, fast_inv_pos_normal_f32, fast_ln_1p_bounded_f32, is_word_array_uniform_64,
-    load_q7_words_64, scale_f32_slice_unrolled8, store_q7_words_64, swar_q7_circular_add_x8,
-    swar_q7_circular_diff_x8, swar_q7_mean_i8_from_words_64,
-    swar_q7_mean_i8_from_words_with_uniform_flag_64, swar_q7_neg_sat_x8,
-    swar_q7_qdps_filter_words_64, swar_q7_qdps_filter_words_with_uniform_flag_64,
-    swar_q7_scale_le128_with_bias_x8, swar_slerp_words_with_uniform_flag_64, swar_words_equal_64,
-    swar_words_nonzero_64, trail_phase_words_mut, trail_phase_words_ref,
-};
+use super::branchless::{BranchlessKernel, atan2_interleaved_pairs_to_q7_word_x8_simd, atan2_to_q7_word_x8_simd, branchless_phase_coherence_inv_temp_scale, branchless_q7_circular_resultant_64, branchless_q7_coherence_64, branchless_toroidal_centroid_step_words_with_coh_and_uni_64, branchless_toroidal_centroid_step_words_with_coh_uni_and_changed_64, coherence_above_floor_from_word_arrays_64, coherence_from_uniform_words_x8, coherence_from_word_arrays_with_both_uniform_flags_64, scale_f32_slice_unrolled8, swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64};
+use super::primitives::{CRC32_CRYSTAL_ACTION_BYTE57_REF, CRC32_CRYSTAL_AID_BYTE0_REF, CRC32_CRYSTAL_AID_BYTE1_REF, CRC32_CRYSTAL_PROV_BYTE0_REF, CRC32_CRYSTAL_PROV_BYTE1_REF, CRC32_CRYSTAL_SC_BYTE0_REF, CRC32_CRYSTAL_SLOT_BYTE56_LUT_8, CRC32_CRYSTAL_ZOFF_BYTE1_REF, CRC32_CRYSTAL_ZOFF_BYTE2_REF, CRC32_CRYSTAL_ZOFF_BYTE3_REF, CRC32_IEEE_SLICE16_REF, CRC32_ZIMMS_DESC_BASE_SEED, CRYSTAL_CRC32_DEFAULT_W5_FINAL_CONTRIB, CRYSTAL_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB, CRYSTAL_CRC32_KAPPA_MAX_FINAL_CONTRIB, CRYSTAL_CRC32_RBAR_ONE_FINAL_CONTRIB, CRYSTAL_CRC32_W0_FINAL_CONTRIB, DEFAULT_PHASE_GRAVITY_EPS, Q7_FULL_COS_REF, SWAR_LOW7_MASK_64, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, VON_MISES_KAPPA_AT_MAX_R_BITS, branchless_abs_f32, branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_crc32_ieee, branchless_flush_subnormal_f32, branchless_inv_pos_f32, branchless_is_finite_f32, branchless_lerp_f32, branchless_maturity_scale_u32, branchless_max_f32, branchless_min_f32, branchless_phase_proximity_gravity_f32, branchless_popcount_rsqrt_u32, branchless_q7_default_gravity_from_diff_u8, branchless_rad_to_qdps_step_u8, branchless_relu_f32, branchless_rsqrt_f32, branchless_select_f32, branchless_select_i8, branchless_select_u32, branchless_select_u64, branchless_select_u8, branchless_select_usize, branchless_sincos_q7_ripa, branchless_splitmix64, crc32_block64_zero_seed_words, crc32_crystal_be24_final_u32, crc32_crystal_gm36_final_u32, crc32_crystal_stamp_contrib_128b, crc32_crystal_zoff16_final_u32, crc32_fold_stamped_crystal_128b, crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32, crc32_slice16_indep_hi1_u32, crc32_slice16_indep_lo1_u32, crc32_slice16_step_u64x2, crc32_step_block64_words, crc32_step_l16, crc32_step_l3, crc32_step_l32, crc32_step_l4, crc32_step_l5, crc32_step_l6, crc32_step_l8, crc32_update_crystal_absorption_delta, crc32_update_crystal_energy_and_mass_delta, crc32_update_crystal_stationary_fields_delta, fast_inv_len_f32, fast_inv_pos_normal_f32, fast_ln_1p_bounded_f32, is_word_array_uniform_64, load_q7_words_64, store_q7_words_64, swar_q7_circular_add_x8, swar_q7_circular_diff_x8, swar_q7_mean_i8_from_words_64, swar_q7_mean_i8_from_words_with_uniform_flag_64, swar_q7_neg_sat_x8, swar_q7_qdps_filter_words_64, swar_q7_qdps_filter_words_with_uniform_flag_64, swar_q7_scale_le128_with_bias_x8, trail_phase_words_mut, trail_phase_words_ref};
 use super::primitives::{
     ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE,
     ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
@@ -1711,7 +1674,7 @@ impl GatewayFrame {
             let mut idx = 0usize;
             while idx < 32 {
                 let (q0, q1) =
-                    super::branchless::branchless_rotate_so2_pair(
+                    super::primitives::branchless_rotate_so2_pair(
                         q_block32[idx],
                         q_block32[idx + 1],
                         sin_t,
@@ -1720,7 +1683,7 @@ impl GatewayFrame {
                 q_block32[idx] = q0;
                 q_block32[idx + 1] = q1;
                 let (k0, k1) =
-                    super::branchless::branchless_rotate_so2_pair(
+                    super::primitives::branchless_rotate_so2_pair(
                         k_block32[idx],
                         k_block32[idx + 1],
                         sin_t,
@@ -1729,7 +1692,7 @@ impl GatewayFrame {
                 k_block32[idx] = k0;
                 k_block32[idx + 1] = k1;
                 let (v0, v1) =
-                    super::branchless::branchless_rotate_so2_pair(
+                    super::primitives::branchless_rotate_so2_pair(
                         v_block32[idx],
                         v_block32[idx + 1],
                         sin_t,
@@ -2329,7 +2292,7 @@ where
         // SAFETY: `target_feature = "avx2"` is enabled at compile time.
         let (v0, v1) = unsafe { super::branchless::avx2_words64_to_vec64(&blended_w) };
         avx_precomputed_tag =
-            Some(unsafe { super::branchless::avx2_q7_mean_i8_from_vec64(v0, v1) });
+            Some(unsafe { super::primitives::avx2_q7_mean_i8_from_vec64(v0, v1) });
     }
     let tag_q7 = match avx_precomputed_tag {
         Some(t) => t,
@@ -6214,7 +6177,7 @@ impl<'a> GcsoFourSectionView<'a> {
 // ===================================================================
 
 #[inline(always)]
-fn accumulate_trail_and_steer_gateway_words_core(
+pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
     frame: &GatewayFrame,
     frm_w: &[u64; NUM_SWARM_MICRO_CELLS],
     trail_inout: &mut gcso_pointer_trail_t,

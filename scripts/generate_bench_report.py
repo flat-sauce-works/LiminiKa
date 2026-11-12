@@ -1472,11 +1472,25 @@ def analyze_sidecar_overhead_budget(
         if edbc_full_ns > 0.0
         else (edbc_stateful["mean_ns"] if edbc_stateful else 0.0)
     )
+    total_24l_ns = token_ctrl_ns + 24.0 * layer_hook_ns
     total_32l_ns = token_ctrl_ns + 32.0 * layer_hook_ns
+    total_80l_ns = token_ctrl_ns + 80.0 * layer_hook_ns
     total_16l_skip_ns = token_ctrl_ns + 16.0 * layer_hook_ns
 
     return {
         "rows": rows,
+        "token_ctrl_ns": token_ctrl_ns,
+        "layer_hook_ns": layer_hook_ns,
+        "total_24l_ns": total_24l_ns,
+        "total_24l_formatted": format_time(total_24l_ns)
+        if total_24l_ns > 0.0
+        else "N/A",
+        "total_24l_llm_pct": (total_24l_ns / llm_token_budget_ns) * 100.0
+        if total_24l_ns > 0.0
+        else 0.0,
+        "total_24l_60fps_pct": (total_24l_ns / game_frame_60fps_ns) * 100.0
+        if total_24l_ns > 0.0
+        else 0.0,
         "total_32l_ns": total_32l_ns,
         "total_32l_formatted": format_time(total_32l_ns)
         if total_32l_ns > 0.0
@@ -1486,6 +1500,16 @@ def analyze_sidecar_overhead_budget(
         else 0.0,
         "total_32l_60fps_pct": (total_32l_ns / game_frame_60fps_ns) * 100.0
         if total_32l_ns > 0.0
+        else 0.0,
+        "total_80l_ns": total_80l_ns,
+        "total_80l_formatted": format_time(total_80l_ns)
+        if total_80l_ns > 0.0
+        else "N/A",
+        "total_80l_llm_pct": (total_80l_ns / llm_token_budget_ns) * 100.0
+        if total_80l_ns > 0.0
+        else 0.0,
+        "total_80l_60fps_pct": (total_80l_ns / game_frame_60fps_ns) * 100.0
+        if total_80l_ns > 0.0
         else 0.0,
         "total_16l_skip_ns": total_16l_skip_ns,
         "total_16l_skip_formatted": format_time(total_16l_skip_ns)
@@ -1497,7 +1521,7 @@ def analyze_sidecar_overhead_budget(
         "total_16l_60fps_pct": (total_16l_skip_ns / game_frame_60fps_ns) * 100.0
         if total_16l_skip_ns > 0.0
         else 0.0,
-        "graduated_10us_budget": 0.0 < total_32l_ns <= 15_000.0,
+        "graduated_15us_budget": 0.0 < total_32l_ns <= 15_000.0,
     }
 
 
@@ -1976,22 +2000,28 @@ def collect_criterion_benchmarks(
 
 
 def _render_sidecar_budget_section(sidecar_budget: dict[str, Any]) -> list[str]:
-    """Render the End-to-End Sidecar Overhead Budget Markdown table."""
+    """Render the End-to-End Sidecar Overhead Budget Markdown tables and transparent methodology note."""
     if not sidecar_budget["rows"]:
         return []
 
     grad_badge = (
-        "✅ **GRADUATED** (`< 15 µs/tok` — Sidecar overhead is `< 0.10%` of host LLM decode; ready for host LLM integration)"
-        if sidecar_budget["graduated_10us_budget"]
+        "✅ **Within `< 15 µs/token` Design Target** (Synthesized 32-layer sidecar overhead is `< 0.10%` of a `15.0 ms` host LLM decode)"
+        if sidecar_budget["graduated_15us_budget"]
         else "⚠️ **Tuning In Progress** (Target `< 15 µs/tok` across 32 layers)"
     )
     lines = [
         "",
         "### 🔌 End-to-End Sidecar Overhead Budget (vs. Host LLM Decode & 60 FPS Game Frame)",
         "",
-        "To evaluate whether LiminiKa is fast enough as a sidecar, raw nanoseconds must be compared against **(a) the host LLM's single-token decode latency (`~15.0 ms = 15,000,000 ns` on a typical 7B/8B local model)**, **(b) a 60 FPS AAA game frame budget (`16.67 ms = 16,666,667 ns`)**, and **(c) the CPU's physical L1d/L2 memory bandwidth roofline (`~48 GB/s` single-core load+store ceiling)**:",
+        "Because LiminiKa (`GCSO`) operates as an external C-ABI sidecar rather than a standalone neural network, its total runtime cost per generated token is the sum of its **per-token control hook (`EDBC`, 1×)** and **per-layer RoPE phase steering hook (`DPSR`, $N_{\\text{layers}}$×)**. To contextualize absolute cost, latencies are compared against **(a) a `15.0 ms` (`15,000,000 ns`) typical 7B/8B local LLM 1-token decode**, **(b) a `16.67 ms` (`16,666,667 ns`) 60 FPS game frame budget**, and **(c) a `48 GB/s` single-core L1d/L2 memory bandwidth roofline**:",
         "",
-        f"- **Micro-Optimization Graduation Status**: {grad_badge}",
+        "| Component | Owner | Responsibility | Invocation Cadence |",
+        "|:----------|:------|:---------------|:-------------------|",
+        "| **Host LLM Engine** (`llama.cpp`, `Candle`, etc.) | Host Process (2–4 GB VRAM) | Quantized transformer weights, MatMul, KV-cache storage, and token sampling | Base decode (`~15.0 ms / token`) |",
+        "| **LiminiKa `EDBC` Sidecar Hook** | `liminika-core` (CPU / RAM) | Entropy monitoring, 2-Origin Gateway synthesis, Toroidal $k$-Means, and pointer rewiring | **1× per token** (Sampling boundary) |",
+        "| **LiminiKa `DPSR` Sidecar Hook** | `liminika-core` (CPU / SIMD) | In-place $SO(2)$ RIPA / QDPS / PSPM phase rotation on $Q, K$ rotary embeddings | **1× per active Transformer layer** |",
+        "",
+        f"- **Sidecar Overhead Target Status**: {grad_badge}",
         "",
         "| Sidecar Interception Hook Stage | Invocation Frequency | Measured Latency | % of 15.0 ms Host LLM Token | % of 16.67 ms (60 FPS) Frame | Hardware Roofline / Execution Regime |",
         "|:--------------------------------|:---------------------|-----------------:|----------------------------:|-----------------------------:|:-------------------------------------|",
@@ -2003,10 +2033,18 @@ def _render_sidecar_budget_section(sidecar_budget: dict[str, Any]) -> list[str]:
     if sidecar_budget["total_32l_ns"] > 0.0:
         lines.extend(
             [
-                f"| **Total 32-Layer LLM Forward Pass (`1× EDBC + 32× DPSR`)** | **Per Generated Token (Full)** | **{sidecar_budget['total_32l_formatted']}** | **`{sidecar_budget['total_32l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_32l_60fps_pct']:.4f}%`** | 🎯 **Negligible Sidecar Overhead (`< 0.1%` of LLM)** |",
-                f"| **Total 32-Layer with `ACTION_MODE_LAYER_SKIP` (`1× EDBC + 16× DPSR`)** | **Per Generated Token (QoS Skip)** | **{sidecar_budget['total_16l_skip_formatted']}** | **`{sidecar_budget['total_16l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_16l_60fps_pct']:.4f}%`** | ⚡ **2× Layer-Skip QoS Coexistence Mode** |",
+                f"| **Estimated 24-Layer Edge LLM (`1.5B–3B`, `1× EDBC + 24× DPSR`)** | **Per Token (Low-Spec Target)** | **{sidecar_budget['total_24l_formatted']}** | **`{sidecar_budget['total_24l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_24l_60fps_pct']:.4f}%`** | 🎯 **2–4 GB VRAM / Entry-PC Coexistence** |",
+                f"| **Estimated 32-Layer Standard LLM (`7B–8B`, `1× EDBC + 32× DPSR`)** | **Per Token (Full Layers)** | **{sidecar_budget['total_32l_formatted']}** | **`{sidecar_budget['total_32l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_32l_60fps_pct']:.4f}%`** | 🎯 **Negligible Sidecar Overhead (`< 0.1%` of LLM)** |",
+                f"| **Estimated 32-Layer with `ACTION_MODE_LAYER_SKIP` (`1× EDBC + 16× DPSR`)** | **Per Token (QoS Skip)** | **{sidecar_budget['total_16l_skip_formatted']}** | **`{sidecar_budget['total_16l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_16l_60fps_pct']:.4f}%`** | ⚡ **2× Layer-Skip QoS Coexistence Mode** |",
+                f"| **Estimated 80-Layer Large LLM (`70B`, `1× EDBC + 80× DPSR`)** | **Per Token (Scale Upper Bound)** | **{sidecar_budget['total_80l_formatted']}** | **`{sidecar_budget['total_80l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_80l_60fps_pct']:.4f}%`** | 📐 **Linear Layer Scaling ($\\mathcal{{O}}(L)$)** |",
             ]
         )
+    lines.extend(
+        [
+            "",
+            "> **Measurement Scope Note**: The per-token totals above are analytical compositions (`T_EDBC + N_layers * T_DPSR`) derived from isolated Criterion microbenchmarks with warm L1d/L2 caches. End-to-end host LLM integration additionally includes host-to-FFI call boundaries and L2/L3 cache sharing with the inference runtime.",
+        ]
+    )
     return lines
 
 

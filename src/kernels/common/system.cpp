@@ -83,20 +83,20 @@ GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL gcso_tagged_ptr_evolve_mode_stigmergi
     gcso_q7_t phase = gcso_tagged_ptr_unpack_phase_inline(ptr);
 
     uint8_t slot = dominant_attractor_slot & GCSO_ATTRACTOR_SLOT_ID_MASK;
-    uint8_t mode = GCSO_ACTION_MODE_PHASE_STEER;
+    uint8_t mode = GCSO_ACTION_MODE_DPSR_STEER;
 
     if (repulsion_triggered != 0U) {
         slot = GCSO_ATTRACTOR_SLOT_REPULSION;
-        mode = static_cast<uint8_t>(GCSO_ACTION_MODE_PHASE_STEER | GCSO_ACTION_MODE_PSPM_ROUTE |
-                                    GCSO_ACTION_MODE_REPULSION_GUARD);
+        mode = static_cast<uint8_t>(GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_PSPM_ROUTE |
+                                    GCSO_ACTION_MODE_PHASE_REPULSE);
         phase = (phase == -128) ? static_cast<gcso_q7_t>(127) : static_cast<gcso_q7_t>(-phase);
     } else if (entropy_h_tilde < low_entropy_skip_thresh && stigmergic_density >= 0.80f) {
         mode = GCSO_ACTION_MODE_LAYER_SKIP;
     } else if (stigmergic_density >= high_density_srl_thresh) {
-        mode = static_cast<uint8_t>(GCSO_ACTION_MODE_PHASE_STEER | GCSO_ACTION_MODE_PSPM_ROUTE |
+        mode = static_cast<uint8_t>(GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_PSPM_ROUTE |
                                     GCSO_ACTION_MODE_SRL_INJECT);
     } else if (stigmergic_density >= 0.50f || entropy_h_tilde >= 0.35f) {
-        mode = static_cast<uint8_t>(GCSO_ACTION_MODE_PHASE_STEER | GCSO_ACTION_MODE_PSPM_ROUTE);
+        mode = static_cast<uint8_t>(GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_PSPM_ROUTE);
     }
 
     return gcso_tagged_ptr_pack_action(addr, slot, mode, phase);

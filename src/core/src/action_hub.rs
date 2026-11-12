@@ -87,13 +87,8 @@ use crate::traits::aligned::{
     AlignedBuffer64, AlignedSlice16, AlignedSliceMut16, AlignedSliceMut32,
 };
 use crate::traits::branchless::{
-    branchless_abs_f32, branchless_clamp_f32, branchless_fast_transition_log_prob,
-    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_max_f32,
-    branchless_min_f32, branchless_rad_to_qdps_step_u8, branchless_relu_f32, branchless_select_f32,
-    branchless_select_u32, branchless_select_u64, branchless_select_u8, branchless_select_usize,
-    coherence_from_word_arrays_64, load_q7_words_64, scale_f32_slice_unrolled8, swar_q7_add_sat_x8,
-    swar_q7_qdps_filter_words_64, swar_words_nonzero_64, trail_phase_words_mut,
-    trail_phase_words_ref, SWAR_SPLAT_BYTE_64,
+    branchless_fast_transition_log_prob, coherence_from_word_arrays_64, scale_f32_slice_unrolled8,
+    swar_words_nonzero_64,
 };
 use crate::traits::gateway::{
     CausalProvenanceSignal, CrystallizedAttractorRecord, GatewayFrame, ManifoldGatewaySignal,
@@ -104,6 +99,14 @@ use crate::traits::gateway::{
     ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
 };
 use crate::traits::hot_path::{PointerActionHub, SwarmCellChunk};
+use crate::traits::primitives::{
+    branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
+    branchless_is_finite_f32, branchless_max_f32, branchless_min_f32,
+    branchless_rad_to_qdps_step_u8, branchless_relu_f32, branchless_select_f32,
+    branchless_select_u32, branchless_select_u64, branchless_select_u8, branchless_select_usize,
+    load_q7_words_64, swar_q7_add_sat_x8, swar_q7_qdps_filter_words_64, trail_phase_words_mut,
+    trail_phase_words_ref, SWAR_SPLAT_BYTE_64,
+};
 use crate::traits::primitives::{
     pack_action_slot_tag, unpack_attractor_slot_from_tag, GcsoResult, Pod, ACTION_MODE_DPSR_STEER,
     ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
