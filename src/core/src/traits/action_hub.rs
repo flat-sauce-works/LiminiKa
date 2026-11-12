@@ -318,7 +318,7 @@ pub fn fuse_lazy_unwrap_and_qdps_into_aligned_64(
     store_q7_words_64(&mut dst_aligned.data, &words);
 }
 
-/// The bottom-most micro composite ledger of state and branchless capabilities (**"The Thing Itself"**).
+/// The core micro composite ledger of sidecar state and branchless capabilities.
 ///
 /// `ActionHub` bundles the fundamental constant-time capabilities registered on the engine:
 /// - [`BranchlessKernel`]: Type-level constant-time execution guarantee.

@@ -45,9 +45,8 @@
 //!     [`SystemConstraintSignal`] x [`CognitiveGroundingSignal`] \[[`ObjectiveFactSignal`],
 //!     [`SubjectivePersonaSignal`], [`ContradictionGuardSignal`]\]), Single Composite Gateway
 //!     ([`ManifoldGatewaySignal`], [`GatewayFrame`], [`GatewayPhaseSteeringExt`],
-//!     [`ActionHubGatewayExt`]), Classical Online Toroidal $k$-Means / DP-Means Macro Clustering,
-//!     Top-2 Liminal Bifurcation Routing, and `.gcso` 4-section zero-copy crystallized attractor
-//!     persistence ([`CrystallizedAttractorRecord`], [`GcsoFourSectionView`]).
+//!     [`ActionHubGatewayExt`]), and re-exports of [`CrystallizedAttractorRecord`] (`crate::crystal`)
+//!     and [`GcsoFourSectionView`] (`crate::zimms`).
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]

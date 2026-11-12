@@ -251,9 +251,8 @@ unsafe fn apply_phase_steering_nonuniform_avx2_ptr(
             return;
         }
         if head_dim == 256 {
-            // Single flat loop over `num_heads * 2` 128-float blocks (`blk >> 1` phase index).
-            // Keeping the loop body at `4x avx2_rotate_so2_block32` (`96` AVX2 instructions, ~420B)
-            // locks `head_dim == 256` inside the 512B Decoded ICache (DSB) window (`0` MITE decode stalls).
+            // Single flat loop over `num_heads * 2` 128-float blocks (`blk >> 1` phase index),
+            // keeping the inner loop body compact for instruction-cache / decoded-uop-cache residency.
             let mut hp = ptr;
             let blocks128 = num_heads << 1;
             let mut blk = 0usize;
@@ -1169,8 +1168,8 @@ fn apply_phase_steering_slice_with_sincos(
         let ptr = t_slice.as_mut_ptr();
         if head_dim == 128 {
             // SAFETY: `t_slice` has length `num_heads * 128` and AVX2 is enabled.
-            // 1 head per iteration (`4x avx2_rotate_so2_block32` = `96` AVX2 instructions, ~420B)
-            // fits strictly inside a single 512B Decoded ICache (DSB) window (`0` MITE decode stalls).
+            // Unroll 1 head (`4x avx2_rotate_so2_block32`) per iteration to keep the loop body
+            // compact for instruction-cache / decoded-uop-cache residency.
             unsafe {
                 let mut hp = ptr;
                 let mut h = 0usize;
@@ -1190,8 +1189,8 @@ fn apply_phase_steering_slice_with_sincos(
         }
         if head_dim == 256 {
             // SAFETY: `t_slice` has length `num_heads * 256` and AVX2 is enabled.
-            // Single flat loop over `num_heads * 2` 128-float blocks (`blk >> 1` phase index)
-            // fits strictly inside a single 512B Decoded ICache (DSB) window (`0` MITE decode stalls).
+            // Single flat loop over `num_heads * 2` 128-float blocks (`blk >> 1` phase index),
+            // keeping the inner loop body compact for instruction-cache / decoded-uop-cache residency.
             unsafe {
                 let mut hp = ptr;
                 let blocks128 = num_heads << 1;

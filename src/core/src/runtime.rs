@@ -375,7 +375,7 @@ impl Config {
 // High-Level Safe Rust Runtime Context Engine
 // ===================================================================
 
-/// High-level safe Rust runtime context integrating [`ActionHub`] ("The Thing Itself"),
+/// High-level safe Rust runtime context integrating [`ActionHub`],
 /// [`HotPathObserver`] (Micro Observer: DPSR, DAES, PSPM, SRL, Contrastive Phase Bloom Filter,
 /// Limina bridging, and Bayesian pointer-trail Attention modulation), and [`ColdPathObserver`]
 /// (Macro Observer: EDBC, Single Unified Attractor Manifold, 8-Lane Working Cache Window,

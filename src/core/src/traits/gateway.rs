@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Lv.3 2-Origin Supertrait Hierarchy, Causal Provenance, Single Composite Manifold Gateway,
-//! Classical Online Toroidal $k$-Means / DP-Means Macro Clustering, Online Basin Consolidation,
-//! and `.gcso` 4-Section Zero-Copy Persistence.
+//! and autonomous Gateway-derived physical parameter synthesis.
+//!
+//! Macro-basin clustering ([`CrystallizedAttractorRecord`]) and 4-section `.gcso` zero-copy
+//! container persistence ([`GcsoFourSectionView`]) live in [`crate::crystal`] and
+//! [`crate::zimms`] respectively and are re-exported here for backward compatibility.
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
