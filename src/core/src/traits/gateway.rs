@@ -3114,9 +3114,11 @@ impl CrystallizedAttractorRecord {
                             let floor = if any_active { best_coh } else { -2.0 };
                             #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                             let c_val = {
-                                // SAFETY: `rec.phase_profile` is 64-byte aligned and AVX2 is enabled.
+                                // SAFETY: AVX2 is enabled; load `rec_w` via 64-bit word moves
+                                // (`avx2_words64_to_vec64`) to match the 64-bit store width of
+                                // `phase_words_mut` / `reset_crystal_fast` and avoid 4-to-1 STLF stalls.
                                 unsafe {
-                                    use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
+                                    use core::arch::x86_64::_mm256_sub_epi8;
                                     let (va0, va1) = match va_vecs {
                                         Some(v) => v,
                                         None => {
@@ -3128,9 +3130,8 @@ impl CrystallizedAttractorRecord {
                                             v
                                         }
                                     };
-                                    let ptr = rec.phase_profile.as_ptr().cast::<__m256i>();
-                                    let vb0 = _mm256_loadu_si256(ptr);
-                                    let vb1 = _mm256_loadu_si256(ptr.add(1));
+                                    let (vb0, vb1) =
+                                        super::branchless::avx2_words64_to_vec64(rec_w);
                                     super::branchless::avx2_coherence_from_diff_vec64_with_floor(
                                         _mm256_sub_epi8(va0, vb0),
                                         _mm256_sub_epi8(va1, vb1),
@@ -4256,11 +4257,28 @@ impl CrystallizedAttractorRecord {
     }
 
     #[inline(always)]
-    fn apply_macro_centroid_pull_to_trail_64(trail: &mut gcso_pointer_trail_t,
-        trail_w: &[u64; NUM_SWARM_MICRO_CELLS], trail_is_uniform: bool,
-        target_w: &[u64; NUM_SWARM_MICRO_CELLS], target_is_uniform: bool,
-        winner: &Self, anchor_id: u32, eff_coh: f32, tot_grav: f32, pull_step_u7: u8,
-        extra_flags: u32) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    #[allow(clippy::too_many_arguments)]
+    fn apply_macro_centroid_pull_to_trail_with_vecs_64(
+        trail: &mut gcso_pointer_trail_t,
+        trail_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        trail_is_uniform: bool,
+        target_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        target_is_uniform: bool,
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))] trail_vecs_opt: Option<(
+            core::arch::x86_64::__m256i,
+            core::arch::x86_64::__m256i,
+        )>,
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))] target_vecs_opt: Option<(
+            core::arch::x86_64::__m256i,
+            core::arch::x86_64::__m256i,
+        )>,
+        winner: &Self,
+        anchor_id: u32,
+        eff_coh: f32,
+        tot_grav: f32,
+        pull_step_u7: u8,
+        extra_flags: u32,
+    ) -> [u64; NUM_SWARM_MICRO_CELLS] {
         let both_uni = trail_is_uniform & target_is_uniform;
         let tw0 = trail_w[0];
         let gw0 = target_w[0];
@@ -4269,13 +4287,8 @@ impl CrystallizedAttractorRecord {
         let both_byte_uni = both_uni
             & (tw0 == tw0.rotate_right(8))
             & (gw0 == gw0.rotate_right(8));
-        let equal_wt = if both_uni {
-            tw0 == gw0
-        } else {
-            swar_words_equal_64(trail_w, target_w)
-        };
         let mut scalar_tag_opt: Option<gcso_q7_t> = None;
-        let (bridged_w, bridged_uni) = if pull_step_u7 == 0 || equal_wt {
+        let (bridged_w, bridged_uni) = if pull_step_u7 == 0 || (both_uni && tw0 == gw0) {
             if both_byte_uni {
                 scalar_tag_opt = Some(tb0 as gcso_q7_t);
             }
@@ -4294,7 +4307,9 @@ impl CrystallizedAttractorRecord {
         } else {
             let s_u64 = branchless_select_u8(pull_step_u7 > 128, 128, pull_step_u7) as u64;
             if s_u64 >= 128 {
-                *trail_phase_words_mut(trail) = *target_w;
+                if !swar_words_equal_64(trail_w, target_w) {
+                    *trail_phase_words_mut(trail) = *target_w;
+                }
                 (*target_w, target_is_uniform)
             } else if both_uni {
                 let bias_restore = (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
@@ -4312,37 +4327,64 @@ impl CrystallizedAttractorRecord {
                 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                 {
                     unsafe {
-                        let (vt0, vt1) = super::branchless::avx2_words64_to_vec64_with_uniform(
-                            trail_w,
-                            trail_is_uniform,
-                        );
-                        let (vg0, vg1) = super::branchless::avx2_words64_to_vec64_with_uniform(
-                            target_w,
-                            target_is_uniform,
-                        );
-                        let (vb0, vb1) = avx2_slerp_vec64(vt0, vt1, vg0, vg1, s_u64);
-                        if winner.zimms_section_offset48 != 0 {
-                            scalar_tag_opt =
-                                Some(super::branchless::avx2_q7_mean_i8_from_vec64(vb0, vb1));
+                        use core::arch::x86_64::{
+                            _mm256_or_si256, _mm256_sub_epi8, _mm256_testz_si256,
+                        };
+                        let (vt0, vt1) = match trail_vecs_opt {
+                            Some(v) => v,
+                            None => super::branchless::avx2_words64_to_vec64_with_uniform(
+                                trail_w,
+                                trail_is_uniform,
+                            ),
+                        };
+                        let (vg0, vg1) = match target_vecs_opt {
+                            Some(v) => v,
+                            None => super::branchless::avx2_words64_to_vec64_with_uniform(
+                                target_w,
+                                target_is_uniform,
+                            ),
+                        };
+                        let d0 = _mm256_sub_epi8(vg0, vt0);
+                        let d1 = _mm256_sub_epi8(vg1, vt1);
+                        let d_or = _mm256_or_si256(d0, d1);
+                        if _mm256_testz_si256(d_or, d_or) != 0 {
+                            if winner.zimms_section_offset48 != 0 {
+                                scalar_tag_opt =
+                                    Some(super::branchless::avx2_q7_mean_i8_from_vec64(vt0, vt1));
+                            }
+                            (*trail_w, trail_is_uniform)
+                        } else {
+                            let (vb0, vb1) = super::branchless::avx2_slerp_from_diff_vec64(
+                                vt0, vt1, d0, d1, s_u64,
+                            );
+                            if winner.zimms_section_offset48 != 0 {
+                                scalar_tag_opt =
+                                    Some(super::branchless::avx2_q7_mean_i8_from_vec64(vb0, vb1));
+                            }
+                            let bw = avx2_vec64_to_words64(vb0, vb1);
+                            *trail_phase_words_mut(trail) = bw;
+                            (bw, false)
                         }
-                        let bw = avx2_vec64_to_words64(vb0, vb1);
-                        *trail_phase_words_mut(trail) = bw;
-                        (bw, false)
                     }
                 }
                 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
                 {
-                    let bias_restore = (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-                    let (bw, b_uni) = swar_slerp_words_with_uniform_flag_64(
-                        trail_w,
-                        trail_is_uniform,
-                        target_w,
-                        target_is_uniform,
-                        s_u64,
-                        bias_restore,
-                    );
-                    *trail_phase_words_mut(trail) = bw;
-                    (bw, b_uni)
+                    if swar_words_equal_64(trail_w, target_w) {
+                        (*trail_w, trail_is_uniform)
+                    } else {
+                        let bias_restore =
+                            (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+                        let (bw, b_uni) = swar_slerp_words_with_uniform_flag_64(
+                            trail_w,
+                            trail_is_uniform,
+                            target_w,
+                            target_is_uniform,
+                            s_u64,
+                            bias_restore,
+                        );
+                        *trail_phase_words_mut(trail) = bw;
+                        (bw, b_uni)
+                    }
                 }
             }
         };
@@ -4364,6 +4406,31 @@ impl CrystallizedAttractorRecord {
         }
         trail.flags |= TRAIL_FLAG_SYNERGY_RESONANCE | TRAIL_FLAG_CRYSTALLIZED_CANDIDATE | extra_flags;
         bridged_w
+    }
+
+    #[inline(always)]
+    fn apply_macro_centroid_pull_to_trail_64(trail: &mut gcso_pointer_trail_t,
+        trail_w: &[u64; NUM_SWARM_MICRO_CELLS], trail_is_uniform: bool,
+        target_w: &[u64; NUM_SWARM_MICRO_CELLS], target_is_uniform: bool,
+        winner: &Self, anchor_id: u32, eff_coh: f32, tot_grav: f32, pull_step_u7: u8,
+        extra_flags: u32) -> [u64; NUM_SWARM_MICRO_CELLS] {
+        Self::apply_macro_centroid_pull_to_trail_with_vecs_64(
+            trail,
+            trail_w,
+            trail_is_uniform,
+            target_w,
+            target_is_uniform,
+            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+            None,
+            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+            None,
+            winner,
+            anchor_id,
+            eff_coh,
+            tot_grav,
+            pull_step_u7,
+            extra_flags,
+        )
     }
 
     #[inline(always)]
@@ -4479,6 +4546,16 @@ impl CrystallizedAttractorRecord {
             core::arch::x86_64::__m256i,
             core::arch::x86_64::__m256i,
         )> = None;
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+        let mut v1_vecs: Option<(
+            core::arch::x86_64::__m256i,
+            core::arch::x86_64::__m256i,
+        )> = None;
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+        let mut v2_vecs: Option<(
+            core::arch::x86_64::__m256i,
+            core::arch::x86_64::__m256i,
+        )> = None;
         let mut byte_uni1 = false;
         let mut idx2 = 0usize;
         let mut coh2 = -2.0_f32;
@@ -4503,6 +4580,11 @@ impl CrystallizedAttractorRecord {
                 let rec_byte_uni = rec_uni
                     & trail_is_byte_uniform
                     & ((rw0 == trail_w0) | (rw0 == rw0.rotate_right(8)));
+                #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+                let mut cur_rec_vecs: Option<(
+                    core::arch::x86_64::__m256i,
+                    core::arch::x86_64::__m256i,
+                )> = None;
                 let (coh, grav) = if rec_uni {
                     if rw0 == trail_w0 {
                         (1.0, branchless_q7_default_gravity_from_diff_u8(mass, 0))
@@ -4540,7 +4622,7 @@ impl CrystallizedAttractorRecord {
                     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                     let c_val = {
                         unsafe {
-                            use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
+                            use core::arch::x86_64::_mm256_sub_epi8;
                             let (va0, va1) = match va_vecs {
                                 Some(v) => v,
                                 None => {
@@ -4552,9 +4634,9 @@ impl CrystallizedAttractorRecord {
                                     v
                                 }
                             };
-                            let ptr = rec.phase_profile.as_ptr().cast::<__m256i>();
-                            let vb0 = _mm256_loadu_si256(ptr);
-                            let vb1 = _mm256_loadu_si256(ptr.add(1));
+                            let (vb0, vb1) =
+                                super::branchless::avx2_words64_to_vec64(rec_w);
+                            cur_rec_vecs = Some((vb0, vb1));
                             super::branchless::avx2_coherence_from_diff_vec64_with_floor(
                                 _mm256_sub_epi8(va0, vb0),
                                 _mm256_sub_epi8(va1, vb1),
@@ -4590,6 +4672,11 @@ impl CrystallizedAttractorRecord {
                         grav2 = grav1;
                         uni2 = uni1;
                         byte_uni2 = byte_uni1;
+                        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+                        {
+                            v2_vecs = v1_vecs;
+                            v1_vecs = cur_rec_vecs;
+                        }
                         idx1 = i;
                         coh1 = coh;
                         grav1 = grav;
@@ -4601,6 +4688,10 @@ impl CrystallizedAttractorRecord {
                         grav2 = grav;
                         uni2 = rec_uni;
                         byte_uni2 = rec_byte_uni;
+                        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+                        {
+                            v2_vecs = cur_rec_vecs;
+                        }
                     }
                 }
                 active_found += 1;
@@ -4626,6 +4717,11 @@ impl CrystallizedAttractorRecord {
         } else {
             is_word_array_uniform_64(&w1)
         };
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+        let mut target_vecs_opt: Option<(
+            core::arch::x86_64::__m256i,
+            core::arch::x86_64::__m256i,
+        )> = None;
         let (target_w, target_uni, w2_opt) = if is_liminal {
             let w2 = *centroids[idx2].phase_words_ref();
             let w2_uni = if trail_is_uniform {
@@ -4655,13 +4751,22 @@ impl CrystallizedAttractorRecord {
                 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                 {
                     unsafe {
-                        use core::arch::x86_64::{__m256i, _mm256_loadu_si256};
-                        let p1 = centroids[idx1].phase_profile.as_ptr().cast::<__m256i>();
-                        let p2 = centroids[idx2].phase_profile.as_ptr().cast::<__m256i>();
-                        let (v1_0, v1_1) = (_mm256_loadu_si256(p1), _mm256_loadu_si256(p1.add(1)));
-                        let (v2_0, v2_1) = (_mm256_loadu_si256(p2), _mm256_loadu_si256(p2.add(1)));
+                        let (v1_0, v1_1) = match v1_vecs {
+                            Some(v) => v,
+                            None => super::branchless::avx2_words64_to_vec64_with_uniform(&w1, w1_uni),
+                        };
+                        let (v2_0, v2_1) = match v2_vecs {
+                            Some(v) => v,
+                            None => super::branchless::avx2_words64_to_vec64_with_uniform(&w2, w2_uni),
+                        };
                         let (vt0, vt1) = avx2_slerp_vec64(v1_0, v1_1, v2_0, v2_1, s_lim);
-                        (avx2_vec64_to_words64(vt0, vt1), false, w2)
+                        target_vecs_opt = Some((vt0, vt1));
+                        let tw = if pull_step_u7 >= 128 {
+                            avx2_vec64_to_words64(vt0, vt1)
+                        } else {
+                            w1
+                        };
+                        (tw, false, w2)
                     }
                 }
                 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
@@ -4674,6 +4779,10 @@ impl CrystallizedAttractorRecord {
                 }
             }
         } else {
+            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+            {
+                target_vecs_opt = v1_vecs;
+            }
             (w1, w1_uni, [0u64; NUM_SWARM_MICRO_CELLS])
         };
 
@@ -4694,12 +4803,16 @@ impl CrystallizedAttractorRecord {
         } else {
             win1.phase_words_ref()
         };
-        let bridged_w = Self::apply_macro_centroid_pull_to_trail_64(
+        let bridged_w = Self::apply_macro_centroid_pull_to_trail_with_vecs_64(
             trail,
             &trail_w,
             trail_is_uniform,
             target_ref,
             target_uni,
+            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+            va_vecs,
+            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+            target_vecs_opt,
             win1,
             aid1,
             eff_coh,
@@ -5064,8 +5177,8 @@ impl CrystallizedAttractorRecord {
             // seamlessly transitions to YMM-resident `acc_v0, acc_v1` if any record is non-uniform.
             unsafe {
                 use core::arch::x86_64::{
-                    __m256i, _mm256_loadu_si256, _mm256_or_si256, _mm256_set1_epi64x,
-                    _mm256_sub_epi8, _mm256_testz_si256,
+                    __m256i, _mm256_or_si256, _mm256_set1_epi64x, _mm256_sub_epi8,
+                    _mm256_testz_si256,
                 };
                 let mut init_vecs: Option<(__m256i, __m256i)> = if init_is_uniform {
                     None
@@ -5173,9 +5286,10 @@ impl CrystallizedAttractorRecord {
                                 }
                             };
                             acc_uni = false;
-                            let rec_ptr = rec.phase_profile.as_ptr().cast::<__m256i>();
-                            let rv0 = _mm256_loadu_si256(rec_ptr);
-                            let rv1 = _mm256_loadu_si256(rec_ptr.add(1));
+                            let (rv0, rv1) =
+                                super::branchless::avx2_words64_to_vec64_with_uniform(
+                                    rec_w, rec_uni,
+                                );
                             let coh = if !init_nonzero {
                                 1.0
                             } else {
@@ -5680,8 +5794,8 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
             // seamlessly transitions to YMM-resident `acc_v0, acc_v1` if any record is non-uniform.
             unsafe {
                 use core::arch::x86_64::{
-                    __m256i, _mm256_loadu_si256, _mm256_or_si256, _mm256_set1_epi64x,
-                    _mm256_sub_epi8, _mm256_testz_si256,
+                    __m256i, _mm256_or_si256, _mm256_set1_epi64x, _mm256_sub_epi8,
+                    _mm256_testz_si256,
                 };
                 let mut acc_w0 = 0u64;
                 let mut acc_vecs: Option<(__m256i, __m256i)> = None;
@@ -5709,11 +5823,8 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                             if acc_is_uniform {
                                 acc_w0 = rec_w[0];
                             } else {
-                                let rec_ptr = rec.phase_profile.as_ptr().cast::<__m256i>();
-                                acc_vecs = Some((
-                                    _mm256_loadu_si256(rec_ptr),
-                                    _mm256_loadu_si256(rec_ptr.add(1)),
-                                ));
+                                acc_vecs =
+                                    Some(super::branchless::avx2_words64_to_vec64(rec_w));
                             }
                             tot_e = f_e;
                             best_e = f_e;
@@ -5783,9 +5894,10 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                                             }
                                         };
                                         acc_is_uniform = false;
-                                        let rec_ptr = rec.phase_profile.as_ptr().cast::<__m256i>();
-                                        let fv0 = _mm256_loadu_si256(rec_ptr);
-                                        let fv1 = _mm256_loadu_si256(rec_ptr.add(1));
+                                        let (fv0, fv1) =
+                                            super::branchless::avx2_words64_to_vec64_with_uniform(
+                                                rec_w, rec_uni,
+                                            );
                                         if s_u64 >= 128 {
                                             if rec_uni {
                                                 acc_w0 = rec_w[0];

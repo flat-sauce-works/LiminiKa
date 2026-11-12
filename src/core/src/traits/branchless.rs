@@ -6322,6 +6322,7 @@ pub fn branchless_toroidal_centroid_step_words_64(
     )
 }
 
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 #[inline(always)]
 const fn swar_synergy_word_with_bias_x8(
     a: u64,
@@ -6356,56 +6357,171 @@ pub fn branchless_q7_synergy_fuse_words_64(
     let clean_wa = branchless_relu_f32(weight_a);
     let clean_wb = branchless_relu_f32(weight_b);
     let base_sum = clean_wa + clean_wb;
-    let valid_sum = base_sum > 1.0e-9;
-    let safe_sum = branchless_select_f32(valid_sum, base_sum, 1.0);
+    if base_sum <= 1.0e-9 {
+        return ([0u64; 8], 0.0, 0.0);
+    }
 
-    let d = [
-        swar_q7_circular_diff_x8(b[0], a[0]),
-        swar_q7_circular_diff_x8(b[1], a[1]),
-        swar_q7_circular_diff_x8(b[2], a[2]),
-        swar_q7_circular_diff_x8(b[3], a[3]),
-        swar_q7_circular_diff_x8(b[4], a[4]),
-        swar_q7_circular_diff_x8(b[5], a[5]),
-        swar_q7_circular_diff_x8(b[6], a[6]),
-        swar_q7_circular_diff_x8(b[7], a[7]),
-    ];
-    let raw_coherence = coherence_from_diff_words_64(
-        d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
-    );
-    let coherence = branchless_select_f32(valid_sum, raw_coherence, 0.0);
-    let pos_resonance = branchless_relu_f32(coherence);
-    let liminal_beat = branchless_relu_f32(-coherence);
+    let d0 = swar_q7_circular_diff_x8(b[0], a[0]);
+    let d1 = swar_q7_circular_diff_x8(b[1], a[1]);
+    let d2 = swar_q7_circular_diff_x8(b[2], a[2]);
+    let d3 = swar_q7_circular_diff_x8(b[3], a[3]);
+    let d4 = swar_q7_circular_diff_x8(b[4], a[4]);
+    let d5 = swar_q7_circular_diff_x8(b[5], a[5]);
+    let d6 = swar_q7_circular_diff_x8(b[6], a[6]);
+    let d7 = swar_q7_circular_diff_x8(b[7], a[7]);
 
+    let d_uni =
+        ((d0 ^ d1) | (d0 ^ d2) | (d0 ^ d3) | (d0 ^ d4) | (d0 ^ d5) | (d0 ^ d6) | (d0 ^ d7)) == 0;
     let safe_gain = branchless_relu_f32(synergy_gain);
-    let synergy_boost = safe_gain * base_sum * pos_resonance;
-    let effective_pull = branchless_select_f32(valid_sum, base_sum + synergy_boost, 0.0);
 
-    let inv_sum = 128.0 * fast_inv_pos_normal_f32(safe_sum);
-    let ratio_b = branchless_select_u8(
-        valid_sum,
-        branchless_clamp_f32(clean_wb * inv_sum + 0.5, 0.0, 128.0) as u8,
-        0,
-    ) as u64;
-    let beat_u7 = branchless_select_u8(
-        valid_sum,
-        (liminal_beat * branchless_clamp_f32(safe_gain, 0.0, 1.0) * 64.0 + 0.5) as u8,
-        0,
-    ) as u64;
-    let bias_ratio = (128u64.wrapping_sub(ratio_b)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-    let bias_beat = (128u64.wrapping_sub(beat_u7)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-    let m = (valid_sum as u64).wrapping_neg();
+    if d_uni {
+        if d0 == 0 {
+            let effective_pull = base_sum + safe_gain * base_sum;
+            return (*a, effective_pull, 1.0);
+        }
+        let coherence = coherence_from_uniform_diff_word_x8(d0);
+        let pos_resonance = branchless_relu_f32(coherence);
+        let liminal_beat = branchless_relu_f32(-coherence);
+        let effective_pull = base_sum + safe_gain * base_sum * pos_resonance;
 
-    let fused_w = [
-        swar_synergy_word_with_bias_x8(a[0], d[0], ratio_b, bias_ratio, beat_u7, bias_beat, m),
-        swar_synergy_word_with_bias_x8(a[1], d[1], ratio_b, bias_ratio, beat_u7, bias_beat, m),
-        swar_synergy_word_with_bias_x8(a[2], d[2], ratio_b, bias_ratio, beat_u7, bias_beat, m),
-        swar_synergy_word_with_bias_x8(a[3], d[3], ratio_b, bias_ratio, beat_u7, bias_beat, m),
-        swar_synergy_word_with_bias_x8(a[4], d[4], ratio_b, bias_ratio, beat_u7, bias_beat, m),
-        swar_synergy_word_with_bias_x8(a[5], d[5], ratio_b, bias_ratio, beat_u7, bias_beat, m),
-        swar_synergy_word_with_bias_x8(a[6], d[6], ratio_b, bias_ratio, beat_u7, bias_beat, m),
-        swar_synergy_word_with_bias_x8(a[7], d[7], ratio_b, bias_ratio, beat_u7, bias_beat, m),
-    ];
-    (fused_w, effective_pull, coherence)
+        let inv_sum = 128.0 * fast_inv_pos_normal_f32(base_sum);
+        let ratio_b = (branchless_clamp_f32(clean_wb * inv_sum + 0.5, 0.0, 128.0) as u8) as u64;
+        let beat_u7 =
+            ((liminal_beat * branchless_clamp_f32(safe_gain, 0.0, 1.0) * 64.0 + 0.5) as u8) as u64;
+        let bias_ratio = (128u64.wrapping_sub(ratio_b)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+        let step_r = swar_q7_scale_le128_with_bias_x8(d0, ratio_b, bias_ratio);
+        let step0 = if beat_u7 == 0 {
+            step_r
+        } else {
+            let bias_beat = (128u64.wrapping_sub(beat_u7)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+            swar_q7_circular_add_x8(
+                step_r,
+                swar_q7_scale_le128_with_bias_x8(d0, beat_u7, bias_beat),
+            )
+        };
+        if step0 == 0 {
+            return (*a, effective_pull, coherence);
+        }
+        let fused_w = [
+            swar_q7_circular_add_x8(a[0], step0),
+            swar_q7_circular_add_x8(a[1], step0),
+            swar_q7_circular_add_x8(a[2], step0),
+            swar_q7_circular_add_x8(a[3], step0),
+            swar_q7_circular_add_x8(a[4], step0),
+            swar_q7_circular_add_x8(a[5], step0),
+            swar_q7_circular_add_x8(a[6], step0),
+            swar_q7_circular_add_x8(a[7], step0),
+        ];
+        return (fused_w, effective_pull, coherence);
+    }
+
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    {
+        // SAFETY: Guarded by `target_feature = "avx2"`.
+        unsafe {
+            use core::arch::x86_64::_mm256_add_epi8;
+            let (vd0, vd1) = avx2_u64x8_to_vec64(d0, d1, d2, d3, d4, d5, d6, d7);
+            let coherence = avx2_coherence_from_diff_vec64(vd0, vd1);
+            let pos_resonance = branchless_relu_f32(coherence);
+            let liminal_beat = branchless_relu_f32(-coherence);
+            let effective_pull = base_sum + safe_gain * base_sum * pos_resonance;
+
+            let inv_sum = 128.0 * fast_inv_pos_normal_f32(base_sum);
+            let ratio_b = (branchless_clamp_f32(clean_wb * inv_sum + 0.5, 0.0, 128.0) as u8) as u64;
+            let beat_u7 = ((liminal_beat * branchless_clamp_f32(safe_gain, 0.0, 1.0) * 64.0 + 0.5)
+                as u8) as u64;
+            let (vr0, vr1) = avx2_scale_vec64(vd0, vd1, ratio_b);
+            let (vst0, vst1) = if beat_u7 == 0 {
+                (vr0, vr1)
+            } else {
+                let (vb0, vb1) = avx2_scale_vec64(vd0, vd1, beat_u7);
+                (_mm256_add_epi8(vr0, vb0), _mm256_add_epi8(vr1, vb1))
+            };
+            let (va0, va1) = avx2_words64_to_vec64(a);
+            let fused_w =
+                avx2_vec64_to_words64(_mm256_add_epi8(va0, vst0), _mm256_add_epi8(va1, vst1));
+            return (fused_w, effective_pull, coherence);
+        }
+    }
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    {
+        let coherence = coherence_from_diff_words_64(d0, d1, d2, d3, d4, d5, d6, d7);
+        let pos_resonance = branchless_relu_f32(coherence);
+        let liminal_beat = branchless_relu_f32(-coherence);
+        let effective_pull = base_sum + safe_gain * base_sum * pos_resonance;
+
+        let inv_sum = 128.0 * fast_inv_pos_normal_f32(base_sum);
+        let ratio_b = (branchless_clamp_f32(clean_wb * inv_sum + 0.5, 0.0, 128.0) as u8) as u64;
+        let beat_u7 =
+            ((liminal_beat * branchless_clamp_f32(safe_gain, 0.0, 1.0) * 64.0 + 0.5) as u8) as u64;
+        let bias_ratio = (128u64.wrapping_sub(ratio_b)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+        let fused_w = if beat_u7 == 0 {
+            [
+                swar_q7_circular_add_x8(
+                    a[0],
+                    swar_q7_scale_le128_with_bias_x8(d0, ratio_b, bias_ratio),
+                ),
+                swar_q7_circular_add_x8(
+                    a[1],
+                    swar_q7_scale_le128_with_bias_x8(d1, ratio_b, bias_ratio),
+                ),
+                swar_q7_circular_add_x8(
+                    a[2],
+                    swar_q7_scale_le128_with_bias_x8(d2, ratio_b, bias_ratio),
+                ),
+                swar_q7_circular_add_x8(
+                    a[3],
+                    swar_q7_scale_le128_with_bias_x8(d3, ratio_b, bias_ratio),
+                ),
+                swar_q7_circular_add_x8(
+                    a[4],
+                    swar_q7_scale_le128_with_bias_x8(d4, ratio_b, bias_ratio),
+                ),
+                swar_q7_circular_add_x8(
+                    a[5],
+                    swar_q7_scale_le128_with_bias_x8(d5, ratio_b, bias_ratio),
+                ),
+                swar_q7_circular_add_x8(
+                    a[6],
+                    swar_q7_scale_le128_with_bias_x8(d6, ratio_b, bias_ratio),
+                ),
+                swar_q7_circular_add_x8(
+                    a[7],
+                    swar_q7_scale_le128_with_bias_x8(d7, ratio_b, bias_ratio),
+                ),
+            ]
+        } else {
+            let bias_beat = (128u64.wrapping_sub(beat_u7)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+            [
+                swar_synergy_word_with_bias_x8(
+                    a[0], d0, ratio_b, bias_ratio, beat_u7, bias_beat, !0u64,
+                ),
+                swar_synergy_word_with_bias_x8(
+                    a[1], d1, ratio_b, bias_ratio, beat_u7, bias_beat, !0u64,
+                ),
+                swar_synergy_word_with_bias_x8(
+                    a[2], d2, ratio_b, bias_ratio, beat_u7, bias_beat, !0u64,
+                ),
+                swar_synergy_word_with_bias_x8(
+                    a[3], d3, ratio_b, bias_ratio, beat_u7, bias_beat, !0u64,
+                ),
+                swar_synergy_word_with_bias_x8(
+                    a[4], d4, ratio_b, bias_ratio, beat_u7, bias_beat, !0u64,
+                ),
+                swar_synergy_word_with_bias_x8(
+                    a[5], d5, ratio_b, bias_ratio, beat_u7, bias_beat, !0u64,
+                ),
+                swar_synergy_word_with_bias_x8(
+                    a[6], d6, ratio_b, bias_ratio, beat_u7, bias_beat, !0u64,
+                ),
+                swar_synergy_word_with_bias_x8(
+                    a[7], d7, ratio_b, bias_ratio, beat_u7, bias_beat, !0u64,
+                ),
+            ]
+        };
+        (fused_w, effective_pull, coherence)
+    }
 }
 
 /// Synthesizes a non-linear synergistic 64-head Q7 phase profile and amplified pull force in
@@ -6442,7 +6558,9 @@ pub fn branchless_q7_inhibit_words_64(
     if safe_strength <= 1.0e-9 {
         return clean_w;
     }
-    let coherence = coherence_from_word_arrays_64(target_words, inhibitor_words);
+    let target_uni = is_word_array_uniform_64(target_words);
+    let coherence =
+        coherence_from_word_arrays_with_uniform_flag_64(target_words, target_uni, inhibitor_words);
     let opposition = branchless_relu_f32(-coherence);
     let retain_factor = branchless_clamp_f32(1.0 - safe_strength * opposition, 0.0, 1.0);
     let s = (((retain_factor * 128.0) + 0.5) as u8) as u64;
@@ -6453,16 +6571,35 @@ pub fn branchless_q7_inhibit_words_64(
         *target_words = [0u64; 8];
         return 0.0;
     }
-    let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-    target_words[0] = swar_q7_scale_le128_with_bias_x8(target_words[0], s, bias_restore);
-    target_words[1] = swar_q7_scale_le128_with_bias_x8(target_words[1], s, bias_restore);
-    target_words[2] = swar_q7_scale_le128_with_bias_x8(target_words[2], s, bias_restore);
-    target_words[3] = swar_q7_scale_le128_with_bias_x8(target_words[3], s, bias_restore);
-    target_words[4] = swar_q7_scale_le128_with_bias_x8(target_words[4], s, bias_restore);
-    target_words[5] = swar_q7_scale_le128_with_bias_x8(target_words[5], s, bias_restore);
-    target_words[6] = swar_q7_scale_le128_with_bias_x8(target_words[6], s, bias_restore);
-    target_words[7] = swar_q7_scale_le128_with_bias_x8(target_words[7], s, bias_restore);
-    clean_w * retain_factor
+    if target_uni {
+        let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+        let w0 = swar_q7_scale_le128_with_bias_x8(target_words[0], s, bias_restore);
+        *target_words = [w0; 8];
+        return clean_w * retain_factor;
+    }
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    {
+        // SAFETY: Guarded by `target_feature = "avx2"`.
+        unsafe {
+            let (vt0, vt1) = avx2_words64_to_vec64(target_words);
+            let (vs0, vs1) = avx2_scale_vec64(vt0, vt1, s);
+            *target_words = avx2_vec64_to_words64(vs0, vs1);
+        }
+        return clean_w * retain_factor;
+    }
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    {
+        let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+        target_words[0] = swar_q7_scale_le128_with_bias_x8(target_words[0], s, bias_restore);
+        target_words[1] = swar_q7_scale_le128_with_bias_x8(target_words[1], s, bias_restore);
+        target_words[2] = swar_q7_scale_le128_with_bias_x8(target_words[2], s, bias_restore);
+        target_words[3] = swar_q7_scale_le128_with_bias_x8(target_words[3], s, bias_restore);
+        target_words[4] = swar_q7_scale_le128_with_bias_x8(target_words[4], s, bias_restore);
+        target_words[5] = swar_q7_scale_le128_with_bias_x8(target_words[5], s, bias_restore);
+        target_words[6] = swar_q7_scale_le128_with_bias_x8(target_words[6], s, bias_restore);
+        target_words[7] = swar_q7_scale_le128_with_bias_x8(target_words[7], s, bias_restore);
+        clean_w * retain_factor
+    }
 }
 
 /// Applies branchless mutual inhibition gating to a target 64-head Q7 phase profile in a single
