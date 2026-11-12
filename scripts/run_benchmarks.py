@@ -8,7 +8,7 @@ running `python scripts/run_benchmarks.py` with no arguments automatically
 achieves maximum determinism, lowest CoV/MAD jitter, peak SIMD throughput, and
 generates Criterion's interactive HTML index (`target/criterion/report/index.html`):
 - Clean Core vs. Provisional `.gcso` Separation: the default `standard` profile
-  runs all finalized Core (`DPSR` + `EDBC`) benchmark groups while isolating
+  runs all finalized Core (`PhaseSteering` + `EntropyControl`) benchmark groups while isolating
   `Provisional_GCSO_Container` via `LIMINIKA_RUN_PROVISIONAL_GCSO=0` and
   Criterion positive group-prefix regex filtering (avoiding `libtest`'s
   `--skip` flag, which Criterion's `configure_from_args()` rejects with exit
@@ -56,7 +56,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
-# Anchored Criterion group-prefix regex matching all finalized Core (DPSR + EDBC) groups
+# Anchored Criterion group-prefix regex matching all finalized Core (PhaseSteering + EntropyControl) groups
 # while excluding `PhaseSteering_Provisional_GCSO_Container` and `EntropyControl_Provisional_GCSO_Container`.
 # Criterion's `configure_from_args()` CLI parser does not support `libtest`'s `--skip` flag
 # (passing `--skip` fails with `error: unexpected argument found`, exit code 2), so Core-only
@@ -69,17 +69,17 @@ CORE_GROUPS_PREFIX_REGEX: str = (
 # Pre-defined execution profiles for tailored benchmarking runs
 PROFILES: dict[str, dict[str, str | None]] = {
     "standard": {
-        "description": "Finalized Core benchmark suite covering DPSR, EDBC, Online Toroidal k-Means, Coarse-to-Fine Routing, Unified-Field, and Stigmergic Micro-Swarm hot paths (excludes provisional .gcso container benchmarks by default)",
+        "description": "Finalized Core benchmark suite covering PhaseSteering, EntropyControl, Online Toroidal k-Means, Coarse-to-Fine Routing, Unified-Field, and Stigmergic Micro-Swarm hot paths (excludes provisional .gcso container benchmarks by default)",
         "filter": None,
         "skip": "Provisional_GCSO_Container",
     },
     "provisional-gcso": {
-        "description": "Isolated pre-v1.0 provisional .gcso / ZIMMS 4-section container serialization, CRC32 verification, and zero-copy mapping benchmarks",
+        "description": "Isolated pre-v1.0 provisional .gcso storage 4-section container serialization, CRC32 verification, and zero-copy mapping benchmarks",
         "filter": "Provisional_GCSO_Container",
         "skip": None,
     },
     "quick": {
-        "description": "Fast smoke test run for build validation and core DPSR/EDBC kernel verification",
+        "description": "Fast smoke test run for build validation and core PhaseSteering/EntropyControl kernel verification",
         "filter": "steering_32b|safe_ripa|normal_mode|eval_cvoid|swarm_quorum|unified_field|bayesian|toroidal_kmeans|coarse_to_fine|top2_liminal|merge_and_prune|autonomous_swarm_aperture|gop_budget",
         "skip": "Provisional_GCSO_Container",
     },
@@ -124,7 +124,7 @@ PROFILES: dict[str, dict[str, str | None]] = {
         "skip": "Provisional_GCSO_Container",
     },
     "all": {
-        "description": "Full exhaustive execution across all Core (DPSR + EDBC) and Provisional (.gcso / ZIMMS) benchmark groups",
+        "description": "Full exhaustive execution across all Core (PhaseSteering + EntropyControl) and Provisional (.gcso Storage) benchmark groups",
         "filter": None,
         "skip": None,
     },
@@ -532,7 +532,7 @@ def main() -> None:
     default_core = auto_select_optimal_core()
 
     parser = argparse.ArgumentParser(
-        description="Unified LiminiKa Benchmark & Report Pipeline Runner (Core DPSR/EDBC Default + Isolated Provisional .gcso)"
+        description="Unified LiminiKa Benchmark & Report Pipeline Runner (Core PhaseSteering/EntropyControl Default + Isolated Provisional .gcso)"
     )
     parser.add_argument(
         "--benchmarks",
@@ -544,13 +544,13 @@ def main() -> None:
         "--profile",
         choices=list(PROFILES.keys()),
         default="standard",
-        help="Select pre-configured benchmarking profile (default: standard = Core DPSR + EDBC only)",
+        help="Select pre-configured benchmarking profile (default: standard = Core PhaseSteering + EntropyControl only)",
     )
     parser.add_argument(
         "--include-provisional-gcso",
         action="store_true",
         default=False,
-        help="Also run provisional .gcso / ZIMMS container benchmarks alongside the selected profile",
+        help="Also run provisional .gcso storage container benchmarks alongside the selected profile",
     )
     parser.add_argument(
         "--filter",

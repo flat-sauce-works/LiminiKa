@@ -1,6 +1,11 @@
 // name: include/liminika/gcso_config.h
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+/**
+ * @file gcso_config.h
+ * @brief Platform, compiler, SIMD feature-detection, and visibility macros for the LiminiKa GCSO C-ABI.
+ */
+
 #ifndef LIMINIKA_GCSO_CONFIG_H
 #define LIMINIKA_GCSO_CONFIG_H
 

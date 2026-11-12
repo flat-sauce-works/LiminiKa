@@ -15,13 +15,13 @@ Unified Attractor Manifold (1-anchor & 4-anchor) vs 8-Slot Bank Swarm
 diagnostics, Classical Online Toroidal k-Means / DP-Means E+M Clustering &
 Coarse-to-Fine Macro-to-Micro Routing, Bayes-Attention Stigmergic Pointer-Trail
 Rewiring & Limina 4-Hop Chain diagnostics, Procrustes closed-loop feedback & 3D
-Visual Co-Watching diagnostics, EDBC CVoid SIMD l1/l2 coherence vs dyadic
+Visual Co-Watching diagnostics, EntropyControl CVoid SIMD l1/l2 coherence vs dyadic
 bandwidth parity diagnostics, per-shape memory alignment boundary comparisons
 (32B vs 128B vs 256B vs 512B), long-horizon stream/prefill drift & edge-case
 boundary parity diagnostics, principled RDTSC timer-quantum floor (<30ns) and
 MAD-verified OS scheduler jitter floor (MoE <= 3.5% / MAD <= 6.5%) noise
-separation, and explicit separation of Provisional `.gcso` / ZIMMS Container
-workloads from the finalized Core (`DPSR` + `EDBC`) Health Score.
+separation, and explicit separation of Provisional `.gcso` Storage Container
+workloads from the finalized Core (`PhaseSteering` + `EntropyControl`) Health Score.
 """
 
 import argparse
@@ -1560,7 +1560,13 @@ def generate_mermaid_charts(groups: dict[str, list[dict[str, Any]]]) -> str:
             if b.get("ns_per_token") is not None
             else b["mean_formatted"]
         )
-        short_group = b["group"].replace("DPSR_", "D_").replace("EDBC_", "E_")
+        short_group = (
+            b["group"]
+            .replace("PhaseSteering_", "PS_")
+            .replace("EntropyControl_", "EC_")
+            .replace("DPSR_", "D_")
+            .replace("EDBC_", "E_")
+        )
         clean_name = _RE_MERMAID_IDENT.sub("_", f"{short_group}_{b['name']}")
         scaled_ns = max(1, int(round(eff_ns)))
         lines.append(f"    {clean_name} ({label_time}) :active, 0, {scaled_ns}")
@@ -1934,6 +1940,8 @@ def collect_criterion_benchmarks(
                         criterion_dir / pg / bench_name / "new" / "estimates.json"
                     ).exists()
                     for pg in (
+                        "PhaseSteering_Provisional_GCSO_Container",
+                        "EntropyControl_Provisional_GCSO_Container",
                         "DPSR_Provisional_GCSO_Container",
                         "EDBC_Provisional_GCSO_Container",
                     )
@@ -2033,42 +2041,42 @@ def _render_sidecar_budget_section(sidecar_budget: dict[str, Any]) -> list[str]:
     if sidecar_budget["total_32l_ns"] > 0.0:
         lines.extend(
             [
-                f"| **Estimated 24-Layer Edge LLM (`1.5B–3B`, `1× EDBC + 24× DPSR`)** | **Per Token (Low-Spec Target)** | **{sidecar_budget['total_24l_formatted']}** | **`{sidecar_budget['total_24l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_24l_60fps_pct']:.4f}%`** | 🎯 **2–4 GB VRAM / Entry-PC Coexistence** |",
-                f"| **Estimated 32-Layer Standard LLM (`7B–8B`, `1× EDBC + 32× DPSR`)** | **Per Token (Full Layers)** | **{sidecar_budget['total_32l_formatted']}** | **`{sidecar_budget['total_32l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_32l_60fps_pct']:.4f}%`** | 🎯 **Negligible Sidecar Overhead (`< 0.1%` of LLM)** |",
-                f"| **Estimated 32-Layer with `ACTION_MODE_LAYER_SKIP` (`1× EDBC + 16× DPSR`)** | **Per Token (QoS Skip)** | **{sidecar_budget['total_16l_skip_formatted']}** | **`{sidecar_budget['total_16l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_16l_60fps_pct']:.4f}%`** | ⚡ **2× Layer-Skip QoS Coexistence Mode** |",
-                f"| **Estimated 80-Layer Large LLM (`70B`, `1× EDBC + 80× DPSR`)** | **Per Token (Scale Upper Bound)** | **{sidecar_budget['total_80l_formatted']}** | **`{sidecar_budget['total_80l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_80l_60fps_pct']:.4f}%`** | 📐 **Linear Layer Scaling ($\\mathcal{{O}}(L)$)** |",
+                f"| **Estimated 24-Layer Edge LLM (`1.5B–3B`, `1× EntropyControl + 24× PhaseSteering`)** | **Per Token (Low-Spec Target)** | **{sidecar_budget['total_24l_formatted']}** | **`{sidecar_budget['total_24l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_24l_60fps_pct']:.4f}%`** | 🎯 **2–4 GB VRAM / Entry-PC Coexistence** |",
+                f"| **Estimated 32-Layer Standard LLM (`7B–8B`, `1× EntropyControl + 32× PhaseSteering`)** | **Per Token (Full Layers)** | **{sidecar_budget['total_32l_formatted']}** | **`{sidecar_budget['total_32l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_32l_60fps_pct']:.4f}%`** | 🎯 **Negligible Sidecar Overhead (`< 0.1%` of LLM)** |",
+                f"| **Estimated 32-Layer with `ACTION_MODE_LAYER_SKIP` (`1× EntropyControl + 16× PhaseSteering`)** | **Per Token (QoS Skip)** | **{sidecar_budget['total_16l_skip_formatted']}** | **`{sidecar_budget['total_16l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_16l_60fps_pct']:.4f}%`** | ⚡ **2× Layer-Skip QoS Coexistence Mode** |",
+                f"| **Estimated 80-Layer Large LLM (`70B`, `1× EntropyControl + 80× PhaseSteering`)** | **Per Token (Scale Upper Bound)** | **{sidecar_budget['total_80l_formatted']}** | **`{sidecar_budget['total_80l_llm_pct']:.4f}%`** | **`{sidecar_budget['total_80l_60fps_pct']:.4f}%`** | 📐 **Linear Layer Scaling ($\\mathcal{{O}}(L)$)** |",
             ]
         )
     lines.extend(
         [
             "",
-            "> **Measurement Scope Note**: The per-token totals above are analytical compositions (`T_EDBC + N_layers * T_DPSR`) derived from isolated Criterion microbenchmarks with warm L1d/L2 caches. End-to-end host LLM integration additionally includes host-to-FFI call boundaries and L2/L3 cache sharing with the inference runtime.",
+            "> **Measurement Scope Note**: The per-token totals above are analytical compositions (`T_EntropyControl + N_layers * T_PhaseSteering`) derived from isolated Criterion microbenchmarks with warm L1d/L2 caches. End-to-end host LLM integration additionally includes host-to-FFI call boundaries and L2/L3 cache sharing with the inference runtime.",
         ]
     )
     return lines
 
 
 _CATEGORY_LABELS: dict[str, tuple[str, str]] = {
-    "micro_hotpath_kernel": ("⚡ Micro Hot-Path Kernels", "Core (`DPSR`/`EDBC`)"),
+    "micro_hotpath_kernel": ("⚡ Micro Hot-Path Kernels", "Core (`PhaseSteering`/`EntropyControl`)"),
     "swarm_and_stigmergy": (
         "🐝 Stigmergic Swarm, Toroidal k-Means & Pointer-Trails",
-        "Core (`DPSR`/`EDBC`)",
+        "Core (`PhaseSteering`/`EntropyControl`)",
     ),
-    "alignment_memory_hierarchy": ("💾 Memory Alignment Hierarchy", "Core (`DPSR`)"),
+    "alignment_memory_hierarchy": ("💾 Memory Alignment Hierarchy", "Core (`PhaseSteering`)"),
     "batch_sequence_scaling": (
         "📦 Multi-Token Batch & Prefill Scaling",
-        "Core (`DPSR`/`EDBC`)",
+        "Core (`PhaseSteering`/`EntropyControl`)",
     ),
     "long_dialogue_endurance": (
         "🛡️ Long-Dialogue Endurance (1K–1M Tokens)",
-        "Core (`DPSR`/`EDBC`)",
+        "Core (`PhaseSteering`/`EntropyControl`)",
     ),
     "extreme_edge_stress": (
         "🔥 Extreme Boundary & Singularity Guards",
-        "Core (`DPSR`/`EDBC`)",
+        "Core (`PhaseSteering`/`EntropyControl`)",
     ),
     "provisional_gcso_container": (
-        "🧪 Provisional `.gcso` / ZIMMS Container",
+        "🧪 Provisional `.gcso` Storage Container",
         "Provisional (Pre-v1.0)",
     ),
 }
@@ -2303,21 +2311,21 @@ def generate_markdown_report(
         "",
         "> **What is LiminiKa (`GCSO`)?**  ",
         "> LiminiKa (**Geometric Cellular Sheaf Orchestrator**) is **not** a standalone neural network or a model trained from scratch. It is a **non-invasive, `#![no_std]` zero-allocation C-ABI sidecar** designed to sit alongside an existing local LLM inference engine (such as `llama.cpp`, `vLLM`, `Candle`, or `ONNX Runtime`) in low-VRAM environments (2–4 GB VRAM, co-resident with 60 FPS AAA games). Instead of modifying model weights or expanding KV-cache prompts, LiminiKa steers persona continuity and factual grounding via two ultra-lightweight interception hooks:",
-        "> 1. **`EDBC` (`Entropy-Driven Decoding Branch Controller` — 1× per token at Logit/Sampling Boundary)**: Observes token entropy and sheaf cohomology contradiction ($H^1$), synthesizes 2-Origin Gateway signals (System QoS $\\times$ Fact / Persona / Contradiction Guard), updates Online Toroidal $k$-Means macro centroids, and rewires $\\mathcal{O}(1)$ Stigmergic Pointer-Trails.",
-        "> 2. **`DPSR` (`Dynamic Phase-Shifted RoPE` — 1× per Transformer layer at Attention RoPE Boundary)**: Rotates the host LLM's in-place $Q, K$ (or $Q, K, V$) rotary embedding tensors by a 64-head Q7 phase shift $\\boldsymbol{\\Delta\\theta} \\in SO(2)^{64}$ using RIPA soft-clamping, QDPS noise filtering, and PSPM sub-head routing.",
+        "> 1. **`EntropyController` (`entropy_control` — 1× per token at Logit/Sampling Boundary)**: Observes token entropy and sheaf cohomology contradiction ($H^1$), synthesizes 2-Origin Gateway signals (System QoS $\\times$ Fact / Persona / Contradiction Guard), updates Online Toroidal $k$-Means macro centroids, and rewires $\\mathcal{O}(1)$ Stigmergic Pointer-Trails.",
+        "> 2. **`PhaseSteeringEngine` (`phase_steering` — 1× per Transformer layer at Attention RoPE Boundary)**: Rotates the host LLM's in-place $Q, K$ (or $Q, K, V$) rotary embedding tensors by a 64-head Q7 phase shift $\\boldsymbol{\\Delta\\theta} \\in SO(2)^{64}$ using RIPA soft-clamping, QDPS noise filtering, and PSPM sub-head routing.",
         "",
-        f"*Report generated automatically from Criterion statistical estimates on `{utc_now}` (with Provisional pre-v1.0 `.gcso` / ZIMMS persistence container benchmarks isolated from the Core Sidecar Health Score).*",
+        f"*Report generated automatically from Criterion statistical estimates on `{utc_now}` (with Provisional pre-v1.0 `.gcso` persistence container benchmarks isolated from the Core Sidecar Health Score).*",
         "",
-        "## 📊 Executive Summary & Core Sidecar Health Index (`DPSR` + `EDBC`)",
+        "## 📊 Executive Summary & Core Sidecar Health Index (`PhaseSteering` + `EntropyControl`)",
         "",
         f"- **GCSO Core System Benchmark Health Score**: **`{health_score:.1f} / 100.0`** (`{health_grade}`)",
-        f"- **Estimated 32-Layer LLM Per-Token Sidecar Overhead (`1× EDBC + 32× DPSR`)**: **`{sidecar_budget['total_32l_formatted']}` / token** (**`{sidecar_budget['total_32l_llm_pct']:.4f}%`** of a `15.0 ms` host LLM token decode · **`{sidecar_budget['total_32l_60fps_pct']:.4f}%`** of a `16.67 ms` 60 FPS game frame)",
-        f"- **Estimated Inertia Layer-Skipped Sidecar Overhead (`1× EDBC + 16× DPSR`)**: **`{sidecar_budget['total_16l_skip_formatted']}` / token** (**`{sidecar_budget['total_16l_llm_pct']:.4f}%`** of a `15.0 ms` host LLM token decode)",
+        f"- **Estimated 32-Layer LLM Per-Token Sidecar Overhead (`1× EntropyControl + 32× PhaseSteering`)**: **`{sidecar_budget['total_32l_formatted']}` / token** (**`{sidecar_budget['total_32l_llm_pct']:.4f}%`** of a `15.0 ms` host LLM token decode · **`{sidecar_budget['total_32l_60fps_pct']:.4f}%`** of a `16.67 ms` 60 FPS game frame)",
+        f"- **Estimated Inertia Layer-Skipped Sidecar Overhead (`1× EntropyControl + 16× PhaseSteering`)**: **`{sidecar_budget['total_16l_skip_formatted']}` / token** (**`{sidecar_budget['total_16l_llm_pct']:.4f}%`** of a `15.0 ms` host LLM token decode)",
         f"- **Long-Dialogue Reliability Index**: **`{dialogue_evaluation['score']:.1f} / 100.0`** ({dialogue_evaluation['status']})",
         f"- **Total Benchmark Groups**: `{len(groups)}`",
-        f"- **Core (`DPSR` + `EDBC`) Workload Variants Evaluated**: `{len(core_benchmarks)}` (Total incl. Provisional `.gcso`: `{total_benchmarks}`)",
+        f"- **Core (`PhaseSteering` + `EntropyControl`) Workload Variants Evaluated**: `{len(core_benchmarks)}` (Total incl. Provisional `.gcso`: `{total_benchmarks}`)",
         f"- **Core Stigmergic Micro-Swarm, Toroidal k-Means, Unified-Field, Bayesian Pointer-Trail & Cohomology Workloads**: `{len(swarm_stigmergy_benches)}`",
-        f"- **Provisional `.gcso` / ZIMMS Container Workloads (Isolated from Core Score)**: `{len(provisional_gcso_benches)}`",
+        f"- **Provisional `.gcso` Storage Container Workloads (Isolated from Core Score)**: `{len(provisional_gcso_benches)}`",
         f"- **Long-Dialogue Endurance Workloads**: `{len(dialogue_evaluation['benches'])}`",
         f"- **Extreme Boundary & Edge Case Workloads**: `{len(extreme_edge_benches)}`",
         f"- **Memory Alignment Hierarchy Workloads**: `{len(alignment_benches)}`",
@@ -2477,9 +2485,9 @@ def generate_markdown_report(
     if provisional_gcso_benches or provisional_gcso_diagnostics:
         md_lines.extend(
             [
-                "## 🧪 Provisional `.gcso` / ZIMMS Container Diagnostics (Pre-v1.0 Spec — Excluded from Core Score)",
+                "## 🧪 Provisional `.gcso` Storage Container Diagnostics (Pre-v1.0 Spec — Excluded from Core Score)",
                 "",
-                "> **Architectural Note**: The `.gcso` / ZIMMS 4-section byte container benchmarks below evaluate the **provisional pre-v1.0 memory persistence layout**. They are explicitly excluded from the Core (`DPSR` + `EDBC`) Health Score and will be superseded by the PPRC video-stream keyframe/delta memory recall architecture in v1.0.",
+                "> **Architectural Note**: The `.gcso` 4-section byte container benchmarks below evaluate the **provisional pre-v1.0 memory persistence layout** (`MappedStorageEngine` / `GcsoFourSectionView`). They are explicitly excluded from the Core (`PhaseSteering` + `EntropyControl`) Health Score and will be superseded by the PPRC video-stream keyframe/delta memory recall architecture in v1.0.",
                 "",
             ]
         )
@@ -2498,8 +2506,8 @@ def generate_markdown_report(
         if provisional_gcso_benches:
             md_lines.extend(
                 [
-                    "| Group | Provisional `.gcso` / ZIMMS Workload | Mean Latency | MAD (%) | MoE (95% CI) | CoV (%) | Throughput / Rate |",
-                    "|:------|:-------------------------------------|-------------:|--------:|-------------:|--------:|------------------:|",
+                    "| Group | Provisional `.gcso` Container Workload | Mean Latency | MAD (%) | MoE (95% CI) | CoV (%) | Throughput / Rate |",
+                    "|:------|:---------------------------------------|-------------:|--------:|-------------:|--------:|------------------:|",
                 ]
             )
             for pb in sorted(provisional_gcso_benches, key=lambda x: x["mean_ns"]):
@@ -2739,7 +2747,7 @@ def generate_markdown_report(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate Markdown benchmark report & Criterion HTML index from Criterion JSON outputs with Log-Log OLS bottleneck, Core DPSR/EDBC analysis, and isolated Provisional .gcso diagnostics."
+        description="Generate Markdown benchmark report & Criterion HTML index from Criterion JSON outputs with Log-Log OLS bottleneck, Core PhaseSteering/EntropyControl analysis, and isolated Provisional .gcso diagnostics."
     )
     parser.add_argument(
         "--criterion-dir",
