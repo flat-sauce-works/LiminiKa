@@ -1,14 +1,14 @@
-// name: benches/bench_edbc.rs
+// name: benches/bench_entropy_control.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Comprehensive benchmarks for Entropy-Driven Decoding Branch Controller (EDBC) kernels and
+//! Comprehensive benchmarks for `EntropyController` kernels and
 //! `EntropyClosedLoopCoordinator` blanket implementations, engineered for **zero input overfitting**
-//! and **clean separation of Provisional `.gcso` / ZIMMS Container workloads**:
+//! and **clean separation of Provisional `.gcso` Storage Container workloads**:
 //! - Evaluates Coarse-to-Fine and Top-2 Liminal routing across 8 candidate trails (2 candidates
 //!   per macro cluster across 4 centroids) so the Fine step genuinely resolves intra-cluster
 //!   candidate competition.
-//! - Isolates provisional pre-v1.0 `.gcso` / ZIMMS container crystallization and zero-copy
-//!   deserialization workloads into the dedicated `EDBC_Provisional_GCSO_Container` Criterion group.
+//! - Isolates provisional pre-v1.0 `.gcso` container crystallization and zero-copy
+//!   deserialization workloads into the dedicated `EntropyControl_Provisional_GCSO_Container` Criterion group.
 
 #![allow(missing_docs)]
 #![allow(clippy::too_many_arguments)]
@@ -240,9 +240,9 @@ fn should_run_provisional_gcso() -> bool {
         .any(|arg| !arg.starts_with('-') && arg.to_ascii_lowercase().contains("provisional"))
 }
 
-fn bench_edbc_stateful_eval(c: &mut Criterion) {
+fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("EDBC_Stateful_Entropy_Evaluation");
+    let mut group = c.benchmark_group("EntropyControl_Stateful_Entropy_Evaluation");
     group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
@@ -428,9 +428,9 @@ fn bench_edbc_stateful_eval(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_edbc_cvoid_dyadic(c: &mut Criterion) {
+fn bench_entropy_control_cvoid_dyadic(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("EDBC_CVoid_Dyadic_Vector_Alignment");
+    let mut group = c.benchmark_group("EntropyControl_CVoid_Dyadic_Vector_Alignment");
     group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
@@ -558,9 +558,9 @@ fn bench_edbc_cvoid_dyadic(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_edbc_stream_simulation(c: &mut Criterion) {
+fn bench_entropy_control_stream_simulation(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("EDBC_Continuous_Stream_Simulation");
+    let mut group = c.benchmark_group("EntropyControl_Continuous_Stream_Simulation");
     group.noise_threshold(configured_noise_threshold());
     group.warm_up_time(Duration::from_millis(500));
 
@@ -617,9 +617,9 @@ fn bench_edbc_stream_simulation(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_edbc_long_dialogue_reliability(c: &mut Criterion) {
+fn bench_entropy_control_long_dialogue_reliability(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("EDBC_Long_Dialogue_Reliability");
+    let mut group = c.benchmark_group("EntropyControl_Long_Dialogue_Reliability");
     group.noise_threshold(configured_noise_threshold());
 
     // 1. Ultra-Long Token Stream Simulation (500,000 Tokens)
@@ -760,9 +760,9 @@ fn bench_edbc_long_dialogue_reliability(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
+fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("EDBC_Pointer_Tunneling_And_Cohomology");
+    let mut group = c.benchmark_group("EntropyControl_Pointer_Tunneling_And_Cohomology");
     group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
@@ -1950,12 +1950,12 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
 /// Evaluates pre-v1.0 `.gcso` record crystallization, 4-axis provenance records, and 4-section
 /// zero-copy byte container verification. Skipped by default under `run_benchmarks.py --profile standard`
 /// so Core `DPSR`/`EDBC` evaluations remain decoupled from the provisional container layout.
-fn bench_edbc_provisional_gcso_container(c: &mut Criterion) {
+fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
     if !should_run_provisional_gcso() {
         return;
     }
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("EDBC_Provisional_GCSO_Container");
+    let mut group = c.benchmark_group("EntropyControl_Provisional_GCSO_Container");
     group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
@@ -2345,9 +2345,9 @@ fn bench_edbc_provisional_gcso_container(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_edbc_extreme_and_edge_cases(c: &mut Criterion) {
+fn bench_entropy_control_extreme_and_edge_cases(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("EDBC_Extreme_And_Edge_Cases");
+    let mut group = c.benchmark_group("EntropyControl_Extreme_And_Edge_Cases");
     group.noise_threshold(configured_noise_threshold());
 
     // 1. Long-Run Token Stream Simulation (1,000,000 Tokens with Periodic Outliers)
@@ -2517,12 +2517,12 @@ fn bench_edbc_extreme_and_edge_cases(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_edbc_stateful_eval,
-    bench_edbc_cvoid_dyadic,
-    bench_edbc_stream_simulation,
-    bench_edbc_long_dialogue_reliability,
-    bench_edbc_pointer_tunneling_and_cohomology,
-    bench_edbc_extreme_and_edge_cases,
-    bench_edbc_provisional_gcso_container
+    bench_entropy_control_stateful_eval,
+    bench_entropy_control_cvoid_dyadic,
+    bench_entropy_control_stream_simulation,
+    bench_entropy_control_long_dialogue_reliability,
+    bench_entropy_control_pointer_tunneling_and_cohomology,
+    bench_entropy_control_extreme_and_edge_cases,
+    bench_entropy_control_provisional_gcso_container
 );
 criterion_main!(benches);

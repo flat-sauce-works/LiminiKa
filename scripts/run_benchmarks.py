@@ -57,13 +57,13 @@ from pathlib import Path
 from typing import cast
 
 # Anchored Criterion group-prefix regex matching all finalized Core (DPSR + EDBC) groups
-# while excluding `DPSR_Provisional_GCSO_Container` and `EDBC_Provisional_GCSO_Container`.
+# while excluding `PhaseSteering_Provisional_GCSO_Container` and `EntropyControl_Provisional_GCSO_Container`.
 # Criterion's `configure_from_args()` CLI parser does not support `libtest`'s `--skip` flag
 # (passing `--skip` fails with `error: unexpected argument found`, exit code 2), so Core-only
 # profiles combine `LIMINIKA_RUN_PROVISIONAL_GCSO=0` with this positive group regex.
 CORE_GROUPS_PREFIX_REGEX: str = (
-    r"^(DPSR_(HotPath|Batch|Long_Context|Swarm|Extreme)"
-    r"|EDBC_(Stateful|CVoid|Continuous|Long_Dialogue|Pointer|Extreme))"
+    r"^(PhaseSteering_(HotPath|Batch|Long_Context|Swarm|Extreme)"
+    r"|EntropyControl_(Stateful|CVoid|Continuous|Long_Dialogue|Pointer|Extreme))"
 )
 
 # Pre-defined execution profiles for tailored benchmarking runs
@@ -153,7 +153,7 @@ def discover_benchmark_targets(project_root: Path) -> list[str]:
             for entry in benches_dir.glob("*.rs"):
                 targets.add(entry.stem)
 
-    return sorted(targets) if targets else ["bench_dpsr", "bench_edbc"]
+    return sorted(targets) if targets else ["bench_phase_steering", "bench_entropy_control"]
 
 
 def resolve_manifest_path(
@@ -745,7 +745,7 @@ def main() -> None:
 
     # Criterion's `configure_from_args()` accepts a single positive positional regex `[FILTER]`
     # and does not support `libtest`'s `--skip` flag. When `effective_skip` is active, combine
-    # `LIMINIKA_RUN_PROVISIONAL_GCSO=0` (in-process group gating in `bench_dpsr.rs`/`bench_edbc.rs`)
+    # `LIMINIKA_RUN_PROVISIONAL_GCSO=0` (in-process group gating in `bench_phase_steering.rs`/`bench_entropy_control.rs`)
     # with an anchored Core-group regex when a sub-profile filter is present.
     effective_filter: str | None
     if effective_skip and not args.filter:

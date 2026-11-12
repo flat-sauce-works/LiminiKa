@@ -623,7 +623,7 @@ fn fallback_scan_unpruned_macro_candidates_cold(
 }
 
 /// Shared Coarse-to-Fine / Top-2 Liminal Bayesian candidate scanner, fallback unpruned scanner,
-/// and AVX2/SWAR Limina geodesic SLERP bridger used by both `dpsr` and `edbc`.
+/// and AVX2/SWAR Limina geodesic SLERP bridger used by both `phase_steering` and `entropy_control`.
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn select_and_bridge_macro_aligned_bayesian_trail_core(
@@ -2352,7 +2352,7 @@ pub trait StigmergicTrailOps {
     ) -> (f32, u32, u32);
     /// Single-pass fused evaluator for **Bayesian Candidate Selection, Pointer Rewiring, Limina
     /// Geodesic Bridging, and Optional In-Place Attention Score Modulation**:
-    /// eliminates duplicate candidate-trail scans across `dpsr.rs` and `edbc.rs`, tracking only
+    /// eliminates duplicate candidate-trail scans across `phase_steering.rs` and `entropy_control.rs`, tracking only
     /// scalar `best_idx` inside the loop to eliminate 8-word `best_w` register pressure.
     ///
     /// Returns `(selected_id, best_bayesian_score, mean_coherence, coherent_count, found_coherent)`.

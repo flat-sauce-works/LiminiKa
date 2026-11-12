@@ -46,11 +46,11 @@ criterion = { workspace = true }
 workspace = true
 
 [[bench]]
-name = "bench_dpsr"
+name = "bench_phase_steering"
 harness = false
-path = "../../benches/bench_dpsr.rs"
+path = "../../benches/bench_phase_steering.rs"
 
 [[bench]]
-name = "bench_edbc"
+name = "bench_entropy_control"
 harness = false
-path = "../../benches/bench_edbc.rs"
+path = "../../benches/bench_entropy_control.rs"

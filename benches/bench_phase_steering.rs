@@ -1,16 +1,16 @@
-// name: benches/bench_dpsr.rs
+// name: benches/bench_phase_steering.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Advanced benchmarks for Dynamic Phase-Shifted RoPE (DPSR) hot-path kernels and
+//! Advanced benchmarks for `PhaseSteeringEngine` hot-path kernels and
 //! `PhaseSteeringClosedLoop` blanket implementations, engineered for **zero input overfitting**
-//! and **clean separation of Provisional `.gcso` / ZIMMS Container workloads**:
+//! and **clean separation of Provisional `.gcso` Storage Container workloads**:
 //! - Uses realistic heterogeneous 64-head phase profiles across all batch and sub-head ensembles
 //!   (never uniform `[8i8; 64]` arrays or unit-gain `1.0f32` fast-path bypasses).
 //! - Evaluates Coarse-to-Fine and Top-2 Liminal routing across 8 candidate trails (2 candidates
 //!   per macro cluster across 4 centroids) so the Fine step genuinely resolves intra-cluster
 //!   candidate competition.
-//! - Isolates provisional pre-v1.0 `.gcso` / ZIMMS container crystallization and zero-copy
-//!   mapping workloads into the dedicated `DPSR_Provisional_GCSO_Container` Criterion group.
+//! - Isolates provisional pre-v1.0 `.gcso` container crystallization and zero-copy
+//!   mapping workloads into the dedicated `PhaseSteering_Provisional_GCSO_Container` Criterion group.
 
 #![allow(missing_docs)]
 #![allow(clippy::too_many_arguments)]
@@ -354,9 +354,9 @@ fn bench_aligned_query_variant<const ALIGN: usize>(
     );
 }
 
-fn bench_dpsr_steering_operations(c: &mut Criterion) {
+fn bench_phase_steering_operations(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("DPSR_HotPath_Advanced_Kernels");
+    let mut group = c.benchmark_group("PhaseSteering_HotPath_Advanced_Kernels");
     group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
@@ -620,9 +620,9 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_dpsr_batch_sequence_scaling(c: &mut Criterion) {
+fn bench_phase_steering_batch_sequence_scaling(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("DPSR_Batch_Sequence_Scaling");
+    let mut group = c.benchmark_group("PhaseSteering_Batch_Sequence_Scaling");
     group.noise_threshold(configured_noise_threshold());
     group.warm_up_time(Duration::from_millis(500));
 
@@ -754,9 +754,9 @@ fn bench_dpsr_batch_sequence_scaling(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_dpsr_long_context_and_procrustes(c: &mut Criterion) {
+fn bench_phase_steering_long_context_and_procrustes(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("DPSR_Long_Context_And_Procrustes");
+    let mut group = c.benchmark_group("PhaseSteering_Long_Context_And_Procrustes");
     group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
@@ -1003,9 +1003,9 @@ fn bench_dpsr_long_context_and_procrustes(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
+fn bench_phase_steering_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("DPSR_Swarm_PSPM_And_Visual_CoWatching");
+    let mut group = c.benchmark_group("PhaseSteering_Swarm_PSPM_And_Visual_CoWatching");
     group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
@@ -2568,12 +2568,12 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
 /// Evaluates pre-v1.0 `.gcso` record crystallization and 4-section zero-copy byte container mapping.
 /// Skipped by default under `run_benchmarks.py --profile standard` so Core `DPSR`/`EDBC` evaluations
 /// remain decoupled from the provisional container layout prior to v1.0 PPRC video-stream memory integration.
-fn bench_dpsr_provisional_gcso_container(c: &mut Criterion) {
+fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
     if !should_run_provisional_gcso() {
         return;
     }
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("DPSR_Provisional_GCSO_Container");
+    let mut group = c.benchmark_group("PhaseSteering_Provisional_GCSO_Container");
     group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
@@ -3020,9 +3020,9 @@ fn bench_dpsr_provisional_gcso_container(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
+fn bench_phase_steering_extreme_and_edge_cases(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("DPSR_Extreme_And_Edge_Cases");
+    let mut group = c.benchmark_group("PhaseSteering_Extreme_And_Edge_Cases");
     group.noise_threshold(configured_noise_threshold());
 
     // 1. Stress Test: Ultra-Large Sequence Scaling (4096..32768 Prefill Context)
@@ -3315,11 +3315,11 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_dpsr_steering_operations,
-    bench_dpsr_batch_sequence_scaling,
-    bench_dpsr_long_context_and_procrustes,
-    bench_dpsr_swarm_pspm_and_visual_cowatching,
-    bench_dpsr_extreme_and_edge_cases,
-    bench_dpsr_provisional_gcso_container
+    bench_phase_steering_operations,
+    bench_phase_steering_batch_sequence_scaling,
+    bench_phase_steering_long_context_and_procrustes,
+    bench_phase_steering_swarm_pspm_and_visual_cowatching,
+    bench_phase_steering_extreme_and_edge_cases,
+    bench_phase_steering_provisional_gcso_container
 );
 criterion_main!(benches);

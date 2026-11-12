@@ -673,8 +673,9 @@ impl StigmergicThresholds {
         Ok((steered, pspm_routed, skip_compensated))
     }
 
-    /// Executes a stateless one-shot stigmergic orchestration step directly from `self` and `dpsr`
-    /// without allocating a 2,816-byte [`ActionHubEngine`] on the stack (`0` stack table zero-init).
+    /// Executes a stateless one-shot stigmergic orchestration step directly from `self` and
+    /// `phase_steering` without allocating a 2,816-byte [`ActionHubEngine`] on the stack
+    /// (`0` stack table zero-init).
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `query_tensor`, `key_tensor`, or `logits_opt`
@@ -682,7 +683,7 @@ impl StigmergicThresholds {
     #[inline]
     pub fn orchestrate_stateless_action_step(
         &self,
-        dpsr: &PhaseSteeringEngine,
+        phase_steering: &PhaseSteeringEngine,
         input_ptr: gcso_tagged_ptr_t,
         entropy_h_tilde: f32,
         dominant_slot: u8,
@@ -691,10 +692,10 @@ impl StigmergicThresholds {
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<ActionOrchestrationReport> {
-        let qdps_min_rad = dpsr.qdps_min_step_rad();
-        let ripa_clamp = dpsr.ripa_clamp_max_rad();
-        let head_dim = dpsr.head_dim() as usize;
-        let num_heads = dpsr.num_heads() as usize;
+        let qdps_min_rad = phase_steering.qdps_min_step_rad();
+        let ripa_clamp = phase_steering.ripa_clamp_max_rad();
+        let head_dim = phase_steering.head_dim() as usize;
+        let num_heads = phase_steering.num_heads() as usize;
         let expected_len = head_dim
             .checked_mul(num_heads)
             .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
