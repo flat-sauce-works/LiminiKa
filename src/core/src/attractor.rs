@@ -1221,6 +1221,20 @@ impl CrystallizedAnchorRecord {
         reserved_padding: [0; 16],
     };
 
+    /// Returns `true` when all 128 bytes (`16 x u64` words) of this record are zero, enabling
+    /// sound GF(2) zero-block skipping in [`AttractorGrowthSnapshot::finalize_crc32_for_active_anchors`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_zero_blocks_fast(&self) -> bool {
+        // SAFETY: `CrystallizedAnchorRecord` is 128 bytes and 64-byte aligned (`>= 8-byte` `u64` alignment).
+        let w = unsafe { &*core::ptr::from_ref(self).cast::<[u64; 16]>() };
+        (((w[0] | w[1]) | (w[2] | w[3]))
+            | ((w[4] | w[5]) | (w[6] | w[7]))
+            | ((w[8] | w[9]) | (w[10] | w[11]))
+            | ((w[12] | w[13]) | (w[14] | w[15])))
+            == 0
+    }
+
     /// Packs a full [`AttractorAnchor`] into a compact 128-byte [`CrystallizedAnchorRecord`],
     /// computing its 64-head circular statistics $(\bar{R}_c, \kappa_c)$ in constant time.
     #[inline]
@@ -2986,8 +3000,10 @@ impl AttractorFieldEngine {
         }
         let clear_end = prev_clear_end.max(out_idx).min(MAX_ANCHORS_PER_FIELD);
         let mut c_idx = out_idx;
-        while c_idx < clear_end {
-            snapshot_out.anchors[c_idx] = CrystallizedAnchorRecord::EMPTY;
+        while c_idx < MAX_ANCHORS_PER_FIELD {
+            if c_idx < clear_end || !snapshot_out.anchors[c_idx].is_zero_blocks_fast() {
+                snapshot_out.anchors[c_idx] = CrystallizedAnchorRecord::EMPTY;
+            }
             c_idx += 1;
         }
         snapshot_out.active_anchor_count = out_idx as u32;
@@ -3826,8 +3842,10 @@ impl MultiAttractorSpace {
         }
         let clear_end = prev_clear_end.max(out_idx).min(MAX_ANCHORS_PER_FIELD);
         let mut c_idx = out_idx;
-        while c_idx < clear_end {
-            snapshot_out.anchors[c_idx] = CrystallizedAnchorRecord::EMPTY;
+        while c_idx < MAX_ANCHORS_PER_FIELD {
+            if c_idx < clear_end || !snapshot_out.anchors[c_idx].is_zero_blocks_fast() {
+                snapshot_out.anchors[c_idx] = CrystallizedAnchorRecord::EMPTY;
+            }
             c_idx += 1;
         }
 

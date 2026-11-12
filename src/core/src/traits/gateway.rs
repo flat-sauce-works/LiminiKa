@@ -184,8 +184,16 @@ pub const fn project_bytes_swar_to_words_64(bytes: &[u8]) -> [u64; NUM_SWARM_MIC
     let mut seed = (len as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let mut i = 0usize;
     while i + 8 <= len {
-        let w = u64::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2],
-            bytes[i + 3], bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]]);
+        let w = u64::from_le_bytes([
+            bytes[i],
+            bytes[i + 1],
+            bytes[i + 2],
+            bytes[i + 3],
+            bytes[i + 4],
+            bytes[i + 5],
+            bytes[i + 6],
+            bytes[i + 7],
+        ]);
         seed = branchless_splitmix64(seed ^ w);
         i += 8;
     }
@@ -759,8 +767,12 @@ impl<T> SystemConstraint<T> {
     /// Constructs a new [`SystemConstraint`] wrapper with explicit QoS parameters.
     #[inline(always)]
     #[must_use]
-    pub const fn new(inner: T, vram_pressure: f32, gpu_frame_overrun: f32,
-        active_swarm_mask: u8) -> Self {
+    pub const fn new(
+        inner: T,
+        vram_pressure: f32,
+        gpu_frame_overrun: f32,
+        active_swarm_mask: u8,
+    ) -> Self {
         let p_vram = branchless_clamp_f32(branchless_relu_f32(vram_pressure), 0.0, 1.0);
         let p_gpu = branchless_clamp_f32(branchless_relu_f32(gpu_frame_overrun), 0.0, 1.0);
         let max_p = branchless_max_f32(p_vram, p_gpu);
@@ -1046,16 +1058,22 @@ pub trait ContradictionGuardSignal: CognitiveGroundingSignal {
 
 impl<T: ContradictionGuardSignal + ?Sized> ContradictionGuardSignal for &T {
     #[inline(always)]
-    fn evaluate_repulsion_severity(&self,
-        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> f32 {
+    fn evaluate_repulsion_severity(
+        &self,
+        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> f32 {
         (**self).evaluate_repulsion_severity(candidate_phases)
     }
+
     #[inline(always)]
     fn evaluate_repulsion_severity_from_words(
         &self,
         candidate_words: &[u64; NUM_SWARM_MICRO_CELLS],
         candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    ) -> f32 { (**self).evaluate_repulsion_severity_from_words(candidate_words, candidate_phases) }
+    ) -> f32 {
+        (**self).evaluate_repulsion_severity_from_words(candidate_words, candidate_phases)
+    }
+
     #[inline(always)]
     fn requires_phase_slice_for_repulsion(&self) -> bool {
         (**self).requires_phase_slice_for_repulsion()
@@ -1237,13 +1255,22 @@ impl<B> ContradictionGuard<B> {
     /// Constructs a new [`ContradictionGuard`] with explicit cohomological obstruction and Bloom threshold.
     #[inline(always)]
     #[must_use]
-    pub const fn new(bloom: B,
-        cohomology_obstruction: f32, bloom_repulsion_threshold: u8) -> Self {
+    pub const fn new(
+        bloom: B,
+        cohomology_obstruction: f32,
+        bloom_repulsion_threshold: u8,
+    ) -> Self {
         Self {
-            bloom, cohomology_obstruction: branchless_flush_subnormal_f32(branchless_relu_f32(
-                cohomology_obstruction)),
-            obstruction_threshold: 0.25, bloom_repulsion_threshold: branchless_select_u8(
-                bloom_repulsion_threshold > 0, bloom_repulsion_threshold, 4),
+            bloom,
+            cohomology_obstruction: branchless_flush_subnormal_f32(branchless_relu_f32(
+                cohomology_obstruction,
+            )),
+            obstruction_threshold: 0.25,
+            bloom_repulsion_threshold: branchless_select_u8(
+                bloom_repulsion_threshold > 0,
+                bloom_repulsion_threshold,
+                4,
+            ),
         }
     }
 
@@ -1299,11 +1326,14 @@ impl<B: BranchlessKernel> CognitiveGroundingSignal for ContradictionGuard<B> {
 
 impl ContradictionGuardSignal for ContradictionGuard<ContrastivePhaseBloomFilter> {
     #[inline(always)]
-    fn evaluate_repulsion_severity(&self,
-        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> f32 {
+    fn evaluate_repulsion_severity(
+        &self,
+        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> f32 {
         let words = load_q7_words_64(candidate_phases);
         self.evaluate_repulsion_severity_from_words(&words, candidate_phases)
     }
+
     #[inline(always)]
     fn evaluate_repulsion_severity_from_words(
         &self,
@@ -1311,7 +1341,8 @@ impl ContradictionGuardSignal for ContradictionGuard<ContrastivePhaseBloomFilter
         _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let obs_exceeded = self.cohomology_obstruction > self.obstruction_threshold;
-        let obs_sev = branchless_select_f32(obs_exceeded,
+        let obs_sev = branchless_select_f32(
+            obs_exceeded,
             branchless_clamp_f32(
                 0.55 + (self.cohomology_obstruction - self.obstruction_threshold),
                 0.55,
@@ -1324,10 +1355,14 @@ impl ContradictionGuardSignal for ContradictionGuard<ContrastivePhaseBloomFilter
         }
         let density = self.bloom.query_repulsive_density_from_words(candidate_words);
         let bloom_hit = density >= self.bloom_repulsion_threshold;
-        let bloom_sev = branchless_select_f32(bloom_hit,
-            branchless_clamp_f32(0.60 + (density as f32) * 0.05, 0.60, 1.0), 0.0);
+        let bloom_sev = branchless_select_f32(
+            bloom_hit,
+            branchless_clamp_f32(0.60 + (density as f32) * 0.05, 0.60, 1.0),
+            0.0,
+        );
         branchless_max_f32(obs_sev, bloom_sev)
     }
+
     #[inline(always)]
     fn requires_phase_slice_for_repulsion(&self) -> bool {
         false
@@ -1336,10 +1371,13 @@ impl ContradictionGuardSignal for ContradictionGuard<ContrastivePhaseBloomFilter
 
 impl ContradictionGuardSignal for ContradictionGuard<()> {
     #[inline(always)]
-    fn evaluate_repulsion_severity(&self,
-        _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> f32 {
+    fn evaluate_repulsion_severity(
+        &self,
+        _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> f32 {
         let obs_exceeded = self.cohomology_obstruction > self.obstruction_threshold;
-        branchless_select_f32(obs_exceeded,
+        branchless_select_f32(
+            obs_exceeded,
             branchless_clamp_f32(
                 0.55 + (self.cohomology_obstruction - self.obstruction_threshold),
                 0.55,
@@ -1348,6 +1386,7 @@ impl ContradictionGuardSignal for ContradictionGuard<()> {
             0.0,
         )
     }
+
     #[inline(always)]
     fn evaluate_repulsion_severity_from_words(
         &self,
@@ -1355,7 +1394,8 @@ impl ContradictionGuardSignal for ContradictionGuard<()> {
         _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let obs_exceeded = self.cohomology_obstruction > self.obstruction_threshold;
-        branchless_select_f32(obs_exceeded,
+        branchless_select_f32(
+            obs_exceeded,
             branchless_clamp_f32(
                 0.55 + (self.cohomology_obstruction - self.obstruction_threshold),
                 0.55,
@@ -1364,6 +1404,7 @@ impl ContradictionGuardSignal for ContradictionGuard<()> {
             0.0,
         )
     }
+
     #[inline(always)]
     fn requires_phase_slice_for_repulsion(&self) -> bool {
         false
@@ -1394,8 +1435,10 @@ impl CognitiveGroundingSignal for ContrastivePhaseBloomFilter {
 
 impl ContradictionGuardSignal for ContrastivePhaseBloomFilter {
     #[inline(always)]
-    fn evaluate_repulsion_severity(&self,
-        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> f32 {
+    fn evaluate_repulsion_severity(
+        &self,
+        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> f32 {
         let words = load_q7_words_64(candidate_phases);
         self.evaluate_repulsion_severity_from_words(&words, candidate_phases)
     }
@@ -1486,16 +1529,22 @@ impl Default for GatewayFrame {
     #[inline(always)]
     fn default() -> Self {
         Self {
-            tagged_ptr: gcso_tagged_ptr_t::pack(0,
+            tagged_ptr: gcso_tagged_ptr_t::pack(
+                0,
                 pack_action_slot_tag(ATTRACTOR_SLOT_SYSTEM_BASELINE, ACTION_PRESET_EXPRESS_PHASE),
                 0,
             )
             .raw(),
-            zimms_section_offset48: 0, target_anchor_id: 0,
-            effective_energy: 0.0, ripa_clamp_rad: DEFAULT_RIPA_CLAMP_MAX_RAD,
-            qdps_min_step_rad: DEFAULT_QDPS_MIN_STEP_RAD, effective_inv_temp: 1.0,
-            fact_persona_coherence: 1.0, repulsion_severity: 0.0,
-            provenance_bits: 0, dominant_cause_code: ROOT_CAUSE_NOMINAL,
+            zimms_section_offset48: 0,
+            target_anchor_id: 0,
+            effective_energy: 0.0,
+            ripa_clamp_rad: DEFAULT_RIPA_CLAMP_MAX_RAD,
+            qdps_min_step_rad: DEFAULT_QDPS_MIN_STEP_RAD,
+            effective_inv_temp: 1.0,
+            fact_persona_coherence: 1.0,
+            repulsion_severity: 0.0,
+            provenance_bits: 0,
+            dominant_cause_code: ROOT_CAUSE_NOMINAL,
             dominant_slot: ATTRACTOR_SLOT_SYSTEM_BASELINE,
             action_mode_flags: ACTION_PRESET_EXPRESS_PHASE,
             active_swarm_cell_mask: 0xFF,
@@ -1504,9 +1553,12 @@ impl Default for GatewayFrame {
             pspm_logic_heads: 24,
             pspm_explore_heads: 16,
             pspm_fact_gain_q7: 128,
-            pspm_logic_gain_q7: 128, pspm_explore_gain_q7: 128,
-            mean_phase_tag_q7: 0, active_head_count: MAX_ATTENTION_HEADS as u16,
-            frame_flags: 0, phase_deltas: [0i8; MAX_ATTENTION_HEADS],
+            pspm_logic_gain_q7: 128,
+            pspm_explore_gain_q7: 128,
+            mean_phase_tag_q7: 0,
+            active_head_count: MAX_ATTENTION_HEADS as u16,
+            frame_flags: 0,
+            phase_deltas: [0i8; MAX_ATTENTION_HEADS],
         }
     }
 }
@@ -1572,7 +1624,8 @@ impl GatewayFrame {
             fact_persona_coherence: self.fact_persona_coherence,
             anomaly_severity: self.repulsion_severity,
             dominant_cause_code: self.dominant_cause_code,
-            dominant_slot: self.dominant_slot, action_mode_flags: self.action_mode_flags,
+            dominant_slot: self.dominant_slot,
+            action_mode_flags: self.action_mode_flags,
             active_swarm_mask: self.active_swarm_cell_mask,
         }
     }
@@ -1589,7 +1642,10 @@ impl GatewayFrame {
         };
         if h == 0 {
             return gcso_pspm_config_t {
-                num_fact_heads: 0, num_logic_heads: 0, num_explore_heads: 0, flags: 0,
+                num_fact_heads: 0,
+                num_logic_heads: 0,
+                num_explore_heads: 0,
+                flags: 0,
                 fact_phase_gain: 1.0,
                 logic_phase_gain: 1.0,
                 explore_phase_gain: 1.0,
@@ -1871,22 +1927,36 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
         let tag_q7 = swar_q7_mean_i8_from_words_with_uniform_flag_64(&acc_w, acc_is_uniform);
         let packed_tag = pack_action_slot_tag(dom_slot, action_flags);
         let tagged_ptr = gcso_tagged_ptr_t::pack(zimms_addr, packed_tag, tag_q7).raw();
-        (GatewayFrame {
-                tagged_ptr, zimms_section_offset48: zimms_addr,
+        (
+            GatewayFrame {
+                tagged_ptr,
+                zimms_section_offset48: zimms_addr,
                 target_anchor_id,
                 effective_energy: branchless_min_f32(tot_e, MAX_ATTRACTOR_PULL_FORCE),
-                ripa_clamp_rad, qdps_min_step_rad,
-                effective_inv_temp: eff_inv_temp, fact_persona_coherence: fp_coh,
-                repulsion_severity: rep_sev, provenance_bits: prov_bits,
-                dominant_cause_code: dom_cause, dominant_slot: dom_slot,
-                action_mode_flags: action_flags, active_swarm_cell_mask: swarm_mask,
-                qdps_min_step_q7: qdps_step_q7, pspm_fact_heads: pspm_fact,
-                pspm_logic_heads: pspm_logic, pspm_explore_heads: pspm_explore,
-                pspm_fact_gain_q7: fact_gain_q7, pspm_logic_gain_q7: logic_gain_q7,
-                pspm_explore_gain_q7: explore_gain_q7, mean_phase_tag_q7: tag_q7,
-                active_head_count: active_heads, frame_flags: packed_tag as u16, phase_deltas,
+                ripa_clamp_rad,
+                qdps_min_step_rad,
+                effective_inv_temp: eff_inv_temp,
+                fact_persona_coherence: fp_coh,
+                repulsion_severity: rep_sev,
+                provenance_bits: prov_bits,
+                dominant_cause_code: dom_cause,
+                dominant_slot: dom_slot,
+                action_mode_flags: action_flags,
+                active_swarm_cell_mask: swarm_mask,
+                qdps_min_step_q7: qdps_step_q7,
+                pspm_fact_heads: pspm_fact,
+                pspm_logic_heads: pspm_logic,
+                pspm_explore_heads: pspm_explore,
+                pspm_fact_gain_q7: fact_gain_q7,
+                pspm_logic_gain_q7: logic_gain_q7,
+                pspm_explore_gain_q7: explore_gain_q7,
+                mean_phase_tag_q7: tag_q7,
+                active_head_count: active_heads,
+                frame_flags: packed_tag as u16,
+                phase_deltas,
             },
-            acc_w)
+            acc_w,
+        )
     }
 }
 
@@ -1936,12 +2006,18 @@ impl ManifoldGatewaySignal for GatewayFrame {
 /// (`ObjectiveFactSignal`, `SubjectivePersonaSignal`, `ContradictionGuardSignal`)** components.
 #[inline(always)]
 #[must_use]
-pub fn synthesize_multi_origin_gateway_frame_with_words<S, F, P, G>(sys_opt: Option<&S>,
-    fact_opt: Option<&F>, persona_opt: Option<&P>,
-    guard_opt: Option<&G>) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS])
+pub fn synthesize_multi_origin_gateway_frame_with_words<S, F, P, G>(
+    sys_opt: Option<&S>,
+    fact_opt: Option<&F>,
+    persona_opt: Option<&P>,
+    guard_opt: Option<&G>,
+) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS])
 where
-    S: SystemConstraintSignal + ?Sized, F: ObjectiveFactSignal + ?Sized,
-    P: SubjectivePersonaSignal + ?Sized, G: ContradictionGuardSignal + ?Sized, {
+    S: SystemConstraintSignal + ?Sized,
+    F: ObjectiveFactSignal + ?Sized,
+    P: SubjectivePersonaSignal + ?Sized,
+    G: ContradictionGuardSignal + ?Sized,
+{
     let mut prov_bits = 0u32;
     let mut active_swarm_mask = 0xFFu8;
     let mut force_skip = false;
@@ -2003,8 +2079,11 @@ where
         pers_addr = pers.zimms_section_offset48() & gcso_tagged_ptr_t::ADDR_MASK;
         pers_id = pers.grounding_anchor_id();
         let pc = pers.persona_ripa_clamp_rad();
-        pers_clamp = branchless_select_f32(branchless_is_finite_f32(pc) & (pc > 0.0),
-            pc, DEFAULT_PERSONA_RIPA_CLAMP_RAD);
+        pers_clamp = branchless_select_f32(
+            branchless_is_finite_f32(pc) & (pc > 0.0),
+            pc,
+            DEFAULT_PERSONA_RIPA_CLAMP_RAD,
+        );
         let pg = branchless_clamp_f32(pers.persona_pspm_gain(), 0.25, 1.99);
         pers_gain_q7 = (pg * 128.0 + 0.5) as u8;
         pers_w = pers.project_grounding_words_64();
@@ -2095,10 +2174,16 @@ where
 
         let fact_dom = (fact_e >= pers_e) | collision;
         dom_slot = branchless_select_u8(fact_dom, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA);
-        dom_anchor_id = branchless_select_u32(fact_dom & (fact_id != 0),
-            fact_id, branchless_select_u32(pers_id != 0, pers_id, fact_id));
-        zimms_addr = branchless_select_u64(fact_addr != 0,
-            fact_addr, branchless_select_u64(pers_addr != 0, pers_addr, 0));
+        dom_anchor_id = branchless_select_u32(
+            fact_dom & (fact_id != 0),
+            fact_id,
+            branchless_select_u32(pers_id != 0, pers_id, fact_id),
+        );
+        zimms_addr = branchless_select_u64(
+            fact_addr != 0,
+            fact_addr,
+            branchless_select_u64(pers_addr != 0, pers_addr, 0),
+        );
         pspm_fact = branchless_select_u8(fact_dom, 32, 20);
         pspm_logic = 24;
         pspm_explore = branchless_select_u8(fact_dom, 8, 20);
@@ -2254,35 +2339,56 @@ where
     let tagged_ptr = gcso_tagged_ptr_t::pack(zimms_addr, packed_tag, tag_q7).raw();
     let logic_gain_q7 = ((fact_gain_q7 as u16 + pers_gain_q7 as u16) >> 1) as u8;
 
-    (GatewayFrame {
-            tagged_ptr, zimms_section_offset48: zimms_addr,
-            target_anchor_id: dom_anchor_id, effective_energy: eff_energy,
-            ripa_clamp_rad: norm_ripa_clamp, qdps_min_step_rad: qdps_rad,
-            effective_inv_temp: inv_temp, fact_persona_coherence: fp_coh,
-            repulsion_severity: branchless_max_f32(rep_sev, sys_sev), provenance_bits: prov_bits,
-            dominant_cause_code: dominant_cause, dominant_slot: dom_slot,
-            action_mode_flags: action_flags, active_swarm_cell_mask: active_swarm_mask,
-            qdps_min_step_q7: qdps_step_u8, pspm_fact_heads: pspm_fact,
-            pspm_logic_heads: pspm_logic, pspm_explore_heads: pspm_explore,
-            pspm_fact_gain_q7: fact_gain_q7, pspm_logic_gain_q7: logic_gain_q7,
-            pspm_explore_gain_q7: pers_gain_q7, mean_phase_tag_q7: tag_q7,
+    (
+        GatewayFrame {
+            tagged_ptr,
+            zimms_section_offset48: zimms_addr,
+            target_anchor_id: dom_anchor_id,
+            effective_energy: eff_energy,
+            ripa_clamp_rad: norm_ripa_clamp,
+            qdps_min_step_rad: qdps_rad,
+            effective_inv_temp: inv_temp,
+            fact_persona_coherence: fp_coh,
+            repulsion_severity: branchless_max_f32(rep_sev, sys_sev),
+            provenance_bits: prov_bits,
+            dominant_cause_code: dominant_cause,
+            dominant_slot: dom_slot,
+            action_mode_flags: action_flags,
+            active_swarm_cell_mask: active_swarm_mask,
+            qdps_min_step_q7: qdps_step_u8,
+            pspm_fact_heads: pspm_fact,
+            pspm_logic_heads: pspm_logic,
+            pspm_explore_heads: pspm_explore,
+            pspm_fact_gain_q7: fact_gain_q7,
+            pspm_logic_gain_q7: logic_gain_q7,
+            pspm_explore_gain_q7: pers_gain_q7,
+            mean_phase_tag_q7: tag_q7,
             active_head_count: MAX_ATTENTION_HEADS as u16,
             frame_flags: packed_tag as u16,
             phase_deltas,
         },
-        blended_w)
+        blended_w,
+    )
 }
 
 /// Synthesizes a 128-byte [`GatewayFrame`] from optional **Origin 1 (`SystemConstraintSignal`)**
 /// and **Origin 2 (`ObjectiveFactSignal`, `SubjectivePersonaSignal`, `ContradictionGuardSignal`)** components.
 #[inline(always)]
 #[must_use]
-pub fn synthesize_multi_origin_gateway_frame<S, F, P, G>(sys_opt: Option<&S>,
-    fact_opt: Option<&F>, persona_opt: Option<&P>, guard_opt: Option<&G>) -> GatewayFrame
+pub fn synthesize_multi_origin_gateway_frame<S, F, P, G>(
+    sys_opt: Option<&S>,
+    fact_opt: Option<&F>,
+    persona_opt: Option<&P>,
+    guard_opt: Option<&G>,
+) -> GatewayFrame
 where
-    S: SystemConstraintSignal + ?Sized, F: ObjectiveFactSignal + ?Sized,
-    P: SubjectivePersonaSignal + ?Sized, G: ContradictionGuardSignal + ?Sized,
-{ synthesize_multi_origin_gateway_frame_with_words(sys_opt, fact_opt, persona_opt, guard_opt).0 }
+    S: SystemConstraintSignal + ?Sized,
+    F: ObjectiveFactSignal + ?Sized,
+    P: SubjectivePersonaSignal + ?Sized,
+    G: ContradictionGuardSignal + ?Sized,
+{
+    synthesize_multi_origin_gateway_frame_with_words(sys_opt, fact_opt, persona_opt, guard_opt).0
+}
 
 // ===================================================================
 // 7. Blanket `ManifoldGatewaySignal` Implementations for Wrappers, Tuples & Ensembles
@@ -2374,8 +2480,12 @@ where
 {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
-        synthesize_multi_origin_gateway_frame_with_words::< SystemConstraint<()>,
-            ObjectiveFact<[u8; 0]>, SubjectivePersona<[u8; 0]>, Self>(None, None, None, Some(self))
+        synthesize_multi_origin_gateway_frame_with_words::<
+            SystemConstraint<()>,
+            ObjectiveFact<[u8; 0]>,
+            SubjectivePersona<[u8; 0]>,
+            Self,
+        >(None, None, None, Some(self))
     }
     #[inline(always)]
     fn synthesize_gateway_frame(&self) -> GatewayFrame {
@@ -2398,8 +2508,12 @@ impl<F: ObjectiveFactSignal, P: SubjectivePersonaSignal> CausalProvenanceSignal 
 impl<F: ObjectiveFactSignal, P: SubjectivePersonaSignal> ManifoldGatewaySignal for (F, P) {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
-        synthesize_multi_origin_gateway_frame_with_words::< SystemConstraint<()>, F, P,
-            ContradictionGuard<()>>(None, Some(&self.0), Some(&self.1), None)
+        synthesize_multi_origin_gateway_frame_with_words::<
+            SystemConstraint<()>,
+            F,
+            P,
+            ContradictionGuard<()>,
+        >(None, Some(&self.0), Some(&self.1), None)
     }
     #[inline(always)]
     fn synthesize_gateway_frame(&self) -> GatewayFrame {
@@ -2446,8 +2560,12 @@ impl<S: SystemConstraintSignal, F: ObjectiveFactSignal, P: SubjectivePersonaSign
     }
 }
 
-impl< S: SystemConstraintSignal, F: ObjectiveFactSignal, P: SubjectivePersonaSignal,
-        G: ContradictionGuardSignal, > CausalProvenanceSignal for (S, F, P, G)
+impl<
+        S: SystemConstraintSignal,
+        F: ObjectiveFactSignal,
+        P: SubjectivePersonaSignal,
+        G: ContradictionGuardSignal,
+    > CausalProvenanceSignal for (S, F, P, G)
 {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
@@ -2471,8 +2589,12 @@ impl< S: SystemConstraintSignal, F: ObjectiveFactSignal, P: SubjectivePersonaSig
     }
 }
 
-impl< S: SystemConstraintSignal, F: ObjectiveFactSignal, P: SubjectivePersonaSignal,
-        G: ContradictionGuardSignal, > ManifoldGatewaySignal for (S, F, P, G)
+impl<
+        S: SystemConstraintSignal,
+        F: ObjectiveFactSignal,
+        P: SubjectivePersonaSignal,
+        G: ContradictionGuardSignal,
+    > ManifoldGatewaySignal for (S, F, P, G)
 {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
@@ -2492,11 +2614,18 @@ impl< S: SystemConstraintSignal, F: ObjectiveFactSignal, P: SubjectivePersonaSig
 impl<T: ManifoldGatewaySignal> CausalProvenanceSignal for Option<T> {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
-        match self { Some(inner) => inner.causal_provenance_bits(), None => 0, }
+        match self {
+            Some(inner) => inner.causal_provenance_bits(),
+            None => 0,
+        }
     }
+
     #[inline(always)]
     fn causal_anomaly_severity(&self) -> f32 {
-        match self { Some(inner) => inner.causal_anomaly_severity(), None => 0.0, }
+        match self {
+            Some(inner) => inner.causal_anomaly_severity(),
+            None => 0.0,
+        }
     }
 }
 
@@ -2705,11 +2834,16 @@ impl CrystallizedAttractorRecord {
             sample_count: 0,
             zimms_section_offset48: zimms_section_offset48 & gcso_tagged_ptr_t::ADDR_MASK,
             base_energy: 0.0,
-            resultant_r_bar: 0.0, von_mises_kappa: 0.0,
-            phase_gravity_mass: 0.0, ripa_clamp_rad: DEFAULT_RIPA_CLAMP_MAX_RAD,
-            effective_inv_temp: 1.0, provenance_bits: 0,
-            checksum_crc32: 0, dominant_slot: dominant_slot & ATTRACTOR_SLOT_ID_MASK,
-            action_mode_flags: ACTION_PRESET_PASSIVE_SIDECAR, active_swarm_mask: 0xFF,
+            resultant_r_bar: 0.0,
+            von_mises_kappa: 0.0,
+            phase_gravity_mass: 0.0,
+            ripa_clamp_rad: DEFAULT_RIPA_CLAMP_MAX_RAD,
+            effective_inv_temp: 1.0,
+            provenance_bits: 0,
+            checksum_crc32: 0,
+            dominant_slot: dominant_slot & ATTRACTOR_SLOT_ID_MASK,
+            action_mode_flags: ACTION_PRESET_PASSIVE_SIDECAR,
+            active_swarm_mask: 0xFF,
             dominant_cause_code: ROOT_CAUSE_NOMINAL,
             reserved_align64: 0,
             phase_profile: [0i8; MAX_ATTENTION_HEADS],
@@ -3060,10 +3194,14 @@ impl CrystallizedAttractorRecord {
     /// and an optional `precomputed_coh_opt` from the E-step to eliminate duplicate 64-head coherence evaluation.
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
-    fn absorb_sample_words_with_cur_coh_and_uni_unstamped(&mut self,
-        cur_w: &[u64; NUM_SWARM_MICRO_CELLS], sample_w: &[u64; NUM_SWARM_MICRO_CELLS],
-        precomputed_coh_opt: Option<f32>, uni_flags_opt: Option<(bool, bool)>,
-        sample_energy: f32, add_count: u32,
+    fn absorb_sample_words_with_cur_coh_and_uni_unstamped(
+        &mut self,
+        cur_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        sample_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        precomputed_coh_opt: Option<f32>,
+        uni_flags_opt: Option<(bool, bool)>,
+        sample_energy: f32,
+        add_count: u32,
     ) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, bool) {
         let clean_e = branchless_flush_subnormal_f32(branchless_relu_f32(sample_energy));
         if clean_e <= 1.0e-12 || add_count == 0 {
@@ -3129,9 +3267,13 @@ impl CrystallizedAttractorRecord {
     }
 
     #[inline(always)]
-    fn absorb_sample_words_with_cur_unstamped(&mut self,
-        cur_w: &[u64; NUM_SWARM_MICRO_CELLS], sample_w: &[u64; NUM_SWARM_MICRO_CELLS],
-        sample_energy: f32, add_count: u32) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, bool) {
+    fn absorb_sample_words_with_cur_unstamped(
+        &mut self,
+        cur_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        sample_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        sample_energy: f32,
+        add_count: u32,
+    ) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, bool) {
         self.absorb_sample_words_with_cur_coh_and_uni_unstamped(
             cur_w,
             sample_w,
@@ -3143,9 +3285,12 @@ impl CrystallizedAttractorRecord {
     }
 
     #[inline(always)]
-    fn absorb_gateway_frame_with_cur_coh_and_uni_unstamped(&mut self,
-        cur_w: &[u64; NUM_SWARM_MICRO_CELLS], frame: &GatewayFrame,
-        frame_words: &[u64; NUM_SWARM_MICRO_CELLS], precomputed_coh_opt: Option<f32>,
+    fn absorb_gateway_frame_with_cur_coh_and_uni_unstamped(
+        &mut self,
+        cur_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        frame: &GatewayFrame,
+        frame_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        precomputed_coh_opt: Option<f32>,
         uni_flags_opt: Option<(bool, bool)>,
     ) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, bool, bool) {
         if frame.is_repulsed() {
@@ -3188,7 +3333,8 @@ impl CrystallizedAttractorRecord {
     }
 
     #[inline(always)]
-    fn absorb_gateway_frame_with_cur_unstamped(&mut self,
+    fn absorb_gateway_frame_with_cur_unstamped(
+        &mut self,
         cur_w: &[u64; NUM_SWARM_MICRO_CELLS],
         frame: &GatewayFrame,
         frame_words: &[u64; NUM_SWARM_MICRO_CELLS],
@@ -3271,8 +3417,11 @@ impl CrystallizedAttractorRecord {
     /// Absorbs a 64-head sample point (`sample_phases`, `sample_energy`) into this centroid on
     /// $SO(2)^{64}$, updates $(\bar{R}_c, \kappa_c, M_{\mathrm{grav}})$, and stamps `checksum_crc32`.
     #[inline]
-    pub fn absorb_sample_point_64(&mut self,
-        sample_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS], sample_energy: f32) -> f32 {
+    pub fn absorb_sample_point_64(
+        &mut self,
+        sample_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        sample_energy: f32,
+    ) -> f32 {
         let prev_crc = self.checksum_crc32;
         let prev_count = self.sample_count;
         let prev_be_bits = self.base_energy.to_bits();
@@ -3310,8 +3459,11 @@ impl CrystallizedAttractorRecord {
     /// Absorbs a [`GatewayFrame`] and its pre-loaded 8 `u64` SWAR words (`frame_words`) into this
     /// centroid without reloading `frame.phase_deltas`, stamping `checksum_crc32` once at the end.
     #[inline]
-    pub fn absorb_gateway_frame_with_words(&mut self,
-        frame: &GatewayFrame, frame_words: &[u64; NUM_SWARM_MICRO_CELLS]) -> f32 {
+    pub fn absorb_gateway_frame_with_words(
+        &mut self,
+        frame: &GatewayFrame,
+        frame_words: &[u64; NUM_SWARM_MICRO_CELLS],
+    ) -> f32 {
         if frame.is_repulsed() {
             return self.phase_gravity_mass;
         }
@@ -3416,8 +3568,10 @@ impl CrystallizedAttractorRecord {
     /// Evaluates **Phase-Proximity Gravity** and cosine phase coherence between `query_phases` and `self`.
     #[inline]
     #[must_use]
-    pub fn evaluate_phase_proximity_gravity_64(&self,
-        query_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> (f32, f32) {
+    pub fn evaluate_phase_proximity_gravity_64(
+        &self,
+        query_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> (f32, f32) {
         if self.sample_count == 0 || self.phase_gravity_mass <= 1.0e-12 {
             return (0.0, 0.0);
         }
@@ -3676,9 +3830,15 @@ impl CrystallizedAttractorRecord {
     }
 
     #[inline(always)]
-    fn select_or_spawn_centroid_slot_64(centroids: &mut [Self], frame: &GatewayFrame,
-        nearest_idx: usize, best_coh: f32, empty_opt: Option<usize>, weakest_idx: usize,
-        best_w: [u64; NUM_SWARM_MICRO_CELLS], safe_split: f32,
+    fn select_or_spawn_centroid_slot_64(
+        centroids: &mut [Self],
+        frame: &GatewayFrame,
+        nearest_idx: usize,
+        best_coh: f32,
+        empty_opt: Option<usize>,
+        weakest_idx: usize,
+        best_w: [u64; NUM_SWARM_MICRO_CELLS],
+        safe_split: f32,
     ) -> (usize, bool, [u64; NUM_SWARM_MICRO_CELLS]) {
         let needs_split = (centroids[nearest_idx].sample_count == 0) | (best_coh < safe_split);
         if needs_split {
@@ -3715,7 +3875,8 @@ impl CrystallizedAttractorRecord {
     }
 
     #[inline]
-    pub(crate) fn step_online_toroidal_kmeans_frame_with_words_64(centroids: &mut [Self],
+    pub(crate) fn step_online_toroidal_kmeans_frame_with_words_64(
+        centroids: &mut [Self],
         frame: &GatewayFrame,
         sample_w: &[u64; NUM_SWARM_MICRO_CELLS],
         split_coherence_thresh: f32,
@@ -3755,7 +3916,15 @@ impl CrystallizedAttractorRecord {
 
         let safe_split = branchless_clamp_f32(split_coherence_thresh, -0.95, 0.95);
         let (target_idx, spawned_new, cur_target_w) = Self::select_or_spawn_centroid_slot_64(
-            centroids, frame, nearest_idx, best_coh, empty_opt, weakest_idx, best_w, safe_split);
+            centroids,
+            frame,
+            nearest_idx,
+            best_coh,
+            empty_opt,
+            weakest_idx,
+            best_w,
+            safe_split,
+        );
 
         let pre_coh = if spawned_new { Some(1.0) } else { Some(best_coh) };
         let uni_flags = Some((if spawned_new { true } else { best_is_uniform }, sample_is_uniform));
@@ -3819,14 +3988,19 @@ impl CrystallizedAttractorRecord {
     /// **Classical Online Toroidal $k$-Means / DP-Means Closed-Loop E+M Step ($\mathcal{O}(K)$)**:
     /// Returns `(assigned_cluster_idx, assigned_anchor_id, centroid_coherence, updated_gravity_mass, spawned_new_cluster)`.
     #[inline(always)]
-    pub fn step_online_toroidal_kmeans_frame_64(centroids: &mut [Self],
-        frame: &GatewayFrame, split_coherence_thresh: f32,
-        trail_opt: Option<&mut gcso_pointer_trail_t>) -> (usize, u32, f32, f32, bool) {
+    pub fn step_online_toroidal_kmeans_frame_64(
+        centroids: &mut [Self],
+        frame: &GatewayFrame,
+        split_coherence_thresh: f32,
+        trail_opt: Option<&mut gcso_pointer_trail_t>,
+    ) -> (usize, u32, f32, f32, bool) {
         Self::step_online_toroidal_kmeans_frame_with_words_64(
             centroids,
             frame,
             frame.phase_words_ref(),
-            split_coherence_thresh, trail_opt)
+            split_coherence_thresh,
+            trail_opt,
+        )
     }
 
     /// Executes Online Toroidal $k$-Means / DP-Means across a batch of [`GatewayFrame`]s,
@@ -4877,90 +5051,87 @@ impl CrystallizedAttractorRecord {
         let mut coh_sum = 0.0_f32;
         let mut active_cnt = 0usize;
 
-            let mut i = 0usize;
-            while i < records.len() {
-                let rec = &records[i];
-                if rec.sample_count > 0 && rec.phase_gravity_mass > 1.0e-12 {
-                    let rec_w = rec.phase_words_ref();
-                    let rec_is_uniform = if (init_nonzero & init_is_uniform) | acc_is_uniform {
-                        is_word_array_uniform_64(rec_w)
-                    } else {
-                        false
-                    };
-                    let rw0 = rec_w[0];
-                    let rb0 = (rw0 & 0xFF) as u8;
-                    let (coh, grav) = if (!init_nonzero)
-                        | (rec_is_uniform & init_is_uniform & (rw0 == init_w0))
-                    {
-                        (
-                            1.0,
-                            branchless_q7_default_gravity_from_diff_u8(rec.phase_gravity_mass, 0),
-                        )
-                    } else if rec_is_uniform & init_is_byte_uniform & (rw0 == rw0.rotate_right(8)) {
-                        let d_u8 = init_b0.wrapping_sub(rb0);
-                        (
-                            Q7_FULL_COS_REF[d_u8 as usize],
-                            branchless_q7_default_gravity_from_diff_u8(
-                                rec.phase_gravity_mass,
-                                d_u8,
-                            ),
-                        )
-                    } else {
-                        let c_val = coherence_from_word_arrays_with_both_uniform_flags_64(
-                            &init_w,
-                            init_is_uniform,
-                            rec_w,
-                            rec_is_uniform,
-                        );
-                        (
+        let mut i = 0usize;
+        while i < records.len() {
+            let rec = &records[i];
+            if rec.sample_count > 0 && rec.phase_gravity_mass > 1.0e-12 {
+                let rec_w = rec.phase_words_ref();
+                let rec_is_uniform = if (init_nonzero & init_is_uniform) | acc_is_uniform {
+                    is_word_array_uniform_64(rec_w)
+                } else {
+                    false
+                };
+                let rw0 = rec_w[0];
+                let rb0 = (rw0 & 0xFF) as u8;
+                let (coh, grav) = if (!init_nonzero)
+                    | (rec_is_uniform & init_is_uniform & (rw0 == init_w0))
+                {
+                    (
+                        1.0,
+                        branchless_q7_default_gravity_from_diff_u8(rec.phase_gravity_mass, 0),
+                    )
+                } else if rec_is_uniform & init_is_byte_uniform & (rw0 == rw0.rotate_right(8)) {
+                    let d_u8 = init_b0.wrapping_sub(rb0);
+                    (
+                        Q7_FULL_COS_REF[d_u8 as usize],
+                        branchless_q7_default_gravity_from_diff_u8(rec.phase_gravity_mass, d_u8),
+                    )
+                } else {
+                    let c_val = coherence_from_word_arrays_with_both_uniform_flags_64(
+                        &init_w,
+                        init_is_uniform,
+                        rec_w,
+                        rec_is_uniform,
+                    );
+                    (
+                        c_val,
+                        branchless_phase_proximity_gravity_f32(
+                            rec.phase_gravity_mass,
                             c_val,
-                            branchless_phase_proximity_gravity_f32(
-                                rec.phase_gravity_mass,
-                                c_val,
-                                DEFAULT_PHASE_GRAVITY_EPS,
-                            ),
-                        )
-                    };
-                    coh_sum += coh;
-                    active_cnt += 1;
-                    let new_tot = tot_pull + grav;
-                    if grav > 1.0e-12 {
-                        if tot_pull <= 1.0e-12 {
+                            DEFAULT_PHASE_GRAVITY_EPS,
+                        ),
+                    )
+                };
+                coh_sum += coh;
+                active_cnt += 1;
+                let new_tot = tot_pull + grav;
+                if grav > 1.0e-12 {
+                    if tot_pull <= 1.0e-12 {
+                        acc_w = *rec_w;
+                        acc_is_uniform = rec_is_uniform;
+                    } else if !swar_words_equal_64(&acc_w, rec_w) {
+                        let safe_tot = branchless_select_f32(new_tot > 1.0e-12, new_tot, 1.0);
+                        let s_u8 =
+                            ((grav * fast_inv_pos_normal_f32(safe_tot)) * 128.0 + 0.5) as u8;
+                        let s_u64 = s_u8.min(128) as u64;
+                        if s_u64 >= 128 {
                             acc_w = *rec_w;
                             acc_is_uniform = rec_is_uniform;
-                        } else if !swar_words_equal_64(&acc_w, rec_w) {
-                            let safe_tot = branchless_select_f32(new_tot > 1.0e-12, new_tot, 1.0);
-                            let s_u8 =
-                                ((grav * fast_inv_pos_normal_f32(safe_tot)) * 128.0 + 0.5) as u8;
-                            let s_u64 = s_u8.min(128) as u64;
-                            if s_u64 >= 128 {
-                                acc_w = *rec_w;
-                                acc_is_uniform = rec_is_uniform;
-                            } else if s_u64 > 0 {
-                                let bias_restore =
-                                    (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-                                let (next_acc, next_uni) = swar_slerp_words_with_uniform_flag_64(
-                                    &acc_w,
-                                    acc_is_uniform,
-                                    rec_w,
-                                    rec_is_uniform,
-                                    s_u64,
-                                    bias_restore,
-                                );
-                                acc_w = next_acc;
-                                acc_is_uniform = next_uni;
-                            }
+                        } else if s_u64 > 0 {
+                            let bias_restore =
+                                (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+                            let (next_acc, next_uni) = swar_slerp_words_with_uniform_flag_64(
+                                &acc_w,
+                                acc_is_uniform,
+                                rec_w,
+                                rec_is_uniform,
+                                s_u64,
+                                bias_restore,
+                            );
+                            acc_w = next_acc;
+                            acc_is_uniform = next_uni;
                         }
                     }
-
-                    let is_dom = grav > best_grav;
-                    best_grav = branchless_select_f32(is_dom, grav, best_grav);
-                    dom_id = branchless_select_u32(is_dom, rec.anchor_id, dom_id);
-                    dom_clamp = branchless_select_f32(is_dom, rec.ripa_clamp_rad, dom_clamp);
-                    tot_pull = new_tot;
                 }
-                i += 1;
+
+                let is_dom = grav > best_grav;
+                best_grav = branchless_select_f32(is_dom, grav, best_grav);
+                dom_id = branchless_select_u32(is_dom, rec.anchor_id, dom_id);
+                dom_clamp = branchless_select_f32(is_dom, rec.ripa_clamp_rad, dom_clamp);
+                tot_pull = new_tot;
             }
+            i += 1;
+        }
         store_q7_words_64(trail_phases_inout, &acc_w);
         let mean_coh = if active_cnt == 0 {
             0.0
@@ -5013,15 +5184,6 @@ impl CrystallizedAttractorRecord {
     /// [`GCSO_ERROR_CONTAINER_CORRUPTED`] on validation failure.
     #[inline]
     pub fn slice_from_zimms_bytes_zero_copy(bytes: &[u8], count: usize) -> GcsoResult<&[Self]> {
-        Self::slice_from_zimms_bytes_with_crc_mode(bytes, count, true)
-    }
-
-    #[inline(always)]
-    fn slice_from_zimms_bytes_with_crc_mode(
-        bytes: &[u8],
-        count: usize,
-        verify_per_record_crc: bool,
-    ) -> GcsoResult<&[Self]> {
         if count == 0 {
             return Ok(&[]);
         }
@@ -5037,37 +5199,11 @@ impl CrystallizedAttractorRecord {
         // SAFETY: `bytes` is verified 64-byte aligned and at least `count * 128` bytes long, and `Self: Pod`.
         let recs = unsafe { core::slice::from_raw_parts(bytes.as_ptr().cast::<Self>(), count) };
         let mut i = 0usize;
-        if verify_per_record_crc {
-            while i < count {
-                if !recs[i].verify_integrity() {
-                    return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
-                }
-                i += 1;
+        while i < count {
+            if !recs[i].verify_integrity() {
+                return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
             }
-        } else {
-            #[cfg(target_endian = "little")]
-            let expected_w0 =
-                (GCSO_CRYSTAL_RECORD_MAGIC as u64) | ((GCSO_CRYSTAL_RECORD_VERSION as u64) << 32);
-            while i < count {
-                #[cfg(target_endian = "little")]
-                {
-                    let rw = unsafe { &*core::ptr::from_ref(&recs[i]).cast::<[u64; 16]>() };
-                    if (rw[0] != expected_w0) | ((rw[6] >> 32) == 0) {
-                        return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
-                    }
-                }
-                #[cfg(not(target_endian = "little"))]
-                {
-                    let r = &recs[i];
-                    if (r.magic != GCSO_CRYSTAL_RECORD_MAGIC)
-                        | (r.version != GCSO_CRYSTAL_RECORD_VERSION)
-                        | (r.checksum_crc32 == 0)
-                    {
-                        return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
-                    }
-                }
-                i += 1;
-            }
+            i += 1;
         }
         Ok(recs)
     }
@@ -5438,10 +5574,9 @@ impl<'a> GcsoFourSectionView<'a> {
             return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
         }
         let num_crystals = crystals_byte_len / size_of::<CrystallizedAttractorRecord>();
-        let crystals = CrystallizedAttractorRecord::slice_from_zimms_bytes_with_crc_mode(
+        let crystals = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
             &bytes[off_crystals..end_crystals],
             num_crystals,
-            header.checksum_crc32 == 0,
         )?;
         if header.checksum_crc32 != 0 {
             let computed = Self::compute_container_crc32_with_stamped_crystals(
@@ -6110,7 +6245,7 @@ fn accumulate_trail_and_steer_gateway_words_core(
         trail_inout.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
     } else if query_tensor.is_some() | key_tensor.is_some() {
         steered = true;
-        let swar_words = if frame.qdps_min_step_q7 <= 1 || frm_nonzero {
+        let swar_words = if frame.qdps_min_step_q7 <= 1 {
             next_w
         } else if frame.qdps_min_step_q7 > 127 {
             [0u64; NUM_SWARM_MICRO_CELLS]
@@ -6120,7 +6255,7 @@ fn accumulate_trail_and_steer_gateway_words_core(
         let clean_damping =
             branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
 
-        let has_nonzero_words = if frm_nonzero {
+        let has_nonzero_words = if frm_nonzero & (frame.qdps_min_step_q7 <= 1) {
             true
         } else {
             swar_words_nonzero_64(&swar_words)
@@ -6768,7 +6903,8 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
         if !is_active {
             let packed_tag =
                 pack_action_slot_tag(self.dominant_slot, ACTION_PRESET_PASSIVE_SIDECAR);
-            return (GatewayFrame {
+            return (
+                GatewayFrame {
                     tagged_ptr: gcso_tagged_ptr_t::pack(self.zimms_section_offset48, packed_tag, 0)
                         .raw(),
                     zimms_section_offset48: self.zimms_section_offset48,
@@ -6777,9 +6913,11 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                     action_mode_flags: ACTION_PRESET_PASSIVE_SIDECAR,
                     active_swarm_cell_mask: self.active_swarm_mask,
                     dominant_cause_code: self.dominant_cause_code,
-                    frame_flags: packed_tag as u16,..GatewayFrame::default()
+                    frame_flags: packed_tag as u16,
+                    ..GatewayFrame::default()
                 },
-                [0u64; NUM_SWARM_MICRO_CELLS]);
+                [0u64; NUM_SWARM_MICRO_CELLS],
+            );
         }
         let is_mature = (self.sample_count >= 2) & (self.resultant_r_bar >= 0.45);
         let w = *self.phase_words_ref();
@@ -6802,34 +6940,47 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
         let explore_gain_q7 = branchless_select_u8(is_persona_slot, 154, 128);
         let logic_gain_q7 = ((fact_gain_q7 as u16 + explore_gain_q7 as u16) >> 1) as u8;
 
-        (GatewayFrame {
-                tagged_ptr, zimms_section_offset48: self.zimms_section_offset48,
-                target_anchor_id: self.anchor_id, effective_energy: branchless_min_f32(
+        (
+            GatewayFrame {
+                tagged_ptr,
+                zimms_section_offset48: self.zimms_section_offset48,
+                target_anchor_id: self.anchor_id,
+                effective_energy: branchless_min_f32(
                     self.phase_gravity_mass,
                     MAX_ATTRACTOR_PULL_FORCE,
                 ),
                 ripa_clamp_rad: DEFAULT_RIPA_CLAMP_MAX_RAD,
                 qdps_min_step_rad: DEFAULT_QDPS_MIN_STEP_RAD,
                 effective_inv_temp: self.effective_inv_temp,
-                fact_persona_coherence: self.resultant_r_bar, repulsion_severity: 0.0,
-                provenance_bits: prov_bits, dominant_cause_code: self.dominant_cause_code,
-                dominant_slot: self.dominant_slot, action_mode_flags: eff_action,
+                fact_persona_coherence: self.resultant_r_bar,
+                repulsion_severity: 0.0,
+                provenance_bits: prov_bits,
+                dominant_cause_code: self.dominant_cause_code,
+                dominant_slot: self.dominant_slot,
+                action_mode_flags: eff_action,
                 active_swarm_cell_mask: self.active_swarm_mask,
                 qdps_min_step_q7: branchless_rad_to_qdps_step_u8(DEFAULT_QDPS_MIN_STEP_RAD),
-                pspm_fact_heads: pspm_fact, pspm_logic_heads: pspm_logic,
-                pspm_explore_heads: pspm_explore, pspm_fact_gain_q7: fact_gain_q7,
-                pspm_logic_gain_q7: logic_gain_q7, pspm_explore_gain_q7: explore_gain_q7,
-                mean_phase_tag_q7: tag_q7, active_head_count: MAX_ATTENTION_HEADS as u16,
-                frame_flags: packed_tag as u16, phase_deltas: self.phase_profile,
+                pspm_fact_heads: pspm_fact,
+                pspm_logic_heads: pspm_logic,
+                pspm_explore_heads: pspm_explore,
+                pspm_fact_gain_q7: fact_gain_q7,
+                pspm_logic_gain_q7: logic_gain_q7,
+                pspm_explore_gain_q7: explore_gain_q7,
+                mean_phase_tag_q7: tag_q7,
+                active_head_count: MAX_ATTENTION_HEADS as u16,
+                frame_flags: packed_tag as u16,
+                phase_deltas: self.phase_profile,
             },
-            w)
+            w,
+        )
     }
 
     #[inline(always)]
     fn synthesize_gateway_ensemble_item(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
         let is_active = (self.sample_count > 0) & (self.phase_gravity_mass > 1.0e-12);
         if !is_active {
-            return (GatewayFrame {
+            return (
+                GatewayFrame {
                     zimms_section_offset48: self.zimms_section_offset48,
                     target_anchor_id: self.anchor_id,
                     dominant_slot: self.dominant_slot,
@@ -6838,7 +6989,8 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                     dominant_cause_code: self.dominant_cause_code,
                     ..GatewayFrame::default()
                 },
-                [0u64; NUM_SWARM_MICRO_CELLS]);
+                [0u64; NUM_SWARM_MICRO_CELLS],
+            );
         }
         let is_mature = (self.sample_count >= 2) & (self.resultant_r_bar >= 0.45);
         let w = *self.phase_words_ref();
@@ -6855,27 +7007,39 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
         let explore_gain_q7 = branchless_select_u8(is_persona_slot, 154, 128);
         let logic_gain_q7 = ((fact_gain_q7 as u16 + explore_gain_q7 as u16) >> 1) as u8;
 
-        (GatewayFrame {
-                tagged_ptr: 0, zimms_section_offset48: self.zimms_section_offset48,
-                target_anchor_id: self.anchor_id, effective_energy: branchless_min_f32(
+        (
+            GatewayFrame {
+                tagged_ptr: 0,
+                zimms_section_offset48: self.zimms_section_offset48,
+                target_anchor_id: self.anchor_id,
+                effective_energy: branchless_min_f32(
                     self.phase_gravity_mass,
                     MAX_ATTRACTOR_PULL_FORCE,
                 ),
                 ripa_clamp_rad: DEFAULT_RIPA_CLAMP_MAX_RAD,
                 qdps_min_step_rad: DEFAULT_QDPS_MIN_STEP_RAD,
                 effective_inv_temp: self.effective_inv_temp,
-                fact_persona_coherence: self.resultant_r_bar, repulsion_severity: 0.0,
-                provenance_bits: prov_bits, dominant_cause_code: self.dominant_cause_code,
-                dominant_slot: self.dominant_slot, action_mode_flags: self.action_mode_flags,
+                fact_persona_coherence: self.resultant_r_bar,
+                repulsion_severity: 0.0,
+                provenance_bits: prov_bits,
+                dominant_cause_code: self.dominant_cause_code,
+                dominant_slot: self.dominant_slot,
+                action_mode_flags: self.action_mode_flags,
                 active_swarm_cell_mask: self.active_swarm_mask,
                 qdps_min_step_q7: branchless_rad_to_qdps_step_u8(DEFAULT_QDPS_MIN_STEP_RAD),
-                pspm_fact_heads: pspm_fact, pspm_logic_heads: pspm_logic,
-                pspm_explore_heads: pspm_explore, pspm_fact_gain_q7: fact_gain_q7,
-                pspm_logic_gain_q7: logic_gain_q7, pspm_explore_gain_q7: explore_gain_q7,
-                mean_phase_tag_q7: 0, active_head_count: MAX_ATTENTION_HEADS as u16,
-                frame_flags: 0, phase_deltas: [0i8; MAX_ATTENTION_HEADS],
+                pspm_fact_heads: pspm_fact,
+                pspm_logic_heads: pspm_logic,
+                pspm_explore_heads: pspm_explore,
+                pspm_fact_gain_q7: fact_gain_q7,
+                pspm_logic_gain_q7: logic_gain_q7,
+                pspm_explore_gain_q7: explore_gain_q7,
+                mean_phase_tag_q7: 0,
+                active_head_count: MAX_ATTENTION_HEADS as u16,
+                frame_flags: 0,
+                phase_deltas: [0i8; MAX_ATTENTION_HEADS],
             },
-            w)
+            w,
+        )
     }
 
     #[inline(always)]
@@ -7024,24 +7188,36 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
         let packed_tag = pack_action_slot_tag(dom_slot, action_flags);
         let tagged_ptr = gcso_tagged_ptr_t::pack(dom_zimms_addr, packed_tag, tag_q7).raw();
 
-        (GatewayFrame {
-                tagged_ptr, zimms_section_offset48: dom_zimms_addr,
+        (
+            GatewayFrame {
+                tagged_ptr,
+                zimms_section_offset48: dom_zimms_addr,
                 target_anchor_id: dom.anchor_id,
                 effective_energy: branchless_min_f32(tot_e, MAX_ATTRACTOR_PULL_FORCE),
                 ripa_clamp_rad: DEFAULT_RIPA_CLAMP_MAX_RAD,
                 qdps_min_step_rad: DEFAULT_QDPS_MIN_STEP_RAD,
-                effective_inv_temp: eff_inv_temp, fact_persona_coherence: fp_coh,
-                repulsion_severity: 0.0, provenance_bits: prov_bits,
-                dominant_cause_code: dom_cause, dominant_slot: dom_slot,
-                action_mode_flags: action_flags, active_swarm_cell_mask: swarm_mask,
+                effective_inv_temp: eff_inv_temp,
+                fact_persona_coherence: fp_coh,
+                repulsion_severity: 0.0,
+                provenance_bits: prov_bits,
+                dominant_cause_code: dom_cause,
+                dominant_slot: dom_slot,
+                action_mode_flags: action_flags,
+                active_swarm_cell_mask: swarm_mask,
                 qdps_min_step_q7: branchless_rad_to_qdps_step_u8(DEFAULT_QDPS_MIN_STEP_RAD),
-                pspm_fact_heads: pspm_fact, pspm_logic_heads: pspm_logic,
-                pspm_explore_heads: pspm_explore, pspm_fact_gain_q7: fact_gain_q7,
-                pspm_logic_gain_q7: logic_gain_q7, pspm_explore_gain_q7: explore_gain_q7,
-                mean_phase_tag_q7: tag_q7, active_head_count: MAX_ATTENTION_HEADS as u16,
-                frame_flags: packed_tag as u16, phase_deltas,
+                pspm_fact_heads: pspm_fact,
+                pspm_logic_heads: pspm_logic,
+                pspm_explore_heads: pspm_explore,
+                pspm_fact_gain_q7: fact_gain_q7,
+                pspm_logic_gain_q7: logic_gain_q7,
+                pspm_explore_gain_q7: explore_gain_q7,
+                mean_phase_tag_q7: tag_q7,
+                active_head_count: MAX_ATTENTION_HEADS as u16,
+                frame_flags: packed_tag as u16,
+                phase_deltas,
             },
-            acc_w)
+            acc_w,
+        )
     }
 
     #[inline(always)]
@@ -7098,9 +7274,9 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::telemetry::TRAIL_FLAG_LIMINAL_BEAT_ACTIVE;
     use crate::abi::gcso_daes_slot_t;
     use crate::traits::aligned::{AlignedBuffer128, AlignedBuffer64};
+    use crate::traits::telemetry::TRAIL_FLAG_LIMINAL_BEAT_ACTIVE;
 
     #[test]
     fn test_two_origin_supertrait_synthesis_and_causal_provenance() {
@@ -7143,9 +7319,11 @@ mod tests {
 
     #[test]
     fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
-        let mut centroids = [CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0),
+        let mut centroids = [
+            CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0),
             CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_PERSONA, 0),
-            CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_PERSONA, 0)];
+            CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_PERSONA, 0),
+        ];
         assert_eq!(centroids[0].causal_provenance_bits(), 0);
         assert_eq!(
             centroids[0].synthesize_gateway_frame().action_mode_flags,
@@ -7156,21 +7334,33 @@ mod tests {
 
         let fact_a = ObjectiveFact::new([28i8; MAX_ATTENTION_HEADS], 2.5, 0x0010_0000, 101);
         let (f1, idx1, id1, _coh1, mass1, spawned1) =
-            CrystallizedAttractorRecord::step_online_toroidal_kmeans_signal_64(&mut centroids,
-                &fact_a, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, Some(&mut trail));
+            CrystallizedAttractorRecord::step_online_toroidal_kmeans_signal_64(
+                &mut centroids,
+                &fact_a,
+                DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
+                Some(&mut trail),
+            );
         assert!(spawned1 && idx1 == 0 && id1 == 101 && trail.cluster_id == 101 && mass1 > 0.0);
 
         let fact_a2 = ObjectiveFact::new([30i8; MAX_ATTENTION_HEADS], 3.0, 0x0010_0000, 101);
         let (f2, idx2, id2, coh2, mass2, spawned2) =
-            CrystallizedAttractorRecord::step_online_toroidal_kmeans_signal_64(&mut centroids,
-                &fact_a2, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, Some(&mut trail));
+            CrystallizedAttractorRecord::step_online_toroidal_kmeans_signal_64(
+                &mut centroids,
+                &fact_a2,
+                DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
+                Some(&mut trail),
+            );
         assert!(!spawned2 && idx2 == 0 && id2 == 101 && coh2 > 0.95 && mass2 > mass1);
         assert_eq!(centroids[0].sample_count, 2);
 
         let persona_b = SubjectivePersona::new([-80i8; MAX_ATTENTION_HEADS], 2.8, 0x0024_0000, 202);
         let (_f3, idx3, id3, _coh3, mass3, spawned3) =
-            CrystallizedAttractorRecord::step_online_toroidal_kmeans_signal_64(&mut centroids,
-                &persona_b, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, Some(&mut trail));
+            CrystallizedAttractorRecord::step_online_toroidal_kmeans_signal_64(
+                &mut centroids,
+                &persona_b,
+                DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
+                Some(&mut trail),
+            );
         assert!(spawned3 && idx3 == 1 && id3 == 202 && trail.cluster_id == 202 && mass3 > 0.0);
 
         let (act_cnt, tot_smp, mean_r, mean_k, _max_coh) =
@@ -7181,12 +7371,19 @@ mod tests {
 
         let closed_loop_frame = centroids.synthesize_gateway_frame();
         assert!(closed_loop_frame.effective_energy > 2.0);
-        assert_ne!(closed_loop_frame.provenance_bits & CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, 0);
+        assert_ne!(
+            closed_loop_frame.provenance_bits & CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
+            0
+        );
 
         let batch_frames = [f1, f2];
         let (_b_idx, b_id, b_coh, b_spawned) =
-            CrystallizedAttractorRecord::step_online_toroidal_kmeans_batch_frames_64(&mut centroids,
-                &batch_frames, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, Some(&mut trail));
+            CrystallizedAttractorRecord::step_online_toroidal_kmeans_batch_frames_64(
+                &mut centroids,
+                &batch_frames,
+                DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
+                Some(&mut trail),
+            );
         assert_eq!(b_id, 101);
         assert_eq!(b_spawned, 0);
         assert!(b_coh > 0.95 && centroids[0].verify_integrity());
@@ -7194,18 +7391,22 @@ mod tests {
         // Populate slot 2 with a near-duplicate of slot 0 and verify online consolidation
         centroids[2] = CrystallizedAttractorRecord::new_empty(303, ATTRACTOR_SLOT_KNOWLEDGE, 0);
         let _ = centroids[2].absorb_sample_point_64(&[29i8; MAX_ATTENTION_HEADS], 1.2);
-        let (merged_cnt, pruned_cnt) =
-            CrystallizedAttractorRecord::merge_and_prune_centroids_64(
-                &mut centroids,
-            DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE, 0.10, 0.98);
+        let (merged_cnt, pruned_cnt) = CrystallizedAttractorRecord::merge_and_prune_centroids_64(
+            &mut centroids,
+            DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
+            0.10,
+            0.98,
+        );
         assert_eq!(merged_cnt, 1);
         assert_eq!(pruned_cnt, 0);
         assert_eq!(centroids[2].sample_count, 0);
         assert!(centroids[0].verify_integrity() && centroids[2].verify_integrity());
 
         let mut query_trail = gcso_pointer_trail_t {
-            accumulated_phase_delta: [-76i8; MAX_ATTENTION_HEADS], stigmergic_density: 1.0,
-            attractor_pull_force: 1.0,..Default::default()
+            accumulated_phase_delta: [-76i8; MAX_ATTENTION_HEADS],
+            stigmergic_density: 1.0,
+            attractor_pull_force: 1.0,
+            ..Default::default()
         };
         let (routed_idx, routed_id, routed_coh, routed_grav) =
             CrystallizedAttractorRecord::route_coarse_to_fine_trail_64(
@@ -7216,15 +7417,17 @@ mod tests {
         assert_eq!(routed_idx, 1);
         assert_eq!(routed_id, 202);
         assert_eq!(query_trail.cluster_id, 202);
-        assert_eq!(gcso_tagged_ptr_t(query_trail.current_ptr).unpack_addr(), 0x0024_0000);
+        assert_eq!(
+            gcso_tagged_ptr_t(query_trail.current_ptr).unpack_addr(),
+            0x0024_0000
+        );
         assert!(routed_coh > 0.95 && routed_grav > 1.0);
 
         let mut zimms_buf = AlignedBuffer64::<u8, 384>::new([0u8; 384]);
-        let written =
-            CrystallizedAttractorRecord::write_records_to_zimms_bytes(
-                &centroids,
-                &mut zimms_buf.data,
-            )
+        let written = CrystallizedAttractorRecord::write_records_to_zimms_bytes(
+            &centroids,
+            &mut zimms_buf.data,
+        )
         .unwrap();
         assert_eq!(written, 384);
         let restored =
@@ -7238,7 +7441,8 @@ mod tests {
         let reports_arr = [f1.to_causal_report(), f2.to_causal_report()];
         let trails_arr = [query_trail];
         let mut container_buf = AlignedBuffer128::<u8, 1024>::new([0u8; 1024]);
-        let no_rep_len = GcsoFourSectionView::write_four_section_container_to_bytes(&centroids[..2],
+        let no_rep_len = GcsoFourSectionView::write_four_section_container_to_bytes(
+            &centroids[..2],
             &trails_arr,
             Some(&bloom),
             Some(&daes),
@@ -7251,7 +7455,8 @@ mod tests {
                 .unwrap();
         assert_eq!(no_rep_view.crystals.len(), 2);
 
-        let total_len = GcsoFourSectionView::write_four_section_with_reports_to_bytes(&centroids,
+        let total_len = GcsoFourSectionView::write_four_section_with_reports_to_bytes(
+            &centroids,
             &trails_arr,
             Some(&bloom),
             Some(&daes),
@@ -7268,7 +7473,8 @@ mod tests {
                 DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
                 DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
                 0,
-            ).unwrap();
+            )
+            .unwrap();
         assert_eq!(ev_idx, 0);
         assert_eq!(ev_id, 101);
         assert_eq!(ev_merged, 0);
@@ -7276,7 +7482,11 @@ mod tests {
 
         let (r_idx, r_id, _r_coh, r_grav) =
             GcsoFourSectionView::route_four_section_coarse_to_fine_in_place(
-                &mut container_buf.data[..total_len], 0, 32).unwrap();
+                &mut container_buf.data[..total_len],
+                0,
+                32,
+            )
+            .unwrap();
         assert_eq!(r_idx, 1);
         assert_eq!(r_id, 202);
         assert!(r_grav > 1.0);
@@ -7298,38 +7508,56 @@ mod tests {
         // Verify Top-2 Liminal Bifurcation Routing between two balanced attractors
         let mut lim_centroids = [
             CrystallizedAttractorRecord::new_empty(101, ATTRACTOR_SLOT_KNOWLEDGE, 0x0010_0000),
-            CrystallizedAttractorRecord::new_empty(202, ATTRACTOR_SLOT_PERSONA, 0x0024_0000)];
+            CrystallizedAttractorRecord::new_empty(202, ATTRACTOR_SLOT_PERSONA, 0x0024_0000),
+        ];
         let _ = lim_centroids[0].absorb_sample_point_64(&[16i8; MAX_ATTENTION_HEADS], 2.5);
         let _ = lim_centroids[1].absorb_sample_point_64(&[48i8; MAX_ATTENTION_HEADS], 2.5);
         let mut lim_trail = gcso_pointer_trail_t {
-            accumulated_phase_delta: [32i8; MAX_ATTENTION_HEADS], stigmergic_density: 1.0,
-            attractor_pull_force: 1.0,..Default::default()
+            accumulated_phase_delta: [32i8; MAX_ATTENTION_HEADS],
+            stigmergic_density: 1.0,
+            attractor_pull_force: 1.0,
+            ..Default::default()
         };
         let (_k1, _k2, aid1, aid2, lim_coh, lim_grav, is_liminal) =
             CrystallizedAttractorRecord::route_top2_liminal_centroids_64(
                 &lim_centroids,
                 &mut lim_trail,
                 64,
-                DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO);
+                DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
+            );
         assert!(is_liminal && aid1 != 0 && aid2 != 0 && aid1 != aid2);
         assert!(lim_coh > 0.70 && lim_grav > 1.0);
         assert_ne!(lim_trail.flags & TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, 0);
 
         // Verify Continuous Geodesic Affinity Prior on unstamped candidate trails (cluster_id == 0)
         let cand_aligned = gcso_pointer_trail_t {
-            accumulated_phase_delta: [18i8; MAX_ATTENTION_HEADS], stigmergic_density: 1.0,
-            cluster_id: 0,..Default::default()
+            accumulated_phase_delta: [18i8; MAX_ATTENTION_HEADS],
+            stigmergic_density: 1.0,
+            cluster_id: 0,
+            ..Default::default()
         };
         let cand_orthogonal = gcso_pointer_trail_t {
-            accumulated_phase_delta: [-96i8; MAX_ATTENTION_HEADS], stigmergic_density: 1.0,
-            cluster_id: 0,..Default::default()
+            accumulated_phase_delta: [-96i8; MAX_ATTENTION_HEADS],
+            stigmergic_density: 1.0,
+            cluster_id: 0,
+            ..Default::default()
         };
         let mut src_trail = gcso_pointer_trail_t {
-            accumulated_phase_delta: [16i8; MAX_ATTENTION_HEADS],..Default::default()
+            accumulated_phase_delta: [16i8; MAX_ATTENTION_HEADS],
+            ..Default::default()
         };
         let (win_c, sel_tid, best_sc, best_c, found_ok) =
-            CrystallizedAttractorRecord::route_coarse_to_fine_candidates_64(&lim_centroids,
-                &mut src_trail, &[cand_orthogonal, cand_aligned], 128, 1.0, 0.25, 0.10, 0.50, 0.35);
+            CrystallizedAttractorRecord::route_coarse_to_fine_candidates_64(
+                &lim_centroids,
+                &mut src_trail,
+                &[cand_orthogonal, cand_aligned],
+                128,
+                1.0,
+                0.25,
+                0.10,
+                0.50,
+                0.35,
+            );
         assert!(found_ok && win_c == 0 && sel_tid == 1 && best_sc > 0.5 && best_c > 0.95);
     }
 }

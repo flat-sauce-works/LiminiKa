@@ -1795,6 +1795,12 @@ impl PointerActionHub for ActionHubEngine {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
         let inline_idx = (trail_id as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
+        let min_active = ((inline_idx as u32) + 1).min(self.capacity);
+        self.active_count = branchless_select_u32(
+            self.active_count < min_active,
+            min_active,
+            self.active_count,
+        );
         self.trails[inline_idx].accumulate_uniform_phase(phase_delta);
         let slot_idx = (trail_id as usize) & (MAX_ATTRACTOR_DOMAINS - 1);
         if phase_delta != 0 {
@@ -1833,6 +1839,12 @@ impl PointerActionHub for ActionHubEngine {
         let clean_pull =
             branchless_min_f32(branchless_relu_f32(pull_force), MAX_ATTRACTOR_PULL_FORCE);
         let inline_idx = (trail_id as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
+        let min_active = ((inline_idx as u32) + 1).min(self.capacity);
+        self.active_count = branchless_select_u32(
+            self.active_count < min_active,
+            min_active,
+            self.active_count,
+        );
         let trail = &mut self.trails[inline_idx];
         trail.target_anchor_id = anchor_id;
         trail.cluster_id = branchless_select_u32(anchor_id != 0, anchor_id, trail.cluster_id);
@@ -1848,6 +1860,13 @@ impl PointerActionHub for ActionHubEngine {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
         let src_idx = (src_trail_id as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
+        let dst_idx = (dst_trail_id as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
+        let min_active = ((src_idx.max(dst_idx) as u32) + 1).min(self.capacity);
+        self.active_count = branchless_select_u32(
+            self.active_count < min_active,
+            min_active,
+            self.active_count,
+        );
         self.trails[src_idx].linked_trail_id = dst_trail_id;
         self.last_selected_trail_id = dst_trail_id;
         Ok(())
@@ -1933,7 +1952,14 @@ impl crate::traits::SystemConstraintSignal for ActionHubEngine {
 impl ManifoldGatewaySignal for ActionHubEngine {
     #[inline]
     fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
-        let idx = (self.last_selected_trail_id as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
+        let sel_idx = (self.last_selected_trail_id as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
+        let latest_idx =
+            (self.write_cursor.wrapping_sub(1) as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
+        let idx = if (self.active_count > 0) & (self.trails[sel_idx].current_ptr == 0) {
+            latest_idx
+        } else {
+            sel_idx
+        };
         let active_trail = &self.trails[idx];
         let words = *trail_phase_words_ref(active_trail);
         let dec = StigmergicActionDecision::from_u8(self.last_decision);

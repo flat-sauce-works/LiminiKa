@@ -911,17 +911,20 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
         src_is_byte_uniform: bool,
         src_b0: u8,
         candidate_trails: &[gcso_pointer_trail_t],
+        attention_scores_opt: &mut Option<&mut [f32]>,
         macro_anchor_id: u32,
         secondary_macro_anchor_id: u32,
         cur_linked_id: u32,
         phase_scale: f32,
         clean_eta: f32,
+        clean_penalty: f32,
         safe_thresh: f32,
         best_id: &mut u32,
         best_idx: &mut usize,
         best_score: &mut f32,
         best_coh: &mut f32,
         best_cand_is_uniform: &mut bool,
+        best_cand_eq_src: &mut bool,
         found_valid: &mut bool,
     ) {
         let cand_len = candidate_trails.len();
@@ -930,6 +933,12 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
             let cand = &candidate_trails[f_idx];
             let cand_not_repulsed = (cand.flags & TRAIL_FLAG_REPULSION_ACTIVE) == 0;
             if !cand_not_repulsed {
+                if let Some(ref mut scores) = *attention_scores_opt {
+                    if f_idx < scores.len() {
+                        scores[f_idx] =
+                            branchless_flush_subnormal_f32(scores[f_idx] - clean_penalty);
+                    }
+                }
                 f_idx += 1;
                 continue;
             }
@@ -950,9 +959,10 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
             }
             let cand_w = trail_phase_words_ref(cand);
             let cu = src_is_uniform && is_word_array_uniform_64(cand_w);
+            let cand_eq_src = cu && (cand_w[0] == src_w[0]);
             let coh = if cu {
                 let cw0 = cand_w[0];
-                if cw0 == src_w[0] {
+                if cand_eq_src {
                     1.0
                 } else if src_is_byte_uniform && (cw0 == cw0.rotate_right(8)) {
                     Q7_FULL_COS_REF[src_b0.wrapping_sub(cw0 as u8) as usize]
@@ -972,6 +982,13 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
             let bayes_delta = branchless_flush_subnormal_f32(
                 phase_scale * coh + branchless_select_f32(is_coherent, prior_term, 0.0),
             );
+            if let Some(ref mut scores) = *attention_scores_opt {
+                if f_idx < scores.len() {
+                    let penalty = branchless_select_f32(is_coherent, 0.0, clean_penalty);
+                    scores[f_idx] =
+                        branchless_flush_subnormal_f32(scores[f_idx] + bayes_delta - penalty);
+                }
+            }
             let take = is_coherent & ((!*found_valid) | (bayes_delta > *best_score));
             if take {
                 *best_id = cand_id;
@@ -979,6 +996,7 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
                 *best_score = bayes_delta;
                 *best_coh = coh;
                 *best_cand_is_uniform = cu;
+                *best_cand_eq_src = cand_eq_src;
             }
             *found_valid |= is_coherent;
             f_idx += 1;
@@ -1227,17 +1245,20 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
             src_is_byte_uniform,
             src_b0,
             candidate_trails,
+            &mut attention_scores_opt,
             macro_anchor_id,
             secondary_macro_anchor_id,
             cur_linked_id,
             phase_scale,
             clean_eta,
+            clean_penalty,
             safe_thresh,
             &mut best_id,
             &mut best_idx,
             &mut best_score,
             &mut best_coh,
             &mut best_cand_is_uniform,
+            &mut best_cand_eq_src,
             &mut found_valid,
         );
     }
@@ -3258,7 +3279,13 @@ impl EdbcEngine {
         self.state.repulsion_gain = 0.0;
         self.state.sample_temperature = DEFAULT_SAMPLE_TEMPERATURE;
         self.state.active_branch_mode = EDBC_MODE_NORMAL_ENTROPY;
-        self.window_buf[0] = 0.0;
+        let mut i = 0usize;
+        while i < EDBC_WINDOW_RING_CAPACITY {
+            if self.window_buf[i].to_bits() != 0 {
+                self.window_buf[i] = 0.0;
+            }
+            i += 1;
+        }
         self.step_count = 0;
         self.mode_dwell_steps = 0;
         self.window_idx = 0;
@@ -3267,7 +3294,8 @@ impl EdbcEngine {
 
     /// Restores the mutable runtime accumulators of `self` from `src` using width-matched scalar
     /// stores (`f32`, `u32`, `u64`, `u8`), avoiding the 256-bit `vmovaps` YMM store-to-scalar-load
-    /// Store-to-Load Forwarding (STLF) pipeline stall caused by 128-byte `*self = *src` assignment.
+    /// Store-to-Load Forwarding (STLF) pipeline stall caused by 128-byte `*self = *src` assignment
+    /// while guaranteeing full 8-slot ring restoration across multi-step rollbacks.
     #[inline(always)]
     pub fn restore_from(&mut self, src: &Self) {
         self.state.moving_z_entropy = src.state.moving_z_entropy;
@@ -3279,8 +3307,14 @@ impl EdbcEngine {
         self.state.active_branch_mode = src.state.active_branch_mode;
         self.hysteresis_band = src.hysteresis_band;
         self.tau_flux = src.tau_flux;
-        let write_slot = (src.window_idx & ((EDBC_WINDOW_RING_CAPACITY as u8) - 1)) as usize;
-        self.window_buf[write_slot] = src.window_buf[write_slot];
+        let mut i = 0usize;
+        while i < EDBC_WINDOW_RING_CAPACITY {
+            let src_val = src.window_buf[i];
+            if self.window_buf[i].to_bits() != src_val.to_bits() {
+                self.window_buf[i] = src_val;
+            }
+            i += 1;
+        }
         self.step_count = src.step_count;
         self.mode_dwell_steps = src.mode_dwell_steps;
         self.min_mode_dwell_steps = src.min_mode_dwell_steps;

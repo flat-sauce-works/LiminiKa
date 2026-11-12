@@ -360,12 +360,12 @@ fn steer_gateway_signal_core_safe<
     trail.flags = branchless_select_u32(is_repulsed, rep_flags, coh_flags);
 
     if (frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) == 0 {
-        let swar_words = if frm_nonzero | (frame.qdps_min_step_q7 <= 1) {
+        let swar_words = if frame.qdps_min_step_q7 <= 1 {
             next_w
         } else {
             filter_qdps_words_64(&next_w, frame.qdps_min_step_q7)
         };
-        let swar_nonzero = if frm_nonzero {
+        let swar_nonzero = if frm_nonzero & (frame.qdps_min_step_q7 <= 1) {
             true
         } else {
             swar_words_nonzero_64(&swar_words)
@@ -512,11 +512,13 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
         self_is_byte_uniform: bool,
         self_b0: u8,
         candidate_trails: &[gcso_pointer_trail_t],
+        scores_slice_opt: &mut Option<&mut [f32]>,
         primary_macro_anchor_id: u32,
         secondary_macro_anchor_id: u32,
         cur_linked_id: u32,
         phase_scale: f32,
         clean_eta: f32,
+        clean_penalty: f32,
         safe_thresh: f32,
         best_id: &mut u32,
         best_idx: &mut usize,
@@ -524,6 +526,9 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
         best_coh: &mut f32,
         best_link_term: &mut f32,
         best_cand_is_uniform: &mut bool,
+        best_cand_eq_self: &mut bool,
+        coh_sum: &mut f32,
+        coh_cnt: &mut usize,
         found: &mut bool,
     ) {
         let cand_len = candidate_trails.len();
@@ -532,6 +537,12 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
             let cand = &candidate_trails[f_idx];
             let cand_not_repulsed = (cand.flags & TRAIL_FLAG_REPULSION_ACTIVE) == 0;
             if !cand_not_repulsed {
+                if let Some(ref mut scores) = *scores_slice_opt {
+                    if f_idx < scores.len() {
+                        scores[f_idx] =
+                            branchless_flush_subnormal_f32(scores[f_idx] - clean_penalty);
+                    }
+                }
                 f_idx += 1;
                 continue;
             }
@@ -552,9 +563,10 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
             }
             let cand_w = trail_phase_words_ref(cand);
             let cu = self_is_uniform && is_word_array_uniform_64(cand_w);
+            let cand_eq_self = cu && (cand_w[0] == self_w[0]);
             let coh = if cu {
                 let cw0 = cand_w[0];
-                if cw0 == self_w[0] {
+                if cand_eq_self {
                     1.0
                 } else if self_is_byte_uniform && (cw0 == cw0.rotate_right(8)) {
                     Q7_FULL_COS_REF[self_b0.wrapping_sub(cw0 as u8) as usize]
@@ -576,6 +588,13 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
             let bayes_delta = branchless_flush_subnormal_f32(
                 phase_scale * coh + branchless_select_f32(is_coherent, prior_term, 0.0),
             );
+            if let Some(ref mut scores) = *scores_slice_opt {
+                if f_idx < scores.len() {
+                    let penalty = branchless_select_f32(is_coherent, 0.0, clean_penalty);
+                    scores[f_idx] =
+                        branchless_flush_subnormal_f32(scores[f_idx] + bayes_delta - penalty);
+                }
+            }
             let take = is_coherent & ((!*found) | (bayes_delta > *best_score));
             if take {
                 *best_id = cand_id;
@@ -584,8 +603,11 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
                 *best_coh = coh;
                 *best_link_term = 0.0;
                 *best_cand_is_uniform = cu;
+                *best_cand_eq_self = cand_eq_self;
             }
             *found |= is_coherent;
+            *coh_sum += coh;
+            *coh_cnt += 1;
             f_idx += 1;
         }
     }
@@ -839,11 +861,13 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
             self_is_byte_uniform,
             self_b0,
             candidate_trails,
+            &mut scores_slice_opt,
             primary_macro_anchor_id,
             secondary_macro_anchor_id,
             cur_linked_id,
             phase_scale,
             clean_eta,
+            clean_penalty,
             safe_thresh,
             &mut best_id,
             &mut best_idx,
@@ -851,6 +875,9 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
             &mut best_coh,
             &mut best_link_term,
             &mut best_cand_is_uniform,
+            &mut best_cand_eq_self,
+            &mut coh_sum,
+            &mut coh_cnt,
             &mut found,
         );
     }

@@ -1484,12 +1484,12 @@ fn steer_gateway_frame_with_words_core_safe(
     if (frame_ref.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0 {
         trail.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
     } else {
-        let swar_words = if frm_nonzero | (frame_ref.qdps_min_step_q7 <= 1) {
+        let swar_words = if frame_ref.qdps_min_step_q7 <= 1 {
             next_w
         } else {
             swar_q7_qdps_filter_words_64(&next_w, frame_ref.qdps_min_step_q7)
         };
-        let swar_nonzero = if frm_nonzero {
+        let swar_nonzero = if frm_nonzero & (frame_ref.qdps_min_step_q7 <= 1) {
             true
         } else {
             swar_words_nonzero_64(&swar_words)
@@ -2312,7 +2312,7 @@ pub unsafe extern "C" fn gcso_context_create(
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
 
-        *out_handle = ptr::null_mut();
+        *out_handle = core::ptr::NonNull::dangling().as_ptr();
         Ok(GCSO_SUCCESS)
     })
 }
@@ -2471,7 +2471,7 @@ pub unsafe extern "C" fn gcso_context_deserialize(
             }
         }
 
-        *out_handle = ptr::null_mut();
+        *out_handle = core::ptr::NonNull::dangling().as_ptr();
         Ok(GCSO_SUCCESS)
     })
 }
@@ -4563,7 +4563,7 @@ pub unsafe extern "C" fn gcso_daes_slot_create(slot_out: *mut GcsoDaesSlotHandle
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
         let mut out_handle = unsafe { FfiHandleMut::from_raw(slot_out)? };
-        *out_handle = ptr::null_mut();
+        *out_handle = core::ptr::NonNull::dangling().as_ptr();
         Ok(GCSO_SUCCESS)
     })
 }
@@ -6056,7 +6056,7 @@ pub unsafe extern "C" fn gcso_pspm_router_create(
                 FfiHandleMut::from_raw(router_out)?,
             )
         };
-        *out_handle = ptr::null_mut();
+        *out_handle = core::ptr::NonNull::dangling().as_ptr();
         Ok(GCSO_SUCCESS)
     })
 }
@@ -6117,7 +6117,7 @@ pub unsafe extern "C" fn gcso_srl_adapter_create(
                 FfiHandleMut::from_raw(adapter_out)?,
             )
         };
-        *out_handle = ptr::null_mut();
+        *out_handle = core::ptr::NonNull::dangling().as_ptr();
         Ok(GCSO_SUCCESS)
     })
 }
@@ -6299,7 +6299,7 @@ pub unsafe extern "C" fn gcso_attractor_field_create(
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
         let mut out_handle = unsafe { FfiHandleMut::from_raw(field_out)? };
-        *out_handle = ptr::null_mut();
+        *out_handle = core::ptr::NonNull::dangling().as_ptr();
         Ok(GCSO_SUCCESS)
     })
 }

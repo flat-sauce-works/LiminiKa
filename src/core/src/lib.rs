@@ -2294,12 +2294,25 @@ impl ManifoldGatewaySignal for RuntimeContext {
     fn synthesize_gateway_frame_with_words(
         &self,
     ) -> (GatewayFrame, [u64; crate::traits::NUM_SWARM_MICRO_CELLS]) {
-        self.edbc.synthesize_gateway_frame_with_words()
+        if self.action_hub.active_count > 0 {
+            let (mut frame, words) = self.action_hub.synthesize_gateway_frame_with_words();
+            frame.provenance_bits |= self.causal_provenance_bits();
+            frame.active_swarm_cell_mask &= self.active_swarm_cells_mask();
+            frame.qdps_min_step_rad = self.qdps_min_step_rad_override();
+            frame.qdps_min_step_q7 =
+                crate::traits::branchless::branchless_rad_to_qdps_step_u8(frame.qdps_min_step_rad);
+            if self.recommend_layer_skip() {
+                frame.action_mode_flags |= ACTION_MODE_LAYER_SKIP;
+            }
+            (frame, words)
+        } else {
+            self.edbc.synthesize_gateway_frame_with_words()
+        }
     }
 
     #[inline(always)]
     fn synthesize_gateway_frame(&self) -> GatewayFrame {
-        self.edbc.synthesize_gateway_frame()
+        self.synthesize_gateway_frame_with_words().0
     }
 }
 
