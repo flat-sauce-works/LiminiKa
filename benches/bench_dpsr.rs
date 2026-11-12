@@ -978,8 +978,8 @@ fn bench_dpsr_long_context_and_procrustes(c: &mut Criterion) {
     group.throughput(Throughput::Elements(u64::from(num_heads)));
     group.bench_function("qdps_quantization_step_filter_high_frequency", |b| {
         let seed_buf = AlignedBuffer16::new([
-            3i8, 12, -2, 18, -4, 9, 1, -15, 3, 12, -2, 18, -4, 9, 1, -15, 3, 12, -2, 18, -4, 9, 1,
-            -15, 3, 12, -2, 18, -4, 9, 1, -15,
+            3i8, 12, -2, 18, -4, 9, 1, -15, -5, 14, 4, -21, 6, -11, -3, 22, 2, -16, 5, 25, -6, 13,
+            -1, -19, -4, 17, 3, -24, 5, -10, 2, 20,
         ]);
         for _ in 0..8 {
             let mut warm = seed_buf;
@@ -2481,6 +2481,48 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
                 )
                 .unwrap();
             black_box((steered, grid_slice.as_slice()[0]));
+        });
+    });
+
+    // 7. Zero-Hyperparameter Swarm & Blanket Autonomous Frequency Aperture Steering (64 Heads)
+    group.throughput(Throughput::Bytes(tensor_bytes as u64));
+    group.bench_function("apply_autonomous_swarm_aperture_steering_64h", |b| {
+        let mut q_slice = shared_q_arena
+            .as_aligned_prefix_mut(total_elements)
+            .relax_alignment::<32>();
+        q_slice.as_mut_slice().fill(1.0f32);
+        let deltas_64 = AlignedBuffer16::new(make_heterogeneous_q7_phases_with_offset(24));
+        let d_slice = deltas_64.as_aligned_slice();
+        let _ftz = ScopedFtzdazGuard::new();
+        for _ in 0..8 {
+            let _ = engine
+                .apply_autonomous_swarm_phase_steering(
+                    &mut q_slice,
+                    None,
+                    &d_slice,
+                    DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    0x06,
+                    0xFF,
+                    0.22f32,
+                    2.4f32,
+                )
+                .unwrap();
+        }
+
+        b.iter(|| {
+            let rot_dim = engine
+                .apply_autonomous_swarm_phase_steering(
+                    black_box(&mut q_slice),
+                    None,
+                    black_box(&d_slice),
+                    black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
+                    black_box(0x06),
+                    black_box(0xFF),
+                    black_box(0.22f32),
+                    black_box(2.4f32),
+                )
+                .unwrap();
+            black_box((rot_dim, q_slice.as_slice()[0]));
         });
     });
 

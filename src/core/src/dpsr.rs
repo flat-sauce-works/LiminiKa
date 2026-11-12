@@ -98,8 +98,9 @@ use crate::traits::primitives::{
     DEFAULT_RIPA_CLAMP_MAX_RAD, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
 };
 use crate::traits::rope::{
-    dispatch_fused_ripa_and_pspm_words_core, steer_from_swar_words_core_safe, DynamicLayerSkipper,
-    EntropyGatedPhaseLookup, PhaseSteering, PspmRouter, VisualAttentionSteering,
+    dispatch_fused_ripa_and_pspm_words_core, ripa_upper_rot_dim, steer_from_swar_words_core_safe,
+    DynamicLayerSkipper, EntropyGatedPhaseLookup, PhaseSteering, PspmRouter,
+    VisualAttentionSteering,
 };
 use crate::traits::telemetry::{
     ContrastivePhaseBloomFilter, PagedBitmaskOps, StigmergicActionPtrOps, StigmergicSwarmOps,
@@ -377,10 +378,11 @@ fn steer_gateway_signal_core_safe<
             if swar_nonzero {
                 let is_default_ripa = (frame.ripa_clamp_rad.to_bits()
                     == DEFAULT_RIPA_CLAMP_MAX_RAD.to_bits())
+                    & frame.has_unit_pspm_gains()
                     & (num_heads > 0)
                     & (num_heads <= MAX_ATTENTION_HEADS);
                 if is_default_ripa {
-                    let rot_dim = ((head_dim >> 2) & !1).max(2).min(head_dim);
+                    let rot_dim = frame.resolve_autonomous_rot_dim(head_dim, 0.0, 0.0);
                     if let Some(k) = key_tensor.as_deref_mut() {
                         crate::traits::rope::rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words(
                             query_tensor.as_mut_slice(),
@@ -1463,7 +1465,7 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
                 & (num_heads > 0)
                 & (num_heads <= MAX_ATTENTION_HEADS);
             if is_default_ripa_pspm {
-                let rot_dim = ((head_dim >> 2) & !1).max(2).min(head_dim);
+                let rot_dim = ripa_upper_rot_dim(head_dim);
                 if let Some(k) = key_tensor.as_deref_mut() {
                     if filt_nonzero {
                         crate::traits::rope::rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words(
@@ -2541,10 +2543,11 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
                 let is_default_ripa = (explore_pulse_q7 == 0)
                     & swar_nonzero
                     & (frame.ripa_clamp_rad.to_bits() == DEFAULT_RIPA_CLAMP_MAX_RAD.to_bits())
+                    & frame.has_unit_pspm_gains()
                     & (num_heads > 0)
                     & (num_heads <= MAX_ATTENTION_HEADS);
                 if is_default_ripa {
-                    let rot_dim = ((head_dim >> 2) & !1).max(2).min(head_dim);
+                    let rot_dim = frame.resolve_autonomous_rot_dim(head_dim, 0.0, 0.0);
                     if let Some(k) = key_tensor.as_deref_mut() {
                         crate::traits::rope::rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words(
                             query_tensor.as_mut_slice(),
@@ -3078,7 +3081,7 @@ mod tests {
             .slerp_norm_guard_stable(&mut t_buf.as_aligned_slice_mut(), 1.0, 1.0)
             .unwrap();
         let norm_sq: f32 = t_buf.data.iter().map(|v| v * v).sum();
-        assert!((norm_sq.sqrt() - 1.0).abs() < 1e-5);
+        assert!((crate::traits::branchless::branchless_sqrt_f32(norm_sq) - 1.0).abs() < 1e-5);
 
         let mut logits = AlignedBuffer32::new([1.0f32; 8]);
         let mut phases_arr = [0i8; 16];

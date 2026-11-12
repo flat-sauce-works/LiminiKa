@@ -81,7 +81,7 @@ use super::primitives::{
 };
 use super::rope::{
     PhaseSteering, PspmRouter, dispatch_fused_ripa_and_pspm_words_core,
-    rotate_fused_self_ripa_and_pspm_default_words,
+    resolve_autonomous_swarm_rot_dim, rotate_fused_self_ripa_and_pspm_default_words,
     rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words, steer_from_swar_words_core_safe,
 };
 use super::telemetry::{
@@ -1543,6 +1543,26 @@ impl GatewayFrame {
             | ((self.provenance_bits & CAUSAL_CAUSE_COHOMOLOGY_REPULSION) != 0)
     }
 
+    /// Resolves the **Swarm- & Blanket-Driven Autonomous Frequency Aperture** (`rot_dim`, even
+    /// integer in `2..=head_dim`) directly from this [`GatewayFrame`]'s `provenance_bits` and
+    /// `active_swarm_cell_mask` combined with `moving_z_entropy` and `von_mises_kappa`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn resolve_autonomous_rot_dim(
+        &self,
+        head_dim: usize,
+        moving_z_entropy: f32,
+        von_mises_kappa: f32,
+    ) -> usize {
+        resolve_autonomous_swarm_rot_dim(
+            head_dim,
+            self.provenance_bits,
+            self.active_swarm_cell_mask,
+            moving_z_entropy,
+            von_mises_kappa,
+        )
+    }
+
     /// Extracts the 16-byte [`CausalProvenanceReport`] from this [`GatewayFrame`] in $\mathcal{O}(1)$.
     #[inline(always)]
     #[must_use]
@@ -1582,30 +1602,26 @@ impl GatewayFrame {
         let rem = h - f_cnt;
         let l_cnt = if l_raw > rem { rem } else { l_raw };
         let e_cnt = h - f_cnt - l_cnt;
-        let lut_normalized =
-            branchless_abs_f32(self.ripa_clamp_rad - DEFAULT_RIPA_CLAMP_MAX_RAD) <= 1.0e-6;
         gcso_pspm_config_t {
             num_fact_heads: f_cnt as u16,
             num_logic_heads: l_cnt as u16,
             num_explore_heads: e_cnt as u16,
             flags: 1,
-            fact_phase_gain: if lut_normalized {
-                1.0
-            } else {
-                (self.pspm_fact_gain_q7 as f32) * (1.0 / 128.0)
-            },
-            logic_phase_gain: if lut_normalized {
-                1.0
-            } else {
-                (self.pspm_logic_gain_q7 as f32) * (1.0 / 128.0)
-            },
-            explore_phase_gain: if lut_normalized {
-                1.0
-            } else {
-                (self.pspm_explore_gain_q7 as f32) * (1.0 / 128.0)
-            },
+            fact_phase_gain: (self.pspm_fact_gain_q7 as f32) * (1.0 / 128.0),
+            logic_phase_gain: (self.pspm_logic_gain_q7 as f32) * (1.0 / 128.0),
+            explore_phase_gain: (self.pspm_explore_gain_q7 as f32) * (1.0 / 128.0),
             reserved: [0; 12],
         }
+    }
+
+    /// Returns `true` when all three PSPM sub-head group gains (`pspm_fact_gain_q7`,
+    /// `pspm_logic_gain_q7`, `pspm_explore_gain_q7`) equal unit gain (`128` in Q0.7).
+    #[inline(always)]
+    #[must_use]
+    pub const fn has_unit_pspm_gains(&self) -> bool {
+        (self.pspm_fact_gain_q7 == 128)
+            & (self.pspm_logic_gain_q7 == 128)
+            & (self.pspm_explore_gain_q7 == 128)
     }
 
     /// Rotates a 32-float `(Q, K, V)` block triple in-place by the RIPA-clamped $SO(2)$ phase angle
@@ -6114,13 +6130,14 @@ fn accumulate_trail_and_steer_gateway_words_core(
         {
             let is_def_clamp = (frame.ripa_clamp_rad.to_bits()
                 == DEFAULT_RIPA_CLAMP_MAX_RAD.to_bits())
+                & frame.has_unit_pspm_gains()
                 & (num_heads > 0)
                 & (num_heads <= MAX_ATTENTION_HEADS);
             match (query_tensor, key_tensor) {
                 (Some(q), Some(k)) => {
                     if has_nonzero_words {
                         if is_def_clamp {
-                            let rot_dim = ((head_dim >> 2) & !1).max(2).min(head_dim);
+                            let rot_dim = frame.resolve_autonomous_rot_dim(head_dim, 0.0, 0.0);
                             rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words(
                                 q.as_mut_slice(),
                                 k.as_mut_slice(),
@@ -6162,7 +6179,7 @@ fn accumulate_trail_and_steer_gateway_words_core(
                 (Some(q), None) => {
                     if has_nonzero_words {
                         if is_def_clamp {
-                            let rot_dim = ((head_dim >> 2) & !1).max(2).min(head_dim);
+                            let rot_dim = frame.resolve_autonomous_rot_dim(head_dim, 0.0, 0.0);
                             rotate_fused_self_ripa_and_pspm_default_words(
                                 q.as_mut_slice(),
                                 &swar_words,

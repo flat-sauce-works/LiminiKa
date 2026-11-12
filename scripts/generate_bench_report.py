@@ -885,6 +885,25 @@ def analyze_long_horizon_and_edge_bottlenecks(
             }
         )
 
+    # 9. Autonomous Swarm Frequency Aperture vs Uniform Safe RIPA (64H)
+    ap_steer = by_name.get("apply_autonomous_swarm_aperture_steering_64h")
+    ripa_64 = by_name.get("apply_phase_steering_safe_ripa_128x64")
+    if ap_steer and ripa_64 and ripa_64["mean_ns"] > 0.0:
+        ap_ratio = ap_steer["mean_ns"] / ripa_64["mean_ns"]
+        diagnostics.append(
+            {
+                "domain": "Autonomous Swarm Frequency Aperture + Non-Unit PSPM vs Uniform Safe RIPA (64H)",
+                "baseline_metric": f"{ripa_64['mean_formatted']} (Uniform Safe RIPA 128x64)",
+                "extreme_metric": f"{ap_steer['mean_formatted']} (Dynamic Aperture + 3-Group PSPM)",
+                "ratio": ap_ratio,
+                "status": (
+                    f"🦋 Zero-Hyperparameter Aperture ({ap_ratio:.2f}x vs Uniform RIPA)"
+                    if ap_ratio <= 1.35
+                    else f"⚠️ Aperture Overhead ({ap_ratio:.2f}x)"
+                ),
+            }
+        )
+
     return diagnostics
 
 
@@ -1547,6 +1566,8 @@ def resolve_swarm_stigmergy_badge(name: str) -> str:
         return "🔗 Limina Joint-Prob Chain"
     if "unified_field" in lower:
         return "🌌 Single Unified Manifold"
+    if "autonomous_swarm_aperture" in lower:
+        return "🦋 Autonomous Swarm Frequency Aperture"
     if "swarm" in lower or "quorum" in lower:
         return "🐝 8-Cell SWAR Quorum"
     if "pspm" in lower:
@@ -1736,7 +1757,7 @@ def ensure_criterion_html_index(
                 f"""<section class="group-card" id="{html.escape(group_anchor)}" data-group="{html.escape(group_name.lower())}">
 <h2>📂 <a href="{html.escape(g_link)}">{html.escape(group_name)}</a> <span class="{badge_cls}">{html.escape(scope_tag)}</span></h2>
 <table>
-<thead><tr><th>Benchmark Identifier</th><th>Mean Latency</th><th>Median</th><th>Std Dev</th><th>MAD (%)</th><th>MoE (95% CI)</th><th>CoV (%)</th><th>Throughput / Rate</th></tr></thead>
+<thead><tr><th onclick="sortBenchTable(this)" style="cursor:pointer" title="Click to sort">Benchmark Identifier ⇅</th><th onclick="sortBenchTable(this)" style="cursor:pointer" title="Click to sort">Mean Latency ⇅</th><th onclick="sortBenchTable(this)" style="cursor:pointer" title="Click to sort">Median ⇅</th><th onclick="sortBenchTable(this)" style="cursor:pointer" title="Click to sort">Std Dev ⇅</th><th onclick="sortBenchTable(this)" style="cursor:pointer" title="Click to sort">MAD (%) ⇅</th><th onclick="sortBenchTable(this)" style="cursor:pointer" title="Click to sort">MoE (95% CI) ⇅</th><th onclick="sortBenchTable(this)" style="cursor:pointer" title="Click to sort">CoV (%) ⇅</th><th>Throughput / Rate</th></tr></thead>
 <tbody>
 {b_rows_body}
 </tbody>
@@ -1760,7 +1781,7 @@ def ensure_criterion_html_index(
             if sidecar_budget and sidecar_budget.get("total_16l_skip_ns", 0.0) > 0.0
             else "N/A"
         )
-        root_html = f"""<!DOCTYPE html>
+        root_html = rf"""<!DOCTYPE html>
 {_SYNTHESIZED_HTML_MARKER}
 <html lang="en">
 <head>
@@ -1785,6 +1806,32 @@ def ensure_criterion_html_index(
 </div>
 {"".join(sections_html)}
 <script>
+function sortBenchTable(th) {{
+  const table = th.closest('table');
+  const tbody = table ? table.querySelector('tbody') : null;
+  if (!tbody) return;
+  const idx = Array.from(th.parentNode.children).indexOf(th);
+  const asc = th.dataset.asc !== 'true';
+  th.dataset.asc = asc;
+  const parseMetric = (s) => {{
+    const clean = s.replace(/^[±+\-]/, '').trim();
+    if (clean.endsWith(' ms')) return parseFloat(clean) * 1e6;
+    if (clean.endsWith(' µs') || clean.endsWith(' us')) return parseFloat(clean) * 1e3;
+    if (clean.endsWith(' ns')) return parseFloat(clean);
+    if (clean.endsWith('%')) return parseFloat(clean);
+    return clean.toLowerCase();
+  }};
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  rows.sort((a, b) => {{
+    const va = parseMetric(a.children[idx].innerText);
+    const vb = parseMetric(b.children[idx].innerText);
+    if (typeof va === 'number' && typeof vb === 'number' && !isNaN(va) && !isNaN(vb)) {{
+      return asc ? va - vb : vb - va;
+    }}
+    return asc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+  }});
+  rows.forEach(r => tbody.appendChild(r));
+}}
 function filterBenchmarks(q) {{
   const query = (q || "").trim().toLowerCase();
   document.querySelectorAll(".group-card").forEach(section => {{
@@ -1969,8 +2016,11 @@ _CATEGORY_LABELS: dict[str, tuple[str, str]] = {
         "🐝 Stigmergic Swarm, Toroidal k-Means & Pointer-Trails",
         "Core (`DPSR`/`EDBC`)",
     ),
-    "alignment_hierarchy": ("💾 Memory Alignment Hierarchy", "Core (`DPSR`)"),
-    "batch_scaling": ("📦 Multi-Token Batch & Prefill Scaling", "Core (`DPSR`/`EDBC`)"),
+    "alignment_memory_hierarchy": ("💾 Memory Alignment Hierarchy", "Core (`DPSR`)"),
+    "batch_sequence_scaling": (
+        "📦 Multi-Token Batch & Prefill Scaling",
+        "Core (`DPSR`/`EDBC`)",
+    ),
     "long_dialogue_endurance": (
         "🛡️ Long-Dialogue Endurance (1K–1M Tokens)",
         "Core (`DPSR`/`EDBC`)",

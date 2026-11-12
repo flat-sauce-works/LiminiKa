@@ -336,17 +336,17 @@ fn bench_edbc_stateful_eval(c: &mut Criterion) {
         });
     });
 
-    // 2B. Standalone 0-ln 9-Term Even Taylor-Horner Polynomial Surrogate Entropy
+    // 2B. Standalone 0-ln 9-Term Even Taylor-Horner Polynomial Surrogate Entropy (Non-Unit Top-2 Sum = 0.87)
     group.bench_function("compute_sparse_surrogate_taylor_horner_0ln", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         for _ in 0..8 {
-            black_box(compute_sparse_surrogate_entropy(0.72f32, 0.28f32, 1e-12f32));
+            black_box(compute_sparse_surrogate_entropy(0.68f32, 0.19f32, 1e-12f32));
         }
 
         b.iter(|| {
             compute_sparse_surrogate_entropy(
-                black_box(0.72f32),
-                black_box(0.28f32),
+                black_box(0.68f32),
+                black_box(0.19f32),
                 black_box(1e-12f32),
             )
         });

@@ -80,12 +80,12 @@ PROFILES: dict[str, dict[str, str | None]] = {
     },
     "quick": {
         "description": "Fast smoke test run for build validation and core DPSR/EDBC kernel verification",
-        "filter": "steering_32b|safe_ripa|normal_mode|eval_cvoid|swarm_quorum|unified_field|bayesian|toroidal_kmeans|coarse_to_fine|top2_liminal|merge_and_prune|gop_budget",
+        "filter": "steering_32b|safe_ripa|normal_mode|eval_cvoid|swarm_quorum|unified_field|bayesian|toroidal_kmeans|coarse_to_fine|top2_liminal|merge_and_prune|autonomous_swarm_aperture|gop_budget",
         "skip": "Provisional_GCSO_Container",
     },
     "ripa": {
         "description": "Focused comparison of RIPA LUT/pre-inverted trig vs Full-Channel RoPE, Swarm Quorum, Unified Field, Slerp, and PSPM Pseudo-MoE",
-        "filter": "steering_32b|safe_ripa|swarm_quorum|closed_loop_swarm|unified_field|slot_bank_swarm|slerp_geodesic|pspm_subhead|ripa_extreme",
+        "filter": "steering_32b|safe_ripa|swarm_quorum|closed_loop_swarm|unified_field|slot_bank_swarm|slerp_geodesic|pspm_subhead|autonomous_swarm_aperture|ripa_extreme",
         "skip": "Provisional_GCSO_Container",
     },
     "kmeans-coarse-to-fine": {

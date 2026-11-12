@@ -61,7 +61,7 @@
 #![allow(clippy::undocumented_unsafe_blocks)]
 #![allow(clippy::needless_return)]
 
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", test))]
 extern crate std;
 
 extern crate alloc;

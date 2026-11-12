@@ -114,8 +114,9 @@ use crate::traits::primitives::{
     MAX_ATTRACTOR_DOMAINS,
 };
 use crate::traits::rope::{
-    dispatch_fused_ripa_and_pspm_words_core, steer_from_swar_words_core_safe, DynamicLayerSkipper,
-    EntropyGatedPhaseLookup, PhaseSteering, PspmRouter, SrlAdapter, VisualAttentionSteering,
+    dispatch_fused_ripa_and_pspm_words_core, resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim,
+    steer_from_swar_words_core_safe, DynamicLayerSkipper, EntropyGatedPhaseLookup, PhaseSteering,
+    PspmRouter, SrlAdapter, VisualAttentionSteering,
 };
 use crate::traits::telemetry::{
     select_rewire_bridge_and_modulate_with_preloaded_words_64, ContrastivePhaseBloomFilter,
@@ -598,7 +599,7 @@ impl StigmergicThresholds {
                             & (num_heads > 0)
                             & (num_heads <= MAX_ATTENTION_HEADS);
                         if is_default_ripa {
-                            let rot_dim = ((head_dim >> 2) & !1).max(2).min(head_dim);
+                            let rot_dim = ripa_upper_rot_dim(head_dim);
                             if let Some(k) = key_tensor {
                                 crate::traits::rope::rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words(
                                     q.as_mut_slice(),
@@ -1666,6 +1667,25 @@ impl ActionHubEngine {
             spawned_new,
         ))
     }
+
+    /// Resolves the **Swarm- & Blanket-Driven Autonomous Frequency Aperture** (`rot_dim`, even
+    /// integer in `2..=head_dim`) for this engine's `head_dim` and last observed entropy $\tilde{H}$.
+    #[inline(always)]
+    #[must_use]
+    pub fn resolve_autonomous_rot_dim(
+        &self,
+        provenance_bits: u32,
+        quorum_mask: u8,
+        von_mises_kappa: f32,
+    ) -> usize {
+        resolve_autonomous_swarm_rot_dim(
+            self.dpsr.head_dim() as usize,
+            provenance_bits,
+            quorum_mask,
+            self.last_entropy_h_tilde,
+            von_mises_kappa,
+        )
+    }
 }
 
 // ===================================================================
@@ -2168,6 +2188,8 @@ mod tests {
         assert_eq!(c_aid, 42);
         assert!(c_coh > 0.90);
         assert_eq!(gw_frame.target_anchor_id, 42);
+        assert_eq!(gw_frame.resolve_autonomous_rot_dim(16, 0.20, 1.5), 4);
+        assert_eq!(hub.resolve_autonomous_rot_dim(0x04, 0xFF, 1.5), 2);
         assert!(gw_rep.updated_density >= 1.8);
         assert!(centroids[0].verify_integrity());
     }

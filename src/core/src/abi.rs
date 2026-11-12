@@ -51,8 +51,7 @@
 #[cfg(feature = "std")]
 extern crate std;
 
-#[cfg(feature = "std")]
-use std::boxed::Box;
+use alloc::boxed::Box;
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use core::arch::x86_64::{
@@ -1504,10 +1503,11 @@ fn steer_gateway_frame_with_words_core_safe(
             if swar_nonzero {
                 let is_default_ripa = (frame_ref.ripa_clamp_rad.to_bits()
                     == DEFAULT_RIPA_CLAMP_MAX_RAD.to_bits())
+                    & frame_ref.has_unit_pspm_gains()
                     & (num_heads > 0)
                     & (num_heads <= MAX_ATTENTION_HEADS);
                 if is_default_ripa {
-                    let rot_dim = ((head_dim >> 2) & !1).max(2).min(head_dim);
+                    let rot_dim = frame_ref.resolve_autonomous_rot_dim(head_dim, 0.0, 0.0);
                     if let Some(ref mut k) = k_opt {
                         crate::traits::rope::rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words(
                             q_aligned.as_mut_slice(),
@@ -3075,15 +3075,7 @@ pub unsafe extern "C" fn gcso_action_hub_create(
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and alignment.
         let mut out_handle = unsafe { FfiHandleMut::from_raw(hub_out)? };
         let hub = ActionHubEngine::with_capacity(capacity)?;
-        #[cfg(feature = "std")]
-        {
-            *out_handle = Box::into_raw(Box::new(hub)).cast::<GcsoActionHubOpaque>();
-        }
-        #[cfg(not(feature = "std"))]
-        {
-            let _ = hub;
-            *out_handle = ptr::null_mut();
-        }
+        *out_handle = Box::into_raw(Box::new(hub)).cast::<GcsoActionHubOpaque>();
         Ok(GCSO_SUCCESS)
     })
 }
@@ -4687,15 +4679,7 @@ pub unsafe extern "C" fn gcso_dpsr_kernel_create(
         let mut out_handle = unsafe { FfiHandleMut::from_raw(kernel_out)? };
         let engine = DpsrEngine::new(head_dim, num_heads)?;
 
-        #[cfg(feature = "std")]
-        {
-            *out_handle = Box::into_raw(Box::new(engine)).cast::<GcsoDpsrKernelOpaque>();
-        }
-        #[cfg(not(feature = "std"))]
-        {
-            let _ = engine;
-            *out_handle = ptr::null_mut();
-        }
+        *out_handle = Box::into_raw(Box::new(engine)).cast::<GcsoDpsrKernelOpaque>();
         Ok(GCSO_SUCCESS)
     })
 }
@@ -6047,7 +6031,6 @@ pub unsafe extern "C" fn gcso_dpsr_kernel_destroy(kernel: GcsoDpsrKernelHandle) 
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
-        #[cfg(feature = "std")]
         // SAFETY: `kernel` was allocated via `Box::into_raw` in `gcso_dpsr_kernel_create`.
         unsafe {
             let _ = Box::from_raw(kernel.cast::<DpsrEngine>());
@@ -6924,15 +6907,7 @@ pub unsafe extern "C" fn gcso_edbc_controller_create(
         };
 
         let engine = EdbcEngine::new(*init_st);
-        #[cfg(feature = "std")]
-        {
-            *out_handle = Box::into_raw(Box::new(engine)).cast::<GcsoEdbcControllerOpaque>();
-        }
-        #[cfg(not(feature = "std"))]
-        {
-            let _ = engine;
-            *out_handle = ptr::null_mut();
-        }
+        *out_handle = Box::into_raw(Box::new(engine)).cast::<GcsoEdbcControllerOpaque>();
         Ok(GCSO_SUCCESS)
     })
 }
@@ -7042,7 +7017,6 @@ pub unsafe extern "C" fn gcso_action_hub_destroy(handle: GcsoActionHubHandle) ->
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
-        #[cfg(feature = "std")]
         if (handle as usize) >= 4096
             && ((handle as usize) & (align_of::<ActionHubEngine>() - 1)) == 0
         {
@@ -7070,7 +7044,6 @@ pub unsafe extern "C" fn gcso_edbc_controller_destroy(
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     ffi_boundary!({
-        #[cfg(feature = "std")]
         // SAFETY: `controller` was allocated via `Box::into_raw` in `gcso_edbc_controller_create`.
         unsafe {
             let _ = Box::from_raw(controller.cast::<EdbcEngine>());
