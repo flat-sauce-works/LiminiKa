@@ -1502,6 +1502,44 @@ impl Default for AttractorGrowthSnapshot {
 }
 
 impl AttractorGrowthSnapshot {
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
+    fn init_header_and_persona_from_words(
+        &mut self,
+        global_step_counter: u64,
+        coupling_matrix_8x8: u64,
+        active_domains_mask: u32,
+        domain_weights: &[f32; MAX_ATTRACTOR_DOMAINS],
+        repulsion_gain: f32,
+        repulsion_phase_deltas: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        total_potential_energy: f32,
+        run_w: &[u64; 8],
+    ) -> usize {
+        let prev_valid = (self.magic == GCSO_SNAPSHOT_MAGIC_U32)
+            & (self.abi_version == GCSO_ABI_VERSION_HEX)
+            & ((self.active_anchor_count as usize) <= MAX_ANCHORS_PER_FIELD);
+        let prev_clear_end = if prev_valid {
+            self.active_anchor_count as usize
+        } else {
+            MAX_ANCHORS_PER_FIELD
+        };
+        self.magic = GCSO_SNAPSHOT_MAGIC_U32;
+        self.abi_version = GCSO_ABI_VERSION_HEX;
+        self.global_step_counter = global_step_counter;
+        self.coupling_matrix_8x8 = coupling_matrix_8x8;
+        self.active_domains_mask = active_domains_mask;
+        self.domain_weights = *domain_weights;
+        self.repulsion_gain = repulsion_gain;
+        self.reserved_header = [0; 8];
+        self.repulsion_phase_deltas = *repulsion_phase_deltas;
+        self.reserved_meta = [0; 32];
+        self.total_potential_energy = total_potential_energy;
+        store_q7_words_64(&mut self.persona_phase_profile, run_w);
+        let r_bar = circular_r_bar_from_words_64(run_w);
+        self.composite_r_bar = r_bar;
+        self.composite_kappa = branchless_von_mises_kappa(r_bar);
+        prev_clear_end
+    }
     /// Borrows `self.persona_phase_profile` (`offset 64` of `#[repr(C, align(64))]`
     /// [`AttractorGrowthSnapshot`], guaranteed 64-byte aligned) as a zero-copy `&[u64; 8]` SWAR array.
     #[inline(always)]
@@ -2923,34 +2961,19 @@ impl AttractorFieldEngine {
         reference_trail: &gcso_pointer_trail_t,
         snapshot_out: &mut AttractorGrowthSnapshot,
     ) -> u32 {
-        let prev_valid = (snapshot_out.magic == GCSO_SNAPSHOT_MAGIC_U32)
-            & (snapshot_out.abi_version == GCSO_ABI_VERSION_HEX)
-            & ((snapshot_out.active_anchor_count as usize) <= MAX_ANCHORS_PER_FIELD);
-        let prev_clear_end = if prev_valid {
-            snapshot_out.active_anchor_count as usize
-        } else {
-            MAX_ANCHORS_PER_FIELD
-        };
-        snapshot_out.magic = GCSO_SNAPSHOT_MAGIC_U32;
-        snapshot_out.abi_version = GCSO_ABI_VERSION_HEX;
-        snapshot_out.global_step_counter = self.step_counter;
-        snapshot_out.coupling_matrix_8x8 = DEFAULT_SLOT_COUPLING_MATRIX_8X8;
-        snapshot_out.active_domains_mask = 1u32 << (self.domain_id & 7);
-        snapshot_out.repulsion_gain = self.repulsion_gain;
-        snapshot_out.reserved_header = [0; 8];
-        snapshot_out.repulsion_phase_deltas = self.repulsion_phase_deltas;
-        snapshot_out.domain_weights = [1.0; MAX_ATTRACTOR_DOMAINS];
-        snapshot_out.reserved_meta = [0; 32];
-        snapshot_out.total_potential_energy = self.total_potential_energy();
-
         let init_w = trail_phase_words_ref(reference_trail);
         let init_nonzero = (init_w[0] != 0) || words_any_nonzero_64(init_w);
         let (run_w, _pull) = self.evaluate_composite_attractor_force_words(init_w, init_nonzero);
-        store_q7_words_64(&mut snapshot_out.persona_phase_profile, &run_w);
-        let r_bar = circular_r_bar_from_words_64(&run_w);
-        let kappa = branchless_von_mises_kappa(r_bar);
-        snapshot_out.composite_r_bar = r_bar;
-        snapshot_out.composite_kappa = kappa;
+        let prev_clear_end = snapshot_out.init_header_and_persona_from_words(
+            self.step_counter,
+            DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+            1u32 << (self.domain_id & 7),
+            &[1.0; MAX_ATTRACTOR_DOMAINS],
+            self.repulsion_gain,
+            &self.repulsion_phase_deltas,
+            self.total_potential_energy(),
+            &run_w,
+        );
 
         let cap = (self.capacity as usize).min(MAX_ANCHORS_PER_FIELD);
         let mut remaining = self.active_count;
@@ -3751,35 +3774,20 @@ impl MultiAttractorSpace {
         reference_trail: &gcso_pointer_trail_t,
         snapshot_out: &mut AttractorGrowthSnapshot,
     ) -> u32 {
-        let prev_valid = (snapshot_out.magic == GCSO_SNAPSHOT_MAGIC_U32)
-            & (snapshot_out.abi_version == GCSO_ABI_VERSION_HEX)
-            & ((snapshot_out.active_anchor_count as usize) <= MAX_ANCHORS_PER_FIELD);
-        let prev_clear_end = if prev_valid {
-            snapshot_out.active_anchor_count as usize
-        } else {
-            MAX_ANCHORS_PER_FIELD
-        };
-        snapshot_out.magic = GCSO_SNAPSHOT_MAGIC_U32;
-        snapshot_out.abi_version = GCSO_ABI_VERSION_HEX;
-        snapshot_out.global_step_counter = self.global_step_counter;
-        snapshot_out.coupling_matrix_8x8 = self.coupling_matrix_8x8;
-        snapshot_out.active_domains_mask = self.active_domains_mask;
-        snapshot_out.domain_weights = self.domain_weights;
-        snapshot_out.repulsion_gain = self.fields[DOMAIN_PHASE_REPULSION as usize].repulsion_gain;
-        snapshot_out.reserved_header = [0; 8];
-        snapshot_out.repulsion_phase_deltas =
-            self.fields[DOMAIN_PHASE_REPULSION as usize].repulsion_phase_deltas;
-        snapshot_out.reserved_meta = [0; 32];
-        snapshot_out.total_potential_energy = self.total_potential_energy();
-
         let init_w = trail_phase_words_ref(reference_trail);
         let init_nonzero = (init_w[0] != 0) || words_any_nonzero_64(init_w);
         let (run_w, _pull) = self.evaluate_multi_domain_superposition_words(init_w, init_nonzero);
-        store_q7_words_64(&mut snapshot_out.persona_phase_profile, &run_w);
-        let r_bar = circular_r_bar_from_words_64(&run_w);
-        let kappa = branchless_von_mises_kappa(r_bar);
-        snapshot_out.composite_r_bar = r_bar;
-        snapshot_out.composite_kappa = kappa;
+        let rep_field = &self.fields[DOMAIN_PHASE_REPULSION as usize];
+        let prev_clear_end = snapshot_out.init_header_and_persona_from_words(
+            self.global_step_counter,
+            self.coupling_matrix_8x8,
+            self.active_domains_mask,
+            &self.domain_weights,
+            rep_field.repulsion_gain,
+            &rep_field.repulsion_phase_deltas,
+            self.total_potential_energy(),
+            &run_w,
+        );
 
         let mut out_idx = 0usize;
         let mut cryst_cnt = 0u32;

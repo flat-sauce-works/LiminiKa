@@ -170,62 +170,7 @@ pub trait SheafCohomologyEvaluator: BranchlessKernel + Send + Sync {
         }
 
         let mut max_deg = 0.0_f32;
-        if n <= BLOCK_NORM_CACHE_CAP {
-            let norms = &inv_norm_cache[..n];
-            let masks = &block_masks[..n];
-            for i in 0..n {
-                let inv_norm_i = norms[i];
-                if inv_norm_i > 0.0 {
-                    let [m0, m1, m2, m3] = masks[i].bits;
-                    let mut acc_i0 = deg_slice[i];
-                    let mut acc_i1 = 0.0_f32;
-                    let mut j = i + 1;
-
-                    while j + 4 <= n {
-                        let [w0_a, w1_a, w2_a, w3_a] = masks[j].bits;
-                        let [w0_b, w1_b, w2_b, w3_b] = masks[j + 1].bits;
-                        let [w0_c, w1_c, w2_c, w3_c] = masks[j + 2].bits;
-                        let [w0_d, w1_d, w2_d, w3_d] = masks[j + 3].bits;
-
-                        let inter_a = ((m0 & w0_a).count_ones() + (m1 & w1_a).count_ones())
-                            + ((m2 & w2_a).count_ones() + (m3 & w3_a).count_ones());
-                        let inter_b = ((m0 & w0_b).count_ones() + (m1 & w1_b).count_ones())
-                            + ((m2 & w2_b).count_ones() + (m3 & w3_b).count_ones());
-                        let inter_c = ((m0 & w0_c).count_ones() + (m1 & w1_c).count_ones())
-                            + ((m2 & w2_c).count_ones() + (m3 & w3_c).count_ones());
-                        let inter_d = ((m0 & w0_d).count_ones() + (m1 & w1_d).count_ones())
-                            + ((m2 & w2_d).count_ones() + (m3 & w3_d).count_ones());
-
-                        let a_ij_a = (inter_a as f32) * (inv_norm_i * norms[j]);
-                        let a_ij_b = (inter_b as f32) * (inv_norm_i * norms[j + 1]);
-                        let a_ij_c = (inter_c as f32) * (inv_norm_i * norms[j + 2]);
-                        let a_ij_d = (inter_d as f32) * (inv_norm_i * norms[j + 3]);
-
-                        deg_slice[j] += a_ij_a;
-                        deg_slice[j + 1] += a_ij_b;
-                        deg_slice[j + 2] += a_ij_c;
-                        deg_slice[j + 3] += a_ij_d;
-                        acc_i0 += a_ij_a + a_ij_b;
-                        acc_i1 += a_ij_c + a_ij_d;
-                        j += 4;
-                    }
-                    while j < n {
-                        let [w0, w1, w2, w3] = masks[j].bits;
-                        let inter = ((m0 & w0).count_ones() + (m1 & w1).count_ones())
-                            + ((m2 & w2).count_ones() + (m3 & w3).count_ones());
-                        let a_ij = (inter as f32) * (inv_norm_i * norms[j]);
-                        deg_slice[j] += a_ij;
-                        acc_i0 += a_ij;
-                        j += 1;
-                    }
-                    deg_slice[i] = acc_i0 + acc_i1;
-                }
-                max_deg = branchless_max_f32(max_deg, deg_slice[i]);
-            }
-            return Ok(branchless_flush_subnormal_f32(2.0 * max_deg));
-        }
-
-        let cached_upper = BLOCK_NORM_CACHE_CAP;
+        let cached_upper = cached_len;
         for i in 0..n {
             let mask_i = &block_masks[i];
             let inv_norm_i = if i < BLOCK_NORM_CACHE_CAP {

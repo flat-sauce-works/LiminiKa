@@ -1899,83 +1899,12 @@ fn rotate_ripa_upper_slice(buf: &mut [f32], sin_t: f32, cos_t: f32) {
                 return;
             }
             if len == 32 {
-                let p0 = ptr;
-                let p1 = ptr.add(8);
-                let v0 = _mm256_loadu_ps(p0);
-                let v1 = _mm256_loadu_ps(p1);
-                _mm256_storeu_ps(
-                    p0,
-                    _mm256_addsub_ps(
-                        _mm256_mul_ps(v0, v_cos),
-                        _mm256_mul_ps(_mm256_permute_ps::<0xB1>(v0), v_sin),
-                    ),
-                );
-                _mm256_storeu_ps(
-                    p1,
-                    _mm256_addsub_ps(
-                        _mm256_mul_ps(v1, v_cos),
-                        _mm256_mul_ps(_mm256_permute_ps::<0xB1>(v1), v_sin),
-                    ),
-                );
-                let p2 = ptr.add(16);
-                let p3 = ptr.add(24);
-                let v2 = _mm256_loadu_ps(p2);
-                let v3 = _mm256_loadu_ps(p3);
-                _mm256_storeu_ps(
-                    p2,
-                    _mm256_addsub_ps(
-                        _mm256_mul_ps(v2, v_cos),
-                        _mm256_mul_ps(_mm256_permute_ps::<0xB1>(v2), v_sin),
-                    ),
-                );
-                _mm256_storeu_ps(
-                    p3,
-                    _mm256_addsub_ps(
-                        _mm256_mul_ps(v3, v_cos),
-                        _mm256_mul_ps(_mm256_permute_ps::<0xB1>(v3), v_sin),
-                    ),
-                );
+                avx2_rotate_so2_block32(ptr, v_cos, v_sin);
                 return;
             }
             if len == 64 {
-                for base in [0usize, 32] {
-                    let p0 = ptr.add(base);
-                    let p1 = ptr.add(base + 8);
-                    let v0 = _mm256_loadu_ps(p0);
-                    let v1 = _mm256_loadu_ps(p1);
-                    _mm256_storeu_ps(
-                        p0,
-                        _mm256_addsub_ps(
-                            _mm256_mul_ps(v0, v_cos),
-                            _mm256_mul_ps(_mm256_permute_ps::<0xB1>(v0), v_sin),
-                        ),
-                    );
-                    _mm256_storeu_ps(
-                        p1,
-                        _mm256_addsub_ps(
-                            _mm256_mul_ps(v1, v_cos),
-                            _mm256_mul_ps(_mm256_permute_ps::<0xB1>(v1), v_sin),
-                        ),
-                    );
-                    let p2 = ptr.add(base + 16);
-                    let p3 = ptr.add(base + 24);
-                    let v2 = _mm256_loadu_ps(p2);
-                    let v3 = _mm256_loadu_ps(p3);
-                    _mm256_storeu_ps(
-                        p2,
-                        _mm256_addsub_ps(
-                            _mm256_mul_ps(v2, v_cos),
-                            _mm256_mul_ps(_mm256_permute_ps::<0xB1>(v2), v_sin),
-                        ),
-                    );
-                    _mm256_storeu_ps(
-                        p3,
-                        _mm256_addsub_ps(
-                            _mm256_mul_ps(v3, v_cos),
-                            _mm256_mul_ps(_mm256_permute_ps::<0xB1>(v3), v_sin),
-                        ),
-                    );
-                }
+                avx2_rotate_so2_block32(ptr, v_cos, v_sin);
+                avx2_rotate_so2_block32(ptr.add(32), v_cos, v_sin);
                 return;
             }
         }

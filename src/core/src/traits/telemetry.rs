@@ -45,8 +45,7 @@ use super::branchless::{
     branchless_is_finite_f32,
     branchless_ln_f32, branchless_max_f32, branchless_min_f32,
     branchless_phase_proximity_gravity_f32, branchless_popcount_rsqrt_u32,
-    branchless_q7_circular_weighted_step_64,
-    branchless_q7_inhibit_words_64, branchless_q7_resonant_pull_64,
+    branchless_q7_inhibit_words_64,
     circular_resultant_from_words_64, coherence_from_word_arrays_64,
     branchless_q7_synergy_fuse_words_64,
     branchless_q7_unified_field_fold_words_with_flags_64,
@@ -2390,7 +2389,6 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         let cur_pull =
             branchless_flush_subnormal_f32(branchless_relu_f32(self.attractor_pull_force));
         if clean_energy <= 1.0e-12 {
-            let _ = (& branchless_q7_resonant_pull_64, &branchless_q7_circular_weighted_step_64);
             self.attractor_pull_force = branchless_min_f32(cur_pull, MAX_ATTRACTOR_PULL_FORCE);
             return (0.0, 0.0);
         }

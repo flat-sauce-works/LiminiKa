@@ -554,6 +554,132 @@ impl StigmergicThresholds {
         }
     }
 
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
+    fn execute_decision_steering_and_logit_scaling(
+        decision: StigmergicActionDecision,
+        steer_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        qdps_min_rad: f32,
+        ripa_clamp: f32,
+        head_dim: usize,
+        num_heads: usize,
+        best_coh: f32,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    ) -> GcsoResult<(bool, bool, bool)> {
+        let mut steered = false;
+        let mut pspm_routed = false;
+        let mut skip_compensated = false;
+        let min_step_q7 = rad_to_qdps_min_step_q7_u8(qdps_min_rad);
+
+        match decision {
+            StigmergicActionDecision::PassiveSidecar => {}
+            StigmergicActionDecision::InertialLayerSkip => {
+                skip_compensated = true;
+            }
+            StigmergicActionDecision::ExpressPhaseSteer
+            | StigmergicActionDecision::RepulsionEscape => {
+                let swar_w = if min_step_q7 <= 1 {
+                    *steer_words
+                } else {
+                    filter_qdps_words_in_registers_64(steer_words, min_step_q7)
+                };
+                if swar_words_nonzero_64(&swar_w) {
+                    if let Some(q) = query_tensor {
+                        steer_from_swar_words_core_safe(
+                            &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, q,
+                            key_tensor,
+                        );
+                        steered = true;
+                    } else if let Some(k) = key_tensor {
+                        steer_from_swar_words_core_safe(
+                            &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, k, None,
+                        );
+                        steered = true;
+                    }
+                }
+            }
+            StigmergicActionDecision::PspmSubHeadRoute
+            | StigmergicActionDecision::FullOrchestrationSrl
+            | StigmergicActionDecision::CrystallizeMacroBasin => {
+                let swar_w = if min_step_q7 <= 1 {
+                    *steer_words
+                } else {
+                    filter_qdps_words_in_registers_64(steer_words, min_step_q7)
+                };
+                if swar_words_nonzero_64(&swar_w) {
+                    if let Some(q) = query_tensor {
+                        let is_default_ripa = (ripa_clamp.to_bits()
+                            == DEFAULT_RIPA_CLAMP_MAX_RAD.to_bits())
+                            & (num_heads > 0)
+                            & (num_heads <= MAX_ATTENTION_HEADS);
+                        if is_default_ripa {
+                            let rot_dim = ((head_dim >> 2) & !1).max(2).min(head_dim);
+                            if let Some(k) = key_tensor {
+                                crate::traits::rope::rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words(
+                                    q.as_mut_slice(),
+                                    k.as_mut_slice(),
+                                    &swar_w,
+                                    num_heads,
+                                    head_dim,
+                                    rot_dim,
+                                );
+                            } else {
+                                crate::traits::rope::rotate_fused_self_ripa_and_pspm_default_words(
+                                    q.as_mut_slice(),
+                                    &swar_w,
+                                    num_heads,
+                                    head_dim,
+                                    rot_dim,
+                                    true,
+                                );
+                            }
+                        } else {
+                            let f_heads = (num_heads >> 1) as u16;
+                            let l_heads = (num_heads >> 2) as u16;
+                            let e_heads = (num_heads as u16).saturating_sub(f_heads + l_heads);
+                            let pspm_cfg = gcso_pspm_config_t {
+                                num_fact_heads: f_heads,
+                                num_logic_heads: l_heads,
+                                num_explore_heads: e_heads,
+                                flags: 0,
+                                fact_phase_gain: 1.0,
+                                logic_phase_gain: 1.0,
+                                explore_phase_gain: 1.15,
+                                reserved: [0; 12],
+                            };
+                            dispatch_fused_ripa_and_pspm_words_core(
+                                q, &swar_w, ripa_clamp, &pspm_cfg, &swar_w, &swar_w, &swar_w,
+                                ripa_clamp, 0, head_dim, true,
+                            )?;
+                            if let Some(k) = key_tensor {
+                                steer_from_swar_words_core_safe(
+                                    &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, k,
+                                    None,
+                                );
+                            }
+                        }
+                        steered = true;
+                        pspm_routed = true;
+                    }
+                }
+            }
+        }
+
+        if let Some(logits) = logits_opt {
+            if !logits.is_empty() {
+                let inv_temp = branchless_select_f32(
+                    decision as u8 == StigmergicActionDecision::RepulsionEscape as u8,
+                    0.80,
+                    branchless_clamp_f32(1.0 + 0.15 * branchless_relu_f32(best_coh), 0.75, 1.35),
+                );
+                scale_f32_slice_unrolled8(logits.as_mut_slice(), inv_temp);
+            }
+        }
+        Ok((steered, pspm_routed, skip_compensated))
+    }
+
     /// Executes a stateless one-shot stigmergic orchestration step directly from `self` and `dpsr`
     /// without allocating a 2,816-byte [`ActionHubEngine`] on the stack (`0` stack table zero-init).
     ///
@@ -568,9 +694,9 @@ impl StigmergicThresholds {
         entropy_h_tilde: f32,
         dominant_slot: u8,
         trail_inout: &mut gcso_pointer_trail_t,
-        mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        mut key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        mut logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<ActionOrchestrationReport> {
         let qdps_min_rad = dpsr.qdps_min_step_rad();
         let ripa_clamp = dpsr.ripa_clamp_max_rad();
@@ -665,105 +791,18 @@ impl StigmergicThresholds {
             | extra_flags;
         trail_inout.sync_flags_with_current_ptr();
 
-        let min_step_q7 = rad_to_qdps_min_step_q7_u8(qdps_min_rad);
-        match decision {
-            StigmergicActionDecision::PassiveSidecar
-            | StigmergicActionDecision::InertialLayerSkip => {}
-            StigmergicActionDecision::ExpressPhaseSteer
-            | StigmergicActionDecision::RepulsionEscape => {
-                let swar_w = if min_step_q7 <= 1 {
-                    steer_words
-                } else {
-                    filter_qdps_words_in_registers_64(&steer_words, min_step_q7)
-                };
-                if swar_words_nonzero_64(&swar_w) {
-                    if let Some(ref mut q) = query_tensor {
-                        steer_from_swar_words_core_safe(
-                            &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, q,
-                            key_tensor,
-                        );
-                    } else if let Some(ref mut k) = key_tensor {
-                        steer_from_swar_words_core_safe(
-                            &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, k, None,
-                        );
-                    }
-                }
-            }
-            StigmergicActionDecision::PspmSubHeadRoute
-            | StigmergicActionDecision::FullOrchestrationSrl
-            | StigmergicActionDecision::CrystallizeMacroBasin => {
-                let swar_w = if min_step_q7 <= 1 {
-                    steer_words
-                } else {
-                    filter_qdps_words_in_registers_64(&steer_words, min_step_q7)
-                };
-                if swar_words_nonzero_64(&swar_w) {
-                    if let Some(ref mut q) = query_tensor {
-                        let is_default_ripa = (ripa_clamp.to_bits()
-                            == DEFAULT_RIPA_CLAMP_MAX_RAD.to_bits())
-                            & (num_heads > 0)
-                            & (num_heads <= MAX_ATTENTION_HEADS);
-                        if is_default_ripa {
-                            let rot_dim = ((head_dim >> 2) & !1).max(2).min(head_dim);
-                            if let Some(ref mut k) = key_tensor {
-                                crate::traits::rope::rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words(
-                                    q.as_mut_slice(),
-                                    k.as_mut_slice(),
-                                    &swar_w,
-                                    num_heads,
-                                    head_dim,
-                                    rot_dim,
-                                );
-                            } else {
-                                crate::traits::rope::rotate_fused_self_ripa_and_pspm_default_words(
-                                    q.as_mut_slice(),
-                                    &swar_w,
-                                    num_heads,
-                                    head_dim,
-                                    rot_dim,
-                                    true,
-                                );
-                            }
-                        } else {
-                            let f_heads = (num_heads >> 1) as u16;
-                            let l_heads = (num_heads >> 2) as u16;
-                            let e_heads = (num_heads as u16).saturating_sub(f_heads + l_heads);
-                            let pspm_cfg = gcso_pspm_config_t {
-                                num_fact_heads: f_heads,
-                                num_logic_heads: l_heads,
-                                num_explore_heads: e_heads,
-                                flags: 0,
-                                fact_phase_gain: 1.0,
-                                logic_phase_gain: 1.0,
-                                explore_phase_gain: 1.15,
-                                reserved: [0; 12],
-                            };
-                            dispatch_fused_ripa_and_pspm_words_core(
-                                q, &swar_w, ripa_clamp, &pspm_cfg, &swar_w, &swar_w, &swar_w,
-                                ripa_clamp, 0, head_dim, true,
-                            )?;
-                            if let Some(ref mut k) = key_tensor {
-                                steer_from_swar_words_core_safe(
-                                    &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, k,
-                                    None,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(ref mut logits) = logits_opt {
-            if !logits.is_empty() {
-                let inv_temp = branchless_select_f32(
-                    decision as u8 == StigmergicActionDecision::RepulsionEscape as u8,
-                    0.80,
-                    branchless_clamp_f32(1.0 + 0.15 * branchless_relu_f32(best_coh), 0.75, 1.35),
-                );
-                scale_f32_slice_unrolled8(logits.as_mut_slice(), inv_temp);
-            }
-        }
+        let _ = Self::execute_decision_steering_and_logit_scaling(
+            decision,
+            &steer_words,
+            qdps_min_rad,
+            ripa_clamp,
+            head_dim,
+            num_heads,
+            best_coh,
+            query_tensor,
+            key_tensor,
+            logits_opt,
+        )?;
 
         Ok(ActionOrchestrationReport {
             evolved_ptr: evolved_ptr.raw(),
@@ -1372,9 +1411,9 @@ impl ActionHubEngine {
         dominant_slot: u8,
         trail_inout: &mut gcso_pointer_trail_t,
         attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
-        mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        mut key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        mut logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
         accumulate_ptr_phase: bool,
         macro_centroid_words: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
     ) -> GcsoResult<ActionOrchestrationReport> {
@@ -1541,115 +1580,19 @@ impl ActionHubEngine {
             &steer_words,
         );
 
-        let mut steered = false;
-        let mut pspm_routed = false;
-        let mut skip_compensated = false;
-        let min_step_q7 = rad_to_qdps_min_step_q7_u8(qdps_min_rad);
-
-        match decision {
-            StigmergicActionDecision::PassiveSidecar => {}
-            StigmergicActionDecision::InertialLayerSkip => {
-                skip_compensated = true;
-            }
-            StigmergicActionDecision::ExpressPhaseSteer
-            | StigmergicActionDecision::RepulsionEscape => {
-                let swar_w = if min_step_q7 <= 1 {
-                    steer_words
-                } else {
-                    filter_qdps_words_in_registers_64(&steer_words, min_step_q7)
-                };
-                if swar_words_nonzero_64(&swar_w) {
-                    if let Some(ref mut q) = query_tensor {
-                        steer_from_swar_words_core_safe(
-                            &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, q,
-                            key_tensor,
-                        );
-                        steered = true;
-                    } else if let Some(ref mut k) = key_tensor {
-                        steer_from_swar_words_core_safe(
-                            &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, k, None,
-                        );
-                        steered = true;
-                    }
-                }
-            }
-            StigmergicActionDecision::PspmSubHeadRoute
-            | StigmergicActionDecision::FullOrchestrationSrl
-            | StigmergicActionDecision::CrystallizeMacroBasin => {
-                let swar_w = if min_step_q7 <= 1 {
-                    steer_words
-                } else {
-                    filter_qdps_words_in_registers_64(&steer_words, min_step_q7)
-                };
-                if swar_words_nonzero_64(&swar_w) {
-                    if let Some(ref mut q) = query_tensor {
-                        let is_default_ripa = (ripa_clamp.to_bits()
-                            == DEFAULT_RIPA_CLAMP_MAX_RAD.to_bits())
-                            & (num_heads > 0)
-                            & (num_heads <= MAX_ATTENTION_HEADS);
-                        if is_default_ripa {
-                            let rot_dim = ((head_dim >> 2) & !1).max(2).min(head_dim);
-                            if let Some(ref mut k) = key_tensor {
-                                crate::traits::rope::rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words(
-                                    q.as_mut_slice(),
-                                    k.as_mut_slice(),
-                                    &swar_w,
-                                    num_heads,
-                                    head_dim,
-                                    rot_dim,
-                                );
-                            } else {
-                                crate::traits::rope::rotate_fused_self_ripa_and_pspm_default_words(
-                                    q.as_mut_slice(),
-                                    &swar_w,
-                                    num_heads,
-                                    head_dim,
-                                    rot_dim,
-                                    true,
-                                );
-                            }
-                        } else {
-                            let f_heads = (num_heads >> 1) as u16;
-                            let l_heads = (num_heads >> 2) as u16;
-                            let e_heads = (num_heads as u16).saturating_sub(f_heads + l_heads);
-                            let pspm_cfg = gcso_pspm_config_t {
-                                num_fact_heads: f_heads,
-                                num_logic_heads: l_heads,
-                                num_explore_heads: e_heads,
-                                flags: 0,
-                                fact_phase_gain: 1.0,
-                                logic_phase_gain: 1.0,
-                                explore_phase_gain: 1.15,
-                                reserved: [0; 12],
-                            };
-                            dispatch_fused_ripa_and_pspm_words_core(
-                                q, &swar_w, ripa_clamp, &pspm_cfg, &swar_w, &swar_w, &swar_w,
-                                ripa_clamp, 0, head_dim, true,
-                            )?;
-                            if let Some(ref mut k) = key_tensor {
-                                steer_from_swar_words_core_safe(
-                                    &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, k,
-                                    None,
-                                );
-                            }
-                        }
-                        steered = true;
-                        pspm_routed = true;
-                    }
-                }
-            }
-        }
-
-        if let Some(ref mut logits) = logits_opt {
-            if !logits.is_empty() {
-                let inv_temp = branchless_select_f32(
-                    decision as u8 == StigmergicActionDecision::RepulsionEscape as u8,
-                    0.80,
-                    branchless_clamp_f32(1.0 + 0.15 * branchless_relu_f32(best_coh), 0.75, 1.35),
-                );
-                scale_f32_slice_unrolled8(logits.as_mut_slice(), inv_temp);
-            }
-        }
+        let (steered, pspm_routed, skip_compensated) =
+            StigmergicThresholds::execute_decision_steering_and_logit_scaling(
+                decision,
+                &steer_words,
+                qdps_min_rad,
+                ripa_clamp,
+                head_dim,
+                num_heads,
+                best_coh,
+                query_tensor,
+                key_tensor,
+                logits_opt,
+            )?;
 
         let srl_flag = (mode_flags & ACTION_MODE_SRL_INJECT) != 0;
         let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)

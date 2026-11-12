@@ -1476,20 +1476,6 @@ pub trait ActionHub:
             (0, 0)
         };
         let (
-            mut header,
-            total_len,
-            off_crystals,
-            num_crystals,
-            off_trails,
-            num_trails,
-            _off_bloom,
-            off_daes,
-        ) = GcsoFourSectionView::validate_four_section_mut_offsets(zimms_bytes)?;
-        if trail_idx >= num_trails {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-
-        let (
             idx1,
             idx2,
             aid1,
@@ -1500,37 +1486,16 @@ pub trait ActionHub:
             raw_w,
             fact_w,
             logic_w,
+            mut header,
+            total_len,
+            off_daes,
             updated_ptr,
-        ) = {
-            let (prefix_bytes, trails_and_tail) = zimms_bytes.split_at_mut(off_trails);
-            let crystals_ref = CrystallizedAttractorRecord::slice_from_bytes_at(
-                prefix_bytes,
-                off_crystals,
-                num_crystals,
-            )?;
-            let trails_mut =
-                gcso_pointer_trail_t::slice_from_bytes_mut_at(trails_and_tail, 0, num_trails)?;
-            let (i1, i2, a1, a2, ec, tg, lim, rw, fw, lw) =
-                CrystallizedAttractorRecord::route_top2_liminal_centroids_with_words_64(
-                    crystals_ref,
-                    &mut trails_mut[trail_idx],
-                    pull_step_u7,
-                    liminal_gravity_ratio_thresh,
-                );
-            (
-                i1,
-                i2,
-                a1,
-                a2,
-                ec,
-                tg,
-                lim,
-                rw,
-                fw,
-                lw,
-                trails_mut[trail_idx].current_ptr,
-            )
-        };
+        ) = GcsoFourSectionView::route_four_section_top2_liminal_core_in_place(
+            zimms_bytes,
+            trail_idx,
+            pull_step_u7,
+            liminal_gravity_ratio_thresh,
+        )?;
 
         let (steered, pspm_routed) = if want_steer {
             self.steer_qdps_pspm_words_prevalidated_core(

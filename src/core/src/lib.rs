@@ -1175,60 +1175,27 @@ impl RuntimeContext {
             .daes_slot
             .resolve_or_pass_in_place(input_tagged_ptr);
         self.step_pointer(eff_ptr.raw(), trail_out)?;
-        let (density, repulsion_active) = self
-            .action_hub
-            .bloom_filter
-            .apply_phase_conjugate_repulsion_words(
-                trail_phase_words_mut(trail_out),
-                rep_thresh,
-                rep_scale,
-            );
-        let evolved_ptr = trail_out.evolve_trail_mode_stigmergically(
+        self.finish_pointer_cascade_tail(
             edbc_state.moving_z_entropy,
-            repulsion_active,
             dominant_slot_u8,
             low_entropy_skip_thresh,
             high_density_srl_thresh,
-        );
-
-        let mut trail_w = *trail_phase_words_ref(trail_out);
-        let skip_active = evolved_ptr.has_action_mode(ACTION_MODE_LAYER_SKIP);
-        let mut skip_compensated = false;
-        if let Some(comp) = layer_skip_comp_profile {
-            if skip_active {
-                if comp.len() < num_heads {
-                    return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-                }
-                accumulate_q7_slice_into_words_64(&mut trail_w, &comp.as_slice()[..num_heads]);
-                *trail_phase_words_mut(trail_out) = trail_w;
-                trail_out.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
-                skip_compensated = true;
-            }
-        }
-
-        let steered = self.steer_qdps_words_prevalidated_core(
-            &trail_w,
-            head_dim,
-            num_heads,
+            rep_thresh,
+            rep_scale,
             qdps_min,
             ripa_max,
-            Some(&mut *query_tensor),
-            key_tensor,
-        );
-        let extra_metrics = self.apply_optional_pspm_and_srl(
-            query_tensor,
             head_dim,
+            num_heads,
+            bypass_hit,
+            false,
+            0,
+            layer_skip_comp_profile,
+            query_tensor,
+            key_tensor,
             pspm_config,
             srl_activation_and_desc,
-        )?;
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
-            | branchless_select_u8(skip_compensated, DAES_METRIC_LAYER_SKIP_COMPENSATED, 0)
-            | extra_metrics;
-        self.action_hub.daes_slot.push_telemetry_metric(metric);
-
-        Ok((evolved_ptr, density))
+            trail_out,
+        )
     }
 
     /// Executes the full Slot-Bank Pointer Cascade integrating [`RuntimeContext`]'s internal
@@ -1303,6 +1270,54 @@ impl RuntimeContext {
             trail_out,
         )?;
 
+        let (evolved_ptr, density) = self.finish_pointer_cascade_tail(
+            edbc_state.moving_z_entropy,
+            dominant_slot_u8,
+            low_entropy_skip_thresh,
+            high_density_srl_thresh,
+            rep_thresh,
+            rep_scale,
+            qdps_min,
+            ripa_max,
+            head_dim,
+            num_heads,
+            bypass_hit,
+            input_tagged_ptr.has_action_mode(ACTION_MODE_LAYER_SKIP),
+            DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+            layer_skip_comp_profile,
+            query_tensor,
+            key_tensor,
+            pspm_config,
+            srl_activation_and_desc,
+            trail_out,
+        )?;
+        Ok((evolved_ptr, density, damped_pull, coherence))
+    }
+
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
+    fn finish_pointer_cascade_tail(
+        &mut self,
+        moving_z_entropy: f32,
+        dominant_slot_u8: u8,
+        low_entropy_skip_thresh: f32,
+        high_density_srl_thresh: f32,
+        rep_thresh: u8,
+        rep_scale: u8,
+        qdps_min: f32,
+        ripa_max: f32,
+        head_dim: usize,
+        num_heads: usize,
+        bypass_hit: bool,
+        force_skip_flag: bool,
+        base_metric_bits: u8,
+        layer_skip_comp_profile: Option<&AlignedSlice16<'_, gcso_q7_t>>,
+        query_tensor: &mut AlignedSliceMut32<'_, f32>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        pspm_config: Option<&gcso_pspm_config_t>,
+        srl_activation_and_desc: Option<(&AlignedSlice32<'_, f32>, &gcso_srl_descriptor_t)>,
+        trail_out: &mut gcso_pointer_trail_t,
+    ) -> Result<(gcso_tagged_ptr_t, u8)> {
         let (density, repulsion_active) = self
             .action_hub
             .bloom_filter
@@ -1311,9 +1326,8 @@ impl RuntimeContext {
                 rep_thresh,
                 rep_scale,
             );
-
         let evolved_ptr = trail_out.evolve_trail_mode_stigmergically(
-            edbc_state.moving_z_entropy,
+            moving_z_entropy,
             repulsion_active,
             dominant_slot_u8,
             low_entropy_skip_thresh,
@@ -1321,8 +1335,7 @@ impl RuntimeContext {
         );
 
         let mut trail_w = *trail_phase_words_ref(trail_out);
-        let skip_active = evolved_ptr.has_action_mode(ACTION_MODE_LAYER_SKIP)
-            | input_tagged_ptr.has_action_mode(ACTION_MODE_LAYER_SKIP);
+        let skip_active = evolved_ptr.has_action_mode(ACTION_MODE_LAYER_SKIP) | force_skip_flag;
         let mut skip_compensated = false;
         if let Some(comp) = layer_skip_comp_profile {
             if skip_active {
@@ -1351,15 +1364,15 @@ impl RuntimeContext {
             pspm_config,
             srl_activation_and_desc,
         )?;
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
+        let metric = base_metric_bits
+            | branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
             | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
             | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
             | branchless_select_u8(skip_compensated, DAES_METRIC_LAYER_SKIP_COMPENSATED, 0)
-            | DAES_METRIC_SLOT_SYNERGY_ACTIVE
             | extra_metrics;
         self.action_hub.daes_slot.push_telemetry_metric(metric);
 
-        Ok((evolved_ptr, density, damped_pull, coherence))
+        Ok((evolved_ptr, density))
     }
 
     /// Executes a sequence of token steps in zero-allocation mode (for prefill and batch decoding).

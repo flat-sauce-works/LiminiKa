@@ -964,7 +964,7 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
             dst_trail.cluster_id != 0,
             dst_trail.cluster_id,
             branchless_select_u32(
-                src_trail.cluster_id != 0,
+                (primary_macro_anchor_id != 0) & (src_trail.cluster_id != 0),
                 src_trail.cluster_id,
                 src_trail.target_anchor_id,
             ),

@@ -429,7 +429,7 @@ jobs:
       - name: Build C/C++ targets
         run: |
           if [ -d "build" ]; then
-            cmake --build build
+            cmake --build build --parallel
           else
             echo "Build directory does not exist; skipping build step."
           fi
@@ -507,73 +507,35 @@ jobs:
       - name: Enable Rust caching
         uses: Swatinem/rust-cache@v2
 
-      - name: Fast check Rust workspace (Linux with Vulkan enabled)
-        if: runner.os == 'Linux'
+      - name: Configure platform GPU backend environment flags
         run: |
-          if [ -f "Cargo.toml" ]; then
+          if [ "$RUNNER_OS" = "Linux" ]; then
             if [ -f "/usr/include/vulkan/vulkan.h" ] || [ -f "/usr/local/include/vulkan/vulkan.h" ] || [ -n "${VULKAN_SDK:-}" ]; then
-              export LIMINIKA_ENABLE_VULKAN="1"
+              echo "LIMINIKA_ENABLE_VULKAN=1" >> "$GITHUB_ENV"
             else
-              export LIMINIKA_ENABLE_VULKAN="0"
+              echo "LIMINIKA_ENABLE_VULKAN=0" >> "$GITHUB_ENV"
             fi
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            echo "LIMINIKA_ENABLE_METAL=1" >> "$GITHUB_ENV"
+            echo "LIMINIKA_ENABLE_VULKAN=0" >> "$GITHUB_ENV"
+          else
+            echo "LIMINIKA_ENABLE_VULKAN=0" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run cargo clippy (no_std, default, and all-features)
+        run: |
+          if [ -f "Cargo.toml" ]; then
             CARGO_FLAGS=""
-            if cargo check --workspace --all-targets --locked 2>/dev/null; then
+            if cargo metadata --format-version 1 --locked >/dev/null 2>&1; then
               CARGO_FLAGS="--locked"
             else
               echo "Warning: Cargo.lock is out of sync with Cargo.toml. Running without --locked..."
             fi
-            cargo check --workspace --all-targets $CARGO_FLAGS
-            cargo check --workspace --all-targets --no-default-features $CARGO_FLAGS
-            cargo check --workspace --all-targets --all-features $CARGO_FLAGS
+            cargo clippy --workspace --all-targets --no-default-features $CARGO_FLAGS -- -D warnings
+            cargo clippy --workspace --all-targets $CARGO_FLAGS -- -D warnings
+            cargo clippy --workspace --all-targets --all-features $CARGO_FLAGS -- -D warnings
           else
-            echo "No root Cargo.toml found; skipping cargo check."
-          fi
-
-      - name: Fast check Rust workspace (macOS with Metal enabled)
-        if: runner.os == 'macOS'
-        env:
-          LIMINIKA_ENABLE_METAL: "1"
-          LIMINIKA_ENABLE_VULKAN: "0"
-        run: |
-          if [ -f "Cargo.toml" ]; then
-            CARGO_FLAGS=""
-            if cargo check --workspace --all-targets --locked 2>/dev/null; then
-              CARGO_FLAGS="--locked"
-            else
-              echo "Warning: Cargo.lock is out of sync with Cargo.toml. Running without --locked..."
-            fi
-            cargo check --workspace --all-targets $CARGO_FLAGS
-            cargo check --workspace --all-targets --no-default-features $CARGO_FLAGS
-            cargo check --workspace --all-targets --all-features $CARGO_FLAGS
-          else
-            echo "No root Cargo.toml found; skipping cargo check."
-          fi
-
-      - name: Fast check Rust workspace (Windows)
-        if: runner.os == 'Windows'
-        env:
-          LIMINIKA_ENABLE_VULKAN: "0"
-        run: |
-          if [ -f "Cargo.toml" ]; then
-            CARGO_FLAGS=""
-            if cargo check --workspace --all-targets --locked 2>/dev/null; then
-              CARGO_FLAGS="--locked"
-            else
-              echo "Warning: Cargo.lock is out of sync with Cargo.toml. Running without --locked..."
-            fi
-            cargo check --workspace --all-targets $CARGO_FLAGS
-            cargo check --workspace --all-targets --no-default-features $CARGO_FLAGS
-            cargo check --workspace --all-targets --all-features $CARGO_FLAGS
-          else
-            echo "No root Cargo.toml found; skipping cargo check."
-          fi
-
-      - name: Run cargo clippy (default, no_std, and all-features)
-        run: |
-          if [ -f "Cargo.toml" ]; then
-            cargo clippy --workspace --all-targets --no-default-features -- -D warnings
-            cargo clippy --workspace --all-targets -- -D warnings
-            cargo clippy --workspace --all-targets --all-features -- -D warnings
+            echo "No root Cargo.toml found; skipping cargo clippy."
           fi
 
       - name: Run cargo clippy & AVX2/FMA SIMD verification (x86_64 Linux)
@@ -638,9 +600,13 @@ jobs:
           EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \) )
           DSL_FILES=$(find . "${EXCLUDE_ARGS[@]}" -prune -o -name "*.lmnk" -type f -print 2>/dev/null || true)
           if [ -n "$DSL_FILES" ]; then
+            HAS_CLI=0
+            if [ -f "Cargo.toml" ] && cargo metadata --format-version 1 2>/dev/null | grep -qE '"name":"(liminika-cli|liminika)"'; then
+              HAS_CLI=1
+            fi
             for file in $DSL_FILES; do
               echo "Checking $file..."
-              if [ -f "Cargo.toml" ] && cargo metadata --format-version 1 2>/dev/null | grep -qE '"name":"(liminika-cli|liminika)"'; then
+              if [ "$HAS_CLI" -eq 1 ]; then
                 cargo run --workspace -- check "$file" || echo "CLI check command completed for $file"
               fi
             done

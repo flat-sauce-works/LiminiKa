@@ -1049,7 +1049,7 @@ impl<B> ContradictionGuard<B> {
     }
 }
 
-impl CausalProvenanceSignal for ContradictionGuard<ContrastivePhaseBloomFilter> {
+impl<B: BranchlessKernel> CausalProvenanceSignal for ContradictionGuard<B> {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
         let obstructed = self.cohomology_obstruction > self.obstruction_threshold;
@@ -1072,7 +1072,7 @@ impl CausalProvenanceSignal for ContradictionGuard<ContrastivePhaseBloomFilter> 
     }
 }
 
-impl CognitiveGroundingSignal for ContradictionGuard<ContrastivePhaseBloomFilter> {
+impl<B: BranchlessKernel> CognitiveGroundingSignal for ContradictionGuard<B> {
     #[inline(always)]
     fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] { [0i8; MAX_ATTENTION_HEADS] }
     #[inline(always)]
@@ -1105,38 +1105,6 @@ impl ContradictionGuardSignal for ContradictionGuard<ContrastivePhaseBloomFilter
     }
     #[inline(always)]
     fn requires_phase_slice_for_repulsion(&self) -> bool { false }
-}
-
-impl CausalProvenanceSignal for ContradictionGuard<()> {
-    #[inline(always)]
-    fn causal_provenance_bits(&self) -> u32 {
-        let obstructed = self.cohomology_obstruction > self.obstruction_threshold;
-        CAUSAL_AXIS_CONTRADICTION_GUARD | branchless_select_u32(obstructed, CAUSAL_CAUSE_COHOMOLOGY_REPULSION, 0)
-    }
-    #[inline(always)]
-    fn causal_anomaly_severity(&self) -> f32 {
-        if self.cohomology_obstruction <= 0.0 {
-            return 0.0;
-        }
-        let inv_thresh = if self.obstruction_threshold == 0.25 {
-            4.0
-        } else if self.obstruction_threshold >= 1.0e-30 {
-            fast_inv_pos_normal_f32(self.obstruction_threshold)
-        } else {
-            branchless_inv_pos_f32(self.obstruction_threshold)
-        };
-        let ratio = self.cohomology_obstruction * inv_thresh;
-        branchless_clamp_f32(ratio * 0.5, 0.0, 1.0)
-    }
-}
-
-impl CognitiveGroundingSignal for ContradictionGuard<()> {
-    #[inline(always)]
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] { [0i8; MAX_ATTENTION_HEADS] }
-    #[inline(always)]
-    fn project_grounding_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] { [0u64; NUM_SWARM_MICRO_CELLS] }
-    #[inline(always)]
-    fn grounding_base_energy(&self) -> f32 { self.cohomology_obstruction }
 }
 
 impl ContradictionGuardSignal for ContradictionGuard<()> {
@@ -1986,17 +1954,10 @@ impl<T: RawPhaseProjectable> ManifoldGatewaySignal for SubjectivePersona<T> {
     fn synthesize_gateway_frame(&self) -> GatewayFrame { self.synthesize_gateway_frame_with_words().0 }
 }
 
-impl ManifoldGatewaySignal for ContradictionGuard<ContrastivePhaseBloomFilter> {
-    #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
-        synthesize_multi_origin_gateway_frame_with_words::< SystemConstraint<()>,
-            ObjectiveFact<[u8; 0]>, SubjectivePersona<[u8; 0]>, Self>(None, None, None, Some(self))
-    }
-    #[inline(always)]
-    fn synthesize_gateway_frame(&self) -> GatewayFrame { self.synthesize_gateway_frame_with_words().0 }
-}
-
-impl ManifoldGatewaySignal for ContradictionGuard<()> {
+impl<B: BranchlessKernel> ManifoldGatewaySignal for ContradictionGuard<B>
+where
+    Self: ContradictionGuardSignal,
+{
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
         synthesize_multi_origin_gateway_frame_with_words::< SystemConstraint<()>,
@@ -2271,26 +2232,8 @@ impl CrystallizedAttractorRecord {
 
     #[inline(always)]
     fn clear_empty_in_place(&mut self, dominant_slot: u8) {
-        let slot = dominant_slot & ATTRACTOR_SLOT_ID_MASK;
-        self.magic = GCSO_CRYSTAL_RECORD_MAGIC;
-        self.version = GCSO_CRYSTAL_RECORD_VERSION;
-        self.anchor_id = 0;
-        self.sample_count = 0;
-        self.zimms_section_offset48 = 0;
-        self.base_energy = 0.0;
-        self.resultant_r_bar = 0.0;
-        self.von_mises_kappa = 0.0;
-        self.phase_gravity_mass = 0.0;
-        self.ripa_clamp_rad = DEFAULT_RIPA_CLAMP_MAX_RAD;
-        self.effective_inv_temp = 1.0;
-        self.provenance_bits = 0;
-        self.dominant_slot = slot;
-        self.action_mode_flags = ACTION_PRESET_PASSIVE_SIDECAR;
-        self.active_swarm_mask = 0xFF;
-        self.dominant_cause_code = ROOT_CAUSE_NOMINAL;
-        self.reserved_align64 = 0;
+        self.init_spawned_slot_header_in_place(0, dominant_slot, 0);
         *self.phase_words_mut() = [0u64; NUM_SWARM_MICRO_CELLS];
-        self.checksum_crc32 = Self::EMPTY_CRYSTAL_CRC32_BY_SLOT[slot as usize];
     }
 
     #[inline(always)] #[must_use]
@@ -7046,6 +6989,75 @@ impl<'a> GcsoFourSectionView<'a> {
         Ok((best_idx, anchor_id, best_coh, best_grav))
     }
 
+    /// Routes `trails[trail_idx]` in-place against the top-2 macro centroids in `zimms_bytes`
+    /// and returns both the routing metadata and the 3 register-resident 8-word phase arrays
+    /// `(raw_w, fact_w, logic_w)` together with `(header, total_len, off_daes, updated_ptr)` so
+    /// optional Q/K steering callers can fuse their DAES telemetry bits before finalizing the header.
+    #[inline(always)]
+    pub(crate) fn route_four_section_top2_liminal_core_in_place(
+        zimms_bytes: &mut [u8],
+        trail_idx: usize,
+        pull_step_u7: u8,
+        liminal_gravity_ratio_thresh: f32,
+    ) -> GcsoResult<(
+        usize,
+        usize,
+        u32,
+        u32,
+        f32,
+        f32,
+        bool,
+        [u64; NUM_SWARM_MICRO_CELLS],
+        [u64; NUM_SWARM_MICRO_CELLS],
+        [u64; NUM_SWARM_MICRO_CELLS],
+        gcso_snapshot_header_t,
+        usize,
+        usize,
+        u64,
+    )> {
+        let (header, total_len, off_crystals, num_crystals, off_trails, num_trails, _off_bloom, off_daes) =
+            Self::validate_four_section_mut_offsets(zimms_bytes)?;
+        if trail_idx >= num_trails {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+
+        let (crystals_ref, trails_mut) = {
+            let (head_bytes, tail_bytes) = zimms_bytes.split_at_mut(off_trails);
+            let crystals = CrystallizedAttractorRecord::slice_from_bytes_at(
+                head_bytes,
+                off_crystals,
+                num_crystals,
+            )?;
+            let trails = gcso_pointer_trail_t::slice_from_bytes_mut_at(tail_bytes, 0, num_trails)?;
+            (crystals, trails)
+        };
+
+        let (idx1, idx2, aid1, aid2, eff_coh, tot_grav, is_liminal, raw_w, fact_w, logic_w) =
+            CrystallizedAttractorRecord::route_top2_liminal_centroids_with_words_64(
+                crystals_ref,
+                &mut trails_mut[trail_idx],
+                pull_step_u7,
+                liminal_gravity_ratio_thresh,
+            );
+        let updated_ptr = trails_mut[trail_idx].current_ptr;
+        Ok((
+            idx1,
+            idx2,
+            aid1,
+            aid2,
+            eff_coh,
+            tot_grav,
+            is_liminal,
+            raw_w,
+            fact_w,
+            logic_w,
+            header,
+            total_len,
+            off_daes,
+            updated_ptr,
+        ))
+    }
+
     /// **Zero-Copy In-Place Top-2 Liminal Bifurcation Routing on a 4-Section `.gcso` Container**:
     /// Routes `trails[trail_idx]` inside Section 2 against the Top-2 nearest macro centroids in
     /// Section 1 (`crystals`) via [`CrystallizedAttractorRecord::route_top2_liminal_centroids_64`],
@@ -7060,25 +7072,27 @@ impl<'a> GcsoFourSectionView<'a> {
     pub fn route_four_section_top2_liminal_in_place(zimms_bytes: &mut [u8],
         trail_idx: usize, pull_step_u7: u8,
         liminal_gravity_ratio_thresh: f32) -> GcsoResult<(usize, usize, u32, u32, f32, f32, bool)> {
-        let (mut header, total_len, off_crystals, num_crystals, off_trails, num_trails, _off_bloom, off_daes) =
-            Self::validate_four_section_mut_offsets(zimms_bytes)?;
-        if trail_idx >= num_trails { return Err(GCSO_ERROR_INVALID_ARGUMENT); }
-
-        let (crystals_ref, trails_mut) = {
-            let (head_bytes, tail_bytes) = zimms_bytes.split_at_mut(off_trails);
-            let crystals = CrystallizedAttractorRecord::slice_from_bytes_at(
-                head_bytes,
-                off_crystals,
-                num_crystals,
-            )?;
-            let trails = gcso_pointer_trail_t::slice_from_bytes_mut_at(tail_bytes, 0, num_trails)?;
-            (crystals, trails)
-        };
-
-        let (idx1, idx2, aid1, aid2, eff_coh, tot_grav, is_liminal) =
-            CrystallizedAttractorRecord::route_top2_liminal_centroids_64(crystals_ref,
-                &mut trails_mut[trail_idx], pull_step_u7, liminal_gravity_ratio_thresh);
-        let updated_ptr = trails_mut[trail_idx].current_ptr;
+        let (
+            idx1,
+            idx2,
+            aid1,
+            aid2,
+            eff_coh,
+            tot_grav,
+            is_liminal,
+            _raw_w,
+            _fact_w,
+            _logic_w,
+            mut header,
+            total_len,
+            off_daes,
+            updated_ptr,
+        ) = Self::route_four_section_top2_liminal_core_in_place(
+            zimms_bytes,
+            trail_idx,
+            pull_step_u7,
+            liminal_gravity_ratio_thresh,
+        )?;
         let metric_code = branchless_select_u8((aid1 != 0) | is_liminal, DAES_METRIC_SLOT_SYNERGY_ACTIVE, 0);
         let _ = Self::update_four_section_daes_in_place(zimms_bytes, &header,
             total_len, off_daes, metric_code, updated_ptr)?;
