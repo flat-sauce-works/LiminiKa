@@ -1,4 +1,4 @@
-// name: src/core/src/dpsr.rs
+// name: src/core/src/phase_steering.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Dynamic Phase-Shifted RoPE (DPSR), RIPA soft-clamping, 8-lane SWAR QDPS, Single Unified
@@ -7,14 +7,14 @@
 //! routing, and 2-Origin Composite Manifold Gateway execution.
 //!
 //! # Architectural Role (Thin `Pod` State Composite + Blanket Closed-Loop Steering)
-//! - **[`DpsrEngine`]**: Compact 16-byte (`#[repr(C, align(16))]`) [`Pod`] state descriptor storing
+//! - **[`PhaseSteeringEngine`]**: Compact 16-byte (`#[repr(C, align(16))]`) [`Pod`] state descriptor storing
 //!   `(head_dim, num_heads, ripa_clamp_max_rad, qdps_min_step_rad)`. Delegates all 50+ low-level
 //!   constant-time AVX2/SSE2 SIMD and 8-lane SWAR operations directly to the default trait methods
 //!   of [`PhaseSteering`], [`EntropyGatedPhaseLookup`], [`DynamicLayerSkipper`], [`PspmRouter`],
 //!   [`VisualAttentionSteering`], and [`crate::traits::BranchlessKernel`] (`crate::traits::rope`).
-//! - **[`DpsrClosedLoopSteering`]**: Blanket-implemented extension trait
-//!   (`impl<T: PhaseSteering + PspmRouter + ?Sized> DpsrClosedLoopSteering for T {}`) that equips
-//!   [`DpsrEngine`], [`crate::traits::ActionHub`], [`crate::traits::HotPathObserver`], and
+//! - **[`PhaseSteeringClosedLoop`]**: Blanket-implemented extension trait
+//!   (`impl<T: PhaseSteering + PspmRouter + ?Sized> PhaseSteeringClosedLoop for T {}`) that equips
+//!   [`PhaseSteeringEngine`], [`crate::traits::ActionHub`], [`crate::traits::HotPathObserver`], and
 //!   [`crate::traits::ColdPathObserver`] with:
 //!   1. Closed-loop 8-cell SWAR Micro-Swarm resolution (`resolve_and_apply_swarm_phase_steering_safe`,
 //!      `resolve_unified_field_swarm_and_steer_safe`, `resolve_slot_bank_swarm_and_steer_safe`)
@@ -110,10 +110,10 @@ use crate::traits::telemetry::{
     NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
     TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
-/// Default attention head dimension ($d_{\mathrm{head}} = 128$) for [`DpsrEngine::default`].
+/// Default attention head dimension ($d_{\mathrm{head}} = 128$) for [`PhaseSteeringEngine::default`].
 pub const DEFAULT_DPSR_HEAD_DIM: u32 = 128;
 
-/// Default attention head count ($H = 32$) for [`DpsrEngine::default`].
+/// Default attention head count ($H = 32$) for [`PhaseSteeringEngine::default`].
 pub const DEFAULT_DPSR_NUM_HEADS: u32 = 32;
 
 /// Scale factor for Q7 quantized phase representation ($\beta_{\mathrm{Q7}} = \pi / 128$).
@@ -349,8 +349,8 @@ fn steer_gateway_signal_core_safe<
 }
 
 /// Register-resident Fine-Step candidate scanner, fallback scanner, Limina geodesic SLERP bridger,
-/// and QDPS/RIPA steerer shared by [`DpsrClosedLoopSteering::route_coarse_to_fine_and_steer_bayesian_trails_safe`]
-/// and [`DpsrClosedLoopSteering::route_top2_liminal_and_steer_bayesian_trails_safe`].
+/// and QDPS/RIPA steerer shared by [`PhaseSteeringClosedLoop::route_coarse_to_fine_and_steer_bayesian_trails_safe`]
+/// and [`PhaseSteeringClosedLoop::route_top2_liminal_and_steer_bayesian_trails_safe`].
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 fn route_macro_aligned_bayesian_trails_and_steer_core(
@@ -485,9 +485,9 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
 /// 2-Origin Composite Manifold Gateway execution.
 ///
 /// Automatically implemented for all `T: PhaseSteering + PspmRouter + ?Sized` (including
-/// [`DpsrEngine`], [`crate::traits::ActionHub`], [`crate::traits::HotPathObserver`],
+/// [`PhaseSteeringEngine`], [`crate::traits::ActionHub`], [`crate::traits::HotPathObserver`],
 /// [`crate::traits::ColdPathObserver`], and [`crate::traits::FullStackGcsoEngine`]).
-pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
+pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
     /// Executes closed-loop 8-Cell SWAR Micro-Swarm consensus on `trail` against `target_phases`
     /// via [`StigmergicSwarmOps::try_resolve_action_in_swarm_to_words`] and steers `query_tensor`
     /// (and optionally `key_tensor`) directly from the 8 returned `u64` SWAR registers via
@@ -2167,7 +2167,7 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
     }
 }
 
-impl<T: PhaseSteering + PspmRouter + ?Sized> DpsrClosedLoopSteering for T {}
+impl<T: PhaseSteering + PspmRouter + ?Sized> PhaseSteeringClosedLoop for T {}
 
 // ===================================================================
 // 2. Primary DPSR Phase-Steering & Sub-Head Routing Engine (`16B` Pod)
@@ -2176,7 +2176,7 @@ impl<T: PhaseSteering + PspmRouter + ?Sized> DpsrClosedLoopSteering for T {}
 /// Primary Dynamic Phase-Shifted RoPE (DPSR), RIPA, and QDPS execution engine (`16B` aligned, [`Pod`]).
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct DpsrEngine {
+pub struct PhaseSteeringEngine {
     /// Dimension per attention head ($d_{\mathrm{head}}$, positive even integer).
     head_dim: u32,
     /// Total number of attention heads ($H > 0$).
@@ -2187,20 +2187,20 @@ pub struct DpsrEngine {
     qdps_min_step_rad: f32,
 }
 
-// SAFETY: `DpsrEngine` is `#[repr(C, align(16))]` containing four 32-bit primitive fields totaling 16B.
-unsafe impl Pod for DpsrEngine {}
+// SAFETY: `PhaseSteeringEngine` is `#[repr(C, align(16))]` containing four 32-bit primitive fields totaling 16B.
+unsafe impl Pod for PhaseSteeringEngine {}
 
 const _: () = {
-    assert!(size_of::<DpsrEngine>() == 16);
-    assert!(align_of::<DpsrEngine>() == 16);
-    assert!(offset_of!(DpsrEngine, head_dim) == 0);
-    assert!(offset_of!(DpsrEngine, num_heads) == 4);
-    assert!(offset_of!(DpsrEngine, ripa_clamp_max_rad) == 8);
-    assert!(offset_of!(DpsrEngine, qdps_min_step_rad) == 12);
+    assert!(size_of::<PhaseSteeringEngine>() == 16);
+    assert!(align_of::<PhaseSteeringEngine>() == 16);
+    assert!(offset_of!(PhaseSteeringEngine, head_dim) == 0);
+    assert!(offset_of!(PhaseSteeringEngine, num_heads) == 4);
+    assert!(offset_of!(PhaseSteeringEngine, ripa_clamp_max_rad) == 8);
+    assert!(offset_of!(PhaseSteeringEngine, qdps_min_step_rad) == 12);
     assert!(NUM_SWARM_MICRO_CELLS * HEADS_PER_SWARM_CELL == MAX_ATTENTION_HEADS);
 };
 
-impl Default for DpsrEngine {
+impl Default for PhaseSteeringEngine {
     #[inline(always)]
     fn default() -> Self {
         Self {
@@ -2212,8 +2212,8 @@ impl Default for DpsrEngine {
     }
 }
 
-impl DpsrEngine {
-    /// Creates a new [`DpsrEngine`] instance with validated `(head_dim, num_heads)` configuration.
+impl PhaseSteeringEngine {
+    /// Creates a new [`PhaseSteeringEngine`] instance with validated `(head_dim, num_heads)` configuration.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is zero or odd, `num_heads` is zero,
@@ -2238,7 +2238,7 @@ impl DpsrEngine {
         })
     }
 
-    /// Constructs a [`DpsrEngine`] from a C-ABI [`gcso_config_t`] descriptor.
+    /// Constructs a [`PhaseSteeringEngine`] from a C-ABI [`gcso_config_t`] descriptor.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is zero or odd, `num_heads` is zero,
@@ -2324,7 +2324,7 @@ impl DpsrEngine {
     }
 
     /// Steers `query_tensor` (and optional `key_tensor`) in registers using `self.qdps_min_step_rad`
-    /// and `self.ripa_clamp_max_rad` configured on this [`DpsrEngine`].
+    /// and `self.ripa_clamp_max_rad` configured on this [`PhaseSteeringEngine`].
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if tensor dimensions or non-aliasing invariants fail.
@@ -2400,13 +2400,13 @@ impl DpsrEngine {
         Ok((pull, mean_coh, active_cnt))
     }
 
-    /// Executes [`DpsrClosedLoopSteering::select_rewire_and_steer_bayesian_pointer_trail_safe`]
-    /// using `self.qdps_min_step_rad` and `self.ripa_clamp_max_rad` configured on this [`DpsrEngine`].
+    /// Executes [`PhaseSteeringClosedLoop::select_rewire_and_steer_bayesian_pointer_trail_safe`]
+    /// using `self.qdps_min_step_rad` and `self.ripa_clamp_max_rad` configured on this [`PhaseSteeringEngine`].
     ///
     /// Returns `(selected_trail_id, bayesian_score, transition_coherence, transition_log_prob, found_coherent_transition)`.
     ///
     /// # Errors
-    /// Propagates any validation error from [`DpsrClosedLoopSteering::select_rewire_and_steer_bayesian_pointer_trail_safe`].
+    /// Propagates any validation error from [`PhaseSteeringClosedLoop::select_rewire_and_steer_bayesian_pointer_trail_safe`].
     #[inline(always)]
     pub fn select_rewire_and_steer_bayesian_with_defaults(
         &self,
@@ -2439,14 +2439,14 @@ impl DpsrEngine {
         )
     }
 
-    /// Executes [`DpsrClosedLoopSteering::steer_and_kmeans_crystallize_gateway_signal_safe`] with
+    /// Executes [`PhaseSteeringClosedLoop::steer_and_kmeans_crystallize_gateway_signal_safe`] with
     /// default DP-Means split coherence ([`DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE`] = `0.35`)
     /// and unresolved cell damping (`64` = `0.5x`).
     ///
     /// Returns `(GatewayFrame, CausalProvenanceReport, assigned_cluster_idx, assigned_anchor_id, centroid_coherence, updated_gravity_mass, spawned_new_cluster)`.
     ///
     /// # Errors
-    /// Propagates any error from [`DpsrClosedLoopSteering::steer_and_kmeans_crystallize_gateway_signal_safe`].
+    /// Propagates any error from [`PhaseSteeringClosedLoop::steer_and_kmeans_crystallize_gateway_signal_safe`].
     #[inline(always)]
     pub fn steer_and_kmeans_crystallize_with_defaults<S: ManifoldGatewaySignal + ?Sized>(
         &self,
@@ -2482,7 +2482,7 @@ impl DpsrEngine {
 // 3. Minimal Trait Delegations (Inheriting All `rope.rs` Default Implementations)
 // ===================================================================
 
-impl PhaseSteering for DpsrEngine {
+impl PhaseSteering for PhaseSteeringEngine {
     #[inline(always)]
     fn head_dim(&self) -> u32 {
         self.head_dim
@@ -2494,13 +2494,13 @@ impl PhaseSteering for DpsrEngine {
     }
 }
 
-impl EntropyGatedPhaseLookup for DpsrEngine {}
+impl EntropyGatedPhaseLookup for PhaseSteeringEngine {}
 
-impl DynamicLayerSkipper for DpsrEngine {}
+impl DynamicLayerSkipper for PhaseSteeringEngine {}
 
-impl PspmRouter for DpsrEngine {}
+impl PspmRouter for PhaseSteeringEngine {}
 
-impl VisualAttentionSteering for DpsrEngine {}
+impl VisualAttentionSteering for PhaseSteeringEngine {}
 
 #[cfg(test)]
 mod tests {
@@ -2516,12 +2516,12 @@ mod tests {
 
     #[test]
     fn test_dpsr_engine_creation_aligned_dispatch_and_pod_layout() {
-        assert!(DpsrEngine::new(128, 32).is_ok());
-        assert!(DpsrEngine::new(127, 32).is_err());
-        assert!(DpsrEngine::new(0, 32).is_err());
-        assert!(DpsrEngine::new(128, 0).is_err());
+        assert!(PhaseSteeringEngine::new(128, 32).is_ok());
+        assert!(PhaseSteeringEngine::new(127, 32).is_err());
+        assert!(PhaseSteeringEngine::new(0, 32).is_err());
+        assert!(PhaseSteeringEngine::new(128, 0).is_err());
 
-        let def = DpsrEngine::default()
+        let def = PhaseSteeringEngine::default()
             .with_ripa_clamp_max_rad(0.18)
             .with_qdps_min_step_rad(0.01);
         assert_eq!(def.head_dim(), 128);
@@ -2530,7 +2530,7 @@ mod tests {
         assert!((def.qdps_min_step_rad() - 0.01).abs() < 1e-6);
         assert_eq!(def.as_bytes().len(), 16);
 
-        let eng_small = DpsrEngine::new(8, 2).unwrap();
+        let eng_small = PhaseSteeringEngine::new(8, 2).unwrap();
         let mut q128 = AlignedBuffer128::new([
             1.0f32, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0,
         ]);
@@ -2547,7 +2547,7 @@ mod tests {
 
     #[test]
     fn test_qdps_filter_and_swar_scaling() {
-        let engine = DpsrEngine::new(128, 16).unwrap();
+        let engine = PhaseSteeringEngine::new(128, 16).unwrap();
         let mut raw_buf =
             AlignedBuffer16::new([1i8, 5, -2, 10, -128, 4, -1, 8, 6, -6, 12, -12, 0, 2, -3, 16]);
         let mut aligned = raw_buf.as_aligned_slice_mut();
@@ -2574,7 +2574,7 @@ mod tests {
 
     #[test]
     fn test_lazy_unwrap_override_and_3way_qkv_steering() {
-        let engine = DpsrEngine::new(4, 1).unwrap();
+        let engine = PhaseSteeringEngine::new(4, 1).unwrap();
         let mut q_buf = AlignedBuffer32::new([1.0f32, 0.0, 0.0, 1.0]);
         let c_buf = AlignedBuffer32::new([PI * 0.5]);
 
@@ -2609,7 +2609,7 @@ mod tests {
 
     #[test]
     fn test_slerp_norm_guard_logit_shift_and_procrustes_feedback() {
-        let engine = DpsrEngine::new(4, 2).unwrap();
+        let engine = PhaseSteeringEngine::new(4, 2).unwrap();
         let mut t_buf = AlignedBuffer32::new([2.0f32; 8]);
         engine
             .slerp_norm_guard_stable(&mut t_buf.as_aligned_slice_mut(), 1.0, 1.0)
@@ -2633,7 +2633,7 @@ mod tests {
             assert!((val - (1.0 + expected_shift)).abs() < 1e-4);
         }
 
-        let engine_1h = DpsrEngine::new(4, 1).unwrap();
+        let engine_1h = PhaseSteeringEngine::new(4, 1).unwrap();
         let mut q_fb = AlignedBuffer32::new([1.0f32, 0.0, 0.0, 1.0]);
         let tgt = AlignedBuffer32::new([0.0f32, 1.0, -1.0, 0.0]);
         let mut trail = gcso_pointer_trail_t::default();
@@ -2651,7 +2651,7 @@ mod tests {
         assert_eq!(trail.accumulated_phase_delta[0], 64);
         assert!((q_fb.data[2] - 1.0).abs() > 1e-3);
 
-        let engine_8h = DpsrEngine::new(16, 8).unwrap();
+        let engine_8h = PhaseSteeringEngine::new(16, 8).unwrap();
         let mut src_8h = AlignedBuffer32::new([0.0f32; 128]);
         for pair in src_8h.data.chunks_exact_mut(2) {
             pair[0] = 1.0;
@@ -2681,7 +2681,7 @@ mod tests {
 
     #[test]
     fn test_seam_free_circular_unwrap_swarm_quorum_unified_field_limina_and_pspm() {
-        let engine = DpsrEngine::new(4, 16).unwrap();
+        let engine = PhaseSteeringEngine::new(4, 16).unwrap();
         let mut ctx_accum = AlignedBuffer16::new([120i8; 16]);
         let step_deltas = AlignedBuffer16::new([24i8; 16]);
 
@@ -2964,7 +2964,7 @@ mod tests {
 
     #[test]
     fn test_blanket_bayesian_pointer_trail_selection_unified_pspm_and_gateway_crystallization() {
-        let engine = DpsrEngine::new(4, 16).unwrap();
+        let engine = PhaseSteeringEngine::new(4, 16).unwrap();
         let ptr = gcso_tagged_ptr_t::pack_action(
             0x4000,
             ATTRACTOR_SLOT_PERSONA,

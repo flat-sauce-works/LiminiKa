@@ -46,7 +46,7 @@
 //!    Packs a 16-slot inline trail table (`[gcso_pointer_trail_t; 16]` = 2,048 bytes), an 8-lane
 //!    working phase cache window (`AlignedBuffer64<gcso_q7_t, 512>`), a 64-byte [`gcso_daes_slot_t`]
 //!    scratchpad, a 64-byte [`ContrastivePhaseBloomFilter`], [`StigmergicThresholds`], and a
-//!    [`DpsrEngine`] into an exact **2,816-byte (`22 x 128B`), 128-byte cacheline-aligned [`Pod`]
+//!    [`PhaseSteeringEngine`] into an exact **2,816-byte (`22 x 128B`), 128-byte cacheline-aligned [`Pod`]
 //!    structure** ($C_{\mathrm{alloc}} = 0$).
 //!
 //! 3. **Blanket Trait Closure**:
@@ -55,7 +55,7 @@
 //!    [`crate::traits::SystemConstraintSignal`], and [`ManifoldGatewaySignal`], it automatically
 //!    receives the blanket implementations of [`ActionHub`], [`HotPathExecutionEngine`],
 //!    [`HotPathObserver`], [`FractalCascadeCoordinator`], [`ActionHubGatewayExt`],
-//!    [`GatewayPhaseSteeringExt`], and [`crate::dpsr::DpsrClosedLoopSteering`].
+//!    [`GatewayPhaseSteeringExt`], and [`crate::phase_steering::PhaseSteeringClosedLoop`].
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -87,7 +87,7 @@ use crate::abi::{
     gcso_config_t, gcso_daes_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
     gcso_pspm_config_t, gcso_q7_t, gcso_tagged_ptr_t, GCSO_ERROR_INVALID_ARGUMENT,
 };
-use crate::dpsr::{DpsrEngine, DEFAULT_DPSR_HEAD_DIM, DEFAULT_DPSR_NUM_HEADS};
+use crate::phase_steering::{PhaseSteeringEngine, DEFAULT_DPSR_HEAD_DIM, DEFAULT_DPSR_NUM_HEADS};
 use crate::traits::aligned::{
     AlignedBuffer64, AlignedSlice16, AlignedSliceMut16, AlignedSliceMut32,
 };
@@ -682,7 +682,7 @@ impl StigmergicThresholds {
     #[inline]
     pub fn orchestrate_stateless_action_step(
         &self,
-        dpsr: &DpsrEngine,
+        dpsr: &PhaseSteeringEngine,
         input_ptr: gcso_tagged_ptr_t,
         entropy_h_tilde: f32,
         dominant_slot: u8,
@@ -991,7 +991,7 @@ pub struct ActionHubEngine {
     /// Active gravitational weights for the 8 Attractor Working Lanes (`0..=7`, 32 bytes).
     pub slot_weights: [f32; MAX_ATTRACTOR_DOMAINS],
     /// Embedded 16-byte DPSR/RIPA kernel configuration (`head_dim`, `num_heads`, `ripa_clamp_max_rad`, `qdps_min_step_rad`).
-    pub dpsr: DpsrEngine,
+    pub dpsr: PhaseSteeringEngine,
     /// 64-bit ($8 \times 8$) cross-lane coupling bitmatrix.
     pub coupling_matrix_8x8: u64,
     /// Total pointer transitions executed by this Action Hub.
@@ -1037,7 +1037,7 @@ impl ActionHubEngine {
     #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
-        let dpsr = match DpsrEngine::new(DEFAULT_DPSR_HEAD_DIM, DEFAULT_DPSR_NUM_HEADS) {
+        let dpsr = match PhaseSteeringEngine::new(DEFAULT_DPSR_HEAD_DIM, DEFAULT_DPSR_NUM_HEADS) {
             Ok(d) => d,
             Err(_) => unreachable!(),
         };
@@ -1119,7 +1119,7 @@ impl ActionHubEngine {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
         thresholds.validate()?;
-        let dpsr = DpsrEngine::new(head_dim, num_heads)?;
+        let dpsr = PhaseSteeringEngine::new(head_dim, num_heads)?;
         let mut hub = Self::new();
         hub.dpsr = dpsr;
         hub.capacity = capacity;
@@ -1136,7 +1136,7 @@ impl ActionHubEngine {
         if config.action_hub_capacity == 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        let dpsr = DpsrEngine::from_config(config)?;
+        let dpsr = PhaseSteeringEngine::from_config(config)?;
         let mut hub = Self::new();
         hub.dpsr = dpsr;
         hub.capacity = config.action_hub_capacity;
@@ -2373,7 +2373,7 @@ const _: () = {
             + FractalCascadeCoordinator
             + ActionHubGatewayExt
             + GatewayPhaseSteeringExt
-            + crate::dpsr::DpsrClosedLoopSteering
+            + crate::phase_steering::PhaseSteeringClosedLoop
             + CausalProvenanceSignal
             + crate::traits::SystemConstraintSignal
             + ManifoldGatewaySignal

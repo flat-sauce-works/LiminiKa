@@ -1,18 +1,18 @@
-// name: src/core/src/edbc.rs
+// name: src/core/src/entropy_control.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Entropy-Driven Decoding Branch Controller (EDBC) core engine implementation.
 //!
 //! # Architectural Role (Thin `Pod` State Composite + Blanket Closed-Loop & Gateway Coordinator)
-//! - **[`EdbcEngine`]**: Compact 128-byte (2-cacheline, `#[repr(C, align(32))]`) [`Pod`] stateful
+//! - **[`EntropyController`]**: Compact 128-byte (2-cacheline, `#[repr(C, align(32))]`) [`Pod`] stateful
 //!   controller managing Moving Z-Score Normalized Attention Entropy $\tilde{H}$, the 8-slot
 //!   Sliding-Window Entropy Rate Integrator $\Phi_M(t)$ ($M = 5$), anti-chattering dwell-step
 //!   inertia, and Langevin pitchfork branch mode transitions (`Mode 0/1/2`). Directly implements
 //!   **Origin 1 (`CausalProvenanceSignal` + `SystemConstraintSignal`)** and [`ManifoldGatewaySignal`]
-//!   so `&EdbcEngine` can be used both standalone and inside `(S, F, P)` / `(S, F, P, G)` tuples.
-//! - **[`EdbcClosedLoopCoordinator`]**: Blanket-implemented extension trait
-//!   (`impl<T: EdbcBranchController + SheafCohomologyEvaluator + HierarchicalTreeTable + ?Sized> EdbcClosedLoopCoordinator for T {}`)
-//!   that equips [`EdbcEngine`], [`crate::traits::ColdPathObserver`], and
+//!   so `&EntropyController` can be used both standalone and inside `(S, F, P)` / `(S, F, P, G)` tuples.
+//! - **[`EntropyClosedLoopCoordinator`]**: Blanket-implemented extension trait
+//!   (`impl<T: EdbcBranchController + SheafCohomologyEvaluator + HierarchicalTreeTable + ?Sized> EntropyClosedLoopCoordinator for T {}`)
+//!   that equips [`EntropyController`], [`crate::traits::ColdPathObserver`], and
 //!   [`crate::traits::FullStackGcsoEngine`] with:
 //!   1. Single-pass AVX2 $\mathcal{C}_{\mathrm{void}}$ + $\ell_1 / \ell_2$ coherence-ratio evaluation
 //!      (`eval_cvoid_with_coherence_ratio`) and strictly branchless `0-ln` Taylor-Estrin
@@ -1052,12 +1052,12 @@ fn inject_metastable_tunneling_perturbation_in_words_64(
 
 /// Unified EDBC stateful evaluation + Pitchfork metastable tunneling + single-pass register-resident
 /// Bayesian candidate-trail selection & rewiring + pointer mode evolution tail shared across
-/// [`EdbcClosedLoopCoordinator::step_with_bayesian_pointer_selection_and_tunneling`],
-/// [`EdbcClosedLoopCoordinator::route_coarse_to_fine_and_step_bayesian_tunneling`], and
-/// [`EdbcClosedLoopCoordinator::route_top2_liminal_and_step_bayesian_tunneling`].
+/// [`EntropyClosedLoopCoordinator::step_with_bayesian_pointer_selection_and_tunneling`],
+/// [`EntropyClosedLoopCoordinator::route_coarse_to_fine_and_step_bayesian_tunneling`], and
+/// [`EntropyClosedLoopCoordinator::route_top2_liminal_and_step_bayesian_tunneling`].
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
-fn step_edbc_tunneling_and_select_bayesian_core<E: EdbcClosedLoopCoordinator + ?Sized>(
+fn step_edbc_tunneling_and_select_bayesian_core<E: EntropyClosedLoopCoordinator + ?Sized>(
     engine: &mut E,
     src_trail: &mut gcso_pointer_trail_t,
     preloaded_src_w_opt: Option<[u64; NUM_SWARM_MICRO_CELLS]>,
@@ -1232,9 +1232,9 @@ fn step_edbc_tunneling_and_select_bayesian_core<E: EdbcClosedLoopCoordinator + ?
     ))
 }
 
-/// Register-resident core helper for [`EdbcClosedLoopCoordinator::step_via_gateway_frame`],
-/// [`EdbcClosedLoopCoordinator::step_via_gateway_signal`], and
-/// [`EdbcClosedLoopCoordinator::step_via_gateway_kmeans_64`] that operates directly on
+/// Register-resident core helper for [`EntropyClosedLoopCoordinator::step_via_gateway_frame`],
+/// [`EntropyClosedLoopCoordinator::step_via_gateway_signal`], and
+/// [`EntropyClosedLoopCoordinator::step_via_gateway_kmeans_64`] that operates directly on
 /// `gw_w: &[u64; 8]` without reloading `frame.phase_deltas` from the stack.
 #[inline(always)]
 fn step_via_gateway_frame_with_words_core<
@@ -1545,8 +1545,8 @@ fn step_via_gateway_frame_with_words_core<
 /// [`CrystallizedAttractorRecord`] persistence.
 ///
 /// Automatically implemented for all `T: EdbcBranchController + SheafCohomologyEvaluator + HierarchicalTreeTable + ?Sized`
-/// (including [`EdbcEngine`], [`crate::traits::ColdPathObserver`], and [`crate::traits::FullStackGcsoEngine`]).
-pub trait EdbcClosedLoopCoordinator:
+/// (including [`EntropyController`], [`crate::traits::ColdPathObserver`], and [`crate::traits::FullStackGcsoEngine`]).
+pub trait EntropyClosedLoopCoordinator:
     EdbcBranchController + SheafCohomologyEvaluator + HierarchicalTreeTable
 {
     /// Computes the mean-square $\mathcal{C}_{\mathrm{void}}$ latent energy alongside the
@@ -2589,7 +2589,7 @@ pub trait EdbcClosedLoopCoordinator:
     }
 }
 
-impl<T> EdbcClosedLoopCoordinator for T where
+impl<T> EntropyClosedLoopCoordinator for T where
     T: EdbcBranchController + SheafCohomologyEvaluator + HierarchicalTreeTable + ?Sized
 {
 }
@@ -2601,7 +2601,7 @@ impl<T> EdbcClosedLoopCoordinator for T where
 /// Entropy-Driven Decoding Branch Controller (EDBC) stateful engine (128 bytes = 2 cachelines, 32B aligned).
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct EdbcEngine {
+pub struct EntropyController {
     /// Active C-ABI EDBC state descriptor (64 bytes, 32-byte aligned).
     pub state: gcso_edbc_state_t,
     /// Hysteresis deadband width ($\delta_{\mathrm{hyst}}$) preventing mode chattering near thresholds.
@@ -2626,26 +2626,26 @@ pub struct EdbcEngine {
     reserved_pad: [u8; 5],
 }
 
-// SAFETY: `EdbcEngine` is `#[repr(C, align(32))]` of size 128 bytes where every field is `Pod`.
-unsafe impl Pod for EdbcEngine {}
+// SAFETY: `EntropyController` is `#[repr(C, align(32))]` of size 128 bytes where every field is `Pod`.
+unsafe impl Pod for EntropyController {}
 
 const _: () = {
-    assert!(size_of::<EdbcEngine>() == 128);
-    assert!(align_of::<EdbcEngine>() == 32);
-    assert!(offset_of!(EdbcEngine, state) == 0);
-    assert!(offset_of!(EdbcEngine, hysteresis_band) == 64);
-    assert!(offset_of!(EdbcEngine, tau_flux) == 68);
-    assert!(offset_of!(EdbcEngine, window_buf) == 72);
-    assert!(offset_of!(EdbcEngine, step_count) == 104);
-    assert!(offset_of!(EdbcEngine, mode_dwell_steps) == 112);
-    assert!(offset_of!(EdbcEngine, min_mode_dwell_steps) == 116);
-    assert!(offset_of!(EdbcEngine, window_idx) == 120);
-    assert!(offset_of!(EdbcEngine, window_len) == 121);
-    assert!(offset_of!(EdbcEngine, is_active) == 122);
+    assert!(size_of::<EntropyController>() == 128);
+    assert!(align_of::<EntropyController>() == 32);
+    assert!(offset_of!(EntropyController, state) == 0);
+    assert!(offset_of!(EntropyController, hysteresis_band) == 64);
+    assert!(offset_of!(EntropyController, tau_flux) == 68);
+    assert!(offset_of!(EntropyController, window_buf) == 72);
+    assert!(offset_of!(EntropyController, step_count) == 104);
+    assert!(offset_of!(EntropyController, mode_dwell_steps) == 112);
+    assert!(offset_of!(EntropyController, min_mode_dwell_steps) == 116);
+    assert!(offset_of!(EntropyController, window_idx) == 120);
+    assert!(offset_of!(EntropyController, window_len) == 121);
+    assert!(offset_of!(EntropyController, is_active) == 122);
 };
 
-impl EdbcEngine {
-    /// Constructs a new [`EdbcEngine`] with sanitized initial state configuration in branchless mode.
+impl EntropyController {
+    /// Constructs a new [`EntropyController`] with sanitized initial state configuration in branchless mode.
     #[inline(always)]
     pub const fn new(mut initial_state: gcso_edbc_state_t) -> Self {
         let valid_bif = branchless_is_finite_f32(initial_state.bifurcation_threshold)
@@ -3169,7 +3169,7 @@ impl EdbcEngine {
     }
 
     /// Fast register-pipelined Top-2 surrogate + inter-layer cosine distance Moving Z-Score step
-    /// on [`EdbcEngine`] using `self.state.singularity_eps` and bypassing redundant `NaN`/`Inf`
+    /// on [`EntropyController`] using `self.state.singularity_eps` and bypassing redundant `NaN`/`Inf`
     /// checks on the already-sanitized `h_tilde` (`0` branches, `0 fdiv`, `0 ln`).
     ///
     /// # Errors
@@ -3410,15 +3410,15 @@ impl EdbcEngine {
         Ok((st, evolved_ptr, mean_obs, dual_pairing, repulsion_triggered))
     }
 
-    /// Convenience entrypoint on [`EdbcEngine`] that synthesizes a [`GatewayFrame`] from any
+    /// Convenience entrypoint on [`EntropyController`] that synthesizes a [`GatewayFrame`] from any
     /// 2-Origin [`ManifoldGatewaySignal`] (`(F, P)`, `(S, F, P)`, `(S, F, P, G)`, slice ensembles,
-    /// or [`CrystallizedAttractorRecord`]), executes [`EdbcClosedLoopCoordinator::step_via_gateway_frame`],
+    /// or [`CrystallizedAttractorRecord`]), executes [`EntropyClosedLoopCoordinator::step_via_gateway_frame`],
     /// and optionally updates `crystal_record_opt` for `.gcso` persistence.
     ///
     /// Returns `(edbc_state, evolved_ptr, causal_report, effective_inv_temp, crystallized_gravity_mass)`.
     ///
     /// # Errors
-    /// Propagates any validation or singularity error from [`EdbcClosedLoopCoordinator::step_via_gateway_frame`].
+    /// Propagates any validation or singularity error from [`EntropyClosedLoopCoordinator::step_via_gateway_frame`].
     #[inline(always)]
     pub fn step_gateway_signal_with_defaults<G: ManifoldGatewaySignal + ?Sized>(
         &mut self,
@@ -3449,14 +3449,14 @@ impl EdbcEngine {
         )
     }
 
-    /// Convenience entrypoint on [`EdbcEngine`] executing
-    /// [`EdbcClosedLoopCoordinator::step_via_gateway_kmeans_64`] with default Langevin pitchfork
+    /// Convenience entrypoint on [`EntropyController`] executing
+    /// [`EntropyClosedLoopCoordinator::step_via_gateway_kmeans_64`] with default Langevin pitchfork
     /// parameters and [`DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE`] (`0.35`).
     ///
     /// Returns `(edbc_state, evolved_ptr, causal_report, effective_inv_temp, assigned_cluster_idx, assigned_anchor_id, updated_gravity_mass, spawned_new_cluster)`.
     ///
     /// # Errors
-    /// Propagates any error from [`EdbcClosedLoopCoordinator::step_via_gateway_kmeans_64`].
+    /// Propagates any error from [`EntropyClosedLoopCoordinator::step_via_gateway_kmeans_64`].
     #[inline(always)]
     pub fn step_gateway_kmeans_with_defaults<G: ManifoldGatewaySignal + ?Sized>(
         &mut self,
@@ -3491,14 +3491,14 @@ impl EdbcEngine {
         )
     }
 
-    /// Convenience entrypoint on [`EdbcEngine`] that folds a slice of `.gcso`
+    /// Convenience entrypoint on [`EntropyController`] that folds a slice of `.gcso`
     /// [`CrystallizedAttractorRecord`]s on $SO(2)^{64}$ weighted by Phase-Proximity Gravity and
     /// steps EDBC + pointer mode evolution in a single call.
     ///
     /// Returns `(edbc_state, evolved_ptr, total_gravity_pull, mean_coherence, dominant_anchor_id)`.
     ///
     /// # Errors
-    /// Propagates any error from [`EdbcClosedLoopCoordinator::step_with_crystallized_ensemble_and_pointer`].
+    /// Propagates any error from [`EntropyClosedLoopCoordinator::step_with_crystallized_ensemble_and_pointer`].
     #[inline(always)]
     pub fn step_crystallized_ensemble_with_defaults(
         &mut self,
@@ -3517,7 +3517,7 @@ impl EdbcEngine {
     }
 }
 
-impl Default for EdbcEngine {
+impl Default for EntropyController {
     #[inline(always)]
     fn default() -> Self {
         Self::new(gcso_edbc_state_t::default())
@@ -3528,7 +3528,7 @@ impl Default for EdbcEngine {
 // 5. Minimal Trait Delegations & Origin-1 `SystemConstraintSignal` Implementation
 // ===================================================================
 
-impl EdbcEngine {
+impl EntropyController {
     /// Returns the 8-bit active SWAR Micro-Swarm cell mask (`0x0F` in low-entropy inertial mode, `0xFF` otherwise).
     #[inline(always)]
     pub const fn active_swarm_cell_mask(&self) -> u8 {
@@ -3548,7 +3548,7 @@ impl EdbcEngine {
     }
 }
 
-impl CausalProvenanceSignal for EdbcEngine {
+impl CausalProvenanceSignal for EntropyController {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
         let is_rep = self.state.active_branch_mode == EDBC_MODE_PHASE_CONJUGATE_REPULSION;
@@ -3577,7 +3577,7 @@ impl CausalProvenanceSignal for EdbcEngine {
     }
 }
 
-impl SystemConstraintSignal for EdbcEngine {
+impl SystemConstraintSignal for EntropyController {
     #[inline(always)]
     fn system_vram_pressure(&self) -> f32 {
         branchless_clamp_f32(
@@ -3607,7 +3607,7 @@ impl SystemConstraintSignal for EdbcEngine {
     }
 }
 
-impl ManifoldGatewaySignal for EdbcEngine {
+impl ManifoldGatewaySignal for EntropyController {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
         synthesize_multi_origin_gateway_frame_with_words::<
@@ -3629,7 +3629,7 @@ impl ManifoldGatewaySignal for EdbcEngine {
     }
 }
 
-impl EntropyEvaluator for EdbcEngine {
+impl EntropyEvaluator for EntropyController {
     /// Evaluates token Z-score activation entropy and updates dynamic pitchfork branch mode
     /// in a single register-pipelined pass with a 3-`cmov` state machine and zero Store-to-Load stalls.
     ///
@@ -3710,7 +3710,7 @@ impl EntropyEvaluator for EdbcEngine {
     }
 }
 
-impl EdbcBranchController for EdbcEngine {
+impl EdbcBranchController for EntropyController {
     #[inline(always)]
     fn active_branch_mode(&self) -> u32 {
         self.state.active_branch_mode
@@ -3755,9 +3755,9 @@ impl EdbcBranchController for EdbcEngine {
     }
 }
 
-impl SheafCohomologyEvaluator for EdbcEngine {}
+impl SheafCohomologyEvaluator for EntropyController {}
 
-impl HierarchicalTreeTable for EdbcEngine {}
+impl HierarchicalTreeTable for EntropyController {}
 
 #[cfg(test)]
 mod tests {
@@ -3798,7 +3798,7 @@ mod tests {
 
     #[test]
     fn test_edbc_engine_init_setters_and_reset() {
-        let mut engine = EdbcEngine::default();
+        let mut engine = EntropyController::default();
         assert_eq!(engine.state().bifurcation_threshold, 1.5);
         assert_eq!(engine.state().singularity_eps, 1e-12);
         assert_eq!(engine.state().sample_temperature, 1.0);
@@ -3821,7 +3821,7 @@ mod tests {
 
     #[test]
     fn test_eval_stateful_modes_spike_ceiling_and_dwell_anti_chattering() {
-        let mut engine = EdbcEngine::default().with_min_mode_dwell_steps(3);
+        let mut engine = EntropyController::default().with_min_mode_dwell_steps(3);
         engine.set_bifurcation_threshold(1.0);
         engine.set_hysteresis_band(0.05);
         engine.set_tau_flux(0.5);
@@ -3877,7 +3877,7 @@ mod tests {
 
     #[test]
     fn test_cvoid_barriers_pointer_coupled_cohomology_limina_and_unified_field() {
-        let mut engine = EdbcEngine::default();
+        let mut engine = EntropyController::default();
         let mut arr = [2.0f32; 35];
         arr[32..].copy_from_slice(&[3.0f32; 3]);
         let buf = AlignedBuffer32::new(arr);
@@ -4105,7 +4105,7 @@ mod tests {
 
     #[test]
     fn test_blanket_bayesian_pointer_selection_temperature_and_dyadic_tree() {
-        let mut engine = EdbcEngine::default();
+        let mut engine = EntropyController::default();
         engine.state.moving_z_entropy = 1.6;
         let ptr = gcso_tagged_ptr_t::pack_action(
             0x5000,
@@ -4227,7 +4227,7 @@ mod tests {
 
     #[test]
     fn test_edbc_origin1_system_constraint_gateway_kmeans_and_gcso_crystallization() {
-        let mut engine = EdbcEngine::default();
+        let mut engine = EntropyController::default();
         assert_eq!(engine.active_swarm_cell_mask(), 0x0F);
         assert!(engine.requests_inertial_layer_skip());
         let sys_only_frame = engine.synthesize_gateway_frame();

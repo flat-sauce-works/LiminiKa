@@ -46,7 +46,7 @@
 //!     [`SubjectivePersonaSignal`], [`ContradictionGuardSignal`]\]), Single Composite Gateway
 //!     ([`ManifoldGatewaySignal`], [`GatewayFrame`], [`GatewayPhaseSteeringExt`],
 //!     [`ActionHubGatewayExt`]), and re-exports of [`CrystallizedAttractorRecord`] (`crate::crystal`)
-//!     and [`GcsoFourSectionView`] (`crate::zimms`).
+//!     and [`GcsoFourSectionView`] (`crate::storage`).
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]

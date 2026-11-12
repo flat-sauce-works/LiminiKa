@@ -82,14 +82,14 @@ pub mod action_hub;
 /// Dynamic Attractor Field Engine, Unified Phase Manifold, and Accumulator Pressure Dynamics.
 pub mod attractor;
 
-/// Dynamic Phase-Shifted RoPE (DPSR) and RIPA rotation routines for Hot Path execution.
-pub mod dpsr;
+/// Hot-Path RoPE Phase Steering, RIPA soft-clamping, and sub-head routing routines.
+pub mod phase_steering;
 
-/// Dynamic Entropy-Driven Decoding Branch Controller (EDBC) implementation.
-pub mod edbc;
+/// Cold-Path Entropy Evaluation, Branch Control, and Langevin Pitchfork stability routines.
+pub mod entropy_control;
 
-/// Sparse Residual Adapter Layer (SRL) logic and dynamic Rank-1 adapters.
-pub mod srl;
+/// Dynamic Rank-1 Sparse Residual Adapter (`u * v^T`) and persona patching routines.
+pub mod residual_adapter;
 
 /// Cellular swarm coordination, Sidecar Pointer Table (SPT), and stigmergic routines.
 pub mod swarm;
@@ -97,8 +97,8 @@ pub mod swarm;
 /// Core system contracts, `1 + 8` trait hierarchy, branchless primitives, and alignment guards.
 pub mod traits;
 
-/// Unified `.gcso` container storage and zero-copy memory-mapped persistence (ZIMMS).
-pub mod zimms;
+/// Unified `.gcso` container storage and zero-copy memory-mapped persistence.
+pub mod storage;
 
 /// `.gcso` Crystallized Attractor Record (`CrystallizedAttractorRecord`) and Online Toroidal $k$-Means / DP-Means.
 pub mod crystal;
@@ -135,9 +135,10 @@ pub use crate::attractor::{
     DOMAIN_SYSTEM_BASELINE, DOMAIN_USER_INTERACTION, MAX_ANCHORS_PER_FIELD, MAX_ATTRACTOR_DOMAINS,
     MAX_EMBEDDING_DIM,
 };
-pub use crate::dpsr::{DpsrClosedLoopSteering, DpsrEngine};
-pub use crate::edbc::{EdbcClosedLoopCoordinator, EdbcEngine};
-pub use crate::srl::SrlEngine;
+pub use crate::entropy_control::{EntropyClosedLoopCoordinator, EntropyController};
+pub use crate::phase_steering::{PhaseSteeringClosedLoop, PhaseSteeringEngine};
+pub use crate::residual_adapter::ResidualAdapterEngine;
+pub use crate::storage::MappedStorageEngine;
 pub use crate::swarm::SwarmEngine;
 pub use crate::traits::{
     resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim, ActionHub, ActionHubGatewayExt,
@@ -182,7 +183,6 @@ pub use crate::traits::{
     TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
     TRAIL_FLAG_SWARM_ESCALATED, TRAIL_FLAG_SWARM_RESOLVED, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
-pub use crate::zimms::ZimmsEngine;
 
 pub use crate::crystal::CrystallizedAttractorRecord as CrystalRecord;
 pub use crate::runtime::{
@@ -218,12 +218,12 @@ pub mod prelude {
         DOMAIN_SYSTEM_BASELINE, DOMAIN_USER_INTERACTION, MAX_ANCHORS_PER_FIELD,
         MAX_ATTRACTOR_DOMAINS, MAX_EMBEDDING_DIM,
     };
-    pub use crate::dpsr::{DpsrClosedLoopSteering, DpsrEngine};
-    pub use crate::edbc::{EdbcClosedLoopCoordinator, EdbcEngine};
-    pub use crate::srl::SrlEngine;
+    pub use crate::entropy_control::{EntropyClosedLoopCoordinator, EntropyController};
+    pub use crate::phase_steering::{PhaseSteeringClosedLoop, PhaseSteeringEngine};
+    pub use crate::residual_adapter::ResidualAdapterEngine;
+    pub use crate::storage::MappedStorageEngine;
     pub use crate::swarm::SwarmEngine;
     pub use crate::traits::prelude::*;
-    pub use crate::zimms::ZimmsEngine;
     pub use crate::{Config, Result, RuntimeContext};
 }
 

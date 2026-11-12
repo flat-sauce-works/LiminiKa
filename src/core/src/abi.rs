@@ -65,8 +65,8 @@ use core::ptr;
 use core::slice;
 
 use crate::action_hub::{ActionHubEngine, ActionOrchestrationReport, StigmergicThresholds};
-use crate::dpsr::DpsrEngine;
-use crate::edbc::{eval_barrier_pitchfork, EdbcEngine};
+use crate::entropy_control::{eval_barrier_pitchfork, EntropyController};
+use crate::phase_steering::PhaseSteeringEngine;
 use crate::traits::aligned::{
     is_ptr_aligned_to, AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32,
     DisjointMutPair, DisjointRefMut,
@@ -1810,12 +1810,12 @@ unsafe fn slice_of_phase64_from_raw<'a>(
     Ok(unsafe { slice::from_raw_parts(ptr.cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>(), num_items) })
 }
 
-/// Validates a `DpsrEngine` configuration from `(head_dim, num_heads)` and returns `(engine, total_elements)`.
+/// Validates a `PhaseSteeringEngine` configuration from `(head_dim, num_heads)` and returns `(engine, total_elements)`.
 #[inline(always)]
-fn init_dpsr_engine(head_dim: usize, num_heads: usize) -> GcsoResult<(DpsrEngine, usize)> {
+fn init_dpsr_engine(head_dim: usize, num_heads: usize) -> GcsoResult<(PhaseSteeringEngine, usize)> {
     let hd_u32 = u32::try_from(head_dim).map_err(|_| GCSO_ERROR_INVALID_ARGUMENT)?;
     let nh_u32 = u32::try_from(num_heads).map_err(|_| GCSO_ERROR_INVALID_ARGUMENT)?;
-    let engine = DpsrEngine::new(hd_u32, nh_u32)?;
+    let engine = PhaseSteeringEngine::new(hd_u32, nh_u32)?;
     let total_len = head_dim
         .checked_mul(num_heads)
         .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
@@ -1883,7 +1883,7 @@ unsafe fn bind_qk_32<'a>(
     head_dim: usize,
     num_heads: usize,
 ) -> GcsoResult<(
-    DpsrEngine,
+    PhaseSteeringEngine,
     AlignedSliceMut32<'a, f32>,
     Option<AlignedSliceMut32<'a, f32>>,
 )> {
@@ -1916,7 +1916,7 @@ unsafe fn bind_qk_and_logits_32<'a>(
     logits_inout: *mut f32,
     vocab_size: usize,
 ) -> GcsoResult<(
-    DpsrEngine,
+    PhaseSteeringEngine,
     AlignedSliceMut32<'a, f32>,
     Option<AlignedSliceMut32<'a, f32>>,
     Option<AlignedSliceMut32<'a, f32>>,
@@ -4581,7 +4581,7 @@ pub unsafe extern "C" fn gcso_dpsr_kernel_create(
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
         let mut out_handle = unsafe { FfiHandleMut::from_raw(kernel_out)? };
-        let engine = DpsrEngine::new(head_dim, num_heads)?;
+        let engine = PhaseSteeringEngine::new(head_dim, num_heads)?;
 
         *out_handle = Box::into_raw(Box::new(engine)).cast::<GcsoDpsrKernelOpaque>();
         Ok(GCSO_SUCCESS)
@@ -5850,7 +5850,7 @@ pub unsafe extern "C" fn gcso_dpsr_slerp_norm_guard_stable(
 ) -> GcsoStatus {
     ffi_boundary!({
         validate_ptr_aligned(tensor, 32)?;
-        let engine = DpsrEngine::new(128, 1)?;
+        let engine = PhaseSteeringEngine::new(128, 1)?;
         // SAFETY: Validated for non-nullness, 32B alignment, and bounds.
         let mut t_aligned = unsafe { AlignedSliceMut32::from_raw_parts_mut(tensor, dim)? };
 
@@ -5904,7 +5904,7 @@ pub unsafe extern "C" fn gcso_dpsr_compute_procrustes_phase_delta(
         validate_ptr_aligned(target, 32)?;
         validate_ptr(phase_out)?;
         let (head_dim, num_heads) = resolve_flat_tensor_heads(dim)?;
-        let engine = DpsrEngine::new(head_dim, num_heads)?;
+        let engine = PhaseSteeringEngine::new(head_dim, num_heads)?;
 
         // SAFETY: Validated for non-nullness, alignment, and bounds.
         let (src_aligned, tgt_aligned) = unsafe {
@@ -5937,7 +5937,7 @@ pub unsafe extern "C" fn gcso_dpsr_kernel_destroy(kernel: GcsoDpsrKernelHandle) 
     ffi_boundary!({
         // SAFETY: `kernel` was allocated via `Box::into_raw` in `gcso_dpsr_kernel_create`.
         unsafe {
-            let _ = Box::from_raw(kernel.cast::<DpsrEngine>());
+            let _ = Box::from_raw(kernel.cast::<PhaseSteeringEngine>());
         }
         Ok(GCSO_SUCCESS)
     })
@@ -6810,7 +6810,7 @@ pub unsafe extern "C" fn gcso_edbc_controller_create(
             )
         };
 
-        let engine = EdbcEngine::new(*init_st);
+        let engine = EntropyController::new(*init_st);
         *out_handle = Box::into_raw(Box::new(engine)).cast::<GcsoEdbcControllerOpaque>();
         Ok(GCSO_SUCCESS)
     })
@@ -6831,7 +6831,7 @@ pub unsafe extern "C" fn gcso_edbc_eval_stateful(
         // SAFETY: Validated for non-nullness and alignment.
         let (mut engine, mut out_st) = unsafe {
             (
-                FfiHandleMut::from_raw(controller.cast::<EdbcEngine>())?,
+                FfiHandleMut::from_raw(controller.cast::<EntropyController>())?,
                 FfiHandleMut::from_raw(state_out)?,
             )
         };
@@ -6862,7 +6862,7 @@ pub unsafe extern "C" fn gcso_cvoid_eval_dyadic128(
             )
         };
 
-        EdbcEngine::default().eval_cvoid_dyadic128(&key_aligned, &mut out_score)?;
+        EntropyController::default().eval_cvoid_dyadic128(&key_aligned, &mut out_score)?;
         Ok(GCSO_SUCCESS)
     })
 }
@@ -6881,7 +6881,7 @@ pub unsafe extern "C" fn gcso_cvoid_eval_barrier(
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
         let mut out_val = unsafe { FfiHandleMut::from_raw(barrier_out)? };
-        *out_val = EdbcEngine::default().eval_barrier(void_score, tau_eff)?;
+        *out_val = EntropyController::default().eval_barrier(void_score, tau_eff)?;
         Ok(GCSO_SUCCESS)
     })
 }
@@ -6950,7 +6950,7 @@ pub unsafe extern "C" fn gcso_edbc_controller_destroy(
     ffi_boundary!({
         // SAFETY: `controller` was allocated via `Box::into_raw` in `gcso_edbc_controller_create`.
         unsafe {
-            let _ = Box::from_raw(controller.cast::<EdbcEngine>());
+            let _ = Box::from_raw(controller.cast::<EntropyController>());
         }
         Ok(GCSO_SUCCESS)
     })

@@ -41,8 +41,8 @@ use crate::action_hub::{
     ActionHubEngine, ActionOrchestrationReport, StigmergicThresholds, ACTION_HUB_INLINE_TRAILS,
 };
 use crate::attractor::{MultiAttractorSpace, MAX_ANCHORS_PER_FIELD, MAX_ATTRACTOR_DOMAINS};
-use crate::dpsr::{DpsrClosedLoopSteering, DpsrEngine};
-use crate::edbc::{EdbcClosedLoopCoordinator, EdbcEngine};
+use crate::entropy_control::{EntropyClosedLoopCoordinator, EntropyController};
+use crate::phase_steering::{PhaseSteeringClosedLoop, PhaseSteeringEngine};
 use crate::traits::{
     ActionHub, ActionHubGatewayExt, AlignedBuffer64, AlignedSlice16, AlignedSlice32,
     AlignedSliceMut16, AlignedSliceMut32, AttractorField, AttractorSlotSynergyCoordinator,
@@ -394,8 +394,8 @@ impl Config {
 pub struct RuntimeContext {
     config: Config,
     action_hub: ActionHubEngine,
-    dpsr: DpsrEngine,
-    edbc: EdbcEngine,
+    dpsr: PhaseSteeringEngine,
+    edbc: EntropyController,
     attractor_space: MultiAttractorSpace,
 }
 
@@ -408,7 +408,7 @@ impl RuntimeContext {
     #[inline]
     pub fn new(config: Config) -> Result<Self> {
         config.validate()?;
-        let dpsr = DpsrEngine::new(config.raw.head_dim, config.raw.num_heads)?;
+        let dpsr = PhaseSteeringEngine::new(config.raw.head_dim, config.raw.num_heads)?;
         let mut action_hub = ActionHubEngine::from_config(&config.raw)?;
         action_hub.repulsion_threshold = config.repulsion_threshold;
         action_hub.repulsion_scale_u7 = config.repulsion_scale_u7;
@@ -420,7 +420,7 @@ impl RuntimeContext {
             bifurcation_threshold: config.bifurcation_threshold,
             ..Default::default()
         };
-        let mut edbc = EdbcEngine::new(edbc_state);
+        let mut edbc = EntropyController::new(edbc_state);
         edbc.set_hysteresis_band(config.hysteresis_band);
         edbc.set_tau_flux(config.tau_flux);
 
@@ -507,24 +507,24 @@ impl RuntimeContext {
         )
     }
 
-    /// Returns an immutable reference to the underlying [`DpsrEngine`].
+    /// Returns an immutable reference to the underlying [`PhaseSteeringEngine`].
     #[inline(always)]
     #[must_use]
-    pub const fn dpsr_engine(&self) -> &DpsrEngine {
+    pub const fn phase_steering_engine(&self) -> &PhaseSteeringEngine {
         &self.dpsr
     }
 
-    /// Returns an immutable reference to the underlying [`EdbcEngine`].
+    /// Returns an immutable reference to the underlying [`EntropyController`].
     #[inline(always)]
     #[must_use]
-    pub const fn edbc_engine(&self) -> &EdbcEngine {
+    pub const fn entropy_controller(&self) -> &EntropyController {
         &self.edbc
     }
 
-    /// Returns a mutable reference to the underlying [`EdbcEngine`].
+    /// Returns a mutable reference to the underlying [`EntropyController`].
     #[inline(always)]
     #[must_use]
-    pub fn edbc_engine_mut(&mut self) -> &mut EdbcEngine {
+    pub fn entropy_controller_mut(&mut self) -> &mut EntropyController {
         &mut self.edbc
     }
 
@@ -1529,7 +1529,7 @@ impl RuntimeContext {
         let edbc_size = core::mem::size_of::<gcso_edbc_state_t>();
         if buffer.len() >= edbc_off + edbc_size {
             let edbc_st = gcso_edbc_state_t::read_unaligned_from(buffer, edbc_off)?;
-            self.edbc = EdbcEngine::new(edbc_st);
+            self.edbc = EntropyController::new(edbc_st);
             self.edbc.set_hysteresis_band(self.config.hysteresis_band);
             self.edbc.set_tau_flux(self.config.tau_flux);
         }
@@ -2210,8 +2210,8 @@ const _: () = {
         T: ActionHub
             + ActionHubGatewayExt
             + GatewayPhaseSteeringExt
-            + DpsrClosedLoopSteering
-            + EdbcClosedLoopCoordinator
+            + PhaseSteeringClosedLoop
+            + EntropyClosedLoopCoordinator
             + CausalProvenanceSignal
             + SystemConstraintSignal
             + ManifoldGatewaySignal

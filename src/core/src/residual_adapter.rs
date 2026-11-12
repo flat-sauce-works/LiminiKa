@@ -1,7 +1,7 @@
-// name: src/core/src/srl.rs
+// name: src/core/src/residual_adapter.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Concrete 64-byte cacheline-aligned [`SrlEngine`] `Pod` state descriptor applying the
+//! Concrete 64-byte cacheline-aligned [`ResidualAdapterEngine`] `Pod` state descriptor applying the
 //! [`PspmRouter`], [`SrlAdapter`], [`VisualAttentionSteering`], [`PersonaPatcher`], and
 //! [`L2pSvdProjector`] traits from [`crate::traits`].
 
@@ -44,23 +44,23 @@ use core::mem::{align_of, offset_of, size_of};
 /// Visual 2D/3D RoPE steering, and L2P-SVDLoRA basis projection.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SrlEngine {
+pub struct ResidualAdapterEngine {
     /// Embedded 64-byte C-ABI v0.1.1 SRL Rank-1 descriptor (`offset 0..64`).
     pub descriptor: gcso_srl_descriptor_t,
 }
 
-// SAFETY: `SrlEngine` is a `#[repr(C, align(64))]` wrapper around the 64-byte `Pod` `gcso_srl_descriptor_t`.
-unsafe impl Pod for SrlEngine {}
+// SAFETY: `ResidualAdapterEngine` is a `#[repr(C, align(64))]` wrapper around the 64-byte `Pod` `gcso_srl_descriptor_t`.
+unsafe impl Pod for ResidualAdapterEngine {}
 
-impl Default for SrlEngine {
+impl Default for ResidualAdapterEngine {
     #[inline(always)]
     fn default() -> Self {
         Self::new(1.0, 0, 1)
     }
 }
 
-impl SrlEngine {
-    /// Constructs a new 64-byte aligned [`SrlEngine`] with canonical C-ABI v0.1.1 descriptor fields.
+impl ResidualAdapterEngine {
+    /// Constructs a new 64-byte aligned [`ResidualAdapterEngine`] with canonical C-ABI v0.1.1 descriptor fields.
     #[inline(always)]
     #[must_use]
     pub const fn new(scale_factor: f32, layer_idx: u32, rank: u32) -> Self {
@@ -94,11 +94,11 @@ impl SrlEngine {
     }
 }
 
-impl PspmRouter for SrlEngine {}
-impl SrlAdapter for SrlEngine {}
-impl VisualAttentionSteering for SrlEngine {}
-impl L2pSvdProjector for SrlEngine {}
-impl PersonaPatcher for SrlEngine {
+impl PspmRouter for ResidualAdapterEngine {}
+impl SrlAdapter for ResidualAdapterEngine {}
+impl VisualAttentionSteering for ResidualAdapterEngine {}
+impl L2pSvdProjector for ResidualAdapterEngine {}
+impl PersonaPatcher for ResidualAdapterEngine {
     #[inline]
     fn apply_patch(&mut self, patch_data: &[u8]) -> GcsoResult<()> {
         if patch_data.is_empty() {
@@ -112,9 +112,9 @@ impl PersonaPatcher for SrlEngine {
 }
 
 const _: () = {
-    assert!(size_of::<SrlEngine>() == 64);
-    assert!(align_of::<SrlEngine>() == 64);
-    assert!(offset_of!(SrlEngine, descriptor) == 0);
+    assert!(size_of::<ResidualAdapterEngine>() == 64);
+    assert!(align_of::<ResidualAdapterEngine>() == 64);
+    assert!(offset_of!(ResidualAdapterEngine, descriptor) == 0);
 };
 
 #[cfg(test)]
@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn test_srl_engine_pod_and_persona_patch() {
-        let mut engine = SrlEngine::default();
+        let mut engine = ResidualAdapterEngine::default();
         assert_eq!(engine.validate(), Ok(()));
         assert_eq!(engine.apply_patch(b"LiminiKa-SRL-Patch"), Ok(()));
         assert!(engine.descriptor.scale_factor >= 0.25);

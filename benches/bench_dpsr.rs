@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Advanced benchmarks for Dynamic Phase-Shifted RoPE (DPSR) hot-path kernels and
-//! `DpsrClosedLoopSteering` blanket implementations, engineered for **zero input overfitting**
+//! `PhaseSteeringClosedLoop` blanket implementations, engineered for **zero input overfitting**
 //! and **clean separation of Provisional `.gcso` / ZIMMS Container workloads**:
 //! - Uses realistic heterogeneous 64-head phase profiles across all batch and sub-head ensembles
 //!   (never uniform `[8i8; 64]` arrays or unit-gain `1.0f32` fast-path bypasses).
@@ -26,7 +26,7 @@ use liminika_core::abi::{
     gcso_daes_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t,
     gcso_tagged_ptr_t,
 };
-use liminika_core::dpsr::{DpsrClosedLoopSteering, DpsrEngine};
+use liminika_core::phase_steering::{PhaseSteeringClosedLoop, PhaseSteeringEngine};
 use liminika_core::traits::{
     AlignedBuffer128, AlignedBuffer16, AlignedBuffer32, AlignedBuffer64, AlignedSlice,
     AlignedSlice16, AlignedSlice32, AlignedSliceMut, AlignedSliceMut16,
@@ -318,7 +318,7 @@ fn should_run_provisional_gcso() -> bool {
 fn bench_aligned_query_variant<const ALIGN: usize>(
     group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
     bench_name: &str,
-    engine: &DpsrEngine,
+    engine: &PhaseSteeringEngine,
     shared_q_arena: &mut AlignedHeapBuffer<f32, 512>,
     head_dim: u32,
     num_heads: u32,
@@ -382,7 +382,8 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
     for &(head_dim, num_heads) in &configurations {
         let total_elements = (head_dim * num_heads) as usize;
         let single_tensor_bytes = total_elements * core::mem::size_of::<f32>();
-        let engine = DpsrEngine::new(head_dim, num_heads).expect("Failed to initialize DpsrEngine");
+        let engine = PhaseSteeringEngine::new(head_dim, num_heads)
+            .expect("Failed to initialize PhaseSteeringEngine");
 
         // 1. Single Query Steering Across 32B / 128B / 256B / 512B Alignment Boundaries
         group.throughput(Throughput::Bytes(single_tensor_bytes as u64));
@@ -628,7 +629,8 @@ fn bench_dpsr_batch_sequence_scaling(c: &mut Criterion) {
     let head_dim = 128u32;
     let num_heads = 32u32;
     let stride = (head_dim * num_heads) as usize;
-    let engine = DpsrEngine::new(head_dim, num_heads).expect("Failed to initialize DpsrEngine");
+    let engine = PhaseSteeringEngine::new(head_dim, num_heads)
+        .expect("Failed to initialize PhaseSteeringEngine");
 
     let batch_sizes = [1usize, 4, 16, 64, 256, 1024];
     let coherent_hetero_phases = make_heterogeneous_q7_phases_with_offset(8);
@@ -765,7 +767,8 @@ fn bench_dpsr_long_context_and_procrustes(c: &mut Criterion) {
     let num_heads = 32u32;
     let total_elements = (head_dim * num_heads) as usize;
     let single_tensor_bytes = total_elements * core::mem::size_of::<f32>();
-    let engine = DpsrEngine::new(head_dim, num_heads).expect("Failed DpsrEngine init");
+    let engine =
+        PhaseSteeringEngine::new(head_dim, num_heads).expect("Failed PhaseSteeringEngine init");
     let mut shared_q_arena =
         AlignedHeapBuffer::<f32, 512>::new_with_phase_offset(total_elements, 1.0f32, 0);
     let mut shared_tgt_arena =
@@ -1013,7 +1016,8 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
     let num_heads = 64u32;
     let total_elements = (head_dim * num_heads) as usize;
     let tensor_bytes = total_elements * core::mem::size_of::<f32>();
-    let engine = DpsrEngine::new(head_dim, num_heads).expect("Failed 64-head DpsrEngine init");
+    let engine = PhaseSteeringEngine::new(head_dim, num_heads)
+        .expect("Failed 64-head PhaseSteeringEngine init");
     let mut shared_q_arena =
         AlignedHeapBuffer::<f32, 512>::new_with_phase_offset(total_elements, 1.0f32, 0);
 
@@ -2580,7 +2584,8 @@ fn bench_dpsr_provisional_gcso_container(c: &mut Criterion) {
     let num_heads = 64u32;
     let total_elements = (head_dim * num_heads) as usize;
     let tensor_bytes = total_elements * core::mem::size_of::<f32>();
-    let engine = DpsrEngine::new(head_dim, num_heads).expect("Failed 64-head DpsrEngine init");
+    let engine = PhaseSteeringEngine::new(head_dim, num_heads)
+        .expect("Failed 64-head PhaseSteeringEngine init");
     let mut shared_q_arena =
         AlignedHeapBuffer::<f32, 512>::new_with_phase_offset(total_elements, 1.0f32, 0);
 
@@ -3031,7 +3036,8 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
     let num_heads = 32u32;
     let stride = (head_dim * num_heads) as usize;
     let single_tok_bytes = stride * core::mem::size_of::<f32>();
-    let engine = DpsrEngine::new(head_dim, num_heads).expect("Failed DpsrEngine init");
+    let engine =
+        PhaseSteeringEngine::new(head_dim, num_heads).expect("Failed PhaseSteeringEngine init");
     let mut shared_prefill_batch = AlignedHeapBuffer::<f32, 64>::new(stride * 32768, 1.0f32);
 
     for &tokens in &large_contexts {
@@ -3085,7 +3091,8 @@ fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
     for &(h_dim, n_heads) in &extreme_head_configs {
         let total_elements = (h_dim * n_heads) as usize;
         let total_bytes = total_elements * core::mem::size_of::<f32>();
-        let ext_engine = DpsrEngine::new(h_dim, n_heads).expect("Extreme DpsrEngine init failed");
+        let ext_engine = PhaseSteeringEngine::new(h_dim, n_heads)
+            .expect("Extreme PhaseSteeringEngine init failed");
 
         group.throughput(Throughput::Bytes(total_bytes as u64));
         group.bench_with_input(

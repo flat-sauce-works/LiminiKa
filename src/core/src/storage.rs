@@ -1,7 +1,7 @@
-// name: src/core/src/zimms.rs
+// name: src/core/src/storage.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Zero-Copy In-Memory Mapped Storage (`ZimmsEngine` 64B `Pod` state descriptor,
+//! Zero-Copy In-Memory Mapped Storage (`MappedStorageEngine` 64B `Pod` state descriptor,
 //! `GcsoFourSectionView` 4-section `.gcso` container zero-copy persistence & in-place evolution,
 //! and PPRC GOP keyframe/delta packets) applying the [`PprcCache`], [`DnpPacketDispatcher`],
 //! and [`ZimmsStorage`] traits from [`crate::traits`].
@@ -63,23 +63,23 @@ use core::mem::{align_of, offset_of, size_of};
 /// memory & persona reproduction, and DNP 64-byte phase packet dispatch.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ZimmsEngine {
+pub struct MappedStorageEngine {
     /// Embedded 64-byte C-ABI v0.1.1 ZIMMS memory-map & track descriptor (`offset 0..64`).
     pub descriptor: gcso_zimms_descriptor_t,
 }
 
-// SAFETY: `ZimmsEngine` is a `#[repr(C, align(64))]` wrapper around the 64-byte `Pod` `gcso_zimms_descriptor_t`.
-unsafe impl Pod for ZimmsEngine {}
+// SAFETY: `MappedStorageEngine` is a `#[repr(C, align(64))]` wrapper around the 64-byte `Pod` `gcso_zimms_descriptor_t`.
+unsafe impl Pod for MappedStorageEngine {}
 
-impl Default for ZimmsEngine {
+impl Default for MappedStorageEngine {
     #[inline(always)]
     fn default() -> Self {
         Self::new(0, 1)
     }
 }
 
-impl ZimmsEngine {
-    /// Constructs a canonical 64-byte [`ZimmsEngine`] initialized with `file_size_bytes` and `flags`.
+impl MappedStorageEngine {
+    /// Constructs a canonical 64-byte [`MappedStorageEngine`] initialized with `file_size_bytes` and `flags`.
     #[inline(always)]
     #[must_use]
     pub const fn new(file_size_bytes: u64, flags: u32) -> Self {
@@ -121,7 +121,7 @@ impl ZimmsEngine {
     }
 }
 
-impl PprcCache for ZimmsEngine {
+impl PprcCache for MappedStorageEngine {
     #[inline]
     fn seek_to_token(
         &mut self,
@@ -135,9 +135,9 @@ impl PprcCache for ZimmsEngine {
     }
 }
 
-impl DnpPacketDispatcher for ZimmsEngine {}
+impl DnpPacketDispatcher for MappedStorageEngine {}
 
-impl ZimmsStorage for ZimmsEngine {
+impl ZimmsStorage for MappedStorageEngine {
     #[inline]
     fn serialize_snapshot(&self, buffer: &mut [u8], required_size: &mut usize) -> GcsoResult<()> {
         let hdr_len = size_of::<gcso_snapshot_header_t>();
@@ -1090,9 +1090,9 @@ impl<'a> GcsoFourSectionView<'a> {
 }
 
 const _: () = {
-    assert!(size_of::<ZimmsEngine>() == 64);
-    assert!(align_of::<ZimmsEngine>() == 64);
-    assert!(offset_of!(ZimmsEngine, descriptor) == 0);
+    assert!(size_of::<MappedStorageEngine>() == 64);
+    assert!(align_of::<MappedStorageEngine>() == 64);
+    assert!(offset_of!(MappedStorageEngine, descriptor) == 0);
 };
 
 #[cfg(test)]
@@ -1105,7 +1105,7 @@ mod tests {
 
     #[test]
     fn test_zimms_engine_dnp_and_pprc_gop_video_stream_seek() {
-        let engine = ZimmsEngine::new(4096, 1);
+        let engine = MappedStorageEngine::new(4096, 1);
         assert_eq!(engine.validate(), Ok(()));
 
         let daes_slot = gcso_daes_slot_t {

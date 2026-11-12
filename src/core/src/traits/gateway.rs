@@ -6,7 +6,7 @@
 //!
 //! Macro-basin clustering ([`CrystallizedAttractorRecord`]) and 4-section `.gcso` zero-copy
 //! container persistence ([`GcsoFourSectionView`]) live in [`crate::crystal`] and
-//! [`crate::zimms`] respectively and are re-exported here for backward compatibility.
+//! [`crate::storage`] respectively and are re-exported here for backward compatibility.
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -2747,7 +2747,7 @@ impl<T: ManifoldGatewaySignal, const N: usize> ManifoldGatewaySignal for [T; N] 
 // ===================================================================
 
 pub use crate::crystal::CrystallizedAttractorRecord;
-pub use crate::zimms::GcsoFourSectionView;
+pub use crate::storage::GcsoFourSectionView;
 
 // ===================================================================
 // 9. Blanket Extension Traits on `PhaseSteering + PspmRouter` & `ActionHub`

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Comprehensive benchmarks for Entropy-Driven Decoding Branch Controller (EDBC) kernels and
-//! `EdbcClosedLoopCoordinator` blanket implementations, engineered for **zero input overfitting**
+//! `EntropyClosedLoopCoordinator` blanket implementations, engineered for **zero input overfitting**
 //! and **clean separation of Provisional `.gcso` / ZIMMS Container workloads**:
 //! - Evaluates Coarse-to-Fine and Top-2 Liminal routing across 8 candidate trails (2 candidates
 //!   per macro cluster across 4 centroids) so the Fine step genuinely resolves intra-cluster
@@ -24,9 +24,9 @@ use liminika_core::abi::{
     gcso_daes_slot_t, gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t,
     gcso_tagged_ptr_t,
 };
-use liminika_core::edbc::{
+use liminika_core::entropy_control::{
     compute_moving_z_score_entropy, compute_sparse_surrogate_entropy, eval_barrier_pitchfork,
-    EdbcClosedLoopCoordinator, EdbcEngine,
+    EntropyClosedLoopCoordinator, EntropyController,
 };
 use liminika_core::traits::{
     AlignedBuffer128, AlignedBuffer32, AlignedBuffer64, AlignedSlice32, ContradictionGuard,
@@ -179,10 +179,10 @@ fn reset_trail_fast(dst: &mut gcso_pointer_trail_t, src: &gcso_pointer_trail_t) 
     dst.copy_from_fast(src);
 }
 
-/// Restores `dst` from `src` using [`EdbcEngine::restore_from`] (width-matched scalar stores),
+/// Restores `dst` from `src` using [`EntropyController::restore_from`] (width-matched scalar stores),
 /// preventing the 256-bit `vmovaps` YMM store-to-scalar-load STLF pipeline stall inside `b.iter`.
 #[inline(always)]
-fn reset_engine_fast(dst: &mut EdbcEngine, src: &EdbcEngine) {
+fn reset_engine_fast(dst: &mut EntropyController, src: &EntropyController) {
     dst.restore_from(src);
 }
 
@@ -253,7 +253,7 @@ fn bench_edbc_stateful_eval(c: &mut Criterion) {
     // 1. Single Token Stateful Evaluation Benchmarks (Pre-warmed Stationary Regimes)
     group.bench_function("eval_stateful_normal_mode", |b| {
         let _ftz = ScopedFtzdazGuard::new();
-        let mut engine = EdbcEngine::default();
+        let mut engine = EntropyController::default();
         let mut state_out = gcso_edbc_state_t::default();
         for _ in 0..8 {
             engine.eval_stateful(0.42f32, &mut state_out).unwrap();
@@ -269,7 +269,7 @@ fn bench_edbc_stateful_eval(c: &mut Criterion) {
 
     group.bench_function("eval_stateful_bifurcation_mode_transition", |b| {
         let _ftz = ScopedFtzdazGuard::new();
-        let mut base_engine = EdbcEngine::default();
+        let mut base_engine = EntropyController::default();
         base_engine.set_bifurcation_threshold(1.0);
         let mut state_out = gcso_edbc_state_t::default();
         for _ in 0..8 {
@@ -289,7 +289,7 @@ fn bench_edbc_stateful_eval(c: &mut Criterion) {
 
     group.bench_function("eval_stateful_repulsion_mode_transition", |b| {
         let _ftz = ScopedFtzdazGuard::new();
-        let mut base_engine = EdbcEngine::default();
+        let mut base_engine = EntropyController::default();
         base_engine.set_bifurcation_threshold(1.0);
         base_engine.set_tau_flux(0.2);
         let mut state_out = gcso_edbc_state_t::default();
@@ -379,7 +379,7 @@ fn bench_edbc_stateful_eval(c: &mut Criterion) {
     // 3. Fused Top-2 Surrogate + Moving Z-Score + Stateful EDBC Step
     group.bench_function("eval_surrogate_and_step_fused", |b| {
         let _ftz = ScopedFtzdazGuard::new();
-        let mut engine = EdbcEngine::default();
+        let mut engine = EntropyController::default();
         let mut state_out = gcso_edbc_state_t::default();
         for _ in 0..8 {
             engine
@@ -407,7 +407,7 @@ fn bench_edbc_stateful_eval(c: &mut Criterion) {
 
     // 4. O(1) Branchless 2nd-Order Entropy Flux Acceleration & Adaptive PPRC GOP Budget
     group.bench_function("evaluate_adaptive_compute_and_pprc_gop_budget", |b| {
-        let mut engine = EdbcEngine::default();
+        let mut engine = EntropyController::default();
         let mut state_out = gcso_edbc_state_t::default();
         for z in [0.4f32, 0.7, 1.1, 1.8] {
             engine.eval_stateful(z, &mut state_out).unwrap();
@@ -450,7 +450,7 @@ fn bench_edbc_cvoid_dyadic(c: &mut Criterion) {
             |b, &d| {
                 let _ftz = ScopedFtzdazGuard::new();
                 let slice_32 = AlignedSlice32::new(shared_cvoid_arena.as_prefix(d)).unwrap();
-                let engine = EdbcEngine::default();
+                let engine = EntropyController::default();
                 let mut void_score = 0.0f32;
                 for _ in 0..8 {
                     engine
@@ -475,7 +475,7 @@ fn bench_edbc_cvoid_dyadic(c: &mut Criterion) {
     group.bench_function("eval_cvoid_with_l1_l2_coherence_ratio_dim_4096", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         let slice_32 = AlignedSlice32::new(shared_cvoid_arena.as_prefix(coh_dim)).unwrap();
-        let engine = EdbcEngine::default();
+        let engine = EntropyController::default();
         for _ in 0..8 {
             let _ = engine.eval_cvoid_with_coherence_ratio(&slice_32).unwrap();
         }
@@ -493,7 +493,7 @@ fn bench_edbc_cvoid_dyadic(c: &mut Criterion) {
         |b| {
             let _ftz = ScopedFtzdazGuard::new();
             let slice_32 = AlignedSlice32::new(shared_cvoid_arena.as_prefix(coh_dim)).unwrap();
-            let mut base_engine = EdbcEngine::default().with_min_mode_dwell_steps(3);
+            let mut base_engine = EntropyController::default().with_min_mode_dwell_steps(3);
             let mut st_warm = gcso_edbc_state_t::default();
             for _ in 0..8 {
                 base_engine.eval_stateful(0.55f32, &mut st_warm).unwrap();
@@ -597,7 +597,7 @@ fn bench_edbc_stream_simulation(c: &mut Criterion) {
                 }
                 let z_scores = z_buf.as_prefix(len);
 
-                let mut engine = EdbcEngine::default();
+                let mut engine = EntropyController::default();
                 let mut state_out = gcso_edbc_state_t::default();
                 for &z in z_scores {
                     engine.eval_stateful(z, &mut state_out).unwrap();
@@ -638,7 +638,7 @@ fn bench_edbc_long_dialogue_reliability(c: &mut Criterion) {
         let _ftz = ScopedFtzdazGuard::new();
         let z_scores = shared_500k_buf.as_slice();
 
-        let mut engine = EdbcEngine::default();
+        let mut engine = EntropyController::default();
         let mut state_out = gcso_edbc_state_t::default();
         for _ in 0..2 {
             engine.reset();
@@ -678,7 +678,7 @@ fn bench_edbc_long_dialogue_reliability(c: &mut Criterion) {
         let _ftz = ScopedFtzdazGuard::new();
         let oscillating_z = shared_osc_50k.as_slice();
 
-        let mut engine = EdbcEngine::default();
+        let mut engine = EntropyController::default();
         engine.set_bifurcation_threshold(tau);
         engine.set_hysteresis_band(delta);
         let mut state_out = gcso_edbc_state_t::default();
@@ -704,7 +704,7 @@ fn bench_edbc_long_dialogue_reliability(c: &mut Criterion) {
         let _ftz = ScopedFtzdazGuard::new();
         let oscillating_z = shared_osc_50k.as_slice();
 
-        let mut engine = EdbcEngine::default().with_min_mode_dwell_steps(4);
+        let mut engine = EntropyController::default().with_min_mode_dwell_steps(4);
         engine.set_bifurcation_threshold(tau);
         engine.set_hysteresis_band(delta);
         let mut state_out = gcso_edbc_state_t::default();
@@ -772,7 +772,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     // 1. Pointer-Coupled EDBC Step + Eyring-Kramers Temperature + Stigmergic Mode Evolution
     group.throughput(Throughput::Elements(1));
     group.bench_function("eval_stateful_with_cvoid_and_pointer_evolution", |b| {
-        let mut base_engine = EdbcEngine::default().with_min_mode_dwell_steps(3);
+        let mut base_engine = EntropyController::default().with_min_mode_dwell_steps(3);
         let mut st_warm = gcso_edbc_state_t::default();
         for _ in 0..8 {
             base_engine.eval_stateful(1.1f32, &mut st_warm).unwrap();
@@ -808,7 +808,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     // 2. Closed-Loop Pitchfork Bifurcation + SplitMix64 Metastable Tunneling Perturbation
     group.throughput(Throughput::Elements(1));
     group.bench_function("step_and_inject_metastable_tunneling_perturbation", |b| {
-        let mut base_engine = EdbcEngine::default();
+        let mut base_engine = EntropyController::default();
         base_engine.state.moving_z_entropy = 2.0;
         let ptr = gcso_tagged_ptr_t::pack_action(
             0x4000,
@@ -868,7 +868,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     // 3A. Blanket Coordinator: Single Unified Attractor Manifold Folding + EDBC Pointer Evolution
     group.throughput(Throughput::Elements(1));
     group.bench_function("step_with_unified_field_and_pointer_64h", |b| {
-        let base_engine = EdbcEngine::default();
+        let base_engine = EntropyController::default();
         let ptr = gcso_tagged_ptr_t::pack_action(
             0x4400,
             ATTRACTOR_SLOT_PERSONA,
@@ -927,7 +927,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     // 3B. Blanket Coordinator: 4-Hop Limina Trail-Chain Cohomology & Joint Probability Chain Rule Guard
     group.throughput(Throughput::Elements(4));
     group.bench_function("step_with_liminal_trail_chain_and_bloom_guard_4hop", |b| {
-        let base_engine = EdbcEngine::default();
+        let base_engine = EntropyController::default();
         let base_bloom = ContrastivePhaseBloomFilter::new();
         let ptr = gcso_tagged_ptr_t::pack_action(
             0x4800,
@@ -1025,7 +1025,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     group.bench_function(
         "step_with_bayesian_pointer_selection_and_tunneling_64h",
         |b| {
-            let mut base_engine = EdbcEngine::default();
+            let mut base_engine = EntropyController::default();
             base_engine.state.moving_z_entropy = 1.6;
             let base_bloom = ContrastivePhaseBloomFilter::new();
             let mut attn_scores = AlignedBuffer32::new([0.0f32; 8]);
@@ -1154,7 +1154,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     group.bench_function(
         "modulate_candidate_trails_with_edbc_temperature_8cand",
         |b| {
-            let engine = EdbcEngine::default();
+            let engine = EntropyController::default();
             let mut attn_scores = AlignedBuffer32::new([0.5f32; 8]);
             let src_trail = gcso_pointer_trail_t {
                 stigmergic_density: 1.8,
@@ -1233,7 +1233,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     group.bench_function(
         "toroidal_kmeans_dp_means_and_edbc_gateway_step_4centroids",
         |b| {
-            let base_engine = EdbcEngine::default();
+            let base_engine = EntropyController::default();
             let fact = ObjectiveFact::new(
                 make_heterogeneous_q7_phases_with_offset(28),
                 2.8,
@@ -1315,7 +1315,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     group.bench_function(
         "coarse_to_fine_route_and_edbc_bayesian_tunneling_64h",
         |b| {
-            let mut base_engine = EdbcEngine::default();
+            let mut base_engine = EntropyController::default();
             base_engine.state.moving_z_entropy = 1.6;
             let base_bloom = ContrastivePhaseBloomFilter::new();
             let mut attn_scores = AlignedBuffer32::new([0.0f32; 8]);
@@ -1485,7 +1485,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     // 3G. Top-2 Liminal Macro Centroid Bifurcation Route (8 Candidates across 4 Centroids) + Pitchfork Metastable Tunneling + Bayesian Trail Rewire
     group.throughput(Throughput::Elements(8));
     group.bench_function("top2_liminal_route_and_edbc_bayesian_tunneling_64h", |b| {
-        let mut base_engine = EdbcEngine::default();
+        let mut base_engine = EntropyController::default();
         base_engine.state.moving_z_entropy = 1.6;
         let base_bloom = ContrastivePhaseBloomFilter::new();
         let mut attn_scores = AlignedBuffer32::new([0.0f32; 8]);
@@ -1687,7 +1687,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         (64 * 3 * core::mem::size_of::<f32>()) as u64,
     ));
     group.bench_function("step_with_cohomology_and_bloom_guard_64", |b| {
-        let base_engine = EdbcEngine::default();
+        let base_engine = EntropyController::default();
         let base_bloom = ContrastivePhaseBloomFilter::new();
         let r_buf = AlignedBuffer32::new(make_heterogeneous_supernode_field_64(0.45f32, 0.22f32));
         let p_buf = AlignedBuffer32::new(make_heterogeneous_supernode_field_64(0.30f32, 0.18f32));
@@ -1768,7 +1768,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     group.bench_function(
         "matrix_free_stigmergic_block_degrees_and_chebyshev_deg3",
         |b| {
-            let engine = EdbcEngine::default();
+            let engine = EntropyController::default();
             let masks: [gcso_paged_bitmask_t; 16] =
                 core::array::from_fn(|i| gcso_paged_bitmask_t {
                     bits: [
@@ -1814,7 +1814,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         (64 * 3 * core::mem::size_of::<f32>()) as u64,
     ));
     group.bench_function("hodge_obstruction_and_dual_homology_pairing_64", |b| {
-        let engine = EdbcEngine::default();
+        let engine = EntropyController::default();
         let r_buf = AlignedBuffer32::new(make_heterogeneous_supernode_field_64(1.25f32, 0.35f32));
         let p_buf = AlignedBuffer32::new(make_heterogeneous_supernode_field_64(0.45f32, 0.20f32));
         let g_buf = AlignedBuffer32::new(make_heterogeneous_supernode_field_64(0.80f32, 0.28f32));
@@ -1838,7 +1838,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     // 7A. 256-Bit Dyadic Pseudo-Ultrametric QDPT Resolution & Pointer Cascading
     group.throughput(Throughput::Elements(1));
     group.bench_function("resolve_dyadic_qdpt_and_cascade_tagged_ptr", |b| {
-        let engine = EdbcEngine::default();
+        let engine = EntropyController::default();
         let parent_ptr = gcso_tagged_ptr_t::pack_action(
             0x8000,
             ATTRACTOR_SLOT_PERSONA,
@@ -1874,7 +1874,7 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     // 7B. Blanket Coordinator: 256-Bit Dyadic Tree QDPT Resolution + Coupled EDBC Step
     group.throughput(Throughput::Elements(1));
     group.bench_function("resolve_dyadic_tree_and_step_edbc_closed_loop", |b| {
-        let base_engine = EdbcEngine::default();
+        let base_engine = EntropyController::default();
         let parent_ptr = gcso_tagged_ptr_t::pack_action(
             0x8000,
             ATTRACTOR_SLOT_PERSONA,
@@ -1965,7 +1965,7 @@ fn bench_edbc_provisional_gcso_container(c: &mut Criterion) {
     // 1. Provisional 2-Origin Composite Manifold Gateway + `.gcso` Crystallization Step
     group.throughput(Throughput::Elements(1));
     group.bench_function("step_gateway_signal_and_crystallize_attractor_64h", |b| {
-        let base_engine = EdbcEngine::default();
+        let base_engine = EntropyController::default();
         let fact = ObjectiveFact::new(
             make_heterogeneous_q7_phases_with_offset(28),
             2.5,
@@ -2040,12 +2040,12 @@ fn bench_edbc_provisional_gcso_container(c: &mut Criterion) {
         });
     });
 
-    // 2. Provisional Full 4-Axis (EdbcEngine Origin-1 x Fact x Persona x ContradictionGuard) Causal Provenance Step
+    // 2. Provisional Full 4-Axis (EntropyController Origin-1 x Fact x Persona x ContradictionGuard) Causal Provenance Step
     group.throughput(Throughput::Elements(1));
     group.bench_function(
         "step_gateway_4axis_contradiction_guard_and_provenance_64h",
         |b| {
-            let base_engine = EdbcEngine::default();
+            let base_engine = EntropyController::default();
             let sys_snapshot = base_engine;
             let fact = ObjectiveFact::new(
                 make_heterogeneous_q7_phases_with_offset(28),
@@ -2129,7 +2129,7 @@ fn bench_edbc_provisional_gcso_container(c: &mut Criterion) {
     // 3. Provisional `.gcso` CrystallizedAttractorRecord Ensemble Gravity Folding + EDBC Step
     group.throughput(Throughput::Elements(4));
     group.bench_function("step_crystallized_ensemble_gravity_fold_4records", |b| {
-        let base_engine = EdbcEngine::default();
+        let base_engine = EntropyController::default();
         let records: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
             let mut rec = CrystallizedAttractorRecord::new_empty(
                 (i as u32) + 10,
@@ -2183,7 +2183,7 @@ fn bench_edbc_provisional_gcso_container(c: &mut Criterion) {
     // 4. Provisional `.gcso` (ZIMMS) Zero-Copy Deserialization + Crystallized Ensemble Gravity Folding EDBC Step
     group.throughput(Throughput::Elements(4));
     group.bench_function("zimms_zero_copy_crystallized_ensemble_step_4records", |b| {
-        let base_engine = EdbcEngine::default();
+        let base_engine = EntropyController::default();
         let records: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
             let mut rec = CrystallizedAttractorRecord::new_empty(
                 (i as u32) + 10,
@@ -2257,7 +2257,7 @@ fn bench_edbc_provisional_gcso_container(c: &mut Criterion) {
     group.bench_function(
         "four_section_gcso_zero_copy_write_verify_and_step_4records",
         |b| {
-            let base_engine = EdbcEngine::default();
+            let base_engine = EntropyController::default();
             let records: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
                 let mut rec = CrystallizedAttractorRecord::new_empty(
                     (i as u32) + 10,
@@ -2370,7 +2370,7 @@ fn bench_edbc_extreme_and_edge_cases(c: &mut Criterion) {
         let _ftz = ScopedFtzdazGuard::new();
         let z_scores = shared_1m_buf.as_slice();
 
-        let mut engine = EdbcEngine::default();
+        let mut engine = EntropyController::default();
         let mut state_out = gcso_edbc_state_t::default();
         for _ in 0..2 {
             engine.reset();
@@ -2410,7 +2410,7 @@ fn bench_edbc_extreme_and_edge_cases(c: &mut Criterion) {
         }
         let oscillating_z = osc_buf.as_slice();
 
-        let mut engine = EdbcEngine::default();
+        let mut engine = EntropyController::default();
         engine.set_bifurcation_threshold(tau);
         engine.set_hysteresis_band(delta);
         let mut state_out = gcso_edbc_state_t::default();
@@ -2443,7 +2443,7 @@ fn bench_edbc_extreme_and_edge_cases(c: &mut Criterion) {
         }
         let z_scores = spike_buf.as_slice();
 
-        let mut engine = EdbcEngine::default();
+        let mut engine = EntropyController::default();
         let mut state_out = gcso_edbc_state_t::default();
         for &z in z_scores {
             let _ = engine.eval_stateful(z, &mut state_out);
@@ -2468,7 +2468,7 @@ fn bench_edbc_extreme_and_edge_cases(c: &mut Criterion) {
             &d,
             |b, &dim_size| {
                 let slice_32 = AlignedSlice32::new(shared_odd_arena.as_prefix(dim_size)).unwrap();
-                let engine = EdbcEngine::default();
+                let engine = EntropyController::default();
                 let mut void_score = 0.0f32;
                 engine
                     .eval_cvoid_dyadic128(&slice_32, &mut void_score)
@@ -2504,7 +2504,7 @@ fn bench_edbc_extreme_and_edge_cases(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1));
     group.bench_function("eval_barrier_epsilon_singularity_boundary", |b| {
         let _ftz = ScopedFtzdazGuard::new();
-        let engine = EdbcEngine::default();
+        let engine = EntropyController::default();
         b.iter(|| {
             engine
                 .eval_barrier(black_box(0.000_000_000_001f32), black_box(1.0f32))
