@@ -172,9 +172,9 @@ pub use crate::traits::{
 
 use crate::traits::branchless::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
-    branchless_max_f32, branchless_min_f32, branchless_q7_add_sat, branchless_q7_conjugate_64,
-    branchless_q7_inhibit_words_64, branchless_relu_f32, branchless_select_f32,
-    branchless_select_u32, branchless_select_u8,
+    branchless_ln_f32, branchless_max_f32, branchless_min_f32, branchless_q7_add_sat,
+    branchless_q7_conjugate_64, branchless_q7_inhibit_words_64, branchless_relu_f32,
+    branchless_select_f32, branchless_select_u32, branchless_select_u8,
     coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_pos_normal_f32,
     is_phase_profile_nonzero_64, load_q7_words_64, store_q7_words_64, swar_q7_add_sat_x8,
     swar_slerp_words_with_uniform_flag_64, trail_phase_words_mut, trail_phase_words_ref,
@@ -186,9 +186,9 @@ use crate::traits::primitives::{
     MAX_ATTENTION_HEADS, Q7_PHASE_SCALE_RAD,
 };
 use crate::traits::{
-    accumulate_q7_slice_into_words_64, DAES_METRIC_FAST_PATH_HIT,
-    DAES_METRIC_LAYER_SKIP_COMPENSATED, DAES_METRIC_PHASE_STEERED, DAES_METRIC_REPULSION_APPLIED,
-    DAES_METRIC_SLOT_SYNERGY_ACTIVE, MAX_ATTRACTOR_PULL_FORCE,
+    accumulate_q7_slice_into_words_64, select_rewire_bridge_and_modulate_with_preloaded_words_64,
+    DAES_METRIC_FAST_PATH_HIT, DAES_METRIC_LAYER_SKIP_COMPENSATED, DAES_METRIC_PHASE_STEERED,
+    DAES_METRIC_REPULSION_APPLIED, DAES_METRIC_SLOT_SYNERGY_ACTIVE, MAX_ATTRACTOR_PULL_FORCE,
 };
 
 /// Convenient crate-level result type alias for GCSO operations.
@@ -914,29 +914,53 @@ impl RuntimeContext {
         self.edbc.eval_stateful(token_z_score, &mut edbc_state)?;
         self.attractor_space.advance_step();
 
-        let mut daes_local = self.action_hub.daes_slot;
-        let bloom_local = self.action_hub.bloom_filter;
         let rep_thresh = self.config.repulsion_threshold;
         let rep_scale = self.config.repulsion_scale_u7;
         let qdps_min = self.config.raw.qdps_min_step_rad;
         let ripa_max = self.config.raw.ripa_clamp_max_rad;
 
-        let (density, final_pull, mean_coh, _active_cnt) = self
-            .execute_unified_field_token_cascade(
-                input_tagged_ptr.raw(),
-                &mut daes_local,
-                &bloom_local,
+        let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
+            qdps_min,
+            ripa_max,
+            query_tensor.as_deref(),
+            key_tensor.as_deref(),
+        )?;
+        let (bypass_hit, eff_ptr) = self
+            .action_hub
+            .daes_slot
+            .resolve_or_pass_in_place(input_tagged_ptr);
+        self.step_pointer(eff_ptr.raw(), trail_out)?;
+        let (density, repulsion_active) = self
+            .action_hub
+            .bloom_filter
+            .apply_phase_conjugate_repulsion_words(
+                trail_phase_words_mut(trail_out),
                 rep_thresh,
                 rep_scale,
+            );
+        let init_w = *trail_phase_words_ref(trail_out);
+        let (final_pull, mean_coh, active_cnt, raw_words) = self
+            .orchestrate_unified_field_resonance_from_words(
+                init_w,
                 anchor_phases,
                 anchor_base_energies,
                 repulsion_phases_and_strength,
-                qdps_min,
-                ripa_max,
-                query_tensor,
-                key_tensor,
                 trail_out,
             )?;
+        let steered = self.steer_qdps_words_prevalidated_core(
+            &raw_words,
+            head_dim,
+            num_heads,
+            qdps_min,
+            ripa_max,
+            query_tensor,
+            key_tensor,
+        );
+        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
+            | branchless_select_u8(active_cnt > 0, DAES_METRIC_SLOT_SYNERGY_ACTIVE, 0);
+        self.action_hub.daes_slot.push_telemetry_metric(metric);
 
         if let Some(scores) = attention_scores {
             if !anchor_phases.is_empty() && !scores.is_empty() {
@@ -949,7 +973,6 @@ impl RuntimeContext {
             }
         }
 
-        self.action_hub.daes_slot = daes_local;
         Ok((density, final_pull, mean_coh, trail_out.target_anchor_id))
     }
 
@@ -988,40 +1011,125 @@ impl RuntimeContext {
         self.edbc.eval_stateful(token_z_score, &mut edbc_state)?;
         self.attractor_space.advance_step();
 
-        let mut daes_local = self.action_hub.daes_slot;
-        let bloom_local = self.action_hub.bloom_filter;
         let rep_thresh = self.config.repulsion_threshold;
         let rep_scale = self.config.repulsion_scale_u7;
         let qdps_min = self.config.raw.qdps_min_step_rad;
         let ripa_max = self.config.raw.ripa_clamp_max_rad;
 
-        let res = self.execute_autonomous_pointer_trail_attention_cascade(
-            src_trail_id,
-            input_tagged_ptr.raw(),
-            &mut daes_local,
-            &bloom_local,
-            rep_thresh,
-            rep_scale,
-            candidate_trails,
-            phase_interference_gain,
-            stigmergic_prior_gain,
-            pointer_link_bonus,
-            repulsion_penalty,
-            interpolation_u7,
-            contradiction_threshold,
-            anchor_phases,
-            anchor_base_energies,
-            repulsion_phases_and_strength,
-            attention_scores,
+        if candidate_trails.is_empty()
+            || !branchless_is_finite_f32(phase_interference_gain)
+            || !branchless_is_finite_f32(stigmergic_prior_gain)
+            || !branchless_is_finite_f32(pointer_link_bonus)
+            || !branchless_is_finite_f32(repulsion_penalty)
+            || !branchless_is_finite_f32(contradiction_threshold)
+        {
+            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
+            qdps_min,
+            ripa_max,
+            query_tensor.as_deref(),
+            key_tensor.as_deref(),
+        )?;
+        let (bypass_hit, eff_ptr) = self
+            .action_hub
+            .daes_slot
+            .resolve_or_pass_in_place(input_tagged_ptr);
+        self.step_pointer(eff_ptr.raw(), trail_out)?;
+        let (_density, mut repulsion_active) = self
+            .action_hub
+            .bloom_filter
+            .apply_phase_conjugate_repulsion_words(
+                trail_phase_words_mut(trail_out),
+                rep_thresh,
+                rep_scale,
+            );
+        let init_w = *trail_phase_words_ref(trail_out);
+        let (_final_pull, _mean_anc_coh, active_anchors, pre_bridge_words) = self
+            .orchestrate_unified_field_resonance_from_words(
+                init_w,
+                anchor_phases,
+                anchor_base_energies,
+                repulsion_phases_and_strength,
+                trail_out,
+            )?;
+
+        let scores_slice_opt = attention_scores
+            .filter(|s| !s.is_empty())
+            .map(AlignedSliceMut32::as_mut_slice);
+
+        let (selected_id, bayes_score, _mean_coh, _coh_cnt, found_coherent, final_words, best_coh) =
+            select_rewire_bridge_and_modulate_with_preloaded_words_64(
+                trail_out,
+                pre_bridge_words,
+                candidate_trails,
+                scores_slice_opt,
+                head_dim as u32,
+                phase_interference_gain,
+                stigmergic_prior_gain,
+                pointer_link_bonus,
+                contradiction_threshold,
+                interpolation_u7,
+                repulsion_penalty,
+                0,
+                None,
+                0.0,
+            );
+
+        let mut log_prob = 0.0_f32;
+        if found_coherent {
+            self.link_hallucinated_trails(src_trail_id, selected_id)?;
+            let dst_idx = (selected_id as usize).min(candidate_trails.len() - 1);
+            let dst_trail = &mut candidate_trails[dst_idx];
+            let cond_prob = branchless_clamp_f32(0.5 * (1.0 + best_coh), DEFAULT_ENTROPY_EPS, 1.0);
+            log_prob = branchless_flush_subnormal_f32(branchless_ln_f32(cond_prob));
+            *trail_phase_words_mut(dst_trail) = final_words;
+            let dst_has_anchor = dst_trail.target_anchor_id != 0;
+            let inherited_anchor = branchless_select_u32(
+                dst_has_anchor,
+                dst_trail.target_anchor_id,
+                trail_out.target_anchor_id,
+            );
+            trail_out.target_anchor_id = inherited_anchor;
+            dst_trail.target_anchor_id = inherited_anchor;
+            if inherited_anchor != 0 {
+                trail_out.cluster_id = inherited_anchor;
+                dst_trail.cluster_id = inherited_anchor;
+            }
+            trail_out.flags |= TRAIL_FLAG_SYNERGY_RESONANCE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE;
+            dst_trail.flags |= TRAIL_FLAG_SYNERGY_RESONANCE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE;
+            dst_trail.sync_flags_with_current_ptr();
+        } else {
+            repulsion_active = true;
+        }
+        trail_out.sync_flags_with_current_ptr();
+
+        let steered = self.steer_qdps_words_prevalidated_core(
+            &final_words,
+            head_dim,
+            num_heads,
             qdps_min,
             ripa_max,
             query_tensor,
             key_tensor,
-            trail_out,
-        )?;
+        );
+        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
+            | branchless_select_u8(
+                (active_anchors > 0) | found_coherent,
+                DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+                0,
+            );
+        self.action_hub.daes_slot.push_telemetry_metric(metric);
 
-        self.action_hub.daes_slot = daes_local;
-        Ok(res)
+        Ok((
+            selected_id,
+            bayes_score,
+            log_prob,
+            trail_out.target_anchor_id,
+            found_coherent,
+        ))
     }
 
     /// Executes the Pointer-Driven Stigmergic Mode Cascade on this context's internal DAES
@@ -1686,8 +1794,17 @@ impl PointerActionHub for RuntimeContext {
             branchless_select_u32(cur_active < cap, cur_active.wrapping_add(1), cur_active);
         self.action_hub.step_counter = self.action_hub.step_counter.wrapping_add(1);
         trail_out.record_pointer_transition(current_ptr, 1, 1.0);
-        let embedded_phase = gcso_tagged_ptr_t(current_ptr).unpack_phase();
-        trail_out.accumulate_uniform_phase(embedded_phase);
+        let tp = gcso_tagged_ptr_t(current_ptr);
+        let embedded_phase = tp.unpack_phase();
+        if embedded_phase != 0 {
+            trail_out.accumulate_uniform_phase(embedded_phase);
+        }
+        trail_out.cluster_id = branchless_select_u32(
+            trail_out.target_anchor_id != 0,
+            trail_out.target_anchor_id,
+            u32::from(tp.target_attractor_slot() & ATTRACTOR_SLOT_ID_MASK),
+        );
+        trail_out.sync_flags_with_current_ptr();
         let slot_idx = (self.action_hub.write_cursor as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
         ActionHubEngine::copy_trail_to_slot_fast(&mut self.action_hub.trails[slot_idx], trail_out);
         self.action_hub.write_cursor =

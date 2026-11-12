@@ -918,13 +918,13 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
             stigmergic_density: 1.0,
             half_life_steps: 1000,
             last_active_step: current_step,
-            phase_deltas: phases,
-            vector_data,
+            domain_id: self.preferred_working_lane() & ((MAX_ATTRACTOR_DOMAINS as u32) - 1),
             vector_dim: 16,
             is_active: 1,
             is_crystallized: u8::from(anchor_type == GCSO_ANCHOR_TYPE_CRYSTALLIZED),
-            domain_id: self.preferred_working_lane() & ((MAX_ATTRACTOR_DOMAINS as u32) - 1),
             reserved_padding: [0; 24],
+            phase_deltas: phases,
+            vector_data,
         }
     }
 }
@@ -1276,13 +1276,44 @@ impl CrystallizedAnchorRecord {
                 self.half_life_steps,
             ),
             last_active_step: self.last_active_step,
-            phase_deltas: self.phase_deltas,
-            vector_data,
+            domain_id: self.domain_id & ((MAX_ATTRACTOR_DOMAINS as u32) - 1),
             vector_dim: 16,
             is_active: self.is_active,
             is_crystallized: self.is_crystallized,
-            domain_id: self.domain_id & ((MAX_ATTRACTOR_DOMAINS as u32) - 1),
             reserved_padding: [0; 24],
+            phase_deltas: self.phase_deltas,
+            vector_data,
+        }
+    }
+
+    /// Writes this 128-byte record directly into `dst` in-place, touching only Cache Line 0
+    /// (`offset 0..64`), Cache Line 1 (`phase_deltas`, `offset 64..128`), and the first 16
+    /// floats (`64` bytes) of `vector_data` without constructing a 640-byte stack temporary or
+    /// zeroing the remaining 448 bytes of unused `vector_data[16..128]`.
+    #[inline(always)]
+    pub fn write_to_anchor_in_place(
+        &self,
+        dst: &mut AttractorAnchor,
+        domain_override: Option<u32>,
+    ) {
+        dst.id = self.id;
+        dst.anchor_type = self.anchor_type;
+        dst.weight = self.weight;
+        dst.pull_force = self.pull_force;
+        dst.stigmergic_density = self.stigmergic_density;
+        dst.half_life_steps =
+            branchless_select_u32(self.half_life_steps == 0, 1000, self.half_life_steps);
+        dst.last_active_step = self.last_active_step;
+        dst.domain_id =
+            domain_override.unwrap_or(self.domain_id) & ((MAX_ATTRACTOR_DOMAINS as u32) - 1);
+        dst.vector_dim = 16;
+        dst.is_active = self.is_active;
+        dst.is_crystallized = self.is_crystallized;
+        dst.phase_deltas = self.phase_deltas;
+        let mut i = 0usize;
+        while i < 16 {
+            dst.vector_data[i] = (self.phase_deltas[i] as f32) * (1.0 / 128.0);
+            i += 1;
         }
     }
 
@@ -1777,8 +1808,18 @@ pub struct DomainAccumulatorSummary {
 // SAFETY: `DomainAccumulatorSummary` is a 32-byte `#[repr(C, align(16))]` struct of primitive `u32`/`f32` fields.
 unsafe impl Pod for DomainAccumulatorSummary {}
 
-/// Single topological anchor point living on the unified $SO(2)^{64}$ phase field.
-#[repr(C, align(32))]
+/// Single topological anchor point living on the unified $SO(2)^{64}$ phase field (`640` bytes = `10` cache lines).
+///
+/// # 3-Tier Cache-Line Layout (`#[repr(C, align(64))]`)
+/// - **Cache Line 0 (`offset 0..64`)**: Hot scalar metadata (`id`, `anchor_type`, `weight`,
+///   `pull_force`, `stigmergic_density`, `half_life_steps`, `last_active_step`, `domain_id`,
+///   `vector_dim`, `is_active`, `is_crystallized`, `reserved_padding`) so active-slot screening
+///   and `compute_energy_score` touch strictly a single 64-byte L1D cache line.
+/// - **Cache Line 1 (`offset 64..128`)**: `phase_deltas: [gcso_q7_t; 64]`, strictly 64-byte
+///   cacheline-aligned so 8-word SWAR (`phase_words_ref`) and AVX2 loads never cross a cache line.
+/// - **Cache Lines 2..9 (`offset 128..640`)**: Cold `vector_data: [f32; 128]` (`512` bytes),
+///   untouched during hot/mezzo phase folding.
+#[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AttractorAnchor {
     /// Unique anchor identifier (1-based index, `0` indicates unallocated slot).
@@ -1795,23 +1836,23 @@ pub struct AttractorAnchor {
     pub half_life_steps: u32,
     /// Token step index when this anchor was last activated or traversed.
     pub last_active_step: u64,
-    /// Target phase coordinates across 64 attention heads (Q7 fixed-point).
-    pub phase_deltas: [gcso_q7_t; MAX_ATTENTION_HEADS],
-    /// Continuous feature embedding vector buffer (up to 128 dimensions).
-    pub vector_data: [f32; MAX_EMBEDDING_DIM],
+    /// Originating working lane identifier (`0..=7`) associated with this anchor.
+    pub domain_id: u32,
     /// Active dimension of stored vector data (`0..=128`).
     pub vector_dim: u16,
     /// Flag indicating whether anchor is active (`1` = active, `0` = inactive).
     pub is_active: u8,
     /// Flag indicating whether anchor was bottom-up crystallized from high-density trails (`1` or `0`).
     pub is_crystallized: u8,
-    /// Originating working lane identifier (`0..=7`) associated with this anchor.
-    pub domain_id: u32,
-    /// Explicit trailing padding to 32-byte alignment boundary (`616 + 24 = 640` bytes).
+    /// Explicit padding completing Cache Line 0 (`offset 40..64`).
     pub reserved_padding: [u8; 24],
+    /// Target phase coordinates across 64 attention heads (Q7 fixed-point, Cache Line 1: `offset 64..128`).
+    pub phase_deltas: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    /// Continuous feature embedding vector buffer (up to 128 dimensions, Cache Lines 2..9: `offset 128..640`).
+    pub vector_data: [f32; MAX_EMBEDDING_DIM],
 }
 
-// SAFETY: `AttractorAnchor` is `#[repr(C, align(32))]` with explicit padding and primitive fields where all bit patterns are valid.
+// SAFETY: `AttractorAnchor` is `#[repr(C, align(64))]` with explicit padding and primitive fields where all bit patterns are valid.
 unsafe impl Pod for AttractorAnchor {}
 
 impl AttractorAnchor {
@@ -1840,13 +1881,13 @@ impl Default for AttractorAnchor {
             stigmergic_density: 1.0,
             half_life_steps: 1000,
             last_active_step: 0,
-            phase_deltas: [0; MAX_ATTENTION_HEADS],
-            vector_data: [0.0; MAX_EMBEDDING_DIM],
+            domain_id: DOMAIN_SYSTEM_BASELINE,
             vector_dim: 0,
             is_active: 0,
             is_crystallized: 0,
-            domain_id: DOMAIN_SYSTEM_BASELINE,
             reserved_padding: [0; 24],
+            phase_deltas: [0; MAX_ATTENTION_HEADS],
+            vector_data: [0.0; MAX_EMBEDDING_DIM],
         }
     }
 }
@@ -1952,13 +1993,13 @@ impl ManifoldGatewaySignal for AttractorAnchor {
 }
 
 impl AttractorAnchor {
-    /// Zero-copy `const` reference reinterpretation of `self.phase_deltas` (`offset 32..96`,
-    /// guaranteed 32-byte aligned by `#[repr(C, align(32))]`) as 8 native `u64` SWAR words (`&[u64; 8]`).
+    /// Zero-copy `const` reference reinterpretation of `self.phase_deltas` (`offset 64..128`,
+    /// guaranteed 64-byte cacheline-aligned by `#[repr(C, align(64))]`) as 8 native `u64` SWAR words (`&[u64; 8]`).
     #[inline(always)]
     #[must_use]
     pub const fn phase_words_ref(&self) -> &[u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
-        // SAFETY: `AttractorAnchor` is `#[repr(C, align(32))]` and `phase_deltas` is at byte offset 32
-        // (32-byte aligned, >= 8-byte alignment of `u64`), with identical size (64 bytes) and `Pod` validity.
+        // SAFETY: `AttractorAnchor` is `#[repr(C, align(64))]` and `phase_deltas` is at byte offset 64
+        // (64-byte aligned, >= 8-byte alignment of `u64`), with identical size (64 bytes) and `Pod` validity.
         unsafe {
             &*(self
                 .phase_deltas
@@ -1967,13 +2008,13 @@ impl AttractorAnchor {
         }
     }
 
-    /// Mutably borrows `self.phase_deltas` (`offset 32` of `#[repr(C, align(32))]`
-    /// [`AttractorAnchor`], guaranteed 32-byte aligned) as a zero-copy `&mut [u64; 8]` SWAR array.
+    /// Mutably borrows `self.phase_deltas` (`offset 64` of `#[repr(C, align(64))]`
+    /// [`AttractorAnchor`], guaranteed 64-byte cacheline-aligned) as a zero-copy `&mut [u64; 8]` SWAR array.
     #[inline(always)]
     #[must_use]
     pub const fn phase_words_mut(&mut self) -> &mut [u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
-        // SAFETY: `AttractorAnchor` is `#[repr(C, align(32))]` and `phase_deltas` is at byte offset 32
-        // (32-byte aligned, >= 8-byte alignment of `u64`), with identical size (64 bytes) and `Pod` validity.
+        // SAFETY: `AttractorAnchor` is `#[repr(C, align(64))]` and `phase_deltas` is at byte offset 64
+        // (64-byte aligned, >= 8-byte alignment of `u64`), with identical size (64 bytes) and `Pod` validity.
         unsafe {
             &mut *(self
                 .phase_deltas
@@ -2055,11 +2096,18 @@ impl AttractorAnchor {
 // ===================================================================
 
 /// Dynamic Attractor Field Engine with Accumulator Pressure Dynamics and $S^1$ Geodesic Phase-Proximity Gravity.
+///
+/// # Cache-Line Layout (`#[repr(C, align(64))]`)
+/// - **Cache Line 0 (`offset 0..64`)**: Hot lane control metadata (`active_count`, `capacity`,
+///   `domain_id`, `repulsion_gain`, `accumulator_pressure`, `evaporation_rate`,
+///   `dissipated_energy_total`, `next_anchor_id`, `step_counter`, `reserved_padding`).
+/// - **Cache Line 1 (`offset 64..128`)**: `repulsion_phase_deltas: [gcso_q7_t; 64]`, strictly
+///   64-byte cacheline-aligned (`0` cacheline splits).
+/// - **Cache Lines 2..641 (`offset 128..41088`)**: `anchors: [AttractorAnchor; 64]`, each strictly
+///   64-byte cacheline-aligned (`640` bytes).
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AttractorFieldEngine {
-    /// Fixed-capacity storage array for topological anchors (`64` slots).
-    pub anchors: [AttractorAnchor; MAX_ANCHORS_PER_FIELD],
     /// Number of active anchors registered in this lane.
     pub active_count: u32,
     /// Maximum capacity of this lane (`<= 64`).
@@ -2068,8 +2116,6 @@ pub struct AttractorFieldEngine {
     pub domain_id: u32,
     /// Global phase repulsion gain factor.
     pub repulsion_gain: f32,
-    /// Global anti-phase repulsion profile vector ($-\boldsymbol{\Delta\theta}$).
-    pub repulsion_phase_deltas: [gcso_q7_t; MAX_ATTENTION_HEADS],
     /// Accumulator pressure factor controlling minimum threshold for evaporative displacement.
     pub accumulator_pressure: f32,
     /// Evaporation rate per step applied to stigmergic density under external pressure.
@@ -2080,8 +2126,12 @@ pub struct AttractorFieldEngine {
     next_anchor_id: u32,
     /// Internal token step counter for LRU and temporal decay tracking.
     pub step_counter: u64,
-    /// Explicit trailing padding to 64-byte cacheline boundary.
+    /// Explicit padding completing Cache Line 0 (`offset 40..64`).
     pub reserved_padding: [u8; 24],
+    /// Global anti-phase repulsion profile vector ($-\boldsymbol{\Delta\theta}$, Cache Line 1: `offset 64..128`).
+    pub repulsion_phase_deltas: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    /// Fixed-capacity storage array for topological anchors (`64` slots, `offset 128..41088`).
+    pub anchors: [AttractorAnchor; MAX_ANCHORS_PER_FIELD],
 }
 
 // SAFETY: `AttractorFieldEngine` is `#[repr(C, align(64))]` where all fields are `Pod`.
@@ -2095,13 +2145,13 @@ impl Default for AttractorFieldEngine {
 }
 
 impl AttractorFieldEngine {
-    /// Borrows `self.repulsion_phase_deltas` (`offset 40976` of `#[repr(C, align(64))]`
-    /// [`AttractorFieldEngine`], guaranteed 16-byte aligned) as a zero-copy `&[u64; 8]` SWAR array.
+    /// Borrows `self.repulsion_phase_deltas` (`offset 64` of `#[repr(C, align(64))]`
+    /// [`AttractorFieldEngine`], guaranteed 64-byte cacheline-aligned) as a zero-copy `&[u64; 8]` SWAR array.
     #[inline(always)]
     #[must_use]
     pub const fn repulsion_words_ref(&self) -> &[u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
         // SAFETY: `AttractorFieldEngine` is `#[repr(C, align(64))]` and `repulsion_phase_deltas`
-        // is at byte offset 40976 (`40976 % 16 == 0`, >= 8-byte alignment of `u64`).
+        // is at byte offset 64 (`64 % 64 == 0`, >= 8-byte alignment of `u64`).
         unsafe {
             &*(self
                 .repulsion_phase_deltas
@@ -2120,6 +2170,17 @@ impl AttractorFieldEngine {
             capacity,
         );
         Self {
+            active_count: 0,
+            capacity: cap,
+            domain_id,
+            repulsion_gain: 0.0,
+            accumulator_pressure: 0.5,
+            evaporation_rate: 0.01,
+            dissipated_energy_total: 0.0,
+            next_anchor_id: 1,
+            step_counter: 0,
+            reserved_padding: [0; 24],
+            repulsion_phase_deltas: [0; MAX_ATTENTION_HEADS],
             anchors: [AttractorAnchor {
                 id: 0,
                 anchor_type: GCSO_ANCHOR_TYPE_SYSTEM_PROMPT,
@@ -2128,25 +2189,14 @@ impl AttractorFieldEngine {
                 stigmergic_density: 1.0,
                 half_life_steps: 1000,
                 last_active_step: 0,
-                phase_deltas: [0; MAX_ATTENTION_HEADS],
-                vector_data: [0.0; MAX_EMBEDDING_DIM],
+                domain_id,
                 vector_dim: 0,
                 is_active: 0,
                 is_crystallized: 0,
-                domain_id,
                 reserved_padding: [0; 24],
+                phase_deltas: [0; MAX_ATTENTION_HEADS],
+                vector_data: [0.0; MAX_EMBEDDING_DIM],
             }; MAX_ANCHORS_PER_FIELD],
-            active_count: 0,
-            capacity: cap,
-            domain_id,
-            repulsion_gain: 0.0,
-            repulsion_phase_deltas: [0; MAX_ATTENTION_HEADS],
-            accumulator_pressure: 0.5,
-            evaporation_rate: 0.01,
-            dissipated_energy_total: 0.0,
-            next_anchor_id: 1,
-            step_counter: 0,
-            reserved_padding: [0; 24],
         }
     }
 
@@ -2372,39 +2422,40 @@ impl AttractorFieldEngine {
             self.next_anchor_id = 1;
         }
 
-        let mut new_anchor = AttractorAnchor {
-            id: anchor_id,
-            anchor_type,
-            weight,
-            pull_force: 1.0,
-            stigmergic_density: 1.0,
-            half_life_steps: 1000,
-            last_active_step: self.step_counter,
-            is_active: 1,
-            is_crystallized: u8::from(is_crystallized),
-            domain_id: self.domain_id,
-            ..Default::default()
-        };
+        let step = self.step_counter;
+        let dom_id = self.domain_id;
+        let dst = &mut self.anchors[slot_idx];
+        dst.id = anchor_id;
+        dst.anchor_type = anchor_type;
+        dst.weight = weight;
+        dst.pull_force = 1.0;
+        dst.stigmergic_density = 1.0;
+        dst.half_life_steps = 1000;
+        dst.last_active_step = step;
+        dst.domain_id = dom_id;
+        dst.vector_dim = 0;
+        dst.is_active = 1;
+        dst.is_crystallized = u8::from(is_crystallized);
 
-        if let Some(p_phases) = prompt_phases {
-            new_anchor.phase_deltas = *p_phases;
-        }
+        let mut phases = match prompt_phases {
+            Some(p_phases) => *p_phases,
+            None => [0i8; MAX_ATTENTION_HEADS],
+        };
         if let Some(emb) = embedding {
             let copy_len = emb.len().min(MAX_EMBEDDING_DIM);
             if copy_len > 0 {
-                new_anchor.vector_data[..copy_len].copy_from_slice(&emb.as_slice()[..copy_len]);
-                new_anchor.vector_dim = copy_len as u16;
+                let src_slice = &emb.as_slice()[..copy_len];
+                dst.vector_data[..copy_len].copy_from_slice(src_slice);
+                dst.vector_dim = copy_len as u16;
                 if prompt_phases.is_none() {
-                    new_anchor.phase_deltas =
-                        project_f32_slice_to_q7_phases(&new_anchor.vector_data[..copy_len]);
+                    phases = project_f32_slice_to_q7_phases(src_slice);
                 }
             }
         }
         if anchor_type == GCSO_ANCHOR_TYPE_PHASE_REPULSE {
-            new_anchor.phase_deltas = branchless_q7_conjugate_64(&new_anchor.phase_deltas);
+            phases = branchless_q7_conjugate_64(&phases);
         }
-
-        self.anchors[slot_idx] = new_anchor;
+        dst.phase_deltas = phases;
         Ok(anchor_id)
     }
 
@@ -2949,7 +3000,7 @@ impl AttractorFieldEngine {
         let mut active_loaded = 0u32;
         for rec in snapshot.anchors.iter().take(count) {
             if rec.is_active != 0 {
-                self.anchors[active_loaded as usize] = rec.to_anchor();
+                rec.write_to_anchor_in_place(&mut self.anchors[active_loaded as usize], None);
                 if rec.id > max_id {
                     max_id = rec.id;
                 }
@@ -3156,20 +3207,20 @@ impl PersonaPatcher for AttractorFieldEngine {
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MultiAttractorSpace {
-    /// 8 hardware-aligned working lanes (`8 * 64 = 512` unified anchors).
-    pub fields: [AttractorFieldEngine; MAX_ATTRACTOR_DOMAINS],
-    /// Relative lane weights (initialized to neutral `1.0` and self-modulated by phase proximity).
+    /// Relative lane weights (Cache Line 0: `offset 0..32`, initialized to neutral `1.0` and self-modulated by phase proximity).
     pub domain_weights: [f32; MAX_ATTRACTOR_DOMAINS],
-    /// Active working lane bitmask (`0xFF` = all 8 lanes active on the unified field).
+    /// Active working lane bitmask (`offset 32..36`, `0xFF` = all 8 lanes active on the unified field).
     pub active_domains_mask: u32,
-    /// Explicit 4-byte alignment padding before 64-bit counters.
+    /// Explicit 4-byte alignment padding before 64-bit counters (`offset 36..40`).
     pub reserved_flags: u32,
-    /// Global token step counter across the unified phase space.
+    /// Global token step counter across the unified phase space (`offset 40..48`).
     pub global_step_counter: u64,
-    /// $8 \times 8$ cross-slot coupling bitmatrix (`u64`).
+    /// $8 \times 8$ cross-slot coupling bitmatrix (`u64`, `offset 48..56`).
     pub coupling_matrix_8x8: u64,
-    /// Explicit trailing padding to 64-byte cacheline boundary.
+    /// Explicit padding completing Cache Line 0 (`offset 56..64`).
     pub reserved_padding: [u8; 8],
+    /// 8 hardware-aligned working lanes (`offset 64..328768`, `8 * 64 = 512` unified anchors).
+    pub fields: [AttractorFieldEngine; MAX_ATTRACTOR_DOMAINS],
 }
 
 // SAFETY: `MultiAttractorSpace` is `#[repr(C, align(64))]` where all fields are `Pod`.
@@ -3472,13 +3523,17 @@ impl MultiAttractorSpace {
         )
     }
 
-    /// Advances global step counter across all working lanes and evaluates evaporative decay.
+    /// Advances global step counter across all working lanes and evaluates evaporative decay
+    /// (touching only Cache Line 0 of empty lanes and running anchor decay only when `active_count > 0`).
     #[inline]
     pub fn advance_step(&mut self) {
-        self.global_step_counter = self.global_step_counter.wrapping_add(1);
+        let next_step = self.global_step_counter.wrapping_add(1);
+        self.global_step_counter = next_step;
         for field in &mut self.fields {
-            field.step_counter = self.global_step_counter;
-            field.apply_evaporative_decay();
+            field.step_counter = next_step;
+            if field.active_count != 0 {
+                field.apply_evaporative_decay();
+            }
         }
     }
 
@@ -3810,9 +3865,7 @@ impl MultiAttractorSpace {
             let lane = self.select_spillover_lane(rec.domain_id);
             let field = &mut self.fields[lane];
             let slot_idx = field.allocate_anchor_slot(rec.weight.max(0.1))?;
-            let mut restored = rec.to_anchor();
-            restored.domain_id = lane as u32;
-            field.anchors[slot_idx] = restored;
+            rec.write_to_anchor_in_place(&mut field.anchors[slot_idx], Some(lane as u32));
             if rec.id >= field.next_anchor_id {
                 field.next_anchor_id = rec.id.wrapping_add(1).max(1);
             }
@@ -4209,10 +4262,15 @@ const _: () = {
     assert!(offset_of!(AttractorGrowthSnapshot, anchors) == 256);
     assert!(align_of::<DomainAccumulatorSummary>() == 16);
     assert!(size_of::<DomainAccumulatorSummary>() == 32);
-    assert!(align_of::<AttractorAnchor>() == 32);
+    assert!(align_of::<AttractorAnchor>() == 64);
     assert!(size_of::<AttractorAnchor>() == 640);
+    assert!(offset_of!(AttractorAnchor, phase_deltas) == 64);
+    assert!(offset_of!(AttractorAnchor, vector_data) == 128);
     assert!(align_of::<AttractorFieldEngine>() == 64);
+    assert!(offset_of!(AttractorFieldEngine, repulsion_phase_deltas) == 64);
+    assert!(offset_of!(AttractorFieldEngine, anchors) == 128);
     assert!(align_of::<MultiAttractorSpace>() == 64);
+    assert!(offset_of!(MultiAttractorSpace, fields) == 64);
 };
 
 #[cfg(test)]

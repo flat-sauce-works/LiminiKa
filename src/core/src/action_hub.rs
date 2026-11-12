@@ -1266,8 +1266,9 @@ impl ActionHubEngine {
         dst.reserved_padding = [0; 8];
     }
 
-    /// Applies pheromone evaporation across active inline trails and updates `trail_inout.stigmergic_density`
-    /// in registers without writing `self.trails[slot_idx]` prematurely, returning `(slot_idx, updated_density)`.
+    /// Applies pheromone evaporation across active inline trails (skipping `slot_idx`, which is
+    /// about to be overwritten, and skipping the loop entirely when `retain >= 1.0`) and updates
+    /// `trail_inout.stigmergic_density` in registers, returning `(slot_idx, updated_density)`.
     #[inline(always)]
     fn evaporate_and_prepare_slot_without_copy(
         &mut self,
@@ -1280,14 +1281,20 @@ impl ActionHubEngine {
             0.0,
             1.0,
         );
+        let slot_idx = self.write_cursor & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
+        let slot_usize = slot_idx as usize;
         let active_len = self.inline_active_len();
-        let mut i = 0usize;
-        while i < active_len {
-            let decayed = branchless_flush_subnormal_f32(
-                branchless_relu_f32(self.trails[i].stigmergic_density) * retain,
-            );
-            self.trails[i].stigmergic_density = decayed;
-            i += 1;
+        if retain < 1.0 - 1.0e-7 {
+            let mut i = 0usize;
+            while i < active_len {
+                if i != slot_usize {
+                    let decayed = branchless_flush_subnormal_f32(
+                        branchless_relu_f32(self.trails[i].stigmergic_density) * retain,
+                    );
+                    self.trails[i].stigmergic_density = decayed;
+                }
+                i += 1;
+            }
         }
 
         let cur_rho = branchless_flush_subnormal_f32(
@@ -1300,7 +1307,6 @@ impl ActionHubEngine {
         let next_rho = branchless_select_f32(contradiction_repulsed, damped_rho, reinforced_rho);
         trail_inout.stigmergic_density = next_rho;
 
-        let slot_idx = self.write_cursor & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
         self.write_cursor =
             self.write_cursor.wrapping_add(1) & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
         let cap = self.capacity;
@@ -1340,9 +1346,37 @@ impl ActionHubEngine {
         dominant_slot: u8,
         trail_inout: &mut gcso_pointer_trail_t,
         attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    ) -> GcsoResult<ActionOrchestrationReport> {
+        self.orchestrate_next_action_step_core(
+            input_ptr,
+            entropy_h_tilde,
+            dominant_slot,
+            trail_inout,
+            attention_scores,
+            query_tensor,
+            key_tensor,
+            logits_opt,
+            true,
+            None,
+        )
+    }
+
+    #[inline(always)]
+    fn orchestrate_next_action_step_core(
+        &mut self,
+        input_ptr: gcso_tagged_ptr_t,
+        entropy_h_tilde: f32,
+        dominant_slot: u8,
+        trail_inout: &mut gcso_pointer_trail_t,
+        attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
         mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         mut key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         mut logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+        accumulate_ptr_phase: bool,
+        macro_centroid_words: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
     ) -> GcsoResult<ActionOrchestrationReport> {
         let qdps_min_rad = self.dpsr.qdps_min_step_rad();
         let ripa_clamp = self.dpsr.ripa_clamp_max_rad();
@@ -1365,9 +1399,11 @@ impl ActionHubEngine {
 
         self.step_counter = self.step_counter.wrapping_add(1);
         trail_inout.record_pointer_transition(eff_ptr.raw(), 1, 0.0);
-        let embedded_phase = eff_ptr.unpack_phase();
-        if embedded_phase != 0 {
-            trail_inout.accumulate_uniform_phase(embedded_phase);
+        if accumulate_ptr_phase {
+            let embedded_phase = eff_ptr.unpack_phase();
+            if embedded_phase != 0 {
+                trail_inout.accumulate_uniform_phase(embedded_phase);
+            }
         }
 
         let (bloom_density, bloom_repulsed) =
@@ -1401,7 +1437,7 @@ impl ActionHubEngine {
                     64,
                     1.0,
                     trail_inout.target_anchor_id,
-                    None,
+                    macro_centroid_words,
                     0.25,
                 );
             let lp = fast_log_transition_prob(raw_best_coh);
@@ -1705,7 +1741,8 @@ impl ActionHubEngine {
                 Some(trail_inout),
             );
 
-        let report = self.orchestrate_next_action_step(
+        let win_w = *centroids[assigned_idx].phase_words_ref();
+        let report = self.orchestrate_next_action_step_core(
             gcso_tagged_ptr_t(frame.tagged_ptr),
             entropy_h_tilde,
             frame.dominant_slot,
@@ -1714,6 +1751,8 @@ impl ActionHubEngine {
             query_tensor,
             key_tensor,
             logits_opt,
+            false,
+            Some(&win_w),
         )?;
 
         Ok((

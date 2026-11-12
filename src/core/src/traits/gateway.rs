@@ -7382,14 +7382,30 @@ pub trait ActionHubGatewayExt: ActionHub {
 
         let (bypass_hit, effective_ptr) =
             self.resolve_or_pass_tagged_ptr(daes_slot, gcso_tagged_ptr_t(frame.tagged_ptr));
-        self.step_pointer(effective_ptr.raw(), trail_out)?;
-
+        let frm_nonzero = swar_words_nonzero_64(&frm_w);
+        if frm_nonzero {
+            *trail_phase_words_mut(trail_out) = frm_w;
+        }
         if frame.target_anchor_id != 0 {
             trail_out.target_anchor_id = frame.target_anchor_id;
             trail_out.cluster_id = frame.target_anchor_id;
         } else {
             trail_out.cluster_id = frame.dominant_slot as u32;
         }
+        trail_out.attractor_pull_force = branchless_min_f32(
+            branchless_max_f32(trail_out.attractor_pull_force, frame.effective_energy),
+            MAX_ATTRACTOR_PULL_FORCE,
+        );
+        // When `frm_w` is non-zero, pass `effective_ptr.with_phase(0)` to `step_pointer` so
+        // `step_pointer` does not double-accumulate `mean_phase_tag_q7` onto `frm_w` and so
+        // `ActionHubEngine::trails[slot_idx]` receives the exact `GatewayFrame` phase profile.
+        let step_ptr = if frm_nonzero {
+            effective_ptr.with_phase(0)
+        } else {
+            effective_ptr
+        };
+        self.step_pointer(step_ptr.raw(), trail_out)?;
+        trail_out.current_ptr = effective_ptr.raw();
 
         let is_repulsed = report.is_cohomology_repulsion()
             | ((frame.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0);
