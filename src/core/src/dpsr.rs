@@ -1583,11 +1583,13 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
                 dst_trail.target_anchor_id,
                 src_trail.target_anchor_id,
             );
-            src_trail.cluster_id = branchless_select_u32(
-                src_trail.target_anchor_id != 0,
+            let dst_cluster = branchless_select_u32(
+                dst_trail.cluster_id != 0,
+                dst_trail.cluster_id,
                 src_trail.target_anchor_id,
-                src_trail.cluster_id,
             );
+            src_trail.cluster_id =
+                branchless_select_u32(dst_cluster != 0, dst_cluster, src_trail.cluster_id);
             dst_trail.target_anchor_id = src_trail.target_anchor_id;
             dst_trail.cluster_id = src_trail.cluster_id;
 
@@ -1918,56 +1920,53 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
             head_dim,
             num_heads,
         );
+        let mut steer_words = *trail_phase_words_ref(trail);
         let mut any_nonzero = 0u64;
-        {
-            let tw = trail_phase_words_mut(trail);
-            if is_unit_gain & is_bypass_step {
-                let mut c = 0usize;
-                while c < active_cells {
-                    let filt_w = raw_words[c];
-                    let nw = swar_q7_circular_add_x8(tw[c], filt_w);
-                    tw[c] = nw;
-                    any_nonzero |= nw;
-                    c += 1;
-                }
-            } else if is_bypass_step {
-                let mut c = 0usize;
-                while c < active_cells {
-                    let filt_w =
-                        swar_q7_scale_le128_with_bias_x8(raw_words[c], gain_u64, gain_bias);
-                    raw_words[c] = filt_w;
-                    let nw = swar_q7_circular_add_x8(tw[c], filt_w);
-                    tw[c] = nw;
-                    any_nonzero |= nw;
-                    c += 1;
-                }
-            } else if is_unit_gain {
-                let mut c = 0usize;
-                while c < active_cells {
-                    let filt_w = swar_q7_qdps_filter_x8(raw_words[c], step_u8);
-                    raw_words[c] = filt_w;
-                    let nw = swar_q7_circular_add_x8(tw[c], filt_w);
-                    tw[c] = nw;
-                    any_nonzero |= nw;
-                    c += 1;
-                }
-            } else {
-                let mut c = 0usize;
-                while c < active_cells {
-                    let scaled_w =
-                        swar_q7_scale_le128_with_bias_x8(raw_words[c], gain_u64, gain_bias);
-                    let filt_w = swar_q7_qdps_filter_x8(scaled_w, step_u8);
-                    raw_words[c] = filt_w;
-                    let nw = swar_q7_circular_add_x8(tw[c], filt_w);
-                    tw[c] = nw;
-                    any_nonzero |= nw;
-                    c += 1;
-                }
+        if is_unit_gain & is_bypass_step {
+            let mut c = 0usize;
+            while c < active_cells {
+                let filt_w = raw_words[c];
+                let nw = swar_q7_circular_add_x8(steer_words[c], filt_w);
+                steer_words[c] = nw;
+                any_nonzero |= nw;
+                c += 1;
+            }
+        } else if is_bypass_step {
+            let mut c = 0usize;
+            while c < active_cells {
+                let filt_w = swar_q7_scale_le128_with_bias_x8(raw_words[c], gain_u64, gain_bias);
+                raw_words[c] = filt_w;
+                let nw = swar_q7_circular_add_x8(steer_words[c], filt_w);
+                steer_words[c] = nw;
+                any_nonzero |= nw;
+                c += 1;
+            }
+        } else if is_unit_gain {
+            let mut c = 0usize;
+            while c < active_cells {
+                let filt_w = swar_q7_qdps_filter_x8(raw_words[c], step_u8);
+                raw_words[c] = filt_w;
+                let nw = swar_q7_circular_add_x8(steer_words[c], filt_w);
+                steer_words[c] = nw;
+                any_nonzero |= nw;
+                c += 1;
+            }
+        } else {
+            let mut c = 0usize;
+            while c < active_cells {
+                let scaled_w = swar_q7_scale_le128_with_bias_x8(raw_words[c], gain_u64, gain_bias);
+                let filt_w = swar_q7_qdps_filter_x8(scaled_w, step_u8);
+                raw_words[c] = filt_w;
+                let nw = swar_q7_circular_add_x8(steer_words[c], filt_w);
+                steer_words[c] = nw;
+                any_nonzero |= nw;
+                c += 1;
             }
         }
+        *trail_phase_words_mut(trail) = steer_words;
         if any_nonzero != 0 {
             steer_from_swar_words_core_safe(
-                trail_phase_words_ref(trail),
+                &steer_words,
                 0xFF,
                 128,
                 head_dim,
@@ -2797,9 +2796,14 @@ pub trait DpsrClosedLoopSteering: PhaseSteering + PspmRouter {
                             trail.target_anchor_id,
                         );
                         if trail.target_anchor_id != 0 {
-                            trail.cluster_id = trail.target_anchor_id;
+                            let resolved_cluster = branchless_select_u32(
+                                dst_trail.cluster_id != 0,
+                                dst_trail.cluster_id,
+                                trail.target_anchor_id,
+                            );
+                            trail.cluster_id = resolved_cluster;
                             dst_trail.target_anchor_id = trail.target_anchor_id;
-                            dst_trail.cluster_id = trail.target_anchor_id;
+                            dst_trail.cluster_id = resolved_cluster;
                         }
                     }
                 }

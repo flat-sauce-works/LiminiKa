@@ -5081,8 +5081,7 @@ impl CrystallizedAttractorRecord {
                 while i < records.len() {
                     let rec = &records[i];
                     if rec.sample_count > 0 && rec.phase_gravity_mass > 1.0e-12 {
-                        let check_uni =
-                            (tot_pull <= 1.0e-12) | (acc_uni & (init_is_uniform | !init_nonzero));
+                        let check_uni = acc_uni & (init_is_uniform | !init_nonzero);
                         let rec_w = rec.phase_words_ref();
                         let rec_uni = if check_uni {
                             is_word_array_uniform_64(rec_w)
@@ -5406,12 +5405,25 @@ impl CrystallizedAttractorRecord {
                 i += 1;
             }
         } else {
+            #[cfg(target_endian = "little")]
+            let expected_w0 = (GCSO_CRYSTAL_RECORD_MAGIC as u64)
+                | ((GCSO_CRYSTAL_RECORD_VERSION as u64) << 32);
             while i < count {
-                let r = &recs[i];
-                if (r.magic != GCSO_CRYSTAL_RECORD_MAGIC)
-                    | (r.version != GCSO_CRYSTAL_RECORD_VERSION)
-                    | (r.checksum_crc32 == 0)
-                { return Err(GCSO_ERROR_CONTAINER_CORRUPTED); }
+                #[cfg(target_endian = "little")]
+                {
+                    let rw = unsafe { &*core::ptr::from_ref(&recs[i]).cast::<[u64; 16]>() };
+                    if (rw[0] != expected_w0) | ((rw[6] >> 32) == 0) {
+                        return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+                    }
+                }
+                #[cfg(not(target_endian = "little"))]
+                {
+                    let r = &recs[i];
+                    if (r.magic != GCSO_CRYSTAL_RECORD_MAGIC)
+                        | (r.version != GCSO_CRYSTAL_RECORD_VERSION)
+                        | (r.checksum_crc32 == 0)
+                    { return Err(GCSO_ERROR_CONTAINER_CORRUPTED); }
+                }
                 i += 1;
             }
         }
@@ -5428,6 +5440,54 @@ impl CrystallizedAttractorRecord {
         let total_bytes = records.len().checked_mul(size_of::<Self>()).ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
         if dst_bytes.len() < total_bytes { return Err(GCSO_ERROR_BUFFER_TOO_SMALL); }
         if total_bytes == 0 { return Ok(0); }
+        #[cfg(target_endian = "little")]
+        if is_aligned_to(dst_bytes, align_of::<u64>()) {
+            // Write 64-bit `u64` words directly so subsequent 64-bit CRC32 & header validation loads
+            // in `from_zimms_bytes_zero_copy` forward cleanly from the x86 Store Buffer with zero
+            // 256-bit-to-64-bit Store-to-Load Forwarding (STLF) stalls.
+            let expected_w0 = (GCSO_CRYSTAL_RECORD_MAGIC as u64)
+                | ((GCSO_CRYSTAL_RECORD_VERSION as u64) << 32);
+            let dst_ptr = dst_bytes.as_mut_ptr().cast::<u64>();
+            let mut idx = 0usize;
+            while idx < records.len() {
+                let r = &records[idx];
+                let src_w = unsafe { &*core::ptr::from_ref(r).cast::<[u64; 16]>() };
+                let mut w0 = src_w[0];
+                let mut w6 = src_w[6];
+                let valid_hdr = w0 == expected_w0;
+                if (!valid_hdr) | ((w6 >> 32) == 0) {
+                    let crc = if valid_hdr {
+                        r.compute_payload_crc32()
+                    } else {
+                        let mut rec = *r;
+                        rec.magic = GCSO_CRYSTAL_RECORD_MAGIC;
+                        rec.version = GCSO_CRYSTAL_RECORD_VERSION;
+                        w0 = expected_w0;
+                        rec.compute_payload_crc32()
+                    };
+                    w6 = (w6 & 0xFFFF_FFFFu64) | ((crc as u64) << 32);
+                }
+                let out_w = unsafe { &mut *dst_ptr.add(idx * 16).cast::<[u64; 16]>() };
+                out_w[0] = w0;
+                out_w[1] = src_w[1];
+                out_w[2] = src_w[2];
+                out_w[3] = src_w[3];
+                out_w[4] = src_w[4];
+                out_w[5] = src_w[5];
+                out_w[6] = w6;
+                out_w[7] = src_w[7];
+                out_w[8] = src_w[8];
+                out_w[9] = src_w[9];
+                out_w[10] = src_w[10];
+                out_w[11] = src_w[11];
+                out_w[12] = src_w[12];
+                out_w[13] = src_w[13];
+                out_w[14] = src_w[14];
+                out_w[15] = src_w[15];
+                idx += 1;
+            }
+            return Ok(total_bytes);
+        }
         dst_bytes[..total_bytes].copy_from_slice(Self::slice_as_bytes(records));
         let mut idx = 0usize;
         while idx < records.len() {
@@ -6043,38 +6103,147 @@ impl<'a> GcsoFourSectionView<'a> {
             &mut buf[off_crystals..])?;
         let after_crystals = off_crystals + crystals_bytes;
         let off_trails = (after_crystals + 127) & !127usize;
-        if off_trails > after_crystals { buf[after_crystals..off_trails].fill(0); }
-
-        gcso_pointer_trail_t::write_unaligned_slice_to(trails, buf, off_trails)?;
-        let off_bloom = off_trails + core::mem::size_of_val(trails);
-        if let Some(bloom) = bloom_opt { bloom.write_unaligned_to(buf, off_bloom)?; }
+        let trails_bytes = core::mem::size_of_val(trails);
+        let off_bloom = off_trails + trails_bytes;
         let off_daes = off_bloom
             + if bloom_opt.is_some() {
                 size_of::<ContrastivePhaseBloomFilter>()
             } else {
                 0
             };
-        if let Some(daes) = daes_opt { daes.write_unaligned_to(buf, off_daes)?; }
         let off_reports = off_daes
             + if daes_opt.is_some() {
                 size_of::<gcso_daes_slot_t>()
             } else {
                 0
             };
-        CausalProvenanceReport::write_unaligned_slice_to(provenance_reports, buf, off_reports)?;
-        let end_reports = off_reports + core::mem::size_of_val(provenance_reports);
-        if total_len > end_reports { buf[end_reports..total_len].fill(0); }
+        let reports_bytes = core::mem::size_of_val(provenance_reports);
+        let end_reports = off_reports + reports_bytes;
 
-        if let Ok(desc_out) =
-            gcso_zimms_descriptor_t::from_bytes_mut_at(buf, GCSO_ZIMMS_DESCRIPTOR_PREAMBLE_OFFSET)
-        {
-            desc_out.mapped_address = 0;
-            desc_out.file_size_bytes = total_len as u64;
-            desc_out.dma_buffer_handle = 0;
-            desc_out.flags = 4;
-            desc_out.fd_handle = -1;
-            desc_out.reserved = [0; 32];
+        #[inline(always)]
+        unsafe fn copy_u64_words_aligned(dst: *mut u64, src: *const u64, word_count: usize) {
+            // SAFETY: Caller guarantees `dst` and `src` are valid 8-byte-aligned pointers for `word_count` u64s.
+            unsafe {
+                let mut i = 0usize;
+                while i + 8 <= word_count {
+                    let w0 = *src.add(i);
+                    let w1 = *src.add(i + 1);
+                    let w2 = *src.add(i + 2);
+                    let w3 = *src.add(i + 3);
+                    let w4 = *src.add(i + 4);
+                    let w5 = *src.add(i + 5);
+                    let w6 = *src.add(i + 6);
+                    let w7 = *src.add(i + 7);
+                    *dst.add(i) = w0;
+                    *dst.add(i + 1) = w1;
+                    *dst.add(i + 2) = w2;
+                    *dst.add(i + 3) = w3;
+                    *dst.add(i + 4) = w4;
+                    *dst.add(i + 5) = w5;
+                    *dst.add(i + 6) = w6;
+                    *dst.add(i + 7) = w7;
+                    i += 8;
+                }
+                while i < word_count {
+                    *dst.add(i) = *src.add(i);
+                    i += 1;
+                }
+            }
+        }
+
+        #[inline(always)]
+        unsafe fn zero_u64_words_aligned(dst: *mut u64, word_count: usize) {
+            // SAFETY: Caller guarantees `dst` is a valid 8-byte-aligned pointer for `word_count` u64s.
+            unsafe {
+                let mut i = 0usize;
+                while i + 8 <= word_count {
+                    *dst.add(i) = 0;
+                    *dst.add(i + 1) = 0;
+                    *dst.add(i + 2) = 0;
+                    *dst.add(i + 3) = 0;
+                    *dst.add(i + 4) = 0;
+                    *dst.add(i + 5) = 0;
+                    *dst.add(i + 6) = 0;
+                    *dst.add(i + 7) = 0;
+                    i += 8;
+                }
+                while i < word_count {
+                    *dst.add(i) = 0;
+                    i += 1;
+                }
+            }
+        }
+
+        #[cfg(target_endian = "little")]
+        let aligned_u64 = is_aligned_to(buf, align_of::<u64>());
+        #[cfg(not(target_endian = "little"))]
+        let aligned_u64 = false;
+
+        if aligned_u64 {
+            // Write all 64-byte blocks using 64-bit `u64` stores so immediate CRC32 computation
+            // and subsequent `from_zimms_bytes_zero_copy` 64-bit loads experience zero
+            // 256-bit-to-64-bit Store-to-Load Forwarding (STLF) stalls.
+            unsafe {
+                let base_ptr = buf.as_mut_ptr();
+                if off_trails > after_crystals {
+                    zero_u64_words_aligned(
+                        base_ptr.add(after_crystals).cast::<u64>(),
+                        (off_trails - after_crystals) >> 3,
+                    );
+                }
+                if trails_bytes > 0 {
+                    copy_u64_words_aligned(
+                        base_ptr.add(off_trails).cast::<u64>(),
+                        trails.as_ptr().cast::<u64>(),
+                        trails_bytes >> 3,
+                    );
+                }
+                if let Some(bloom) = bloom_opt {
+                    copy_u64_words_aligned(
+                        base_ptr.add(off_bloom).cast::<u64>(),
+                        core::ptr::from_ref(bloom).cast::<u64>(),
+                        size_of::<ContrastivePhaseBloomFilter>() >> 3,
+                    );
+                }
+                if let Some(daes) = daes_opt {
+                    copy_u64_words_aligned(
+                        base_ptr.add(off_daes).cast::<u64>(),
+                        core::ptr::from_ref(daes).cast::<u64>(),
+                        size_of::<gcso_daes_slot_t>() >> 3,
+                    );
+                }
+                if reports_bytes > 0 {
+                    copy_u64_words_aligned(
+                        base_ptr.add(off_reports).cast::<u64>(),
+                        provenance_reports.as_ptr().cast::<u64>(),
+                        reports_bytes >> 3,
+                    );
+                }
+                if total_len > end_reports {
+                    zero_u64_words_aligned(
+                        base_ptr.add(end_reports).cast::<u64>(),
+                        (total_len - end_reports) >> 3,
+                    );
+                }
+                let desc_w = &mut *base_ptr
+                    .add(GCSO_ZIMMS_DESCRIPTOR_PREAMBLE_OFFSET)
+                    .cast::<[u64; 8]>();
+                desc_w[0] = 0;
+                desc_w[1] = total_len as u64;
+                desc_w[2] = 0;
+                desc_w[3] = 0xFFFF_FFFF_0000_0004u64;
+                desc_w[4] = 0;
+                desc_w[5] = 0;
+                desc_w[6] = 0;
+                desc_w[7] = 0;
+            }
         } else {
+            if off_trails > after_crystals { buf[after_crystals..off_trails].fill(0); }
+            gcso_pointer_trail_t::write_unaligned_slice_to(trails, buf, off_trails)?;
+            if let Some(bloom) = bloom_opt { bloom.write_unaligned_to(buf, off_bloom)?; }
+            if let Some(daes) = daes_opt { daes.write_unaligned_to(buf, off_daes)?; }
+            CausalProvenanceReport::write_unaligned_slice_to(provenance_reports, buf, off_reports)?;
+            if total_len > end_reports { buf[end_reports..total_len].fill(0); }
             let zimms_desc = gcso_zimms_descriptor_t {
                 mapped_address: 0,
                 file_size_bytes: total_len as u64,
@@ -6114,6 +6283,11 @@ impl<'a> GcsoFourSectionView<'a> {
                         & (r.version == GCSO_CRYSTAL_RECORD_VERSION);
                     if valid_hdr && r.checksum_crc32 != 0 {
                         r.checksum_crc32
+                    } else if is_aligned_to(buf, align_of::<u64>()) {
+                        let w6_off =
+                            off_crystals + idx * size_of::<CrystallizedAttractorRecord>() + 48;
+                        let w6 = unsafe { *buf.as_ptr().add(w6_off).cast::<u64>() };
+                        (w6 >> 32) as u32
                     } else {
                         let c_off =
                             off_crystals + idx * size_of::<CrystallizedAttractorRecord>() + 52;
@@ -6296,7 +6470,28 @@ impl<'a> GcsoFourSectionView<'a> {
             }
         };
 
-        if let Ok(hdr_out) = gcso_snapshot_header_t::from_bytes_mut_at(buf, 0) {
+        if aligned_u64 {
+            let pad_w0 = (u64::from(bloom_opt.is_some()))
+                | (u64::from(daes_opt.is_some()) << 8)
+                | (((provenance_reports.len() as u32) as u64) << 32);
+            let hdr_w = unsafe { &mut *buf.as_mut_ptr().cast::<[u64; 16]>() };
+            hdr_w[0] = (GCSO_SNAPSHOT_MAGIC_U32 as u64) | ((GCSO_ABI_VERSION_HEX as u64) << 32);
+            hdr_w[1] = total_len as u64;
+            hdr_w[2] = off_trails as u64;
+            hdr_w[3] = off_crystals as u64;
+            hdr_w[4] = after_crystals as u64;
+            hdr_w[5] = off_reports as u64;
+            hdr_w[6] = off_bloom as u64;
+            hdr_w[7] = (checksum_crc32 as u64) | (((off_daes as u32) as u64) << 32);
+            hdr_w[8] = timestamp_epoch_sec;
+            hdr_w[9] = pad_w0;
+            hdr_w[10] = 0;
+            hdr_w[11] = 0;
+            hdr_w[12] = 0;
+            hdr_w[13] = 0;
+            hdr_w[14] = 0;
+            hdr_w[15] = 0;
+        } else if let Ok(hdr_out) = gcso_snapshot_header_t::from_bytes_mut_at(buf, 0) {
             hdr_out.magic = GCSO_SNAPSHOT_MAGIC_U32;
             hdr_out.version = GCSO_ABI_VERSION_HEX;
             hdr_out.total_size = total_len as u64;
@@ -6389,7 +6584,27 @@ impl<'a> GcsoFourSectionView<'a> {
         let num_trails = trails_byte_len / size_of::<gcso_pointer_trail_t>();
         let trails = gcso_pointer_trail_t::slice_from_bytes_at(bytes, off_trails, num_trails)?;
 
-        let has_bloom = (header.reserved_padding[0] != 0)
+        #[cfg(target_endian = "little")]
+        let pad_w0 = unsafe { *core::ptr::from_ref(header).cast::<u64>().add(9) };
+        #[cfg(target_endian = "little")]
+        let (has_bloom_flag, has_daes_flag, num_reports) = (
+            (pad_w0 & 0xFF) != 0,
+            ((pad_w0 >> 8) & 0xFF) != 0,
+            (pad_w0 >> 32) as usize,
+        );
+        #[cfg(not(target_endian = "little"))]
+        let (has_bloom_flag, has_daes_flag, num_reports) = (
+            header.reserved_padding[0] != 0,
+            header.reserved_padding[1] != 0,
+            u32::from_le_bytes([
+                header.reserved_padding[4],
+                header.reserved_padding[5],
+                header.reserved_padding[6],
+                header.reserved_padding[7],
+            ]) as usize,
+        );
+
+        let has_bloom = has_bloom_flag
             & ((off_daes - off_bloom) >= size_of::<ContrastivePhaseBloomFilter>());
         let bloom = if has_bloom {
             Some(ContrastivePhaseBloomFilter::from_bytes_at(bytes, off_bloom)?)
@@ -6397,15 +6612,12 @@ impl<'a> GcsoFourSectionView<'a> {
             None
         };
 
-        let has_daes = (header.reserved_padding[1] != 0) & ((total_len - off_daes) >= size_of::<gcso_daes_slot_t>());
+        let has_daes = has_daes_flag & ((total_len - off_daes) >= size_of::<gcso_daes_slot_t>());
         let daes = if has_daes {
             Some(gcso_daes_slot_t::from_bytes_at(bytes, off_daes)?)
         } else {
             None
         };
-
-        let num_reports = u32::from_le_bytes([header.reserved_padding[4],
-            header.reserved_padding[5], header.reserved_padding[6], header.reserved_padding[7]]) as usize;
         let off_reports = off_daes
             + if has_daes {
                 size_of::<gcso_daes_slot_t>()
@@ -6513,34 +6725,14 @@ impl<'a> GcsoFourSectionView<'a> {
                 };
                 let mut idx = 0usize;
                 while idx + 4 <= num_crystals {
-                    let c_off0 = off_crystals + idx * size_of::<CrystallizedAttractorRecord>() + 52;
-                    let c_off1 = c_off0 + size_of::<CrystallizedAttractorRecord>();
-                    let c_off2 = c_off1 + size_of::<CrystallizedAttractorRecord>();
-                    let c_off3 = c_off2 + size_of::<CrystallizedAttractorRecord>();
-                    let rec_crc0 = u32::from_le_bytes([
-                        buf[c_off0],
-                        buf[c_off0 + 1],
-                        buf[c_off0 + 2],
-                        buf[c_off0 + 3],
-                    ]);
-                    let rec_crc1 = u32::from_le_bytes([
-                        buf[c_off1],
-                        buf[c_off1 + 1],
-                        buf[c_off1 + 2],
-                        buf[c_off1 + 3],
-                    ]);
-                    let rec_crc2 = u32::from_le_bytes([
-                        buf[c_off2],
-                        buf[c_off2 + 1],
-                        buf[c_off2 + 2],
-                        buf[c_off2 + 3],
-                    ]);
-                    let rec_crc3 = u32::from_le_bytes([
-                        buf[c_off3],
-                        buf[c_off3 + 1],
-                        buf[c_off3 + 2],
-                        buf[c_off3 + 3],
-                    ]);
+                    let w6_off0 = off_crystals + idx * size_of::<CrystallizedAttractorRecord>() + 48;
+                    let w6_off1 = w6_off0 + size_of::<CrystallizedAttractorRecord>();
+                    let w6_off2 = w6_off1 + size_of::<CrystallizedAttractorRecord>();
+                    let w6_off3 = w6_off2 + size_of::<CrystallizedAttractorRecord>();
+                    let rec_crc0 = (unsafe { *buf.as_ptr().add(w6_off0).cast::<u64>() } >> 32) as u32;
+                    let rec_crc1 = (unsafe { *buf.as_ptr().add(w6_off1).cast::<u64>() } >> 32) as u32;
+                    let rec_crc2 = (unsafe { *buf.as_ptr().add(w6_off2).cast::<u64>() } >> 32) as u32;
+                    let rec_crc3 = (unsafe { *buf.as_ptr().add(w6_off3).cast::<u64>() } >> 32) as u32;
                     let s0 = crc32_crystal_stamp_contrib_128b(rec_crc0);
                     let s1 = crc32_crystal_stamp_contrib_128b(rec_crc1);
                     let s2 = crc32_crystal_stamp_contrib_128b(rec_crc2);
@@ -6551,33 +6743,18 @@ impl<'a> GcsoFourSectionView<'a> {
                     idx += 4;
                 }
                 while idx + 2 <= num_crystals {
-                    let c_off0 = off_crystals + idx * size_of::<CrystallizedAttractorRecord>() + 52;
-                    let c_off1 = c_off0 + size_of::<CrystallizedAttractorRecord>();
-                    let rec_crc0 = u32::from_le_bytes([
-                        buf[c_off0],
-                        buf[c_off0 + 1],
-                        buf[c_off0 + 2],
-                        buf[c_off0 + 3],
-                    ]);
-                    let rec_crc1 = u32::from_le_bytes([
-                        buf[c_off1],
-                        buf[c_off1 + 1],
-                        buf[c_off1 + 2],
-                        buf[c_off1 + 3],
-                    ]);
+                    let w6_off0 = off_crystals + idx * size_of::<CrystallizedAttractorRecord>() + 48;
+                    let w6_off1 = w6_off0 + size_of::<CrystallizedAttractorRecord>();
+                    let rec_crc0 = (unsafe { *buf.as_ptr().add(w6_off0).cast::<u64>() } >> 32) as u32;
+                    let rec_crc1 = (unsafe { *buf.as_ptr().add(w6_off1).cast::<u64>() } >> 32) as u32;
                     let s0 = crc32_crystal_stamp_contrib_128b(rec_crc0);
                     let s1 = crc32_crystal_stamp_contrib_128b(rec_crc1);
                     crc = crc32_step_l16(crc) ^ crc32_step_l8(s0) ^ s1;
                     idx += 2;
                 }
                 if idx < num_crystals {
-                    let c_off = off_crystals + idx * size_of::<CrystallizedAttractorRecord>() + 52;
-                    let rec_crc = u32::from_le_bytes([
-                        buf[c_off],
-                        buf[c_off + 1],
-                        buf[c_off + 2],
-                        buf[c_off + 3],
-                    ]);
+                    let w6_off = off_crystals + idx * size_of::<CrystallizedAttractorRecord>() + 48;
+                    let rec_crc = (unsafe { *buf.as_ptr().add(w6_off).cast::<u64>() } >> 32) as u32;
                     crc = crc32_fold_stamped_crystal_128b(crc, rec_crc);
                 }
                 let mut rem_off = after_crystals;

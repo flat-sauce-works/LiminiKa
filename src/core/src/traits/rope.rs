@@ -2447,7 +2447,8 @@ unsafe fn apply_ripa_default_nonuniform_avx2_ptr(
             let step2 = head_dim * 2;
             let mut h = 0usize;
             while h + 2 <= num_heads {
-                let wb16 = p_ptr.add(h).cast::<u16>().read_unaligned();
+                let wb16 =
+                    (p_ptr.add(h & !7usize).cast::<u64>().read_unaligned() >> ((h & 6) << 3)) as u32;
                 let (s0, c0) = lut[(wb16 as u8) as usize];
                 let vc0 = _mm256_set1_ps(c0);
                 let vs0 = _mm256_set1_ps(s0);
@@ -2468,7 +2469,7 @@ unsafe fn apply_ripa_default_nonuniform_avx2_ptr(
                     ),
                 );
                 let hp1 = hp.add(head_dim);
-                let (s1, c1) = lut[(wb16 >> 8) as usize];
+                let (s1, c1) = lut[((wb16 >> 8) as u8) as usize];
                 let vc1 = _mm256_set1_ps(c1);
                 let vs1 = _mm256_set1_ps(s1);
                 let u0 = _mm256_loadu_ps(hp1);
@@ -2491,7 +2492,9 @@ unsafe fn apply_ripa_default_nonuniform_avx2_ptr(
                 h += 2;
             }
             while h < num_heads {
-                let (sin_t, cos_t) = lut[*p_ptr.add(h) as usize];
+                let b_h =
+                    (p_ptr.add(h & !7usize).cast::<u64>().read_unaligned() >> ((h & 7) << 3)) as u8;
+                let (sin_t, cos_t) = lut[b_h as usize];
                 let v_cos = _mm256_set1_ps(cos_t);
                 let v_sin = _mm256_set1_ps(sin_t);
                 let v0 = _mm256_loadu_ps(hp);
@@ -2520,14 +2523,15 @@ unsafe fn apply_ripa_default_nonuniform_avx2_ptr(
             let step2 = head_dim * 2;
             let mut h = 0usize;
             while h + 2 <= num_heads {
-                let wb16 = p_ptr.add(h).cast::<u16>().read_unaligned();
+                let wb16 =
+                    (p_ptr.add(h & !7usize).cast::<u64>().read_unaligned() >> ((h & 6) << 3)) as u32;
                 let (s0, c0) = lut[(wb16 as u8) as usize];
                 let vc0 = _mm256_set1_ps(c0);
                 let vs0 = _mm256_set1_ps(s0);
                 avx2_rotate_so2_block32(hp, vc0, vs0);
                 avx2_rotate_so2_block32(hp.add(32), vc0, vs0);
                 let hp1 = hp.add(head_dim);
-                let (s1, c1) = lut[(wb16 >> 8) as usize];
+                let (s1, c1) = lut[((wb16 >> 8) as u8) as usize];
                 let vc1 = _mm256_set1_ps(c1);
                 let vs1 = _mm256_set1_ps(s1);
                 avx2_rotate_so2_block32(hp1, vc1, vs1);
@@ -2536,7 +2540,9 @@ unsafe fn apply_ripa_default_nonuniform_avx2_ptr(
                 h += 2;
             }
             while h < num_heads {
-                let (sin_t, cos_t) = lut[*p_ptr.add(h) as usize];
+                let b_h =
+                    (p_ptr.add(h & !7usize).cast::<u64>().read_unaligned() >> ((h & 7) << 3)) as u8;
+                let (sin_t, cos_t) = lut[b_h as usize];
                 let v_cos = _mm256_set1_ps(cos_t);
                 let v_sin = _mm256_set1_ps(sin_t);
                 avx2_rotate_so2_block32(hp, v_cos, v_sin);
@@ -2680,13 +2686,14 @@ fn apply_ripa_pair_slice_core(
                     let step2 = head_dim * 2;
                     let mut h = 0usize;
                     while h + 2 <= num_heads {
-                        let wb16 = p_ptr.add(h).cast::<u16>().read_unaligned();
+                        let wb16 = (p_ptr.add(h & !7usize).cast::<u64>().read_unaligned()
+                            >> ((h & 6) << 3)) as u32;
                         let (s0, c0) = lut[(wb16 as u8) as usize];
                         let vc0 = _mm256_set1_ps(c0);
                         let vs0 = _mm256_set1_ps(s0);
                         avx2_rotate_so2_block32(qp, vc0, vs0);
                         avx2_rotate_so2_block32(kp, vc0, vs0);
-                        let (s1, c1) = lut[(wb16 >> 8) as usize];
+                        let (s1, c1) = lut[((wb16 >> 8) as u8) as usize];
                         let vc1 = _mm256_set1_ps(c1);
                         let vs1 = _mm256_set1_ps(s1);
                         avx2_rotate_so2_block32(qp.add(head_dim), vc1, vs1);
@@ -2696,7 +2703,9 @@ fn apply_ripa_pair_slice_core(
                         h += 2;
                     }
                     while h < num_heads {
-                        let (sin_t, cos_t) = lut[*p_ptr.add(h) as usize];
+                        let b_h = (p_ptr.add(h & !7usize).cast::<u64>().read_unaligned()
+                            >> ((h & 7) << 3)) as u8;
+                        let (sin_t, cos_t) = lut[b_h as usize];
                         let vc = _mm256_set1_ps(cos_t);
                         let vs = _mm256_set1_ps(sin_t);
                         avx2_rotate_so2_block32(qp, vc, vs);
@@ -2711,12 +2720,15 @@ fn apply_ripa_pair_slice_core(
             if rot_dim == 16 {
                 // SAFETY: `q_slice` and `k_slice` have length `num_heads * head_dim`, `rot_dim == 16`, and AVX2 is enabled.
                 unsafe {
+                    let p_ptr = p_slice.as_ptr().cast::<u8>();
                     let mut qp = q_ptr.add(upper_off);
                     let mut kp = k_ptr.add(upper_off);
                     let step2 = head_dim * 2;
                     let mut h = 0usize;
                     while h + 2 <= num_heads {
-                        let (s0, c0) = lut[(*p_slice.get_unchecked(h) as u8) as usize];
+                        let wb16 = (p_ptr.add(h & !7usize).cast::<u64>().read_unaligned()
+                            >> ((h & 6) << 3)) as u32;
+                        let (s0, c0) = lut[(wb16 as u8) as usize];
                         let vc0 = _mm256_set1_ps(c0);
                         let vs0 = _mm256_set1_ps(s0);
                         let q0 = _mm256_loadu_ps(qp);
@@ -2753,7 +2765,7 @@ fn apply_ripa_pair_slice_core(
                         );
                         let qp_next = qp.add(head_dim);
                         let kp_next = kp.add(head_dim);
-                        let (s1, c1) = lut[(*p_slice.get_unchecked(h + 1) as u8) as usize];
+                        let (s1, c1) = lut[((wb16 >> 8) as u8) as usize];
                         let vc1 = _mm256_set1_ps(c1);
                         let vs1 = _mm256_set1_ps(s1);
                         let q2 = _mm256_loadu_ps(qp_next);
@@ -2793,7 +2805,9 @@ fn apply_ripa_pair_slice_core(
                         h += 2;
                     }
                     while h < num_heads {
-                        let (sin_t, cos_t) = lut[(*p_slice.get_unchecked(h) as u8) as usize];
+                        let b_h = (p_ptr.add(h & !7usize).cast::<u64>().read_unaligned()
+                            >> ((h & 7) << 3)) as u8;
+                        let (sin_t, cos_t) = lut[b_h as usize];
                         let v_cos = _mm256_set1_ps(cos_t);
                         let v_sin = _mm256_set1_ps(sin_t);
                         let q0 = _mm256_loadu_ps(qp);
@@ -2847,7 +2861,9 @@ fn apply_ripa_pair_slice_core(
                     let mut kp = k_ptr.add(upper_off);
                     let mut h = 0usize;
                     while h < num_heads {
-                        let (sin_t, cos_t) = lut[*p_ptr.add(h) as usize];
+                        let b_h = (p_ptr.add(h & !7usize).cast::<u64>().read_unaligned()
+                            >> ((h & 7) << 3)) as u8;
+                        let (sin_t, cos_t) = lut[b_h as usize];
                         let vc = _mm256_set1_ps(cos_t);
                         let vs = _mm256_set1_ps(sin_t);
                         avx2_rotate_so2_block32(qp, vc, vs);
@@ -3613,12 +3629,12 @@ fn steer_pair_slice_from_eff_words_core(
                 if rot_dim == 64 {
                     // SAFETY: `q_slice` and `k_slice` have length `num_heads * head_dim`, `rot_dim == 64`, and AVX2 is enabled.
                     unsafe {
-                        let p_ptr = eff_words.as_ptr().cast::<u8>();
                         let mut qp = q_slice.as_mut_ptr().add(upper_off);
                         let mut kp = k_slice.as_mut_ptr().add(upper_off);
                         let mut h = 0usize;
                         while h < num_heads {
-                            let (sin_t, cos_t) = lut[*p_ptr.add(h) as usize];
+                            let b_h = (eff_words[h >> 3] >> ((h & 7) << 3)) as u8;
+                            let (sin_t, cos_t) = lut[b_h as usize];
                             let v_cos = _mm256_set1_ps(cos_t);
                             let v_sin = _mm256_set1_ps(sin_t);
                             avx2_rotate_so2_block32(qp, v_cos, v_sin);
@@ -7063,7 +7079,6 @@ fn rotate_ripa_lut_words_slice_nonuniform(
     {
         use core::arch::x86_64::_mm256_set1_ps;
         let ptr = t_slice.as_mut_ptr();
-        let p_ptr = base_ripa_words.as_ptr().cast::<u8>();
         if head_dim == 128 {
             #[inline(always)]
             unsafe fn rot4_128(hp: *mut f32, wb32: u32, lut: &[(f32, f32); 256]) {
@@ -7238,7 +7253,8 @@ fn rotate_ripa_lut_words_slice_nonuniform(
                     h += 2;
                 }
                 while h < limit {
-                    let (sin_c, cos_c) = self_lut[*p_ptr.add(h) as usize];
+                    let b_h = (base_ripa_words[h >> 3] >> ((h & 7) << 3)) as u8;
+                    let (sin_c, cos_c) = self_lut[b_h as usize];
                     let vc = _mm256_set1_ps(cos_c);
                     let vs = _mm256_set1_ps(sin_c);
                     let v0 = _mm256_loadu_ps(hp);
@@ -7269,7 +7285,8 @@ fn rotate_ripa_lut_words_slice_nonuniform(
                 let mut hp = ptr.add(upper_off);
                 let mut h = 0usize;
                 while h < limit {
-                    let (sin_c, cos_c) = self_lut[*p_ptr.add(h) as usize];
+                    let b_h = (base_ripa_words[h >> 3] >> ((h & 7) << 3)) as u8;
+                    let (sin_c, cos_c) = self_lut[b_h as usize];
                     let vc = _mm256_set1_ps(cos_c);
                     let vs = _mm256_set1_ps(sin_c);
                     avx2_rotate_so2_block32(hp, vc, vs);

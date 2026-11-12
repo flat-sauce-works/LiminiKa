@@ -1679,7 +1679,6 @@ fn step_via_gateway_frame_with_words_core<
     engine.eval_stateful(token_z_score, &mut raw_st)?;
     let moving_z_entropy = raw_st.moving_z_entropy;
     let sliding_entropy_rate = raw_st.sliding_entropy_rate;
-    let singularity_eps = raw_st.singularity_eps;
     let bif_thresh = branchless_select_f32(
         (raw_st.bifurcation_threshold > 0.0)
             & branchless_is_finite_f32(raw_st.bifurcation_threshold),
@@ -1932,17 +1931,11 @@ fn step_via_gateway_frame_with_words_core<
         }
     }
 
-    let st = gcso_edbc_state_t {
-        moving_z_entropy,
-        bifurcation_threshold: bif_thresh,
-        singularity_eps,
-        sliding_entropy_rate,
-        repulsion_gain: final_rep_gain,
-        sample_temperature: edbc_temp,
-        active_branch_mode: final_mode,
-        reserved: [0u8; 36],
-    };
-    Ok((st, evolved_ptr, report, eff_inv_temp, crystal_mass))
+    raw_st.bifurcation_threshold = bif_thresh;
+    raw_st.repulsion_gain = final_rep_gain;
+    raw_st.sample_temperature = edbc_temp;
+    raw_st.active_branch_mode = final_mode;
+    Ok((raw_st, evolved_ptr, report, eff_inv_temp, crystal_mass))
 }
 
 // ===================================================================
