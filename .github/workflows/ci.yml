@@ -52,8 +52,13 @@ jobs:
       - name: Install clang-format & Python formatters
         run: |
           if ! command -v clang-format >/dev/null 2>&1 || ! command -v autopep8 >/dev/null 2>&1; then
-            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 update || true
-            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 install -y clang-format python3-autopep8 || true
+            if ! sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update; then
+              if [ -f /etc/apt/apt-mirrors.txt ]; then
+                printf 'https://archive.ubuntu.com/ubuntu\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null || true
+              fi
+              sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update || true
+            fi
+            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 install -y clang-format python3-autopep8 || true
           fi
           if ! command -v autopep8 >/dev/null 2>&1; then
             python3 -m pip install --quiet --retries 1 --timeout 10 autopep8 2>/dev/null || pip3 install --quiet --break-system-packages --retries 1 --timeout 10 autopep8 2>/dev/null || true
@@ -309,8 +314,15 @@ jobs:
       - name: Install Build Dependencies & Cache Tools (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 update || true
-          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 install -y ninja-build clang clang-format cmake libclang-dev ccache vulkan-tools libvulkan-dev glslang-tools libshaderc-dev || true
+          if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1 || ! command -v ccache >/dev/null 2>&1 || [ ! -f /usr/include/vulkan/vulkan.h ]; then
+            if ! sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update; then
+              if [ -f /etc/apt/apt-mirrors.txt ]; then
+                printf 'https://archive.ubuntu.com/ubuntu\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null || true
+              fi
+              sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update || true
+            fi
+            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 install -y ninja-build clang clang-format cmake libclang-dev ccache vulkan-tools libvulkan-dev glslang-tools libshaderc-dev || true
+          fi
           if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
             python3 -m pip install --quiet --retries 1 --timeout 10 cmake ninja 2>/dev/null || pip3 install --quiet --break-system-packages --retries 1 --timeout 10 cmake ninja 2>/dev/null || true
           fi
@@ -457,8 +469,15 @@ jobs:
       - name: Install C/C++ & LLVM Dependencies for FFI/Bindgen (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 update || true
-          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 install -y cmake ninja-build libclang-dev clang libvulkan-dev glslang-tools libshaderc-dev || true
+          if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1 || [ ! -f /usr/include/vulkan/vulkan.h ]; then
+            if ! sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update; then
+              if [ -f /etc/apt/apt-mirrors.txt ]; then
+                printf 'https://archive.ubuntu.com/ubuntu\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null || true
+              fi
+              sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update || true
+            fi
+            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 install -y cmake ninja-build libclang-dev clang libvulkan-dev glslang-tools libshaderc-dev || true
+          fi
           if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
             python3 -m pip install --quiet --retries 1 --timeout 10 cmake ninja 2>/dev/null || pip3 install --quiet --break-system-packages --retries 1 --timeout 10 cmake ninja 2>/dev/null || true
           fi

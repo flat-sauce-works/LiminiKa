@@ -8,10 +8,12 @@ running `python scripts/run_benchmarks.py` with no arguments automatically
 achieves maximum determinism, lowest CoV/MAD jitter, peak SIMD throughput, and
 generates Criterion's interactive HTML index (`target/criterion/report/index.html`):
 - Clean Core vs. Provisional `.gcso` Separation: the default `standard` profile
-  runs all finalized Core (`DPSR` + `EDBC`) benchmark groups while skipping
-  `Provisional_GCSO_Container` (`--skip Provisional_GCSO_Container`), unless
-  `--include-provisional-gcso`, `--profile provisional-gcso`, or `--profile all`
-  is specified.
+  runs all finalized Core (`DPSR` + `EDBC`) benchmark groups while isolating
+  `Provisional_GCSO_Container` via `LIMINIKA_RUN_PROVISIONAL_GCSO=0` and
+  Criterion positive group-prefix regex filtering (avoiding `libtest`'s
+  `--skip` flag, which Criterion's `configure_from_args()` rejects with exit
+  code 2), unless `--include-provisional-gcso`, `--profile provisional-gcso`,
+  or `--profile all` is specified.
 - Two-stage Pre-Compilation & Thermal/IO Settle (`--precompile` enabled by
   default; disable via `--no-precompile`): builds all benchmark binaries via
   `cargo bench --no-run` first, flushes OS filesystem buffers, runs Python GC,
@@ -53,6 +55,16 @@ import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
+
+# Anchored Criterion group-prefix regex matching all finalized Core (DPSR + EDBC) groups
+# while excluding `DPSR_Provisional_GCSO_Container` and `EDBC_Provisional_GCSO_Container`.
+# Criterion's `configure_from_args()` CLI parser does not support `libtest`'s `--skip` flag
+# (passing `--skip` fails with `error: unexpected argument found`, exit code 2), so Core-only
+# profiles combine `LIMINIKA_RUN_PROVISIONAL_GCSO=0` with this positive group regex.
+CORE_GROUPS_PREFIX_REGEX: str = (
+    r"^(DPSR_(HotPath|Batch|Long_Context|Swarm|Extreme)"
+    r"|EDBC_(Stateful|CVoid|Continuous|Long_Dialogue|Pointer|Extreme))"
+)
 
 # Pre-defined execution profiles for tailored benchmarking runs
 PROFILES: dict[str, dict[str, str | None]] = {
@@ -388,7 +400,10 @@ def prepare_host_for_measurement(settle_ms: int = 150) -> None:
 
 
 def build_optimal_cargo_env(
-    native_cpu: bool, extra_rustflags: str | None
+    native_cpu: bool,
+    extra_rustflags: str | None,
+    run_provisional_gcso: bool = False,
+    noise_threshold: float | None = 0.025,
 ) -> dict[str, str]:
     """Construct a deterministic, single-thread-pool Cargo/Criterion environment dictionary."""
     custom_env: dict[str, str] = {
@@ -400,7 +415,10 @@ def build_optimal_cargo_env(
         "OPENBLAS_NUM_THREADS": "1",
         "TOKIO_WORKER_THREADS": "1",
         "RUST_BACKTRACE": "0",
+        "LIMINIKA_RUN_PROVISIONAL_GCSO": "1" if run_provisional_gcso else "0",
     }
+    if noise_threshold is not None and noise_threshold > 0.0:
+        custom_env["LIMINIKA_NOISE_THRESHOLD"] = str(noise_threshold)
 
     rustflags_list: list[str] = []
     if os.environ.get("RUSTFLAGS"):
@@ -709,14 +727,43 @@ def main() -> None:
 
     print_system_diagnostics()
 
-    effective_filter = args.filter
+    raw_profile_filter = args.filter
     effective_skip: str | None = None
-    if not effective_filter and args.profile in PROFILES:
-        effective_filter = PROFILES[args.profile]["filter"]
+    if not raw_profile_filter and args.profile in PROFILES:
+        raw_profile_filter = PROFILES[args.profile]["filter"]
         if not args.include_provisional_gcso:
             effective_skip = PROFILES[args.profile].get("skip")
 
-    custom_env = build_optimal_cargo_env(args.native_cpu, args.rustflags)
+    run_provisional_gcso = bool(
+        args.include_provisional_gcso
+        or args.profile in ("provisional-gcso", "all")
+        or (
+            raw_profile_filter is not None
+            and "provisional" in raw_profile_filter.lower()
+        )
+    )
+
+    # Criterion's `configure_from_args()` accepts a single positive positional regex `[FILTER]`
+    # and does NOT support `libtest`'s `--skip` flag. When `effective_skip` is active, combine
+    # `LIMINIKA_RUN_PROVISIONAL_GCSO=0` (in-process group gating in `bench_dpsr.rs`/`bench_edbc.rs`)
+    # with an anchored Core-group regex when a sub-profile filter is present.
+    effective_filter: str | None
+    if effective_skip and not args.filter:
+        if raw_profile_filter:
+            effective_filter = (
+                f"{CORE_GROUPS_PREFIX_REGEX}[^/]*/.*({raw_profile_filter})"
+            )
+        else:
+            effective_filter = f"{CORE_GROUPS_PREFIX_REGEX}/"
+    else:
+        effective_filter = raw_profile_filter
+
+    custom_env = build_optimal_cargo_env(
+        args.native_cpu,
+        args.rustflags,
+        run_provisional_gcso=run_provisional_gcso,
+        noise_threshold=args.noise_threshold,
+    )
     resolved_manifest = resolve_manifest_path(project_root, args.manifest_path)
 
     if not args.skip_execution:
@@ -724,7 +771,7 @@ def main() -> None:
             clean_provisional_criterion_artifacts(
                 project_root,
                 args.criterion_dir,
-                remove_provisional_groups=bool(effective_skip),
+                remove_provisional_groups=not run_provisional_gcso,
             )
 
         base_cargo_cmd = ["cargo", "bench"]
@@ -764,13 +811,13 @@ def main() -> None:
         if effective_filter:
             print(f"Filter     : '{effective_filter}'")
         if effective_skip:
-            print(f"Skipped    : '{effective_skip}' (Provisional .gcso isolated)")
+            print(
+                f"Skipped    : '{effective_skip}' (Provisional .gcso isolated via LIMINIKA_RUN_PROVISIONAL_GCSO=0)"
+            )
 
         cargo_args: list[str] = []
         if effective_filter:
             cargo_args.append(effective_filter)
-        if effective_skip:
-            cargo_args.extend(["--skip", effective_skip])
         if args.baseline:
             cargo_args.extend(["--baseline", args.baseline])
         if args.save_baseline:

@@ -45,13 +45,14 @@
 use super::aligned::{AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32};
 use super::branchless::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
-    branchless_ln_f32, branchless_min_f32, branchless_phase_coherence_inv_temp_scale,
-    branchless_q7_circular_resultant_64, branchless_q7_slerp_64,
-    branchless_relu_f32, branchless_select_f32, branchless_select_u32, branchless_select_u64,
-    branchless_select_u8, branchless_splitmix64, coherence_from_word_arrays_64, load_q7_words_64,
-    scale_f32_slice_unrolled8,
+    branchless_ln_f32, branchless_max_f32, branchless_min_f32,
+    branchless_phase_coherence_inv_temp_scale, branchless_q7_circular_resultant_64,
+    branchless_q7_slerp_64, branchless_relu_f32, branchless_select_f32, branchless_select_u32,
+    branchless_select_u64, branchless_select_u8, branchless_splitmix64,
+    coherence_from_word_arrays_64, load_q7_words_64, scale_f32_slice_unrolled8,
     swar_add_sat_q7_slice_in_place, swar_circular_add_and_fold_geodesic_q7_slice_in_place,
-    swar_q7_add_sat_x8, trail_phase_words_mut, trail_phase_words_ref, BranchlessKernel,
+    swar_q7_add_sat_x8, swar_slerp_words_with_bias_64, trail_phase_words_mut,
+    trail_phase_words_ref, BranchlessKernel,
 };
 use super::gateway::CrystallizedAttractorRecord;
 use super::primitives::{
@@ -66,7 +67,8 @@ use super::telemetry::{
     StigmergicTrailOps, SwarmResolutionReport, DAES_METRIC_FAST_PATH_HIT,
     DAES_METRIC_LAYER_SKIP_COMPENSATED, DAES_METRIC_LAZY_UNWRAP_APPLIED, DAES_METRIC_PHASE_STEERED,
     DAES_METRIC_PSPM_ROUTED, DAES_METRIC_REPULSION_APPLIED, DAES_METRIC_SLOT_SYNERGY_ACTIVE,
-    MAX_ATTRACTOR_PULL_FORCE, NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
+    MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS,
+    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 use super::{
@@ -796,7 +798,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
 
-        let (selected_id, bayes_score, _raw_coh, found) = src_trail
+        let (selected_id, bayes_score, raw_coh, found) = src_trail
             .select_and_rewire_best_next_trail(
                 candidate_trails,
                 head_dim,
@@ -813,13 +815,65 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
         self.link_hallucinated_trails(src_trail_id, selected_id)?;
         let dst_idx = (selected_id as usize).min(candidate_trails.len() - 1);
         let dst_trail = &mut candidate_trails[dst_idx];
-        let (coh, log_prob, _repulsed) = dst_trail.bridge_liminal_hallucinated_trail(
-            src_trail,
+
+        let t_s = u64::from(branchless_select_u8(
+            interpolation_u7 > 128,
+            128,
             interpolation_u7,
-            contradiction_threshold,
+        ));
+        if t_s < 128 && raw_coh < 1.0 - 1.0e-7 {
+            let src_w = trail_phase_words_ref(src_trail);
+            if t_s == 0 {
+                *trail_phase_words_mut(dst_trail) = *src_w;
+            } else {
+                let dst_w = *trail_phase_words_ref(dst_trail);
+                let bias_restore = (128u64.wrapping_sub(t_s)).wrapping_mul(0x0101_0101_0101_0101);
+                *trail_phase_words_mut(dst_trail) =
+                    swar_slerp_words_with_bias_64(src_w, &dst_w, t_s, bias_restore);
+            }
+        }
+
+        let log_prob = if raw_coh >= 1.0 - 1.0e-7 {
+            0.0_f32
+        } else {
+            let prob = branchless_max_f32(0.5 * (1.0 + raw_coh), 1.0e-6);
+            branchless_ln_f32(prob)
+        };
+
+        dst_trail.prev_ptr = src_trail.current_ptr;
+        dst_trail.step_count = src_trail.step_count.wrapping_add(1);
+        let inherit_anchor = dst_trail.target_anchor_id == 0;
+        dst_trail.target_anchor_id = branchless_select_u32(
+            inherit_anchor,
+            src_trail.target_anchor_id,
+            dst_trail.target_anchor_id,
         );
+        dst_trail.cluster_id = branchless_select_u32(
+            inherit_anchor & (src_trail.target_anchor_id != 0),
+            src_trail.target_anchor_id,
+            dst_trail.cluster_id,
+        );
+
+        let cur_rho =
+            branchless_flush_subnormal_f32(branchless_relu_f32(dst_trail.stigmergic_density));
+        let pos_rho = cur_rho + 0.25 * (1.0 + branchless_relu_f32(raw_coh));
+        dst_trail.stigmergic_density =
+            branchless_min_f32(branchless_flush_subnormal_f32(pos_rho), MAX_STIGMERGIC_DENSITY);
+
+        let prev_pull =
+            branchless_flush_subnormal_f32(branchless_relu_f32(src_trail.attractor_pull_force));
+        let cur_pull =
+            branchless_flush_subnormal_f32(branchless_relu_f32(dst_trail.attractor_pull_force));
+        let bridged_pull =
+            cur_pull + 0.5 * prev_pull * branchless_clamp_f32(1.0 + raw_coh, 0.25, 2.0);
+        dst_trail.attractor_pull_force = branchless_min_f32(
+            branchless_flush_subnormal_f32(bridged_pull),
+            MAX_ATTRACTOR_PULL_FORCE,
+        );
+
+        dst_trail.flags |= branchless_select_u32(raw_coh > 0.25, TRAIL_FLAG_SYNERGY_RESONANCE, 0);
         dst_trail.sync_flags_with_current_ptr();
-        Ok((selected_id, bayes_score, coh, log_prob, true))
+        Ok((selected_id, bayes_score, raw_coh, log_prob, true))
     }
 
     /// Directly modulates pre-Softmax candidate memory Attention scores (`attention_scores[..M]`)

@@ -313,6 +313,39 @@ const fn make_heterogeneous_q7_phases_with_offset(base_shift: gcso_q7_t) -> [gcs
     arr
 }
 
+/// Reads `LIMINIKA_NOISE_THRESHOLD` (defaulting to `0.025` = 2.5%) so every Criterion group
+/// suppresses sub-30ns RDTSC timer-quantum and background OS scheduler false alarms whether
+/// invoked via `python scripts/run_benchmarks.py` or bare `cargo bench`.
+#[inline]
+fn configured_noise_threshold() -> f64 {
+    std::env::var("LIMINIKA_NOISE_THRESHOLD")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|&v| v.is_finite() && v > 0.0 && v < 1.0)
+        .unwrap_or(0.025)
+}
+
+/// Determines whether the isolated pre-v1.0 `Provisional_GCSO_Container` benchmark group
+/// should be registered and executed.
+///
+/// Enabled only when `LIMINIKA_RUN_PROVISIONAL_GCSO` is set to `"1"`/`"true"`, or when the
+/// user explicitly passes a positional Criterion CLI filter targeting `Provisional_GCSO_Container`.
+#[inline]
+fn should_run_provisional_gcso() -> bool {
+    if let Ok(val) = std::env::var("LIMINIKA_RUN_PROVISIONAL_GCSO") {
+        let trimmed = val.trim();
+        if trimmed == "1" || trimmed.eq_ignore_ascii_case("true") {
+            return true;
+        }
+        if trimmed == "0" || trimmed.eq_ignore_ascii_case("false") {
+            return false;
+        }
+    }
+    std::env::args()
+        .skip(1)
+        .any(|arg| !arg.starts_with('-') && arg.to_ascii_lowercase().contains("provisional"))
+}
+
 fn bench_aligned_query_variant<const ALIGN: usize>(
     group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
     bench_name: &str,
@@ -355,6 +388,7 @@ fn bench_aligned_query_variant<const ALIGN: usize>(
 fn bench_dpsr_steering_operations(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
     let mut group = c.benchmark_group("DPSR_HotPath_Advanced_Kernels");
+    group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
     group.warm_up_time(Duration::from_millis(450));
@@ -619,6 +653,7 @@ fn bench_dpsr_steering_operations(c: &mut Criterion) {
 fn bench_dpsr_batch_sequence_scaling(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
     let mut group = c.benchmark_group("DPSR_Batch_Sequence_Scaling");
+    group.noise_threshold(configured_noise_threshold());
     group.warm_up_time(Duration::from_millis(500));
 
     let head_dim = 128u32;
@@ -751,6 +786,7 @@ fn bench_dpsr_batch_sequence_scaling(c: &mut Criterion) {
 fn bench_dpsr_long_context_and_procrustes(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
     let mut group = c.benchmark_group("DPSR_Long_Context_And_Procrustes");
+    group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
     group.warm_up_time(Duration::from_millis(450));
@@ -998,6 +1034,7 @@ fn bench_dpsr_long_context_and_procrustes(c: &mut Criterion) {
 fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
     let mut group = c.benchmark_group("DPSR_Swarm_PSPM_And_Visual_CoWatching");
+    group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
     group.warm_up_time(Duration::from_millis(450));
@@ -2066,7 +2103,6 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut src_trail = base_src;
         for _ in 0..8 {
             reset_trail_fast(&mut src_trail, &base_src);
-            reset_trail_fast(&mut candidates[4], &base_candidates[4]);
             reset_trail_fast(&mut candidates[5], &base_candidates[5]);
             let _ = engine
                 .route_coarse_to_fine_and_steer_bayesian_trails_safe(
@@ -2091,7 +2127,6 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
 
         b.iter(|| {
             reset_trail_fast(&mut src_trail, &base_src);
-            reset_trail_fast(&mut candidates[4], &base_candidates[4]);
             reset_trail_fast(&mut candidates[5], &base_candidates[5]);
             let res = engine
                 .route_coarse_to_fine_and_steer_bayesian_trails_safe(
@@ -2230,7 +2265,6 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         let mut src_trail = base_src;
         for _ in 0..8 {
             reset_trail_fast(&mut src_trail, &base_src);
-            reset_trail_fast(&mut candidates[3], &base_candidates[3]);
             reset_trail_fast(&mut candidates[5], &base_candidates[5]);
             let _ = engine
                 .route_top2_liminal_and_steer_bayesian_trails_safe(
@@ -2256,7 +2290,6 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
 
         b.iter(|| {
             reset_trail_fast(&mut src_trail, &base_src);
-            reset_trail_fast(&mut candidates[3], &base_candidates[3]);
             reset_trail_fast(&mut candidates[5], &base_candidates[5]);
             let res = engine
                 .route_top2_liminal_and_steer_bayesian_trails_safe(
@@ -2491,8 +2524,12 @@ fn bench_dpsr_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
 /// Skipped by default under `run_benchmarks.py --profile standard` so Core `DPSR`/`EDBC` evaluations
 /// remain decoupled from the provisional container layout prior to v1.0 PPRC video-stream memory integration.
 fn bench_dpsr_provisional_gcso_container(c: &mut Criterion) {
+    if !should_run_provisional_gcso() {
+        return;
+    }
     let _ftz = ScopedFtzdazGuard::new();
     let mut group = c.benchmark_group("DPSR_Provisional_GCSO_Container");
+    group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
     group.warm_up_time(Duration::from_millis(450));
@@ -2936,6 +2973,7 @@ fn bench_dpsr_provisional_gcso_container(c: &mut Criterion) {
 fn bench_dpsr_extreme_and_edge_cases(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
     let mut group = c.benchmark_group("DPSR_Extreme_And_Edge_Cases");
+    group.noise_threshold(configured_noise_threshold());
 
     // 1. Stress Test: Ultra-Large Sequence Scaling (4096..32768 Prefill Context)
     group.sampling_mode(SamplingMode::Flat);

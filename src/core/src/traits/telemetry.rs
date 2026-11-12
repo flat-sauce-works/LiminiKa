@@ -295,9 +295,13 @@ fn eval_candidate_trail_words_with_macro_fast(
     let cand_not_repulsed = (cand.flags & TRAIL_FLAG_REPULSION_ACTIVE) == 0;
     let is_coherent = (coh >= -safe_thresh) & cand_not_repulsed;
     let eff_prior_link = if is_coherent {
-        let prior_term = clean_eta * fast_ln_1p_bounded_f32(branchless_relu_f32(cand.stigmergic_density));
         let is_linked = (cur_linked_id != 0) & (cur_linked_id == cand_id);
         let link_term = branchless_select_f32(is_linked, clean_link, 0.0);
+        let prior_term = if clean_eta > 0.0 {
+            clean_eta * fast_ln_1p_bounded_f32(branchless_relu_f32(cand.stigmergic_density))
+        } else {
+            0.0
+        };
         let macro_affinity = if (macro_anchor_id != 0)
             & ((cand.cluster_id == macro_anchor_id) | (cand.target_anchor_id == macro_anchor_id))
         {
@@ -426,10 +430,13 @@ unsafe fn eval_candidate_trail_avx2_with_macro_fast(
         let cand_not_repulsed = (cand.flags & TRAIL_FLAG_REPULSION_ACTIVE) == 0;
         let is_coherent = (coh >= -safe_thresh) & cand_not_repulsed;
         let eff_prior_link = if is_coherent {
-            let prior_term =
-                clean_eta * fast_ln_1p_bounded_f32(branchless_relu_f32(cand.stigmergic_density));
             let is_linked = (cur_linked_id != 0) & (cur_linked_id == cand_id);
             let link_term = branchless_select_f32(is_linked, clean_link, 0.0);
+            let prior_term = if clean_eta > 0.0 {
+                clean_eta * fast_ln_1p_bounded_f32(branchless_relu_f32(cand.stigmergic_density))
+            } else {
+                0.0
+            };
             let macro_affinity = if (macro_anchor_id != 0)
                 & ((cand.cluster_id == macro_anchor_id)
                     | (cand.target_anchor_id == macro_anchor_id))
@@ -2556,8 +2563,11 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
                 (1.0_f32, 0.0_f32, false, *s, false)
             } else {
                 let c_val = coherence_from_uniform_diff_word_x8(d0);
-                let prob = branchless_max_f32(0.5 * (1.0 + c_val), 1.0e-6);
-                let lp = branchless_ln_f32(prob);
+                let lp = if c_val >= 1.0 - 1.0e-7 {
+                    0.0_f32
+                } else {
+                    branchless_ln_f32(branchless_max_f32(0.5 * (1.0 + c_val), 1.0e-6))
+                };
                 let contr = c_val < -safe_thresh;
                 let w0 = if contr {
                     swar_q7_neg_sat_x8(s[0])
@@ -2593,8 +2603,11 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
                         (1.0_f32, 0.0_f32, false, *s, false)
                     } else {
                         let c_val = super::branchless::avx2_coherence_from_diff_vec64(vd0, vd1);
-                        let prob = branchless_max_f32(0.5 * (1.0 + c_val), 1.0e-6);
-                        let lp = branchless_ln_f32(prob);
+                        let lp = if c_val >= 1.0 - 1.0e-7 {
+                            0.0_f32
+                        } else {
+                            branchless_ln_f32(branchless_max_f32(0.5 * (1.0 + c_val), 1.0e-6))
+                        };
                         let contr = c_val < -safe_thresh;
                         if contr {
                             let zero = _mm256_setzero_si256();
@@ -2641,8 +2654,11 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
                     (1.0_f32, 0.0_f32, false, *s, false)
                 } else {
                     let c_val = super::branchless::coherence_from_diff_words_64(d0, d1, d2, d3, d4, d5, d6, d7);
-                    let prob = branchless_max_f32(0.5 * (1.0 + c_val), 1.0e-6);
-                    let lp = branchless_ln_f32(prob);
+                    let lp = if c_val >= 1.0 - 1.0e-7 {
+                        0.0_f32
+                    } else {
+                        branchless_ln_f32(branchless_max_f32(0.5 * (1.0 + c_val), 1.0e-6))
+                    };
                     let contr = c_val < -safe_thresh;
 
                     if contr {
@@ -2852,11 +2868,25 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
 
         let mut idx = 0usize;
         while idx < candidate_trails.len() {
-            if (candidate_trails[idx].flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0 {
+            let cand = &candidate_trails[idx];
+            if (cand.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0 {
                 idx += 1;
                 continue;
             }
             let cand_id = idx as u32;
+            if found_valid {
+                let is_linked = (cur_linked_id != 0) & (cur_linked_id == cand_id);
+                let link_term = branchless_select_f32(is_linked, clean_link, 0.0);
+                let prior_term = if clean_eta > 0.0 {
+                    clean_eta * fast_ln_1p_bounded_f32(branchless_relu_f32(cand.stigmergic_density))
+                } else {
+                    0.0
+                };
+                if phase_scale + prior_term + link_term <= best_score {
+                    idx += 1;
+                    continue;
+                }
+            }
             #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
             let (score, coh, is_coherent) = unsafe {
                 let mut win_meta_evaluated = true;
@@ -2872,7 +2902,7 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
                     self_v1,
                     cur_linked_id,
                     cand_id,
-                    &candidate_trails[idx],
+                    cand,
                     phase_scale,
                     clean_eta,
                     clean_link,
@@ -2896,7 +2926,7 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
                 self_b0,
                 cur_linked_id,
                 cand_id,
-                &candidate_trails[idx],
+                cand,
                 phase_scale,
                 clean_eta,
                 clean_link,

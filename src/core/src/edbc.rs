@@ -1339,9 +1339,18 @@ fn select_rewire_bridge_and_eval_log_prob_in_registers(
         );
         src_trail.target_anchor_id = inherited_id;
         dst_trail.target_anchor_id = inherited_id;
-        if inherited_id != 0 {
-            src_trail.cluster_id = inherited_id;
-            dst_trail.cluster_id = inherited_id;
+        let resolved_cluster_id = branchless_select_u32(
+            dst_trail.cluster_id != 0,
+            dst_trail.cluster_id,
+            branchless_select_u32(
+                (macro_anchor_id != 0) & (src_trail.cluster_id != 0),
+                src_trail.cluster_id,
+                inherited_id,
+            ),
+        );
+        if resolved_cluster_id != 0 {
+            src_trail.cluster_id = resolved_cluster_id;
+            dst_trail.cluster_id = resolved_cluster_id;
         }
         src_trail.flags =
             (src_trail.flags | TRAIL_FLAG_SYNERGY_RESONANCE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE)
@@ -1589,6 +1598,7 @@ fn step_edbc_tunneling_and_select_bayesian_core<E: EdbcClosedLoopCoordinator + ?
         (src_trail.target_anchor_id as u8) & ATTRACTOR_SLOT_ID_MASK,
         src_trail.target_attractor_slot(),
     );
+    let pre_evolve_cluster_id = src_trail.cluster_id;
     let evolved_ptr = src_trail.evolve_trail_mode_stigmergically(
         st.moving_z_entropy,
         repulsion_active,
@@ -1596,6 +1606,9 @@ fn step_edbc_tunneling_and_select_bayesian_core<E: EdbcClosedLoopCoordinator + ?
         branchless_relu_f32(bif_thresh * 0.5),
         high_density_srl_thresh,
     );
+    if (macro_anchor_id != 0) & (!repulsion_active) & (pre_evolve_cluster_id != 0) {
+        src_trail.cluster_id = pre_evolve_cluster_id;
+    }
     st.sample_temperature = if st.active_branch_mode == EDBC_MODE_NORMAL_ENTROPY {
         DEFAULT_SAMPLE_TEMPERATURE
     } else {
@@ -4723,7 +4736,7 @@ mod tests {
             },
             gcso_pointer_trail_t {
                 cluster_id: 99,
-                target_anchor_id: 99,
+                target_anchor_id: 990,
                 stigmergic_density: 2.5,
                 accumulated_phase_delta: [-82i8; MAX_ATTENTION_HEADS],
                 ..Default::default()
@@ -4759,5 +4772,7 @@ mod tests {
         assert!(found_c2f);
         assert_eq!(sel_id, 1);
         assert_eq!(c2f_trail.cluster_id, 99);
+        assert_eq!(c2f_trail.target_anchor_id, 990);
+        assert_eq!(c2f_candidates[1].cluster_id, 99);
     }
 }

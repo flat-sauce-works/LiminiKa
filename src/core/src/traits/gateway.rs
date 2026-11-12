@@ -2510,6 +2510,10 @@ impl CrystallizedAttractorRecord {
             let z_crc = if (z_lo & 0xFFFF) == 0 {
                 CRC32_CRYSTAL_ZOFF_BYTE2_REF[((z_lo >> 16) & 0xFF) as usize]
                     ^ CRC32_CRYSTAL_ZOFF_BYTE3_REF[(z_lo >> 24) as usize]
+            } else if (z_lo & 0xFF) == 0 {
+                CRC32_CRYSTAL_ZOFF_BYTE1_REF[((z_lo >> 8) & 0xFF) as usize]
+                    ^ CRC32_CRYSTAL_ZOFF_BYTE2_REF[((z_lo >> 16) & 0xFF) as usize]
+                    ^ CRC32_CRYSTAL_ZOFF_BYTE3_REF[(z_lo >> 24) as usize]
             } else {
                 crc32_crystal_zoff16_final_u32(z_lo)
             };
@@ -4830,6 +4834,34 @@ impl CrystallizedAttractorRecord {
                 idx += 1;
                 continue;
             }
+            let cand_id = idx as u32;
+            let is_linked = (cur_linked_id != 0) & (cur_linked_id == cand_id);
+            let link_term = branchless_select_f32(is_linked, clean_link, 0.0);
+            let in_macro_cluster = (macro_anchor_id != 0)
+                & ((cand.cluster_id == macro_anchor_id)
+                    | (cand.target_anchor_id == macro_anchor_id));
+            let is_unstamped_for_geo = (!in_macro_cluster)
+                & has_win_centroid
+                & (clean_cluster_bonus > 0.0)
+                & (cand.cluster_id == 0)
+                & (cand.target_anchor_id == 0);
+            let max_macro_bonus = branchless_select_f32(
+                in_macro_cluster | is_unstamped_for_geo,
+                clean_cluster_bonus,
+                0.0,
+            );
+            let clean_rho = branchless_clamp_f32(
+                branchless_relu_f32(cand.stigmergic_density),
+                0.0,
+                MAX_STIGMERGIC_DENSITY,
+            );
+            let prior_term = clean_eta * fast_ln_1p_bounded_f32(clean_rho);
+            let non_phase_upper = prior_term + link_term + max_macro_bonus;
+            if found_valid && (phase_scale + non_phase_upper <= best_score) {
+                idx += 1;
+                continue;
+            }
+
             let cand_w = trail_phase_words_ref(cand);
             let cand_is_uniform = if self_is_uniform {
                 is_word_array_uniform_64(cand_w)
@@ -4878,98 +4910,93 @@ impl CrystallizedAttractorRecord {
                 }
             };
             if coh >= -safe_thresh {
-                let cand_id = idx as u32;
-                let clean_rho = branchless_clamp_f32(branchless_relu_f32(cand.stigmergic_density),
-                    0.0, MAX_STIGMERGIC_DENSITY);
-                let prior_term = clean_eta * fast_ln_1p_bounded_f32(clean_rho);
-                let is_linked = (cur_linked_id != 0) & (cur_linked_id == cand_id);
-                let in_macro_cluster = (macro_anchor_id != 0) & ((cand.cluster_id == macro_anchor_id)
-                        | (cand.target_anchor_id == macro_anchor_id));
-                let geo_macro_affinity = if in_macro_cluster {
-                    1.0
-                } else if has_win_centroid & (clean_cluster_bonus > 0.0) {
-                    if !win_meta_evaluated {
-                        win_eq_self = swar_words_equal_64(&self_w, &win_w);
-                        win_is_uniform = if win_eq_self {
-                            self_is_uniform
-                        } else if self_is_uniform {
-                            win_uni_from_estep
-                        } else {
-                            is_word_array_uniform_64(&win_w)
-                        };
-                        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-                        if !win_eq_self {
-                            (win_v0, win_v1) = unsafe {
-                                super::branchless::avx2_words64_to_vec64_with_uniform(
-                                    &win_w,
-                                    win_is_uniform,
-                                )
-                            };
-                        }
-                        win_meta_evaluated = true;
-                    }
-                    let c_win_coh = if win_eq_self {
-                        coh
-                    } else {
-                        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-                        {
-                            if let Some((c0, c1)) = cand_vecs_opt {
-                                unsafe {
-                                    use core::arch::x86_64::_mm256_sub_epi8;
-                                    avx2_coherence_from_diff_vec64(
-                                        _mm256_sub_epi8(win_v0, c0),
-                                        _mm256_sub_epi8(win_v1, c1),
-                                    )
-                                }
-                            } else if win_is_uniform & cand_is_uniform {
-                                coherence_from_word_arrays_with_both_uniform_flags_64(
-                                    &win_w, true, cand_w, true,
-                                )
+                let base_score_no_macro = (phase_scale * coh) + prior_term + link_term;
+                if !found_valid || (base_score_no_macro + max_macro_bonus > best_score) {
+                    let geo_macro_affinity = if in_macro_cluster {
+                        1.0
+                    } else if is_unstamped_for_geo {
+                        if !win_meta_evaluated {
+                            win_eq_self = swar_words_equal_64(&self_w, &win_w);
+                            win_is_uniform = if win_eq_self {
+                                self_is_uniform
+                            } else if self_is_uniform {
+                                win_uni_from_estep
                             } else {
-                                unsafe {
-                                    use core::arch::x86_64::_mm256_sub_epi8;
-                                    let (c0, c1) =
-                                        super::branchless::avx2_words64_to_vec64_with_uniform(
-                                            cand_w,
-                                            cand_is_uniform,
-                                        );
-                                    avx2_coherence_from_diff_vec64(
-                                        _mm256_sub_epi8(win_v0, c0),
-                                        _mm256_sub_epi8(win_v1, c1),
+                                is_word_array_uniform_64(&win_w)
+                            };
+                            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+                            if !win_eq_self {
+                                (win_v0, win_v1) = unsafe {
+                                    super::branchless::avx2_words64_to_vec64_with_uniform(
+                                        &win_w,
+                                        win_is_uniform,
                                     )
+                                };
+                            }
+                            win_meta_evaluated = true;
+                        }
+                        let c_win_coh = if win_eq_self {
+                            coh
+                        } else {
+                            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+                            {
+                                if let Some((c0, c1)) = cand_vecs_opt {
+                                    unsafe {
+                                        use core::arch::x86_64::_mm256_sub_epi8;
+                                        avx2_coherence_from_diff_vec64(
+                                            _mm256_sub_epi8(win_v0, c0),
+                                            _mm256_sub_epi8(win_v1, c1),
+                                        )
+                                    }
+                                } else if win_is_uniform & cand_is_uniform {
+                                    coherence_from_word_arrays_with_both_uniform_flags_64(
+                                        &win_w, true, cand_w, true,
+                                    )
+                                } else {
+                                    unsafe {
+                                        use core::arch::x86_64::_mm256_sub_epi8;
+                                        let (c0, c1) =
+                                            super::branchless::avx2_words64_to_vec64_with_uniform(
+                                                cand_w,
+                                                cand_is_uniform,
+                                            );
+                                        avx2_coherence_from_diff_vec64(
+                                            _mm256_sub_epi8(win_v0, c0),
+                                            _mm256_sub_epi8(win_v1, c1),
+                                        )
+                                    }
                                 }
                             }
-                        }
-                        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-                        {
-                            let cand_uni_for_win = if self_is_uniform {
-                                cand_is_uniform
-                            } else if win_is_uniform {
-                                is_word_array_uniform_64(cand_w)
-                            } else {
-                                false
-                            };
-                            coherence_from_word_arrays_with_both_uniform_flags_64(
-                                &win_w,
-                                win_is_uniform,
-                                cand_w,
-                                cand_uni_for_win,
-                            )
-                        }
+                            #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+                            {
+                                let cand_uni_for_win = if self_is_uniform {
+                                    cand_is_uniform
+                                } else if win_is_uniform {
+                                    is_word_array_uniform_64(cand_w)
+                                } else {
+                                    false
+                                };
+                                coherence_from_word_arrays_with_both_uniform_flags_64(
+                                    &win_w,
+                                    win_is_uniform,
+                                    cand_w,
+                                    cand_uni_for_win,
+                                )
+                            }
+                        };
+                        branchless_relu_f32(c_win_coh)
+                    } else {
+                        0.0
                     };
-                    branchless_relu_f32(c_win_coh)
-                } else {
-                    0.0
-                };
-                let score = branchless_flush_subnormal_f32((phase_scale * coh)
-                        + prior_term
-                        + branchless_select_f32(is_linked, clean_link, 0.0)
-                        + (clean_cluster_bonus * geo_macro_affinity));
-                let take = (!found_valid) | (score > best_score);
-                best_id = branchless_select_u32(take, cand_id, best_id);
-                best_score = branchless_select_f32(take, score, best_score);
-                best_coh = branchless_select_f32(take, coh, best_coh);
-                found_valid = true;
+                    let score = branchless_flush_subnormal_f32(
+                        base_score_no_macro + (clean_cluster_bonus * geo_macro_affinity),
+                    );
+                    let take = (!found_valid) | (score > best_score);
+                    best_id = branchless_select_u32(take, cand_id, best_id);
+                    best_score = branchless_select_f32(take, score, best_score);
+                    best_coh = branchless_select_f32(take, coh, best_coh);
+                    found_valid = true;
+                }
             }
             idx += 1;
         }

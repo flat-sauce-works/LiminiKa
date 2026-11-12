@@ -951,13 +951,18 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
             dst_trail.target_anchor_id,
             src_trail.target_anchor_id,
         );
-        src_trail.cluster_id = branchless_select_u32(
-            src_trail.target_anchor_id != 0,
-            src_trail.target_anchor_id,
-            src_trail.cluster_id,
+        let resolved_cluster_id = branchless_select_u32(
+            dst_trail.cluster_id != 0,
+            dst_trail.cluster_id,
+            branchless_select_u32(
+                src_trail.cluster_id != 0,
+                src_trail.cluster_id,
+                src_trail.target_anchor_id,
+            ),
         );
+        src_trail.cluster_id = resolved_cluster_id;
         dst_trail.target_anchor_id = src_trail.target_anchor_id;
-        dst_trail.cluster_id = src_trail.cluster_id;
+        dst_trail.cluster_id = resolved_cluster_id;
 
         fast_transition_log_prob_from_coh(best_coh)
     } else {
@@ -3918,7 +3923,7 @@ mod tests {
             },
             gcso_pointer_trail_t {
                 cluster_id: 202,
-                target_anchor_id: 202,
+                target_anchor_id: 2020,
                 stigmergic_density: 2.5,
                 accumulated_phase_delta: [-82i8; MAX_ATTENTION_HEADS],
                 ..Default::default()
@@ -3950,6 +3955,8 @@ mod tests {
         assert!(fine_found);
         assert_eq!(fine_sel_id, 1);
         assert_eq!(c2f_trail.cluster_id, 202);
+        assert_eq!(c2f_trail.target_anchor_id, 2020);
+        assert_eq!(c2f_candidates[1].cluster_id, 202);
 
         let mut c2f_pruned_trail = gcso_pointer_trail_t {
             accumulated_phase_delta: [-80i8; MAX_ATTENTION_HEADS],

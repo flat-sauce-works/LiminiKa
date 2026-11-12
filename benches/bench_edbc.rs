@@ -236,9 +236,43 @@ const fn make_heterogeneous_q7_phases_with_offset(base_shift: gcso_q7_t) -> [gcs
     arr
 }
 
+/// Reads `LIMINIKA_NOISE_THRESHOLD` (defaulting to `0.025` = 2.5%) so every Criterion group
+/// suppresses sub-30ns RDTSC timer-quantum and background OS scheduler false alarms whether
+/// invoked via `python scripts/run_benchmarks.py` or bare `cargo bench`.
+#[inline]
+fn configured_noise_threshold() -> f64 {
+    std::env::var("LIMINIKA_NOISE_THRESHOLD")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|&v| v.is_finite() && v > 0.0 && v < 1.0)
+        .unwrap_or(0.025)
+}
+
+/// Determines whether the isolated pre-v1.0 `Provisional_GCSO_Container` benchmark group
+/// should be registered and executed.
+///
+/// Enabled only when `LIMINIKA_RUN_PROVISIONAL_GCSO` is set to `"1"`/`"true"`, or when the
+/// user explicitly passes a positional Criterion CLI filter targeting `Provisional_GCSO_Container`.
+#[inline]
+fn should_run_provisional_gcso() -> bool {
+    if let Ok(val) = std::env::var("LIMINIKA_RUN_PROVISIONAL_GCSO") {
+        let trimmed = val.trim();
+        if trimmed == "1" || trimmed.eq_ignore_ascii_case("true") {
+            return true;
+        }
+        if trimmed == "0" || trimmed.eq_ignore_ascii_case("false") {
+            return false;
+        }
+    }
+    std::env::args()
+        .skip(1)
+        .any(|arg| !arg.starts_with('-') && arg.to_ascii_lowercase().contains("provisional"))
+}
+
 fn bench_edbc_stateful_eval(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
     let mut group = c.benchmark_group("EDBC_Stateful_Entropy_Evaluation");
+    group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
     group.warm_up_time(Duration::from_millis(450));
@@ -426,6 +460,7 @@ fn bench_edbc_stateful_eval(c: &mut Criterion) {
 fn bench_edbc_cvoid_dyadic(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
     let mut group = c.benchmark_group("EDBC_CVoid_Dyadic_Vector_Alignment");
+    group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
     group.warm_up_time(Duration::from_millis(450));
@@ -555,6 +590,7 @@ fn bench_edbc_cvoid_dyadic(c: &mut Criterion) {
 fn bench_edbc_stream_simulation(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
     let mut group = c.benchmark_group("EDBC_Continuous_Stream_Simulation");
+    group.noise_threshold(configured_noise_threshold());
     group.warm_up_time(Duration::from_millis(500));
 
     let sequence_lengths = [100usize, 1000, 10000, 100000];
@@ -613,6 +649,7 @@ fn bench_edbc_stream_simulation(c: &mut Criterion) {
 fn bench_edbc_long_dialogue_reliability(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
     let mut group = c.benchmark_group("EDBC_Long_Dialogue_Reliability");
+    group.noise_threshold(configured_noise_threshold());
 
     // 1. Ultra-Long Token Stream Simulation (500,000 Tokens)
     group.sampling_mode(SamplingMode::Flat);
@@ -755,6 +792,7 @@ fn bench_edbc_long_dialogue_reliability(c: &mut Criterion) {
 fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
     let mut group = c.benchmark_group("EDBC_Pointer_Tunneling_And_Cohomology");
+    group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
     group.warm_up_time(Duration::from_millis(450));
@@ -1406,7 +1444,6 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                     bloom = base_bloom;
                 }
                 reset_trail_fast(&mut src_trail, &base_src);
-                reset_trail_fast(&mut candidates[4], &base_candidates[4]);
                 reset_trail_fast(&mut candidates[5], &base_candidates[5]);
                 attn_scores.data = [0.0f32; 8];
                 let mut scores_mut = attn_scores.as_aligned_slice_mut();
@@ -1442,7 +1479,6 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                     bloom = base_bloom;
                 }
                 reset_trail_fast(&mut src_trail, &base_src);
-                reset_trail_fast(&mut candidates[4], &base_candidates[4]);
                 reset_trail_fast(&mut candidates[5], &base_candidates[5]);
                 attn_scores.data = [0.0f32; 8];
                 let mut scores_mut = attn_scores.as_aligned_slice_mut();
@@ -1607,7 +1643,6 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                 bloom = base_bloom;
             }
             reset_trail_fast(&mut src_trail, &base_src);
-            reset_trail_fast(&mut candidates[3], &base_candidates[3]);
             reset_trail_fast(&mut candidates[5], &base_candidates[5]);
             attn_scores.data = [0.0f32; 8];
             let mut scores_mut = attn_scores.as_aligned_slice_mut();
@@ -1644,7 +1679,6 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                 bloom = base_bloom;
             }
             reset_trail_fast(&mut src_trail, &base_src);
-            reset_trail_fast(&mut candidates[3], &base_candidates[3]);
             reset_trail_fast(&mut candidates[5], &base_candidates[5]);
             attn_scores.data = [0.0f32; 8];
             let mut scores_mut = attn_scores.as_aligned_slice_mut();
@@ -1946,8 +1980,12 @@ fn bench_edbc_pointer_tunneling_and_cohomology(c: &mut Criterion) {
 /// zero-copy byte container verification. Skipped by default under `run_benchmarks.py --profile standard`
 /// so Core `DPSR`/`EDBC` evaluations remain decoupled from the provisional container layout.
 fn bench_edbc_provisional_gcso_container(c: &mut Criterion) {
+    if !should_run_provisional_gcso() {
+        return;
+    }
     let _ftz = ScopedFtzdazGuard::new();
     let mut group = c.benchmark_group("EDBC_Provisional_GCSO_Container");
+    group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
     group.warm_up_time(Duration::from_millis(450));
@@ -2339,6 +2377,7 @@ fn bench_edbc_provisional_gcso_container(c: &mut Criterion) {
 fn bench_edbc_extreme_and_edge_cases(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
     let mut group = c.benchmark_group("EDBC_Extreme_And_Edge_Cases");
+    group.noise_threshold(configured_noise_threshold());
 
     // 1. Long-Run Token Stream Simulation (1,000,000 Tokens with Periodic Outliers)
     group.sampling_mode(SamplingMode::Flat);
