@@ -3371,7 +3371,7 @@ pub const fn branchless_lerp_f32(a: f32, b: f32, t: f32) -> f32 {
 #[inline(always)]
 pub const fn branchless_smoothstep_f32(edge0: f32, edge1: f32, x: f32) -> f32 {
     let span = edge1 - edge0;
-    let valid_span = (span > 1.0e-12) & branchless_is_finite_f32(span);
+    let valid_span = (span > DEFAULT_ENTROPY_EPS) & branchless_is_finite_f32(span);
     let inv_span = branchless_inv_pos_f32(branchless_select_f32(valid_span, span, 1.0));
     let u = branchless_select_f32(
         valid_span,
@@ -3521,7 +3521,7 @@ pub const fn branchless_exp_f32(x: f32) -> f32 {
 /// squared resultant lengths $x = \bar{S}^2 + \bar{C}^2 \in [0.0, 1.01]$ (`0` exponent unpacking).
 #[inline(always)]
 pub(crate) const fn fast_sqrt_unit_f32(r_sq: f32) -> f32 {
-    if r_sq <= 1.0e-12 {
+    if r_sq <= DEFAULT_ENTROPY_EPS {
         return 0.0;
     }
     let half_x = 0.5 * r_sq;
@@ -3939,8 +3939,8 @@ pub const fn branchless_eyring_kramers_escape(
         & branchless_is_finite_f32(alpha)
         & branchless_is_finite_f32(beta)
         & branchless_is_finite_f32(d0)
-        & (beta > 1.0e-12)
-        & (d0 > 1.0e-12);
+        & (beta > DEFAULT_ENTROPY_EPS)
+        & (d0 > DEFAULT_ENTROPY_EPS);
     let safe_denom = branchless_select_f32(valid, 4.0 * beta * d0, 1.0);
     let excess = branchless_relu_f32(cvoid - tau_eff);
     let safe_alpha = branchless_select_f32(valid, alpha, 0.0);

@@ -88,6 +88,39 @@ pub(crate) const NUM_SWARM_CELLS: usize = 8;
 pub(crate) const HEADS_PER_CELL: usize = MAX_ATTENTION_HEADS / NUM_SWARM_CELLS;
 const INV_Q14_SCALE_F32: f32 = 1.0 / 16384.0;
 
+/// Packs `num_heads <= MAX_ATTENTION_HEADS` Q7 phase bytes into an 8-word SWAR array.
+#[inline(always)]
+#[must_use]
+pub(super) fn pack_q7_slice_to_swar_words_64(
+    p_slice: &[gcso_q7_t],
+    num_heads: usize,
+) -> [u64; NUM_SWARM_CELLS] {
+    if p_slice.len() >= MAX_ATTENTION_HEADS && num_heads == MAX_ATTENTION_HEADS {
+        // SAFETY: `p_slice.len() >= MAX_ATTENTION_HEADS` and `align_of::<gcso_q7_t>() == 1`.
+        let arr64 = unsafe { &*p_slice.as_ptr().cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>() };
+        return load_q7_words_64(arr64);
+    }
+    let mut words = [0u64; NUM_SWARM_CELLS];
+    let limit = num_heads.min(p_slice.len()).min(MAX_ATTENTION_HEADS);
+    let full_cells = limit / HEADS_PER_CELL;
+    let mut c = 0usize;
+    while c < full_cells {
+        words[c] = load_q7_x8_slice(p_slice, c * HEADS_PER_CELL);
+        c += 1;
+    }
+    let rem_start = full_cells * HEADS_PER_CELL;
+    if rem_start < limit {
+        let mut tail_w = 0u64;
+        let mut h = rem_start;
+        while h < limit {
+            tail_w |= u64::from(p_slice[h] as u8) << ((h - rem_start) * 8);
+            h += 1;
+        }
+        words[full_cells] = tail_w;
+    }
+    words
+}
+
 
 mod kernels;
 pub use kernels::*;
@@ -277,5 +310,59 @@ mod tests {
         assert_eq!(used_rot, 6);
         assert_eq!(&q_auto.data[0..10], &[1.0_f32; 10]);
         assert!((q_auto.data[10] - 1.0).abs() > 1.0e-3);
+
+        // Verify non-uniform phases across variable rot_dim (16, 48, 64) on head_dim=128
+        let eng128 = DummyRopeEngine {
+            head_dim: 128,
+            num_heads: 8,
+        };
+        let mut nonuni = [0i8; MAX_ATTENTION_HEADS];
+        for (i, slot) in nonuni.iter_mut().take(8).enumerate() {
+            *slot = if (i & 1) == 0 {
+                16 + (i as i8) * 8
+            } else {
+                -20 - (i as i8) * 8
+            };
+        }
+        let nonuni_buf = AlignedBuffer16::new(nonuni);
+        for &(prov, quorum, z_ent, kappa, expected_rot) in &[
+            (0x02u32, 0xFFu8, 0.1f32, 2.0f32, 16usize),
+            (0x04u32, 0xFFu8, 0.2f32, 1.5f32, 48usize),
+            (0x08u32, 0xFFu8, 0.6f32, 1.0f32, 64usize),
+        ] {
+            let mut q_128 = AlignedBuffer32::new([1.0_f32; 8 * 128]);
+            let mut k_128 = AlignedBuffer32::new([1.0_f32; 8 * 128]);
+            let rot = eng128
+                .apply_autonomous_swarm_phase_steering(
+                    &mut q_128.as_aligned_slice_mut(),
+                    Some(&mut k_128.as_aligned_slice_mut()),
+                    &nonuni_buf.as_aligned_slice(),
+                    DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    prov,
+                    quorum,
+                    z_ent,
+                    kappa,
+                )
+                .unwrap();
+            assert_eq!(rot, expected_rot);
+            let upper_off = 128 - expected_rot;
+            for h in 0..8 {
+                let base = h * 128;
+                assert!(
+                    q_128.data[base..base + upper_off]
+                        .iter()
+                        .all(|&v| v == 1.0_f32),
+                    "low-freq channels must remain untouched for head {h}, rot_dim={expected_rot}"
+                );
+                assert!(
+                    (q_128.data[base + upper_off] - 1.0).abs() > 1.0e-3,
+                    "upper channel must be rotated for head {h}, rot_dim={expected_rot}"
+                );
+                assert_eq!(
+                    q_128.data[base + upper_off..base + 128],
+                    k_128.data[base + upper_off..base + 128]
+                );
+            }
+        }
     }
 }

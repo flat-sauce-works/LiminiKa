@@ -94,7 +94,7 @@ use crate::traits::primitives::{
     SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
 };
 use crate::traits::primitives::{
-    is_slot_pair_coupled, GcsoResult, Pod, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+    is_slot_pair_coupled, GcsoResult, Pod, DEFAULT_ENTROPY_EPS, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
     GCSO_SNAPSHOT_MAGIC_U32, MAX_ATTENTION_HEADS,
 };
 use crate::traits::rope::PhaseSteering;

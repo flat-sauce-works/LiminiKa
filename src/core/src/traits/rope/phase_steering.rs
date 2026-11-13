@@ -863,22 +863,72 @@ pub trait PhaseSteering: BranchlessKernel {
         );
         let upper_off = head_dim - rot_dim;
         let (is_default, eff_max, q7_to_norm_scale) = resolve_ripa_norm_params(max_rad);
-        let p_slice = &phase_deltas.as_slice()[..num_heads];
         let q_slice = &mut query_tensor.as_mut_slice()[..expected_len];
 
+        if num_heads <= MAX_ATTENTION_HEADS {
+            let swar_words = pack_q7_slice_to_swar_words_64(phase_deltas.as_slice(), num_heads);
+            let active_cells = num_heads.div_ceil(HEADS_PER_CELL).min(NUM_SWARM_CELLS);
+            let cell_limit_mask = ((1u16 << active_cells) - 1) as u8;
+            if let Some(k_ref) = key_tensor {
+                let k_slice = &mut k_ref.as_mut_slice()[..expected_len];
+                steer_pair_slice_from_eff_words_core(
+                    q_slice,
+                    k_slice,
+                    &swar_words,
+                    cell_limit_mask,
+                    cell_limit_mask,
+                    head_dim,
+                    num_heads,
+                    rot_dim,
+                    upper_off,
+                    true,
+                    is_default,
+                    eff_max,
+                    q7_to_norm_scale,
+                );
+            } else {
+                steer_single_slice_from_eff_words_core(
+                    q_slice,
+                    &swar_words,
+                    cell_limit_mask,
+                    cell_limit_mask,
+                    head_dim,
+                    num_heads,
+                    rot_dim,
+                    upper_off,
+                    true,
+                    is_default,
+                    eff_max,
+                    q7_to_norm_scale,
+                );
+            }
+            return Ok(rot_dim);
+        }
+
+        let p_slice = &phase_deltas.as_slice()[..num_heads];
+        let mut cached_q7 = i32::MIN;
+        let mut cached_sincos = (0.0_f32, 1.0_f32);
         let mut h = 0usize;
         if let Some(k_ref) = key_tensor {
             let k_slice = &mut k_ref.as_mut_slice()[..expected_len];
             while h < num_heads {
                 let raw_q7 = p_slice[h];
                 if raw_q7 != 0 {
-                    let (sin_t, cos_t) = eval_ripa_sincos_with_params(
-                        raw_q7,
-                        true,
-                        is_default,
-                        eff_max,
-                        q7_to_norm_scale,
-                    );
+                    let q7_i32 = i32::from(raw_q7);
+                    let (sin_t, cos_t) = if q7_i32 == cached_q7 {
+                        cached_sincos
+                    } else {
+                        let sc = eval_ripa_sincos_with_params(
+                            raw_q7,
+                            true,
+                            is_default,
+                            eff_max,
+                            q7_to_norm_scale,
+                        );
+                        cached_q7 = q7_i32;
+                        cached_sincos = sc;
+                        sc
+                    };
                     let base = h * head_dim + upper_off;
                     rotate_ripa_upper_slice(&mut q_slice[base..base + rot_dim], sin_t, cos_t);
                     rotate_ripa_upper_slice(&mut k_slice[base..base + rot_dim], sin_t, cos_t);
@@ -889,13 +939,21 @@ pub trait PhaseSteering: BranchlessKernel {
             while h < num_heads {
                 let raw_q7 = p_slice[h];
                 if raw_q7 != 0 {
-                    let (sin_t, cos_t) = eval_ripa_sincos_with_params(
-                        raw_q7,
-                        true,
-                        is_default,
-                        eff_max,
-                        q7_to_norm_scale,
-                    );
+                    let q7_i32 = i32::from(raw_q7);
+                    let (sin_t, cos_t) = if q7_i32 == cached_q7 {
+                        cached_sincos
+                    } else {
+                        let sc = eval_ripa_sincos_with_params(
+                            raw_q7,
+                            true,
+                            is_default,
+                            eff_max,
+                            q7_to_norm_scale,
+                        );
+                        cached_q7 = q7_i32;
+                        cached_sincos = sc;
+                        sc
+                    };
                     let base = h * head_dim + upper_off;
                     rotate_ripa_upper_slice(&mut q_slice[base..base + rot_dim], sin_t, cos_t);
                 }
@@ -1354,29 +1412,7 @@ pub trait PhaseSteering: BranchlessKernel {
 
         let clean_damping =
             branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
-        let swar_words = if let Ok(arr64) = phase_deltas.as_array::<MAX_ATTENTION_HEADS>() {
-            load_q7_words_64(arr64)
-        } else {
-            let p_slice = phase_deltas.as_slice();
-            let mut words = [0u64; NUM_SWARM_CELLS];
-            let full_cells = num_heads / HEADS_PER_CELL;
-            let mut c = 0usize;
-            while c < full_cells {
-                words[c] = load_q7_x8_slice(p_slice, c * HEADS_PER_CELL);
-                c += 1;
-            }
-            let rem_start = full_cells * HEADS_PER_CELL;
-            if rem_start < num_heads {
-                let mut tail_w = 0u64;
-                let mut h = rem_start;
-                while h < num_heads {
-                    tail_w |= u64::from(p_slice[h] as u8) << ((h - rem_start) * 8);
-                    h += 1;
-                }
-                words[full_cells] = tail_w;
-            }
-            words
-        };
+        let swar_words = pack_q7_slice_to_swar_words_64(phase_deltas.as_slice(), num_heads);
 
         steer_from_swar_words_core_safe(
             &swar_words,

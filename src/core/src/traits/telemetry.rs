@@ -66,7 +66,8 @@ use super::primitives::{
     ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
     ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_REPULSION_ESCAPE,
     ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION, DAES_MINI_LEDGER_LEN, DAES_SHORTCUT_SLOTS,
-    GcsoResult, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PAGED_BITMASK_BITS, Pod,
+    DEFAULT_ENTROPY_EPS, GcsoResult, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PAGED_BITMASK_BITS,
+    Pod,
     coupled_slot_row_mask, is_slot_pair_coupled, pack_action_slot_tag, unpack_action_mode_from_tag,
     unpack_attractor_slot_from_tag,
 };
@@ -152,7 +153,7 @@ pub(crate) fn eval_unified_anchor_resonance_words_with_uniform(
     base_energy: f32,
 ) -> (f32, f32) {
     let clean_base = branchless_flush_subnormal_f32(branchless_relu_f32(base_energy));
-    if clean_base <= 1.0e-12 {
+    if clean_base <= DEFAULT_ENTROPY_EPS {
         return (0.0, 0.0);
     }
     let anc_nonzero = if anc_is_uniform {
@@ -2948,7 +2949,7 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         let clean_energy = branchless_flush_subnormal_f32(branchless_relu_f32(anchor_base_energy));
         let cur_pull =
             branchless_flush_subnormal_f32(branchless_relu_f32(self.attractor_pull_force));
-        if clean_energy <= 1.0e-12 {
+        if clean_energy <= DEFAULT_ENTROPY_EPS {
             self.attractor_pull_force = branchless_min_f32(cur_pull, MAX_ATTRACTOR_PULL_FORCE);
             return (0.0, 0.0);
         }
@@ -2974,8 +2975,8 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         let proximity_gain = branchless_clamp_f32(1.0 + coherence, 0.25, 2.0);
         let resonant_pull = branchless_flush_subnormal_f32(clean_energy * proximity_gain);
         let new_pull = cur_pull + resonant_pull;
-        if resonant_pull > 1.0e-12 {
-            if cur_pull <= 1.0e-12 {
+        if resonant_pull > DEFAULT_ENTROPY_EPS {
+            if cur_pull <= DEFAULT_ENTROPY_EPS {
                 *trail_phase_words_mut(self) = b_w;
             } else {
                 let ratio_f32 = branchless_clamp_f32(
@@ -4749,7 +4750,7 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
         quorum_threshold: u8,
     ) -> u8 {
         let prev_quorum = self.swarm_quorum_mask();
-        let has_best = donor_pull > 1.0e-12;
+        let has_best = donor_pull > DEFAULT_ENTROPY_EPS;
         self.target_anchor_id =
             branchless_select_u32(has_best, donor_anchor_id, self.target_anchor_id);
         self.cluster_id = branchless_select_u32(has_best, donor_anchor_id, self.cluster_id);
@@ -4821,7 +4822,7 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
         let mut idx = 0usize;
         while idx < count {
             let base_e = anchor_base_energies[idx];
-            if base_e > 1.0e-12 && branchless_is_finite_f32(base_e) {
+            if base_e > DEFAULT_ENTROPY_EPS && branchless_is_finite_f32(base_e) {
                 let anc_w = load_q7_words_64(&anchor_phases[idx]);
                 let anc_is_uniform = if self_is_uniform {
                     is_word_array_uniform_64(&anc_w)
@@ -4985,7 +4986,7 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
         let (tgt_w, total_pull, dom_id, has_active_anchors) = if count == 1 {
             let clean_e =
                 branchless_flush_subnormal_f32(branchless_relu_f32(anchor_base_energies[0]));
-            let has_active = clean_e > 1.0e-12;
+            let has_active = clean_e > DEFAULT_ENTROPY_EPS;
             let tw = if has_active {
                 load_q7_words_64(&anchor_phases[0])
             } else {

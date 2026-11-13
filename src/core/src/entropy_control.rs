@@ -1307,11 +1307,11 @@ fn step_via_gateway_frame_with_words_core<
     let cur_pull = branchless_flush_subnormal_f32(branchless_relu_f32(trail.attractor_pull_force));
     let gw_pull = branchless_flush_subnormal_f32(branchless_relu_f32(frame.effective_energy));
     let total_pull = cur_pull + gw_pull;
-    let has_cur_pull = cur_pull > 1.0e-12;
+    let has_cur_pull = cur_pull > DEFAULT_ENTROPY_EPS;
     let qdps_step = frame.qdps_min_step_q7;
     #[allow(unused_mut)]
     let mut qdps_filtered_in_vec = false;
-    let (mut next_w, next_eq_gw, mut next_eq_cur) = if gw_pull <= 1.0e-12 {
+    let (mut next_w, next_eq_gw, mut next_eq_cur) = if gw_pull <= DEFAULT_ENTROPY_EPS {
         (*trail_phase_words_ref(trail), false, true)
     } else if !has_cur_pull {
         (*gw_w, true, false)
@@ -1509,7 +1509,7 @@ fn step_via_gateway_frame_with_words_core<
 
     let mut crystal_mass = 0.0_f32;
     if let Some(crystal) = crystal_record_opt {
-        if (!repulsion_triggered) & (gw_pull > 1.0e-12) {
+        if (!repulsion_triggered) & (gw_pull > DEFAULT_ENTROPY_EPS) {
             let new_dom = evolved_ptr.target_attractor_slot();
             let new_act = evolved_ptr.action_mode_flags();
             crystal_mass = crystal.absorb_gateway_frame_with_words_and_overrides(
@@ -3770,18 +3770,24 @@ mod tests {
 
     #[test]
     fn test_surrogate_and_moving_z_entropy() {
-        let entropy = compute_sparse_surrogate_entropy(0.5, 0.5, 1e-12);
+        let entropy = compute_sparse_surrogate_entropy(0.5, 0.5, DEFAULT_ENTROPY_EPS);
         assert!((entropy - LN_2).abs() < 1e-6);
-        assert_eq!(compute_sparse_surrogate_entropy(1.0, 0.0, 1e-12), 0.0);
-        assert_eq!(compute_sparse_surrogate_entropy(-0.5, 0.5, 1e-12), 0.0);
+        assert_eq!(
+            compute_sparse_surrogate_entropy(1.0, 0.0, DEFAULT_ENTROPY_EPS),
+            0.0
+        );
+        assert_eq!(
+            compute_sparse_surrogate_entropy(-0.5, 0.5, DEFAULT_ENTROPY_EPS),
+            0.0
+        );
 
-        let asym_h = compute_sparse_surrogate_entropy(0.8, 0.2, 1e-12);
+        let asym_h = compute_sparse_surrogate_entropy(0.8, 0.2, DEFAULT_ENTROPY_EPS);
         assert!(asym_h > 0.45 && asym_h < LN_2);
 
-        let unnorm_h = compute_sparse_surrogate_entropy(1.6, 0.4, 1e-12);
+        let unnorm_h = compute_sparse_surrogate_entropy(1.6, 0.4, DEFAULT_ENTROPY_EPS);
         assert!((asym_h - unnorm_h).abs() < 1e-6);
 
-        let tail_h = compute_sparse_surrogate_entropy(0.99, 0.01, 1e-12);
+        let tail_h = compute_sparse_surrogate_entropy(0.99, 0.01, DEFAULT_ENTROPY_EPS);
         assert!(tail_h > 0.03 && tail_h < 0.07);
 
         let h_tilde = compute_moving_z_score_entropy(0.5, 0.8, 0.2, 0.1, 1e-6, 1.0, 0.5);
@@ -3800,7 +3806,7 @@ mod tests {
     fn test_entropy_controller_init_setters_and_reset() {
         let mut engine = EntropyController::default();
         assert_eq!(engine.state().bifurcation_threshold, 1.5);
-        assert_eq!(engine.state().singularity_eps, 1e-12);
+        assert_eq!(engine.state().singularity_eps, DEFAULT_ENTROPY_EPS);
         assert_eq!(engine.state().sample_temperature, 1.0);
         assert_eq!(engine.hysteresis_band, DEFAULT_HYSTERESIS_BAND);
         assert_eq!(engine.tau_flux, DEFAULT_TAU_FLUX);

@@ -60,8 +60,9 @@ use super::primitives::{
     ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
     ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
     ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
-    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_QDPS_MIN_STEP_RAD,
-    DEFAULT_RIPA_CLAMP_MAX_RAD, GcsoResult, MAX_ATTENTION_HEADS, Pod, pack_action_slot_tag,
+    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_ENTROPY_EPS,
+    DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD, GcsoResult, MAX_ATTENTION_HEADS, Pod,
+    pack_action_slot_tag,
 };
 use super::rope::{
     PhaseSteering, PspmRouter, dispatch_fused_ripa_and_pspm_words_core,
@@ -1861,7 +1862,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
             }
             let (f, f_w) = slice[i].synthesize_gateway_ensemble_item();
             let f_e = branchless_flush_subnormal_f32(branchless_relu_f32(f.effective_energy));
-            let f_has_signal = (f_e > 1.0e-12) | (f.repulsion_severity > 1.0e-12)
+            let f_has_signal = (f_e > DEFAULT_ENTROPY_EPS) | (f.repulsion_severity > DEFAULT_ENTROPY_EPS)
                 | (f.provenance_bits != 0) | ((f.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0);
 
             if f_has_signal {
@@ -1892,9 +1893,9 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
                     active_heads = f.active_head_count;
                     has_active = true;
                 } else {
-                    if f_e > 1.0e-12 {
+                    if f_e > DEFAULT_ENTROPY_EPS {
                         let new_tot = tot_e + f_e;
-                        let safe_tot = branchless_select_f32(new_tot > 1.0e-12, new_tot, 1.0);
+                        let safe_tot = branchless_select_f32(new_tot > DEFAULT_ENTROPY_EPS, new_tot, 1.0);
                         let w_ratio =
                             branchless_clamp_f32(f_e * fast_inv_pos_normal_f32(safe_tot), 0.0, 1.0);
                         let s_u64 = ((w_ratio * 128.0 + 0.5) as u8).min(128) as u64;
@@ -2172,7 +2173,7 @@ where
             pers_e * branchless_clamp_f32(1.0 + 0.5 * fp_coh, 0.5, 1.5),
         );
         let tot_e = fact_e + eff_pers_e;
-        let safe_tot = branchless_select_f32(tot_e > 1.0e-12, tot_e, 1.0);
+        let safe_tot = branchless_select_f32(tot_e > DEFAULT_ENTROPY_EPS, tot_e, 1.0);
         let pers_ratio =
             branchless_clamp_f32(eff_pers_e * fast_inv_pos_normal_f32(safe_tot), 0.0, 1.0);
         let s_u64 = ((pers_ratio * 128.0 + 0.5) as u8).min(128) as u64;
@@ -3437,7 +3438,7 @@ impl SubjectivePersonaSignal for CrystallizedAttractorRecord {
 impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
-        let is_active = (self.sample_count > 0) & (self.phase_gravity_mass > 1.0e-12);
+        let is_active = (self.sample_count > 0) & (self.phase_gravity_mass > DEFAULT_ENTROPY_EPS);
         if !is_active {
             let packed_tag =
                 pack_action_slot_tag(self.dominant_slot, ACTION_PRESET_PASSIVE_SIDECAR);
@@ -3515,7 +3516,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
 
     #[inline(always)]
     fn synthesize_gateway_ensemble_item(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
-        let is_active = (self.sample_count > 0) & (self.phase_gravity_mass > 1.0e-12);
+        let is_active = (self.sample_count > 0) & (self.phase_gravity_mass > DEFAULT_ENTROPY_EPS);
         if !is_active {
             return (
                 GatewayFrame {
@@ -3582,7 +3583,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
 
     #[inline(always)]
     fn has_active_gateway_ensemble_signal(&self) -> bool {
-        (self.sample_count > 0) & (self.phase_gravity_mass > 1.0e-12)
+        (self.sample_count > 0) & (self.phase_gravity_mass > DEFAULT_ENTROPY_EPS)
     }
 
     #[inline]
@@ -3614,7 +3615,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
         let mut i = 0usize;
         while i < len {
             let rec = &records[i];
-            if (rec.sample_count > 0) & (rec.phase_gravity_mass > 1.0e-12) {
+            if (rec.sample_count > 0) & (rec.phase_gravity_mass > DEFAULT_ENTROPY_EPS) {
                 let rec_w = rec.phase_words_ref();
                 let rec_is_uniform = if !has_active || acc_is_uniform {
                     is_word_array_uniform_64(rec_w)
@@ -3643,10 +3644,10 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                     prov_bits = rec_prov;
                     dom_cause = rec.dominant_cause_code;
                     has_active = true;
-                } else if f_e > 1.0e-12 {
+                } else if f_e > DEFAULT_ENTROPY_EPS {
                     let new_tot = tot_e + f_e;
                     if !swar_words_equal_64(&acc_w, rec_w) {
-                        let safe_tot = branchless_select_f32(new_tot > 1.0e-12, new_tot, 1.0);
+                        let safe_tot = branchless_select_f32(new_tot > DEFAULT_ENTROPY_EPS, new_tot, 1.0);
                         let w_ratio = branchless_clamp_f32(
                             f_e * fast_inv_pos_normal_f32(safe_tot),
                             0.0,
@@ -3696,15 +3697,15 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
             i += 1;
         }
 
-        let safe_tot_e = branchless_select_f32(tot_e > 1.0e-12, tot_e, 1.0);
+        let safe_tot_e = branchless_select_f32(tot_e > DEFAULT_ENTROPY_EPS, tot_e, 1.0);
         let inv_tot_e = fast_inv_pos_normal_f32(safe_tot_e);
         let eff_inv_temp = branchless_select_f32(
-            tot_e > 1.0e-12,
+            tot_e > DEFAULT_ENTROPY_EPS,
             branchless_clamp_f32(weighted_inv_temp * inv_tot_e, 0.25, 4.0),
             records[dom_idx].effective_inv_temp,
         );
         let fp_coh = branchless_select_f32(
-            tot_e > 1.0e-12,
+            tot_e > DEFAULT_ENTROPY_EPS,
             branchless_clamp_f32(weighted_coh * inv_tot_e, 0.0, 1.0),
             records[dom_idx].resultant_r_bar,
         );

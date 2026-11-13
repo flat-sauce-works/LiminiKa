@@ -454,10 +454,10 @@ pub fn branchless_q7_circular_weighted_step_64(
     let w_run = branchless_flush_subnormal_f32(branchless_relu_f32(running_weight));
     let w_cand = branchless_flush_subnormal_f32(branchless_relu_f32(candidate_weight));
     let total_w = w_run + w_cand;
-    if w_cand <= 1.0e-12 {
+    if w_cand <= DEFAULT_ENTROPY_EPS {
         return total_w;
     }
-    if w_run <= 1.0e-12 {
+    if w_run <= DEFAULT_ENTROPY_EPS {
         *running_phases = *candidate_phases;
         return total_w;
     }
@@ -944,7 +944,7 @@ pub fn branchless_q7_resonant_pull_64(
     base_energy: f32,
 ) -> (f32, f32) {
     let clean_energy = branchless_flush_subnormal_f32(branchless_relu_f32(base_energy));
-    if clean_energy <= 1.0e-12 {
+    if clean_energy <= DEFAULT_ENTROPY_EPS {
         return (0.0, 0.0);
     }
     let t = load_q7_words_64(trail_phases);
@@ -998,7 +998,7 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
         } else {
             0.0
         };
-        if clean_energy <= 1.0e-12 {
+        if clean_energy <= DEFAULT_ENTROPY_EPS {
             return (t, init_w, 0.0, default_dominant_idx, 0, false, false);
         }
         let b = load_q7_words_64(&anchor_phases[0]);
@@ -1013,12 +1013,12 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
             branchless_flush_subnormal_f32(
                 clean_energy * branchless_clamp_f32(1.0 + coh, 0.25, 2.0),
             );
-        let is_active = res_pull > 1.0e-12;
+        let is_active = res_pull > DEFAULT_ENTROPY_EPS;
         if !is_active {
             return (t, init_w, 0.0, default_dominant_idx, 0, false, false);
         }
         let total_w = init_w + res_pull;
-        let out_w = if init_w <= 1.0e-12 {
+        let out_w = if init_w <= DEFAULT_ENTROPY_EPS {
             b
         } else {
             let ratio_f32 = branchless_clamp_f32(
@@ -1078,9 +1078,9 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
                 } else {
                     0.0
                 };
-                if clean_energy > 1.0e-12 {
+                if clean_energy > DEFAULT_ENTROPY_EPS {
                     let check_b_uni =
-                        (running_weight <= 1.0e-12) | (r_uni & (t_uni | !trail_nonzero));
+                        (running_weight <= DEFAULT_ENTROPY_EPS) | (r_uni & (t_uni | !trail_nonzero));
                     let mut b = [0u64; 8];
                     let b_uni = if check_b_uni {
                         b = load_q7_words_64(&anchor_phases[idx]);
@@ -1106,11 +1106,11 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
                         let res_pull = branchless_flush_subnormal_f32(
                             clean_energy * branchless_clamp_f32(1.0 + coh, 0.25, 2.0),
                         );
-                        let is_active = res_pull > 1.0e-12;
+                        let is_active = res_pull > DEFAULT_ENTROPY_EPS;
                         let is_better = res_pull > best_pull;
                         let total_w = running_weight + res_pull;
 
-                        if running_weight <= 1.0e-12 {
+                        if running_weight <= DEFAULT_ENTROPY_EPS {
                             if is_active {
                                 r_w0 = bw0;
                             }
@@ -1196,11 +1196,11 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
                         let res_pull = branchless_flush_subnormal_f32(
                             clean_energy * branchless_clamp_f32(1.0 + coh, 0.25, 2.0),
                         );
-                        let is_active = res_pull > 1.0e-12;
+                        let is_active = res_pull > DEFAULT_ENTROPY_EPS;
                         let is_better = res_pull > best_pull;
                         let total_w = running_weight + res_pull;
 
-                        if running_weight <= 1.0e-12 {
+                        if running_weight <= DEFAULT_ENTROPY_EPS {
                             if is_active {
                                 if b_uni {
                                     r_w0 = b[0];
@@ -1260,7 +1260,7 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
                 idx += 1;
             }
 
-            let has_pull = (active_count > 0) & (anchor_pull_sum > 1.0e-12);
+            let has_pull = (active_count > 0) & (anchor_pull_sum > DEFAULT_ENTROPY_EPS);
             let inv_pull =
                 fast_inv_pos_normal_f32(branchless_select_f32(has_pull, anchor_pull_sum, 1.0));
             let mean_coh = branchless_select_f32(
@@ -1309,7 +1309,7 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
             } else {
                 0.0
             };
-            if clean_energy > 1.0e-12 {
+            if clean_energy > DEFAULT_ENTROPY_EPS {
                 let b = load_q7_words_64(&anchor_phases[idx]);
                 let b_is_uniform = is_word_array_uniform_64(&b);
                 let anchor_nonzero = if b_is_uniform {
@@ -1330,11 +1330,11 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
                 let res_pull = branchless_flush_subnormal_f32(
                     clean_energy * branchless_clamp_f32(1.0 + coh, 0.25, 2.0),
                 );
-                let is_active = res_pull > 1.0e-12;
+                let is_active = res_pull > DEFAULT_ENTROPY_EPS;
                 let is_better = res_pull > best_pull;
                 let total_w = running_weight + res_pull;
 
-                if running_weight <= 1.0e-12 {
+                if running_weight <= DEFAULT_ENTROPY_EPS {
                     if is_active {
                         r = b;
                         r_is_uniform = b_is_uniform;
@@ -1371,7 +1371,7 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
             idx += 1;
         }
 
-        let has_pull = (active_count > 0) & (anchor_pull_sum > 1.0e-12);
+        let has_pull = (active_count > 0) & (anchor_pull_sum > DEFAULT_ENTROPY_EPS);
         let inv_pull =
             fast_inv_pos_normal_f32(branchless_select_f32(has_pull, anchor_pull_sum, 1.0));
         let mean_coh = branchless_select_f32(
@@ -1515,9 +1515,9 @@ pub fn branchless_q7_gravity_fold_64(
             while idx < count {
                 let mass =
                     branchless_flush_subnormal_f32(branchless_relu_f32(anchor_gravity_masses[idx]));
-                if mass > 1.0e-12 {
+                if mass > DEFAULT_ENTROPY_EPS {
                     let check_b_uni =
-                        (running_pull <= 1.0e-12) | (r_uni & (q_uni | !q_nonzero));
+                        (running_pull <= DEFAULT_ENTROPY_EPS) | (r_uni & (q_uni | !q_nonzero));
                     let mut b_w = [0u64; 8];
                     let b_uni = if check_b_uni {
                         b_w = load_q7_words_64(&anchor_phases[idx]);
@@ -1540,10 +1540,10 @@ pub fn branchless_q7_gravity_fold_64(
                         };
                         let grav_pull =
                             branchless_phase_proximity_gravity_f32(mass, coh, softening_eps);
-                        if grav_pull > 1.0e-12 {
+                        if grav_pull > DEFAULT_ENTROPY_EPS {
                             let is_better = grav_pull > best_pull;
                             let total_w = running_pull + grav_pull;
-                            if running_pull <= 1.0e-12 {
+                            if running_pull <= DEFAULT_ENTROPY_EPS {
                                 r_w0 = bw0;
                             } else if r_w0 != bw0 {
                                 let ratio_f32 = branchless_clamp_f32(
@@ -1599,10 +1599,10 @@ pub fn branchless_q7_gravity_fold_64(
                         };
                         let grav_pull =
                             branchless_phase_proximity_gravity_f32(mass, coh, softening_eps);
-                        if grav_pull > 1.0e-12 {
+                        if grav_pull > DEFAULT_ENTROPY_EPS {
                             let is_better = grav_pull > best_pull;
                             let total_w = running_pull + grav_pull;
-                            if running_pull <= 1.0e-12 {
+                            if running_pull <= DEFAULT_ENTROPY_EPS {
                                 if b_uni {
                                     r_w0 = b_w[0];
                                     r_uni = true;
@@ -1652,7 +1652,7 @@ pub fn branchless_q7_gravity_fold_64(
                 [r_w0; 8]
             };
             store_q7_words_64(folded_phases_out, &out_w);
-            let has_pull = (active_count > 0) & (running_pull > 1.0e-12);
+            let has_pull = (active_count > 0) & (running_pull > DEFAULT_ENTROPY_EPS);
             let inv_pull =
                 fast_inv_pos_normal_f32(branchless_select_f32(has_pull, running_pull, 1.0));
             let mean_coh = branchless_select_f32(
@@ -1689,10 +1689,10 @@ pub fn branchless_q7_gravity_fold_64(
         while idx < count {
             let mass =
                 branchless_flush_subnormal_f32(branchless_relu_f32(anchor_gravity_masses[idx]));
-            if mass > 1.0e-12 {
+            if mass > DEFAULT_ENTROPY_EPS {
                 let b = load_q7_words_64(&anchor_phases[idx]);
                 let need_b_uni =
-                    (q_nonzero & q_is_uniform) | (running_pull <= 1.0e-12) | r_is_uniform;
+                    (q_nonzero & q_is_uniform) | (running_pull <= DEFAULT_ENTROPY_EPS) | r_is_uniform;
                 let b_is_uniform = if need_b_uni {
                     is_word_array_uniform_64(&b)
                 } else {
@@ -1714,10 +1714,10 @@ pub fn branchless_q7_gravity_fold_64(
                     0.0
                 };
                 let grav_pull = branchless_phase_proximity_gravity_f32(mass, coh, softening_eps);
-                if grav_pull > 1.0e-12 {
+                if grav_pull > DEFAULT_ENTROPY_EPS {
                     let is_better = grav_pull > best_pull;
                     let total_w = running_pull + grav_pull;
-                    if running_pull <= 1.0e-12 {
+                    if running_pull <= DEFAULT_ENTROPY_EPS {
                         r = b;
                         r_is_uniform = b_is_uniform;
                     } else {
@@ -1752,7 +1752,7 @@ pub fn branchless_q7_gravity_fold_64(
         }
 
         store_q7_words_64(folded_phases_out, &r);
-        let has_pull = running_pull > 1.0e-12;
+        let has_pull = running_pull > DEFAULT_ENTROPY_EPS;
         let inv_pull = fast_inv_pos_normal_f32(branchless_select_f32(has_pull, running_pull, 1.0));
         let mean_coh = branchless_select_f32(
             has_pull,
@@ -2582,7 +2582,7 @@ pub(crate) fn branchless_toroidal_centroid_step_words_with_coh_uni_and_changed_6
     sample_uni: bool,
 ) -> ([u64; 8], f32, f32, f32, bool) {
     let clean_e = branchless_flush_subnormal_f32(branchless_relu_f32(sample_energy));
-    if clean_e <= 1.0e-12 {
+    if clean_e <= DEFAULT_ENTROPY_EPS {
         return (*centroid_words, prev_base_energy, prev_r_bar, prev_kappa, false);
     }
     let both_uni = c_uni & sample_uni;
@@ -2594,7 +2594,7 @@ pub(crate) fn branchless_toroidal_centroid_step_words_with_coh_uni_and_changed_6
                 | (sample_words[7] ^ centroid_words[7]))
                 == 0));
     let prev_e = branchless_flush_subnormal_f32(branchless_relu_f32(prev_base_energy));
-    if prev_sample_count == 0 || prev_e <= 1.0e-12 {
+    if prev_sample_count == 0 || prev_e <= DEFAULT_ENTROPY_EPS {
         let rb = circular_r_bar_from_words_with_uniform_flag_64(sample_words, sample_uni);
         return (
             *sample_words,
@@ -2657,7 +2657,7 @@ pub(crate) fn branchless_toroidal_centroid_step_words_with_coh_uni_and_changed_6
             return (*centroid_words, next_e, rb, branchless_von_mises_kappa(rb), false);
         }
         let tot_e = prev_e + eff_sample_e;
-        let safe_tot = branchless_select_f32(tot_e > 1.0e-12, tot_e, 1.0);
+        let safe_tot = branchless_select_f32(tot_e > DEFAULT_ENTROPY_EPS, tot_e, 1.0);
         let ratio = branchless_clamp_f32(
             eff_sample_e * fast_inv_pos_normal_f32(safe_tot),
             0.05,
@@ -2722,7 +2722,7 @@ pub(crate) fn branchless_toroidal_centroid_step_words_with_coh_uni_and_changed_6
             let eff_sample_e = clean_e * branchless_clamp_f32(0.5 * (1.0 + coh), 0.25, 1.0);
             let next_e = prev_e + 0.5 * eff_sample_e;
             let tot_e = prev_e + eff_sample_e;
-            let safe_tot = branchless_select_f32(tot_e > 1.0e-12, tot_e, 1.0);
+            let safe_tot = branchless_select_f32(tot_e > DEFAULT_ENTROPY_EPS, tot_e, 1.0);
             let ratio = branchless_clamp_f32(
                 eff_sample_e * fast_inv_pos_normal_f32(safe_tot),
                 0.05,
@@ -2810,7 +2810,7 @@ pub(crate) fn branchless_toroidal_centroid_step_words_with_coh_uni_and_changed_6
         let eff_sample_e = clean_e * branchless_clamp_f32(0.5 * (1.0 + coh), 0.25, 1.0);
         let next_e = prev_e + 0.5 * eff_sample_e;
         let tot_e = prev_e + eff_sample_e;
-        let safe_tot = branchless_select_f32(tot_e > 1.0e-12, tot_e, 1.0);
+        let safe_tot = branchless_select_f32(tot_e > DEFAULT_ENTROPY_EPS, tot_e, 1.0);
         let ratio = branchless_clamp_f32(
             eff_sample_e * fast_inv_pos_normal_f32(safe_tot),
             0.05,
@@ -4824,7 +4824,7 @@ unsafe fn avx2_atan2_to_q7_word_x8_vec(
         );
         let rounded_q7 = _mm256_add_ps(ang_q7, _mm256_or_ps(_mm256_set1_ps(0.5_f32), y_sign));
         let valid_mask = _mm256_and_ps(
-            _mm256_cmp_ps::<_CMP_GT_OQ>(norm_sq, _mm256_set1_ps(1.0e-12_f32)),
+            _mm256_cmp_ps::<_CMP_GT_OQ>(norm_sq, _mm256_set1_ps(DEFAULT_ENTROPY_EPS)),
             _mm256_cmp_ps::<_CMP_LT_OQ>(norm_sq, _mm256_set1_ps(f32::INFINITY)),
         );
         let v_i32 = _mm256_and_si256(
@@ -4858,7 +4858,7 @@ pub(crate) fn atan2_to_q7_word_x8_simd(sin_arr: &[f32; 8], cos_arr: &[f32; 8]) -
             let sum_sin = sin_arr[lane];
             let sum_cos = cos_arr[lane];
             let norm_sq = sum_cos * sum_cos + sum_sin * sum_sin;
-            let valid = (norm_sq > 1.0e-12) & branchless_is_finite_f32(norm_sq);
+            let valid = (norm_sq > DEFAULT_ENTROPY_EPS) & branchless_is_finite_f32(norm_sq);
             let q7 = if valid {
                 branchless_atan2_to_q7_fast(sum_sin, sum_cos)
             } else {

@@ -789,7 +789,7 @@ pub trait EntropyEvaluator: BranchlessKernel + Send + Sync {
     fn eval_barrier(&self, void_score: f32, tau_eff: f32) -> GcsoResult<f32> {
         if !branchless_is_finite_f32(void_score)
             || !branchless_is_finite_f32(tau_eff)
-            || void_score <= 1.0e-12
+            || void_score <= DEFAULT_ENTROPY_EPS
             || tau_eff < 0.0
         {
             return Err(GCSO_ERROR_EDBC_SINGULARITY);
@@ -2402,7 +2402,7 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
 
         let norm = branchless_sqrt_f32(sum_c * sum_c + sum_s * sum_s);
         let r_bar = branchless_flush_subnormal_f32(branchless_select_f32(
-            sum_w > 1.0e-12,
+            sum_w > DEFAULT_ENTROPY_EPS,
             norm * branchless_inv_pos_f32(sum_w),
             0.0,
         ));

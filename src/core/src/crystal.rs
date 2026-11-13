@@ -70,7 +70,7 @@ use crate::traits::primitives::{
     CRC32_CRYSTAL_SLOT_BYTE56_LUT_8, CRC32_CRYSTAL_ZOFF_BYTE1_REF, CRC32_CRYSTAL_ZOFF_BYTE2_REF,
     CRC32_CRYSTAL_ZOFF_BYTE3_REF, CRC32_IEEE_SLICE16_REF, CRYSTAL_CRC32_DEFAULT_W5_FINAL_CONTRIB,
     CRYSTAL_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB, CRYSTAL_CRC32_KAPPA_MAX_FINAL_CONTRIB,
-    CRYSTAL_CRC32_RBAR_ONE_FINAL_CONTRIB, CRYSTAL_CRC32_W0_FINAL_CONTRIB,
+    CRYSTAL_CRC32_RBAR_ONE_FINAL_CONTRIB, CRYSTAL_CRC32_W0_FINAL_CONTRIB, DEFAULT_ENTROPY_EPS,
     DEFAULT_PHASE_GRAVITY_EPS, DEFAULT_RIPA_CLAMP_MAX_RAD, MAX_ATTENTION_HEADS, Q7_FULL_COS_REF,
     SWAR_SPLAT_BYTE_64, VON_MISES_KAPPA_AT_MAX_R_BITS,
 };
@@ -586,7 +586,7 @@ impl CrystallizedAttractorRecord {
         add_count: u32,
     ) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, bool) {
         let clean_e = branchless_flush_subnormal_f32(branchless_relu_f32(sample_energy));
-        if clean_e <= 1.0e-12 || add_count == 0 {
+        if clean_e <= DEFAULT_ENTROPY_EPS || add_count == 0 {
             return (*cur_w, self.phase_gravity_mass, false);
         }
 
@@ -955,7 +955,7 @@ impl CrystallizedAttractorRecord {
         &self,
         query_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> (f32, f32) {
-        if self.sample_count == 0 || self.phase_gravity_mass <= 1.0e-12 {
+        if self.sample_count == 0 || self.phase_gravity_mass <= DEFAULT_ENTROPY_EPS {
             return (0.0, 0.0);
         }
         let coh = branchless_q7_coherence_64(query_phases, &self.phase_profile);
@@ -1022,7 +1022,7 @@ impl CrystallizedAttractorRecord {
         while i < k_len {
             let rec = &centroids[i];
             let mass = rec.phase_gravity_mass;
-            let is_active = (rec.sample_count > 0) & (mass > 1.0e-12);
+            let is_active = (rec.sample_count > 0) & (mass > DEFAULT_ENTROPY_EPS);
             if !is_active {
                 if first_empty.is_none() {
                     first_empty = Some(i);
@@ -1143,7 +1143,7 @@ impl CrystallizedAttractorRecord {
         );
         let any_active = !centroids.is_empty()
             && (centroids[best_idx].sample_count > 0)
-            && (best_mass > 1.0e-12);
+            && (best_mass > DEFAULT_ENTROPY_EPS);
         let best_grav = if any_active {
             match best_byte_diff {
                 Some(diff_u8) => branchless_q7_default_gravity_from_diff_u8(best_mass, diff_u8),
@@ -1650,13 +1650,17 @@ impl CrystallizedAttractorRecord {
 
         let mut a = 0usize;
         while a < k_len {
-            if centroids[a].sample_count > 0 && centroids[a].phase_gravity_mass > 1.0e-12 {
+            if centroids[a].sample_count > 0
+                && centroids[a].phase_gravity_mass > DEFAULT_ENTROPY_EPS
+            {
                 let mut w_a = *centroids[a].phase_words_ref();
                 let mut a_uni = is_word_array_uniform_64(&w_a);
                 let mut a_merged = false;
                 let mut b = a + 1;
                 while b < k_len {
-                    if centroids[b].sample_count > 0 && centroids[b].phase_gravity_mass > 1.0e-12 {
+                    if centroids[b].sample_count > 0
+                        && centroids[b].phase_gravity_mass > DEFAULT_ENTROPY_EPS
+                    {
                         let w_b = *centroids[b].phase_words_ref();
                         let b_uni = if a_uni {
                             is_word_array_uniform_64(&w_b)
@@ -1747,7 +1751,7 @@ impl CrystallizedAttractorRecord {
         let mut i = 0usize;
         while i < k_len {
             let rec_i = &centroids[i];
-            if rec_i.sample_count > 0 && rec_i.phase_gravity_mass > 1.0e-12 {
+            if rec_i.sample_count > 0 && rec_i.phase_gravity_mass > DEFAULT_ENTROPY_EPS {
                 active_cnt += 1;
                 tot_samples = tot_samples.saturating_add(rec_i.sample_count);
                 sum_r += rec_i.resultant_r_bar;
@@ -1757,7 +1761,7 @@ impl CrystallizedAttractorRecord {
                 let mut j = i + 1;
                 while j < k_len {
                     let rec_j = &centroids[j];
-                    if rec_j.sample_count > 0 && rec_j.phase_gravity_mass > 1.0e-12 {
+                    if rec_j.sample_count > 0 && rec_j.phase_gravity_mass > DEFAULT_ENTROPY_EPS {
                         let w_j = rec_j.phase_words_ref();
                         let j_uni = if i_uni {
                             is_word_array_uniform_64(w_j)
@@ -1863,7 +1867,10 @@ impl CrystallizedAttractorRecord {
             win_uni,
             best_byte_diff,
         ) = Self::find_nearest_toroidal_centroid_with_cache_64(centroids, &trail_w, None);
-        if centroids.is_empty() || centroids[best_idx].sample_count == 0 || best_mass <= 1.0e-12 {
+        if centroids.is_empty()
+            || centroids[best_idx].sample_count == 0
+            || best_mass <= DEFAULT_ENTROPY_EPS
+        {
             return (
                 0,
                 trail.target_anchor_id,
@@ -1992,7 +1999,7 @@ impl CrystallizedAttractorRecord {
         while i < k_len {
             let rec = &centroids[i];
             let mass = rec.phase_gravity_mass;
-            if (rec.sample_count > 0) & (mass > 1.0e-12) {
+            if (rec.sample_count > 0) & (mass > DEFAULT_ENTROPY_EPS) {
                 let rec_w = rec.phase_words_ref();
                 let rw0 = rec_w[0];
                 let rb0 = (rw0 & 0xFF) as u8;
@@ -2083,7 +2090,7 @@ impl CrystallizedAttractorRecord {
         let mass_ratio_ok =
             centroids[idx2].phase_gravity_mass >= centroids[idx1].phase_gravity_mass * safe_ratio;
         let is_liminal = (active_found >= 2)
-            & (grav2 > 1.0e-12)
+            & (grav2 > DEFAULT_ENTROPY_EPS)
             & ((grav2 >= grav1 * safe_ratio) | (mass_ratio_ok & (coh2 >= safe_ratio)))
             & (coh2 > -0.25);
 
@@ -2102,7 +2109,7 @@ impl CrystallizedAttractorRecord {
                 false
             };
             let tot_g = grav1 + grav2;
-            let safe_tot = branchless_select_f32(tot_g > 1.0e-12, tot_g, 1.0);
+            let safe_tot = branchless_select_f32(tot_g > DEFAULT_ENTROPY_EPS, tot_g, 1.0);
             let w2_ratio =
                 branchless_clamp_f32(grav2 * fast_inv_pos_normal_f32(safe_tot), 0.10, 0.50);
             let s_lim = ((w2_ratio * 128.0 + 0.5) as u8).min(64) as u64;
@@ -2431,9 +2438,9 @@ impl CrystallizedAttractorRecord {
                 != 0
         };
         let mut tot_pull = branchless_flush_subnormal_f32(branchless_relu_f32(init_pull_weight));
-        if records.len() == 1 && !init_nonzero && tot_pull <= 1.0e-12 {
+        if records.len() == 1 && !init_nonzero && tot_pull <= DEFAULT_ENTROPY_EPS {
             let rec = &records[0];
-            if rec.sample_count > 0 && rec.phase_gravity_mass > 1.0e-12 {
+            if rec.sample_count > 0 && rec.phase_gravity_mass > DEFAULT_ENTROPY_EPS {
                 let rec_w = *rec.phase_words_ref();
                 let grav = branchless_phase_proximity_gravity_f32(
                     rec.phase_gravity_mass,
@@ -2456,7 +2463,7 @@ impl CrystallizedAttractorRecord {
         let mut i = 0usize;
         while i < records.len() {
             let rec = &records[i];
-            if rec.sample_count > 0 && rec.phase_gravity_mass > 1.0e-12 {
+            if rec.sample_count > 0 && rec.phase_gravity_mass > DEFAULT_ENTROPY_EPS {
                 let rec_w = rec.phase_words_ref();
                 let rec_is_uniform = if (init_nonzero & init_is_uniform) | acc_is_uniform {
                     is_word_array_uniform_64(rec_w)
@@ -2497,12 +2504,13 @@ impl CrystallizedAttractorRecord {
                 coh_sum += coh;
                 active_cnt += 1;
                 let new_tot = tot_pull + grav;
-                if grav > 1.0e-12 {
-                    if tot_pull <= 1.0e-12 {
+                if grav > DEFAULT_ENTROPY_EPS {
+                    if tot_pull <= DEFAULT_ENTROPY_EPS {
                         acc_w = *rec_w;
                         acc_is_uniform = rec_is_uniform;
                     } else if !swar_words_equal_64(&acc_w, rec_w) {
-                        let safe_tot = branchless_select_f32(new_tot > 1.0e-12, new_tot, 1.0);
+                        let safe_tot =
+                            branchless_select_f32(new_tot > DEFAULT_ENTROPY_EPS, new_tot, 1.0);
                         let s_u8 = ((grav * fast_inv_pos_normal_f32(safe_tot)) * 128.0 + 0.5) as u8;
                         let s_u64 = s_u8.min(128) as u64;
                         if s_u64 >= 128 {

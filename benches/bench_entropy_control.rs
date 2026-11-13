@@ -34,7 +34,7 @@ use liminika_core::traits::{
     GcsoFourSectionView, HierarchicalTreeTable, ManifoldGatewaySignal, ObjectiveFact,
     SheafCohomologyEvaluator, StigmergicActionPtrOps, SubjectivePersona,
     ACTION_PRESET_EXPRESS_PHASE, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
-    MAX_ATTENTION_HEADS,
+    DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS,
 };
 use std::alloc::{alloc, dealloc, Layout};
 use std::hint::black_box;
@@ -312,7 +312,7 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
     group.bench_function("compute_sparse_surrogate_and_moving_z_entropy", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         for _ in 0..8 {
-            let h_s = compute_sparse_surrogate_entropy(0.72f32, 0.21f32, 1e-12f32);
+            let h_s = compute_sparse_surrogate_entropy(0.72f32, 0.21f32, DEFAULT_ENTROPY_EPS);
             black_box(compute_moving_z_score_entropy(
                 h_s, 0.35f32, 0.12f32, 0.08f32, 1e-6f32, 1.0f32, 0.5f32,
             ));
@@ -322,7 +322,7 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
             let h_surr = compute_sparse_surrogate_entropy(
                 black_box(0.72f32),
                 black_box(0.21f32),
-                black_box(1e-12f32),
+                black_box(DEFAULT_ENTROPY_EPS),
             );
             compute_moving_z_score_entropy(
                 black_box(h_surr),
@@ -340,14 +340,18 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
     group.bench_function("compute_sparse_surrogate_taylor_horner_0ln", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         for _ in 0..8 {
-            black_box(compute_sparse_surrogate_entropy(0.68f32, 0.19f32, 1e-12f32));
+            black_box(compute_sparse_surrogate_entropy(
+                0.68f32,
+                0.19f32,
+                DEFAULT_ENTROPY_EPS,
+            ));
         }
 
         b.iter(|| {
             compute_sparse_surrogate_entropy(
                 black_box(0.68f32),
                 black_box(0.19f32),
-                black_box(1e-12f32),
+                black_box(DEFAULT_ENTROPY_EPS),
             )
         });
     });
@@ -356,8 +360,8 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
     group.bench_function("compute_sparse_surrogate_deterministic_fastpath", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         for _ in 0..8 {
-            let hg = compute_sparse_surrogate_entropy(0.99f32, 0.0f32, 1e-12f32);
-            let ht = compute_sparse_surrogate_entropy(0.50f32, 0.50f32, 1e-12f32);
+            let hg = compute_sparse_surrogate_entropy(0.99f32, 0.0f32, DEFAULT_ENTROPY_EPS);
+            let ht = compute_sparse_surrogate_entropy(0.50f32, 0.50f32, DEFAULT_ENTROPY_EPS);
             black_box(hg + ht);
         }
 
@@ -365,12 +369,12 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
             let h_greedy = compute_sparse_surrogate_entropy(
                 black_box(0.99f32),
                 black_box(0.0f32),
-                black_box(1e-12f32),
+                black_box(DEFAULT_ENTROPY_EPS),
             );
             let h_tie = compute_sparse_surrogate_entropy(
                 black_box(0.50f32),
                 black_box(0.50f32),
-                black_box(1e-12f32),
+                black_box(DEFAULT_ENTROPY_EPS),
             );
             black_box(h_greedy + h_tie)
         });

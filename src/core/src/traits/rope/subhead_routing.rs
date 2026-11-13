@@ -1426,23 +1426,7 @@ pub trait PspmRouter: BranchlessKernel {
         let e_gain_u7 = sanitize_pspm_gain_to_u7(config.explore_phase_gain);
 
         if total_heads <= MAX_ATTENTION_HEADS {
-            let mut raw_words = [0u64; NUM_SWARM_CELLS];
-            let full_cells = total_heads / HEADS_PER_CELL;
-            let mut c = 0usize;
-            while c < full_cells {
-                raw_words[c] = load_q7_x8_slice(p_slice, c * HEADS_PER_CELL);
-                c += 1;
-            }
-            let rem_start = full_cells * HEADS_PER_CELL;
-            if rem_start < total_heads {
-                let mut tail_w = 0u64;
-                let mut h = rem_start;
-                while h < total_heads {
-                    tail_w |= u64::from(p_slice[h] as u8) << ((h - rem_start) * 8);
-                    h += 1;
-                }
-                raw_words[full_cells] = tail_w;
-            }
+            let raw_words = pack_q7_slice_to_swar_words_64(p_slice, total_heads);
             let eff_words = build_pspm_eff_words_64(
                 &raw_words,
                 fact_h,

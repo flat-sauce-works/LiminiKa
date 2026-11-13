@@ -1300,7 +1300,7 @@ impl RuntimeContext {
                     if enabled {
                         let base_e =
                             branchless_flush_subnormal_f32(branchless_relu_f32(weights[idx]));
-                        if base_e > 1.0e-12 {
+                        if base_e > DEFAULT_ENTROPY_EPS {
                             // SAFETY: `self.action_hub.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
                             // 64-byte row `bank_2d[idx]` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
                             let slot_w = unsafe {
@@ -1324,7 +1324,9 @@ impl RuntimeContext {
                                     base_e * branchless_clamp_f32(1.0 + coh, 0.25, 2.0),
                                 );
                                 let total_w = running_pull + res_pull;
-                                if total_w > 1.0e-12 && !swar_words_equal_64(&run_w, slot_w) {
+                                if total_w > DEFAULT_ENTROPY_EPS
+                                    && !swar_words_equal_64(&run_w, slot_w)
+                                {
                                     let ratio_f32 = branchless_clamp_f32(
                                         (res_pull * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
                                         0.0,

@@ -1791,15 +1791,20 @@ pub(super) unsafe fn apply_ripa_default_nonuniform_avx2_ptr(
     ptr: *mut f32,
     p_ptr: *const u8,
     head_dim: usize,
-    num_heads_and_geo: usize,
+    num_heads_and_geo_and_rot: usize,
 ) {
     use core::arch::x86_64::{
         _mm256_addsub_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_permute_ps, _mm256_set1_ps,
         _mm256_storeu_ps,
     };
-    let fold_geodesic = (num_heads_and_geo >> 31) != 0;
-    let num_heads = num_heads_and_geo & 0x7FFF_FFFF;
-    let rot_dim = ripa_upper_rot_dim(head_dim);
+    let fold_geodesic = (num_heads_and_geo_and_rot >> 31) != 0;
+    let num_heads = num_heads_and_geo_and_rot & 0xFFFF;
+    let packed_rot = (num_heads_and_geo_and_rot >> 16) & 0x7FFF;
+    let rot_dim = if packed_rot != 0 {
+        packed_rot
+    } else {
+        ripa_upper_rot_dim(head_dim)
+    };
     let upper_off = head_dim - rot_dim;
     let lut = if fold_geodesic {
         Q7_GEODESIC_DEFAULT_RIPA_SINCOS_REF
@@ -2000,10 +2005,10 @@ pub(super) fn apply_ripa_default_nonuniform_slice_core(
     lut: &[(f32, f32); 256],
 ) {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    {
-        let _ = (rot_dim, upper_off);
+    if num_heads <= 0xFFFF && rot_dim <= 0x7FFF {
+        let _ = upper_off;
         let is_geo = core::ptr::eq(lut, Q7_GEODESIC_DEFAULT_RIPA_SINCOS_REF);
-        let packed = num_heads | ((is_geo as usize) << 31);
+        let packed = num_heads | (rot_dim << 16) | ((is_geo as usize) << 31);
         // SAFETY: Caller has validated `t_slice` and `p_slice` lengths.
         unsafe {
             apply_ripa_default_nonuniform_avx2_ptr(
@@ -2015,13 +2020,10 @@ pub(super) fn apply_ripa_default_nonuniform_slice_core(
         }
         return;
     }
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-    {
-        let _ = (num_heads, rot_dim);
-        for (head_buf, &raw_q7) in t_slice.chunks_exact_mut(head_dim).zip(p_slice.iter()) {
-            let (sin_t, cos_t) = lut[(raw_q7 as u8) as usize];
-            rotate_ripa_upper_slice(&mut head_buf[upper_off..], sin_t, cos_t);
-        }
+    let _ = (num_heads, rot_dim);
+    for (head_buf, &raw_q7) in t_slice.chunks_exact_mut(head_dim).zip(p_slice.iter()) {
+        let (sin_t, cos_t) = lut[(raw_q7 as u8) as usize];
+        rotate_ripa_upper_slice(&mut head_buf[upper_off..], sin_t, cos_t);
     }
 }
 
@@ -2245,8 +2247,8 @@ pub(crate) fn steer_single_slice_from_eff_words_core(
         }
         if run_mask == _cell_limit_mask {
             #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-            {
-                let packed = num_heads | ((fold_geodesic as usize) << 31);
+            if num_heads <= 0xFFFF && rot_dim <= 0x7FFF {
+                let packed = num_heads | (rot_dim << 16) | ((fold_geodesic as usize) << 31);
                 // SAFETY: `t_slice` has length `num_heads * head_dim`, `eff_words` has `8 * 8 = 64 >= num_heads`
                 // little-endian Q7 bytes, and AVX2 is enabled. Delegating to the shared frameless leaf
                 // `apply_ripa_default_nonuniform_avx2_ptr` keeps all swarm/SLERP/unified-field callers

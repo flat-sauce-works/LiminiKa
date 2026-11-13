@@ -95,8 +95,9 @@ use crate::traits::primitives::{
 };
 use crate::traits::primitives::{
     GcsoResult, Pod, ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PSPM_ROUTE,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_REPULSION, DEFAULT_QDPS_MIN_STEP_RAD,
-    DEFAULT_RIPA_CLAMP_MAX_RAD, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
+    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_REPULSION, DEFAULT_ENTROPY_EPS,
+    DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD, MAX_ATTENTION_HEADS,
+    MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
 };
 use crate::traits::rope::{
     dispatch_fused_ripa_and_pspm_words_core, ripa_upper_rot_dim, steer_from_swar_words_core_safe,
@@ -881,7 +882,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
             logits_and_inv_temp_gain.is_some() || pspm_config_and_explore_pulse.is_some();
         let raw_eq_dom = (!need_dom_w)
             | ((active_cnt <= 1)
-                & ((anchor_phases.len() <= 1) | (init_pull <= 1.0e-12))
+                & ((anchor_phases.len() <= 1) | (init_pull <= DEFAULT_ENTROPY_EPS))
                 & repulsion_phases_and_strength.is_none());
         let dom_w = if raw_eq_dom || anchor_phases.is_empty() {
             raw_w

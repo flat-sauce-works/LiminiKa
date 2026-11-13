@@ -497,10 +497,10 @@ impl AttractorFieldEngine {
                 let base_pull = branchless_relu_f32(anchor.weight)
                     * branchless_relu_f32(anchor.pull_force)
                     * energy;
-                if base_pull > 1.0e-12 {
+                if base_pull > DEFAULT_ENTROPY_EPS {
                     let anc_w = anchor.phase_words_ref();
                     let check_anc_uni = (init_nonzero & init_is_uniform)
-                        | (running_pull <= 1.0e-12)
+                        | (running_pull <= DEFAULT_ENTROPY_EPS)
                         | run_is_uniform;
                     let anc_is_uniform = if check_anc_uni {
                         is_word_array_uniform_64(anc_w)
@@ -533,9 +533,9 @@ impl AttractorFieldEngine {
                             branchless_flush_subnormal_f32(base_pull * proximity_gain),
                             MAX_ATTRACTOR_PULL_FORCE,
                         );
-                        if pull > 1.0e-12 {
+                        if pull > DEFAULT_ENTROPY_EPS {
                             let total_w = running_pull + pull;
-                            if running_pull <= 1.0e-12 {
+                            if running_pull <= DEFAULT_ENTROPY_EPS {
                                 run_w0 = aw0;
                             } else if run_w0 != aw0 {
                                 let ratio_f32 = branchless_clamp_f32(
@@ -622,11 +622,11 @@ impl AttractorFieldEngine {
                         branchless_flush_subnormal_f32(base_pull * proximity_gain),
                         MAX_ATTRACTOR_PULL_FORCE,
                     );
-                    if pull > 1.0e-12 {
+                    if pull > DEFAULT_ENTROPY_EPS {
                         let total_w = running_pull + pull;
                         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                         {
-                            if running_pull <= 1.0e-12 {
+                            if running_pull <= DEFAULT_ENTROPY_EPS {
                                 if anc_is_uniform {
                                     run_w0 = anc_w[0];
                                     run_is_uniform = true;
@@ -678,7 +678,7 @@ impl AttractorFieldEngine {
                         }
                         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
                         {
-                            if running_pull <= 1.0e-12 {
+                            if running_pull <= DEFAULT_ENTROPY_EPS {
                                 run_w = *anc_w;
                                 run_is_uniform = anc_is_uniform;
                             } else if !crate::traits::branchless::swar_words_equal_64(&run_w, anc_w)
@@ -711,7 +711,7 @@ impl AttractorFieldEngine {
             idx += 1;
         }
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-        let mut run_w = if running_pull <= 1.0e-12 {
+        let mut run_w = if running_pull <= DEFAULT_ENTROPY_EPS {
             *init_w
         } else if run_is_uniform {
             [run_w0; 8]
