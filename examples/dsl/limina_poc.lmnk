@@ -1,0 +1,12 @@
+// name: examples/dsl/limina_poc.lmnk
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+persona Limina extends "presets/persona/limina_base" {
+    attractors {
+        attract "tests/fixtures/gcso_eval_samples.txt" @ 0.8
+    }
+}
+
+session DesktopAssistant using Limina {
+    mode = creative_exploration
+}
