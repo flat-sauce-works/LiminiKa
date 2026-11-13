@@ -3001,7 +3001,7 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering + PspmRouter {
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if head dimensions, `min_step_rad`, or tensor slices
     /// violate layout or `GCSO_RESTRICT` disjointness invariants.
-    #[inline(always)]
+    #[inline]
     fn steer_crystallized_ensemble_zero_copy_safe(
         &self,
         records: &[CrystallizedAttractorRecord],
@@ -3099,7 +3099,7 @@ pub trait ActionHubGatewayExt: ActionHub {
     ///
     /// # Errors
     /// Propagates any validation or execution error from [`ActionHub`].
-    #[inline(always)]
+    #[inline]
     fn ingest_gateway_and_steer_with_words_core<S: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         signal: &S,

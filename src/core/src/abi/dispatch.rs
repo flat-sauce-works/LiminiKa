@@ -55,13 +55,6 @@ pub fn is_aligned<T>(ptr: *const T) -> bool {
     (!ptr.is_null()) & (((ptr as usize) & (align - 1)) == 0)
 }
 
-/// Branchlessly checks pointer non-nullness and custom power-of-two byte alignment.
-#[inline(always)]
-#[must_use]
-pub fn is_aligned_to<T>(ptr: *const T, align: usize) -> bool {
-    is_ptr_aligned_to(ptr, align)
-}
-
 /// Validates a non-null, naturally aligned pointer or opaque handle.
 #[inline(always)]
 pub(super) fn validate_ptr<T>(ptr: *const T) -> GcsoResult<()> {
@@ -79,7 +72,7 @@ pub(super) fn validate_ptr<T>(ptr: *const T) -> GcsoResult<()> {
 pub(super) fn validate_ptr_aligned<T>(ptr: *const T, align: usize) -> GcsoResult<()> {
     if ptr.is_null() {
         Err(GCSO_ERROR_NULL_POINTER)
-    } else if !is_aligned_to(ptr, align) {
+    } else if !is_ptr_aligned_to(ptr, align) {
         Err(GCSO_ERROR_MISALIGNED_POINTER)
     } else {
         Ok(())

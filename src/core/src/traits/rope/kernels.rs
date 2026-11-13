@@ -1631,7 +1631,7 @@ pub(super) fn unpack_ripa_sincos_heads_64(
 /// Rotates strictly the upper low-frequency quarter `rot_dim = ((head_dim >> 2) & !1).max(2)`
 /// (`[base + head_dim - rot_dim .. base + head_dim]`) of each head in `t_slice` using pre-unpacked
 /// `sincos_heads`, eliminating per-head `rot_dim` branches and LUT reloads across multi-token batches.
-#[inline(always)]
+#[inline]
 pub(super) fn apply_ripa_single_slice_with_sincos(
     t_slice: &mut [f32],
     sincos_heads: &[(f32, f32)],

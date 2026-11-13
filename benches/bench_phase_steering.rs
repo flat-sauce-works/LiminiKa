@@ -371,7 +371,11 @@ fn bench_phase_steering_operations(c: &mut Criterion) {
         (256u32, 32u32),
     ];
 
-    let max_elements = 256usize * 32usize;
+    let max_elements = configurations
+        .iter()
+        .map(|&(d, h)| (d as usize) * (h as usize))
+        .max()
+        .unwrap_or(256usize * 32usize);
     let mut shared_q_arena =
         AlignedHeapBuffer::<f32, 512>::new_with_phase_offset(max_elements, 1.0f32, 0);
     let mut shared_k_arena =
@@ -598,22 +602,32 @@ fn bench_phase_steering_operations(c: &mut Criterion) {
             &(head_dim, num_heads),
             |b, _| {
                 let _ftz = ScopedFtzdazGuard::new();
-                let mut q_slice = shared_q_arena
-                    .as_aligned_prefix_mut(total_elements)
-                    .relax_alignment::<32>();
-                q_slice.as_mut_slice().fill(1.0f32);
-                for _ in 0..8 {
-                    engine
-                        .apply_soft_phase_damping(&mut q_slice, 0.85f32)
-                        .unwrap();
+                let mut template = vec![0.0f32; total_elements];
+                for (idx, val) in template.iter_mut().enumerate() {
+                    *val = 0.75f32 + ((idx & 15) as f32) * 0.0625f32;
                 }
 
-                b.iter(|| {
-                    engine
-                        .apply_soft_phase_damping(black_box(&mut q_slice), black_box(0.85f32))
-                        .unwrap();
-                    black_box(q_slice.as_slice()[0]);
-                });
+                b.iter_batched(
+                    || {
+                        let mut arena = AlignedHeapBuffer::<f32, 32>::new_with_phase_offset(
+                            total_elements,
+                            0.0f32,
+                            0,
+                        );
+                        arena.as_mut_slice()[..total_elements].copy_from_slice(&template);
+                        arena
+                    },
+                    |mut arena| {
+                        let mut q_slice = arena
+                            .as_aligned_prefix_mut(total_elements)
+                            .relax_alignment::<32>();
+                        engine
+                            .apply_soft_phase_damping(black_box(&mut q_slice), black_box(0.85f32))
+                            .unwrap();
+                        black_box(q_slice.as_slice()[0]);
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
             },
         );
     }
@@ -962,7 +976,9 @@ fn bench_phase_steering_long_context_and_procrustes(c: &mut Criterion) {
         let mut l_slice = shared_logits_arena
             .as_aligned_prefix_mut(vocab_size)
             .relax_alignment::<32>();
-        l_slice.as_mut_slice().fill(2.5f32);
+        for (idx, val) in l_slice.as_mut_slice().iter_mut().enumerate() {
+            *val = -2.0f32 + ((idx & 31) as f32) * 0.25f32;
+        }
         let phase_pos = AlignedQ7Buffer(make_heterogeneous_q7_phases_with_offset(10));
         let p_pos = AlignedSlice16::new(&phase_pos.0[..32]).unwrap();
         for _ in 0..4 {
@@ -990,14 +1006,17 @@ fn bench_phase_steering_long_context_and_procrustes(c: &mut Criterion) {
             engine.qdps_filter_step(&mut w_slice, 0.12f32).unwrap();
         }
 
-        b.iter(|| {
-            let mut local = seed_buf;
-            let mut p_slice = local.as_aligned_slice_mut();
-            engine
-                .qdps_filter_step(black_box(&mut p_slice), black_box(0.12f32))
-                .unwrap();
-            black_box(p_slice.as_slice()[0]);
-        });
+        b.iter_batched(
+            || seed_buf,
+            |mut local| {
+                let mut p_slice = local.as_aligned_slice_mut();
+                engine
+                    .qdps_filter_step(black_box(&mut p_slice), black_box(0.12f32))
+                    .unwrap();
+                black_box(p_slice.as_slice()[0]);
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 
     group.finish();
@@ -2820,10 +2839,10 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
                 );
                 rec
             });
-            let mut zimms_buf = AlignedBuffer64::<u8, 512>::new([0u8; 512]);
+            let mut storage_buf = AlignedBuffer64::<u8, 512>::new([0u8; 512]);
             CrystallizedAttractorRecord::write_records_to_zimms_bytes(
                 &records,
-                &mut zimms_buf.data,
+                &mut storage_buf.data,
             )
             .unwrap();
             let base_trail = gcso_pointer_trail_t {
@@ -2839,7 +2858,7 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
                 gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
                 let mut logits_mut = gw_logits.as_aligned_slice_mut();
                 let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
-                    &zimms_buf.data,
+                    &storage_buf.data,
                     4usize,
                 )
                 .unwrap();
@@ -2860,7 +2879,7 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
                 gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
                 let mut logits_mut = gw_logits.as_aligned_slice_mut();
                 let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
-                    black_box(&zimms_buf.data),
+                    black_box(&storage_buf.data),
                     black_box(4usize),
                 )
                 .unwrap();
@@ -2870,7 +2889,7 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
                         black_box(&mut trail),
                         black_box(64u8),
                         black_box(&mut q_slice),
-                        None,
+                        black_box(None),
                         black_box(Some(&mut logits_mut)),
                     )
                     .unwrap();

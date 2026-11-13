@@ -1559,9 +1559,9 @@ pub unsafe extern "C" fn gcso_l2p_svd_project_lora(
             .checked_mul(rank)
             .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
 
-        if is_aligned_to(lora_a, 32)
-            && is_aligned_to(lora_b, 32)
-            && is_aligned_to(phase_profile_out, 16)
+        if is_ptr_aligned_to(lora_a, 32)
+            && is_ptr_aligned_to(lora_b, 32)
+            && is_ptr_aligned_to(phase_profile_out, 16)
             && ((dim_out & 1) == 0)
         {
             let num_heads = (dim_out / 128).clamp(1, MAX_ATTENTION_HEADS);

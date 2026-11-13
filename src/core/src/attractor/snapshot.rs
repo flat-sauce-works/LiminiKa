@@ -700,6 +700,28 @@ impl AttractorGrowthSnapshot {
         crc
     }
 
+    /// Zeroes unused trailing anchor slots `[out_idx..MAX_ANCHORS_PER_FIELD]`, stamps counts,
+    /// and returns the finalized IEEE 802.3 CRC32 payload checksum.
+    #[inline]
+    pub(super) fn finalize_anchors_and_crc32(
+        &mut self,
+        out_idx: usize,
+        cryst_cnt: u32,
+        prev_clear_end: usize,
+    ) -> u32 {
+        let clear_end = prev_clear_end.max(out_idx).min(MAX_ANCHORS_PER_FIELD);
+        let mut c_idx = out_idx;
+        while c_idx < MAX_ANCHORS_PER_FIELD {
+            if c_idx < clear_end || !self.anchors[c_idx].is_zero_blocks_fast() {
+                self.anchors[c_idx] = CrystallizedAnchorRecord::EMPTY;
+            }
+            c_idx += 1;
+        }
+        self.active_anchor_count = out_idx as u32;
+        self.crystallized_anchor_count = cryst_cnt;
+        self.finalize_crc32_for_active_anchors(out_idx)
+    }
+
     /// Verifies the snapshot magic (`0x4F534347`), ABI version (`0x00000101`), anchor count bounds,
     /// and IEEE 802.3 CRC32 payload checksum.
     ///

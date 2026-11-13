@@ -2613,7 +2613,7 @@ pub(crate) const CRC32_ZIMMS_DESC_BASE_SEED: u32 =
 /// `(final_128b_xor, c3_at_offset_64)` using strictly the L1D-resident `CRC32_IEEE_SLICE16_REF`
 /// table and scalar constants (`0` separate 4KB `FINAL_LUT` table accesses), allowing `c3` to fold
 /// directly into `phase_profile` word 0 (`dw[0]`) with zero `crc32_step_l4` overhead.
-#[inline(always)]
+#[inline]
 pub(crate) const fn crc32_crystal_header_delta_c3(
     delta_anchor_id: u32,
     delta_sample_count: u32,
@@ -4181,6 +4181,41 @@ pub const fn swar_q7_add_sat_x8(a_packed: u64, b_packed: u64) -> u64 {
     let ovf_mask = (ovf_sign >> 7).wrapping_mul(0xFF);
     let sat_val = SWAR_LOW7_MASK_64.wrapping_add((a_packed & SWAR_SIGN_MASK_64) >> 7);
     (sum_unwrapped & !ovf_mask) | (sat_val & ovf_mask)
+}
+
+/// Saturating 64-head Q7 addition (`dst += src`) across 8 packed `u64` words.
+///
+/// Uses two AVX2 `_mm256_adds_epi8` instructions on `x86_64` + AVX2 targets and falls back
+/// to 8-word bit-parallel SWAR [`swar_q7_add_sat_x8`] elsewhere.
+#[inline(always)]
+pub(crate) fn swar_or_avx2_q7_add_sat_words_64(dst: &mut [u64; 8], src: &[u64; 8]) {
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    {
+        use core::arch::x86_64::{__m256i, _mm256_adds_epi8, _mm256_loadu_si256, _mm256_storeu_si256};
+        // SAFETY: `dst` and `src` are valid 64-byte (`8 x u64`) arrays; unaligned 256-bit loads/stores
+        // are valid for any 8-byte aligned `[u64; 8]` and guarded by `target_feature = "avx2"`.
+        unsafe {
+            let dp = dst.as_mut_ptr().cast::<__m256i>();
+            let sp = src.as_ptr().cast::<__m256i>();
+            let d0 = _mm256_loadu_si256(dp);
+            let s0 = _mm256_loadu_si256(sp);
+            let d1 = _mm256_loadu_si256(dp.add(1));
+            let s1 = _mm256_loadu_si256(sp.add(1));
+            _mm256_storeu_si256(dp, _mm256_adds_epi8(d0, s0));
+            _mm256_storeu_si256(dp.add(1), _mm256_adds_epi8(d1, s1));
+        }
+    }
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    {
+        dst[0] = swar_q7_add_sat_x8(dst[0], src[0]);
+        dst[1] = swar_q7_add_sat_x8(dst[1], src[1]);
+        dst[2] = swar_q7_add_sat_x8(dst[2], src[2]);
+        dst[3] = swar_q7_add_sat_x8(dst[3], src[3]);
+        dst[4] = swar_q7_add_sat_x8(dst[4], src[4]);
+        dst[5] = swar_q7_add_sat_x8(dst[5], src[5]);
+        dst[6] = swar_q7_add_sat_x8(dst[6], src[6]);
+        dst[7] = swar_q7_add_sat_x8(dst[7], src[7]);
+    }
 }
 
 /// True bit-parallel SWAR 8-lane Q7 saturating subtraction packed in a 64-bit word.

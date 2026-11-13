@@ -172,7 +172,7 @@ pub(crate) fn validate_optional_qk_tensors(
 /// Computes register-resident 8-word (`[u64; 8]`) Lazy Phase Unwrap (`query - context`, either
 /// saturating or $S^1$ geodesic-folded) + 8-lane SWAR QDPS discrete step filtering directly in
 /// 64-bit registers (`0` stack buffer allocation when consumed by `steer_from_swar_words_core_safe`).
-#[inline(always)]
+#[inline]
 #[must_use]
 pub(crate) fn fuse_lazy_unwrap_and_qdps_from_words_64(
     q_w: &[u64; NUM_SWARM_MICRO_CELLS],

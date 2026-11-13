@@ -613,7 +613,7 @@ pub(crate) unsafe fn avx2_coherence_from_diff_vec64(
 }
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-#[inline(always)]
+#[inline]
 unsafe fn avx2_coherence_from_raw_abs_vec64(
     raw_abs0: core::arch::x86_64::__m256i,
     raw_abs1: core::arch::x86_64::__m256i,
@@ -3469,7 +3469,7 @@ pub(crate) unsafe fn avx2_hsum3_ps(v0: __m256, v1: __m256, v2: __m256) -> (f32, 
 /// Evaluates $(\sum_i |x_i|, \sum_i x_i^2)$ across `slice` using a 32-float (2-pair tree-reduced)
 /// AVX2 SIMD kernel that computes `a = |x|` once per vector and uses $a^2 \equiv x^2$ to eliminate
 /// Port 0/1 accumulator contention.
-#[inline(always)]
+#[inline]
 pub fn sum_abs_and_sq_f32_simd8(slice: &[f32]) -> (f32, f32) {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
@@ -3600,7 +3600,7 @@ pub fn sum_abs_and_sq_f32_simd8(slice: &[f32]) -> (f32, f32) {
 /// Evaluates $(\sum_i |x_i|, \sum_i x_i^2, \max_i |x_i|)$ in a **single memory pass** across `slice`
 /// using 32-float unrolled AVX2 SIMD accumulators while keeping peak live YMM usage `<= 6`
 /// (`0` Windows x64 `xmm6..xmm15` stack saves/restores).
-#[inline(always)]
+#[inline]
 pub fn sum_abs_sq_and_max_f32_simd8(slice: &[f32]) -> (f32, f32, f32) {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
@@ -3687,7 +3687,7 @@ pub fn sum_abs_sq_and_max_f32_simd8(slice: &[f32]) -> (f32, f32, f32) {
 }
 
 /// Evaluates $\sum_i x_i^2$ across `slice` using a 32-float (4-accumulator) unrolled AVX2 tree reduction.
-#[inline(always)]
+#[inline]
 pub fn sum_sq_f32_simd8(slice: &[f32]) -> f32 {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
@@ -3842,7 +3842,7 @@ fn sum_sq_subnormal_mantissa_f32_simd8(slice: &[f32]) -> f32 {
 }
 
 /// Evaluates $\sum_i (x_i \cdot \mathrm{scale})^2$ across `slice` using a 64-float unrolled AVX2 tree reduction.
-#[inline(always)]
+#[inline]
 pub(crate) fn sum_sq_scaled_f32_simd8(slice: &[f32], scale: f32) -> f32 {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
@@ -4017,7 +4017,7 @@ pub(crate) fn max_pos_f32_unrolled4(slice: &[f32]) -> f32 {
 /// branches) while flushing any subnormal product (`|y| < F32_MIN_POSITIVE_NORMAL`) to `+0.0`
 /// directly in the AVX2 FP execution domain (`<= 6` live YMMs, `0` FP-to-INT domain-crossing stalls,
 /// `0` Windows x64 `xmm6..xmm15` stack saves).
-#[inline(always)]
+#[inline]
 pub(crate) fn scale_f32_slice_unrolled8(buf: &mut [f32], scale: f32) {
     let len = buf.len();
     if len == 0 {
@@ -5163,7 +5163,7 @@ pub(crate) unsafe fn avx2_rotate_so2_block32(ptr: *mut f32, v_cos: __m256, v_sin
 }
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-#[inline(always)]
+#[inline]
 pub(crate) unsafe fn avx2_rotate_so2_dispatch(
     ptr: *mut f32,
     len: usize,
@@ -6197,7 +6197,7 @@ pub(crate) fn rotate_so2_2d_xy_slice_simd(
 /// Executes 3D spatiotemporal $(\Delta\theta_t, \Delta\theta_x, \Delta\theta_y)$ rotation across `buf`
 /// using a 24-float (3-YMM = 4-hexagon) unrolled AVX2 kernel with 12-float (`1 YMM + 1 XMM`) and
 /// 6-float (`1 XMM + 1 pair`) vector tail handling.
-#[inline(always)]
+#[inline]
 pub(crate) fn rotate_so2_3d_txy_slice_simd(
     buf: &mut [f32],
     sin_t: f32,
@@ -6399,7 +6399,7 @@ pub(crate) fn srl_write_outer_product_simd(
 }
 
 /// Accumulates SRL Rank-1 outer product `y_slice[i] += scale * u_slice[i] * g_i` using AVX2.
-#[inline(always)]
+#[inline]
 pub(crate) fn srl_accum_outer_product_simd(
     y_slice: &mut [f32],
     u_slice: &[f32],

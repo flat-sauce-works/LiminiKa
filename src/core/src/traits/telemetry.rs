@@ -52,7 +52,8 @@ use super::primitives::{
     branchless_relu_f32, branchless_rsqrt_f32, branchless_select_f32, branchless_select_u32,
     branchless_select_u64, branchless_select_u8, branchless_select_usize, branchless_splitmix64,
     branchless_tanh_f32, fast_inv_len_f32, fast_ln_1p_bounded_f32, is_word_array_uniform_64,
-    load_q7_word_at, load_q7_words_64, store_q7_words_64, swar_q7_abs_u8_x8, swar_q7_add_sat_x8,
+    load_q7_word_at, load_q7_words_64, store_q7_words_64, swar_or_avx2_q7_add_sat_words_64,
+    swar_q7_abs_u8_x8, swar_q7_add_sat_x8,
     swar_q7_avg_round_x8, swar_q7_circular_diff_x8, swar_q7_neg_sat_x8,
     swar_q7_scale_le128_with_bias_x8, swar_u8_add_sat_x8, swar_u8_halve_decay_x8, swar_u8_max_x8,
     swar_u8_mean_round_x8, swar_u8_nonzero_count_x8, swar_u8_nonzero_msb_mask, swar_u8_sub_sat_x8,
@@ -201,7 +202,7 @@ const fn precompute_bayesian_trail_scales(
 }
 
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-#[inline(always)]
+#[inline]
 #[must_use]
 fn eval_candidate_trail_words_with_macro_fast(
     self_w: &[u64; 8],
@@ -2764,14 +2765,7 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
     fn accumulate_phase_vector(&mut self, delta_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) {
         let d = load_q7_words_64(delta_phases);
         let w = trail_phase_words_mut(self);
-        w[0] = swar_q7_add_sat_x8(w[0], d[0]);
-        w[1] = swar_q7_add_sat_x8(w[1], d[1]);
-        w[2] = swar_q7_add_sat_x8(w[2], d[2]);
-        w[3] = swar_q7_add_sat_x8(w[3], d[3]);
-        w[4] = swar_q7_add_sat_x8(w[4], d[4]);
-        w[5] = swar_q7_add_sat_x8(w[5], d[5]);
-        w[6] = swar_q7_add_sat_x8(w[6], d[6]);
-        w[7] = swar_q7_add_sat_x8(w[7], d[7]);
+        swar_or_avx2_q7_add_sat_words_64(w, &d);
     }
 
     #[inline(always)]
@@ -3699,14 +3693,7 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         let (fw, synergy_pull, coherence) =
             branchless_q7_synergy_fuse_words_64(&wa, weight_a, &wb, weight_b, effective_gain);
         let cur_w = trail_phase_words_mut(self);
-        cur_w[0] = swar_q7_add_sat_x8(cur_w[0], fw[0]);
-        cur_w[1] = swar_q7_add_sat_x8(cur_w[1], fw[1]);
-        cur_w[2] = swar_q7_add_sat_x8(cur_w[2], fw[2]);
-        cur_w[3] = swar_q7_add_sat_x8(cur_w[3], fw[3]);
-        cur_w[4] = swar_q7_add_sat_x8(cur_w[4], fw[4]);
-        cur_w[5] = swar_q7_add_sat_x8(cur_w[5], fw[5]);
-        cur_w[6] = swar_q7_add_sat_x8(cur_w[6], fw[6]);
-        cur_w[7] = swar_q7_add_sat_x8(cur_w[7], fw[7]);
+        swar_or_avx2_q7_add_sat_words_64(cur_w, &fw);
         let new_pull = branchless_flush_subnormal_f32(
             branchless_relu_f32(self.attractor_pull_force) + synergy_pull,
         );
@@ -3801,14 +3788,7 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         }
 
         if (active_neighbors > 0) | (primary_pull > 1.0e-9) {
-            acc_w[0] = swar_q7_add_sat_x8(acc_w[0], cur_w[0]);
-            acc_w[1] = swar_q7_add_sat_x8(acc_w[1], cur_w[1]);
-            acc_w[2] = swar_q7_add_sat_x8(acc_w[2], cur_w[2]);
-            acc_w[3] = swar_q7_add_sat_x8(acc_w[3], cur_w[3]);
-            acc_w[4] = swar_q7_add_sat_x8(acc_w[4], cur_w[4]);
-            acc_w[5] = swar_q7_add_sat_x8(acc_w[5], cur_w[5]);
-            acc_w[6] = swar_q7_add_sat_x8(acc_w[6], cur_w[6]);
-            acc_w[7] = swar_q7_add_sat_x8(acc_w[7], cur_w[7]);
+            swar_or_avx2_q7_add_sat_words_64(&mut acc_w, &cur_w);
         }
         let mut total_pull =
             branchless_flush_subnormal_f32(branchless_relu_f32(self.attractor_pull_force))
@@ -3819,10 +3799,9 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
             MAX_ATTRACTOR_PULL_FORCE,
         );
         let safe_neighbors = branchless_select_u32(active_neighbors > 0, active_neighbors, 1);
-        let rsqrt_n = branchless_popcount_rsqrt_u32(safe_neighbors);
         let mean_coh = branchless_select_f32(
             active_neighbors > 0,
-            coh_sum * (rsqrt_n * rsqrt_n),
+            coh_sum * fast_inv_len_f32(safe_neighbors as usize),
             branchless_select_f32(primary_pull > 1.0e-9, 1.0, 0.0),
         );
         let is_resonant = (active_neighbors > 0) & (mean_coh > 0.25);

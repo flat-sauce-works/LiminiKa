@@ -70,7 +70,8 @@ use crate::traits::primitives::{
     branchless_max_f32, branchless_min_f32, branchless_q7_add_sat, branchless_q7_conjugate_64,
     branchless_relu_f32, branchless_select_f32, branchless_select_u32, branchless_select_u8,
     fast_inv_pos_normal_f32, is_phase_profile_nonzero_64, load_q7_words_64, store_q7_words_64,
-    swar_q7_add_sat_x8, trail_phase_words_mut, trail_phase_words_ref, SWAR_SPLAT_BYTE_64,
+    swar_or_avx2_q7_add_sat_words_64, trail_phase_words_mut, trail_phase_words_ref,
+    SWAR_SPLAT_BYTE_64,
 };
 use crate::traits::primitives::{
     finalize_snapshot_header_crc32, init_snapshot_header, verify_snapshot_payload_crc32,
@@ -2009,14 +2010,7 @@ impl PersonaPatcher for RuntimeContext {
             };
             let pw = load_q7_words_64(patch_ref);
             let sw = self.slot_words_mut(usize::from(ATTRACTOR_SLOT_PERSONA))?;
-            sw[0] = swar_q7_add_sat_x8(sw[0], pw[0]);
-            sw[1] = swar_q7_add_sat_x8(sw[1], pw[1]);
-            sw[2] = swar_q7_add_sat_x8(sw[2], pw[2]);
-            sw[3] = swar_q7_add_sat_x8(sw[3], pw[3]);
-            sw[4] = swar_q7_add_sat_x8(sw[4], pw[4]);
-            sw[5] = swar_q7_add_sat_x8(sw[5], pw[5]);
-            sw[6] = swar_q7_add_sat_x8(sw[6], pw[6]);
-            sw[7] = swar_q7_add_sat_x8(sw[7], pw[7]);
+            swar_or_avx2_q7_add_sat_words_64(sw, &pw);
         } else {
             let mut bank_mut = self.action_hub.slot_phase_bank.as_aligned_slice_mut();
             let persona_slot = bank_mut

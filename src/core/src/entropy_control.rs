@@ -1634,7 +1634,7 @@ pub trait EntropyClosedLoopCoordinator:
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `trail_chain` is empty or thresholds are non-finite.
     /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score` or `cvoid_score` is non-finite.
-    #[inline(always)]
+    #[inline]
     fn step_with_liminal_trail_chain_and_bloom_guard(
         &mut self,
         trail_chain: &mut [gcso_pointer_trail_t],
@@ -3045,7 +3045,7 @@ impl EntropyController {
 
     /// Internal register-pipelined implementation of `eval_stateful_with_cvoid_and_pointer`
     /// assuming `token_z_score` and `cvoid_score` have already been verified finite.
-    #[inline(always)]
+    #[inline]
     fn eval_stateful_with_cvoid_and_pointer_finite(
         &mut self,
         token_z_score: f32,
@@ -3320,7 +3320,7 @@ impl EntropyController {
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if cochain slices are empty or mismatched in length.
     /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if norms or Z-score inputs are non-finite.
-    #[inline(always)]
+    #[inline]
     pub fn step_with_cohomology_and_bloom_guard(
         &mut self,
         token_z_score: f32,

@@ -547,7 +547,6 @@ pub trait PhaseSteering: BranchlessKernel {
         let mut effective_phases =
             AlignedBuffer16::<gcso_q7_t, MAX_ATTENTION_HEADS>::new([0i8; MAX_ATTENTION_HEADS]);
         store_q7_words_64(&mut effective_phases.data, &eff_words);
-
         if let Some(max_rad) = ripa_clamp_max_rad {
             steer_from_swar_words_core_safe(
                 &eff_words,

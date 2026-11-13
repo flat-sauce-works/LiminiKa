@@ -54,7 +54,6 @@
 #![allow(clippy::if_same_then_else)]
 #![allow(clippy::ifs_same_cond)]
 #![allow(clippy::field_reassign_with_default)]
-#![allow(unused_imports)]
 
 use core::mem::{align_of, offset_of, size_of};
 

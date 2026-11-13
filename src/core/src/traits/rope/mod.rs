@@ -59,7 +59,6 @@
 #![allow(clippy::approx_constant)]
 #![allow(clippy::if_same_then_else)]
 #![allow(clippy::ifs_same_cond)]
-#![allow(unused_imports)]
 use super::aligned::{
     AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut, AlignedSliceMut16,
     AlignedSliceMut32, DisjointMutPair, DisjointMutTriple,

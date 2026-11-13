@@ -867,17 +867,7 @@ impl AttractorFieldEngine {
                 out_idx += 1;
             }
         }
-        let clear_end = prev_clear_end.max(out_idx).min(MAX_ANCHORS_PER_FIELD);
-        let mut c_idx = out_idx;
-        while c_idx < MAX_ANCHORS_PER_FIELD {
-            if c_idx < clear_end || !snapshot_out.anchors[c_idx].is_zero_blocks_fast() {
-                snapshot_out.anchors[c_idx] = CrystallizedAnchorRecord::EMPTY;
-            }
-            c_idx += 1;
-        }
-        snapshot_out.active_anchor_count = out_idx as u32;
-        snapshot_out.crystallized_anchor_count = cryst_cnt;
-        snapshot_out.finalize_crc32_for_active_anchors(out_idx)
+        snapshot_out.finalize_anchors_and_crc32(out_idx, cryst_cnt, prev_clear_end)
     }
 
     /// Restores this lane's state from a verified [`AttractorGrowthSnapshot`].

@@ -109,8 +109,8 @@ use crate::traits::primitives::{
     branchless_is_finite_f32, branchless_max_f32, branchless_min_f32,
     branchless_rad_to_qdps_step_u8, branchless_relu_f32, branchless_select_f32,
     branchless_select_u32, branchless_select_u64, branchless_select_u8, branchless_select_usize,
-    load_q7_words_64, swar_q7_add_sat_x8, swar_q7_qdps_filter_words_64, trail_phase_words_mut,
-    trail_phase_words_ref, SWAR_SPLAT_BYTE_64,
+    fast_inv_len_f32, load_q7_words_64, swar_or_avx2_q7_add_sat_words_64,
+    swar_q7_qdps_filter_words_64, trail_phase_words_mut, trail_phase_words_ref, SWAR_SPLAT_BYTE_64,
 };
 use crate::traits::primitives::{
     pack_action_slot_tag, unpack_attractor_slot_from_tag, GcsoResult, Pod, ACTION_MODE_DPSR_STEER,
@@ -392,7 +392,7 @@ impl StigmergicThresholds {
     /// Evaluates the 7-regime stigmergic threshold ladder in **strictly branchless constant time
     /// (`0` data-dependent branches)**, returning
     /// `(decision, action_mode_flags, target_slot, extra_trail_flags)`.
-    #[inline(always)]
+    #[inline]
     #[must_use]
     pub const fn select_action_decision(
         &self,
@@ -1599,14 +1599,7 @@ impl ActionHubEngine {
                     as *const [u64; NUM_SWARM_MICRO_CELLS])
             };
             if swar_words_nonzero_64(slot_w) {
-                steer_words[0] = swar_q7_add_sat_x8(steer_words[0], slot_w[0]);
-                steer_words[1] = swar_q7_add_sat_x8(steer_words[1], slot_w[1]);
-                steer_words[2] = swar_q7_add_sat_x8(steer_words[2], slot_w[2]);
-                steer_words[3] = swar_q7_add_sat_x8(steer_words[3], slot_w[3]);
-                steer_words[4] = swar_q7_add_sat_x8(steer_words[4], slot_w[4]);
-                steer_words[5] = swar_q7_add_sat_x8(steer_words[5], slot_w[5]);
-                steer_words[6] = swar_q7_add_sat_x8(steer_words[6], slot_w[6]);
-                steer_words[7] = swar_q7_add_sat_x8(steer_words[7], slot_w[7]);
+                swar_or_avx2_q7_add_sat_words_64(&mut steer_words, slot_w);
                 *trail_phase_words_mut(trail_inout) = steer_words;
             }
         }
@@ -1934,14 +1927,7 @@ impl ActionHubEngine {
             }
 
             if step > 0 {
-                chain_w[0] = swar_q7_add_sat_x8(chain_w[0], node_w[0]);
-                chain_w[1] = swar_q7_add_sat_x8(chain_w[1], node_w[1]);
-                chain_w[2] = swar_q7_add_sat_x8(chain_w[2], node_w[2]);
-                chain_w[3] = swar_q7_add_sat_x8(chain_w[3], node_w[3]);
-                chain_w[4] = swar_q7_add_sat_x8(chain_w[4], node_w[4]);
-                chain_w[5] = swar_q7_add_sat_x8(chain_w[5], node_w[5]);
-                chain_w[6] = swar_q7_add_sat_x8(chain_w[6], node_w[6]);
-                chain_w[7] = swar_q7_add_sat_x8(chain_w[7], node_w[7]);
+                swar_or_avx2_q7_add_sat_words_64(&mut chain_w, &node_w);
             }
 
             coh_sum += hop_coh;
@@ -1971,7 +1957,11 @@ impl ActionHubEngine {
             step += 1;
         }
 
-        let mean_coh = coh_sum / (hops as f32);
+        let mean_coh = branchless_select_f32(
+            hops > 0,
+            branchless_clamp_f32(coh_sum * fast_inv_len_f32(hops as usize), -1.0, 1.0),
+            0.0,
+        );
         *trail_phase_words_mut(trail_inout) = chain_w;
         trail_inout.stigmergic_density =
             branchless_max_f32(trail_inout.stigmergic_density, max_chain_rho);
@@ -2128,14 +2118,7 @@ impl PointerActionHub for ActionHubEngine {
                     .add(slot_idx * MAX_ATTENTION_HEADS)
                     as *mut [u64; NUM_SWARM_MICRO_CELLS])
             };
-            w[0] = swar_q7_add_sat_x8(w[0], splat);
-            w[1] = swar_q7_add_sat_x8(w[1], splat);
-            w[2] = swar_q7_add_sat_x8(w[2], splat);
-            w[3] = swar_q7_add_sat_x8(w[3], splat);
-            w[4] = swar_q7_add_sat_x8(w[4], splat);
-            w[5] = swar_q7_add_sat_x8(w[5], splat);
-            w[6] = swar_q7_add_sat_x8(w[6], splat);
-            w[7] = swar_q7_add_sat_x8(w[7], splat);
+            swar_or_avx2_q7_add_sat_words_64(w, &[splat; NUM_SWARM_MICRO_CELLS]);
         }
         Ok(())
     }

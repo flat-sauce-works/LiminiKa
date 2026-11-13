@@ -389,16 +389,17 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
 
         b.iter(|| {
             let (p_max, p_2nd, cos_d) = black_box((0.68f32, 0.24f32, 0.35f32));
+            let (alpha, beta, d0, d_tau) = black_box((0.15f32, 0.09f32, 1.0f32, 0.5f32));
             let h = engine
                 .eval_surrogate_and_step(
                     p_max,
                     p_2nd,
                     cos_d,
-                    0.15f32,
-                    0.09f32,
-                    1.0f32,
-                    0.5f32,
-                    &mut state_out,
+                    alpha,
+                    beta,
+                    d0,
+                    d_tau,
+                    black_box(&mut state_out),
                 )
                 .unwrap();
             black_box((h, state_out.active_branch_mode));
@@ -2196,8 +2197,8 @@ fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
             );
             rec
         });
-        let mut zimms_buf = AlignedBuffer64::<u8, 512>::new([0u8; 512]);
-        CrystallizedAttractorRecord::write_records_to_zimms_bytes(&records, &mut zimms_buf.data)
+        let mut storage_buf = AlignedBuffer64::<u8, 512>::new([0u8; 512]);
+        CrystallizedAttractorRecord::write_records_to_zimms_bytes(&records, &mut storage_buf.data)
             .unwrap();
         let base_trail = gcso_pointer_trail_t {
             stigmergic_density: 1.2,
@@ -2212,7 +2213,7 @@ fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
             reset_engine_fast(&mut engine, &base_engine);
             reset_trail_fast(&mut trail, &base_trail);
             let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
-                &zimms_buf.data,
+                &storage_buf.data,
                 4usize,
             )
             .unwrap();
@@ -2230,7 +2231,7 @@ fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
             reset_engine_fast(&mut engine, &base_engine);
             reset_trail_fast(&mut trail, &base_trail);
             let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
-                black_box(&zimms_buf.data),
+                black_box(&storage_buf.data),
                 black_box(4usize),
             )
             .unwrap();
