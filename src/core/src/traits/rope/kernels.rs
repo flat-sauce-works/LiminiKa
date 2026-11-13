@@ -2150,7 +2150,7 @@ pub(crate) fn steer_single_slice_from_eff_words_core(
     t_slice: &mut [f32],
     eff_words: &[u64; NUM_SWARM_CELLS],
     mut run_mask: u8,
-    _cell_limit_mask: u8,
+    cell_limit_mask: u8,
     head_dim: usize,
     num_heads: usize,
     rot_dim: usize,
@@ -2162,8 +2162,8 @@ pub(crate) fn steer_single_slice_from_eff_words_core(
 ) {
     let active_cells = num_heads.div_ceil(HEADS_PER_CELL).min(NUM_SWARM_CELLS);
     let max_cell_mask = ((1u16 << active_cells) - 1) as u8;
-    let _cell_limit_mask = _cell_limit_mask & max_cell_mask;
-    run_mask &= _cell_limit_mask;
+    let cell_limit_mask = cell_limit_mask & max_cell_mask;
+    run_mask &= cell_limit_mask;
     if run_mask == 0 || num_heads == 0 {
         return;
     }
@@ -2185,7 +2185,7 @@ pub(crate) fn steer_single_slice_from_eff_words_core(
             if w0 == w0.rotate_right(8) {
                 if b0 != 0 {
                     let (sin_t, cos_t) = lut[b0 as usize];
-                    if run_mask == _cell_limit_mask {
+                    if run_mask == cell_limit_mask {
                         rotate_ripa_upper_heads_uniform_sincos(
                             t_slice, 0, num_heads, head_dim, rot_dim, sin_t, cos_t,
                         );
@@ -2245,7 +2245,7 @@ pub(crate) fn steer_single_slice_from_eff_words_core(
                 return;
             }
         }
-        if run_mask == _cell_limit_mask {
+        if run_mask == cell_limit_mask {
             #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
             if num_heads <= 0xFFFF && rot_dim <= 0x7FFF {
                 let packed = num_heads | (rot_dim << 16) | ((fold_geodesic as usize) << 31);
@@ -2307,7 +2307,7 @@ pub(crate) fn steer_single_slice_from_eff_words_core(
             );
         }
     } else {
-        if run_mask == _cell_limit_mask && is_word_array_uniform_64(eff_words) {
+        if run_mask == cell_limit_mask && is_word_array_uniform_64(eff_words) {
             let w0 = eff_words[0];
             let b0 = (w0 & 0xFF) as u8;
             if w0 == w0.rotate_right(8) {

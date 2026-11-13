@@ -332,7 +332,6 @@ pub unsafe extern "C" fn gcso_context_serialize(
         let out_bytes = unsafe { slice::from_raw_parts_mut(buffer, required) };
         out_bytes.fill(0);
 
-        let hdr_size = size_of::<gcso_snapshot_header_t>();
         let mut header = init_snapshot_header(required as u64, 1_774_900_000);
         header.action_hub_offset = 128;
         header.attractor_field_offset = 128;
@@ -340,7 +339,6 @@ pub unsafe extern "C" fn gcso_context_serialize(
         header.srl_state_offset = 192;
         header.edbc_state_offset = 192;
         const ZERO_PAYLOAD_192_CRC32: u32 = branchless_crc32_ieee(&[0u8; 192]);
-        let _ = hdr_size;
         header.daes_slot_offset = 256;
         header.checksum_crc32 = ZERO_PAYLOAD_192_CRC32;
 
