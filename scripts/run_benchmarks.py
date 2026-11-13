@@ -181,13 +181,16 @@ def resolve_criterion_dir(project_root: Path, requested_dir: Path) -> Path:
 
 LEGACY_PROVISIONAL_BENCH_SUBDIRS: tuple[str, ...] = (
     "gateway_signal_steer_and_crystallize_attractor_64h",
+    "gateway_swarm_bayesian_subhead_and_crystallize_full_64h",
     "gateway_swarm_bayesian_pspm_and_crystallize_full_64h",
+    "storage_zero_copy_crystallized_ensemble_gateway_steer_64h",
     "zimms_zero_copy_crystallized_ensemble_gateway_steer_64h",
     "zero_copy_register_crystallized_ensemble_steer_64h",
     "four_section_gcso_zero_copy_map_and_register_steer_64h",
     "step_gateway_signal_and_crystallize_attractor_64h",
     "step_gateway_4axis_contradiction_guard_and_provenance_64h",
     "step_crystallized_ensemble_gravity_fold_4records",
+    "storage_zero_copy_crystallized_ensemble_step_4records",
     "zimms_zero_copy_crystallized_ensemble_step_4records",
     "four_section_gcso_zero_copy_write_verify_and_step_4records",
 )

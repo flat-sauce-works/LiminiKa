@@ -1568,7 +1568,7 @@ pub trait PhaseSteering: BranchlessKernel {
         let t_slice = &mut tensor.as_mut_slice()[..expected_len];
         let s_slice = &block_scales.as_slice()[..num_pairs];
         for (pair, &raw_scale) in t_slice.chunks_exact_mut(2).zip(s_slice.iter()) {
-            let s = branchless_flush_subnormal_f32(sanitize_inplace_gain_f32(pair[0], raw_scale));
+            let s = branchless_flush_subnormal_f32(sanitize_inplace_gain_f32(raw_scale));
             pair[0] = branchless_flush_subnormal_f32(pair[0] * s);
             pair[1] = branchless_flush_subnormal_f32(pair[1] * s);
         }
@@ -1616,7 +1616,7 @@ pub trait PhaseSteering: BranchlessKernel {
             let head_scales = &s_slice[s_base..s_base + pairs_per_head];
 
             for (pair, &raw_s) in head_buf.chunks_exact_mut(2).zip(head_scales.iter()) {
-                let s = branchless_flush_subnormal_f32(sanitize_inplace_gain_f32(pair[0], raw_s));
+                let s = branchless_flush_subnormal_f32(sanitize_inplace_gain_f32(raw_s));
                 let (r0, r1) =
                     branchless_rotate_so2_pair_scaled(pair[0], pair[1], sin_t, cos_t, s);
                 pair[0] = r0;

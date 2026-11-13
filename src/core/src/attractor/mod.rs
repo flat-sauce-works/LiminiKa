@@ -262,7 +262,7 @@ mod tests {
         // 1. Verify Blanket EpisodicSampleSteering across diverse sample types (&str, &[u8], [i8; 64], [f32; N], tuples)
         let steerer = DummyPhaseSteerer;
         let mut q_tensor = AlignedBuffer32::new([1.0f32; 16]);
-        let str_deltas = "Monika literature club persona"
+        let str_deltas = "persistent persona anchor sample"
             .steer_rope_tensors_direct(
                 &steerer,
                 1,
@@ -310,7 +310,7 @@ mod tests {
         let mut step_rope_deltas = [0i8; MAX_ATTENTION_HEADS];
         let (str_rep, beta_eff) = space
             .absorb_and_steer_rope_step(
-                "Monika literature club memory",
+                "episodic memory anchor sample",
                 1,
                 0.5,
                 0.5,

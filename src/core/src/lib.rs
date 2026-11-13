@@ -20,19 +20,25 @@
 //!   cohomology $H^1(K; \mathcal{F})$, Single Unified Attractor Manifold superposition, L2P-SVD
 //!   projection, PPRC keyframe replay, and ZIMMS zero-copy `.gcso` persistence.
 //!
-//! # Core Design Principles (`Limina + Monika = LiminiKa`)
+//! # Core Mathematical & Systems Design Principles
 //! 1. **Sequential Conditional Transition Probability $\times$ Attention Phase Interference**:
 //!    Long-horizon persona and context consistency $P(M_1, \dots, M_T) = \prod_{t=1}^T P(M_t \mid M_{<t})$
-//!    is factored into local conditional transitions modulated in $\mathcal{O}(1)$ via DPSR RoPE phase
-//!    interference without modifying model weights $W_Q, W_K$.
+//!    is factored into local conditional transitions modulated in $\mathcal{O}(1)$ via RoPE phase
+//!    steering without modifying host model weights $W_Q, W_K$.
 //! 2. **Indirect Pointer-Chain Graph Routing in `ActionHub`**:
 //!    Rather than holding all knowledge inside active model parameters, the runtime maintains compact
 //!    64-bit tagged pointers ([`gcso_tagged_ptr_t`]) and 128-byte pointer trails ([`gcso_pointer_trail_t`])
-//!    that reference external ZIMMS storage offsets (`zimms_section_offset48`) and chain to subsequent
+//!    that reference external `.gcso` storage offsets (`zimms_section_offset48`) and chain to subsequent
 //!    trail nodes (`linked_trail_id`). Traversing and reinforcing these pointer chains forms a sparse,
-//!    associative routing graph that bridges inter-memory **Limina** boundaries while repulsing
+//!    associative routing graph that bridges inter-basin **Limina** thresholds while repulsing
 //!    topological contradictions ($H^1(K; \mathcal{F}) \neq 0$) via Phase-Conjugate Attractor Repulsion ($-\boldsymbol{\Delta\theta}$).
-//! 3. **Single Unified Attractor Manifold**:
+//! 3. **Coherence Void ($\mathcal{C}_{\mathrm{void}}$) & Liminal Bifurcation Routing**:
+//!    Representation-space sparsity and inter-basin dispersion are quantified via the dyadic
+//!    **Coherence Void** functional ($\mathcal{C}_{\mathrm{void}}$) and $\ell_1 / \ell_2$ coherence
+//!    ratios. When a trajectory enters the threshold boundary (*Limina*) between competing attractor
+//!    basins ($G_2 / G_1 \ge \tau_{\mathrm{liminal}}$), Top-2 geodesic midpoint interpolation bridges
+//!    both basins without collapsing into winner-take-all truncation or incoherent drift.
+//! 4. **Single Unified Attractor Manifold**:
 //!    All anchors coexist on a single unified phase manifold ($SO(2)^{d_{\mathrm{head}}/2}$)
 //!    governed by zero-hyperparameter phase-proximity gravity (`branchless_q7_resonant_pull_64`),
 //!    with an optional 8-lane hardware working cache window (`slot_phase_bank`) for $\mathcal{O}(1)$

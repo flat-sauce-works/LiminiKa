@@ -594,6 +594,7 @@ fn bench_phase_steering_operations(c: &mut Criterion) {
         );
 
         // 4. Soft Phase Damping (Stationary Constant-Time AVX2 Gain Scaling with non-unit gain)
+        group.throughput(Throughput::Bytes(single_tensor_bytes as u64));
         group.bench_with_input(
             BenchmarkId::new(
                 "apply_soft_phase_damping",
@@ -601,33 +602,29 @@ fn bench_phase_steering_operations(c: &mut Criterion) {
             ),
             &(head_dim, num_heads),
             |b, _| {
+                const DAMPING_GAINS: [f32; 2] = [0.8f32, 1.25f32];
                 let _ftz = ScopedFtzdazGuard::new();
-                let mut template = vec![0.0f32; total_elements];
-                for (idx, val) in template.iter_mut().enumerate() {
+                let mut q_slice = shared_q_arena
+                    .as_aligned_prefix_mut(total_elements)
+                    .relax_alignment::<32>();
+                for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
                     *val = 0.75f32 + ((idx & 15) as f32) * 0.0625f32;
                 }
+                for step in 0..8usize {
+                    engine
+                        .apply_soft_phase_damping(&mut q_slice, DAMPING_GAINS[step & 1])
+                        .unwrap();
+                }
 
-                b.iter_batched(
-                    || {
-                        let mut arena = AlignedHeapBuffer::<f32, 32>::new_with_phase_offset(
-                            total_elements,
-                            0.0f32,
-                            0,
-                        );
-                        arena.as_mut_slice()[..total_elements].copy_from_slice(&template);
-                        arena
-                    },
-                    |mut arena| {
-                        let mut q_slice = arena
-                            .as_aligned_prefix_mut(total_elements)
-                            .relax_alignment::<32>();
-                        engine
-                            .apply_soft_phase_damping(black_box(&mut q_slice), black_box(0.85f32))
-                            .unwrap();
-                        black_box(q_slice.as_slice()[0]);
-                    },
-                    criterion::BatchSize::SmallInput,
-                );
+                let mut toggle = 0usize;
+                b.iter(|| {
+                    let gain = DAMPING_GAINS[toggle & 1];
+                    toggle = toggle.wrapping_add(1);
+                    engine
+                        .apply_soft_phase_damping(black_box(&mut q_slice), black_box(gain))
+                        .unwrap();
+                    black_box(q_slice.as_slice()[0]);
+                });
             },
         );
     }
@@ -1022,9 +1019,9 @@ fn bench_phase_steering_long_context_and_procrustes(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_phase_steering_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
+fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("PhaseSteering_Swarm_PSPM_And_Visual_CoWatching");
+    let mut group = c.benchmark_group("PhaseSteering_Swarm_Subhead_And_Visual_CoWatching");
     group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
@@ -1758,9 +1755,9 @@ fn bench_phase_steering_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         });
     });
 
-    // 5A. Swarm-Fragmented Pseudo-MoE (PSPM 8-Slot Sub-Head Ensemble — Non-Unit Gains)
+    // 5A. Swarm-Fragmented Pseudo-MoE (8-Slot Sub-Head Ensemble — Non-Unit Gains)
     group.throughput(Throughput::Bytes(tensor_bytes as u64));
-    group.bench_function("pspm_subhead_8slot_pseudo_moe_ensemble", |b| {
+    group.bench_function("subhead_8slot_pseudo_moe_ensemble", |b| {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
@@ -1816,8 +1813,8 @@ fn bench_phase_steering_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         });
     });
 
-    // 5B. Geodesic-Folded PSPM 8-Slot Sub-Head Ensemble (Non-Unit Gains to exercise full scaling path)
-    group.bench_function("pspm_subhead_8slot_geodesic_moe_ensemble", |b| {
+    // 5B. Geodesic-Folded 8-Slot Sub-Head Ensemble (Non-Unit Gains to exercise full scaling path)
+    group.bench_function("subhead_8slot_geodesic_moe_ensemble", |b| {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
             .relax_alignment::<32>();
@@ -1873,81 +1870,84 @@ fn bench_phase_steering_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         });
     });
 
-    // 5C. Single-Manifold Unified-Field + PSPM Sub-Head Pseudo-MoE (Non-Unit Gains) + Inverse-Temperature Logit Sharpening
-    group.bench_function("unified_field_pspm_and_inv_temp_logit_sharpen_64h", |b| {
-        let mut q_slice = shared_q_arena
-            .as_aligned_prefix_mut(total_elements)
-            .relax_alignment::<32>();
-        for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
-            *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
-        }
-        let mut temp_logits =
-            AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
-        let unified_anchors = [
-            make_heterogeneous_q7_phases_with_offset(-96),
-            make_heterogeneous_q7_phases_with_offset(32),
-        ];
-        let unified_energies = [0.2f32, 3.0f32];
-        let pspm_cfg = gcso_pspm_config_t {
-            num_fact_heads: 32,
-            num_logic_heads: 24,
-            num_explore_heads: 8,
-            fact_phase_gain: 1.0,
-            logic_phase_gain: 0.90,
-            explore_phase_gain: 1.15,
-            ..Default::default()
-        };
-        let base_trail = gcso_pointer_trail_t {
-            current_ptr: 0x3800,
-            stigmergic_density: 1.4,
-            attractor_pull_force: 1.5,
-            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
-            ..Default::default()
-        };
+    // 5C. Single-Manifold Unified-Field + Sub-Head Pseudo-MoE (Non-Unit Gains) + Inverse-Temperature Logit Sharpening
+    group.bench_function(
+        "unified_field_subhead_and_inv_temp_logit_sharpen_64h",
+        |b| {
+            let mut q_slice = shared_q_arena
+                .as_aligned_prefix_mut(total_elements)
+                .relax_alignment::<32>();
+            for (idx, val) in q_slice.as_mut_slice().iter_mut().enumerate() {
+                *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
+            }
+            let mut temp_logits =
+                AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
+            let unified_anchors = [
+                make_heterogeneous_q7_phases_with_offset(-96),
+                make_heterogeneous_q7_phases_with_offset(32),
+            ];
+            let unified_energies = [0.2f32, 3.0f32];
+            let pspm_cfg = gcso_pspm_config_t {
+                num_fact_heads: 32,
+                num_logic_heads: 24,
+                num_explore_heads: 8,
+                fact_phase_gain: 1.0,
+                logic_phase_gain: 0.90,
+                explore_phase_gain: 1.15,
+                ..Default::default()
+            };
+            let base_trail = gcso_pointer_trail_t {
+                current_ptr: 0x3800,
+                stigmergic_density: 1.4,
+                attractor_pull_force: 1.5,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
+                ..Default::default()
+            };
 
-        let _ftz = ScopedFtzdazGuard::new();
-        let mut trail = base_trail;
-        for _ in 0..8 {
-            reset_trail_fast(&mut trail, &base_trail);
-            temp_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
-            let mut logits_mut = temp_logits.as_aligned_slice_mut();
-            let _ = engine
-                .steer_unified_field_pspm_and_inv_temperature_safe(
-                    &mut trail,
-                    &unified_anchors,
-                    &unified_energies,
-                    None,
-                    Some((&pspm_cfg, 8i8)),
-                    Some((&mut logits_mut, 0.75f32)),
-                    0.01f32,
-                    DEFAULT_RIPA_CLAMP_MAX_RAD,
-                    &mut q_slice,
-                    None,
-                )
-                .unwrap();
-        }
+            let _ftz = ScopedFtzdazGuard::new();
+            let mut trail = base_trail;
+            for _ in 0..8 {
+                reset_trail_fast(&mut trail, &base_trail);
+                temp_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
+                let mut logits_mut = temp_logits.as_aligned_slice_mut();
+                let _ = engine
+                    .steer_unified_field_pspm_and_inv_temperature_safe(
+                        &mut trail,
+                        &unified_anchors,
+                        &unified_energies,
+                        None,
+                        Some((&pspm_cfg, 8i8)),
+                        Some((&mut logits_mut, 0.75f32)),
+                        0.01f32,
+                        DEFAULT_RIPA_CLAMP_MAX_RAD,
+                        &mut q_slice,
+                        None,
+                    )
+                    .unwrap();
+            }
 
-        b.iter(|| {
-            reset_trail_fast(&mut trail, &base_trail);
-            temp_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
-            let mut logits_mut = temp_logits.as_aligned_slice_mut();
-            let res = engine
-                .steer_unified_field_pspm_and_inv_temperature_safe(
-                    black_box(&mut trail),
-                    black_box(&unified_anchors),
-                    black_box(&unified_energies),
-                    black_box(None),
-                    black_box(Some((&pspm_cfg, 8i8))),
-                    black_box(Some((&mut logits_mut, 0.75f32))),
-                    black_box(0.01f32),
-                    black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
-                    black_box(&mut q_slice),
-                    None,
-                )
-                .unwrap();
-            black_box((res, logits_mut.as_slice()[0], q_slice.as_slice()[0]));
-        });
-    });
+            b.iter(|| {
+                reset_trail_fast(&mut trail, &base_trail);
+                temp_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
+                let mut logits_mut = temp_logits.as_aligned_slice_mut();
+                let res = engine
+                    .steer_unified_field_pspm_and_inv_temperature_safe(
+                        black_box(&mut trail),
+                        black_box(&unified_anchors),
+                        black_box(&unified_energies),
+                        black_box(None),
+                        black_box(Some((&pspm_cfg, 8i8))),
+                        black_box(Some((&mut logits_mut, 0.75f32))),
+                        black_box(0.01f32),
+                        black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
+                        black_box(&mut q_slice),
+                        None,
+                    )
+                    .unwrap();
+                black_box((res, logits_mut.as_slice()[0], q_slice.as_slice()[0]));
+            });
+        },
+    );
 
     // 5D. Classical Online Toroidal k-Means / DP-Means E+M Closed-Loop Gateway Steering (K = 4 Centroids)
     group.bench_function("online_toroidal_kmeans_gateway_steer_4centroids_64h", |b| {
@@ -2684,9 +2684,9 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
         });
     });
 
-    // 2. Provisional End-to-End 2-Origin Gateway -> 8-Cell Swarm -> Bayesian Trail Rewire -> PSPM -> `.gcso` Crystallization
+    // 2. Provisional End-to-End 2-Origin Gateway -> 8-Cell Swarm -> Bayesian Trail Rewire -> Subhead -> `.gcso` Crystallization
     group.bench_function(
-        "gateway_swarm_bayesian_pspm_and_crystallize_full_64h",
+        "gateway_swarm_bayesian_subhead_and_crystallize_full_64h",
         |b| {
             let mut q_slice = shared_q_arena
                 .as_aligned_prefix_mut(total_elements)
@@ -2819,7 +2819,7 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
 
     // 3. Provisional `.gcso` (MappedStorage) Zero-Copy Deserialization + Phase-Proximity Gravity Ensemble Gateway Steering
     group.bench_function(
-        "zimms_zero_copy_crystallized_ensemble_gateway_steer_64h",
+        "storage_zero_copy_crystallized_ensemble_gateway_steer_64h",
         |b| {
             let mut q_slice = shared_q_arena
                 .as_aligned_prefix_mut(total_elements)
@@ -3337,7 +3337,7 @@ criterion_group!(
     bench_phase_steering_operations,
     bench_phase_steering_batch_sequence_scaling,
     bench_phase_steering_long_context_and_procrustes,
-    bench_phase_steering_swarm_pspm_and_visual_cowatching,
+    bench_phase_steering_swarm_subhead_and_visual_cowatching,
     bench_phase_steering_extreme_and_edge_cases,
     bench_phase_steering_provisional_gcso_container
 );

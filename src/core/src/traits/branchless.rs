@@ -4023,7 +4023,7 @@ pub(crate) fn scale_f32_slice_unrolled8(buf: &mut [f32], scale: f32) {
     if len == 0 {
         return;
     }
-    let eff_scale = branchless_flush_subnormal_f32(sanitize_inplace_gain_f32(buf[0], scale));
+    let eff_scale = branchless_flush_subnormal_f32(sanitize_inplace_gain_f32(scale));
     if len <= 16 {
         // Match preceding 32-bit/128-bit stores in the CPU store buffer on short logit/score slices
         // (`<= 16` floats) to prevent a ~14-cycle 32-bit-store -> 256-bit-YMM-load STLF stall.

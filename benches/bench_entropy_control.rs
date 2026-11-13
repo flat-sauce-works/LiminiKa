@@ -1157,7 +1157,7 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     // 3D. Blanket Coordinator: Zero-Copy Candidate-Trail Bayes-Attention Score Modulation with EntropyControl Temperature
     group.throughput(Throughput::Elements(8));
     group.bench_function(
-        "modulate_candidate_trails_with_edbc_temperature_8cand",
+        "modulate_candidate_trails_with_entropy_temperature_8cand",
         |b| {
             let engine = EntropyController::default();
             let mut attn_scores = AlignedBuffer32::new([0.5f32; 8]);
@@ -1236,7 +1236,7 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     // 3E. Online Toroidal k-Means / DP-Means E+M Step + EntropyControl Gateway Coordinator (4 Centroids)
     group.throughput(Throughput::Elements(4));
     group.bench_function(
-        "toroidal_kmeans_dp_means_and_edbc_gateway_step_4centroids",
+        "toroidal_kmeans_dp_means_and_entropy_gateway_step_4centroids",
         |b| {
             let base_engine = EntropyController::default();
             let fact = ObjectiveFact::new(
@@ -1318,7 +1318,7 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     // 3F. Coarse-to-Fine Macro Centroid Route (O(K=4) -> O(M_local=2) out of 8 Candidates) + Pitchfork Metastable Tunneling + Bayesian Trail Rewire
     group.throughput(Throughput::Elements(8));
     group.bench_function(
-        "coarse_to_fine_route_and_edbc_bayesian_tunneling_64h",
+        "coarse_to_fine_route_and_entropy_bayesian_tunneling_64h",
         |b| {
             let mut base_engine = EntropyController::default();
             base_engine.state.moving_z_entropy = 1.6;
@@ -1489,203 +1489,210 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
 
     // 3G. Top-2 Liminal Macro Centroid Bifurcation Route (8 Candidates across 4 Centroids) + Pitchfork Metastable Tunneling + Bayesian Trail Rewire
     group.throughput(Throughput::Elements(8));
-    group.bench_function("top2_liminal_route_and_edbc_bayesian_tunneling_64h", |b| {
-        let mut base_engine = EntropyController::default();
-        base_engine.state.moving_z_entropy = 1.6;
-        let base_bloom = ContrastivePhaseBloomFilter::new();
-        let mut attn_scores = AlignedBuffer32::new([0.0f32; 8]);
-        let centroids: [CrystallizedAttractorRecord; 4] = [
-            {
-                let mut rec = CrystallizedAttractorRecord::new_empty(
-                    200,
-                    ATTRACTOR_SLOT_KNOWLEDGE,
-                    0x0030_0000,
-                );
-                let _ =
-                    rec.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(-60), 2.0);
-                rec
-            },
-            {
-                let mut rec = CrystallizedAttractorRecord::new_empty(
-                    201,
-                    ATTRACTOR_SLOT_KNOWLEDGE,
-                    0x0031_0000,
-                );
-                let _ =
-                    rec.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(26), 3.0);
-                rec
-            },
-            {
-                let mut rec = CrystallizedAttractorRecord::new_empty(
-                    202,
+    group.bench_function(
+        "top2_liminal_route_and_entropy_bayesian_tunneling_64h",
+        |b| {
+            let mut base_engine = EntropyController::default();
+            base_engine.state.moving_z_entropy = 1.6;
+            let base_bloom = ContrastivePhaseBloomFilter::new();
+            let mut attn_scores = AlignedBuffer32::new([0.0f32; 8]);
+            let centroids: [CrystallizedAttractorRecord; 4] = [
+                {
+                    let mut rec = CrystallizedAttractorRecord::new_empty(
+                        200,
+                        ATTRACTOR_SLOT_KNOWLEDGE,
+                        0x0030_0000,
+                    );
+                    let _ = rec.absorb_sample_point_64(
+                        &make_heterogeneous_q7_phases_with_offset(-60),
+                        2.0,
+                    );
+                    rec
+                },
+                {
+                    let mut rec = CrystallizedAttractorRecord::new_empty(
+                        201,
+                        ATTRACTOR_SLOT_KNOWLEDGE,
+                        0x0031_0000,
+                    );
+                    let _ = rec
+                        .absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(26), 3.0);
+                    rec
+                },
+                {
+                    let mut rec = CrystallizedAttractorRecord::new_empty(
+                        202,
+                        ATTRACTOR_SLOT_PERSONA,
+                        0x0032_0000,
+                    );
+                    let _ = rec
+                        .absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(30), 2.9);
+                    rec
+                },
+                {
+                    let mut rec = CrystallizedAttractorRecord::new_empty(
+                        203,
+                        ATTRACTOR_SLOT_KNOWLEDGE,
+                        0x0033_0000,
+                    );
+                    let _ = rec.absorb_sample_point_64(
+                        &make_heterogeneous_q7_phases_with_offset(-35),
+                        1.5,
+                    );
+                    rec
+                },
+            ];
+            let base_src = gcso_pointer_trail_t {
+                current_ptr: gcso_tagged_ptr_t::pack_action(
+                    0x4C00,
                     ATTRACTOR_SLOT_PERSONA,
-                    0x0032_0000,
-                );
-                let _ =
-                    rec.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(30), 2.9);
-                rec
-            },
-            {
-                let mut rec = CrystallizedAttractorRecord::new_empty(
-                    203,
-                    ATTRACTOR_SLOT_KNOWLEDGE,
-                    0x0033_0000,
-                );
-                let _ =
-                    rec.absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(-35), 1.5);
-                rec
-            },
-        ];
-        let base_src = gcso_pointer_trail_t {
-            current_ptr: gcso_tagged_ptr_t::pack_action(
-                0x4C00,
-                ATTRACTOR_SLOT_PERSONA,
-                ACTION_PRESET_EXPRESS_PHASE,
-                16,
-            )
-            .raw(),
-            stigmergic_density: 1.5,
-            attractor_pull_force: 2.0,
-            linked_trail_id: 1,
-            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
-            ..Default::default()
-        };
-        let base_candidates: [gcso_pointer_trail_t; 8] = [
-            gcso_pointer_trail_t {
+                    ACTION_PRESET_EXPRESS_PHASE,
+                    16,
+                )
+                .raw(),
                 stigmergic_density: 1.5,
-                target_anchor_id: 200,
-                cluster_id: 200,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-60),
-                ..Default::default()
-            },
-            gcso_pointer_trail_t {
-                stigmergic_density: 1.2,
-                target_anchor_id: 200,
-                cluster_id: 200,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-56),
-                ..Default::default()
-            },
-            gcso_pointer_trail_t {
-                stigmergic_density: 2.5,
-                target_anchor_id: 201,
-                cluster_id: 201,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(23),
-                ..Default::default()
-            },
-            gcso_pointer_trail_t {
-                stigmergic_density: 2.8,
-                target_anchor_id: 201,
-                cluster_id: 201,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
-                ..Default::default()
-            },
-            gcso_pointer_trail_t {
-                stigmergic_density: 2.7,
-                target_anchor_id: 202,
-                cluster_id: 202,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(25),
-                ..Default::default()
-            },
-            gcso_pointer_trail_t {
-                stigmergic_density: 3.2,
-                target_anchor_id: 202,
-                cluster_id: 202,
+                attractor_pull_force: 2.0,
+                linked_trail_id: 1,
                 accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
                 ..Default::default()
-            },
-            gcso_pointer_trail_t {
-                stigmergic_density: 1.4,
-                target_anchor_id: 203,
-                cluster_id: 203,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-35),
-                ..Default::default()
-            },
-            gcso_pointer_trail_t {
-                stigmergic_density: 1.1,
-                target_anchor_id: 203,
-                cluster_id: 203,
-                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-30),
-                ..Default::default()
-            },
-        ];
-        let mut candidates = base_candidates;
+            };
+            let base_candidates: [gcso_pointer_trail_t; 8] = [
+                gcso_pointer_trail_t {
+                    stigmergic_density: 1.5,
+                    target_anchor_id: 200,
+                    cluster_id: 200,
+                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-60),
+                    ..Default::default()
+                },
+                gcso_pointer_trail_t {
+                    stigmergic_density: 1.2,
+                    target_anchor_id: 200,
+                    cluster_id: 200,
+                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-56),
+                    ..Default::default()
+                },
+                gcso_pointer_trail_t {
+                    stigmergic_density: 2.5,
+                    target_anchor_id: 201,
+                    cluster_id: 201,
+                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(23),
+                    ..Default::default()
+                },
+                gcso_pointer_trail_t {
+                    stigmergic_density: 2.8,
+                    target_anchor_id: 201,
+                    cluster_id: 201,
+                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+                    ..Default::default()
+                },
+                gcso_pointer_trail_t {
+                    stigmergic_density: 2.7,
+                    target_anchor_id: 202,
+                    cluster_id: 202,
+                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(25),
+                    ..Default::default()
+                },
+                gcso_pointer_trail_t {
+                    stigmergic_density: 3.2,
+                    target_anchor_id: 202,
+                    cluster_id: 202,
+                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(28),
+                    ..Default::default()
+                },
+                gcso_pointer_trail_t {
+                    stigmergic_density: 1.4,
+                    target_anchor_id: 203,
+                    cluster_id: 203,
+                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-35),
+                    ..Default::default()
+                },
+                gcso_pointer_trail_t {
+                    stigmergic_density: 1.1,
+                    target_anchor_id: 203,
+                    cluster_id: 203,
+                    accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(-30),
+                    ..Default::default()
+                },
+            ];
+            let mut candidates = base_candidates;
 
-        let mut src_trail = base_src;
-        let mut engine = base_engine;
-        let mut bloom = base_bloom;
-        for _ in 0..8 {
-            reset_engine_fast(&mut engine, &base_engine);
-            if !bloom.is_empty() {
-                bloom = base_bloom;
+            let mut src_trail = base_src;
+            let mut engine = base_engine;
+            let mut bloom = base_bloom;
+            for _ in 0..8 {
+                reset_engine_fast(&mut engine, &base_engine);
+                if !bloom.is_empty() {
+                    bloom = base_bloom;
+                }
+                reset_trail_fast(&mut src_trail, &base_src);
+                reset_trail_fast(&mut candidates[5], &base_candidates[5]);
+                attn_scores.data = [0.0f32; 8];
+                let mut scores_mut = attn_scores.as_aligned_slice_mut();
+                let _ = engine
+                    .route_top2_liminal_and_step_bayesian_tunneling(
+                        &centroids,
+                        64u8,
+                        0.20f32,
+                        &mut src_trail,
+                        &mut candidates,
+                        2.1f32,
+                        2.5f32,
+                        2.0f32,
+                        1.0f32,
+                        0.5f32,
+                        128u32,
+                        48usize,
+                        2.0f32,
+                        0.5f32,
+                        0.25f32,
+                        1.0f32,
+                        64u8,
+                        0.25f32,
+                        1.5f32,
+                        &mut bloom,
+                        Some(&mut scores_mut),
+                    )
+                    .unwrap();
             }
-            reset_trail_fast(&mut src_trail, &base_src);
-            reset_trail_fast(&mut candidates[5], &base_candidates[5]);
-            attn_scores.data = [0.0f32; 8];
-            let mut scores_mut = attn_scores.as_aligned_slice_mut();
-            let _ = engine
-                .route_top2_liminal_and_step_bayesian_tunneling(
-                    &centroids,
-                    64u8,
-                    0.20f32,
-                    &mut src_trail,
-                    &mut candidates,
-                    2.1f32,
-                    2.5f32,
-                    2.0f32,
-                    1.0f32,
-                    0.5f32,
-                    128u32,
-                    48usize,
-                    2.0f32,
-                    0.5f32,
-                    0.25f32,
-                    1.0f32,
-                    64u8,
-                    0.25f32,
-                    1.5f32,
-                    &mut bloom,
-                    Some(&mut scores_mut),
-                )
-                .unwrap();
-        }
 
-        b.iter(|| {
-            reset_engine_fast(&mut engine, &base_engine);
-            if !bloom.is_empty() {
-                bloom = base_bloom;
-            }
-            reset_trail_fast(&mut src_trail, &base_src);
-            reset_trail_fast(&mut candidates[5], &base_candidates[5]);
-            attn_scores.data = [0.0f32; 8];
-            let mut scores_mut = attn_scores.as_aligned_slice_mut();
-            let res = engine
-                .route_top2_liminal_and_step_bayesian_tunneling(
-                    black_box(&centroids),
-                    black_box(64u8),
-                    black_box(0.20f32),
-                    black_box(&mut src_trail),
-                    black_box(&mut candidates),
-                    black_box(2.1f32),
-                    black_box(2.5f32),
-                    black_box(2.0f32),
-                    black_box(1.0f32),
-                    black_box(0.5f32),
-                    black_box(128u32),
-                    black_box(48usize),
-                    black_box(2.0f32),
-                    black_box(0.5f32),
-                    black_box(0.25f32),
-                    black_box(1.0f32),
-                    black_box(64u8),
-                    black_box(0.25f32),
-                    black_box(1.5f32),
-                    black_box(&mut bloom),
-                    black_box(Some(&mut scores_mut)),
-                )
-                .unwrap();
-            black_box((res, scores_mut.as_slice()[5]));
-        });
-    });
+            b.iter(|| {
+                reset_engine_fast(&mut engine, &base_engine);
+                if !bloom.is_empty() {
+                    bloom = base_bloom;
+                }
+                reset_trail_fast(&mut src_trail, &base_src);
+                reset_trail_fast(&mut candidates[5], &base_candidates[5]);
+                attn_scores.data = [0.0f32; 8];
+                let mut scores_mut = attn_scores.as_aligned_slice_mut();
+                let res = engine
+                    .route_top2_liminal_and_step_bayesian_tunneling(
+                        black_box(&centroids),
+                        black_box(64u8),
+                        black_box(0.20f32),
+                        black_box(&mut src_trail),
+                        black_box(&mut candidates),
+                        black_box(2.1f32),
+                        black_box(2.5f32),
+                        black_box(2.0f32),
+                        black_box(1.0f32),
+                        black_box(0.5f32),
+                        black_box(128u32),
+                        black_box(48usize),
+                        black_box(2.0f32),
+                        black_box(0.5f32),
+                        black_box(0.25f32),
+                        black_box(1.0f32),
+                        black_box(64u8),
+                        black_box(0.25f32),
+                        black_box(1.5f32),
+                        black_box(&mut bloom),
+                        black_box(Some(&mut scores_mut)),
+                    )
+                    .unwrap();
+                black_box((res, scores_mut.as_slice()[5]));
+            });
+        },
+    );
 
     // 4. Closed-Loop Sheaf Cohomology + Dual Homology Pairing + Repulsive Bloom Filter Guard
     group.throughput(Throughput::Bytes(
@@ -1878,7 +1885,7 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
 
     // 7B. Blanket Coordinator: 256-Bit Dyadic Tree QDPT Resolution + Coupled EntropyControl Step
     group.throughput(Throughput::Elements(1));
-    group.bench_function("resolve_dyadic_tree_and_step_edbc_closed_loop", |b| {
+    group.bench_function("resolve_dyadic_tree_and_step_entropy_closed_loop", |b| {
         let base_engine = EntropyController::default();
         let parent_ptr = gcso_tagged_ptr_t::pack_action(
             0x8000,
@@ -2187,75 +2194,81 @@ fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
 
     // 4. Provisional `.gcso` (MappedStorage) Zero-Copy Deserialization + Crystallized Ensemble Gravity Folding EntropyControl Step
     group.throughput(Throughput::Elements(4));
-    group.bench_function("zimms_zero_copy_crystallized_ensemble_step_4records", |b| {
-        let base_engine = EntropyController::default();
-        let records: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
-            let mut rec = CrystallizedAttractorRecord::new_empty(
-                (i as u32) + 10,
-                ATTRACTOR_SLOT_KNOWLEDGE,
-                0x0010_0000 + ((i as u64) << 12),
-            );
-            let _ = rec.absorb_sample_point_64(
-                &make_heterogeneous_q7_phases_with_offset(20 + (i as i8) * 4),
-                2.0 + (i as f32) * 0.5,
-            );
-            rec
-        });
-        let mut storage_buf = AlignedBuffer64::<u8, 512>::new([0u8; 512]);
-        CrystallizedAttractorRecord::write_records_to_zimms_bytes(&records, &mut storage_buf.data)
-            .unwrap();
-        let base_trail = gcso_pointer_trail_t {
-            stigmergic_density: 1.2,
-            attractor_pull_force: 1.5,
-            accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
-            ..Default::default()
-        };
-
-        let mut trail = base_trail;
-        let mut engine = base_engine;
-        for _ in 0..8 {
-            reset_engine_fast(&mut engine, &base_engine);
-            reset_trail_fast(&mut trail, &base_trail);
-            let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
-                &storage_buf.data,
-                4usize,
+    group.bench_function(
+        "storage_zero_copy_crystallized_ensemble_step_4records",
+        |b| {
+            let base_engine = EntropyController::default();
+            let records: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
+                let mut rec = CrystallizedAttractorRecord::new_empty(
+                    (i as u32) + 10,
+                    ATTRACTOR_SLOT_KNOWLEDGE,
+                    0x0010_0000 + ((i as u64) << 12),
+                );
+                let _ = rec.absorb_sample_point_64(
+                    &make_heterogeneous_q7_phases_with_offset(20 + (i as i8) * 4),
+                    2.0 + (i as f32) * 0.5,
+                );
+                rec
+            });
+            let mut storage_buf = AlignedBuffer64::<u8, 512>::new([0u8; 512]);
+            CrystallizedAttractorRecord::write_records_to_zimms_bytes(
+                &records,
+                &mut storage_buf.data,
             )
             .unwrap();
-            let _ = engine
-                .step_crystallized_ensemble_with_defaults(
-                    0.35f32,
-                    0.80f32,
-                    zero_copy_recs,
-                    &mut trail,
-                )
-                .unwrap();
-        }
+            let base_trail = gcso_pointer_trail_t {
+                stigmergic_density: 1.2,
+                attractor_pull_force: 1.5,
+                accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
+                ..Default::default()
+            };
 
-        b.iter(|| {
-            reset_engine_fast(&mut engine, &base_engine);
-            reset_trail_fast(&mut trail, &base_trail);
-            let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
-                black_box(&storage_buf.data),
-                black_box(4usize),
-            )
-            .unwrap();
-            let res = engine
-                .step_crystallized_ensemble_with_defaults(
-                    black_box(0.35f32),
-                    black_box(0.80f32),
-                    black_box(zero_copy_recs),
-                    black_box(&mut trail),
+            let mut trail = base_trail;
+            let mut engine = base_engine;
+            for _ in 0..8 {
+                reset_engine_fast(&mut engine, &base_engine);
+                reset_trail_fast(&mut trail, &base_trail);
+                let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
+                    &storage_buf.data,
+                    4usize,
                 )
                 .unwrap();
-            black_box((
-                res.0.active_branch_mode,
-                res.1.raw(),
-                res.2,
-                res.3,
-                trail.target_anchor_id,
-            ));
-        });
-    });
+                let _ = engine
+                    .step_crystallized_ensemble_with_defaults(
+                        0.35f32,
+                        0.80f32,
+                        zero_copy_recs,
+                        &mut trail,
+                    )
+                    .unwrap();
+            }
+
+            b.iter(|| {
+                reset_engine_fast(&mut engine, &base_engine);
+                reset_trail_fast(&mut trail, &base_trail);
+                let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
+                    black_box(&storage_buf.data),
+                    black_box(4usize),
+                )
+                .unwrap();
+                let res = engine
+                    .step_crystallized_ensemble_with_defaults(
+                        black_box(0.35f32),
+                        black_box(0.80f32),
+                        black_box(zero_copy_recs),
+                        black_box(&mut trail),
+                    )
+                    .unwrap();
+                black_box((
+                    res.0.active_branch_mode,
+                    res.1.raw(),
+                    res.2,
+                    res.3,
+                    trail.target_anchor_id,
+                ));
+            });
+        },
+    );
 
     // 5. Provisional 4-Section `.gcso` Container Zero-Copy Write, CRC32 Verify & Crystallized Ensemble Step
     group.throughput(Throughput::Elements(4));

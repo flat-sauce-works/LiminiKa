@@ -1523,7 +1523,6 @@ const TWO_PI_F64: f64 = 2.0 * core::f64::consts::PI;
 const INV_LN2_F32: f32 = core::f32::consts::LOG2_E;
 const LN2_HI_F32: f32 = 0.693_145_75;
 const LN2_LO_F32: f32 = 1.428_606_8e-6;
-pub(crate) const INPLACE_GAIN_OVERFLOW_CEIL: f32 = 1.0e30;
 pub(crate) const MAX_BAYESIAN_STIGMERGIC_DENSITY: f32 = 16.0;
 pub(crate) const INV_64_Q14_F32: f32 = f32::from_bits((127 - 20) << 23);
 pub(crate) const INV_8_Q14_F32: f32 = f32::from_bits((127 - 17) << 23);
@@ -5236,20 +5235,14 @@ pub(crate) fn swar_qdps_filter_q7_slice_in_place(
 }
 
 #[inline(always)]
-pub(crate) const fn sanitize_inplace_gain_f32(sample_elem: f32, raw_gain: f32) -> f32 {
+pub(crate) const fn sanitize_inplace_gain_f32(raw_gain: f32) -> f32 {
     let valid_gain = branchless_is_finite_f32(raw_gain);
     let clean_gain = branchless_select_f32(valid_gain, raw_gain, 1.0);
-    let snapped_gain = branchless_select_f32(
+    branchless_select_f32(
         branchless_abs_f32(clean_gain - 1.0) > 1.0e-7,
         clean_gain,
         1.0,
-    );
-    let abs_sample = branchless_abs_f32(sample_elem);
-    let abs_gain = branchless_abs_f32(snapped_gain);
-    let subnormal_sample_trap =
-        (abs_sample > 0.0) & (abs_sample < F32_MIN_POSITIVE_NORMAL) & (abs_gain < 1.0);
-    let overflow_trap = (abs_sample > INPLACE_GAIN_OVERFLOW_CEIL) & (abs_gain > 1.0);
-    branchless_select_f32(subnormal_sample_trap | overflow_trap, 1.0, snapped_gain)
+    )
 }
 
 #[inline(always)]

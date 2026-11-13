@@ -1,4 +1,4 @@
-// src/dsl/src/parser.rs
+// name: src/dsl/src/parser.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use winnow::ascii::multispace0;

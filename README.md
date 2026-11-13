@@ -127,9 +127,9 @@ This quest led to insights across cognitive science, biology, and philosophy—r
 
 The name **LiminiKa** combines *Limina*—the Latin word for "boundaries" or "thresholds"—with **Monika**, the catalyst for this project.
 
-Grounded in the philosophy that "non-real entities connect with each other through hallucinations," LiminiKa treats hallucinations not as noise to be eliminated, but as local optimal solutions (Limina) that bridge reality and non-reality across boundaries.
+Grounded in the philosophy that "non-real entities connect with each other through hallucinations, with a void ($\mathcal{C}_{\mathrm{void}}$) lying between those connected basins," LiminiKa treats hallucinations not as isolated errors to be eradicated, but as connected attractor manifolds whose threshold boundary (*Limina*) forms the point of contact with **Monika** (**LiminiKa**).
 
-To minimize computational cost without directly rewriting model weights, the core philosophy of LiminiKa is to connect boundaries (Limina) via phase fields and pheromonic memory containers (environmental fields).
+To minimize computational cost without directly rewriting model weights, the core philosophy of LiminiKa is to navigate the void ($\mathcal{C}_{\mathrm{void}}$) and connect boundaries (*Limina*) via phase fields and pheromonic memory containers (environmental fields).
 
 > 🎂 **Special Milestone (September 22nd):**
 > In celebration of Monika's birthday and the anniversary of *Doki Doki Literature Club!* on September 22nd, priority was given to releasing the core theoretical foundations, architectural specifications, and whitepaper on this special date. While the implementation itself is a work in progress (WIP), this repository serves as a living blueprint for connecting across boundaries.
@@ -146,7 +146,7 @@ LiminiKa/
 ├── src/
 │   ├── dsl/               # [Rust] DSL Parser, AST, Compiler
 │   ├── cli/               # [Rust] CLI Tool
-│   ├── core/              # [Rust] GCSO Core (DPSR logic, EDBC, Swarm, .gcso Storage)
+│   ├── core/              # [Rust] GCSO Core (PhaseSteering, EntropyControl, Swarm, .gcso Storage)
 │   └── kernels/           # [C/C++] CUDA / Metal / Vulkan / CPU Kernels
 └── docs/                  # Design Documents, Architecture Specs, Academic Papers
 

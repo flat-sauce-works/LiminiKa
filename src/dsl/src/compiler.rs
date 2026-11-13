@@ -1,4 +1,4 @@
-// src/dsl/src/compiler.rs
+// name: src/dsl/src/compiler.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use liminika_core::abi::gcso_config_t;

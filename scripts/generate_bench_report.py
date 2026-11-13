@@ -736,8 +736,12 @@ def analyze_long_horizon_and_edge_bottlenecks(
     # 3B. Online Toroidal k-Means / DP-Means E+M Step & Coarse-to-Fine Macro-to-Micro Routing (8 Candidates across 4 Centroids)
     km_dpsr = by_name.get("online_toroidal_kmeans_gateway_steer_4centroids_64h")
     c2f_dpsr = by_name.get("coarse_to_fine_macro_to_micro_routing_and_steer_64h")
-    km_edbc = by_name.get("toroidal_kmeans_dp_means_and_edbc_gateway_step_4centroids")
-    c2f_edbc = by_name.get("coarse_to_fine_route_and_edbc_bayesian_tunneling_64h")
+    km_edbc = by_name.get(
+        "toroidal_kmeans_dp_means_and_entropy_gateway_step_4centroids"
+    ) or by_name.get("toroidal_kmeans_dp_means_and_edbc_gateway_step_4centroids")
+    c2f_edbc = by_name.get(
+        "coarse_to_fine_route_and_entropy_bayesian_tunneling_64h"
+    ) or by_name.get("coarse_to_fine_route_and_edbc_bayesian_tunneling_64h")
     if km_dpsr and c2f_dpsr and c2f_dpsr["mean_ns"] > 0.0:
         c2f_speedup = km_dpsr["mean_ns"] / c2f_dpsr["mean_ns"]
         c2f_label = (
@@ -768,7 +772,9 @@ def analyze_long_horizon_and_edge_bottlenecks(
 
     # 3C. Top-2 Liminal Macro-to-Micro Bifurcation Routing & Online Centroid Consolidation
     t2_dpsr = by_name.get("top2_liminal_bifurcation_route_and_steer_64h")
-    t2_edbc = by_name.get("top2_liminal_route_and_edbc_bayesian_tunneling_64h")
+    t2_edbc = by_name.get(
+        "top2_liminal_route_and_entropy_bayesian_tunneling_64h"
+    ) or by_name.get("top2_liminal_route_and_edbc_bayesian_tunneling_64h")
     mp_dpsr = by_name.get("online_toroidal_centroid_merge_and_prune_8centroids_64h")
     if c2f_dpsr and t2_dpsr and c2f_dpsr["mean_ns"] > 0.0:
         t2_ratio = t2_dpsr["mean_ns"] / c2f_dpsr["mean_ns"]
@@ -917,10 +923,16 @@ def analyze_provisional_gcso_diagnostics(
     gw_dpsr = by_name.get("gateway_signal_steer_and_crystallize_attractor_64h")
     gw_edbc = by_name.get("step_gateway_signal_and_crystallize_attractor_64h")
     gw_4axis = by_name.get("step_gateway_4axis_contradiction_guard_and_provenance_64h")
-    gw_full = by_name.get("gateway_swarm_bayesian_pspm_and_crystallize_full_64h")
-    zc_edbc = by_name.get("zimms_zero_copy_crystallized_ensemble_step_4records")
+    gw_full = by_name.get(
+        "gateway_swarm_bayesian_subhead_and_crystallize_full_64h"
+    ) or by_name.get("gateway_swarm_bayesian_pspm_and_crystallize_full_64h")
+    zc_edbc = by_name.get(
+        "storage_zero_copy_crystallized_ensemble_step_4records"
+    ) or by_name.get("zimms_zero_copy_crystallized_ensemble_step_4records")
     mem_edbc = by_name.get("step_crystallized_ensemble_gravity_fold_4records")
-    zc_gw_dpsr = by_name.get("zimms_zero_copy_crystallized_ensemble_gateway_steer_64h")
+    zc_gw_dpsr = by_name.get(
+        "storage_zero_copy_crystallized_ensemble_gateway_steer_64h"
+    ) or by_name.get("zimms_zero_copy_crystallized_ensemble_gateway_steer_64h")
     zc_reg_dpsr = by_name.get("zero_copy_register_crystallized_ensemble_steer_64h")
     fs_dpsr = by_name.get("four_section_gcso_zero_copy_map_and_register_steer_64h")
     fs_edbc = by_name.get("four_section_gcso_zero_copy_write_verify_and_step_4records")
@@ -1366,7 +1378,9 @@ def analyze_sidecar_overhead_budget(
         or by_name.get("eval_stateless_branchless")
     )
     edbc_closed_loop = (
-        by_name.get("coarse_to_fine_route_and_edbc_bayesian_tunneling_64h")
+        by_name.get("coarse_to_fine_route_and_entropy_bayesian_tunneling_64h")
+        or by_name.get("coarse_to_fine_route_and_edbc_bayesian_tunneling_64h")
+        or by_name.get("toroidal_kmeans_dp_means_and_entropy_gateway_step_4centroids")
         or by_name.get("toroidal_kmeans_dp_means_and_edbc_gateway_step_4centroids")
         or by_name.get("step_with_bayesian_pointer_selection_and_tunneling_64h")
     )
@@ -1563,7 +1577,9 @@ def generate_mermaid_charts(groups: dict[str, list[dict[str, Any]]]) -> str:
         short_group = (
             b["group"]
             .replace("PhaseSteering_", "PS_")
+            .replace("phasesteering_", "PS_")
             .replace("EntropyControl_", "EC_")
+            .replace("entropycontrol_", "EC_")
             .replace("DPSR_", "D_")
             .replace("EDBC_", "E_")
         )
@@ -1580,7 +1596,7 @@ def resolve_swarm_stigmergy_badge(name: str) -> str:
     lower = name.lower()
     if "four_section_gcso" in lower:
         return "🧪 [Provisional] 4-Section .gcso View"
-    if "zimms_zero_copy" in lower or "crystalliz" in lower:
+    if "storage_zero_copy" in lower or "zimms_zero_copy" in lower or "crystalliz" in lower:
         return "🧪 [Provisional] .gcso MappedStorage Crystal"
     if "merge_and_prune" in lower:
         return "🪐 Online Centroid Consolidation"
@@ -1600,7 +1616,7 @@ def resolve_swarm_stigmergy_badge(name: str) -> str:
         return "🦋 Autonomous Swarm Frequency Aperture"
     if "swarm" in lower or "quorum" in lower:
         return "🐝 8-Cell SWAR Quorum"
-    if "pspm" in lower:
+    if "subhead" in lower or "pspm" in lower:
         return "🎭 Sub-Head Pseudo-MoE"
     if "visual" in lower:
         return "👁️ 256-Bit Delta Gate"
