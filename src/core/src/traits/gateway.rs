@@ -1811,7 +1811,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
     /// Synthesizes a contiguous slice of `Self` into a 128-byte [`GatewayFrame`] and its 8
     /// register-resident `u64` SWAR phase words (`[u64; 8]`), accumulating scalar metadata in
     /// registers and materializing `GatewayFrame` only once upon loop completion.
-    #[inline(always)]
+    #[inline]
     fn synthesize_gateway_slice_with_words(
         slice: &[Self],
     ) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS])
@@ -2039,7 +2039,7 @@ impl ManifoldGatewaySignal for GatewayFrame {
 /// Synthesizes both a 128-byte [`GatewayFrame`] and its register-resident 8 `u64` SWAR phase words
 /// (`[u64; 8]`) from optional **Origin 1 (`SystemConstraintSignal`)** and **Origin 2
 /// (`ObjectiveFactSignal`, `SubjectivePersonaSignal`, `ContradictionGuardSignal`)** components.
-#[inline(always)]
+#[inline]
 #[must_use]
 pub fn synthesize_multi_origin_gateway_frame_with_words<S, F, P, G>(
     sys_opt: Option<&S>,
@@ -2753,7 +2753,7 @@ pub use crate::storage::GcsoFourSectionView;
 // 9. Blanket Extension Traits on `PhaseSteering + PspmRouter` & `ActionHub`
 // ===================================================================
 
-#[inline(always)]
+#[inline]
 pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
     frame: &GatewayFrame,
     frm_w: &[u64; NUM_SWARM_MICRO_CELLS],
@@ -3587,7 +3587,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
         (self.sample_count > 0) & (self.phase_gravity_mass > 1.0e-12)
     }
 
-    #[inline(always)]
+    #[inline]
     fn synthesize_gateway_slice_with_words(
         records: &[Self],
     ) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {

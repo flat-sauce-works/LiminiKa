@@ -1,4 +1,4 @@
-// name: src/core/src/traits/rope/pspm.rs
+// name: src/core/src/traits/rope/subhead_routing.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Parallel Sub-Head Phase Modulation (PspmRouter) trait and dispatch helpers.
@@ -457,7 +457,7 @@ pub(super) fn eval_fused_ripa_pspm_pair_u8(
 /// the 3 PSPM subgroups (`0..fact_h`, `fact_h..logic_end`, `logic_end..total_heads`) each have
 /// constant effective Q7 bytes `(f_u8, l_u8, e_u8)`, coalescing adjacent subgroups when their
 /// effective bytes match (`1..=3` calls to `rotate_ripa_upper_heads_uniform_sincos`).
-#[inline(always)]
+#[inline]
 pub(super) fn rotate_fused_ripa_and_pspm_uniform_subgroups(
     t_slice: &mut [f32],
     b_u8: u8,
@@ -784,7 +784,7 @@ pub(crate) fn rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words(
     );
 }
 
-#[inline(always)]
+#[inline]
 pub(super) fn rotate_fused_ripa_and_pspm_eff_words_core(
     t_slice: &mut [f32],
     base_ripa_words: &[u64; NUM_SWARM_CELLS],
@@ -983,7 +983,7 @@ pub(super) fn rotate_fused_ripa_and_pspm_eff_words_core(
     }
 }
 
-#[inline(always)]
+#[inline]
 pub(crate) fn dispatch_fused_ripa_and_pspm_words_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     base_ripa_words: &[u64; NUM_SWARM_CELLS],

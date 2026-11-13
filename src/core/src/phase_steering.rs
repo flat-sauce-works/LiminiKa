@@ -841,7 +841,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `anchor_phases.len() != anchor_base_energies.len()`,
     /// `min_step_rad < 0.0`, `max_rad <= 0.0`, or tensor/PSPM parameters are invalid.
-    #[inline(always)]
+    #[inline]
     fn steer_unified_field_pspm_and_inv_temperature_safe(
         &self,
         trail: &mut gcso_pointer_trail_t,
@@ -1188,7 +1188,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `contradiction_threshold`, `min_step_rad`, or
     /// `max_rad` is invalid, or if tensor slice dimensions are insufficient.
-    #[inline(always)]
+    #[inline]
     fn bridge_liminal_trail_and_steer_qk_safe(
         &self,
         prev_memory_trail: &gcso_pointer_trail_t,
@@ -1874,7 +1874,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if tensor dimensions or `GCSO_RESTRICT` non-aliasing
     /// invariants are violated.
-    #[inline(always)]
+    #[inline]
     fn steer_gateway_swarm_bayesian_and_crystallize_safe<S: ManifoldGatewaySignal + ?Sized>(
         &self,
         signal: &S,

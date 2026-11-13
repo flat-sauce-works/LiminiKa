@@ -1059,7 +1059,7 @@ pub(super) fn apply_phase_steering_fused_safe_multi_token_batch_core(
 /// Rotates `t_slice` across `num_heads` heads using pre-unpacked `sincos_heads`, amortizing
 /// Q7 SWAR unpacking and 256-entry LUT lookups across multi-token (`batch_tokens > 1`) calls
 /// while broadcasting once across `total_len` when `all_uniform` holds.
-#[inline(always)]
+#[inline]
 pub(super) fn apply_phase_steering_slice_with_sincos(
     t_slice: &mut [f32],
     sincos_heads: &[(f32, f32)],
@@ -1408,7 +1408,7 @@ pub(crate) fn rotate_ripa_upper_slice(buf: &mut [f32], sin_t: f32, cos_t: f32) {
     rotate_so2_slice_unrolled16(buf, sin_t, cos_t);
 }
 
-#[inline(always)]
+#[inline]
 pub(crate) fn rotate_ripa_upper_heads_uniform_sincos(
     t_slice: &mut [f32],
     head_start: usize,

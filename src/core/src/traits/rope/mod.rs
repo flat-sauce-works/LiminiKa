@@ -96,8 +96,8 @@ pub use kernels::*;
 mod phase_steering;
 pub use phase_steering::*;
 
-mod pspm;
-pub use pspm::*;
+mod subhead_routing;
+pub use subhead_routing::*;
 
 mod adapters;
 pub use adapters::*;

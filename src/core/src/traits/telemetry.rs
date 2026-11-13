@@ -624,7 +624,7 @@ fn fallback_scan_unpruned_macro_candidates_cold(
 
 /// Shared Coarse-to-Fine / Top-2 Liminal Bayesian candidate scanner, fallback unpruned scanner,
 /// and AVX2/SWAR Limina geodesic SLERP bridger used by both `phase_steering` and `entropy_control`.
-#[inline(always)]
+#[inline]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn select_and_bridge_macro_aligned_bayesian_trail_core(
     mut self_w: [u64; NUM_SWARM_MICRO_CELLS],
@@ -4269,7 +4269,7 @@ pub trait StigmergicSwarmOps: StigmergicTrailOps {
 }
 
 impl gcso_pointer_trail_t {
-    #[inline(always)]
+    #[inline]
     pub(crate) fn try_resolve_action_in_swarm_with_cur_words(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,

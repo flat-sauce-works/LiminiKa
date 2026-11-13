@@ -240,7 +240,7 @@ pub trait PhaseSteering: BranchlessKernel {
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `min_step_rad < 0.0`, `min_step_rad` is non-finite,
     /// or slice lengths are smaller than `self.num_heads()`.
-    #[inline(always)]
+    #[inline]
     fn accumulate_context_phases_circular_q7(
         &self,
         accumulated_context_phases: &mut AlignedSliceMut16<'_, gcso_q7_t>,

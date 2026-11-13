@@ -2567,7 +2567,7 @@ pub fn branchless_q7_coherence_and_resultant_64(
 /// directional cosine weighting $w_{\mathrm{coh}} = \operatorname{clamp}(0.5(1 + \mathcal{C}_{\mathrm{phase}}), 0.25, 1.0)$).
 ///
 /// Returns `(updated_centroid_words, next_base_energy, resultant_r_bar, von_mises_kappa, words_changed)`.
-#[inline(always)]
+#[inline]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn branchless_toroidal_centroid_step_words_with_coh_uni_and_changed_64(
     centroid_words: &[u64; 8],
@@ -2966,7 +2966,7 @@ const fn swar_synergy_word_with_bias_x8(
 /// Synthesizes a non-linear synergistic 64-head Q7 phase profile directly in 8 register-resident
 /// `u64` SWAR words (`0` intermediate stack arrays, `0` branches, `0 fdiv`), returning
 /// `(fused_words, effective_pull, coherence)`.
-#[inline(always)]
+#[inline]
 #[must_use]
 pub fn branchless_q7_synergy_fuse_words_64(
     a: &[u64; 8],

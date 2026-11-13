@@ -1439,7 +1439,7 @@ impl ActionHubEngine {
         )
     }
 
-    #[inline(always)]
+    #[inline]
     fn orchestrate_next_action_step_core(
         &mut self,
         input_ptr: gcso_tagged_ptr_t,

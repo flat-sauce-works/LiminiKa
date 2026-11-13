@@ -363,7 +363,7 @@ const fn eval_temperature_for_mode(
 /// and accumulates the post-bridge **Joint Probability Chain Rule Log-Likelihood**
 /// $\sum_{t=1}^{T-1} \ln P(M_t \mid M_{t-1})$ and **$S^1$ Sheaf Holonomy Obstruction Energy**
 /// $\mathcal{E}_{\mathrm{holonomy}} \in [0, 1]$ without data-dependent branch mispredictions.
-#[inline(always)]
+#[inline]
 fn bridge_and_eval_liminal_trail_chain_single_pass(
     trail_chain: &mut [gcso_pointer_trail_t],
     interpolation_u7: u8,
@@ -1055,7 +1055,7 @@ fn inject_metastable_tunneling_perturbation_in_words_64(
 /// [`EntropyClosedLoopCoordinator::step_with_bayesian_pointer_selection_and_tunneling`],
 /// [`EntropyClosedLoopCoordinator::route_coarse_to_fine_and_step_bayesian_tunneling`], and
 /// [`EntropyClosedLoopCoordinator::route_top2_liminal_and_step_bayesian_tunneling`].
-#[inline(always)]
+#[inline]
 #[allow(clippy::too_many_arguments)]
 fn step_edbc_tunneling_and_select_bayesian_core<E: EntropyClosedLoopCoordinator + ?Sized>(
     engine: &mut E,
@@ -1236,7 +1236,7 @@ fn step_edbc_tunneling_and_select_bayesian_core<E: EntropyClosedLoopCoordinator 
 /// [`EntropyClosedLoopCoordinator::step_via_gateway_signal`], and
 /// [`EntropyClosedLoopCoordinator::step_via_gateway_kmeans_64`] that operates directly on
 /// `gw_w: &[u64; 8]` without reloading `frame.phase_deltas` from the stack.
-#[inline(always)]
+#[inline]
 fn step_via_gateway_frame_with_words_core<
     T: EdbcBranchController + SheafCohomologyEvaluator + HierarchicalTreeTable + ?Sized,
 >(

@@ -244,7 +244,7 @@ impl CrystallizedAttractorRecord {
         ])
     }
 
-    #[inline(always)]
+    #[inline]
     #[must_use]
     const fn compute_payload_crc32_with_words_raw(
         &self,
@@ -1939,7 +1939,7 @@ impl CrystallizedAttractorRecord {
         (best_idx, anchor_id, best_coh, best_grav)
     }
 
-    #[inline(always)]
+    #[inline]
     pub(crate) fn route_top2_liminal_centroids_from_preloaded_words_64(
         centroids: &[Self],
         trail: &mut gcso_pointer_trail_t,
