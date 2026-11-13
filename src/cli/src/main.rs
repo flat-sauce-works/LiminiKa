@@ -1,6 +1,7 @@
 // name: src/cli/src/main.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+mod eval_runner;
 mod eval_samples;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -51,6 +52,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     probe.prompt,
                     probe.expected_keywords.join(", "),
                     probe.forbidden_keywords.join(", ")
+                );
+            }
+        } else if cmd == "eval-dry-run" {
+            let path = args
+                .next()
+                .unwrap_or_else(|| "tests/fixtures/gcso_eval_samples.txt".to_string());
+            let raw = std::fs::read_to_string(&path)?;
+            let suite = eval_samples::EvalSampleSuite::parse(&raw)
+                .map_err(|e| format!("failed to parse {}: {}", path, e))?;
+
+            let geom = eval_runner::RopeGeometry {
+                layout: eval_runner::RopeLayout::HalfSplit,
+                head_dim: 128,
+                rotary_dim: 64,
+                num_q_heads: 24,
+                num_kv_heads: 8,
+                num_layers: 32,
+                layer_rope_mask: 0xFFFF_FFFF,
+            };
+            let mut backend = eval_runner::DummyBackend::new(geom);
+            let profile = eval_runner::bake_in_memory_profile(&mut backend, &suite)
+                .map_err(|e| format!("bake failed: {}", e))?;
+            let angles = [0.0_f32, 0.05, 0.10, 0.15, 0.25];
+            let rows = eval_runner::run_angle_sweep(&mut backend, &suite, &profile, &angles, 48)
+                .map_err(|e| format!("sweep failed: {}", e))?;
+
+            println!(
+                "Dry-run sweep on '{}' (active RoPE layers: {}):",
+                path, profile.active_rope_layers
+            );
+            println!(
+                "{:>8} | {:>10} | {:>12} | {:>11} | {:>11}",
+                "max_rad", "mean_KL", "d_logprob", "expect_hit", "forbid_hit"
+            );
+            for r in rows {
+                println!(
+                    "{:>8.2} | {:>10.4} | {:>+12.4} | {:>10.1}% | {:>10.1}%",
+                    r.max_rad,
+                    r.mean_kl_div,
+                    r.mean_target_logprob_delta,
+                    r.expected_hit_rate * 100.0,
+                    r.forbidden_hit_rate * 100.0
                 );
             }
         }
