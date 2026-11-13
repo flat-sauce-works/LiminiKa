@@ -203,10 +203,14 @@ LEGACY_PROVISIONAL_BENCH_SUBDIRS: tuple[str, ...] = (
 )
 
 
-def clean_provisional_criterion_artifacts(
-    project_root: Path, requested_dir: Path, remove_provisional_groups: bool = True
+def clean_criterion_artifacts(
+    project_root: Path,
+    requested_dir: Path,
+    json_summary_out: Path | None = None,
+    full_clean: bool = True,
+    remove_provisional_groups: bool = True,
 ) -> None:
-    """Remove stale provisional `.gcso` Criterion directories and legacy pre-split subdirectories."""
+    """Clean stale Criterion directories before a fresh run (or prune provisional groups only)."""
     candidate_roots = [
         requested_dir
         if requested_dir.is_absolute()
@@ -214,6 +218,25 @@ def clean_provisional_criterion_artifacts(
         project_root / "target" / "criterion",
         project_root / "src" / "core" / "target" / "criterion",
     ]
+    if full_clean:
+        seen: set[Path] = set()
+        for root in candidate_roots:
+            resolved = root.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            if root.exists():
+                shutil.rmtree(root, ignore_errors=True)
+        if json_summary_out is not None:
+            summary_path = (
+                json_summary_out
+                if json_summary_out.is_absolute()
+                else (project_root / json_summary_out)
+            )
+            if summary_path.exists():
+                summary_path.unlink(missing_ok=True)
+        return
+
     for root in candidate_roots:
         if not root.exists():
             continue
@@ -712,6 +735,18 @@ def main() -> None:
         help="Generate summary tables only in Markdown report",
     )
     parser.add_argument(
+        "--clean",
+        action="store_true",
+        default=True,
+        help="Remove existing Criterion artifacts before measuring so every run starts completely fresh (default: enabled, automatically disabled when --baseline is set)",
+    )
+    parser.add_argument(
+        "--no-clean",
+        action="store_false",
+        dest="clean",
+        help="Keep existing Criterion artifacts for incremental updates or baseline comparisons",
+    )
+    parser.add_argument(
         "--skip-execution",
         action="store_true",
         help="Skip cargo bench execution and re-generate report from existing target/criterion artifacts",
@@ -754,7 +789,7 @@ def main() -> None:
                 f"{CORE_GROUPS_PREFIX_REGEX}[^/]*/.*({raw_profile_filter})"
             )
         else:
-            effective_filter = f"{CORE_GROUPS_PREFIX_REGEX}/"
+            effective_filter = f"{CORE_GROUPS_PREFIX_REGEX}[^/]*/"
     else:
         effective_filter = raw_profile_filter
 
@@ -768,9 +803,12 @@ def main() -> None:
 
     if not args.skip_execution:
         if not args.dry_run:
-            clean_provisional_criterion_artifacts(
+            do_full_clean = bool(args.clean and not args.baseline)
+            clean_criterion_artifacts(
                 project_root,
                 args.criterion_dir,
+                json_summary_out=args.json_summary_out,
+                full_clean=do_full_clean,
                 remove_provisional_groups=not run_provisional_gcso,
             )
 
