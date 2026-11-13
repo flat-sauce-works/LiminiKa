@@ -54,17 +54,7 @@ import time
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
-
-# Anchored Criterion group-prefix regex matching all finalized Core (PhaseSteering + EntropyControl) groups
-# while excluding `PhaseSteering_Provisional_GCSO_Container` and `EntropyControl_Provisional_GCSO_Container`.
-# Criterion's `configure_from_args()` CLI parser does not support `libtest`'s `--skip` flag
-# (passing `--skip` fails with `error: unexpected argument found`, exit code 2), so Core-only
-# profiles combine `LIMINIKA_RUN_PROVISIONAL_GCSO=0` with this positive group regex.
-CORE_GROUPS_PREFIX_REGEX: str = (
-    r"^(PhaseSteering_(HotPath|Batch|Long_Context|Swarm|Extreme)"
-    r"|EntropyControl_(Stateful|CVoid|Continuous|Long_Dialogue|Pointer|Extreme))"
-)
+from typing import Any, cast
 
 # Pre-defined execution profiles for tailored benchmarking runs
 PROFILES: dict[str, dict[str, str | None]] = {
@@ -311,6 +301,31 @@ def auto_select_optimal_core() -> int | None:
     return None
 
 
+def _win32_configure_kernel32(kernel32: Any) -> None:
+    """Configure explicit 64-bit Win32 HANDLE/argtypes on ctypes.windll.kernel32."""
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    kernel32.GetCurrentThread.argtypes = []
+    kernel32.GetCurrentThread.restype = ctypes.c_void_p
+    kernel32.SetProcessAffinityMask.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+    kernel32.SetProcessAffinityMask.restype = ctypes.c_int
+    kernel32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    kernel32.SetPriorityClass.restype = ctypes.c_int
+    kernel32.SetThreadPriority.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    kernel32.SetThreadPriority.restype = ctypes.c_int
+    kernel32.SetProcessPriorityBoost.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    kernel32.SetProcessPriorityBoost.restype = ctypes.c_int
+    kernel32.SetProcessInformation.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+    ]
+    kernel32.SetProcessInformation.restype = ctypes.c_int
+    kernel32.SetThreadIdealProcessor.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    kernel32.SetThreadIdealProcessor.restype = ctypes.c_ulong
+
+
 def apply_process_stabilization(high_priority: bool, pin_core: int | None) -> None:
     """Elevate process scheduling priority, disable EcoQoS throttling, and pin CPU core affinity."""
     if pin_core is not None:
@@ -335,6 +350,7 @@ def apply_process_stabilization(high_priority: bool, pin_core: int | None) -> No
                     windll = getattr(ctypes, "windll", None)
                     if windll is not None:
                         kernel32 = windll.kernel32
+                        _win32_configure_kernel32(kernel32)
                         handle = kernel32.GetCurrentProcess()
                         mask = ctypes.c_size_t(1 << int(pin_core))
                         if kernel32.SetProcessAffinityMask(handle, mask):
@@ -353,6 +369,7 @@ def apply_process_stabilization(high_priority: bool, pin_core: int | None) -> No
                 windll = getattr(ctypes, "windll", None)
                 if windll is not None:
                     kernel32 = windll.kernel32
+                    _win32_configure_kernel32(kernel32)
                     handle = kernel32.GetCurrentProcess()
                     if kernel32.SetPriorityClass(handle, 0x00000080):
                         print(
@@ -779,19 +796,10 @@ def main() -> None:
     )
 
     # Criterion's `configure_from_args()` accepts a single positive positional regex `[FILTER]`
-    # and does not support `libtest`'s `--skip` flag. When `effective_skip` is active, combine
-    # `LIMINIKA_RUN_PROVISIONAL_GCSO=0` (in-process group gating in `bench_phase_steering.rs`/`bench_entropy_control.rs`)
-    # with an anchored Core-group regex when a sub-profile filter is present.
-    effective_filter: str | None
-    if effective_skip and not args.filter:
-        if raw_profile_filter:
-            effective_filter = (
-                f"{CORE_GROUPS_PREFIX_REGEX}[^/]*/.*({raw_profile_filter})"
-            )
-        else:
-            effective_filter = f"{CORE_GROUPS_PREFIX_REGEX}[^/]*/"
-    else:
-        effective_filter = raw_profile_filter
+    # and does not support `libtest`'s `--skip` flag. Provisional `.gcso` groups are gated
+    # in-process via `LIMINIKA_RUN_PROVISIONAL_GCSO=0`, so we do not restrict group names to a
+    # hardcoded prefix allowlist—allowing newly added benchmark files/groups to run automatically.
+    effective_filter: str | None = raw_profile_filter
 
     custom_env = build_optimal_cargo_env(
         args.native_cpu,

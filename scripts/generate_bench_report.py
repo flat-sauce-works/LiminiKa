@@ -105,7 +105,7 @@ def format_throughput(bytes_per_sec: float) -> str:
     elif bytes_per_sec >= 1_000_000.0:
         return f"{bytes_per_sec / 1_000_000.0:.2f} MB/s"
     elif bytes_per_sec >= 1_000.0:
-        return f"{bytes_per_sec / 1_000_000.0:.2f} KB/s"
+        return f"{bytes_per_sec / 1_000.0:.2f} KB/s"
     else:
         return f"{bytes_per_sec:.2f} B/s"
 
