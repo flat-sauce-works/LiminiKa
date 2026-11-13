@@ -1,6 +1,8 @@
 // name: src/cli/src/main.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+mod eval_samples;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("LiminiKa GCSO Core Engine v0.1.1");
 
@@ -23,7 +25,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Context initialized successfully. Ready for token stepping.");
 
-    // 4. Clean up allocated context resources
+    // 4. Optional subcommand: `eval-check [fixture_path]`
+    let mut args = std::env::args().skip(1);
+    if let Some(cmd) = args.next() {
+        if cmd == "eval-check" {
+            let path = args
+                .next()
+                .unwrap_or_else(|| "tests/fixtures/gcso_eval_samples.txt".to_string());
+            let raw = std::fs::read_to_string(&path)?;
+            let suite = eval_samples::EvalSampleSuite::parse(&raw)
+                .map_err(|e| format!("failed to parse {}: {}", path, e))?;
+            println!(
+                "Loaded eval fixture '{}': {} facts, {} persona samples, {} guards, {} probes.",
+                path,
+                suite.facts.len(),
+                suite.persona.len(),
+                suite.guards.len(),
+                suite.probes.len()
+            );
+            for (i, probe) in suite.probes.iter().enumerate() {
+                println!(
+                    "  [Probe {} | {:?}] {} (expect: {}, forbid: {})",
+                    i + 1,
+                    probe.slot,
+                    probe.prompt,
+                    probe.expected_keywords.join(", "),
+                    probe.forbidden_keywords.join(", ")
+                );
+            }
+        }
+    }
+
+    // 5. Clean up allocated context resources
     unsafe { liminika_core::abi::gcso_context_destroy(ctx_handle) };
     Ok(())
 }

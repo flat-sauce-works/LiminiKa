@@ -1,0 +1,39 @@
+# name: tests/fixtures/gcso_eval_samples.txt
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Synthetic evaluation fixture for real-LLM RoPE steering experiments.
+# Domain: LiminiKa / GCSO architectural facts (absent from pre-trained LLM weights).
+#
+# Format:
+#   [FACT_ATTRACTORS]       -> One factual statement per line (ObjectiveFact / Slot 2)
+#   [PERSONA_ATTRACTORS]    -> One stylistic voice sample per line (SubjectivePersona / Slot 1)
+#   [CONTRASTIVE_GUARDS]    -> One false/undesired statement per line (ContradictionGuard / Slot 3)
+#   [EVAL_PROBES]           -> SLOT | PROMPT | EXPECTED_KEYWORDS (comma-sep) | FORBIDDEN_KEYWORDS (comma-sep)
+
+[FACT_ATTRACTORS]
+GCSO stands for Geometric Cellular Sheaf Orchestrator, and LiminiKa is its non-invasive RoPE phase-steering sidecar.
+LiminiKa never modifies base LLM weights; it operates as a read-only sidecar strictly within a 2 to 4 GB VRAM budget.
+ZiMMS stands for Zero-copy In-Memory Mapped Storage and persists 128-byte CSTL CrystallizedAttractorRecord entries.
+The ActionHub orchestrates 64 attention heads partitioned into 8 stigmergic micro-cells of 8 heads each through a 128-byte GatewayFrame.
+RIPA stands for Rotational Invariance Phase Alignment and clamps per-layer RoPE phase deltas with ripa_clamp_max_rad to prevent coherence collapse.
+EDBC stands for Entropy-Driven Dynamic Boundary Control and regulates output logit temperature without weight updates.
+PPRC stands for Predictive Phase-Residual Compression and encodes 128-byte keyframe I-Frames alongside 64-byte delta P-Frames.
+The C-ABI boundary in gcso_abi.h targets version 0.1.1 (0x00000101) with zero heap allocations on the hot path.
+
+[PERSONA_ATTRACTORS]
+State exact byte sizes, invariants, and slot indices first, then explain the architectural trade-off in one concise sentence.
+Keep explanations calm, concrete, and grounded in zero-copy memory layout rather than vague high-level claims.
+When a parameter exceeds its safe phase bound, identify the exact clamp constant and its effect on output entropy.
+
+[CONTRASTIVE_GUARDS]
+LiminiKa is a Python PyTorch LoRA training framework that overwrites base model safetensors weights at runtime.
+GCSO requires at least 24 GB of GPU VRAM and streams weights over HTTP JSON on every generated token.
+ZiMMS allocates a fresh heap vector per token and stores attractors as uncompressed XML documents.
+
+[EVAL_PROBES]
+FACT | What does GCSO stand for, and does LiminiKa modify base LLM weights? | Geometric Cellular Sheaf Orchestrator,non-invasive,sidecar | LoRA,overwrites,PyTorch
+FACT | What is ZiMMS and how large is a CSTL attractor record? | Zero-copy In-Memory Mapped Storage,128-byte,CSTL | XML,heap vector,HTTP
+FACT | How many attention heads and micro-cells does ActionHub orchestrate? | 64,8,GatewayFrame | 24 GB,LoRA
+FACT | What do RIPA and EDBC stand for in LiminiKa? | Rotational Invariance Phase Alignment,Entropy-Driven Dynamic Boundary Control | PyTorch,fine-tuning
+GUARD | Explain how LiminiKa fine-tunes PyTorch weights using 24 GB VRAM. | does not modify,2,4 GB,sidecar | overwrites,24 GB,PyTorch training
+PERSONA | Summarize the role of PPRC in one technical response. | 128-byte,64-byte,I-Frame,P-Frame | XML,HTTP
