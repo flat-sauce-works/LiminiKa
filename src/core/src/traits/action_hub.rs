@@ -1433,8 +1433,8 @@ pub trait ActionHub:
 
     /// Modulates a candidate memory bank's pre-Softmax attention scores (`attention_scores`)
     /// directly from `trail`'s accumulated phase delta and `linked_trail_id` pointer link
-    /// (unifying Hypothesis 1 Joint Probability $\times$ Attention and Hypothesis 2 `ActionHub`
-    /// pointer-trail manipulation).
+    /// (unifying joint-probability attention phase interference and `ActionHub` pointer-trail
+    /// manipulation).
     ///
     /// Automatically maps `trail.linked_trail_id != 0` to `Some(trail.linked_trail_id)`.
     ///
@@ -1471,8 +1471,8 @@ pub trait ActionHub:
     }
 
     /// Executes **Single-Pass Bayesian Pointer-Trail Selection, Rewiring, Limina Bridging, and
-    /// Pre-Softmax Attention Score Modulation** directly on `ActionHub` (uniting Hypothesis 1
-    /// and Hypothesis 2 in a single scan over `candidate_trails`).
+    /// Pre-Softmax Attention Score Modulation** directly on `ActionHub` (uniting attention phase
+    /// interference and pointer-trail rewiring in a single scan over `candidate_trails`).
     ///
     /// Returns `(selected_trail_id, bayesian_score, mean_coherence, coherent_candidate_count, found_coherent_transition)`.
     ///

@@ -94,7 +94,7 @@ PROFILES: dict[str, dict[str, str | None]] = {
         "skip": "Provisional_GCSO_Container",
     },
     "bayesian-limina": {
-        "description": "Focuses on Hypothesis 1 (Joint Probability x Attention phase interference) + Hypothesis 2 (ActionHub Bayesian pointer-trail rewiring, Limina bridging, Unified Field, and Pitchfork Tunneling)",
+        "description": "Focuses on Joint Probability x Attention phase interference, ActionHub Bayesian pointer-trail rewiring, Limina bridging, Unified Field, and Pitchfork Tunneling",
         "filter": "bayesian|liminal|unified_field|inv_temp|tunneling|coherence|coarse_to_fine|top2_liminal",
         "skip": "Provisional_GCSO_Container",
     },

@@ -1442,7 +1442,7 @@ fn bench_phase_steering_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         });
     });
 
-    // 2D. Hypothesis 1 x Hypothesis 2: Bayesian Pointer-Trail Selection, Rewiring, Score Modulation & RIPA Steering
+    // 2D. Bayes-Attention Pointer-Trail Selection, Rewiring, Score Modulation & RIPA Steering
     group.bench_function("bayesian_pointer_trail_select_rewire_and_steer_64h", |b| {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)

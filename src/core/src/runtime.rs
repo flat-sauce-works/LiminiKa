@@ -870,9 +870,8 @@ impl RuntimeContext {
     }
 
     /// Executes the closed-loop **Autonomous Pointer-Trail Selection + Bayes-Attention
-    /// Interference** cascade uniting **Hypothesis 1** (Persona as Joint Probability Chain Rule
-    /// $\times$ Attention phase interference) and **Hypothesis 2** (Intelligence as Stigmergic
-    /// Pointer-Trail rewiring in [`ActionHub`]) in zero-allocation ($C_{\mathrm{alloc}} = 0$) mode.
+    /// Interference** cascade uniting joint-probability attention phase interference and
+    /// stigmergic pointer-trail rewiring in [`ActionHub`] in zero-allocation ($C_{\mathrm{alloc}} = 0$) mode.
     ///
     /// Returns `(selected_trail_id, bayesian_score, transition_log_prob, dominant_anchor_id, found_coherent_transition)`.
     ///

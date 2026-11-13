@@ -792,18 +792,18 @@ def analyze_long_horizon_and_edge_bottlenecks(
             }
         )
 
-    # 4. Hypothesis 1 x Hypothesis 2: Bayes-Attention Pointer-Trail Rewiring + RIPA Steering
+    # 4. Bayes-Attention Pointer-Trail Rewiring + RIPA Steering
     bayes_dpsr = by_name.get("bayesian_pointer_trail_select_rewire_and_steer_64h")
     bayes_edbc = by_name.get("step_with_bayesian_pointer_selection_and_tunneling_64h")
     if bayes_dpsr and bayes_edbc and bayes_dpsr["mean_ns"] > 0.0:
         ratio_be = bayes_dpsr["mean_ns"] / max(bayes_edbc["mean_ns"], 1e-9)
         diagnostics.append(
             {
-                "domain": "Bayes-Attention Pointer Rewiring (DPSR Steer vs EDBC Tunneling)",
-                "baseline_metric": f"{bayes_edbc['mean_formatted']} (EDBC + Tunneling + Rewire)",
+                "domain": "Bayes-Attention Pointer Rewiring (PhaseSteering vs EntropyControl Tunneling)",
+                "baseline_metric": f"{bayes_edbc['mean_formatted']} (EntropyControl + Tunneling + Rewire)",
                 "extreme_metric": f"{bayes_dpsr['mean_formatted']} (Rewire + Limina + RIPA Steer)",
                 "ratio": ratio_be,
-                "status": "🧠 Closed-Loop Hypothesis 1 × Hypothesis 2 Active ($C_{\\mathrm{alloc}} = 0$)",
+                "status": "🧠 Closed-Loop Bayes-Attention × Pointer-Trail Active ($C_{\\mathrm{alloc}} = 0$)",
             }
         )
 
@@ -1257,7 +1257,7 @@ def generate_actionable_recommendations(
 
     if dialogue_score < 85.0:
         recommendations.append(
-            "**Long-Dialogue Endurance Tuning**: Elevated variance observed under multi-turn long-stream simulations. Verify single-writeback register evaluation in `EdbcEngine::eval_stateful` and $S^1$ geodesic lazy unwrapping (`apply_seam_free_lazy_unwrap_q7`)."
+            "**Long-Dialogue Endurance Tuning**: Elevated variance observed under multi-turn long-stream simulations. Verify single-writeback register evaluation in `EntropyController::eval_stateful` and $S^1$ geodesic lazy unwrapping (`apply_seam_free_lazy_unwrap_q7`)."
         )
 
     if not recommendations:
@@ -1270,7 +1270,7 @@ def generate_actionable_recommendations(
             else "1.6x–3.2x"
         )
         recommendations.append(
-            f"**All Core Systems Nominal**: Hot-path RIPA LUT (`{ripa_range_str}` speedup), 32B..512B aligned SIMD kernels, lockstep Fused QK/QKV, Single Unified Attractor Manifold Swarm, Classical Online Toroidal $k$-Means / DP-Means & Coarse-to-Fine Routing, Bayes-Attention Pointer-Trail Rewiring (Hypothesis 1 × Hypothesis 2), Procrustes closed-loop feedback, and SIMD CVoid reductions (`100+ GB/s`) operate strictly within $\\mathcal{{O}}(1)$ or $\\mathcal{{O}}(N)$ bounds with deterministic low variance ($C_{{\\mathrm{{alloc}}}} = 0$). Provisional `.gcso` / ZIMMS container benchmarks are cleanly isolated from the Core Health Score pending v1.0 PPRC video-stream memory integration."
+            f"**All Core Systems Nominal**: Hot-path RIPA LUT (`{ripa_range_str}` speedup), 32B..512B aligned SIMD kernels, lockstep Fused QK/QKV, Single Unified Attractor Manifold Swarm, Classical Online Toroidal $k$-Means / DP-Means & Coarse-to-Fine Routing, Bayes-Attention Pointer-Trail Rewiring, Procrustes closed-loop feedback, and SIMD CVoid reductions (`100+ GB/s`) operate strictly within $\\mathcal{{O}}(1)$ or $\\mathcal{{O}}(N)$ bounds with deterministic low variance ($C_{{\\mathrm{{alloc}}}} = 0$). Provisional `.gcso` storage container benchmarks are cleanly isolated from the Core Health Score pending v1.0 PPRC video-stream memory integration."
         )
 
     return recommendations
@@ -2469,7 +2469,7 @@ def generate_markdown_report(
             [
                 "## 🐝 Core Stigmergic Micro-Swarm, Toroidal k-Means, Unified-Field, Bayesian Pointer-Trail & Cohomology Diagnostics",
                 "",
-                "Evaluates 8-Cell SWAR Micro-Swarm quorum resolution, Single Unified Attractor Manifold Swarm steering, Classical Online Toroidal $k$-Means / DP-Means & Coarse-to-Fine Routing (8 candidates across 4 centroids), Bayes-Attention Pointer-Trail selection & Limina bridging (Hypothesis 1 × Hypothesis 2), 8-slot Attractor Bank lateral recruitment, $S^1$ geodesic Slerp steering, Procrustes closed-loop feedback, PSPM Sub-Head Pseudo-MoE (with non-unit per-group phase gains), 256-patch 2D/3D bitmask-gated Visual Co-Watching, metastable tunneling perturbation, and matrix-free Chebyshev sheaf cohomology:",
+                "Evaluates 8-Cell SWAR Micro-Swarm quorum resolution, Single Unified Attractor Manifold Swarm steering, Classical Online Toroidal $k$-Means / DP-Means & Coarse-to-Fine Routing (8 candidates across 4 centroids), Bayes-Attention Pointer-Trail selection & Limina bridging, 8-slot Attractor Bank lateral recruitment, $S^1$ geodesic Slerp steering, Procrustes closed-loop feedback, PSPM Sub-Head Pseudo-MoE (with non-unit per-group phase gains), 256-patch 2D/3D bitmask-gated Visual Co-Watching, metastable tunneling perturbation, and matrix-free Chebyshev sheaf cohomology:",
                 "",
                 "| Group | Core Stigmergic / Swarm / Routing Workload | Mean Latency | MAD (%) | CoV (%) | Throughput / Bandwidth | Architectural Guarantee |",
                 "|:------|:-------------------------------------------|-------------:|--------:|--------:|-----------------------:|:------------------------|",
