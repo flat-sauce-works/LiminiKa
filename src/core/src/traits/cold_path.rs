@@ -4211,7 +4211,7 @@ mod tests {
     }
 
     #[test]
-    fn test_l2p_svd_pprc_limina_replay_unified_field_and_edbc_tunneling() {
+    fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
         struct MockColdSystem;
         impl SystemCapabilityQuery for MockColdSystem {}
         impl L2pSvdProjector for MockColdSystem {}

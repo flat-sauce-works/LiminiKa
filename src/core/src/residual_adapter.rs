@@ -146,7 +146,7 @@ mod tests {
     impl VisualAttentionSteering for DummyRopeEngine {}
 
     #[test]
-    fn test_srl_engine_pod_and_persona_patch() {
+    fn test_residual_adapter_engine_pod_and_persona_patch() {
         let mut engine = ResidualAdapterEngine::default();
         assert_eq!(engine.validate(), Ok(()));
         assert_eq!(engine.apply_patch(b"LiminiKa-SRL-Patch"), Ok(()));
@@ -154,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pspm_srl_layer_skipper_and_visual_steering() {
+    fn test_subhead_routing_residual_layer_skipper_and_visual_steering() {
         let eng = DummyRopeEngine {
             head_dim: 12,
             num_heads: 8,

@@ -3797,7 +3797,7 @@ mod tests {
     }
 
     #[test]
-    fn test_edbc_engine_init_setters_and_reset() {
+    fn test_entropy_controller_init_setters_and_reset() {
         let mut engine = EntropyController::default();
         assert_eq!(engine.state().bifurcation_threshold, 1.5);
         assert_eq!(engine.state().singularity_eps, 1e-12);
@@ -4226,7 +4226,7 @@ mod tests {
     }
 
     #[test]
-    fn test_edbc_origin1_system_constraint_gateway_kmeans_and_gcso_crystallization() {
+    fn test_entropy_origin1_system_constraint_gateway_kmeans_and_gcso_crystallization() {
         let mut engine = EntropyController::default();
         assert_eq!(engine.active_swarm_cell_mask(), 0x0F);
         assert!(engine.requests_inertial_layer_skip());

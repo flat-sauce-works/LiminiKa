@@ -2308,7 +2308,7 @@ mod tests {
     }
 
     #[test]
-    fn test_runtime_context_capabilities_and_zimms() {
+    fn test_runtime_context_capabilities_and_mapped_storage() {
         let config = Config::new();
         let mut ctx = RuntimeContext::new(config).unwrap();
 

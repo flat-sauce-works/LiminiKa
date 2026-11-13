@@ -2515,7 +2515,7 @@ mod tests {
     use core::f32::consts::PI;
 
     #[test]
-    fn test_dpsr_engine_creation_aligned_dispatch_and_pod_layout() {
+    fn test_phase_steering_engine_creation_aligned_dispatch_and_pod_layout() {
         assert!(PhaseSteeringEngine::new(128, 32).is_ok());
         assert!(PhaseSteeringEngine::new(127, 32).is_err());
         assert!(PhaseSteeringEngine::new(0, 32).is_err());

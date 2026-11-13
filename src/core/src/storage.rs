@@ -1104,7 +1104,7 @@ mod tests {
     use crate::traits::CAUSAL_AXIS_SUBJECTIVE_PERSONA;
 
     #[test]
-    fn test_zimms_engine_dnp_and_pprc_gop_video_stream_seek() {
+    fn test_mapped_storage_engine_dnp_and_pprc_gop_video_stream_seek() {
         let engine = MappedStorageEngine::new(4096, 1);
         assert_eq!(engine.validate(), Ok(()));
 
