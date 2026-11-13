@@ -29,7 +29,9 @@ SESSION_STATE.md
 # -----------------------------------------------------------------------------
 # Rust Build Artifacts & Cargo
 # -----------------------------------------------------------------------------
-/target/
+target/
+**/target/
+examples/*/Cargo.lock
 **/*.rs.bk
 
 # Profiling, coverage, and benchmark outputs
@@ -43,9 +45,10 @@ cargo-timing*.html
 # -----------------------------------------------------------------------------
 # C / C++ / CUDA / GPU Kernel Build Artifacts
 # -----------------------------------------------------------------------------
-/build/
-/build*/
-/cmake-build-*/
+build/
+**/build/
+build-*/
+cmake-build-*/
 /bin/
 /lib/
 
@@ -58,6 +61,8 @@ cargo-timing*.html
 *.a
 *.lib
 *.exp
+*.pdb
+*.ilk
 *.exe
 
 # GPU Compiled Shaders & Kernels (CUDA / Metal / Vulkan)

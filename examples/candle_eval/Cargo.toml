@@ -1,0 +1,23 @@
+# name: examples/candle_eval/Cargo.toml
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "liminika-candle-eval"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace]
+
+[features]
+default = []
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
+
+[dependencies]
+candle-core = "0.8"
+candle-nn = "0.8"
+liminika-core = { path = "../../src/core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
