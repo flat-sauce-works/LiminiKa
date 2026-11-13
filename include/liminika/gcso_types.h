@@ -6,7 +6,7 @@
  * @brief C-ABI v0.1.1 POD types, bitmasks, status codes, and compile-time layout assertions.
  *
  * All struct sizes, alignments, and field offsets in this header are verified at compile time
- * via `GCSO_STATIC_ASSERT` to maintain 1:1 ABI parity with `src/core/src/abi.rs` and
+ * via `GCSO_STATIC_ASSERT` to maintain 1:1 ABI parity with `src/core/src/abi/` and
  * `src/core/src/traits/`.
  *
  * Legacy C-ABI v0.1.1 symbol prefixes (`dpsr`, `edbc`, `srl`, `zimms`) are preserved for binary
@@ -523,7 +523,7 @@ typedef struct gcso_pspm_router_opaque* gcso_pspm_router_handle_t;
 struct gcso_srl_adapter_opaque;
 typedef struct gcso_srl_adapter_opaque* gcso_srl_adapter_handle_t;
 
-/* Static Assertions for Size Invariants Matching src/core/src/abi.rs & traits/ */
+/* Static Assertions for Size Invariants Matching src/core/src/abi/ & traits/ */
 GCSO_STATIC_ASSERT(sizeof(gcso_status_t) == 4, "gcso_status_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_anchor_type_t) == 4, "gcso_anchor_type_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_q7_t) == 1, "gcso_q7_t size mismatch");
@@ -557,7 +557,7 @@ GCSO_STATIC_ASSERT(sizeof(gcso_crystallized_attractor_record_t) == 128,
 GCSO_STATIC_ASSERT(sizeof(gcso_contrastive_bloom_filter_t) == 64,
                    "gcso_contrastive_bloom_filter_t size mismatch");
 
-/* Static Assertions for Alignment Invariants Matching src/core/src/abi.rs & traits/ */
+/* Static Assertions for Alignment Invariants Matching src/core/src/abi/ & traits/ */
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_raw_buffer_t) == 16, "gcso_raw_buffer_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_paged_bitmask_t) == 32,
                    "gcso_paged_bitmask_t alignment mismatch");
@@ -590,7 +590,7 @@ GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_crystallized_attractor_record_t) == 64,
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_contrastive_bloom_filter_t) == 64,
                    "gcso_contrastive_bloom_filter_t alignment mismatch");
 
-/* Static Assertions for Exact Field Offsets Matching Rust abi.rs & traits/ */
+/* Static Assertions for Exact Field Offsets Matching Rust abi/ & traits/ */
 GCSO_STATIC_ASSERT(offsetof(gcso_descriptor_header_t, struct_size) == 0,
                    "gcso_descriptor_header_t::struct_size offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_descriptor_header_t, abi_version) == 4,

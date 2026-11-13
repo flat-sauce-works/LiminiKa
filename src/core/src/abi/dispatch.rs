@@ -136,7 +136,7 @@ impl RawPhaseProjectable for AbiF32EmbeddingRef<'_> {
     }
 }
 
-/// Private zero-copy borrowed [`ContrastivePhaseBloomFilter`] guard wrapper inside `abi.rs`
+/// Private zero-copy borrowed [`ContrastivePhaseBloomFilter`] guard wrapper inside `abi::dispatch`
 /// implementing [`CausalProvenanceSignal`], [`CognitiveGroundingSignal`], and
 /// [`ContradictionGuardSignal`] without colliding with blanket implementations on
 /// [`ContradictionGuard`] in `gateway.rs`. Note: `BranchlessKernel` is automatically

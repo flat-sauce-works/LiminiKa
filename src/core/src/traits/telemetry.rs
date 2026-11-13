@@ -517,7 +517,7 @@ pub(crate) struct MacroAlignedBayesianSelectionOutcome {
     pub(crate) qdps_done: bool,
 }
 
-#[inline(always)]
+#[cold]
 #[allow(clippy::too_many_arguments)]
 fn fallback_scan_unpruned_macro_candidates_cold(
     self_w: &[u64; NUM_SWARM_MICRO_CELLS],
@@ -4603,7 +4603,7 @@ impl gcso_pointer_trail_t {
         );
     }
 
-    #[inline(always)]
+    #[cold]
     fn recruit_slot_bank_stragglers_cold(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,

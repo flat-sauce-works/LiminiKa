@@ -6,7 +6,7 @@
  * @brief Public C-ABI v0.1.1 declarations for the LiminiKa Geometric Cellular Sheaf Orchestrator
  * (GCSO).
  *
- * This header defines the stable C11/C++20 FFI surface implemented by `src/core/src/abi.rs`.
+ * This header defines the stable C11/C++20 FFI surface implemented by `src/core/src/abi/`.
  * C-ABI v0.1.1 function prefixes are preserved for binary compatibility and map to the
  * refactored Rust core modules as follows:
  * - `gcso_dpsr_*`  -> `liminika_core::phase_steering` (`PhaseSteeringEngine`)
