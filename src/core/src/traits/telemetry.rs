@@ -316,7 +316,7 @@ fn eval_candidate_trail_words_with_macro_fast(
 }
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-#[inline(always)]
+#[inline]
 #[must_use]
 unsafe fn eval_candidate_trail_avx2_with_macro_fast(
     self_w: &[u64; 8],
@@ -1127,7 +1127,7 @@ const fn precompute_swarm_step_params(
 }
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-#[inline(always)]
+#[inline]
 #[must_use]
 unsafe fn avx2_subswarm_resolve_words_64(
     cur_w: &[u64; NUM_SWARM_MICRO_CELLS],
@@ -4482,7 +4482,7 @@ impl gcso_pointer_trail_t {
         )
     }
 
-    #[inline(always)]
+    #[cold]
     fn recruit_single_anchor_stragglers_cold(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,
@@ -4572,7 +4572,7 @@ impl gcso_pointer_trail_t {
         }
     }
 
-    #[inline(always)]
+    #[cold]
     fn recruit_multi_anchor_stragglers_cold(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,

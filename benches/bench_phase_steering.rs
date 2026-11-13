@@ -1539,7 +1539,7 @@ fn bench_phase_steering_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
         });
     });
 
-    // 2E. Limina Inter-Memory Bridging + Attention x DPSR Score Modulation
+    // 2E. Limina Inter-Memory Bridging + Attention x PhaseSteering Score Modulation
     group.bench_function(
         "liminal_trail_bridge_and_attention_score_modulate_64h",
         |b| {
@@ -2563,10 +2563,10 @@ fn bench_phase_steering_swarm_pspm_and_visual_cowatching(c: &mut Criterion) {
     group.finish();
 }
 
-/// Provisional `.gcso` / ZIMMS 4-Section Container Benchmarks (Isolated from Core DPSR Suite).
+/// Provisional `.gcso` / MappedStorage 4-Section Container Benchmarks (Isolated from Core PhaseSteering Suite).
 ///
 /// Evaluates pre-v1.0 `.gcso` record crystallization and 4-section zero-copy byte container mapping.
-/// Skipped by default under `run_benchmarks.py --profile standard` so Core `DPSR`/`EDBC` evaluations
+/// Skipped by default under `run_benchmarks.py --profile standard` so Core `PhaseSteering`/`EntropyControl` evaluations
 /// remain decoupled from the provisional container layout prior to v1.0 PPRC video-stream memory integration.
 fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
     if !should_run_provisional_gcso() {
@@ -2798,7 +2798,7 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
         },
     );
 
-    // 3. Provisional `.gcso` (ZIMMS) Zero-Copy Deserialization + Phase-Proximity Gravity Ensemble Gateway Steering
+    // 3. Provisional `.gcso` (MappedStorage) Zero-Copy Deserialization + Phase-Proximity Gravity Ensemble Gateway Steering
     group.bench_function(
         "zimms_zero_copy_crystallized_ensemble_gateway_steer_64h",
         |b| {
@@ -2937,7 +2937,7 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
         });
     });
 
-    // 5. Provisional 4-Section `.gcso` (ZIMMS) Zero-Copy Container Map + Register-Resident Ensemble Steering
+    // 5. Provisional 4-Section `.gcso` (MappedStorage) Zero-Copy Container Map + Register-Resident Ensemble Steering
     group.bench_function(
         "four_section_gcso_zero_copy_map_and_register_steer_64h",
         |b| {

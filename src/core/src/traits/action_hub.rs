@@ -561,7 +561,7 @@ pub trait ActionHub:
     ///
     /// # Errors
     /// Propagates any PSPM configuration error from `dispatch_fused_ripa_and_pspm_words_core`.
-    #[inline(always)]
+    #[inline]
     fn steer_qdps_pspm_words_prevalidated_core(
         &self,
         raw_words: &[u64; NUM_SWARM_MICRO_CELLS],

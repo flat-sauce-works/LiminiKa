@@ -1,5 +1,7 @@
-// src/dsl/src/lib.rs
+// name: src/dsl/src/lib.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Declarative DSL frontend crate for LiminiKa (staged for post-core integration).
 
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")

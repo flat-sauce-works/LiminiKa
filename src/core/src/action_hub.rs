@@ -547,7 +547,7 @@ impl StigmergicThresholds {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     #[allow(clippy::too_many_arguments)]
     fn execute_decision_steering_and_logit_scaling(
         decision: StigmergicActionDecision,

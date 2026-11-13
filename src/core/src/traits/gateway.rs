@@ -2129,8 +2129,6 @@ where
     let mut blended_w = [0u64; NUM_SWARM_MICRO_CELLS];
     let mut blended_uni = true;
     #[allow(unused_mut)]
-    let mut avx_post_applied = false;
-    #[allow(unused_mut)]
     let mut avx_precomputed_tag: Option<gcso_q7_t> = None;
     let mut eff_energy = 0.0_f32;
     let mut raw_clamp = DEFAULT_PERSONA_RIPA_CLAMP_RAD;
@@ -2247,7 +2245,7 @@ where
     }
 
     let norm_ripa_clamp = {
-        if !avx_post_applied && raw_clamp < DEFAULT_FACT_RIPA_CLAMP_RAD {
+        if raw_clamp < DEFAULT_FACT_RIPA_CLAMP_RAD {
             let auth_ratio = branchless_clamp_f32(raw_clamp * INV_FACT_RIPA_CLAMP_RAD, 0.10, 1.0);
             let auth_u64 = ((auth_ratio * 128.0 + 0.5) as u8).min(128) as u64;
             if auth_u64 < 128 {
@@ -2275,7 +2273,7 @@ where
         DEFAULT_RIPA_CLAMP_MAX_RAD
     };
 
-    if !avx_post_applied && qdps_step_u8 > 1 {
+    if qdps_step_u8 > 1 {
         let (fw, fu) = swar_q7_qdps_filter_words_with_uniform_flag_64(
             &blended_w,
             blended_uni,

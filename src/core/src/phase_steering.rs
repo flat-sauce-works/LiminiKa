@@ -351,7 +351,7 @@ fn steer_gateway_signal_core_safe<
 /// Register-resident Fine-Step candidate scanner, fallback scanner, Limina geodesic SLERP bridger,
 /// and QDPS/RIPA steerer shared by [`PhaseSteeringClosedLoop::route_coarse_to_fine_and_steer_bayesian_trails_safe`]
 /// and [`PhaseSteeringClosedLoop::route_top2_liminal_and_steer_bayesian_trails_safe`].
-#[inline(always)]
+#[inline]
 #[allow(clippy::too_many_arguments)]
 fn route_macro_aligned_bayesian_trails_and_steer_core(
     self_w: [u64; NUM_SWARM_MICRO_CELLS],
@@ -1047,7 +1047,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `num_heads > MAX_ATTENTION_HEADS`,
     /// `min_step_rad < 0.0`, `max_rad <= 0.0`, or tensor lengths are insufficient.
-    #[inline(always)]
+    #[inline]
     fn steer_trail_with_procrustes_feedback(
         &self,
         trail: &mut gcso_pointer_trail_t,

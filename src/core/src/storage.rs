@@ -625,7 +625,7 @@ impl<'a> GcsoFourSectionView<'a> {
         Ok(has_daes)
     }
 
-    #[inline(always)]
+    #[inline]
     #[must_use]
     fn compute_container_crc32_with_stamped_crystals(
         buf: &[u8],

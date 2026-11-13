@@ -967,7 +967,7 @@ impl CrystallizedAttractorRecord {
         (grav, coh)
     }
 
-    #[inline(always)]
+    #[inline]
     #[must_use]
     pub(crate) fn find_nearest_toroidal_centroid_with_cache_64(
         centroids: &[Self],

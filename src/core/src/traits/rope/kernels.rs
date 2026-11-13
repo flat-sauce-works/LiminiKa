@@ -1230,7 +1230,7 @@ pub(super) fn apply_phase_steering_slice_with_sincos(
 /// Rotates `q_slice` and `k_slice` in lockstep across `num_heads` heads using pre-unpacked
 /// `sincos_heads`, sharing 1 `(vc, vs)` broadcast per head across both Q and K via
 /// `avx2_rotate_so2_pair_block32` (`0` 4KB page-offset aliasing stalls, `50%` fewer broadcasts).
-#[inline(always)]
+#[inline]
 pub(super) fn apply_phase_steering_pair_slice_with_sincos(
     q_slice: &mut [f32],
     k_slice: &mut [f32],
@@ -2039,7 +2039,7 @@ pub(super) fn apply_ripa_pair_slice_core(
     apply_ripa_single_slice_core(k_slice, p_slice, head_dim, num_heads, fold_geodesic, max_rad);
 }
 
-#[inline(always)]
+#[inline]
 pub(crate) fn steer_ripa_single_cell_from_word_core(
     t_slice: &mut [f32],
     raw_word: u64,

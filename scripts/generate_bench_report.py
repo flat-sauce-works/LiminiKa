@@ -654,7 +654,7 @@ def analyze_long_horizon_and_edge_bottlenecks(
     diagnostics: list[dict[str, Any]] = []
     by_name = {b["name"].lower(): b for b in benchmarks}
 
-    # 1. EDBC Long-Horizon Stream Drift (seq_1000 vs 1M tokens with outlier spikes)
+    # 1. EntropyControl Long-Horizon Stream Drift (seq_1000 vs 1M tokens with outlier spikes)
     s_1k = by_name.get("simulate_token_stream_seq_1000")
     s_1m = by_name.get("simulate_ultra_long_stream_1m") or by_name.get(
         "simulate_ultra_long_stream_500k"
@@ -665,7 +665,7 @@ def analyze_long_horizon_and_edge_bottlenecks(
         drift_ratio = t_long / t_short if t_short > 0.0 else 1.0
         diagnostics.append(
             {
-                "domain": "EDBC Long-Horizon Stream Drift (1K → 1M Tokens)",
+                "domain": "EntropyControl Long-Horizon Stream Drift (1K → 1M Tokens)",
                 "baseline_metric": f"{format_time(t_short)}/tok (1K)",
                 "extreme_metric": f"{format_time(t_long)}/tok (1M + Spikes)",
                 "ratio": drift_ratio,
@@ -758,8 +758,8 @@ def analyze_long_horizon_and_edge_bottlenecks(
         edbc_km_ratio = c2f_edbc["mean_ns"] / km_edbc["mean_ns"]
         diagnostics.append(
             {
-                "domain": "EDBC Toroidal k-Means Gateway vs Coarse-to-Fine Bayesian Tunneling (4 Centroids, 8 Candidates)",
-                "baseline_metric": f"{km_edbc['mean_formatted']} (Toroidal k-Means + EDBC)",
+                "domain": "EntropyControl Toroidal k-Means Gateway vs Coarse-to-Fine Bayesian Tunneling (4 Centroids, 8 Candidates)",
+                "baseline_metric": f"{km_edbc['mean_formatted']} (Toroidal k-Means + EntropyControl)",
                 "extreme_metric": f"{c2f_edbc['mean_formatted']} (Coarse-to-Fine + Bayes Tunneling)",
                 "ratio": edbc_km_ratio,
                 "status": f"🎯 $\\mathcal{{O}}(K + M_{{\\mathrm{{local}}}})$ Macro-to-Micro Closed Loop Active ({km_edbc['mean_formatted']})",
@@ -784,9 +784,9 @@ def analyze_long_horizon_and_edge_bottlenecks(
     if t2_edbc and mp_dpsr and mp_dpsr["mean_ns"] > 0.0:
         diagnostics.append(
             {
-                "domain": "Online Toroidal Centroid Consolidation (8 Centroids) & EDBC Top-2 Liminal Tunneling",
+                "domain": "Online Toroidal Centroid Consolidation (8 Centroids) & EntropyControl Top-2 Liminal Tunneling",
                 "baseline_metric": f"{mp_dpsr['mean_formatted']} (8-Centroid Merge & Prune)",
-                "extreme_metric": f"{t2_edbc['mean_formatted']} (EDBC Top-2 Liminal Tunneling)",
+                "extreme_metric": f"{t2_edbc['mean_formatted']} (EntropyControl Top-2 Liminal Tunneling)",
                 "ratio": t2_edbc["mean_ns"] / mp_dpsr["mean_ns"],
                 "status": f"🪐 Autonomous Basin Merge ({format_time(mp_dpsr['mean_ns'] / 8.0)}/centroid)",
             }
@@ -910,7 +910,7 @@ def analyze_long_horizon_and_edge_bottlenecks(
 def analyze_provisional_gcso_diagnostics(
     benchmarks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Diagnose provisional `.gcso` / ZIMMS container serialization & mapping workloads (isolated from Core DPSR/EDBC Health Score)."""
+    """Diagnose provisional `.gcso` / MappedStorage container serialization & mapping workloads (isolated from Core PhaseSteering/EntropyControl Health Score)."""
     diagnostics: list[dict[str, Any]] = []
     by_name = {b["name"].lower(): b for b in benchmarks}
 
@@ -929,9 +929,9 @@ def analyze_provisional_gcso_diagnostics(
         combined_gw_ns = gw_dpsr["mean_ns"] + gw_edbc["mean_ns"]
         diagnostics.append(
             {
-                "domain": "[Provisional .gcso] 2-Origin Gateway + .gcso Crystallization (EDBC + DPSR)",
-                "baseline_metric": f"{gw_edbc['mean_formatted']} (EDBC Gateway + Crystal)",
-                "extreme_metric": f"{gw_dpsr['mean_formatted']} (DPSR/PSPM + Crystal)",
+                "domain": "[Provisional .gcso] 2-Origin Gateway + .gcso Crystallization (EntropyControl + PhaseSteering)",
+                "baseline_metric": f"{gw_edbc['mean_formatted']} (EntropyControl Gateway + Crystal)",
+                "extreme_metric": f"{gw_dpsr['mean_formatted']} (PhaseSteering/Subhead + Crystal)",
                 "ratio": gw_dpsr["mean_ns"] / max(gw_edbc["mean_ns"], 1e-9),
                 "status": f"🧪 Provisional Crystal in {format_time(combined_gw_ns)} ($C_{{\\mathrm{{alloc}}}} = 0$)",
             }
@@ -964,7 +964,7 @@ def analyze_provisional_gcso_diagnostics(
         crc_overhead_ns = max(0.0, zc_edbc["mean_ns"] - mem_edbc["mean_ns"])
         diagnostics.append(
             {
-                "domain": "[Provisional .gcso] ZIMMS Zero-Copy Load + CRC32 + Gravity Fold (4 Records)",
+                "domain": "[Provisional .gcso] MappedStorage Zero-Copy Load + CRC32 + Gravity Fold (4 Records)",
                 "baseline_metric": f"{mem_edbc['mean_formatted']} (In-Memory 4 Records)",
                 "extreme_metric": f"{zc_edbc['mean_formatted']} (+{format_time(crc_overhead_ns)} CRC32/Zero-Copy)",
                 "ratio": zc_ratio,
@@ -986,7 +986,7 @@ def analyze_provisional_gcso_diagnostics(
         diagnostics.append(
             {
                 "domain": "[Provisional .gcso] 4-Section Container Zero-Copy Write/Verify + Steer",
-                "baseline_metric": f"{fs_edbc['mean_formatted']} (Write + CRC32 Verify + EDBC Step)",
+                "baseline_metric": f"{fs_edbc['mean_formatted']} (Write + CRC32 Verify + EntropyControl Step)",
                 "extreme_metric": f"{fs_dpsr['mean_formatted']} (Zero-Copy Map + Register Steer)",
                 "ratio": fs_dpsr["mean_ns"] / max(fs_edbc["mean_ns"], 1e-9),
                 "status": "🧪 Pre-v1.0 4-Section Container Spec (Pending PPRC Video-Stream Spec)",
@@ -1283,7 +1283,7 @@ def calculate_health_index(
     bottlenecks_count: int,
     dialogue_score: float,
 ) -> tuple[str, float, dict[str, float]]:
-    """Calculate Core GCSO (`DPSR` + `EDBC`) System Benchmark Health Score and return its exact mathematical penalty breakdown."""
+    """Calculate Core GCSO (`PhaseSteering` + `EntropyControl`) System Benchmark Health Score and return its exact mathematical penalty breakdown."""
     if not core_benchmarks:
         return (
             "N/A",
@@ -1351,7 +1351,7 @@ def calculate_health_index(
 def analyze_sidecar_overhead_budget(
     benchmarks: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Quantify LiminiKa (`DPSR` + `EDBC`) as a non-invasive LLM sidecar against a 15.0 ms host LLM token decode budget, a 16.67 ms (60 FPS) AAA game frame budget, and L1d/L2 memory bandwidth rooflines."""
+    """Quantify LiminiKa (`PhaseSteering` + `EntropyControl`) as a non-invasive LLM sidecar against a 15.0 ms host LLM token decode budget, a 16.67 ms (60 FPS) AAA game frame budget, and L1d/L2 memory bandwidth rooflines."""
     by_name = {b["name"].lower(): b for b in benchmarks}
     llm_token_budget_ns = 15_000_000.0  # 15.0 ms typical 7B/8B local LLM 1-token decode
     game_frame_60fps_ns = 16_666_666.67  # 16.67 ms (60 FPS frame budget)
@@ -1359,7 +1359,7 @@ def analyze_sidecar_overhead_budget(
         48_000_000_000.0  # 48 GB/s practical single-core L1d/L2 read+write ceiling
     )
 
-    # Representative EDBC per-token hooks (executed 1x per generated token)
+    # Representative EntropyControl per-token hooks (executed 1x per generated token)
     edbc_stateful = (
         by_name.get("eval_stateful_normal_mode")
         or by_name.get("eval_stateful")
@@ -1371,7 +1371,7 @@ def analyze_sidecar_overhead_budget(
         or by_name.get("step_with_bayesian_pointer_selection_and_tunneling_64h")
     )
 
-    # Representative DPSR per-layer hooks (executed 1x per Transformer layer on Q/K tensors)
+    # Representative PhaseSteering per-layer hooks (executed 1x per Transformer layer on Q/K tensors)
     dpsr_ripa_layer = by_name.get(
         "apply_phase_steering_safe_ripa_128x32"
     ) or by_name.get("apply_phase_steering_32b_128x32")
@@ -1426,35 +1426,35 @@ def analyze_sidecar_overhead_budget(
         return eff_ns
 
     add_row(
-        "1. EDBC Minimal Entropy Gate (`eval_stateful`)",
+        "1. EntropyControl Minimal Entropy Gate (`eval_stateful`)",
         "1× / token (Logit Hook)",
         edbc_stateful,
         1.0,
         "O(1) Moving Z-Score & Hysteresis Gate",
     )
     edbc_full_ns = add_row(
-        "2. EDBC Full Closed-Loop Hook (Gateway + Macro k-Means + Bayes Tunneling)",
+        "2. EntropyControl Full Closed-Loop Hook (Gateway + Macro k-Means + Bayes Tunneling)",
         "1× / token (Sampling Boundary)",
         edbc_closed_loop,
         1.0,
         "O(K + M_local) Coarse-to-Fine + Cohomology",
     )
     add_row(
-        "3. DPSR Single-Layer RIPA RoPE Hook (`128x32` Q Tensor)",
+        "3. PhaseSteering Single-Layer RIPA RoPE Hook (`128x32` Q Tensor)",
         "1× / layer (Attention Hook)",
         dpsr_ripa_layer,
         1.0,
         "In-Place 256-Entry LUT RoPE Rotation",
     )
     dpsr_qk_ns = add_row(
-        "4. DPSR Single-Layer Geodesic Fused QK Hook (`128x32` Q+K)",
+        "4. PhaseSteering Single-Layer Geodesic Fused QK Hook (`128x32` Q+K)",
         "1× / layer (Attention Q+K Hook)",
         dpsr_fused_qk_layer or dpsr_ripa_layer,
         1.0,
         "Lockstep 2-Tensor Q+K In-Place Rotation",
     )
     add_row(
-        "5. DPSR Macro-to-Micro Trail Route + RIPA Steer (64H)",
+        "5. PhaseSteering Macro-to-Micro Trail Route + RIPA Steer (64H)",
         "1× / token or block",
         dpsr_closed_loop,
         1.0,
@@ -1581,7 +1581,7 @@ def resolve_swarm_stigmergy_badge(name: str) -> str:
     if "four_section_gcso" in lower:
         return "🧪 [Provisional] 4-Section .gcso View"
     if "zimms_zero_copy" in lower or "crystalliz" in lower:
-        return "🧪 [Provisional] .gcso ZIMMS Crystal"
+        return "🧪 [Provisional] .gcso MappedStorage Crystal"
     if "merge_and_prune" in lower:
         return "🪐 Online Centroid Consolidation"
     if "top2_liminal" in lower:
@@ -1804,7 +1804,7 @@ def ensure_criterion_html_index(
         s32_pct = (
             f"{sidecar_budget['total_32l_llm_pct']:.4f}% of 15ms LLM"
             if sidecar_budget and sidecar_budget.get("total_32l_ns", 0.0) > 0.0
-            else "1x EDBC + 32x DPSR"
+            else "1x EntropyControl + 32x PhaseSteering"
         )
         s16_fmt = (
             sidecar_budget["total_16l_skip_formatted"]
@@ -1823,7 +1823,7 @@ def ensure_criterion_html_index(
 </head>
 <body>
 <h1>🚀 LiminiKa GCSO Criterion Benchmark Index</h1>
-<p class="meta">Generated on <code>{html.escape(utc_now)}</code> | Non-Invasive <code>#![no_std]</code> Zero-Allocation LLM Sidecar (<code>DPSR</code> + <code>EDBC</code>)</p>
+<p class="meta">Generated on <code>{html.escape(utc_now)}</code> | Non-Invasive <code>#![no_std]</code> Zero-Allocation LLM Sidecar (<code>PhaseSteering</code> + <code>EntropyControl</code>)</p>
 <div class="kpi-grid">
   <div class="kpi-card"><div class="kpi-label">Core Health Score</div><div class="kpi-value">{health_score:.1f} / 100.0</div><div class="kpi-sub">{html.escape(health_grade)}</div></div>
   <div class="kpi-card"><div class="kpi-label">32-Layer Token Sidecar</div><div class="kpi-value">{html.escape(s32_fmt)}</div><div class="kpi-sub">{html.escape(s32_pct)}</div></div>
@@ -2021,13 +2021,13 @@ def _render_sidecar_budget_section(sidecar_budget: dict[str, Any]) -> list[str]:
         "",
         "### 🔌 End-to-End Sidecar Overhead Budget (vs. Host LLM Decode & 60 FPS Game Frame)",
         "",
-        "Because LiminiKa (`GCSO`) operates as an external C-ABI sidecar rather than a standalone neural network, its total runtime cost per generated token is the sum of its **per-token control hook (`EDBC`, 1×)** and **per-layer RoPE phase steering hook (`DPSR`, $N_{\\text{layers}}$×)**. To contextualize absolute cost, latencies are compared against **(a) a `15.0 ms` (`15,000,000 ns`) typical 7B/8B local LLM 1-token decode**, **(b) a `16.67 ms` (`16,666,667 ns`) 60 FPS game frame budget**, and **(c) a `48 GB/s` single-core L1d/L2 memory bandwidth roofline**:",
+        "Because LiminiKa (`GCSO`) operates as an external C-ABI sidecar rather than a standalone neural network, its total runtime cost per generated token is the sum of its **per-token control hook (`EntropyControl`, 1×)** and **per-layer RoPE phase steering hook (`PhaseSteering`, $N_{\\text{layers}}$×)**. To contextualize absolute cost, latencies are compared against **(a) a `15.0 ms` (`15,000,000 ns`) typical 7B/8B local LLM 1-token decode**, **(b) a `16.67 ms` (`16,666,667 ns`) 60 FPS game frame budget**, and **(c) a `48 GB/s` single-core L1d/L2 memory bandwidth roofline**:",
         "",
         "| Component | Owner | Responsibility | Invocation Cadence |",
         "|:----------|:------|:---------------|:-------------------|",
         "| **Host LLM Engine** (`llama.cpp`, `Candle`, etc.) | Host Process (2–4 GB VRAM) | Quantized transformer weights, MatMul, KV-cache storage, and token sampling | Base decode (`~15.0 ms / token`) |",
-        "| **LiminiKa `EDBC` Sidecar Hook** | `liminika-core` (CPU / RAM) | Entropy monitoring, 2-Origin Gateway synthesis, Toroidal $k$-Means, and pointer rewiring | **1× per token** (Sampling boundary) |",
-        "| **LiminiKa `DPSR` Sidecar Hook** | `liminika-core` (CPU / SIMD) | In-place $SO(2)$ RIPA / QDPS / PSPM phase rotation on $Q, K$ rotary embeddings | **1× per active Transformer layer** |",
+        "| **LiminiKa `EntropyControl` Sidecar Hook** | `liminika-core` (CPU / RAM) | Entropy monitoring, 2-Origin Gateway synthesis, Toroidal $k$-Means, and pointer rewiring | **1× per token** (Sampling boundary) |",
+        "| **LiminiKa `PhaseSteering` Sidecar Hook** | `liminika-core` (CPU / SIMD) | In-place $SO(2)$ RIPA / QDPS / Subhead phase rotation on $Q, K$ rotary embeddings | **1× per active Transformer layer** |",
         "",
         f"- **Sidecar Overhead Target Status**: {grad_badge}",
         "",
@@ -2397,7 +2397,7 @@ def generate_markdown_report(
         scope_label = (
             "🧪 Provisional `.gcso`"
             if "provisional_gcso" in group_name.lower()
-            else "🎯 Core (`DPSR`/`EDBC`)"
+            else "🎯 Core (`PhaseSteering`/`EntropyControl`)"
         )
         md_lines.append(
             f"| `{group_name}` | {scope_label} | `{len(b_list)}` | `{g_fastest['name']}` (**{g_fastest['mean_formatted']}**) | [`{group_name}/report/index.html`]({rel_g_html}) |"

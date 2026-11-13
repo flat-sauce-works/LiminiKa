@@ -159,7 +159,7 @@ pub(super) fn dispatch_subhead_profiles_core(
 /// Assembles the 8 effective `u64` SWAR PSPM phase words across `[0..total_heads]` from three
 /// 8-word arrays (`fact_w`, `logic_w`, `explore_w`), evaluating `compute_pspm_eff_word_x8` only
 /// on the cells actually spanned by each subgroup (`8` word transforms total for aligned splits).
-#[inline(always)]
+#[inline]
 #[must_use]
 pub(super) const fn build_pspm_eff_words_64(
     fact_w: &[u64; NUM_SWARM_CELLS],
@@ -274,7 +274,7 @@ pub(super) const fn build_pspm_eff_words_64(
 /// Loads only the active 8-byte SWAR cells from `fact_phases`, `logic_phases`, and `explore_phases`
 /// (`8` `u64` loads total instead of `24` `u64` loads across three full 64-byte arrays) and applies
 /// `compute_pspm_eff_word_x8` in registers.
-#[inline(always)]
+#[inline]
 #[must_use]
 pub(super) fn build_pspm_eff_words_from_profiles_64(
     fact_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],

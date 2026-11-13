@@ -376,7 +376,7 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
         });
     });
 
-    // 3. Fused Top-2 Surrogate + Moving Z-Score + Stateful EDBC Step
+    // 3. Fused Top-2 Surrogate + Moving Z-Score + Stateful EntropyControl Step
     group.bench_function("eval_surrogate_and_step_fused", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         let mut engine = EntropyController::default();
@@ -769,7 +769,7 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     group.warm_up_time(Duration::from_millis(450));
     group.measurement_time(Duration::from_millis(1350));
 
-    // 1. Pointer-Coupled EDBC Step + Eyring-Kramers Temperature + Stigmergic Mode Evolution
+    // 1. Pointer-Coupled EntropyControl Step + Eyring-Kramers Temperature + Stigmergic Mode Evolution
     group.throughput(Throughput::Elements(1));
     group.bench_function("eval_stateful_with_cvoid_and_pointer_evolution", |b| {
         let mut base_engine = EntropyController::default().with_min_mode_dwell_steps(3);
@@ -865,7 +865,7 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         });
     });
 
-    // 3A. Blanket Coordinator: Single Unified Attractor Manifold Folding + EDBC Pointer Evolution
+    // 3A. Blanket Coordinator: Single Unified Attractor Manifold Folding + EntropyControl Pointer Evolution
     group.throughput(Throughput::Elements(1));
     group.bench_function("step_with_unified_field_and_pointer_64h", |b| {
         let base_engine = EntropyController::default();
@@ -1149,7 +1149,7 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         },
     );
 
-    // 3D. Blanket Coordinator: Zero-Copy Candidate-Trail Bayes-Attention Score Modulation with EDBC Temperature
+    // 3D. Blanket Coordinator: Zero-Copy Candidate-Trail Bayes-Attention Score Modulation with EntropyControl Temperature
     group.throughput(Throughput::Elements(8));
     group.bench_function(
         "modulate_candidate_trails_with_edbc_temperature_8cand",
@@ -1228,7 +1228,7 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         },
     );
 
-    // 3E. Online Toroidal k-Means / DP-Means E+M Step + EDBC Gateway Coordinator (4 Centroids)
+    // 3E. Online Toroidal k-Means / DP-Means E+M Step + EntropyControl Gateway Coordinator (4 Centroids)
     group.throughput(Throughput::Elements(4));
     group.bench_function(
         "toroidal_kmeans_dp_means_and_edbc_gateway_step_4centroids",
@@ -1871,7 +1871,7 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         });
     });
 
-    // 7B. Blanket Coordinator: 256-Bit Dyadic Tree QDPT Resolution + Coupled EDBC Step
+    // 7B. Blanket Coordinator: 256-Bit Dyadic Tree QDPT Resolution + Coupled EntropyControl Step
     group.throughput(Throughput::Elements(1));
     group.bench_function("resolve_dyadic_tree_and_step_edbc_closed_loop", |b| {
         let base_engine = EntropyController::default();
@@ -1945,11 +1945,11 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     group.finish();
 }
 
-/// Provisional `.gcso` / ZIMMS 4-Section Container Benchmarks (Isolated from Core EDBC Suite).
+/// Provisional `.gcso` / MappedStorage 4-Section Container Benchmarks (Isolated from Core EntropyControl Suite).
 ///
 /// Evaluates pre-v1.0 `.gcso` record crystallization, 4-axis provenance records, and 4-section
 /// zero-copy byte container verification. Skipped by default under `run_benchmarks.py --profile standard`
-/// so Core `DPSR`/`EDBC` evaluations remain decoupled from the provisional container layout.
+/// so Core `PhaseSteering`/`EntropyControl` evaluations remain decoupled from the provisional container layout.
 fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
     if !should_run_provisional_gcso() {
         return;
@@ -2126,7 +2126,7 @@ fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
         },
     );
 
-    // 3. Provisional `.gcso` CrystallizedAttractorRecord Ensemble Gravity Folding + EDBC Step
+    // 3. Provisional `.gcso` CrystallizedAttractorRecord Ensemble Gravity Folding + EntropyControl Step
     group.throughput(Throughput::Elements(4));
     group.bench_function("step_crystallized_ensemble_gravity_fold_4records", |b| {
         let base_engine = EntropyController::default();
@@ -2180,7 +2180,7 @@ fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
         });
     });
 
-    // 4. Provisional `.gcso` (ZIMMS) Zero-Copy Deserialization + Crystallized Ensemble Gravity Folding EDBC Step
+    // 4. Provisional `.gcso` (MappedStorage) Zero-Copy Deserialization + Crystallized Ensemble Gravity Folding EntropyControl Step
     group.throughput(Throughput::Elements(4));
     group.bench_function("zimms_zero_copy_crystallized_ensemble_step_4records", |b| {
         let base_engine = EntropyController::default();

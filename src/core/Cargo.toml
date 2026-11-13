@@ -54,3 +54,11 @@ path = "../../benches/bench_phase_steering.rs"
 name = "bench_entropy_control"
 harness = false
 path = "../../benches/bench_entropy_control.rs"
+
+[[test]]
+name = "test_zero_alloc"
+path = "../../tests/core/test_zero_alloc.rs"
+
+[[test]]
+name = "test_abi_layout"
+path = "../../tests/ffi/test_abi_layout.rs"

@@ -2220,7 +2220,7 @@ unsafe fn avx2_mean_sincos_from_words_64(w: &[u64; 8]) -> (f32, f32) {
 }
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-#[inline(always)]
+#[inline]
 unsafe fn avx2_mean_sincos_from_vec64(
     v0: core::arch::x86_64::__m256i,
     v1: core::arch::x86_64::__m256i,
@@ -4230,7 +4230,7 @@ pub(crate) fn clamp_angles_ripa_in_place_simd8(angles: &mut [f32], max_rad: f32)
 
 /// Evaluates a 3rd-order Chebyshev Polynomial Spectral Filter $\sum_{k=0}^3 c_k T_k(\tilde{\lambda})$
 /// across `eigenvalues_in` into `filtered_out` using 32-float (4-YMM) unrolled AVX2 Horner evaluation.
-#[inline(always)]
+#[inline]
 pub(crate) fn chebyshev_deg3_filter_slice_simd8(
     eigenvalues_in: &[f32],
     filtered_out: &mut [f32],
@@ -5513,7 +5513,7 @@ pub(crate) fn dot_and_norms_f32_unrolled4(a: &[f32], b: &[f32]) -> (f32, f32, f3
 /// Computes $(\|\mathbf{r} - \mathbf{p}\|_2^2, \langle \mathbf{r} - \mathbf{p}, \boldsymbol{\gamma} \rangle, \|\boldsymbol{\gamma}\|_2^2)$
 /// in a single fused AVX2 memory pass while keeping peak live YMM usage `<= 5`
 /// (`0` Windows x64 `xmm6..xmm15` stack saves/restores).
-#[inline(always)]
+#[inline]
 #[must_use]
 pub(crate) fn hodge_obstruction_and_dual_pairing_f32(
     r_slice: &[f32],

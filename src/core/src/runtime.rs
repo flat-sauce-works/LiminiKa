@@ -584,29 +584,6 @@ impl RuntimeContext {
         self.action_hub.slot_phase_bank.relax_slice_mut::<16>()
     }
 
-    /// Returns an immutable reference to the 64-byte (`8 x u64`) aligned word view of slot `slot_idx`.
-    #[allow(dead_code)]
-    #[inline(always)]
-    fn slot_words_ref(
-        &self,
-        slot_idx: usize,
-    ) -> Result<&[u64; crate::traits::NUM_SWARM_MICRO_CELLS]> {
-        if slot_idx >= MAX_ATTRACTOR_DOMAINS {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        // SAFETY: `self.action_hub.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
-        // 64-byte slot at byte offset `slot_idx * 64` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
-        Ok(unsafe {
-            &*(self
-                .action_hub
-                .slot_phase_bank
-                .as_slice()
-                .as_ptr()
-                .add(slot_idx * MAX_ATTENTION_HEADS)
-                as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
-        })
-    }
-
     /// Returns a mutable reference to the 64-byte (`8 x u64`) aligned word view of slot `slot_idx`.
     #[inline(always)]
     fn slot_words_mut(

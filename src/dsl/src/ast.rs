@@ -1,4 +1,4 @@
-// src/dsl/src/ast.rs
+// name: src/dsl/src/ast.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Abstract Syntax Tree (AST) definitions for LiminiKa DSL declarative specifications.
@@ -53,7 +53,7 @@ pub struct RepelRule {
     pub weight: f32,
 }
 
-/// PSPM Sub-head style routing specification.
+/// Subhead style routing specification.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StyleAdapterSpec {
     pub adapter_path: String,
@@ -70,7 +70,7 @@ pub struct MemorySpec {
     pub protected_fact_keys: Vec<String>,
 }
 
-/// Runtime dynamics and EDBC event engine session.
+/// Runtime dynamics and EntropyControl event engine session.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SessionDecl {
     pub name: String,
@@ -80,7 +80,7 @@ pub struct SessionDecl {
     pub event_rules: Vec<EventRule>,
 }
 
-/// Reactive EDBC event trigger rule.
+/// Reactive EntropyControl event trigger rule.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EventRule {
     pub condition: EventCondition,
@@ -95,7 +95,7 @@ pub enum EventCondition {
     EntropySpike,
 }
 
-/// Topological phase steering action triggered by EDBC.
+/// Topological phase steering action triggered by EntropyControl.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EventAction {
     BoostPhase(f32),

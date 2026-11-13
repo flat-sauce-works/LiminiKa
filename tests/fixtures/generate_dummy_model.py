@@ -19,7 +19,7 @@ DEFAULT_OUTPUT_PATH = SCRIPT_DIR / "dummy_weights.bin"
 def generate_dummy_raw_tensors(output_path: Path = DEFAULT_OUTPUT_PATH):
     """Generates flat raw binary tensor data for kernel benchmarks and SIMD alignment testing.
 
-    Guarantees strict 32-byte SIMD cacheline alignment for zero-copy ZIMMS mmap testing.
+    Guarantees strict 32-byte SIMD cacheline alignment for zero-copy MappedStorage mmap testing.
     """
     output_path = Path(output_path)
     os.makedirs(output_path.parent, exist_ok=True)

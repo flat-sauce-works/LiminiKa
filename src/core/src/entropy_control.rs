@@ -859,7 +859,7 @@ fn bridge_and_eval_liminal_trail_chain_single_pass(
 /// registers so the transition log-probability $\ln P(M_{j^*} \mid M_t)$ is computed with
 /// **zero redundant 64-head coherence reloads**, and directly incorporates `macro_anchor_id`
 /// cluster matching in a single pass.
-#[inline(always)]
+#[inline]
 #[allow(clippy::too_many_arguments)]
 fn select_rewire_bridge_and_eval_log_prob_in_registers(
     src_trail: &mut gcso_pointer_trail_t,
@@ -1918,7 +1918,7 @@ pub trait EntropyClosedLoopCoordinator:
     ///
     /// # Errors
     /// Propagates any validation or singularity error from [`Self::step_with_bayesian_pointer_selection_and_tunneling`].
-    #[inline(always)]
+    #[inline]
     fn route_coarse_to_fine_and_step_bayesian_tunneling(
         &mut self,
         macro_centroids: &[CrystallizedAttractorRecord],
@@ -2044,7 +2044,7 @@ pub trait EntropyClosedLoopCoordinator:
     ///
     /// # Errors
     /// Propagates any validation or singularity error from [`Self::route_coarse_to_fine_and_step_bayesian_tunneling`].
-    #[inline(always)]
+    #[inline]
     fn route_top2_liminal_and_step_bayesian_tunneling(
         &mut self,
         macro_centroids: &[CrystallizedAttractorRecord],

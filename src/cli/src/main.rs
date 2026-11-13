@@ -1,3 +1,4 @@
+// name: src/cli/src/main.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
