@@ -9,9 +9,11 @@
 
 use liminika_core::abi::{gcso_daes_slot_t, gcso_edbc_state_t, gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::action_hub::{ActionHubEngine, StigmergicActionDecision, StigmergicThresholds};
+use liminika_core::crystal::CrystallizedAttractorRecord;
 use liminika_core::entropy_control::EntropyController;
 use liminika_core::phase_steering::PhaseSteeringEngine;
 use liminika_core::residual_adapter::ResidualAdapterEngine;
+use liminika_core::storage::GcsoFourSectionView;
 use liminika_core::traits::aligned::{
     AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32,
 };
@@ -20,7 +22,9 @@ use liminika_core::traits::gateway::{
     GatewayPhaseSteeringExt, GatewaySrlSteeringExt, ManifoldGatewaySignal, ManifoldProbeBaseline,
     ObjectiveFact, StigmergicThresholdPolicy, SubjectivePersona, SystemConstraint,
 };
-use liminika_core::traits::primitives::MAX_ATTENTION_HEADS;
+use liminika_core::traits::primitives::{
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, MAX_ATTENTION_HEADS,
+};
 use liminika_core::traits::rope::{
     PhaseSteeringGeometryExt, RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget,
 };
@@ -1577,6 +1581,590 @@ impl TextAttractorCorpus {
     }
 }
 
+/// Transition telemetry evaluated by [`TimelineCutDetector`] to choose between a P-Frame delta
+/// and a full I-Frame keyframe (Scene Cut) in a `.gcso` GOP timeline.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameTransitionMetrics {
+    /// Mean normalized L1 phase change relative to the previous frame (`0.0..=2.0`).
+    pub phase_l1_delta: f32,
+    /// Current query boundary classification (`CvoidEmptySpace` triggers scene-cut keyframe).
+    pub void_state: VoidBoundaryState,
+    /// Number of P-Frames elapsed since the last I-Frame.
+    pub frames_since_keyframe: usize,
+    /// Whether a new attractor cluster crystallized at this step.
+    pub new_cluster_spawned: bool,
+}
+
+/// Trait abstracting GOP scene-cut / keyframe insertion policy for `.gcso` timelines.
+pub trait TimelineCutDetector {
+    /// Returns `true` when the timeline should emit a full I-Frame keyframe instead of a P-Frame.
+    fn should_emit_keyframe(&self, metrics: &FrameTransitionMetrics) -> bool;
+}
+
+/// Default adaptive GOP detector inserting I-Frames on max GOP length, cluster crystallization,
+/// `cvoid` boundary transitions, or large phase shifts.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AdaptiveGopCutDetector {
+    /// Maximum P-Frames allowed between I-Frames.
+    pub max_gop_len: usize,
+    /// Phase L1 delta threshold triggering a scene-cut I-Frame.
+    pub phase_delta_cut_thresh: f32,
+}
+
+impl Default for AdaptiveGopCutDetector {
+    fn default() -> Self {
+        Self {
+            max_gop_len: 16,
+            phase_delta_cut_thresh: 0.35,
+        }
+    }
+}
+
+impl TimelineCutDetector for AdaptiveGopCutDetector {
+    fn should_emit_keyframe(&self, metrics: &FrameTransitionMetrics) -> bool {
+        metrics.frames_since_keyframe >= self.max_gop_len
+            || metrics.new_cluster_spawned
+            || matches!(metrics.void_state, VoidBoundaryState::CvoidEmptySpace)
+            || metrics.phase_l1_delta >= self.phase_delta_cut_thresh
+    }
+}
+
+/// Lightweight natural-language source record stored in the `.gcso` Subtitle / Source Track for
+/// model-agnostic reproducibility and cross-model transcoding.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceTextRecord {
+    /// Monotonic frame index (`0..`).
+    pub frame_index: u64,
+    /// Unix epoch timestamp in seconds.
+    pub timestamp_epoch_sec: u64,
+    /// Attractor role (`Fact`, `Persona`, or `Guard`).
+    pub role: AttractorRole,
+    /// Raw natural-language chunk.
+    pub text: String,
+    /// Base gravitational energy associated with this text chunk.
+    pub energy: f32,
+}
+
+/// Video-codec-inspired GOP frame payload stored in the `.gcso` PPRC Track.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GopFrameKind {
+    /// Full I-Frame snapshot containing a validated 4-section ZIMMS `.gcso` container and active policy.
+    KeyframeI {
+        /// Serialized 4-section ZIMMS container bytes (`GcsoFourSectionView`).
+        zimms_4section: Vec<u8>,
+        /// Calibrated recall policy at this keyframe.
+        recall_policy: RecallPolicy,
+    },
+    /// Incremental P-Frame storing Q7 phase motion delta and energy delta relative to the prior frame.
+    DeltaP {
+        /// Per-head Q7 phase motion delta (`64` heads).
+        delta_q7: [gcso_q7_t; MAX_ATTENTION_HEADS],
+        /// Incremental energy change.
+        energy_delta: f32,
+        /// Target anchor ID updated by this step.
+        target_anchor_id: u32,
+    },
+}
+
+/// Single frame in a [`GcsoDualTrackTimeline`] pairing a Subtitle/Source record with a GOP payload.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GopTimelineFrame {
+    /// Monotonic frame index.
+    pub frame_index: u64,
+    /// Model-agnostic natural-language source track entry.
+    pub source: SourceTextRecord,
+    /// Compiled I-Frame or P-Frame payload.
+    pub kind: GopFrameKind,
+}
+
+/// Reconstructed state returned by zero-forward GOP seek (`AttractorContainerCodec::seek_zero_forward`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeekedContainerState {
+    /// Requested target frame index.
+    pub target_frame_index: u64,
+    /// Frame index of the nearest preceding I-Frame used as reconstruction base.
+    pub keyframe_index: u64,
+    /// Number of P-Frames accumulated on top of the I-Frame.
+    pub p_frames_applied: usize,
+    /// Active [`RecallPolicy`] restored from the keyframe.
+    pub recall_policy: RecallPolicy,
+    /// Reconstructed 64-head Q7 phase state after applying P-Frame deltas.
+    pub active_phase_q7: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    /// Reconstructed total gravitational energy.
+    pub total_energy: f32,
+    /// Anchor IDs present in the keyframe's ZIMMS crystal section.
+    pub anchor_ids: Vec<u32>,
+}
+
+/// Context passed into [`AttractorContainerCodec::record_step`] to keep recording extensible.
+pub struct TimelineStepContext<'a> {
+    /// Active steering adapter providing model geometry.
+    pub adapter: &'a ModelSteeringAdapter,
+    /// Active compiled attractor corpus.
+    pub corpus: &'a TextAttractorCorpus,
+    /// Active calibrated recall policy.
+    pub policy: &'a RecallPolicy,
+    /// Scene-cut / keyframe detector trait object.
+    pub detector: &'a dyn TimelineCutDetector,
+}
+
+/// Trait abstracting dual-track `.gcso` container recording, zero-forward GOP seek, and
+/// cross-model natural-language track export.
+pub trait AttractorContainerCodec {
+    /// Appends a timeline frame (emitting an I-Frame or P-Frame per `ctx.detector`).
+    /// Returns `Ok(true)` if an I-Frame keyframe was emitted, `Ok(false)` for a P-Frame.
+    ///
+    /// # Errors
+    /// Returns an error if ZIMMS serialization or frame ordering fails.
+    fn record_step(
+        &mut self,
+        ctx: &TimelineStepContext<'_>,
+        source: SourceTextRecord,
+        metrics: &FrameTransitionMetrics,
+    ) -> Result<bool, String>;
+
+    /// Reconstructs attractor phase state at `target_frame_index` by seeking to the nearest
+    /// preceding I-Frame and applying subsequent P-Frames with zero LLM forward passes.
+    ///
+    /// # Errors
+    /// Returns an error if `target_frame_index` is out of range or no preceding I-Frame exists.
+    fn seek_zero_forward(&self, target_frame_index: u64) -> Result<SeekedContainerState, String>;
+
+    /// Exports the model-agnostic Subtitle / Source Track up to `up_to_frame` (inclusive) for
+    /// cross-model re-baking when `EnvProbe` detects a model change.
+    fn export_subtitle_track(&self, up_to_frame: Option<u64>) -> Vec<SourceTextRecord>;
+
+    /// Serializes the dual-track container into a portable byte stream.
+    fn to_bytes(&self) -> Vec<u8>;
+}
+
+const GCSO_DUAL_MAGIC: &[u8; 8] = b"GCSODUAL";
+const GCSO_DUAL_VERSION: u32 = 1;
+
+/// Dual-Track (Subtitle Natural-Language Track + PPRC Video-Style GOP Track) `.gcso` container.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GcsoDualTrackTimeline {
+    model_fingerprint: u64,
+    frames: Vec<GopTimelineFrame>,
+    seek_index: Vec<usize>,
+}
+
+impl GcsoDualTrackTimeline {
+    /// Computes a deterministic 64-bit fingerprint for a [`RopeGeometry`] so `EnvProbe` can detect
+    /// model switches requiring subtitle-track transcoding.
+    #[must_use]
+    pub fn geometry_fingerprint(geom: &RopeGeometry) -> u64 {
+        let mut h = 0xCBF2_9CE4_8422_2325_u64;
+        for val in [
+            geom.num_layers as u64,
+            geom.num_q_heads as u64,
+            geom.num_kv_heads as u64,
+            geom.head_dim as u64,
+            geom.rotary_dim as u64,
+            geom.layer_rope_mask,
+            match geom.layout {
+                RopeLayout::Interleaved => 1,
+                RopeLayout::HalfSplit => 2,
+            },
+        ] {
+            h ^= val;
+            h = h.wrapping_mul(0x0000_0100_0000_01B3);
+        }
+        h
+    }
+
+    /// Creates an empty [`GcsoDualTrackTimeline`] bound to `model_fingerprint`.
+    #[must_use]
+    pub const fn new(model_fingerprint: u64) -> Self {
+        Self {
+            model_fingerprint,
+            frames: Vec::new(),
+            seek_index: Vec::new(),
+        }
+    }
+
+    /// Returns the geometry fingerprint this compiled GOP track was baked for.
+    #[must_use]
+    pub const fn model_fingerprint(&self) -> u64 {
+        self.model_fingerprint
+    }
+
+    /// Returns all recorded timeline frames.
+    #[must_use]
+    pub fn frames(&self) -> &[GopTimelineFrame] {
+        &self.frames
+    }
+
+    /// Returns frame indices of all I-Frame keyframes in the seek table.
+    #[must_use]
+    pub fn keyframe_positions(&self) -> &[usize] {
+        &self.seek_index
+    }
+
+    fn slot_for_role(role: AttractorRole) -> u8 {
+        match role {
+            AttractorRole::Fact => ATTRACTOR_SLOT_KNOWLEDGE,
+            AttractorRole::Persona => ATTRACTOR_SLOT_PERSONA,
+            AttractorRole::Guard => ATTRACTOR_SLOT_REPULSION,
+        }
+    }
+
+    fn build_zimms_snapshot(
+        corpus: &TextAttractorCorpus,
+        timestamp_epoch_sec: u64,
+    ) -> Result<Vec<u8>, String> {
+        let mut crystals = Vec::with_capacity(corpus.entries().len().max(1));
+        for entry in corpus.entries() {
+            let mut rec = CrystallizedAttractorRecord::new_empty(
+                entry.anchor_id,
+                Self::slot_for_role(entry.role),
+                0,
+            );
+            rec.base_energy = entry.energy;
+            rec.phase_gravity_mass = entry.energy;
+            rec.sample_count = 1;
+            if let Some(first_layer) = entry.per_layer_q7.last() {
+                rec.phase_profile = *first_layer;
+            }
+            rec.checksum_crc32 = 0;
+            crystals.push(rec);
+        }
+        if crystals.is_empty() {
+            let empty_rec = CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0);
+            crystals.push(empty_rec);
+        }
+        let trail = gcso_pointer_trail_t::default();
+        let trails = [trail];
+        let req_len = GcsoFourSectionView::required_byte_len_with_reports(
+            crystals.len(),
+            trails.len(),
+            false,
+            false,
+            0,
+        )
+        .map_err(|e| format!("required_byte_len error: {e}"))?;
+        let mut aligned = vec![0_u8; req_len + 128];
+        let off = aligned.as_ptr().align_offset(128);
+        let written = GcsoFourSectionView::write_four_section_with_reports_to_bytes(
+            &crystals,
+            &trails,
+            None,
+            None,
+            &[],
+            timestamp_epoch_sec,
+            &mut aligned[off..off + req_len],
+        )
+        .map_err(|e| format!("write_four_section error: {e}"))?;
+        Ok(aligned[off..off + written].to_vec())
+    }
+
+    fn latest_phase_q7(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+        if let Some(last) = self.frames.last() {
+            if let Ok(state) = self.seek_zero_forward(last.frame_index) {
+                return state.active_phase_q7;
+            }
+        }
+        [0_i8; MAX_ATTENTION_HEADS]
+    }
+
+    /// Deserializes a portable [`GcsoDualTrackTimeline`] byte stream produced by [`Self::to_bytes`].
+    ///
+    /// # Errors
+    /// Returns an error if magic, version, or frame payload lengths are invalid.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let mut cursor = 0_usize;
+        let read_exact = |cur: &mut usize, n: usize| -> Result<&[u8], String> {
+            let end = cur.checked_add(n).ok_or_else(|| "overflow".to_string())?;
+            if end > bytes.len() {
+                return Err("unexpected EOF in GCSO dual-track container".to_string());
+            }
+            let slice = &bytes[*cur..end];
+            *cur = end;
+            Ok(slice)
+        };
+        let magic = read_exact(&mut cursor, 8)?;
+        if magic != GCSO_DUAL_MAGIC {
+            return Err("invalid GCSO dual-track magic".to_string());
+        }
+        let ver = u32::from_le_bytes(read_exact(&mut cursor, 4)?.try_into().map_err(|_| "ver")?);
+        if ver != GCSO_DUAL_VERSION {
+            return Err(format!("unsupported GCSO dual-track version: {ver}"));
+        }
+        let model_fingerprint =
+            u64::from_le_bytes(read_exact(&mut cursor, 8)?.try_into().map_err(|_| "fp")?);
+        let frame_count =
+            u32::from_le_bytes(read_exact(&mut cursor, 4)?.try_into().map_err(|_| "cnt")?) as usize;
+
+        let mut frames = Vec::with_capacity(frame_count);
+        let mut seek_index = Vec::new();
+        for idx in 0..frame_count {
+            let frame_index =
+                u64::from_le_bytes(read_exact(&mut cursor, 8)?.try_into().map_err(|_| "fidx")?);
+            let ts = u64::from_le_bytes(read_exact(&mut cursor, 8)?.try_into().map_err(|_| "ts")?);
+            let role = match read_exact(&mut cursor, 1)?[0] {
+                0 => AttractorRole::Fact,
+                1 => AttractorRole::Persona,
+                2 => AttractorRole::Guard,
+                r => return Err(format!("unknown AttractorRole byte: {r}")),
+            };
+            let energy =
+                f32::from_le_bytes(read_exact(&mut cursor, 4)?.try_into().map_err(|_| "en")?);
+            let text_len =
+                u32::from_le_bytes(read_exact(&mut cursor, 4)?.try_into().map_err(|_| "tlen")?)
+                    as usize;
+            let text = std::str::from_utf8(read_exact(&mut cursor, text_len)?)
+                .map_err(|e| format!("invalid UTF-8 in source track: {e}"))?
+                .to_string();
+            let kind_tag = read_exact(&mut cursor, 1)?[0];
+            let kind = match kind_tag {
+                0 => {
+                    let top_k_facts = u32::from_le_bytes(
+                        read_exact(&mut cursor, 4)?.try_into().map_err(|_| "tkf")?,
+                    ) as usize;
+                    let top_k_personas = u32::from_le_bytes(
+                        read_exact(&mut cursor, 4)?.try_into().map_err(|_| "tkp")?,
+                    ) as usize;
+                    let min_coherence = f32::from_le_bytes(
+                        read_exact(&mut cursor, 4)?.try_into().map_err(|_| "mc")?,
+                    );
+                    let boundary_margin = f32::from_le_bytes(
+                        read_exact(&mut cursor, 4)?.try_into().map_err(|_| "bm")?,
+                    );
+                    let guard_suppress_margin = f32::from_le_bytes(
+                        read_exact(&mut cursor, 4)?.try_into().map_err(|_| "gsm")?,
+                    );
+                    let z_len = u32::from_le_bytes(
+                        read_exact(&mut cursor, 4)?.try_into().map_err(|_| "zlen")?,
+                    ) as usize;
+                    let zimms_4section = read_exact(&mut cursor, z_len)?.to_vec();
+                    seek_index.push(idx);
+                    GopFrameKind::KeyframeI {
+                        zimms_4section,
+                        recall_policy: RecallPolicy {
+                            top_k_facts,
+                            top_k_personas,
+                            min_coherence,
+                            boundary_margin,
+                            guard_suppress_margin,
+                        },
+                    }
+                }
+                1 => {
+                    let q7_bytes = read_exact(&mut cursor, MAX_ATTENTION_HEADS)?;
+                    let mut delta_q7 = [0_i8; MAX_ATTENTION_HEADS];
+                    for (dst, &b) in delta_q7.iter_mut().zip(q7_bytes.iter()) {
+                        *dst = b as i8;
+                    }
+                    let energy_delta = f32::from_le_bytes(
+                        read_exact(&mut cursor, 4)?.try_into().map_err(|_| "ed")?,
+                    );
+                    let target_anchor_id = u32::from_le_bytes(
+                        read_exact(&mut cursor, 4)?.try_into().map_err(|_| "aid")?,
+                    );
+                    GopFrameKind::DeltaP {
+                        delta_q7,
+                        energy_delta,
+                        target_anchor_id,
+                    }
+                }
+                other => return Err(format!("unknown GopFrameKind tag: {other}")),
+            };
+            frames.push(GopTimelineFrame {
+                frame_index,
+                source: SourceTextRecord {
+                    frame_index,
+                    timestamp_epoch_sec: ts,
+                    role,
+                    text,
+                    energy,
+                },
+                kind,
+            });
+        }
+        Ok(Self {
+            model_fingerprint,
+            frames,
+            seek_index,
+        })
+    }
+}
+
+impl AttractorContainerCodec for GcsoDualTrackTimeline {
+    fn record_step(
+        &mut self,
+        ctx: &TimelineStepContext<'_>,
+        source: SourceTextRecord,
+        metrics: &FrameTransitionMetrics,
+    ) -> Result<bool, String> {
+        let frame_index = source.frame_index;
+        let emit_i = self.frames.is_empty() || ctx.detector.should_emit_keyframe(metrics);
+        let fp = Self::geometry_fingerprint(ctx.adapter.geometry());
+        if self.frames.is_empty() {
+            self.model_fingerprint = fp;
+        }
+        if emit_i {
+            let zimms_4section =
+                Self::build_zimms_snapshot(ctx.corpus, source.timestamp_epoch_sec)?;
+            let idx = self.frames.len();
+            self.seek_index.push(idx);
+            self.frames.push(GopTimelineFrame {
+                frame_index,
+                source,
+                kind: GopFrameKind::KeyframeI {
+                    zimms_4section,
+                    recall_policy: *ctx.policy,
+                },
+            });
+            Ok(true)
+        } else {
+            let prev_q7 = self.latest_phase_q7();
+            let target_entry = ctx.corpus.entries().last();
+            let curr_q7 = target_entry
+                .and_then(|e| e.per_layer_q7.last().copied())
+                .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
+            let mut delta_q7 = [0_i8; MAX_ATTENTION_HEADS];
+            for h in 0..MAX_ATTENTION_HEADS {
+                delta_q7[h] = curr_q7[h].saturating_sub(prev_q7[h]);
+            }
+            let target_anchor_id = target_entry.map_or(0, |e| e.anchor_id);
+            let energy_delta = source.energy;
+            self.frames.push(GopTimelineFrame {
+                frame_index,
+                source,
+                kind: GopFrameKind::DeltaP {
+                    delta_q7,
+                    energy_delta,
+                    target_anchor_id,
+                },
+            });
+            Ok(false)
+        }
+    }
+
+    fn seek_zero_forward(&self, target_frame_index: u64) -> Result<SeekedContainerState, String> {
+        let target_pos = self
+            .frames
+            .iter()
+            .position(|f| f.frame_index == target_frame_index)
+            .ok_or_else(|| format!("frame_index {target_frame_index} not found"))?;
+        let key_pos = self
+            .seek_index
+            .iter()
+            .copied()
+            .rfind(|&pos| pos <= target_pos)
+            .ok_or_else(|| format!("no preceding I-Frame for target {target_frame_index}"))?;
+
+        let key_frame = &self.frames[key_pos];
+        let (zimms_bytes, recall_policy) = match &key_frame.kind {
+            GopFrameKind::KeyframeI {
+                zimms_4section,
+                recall_policy,
+            } => (zimms_4section, *recall_policy),
+            GopFrameKind::DeltaP { .. } => {
+                return Err("corrupt seek index pointing to DeltaP".to_string())
+            }
+        };
+
+        let mut aligned = vec![0_u8; zimms_bytes.len() + 128];
+        let off = aligned.as_ptr().align_offset(128);
+        aligned[off..off + zimms_bytes.len()].copy_from_slice(zimms_bytes);
+        let view =
+            GcsoFourSectionView::from_zimms_bytes_zero_copy(&aligned[off..off + zimms_bytes.len()])
+                .map_err(|e| format!("ZIMMS zero-copy view validation failed: {e}"))?;
+
+        let mut active_phase_q7 = view
+            .crystals
+            .last()
+            .map_or([0_i8; MAX_ATTENTION_HEADS], |c| c.phase_profile);
+        let mut total_energy: f32 = view.crystals.iter().map(|c| c.base_energy).sum();
+        let anchor_ids: Vec<u32> = view.crystals.iter().map(|c| c.anchor_id).collect();
+
+        let mut p_frames_applied = 0_usize;
+        for f in &self.frames[(key_pos + 1)..=target_pos] {
+            if let GopFrameKind::DeltaP {
+                delta_q7,
+                energy_delta,
+                ..
+            } = &f.kind
+            {
+                for h in 0..MAX_ATTENTION_HEADS {
+                    active_phase_q7[h] = active_phase_q7[h].saturating_add(delta_q7[h]);
+                }
+                total_energy += *energy_delta;
+                p_frames_applied += 1;
+            }
+        }
+
+        Ok(SeekedContainerState {
+            target_frame_index,
+            keyframe_index: key_frame.frame_index,
+            p_frames_applied,
+            recall_policy,
+            active_phase_q7,
+            total_energy,
+            anchor_ids,
+        })
+    }
+
+    fn export_subtitle_track(&self, up_to_frame: Option<u64>) -> Vec<SourceTextRecord> {
+        self.frames
+            .iter()
+            .filter(|f| up_to_frame.is_none_or(|limit| f.frame_index <= limit))
+            .map(|f| f.source.clone())
+            .collect()
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(GCSO_DUAL_MAGIC);
+        out.extend_from_slice(&GCSO_DUAL_VERSION.to_le_bytes());
+        out.extend_from_slice(&self.model_fingerprint.to_le_bytes());
+        out.extend_from_slice(&(self.frames.len() as u32).to_le_bytes());
+        for f in &self.frames {
+            out.extend_from_slice(&f.frame_index.to_le_bytes());
+            out.extend_from_slice(&f.source.timestamp_epoch_sec.to_le_bytes());
+            let role_byte = match f.source.role {
+                AttractorRole::Fact => 0_u8,
+                AttractorRole::Persona => 1_u8,
+                AttractorRole::Guard => 2_u8,
+            };
+            out.push(role_byte);
+            out.extend_from_slice(&f.source.energy.to_le_bytes());
+            let tb = f.source.text.as_bytes();
+            out.extend_from_slice(&(tb.len() as u32).to_le_bytes());
+            out.extend_from_slice(tb);
+            match &f.kind {
+                GopFrameKind::KeyframeI {
+                    zimms_4section,
+                    recall_policy,
+                } => {
+                    out.push(0_u8);
+                    out.extend_from_slice(&(recall_policy.top_k_facts as u32).to_le_bytes());
+                    out.extend_from_slice(&(recall_policy.top_k_personas as u32).to_le_bytes());
+                    out.extend_from_slice(&recall_policy.min_coherence.to_le_bytes());
+                    out.extend_from_slice(&recall_policy.boundary_margin.to_le_bytes());
+                    out.extend_from_slice(&recall_policy.guard_suppress_margin.to_le_bytes());
+                    out.extend_from_slice(&(zimms_4section.len() as u32).to_le_bytes());
+                    out.extend_from_slice(zimms_4section);
+                }
+                GopFrameKind::DeltaP {
+                    delta_q7,
+                    energy_delta,
+                    target_anchor_id,
+                } => {
+                    out.push(1_u8);
+                    for &q in delta_q7 {
+                        out.push(q as u8);
+                    }
+                    out.extend_from_slice(&energy_delta.to_le_bytes());
+                    out.extend_from_slice(&target_anchor_id.to_le_bytes());
+                }
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1931,5 +2519,154 @@ mod tests {
             .expect("recall void");
         assert_eq!(recall_void.void_state, VoidBoundaryState::CvoidEmptySpace);
         assert!(recall_void.recalled_facts.is_empty());
+    }
+
+    #[test]
+    fn dual_track_timeline_records_gop_seeks_zero_forward_and_roundtrips() {
+        let geom = RopeGeometry::phi4_mini();
+        let adapter = ModelSteeringAdapter::new(geom).expect("phi4 geometry");
+        let q_len = adapter.geometry().q_rot_len();
+        let ref_vec = vec![0.0_f32; q_len];
+        let mut q_a = vec![0.0_f32; q_len];
+        let mut q_b = vec![0.0_f32; q_len];
+        let rot = adapter.geometry().rotary_dim;
+        let half = rot / 2;
+        for h in 0..adapter.geometry().num_q_heads {
+            let base = h * rot;
+            for i in 0..half {
+                let (sa, ca) = (0.30 + 0.01 * h as f32).sin_cos();
+                let (sb, cb) = (0.42 + 0.01 * h as f32).sin_cos();
+                q_a[base + i] = ca;
+                q_a[base + half + i] = sa;
+                q_b[base + i] = cb;
+                q_b[base + half + i] = sb;
+            }
+        }
+        let refs: Vec<&[f32]> = vec![ref_vec.as_slice(); 32];
+        let qa_slices: Vec<&[f32]> = vec![q_a.as_slice(); 32];
+        let qb_slices: Vec<&[f32]> = vec![q_b.as_slice(); 32];
+
+        let mut corpus = TextAttractorCorpus::new();
+        let id1 = corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Turn 0 fact",
+                &qa_slices,
+                &refs,
+                2.0,
+            )
+            .expect("ingest 0");
+        assert_eq!(id1, 1);
+
+        let detector = AdaptiveGopCutDetector::default();
+        let policy = RecallPolicy::default();
+        let mut timeline = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
+            adapter.geometry(),
+        ));
+
+        // Frame 0: initial frame -> always emits I-Frame keyframe.
+        let is_i0 = timeline
+            .record_step(
+                &TimelineStepContext {
+                    adapter: &adapter,
+                    corpus: &corpus,
+                    policy: &policy,
+                    detector: &detector,
+                },
+                SourceTextRecord {
+                    frame_index: 0,
+                    timestamp_epoch_sec: 1_700_000_000,
+                    role: AttractorRole::Fact,
+                    text: "Turn 0 fact".to_string(),
+                    energy: 2.0,
+                },
+                &FrameTransitionMetrics {
+                    phase_l1_delta: 0.0,
+                    void_state: VoidBoundaryState::InsideBasin,
+                    frames_since_keyframe: 0,
+                    new_cluster_spawned: false,
+                },
+            )
+            .expect("frame 0");
+        assert!(is_i0);
+
+        // Frame 1: in-basin small phase delta -> emits P-Frame delta.
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Persona,
+                "Turn 1 persona",
+                &qb_slices,
+                &refs,
+                1.5,
+            )
+            .expect("ingest 1");
+        let is_i1 = timeline
+            .record_step(
+                &TimelineStepContext {
+                    adapter: &adapter,
+                    corpus: &corpus,
+                    policy: &policy,
+                    detector: &detector,
+                },
+                SourceTextRecord {
+                    frame_index: 1,
+                    timestamp_epoch_sec: 1_700_000_010,
+                    role: AttractorRole::Persona,
+                    text: "Turn 1 persona".to_string(),
+                    energy: 1.5,
+                },
+                &FrameTransitionMetrics {
+                    phase_l1_delta: 0.08,
+                    void_state: VoidBoundaryState::InsideBasin,
+                    frames_since_keyframe: 1,
+                    new_cluster_spawned: false,
+                },
+            )
+            .expect("frame 1");
+        assert!(!is_i1);
+
+        // Frame 2: cvoid scene cut -> automatically emits a new I-Frame keyframe.
+        let is_i2 = timeline
+            .record_step(
+                &TimelineStepContext {
+                    adapter: &adapter,
+                    corpus: &corpus,
+                    policy: &policy,
+                    detector: &detector,
+                },
+                SourceTextRecord {
+                    frame_index: 2,
+                    timestamp_epoch_sec: 1_700_000_020,
+                    role: AttractorRole::Guard,
+                    text: "Turn 2 scene cut".to_string(),
+                    energy: 2.0,
+                },
+                &FrameTransitionMetrics {
+                    phase_l1_delta: 0.10,
+                    void_state: VoidBoundaryState::CvoidEmptySpace,
+                    frames_since_keyframe: 2,
+                    new_cluster_spawned: true,
+                },
+            )
+            .expect("frame 2");
+        assert!(is_i2);
+        assert_eq!(timeline.keyframe_positions(), &[0, 2]);
+
+        // Zero-forward seek to frame 1 reconstructs from keyframe 0 + 1 P-Frame.
+        let seek1 = timeline.seek_zero_forward(1).expect("seek frame 1");
+        assert_eq!(seek1.keyframe_index, 0);
+        assert_eq!(seek1.p_frames_applied, 1);
+        assert!((seek1.total_energy - 3.5).abs() < 1e-5);
+
+        // Portable binary serialization roundtrip & subtitle track export.
+        let bytes = timeline.to_bytes();
+        let decoded = GcsoDualTrackTimeline::from_bytes(&bytes).expect("decode dual-track");
+        assert_eq!(decoded, timeline);
+        let subtitles = decoded.export_subtitle_track(Some(1));
+        assert_eq!(subtitles.len(), 2);
+        assert_eq!(subtitles[0].text, "Turn 0 fact");
+        assert_eq!(subtitles[1].text, "Turn 1 persona");
     }
 }
