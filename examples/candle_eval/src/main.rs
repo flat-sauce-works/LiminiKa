@@ -318,7 +318,7 @@ impl Phi3Attention {
             .contiguous()?;
 
         // Capture sequence-mean pre-RoPE Q activations so semantic attractor indexing is
-        // position-invariant across sentences of varying token lengths.
+        // position-invariant and avoids punctuation bias at the final token (`?` vs `.`).
         let q_heads = if collect_q_heads {
             let mean_q = q
                 .i((0, .., .., 0..rope.rotary_dim))?

@@ -1116,9 +1116,11 @@ pub struct RecallBoundaryMetrics {
     pub top1_fact_score: f32,
     /// Second-highest geometric resonance score among Fact attractors.
     pub top2_fact_score: f32,
+    /// Highest geometric resonance score among Persona attractors.
+    pub top1_persona_score: f32,
     /// Highest geometric resonance score among Guard attractors.
     pub max_guard_score: f32,
-    /// `max_guard_score - top1_fact_score`.
+    /// `max_guard_score - max(top1_fact_score, top1_persona_score)`.
     pub guard_conflict_margin: f32,
 }
 
@@ -1127,7 +1129,7 @@ pub struct RecallBoundaryMetrics {
 pub struct RecallGateDecision {
     /// Classified boundary state (`InsideBasin`, `LiminalBoundary`, or `CvoidEmptySpace`).
     pub void_state: VoidBoundaryState,
-    /// Whether forced Fact attractor injection should be suppressed (e.g., `cvoid` or Guard dominance).
+    /// Whether forced Fact/Persona attractor injection should be suppressed (e.g., `cvoid` or Guard dominance).
     pub suppress_fact_injection: bool,
 }
 
@@ -1208,9 +1210,12 @@ impl TextAttractorCorpus {
             if !geom.is_rope_layer(l) {
                 continue;
             }
+            let start = sig.len();
             for (&qv, &rv) in q.iter().zip(r.iter()) {
                 sig.push(qv - rv);
             }
+            // Equalize per-layer contribution so late-layer norm spikes cannot drown mid-layer semantics.
+            Self::l2_normalize_in_place(&mut sig[start..]);
         }
         Self::l2_normalize_in_place(&mut sig);
         sig
@@ -1545,11 +1550,13 @@ impl TextAttractorCorpus {
 
         let top1_fact_score = fact_scores.first().map_or(-1.0, |x| x.1);
         let top2_fact_score = fact_scores.get(1).map_or(-1.0, |x| x.1);
-        let guard_conflict_margin = max_guard_score - top1_fact_score;
+        let top1_persona_score = persona_scores.first().map_or(-1.0, |x| x.1);
+        let guard_conflict_margin = max_guard_score - top1_fact_score.max(top1_persona_score);
 
         let metrics = RecallBoundaryMetrics {
             top1_fact_score,
             top2_fact_score,
+            top1_persona_score,
             max_guard_score,
             guard_conflict_margin,
         };
@@ -1565,10 +1572,15 @@ impl TextAttractorCorpus {
                 .take(policy.top_k_facts)
                 .collect()
         };
-        let recalled_personas = persona_scores
-            .into_iter()
-            .take(policy.top_k_personas)
-            .collect();
+        let recalled_personas = if decision.suppress_fact_injection {
+            Vec::new()
+        } else {
+            persona_scores
+                .into_iter()
+                .filter(|(_, s)| *s >= policy.min_coherence * 0.75)
+                .take(policy.top_k_personas)
+                .collect()
+        };
 
         Ok(DynamicAttractorRecall {
             void_state,
