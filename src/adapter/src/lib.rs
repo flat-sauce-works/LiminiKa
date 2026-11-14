@@ -1089,6 +1089,8 @@ pub struct RecallPolicy {
     pub min_coherence: f32,
     /// Minimum top-1 minus top-2 score gap to avoid `LiminalBoundary`.
     pub boundary_margin: f32,
+    /// Guard conflict margin (`max_guard_score - top1_fact_score`) above which fact injection is suppressed.
+    pub guard_suppress_margin: f32,
 }
 
 impl Default for RecallPolicy {
@@ -1098,6 +1100,70 @@ impl Default for RecallPolicy {
             top_k_personas: 1,
             min_coherence: 0.35,
             boundary_margin: 0.03,
+            guard_suppress_margin: 0.0,
+        }
+    }
+}
+
+/// Geometric boundary measurements evaluated by a [`RecallBoundaryGate`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RecallBoundaryMetrics {
+    /// Highest geometric resonance score among Fact attractors.
+    pub top1_fact_score: f32,
+    /// Second-highest geometric resonance score among Fact attractors.
+    pub top2_fact_score: f32,
+    /// Highest geometric resonance score among Guard attractors.
+    pub max_guard_score: f32,
+    /// `max_guard_score - top1_fact_score`.
+    pub guard_conflict_margin: f32,
+}
+
+/// Decision produced by a [`RecallBoundaryGate`] for a query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecallGateDecision {
+    /// Classified boundary state (`InsideBasin`, `LiminalBoundary`, or `CvoidEmptySpace`).
+    pub void_state: VoidBoundaryState,
+    /// Whether forced Fact attractor injection should be suppressed (e.g., `cvoid` or Guard dominance).
+    pub suppress_fact_injection: bool,
+}
+
+/// Trait abstracting `cvoid` boundary classification and Guard-conflict suppression policies.
+pub trait RecallBoundaryGate {
+    /// Evaluates boundary metrics under the active [`RecallPolicy`].
+    fn evaluate(
+        &self,
+        metrics: &RecallBoundaryMetrics,
+        policy: &RecallPolicy,
+    ) -> RecallGateDecision;
+}
+
+/// Default [`RecallBoundaryGate`] enforcing both `cvoid` coherence floor and Guard dominance suppression.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CoherenceGuardGate;
+
+impl RecallBoundaryGate for CoherenceGuardGate {
+    fn evaluate(
+        &self,
+        metrics: &RecallBoundaryMetrics,
+        policy: &RecallPolicy,
+    ) -> RecallGateDecision {
+        if metrics.top1_fact_score < policy.min_coherence
+            || metrics.guard_conflict_margin > policy.guard_suppress_margin
+        {
+            RecallGateDecision {
+                void_state: VoidBoundaryState::CvoidEmptySpace,
+                suppress_fact_injection: true,
+            }
+        } else if (metrics.top1_fact_score - metrics.top2_fact_score) < policy.boundary_margin {
+            RecallGateDecision {
+                void_state: VoidBoundaryState::LiminalBoundary,
+                suppress_fact_injection: false,
+            }
+        } else {
+            RecallGateDecision {
+                void_state: VoidBoundaryState::InsideBasin,
+                suppress_fact_injection: false,
+            }
         }
     }
 }
@@ -1108,7 +1174,7 @@ impl Default for RecallPolicy {
 pub struct TextAttractorCorpus {
     entries: Vec<TextAttractorEntry>,
     next_anchor_id: u32,
-    common_mode_dir: Vec<f32>,
+    common_mode_basis: Vec<Vec<f32>>,
 }
 
 impl TextAttractorCorpus {
@@ -1118,7 +1184,7 @@ impl TextAttractorCorpus {
         Self {
             entries: Vec::new(),
             next_anchor_id: 1,
-            common_mode_dir: Vec::new(),
+            common_mode_basis: Vec::new(),
         }
     }
 
@@ -1157,17 +1223,22 @@ impl TextAttractorCorpus {
         }
     }
 
-    fn project_and_normalize(v: &[f32], common_dir: &[f32]) -> Vec<f32> {
+    fn project_and_normalize(v: &[f32], basis: &[Vec<f32>]) -> Vec<f32> {
         let mut out = v.to_vec();
-        if common_dir.len() == out.len() && !common_dir.is_empty() {
-            let dot: f64 = out
-                .iter()
-                .zip(common_dir.iter())
-                .map(|(&a, &b)| f64::from(a) * f64::from(b))
-                .sum();
-            let d = dot as f32;
-            for (x, &c) in out.iter_mut().zip(common_dir.iter()) {
-                *x -= d * c;
+        if !basis.is_empty() {
+            for dir in basis {
+                if dir.len() != out.len() {
+                    continue;
+                }
+                let dot: f64 = out
+                    .iter()
+                    .zip(dir.iter())
+                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                    .sum();
+                let d = dot as f32;
+                for (x, &c) in out.iter_mut().zip(dir.iter()) {
+                    *x -= d * c;
+                }
             }
             Self::l2_normalize_in_place(&mut out);
         }
@@ -1194,46 +1265,100 @@ impl TextAttractorCorpus {
         }
     }
 
-    /// Estimates and stores the dominant unsupervised common-mode singular direction across
-    /// ingested entries via power iteration, so recall projects out shared prompt/template bias.
-    pub fn fit_common_mode_projection(&mut self) {
-        if self.entries.len() < 4 {
-            self.common_mode_dir.clear();
+    /// Estimates and stores an orthonormal common-mode subspace of up to `max_components`
+    /// directions via deflated power iteration + Gram-Schmidt orthogonalization.
+    pub fn fit_common_mode_subspace(&mut self, max_components: usize) {
+        self.common_mode_basis.clear();
+        if self.entries.len() < 4 || max_components == 0 {
             return;
         }
         let dim = self.entries[0].residual_sig.len();
         if dim == 0 || self.entries.iter().any(|e| e.residual_sig.len() != dim) {
-            self.common_mode_dir.clear();
             return;
         }
-        let mut v = vec![0.0_f32; dim];
-        for e in &self.entries {
-            for (dst, &src) in v.iter_mut().zip(e.residual_sig.iter()) {
-                *dst += src;
+        let rank_cap = max_components.min(self.entries.len() / 3);
+        let mut work: Vec<Vec<f32>> = self
+            .entries
+            .iter()
+            .map(|e| e.residual_sig.clone())
+            .collect();
+
+        for _ in 0..rank_cap {
+            let mut v = vec![0.0_f32; dim];
+            for w in &work {
+                for (dst, &src) in v.iter_mut().zip(w.iter()) {
+                    *dst += src;
+                }
             }
-        }
-        Self::l2_normalize_in_place(&mut v);
-        if v.iter().all(|&x| x == 0.0) {
-            v[0] = 1.0;
-        }
-        for _ in 0..8 {
-            let mut next = vec![0.0_f32; dim];
-            for e in &self.entries {
-                let dot: f64 = e
-                    .residual_sig
+            for dir in &self.common_mode_basis {
+                let dot: f64 = v
+                    .iter()
+                    .zip(dir.iter())
+                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                    .sum();
+                let d = dot as f32;
+                for (dst, &c) in v.iter_mut().zip(dir.iter()) {
+                    *dst -= d * c;
+                }
+            }
+            Self::l2_normalize_in_place(&mut v);
+            if v.iter().all(|&x| x == 0.0) {
+                break;
+            }
+            for _ in 0..8 {
+                let mut next = vec![0.0_f32; dim];
+                for w in &work {
+                    let dot: f64 = w
+                        .iter()
+                        .zip(v.iter())
+                        .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                        .sum();
+                    let d = dot as f32;
+                    for (dst, &src) in next.iter_mut().zip(w.iter()) {
+                        *dst += d * src;
+                    }
+                }
+                for dir in &self.common_mode_basis {
+                    let dot: f64 = next
+                        .iter()
+                        .zip(dir.iter())
+                        .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                        .sum();
+                    let d = dot as f32;
+                    for (dst, &c) in next.iter_mut().zip(dir.iter()) {
+                        *dst -= d * c;
+                    }
+                }
+                let norm_sq: f64 = next.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+                if norm_sq < 1e-12 {
+                    break;
+                }
+                Self::l2_normalize_in_place(&mut next);
+                v = next;
+            }
+            let norm_sq: f64 = v.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+            if norm_sq < 0.5 {
+                break;
+            }
+            for w in &mut work {
+                let dot: f64 = w
                     .iter()
                     .zip(v.iter())
                     .map(|(&a, &b)| f64::from(a) * f64::from(b))
                     .sum();
                 let d = dot as f32;
-                for (dst, &src) in next.iter_mut().zip(e.residual_sig.iter()) {
-                    *dst += d * src;
+                for (dst, &c) in w.iter_mut().zip(v.iter()) {
+                    *dst -= d * c;
                 }
             }
-            Self::l2_normalize_in_place(&mut next);
-            v = next;
+            self.common_mode_basis.push(v);
         }
-        self.common_mode_dir = v;
+    }
+
+    /// Estimates and stores the dominant unsupervised common-mode subspace (up to 3 components)
+    /// so recall projects out shared prompt/template bias.
+    pub fn fit_common_mode_projection(&mut self) {
+        self.fit_common_mode_subspace(3);
     }
 
     /// Calibrates [`RecallPolicy`] from the empirical off-diagonal similarity distribution of the
@@ -1254,7 +1379,7 @@ impl TextAttractorCorpus {
         let projected: Vec<Vec<f32>> = self
             .entries
             .iter()
-            .map(|e| Self::project_and_normalize(&e.residual_sig, &self.common_mode_dir))
+            .map(|e| Self::project_and_normalize(&e.residual_sig, &self.common_mode_basis))
             .collect();
         let mut sims = Vec::new();
         for i in 0..projected.len() {
@@ -1273,6 +1398,7 @@ impl TextAttractorCorpus {
             top_k_personas,
             min_coherence,
             boundary_margin,
+            guard_suppress_margin: 0.0,
         }
     }
 
@@ -1326,8 +1452,8 @@ impl TextAttractorCorpus {
     }
 
     /// Re-bakes or scores a query's per-layer Q activations against the corpus purely via
-    /// steered-layer active-head geometric cosine similarity (zero keyword heuristics),
-    /// returning top-K recalled attractors and the query's [`VoidBoundaryState`].
+    /// steered-layer geometric cosine similarity (zero keyword heuristics), using the default
+    /// [`CoherenceGuardGate`] to classify [`VoidBoundaryState`].
     ///
     /// # Errors
     ///
@@ -1338,6 +1464,29 @@ impl TextAttractorCorpus {
         query_per_layer_q: &[&[f32]],
         baseline_ref_per_layer: &[&[f32]],
         policy: &RecallPolicy,
+    ) -> Result<DynamicAttractorRecall<'_>, String> {
+        self.recall_for_query_with_gate(
+            adapter,
+            query_per_layer_q,
+            baseline_ref_per_layer,
+            policy,
+            &CoherenceGuardGate,
+        )
+    }
+
+    /// Scores a query's per-layer Q activations against the corpus and delegates boundary/guard
+    /// gating to a caller-supplied [`RecallBoundaryGate`] trait object.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if query/baseline layer slices mismatch `adapter.geometry()`.
+    pub fn recall_for_query_with_gate(
+        &self,
+        adapter: &ModelSteeringAdapter,
+        query_per_layer_q: &[&[f32]],
+        baseline_ref_per_layer: &[&[f32]],
+        policy: &RecallPolicy,
+        gate: &dyn RecallBoundaryGate,
     ) -> Result<DynamicAttractorRecall<'_>, String> {
         if query_per_layer_q.len() != baseline_ref_per_layer.len() {
             return Err(format!(
@@ -1366,14 +1515,15 @@ impl TextAttractorCorpus {
         }
         let raw_sig =
             Self::build_steered_residual_sig(geom, query_per_layer_q, baseline_ref_per_layer);
-        let query_sig = Self::project_and_normalize(&raw_sig, &self.common_mode_dir);
+        let query_sig = Self::project_and_normalize(&raw_sig, &self.common_mode_basis);
 
         let mut fact_scores: Vec<(&TextAttractorEntry, f32)> = Vec::new();
         let mut persona_scores: Vec<(&TextAttractorEntry, f32)> = Vec::new();
         let mut max_guard_score = -1.0_f32;
 
         for entry in &self.entries {
-            let entry_sig = Self::project_and_normalize(&entry.residual_sig, &self.common_mode_dir);
+            let entry_sig =
+                Self::project_and_normalize(&entry.residual_sig, &self.common_mode_basis);
             let mean_cos = Self::cosine_f32(&query_sig, &entry_sig);
             match entry.role {
                 AttractorRole::Fact => fact_scores.push((entry, mean_cos)),
@@ -1393,15 +1543,16 @@ impl TextAttractorCorpus {
         let top2_fact_score = fact_scores.get(1).map_or(-1.0, |x| x.1);
         let guard_conflict_margin = max_guard_score - top1_fact_score;
 
-        let void_state = if top1_fact_score < policy.min_coherence {
-            VoidBoundaryState::CvoidEmptySpace
-        } else if (top1_fact_score - top2_fact_score) < policy.boundary_margin {
-            VoidBoundaryState::LiminalBoundary
-        } else {
-            VoidBoundaryState::InsideBasin
+        let metrics = RecallBoundaryMetrics {
+            top1_fact_score,
+            top2_fact_score,
+            max_guard_score,
+            guard_conflict_margin,
         };
+        let decision = gate.evaluate(&metrics, policy);
+        let void_state = decision.void_state;
 
-        let recalled_facts = if matches!(void_state, VoidBoundaryState::CvoidEmptySpace) {
+        let recalled_facts = if decision.suppress_fact_injection {
             Vec::new()
         } else {
             fact_scores
@@ -1767,6 +1918,7 @@ mod tests {
             top_k_personas: 1,
             min_coherence: 0.50,
             boundary_margin: 0.05,
+            ..RecallPolicy::default()
         };
         let recall_a = corpus
             .recall_for_query(&adapter, &qa_slices, &refs, &policy)
