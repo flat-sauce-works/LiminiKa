@@ -14,7 +14,7 @@ use liminika_core::residual_adapter::ResidualAdapterEngine;
 use liminika_core::traits::aligned::{
     AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32,
 };
-use liminika_core::traits::PhaseSteering;
+use liminika_core::traits::{PhaseSteering, SrlAdapter};
 
 /// Memory pairing convention used by an LLM's Rotary Position Embedding (RoPE).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -405,6 +405,112 @@ impl ModelSteeringAdapter {
 
         Ok(())
     }
+
+    /// Evaluates Top-2 sparse surrogate entropy via [`EntropyController::eval_surrogate_and_step`]
+    /// and scales `logits` by the resulting adaptive `sample_temperature`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `logits` is empty or `EntropyController` reports an error.
+    pub fn step_edbc_logits(&mut self, logits: &mut [f32]) -> Result<gcso_edbc_state_t, String> {
+        if logits.is_empty() {
+            return Err("logits slice must not be empty".to_string());
+        }
+        let mut max1 = f32::NEG_INFINITY;
+        let mut max2 = f32::NEG_INFINITY;
+        for &v in logits.iter() {
+            if v > max1 {
+                max2 = max1;
+                max1 = v;
+            } else if v > max2 {
+                max2 = v;
+            }
+        }
+        let sum_exp: f32 = logits
+            .iter()
+            .map(|&v| (v - max1).exp())
+            .sum::<f32>()
+            .max(1e-12);
+        let p_max = 1.0 / sum_exp;
+        let p_2nd = if max2.is_finite() {
+            (max2 - max1).exp() / sum_exp
+        } else {
+            0.0
+        };
+
+        let mut state_out = gcso_edbc_state_t::default();
+        let temp = self
+            .entropy_controller
+            .eval_surrogate_and_step(p_max, p_2nd, 0.0, 0.0, 1.0, 0.1, 0.1, &mut state_out)
+            .map_err(|e| format!("eval_surrogate_and_step error: {e}"))?;
+
+        if temp.is_finite() && temp > 1e-4 && (temp - 1.0).abs() > 1e-4 {
+            let inv_temp = 1.0 / temp;
+            for v in logits.iter_mut() {
+                *v *= inv_temp;
+            }
+        }
+        Ok(state_out)
+    }
+
+    /// Applies Rank-1 SRL residual injection (`y <- y + s * u * (v^T * y)`) to a hidden-state
+    /// vector via [`SrlAdapter::eval_rank1_slices_fused`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if slice lengths mismatch or `ResidualAdapterEngine` rejects inputs.
+    pub fn apply_srl_hidden_fused(
+        &self,
+        hidden_inout: &mut [f32],
+        u_vec: &[f32],
+        v_vec: &[f32],
+        scale_factor: f32,
+    ) -> Result<(), String> {
+        if scale_factor == 0.0 {
+            return Ok(());
+        }
+        let d = hidden_inout.len();
+        if d == 0 || u_vec.len() != d || v_vec.len() != d {
+            return Err(format!(
+                "SRL hidden/u/v length mismatch: hidden={}, u={}, v={}",
+                d,
+                u_vec.len(),
+                v_vec.len()
+            ));
+        }
+
+        let mut y_buf = AlignedF32Buffer32::new_zeroed(d);
+        let mut x_buf = AlignedF32Buffer32::new_zeroed(d);
+        let mut u_buf = AlignedF32Buffer32::new_zeroed(d);
+        let mut v_buf = AlignedF32Buffer32::new_zeroed(d);
+        y_buf.as_mut_slice().copy_from_slice(hidden_inout);
+        x_buf.as_mut_slice().copy_from_slice(hidden_inout);
+        u_buf.as_mut_slice().copy_from_slice(u_vec);
+        v_buf.as_mut_slice().copy_from_slice(v_vec);
+
+        let mut y_mut = AlignedSliceMut32::new(y_buf.as_mut_slice())
+            .map_err(|e| format!("AlignedSliceMut32 y error: {e}"))?;
+        let x_aligned = AlignedSlice32::new(x_buf.as_slice())
+            .map_err(|e| format!("AlignedSlice32 x error: {e}"))?;
+        let u_aligned = AlignedSlice32::new(u_buf.as_slice())
+            .map_err(|e| format!("AlignedSlice32 u error: {e}"))?;
+        let v_aligned = AlignedSlice32::new(v_buf.as_slice())
+            .map_err(|e| format!("AlignedSlice32 v error: {e}"))?;
+
+        self.residual_adapter
+            .eval_rank1_slices_fused(
+                &mut y_mut,
+                &x_aligned,
+                &u_aligned,
+                &v_aligned,
+                None,
+                scale_factor,
+            )
+            .map_err(|e| format!("eval_rank1_slices_fused error: {e}"))?;
+
+        hidden_inout.copy_from_slice(y_buf.as_slice());
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -454,5 +560,23 @@ mod tests {
                 .expect("skip layer 1");
             assert_eq!(q_layer1, neg);
         }
+    }
+
+    #[test]
+    fn adapter_steps_edbc_and_applies_srl_residual() {
+        let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let mut logits = vec![4.0, 2.0, 1.0, 0.5];
+        let state = adapter
+            .step_edbc_logits(&mut logits)
+            .expect("edbc step should succeed");
+        assert!(state.sample_temperature > 0.0);
+
+        let mut hidden = vec![1.0, 0.5, -0.5, 0.25];
+        let u = vec![0.5, 0.5, 0.5, 0.5];
+        let v = vec![1.0, 0.0, 0.0, 0.0];
+        adapter
+            .apply_srl_hidden_fused(&mut hidden, &u, &v, 0.5)
+            .expect("srl fused should succeed");
+        assert!((hidden[0] - 1.25).abs() < 1e-5);
     }
 }

@@ -365,29 +365,35 @@ impl Phi3Model {
         &mut self,
         tokens: &[u32],
         offset: usize,
-        steer: Option<(&ModelSteeringAdapter, &[Vec<gcso_q7_t>], f32)>,
-        collect_q_heads: bool,
-    ) -> CResult<(Vec<f32>, Vec<Vec<f32>>)> {
+        mut adapter: Option<&mut ModelSteeringAdapter>,
+        q7s: Option<&[Vec<gcso_q7_t>]>,
+        rope_rad: f32,
+        srl: Option<(&[f32], &[f32], f32)>,
+        use_edbc: bool,
+        collect_bake_data: bool,
+    ) -> CResult<(Vec<f32>, Vec<Vec<f32>>, Vec<f32>)> {
         let input = Tensor::from_slice(tokens, (1, tokens.len()), &self.device)?;
         let mut h = self.embed_tokens.forward(&input)?;
-        let mut per_layer_q = if collect_q_heads {
+        let mut per_layer_q = if collect_bake_data {
             Vec::with_capacity(self.layers.len())
         } else {
             Vec::new()
         };
 
         for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
-            let steer_ref = steer.and_then(|(adapter, q7s, rad)| {
-                q7s.get(layer_idx)
-                    .map(|q7| (adapter, layer_idx, q7.as_slice(), rad))
-            });
+            let steer_ref = match (adapter.as_deref(), q7s) {
+                (Some(ad), Some(qs)) if rope_rad > 0.0 => qs
+                    .get(layer_idx)
+                    .map(|q7| (ad, layer_idx, q7.as_slice(), rope_rad)),
+                _ => None,
+            };
             let normed = layer.input_layernorm.forward(&h)?;
             let (attn_out, q_opt) = layer.self_attn.forward(
                 &normed,
                 &self.rope,
                 offset,
                 steer_ref,
-                collect_q_heads,
+                collect_bake_data,
             )?;
             if let Some(q) = q_opt {
                 per_layer_q.push(q);
@@ -399,14 +405,37 @@ impl Phi3Model {
         }
 
         let h = self.norm.forward(&h)?;
-        let last = h.i((0, tokens.len() - 1, ..))?.unsqueeze(0)?;
-        let logits = self
+        let mut last = h.i((0, tokens.len() - 1, ..))?.unsqueeze(0)?;
+        let last_hidden = if collect_bake_data {
+            last.squeeze(0)?.to_dtype(DType::F32)?.to_vec1::<f32>()?
+        } else {
+            Vec::new()
+        };
+
+        if let (Some(ad), Some((u_vec, v_vec, srl_scale))) = (adapter.as_deref(), srl) {
+            if srl_scale != 0.0 {
+                let mut h_vec = last.squeeze(0)?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+                ad.apply_srl_hidden_fused(&mut h_vec, u_vec, v_vec, srl_scale)
+                    .map_err(candle_core::Error::Msg)?;
+                let len = h_vec.len();
+                last = Tensor::from_vec(h_vec, (1, len), &self.device)?.to_dtype(last.dtype())?;
+            }
+        }
+
+        let mut logits = self
             .lm_head
             .forward(&last)?
             .squeeze(0)?
             .to_dtype(DType::F32)?
             .to_vec1::<f32>()?;
-        Ok((logits, per_layer_q))
+        if use_edbc {
+            if let Some(ad) = adapter.as_deref_mut() {
+                let _ = ad
+                    .step_edbc_logits(&mut logits)
+                    .map_err(candle_core::Error::Msg)?;
+            }
+        }
+        Ok((logits, per_layer_q, last_hidden))
     }
 }
 
@@ -505,16 +534,32 @@ fn format_phi4_prompt(user_prompt: &str) -> String {
     format!("<|user|>{user_prompt}<|end|><|assistant|>")
 }
 
+struct BakedModelProfile {
+    per_layer_q7: Vec<Vec<gcso_q7_t>>,
+    srl_u: Vec<f32>,
+    srl_v: Vec<f32>,
+}
+
+fn normalize_unit(v: &mut [f32]) {
+    let norm = v.iter().map(|&x| x * x).sum::<f32>().sqrt().max(1e-8);
+    for x in v.iter_mut() {
+        *x /= norm;
+    }
+}
+
 fn bake_via_adapter(
     model: &mut Phi3Model,
     tokenizer: &Tokenizer,
     adapter: &ModelSteeringAdapter,
+    hidden_size: usize,
     suite: &FixtureSuite,
-) -> Result<Vec<Vec<gcso_q7_t>>, Box<dyn std::error::Error>> {
+) -> Result<BakedModelProfile, Box<dyn std::error::Error>> {
     let num_layers = adapter.geometry().num_layers;
     let q_len = adapter.geometry().q_rot_len();
     let mut pos_sum = vec![vec![0.0_f32; q_len]; num_layers];
     let mut neg_sum = vec![vec![0.0_f32; q_len]; num_layers];
+    let mut pos_h = vec![0.0_f32; hidden_size];
+    let mut neg_h = vec![0.0_f32; hidden_size];
 
     let pos_count = (suite.facts.len() + suite.persona.len()).max(1) as f32;
     let neg_count = suite.guards.len().max(1) as f32;
@@ -526,11 +571,15 @@ fn bake_via_adapter(
             .map_err(|e| format!("encode error: {e}"))?
             .get_ids()
             .to_vec();
-        let (_, layer_qs) = model.forward_tokens(&ids, 0, None, true)?;
+        let (_, layer_qs, h_vec) =
+            model.forward_tokens(&ids, 0, None, None, 0.0, None, false, true)?;
         for (l, q) in layer_qs.iter().enumerate() {
             for (dst, &src) in pos_sum[l].iter_mut().zip(q.iter()) {
                 *dst += src / pos_count;
             }
+        }
+        for (dst, &src) in pos_h.iter_mut().zip(h_vec.iter()) {
+            *dst += src / pos_count;
         }
     }
 
@@ -541,19 +590,43 @@ fn bake_via_adapter(
             .map_err(|e| format!("encode error: {e}"))?
             .get_ids()
             .to_vec();
-        let (_, layer_qs) = model.forward_tokens(&ids, 0, None, true)?;
+        let (_, layer_qs, h_vec) =
+            model.forward_tokens(&ids, 0, None, None, 0.0, None, false, true)?;
         for (l, q) in layer_qs.iter().enumerate() {
             for (dst, &src) in neg_sum[l].iter_mut().zip(q.iter()) {
                 *dst += src / neg_count;
             }
         }
+        for (dst, &src) in neg_h.iter_mut().zip(h_vec.iter()) {
+            *dst += src / neg_count;
+        }
     }
 
-    let mut out = Vec::with_capacity(num_layers);
+    let mut per_layer_q7 = Vec::with_capacity(num_layers);
     for l in 0..num_layers {
-        out.push(adapter.bake_layer_procrustes_q7(&neg_sum[l], &pos_sum[l])?);
+        out_push_q7(&mut per_layer_q7, adapter, &neg_sum[l], &pos_sum[l])?;
     }
-    Ok(out)
+
+    let mut srl_u: Vec<f32> = pos_h.iter().zip(neg_h.iter()).map(|(&p, &n)| p - n).collect();
+    let mut srl_v = srl_u.clone();
+    normalize_unit(&mut srl_u);
+    normalize_unit(&mut srl_v);
+
+    Ok(BakedModelProfile {
+        per_layer_q7,
+        srl_u,
+        srl_v,
+    })
+}
+
+fn out_push_q7(
+    out: &mut Vec<Vec<gcso_q7_t>>,
+    adapter: &ModelSteeringAdapter,
+    neg: &[f32],
+    pos: &[f32],
+) -> Result<(), String> {
+    out.push(adapter.bake_layer_procrustes_q7(neg, pos)?);
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -569,11 +642,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("tokenizer load error: {e}"))?;
     let suite = load_fixture(&fixture_path)?;
 
-    let adapter = ModelSteeringAdapter::new(cfg.to_rope_geometry())?;
+    let mut adapter = ModelSteeringAdapter::new(cfg.to_rope_geometry())?;
 
     let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
     println!(
-        "LiminiKa Candle Eval (via liminika-adapter) | device={:?} | layers={} heads={}/{} head_dim={} rotary_dim={}",
+        "LiminiKa Candle Eval (RoPE + EDBC + SRL via liminika-adapter) | device={:?} | layers={} heads={}/{} head_dim={} rotary_dim={}",
         device,
         adapter.geometry().num_layers,
         adapter.geometry().num_q_heads,
@@ -586,11 +659,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut model = Phi3Model::load(&model_dir, &cfg, &device)?;
     println!("Loaded Phi-4-mini-instruct in {:.2?}", t0.elapsed());
 
-    let per_layer_q7 = bake_via_adapter(&mut model, &tokenizer, &adapter, &suite)?;
+    let baked = bake_via_adapter(&mut model, &tokenizer, &adapter, cfg.hidden_size, &suite)?;
     println!(
-        "Baked {} x {} Q7 phase deltas via ModelSteeringAdapter.",
-        per_layer_q7.len(),
-        adapter.geometry().num_q_heads
+        "Baked {} x {} Q7 phase deltas + {}-dim SRL vectors via ModelSteeringAdapter.",
+        baked.per_layer_q7.len(),
+        adapter.geometry().num_q_heads,
+        cfg.hidden_size
     );
 
     let mut target_toks: Vec<Option<u32>> = Vec::with_capacity(suite.probes.len());
@@ -604,7 +678,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         target_toks.push(tok);
     }
 
-    let angles = [0.0_f32, 0.05, 0.10, 0.15, 0.25];
     let mut baselines: Vec<Vec<f32>> = Vec::with_capacity(suite.probes.len());
     for (_, prompt, _, _) in &suite.probes {
         model.clear_cache();
@@ -614,21 +687,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| format!("encode error: {e}"))?
             .get_ids()
             .to_vec();
-        let (logits, _) = model.forward_tokens(&ids, 0, None, false)?;
+        let (logits, _, _) =
+            model.forward_tokens(&ids, 0, None, None, 0.0, None, false, false)?;
         baselines.push(logits);
     }
 
+    // 4-way ablation: Baseline, RoPE only, RoPE + EDBC, RoPE + EDBC + SRL.
+    let configs: [(&str, f32, bool, f32); 4] = [
+        ("Baseline", 0.00, false, 0.00),
+        ("RoPE only", 0.10, false, 0.00),
+        ("RoPE + EDBC", 0.10, true, 0.00),
+        ("RoPE + EDBC + SRL", 0.10, true, 0.15),
+    ];
+
     println!(
-        "\n{:>8} | {:>10} | {:>12} | {:>11} | {:>11}",
-        "max_rad", "mean_KL", "d_logprob", "expect_hit", "forbid_hit"
+        "\n{:>18} | {:>10} | {:>12} | {:>11} | {:>11}",
+        "mode", "mean_KL", "d_logprob", "expect_hit", "forbid_hit"
     );
 
-    for &angle in &angles {
-        let steer = if angle > 0.0 {
-            Some((&adapter, per_layer_q7.as_slice(), angle))
-        } else {
-            None
-        };
+    for (label, rope_rad, use_edbc, srl_scale) in configs {
         let mut sum_kl = 0.0_f32;
         let mut sum_d_lp = 0.0_f32;
         let mut d_lp_count = 0_usize;
@@ -636,6 +713,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut exp_total = 0_usize;
         let mut forb_hits = 0_usize;
         let mut forb_total = 0_usize;
+        let mut p1_sample = String::new();
 
         for (p_idx, ((_, prompt, expected, forbidden), base_logits)) in
             suite.probes.iter().zip(baselines.iter()).enumerate()
@@ -647,7 +725,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("encode error: {e}"))?
                 .get_ids()
                 .to_vec();
-            let (mut logits, _) = model.forward_tokens(&ids, 0, steer, false)?;
+            let srl_arg = if srl_scale != 0.0 {
+                Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), srl_scale))
+            } else {
+                None
+            };
+            let (mut logits, _, _) = model.forward_tokens(
+                &ids,
+                0,
+                Some(&mut adapter),
+                Some(baked.per_layer_q7.as_slice()),
+                rope_rad,
+                srl_arg,
+                use_edbc,
+                false,
+            )?;
             sum_kl += kl_div(base_logits, &logits);
 
             if let Some(tok) = target_toks[p_idx] {
@@ -663,22 +755,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     break;
                 }
                 gen_ids.push(next);
-                let (next_logits, _) = model.forward_tokens(&[next], offset, steer, false)?;
+                let (next_logits, _, _) = model.forward_tokens(
+                    &[next],
+                    offset,
+                    Some(&mut adapter),
+                    Some(baked.per_layer_q7.as_slice()),
+                    rope_rad,
+                    srl_arg,
+                    use_edbc,
+                    false,
+                )?;
                 logits = next_logits;
                 offset += 1;
             }
             let text = tokenizer
                 .decode(&gen_ids, true)
-                .map_err(|e| format!("decode error: {e}"))?
-                .to_lowercase();
+                .map_err(|e| format!("decode error: {e}"))?;
+            if p_idx == 0 {
+                p1_sample = text.replace('\n', " ");
+            }
+            let lower = text.to_lowercase();
             exp_hits += expected
                 .iter()
-                .filter(|kw| text.contains(&kw.to_lowercase()))
+                .filter(|kw| lower.contains(&kw.to_lowercase()))
                 .count();
             exp_total += expected.len();
             forb_hits += forbidden
                 .iter()
-                .filter(|kw| text.contains(&kw.to_lowercase()))
+                .filter(|kw| lower.contains(&kw.to_lowercase()))
                 .count();
             forb_total += forbidden.len();
         }
@@ -700,9 +804,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             forb_hits as f32 / forb_total as f32 * 100.0
         };
         println!(
-            "{angle:>8.2} | {:>10.4} | {mean_d_lp:>+12.4} | {eh:>10.1}% | {fh:>10.1}%",
+            "{label:>18} | {:>10.4} | {mean_d_lp:>+12.4} | {eh:>10.1}% | {fh:>10.1}%",
             sum_kl / n
         );
+        println!("   [P1] {p1_sample}");
     }
 
     Ok(())
