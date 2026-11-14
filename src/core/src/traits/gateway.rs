@@ -935,6 +935,25 @@ pub trait CognitiveGroundingSignal: CausalProvenanceSignal {
     fn grounding_anchor_id(&self) -> u32 {
         0
     }
+
+    /// Active attention-head subspace dimension $H \in [1, 64]$ over which phase coherence is evaluated.
+    #[inline(always)]
+    fn active_head_count(&self) -> u16 {
+        MAX_ATTENTION_HEADS as u16
+    }
+
+    /// Single-pass grounding envelope `(phase_words, base_energy, zimms_offset48, anchor_id, active_heads)`
+    /// avoiding redundant slice folds on composite or resonant signals.
+    #[inline(always)]
+    fn synthesize_grounding_envelope(&self) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, u64, u32, u16) {
+        (
+            self.project_grounding_words_64(),
+            self.grounding_base_energy(),
+            self.zimms_section_offset48(),
+            self.grounding_anchor_id(),
+            self.active_head_count(),
+        )
+    }
 }
 
 impl<T: CognitiveGroundingSignal + ?Sized> CognitiveGroundingSignal for &T {
@@ -961,6 +980,14 @@ impl<T: CognitiveGroundingSignal + ?Sized> CognitiveGroundingSignal for &T {
     #[inline(always)]
     fn grounding_anchor_id(&self) -> u32 {
         (**self).grounding_anchor_id()
+    }
+    #[inline(always)]
+    fn active_head_count(&self) -> u16 {
+        (**self).active_head_count()
+    }
+    #[inline(always)]
+    fn synthesize_grounding_envelope(&self) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, u64, u32, u16) {
+        (**self).synthesize_grounding_envelope()
     }
 }
 
@@ -1834,10 +1861,146 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
 /// Folds an arbitrary-length slice of [`ManifoldGatewaySignal`] items into a single
 /// [`GatewayFrame`] and register-resident SWAR phase words, optionally weighting each item
 /// by its $SO(2)^{64}$ phase coherence against `query_words_opt`.
-#[inline]
+#[inline(always)]
+fn mask_words_for_active_heads_64(
+    words: &[u64; NUM_SWARM_MICRO_CELLS],
+    active_heads: u16,
+) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    if active_heads >= MAX_ATTENTION_HEADS as u16 {
+        return *words;
+    }
+    let h = active_heads as usize;
+    let mut out = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut w_idx = 0usize;
+    while w_idx < NUM_SWARM_MICRO_CELLS {
+        let base = w_idx * 8;
+        if base + 8 <= h {
+            out[w_idx] = words[w_idx];
+        } else if base < h {
+            let rem = (h - base) as u32;
+            let mask = (1u64 << (rem * 8)) - 1;
+            out[w_idx] = words[w_idx] & mask;
+        }
+        w_idx += 1;
+    }
+    out
+}
+
+/// Evaluates $SO(2)^H$ circular phase coherence restricted to the `active_heads` ($H \in [1, 64]$)
+/// active attention heads, algebraically subtracting the $+1.0$ zero-padding bias contributed by
+/// the $(64 - H)$ inactive SIMD/SWAR lanes.
+#[inline(always)]
+fn coherence_for_active_heads_64(
+    a: &[u64; NUM_SWARM_MICRO_CELLS],
+    a_uni: bool,
+    b: &[u64; NUM_SWARM_MICRO_CELLS],
+    b_uni: bool,
+    active_heads: u16,
+) -> f32 {
+    let h = active_heads.clamp(1, MAX_ATTENTION_HEADS as u16);
+    if h >= MAX_ATTENTION_HEADS as u16 || (a_uni && b_uni) {
+        return coherence_from_word_arrays_with_both_uniform_flags_64(a, a_uni, b, b_uni);
+    }
+    let a_masked = mask_words_for_active_heads_64(a, h);
+    let b_masked = mask_words_for_active_heads_64(b, h);
+    let c64 = coherence_from_word_arrays_with_both_uniform_flags_64(
+        &a_masked, false, &b_masked, false,
+    );
+    let h_f32 = f32::from(h);
+    let pad_f32 = (MAX_ATTENTION_HEADS as f32) - h_f32;
+    branchless_clamp_f32(((MAX_ATTENTION_HEADS as f32) * c64 - pad_f32) / h_f32, -1.0, 1.0)
+}
+
+/// Evaluates scale-invariant multi-head tangent cosine similarity in $[-1.0, 1.0]$ over the first
+/// `active_heads` ($H \in [1, 64]$) lanes, eliminating both zero-padding bias and small-amplitude
+/// circular cosine bias when comparing heterogeneous tangent steering vectors.
+#[inline(always)]
+fn tangent_cosine_active_heads_64(
+    a: &[u64; NUM_SWARM_MICRO_CELLS],
+    b: &[u64; NUM_SWARM_MICRO_CELLS],
+    active_heads: u16,
+) -> f32 {
+    let h_usize = (active_heads.clamp(1, MAX_ATTENTION_HEADS as u16)) as usize;
+    let a_bytes = words_to_q7_array_64(a);
+    let b_bytes = words_to_q7_array_64(b);
+    let mut dot = 0i32;
+    let mut norm_a = 0i32;
+    let mut norm_b = 0i32;
+    let mut idx = 0usize;
+    while idx < h_usize {
+        let av = i32::from(a_bytes[idx]);
+        let bv = i32::from(b_bytes[idx]);
+        dot += av * bv;
+        norm_a += av * av;
+        norm_b += bv * bv;
+        idx += 1;
+    }
+    if norm_a <= 0 || norm_b <= 0 {
+        return 0.0;
+    }
+    let denom_sq = (norm_a as f32) * (norm_b as f32);
+    let half = 0.5_f32 * denom_sq;
+    let y0 = f32::from_bits(0x5f37_5a86_u32.wrapping_sub(denom_sq.to_bits() >> 1));
+    let y1 = y0 * (1.5_f32 - half * y0 * y0);
+    let inv_denom = y1 * (1.5_f32 - half * y1 * y1);
+    branchless_clamp_f32((dot as f32) * inv_denom, -1.0, 1.0)
+}
+
+/// Linearly interpolates two 64-lane signed Q7 tangent arrays in $[-\theta_{\mathrm{clamp}}, +\theta_{\mathrm{clamp}}]^{64}$
+/// (`[-127, +127]`) without modular $\pm 128$ wrapping overflow when $|b_h - a_h| > 127$.
+#[inline(always)]
+fn swar_tangent_lerp_words_with_uniform_flag_64(
+    a: &[u64; NUM_SWARM_MICRO_CELLS],
+    a_uni: bool,
+    b: &[u64; NUM_SWARM_MICRO_CELLS],
+    b_uni: bool,
+    s_u64: u64,
+) -> ([u64; NUM_SWARM_MICRO_CELLS], bool) {
+    let s = if s_u64 > 128 { 128 } else { s_u64 };
+    if s == 0 {
+        return (*a, a_uni);
+    }
+    if s >= 128 {
+        return (*b, b_uni);
+    }
+    let inv_s = 128u64.wrapping_sub(s);
+    let bias_a = s.wrapping_mul(SWAR_SPLAT_BYTE_64);
+    let bias_b = inv_s.wrapping_mul(SWAR_SPLAT_BYTE_64);
+    if a_uni && b_uni {
+        let a0 = swar_q7_scale_le128_with_bias_x8(a[0], inv_s, bias_a);
+        let b0 = swar_q7_scale_le128_with_bias_x8(b[0], s, bias_b);
+        let w0 = swar_q7_circular_add_x8(a0, b0);
+        return ([w0; NUM_SWARM_MICRO_CELLS], true);
+    }
+    let mut out = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut k = 0usize;
+    while k < NUM_SWARM_MICRO_CELLS {
+        let ak = swar_q7_scale_le128_with_bias_x8(a[k], inv_s, bias_a);
+        let bk = swar_q7_scale_le128_with_bias_x8(b[k], s, bias_b);
+        out[k] = swar_q7_circular_add_x8(ak, bk);
+        k += 1;
+    }
+    let is_uni = is_word_array_uniform_64(&out);
+    (out, is_uni)
+}
+
+#[inline(always)]
 fn fold_gateway_slice_with_query_words_core<S: ManifoldGatewaySignal>(
     slice: &[S],
     query_words_opt: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
+) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fold_gateway_slice_with_query_words_and_heads_core(
+        slice,
+        query_words_opt,
+        MAX_ATTENTION_HEADS as u16,
+    )
+}
+
+#[inline]
+fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGatewaySignal>(
+    slice: &[S],
+    query_words_opt: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
+    query_active_heads: u16,
 ) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
     let len = slice.len();
     if len == 0 {
@@ -1874,7 +2037,7 @@ fn fold_gateway_slice_with_query_words_core<S: ManifoldGatewaySignal>(
     let mut fact_gain_q7 = 128u8;
     let mut logic_gain_q7 = 128u8;
     let mut explore_gain_q7 = 128u8;
-    let mut active_heads = MAX_ATTENTION_HEADS as u16;
+    let mut active_heads = query_active_heads.clamp(1, MAX_ATTENTION_HEADS as u16);
 
     let mut i = 0usize;
     while i < len {
@@ -1885,13 +2048,18 @@ fn fold_gateway_slice_with_query_words_core<S: ManifoldGatewaySignal>(
         let (f, f_w) = slice[i].synthesize_gateway_ensemble_item();
         let raw_e = branchless_flush_subnormal_f32(branchless_relu_f32(f.effective_energy));
         let f_w_uniform = is_word_array_uniform_64(&f_w);
+        let item_heads = f
+            .active_head_count
+            .min(query_active_heads)
+            .clamp(1, MAX_ATTENTION_HEADS as u16);
         let f_e = if use_query_resonance {
             let q_w = query_words_opt.unwrap_or(&f_w);
-            let coh = coherence_from_word_arrays_with_both_uniform_flags_64(
+            let coh = coherence_for_active_heads_64(
                 q_w,
                 q_is_uniform,
                 &f_w,
                 f_w_uniform,
+                item_heads,
             );
             let res = branchless_max_f32(coh, 0.0);
             branchless_flush_subnormal_f32(raw_e * (res * res + 0.02))
@@ -1928,7 +2096,7 @@ fn fold_gateway_slice_with_query_words_core<S: ManifoldGatewaySignal>(
                 fact_gain_q7 = f.pspm_fact_gain_q7;
                 logic_gain_q7 = f.pspm_logic_gain_q7;
                 explore_gain_q7 = f.pspm_explore_gain_q7;
-                active_heads = f.active_head_count;
+                active_heads = item_heads;
                 has_active = true;
             } else {
                 if f_e > DEFAULT_ENTROPY_EPS {
@@ -2122,13 +2290,17 @@ where
     let mut fact_clamp = DEFAULT_FACT_RIPA_CLAMP_RAD;
     let mut fact_gain_q7 = 128u8;
     let mut fact_w = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut fact_heads = MAX_ATTENTION_HEADS as u16;
 
     if let Some(fact) = fact_opt {
         has_fact = true;
         prov_bits |= fact.causal_provenance_bits() | CAUSAL_AXIS_OBJECTIVE_FACT;
-        fact_e = branchless_flush_subnormal_f32(branchless_relu_f32(fact.grounding_base_energy()));
-        fact_addr = fact.zimms_section_offset48() & gcso_tagged_ptr_t::ADDR_MASK;
-        fact_id = fact.grounding_anchor_id();
+        let (fw, fe, fa, fid, fh) = fact.synthesize_grounding_envelope();
+        fact_w = fw;
+        fact_e = branchless_flush_subnormal_f32(branchless_relu_f32(fe));
+        fact_addr = fa & gcso_tagged_ptr_t::ADDR_MASK;
+        fact_id = fid;
+        fact_heads = fh.clamp(1, MAX_ATTENTION_HEADS as u16);
         let fc = fact.fact_ripa_clamp_rad();
         fact_clamp = branchless_select_f32(
             branchless_is_finite_f32(fc) & (fc > 0.0),
@@ -2137,7 +2309,6 @@ where
         );
         let fg = branchless_clamp_f32(fact.fact_pspm_gain(), 0.25, 1.99);
         fact_gain_q7 = (fg * 128.0 + 0.5) as u8;
-        fact_w = fact.project_grounding_words_64();
         if fact_e < 0.25 {
             prov_bits |= CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK;
         }
@@ -2150,13 +2321,17 @@ where
     let mut pers_clamp = DEFAULT_PERSONA_RIPA_CLAMP_RAD;
     let mut pers_gain_q7 = 128u8;
     let mut pers_w = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut pers_heads = MAX_ATTENTION_HEADS as u16;
 
     if let Some(pers) = persona_opt {
         has_persona = true;
         prov_bits |= pers.causal_provenance_bits() | CAUSAL_AXIS_SUBJECTIVE_PERSONA;
-        pers_e = branchless_flush_subnormal_f32(branchless_relu_f32(pers.grounding_base_energy()));
-        pers_addr = pers.zimms_section_offset48() & gcso_tagged_ptr_t::ADDR_MASK;
-        pers_id = pers.grounding_anchor_id();
+        let (pw, pe, pa, pid, ph) = pers.synthesize_grounding_envelope();
+        pers_w = pw;
+        pers_e = branchless_flush_subnormal_f32(branchless_relu_f32(pe));
+        pers_addr = pa & gcso_tagged_ptr_t::ADDR_MASK;
+        pers_id = pid;
+        pers_heads = ph.clamp(1, MAX_ATTENTION_HEADS as u16);
         let pc = pers.persona_ripa_clamp_rad();
         pers_clamp = branchless_select_f32(
             branchless_is_finite_f32(pc) & (pc > 0.0),
@@ -2165,8 +2340,17 @@ where
         );
         let pg = branchless_clamp_f32(pers.persona_pspm_gain(), 0.25, 1.99);
         pers_gain_q7 = (pg * 128.0 + 0.5) as u8;
-        pers_w = pers.project_grounding_words_64();
     }
+
+    let active_heads = if has_fact & has_persona {
+        fact_heads.min(pers_heads)
+    } else if has_fact {
+        fact_heads
+    } else if has_persona {
+        pers_heads
+    } else {
+        MAX_ATTENTION_HEADS as u16
+    };
 
     let mut fp_coh = 1.0_f32;
     let mut collision = false;
@@ -2201,19 +2385,33 @@ where
             1.0
         } else if both_uni {
             coherence_from_uniform_words_x8(pers_w[0], fact_w[0])
+        } else if active_heads < MAX_ATTENTION_HEADS as u16 {
+            tangent_cosine_active_heads_64(&pers_w, &fact_w, active_heads)
         } else {
-            coherence_from_word_arrays_with_both_uniform_flags_64(
-                &pers_w, pers_uni, &fact_w, fact_uni,
-            )
+            coherence_for_active_heads_64(&pers_w, pers_uni, &fact_w, fact_uni, active_heads)
         };
         collision = fp_coh < -DEFAULT_PERSONA_FACT_COLLISION_THRESH;
         if collision {
             prov_bits |= CAUSAL_CAUSE_PERSONA_FACT_COLLISION;
         }
+        // When operating in a sub-64 active-head tangent subspace (`active_heads < 64`) and
+        // ObjectiveFact dominates (`fact_e >= pers_e`), gate Persona phase blending by strong
+        // phase-lock coherence (`fp_coh > 0.70`) so an unaligned Persona slice never dilutes
+        // factual steering; on full 64-head toroidal signals preserve standard S^1 SLERP synergy.
+        let is_subspace = active_heads < MAX_ATTENTION_HEADS as u16;
+        let coh_gate = if is_subspace {
+            branchless_select_f32(
+                fact_e >= pers_e,
+                branchless_relu_f32((fp_coh - 0.70) * 3.333_333_3),
+                branchless_clamp_f32(1.0 + 0.5 * fp_coh, 0.5, 1.5),
+            )
+        } else {
+            branchless_clamp_f32(1.0 + 0.5 * fp_coh, 0.5, 1.5)
+        };
         let eff_pers_e = branchless_select_f32(
             collision,
-            pers_e * 0.20,
-            pers_e * branchless_clamp_f32(1.0 + 0.5 * fp_coh, 0.5, 1.5),
+            if is_subspace { 0.0 } else { pers_e * 0.20 },
+            pers_e * coh_gate,
         );
         let tot_e = fact_e + eff_pers_e;
         let safe_tot = branchless_select_f32(tot_e > DEFAULT_ENTROPY_EPS, tot_e, 1.0);
@@ -2231,6 +2429,12 @@ where
             let step0 = swar_q7_scale_le128_with_bias_x8(diff_w0, s_u64, bias_restore);
             blended_w = [swar_q7_circular_add_x8(fact_w[0], step0); NUM_SWARM_MICRO_CELLS];
             blended_uni = true;
+        } else if is_subspace {
+            let (bw, bu) = swar_tangent_lerp_words_with_uniform_flag_64(
+                &fact_w, fact_uni, &pers_w, pers_uni, s_u64,
+            );
+            blended_w = bw;
+            blended_uni = bu;
         } else {
             let bias_restore = (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
             let (bw, bu) = swar_slerp_words_with_uniform_flag_64(
@@ -2440,7 +2644,7 @@ where
             pspm_logic_gain_q7: logic_gain_q7,
             pspm_explore_gain_q7: pers_gain_q7,
             mean_phase_tag_q7: tag_q7,
-            active_head_count: MAX_ATTENTION_HEADS as u16,
+            active_head_count: active_heads,
             frame_flags: packed_tag as u16,
             phase_deltas,
         },
@@ -2785,12 +2989,15 @@ impl<T: ManifoldGatewaySignal, const N: usize> ManifoldGatewaySignal for [T; N] 
 }
 
 /// Arbitrary-length [`ManifoldGatewaySignal`] slice adapter that weights each element by its
-/// $SO(2)^{64}$ phase resonance against `query_phase_words` (zero heap allocation, zero fixed count).
+/// $SO(2)^{H}$ phase resonance against `query_phase_words` over `active_heads` active heads
+/// (zero heap allocation, zero fixed count).
 pub struct ResonantSignalSlice<'a, S: ManifoldGatewaySignal> {
     /// Dynamic slice of candidate Gateway signals (e.g. facts, personas, or attractor records).
     pub signals: &'a [S],
     /// Query-side 64-head Q7 phase words packed into 8 SWAR `u64` lanes.
     pub query_phase_words: [u64; NUM_SWARM_MICRO_CELLS],
+    /// Active attention-head count $H \in [1, 64]$ of the query probe (excludes zero-padded lanes).
+    pub active_heads: u16,
 }
 
 impl<'a, S: ManifoldGatewaySignal> ResonantSignalSlice<'a, S> {
@@ -2804,6 +3011,7 @@ impl<'a, S: ManifoldGatewaySignal> ResonantSignalSlice<'a, S> {
         Self {
             signals,
             query_phase_words: load_q7_words_64(&arr),
+            active_heads: limit.clamp(1, MAX_ATTENTION_HEADS) as u16,
         }
     }
 
@@ -2814,6 +3022,7 @@ impl<'a, S: ManifoldGatewaySignal> ResonantSignalSlice<'a, S> {
         Self {
             signals,
             query_phase_words: *trail_phase_words_ref(trail),
+            active_heads: MAX_ATTENTION_HEADS as u16,
         }
     }
 }
@@ -2833,12 +3042,16 @@ impl<S: ManifoldGatewaySignal> CausalProvenanceSignal for ResonantSignalSlice<'_
 impl<S: ManifoldGatewaySignal> ManifoldGatewaySignal for ResonantSignalSlice<'_, S> {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
-        fold_gateway_slice_with_query_words_core(self.signals, Some(&self.query_phase_words))
+        fold_gateway_slice_with_query_words_and_heads_core(
+            self.signals,
+            Some(&self.query_phase_words),
+            self.active_heads,
+        )
     }
 
     #[inline(always)]
     fn synthesize_gateway_frame(&self) -> GatewayFrame {
-        fold_gateway_slice_with_query_words_core(self.signals, Some(&self.query_phase_words)).0
+        self.synthesize_gateway_frame_with_words().0
     }
 }
 
@@ -2868,6 +3081,23 @@ impl<S: CognitiveGroundingSignal + ManifoldGatewaySignal> CognitiveGroundingSign
     #[inline(always)]
     fn grounding_anchor_id(&self) -> u32 {
         self.synthesize_gateway_frame().target_anchor_id
+    }
+
+    #[inline(always)]
+    fn active_head_count(&self) -> u16 {
+        self.active_heads
+    }
+
+    #[inline(always)]
+    fn synthesize_grounding_envelope(&self) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, u64, u32, u16) {
+        let (frame, words) = self.synthesize_gateway_frame_with_words();
+        (
+            words,
+            frame.effective_energy,
+            frame.zimms_section_offset48,
+            frame.target_anchor_id,
+            frame.active_head_count,
+        )
     }
 }
 
@@ -3643,15 +3873,10 @@ pub trait ActionHubGatewayExt: ActionHub {
             trail_out.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
             metrics |= DAES_METRIC_LAYER_SKIP_COMPENSATED;
         } else if let Some(q) = query_tensor.as_deref_mut() {
-            // Autonomous ActionHub damping derived from trail stigmergic density & frame energy.
             let clean_damping =
                 branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
-            let density_ramp = branchless_clamp_f32(trail_out.stigmergic_density, 0.35, 1.0);
-            let energy_gate = branchless_clamp_f32(frame.effective_energy, 0.0, 1.0);
-            let hub_damping_u7 =
-                ((f32::from(clean_damping) * density_ramp * energy_gate) as u8).min(128);
             let swar_words =
-                filter_and_damp_gateway_words(&next_w, frame.qdps_min_step_q7, hub_damping_u7);
+                filter_and_damp_gateway_words(&next_w, frame.qdps_min_step_q7, clean_damping);
             if swar_words_nonzero_64(&swar_words) {
                 let mut q7_stack = AlignedBuffer16::new([0i8; MAX_ATTENTION_HEADS]);
                 store_q7_words_64(&mut q7_stack.data, &swar_words);
@@ -3725,28 +3950,49 @@ pub trait ActionHubGatewayExt: ActionHub {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
 
-        // Evaporate stale pheromone and deposit new pheromone weighted quadratically by resonance
-        // energy so weak/off-topic probes decay to PassiveSidecar instead of saturating Crystal.
+        // Evaporate stale pheromone and deposit new pheromone weighted by resonance energy and
+        // active-head trajectory self-coherence (`prev_w` vs `frm_w`) so multi-layer traversal
+        // dynamically transitions across Express, PSPM, SRL, and Crystal instead of saturating.
         let prev_rho =
             branchless_flush_subnormal_f32(branchless_relu_f32(trail_out.stigmergic_density));
         let energy_gate = branchless_clamp_f32(frame.effective_energy, 0.0, 1.0);
-        let retain =
-            branchless_clamp_f32(branchless_relu_f32(thresholds.evaporation_retain), 0.0, 1.0);
-        let deposit =
-            branchless_relu_f32(thresholds.reinforcement_gain) * (energy_gate * energy_gate);
-        let next_rho = branchless_min_f32(
-            branchless_flush_subnormal_f32(prev_rho * retain + deposit),
-            MAX_STIGMERGIC_DENSITY,
-        );
+        let prev_w = *trail_phase_words_ref(trail_out);
+        let frm_nonzero = swar_words_nonzero_64(&frm_w);
+        let trail_coh = if trail_out.step_count == 0 || !frm_nonzero {
+            1.0_f32
+        } else {
+            tangent_cosine_active_heads_64(&prev_w, &frm_w, frame.active_head_count)
+        };
+        let traj_gate = if trail_out.step_count == 0 {
+            1.0_f32
+        } else if frame.active_head_count < MAX_ATTENTION_HEADS as u16 {
+            0.38_f32 + 0.52_f32 * branchless_relu_f32(trail_coh)
+        } else {
+            0.50_f32 + 0.50_f32 * branchless_relu_f32(trail_coh)
+        };
+        let should_step_trail =
+            query_tensor.is_some() || srl_hidden.is_none() || (trail_out.step_count == 0);
+        let next_rho = if should_step_trail {
+            let retain =
+                branchless_clamp_f32(branchless_relu_f32(thresholds.evaporation_retain), 0.0, 1.0);
+            let deposit = branchless_relu_f32(thresholds.reinforcement_gain)
+                * (energy_gate * energy_gate)
+                * (traj_gate * traj_gate);
+            branchless_min_f32(
+                branchless_flush_subnormal_f32(prev_rho * retain + deposit),
+                MAX_STIGMERGIC_DENSITY,
+            )
+        } else {
+            prev_rho
+        };
 
         let (bypass_hit, effective_ptr) =
             self.resolve_or_pass_tagged_ptr(daes_slot, gcso_tagged_ptr_t(frame.tagged_ptr));
-        let frm_nonzero = swar_words_nonzero_64(&frm_w);
         let next_w = if frm_nonzero {
             *trail_phase_words_mut(trail_out) = frm_w;
             frm_w
         } else {
-            *trail_phase_words_ref(trail_out)
+            prev_w
         };
         if frame.target_anchor_id != 0 {
             trail_out.target_anchor_id = frame.target_anchor_id;
@@ -3758,18 +4004,28 @@ pub trait ActionHubGatewayExt: ActionHub {
             branchless_max_f32(trail_out.attractor_pull_force, frame.effective_energy),
             MAX_ATTRACTOR_PULL_FORCE,
         );
-        let step_ptr = if frm_nonzero {
-            effective_ptr.with_phase(0)
-        } else {
-            effective_ptr
-        };
-        self.step_pointer(step_ptr.raw(), trail_out)?;
+        if should_step_trail {
+            let step_ptr = if frm_nonzero {
+                effective_ptr.with_phase(0)
+            } else {
+                effective_ptr
+            };
+            self.step_pointer(step_ptr.raw(), trail_out)?;
+        }
         trail_out.stigmergic_density = next_rho;
         trail_out.current_ptr = effective_ptr.raw();
 
         let is_repulsed = report.is_cohomology_repulsion()
             | ((frame.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0);
-        let coh = if is_repulsed { -1.0 } else { energy_gate };
+        let coh = if is_repulsed {
+            -1.0
+        } else {
+            branchless_clamp_f32(
+                branchless_max_f32(frame.fact_persona_coherence, 0.25) * energy_gate,
+                0.0,
+                1.0,
+            )
+        };
         let (decision, _mode_flags, _target_slot, extra_flags) = thresholds
             .select_action_decision(
                 next_rho,
@@ -3805,15 +4061,12 @@ pub trait ActionHubGatewayExt: ActionHub {
             if let Some(q) = query_tensor.as_deref_mut() {
                 let clean_damping =
                     branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
-                let density_ramp = branchless_clamp_f32(next_rho, 0.35, 1.0);
-                let repulse_scale = if matches!(decision, StigmergicActionDecision::RepulsionEscape) {
-                    0.5
+                let hub_damping_u7 = if matches!(decision, StigmergicActionDecision::RepulsionEscape)
+                {
+                    (clean_damping >> 1).max(1)
                 } else {
-                    1.0
+                    clean_damping
                 };
-                let hub_damping_u7 =
-                    ((f32::from(clean_damping) * density_ramp * energy_gate * repulse_scale) as u8)
-                        .min(128);
                 let swar_words =
                     filter_and_damp_gateway_words(&next_w, frame.qdps_min_step_q7, hub_damping_u7);
                 if swar_words_nonzero_64(&swar_words) {
