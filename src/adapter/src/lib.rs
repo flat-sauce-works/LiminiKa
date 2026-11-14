@@ -1879,6 +1879,37 @@ impl GcsoDualTrackTimeline {
         [0_i8; MAX_ATTENTION_HEADS]
     }
 
+    /// Writes the serialized `.gcso` dual-track container to `path`, returning the bytes written.
+    ///
+    /// # Errors
+    /// Returns an error if creating parent directories or writing the file fails.
+    pub fn save_to_path(&self, path: impl AsRef<std::path::Path>) -> Result<usize, String> {
+        let p = path.as_ref();
+        if let Some(parent) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "failed to create parent directory {}: {e}",
+                    parent.display()
+                )
+            })?;
+        }
+        let bytes = self.to_bytes();
+        std::fs::write(p, &bytes)
+            .map_err(|e| format!("failed to write .gcso container {}: {e}", p.display()))?;
+        Ok(bytes.len())
+    }
+
+    /// Loads and validates a `.gcso` dual-track container from `path`.
+    ///
+    /// # Errors
+    /// Returns an error if reading the file or parsing the container fails.
+    pub fn load_from_path(path: impl AsRef<std::path::Path>) -> Result<Self, String> {
+        let p = path.as_ref();
+        let bytes = std::fs::read(p)
+            .map_err(|e| format!("failed to read .gcso container {}: {e}", p.display()))?;
+        Self::from_bytes(&bytes)
+    }
+
     /// Deserializes a portable [`GcsoDualTrackTimeline`] byte stream produced by [`Self::to_bytes`].
     ///
     /// # Errors
@@ -2680,5 +2711,16 @@ mod tests {
         assert_eq!(subtitles.len(), 2);
         assert_eq!(subtitles[0].text, "Turn 0 fact");
         assert_eq!(subtitles[1].text, "Turn 1 persona");
+
+        // Disk persistence roundtrip.
+        let tmp_path = std::env::temp_dir().join("liminika_dual_track_test.gcso");
+        let written = timeline
+            .save_to_path(&tmp_path)
+            .expect("save .gcso to temp");
+        assert_eq!(written, bytes.len());
+        let loaded =
+            GcsoDualTrackTimeline::load_from_path(&tmp_path).expect("load .gcso from temp");
+        assert_eq!(loaded, timeline);
+        let _ = std::fs::remove_file(&tmp_path);
     }
 }

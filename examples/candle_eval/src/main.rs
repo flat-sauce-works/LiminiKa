@@ -1599,10 +1599,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         step2_forb_total,
     );
 
-    // Step 3: Dual-Track .gcso Persistence, Zero-Forward GOP Seek & Cross-Model Subtitle Export
+    // Step 3: Dual-Track .gcso Disk Persistence, Zero-Forward GOP Seek & Cross-Model Subtitle Export
     println!("\n=== Step 3: Dual-Track .gcso GOP Seek & Cross-Model Subtitle Check ===");
-    let gcso_bytes = timeline.to_bytes();
-    let reloaded = GcsoDualTrackTimeline::from_bytes(&gcso_bytes)?;
+    let gcso_path = std::env::temp_dir().join("liminika_phi4_session.gcso");
+    let written_bytes = timeline.save_to_path(&gcso_path)?;
+    let reloaded = GcsoDualTrackTimeline::load_from_path(&gcso_path)?;
     let active_fp = GcsoDualTrackTimeline::geometry_fingerprint(adapter.geometry());
     let seek_state = reloaded.seek_zero_forward(2)?;
     let mut alt_geom = RopeGeometry::phi4_mini();
@@ -1612,8 +1613,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model_changed = reloaded.model_fingerprint() != alt_fp;
     let subtitles = reloaded.export_subtitle_track(None);
     println!(
-        "Serialized .gcso: {} bytes | frames={} | keyframes={:?} | fp_match={}",
-        gcso_bytes.len(),
+        "Saved & Reloaded .gcso ({}): {} bytes | frames={} | keyframes={:?} | fp_match={}",
+        gcso_path.display(),
+        written_bytes,
         reloaded.frames().len(),
         reloaded.keyframe_positions(),
         reloaded.model_fingerprint() == active_fp,

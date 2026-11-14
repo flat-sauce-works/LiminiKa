@@ -96,6 +96,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     r.forbidden_hit_rate * 100.0
                 );
             }
+        } else if cmd == "gcso-inspect" {
+            use liminika_adapter::{AttractorContainerCodec, GcsoDualTrackTimeline};
+
+            let path = args
+                .next()
+                .ok_or("usage: liminika gcso-inspect <file.gcso> [seek_frame]")?;
+            let seek_frame: Option<u64> = args.next().map(|s| s.parse::<u64>()).transpose()?;
+            let timeline = GcsoDualTrackTimeline::load_from_path(&path)?;
+            println!(
+                "Loaded .gcso '{}': fingerprint=0x{:016x} frames={} keyframes={:?}",
+                path,
+                timeline.model_fingerprint(),
+                timeline.frames().len(),
+                timeline.keyframe_positions()
+            );
+            for rec in timeline.export_subtitle_track(None) {
+                println!(
+                    "  [Frame {} | {:?} | E={:.2}] {}",
+                    rec.frame_index, rec.role, rec.energy, rec.text
+                );
+            }
+            if let Some(target) = seek_frame {
+                let state = timeline.seek_zero_forward(target)?;
+                println!(
+                    "Zero-Forward Seek(frame={}): keyframe={} p_frames={} total_energy={:.2} anchors={}",
+                    state.target_frame_index,
+                    state.keyframe_index,
+                    state.p_frames_applied,
+                    state.total_energy,
+                    state.anchor_ids.len()
+                );
+            }
         }
     }
 

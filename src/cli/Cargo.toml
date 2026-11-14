@@ -18,5 +18,6 @@ metal = ["liminika-core/metal"]
 vulkan = ["liminika-core/vulkan"]
 
 [dependencies]
+liminika-adapter = { path = "../adapter" }
 liminika-core = { path = "../core" }
 liminika-dsl = { path = "../dsl" }
