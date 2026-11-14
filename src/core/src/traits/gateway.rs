@@ -1817,188 +1817,219 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
     /// Synthesizes a contiguous slice of `Self` into a 128-byte [`GatewayFrame`] and its 8
     /// register-resident `u64` SWAR phase words (`[u64; 8]`), accumulating scalar metadata in
     /// registers and materializing `GatewayFrame` only once upon loop completion.
-    #[inline]
+    #[inline(always)]
     fn synthesize_gateway_slice_with_words(
         slice: &[Self],
     ) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS])
     where
         Self: Sized,
     {
-        let len = slice.len();
-        if len == 0 {
-            return (GatewayFrame::default(), [0u64; NUM_SWARM_MICRO_CELLS]);
+        fold_gateway_slice_with_query_words_core(slice, None)
+    }
+}
+
+/// Folds an arbitrary-length slice of [`ManifoldGatewaySignal`] items into a single
+/// [`GatewayFrame`] and register-resident SWAR phase words, optionally weighting each item
+/// by its $SO(2)^{64}$ phase coherence against `query_words_opt`.
+#[inline]
+fn fold_gateway_slice_with_query_words_core<S: ManifoldGatewaySignal>(
+    slice: &[S],
+    query_words_opt: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
+) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    let len = slice.len();
+    if len == 0 {
+        return (GatewayFrame::default(), [0u64; NUM_SWARM_MICRO_CELLS]);
+    }
+    if len == 1 {
+        return slice[0].synthesize_gateway_frame_with_words();
+    }
+
+    let use_query_resonance = query_words_opt.is_some_and(swar_words_nonzero_64);
+    let q_is_uniform = query_words_opt.is_some_and(is_word_array_uniform_64);
+
+    let mut acc_w = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut acc_is_uniform = true;
+    let mut tot_e = 0.0_f32;
+    let mut best_e = 0.0_f32;
+    let mut has_active = false;
+
+    let mut zimms_addr = 0u64;
+    let mut target_anchor_id = 0u32;
+    let mut ripa_clamp_rad = DEFAULT_RIPA_CLAMP_MAX_RAD;
+    let mut qdps_min_step_rad = DEFAULT_QDPS_MIN_STEP_RAD;
+    let mut eff_inv_temp = 1.0_f32;
+    let mut fp_coh = 1.0_f32;
+    let mut rep_sev = 0.0_f32;
+    let mut prov_bits = 0u32;
+    let mut dom_cause = ROOT_CAUSE_NOMINAL;
+    let mut dom_slot = ATTRACTOR_SLOT_SYSTEM_BASELINE;
+    let mut action_flags = ACTION_PRESET_EXPRESS_PHASE;
+    let mut swarm_mask = 0xFFu8;
+    let mut qdps_step_q7 = branchless_rad_to_qdps_step_u8(DEFAULT_QDPS_MIN_STEP_RAD);
+    let mut pspm_fact = 24u8;
+    let mut pspm_logic = 24u8;
+    let mut pspm_explore = 16u8;
+    let mut fact_gain_q7 = 128u8;
+    let mut logic_gain_q7 = 128u8;
+    let mut explore_gain_q7 = 128u8;
+    let mut active_heads = MAX_ATTENTION_HEADS as u16;
+
+    let mut i = 0usize;
+    while i < len {
+        if !slice[i].has_active_gateway_ensemble_signal() {
+            i += 1;
+            continue;
         }
-        if len == 1 {
-            return slice[0].synthesize_gateway_frame_with_words();
-        }
+        let (f, f_w) = slice[i].synthesize_gateway_ensemble_item();
+        let raw_e = branchless_flush_subnormal_f32(branchless_relu_f32(f.effective_energy));
+        let f_w_uniform = is_word_array_uniform_64(&f_w);
+        let f_e = if use_query_resonance {
+            let q_w = query_words_opt.unwrap_or(&f_w);
+            let coh = coherence_from_word_arrays_with_both_uniform_flags_64(
+                q_w,
+                q_is_uniform,
+                &f_w,
+                f_w_uniform,
+            );
+            let res = branchless_max_f32(coh, 0.0);
+            branchless_flush_subnormal_f32(raw_e * (res * res + 0.02))
+        } else {
+            raw_e
+        };
+        let f_has_signal = (f_e > DEFAULT_ENTROPY_EPS)
+            | (f.repulsion_severity > DEFAULT_ENTROPY_EPS)
+            | (f.provenance_bits != 0)
+            | ((f.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0);
 
-        let mut acc_w = [0u64; NUM_SWARM_MICRO_CELLS];
-        let mut acc_is_uniform = true;
-        let mut tot_e = 0.0_f32;
-        let mut best_e = 0.0_f32;
-        let mut has_active = false;
-
-        let mut zimms_addr = 0u64;
-        let mut target_anchor_id = 0u32;
-        let mut ripa_clamp_rad = DEFAULT_RIPA_CLAMP_MAX_RAD;
-        let mut qdps_min_step_rad = DEFAULT_QDPS_MIN_STEP_RAD;
-        let mut eff_inv_temp = 1.0_f32;
-        let mut fp_coh = 1.0_f32;
-        let mut rep_sev = 0.0_f32;
-        let mut prov_bits = 0u32;
-        let mut dom_cause = ROOT_CAUSE_NOMINAL;
-        let mut dom_slot = ATTRACTOR_SLOT_SYSTEM_BASELINE;
-        let mut action_flags = ACTION_PRESET_EXPRESS_PHASE;
-        let mut swarm_mask = 0xFFu8;
-        let mut qdps_step_q7 = branchless_rad_to_qdps_step_u8(DEFAULT_QDPS_MIN_STEP_RAD);
-        let mut pspm_fact = 24u8;
-        let mut pspm_logic = 24u8;
-        let mut pspm_explore = 16u8;
-        let mut fact_gain_q7 = 128u8;
-        let mut logic_gain_q7 = 128u8;
-        let mut explore_gain_q7 = 128u8;
-        let mut active_heads = MAX_ATTENTION_HEADS as u16;
-
-        let mut i = 0usize;
-        while i < len {
-            if !slice[i].has_active_gateway_ensemble_signal() {
-                i += 1;
-                continue;
-            }
-            let (f, f_w) = slice[i].synthesize_gateway_ensemble_item();
-            let f_e = branchless_flush_subnormal_f32(branchless_relu_f32(f.effective_energy));
-            let f_has_signal = (f_e > DEFAULT_ENTROPY_EPS) | (f.repulsion_severity > DEFAULT_ENTROPY_EPS)
-                | (f.provenance_bits != 0) | ((f.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0);
-
-            if f_has_signal {
-                if !has_active {
-                    acc_w = f_w;
-                    acc_is_uniform = is_word_array_uniform_64(&f_w);
-                    tot_e = f_e;
-                    best_e = f_e;
-                    zimms_addr = f.zimms_section_offset48;
-                    target_anchor_id = f.target_anchor_id;
-                    ripa_clamp_rad = f.ripa_clamp_rad;
-                    qdps_min_step_rad = f.qdps_min_step_rad;
-                    eff_inv_temp = f.effective_inv_temp;
-                    fp_coh = f.fact_persona_coherence;
-                    rep_sev = f.repulsion_severity;
-                    prov_bits = f.provenance_bits;
-                    dom_cause = f.dominant_cause_code;
-                    dom_slot = f.dominant_slot;
-                    action_flags = f.action_mode_flags;
-                    swarm_mask = f.active_swarm_cell_mask;
-                    qdps_step_q7 = f.qdps_min_step_q7;
-                    pspm_fact = f.pspm_fact_heads;
-                    pspm_logic = f.pspm_logic_heads;
-                    pspm_explore = f.pspm_explore_heads;
-                    fact_gain_q7 = f.pspm_fact_gain_q7;
-                    logic_gain_q7 = f.pspm_logic_gain_q7;
-                    explore_gain_q7 = f.pspm_explore_gain_q7;
-                    active_heads = f.active_head_count;
-                    has_active = true;
-                } else {
-                    if f_e > DEFAULT_ENTROPY_EPS {
-                        let new_tot = tot_e + f_e;
-                        let safe_tot = branchless_select_f32(new_tot > DEFAULT_ENTROPY_EPS, new_tot, 1.0);
-                        let w_ratio =
-                            branchless_clamp_f32(f_e * fast_inv_pos_normal_f32(safe_tot), 0.0, 1.0);
-                        let s_u64 = ((w_ratio * 128.0 + 0.5) as u8).min(128) as u64;
-                        if s_u64 >= 128 {
-                            acc_w = f_w;
-                            acc_is_uniform = is_word_array_uniform_64(&f_w);
-                        } else if s_u64 > 0 && !swar_words_equal_64(&acc_w, &f_w) {
-                            let f_is_uniform = acc_is_uniform && is_word_array_uniform_64(&f_w);
-                            let bias_restore =
-                                (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-                            let (next_acc, next_uni) = swar_slerp_words_with_uniform_flag_64(
-                                &acc_w,
-                                acc_is_uniform,
-                                &f_w,
-                                f_is_uniform,
-                                s_u64,
-                                bias_restore,
-                            );
-                            acc_w = next_acc;
-                            acc_is_uniform = next_uni;
-                        }
-                        eff_inv_temp =
-                            branchless_lerp_f32(eff_inv_temp, f.effective_inv_temp, w_ratio);
-                        fp_coh = branchless_lerp_f32(fp_coh, f.fact_persona_coherence, w_ratio);
-
-                        let take_dom = f_e > best_e;
-                        best_e = branchless_select_f32(take_dom, f_e, best_e);
-                        target_anchor_id =
-                            branchless_select_u32(take_dom, f.target_anchor_id, target_anchor_id);
-                        zimms_addr = branchless_select_u64(
-                            take_dom & (f.zimms_section_offset48 != 0),
-                            f.zimms_section_offset48,
-                            zimms_addr,
+        if f_has_signal {
+            if !has_active {
+                acc_w = f_w;
+                acc_is_uniform = f_w_uniform;
+                tot_e = f_e;
+                best_e = f_e;
+                zimms_addr = f.zimms_section_offset48;
+                target_anchor_id = f.target_anchor_id;
+                ripa_clamp_rad = f.ripa_clamp_rad;
+                qdps_min_step_rad = f.qdps_min_step_rad;
+                eff_inv_temp = f.effective_inv_temp;
+                fp_coh = f.fact_persona_coherence;
+                rep_sev = f.repulsion_severity;
+                prov_bits = f.provenance_bits;
+                dom_cause = f.dominant_cause_code;
+                dom_slot = f.dominant_slot;
+                action_flags = f.action_mode_flags;
+                swarm_mask = f.active_swarm_cell_mask;
+                qdps_step_q7 = f.qdps_min_step_q7;
+                pspm_fact = f.pspm_fact_heads;
+                pspm_logic = f.pspm_logic_heads;
+                pspm_explore = f.pspm_explore_heads;
+                fact_gain_q7 = f.pspm_fact_gain_q7;
+                logic_gain_q7 = f.pspm_logic_gain_q7;
+                explore_gain_q7 = f.pspm_explore_gain_q7;
+                active_heads = f.active_head_count;
+                has_active = true;
+            } else {
+                if f_e > DEFAULT_ENTROPY_EPS {
+                    let new_tot = tot_e + f_e;
+                    let safe_tot =
+                        branchless_select_f32(new_tot > DEFAULT_ENTROPY_EPS, new_tot, 1.0);
+                    let w_ratio =
+                        branchless_clamp_f32(f_e * fast_inv_pos_normal_f32(safe_tot), 0.0, 1.0);
+                    let s_u64 = ((w_ratio * 128.0 + 0.5) as u8).min(128) as u64;
+                    if s_u64 >= 128 {
+                        acc_w = f_w;
+                        acc_is_uniform = f_w_uniform;
+                    } else if s_u64 > 0 && !swar_words_equal_64(&acc_w, &f_w) {
+                        let f_is_uniform = acc_is_uniform && f_w_uniform;
+                        let bias_restore =
+                            (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+                        let (next_acc, next_uni) = swar_slerp_words_with_uniform_flag_64(
+                            &acc_w,
+                            acc_is_uniform,
+                            &f_w,
+                            f_is_uniform,
+                            s_u64,
+                            bias_restore,
                         );
-                        dom_slot = branchless_select_u8(take_dom, f.dominant_slot, dom_slot);
-                        pspm_fact = branchless_select_u8(take_dom, f.pspm_fact_heads, pspm_fact);
-                        pspm_logic = branchless_select_u8(take_dom, f.pspm_logic_heads, pspm_logic);
-                        pspm_explore =
-                            branchless_select_u8(take_dom, f.pspm_explore_heads, pspm_explore);
-                        fact_gain_q7 =
-                            branchless_select_u8(take_dom, f.pspm_fact_gain_q7, fact_gain_q7);
-                        logic_gain_q7 =
-                            branchless_select_u8(take_dom, f.pspm_logic_gain_q7, logic_gain_q7);
-                        explore_gain_q7 =
-                            branchless_select_u8(take_dom, f.pspm_explore_gain_q7, explore_gain_q7);
-                        tot_e = new_tot;
+                        acc_w = next_acc;
+                        acc_is_uniform = next_uni;
                     }
-                    action_flags |= f.action_mode_flags;
-                    swarm_mask &= f.active_swarm_cell_mask;
-                    prov_bits |= f.provenance_bits;
-                    rep_sev = branchless_max_f32(rep_sev, f.repulsion_severity);
-                    if f.dominant_cause_code > dom_cause {
-                        dom_cause = f.dominant_cause_code;
-                    }
+                    eff_inv_temp =
+                        branchless_lerp_f32(eff_inv_temp, f.effective_inv_temp, w_ratio);
+                    fp_coh = branchless_lerp_f32(fp_coh, f.fact_persona_coherence, w_ratio);
+
+                    let take_dom = f_e > best_e;
+                    best_e = branchless_select_f32(take_dom, f_e, best_e);
+                    target_anchor_id =
+                        branchless_select_u32(take_dom, f.target_anchor_id, target_anchor_id);
+                    zimms_addr = branchless_select_u64(
+                        take_dom & (f.zimms_section_offset48 != 0),
+                        f.zimms_section_offset48,
+                        zimms_addr,
+                    );
+                    dom_slot = branchless_select_u8(take_dom, f.dominant_slot, dom_slot);
+                    pspm_fact = branchless_select_u8(take_dom, f.pspm_fact_heads, pspm_fact);
+                    pspm_logic = branchless_select_u8(take_dom, f.pspm_logic_heads, pspm_logic);
+                    pspm_explore =
+                        branchless_select_u8(take_dom, f.pspm_explore_heads, pspm_explore);
+                    fact_gain_q7 =
+                        branchless_select_u8(take_dom, f.pspm_fact_gain_q7, fact_gain_q7);
+                    logic_gain_q7 =
+                        branchless_select_u8(take_dom, f.pspm_logic_gain_q7, logic_gain_q7);
+                    explore_gain_q7 =
+                        branchless_select_u8(take_dom, f.pspm_explore_gain_q7, explore_gain_q7);
+                    tot_e = new_tot;
+                }
+                action_flags |= f.action_mode_flags;
+                swarm_mask &= f.active_swarm_cell_mask;
+                prov_bits |= f.provenance_bits;
+                rep_sev = branchless_max_f32(rep_sev, f.repulsion_severity);
+                if f.dominant_cause_code > dom_cause {
+                    dom_cause = f.dominant_cause_code;
                 }
             }
-            i += 1;
         }
-
-        if !has_active {
-            return slice[0].synthesize_gateway_frame_with_words();
-        }
-
-        let phase_deltas = words_to_q7_array_64(&acc_w);
-        let tag_q7 = swar_q7_mean_i8_from_words_with_uniform_flag_64(&acc_w, acc_is_uniform);
-        let packed_tag = pack_action_slot_tag(dom_slot, action_flags);
-        let tagged_ptr = gcso_tagged_ptr_t::pack(zimms_addr, packed_tag, tag_q7).raw();
-        (
-            GatewayFrame {
-                tagged_ptr,
-                zimms_section_offset48: zimms_addr,
-                target_anchor_id,
-                effective_energy: branchless_min_f32(tot_e, MAX_ATTRACTOR_PULL_FORCE),
-                ripa_clamp_rad,
-                qdps_min_step_rad,
-                effective_inv_temp: eff_inv_temp,
-                fact_persona_coherence: fp_coh,
-                repulsion_severity: rep_sev,
-                provenance_bits: prov_bits,
-                dominant_cause_code: dom_cause,
-                dominant_slot: dom_slot,
-                action_mode_flags: action_flags,
-                active_swarm_cell_mask: swarm_mask,
-                qdps_min_step_q7: qdps_step_q7,
-                pspm_fact_heads: pspm_fact,
-                pspm_logic_heads: pspm_logic,
-                pspm_explore_heads: pspm_explore,
-                pspm_fact_gain_q7: fact_gain_q7,
-                pspm_logic_gain_q7: logic_gain_q7,
-                pspm_explore_gain_q7: explore_gain_q7,
-                mean_phase_tag_q7: tag_q7,
-                active_head_count: active_heads,
-                frame_flags: packed_tag as u16,
-                phase_deltas,
-            },
-            acc_w,
-        )
+        i += 1;
     }
+
+    if !has_active {
+        return slice[0].synthesize_gateway_frame_with_words();
+    }
+
+    let phase_deltas = words_to_q7_array_64(&acc_w);
+    let tag_q7 = swar_q7_mean_i8_from_words_with_uniform_flag_64(&acc_w, acc_is_uniform);
+    let packed_tag = pack_action_slot_tag(dom_slot, action_flags);
+    let tagged_ptr = gcso_tagged_ptr_t::pack(zimms_addr, packed_tag, tag_q7).raw();
+    (
+        GatewayFrame {
+            tagged_ptr,
+            zimms_section_offset48: zimms_addr,
+            target_anchor_id,
+            effective_energy: branchless_min_f32(tot_e, MAX_ATTRACTOR_PULL_FORCE),
+            ripa_clamp_rad,
+            qdps_min_step_rad,
+            effective_inv_temp: eff_inv_temp,
+            fact_persona_coherence: fp_coh,
+            repulsion_severity: rep_sev,
+            provenance_bits: prov_bits,
+            dominant_cause_code: dom_cause,
+            dominant_slot: dom_slot,
+            action_mode_flags: action_flags,
+            active_swarm_cell_mask: swarm_mask,
+            qdps_min_step_q7: qdps_step_q7,
+            pspm_fact_heads: pspm_fact,
+            pspm_logic_heads: pspm_logic,
+            pspm_explore_heads: pspm_explore,
+            pspm_fact_gain_q7: fact_gain_q7,
+            pspm_logic_gain_q7: logic_gain_q7,
+            pspm_explore_gain_q7: explore_gain_q7,
+            mean_phase_tag_q7: tag_q7,
+            active_head_count: active_heads,
+            frame_flags: packed_tag as u16,
+            phase_deltas,
+        },
+        acc_w,
+    )
 }
 
 impl<T: ManifoldGatewaySignal + ?Sized> ManifoldGatewaySignal for &T {
@@ -2743,6 +2774,64 @@ impl<T: ManifoldGatewaySignal, const N: usize> ManifoldGatewaySignal for [T; N] 
     #[inline(always)]
     fn synthesize_gateway_frame(&self) -> GatewayFrame {
         self.as_slice().synthesize_gateway_frame_with_words().0
+    }
+}
+
+/// Arbitrary-length [`ManifoldGatewaySignal`] slice adapter that weights each element by its
+/// $SO(2)^{64}$ phase resonance against `query_phase_words` (zero heap allocation, zero fixed count).
+pub struct ResonantSignalSlice<'a, S: ManifoldGatewaySignal> {
+    /// Dynamic slice of candidate Gateway signals (e.g. facts, personas, or attractor records).
+    pub signals: &'a [S],
+    /// Query-side 64-head Q7 phase words packed into 8 SWAR `u64` lanes.
+    pub query_phase_words: [u64; NUM_SWARM_MICRO_CELLS],
+}
+
+impl<'a, S: ManifoldGatewaySignal> ResonantSignalSlice<'a, S> {
+    /// Wraps an arbitrary slice `signals` with a Q7 phase probe slice (`<= 64` heads).
+    #[inline]
+    #[must_use]
+    pub fn from_q7_probe(signals: &'a [S], probe_q7: &[gcso_q7_t]) -> Self {
+        let mut arr = [0i8; MAX_ATTENTION_HEADS];
+        let limit = probe_q7.len().min(MAX_ATTENTION_HEADS);
+        arr[..limit].copy_from_slice(&probe_q7[..limit]);
+        Self {
+            signals,
+            query_phase_words: load_q7_words_64(&arr),
+        }
+    }
+
+    /// Wraps an arbitrary slice `signals` using the accumulated phase words of `trail`.
+    #[inline]
+    #[must_use]
+    pub fn from_trail(signals: &'a [S], trail: &gcso_pointer_trail_t) -> Self {
+        Self {
+            signals,
+            query_phase_words: *trail_phase_words_ref(trail),
+        }
+    }
+}
+
+impl<S: ManifoldGatewaySignal> CausalProvenanceSignal for ResonantSignalSlice<'_, S> {
+    #[inline(always)]
+    fn causal_provenance_bits(&self) -> u32 {
+        self.signals.causal_provenance_bits()
+    }
+
+    #[inline(always)]
+    fn causal_anomaly_severity(&self) -> f32 {
+        self.signals.causal_anomaly_severity()
+    }
+}
+
+impl<S: ManifoldGatewaySignal> ManifoldGatewaySignal for ResonantSignalSlice<'_, S> {
+    #[inline(always)]
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+        fold_gateway_slice_with_query_words_core(self.signals, Some(&self.query_phase_words))
+    }
+
+    #[inline(always)]
+    fn synthesize_gateway_frame(&self) -> GatewayFrame {
+        fold_gateway_slice_with_query_words_core(self.signals, Some(&self.query_phase_words)).0
     }
 }
 

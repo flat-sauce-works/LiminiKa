@@ -720,4 +720,35 @@ mod tests {
         assert!(gain > 0.0);
         assert!(hidden[0] > 10.0);
     }
+
+    #[test]
+    fn adapter_resonates_arbitrary_slice_without_hardcoded_count() {
+        use liminika_core::traits::gateway::{ObjectiveFact, ResonantSignalSlice};
+
+        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let len = adapter.geometry().q_rot_len();
+        let mut q_rot: Vec<f32> = (0..len).map(|i| ((i % 9) as f32) * 0.1 - 0.3).collect();
+        let mut trail = gcso_pointer_trail_t::default();
+
+        // Arbitrary number of candidates (e.g. 3, not tied to 8) matching 24 active Q heads.
+        let mut a1 = [0i8; 64];
+        a1[..24].fill(60);
+        let mut a2 = [0i8; 64];
+        a2[..24].fill(-60);
+        let signals = [
+            ObjectiveFact::new(a1, 2.0, 0, 10),
+            ObjectiveFact::new(a2, 2.0, 0, 20),
+            ObjectiveFact::new([0i8; 64], 2.0, 0, 30),
+        ];
+        let probe = [60i8; 24];
+        let resonant = ResonantSignalSlice::from_q7_probe(&signals, &probe);
+
+        let (frame, _) = adapter
+            .steer_layer_with_gateway(0, &resonant, &mut trail, 128, &mut q_rot, None)
+            .expect("resonant steering should succeed")
+            .expect("layer 0 active");
+
+        assert_eq!(frame.target_anchor_id, 10);
+        assert!(frame.phase_deltas[0] > 30);
+    }
 }
