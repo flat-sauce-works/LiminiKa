@@ -7,12 +7,15 @@
 //! unified, zero-external-dependency bridge for external LLM runtimes (Candle, `llama.cpp`,
 //! and CLI evaluation harnesses).
 
-use liminika_core::abi::{gcso_edbc_state_t, gcso_q7_t};
+use liminika_core::abi::{gcso_edbc_state_t, gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::entropy_control::EntropyController;
 use liminika_core::phase_steering::PhaseSteeringEngine;
 use liminika_core::residual_adapter::ResidualAdapterEngine;
 use liminika_core::traits::aligned::{
     AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32,
+};
+use liminika_core::traits::gateway::{
+    CausalProvenanceReport, GatewayFrame, GatewayPhaseSteeringExt, ManifoldGatewaySignal,
 };
 use liminika_core::traits::rope::{
     PhaseSteeringGeometryExt, RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget,
@@ -373,6 +376,78 @@ impl ModelSteeringAdapter {
         Ok(())
     }
 
+    /// Steers a single token's rotated query slice (`num_q_heads * rotary_dim`) using a
+    /// [`ManifoldGatewaySignal`] composite so structural hyperparameters (`ripa_clamp_rad`,
+    /// `qdps_min_step_rad`, `effective_inv_temp`) are derived autonomously from Gateway physics
+    /// rather than manual scalar tuning.
+    ///
+    /// Layers disabled in `geometry.layer_rope_mask` (NoPE layers) are skipped in O(1),
+    /// returning `Ok(None)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `q_rot_inout` length mismatches or `liminika-core` rejects the inputs.
+    pub fn steer_layer_with_gateway<S: ManifoldGatewaySignal + ?Sized>(
+        &self,
+        layer_idx: usize,
+        signal: &S,
+        trail_inout: &mut gcso_pointer_trail_t,
+        unresolved_damping_u7: u8,
+        q_rot_inout: &mut [f32],
+        logits_opt: Option<&mut [f32]>,
+    ) -> Result<Option<(GatewayFrame, CausalProvenanceReport)>, String> {
+        if !self.geometry.is_rope_layer(layer_idx) {
+            return Ok(None);
+        }
+        let expected = self.geometry.q_rot_len();
+        if q_rot_inout.len() != expected {
+            return Err(format!(
+                "expected q_rot_inout length {}, got {}",
+                expected,
+                q_rot_inout.len()
+            ));
+        }
+
+        let mut work_buf = AlignedF32Buffer32::new_zeroed(expected);
+        work_buf.as_mut_slice().copy_from_slice(q_rot_inout);
+
+        let mut logits_buf = logits_opt.as_ref().map(|l| {
+            let mut b = AlignedF32Buffer32::new_zeroed(l.len());
+            b.as_mut_slice().copy_from_slice(l);
+            b
+        });
+
+        let (frame, report) = {
+            let mut tensor_mut = AlignedSliceMut32::new(work_buf.as_mut_slice())
+                .map_err(|e| format!("AlignedSliceMut32 error: {e}"))?;
+            let mut logits_mut_opt = match logits_buf.as_mut() {
+                Some(b) => Some(
+                    AlignedSliceMut32::new(b.as_mut_slice())
+                        .map_err(|e| format!("AlignedSliceMut32 logits error: {e}"))?,
+                ),
+                None => None,
+            };
+            self.phase_engine
+                .steer_gateway_signal_for_geometry_safe(
+                    signal,
+                    &self.geometry,
+                    trail_inout,
+                    unresolved_damping_u7,
+                    &mut tensor_mut,
+                    None,
+                    logits_mut_opt.as_mut(),
+                )
+                .map_err(|e| format!("steer_gateway_signal_for_geometry_safe error: {e}"))?
+        };
+
+        q_rot_inout.copy_from_slice(work_buf.as_slice());
+        if let (Some(dst), Some(src)) = (logits_opt, logits_buf) {
+            dst.copy_from_slice(src.as_slice());
+        }
+
+        Ok(Some((frame, report)))
+    }
+
     /// Evaluates Top-2 sparse surrogate entropy via [`EntropyController::eval_surrogate_and_step`]
     /// and scales `logits` by the resulting adaptive `sample_temperature`.
     ///
@@ -545,5 +620,42 @@ mod tests {
             .apply_srl_hidden_fused(&mut hidden, &u, &v, 0.5)
             .expect("srl fused should succeed");
         assert!((hidden[0] - 1.25).abs() < 1e-5);
+    }
+
+    #[test]
+    fn adapter_steers_via_gateway_trait_composition() {
+        use liminika_core::traits::gateway::{
+            ObjectiveFact, SubjectivePersona, CAUSAL_AXIS_OBJECTIVE_FACT,
+            CAUSAL_AXIS_SUBJECTIVE_PERSONA,
+        };
+
+        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let len = adapter.geometry().q_rot_len();
+        let orig: Vec<f32> = (0..len).map(|i| ((i % 11) as f32) * 0.1 - 0.4).collect();
+        let mut q_rot = orig.clone();
+        let mut logits = vec![2.0, 1.0, 0.5, -0.5];
+        let mut trail = gcso_pointer_trail_t::default();
+
+        let fact = ObjectiveFact::new([20i8; 64], 2.5, 0, 42);
+        let persona = SubjectivePersona::new([-12i8; 64], 1.8, 0, 7);
+        let composite_signal = (fact, persona);
+
+        let (frame, report) = adapter
+            .steer_layer_with_gateway(
+                0,
+                &composite_signal,
+                &mut trail,
+                128,
+                &mut q_rot,
+                Some(&mut logits),
+            )
+            .expect("gateway steering should succeed")
+            .expect("layer 0 is active");
+
+        assert!(frame.ripa_clamp_rad > 0.0);
+        assert_ne!(report.provenance_bits & CAUSAL_AXIS_OBJECTIVE_FACT, 0);
+        assert_ne!(report.provenance_bits & CAUSAL_AXIS_SUBJECTIVE_PERSONA, 0);
+        assert_ne!(q_rot, orig);
+        assert_eq!(trail.step_count, 1);
     }
 }

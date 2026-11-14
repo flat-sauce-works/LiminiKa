@@ -611,6 +611,26 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_w
     const gcso_config_t* GCSO_RESTRICT config) GCSO_NOEXCEPT;
 
 /**
+ * @brief Steers query_tensor using a 2-Origin ManifoldGatewaySignal composite
+ * (ObjectiveFact + SubjectivePersona) so structural hyperparameters (ripa_clamp_rad,
+ * qdps_min_step_rad, effective_inv_temp) are derived autonomously from Gateway physics
+ * and dispatched according to gcso_config_t RoPE geometry (Interleaved/HalfSplit, rotary_dim).
+ * @param query_tensor 32-byte aligned query tensor buffer.
+ * @param fact_phases Q7 phase array for ObjectiveFact (16-byte aligned, length >= num_heads).
+ * @param fact_energy ObjectiveFact base energy.
+ * @param persona_phases Q7 phase array for SubjectivePersona (16-byte aligned, length >= num_heads).
+ * @param persona_energy SubjectivePersona base energy.
+ * @param trail_inout 128-byte aligned pointer trail state updated in-place.
+ * @param config 16-byte aligned runtime configuration carrying RoPE geometry.
+ * @return GCSO_SUCCESS or error status code.
+ */
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_steer_with_gateway_and_config_safe(
+    float* GCSO_RESTRICT query_tensor, const gcso_q7_t* GCSO_RESTRICT fact_phases,
+    float fact_energy, const gcso_q7_t* GCSO_RESTRICT persona_phases, float persona_energy,
+    gcso_pointer_trail_t* GCSO_RESTRICT trail_inout,
+    const gcso_config_t* GCSO_RESTRICT config) GCSO_NOEXCEPT;
+
+/**
  * @brief Recovers per-head Q7 Procrustes phase deltas from HalfSplit RoPE tensor pairs.
  * @param q_before 32-byte aligned pre-steering query tensor.
  * @param q_after 32-byte aligned post-steering query tensor.

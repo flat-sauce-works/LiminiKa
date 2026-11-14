@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "liminika/gcso_abi.h"
 
@@ -128,6 +129,58 @@ int main(void) {
     printf("Phi-4-mini C-ABI HalfSplit hook OK: layer=%u head0_q7_in=%d head0_q7_recovered=%d\n",
            example_layer_idx, (int)phase_deltas[0], (int)recovered_q7[0]);
 
+    /* Also verify 2-Origin Gateway composite steering (structural hyperparameters). */
+    gcso_pointer_trail_t* trail =
+        (gcso_pointer_trail_t*)gcso_alloc_aligned(128u, sizeof(gcso_pointer_trail_t));
+    gcso_q7_t* persona_deltas = (gcso_q7_t*)gcso_alloc_aligned(16u, num_heads * sizeof(gcso_q7_t));
+    if (trail == NULL || persona_deltas == NULL) {
+        fprintf(stderr, "Aligned Gateway buffer allocation failed\n");
+        gcso_free_aligned(trail);
+        gcso_free_aligned(persona_deltas);
+        gcso_free_aligned(q_before);
+        gcso_free_aligned(q_after);
+        gcso_free_aligned(phase_deltas);
+        gcso_free_aligned(recovered_q7);
+        return 1;
+    }
+    memset(trail, 0, sizeof(gcso_pointer_trail_t));
+    for (size_t h = 0; h < num_heads; ++h) {
+        persona_deltas[h] = (gcso_q7_t)(-8);
+    }
+
+    status = gcso_dpsr_steer_with_gateway_and_config_safe(
+        q_after, phase_deltas, 2.5f, persona_deltas, 1.8f, trail, &cfg);
+    if (status != GCSO_SUCCESS) {
+        fprintf(stderr, "gcso_dpsr_steer_with_gateway_and_config_safe failed: %d\n", (int)status);
+        gcso_free_aligned(trail);
+        gcso_free_aligned(persona_deltas);
+        gcso_free_aligned(q_before);
+        gcso_free_aligned(q_after);
+        gcso_free_aligned(phase_deltas);
+        gcso_free_aligned(recovered_q7);
+        return 1;
+    }
+
+    for (size_t h = 0; h < num_heads; ++h) {
+        for (size_t d = rotary_dim; d < head_dim; ++d) {
+            const size_t idx = h * head_dim + d;
+            if (fabsf(q_after[idx] - q_before[idx]) > 1.0e-7f) {
+                fprintf(stderr, "Gateway tail corrupted at head=%zu dim=%zu\n", h, d);
+                gcso_free_aligned(trail);
+                gcso_free_aligned(persona_deltas);
+                gcso_free_aligned(q_before);
+                gcso_free_aligned(q_after);
+                gcso_free_aligned(phase_deltas);
+                gcso_free_aligned(recovered_q7);
+                return 1;
+            }
+        }
+    }
+    printf("Phi-4-mini Gateway composite C-ABI OK: trail_step=%llu\n",
+           (unsigned long long)trail->step_count);
+
+    gcso_free_aligned(trail);
+    gcso_free_aligned(persona_deltas);
     gcso_free_aligned(q_before);
     gcso_free_aligned(q_after);
     gcso_free_aligned(phase_deltas);

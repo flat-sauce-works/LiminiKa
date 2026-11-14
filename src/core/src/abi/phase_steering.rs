@@ -207,6 +207,80 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_with_config_safe(
     })
 }
 
+/// Steers `query_tensor` using a 2-Origin [`ManifoldGatewaySignal`](crate::traits::gateway::ManifoldGatewaySignal)
+/// composite (`(ObjectiveFact, SubjectivePersona)`) so structural hyperparameters are synthesized
+/// autonomously from Gateway physics and dispatched via [`gcso_config_t`] RoPE geometry.
+///
+/// # Safety
+/// `query_tensor` (32B aligned), `fact_phases` (16B aligned), `persona_phases` (16B aligned),
+/// `trail_inout` (128B aligned), and `config` (16B aligned) must be non-null and valid.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_dpsr_steer_with_gateway_and_config_safe(
+    query_tensor: *mut f32,
+    fact_phases: *const gcso_q7_t,
+    fact_energy: f32,
+    persona_phases: *const gcso_q7_t,
+    persona_energy: f32,
+    trail_inout: *mut gcso_pointer_trail_t,
+    config: *const gcso_config_t,
+) -> GcsoStatus {
+    ffi_boundary!({
+        validate_ptr_aligned(query_tensor, 32)?;
+        validate_ptr(fact_phases)?;
+        validate_ptr(persona_phases)?;
+        // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and 128-byte alignment.
+        let mut trail = unsafe { FfiHandleMut::from_raw(trail_inout)? };
+        // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and 16-byte alignment.
+        let cfg = unsafe { FfiHandleRef::from_raw(config)? };
+
+        let head_dim = cfg.head_dim as usize;
+        let num_heads = cfg.num_heads as usize;
+        let rotary_dim = if cfg.rotary_dim == 0 {
+            head_dim
+        } else {
+            cfg.rotary_dim as usize
+        };
+        let layout = crate::traits::rope::RopePairLayout::from_u8(cfg.rope_layout)?;
+        let (engine, total_q_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let geom = crate::traits::rope::RopeGeometryDescriptor {
+            layout,
+            head_dim,
+            rotary_dim,
+            num_heads,
+        };
+
+        // SAFETY: Validated for non-nullness, alignment, and bounds.
+        let mut q_aligned =
+            unsafe { AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_q_len)? };
+        // SAFETY: Validated for non-nullness, alignment, and bounds.
+        let fact_slice = unsafe { AlignedSlice16::from_raw_parts(fact_phases, num_heads)? };
+        // SAFETY: Validated for non-nullness, alignment, and bounds.
+        let persona_slice = unsafe { AlignedSlice16::from_raw_parts(persona_phases, num_heads)? };
+
+        let mut fact_arr = [0i8; crate::traits::primitives::MAX_ATTENTION_HEADS];
+        let mut persona_arr = [0i8; crate::traits::primitives::MAX_ATTENTION_HEADS];
+        fact_arr[..num_heads].copy_from_slice(fact_slice.as_slice());
+        persona_arr[..num_heads].copy_from_slice(persona_slice.as_slice());
+
+        let composite = (
+            crate::traits::gateway::ObjectiveFact::new(fact_arr, fact_energy, 0, 1),
+            crate::traits::gateway::SubjectivePersona::new(persona_arr, persona_energy, 0, 2),
+        );
+
+        crate::traits::gateway::GatewayPhaseSteeringExt::steer_gateway_signal_for_geometry_safe(
+            &engine,
+            &composite,
+            &geom,
+            &mut trail,
+            128,
+            &mut q_aligned,
+            None,
+            None,
+        )?;
+        Ok(GCSO_SUCCESS)
+    })
+}
+
 /// Recovers per-head Q7 Procrustes phase deltas from `HalfSplit` RoPE tensor pairs.
 ///
 /// # Safety

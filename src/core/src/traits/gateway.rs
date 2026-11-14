@@ -32,7 +32,10 @@
 #![allow(clippy::ifs_same_cond)]
 #![allow(clippy::field_reassign_with_default)]
 use core::mem::{align_of, offset_of, size_of};
-use super::aligned::{AlignedSlice, AlignedSlice32, AlignedSliceMut32, is_aligned_to};
+use super::aligned::{
+    AlignedBuffer16, AlignedSlice, AlignedSlice16, AlignedSlice32, AlignedSliceMut32,
+    is_aligned_to,
+};
 use super::branchless::{
     BranchlessKernel, atan2_interleaved_pairs_to_q7_word_x8_simd, atan2_to_q7_word_x8_simd,
     branchless_phase_coherence_inv_temp_scale, branchless_q7_circular_resultant_64,
@@ -49,7 +52,8 @@ use super::primitives::{
     branchless_select_u64, branchless_select_u8, branchless_select_usize,
     branchless_sincos_q7_ripa, branchless_splitmix64, crc32_block64_zero_seed_words,
     crc32_step_block64_words, crc32_step_l16, crc32_step_l4, crc32_step_l8,
-    fast_inv_pos_normal_f32, is_word_array_uniform_64, load_q7_words_64, swar_q7_circular_add_x8,
+    fast_inv_pos_normal_f32, is_word_array_uniform_64, load_q7_words_64, store_q7_words_64,
+    swar_q7_circular_add_x8,
     swar_q7_circular_diff_x8, swar_q7_mean_i8_from_words_64,
     swar_q7_mean_i8_from_words_with_uniform_flag_64, swar_q7_neg_sat_x8,
     swar_q7_qdps_filter_words_64, swar_q7_qdps_filter_words_with_uniform_flag_64,
@@ -65,8 +69,9 @@ use super::primitives::{
     pack_action_slot_tag,
 };
 use super::rope::{
-    PhaseSteering, PspmRouter, dispatch_fused_ripa_and_pspm_words_core,
-    resolve_autonomous_swarm_rot_dim, rotate_fused_self_ripa_and_pspm_default_words,
+    PhaseSteering, PhaseSteeringGeometryExt, PspmRouter, RopePairLayout, RopeSteeringTarget,
+    dispatch_fused_ripa_and_pspm_words_core, resolve_autonomous_swarm_rot_dim,
+    rotate_fused_self_ripa_and_pspm_default_words,
     rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words, steer_from_swar_words_core_safe,
 };
 use super::telemetry::{
@@ -2940,6 +2945,45 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
     Ok((layer_skipped, steered, pspm_routed))
 }
 
+#[inline(always)]
+fn prepare_gateway_steering_state<T: PhaseSteering + ?Sized, S: ManifoldGatewaySignal + ?Sized>(
+    engine: &T,
+    signal: &S,
+    trail_inout: &mut gcso_pointer_trail_t,
+    query_tensor: &AlignedSliceMut32<'_, f32>,
+    key_tensor: Option<&AlignedSliceMut32<'_, f32>>,
+) -> GcsoResult<(
+    GatewayFrame,
+    [u64; NUM_SWARM_MICRO_CELLS],
+    CausalProvenanceReport,
+    usize,
+    usize,
+)> {
+    let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
+    let report = frame.to_causal_report();
+    let (head_dim, num_heads, expected_len) = engine.validate_head_layout()?;
+    if num_heads > MAX_ATTENTION_HEADS
+        || frame.qdps_min_step_rad < 0.0
+        || !branchless_is_finite_f32(frame.qdps_min_step_rad)
+        || frame.ripa_clamp_rad <= 0.0
+        || !branchless_is_finite_f32(frame.ripa_clamp_rad)
+    {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    }
+    validate_optional_qk_tensors(Some(query_tensor), key_tensor, expected_len)?;
+
+    trail_inout.prev_ptr = trail_inout.current_ptr;
+    trail_inout.current_ptr = frame.tagged_ptr;
+    trail_inout.step_count = trail_inout.step_count.wrapping_add(1);
+    if frame.target_anchor_id != 0 {
+        trail_inout.target_anchor_id = frame.target_anchor_id;
+        trail_inout.cluster_id = frame.target_anchor_id;
+    } else {
+        trail_inout.cluster_id = u32::from(frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK);
+    }
+    Ok((frame, frm_w, report, head_dim, num_heads))
+}
+
 /// Blanket-implemented closed-loop Gateway & Crystallized Ensemble steering extension trait for
 /// any type implementing [`PhaseSteering`] + [`PspmRouter`].
 pub trait GatewayPhaseSteeringExt: PhaseSteering + PspmRouter {
@@ -2959,28 +3003,13 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering + PspmRouter {
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport)> {
-        let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
-        let report = frame.to_causal_report();
-        let (head_dim, num_heads, expected_len) = self.validate_head_layout()?;
-        if num_heads > MAX_ATTENTION_HEADS
-            || frame.qdps_min_step_rad < 0.0
-            || !branchless_is_finite_f32(frame.qdps_min_step_rad)
-            || frame.ripa_clamp_rad <= 0.0
-            || !branchless_is_finite_f32(frame.ripa_clamp_rad)
-        {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        validate_optional_qk_tensors(Some(&*query_tensor), key_tensor.as_deref(), expected_len)?;
-
-        trail_inout.prev_ptr = trail_inout.current_ptr;
-        trail_inout.current_ptr = frame.tagged_ptr;
-        trail_inout.step_count = trail_inout.step_count.wrapping_add(1);
-        if frame.target_anchor_id != 0 {
-            trail_inout.target_anchor_id = frame.target_anchor_id;
-            trail_inout.cluster_id = frame.target_anchor_id;
-        } else {
-            trail_inout.cluster_id = u32::from(frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK);
-        }
+        let (frame, frm_w, report, head_dim, num_heads) = prepare_gateway_steering_state(
+            self,
+            signal,
+            trail_inout,
+            query_tensor,
+            key_tensor.as_deref(),
+        )?;
 
         let _ = accumulate_trail_and_steer_gateway_words_core(
             &frame,
@@ -2993,6 +3022,125 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering + PspmRouter {
             key_tensor,
             logits_opt,
         )?;
+        Ok((frame, report))
+    }
+
+    /// Synthesizes any [`ManifoldGatewaySignal`] into structural hyperparameters (`ripa_clamp_rad`,
+    /// `qdps_min_step_rad`, `effective_inv_temp`, SWAR phase words) and steers `query_tensor`
+    /// (and optional `key_tensor`) according to [`RopeSteeringTarget`] (`Interleaved` or `HalfSplit`,
+    /// including partial `rotary_dim`) with zero heap allocation.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `geometry`, radian clamps, or tensor slices
+    /// violate layout or `GCSO_RESTRICT` disjointness invariants.
+    #[inline]
+    fn steer_gateway_signal_for_geometry_safe<
+        S: ManifoldGatewaySignal + ?Sized,
+        G: RopeSteeringTarget + ?Sized,
+    >(
+        &self,
+        signal: &S,
+        geometry: &G,
+        trail_inout: &mut gcso_pointer_trail_t,
+        unresolved_damping_u7: u8,
+        query_tensor: &mut AlignedSliceMut32<'_, f32>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport)> {
+        let geom = geometry.rope_geometry();
+        geom.validate()?;
+        if geom.layout == RopePairLayout::Interleaved && geom.rotary_dim == geom.head_dim {
+            return self.steer_gateway_signal_safe(
+                signal,
+                trail_inout,
+                unresolved_damping_u7,
+                query_tensor,
+                key_tensor,
+                logits_opt,
+            );
+        }
+
+        let (frame, frm_w, report, head_dim, num_heads) = prepare_gateway_steering_state(
+            self,
+            signal,
+            trail_inout,
+            query_tensor,
+            key_tensor.as_deref(),
+        )?;
+        if geom.head_dim != head_dim || geom.num_heads != num_heads {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+
+        let frm_nonzero = swar_words_nonzero_64(&frm_w);
+        let next_w = if frm_nonzero {
+            *trail_phase_words_mut(trail_inout) = frm_w;
+            frm_w
+        } else {
+            *trail_phase_words_ref(trail_inout)
+        };
+        trail_inout.attractor_pull_force = branchless_min_f32(
+            branchless_max_f32(trail_inout.attractor_pull_force, frame.effective_energy),
+            MAX_ATTRACTOR_PULL_FORCE,
+        );
+
+        let layer_skipped = (frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0;
+        if layer_skipped {
+            trail_inout.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
+        } else {
+            let qdps_words = if frame.qdps_min_step_q7 <= 1 {
+                next_w
+            } else if frame.qdps_min_step_q7 > 127 {
+                [0u64; NUM_SWARM_MICRO_CELLS]
+            } else {
+                swar_q7_qdps_filter_words_64(&next_w, frame.qdps_min_step_q7)
+            };
+            let clean_damping =
+                branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
+            let swar_words = if clean_damping >= 128 {
+                qdps_words
+            } else {
+                let s_u64 = u64::from(clean_damping);
+                let bias_restore = (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+                [
+                    swar_q7_scale_le128_with_bias_x8(qdps_words[0], s_u64, bias_restore),
+                    swar_q7_scale_le128_with_bias_x8(qdps_words[1], s_u64, bias_restore),
+                    swar_q7_scale_le128_with_bias_x8(qdps_words[2], s_u64, bias_restore),
+                    swar_q7_scale_le128_with_bias_x8(qdps_words[3], s_u64, bias_restore),
+                    swar_q7_scale_le128_with_bias_x8(qdps_words[4], s_u64, bias_restore),
+                    swar_q7_scale_le128_with_bias_x8(qdps_words[5], s_u64, bias_restore),
+                    swar_q7_scale_le128_with_bias_x8(qdps_words[6], s_u64, bias_restore),
+                    swar_q7_scale_le128_with_bias_x8(qdps_words[7], s_u64, bias_restore),
+                ]
+            };
+
+            if swar_words_nonzero_64(&swar_words) {
+                let mut q7_stack = AlignedBuffer16::new([0i8; MAX_ATTENTION_HEADS]);
+                store_q7_words_64(&mut q7_stack.data, &swar_words);
+                let p_aligned = AlignedSlice16::new(&q7_stack.data[..num_heads])?;
+                PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe(
+                    self,
+                    geometry,
+                    query_tensor,
+                    &p_aligned,
+                    frame.ripa_clamp_rad,
+                )?;
+                if let Some(k) = key_tensor {
+                    PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe(
+                        self,
+                        geometry,
+                        k,
+                        &p_aligned,
+                        frame.ripa_clamp_rad,
+                    )?;
+                }
+            }
+        }
+
+        if let Some(logits) = logits_opt {
+            if !logits.is_empty() {
+                scale_f32_slice_unrolled8(logits.as_mut_slice(), frame.effective_inv_temp);
+            }
+        }
         Ok((frame, report))
     }
 
