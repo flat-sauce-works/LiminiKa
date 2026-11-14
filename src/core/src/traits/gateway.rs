@@ -896,6 +896,218 @@ impl SystemConstraintSignal for gcso_config_t {
     }
 }
 
+/// Cold-Path and startup/periodic environment-probe snapshot characterizing the active LLM's
+/// RoPE subspace geometry, neutral entropy baseline, and inter-layer phase coherence.
+///
+/// Populated before startup and refreshed on periodic Cold-Path probes or model swaps so
+/// [`StigmergicThresholdPolicy`] implementations can self-calibrate without hardcoded per-model constants.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ManifoldProbeBaseline {
+    /// Active attention heads observed in the target model (`1..=MAX_ATTENTION_HEADS`).
+    pub active_heads: u16,
+    /// Number of transformer layers selected by `layer_rope_mask` (`>= 1`).
+    pub steered_layers: u16,
+    /// Baseline normalized EDBC entropy observed on neutral calibration prompts ($\tilde{H}_0 \in [0, 1]$).
+    pub baseline_entropy: f32,
+    /// Mean positive inter-layer / intra-turn phase trajectory coherence measured during calibration ($\bar{c} \in [0, 1]$).
+    pub baseline_inter_layer_coherence: f32,
+    /// Neutral-token baseline cosine similarity against contrastive guard anchors ($\in [0, 1]$).
+    pub baseline_guard_noise_floor: f32,
+    /// Monotonically incremented Cold-Path calibration / re-allocation epoch counter.
+    pub probe_epoch: u32,
+}
+
+impl Default for ManifoldProbeBaseline {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ManifoldProbeBaseline {
+    /// Creates a neutral default [`ManifoldProbeBaseline`] suitable before runtime probing runs.
+    #[inline(always)]
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            active_heads: MAX_ATTENTION_HEADS as u16,
+            steered_layers: 16,
+            baseline_entropy: 0.35,
+            baseline_inter_layer_coherence: 0.75,
+            baseline_guard_noise_floor: 0.45,
+            probe_epoch: 0,
+        }
+    }
+}
+
+/// Trait abstracting dynamic derivation of [`StigmergicThresholds`] from hardware/telemetry
+/// constraints (`SystemConstraintSignal`), Cold-Path model probe measurements (`ManifoldProbeBaseline`),
+/// active pointer-trail state, and instantaneous entropy (`H_tilde`).
+pub trait StigmergicThresholdPolicy {
+    /// Resolves effective [`StigmergicThresholds`] for the current inference step without heap allocation.
+    fn resolve_thresholds<C: SystemConstraintSignal + ?Sized>(
+        &self,
+        system: &C,
+        probe: &ManifoldProbeBaseline,
+        trail: &gcso_pointer_trail_t,
+        entropy_h_tilde: f32,
+    ) -> StigmergicThresholds;
+}
+
+impl<T: StigmergicThresholdPolicy + ?Sized> StigmergicThresholdPolicy for &T {
+    #[inline(always)]
+    fn resolve_thresholds<C: SystemConstraintSignal + ?Sized>(
+        &self,
+        system: &C,
+        probe: &ManifoldProbeBaseline,
+        trail: &gcso_pointer_trail_t,
+        entropy_h_tilde: f32,
+    ) -> StigmergicThresholds {
+        (**self).resolve_thresholds(system, probe, trail, entropy_h_tilde)
+    }
+}
+
+impl StigmergicThresholdPolicy for StigmergicThresholds {
+    #[inline(always)]
+    fn resolve_thresholds<C: SystemConstraintSignal + ?Sized>(
+        &self,
+        _system: &C,
+        _probe: &ManifoldProbeBaseline,
+        _trail: &gcso_pointer_trail_t,
+        _entropy_h_tilde: f32,
+    ) -> StigmergicThresholds {
+        *self
+    }
+}
+
+/// Closed-form, branchless adaptive threshold policy calibrating [`StigmergicThresholds`]
+/// from live [`SystemConstraintSignal`] pressure, [`ManifoldProbeBaseline`] model geometry,
+/// and pointer-trail stability.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AdaptiveThresholdPolicy {
+    /// Nominal baseline thresholds before runtime/probe calibration.
+    pub base: StigmergicThresholds,
+    /// Minimum/maximum clamp multiplier applied to dynamic gain & ladder adaptation.
+    pub min_scale: f32,
+    /// Maximum clamp multiplier applied to dynamic gain adaptation.
+    pub max_scale: f32,
+}
+
+impl Default for AdaptiveThresholdPolicy {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new(StigmergicThresholds::default())
+    }
+}
+
+impl AdaptiveThresholdPolicy {
+    /// Creates an [`AdaptiveThresholdPolicy`] anchored around `base`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn new(base: StigmergicThresholds) -> Self {
+        Self {
+            base,
+            min_scale: 0.65,
+            max_scale: 1.85,
+        }
+    }
+}
+
+impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
+    #[inline]
+    fn resolve_thresholds<C: SystemConstraintSignal + ?Sized>(
+        &self,
+        system: &C,
+        probe: &ManifoldProbeBaseline,
+        trail: &gcso_pointer_trail_t,
+        entropy_h_tilde: f32,
+    ) -> StigmergicThresholds {
+        let p_vram = branchless_clamp_f32(branchless_relu_f32(system.system_vram_pressure()), 0.0, 1.0);
+        let p_overrun =
+            branchless_clamp_f32(branchless_relu_f32(system.system_gpu_frame_overrun()), 0.0, 1.0);
+        let pressure = branchless_max_f32(p_vram, p_overrun);
+
+        let base_coh = branchless_clamp_f32(
+            branchless_select_f32(
+                branchless_is_finite_f32(probe.baseline_inter_layer_coherence),
+                probe.baseline_inter_layer_coherence,
+                0.75,
+            ),
+            0.0,
+            1.0,
+        );
+        let retain_0 =
+            branchless_clamp_f32(branchless_relu_f32(self.base.evaporation_retain), 0.0, 0.995);
+        let is_subspace = probe.active_heads > 0 && probe.active_heads < MAX_ATTENTION_HEADS as u16;
+        let eff_retain = if is_subspace {
+            retain_0 * (0.85_f32 + 0.15_f32 * base_coh)
+        } else {
+            retain_0
+        };
+        let eff_traj = if is_subspace {
+            0.38_f32 + 0.52_f32 * base_coh
+        } else {
+            0.50_f32 + 0.50_f32 * base_coh
+        };
+        // Equilibrate deposit gain against model-specific inter-layer decay & trajectory damping.
+        // Reference equilibrium factor at default baseline (`c=0.75`, `retain=0.95`, `subspace`): 0.1444.
+        let loss_over_traj2 = (1.0_f32 - eff_retain) * fast_inv_pos_normal_f32(eff_traj * eff_traj);
+        let raw_gain_scale = loss_over_traj2 * (1.0_f32 / 0.1444_f32);
+        let gain_scale = branchless_clamp_f32(raw_gain_scale, self.min_scale, self.max_scale);
+        let pressure_damp = 1.0_f32 - 0.35_f32 * pressure;
+
+        let dyn_gain =
+            branchless_clamp_f32(self.base.reinforcement_gain * gain_scale * pressure_damp, 0.05, 1.25);
+
+        // Sustained high-pull trails gradually ease crystallization, while resource pressure raises skip/SRL gates.
+        let sustained_pull = if trail.step_count >= 16 {
+            branchless_clamp_f32((trail.attractor_pull_force - 0.65_f32) * 2.0_f32, 0.0, 1.0)
+        } else {
+            0.0_f32
+        };
+        let skip_thresh = branchless_clamp_f32(
+            self.base.inertial_skip_entropy_thresh * (1.0_f32 + 0.75_f32 * pressure),
+            0.05,
+            0.45,
+        );
+        let express_thresh = self.base.express_steer_density_thresh * (1.0_f32 + 0.35_f32 * pressure);
+        let pspm_thresh = self.base.pspm_route_density_thresh * (1.0_f32 + 0.30_f32 * pressure);
+        let srl_thresh = self.base.srl_inject_density_thresh * (1.0_f32 + 0.50_f32 * pressure);
+        let crystal_thresh =
+            self.base.crystallize_density_thresh * (1.0_f32 - 0.15_f32 * sustained_pull + 0.25_f32 * pressure);
+
+        // Gently relax contradiction sensitivity when probe observes noisy guard floor or high entropy.
+        let h_valid = branchless_select_f32(
+            branchless_is_finite_f32(entropy_h_tilde),
+            branchless_clamp_f32(entropy_h_tilde, 0.0, 1.0),
+            0.35,
+        );
+        let noise_adj = branchless_clamp_f32(
+            branchless_relu_f32(probe.baseline_guard_noise_floor - 0.50_f32) * 0.40_f32,
+            0.0,
+            0.25,
+        );
+        let contradict_thresh = branchless_clamp_f32(
+            self.base.contradiction_coherence_thresh + noise_adj + 0.05_f32 * h_valid,
+            0.15,
+            0.75,
+        );
+
+        StigmergicThresholds {
+            evaporation_retain: retain_0,
+            reinforcement_gain: dyn_gain,
+            inertial_skip_entropy_thresh: skip_thresh,
+            express_steer_density_thresh: express_thresh,
+            pspm_route_density_thresh: pspm_thresh,
+            srl_inject_density_thresh: srl_thresh,
+            crystallize_density_thresh: crystal_thresh,
+            contradiction_coherence_thresh: contradict_thresh,
+        }
+    }
+}
+
 // ===================================================================
 // 5. Origin 2: Cognitive Grounding Hierarchy (`Fact` x `Persona` x `ContradictionGuard`)
 // ===================================================================
@@ -4295,6 +4507,54 @@ pub trait ActionHubGatewayExt: ActionHub {
         Ok((frame, report, decision))
     }
 
+    /// Policy-driven variant of [`Self::orchestrate_gateway_layer_safe`] that dynamically resolves
+    /// [`StigmergicThresholds`] via [`StigmergicThresholdPolicy`] from live system telemetry,
+    /// the calibrated [`ManifoldProbeBaseline`], the current pointer trail, and EDBC entropy.
+    ///
+    /// # Errors
+    /// Propagates any error from [`Self::orchestrate_gateway_layer_safe`].
+    #[inline]
+    fn orchestrate_gateway_layer_with_policy_safe<
+        S: ManifoldGatewaySignal + ?Sized,
+        G: RopeSteeringTarget + ?Sized,
+        P: StigmergicThresholdPolicy + ?Sized,
+        C: SystemConstraintSignal + ?Sized,
+    >(
+        &mut self,
+        signal: &S,
+        geometry: &G,
+        policy: &P,
+        system: &C,
+        probe: &ManifoldProbeBaseline,
+        entropy_h_tilde: f32,
+        daes_slot: &mut gcso_daes_slot_t,
+        trail_out: &mut gcso_pointer_trail_t,
+        unresolved_damping_u7: u8,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        srl_hidden: Option<(
+            &mut AlignedSliceMut32<'_, f32>,
+            &AlignedSlice32<'_, f32>,
+            &AlignedSlice32<'_, f32>,
+            &AlignedSlice32<'_, f32>,
+        )>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport, StigmergicActionDecision)> {
+        let dyn_thresholds =
+            policy.resolve_thresholds(system, probe, trail_out, entropy_h_tilde);
+        self.orchestrate_gateway_layer_safe(
+            signal,
+            geometry,
+            &dyn_thresholds,
+            entropy_h_tilde,
+            daes_slot,
+            trail_out,
+            unresolved_damping_u7,
+            query_tensor,
+            srl_hidden,
+            logits_opt,
+        )
+    }
+
     /// Ingests `signal`, resolves the 8-Cell SWAR Micro-Swarm on `trail_out`, and absorbs the
     /// resulting [`GatewayFrame`] into `crystal_record`.
     ///
@@ -5173,5 +5433,38 @@ mod tests {
                 0.35,
             );
         assert!(found_ok && win_c == 0 && sel_tid == 1 && best_sc > 0.5 && best_c > 0.95);
+    }
+
+    #[test]
+    fn test_adaptive_threshold_policy_probe_and_telemetry_scaling() {
+        let policy = AdaptiveThresholdPolicy::default();
+        let low_pressure = SystemConstraint::new((), 0.0, 0.0, 0xFF);
+        let high_pressure = SystemConstraint::new((), 0.85, 0.70, 0x0F);
+
+        let mut probe = ManifoldProbeBaseline {
+            active_heads: 24,
+            steered_layers: 16,
+            baseline_entropy: 0.40,
+            baseline_inter_layer_coherence: 0.35,
+            baseline_guard_noise_floor: 0.45,
+            probe_epoch: 1,
+        };
+        let trail = gcso_pointer_trail_t {
+            step_count: 32,
+            attractor_pull_force: 1.0,
+            ..Default::default()
+        };
+
+        let low_coh_t = policy.resolve_thresholds(&low_pressure, &probe, &trail, 0.40);
+        probe.baseline_inter_layer_coherence = 0.90;
+        let high_coh_t = policy.resolve_thresholds(&low_pressure, &probe, &trail, 0.40);
+        // Models with weaker natural inter-layer coherence receive higher calibrated deposit gain
+        // so equilibrium pheromone density stays within the Express..SRL band without hand tuning.
+        assert!(low_coh_t.reinforcement_gain > high_coh_t.reinforcement_gain);
+
+        let stressed_t = policy.resolve_thresholds(&high_pressure, &probe, &trail, 0.40);
+        assert!(stressed_t.inertial_skip_entropy_thresh > high_coh_t.inertial_skip_entropy_thresh);
+        assert!(stressed_t.srl_inject_density_thresh > high_coh_t.srl_inject_density_thresh);
+        assert!(stressed_t.crystallize_density_thresh > high_coh_t.crystallize_density_thresh);
     }
 }

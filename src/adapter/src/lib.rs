@@ -16,8 +16,9 @@ use liminika_core::traits::aligned::{
     AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32,
 };
 use liminika_core::traits::gateway::{
-    ActionHubGatewayExt, CausalProvenanceReport, GatewayFrame, GatewayPhaseSteeringExt,
-    GatewaySrlSteeringExt, ManifoldGatewaySignal,
+    ActionHubGatewayExt, AdaptiveThresholdPolicy, CausalProvenanceReport, GatewayFrame,
+    GatewayPhaseSteeringExt, GatewaySrlSteeringExt, ManifoldGatewaySignal, ManifoldProbeBaseline,
+    StigmergicThresholdPolicy, SystemConstraint,
 };
 use liminika_core::traits::rope::{
     PhaseSteeringGeometryExt, RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget,
@@ -229,9 +230,22 @@ pub struct ModelSteeringAdapter {
     decision_counts: [u64; 7],
     entropy_controller: EntropyController,
     residual_adapter: ResidualAdapterEngine,
+    system_constraint: SystemConstraint<()>,
+    probe_baseline: ManifoldProbeBaseline,
+    threshold_policy: AdaptiveThresholdPolicy,
 }
 
 impl ModelSteeringAdapter {
+    fn compute_steered_layer_count(geometry: &RopeGeometry) -> u16 {
+        let mut count = 0u16;
+        for l in 0..geometry.num_layers.min(64) {
+            if geometry.is_rope_layer(l) {
+                count += 1;
+            }
+        }
+        count.max(1)
+    }
+
     /// Creates a new [`ModelSteeringAdapter`] after validating `geometry`.
     ///
     /// # Errors
@@ -256,6 +270,11 @@ impl ModelSteeringAdapter {
         let daes_slot = gcso_daes_slot_t::default();
         let entropy_controller = EntropyController::new(gcso_edbc_state_t::default());
         let residual_adapter = ResidualAdapterEngine::new(1.0, 0, 1);
+        let system_constraint = SystemConstraint::new((), 0.0, 0.0, 0xFF);
+        let mut probe_baseline = ManifoldProbeBaseline::new();
+        probe_baseline.active_heads = geometry.num_q_heads.min(64) as u16;
+        probe_baseline.steered_layers = Self::compute_steered_layer_count(&geometry);
+        let threshold_policy = AdaptiveThresholdPolicy::default();
 
         Ok(Self {
             geometry,
@@ -265,6 +284,9 @@ impl ModelSteeringAdapter {
             decision_counts: [0; 7],
             entropy_controller,
             residual_adapter,
+            system_constraint,
+            probe_baseline,
+            threshold_policy,
         })
     }
 
@@ -301,6 +323,168 @@ impl ModelSteeringAdapter {
     /// Updates the active RoPE layer bitmask (`1` = steer, `0` = skip NoPE/disabled layer).
     pub fn set_layer_rope_mask(&mut self, mask: u64) {
         self.geometry.layer_rope_mask = mask;
+        self.probe_baseline.steered_layers = Self::compute_steered_layer_count(&self.geometry);
+    }
+
+    /// Returns the latest Cold-Path [`ManifoldProbeBaseline`] calibrated for the active model.
+    #[must_use]
+    pub const fn probe_baseline(&self) -> &ManifoldProbeBaseline {
+        &self.probe_baseline
+    }
+
+    /// Returns the live [`SystemConstraint<()>`] telemetry snapshot.
+    #[must_use]
+    pub const fn system_constraint(&self) -> &SystemConstraint<()> {
+        &self.system_constraint
+    }
+
+    /// Returns a mutable reference to the dynamic [`AdaptiveThresholdPolicy`].
+    pub fn threshold_policy_mut(&mut self) -> &mut AdaptiveThresholdPolicy {
+        &mut self.threshold_policy
+    }
+
+    /// Updates hardware/runtime telemetry (`vram_pressure`, `gpu_frame_overrun`, active swarm mask)
+    /// from an external environment probe and immediately refreshes cached thresholds.
+    pub fn update_environment_telemetry(
+        &mut self,
+        vram_pressure: f32,
+        gpu_frame_overrun: f32,
+        active_swarm_mask: u8,
+    ) {
+        self.system_constraint =
+            SystemConstraint::new((), vram_pressure, gpu_frame_overrun, active_swarm_mask);
+        let neutral_trail = gcso_pointer_trail_t::default();
+        self.action_hub.thresholds = self.threshold_policy.resolve_thresholds(
+            &self.system_constraint,
+            &self.probe_baseline,
+            &neutral_trail,
+            self.probe_baseline.baseline_entropy,
+        );
+    }
+
+    /// Cold-Path model calibration probe run before startup or periodically when drift / model
+    /// changes occur. Measures the model's empirical inter-layer phase trajectory coherence and
+    /// neutral entropy distribution, updates [`ManifoldProbeBaseline`], and equilibrates
+    /// [`StigmergicThresholds`] without manual constant tuning.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any probe Q-slice length mismatches `self.geometry().q_rot_len()`.
+    pub fn calibrate_manifold_probe(
+        &mut self,
+        per_layer_sample_q: &[&[f32]],
+        baseline_ref_per_layer: &[&[f32]],
+        observed_entropies: &[f32],
+    ) -> Result<ManifoldProbeBaseline, String> {
+        let mut prev_q7: Option<Vec<gcso_q7_t>> = None;
+        let mut coh_sum = 0.0_f64;
+        let mut coh_count = 0_usize;
+
+        for (layer_idx, (q_sample, q_ref)) in per_layer_sample_q
+            .iter()
+            .zip(baseline_ref_per_layer.iter())
+            .enumerate()
+        {
+            if !self.geometry.is_rope_layer(layer_idx) {
+                continue;
+            }
+            let cur_q7 = self.bake_layer_procrustes_q7(q_ref, q_sample)?;
+            if let Some(prev) = prev_q7.as_ref() {
+                let mut dot = 0.0_f64;
+                let mut n_a = 0.0_f64;
+                let mut n_b = 0.0_f64;
+                for (&a, &b) in prev.iter().zip(cur_q7.iter()) {
+                    let fa = f64::from(a);
+                    let fb = f64::from(b);
+                    dot += fa * fb;
+                    n_a += fa * fa;
+                    n_b += fb * fb;
+                }
+                let denom = (n_a * n_b).sqrt();
+                if denom > 1e-12 {
+                    let cos = (dot / denom).clamp(-1.0, 1.0);
+                    if cos > 0.0 {
+                        coh_sum += cos;
+                    }
+                    coh_count += 1;
+                }
+            }
+            prev_q7 = Some(cur_q7);
+        }
+
+        if coh_count > 0 {
+            self.probe_baseline.baseline_inter_layer_coherence =
+                (coh_sum / coh_count as f64).clamp(0.05, 1.0) as f32;
+        }
+        let mut ent_sum = 0.0_f64;
+        let mut ent_count = 0_usize;
+        for &h in observed_entropies {
+            if h.is_finite() && h >= 0.0 {
+                ent_sum += f64::from(h.clamp(0.0, 1.0));
+                ent_count += 1;
+            }
+        }
+        if ent_count > 0 {
+            self.probe_baseline.baseline_entropy = (ent_sum / ent_count as f64) as f32;
+        }
+        self.probe_baseline.active_heads = self.geometry.num_q_heads.min(64) as u16;
+        self.probe_baseline.steered_layers = Self::compute_steered_layer_count(&self.geometry);
+        self.probe_baseline.probe_epoch = self.probe_baseline.probe_epoch.saturating_add(1);
+
+        let neutral_trail = gcso_pointer_trail_t::default();
+        self.action_hub.thresholds = self.threshold_policy.resolve_thresholds(
+            &self.system_constraint,
+            &self.probe_baseline,
+            &neutral_trail,
+            self.probe_baseline.baseline_entropy,
+        );
+        Ok(self.probe_baseline)
+    }
+
+    /// Safely re-allocates and re-initializes the Cold-Path engines (`PhaseSteeringEngine`,
+    /// `ActionHubEngine`, and `daes_slot`) when the underlying LLM or RoPE geometry changes
+    /// during a periodic environment probe, returning the new `probe_epoch`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `new_geometry.validate()` fails or `liminika-core` rejects dimensions.
+    pub fn rebind_geometry_cold_path(&mut self, new_geometry: RopeGeometry) -> Result<u32, String> {
+        new_geometry.validate()?;
+        let new_phase_engine = PhaseSteeringEngine::new(
+            new_geometry.rotary_dim as u32,
+            new_geometry.num_q_heads as u32,
+        )
+        .map_err(|e| format!("PhaseSteeringEngine::new failed: {e}"))?;
+        let mut next_probe = self.probe_baseline;
+        next_probe.active_heads = new_geometry.num_q_heads.min(64) as u16;
+        next_probe.steered_layers = Self::compute_steered_layer_count(&new_geometry);
+        next_probe.probe_epoch = next_probe.probe_epoch.saturating_add(1);
+
+        let neutral_trail = gcso_pointer_trail_t::default();
+        let calibrated = self.threshold_policy.resolve_thresholds(
+            &self.system_constraint,
+            &next_probe,
+            &neutral_trail,
+            next_probe.baseline_entropy,
+        );
+        let mut new_action_hub = Box::new(
+            ActionHubEngine::with_dimensions_and_thresholds(
+                new_geometry.rotary_dim as u32,
+                new_geometry.num_q_heads as u32,
+                16,
+                calibrated,
+            )
+            .map_err(|e| format!("ActionHubEngine::with_dimensions_and_thresholds failed: {e}"))?,
+        );
+        new_action_hub.last_entropy_h_tilde = next_probe.baseline_entropy;
+
+        self.geometry = new_geometry;
+        self.phase_engine = new_phase_engine;
+        self.action_hub = new_action_hub;
+        self.daes_slot = gcso_daes_slot_t::default();
+        self.decision_counts = [0; 7];
+        self.probe_baseline = next_probe;
+        Ok(self.probe_baseline.probe_epoch)
     }
 
     /// Returns a mutable reference to the embedded [`EntropyController`] (EDBC).
@@ -568,15 +752,16 @@ impl ModelSteeringAdapter {
         String,
     > {
         self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
-            let thresholds = this.action_hub.thresholds;
             let entropy_h_tilde =
                 entropy_h_tilde_opt.unwrap_or(this.action_hub.last_entropy_h_tilde);
             let (frame, report, decision) = this
                 .action_hub
-                .orchestrate_gateway_layer_safe(
+                .orchestrate_gateway_layer_with_policy_safe(
                     signal,
                     &this.geometry,
-                    &thresholds,
+                    &this.threshold_policy,
+                    &this.system_constraint,
+                    &this.probe_baseline,
                     entropy_h_tilde,
                     &mut this.daes_slot,
                     trail_inout,
@@ -585,7 +770,7 @@ impl ModelSteeringAdapter {
                     None,
                     logits,
                 )
-                .map_err(|e| format!("orchestrate_gateway_layer_safe error: {e}"))?;
+                .map_err(|e| format!("orchestrate_gateway_layer_with_policy_safe error: {e}"))?;
             this.action_hub.last_decision = decision as u8;
             this.decision_counts[(decision as usize).min(6)] += 1;
             Ok((frame, report, decision))
@@ -1029,5 +1214,45 @@ mod tests {
             .expect("srl gate");
         assert!(srl_res.is_some());
         assert!(hidden[0] > 10.0);
+    }
+
+    #[test]
+    fn cold_path_probe_calibrates_thresholds_and_rebinds_geometry() {
+        let geom = RopeGeometry::phi4_mini();
+        let mut adapter = ModelSteeringAdapter::new(geom).expect("phi4 geometry valid");
+        adapter.set_layer_rope_mask(0xFFFF_0000);
+        let q_len = adapter.geometry().q_rot_len();
+
+        let ref_vec = vec![1.0_f32; q_len];
+        let probe_vec: Vec<f32> = (0..q_len)
+            .map(|i| if (i & 1) == 0 { 0.85 } else { 0.45 })
+            .collect();
+        let samples: Vec<&[f32]> = vec![probe_vec.as_slice(); 32];
+        let refs: Vec<&[f32]> = vec![ref_vec.as_slice(); 32];
+
+        let baseline = adapter
+            .calibrate_manifold_probe(&samples, &refs, &[0.42, 0.46])
+            .expect("calibration probe should succeed");
+        assert_eq!(baseline.probe_epoch, 1);
+        assert_eq!(baseline.active_heads, 24);
+        assert_eq!(baseline.steered_layers, 16);
+        assert!(baseline.baseline_entropy > 0.40);
+
+        let low_load_srl = adapter.action_hub().thresholds.srl_inject_density_thresh;
+        adapter.update_environment_telemetry(0.85, 0.70, 0x0F);
+        let high_load_srl = adapter.action_hub().thresholds.srl_inject_density_thresh;
+        assert!(high_load_srl > low_load_srl);
+
+        let mut alt_geom = RopeGeometry::phi4_mini();
+        alt_geom.num_q_heads = 32;
+        alt_geom.head_dim = 128;
+        alt_geom.rotary_dim = 128;
+        alt_geom.layer_rope_mask = 0xFFFF_FFFF;
+        let new_epoch = adapter
+            .rebind_geometry_cold_path(alt_geom)
+            .expect("cold-path geometry rebind should succeed");
+        assert_eq!(new_epoch, 2);
+        assert_eq!(adapter.probe_baseline().active_heads, 32);
+        assert_eq!(adapter.probe_baseline().steered_layers, 32);
     }
 }

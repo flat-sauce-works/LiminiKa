@@ -958,6 +958,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut baselines: Vec<Vec<f32>> = Vec::with_capacity(suite.probes.len());
+    let mut base_entropies: Vec<f32> = Vec::with_capacity(suite.probes.len());
     for (_, prompt, _, _) in &suite.probes {
         model.clear_cache();
         let formatted = format_phi4_prompt(prompt);
@@ -968,8 +969,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .to_vec();
         let (logits, _, _) =
             model.forward_tokens(&ids, 0, None, None, None, None, 0.0, None, None, false, false)?;
+        let h_t = adapter.measure_edbc_entropy(&logits)?.moving_z_entropy;
+        base_entropies.push(h_t);
         baselines.push(logits);
     }
+
+    adapter.set_layer_rope_mask(0xFFFF_0000);
+    let pos_slices: Vec<&[f32]> = baked.pos_sum.iter().map(Vec::as_slice).collect();
+    let neg_slices: Vec<&[f32]> = baked.neg_sum.iter().map(Vec::as_slice).collect();
+    let probe_res = adapter.calibrate_manifold_probe(&pos_slices, &neg_slices, &base_entropies)?;
+    println!(
+        "[EnvProbe epoch={}] heads={} steered_layers={} coh={:.3} H0={:.3} => dyn_gain={:.3} skip_H={:.3} srl_rho={:.3}",
+        probe_res.probe_epoch,
+        probe_res.active_heads,
+        probe_res.steered_layers,
+        probe_res.baseline_inter_layer_coherence,
+        probe_res.baseline_entropy,
+        adapter.action_hub().thresholds.reinforcement_gain,
+        adapter.action_hub().thresholds.inertial_skip_entropy_thresh,
+        adapter.action_hub().thresholds.srl_inject_density_thresh,
+    );
 
     // Compare manual max_rad vs Gateway structural hyperparameters vs Resonant slice vs ActionHub.
     // tuple: (label, layer_mask, rope_rad, srl_scale, use_two_origin, use_resonant_slice)
