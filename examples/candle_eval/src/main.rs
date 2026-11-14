@@ -477,8 +477,31 @@ impl Phi3Model {
         if let (Some(ad), Some((u_vec, v_vec, srl_scale))) = (adapter.as_deref(), srl) {
             if srl_scale != 0.0 {
                 let mut h_vec = last.squeeze(0)?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
-                ad.apply_srl_hidden_fused(&mut h_vec, u_vec, v_vec, srl_scale)
-                    .map_err(candle_core::Error::Msg)?;
+                if srl_scale < 0.0 {
+                    let mut fact_arr = [0i8; 64];
+                    if let Some(last_q7) = q7s.and_then(|qs| qs.last()) {
+                        let n = last_q7.len().min(64);
+                        fact_arr[..n].copy_from_slice(&last_q7[..n]);
+                    }
+                    let fact = ObjectiveFact::new(fact_arr, 2.5, 0, 1);
+                    if let Some(last_p) = persona_q7s.and_then(|ps| ps.last()) {
+                        let mut persona_arr = [0i8; 64];
+                        let pn = last_p.len().min(64);
+                        persona_arr[..pn].copy_from_slice(&last_p[..pn]);
+                        let persona = SubjectivePersona::new(persona_arr, 1.5, 0, 101);
+                        let composite = (fact, persona);
+                        let _ = ad
+                            .apply_srl_with_gateway(&composite, &mut h_vec, u_vec, v_vec)
+                            .map_err(candle_core::Error::Msg)?;
+                    } else {
+                        let _ = ad
+                            .apply_srl_with_gateway(&fact, &mut h_vec, u_vec, v_vec)
+                            .map_err(candle_core::Error::Msg)?;
+                    }
+                } else {
+                    ad.apply_srl_hidden_fused(&mut h_vec, u_vec, v_vec, srl_scale)
+                        .map_err(candle_core::Error::Msg)?;
+                }
                 let len = h_vec.len();
                 last = Tensor::from_vec(h_vec, (1, len), &self.device)?.to_dtype(last.dtype())?;
             }
@@ -787,12 +810,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         baselines.push(logits);
     }
 
-    // Compare manual max_rad vs 1-Origin Gateway vs 2-Origin Gateway + structural SRL.
+    // Compare manual max_rad vs Gateway structural hyperparameters (RoPE + norm-adaptive SRL).
     let configs: [(&str, u64, f32, f32, bool); 5] = [
         ("Baseline", 0xFFFF_FFFF, 0.00, 0.00, false),
         ("RoPE (Top16, 0.10)", 0xFFFF_0000, 0.10, 0.00, false),
         ("Top16 + GW(Fact)", 0xFFFF_0000, -1.00, 0.00, false),
-        ("Top16 + GW(2-Orig)", 0xFFFF_0000, -1.00, 0.00, true),
+        ("Top16 + GW(Fact+SRL)", 0xFFFF_0000, -1.00, -1.00, false),
         ("Top16 + GW(2O+SRL)", 0xFFFF_0000, -1.00, -1.00, true),
     ];
 
@@ -834,10 +857,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 None
             };
-            let srl_arg = if srl_scale < 0.0 {
-                let gw_srl = (trail.attractor_pull_force * 0.25).clamp(0.15, 0.80);
-                Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), gw_srl))
-            } else if srl_scale != 0.0 {
+            let srl_arg = if srl_scale != 0.0 {
                 Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), srl_scale))
             } else {
                 None
@@ -869,12 +889,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     break;
                 }
                 gen_ids.push(next);
-                let step_srl = if srl_scale < 0.0 {
-                    let gw_srl = (trail.attractor_pull_force * 0.25).clamp(0.15, 0.80);
-                    Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), gw_srl))
-                } else {
-                    srl_arg
-                };
                 let (next_logits, _, _) = model.forward_tokens(
                     &[next],
                     offset,
@@ -883,7 +897,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     q7_persona,
                     rope_rad,
                     Some(&mut trail),
-                    step_srl,
+                    srl_arg,
                     use_edbc,
                     false,
                 )?;

@@ -15,7 +15,8 @@ use liminika_core::traits::aligned::{
     AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32,
 };
 use liminika_core::traits::gateway::{
-    CausalProvenanceReport, GatewayFrame, GatewayPhaseSteeringExt, ManifoldGatewaySignal,
+    CausalProvenanceReport, GatewayFrame, GatewayPhaseSteeringExt, GatewaySrlSteeringExt,
+    ManifoldGatewaySignal,
 };
 use liminika_core::traits::rope::{
     PhaseSteeringGeometryExt, RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget,
@@ -448,6 +449,58 @@ impl ModelSteeringAdapter {
         Ok(Some((frame, report)))
     }
 
+    /// Applies norm-adaptive SRL residual injection driven purely by a [`ManifoldGatewaySignal`]
+    /// via [`GatewaySrlSteeringExt::apply_gateway_srl_hidden_fused`] without manual scale tuning.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if slice lengths mismatch or `liminika-core` rejects the inputs.
+    pub fn apply_srl_with_gateway<S: ManifoldGatewaySignal + ?Sized>(
+        &self,
+        signal: &S,
+        hidden_inout: &mut [f32],
+        u_vec: &[f32],
+        v_vec: &[f32],
+    ) -> Result<(GatewayFrame, f32), String> {
+        let d = hidden_inout.len();
+        if d == 0 || u_vec.len() != d || v_vec.len() != d {
+            return Err(format!(
+                "SRL hidden/u/v length mismatch: hidden={}, u={}, v={}",
+                d,
+                u_vec.len(),
+                v_vec.len()
+            ));
+        }
+
+        let mut y_buf = AlignedF32Buffer32::new_zeroed(d);
+        let mut x_buf = AlignedF32Buffer32::new_zeroed(d);
+        let mut u_buf = AlignedF32Buffer32::new_zeroed(d);
+        let mut v_buf = AlignedF32Buffer32::new_zeroed(d);
+        y_buf.as_mut_slice().copy_from_slice(hidden_inout);
+        x_buf.as_mut_slice().copy_from_slice(hidden_inout);
+        u_buf.as_mut_slice().copy_from_slice(u_vec);
+        v_buf.as_mut_slice().copy_from_slice(v_vec);
+
+        let (frame, gain) = {
+            let mut y_mut = AlignedSliceMut32::new(y_buf.as_mut_slice())
+                .map_err(|e| format!("AlignedSliceMut32 y error: {e}"))?;
+            let x_aligned = AlignedSlice32::new(x_buf.as_slice())
+                .map_err(|e| format!("AlignedSlice32 x error: {e}"))?;
+            let u_aligned = AlignedSlice32::new(u_buf.as_slice())
+                .map_err(|e| format!("AlignedSlice32 u error: {e}"))?;
+            let v_aligned = AlignedSlice32::new(v_buf.as_slice())
+                .map_err(|e| format!("AlignedSlice32 v error: {e}"))?;
+            self.residual_adapter
+                .apply_gateway_srl_hidden_fused(
+                    signal, &mut y_mut, &x_aligned, &u_aligned, &v_aligned,
+                )
+                .map_err(|e| format!("apply_gateway_srl_hidden_fused error: {e}"))?
+        };
+
+        hidden_inout.copy_from_slice(y_buf.as_slice());
+        Ok((frame, gain))
+    }
+
     /// Evaluates Top-2 sparse surrogate entropy via [`EntropyController::eval_surrogate_and_step`]
     /// and scales `logits` by the resulting adaptive `sample_temperature`.
     ///
@@ -657,5 +710,14 @@ mod tests {
         assert_ne!(report.provenance_bits & CAUSAL_AXIS_SUBJECTIVE_PERSONA, 0);
         assert_ne!(q_rot, orig);
         assert_eq!(trail.step_count, 1);
+
+        let mut hidden = vec![10.0, 0.0, 0.0, 0.0];
+        let u = vec![1.0, 0.0, 0.0, 0.0];
+        let v = vec![1.0, 0.0, 0.0, 0.0];
+        let (_, gain) = adapter
+            .apply_srl_with_gateway(&composite_signal, &mut hidden, &u, &v)
+            .expect("gateway srl should succeed");
+        assert!(gain > 0.0);
+        assert!(hidden[0] > 10.0);
     }
 }

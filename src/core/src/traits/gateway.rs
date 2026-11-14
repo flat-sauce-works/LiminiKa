@@ -70,7 +70,7 @@ use super::primitives::{
 };
 use super::rope::{
     PhaseSteering, PhaseSteeringGeometryExt, PspmRouter, RopePairLayout, RopeSteeringTarget,
-    dispatch_fused_ripa_and_pspm_words_core, resolve_autonomous_swarm_rot_dim,
+    SrlAdapter, dispatch_fused_ripa_and_pspm_words_core, resolve_autonomous_swarm_rot_dim,
     rotate_fused_self_ripa_and_pspm_default_words,
     rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words, steer_from_swar_words_core_safe,
 };
@@ -3238,6 +3238,56 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering + PspmRouter {
 }
 
 impl<T: PhaseSteering + PspmRouter + ?Sized> GatewayPhaseSteeringExt for T {}
+
+/// Blanket-implemented Gateway-driven Semantic Residual Layer (SRL) extension for any
+/// [`SrlAdapter`] engine.
+///
+/// Derives a scale-invariant residual injection gain autonomously from the hidden state's
+/// L2 norm and [`GatewayFrame`] structural quantities (`effective_energy`, `ripa_clamp_rad`,
+/// `fact_persona_coherence`, `repulsion_severity`), eliminating manual scalar tuning.
+pub trait GatewaySrlSteeringExt: SrlAdapter {
+    /// Synthesizes `signal` into a [`GatewayFrame`] and applies norm-adaptive fused SRL
+    /// residual injection $\mathbf{y} \leftarrow \mathbf{y} + g_{\mathrm{struct}} (\mathbf{v}^\top \mathbf{x}) \mathbf{u}$.
+    ///
+    /// Returns `(frame, applied_structural_gain)`.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slice lengths mismatch or `SrlAdapter` rejects inputs.
+    #[inline]
+    fn apply_gateway_srl_hidden_fused<S: ManifoldGatewaySignal + ?Sized>(
+        &self,
+        signal: &S,
+        y_out: &mut AlignedSliceMut32<'_, f32>,
+        x_in: &AlignedSlice32<'_, f32>,
+        u_vec: &AlignedSlice32<'_, f32>,
+        v_vec: &AlignedSlice32<'_, f32>,
+    ) -> GcsoResult<(GatewayFrame, f32)> {
+        let frame = signal.synthesize_gateway_frame();
+        if (frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0 {
+            return Ok((frame, 0.0));
+        }
+        // Rank-1 outer product `(v^T x) u` already scales linearly with `||x||_2`,
+        // so `structural_gain` must be a dimensionless ratio derived from Gateway physics.
+        let energy_gate = branchless_clamp_f32(
+            frame.effective_energy * (1.0 - 0.5 * frame.repulsion_severity),
+            0.0,
+            4.0,
+        );
+        let coh_boost =
+            branchless_clamp_f32(0.5 + 0.5 * frame.fact_persona_coherence, 0.25, 1.0);
+        let structural_gain = branchless_flush_subnormal_f32(branchless_clamp_f32(
+            frame.ripa_clamp_rad * energy_gate * coh_boost * 0.125,
+            0.0,
+            0.05,
+        ));
+        if structural_gain > 0.0 {
+            self.eval_rank1_slices_fused(y_out, x_in, u_vec, v_vec, None, structural_gain)?;
+        }
+        Ok((frame, structural_gain))
+    }
+}
+
+impl<T: SrlAdapter + ?Sized> GatewaySrlSteeringExt for T {}
 
 /// Blanket-implemented extension trait equipping any [`ActionHub`] with single-call
 /// [`ManifoldGatewaySignal`] ingestion, Online Toroidal $k$-Means / DP-Means macro clustering,
