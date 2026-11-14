@@ -7,7 +7,8 @@
 //! unified, zero-external-dependency bridge for external LLM runtimes (Candle, `llama.cpp`,
 //! and CLI evaluation harnesses).
 
-use liminika_core::abi::{gcso_edbc_state_t, gcso_pointer_trail_t, gcso_q7_t};
+use liminika_core::abi::{gcso_daes_slot_t, gcso_edbc_state_t, gcso_pointer_trail_t, gcso_q7_t};
+use liminika_core::action_hub::{ActionHubEngine, StigmergicThresholds};
 use liminika_core::entropy_control::EntropyController;
 use liminika_core::phase_steering::PhaseSteeringEngine;
 use liminika_core::residual_adapter::ResidualAdapterEngine;
@@ -15,8 +16,8 @@ use liminika_core::traits::aligned::{
     AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32,
 };
 use liminika_core::traits::gateway::{
-    CausalProvenanceReport, GatewayFrame, GatewayPhaseSteeringExt, GatewaySrlSteeringExt,
-    ManifoldGatewaySignal,
+    ActionHubGatewayExt, CausalProvenanceReport, GatewayFrame, GatewayPhaseSteeringExt,
+    GatewaySrlSteeringExt, ManifoldGatewaySignal,
 };
 use liminika_core::traits::rope::{
     PhaseSteeringGeometryExt, RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget,
@@ -223,6 +224,8 @@ impl RopeSteeringTarget for RopeGeometry {
 pub struct ModelSteeringAdapter {
     geometry: RopeGeometry,
     phase_engine: PhaseSteeringEngine,
+    action_hub: Box<ActionHubEngine>,
+    daes_slot: gcso_daes_slot_t,
     entropy_controller: EntropyController,
     residual_adapter: ResidualAdapterEngine,
 }
@@ -239,15 +242,38 @@ impl ModelSteeringAdapter {
         let phase_engine =
             PhaseSteeringEngine::new(geometry.rotary_dim as u32, geometry.num_q_heads as u32)
                 .map_err(|e| format!("PhaseSteeringEngine::new failed: {e}"))?;
+        let action_hub = Box::new(
+            ActionHubEngine::with_dimensions_and_thresholds(
+                geometry.rotary_dim as u32,
+                geometry.num_q_heads as u32,
+                16,
+                StigmergicThresholds::default(),
+            )
+            .map_err(|e| format!("ActionHubEngine::with_dimensions_and_thresholds failed: {e}"))?,
+        );
+        let daes_slot = gcso_daes_slot_t::default();
         let entropy_controller = EntropyController::new(gcso_edbc_state_t::default());
         let residual_adapter = ResidualAdapterEngine::new(1.0, 0, 1);
 
         Ok(Self {
             geometry,
             phase_engine,
+            action_hub,
+            daes_slot,
             entropy_controller,
             residual_adapter,
         })
+    }
+
+    /// Returns a shared reference to the embedded [`ActionHubEngine`].
+    #[must_use]
+    pub fn action_hub(&self) -> &ActionHubEngine {
+        &self.action_hub
+    }
+
+    /// Returns a mutable reference to the embedded [`ActionHubEngine`].
+    pub fn action_hub_mut(&mut self) -> &mut ActionHubEngine {
+        &mut self.action_hub
     }
 
     /// Returns the validated [`RopeGeometry`].
@@ -377,26 +403,20 @@ impl ModelSteeringAdapter {
         Ok(())
     }
 
-    /// Steers a single token's rotated query slice (`num_q_heads * rotary_dim`) using a
-    /// [`ManifoldGatewaySignal`] composite so structural hyperparameters (`ripa_clamp_rad`,
-    /// `qdps_min_step_rad`, `effective_inv_temp`) are derived autonomously from Gateway physics
-    /// rather than manual scalar tuning.
-    ///
-    /// Layers disabled in `geometry.layer_rope_mask` (NoPE layers) are skipped in O(1),
-    /// returning `Ok(None)`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `q_rot_inout` length mismatches or `liminika-core` rejects the inputs.
-    pub fn steer_layer_with_gateway<S: ManifoldGatewaySignal + ?Sized>(
-        &self,
+    fn marshal_q_rot_and_logits<F>(
+        &mut self,
         layer_idx: usize,
-        signal: &S,
-        trail_inout: &mut gcso_pointer_trail_t,
-        unresolved_damping_u7: u8,
         q_rot_inout: &mut [f32],
         logits_opt: Option<&mut [f32]>,
-    ) -> Result<Option<(GatewayFrame, CausalProvenanceReport)>, String> {
+        f: F,
+    ) -> Result<Option<(GatewayFrame, CausalProvenanceReport)>, String>
+    where
+        F: FnOnce(
+            &mut Self,
+            &mut AlignedSliceMut32<'_, f32>,
+            Option<&mut AlignedSliceMut32<'_, f32>>,
+        ) -> Result<(GatewayFrame, CausalProvenanceReport), String>,
+    {
         if !self.geometry.is_rope_layer(layer_idx) {
             return Ok(None);
         }
@@ -428,17 +448,7 @@ impl ModelSteeringAdapter {
                 ),
                 None => None,
             };
-            self.phase_engine
-                .steer_gateway_signal_for_geometry_safe(
-                    signal,
-                    &self.geometry,
-                    trail_inout,
-                    unresolved_damping_u7,
-                    &mut tensor_mut,
-                    None,
-                    logits_mut_opt.as_mut(),
-                )
-                .map_err(|e| format!("steer_gateway_signal_for_geometry_safe error: {e}"))?
+            f(self, &mut tensor_mut, logits_mut_opt.as_mut())?
         };
 
         q_rot_inout.copy_from_slice(work_buf.as_slice());
@@ -447,6 +457,73 @@ impl ModelSteeringAdapter {
         }
 
         Ok(Some((frame, report)))
+    }
+
+    /// Steers a single token's rotated query slice (`num_q_heads * rotary_dim`) using a
+    /// [`ManifoldGatewaySignal`] composite so structural hyperparameters (`ripa_clamp_rad`,
+    /// `qdps_min_step_rad`, `effective_inv_temp`) are derived autonomously from Gateway physics
+    /// rather than manual scalar tuning.
+    ///
+    /// Layers disabled in `geometry.layer_rope_mask` (NoPE layers) are skipped in O(1),
+    /// returning `Ok(None)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `q_rot_inout` length mismatches or `liminika-core` rejects the inputs.
+    pub fn steer_layer_with_gateway<S: ManifoldGatewaySignal + ?Sized>(
+        &mut self,
+        layer_idx: usize,
+        signal: &S,
+        trail_inout: &mut gcso_pointer_trail_t,
+        unresolved_damping_u7: u8,
+        q_rot_inout: &mut [f32],
+        logits_opt: Option<&mut [f32]>,
+    ) -> Result<Option<(GatewayFrame, CausalProvenanceReport)>, String> {
+        self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
+            this.phase_engine
+                .steer_gateway_signal_for_geometry_safe(
+                    signal,
+                    &this.geometry,
+                    trail_inout,
+                    unresolved_damping_u7,
+                    q,
+                    None,
+                    logits,
+                )
+                .map_err(|e| format!("steer_gateway_signal_for_geometry_safe error: {e}"))
+        })
+    }
+
+    /// Routes [`ManifoldGatewaySignal`] through the embedded [`ActionHubEngine`] via
+    /// [`ActionHubGatewayExt::ingest_gateway_and_steer_for_geometry_safe`], allowing the hub's
+    /// stigmergic trail density, DAES fast-path state, and frame energy to autonomously modulate
+    /// steering across layers and tokens.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `q_rot_inout` length mismatches or `liminika-core` rejects the inputs.
+    pub fn steer_layer_with_action_hub<S: ManifoldGatewaySignal + ?Sized>(
+        &mut self,
+        layer_idx: usize,
+        signal: &S,
+        trail_inout: &mut gcso_pointer_trail_t,
+        unresolved_damping_u7: u8,
+        q_rot_inout: &mut [f32],
+        logits_opt: Option<&mut [f32]>,
+    ) -> Result<Option<(GatewayFrame, CausalProvenanceReport)>, String> {
+        self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
+            this.action_hub
+                .ingest_gateway_and_steer_for_geometry_safe(
+                    signal,
+                    &this.geometry,
+                    &mut this.daes_slot,
+                    trail_inout,
+                    unresolved_damping_u7,
+                    Some(q),
+                    logits,
+                )
+                .map_err(|e| format!("ingest_gateway_and_steer_for_geometry_safe error: {e}"))
+        })
     }
 
     /// Applies norm-adaptive SRL residual injection driven purely by a [`ManifoldGatewaySignal`]
@@ -682,7 +759,7 @@ mod tests {
             CAUSAL_AXIS_SUBJECTIVE_PERSONA,
         };
 
-        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
         let len = adapter.geometry().q_rot_len();
         let orig: Vec<f32> = (0..len).map(|i| ((i % 11) as f32) * 0.1 - 0.4).collect();
         let mut q_rot = orig.clone();
@@ -725,7 +802,7 @@ mod tests {
     fn adapter_resonates_arbitrary_slice_without_hardcoded_count() {
         use liminika_core::traits::gateway::{ObjectiveFact, ResonantSignalSlice};
 
-        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
         let len = adapter.geometry().q_rot_len();
         let mut q_rot: Vec<f32> = (0..len).map(|i| ((i % 9) as f32) * 0.1 - 0.3).collect();
         let mut trail = gcso_pointer_trail_t::default();
@@ -750,5 +827,32 @@ mod tests {
 
         assert_eq!(frame.target_anchor_id, 10);
         assert!(frame.phase_deltas[0] > 30);
+    }
+
+    #[test]
+    fn adapter_steers_via_action_hub_and_builds_stigmergic_density() {
+        use liminika_core::traits::gateway::{ObjectiveFact, ResonantSignalSlice};
+
+        let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let len = adapter.geometry().q_rot_len();
+        let mut q_rot: Vec<f32> = (0..len).map(|i| ((i % 7) as f32) * 0.1 - 0.25).collect();
+        let orig = q_rot.clone();
+        let mut trail = gcso_pointer_trail_t::default();
+
+        let mut a1 = [0i8; 64];
+        a1[..24].fill(55);
+        let signals = [ObjectiveFact::new(a1, 2.5, 0, 77)];
+        let probe = [55i8; 24];
+        let resonant = ResonantSignalSlice::from_q7_probe(&signals, &probe);
+
+        let (frame, _) = adapter
+            .steer_layer_with_action_hub(0, &resonant, &mut trail, 128, &mut q_rot, None)
+            .expect("action_hub steering should succeed")
+            .expect("layer 0 active");
+
+        assert_eq!(frame.target_anchor_id, 77);
+        assert_ne!(q_rot, orig);
+        assert_eq!(adapter.action_hub().step_counter, 1);
+        assert!(trail.stigmergic_density > 0.0);
     }
 }

@@ -3035,6 +3035,39 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
 }
 
 #[inline(always)]
+fn filter_and_damp_gateway_words(
+    next_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    qdps_min_step_q7: u8,
+    unresolved_damping_u7: u8,
+) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    let qdps_words = if qdps_min_step_q7 <= 1 {
+        *next_w
+    } else if qdps_min_step_q7 > 127 {
+        [0u64; NUM_SWARM_MICRO_CELLS]
+    } else {
+        swar_q7_qdps_filter_words_64(next_w, qdps_min_step_q7)
+    };
+    let clean_damping =
+        branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
+    if clean_damping >= 128 {
+        qdps_words
+    } else {
+        let s_u64 = u64::from(clean_damping);
+        let bias_restore = (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+        [
+            swar_q7_scale_le128_with_bias_x8(qdps_words[0], s_u64, bias_restore),
+            swar_q7_scale_le128_with_bias_x8(qdps_words[1], s_u64, bias_restore),
+            swar_q7_scale_le128_with_bias_x8(qdps_words[2], s_u64, bias_restore),
+            swar_q7_scale_le128_with_bias_x8(qdps_words[3], s_u64, bias_restore),
+            swar_q7_scale_le128_with_bias_x8(qdps_words[4], s_u64, bias_restore),
+            swar_q7_scale_le128_with_bias_x8(qdps_words[5], s_u64, bias_restore),
+            swar_q7_scale_le128_with_bias_x8(qdps_words[6], s_u64, bias_restore),
+            swar_q7_scale_le128_with_bias_x8(qdps_words[7], s_u64, bias_restore),
+        ]
+    }
+}
+
+#[inline(always)]
 fn prepare_gateway_steering_state<T: PhaseSteering + ?Sized, S: ManifoldGatewaySignal + ?Sized>(
     engine: &T,
     signal: &S,
@@ -3176,31 +3209,11 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering + PspmRouter {
         if layer_skipped {
             trail_inout.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
         } else {
-            let qdps_words = if frame.qdps_min_step_q7 <= 1 {
-                next_w
-            } else if frame.qdps_min_step_q7 > 127 {
-                [0u64; NUM_SWARM_MICRO_CELLS]
-            } else {
-                swar_q7_qdps_filter_words_64(&next_w, frame.qdps_min_step_q7)
-            };
-            let clean_damping =
-                branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
-            let swar_words = if clean_damping >= 128 {
-                qdps_words
-            } else {
-                let s_u64 = u64::from(clean_damping);
-                let bias_restore = (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-                [
-                    swar_q7_scale_le128_with_bias_x8(qdps_words[0], s_u64, bias_restore),
-                    swar_q7_scale_le128_with_bias_x8(qdps_words[1], s_u64, bias_restore),
-                    swar_q7_scale_le128_with_bias_x8(qdps_words[2], s_u64, bias_restore),
-                    swar_q7_scale_le128_with_bias_x8(qdps_words[3], s_u64, bias_restore),
-                    swar_q7_scale_le128_with_bias_x8(qdps_words[4], s_u64, bias_restore),
-                    swar_q7_scale_le128_with_bias_x8(qdps_words[5], s_u64, bias_restore),
-                    swar_q7_scale_le128_with_bias_x8(qdps_words[6], s_u64, bias_restore),
-                    swar_q7_scale_le128_with_bias_x8(qdps_words[7], s_u64, bias_restore),
-                ]
-            };
+            let swar_words = filter_and_damp_gateway_words(
+                &next_w,
+                frame.qdps_min_step_q7,
+                unresolved_damping_u7,
+            );
 
             if swar_words_nonzero_64(&swar_words) {
                 let mut q7_stack = AlignedBuffer16::new([0i8; MAX_ATTENTION_HEADS]);
@@ -3504,6 +3517,117 @@ pub trait ActionHubGatewayExt: ActionHub {
             logits_opt,
             srl_activation_and_desc,
         )?;
+        Ok((frame, report))
+    }
+
+    /// Ingests any [`ManifoldGatewaySignal`] into `self`, steps `trail_out` and `daes_slot`,
+    /// modulates damping autonomously from the trail's stigmergic density and frame energy,
+    /// and steers `query_tensor` according to `geometry` (`Interleaved` or `HalfSplit`).
+    ///
+    /// # Errors
+    /// Propagates any validation or execution error from [`ActionHub`] or [`PhaseSteeringGeometryExt`].
+    #[inline]
+    fn ingest_gateway_and_steer_for_geometry_safe<
+        S: ManifoldGatewaySignal + ?Sized,
+        G: RopeSteeringTarget + ?Sized,
+    >(
+        &mut self,
+        signal: &S,
+        geometry: &G,
+        daes_slot: &mut gcso_daes_slot_t,
+        trail_out: &mut gcso_pointer_trail_t,
+        unresolved_damping_u7: u8,
+        mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport)> {
+        let geom = geometry.rope_geometry();
+        let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
+        let report = frame.to_causal_report();
+        let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
+            frame.qdps_min_step_rad,
+            frame.ripa_clamp_rad,
+            query_tensor.as_deref(),
+            None,
+        )?;
+        if geom.head_dim != head_dim || geom.num_heads != num_heads {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+
+        let (bypass_hit, effective_ptr) =
+            self.resolve_or_pass_tagged_ptr(daes_slot, gcso_tagged_ptr_t(frame.tagged_ptr));
+        let frm_nonzero = swar_words_nonzero_64(&frm_w);
+        let next_w = if frm_nonzero {
+            *trail_phase_words_mut(trail_out) = frm_w;
+            frm_w
+        } else {
+            *trail_phase_words_ref(trail_out)
+        };
+        if frame.target_anchor_id != 0 {
+            trail_out.target_anchor_id = frame.target_anchor_id;
+            trail_out.cluster_id = frame.target_anchor_id;
+        } else {
+            trail_out.cluster_id = frame.dominant_slot as u32;
+        }
+        trail_out.attractor_pull_force = branchless_min_f32(
+            branchless_max_f32(trail_out.attractor_pull_force, frame.effective_energy),
+            MAX_ATTRACTOR_PULL_FORCE,
+        );
+        let step_ptr = if frm_nonzero {
+            effective_ptr.with_phase(0)
+        } else {
+            effective_ptr
+        };
+        self.step_pointer(step_ptr.raw(), trail_out)?;
+        trail_out.current_ptr = effective_ptr.raw();
+
+        let is_repulsed = report.is_cohomology_repulsion()
+            | ((frame.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0);
+        let mut metrics = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(is_repulsed, DAES_METRIC_REPULSION_APPLIED, 0)
+            | branchless_select_u8(
+                (frame.provenance_bits
+                    & (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_SUBJECTIVE_PERSONA))
+                    == (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_SUBJECTIVE_PERSONA),
+                DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+                0,
+            );
+
+        let layer_skipped = (frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0;
+        if layer_skipped {
+            trail_out.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
+            metrics |= DAES_METRIC_LAYER_SKIP_COMPENSATED;
+        } else if let Some(q) = query_tensor.as_deref_mut() {
+            // Autonomous ActionHub damping derived from trail stigmergic density & frame energy.
+            let clean_damping =
+                branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
+            let density_ramp = branchless_clamp_f32(trail_out.stigmergic_density, 0.35, 1.0);
+            let energy_gate = branchless_clamp_f32(frame.effective_energy, 0.0, 1.0);
+            let hub_damping_u7 =
+                ((f32::from(clean_damping) * density_ramp * energy_gate) as u8).min(128);
+            let swar_words =
+                filter_and_damp_gateway_words(&next_w, frame.qdps_min_step_q7, hub_damping_u7);
+            if swar_words_nonzero_64(&swar_words) {
+                let mut q7_stack = AlignedBuffer16::new([0i8; MAX_ATTENTION_HEADS]);
+                store_q7_words_64(&mut q7_stack.data, &swar_words);
+                let p_aligned = AlignedSlice16::new(&q7_stack.data[..num_heads])?;
+                PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe(
+                    self,
+                    geometry,
+                    q,
+                    &p_aligned,
+                    frame.ripa_clamp_rad,
+                )?;
+                metrics |= DAES_METRIC_PHASE_STEERED;
+            }
+        }
+
+        if let Some(logits) = logits_opt {
+            if !logits.is_empty() && frame.effective_inv_temp > 0.0 {
+                scale_f32_slice_unrolled8(logits.as_mut_slice(), frame.effective_inv_temp);
+            }
+        }
+
+        let _ = self.telemetry_push(daes_slot, metrics);
         Ok((frame, report))
     }
 

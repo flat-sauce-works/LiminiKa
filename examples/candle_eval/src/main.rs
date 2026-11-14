@@ -95,7 +95,7 @@ impl RotaryCache {
         x: &Tensor,
         offset: usize,
         steer: Option<(
-            &ModelSteeringAdapter,
+            &mut ModelSteeringAdapter,
             usize,
             &[gcso_q7_t],
             Option<&[gcso_q7_t]>,
@@ -138,16 +138,29 @@ impl RotaryCache {
                                 .bake_layer_procrustes_q7(neg_ref, slice)
                                 .map_err(candle_core::Error::Msg)?;
                             let resonant = ResonantSignalSlice::from_q7_probe(anchors, &probe);
-                            adapter
-                                .steer_layer_with_gateway(
-                                    layer_idx,
-                                    &resonant,
-                                    trail,
-                                    128,
-                                    slice,
-                                    None,
-                                )
-                                .map_err(candle_core::Error::Msg)?;
+                            if max_rad <= -1.5 {
+                                adapter
+                                    .steer_layer_with_action_hub(
+                                        layer_idx,
+                                        &resonant,
+                                        trail,
+                                        128,
+                                        slice,
+                                        None,
+                                    )
+                                    .map_err(candle_core::Error::Msg)?;
+                            } else {
+                                adapter
+                                    .steer_layer_with_gateway(
+                                        layer_idx,
+                                        &resonant,
+                                        trail,
+                                        128,
+                                        slice,
+                                        None,
+                                    )
+                                    .map_err(candle_core::Error::Msg)?;
+                            }
                         }
                     } else {
                         let mut fact_arr = [0i8; 64];
@@ -249,7 +262,7 @@ impl Phi3Attention {
         rope: &RotaryCache,
         offset: usize,
         steer: Option<(
-            &ModelSteeringAdapter,
+            &mut ModelSteeringAdapter,
             usize,
             &[gcso_q7_t],
             Option<&[gcso_q7_t]>,
@@ -474,7 +487,7 @@ impl Phi3Model {
                     .zip(negs.get(layer_idx))
                     .map(|(a, n)| (a.as_slice(), n.as_slice()))
             });
-            let steer_ref = match (adapter.as_deref(), q7s) {
+            let steer_ref = match (adapter.as_deref_mut(), q7s) {
                 (Some(ad), Some(qs)) if rope_rad != 0.0 => qs.get(layer_idx).map(|q7| {
                     (
                         ad,
@@ -867,14 +880,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         baselines.push(logits);
     }
 
-    // Compare manual max_rad vs Gateway structural hyperparameters vs count-agnostic Resonant slice.
+    // Compare manual max_rad vs Gateway structural hyperparameters vs Resonant slice vs ActionHub.
     // tuple: (label, layer_mask, rope_rad, srl_scale, use_two_origin, use_resonant_slice)
-    let configs: [(&str, u64, f32, f32, bool, bool); 5] = [
+    let configs: [(&str, u64, f32, f32, bool, bool); 6] = [
         ("Baseline", 0xFFFF_FFFF, 0.00, 0.00, false, false),
         ("RoPE (Top16, 0.10)", 0xFFFF_0000, 0.10, 0.00, false, false),
         ("Top16 + GW(Fact)", 0xFFFF_0000, -1.00, 0.00, false, false),
         ("Top16 + GW(Fact+SRL)", 0xFFFF_0000, -1.00, -1.00, false, false),
         ("Top16 + GW(Resonant)", 0xFFFF_0000, -1.00, -1.00, false, true),
+        ("Top16 + ActionHub", 0xFFFF_0000, -2.00, -1.00, false, true),
     ];
 
     println!(
