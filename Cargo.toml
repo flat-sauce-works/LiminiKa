@@ -5,6 +5,7 @@
 members = [
   "src/core",
   "src/dsl",
+  "src/adapter",
   "src/cli",
 ]
 resolver = "2"

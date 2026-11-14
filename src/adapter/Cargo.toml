@@ -1,0 +1,16 @@
+# name: src/adapter/Cargo.toml
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "liminika-adapter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Model connection, RoPE geometry mapping, and optimization adapter over liminika-core"
+
+[dependencies]
+liminika-core = { path = "../core" }
+
+[lints]
+workspace = true

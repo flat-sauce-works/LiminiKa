@@ -1,0 +1,458 @@
+// name: src/adapter/src/lib.rs
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Model connection, RoPE geometry mapping, and optimization adapter over [`liminika_core`].
+//!
+//! Keeps [`liminika_core`] strictly `#![no_std]` and model-agnostic while providing a
+//! unified, zero-external-dependency bridge for external LLM runtimes (Candle, `llama.cpp`,
+//! and CLI evaluation harnesses).
+
+use liminika_core::abi::{gcso_edbc_state_t, gcso_q7_t};
+use liminika_core::entropy_control::EntropyController;
+use liminika_core::phase_steering::PhaseSteeringEngine;
+use liminika_core::residual_adapter::ResidualAdapterEngine;
+use liminika_core::traits::aligned::{
+    AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32,
+};
+use liminika_core::traits::PhaseSteering;
+
+/// Memory pairing convention used by an LLM's Rotary Position Embedding (RoPE).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RopeLayout {
+    /// Adjacent pairs `(x[2i], x[2i + 1])` (original RoPE / some GGUF layouts).
+    Interleaved,
+    /// Split-half pairs `(x[i], x[i + rotary_dim / 2])` (Hugging Face / NeoX / Candle).
+    HalfSplit,
+}
+
+/// Explicit per-model RoPE geometry descriptor.
+///
+/// Capturing layout, partial-RoPE bounds, GQA ratios, and NoPE layer masks up front
+/// prevents silent geometric corruption across heterogeneous LLM architectures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RopeGeometry {
+    /// Pairwise rotation layout (`Interleaved` or `HalfSplit`).
+    pub layout: RopeLayout,
+    /// Full dimension of each attention head (`d_head`).
+    pub head_dim: usize,
+    /// Active rotated dimensions (`<= head_dim`; smaller for partial RoPE models).
+    pub rotary_dim: usize,
+    /// Number of query heads (`H_Q`).
+    pub num_q_heads: usize,
+    /// Number of key/value heads (`H_KV`, `<= H_Q` for GQA).
+    pub num_kv_heads: usize,
+    /// Total transformer layers (`<= 64` for `layer_rope_mask`).
+    pub num_layers: usize,
+    /// Bitmask where bit `i == 1` enables RoPE steering on layer `i` (`0` skips NoPE layers).
+    pub layer_rope_mask: u64,
+}
+
+impl RopeGeometry {
+    /// Returns the validated geometry preset for `microsoft/Phi-4-mini-instruct`.
+    #[must_use]
+    pub const fn phi4_mini() -> Self {
+        Self {
+            layout: RopeLayout::HalfSplit,
+            head_dim: 128,
+            rotary_dim: 96,
+            num_q_heads: 24,
+            num_kv_heads: 8,
+            num_layers: 32,
+            layer_rope_mask: 0xFFFF_FFFF,
+        }
+    }
+
+    /// Validates structural invariants so invalid model configurations fail closed
+    /// before any steering pass runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if `head_dim`, `rotary_dim`, head counts, or `num_layers`
+    /// violate RoPE or GQA divisibility constraints.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.head_dim == 0 || !self.head_dim.is_multiple_of(2) {
+            return Err(format!(
+                "head_dim ({}) must be a positive even integer",
+                self.head_dim
+            ));
+        }
+        if self.rotary_dim == 0
+            || !self.rotary_dim.is_multiple_of(2)
+            || self.rotary_dim > self.head_dim
+        {
+            return Err(format!(
+                "rotary_dim ({}) must be even, > 0, and <= head_dim ({})",
+                self.rotary_dim, self.head_dim
+            ));
+        }
+        if self.num_q_heads == 0 || self.num_kv_heads == 0 {
+            return Err("num_q_heads and num_kv_heads must be > 0".to_string());
+        }
+        if !self.num_q_heads.is_multiple_of(self.num_kv_heads) {
+            return Err(format!(
+                "num_q_heads ({}) must be divisible by num_kv_heads ({})",
+                self.num_q_heads, self.num_kv_heads
+            ));
+        }
+        if self.num_layers == 0 || self.num_layers > 64 {
+            return Err(format!(
+                "num_layers ({}) must be in 1..=64 for bitmask routing",
+                self.num_layers
+            ));
+        }
+        Ok(())
+    }
+
+    /// Returns `true` if layer `layer_idx` uses RoPE and should receive phase steering.
+    #[inline]
+    #[must_use]
+    pub const fn is_rope_layer(&self, layer_idx: usize) -> bool {
+        if layer_idx >= self.num_layers || layer_idx >= 64 {
+            return false;
+        }
+        ((self.layer_rope_mask >> layer_idx) & 1) != 0
+    }
+
+    /// Total elements in one token's active rotated query slice (`num_q_heads * rotary_dim`).
+    #[inline]
+    #[must_use]
+    pub const fn q_rot_len(&self) -> usize {
+        self.num_q_heads * self.rotary_dim
+    }
+}
+
+#[repr(C, align(32))]
+#[derive(Clone, Copy)]
+struct Align32Chunk([f32; 8]);
+
+/// Safe 32-byte aligned `f32` buffer for passing arbitrary-length slices to [`liminika_core`].
+struct AlignedF32Buffer32 {
+    chunks: Vec<Align32Chunk>,
+    len: usize,
+}
+
+impl AlignedF32Buffer32 {
+    fn new_zeroed(len: usize) -> Self {
+        let num_chunks = len.div_ceil(8).max(1);
+        Self {
+            chunks: vec![Align32Chunk([0.0; 8]); num_chunks],
+            len,
+        }
+    }
+
+    fn as_slice(&self) -> &[f32] {
+        let ptr = self.chunks.as_ptr().cast::<f32>();
+        // SAFETY: `Align32Chunk` is `#[repr(C, align(32))]` wrapping `[f32; 8]`, so
+        // `chunks.len() * 8 >= self.len` contiguous `f32` elements are valid and initialized.
+        unsafe { core::slice::from_raw_parts(ptr, self.len) }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [f32] {
+        let ptr = self.chunks.as_mut_ptr().cast::<f32>();
+        // SAFETY: Same contiguous `[f32; 8]` layout as `as_slice`, with exclusive `&mut self`.
+        unsafe { core::slice::from_raw_parts_mut(ptr, self.len) }
+    }
+}
+
+#[repr(C, align(16))]
+#[derive(Clone, Copy)]
+struct Align16Chunk([gcso_q7_t; 16]);
+
+/// Safe 16-byte aligned `gcso_q7_t` buffer for [`AlignedSlice16`] / [`AlignedSliceMut16`].
+struct AlignedQ7Buffer16 {
+    chunks: Vec<Align16Chunk>,
+    len: usize,
+}
+
+impl AlignedQ7Buffer16 {
+    fn from_slice(src: &[gcso_q7_t]) -> Self {
+        let mut buf = Self::new_zeroed(src.len());
+        buf.as_mut_slice().copy_from_slice(src);
+        buf
+    }
+
+    fn new_zeroed(len: usize) -> Self {
+        let num_chunks = len.div_ceil(16).max(1);
+        Self {
+            chunks: vec![Align16Chunk([0; 16]); num_chunks],
+            len,
+        }
+    }
+
+    fn as_slice(&self) -> &[gcso_q7_t] {
+        let ptr = self.chunks.as_ptr().cast::<gcso_q7_t>();
+        // SAFETY: `Align16Chunk` is `#[repr(C, align(16))]` wrapping `[gcso_q7_t; 16]`.
+        unsafe { core::slice::from_raw_parts(ptr, self.len) }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [gcso_q7_t] {
+        let ptr = self.chunks.as_mut_ptr().cast::<gcso_q7_t>();
+        // SAFETY: Same contiguous `[gcso_q7_t; 16]` layout as `as_slice`, with exclusive `&mut self`.
+        unsafe { core::slice::from_raw_parts_mut(ptr, self.len) }
+    }
+}
+
+/// Converts `(num_heads * rot_dim)` from HalfSplit `(x[i], x[i + rot_dim/2])`
+/// into Interleaved `(x[2i], x[2i + 1])`.
+pub fn half_split_to_interleaved(src: &[f32], dst: &mut [f32], num_heads: usize, rot_dim: usize) {
+    let half = rot_dim / 2;
+    for h in 0..num_heads {
+        let base = h * rot_dim;
+        for i in 0..half {
+            dst[base + 2 * i] = src[base + i];
+            dst[base + 2 * i + 1] = src[base + half + i];
+        }
+    }
+}
+
+/// Converts `(num_heads * rot_dim)` from Interleaved back to HalfSplit.
+pub fn interleaved_to_half_split(src: &[f32], dst: &mut [f32], num_heads: usize, rot_dim: usize) {
+    let half = rot_dim / 2;
+    for h in 0..num_heads {
+        let base = h * rot_dim;
+        for i in 0..half {
+            dst[base + i] = src[base + 2 * i];
+            dst[base + half + i] = src[base + 2 * i + 1];
+        }
+    }
+}
+
+/// Unified model-connection and optimization adapter over [`liminika_core`].
+///
+/// Bridges a target LLM's [`RopeGeometry`] to [`PhaseSteeringEngine`],
+/// [`EntropyController`], and [`ResidualAdapterEngine`] without polluting `liminika-core`
+/// with model-specific parsing or runtime dependencies.
+pub struct ModelSteeringAdapter {
+    geometry: RopeGeometry,
+    phase_engine: PhaseSteeringEngine,
+    entropy_controller: EntropyController,
+    residual_adapter: ResidualAdapterEngine,
+}
+
+impl ModelSteeringAdapter {
+    /// Creates a new [`ModelSteeringAdapter`] after validating `geometry`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `geometry.validate()` fails or [`PhaseSteeringEngine::new`]
+    /// rejects the `(rotary_dim, num_q_heads)` pair.
+    pub fn new(geometry: RopeGeometry) -> Result<Self, String> {
+        geometry.validate()?;
+        let phase_engine =
+            PhaseSteeringEngine::new(geometry.rotary_dim as u32, geometry.num_q_heads as u32)
+                .map_err(|e| format!("PhaseSteeringEngine::new failed: {e}"))?;
+        let entropy_controller = EntropyController::new(gcso_edbc_state_t::default());
+        let residual_adapter = ResidualAdapterEngine::new(1.0, 0, 1);
+
+        Ok(Self {
+            geometry,
+            phase_engine,
+            entropy_controller,
+            residual_adapter,
+        })
+    }
+
+    /// Returns the validated [`RopeGeometry`].
+    #[must_use]
+    pub const fn geometry(&self) -> &RopeGeometry {
+        &self.geometry
+    }
+
+    /// Returns a mutable reference to the embedded [`EntropyController`] (EDBC).
+    pub fn entropy_controller_mut(&mut self) -> &mut EntropyController {
+        &mut self.entropy_controller
+    }
+
+    /// Returns a mutable reference to the embedded [`ResidualAdapterEngine`] (SRL).
+    pub fn residual_adapter_mut(&mut self) -> &mut ResidualAdapterEngine {
+        &mut self.residual_adapter
+    }
+
+    /// Computes per-head Q7 phase deltas from negative (`source`) and positive (`target`)
+    /// post-RoPE query centroids via [`PhaseSteering::compute_procrustes_phase_delta`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either slice length does not match `num_q_heads * rotary_dim`
+    /// or if `liminika-core` returns an argument error.
+    pub fn bake_layer_procrustes_q7(
+        &self,
+        neg_q_rot: &[f32],
+        pos_q_rot: &[f32],
+    ) -> Result<Vec<gcso_q7_t>, String> {
+        let expected = self.geometry.q_rot_len();
+        if neg_q_rot.len() != expected || pos_q_rot.len() != expected {
+            return Err(format!(
+                "expected q_rot length {}, got neg={} pos={}",
+                expected,
+                neg_q_rot.len(),
+                pos_q_rot.len()
+            ));
+        }
+
+        let mut neg_buf = AlignedF32Buffer32::new_zeroed(expected);
+        let mut pos_buf = AlignedF32Buffer32::new_zeroed(expected);
+        match self.geometry.layout {
+            RopeLayout::HalfSplit => {
+                half_split_to_interleaved(
+                    neg_q_rot,
+                    neg_buf.as_mut_slice(),
+                    self.geometry.num_q_heads,
+                    self.geometry.rotary_dim,
+                );
+                half_split_to_interleaved(
+                    pos_q_rot,
+                    pos_buf.as_mut_slice(),
+                    self.geometry.num_q_heads,
+                    self.geometry.rotary_dim,
+                );
+            }
+            RopeLayout::Interleaved => {
+                neg_buf.as_mut_slice().copy_from_slice(neg_q_rot);
+                pos_buf.as_mut_slice().copy_from_slice(pos_q_rot);
+            }
+        }
+
+        let src_aligned = AlignedSlice32::new(neg_buf.as_slice())
+            .map_err(|e| format!("AlignedSlice32 src error: {e}"))?;
+        let dst_aligned = AlignedSlice32::new(pos_buf.as_slice())
+            .map_err(|e| format!("AlignedSlice32 dst error: {e}"))?;
+        let mut q7_buf = AlignedQ7Buffer16::new_zeroed(self.geometry.num_q_heads);
+        {
+            let mut q7_mut = AlignedSliceMut16::new(q7_buf.as_mut_slice())
+                .map_err(|e| format!("AlignedSliceMut16 error: {e}"))?;
+            self.phase_engine
+                .compute_procrustes_phase_delta(&src_aligned, &dst_aligned, &mut q7_mut)
+                .map_err(|e| format!("compute_procrustes_phase_delta error: {e}"))?;
+        }
+
+        Ok(q7_buf.as_slice().to_vec())
+    }
+
+    /// Applies RIPA-bounded phase steering to a single token's rotated query slice
+    /// (`num_q_heads * rotary_dim`) using [`PhaseSteering::apply_phase_steering_safe`].
+    ///
+    /// Layers disabled in `geometry.layer_rope_mask` (NoPE layers) are skipped in O(1).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if slice lengths mismatch or `liminika-core` rejects the inputs.
+    pub fn steer_layer_q_rot(
+        &self,
+        layer_idx: usize,
+        q_rot_inout: &mut [f32],
+        q7_deltas: &[gcso_q7_t],
+        max_rad: f32,
+    ) -> Result<(), String> {
+        if max_rad <= 0.0 || !self.geometry.is_rope_layer(layer_idx) {
+            return Ok(());
+        }
+        let expected = self.geometry.q_rot_len();
+        if q_rot_inout.len() != expected {
+            return Err(format!(
+                "expected q_rot_inout length {}, got {}",
+                expected,
+                q_rot_inout.len()
+            ));
+        }
+        if q7_deltas.len() != self.geometry.num_q_heads {
+            return Err(format!(
+                "expected {} q7 deltas, got {}",
+                self.geometry.num_q_heads,
+                q7_deltas.len()
+            ));
+        }
+
+        let mut work_buf = AlignedF32Buffer32::new_zeroed(expected);
+        match self.geometry.layout {
+            RopeLayout::HalfSplit => {
+                half_split_to_interleaved(
+                    q_rot_inout,
+                    work_buf.as_mut_slice(),
+                    self.geometry.num_q_heads,
+                    self.geometry.rotary_dim,
+                );
+            }
+            RopeLayout::Interleaved => {
+                work_buf.as_mut_slice().copy_from_slice(q_rot_inout);
+            }
+        }
+
+        let q7_buf = AlignedQ7Buffer16::from_slice(q7_deltas);
+        let q7_aligned = AlignedSlice16::new(q7_buf.as_slice())
+            .map_err(|e| format!("AlignedSlice16 error: {e}"))?;
+        {
+            let mut tensor_mut = AlignedSliceMut32::new(work_buf.as_mut_slice())
+                .map_err(|e| format!("AlignedSliceMut32 error: {e}"))?;
+            self.phase_engine
+                .apply_phase_steering_safe(&mut tensor_mut, &q7_aligned, max_rad)
+                .map_err(|e| format!("apply_phase_steering_safe error: {e}"))?;
+        }
+
+        match self.geometry.layout {
+            RopeLayout::HalfSplit => {
+                interleaved_to_half_split(
+                    work_buf.as_slice(),
+                    q_rot_inout,
+                    self.geometry.num_q_heads,
+                    self.geometry.rotary_dim,
+                );
+            }
+            RopeLayout::Interleaved => {
+                q_rot_inout.copy_from_slice(work_buf.as_slice());
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn phi4_mini_preset_validates_and_skips_nope_layers() {
+        let mut geom = RopeGeometry::phi4_mini();
+        assert!(geom.validate().is_ok());
+        assert_eq!(geom.q_rot_len(), 24 * 96);
+
+        geom.layer_rope_mask &= !(1 << 5);
+        assert!(geom.is_rope_layer(4));
+        assert!(!geom.is_rope_layer(5));
+    }
+
+    #[test]
+    fn adapter_bakes_and_steers_half_split_and_interleaved() {
+        for layout in [RopeLayout::HalfSplit, RopeLayout::Interleaved] {
+            let mut geom = RopeGeometry::phi4_mini();
+            geom.layout = layout;
+            geom.layer_rope_mask &= !(1 << 1); // Layer 1 is NoPE
+
+            let mut adapter = ModelSteeringAdapter::new(geom).expect("adapter init");
+            assert!(adapter.residual_adapter_mut().validate().is_ok());
+            let _ = adapter.entropy_controller_mut();
+
+            let len = adapter.geometry().q_rot_len();
+            let neg: Vec<f32> = (0..len).map(|i| ((i % 13) as f32) * 0.1 - 0.5).collect();
+            let pos: Vec<f32> = (0..len).map(|i| ((i % 7) as f32) * 0.15 - 0.3).collect();
+
+            let q7 = adapter
+                .bake_layer_procrustes_q7(&neg, &pos)
+                .expect("bake should succeed");
+            assert_eq!(q7.len(), 24);
+
+            let mut q_layer0 = neg.clone();
+            adapter
+                .steer_layer_q_rot(0, &mut q_layer0, &q7, 0.10)
+                .expect("steer layer 0");
+
+            // NoPE layer 1 must remain untouched.
+            let mut q_layer1 = neg.clone();
+            adapter
+                .steer_layer_q_rot(1, &mut q_layer1, &q7, 0.10)
+                .expect("skip layer 1");
+            assert_eq!(q_layer1, neg);
+        }
+    }
+}
