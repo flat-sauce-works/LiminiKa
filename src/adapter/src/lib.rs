@@ -8,7 +8,7 @@
 //! and CLI evaluation harnesses).
 
 use liminika_core::abi::{gcso_daes_slot_t, gcso_edbc_state_t, gcso_pointer_trail_t, gcso_q7_t};
-use liminika_core::action_hub::{ActionHubEngine, StigmergicThresholds};
+use liminika_core::action_hub::{ActionHubEngine, StigmergicActionDecision, StigmergicThresholds};
 use liminika_core::entropy_control::EntropyController;
 use liminika_core::phase_steering::PhaseSteeringEngine;
 use liminika_core::residual_adapter::ResidualAdapterEngine;
@@ -403,19 +403,19 @@ impl ModelSteeringAdapter {
         Ok(())
     }
 
-    fn marshal_q_rot_and_logits<F>(
+    fn marshal_q_rot_and_logits<R, F>(
         &mut self,
         layer_idx: usize,
         q_rot_inout: &mut [f32],
         logits_opt: Option<&mut [f32]>,
         f: F,
-    ) -> Result<Option<(GatewayFrame, CausalProvenanceReport)>, String>
+    ) -> Result<Option<R>, String>
     where
         F: FnOnce(
             &mut Self,
             &mut AlignedSliceMut32<'_, f32>,
             Option<&mut AlignedSliceMut32<'_, f32>>,
-        ) -> Result<(GatewayFrame, CausalProvenanceReport), String>,
+        ) -> Result<R, String>,
     {
         if !self.geometry.is_rope_layer(layer_idx) {
             return Ok(None);
@@ -438,7 +438,7 @@ impl ModelSteeringAdapter {
             b
         });
 
-        let (frame, report) = {
+        let out = {
             let mut tensor_mut = AlignedSliceMut32::new(work_buf.as_mut_slice())
                 .map_err(|e| format!("AlignedSliceMut32 error: {e}"))?;
             let mut logits_mut_opt = match logits_buf.as_mut() {
@@ -456,7 +456,7 @@ impl ModelSteeringAdapter {
             dst.copy_from_slice(src.as_slice());
         }
 
-        Ok(Some((frame, report)))
+        Ok(Some(out))
     }
 
     /// Steers a single token's rotated query slice (`num_q_heads * rotary_dim`) using a
@@ -524,6 +524,80 @@ impl ModelSteeringAdapter {
                 )
                 .map_err(|e| format!("ingest_gateway_and_steer_for_geometry_safe error: {e}"))
         })
+    }
+
+    /// Orchestrates a layer's RoPE steering via [`ActionHubEngine`] using stigmergic
+    /// evaporation + resonance-weighted reinforcement and records the selected
+    /// [`StigmergicActionDecision`] inside `action_hub.last_decision`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `q_rot_inout` length mismatches or `liminika-core` rejects the inputs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn orchestrate_layer_rope_with_action_hub<S: ManifoldGatewaySignal + ?Sized>(
+        &mut self,
+        layer_idx: usize,
+        signal: &S,
+        trail_inout: &mut gcso_pointer_trail_t,
+        entropy_h_tilde: f32,
+        unresolved_damping_u7: u8,
+        q_rot_inout: &mut [f32],
+        logits_opt: Option<&mut [f32]>,
+    ) -> Result<
+        Option<(
+            GatewayFrame,
+            CausalProvenanceReport,
+            StigmergicActionDecision,
+        )>,
+        String,
+    > {
+        self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
+            let thresholds = this.action_hub.thresholds;
+            let (frame, report, decision) = this
+                .action_hub
+                .orchestrate_gateway_layer_safe(
+                    signal,
+                    &this.geometry,
+                    &thresholds,
+                    entropy_h_tilde,
+                    &mut this.daes_slot,
+                    trail_inout,
+                    unresolved_damping_u7,
+                    Some(q),
+                    None,
+                    logits,
+                )
+                .map_err(|e| format!("orchestrate_gateway_layer_safe error: {e}"))?;
+            this.action_hub.last_decision = decision as u8;
+            Ok((frame, report, decision))
+        })
+    }
+
+    /// Executes norm-adaptive SRL residual injection only when [`ActionHubEngine`]'s latest
+    /// [`StigmergicActionDecision`] authorizes full orchestration (`FullOrchestrationSrl` or
+    /// `CrystallizeMacroBasin`). Returns `Ok(None)` when bypassed by ActionHub.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if slice lengths mismatch or `liminika-core` rejects the inputs.
+    pub fn orchestrate_layer_srl_with_action_hub<S: ManifoldGatewaySignal + ?Sized>(
+        &self,
+        signal: &S,
+        hidden_inout: &mut [f32],
+        u_vec: &[f32],
+        v_vec: &[f32],
+    ) -> Result<Option<(GatewayFrame, f32)>, String> {
+        let decision = StigmergicActionDecision::from_u8(self.action_hub.last_decision);
+        if matches!(
+            decision,
+            StigmergicActionDecision::FullOrchestrationSrl
+                | StigmergicActionDecision::CrystallizeMacroBasin
+        ) {
+            let res = self.apply_srl_with_gateway(signal, hidden_inout, u_vec, v_vec)?;
+            Ok(Some(res))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Applies norm-adaptive SRL residual injection driven purely by a [`ManifoldGatewaySignal`]
@@ -854,5 +928,75 @@ mod tests {
         assert_ne!(q_rot, orig);
         assert_eq!(adapter.action_hub().step_counter, 1);
         assert!(trail.stigmergic_density > 0.0);
+    }
+
+    #[test]
+    fn action_hub_orchestrator_gates_rope_and_srl_by_stigmergic_density() {
+        use liminika_core::traits::gateway::{ObjectiveFact, ResonantSignalSlice};
+
+        let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let len = adapter.geometry().q_rot_len();
+        let mut trail = gcso_pointer_trail_t::default();
+
+        let mut a1 = [0i8; 64];
+        a1[..24].fill(55);
+        let signals = [ObjectiveFact::new(a1, 2.5, 0, 77)];
+        let probe = [55i8; 24];
+        let resonant = ResonantSignalSlice::from_q7_probe(&signals, &probe);
+
+        let mut hidden = vec![10.0, 0.0, 0.0, 0.0];
+        let u = vec![1.0, 0.0, 0.0, 0.0];
+        let v = vec![1.0, 0.0, 0.0, 0.0];
+
+        // First step from zero density crosses express_steer (0.35) but not srl_inject (1.50).
+        let mut q_rot1: Vec<f32> = (0..len).map(|i| ((i % 7) as f32) * 0.1 - 0.25).collect();
+        let orig1 = q_rot1.clone();
+        let (_, _, d1) = adapter
+            .orchestrate_layer_rope_with_action_hub(
+                0,
+                &resonant,
+                &mut trail,
+                0.5,
+                128,
+                &mut q_rot1,
+                None,
+            )
+            .expect("step 1")
+            .expect("active");
+        assert_eq!(d1, StigmergicActionDecision::ExpressPhaseSteer);
+        assert_ne!(q_rot1, orig1);
+        assert!(adapter
+            .orchestrate_layer_srl_with_action_hub(&resonant, &mut hidden, &u, &v)
+            .expect("srl gate")
+            .is_none());
+
+        // Repeated resonant steps accumulate density above srl_inject_density_thresh (1.50).
+        let mut final_decision = d1;
+        for _ in 0..8 {
+            let mut q_rot_k: Vec<f32> = (0..len).map(|i| ((i % 7) as f32) * 0.1 - 0.25).collect();
+            let (_, _, dk) = adapter
+                .orchestrate_layer_rope_with_action_hub(
+                    0,
+                    &resonant,
+                    &mut trail,
+                    0.5,
+                    128,
+                    &mut q_rot_k,
+                    None,
+                )
+                .expect("step k")
+                .expect("active");
+            final_decision = dk;
+        }
+        assert!(matches!(
+            final_decision,
+            StigmergicActionDecision::FullOrchestrationSrl
+                | StigmergicActionDecision::CrystallizeMacroBasin
+        ));
+        let srl_res = adapter
+            .orchestrate_layer_srl_with_action_hub(&resonant, &mut hidden, &u, &v)
+            .expect("srl gate");
+        assert!(srl_res.is_some());
+        assert!(hidden[0] > 10.0);
     }
 }

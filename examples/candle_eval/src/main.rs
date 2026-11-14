@@ -140,10 +140,11 @@ impl RotaryCache {
                             let resonant = ResonantSignalSlice::from_q7_probe(anchors, &probe);
                             if max_rad <= -1.5 {
                                 adapter
-                                    .steer_layer_with_action_hub(
+                                    .orchestrate_layer_rope_with_action_hub(
                                         layer_idx,
                                         &resonant,
                                         trail,
+                                        0.5,
                                         128,
                                         slice,
                                         None,
@@ -544,6 +545,10 @@ impl Phi3Model {
                         let composite = (fact, persona);
                         let _ = ad
                             .apply_srl_with_gateway(&composite, &mut h_vec, u_vec, v_vec)
+                            .map_err(candle_core::Error::Msg)?;
+                    } else if rope_rad <= -1.5 {
+                        let _ = ad
+                            .orchestrate_layer_srl_with_action_hub(&fact, &mut h_vec, u_vec, v_vec)
                             .map_err(candle_core::Error::Msg)?;
                     } else {
                         let _ = ad

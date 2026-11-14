@@ -32,6 +32,9 @@
 #![allow(clippy::ifs_same_cond)]
 #![allow(clippy::field_reassign_with_default)]
 use core::mem::{align_of, offset_of, size_of};
+use crate::action_hub::{StigmergicActionDecision, StigmergicThresholds};
+use crate::prelude::MAX_STIGMERGIC_DENSITY;
+use crate::TRAIL_FLAG_REPULSION_ACTIVE;
 use super::aligned::{
     AlignedBuffer16, AlignedSlice, AlignedSlice16, AlignedSlice32, AlignedSliceMut32,
     is_aligned_to,
@@ -3629,6 +3632,182 @@ pub trait ActionHubGatewayExt: ActionHub {
 
         let _ = self.telemetry_push(daes_slot, metrics);
         Ok((frame, report))
+    }
+
+    /// Unified ActionHub-as-Orchestrator entry point for a transformer layer.
+    ///
+    /// Applies pheromone **evaporation + resonance-weighted reinforcement** to `trail_out`,
+    /// evaluates the 7-regime [`StigmergicActionDecision`] ladder via `thresholds`, and
+    /// autonomously executes only the interventions authorized by `decision`:
+    /// - `PassiveSidecar` / `InertialLayerSkip`: zero interference (skips RoPE & SRL).
+    /// - `ExpressPhaseSteer` / `PspmSubHeadRoute`: geometry-aware RoPE phase steering only.
+    /// - `FullOrchestrationSrl` / `CrystallizeMacroBasin`: RoPE phase steering + norm-adaptive SRL.
+    /// - `RepulsionEscape`: suppresses positive SRL injection and applies damped repulsion guard.
+    ///
+    /// # Errors
+    /// Propagates any validation or execution error from [`ActionHub`],
+    /// [`PhaseSteeringGeometryExt`], or [`GatewaySrlSteeringExt`].
+    #[inline]
+    fn orchestrate_gateway_layer_safe<
+        S: ManifoldGatewaySignal + ?Sized,
+        G: RopeSteeringTarget + ?Sized,
+    >(
+        &mut self,
+        signal: &S,
+        geometry: &G,
+        thresholds: &StigmergicThresholds,
+        entropy_h_tilde: f32,
+        daes_slot: &mut gcso_daes_slot_t,
+        trail_out: &mut gcso_pointer_trail_t,
+        unresolved_damping_u7: u8,
+        mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        srl_hidden: Option<(
+            &mut AlignedSliceMut32<'_, f32>,
+            &AlignedSlice32<'_, f32>,
+            &AlignedSlice32<'_, f32>,
+            &AlignedSlice32<'_, f32>,
+        )>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport, StigmergicActionDecision)> {
+        let geom = geometry.rope_geometry();
+        let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
+        let report = frame.to_causal_report();
+        let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
+            frame.qdps_min_step_rad,
+            frame.ripa_clamp_rad,
+            query_tensor.as_deref(),
+            None,
+        )?;
+        if geom.head_dim != head_dim || geom.num_heads != num_heads {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+
+        // Evaporate stale pheromone and deposit new pheromone weighted by resonance energy.
+        let prev_rho =
+            branchless_flush_subnormal_f32(branchless_relu_f32(trail_out.stigmergic_density));
+        let energy_gate = branchless_clamp_f32(frame.effective_energy, 0.0, 1.0);
+        let retain =
+            branchless_clamp_f32(branchless_relu_f32(thresholds.evaporation_retain), 0.0, 1.0);
+        let deposit = branchless_relu_f32(thresholds.reinforcement_gain) * energy_gate;
+        let next_rho = branchless_min_f32(
+            branchless_flush_subnormal_f32(prev_rho * retain + deposit),
+            MAX_STIGMERGIC_DENSITY,
+        );
+
+        let (bypass_hit, effective_ptr) =
+            self.resolve_or_pass_tagged_ptr(daes_slot, gcso_tagged_ptr_t(frame.tagged_ptr));
+        let frm_nonzero = swar_words_nonzero_64(&frm_w);
+        let next_w = if frm_nonzero {
+            *trail_phase_words_mut(trail_out) = frm_w;
+            frm_w
+        } else {
+            *trail_phase_words_ref(trail_out)
+        };
+        if frame.target_anchor_id != 0 {
+            trail_out.target_anchor_id = frame.target_anchor_id;
+            trail_out.cluster_id = frame.target_anchor_id;
+        } else {
+            trail_out.cluster_id = frame.dominant_slot as u32;
+        }
+        trail_out.attractor_pull_force = branchless_min_f32(
+            branchless_max_f32(trail_out.attractor_pull_force, frame.effective_energy),
+            MAX_ATTRACTOR_PULL_FORCE,
+        );
+        let step_ptr = if frm_nonzero {
+            effective_ptr.with_phase(0)
+        } else {
+            effective_ptr
+        };
+        self.step_pointer(step_ptr.raw(), trail_out)?;
+        trail_out.stigmergic_density = next_rho;
+        trail_out.current_ptr = effective_ptr.raw();
+
+        let is_repulsed = report.is_cohomology_repulsion()
+            | ((frame.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0);
+        let coh = if is_repulsed { -1.0 } else { energy_gate };
+        let (decision, _mode_flags, _target_slot, extra_flags) = thresholds
+            .select_action_decision(
+                next_rho,
+                entropy_h_tilde,
+                coh,
+                is_repulsed,
+                frame.dominant_slot,
+            );
+        trail_out.flags = (trail_out.flags
+            & !(TRAIL_FLAG_REPULSION_ACTIVE | TRAIL_FLAG_INERTIAL_SKIP_ACTIVE))
+            | extra_flags;
+
+        let mut metrics = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(is_repulsed, DAES_METRIC_REPULSION_APPLIED, 0)
+            | branchless_select_u8(
+                (frame.provenance_bits
+                    & (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_SUBJECTIVE_PERSONA))
+                    == (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_SUBJECTIVE_PERSONA),
+                DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+                0,
+            );
+
+        let is_passive_or_skip = matches!(
+            decision,
+            StigmergicActionDecision::PassiveSidecar | StigmergicActionDecision::InertialLayerSkip
+        ) || ((frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0);
+
+        if is_passive_or_skip {
+            if matches!(decision, StigmergicActionDecision::InertialLayerSkip) {
+                metrics |= DAES_METRIC_LAYER_SKIP_COMPENSATED;
+            }
+        } else {
+            if let Some(q) = query_tensor.as_deref_mut() {
+                let clean_damping =
+                    branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
+                let density_ramp = branchless_clamp_f32(next_rho, 0.35, 1.0);
+                let repulse_scale = if matches!(decision, StigmergicActionDecision::RepulsionEscape) {
+                    0.5
+                } else {
+                    1.0
+                };
+                let hub_damping_u7 =
+                    ((f32::from(clean_damping) * density_ramp * energy_gate * repulse_scale) as u8)
+                        .min(128);
+                let swar_words =
+                    filter_and_damp_gateway_words(&next_w, frame.qdps_min_step_q7, hub_damping_u7);
+                if swar_words_nonzero_64(&swar_words) {
+                    let mut q7_stack = AlignedBuffer16::new([0i8; MAX_ATTENTION_HEADS]);
+                    store_q7_words_64(&mut q7_stack.data, &swar_words);
+                    let p_aligned = AlignedSlice16::new(&q7_stack.data[..num_heads])?;
+                    PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe(
+                        self,
+                        geometry,
+                        q,
+                        &p_aligned,
+                        frame.ripa_clamp_rad,
+                    )?;
+                    metrics |= DAES_METRIC_PHASE_STEERED;
+                }
+            }
+
+            if matches!(
+                decision,
+                StigmergicActionDecision::FullOrchestrationSrl
+                    | StigmergicActionDecision::CrystallizeMacroBasin
+            ) {
+                if let Some((y_mut, x_in, u_vec, v_vec)) = srl_hidden {
+                    let _ = GatewaySrlSteeringExt::apply_gateway_srl_hidden_fused(
+                        self, signal, y_mut, x_in, u_vec, v_vec,
+                    )?;
+                    metrics |= DAES_METRIC_SRL_INJECTED;
+                }
+            }
+
+            if let Some(logits) = logits_opt {
+                if !logits.is_empty() && frame.effective_inv_temp > 0.0 {
+                    scale_f32_slice_unrolled8(logits.as_mut_slice(), frame.effective_inv_temp);
+                }
+            }
+        }
+
+        let _ = self.telemetry_push(daes_slot, metrics);
+        Ok((frame, report, decision))
     }
 
     /// Ingests `signal`, resolves the 8-Cell SWAR Micro-Swarm on `trail_out`, and absorbs the
