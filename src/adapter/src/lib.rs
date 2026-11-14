@@ -1028,7 +1028,11 @@ pub struct DynamicAttractorRecall<'a> {
     pub top1_fact_score: f32,
     /// Second-highest geometric resonance score among Fact attractors.
     pub top2_fact_score: f32,
-    /// Highest Guard resonance minus highest Fact resonance (`> 0` indicates guard-dominant conflict).
+    /// Highest geometric resonance score among Persona attractors.
+    pub top1_persona_score: f32,
+    /// Smallest per-attractor local `cvoid` depth observed across all attractors (`0.0` = deep in a basin).
+    pub min_local_void_depth: f32,
+    /// Highest Guard resonance minus highest Fact/Persona resonance (`> 0` indicates guard-dominant conflict).
     pub guard_conflict_margin: f32,
     /// Top-K recalled Fact entries (empty when `void_state == CvoidEmptySpace`).
     pub recalled_facts: Vec<(&'a TextAttractorEntry, f32)>,
@@ -1141,6 +1145,94 @@ pub trait RecallBoundaryGate {
         metrics: &RecallBoundaryMetrics,
         policy: &RecallPolicy,
     ) -> RecallGateDecision;
+}
+
+/// Relational neighborhood context observed from a single attractor's vantage point, enabling
+/// asymmetric, perspective-dependent `cvoid` measurements (analogous to viewing a chain from the
+/// left edge vs. the right edge or per-head Attention affinity).
+#[derive(Debug, Clone, Copy)]
+pub struct AttractorPerspectiveContext<'a> {
+    /// Target attractor whose local frame is being evaluated.
+    pub entry: &'a TextAttractorEntry,
+    /// Raw cosine similarity between the query and this attractor.
+    pub raw_cosine: f32,
+    /// Mean cosine from this attractor to its local nearest neighbors inside the corpus.
+    pub neighbor_mean_cosine: f32,
+    /// Standard deviation of cosine similarity around this attractor's local neighborhood.
+    pub neighbor_std_cosine: f32,
+    /// Corpus-wide average of `neighbor_mean_cosine`.
+    pub global_neighbor_mean: f32,
+    /// Query's mean cosine similarity across the corpus (query-side baseline).
+    pub query_mean_cosine: f32,
+    /// Standard deviation of the query's cosine similarity across the corpus.
+    pub query_std_cosine: f32,
+}
+
+/// Per-attractor measurement returned by [`AttractorVoidPerspective::measure_perspective`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PerspectiveVoidReading {
+    /// Perspective-calibrated affinity score as viewed from this attractor's angle.
+    pub perspective_affinity: f32,
+    /// Non-negative local `cvoid` gap seen from this attractor (`0.0` = well inside basin).
+    pub local_void_depth: f32,
+}
+
+/// Trait computing perspective-dependent affinity and local `cvoid` void depth per attractor.
+///
+/// Rather than judging every attractor from a single isotropic origin, each attractor can have a
+/// distinct local density and boundary geometry so central hubs do not eclipse peripheral basins.
+pub trait AttractorVoidPerspective {
+    /// Measures affinity and local `cvoid` depth from `ctx.entry`'s vantage point.
+    fn measure_perspective(
+        &self,
+        ctx: &AttractorPerspectiveContext<'_>,
+        min_coherence: f32,
+    ) -> PerspectiveVoidReading;
+}
+
+/// Default [`AttractorVoidPerspective`] implementing bidirectional CSLS hubness normalization and
+/// asymmetric Z-score scaling across each attractor's local neighborhood.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AsymmetricDominoVoidPerspective {
+    /// Number of nearest corpus neighbors defining each attractor's local baseline.
+    pub neighbor_k: usize,
+    /// Damping weight applied to centered attractor hubness (`neighbor_mean - global_mean`).
+    pub hubness_damping: f32,
+    /// Weight applied to the query/attractor bidirectional Z-score modulated by positive raw cosine.
+    pub perspective_z_gain: f32,
+}
+
+impl Default for AsymmetricDominoVoidPerspective {
+    fn default() -> Self {
+        Self {
+            neighbor_k: 4,
+            hubness_damping: 0.50,
+            perspective_z_gain: 0.025,
+        }
+    }
+}
+
+impl AttractorVoidPerspective for AsymmetricDominoVoidPerspective {
+    fn measure_perspective(
+        &self,
+        ctx: &AttractorPerspectiveContext<'_>,
+        min_coherence: f32,
+    ) -> PerspectiveVoidReading {
+        let hub_shift = ctx.neighbor_mean_cosine - ctx.global_neighbor_mean;
+        let z_from_attractor =
+            (ctx.raw_cosine - ctx.neighbor_mean_cosine) / ctx.neighbor_std_cosine.max(0.05);
+        let z_from_query =
+            (ctx.raw_cosine - ctx.query_mean_cosine) / ctx.query_std_cosine.max(0.05);
+        let rel_z = (0.5 * (z_from_attractor + z_from_query)).clamp(-3.0, 3.0);
+        let positive_support = ctx.raw_cosine.max(0.0);
+        let perspective_affinity = ctx.raw_cosine - self.hubness_damping * hub_shift
+            + self.perspective_z_gain * positive_support * rel_z;
+        let local_void_depth = (min_coherence - perspective_affinity).max(0.0);
+        PerspectiveVoidReading {
+            perspective_affinity,
+            local_void_depth,
+        }
+    }
 }
 
 /// Default [`RecallBoundaryGate`] enforcing both `cvoid` coherence floor and Guard dominance suppression.
@@ -1370,6 +1462,14 @@ impl TextAttractorCorpus {
         self.fit_common_mode_subspace(3);
     }
 
+    /// Returns common-mode-projected normalized signatures across the corpus.
+    fn projected_corpus_sigs(&self) -> Vec<Vec<f32>> {
+        self.entries
+            .iter()
+            .map(|e| Self::project_and_normalize(&e.residual_sig, &self.common_mode_basis))
+            .collect()
+    }
+
     /// Calibrates [`RecallPolicy`] from the empirical off-diagonal similarity distribution of the
     /// corpus (after common-mode projection), avoiding hardcoded model-specific thresholds.
     #[must_use]
@@ -1385,11 +1485,7 @@ impl TextAttractorCorpus {
                 ..RecallPolicy::default()
             };
         }
-        let projected: Vec<Vec<f32>> = self
-            .entries
-            .iter()
-            .map(|e| Self::project_and_normalize(&e.residual_sig, &self.common_mode_basis))
-            .collect();
+        let projected = self.projected_corpus_sigs();
         let mut sims = Vec::new();
         for i in 0..projected.len() {
             for j in (i + 1)..projected.len() {
@@ -1483,8 +1579,9 @@ impl TextAttractorCorpus {
         )
     }
 
-    /// Scores a query's per-layer Q activations against the corpus and delegates boundary/guard
-    /// gating to a caller-supplied [`RecallBoundaryGate`] trait object.
+    /// Scores a query's per-layer Q activations against the corpus using the default
+    /// [`AsymmetricDominoVoidPerspective`] and delegates boundary/guard gating to a
+    /// caller-supplied [`RecallBoundaryGate`] trait object.
     ///
     /// # Errors
     ///
@@ -1496,6 +1593,31 @@ impl TextAttractorCorpus {
         baseline_ref_per_layer: &[&[f32]],
         policy: &RecallPolicy,
         gate: &dyn RecallBoundaryGate,
+    ) -> Result<DynamicAttractorRecall<'_>, String> {
+        self.recall_for_query_with_perspective(
+            adapter,
+            query_per_layer_q,
+            baseline_ref_per_layer,
+            policy,
+            gate,
+            &AsymmetricDominoVoidPerspective::default(),
+        )
+    }
+
+    /// Scores a query's per-layer Q activations against the corpus using caller-supplied
+    /// [`AttractorVoidPerspective`] and [`RecallBoundaryGate`] trait objects.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if query/baseline layer slices mismatch `adapter.geometry()`.
+    pub fn recall_for_query_with_perspective(
+        &self,
+        adapter: &ModelSteeringAdapter,
+        query_per_layer_q: &[&[f32]],
+        baseline_ref_per_layer: &[&[f32]],
+        policy: &RecallPolicy,
+        gate: &dyn RecallBoundaryGate,
+        perspective: &dyn AttractorVoidPerspective,
     ) -> Result<DynamicAttractorRecall<'_>, String> {
         if query_per_layer_q.len() != baseline_ref_per_layer.len() {
             return Err(format!(
@@ -1525,24 +1647,170 @@ impl TextAttractorCorpus {
         let raw_sig =
             Self::build_steered_residual_sig(geom, query_per_layer_q, baseline_ref_per_layer);
         let query_sig = Self::project_and_normalize(&raw_sig, &self.common_mode_basis);
+        let entry_sigs = self.projected_corpus_sigs();
+        let mut raw_cosines: Vec<f32> = entry_sigs
+            .iter()
+            .map(|sig| Self::cosine_f32(&query_sig, sig))
+            .collect();
+
+        // Layer-wise Attention viewing-angle contrast: reward attractors that selectively dominate
+        // specialized layer chunks relative to same-role peers, modulated by positive global support.
+        let n_entries = entry_sigs.len();
+        if expected > 0 && raw_sig.len() >= expected && raw_sig.len().is_multiple_of(expected) {
+            let num_steered = raw_sig.len() / expected;
+            if num_steered >= 2 {
+                let mut layer_cos: Vec<Vec<f32>> = vec![vec![0.0_f32; num_steered]; n_entries];
+                for (i, entry) in self.entries.iter().enumerate() {
+                    if entry.residual_sig.len() != raw_sig.len() {
+                        continue;
+                    }
+                    for (l, slot) in layer_cos[i].iter_mut().enumerate().take(num_steered) {
+                        let start = l * expected;
+                        let end = start + expected;
+                        *slot =
+                            Self::cosine_f32(&raw_sig[start..end], &entry.residual_sig[start..end]);
+                    }
+                }
+                for role in [
+                    AttractorRole::Fact,
+                    AttractorRole::Persona,
+                    AttractorRole::Guard,
+                ] {
+                    let idxs: Vec<usize> = self
+                        .entries
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, e)| e.role == role)
+                        .map(|(i, _)| i)
+                        .collect();
+                    if idxs.len() <= 1 {
+                        continue;
+                    }
+                    let mut role_layer_mean = vec![0.0_f32; num_steered];
+                    for &i in &idxs {
+                        for l in 0..num_steered {
+                            role_layer_mean[l] += layer_cos[i][l] / (idxs.len() as f32);
+                        }
+                    }
+                    let top_l = (num_steered / 4).max(1);
+                    for &i in &idxs {
+                        let mut diffs: Vec<f32> = (0..num_steered)
+                            .map(|l| layer_cos[i][l] - role_layer_mean[l])
+                            .collect();
+                        diffs.sort_by(|a, b| b.total_cmp(a));
+                        let top_contrast = diffs[..top_l].iter().sum::<f32>() / (top_l as f32);
+                        let pos = raw_cosines[i].max(0.0);
+                        raw_cosines[i] += 0.35 * pos * top_contrast;
+                    }
+                }
+            }
+        }
+
+        // Compute query-side similarity baseline across the corpus.
+        let (query_mean_cosine, query_std_cosine) = if raw_cosines.is_empty() {
+            (0.0_f32, 0.05_f32)
+        } else {
+            let n = raw_cosines.len() as f32;
+            let mean = raw_cosines.iter().sum::<f32>() / n;
+            let var = raw_cosines
+                .iter()
+                .map(|&s| (s - mean) * (s - mean))
+                .sum::<f32>()
+                / n;
+            (mean, var.sqrt())
+        };
+
+        // Compute each attractor's local k-NN neighborhood baseline strictly within the same role,
+        // preventing sparse minority roles (e.g. Guards) from receiving artificial anti-hubness boosts.
+        let mut neighbor_stats: Vec<(f32, f32)> = vec![(0.0, 0.05); n_entries];
+        let mut role_global_means = [0.0_f32; 3];
+        for role in [
+            AttractorRole::Fact,
+            AttractorRole::Persona,
+            AttractorRole::Guard,
+        ] {
+            let role_indices: Vec<usize> = self
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.role == role)
+                .map(|(i, _)| i)
+                .collect();
+            if role_indices.len() <= 1 {
+                continue;
+            }
+            let neighbor_k = (role_indices.len() - 1).clamp(1, 4);
+            let mut sum_k_mean = 0.0_f32;
+            for &i in &role_indices {
+                let mut sims: Vec<f32> = role_indices
+                    .iter()
+                    .copied()
+                    .filter(|&j| j != i)
+                    .map(|j| Self::cosine_f32(&entry_sigs[i], &entry_sigs[j]))
+                    .collect();
+                sims.sort_by(|a, b| b.total_cmp(a));
+                let top_slice = &sims[..neighbor_k.min(sims.len())];
+                let k_len = top_slice.len().max(1) as f32;
+                let k_mean = top_slice.iter().sum::<f32>() / k_len;
+                let all_mean = sims.iter().sum::<f32>() / (sims.len().max(1) as f32);
+                let all_var = sims
+                    .iter()
+                    .map(|&s| (s - all_mean) * (s - all_mean))
+                    .sum::<f32>()
+                    / (sims.len().max(1) as f32);
+                neighbor_stats[i] = (k_mean, all_var.sqrt());
+                sum_k_mean += k_mean;
+            }
+            let role_slot = match role {
+                AttractorRole::Fact => 0,
+                AttractorRole::Persona => 1,
+                AttractorRole::Guard => 2,
+            };
+            role_global_means[role_slot] = sum_k_mean / (role_indices.len() as f32);
+        }
 
         let mut fact_scores: Vec<(&TextAttractorEntry, f32)> = Vec::new();
         let mut persona_scores: Vec<(&TextAttractorEntry, f32)> = Vec::new();
         let mut max_guard_score = -1.0_f32;
+        let mut min_local_void_depth = f32::INFINITY;
 
-        for entry in &self.entries {
-            let entry_sig =
-                Self::project_and_normalize(&entry.residual_sig, &self.common_mode_basis);
-            let mean_cos = Self::cosine_f32(&query_sig, &entry_sig);
+        for (idx, entry) in self.entries.iter().enumerate() {
+            let (neighbor_mean_cosine, neighbor_std_cosine) = neighbor_stats[idx];
+            let role_slot = match entry.role {
+                AttractorRole::Fact => 0,
+                AttractorRole::Persona => 1,
+                AttractorRole::Guard => 2,
+            };
+            let global_neighbor_mean = role_global_means[role_slot];
+            let reading = perspective.measure_perspective(
+                &AttractorPerspectiveContext {
+                    entry,
+                    raw_cosine: raw_cosines[idx],
+                    neighbor_mean_cosine,
+                    neighbor_std_cosine,
+                    global_neighbor_mean,
+                    query_mean_cosine,
+                    query_std_cosine,
+                },
+                policy.min_coherence,
+            );
+            if reading.local_void_depth < min_local_void_depth {
+                min_local_void_depth = reading.local_void_depth;
+            }
             match entry.role {
-                AttractorRole::Fact => fact_scores.push((entry, mean_cos)),
-                AttractorRole::Persona => persona_scores.push((entry, mean_cos)),
+                AttractorRole::Fact => fact_scores.push((entry, reading.perspective_affinity)),
+                AttractorRole::Persona => {
+                    persona_scores.push((entry, reading.perspective_affinity))
+                }
                 AttractorRole::Guard => {
-                    if mean_cos > max_guard_score {
-                        max_guard_score = mean_cos;
+                    if reading.perspective_affinity > max_guard_score {
+                        max_guard_score = reading.perspective_affinity;
                     }
                 }
             }
+        }
+        if !min_local_void_depth.is_finite() {
+            min_local_void_depth = 1.0;
         }
 
         fact_scores.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -1586,6 +1854,8 @@ impl TextAttractorCorpus {
             void_state,
             top1_fact_score,
             top2_fact_score,
+            top1_persona_score,
+            min_local_void_depth,
             guard_conflict_margin,
             recalled_facts,
             recalled_personas,
@@ -3112,5 +3382,155 @@ mod tests {
         );
         assert!(decision.suppress_fact_injection);
         assert_eq!(decision.void_state, VoidBoundaryState::CvoidEmptySpace);
+    }
+
+    #[test]
+    fn perspective_void_damps_dense_hub_and_preserves_peripheral_attractor() {
+        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let len = adapter.geometry().q_rot_len();
+        let centroid = vec![0.0_f32; len];
+        let refs: Vec<&[f32]> = vec![centroid.as_slice(); 32];
+
+        // Construct a crowded hub cluster (#1..#3) near axis 0 and a distinct peripheral
+        // attractor (#4) along orthogonal axis 1.
+        let mut hub_a = vec![0.0_f32; len];
+        let mut hub_b = vec![0.0_f32; len];
+        let mut hub_c = vec![0.0_f32; len];
+        let mut periph = vec![0.0_f32; len];
+        hub_a[0] = 1.0;
+        hub_a[2] = 0.25;
+        hub_b[0] = 0.95;
+        hub_b[4] = 0.30;
+        hub_c[0] = 0.95;
+        hub_c[6] = 0.30;
+        periph[1] = 1.0;
+
+        let mut corpus = TextAttractorCorpus::new();
+        let id_hub = corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Hub attractor A",
+                &vec![hub_a.as_slice(); 32],
+                &refs,
+                1.5,
+            )
+            .expect("hub a");
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Hub attractor B",
+                &vec![hub_b.as_slice(); 32],
+                &refs,
+                1.5,
+            )
+            .expect("hub b");
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Hub attractor C",
+                &vec![hub_c.as_slice(); 32],
+                &refs,
+                1.5,
+            )
+            .expect("hub c");
+        let id_periph = corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Peripheral attractor",
+                &vec![periph.as_slice(); 32],
+                &refs,
+                1.5,
+            )
+            .expect("periph");
+
+        // Query has equal raw projection on hub_a's axis 0 and peripheral's axis 1 (slightly
+        // higher raw weight toward hub), yet from the peripheral attractor's perspective the query
+        // stands out sharply whereas hub_a sits inside a crowded neighborhood.
+        let mut query = vec![0.0_f32; len];
+        query[0] = 0.62;
+        query[1] = 0.58;
+        let q_slices = vec![query.as_slice(); 32];
+        let policy = RecallPolicy {
+            min_coherence: 0.30,
+            boundary_margin: 0.02,
+            guard_suppress_margin: 0.0,
+            top_k_facts: 2,
+            top_k_personas: 1,
+        };
+        let recall = corpus
+            .recall_for_query(&adapter, &q_slices, &refs, &policy)
+            .expect("recall");
+        assert_ne!(id_hub, id_periph);
+        assert_eq!(recall.recalled_facts[0].0.anchor_id, id_periph);
+        assert!(recall.min_local_void_depth < 0.05);
+    }
+
+    #[test]
+    fn layer_angle_perspective_separates_specialized_late_layer_attractor() {
+        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let len = adapter.geometry().q_rot_len();
+        let num_layers = adapter.geometry().num_layers;
+        let centroid = vec![0.0_f32; len];
+        let refs: Vec<&[f32]> = vec![centroid.as_slice(); num_layers];
+
+        // Hub shares strong early-layer alignment (layers 0..24), while specialized attractor B
+        // dominates the final 8 semantic layers.
+        let mut hub_layers = vec![vec![0.0_f32; len]; num_layers];
+        let mut spec_layers = vec![vec![0.0_f32; len]; num_layers];
+        let mut query_layers = vec![vec![0.0_f32; len]; num_layers];
+        for l in 0..num_layers {
+            if l < 24 {
+                hub_layers[l][0] = 1.0;
+                spec_layers[l][1] = 1.0;
+                query_layers[l][0] = 0.65;
+                query_layers[l][1] = 0.55;
+            } else {
+                hub_layers[l][0] = 0.2;
+                hub_layers[l][2] = 0.98;
+                spec_layers[l][3] = 1.0;
+                query_layers[l][3] = 1.0;
+            }
+        }
+        let hub_refs: Vec<&[f32]> = hub_layers.iter().map(Vec::as_slice).collect();
+        let spec_refs: Vec<&[f32]> = spec_layers.iter().map(Vec::as_slice).collect();
+        let q_refs: Vec<&[f32]> = query_layers.iter().map(Vec::as_slice).collect();
+
+        let mut corpus = TextAttractorCorpus::new();
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Early hub",
+                &hub_refs,
+                &refs,
+                1.5,
+            )
+            .expect("ingest hub");
+        let id_spec = corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Late specialist",
+                &spec_refs,
+                &refs,
+                1.5,
+            )
+            .expect("ingest spec");
+
+        let policy = RecallPolicy {
+            min_coherence: 0.20,
+            boundary_margin: 0.01,
+            guard_suppress_margin: 0.0,
+            top_k_facts: 2,
+            top_k_personas: 1,
+        };
+        let recall = corpus
+            .recall_for_query(&adapter, &q_refs, &refs, &policy)
+            .expect("recall");
+        assert_eq!(recall.recalled_facts[0].0.anchor_id, id_spec);
     }
 }
