@@ -1326,6 +1326,10 @@ pub struct StratumContext<'a> {
     pub entry_sigs: &'a [Vec<f32>],
     /// Rotary dimension per steered layer chunk (`q_rot_len`).
     pub layer_chunk_dim: usize,
+    /// Number of query attention heads (`H_Q`) inside each steered layer chunk.
+    pub num_q_heads: usize,
+    /// Active rotated dimensions per attention head (`rotary_dim`).
+    pub rotary_dim: usize,
     /// Active recall policy thresholds.
     pub policy: &'a RecallPolicy,
 }
@@ -1450,6 +1454,122 @@ impl SocietyStratum for LocalFeatureWorkerStratum {
         } else {
             for w in &mut signal.stigmergic_weights {
                 *w = (*w * directive.top_down_gain).clamp(0.25, 2.0);
+            }
+        }
+    }
+}
+
+/// Stratum 0.5: multi-head viewing-angle worker treating each attention head (`0..num_q_heads`)
+/// across steered layers as an independent perspective so specialized entity heads are not diluted
+/// by head-wide averaging.
+#[derive(Debug, Clone, Copy)]
+pub struct HeadAngleWorkerStratum {
+    /// Gain applied to top-head viewing-angle contrast modulated by positive global support.
+    pub head_contrast_gain: f32,
+}
+
+impl Default for HeadAngleWorkerStratum {
+    fn default() -> Self {
+        Self {
+            head_contrast_gain: 0.40,
+        }
+    }
+}
+
+impl SocietyStratum for HeadAngleWorkerStratum {
+    fn name(&self) -> &'static str {
+        "head_angle_worker"
+    }
+
+    fn infer_up(&self, ctx: &StratumContext<'_>, signal: &mut StratumSignal) -> Result<(), String> {
+        let n_entries = ctx.entries.len();
+        let expected = ctx.layer_chunk_dim;
+        let n_heads = ctx.num_q_heads;
+        let r_dim = ctx.rotary_dim;
+        if n_entries == 0
+            || n_heads < 2
+            || r_dim == 0
+            || expected != n_heads * r_dim
+            || ctx.raw_sig.len() < expected
+            || !ctx.raw_sig.len().is_multiple_of(expected)
+        {
+            return Ok(());
+        }
+        let num_steered = ctx.raw_sig.len() / expected;
+        let mut head_cos: Vec<Vec<f32>> = vec![vec![0.0_f32; n_heads]; n_entries];
+        for (i, entry) in ctx.entries.iter().enumerate() {
+            if entry.residual_sig.len() != ctx.raw_sig.len() {
+                continue;
+            }
+            for (h, slot) in head_cos[i].iter_mut().enumerate() {
+                let mut dot = 0.0_f64;
+                let mut nq = 0.0_f64;
+                let mut ne = 0.0_f64;
+                for l in 0..num_steered {
+                    let base = l * expected + h * r_dim;
+                    for d in 0..r_dim {
+                        let qv = f64::from(ctx.raw_sig[base + d]);
+                        let ev = f64::from(entry.residual_sig[base + d]);
+                        dot += qv * ev;
+                        nq += qv * qv;
+                        ne += ev * ev;
+                    }
+                }
+                let denom = (nq * ne).sqrt();
+                *slot = if denom > 1e-12 {
+                    (dot / denom).clamp(-1.0, 1.0) as f32
+                } else {
+                    0.0
+                };
+            }
+        }
+
+        let top_k_heads = (n_heads / 6).max(2).min(n_heads);
+        for role in [
+            AttractorRole::Fact,
+            AttractorRole::Persona,
+            AttractorRole::Guard,
+        ] {
+            let idxs: Vec<usize> = ctx
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.role == role)
+                .map(|(i, _)| i)
+                .collect();
+            if idxs.len() <= 1 {
+                continue;
+            }
+            let mut role_head_mean = vec![0.0_f32; n_heads];
+            for &i in &idxs {
+                for (h, mean_slot) in role_head_mean.iter_mut().enumerate() {
+                    *mean_slot += head_cos[i][h] / (idxs.len() as f32);
+                }
+            }
+            for &i in &idxs {
+                let mut diffs: Vec<f32> = (0..n_heads)
+                    .map(|h| head_cos[i][h] - role_head_mean[h])
+                    .collect();
+                diffs.sort_by(|a, b| b.total_cmp(a));
+                let top_contrast = diffs[..top_k_heads].iter().sum::<f32>() / (top_k_heads as f32);
+                let pos = signal.candidate_scores[i].max(0.0);
+                signal.candidate_scores[i] += self.head_contrast_gain * pos * top_contrast;
+                signal.stigmergic_weights[i] =
+                    (signal.stigmergic_weights[i] * (1.0 + top_contrast)).clamp(0.4, 2.0);
+            }
+        }
+        Ok(())
+    }
+
+    fn adjust_down(
+        &self,
+        _ctx: &StratumContext<'_>,
+        directive: &mut StratumDirective,
+        signal: &mut StratumSignal,
+    ) {
+        if directive.repulse_guard || directive.suppress_injection {
+            for w in &mut signal.stigmergic_weights {
+                *w *= 0.5;
             }
         }
     }
@@ -1714,6 +1834,7 @@ impl Default for StratumPipeline<'static> {
     fn default() -> Self {
         let mut p = Self::new();
         p.push_stratum(Box::new(LocalFeatureWorkerStratum::default()));
+        p.push_stratum(Box::new(HeadAngleWorkerStratum::default()));
         p.push_stratum(Box::new(PerspectiveDominoStratum {
             perspective: &DEFAULT_PERSPECTIVE,
         }));
@@ -2087,6 +2208,7 @@ impl TextAttractorCorpus {
     ) -> Result<DynamicAttractorRecall<'_>, String> {
         let mut pipeline = StratumPipeline::new();
         pipeline.push_stratum(Box::new(LocalFeatureWorkerStratum::default()));
+        pipeline.push_stratum(Box::new(HeadAngleWorkerStratum::default()));
         pipeline.push_stratum(Box::new(PerspectiveDominoStratum { perspective }));
         pipeline.push_stratum(Box::new(ActionHubBoundaryStratum { gate }));
         self.recall_for_query_with_strata(
@@ -2172,6 +2294,8 @@ impl TextAttractorCorpus {
             query_sig: &query_sig,
             entry_sigs: &entry_sigs,
             layer_chunk_dim: expected,
+            num_q_heads: geom.num_q_heads,
+            rotary_dim: geom.rotary_dim,
             policy,
         };
         let (signal, directive) = pipeline.evaluate(&stratum_ctx, initial_signal)?;
@@ -3935,12 +4059,13 @@ mod tests {
             top_k_personas: 1,
         };
 
-        // 1. Default 3-stratum pipeline can dynamically remove & re-insert intermediate strata.
+        // 1. Default 4-stratum pipeline can dynamically remove & re-insert intermediate strata.
         let mut pipeline = StratumPipeline::default();
         assert_eq!(
             pipeline.stratum_names(),
             vec![
                 "local_feature_worker",
+                "head_angle_worker",
                 "perspective_domino_cvoid",
                 "action_hub_boundary",
             ]
@@ -3949,10 +4074,14 @@ mod tests {
         assert!(removed.is_some());
         assert_eq!(
             pipeline.stratum_names(),
-            vec!["local_feature_worker", "action_hub_boundary"]
+            vec![
+                "local_feature_worker",
+                "head_angle_worker",
+                "action_hub_boundary",
+            ]
         );
 
-        // Even with the middle stratum removed, ActionHub still arbitrates cleanly.
+        // Even with the perspective stratum removed, ActionHub still arbitrates cleanly.
         let recall_fact = corpus
             .recall_for_query_with_strata(
                 &adapter,
@@ -3967,11 +4096,11 @@ mod tests {
             StigmergicActionDecision::CrystallizeMacroBasin
         );
 
-        // Re-insert the perspective stratum and verify Guard dominance triggers RepulsionEscape.
+        // Re-insert the perspective stratum at index 2 and verify Guard dominance triggers RepulsionEscape.
         if let Some(mid) = removed {
-            pipeline.insert_stratum(1, mid);
+            pipeline.insert_stratum(2, mid);
         }
-        assert_eq!(pipeline.stratum_names().len(), 3);
+        assert_eq!(pipeline.stratum_names().len(), 4);
         let recall_guard = corpus
             .recall_for_query_with_strata(
                 &adapter,
@@ -3986,5 +4115,69 @@ mod tests {
             StigmergicActionDecision::RepulsionEscape
         );
         assert_eq!(recall_guard.void_state, VoidBoundaryState::CvoidEmptySpace);
+    }
+
+    #[test]
+    fn head_angle_worker_stratum_separates_specialized_head_attractor() {
+        // Use phi4_mini geometry where head 0 is shared noise and head 1 holds the specialized signal.
+        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let len = adapter.geometry().q_rot_len();
+        let rotary_dim = len / 24;
+        let num_layers = adapter.geometry().num_layers;
+        let centroid = vec![0.0_f32; len];
+        let refs: Vec<&[f32]> = vec![centroid.as_slice(); num_layers];
+
+        let mut spec_a = vec![0.0_f32; len];
+        let mut spec_b = vec![0.0_f32; len];
+        for i in 0..4 {
+            spec_a[i] = 0.25;
+            spec_b[i] = 0.25;
+        }
+        spec_a[rotary_dim] = 1.0;
+        spec_b[rotary_dim + 1] = 1.0;
+
+        let mut corpus = TextAttractorCorpus::new();
+        let id_a = corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "specialized head A",
+                &vec![spec_a.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("ingest spec_a");
+        let _id_b = corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "specialized head B",
+                &vec![spec_b.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("ingest spec_b");
+
+        let policy = RecallPolicy {
+            min_coherence: 0.20,
+            boundary_margin: 0.01,
+            guard_suppress_margin: 0.0,
+            top_k_facts: 2,
+            top_k_personas: 1,
+        };
+        let recall = corpus
+            .recall_for_query_with_strata(
+                &adapter,
+                &vec![spec_a.as_slice(); num_layers],
+                &refs,
+                &policy,
+                &StratumPipeline::default(),
+            )
+            .expect("head-angle recall");
+        assert_eq!(
+            recall.recalled_facts.first().map(|(e, _)| e.anchor_id),
+            Some(id_a)
+        );
+        assert!(recall.top1_fact_score > recall.top2_fact_score);
     }
 }
