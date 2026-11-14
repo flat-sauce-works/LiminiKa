@@ -254,6 +254,14 @@ typedef struct gcso_daes_slot gcso_daes_slot_t;
 /**
  * @brief Global configuration descriptor structure aligned to 16 bytes (64 bytes total).
  */
+/**
+ * @brief Memory pairing convention for Rotary Position Embedding (RoPE) channels.
+ */
+typedef enum gcso_rope_layout {
+    GCSO_ROPE_LAYOUT_INTERLEAVED = 0,
+    GCSO_ROPE_LAYOUT_HALF_SPLIT = 1
+} gcso_rope_layout_t;
+
 struct GCSO_ALIGN_PREFIX(16) gcso_config {
     uint32_t head_dim;
     uint32_t num_heads;
@@ -268,7 +276,9 @@ struct GCSO_ALIGN_PREFIX(16) gcso_config {
     uint8_t enable_zero_alloc_strict;
     uint8_t daes_mode;
     uint8_t reserved_flags;
-    uint8_t reserved[24];
+    uint32_t rotary_dim;
+    uint8_t rope_layout;
+    uint8_t reserved[19];
 } GCSO_ALIGN_SUFFIX(16);
 typedef struct gcso_config gcso_config_t;
 

@@ -14,7 +14,10 @@ use liminika_core::residual_adapter::ResidualAdapterEngine;
 use liminika_core::traits::aligned::{
     AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32,
 };
-use liminika_core::traits::{PhaseSteering, SrlAdapter};
+use liminika_core::traits::rope::{
+    PhaseSteeringGeometryExt, RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget,
+};
+use liminika_core::traits::SrlAdapter;
 
 /// Memory pairing convention used by an LLM's Rotary Position Embedding (RoPE).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,6 +195,22 @@ impl AlignedQ7Buffer16 {
     }
 }
 
+impl RopeSteeringTarget for RopeGeometry {
+    #[inline(always)]
+    fn rope_geometry(&self) -> RopeGeometryDescriptor {
+        RopeGeometryDescriptor {
+            layout: match self.layout {
+                RopeLayout::Interleaved => RopePairLayout::Interleaved,
+                RopeLayout::HalfSplit => RopePairLayout::HalfSplit,
+            },
+            // `ModelSteeringAdapter` operates directly on the sliced `q_rot` buffer (`rotary_dim` per head).
+            head_dim: self.rotary_dim,
+            rotary_dim: self.rotary_dim,
+            num_heads: self.num_q_heads,
+        }
+    }
+}
+
 /// Unified model-connection and optimization adapter over [`liminika_core`].
 ///
 /// Bridges a target LLM's [`RopeGeometry`] to [`PhaseSteeringEngine`],
@@ -249,7 +268,7 @@ impl ModelSteeringAdapter {
     }
 
     /// Computes per-head Q7 phase deltas from negative (`source`) and positive (`target`)
-    /// post-RoPE query centroids via [`PhaseSteering::compute_procrustes_phase_delta`].
+    /// post-RoPE query centroids via [`PhaseSteeringGeometryExt::compute_procrustes_phase_delta_for_geometry`].
     ///
     /// # Errors
     ///
@@ -283,28 +302,21 @@ impl ModelSteeringAdapter {
         {
             let mut q7_mut = AlignedSliceMut16::new(q7_buf.as_mut_slice())
                 .map_err(|e| format!("AlignedSliceMut16 error: {e}"))?;
-            match self.geometry.layout {
-                RopeLayout::HalfSplit => self
-                    .phase_engine
-                    .compute_procrustes_phase_delta_half_split(
-                        &src_aligned,
-                        &dst_aligned,
-                        self.geometry.rotary_dim,
-                        &mut q7_mut,
-                    )
-                    .map_err(|e| format!("compute_procrustes_phase_delta_half_split error: {e}"))?,
-                RopeLayout::Interleaved => self
-                    .phase_engine
-                    .compute_procrustes_phase_delta(&src_aligned, &dst_aligned, &mut q7_mut)
-                    .map_err(|e| format!("compute_procrustes_phase_delta error: {e}"))?,
-            }
+            self.phase_engine
+                .compute_procrustes_phase_delta_for_geometry(
+                    &self.geometry,
+                    &src_aligned,
+                    &dst_aligned,
+                    &mut q7_mut,
+                )
+                .map_err(|e| format!("compute_procrustes_phase_delta_for_geometry error: {e}"))?;
         }
 
         Ok(q7_buf.as_slice().to_vec())
     }
 
     /// Applies RIPA-bounded phase steering to a single token's rotated query slice
-    /// (`num_q_heads * rotary_dim`) using [`PhaseSteering::apply_phase_steering_safe`].
+    /// (`num_q_heads * rotary_dim`) using [`PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe`].
     ///
     /// Layers disabled in `geometry.layer_rope_mask` (NoPE layers) are skipped in O(1).
     ///
@@ -346,21 +358,14 @@ impl ModelSteeringAdapter {
         {
             let mut tensor_mut = AlignedSliceMut32::new(work_buf.as_mut_slice())
                 .map_err(|e| format!("AlignedSliceMut32 error: {e}"))?;
-            match self.geometry.layout {
-                RopeLayout::HalfSplit => self
-                    .phase_engine
-                    .apply_phase_steering_half_split_safe(
-                        &mut tensor_mut,
-                        &q7_aligned,
-                        self.geometry.rotary_dim,
-                        max_rad,
-                    )
-                    .map_err(|e| format!("apply_phase_steering_half_split_safe error: {e}"))?,
-                RopeLayout::Interleaved => self
-                    .phase_engine
-                    .apply_phase_steering_safe(&mut tensor_mut, &q7_aligned, max_rad)
-                    .map_err(|e| format!("apply_phase_steering_safe error: {e}"))?,
-            }
+            self.phase_engine
+                .apply_phase_steering_for_geometry_safe(
+                    &self.geometry,
+                    &mut tensor_mut,
+                    &q7_aligned,
+                    max_rad,
+                )
+                .map_err(|e| format!("apply_phase_steering_for_geometry_safe error: {e}"))?;
         }
 
         q_rot_inout.copy_from_slice(work_buf.as_slice());

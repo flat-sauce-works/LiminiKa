@@ -115,6 +115,143 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_safe(
     })
 }
 
+/// Applies RIPA soft-bounded $\tanh$ clamping on `HalfSplit` RoPE channels with optional
+/// partial `rotary_dim` (upper quarter of `[0..rotary_dim]` split-half pairs).
+///
+/// # Safety
+/// `query_tensor` (32B aligned) and `phase_deltas` (16B aligned) must be non-null and valid.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_half_split_safe(
+    query_tensor: *mut f32,
+    phase_deltas: *const gcso_q7_t,
+    head_dim: usize,
+    rotary_dim: usize,
+    num_heads: usize,
+    max_rad: f32,
+) -> GcsoStatus {
+    ffi_boundary!({
+        validate_ptr_aligned(query_tensor, 32)?;
+        validate_ptr(phase_deltas)?;
+        let (engine, total_q_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let geom = crate::traits::rope::RopeGeometryDescriptor {
+            layout: crate::traits::rope::RopePairLayout::HalfSplit,
+            head_dim,
+            rotary_dim,
+            num_heads,
+        };
+
+        // SAFETY: Validated for non-nullness, alignment, and bounds.
+        let mut q_aligned =
+            unsafe { AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_q_len)? };
+        // SAFETY: Validated for non-nullness, alignment, and bounds.
+        let p_aligned = unsafe { AlignedSlice16::from_raw_parts(phase_deltas, num_heads)? };
+
+        crate::traits::rope::PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe(
+            &engine,
+            &geom,
+            &mut q_aligned,
+            &p_aligned,
+            max_rad,
+        )?;
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Applies RIPA soft-bounded phase steering dispatched by [`gcso_config_t`] RoPE geometry
+/// (`Interleaved` vs `HalfSplit`, partial `rotary_dim`, `head_dim`, `num_heads`, `ripa_clamp_max_rad`).
+///
+/// # Safety
+/// `query_tensor` (32B aligned), `phase_deltas` (16B aligned), and `config` (16B aligned)
+/// must be non-null and valid.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_with_config_safe(
+    query_tensor: *mut f32,
+    phase_deltas: *const gcso_q7_t,
+    config: *const gcso_config_t,
+) -> GcsoStatus {
+    ffi_boundary!({
+        validate_ptr_aligned(query_tensor, 32)?;
+        validate_ptr(phase_deltas)?;
+        // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and 16-byte alignment.
+        let cfg = unsafe { FfiHandleRef::from_raw(config)? };
+        let head_dim = cfg.head_dim as usize;
+        let num_heads = cfg.num_heads as usize;
+        let rotary_dim = if cfg.rotary_dim == 0 {
+            head_dim
+        } else {
+            cfg.rotary_dim as usize
+        };
+        let layout = crate::traits::rope::RopePairLayout::from_u8(cfg.rope_layout)?;
+        let (engine, total_q_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let geom = crate::traits::rope::RopeGeometryDescriptor {
+            layout,
+            head_dim,
+            rotary_dim,
+            num_heads,
+        };
+
+        // SAFETY: Validated for non-nullness, alignment, and bounds.
+        let mut q_aligned =
+            unsafe { AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_q_len)? };
+        // SAFETY: Validated for non-nullness, alignment, and bounds.
+        let p_aligned = unsafe { AlignedSlice16::from_raw_parts(phase_deltas, num_heads)? };
+
+        crate::traits::rope::PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe(
+            &engine,
+            &geom,
+            &mut q_aligned,
+            &p_aligned,
+            cfg.ripa_clamp_max_rad,
+        )?;
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Recovers per-head Q7 Procrustes phase deltas from `HalfSplit` RoPE tensor pairs.
+///
+/// # Safety
+/// `q_before` (32B aligned), `q_after` (32B aligned), and `q7_phase_out` (16B aligned)
+/// must be non-null and valid.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_dpsr_compute_procrustes_phase_delta_half_split(
+    q_before: *const f32,
+    q_after: *const f32,
+    head_dim: usize,
+    rotary_dim: usize,
+    num_heads: usize,
+    q7_phase_out: *mut gcso_q7_t,
+) -> GcsoStatus {
+    ffi_boundary!({
+        validate_ptr_aligned(q_before, 32)?;
+        validate_ptr_aligned(q_after, 32)?;
+        validate_ptr(q7_phase_out)?;
+        let (engine, total_q_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let geom = crate::traits::rope::RopeGeometryDescriptor {
+            layout: crate::traits::rope::RopePairLayout::HalfSplit,
+            head_dim,
+            rotary_dim,
+            num_heads,
+        };
+
+        // SAFETY: Validated for non-nullness, alignment, and bounds.
+        let q_bef_aligned = unsafe { AlignedSlice32::from_raw_parts(q_before, total_q_len)? };
+        // SAFETY: Validated for non-nullness, alignment, and bounds.
+        let q_aft_aligned = unsafe { AlignedSlice32::from_raw_parts(q_after, total_q_len)? };
+        // SAFETY: Validated for non-nullness, alignment, and bounds.
+        let mut p_out_aligned =
+            unsafe { AlignedSliceMut16::from_raw_parts_mut(q7_phase_out, num_heads)? };
+
+        crate::traits::rope::PhaseSteeringGeometryExt::compute_procrustes_phase_delta_for_geometry(
+            &engine,
+            &geom,
+            &q_bef_aligned,
+            &q_aft_aligned,
+            &mut p_out_aligned,
+        )?;
+        Ok(GCSO_SUCCESS)
+    })
+}
+
 /// Applies fused RIPA soft-bounded $\tanh$ clamping simultaneously to disjoint Query and Key tensors.
 ///
 /// # Safety

@@ -2619,3 +2619,165 @@ pub trait DynamicLayerSkipper: BranchlessKernel {
     }
 }
 
+/// Memory pairing convention for Rotary Position Embedding (RoPE) channels.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RopePairLayout {
+    /// Adjacent interleaved pairs `(x[2i], x[2i + 1])`.
+    #[default]
+    Interleaved = 0,
+    /// Split-half pairs `(x[i], x[i + rotary_dim / 2])` (e.g. NeoX / Hugging Face / Phi-4-mini).
+    HalfSplit = 1,
+}
+
+impl RopePairLayout {
+    /// Converts a C-ABI `u8` layout discriminant into [`RopePairLayout`].
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `raw > 1`.
+    #[inline(always)]
+    pub const fn from_u8(raw: u8) -> GcsoResult<Self> {
+        match raw {
+            0 => Ok(Self::Interleaved),
+            1 => Ok(Self::HalfSplit),
+            _ => Err(GCSO_ERROR_INVALID_ARGUMENT),
+        }
+    }
+}
+
+/// Pure mathematical RoPE channel geometry descriptor for [`PhaseSteeringGeometryExt`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RopeGeometryDescriptor {
+    /// Pairwise rotation layout (`Interleaved` or `HalfSplit`).
+    pub layout: RopePairLayout,
+    /// Total head dimension (`d_head`, positive even integer).
+    pub head_dim: usize,
+    /// Active rotated dimensions (`<= head_dim`, positive even integer).
+    pub rotary_dim: usize,
+    /// Number of heads in the target tensor slice (`1..=MAX_ATTENTION_HEADS`).
+    pub num_heads: usize,
+}
+
+impl RopeGeometryDescriptor {
+    /// Validates RoPE channel geometry invariants.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim`, `rotary_dim`, or `num_heads`
+    /// violate RoPE parity or bounds constraints.
+    #[inline(always)]
+    pub const fn validate(&self) -> GcsoResult<()> {
+        if self.head_dim < 2
+            || (self.head_dim & 1) != 0
+            || self.rotary_dim < 2
+            || (self.rotary_dim & 1) != 0
+            || self.rotary_dim > self.head_dim
+            || self.num_heads == 0
+            || self.num_heads > MAX_ATTENTION_HEADS
+        {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        Ok(())
+    }
+}
+
+/// Trait implemented by any model or runtime descriptor that exposes a [`RopeGeometryDescriptor`].
+pub trait RopeSteeringTarget {
+    /// Returns the validated RoPE channel geometry for this target.
+    fn rope_geometry(&self) -> RopeGeometryDescriptor;
+}
+
+impl RopeSteeringTarget for RopeGeometryDescriptor {
+    #[inline(always)]
+    fn rope_geometry(&self) -> RopeGeometryDescriptor {
+        *self
+    }
+}
+
+/// Blanket-implemented geometry-aware RoPE steering extension for any [`PhaseSteering`] engine.
+///
+/// Unifies `Interleaved` and `HalfSplit` (plus partial `rotary_dim`) dispatch behind a single
+/// zero-allocation trait interface shared by both Rust adapters and the C-ABI boundary.
+pub trait PhaseSteeringGeometryExt: PhaseSteering {
+    /// Applies RIPA soft-bounded phase steering according to `target.rope_geometry()`.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `target` geometry, `max_rad`, or slice lengths
+    /// are invalid.
+    fn apply_phase_steering_for_geometry_safe<T: RopeSteeringTarget + ?Sized>(
+        &self,
+        target: &T,
+        query_tensor: &mut AlignedSliceMut32<'_, f32>,
+        phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
+        max_rad: f32,
+    ) -> GcsoResult<()>;
+
+    /// Recovers per-head Q7 Procrustes phase deltas according to `target.rope_geometry()`.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `target` geometry or slice lengths are invalid.
+    fn compute_procrustes_phase_delta_for_geometry<T: RopeSteeringTarget + ?Sized>(
+        &self,
+        target: &T,
+        q_before: &AlignedSlice32<'_, f32>,
+        q_after: &AlignedSlice32<'_, f32>,
+        q7_phase_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
+    ) -> GcsoResult<()>;
+}
+
+impl<E: PhaseSteering + ?Sized> PhaseSteeringGeometryExt for E {
+    #[inline]
+    fn apply_phase_steering_for_geometry_safe<T: RopeSteeringTarget + ?Sized>(
+        &self,
+        target: &T,
+        query_tensor: &mut AlignedSliceMut32<'_, f32>,
+        phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
+        max_rad: f32,
+    ) -> GcsoResult<()> {
+        let geom = target.rope_geometry();
+        geom.validate()?;
+        if geom.head_dim != self.head_dim() as usize || geom.num_heads != self.num_heads() as usize
+        {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        match geom.layout {
+            RopePairLayout::Interleaved => {
+                self.apply_phase_steering_safe(query_tensor, phase_deltas, max_rad)
+            }
+            RopePairLayout::HalfSplit => self.apply_phase_steering_half_split_safe(
+                query_tensor,
+                phase_deltas,
+                geom.rotary_dim,
+                max_rad,
+            ),
+        }
+    }
+
+    #[inline]
+    fn compute_procrustes_phase_delta_for_geometry<T: RopeSteeringTarget + ?Sized>(
+        &self,
+        target: &T,
+        q_before: &AlignedSlice32<'_, f32>,
+        q_after: &AlignedSlice32<'_, f32>,
+        q7_phase_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
+    ) -> GcsoResult<()> {
+        let geom = target.rope_geometry();
+        geom.validate()?;
+        if geom.head_dim != self.head_dim() as usize || geom.num_heads != self.num_heads() as usize
+        {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        match geom.layout {
+            RopePairLayout::Interleaved => {
+                self.compute_procrustes_phase_delta(q_before, q_after, q7_phase_out)
+            }
+            RopePairLayout::HalfSplit => self.compute_procrustes_phase_delta_half_split(
+                q_before,
+                q_after,
+                geom.rotary_dim,
+                q7_phase_out,
+            ),
+        }
+    }
+}
+
+

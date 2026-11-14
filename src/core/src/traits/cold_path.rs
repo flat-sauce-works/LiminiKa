@@ -1144,7 +1144,9 @@ pub trait SystemCapabilityQuery: BranchlessKernel + Send + Sync {
             enable_zero_alloc_strict: 1,
             daes_mode: 0,
             reserved_flags: 0,
-            reserved: [0; 24],
+            rotary_dim: 0,
+            rope_layout: 0,
+            reserved: [0; 19],
         };
         Ok(())
     }

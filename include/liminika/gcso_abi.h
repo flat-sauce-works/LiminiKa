@@ -583,6 +583,48 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_s
     size_t num_heads, float max_rad) GCSO_NOEXCEPT;
 
 /**
+ * @brief Applies RIPA soft-bounded tanh clamping on HalfSplit RoPE channels with optional
+ * partial rotary_dim (upper quarter of [0..rotary_dim] split-half pairs).
+ * Corresponds to PhaseSteering::apply_phase_steering_half_split_safe in liminika_core::traits.
+ * @param query_tensor 32-byte aligned query tensor buffer.
+ * @param phase_deltas Q7 quantized phase delta array (Aligned 16-byte).
+ * @param head_dim Full head dimension size (must be even).
+ * @param rotary_dim Active rotated dimensions (even, 2 <= rotary_dim <= head_dim).
+ * @param num_heads Total head count.
+ * @param max_rad Maximum allowed phase limit in radians.
+ * @return GCSO_SUCCESS or error status code.
+ */
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_half_split_safe(
+    float* GCSO_RESTRICT query_tensor, const gcso_q7_t* GCSO_RESTRICT phase_deltas, size_t head_dim,
+    size_t rotary_dim, size_t num_heads, float max_rad) GCSO_NOEXCEPT;
+
+/**
+ * @brief Applies RIPA soft-bounded phase steering dispatched by gcso_config_t RoPE geometry
+ * (Interleaved vs HalfSplit, partial rotary_dim, head_dim, num_heads, ripa_clamp_max_rad).
+ * @param query_tensor 32-byte aligned query tensor buffer.
+ * @param phase_deltas Q7 quantized phase delta array (Aligned 16-byte).
+ * @param config 16-byte aligned runtime configuration carrying RoPE geometry.
+ * @return GCSO_SUCCESS or error status code.
+ */
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_with_config_safe(
+    float* GCSO_RESTRICT query_tensor, const gcso_q7_t* GCSO_RESTRICT phase_deltas,
+    const gcso_config_t* GCSO_RESTRICT config) GCSO_NOEXCEPT;
+
+/**
+ * @brief Recovers per-head Q7 Procrustes phase deltas from HalfSplit RoPE tensor pairs.
+ * @param q_before 32-byte aligned pre-steering query tensor.
+ * @param q_after 32-byte aligned post-steering query tensor.
+ * @param head_dim Full head dimension size (must be even).
+ * @param rotary_dim Active rotated dimensions (even, 2 <= rotary_dim <= head_dim).
+ * @param num_heads Total head count.
+ * @param q7_phase_out 16-byte aligned output Q7 phase delta buffer of length >= num_heads.
+ * @return GCSO_SUCCESS or error status code.
+ */
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_compute_procrustes_phase_delta_half_split(
+    const float* GCSO_RESTRICT q_before, const float* GCSO_RESTRICT q_after, size_t head_dim,
+    size_t rotary_dim, size_t num_heads, gcso_q7_t* GCSO_RESTRICT q7_phase_out) GCSO_NOEXCEPT;
+
+/**
  * @brief Applies Order-Invariant Single-Manifold Unified-Field Phase Steering across num_anchors.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_unified_field_phase_steering_safe(

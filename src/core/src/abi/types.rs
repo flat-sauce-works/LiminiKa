@@ -507,8 +507,12 @@ pub struct gcso_config_t {
     pub daes_mode: u8,
     /// Reserved alignment and configuration flags.
     pub reserved_flags: u8,
-    /// Reserved space for future ABI core extensions (24 bytes).
-    pub reserved: [u8; 24],
+    /// Active rotated dimensions per head (`0` defaults to full `head_dim`; smaller for partial RoPE).
+    pub rotary_dim: u32,
+    /// RoPE channel pairing layout (`0` = Interleaved, `1` = HalfSplit).
+    pub rope_layout: u8,
+    /// Reserved space for future ABI core extensions (19 bytes).
+    pub reserved: [u8; 19],
 }
 
 /// Dynamic Entropy-Driven Decoding Branch Controller (EDBC) state structure (64 bytes, 32-byte aligned, Section 5.4.G).
