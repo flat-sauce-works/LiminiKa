@@ -11,8 +11,9 @@ use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor, D};
 use candle_nn::{linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 use liminika_adapter::{
     AdaptiveGopCutDetector, AttractorContainerCodec, AttractorRole, FrameTransitionMetrics,
-    GcsoDualTrackTimeline, ModelSteeringAdapter, RopeGeometry, RopeLayout, SourceTextRecord,
-    TextAttractorCorpus, TimelineStepContext, VoidBoundaryState,
+    GcsoDualTrackTimeline, ModelSteeringAdapter, RebakeContext, RopeGeometry, RopeLayout,
+    SourceTextRecord, SubtitleActivationEncoder, TextAttractorCorpus, TimelineResumeOutcome,
+    TimelineStepContext, VoidBoundaryState,
 };
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::traits::gateway::{
@@ -1599,19 +1600,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         step2_forb_total,
     );
 
-    // Step 3: Dual-Track .gcso Disk Persistence, Zero-Forward GOP Seek & Cross-Model Subtitle Export
-    println!("\n=== Step 3: Dual-Track .gcso GOP Seek & Cross-Model Subtitle Check ===");
-    let gcso_path = std::env::temp_dir().join("liminika_phi4_session.gcso");
+    // Step 3: Repository-Contained .gcso Persistence, Zero-Forward Seek & Cross-Model Re-Bake
+    println!("\n=== Step 3: Dual-Track .gcso GOP Seek & Cross-Model Re-Bake ===");
+    let containers_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("containers");
+    let gcso_path = containers_dir.join("phi4_session.gcso");
     let written_bytes = timeline.save_to_path(&gcso_path)?;
     let reloaded = GcsoDualTrackTimeline::load_from_path(&gcso_path)?;
     let active_fp = GcsoDualTrackTimeline::geometry_fingerprint(adapter.geometry());
-    let seek_state = reloaded.seek_zero_forward(2)?;
-    let mut alt_geom = RopeGeometry::phi4_mini();
-    alt_geom.head_dim = 128;
-    alt_geom.rotary_dim = 128;
-    let alt_fp = GcsoDualTrackTimeline::geometry_fingerprint(&alt_geom);
-    let model_changed = reloaded.model_fingerprint() != alt_fp;
-    let subtitles = reloaded.export_subtitle_track(None);
     println!(
         "Saved & Reloaded .gcso ({}): {} bytes | frames={} | keyframes={:?} | fp_match={}",
         gcso_path.display(),
@@ -1620,18 +1618,99 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         reloaded.keyframe_positions(),
         reloaded.model_fingerprint() == active_fp,
     );
-    println!(
-        "Zero-Forward Seek(frame=2): keyframe={} p_frames={} total_energy={:.2} anchors={}",
-        seek_state.keyframe_index,
-        seek_state.p_frames_applied,
-        seek_state.total_energy,
-        seek_state.anchor_ids.len(),
-    );
-    println!(
-        "Cross-Model EnvProbe Switch Detected={}: exported {} natural-language subtitle records for re-baking.",
-        model_changed,
-        subtitles.len(),
-    );
+
+    struct SubtitleModelProjector<'a> {
+        model: &'a mut Phi3Model,
+        tokenizer: &'a Tokenizer,
+        target_rotary_dim: usize,
+    }
+
+    impl SubtitleActivationEncoder for SubtitleModelProjector<'_> {
+        fn encode_subtitle_activations(
+            &mut self,
+            record: &SourceTextRecord,
+        ) -> Result<Vec<Vec<f32>>, String> {
+            self.model.clear_cache();
+            let prompt = format_phi4_prompt(&record.text);
+            let ids = self
+                .tokenizer
+                .encode(prompt.as_str(), false)
+                .map_err(|e| format!("rebake encode error: {e}"))?
+                .get_ids()
+                .to_vec();
+            let (_, query_qs, _) = self
+                .model
+                .forward_tokens(
+                    &ids, 0, None, None, None, None, 0.0, None, None, false, true,
+                )
+                .map_err(|e| format!("rebake forward error: {e}"))?;
+            Ok(query_qs
+                .into_iter()
+                .map(|mut layer_q| {
+                    layer_q.resize(self.target_rotary_dim, 0.0);
+                    layer_q
+                })
+                .collect())
+        }
+    }
+
+    let mut same_projector = SubtitleModelProjector {
+        model: &mut model,
+        tokenizer: &tokenizer,
+        target_rotary_dim: adapter.geometry().q_rot_len(),
+    };
+    let same_ctx = RebakeContext {
+        adapter: &adapter,
+        policy: &recall_policy,
+        detector: &cut_detector,
+        centroid_layers: &[],
+        up_to_frame: None,
+    };
+    if let TimelineResumeOutcome::FastResumed { seek_state } =
+        reloaded.resume_or_rebake(&same_ctx, &mut same_projector, 2)?
+    {
+        println!(
+            "Same-Model FastResumed(frame=2): keyframe={} p_frames={} total_energy={:.2} anchors={}",
+            seek_state.keyframe_index,
+            seek_state.p_frames_applied,
+            seek_state.total_energy,
+            seek_state.anchor_ids.len(),
+        );
+    }
+
+    let mut alt_geom = RopeGeometry::phi4_mini();
+    alt_geom.head_dim = 128;
+    alt_geom.rotary_dim = 128;
+    let alt_adapter = ModelSteeringAdapter::new(alt_geom)?;
+    let mut alt_projector = SubtitleModelProjector {
+        model: &mut model,
+        tokenizer: &tokenizer,
+        target_rotary_dim: alt_adapter.geometry().q_rot_len(),
+    };
+    let alt_ctx = RebakeContext {
+        adapter: &alt_adapter,
+        policy: &recall_policy,
+        detector: &cut_detector,
+        centroid_layers: &[],
+        up_to_frame: None,
+    };
+    if let TimelineResumeOutcome::Rebaked {
+        timeline: rebaked_tl,
+        seek_state,
+        source_fingerprint,
+        target_fingerprint,
+        rebaked_frames,
+        ..
+    } = reloaded.resume_or_rebake(&alt_ctx, &mut alt_projector, 2)?
+    {
+        let rebaked_path = containers_dir.join("phi4_rebaked_alt.gcso");
+        let rebaked_bytes = rebaked_tl.save_to_path(&rebaked_path)?;
+        println!(
+            "Cross-Model EnvProbe Rebaked: src_fp=0x{source_fingerprint:016x} -> dst_fp=0x{target_fingerprint:016x} | frames={rebaked_frames} | saved={} ({rebaked_bytes} bytes) | seek_frame2_anchors={}",
+            rebaked_path.display(),
+            seek_state.anchor_ids.len(),
+        );
+    }
 
     Ok(())
 }

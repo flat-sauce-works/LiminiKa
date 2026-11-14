@@ -1750,6 +1750,59 @@ pub trait AttractorContainerCodec {
     fn to_bytes(&self) -> Vec<u8>;
 }
 
+/// Abstract encoder projecting a [`SourceTextRecord`] from the `.gcso` Subtitle Track into
+/// per-layer `q`-space activations for a target model's geometry during cross-model re-baking.
+pub trait SubtitleActivationEncoder {
+    /// Encodes `record` into per-layer `q`-space activation vectors (`[layer][rotary_dim]`).
+    ///
+    /// # Errors
+    /// Returns an error if tokenization, forward-pass activation capture, or encoding fails.
+    fn encode_subtitle_activations(
+        &mut self,
+        record: &SourceTextRecord,
+    ) -> Result<Vec<Vec<f32>>, String>;
+}
+
+/// Dependencies required to resume or re-bake a [`GcsoDualTrackTimeline`] for a target model.
+pub struct RebakeContext<'a> {
+    /// Target model's steering adapter (defines the target [`RopeGeometry`]).
+    pub adapter: &'a ModelSteeringAdapter,
+    /// Recall boundary policy applied when constructing re-baked ZIMMS keyframes.
+    pub policy: &'a RecallPolicy,
+    /// Adaptive GOP scene-cut detector used during re-baking.
+    pub detector: &'a dyn TimelineCutDetector,
+    /// Optional per-layer reference centroids (`[layer][rotary_dim]`). When empty, the mean of
+    /// the encoded subtitle activations is computed automatically as the reference centroid.
+    pub centroid_layers: &'a [&'a [f32]],
+    /// Optional inclusive upper frame limit for partial re-baking.
+    pub up_to_frame: Option<u64>,
+}
+
+/// Outcome of [`GcsoDualTrackTimeline::resume_or_rebake`] after `EnvProbe` fingerprint checking.
+#[derive(Debug, Clone)]
+pub enum TimelineResumeOutcome {
+    /// Target model geometry matched `model_fingerprint`; state was restored via zero-forward seek.
+    FastResumed {
+        /// Reconstructed state at the requested target frame.
+        seek_state: SeekedContainerState,
+    },
+    /// Target model geometry differed; Subtitle Track records were re-baked into the new space.
+    Rebaked {
+        /// Newly re-baked dual-track timeline bound to `target_fingerprint`.
+        timeline: GcsoDualTrackTimeline,
+        /// Re-baked dynamic attractor corpus aligned with the target model.
+        corpus: TextAttractorCorpus,
+        /// Reconstructed state at the requested target frame on the re-baked timeline.
+        seek_state: SeekedContainerState,
+        /// Fingerprint recorded in the source container.
+        source_fingerprint: u64,
+        /// Fingerprint of the target model's [`RopeGeometry`].
+        target_fingerprint: u64,
+        /// Number of subtitle records re-baked into the new timeline.
+        rebaked_frames: usize,
+    },
+}
+
 const GCSO_DUAL_MAGIC: &[u8; 8] = b"GCSODUAL";
 const GCSO_DUAL_VERSION: u32 = 1;
 
@@ -1908,6 +1961,140 @@ impl GcsoDualTrackTimeline {
         let bytes = std::fs::read(p)
             .map_err(|e| format!("failed to read .gcso container {}: {e}", p.display()))?;
         Self::from_bytes(&bytes)
+    }
+
+    /// Checks `EnvProbe` compatibility against `ctx.adapter.geometry()` and either performs a
+    /// zero-forward GOP seek (`FastResumed`) or automatically re-bakes the Subtitle Track through
+    /// `encoder` into the target model's geometry (`Rebaked`).
+    ///
+    /// # Errors
+    /// Returns an error if seeking, encoding subtitle activations, or recording re-baked frames fails.
+    pub fn resume_or_rebake<E: SubtitleActivationEncoder + ?Sized>(
+        &self,
+        ctx: &RebakeContext<'_>,
+        encoder: &mut E,
+        target_frame: u64,
+    ) -> Result<TimelineResumeOutcome, String> {
+        let target_fp = Self::geometry_fingerprint(ctx.adapter.geometry());
+        if self.model_fingerprint == target_fp {
+            let seek_state = self.seek_zero_forward(target_frame)?;
+            return Ok(TimelineResumeOutcome::FastResumed { seek_state });
+        }
+
+        let subtitles = self.export_subtitle_track(ctx.up_to_frame);
+        if subtitles.is_empty() {
+            return Err("cannot re-bake an empty subtitle track".to_string());
+        }
+
+        let mut encoded_records = Vec::with_capacity(subtitles.len());
+        for record in &subtitles {
+            encoded_records.push(encoder.encode_subtitle_activations(record)?);
+        }
+
+        let num_layers = encoded_records[0].len();
+        let auto_centroids: Vec<Vec<f32>> = if ctx.centroid_layers.is_empty() {
+            let mut sums: Vec<Vec<f32>> = encoded_records[0]
+                .iter()
+                .map(|layer| vec![0.0_f32; layer.len()])
+                .collect();
+            for rec_layers in &encoded_records {
+                if rec_layers.len() != num_layers {
+                    return Err(
+                        "inconsistent layer count from SubtitleActivationEncoder".to_string()
+                    );
+                }
+                for (l, src) in rec_layers.iter().enumerate() {
+                    if src.len() != sums[l].len() {
+                        return Err(format!(
+                            "inconsistent rotary dimension at layer {l}: {} vs {}",
+                            src.len(),
+                            sums[l].len()
+                        ));
+                    }
+                    for (dst, &val) in sums[l].iter_mut().zip(src.iter()) {
+                        *dst += val;
+                    }
+                }
+            }
+            let inv_n = 1.0_f32 / (encoded_records.len() as f32);
+            for layer_sum in &mut sums {
+                for val in layer_sum.iter_mut() {
+                    *val *= inv_n;
+                }
+            }
+            sums
+        } else {
+            Vec::new()
+        };
+
+        let auto_refs: Vec<&[f32]> = auto_centroids.iter().map(Vec::as_slice).collect();
+        let ref_layers: &[&[f32]] = if ctx.centroid_layers.is_empty() {
+            &auto_refs
+        } else {
+            ctx.centroid_layers
+        };
+
+        let mut rebaked_corpus = TextAttractorCorpus::new();
+        for (record, q_layers) in subtitles.iter().zip(encoded_records.iter()) {
+            let q_refs: Vec<&[f32]> = q_layers.iter().map(Vec::as_slice).collect();
+            rebaked_corpus.ingest_text_activations(
+                ctx.adapter,
+                record.role,
+                &record.text,
+                &q_refs,
+                ref_layers,
+                record.energy,
+            )?;
+        }
+        rebaked_corpus.fit_common_mode_projection();
+
+        let mut rebaked_timeline = Self::new(target_fp);
+        let mut frames_since_keyframe = 0_usize;
+        let step_ctx = TimelineStepContext {
+            adapter: ctx.adapter,
+            corpus: &rebaked_corpus,
+            policy: ctx.policy,
+            detector: ctx.detector,
+        };
+        for (idx, record) in subtitles.iter().enumerate() {
+            let scene_cut = idx > 0 && record.role != subtitles[idx - 1].role;
+            let emitted_i = rebaked_timeline.record_step(
+                &step_ctx,
+                record.clone(),
+                &FrameTransitionMetrics {
+                    phase_l1_delta: if idx == 0 { 0.0 } else { 0.08 },
+                    void_state: if scene_cut {
+                        VoidBoundaryState::CvoidEmptySpace
+                    } else {
+                        VoidBoundaryState::InsideBasin
+                    },
+                    frames_since_keyframe,
+                    new_cluster_spawned: scene_cut,
+                },
+            )?;
+            frames_since_keyframe = if emitted_i {
+                0
+            } else {
+                frames_since_keyframe + 1
+            };
+        }
+
+        let effective_target = subtitles
+            .iter()
+            .filter(|r| r.frame_index <= target_frame)
+            .map(|r| r.frame_index)
+            .next_back()
+            .unwrap_or(subtitles[0].frame_index);
+        let seek_state = rebaked_timeline.seek_zero_forward(effective_target)?;
+
+        Ok(TimelineResumeOutcome::Rebaked {
+            timeline: rebaked_timeline,
+            corpus: rebaked_corpus,
+            seek_state,
+            source_fingerprint: self.model_fingerprint,
+            target_fingerprint: target_fp,
+            rebaked_frames: subtitles.len(),
+        })
     }
 
     /// Deserializes a portable [`GcsoDualTrackTimeline`] byte stream produced by [`Self::to_bytes`].
@@ -2712,15 +2899,194 @@ mod tests {
         assert_eq!(subtitles[0].text, "Turn 0 fact");
         assert_eq!(subtitles[1].text, "Turn 1 persona");
 
-        // Disk persistence roundtrip.
-        let tmp_path = std::env::temp_dir().join("liminika_dual_track_test.gcso");
+        // Disk persistence roundtrip inside repository-contained `containers/`.
+        let repo_container = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("containers")
+            .join("dual_track_test.gcso");
         let written = timeline
-            .save_to_path(&tmp_path)
-            .expect("save .gcso to temp");
+            .save_to_path(&repo_container)
+            .expect("save .gcso to repository containers/");
         assert_eq!(written, bytes.len());
-        let loaded =
-            GcsoDualTrackTimeline::load_from_path(&tmp_path).expect("load .gcso from temp");
+        let loaded = GcsoDualTrackTimeline::load_from_path(&repo_container)
+            .expect("load .gcso from repository containers/");
         assert_eq!(loaded, timeline);
-        let _ = std::fs::remove_file(&tmp_path);
+        let _ = std::fs::remove_file(&repo_container);
+    }
+
+    #[test]
+    fn dual_track_timeline_fast_resumes_and_rebakes_across_models() {
+        struct DeterministicHashEncoder {
+            num_layers: usize,
+            rotary_dim: usize,
+        }
+
+        impl SubtitleActivationEncoder for DeterministicHashEncoder {
+            fn encode_subtitle_activations(
+                &mut self,
+                record: &SourceTextRecord,
+            ) -> Result<Vec<Vec<f32>>, String> {
+                let seed = record
+                    .text
+                    .bytes()
+                    .fold(0x9E37_79B9_7F4A_7C15_u64, |acc, b| {
+                        acc.wrapping_mul(131).wrapping_add(u64::from(b))
+                    });
+                let mut layers = Vec::with_capacity(self.num_layers);
+                for l in 0..self.num_layers {
+                    let mut v = Vec::with_capacity(self.rotary_dim);
+                    for d in 0..self.rotary_dim {
+                        let phase = ((seed ^ ((l as u64) << 8) ^ (d as u64)) % 100) as f32 * 0.01;
+                        v.push((phase - 0.5) * 2.0);
+                    }
+                    layers.push(v);
+                }
+                Ok(layers)
+            }
+        }
+
+        let src_adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("src init");
+        let len = src_adapter.geometry().q_rot_len();
+        let centroid = vec![0.0_f32; len];
+        let refs: Vec<&[f32]> = vec![centroid.as_slice(); 32];
+        let q_a: Vec<f32> = (0..len)
+            .map(|i| if i % 2 == 0 { 0.7 } else { -0.3 })
+            .collect();
+        let qa_slices: Vec<&[f32]> = vec![q_a.as_slice(); 32];
+
+        let mut corpus = TextAttractorCorpus::new();
+        corpus
+            .ingest_text_activations(
+                &src_adapter,
+                AttractorRole::Fact,
+                "Fact zero",
+                &qa_slices,
+                &refs,
+                1.5,
+            )
+            .expect("ingest 0");
+        corpus
+            .ingest_text_activations(
+                &src_adapter,
+                AttractorRole::Persona,
+                "Persona one",
+                &qa_slices,
+                &refs,
+                1.2,
+            )
+            .expect("ingest 1");
+
+        let detector = AdaptiveGopCutDetector::default();
+        let policy = RecallPolicy::default();
+        let mut timeline = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
+            src_adapter.geometry(),
+        ));
+        let step_ctx = TimelineStepContext {
+            adapter: &src_adapter,
+            corpus: &corpus,
+            policy: &policy,
+            detector: &detector,
+        };
+        timeline
+            .record_step(
+                &step_ctx,
+                SourceTextRecord {
+                    frame_index: 0,
+                    timestamp_epoch_sec: 1_700_000_000,
+                    role: AttractorRole::Fact,
+                    text: "Fact zero".to_string(),
+                    energy: 1.5,
+                },
+                &FrameTransitionMetrics {
+                    phase_l1_delta: 0.0,
+                    void_state: VoidBoundaryState::InsideBasin,
+                    frames_since_keyframe: 0,
+                    new_cluster_spawned: false,
+                },
+            )
+            .expect("step 0");
+        timeline
+            .record_step(
+                &step_ctx,
+                SourceTextRecord {
+                    frame_index: 1,
+                    timestamp_epoch_sec: 1_700_000_010,
+                    role: AttractorRole::Persona,
+                    text: "Persona one".to_string(),
+                    energy: 1.2,
+                },
+                &FrameTransitionMetrics {
+                    phase_l1_delta: 0.05,
+                    void_state: VoidBoundaryState::InsideBasin,
+                    frames_since_keyframe: 1,
+                    new_cluster_spawned: false,
+                },
+            )
+            .expect("step 1");
+
+        // 1. Same model geometry -> FastResumed (zero-forward seek).
+        let mut same_encoder = DeterministicHashEncoder {
+            num_layers: src_adapter.geometry().num_layers,
+            rotary_dim: len,
+        };
+        let same_ctx = RebakeContext {
+            adapter: &src_adapter,
+            policy: &policy,
+            detector: &detector,
+            centroid_layers: &[],
+            up_to_frame: None,
+        };
+        match timeline
+            .resume_or_rebake(&same_ctx, &mut same_encoder, 1)
+            .expect("fast resume")
+        {
+            TimelineResumeOutcome::FastResumed { seek_state } => {
+                assert_eq!(seek_state.target_frame_index, 1);
+            }
+            TimelineResumeOutcome::Rebaked { .. } => {
+                panic!("expected FastResumed for matching geometry");
+            }
+        }
+
+        // 2. Different model geometry -> Rebaked automatically from Subtitle Track.
+        let mut alt_geom = RopeGeometry::phi4_mini();
+        alt_geom.head_dim = 128;
+        alt_geom.rotary_dim = 128;
+        let alt_adapter = ModelSteeringAdapter::new(alt_geom).expect("alt init");
+        let alt_len = alt_adapter.geometry().q_rot_len();
+        let mut alt_encoder = DeterministicHashEncoder {
+            num_layers: alt_adapter.geometry().num_layers,
+            rotary_dim: alt_len,
+        };
+        let alt_ctx = RebakeContext {
+            adapter: &alt_adapter,
+            policy: &policy,
+            detector: &detector,
+            centroid_layers: &[],
+            up_to_frame: None,
+        };
+        match timeline
+            .resume_or_rebake(&alt_ctx, &mut alt_encoder, 1)
+            .expect("cross-model rebake")
+        {
+            TimelineResumeOutcome::Rebaked {
+                timeline: rebaked_tl,
+                corpus: rebaked_corpus,
+                seek_state,
+                source_fingerprint,
+                target_fingerprint,
+                rebaked_frames,
+            } => {
+                assert_ne!(source_fingerprint, target_fingerprint);
+                assert_eq!(rebaked_frames, 2);
+                assert_eq!(rebaked_corpus.entries().len(), 2);
+                assert_eq!(rebaked_tl.model_fingerprint(), target_fingerprint);
+                assert_eq!(seek_state.target_frame_index, 1);
+            }
+            TimelineResumeOutcome::FastResumed { .. } => {
+                panic!("expected Rebaked for mismatched geometry");
+            }
+        }
     }
 }
