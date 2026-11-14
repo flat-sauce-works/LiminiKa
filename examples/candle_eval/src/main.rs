@@ -956,11 +956,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut forb_hits = 0_usize;
         let mut forb_total = 0_usize;
         let mut p1_sample = String::new();
+        let mut probe_traces: Vec<(
+            String,
+            String,
+            f32,
+            usize,
+            usize,
+            [u64; 7],
+            f32,
+            u32,
+            f32,
+        )> = Vec::new();
 
-        for (p_idx, ((_, prompt, expected, forbidden), base_logits)) in
+        for (p_idx, ((slot, prompt, expected, forbidden), base_logits)) in
             suite.probes.iter().zip(baselines.iter()).enumerate()
         {
             model.clear_cache();
+            let counts_before = *adapter.action_hub_decision_counts();
             let formatted = format_phi4_prompt(prompt);
             let ids = tokenizer
                 .encode(formatted.as_str(), false)
@@ -1007,14 +1019,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?;
             sum_kl += kl_div(base_logits, &logits);
 
+            let mut probe_d_lp = 0.0_f32;
             if let Some(tok) = target_toks[p_idx] {
-                sum_d_lp += token_logprob(&logits, tok) - token_logprob(base_logits, tok);
+                probe_d_lp = token_logprob(&logits, tok) - token_logprob(base_logits, tok);
+                sum_d_lp += probe_d_lp;
                 d_lp_count += 1;
             }
 
-            let mut gen_ids = Vec::with_capacity(32);
+            let mut gen_ids = Vec::with_capacity(48);
             let mut offset = ids.len();
-            for _ in 0..32 {
+            for _ in 0..48 {
                 let next = argmax(&logits);
                 if next == 199999 {
                     break;
@@ -1039,20 +1053,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let text = tokenizer
                 .decode(&gen_ids, true)
                 .map_err(|e| format!("decode error: {e}"))?;
+            let clean_text = text.replace('\n', " ");
             if p_idx == 0 {
-                p1_sample = text.replace('\n', " ");
+                p1_sample = clean_text.clone();
             }
             let lower = text.to_lowercase();
-            exp_hits += expected
+            let p_exp = expected
                 .iter()
                 .filter(|kw| lower.contains(&kw.to_lowercase()))
                 .count();
+            let p_forb = forbidden
+                .iter()
+                .filter(|kw| lower.contains(&kw.to_lowercase()))
+                .count();
+            exp_hits += p_exp;
             exp_total += expected.len();
-            forb_hits += forbidden
-                .iter()
-                .filter(|kw| lower.contains(&kw.to_lowercase()))
-                .count();
+            forb_hits += p_forb;
             forb_total += forbidden.len();
+
+            let counts_after = *adapter.action_hub_decision_counts();
+            let mut delta = [0_u64; 7];
+            for i in 0..7 {
+                delta[i] = counts_after[i].saturating_sub(counts_before[i]);
+            }
+            probe_traces.push((
+                slot.clone(),
+                clean_text,
+                probe_d_lp,
+                p_exp,
+                p_forb,
+                delta,
+                trail.stigmergic_density,
+                trail.step_count,
+                adapter.action_hub().last_entropy_h_tilde,
+            ));
         }
 
         let n = suite.probes.len() as f32;
@@ -1089,6 +1123,155 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 counts[4] as f64 / total as f64 * 100.0,
                 counts[5] as f64 / total as f64 * 100.0,
                 counts[6] as f64 / total as f64 * 100.0,
+            );
+        }
+        if label == "Baseline" || label == "Top16 + ActionHub" {
+            println!("   --- Per-Probe Trace ({label}) ---");
+            for (idx, (slot, text, d_lp, p_exp, p_forb, delta, rho, steps, h_tilde)) in
+                probe_traces.iter().enumerate()
+            {
+                let d_sum: u64 = delta.iter().sum::<u64>().max(1);
+                if rope_rad <= -1.5 {
+                    println!(
+                        "   [P{}:{}] d_lp={:+.3} hit={}/forb={} rho={:.3} steps={} H={:.3} | Pas={} Skp={} Exp={} PSPM={} SRL={} Cry={} Rep={} | {}",
+                        idx + 1,
+                        slot,
+                        d_lp,
+                        p_exp,
+                        p_forb,
+                        rho,
+                        steps,
+                        h_tilde,
+                        delta[0],
+                        delta[1],
+                        delta[2],
+                        delta[3],
+                        delta[4],
+                        delta[5],
+                        delta[6],
+                        text
+                    );
+                    let _ = d_sum;
+                } else {
+                    println!(
+                        "   [P{}:{}] hit={}/forb={} | {}",
+                        idx + 1,
+                        slot,
+                        p_exp,
+                        p_forb,
+                        text
+                    );
+                }
+            }
+        }
+    }
+
+    // Multi-turn context switching check on a single persistent KV cache & stigmergic trail:
+    // Turn 1 (FACT) -> Turn 2 (PERSONA) -> Turn 3 (GUARD)
+    println!("\n=== Multi-Turn Context Switch Check (Persistent Trail & KV Cache) ===");
+    let turns = [
+        ("Turn1:FACT", suite.probes[0].1.as_str()),
+        ("Turn2:PERSONA", suite.probes[5].1.as_str()),
+        ("Turn3:GUARD", suite.probes[4].1.as_str()),
+    ];
+    for &(mode_label, layer_mask, rope_rad, srl_scale, use_edbc, use_resonant) in &[
+        ("Baseline", 0xFFFF_FFFF_u64, 0.00_f32, 0.00_f32, false, false),
+        ("ActionHub", 0xFFFF_0000_u64, -2.00_f32, -1.00_f32, true, true),
+    ] {
+        adapter.set_layer_rope_mask(layer_mask);
+        adapter.reset_action_hub_stats();
+        model.clear_cache();
+        let mut trail = gcso_pointer_trail_t::default();
+        let mut offset = 0_usize;
+        println!("-- {mode_label} --");
+        for (turn_name, prompt) in turns {
+            let counts_before = *adapter.action_hub_decision_counts();
+            let turn_text = if offset == 0 {
+                format_phi4_prompt(prompt)
+            } else {
+                format!("<|end|><|user|>{prompt}<|end|><|assistant|>")
+            };
+            let ids = tokenizer
+                .encode(turn_text.as_str(), false)
+                .map_err(|e| format!("encode error: {e}"))?
+                .get_ids()
+                .to_vec();
+            let q7_primary = if use_resonant {
+                baked.fact_q7.as_slice()
+            } else {
+                baked.per_layer_q7.as_slice()
+            };
+            let q7_persona = if use_resonant {
+                Some(baked.persona_q7.as_slice())
+            } else {
+                None
+            };
+            let res_ctx = if use_resonant {
+                Some((
+                    baked.fact_anchors_per_layer.as_slice(),
+                    baked.persona_anchors_per_layer.as_slice(),
+                    baked.neg_sum.as_slice(),
+                ))
+            } else {
+                None
+            };
+            let srl_arg = if srl_scale != 0.0 {
+                Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), srl_scale))
+            } else {
+                None
+            };
+            let (mut logits, _, _) = model.forward_tokens(
+                &ids,
+                offset,
+                Some(&mut adapter),
+                Some(q7_primary),
+                q7_persona,
+                res_ctx,
+                rope_rad,
+                Some(&mut trail),
+                srl_arg,
+                use_edbc,
+                false,
+            )?;
+            offset += ids.len();
+            let mut gen_ids = Vec::with_capacity(48);
+            for _ in 0..48 {
+                let next = argmax(&logits);
+                gen_ids.push(next);
+                let (next_logits, _, _) = model.forward_tokens(
+                    &[next],
+                    offset,
+                    Some(&mut adapter),
+                    Some(q7_primary),
+                    q7_persona,
+                    res_ctx,
+                    rope_rad,
+                    Some(&mut trail),
+                    srl_arg,
+                    use_edbc,
+                    false,
+                )?;
+                logits = next_logits;
+                offset += 1;
+                if next == 199999 {
+                    break;
+                }
+            }
+            let text = tokenizer
+                .decode(&gen_ids, true)
+                .map_err(|e| format!("decode error: {e}"))?
+                .replace('\n', " ");
+            let counts_after = *adapter.action_hub_decision_counts();
+            let mut d = [0_u64; 7];
+            for i in 0..7 {
+                d[i] = counts_after[i].saturating_sub(counts_before[i]);
+            }
+            println!(
+                "  [{turn_name}] rho={:.3} steps={} H={:.3} modes=[Pas={} Skp={} Exp={} PSPM={} SRL={} Cry={} Rep={}] => {text}",
+                trail.stigmergic_density,
+                trail.step_count,
+                adapter.action_hub().last_entropy_h_tilde,
+                d[0], d[1], d[2], d[3], d[4], d[5], d[6],
             );
         }
     }
