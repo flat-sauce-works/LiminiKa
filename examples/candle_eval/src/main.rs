@@ -10,7 +10,8 @@ use std::time::Instant;
 use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor, D};
 use candle_nn::{linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 use liminika_adapter::{ModelSteeringAdapter, RopeGeometry, RopeLayout};
-use liminika_core::abi::gcso_q7_t;
+use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
+use liminika_core::traits::gateway::{ObjectiveFact, SubjectivePersona};
 use serde::Deserialize;
 use tokenizers::Tokenizer;
 
@@ -93,7 +94,14 @@ impl RotaryCache {
         &self,
         x: &Tensor,
         offset: usize,
-        steer: Option<(&ModelSteeringAdapter, usize, &[gcso_q7_t], f32)>,
+        steer: Option<(
+            &ModelSteeringAdapter,
+            usize,
+            &[gcso_q7_t],
+            Option<&[gcso_q7_t]>,
+            f32,
+            &mut gcso_pointer_trail_t,
+        )>,
     ) -> CResult<Tensor> {
         let (b, num_heads, seq_len, head_dim) = x.dims4()?;
         let rot = self.rotary_dim;
@@ -110,8 +118,8 @@ impl RotaryCache {
         let r2 = (x1.broadcast_mul(&sin)? + x2.broadcast_mul(&cos)?)?;
         let mut q_rot = Tensor::cat(&[&r1, &r2], D::Minus1)?;
 
-        if let Some((adapter, layer_idx, q7_deltas, max_rad)) = steer {
-            if max_rad > 0.0 && b == 1 {
+        if let Some((adapter, layer_idx, q7_deltas, persona_opt, max_rad, trail)) = steer {
+            if max_rad != 0.0 && b == 1 {
                 let mut flat = q_rot
                     .transpose(1, 2)?
                     .contiguous()?
@@ -119,11 +127,53 @@ impl RotaryCache {
                     .to_dtype(DType::F32)?
                     .to_vec1::<f32>()?;
                 let tok_stride = num_heads * rot;
-                for tok in 0..seq_len {
-                    let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
-                    adapter
-                        .steer_layer_q_rot(layer_idx, slice, q7_deltas, max_rad)
-                        .map_err(candle_core::Error::Msg)?;
+                if max_rad < 0.0 {
+                    let mut fact_arr = [0i8; 64];
+                    let n = q7_deltas.len().min(64);
+                    fact_arr[..n].copy_from_slice(&q7_deltas[..n]);
+                    let fact = ObjectiveFact::new(fact_arr, 2.5, 0, layer_idx as u32 + 1);
+                    if let Some(p_deltas) = persona_opt {
+                        let mut persona_arr = [0i8; 64];
+                        let pn = p_deltas.len().min(64);
+                        persona_arr[..pn].copy_from_slice(&p_deltas[..pn]);
+                        let persona =
+                            SubjectivePersona::new(persona_arr, 1.5, 0, layer_idx as u32 + 101);
+                        let composite = (fact, persona);
+                        for tok in 0..seq_len {
+                            let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
+                            adapter
+                                .steer_layer_with_gateway(
+                                    layer_idx,
+                                    &composite,
+                                    trail,
+                                    128,
+                                    slice,
+                                    None,
+                                )
+                                .map_err(candle_core::Error::Msg)?;
+                        }
+                    } else {
+                        for tok in 0..seq_len {
+                            let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
+                            adapter
+                                .steer_layer_with_gateway(
+                                    layer_idx,
+                                    &fact,
+                                    trail,
+                                    128,
+                                    slice,
+                                    None,
+                                )
+                                .map_err(candle_core::Error::Msg)?;
+                        }
+                    }
+                } else {
+                    for tok in 0..seq_len {
+                        let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
+                        adapter
+                            .steer_layer_q_rot(layer_idx, slice, q7_deltas, max_rad)
+                            .map_err(candle_core::Error::Msg)?;
+                    }
                 }
                 q_rot = Tensor::from_vec(flat, (1, seq_len, num_heads, rot), x.device())?
                     .transpose(1, 2)?
@@ -175,7 +225,14 @@ impl Phi3Attention {
         x: &Tensor,
         rope: &RotaryCache,
         offset: usize,
-        steer: Option<(&ModelSteeringAdapter, usize, &[gcso_q7_t], f32)>,
+        steer: Option<(
+            &ModelSteeringAdapter,
+            usize,
+            &[gcso_q7_t],
+            Option<&[gcso_q7_t]>,
+            f32,
+            &mut gcso_pointer_trail_t,
+        )>,
         collect_q_heads: bool,
     ) -> CResult<(Tensor, Option<Vec<f32>>)> {
         let (b, seq_len, _) = x.dims3()?;
@@ -367,7 +424,9 @@ impl Phi3Model {
         offset: usize,
         mut adapter: Option<&mut ModelSteeringAdapter>,
         q7s: Option<&[Vec<gcso_q7_t>]>,
+        persona_q7s: Option<&[Vec<gcso_q7_t>]>,
         rope_rad: f32,
+        trail_opt: Option<&mut gcso_pointer_trail_t>,
         srl: Option<(&[f32], &[f32], f32)>,
         use_edbc: bool,
         collect_bake_data: bool,
@@ -379,12 +438,15 @@ impl Phi3Model {
         } else {
             Vec::new()
         };
+        let mut fallback_trail = gcso_pointer_trail_t::default();
+        let trail_ref = trail_opt.unwrap_or(&mut fallback_trail);
 
         for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
+            let p_slice = persona_q7s.and_then(|ps| ps.get(layer_idx)).map(Vec::as_slice);
             let steer_ref = match (adapter.as_deref(), q7s) {
-                (Some(ad), Some(qs)) if rope_rad > 0.0 => qs
+                (Some(ad), Some(qs)) if rope_rad != 0.0 => qs
                     .get(layer_idx)
-                    .map(|q7| (ad, layer_idx, q7.as_slice(), rope_rad)),
+                    .map(|q7| (ad, layer_idx, q7.as_slice(), p_slice, rope_rad, &mut *trail_ref)),
                 _ => None,
             };
             let normed = layer.input_layernorm.forward(&h)?;
@@ -536,6 +598,8 @@ fn format_phi4_prompt(user_prompt: &str) -> String {
 
 struct BakedModelProfile {
     per_layer_q7: Vec<Vec<gcso_q7_t>>,
+    fact_q7: Vec<Vec<gcso_q7_t>>,
+    persona_q7: Vec<Vec<gcso_q7_t>>,
     srl_u: Vec<f32>,
     srl_v: Vec<f32>,
 }
@@ -556,15 +620,19 @@ fn bake_via_adapter(
 ) -> Result<BakedModelProfile, Box<dyn std::error::Error>> {
     let num_layers = adapter.geometry().num_layers;
     let q_len = adapter.geometry().q_rot_len();
+    let mut fact_sum = vec![vec![0.0_f32; q_len]; num_layers];
+    let mut persona_sum = vec![vec![0.0_f32; q_len]; num_layers];
     let mut pos_sum = vec![vec![0.0_f32; q_len]; num_layers];
     let mut neg_sum = vec![vec![0.0_f32; q_len]; num_layers];
     let mut pos_h = vec![0.0_f32; hidden_size];
     let mut neg_h = vec![0.0_f32; hidden_size];
 
+    let fact_count = suite.facts.len().max(1) as f32;
+    let persona_count = suite.persona.len().max(1) as f32;
     let pos_count = (suite.facts.len() + suite.persona.len()).max(1) as f32;
     let neg_count = suite.guards.len().max(1) as f32;
 
-    for text in suite.facts.iter().chain(suite.persona.iter()) {
+    for text in &suite.facts {
         model.clear_cache();
         let ids = tokenizer
             .encode(text.as_str(), false)
@@ -572,10 +640,31 @@ fn bake_via_adapter(
             .get_ids()
             .to_vec();
         let (_, layer_qs, h_vec) =
-            model.forward_tokens(&ids, 0, None, None, 0.0, None, false, true)?;
+            model.forward_tokens(&ids, 0, None, None, None, 0.0, None, None, false, true)?;
         for (l, q) in layer_qs.iter().enumerate() {
-            for (dst, &src) in pos_sum[l].iter_mut().zip(q.iter()) {
-                *dst += src / pos_count;
+            for ((f_dst, p_dst), &src) in fact_sum[l].iter_mut().zip(pos_sum[l].iter_mut()).zip(q.iter()) {
+                *f_dst += src / fact_count;
+                *p_dst += src / pos_count;
+            }
+        }
+        for (dst, &src) in pos_h.iter_mut().zip(h_vec.iter()) {
+            *dst += src / pos_count;
+        }
+    }
+
+    for text in &suite.persona {
+        model.clear_cache();
+        let ids = tokenizer
+            .encode(text.as_str(), false)
+            .map_err(|e| format!("encode error: {e}"))?
+            .get_ids()
+            .to_vec();
+        let (_, layer_qs, h_vec) =
+            model.forward_tokens(&ids, 0, None, None, None, 0.0, None, None, false, true)?;
+        for (l, q) in layer_qs.iter().enumerate() {
+            for ((per_dst, p_dst), &src) in persona_sum[l].iter_mut().zip(pos_sum[l].iter_mut()).zip(q.iter()) {
+                *per_dst += src / persona_count;
+                *p_dst += src / pos_count;
             }
         }
         for (dst, &src) in pos_h.iter_mut().zip(h_vec.iter()) {
@@ -591,7 +680,7 @@ fn bake_via_adapter(
             .get_ids()
             .to_vec();
         let (_, layer_qs, h_vec) =
-            model.forward_tokens(&ids, 0, None, None, 0.0, None, false, true)?;
+            model.forward_tokens(&ids, 0, None, None, None, 0.0, None, None, false, true)?;
         for (l, q) in layer_qs.iter().enumerate() {
             for (dst, &src) in neg_sum[l].iter_mut().zip(q.iter()) {
                 *dst += src / neg_count;
@@ -603,8 +692,12 @@ fn bake_via_adapter(
     }
 
     let mut per_layer_q7 = Vec::with_capacity(num_layers);
+    let mut fact_q7 = Vec::with_capacity(num_layers);
+    let mut persona_q7 = Vec::with_capacity(num_layers);
     for l in 0..num_layers {
         out_push_q7(&mut per_layer_q7, adapter, &neg_sum[l], &pos_sum[l])?;
+        out_push_q7(&mut fact_q7, adapter, &neg_sum[l], &fact_sum[l])?;
+        out_push_q7(&mut persona_q7, adapter, &neg_sum[l], &persona_sum[l])?;
     }
 
     let mut srl_u: Vec<f32> = pos_h.iter().zip(neg_h.iter()).map(|(&p, &n)| p - n).collect();
@@ -614,6 +707,8 @@ fn bake_via_adapter(
 
     Ok(BakedModelProfile {
         per_layer_q7,
+        fact_q7,
+        persona_q7,
         srl_u,
         srl_v,
     })
@@ -688,17 +783,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .get_ids()
             .to_vec();
         let (logits, _, _) =
-            model.forward_tokens(&ids, 0, None, None, 0.0, None, false, false)?;
+            model.forward_tokens(&ids, 0, None, None, None, 0.0, None, None, false, false)?;
         baselines.push(logits);
     }
 
-    // Compare full-layer RoPE vs top-16-layer RoPE and pure RoPE + SRL (without EDBC logit scaling).
-    let configs: [(&str, u64, f32, f32); 5] = [
-        ("Baseline", 0xFFFF_FFFF, 0.00, 0.00),
-        ("RoPE (32L, 0.10)", 0xFFFF_FFFF, 0.10, 0.00),
-        ("RoPE (Top16, 0.10)", 0xFFFF_0000, 0.10, 0.00),
-        ("Top16 + SRL(0.15)", 0xFFFF_0000, 0.10, 0.15),
-        ("Top16 + SRL(0.35)", 0xFFFF_0000, 0.10, 0.35),
+    // Compare manual max_rad vs 1-Origin Gateway vs 2-Origin Gateway + structural SRL.
+    let configs: [(&str, u64, f32, f32, bool); 5] = [
+        ("Baseline", 0xFFFF_FFFF, 0.00, 0.00, false),
+        ("RoPE (Top16, 0.10)", 0xFFFF_0000, 0.10, 0.00, false),
+        ("Top16 + GW(Fact)", 0xFFFF_0000, -1.00, 0.00, false),
+        ("Top16 + GW(2-Orig)", 0xFFFF_0000, -1.00, 0.00, true),
+        ("Top16 + GW(2O+SRL)", 0xFFFF_0000, -1.00, -1.00, true),
     ];
 
     println!(
@@ -706,7 +801,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "mode", "mean_KL", "d_logprob", "expect_hit", "forbid_hit"
     );
 
-    for (label, layer_mask, rope_rad, srl_scale) in configs {
+    for (label, layer_mask, rope_rad, srl_scale, use_two_origin) in configs {
         adapter.set_layer_rope_mask(layer_mask);
         let use_edbc = false;
         let mut sum_kl = 0.0_f32;
@@ -728,7 +823,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("encode error: {e}"))?
                 .get_ids()
                 .to_vec();
-            let srl_arg = if srl_scale != 0.0 {
+            let mut trail = gcso_pointer_trail_t::default();
+            let q7_primary = if use_two_origin {
+                baked.fact_q7.as_slice()
+            } else {
+                baked.per_layer_q7.as_slice()
+            };
+            let q7_persona = if use_two_origin {
+                Some(baked.persona_q7.as_slice())
+            } else {
+                None
+            };
+            let srl_arg = if srl_scale < 0.0 {
+                let gw_srl = (trail.attractor_pull_force * 0.25).clamp(0.15, 0.80);
+                Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), gw_srl))
+            } else if srl_scale != 0.0 {
                 Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), srl_scale))
             } else {
                 None
@@ -737,8 +846,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &ids,
                 0,
                 Some(&mut adapter),
-                Some(baked.per_layer_q7.as_slice()),
+                Some(q7_primary),
+                q7_persona,
                 rope_rad,
+                Some(&mut trail),
                 srl_arg,
                 use_edbc,
                 false,
@@ -758,13 +869,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     break;
                 }
                 gen_ids.push(next);
+                let step_srl = if srl_scale < 0.0 {
+                    let gw_srl = (trail.attractor_pull_force * 0.25).clamp(0.15, 0.80);
+                    Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), gw_srl))
+                } else {
+                    srl_arg
+                };
                 let (next_logits, _, _) = model.forward_tokens(
                     &[next],
                     offset,
                     Some(&mut adapter),
-                    Some(baked.per_layer_q7.as_slice()),
+                    Some(q7_primary),
+                    q7_persona,
                     rope_rad,
-                    srl_arg,
+                    Some(&mut trail),
+                    step_srl,
                     use_edbc,
                     false,
                 )?;
