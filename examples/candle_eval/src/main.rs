@@ -1,21 +1,49 @@
 // name: examples/candle_eval/src/main.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Standalone Candle + Safetensors evaluation harness for real-LLM RoPE steering.
+//! Standalone Candle + Safetensors evaluation harness wired directly to `liminika-core`.
 //!
 //! Loads `Phi-4-mini-instruct` (`Phi3ForCausalLM`) via mmaped safetensors, extracts
-//! per-layer, per-head post-RoPE query representations on
-//! `tests/fixtures/gcso_eval_samples.txt`, computes an in-memory SO(2) phase-delta
-//! profile per `(layer, head, pair)`, and runs an angle-sweep benchmark with
-//! `mean_KL`, target `d_logprob`, keyword hit rates, and sample text outputs.
+//! per-layer post-RoPE query representations on `tests/fixtures/gcso_eval_samples.txt`,
+//! computes Q7 phase deltas via `PhaseSteeringEngine::compute_procrustes_phase_delta`,
+//! and steers queries via `PhaseSteeringEngine::apply_phase_steering_safe` across an
+//! angle sweep (`0.00..=0.25 rad`).
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor, D};
 use candle_nn::{linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
+use liminika_core::abi::gcso_q7_t;
+use liminika_core::phase_steering::PhaseSteeringEngine;
+use liminika_core::traits::aligned::{
+    AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32,
+};
+use liminika_core::traits::PhaseSteering;
 use serde::Deserialize;
 use tokenizers::Tokenizer;
+
+const PHI4_NUM_HEADS: usize = 24;
+const PHI4_ROTARY_DIM: usize = 96;
+const PHI4_Q_ROT_LEN: usize = PHI4_NUM_HEADS * PHI4_ROTARY_DIM;
+
+#[repr(C, align(32))]
+struct AlignedQRot([f32; PHI4_Q_ROT_LEN]);
+
+#[repr(C, align(16))]
+struct AlignedQ7([gcso_q7_t; PHI4_NUM_HEADS]);
+
+impl Default for AlignedQRot {
+    fn default() -> Self {
+        Self([0.0; PHI4_Q_ROT_LEN])
+    }
+}
+
+impl Default for AlignedQ7 {
+    fn default() -> Self {
+        Self([0; PHI4_NUM_HEADS])
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct Phi3Config {
@@ -48,6 +76,31 @@ impl Phi3Config {
     }
 }
 
+/// Converts a single `(num_heads * rot_dim)` buffer from HalfSplit `(x[i], x[i+half])`
+/// into Interleaved `(x[2i], x[2i+1])` expected by `PhaseSteeringEngine`.
+fn half_split_to_interleaved(src: &[f32], dst: &mut [f32], num_heads: usize, rot_dim: usize) {
+    let half = rot_dim / 2;
+    for h in 0..num_heads {
+        let base = h * rot_dim;
+        for i in 0..half {
+            dst[base + 2 * i] = src[base + i];
+            dst[base + 2 * i + 1] = src[base + half + i];
+        }
+    }
+}
+
+/// Converts a single `(num_heads * rot_dim)` buffer from Interleaved back to HalfSplit.
+fn interleaved_to_half_split(src: &[f32], dst: &mut [f32], num_heads: usize, rot_dim: usize) {
+    let half = rot_dim / 2;
+    for h in 0..num_heads {
+        let base = h * rot_dim;
+        for i in 0..half {
+            dst[base + i] = src[base + 2 * i];
+            dst[base + half + i] = src[base + 2 * i + 1];
+        }
+    }
+}
+
 struct RotaryCache {
     cos: Tensor,
     sin: Tensor,
@@ -74,14 +127,14 @@ impl RotaryCache {
         })
     }
 
-    /// Applies HalfSplit RoPE on `0..rotary_dim` and optional per-head LiminiKa steering on `q`.
-    fn apply_with_steering(
+    /// Applies HalfSplit RoPE on `0..rotary_dim` and optional `liminika-core` steering on `q`.
+    fn apply_with_core_steering(
         &self,
         x: &Tensor,
         offset: usize,
-        steer_cos_sin: Option<(&Tensor, &Tensor)>,
+        core_steer: Option<(&PhaseSteeringEngine, &AlignedQ7, f32)>,
     ) -> CResult<Tensor> {
-        let (_b, _h, seq_len, head_dim) = x.dims4()?;
+        let (b, num_heads, seq_len, head_dim) = x.dims4()?;
         let rot = self.rotary_dim;
         let half = rot / 2;
 
@@ -92,21 +145,56 @@ impl RotaryCache {
         let cos = self.cos.narrow(0, offset, seq_len)?.unsqueeze(0)?.unsqueeze(0)?;
         let sin = self.sin.narrow(0, offset, seq_len)?.unsqueeze(0)?.unsqueeze(0)?;
 
-        let mut r1 = (x1.broadcast_mul(&cos)? - x2.broadcast_mul(&sin)?)?;
-        let mut r2 = (x1.broadcast_mul(&sin)? + x2.broadcast_mul(&cos)?)?;
+        let r1 = (x1.broadcast_mul(&cos)? - x2.broadcast_mul(&sin)?)?;
+        let r2 = (x1.broadcast_mul(&sin)? + x2.broadcast_mul(&cos)?)?;
+        let mut q_rot = Tensor::cat(&[&r1, &r2], D::Minus1)?;
 
-        if let Some((sc, ss)) = steer_cos_sin {
-            let sr1 = (r1.broadcast_mul(sc)? - r2.broadcast_mul(ss)?)?;
-            let sr2 = (r1.broadcast_mul(ss)? + r2.broadcast_mul(sc)?)?;
-            r1 = sr1;
-            r2 = sr2;
+        if let Some((engine, q7_deltas, max_rad)) = core_steer {
+            if max_rad > 0.0 && b == 1 && num_heads == PHI4_NUM_HEADS && rot == PHI4_ROTARY_DIM {
+                // Reorder (1, H, S, rot) -> (S, H * rot) so each token is contiguous.
+                let flat = q_rot
+                    .transpose(1, 2)?
+                    .contiguous()?
+                    .flatten_all()?
+                    .to_dtype(DType::F32)?
+                    .to_vec1::<f32>()?;
+                let mut steered_half = Vec::with_capacity(seq_len * PHI4_Q_ROT_LEN);
+                let mut inter_buf = AlignedQRot::default();
+                let mut hs_buf = [0.0_f32; PHI4_Q_ROT_LEN];
+
+                let q7_aligned = AlignedSlice16::new(&q7_deltas.0)
+                    .map_err(|e| candle_core::Error::Msg(format!("AlignedSlice16 error: {e}")))?;
+
+                for tok in 0..seq_len {
+                    let src_tok = &flat[tok * PHI4_Q_ROT_LEN..(tok + 1) * PHI4_Q_ROT_LEN];
+                    half_split_to_interleaved(src_tok, &mut inter_buf.0, PHI4_NUM_HEADS, rot);
+                    {
+                        let mut tensor_mut = AlignedSliceMut32::new(&mut inter_buf.0).map_err(|e| {
+                            candle_core::Error::Msg(format!("AlignedSliceMut32 error: {e}"))
+                        })?;
+                        engine
+                            .apply_phase_steering_safe(&mut tensor_mut, &q7_aligned, max_rad)
+                            .map_err(|e| {
+                                candle_core::Error::Msg(format!(
+                                    "apply_phase_steering_safe error: {e}"
+                                ))
+                            })?;
+                    }
+                    interleaved_to_half_split(&inter_buf.0, &mut hs_buf, PHI4_NUM_HEADS, rot);
+                    steered_half.extend_from_slice(&hs_buf);
+                }
+
+                q_rot = Tensor::from_vec(steered_half, (1, seq_len, num_heads, rot), x.device())?
+                    .transpose(1, 2)?
+                    .to_dtype(x.dtype())?;
+            }
         }
 
         if rot < head_dim {
             let x_pass = x.narrow(D::Minus1, rot, head_dim - rot)?;
-            Tensor::cat(&[&r1, &r2, &x_pass], D::Minus1)
+            Tensor::cat(&[&q_rot, &x_pass], D::Minus1)
         } else {
-            Tensor::cat(&[&r1, &r2], D::Minus1)
+            Ok(q_rot)
         }
     }
 }
@@ -141,14 +229,12 @@ impl Phi3Attention {
         self.kv_cache = None;
     }
 
-    /// Forward pass returning attention output and optional `(num_heads * rotary_dim)`
-    /// flattened post-RoPE query vector for the final prompt token.
     fn forward(
         &mut self,
         x: &Tensor,
         rope: &RotaryCache,
         offset: usize,
-        steer_cos_sin: Option<(&Tensor, &Tensor)>,
+        core_steer: Option<(&PhaseSteeringEngine, &AlignedQ7, f32)>,
         collect_q_heads: bool,
     ) -> CResult<(Tensor, Option<Vec<f32>>)> {
         let (b, seq_len, _) = x.dims3()?;
@@ -172,8 +258,8 @@ impl Phi3Attention {
             .transpose(1, 2)?
             .contiguous()?;
 
-        let q = rope.apply_with_steering(&q, offset, steer_cos_sin)?;
-        let k = rope.apply_with_steering(&k, offset, None)?;
+        let q = rope.apply_with_core_steering(&q, offset, core_steer)?;
+        let k = rope.apply_with_core_steering(&k, offset, None)?;
 
         let q_heads = if collect_q_heads {
             let last_q = q
@@ -289,9 +375,7 @@ struct Phi3Model {
     norm: RmsNorm,
     lm_head: Linear,
     rope: RotaryCache,
-    num_heads: usize,
     device: Device,
-    dtype: DType,
 }
 
 impl Phi3Model {
@@ -326,9 +410,7 @@ impl Phi3Model {
             norm,
             lm_head,
             rope,
-            num_heads: cfg.num_attention_heads,
             device: dev.clone(),
-            dtype,
         })
     }
 
@@ -342,7 +424,7 @@ impl Phi3Model {
         &mut self,
         tokens: &[u32],
         offset: usize,
-        layer_steers: Option<&[(Tensor, Tensor)]>,
+        core_steer: Option<(&PhaseSteeringEngine, &[AlignedQ7], f32)>,
         collect_q_heads: bool,
     ) -> CResult<(Vec<f32>, Vec<Vec<f32>>)> {
         let input = Tensor::from_slice(tokens, (1, tokens.len()), &self.device)?;
@@ -354,9 +436,9 @@ impl Phi3Model {
         };
 
         for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
-            let steer_ref = layer_steers
-                .and_then(|s| s.get(layer_idx))
-                .map(|(c, s)| (c, s));
+            let steer_ref = core_steer.and_then(|(eng, q7s, rad)| {
+                q7s.get(layer_idx).map(|q7| (eng, q7, rad))
+            });
             let normed = layer.input_layernorm.forward(&h)?;
             let (attn_out, q_opt) = layer.self_attn.forward(
                 &normed,
@@ -383,30 +465,6 @@ impl Phi3Model {
             .to_dtype(DType::F32)?
             .to_vec1::<f32>()?;
         Ok((logits, per_layer_q))
-    }
-
-    /// Builds per-layer `(1, num_heads, 1, half_rot)` cos/sin steering tensors from
-    /// normalized per-layer phase deltas (`[num_layers][num_heads * half_rot]`).
-    fn make_layer_steers(
-        &self,
-        per_layer_deltas: &[Vec<f32>],
-        max_rad: f32,
-    ) -> CResult<Option<Vec<(Tensor, Tensor)>>> {
-        if max_rad <= 0.0 {
-            return Ok(None);
-        }
-        let half = self.rope.rotary_dim / 2;
-        let mut out = Vec::with_capacity(per_layer_deltas.len());
-        for deltas in per_layer_deltas {
-            let cos_vals: Vec<f32> = deltas.iter().map(|&d| (d * max_rad).cos()).collect();
-            let sin_vals: Vec<f32> = deltas.iter().map(|&d| (d * max_rad).sin()).collect();
-            let c = Tensor::from_vec(cos_vals, (1, self.num_heads, 1, half), &self.device)?
-                .to_dtype(self.dtype)?;
-            let s = Tensor::from_vec(sin_vals, (1, self.num_heads, 1, half), &self.device)?
-                .to_dtype(self.dtype)?;
-            out.push((c, s));
-        }
-        Ok(Some(out))
     }
 }
 
@@ -505,21 +563,16 @@ fn format_phi4_prompt(user_prompt: &str) -> String {
     format!("<|user|>{user_prompt}<|end|><|assistant|>")
 }
 
-/// Computes per-layer, per-head, per-SO(2)-pair normalized phase deltas in `[-1.0, 1.0]`
-/// using `atan2` Procrustes angle between positive (`facts + persona`) and negative (`guards`)
-/// post-RoPE query centroids.
-fn bake_per_layer_procrustes_deltas(
+/// Bakes per-layer `gcso_q7_t` phase deltas using `PhaseSteeringEngine::compute_procrustes_phase_delta`.
+fn bake_core_procrustes_q7(
     model: &mut Phi3Model,
     tokenizer: &Tokenizer,
+    engine: &PhaseSteeringEngine,
     suite: &FixtureSuite,
     num_layers: usize,
-    num_heads: usize,
-    rot_dim: usize,
-) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
-    let q_len = num_heads * rot_dim;
-    let half = rot_dim / 2;
-    let mut pos_sum = vec![vec![0.0_f32; q_len]; num_layers];
-    let mut neg_sum = vec![vec![0.0_f32; q_len]; num_layers];
+) -> Result<Vec<AlignedQ7>, Box<dyn std::error::Error>> {
+    let mut pos_sum = vec![vec![0.0_f32; PHI4_Q_ROT_LEN]; num_layers];
+    let mut neg_sum = vec![vec![0.0_f32; PHI4_Q_ROT_LEN]; num_layers];
 
     let pos_count = (suite.facts.len() + suite.persona.len()).max(1) as f32;
     let neg_count = suite.guards.len().max(1) as f32;
@@ -554,27 +607,29 @@ fn bake_per_layer_procrustes_deltas(
         }
     }
 
-    let inv_pi = std::f32::consts::FRAC_1_PI;
-    let mut per_layer_deltas = Vec::with_capacity(num_layers);
+    let mut per_layer_q7 = Vec::with_capacity(num_layers);
     for l in 0..num_layers {
-        let mut deltas = Vec::with_capacity(num_heads * half);
-        for h in 0..num_heads {
-            let base = h * rot_dim;
-            for i in 0..half {
-                let px = pos_sum[l][base + i];
-                let py = pos_sum[l][base + half + i];
-                let nx = neg_sum[l][base + i];
-                let ny = neg_sum[l][base + half + i];
-                let cross = nx * py - ny * px;
-                let dot = nx * px + ny * py;
-                let angle = cross.atan2(dot); // [-pi, pi]
-                deltas.push((angle * inv_pi).clamp(-1.0, 1.0));
-            }
+        let mut pos_inter = AlignedQRot::default();
+        let mut neg_inter = AlignedQRot::default();
+        half_split_to_interleaved(&pos_sum[l], &mut pos_inter.0, PHI4_NUM_HEADS, PHI4_ROTARY_DIM);
+        half_split_to_interleaved(&neg_sum[l], &mut neg_inter.0, PHI4_NUM_HEADS, PHI4_ROTARY_DIM);
+
+        let src_aligned = AlignedSlice32::new(&neg_inter.0)
+            .map_err(|e| format!("AlignedSlice32 src error: {e}"))?;
+        let dst_aligned = AlignedSlice32::new(&pos_inter.0)
+            .map_err(|e| format!("AlignedSlice32 dst error: {e}"))?;
+        let mut q7_out = AlignedQ7::default();
+        {
+            let mut q7_mut = AlignedSliceMut16::new(&mut q7_out.0)
+                .map_err(|e| format!("AlignedSliceMut16 error: {e}"))?;
+            engine
+                .compute_procrustes_phase_delta(&src_aligned, &dst_aligned, &mut q7_mut)
+                .map_err(|e| format!("compute_procrustes_phase_delta error: {e}"))?;
         }
-        per_layer_deltas.push(deltas);
+        per_layer_q7.push(q7_out);
     }
 
-    Ok(per_layer_deltas)
+    Ok(per_layer_q7)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -590,9 +645,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("tokenizer load error: {e}"))?;
     let suite = load_fixture(&fixture_path)?;
 
+    let engine = PhaseSteeringEngine::new(PHI4_ROTARY_DIM as u32, PHI4_NUM_HEADS as u32)
+        .map_err(|e| format!("PhaseSteeringEngine::new error: {e}"))?;
+
     let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
     println!(
-        "LiminiKa Candle Eval (Per-Layer/Head Procrustes) | device={:?} | layers={} heads={}/{} head_dim={} rotary_dim={}",
+        "LiminiKa Candle Eval (liminika-core PhaseSteeringEngine) | device={:?} | layers={} heads={}/{} head_dim={} rotary_dim={}",
         device,
         cfg.num_hidden_layers,
         cfg.num_attention_heads,
@@ -605,22 +663,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut model = Phi3Model::load(&model_dir, &cfg, &device)?;
     println!("Loaded Phi-4-mini-instruct in {:.2?}", t0.elapsed());
 
-    let per_layer_deltas = bake_per_layer_procrustes_deltas(
+    let per_layer_q7 = bake_core_procrustes_q7(
         &mut model,
         &tokenizer,
+        &engine,
         &suite,
         cfg.num_hidden_layers,
-        cfg.num_attention_heads,
-        cfg.rotary_dim(),
     )?;
     println!(
-        "Baked per-layer/head SO(2) Procrustes deltas ({} x {} x {} pairs).",
-        cfg.num_hidden_layers,
-        cfg.num_attention_heads,
-        cfg.rotary_dim() / 2
+        "Baked {} x {} Q7 phase deltas via PhaseSteeringEngine::compute_procrustes_phase_delta.",
+        per_layer_q7.len(),
+        PHI4_NUM_HEADS
     );
 
-    // Resolve first expected keyword's leading token id for d_logprob tracking.
     let mut target_toks: Vec<Option<u32>> = Vec::with_capacity(suite.probes.len());
     for (_, _, expected, _) in &suite.probes {
         let tok = expected.first().and_then(|kw| {
@@ -653,8 +708,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut sample_outputs: Vec<(f32, String, String)> = Vec::new();
 
     for &angle in &angles {
-        let steers = model.make_layer_steers(&per_layer_deltas, angle)?;
-        let steer_slice = steers.as_deref();
+        let core_steer = if angle > 0.0 {
+            Some((&engine, per_layer_q7.as_slice(), angle))
+        } else {
+            None
+        };
         let mut sum_kl = 0.0_f32;
         let mut sum_d_lp = 0.0_f32;
         let mut d_lp_count = 0_usize;
@@ -675,7 +733,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("encode error: {e}"))?
                 .get_ids()
                 .to_vec();
-            let (mut logits, _) = model.forward_tokens(&ids, 0, steer_slice, false)?;
+            let (mut logits, _) = model.forward_tokens(&ids, 0, core_steer, false)?;
             sum_kl += kl_div(base_logits, &logits);
 
             if let Some(tok) = target_toks[p_idx] {
@@ -691,7 +749,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     break;
                 }
                 gen_ids.push(next);
-                let (next_logits, _) = model.forward_tokens(&[next], offset, steer_slice, false)?;
+                let (next_logits, _) = model.forward_tokens(&[next], offset, core_steer, false)?;
                 logits = next_logits;
                 offset += 1;
             }
