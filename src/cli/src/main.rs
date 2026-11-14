@@ -96,6 +96,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     r.forbidden_hit_rate * 100.0
                 );
             }
+        } else if cmd == "gcso-list" {
+            use liminika_adapter::GcsoDualTrackTimeline;
+
+            let dir = args.next().unwrap_or_else(|| "containers".to_string());
+            let mut entries: Vec<_> = std::fs::read_dir(&dir)?
+                .filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|ext| ext.to_str()) == Some("gcso"))
+                .collect();
+            entries.sort();
+
+            if entries.is_empty() {
+                println!("No .gcso containers found in '{}'.", dir);
+            } else {
+                println!("Found {} .gcso container(s) in '{}':", entries.len(), dir);
+                for path in entries {
+                    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    match GcsoDualTrackTimeline::load_from_path(&path) {
+                        Ok(tl) => println!(
+                            "  {} | {} bytes | fp=0x{:016x} | frames={} | keyframes={:?}",
+                            path.display(),
+                            size,
+                            tl.model_fingerprint(),
+                            tl.frames().len(),
+                            tl.keyframe_positions()
+                        ),
+                        Err(e) => println!("  {} | invalid ({})", path.display(), e),
+                    }
+                }
+            }
         } else if cmd == "gcso-inspect" {
             use liminika_adapter::{AttractorContainerCodec, GcsoDualTrackTimeline};
 
@@ -128,6 +158,122 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     state.anchor_ids.len()
                 );
             }
+        } else if cmd == "gcso-rebake" {
+            use liminika_adapter::{
+                AdaptiveGopCutDetector, GcsoDualTrackTimeline, ModelSteeringAdapter, RebakeContext,
+                RecallPolicy, RopeGeometry, SourceTextRecord, SubtitleActivationEncoder,
+                TimelineResumeOutcome,
+            };
+
+            struct CliProjectionEncoder {
+                num_layers: usize,
+                rotary_dim: usize,
+            }
+
+            impl SubtitleActivationEncoder for CliProjectionEncoder {
+                fn encode_subtitle_activations(
+                    &mut self,
+                    record: &SourceTextRecord,
+                ) -> Result<Vec<Vec<f32>>, String> {
+                    let seed = record
+                        .text
+                        .bytes()
+                        .fold(0x9E37_79B9_7F4A_7C15_u64, |acc, b| {
+                            acc.wrapping_mul(131).wrapping_add(u64::from(b))
+                        });
+                    let mut layers = Vec::with_capacity(self.num_layers);
+                    for l in 0..self.num_layers {
+                        let mut v = Vec::with_capacity(self.rotary_dim);
+                        for d in 0..self.rotary_dim {
+                            let phase =
+                                ((seed ^ ((l as u64) << 8) ^ (d as u64)) % 100) as f32 * 0.01;
+                            v.push((phase - 0.5) * 2.0);
+                        }
+                        layers.push(v);
+                    }
+                    Ok(layers)
+                }
+            }
+
+            let src_path = args
+                .next()
+                .ok_or("usage: liminika gcso-rebake <src.gcso> <dst.gcso> [phi4-mini|alt-128]")?;
+            let dst_path = args
+                .next()
+                .ok_or("usage: liminika gcso-rebake <src.gcso> <dst.gcso> [phi4-mini|alt-128]")?;
+            let profile = args.next().unwrap_or_else(|| "alt-128".to_string());
+
+            let target_geom = match profile.as_str() {
+                "phi4-mini" => RopeGeometry::phi4_mini(),
+                "alt-128" => {
+                    let mut g = RopeGeometry::phi4_mini();
+                    g.head_dim = 128;
+                    g.rotary_dim = 128;
+                    g
+                }
+                other => {
+                    return Err(format!(
+                        "unknown geometry profile '{other}' (expected phi4-mini or alt-128)"
+                    )
+                    .into());
+                }
+            };
+
+            let src_tl = GcsoDualTrackTimeline::load_from_path(&src_path)?;
+            let target_adapter = ModelSteeringAdapter::new(target_geom)?;
+            let policy = RecallPolicy::default();
+            let detector = AdaptiveGopCutDetector::default();
+            let mut encoder = CliProjectionEncoder {
+                num_layers: target_adapter.geometry().num_layers,
+                rotary_dim: target_adapter.geometry().q_rot_len(),
+            };
+            let ctx = RebakeContext {
+                adapter: &target_adapter,
+                policy: &policy,
+                detector: &detector,
+                centroid_layers: &[],
+                up_to_frame: None,
+            };
+            let target_frame = src_tl.frames().last().map_or(0, |f| f.frame_index);
+            match src_tl.resume_or_rebake(&ctx, &mut encoder, target_frame)? {
+                TimelineResumeOutcome::FastResumed { seek_state } => {
+                    let bytes = src_tl.save_to_path(&dst_path)?;
+                    println!(
+                        "EnvProbe matched (fp=0x{:016x}); FastResumed frame={} and copied '{}' ({} bytes).",
+                        src_tl.model_fingerprint(),
+                        seek_state.target_frame_index,
+                        dst_path,
+                        bytes
+                    );
+                }
+                TimelineResumeOutcome::Rebaked {
+                    timeline,
+                    seek_state,
+                    source_fingerprint,
+                    target_fingerprint,
+                    rebaked_frames,
+                    ..
+                } => {
+                    let bytes = timeline.save_to_path(&dst_path)?;
+                    println!(
+                        "Rebaked {} frames: 0x{:016x} -> 0x{:016x} | saved '{}' ({} bytes) | seek_frame={} anchors={}",
+                        rebaked_frames,
+                        source_fingerprint,
+                        target_fingerprint,
+                        dst_path,
+                        bytes,
+                        seek_state.target_frame_index,
+                        seek_state.anchor_ids.len()
+                    );
+                }
+            }
+        } else {
+            println!("Unknown or help command '{}'. Available subcommands:", cmd);
+            println!("  eval-check [fixture_path]");
+            println!("  eval-dry-run [fixture_path]");
+            println!("  gcso-list [containers_dir]");
+            println!("  gcso-inspect <file.gcso> [seek_frame]");
+            println!("  gcso-rebake <src.gcso> <dst.gcso> [phi4-mini|alt-128]");
         }
     }
 
