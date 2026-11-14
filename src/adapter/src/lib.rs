@@ -1031,7 +1031,8 @@ pub struct DynamicAttractorRecall<'a> {
 }
 
 impl<'a> DynamicAttractorRecall<'a> {
-    /// Materializes per-layer `ObjectiveFact<[i8; 64]>` anchors for [`ResonantSignalSlice`].
+    /// Materializes per-layer `ObjectiveFact<[i8; 64]>` anchors for
+    /// [`ResonantSignalSlice`](liminika_core::traits::gateway::ResonantSignalSlice).
     #[must_use]
     pub fn build_fact_anchors_per_layer(
         &self,
@@ -1052,7 +1053,8 @@ impl<'a> DynamicAttractorRecall<'a> {
             .collect()
     }
 
-    /// Materializes per-layer `SubjectivePersona<[i8; 64]>` anchors for [`ResonantSignalSlice`].
+    /// Materializes per-layer `SubjectivePersona<[i8; 64]>` anchors for
+    /// [`ResonantSignalSlice`](liminika_core::traits::gateway::ResonantSignalSlice).
     #[must_use]
     pub fn build_persona_anchors_per_layer(
         &self,
