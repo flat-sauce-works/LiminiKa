@@ -9,7 +9,7 @@
 #include "liminika/gcso_abi.h"
 
 #if defined(_WIN32)
-#include <malloc.h>
+    #include <malloc.h>
 static void* gcso_alloc_aligned(size_t alignment, size_t size) {
     return _aligned_malloc(size, alignment);
 }
