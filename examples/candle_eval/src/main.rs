@@ -4,8 +4,10 @@
 //! Standalone Candle + Safetensors evaluation harness for real-LLM RoPE steering.
 //!
 //! Loads `Phi-4-mini-instruct` (`Phi3ForCausalLM`) via mmaped safetensors, extracts
-//! post-RoPE query representations on `tests/fixtures/gcso_eval_samples.txt` to bake
-//! an in-memory phase profile, and runs an angle-sweep benchmark (`0.00..=0.25 rad`).
+//! per-layer, per-head post-RoPE query representations on
+//! `tests/fixtures/gcso_eval_samples.txt`, computes an in-memory SO(2) phase-delta
+//! profile per `(layer, head, pair)`, and runs an angle-sweep benchmark with
+//! `mean_KL`, target `d_logprob`, keyword hit rates, and sample text outputs.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -72,7 +74,7 @@ impl RotaryCache {
         })
     }
 
-    /// Applies HalfSplit RoPE on `0..rotary_dim` and optional LiminiKa phase steering on `q`.
+    /// Applies HalfSplit RoPE on `0..rotary_dim` and optional per-head LiminiKa steering on `q`.
     fn apply_with_steering(
         &self,
         x: &Tensor,
@@ -139,13 +141,15 @@ impl Phi3Attention {
         self.kv_cache = None;
     }
 
+    /// Forward pass returning attention output and optional `(num_heads * rotary_dim)`
+    /// flattened post-RoPE query vector for the final prompt token.
     fn forward(
         &mut self,
         x: &Tensor,
         rope: &RotaryCache,
         offset: usize,
         steer_cos_sin: Option<(&Tensor, &Tensor)>,
-        collect_q_summary: bool,
+        collect_q_heads: bool,
     ) -> CResult<(Tensor, Option<Vec<f32>>)> {
         let (b, seq_len, _) = x.dims3()?;
         let qkv = self.qkv_proj.forward(x)?;
@@ -171,10 +175,10 @@ impl Phi3Attention {
         let q = rope.apply_with_steering(&q, offset, steer_cos_sin)?;
         let k = rope.apply_with_steering(&k, offset, None)?;
 
-        let q_summary = if collect_q_summary {
+        let q_heads = if collect_q_heads {
             let last_q = q
                 .i((0, .., seq_len - 1, 0..rope.rotary_dim))?
-                .mean(0)?
+                .flatten_all()?
                 .to_dtype(DType::F32)?
                 .to_vec1::<f32>()?;
             Some(last_q)
@@ -205,7 +209,7 @@ impl Phi3Attention {
             .matmul(&v)?
             .transpose(1, 2)?
             .reshape((b, seq_len, q_dim))?;
-        Ok((self.o_proj.forward(&ctx)?, q_summary))
+        Ok((self.o_proj.forward(&ctx)?, q_heads))
     }
 }
 
@@ -285,6 +289,7 @@ struct Phi3Model {
     norm: RmsNorm,
     lm_head: Linear,
     rope: RotaryCache,
+    num_heads: usize,
     device: Device,
     dtype: DType,
 }
@@ -321,6 +326,7 @@ impl Phi3Model {
             norm,
             lm_head,
             rope,
+            num_heads: cfg.num_attention_heads,
             device: dev.clone(),
             dtype,
         })
@@ -336,43 +342,36 @@ impl Phi3Model {
         &mut self,
         tokens: &[u32],
         offset: usize,
-        steer_cos_sin: Option<(&Tensor, &Tensor)>,
-        collect_q_summary: bool,
-    ) -> CResult<(Vec<f32>, Option<Vec<f32>>)> {
+        layer_steers: Option<&[(Tensor, Tensor)]>,
+        collect_q_heads: bool,
+    ) -> CResult<(Vec<f32>, Vec<Vec<f32>>)> {
         let input = Tensor::from_slice(tokens, (1, tokens.len()), &self.device)?;
         let mut h = self.embed_tokens.forward(&input)?;
-        let rot_dim = self.rope.rotary_dim;
-        let mut q_accum = if collect_q_summary {
-            vec![0.0_f32; rot_dim]
+        let mut per_layer_q = if collect_q_heads {
+            Vec::with_capacity(self.layers.len())
         } else {
             Vec::new()
         };
 
-        for layer in &mut self.layers {
+        for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
+            let steer_ref = layer_steers
+                .and_then(|s| s.get(layer_idx))
+                .map(|(c, s)| (c, s));
             let normed = layer.input_layernorm.forward(&h)?;
-            let (attn_out, q_sum) = layer.self_attn.forward(
+            let (attn_out, q_opt) = layer.self_attn.forward(
                 &normed,
                 &self.rope,
                 offset,
-                steer_cos_sin,
-                collect_q_summary,
+                steer_ref,
+                collect_q_heads,
             )?;
-            if let Some(qs) = q_sum {
-                for (d, s) in q_accum.iter_mut().zip(qs.iter()) {
-                    *d += s;
-                }
+            if let Some(q) = q_opt {
+                per_layer_q.push(q);
             }
             h = (h + attn_out)?;
             let post = layer.post_attention_layernorm.forward(&h)?;
             let mlp_out = layer.mlp.forward(&post)?;
             h = (h + mlp_out)?;
-        }
-
-        if collect_q_summary && !self.layers.is_empty() {
-            let inv = 1.0 / self.layers.len() as f32;
-            for v in &mut q_accum {
-                *v *= inv;
-            }
         }
 
         let h = self.norm.forward(&h)?;
@@ -383,34 +382,31 @@ impl Phi3Model {
             .squeeze(0)?
             .to_dtype(DType::F32)?
             .to_vec1::<f32>()?;
-        Ok((
-            logits,
-            if collect_q_summary {
-                Some(q_accum)
-            } else {
-                None
-            },
-        ))
+        Ok((logits, per_layer_q))
     }
 
-    fn make_steer_tensors(
+    /// Builds per-layer `(1, num_heads, 1, half_rot)` cos/sin steering tensors from
+    /// normalized per-layer phase deltas (`[num_layers][num_heads * half_rot]`).
+    fn make_layer_steers(
         &self,
-        profile: &[f32],
+        per_layer_deltas: &[Vec<f32>],
         max_rad: f32,
-    ) -> CResult<Option<(Tensor, Tensor)>> {
+    ) -> CResult<Option<Vec<(Tensor, Tensor)>>> {
         if max_rad <= 0.0 {
             return Ok(None);
         }
         let half = self.rope.rotary_dim / 2;
-        let cos_vals: Vec<f32> = (0..half)
-            .map(|i| (profile[i] * max_rad).cos())
-            .collect();
-        let sin_vals: Vec<f32> = (0..half)
-            .map(|i| (profile[i] * max_rad).sin())
-            .collect();
-        let c = Tensor::from_vec(cos_vals, (1, 1, 1, half), &self.device)?.to_dtype(self.dtype)?;
-        let s = Tensor::from_vec(sin_vals, (1, 1, 1, half), &self.device)?.to_dtype(self.dtype)?;
-        Ok(Some((c, s)))
+        let mut out = Vec::with_capacity(per_layer_deltas.len());
+        for deltas in per_layer_deltas {
+            let cos_vals: Vec<f32> = deltas.iter().map(|&d| (d * max_rad).cos()).collect();
+            let sin_vals: Vec<f32> = deltas.iter().map(|&d| (d * max_rad).sin()).collect();
+            let c = Tensor::from_vec(cos_vals, (1, self.num_heads, 1, half), &self.device)?
+                .to_dtype(self.dtype)?;
+            let s = Tensor::from_vec(sin_vals, (1, self.num_heads, 1, half), &self.device)?
+                .to_dtype(self.dtype)?;
+            out.push((c, s));
+        }
+        Ok(Some(out))
     }
 }
 
@@ -487,6 +483,16 @@ fn kl_div(p_logits: &[f32], q_logits: &[f32]) -> f32 {
         .sum()
 }
 
+fn token_logprob(logits: &[f32], tok_id: u32) -> f32 {
+    let idx = tok_id as usize;
+    if idx >= logits.len() {
+        return 0.0;
+    }
+    let m = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let log_sum_exp = m + logits.iter().map(|&x| (x - m).exp()).sum::<f32>().ln();
+    logits[idx] - log_sum_exp
+}
+
 fn argmax(logits: &[f32]) -> u32 {
     logits
         .iter()
@@ -499,6 +505,78 @@ fn format_phi4_prompt(user_prompt: &str) -> String {
     format!("<|user|>{user_prompt}<|end|><|assistant|>")
 }
 
+/// Computes per-layer, per-head, per-SO(2)-pair normalized phase deltas in `[-1.0, 1.0]`
+/// using `atan2` Procrustes angle between positive (`facts + persona`) and negative (`guards`)
+/// post-RoPE query centroids.
+fn bake_per_layer_procrustes_deltas(
+    model: &mut Phi3Model,
+    tokenizer: &Tokenizer,
+    suite: &FixtureSuite,
+    num_layers: usize,
+    num_heads: usize,
+    rot_dim: usize,
+) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
+    let q_len = num_heads * rot_dim;
+    let half = rot_dim / 2;
+    let mut pos_sum = vec![vec![0.0_f32; q_len]; num_layers];
+    let mut neg_sum = vec![vec![0.0_f32; q_len]; num_layers];
+
+    let pos_count = (suite.facts.len() + suite.persona.len()).max(1) as f32;
+    let neg_count = suite.guards.len().max(1) as f32;
+
+    for text in suite.facts.iter().chain(suite.persona.iter()) {
+        model.clear_cache();
+        let ids = tokenizer
+            .encode(text.as_str(), false)
+            .map_err(|e| format!("encode error: {e}"))?
+            .get_ids()
+            .to_vec();
+        let (_, layer_qs) = model.forward_tokens(&ids, 0, None, true)?;
+        for (l, q) in layer_qs.iter().enumerate() {
+            for (dst, &src) in pos_sum[l].iter_mut().zip(q.iter()) {
+                *dst += src / pos_count;
+            }
+        }
+    }
+
+    for guard in &suite.guards {
+        model.clear_cache();
+        let ids = tokenizer
+            .encode(guard.as_str(), false)
+            .map_err(|e| format!("encode error: {e}"))?
+            .get_ids()
+            .to_vec();
+        let (_, layer_qs) = model.forward_tokens(&ids, 0, None, true)?;
+        for (l, q) in layer_qs.iter().enumerate() {
+            for (dst, &src) in neg_sum[l].iter_mut().zip(q.iter()) {
+                *dst += src / neg_count;
+            }
+        }
+    }
+
+    let inv_pi = std::f32::consts::FRAC_1_PI;
+    let mut per_layer_deltas = Vec::with_capacity(num_layers);
+    for l in 0..num_layers {
+        let mut deltas = Vec::with_capacity(num_heads * half);
+        for h in 0..num_heads {
+            let base = h * rot_dim;
+            for i in 0..half {
+                let px = pos_sum[l][base + i];
+                let py = pos_sum[l][base + half + i];
+                let nx = neg_sum[l][base + i];
+                let ny = neg_sum[l][base + half + i];
+                let cross = nx * py - ny * px;
+                let dot = nx * px + ny * py;
+                let angle = cross.atan2(dot); // [-pi, pi]
+                deltas.push((angle * inv_pi).clamp(-1.0, 1.0));
+            }
+        }
+        per_layer_deltas.push(deltas);
+    }
+
+    Ok(per_layer_deltas)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -506,14 +584,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model_dir = repo_root.join("models/Phi-4-mini-instruct");
     let fixture_path = repo_root.join("tests/fixtures/gcso_eval_samples.txt");
 
-    let cfg: Phi3Config = serde_json::from_str(&std::fs::read_to_string(model_dir.join("config.json"))?)?;
+    let cfg: Phi3Config =
+        serde_json::from_str(&std::fs::read_to_string(model_dir.join("config.json"))?)?;
     let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json"))
         .map_err(|e| format!("tokenizer load error: {e}"))?;
     let suite = load_fixture(&fixture_path)?;
 
     let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
     println!(
-        "LiminiKa Candle Eval | device={:?} | layers={} heads={}/{} head_dim={} rotary_dim={}",
+        "LiminiKa Candle Eval (Per-Layer/Head Procrustes) | device={:?} | layers={} heads={}/{} head_dim={} rotary_dim={}",
         device,
         cfg.num_hidden_layers,
         cfg.num_attention_heads,
@@ -526,44 +605,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut model = Phi3Model::load(&model_dir, &cfg, &device)?;
     println!("Loaded Phi-4-mini-instruct in {:.2?}", t0.elapsed());
 
-    // 1. In-memory bake of phase profile from fixture facts/persona vs guards.
-    let rot_dim = cfg.rotary_dim();
-    let mut accum = vec![0.0_f32; rot_dim];
-    for text in suite.facts.iter().chain(suite.persona.iter()) {
-        model.clear_cache();
-        let ids = tokenizer
-            .encode(text.as_str(), false)
-            .map_err(|e| format!("encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let (_, q_opt) = model.forward_tokens(&ids, 0, None, true)?;
-        if let Some(q) = q_opt {
-            for (d, s) in accum.iter_mut().zip(q.iter()) {
-                *d += s;
-            }
-        }
-    }
-    for guard in &suite.guards {
-        model.clear_cache();
-        let ids = tokenizer
-            .encode(guard.as_str(), false)
-            .map_err(|e| format!("encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let (_, q_opt) = model.forward_tokens(&ids, 0, None, true)?;
-        if let Some(q) = q_opt {
-            for (d, s) in accum.iter_mut().zip(q.iter()) {
-                *d -= 0.5 * s;
-            }
-        }
-    }
-    let max_abs = accum.iter().fold(0.0_f32, |m, &v| m.max(v.abs())).max(1e-6);
-    for v in &mut accum {
-        *v /= max_abs;
-    }
-    println!("Baked in-memory phase profile ({rot_dim} dims). Running angle sweep...");
+    let per_layer_deltas = bake_per_layer_procrustes_deltas(
+        &mut model,
+        &tokenizer,
+        &suite,
+        cfg.num_hidden_layers,
+        cfg.num_attention_heads,
+        cfg.rotary_dim(),
+    )?;
+    println!(
+        "Baked per-layer/head SO(2) Procrustes deltas ({} x {} x {} pairs).",
+        cfg.num_hidden_layers,
+        cfg.num_attention_heads,
+        cfg.rotary_dim() / 2
+    );
 
-    // 2. Angle sweep across probes.
+    // Resolve first expected keyword's leading token id for d_logprob tracking.
+    let mut target_toks: Vec<Option<u32>> = Vec::with_capacity(suite.probes.len());
+    for (_, _, expected, _) in &suite.probes {
+        let tok = expected.first().and_then(|kw| {
+            tokenizer
+                .encode(kw.as_str(), false)
+                .ok()
+                .and_then(|enc| enc.get_ids().first().copied())
+        });
+        target_toks.push(tok);
+    }
+
     let angles = [0.0_f32, 0.05, 0.10, 0.15, 0.25];
     let mut baselines: Vec<Vec<f32>> = Vec::with_capacity(suite.probes.len());
     for (_, prompt, _, _) in &suite.probes {
@@ -579,20 +647,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!(
-        "{:>8} | {:>10} | {:>11} | {:>11}",
-        "max_rad", "mean_KL", "expect_hit", "forbid_hit"
+        "\n{:>8} | {:>10} | {:>12} | {:>11} | {:>11}",
+        "max_rad", "mean_KL", "d_logprob", "expect_hit", "forbid_hit"
     );
+    let mut sample_outputs: Vec<(f32, String, String)> = Vec::new();
+
     for &angle in &angles {
-        let steer = model.make_steer_tensors(&accum, angle)?;
-        let steer_ref = steer.as_ref().map(|(c, s)| (c, s));
+        let steers = model.make_layer_steers(&per_layer_deltas, angle)?;
+        let steer_slice = steers.as_deref();
         let mut sum_kl = 0.0_f32;
+        let mut sum_d_lp = 0.0_f32;
+        let mut d_lp_count = 0_usize;
         let mut exp_hits = 0_usize;
         let mut exp_total = 0_usize;
         let mut forb_hits = 0_usize;
         let mut forb_total = 0_usize;
+        let mut probe1_text = String::new();
+        let mut probe6_text = String::new();
 
-        for ((_, prompt, expected, forbidden), base_logits) in
-            suite.probes.iter().zip(baselines.iter())
+        for (p_idx, ((_, prompt, expected, forbidden), base_logits)) in
+            suite.probes.iter().zip(baselines.iter()).enumerate()
         {
             model.clear_cache();
             let formatted = format_phi4_prompt(prompt);
@@ -601,8 +675,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("encode error: {e}"))?
                 .get_ids()
                 .to_vec();
-            let (mut logits, _) = model.forward_tokens(&ids, 0, steer_ref, false)?;
+            let (mut logits, _) = model.forward_tokens(&ids, 0, steer_slice, false)?;
             sum_kl += kl_div(base_logits, &logits);
+
+            if let Some(tok) = target_toks[p_idx] {
+                sum_d_lp += token_logprob(&logits, tok) - token_logprob(base_logits, tok);
+                d_lp_count += 1;
+            }
 
             let mut gen_ids = Vec::with_capacity(32);
             let mut offset = ids.len();
@@ -612,27 +691,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     break;
                 }
                 gen_ids.push(next);
-                let (next_logits, _) = model.forward_tokens(&[next], offset, steer_ref, false)?;
+                let (next_logits, _) = model.forward_tokens(&[next], offset, steer_slice, false)?;
                 logits = next_logits;
                 offset += 1;
             }
-            let text = tokenizer
+            let raw_text = tokenizer
                 .decode(&gen_ids, true)
-                .map_err(|e| format!("decode error: {e}"))?
-                .to_lowercase();
+                .map_err(|e| format!("decode error: {e}"))?;
+            let clean_text = raw_text.replace('\n', " ");
+            if p_idx == 0 {
+                probe1_text = clean_text.clone();
+            } else if p_idx == 5 {
+                probe6_text = clean_text.clone();
+            }
+
+            let lower = clean_text.to_lowercase();
             exp_hits += expected
                 .iter()
-                .filter(|kw| text.contains(&kw.to_lowercase()))
+                .filter(|kw| lower.contains(&kw.to_lowercase()))
                 .count();
             exp_total += expected.len();
             forb_hits += forbidden
                 .iter()
-                .filter(|kw| text.contains(&kw.to_lowercase()))
+                .filter(|kw| lower.contains(&kw.to_lowercase()))
                 .count();
             forb_total += forbidden.len();
         }
 
+        sample_outputs.push((angle, probe1_text, probe6_text));
+
         let n = suite.probes.len() as f32;
+        let mean_d_lp = if d_lp_count == 0 {
+            0.0
+        } else {
+            sum_d_lp / d_lp_count as f32
+        };
         let eh = if exp_total == 0 {
             0.0
         } else {
@@ -643,7 +736,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             forb_hits as f32 / forb_total as f32 * 100.0
         };
-        println!("{angle:>8.2} | {:>10.4} | {eh:>10.1}% | {fh:>10.1}%", sum_kl / n);
+        println!(
+            "{angle:>8.2} | {:>10.4} | {mean_d_lp:>+12.4} | {eh:>10.1}% | {fh:>10.1}%",
+            sum_kl / n
+        );
+    }
+
+    println!("\n--- Sample Generated Outputs (Probe 1 [FACT] & Probe 6 [PERSONA]) ---");
+    for (angle, p1, p6) in sample_outputs {
+        println!("[{angle:.2} rad] P1: {p1}");
+        println!("[{angle:.2} rad] P6: {p6}");
     }
 
     Ok(())
