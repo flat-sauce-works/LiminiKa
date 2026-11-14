@@ -4,6 +4,7 @@
 //! Core SWAR/AVX2 RoPE rotation, RIPA, SLERP, Procrustes, and Bayesian attention helpers.
 
 use super::*;
+use crate::traits::branchless::atan2_to_q7_word_x8_simd;
 
 /// Computes the RIPA / PSPM upper low-frequency rotation dimension
 /// `rot_dim = ((head_dim / 4) & !1).max(2)` (even integer in `2..=head_dim`).
@@ -1777,6 +1778,104 @@ pub(super) fn apply_ripa_single_slice_core(
             };
             rotate_ripa_upper_slice(&mut head_buf[upper_off..], sin_t, cos_t);
         }
+    }
+}
+
+/// Rotates strictly the upper low-frequency quarter (`rot_pairs = ripa_upper_rot_dim(rotary_dim) / 2`)
+/// of a HalfSplit (NeoX) tensor `t_slice` across `num_heads` heads of stride `head_dim`, leaving
+/// non-RoPE dimensions `[rotary_dim .. head_dim]` untouched.
+#[inline(never)]
+pub(super) fn apply_ripa_half_split_slice_core(
+    t_slice: &mut [f32],
+    p_slice: &[gcso_q7_t],
+    head_dim: usize,
+    rotary_dim: usize,
+    num_heads: usize,
+    max_rad: f32,
+) {
+    let half_rot = rotary_dim >> 1;
+    let rot_pairs = (ripa_upper_rot_dim(rotary_dim) >> 1).min(half_rot);
+    let start = half_rot - rot_pairs;
+    let total_len = num_heads * head_dim;
+    let t_slice = &mut t_slice[..total_len];
+    let p_slice = &p_slice[..num_heads];
+    let (is_default, eff_max, q7_to_norm_scale) = resolve_ripa_norm_params(max_rad);
+
+    let mut cached_q7: i32 = i32::MIN;
+    let mut cached_sincos = (0.0_f32, 1.0_f32);
+    for (head_buf, &raw_q7) in t_slice.chunks_exact_mut(head_dim).zip(p_slice.iter()) {
+        let q7_i32 = i32::from(raw_q7);
+        let (sin_t, cos_t) = if q7_i32 == cached_q7 {
+            cached_sincos
+        } else {
+            let sc = if is_default {
+                Q7_DEFAULT_RIPA_SINCOS_REF[raw_q7 as u8 as usize]
+            } else {
+                branchless_sincos_q7_ripa_preinv(raw_q7, eff_max, q7_to_norm_scale)
+            };
+            cached_q7 = q7_i32;
+            cached_sincos = sc;
+            sc
+        };
+        if sin_t == 0.0 && cos_t == 1.0 {
+            continue;
+        }
+        let (h1, h2) = head_buf[..rotary_dim].split_at_mut(half_rot);
+        let x1 = &mut h1[start..half_rot];
+        let x2 = &mut h2[start..half_rot];
+        for (a, b) in x1.iter_mut().zip(x2.iter_mut()) {
+            let va = *a;
+            let vb = *b;
+            *a = va.mul_add(cos_t, -vb * sin_t);
+            *b = va.mul_add(sin_t, vb * cos_t);
+        }
+    }
+}
+
+/// Computes per-head Q7 Procrustes phase deltas directly on HalfSplit `(x[i], x[i + rotary_dim/2])`
+/// slices of stride `head_dim` without intermediate layout conversion.
+#[inline(never)]
+pub(super) fn procrustes_q7_half_split_slice(
+    src_slice: &[f32],
+    tgt_slice: &[f32],
+    head_dim: usize,
+    rotary_dim: usize,
+    num_heads: usize,
+    phases_out: &mut [gcso_q7_t],
+) {
+    let limit_heads = num_heads.min(MAX_ATTENTION_HEADS).min(phases_out.len());
+    let half_rot = rotary_dim >> 1;
+    let mut h_base = 0usize;
+    while h_base < limit_heads {
+        let cell_heads = (limit_heads - h_base).min(8);
+        let mut sin_arr = [0.0_f32; 8];
+        let mut cos_arr = [0.0_f32; 8];
+        let mut lane = 0usize;
+        while lane < cell_heads {
+            let base = (h_base + lane) * head_dim;
+            let s1 = &src_slice[base..base + half_rot];
+            let s2 = &src_slice[base + half_rot..base + rotary_dim];
+            let t1 = &tgt_slice[base..base + half_rot];
+            let t2 = &tgt_slice[base + half_rot..base + rotary_dim];
+            let mut sum_cos = 0.0_f32;
+            let mut sum_sin = 0.0_f32;
+            for i in 0..half_rot {
+                sum_cos += s1[i].mul_add(t1[i], s2[i] * t2[i]);
+                sum_sin += s1[i].mul_add(t2[i], -s2[i] * t1[i]);
+            }
+            cos_arr[lane] = sum_cos;
+            sin_arr[lane] = sum_sin;
+            lane += 1;
+        }
+        let word = atan2_to_q7_word_x8_simd(&sin_arr, &cos_arr);
+        let mut w = word;
+        let mut out_lane = 0usize;
+        while out_lane < cell_heads {
+            phases_out[h_base + out_lane] = (w & 0xFF) as gcso_q7_t;
+            w >>= 8;
+            out_lane += 1;
+        }
+        h_base += cell_heads;
     }
 }
 

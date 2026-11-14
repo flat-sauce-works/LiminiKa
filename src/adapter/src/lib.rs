@@ -192,31 +192,6 @@ impl AlignedQ7Buffer16 {
     }
 }
 
-/// Converts `(num_heads * rot_dim)` from HalfSplit `(x[i], x[i + rot_dim/2])`
-/// into Interleaved `(x[2i], x[2i + 1])`.
-pub fn half_split_to_interleaved(src: &[f32], dst: &mut [f32], num_heads: usize, rot_dim: usize) {
-    let half = rot_dim / 2;
-    for h in 0..num_heads {
-        let base = h * rot_dim;
-        for i in 0..half {
-            dst[base + 2 * i] = src[base + i];
-            dst[base + 2 * i + 1] = src[base + half + i];
-        }
-    }
-}
-
-/// Converts `(num_heads * rot_dim)` from Interleaved back to HalfSplit.
-pub fn interleaved_to_half_split(src: &[f32], dst: &mut [f32], num_heads: usize, rot_dim: usize) {
-    let half = rot_dim / 2;
-    for h in 0..num_heads {
-        let base = h * rot_dim;
-        for i in 0..half {
-            dst[base + i] = src[base + 2 * i];
-            dst[base + half + i] = src[base + 2 * i + 1];
-        }
-    }
-}
-
 /// Unified model-connection and optimization adapter over [`liminika_core`].
 ///
 /// Bridges a target LLM's [`RopeGeometry`] to [`PhaseSteeringEngine`],
@@ -297,26 +272,8 @@ impl ModelSteeringAdapter {
 
         let mut neg_buf = AlignedF32Buffer32::new_zeroed(expected);
         let mut pos_buf = AlignedF32Buffer32::new_zeroed(expected);
-        match self.geometry.layout {
-            RopeLayout::HalfSplit => {
-                half_split_to_interleaved(
-                    neg_q_rot,
-                    neg_buf.as_mut_slice(),
-                    self.geometry.num_q_heads,
-                    self.geometry.rotary_dim,
-                );
-                half_split_to_interleaved(
-                    pos_q_rot,
-                    pos_buf.as_mut_slice(),
-                    self.geometry.num_q_heads,
-                    self.geometry.rotary_dim,
-                );
-            }
-            RopeLayout::Interleaved => {
-                neg_buf.as_mut_slice().copy_from_slice(neg_q_rot);
-                pos_buf.as_mut_slice().copy_from_slice(pos_q_rot);
-            }
-        }
+        neg_buf.as_mut_slice().copy_from_slice(neg_q_rot);
+        pos_buf.as_mut_slice().copy_from_slice(pos_q_rot);
 
         let src_aligned = AlignedSlice32::new(neg_buf.as_slice())
             .map_err(|e| format!("AlignedSlice32 src error: {e}"))?;
@@ -326,9 +283,21 @@ impl ModelSteeringAdapter {
         {
             let mut q7_mut = AlignedSliceMut16::new(q7_buf.as_mut_slice())
                 .map_err(|e| format!("AlignedSliceMut16 error: {e}"))?;
-            self.phase_engine
-                .compute_procrustes_phase_delta(&src_aligned, &dst_aligned, &mut q7_mut)
-                .map_err(|e| format!("compute_procrustes_phase_delta error: {e}"))?;
+            match self.geometry.layout {
+                RopeLayout::HalfSplit => self
+                    .phase_engine
+                    .compute_procrustes_phase_delta_half_split(
+                        &src_aligned,
+                        &dst_aligned,
+                        self.geometry.rotary_dim,
+                        &mut q7_mut,
+                    )
+                    .map_err(|e| format!("compute_procrustes_phase_delta_half_split error: {e}"))?,
+                RopeLayout::Interleaved => self
+                    .phase_engine
+                    .compute_procrustes_phase_delta(&src_aligned, &dst_aligned, &mut q7_mut)
+                    .map_err(|e| format!("compute_procrustes_phase_delta error: {e}"))?,
+            }
         }
 
         Ok(q7_buf.as_slice().to_vec())
@@ -369,19 +338,7 @@ impl ModelSteeringAdapter {
         }
 
         let mut work_buf = AlignedF32Buffer32::new_zeroed(expected);
-        match self.geometry.layout {
-            RopeLayout::HalfSplit => {
-                half_split_to_interleaved(
-                    q_rot_inout,
-                    work_buf.as_mut_slice(),
-                    self.geometry.num_q_heads,
-                    self.geometry.rotary_dim,
-                );
-            }
-            RopeLayout::Interleaved => {
-                work_buf.as_mut_slice().copy_from_slice(q_rot_inout);
-            }
-        }
+        work_buf.as_mut_slice().copy_from_slice(q_rot_inout);
 
         let q7_buf = AlignedQ7Buffer16::from_slice(q7_deltas);
         let q7_aligned = AlignedSlice16::new(q7_buf.as_slice())
@@ -389,24 +346,24 @@ impl ModelSteeringAdapter {
         {
             let mut tensor_mut = AlignedSliceMut32::new(work_buf.as_mut_slice())
                 .map_err(|e| format!("AlignedSliceMut32 error: {e}"))?;
-            self.phase_engine
-                .apply_phase_steering_safe(&mut tensor_mut, &q7_aligned, max_rad)
-                .map_err(|e| format!("apply_phase_steering_safe error: {e}"))?;
+            match self.geometry.layout {
+                RopeLayout::HalfSplit => self
+                    .phase_engine
+                    .apply_phase_steering_half_split_safe(
+                        &mut tensor_mut,
+                        &q7_aligned,
+                        self.geometry.rotary_dim,
+                        max_rad,
+                    )
+                    .map_err(|e| format!("apply_phase_steering_half_split_safe error: {e}"))?,
+                RopeLayout::Interleaved => self
+                    .phase_engine
+                    .apply_phase_steering_safe(&mut tensor_mut, &q7_aligned, max_rad)
+                    .map_err(|e| format!("apply_phase_steering_safe error: {e}"))?,
+            }
         }
 
-        match self.geometry.layout {
-            RopeLayout::HalfSplit => {
-                interleaved_to_half_split(
-                    work_buf.as_slice(),
-                    q_rot_inout,
-                    self.geometry.num_q_heads,
-                    self.geometry.rotary_dim,
-                );
-            }
-            RopeLayout::Interleaved => {
-                q_rot_inout.copy_from_slice(work_buf.as_slice());
-            }
-        }
+        q_rot_inout.copy_from_slice(work_buf.as_slice());
 
         Ok(())
     }

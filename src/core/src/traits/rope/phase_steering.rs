@@ -979,6 +979,44 @@ pub trait PhaseSteering: BranchlessKernel {
         self.apply_phase_steering_safe_aligned::<32>(tensor, phase_deltas, max_rad)
     }
 
+    /// Applies RIPA-bounded phase steering directly to a **HalfSplit (NeoX)** tensor
+    /// (`(x[i], x[i + rotary_dim / 2])`) with optional partial-RoPE boundary `rotary_dim <= head_dim`,
+    /// eliminating layout conversion copies on the hot path.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `max_rad <= 0.0`, `rotary_dim` is invalid,
+    /// or slice lengths are insufficient.
+    #[inline(always)]
+    fn apply_phase_steering_half_split_safe(
+        &self,
+        tensor: &mut AlignedSliceMut32<'_, f32>,
+        phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
+        rotary_dim: usize,
+        max_rad: f32,
+    ) -> GcsoResult<()> {
+        if max_rad <= 0.0 || !branchless_is_finite_f32(max_rad) {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let (head_dim, num_heads, expected_len) = self.validate_head_layout()?;
+        if rotary_dim < 2
+            || (rotary_dim & 1) != 0
+            || rotary_dim > head_dim
+            || tensor.len() < expected_len
+            || phase_deltas.len() < num_heads
+        {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        apply_ripa_half_split_slice_core(
+            tensor.as_mut_slice(),
+            phase_deltas.as_slice(),
+            head_dim,
+            rotary_dim,
+            num_heads,
+            max_rad,
+        );
+        Ok(())
+    }
+
     /// Applies **Seam-Free $S^1$ Geodesic-Folded RIPA Phase Steering** to the upper $d_{\mathrm{head}}/4$
     /// low-frequency channels of a single 32B-aligned tensor.
     ///
@@ -2216,6 +2254,40 @@ pub trait PhaseSteering: BranchlessKernel {
             source_tensor.as_slice(),
             target_tensor.as_slice(),
             head_dim,
+            num_heads,
+            phase_deltas_out.as_mut_slice(),
+        );
+        Ok(())
+    }
+
+    /// Computes per-head Q7 Procrustes phase deltas directly on **HalfSplit (NeoX)** tensors
+    /// (`(x[i], x[i + rotary_dim / 2])`) with partial-RoPE boundary `rotary_dim <= head_dim`.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `rotary_dim` is invalid or slice lengths are insufficient.
+    #[inline]
+    fn compute_procrustes_phase_delta_half_split(
+        &self,
+        source_tensor: &AlignedSlice32<'_, f32>,
+        target_tensor: &AlignedSlice32<'_, f32>,
+        rotary_dim: usize,
+        phase_deltas_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
+    ) -> GcsoResult<()> {
+        let (head_dim, num_heads, expected_len) = self.validate_head_layout()?;
+        if rotary_dim < 2
+            || (rotary_dim & 1) != 0
+            || rotary_dim > head_dim
+            || source_tensor.len() < expected_len
+            || target_tensor.len() < expected_len
+            || phase_deltas_out.len() < num_heads
+        {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        procrustes_q7_half_split_slice(
+            source_tensor.as_slice(),
+            target_tensor.as_slice(),
+            head_dim,
+            rotary_dim,
             num_heads,
             phase_deltas_out.as_mut_slice(),
         );
