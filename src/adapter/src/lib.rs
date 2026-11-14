@@ -1153,7 +1153,8 @@ impl RecallBoundaryGate for CoherenceGuardGate {
         metrics: &RecallBoundaryMetrics,
         policy: &RecallPolicy,
     ) -> RecallGateDecision {
-        if metrics.top1_fact_score < policy.min_coherence
+        let best_positive = metrics.top1_fact_score.max(metrics.top1_persona_score);
+        if best_positive < policy.min_coherence
             || metrics.guard_conflict_margin > policy.guard_suppress_margin
         {
             RecallGateDecision {
@@ -3088,5 +3089,29 @@ mod tests {
                 panic!("expected Rebaked for mismatched geometry");
             }
         }
+    }
+
+    #[test]
+    fn coherence_guard_gate_allows_strong_persona_without_fact_match() {
+        let gate = CoherenceGuardGate;
+        let policy = RecallPolicy {
+            min_coherence: 0.16,
+            boundary_margin: 0.05,
+            guard_suppress_margin: 0.0,
+            top_k_facts: 2,
+            top_k_personas: 1,
+        };
+        let decision = gate.evaluate(
+            &RecallBoundaryMetrics {
+                top1_fact_score: 0.088,
+                top2_fact_score: 0.060,
+                top1_persona_score: 0.240,
+                max_guard_score: 0.100,
+                guard_conflict_margin: -0.140,
+            },
+            &policy,
+        );
+        assert!(!decision.suppress_fact_injection);
+        assert_ne!(decision.void_state, VoidBoundaryState::CvoidEmptySpace);
     }
 }
