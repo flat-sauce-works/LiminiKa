@@ -618,7 +618,8 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_w
  * @param query_tensor 32-byte aligned query tensor buffer.
  * @param fact_phases Q7 phase array for ObjectiveFact (16-byte aligned, length >= num_heads).
  * @param fact_energy ObjectiveFact base energy.
- * @param persona_phases Q7 phase array for SubjectivePersona (16-byte aligned, length >= num_heads).
+ * @param persona_phases Q7 phase array for SubjectivePersona (16-byte aligned, length >=
+ * num_heads).
  * @param persona_energy SubjectivePersona base energy.
  * @param trail_inout 128-byte aligned pointer trail state updated in-place.
  * @param config 16-byte aligned runtime configuration carrying RoPE geometry.

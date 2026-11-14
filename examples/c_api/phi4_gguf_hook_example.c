@@ -148,8 +148,8 @@ int main(void) {
         persona_deltas[h] = (gcso_q7_t)(-8);
     }
 
-    status = gcso_dpsr_steer_with_gateway_and_config_safe(
-        q_after, phase_deltas, 2.5f, persona_deltas, 1.8f, trail, &cfg);
+    status = gcso_dpsr_steer_with_gateway_and_config_safe(q_after, phase_deltas, 2.5f,
+                                                          persona_deltas, 1.8f, trail, &cfg);
     if (status != GCSO_SUCCESS) {
         fprintf(stderr, "gcso_dpsr_steer_with_gateway_and_config_safe failed: %d\n", (int)status);
         gcso_free_aligned(trail);
