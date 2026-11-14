@@ -9,7 +9,10 @@ use std::time::Instant;
 
 use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor, D};
 use candle_nn::{linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
-use liminika_adapter::{ModelSteeringAdapter, RopeGeometry, RopeLayout};
+use liminika_adapter::{
+    AttractorRole, ModelSteeringAdapter, RopeGeometry, RopeLayout, TextAttractorCorpus,
+    VoidBoundaryState,
+};
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::traits::gateway::{
     GuardPhaseAnchor, ObjectiveFact, ResonantSignalSlice, SubjectivePersona,
@@ -317,12 +320,13 @@ impl Phi3Attention {
         let k = rope.apply_with_adapter(&k, offset, None)?;
 
         let q_heads = if collect_q_heads {
-            let last_q = q
-                .i((0, .., seq_len - 1, 0..rope.rotary_dim))?
+            let mean_q = q
+                .i((0, .., .., 0..rope.rotary_dim))?
+                .mean(1)?
                 .flatten_all()?
                 .to_dtype(DType::F32)?
                 .to_vec1::<f32>()?;
-            Some(last_q)
+            Some(mean_q)
         } else {
             None
         };
@@ -1341,6 +1345,203 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     }
+
+    // Step 2: Online Natural-Language -> Attractor Corpus & cvoid Boundary Evaluation
+    println!("\n=== Step 2: Natural-Language Attractor Corpus & cvoid Boundary Eval ===");
+    adapter.set_layer_rope_mask(0xFFFF_0000);
+    let mut corpus = TextAttractorCorpus::new();
+    let neg_slices_ref: Vec<&[f32]> = baked.neg_sum.iter().map(Vec::as_slice).collect();
+    for (role, texts, energy) in [
+        (AttractorRole::Fact, suite.facts.as_slice(), 2.5_f32),
+        (AttractorRole::Persona, suite.persona.as_slice(), 1.5_f32),
+        (AttractorRole::Guard, suite.guards.as_slice(), 2.0_f32),
+    ] {
+        for text in texts {
+            model.clear_cache();
+            let ids = tokenizer
+                .encode(text.as_str(), false)
+                .map_err(|e| format!("encode error: {e}"))?
+                .get_ids()
+                .to_vec();
+            let (_, layer_qs, _) = model
+                .forward_tokens(&ids, 0, None, None, None, None, 0.0, None, None, false, true)?;
+            let q_refs: Vec<&[f32]> = layer_qs.iter().map(Vec::as_slice).collect();
+            corpus.ingest_text_activations(&adapter, role, text, &q_refs, &neg_slices_ref, energy)?;
+        }
+    }
+    println!(
+        "Compiled {} natural-language attractors into TextAttractorCorpus.",
+        corpus.entries().len()
+    );
+
+    let mut step2_exp_hits = 0_usize;
+    let mut step2_exp_total = 0_usize;
+    let mut step2_forb_hits = 0_usize;
+    let mut step2_forb_total = 0_usize;
+    let mut eval_items: Vec<(String, String, Vec<String>, Vec<String>)> = suite.probes.clone();
+    eval_items.push((
+        "CVOID".to_string(),
+        "What is the boiling point of water at standard sea-level pressure?".to_string(),
+        vec!["100".to_string()],
+        vec!["GCSO".to_string(), "ZiMMS".to_string()],
+    ));
+
+    for (idx, (slot, prompt, expected, forbidden)) in eval_items.iter().enumerate() {
+        model.clear_cache();
+        let q_ids = tokenizer
+            .encode(prompt.as_str(), false)
+            .map_err(|e| format!("encode error: {e}"))?
+            .get_ids()
+            .to_vec();
+        let (_, query_qs, _) = model.forward_tokens(
+            &q_ids, 0, None, None, None, None, 0.0, None, None, false, true,
+        )?;
+        let q_refs: Vec<&[f32]> = query_qs.iter().map(Vec::as_slice).collect();
+        let recall =
+            corpus.recall_for_query(&adapter, &q_refs, &neg_slices_ref, 2, 1, 0.35, 0.03)?;
+
+        let recalled_ctx: String = recall
+            .recalled_facts
+            .iter()
+            .map(|(e, _)| e.text.as_str())
+            .chain(recall.recalled_personas.iter().map(|(e, _)| e.text.as_str()))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let active_prompt = if matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace)
+            || recall.guard_conflict_margin > 0.05
+            || recalled_ctx.is_empty()
+        {
+            format_phi4_prompt(prompt)
+        } else {
+            format_phi4_prompt(&format!("[Context: {recalled_ctx}]\n{prompt}"))
+        };
+
+        model.clear_cache();
+        adapter.reset_action_hub_stats();
+        let mut trail = gcso_pointer_trail_t::default();
+        let ids = tokenizer
+            .encode(active_prompt.as_str(), false)
+            .map_err(|e| format!("encode error: {e}"))?
+            .get_ids()
+            .to_vec();
+
+        let dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
+        let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);
+        let use_steer = !matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace)
+            && !dyn_facts.is_empty();
+        let res_ctx = if use_steer {
+            Some((
+                dyn_facts.as_slice(),
+                dyn_personas.as_slice(),
+                baked.guard_anchors_per_layer.as_slice(),
+                baked.neg_sum.as_slice(),
+                baked.pos_sum.as_slice(),
+            ))
+        } else {
+            None
+        };
+        let rope_rad = if use_steer { -2.00 } else { 0.00 };
+        let srl_arg = if use_steer {
+            Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), -1.00))
+        } else {
+            None
+        };
+
+        let (mut logits, _, _) = model.forward_tokens(
+            &ids,
+            0,
+            Some(&mut adapter),
+            Some(baked.fact_q7.as_slice()),
+            Some(baked.persona_q7.as_slice()),
+            res_ctx,
+            rope_rad,
+            Some(&mut trail),
+            srl_arg,
+            use_steer,
+            false,
+        )?;
+
+        let mut gen_ids = Vec::with_capacity(48);
+        let mut offset = ids.len();
+        for _ in 0..48 {
+            let next = argmax(&logits);
+            if next == 199999 {
+                break;
+            }
+            gen_ids.push(next);
+            let (next_logits, _, _) = model.forward_tokens(
+                &[next],
+                offset,
+                Some(&mut adapter),
+                Some(baked.fact_q7.as_slice()),
+                Some(baked.persona_q7.as_slice()),
+                res_ctx,
+                rope_rad,
+                Some(&mut trail),
+                srl_arg,
+                use_steer,
+                false,
+            )?;
+            logits = next_logits;
+            offset += 1;
+        }
+        let text = tokenizer
+            .decode(&gen_ids, true)
+            .map_err(|e| format!("decode error: {e}"))?
+            .replace('\n', " ");
+        let lower = text.to_lowercase();
+        let p_exp = expected
+            .iter()
+            .filter(|kw| lower.contains(&kw.to_lowercase()))
+            .count();
+        let p_forb = forbidden
+            .iter()
+            .filter(|kw| lower.contains(&kw.to_lowercase()))
+            .count();
+        if idx < suite.probes.len() {
+            step2_exp_hits += p_exp;
+            step2_exp_total += expected.len();
+            step2_forb_hits += p_forb;
+            step2_forb_total += forbidden.len();
+        }
+        let top_fact_preview = recall
+            .recalled_facts
+            .first()
+            .map(|(e, _)| format!("#{}", e.anchor_id))
+            .unwrap_or_else(|| "none".to_string());
+        println!(
+            "  [S2:{}:{}] void={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} hit={}/{} forb={} => {}",
+            idx + 1,
+            slot,
+            recall.void_state,
+            recall.top1_fact_score,
+            recall.top2_fact_score,
+            recall.guard_conflict_margin,
+            top_fact_preview,
+            p_exp,
+            expected.len(),
+            p_forb,
+            text
+        );
+    }
+    println!(
+        "Step 2 Dynamic Corpus Summary: expect_hit={:.1}% ({}/{}) forbid_hit={:.1}% ({}/{})",
+        if step2_exp_total == 0 {
+            0.0
+        } else {
+            step2_exp_hits as f32 / step2_exp_total as f32 * 100.0
+        },
+        step2_exp_hits,
+        step2_exp_total,
+        if step2_forb_total == 0 {
+            0.0
+        } else {
+            step2_forb_hits as f32 / step2_forb_total as f32 * 100.0
+        },
+        step2_forb_hits,
+        step2_forb_total,
+    );
 
     Ok(())
 }

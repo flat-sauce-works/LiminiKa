@@ -18,8 +18,9 @@ use liminika_core::traits::aligned::{
 use liminika_core::traits::gateway::{
     ActionHubGatewayExt, AdaptiveThresholdPolicy, CausalProvenanceReport, GatewayFrame,
     GatewayPhaseSteeringExt, GatewaySrlSteeringExt, ManifoldGatewaySignal, ManifoldProbeBaseline,
-    StigmergicThresholdPolicy, SystemConstraint,
+    ObjectiveFact, StigmergicThresholdPolicy, SubjectivePersona, SystemConstraint,
 };
+use liminika_core::traits::primitives::MAX_ATTENTION_HEADS;
 use liminika_core::traits::rope::{
     PhaseSteeringGeometryExt, RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget,
 };
@@ -975,6 +976,291 @@ impl ModelSteeringAdapter {
     }
 }
 
+/// Semantic origin role of a natural-language text attractor inside [`TextAttractorCorpus`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttractorRole {
+    /// Factual / declarative knowledge chunk (`ObjectiveFact` origin).
+    Fact,
+    /// Stylistic / behavioral / personality log (`SubjectivePersona` origin).
+    Persona,
+    /// Contrastive / negative guard boundary (`ContradictionGuard` origin).
+    Guard,
+}
+
+/// Geometric classification of a query's position relative to the compiled attractor manifold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoidBoundaryState {
+    /// Query clearly resides inside a resonant attractor basin.
+    InsideBasin,
+    /// Query sits on the `cvoid` / liminal boundary between two competing attractors.
+    LiminalBoundary,
+    /// Query falls in empty ungrounded space (`cvoid`) below minimum resonance; avoid forced steering.
+    CvoidEmptySpace,
+}
+
+/// Single natural-language-backed attractor entry compiled for the active model's RoPE manifold.
+#[derive(Debug, Clone)]
+pub struct TextAttractorEntry {
+    /// Unique stable anchor identifier (`1..`).
+    pub anchor_id: u32,
+    /// Origin role (`Fact`, `Persona`, or `Guard`).
+    pub role: AttractorRole,
+    /// Lightweight natural-language source text (reproducible source of truth).
+    pub text: String,
+    /// Per-layer 64-head Q7 phase signatures (`num_layers` entries).
+    pub per_layer_q7: Vec<[gcso_q7_t; MAX_ATTENTION_HEADS]>,
+    /// Base gravitational pull energy for gateway composition.
+    pub energy: f32,
+}
+
+/// Dynamic top-K recall result from [`TextAttractorCorpus::recall_for_query`].
+#[derive(Debug, Clone)]
+pub struct DynamicAttractorRecall<'a> {
+    /// Whether the query landed inside a basin, on a liminal boundary, or in `cvoid` empty space.
+    pub void_state: VoidBoundaryState,
+    /// Highest geometric resonance score among Fact attractors.
+    pub top1_fact_score: f32,
+    /// Second-highest geometric resonance score among Fact attractors.
+    pub top2_fact_score: f32,
+    /// Highest Guard resonance minus highest Fact resonance (`> 0` indicates guard-dominant conflict).
+    pub guard_conflict_margin: f32,
+    /// Top-K recalled Fact entries (empty when `void_state == CvoidEmptySpace`).
+    pub recalled_facts: Vec<(&'a TextAttractorEntry, f32)>,
+    /// Top-K recalled Persona entries.
+    pub recalled_personas: Vec<(&'a TextAttractorEntry, f32)>,
+}
+
+impl<'a> DynamicAttractorRecall<'a> {
+    /// Materializes per-layer `ObjectiveFact<[i8; 64]>` anchors for [`ResonantSignalSlice`].
+    #[must_use]
+    pub fn build_fact_anchors_per_layer(
+        &self,
+        num_layers: usize,
+    ) -> Vec<Vec<ObjectiveFact<[gcso_q7_t; MAX_ATTENTION_HEADS]>>> {
+        (0..num_layers)
+            .map(|l| {
+                self.recalled_facts
+                    .iter()
+                    .filter_map(|(entry, score)| {
+                        entry.per_layer_q7.get(l).map(|&arr| {
+                            let scaled_e = (entry.energy * score.clamp(0.25, 1.25)).max(0.25);
+                            ObjectiveFact::new(arr, scaled_e, 0, entry.anchor_id)
+                        })
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Materializes per-layer `SubjectivePersona<[i8; 64]>` anchors for [`ResonantSignalSlice`].
+    #[must_use]
+    pub fn build_persona_anchors_per_layer(
+        &self,
+        num_layers: usize,
+    ) -> Vec<Vec<SubjectivePersona<[gcso_q7_t; MAX_ATTENTION_HEADS]>>> {
+        (0..num_layers)
+            .map(|l| {
+                self.recalled_personas
+                    .iter()
+                    .filter_map(|(entry, score)| {
+                        entry.per_layer_q7.get(l).map(|&arr| {
+                            let scaled_e = (entry.energy * score.clamp(0.25, 1.25)).max(0.25);
+                            SubjectivePersona::new(arr, scaled_e, 0, entry.anchor_id)
+                        })
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+}
+
+/// Model-agnostic Cold-Path corpus that compiles natural-language logs, facts, personas, and
+/// contrastive guards into a dynamic attractor manifold with explicit `cvoid` boundary detection.
+#[derive(Debug, Default, Clone)]
+pub struct TextAttractorCorpus {
+    entries: Vec<TextAttractorEntry>,
+    next_anchor_id: u32,
+}
+
+impl TextAttractorCorpus {
+    /// Creates an empty [`TextAttractorCorpus`].
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            next_anchor_id: 1,
+        }
+    }
+
+    /// Returns all stored attractor entries.
+    #[must_use]
+    pub fn entries(&self) -> &[TextAttractorEntry] {
+        &self.entries
+    }
+
+    /// Compiles and appends a single natural-language text chunk into the attractor corpus using
+    /// the active model's `adapter` and per-layer baseline reference activations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `per_layer_q.len() != baseline_ref_per_layer.len()` or any layer slice
+    /// mismatches `adapter.geometry().q_rot_len()`.
+    pub fn ingest_text_activations(
+        &mut self,
+        adapter: &ModelSteeringAdapter,
+        role: AttractorRole,
+        text: impl Into<String>,
+        per_layer_q: &[&[f32]],
+        baseline_ref_per_layer: &[&[f32]],
+        energy: f32,
+    ) -> Result<u32, String> {
+        if per_layer_q.len() != baseline_ref_per_layer.len() {
+            return Err(format!(
+                "layer count mismatch: per_layer_q={}, baseline={}",
+                per_layer_q.len(),
+                baseline_ref_per_layer.len()
+            ));
+        }
+        let mut per_layer_q7 = Vec::with_capacity(per_layer_q.len());
+        for (q, r) in per_layer_q.iter().zip(baseline_ref_per_layer.iter()) {
+            let q7 = adapter.bake_layer_procrustes_q7(r, q)?;
+            let mut arr64 = [0i8; MAX_ATTENTION_HEADS];
+            let n = q7.len().min(MAX_ATTENTION_HEADS);
+            arr64[..n].copy_from_slice(&q7[..n]);
+            per_layer_q7.push(arr64);
+        }
+        let id = self.next_anchor_id;
+        self.next_anchor_id = self.next_anchor_id.saturating_add(1);
+        self.entries.push(TextAttractorEntry {
+            anchor_id: id,
+            role,
+            text: text.into(),
+            per_layer_q7,
+            energy: energy.max(0.1),
+        });
+        Ok(id)
+    }
+
+    /// Re-bakes or scores a query's per-layer Q activations against the corpus purely via
+    /// steered-layer active-head geometric cosine similarity (zero keyword heuristics),
+    /// returning top-K recalled attractors and the query's [`VoidBoundaryState`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if query/baseline layer slices mismatch `adapter.geometry()`.
+    pub fn recall_for_query(
+        &self,
+        adapter: &ModelSteeringAdapter,
+        query_per_layer_q: &[&[f32]],
+        baseline_ref_per_layer: &[&[f32]],
+        top_k_facts: usize,
+        top_k_personas: usize,
+        min_coherence: f32,
+        boundary_margin: f32,
+    ) -> Result<DynamicAttractorRecall<'_>, String> {
+        if query_per_layer_q.len() != baseline_ref_per_layer.len() {
+            return Err(format!(
+                "query/baseline layer mismatch: {} vs {}",
+                query_per_layer_q.len(),
+                baseline_ref_per_layer.len()
+            ));
+        }
+        let geom = adapter.geometry();
+        let active_heads = geom.num_q_heads.min(MAX_ATTENTION_HEADS);
+        let mut steered_layers = Vec::new();
+        let mut query_q7s = Vec::new();
+        for (l, (q, r)) in query_per_layer_q
+            .iter()
+            .zip(baseline_ref_per_layer.iter())
+            .enumerate()
+        {
+            if !geom.is_rope_layer(l) {
+                continue;
+            }
+            let q7 = adapter.bake_layer_procrustes_q7(r, q)?;
+            steered_layers.push(l);
+            query_q7s.push(q7);
+        }
+
+        let mut fact_scores: Vec<(&TextAttractorEntry, f32)> = Vec::new();
+        let mut persona_scores: Vec<(&TextAttractorEntry, f32)> = Vec::new();
+        let mut max_guard_score = -1.0_f32;
+
+        for entry in &self.entries {
+            let mut sum_cos = 0.0_f64;
+            let mut count = 0_usize;
+            for (&l, q7) in steered_layers.iter().zip(query_q7s.iter()) {
+                if let Some(e_q7) = entry.per_layer_q7.get(l) {
+                    let mut dot = 0.0_f64;
+                    let mut na = 0.0_f64;
+                    let mut nb = 0.0_f64;
+                    for h in 0..active_heads.min(q7.len()) {
+                        let a = f64::from(q7[h]);
+                        let b = f64::from(e_q7[h]);
+                        dot += a * b;
+                        na += a * a;
+                        nb += b * b;
+                    }
+                    let denom = (na * nb).sqrt();
+                    if denom > 1e-12 {
+                        sum_cos += (dot / denom).clamp(-1.0, 1.0);
+                        count += 1;
+                    }
+                }
+            }
+            let mean_cos = if count > 0 {
+                (sum_cos / count as f64) as f32
+            } else {
+                0.0
+            };
+            match entry.role {
+                AttractorRole::Fact => fact_scores.push((entry, mean_cos)),
+                AttractorRole::Persona => persona_scores.push((entry, mean_cos)),
+                AttractorRole::Guard => {
+                    if mean_cos > max_guard_score {
+                        max_guard_score = mean_cos;
+                    }
+                }
+            }
+        }
+
+        fact_scores.sort_by(|a, b| b.1.total_cmp(&a.1));
+        persona_scores.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+        let top1_fact_score = fact_scores.first().map_or(-1.0, |x| x.1);
+        let top2_fact_score = fact_scores.get(1).map_or(-1.0, |x| x.1);
+        let guard_conflict_margin = max_guard_score - top1_fact_score;
+
+        let void_state = if top1_fact_score < min_coherence {
+            VoidBoundaryState::CvoidEmptySpace
+        } else if (top1_fact_score - top2_fact_score) < boundary_margin {
+            VoidBoundaryState::LiminalBoundary
+        } else {
+            VoidBoundaryState::InsideBasin
+        };
+
+        let recalled_facts = if matches!(void_state, VoidBoundaryState::CvoidEmptySpace) {
+            Vec::new()
+        } else {
+            fact_scores
+                .into_iter()
+                .filter(|(_, s)| *s >= min_coherence * 0.75)
+                .take(top_k_facts)
+                .collect()
+        };
+        let recalled_personas = persona_scores.into_iter().take(top_k_personas).collect();
+
+        Ok(DynamicAttractorRecall {
+            void_state,
+            top1_fact_score,
+            top2_fact_score,
+            guard_conflict_margin,
+            recalled_facts,
+            recalled_personas,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1254,5 +1540,73 @@ mod tests {
         assert_eq!(new_epoch, 2);
         assert_eq!(adapter.probe_baseline().active_heads, 32);
         assert_eq!(adapter.probe_baseline().steered_layers, 32);
+    }
+
+    #[test]
+    fn text_attractor_corpus_recalls_basin_and_detects_cvoid_boundary() {
+        let geom = RopeGeometry::phi4_mini();
+        let mut adapter = ModelSteeringAdapter::new(geom).expect("phi4 geometry valid");
+        adapter.set_layer_rope_mask(0xFFFF_0000);
+        let q_len = adapter.geometry().q_rot_len();
+
+        let ref_vec = vec![1.0_f32; q_len];
+        let half = adapter.geometry().rotary_dim / 2;
+        let rot = adapter.geometry().rotary_dim;
+        let mut fact_a = vec![0.0_f32; q_len];
+        let mut fact_b = vec![0.0_f32; q_len];
+        let mut void_q = vec![0.0_f32; q_len];
+        for h in 0..adapter.geometry().num_q_heads {
+            let base = h * rot;
+            for i in 0..half {
+                let (sa, ca) = (0.35 + 0.02 * h as f32).sin_cos();
+                let (sb, cb) = (-0.45 - 0.01 * h as f32).sin_cos();
+                let (sv, cv) = (2.80 - 0.02 * h as f32).sin_cos();
+                fact_a[base + i] = ca;
+                fact_a[base + half + i] = sa;
+                fact_b[base + i] = cb;
+                fact_b[base + half + i] = sb;
+                void_q[base + i] = cv;
+                void_q[base + half + i] = sv;
+            }
+        }
+
+        let refs: Vec<&[f32]> = vec![ref_vec.as_slice(); 32];
+        let qa_slices: Vec<&[f32]> = vec![fact_a.as_slice(); 32];
+        let qb_slices: Vec<&[f32]> = vec![fact_b.as_slice(); 32];
+        let qv_slices: Vec<&[f32]> = vec![void_q.as_slice(); 32];
+
+        let mut corpus = TextAttractorCorpus::new();
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Fact A",
+                &qa_slices,
+                &refs,
+                2.5,
+            )
+            .expect("ingest A");
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Fact B",
+                &qb_slices,
+                &refs,
+                2.5,
+            )
+            .expect("ingest B");
+
+        let recall_a = corpus
+            .recall_for_query(&adapter, &qa_slices, &refs, 1, 1, 0.50, 0.05)
+            .expect("recall A");
+        assert_eq!(recall_a.void_state, VoidBoundaryState::InsideBasin);
+        assert_eq!(recall_a.recalled_facts[0].0.text, "Fact A");
+
+        let recall_void = corpus
+            .recall_for_query(&adapter, &qv_slices, &refs, 1, 1, 0.50, 0.05)
+            .expect("recall void");
+        assert_eq!(recall_void.void_state, VoidBoundaryState::CvoidEmptySpace);
+        assert!(recall_void.recalled_facts.is_empty());
     }
 }
