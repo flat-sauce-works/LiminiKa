@@ -10,8 +10,8 @@ use std::time::Instant;
 use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor, D};
 use candle_nn::{linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 use liminika_adapter::{
-    AttractorRole, ModelSteeringAdapter, RecallPolicy, RopeGeometry, RopeLayout,
-    TextAttractorCorpus, VoidBoundaryState,
+    AttractorRole, ModelSteeringAdapter, RopeGeometry, RopeLayout, TextAttractorCorpus,
+    VoidBoundaryState,
 };
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::traits::gateway::{
@@ -1388,12 +1388,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let q_refs: Vec<&[f32]> = layer_qs.iter().map(Vec::as_slice).collect();
         corpus.ingest_text_activations(&adapter, *role, *text, &q_refs, &centroid_refs, *energy)?;
     }
+    corpus.fit_common_mode_projection();
+    let recall_policy = corpus.calibrate_recall_policy(2, 1);
     println!(
-        "Compiled {} natural-language attractors into TextAttractorCorpus (centroid-referenced).",
-        corpus.entries().len()
+        "Compiled {} natural-language attractors (centroid + common-mode projected) | auto RecallPolicy: min_coh={:.3} margin={:.3}",
+        corpus.entries().len(),
+        recall_policy.min_coherence,
+        recall_policy.boundary_margin,
     );
-
-    let recall_policy = RecallPolicy::default();
     let mut step2_exp_hits = 0_usize;
     let mut step2_exp_total = 0_usize;
     let mut step2_forb_hits = 0_usize;

@@ -1011,6 +1011,8 @@ pub struct TextAttractorEntry {
     pub per_layer_q7: Vec<[gcso_q7_t; MAX_ATTENTION_HEADS]>,
     /// Base gravitational pull energy for gateway composition.
     pub energy: f32,
+    /// L2-normalized centered residual Q signature across steered layers for high-resolution semantic recall.
+    residual_sig: Vec<f32>,
 }
 
 /// Dynamic top-K recall result from [`TextAttractorCorpus::recall_for_query`].
@@ -1106,6 +1108,7 @@ impl Default for RecallPolicy {
 pub struct TextAttractorCorpus {
     entries: Vec<TextAttractorEntry>,
     next_anchor_id: u32,
+    common_mode_dir: Vec<f32>,
 }
 
 impl TextAttractorCorpus {
@@ -1115,6 +1118,7 @@ impl TextAttractorCorpus {
         Self {
             entries: Vec::new(),
             next_anchor_id: 1,
+            common_mode_dir: Vec::new(),
         }
     }
 
@@ -1122,6 +1126,154 @@ impl TextAttractorCorpus {
     #[must_use]
     pub fn entries(&self) -> &[TextAttractorEntry] {
         &self.entries
+    }
+
+    fn build_steered_residual_sig(
+        geom: &RopeGeometry,
+        q_layers: &[&[f32]],
+        ref_layers: &[&[f32]],
+    ) -> Vec<f32> {
+        let mut sig = Vec::new();
+        for (l, (q, r)) in q_layers.iter().zip(ref_layers.iter()).enumerate() {
+            if !geom.is_rope_layer(l) {
+                continue;
+            }
+            for (&qv, &rv) in q.iter().zip(r.iter()) {
+                sig.push(qv - rv);
+            }
+        }
+        Self::l2_normalize_in_place(&mut sig);
+        sig
+    }
+
+    fn l2_normalize_in_place(v: &mut [f32]) {
+        let norm_sq: f64 = v.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+        let norm = norm_sq.sqrt();
+        if norm > 1e-12 {
+            let inv = (1.0 / norm) as f32;
+            for x in v.iter_mut() {
+                *x *= inv;
+            }
+        }
+    }
+
+    fn project_and_normalize(v: &[f32], common_dir: &[f32]) -> Vec<f32> {
+        let mut out = v.to_vec();
+        if common_dir.len() == out.len() && !common_dir.is_empty() {
+            let dot: f64 = out
+                .iter()
+                .zip(common_dir.iter())
+                .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                .sum();
+            let d = dot as f32;
+            for (x, &c) in out.iter_mut().zip(common_dir.iter()) {
+                *x -= d * c;
+            }
+            Self::l2_normalize_in_place(&mut out);
+        }
+        out
+    }
+
+    fn cosine_f32(a: &[f32], b: &[f32]) -> f32 {
+        let len = a.len().min(b.len());
+        let mut dot = 0.0_f64;
+        let mut na = 0.0_f64;
+        let mut nb = 0.0_f64;
+        for i in 0..len {
+            let x = f64::from(a[i]);
+            let y = f64::from(b[i]);
+            dot += x * y;
+            na += x * x;
+            nb += y * y;
+        }
+        let denom = (na * nb).sqrt();
+        if denom > 1e-12 {
+            (dot / denom).clamp(-1.0, 1.0) as f32
+        } else {
+            0.0
+        }
+    }
+
+    /// Estimates and stores the dominant unsupervised common-mode singular direction across
+    /// ingested entries via power iteration, so recall projects out shared prompt/template bias.
+    pub fn fit_common_mode_projection(&mut self) {
+        if self.entries.len() < 4 {
+            self.common_mode_dir.clear();
+            return;
+        }
+        let dim = self.entries[0].residual_sig.len();
+        if dim == 0 || self.entries.iter().any(|e| e.residual_sig.len() != dim) {
+            self.common_mode_dir.clear();
+            return;
+        }
+        let mut v = vec![0.0_f32; dim];
+        for e in &self.entries {
+            for (dst, &src) in v.iter_mut().zip(e.residual_sig.iter()) {
+                *dst += src;
+            }
+        }
+        Self::l2_normalize_in_place(&mut v);
+        if v.iter().all(|&x| x == 0.0) {
+            v[0] = 1.0;
+        }
+        for _ in 0..8 {
+            let mut next = vec![0.0_f32; dim];
+            for e in &self.entries {
+                let dot: f64 = e
+                    .residual_sig
+                    .iter()
+                    .zip(v.iter())
+                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                    .sum();
+                let d = dot as f32;
+                for (dst, &src) in next.iter_mut().zip(e.residual_sig.iter()) {
+                    *dst += d * src;
+                }
+            }
+            Self::l2_normalize_in_place(&mut next);
+            v = next;
+        }
+        self.common_mode_dir = v;
+    }
+
+    /// Calibrates [`RecallPolicy`] from the empirical off-diagonal similarity distribution of the
+    /// corpus (after common-mode projection), avoiding hardcoded model-specific thresholds.
+    #[must_use]
+    pub fn calibrate_recall_policy(
+        &self,
+        top_k_facts: usize,
+        top_k_personas: usize,
+    ) -> RecallPolicy {
+        if self.entries.len() < 2 {
+            return RecallPolicy {
+                top_k_facts,
+                top_k_personas,
+                ..RecallPolicy::default()
+            };
+        }
+        let projected: Vec<Vec<f32>> = self
+            .entries
+            .iter()
+            .map(|e| Self::project_and_normalize(&e.residual_sig, &self.common_mode_dir))
+            .collect();
+        let mut sims = Vec::new();
+        for i in 0..projected.len() {
+            for j in (i + 1)..projected.len() {
+                sims.push(f64::from(Self::cosine_f32(&projected[i], &projected[j])));
+            }
+        }
+        let n = sims.len().max(1) as f64;
+        let mean = sims.iter().sum::<f64>() / n;
+        let var = sims.iter().map(|&s| (s - mean) * (s - mean)).sum::<f64>() / n;
+        let std = var.sqrt();
+        let min_coherence = (mean + 1.25 * std).clamp(0.15, 0.75) as f32;
+        let boundary_margin = (0.30 * std).clamp(0.01, 0.12) as f32;
+        RecallPolicy {
+            top_k_facts,
+            top_k_personas,
+            min_coherence,
+            boundary_margin,
+        }
     }
 
     /// Compiles and appends a single natural-language text chunk into the attractor corpus using
@@ -1155,6 +1307,11 @@ impl TextAttractorCorpus {
             arr64[..n].copy_from_slice(&q7[..n]);
             per_layer_q7.push(arr64);
         }
+        let residual_sig = Self::build_steered_residual_sig(
+            adapter.geometry(),
+            per_layer_q,
+            baseline_ref_per_layer,
+        );
         let id = self.next_anchor_id;
         self.next_anchor_id = self.next_anchor_id.saturating_add(1);
         self.entries.push(TextAttractorEntry {
@@ -1163,6 +1320,7 @@ impl TextAttractorCorpus {
             text: text.into(),
             per_layer_q7,
             energy: energy.max(0.1),
+            residual_sig,
         });
         Ok(id)
     }
@@ -1189,9 +1347,7 @@ impl TextAttractorCorpus {
             ));
         }
         let geom = adapter.geometry();
-        let active_heads = geom.num_q_heads.min(MAX_ATTENTION_HEADS);
-        let mut steered_layers = Vec::new();
-        let mut query_q7s = Vec::new();
+        let expected = geom.q_rot_len();
         for (l, (q, r)) in query_per_layer_q
             .iter()
             .zip(baseline_ref_per_layer.iter())
@@ -1200,42 +1356,25 @@ impl TextAttractorCorpus {
             if !geom.is_rope_layer(l) {
                 continue;
             }
-            let q7 = adapter.bake_layer_procrustes_q7(r, q)?;
-            steered_layers.push(l);
-            query_q7s.push(q7);
+            if q.len() != expected || r.len() != expected {
+                return Err(format!(
+                    "layer {l}: expected q_rot length {expected}, got query={} baseline={}",
+                    q.len(),
+                    r.len()
+                ));
+            }
         }
+        let raw_sig =
+            Self::build_steered_residual_sig(geom, query_per_layer_q, baseline_ref_per_layer);
+        let query_sig = Self::project_and_normalize(&raw_sig, &self.common_mode_dir);
 
         let mut fact_scores: Vec<(&TextAttractorEntry, f32)> = Vec::new();
         let mut persona_scores: Vec<(&TextAttractorEntry, f32)> = Vec::new();
         let mut max_guard_score = -1.0_f32;
 
         for entry in &self.entries {
-            let mut sum_cos = 0.0_f64;
-            let mut count = 0_usize;
-            for (&l, q7) in steered_layers.iter().zip(query_q7s.iter()) {
-                if let Some(e_q7) = entry.per_layer_q7.get(l) {
-                    let mut dot = 0.0_f64;
-                    let mut na = 0.0_f64;
-                    let mut nb = 0.0_f64;
-                    for h in 0..active_heads.min(q7.len()) {
-                        let a = f64::from(q7[h]);
-                        let b = f64::from(e_q7[h]);
-                        dot += a * b;
-                        na += a * a;
-                        nb += b * b;
-                    }
-                    let denom = (na * nb).sqrt();
-                    if denom > 1e-12 {
-                        sum_cos += (dot / denom).clamp(-1.0, 1.0);
-                        count += 1;
-                    }
-                }
-            }
-            let mean_cos = if count > 0 {
-                (sum_cos / count as f64) as f32
-            } else {
-                0.0
-            };
+            let entry_sig = Self::project_and_normalize(&entry.residual_sig, &self.common_mode_dir);
+            let mean_cos = Self::cosine_f32(&query_sig, &entry_sig);
             match entry.role {
                 AttractorRole::Fact => fact_scores.push((entry, mean_cos)),
                 AttractorRole::Persona => persona_scores.push((entry, mean_cos)),
@@ -1535,7 +1674,7 @@ mod tests {
         adapter.set_layer_rope_mask(0xFFFF_0000);
         let q_len = adapter.geometry().q_rot_len();
 
-        let ref_vec = vec![1.0_f32; q_len];
+        let ref_vec = vec![0.0_f32; q_len];
         let probe_vec: Vec<f32> = (0..q_len)
             .map(|i| if (i & 1) == 0 { 0.85 } else { 0.45 })
             .collect();
@@ -1575,7 +1714,7 @@ mod tests {
         adapter.set_layer_rope_mask(0xFFFF_0000);
         let q_len = adapter.geometry().q_rot_len();
 
-        let ref_vec = vec![1.0_f32; q_len];
+        let ref_vec = vec![0.0_f32; q_len];
         let half = adapter.geometry().rotary_dim / 2;
         let rot = adapter.geometry().rotary_dim;
         let mut fact_a = vec![0.0_f32; q_len];
