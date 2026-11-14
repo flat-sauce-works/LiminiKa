@@ -11,7 +11,9 @@ use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor, D};
 use candle_nn::{linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 use liminika_adapter::{ModelSteeringAdapter, RopeGeometry, RopeLayout};
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
-use liminika_core::traits::gateway::{ObjectiveFact, ResonantSignalSlice, SubjectivePersona};
+use liminika_core::traits::gateway::{
+    GuardPhaseAnchor, ObjectiveFact, ResonantSignalSlice, SubjectivePersona,
+};
 use serde::Deserialize;
 use tokenizers::Tokenizer;
 
@@ -102,6 +104,8 @@ impl RotaryCache {
             Option<(
                 &[ObjectiveFact<[i8; 64]>],
                 &[SubjectivePersona<[i8; 64]>],
+                &[GuardPhaseAnchor],
+                &[f32],
                 &[f32],
             )>,
             f32,
@@ -135,7 +139,9 @@ impl RotaryCache {
                     .to_vec1::<f32>()?;
                 let tok_stride = num_heads * rot;
                 if max_rad < 0.0 {
-                    if let Some((fact_anchors, persona_anchors, neg_ref)) = resonant_opt {
+                    if let Some((fact_anchors, persona_anchors, _guard_anchors, neg_ref, _pos_ref)) =
+                        resonant_opt
+                    {
                         for tok in 0..seq_len {
                             let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
                             let probe = adapter
@@ -277,6 +283,8 @@ impl Phi3Attention {
             Option<(
                 &[ObjectiveFact<[i8; 64]>],
                 &[SubjectivePersona<[i8; 64]>],
+                &[GuardPhaseAnchor],
+                &[f32],
                 &[f32],
             )>,
             f32,
@@ -477,6 +485,8 @@ impl Phi3Model {
         resonant_ctx: Option<(
             &[Vec<ObjectiveFact<[i8; 64]>>],
             &[Vec<SubjectivePersona<[i8; 64]>>],
+            &[Vec<GuardPhaseAnchor>],
+            &[Vec<f32>],
             &[Vec<f32>],
         )>,
         rope_rad: f32,
@@ -497,12 +507,16 @@ impl Phi3Model {
 
         for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
             let p_slice = persona_q7s.and_then(|ps| ps.get(layer_idx)).map(Vec::as_slice);
-            let res_slice = resonant_ctx.and_then(|(f_anchors, p_anchors, negs)| {
+            let res_slice = resonant_ctx.and_then(|(f_anchors, p_anchors, g_anchors, negs, poss)| {
                 f_anchors
                     .get(layer_idx)
                     .zip(p_anchors.get(layer_idx))
+                    .zip(g_anchors.get(layer_idx))
                     .zip(negs.get(layer_idx))
-                    .map(|((fa, pa), n)| (fa.as_slice(), pa.as_slice(), n.as_slice()))
+                    .zip(poss.get(layer_idx))
+                    .map(|((((fa, pa), ga), n), p)| {
+                        (fa.as_slice(), pa.as_slice(), ga.as_slice(), n.as_slice(), p.as_slice())
+                    })
             });
             let steer_ref = match (adapter.as_deref_mut(), q7s) {
                 (Some(ad), Some(qs)) if rope_rad != 0.0 => qs.get(layer_idx).map(|q7| {
@@ -559,9 +573,20 @@ impl Phi3Model {
                         persona_arr[..pn].copy_from_slice(&last_p[..pn]);
                         let persona = SubjectivePersona::new(persona_arr, 1.5, 0, 101);
                         let composite = (fact, persona);
-                        let _ = ad
-                            .apply_srl_with_gateway(&composite, &mut h_vec, u_vec, v_vec)
-                            .map_err(candle_core::Error::Msg)?;
+                        if rope_rad <= -1.5 {
+                            let _ = ad
+                                .orchestrate_layer_srl_with_action_hub(
+                                    &composite,
+                                    &mut h_vec,
+                                    u_vec,
+                                    v_vec,
+                                )
+                                .map_err(candle_core::Error::Msg)?;
+                        } else {
+                            let _ = ad
+                                .apply_srl_with_gateway(&composite, &mut h_vec, u_vec, v_vec)
+                                .map_err(candle_core::Error::Msg)?;
+                        }
                     } else if rope_rad <= -1.5 {
                         let _ = ad
                             .orchestrate_layer_srl_with_action_hub(&fact, &mut h_vec, u_vec, v_vec)
@@ -703,8 +728,10 @@ struct BakedModelProfile {
     fact_q7: Vec<Vec<gcso_q7_t>>,
     persona_q7: Vec<Vec<gcso_q7_t>>,
     neg_sum: Vec<Vec<f32>>,
+    pos_sum: Vec<Vec<f32>>,
     fact_anchors_per_layer: Vec<Vec<ObjectiveFact<[i8; 64]>>>,
     persona_anchors_per_layer: Vec<Vec<SubjectivePersona<[i8; 64]>>>,
+    guard_anchors_per_layer: Vec<Vec<GuardPhaseAnchor>>,
     srl_u: Vec<f32>,
     srl_v: Vec<f32>,
 }
@@ -740,6 +767,8 @@ fn bake_via_adapter(
     let mut per_layer_fact_qs: Vec<Vec<Vec<f32>>> = vec![Vec::with_capacity(suite.facts.len()); num_layers];
     let mut per_layer_persona_qs: Vec<Vec<Vec<f32>>> =
         vec![Vec::with_capacity(suite.persona.len()); num_layers];
+    let mut per_layer_guard_qs: Vec<Vec<Vec<f32>>> =
+        vec![Vec::with_capacity(suite.guards.len()); num_layers];
 
     for text in &suite.facts {
         model.clear_cache();
@@ -793,6 +822,7 @@ fn bake_via_adapter(
         let (_, layer_qs, h_vec) =
             model.forward_tokens(&ids, 0, None, None, None, None, 0.0, None, None, false, true)?;
         for (l, q) in layer_qs.iter().enumerate() {
+            per_layer_guard_qs[l].push(q.clone());
             for (dst, &src) in neg_sum[l].iter_mut().zip(q.iter()) {
                 *dst += src / neg_count;
             }
@@ -807,6 +837,7 @@ fn bake_via_adapter(
     let mut persona_q7 = Vec::with_capacity(num_layers);
     let mut fact_anchors_per_layer = Vec::with_capacity(num_layers);
     let mut persona_anchors_per_layer = Vec::with_capacity(num_layers);
+    let mut guard_anchors_per_layer = Vec::with_capacity(num_layers);
     for l in 0..num_layers {
         out_push_q7(&mut per_layer_q7, adapter, &neg_sum[l], &pos_sum[l])?;
         out_push_q7(&mut fact_q7, adapter, &neg_sum[l], &fact_sum[l])?;
@@ -836,6 +867,16 @@ fn bake_via_adapter(
             ));
         }
         persona_anchors_per_layer.push(layer_personas);
+
+        let mut layer_guards = Vec::with_capacity(per_layer_guard_qs[l].len());
+        for q_guard in &per_layer_guard_qs[l] {
+            let q7 = adapter.bake_layer_procrustes_q7(&pos_sum[l], q_guard)?;
+            let mut arr64 = [0i8; 64];
+            let n = q7.len().min(64);
+            arr64[..n].copy_from_slice(&q7[..n]);
+            layer_guards.push(GuardPhaseAnchor::new(arr64, 0.0, 0.72));
+        }
+        guard_anchors_per_layer.push(layer_guards);
     }
 
     let mut srl_u: Vec<f32> = pos_h.iter().zip(neg_h.iter()).map(|(&p, &n)| p - n).collect();
@@ -848,8 +889,10 @@ fn bake_via_adapter(
         fact_q7,
         persona_q7,
         neg_sum,
+        pos_sum,
         fact_anchors_per_layer,
         persona_anchors_per_layer,
+        guard_anchors_per_layer,
         srl_u,
         srl_v,
     })
@@ -994,7 +1037,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some((
                     baked.fact_anchors_per_layer.as_slice(),
                     baked.persona_anchors_per_layer.as_slice(),
+                    baked.guard_anchors_per_layer.as_slice(),
                     baked.neg_sum.as_slice(),
+                    baked.pos_sum.as_slice(),
                 ))
             } else {
                 None
@@ -1210,7 +1255,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some((
                     baked.fact_anchors_per_layer.as_slice(),
                     baked.persona_anchors_per_layer.as_slice(),
+                    baked.guard_anchors_per_layer.as_slice(),
                     baked.neg_sum.as_slice(),
+                    baked.pos_sum.as_slice(),
                 ))
             } else {
                 None

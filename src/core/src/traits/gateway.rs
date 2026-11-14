@@ -1429,6 +1429,115 @@ impl ContradictionGuardSignal for ContradictionGuard<()> {
     }
 }
 
+/// 64-byte Q7 phase anchor for contrastive/negative guard attractors, enabling
+/// query-resonance repulsion checks inside [`ResonantSignalSlice`] and 3-origin tuples.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GuardPhaseAnchor {
+    /// Per-head Q7 phase deltas (`[i8; 64]`).
+    pub phase_deltas: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    /// Observed cohomological obstruction residual norm $\| \mathbf{r}_{\mathrm{obs}} \| \ge 0$.
+    pub cohomology_obstruction: f32,
+    /// Threshold above which `cohomology_obstruction` triggers repulsive escape.
+    pub obstruction_threshold: f32,
+}
+
+impl GuardPhaseAnchor {
+    /// Constructs a new [`GuardPhaseAnchor`] from a 64-head Q7 phase array.
+    #[inline(always)]
+    #[must_use]
+    pub const fn new(
+        phase_deltas: [gcso_q7_t; MAX_ATTENTION_HEADS],
+        cohomology_obstruction: f32,
+        obstruction_threshold: f32,
+    ) -> Self {
+        Self {
+            phase_deltas,
+            cohomology_obstruction: branchless_flush_subnormal_f32(branchless_relu_f32(
+                cohomology_obstruction,
+            )),
+            obstruction_threshold,
+        }
+    }
+}
+
+impl CausalProvenanceSignal for GuardPhaseAnchor {
+    #[inline(always)]
+    fn causal_provenance_bits(&self) -> u32 {
+        let obstructed = self.cohomology_obstruction > self.obstruction_threshold;
+        CAUSAL_AXIS_CONTRADICTION_GUARD
+            | branchless_select_u32(obstructed, CAUSAL_CAUSE_COHOMOLOGY_REPULSION, 0)
+    }
+
+    #[inline(always)]
+    fn causal_anomaly_severity(&self) -> f32 {
+        let obstructed = self.cohomology_obstruction > self.obstruction_threshold;
+        branchless_select_f32(
+            obstructed,
+            branchless_clamp_f32(self.cohomology_obstruction, 0.0, 1.0),
+            0.0,
+        )
+    }
+}
+
+impl CognitiveGroundingSignal for GuardPhaseAnchor {
+    #[inline(always)]
+    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+        self.phase_deltas
+    }
+
+    #[inline(always)]
+    fn project_grounding_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+        self.phase_deltas.project_to_words_64()
+    }
+
+    #[inline(always)]
+    fn grounding_base_energy(&self) -> f32 {
+        self.cohomology_obstruction
+    }
+}
+
+impl ContradictionGuardSignal for GuardPhaseAnchor {
+    #[inline(always)]
+    fn evaluate_repulsion_severity(
+        &self,
+        _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> f32 {
+        let obs_exceeded = self.cohomology_obstruction > self.obstruction_threshold;
+        branchless_select_f32(
+            obs_exceeded,
+            branchless_clamp_f32(
+                0.55 + (self.cohomology_obstruction - self.obstruction_threshold),
+                0.55,
+                1.0,
+            ),
+            0.0,
+        )
+    }
+
+    #[inline(always)]
+    fn evaluate_repulsion_severity_from_words(
+        &self,
+        _candidate_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> f32 {
+        let obs_exceeded = self.cohomology_obstruction > self.obstruction_threshold;
+        branchless_select_f32(
+            obs_exceeded,
+            branchless_clamp_f32(
+                0.55 + (self.cohomology_obstruction - self.obstruction_threshold),
+                0.55,
+                1.0,
+            ),
+            0.0,
+        )
+    }
+
+    #[inline(always)]
+    fn requires_phase_slice_for_repulsion(&self) -> bool {
+        false
+    }
+}
+
 impl CausalProvenanceSignal for ContrastivePhaseBloomFilter {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
@@ -2774,6 +2883,22 @@ where
     }
 }
 
+impl ManifoldGatewaySignal for GuardPhaseAnchor {
+    #[inline(always)]
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+        synthesize_multi_origin_gateway_frame_with_words::<
+            SystemConstraint<()>,
+            ObjectiveFact<[u8; 0]>,
+            SubjectivePersona<[u8; 0]>,
+            Self,
+        >(None, None, None, Some(self))
+    }
+    #[inline(always)]
+    fn synthesize_gateway_frame(&self) -> GatewayFrame {
+        self.synthesize_gateway_frame_with_words().0
+    }
+}
+
 impl<F: ObjectiveFactSignal, P: SubjectivePersonaSignal> CausalProvenanceSignal for (F, P) {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
@@ -3109,6 +3234,61 @@ impl<S: ObjectiveFactSignal + ManifoldGatewaySignal> ObjectiveFactSignal
 impl<S: SubjectivePersonaSignal + ManifoldGatewaySignal> SubjectivePersonaSignal
     for ResonantSignalSlice<'_, S>
 {
+}
+
+impl<S: ContradictionGuardSignal + CognitiveGroundingSignal + ManifoldGatewaySignal>
+    ContradictionGuardSignal for ResonantSignalSlice<'_, S>
+{
+    #[inline]
+    fn evaluate_repulsion_severity(
+        &self,
+        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> f32 {
+        let candidate_words = candidate_phases.project_to_words_64();
+        self.evaluate_repulsion_severity_from_words(&candidate_words, candidate_phases)
+    }
+
+    #[inline]
+    fn evaluate_repulsion_severity_from_words(
+        &self,
+        candidate_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> f32 {
+        let mut max_coh = -1.0_f32;
+        let mut max_sev = 0.0_f32;
+        let is_subspace = self.active_heads < MAX_ATTENTION_HEADS as u16;
+        let query_uni = is_word_array_uniform_64(&self.query_phase_words);
+        for sig in self.signals {
+            let sig_sev = sig.evaluate_repulsion_severity_from_words(candidate_words, candidate_phases);
+            max_sev = branchless_max_f32(max_sev, sig_sev);
+            let sig_words = sig.project_grounding_words_64();
+            let coh = if is_subspace {
+                tangent_cosine_active_heads_64(&self.query_phase_words, &sig_words, self.active_heads)
+            } else {
+                let sig_uni = is_word_array_uniform_64(&sig_words);
+                coherence_for_active_heads_64(
+                    &self.query_phase_words,
+                    query_uni,
+                    &sig_words,
+                    sig_uni,
+                    self.active_heads,
+                )
+            };
+            max_coh = branchless_max_f32(max_coh, coh);
+        }
+        // Trigger repulsion only when the query probe resonates very strongly with a guard anchor.
+        let res_sev = branchless_select_f32(
+            max_coh > 0.90_f32,
+            branchless_clamp_f32(0.55_f32 + (max_coh - 0.90_f32) * 4.5_f32, 0.55, 1.0),
+            0.0,
+        );
+        branchless_max_f32(max_sev, res_sev)
+    }
+
+    #[inline(always)]
+    fn requires_phase_slice_for_repulsion(&self) -> bool {
+        false
+    }
 }
 
 // ===================================================================
@@ -3973,8 +4153,15 @@ pub trait ActionHubGatewayExt: ActionHub {
         let should_step_trail =
             query_tensor.is_some() || srl_hidden.is_none() || (trail_out.step_count == 0);
         let next_rho = if should_step_trail {
-            let retain =
+            let base_retain =
                 branchless_clamp_f32(branchless_relu_f32(thresholds.evaporation_retain), 0.0, 1.0);
+            let retain = if trail_out.step_count > 0
+                && frame.active_head_count < MAX_ATTENTION_HEADS as u16
+            {
+                base_retain * (0.85_f32 + 0.15_f32 * branchless_relu_f32(trail_coh))
+            } else {
+                base_retain
+            };
             let deposit = branchless_relu_f32(thresholds.reinforcement_gain)
                 * (energy_gate * energy_gate)
                 * (traj_gate * traj_gate);

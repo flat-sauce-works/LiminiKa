@@ -421,9 +421,10 @@ impl StigmergicThresholds {
         let is_repulsed = repulsion_triggered | (coh < -contradict_thresh);
 
         let is_low_entropy_skip = (!is_repulsed) & (h_tilde <= self.inertial_skip_entropy_thresh);
+        let srl_entropy_min = self.inertial_skip_entropy_thresh * 1.6_f32;
         let ge_steer = rho >= self.express_steer_density_thresh;
         let ge_pspm = (rho >= self.pspm_route_density_thresh) | (h_tilde >= 0.55);
-        let ge_srl = rho >= self.srl_inject_density_thresh;
+        let ge_srl = (rho >= self.srl_inject_density_thresh) & (h_tilde > srl_entropy_min);
         let ge_crystal = (rho >= self.crystallize_density_thresh)
             & (coh >= DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE);
 
