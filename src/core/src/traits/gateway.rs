@@ -1843,11 +1843,10 @@ fn fold_gateway_slice_with_query_words_core<S: ManifoldGatewaySignal>(
     if len == 0 {
         return (GatewayFrame::default(), [0u64; NUM_SWARM_MICRO_CELLS]);
     }
-    if len == 1 {
+    let use_query_resonance = query_words_opt.is_some_and(swar_words_nonzero_64);
+    if len == 1 && !use_query_resonance {
         return slice[0].synthesize_gateway_frame_with_words();
     }
-
-    let use_query_resonance = query_words_opt.is_some_and(swar_words_nonzero_64);
     let q_is_uniform = query_words_opt.is_some_and(is_word_array_uniform_64);
 
     let mut acc_w = [0u64; NUM_SWARM_MICRO_CELLS];
@@ -2003,12 +2002,17 @@ fn fold_gateway_slice_with_query_words_core<S: ManifoldGatewaySignal>(
     let tag_q7 = swar_q7_mean_i8_from_words_with_uniform_flag_64(&acc_w, acc_is_uniform);
     let packed_tag = pack_action_slot_tag(dom_slot, action_flags);
     let tagged_ptr = gcso_tagged_ptr_t::pack(zimms_addr, packed_tag, tag_q7).raw();
+    let out_energy = if use_query_resonance {
+        branchless_min_f32(best_e, MAX_ATTRACTOR_PULL_FORCE)
+    } else {
+        branchless_min_f32(tot_e, MAX_ATTRACTOR_PULL_FORCE)
+    };
     (
         GatewayFrame {
             tagged_ptr,
             zimms_section_offset48: zimms_addr,
             target_anchor_id,
-            effective_energy: branchless_min_f32(tot_e, MAX_ATTRACTOR_PULL_FORCE),
+            effective_energy: out_energy,
             ripa_clamp_rad,
             qdps_min_step_rad,
             effective_inv_temp: eff_inv_temp,
@@ -2836,6 +2840,45 @@ impl<S: ManifoldGatewaySignal> ManifoldGatewaySignal for ResonantSignalSlice<'_,
     fn synthesize_gateway_frame(&self) -> GatewayFrame {
         fold_gateway_slice_with_query_words_core(self.signals, Some(&self.query_phase_words)).0
     }
+}
+
+impl<S: CognitiveGroundingSignal + ManifoldGatewaySignal> CognitiveGroundingSignal
+    for ResonantSignalSlice<'_, S>
+{
+    #[inline(always)]
+    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+        self.synthesize_gateway_frame().phase_deltas
+    }
+
+    #[inline(always)]
+    fn project_grounding_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+        self.synthesize_gateway_frame_with_words().1
+    }
+
+    #[inline(always)]
+    fn grounding_base_energy(&self) -> f32 {
+        self.synthesize_gateway_frame().effective_energy
+    }
+
+    #[inline(always)]
+    fn zimms_section_offset48(&self) -> u64 {
+        self.synthesize_gateway_frame().zimms_section_offset48
+    }
+
+    #[inline(always)]
+    fn grounding_anchor_id(&self) -> u32 {
+        self.synthesize_gateway_frame().target_anchor_id
+    }
+}
+
+impl<S: ObjectiveFactSignal + ManifoldGatewaySignal> ObjectiveFactSignal
+    for ResonantSignalSlice<'_, S>
+{
+}
+
+impl<S: SubjectivePersonaSignal + ManifoldGatewaySignal> SubjectivePersonaSignal
+    for ResonantSignalSlice<'_, S>
+{
 }
 
 // ===================================================================
@@ -3682,13 +3725,15 @@ pub trait ActionHubGatewayExt: ActionHub {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
 
-        // Evaporate stale pheromone and deposit new pheromone weighted by resonance energy.
+        // Evaporate stale pheromone and deposit new pheromone weighted quadratically by resonance
+        // energy so weak/off-topic probes decay to PassiveSidecar instead of saturating Crystal.
         let prev_rho =
             branchless_flush_subnormal_f32(branchless_relu_f32(trail_out.stigmergic_density));
         let energy_gate = branchless_clamp_f32(frame.effective_energy, 0.0, 1.0);
         let retain =
             branchless_clamp_f32(branchless_relu_f32(thresholds.evaporation_retain), 0.0, 1.0);
-        let deposit = branchless_relu_f32(thresholds.reinforcement_gain) * energy_gate;
+        let deposit =
+            branchless_relu_f32(thresholds.reinforcement_gain) * (energy_gate * energy_gate);
         let next_rho = branchless_min_f32(
             branchless_flush_subnormal_f32(prev_rho * retain + deposit),
             MAX_STIGMERGIC_DENSITY,

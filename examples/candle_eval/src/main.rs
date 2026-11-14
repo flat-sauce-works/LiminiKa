@@ -99,7 +99,11 @@ impl RotaryCache {
             usize,
             &[gcso_q7_t],
             Option<&[gcso_q7_t]>,
-            Option<(&[ObjectiveFact<[i8; 64]>], &[f32])>,
+            Option<(
+                &[ObjectiveFact<[i8; 64]>],
+                &[SubjectivePersona<[i8; 64]>],
+                &[f32],
+            )>,
             f32,
             &mut gcso_pointer_trail_t,
         )>,
@@ -131,18 +135,21 @@ impl RotaryCache {
                     .to_vec1::<f32>()?;
                 let tok_stride = num_heads * rot;
                 if max_rad < 0.0 {
-                    if let Some((anchors, neg_ref)) = resonant_opt {
+                    if let Some((fact_anchors, persona_anchors, neg_ref)) = resonant_opt {
                         for tok in 0..seq_len {
                             let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
                             let probe = adapter
                                 .bake_layer_procrustes_q7(neg_ref, slice)
                                 .map_err(candle_core::Error::Msg)?;
-                            let resonant = ResonantSignalSlice::from_q7_probe(anchors, &probe);
+                            let fact_res = ResonantSignalSlice::from_q7_probe(fact_anchors, &probe);
                             if max_rad <= -1.5 {
+                                let persona_res =
+                                    ResonantSignalSlice::from_q7_probe(persona_anchors, &probe);
+                                let composite = (fact_res, persona_res);
                                 adapter
                                     .orchestrate_layer_rope_with_action_hub(
                                         layer_idx,
-                                        &resonant,
+                                        &composite,
                                         trail,
                                         None,
                                         128,
@@ -154,7 +161,7 @@ impl RotaryCache {
                                 adapter
                                     .steer_layer_with_gateway(
                                         layer_idx,
-                                        &resonant,
+                                        &fact_res,
                                         trail,
                                         128,
                                         slice,
@@ -267,7 +274,11 @@ impl Phi3Attention {
             usize,
             &[gcso_q7_t],
             Option<&[gcso_q7_t]>,
-            Option<(&[ObjectiveFact<[i8; 64]>], &[f32])>,
+            Option<(
+                &[ObjectiveFact<[i8; 64]>],
+                &[SubjectivePersona<[i8; 64]>],
+                &[f32],
+            )>,
             f32,
             &mut gcso_pointer_trail_t,
         )>,
@@ -463,7 +474,11 @@ impl Phi3Model {
         mut adapter: Option<&mut ModelSteeringAdapter>,
         q7s: Option<&[Vec<gcso_q7_t>]>,
         persona_q7s: Option<&[Vec<gcso_q7_t>]>,
-        resonant_ctx: Option<(&[Vec<ObjectiveFact<[i8; 64]>>], &[Vec<f32>])>,
+        resonant_ctx: Option<(
+            &[Vec<ObjectiveFact<[i8; 64]>>],
+            &[Vec<SubjectivePersona<[i8; 64]>>],
+            &[Vec<f32>],
+        )>,
         rope_rad: f32,
         trail_opt: Option<&mut gcso_pointer_trail_t>,
         srl: Option<(&[f32], &[f32], f32)>,
@@ -482,11 +497,12 @@ impl Phi3Model {
 
         for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
             let p_slice = persona_q7s.and_then(|ps| ps.get(layer_idx)).map(Vec::as_slice);
-            let res_slice = resonant_ctx.and_then(|(anchors, negs)| {
-                anchors
+            let res_slice = resonant_ctx.and_then(|(f_anchors, p_anchors, negs)| {
+                f_anchors
                     .get(layer_idx)
+                    .zip(p_anchors.get(layer_idx))
                     .zip(negs.get(layer_idx))
-                    .map(|(a, n)| (a.as_slice(), n.as_slice()))
+                    .map(|((fa, pa), n)| (fa.as_slice(), pa.as_slice(), n.as_slice()))
             });
             let steer_ref = match (adapter.as_deref_mut(), q7s) {
                 (Some(ad), Some(qs)) if rope_rad != 0.0 => qs.get(layer_idx).map(|q7| {
@@ -688,6 +704,7 @@ struct BakedModelProfile {
     persona_q7: Vec<Vec<gcso_q7_t>>,
     neg_sum: Vec<Vec<f32>>,
     fact_anchors_per_layer: Vec<Vec<ObjectiveFact<[i8; 64]>>>,
+    persona_anchors_per_layer: Vec<Vec<SubjectivePersona<[i8; 64]>>>,
     srl_u: Vec<f32>,
     srl_v: Vec<f32>,
 }
@@ -721,6 +738,8 @@ fn bake_via_adapter(
     let neg_count = suite.guards.len().max(1) as f32;
 
     let mut per_layer_fact_qs: Vec<Vec<Vec<f32>>> = vec![Vec::with_capacity(suite.facts.len()); num_layers];
+    let mut per_layer_persona_qs: Vec<Vec<Vec<f32>>> =
+        vec![Vec::with_capacity(suite.persona.len()); num_layers];
 
     for text in &suite.facts {
         model.clear_cache();
@@ -753,6 +772,7 @@ fn bake_via_adapter(
         let (_, layer_qs, h_vec) =
             model.forward_tokens(&ids, 0, None, None, None, None, 0.0, None, None, false, true)?;
         for (l, q) in layer_qs.iter().enumerate() {
+            per_layer_persona_qs[l].push(q.clone());
             for ((per_dst, p_dst), &src) in persona_sum[l].iter_mut().zip(pos_sum[l].iter_mut()).zip(q.iter()) {
                 *per_dst += src / persona_count;
                 *p_dst += src / pos_count;
@@ -786,6 +806,7 @@ fn bake_via_adapter(
     let mut fact_q7 = Vec::with_capacity(num_layers);
     let mut persona_q7 = Vec::with_capacity(num_layers);
     let mut fact_anchors_per_layer = Vec::with_capacity(num_layers);
+    let mut persona_anchors_per_layer = Vec::with_capacity(num_layers);
     for l in 0..num_layers {
         out_push_q7(&mut per_layer_q7, adapter, &neg_sum[l], &pos_sum[l])?;
         out_push_q7(&mut fact_q7, adapter, &neg_sum[l], &fact_sum[l])?;
@@ -800,6 +821,21 @@ fn bake_via_adapter(
             layer_anchors.push(ObjectiveFact::new(arr64, 2.5, 0, (fact_idx + 1) as u32));
         }
         fact_anchors_per_layer.push(layer_anchors);
+
+        let mut layer_personas = Vec::with_capacity(per_layer_persona_qs[l].len());
+        for (per_idx, q_per) in per_layer_persona_qs[l].iter().enumerate() {
+            let q7 = adapter.bake_layer_procrustes_q7(&neg_sum[l], q_per)?;
+            let mut arr64 = [0i8; 64];
+            let n = q7.len().min(64);
+            arr64[..n].copy_from_slice(&q7[..n]);
+            layer_personas.push(SubjectivePersona::new(
+                arr64,
+                1.5,
+                0,
+                (per_idx + 101) as u32,
+            ));
+        }
+        persona_anchors_per_layer.push(layer_personas);
     }
 
     let mut srl_u: Vec<f32> = pos_h.iter().zip(neg_h.iter()).map(|(&p, &n)| p - n).collect();
@@ -813,6 +849,7 @@ fn bake_via_adapter(
         persona_q7,
         neg_sum,
         fact_anchors_per_layer,
+        persona_anchors_per_layer,
         srl_u,
         srl_v,
     })
@@ -944,6 +981,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let res_ctx = if use_resonant {
                 Some((
                     baked.fact_anchors_per_layer.as_slice(),
+                    baked.persona_anchors_per_layer.as_slice(),
                     baked.neg_sum.as_slice(),
                 ))
             } else {
