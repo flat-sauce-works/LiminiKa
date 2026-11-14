@@ -692,20 +692,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         baselines.push(logits);
     }
 
-    // 4-way ablation: Baseline, RoPE only, RoPE + EDBC, RoPE + EDBC + SRL.
-    let configs: [(&str, f32, bool, f32); 4] = [
-        ("Baseline", 0.00, false, 0.00),
-        ("RoPE only", 0.10, false, 0.00),
-        ("RoPE + EDBC", 0.10, true, 0.00),
-        ("RoPE + EDBC + SRL", 0.10, true, 0.15),
+    // Compare full-layer RoPE vs top-16-layer RoPE and pure RoPE + SRL (without EDBC logit scaling).
+    let configs: [(&str, u64, f32, f32); 5] = [
+        ("Baseline", 0xFFFF_FFFF, 0.00, 0.00),
+        ("RoPE (32L, 0.10)", 0xFFFF_FFFF, 0.10, 0.00),
+        ("RoPE (Top16, 0.10)", 0xFFFF_0000, 0.10, 0.00),
+        ("Top16 + SRL(0.15)", 0xFFFF_0000, 0.10, 0.15),
+        ("Top16 + SRL(0.35)", 0xFFFF_0000, 0.10, 0.35),
     ];
 
     println!(
-        "\n{:>18} | {:>10} | {:>12} | {:>11} | {:>11}",
+        "\n{:>20} | {:>10} | {:>12} | {:>11} | {:>11}",
         "mode", "mean_KL", "d_logprob", "expect_hit", "forbid_hit"
     );
 
-    for (label, rope_rad, use_edbc, srl_scale) in configs {
+    for (label, layer_mask, rope_rad, srl_scale) in configs {
+        adapter.set_layer_rope_mask(layer_mask);
+        let use_edbc = false;
         let mut sum_kl = 0.0_f32;
         let mut sum_d_lp = 0.0_f32;
         let mut d_lp_count = 0_usize;
@@ -804,7 +807,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             forb_hits as f32 / forb_total as f32 * 100.0
         };
         println!(
-            "{label:>18} | {:>10.4} | {mean_d_lp:>+12.4} | {eh:>10.1}% | {fh:>10.1}%",
+            "{label:>20} | {:>10.4} | {mean_d_lp:>+12.4} | {eh:>10.1}% | {fh:>10.1}%",
             sum_kl / n
         );
         println!("   [P1] {p1_sample}");

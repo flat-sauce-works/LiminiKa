@@ -258,6 +258,11 @@ impl ModelSteeringAdapter {
         &self.geometry
     }
 
+    /// Updates the active RoPE layer bitmask (`1` = steer, `0` = skip NoPE/disabled layer).
+    pub fn set_layer_rope_mask(&mut self, mask: u64) {
+        self.geometry.layer_rope_mask = mask;
+    }
+
     /// Returns a mutable reference to the embedded [`EntropyController`] (EDBC).
     pub fn entropy_controller_mut(&mut self) -> &mut EntropyController {
         &mut self.entropy_controller
