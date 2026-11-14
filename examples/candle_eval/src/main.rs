@@ -11,7 +11,7 @@ use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor, D};
 use candle_nn::{linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 use liminika_adapter::{ModelSteeringAdapter, RopeGeometry, RopeLayout};
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
-use liminika_core::traits::gateway::{ObjectiveFact, SubjectivePersona};
+use liminika_core::traits::gateway::{ObjectiveFact, ResonantSignalSlice, SubjectivePersona};
 use serde::Deserialize;
 use tokenizers::Tokenizer;
 
@@ -99,6 +99,7 @@ impl RotaryCache {
             usize,
             &[gcso_q7_t],
             Option<&[gcso_q7_t]>,
+            Option<(&[ObjectiveFact<[i8; 64]>], &[f32])>,
             f32,
             &mut gcso_pointer_trail_t,
         )>,
@@ -118,7 +119,9 @@ impl RotaryCache {
         let r2 = (x1.broadcast_mul(&sin)? + x2.broadcast_mul(&cos)?)?;
         let mut q_rot = Tensor::cat(&[&r1, &r2], D::Minus1)?;
 
-        if let Some((adapter, layer_idx, q7_deltas, persona_opt, max_rad, trail)) = steer {
+        if let Some((adapter, layer_idx, q7_deltas, persona_opt, resonant_opt, max_rad, trail)) =
+            steer
+        {
             if max_rad != 0.0 && b == 1 {
                 let mut flat = q_rot
                     .transpose(1, 2)?
@@ -128,23 +131,17 @@ impl RotaryCache {
                     .to_vec1::<f32>()?;
                 let tok_stride = num_heads * rot;
                 if max_rad < 0.0 {
-                    let mut fact_arr = [0i8; 64];
-                    let n = q7_deltas.len().min(64);
-                    fact_arr[..n].copy_from_slice(&q7_deltas[..n]);
-                    let fact = ObjectiveFact::new(fact_arr, 2.5, 0, layer_idx as u32 + 1);
-                    if let Some(p_deltas) = persona_opt {
-                        let mut persona_arr = [0i8; 64];
-                        let pn = p_deltas.len().min(64);
-                        persona_arr[..pn].copy_from_slice(&p_deltas[..pn]);
-                        let persona =
-                            SubjectivePersona::new(persona_arr, 1.5, 0, layer_idx as u32 + 101);
-                        let composite = (fact, persona);
+                    if let Some((anchors, neg_ref)) = resonant_opt {
                         for tok in 0..seq_len {
                             let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
+                            let probe = adapter
+                                .bake_layer_procrustes_q7(neg_ref, slice)
+                                .map_err(candle_core::Error::Msg)?;
+                            let resonant = ResonantSignalSlice::from_q7_probe(anchors, &probe);
                             adapter
                                 .steer_layer_with_gateway(
                                     layer_idx,
-                                    &composite,
+                                    &resonant,
                                     trail,
                                     128,
                                     slice,
@@ -153,18 +150,44 @@ impl RotaryCache {
                                 .map_err(candle_core::Error::Msg)?;
                         }
                     } else {
-                        for tok in 0..seq_len {
-                            let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
-                            adapter
-                                .steer_layer_with_gateway(
-                                    layer_idx,
-                                    &fact,
-                                    trail,
-                                    128,
-                                    slice,
-                                    None,
-                                )
-                                .map_err(candle_core::Error::Msg)?;
+                        let mut fact_arr = [0i8; 64];
+                        let n = q7_deltas.len().min(64);
+                        fact_arr[..n].copy_from_slice(&q7_deltas[..n]);
+                        let fact = ObjectiveFact::new(fact_arr, 2.5, 0, layer_idx as u32 + 1);
+                        if let Some(p_deltas) = persona_opt {
+                            let mut persona_arr = [0i8; 64];
+                            let pn = p_deltas.len().min(64);
+                            persona_arr[..pn].copy_from_slice(&p_deltas[..pn]);
+                            let persona =
+                                SubjectivePersona::new(persona_arr, 1.5, 0, layer_idx as u32 + 101);
+                            let composite = (fact, persona);
+                            for tok in 0..seq_len {
+                                let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
+                                adapter
+                                    .steer_layer_with_gateway(
+                                        layer_idx,
+                                        &composite,
+                                        trail,
+                                        128,
+                                        slice,
+                                        None,
+                                    )
+                                    .map_err(candle_core::Error::Msg)?;
+                            }
+                        } else {
+                            for tok in 0..seq_len {
+                                let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
+                                adapter
+                                    .steer_layer_with_gateway(
+                                        layer_idx,
+                                        &fact,
+                                        trail,
+                                        128,
+                                        slice,
+                                        None,
+                                    )
+                                    .map_err(candle_core::Error::Msg)?;
+                            }
                         }
                     }
                 } else {
@@ -230,6 +253,7 @@ impl Phi3Attention {
             usize,
             &[gcso_q7_t],
             Option<&[gcso_q7_t]>,
+            Option<(&[ObjectiveFact<[i8; 64]>], &[f32])>,
             f32,
             &mut gcso_pointer_trail_t,
         )>,
@@ -425,6 +449,7 @@ impl Phi3Model {
         mut adapter: Option<&mut ModelSteeringAdapter>,
         q7s: Option<&[Vec<gcso_q7_t>]>,
         persona_q7s: Option<&[Vec<gcso_q7_t>]>,
+        resonant_ctx: Option<(&[Vec<ObjectiveFact<[i8; 64]>>], &[Vec<f32>])>,
         rope_rad: f32,
         trail_opt: Option<&mut gcso_pointer_trail_t>,
         srl: Option<(&[f32], &[f32], f32)>,
@@ -443,10 +468,24 @@ impl Phi3Model {
 
         for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
             let p_slice = persona_q7s.and_then(|ps| ps.get(layer_idx)).map(Vec::as_slice);
-            let steer_ref = match (adapter.as_deref(), q7s) {
-                (Some(ad), Some(qs)) if rope_rad != 0.0 => qs
+            let res_slice = resonant_ctx.and_then(|(anchors, negs)| {
+                anchors
                     .get(layer_idx)
-                    .map(|q7| (ad, layer_idx, q7.as_slice(), p_slice, rope_rad, &mut *trail_ref)),
+                    .zip(negs.get(layer_idx))
+                    .map(|(a, n)| (a.as_slice(), n.as_slice()))
+            });
+            let steer_ref = match (adapter.as_deref(), q7s) {
+                (Some(ad), Some(qs)) if rope_rad != 0.0 => qs.get(layer_idx).map(|q7| {
+                    (
+                        ad,
+                        layer_idx,
+                        q7.as_slice(),
+                        p_slice,
+                        res_slice,
+                        rope_rad,
+                        &mut *trail_ref,
+                    )
+                }),
                 _ => None,
             };
             let normed = layer.input_layernorm.forward(&h)?;
@@ -623,6 +662,8 @@ struct BakedModelProfile {
     per_layer_q7: Vec<Vec<gcso_q7_t>>,
     fact_q7: Vec<Vec<gcso_q7_t>>,
     persona_q7: Vec<Vec<gcso_q7_t>>,
+    neg_sum: Vec<Vec<f32>>,
+    fact_anchors_per_layer: Vec<Vec<ObjectiveFact<[i8; 64]>>>,
     srl_u: Vec<f32>,
     srl_v: Vec<f32>,
 }
@@ -655,6 +696,8 @@ fn bake_via_adapter(
     let pos_count = (suite.facts.len() + suite.persona.len()).max(1) as f32;
     let neg_count = suite.guards.len().max(1) as f32;
 
+    let mut per_layer_fact_qs: Vec<Vec<Vec<f32>>> = vec![Vec::with_capacity(suite.facts.len()); num_layers];
+
     for text in &suite.facts {
         model.clear_cache();
         let ids = tokenizer
@@ -663,8 +706,9 @@ fn bake_via_adapter(
             .get_ids()
             .to_vec();
         let (_, layer_qs, h_vec) =
-            model.forward_tokens(&ids, 0, None, None, None, 0.0, None, None, false, true)?;
+            model.forward_tokens(&ids, 0, None, None, None, None, 0.0, None, None, false, true)?;
         for (l, q) in layer_qs.iter().enumerate() {
+            per_layer_fact_qs[l].push(q.clone());
             for ((f_dst, p_dst), &src) in fact_sum[l].iter_mut().zip(pos_sum[l].iter_mut()).zip(q.iter()) {
                 *f_dst += src / fact_count;
                 *p_dst += src / pos_count;
@@ -683,7 +727,7 @@ fn bake_via_adapter(
             .get_ids()
             .to_vec();
         let (_, layer_qs, h_vec) =
-            model.forward_tokens(&ids, 0, None, None, None, 0.0, None, None, false, true)?;
+            model.forward_tokens(&ids, 0, None, None, None, None, 0.0, None, None, false, true)?;
         for (l, q) in layer_qs.iter().enumerate() {
             for ((per_dst, p_dst), &src) in persona_sum[l].iter_mut().zip(pos_sum[l].iter_mut()).zip(q.iter()) {
                 *per_dst += src / persona_count;
@@ -703,7 +747,7 @@ fn bake_via_adapter(
             .get_ids()
             .to_vec();
         let (_, layer_qs, h_vec) =
-            model.forward_tokens(&ids, 0, None, None, None, 0.0, None, None, false, true)?;
+            model.forward_tokens(&ids, 0, None, None, None, None, 0.0, None, None, false, true)?;
         for (l, q) in layer_qs.iter().enumerate() {
             for (dst, &src) in neg_sum[l].iter_mut().zip(q.iter()) {
                 *dst += src / neg_count;
@@ -717,10 +761,21 @@ fn bake_via_adapter(
     let mut per_layer_q7 = Vec::with_capacity(num_layers);
     let mut fact_q7 = Vec::with_capacity(num_layers);
     let mut persona_q7 = Vec::with_capacity(num_layers);
+    let mut fact_anchors_per_layer = Vec::with_capacity(num_layers);
     for l in 0..num_layers {
         out_push_q7(&mut per_layer_q7, adapter, &neg_sum[l], &pos_sum[l])?;
         out_push_q7(&mut fact_q7, adapter, &neg_sum[l], &fact_sum[l])?;
         out_push_q7(&mut persona_q7, adapter, &neg_sum[l], &persona_sum[l])?;
+
+        let mut layer_anchors = Vec::with_capacity(per_layer_fact_qs[l].len());
+        for (fact_idx, q_fact) in per_layer_fact_qs[l].iter().enumerate() {
+            let q7 = adapter.bake_layer_procrustes_q7(&neg_sum[l], q_fact)?;
+            let mut arr64 = [0i8; 64];
+            let n = q7.len().min(64);
+            arr64[..n].copy_from_slice(&q7[..n]);
+            layer_anchors.push(ObjectiveFact::new(arr64, 2.5, 0, (fact_idx + 1) as u32));
+        }
+        fact_anchors_per_layer.push(layer_anchors);
     }
 
     let mut srl_u: Vec<f32> = pos_h.iter().zip(neg_h.iter()).map(|(&p, &n)| p - n).collect();
@@ -732,6 +787,8 @@ fn bake_via_adapter(
         per_layer_q7,
         fact_q7,
         persona_q7,
+        neg_sum,
+        fact_anchors_per_layer,
         srl_u,
         srl_v,
     })
@@ -806,17 +863,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .get_ids()
             .to_vec();
         let (logits, _, _) =
-            model.forward_tokens(&ids, 0, None, None, None, 0.0, None, None, false, false)?;
+            model.forward_tokens(&ids, 0, None, None, None, None, 0.0, None, None, false, false)?;
         baselines.push(logits);
     }
 
-    // Compare manual max_rad vs Gateway structural hyperparameters (RoPE + norm-adaptive SRL).
-    let configs: [(&str, u64, f32, f32, bool); 5] = [
-        ("Baseline", 0xFFFF_FFFF, 0.00, 0.00, false),
-        ("RoPE (Top16, 0.10)", 0xFFFF_0000, 0.10, 0.00, false),
-        ("Top16 + GW(Fact)", 0xFFFF_0000, -1.00, 0.00, false),
-        ("Top16 + GW(Fact+SRL)", 0xFFFF_0000, -1.00, -1.00, false),
-        ("Top16 + GW(2O+SRL)", 0xFFFF_0000, -1.00, -1.00, true),
+    // Compare manual max_rad vs Gateway structural hyperparameters vs count-agnostic Resonant slice.
+    // tuple: (label, layer_mask, rope_rad, srl_scale, use_two_origin, use_resonant_slice)
+    let configs: [(&str, u64, f32, f32, bool, bool); 5] = [
+        ("Baseline", 0xFFFF_FFFF, 0.00, 0.00, false, false),
+        ("RoPE (Top16, 0.10)", 0xFFFF_0000, 0.10, 0.00, false, false),
+        ("Top16 + GW(Fact)", 0xFFFF_0000, -1.00, 0.00, false, false),
+        ("Top16 + GW(Fact+SRL)", 0xFFFF_0000, -1.00, -1.00, false, false),
+        ("Top16 + GW(Resonant)", 0xFFFF_0000, -1.00, -1.00, false, true),
     ];
 
     println!(
@@ -824,7 +882,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "mode", "mean_KL", "d_logprob", "expect_hit", "forbid_hit"
     );
 
-    for (label, layer_mask, rope_rad, srl_scale, use_two_origin) in configs {
+    for (label, layer_mask, rope_rad, srl_scale, use_two_origin, use_resonant) in configs {
         adapter.set_layer_rope_mask(layer_mask);
         let use_edbc = false;
         let mut sum_kl = 0.0_f32;
@@ -857,6 +915,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 None
             };
+            let res_ctx = if use_resonant {
+                Some((
+                    baked.fact_anchors_per_layer.as_slice(),
+                    baked.neg_sum.as_slice(),
+                ))
+            } else {
+                None
+            };
             let srl_arg = if srl_scale != 0.0 {
                 Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), srl_scale))
             } else {
@@ -868,6 +934,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(&mut adapter),
                 Some(q7_primary),
                 q7_persona,
+                res_ctx,
                 rope_rad,
                 Some(&mut trail),
                 srl_arg,
@@ -895,6 +962,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Some(&mut adapter),
                     Some(q7_primary),
                     q7_persona,
+                    res_ctx,
                     rope_rad,
                     Some(&mut trail),
                     srl_arg,
