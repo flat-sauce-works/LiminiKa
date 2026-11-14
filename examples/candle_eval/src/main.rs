@@ -10,8 +10,9 @@ use std::time::Instant;
 use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor, D};
 use candle_nn::{linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 use liminika_adapter::{
-    AttractorRole, ModelSteeringAdapter, RopeGeometry, RopeLayout, TextAttractorCorpus,
-    VoidBoundaryState,
+    AdaptiveGopCutDetector, AttractorContainerCodec, AttractorRole, FrameTransitionMetrics,
+    GcsoDualTrackTimeline, ModelSteeringAdapter, RopeGeometry, RopeLayout, SourceTextRecord,
+    TextAttractorCorpus, TimelineStepContext, VoidBoundaryState,
 };
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::traits::gateway::{
@@ -1408,6 +1409,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec!["GCSO".to_string(), "ZiMMS".to_string()],
     ));
 
+    let cut_detector = AdaptiveGopCutDetector::default();
+    let mut timeline = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
+        adapter.geometry(),
+    ));
+    let mut frames_since_keyframe = 0_usize;
+
     for (idx, (slot, prompt, expected, forbidden)) in eval_items.iter().enumerate() {
         model.clear_cache();
         let q_ids = tokenizer
@@ -1420,6 +1427,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         let q_refs: Vec<&[f32]> = query_qs.iter().map(Vec::as_slice).collect();
         let recall = corpus.recall_for_query(&adapter, &q_refs, &centroid_refs, &recall_policy)?;
+
+        let turn_role = match slot.as_str() {
+            "PERSONA" => AttractorRole::Persona,
+            "GUARD" => AttractorRole::Guard,
+            _ => AttractorRole::Fact,
+        };
+        let emitted_i = timeline.record_step(
+            &TimelineStepContext {
+                adapter: &adapter,
+                corpus: &corpus,
+                policy: &recall_policy,
+                detector: &cut_detector,
+            },
+            SourceTextRecord {
+                frame_index: idx as u64,
+                timestamp_epoch_sec: 1_700_000_000 + (idx as u64) * 10,
+                role: turn_role,
+                text: prompt.clone(),
+                energy: 1.5,
+            },
+            &FrameTransitionMetrics {
+                phase_l1_delta: (1.0 - recall.top1_fact_score).clamp(0.0, 1.0) * 0.25,
+                void_state: recall.void_state,
+                frames_since_keyframe,
+                new_cluster_spawned: matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace),
+            },
+        )?;
+        frames_since_keyframe = if emitted_i { 0 } else { frames_since_keyframe + 1 };
 
         let recalled_ctx: String = recall
             .recalled_facts
@@ -1562,6 +1597,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         step2_forb_hits,
         step2_forb_total,
+    );
+
+    // Step 3: Dual-Track .gcso Persistence, Zero-Forward GOP Seek & Cross-Model Subtitle Export
+    println!("\n=== Step 3: Dual-Track .gcso GOP Seek & Cross-Model Subtitle Check ===");
+    let gcso_bytes = timeline.to_bytes();
+    let reloaded = GcsoDualTrackTimeline::from_bytes(&gcso_bytes)?;
+    let active_fp = GcsoDualTrackTimeline::geometry_fingerprint(adapter.geometry());
+    let seek_state = reloaded.seek_zero_forward(2)?;
+    let mut alt_geom = RopeGeometry::phi4_mini();
+    alt_geom.head_dim = 128;
+    alt_geom.rotary_dim = 128;
+    let alt_fp = GcsoDualTrackTimeline::geometry_fingerprint(&alt_geom);
+    let model_changed = reloaded.model_fingerprint() != alt_fp;
+    let subtitles = reloaded.export_subtitle_track(None);
+    println!(
+        "Serialized .gcso: {} bytes | frames={} | keyframes={:?} | fp_match={}",
+        gcso_bytes.len(),
+        reloaded.frames().len(),
+        reloaded.keyframe_positions(),
+        reloaded.model_fingerprint() == active_fp,
+    );
+    println!(
+        "Zero-Forward Seek(frame=2): keyframe={} p_frames={} total_energy={:.2} anchors={}",
+        seek_state.keyframe_index,
+        seek_state.p_frames_applied,
+        seek_state.total_energy,
+        seek_state.anchor_ids.len(),
+    );
+    println!(
+        "Cross-Model EnvProbe Switch Detected={}: exported {} natural-language subtitle records for re-baking.",
+        model_changed,
+        subtitles.len(),
     );
 
     Ok(())
