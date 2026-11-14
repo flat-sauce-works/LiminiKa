@@ -1034,6 +1034,9 @@ pub struct DynamicAttractorRecall<'a> {
     pub min_local_void_depth: f32,
     /// Highest Guard resonance minus highest Fact/Persona resonance (`> 0` indicates guard-dominant conflict).
     pub guard_conflict_margin: f32,
+    /// `ActionHub` regime selected by the upper boundary stratum (`PassiveSidecar`, `InertialLayerSkip`,
+    /// `ExpressPhaseSteer`, `FullOrchestrationSrl`, `CrystallizeMacroBasin`, or `RepulsionEscape`).
+    pub action_decision: StigmergicActionDecision,
     /// Top-K recalled Fact entries (empty when `void_state == CvoidEmptySpace`).
     pub recalled_facts: Vec<(&'a TextAttractorEntry, f32)>,
     /// Top-K recalled Persona entries.
@@ -1265,6 +1268,468 @@ impl RecallBoundaryGate for CoherenceGuardGate {
         }
     }
 }
+
+/// Bottom-up and top-down signal flowing across a Society-of-Mind [`StratumPipeline`].
+///
+/// Lower strata (`n - 1`) populate local features and stigmergic pointer weights without needing
+/// global semantic awareness, while upper strata (`n + 1`) arbitrate `cvoid` boundaries, Guard
+/// conflicts, and `ActionHub` regimes.
+#[derive(Debug, Clone)]
+pub struct StratumSignal {
+    /// Per-attractor score (`-1.0..=1.0+`) updated by each stratum in the stack.
+    pub candidate_scores: Vec<f32>,
+    /// Per-attractor local `cvoid` gap depth (`0.0` = deep inside basin).
+    pub local_void_depths: Vec<f32>,
+    /// Per-attractor stigmergic pointer trace / pheromone strength (`>= 0.0`).
+    pub stigmergic_weights: Vec<f32>,
+    /// Aggregated boundary metrics observed at the upper boundary stratum.
+    pub boundary_metrics: RecallBoundaryMetrics,
+    /// Boundary gate decision (`InsideBasin`, `LiminalBoundary`, or `CvoidEmptySpace`).
+    pub gate_decision: RecallGateDecision,
+    /// `ActionHub` regime chosen for top-down orchestration.
+    pub action_decision: StigmergicActionDecision,
+}
+
+/// Top-down directive sent from stratum `n + 1` down to `n` and `n - 1` after upward inference.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StratumDirective {
+    /// Whether injection should be suppressed (`CvoidEmptySpace` or Guard repulsion).
+    pub suppress_injection: bool,
+    /// Whether active Guard repulsion (`RepulsionEscape`) was triggered.
+    pub repulse_guard: bool,
+    /// Top-down gain multiplier (`0.0` when skipped/repulsed, `< 1.0` on liminal boundary, `>= 1.0` inside basin).
+    pub top_down_gain: f32,
+    /// Minimum local `cvoid` depth observed across the stack.
+    pub min_local_void_depth: f32,
+}
+
+impl Default for StratumDirective {
+    fn default() -> Self {
+        Self {
+            suppress_injection: false,
+            repulse_guard: false,
+            top_down_gain: 1.0,
+            min_local_void_depth: 1.0,
+        }
+    }
+}
+
+/// Read-only shared context passed to each [`SocietyStratum`] during upward and downward passes.
+pub struct StratumContext<'a> {
+    /// Corpus entries aligned with `signal.candidate_scores`.
+    pub entries: &'a [TextAttractorEntry],
+    /// Unprojected steered-layer residual signature for the query.
+    pub raw_sig: &'a [f32],
+    /// Common-mode-projected normalized query signature.
+    pub query_sig: &'a [f32],
+    /// Common-mode-projected normalized corpus signatures.
+    pub entry_sigs: &'a [Vec<f32>],
+    /// Rotary dimension per steered layer chunk (`q_rot_len`).
+    pub layer_chunk_dim: usize,
+    /// Active recall policy thresholds.
+    pub policy: &'a RecallPolicy,
+}
+
+/// Pluggable hierarchical layer in a Society-of-Mind recall/steering stack (`n - 1 <-> n <-> n + 1`).
+///
+/// Strata can be dynamically added, inserted, or removed via [`StratumPipeline`] without altering
+/// neighboring layers.
+pub trait SocietyStratum {
+    /// Stable identifier for inspection and dynamic removal/insertion.
+    fn name(&self) -> &'static str;
+
+    /// Bottom-up inference step (`n - 1 -> n -> n + 1`): transforms `signal` using local rules.
+    ///
+    /// # Errors
+    /// Returns an error if input dimensions or invariants required by this stratum are invalid.
+    fn infer_up(&self, ctx: &StratumContext<'_>, signal: &mut StratumSignal) -> Result<(), String>;
+
+    /// Top-down self-adjustment step (`n + 1 -> n -> n - 1`): updates `directive` or modulates
+    /// lower-stratum `stigmergic_weights` / scores. Default implementation is a no-op.
+    fn adjust_down(
+        &self,
+        _ctx: &StratumContext<'_>,
+        _directive: &mut StratumDirective,
+        _signal: &mut StratumSignal,
+    ) {
+    }
+}
+
+/// Stratum 0 (`n = 0`): local feature worker extracting per-layer viewing-angle contrast relative
+/// to same-role peers and recording initial stigmergic pointer weights.
+#[derive(Debug, Clone, Copy)]
+pub struct LocalFeatureWorkerStratum {
+    /// Weight applied to top-layer viewing-angle contrast modulated by positive global support.
+    pub layer_contrast_gain: f32,
+}
+
+impl Default for LocalFeatureWorkerStratum {
+    fn default() -> Self {
+        Self {
+            layer_contrast_gain: 0.35,
+        }
+    }
+}
+
+impl SocietyStratum for LocalFeatureWorkerStratum {
+    fn name(&self) -> &'static str {
+        "local_feature_worker"
+    }
+
+    fn infer_up(&self, ctx: &StratumContext<'_>, signal: &mut StratumSignal) -> Result<(), String> {
+        let n_entries = ctx.entries.len();
+        let expected = ctx.layer_chunk_dim;
+        if expected > 0
+            && ctx.raw_sig.len() >= expected
+            && ctx.raw_sig.len().is_multiple_of(expected)
+        {
+            let num_steered = ctx.raw_sig.len() / expected;
+            if num_steered >= 2 {
+                let mut layer_cos: Vec<Vec<f32>> = vec![vec![0.0_f32; num_steered]; n_entries];
+                for (i, entry) in ctx.entries.iter().enumerate() {
+                    if entry.residual_sig.len() != ctx.raw_sig.len() {
+                        continue;
+                    }
+                    for (l, slot) in layer_cos[i].iter_mut().enumerate().take(num_steered) {
+                        let start = l * expected;
+                        let end = start + expected;
+                        *slot = TextAttractorCorpus::cosine_f32(
+                            &ctx.raw_sig[start..end],
+                            &entry.residual_sig[start..end],
+                        );
+                    }
+                }
+                for role in [
+                    AttractorRole::Fact,
+                    AttractorRole::Persona,
+                    AttractorRole::Guard,
+                ] {
+                    let idxs: Vec<usize> = ctx
+                        .entries
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, e)| e.role == role)
+                        .map(|(i, _)| i)
+                        .collect();
+                    if idxs.len() <= 1 {
+                        continue;
+                    }
+                    let mut role_layer_mean = vec![0.0_f32; num_steered];
+                    for &i in &idxs {
+                        for (l, mean_slot) in role_layer_mean.iter_mut().enumerate() {
+                            *mean_slot += layer_cos[i][l] / (idxs.len() as f32);
+                        }
+                    }
+                    let top_l = (num_steered / 4).max(1);
+                    for &i in &idxs {
+                        let mut diffs: Vec<f32> = (0..num_steered)
+                            .map(|l| layer_cos[i][l] - role_layer_mean[l])
+                            .collect();
+                        diffs.sort_by(|a, b| b.total_cmp(a));
+                        let top_contrast = diffs[..top_l].iter().sum::<f32>() / (top_l as f32);
+                        let pos = signal.candidate_scores[i].max(0.0);
+                        signal.candidate_scores[i] += self.layer_contrast_gain * pos * top_contrast;
+                        signal.stigmergic_weights[i] = (1.0 + top_contrast).clamp(0.5, 1.5);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn adjust_down(
+        &self,
+        _ctx: &StratumContext<'_>,
+        directive: &mut StratumDirective,
+        signal: &mut StratumSignal,
+    ) {
+        if directive.repulse_guard || directive.suppress_injection {
+            for w in &mut signal.stigmergic_weights {
+                *w *= 0.25;
+            }
+        } else {
+            for w in &mut signal.stigmergic_weights {
+                *w = (*w * directive.top_down_gain).clamp(0.25, 2.0);
+            }
+        }
+    }
+}
+
+/// Stratum 1 (`n = 1`): evaluates role-scoped local neighborhood baselines and perspective-dependent
+/// `cvoid` depths via an [`AttractorVoidPerspective`] trait object.
+pub struct PerspectiveDominoStratum<'a> {
+    /// Perspective evaluator measuring `perspective_affinity` and `local_void_depth`.
+    pub perspective: &'a dyn AttractorVoidPerspective,
+}
+
+impl SocietyStratum for PerspectiveDominoStratum<'_> {
+    fn name(&self) -> &'static str {
+        "perspective_domino_cvoid"
+    }
+
+    fn infer_up(&self, ctx: &StratumContext<'_>, signal: &mut StratumSignal) -> Result<(), String> {
+        let n_entries = ctx.entries.len();
+        let (query_mean_cosine, query_std_cosine) = if signal.candidate_scores.is_empty() {
+            (0.0_f32, 0.05_f32)
+        } else {
+            let n = signal.candidate_scores.len() as f32;
+            let mean = signal.candidate_scores.iter().sum::<f32>() / n;
+            let var = signal
+                .candidate_scores
+                .iter()
+                .map(|&s| (s - mean) * (s - mean))
+                .sum::<f32>()
+                / n;
+            (mean, var.sqrt())
+        };
+
+        let mut neighbor_stats: Vec<(f32, f32)> = vec![(0.0, 0.05); n_entries];
+        let mut role_global_means = [0.0_f32; 3];
+        for role in [
+            AttractorRole::Fact,
+            AttractorRole::Persona,
+            AttractorRole::Guard,
+        ] {
+            let role_indices: Vec<usize> = ctx
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.role == role)
+                .map(|(i, _)| i)
+                .collect();
+            if role_indices.len() <= 1 {
+                continue;
+            }
+            let neighbor_k = (role_indices.len() - 1).clamp(1, 4);
+            let mut sum_k_mean = 0.0_f32;
+            for &i in &role_indices {
+                let mut sims: Vec<f32> = role_indices
+                    .iter()
+                    .copied()
+                    .filter(|&j| j != i)
+                    .map(|j| {
+                        TextAttractorCorpus::cosine_f32(&ctx.entry_sigs[i], &ctx.entry_sigs[j])
+                    })
+                    .collect();
+                sims.sort_by(|a, b| b.total_cmp(a));
+                let top_slice = &sims[..neighbor_k.min(sims.len())];
+                let k_len = top_slice.len().max(1) as f32;
+                let k_mean = top_slice.iter().sum::<f32>() / k_len;
+                let all_mean = sims.iter().sum::<f32>() / (sims.len().max(1) as f32);
+                let all_var = sims
+                    .iter()
+                    .map(|&s| (s - all_mean) * (s - all_mean))
+                    .sum::<f32>()
+                    / (sims.len().max(1) as f32);
+                neighbor_stats[i] = (k_mean, all_var.sqrt());
+                sum_k_mean += k_mean;
+            }
+            let role_slot = match role {
+                AttractorRole::Fact => 0,
+                AttractorRole::Persona => 1,
+                AttractorRole::Guard => 2,
+            };
+            role_global_means[role_slot] = sum_k_mean / (role_indices.len() as f32);
+        }
+
+        for (idx, entry) in ctx.entries.iter().enumerate() {
+            let (neighbor_mean_cosine, neighbor_std_cosine) = neighbor_stats[idx];
+            let role_slot = match entry.role {
+                AttractorRole::Fact => 0,
+                AttractorRole::Persona => 1,
+                AttractorRole::Guard => 2,
+            };
+            let reading = self.perspective.measure_perspective(
+                &AttractorPerspectiveContext {
+                    entry,
+                    raw_cosine: signal.candidate_scores[idx],
+                    neighbor_mean_cosine,
+                    neighbor_std_cosine,
+                    global_neighbor_mean: role_global_means[role_slot],
+                    query_mean_cosine,
+                    query_std_cosine,
+                },
+                ctx.policy.min_coherence,
+            );
+            signal.candidate_scores[idx] = reading.perspective_affinity;
+            signal.local_void_depths[idx] = reading.local_void_depth;
+        }
+        Ok(())
+    }
+}
+
+/// Stratum 2 (`n = 2`): upper Society-of-Mind arbiter combining [`RecallBoundaryGate`] with
+/// `ActionHub` [`StigmergicActionDecision`] regime selection and top-down directives.
+pub struct ActionHubBoundaryStratum<'a> {
+    /// Boundary gate classifying `void_state` and suppression.
+    pub gate: &'a dyn RecallBoundaryGate,
+}
+
+impl SocietyStratum for ActionHubBoundaryStratum<'_> {
+    fn name(&self) -> &'static str {
+        "action_hub_boundary"
+    }
+
+    fn infer_up(&self, ctx: &StratumContext<'_>, signal: &mut StratumSignal) -> Result<(), String> {
+        let mut fact_scores: Vec<f32> = Vec::new();
+        let mut persona_scores: Vec<f32> = Vec::new();
+        let mut max_guard_score = -1.0_f32;
+        for (entry, &score) in ctx.entries.iter().zip(signal.candidate_scores.iter()) {
+            match entry.role {
+                AttractorRole::Fact => fact_scores.push(score),
+                AttractorRole::Persona => persona_scores.push(score),
+                AttractorRole::Guard => {
+                    if score > max_guard_score {
+                        max_guard_score = score;
+                    }
+                }
+            }
+        }
+        fact_scores.sort_by(|a, b| b.total_cmp(a));
+        persona_scores.sort_by(|a, b| b.total_cmp(a));
+
+        let top1_fact_score = fact_scores.first().copied().unwrap_or(-1.0);
+        let top2_fact_score = fact_scores.get(1).copied().unwrap_or(-1.0);
+        let top1_persona_score = persona_scores.first().copied().unwrap_or(-1.0);
+        let guard_conflict_margin = max_guard_score - top1_fact_score.max(top1_persona_score);
+
+        let metrics = RecallBoundaryMetrics {
+            top1_fact_score,
+            top2_fact_score,
+            top1_persona_score,
+            max_guard_score,
+            guard_conflict_margin,
+        };
+        let decision = self.gate.evaluate(&metrics, ctx.policy);
+        let action_decision = if guard_conflict_margin > ctx.policy.guard_suppress_margin {
+            StigmergicActionDecision::RepulsionEscape
+        } else {
+            match decision.void_state {
+                VoidBoundaryState::CvoidEmptySpace => StigmergicActionDecision::InertialLayerSkip,
+                VoidBoundaryState::LiminalBoundary => StigmergicActionDecision::ExpressPhaseSteer,
+                VoidBoundaryState::InsideBasin => {
+                    if (top1_fact_score - top2_fact_score) >= 2.0 * ctx.policy.boundary_margin {
+                        StigmergicActionDecision::CrystallizeMacroBasin
+                    } else {
+                        StigmergicActionDecision::FullOrchestrationSrl
+                    }
+                }
+            }
+        };
+
+        signal.boundary_metrics = metrics;
+        signal.gate_decision = decision;
+        signal.action_decision = action_decision;
+        Ok(())
+    }
+
+    fn adjust_down(
+        &self,
+        _ctx: &StratumContext<'_>,
+        directive: &mut StratumDirective,
+        signal: &mut StratumSignal,
+    ) {
+        directive.suppress_injection = signal.gate_decision.suppress_fact_injection;
+        directive.repulse_guard = matches!(
+            signal.action_decision,
+            StigmergicActionDecision::RepulsionEscape
+        );
+        directive.top_down_gain = match signal.action_decision {
+            StigmergicActionDecision::RepulsionEscape
+            | StigmergicActionDecision::InertialLayerSkip
+            | StigmergicActionDecision::PassiveSidecar => 0.0,
+            StigmergicActionDecision::ExpressPhaseSteer => 0.65,
+            StigmergicActionDecision::PspmSubHeadRoute => 0.85,
+            StigmergicActionDecision::FullOrchestrationSrl => 1.0,
+            StigmergicActionDecision::CrystallizeMacroBasin => 1.15,
+        };
+        let min_void = signal
+            .local_void_depths
+            .iter()
+            .copied()
+            .fold(f32::INFINITY, f32::min);
+        directive.min_local_void_depth = if min_void.is_finite() { min_void } else { 1.0 };
+    }
+}
+
+/// Composable Society-of-Mind pipeline supporting dynamic insertion, removal, and finite
+/// bidirectional (`infer_up` then `adjust_down`) arbitration across [`SocietyStratum`] layers.
+pub struct StratumPipeline<'a> {
+    strata: Vec<Box<dyn SocietyStratum + 'a>>,
+}
+
+impl<'a> StratumPipeline<'a> {
+    /// Creates an empty [`StratumPipeline`].
+    #[must_use]
+    pub fn new() -> Self {
+        Self { strata: Vec::new() }
+    }
+
+    /// Appends a stratum at the top (`n + 1`) of the pipeline.
+    pub fn push_stratum(&mut self, stratum: Box<dyn SocietyStratum + 'a>) {
+        self.strata.push(stratum);
+    }
+
+    /// Inserts a stratum at `index` (clamped to `self.strata.len()`).
+    pub fn insert_stratum(&mut self, index: usize, stratum: Box<dyn SocietyStratum + 'a>) {
+        let pos = index.min(self.strata.len());
+        self.strata.insert(pos, stratum);
+    }
+
+    /// Removes and returns the first stratum matching `name`, if present.
+    pub fn remove_stratum(&mut self, name: &str) -> Option<Box<dyn SocietyStratum + 'a>> {
+        self.strata
+            .iter()
+            .position(|s| s.name() == name)
+            .map(|idx| self.strata.remove(idx))
+    }
+
+    /// Returns the ordered list of active stratum names from bottom (`0`) to top.
+    #[must_use]
+    pub fn stratum_names(&self) -> Vec<&'static str> {
+        self.strata.iter().map(|s| s.name()).collect()
+    }
+
+    /// Executes one bottom-up pass (`0..len`) followed by one top-down pass (`len..0`).
+    ///
+    /// # Errors
+    /// Returns an error if any stratum's `infer_up` fails.
+    pub fn evaluate(
+        &self,
+        ctx: &StratumContext<'_>,
+        mut signal: StratumSignal,
+    ) -> Result<(StratumSignal, StratumDirective), String> {
+        for stratum in &self.strata {
+            stratum.infer_up(ctx, &mut signal)?;
+        }
+        let mut directive = StratumDirective::default();
+        for stratum in self.strata.iter().rev() {
+            stratum.adjust_down(ctx, &mut directive, &mut signal);
+        }
+        Ok((signal, directive))
+    }
+}
+
+impl Default for StratumPipeline<'static> {
+    fn default() -> Self {
+        let mut p = Self::new();
+        p.push_stratum(Box::new(LocalFeatureWorkerStratum::default()));
+        p.push_stratum(Box::new(PerspectiveDominoStratum {
+            perspective: &DEFAULT_PERSPECTIVE,
+        }));
+        p.push_stratum(Box::new(ActionHubBoundaryStratum {
+            gate: &DEFAULT_GATE,
+        }));
+        p
+    }
+}
+
+static DEFAULT_PERSPECTIVE: AsymmetricDominoVoidPerspective = AsymmetricDominoVoidPerspective {
+    neighbor_k: 4,
+    hubness_damping: 0.50,
+    perspective_z_gain: 0.025,
+};
+static DEFAULT_GATE: CoherenceGuardGate = CoherenceGuardGate;
 
 /// Model-agnostic Cold-Path corpus that compiles natural-language logs, facts, personas, and
 /// contrastive guards into a dynamic attractor manifold with explicit `cvoid` boundary detection.
@@ -1605,7 +2070,8 @@ impl TextAttractorCorpus {
     }
 
     /// Scores a query's per-layer Q activations against the corpus using caller-supplied
-    /// [`AttractorVoidPerspective`] and [`RecallBoundaryGate`] trait objects.
+    /// [`AttractorVoidPerspective`] and [`RecallBoundaryGate`] trait objects inside the default
+    /// 3-stratum Society-of-Mind pipeline.
     ///
     /// # Errors
     ///
@@ -1618,6 +2084,33 @@ impl TextAttractorCorpus {
         policy: &RecallPolicy,
         gate: &dyn RecallBoundaryGate,
         perspective: &dyn AttractorVoidPerspective,
+    ) -> Result<DynamicAttractorRecall<'_>, String> {
+        let mut pipeline = StratumPipeline::new();
+        pipeline.push_stratum(Box::new(LocalFeatureWorkerStratum::default()));
+        pipeline.push_stratum(Box::new(PerspectiveDominoStratum { perspective }));
+        pipeline.push_stratum(Box::new(ActionHubBoundaryStratum { gate }));
+        self.recall_for_query_with_strata(
+            adapter,
+            query_per_layer_q,
+            baseline_ref_per_layer,
+            policy,
+            &pipeline,
+        )
+    }
+
+    /// Scores a query's per-layer Q activations through a dynamically composable [`StratumPipeline`]
+    /// (`n - 1 <-> n <-> n + 1`), enabling runtime addition or removal of strata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if query/baseline layer slices mismatch `adapter.geometry()` or a stratum fails.
+    pub fn recall_for_query_with_strata(
+        &self,
+        adapter: &ModelSteeringAdapter,
+        query_per_layer_q: &[&[f32]],
+        baseline_ref_per_layer: &[&[f32]],
+        policy: &RecallPolicy,
+        pipeline: &StratumPipeline<'_>,
     ) -> Result<DynamicAttractorRecall<'_>, String> {
         if query_per_layer_q.len() != baseline_ref_per_layer.len() {
             return Err(format!(
@@ -1648,190 +2141,55 @@ impl TextAttractorCorpus {
             Self::build_steered_residual_sig(geom, query_per_layer_q, baseline_ref_per_layer);
         let query_sig = Self::project_and_normalize(&raw_sig, &self.common_mode_basis);
         let entry_sigs = self.projected_corpus_sigs();
-        let mut raw_cosines: Vec<f32> = entry_sigs
+        let raw_cosines: Vec<f32> = entry_sigs
             .iter()
             .map(|sig| Self::cosine_f32(&query_sig, sig))
             .collect();
-
-        // Layer-wise Attention viewing-angle contrast: reward attractors that selectively dominate
-        // specialized layer chunks relative to same-role peers, modulated by positive global support.
         let n_entries = entry_sigs.len();
-        if expected > 0 && raw_sig.len() >= expected && raw_sig.len().is_multiple_of(expected) {
-            let num_steered = raw_sig.len() / expected;
-            if num_steered >= 2 {
-                let mut layer_cos: Vec<Vec<f32>> = vec![vec![0.0_f32; num_steered]; n_entries];
-                for (i, entry) in self.entries.iter().enumerate() {
-                    if entry.residual_sig.len() != raw_sig.len() {
-                        continue;
-                    }
-                    for (l, slot) in layer_cos[i].iter_mut().enumerate().take(num_steered) {
-                        let start = l * expected;
-                        let end = start + expected;
-                        *slot =
-                            Self::cosine_f32(&raw_sig[start..end], &entry.residual_sig[start..end]);
-                    }
-                }
-                for role in [
-                    AttractorRole::Fact,
-                    AttractorRole::Persona,
-                    AttractorRole::Guard,
-                ] {
-                    let idxs: Vec<usize> = self
-                        .entries
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, e)| e.role == role)
-                        .map(|(i, _)| i)
-                        .collect();
-                    if idxs.len() <= 1 {
-                        continue;
-                    }
-                    let mut role_layer_mean = vec![0.0_f32; num_steered];
-                    for &i in &idxs {
-                        for l in 0..num_steered {
-                            role_layer_mean[l] += layer_cos[i][l] / (idxs.len() as f32);
-                        }
-                    }
-                    let top_l = (num_steered / 4).max(1);
-                    for &i in &idxs {
-                        let mut diffs: Vec<f32> = (0..num_steered)
-                            .map(|l| layer_cos[i][l] - role_layer_mean[l])
-                            .collect();
-                        diffs.sort_by(|a, b| b.total_cmp(a));
-                        let top_contrast = diffs[..top_l].iter().sum::<f32>() / (top_l as f32);
-                        let pos = raw_cosines[i].max(0.0);
-                        raw_cosines[i] += 0.35 * pos * top_contrast;
-                    }
-                }
-            }
-        }
-
-        // Compute query-side similarity baseline across the corpus.
-        let (query_mean_cosine, query_std_cosine) = if raw_cosines.is_empty() {
-            (0.0_f32, 0.05_f32)
-        } else {
-            let n = raw_cosines.len() as f32;
-            let mean = raw_cosines.iter().sum::<f32>() / n;
-            let var = raw_cosines
+        let initial_signal = StratumSignal {
+            candidate_scores: raw_cosines.clone(),
+            local_void_depths: raw_cosines
                 .iter()
-                .map(|&s| (s - mean) * (s - mean))
-                .sum::<f32>()
-                / n;
-            (mean, var.sqrt())
+                .map(|&s| (policy.min_coherence - s).max(0.0))
+                .collect(),
+            stigmergic_weights: vec![1.0_f32; n_entries],
+            boundary_metrics: RecallBoundaryMetrics {
+                top1_fact_score: -1.0,
+                top2_fact_score: -1.0,
+                top1_persona_score: -1.0,
+                max_guard_score: -1.0,
+                guard_conflict_margin: 0.0,
+            },
+            gate_decision: RecallGateDecision {
+                void_state: VoidBoundaryState::CvoidEmptySpace,
+                suppress_fact_injection: true,
+            },
+            action_decision: StigmergicActionDecision::PassiveSidecar,
         };
-
-        // Compute each attractor's local k-NN neighborhood baseline strictly within the same role,
-        // preventing sparse minority roles (e.g. Guards) from receiving artificial anti-hubness boosts.
-        let mut neighbor_stats: Vec<(f32, f32)> = vec![(0.0, 0.05); n_entries];
-        let mut role_global_means = [0.0_f32; 3];
-        for role in [
-            AttractorRole::Fact,
-            AttractorRole::Persona,
-            AttractorRole::Guard,
-        ] {
-            let role_indices: Vec<usize> = self
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| e.role == role)
-                .map(|(i, _)| i)
-                .collect();
-            if role_indices.len() <= 1 {
-                continue;
-            }
-            let neighbor_k = (role_indices.len() - 1).clamp(1, 4);
-            let mut sum_k_mean = 0.0_f32;
-            for &i in &role_indices {
-                let mut sims: Vec<f32> = role_indices
-                    .iter()
-                    .copied()
-                    .filter(|&j| j != i)
-                    .map(|j| Self::cosine_f32(&entry_sigs[i], &entry_sigs[j]))
-                    .collect();
-                sims.sort_by(|a, b| b.total_cmp(a));
-                let top_slice = &sims[..neighbor_k.min(sims.len())];
-                let k_len = top_slice.len().max(1) as f32;
-                let k_mean = top_slice.iter().sum::<f32>() / k_len;
-                let all_mean = sims.iter().sum::<f32>() / (sims.len().max(1) as f32);
-                let all_var = sims
-                    .iter()
-                    .map(|&s| (s - all_mean) * (s - all_mean))
-                    .sum::<f32>()
-                    / (sims.len().max(1) as f32);
-                neighbor_stats[i] = (k_mean, all_var.sqrt());
-                sum_k_mean += k_mean;
-            }
-            let role_slot = match role {
-                AttractorRole::Fact => 0,
-                AttractorRole::Persona => 1,
-                AttractorRole::Guard => 2,
-            };
-            role_global_means[role_slot] = sum_k_mean / (role_indices.len() as f32);
-        }
+        let stratum_ctx = StratumContext {
+            entries: &self.entries,
+            raw_sig: &raw_sig,
+            query_sig: &query_sig,
+            entry_sigs: &entry_sigs,
+            layer_chunk_dim: expected,
+            policy,
+        };
+        let (signal, directive) = pipeline.evaluate(&stratum_ctx, initial_signal)?;
 
         let mut fact_scores: Vec<(&TextAttractorEntry, f32)> = Vec::new();
         let mut persona_scores: Vec<(&TextAttractorEntry, f32)> = Vec::new();
-        let mut max_guard_score = -1.0_f32;
-        let mut min_local_void_depth = f32::INFINITY;
-
-        for (idx, entry) in self.entries.iter().enumerate() {
-            let (neighbor_mean_cosine, neighbor_std_cosine) = neighbor_stats[idx];
-            let role_slot = match entry.role {
-                AttractorRole::Fact => 0,
-                AttractorRole::Persona => 1,
-                AttractorRole::Guard => 2,
-            };
-            let global_neighbor_mean = role_global_means[role_slot];
-            let reading = perspective.measure_perspective(
-                &AttractorPerspectiveContext {
-                    entry,
-                    raw_cosine: raw_cosines[idx],
-                    neighbor_mean_cosine,
-                    neighbor_std_cosine,
-                    global_neighbor_mean,
-                    query_mean_cosine,
-                    query_std_cosine,
-                },
-                policy.min_coherence,
-            );
-            if reading.local_void_depth < min_local_void_depth {
-                min_local_void_depth = reading.local_void_depth;
-            }
+        for (entry, &score) in self.entries.iter().zip(signal.candidate_scores.iter()) {
             match entry.role {
-                AttractorRole::Fact => fact_scores.push((entry, reading.perspective_affinity)),
-                AttractorRole::Persona => {
-                    persona_scores.push((entry, reading.perspective_affinity))
-                }
-                AttractorRole::Guard => {
-                    if reading.perspective_affinity > max_guard_score {
-                        max_guard_score = reading.perspective_affinity;
-                    }
-                }
+                AttractorRole::Fact => fact_scores.push((entry, score)),
+                AttractorRole::Persona => persona_scores.push((entry, score)),
+                AttractorRole::Guard => {}
             }
         }
-        if !min_local_void_depth.is_finite() {
-            min_local_void_depth = 1.0;
-        }
-
         fact_scores.sort_by(|a, b| b.1.total_cmp(&a.1));
         persona_scores.sort_by(|a, b| b.1.total_cmp(&a.1));
 
-        let top1_fact_score = fact_scores.first().map_or(-1.0, |x| x.1);
-        let top2_fact_score = fact_scores.get(1).map_or(-1.0, |x| x.1);
-        let top1_persona_score = persona_scores.first().map_or(-1.0, |x| x.1);
-        let guard_conflict_margin = max_guard_score - top1_fact_score.max(top1_persona_score);
-
-        let metrics = RecallBoundaryMetrics {
-            top1_fact_score,
-            top2_fact_score,
-            top1_persona_score,
-            max_guard_score,
-            guard_conflict_margin,
-        };
-        let decision = gate.evaluate(&metrics, policy);
-        let void_state = decision.void_state;
-
-        let recalled_facts = if decision.suppress_fact_injection {
+        let suppress = directive.suppress_injection || signal.gate_decision.suppress_fact_injection;
+        let recalled_facts = if suppress {
             Vec::new()
         } else {
             fact_scores
@@ -1840,7 +2198,7 @@ impl TextAttractorCorpus {
                 .take(policy.top_k_facts)
                 .collect()
         };
-        let recalled_personas = if decision.suppress_fact_injection {
+        let recalled_personas = if suppress {
             Vec::new()
         } else {
             persona_scores
@@ -1851,12 +2209,13 @@ impl TextAttractorCorpus {
         };
 
         Ok(DynamicAttractorRecall {
-            void_state,
-            top1_fact_score,
-            top2_fact_score,
-            top1_persona_score,
-            min_local_void_depth,
-            guard_conflict_margin,
+            void_state: signal.gate_decision.void_state,
+            top1_fact_score: signal.boundary_metrics.top1_fact_score,
+            top2_fact_score: signal.boundary_metrics.top2_fact_score,
+            top1_persona_score: signal.boundary_metrics.top1_persona_score,
+            min_local_void_depth: directive.min_local_void_depth,
+            guard_conflict_margin: signal.boundary_metrics.guard_conflict_margin,
+            action_decision: signal.action_decision,
             recalled_facts,
             recalled_personas,
         })
@@ -3532,5 +3891,100 @@ mod tests {
             .recall_for_query(&adapter, &q_refs, &refs, &policy)
             .expect("recall");
         assert_eq!(recall.recalled_facts[0].0.anchor_id, id_spec);
+    }
+
+    #[test]
+    fn society_stratum_pipeline_supports_dynamic_add_remove_and_action_hub_arbitration() {
+        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let len = adapter.geometry().q_rot_len();
+        let centroid = vec![0.0_f32; len];
+        let refs: Vec<&[f32]> = vec![centroid.as_slice(); 32];
+
+        let mut fact_vec = vec![0.0_f32; len];
+        let mut guard_vec = vec![0.0_f32; len];
+        fact_vec[0] = 1.0;
+        guard_vec[1] = 1.0;
+
+        let mut corpus = TextAttractorCorpus::new();
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Coherent fact",
+                &vec![fact_vec.as_slice(); 32],
+                &refs,
+                1.5,
+            )
+            .expect("fact");
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Guard,
+                "Contrastive guard",
+                &vec![guard_vec.as_slice(); 32],
+                &refs,
+                1.5,
+            )
+            .expect("guard");
+
+        let policy = RecallPolicy {
+            min_coherence: 0.30,
+            boundary_margin: 0.05,
+            guard_suppress_margin: 0.0,
+            top_k_facts: 2,
+            top_k_personas: 1,
+        };
+
+        // 1. Default 3-stratum pipeline can dynamically remove & re-insert intermediate strata.
+        let mut pipeline = StratumPipeline::default();
+        assert_eq!(
+            pipeline.stratum_names(),
+            vec![
+                "local_feature_worker",
+                "perspective_domino_cvoid",
+                "action_hub_boundary",
+            ]
+        );
+        let removed = pipeline.remove_stratum("perspective_domino_cvoid");
+        assert!(removed.is_some());
+        assert_eq!(
+            pipeline.stratum_names(),
+            vec!["local_feature_worker", "action_hub_boundary"]
+        );
+
+        // Even with the middle stratum removed, ActionHub still arbitrates cleanly.
+        let recall_fact = corpus
+            .recall_for_query_with_strata(
+                &adapter,
+                &vec![fact_vec.as_slice(); 32],
+                &refs,
+                &policy,
+                &pipeline,
+            )
+            .expect("fact recall");
+        assert_eq!(
+            recall_fact.action_decision,
+            StigmergicActionDecision::CrystallizeMacroBasin
+        );
+
+        // Re-insert the perspective stratum and verify Guard dominance triggers RepulsionEscape.
+        if let Some(mid) = removed {
+            pipeline.insert_stratum(1, mid);
+        }
+        assert_eq!(pipeline.stratum_names().len(), 3);
+        let recall_guard = corpus
+            .recall_for_query_with_strata(
+                &adapter,
+                &vec![guard_vec.as_slice(); 32],
+                &refs,
+                &policy,
+                &pipeline,
+            )
+            .expect("guard recall");
+        assert_eq!(
+            recall_guard.action_decision,
+            StigmergicActionDecision::RepulsionEscape
+        );
+        assert_eq!(recall_guard.void_state, VoidBoundaryState::CvoidEmptySpace);
     }
 }

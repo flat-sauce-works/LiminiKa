@@ -1568,10 +1568,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|(e, _)| format!("#{}", e.anchor_id))
             .unwrap_or_else(|| "none".to_string());
         println!(
-            "  [S2:{}:{}] void={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} hit={}/{} forb={} => {}",
+            "  [S2:{}:{}] void={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} hit={}/{} forb={} => {}",
             idx + 1,
             slot,
             recall.void_state,
+            recall.action_decision,
             recall.top1_fact_score,
             recall.top2_fact_score,
             recall.guard_conflict_margin,
