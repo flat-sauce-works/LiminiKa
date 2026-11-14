@@ -10,8 +10,8 @@ use std::time::Instant;
 use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor, D};
 use candle_nn::{linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 use liminika_adapter::{
-    AttractorRole, ModelSteeringAdapter, RopeGeometry, RopeLayout, TextAttractorCorpus,
-    VoidBoundaryState,
+    AttractorRole, ModelSteeringAdapter, RecallPolicy, RopeGeometry, RopeLayout,
+    TextAttractorCorpus, VoidBoundaryState,
 };
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::traits::gateway::{
@@ -316,9 +316,8 @@ impl Phi3Attention {
             .transpose(1, 2)?
             .contiguous()?;
 
-        let q = rope.apply_with_adapter(&q, offset, steer)?;
-        let k = rope.apply_with_adapter(&k, offset, None)?;
-
+        // Capture sequence-mean pre-RoPE Q activations so semantic attractor indexing is
+        // position-invariant across sentences of varying token lengths.
         let q_heads = if collect_q_heads {
             let mean_q = q
                 .i((0, .., .., 0..rope.rotary_dim))?
@@ -330,6 +329,9 @@ impl Phi3Attention {
         } else {
             None
         };
+
+        let q = rope.apply_with_adapter(&q, offset, steer)?;
+        let k = rope.apply_with_adapter(&k, offset, None)?;
 
         let (k, v) = match &self.kv_cache {
             Some((prev_k, prev_v)) => (
@@ -1349,8 +1351,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 2: Online Natural-Language -> Attractor Corpus & cvoid Boundary Evaluation
     println!("\n=== Step 2: Natural-Language Attractor Corpus & cvoid Boundary Eval ===");
     adapter.set_layer_rope_mask(0xFFFF_0000);
-    let mut corpus = TextAttractorCorpus::new();
-    let neg_slices_ref: Vec<&[f32]> = baked.neg_sum.iter().map(Vec::as_slice).collect();
+    let mut staged_entries: Vec<(AttractorRole, &str, f32, Vec<Vec<f32>>)> = Vec::new();
     for (role, texts, energy) in [
         (AttractorRole::Fact, suite.facts.as_slice(), 2.5_f32),
         (AttractorRole::Persona, suite.persona.as_slice(), 1.5_f32),
@@ -1365,15 +1366,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .to_vec();
             let (_, layer_qs, _) = model
                 .forward_tokens(&ids, 0, None, None, None, None, 0.0, None, None, false, true)?;
-            let q_refs: Vec<&[f32]> = layer_qs.iter().map(Vec::as_slice).collect();
-            corpus.ingest_text_activations(&adapter, role, text, &q_refs, &neg_slices_ref, energy)?;
+            staged_entries.push((role, text.as_str(), energy, layer_qs));
         }
     }
+
+    let num_layers = adapter.geometry().num_layers;
+    let q_rot_len = adapter.geometry().q_rot_len();
+    let mut corpus_centroid: Vec<Vec<f32>> = vec![vec![0.0_f32; q_rot_len]; num_layers];
+    let entry_count = staged_entries.len().max(1) as f32;
+    for (_, _, _, layer_qs) in &staged_entries {
+        for (l, q_vec) in layer_qs.iter().enumerate() {
+            for (dst, src) in corpus_centroid[l].iter_mut().zip(q_vec.iter()) {
+                *dst += *src / entry_count;
+            }
+        }
+    }
+    let centroid_refs: Vec<&[f32]> = corpus_centroid.iter().map(Vec::as_slice).collect();
+
+    let mut corpus = TextAttractorCorpus::new();
+    for (role, text, energy, layer_qs) in &staged_entries {
+        let q_refs: Vec<&[f32]> = layer_qs.iter().map(Vec::as_slice).collect();
+        corpus.ingest_text_activations(&adapter, *role, *text, &q_refs, &centroid_refs, *energy)?;
+    }
     println!(
-        "Compiled {} natural-language attractors into TextAttractorCorpus.",
+        "Compiled {} natural-language attractors into TextAttractorCorpus (centroid-referenced).",
         corpus.entries().len()
     );
 
+    let recall_policy = RecallPolicy::default();
     let mut step2_exp_hits = 0_usize;
     let mut step2_exp_total = 0_usize;
     let mut step2_forb_hits = 0_usize;
@@ -1397,8 +1417,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &q_ids, 0, None, None, None, None, 0.0, None, None, false, true,
         )?;
         let q_refs: Vec<&[f32]> = query_qs.iter().map(Vec::as_slice).collect();
-        let recall =
-            corpus.recall_for_query(&adapter, &q_refs, &neg_slices_ref, 2, 1, 0.35, 0.03)?;
+        let recall = corpus.recall_for_query(&adapter, &q_refs, &centroid_refs, &recall_policy)?;
 
         let recalled_ctx: String = recall
             .recalled_facts

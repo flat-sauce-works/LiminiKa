@@ -1074,6 +1074,30 @@ impl<'a> DynamicAttractorRecall<'a> {
     }
 }
 
+/// Policy parameters controlling top-K attractor recall and `cvoid` boundary classification.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RecallPolicy {
+    /// Maximum number of fact attractors to return when inside a basin or liminal boundary.
+    pub top_k_facts: usize,
+    /// Maximum number of persona attractors to return.
+    pub top_k_personas: usize,
+    /// Minimum top-1 geometric coherence required to stay inside an attractor basin (below this -> `CvoidEmptySpace`).
+    pub min_coherence: f32,
+    /// Minimum top-1 minus top-2 score gap to avoid `LiminalBoundary`.
+    pub boundary_margin: f32,
+}
+
+impl Default for RecallPolicy {
+    fn default() -> Self {
+        Self {
+            top_k_facts: 2,
+            top_k_personas: 1,
+            min_coherence: 0.35,
+            boundary_margin: 0.03,
+        }
+    }
+}
+
 /// Model-agnostic Cold-Path corpus that compiles natural-language logs, facts, personas, and
 /// contrastive guards into a dynamic attractor manifold with explicit `cvoid` boundary detection.
 #[derive(Debug, Default, Clone)]
@@ -1153,10 +1177,7 @@ impl TextAttractorCorpus {
         adapter: &ModelSteeringAdapter,
         query_per_layer_q: &[&[f32]],
         baseline_ref_per_layer: &[&[f32]],
-        top_k_facts: usize,
-        top_k_personas: usize,
-        min_coherence: f32,
-        boundary_margin: f32,
+        policy: &RecallPolicy,
     ) -> Result<DynamicAttractorRecall<'_>, String> {
         if query_per_layer_q.len() != baseline_ref_per_layer.len() {
             return Err(format!(
@@ -1231,9 +1252,9 @@ impl TextAttractorCorpus {
         let top2_fact_score = fact_scores.get(1).map_or(-1.0, |x| x.1);
         let guard_conflict_margin = max_guard_score - top1_fact_score;
 
-        let void_state = if top1_fact_score < min_coherence {
+        let void_state = if top1_fact_score < policy.min_coherence {
             VoidBoundaryState::CvoidEmptySpace
-        } else if (top1_fact_score - top2_fact_score) < boundary_margin {
+        } else if (top1_fact_score - top2_fact_score) < policy.boundary_margin {
             VoidBoundaryState::LiminalBoundary
         } else {
             VoidBoundaryState::InsideBasin
@@ -1244,11 +1265,14 @@ impl TextAttractorCorpus {
         } else {
             fact_scores
                 .into_iter()
-                .filter(|(_, s)| *s >= min_coherence * 0.75)
-                .take(top_k_facts)
+                .filter(|(_, s)| *s >= policy.min_coherence * 0.75)
+                .take(policy.top_k_facts)
                 .collect()
         };
-        let recalled_personas = persona_scores.into_iter().take(top_k_personas).collect();
+        let recalled_personas = persona_scores
+            .into_iter()
+            .take(policy.top_k_personas)
+            .collect();
 
         Ok(DynamicAttractorRecall {
             void_state,
@@ -1597,14 +1621,20 @@ mod tests {
             )
             .expect("ingest B");
 
+        let policy = RecallPolicy {
+            top_k_facts: 1,
+            top_k_personas: 1,
+            min_coherence: 0.50,
+            boundary_margin: 0.05,
+        };
         let recall_a = corpus
-            .recall_for_query(&adapter, &qa_slices, &refs, 1, 1, 0.50, 0.05)
+            .recall_for_query(&adapter, &qa_slices, &refs, &policy)
             .expect("recall A");
         assert_eq!(recall_a.void_state, VoidBoundaryState::InsideBasin);
         assert_eq!(recall_a.recalled_facts[0].0.text, "Fact A");
 
         let recall_void = corpus
-            .recall_for_query(&adapter, &qv_slices, &refs, 1, 1, 0.50, 0.05)
+            .recall_for_query(&adapter, &qv_slices, &refs, &policy)
             .expect("recall void");
         assert_eq!(recall_void.void_state, VoidBoundaryState::CvoidEmptySpace);
         assert!(recall_void.recalled_facts.is_empty());
