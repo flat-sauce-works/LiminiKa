@@ -144,7 +144,7 @@ impl RotaryCache {
                                         layer_idx,
                                         &resonant,
                                         trail,
-                                        0.5,
+                                        None,
                                         128,
                                         slice,
                                         None,
@@ -572,9 +572,15 @@ impl Phi3Model {
             .to_vec1::<f32>()?;
         if use_edbc {
             if let Some(ad) = adapter.as_deref_mut() {
-                let _ = ad
-                    .step_edbc_logits(&mut logits)
-                    .map_err(candle_core::Error::Msg)?;
+                if rope_rad <= -1.5 {
+                    let _ = ad
+                        .measure_edbc_entropy(&logits)
+                        .map_err(candle_core::Error::Msg)?;
+                } else {
+                    let _ = ad
+                        .step_edbc_logits(&mut logits)
+                        .map_err(candle_core::Error::Msg)?;
+                }
             }
         }
         Ok((logits, per_layer_q, last_hidden))
@@ -903,7 +909,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (label, layer_mask, rope_rad, srl_scale, use_two_origin, use_resonant) in configs {
         adapter.set_layer_rope_mask(layer_mask);
-        let use_edbc = false;
+        adapter.reset_action_hub_stats();
+        let use_edbc = rope_rad <= -1.5;
         let mut sum_kl = 0.0_f32;
         let mut sum_d_lp = 0.0_f32;
         let mut d_lp_count = 0_usize;
@@ -1031,6 +1038,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             sum_kl / n
         );
         println!("   [P1] {p1_sample}");
+        if rope_rad <= -1.5 {
+            let counts = adapter.action_hub_decision_counts();
+            let total: u64 = counts.iter().sum::<u64>().max(1);
+            println!(
+                "   [ActionHub] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% PSPM={:.1}% SRL={:.1}% Crystal={:.1}% Repulse={:.1}%",
+                total,
+                counts[0] as f64 / total as f64 * 100.0,
+                counts[1] as f64 / total as f64 * 100.0,
+                counts[2] as f64 / total as f64 * 100.0,
+                counts[3] as f64 / total as f64 * 100.0,
+                counts[4] as f64 / total as f64 * 100.0,
+                counts[5] as f64 / total as f64 * 100.0,
+                counts[6] as f64 / total as f64 * 100.0,
+            );
+        }
     }
 
     Ok(())

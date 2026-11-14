@@ -226,6 +226,7 @@ pub struct ModelSteeringAdapter {
     phase_engine: PhaseSteeringEngine,
     action_hub: Box<ActionHubEngine>,
     daes_slot: gcso_daes_slot_t,
+    decision_counts: [u64; 7],
     entropy_controller: EntropyController,
     residual_adapter: ResidualAdapterEngine,
 }
@@ -242,7 +243,7 @@ impl ModelSteeringAdapter {
         let phase_engine =
             PhaseSteeringEngine::new(geometry.rotary_dim as u32, geometry.num_q_heads as u32)
                 .map_err(|e| format!("PhaseSteeringEngine::new failed: {e}"))?;
-        let action_hub = Box::new(
+        let mut action_hub = Box::new(
             ActionHubEngine::with_dimensions_and_thresholds(
                 geometry.rotary_dim as u32,
                 geometry.num_q_heads as u32,
@@ -251,6 +252,7 @@ impl ModelSteeringAdapter {
             )
             .map_err(|e| format!("ActionHubEngine::with_dimensions_and_thresholds failed: {e}"))?,
         );
+        action_hub.last_entropy_h_tilde = 0.35;
         let daes_slot = gcso_daes_slot_t::default();
         let entropy_controller = EntropyController::new(gcso_edbc_state_t::default());
         let residual_adapter = ResidualAdapterEngine::new(1.0, 0, 1);
@@ -260,9 +262,23 @@ impl ModelSteeringAdapter {
             phase_engine,
             action_hub,
             daes_slot,
+            decision_counts: [0; 7],
             entropy_controller,
             residual_adapter,
         })
+    }
+
+    /// Returns the per-regime [`StigmergicActionDecision`] invocation counts (`0..=6`).
+    #[must_use]
+    pub const fn action_hub_decision_counts(&self) -> &[u64; 7] {
+        &self.decision_counts
+    }
+
+    /// Resets the per-regime [`StigmergicActionDecision`] invocation counters and restores
+    /// initial neutral entropy (`0.35`) for a fresh evaluation pass.
+    pub fn reset_action_hub_stats(&mut self) {
+        self.decision_counts = [0; 7];
+        self.action_hub.last_entropy_h_tilde = 0.35;
     }
 
     /// Returns a shared reference to the embedded [`ActionHubEngine`].
@@ -539,7 +555,7 @@ impl ModelSteeringAdapter {
         layer_idx: usize,
         signal: &S,
         trail_inout: &mut gcso_pointer_trail_t,
-        entropy_h_tilde: f32,
+        entropy_h_tilde_opt: Option<f32>,
         unresolved_damping_u7: u8,
         q_rot_inout: &mut [f32],
         logits_opt: Option<&mut [f32]>,
@@ -553,6 +569,8 @@ impl ModelSteeringAdapter {
     > {
         self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
             let thresholds = this.action_hub.thresholds;
+            let entropy_h_tilde =
+                entropy_h_tilde_opt.unwrap_or(this.action_hub.last_entropy_h_tilde);
             let (frame, report, decision) = this
                 .action_hub
                 .orchestrate_gateway_layer_safe(
@@ -569,6 +587,7 @@ impl ModelSteeringAdapter {
                 )
                 .map_err(|e| format!("orchestrate_gateway_layer_safe error: {e}"))?;
             this.action_hub.last_decision = decision as u8;
+            this.decision_counts[(decision as usize).min(6)] += 1;
             Ok((frame, report, decision))
         })
     }
@@ -653,12 +672,12 @@ impl ModelSteeringAdapter {
     }
 
     /// Evaluates Top-2 sparse surrogate entropy via [`EntropyController::eval_surrogate_and_step`]
-    /// and scales `logits` by the resulting adaptive `sample_temperature`.
+    /// and updates `action_hub.last_entropy_h_tilde` without rescaling `logits`.
     ///
     /// # Errors
     ///
     /// Returns an error if `logits` is empty or `EntropyController` reports an error.
-    pub fn step_edbc_logits(&mut self, logits: &mut [f32]) -> Result<gcso_edbc_state_t, String> {
+    pub fn measure_edbc_entropy(&mut self, logits: &[f32]) -> Result<gcso_edbc_state_t, String> {
         if logits.is_empty() {
             return Err("logits slice must not be empty".to_string());
         }
@@ -685,11 +704,23 @@ impl ModelSteeringAdapter {
         };
 
         let mut state_out = gcso_edbc_state_t::default();
-        let temp = self
+        let _temp = self
             .entropy_controller
             .eval_surrogate_and_step(p_max, p_2nd, 0.0, 0.0, 1.0, 0.1, 0.1, &mut state_out)
             .map_err(|e| format!("eval_surrogate_and_step error: {e}"))?;
+        self.action_hub.last_entropy_h_tilde = state_out.moving_z_entropy;
+        Ok(state_out)
+    }
 
+    /// Evaluates Top-2 sparse surrogate entropy via [`Self::measure_edbc_entropy`]
+    /// and scales `logits` by the resulting adaptive `sample_temperature`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `logits` is empty or `EntropyController` reports an error.
+    pub fn step_edbc_logits(&mut self, logits: &mut [f32]) -> Result<gcso_edbc_state_t, String> {
+        let state_out = self.measure_edbc_entropy(logits)?;
+        let temp = state_out.sample_temperature;
         if temp.is_finite() && temp > 1e-4 && (temp - 1.0).abs() > 1e-4 {
             let inv_temp = 1.0 / temp;
             for v in logits.iter_mut() {
@@ -956,7 +987,7 @@ mod tests {
                 0,
                 &resonant,
                 &mut trail,
-                0.5,
+                None,
                 128,
                 &mut q_rot1,
                 None,
@@ -979,7 +1010,7 @@ mod tests {
                     0,
                     &resonant,
                     &mut trail,
-                    0.5,
+                    None,
                     128,
                     &mut q_rot_k,
                     None,
