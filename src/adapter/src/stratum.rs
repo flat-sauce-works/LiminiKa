@@ -15,9 +15,30 @@ use crate::{
 };
 use liminika_core::action_hub::StigmergicActionDecision;
 use liminika_core::traits::gateway::{
-    GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact, SubjectivePersona,
+    CausalProvenanceReport, GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact,
+    SubjectivePersona,
 };
 use liminika_core::traits::primitives::MAX_ATTENTION_HEADS;
+
+/// Per-query diagnostic telemetry bridging adapter stratum channels with [`liminika_core`]
+/// [`CausalProvenanceReport`] so `ActionHub` and evaluation harnesses observe channel agreement.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StratumProbeTelemetry {
+    /// Winning anchor ID from the global pooled cosine channel before stratum modulation.
+    pub global_top1_anchor: Option<u32>,
+    /// Winning score from the global pooled cosine channel.
+    pub global_top1_score: f32,
+    /// Winning anchor ID from the multi-token MaxSim channel (`local_token_scores`), if active.
+    pub local_top1_anchor: Option<u32>,
+    /// Winning score from the multi-token MaxSim channel (`local_token_scores`).
+    pub local_top1_score: f32,
+    /// Winning anchor ID after full `StratumPipeline` arbitration.
+    pub final_top1_anchor: Option<u32>,
+    /// True when both channels are active and disagree on the top-1 anchor ID.
+    pub channel_disagreement: bool,
+    /// Core 16-byte causal provenance report synthesized via [`GatewayFrame::to_causal_report`].
+    pub provenance: CausalProvenanceReport,
+}
 
 /// Bottom-up and top-down signal flowing across a Society-of-Mind [`StratumPipeline`].
 ///
@@ -41,6 +62,8 @@ pub struct StratumSignal {
     pub gate_decision: RecallGateDecision,
     /// `ActionHub` regime chosen for top-down orchestration.
     pub action_decision: StigmergicActionDecision,
+    /// Cross-channel probe telemetry and core [`CausalProvenanceReport`].
+    pub telemetry: StratumProbeTelemetry,
 }
 
 /// Top-down directive sent from stratum `n + 1` down to `n` and `n - 1` after upward inference.
@@ -597,6 +620,17 @@ impl<'a> StratumPipeline<'a> {
         ctx: &StratumContext<'_>,
         mut signal: StratumSignal,
     ) -> Result<(StratumSignal, StratumDirective), String> {
+        let best_anchor = |scores: &[f32]| -> (Option<u32>, f32) {
+            ctx.entries
+                .iter()
+                .zip(scores.iter())
+                .max_by(|(_, a), (_, b)| a.total_cmp(b))
+                .map(|(e, &s)| (Some(e.anchor_id), s))
+                .unwrap_or((None, -1.0))
+        };
+        let (global_top1_anchor, global_top1_score) = best_anchor(&signal.candidate_scores);
+        let (local_top1_anchor, local_top1_score) = best_anchor(&signal.local_token_scores);
+
         for stratum in &self.strata {
             stratum.infer_up(ctx, &mut signal)?;
         }
@@ -604,6 +638,28 @@ impl<'a> StratumPipeline<'a> {
         for stratum in self.strata.iter().rev() {
             stratum.adjust_down(ctx, &mut directive, &mut signal);
         }
+
+        let (final_top1_anchor, _) = best_anchor(&signal.candidate_scores);
+        let last_layer = ctx
+            .entries
+            .first()
+            .map(|e| e.per_layer_q7.len().saturating_sub(1))
+            .unwrap_or(0);
+        let provenance = signal
+            .map_to_gateway(ctx.entries, last_layer)
+            .frame
+            .to_causal_report();
+        signal.telemetry = StratumProbeTelemetry {
+            global_top1_anchor,
+            global_top1_score,
+            local_top1_anchor,
+            local_top1_score,
+            final_top1_anchor,
+            channel_disagreement: global_top1_anchor.is_some()
+                && local_top1_anchor.is_some()
+                && global_top1_anchor != local_top1_anchor,
+            provenance,
+        };
         Ok((signal, directive))
     }
 }

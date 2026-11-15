@@ -1568,8 +1568,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .first()
             .map(|(e, _)| format!("#{}", e.anchor_id))
             .unwrap_or_else(|| "none".to_string());
+        let tlm = &recall.telemetry;
         println!(
-            "  [S2:{}:{}] void={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} hit={}/{} forb={} => {}",
+            "  [S2:{}:{}] void={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={} prov_slot={}] hit={}/{} forb={} => {}",
             idx + 1,
             slot,
             recall.void_state,
@@ -1578,6 +1579,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             recall.top2_fact_score,
             recall.guard_conflict_margin,
             top_fact_preview,
+            tlm.global_top1_anchor.unwrap_or(0),
+            tlm.global_top1_score,
+            tlm.local_top1_anchor.unwrap_or(0),
+            tlm.local_top1_score,
+            tlm.channel_disagreement,
+            tlm.provenance.dominant_slot,
             p_exp,
             expected.len(),
             p_forb,

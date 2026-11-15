@@ -673,7 +673,10 @@ mod tests {
 
     #[test]
     fn stratum_signal_maps_to_core_gateway_blanket_frame() {
-        use crate::{RecallBoundaryMetrics, RecallGateDecision, StratumSignal, TextAttractorEntry};
+        use crate::{
+            RecallBoundaryMetrics, RecallGateDecision, StratumProbeTelemetry, StratumSignal,
+            TextAttractorEntry,
+        };
         use liminika_core::action_hub::StigmergicActionDecision;
 
         let entries = vec![
@@ -711,6 +714,7 @@ mod tests {
                 suppress_fact_injection: false,
             },
             action_decision: StigmergicActionDecision::CrystallizeMacroBasin,
+            telemetry: StratumProbeTelemetry::default(),
         };
 
         let mapped = signal.map_to_gateway(&entries, 0);

@@ -1043,6 +1043,8 @@ pub struct DynamicAttractorRecall<'a> {
     /// `ActionHub` regime selected by the upper boundary stratum (`PassiveSidecar`, `InertialLayerSkip`,
     /// `ExpressPhaseSteer`, `FullOrchestrationSrl`, `CrystallizeMacroBasin`, or `RepulsionEscape`).
     pub action_decision: StigmergicActionDecision,
+    /// Cross-channel probe telemetry and core [`CausalProvenanceReport`].
+    pub telemetry: StratumProbeTelemetry,
     /// Top-K recalled Fact entries (empty when `void_state == CvoidEmptySpace`).
     pub recalled_facts: Vec<(&'a TextAttractorEntry, f32)>,
     /// Top-K recalled Persona entries.
@@ -1762,6 +1764,7 @@ impl TextAttractorCorpus {
                 suppress_fact_injection: true,
             },
             action_decision: StigmergicActionDecision::PassiveSidecar,
+            telemetry: StratumProbeTelemetry::default(),
         };
         let stratum_ctx = StratumContext {
             entries: &self.entries,
@@ -1815,6 +1818,7 @@ impl TextAttractorCorpus {
             min_local_void_depth: directive.min_local_void_depth,
             guard_conflict_margin: signal.boundary_metrics.guard_conflict_margin,
             action_decision: signal.action_decision,
+            telemetry: signal.telemetry,
             recalled_facts,
             recalled_personas,
         })
