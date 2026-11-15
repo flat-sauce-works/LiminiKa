@@ -18,9 +18,11 @@ use liminika_core::traits::aligned::{
     AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32,
 };
 use liminika_core::traits::gateway::{
-    ActionHubGatewayExt, AdaptiveThresholdPolicy, CausalProvenanceReport, GatewayFrame,
-    GatewayPhaseSteeringExt, GatewaySrlSteeringExt, ManifoldGatewaySignal, ManifoldProbeBaseline,
-    ObjectiveFact, StigmergicThresholdPolicy, SubjectivePersona, SystemConstraint,
+    ActionHubGatewayExt, AdaptiveThresholdPolicy, CausalProvenanceReport, CausalProvenanceSignal,
+    GatewayFrame, GatewayPhaseSteeringExt, GatewaySrlSteeringExt, GuardPhaseAnchor,
+    ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact, StigmergicThresholdPolicy,
+    SubjectivePersona, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
 };
 use liminika_core::traits::primitives::{
     ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, MAX_ATTENTION_HEADS,
@@ -28,6 +30,7 @@ use liminika_core::traits::primitives::{
 use liminika_core::traits::rope::{
     PhaseSteeringGeometryExt, RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget,
 };
+use liminika_core::traits::telemetry::SwarmResolutionReport;
 use liminika_core::traits::SrlAdapter;
 
 pub mod pooling;
@@ -1025,6 +1028,37 @@ pub struct TextAttractorEntry {
     residual_sig: Vec<f32>,
 }
 
+impl CausalProvenanceSignal for TextAttractorEntry {
+    fn causal_provenance_bits(&self) -> u32 {
+        match self.role {
+            AttractorRole::Fact => CAUSAL_AXIS_OBJECTIVE_FACT,
+            AttractorRole::Persona => CAUSAL_AXIS_SUBJECTIVE_PERSONA,
+            AttractorRole::Guard => CAUSAL_AXIS_CONTRADICTION_GUARD,
+        }
+    }
+}
+
+impl ManifoldGatewaySignal for TextAttractorEntry {
+    fn synthesize_gateway_frame(&self) -> GatewayFrame {
+        let q7 = self
+            .per_layer_q7
+            .last()
+            .copied()
+            .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
+        let layer_idx = self.per_layer_q7.len().saturating_sub(1) as u64;
+        match self.role {
+            AttractorRole::Fact => ObjectiveFact::new(q7, self.energy, layer_idx, self.anchor_id)
+                .synthesize_gateway_frame(),
+            AttractorRole::Persona => {
+                SubjectivePersona::new(q7, self.energy, layer_idx, self.anchor_id)
+                    .synthesize_gateway_frame()
+            }
+            AttractorRole::Guard => GuardPhaseAnchor::new(q7, self.energy.clamp(0.0, 1.0), 0.5)
+                .synthesize_gateway_frame(),
+        }
+    }
+}
+
 /// Dynamic top-K recall result from [`TextAttractorCorpus::recall_for_query`].
 #[derive(Debug, Clone)]
 pub struct DynamicAttractorRecall<'a> {
@@ -1041,13 +1075,15 @@ pub struct DynamicAttractorRecall<'a> {
     /// Highest Guard resonance minus highest Fact/Persona resonance (`> 0` indicates guard-dominant conflict).
     pub guard_conflict_margin: f32,
     /// `ActionHub` regime selected by the upper boundary stratum (`PassiveSidecar`, `InertialLayerSkip`,
-    /// `ExpressPhaseSteer`, `FullOrchestrationSrl`, `CrystallizeMacroBasin`, or `RepulsionEscape`).
+    /// `ExpressPhaseSteer`, `PspmSubHeadRoute`, `FullOrchestrationSrl`, `CrystallizeMacroBasin`, or `RepulsionEscape`).
     pub action_decision: StigmergicActionDecision,
+    /// Authoritative 128-byte core [`GatewayFrame`] synthesized and arbitrated by the pipeline.
+    pub gateway_frame: GatewayFrame,
     /// Cross-channel probe telemetry and core [`CausalProvenanceReport`].
     pub telemetry: StratumProbeTelemetry,
     /// Top-K recalled Fact entries (empty when `void_state == CvoidEmptySpace`).
     pub recalled_facts: Vec<(&'a TextAttractorEntry, f32)>,
-    /// Top-K recalled Persona entries.
+    /// Top-K recalled Persona entries (suppressed only on Guard repulsion).
     pub recalled_personas: Vec<(&'a TextAttractorEntry, f32)>,
 }
 
@@ -1236,7 +1272,15 @@ impl AttractorVoidPerspective for AsymmetricDominoVoidPerspective {
             (ctx.raw_cosine - ctx.query_mean_cosine) / ctx.query_std_cosine.max(0.05);
         let rel_z = (0.5 * (z_from_attractor + z_from_query)).clamp(-3.0, 3.0);
         let positive_support = ctx.raw_cosine.max(0.0);
-        let perspective_affinity = ctx.raw_cosine - self.hubness_damping * hub_shift
+        // Gate hubness compensation by positive raw support so unrelated singleton entries never
+        // gain phantom positive affinity when `raw_cosine <= 0`, while true dense hubs still damp.
+        let support_gate = (positive_support / min_coherence.max(0.05)).clamp(0.0, 1.0);
+        let damped_hub = if hub_shift < 0.0 {
+            hub_shift * support_gate * support_gate
+        } else {
+            hub_shift * support_gate
+        };
+        let perspective_affinity = ctx.raw_cosine - self.hubness_damping * damped_hub
             + self.perspective_z_gain * positive_support * rel_z;
         let local_void_depth = (min_coherence - perspective_affinity).max(0.0);
         PerspectiveVoidReading {
@@ -1263,8 +1307,9 @@ impl RecallBoundaryGate for CoherenceGuardGate {
             };
         }
         let margin = metrics.top1_fact_score - metrics.top2_fact_score;
-        let sharp_liminal_match = metrics.top1_fact_score >= policy.min_coherence * 0.75
-            && margin >= policy.boundary_margin * 1.5;
+        let sharp_liminal_match = metrics.top1_fact_score >= policy.min_coherence * 0.65
+            && margin >= policy.boundary_margin
+            && metrics.top1_fact_score >= metrics.top2_fact_score.max(0.0) * 1.5;
 
         if metrics.top1_fact_score < policy.min_coherence && !sharp_liminal_match {
             RecallGateDecision {
@@ -1311,10 +1356,6 @@ impl TextAttractorCorpus {
     #[must_use]
     pub fn entries(&self) -> &[TextAttractorEntry] {
         &self.entries
-    }
-
-    pub(crate) fn common_mode_basis(&self) -> &[Vec<f32>] {
-        &self.common_mode_basis
     }
 
     pub(crate) fn build_steered_residual_sig(
@@ -1393,21 +1434,22 @@ impl TextAttractorCorpus {
 
     /// Estimates and stores an orthonormal common-mode subspace of up to `max_components`
     /// directions via deflated power iteration + Gram-Schmidt orthogonalization.
-    pub fn fit_common_mode_subspace(&mut self, max_components: usize) {
-        self.common_mode_basis.clear();
-        if self.entries.len() < 4 || max_components == 0 {
-            return;
+    /// Estimates up to `max_components` orthonormal common-mode directions from `sigs` via
+    /// deflated power iteration so shared template/attention-sink directions can be projected out.
+    pub(crate) fn fit_common_mode_subspace_from_sigs(
+        sigs: &[Vec<f32>],
+        max_components: usize,
+    ) -> Vec<Vec<f32>> {
+        let mut basis: Vec<Vec<f32>> = Vec::new();
+        if sigs.len() < 4 || max_components == 0 {
+            return basis;
         }
-        let dim = self.entries[0].residual_sig.len();
-        if dim == 0 || self.entries.iter().any(|e| e.residual_sig.len() != dim) {
-            return;
+        let dim = sigs[0].len();
+        if dim == 0 || sigs.iter().any(|s| s.len() != dim) {
+            return basis;
         }
-        let rank_cap = max_components.min(self.entries.len() / 3);
-        let mut work: Vec<Vec<f32>> = self
-            .entries
-            .iter()
-            .map(|e| e.residual_sig.clone())
-            .collect();
+        let rank_cap = max_components.min(sigs.len() / 3);
+        let mut work: Vec<Vec<f32>> = sigs.to_vec();
 
         for _ in 0..rank_cap {
             let mut v = vec![0.0_f32; dim];
@@ -1416,7 +1458,7 @@ impl TextAttractorCorpus {
                     *dst += src;
                 }
             }
-            for dir in &self.common_mode_basis {
+            for dir in &basis {
                 let dot: f64 = v
                     .iter()
                     .zip(dir.iter())
@@ -1444,7 +1486,7 @@ impl TextAttractorCorpus {
                         *dst += d * src;
                     }
                 }
-                for dir in &self.common_mode_basis {
+                for dir in &basis {
                     let dot: f64 = next
                         .iter()
                         .zip(dir.iter())
@@ -1477,8 +1519,20 @@ impl TextAttractorCorpus {
                     *dst -= d * c;
                 }
             }
-            self.common_mode_basis.push(v);
+            basis.push(v);
         }
+        basis
+    }
+
+    /// Estimates up to `max_components` orthonormal common-mode directions from corpus signatures
+    /// via deflated power iteration.
+    pub fn fit_common_mode_subspace(&mut self, max_components: usize) {
+        let sigs: Vec<Vec<f32>> = self
+            .entries
+            .iter()
+            .map(|e| e.residual_sig.clone())
+            .collect();
+        self.common_mode_basis = Self::fit_common_mode_subspace_from_sigs(&sigs, max_components);
     }
 
     /// Estimates and stores the dominant unsupervised common-mode subspace (up to 3 components)
@@ -1764,6 +1818,9 @@ impl TextAttractorCorpus {
                 suppress_fact_injection: true,
             },
             action_decision: StigmergicActionDecision::PassiveSidecar,
+            gateway_frame: GatewayFrame::default(),
+            swarm_report: SwarmResolutionReport::default(),
+            local_channel_preferred: false,
             telemetry: StratumProbeTelemetry::default(),
         };
         let stratum_ctx = StratumContext {
@@ -1790,17 +1847,22 @@ impl TextAttractorCorpus {
         fact_scores.sort_by(|a, b| b.1.total_cmp(&a.1));
         persona_scores.sort_by(|a, b| b.1.total_cmp(&a.1));
 
-        let suppress = directive.suppress_injection || signal.gate_decision.suppress_fact_injection;
-        let recalled_facts = if suppress {
+        let suppress_facts = directive.repulse_guard
+            || directive.suppress_injection
+            || signal.gate_decision.suppress_fact_injection;
+        let recalled_facts = if suppress_facts {
             Vec::new()
         } else {
             fact_scores
                 .into_iter()
-                .filter(|(_, s)| *s >= policy.min_coherence * 0.75)
+                .enumerate()
+                .filter(|(rank, (_, s))| *rank == 0 || *s >= policy.min_coherence * 0.75)
+                .map(|(_, pair)| pair)
                 .take(policy.top_k_facts)
                 .collect()
         };
-        let recalled_personas = if suppress {
+        // Persona grounding operates orthogonally to factual `cvoid` gating and is suppressed only on Guard repulsion.
+        let recalled_personas = if directive.repulse_guard {
             Vec::new()
         } else {
             persona_scores
@@ -1818,6 +1880,7 @@ impl TextAttractorCorpus {
             min_local_void_depth: directive.min_local_void_depth,
             guard_conflict_margin: signal.boundary_metrics.guard_conflict_margin,
             action_decision: signal.action_decision,
+            gateway_frame: signal.gateway_frame,
             telemetry: signal.telemetry,
             recalled_facts,
             recalled_personas,
@@ -3699,5 +3762,269 @@ mod tests {
             Some(id_a)
         );
         assert!(recall.top1_fact_score > recall.top2_fact_score);
+    }
+
+    #[test]
+    fn persona_recall_survives_factual_cvoid_and_routes_via_gateway_frame() {
+        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let len = adapter.geometry().q_rot_len();
+        let num_layers = adapter.geometry().num_layers;
+        let centroid = vec![0.0_f32; len];
+        let refs: Vec<&[f32]> = vec![centroid.as_slice(); num_layers];
+
+        let mut fact_vec = vec![0.0_f32; len];
+        let mut persona_vec = vec![0.0_f32; len];
+        fact_vec[0] = 1.0;
+        persona_vec[1] = 1.0;
+
+        let mut corpus = TextAttractorCorpus::new();
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Orthogonal fact",
+                &vec![fact_vec.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("fact");
+        let id_persona = corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Persona,
+                "Target persona",
+                &vec![persona_vec.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("persona");
+
+        let policy = RecallPolicy {
+            min_coherence: 0.30,
+            boundary_margin: 0.02,
+            guard_suppress_margin: 0.0,
+            top_k_facts: 2,
+            top_k_personas: 1,
+        };
+        let recall = corpus
+            .recall_for_query_with_strata(
+                &adapter,
+                &vec![persona_vec.as_slice(); num_layers],
+                &refs,
+                &policy,
+                &StratumPipeline::default(),
+            )
+            .expect("persona recall");
+
+        assert!(recall.recalled_facts.is_empty());
+        assert_eq!(
+            recall.recalled_personas.first().map(|(e, _)| e.anchor_id),
+            Some(id_persona)
+        );
+        assert_eq!(recall.gateway_frame.dominant_slot, ATTRACTOR_SLOT_PERSONA);
+        assert_eq!(
+            recall.action_decision,
+            StigmergicActionDecision::ExpressPhaseSteer
+        );
+    }
+
+    #[test]
+    fn local_token_resonance_arbitrates_channel_disagreement_via_pspm_subhead_route() {
+        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let len = adapter.geometry().q_rot_len();
+        let num_layers = adapter.geometry().num_layers;
+        let centroid = vec![0.0_f32; len];
+        let refs: Vec<&[f32]> = vec![centroid.as_slice(); num_layers];
+
+        let mut f1 = vec![0.0_f32; len];
+        let mut f2 = vec![0.0_f32; len];
+        let mut f3 = vec![0.0_f32; len];
+        f1[0] = 0.9;
+        f1[1] = 0.4;
+        f2[0] = 0.85;
+        f2[2] = 0.5;
+        f3[0] = 0.85;
+        f3[3] = 0.5;
+
+        let mut corpus = TextAttractorCorpus::new();
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Ambiguous hub fact",
+                &vec![f1.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("f1");
+        let id_target = corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Target specialist fact",
+                &vec![f2.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("f2");
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Peer fact",
+                &vec![f3.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("f3");
+
+        let mut query = vec![0.0_f32; len];
+        query[0] = 1.0;
+        let policy = RecallPolicy {
+            min_coherence: 0.30,
+            boundary_margin: 0.02,
+            guard_suppress_margin: 0.0,
+            top_k_facts: 2,
+            top_k_personas: 1,
+        };
+        // Local channel sharply selects id_target while global channel prefers f1 slightly -> disagreement triggers PspmSubHeadRoute.
+        let recall = corpus
+            .recall_for_query_with_strata_and_local_scores(
+                &adapter,
+                &vec![query.as_slice(); num_layers],
+                &refs,
+                &policy,
+                &StratumPipeline::default(),
+                Some(&[0.10, 0.85, 0.12]),
+            )
+            .expect("disagreement recall");
+        assert!(recall.telemetry.channel_disagreement);
+        assert_eq!(
+            recall.action_decision,
+            StigmergicActionDecision::PspmSubHeadRoute
+        );
+        assert_eq!(
+            recall.recalled_facts.first().map(|(e, _)| e.anchor_id),
+            Some(id_target)
+        );
+    }
+
+    #[test]
+    fn support_gated_perspective_prevents_phantom_boost_on_non_matching_outlier() {
+        let perspective = AsymmetricDominoVoidPerspective::default();
+        let entry = TextAttractorEntry {
+            anchor_id: 99,
+            role: AttractorRole::Guard,
+            text: "Outlier".to_string(),
+            per_layer_q7: vec![],
+            energy: 2.0,
+            residual_sig: vec![],
+        };
+        let outlier_ctx = AttractorPerspectiveContext {
+            entry: &entry,
+            raw_cosine: -0.10,
+            neighbor_mean_cosine: -0.20,
+            neighbor_std_cosine: 0.08,
+            global_neighbor_mean: 0.15,
+            query_mean_cosine: 0.0,
+            query_std_cosine: 0.08,
+        };
+        let reading = perspective.measure_perspective(&outlier_ctx, 0.25);
+        assert!(
+            (reading.perspective_affinity - (-0.10)).abs() < 1e-6,
+            "negative raw_cosine must not gain phantom affinity from negative hub_shift: got {}",
+            reading.perspective_affinity
+        );
+    }
+
+    #[test]
+    fn per_role_local_token_resonance_arbitrates_fact_despite_persona_hub() {
+        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let len = adapter.geometry().q_rot_len();
+        let num_layers = adapter.geometry().num_layers;
+        let centroid = vec![0.0_f32; len];
+        let refs: Vec<&[f32]> = vec![centroid.as_slice(); num_layers];
+
+        let mut f_hub = vec![0.0_f32; len];
+        let mut f_target = vec![0.0_f32; len];
+        let mut f_peer = vec![0.0_f32; len];
+        let mut persona_hub = vec![0.0_f32; len];
+        f_hub[0] = 0.70;
+        f_hub[1] = 0.70;
+        f_target[2] = 1.0;
+        f_peer[3] = 1.0;
+        persona_hub[0] = 0.90;
+        persona_hub[4] = 0.43;
+
+        let mut corpus = TextAttractorCorpus::new();
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Generic hub fact",
+                &vec![f_hub.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("f_hub");
+        let id_target = corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Specialist fact",
+                &vec![f_target.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("f_target");
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Peer fact",
+                &vec![f_peer.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("f_peer");
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Persona,
+                "Persona style hub",
+                &vec![persona_hub.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("persona_hub");
+
+        // Persona hub dominates mixed global cosine (`0.90`), yet local channel sharply isolates id_target inside Facts.
+        let mut query = vec![0.0_f32; len];
+        query[0] = 1.0;
+        let policy = RecallPolicy {
+            min_coherence: 0.25,
+            boundary_margin: 0.02,
+            guard_suppress_margin: 0.0,
+            top_k_facts: 2,
+            top_k_personas: 1,
+        };
+        let recall = corpus
+            .recall_for_query_with_strata_and_local_scores(
+                &adapter,
+                &vec![query.as_slice(); num_layers],
+                &refs,
+                &policy,
+                &StratumPipeline::default(),
+                Some(&[0.01, 0.45, -0.02, -0.05]),
+            )
+            .expect("per-role arbitration");
+        assert_eq!(
+            recall.recalled_facts.first().map(|(e, _)| e.anchor_id),
+            Some(id_target)
+        );
+        assert_eq!(
+            recall.action_decision,
+            StigmergicActionDecision::PspmSubHeadRoute
+        );
     }
 }

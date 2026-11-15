@@ -13,12 +13,14 @@ use crate::{
     AttractorVoidPerspective, CoherenceGuardGate, RecallBoundaryGate, RecallBoundaryMetrics,
     RecallGateDecision, RecallPolicy, TextAttractorCorpus, TextAttractorEntry, VoidBoundaryState,
 };
-use liminika_core::action_hub::StigmergicActionDecision;
+use liminika_core::abi::gcso_pointer_trail_t;
+use liminika_core::action_hub::{StigmergicActionDecision, StigmergicThresholds};
 use liminika_core::traits::gateway::{
     CausalProvenanceReport, GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact,
     SubjectivePersona,
 };
-use liminika_core::traits::primitives::MAX_ATTENTION_HEADS;
+use liminika_core::traits::primitives::{load_q7_words_64, MAX_ATTENTION_HEADS};
+use liminika_core::traits::telemetry::{StigmergicSwarmOps, SwarmResolutionReport};
 
 /// Per-query diagnostic telemetry bridging adapter stratum channels with [`liminika_core`]
 /// [`CausalProvenanceReport`] so `ActionHub` and evaluation harnesses observe channel agreement.
@@ -62,6 +64,12 @@ pub struct StratumSignal {
     pub gate_decision: RecallGateDecision,
     /// `ActionHub` regime chosen for top-down orchestration.
     pub action_decision: StigmergicActionDecision,
+    /// Synthesized 128-byte core [`GatewayFrame`] serving as the universal arbitration gate.
+    pub gateway_frame: GatewayFrame,
+    /// 8-cell Micro-Swarm consensus report between global and local phase channels.
+    pub swarm_report: SwarmResolutionReport,
+    /// True when the local multi-token channel exhibits sharper unimodal support than global pooling.
+    pub local_channel_preferred: bool,
     /// Cross-channel probe telemetry and core [`CausalProvenanceReport`].
     pub telemetry: StratumProbeTelemetry,
 }
@@ -522,25 +530,90 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
             guard_conflict_margin,
         };
         let decision = self.gate.evaluate(&metrics, ctx.policy);
-        let action_decision = if guard_conflict_margin > ctx.policy.guard_suppress_margin {
-            StigmergicActionDecision::RepulsionEscape
-        } else {
-            match decision.void_state {
-                VoidBoundaryState::CvoidEmptySpace => StigmergicActionDecision::InertialLayerSkip,
-                VoidBoundaryState::LiminalBoundary => StigmergicActionDecision::ExpressPhaseSteer,
-                VoidBoundaryState::InsideBasin => {
-                    if (top1_fact_score - top2_fact_score) >= 2.0 * ctx.policy.boundary_margin {
-                        StigmergicActionDecision::CrystallizeMacroBasin
-                    } else {
-                        StigmergicActionDecision::FullOrchestrationSrl
-                    }
-                }
-            }
-        };
-
         signal.boundary_metrics = metrics;
         signal.gate_decision = decision;
+
+        let repulsed_by_guard = guard_conflict_margin > ctx.policy.guard_suppress_margin;
+        if repulsed_by_guard {
+            signal.action_decision = StigmergicActionDecision::RepulsionEscape;
+        }
+
+        let last_layer = ctx
+            .entries
+            .first()
+            .map(|e| e.per_layer_q7.len().saturating_sub(1))
+            .unwrap_or(0);
+        let persona_floor = ctx.policy.min_coherence * 0.75;
+        let mut frame = signal
+            .map_to_gateway_with_persona_floor(ctx.entries, last_layer, persona_floor)
+            .frame;
+
+        let repulsed = repulsed_by_guard || frame.is_repulsed();
+        let has_active_persona = top1_persona_score >= persona_floor;
+        let is_total_cvoid = matches!(decision.void_state, VoidBoundaryState::CvoidEmptySpace)
+            && !has_active_persona
+            && !repulsed;
+
+        let fact_margin = (top1_fact_score - top2_fact_score).max(0.0);
+        let margin_ratio = (fact_margin / ctx.policy.boundary_margin.max(0.01)).clamp(0.0, 3.0);
+        let channel_disagreement = signal.telemetry.channel_disagreement;
+        let partial_swarm_consensus = signal.swarm_report.resolved_cell_count > 0
+            && signal.swarm_report.resolved_cell_count < 6;
+
+        let thresholds = StigmergicThresholds::default();
+        let (rho, h_tilde) = if repulsed {
+            (frame.effective_energy, 0.75_f32)
+        } else if is_total_cvoid {
+            (0.0_f32, 0.0_f32)
+        } else if signal.local_channel_preferred
+            || (channel_disagreement && partial_swarm_consensus)
+        {
+            // Bifurcated or local-sharpened channel triggers PSPM sub-head routing via core ladder.
+            (
+                thresholds
+                    .pspm_route_density_thresh
+                    .max(frame.effective_energy.min(1.35)),
+                0.65_f32,
+            )
+        } else if matches!(decision.void_state, VoidBoundaryState::CvoidEmptySpace)
+            && has_active_persona
+        {
+            // Persona-only active grounding outside factual basins uses lightweight ExpressPhaseSteer.
+            (thresholds.express_steer_density_thresh.max(0.45), 0.35_f32)
+        } else if matches!(decision.void_state, VoidBoundaryState::LiminalBoundary) {
+            (thresholds.express_steer_density_thresh.max(0.45), 0.35_f32)
+        } else if margin_ratio >= 2.0 {
+            let boost = thresholds
+                .crystallize_density_thresh
+                .max(frame.effective_energy * 1.5);
+            (boost, 0.40_f32)
+        } else {
+            let srl_rho = thresholds
+                .srl_inject_density_thresh
+                .max(frame.effective_energy.min(2.0));
+            (srl_rho, 0.40_f32)
+        };
+
+        let (action_decision, mode_flags, target_slot, _) = thresholds.select_action_decision(
+            rho,
+            h_tilde,
+            frame.fact_persona_coherence,
+            repulsed,
+            frame.dominant_slot,
+        );
+        frame.action_mode_flags = mode_flags;
+        frame.dominant_slot = target_slot;
+
+        let final_top1_anchor = ctx
+            .entries
+            .iter()
+            .zip(signal.candidate_scores.iter())
+            .max_by(|(_, a), (_, b)| a.total_cmp(b))
+            .map(|(e, _)| e.anchor_id);
         signal.action_decision = action_decision;
+        signal.gateway_frame = frame;
+        signal.telemetry.final_top1_anchor = final_top1_anchor;
+        signal.telemetry.provenance = frame.to_causal_report();
         Ok(())
     }
 
@@ -630,6 +703,13 @@ impl<'a> StratumPipeline<'a> {
         };
         let (global_top1_anchor, global_top1_score) = best_anchor(&signal.candidate_scores);
         let (local_top1_anchor, local_top1_score) = best_anchor(&signal.local_token_scores);
+        signal.telemetry.global_top1_anchor = global_top1_anchor;
+        signal.telemetry.global_top1_score = global_top1_score;
+        signal.telemetry.local_top1_anchor = local_top1_anchor;
+        signal.telemetry.local_top1_score = local_top1_score;
+        signal.telemetry.channel_disagreement = global_top1_anchor.is_some()
+            && local_top1_anchor.is_some()
+            && global_top1_anchor != local_top1_anchor;
 
         for stratum in &self.strata {
             stratum.infer_up(ctx, &mut signal)?;
@@ -639,36 +719,34 @@ impl<'a> StratumPipeline<'a> {
             stratum.adjust_down(ctx, &mut directive, &mut signal);
         }
 
-        let (final_top1_anchor, _) = best_anchor(&signal.candidate_scores);
-        let last_layer = ctx
-            .entries
-            .first()
-            .map(|e| e.per_layer_q7.len().saturating_sub(1))
-            .unwrap_or(0);
-        let provenance = signal
-            .map_to_gateway(ctx.entries, last_layer)
-            .frame
-            .to_causal_report();
-        signal.telemetry = StratumProbeTelemetry {
-            global_top1_anchor,
-            global_top1_score,
-            local_top1_anchor,
-            local_top1_score,
-            final_top1_anchor,
-            channel_disagreement: global_top1_anchor.is_some()
-                && local_top1_anchor.is_some()
-                && global_top1_anchor != local_top1_anchor,
-            provenance,
-        };
+        if signal.telemetry.final_top1_anchor.is_none() {
+            let (final_top1_anchor, _) = best_anchor(&signal.candidate_scores);
+            let last_layer = ctx
+                .entries
+                .first()
+                .map(|e| e.per_layer_q7.len().saturating_sub(1))
+                .unwrap_or(0);
+            let frame = signal
+                .map_to_gateway_with_persona_floor(
+                    ctx.entries,
+                    last_layer,
+                    ctx.policy.min_coherence * 0.75,
+                )
+                .frame;
+            signal.gateway_frame = frame;
+            signal.telemetry.final_top1_anchor = final_top1_anchor;
+            signal.telemetry.provenance = frame.to_causal_report();
+        }
         Ok((signal, directive))
     }
 }
 
-/// Stratum 0.75: multi-token late-interaction resonance stratum interpreting the independent
-/// `local_token_scores` channel (without coupling the `cvoid` layers to tokenizers or model pooling).
+/// Stratum 0.75: multi-token late-interaction resonance stratum arbitrating global pooled
+/// resonance against `local_token_scores` via statistical unimodality and 8-cell Micro-Swarm
+/// phase consensus (`StigmergicSwarmOps`).
 #[derive(Debug, Clone, Copy)]
 pub struct LocalTokenResonanceStratum {
-    /// Gain applied to role-centered MaxSim contrast (`local_score - role_mean`).
+    /// Gain applied when promoting non-negative local contrast under sharper local unimodality.
     pub token_contrast_gain: f32,
 }
 
@@ -677,6 +755,76 @@ impl Default for LocalTokenResonanceStratum {
         Self {
             token_contrast_gain: 0.45,
         }
+    }
+}
+
+impl LocalTokenResonanceStratum {
+    fn channel_sharpness_on_indices(
+        scores: &[f32],
+        idxs: &[usize],
+        min_std: f32,
+    ) -> Option<(usize, f32, f32, f32, f32, f32)> {
+        if idxs.is_empty() {
+            return None;
+        }
+        let mut indexed: Vec<(usize, f32)> = idxs.iter().map(|&i| (i, scores[i])).collect();
+        indexed.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let (top1_idx, top1) = indexed[0];
+        let top2 = indexed.get(1).map(|x| x.1).unwrap_or(top1);
+        let n = indexed.len() as f32;
+        let mean = indexed.iter().map(|&(_, s)| s).sum::<f32>() / n;
+        let var = indexed
+            .iter()
+            .map(|&(_, s)| (s - mean) * (s - mean))
+            .sum::<f32>()
+            / n;
+        let std = var.sqrt().max(min_std);
+        let z_peak = (top1 - mean) / std;
+        let z_margin = (top1 - top2) / std;
+        Some((top1_idx, top1, top2, mean, std, 0.5 * (z_peak + z_margin)))
+    }
+
+    fn channel_sharpness(scores: &[f32]) -> Option<(usize, f32, f32)> {
+        let all: Vec<usize> = (0..scores.len()).collect();
+        Self::channel_sharpness_on_indices(scores, &all, 0.08)
+            .map(|(idx, top1, _, _, _, sharp)| (idx, top1, sharp))
+    }
+
+    fn resolve_pair_swarm(
+        entries: &[TextAttractorEntry],
+        g_idx: usize,
+        l_idx: usize,
+        last_layer: usize,
+    ) -> SwarmResolutionReport {
+        let g_q7 = entries[g_idx]
+            .per_layer_q7
+            .get(last_layer)
+            .copied()
+            .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
+        let l_q7 = entries[l_idx]
+            .per_layer_q7
+            .get(last_layer)
+            .copied()
+            .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
+        let g_words = load_q7_words_64(&g_q7);
+        let l_words = load_q7_words_64(&l_q7);
+        let mut swarm_trail = gcso_pointer_trail_t::default();
+        swarm_trail.copy_from_with_words_fast(&gcso_pointer_trail_t::default(), &g_words);
+        let (swarm_report, _) = swarm_trail.try_resolve_action_in_swarm_from_words(
+            Default::default(),
+            &l_words,
+            0xFF,
+            64,
+            4,
+            24,
+            4,
+            0.40,
+            0.15,
+            None,
+            3,
+            96,
+        );
+        swarm_report
     }
 }
 
@@ -690,6 +838,35 @@ impl SocietyStratum for LocalTokenResonanceStratum {
         if n_entries == 0 || signal.local_token_scores.len() != n_entries {
             return Ok(());
         }
+
+        let Some((g_idx, _g_score, g_sharp)) = Self::channel_sharpness(&signal.candidate_scores)
+        else {
+            return Ok(());
+        };
+        let Some((l_idx, l_score, l_sharp)) = Self::channel_sharpness(&signal.local_token_scores)
+        else {
+            return Ok(());
+        };
+
+        let last_layer = ctx
+            .entries
+            .first()
+            .map(|e| e.per_layer_q7.len().saturating_sub(1))
+            .unwrap_or(0);
+        // Run core 8-cell Micro-Swarm consensus between the global and local winners' 64-head Q7 profiles.
+        signal.swarm_report = Self::resolve_pair_swarm(ctx.entries, g_idx, l_idx, last_layer);
+
+        let global_local_sharper = g_idx != l_idx && l_score > 0.0 && l_sharp > g_sharp * 1.15;
+        signal.local_channel_preferred = global_local_sharper;
+
+        if g_idx == l_idx && l_score > 0.0 {
+            signal.stigmergic_weights[g_idx] = (signal.stigmergic_weights[g_idx]
+                * (1.0 + 0.35 * l_score.min(1.0)))
+            .clamp(0.35, 2.0);
+        }
+
+        // Arbitrate per causal role subspace (Fact / Persona / Guard) so a strong Persona style
+        // hub cannot mask Fact-level disagreement between global pooling and token-level MaxSim.
         for role in [
             AttractorRole::Fact,
             AttractorRole::Persona,
@@ -705,19 +882,50 @@ impl SocietyStratum for LocalTokenResonanceStratum {
             if idxs.len() <= 1 {
                 continue;
             }
-            let role_mean = idxs
-                .iter()
-                .map(|&i| signal.local_token_scores[i])
-                .sum::<f32>()
-                / (idxs.len() as f32);
+            let Some((g_r_idx, _g_r_top1, _g_r_top2, g_r_mean, g_r_std, g_r_sharp)) =
+                Self::channel_sharpness_on_indices(&signal.candidate_scores, &idxs, 0.05)
+            else {
+                continue;
+            };
+            let Some((l_r_idx, l_r_top1, l_r_top2, l_r_mean, l_r_std, l_r_sharp)) =
+                Self::channel_sharpness_on_indices(&signal.local_token_scores, &idxs, 0.035)
+            else {
+                continue;
+            };
+
+            if g_r_idx == l_r_idx {
+                if l_r_top1 > 0.0 {
+                    signal.stigmergic_weights[g_r_idx] = (signal.stigmergic_weights[g_r_idx]
+                        * (1.0 + 0.25 * l_r_top1.min(1.0)))
+                    .clamp(0.35, 2.0);
+                }
+                continue;
+            }
+
+            let l_r_margin = (l_r_top1 - l_r_top2).max(0.0);
+            let role_local_sharper = (global_local_sharper && l_r_top1 > 0.04)
+                || (l_r_top1 > 0.04 && l_r_margin >= 0.025 && l_r_sharp > g_r_sharp * 1.15);
+            if !role_local_sharper {
+                continue;
+            }
+
+            if role == AttractorRole::Fact {
+                signal.local_channel_preferred = true;
+                signal.swarm_report =
+                    Self::resolve_pair_swarm(ctx.entries, g_r_idx, l_r_idx, last_layer);
+            }
+
+            let alpha = (self.token_contrast_gain * 1.6).clamp(0.0, 0.80);
+            let scale = g_r_std.max(0.10);
             for &i in &idxs {
-                let local_score = signal.local_token_scores[i];
-                let contrast = local_score - role_mean;
-                let support = local_score.max(signal.candidate_scores[i]).max(0.0);
-                if support > 0.0 {
-                    signal.candidate_scores[i] += self.token_contrast_gain * contrast;
+                let z_loc = ((signal.local_token_scores[i] - l_r_mean) / l_r_std).clamp(-2.0, 3.0);
+                let matched_loc = g_r_mean + z_loc * scale;
+                signal.candidate_scores[i] =
+                    (1.0 - alpha) * signal.candidate_scores[i] + alpha * matched_loc;
+                let pos_contrast = (signal.local_token_scores[i] - l_r_mean).max(0.0);
+                if pos_contrast > 0.0 {
                     signal.stigmergic_weights[i] =
-                        (signal.stigmergic_weights[i] * (1.0 + contrast)).clamp(0.35, 2.0);
+                        (signal.stigmergic_weights[i] * (1.0 + pos_contrast)).clamp(0.35, 2.0);
                 }
             }
         }
@@ -760,6 +968,15 @@ impl StratumSignal {
         entries: &[TextAttractorEntry],
         layer_idx: usize,
     ) -> StratumGatewayMapping {
+        self.map_to_gateway_with_persona_floor(entries, layer_idx, f32::NEG_INFINITY)
+    }
+
+    pub(crate) fn map_to_gateway_with_persona_floor(
+        &self,
+        entries: &[TextAttractorEntry],
+        layer_idx: usize,
+        persona_floor: f32,
+    ) -> StratumGatewayMapping {
         let mut best_fact: Option<(usize, f32)> = None;
         let mut best_persona: Option<(usize, f32)> = None;
         let mut best_guard: Option<(usize, f32)> = None;
@@ -775,7 +992,12 @@ impl StratumSignal {
             }
         }
 
-        let fact = if !self.gate_decision.suppress_fact_injection {
+        let is_repulsion = matches!(
+            self.action_decision,
+            StigmergicActionDecision::RepulsionEscape
+        );
+
+        let fact = if !is_repulsion && !self.gate_decision.suppress_fact_injection {
             best_fact.and_then(|(idx, score)| {
                 let entry = &entries[idx];
                 let q7 = entry
@@ -795,20 +1017,26 @@ impl StratumSignal {
             None
         };
 
-        let persona = best_persona.and_then(|(idx, score)| {
-            let entry = &entries[idx];
-            let q7 = entry
-                .per_layer_q7
-                .get(layer_idx)
-                .copied()
-                .or_else(|| entry.per_layer_q7.last().copied())?;
-            Some(SubjectivePersona::new(
-                q7,
-                (entry.energy * score.max(0.05)).max(0.05),
-                layer_idx as u64,
-                entry.anchor_id,
-            ))
-        });
+        let persona = if !is_repulsion {
+            best_persona
+                .filter(|(_, score)| *score >= persona_floor)
+                .and_then(|(idx, score)| {
+                    let entry = &entries[idx];
+                    let q7 = entry
+                        .per_layer_q7
+                        .get(layer_idx)
+                        .copied()
+                        .or_else(|| entry.per_layer_q7.last().copied())?;
+                    Some(SubjectivePersona::new(
+                        q7,
+                        (entry.energy * score.max(0.05)).max(0.05),
+                        layer_idx as u64,
+                        entry.anchor_id,
+                    ))
+                })
+        } else {
+            None
+        };
 
         let guard = best_guard.and_then(|(idx, _)| {
             let entry = &entries[idx];
@@ -821,20 +1049,16 @@ impl StratumSignal {
             Some(GuardPhaseAnchor::new(q7, obs, 0.5))
         });
 
-        let frame = if matches!(
-            self.action_decision,
-            StigmergicActionDecision::RepulsionEscape
-        ) {
+        let frame = if is_repulsion {
             guard
                 .map(|g| g.synthesize_gateway_frame())
                 .unwrap_or_default()
         } else {
-            match (fact, persona, guard) {
-                (Some(f), Some(p), _) => (f, p).synthesize_gateway_frame(),
-                (Some(f), None, _) => f.synthesize_gateway_frame(),
-                (None, Some(p), _) => p.synthesize_gateway_frame(),
-                (None, None, Some(g)) => g.synthesize_gateway_frame(),
-                (None, None, None) => GatewayFrame::default(),
+            match (fact, persona) {
+                (Some(f), Some(p)) => (f, p).synthesize_gateway_frame(),
+                (Some(f), None) => f.synthesize_gateway_frame(),
+                (None, Some(p)) => p.synthesize_gateway_frame(),
+                (None, None) => GatewayFrame::default(),
             }
         };
 
