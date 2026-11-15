@@ -10,10 +10,11 @@ use std::time::Instant;
 use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor, D};
 use candle_nn::{linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 use liminika_adapter::{
-    AdaptiveGopCutDetector, AttractorContainerCodec, AttractorRole, FrameTransitionMetrics,
-    GcsoDualTrackTimeline, ModelSteeringAdapter, RebakeContext, RopeGeometry, RopeLayout,
-    SourceTextRecord, SubtitleActivationEncoder, TextAttractorCorpus, TimelineResumeOutcome,
-    TimelineStepContext, VoidBoundaryState,
+    AdaptiveGopCutDetector, AttractorContainerCodec, AttractorRole, CompiledTokenCorpus,
+    FrameTransitionMetrics, GcsoDualTrackTimeline, ModelSteeringAdapter, RebakeContext,
+    RopeGeometry, RopeLayout, SequenceActivationPooler, SourceTextRecord,
+    SubtitleActivationEncoder, TimelineResumeOutcome, TimelineStepContext, TokenSequenceEntry,
+    VoidBoundaryState,
 };
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::traits::gateway::{
@@ -318,16 +319,17 @@ impl Phi3Attention {
             .transpose(1, 2)?
             .contiguous()?;
 
-        // Capture sequence-mean pre-RoPE Q activations so semantic attractor indexing is
-        // position-invariant and avoids punctuation bias at the final token (`?` vs `.`).
+        // Capture raw per-token pre-RoPE Q activations `[seq_len * num_heads * rotary_dim]`
+        // and delegate all sequence pooling & novelty weighting to `liminika-adapter::pooling`.
         let q_heads = if collect_q_heads {
-            let mean_q = q
+            let seq_q = q
                 .i((0, .., .., 0..rope.rotary_dim))?
-                .mean(1)?
+                .transpose(0, 1)?
+                .contiguous()?
                 .flatten_all()?
                 .to_dtype(DType::F32)?
                 .to_vec1::<f32>()?;
-            Some(mean_q)
+            Some(seq_q)
         } else {
             None
         };
@@ -785,14 +787,17 @@ fn bake_via_adapter(
             .map_err(|e| format!("encode error: {e}"))?
             .get_ids()
             .to_vec();
-        let (_, layer_qs, h_vec) =
+        let (_, layer_tok_qs, h_vec) =
             model.forward_tokens(&ids, 0, None, None, None, None, 0.0, None, None, false, true)?;
-        for (l, q) in layer_qs.iter().enumerate() {
-            per_layer_fact_qs[l].push(q.clone());
-            for ((f_dst, p_dst), &src) in fact_sum[l].iter_mut().zip(pos_sum[l].iter_mut()).zip(q.iter()) {
+        for (l, tok_flat) in layer_tok_qs.iter().enumerate() {
+            let q = SequenceActivationPooler::uniform_raw_mean(tok_flat, ids.len(), q_len)?;
+            for ((f_dst, p_dst), &src) in
+                fact_sum[l].iter_mut().zip(pos_sum[l].iter_mut()).zip(q.iter())
+            {
                 *f_dst += src / fact_count;
                 *p_dst += src / pos_count;
             }
+            per_layer_fact_qs[l].push(q);
         }
         for (dst, &src) in pos_h.iter_mut().zip(h_vec.iter()) {
             *dst += src / pos_count;
@@ -806,14 +811,17 @@ fn bake_via_adapter(
             .map_err(|e| format!("encode error: {e}"))?
             .get_ids()
             .to_vec();
-        let (_, layer_qs, h_vec) =
+        let (_, layer_tok_qs, h_vec) =
             model.forward_tokens(&ids, 0, None, None, None, None, 0.0, None, None, false, true)?;
-        for (l, q) in layer_qs.iter().enumerate() {
-            per_layer_persona_qs[l].push(q.clone());
-            for ((per_dst, p_dst), &src) in persona_sum[l].iter_mut().zip(pos_sum[l].iter_mut()).zip(q.iter()) {
+        for (l, tok_flat) in layer_tok_qs.iter().enumerate() {
+            let q = SequenceActivationPooler::uniform_raw_mean(tok_flat, ids.len(), q_len)?;
+            for ((per_dst, p_dst), &src) in
+                persona_sum[l].iter_mut().zip(pos_sum[l].iter_mut()).zip(q.iter())
+            {
                 *per_dst += src / persona_count;
                 *p_dst += src / pos_count;
             }
+            per_layer_persona_qs[l].push(q);
         }
         for (dst, &src) in pos_h.iter_mut().zip(h_vec.iter()) {
             *dst += src / pos_count;
@@ -827,13 +835,14 @@ fn bake_via_adapter(
             .map_err(|e| format!("encode error: {e}"))?
             .get_ids()
             .to_vec();
-        let (_, layer_qs, h_vec) =
+        let (_, layer_tok_qs, h_vec) =
             model.forward_tokens(&ids, 0, None, None, None, None, 0.0, None, None, false, true)?;
-        for (l, q) in layer_qs.iter().enumerate() {
-            per_layer_guard_qs[l].push(q.clone());
+        for (l, tok_flat) in layer_tok_qs.iter().enumerate() {
+            let q = SequenceActivationPooler::uniform_raw_mean(tok_flat, ids.len(), q_len)?;
             for (dst, &src) in neg_sum[l].iter_mut().zip(q.iter()) {
                 *dst += src / neg_count;
             }
+            per_layer_guard_qs[l].push(q);
         }
         for (dst, &src) in neg_h.iter_mut().zip(h_vec.iter()) {
             *dst += src / neg_count;
@@ -1353,7 +1362,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 2: Online Natural-Language -> Attractor Corpus & cvoid Boundary Evaluation
     println!("\n=== Step 2: Natural-Language Attractor Corpus & cvoid Boundary Eval ===");
     adapter.set_layer_rope_mask(0xFFFF_0000);
-    let mut staged_entries: Vec<(AttractorRole, &str, f32, Vec<Vec<f32>>)> = Vec::new();
+    let mut staged_entries: Vec<TokenSequenceEntry> = Vec::new();
     for (role, texts, energy) in [
         (AttractorRole::Fact, suite.facts.as_slice(), 2.5_f32),
         (AttractorRole::Persona, suite.persona.as_slice(), 1.5_f32),
@@ -1366,37 +1375,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("encode error: {e}"))?
                 .get_ids()
                 .to_vec();
-            let (_, layer_qs, _) = model
+            let (_, layer_tok_qs, _) = model
                 .forward_tokens(&ids, 0, None, None, None, None, 0.0, None, None, false, true)?;
-            staged_entries.push((role, text.as_str(), energy, layer_qs));
+            staged_entries.push(TokenSequenceEntry {
+                role,
+                text: text.clone(),
+                energy,
+                seq_len: ids.len(),
+                per_layer_token_qs: layer_tok_qs,
+            });
         }
     }
 
-    let num_layers = adapter.geometry().num_layers;
-    let q_rot_len = adapter.geometry().q_rot_len();
-    let mut corpus_centroid: Vec<Vec<f32>> = vec![vec![0.0_f32; q_rot_len]; num_layers];
-    let entry_count = staged_entries.len().max(1) as f32;
-    for (_, _, _, layer_qs) in &staged_entries {
-        for (l, q_vec) in layer_qs.iter().enumerate() {
-            for (dst, src) in corpus_centroid[l].iter_mut().zip(q_vec.iter()) {
-                *dst += *src / entry_count;
-            }
-        }
-    }
-    let centroid_refs: Vec<&[f32]> = corpus_centroid.iter().map(Vec::as_slice).collect();
-
-    let mut corpus = TextAttractorCorpus::new();
-    for (role, text, energy, layer_qs) in &staged_entries {
-        let q_refs: Vec<&[f32]> = layer_qs.iter().map(Vec::as_slice).collect();
-        corpus.ingest_text_activations(&adapter, *role, *text, &q_refs, &centroid_refs, *energy)?;
-    }
-    corpus.fit_common_mode_projection();
-    let recall_policy = corpus.calibrate_recall_policy(2, 1);
+    let compiled = CompiledTokenCorpus::compile(
+        &adapter,
+        &staged_entries,
+        SequenceActivationPooler::default(),
+        2,
+        1,
+    )?;
     println!(
-        "Compiled {} natural-language attractors (centroid + common-mode projected) | auto RecallPolicy: min_coh={:.3} margin={:.3}",
-        corpus.entries().len(),
-        recall_policy.min_coherence,
-        recall_policy.boundary_margin,
+        "Compiled {} natural-language attractors (two-pass novelty SIF + Stratum pipeline) | auto RecallPolicy: min_coh={:.3} margin={:.3}",
+        compiled.corpus.entries().len(),
+        compiled.recall_policy.min_coherence,
+        compiled.recall_policy.boundary_margin,
     );
     let mut step2_exp_hits = 0_usize;
     let mut step2_exp_total = 0_usize;
@@ -1423,11 +1425,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| format!("encode error: {e}"))?
             .get_ids()
             .to_vec();
-        let (_, query_qs, _) = model.forward_tokens(
+        let (_, query_tok_qs, _) = model.forward_tokens(
             &q_ids, 0, None, None, None, None, 0.0, None, None, false, true,
         )?;
-        let q_refs: Vec<&[f32]> = query_qs.iter().map(Vec::as_slice).collect();
-        let recall = corpus.recall_for_query(&adapter, &q_refs, &centroid_refs, &recall_policy)?;
+        let recall = compiled.recall_token_sequence(&adapter, &query_tok_qs, q_ids.len())?;
 
         let turn_role = match slot.as_str() {
             "PERSONA" => AttractorRole::Persona,
@@ -1437,8 +1438,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let emitted_i = timeline.record_step(
             &TimelineStepContext {
                 adapter: &adapter,
-                corpus: &corpus,
-                policy: &recall_policy,
+                corpus: &compiled.corpus,
+                policy: &compiled.recall_policy,
                 detector: &cut_detector,
             },
             SourceTextRecord {
@@ -1623,6 +1624,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     struct SubtitleModelProjector<'a> {
         model: &'a mut Phi3Model,
         tokenizer: &'a Tokenizer,
+        model_rotary_dim: usize,
         target_rotary_dim: usize,
     }
 
@@ -1639,30 +1641,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("rebake encode error: {e}"))?
                 .get_ids()
                 .to_vec();
-            let (_, query_qs, _) = self
+            let (_, query_tok_qs, _) = self
                 .model
                 .forward_tokens(
                     &ids, 0, None, None, None, None, 0.0, None, None, false, true,
                 )
                 .map_err(|e| format!("rebake forward error: {e}"))?;
-            Ok(query_qs
-                .into_iter()
-                .map(|mut layer_q| {
-                    layer_q.resize(self.target_rotary_dim, 0.0);
-                    layer_q
-                })
-                .collect())
+            let mut out = Vec::with_capacity(query_tok_qs.len());
+            for tok_flat in query_tok_qs {
+                let mut layer_q = SequenceActivationPooler::uniform_unit_mean(
+                    &tok_flat,
+                    ids.len(),
+                    self.model_rotary_dim,
+                )?;
+                layer_q.resize(self.target_rotary_dim, 0.0);
+                out.push(layer_q);
+            }
+            Ok(out)
         }
     }
 
     let mut same_projector = SubtitleModelProjector {
         model: &mut model,
         tokenizer: &tokenizer,
+        model_rotary_dim: adapter.geometry().q_rot_len(),
         target_rotary_dim: adapter.geometry().q_rot_len(),
     };
     let same_ctx = RebakeContext {
         adapter: &adapter,
-        policy: &recall_policy,
+        policy: &compiled.recall_policy,
         detector: &cut_detector,
         centroid_layers: &[],
         up_to_frame: None,
@@ -1686,11 +1693,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut alt_projector = SubtitleModelProjector {
         model: &mut model,
         tokenizer: &tokenizer,
+        model_rotary_dim: adapter.geometry().q_rot_len(),
         target_rotary_dim: alt_adapter.geometry().q_rot_len(),
     };
     let alt_ctx = RebakeContext {
         adapter: &alt_adapter,
-        policy: &recall_policy,
+        policy: &compiled.recall_policy,
         detector: &cut_detector,
         centroid_layers: &[],
         up_to_frame: None,
