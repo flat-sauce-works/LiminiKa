@@ -1311,7 +1311,11 @@ impl TextAttractorCorpus {
         &self.entries
     }
 
-    fn build_steered_residual_sig(
+    pub(crate) fn common_mode_basis(&self) -> &[Vec<f32>] {
+        &self.common_mode_basis
+    }
+
+    pub(crate) fn build_steered_residual_sig(
         geom: &RopeGeometry,
         q_layers: &[&[f32]],
         ref_layers: &[&[f32]],
@@ -1343,7 +1347,7 @@ impl TextAttractorCorpus {
         }
     }
 
-    fn project_and_normalize(v: &[f32], basis: &[Vec<f32>]) -> Vec<f32> {
+    pub(crate) fn project_and_normalize(v: &[f32], basis: &[Vec<f32>]) -> Vec<f32> {
         let mut out = v.to_vec();
         if !basis.is_empty() {
             for dir in basis {
@@ -1642,6 +1646,7 @@ impl TextAttractorCorpus {
         let mut pipeline = StratumPipeline::new();
         pipeline.push_stratum(Box::new(LocalFeatureWorkerStratum::default()));
         pipeline.push_stratum(Box::new(HeadAngleWorkerStratum::default()));
+        pipeline.push_stratum(Box::new(LocalTokenResonanceStratum::default()));
         pipeline.push_stratum(Box::new(PerspectiveDominoStratum { perspective }));
         pipeline.push_stratum(Box::new(ActionHubBoundaryStratum { gate }));
         self.recall_for_query_with_strata(
@@ -1666,6 +1671,32 @@ impl TextAttractorCorpus {
         baseline_ref_per_layer: &[&[f32]],
         policy: &RecallPolicy,
         pipeline: &StratumPipeline<'_>,
+    ) -> Result<DynamicAttractorRecall<'_>, String> {
+        self.recall_for_query_with_strata_and_local_scores(
+            adapter,
+            query_per_layer_q,
+            baseline_ref_per_layer,
+            policy,
+            pipeline,
+            None,
+        )
+    }
+
+    /// Scores a query's per-layer Q activations through a [`StratumPipeline`] while supplying an
+    /// independent `local_token_scores` channel (e.g., ColBERT-style MaxSim point-cloud scores).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if query/baseline layer slices mismatch `adapter.geometry()`,
+    /// `local_token_scores` length mismatches `self.entries().len()`, or a stratum fails.
+    pub fn recall_for_query_with_strata_and_local_scores(
+        &self,
+        adapter: &ModelSteeringAdapter,
+        query_per_layer_q: &[&[f32]],
+        baseline_ref_per_layer: &[&[f32]],
+        policy: &RecallPolicy,
+        pipeline: &StratumPipeline<'_>,
+        local_token_scores: Option<&[f32]>,
     ) -> Result<DynamicAttractorRecall<'_>, String> {
         if query_per_layer_q.len() != baseline_ref_per_layer.len() {
             return Err(format!(
@@ -1701,8 +1732,19 @@ impl TextAttractorCorpus {
             .map(|sig| Self::cosine_f32(&query_sig, sig))
             .collect();
         let n_entries = entry_sigs.len();
+        let token_channel = match local_token_scores {
+            Some(scores) if scores.len() == n_entries => scores.to_vec(),
+            Some(scores) => {
+                return Err(format!(
+                    "local_token_scores length mismatch: expected {n_entries}, got {}",
+                    scores.len()
+                ));
+            }
+            None => Vec::new(),
+        };
         let initial_signal = StratumSignal {
             candidate_scores: raw_cosines.clone(),
+            local_token_scores: token_channel,
             local_void_depths: raw_cosines
                 .iter()
                 .map(|&s| (policy.min_coherence - s).max(0.0))
@@ -3531,13 +3573,14 @@ mod tests {
             top_k_personas: 1,
         };
 
-        // 1. Default 4-stratum pipeline can dynamically remove & re-insert intermediate strata.
+        // 1. Default 5-stratum pipeline can dynamically remove & re-insert intermediate strata.
         let mut pipeline = StratumPipeline::default();
         assert_eq!(
             pipeline.stratum_names(),
             vec![
                 "local_feature_worker",
                 "head_angle_worker",
+                "local_token_resonance",
                 "perspective_domino_cvoid",
                 "action_hub_boundary",
             ]
@@ -3549,6 +3592,7 @@ mod tests {
             vec![
                 "local_feature_worker",
                 "head_angle_worker",
+                "local_token_resonance",
                 "action_hub_boundary",
             ]
         );
@@ -3568,11 +3612,11 @@ mod tests {
             StigmergicActionDecision::CrystallizeMacroBasin
         );
 
-        // Re-insert the perspective stratum at index 2 and verify Guard dominance triggers RepulsionEscape.
+        // Re-insert the perspective stratum at index 3 and verify Guard dominance triggers RepulsionEscape.
         if let Some(mid) = removed {
-            pipeline.insert_stratum(2, mid);
+            pipeline.insert_stratum(3, mid);
         }
-        assert_eq!(pipeline.stratum_names().len(), 4);
+        assert_eq!(pipeline.stratum_names().len(), 5);
         let recall_guard = corpus
             .recall_for_query_with_strata(
                 &adapter,

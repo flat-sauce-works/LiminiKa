@@ -14,6 +14,10 @@ use crate::{
     RecallGateDecision, RecallPolicy, TextAttractorCorpus, TextAttractorEntry, VoidBoundaryState,
 };
 use liminika_core::action_hub::StigmergicActionDecision;
+use liminika_core::traits::gateway::{
+    GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact, SubjectivePersona,
+};
+use liminika_core::traits::primitives::MAX_ATTENTION_HEADS;
 
 /// Bottom-up and top-down signal flowing across a Society-of-Mind [`StratumPipeline`].
 ///
@@ -24,6 +28,9 @@ use liminika_core::action_hub::StigmergicActionDecision;
 pub struct StratumSignal {
     /// Per-attractor score (`-1.0..=1.0+`) updated by each stratum in the stack.
     pub candidate_scores: Vec<f32>,
+    /// Independent per-attractor multi-token MaxSim score (`-1.0..=1.0`) supplied by a
+    /// representation sensor, or empty when operating in single-vector mode.
+    pub local_token_scores: Vec<f32>,
     /// Per-attractor local `cvoid` gap depth (`0.0` = deep inside basin).
     pub local_void_depths: Vec<f32>,
     /// Per-attractor stigmergic pointer trace / pheromone strength (`>= 0.0`).
@@ -601,11 +608,195 @@ impl<'a> StratumPipeline<'a> {
     }
 }
 
+/// Stratum 0.75: multi-token late-interaction resonance stratum interpreting the independent
+/// `local_token_scores` channel (without coupling the `cvoid` layers to tokenizers or model pooling).
+#[derive(Debug, Clone, Copy)]
+pub struct LocalTokenResonanceStratum {
+    /// Gain applied to role-centered MaxSim contrast (`local_score - role_mean`).
+    pub token_contrast_gain: f32,
+}
+
+impl Default for LocalTokenResonanceStratum {
+    fn default() -> Self {
+        Self {
+            token_contrast_gain: 0.45,
+        }
+    }
+}
+
+impl SocietyStratum for LocalTokenResonanceStratum {
+    fn name(&self) -> &'static str {
+        "local_token_resonance"
+    }
+
+    fn infer_up(&self, ctx: &StratumContext<'_>, signal: &mut StratumSignal) -> Result<(), String> {
+        let n_entries = ctx.entries.len();
+        if n_entries == 0 || signal.local_token_scores.len() != n_entries {
+            return Ok(());
+        }
+        for role in [
+            AttractorRole::Fact,
+            AttractorRole::Persona,
+            AttractorRole::Guard,
+        ] {
+            let idxs: Vec<usize> = ctx
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.role == role)
+                .map(|(i, _)| i)
+                .collect();
+            if idxs.len() <= 1 {
+                continue;
+            }
+            let role_mean = idxs
+                .iter()
+                .map(|&i| signal.local_token_scores[i])
+                .sum::<f32>()
+                / (idxs.len() as f32);
+            for &i in &idxs {
+                let local_score = signal.local_token_scores[i];
+                let contrast = local_score - role_mean;
+                let support = local_score.max(signal.candidate_scores[i]).max(0.0);
+                if support > 0.0 {
+                    signal.candidate_scores[i] += self.token_contrast_gain * contrast;
+                    signal.stigmergic_weights[i] =
+                        (signal.stigmergic_weights[i] * (1.0 + contrast)).clamp(0.35, 2.0);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn adjust_down(
+        &self,
+        _ctx: &StratumContext<'_>,
+        directive: &mut StratumDirective,
+        signal: &mut StratumSignal,
+    ) {
+        if directive.repulse_guard || directive.suppress_injection {
+            for w in &mut signal.stigmergic_weights {
+                *w *= 0.5;
+            }
+        }
+    }
+}
+
+/// Core `ManifoldGatewaySignal` projection synthesized from adapter-layer [`StratumSignal`] channels.
+#[derive(Debug, Clone, Copy)]
+pub struct StratumGatewayMapping {
+    /// Winning `ObjectiveFact` axis when a non-suppressed Fact basin is active.
+    pub fact: Option<ObjectiveFact<[i8; MAX_ATTENTION_HEADS]>>,
+    /// Winning `SubjectivePersona` axis when a Persona attractor is active.
+    pub persona: Option<SubjectivePersona<[i8; MAX_ATTENTION_HEADS]>>,
+    /// Guard repulsion axis when a Guard attractor is present.
+    pub guard: Option<GuardPhaseAnchor>,
+    /// Synthesized 128-byte [`GatewayFrame`] produced via `liminika_core` blanket traits.
+    pub frame: GatewayFrame,
+}
+
+impl StratumSignal {
+    /// Maps this stratum signal's winning role axes into `liminika_core` [`ManifoldGatewaySignal`]
+    /// primitives and synthesizes a unified 128-byte [`GatewayFrame`] via blanket composition.
+    #[must_use]
+    pub fn map_to_gateway(
+        &self,
+        entries: &[TextAttractorEntry],
+        layer_idx: usize,
+    ) -> StratumGatewayMapping {
+        let mut best_fact: Option<(usize, f32)> = None;
+        let mut best_persona: Option<(usize, f32)> = None;
+        let mut best_guard: Option<(usize, f32)> = None;
+
+        for (i, (entry, &score)) in entries.iter().zip(self.candidate_scores.iter()).enumerate() {
+            let slot = match entry.role {
+                AttractorRole::Fact => &mut best_fact,
+                AttractorRole::Persona => &mut best_persona,
+                AttractorRole::Guard => &mut best_guard,
+            };
+            if slot.is_none_or(|(_, best_s)| score > best_s) {
+                *slot = Some((i, score));
+            }
+        }
+
+        let fact = if !self.gate_decision.suppress_fact_injection {
+            best_fact.and_then(|(idx, score)| {
+                let entry = &entries[idx];
+                let q7 = entry
+                    .per_layer_q7
+                    .get(layer_idx)
+                    .copied()
+                    .or_else(|| entry.per_layer_q7.last().copied())?;
+                let w = self.stigmergic_weights.get(idx).copied().unwrap_or(1.0);
+                Some(ObjectiveFact::new(
+                    q7,
+                    (entry.energy * score.max(0.1) * w).max(0.1),
+                    layer_idx as u64,
+                    entry.anchor_id,
+                ))
+            })
+        } else {
+            None
+        };
+
+        let persona = best_persona.and_then(|(idx, score)| {
+            let entry = &entries[idx];
+            let q7 = entry
+                .per_layer_q7
+                .get(layer_idx)
+                .copied()
+                .or_else(|| entry.per_layer_q7.last().copied())?;
+            Some(SubjectivePersona::new(
+                q7,
+                (entry.energy * score.max(0.05)).max(0.05),
+                layer_idx as u64,
+                entry.anchor_id,
+            ))
+        });
+
+        let guard = best_guard.and_then(|(idx, _)| {
+            let entry = &entries[idx];
+            let q7 = entry
+                .per_layer_q7
+                .get(layer_idx)
+                .copied()
+                .or_else(|| entry.per_layer_q7.last().copied())?;
+            let obs = (self.boundary_metrics.guard_conflict_margin + 0.5).max(0.0);
+            Some(GuardPhaseAnchor::new(q7, obs, 0.5))
+        });
+
+        let frame = if matches!(
+            self.action_decision,
+            StigmergicActionDecision::RepulsionEscape
+        ) {
+            guard
+                .map(|g| g.synthesize_gateway_frame())
+                .unwrap_or_default()
+        } else {
+            match (fact, persona, guard) {
+                (Some(f), Some(p), _) => (f, p).synthesize_gateway_frame(),
+                (Some(f), None, _) => f.synthesize_gateway_frame(),
+                (None, Some(p), _) => p.synthesize_gateway_frame(),
+                (None, None, Some(g)) => g.synthesize_gateway_frame(),
+                (None, None, None) => GatewayFrame::default(),
+            }
+        };
+
+        StratumGatewayMapping {
+            fact,
+            persona,
+            guard,
+            frame,
+        }
+    }
+}
+
 impl Default for StratumPipeline<'static> {
     fn default() -> Self {
         let mut p = Self::new();
         p.push_stratum(Box::new(LocalFeatureWorkerStratum::default()));
         p.push_stratum(Box::new(HeadAngleWorkerStratum::default()));
+        p.push_stratum(Box::new(LocalTokenResonanceStratum::default()));
         p.push_stratum(Box::new(PerspectiveDominoStratum {
             perspective: &DEFAULT_PERSPECTIVE,
         }));

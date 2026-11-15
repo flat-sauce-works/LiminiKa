@@ -246,7 +246,7 @@ pub struct TokenSequenceEntry {
 }
 
 /// Self-contained Cold-Path corpus compiled from raw multi-token Q activations via two-pass
-/// unsupervised centroid estimation + SIF novelty pooling + Stratum calibration.
+/// unsupervised centroid estimation + SIF novelty pooling + salient token point clouds.
 #[derive(Debug, Clone)]
 pub struct CompiledTokenCorpus {
     /// Compiled attractor manifold corpus.
@@ -255,6 +255,9 @@ pub struct CompiledTokenCorpus {
     pub novelty_reference_per_layer: Vec<Vec<f32>>,
     /// Pass-2 centroid matching the pooled distribution of `corpus` entries.
     pub corpus_centroid_per_layer: Vec<Vec<f32>>,
+    /// Top salient token signatures per corpus entry (`[entry][token_k][steered_dim]`) for
+    /// ColBERT-style late interaction (`local_token_scores`).
+    pub entry_token_sigs: Vec<Vec<Vec<f32>>>,
     /// Empirically calibrated [`RecallPolicy`] derived from projected corpus similarities.
     pub recall_policy: RecallPolicy,
     /// Pooler configuration applied identically during compilation and query recall.
@@ -262,6 +265,81 @@ pub struct CompiledTokenCorpus {
 }
 
 impl CompiledTokenCorpus {
+    fn extract_salient_token_sigs(
+        adapter: &ModelSteeringAdapter,
+        per_layer_token_qs: &[Vec<f32>],
+        seq_len: usize,
+        novelty_reference_per_layer: &[Vec<f32>],
+        common_mode_basis: &[Vec<f32>],
+        max_tokens: usize,
+        pooler: SequenceActivationPooler,
+    ) -> Result<Vec<(Vec<f32>, f32)>, String> {
+        let geom = adapter.geometry();
+        let dim = geom.q_rot_len();
+        if seq_len == 0 || max_tokens == 0 {
+            return Ok(Vec::new());
+        }
+        let mut token_scores: Vec<(usize, f32)> = Vec::with_capacity(seq_len);
+        let (power, floor) = match pooler.mode {
+            SequencePoolingMode::UniformMean => (0.0_f32, 1.0_f32),
+            SequencePoolingMode::CorpusNoveltySif {
+                novelty_power,
+                weight_floor,
+            } => (novelty_power.max(0.0), weight_floor.clamp(1e-3, 1.0)),
+        };
+
+        for t in 0..seq_len {
+            let mut sum_w = 0.0_f32;
+            let mut count = 0_usize;
+            for (l, layer_flat) in per_layer_token_qs.iter().enumerate() {
+                if !geom.is_rope_layer(l) {
+                    continue;
+                }
+                let start = t * dim;
+                let end = start + dim;
+                if end > layer_flat.len() {
+                    return Err(format!(
+                        "layer {l}: token slice {start}..{end} exceeds {}",
+                        layer_flat.len()
+                    ));
+                }
+                let slice = &layer_flat[start..end];
+                let cos_pos =
+                    TextAttractorCorpus::cosine_f32(slice, &novelty_reference_per_layer[l])
+                        .max(0.0);
+                let w = (1.0 - cos_pos).clamp(floor, 1.0).powf(power);
+                sum_w += w;
+                count += 1;
+            }
+            let mean_w = if count > 0 {
+                sum_w / (count as f32)
+            } else {
+                1.0
+            };
+            token_scores.push((t, mean_w));
+        }
+
+        token_scores.sort_by(|a, b| b.1.total_cmp(&a.1));
+        token_scores.truncate(max_tokens.min(seq_len));
+
+        let ref_slices: Vec<&[f32]> = novelty_reference_per_layer
+            .iter()
+            .map(Vec::as_slice)
+            .collect();
+        let mut out = Vec::with_capacity(token_scores.len());
+        for (t, w) in token_scores {
+            let mut tok_layers: Vec<&[f32]> = Vec::with_capacity(per_layer_token_qs.len());
+            for layer_flat in per_layer_token_qs {
+                tok_layers.push(&layer_flat[t * dim..(t + 1) * dim]);
+            }
+            let raw_tok_sig =
+                TextAttractorCorpus::build_steered_residual_sig(geom, &tok_layers, &ref_slices);
+            let proj_tok_sig =
+                TextAttractorCorpus::project_and_normalize(&raw_tok_sig, common_mode_basis);
+            out.push((proj_tok_sig, w));
+        }
+        Ok(out)
+    }
     /// Compiles a list of raw token-sequence captures into a calibrated [`CompiledTokenCorpus`].
     ///
     /// Pass 1 computes an unsupervised uniform-mean centroid across all entries to serve as a
@@ -338,11 +416,25 @@ impl CompiledTokenCorpus {
         }
         corpus.fit_common_mode_projection();
         let recall_policy = corpus.calibrate_recall_policy(top_k_facts, top_k_personas);
+        let mut entry_token_sigs = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let salient = Self::extract_salient_token_sigs(
+                adapter,
+                &entry.per_layer_token_qs,
+                entry.seq_len,
+                &novelty_reference_per_layer,
+                corpus.common_mode_basis(),
+                4,
+                pooler,
+            )?;
+            entry_token_sigs.push(salient.into_iter().map(|(sig, _)| sig).collect());
+        }
 
         Ok(Self {
             corpus,
             novelty_reference_per_layer,
             corpus_centroid_per_layer,
+            entry_token_sigs,
             recall_policy,
             pooler,
         })
@@ -392,18 +484,49 @@ impl CompiledTokenCorpus {
             dim,
             Some(&self.novelty_reference_per_layer),
         )?;
+        let query_salient = Self::extract_salient_token_sigs(
+            adapter,
+            query_token_qs,
+            query_seq_len,
+            &self.novelty_reference_per_layer,
+            self.corpus.common_mode_basis(),
+            6,
+            self.pooler,
+        )?;
+        let mut local_token_scores = vec![0.0_f32; self.entry_token_sigs.len()];
+        let weight_sum: f32 = query_salient.iter().map(|(_, w)| *w).sum();
+        if weight_sum > 1e-12 && !query_salient.is_empty() {
+            for (i, doc_tokens) in self.entry_token_sigs.iter().enumerate() {
+                if doc_tokens.is_empty() {
+                    continue;
+                }
+                let mut weighted_maxsim = 0.0_f32;
+                for (q_tok, w_t) in &query_salient {
+                    let max_sim = doc_tokens
+                        .iter()
+                        .map(|d_tok| TextAttractorCorpus::cosine_f32(q_tok, d_tok))
+                        .fold(f32::NEG_INFINITY, f32::max);
+                    if max_sim.is_finite() {
+                        weighted_maxsim += *w_t * max_sim;
+                    }
+                }
+                local_token_scores[i] = weighted_maxsim / weight_sum;
+            }
+        }
+
         let q_refs: Vec<&[f32]> = pooled_q.iter().map(Vec::as_slice).collect();
         let centroid_refs: Vec<&[f32]> = self
             .corpus_centroid_per_layer
             .iter()
             .map(Vec::as_slice)
             .collect();
-        self.corpus.recall_for_query_with_strata(
+        self.corpus.recall_for_query_with_strata_and_local_scores(
             adapter,
             &q_refs,
             &centroid_refs,
             &self.recall_policy,
             pipeline,
+            Some(&local_token_scores),
         )
     }
 }
@@ -546,5 +669,53 @@ mod tests {
             .expect("recall OOD");
         assert_eq!(recall_ood.void_state, VoidBoundaryState::CvoidEmptySpace);
         assert!(recall_ood.recalled_facts.is_empty());
+    }
+
+    #[test]
+    fn stratum_signal_maps_to_core_gateway_blanket_frame() {
+        use crate::{RecallBoundaryMetrics, RecallGateDecision, StratumSignal, TextAttractorEntry};
+        use liminika_core::action_hub::StigmergicActionDecision;
+
+        let entries = vec![
+            TextAttractorEntry {
+                anchor_id: 7,
+                role: AttractorRole::Fact,
+                text: "Fact 7".to_string(),
+                per_layer_q7: vec![[12_i8; 64]],
+                energy: 2.0,
+                residual_sig: vec![],
+            },
+            TextAttractorEntry {
+                anchor_id: 101,
+                role: AttractorRole::Persona,
+                text: "Persona 101".to_string(),
+                per_layer_q7: vec![[5_i8; 64]],
+                energy: 1.5,
+                residual_sig: vec![],
+            },
+        ];
+        let signal = StratumSignal {
+            candidate_scores: vec![0.45, 0.30],
+            local_token_scores: vec![0.60, 0.25],
+            local_void_depths: vec![0.0, 0.0],
+            stigmergic_weights: vec![1.2, 1.0],
+            boundary_metrics: RecallBoundaryMetrics {
+                top1_fact_score: 0.45,
+                top2_fact_score: 0.10,
+                top1_persona_score: 0.30,
+                max_guard_score: -0.2,
+                guard_conflict_margin: -0.65,
+            },
+            gate_decision: RecallGateDecision {
+                void_state: VoidBoundaryState::InsideBasin,
+                suppress_fact_injection: false,
+            },
+            action_decision: StigmergicActionDecision::CrystallizeMacroBasin,
+        };
+
+        let mapped = signal.map_to_gateway(&entries, 0);
+        assert_eq!(mapped.fact.map(|f| f.anchor_id), Some(7));
+        assert_eq!(mapped.persona.map(|p| p.anchor_id), Some(101));
+        assert_eq!(mapped.frame.target_anchor_id, 7);
     }
 }
