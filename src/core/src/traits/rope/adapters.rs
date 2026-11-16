@@ -1,17 +1,17 @@
 // name: src/core/src/traits/rope/adapters.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Synchronous Residual Adapter (SrlAdapter) and 2D/3D VisualAttentionSteering traits.
+//! Synchronous Residual Adapter (Rank1ResidualAdapter) and 2D/3D VisualAttentionSteering traits.
 
 use super::*;
 
 // ===================================================================
-// 5. Synchronous Residual Adapter (`SrlAdapter`)
+// 5. Synchronous Residual Adapter (`Rank1ResidualAdapter`)
 // ===================================================================
 
 #[inline(always)]
-pub(super) fn validate_and_unpack_srl_descriptor<'a>(
-    desc: &'a gcso_srl_descriptor_t,
+pub(super) fn validate_and_unpack_rank1_descriptor<'a>(
+    desc: &'a gcso_rank1_residual_descriptor_t,
     d_in: usize,
     d_out: usize,
 ) -> GcsoResult<(
@@ -47,12 +47,12 @@ pub(super) fn validate_and_unpack_srl_descriptor<'a>(
     Ok((u_slice, v_slice, g_slice_opt))
 }
 
-/// Trait for Synchronous Residual Layer (SRL) Dynamic Rank-1 Outer Product Injection
+/// Trait for Synchronous Residual Layer (Rank-1 residual) Dynamic Rank-1 Outer Product Injection
 /// ($\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$)
 /// (**Micro Level**, Section 1.5 & 5.2).
-pub trait SrlAdapter: BranchlessKernel {
+pub trait Rank1ResidualAdapter: BranchlessKernel {
     /// Evaluates the standalone Rank-1 outer product $\mathbf{y} = s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
-    /// into `y_out` from safe hardware-aligned slices using AVX2 (`dot_f32_unrolled4`, `srl_write_outer_product_simd`).
+    /// into `y_out` from safe hardware-aligned slices using AVX2 (`dot_f32_unrolled4`, `rank1_write_outer_product_simd`).
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `y_out`, `x_in`, `u_vec`, or `v_vec` is empty,
@@ -89,7 +89,7 @@ pub trait SrlAdapter: BranchlessKernel {
         }
         let eff_scale = branchless_flush_subnormal_f32(scale_factor * dot_vx);
         let g_slice_opt = gain_vec.map(|g| &g.as_slice()[..d_out]);
-        srl_write_outer_product_simd(
+        rank1_write_outer_product_simd(
             &mut y_out.as_mut_slice()[..d_out],
             &u_vec.as_slice()[..d_out],
             g_slice_opt,
@@ -99,7 +99,7 @@ pub trait SrlAdapter: BranchlessKernel {
     }
 
     /// Accumulates the fused Rank-1 outer product residual $\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
-    /// in-place into `y_inout` from safe hardware-aligned slices using AVX2 (`srl_accum_outer_product_simd`).
+    /// in-place into `y_inout` from safe hardware-aligned slices using AVX2 (`rank1_accum_outer_product_simd`).
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any slice is empty, lengths mismatch, or `scale_factor` is non-finite.
@@ -135,7 +135,7 @@ pub trait SrlAdapter: BranchlessKernel {
         }
         let eff_scale = branchless_flush_subnormal_f32(scale_factor * dot_vx);
         let g_slice_opt = gain_vec.map(|g| &g.as_slice()[..d_out]);
-        srl_accum_outer_product_simd(
+        rank1_accum_outer_product_simd(
             &mut y_inout.as_mut_slice()[..d_out],
             &u_vec.as_slice()[..d_out],
             g_slice_opt,
@@ -145,7 +145,7 @@ pub trait SrlAdapter: BranchlessKernel {
     }
 
     /// Evaluates the standalone Rank-1 outer product $\mathbf{y} = s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
-    /// from a C-ABI [`gcso_srl_descriptor_t`] (including optional 32B-aligned `gain_scalar_ptr`).
+    /// from a C-ABI [`gcso_rank1_residual_descriptor_t`] (including optional 32B-aligned `gain_scalar_ptr`).
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_NULL_POINTER`] if `u_vector_ptr == 0` or `v_vector_ptr == 0`,
@@ -156,10 +156,10 @@ pub trait SrlAdapter: BranchlessKernel {
         &self,
         y_out: &mut AlignedSliceMut32<'_, f32>,
         x_in: &AlignedSlice32<'_, f32>,
-        desc: &gcso_srl_descriptor_t,
+        desc: &gcso_rank1_residual_descriptor_t,
     ) -> GcsoResult<()> {
         let (u_slice, v_slice, g_slice_opt) =
-            validate_and_unpack_srl_descriptor(desc, x_in.len(), y_out.len())?;
+            validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_out.len())?;
         self.eval_rank1_slices(
             y_out,
             x_in,
@@ -171,7 +171,7 @@ pub trait SrlAdapter: BranchlessKernel {
     }
 
     /// Accumulates the fused Rank-1 outer product residual $\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
-    /// in-place into `y_inout` from a C-ABI [`gcso_srl_descriptor_t`] (including optional 32B-aligned `gain_scalar_ptr`).
+    /// in-place into `y_inout` from a C-ABI [`gcso_rank1_residual_descriptor_t`] (including optional 32B-aligned `gain_scalar_ptr`).
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_NULL_POINTER`] if `u_vector_ptr == 0` or `v_vector_ptr == 0`,
@@ -182,10 +182,10 @@ pub trait SrlAdapter: BranchlessKernel {
         &self,
         y_inout: &mut AlignedSliceMut32<'_, f32>,
         x_in: &AlignedSlice32<'_, f32>,
-        desc: &gcso_srl_descriptor_t,
+        desc: &gcso_rank1_residual_descriptor_t,
     ) -> GcsoResult<()> {
         let (u_slice, v_slice, g_slice_opt) =
-            validate_and_unpack_srl_descriptor(desc, x_in.len(), y_inout.len())?;
+            validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_inout.len())?;
         self.eval_rank1_slices_fused(
             y_inout,
             x_in,
@@ -196,7 +196,7 @@ pub trait SrlAdapter: BranchlessKernel {
         )
     }
 
-    /// Accumulates the fused Rank-1 outer product residual gated by `tagged_ptr`'s `ACTION_MODE_SRL_INJECT` bit (`0x10`).
+    /// Accumulates the fused Rank-1 outer product residual gated by `tagged_ptr`'s `ACTION_MODE_RANK1_INJECT` bit (`0x10`).
     ///
     /// # Errors
     /// Propagates any pointer/slice validation error from [`Self::eval_rank1_fused`].
@@ -206,11 +206,11 @@ pub trait SrlAdapter: BranchlessKernel {
         tagged_ptr: gcso_tagged_ptr_t,
         y_inout: &mut AlignedSliceMut32<'_, f32>,
         x_in: &AlignedSlice32<'_, f32>,
-        desc: &gcso_srl_descriptor_t,
+        desc: &gcso_rank1_residual_descriptor_t,
     ) -> GcsoResult<bool> {
         let (u_slice, v_slice, g_slice_opt) =
-            validate_and_unpack_srl_descriptor(desc, x_in.len(), y_inout.len())?;
-        if !ptr_has_action_mode(tagged_ptr, ACTION_MODE_SRL_INJECT) {
+            validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_inout.len())?;
+        if !ptr_has_action_mode(tagged_ptr, ACTION_MODE_RANK1_INJECT) {
             return Ok(false);
         }
         self.eval_rank1_slices_fused(

@@ -31,7 +31,7 @@ pub struct ReflectionPolicy {
     pub alignment_improvement_eps: f32,
     /// Additive RoPE steering delta (radians) applied on corrective Fact/Guard passes.
     pub max_rope_boost_rad: f32,
-    /// Additive SRL residual scale delta applied on corrective Fact/Guard passes.
+    /// Additive Rank-1 residual residual scale delta applied on corrective Fact/Guard passes.
     pub srl_boost_delta: f32,
 }
 
@@ -85,7 +85,7 @@ pub struct ReflectionCorrectiveDirective {
     pub suppress_injection: bool,
     /// Additive RoPE steering adjustment (radians) applied during Pass 2.
     pub rope_rad_delta: f32,
-    /// Additive SRL gain adjustment applied during Pass 2.
+    /// Additive Rank-1 residual gain adjustment applied during Pass 2.
     pub srl_scale_delta: f32,
     /// True when the draft's top recalled Fact anchor diverges from the query's top Fact anchor.
     pub anchor_mismatch: bool,

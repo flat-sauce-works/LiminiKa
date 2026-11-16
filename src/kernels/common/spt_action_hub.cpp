@@ -513,7 +513,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_ledger_set_mode(gcso_ledger_slot_t* GCSO_R
 }
 
 /**
- * @brief Evaluates telemetry ledger to auto-tune PSPM routing ratios, RIPA bounds & EDBC
+ * @brief Evaluates telemetry ledger to auto-tune sub-head router routing ratios, RIPA bounds & EDBC
  * thresholds.
  *
  * Self-Optimization Loop: Analyzes cache hit counts from FastPathLedger to adaptively adjust

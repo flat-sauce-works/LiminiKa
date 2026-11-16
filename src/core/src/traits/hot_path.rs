@@ -14,7 +14,7 @@
 //!   synchronization (both saturating and circular $S^1$ geodesic-folded).
 //! - **[`HotPathExecutionEngine`] / [`FractalCascadeCoordinator`] / [`HotPathObserver`]**:
 //!   Blanket-implemented micro observers over [`super::ActionHub`] that drive constant-time
-//!   $\mathcal{O}(1)$ `Pointer -> FastPathLedger -> Bloom Repulsion -> Unified Field / Toroidal k-Means / Limina / Swarm -> QDPS/RIPA/RoPE -> PSPM/SRL`
+//!   $\mathcal{O}(1)$ `Pointer -> FastPathLedger -> Bloom Repulsion -> Unified Field / Toroidal k-Means / Limina / Swarm -> QDPS/RIPA/RoPE -> sub-head router/Rank-1 residual`
 //!   token cascades with type-level [`BranchlessKernel`] enforcement.
 
 #![deny(unsafe_code)]
@@ -56,7 +56,7 @@ use super::telemetry::{
     ContrastivePhaseBloomFilter, PagedBitmaskOps, StigmergicActionPtrOps, StigmergicSwarmOps,
     StigmergicTrailOps, SwarmResolutionReport, LEDGER_METRIC_FAST_PATH_HIT,
     LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_LAZY_UNWRAP_APPLIED, LEDGER_METRIC_PHASE_STEERED,
-    LEDGER_METRIC_PSPM_ROUTED, LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
+    LEDGER_METRIC_SUBHEAD_ROUTED, LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
     MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS,
     TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
@@ -65,8 +65,8 @@ use super::{
     accumulate_q7_slice_into_words_64, fuse_lazy_unwrap_and_qdps_from_words_64, ActionHub,
 };
 use crate::abi::{
-    gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t,
-    gcso_srl_descriptor_t, gcso_tagged_ptr_t, GCSO_ERROR_INVALID_ARGUMENT,
+    gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_subhead_config_t, gcso_q7_t,
+    gcso_rank1_residual_descriptor_t, gcso_tagged_ptr_t, GCSO_ERROR_INVALID_ARGUMENT,
 };
 
 // ===================================================================
@@ -129,7 +129,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
         entropy_h_tilde: f32,
         dominant_attractor_slot: u8,
         low_entropy_skip_thresh: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
@@ -149,7 +149,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
             repulsion_triggered,
             dominant_attractor_slot,
             low_entropy_skip_thresh,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
         );
         Ok((evolved_ptr, density, repulsion_triggered))
     }
@@ -172,7 +172,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
         game_qos_budget_active: bool,
         dominant_attractor_slot: u8,
         low_entropy_skip_thresh: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
@@ -186,7 +186,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
             entropy_h_tilde,
             dominant_attractor_slot,
             low_entropy_skip_thresh,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
             bloom_filter,
             repulsion_threshold,
             repulsion_scale_u7,
@@ -1155,7 +1155,7 @@ pub trait HotPathExecutionEngine: ActionHub {}
 impl<T: ActionHub + ?Sized> HotPathExecutionEngine for T {}
 
 /// Blanket-implemented Lv.2 Micro-Observer coordinator that drives constant-time
-/// $\mathcal{O}(1)$ `ActionHub -> FastPathLedger -> Bloom Repulsion -> Unified Field / Toroidal k-Means / Limina / Swarm -> QDPS/RIPA/RoPE -> PSPM/SRL`
+/// $\mathcal{O}(1)$ `ActionHub -> FastPathLedger -> Bloom Repulsion -> Unified Field / Toroidal k-Means / Limina / Swarm -> QDPS/RIPA/RoPE -> sub-head router/Rank-1 residual`
 /// token cascades.
 pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     /// Executes a constant-time per-token stigmergic cascade over [`ActionHub`]:
@@ -1289,12 +1289,12 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         Ok((density, final_pull, mean_coh, active_anchors))
     }
 
-    /// Executes a **Single-Pass $SO(2)$ Group-Closure Unified-Field + PSPM Sub-Head Pseudo-MoE +
+    /// Executes a **Single-Pass $SO(2)$ Group-Closure Unified-Field + sub-head router Sub-Head Pseudo-MoE +
     /// Inverse-Temperature Logit Sharpening** token cascade over [`ActionHub`]:
     /// 1. Steps `input_ptr` with `ledger_slot` shortcut resolution and `bloom_filter` repulsion.
     /// 2. Folds `anchor_phases` and `anchor_base_energies` on the Single Unified Attractor Manifold.
-    /// 3. Applies 8-lane SWAR QDPS step filtering in registers and, when `pspm_config_and_pulse`
-    ///    is `Some`, fuses RIPA phase steering and PSPM Fact/Logic/Explore sub-head routing into a
+    /// 3. Applies 8-lane SWAR QDPS step filtering in registers and, when `subhead_config_and_pulse`
+    ///    is `Some`, fuses RIPA phase steering and sub-head router Fact/Logic/Explore sub-head routing into a
     ///    **single pass** over `query_tensor` directly from 8-word SWAR registers via
     ///    [`ActionHub::filter_qdps_and_steer_qk_with_unified_pspm_safe`] (`0` stack buffer copies).
     /// 4. When `logits_and_temp_gain` is `Some`, modulates vocabulary/branch logits in-place by
@@ -1316,7 +1316,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
         repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
-        pspm_config_and_pulse: Option<(&gcso_pspm_config_t, gcso_q7_t)>,
+        subhead_config_and_pulse: Option<(&gcso_subhead_config_t, gcso_q7_t)>,
         logits_and_temp_gain: Option<(&mut AlignedSliceMut32<'_, f32>, f32)>,
         qdps_min_step_rad: f32,
         ripa_max_rad: f32,
@@ -1367,7 +1367,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         let fact_eq_raw = single_direct || (n_anc > 0 && swar_words_equal_64(&raw_words, &fact_w));
         let fact_ref = if fact_eq_raw { &raw_words } else { &fact_w };
         let logic_w;
-        let logic_ref = if pspm_config_and_pulse.is_some() && n_anc > 1 {
+        let logic_ref = if subhead_config_and_pulse.is_some() && n_anc > 1 {
             let l_idx = (dom_idx + 1) % n_anc;
             if l_idx == dom_idx {
                 fact_ref
@@ -1383,11 +1383,11 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             &raw_words
         };
 
-        let (steered, pspm_routed) = self.steer_qdps_pspm_words_prevalidated_core(
+        let (steered, subhead_routed) = self.steer_qdps_pspm_words_prevalidated_core(
             &raw_words,
             fact_ref,
             logic_ref,
-            pspm_config_and_pulse,
+            subhead_config_and_pulse,
             head_dim,
             num_heads,
             qdps_min_step_rad,
@@ -1426,7 +1426,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
 
         let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
             | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(pspm_routed, LEDGER_METRIC_PSPM_ROUTED, 0)
+            | branchless_select_u8(subhead_routed, LEDGER_METRIC_SUBHEAD_ROUTED, 0)
             | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
             | branchless_select_u8(active_anchors > 0, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, 0);
         self.telemetry_push(ledger_slot, metric)?;
@@ -1506,13 +1506,13 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         Ok((density, cluster_idx, anchor_id, coh, grav))
     }
 
-    /// Executes a **Top-2 Liminal Bifurcation Macro-Centroid + Dual-Centroid PSPM** token cascade
+    /// Executes a **Top-2 Liminal Bifurcation Macro-Centroid + Dual-Centroid sub-head router** token cascade
     /// ($\mathcal{O}(K)$ 64-bit SWAR) over [`ActionHub`]:
     /// 1. Steps `input_ptr` with `ledger_slot` shortcut resolution and `bloom_filter` repulsion.
     /// 2. Routes `trail_out` against the Top-2 macro centroids $(k_1^*, k_2^*)$ in `centroids`,
     ///    bridging inter-memory *Limina* boundaries along the shortest $S^1$ geodesic when
     ///    $G_2 \ge \tau_{\mathrm{limina}} G_1$, and steers `query_tensor` / `key_tensor` with
-    ///    register-resident PSPM sub-head routing via [`ActionHub::route_top2_liminal_and_steer_qk_safe`].
+    ///    register-resident sub-head router sub-head routing via [`ActionHub::route_top2_liminal_and_steer_qk_safe`].
     /// 3. Pushes combined FastPathLedger telemetry metrics into `ledger_slot`.
     ///
     /// Returns `(repulsion_density, primary_idx, secondary_idx, primary_anchor_id, secondary_anchor_id, blended_coherence, total_gravity, is_liminal_bifurcation)`.
@@ -1530,7 +1530,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         centroids: &[CrystallizedAttractorRecord],
         pull_step_u7: u8,
         liminal_gravity_ratio_thresh: f32,
-        pspm_config_and_pulse: Option<(&gcso_pspm_config_t, gcso_q7_t)>,
+        subhead_config_and_pulse: Option<(&gcso_subhead_config_t, gcso_q7_t)>,
         qdps_min_step_rad: f32,
         ripa_max_rad: f32,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -1561,11 +1561,11 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
                 pull_step_u7,
                 liminal_gravity_ratio_thresh,
             );
-        let (steered, _pspm_routed) = self.steer_qdps_pspm_words_prevalidated_core(
+        let (steered, _subhead_routed) = self.steer_qdps_pspm_words_prevalidated_core(
             &raw_w,
             &fact_w,
             &logic_w,
-            pspm_config_and_pulse,
+            subhead_config_and_pulse,
             head_dim,
             num_heads,
             qdps_min_step_rad,
@@ -1573,10 +1573,10 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             query_tensor,
             key_tensor,
         )?;
-        let pspm_routed = has_q & pspm_config_and_pulse.is_some();
+        let subhead_routed = has_q & subhead_config_and_pulse.is_some();
         let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
             | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(pspm_routed, LEDGER_METRIC_PSPM_ROUTED, 0)
+            | branchless_select_u8(subhead_routed, LEDGER_METRIC_SUBHEAD_ROUTED, 0)
             | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
             | branchless_select_u8(
                 (aid1 != 0) | is_liminal,
@@ -1967,7 +1967,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     }
 
     /// Executes a full per-token Hot-Path cascade combining pointer transition, Bloom repulsion,
-    /// QDPS/RIPA phase steering, and optional single-pass PSPM sub-head routing + SRL Rank-1
+    /// QDPS/RIPA phase steering, and optional single-pass sub-head router sub-head routing + Rank-1 residual Rank-1
     /// residual injection.
     ///
     /// # Errors
@@ -1986,8 +1986,8 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         ripa_max_rad: f32,
         mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        pspm_config: Option<&gcso_pspm_config_t>,
-        srl_activation_and_desc: Option<(&AlignedSlice32<'_, f32>, &gcso_srl_descriptor_t)>,
+        subhead_config: Option<&gcso_subhead_config_t>,
+        rank1_activation_and_desc: Option<(&AlignedSlice32<'_, f32>, &gcso_rank1_residual_descriptor_t)>,
         trail_out: &mut gcso_pointer_trail_t,
     ) -> GcsoResult<u8> {
         let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
@@ -2015,7 +2015,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             key_tensor,
         );
         let extra_metrics = if let Some(q) = query_tensor {
-            self.apply_optional_pspm_and_srl(q, head_dim, pspm_config, srl_activation_and_desc)?
+            self.apply_optional_pspm_and_srl(q, head_dim, subhead_config, rank1_activation_and_desc)?
         } else {
             0
         };
@@ -2410,7 +2410,7 @@ impl<T: ActionHub + ?Sized> FractalCascadeCoordinator for T {}
 /// Unified Lv.2 Micro Observer trait over [`ActionHub`] (`traits/hot_path.rs`).
 ///
 /// Observes [`ActionHub`] as a strictly branchless, constant-time $\mathcal{O}(1)$
-/// `Pointer -> FastPathLedger -> Unified Field / Toroidal k-Means / Limina / Swarm -> RoPE (DPSR/RIPA/QDPS) -> PSPM/SRL`
+/// `Pointer -> FastPathLedger -> Unified Field / Toroidal k-Means / Limina / Swarm -> RoPE (DPSR/RIPA/QDPS) -> sub-head router/Rank-1 residual`
 /// execution pipeline.
 pub trait HotPathObserver: HotPathExecutionEngine + FractalCascadeCoordinator {}
 
@@ -2427,7 +2427,7 @@ mod tests {
         DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
     };
     use crate::traits::rope::{
-        PhaseSteering, PspmRouter, SrlAdapter, VisualAttentionSteering,
+        PhaseSteering, SubHeadRouter, Rank1ResidualAdapter, VisualAttentionSteering,
     };
     use crate::traits::telemetry::{
         FastPathLedger, DEFAULT_SWARM_QUORUM_THRESHOLD, DEFAULT_SWARM_TOLERANCE_Q7,
@@ -2496,8 +2496,8 @@ mod tests {
         }
     }
 
-    impl PspmRouter for MinimalHotPathEngine {}
-    impl SrlAdapter for MinimalHotPathEngine {}
+    impl SubHeadRouter for MinimalHotPathEngine {}
+    impl Rank1ResidualAdapter for MinimalHotPathEngine {}
     impl VisualAttentionSteering for MinimalHotPathEngine {}
 
     impl SwarmCellChunk for MinimalHotPathEngine {
@@ -2602,8 +2602,8 @@ mod tests {
         assert_eq!(uf_trail.cluster_id, 1);
         assert!(uf_pull > 4.0 && (uf_coh - 1.0).abs() < 1e-4);
 
-        // Verify Single-Pass SO(2) Fused Unified-Field + PSPM + Inverse-Temperature Cascade
-        let pspm_cfg = gcso_pspm_config_t {
+        // Verify Single-Pass SO(2) Fused Unified-Field + sub-head router + Inverse-Temperature Cascade
+        let subhead_cfg = gcso_subhead_config_t {
             num_fact_heads: 1,
             num_logic_heads: 0,
             num_explore_heads: 1,
@@ -2625,7 +2625,7 @@ mod tests {
                 &unified_anchors,
                 &unified_energies,
                 None,
-                Some((&pspm_cfg, 8)),
+                Some((&subhead_cfg, 8)),
                 Some((&mut temp_logits.as_aligned_slice_mut(), 0.75)),
                 DEFAULT_QDPS_MIN_STEP_RAD,
                 DEFAULT_RIPA_CLAMP_MAX_RAD,
@@ -2683,7 +2683,7 @@ mod tests {
                 &centroids,
                 64,
                 DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
-                Some((&pspm_cfg, 4)),
+                Some((&subhead_cfg, 4)),
                 DEFAULT_QDPS_MIN_STEP_RAD,
                 DEFAULT_RIPA_CLAMP_MAX_RAD,
                 Some(&mut q_buf.as_aligned_slice_mut()),

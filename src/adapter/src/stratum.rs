@@ -648,10 +648,10 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
             || signal.decomposition_triggered
             || (channel_disagreement && partial_swarm_consensus)
         {
-            // Bifurcated or local-sharpened channel triggers PSPM sub-head routing via core ladder.
+            // Bifurcated or local-sharpened channel triggers sub-head router sub-head routing via core ladder.
             (
                 thresholds
-                    .pspm_route_density_thresh
+                    .subhead_route_density_thresh
                     .max(frame.effective_energy.min(1.35)),
                 0.65_f32,
             )
@@ -669,7 +669,7 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
             (boost, 0.40_f32)
         } else {
             let srl_rho = thresholds
-                .srl_inject_density_thresh
+                .rank1_inject_density_thresh
                 .max(frame.effective_energy.min(2.0));
             (srl_rho, 0.40_f32)
         };
@@ -730,14 +730,14 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
                 StigmergicActionDecision::CrystallizeMacroBasin => {
                     CognitiveOpKind::CrystallizeCommit
                 }
-                StigmergicActionDecision::PspmSubHeadRoute => {
+                StigmergicActionDecision::SubHeadRoute => {
                     if signal.decomposition_triggered {
                         CognitiveOpKind::DecomposePeel
                     } else {
                         CognitiveOpKind::RouteSubHead
                     }
                 }
-                StigmergicActionDecision::FullOrchestrationSrl
+                StigmergicActionDecision::FullOrchestration
                 | StigmergicActionDecision::ExpressPhaseSteer => CognitiveOpKind::SynthesizeFuse,
                 StigmergicActionDecision::PassiveSidecar
                 | StigmergicActionDecision::InertialLayerSkip => CognitiveOpKind::Observe,
@@ -771,8 +771,8 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
             | StigmergicActionDecision::InertialLayerSkip
             | StigmergicActionDecision::PassiveSidecar => 0.0,
             StigmergicActionDecision::ExpressPhaseSteer => 0.65,
-            StigmergicActionDecision::PspmSubHeadRoute => 0.85,
-            StigmergicActionDecision::FullOrchestrationSrl => 1.0,
+            StigmergicActionDecision::SubHeadRoute => 0.85,
+            StigmergicActionDecision::FullOrchestration => 1.0,
             StigmergicActionDecision::CrystallizeMacroBasin => 1.15,
         };
         let min_void = signal

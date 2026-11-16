@@ -8,7 +8,7 @@
 //! Rather than holding all long-term context inside active model weights, `LiminiKa` (`GCSO`)
 //! represents active memory as a lightweight graph of 64-bit tagged pointers (`gcso_tagged_ptr_t`)
 //! and 128-byte pointer trails (`gcso_pointer_trail_t`). The CPU only needs to hold the entry
-//! pointer to a trail memo; each memo stores a 48-bit external ZIMMS storage offset, a 64-head
+//! pointer to a trail memo; each memo stores a 48-bit external mapped-storage storage offset, a 64-head
 //! phase signature, pheromone density ($\rho_{\mathrm{stigmergy}}$), and a `linked_trail_id`
 //! pointing to the next memo in the chain. Traversing these linked memos forms a sparse,
 //! neural-like associative pathway that bridges inter-memory **Limina** gaps and drives
@@ -27,11 +27,11 @@
 //!    - [`StigmergicActionDecision::ExpressPhaseSteer`] (`2`): Single-pass RIPA soft-clamped
 //!      RoPE phase steering when $\tau_{\mathrm{steer}} \le \rho < \tau_{\mathrm{pspm}}$
 //!      ([`ACTION_PRESET_EXPRESS_PHASE`]).
-//!    - [`StigmergicActionDecision::PspmSubHeadRoute`] (`3`): $SO(2)$-fused RIPA + PSPM
+//!    - [`StigmergicActionDecision::SubHeadRoute`] (`3`): $SO(2)$-fused RIPA + sub-head router
 //!      (`Fact / Logic / Explore`) Sub-Head Pseudo-MoE routing when $\tau_{\mathrm{pspm}} \le \rho < \tau_{\mathrm{srl}}$
-//!      or during EDBC pitchfork bifurcation (`ACTION_MODE_DPSR_STEER | ACTION_MODE_PSPM_ROUTE`).
-//!    - [`StigmergicActionDecision::FullOrchestrationSrl`] (`4`): Full $SO(2)$-fused RIPA + PSPM +
-//!      Dynamic Rank-1 SRL residual injection when $\tau_{\mathrm{srl}} \le \rho < \tau_{\mathrm{crystal}}$
+//!      or during EDBC pitchfork bifurcation (`ACTION_MODE_DPSR_STEER | ACTION_MODE_SUBHEAD_ROUTE`).
+//!    - [`StigmergicActionDecision::FullOrchestration`] (`4`): Full $SO(2)$-fused RIPA + sub-head router +
+//!      Dynamic Rank-1 Rank-1 residual residual injection when $\tau_{\mathrm{srl}} \le \rho < \tau_{\mathrm{crystal}}$
 //!      ([`ACTION_PRESET_FULL_ORCHESTRATION`]).
 //!    - [`StigmergicActionDecision::CrystallizeMacroBasin`] (`5`): Promotes a super-saturated
 //!      coherent trail ($\rho \ge \tau_{\mathrm{crystal}}$ and $\mathcal{C}_{\mathrm{phase}} \ge \tau_{\mathrm{merge}}$)
@@ -50,8 +50,8 @@
 //!    structure** ($C_{\mathrm{alloc}} = 0$).
 //!
 //! 3. **Blanket Trait Closure**:
-//!    Because [`ActionHubEngine`] implements [`PhaseSteering`], [`PointerActionHub`], [`PspmRouter`],
-//!    [`SrlAdapter`], [`FastPathLedger`], [`SwarmCellChunk`], [`CausalProvenanceSignal`],
+//!    Because [`ActionHubEngine`] implements [`PhaseSteering`], [`PointerActionHub`], [`SubHeadRouter`],
+//!    [`Rank1ResidualAdapter`], [`FastPathLedger`], [`SwarmCellChunk`], [`CausalProvenanceSignal`],
 //!    [`crate::traits::SystemConstraintSignal`], and [`ManifoldGatewaySignal`], it automatically
 //!    receives the blanket implementations of [`ActionHub`], [`HotPathExecutionEngine`],
 //!    [`HotPathObserver`], [`FractalCascadeCoordinator`], [`ActionHubGatewayExt`],
@@ -84,8 +84,8 @@
 use core::mem::{align_of, offset_of, size_of};
 
 use crate::abi::{
-    gcso_config_t, gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
-    gcso_pspm_config_t, gcso_q7_t, gcso_tagged_ptr_t, GCSO_ERROR_INVALID_ARGUMENT,
+    gcso_config_t, gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t,
+    gcso_subhead_config_t, gcso_tagged_ptr_t, GCSO_ERROR_INVALID_ARGUMENT,
 };
 use crate::phase_steering::{PhaseSteeringEngine, DEFAULT_DPSR_HEAD_DIM, DEFAULT_DPSR_NUM_HEADS};
 use crate::traits::aligned::{
@@ -114,7 +114,7 @@ use crate::traits::primitives::{
 };
 use crate::traits::primitives::{
     pack_action_slot_tag, unpack_attractor_slot_from_tag, GcsoResult, Pod, ACTION_MODE_DPSR_STEER,
-    ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE,
     ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR,
     ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION,
     DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_RIPA_CLAMP_MAX_RAD, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
@@ -123,17 +123,17 @@ use crate::traits::primitives::{
 use crate::traits::rope::{
     dispatch_fused_ripa_and_pspm_words_core, resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim,
     steer_from_swar_words_core_safe, DynamicLayerSkipper, EntropyGatedPhaseLookup, PhaseSteering,
-    PspmRouter, SrlAdapter, VisualAttentionSteering,
+    Rank1ResidualAdapter, SubHeadRouter, VisualAttentionSteering,
 };
 use crate::traits::telemetry::{
     select_rewire_bridge_and_modulate_with_preloaded_words_64, ContrastivePhaseBloomFilter,
     FastPathLedger, StigmergicActionPtrOps, StigmergicSwarmOps, StigmergicTrailOps,
     LEDGER_METRIC_FAST_PATH_HIT, LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED,
-    LEDGER_METRIC_PSPM_ROUTED, LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
-    LEDGER_METRIC_SRL_INJECTED, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY,
-    NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_DPSR_ACTIVE,
-    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
-    TRAIL_FLAG_SYNERGY_RESONANCE,
+    LEDGER_METRIC_RANK1_INJECTED, LEDGER_METRIC_REPULSION_APPLIED,
+    LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SUBHEAD_ROUTED, MAX_ATTRACTOR_PULL_FORCE,
+    MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
+    TRAIL_FLAG_DPSR_ACTIVE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
+    TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 use crate::traits::{
     ActionHub, ActionHubGatewayExt, FractalCascadeCoordinator, GatewayPhaseSteeringExt,
@@ -155,11 +155,11 @@ pub const DEFAULT_STIGMERGIC_INERTIAL_SKIP_ENTROPY: f32 = 0.15;
 /// Default stigmergic trail density threshold ($\tau_{\mathrm{steer}} = 0.35$) triggering [`StigmergicActionDecision::ExpressPhaseSteer`].
 pub const DEFAULT_STIGMERGIC_EXPRESS_STEER_THRESH: f32 = 0.35;
 
-/// Default stigmergic trail density threshold ($\tau_{\mathrm{pspm}} = 0.85$) triggering [`StigmergicActionDecision::PspmSubHeadRoute`].
-pub const DEFAULT_STIGMERGIC_PSPM_ROUTE_THRESH: f32 = 0.85;
+/// Default stigmergic trail density threshold ($\tau_{\mathrm{pspm}} = 0.85$) triggering [`StigmergicActionDecision::SubHeadRoute`].
+pub const DEFAULT_STIGMERGIC_SUBHEAD_ROUTE_THRESH: f32 = 0.85;
 
-/// Default stigmergic trail density threshold ($\tau_{\mathrm{srl}} = 1.50$) triggering [`StigmergicActionDecision::FullOrchestrationSrl`].
-pub const DEFAULT_STIGMERGIC_SRL_INJECT_THRESH: f32 = 1.50;
+/// Default stigmergic trail density threshold ($\tau_{\mathrm{srl}} = 1.50$) triggering [`StigmergicActionDecision::FullOrchestration`].
+pub const DEFAULT_STIGMERGIC_RANK1_INJECT_THRESH: f32 = 1.50;
 
 /// Default stigmergic trail density threshold ($\tau_{\mathrm{crystal}} = 2.20$) triggering [`StigmergicActionDecision::CrystallizeMacroBasin`].
 pub const DEFAULT_STIGMERGIC_CRYSTALLIZE_THRESH: f32 = 2.20;
@@ -193,12 +193,12 @@ pub enum StigmergicActionDecision {
     /// Single-pass RIPA soft-clamped RoPE phase steering (`ACTION_PRESET_EXPRESS_PHASE = 0x01`):
     /// $\tau_{\mathrm{steer}} \le \rho < \tau_{\mathrm{pspm}}$.
     ExpressPhaseSteer = 2,
-    /// $SO(2)$-fused RIPA + PSPM (`Fact / Logic / Explore`) Sub-Head Pseudo-MoE routing (`0x09`):
+    /// $SO(2)$-fused RIPA + sub-head router (`Fact / Logic / Explore`) Sub-Head Pseudo-MoE routing (`0x09`):
     /// $\tau_{\mathrm{pspm}} \le \rho < \tau_{\mathrm{srl}}$ or high bifurcation entropy.
-    PspmSubHeadRoute = 3,
-    /// Full $SO(2)$-fused RIPA + PSPM + Dynamic Rank-1 SRL residual injection
+    SubHeadRoute = 3,
+    /// Full $SO(2)$-fused RIPA + sub-head router + Dynamic Rank-1 Rank-1 residual residual injection
     /// (`ACTION_PRESET_FULL_ORCHESTRATION = 0x19`): $\tau_{\mathrm{srl}} \le \rho < \tau_{\mathrm{crystal}}$.
-    FullOrchestrationSrl = 4,
+    FullOrchestration = 4,
     /// Super-saturated coherent basin promotion (`ACTION_PRESET_FULL_ORCHESTRATION` +
     /// `TRAIL_FLAG_CRYSTALLIZED_CANDIDATE`): $\rho \ge \tau_{\mathrm{crystal}}$ and
     /// $\mathcal{C}_{\mathrm{phase}} \ge \tau_{\mathrm{merge}}$.
@@ -218,8 +218,8 @@ impl StigmergicActionDecision {
             0 => Self::PassiveSidecar,
             1 => Self::InertialLayerSkip,
             2 => Self::ExpressPhaseSteer,
-            3 => Self::PspmSubHeadRoute,
-            4 => Self::FullOrchestrationSrl,
+            3 => Self::SubHeadRoute,
+            4 => Self::FullOrchestration,
             5 => Self::CrystallizeMacroBasin,
             _ => Self::RepulsionEscape,
         }
@@ -233,8 +233,8 @@ impl StigmergicActionDecision {
             Self::PassiveSidecar => ACTION_PRESET_PASSIVE_SIDECAR,
             Self::InertialLayerSkip => ACTION_PRESET_INERTIAL_SKIP,
             Self::ExpressPhaseSteer => ACTION_PRESET_EXPRESS_PHASE,
-            Self::PspmSubHeadRoute => ACTION_MODE_DPSR_STEER | ACTION_MODE_PSPM_ROUTE,
-            Self::FullOrchestrationSrl | Self::CrystallizeMacroBasin => {
+            Self::SubHeadRoute => ACTION_MODE_DPSR_STEER | ACTION_MODE_SUBHEAD_ROUTE,
+            Self::FullOrchestration | Self::CrystallizeMacroBasin => {
                 ACTION_PRESET_FULL_ORCHESTRATION
             }
             Self::RepulsionEscape => ACTION_PRESET_REPULSION_ESCAPE,
@@ -255,10 +255,10 @@ pub struct StigmergicThresholds {
     pub inertial_skip_entropy_thresh: f32,
     /// Minimum stigmergic density $\tau_{\mathrm{steer}}$ triggering [`StigmergicActionDecision::ExpressPhaseSteer`] (default `0.35`).
     pub express_steer_density_thresh: f32,
-    /// Minimum stigmergic density $\tau_{\mathrm{pspm}}$ triggering [`StigmergicActionDecision::PspmSubHeadRoute`] (default `0.85`).
-    pub pspm_route_density_thresh: f32,
-    /// Minimum stigmergic density $\tau_{\mathrm{srl}}$ triggering [`StigmergicActionDecision::FullOrchestrationSrl`] (default `1.50`).
-    pub srl_inject_density_thresh: f32,
+    /// Minimum stigmergic density $\tau_{\mathrm{pspm}}$ triggering [`StigmergicActionDecision::SubHeadRoute`] (default `0.85`).
+    pub subhead_route_density_thresh: f32,
+    /// Minimum stigmergic density $\tau_{\mathrm{srl}}$ triggering [`StigmergicActionDecision::FullOrchestration`] (default `1.50`).
+    pub rank1_inject_density_thresh: f32,
     /// Minimum stigmergic density $\tau_{\mathrm{crystal}}$ triggering [`StigmergicActionDecision::CrystallizeMacroBasin`] (default `2.20`).
     pub crystallize_density_thresh: f32,
     /// Contradiction coherence threshold $\tau_{\mathrm{contradict}} \in [0.0, 1.0]$ where $\mathcal{C}_{\mathrm{phase}} < -\tau_{\mathrm{contradict}}$ triggers [`StigmergicActionDecision::RepulsionEscape`] (default `0.25`).
@@ -285,8 +285,8 @@ impl StigmergicThresholds {
             reinforcement_gain: DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN,
             inertial_skip_entropy_thresh: DEFAULT_STIGMERGIC_INERTIAL_SKIP_ENTROPY,
             express_steer_density_thresh: DEFAULT_STIGMERGIC_EXPRESS_STEER_THRESH,
-            pspm_route_density_thresh: DEFAULT_STIGMERGIC_PSPM_ROUTE_THRESH,
-            srl_inject_density_thresh: DEFAULT_STIGMERGIC_SRL_INJECT_THRESH,
+            subhead_route_density_thresh: DEFAULT_STIGMERGIC_SUBHEAD_ROUTE_THRESH,
+            rank1_inject_density_thresh: DEFAULT_STIGMERGIC_RANK1_INJECT_THRESH,
             crystallize_density_thresh: DEFAULT_STIGMERGIC_CRYSTALLIZE_THRESH,
             contradiction_coherence_thresh: DEFAULT_STIGMERGIC_CONTRADICTION_THRESH,
         }
@@ -324,19 +324,19 @@ impl StigmergicThresholds {
         self
     }
 
-    /// Sets the PSPM Sub-Head Pseudo-MoE routing density threshold $\tau_{\mathrm{pspm}}$.
+    /// Sets the sub-head router Sub-Head Pseudo-MoE routing density threshold $\tau_{\mathrm{pspm}}$.
     #[inline(always)]
     #[must_use]
-    pub const fn with_pspm_route_density_thresh(mut self, thresh: f32) -> Self {
-        self.pspm_route_density_thresh = branchless_relu_f32(thresh);
+    pub const fn with_subhead_route_density_thresh(mut self, thresh: f32) -> Self {
+        self.subhead_route_density_thresh = branchless_relu_f32(thresh);
         self
     }
 
-    /// Sets the full orchestration + SRL injection density threshold $\tau_{\mathrm{srl}}$.
+    /// Sets the full orchestration + Rank-1 residual injection density threshold $\tau_{\mathrm{srl}}$.
     #[inline(always)]
     #[must_use]
-    pub const fn with_srl_inject_density_thresh(mut self, thresh: f32) -> Self {
-        self.srl_inject_density_thresh = branchless_relu_f32(thresh);
+    pub const fn with_rank1_inject_density_thresh(mut self, thresh: f32) -> Self {
+        self.rank1_inject_density_thresh = branchless_relu_f32(thresh);
         self
     }
 
@@ -372,12 +372,12 @@ impl StigmergicThresholds {
             & (self.inertial_skip_entropy_thresh >= 0.0)
             & branchless_is_finite_f32(self.express_steer_density_thresh)
             & (self.express_steer_density_thresh >= 0.0)
-            & branchless_is_finite_f32(self.pspm_route_density_thresh)
-            & (self.pspm_route_density_thresh >= self.express_steer_density_thresh)
-            & branchless_is_finite_f32(self.srl_inject_density_thresh)
-            & (self.srl_inject_density_thresh >= self.pspm_route_density_thresh)
+            & branchless_is_finite_f32(self.subhead_route_density_thresh)
+            & (self.subhead_route_density_thresh >= self.express_steer_density_thresh)
+            & branchless_is_finite_f32(self.rank1_inject_density_thresh)
+            & (self.rank1_inject_density_thresh >= self.subhead_route_density_thresh)
             & branchless_is_finite_f32(self.crystallize_density_thresh)
-            & (self.crystallize_density_thresh >= self.srl_inject_density_thresh)
+            & (self.crystallize_density_thresh >= self.rank1_inject_density_thresh)
             & branchless_is_finite_f32(self.contradiction_coherence_thresh)
             & (self.contradiction_coherence_thresh >= 0.0)
             & (self.contradiction_coherence_thresh <= 1.0);
@@ -422,8 +422,8 @@ impl StigmergicThresholds {
         let is_low_entropy_skip = (!is_repulsed) & (h_tilde <= self.inertial_skip_entropy_thresh);
         let srl_entropy_min = self.inertial_skip_entropy_thresh * 1.6_f32;
         let ge_steer = rho >= self.express_steer_density_thresh;
-        let ge_pspm = (rho >= self.pspm_route_density_thresh) | (h_tilde >= 0.55);
-        let ge_srl = (rho >= self.srl_inject_density_thresh) & (h_tilde > srl_entropy_min);
+        let ge_pspm = (rho >= self.subhead_route_density_thresh) | (h_tilde >= 0.55);
+        let ge_srl = (rho >= self.rank1_inject_density_thresh) & (h_tilde > srl_entropy_min);
         let ge_crystal = (rho >= self.crystallize_density_thresh)
             & (coh >= DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE);
 
@@ -434,14 +434,10 @@ impl StigmergicThresholds {
             StigmergicActionDecision::ExpressPhaseSteer as u8,
             disc,
         );
-        disc = branchless_select_u8(
-            ge_pspm,
-            StigmergicActionDecision::PspmSubHeadRoute as u8,
-            disc,
-        );
+        disc = branchless_select_u8(ge_pspm, StigmergicActionDecision::SubHeadRoute as u8, disc);
         disc = branchless_select_u8(
             ge_srl,
-            StigmergicActionDecision::FullOrchestrationSrl as u8,
+            StigmergicActionDecision::FullOrchestration as u8,
             disc,
         );
         disc = branchless_select_u8(
@@ -562,7 +558,7 @@ impl StigmergicThresholds {
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<(bool, bool, bool)> {
         let mut steered = false;
-        let mut pspm_routed = false;
+        let mut subhead_routed = false;
         let mut skip_compensated = false;
         let min_step_q7 = branchless_rad_to_qdps_step_u8(qdps_min_rad);
 
@@ -593,8 +589,8 @@ impl StigmergicThresholds {
                     }
                 }
             }
-            StigmergicActionDecision::PspmSubHeadRoute
-            | StigmergicActionDecision::FullOrchestrationSrl
+            StigmergicActionDecision::SubHeadRoute
+            | StigmergicActionDecision::FullOrchestration
             | StigmergicActionDecision::CrystallizeMacroBasin => {
                 let swar_w = if min_step_q7 <= 1 {
                     *steer_words
@@ -632,7 +628,7 @@ impl StigmergicThresholds {
                             let f_heads = (num_heads >> 1) as u16;
                             let l_heads = (num_heads >> 2) as u16;
                             let e_heads = (num_heads as u16).saturating_sub(f_heads + l_heads);
-                            let pspm_cfg = gcso_pspm_config_t {
+                            let subhead_cfg = gcso_subhead_config_t {
                                 num_fact_heads: f_heads,
                                 num_logic_heads: l_heads,
                                 num_explore_heads: e_heads,
@@ -643,8 +639,17 @@ impl StigmergicThresholds {
                                 reserved: [0; 12],
                             };
                             dispatch_fused_ripa_and_pspm_words_core(
-                                q, &swar_w, ripa_clamp, &pspm_cfg, &swar_w, &swar_w, &swar_w,
-                                ripa_clamp, 0, head_dim, true,
+                                q,
+                                &swar_w,
+                                ripa_clamp,
+                                &subhead_cfg,
+                                &swar_w,
+                                &swar_w,
+                                &swar_w,
+                                ripa_clamp,
+                                0,
+                                head_dim,
+                                true,
                             )?;
                             if let Some(k) = key_tensor {
                                 steer_from_swar_words_core_safe(
@@ -654,7 +659,7 @@ impl StigmergicThresholds {
                             }
                         }
                         steered = true;
-                        pspm_routed = true;
+                        subhead_routed = true;
                     }
                 }
             }
@@ -670,7 +675,7 @@ impl StigmergicThresholds {
                 scale_f32_slice_unrolled8(logits.as_mut_slice(), inv_temp);
             }
         }
-        Ok((steered, pspm_routed, skip_compensated))
+        Ok((steered, subhead_routed, skip_compensated))
     }
 
     /// Executes a stateless one-shot stigmergic orchestration step directly from `self` and
@@ -860,7 +865,7 @@ impl ActionOrchestrationReport {
 
     /// Computes the branchless stigmergic emergence potential
     /// $\Psi_{\mathrm{emerge}} = \rho_{\mathrm{stigmergy}} \cdot \max(0.1, \mathcal{C}_{\mathrm{phase}})$
-    /// quantifying how strongly the Swarm and ZIMMS Attractors have reinforced this action trail.
+    /// quantifying how strongly the Swarm and mapped-storage Attractors have reinforced this action trail.
     #[inline(always)]
     #[must_use]
     pub const fn emergence_potential(&self) -> f32 {
@@ -878,11 +883,11 @@ impl ActionOrchestrationReport {
     }
 }
 
-/// Composable receptor trait invoked by [`ActionHubEngine`] when Swarm consensus and ZIMMS
+/// Composable receptor trait invoked by [`ActionHubEngine`] when Swarm consensus and mapped-storage
 /// attractor pull elevate a pointer trail's stigmergic pheromone density across an action regime.
 ///
 /// Instead of writing ad-hoc `if/else` semantic branches (e.g., `if needs_web_search { ... }`),
-/// external or Cold-Path capabilities (such as asynchronous retrieval, ZIMMS RAG prefetch, or
+/// external or Cold-Path capabilities (such as asynchronous retrieval, mapped-storage RAG prefetch, or
 /// macro-basin consolidation) implement [`StigmergicActionReceptor`] and are composed into tuples
 /// `(ReceptorA, ReceptorB)` that react when `report.target_slot`, `report.dominant_anchor_id`, and
 /// `report.action_decision()` cross the physical stigmergic threshold.
@@ -1406,7 +1411,7 @@ impl ActionHubEngine {
     /// 5. Applies global pheromone evaporation & reinforcement (`evaporate_and_deposit_pheromone`).
     /// 6. Evaluates `self.thresholds.select_action_decision` to choose the next
     ///    [`StigmergicActionDecision`] (`PassiveSidecar`, `InertialLayerSkip`, `ExpressPhaseSteer`,
-    ///    `PspmSubHeadRoute`, `FullOrchestrationSrl`, `CrystallizeMacroBasin`, or `RepulsionEscape`).
+    ///    `SubHeadRoute`, `FullOrchestration`, `CrystallizeMacroBasin`, or `RepulsionEscape`).
     /// 7. Executes the selected action on `query_tensor` / `key_tensor` / `logits_opt` and logs
     ///    telemetry into `self.ledger_slot`.
     ///
@@ -1609,7 +1614,7 @@ impl ActionHubEngine {
             &steer_words,
         );
 
-        let (steered, pspm_routed, skip_compensated) =
+        let (steered, subhead_routed, skip_compensated) =
             StigmergicThresholds::execute_decision_steering_and_logit_scaling(
                 decision,
                 &steer_words,
@@ -1623,11 +1628,11 @@ impl ActionHubEngine {
                 logits_opt,
             )?;
 
-        let srl_flag = (mode_flags & ACTION_MODE_SRL_INJECT) != 0;
+        let srl_flag = (mode_flags & ACTION_MODE_RANK1_INJECT) != 0;
         let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
             | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(pspm_routed, LEDGER_METRIC_PSPM_ROUTED, 0)
-            | branchless_select_u8(srl_flag, LEDGER_METRIC_SRL_INJECTED, 0)
+            | branchless_select_u8(subhead_routed, LEDGER_METRIC_SUBHEAD_ROUTED, 0)
+            | branchless_select_u8(srl_flag, LEDGER_METRIC_RANK1_INJECTED, 0)
             | branchless_select_u8(skip_compensated, LEDGER_METRIC_LAYER_SKIP_COMPENSATED, 0)
             | branchless_select_u8(contradiction_repulsed, LEDGER_METRIC_REPULSION_APPLIED, 0)
             | branchless_select_u8(found_coherent, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, 0);
@@ -1757,13 +1762,13 @@ impl ActionHubEngine {
     }
 
     /// Executes the full **Gateway-Origin Trait Composition $\to$ 8-Cell Micro-Swarm Consensus $\to$
-    /// ZIMMS Attractor Basin Pull $\to$ Stigmergic Pheromone Action Selection & Receptor Dispatch**
+    /// mapped-storage Attractor Basin Pull $\to$ Stigmergic Pheromone Action Selection & Receptor Dispatch**
     /// closed loop without manual hyperparameter arguments or semantic `if/else` task branching.
     ///
     /// 1. Synthesizes `(GatewayFrame, [u64; 8])` from `signal: &S` ([`ManifoldGatewaySignal`]).
     /// 2. Resolves the 8-cell SWAR Micro-Swarm (`try_resolve_action_in_swarm_from_words`) using
     ///    autonomous physical parameters derived directly from the [`GatewayFrame`].
-    /// 3. Steps the ZIMMS Online Toroidal $k$-Means / DP-Means attractor basins (`centroids`) and
+    /// 3. Steps the mapped-storage Online Toroidal $k$-Means / DP-Means attractor basins (`centroids`) and
     ///    evolves `trail_inout`'s stigmergic pheromone density (`orchestrate_next_action_step_core`).
     /// 4. Dispatches `receptor.on_stigmergic_action_emerged(&frame, &report, trail_inout)` whenever
     ///    a non-passive [`StigmergicActionDecision`] emerges from the trail's accumulated density.
@@ -2011,8 +2016,8 @@ impl PhaseSteering for ActionHubEngine {
 impl EntropyGatedPhaseLookup for ActionHubEngine {}
 impl DynamicLayerSkipper for ActionHubEngine {}
 impl VisualAttentionSteering for ActionHubEngine {}
-impl PspmRouter for ActionHubEngine {}
-impl SrlAdapter for ActionHubEngine {}
+impl SubHeadRouter for ActionHubEngine {}
+impl Rank1ResidualAdapter for ActionHubEngine {}
 
 impl FastPathLedger for ActionHubEngine {
     #[inline]
@@ -2283,7 +2288,7 @@ impl ManifoldGatewaySignal for ActionHubEngine {
         let explore_h = num_heads_u8.saturating_sub(fact_h + logic_h);
         let mut frame = GatewayFrame {
             tagged_ptr: active_trail.current_ptr,
-            zimms_section_offset48: cur_tp.unpack_addr(),
+            mapped_section_offset48: cur_tp.unpack_addr(),
             target_anchor_id: active_trail.target_anchor_id,
             effective_energy: branchless_max_f32(
                 active_trail.stigmergic_density,
@@ -2300,12 +2305,12 @@ impl ManifoldGatewaySignal for ActionHubEngine {
             action_mode_flags: mode_flags,
             active_swarm_cell_mask: self.slot_enabled_mask,
             qdps_min_step_q7: branchless_rad_to_qdps_step_u8(qdps_min_rad),
-            pspm_fact_heads: fact_h,
-            pspm_logic_heads: logic_h,
-            pspm_explore_heads: explore_h,
-            pspm_fact_gain_q7: 128,
-            pspm_logic_gain_q7: 128,
-            pspm_explore_gain_q7: 128,
+            subhead_fact_heads: fact_h,
+            subhead_logic_heads: logic_h,
+            subhead_explore_heads: explore_h,
+            subhead_fact_gain_q7: 128,
+            subhead_logic_gain_q7: 128,
+            subhead_explore_gain_q7: 128,
             mean_phase_tag_q7: cur_tp.unpack_phase(),
             active_head_count: u16::from(num_heads_u8),
             frame_flags: u16::from(dec == StigmergicActionDecision::RepulsionEscape),
@@ -2399,16 +2404,16 @@ mod tests {
         assert_eq!(dec2, StigmergicActionDecision::ExpressPhaseSteer);
         assert_eq!(flags2, ACTION_PRESET_EXPRESS_PHASE);
 
-        // 3. PspmSubHeadRoute: 0.85 <= density < 1.50
+        // 3. SubHeadRoute: 0.85 <= density < 1.50
         let (dec3, flags3, _, _) =
             thresh.select_action_decision(1.10, 0.30, 0.85, false, ATTRACTOR_SLOT_KNOWLEDGE);
-        assert_eq!(dec3, StigmergicActionDecision::PspmSubHeadRoute);
-        assert_eq!(flags3, ACTION_MODE_DPSR_STEER | ACTION_MODE_PSPM_ROUTE);
+        assert_eq!(dec3, StigmergicActionDecision::SubHeadRoute);
+        assert_eq!(flags3, ACTION_MODE_DPSR_STEER | ACTION_MODE_SUBHEAD_ROUTE);
 
-        // 4. FullOrchestrationSrl: 1.50 <= density < 2.20
+        // 4. FullOrchestration: 1.50 <= density < 2.20
         let (dec4, flags4, _, _) =
             thresh.select_action_decision(1.80, 0.30, 0.85, false, ATTRACTOR_SLOT_PERSONA);
-        assert_eq!(dec4, StigmergicActionDecision::FullOrchestrationSrl);
+        assert_eq!(dec4, StigmergicActionDecision::FullOrchestration);
         assert_eq!(flags4, ACTION_PRESET_FULL_ORCHESTRATION);
 
         // 5. CrystallizeMacroBasin: density >= 2.20 and coherence >= 0.85
@@ -2474,7 +2479,7 @@ mod tests {
 
         assert_eq!(
             report.action_decision(),
-            StigmergicActionDecision::FullOrchestrationSrl
+            StigmergicActionDecision::FullOrchestration
         );
         assert!(report.phase_coherence > 0.95);
         assert_eq!(active_trail.target_anchor_id, 42);

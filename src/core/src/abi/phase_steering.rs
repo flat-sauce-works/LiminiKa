@@ -1,12 +1,12 @@
 // name: src/core/src/abi/phase_steering.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Phase Steering (DPSR), QDPS, 2-Origin Gateway, PSPM routing, and Residual Adapter (SRL) FFI.
+//! Phase Steering (DPSR), QDPS, 2-Origin Gateway, sub-head router routing, and Residual Adapter (Rank-1 residual) FFI.
 
 use super::*;
 
 // ===================================================================
-// 4. DPSR, QDPS, 2-Origin Gateway, PSPM & SRL Interface
+// 4. DPSR, QDPS, 2-Origin Gateway, sub-head router & Rank-1 residual Interface
 // ===================================================================
 
 /// Creates a DPSR phase steering kernel instance.
@@ -685,11 +685,11 @@ pub unsafe extern "C" fn gcso_gateway_synthesize_multi_origin_frame(
     recommend_layer_skip: u8,
     fact_phases: *const gcso_q7_t,
     fact_confidence: f32,
-    fact_zimms_offset48: u64,
+    fact_mapped_offset48: u64,
     fact_anchor_id: u32,
     persona_phases: *const gcso_q7_t,
     persona_strength: f32,
-    persona_zimms_offset48: u64,
+    persona_mapped_offset48: u64,
     persona_anchor_id: u32,
     bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
     contradiction_threshold: f32,
@@ -715,11 +715,11 @@ pub unsafe extern "C" fn gcso_gateway_synthesize_multi_origin_frame(
                 recommend_layer_skip,
                 fact_phases,
                 fact_confidence,
-                fact_zimms_offset48,
+                fact_mapped_offset48,
                 fact_anchor_id,
                 persona_phases,
                 persona_strength,
-                persona_zimms_offset48,
+                persona_mapped_offset48,
                 persona_anchor_id,
                 bloom_filter_opt,
                 contradiction_threshold,
@@ -866,7 +866,7 @@ pub unsafe extern "C" fn gcso_dpsr_steer_and_kmeans_crystallize_gateway_frame_sa
     })
 }
 
-/// Executes a one-shot **2-Origin Multi-Blanket Gateway Synthesis + $SO(2)$-Fused RIPA/PSPM
+/// Executes a one-shot **2-Origin Multi-Blanket Gateway Synthesis + $SO(2)$-Fused RIPA/sub-head router
 /// Steering + Optional Online Toroidal $k$-Means / DP-Means Macro Crystallization** across the
 /// C-ABI boundary ($C_{\mathrm{alloc}} = 0$, `0` intermediate C-stack `GatewayFrame` roundtrips).
 ///
@@ -880,11 +880,11 @@ pub unsafe extern "C" fn gcso_gateway_synthesize_kmeans_and_steer_qk_safe(
     recommend_layer_skip: u8,
     fact_phases: *const gcso_q7_t,
     fact_confidence: f32,
-    fact_zimms_offset48: u64,
+    fact_mapped_offset48: u64,
     fact_anchor_id: u32,
     persona_phases: *const gcso_q7_t,
     persona_strength: f32,
-    persona_zimms_offset48: u64,
+    persona_mapped_offset48: u64,
     persona_anchor_id: u32,
     bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
     contradiction_threshold: f32,
@@ -916,11 +916,11 @@ pub unsafe extern "C" fn gcso_gateway_synthesize_kmeans_and_steer_qk_safe(
                 recommend_layer_skip,
                 fact_phases,
                 fact_confidence,
-                fact_zimms_offset48,
+                fact_mapped_offset48,
                 fact_anchor_id,
                 persona_phases,
                 persona_strength,
-                persona_zimms_offset48,
+                persona_mapped_offset48,
                 persona_anchor_id,
                 bloom_filter_opt,
                 contradiction_threshold,
@@ -955,7 +955,7 @@ pub unsafe extern "C" fn gcso_gateway_synthesize_kmeans_and_steer_qk_safe(
 }
 
 /// Executes a one-shot **Raw-Byte 2-Origin Multi-Blanket Gateway Synthesis + $SO(2)$-Fused
-/// RIPA/PSPM Steering + Optional Online Toroidal $k$-Means / DP-Means Macro Crystallization**
+/// RIPA/sub-head router Steering + Optional Online Toroidal $k$-Means / DP-Means Macro Crystallization**
 /// across the C-ABI boundary ($C_{\mathrm{alloc}} = 0$).
 ///
 /// # Safety
@@ -969,12 +969,12 @@ pub unsafe extern "C" fn gcso_gateway_project_bytes_synthesize_kmeans_and_steer_
     fact_bytes: *const u8,
     fact_byte_len: usize,
     fact_confidence: f32,
-    fact_zimms_offset48: u64,
+    fact_mapped_offset48: u64,
     fact_anchor_id: u32,
     persona_bytes: *const u8,
     persona_byte_len: usize,
     persona_strength: f32,
-    persona_zimms_offset48: u64,
+    persona_mapped_offset48: u64,
     persona_anchor_id: u32,
     bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
     contradiction_threshold: f32,
@@ -1007,12 +1007,12 @@ pub unsafe extern "C" fn gcso_gateway_project_bytes_synthesize_kmeans_and_steer_
                 fact_bytes,
                 fact_byte_len,
                 fact_confidence,
-                fact_zimms_offset48,
+                fact_mapped_offset48,
                 fact_anchor_id,
                 persona_bytes,
                 persona_byte_len,
                 persona_strength,
-                persona_zimms_offset48,
+                persona_mapped_offset48,
                 persona_anchor_id,
                 bloom_filter_opt,
                 contradiction_threshold,
@@ -1047,7 +1047,7 @@ pub unsafe extern "C" fn gcso_gateway_project_bytes_synthesize_kmeans_and_steer_
 }
 
 /// Executes a one-shot **Raw-`f32` Embedding 2-Origin Multi-Blanket Gateway Synthesis +
-/// $SO(2)$-Fused RIPA/PSPM Steering + Optional Online Toroidal $k$-Means / DP-Means Macro
+/// $SO(2)$-Fused RIPA/sub-head router Steering + Optional Online Toroidal $k$-Means / DP-Means Macro
 /// Crystallization** across the C-ABI boundary ($C_{\mathrm{alloc}} = 0$).
 ///
 /// # Safety
@@ -1062,13 +1062,13 @@ pub unsafe extern "C" fn gcso_gateway_project_f32_synthesize_kmeans_and_steer_qk
     fact_len: usize,
     fact_projection_gain: f32,
     fact_confidence: f32,
-    fact_zimms_offset48: u64,
+    fact_mapped_offset48: u64,
     fact_anchor_id: u32,
     persona_values: *const f32,
     persona_len: usize,
     persona_projection_gain: f32,
     persona_strength: f32,
-    persona_zimms_offset48: u64,
+    persona_mapped_offset48: u64,
     persona_anchor_id: u32,
     bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
     contradiction_threshold: f32,
@@ -1102,13 +1102,13 @@ pub unsafe extern "C" fn gcso_gateway_project_f32_synthesize_kmeans_and_steer_qk
                 fact_len,
                 fact_projection_gain,
                 fact_confidence,
-                fact_zimms_offset48,
+                fact_mapped_offset48,
                 fact_anchor_id,
                 persona_values,
                 persona_len,
                 persona_projection_gain,
                 persona_strength,
-                persona_zimms_offset48,
+                persona_mapped_offset48,
                 persona_anchor_id,
                 bloom_filter_opt,
                 contradiction_threshold,
@@ -1191,7 +1191,7 @@ pub unsafe extern "C" fn gcso_gateway_synthesize_from_crystallized_records(
 }
 
 /// Executes a one-shot **Closed-Loop Macro-Distribution Gateway Re-Injection + $SO(2)$-Fused
-/// RIPA/PSPM Steering** across the C-ABI boundary ($C_{\mathrm{alloc}} = 0$) from
+/// RIPA/sub-head router Steering** across the C-ABI boundary ($C_{\mathrm{alloc}} = 0$) from
 /// `records[0..num_records]` via the blanket [`ManifoldGatewaySignal`] implementation.
 ///
 /// # Safety
@@ -1595,14 +1595,14 @@ pub unsafe extern "C" fn gcso_dpsr_kernel_destroy(kernel: GcsoDpsrKernelHandle) 
     })
 }
 
-/// Creates a PSPM sub-head group router instance.
+/// Creates a sub-head router sub-head group router instance.
 ///
 /// # Safety
 /// `config` and `router_out` must be non-null and naturally aligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_pspm_router_create(
-    config: *const gcso_pspm_config_t,
-    router_out: *mut GcsoPspmRouterHandle,
+pub unsafe extern "C" fn gcso_subhead_router_create(
+    config: *const gcso_subhead_config_t,
+    router_out: *mut GcsoSubHeadRouterHandle,
 ) -> GcsoStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
@@ -1617,20 +1617,20 @@ pub unsafe extern "C" fn gcso_pspm_router_create(
     })
 }
 
-/// Dispatches PSPM sub-head group phase gains (Fact, Logic, Explore) in a single forward pass.
+/// Dispatches sub-head router sub-head group phase gains (Fact, Logic, Explore) in a single forward pass.
 ///
 /// # Safety
-/// `query_tensor` (32B aligned) and `pspm_cfg` (16B aligned) must be non-null and valid.
+/// `query_tensor` (32B aligned) and `subhead_cfg` (16B aligned) must be non-null and valid.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_pspm_dispatch_single_pass(
+pub unsafe extern "C" fn gcso_subhead_dispatch_single_pass(
     query_tensor: *mut f32,
-    pspm_cfg: *const gcso_pspm_config_t,
+    subhead_cfg: *const gcso_subhead_config_t,
     head_dim: usize,
 ) -> GcsoStatus {
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         // SAFETY: Validated for non-nullness and 16B alignment.
-        let cfg = unsafe { FfiHandleRef::from_raw(pspm_cfg)? };
+        let cfg = unsafe { FfiHandleRef::from_raw(subhead_cfg)? };
         if head_dim == 0 || (head_dim & 1) != 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -1656,14 +1656,14 @@ pub unsafe extern "C" fn gcso_pspm_dispatch_single_pass(
     })
 }
 
-/// Creates a Sparse Residual Adapter Layer (SRL) Rank-1 instance.
+/// Creates a Sparse Residual Adapter Layer (Rank-1 residual) Rank-1 instance.
 ///
 /// # Safety
 /// `descriptor` and `adapter_out` must be non-null and naturally aligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_srl_adapter_create(
-    descriptor: *const gcso_srl_descriptor_t,
-    adapter_out: *mut GcsoSrlAdapterHandle,
+pub unsafe extern "C" fn gcso_rank1_residual_create(
+    descriptor: *const gcso_rank1_residual_descriptor_t,
+    adapter_out: *mut GcsoRank1ResidualHandle,
 ) -> GcsoStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
@@ -1678,15 +1678,15 @@ pub unsafe extern "C" fn gcso_srl_adapter_create(
     })
 }
 
-/// Evaluates SRL Dynamic Rank-1 outer product: $\mathbf{y} = \alpha \cdot \mathbf{s} \odot (\mathbf{u} (\mathbf{v}^T \mathbf{x}))$.
+/// Evaluates Rank-1 residual Dynamic Rank-1 outer product: $\mathbf{y} = \alpha \cdot \mathbf{s} \odot (\mathbf{u} (\mathbf{v}^T \mathbf{x}))$.
 ///
 /// # Safety
-/// `y_out` (32B), `x_in` (32B), and `srl_desc` (32B) must be non-null, aligned, and disjoint.
+/// `y_out` (32B), `x_in` (32B), and `rank1_desc` (32B) must be non-null, aligned, and disjoint.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_srl_eval_rank1(
+pub unsafe extern "C" fn gcso_rank1_eval(
     y_out: *mut f32,
     x_in: *const f32,
-    srl_desc: *const gcso_srl_descriptor_t,
+    rank1_desc: *const gcso_rank1_residual_descriptor_t,
     dim_in: usize,
     dim_out: usize,
 ) -> GcsoStatus {
@@ -1694,7 +1694,7 @@ pub unsafe extern "C" fn gcso_srl_eval_rank1(
         validate_ptr_aligned(y_out, 32)?;
         validate_ptr_aligned(x_in, 32)?;
         // SAFETY: Validated for non-nullness and 32B alignment.
-        let desc = unsafe { FfiHandleRef::from_raw(srl_desc)? };
+        let desc = unsafe { FfiHandleRef::from_raw(rank1_desc)? };
         if dim_in == 0 || dim_out == 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -1707,16 +1707,16 @@ pub unsafe extern "C" fn gcso_srl_eval_rank1(
     })
 }
 
-/// Evaluates SRL Dynamic Rank-1 outer product and accumulates directly into `y_inout` in-place:
+/// Evaluates Rank-1 residual Dynamic Rank-1 outer product and accumulates directly into `y_inout` in-place:
 /// $\mathbf{y} \gets \mathbf{y} + \alpha \cdot \mathbf{s} \odot (\mathbf{u} (\mathbf{v}^T \mathbf{x}))$.
 ///
 /// # Safety
-/// `y_inout` (32B), `x_in` (32B), and `srl_desc` (32B) must be non-null, aligned, and disjoint.
+/// `y_inout` (32B), `x_in` (32B), and `rank1_desc` (32B) must be non-null, aligned, and disjoint.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_srl_eval_rank1_fused(
+pub unsafe extern "C" fn gcso_rank1_eval_fused(
     y_inout: *mut f32,
     x_in: *const f32,
-    srl_desc: *const gcso_srl_descriptor_t,
+    rank1_desc: *const gcso_rank1_residual_descriptor_t,
     dim_in: usize,
     dim_out: usize,
 ) -> GcsoStatus {
@@ -1724,7 +1724,7 @@ pub unsafe extern "C" fn gcso_srl_eval_rank1_fused(
         validate_ptr_aligned(y_inout, 32)?;
         validate_ptr_aligned(x_in, 32)?;
         // SAFETY: Validated for non-nullness and 32B alignment.
-        let desc = unsafe { FfiHandleRef::from_raw(srl_desc)? };
+        let desc = unsafe { FfiHandleRef::from_raw(rank1_desc)? };
         if dim_in == 0 || dim_out == 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -1739,7 +1739,7 @@ pub unsafe extern "C" fn gcso_srl_eval_rank1_fused(
 }
 
 /// L2P-SVD: Training-free projection of fine-tuned LoRA matrices ($W_A \in \mathbb{R}^{r \times d_{\mathrm{in}}}$,
-/// $W_B \in \mathbb{R}^{d_{\mathrm{out}} \times r}$) into an SRL Rank-1 descriptor and Q7 phase profile (Section 5.2).
+/// $W_B \in \mathbb{R}^{d_{\mathrm{out}} \times r}$) into an Rank-1 residual Rank-1 descriptor and Q7 phase profile (Section 5.2).
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, and bounds invariants.
@@ -1750,7 +1750,7 @@ pub unsafe extern "C" fn gcso_l2p_svd_project_lora(
     rank: usize,
     dim_in: usize,
     dim_out: usize,
-    srl_out: *mut gcso_srl_descriptor_t,
+    rank1_out: *mut gcso_rank1_residual_descriptor_t,
     phase_profile_out: *mut gcso_q7_t,
 ) -> GcsoStatus {
     ffi_boundary!({
@@ -1758,7 +1758,7 @@ pub unsafe extern "C" fn gcso_l2p_svd_project_lora(
         validate_ptr(lora_b)?;
         validate_ptr(phase_profile_out)?;
         // SAFETY: Validated for non-nullness and 32B alignment.
-        let mut srl_desc = unsafe { FfiHandleMut::from_raw(srl_out)? };
+        let mut rank1_desc = unsafe { FfiHandleMut::from_raw(rank1_out)? };
         if rank == 0 || dim_in == 0 || dim_out == 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -1793,7 +1793,7 @@ pub unsafe extern "C" fn gcso_l2p_svd_project_lora(
                 rank,
                 dim_in,
                 dim_out,
-                &mut srl_desc,
+                &mut rank1_desc,
                 &mut p_aligned,
             )?;
             return Ok(GCSO_SUCCESS);
@@ -1822,12 +1822,12 @@ pub unsafe extern "C" fn gcso_l2p_svd_project_lora(
         let norm_v_sq = sum_sq_f32_simd8(&a_slice[..dim_in]);
 
         let sigma_1 = branchless_flush_subnormal_f32(branchless_sqrt_f32(norm_u_sq * norm_v_sq));
-        srl_desc.layer_idx = 0;
-        srl_desc.rank = 1;
-        srl_desc.u_vector_ptr = lora_b as u64;
-        srl_desc.v_vector_ptr = lora_a as u64;
-        srl_desc.gain_scalar_ptr = 0;
-        srl_desc.scale_factor = branchless_select_f32(sigma_1 > 0.0, sigma_1, 1.0);
+        rank1_desc.layer_idx = 0;
+        rank1_desc.rank = 1;
+        rank1_desc.u_vector_ptr = lora_b as u64;
+        rank1_desc.v_vector_ptr = lora_a as u64;
+        rank1_desc.gain_scalar_ptr = 0;
+        rank1_desc.scale_factor = branchless_select_f32(sigma_1 > 0.0, sigma_1, 1.0);
 
         let phase_val = if dim_out >= 2 {
             branchless_atan2_to_q7_fast(b_slice[rank], b_slice[0])

@@ -46,21 +46,21 @@ use super::primitives::{
 use super::rope::{
     dispatch_fused_ripa_and_pspm_words_core, ripa_upper_rot_dim,
     rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words, steer_from_swar_words_core_safe,
-    PhaseSteering, PspmRouter, SrlAdapter,
+    PhaseSteering, SubHeadRouter, Rank1ResidualAdapter,
 };
 use super::telemetry::{
     select_rewire_bridge_and_modulate_with_preloaded_words_64, ContrastivePhaseBloomFilter,
     FastPathLedger, StigmergicTrailOps, LEDGER_METRIC_PHASE_STEERED,
-    LEDGER_METRIC_PSPM_ROUTED, LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
-    LEDGER_METRIC_SRL_INJECTED, MAX_ATTRACTOR_PULL_FORCE, NUM_SWARM_MICRO_CELLS,
+    LEDGER_METRIC_SUBHEAD_ROUTED, LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
+    LEDGER_METRIC_RANK1_INJECTED, MAX_ATTRACTOR_PULL_FORCE, NUM_SWARM_MICRO_CELLS,
     TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
     TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
 use core::mem::size_of;
 use crate::abi::{
-    gcso_ledger_slot_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t, gcso_snapshot_header_t,
-    gcso_srl_descriptor_t, gcso_tagged_ptr_t, GCSO_ERROR_INVALID_ARGUMENT,
+    gcso_ledger_slot_t, gcso_pointer_trail_t, gcso_subhead_config_t, gcso_q7_t, gcso_snapshot_header_t,
+    gcso_rank1_residual_descriptor_t, gcso_tagged_ptr_t, GCSO_ERROR_INVALID_ARGUMENT,
 };
 
 // ===================================================================
@@ -68,24 +68,24 @@ use crate::abi::{
 // ===================================================================
 
 /// Loads the 8 register-resident `u64` SWAR phase words of `trails[trail_idx]` directly from an
-/// already-validated 4-section `.gcso` byte slice (`zimms_bytes`) without re-running a second
+/// already-validated 4-section `.gcso` byte slice (`container_bytes`) without re-running a second
 /// full-container IEEE 802.3 CRC32 verification pass.
 #[inline(always)]
 #[must_use]
 pub(crate) fn load_validated_four_section_trail_words_64(
-    zimms_bytes: &[u8],
+    container_bytes: &[u8],
     trail_idx: usize,
     fallback_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
 ) -> [u64; NUM_SWARM_MICRO_CELLS] {
-    if let Ok(header) = gcso_snapshot_header_t::from_bytes_at(zimms_bytes, 0) {
+    if let Ok(header) = gcso_snapshot_header_t::from_bytes_at(container_bytes, 0) {
         let off_trails = header.action_hub_offset as usize;
         let off_bloom = header.edbc_state_offset as usize;
         let trail_size = size_of::<gcso_pointer_trail_t>();
-        if off_trails <= off_bloom && off_bloom <= zimms_bytes.len() {
+        if off_trails <= off_bloom && off_bloom <= container_bytes.len() {
             let num_trails = (off_bloom - off_trails) / trail_size;
             if trail_idx < num_trails {
                 let trail_off = off_trails + trail_idx * trail_size;
-                if let Ok(trail_ref) = gcso_pointer_trail_t::from_bytes_at(zimms_bytes, trail_off) {
+                if let Ok(trail_ref) = gcso_pointer_trail_t::from_bytes_at(container_bytes, trail_off) {
                     let trail_w = trail_phase_words_ref(trail_ref);
                     if swar_words_nonzero_64(trail_w) {
                         return *trail_w;
@@ -325,13 +325,13 @@ pub fn fuse_lazy_unwrap_and_qdps_into_aligned_64(
 /// - [`PointerActionHub`]: $\mathcal{O}(1)$ tagged-pointer transition table and stigmergic trail state.
 /// - [`FastPathLedger`]: 64-byte fast-path shortcut table and 8-byte ring telemetry ledger.
 /// - [`PhaseSteering`]: Inline $SO(2)^{d_{\mathrm{head}}/2}$ DPSR/RIPA/QDPS phase & Bayesian-Attention modulation.
-/// - [`PspmRouter`]: Single-pass Fact/Logic/Explore sub-head and Unified-Field Pseudo-MoE routing.
-/// - [`SrlAdapter`]: Dynamic Rank-1 outer product residual injection ($\mathbf{u}\mathbf{v}^T$).
+/// - [`SubHeadRouter`]: Single-pass Fact/Logic/Explore sub-head and Unified-Field Pseudo-MoE routing.
+/// - [`Rank1ResidualAdapter`]: Dynamic Rank-1 outer product residual injection ($\mathbf{u}\mathbf{v}^T$).
 ///
 /// Both [`super::HotPathObserver`] (`traits/hot_path.rs`), [`super::ColdPathObserver`] (`traits/cold_path.rs`),
 /// and [`super::ActionHubGatewayExt`] (`traits/gateway.rs`) observe and mutate `ActionHub` via blanket implementations.
 pub trait ActionHub:
-    BranchlessKernel + PhaseSteering + PointerActionHub + PspmRouter + SrlAdapter + FastPathLedger
+    BranchlessKernel + PhaseSteering + PointerActionHub + SubHeadRouter + Rank1ResidualAdapter + FastPathLedger
 {
     /// Validates `head_dim`, `num_heads <= MAX_ATTENTION_HEADS`, `qdps_min_step_rad >= 0.0`,
     /// `ripa_max_rad > 0.0`, and optional Query/Key tensor lengths and `GCSO_RESTRICT` disjointness.
@@ -560,14 +560,14 @@ pub trait ActionHub:
     /// accepting caller-validated `(head_dim, num_heads)` (`0` redundant validation checks).
     ///
     /// # Errors
-    /// Propagates any PSPM configuration error from `dispatch_fused_ripa_and_pspm_words_core`.
+    /// Propagates any sub-head router configuration error from `dispatch_fused_ripa_and_pspm_words_core`.
     #[inline]
     fn steer_qdps_pspm_words_prevalidated_core(
         &self,
         raw_words: &[u64; NUM_SWARM_MICRO_CELLS],
         fact_words: &[u64; NUM_SWARM_MICRO_CELLS],
         logic_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        pspm_config_and_pulse: Option<(&gcso_pspm_config_t, gcso_q7_t)>,
+        subhead_config_and_pulse: Option<(&gcso_subhead_config_t, gcso_q7_t)>,
         head_dim: usize,
         num_heads: usize,
         qdps_min_step_rad: f32,
@@ -575,7 +575,7 @@ pub trait ActionHub:
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<(bool, bool)> {
-        let Some((pspm_cfg, pulse_q7)) = pspm_config_and_pulse else {
+        let Some((subhead_cfg, pulse_q7)) = subhead_config_and_pulse else {
             let steered = self.steer_qdps_words_prevalidated_core(
                 raw_words,
                 head_dim,
@@ -608,16 +608,16 @@ pub trait ActionHub:
 
         match (query_tensor, key_tensor) {
             (Some(q), Some(k)) => {
-                let total_pspm_heads = (pspm_cfg.num_fact_heads as usize)
-                    .wrapping_add(pspm_cfg.num_logic_heads as usize)
-                    .wrapping_add(pspm_cfg.num_explore_heads as usize);
+                let total_pspm_heads = (subhead_cfg.num_fact_heads as usize)
+                    .wrapping_add(subhead_cfg.num_logic_heads as usize)
+                    .wrapping_add(subhead_cfg.num_explore_heads as usize);
                 let is_default_self_fast = ripa_max_rad.to_bits()
                     == DEFAULT_RIPA_CLAMP_MAX_RAD.to_bits()
                     && pulse_q7 == 0
                     && total_pspm_heads == num_heads
-                    && pspm_cfg.fact_phase_gain.to_bits() == 1.0_f32.to_bits()
-                    && pspm_cfg.logic_phase_gain.to_bits() == 1.0_f32.to_bits()
-                    && pspm_cfg.explore_phase_gain.to_bits() == 1.0_f32.to_bits()
+                    && subhead_cfg.fact_phase_gain.to_bits() == 1.0_f32.to_bits()
+                    && subhead_cfg.logic_phase_gain.to_bits() == 1.0_f32.to_bits()
+                    && subhead_cfg.explore_phase_gain.to_bits() == 1.0_f32.to_bits()
                     && (core::ptr::eq(fact_words, swar_words) || fact_words == swar_words)
                     && (core::ptr::eq(logic_words, swar_words) || logic_words == swar_words)
                     && (core::ptr::eq(raw_words, swar_words) || raw_words == swar_words);
@@ -638,7 +638,7 @@ pub trait ActionHub:
                     q,
                     swar_words,
                     ripa_max_rad,
-                    pspm_cfg,
+                    subhead_cfg,
                     fact_words,
                     logic_words,
                     raw_words,
@@ -667,7 +667,7 @@ pub trait ActionHub:
                     q,
                     swar_words,
                     ripa_max_rad,
-                    pspm_cfg,
+                    subhead_cfg,
                     fact_words,
                     logic_words,
                     raw_words,
@@ -697,11 +697,11 @@ pub trait ActionHub:
         Ok((true, has_q))
     }
 
-    /// Register-direct fused QDPS + $SO(2)$ Group-Closure RIPA + PSPM Sub-Head Routing over
+    /// Register-direct fused QDPS + $SO(2)$ Group-Closure RIPA + sub-head router Sub-Head Routing over
     /// pre-loaded 8-word SWAR registers (`raw_words`, `fact_words`, `logic_words`) without
     /// intermediate stack array copies or memory reloads.
     ///
-    /// Returns `(steered, pspm_routed)`.
+    /// Returns `(steered, subhead_routed)`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if dimensions, thresholds, or tensor slices are invalid.
@@ -711,7 +711,7 @@ pub trait ActionHub:
         raw_words: &[u64; NUM_SWARM_MICRO_CELLS],
         fact_words: &[u64; NUM_SWARM_MICRO_CELLS],
         logic_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        pspm_config_and_pulse: Option<(&gcso_pspm_config_t, gcso_q7_t)>,
+        subhead_config_and_pulse: Option<(&gcso_subhead_config_t, gcso_q7_t)>,
         qdps_min_step_rad: f32,
         ripa_max_rad: f32,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -730,7 +730,7 @@ pub trait ActionHub:
             raw_words,
             fact_words,
             logic_words,
-            pspm_config_and_pulse,
+            subhead_config_and_pulse,
             head_dim,
             num_heads,
             qdps_min_step_rad,
@@ -741,11 +741,11 @@ pub trait ActionHub:
     }
 
     /// Filters `raw_phases` via 8-lane SWAR QDPS directly in 64-bit registers (`swar_words`) and
-    /// executes **Single-Pass $SO(2)$ Group-Closure RIPA + PSPM Sub-Head Routing** on `query_tensor`
-    /// when `pspm_config_and_pulse` is `Some` via [`Self::filter_qdps_and_steer_qk_with_pspm_words_safe`]
+    /// executes **Single-Pass $SO(2)$ Group-Closure RIPA + sub-head router Sub-Head Routing** on `query_tensor`
+    /// when `subhead_config_and_pulse` is `Some` via [`Self::filter_qdps_and_steer_qk_with_pspm_words_safe`]
     /// (`0` intermediate stack buffer copies or reloads).
     ///
-    /// Returns `(steered, pspm_routed)`.
+    /// Returns `(steered, subhead_routed)`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if dimensions, thresholds, or tensor slices are invalid.
@@ -755,13 +755,13 @@ pub trait ActionHub:
         raw_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         dominant_anchor_id: u32,
         anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
-        pspm_config_and_pulse: Option<(&gcso_pspm_config_t, gcso_q7_t)>,
+        subhead_config_and_pulse: Option<(&gcso_subhead_config_t, gcso_q7_t)>,
         qdps_min_step_rad: f32,
         ripa_max_rad: f32,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<(bool, bool)> {
-        if pspm_config_and_pulse.is_none() {
+        if subhead_config_and_pulse.is_none() {
             let steered = self.filter_qdps_and_steer_qk_safe(
                 raw_phases,
                 qdps_min_step_rad,
@@ -800,7 +800,7 @@ pub trait ActionHub:
             &raw_words,
             &fact_w,
             &logic_w,
-            pspm_config_and_pulse,
+            subhead_config_and_pulse,
             qdps_min_step_rad,
             ripa_max_rad,
             query_tensor,
@@ -866,7 +866,7 @@ pub trait ActionHub:
         Ok((cluster_idx, anchor_id, coh, grav, steered))
     }
 
-    /// Executes **Top-2 Liminal Bifurcation Macro Routing & $SO(2)$-Fused RIPA/PSPM Steering ($\mathcal{O}(K)$)**
+    /// Executes **Top-2 Liminal Bifurcation Macro Routing & $SO(2)$-Fused RIPA/sub-head router Steering ($\mathcal{O}(K)$)**
     /// over a slice of Online Toroidal $k$-Means / DP-Means macro centroids (`centroids: &[CrystallizedAttractorRecord]`):
     /// 1. Validates optional `query_tensor` / `key_tensor` parameters upfront for strong error atomicity.
     /// 2. Identifies the Top-2 macro centroids $(k_1^*, k_2^*)$ via
@@ -888,7 +888,7 @@ pub trait ActionHub:
         centroids: &[CrystallizedAttractorRecord],
         pull_step_u7: u8,
         liminal_gravity_ratio_thresh: f32,
-        pspm_config_and_pulse: Option<(&gcso_pspm_config_t, gcso_q7_t)>,
+        subhead_config_and_pulse: Option<(&gcso_subhead_config_t, gcso_q7_t)>,
         qdps_min_step_rad: f32,
         ripa_max_rad: f32,
         trail: &mut gcso_pointer_trail_t,
@@ -919,7 +919,7 @@ pub trait ActionHub:
                 &raw_w,
                 &fact_w,
                 &logic_w,
-                pspm_config_and_pulse,
+                subhead_config_and_pulse,
                 head_dim,
                 num_heads,
                 qdps_min_step_rad,
@@ -938,7 +938,7 @@ pub trait ActionHub:
 
     /// Executes **Full Coarse-to-Fine Macro-to-Micro Routing ($\mathcal{O}(K)$ Macro Centroids $\to$
     /// $\mathcal{O}(M)$ Local Pointer Trails) + Continuous Geodesic Affinity Prior + Bayesian Pointer
-    /// Rewiring + $SO(2)$-Fused RIPA/PSPM Steering + FastPathLedger Telemetry** directly on `ActionHub`:
+    /// Rewiring + $SO(2)$-Fused RIPA/sub-head router Steering + FastPathLedger Telemetry** directly on `ActionHub`:
     /// 1. **Coarse Step ($\mathcal{O}(K)$)**: Routes `src_trail` to the highest-gravity coherent
     ///    macro centroid $k^*$ in `centroids` via
     ///    [`CrystallizedAttractorRecord::route_coarse_to_fine_trail_64`] and pre-aligns
@@ -972,7 +972,7 @@ pub trait ActionHub:
         repulsion_penalty: f32,
         fine_interpolation_u7: u8,
         contradiction_threshold: f32,
-        pspm_config_and_pulse: Option<(&gcso_pspm_config_t, gcso_q7_t)>,
+        subhead_config_and_pulse: Option<(&gcso_subhead_config_t, gcso_q7_t)>,
         qdps_min_step_rad: f32,
         ripa_max_rad: f32,
         ledger_slot: &mut gcso_ledger_slot_t,
@@ -1018,12 +1018,12 @@ pub trait ActionHub:
                 pointer_link_bonus,
             )?;
         let fact_w = if has_win_centroid { &dom_w } else { &raw_w };
-        let (steered, pspm_routed) = if want_steer {
+        let (steered, subhead_routed) = if want_steer {
             self.steer_qdps_pspm_words_prevalidated_core(
                 &raw_w,
                 fact_w,
                 &raw_w,
-                pspm_config_and_pulse,
+                subhead_config_and_pulse,
                 head_dim,
                 num_heads,
                 qdps_min_step_rad,
@@ -1036,7 +1036,7 @@ pub trait ActionHub:
         };
 
         let metrics = branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(pspm_routed, LEDGER_METRIC_PSPM_ROUTED, 0)
+            | branchless_select_u8(subhead_routed, LEDGER_METRIC_SUBHEAD_ROUTED, 0)
             | branchless_select_u8(found, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, 0)
             | branchless_select_u8(!found, LEDGER_METRIC_REPULSION_APPLIED, 0);
         let _ = self.telemetry_push(ledger_slot, metrics);
@@ -1054,7 +1054,7 @@ pub trait ActionHub:
     /// Executes **In-Place 4-Section `.gcso` Zero-Copy Online Toroidal $k$-Means / DP-Means
     /// Evolution + Single-CRC32 Register-Direct QDPS/RIPA Q/K Steering** on `ActionHub`:
     /// 1. Validates optional `query_tensor` / `key_tensor` parameters upfront for strong error atomicity
-    ///    (ensuring `zimms_bytes` is never mutated if tensor layout or `GCSO_RESTRICT` invariants fail).
+    ///    (ensuring `container_bytes` is never mutated if tensor layout or `GCSO_RESTRICT` invariants fail).
     /// 2. Synthesizes `signal` and evolves Section 1 (`crystals`), Section 2 (`trails[trail_idx]`),
     ///    Section 3a (`bloom`), Section 3b (`ledger`), Section 3c (`provenance_reports`), and the
     ///    Section 0 IEEE 802.3 CRC32 checksum in-place via
@@ -1071,7 +1071,7 @@ pub trait ActionHub:
     #[inline]
     fn evolve_four_section_kmeans_and_steer_qk_safe<S: ManifoldGatewaySignal + ?Sized>(
         &self,
-        zimms_bytes: &mut [u8],
+        container_bytes: &mut [u8],
         signal: &S,
         split_coherence_thresh: f32,
         merge_coherence_thresh: f32,
@@ -1097,7 +1097,7 @@ pub trait ActionHub:
 
         let (frame, c_idx, c_id, mass, spawned, merged) =
             GcsoFourSectionView::evolve_four_section_kmeans_in_place(
-                zimms_bytes,
+                container_bytes,
                 signal,
                 split_coherence_thresh,
                 merge_coherence_thresh,
@@ -1115,7 +1115,7 @@ pub trait ActionHub:
         }
 
         let steer_w =
-            load_validated_four_section_trail_words_64(zimms_bytes, trail_idx, &frame.phase_deltas);
+            load_validated_four_section_trail_words_64(container_bytes, trail_idx, &frame.phase_deltas);
         let steered = self.steer_qdps_words_prevalidated_core(
             &steer_w,
             head_dim,
@@ -1131,7 +1131,7 @@ pub trait ActionHub:
     /// Executes **In-Place 4-Section `.gcso` Zero-Copy Coarse-to-Fine Routing + Single-CRC32
     /// Register-Direct QDPS/RIPA Q/K Steering** on `ActionHub`:
     /// 1. Validates optional `query_tensor` / `key_tensor` parameters upfront for strong error atomicity.
-    /// 2. Routes `trail_idx` in Section 2 of `zimms_bytes` against the macro centroids in Section 1
+    /// 2. Routes `trail_idx` in Section 2 of `container_bytes` against the macro centroids in Section 1
     ///    and restamps the IEEE 802.3 CRC32 checksum once via
     ///    [`GcsoFourSectionView::route_four_section_coarse_to_fine_in_place`].
     /// 3. Uses the bridged 8 SWAR phase words returned directly in registers to steer
@@ -1144,7 +1144,7 @@ pub trait ActionHub:
     #[inline]
     fn route_four_section_coarse_to_fine_and_steer_qk_safe(
         &self,
-        zimms_bytes: &mut [u8],
+        container_bytes: &mut [u8],
         trail_idx: usize,
         pull_step_u7: u8,
         qdps_min_step_rad: f32,
@@ -1166,7 +1166,7 @@ pub trait ActionHub:
         };
         let (cluster_idx, anchor_id, coh, grav, steer_w) =
             GcsoFourSectionView::route_four_section_coarse_to_fine_with_words_in_place(
-                zimms_bytes,
+                container_bytes,
                 trail_idx,
                 pull_step_u7,
             )?;
@@ -1186,12 +1186,12 @@ pub trait ActionHub:
     }
 
     /// Executes **In-Place 4-Section `.gcso` Zero-Copy Top-2 Liminal Bifurcation Routing +
-    /// Dual-Centroid ($k_1^*, k_2^*$) PSPM Sub-Head Steering + Section-3b FastPathLedger Telemetry +
+    /// Dual-Centroid ($k_1^*, k_2^*$) sub-head router Sub-Head Steering + Section-3b FastPathLedger Telemetry +
     /// Single-Pass IEEE 802.3 CRC32 Refresh** on `ActionHub` using 100% safe disjoint slice
-    /// splitting (`zimms_bytes.split_at_mut(off_trails)` + [`Pod::slice_from_bytes_at`] /
+    /// splitting (`container_bytes.split_at_mut(off_trails)` + [`Pod::slice_from_bytes_at`] /
     /// [`Pod::slice_from_bytes_mut_at`]):
     /// 1. Validates optional `query_tensor` / `key_tensor` parameters upfront for strong error atomicity.
-    /// 2. Validates the 128B-aligned 4-section `.gcso` container layout (`zimms_bytes`) and executes
+    /// 2. Validates the 128B-aligned 4-section `.gcso` container layout (`container_bytes`) and executes
     ///    [`CrystallizedAttractorRecord::route_top2_liminal_centroids_64`] in-place on Section 1
     ///    (`crystals`) and Section 2 (`trails[trail_idx]`), bridging inter-memory *Limina* boundaries
     ///    along the shortest $S^1$ geodesic when $G_2 \ge \tau_{\mathrm{limina}} G_1$.
@@ -1210,11 +1210,11 @@ pub trait ActionHub:
     #[inline]
     fn route_four_section_top2_liminal_and_steer_qk_safe(
         &self,
-        zimms_bytes: &mut [u8],
+        container_bytes: &mut [u8],
         trail_idx: usize,
         pull_step_u7: u8,
         liminal_gravity_ratio_thresh: f32,
-        pspm_config_and_pulse: Option<(&gcso_pspm_config_t, gcso_q7_t)>,
+        subhead_config_and_pulse: Option<(&gcso_subhead_config_t, gcso_q7_t)>,
         qdps_min_step_rad: f32,
         ripa_max_rad: f32,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -1248,18 +1248,18 @@ pub trait ActionHub:
             off_daes,
             updated_ptr,
         ) = GcsoFourSectionView::route_four_section_top2_liminal_core_in_place(
-            zimms_bytes,
+            container_bytes,
             trail_idx,
             pull_step_u7,
             liminal_gravity_ratio_thresh,
         )?;
 
-        let (steered, pspm_routed) = if want_steer {
+        let (steered, subhead_routed) = if want_steer {
             self.steer_qdps_pspm_words_prevalidated_core(
                 &raw_w,
                 &fact_w,
                 &logic_w,
-                pspm_config_and_pulse,
+                subhead_config_and_pulse,
                 head_dim,
                 num_heads,
                 qdps_min_step_rad,
@@ -1272,10 +1272,10 @@ pub trait ActionHub:
         };
 
         let metric_code = branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(pspm_routed, LEDGER_METRIC_PSPM_ROUTED, 0)
+            | branchless_select_u8(subhead_routed, LEDGER_METRIC_SUBHEAD_ROUTED, 0)
             | branchless_select_u8((aid1 != 0) | is_liminal, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, 0);
         let _ = GcsoFourSectionView::update_four_section_daes_in_place(
-            zimms_bytes,
+            container_bytes,
             &header,
             total_len,
             off_daes,
@@ -1283,7 +1283,7 @@ pub trait ActionHub:
             updated_ptr,
         )?;
         GcsoFourSectionView::finalize_four_section_header_in_place(
-            zimms_bytes,
+            container_bytes,
             &mut header,
             total_len,
         )?;
@@ -1663,28 +1663,28 @@ pub trait ActionHub:
         )
     }
 
-    /// Executes optional single-pass PSPM sub-head routing (`pspm_config`) and SRL Rank-1 outer
-    /// product residual injection (`srl_activation_and_desc`) on `query_tensor`, returning the
-    /// accumulated FastPathLedger telemetry metric bitmask (`LEDGER_METRIC_PSPM_ROUTED | LEDGER_METRIC_SRL_INJECTED`).
+    /// Executes optional single-pass sub-head router sub-head routing (`subhead_config`) and Rank-1 residual Rank-1 outer
+    /// product residual injection (`rank1_activation_and_desc`) on `query_tensor`, returning the
+    /// accumulated FastPathLedger telemetry metric bitmask (`LEDGER_METRIC_SUBHEAD_ROUTED | LEDGER_METRIC_RANK1_INJECTED`).
     ///
     /// # Errors
-    /// Propagates any error from [`PspmRouter::dispatch_single_pass`] or [`SrlAdapter::eval_rank1_fused`].
+    /// Propagates any error from [`SubHeadRouter::dispatch_single_pass`] or [`Rank1ResidualAdapter::eval_rank1_fused`].
     #[inline(always)]
     fn apply_optional_pspm_and_srl(
         &self,
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         head_dim: usize,
-        pspm_config: Option<&gcso_pspm_config_t>,
-        srl_activation_and_desc: Option<(&AlignedSlice32<'_, f32>, &gcso_srl_descriptor_t)>,
+        subhead_config: Option<&gcso_subhead_config_t>,
+        rank1_activation_and_desc: Option<(&AlignedSlice32<'_, f32>, &gcso_rank1_residual_descriptor_t)>,
     ) -> GcsoResult<u8> {
         let mut extra_metrics = 0u8;
-        if let Some(cfg) = pspm_config {
+        if let Some(cfg) = subhead_config {
             self.dispatch_single_pass(query_tensor, cfg, head_dim)?;
-            extra_metrics |= LEDGER_METRIC_PSPM_ROUTED;
+            extra_metrics |= LEDGER_METRIC_SUBHEAD_ROUTED;
         }
-        if let Some((x_in, desc)) = srl_activation_and_desc {
+        if let Some((x_in, desc)) = rank1_activation_and_desc {
             self.eval_rank1_fused(query_tensor, x_in, desc)?;
-            extra_metrics |= LEDGER_METRIC_SRL_INJECTED;
+            extra_metrics |= LEDGER_METRIC_RANK1_INJECTED;
         }
         Ok(extra_metrics)
     }
@@ -1694,8 +1694,8 @@ impl<T> ActionHub for T where
     T: BranchlessKernel
         + PhaseSteering
         + PointerActionHub
-        + PspmRouter
-        + SrlAdapter
+        + SubHeadRouter
+        + Rank1ResidualAdapter
         + FastPathLedger
         + ?Sized
 {

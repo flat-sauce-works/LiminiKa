@@ -6074,7 +6074,7 @@ pub trait BranchlessKernel {
 impl<T: ?Sized> BranchlessKernel for T {}
 
 // ===================================================================
-// 2. AVX2 / Scalar SIMD Kernels for 2D/3D Visual RoPE & Rank-1 SRL
+// 2. AVX2 / Scalar SIMD Kernels for 2D/3D Visual RoPE & Rank-1 Rank-1 residual
 // ===================================================================
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
@@ -6303,9 +6303,9 @@ pub(crate) fn rotate_so2_3d_txy_slice_simd(
     }
 }
 
-/// Evaluates SRL Rank-1 outer product write `y_slice[i] = scale * u_slice[i] * g_i` using AVX2.
+/// Evaluates Rank-1 residual Rank-1 outer product write `y_slice[i] = scale * u_slice[i] * g_i` using AVX2.
 #[inline(always)]
-pub(crate) fn srl_write_outer_product_simd(
+pub(crate) fn rank1_write_outer_product_simd(
     y_slice: &mut [f32],
     u_slice: &[f32],
     g_slice_opt: Option<&[f32]>,
@@ -6398,9 +6398,9 @@ pub(crate) fn srl_write_outer_product_simd(
     }
 }
 
-/// Accumulates SRL Rank-1 outer product `y_slice[i] += scale * u_slice[i] * g_i` using AVX2.
+/// Accumulates Rank-1 residual Rank-1 outer product `y_slice[i] += scale * u_slice[i] * g_i` using AVX2.
 #[inline]
-pub(crate) fn srl_accum_outer_product_simd(
+pub(crate) fn rank1_accum_outer_product_simd(
     y_slice: &mut [f32],
     u_slice: &[f32],
     g_slice_opt: Option<&[f32]>,
@@ -6713,7 +6713,7 @@ mod tests {
         assert!((s_sq - 30.0).abs() < 1.0e-5);
         assert!((m_abs - 4.0).abs() < 1.0e-5);
 
-        // Verify single-evaluation fused RIPA + PSPM angle helper
+        // Verify single-evaluation fused RIPA + sub-head router angle helper
         let scale_018 = Q7_PHASE_SCALE_RAD * branchless_inv_pos_f32(0.18);
         let (s1, c1) = eval_ripa_sincos_q7_fast(28, false, 0.18, scale_018);
         let (s2, c2) = eval_ripa_sincos_q7_fast(12, false, 0.18, scale_018);

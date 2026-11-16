@@ -85,7 +85,7 @@ use crate::traits::telemetry::{
 // ===================================================================
 
 /// 128-byte (`#[repr(C, align(64))]`) [`Pod`] record representing a bottom-up crystallized
-/// macro attractor centroid on $SO(2)^{64}$ persisted inside `.gcso` (ZIMMS) containers.
+/// macro attractor centroid on $SO(2)^{64}$ persisted inside `.gcso` (mapped-storage) containers.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CrystallizedAttractorRecord {
@@ -97,8 +97,8 @@ pub struct CrystallizedAttractorRecord {
     pub anchor_id: u32,
     /// Number of coherent sample points absorbed into this centroid (`offset 12..16`).
     pub sample_count: u32,
-    /// Canonical 48-bit `.gcso` (ZIMMS) section offset (`bits 0..=47`, `offset 16..24`).
-    pub zimms_section_offset48: u64,
+    /// Canonical 48-bit `.gcso` (mapped-storage) section offset (`bits 0..=47`, `offset 16..24`).
+    pub mapped_section_offset48: u64,
     /// Accumulated base gravitational energy $E_{\mathrm{base}} \ge 0$ (`offset 24..28`).
     pub base_energy: f32,
     /// Circular mean resultant length $\bar{R}_c \in [0, 1]$ across the 64 heads (`offset 28..32`).
@@ -185,7 +185,7 @@ impl CrystallizedAttractorRecord {
         self.version = base.version;
         self.anchor_id = base.anchor_id;
         self.sample_count = base.sample_count;
-        self.zimms_section_offset48 = base.zimms_section_offset48;
+        self.mapped_section_offset48 = base.mapped_section_offset48;
         self.base_energy = base.base_energy;
         self.resultant_r_bar = base.resultant_r_bar;
         self.von_mises_kappa = base.von_mises_kappa;
@@ -209,13 +209,17 @@ impl CrystallizedAttractorRecord {
 
     #[inline(always)]
     #[must_use]
-    const fn new_unstamped(anchor_id: u32, dominant_slot: u8, zimms_section_offset48: u64) -> Self {
+    const fn new_unstamped(
+        anchor_id: u32,
+        dominant_slot: u8,
+        mapped_section_offset48: u64,
+    ) -> Self {
         Self {
             magic: GCSO_CRYSTAL_RECORD_MAGIC,
             version: GCSO_CRYSTAL_RECORD_VERSION,
             anchor_id,
             sample_count: 0,
-            zimms_section_offset48: zimms_section_offset48 & gcso_tagged_ptr_t::ADDR_MASK,
+            mapped_section_offset48: mapped_section_offset48 & gcso_tagged_ptr_t::ADDR_MASK,
             base_energy: 0.0,
             resultant_r_bar: 0.0,
             von_mises_kappa: 0.0,
@@ -250,7 +254,7 @@ impl CrystallizedAttractorRecord {
         &self,
         phase_words: &[u64; NUM_SWARM_MICRO_CELLS],
     ) -> u32 {
-        let w2 = self.zimms_section_offset48;
+        let w2 = self.mapped_section_offset48;
         let be_bits = self.base_energy.to_bits();
         let rb_bits = self.resultant_r_bar.to_bits();
         let kp_bits = self.von_mises_kappa.to_bits();
@@ -423,9 +427,13 @@ impl CrystallizedAttractorRecord {
     /// Creates an empty, CRC32-stamped [`CrystallizedAttractorRecord`] ready to absorb sample points.
     #[inline]
     #[must_use]
-    pub const fn new_empty(anchor_id: u32, dominant_slot: u8, zimms_section_offset48: u64) -> Self {
-        let mut rec = Self::new_unstamped(anchor_id, dominant_slot, zimms_section_offset48);
-        let zoff = rec.zimms_section_offset48;
+    pub const fn new_empty(
+        anchor_id: u32,
+        dominant_slot: u8,
+        mapped_section_offset48: u64,
+    ) -> Self {
+        let mut rec = Self::new_unstamped(anchor_id, dominant_slot, mapped_section_offset48);
+        let zoff = rec.mapped_section_offset48;
         let base_crc =
             Self::EMPTY_CRYSTAL_CRC32_BY_SLOT[(dominant_slot & ATTRACTOR_SLOT_ID_MASK) as usize];
         if zoff == 0 {
@@ -522,7 +530,7 @@ impl CrystallizedAttractorRecord {
         self.version = src.version;
         self.anchor_id = src.anchor_id;
         self.sample_count = src.sample_count;
-        self.zimms_section_offset48 = src.zimms_section_offset48;
+        self.mapped_section_offset48 = src.mapped_section_offset48;
         self.base_energy = src.base_energy;
         self.resultant_r_bar = src.resultant_r_bar;
         self.von_mises_kappa = src.von_mises_kappa;
@@ -557,7 +565,7 @@ impl CrystallizedAttractorRecord {
                 | self.provenance_bits
                 | self.reserved_align64)
                 == 0)
-            && (self.zimms_section_offset48 == 0)
+            && (self.mapped_section_offset48 == 0)
             && (self.ripa_clamp_rad.to_bits() == DEFAULT_RIPA_CLAMP_MAX_RAD.to_bits())
             && (self.effective_inv_temp.to_bits() == 0x3F80_0000u32)
             && ((self.dominant_slot & !ATTRACTOR_SLOT_ID_MASK) == 0)
@@ -683,8 +691,8 @@ impl CrystallizedAttractorRecord {
             if frame.target_anchor_id != 0 {
                 self.anchor_id = frame.target_anchor_id;
             }
-            if frame.zimms_section_offset48 != 0 {
-                self.zimms_section_offset48 = frame.zimms_section_offset48;
+            if frame.mapped_section_offset48 != 0 {
+                self.mapped_section_offset48 = frame.mapped_section_offset48;
             }
             self.dominant_slot = frame.dominant_slot;
             self.ripa_clamp_rad = frame.ripa_clamp_rad;
@@ -752,7 +760,7 @@ impl CrystallizedAttractorRecord {
     ) {
         if prev_crc != 0 {
             let delta_aid = prev_aid ^ self.anchor_id;
-            let delta_zoff = prev_zoff ^ self.zimms_section_offset48;
+            let delta_zoff = prev_zoff ^ self.mapped_section_offset48;
             let delta_rb = prev_rb_bits ^ self.resultant_r_bar.to_bits();
             let delta_kp = prev_kp_bits ^ self.von_mises_kappa.to_bits();
             let delta_cl = prev_clamp_bits ^ self.ripa_clamp_rad.to_bits();
@@ -823,7 +831,7 @@ impl CrystallizedAttractorRecord {
             prev_crc,
             self.anchor_id,
             prev_count,
-            self.zimms_section_offset48,
+            self.mapped_section_offset48,
             prev_be_bits,
             prev_rb_bits,
             prev_kp_bits,
@@ -853,7 +861,7 @@ impl CrystallizedAttractorRecord {
         let prev_crc = self.checksum_crc32;
         let prev_aid = self.anchor_id;
         let prev_count = self.sample_count;
-        let prev_zoff = self.zimms_section_offset48;
+        let prev_zoff = self.mapped_section_offset48;
         let prev_be_bits = self.base_energy.to_bits();
         let prev_rb_bits = self.resultant_r_bar.to_bits();
         let prev_kp_bits = self.von_mises_kappa.to_bits();
@@ -905,7 +913,7 @@ impl CrystallizedAttractorRecord {
         let prev_crc = self.checksum_crc32;
         let prev_aid = self.anchor_id;
         let prev_count = self.sample_count;
-        let prev_zoff = self.zimms_section_offset48;
+        let prev_zoff = self.mapped_section_offset48;
         let prev_be_bits = self.base_energy.to_bits();
         let prev_rb_bits = self.resultant_r_bar.to_bits();
         let prev_kp_bits = self.von_mises_kappa.to_bits();
@@ -1192,7 +1200,7 @@ impl CrystallizedAttractorRecord {
         self.version = GCSO_CRYSTAL_RECORD_VERSION;
         self.anchor_id = assigned_id;
         self.sample_count = 0;
-        self.zimms_section_offset48 = zoff48 & gcso_tagged_ptr_t::ADDR_MASK;
+        self.mapped_section_offset48 = zoff48 & gcso_tagged_ptr_t::ADDR_MASK;
         self.base_energy = 0.0;
         self.resultant_r_bar = 0.0;
         self.von_mises_kappa = 0.0;
@@ -1233,7 +1241,7 @@ impl CrystallizedAttractorRecord {
                 centroids[empty_i].init_spawned_slot_header_in_place(
                     assigned_id,
                     frame.dominant_slot,
-                    frame.zimms_section_offset48,
+                    frame.mapped_section_offset48,
                 );
                 (empty_i, true, [0u64; NUM_SWARM_MICRO_CELLS])
             } else if frame.effective_energy > centroids[weakest_idx].phase_gravity_mass {
@@ -1245,7 +1253,7 @@ impl CrystallizedAttractorRecord {
                 centroids[weakest_idx].init_spawned_slot_header_in_place(
                     assigned_id,
                     frame.dominant_slot,
-                    frame.zimms_section_offset48,
+                    frame.mapped_section_offset48,
                 );
                 (weakest_idx, true, [0u64; NUM_SWARM_MICRO_CELLS])
             } else {
@@ -1325,7 +1333,7 @@ impl CrystallizedAttractorRecord {
         let prev_zoff = if spawned_new {
             0
         } else {
-            target.zimms_section_offset48
+            target.mapped_section_offset48
         };
         let prev_be_bits = target.base_energy.to_bits();
         let prev_gm_bits = target.phase_gravity_mass.to_bits();
@@ -1514,7 +1522,7 @@ impl CrystallizedAttractorRecord {
             self.effective_inv_temp = b_effective_inv_temp;
             self.dominant_cause_code = b_dominant_cause_code;
             if b_zimms_offset48 != 0 {
-                self.zimms_section_offset48 = b_zimms_offset48;
+                self.mapped_section_offset48 = b_zimms_offset48;
             }
             (
                 w_b,
@@ -1531,8 +1539,8 @@ impl CrystallizedAttractorRecord {
                 self.von_mises_kappa,
             )
         } else {
-            if self.zimms_section_offset48 == 0 {
-                self.zimms_section_offset48 = b_zimms_offset48;
+            if self.mapped_section_offset48 == 0 {
+                self.mapped_section_offset48 = b_zimms_offset48;
             }
             (
                 w_a,
@@ -1689,7 +1697,7 @@ impl CrystallizedAttractorRecord {
                             ) = (
                                 centroids[b].anchor_id,
                                 centroids[b].sample_count,
-                                centroids[b].zimms_section_offset48,
+                                centroids[b].mapped_section_offset48,
                                 centroids[b].base_energy,
                                 centroids[b].resultant_r_bar,
                                 centroids[b].von_mises_kappa,
@@ -1832,12 +1840,12 @@ impl CrystallizedAttractorRecord {
             trail.stigmergic_density + 0.20 * branchless_relu_f32(eff_coh),
             MAX_STIGMERGIC_DENSITY,
         );
-        if winner.zimms_section_offset48 != 0 {
+        if winner.mapped_section_offset48 != 0 {
             let tag_q7 = swar_q7_mean_i8_from_words_with_uniform_flag_64(&bridged_w, bridged_uni);
             let packed_tag = pack_action_slot_tag(winner.dominant_slot, winner.action_mode_flags);
             trail.prev_ptr = trail.current_ptr;
             trail.current_ptr =
-                gcso_tagged_ptr_t::pack(winner.zimms_section_offset48, packed_tag, tag_q7).raw();
+                gcso_tagged_ptr_t::pack(winner.mapped_section_offset48, packed_tag, tag_q7).raw();
         }
         trail.flags |=
             TRAIL_FLAG_SYNERGY_RESONANCE | TRAIL_FLAG_CRYSTALLIZED_CANDIDATE | extra_flags;
@@ -2586,13 +2594,13 @@ impl CrystallizedAttractorRecord {
     }
 
     /// Zero-copy deserialization of `count` [`CrystallizedAttractorRecord`]s from a 64-byte aligned
-    /// `.gcso` (ZIMMS) memory-mapped byte slice with header magic/version and CRC32 validation.
+    /// `.gcso` (mapped-storage) memory-mapped byte slice with header magic/version and CRC32 validation.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`], [`GCSO_ERROR_BUFFER_TOO_SMALL`], or
     /// [`GCSO_ERROR_CONTAINER_CORRUPTED`] on validation failure.
     #[inline]
-    pub fn slice_from_zimms_bytes_zero_copy(bytes: &[u8], count: usize) -> GcsoResult<&[Self]> {
+    pub fn slice_from_container_bytes_zero_copy(bytes: &[u8], count: usize) -> GcsoResult<&[Self]> {
         if count == 0 {
             return Ok(&[]);
         }
@@ -2617,13 +2625,13 @@ impl CrystallizedAttractorRecord {
         Ok(recs)
     }
 
-    /// Serializes `records` into a `.gcso` (ZIMMS) byte slice (`dst_bytes`), stamping each
+    /// Serializes `records` into a `.gcso` (mapped-storage) byte slice (`dst_bytes`), stamping each
     /// record's IEEE 802.3 CRC32 checksum when not already stamped.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `dst_bytes.len() < records.len() * 128`.
     #[inline]
-    pub fn write_records_to_zimms_bytes(
+    pub fn write_records_to_container_bytes(
         records: &[Self],
         dst_bytes: &mut [u8],
     ) -> GcsoResult<usize> {
@@ -2640,7 +2648,7 @@ impl CrystallizedAttractorRecord {
         #[cfg(target_endian = "little")]
         if is_aligned_to(dst_bytes, align_of::<u64>()) {
             // Write 64-bit `u64` words directly so subsequent 64-bit CRC32 & header validation loads
-            // in `from_zimms_bytes_zero_copy` forward cleanly from the x86 Store Buffer with zero
+            // in `from_container_bytes_zero_copy` forward cleanly from the x86 Store Buffer with zero
             // 256-bit-to-64-bit Store-to-Load Forwarding (STLF) stalls.
             let expected_w0 =
                 (GCSO_CRYSTAL_RECORD_MAGIC as u64) | ((GCSO_CRYSTAL_RECORD_VERSION as u64) << 32);
@@ -2720,7 +2728,7 @@ const _: () = {
     assert!(offset_of!(CrystallizedAttractorRecord, version) == 4);
     assert!(offset_of!(CrystallizedAttractorRecord, anchor_id) == 8);
     assert!(offset_of!(CrystallizedAttractorRecord, sample_count) == 12);
-    assert!(offset_of!(CrystallizedAttractorRecord, zimms_section_offset48) == 16);
+    assert!(offset_of!(CrystallizedAttractorRecord, mapped_section_offset48) == 16);
     assert!(offset_of!(CrystallizedAttractorRecord, checksum_crc32) == 52);
     assert!(offset_of!(CrystallizedAttractorRecord, dominant_slot) == 56);
     assert!(offset_of!(CrystallizedAttractorRecord, reserved_align64) == 60);

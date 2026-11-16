@@ -1075,7 +1075,7 @@ fn step_edbc_tunneling_and_select_bayesian_core<E: EntropyClosedLoopCoordinator 
     repulsion_penalty: f32,
     interpolation_u7: u8,
     contradiction_threshold: f32,
-    high_density_srl_thresh: f32,
+    high_density_rank1_thresh: f32,
     macro_anchor_id: u32,
     secondary_macro_anchor_id: u32,
     win_w_opt: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
@@ -1201,7 +1201,7 @@ fn step_edbc_tunneling_and_select_bayesian_core<E: EntropyClosedLoopCoordinator 
         repulsion_active,
         dom_lane,
         branchless_relu_f32(bif_thresh * 0.5),
-        high_density_srl_thresh,
+        high_density_rank1_thresh,
     );
     if (macro_anchor_id != 0) & (!repulsion_active) & (pre_evolve_cluster_id != 0) {
         src_trail.cluster_id = pre_evolve_cluster_id;
@@ -1246,7 +1246,7 @@ fn step_via_gateway_frame_with_words_core<
     alpha: f32,
     beta: f32,
     d0: f32,
-    high_density_srl_thresh: f32,
+    high_density_rank1_thresh: f32,
     frame: &GatewayFrame,
     gw_w: &[u64; NUM_SWARM_MICRO_CELLS],
     trail: &mut gcso_pointer_trail_t,
@@ -1259,7 +1259,7 @@ fn step_via_gateway_frame_with_words_core<
     f32,
     f32,
 )> {
-    if !branchless_is_finite_f32(high_density_srl_thresh) {
+    if !branchless_is_finite_f32(high_density_rank1_thresh) {
         return Err(GCSO_ERROR_INVALID_ARGUMENT);
     }
     if !branchless_is_finite_f32(cvoid_score)
@@ -1448,7 +1448,7 @@ fn step_via_gateway_frame_with_words_core<
         repulsion_triggered,
         dom_lane,
         low_entropy_skip_thresh,
-        high_density_srl_thresh,
+        high_density_rank1_thresh,
     );
     if ((frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0)
         & (final_mode == EDBC_MODE_NORMAL_ENTROPY)
@@ -1643,7 +1643,7 @@ pub trait EntropyClosedLoopCoordinator:
         obstruction_threshold: f32,
         token_z_score: f32,
         cvoid_score: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         dominant_attractor_slot: u8,
         bloom_filter: &mut ContrastivePhaseBloomFilter,
     ) -> GcsoResult<(gcso_edbc_state_t, gcso_tagged_ptr_t, f32, f32, bool)> {
@@ -1685,7 +1685,7 @@ pub trait EntropyClosedLoopCoordinator:
                 repulsion_triggered,
                 dominant_attractor_slot & ATTRACTOR_SLOT_ID_MASK,
                 low_entropy_skip_thresh,
-                high_density_srl_thresh,
+                high_density_rank1_thresh,
             );
 
         if repulsion_triggered {
@@ -1749,7 +1749,7 @@ pub trait EntropyClosedLoopCoordinator:
         cvoid_score: f32,
         anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         trail: &mut gcso_pointer_trail_t,
     ) -> GcsoResult<(gcso_edbc_state_t, gcso_tagged_ptr_t, f32, f32, u32)> {
         if anchor_phases.len() != anchor_base_energies.len() {
@@ -1794,7 +1794,7 @@ pub trait EntropyClosedLoopCoordinator:
             is_repulsion,
             dom_lane,
             low_entropy_skip_thresh,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
         );
         trail.current_ptr = evolved_ptr.raw();
         let preserve_anchor = (trail.target_anchor_id != 0) & (!is_repulsion);
@@ -1842,7 +1842,7 @@ pub trait EntropyClosedLoopCoordinator:
         repulsion_penalty: f32,
         interpolation_u7: u8,
         contradiction_threshold: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         bloom_filter: &mut ContrastivePhaseBloomFilter,
         attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<(
@@ -1894,7 +1894,7 @@ pub trait EntropyClosedLoopCoordinator:
             repulsion_penalty,
             interpolation_u7,
             contradiction_threshold,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
             0,
             0,
             None,
@@ -1938,7 +1938,7 @@ pub trait EntropyClosedLoopCoordinator:
         repulsion_penalty: f32,
         fine_interpolation_u7: u8,
         contradiction_threshold: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         bloom_filter: &mut ContrastivePhaseBloomFilter,
         attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<(
@@ -2009,7 +2009,7 @@ pub trait EntropyClosedLoopCoordinator:
             repulsion_penalty,
             fine_interpolation_u7,
             contradiction_threshold,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
             macro_anchor_id,
             0,
             has_win_centroid.then_some(&win_w),
@@ -2065,7 +2065,7 @@ pub trait EntropyClosedLoopCoordinator:
         repulsion_penalty: f32,
         fine_interpolation_u7: u8,
         contradiction_threshold: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         bloom_filter: &mut ContrastivePhaseBloomFilter,
         attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<(
@@ -2141,7 +2141,7 @@ pub trait EntropyClosedLoopCoordinator:
             repulsion_penalty,
             fine_interpolation_u7,
             contradiction_threshold,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
             aid1,
             branchless_select_u32(is_liminal, aid2, 0),
             has_win_centroid.then_some(&w1),
@@ -2270,7 +2270,7 @@ pub trait EntropyClosedLoopCoordinator:
         qdpt_phase_deltas: &[gcso_q7_t],
         token_z_score: f32,
         cvoid_score: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         trail: &mut gcso_pointer_trail_t,
     ) -> GcsoResult<(gcso_edbc_state_t, u32, f32, gcso_tagged_ptr_t)> {
         if !branchless_is_finite_f32(cvoid_score) {
@@ -2309,7 +2309,7 @@ pub trait EntropyClosedLoopCoordinator:
             is_repulsion,
             dom_lane,
             low_entropy_skip_thresh,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
         );
         trail.prev_ptr = trail.current_ptr;
         trail.current_ptr = evolved_ptr.raw();
@@ -2330,7 +2330,7 @@ pub trait EntropyClosedLoopCoordinator:
     /// 2. Ingests `frame.phase_deltas` into `trail` in 8 register-resident `u64` SWAR words
     ///    (`next_w`), applying `frame.qdps_min_step_q7` step filtering and binding 32-bit
     ///    `frame.target_anchor_id` into `trail.target_anchor_id` and `trail.cluster_id`.
-    /// 3. Evolves `trail.current_ptr` preserving `frame.zimms_section_offset48` (`48-bit` `.gcso`
+    /// 3. Evolves `trail.current_ptr` preserving `frame.mapped_section_offset48` (`48-bit` `.gcso`
     ///    direct RAG/Fact address) and reconciling `ACTION_MODE_LAYER_SKIP` with EDBC's
     ///    entropy state.
     /// 4. Combines `frame.effective_inv_temp` with EDBC's mode-aware temperature $T_{\mathrm{sample}}$
@@ -2345,7 +2345,7 @@ pub trait EntropyClosedLoopCoordinator:
     /// Returns `(edbc_state, evolved_ptr, causal_report, effective_inv_temp, crystallized_gravity_mass)`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `high_density_srl_thresh` is non-finite.
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `high_density_rank1_thresh` is non-finite.
     /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score`, `cvoid_score`, `alpha`,
     /// `beta <= 0.0`, or `d0 <= 0.0` is invalid.
     #[inline(always)]
@@ -2356,7 +2356,7 @@ pub trait EntropyClosedLoopCoordinator:
         alpha: f32,
         beta: f32,
         d0: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         frame: &GatewayFrame,
         trail: &mut gcso_pointer_trail_t,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -2375,7 +2375,7 @@ pub trait EntropyClosedLoopCoordinator:
             alpha,
             beta,
             d0,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
             frame,
             frame.phase_words_ref(),
             trail,
@@ -2401,7 +2401,7 @@ pub trait EntropyClosedLoopCoordinator:
         alpha: f32,
         beta: f32,
         d0: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         gateway_signal: &G,
         trail: &mut gcso_pointer_trail_t,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -2421,7 +2421,7 @@ pub trait EntropyClosedLoopCoordinator:
             alpha,
             beta,
             d0,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
             &frame,
             &gw_w,
             trail,
@@ -2447,7 +2447,7 @@ pub trait EntropyClosedLoopCoordinator:
         alpha: f32,
         beta: f32,
         d0: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         gateway_signal: &G,
         centroids: &mut [CrystallizedAttractorRecord],
         split_coherence_thresh: f32,
@@ -2472,7 +2472,7 @@ pub trait EntropyClosedLoopCoordinator:
                 alpha,
                 beta,
                 d0,
-                high_density_srl_thresh,
+                high_density_rank1_thresh,
                 &frame,
                 &gw_w,
                 trail,
@@ -2515,7 +2515,7 @@ pub trait EntropyClosedLoopCoordinator:
     /// Returns `(edbc_state, evolved_ptr, total_gravity_pull, mean_coherence, dominant_anchor_id)`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `high_density_srl_thresh` is non-finite.
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `high_density_rank1_thresh` is non-finite.
     /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score` or `cvoid_score` is non-finite.
     #[inline(always)]
     fn step_with_crystallized_ensemble_and_pointer(
@@ -2523,10 +2523,10 @@ pub trait EntropyClosedLoopCoordinator:
         token_z_score: f32,
         cvoid_score: f32,
         records: &[CrystallizedAttractorRecord],
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         trail: &mut gcso_pointer_trail_t,
     ) -> GcsoResult<(gcso_edbc_state_t, gcso_tagged_ptr_t, f32, f32, u32)> {
-        if !branchless_is_finite_f32(high_density_srl_thresh) {
+        if !branchless_is_finite_f32(high_density_rank1_thresh) {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
         if !branchless_is_finite_f32(cvoid_score) {
@@ -2569,7 +2569,7 @@ pub trait EntropyClosedLoopCoordinator:
             is_repulsion,
             dom_lane,
             low_entropy_skip_thresh,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
         );
         trail.current_ptr = evolved_ptr.raw();
         let preserve_anchor = (trail.target_anchor_id != 0) & (!is_repulsion);
@@ -2784,7 +2784,7 @@ impl EntropyController {
         )
     }
 
-    /// Evaluates PPRC Variable GOP keyframe scheduling and Game-Coexistence QoS compute budgeting
+    /// Evaluates KV-keyframe Variable GOP keyframe scheduling and Game-Coexistence QoS compute budgeting
     /// in $\mathcal{O}(1)$ division-free (`0 fdiv`) branchless arithmetic from the current EDBC state.
     #[inline(always)]
     pub const fn evaluate_adaptive_compute_and_gop_budget(
@@ -3056,7 +3056,7 @@ impl EntropyController {
         input_ptr: gcso_tagged_ptr_t,
         trail_density: f32,
         dominant_attractor_slot: u8,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
     ) -> (gcso_edbc_state_t, gcso_tagged_ptr_t) {
         let prev_mode = self.state.active_branch_mode;
         let prev_dwell = self.mode_dwell_steps;
@@ -3096,7 +3096,7 @@ impl EntropyController {
             is_repulsion,
             dominant_attractor_slot & ATTRACTOR_SLOT_ID_MASK,
             low_entropy_skip_thresh,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
         );
 
         let sample_temp = eval_temperature_for_mode(
@@ -3150,7 +3150,7 @@ impl EntropyController {
         input_ptr: gcso_tagged_ptr_t,
         trail_density: f32,
         dominant_attractor_slot: u8,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
     ) -> GcsoResult<(gcso_edbc_state_t, gcso_tagged_ptr_t)> {
         if !branchless_is_finite_f32(token_z_score) || !branchless_is_finite_f32(cvoid_score) {
             return Err(GCSO_ERROR_EDBC_SINGULARITY);
@@ -3164,7 +3164,7 @@ impl EntropyController {
             input_ptr,
             trail_density,
             dominant_attractor_slot,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
         ))
     }
 
@@ -3227,7 +3227,7 @@ impl EntropyController {
         input_ptr: gcso_tagged_ptr_t,
         trail_density: f32,
         dominant_attractor_slot: u8,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
     ) -> GcsoResult<(gcso_edbc_state_t, gcso_tagged_ptr_t, f32, f32)> {
         let (cvoid_score, coh_ratio) = self.eval_cvoid_with_coherence_ratio(key_vector)?;
         let eps = self.state.singularity_eps;
@@ -3250,7 +3250,7 @@ impl EntropyController {
             input_ptr,
             trail_density,
             dominant_attractor_slot,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
         );
         Ok((st, evolved_ptr, cvoid_score, coh_ratio))
     }
@@ -3276,7 +3276,7 @@ impl EntropyController {
         input_ptr: gcso_tagged_ptr_t,
         trail_density: f32,
         dominant_attractor_slot: u8,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         phases_inout: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> GcsoResult<(gcso_edbc_state_t, gcso_tagged_ptr_t, f32)> {
         let (st, evolved_ptr) = self.eval_stateful_with_cvoid_and_pointer(
@@ -3288,7 +3288,7 @@ impl EntropyController {
             input_ptr,
             trail_density,
             dominant_attractor_slot,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
         )?;
 
         if st.active_branch_mode != EDBC_MODE_NORMAL_ENTROPY {
@@ -3335,7 +3335,7 @@ impl EntropyController {
         input_ptr: gcso_tagged_ptr_t,
         trail_density: f32,
         dominant_attractor_slot: u8,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         active_phases_inout: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
         bloom_filter: &mut ContrastivePhaseBloomFilter,
     ) -> GcsoResult<(gcso_edbc_state_t, gcso_tagged_ptr_t, f32, f32, bool)> {
@@ -3356,7 +3356,7 @@ impl EntropyController {
             input_ptr,
             trail_density,
             dominant_attractor_slot,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
         )?;
 
         let repulsion_triggered =

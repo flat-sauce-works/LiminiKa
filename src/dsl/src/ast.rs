@@ -62,7 +62,7 @@ pub struct StyleAdapterSpec {
     pub explore_ratio: f32,
 }
 
-/// Stigmergic memory & PPRC key-frame retention policy.
+/// Stigmergic memory & KV-keyframe key-frame retention policy.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MemorySpec {
     pub container_path: String,

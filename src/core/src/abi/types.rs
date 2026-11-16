@@ -108,9 +108,9 @@ define_status_codes!(
     (GCSO_ERROR_QDPS_UNDERFLOW, -31, b"GCSO_ERROR_QDPS_UNDERFLOW\0", "GCSO_ERROR_QDPS_UNDERFLOW", "QDPS quantization step fell below minimal threshold $\\Delta\\theta_{\\mathrm{min\\_step}}$."),
     (GCSO_ERROR_EDBC_SINGULARITY, -40, b"GCSO_ERROR_EDBC_SINGULARITY\0", "GCSO_ERROR_EDBC_SINGULARITY", "EDBC entropy controller encountered numerical or logarithmic singularity."),
     (GCSO_ERROR_CONTAINER_CORRUPTED, -50, b"GCSO_ERROR_CONTAINER_CORRUPTED\0", "GCSO_ERROR_CONTAINER_CORRUPTED", "Binary `.gcso` snapshot container header or payload checksum corrupted."),
-    (GCSO_ERROR_ZIMMS_MAPPING_FAILED, -51, b"GCSO_ERROR_ZIMMS_MAPPING_FAILED\0", "GCSO_ERROR_ZIMMS_MAPPING_FAILED", "ZIMMS zero-copy memory mapping or Direct-DMA buffer mapping failed."),
-    (GCSO_ERROR_PSPM_ROUTING_FAILED, -60, b"GCSO_ERROR_PSPM_ROUTING_FAILED\0", "GCSO_ERROR_PSPM_ROUTING_FAILED", "PSPM sub-head group phase routing evaluation failed."),
-    (GCSO_ERROR_PPRC_SEEK_FAILED, -70, b"GCSO_ERROR_PPRC_SEEK_FAILED\0", "GCSO_ERROR_PPRC_SEEK_FAILED", "PPRC keyframe index lookup or token seek operation failed."),
+    (GCSO_ERROR_MAPPED_STORAGE_FAILED, -51, b"GCSO_ERROR_MAPPED_STORAGE_FAILED\0", "GCSO_ERROR_MAPPED_STORAGE_FAILED", "mapped-storage zero-copy memory mapping or Direct-DMA buffer mapping failed."),
+    (GCSO_ERROR_SUBHEAD_ROUTING_FAILED, -60, b"GCSO_ERROR_SUBHEAD_ROUTING_FAILED\0", "GCSO_ERROR_SUBHEAD_ROUTING_FAILED", "sub-head router sub-head group phase routing evaluation failed."),
+    (GCSO_ERROR_KV_KEYFRAME_SEEK_FAILED, -70, b"GCSO_ERROR_KV_KEYFRAME_SEEK_FAILED\0", "GCSO_ERROR_KV_KEYFRAME_SEEK_FAILED", "KV-keyframe keyframe index lookup or token seek operation failed."),
     (GCSO_ERROR_OBSTRUCTION_UNRESOLVED, -80, b"GCSO_ERROR_OBSTRUCTION_UNRESOLVED\0", "GCSO_ERROR_OBSTRUCTION_UNRESOLVED", "Unresolved cohomological obstruction class $H^1(K; \\mathcal{F})$ encountered."),
     (GCSO_ERROR_EXTENSION_NOT_LOADED, -90, b"GCSO_ERROR_EXTENSION_NOT_LOADED\0", "GCSO_ERROR_EXTENSION_NOT_LOADED", "Dynamic extension module not loaded or inactive in ledger slot."),
     (GCSO_ERROR_LEDGER_FULL, -91, b"GCSO_ERROR_LEDGER_FULL\0", "GCSO_ERROR_LEDGER_FULL", "FastPathLedger fast-path table or ring buffer fully occupied."),
@@ -232,16 +232,16 @@ define_opaque_handles!(
         "Opaque DPSR phase steering kernel handle (`gcso_dpsr_kernel_handle_t`)."
     ),
     (
-        GcsoPspmRouterOpaque,
-        GcsoPspmRouterHandle,
-        gcso_pspm_router_handle_t,
-        "Opaque PSPM sub-head group router handle (`gcso_pspm_router_handle_t`)."
+        GcsoSubHeadRouterOpaque,
+        GcsoSubHeadRouterHandle,
+        gcso_subhead_router_handle_t,
+        "Opaque sub-head router sub-head group router handle (`gcso_subhead_router_handle_t`)."
     ),
     (
-        GcsoSrlAdapterOpaque,
-        GcsoSrlAdapterHandle,
-        gcso_srl_adapter_handle_t,
-        "Opaque SRL Rank-1 adapter layer handle (`gcso_srl_adapter_handle_t`)."
+        GcsoRank1ResidualOpaque,
+        GcsoRank1ResidualHandle,
+        gcso_rank1_residual_handle_t,
+        "Opaque Rank-1 residual Rank-1 adapter layer handle (`gcso_rank1_residual_handle_t`)."
     ),
 );
 
@@ -545,10 +545,10 @@ impl Default for gcso_edbc_state_t {
     }
 }
 
-/// Zero-Overhead In-Memory Mapped Storage (ZIMMS) descriptor (64 bytes, 32-byte aligned, Section 5.4.G).
+/// Zero-Overhead In-Memory Mapped Storage (mapped-storage) descriptor (64 bytes, 32-byte aligned, Section 5.4.G).
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct gcso_zimms_descriptor_t {
+pub struct gcso_mapped_storage_descriptor_t {
     /// Base virtual memory address of the zero-copy `mmap` region.
     pub mapped_address: u64,
     /// Total mapped `.gcso` file length in bytes.
@@ -563,7 +563,7 @@ pub struct gcso_zimms_descriptor_t {
     pub reserved: [u8; 32],
 }
 
-impl Default for gcso_zimms_descriptor_t {
+impl Default for gcso_mapped_storage_descriptor_t {
     #[inline(always)]
     fn default() -> Self {
         Self {
@@ -577,10 +577,10 @@ impl Default for gcso_zimms_descriptor_t {
     }
 }
 
-/// Phase-Steered Parallel Multi-head (PSPM) router configuration descriptor (32 bytes, 16-byte aligned, Section 5.4.G).
+/// Phase-Steered Parallel Multi-head (sub-head router) router configuration descriptor (32 bytes, 16-byte aligned, Section 5.4.G).
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct gcso_pspm_config_t {
+pub struct gcso_subhead_config_t {
     /// Number of attention heads allocated to the Fact sub-group.
     pub num_fact_heads: u16,
     /// Number of attention heads allocated to the Logic sub-group.
@@ -599,13 +599,13 @@ pub struct gcso_pspm_config_t {
     pub reserved: [u8; 12],
 }
 
-/// Sparse Residual Adapter Layer (SRL) Dynamic Rank-1 descriptor (64 bytes, 32-byte aligned, Section 5.4.G).
+/// Sparse Residual Adapter Layer (Rank-1 residual) Dynamic Rank-1 descriptor (64 bytes, 32-byte aligned, Section 5.4.G).
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct gcso_srl_descriptor_t {
+pub struct gcso_rank1_residual_descriptor_t {
     /// Index of target Transformer layer for Rank-1 residual injection.
     pub layer_idx: u32,
-    /// Rank of low-rank adapter (fixed to `1` for SRL).
+    /// Rank of low-rank adapter (fixed to `1` for Rank-1 residual).
     pub rank: u32,
     /// Raw 64-bit pointer to left column projection vector $\mathbf{u}$.
     pub u_vector_ptr: u64,
@@ -637,8 +637,8 @@ pub struct gcso_snapshot_header_t {
     pub attractor_field_offset: u64,
     /// Byte offset to DPSR kernel state section.
     pub dpsr_state_offset: u64,
-    /// Byte offset to SRL adapter state section.
-    pub srl_state_offset: u64,
+    /// Byte offset to Rank-1 residual adapter state section.
+    pub rank1_state_offset: u64,
     /// Byte offset to EDBC controller state section.
     pub edbc_state_offset: u64,
     /// CRC32 integrity checksum over snapshot payload.
@@ -661,7 +661,7 @@ impl Default for gcso_snapshot_header_t {
             action_hub_offset: 0,
             attractor_field_offset: 0,
             dpsr_state_offset: 0,
-            srl_state_offset: 0,
+            rank1_state_offset: 0,
             edbc_state_offset: 0,
             checksum_crc32: 0,
             ledger_slot_offset: 0,
@@ -671,10 +671,10 @@ impl Default for gcso_snapshot_header_t {
     }
 }
 
-/// PPRC Keyframe KV cache index header structure (64 bytes, 32-byte aligned, Section 5.4.G).
+/// KV-keyframe Keyframe KV cache index header structure (64 bytes, 32-byte aligned, Section 5.4.G).
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct gcso_pprc_keyframe_header_t {
+pub struct gcso_kv_keyframe_header_t {
     /// Frame classification (`0` = I-Frame Keyframe Anchor, `1` = P-Frame Phase Motion Delta).
     pub frame_type: u32,
     /// Absolute token position index in sequence.
@@ -691,7 +691,7 @@ pub struct gcso_pprc_keyframe_header_t {
     pub icache_payload_offset: u64,
     /// Byte offset to Predictive Phase Motion Cache (P-Cache) payload.
     pub pcache_payload_offset: u64,
-    /// Reserved space for future PPRC extensions (24 bytes).
+    /// Reserved space for future KV-keyframe extensions (24 bytes).
     pub reserved: [u8; 24],
 }
 
@@ -718,16 +718,20 @@ const _: () = {
     assert!(size_of::<gcso_config_t>() == 64 && align_of::<gcso_config_t>() == 16);
     assert!(size_of::<gcso_edbc_state_t>() == 64 && align_of::<gcso_edbc_state_t>() == 32);
     assert!(
-        size_of::<gcso_zimms_descriptor_t>() == 64 && align_of::<gcso_zimms_descriptor_t>() == 32
+        size_of::<gcso_mapped_storage_descriptor_t>() == 64
+            && align_of::<gcso_mapped_storage_descriptor_t>() == 32
     );
-    assert!(size_of::<gcso_pspm_config_t>() == 32 && align_of::<gcso_pspm_config_t>() == 16);
-    assert!(size_of::<gcso_srl_descriptor_t>() == 64 && align_of::<gcso_srl_descriptor_t>() == 32);
+    assert!(size_of::<gcso_subhead_config_t>() == 32 && align_of::<gcso_subhead_config_t>() == 16);
+    assert!(
+        size_of::<gcso_rank1_residual_descriptor_t>() == 64
+            && align_of::<gcso_rank1_residual_descriptor_t>() == 32
+    );
     assert!(
         size_of::<gcso_snapshot_header_t>() == 128 && align_of::<gcso_snapshot_header_t>() == 64
     );
     assert!(
-        size_of::<gcso_pprc_keyframe_header_t>() == 64
-            && align_of::<gcso_pprc_keyframe_header_t>() == 32
+        size_of::<gcso_kv_keyframe_header_t>() == 64
+            && align_of::<gcso_kv_keyframe_header_t>() == 32
     );
     assert!(size_of::<SwarmResolutionReport>() == 16 && align_of::<SwarmResolutionReport>() == 16);
     assert!(size_of::<gcso_gateway_frame_t>() == 128 && align_of::<gcso_gateway_frame_t>() == 64);
@@ -773,17 +777,17 @@ const _: () = {
     assert!(offset_of!(gcso_ledger_slot_t, fast_path_bypass_mask) == 16);
     assert!(offset_of!(gcso_ledger_slot_t, fast_path_shortcuts) == 24);
     assert!(offset_of!(gcso_ledger_slot_t, telemetry_mini_ledger) == 56);
-    assert!(offset_of!(gcso_pspm_config_t, num_fact_heads) == 0);
-    assert!(offset_of!(gcso_pspm_config_t, fact_phase_gain) == 8);
+    assert!(offset_of!(gcso_subhead_config_t, num_fact_heads) == 0);
+    assert!(offset_of!(gcso_subhead_config_t, fact_phase_gain) == 8);
     assert!(offset_of!(gcso_edbc_state_t, moving_z_entropy) == 0);
     assert!(offset_of!(gcso_edbc_state_t, active_branch_mode) == 24);
-    assert!(offset_of!(gcso_srl_descriptor_t, layer_idx) == 0);
-    assert!(offset_of!(gcso_srl_descriptor_t, u_vector_ptr) == 8);
-    assert!(offset_of!(gcso_srl_descriptor_t, v_vector_ptr) == 16);
-    assert!(offset_of!(gcso_srl_descriptor_t, scale_factor) == 32);
-    assert!(offset_of!(gcso_zimms_descriptor_t, mapped_address) == 0);
-    assert!(offset_of!(gcso_zimms_descriptor_t, file_size_bytes) == 8);
-    assert!(offset_of!(gcso_pprc_keyframe_header_t, frame_type) == 0);
-    assert!(offset_of!(gcso_pprc_keyframe_header_t, icache_payload_offset) == 24);
-    assert!(offset_of!(gcso_pprc_keyframe_header_t, pcache_payload_offset) == 32);
+    assert!(offset_of!(gcso_rank1_residual_descriptor_t, layer_idx) == 0);
+    assert!(offset_of!(gcso_rank1_residual_descriptor_t, u_vector_ptr) == 8);
+    assert!(offset_of!(gcso_rank1_residual_descriptor_t, v_vector_ptr) == 16);
+    assert!(offset_of!(gcso_rank1_residual_descriptor_t, scale_factor) == 32);
+    assert!(offset_of!(gcso_mapped_storage_descriptor_t, mapped_address) == 0);
+    assert!(offset_of!(gcso_mapped_storage_descriptor_t, file_size_bytes) == 8);
+    assert!(offset_of!(gcso_kv_keyframe_header_t, frame_type) == 0);
+    assert!(offset_of!(gcso_kv_keyframe_header_t, icache_payload_offset) == 24);
+    assert!(offset_of!(gcso_kv_keyframe_header_t, pcache_payload_offset) == 32);
 };

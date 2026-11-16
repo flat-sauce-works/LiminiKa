@@ -23,15 +23,15 @@ use criterion::{
     criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
 use liminika_core::abi::{
-    gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t,
-    gcso_tagged_ptr_t,
+    gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t,
+    gcso_subhead_config_t, gcso_tagged_ptr_t,
 };
 use liminika_core::phase_steering::{PhaseSteeringClosedLoop, PhaseSteeringEngine};
 use liminika_core::traits::{
     AlignedBuffer128, AlignedBuffer16, AlignedBuffer32, AlignedBuffer64, AlignedSlice,
     AlignedSlice16, AlignedSlice32, AlignedSliceMut, AlignedSliceMut16,
     ContrastivePhaseBloomFilter, CrystallizedAttractorRecord, GcsoFourSectionView, ObjectiveFact,
-    PhaseSteering, PspmRouter, StigmergicActionPtrOps, SubjectivePersona, SystemConstraint,
+    PhaseSteering, StigmergicActionPtrOps, SubHeadRouter, SubjectivePersona, SystemConstraint,
     VisualAttentionSteering, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
     ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE,
     DEFAULT_RIPA_CLAMP_MAX_RAD, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
@@ -1770,7 +1770,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
         slot_bank.data[128..192].copy_from_slice(&make_heterogeneous_q7_phases_with_offset(-18));
         let bank_slice = slot_bank.relax_slice::<16>();
         let _ftz = ScopedFtzdazGuard::new();
-        let pspm_cfg = gcso_pspm_config_t {
+        let subhead_cfg = gcso_subhead_config_t {
             num_fact_heads: 32,
             num_logic_heads: 24,
             num_explore_heads: 8,
@@ -1783,7 +1783,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
             engine
                 .dispatch_subhead_slot_ensemble(
                     &mut q_slice,
-                    &pspm_cfg,
+                    &subhead_cfg,
                     &bank_slice,
                     ATTRACTOR_SLOT_SYSTEM_BASELINE,
                     ATTRACTOR_SLOT_KNOWLEDGE,
@@ -1799,7 +1799,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
             engine
                 .dispatch_subhead_slot_ensemble(
                     black_box(&mut q_slice),
-                    black_box(&pspm_cfg),
+                    black_box(&subhead_cfg),
                     black_box(&bank_slice),
                     black_box(ATTRACTOR_SLOT_SYSTEM_BASELINE),
                     black_box(ATTRACTOR_SLOT_KNOWLEDGE),
@@ -1827,7 +1827,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
         slot_bank.data[128..192].copy_from_slice(&make_heterogeneous_q7_phases_with_offset(-18));
         let bank_slice = slot_bank.relax_slice::<16>();
         let _ftz = ScopedFtzdazGuard::new();
-        let pspm_cfg = gcso_pspm_config_t {
+        let subhead_cfg = gcso_subhead_config_t {
             num_fact_heads: 32,
             num_logic_heads: 24,
             num_explore_heads: 8,
@@ -1840,7 +1840,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
             engine
                 .dispatch_subhead_slot_ensemble_geodesic(
                     &mut q_slice,
-                    &pspm_cfg,
+                    &subhead_cfg,
                     &bank_slice,
                     ATTRACTOR_SLOT_SYSTEM_BASELINE,
                     ATTRACTOR_SLOT_KNOWLEDGE,
@@ -1856,7 +1856,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
             engine
                 .dispatch_subhead_slot_ensemble_geodesic(
                     black_box(&mut q_slice),
-                    black_box(&pspm_cfg),
+                    black_box(&subhead_cfg),
                     black_box(&bank_slice),
                     black_box(ATTRACTOR_SLOT_SYSTEM_BASELINE),
                     black_box(ATTRACTOR_SLOT_KNOWLEDGE),
@@ -1887,7 +1887,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 make_heterogeneous_q7_phases_with_offset(32),
             ];
             let unified_energies = [0.2f32, 3.0f32];
-            let pspm_cfg = gcso_pspm_config_t {
+            let subhead_cfg = gcso_subhead_config_t {
                 num_fact_heads: 32,
                 num_logic_heads: 24,
                 num_explore_heads: 8,
@@ -1916,7 +1916,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                         &unified_anchors,
                         &unified_energies,
                         None,
-                        Some((&pspm_cfg, 8i8)),
+                        Some((&subhead_cfg, 8i8)),
                         Some((&mut logits_mut, 0.75f32)),
                         0.01f32,
                         DEFAULT_RIPA_CLAMP_MAX_RAD,
@@ -1936,7 +1936,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                         black_box(&unified_anchors),
                         black_box(&unified_energies),
                         black_box(None),
-                        black_box(Some((&pspm_cfg, 8i8))),
+                        black_box(Some((&subhead_cfg, 8i8))),
                         black_box(Some((&mut logits_mut, 0.75f32))),
                         black_box(0.01f32),
                         black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
@@ -2586,7 +2586,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
 ///
 /// Evaluates pre-v1.0 `.gcso` record crystallization and 4-section zero-copy byte container mapping.
 /// Skipped by default under `run_benchmarks.py --profile standard` so Core `PhaseSteering`/`EntropyControl` evaluations
-/// remain decoupled from the provisional container layout prior to v1.0 PPRC video-stream memory integration.
+/// remain decoupled from the provisional container layout prior to v1.0 KV-keyframe video-stream memory integration.
 fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
     if !should_run_provisional_gcso() {
         return;
@@ -2610,7 +2610,7 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
 
     group.throughput(Throughput::Bytes(tensor_bytes as u64));
 
-    // 1. Provisional 2-Origin Composite Manifold Gateway + SO(2)-Fused RIPA/PSPM Steering + `.gcso` Crystallization
+    // 1. Provisional 2-Origin Composite Manifold Gateway + SO(2)-Fused RIPA/sub-head router Steering + `.gcso` Crystallization
     group.bench_function("gateway_signal_steer_and_crystallize_attractor_64h", |b| {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
@@ -2840,7 +2840,7 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
                 rec
             });
             let mut storage_buf = AlignedBuffer64::<u8, 512>::new([0u8; 512]);
-            CrystallizedAttractorRecord::write_records_to_zimms_bytes(
+            CrystallizedAttractorRecord::write_records_to_container_bytes(
                 &records,
                 &mut storage_buf.data,
             )
@@ -2857,11 +2857,12 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
                 reset_trail_fast(&mut trail, &base_trail);
                 gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
                 let mut logits_mut = gw_logits.as_aligned_slice_mut();
-                let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
-                    &storage_buf.data,
-                    4usize,
-                )
-                .unwrap();
+                let zero_copy_recs =
+                    CrystallizedAttractorRecord::slice_from_container_bytes_zero_copy(
+                        &storage_buf.data,
+                        4usize,
+                    )
+                    .unwrap();
                 let _ = engine
                     .steer_gateway_signal_safe(
                         zero_copy_recs,
@@ -2878,11 +2879,12 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
                 reset_trail_fast(&mut trail, &base_trail);
                 gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
                 let mut logits_mut = gw_logits.as_aligned_slice_mut();
-                let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
-                    black_box(&storage_buf.data),
-                    black_box(4usize),
-                )
-                .unwrap();
+                let zero_copy_recs =
+                    CrystallizedAttractorRecord::slice_from_container_bytes_zero_copy(
+                        black_box(&storage_buf.data),
+                        black_box(4usize),
+                    )
+                    .unwrap();
                 let res = engine
                     .steer_gateway_signal_safe(
                         black_box(zero_copy_recs),
@@ -3000,7 +3002,7 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
             let mut trail = trails[0];
             for _ in 0..8 {
                 let view =
-                    GcsoFourSectionView::from_zimms_bytes_zero_copy(&container.data[..written])
+                    GcsoFourSectionView::from_container_bytes_zero_copy(&container.data[..written])
                         .unwrap();
                 reset_trail_fast(&mut trail, &view.trails[0]);
                 let _ = engine
@@ -3016,7 +3018,7 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
             }
 
             b.iter(|| {
-                let view = GcsoFourSectionView::from_zimms_bytes_zero_copy(black_box(
+                let view = GcsoFourSectionView::from_container_bytes_zero_copy(black_box(
                     &container.data[..written],
                 ))
                 .unwrap();

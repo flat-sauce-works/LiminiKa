@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Concrete 64-byte cacheline-aligned [`ResidualAdapterEngine`] `Pod` state descriptor applying the
-//! [`PspmRouter`], [`SrlAdapter`], [`VisualAttentionSteering`], [`PersonaPatcher`], and
+//! [`SubHeadRouter`], [`Rank1ResidualAdapter`], [`VisualAttentionSteering`], [`PersonaPatcher`], and
 //! [`L2pSvdProjector`] traits from [`crate::traits`].
 
 #![forbid(unsafe_op_in_unsafe_fn)]
@@ -29,27 +29,27 @@
 #![allow(clippy::ifs_same_cond)]
 #![allow(clippy::field_reassign_with_default)]
 
-use crate::abi::{gcso_srl_descriptor_t, GCSO_ERROR_INVALID_ARGUMENT};
+use crate::abi::{gcso_rank1_residual_descriptor_t, GCSO_ERROR_INVALID_ARGUMENT};
 use crate::traits::branchless::circular_r_bar_from_words_64;
 use crate::traits::gateway::project_bytes_swar_to_words_64;
 use crate::traits::primitives::{branchless_clamp_f32, branchless_is_finite_f32};
 use crate::traits::{
-    GcsoResult, L2pSvdProjector, PersonaPatcher, Pod, PspmRouter, SrlAdapter,
+    GcsoResult, L2pSvdProjector, PersonaPatcher, Pod, Rank1ResidualAdapter, SubHeadRouter,
     VisualAttentionSteering,
 };
 use core::mem::{align_of, offset_of, size_of};
 
 /// 64-byte cacheline-aligned Plain Old Data (`Pod`) descriptor and execution engine for
-/// Synchronous Residual Layer (SRL) Rank-1 outer product adapters, PSPM sub-head routing,
+/// Synchronous Residual Layer (Rank-1 residual) Rank-1 outer product adapters, sub-head router sub-head routing,
 /// Visual 2D/3D RoPE steering, and L2P-SVDLoRA basis projection.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResidualAdapterEngine {
-    /// Embedded 64-byte C-ABI v0.1.1 SRL Rank-1 descriptor (`offset 0..64`).
-    pub descriptor: gcso_srl_descriptor_t,
+    /// Embedded 64-byte C-ABI v0.1.1 Rank-1 residual Rank-1 descriptor (`offset 0..64`).
+    pub descriptor: gcso_rank1_residual_descriptor_t,
 }
 
-// SAFETY: `ResidualAdapterEngine` is a `#[repr(C, align(64))]` wrapper around the 64-byte `Pod` `gcso_srl_descriptor_t`.
+// SAFETY: `ResidualAdapterEngine` is a `#[repr(C, align(64))]` wrapper around the 64-byte `Pod` `gcso_rank1_residual_descriptor_t`.
 unsafe impl Pod for ResidualAdapterEngine {}
 
 impl Default for ResidualAdapterEngine {
@@ -65,7 +65,7 @@ impl ResidualAdapterEngine {
     #[must_use]
     pub const fn new(scale_factor: f32, layer_idx: u32, rank: u32) -> Self {
         Self {
-            descriptor: gcso_srl_descriptor_t {
+            descriptor: gcso_rank1_residual_descriptor_t {
                 layer_idx,
                 rank: if rank == 0 { 1 } else { rank },
                 u_vector_ptr: 0,
@@ -78,7 +78,7 @@ impl ResidualAdapterEngine {
         }
     }
 
-    /// Validates the embedded `gcso_srl_descriptor_t` fields (`rank > 0` and finite positive `scale_factor`).
+    /// Validates the embedded `gcso_rank1_residual_descriptor_t` fields (`rank > 0` and finite positive `scale_factor`).
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `rank == 0` or `scale_factor` is non-positive/non-finite.
@@ -94,8 +94,8 @@ impl ResidualAdapterEngine {
     }
 }
 
-impl PspmRouter for ResidualAdapterEngine {}
-impl SrlAdapter for ResidualAdapterEngine {}
+impl SubHeadRouter for ResidualAdapterEngine {}
+impl Rank1ResidualAdapter for ResidualAdapterEngine {}
 impl VisualAttentionSteering for ResidualAdapterEngine {}
 impl L2pSvdProjector for ResidualAdapterEngine {}
 impl PersonaPatcher for ResidualAdapterEngine {
@@ -120,7 +120,7 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abi::{gcso_paged_bitmask_t, gcso_pspm_config_t, gcso_q7_t, gcso_tagged_ptr_t};
+    use crate::abi::{gcso_paged_bitmask_t, gcso_q7_t, gcso_subhead_config_t, gcso_tagged_ptr_t};
     use crate::traits::aligned::{AlignedBuffer32, AlignedBuffer64};
     use crate::traits::primitives::{
         ACTION_PRESET_FULL_ORCHESTRATION, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
@@ -141,15 +141,18 @@ mod tests {
         }
     }
     impl DynamicLayerSkipper for DummyRopeEngine {}
-    impl PspmRouter for DummyRopeEngine {}
-    impl SrlAdapter for DummyRopeEngine {}
+    impl SubHeadRouter for DummyRopeEngine {}
+    impl Rank1ResidualAdapter for DummyRopeEngine {}
     impl VisualAttentionSteering for DummyRopeEngine {}
 
     #[test]
     fn test_residual_adapter_engine_pod_and_persona_patch() {
         let mut engine = ResidualAdapterEngine::default();
         assert_eq!(engine.validate(), Ok(()));
-        assert_eq!(engine.apply_patch(b"LiminiKa-SRL-Patch"), Ok(()));
+        assert_eq!(
+            engine.apply_patch(b"LiminiKa-Rank-1 residual-Patch"),
+            Ok(())
+        );
         assert!(engine.descriptor.scale_factor >= 0.25);
     }
 
@@ -159,7 +162,7 @@ mod tests {
             head_dim: 12,
             num_heads: 8,
         };
-        let pspm_cfg = gcso_pspm_config_t {
+        let subhead_cfg = gcso_subhead_config_t {
             num_fact_heads: 2,
             num_logic_heads: 4,
             num_explore_heads: 2,
@@ -174,7 +177,7 @@ mod tests {
             &mut q_pspm.as_aligned_slice_mut(),
             &[16i8; 64],
             DEFAULT_RIPA_CLAMP_MAX_RAD,
-            &pspm_cfg,
+            &subhead_cfg,
             &bank.relax_slice::<16>(),
             ATTRACTOR_SLOT_KNOWLEDGE,
             ATTRACTOR_SLOT_PERSONA,
@@ -193,7 +196,7 @@ mod tests {
         let u_srl = AlignedBuffer32::new([0.5_f32; 8]);
         let v_srl = AlignedBuffer32::new([0.25_f32; 8]);
         let g_srl = AlignedBuffer32::new([2.0_f32; 8]);
-        let desc = gcso_srl_descriptor_t {
+        let desc = gcso_rank1_residual_descriptor_t {
             layer_idx: 0,
             rank: 1,
             u_vector_ptr: u_srl.as_aligned_slice().as_ptr() as u64,
@@ -219,7 +222,7 @@ mod tests {
         assert!(injected);
         assert!((y_srl.data[0] - 2.0).abs() < 1.0e-5);
 
-        let desc_with_gain = gcso_srl_descriptor_t {
+        let desc_with_gain = gcso_rank1_residual_descriptor_t {
             gain_scalar_ptr: g_srl.as_aligned_slice().as_ptr() as u64,
             ..desc
         };

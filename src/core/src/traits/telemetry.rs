@@ -63,7 +63,7 @@ use super::primitives::{
 use super::primitives::branchless_rad_to_qdps_step_u8;
 use super::primitives::{
     ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE,
-    ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_MODE_SUBHEAD_ROUTE, ACTION_MODE_RANK1_INJECT, ACTION_PRESET_EXPRESS_PHASE,
     ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_REPULSION_ESCAPE,
     ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION, LEDGER_HISTORY_LEN, FAST_PATH_SHORTCUT_SLOTS,
     DEFAULT_ENTROPY_EPS, GcsoResult, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PAGED_BITMASK_BITS,
@@ -129,10 +129,10 @@ pub const LEDGER_METRIC_PHASE_STEERED: u8 = 1 << 1;
 pub const LEDGER_METRIC_REPULSION_APPLIED: u8 = 1 << 2;
 /// FastPathLedger telemetry metric bit (`0x08`): Intermediate layer skipped with SWAR phase compensation.
 pub const LEDGER_METRIC_LAYER_SKIP_COMPENSATED: u8 = 1 << 3;
-/// FastPathLedger telemetry metric bit (`0x10`): PSPM single-pass sub-head routing executed.
-pub const LEDGER_METRIC_PSPM_ROUTED: u8 = 1 << 4;
-/// FastPathLedger telemetry metric bit (`0x20`): SRL Dynamic Rank-1 residual adapter injected.
-pub const LEDGER_METRIC_SRL_INJECTED: u8 = 1 << 5;
+/// FastPathLedger telemetry metric bit (`0x10`): sub-head router single-pass sub-head routing executed.
+pub const LEDGER_METRIC_SUBHEAD_ROUTED: u8 = 1 << 4;
+/// FastPathLedger telemetry metric bit (`0x20`): Rank-1 residual Dynamic Rank-1 residual adapter injected.
+pub const LEDGER_METRIC_RANK1_INJECTED: u8 = 1 << 5;
 /// FastPathLedger telemetry metric bit (`0x40`): Lazy Phase Unwrapping relative shift applied.
 pub const LEDGER_METRIC_LAZY_UNWRAP_APPLIED: u8 = 1 << 6;
 /// FastPathLedger telemetry metric bit (`0x80`): Unified-field or cross-slot attractor synergy / mutual inhibition active.
@@ -1704,7 +1704,7 @@ pub trait StigmergicActionPtrOps: Copy {
         repulsion_triggered: bool,
         dominant_attractor_slot: u8,
         low_entropy_skip_thresh: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
     ) -> Self;
 }
 
@@ -1751,7 +1751,7 @@ impl StigmergicActionPtrOps for gcso_tagged_ptr_t {
         repulsion_triggered: bool,
         dominant_attractor_slot: u8,
         low_entropy_skip_thresh: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
     ) -> Self {
         let finite_h = branchless_is_finite_f32(entropy_h_tilde);
         let clean_h = branchless_select_f32(finite_h, entropy_h_tilde, 0.0);
@@ -1764,9 +1764,9 @@ impl StigmergicActionPtrOps for gcso_tagged_ptr_t {
         let m_skip = branchless_select_u8(can_skip, ACTION_MODE_LAYER_SKIP, 0);
         let m_rep = branchless_select_u8(repulsion_triggered, ACTION_MODE_PHASE_REPULSE, 0);
         let need_pspm = (clean_h > low_entropy_skip_thresh) | repulsion_triggered;
-        let m_pspm = branchless_select_u8(need_pspm, ACTION_MODE_PSPM_ROUTE, 0);
-        let need_srl = (clean_rho >= high_density_srl_thresh) & (high_density_srl_thresh > 0.0);
-        let m_srl = branchless_select_u8(need_srl, ACTION_MODE_SRL_INJECT, 0);
+        let m_pspm = branchless_select_u8(need_pspm, ACTION_MODE_SUBHEAD_ROUTE, 0);
+        let need_srl = (clean_rho >= high_density_rank1_thresh) & (high_density_rank1_thresh > 0.0);
+        let m_srl = branchless_select_u8(need_srl, ACTION_MODE_RANK1_INJECT, 0);
 
         let next_mode = m_dpsr | m_skip | m_rep | m_pspm | m_srl;
         let next_slot = branchless_select_u8(
@@ -2246,7 +2246,7 @@ pub trait StigmergicTrailOps {
         repulsion_triggered: bool,
         dominant_attractor_slot: u8,
         low_entropy_skip_thresh: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
     ) -> gcso_tagged_ptr_t;
     /// Evaluates circular phase coherence $\mathcal{C}_{\mathrm{phase}} \in [-1.0, 1.0]$ with `slot_phases`.
     fn phase_coherence_with(&self, slot_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> f32;
@@ -2899,7 +2899,7 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         repulsion_triggered: bool,
         dominant_attractor_slot: u8,
         low_entropy_skip_thresh: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
     ) -> gcso_tagged_ptr_t {
         let evolved = gcso_tagged_ptr_t(self.current_ptr).evolve_mode_stigmergically(
             self.stigmergic_density,
@@ -2907,7 +2907,7 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
             repulsion_triggered,
             dominant_attractor_slot,
             low_entropy_skip_thresh,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
         );
         self.current_ptr = evolved.raw();
         let preserve_unified_anchor = (self.target_anchor_id != 0) & (!repulsion_triggered);
@@ -5274,7 +5274,7 @@ pub trait FastPathLedger: BranchlessKernel {
         Ok(())
     }
 
-    /// Evaluates telemetry ledger to auto-tune PSPM ratios, RIPA clamps, and EDBC thresholds.
+    /// Evaluates telemetry ledger to auto-tune sub-head router ratios, RIPA clamps, and EDBC thresholds.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_STATE`] if `slot` is in an incompatible mode.

@@ -679,7 +679,7 @@ impl MultiAttractorSpace {
         Ok(size_of::<AttractorGrowthSnapshot>())
     }
 
-    /// Zero-copy casts, verifies CRC32, and restores `self` from a 64-byte-aligned `.gcso` ZIMMS
+    /// Zero-copy casts, verifies CRC32, and restores `self` from a 64-byte-aligned `.gcso` mapped-storage
     /// byte buffer at `offset`, returning the zero-copy `&'a AttractorGrowthSnapshot` reference.
     ///
     /// # Errors

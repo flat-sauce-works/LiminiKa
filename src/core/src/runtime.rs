@@ -32,10 +32,10 @@
 
 use crate::abi::{
     gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_edbc_state_t,
-    gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t,
-    gcso_pspm_config_t, gcso_q7_t, gcso_snapshot_header_t, gcso_srl_descriptor_t,
-    gcso_tagged_ptr_t, gcso_zimms_descriptor_t, GCSO_CAP_CPU_BASELINE, GCSO_CAP_CUDA_BACKEND,
-    GCSO_CAP_METAL_BACKEND, GCSO_CAP_VULKAN_BACKEND,
+    gcso_kv_keyframe_header_t, gcso_ledger_slot_t, gcso_mapped_storage_descriptor_t,
+    gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t, gcso_rank1_residual_descriptor_t,
+    gcso_snapshot_header_t, gcso_subhead_config_t, gcso_tagged_ptr_t, GCSO_CAP_CPU_BASELINE,
+    GCSO_CAP_CUDA_BACKEND, GCSO_CAP_METAL_BACKEND, GCSO_CAP_VULKAN_BACKEND,
 };
 use crate::action_hub::{
     ActionHubEngine, ActionOrchestrationReport, StigmergicThresholds, ACTION_HUB_INLINE_TRAILS,
@@ -50,11 +50,11 @@ use crate::traits::{
     ContrastivePhaseBloomFilter, DnpPacketDispatcher, DynamicLayerSkipper, EdbcBranchController,
     EntropyEvaluator, EntropyGatedPhaseLookup, FastPathLedger, FractalCascadeCoordinator,
     FullStackGcsoEngine, GatewayFrame, GatewayPhaseSteeringExt, GcsoResult, GcsoRuntimeContext,
-    HierarchicalTreeTable, HotPathObserver, L2pSvdProjector, ManifoldGatewaySignal,
-    MultiDomainAttractorSpace, PersonaPatcher, PhaseSteering, Pod, PointerActionHub, PprcCache,
-    PspmRouter, SheafCohomologyEvaluator, SrlAdapter, StigmergicActionPtrOps,
-    StigmergicCohomologyCoordinator, StigmergicTrailOps, SwarmCellChunk, SystemCapabilityQuery,
-    SystemConstraintSignal, VisualAttentionSteering, ZimmsStorage, ACTION_MODE_LAYER_SKIP,
+    HierarchicalTreeTable, HotPathObserver, KvKeyframeCache, L2pSvdProjector,
+    ManifoldGatewaySignal, MappedStorage, MultiDomainAttractorSpace, PersonaPatcher, PhaseSteering,
+    Pod, PointerActionHub, Rank1ResidualAdapter, SheafCohomologyEvaluator, StigmergicActionPtrOps,
+    StigmergicCohomologyCoordinator, StigmergicTrailOps, SubHeadRouter, SwarmCellChunk,
+    SystemCapabilityQuery, SystemConstraintSignal, VisualAttentionSteering, ACTION_MODE_LAYER_SKIP,
     ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE,
     DEFAULT_SLOT_COUPLING_MATRIX_8X8, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
@@ -379,10 +379,10 @@ impl Config {
 // ===================================================================
 
 /// High-level safe Rust runtime context integrating [`ActionHub`],
-/// [`HotPathObserver`] (Micro Observer: DPSR, FastPathLedger, PSPM, SRL, Contrastive Phase Bloom Filter,
+/// [`HotPathObserver`] (Micro Observer: DPSR, FastPathLedger, sub-head router, Rank-1 residual, Contrastive Phase Bloom Filter,
 /// Limina bridging, and Bayesian pointer-trail Attention modulation), and [`ColdPathObserver`]
 /// (Macro Observer: EDBC, Single Unified Attractor Manifold, 8-Lane Working Cache Window,
-/// Sheaf Cohomology $H^1$, L2P-SVD, PPRC, and ZIMMS Storage).
+/// Sheaf Cohomology $H^1$, L2P-SVD, KV-keyframe, and mapped-storage Storage).
 ///
 /// Because `RuntimeContext` implements all foundational Nano/Micro/Mezzo/Macro traits in
 /// [`crate::traits`], it automatically receives the blanket implementations of:
@@ -1015,12 +1015,15 @@ impl RuntimeContext {
         input_tagged_ptr: gcso_tagged_ptr_t,
         token_z_score: f32,
         low_entropy_skip_thresh: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         layer_skip_comp_profile: Option<&AlignedSlice16<'_, gcso_q7_t>>,
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        pspm_config: Option<&gcso_pspm_config_t>,
-        srl_activation_and_desc: Option<(&AlignedSlice32<'_, f32>, &gcso_srl_descriptor_t)>,
+        subhead_config: Option<&gcso_subhead_config_t>,
+        rank1_activation_and_desc: Option<(
+            &AlignedSlice32<'_, f32>,
+            &gcso_rank1_residual_descriptor_t,
+        )>,
         trail_out: &mut gcso_pointer_trail_t,
     ) -> Result<(gcso_tagged_ptr_t, u8)> {
         let mut edbc_state = gcso_edbc_state_t::default();
@@ -1050,7 +1053,7 @@ impl RuntimeContext {
             edbc_state.moving_z_entropy,
             dominant_slot_u8,
             low_entropy_skip_thresh,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
             rep_thresh,
             rep_scale,
             qdps_min,
@@ -1063,8 +1066,8 @@ impl RuntimeContext {
             layer_skip_comp_profile,
             query_tensor,
             key_tensor,
-            pspm_config,
-            srl_activation_and_desc,
+            subhead_config,
+            rank1_activation_and_desc,
             trail_out,
         )
     }
@@ -1088,12 +1091,15 @@ impl RuntimeContext {
         inhibition_strength: f32,
         token_z_score: f32,
         low_entropy_skip_thresh: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         layer_skip_comp_profile: Option<&AlignedSlice16<'_, gcso_q7_t>>,
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        pspm_config: Option<&gcso_pspm_config_t>,
-        srl_activation_and_desc: Option<(&AlignedSlice32<'_, f32>, &gcso_srl_descriptor_t)>,
+        subhead_config: Option<&gcso_subhead_config_t>,
+        rank1_activation_and_desc: Option<(
+            &AlignedSlice32<'_, f32>,
+            &gcso_rank1_residual_descriptor_t,
+        )>,
         trail_out: &mut gcso_pointer_trail_t,
     ) -> Result<(gcso_tagged_ptr_t, u8, f32, f32)> {
         let mut edbc_state = gcso_edbc_state_t::default();
@@ -1145,7 +1151,7 @@ impl RuntimeContext {
             edbc_state.moving_z_entropy,
             dominant_slot_u8,
             low_entropy_skip_thresh,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
             rep_thresh,
             rep_scale,
             qdps_min,
@@ -1158,8 +1164,8 @@ impl RuntimeContext {
             layer_skip_comp_profile,
             query_tensor,
             key_tensor,
-            pspm_config,
-            srl_activation_and_desc,
+            subhead_config,
+            rank1_activation_and_desc,
             trail_out,
         )?;
         Ok((evolved_ptr, density, damped_pull, coherence))
@@ -1172,7 +1178,7 @@ impl RuntimeContext {
         moving_z_entropy: f32,
         dominant_slot_u8: u8,
         low_entropy_skip_thresh: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         rep_thresh: u8,
         rep_scale: u8,
         qdps_min: f32,
@@ -1185,8 +1191,11 @@ impl RuntimeContext {
         layer_skip_comp_profile: Option<&AlignedSlice16<'_, gcso_q7_t>>,
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        pspm_config: Option<&gcso_pspm_config_t>,
-        srl_activation_and_desc: Option<(&AlignedSlice32<'_, f32>, &gcso_srl_descriptor_t)>,
+        subhead_config: Option<&gcso_subhead_config_t>,
+        rank1_activation_and_desc: Option<(
+            &AlignedSlice32<'_, f32>,
+            &gcso_rank1_residual_descriptor_t,
+        )>,
         trail_out: &mut gcso_pointer_trail_t,
     ) -> Result<(gcso_tagged_ptr_t, u8)> {
         let (density, repulsion_active) = self
@@ -1202,7 +1211,7 @@ impl RuntimeContext {
             repulsion_active,
             dominant_slot_u8,
             low_entropy_skip_thresh,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
         );
 
         let mut trail_w = *trail_phase_words_ref(trail_out);
@@ -1232,8 +1241,8 @@ impl RuntimeContext {
         let extra_metrics = self.apply_optional_pspm_and_srl(
             query_tensor,
             head_dim,
-            pspm_config,
-            srl_activation_and_desc,
+            subhead_config,
+            rank1_activation_and_desc,
         )?;
         let metric = base_metric_bits
             | branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
@@ -1437,7 +1446,7 @@ impl RuntimeContext {
         header.action_hub_offset = action_hub_off as u64;
         header.attractor_field_offset = action_hub_off as u64;
         header.dpsr_state_offset = edbc_off as u64;
-        header.srl_state_offset = edbc_off as u64;
+        header.rank1_state_offset = edbc_off as u64;
         header.edbc_state_offset = edbc_off as u64;
         header.ledger_slot_offset = daes_off as u32;
         finalize_snapshot_header_crc32(&mut header, &buffer[..total_required])?;
@@ -1605,7 +1614,7 @@ impl GcsoRuntimeContext for RuntimeContext {
     fn seek_to_token(
         &mut self,
         token_index: u32,
-        header_out: &mut gcso_pprc_keyframe_header_t,
+        header_out: &mut gcso_kv_keyframe_header_t,
     ) -> Result<()> {
         header_out.token_index = token_index;
         header_out.frame_type = 0;
@@ -2029,12 +2038,12 @@ impl PersonaPatcher for RuntimeContext {
     }
 }
 
-impl PprcCache for RuntimeContext {
+impl KvKeyframeCache for RuntimeContext {
     #[inline]
     fn seek_to_token(
         &mut self,
         token_index: u32,
-        header_out: &mut gcso_pprc_keyframe_header_t,
+        header_out: &mut gcso_kv_keyframe_header_t,
     ) -> Result<()> {
         header_out.token_index = token_index;
         header_out.frame_type = 0;
@@ -2045,14 +2054,14 @@ impl PprcCache for RuntimeContext {
 impl EntropyGatedPhaseLookup for RuntimeContext {}
 impl DynamicLayerSkipper for RuntimeContext {}
 impl VisualAttentionSteering for RuntimeContext {}
-impl PspmRouter for RuntimeContext {}
-impl SrlAdapter for RuntimeContext {}
+impl SubHeadRouter for RuntimeContext {}
+impl Rank1ResidualAdapter for RuntimeContext {}
 impl SheafCohomologyEvaluator for RuntimeContext {}
 impl HierarchicalTreeTable for RuntimeContext {}
 impl L2pSvdProjector for RuntimeContext {}
 impl DnpPacketDispatcher for RuntimeContext {}
 
-impl ZimmsStorage for RuntimeContext {
+impl MappedStorage for RuntimeContext {
     #[inline]
     fn serialize_snapshot(&self, buffer: &mut [u8], required_size: &mut usize) -> Result<()> {
         self.serialize_to_bytes(buffer, required_size)
@@ -2073,7 +2082,7 @@ impl ZimmsStorage for RuntimeContext {
     fn open_mmap(
         &mut self,
         file_path: &str,
-        descriptor_out: &mut gcso_zimms_descriptor_t,
+        descriptor_out: &mut gcso_mapped_storage_descriptor_t,
     ) -> Result<()> {
         if file_path.is_empty() {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
@@ -2086,7 +2095,7 @@ impl ZimmsStorage for RuntimeContext {
     }
 
     #[inline]
-    fn close_mmap(&mut self, descriptor: &mut gcso_zimms_descriptor_t) -> Result<()> {
+    fn close_mmap(&mut self, descriptor: &mut gcso_mapped_storage_descriptor_t) -> Result<()> {
         descriptor.mapped_address = 0;
         descriptor.file_size_bytes = 0;
         descriptor.fd_handle = -1;
@@ -2291,7 +2300,7 @@ mod tests {
         assert_eq!(ctx.abi_version_string(), "0.1.1");
         assert_ne!(ctx.query_capability() & GCSO_CAP_CPU_BASELINE, 0);
 
-        let mut desc = gcso_zimms_descriptor_t::default();
+        let mut desc = gcso_mapped_storage_descriptor_t::default();
         assert!(ctx.open_mmap("test.gcso", &mut desc).is_ok());
         assert_eq!(desc.fd_handle, 3);
         assert_eq!(
@@ -2350,7 +2359,7 @@ mod tests {
         assert!((coh - 1.0).abs() < 1e-4);
         assert!(pull >= 6.0);
         assert_ne!(trail.flags & TRAIL_FLAG_SYNERGY_RESONANCE, 0);
-        assert!(evolved_ptr.has_action_mode(ACTION_MODE_DPSR_STEER | ACTION_MODE_SRL_INJECT));
+        assert!(evolved_ptr.has_action_mode(ACTION_MODE_DPSR_STEER | ACTION_MODE_RANK1_INJECT));
 
         // Verify Single-Manifold Unified-Field cascade & Autonomous Pointer-Trail Attention cascade
         let unified_anchors = [[0i8; MAX_ATTENTION_HEADS], [32i8; MAX_ATTENTION_HEADS]];

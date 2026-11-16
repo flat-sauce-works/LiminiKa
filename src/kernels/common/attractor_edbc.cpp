@@ -532,7 +532,7 @@ gcso_edbc_controller_destroy(gcso_edbc_controller_handle_t controller) GCSO_NOEX
 }
 
 // ===================================================================
-// Persona Patch & ZIMMS Storage Mechanics Implementation
+// Persona Patch & mapped-storage Storage Mechanics Implementation
 // ===================================================================
 
 /**
@@ -573,13 +573,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_persona_apply_patch(gcso_context_handle_t 
  * @brief Zero-Overhead In-Memory Mapped Storage: Maps .gcso container payload using zero-copy mmap.
  *
  * @param file_path Null-terminated path string to target .gcso file.
- * @param zimms_out Descriptor structure pointer to populate.
- * @return GCSO_SUCCESS or GCSO_ERROR_ZIMMS_MAPPING_FAILED.
+ * @param storage_out Descriptor structure pointer to populate.
+ * @return GCSO_SUCCESS or GCSO_ERROR_MAPPED_STORAGE_FAILED.
  */
 GCSO_API gcso_status_t GCSO_CALL
-gcso_zimms_open_mmap(const char* GCSO_RESTRICT file_path,
-                     gcso_zimms_descriptor_t* GCSO_RESTRICT zimms_out) GCSO_NOEXCEPT {
-    if (GCSO_UNLIKELY(file_path == nullptr || zimms_out == nullptr)) {
+gcso_mapped_storage_open_mmap(const char* GCSO_RESTRICT file_path,
+                     gcso_mapped_storage_descriptor_t* GCSO_RESTRICT storage_out) GCSO_NOEXCEPT {
+    if (GCSO_UNLIKELY(file_path == nullptr || storage_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     if (GCSO_UNLIKELY(file_path[0] == '\0')) {
@@ -587,13 +587,13 @@ gcso_zimms_open_mmap(const char* GCSO_RESTRICT file_path,
     }
     try {
         if (GCSO_UNLIKELY(
-                reinterpret_cast<uintptr_t>(zimms_out) % alignof(gcso_zimms_descriptor_t) != 0)) {
+                reinterpret_cast<uintptr_t>(storage_out) % alignof(gcso_mapped_storage_descriptor_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
-        std::memset(zimms_out, 0, sizeof(gcso_zimms_descriptor_t));
-        zimms_out->mapped_address = 0x10000000ULL;
-        zimms_out->file_size_bytes = 4096ULL;
-        zimms_out->fd_handle = 3;
+        std::memset(storage_out, 0, sizeof(gcso_mapped_storage_descriptor_t));
+        storage_out->mapped_address = 0x10000000ULL;
+        storage_out->file_size_bytes = 4096ULL;
+        storage_out->fd_handle = 3;
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -601,23 +601,23 @@ gcso_zimms_open_mmap(const char* GCSO_RESTRICT file_path,
 }
 
 /**
- * @brief Unmaps zero-copy ZIMMS memory handle and releases Direct DMA resources.
+ * @brief Unmaps zero-copy mapped-storage memory handle and releases Direct DMA resources.
  * Safe No-Op if NULL.
  *
- * @param zimms_desc Descriptor structure pointer to clear.
+ * @param storage_desc Descriptor structure pointer to clear.
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
 GCSO_API gcso_status_t GCSO_CALL
-gcso_zimms_close_mmap(gcso_zimms_descriptor_t* GCSO_RESTRICT zimms_desc) GCSO_NOEXCEPT {
-    if (GCSO_UNLIKELY(zimms_desc == nullptr)) {
+gcso_mapped_storage_close_mmap(gcso_mapped_storage_descriptor_t* GCSO_RESTRICT storage_desc) GCSO_NOEXCEPT {
+    if (GCSO_UNLIKELY(storage_desc == nullptr)) {
         return GCSO_SUCCESS;
     }
     try {
         if (GCSO_UNLIKELY(
-                reinterpret_cast<uintptr_t>(zimms_desc) % alignof(gcso_zimms_descriptor_t) != 0)) {
+                reinterpret_cast<uintptr_t>(storage_desc) % alignof(gcso_mapped_storage_descriptor_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
-        std::memset(zimms_desc, 0, sizeof(gcso_zimms_descriptor_t));
+        std::memset(storage_desc, 0, sizeof(gcso_mapped_storage_descriptor_t));
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;

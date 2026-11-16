@@ -301,20 +301,20 @@ struct GCSO_ALIGNAS(16) gcso_dpsr_kernel_opaque {
 };
 
 /**
- * @brief Internal Phase-Steered Parallel Multi-head router (matching gcso_pspm_router_opaque).
+ * @brief Internal Phase-Steered Parallel Multi-head router (matching gcso_subhead_router_opaque).
  * Aligned to 16 bytes.
  */
-struct GCSO_ALIGNAS(16) gcso_pspm_router_opaque {
-    gcso_pspm_config_t config; ///< Sub-head group allocation configuration.
+struct GCSO_ALIGNAS(16) gcso_subhead_router_opaque {
+    gcso_subhead_config_t config; ///< Sub-head group allocation configuration.
     bool is_active;            ///< Lifecycle state flag.
 };
 
 /**
- * @brief Internal Sparse Residual Adapter Layer layout (matching gcso_srl_adapter_opaque).
+ * @brief Internal Sparse Residual Adapter Layer layout (matching gcso_rank1_residual_opaque).
  * Aligned to 32 bytes.
  */
-struct GCSO_ALIGNAS(32) gcso_srl_adapter_opaque {
-    gcso_srl_descriptor_t descriptor; ///< Rank-1 outer product descriptor layout.
+struct GCSO_ALIGNAS(32) gcso_rank1_residual_opaque {
+    gcso_rank1_residual_descriptor_t descriptor; ///< Rank-1 outer product descriptor layout.
     bool is_active;                   ///< Lifecycle state flag.
 };
 

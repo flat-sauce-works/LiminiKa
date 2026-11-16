@@ -373,7 +373,7 @@ impl ManifoldGatewaySignal for CrystallizedAnchorRecord {
 }
 
 /// Self-contained 8,448-byte (`8.25 KB`, 132 cachelines) 64-byte-aligned [`Pod`] snapshot structure
-/// for `.gcso` ZIMMS persistence and Steam Workshop distribution of a grown personality.
+/// for `.gcso` mapped-storage persistence and Steam Workshop distribution of a grown personality.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AttractorGrowthSnapshot {
@@ -749,7 +749,7 @@ impl AttractorGrowthSnapshot {
     }
 
     /// Zero-copy casts and verifies an `AttractorGrowthSnapshot` directly from a 64-byte-aligned
-    /// `.gcso` ZIMMS memory-mapped slice at `offset`.
+    /// `.gcso` mapped-storage memory-mapped slice at `offset`.
     ///
     /// # Errors
     /// Returns [`crate::abi::GCSO_ERROR_BUFFER_TOO_SMALL`] if `bytes` cannot hold `size_of::<Self>()`,

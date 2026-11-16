@@ -29,7 +29,7 @@
 //! 3. **Zero-Copy `.gcso` `Pod` Snapshot Persistence (`CrystallizedAnchorRecord` & `AttractorGrowthSnapshot`)**:
 //!    Crystallized sample points, synthesized persona phase profiles, and concentration $\kappa_c$
 //!    are packed into an 8,448-byte (8.25 KB) 64-byte-aligned [`Pod`] snapshot (`AttractorGrowthSnapshot`)
-//!    with branchless IEEE 802.3 CRC32 verification for zero-copy ZIMMS `.gcso` distribution.
+//!    with branchless IEEE 802.3 CRC32 verification for zero-copy mapped-storage `.gcso` distribution.
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]

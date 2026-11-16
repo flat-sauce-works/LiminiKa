@@ -78,7 +78,7 @@ GCSO_NODISCARD GCSO_API uint8_t GCSO_CALL gcso_tagged_ptr_unpack_attractor_slot(
 GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL gcso_tagged_ptr_evolve_mode_stigmergically(
     uint64_t ptr, float stigmergic_density, float entropy_h_tilde, uint8_t repulsion_triggered,
     uint8_t dominant_attractor_slot, float low_entropy_skip_thresh,
-    float high_density_srl_thresh) GCSO_NOEXCEPT {
+    float high_density_rank1_thresh) GCSO_NOEXCEPT {
     const uint64_t addr = gcso_tagged_ptr_unpack_addr_inline(ptr);
     gcso_q7_t phase = gcso_tagged_ptr_unpack_phase_inline(ptr);
 
@@ -87,16 +87,16 @@ GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL gcso_tagged_ptr_evolve_mode_stigmergi
 
     if (repulsion_triggered != 0U) {
         slot = GCSO_ATTRACTOR_SLOT_REPULSION;
-        mode = static_cast<uint8_t>(GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_PSPM_ROUTE |
+        mode = static_cast<uint8_t>(GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_SUBHEAD_ROUTE |
                                     GCSO_ACTION_MODE_PHASE_REPULSE);
         phase = (phase == -128) ? static_cast<gcso_q7_t>(127) : static_cast<gcso_q7_t>(-phase);
     } else if (entropy_h_tilde < low_entropy_skip_thresh && stigmergic_density >= 0.80f) {
         mode = GCSO_ACTION_MODE_LAYER_SKIP;
-    } else if (stigmergic_density >= high_density_srl_thresh) {
-        mode = static_cast<uint8_t>(GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_PSPM_ROUTE |
-                                    GCSO_ACTION_MODE_SRL_INJECT);
+    } else if (stigmergic_density >= high_density_rank1_thresh) {
+        mode = static_cast<uint8_t>(GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_SUBHEAD_ROUTE |
+                                    GCSO_ACTION_MODE_RANK1_INJECT);
     } else if (stigmergic_density >= 0.50f || entropy_h_tilde >= 0.35f) {
-        mode = static_cast<uint8_t>(GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_PSPM_ROUTE);
+        mode = static_cast<uint8_t>(GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_SUBHEAD_ROUTE);
     }
 
     return gcso_tagged_ptr_pack_action(addr, slot, mode, phase);
@@ -186,12 +186,12 @@ GCSO_NODISCARD GCSO_API const char* GCSO_CALL gcso_status_to_string(gcso_status_
             return "GCSO_ERROR_EDBC_SINGULARITY";
         case GCSO_ERROR_CONTAINER_CORRUPTED:
             return "GCSO_ERROR_CONTAINER_CORRUPTED";
-        case GCSO_ERROR_ZIMMS_MAPPING_FAILED:
-            return "GCSO_ERROR_ZIMMS_MAPPING_FAILED";
-        case GCSO_ERROR_PSPM_ROUTING_FAILED:
-            return "GCSO_ERROR_PSPM_ROUTING_FAILED";
-        case GCSO_ERROR_PPRC_SEEK_FAILED:
-            return "GCSO_ERROR_PPRC_SEEK_FAILED";
+        case GCSO_ERROR_MAPPED_STORAGE_FAILED:
+            return "GCSO_ERROR_MAPPED_STORAGE_FAILED";
+        case GCSO_ERROR_SUBHEAD_ROUTING_FAILED:
+            return "GCSO_ERROR_SUBHEAD_ROUTING_FAILED";
+        case GCSO_ERROR_KV_KEYFRAME_SEEK_FAILED:
+            return "GCSO_ERROR_KV_KEYFRAME_SEEK_FAILED";
         case GCSO_ERROR_OBSTRUCTION_UNRESOLVED:
             return "GCSO_ERROR_OBSTRUCTION_UNRESOLVED";
         case GCSO_ERROR_EXTENSION_NOT_LOADED:

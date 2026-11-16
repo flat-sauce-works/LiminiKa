@@ -410,7 +410,7 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
         });
     });
 
-    // 4. O(1) Branchless 2nd-Order Entropy Flux Acceleration & Adaptive PPRC GOP Budget
+    // 4. O(1) Branchless 2nd-Order Entropy Flux Acceleration & Adaptive KV-keyframe GOP Budget
     group.bench_function("evaluate_adaptive_compute_and_pprc_gop_budget", |b| {
         let mut engine = EntropyController::default();
         let mut state_out = gcso_edbc_state_t::default();
@@ -2211,7 +2211,7 @@ fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
                 rec
             });
             let mut storage_buf = AlignedBuffer64::<u8, 512>::new([0u8; 512]);
-            CrystallizedAttractorRecord::write_records_to_zimms_bytes(
+            CrystallizedAttractorRecord::write_records_to_container_bytes(
                 &records,
                 &mut storage_buf.data,
             )
@@ -2228,11 +2228,12 @@ fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
             for _ in 0..8 {
                 reset_engine_fast(&mut engine, &base_engine);
                 reset_trail_fast(&mut trail, &base_trail);
-                let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
-                    &storage_buf.data,
-                    4usize,
-                )
-                .unwrap();
+                let zero_copy_recs =
+                    CrystallizedAttractorRecord::slice_from_container_bytes_zero_copy(
+                        &storage_buf.data,
+                        4usize,
+                    )
+                    .unwrap();
                 let _ = engine
                     .step_crystallized_ensemble_with_defaults(
                         0.35f32,
@@ -2246,11 +2247,12 @@ fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
             b.iter(|| {
                 reset_engine_fast(&mut engine, &base_engine);
                 reset_trail_fast(&mut trail, &base_trail);
-                let zero_copy_recs = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
-                    black_box(&storage_buf.data),
-                    black_box(4usize),
-                )
-                .unwrap();
+                let zero_copy_recs =
+                    CrystallizedAttractorRecord::slice_from_container_bytes_zero_copy(
+                        black_box(&storage_buf.data),
+                        black_box(4usize),
+                    )
+                    .unwrap();
                 let res = engine
                     .step_crystallized_ensemble_with_defaults(
                         black_box(0.35f32),
@@ -2311,9 +2313,10 @@ fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
                     &mut container_buf.data,
                 )
                 .unwrap();
-                let view =
-                    GcsoFourSectionView::from_zimms_bytes_zero_copy(&container_buf.data[..written])
-                        .unwrap();
+                let view = GcsoFourSectionView::from_container_bytes_zero_copy(
+                    &container_buf.data[..written],
+                )
+                .unwrap();
                 reset_trail_fast(&mut trail, &view.trails[0]);
                 let _ = engine
                     .step_crystallized_ensemble_with_defaults(
@@ -2336,7 +2339,7 @@ fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
                     black_box(&mut container_buf.data),
                 )
                 .unwrap();
-                let view = GcsoFourSectionView::from_zimms_bytes_zero_copy(black_box(
+                let view = GcsoFourSectionView::from_container_bytes_zero_copy(black_box(
                     &container_buf.data[..written],
                 ))
                 .unwrap();

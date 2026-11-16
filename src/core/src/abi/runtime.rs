@@ -1,7 +1,7 @@
 // name: src/core/src/abi/runtime.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Tagged-pointer bit-packing, version/capability queries, context lifecycle, .gcso persistence, and PPRC seek.
+//! Tagged-pointer bit-packing, version/capability queries, context lifecycle, .gcso persistence, and KV-keyframe seek.
 
 use super::*;
 
@@ -73,7 +73,7 @@ pub extern "C" fn gcso_tagged_ptr_evolve_mode_stigmergically(
     repulsion_triggered: u8,
     dominant_attractor_slot: u8,
     low_entropy_skip_thresh: f32,
-    high_density_srl_thresh: f32,
+    high_density_rank1_thresh: f32,
 ) -> u64 {
     gcso_tagged_ptr_t(ptr)
         .evolve_mode_stigmergically(
@@ -82,7 +82,7 @@ pub extern "C" fn gcso_tagged_ptr_evolve_mode_stigmergically(
             repulsion_triggered != 0,
             dominant_attractor_slot,
             low_entropy_skip_thresh,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
         )
         .raw()
 }
@@ -197,7 +197,7 @@ pub unsafe extern "C" fn gcso_free_string(str_ptr: *const c_char) {
 }
 
 // ===================================================================
-// 2. Context Lifecycle, 4-Section `.gcso` Persistence & PPRC Seek
+// 2. Context Lifecycle, 4-Section `.gcso` Persistence & KV-keyframe Seek
 // ===================================================================
 
 /// Creates a new GCSO runtime context instance from a configuration descriptor.
@@ -336,7 +336,7 @@ pub unsafe extern "C" fn gcso_context_serialize(
         header.action_hub_offset = 128;
         header.attractor_field_offset = 128;
         header.dpsr_state_offset = 192;
-        header.srl_state_offset = 192;
+        header.rank1_state_offset = 192;
         header.edbc_state_offset = 192;
         const ZERO_PAYLOAD_192_CRC32: u32 = branchless_crc32_ieee(&[0u8; 192]);
         header.ledger_slot_offset = 256;
@@ -389,7 +389,7 @@ pub unsafe extern "C" fn gcso_context_deserialize(
 }
 
 /// Serializes `num_records` Section-1 [`CrystallizedAttractorRecord`]s (`records`) into a `.gcso`
-/// (ZIMMS) byte buffer (`out_bytes`) via [`CrystallizedAttractorRecord::write_records_to_zimms_bytes`],
+/// (mapped-storage) byte buffer (`out_bytes`) via [`CrystallizedAttractorRecord::write_records_to_container_bytes`],
 /// stamping each record's IEEE 802.3 CRC32 checksum when not already stamped.
 ///
 /// # Safety
@@ -434,32 +434,32 @@ pub unsafe extern "C" fn gcso_container_write_crystallized_records_zero_copy(
             )
         };
         let written =
-            CrystallizedAttractorRecord::write_records_to_zimms_bytes(rec_slice, dst_slice)?;
+            CrystallizedAttractorRecord::write_records_to_container_bytes(rec_slice, dst_slice)?;
         *size_io = written;
         Ok(GCSO_SUCCESS)
     })
 }
 
 /// Validates and maps `num_records` Section-1 [`CrystallizedAttractorRecord`]s in-place ($C_{\mathrm{alloc}} = 0$)
-/// from a 64-byte aligned `.gcso` (ZIMMS) byte buffer via [`CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy`].
+/// from a 64-byte aligned `.gcso` (mapped-storage) byte buffer via [`CrystallizedAttractorRecord::slice_from_container_bytes_zero_copy`].
 ///
 /// # Safety
-/// `zimms_bytes` must be non-null, 64-byte aligned, and valid for at least `byte_len` bytes.
+/// `container_bytes` must be non-null, 64-byte aligned, and valid for at least `byte_len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn gcso_container_verify_crystallized_records_zero_copy(
-    zimms_bytes: *const u8,
+    container_bytes: *const u8,
     byte_len: usize,
     num_records: usize,
     records_ptr_out: *mut *const gcso_crystallized_attractor_record_t,
 ) -> GcsoStatus {
     ffi_boundary!({
-        if zimms_bytes.is_null() {
+        if container_bytes.is_null() {
             return Err(GCSO_ERROR_NULL_POINTER);
         }
-        // SAFETY: `zimms_bytes` is non-null.
-        let bytes = unsafe { slice::from_raw_parts(zimms_bytes, byte_len) };
+        // SAFETY: `container_bytes` is non-null.
+        let bytes = unsafe { slice::from_raw_parts(container_bytes, byte_len) };
         let recs =
-            CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(bytes, num_records)?;
+            CrystallizedAttractorRecord::slice_from_container_bytes_zero_copy(bytes, num_records)?;
         // SAFETY: `FfiHandleMut::from_raw_opt` validates optional output pointer.
         if let Some(mut rp_out) = unsafe { FfiHandleMut::from_raw_opt(records_ptr_out)? } {
             *rp_out = if recs.is_empty() {
@@ -472,7 +472,7 @@ pub unsafe extern "C" fn gcso_container_verify_crystallized_records_zero_copy(
     })
 }
 
-/// Serializes a 4-section `.gcso` (ZIMMS) zero-copy container (`GcsoFourSectionView`) including
+/// Serializes a 4-section `.gcso` (mapped-storage) zero-copy container (`GcsoFourSectionView`) including
 /// Section 3c [`CausalProvenanceReport`] diagnostic history entries.
 ///
 /// # Safety
@@ -558,7 +558,7 @@ pub unsafe extern "C" fn gcso_container_write_four_section_with_reports_zero_cop
     })
 }
 
-/// Serializes a 4-section `.gcso` (ZIMMS) zero-copy container (`GcsoFourSectionView`).
+/// Serializes a 4-section `.gcso` (mapped-storage) zero-copy container (`GcsoFourSectionView`).
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `GCSO_RESTRICT` invariants.
@@ -592,17 +592,17 @@ pub unsafe extern "C" fn gcso_container_write_four_section_zero_copy(
     }
 }
 
-/// Validates and maps a 128B-aligned 4-section `.gcso` (ZIMMS) container in-place ($C_{\mathrm{alloc}} = 0$)
-/// via [`GcsoFourSectionView::from_zimms_bytes_zero_copy`], exposing all 4 sections including
-/// Section 0b [`gcso_zimms_descriptor_t`] and Section 3c [`CausalProvenanceReport`]s.
+/// Validates and maps a 128B-aligned 4-section `.gcso` (mapped-storage) container in-place ($C_{\mathrm{alloc}} = 0$)
+/// via [`GcsoFourSectionView::from_container_bytes_zero_copy`], exposing all 4 sections including
+/// Section 0b [`gcso_mapped_storage_descriptor_t`] and Section 3c [`CausalProvenanceReport`]s.
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `GCSO_RESTRICT` invariants.
 #[no_mangle]
 pub unsafe extern "C" fn gcso_container_verify_four_section_with_reports_zero_copy(
-    zimms_bytes: *const u8,
+    container_bytes: *const u8,
     byte_len: usize,
-    zimms_desc_out: *mut gcso_zimms_descriptor_t,
+    storage_desc_out: *mut gcso_mapped_storage_descriptor_t,
     num_crystals_out: *mut usize,
     num_trails_out: *mut usize,
     num_reports_out: *mut usize,
@@ -613,19 +613,19 @@ pub unsafe extern "C" fn gcso_container_verify_four_section_with_reports_zero_co
     reports_ptr_out: *mut *const gcso_causal_provenance_report_t,
 ) -> GcsoStatus {
     ffi_boundary!({
-        if zimms_bytes.is_null() {
+        if container_bytes.is_null() {
             return Err(GCSO_ERROR_NULL_POINTER);
         }
         if byte_len < GCSO_FOUR_SECTION_HEADER_BYTES {
             return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
         }
-        // SAFETY: `zimms_bytes` is non-null and `byte_len >= 192`.
-        let bytes = unsafe { slice::from_raw_parts(zimms_bytes, byte_len) };
-        let view = GcsoFourSectionView::from_zimms_bytes_zero_copy(bytes)?;
+        // SAFETY: `container_bytes` is non-null and `byte_len >= 192`.
+        let bytes = unsafe { slice::from_raw_parts(container_bytes, byte_len) };
+        let view = GcsoFourSectionView::from_container_bytes_zero_copy(bytes)?;
 
         // SAFETY: `write_opt_out` validates optional output pointers.
         unsafe {
-            write_opt_out(zimms_desc_out, *view.zimms_descriptor)?;
+            write_opt_out(storage_desc_out, *view.mapped_storage_descriptor)?;
             write_opt_out(num_crystals_out, view.crystals.len())?;
             write_opt_out(num_trails_out, view.trails.len())?;
             write_opt_out(num_reports_out, view.provenance_reports.len())?;
@@ -672,14 +672,14 @@ pub unsafe extern "C" fn gcso_container_verify_four_section_with_reports_zero_co
     })
 }
 
-/// Validates and maps a 128B-aligned 4-section `.gcso` (ZIMMS) container in-place ($C_{\mathrm{alloc}} = 0$)
-/// via [`GcsoFourSectionView::from_zimms_bytes_zero_copy`].
+/// Validates and maps a 128B-aligned 4-section `.gcso` (mapped-storage) container in-place ($C_{\mathrm{alloc}} = 0$)
+/// via [`GcsoFourSectionView::from_container_bytes_zero_copy`].
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `GCSO_RESTRICT` invariants.
 #[no_mangle]
 pub unsafe extern "C" fn gcso_container_verify_four_section_zero_copy(
-    zimms_bytes: *const u8,
+    container_bytes: *const u8,
     byte_len: usize,
     num_crystals_out: *mut usize,
     num_trails_out: *mut usize,
@@ -689,7 +689,7 @@ pub unsafe extern "C" fn gcso_container_verify_four_section_zero_copy(
     // SAFETY: Delegates to `gcso_container_verify_four_section_with_reports_zero_copy`.
     unsafe {
         gcso_container_verify_four_section_with_reports_zero_copy(
-            zimms_bytes,
+            container_bytes,
             byte_len,
             ptr::null_mut(),
             num_crystals_out,
@@ -704,7 +704,7 @@ pub unsafe extern "C" fn gcso_container_verify_four_section_zero_copy(
     }
 }
 
-/// Validates and maps a 128B-aligned 4-section `.gcso` (ZIMMS) container in-place ($C_{\mathrm{alloc}} = 0$),
+/// Validates and maps a 128B-aligned 4-section `.gcso` (mapped-storage) container in-place ($C_{\mathrm{alloc}} = 0$),
 /// folds Section 1 [`CrystallizedAttractorRecord`]s onto `trail_inout` by **Phase-Proximity Gravity**,
 /// applies Section 3a `view.bloom` contrastive Phase-Conjugate Repulsion ($-\boldsymbol{\Delta\theta}$)
 /// if active, and steers `query_tensor` (and optional `key_tensor`) in a single register-resident FFI call.
@@ -713,7 +713,7 @@ pub unsafe extern "C" fn gcso_container_verify_four_section_zero_copy(
 /// Pointers must satisfy non-null, alignment, bounds, and `GCSO_RESTRICT` invariants.
 #[no_mangle]
 pub unsafe extern "C" fn gcso_container_map_and_steer_four_section_zero_copy_safe(
-    zimms_bytes: *const u8,
+    container_bytes: *const u8,
     byte_len: usize,
     trail_inout: *mut gcso_pointer_trail_t,
     min_step_rad: f32,
@@ -727,7 +727,7 @@ pub unsafe extern "C" fn gcso_container_map_and_steer_four_section_zero_copy_saf
     effective_ripa_rad_out: *mut f32,
 ) -> GcsoStatus {
     ffi_boundary!({
-        if zimms_bytes.is_null() {
+        if container_bytes.is_null() {
             return Err(GCSO_ERROR_NULL_POINTER);
         }
         if byte_len < GCSO_FOUR_SECTION_HEADER_BYTES {
@@ -735,7 +735,7 @@ pub unsafe extern "C" fn gcso_container_map_and_steer_four_section_zero_copy_saf
         }
         validate_ptr(trail_inout)?;
         if raw_byte_ranges_overlap(
-            zimms_bytes as usize,
+            container_bytes as usize,
             byte_len,
             trail_inout as usize,
             size_of::<gcso_pointer_trail_t>(),
@@ -746,9 +746,9 @@ pub unsafe extern "C" fn gcso_container_map_and_steer_four_section_zero_copy_saf
         // SAFETY: `bind_qk_32` validates `query_tensor` and `key_tensor` alignment and disjointness.
         let (_engine, mut q_aligned, mut k_opt) =
             unsafe { bind_qk_32(query_tensor, key_tensor, head_dim, num_heads)? };
-        // SAFETY: `zimms_bytes` is non-null and `byte_len >= 192`.
-        let bytes = unsafe { slice::from_raw_parts(zimms_bytes, byte_len) };
-        let view = GcsoFourSectionView::from_zimms_bytes_zero_copy(bytes)?;
+        // SAFETY: `container_bytes` is non-null and `byte_len >= 192`.
+        let bytes = unsafe { slice::from_raw_parts(container_bytes, byte_len) };
+        let view = GcsoFourSectionView::from_container_bytes_zero_copy(bytes)?;
         // SAFETY: `trail_inout` is validated above.
         let mut trail = unsafe { FfiHandleMut::from_raw(trail_inout)? };
 
@@ -774,7 +774,7 @@ pub unsafe extern "C" fn gcso_container_map_and_steer_four_section_zero_copy_saf
     })
 }
 
-/// Maps a 128B-aligned 4-section `.gcso` (ZIMMS) container in-place ($C_{\mathrm{alloc}} = 0$),
+/// Maps a 128B-aligned 4-section `.gcso` (mapped-storage) container in-place ($C_{\mathrm{alloc}} = 0$),
 /// executes **Coarse-to-Fine Macro-to-Micro Routing ($\mathcal{O}(K + M)$)** directly over Section 1
 /// macro centroids (`view.crystals`) and Section 2 micro pointer trails (`view.trails`), applies
 /// Section 3a `view.bloom` contrastive Phase-Conjugate Repulsion ($-\boldsymbol{\Delta\theta}$) in
@@ -785,7 +785,7 @@ pub unsafe extern "C" fn gcso_container_map_and_steer_four_section_zero_copy_saf
 /// Pointers must satisfy non-null, alignment, bounds, and `GCSO_RESTRICT` invariants.
 #[no_mangle]
 pub unsafe extern "C" fn gcso_container_map_route_coarse_to_fine_and_steer_four_section_zero_copy_safe(
-    zimms_bytes: *const u8,
+    container_bytes: *const u8,
     byte_len: usize,
     src_trail_inout: *mut gcso_pointer_trail_t,
     head_dim: usize,
@@ -808,7 +808,7 @@ pub unsafe extern "C" fn gcso_container_map_route_coarse_to_fine_and_steer_four_
     found_out: *mut u8,
 ) -> GcsoStatus {
     ffi_boundary!({
-        if zimms_bytes.is_null() {
+        if container_bytes.is_null() {
             return Err(GCSO_ERROR_NULL_POINTER);
         }
         if byte_len < GCSO_FOUR_SECTION_HEADER_BYTES {
@@ -826,7 +826,7 @@ pub unsafe extern "C" fn gcso_container_map_route_coarse_to_fine_and_steer_four_
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
         if raw_byte_ranges_overlap(
-            zimms_bytes as usize,
+            container_bytes as usize,
             byte_len,
             src_trail_inout as usize,
             size_of::<gcso_pointer_trail_t>(),
@@ -837,9 +837,9 @@ pub unsafe extern "C" fn gcso_container_map_route_coarse_to_fine_and_steer_four_
         // SAFETY: `bind_qk_32` validates `query_tensor` and `key_tensor` alignment and disjointness.
         let (_engine, mut q_aligned, mut k_opt) =
             unsafe { bind_qk_32(query_tensor, key_tensor, head_dim, num_heads)? };
-        // SAFETY: `zimms_bytes` is non-null and `byte_len >= 192`.
-        let bytes = unsafe { slice::from_raw_parts(zimms_bytes, byte_len) };
-        let view = GcsoFourSectionView::from_zimms_bytes_zero_copy(bytes)?;
+        // SAFETY: `container_bytes` is non-null and `byte_len >= 192`.
+        let bytes = unsafe { slice::from_raw_parts(container_bytes, byte_len) };
+        let view = GcsoFourSectionView::from_container_bytes_zero_copy(bytes)?;
         // SAFETY: `src_trail_inout` is validated above.
         let mut src_trail = unsafe { FfiHandleMut::from_raw(src_trail_inout)? };
 
@@ -948,21 +948,21 @@ pub unsafe extern "C" fn gcso_container_map_route_coarse_to_fine_and_steer_four_
     })
 }
 
-/// Seeks to a specific token index in the PPRC keyframe KV cache index without forward passes.
+/// Seeks to a specific token index in the KV-keyframe keyframe KV cache index without forward passes.
 ///
 /// # Safety
 /// `context` and `keyframe_header_out` must be non-null and naturally aligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_pprc_seek_to_token(
+pub unsafe extern "C" fn gcso_kv_keyframe_seek_to_token(
     context: GcsoContextHandle,
     token_index: u32,
-    keyframe_header_out: *mut gcso_pprc_keyframe_header_t,
+    keyframe_header_out: *mut gcso_kv_keyframe_header_t,
 ) -> GcsoStatus {
     ffi_boundary!({
         validate_ptr(context)?;
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and alignment.
         let mut header_out = unsafe { FfiHandleMut::from_raw(keyframe_header_out)? };
-        *header_out = gcso_pprc_keyframe_header_t {
+        *header_out = gcso_kv_keyframe_header_t {
             token_index,
             ..Default::default()
         };

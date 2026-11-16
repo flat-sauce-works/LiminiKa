@@ -3,8 +3,8 @@
 
 //! Zero-Copy In-Memory Mapped Storage (`MappedStorageEngine` 64B `Pod` state descriptor,
 //! `GcsoFourSectionView` 4-section `.gcso` container zero-copy persistence & in-place evolution,
-//! and PPRC GOP keyframe/delta packets) applying the [`PprcCache`], [`DnpPacketDispatcher`],
-//! and [`ZimmsStorage`] traits from [`crate::traits`].
+//! and KV-keyframe GOP keyframe/delta packets) applying the [`KvKeyframeCache`], [`DnpPacketDispatcher`],
+//! and [`MappedStorage`] traits from [`crate::traits`].
 
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -31,8 +31,8 @@
 #![allow(clippy::field_reassign_with_default)]
 
 use crate::abi::{
-    gcso_config_t, gcso_ledger_slot_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t,
-    gcso_snapshot_header_t, gcso_zimms_descriptor_t, GCSO_ERROR_BUFFER_TOO_SMALL,
+    gcso_config_t, gcso_kv_keyframe_header_t, gcso_ledger_slot_t, gcso_mapped_storage_descriptor_t,
+    gcso_pointer_trail_t, gcso_snapshot_header_t, GCSO_ERROR_BUFFER_TOO_SMALL,
     GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER,
 };
 use crate::crystal::CrystallizedAttractorRecord;
@@ -41,35 +41,35 @@ use crate::traits::gateway::{
     compute_aligned64_payload_crc32_ieee, update_aligned64_blocks_crc32_raw,
     CausalProvenanceReport, GatewayFrame, ManifoldGatewaySignal,
     CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, GCSO_FOUR_SECTION_HEADER_BYTES,
-    GCSO_ZIMMS_DESCRIPTOR_PREAMBLE_OFFSET,
+    GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET,
 };
 use crate::traits::primitives::{
     branchless_select_u64, branchless_select_u8, crc32_crystal_stamp_contrib_128b,
     crc32_fold_stamped_crystal_128b, crc32_slice16_indep_hi1_u32, crc32_slice16_indep_lo1_u32,
     crc32_step_block64_words, crc32_step_l16, crc32_step_l3, crc32_step_l32, crc32_step_l4,
     crc32_step_l8, init_snapshot_header, validate_snapshot_header, verify_snapshot_payload_crc32,
-    ACTION_MODE_PSPM_ROUTE, CRC32_ZIMMS_DESC_BASE_SEED, FAST_PATH_SHORTCUT_SLOTS,
+    ACTION_MODE_SUBHEAD_ROUTE, CRC32_MAPPED_STORAGE_DESC_BASE_SEED, FAST_PATH_SHORTCUT_SLOTS,
     LEDGER_HISTORY_LEN,
 };
-pub use crate::traits::primitives::{PprcKeyframePacket, PprcMotionDeltaPacket};
+pub use crate::traits::primitives::{KvKeyframePacket, KvMotionDeltaPacket};
 use crate::traits::telemetry::{
-    ContrastivePhaseBloomFilter, LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_PSPM_ROUTED,
-    LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, NUM_SWARM_MICRO_CELLS,
+    ContrastivePhaseBloomFilter, LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_REPULSION_APPLIED,
+    LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SUBHEAD_ROUTED, NUM_SWARM_MICRO_CELLS,
 };
-use crate::traits::{DnpPacketDispatcher, GcsoResult, Pod, PprcCache, ZimmsStorage};
+use crate::traits::{DnpPacketDispatcher, GcsoResult, KvKeyframeCache, MappedStorage, Pod};
 use core::mem::{align_of, offset_of, size_of};
 
 /// 64-byte cacheline-aligned Plain Old Data (`Pod`) descriptor and execution engine for
-/// Zero-Copy In-Memory Mapped Storage (ZIMMS `.gcso` containers), PPRC keyframe/delta video-stream
+/// Zero-Copy In-Memory Mapped Storage (mapped-storage `.gcso` containers), KV-keyframe keyframe/delta video-stream
 /// memory & persona reproduction, and DNP 64-byte phase packet dispatch.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MappedStorageEngine {
-    /// Embedded 64-byte C-ABI v0.1.1 ZIMMS memory-map & track descriptor (`offset 0..64`).
-    pub descriptor: gcso_zimms_descriptor_t,
+    /// Embedded 64-byte C-ABI v0.1.1 mapped-storage memory-map & track descriptor (`offset 0..64`).
+    pub descriptor: gcso_mapped_storage_descriptor_t,
 }
 
-// SAFETY: `MappedStorageEngine` is a `#[repr(C, align(64))]` wrapper around the 64-byte `Pod` `gcso_zimms_descriptor_t`.
+// SAFETY: `MappedStorageEngine` is a `#[repr(C, align(64))]` wrapper around the 64-byte `Pod` `gcso_mapped_storage_descriptor_t`.
 unsafe impl Pod for MappedStorageEngine {}
 
 impl Default for MappedStorageEngine {
@@ -85,7 +85,7 @@ impl MappedStorageEngine {
     #[must_use]
     pub const fn new(file_size_bytes: u64, flags: u32) -> Self {
         Self {
-            descriptor: gcso_zimms_descriptor_t {
+            descriptor: gcso_mapped_storage_descriptor_t {
                 mapped_address: 0,
                 file_size_bytes,
                 dma_buffer_handle: 0,
@@ -96,7 +96,7 @@ impl MappedStorageEngine {
         }
     }
 
-    /// Validates the embedded `gcso_zimms_descriptor_t` fields.
+    /// Validates the embedded `gcso_mapped_storage_descriptor_t` fields.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `flags == 0` when `file_size_bytes == 0`.
@@ -108,12 +108,15 @@ impl MappedStorageEngine {
         Ok(())
     }
 
-    /// Verifies and binds an external [`gcso_zimms_descriptor_t`] into this engine.
+    /// Verifies and binds an external [`gcso_mapped_storage_descriptor_t`] into this engine.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `desc.file_size_bytes == 0 && desc.flags == 0`.
     #[inline]
-    pub fn verify_and_map_container(&mut self, desc: &gcso_zimms_descriptor_t) -> GcsoResult<()> {
+    pub fn verify_and_map_container(
+        &mut self,
+        desc: &gcso_mapped_storage_descriptor_t,
+    ) -> GcsoResult<()> {
         if desc.file_size_bytes == 0 && desc.flags == 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -122,12 +125,12 @@ impl MappedStorageEngine {
     }
 }
 
-impl PprcCache for MappedStorageEngine {
+impl KvKeyframeCache for MappedStorageEngine {
     #[inline]
     fn seek_to_token(
         &mut self,
         token_index: u32,
-        header_out: &mut gcso_pprc_keyframe_header_t,
+        header_out: &mut gcso_kv_keyframe_header_t,
     ) -> GcsoResult<()> {
         header_out.token_index = token_index;
         header_out.gop_length = 1;
@@ -138,7 +141,7 @@ impl PprcCache for MappedStorageEngine {
 
 impl DnpPacketDispatcher for MappedStorageEngine {}
 
-impl ZimmsStorage for MappedStorageEngine {
+impl MappedStorage for MappedStorageEngine {
     #[inline]
     fn serialize_snapshot(&self, buffer: &mut [u8], required_size: &mut usize) -> GcsoResult<()> {
         let hdr_len = size_of::<gcso_snapshot_header_t>();
@@ -167,7 +170,7 @@ impl ZimmsStorage for MappedStorageEngine {
     fn open_mmap(
         &mut self,
         file_path: &str,
-        descriptor_out: &mut gcso_zimms_descriptor_t,
+        descriptor_out: &mut gcso_mapped_storage_descriptor_t,
     ) -> GcsoResult<()> {
         if file_path.is_empty() {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
@@ -177,7 +180,7 @@ impl ZimmsStorage for MappedStorageEngine {
     }
 
     #[inline]
-    fn close_mmap(&mut self, descriptor: &mut gcso_zimms_descriptor_t) -> GcsoResult<()> {
+    fn close_mmap(&mut self, descriptor: &mut gcso_mapped_storage_descriptor_t) -> GcsoResult<()> {
         descriptor.mapped_address = 0;
         descriptor.fd_handle = -1;
         self.descriptor = *descriptor;
@@ -186,16 +189,16 @@ impl ZimmsStorage for MappedStorageEngine {
 }
 
 // ===================================================================
-// 8.5. 4-Section `.gcso` (ZIMMS) Zero-Copy Container View (`GcsoFourSectionView`)
+// 8.5. 4-Section `.gcso` (mapped-storage) Zero-Copy Container View (`GcsoFourSectionView`)
 // ===================================================================
 
-/// Zero-copy view over a 128B-aligned 4-section `.gcso` (ZIMMS) memory-mapped container.
+/// Zero-copy view over a 128B-aligned 4-section `.gcso` (mapped-storage) memory-mapped container.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GcsoFourSectionView<'a> {
     /// Section 0a: Validated 128-byte `.gcso` snapshot header (`offset 0..128`).
     pub header: &'a gcso_snapshot_header_t,
-    /// Section 0b: Validated 64-byte ZIMMS memory-map & track descriptor (`offset 128..192`).
-    pub zimms_descriptor: &'a gcso_zimms_descriptor_t,
+    /// Section 0b: Validated 64-byte mapped-storage memory-map & track descriptor (`offset 128..192`).
+    pub mapped_storage_descriptor: &'a gcso_mapped_storage_descriptor_t,
     /// Section 1: Zero-copy slice of crystallized macro attractor centroids (`128B` each).
     pub crystals: &'a [CrystallizedAttractorRecord],
     /// Section 2: Zero-copy slice of stigmergic pointer trails (`128B` each).
@@ -333,7 +336,7 @@ impl<'a> GcsoFourSectionView<'a> {
 
         let buf = &mut dst_bytes[..total_len];
         let off_crystals = GCSO_FOUR_SECTION_HEADER_BYTES;
-        let crystals_bytes = CrystallizedAttractorRecord::write_records_to_zimms_bytes(
+        let crystals_bytes = CrystallizedAttractorRecord::write_records_to_container_bytes(
             crystals,
             &mut buf[off_crystals..],
         )?;
@@ -370,7 +373,7 @@ impl<'a> GcsoFourSectionView<'a> {
         if total_len > end_reports {
             buf[end_reports..total_len].fill(0);
         }
-        let zimms_desc = gcso_zimms_descriptor_t {
+        let storage_desc = gcso_mapped_storage_descriptor_t {
             mapped_address: 0,
             file_size_bytes: total_len as u64,
             dma_buffer_handle: 0,
@@ -378,7 +381,7 @@ impl<'a> GcsoFourSectionView<'a> {
             fd_handle: -1,
             reserved: [0; 32],
         };
-        zimms_desc.write_unaligned_to(buf, GCSO_ZIMMS_DESCRIPTOR_PREAMBLE_OFFSET)?;
+        storage_desc.write_unaligned_to(buf, GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET)?;
 
         let checksum_crc32 = Self::compute_container_crc32_with_stamped_crystals(
             buf,
@@ -406,7 +409,7 @@ impl<'a> GcsoFourSectionView<'a> {
         Ok(total_len)
     }
 
-    /// Validates and maps a 128-byte aligned 4-section `.gcso` (ZIMMS) container byte slice
+    /// Validates and maps a 128-byte aligned 4-section `.gcso` (mapped-storage) container byte slice
     /// into a zero-copy [`GcsoFourSectionView`] ($C_{\mathrm{alloc}} = 0$).
     ///
     /// # Errors
@@ -414,7 +417,7 @@ impl<'a> GcsoFourSectionView<'a> {
     /// [`GCSO_ERROR_CONTAINER_CORRUPTED`], or [`crate::abi::GCSO_ERROR_VERSION_MISMATCH`]
     /// if the container header, alignment, section offsets, or IEEE 802.3 CRC32 checksums are invalid.
     #[inline]
-    pub fn from_zimms_bytes_zero_copy(bytes: &'a [u8]) -> GcsoResult<Self> {
+    pub fn from_container_bytes_zero_copy(bytes: &'a [u8]) -> GcsoResult<Self> {
         if bytes.len() < GCSO_FOUR_SECTION_HEADER_BYTES {
             return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
         }
@@ -424,10 +427,12 @@ impl<'a> GcsoFourSectionView<'a> {
 
         let header = gcso_snapshot_header_t::from_bytes_at(bytes, 0)?;
         validate_snapshot_header(header, bytes.len())?;
-        let zimms_descriptor =
-            gcso_zimms_descriptor_t::from_bytes_at(bytes, GCSO_ZIMMS_DESCRIPTOR_PREAMBLE_OFFSET)?;
-        if zimms_descriptor.file_size_bytes != 0
-            && zimms_descriptor.file_size_bytes != header.total_size
+        let mapped_storage_descriptor = gcso_mapped_storage_descriptor_t::from_bytes_at(
+            bytes,
+            GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET,
+        )?;
+        if mapped_storage_descriptor.file_size_bytes != 0
+            && mapped_storage_descriptor.file_size_bytes != header.total_size
         {
             return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
         }
@@ -455,7 +460,7 @@ impl<'a> GcsoFourSectionView<'a> {
             return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
         }
         let num_crystals = crystals_byte_len / size_of::<CrystallizedAttractorRecord>();
-        let crystals = CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(
+        let crystals = CrystallizedAttractorRecord::slice_from_container_bytes_zero_copy(
             &bytes[off_crystals..end_crystals],
             num_crystals,
         )?;
@@ -530,7 +535,7 @@ impl<'a> GcsoFourSectionView<'a> {
 
         Ok(Self {
             header,
-            zimms_descriptor,
+            mapped_storage_descriptor,
             crystals,
             trails,
             bloom,
@@ -541,7 +546,7 @@ impl<'a> GcsoFourSectionView<'a> {
 
     #[inline(always)]
     pub(crate) fn validate_four_section_mut_offsets(
-        zimms_bytes: &[u8],
+        container_bytes: &[u8],
     ) -> GcsoResult<(
         gcso_snapshot_header_t,
         usize,
@@ -552,15 +557,15 @@ impl<'a> GcsoFourSectionView<'a> {
         usize,
         usize,
     )> {
-        if zimms_bytes.len() < GCSO_FOUR_SECTION_HEADER_BYTES {
+        if container_bytes.len() < GCSO_FOUR_SECTION_HEADER_BYTES {
             return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
         }
-        if !is_aligned_to(zimms_bytes, 128) {
+        if !is_aligned_to(container_bytes, 128) {
             return Err(GCSO_ERROR_MISALIGNED_POINTER);
         }
 
-        let header = *gcso_snapshot_header_t::from_bytes_at(zimms_bytes, 0)?;
-        validate_snapshot_header(&header, zimms_bytes.len())?;
+        let header = *gcso_snapshot_header_t::from_bytes_at(container_bytes, 0)?;
+        validate_snapshot_header(&header, container_bytes.len())?;
         let total_len = header.total_size as usize;
         let off_crystals = header.attractor_field_offset as usize;
         let end_crystals = header.dpsr_state_offset as usize;
@@ -603,7 +608,7 @@ impl<'a> GcsoFourSectionView<'a> {
 
     #[inline(always)]
     pub(crate) fn update_four_section_daes_in_place(
-        zimms_bytes: &mut [u8],
+        container_bytes: &mut [u8],
         header: &gcso_snapshot_header_t,
         total_len: usize,
         off_ledger: usize,
@@ -613,7 +618,7 @@ impl<'a> GcsoFourSectionView<'a> {
         let has_ledger = (header.reserved_padding[1] != 0)
             & ((total_len - off_ledger) >= size_of::<gcso_ledger_slot_t>());
         if has_ledger {
-            let ledger_mut = gcso_ledger_slot_t::from_bytes_mut_at(zimms_bytes, off_ledger)?;
+            let ledger_mut = gcso_ledger_slot_t::from_bytes_mut_at(container_bytes, off_ledger)?;
             let ring_head = (ledger_mut.telemetry_ring_head as usize) & (LEDGER_HISTORY_LEN - 1);
             ledger_mut.telemetry_mini_ledger[ring_head] = metric_code;
             ledger_mut.telemetry_ring_head = ledger_mut.telemetry_ring_head.wrapping_add(1);
@@ -661,7 +666,7 @@ impl<'a> GcsoFourSectionView<'a> {
                         } else {
                             crc32_slice16_indep_hi1_u32(fs_hi)
                         });
-                        CRC32_ZIMMS_DESC_BASE_SEED
+                        CRC32_MAPPED_STORAGE_DESC_BASE_SEED
                             ^ (if fs_c == 0 { 0 } else { crc32_step_l3(fs_c) })
                     } else {
                         crc32_step_block64_words(0xFFFF_FFFFu32, w)
@@ -732,7 +737,7 @@ impl<'a> GcsoFourSectionView<'a> {
 
     #[inline(always)]
     pub(crate) fn finalize_four_section_header_in_place(
-        zimms_bytes: &mut [u8],
+        container_bytes: &mut [u8],
         header: &mut gcso_snapshot_header_t,
         total_len: usize,
     ) -> GcsoResult<()> {
@@ -741,7 +746,7 @@ impl<'a> GcsoFourSectionView<'a> {
         let end_crystals = header.dpsr_state_offset as usize;
         let num_crystals = (end_crystals - off_crystals) / size_of::<CrystallizedAttractorRecord>();
         let crc = Self::compute_container_crc32_with_stamped_crystals(
-            zimms_bytes,
+            container_bytes,
             hdr_size,
             off_crystals,
             num_crystals,
@@ -750,12 +755,12 @@ impl<'a> GcsoFourSectionView<'a> {
         );
         header.checksum_crc32 = crc;
         let crc_off = offset_of!(gcso_snapshot_header_t, checksum_crc32);
-        zimms_bytes[crc_off..crc_off + 4].copy_from_slice(&crc.to_le_bytes());
+        container_bytes[crc_off..crc_off + 4].copy_from_slice(&crc.to_le_bytes());
         Ok(())
     }
 
     /// **Zero-Copy In-Place `.gcso` 4-Section Container Evolution**:
-    /// Mutates a 128-byte aligned `.gcso` (ZIMMS) container buffer (`zimms_bytes`) directly in-place:
+    /// Mutates a 128-byte aligned `.gcso` (mapped-storage) container buffer (`container_bytes`) directly in-place:
     /// 1. Validates Section 0 (`gcso_snapshot_header_t`) and section offsets.
     /// 2. Synthesizes `signal` via [`ManifoldGatewaySignal::synthesize_gateway_frame_with_words`]
     ///    and executes Online Toroidal $k$-Means / DP-Means (`step_online_toroidal_kmeans_frame_with_words_64`)
@@ -771,10 +776,10 @@ impl<'a> GcsoFourSectionView<'a> {
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`], [`GCSO_ERROR_MISALIGNED_POINTER`], or
-    /// [`GCSO_ERROR_CONTAINER_CORRUPTED`] if `zimms_bytes` fails layout or alignment checks.
+    /// [`GCSO_ERROR_CONTAINER_CORRUPTED`] if `container_bytes` fails layout or alignment checks.
     #[inline]
     pub fn evolve_four_section_kmeans_in_place<S: ManifoldGatewaySignal + ?Sized>(
-        zimms_bytes: &mut [u8],
+        container_bytes: &mut [u8],
         signal: &S,
         split_coherence_thresh: f32,
         merge_coherence_thresh: f32,
@@ -789,11 +794,11 @@ impl<'a> GcsoFourSectionView<'a> {
             num_trails,
             off_bloom,
             off_daes,
-        ) = Self::validate_four_section_mut_offsets(zimms_bytes)?;
+        ) = Self::validate_four_section_mut_offsets(container_bytes)?;
 
         let (frame, sample_w) = signal.synthesize_gateway_frame_with_words();
         let (crystals_mut, trails_mut) = {
-            let (head_bytes, tail_bytes) = zimms_bytes.split_at_mut(off_trails);
+            let (head_bytes, tail_bytes) = container_bytes.split_at_mut(off_trails);
             let crystals = CrystallizedAttractorRecord::slice_from_bytes_mut_at(
                 head_bytes,
                 off_crystals,
@@ -827,7 +832,8 @@ impl<'a> GcsoFourSectionView<'a> {
         let has_bloom = (header.reserved_padding[0] != 0)
             & ((off_daes - off_bloom) >= size_of::<ContrastivePhaseBloomFilter>());
         if has_bloom && rep.is_cohomology_repulsion() {
-            let bloom_mut = ContrastivePhaseBloomFilter::from_bytes_mut_at(zimms_bytes, off_bloom)?;
+            let bloom_mut =
+                ContrastivePhaseBloomFilter::from_bytes_mut_at(container_bytes, off_bloom)?;
             bloom_mut.insert_repulsive_pattern_words_weighted(&sample_w, 2);
         }
 
@@ -836,8 +842,8 @@ impl<'a> GcsoFourSectionView<'a> {
             LEDGER_METRIC_REPULSION_APPLIED,
             LEDGER_METRIC_PHASE_STEERED,
         ) | branchless_select_u8(
-            (frame.action_mode_flags & ACTION_MODE_PSPM_ROUTE) != 0,
-            LEDGER_METRIC_PSPM_ROUTED,
+            (frame.action_mode_flags & ACTION_MODE_SUBHEAD_ROUTE) != 0,
+            LEDGER_METRIC_SUBHEAD_ROUTED,
             0,
         ) | branchless_select_u8(
             (frame.provenance_bits & CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED) != 0,
@@ -847,7 +853,7 @@ impl<'a> GcsoFourSectionView<'a> {
         let shortcut_ptr =
             branchless_select_u64(rep.is_cohomology_repulsion(), 0, frame.tagged_ptr);
         let has_daes = Self::update_four_section_daes_in_place(
-            zimms_bytes,
+            container_bytes,
             &header,
             total_len,
             off_daes,
@@ -880,24 +886,24 @@ impl<'a> GcsoFourSectionView<'a> {
                 ]) as usize;
                 let slot_idx = write_cursor % num_reports;
                 let slot_off = off_reports + slot_idx * size_of::<CausalProvenanceReport>();
-                rep.write_unaligned_to(zimms_bytes, slot_off)?;
+                rep.write_unaligned_to(container_bytes, slot_off)?;
                 let next_cursor = ((write_cursor.wrapping_add(1)) as u32).to_le_bytes();
                 header.reserved_padding[8] = next_cursor[0];
                 header.reserved_padding[9] = next_cursor[1];
                 header.reserved_padding[10] = next_cursor[2];
                 header.reserved_padding[11] = next_cursor[3];
                 let cursor_off = offset_of!(gcso_snapshot_header_t, reserved_padding) + 8;
-                zimms_bytes[cursor_off..cursor_off + 4].copy_from_slice(&next_cursor);
+                container_bytes[cursor_off..cursor_off + 4].copy_from_slice(&next_cursor);
             }
         }
 
-        Self::finalize_four_section_header_in_place(zimms_bytes, &mut header, total_len)?;
+        Self::finalize_four_section_header_in_place(container_bytes, &mut header, total_len)?;
         Ok((frame, c_idx, c_id, mass, spawned, merged))
     }
 
     #[inline(always)]
     pub(crate) fn route_four_section_coarse_to_fine_with_words_in_place(
-        zimms_bytes: &mut [u8],
+        container_bytes: &mut [u8],
         trail_idx: usize,
         pull_step_u7: u8,
     ) -> GcsoResult<(usize, u32, f32, f32, [u64; NUM_SWARM_MICRO_CELLS])> {
@@ -910,13 +916,13 @@ impl<'a> GcsoFourSectionView<'a> {
             num_trails,
             _off_bloom,
             _off_daes,
-        ) = Self::validate_four_section_mut_offsets(zimms_bytes)?;
+        ) = Self::validate_four_section_mut_offsets(container_bytes)?;
         if trail_idx >= num_trails {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
 
         let (crystals_ref, trails_mut) = {
-            let (head_bytes, tail_bytes) = zimms_bytes.split_at_mut(off_trails);
+            let (head_bytes, tail_bytes) = container_bytes.split_at_mut(off_trails);
             let crystals = CrystallizedAttractorRecord::slice_from_bytes_at(
                 head_bytes,
                 off_crystals,
@@ -932,7 +938,7 @@ impl<'a> GcsoFourSectionView<'a> {
                 &mut trails_mut[trail_idx],
                 pull_step_u7,
             );
-        Self::finalize_four_section_header_in_place(zimms_bytes, &mut header, total_len)?;
+        Self::finalize_four_section_header_in_place(container_bytes, &mut header, total_len)?;
         Ok((best_idx, anchor_id, best_coh, best_grav, bridged_w))
     }
 
@@ -948,26 +954,26 @@ impl<'a> GcsoFourSectionView<'a> {
     /// [`GCSO_ERROR_INVALID_ARGUMENT`], or [`GCSO_ERROR_CONTAINER_CORRUPTED`] on validation failure.
     #[inline]
     pub fn route_four_section_coarse_to_fine_in_place(
-        zimms_bytes: &mut [u8],
+        container_bytes: &mut [u8],
         trail_idx: usize,
         pull_step_u7: u8,
     ) -> GcsoResult<(usize, u32, f32, f32)> {
         let (best_idx, anchor_id, best_coh, best_grav, _bridged_w) =
             Self::route_four_section_coarse_to_fine_with_words_in_place(
-                zimms_bytes,
+                container_bytes,
                 trail_idx,
                 pull_step_u7,
             )?;
         Ok((best_idx, anchor_id, best_coh, best_grav))
     }
 
-    /// Routes `trails[trail_idx]` in-place against the top-2 macro centroids in `zimms_bytes`
+    /// Routes `trails[trail_idx]` in-place against the top-2 macro centroids in `container_bytes`
     /// and returns both the routing metadata and the 3 register-resident 8-word phase arrays
     /// `(raw_w, fact_w, logic_w)` together with `(header, total_len, off_daes, updated_ptr)` so
     /// optional Q/K steering callers can fuse their FastPathLedger telemetry bits before finalizing the header.
     #[inline(always)]
     pub(crate) fn route_four_section_top2_liminal_core_in_place(
-        zimms_bytes: &mut [u8],
+        container_bytes: &mut [u8],
         trail_idx: usize,
         pull_step_u7: u8,
         liminal_gravity_ratio_thresh: f32,
@@ -996,13 +1002,13 @@ impl<'a> GcsoFourSectionView<'a> {
             num_trails,
             _off_bloom,
             off_daes,
-        ) = Self::validate_four_section_mut_offsets(zimms_bytes)?;
+        ) = Self::validate_four_section_mut_offsets(container_bytes)?;
         if trail_idx >= num_trails {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
 
         let (crystals_ref, trails_mut) = {
-            let (head_bytes, tail_bytes) = zimms_bytes.split_at_mut(off_trails);
+            let (head_bytes, tail_bytes) = container_bytes.split_at_mut(off_trails);
             let crystals = CrystallizedAttractorRecord::slice_from_bytes_at(
                 head_bytes,
                 off_crystals,
@@ -1050,7 +1056,7 @@ impl<'a> GcsoFourSectionView<'a> {
     /// [`GCSO_ERROR_INVALID_ARGUMENT`], or [`GCSO_ERROR_CONTAINER_CORRUPTED`] on validation failure.
     #[inline]
     pub fn route_four_section_top2_liminal_in_place(
-        zimms_bytes: &mut [u8],
+        container_bytes: &mut [u8],
         trail_idx: usize,
         pull_step_u7: u8,
         liminal_gravity_ratio_thresh: f32,
@@ -1071,7 +1077,7 @@ impl<'a> GcsoFourSectionView<'a> {
             off_daes,
             updated_ptr,
         ) = Self::route_four_section_top2_liminal_core_in_place(
-            zimms_bytes,
+            container_bytes,
             trail_idx,
             pull_step_u7,
             liminal_gravity_ratio_thresh,
@@ -1082,14 +1088,14 @@ impl<'a> GcsoFourSectionView<'a> {
             0,
         );
         let _ = Self::update_four_section_daes_in_place(
-            zimms_bytes,
+            container_bytes,
             &header,
             total_len,
             off_daes,
             metric_code,
             updated_ptr,
         )?;
-        Self::finalize_four_section_header_in_place(zimms_bytes, &mut header, total_len)?;
+        Self::finalize_four_section_header_in_place(container_bytes, &mut header, total_len)?;
         Ok((idx1, idx2, aid1, aid2, eff_coh, tot_grav, is_liminal))
     }
 }
@@ -1170,7 +1176,7 @@ mod tests {
         assert_eq!(rep_trail.accumulated_phase_delta[0], 0);
         assert_ne!(rep_trail.flags, 0);
 
-        // Verify PPRC Video-Codec Style I-Frame / P-Frame GOP Stream & Zero-Forward Latency Seek
+        // Verify KV-keyframe Video-Codec Style I-Frame / P-Frame GOP Stream & Zero-Forward Latency Seek
         let anchor_t0 = [16i8; MAX_ATTENTION_HEADS];
         let state_t1 = [20i8; MAX_ATTENTION_HEADS];
         let state_t2 = [26i8; MAX_ATTENTION_HEADS];
@@ -1197,13 +1203,13 @@ mod tests {
 
         let mut stream_bytes = [0u8; 256];
         let written = engine
-            .pack_pprc_gop_stream_bytes(&iframe, &gop_pframes, &mut stream_bytes)
+            .pack_kv_gop_stream_bytes(&iframe, &gop_pframes, &mut stream_bytes)
             .unwrap();
         assert_eq!(written, 256);
 
         let mut seek_trail = gcso_pointer_trail_t::default();
         let (lp, r_bar, kappa, v_shift, rep_cnt) = engine
-            .unpack_and_seek_pprc_gop_stream_bytes(
+            .unpack_and_seek_kv_gop_stream_bytes(
                 &stream_bytes[..written],
                 2,
                 1,

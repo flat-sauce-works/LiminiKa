@@ -9,16 +9,16 @@
 //! # Architecture: `1 + 8` Flat Trait Topology (`ActionHub` + 2 Observers + Gateway)
 //! - **`ActionHub` (Core Sidecar State & Capability Ledger, [`crate::traits::ActionHub`])**: The
 //!   foundational micro composite ledger of state and branchless capabilities (`BranchlessKernel +
-//!   PhaseSteering + PointerActionHub + PspmRouter + SrlAdapter + FastPathLedger`), completely
+//!   PhaseSteering + PointerActionHub + SubHeadRouter + Rank1ResidualAdapter + FastPathLedger`), completely
 //!   agnostic to Hot vs. Cold Path execution.
 //! - **Lv.2 Micro Observer ([`crate::traits::HotPathObserver`])**: Drives constant-time $\mathcal{O}(1)$
 //!   per-token cascades (`Pointer -> FastPathLedger -> Bloom Repulsion -> Unified Field / Limina / Swarm ->
-//!   QDPS/RIPA/RoPE -> PSPM/SRL`) with zero dynamic allocations ($C_{\mathrm{alloc}} = 0$).
+//!   QDPS/RIPA/RoPE -> sub-head router/Rank-1 residual`) with zero dynamic allocations ($C_{\mathrm{alloc}} = 0$).
 //! - **Lv.3 Macro Observer ([`crate::traits::ColdPathObserver`])**: Evaluates trajectory telemetry,
 //!   moving Z-score entropy ($\tilde{H} \in [0, \ln 2]$), sliding-window flux ($\Phi_M(t)$),
 //!   scale-invariant Langevin pitchfork bifurcations, matrix-free Gershgorin/Chebyshev sheaf
 //!   cohomology $H^1(K; \mathcal{F})$, Single Unified Attractor Manifold superposition, L2P-SVD
-//!   projection, PPRC keyframe replay, and ZIMMS zero-copy `.gcso` persistence.
+//!   projection, KV-keyframe keyframe replay, and mapped-storage zero-copy `.gcso` persistence.
 //!
 //! # Core Mathematical & Systems Design Principles
 //! 1. **Sequential Conditional Transition Probability $\times$ Attention Phase Interference**:
@@ -28,7 +28,7 @@
 //! 2. **Indirect Pointer-Chain Graph Routing in `ActionHub`**:
 //!    Rather than holding all knowledge inside active model parameters, the runtime maintains compact
 //!    64-bit tagged pointers ([`gcso_tagged_ptr_t`]) and 128-byte pointer trails ([`gcso_pointer_trail_t`])
-//!    that reference external `.gcso` storage offsets (`zimms_section_offset48`) and chain to subsequent
+//!    that reference external `.gcso` storage offsets (`mapped_section_offset48`) and chain to subsequent
 //!    trail nodes (`linked_trail_id`). Traversing and reinforcing these pointer chains forms a sparse,
 //!    associative routing graph that bridges inter-basin **Limina** thresholds while repulsing
 //!    topological contradictions ($H^1(K; \mathcal{F}) \neq 0$) via Phase-Conjugate Attractor Repulsion ($-\boldsymbol{\Delta\theta}$).
@@ -118,10 +118,10 @@ pub mod runtime;
 
 pub use crate::abi::{
     gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_descriptor_header_t,
-    gcso_edbc_state_t, gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
-    gcso_pprc_keyframe_header_t, gcso_pspm_config_t, gcso_q7_t, gcso_snapshot_header_t,
-    gcso_srl_descriptor_t, gcso_status_t, gcso_tagged_ptr_t, gcso_zimms_descriptor_t,
-    GcsoAnchorType, GcsoStatus, GCSO_CAP_CPU_BASELINE, GCSO_CAP_CUDA_BACKEND,
+    gcso_edbc_state_t, gcso_kv_keyframe_header_t, gcso_ledger_slot_t,
+    gcso_mapped_storage_descriptor_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t,
+    gcso_rank1_residual_descriptor_t, gcso_snapshot_header_t, gcso_status_t, gcso_subhead_config_t,
+    gcso_tagged_ptr_t, GcsoAnchorType, GcsoStatus, GCSO_CAP_CPU_BASELINE, GCSO_CAP_CUDA_BACKEND,
     GCSO_CAP_METAL_BACKEND, GCSO_CAP_VULKAN_BACKEND, GCSO_SUCCESS,
 };
 pub use crate::action_hub::{
@@ -129,8 +129,8 @@ pub use crate::action_hub::{
     StigmergicThresholds, ACTION_HUB_INLINE_TRAILS, DEFAULT_STIGMERGIC_CONTRADICTION_THRESH,
     DEFAULT_STIGMERGIC_CRYSTALLIZE_THRESH, DEFAULT_STIGMERGIC_EVAPORATION_RETAIN,
     DEFAULT_STIGMERGIC_EXPRESS_STEER_THRESH, DEFAULT_STIGMERGIC_INERTIAL_SKIP_ENTROPY,
-    DEFAULT_STIGMERGIC_PSPM_ROUTE_THRESH, DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN,
-    DEFAULT_STIGMERGIC_SRL_INJECT_THRESH,
+    DEFAULT_STIGMERGIC_RANK1_INJECT_THRESH, DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN,
+    DEFAULT_STIGMERGIC_SUBHEAD_ROUTE_THRESH,
 };
 
 pub use crate::attractor::{
@@ -161,29 +161,29 @@ pub use crate::traits::{
     EntropyEvaluator, EntropyGatedPhaseLookup, FastPathLedger, FfiHandleMut, FfiHandleRef,
     FractalCascadeCoordinator, FullStackGcsoEngine, GatewayFrame, GatewayPhaseSteeringExt,
     GcsoFourSectionView, GcsoResult, GcsoRuntimeContext, HierarchicalTreeTable,
-    HotPathExecutionEngine, HotPathObserver, L2pSvdProjector, ManifoldGatewaySignal,
+    HotPathExecutionEngine, HotPathObserver, KvKeyframeCache, KvKeyframePacket,
+    KvMotionDeltaPacket, L2pSvdProjector, ManifoldGatewaySignal, MappedStorage,
     MultiDomainAttractorSpace, ObjectiveFact, ObjectiveFactSignal, PagedBitmaskOps, PersonaPatcher,
-    PhaseSteering, Pod, PointerActionHub, PprcCache, PprcKeyframePacket, PprcMotionDeltaPacket,
-    PspmRouter, RawPhaseProjectable, SheafCohomologyEvaluator, SrlAdapter, StigmergicActionPtrOps,
-    StigmergicCohomologyCoordinator, StigmergicSwarmOps, StigmergicTrailOps, SubjectivePersona,
+    PhaseSteering, Pod, PointerActionHub, Rank1ResidualAdapter, RawPhaseProjectable,
+    SheafCohomologyEvaluator, StigmergicActionPtrOps, StigmergicCohomologyCoordinator,
+    StigmergicSwarmOps, StigmergicTrailOps, SubHeadRouter, SubjectivePersona,
     SubjectivePersonaSignal, SwarmCellChunk, SwarmResolutionReport, SystemCapabilityQuery,
-    SystemConstraint, SystemConstraintSignal, VisualAttentionSteering, ZimmsStorage,
-    ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE,
-    ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
-    ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_CUSTOM_5, ATTRACTOR_SLOT_CUSTOM_6,
-    ATTRACTOR_SLOT_CUSTOM_7, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
-    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, ATTRACTOR_SLOT_USER_CONTEXT,
-    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
-    CAUSAL_AXIS_SYSTEM_CONSTRAINT, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
-    CAUSAL_CAUSE_COHOMOLOGY_REPULSION, CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK,
-    CAUSAL_CAUSE_PERSONA_FACT_COLLISION, CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE,
-    DEFAULT_FACT_RIPA_CLAMP_RAD, DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
-    DEFAULT_PERSONA_FACT_COLLISION_THRESH, DEFAULT_PERSONA_RIPA_CLAMP_RAD,
-    DEFAULT_SLOT_COUPLING_MATRIX_8X8, DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
-    DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, GCSO_CRYSTAL_RECORD_MAGIC,
-    GCSO_CRYSTAL_RECORD_VERSION, GCSO_FOUR_SECTION_HEADER_BYTES,
-    GCSO_ZIMMS_DESCRIPTOR_PREAMBLE_OFFSET, ROOT_CAUSE_COHOMOLOGY_REPULSION,
+    SystemConstraint, SystemConstraintSignal, VisualAttentionSteering, ACTION_MODE_DPSR_STEER,
+    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_RANK1_INJECT,
+    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
+    ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
+    ATTRACTOR_SLOT_CUSTOM_5, ATTRACTOR_SLOT_CUSTOM_6, ATTRACTOR_SLOT_CUSTOM_7,
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
+    ATTRACTOR_SLOT_SYSTEM_BASELINE, ATTRACTOR_SLOT_USER_CONTEXT, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA, CAUSAL_AXIS_SYSTEM_CONSTRAINT,
+    CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
+    CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, CAUSAL_CAUSE_PERSONA_FACT_COLLISION,
+    CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, DEFAULT_FACT_RIPA_CLAMP_RAD,
+    DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO, DEFAULT_PERSONA_FACT_COLLISION_THRESH,
+    DEFAULT_PERSONA_RIPA_CLAMP_RAD, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+    DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
+    GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION, GCSO_FOUR_SECTION_HEADER_BYTES,
+    GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET, ROOT_CAUSE_COHOMOLOGY_REPULSION,
     ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_PERSONA_FACT_COLLISION,
     ROOT_CAUSE_SYSTEM_QOS_THROTTLE, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_DPSR_ACTIVE,
     TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
@@ -207,10 +207,11 @@ pub use crate::runtime::{
 pub mod prelude {
     pub use crate::abi::{
         gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_descriptor_header_t,
-        gcso_edbc_state_t, gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
-        gcso_pprc_keyframe_header_t, gcso_pspm_config_t, gcso_q7_t, gcso_snapshot_header_t,
-        gcso_srl_descriptor_t, gcso_status_t, gcso_tagged_ptr_t, gcso_zimms_descriptor_t,
-        GcsoAnchorType, GcsoStatus, GCSO_ABI_VERSION_HEX, GCSO_ABI_VERSION_STRING, GCSO_SUCCESS,
+        gcso_edbc_state_t, gcso_kv_keyframe_header_t, gcso_ledger_slot_t,
+        gcso_mapped_storage_descriptor_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t,
+        gcso_rank1_residual_descriptor_t, gcso_snapshot_header_t, gcso_status_t,
+        gcso_subhead_config_t, gcso_tagged_ptr_t, GcsoAnchorType, GcsoStatus, GCSO_ABI_VERSION_HEX,
+        GCSO_ABI_VERSION_STRING, GCSO_SUCCESS,
     };
     pub use crate::action_hub::{
         ActionHubEngine, ActionOrchestrationReport, StigmergicActionDecision,

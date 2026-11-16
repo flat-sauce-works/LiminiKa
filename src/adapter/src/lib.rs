@@ -19,7 +19,7 @@ use liminika_core::traits::aligned::{
 };
 use liminika_core::traits::gateway::{
     ActionHubGatewayExt, AdaptiveThresholdPolicy, CausalProvenanceReport, CausalProvenanceSignal,
-    GatewayFrame, GatewayPhaseSteeringExt, GatewaySrlSteeringExt, GuardPhaseAnchor,
+    GatewayFrame, GatewayPhaseSteeringExt, GatewayRank1SteeringExt, GuardPhaseAnchor,
     ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact, StigmergicThresholdPolicy,
     SubjectivePersona, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
     CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
@@ -31,7 +31,7 @@ use liminika_core::traits::rope::{
     PhaseSteeringGeometryExt, RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget,
 };
 use liminika_core::traits::telemetry::SwarmResolutionReport;
-use liminika_core::traits::SrlAdapter;
+use liminika_core::traits::Rank1ResidualAdapter;
 
 pub mod pooling;
 pub mod reflection;
@@ -508,7 +508,7 @@ impl ModelSteeringAdapter {
         &mut self.entropy_controller
     }
 
-    /// Returns a mutable reference to the embedded [`ResidualAdapterEngine`] (SRL).
+    /// Returns a mutable reference to the embedded [`ResidualAdapterEngine`] (Rank-1 residual).
     pub fn residual_adapter_mut(&mut self) -> &mut ResidualAdapterEngine {
         &mut self.residual_adapter
     }
@@ -793,8 +793,8 @@ impl ModelSteeringAdapter {
         })
     }
 
-    /// Executes norm-adaptive SRL residual injection only when [`ActionHubEngine`]'s latest
-    /// [`StigmergicActionDecision`] authorizes full orchestration (`FullOrchestrationSrl` or
+    /// Executes norm-adaptive Rank-1 residual residual injection only when [`ActionHubEngine`]'s latest
+    /// [`StigmergicActionDecision`] authorizes full orchestration (`FullOrchestration` or
     /// `CrystallizeMacroBasin`). Returns `Ok(None)` when bypassed by ActionHub.
     ///
     /// # Errors
@@ -810,7 +810,7 @@ impl ModelSteeringAdapter {
         let decision = StigmergicActionDecision::from_u8(self.action_hub.last_decision);
         if matches!(
             decision,
-            StigmergicActionDecision::FullOrchestrationSrl
+            StigmergicActionDecision::FullOrchestration
                 | StigmergicActionDecision::CrystallizeMacroBasin
         ) {
             let res = self.apply_srl_with_gateway(signal, hidden_inout, u_vec, v_vec)?;
@@ -820,8 +820,8 @@ impl ModelSteeringAdapter {
         }
     }
 
-    /// Applies norm-adaptive SRL residual injection driven purely by a [`ManifoldGatewaySignal`]
-    /// via [`GatewaySrlSteeringExt::apply_gateway_srl_hidden_fused`] without manual scale tuning.
+    /// Applies norm-adaptive Rank-1 residual residual injection driven purely by a [`ManifoldGatewaySignal`]
+    /// via [`GatewayRank1SteeringExt::apply_gateway_rank1_hidden_fused`] without manual scale tuning.
     ///
     /// # Errors
     ///
@@ -836,7 +836,7 @@ impl ModelSteeringAdapter {
         let d = hidden_inout.len();
         if d == 0 || u_vec.len() != d || v_vec.len() != d {
             return Err(format!(
-                "SRL hidden/u/v length mismatch: hidden={}, u={}, v={}",
+                "Rank-1 residual hidden/u/v length mismatch: hidden={}, u={}, v={}",
                 d,
                 u_vec.len(),
                 v_vec.len()
@@ -862,10 +862,10 @@ impl ModelSteeringAdapter {
             let v_aligned = AlignedSlice32::new(v_buf.as_slice())
                 .map_err(|e| format!("AlignedSlice32 v error: {e}"))?;
             self.residual_adapter
-                .apply_gateway_srl_hidden_fused(
+                .apply_gateway_rank1_hidden_fused(
                     signal, &mut y_mut, &x_aligned, &u_aligned, &v_aligned,
                 )
-                .map_err(|e| format!("apply_gateway_srl_hidden_fused error: {e}"))?
+                .map_err(|e| format!("apply_gateway_rank1_hidden_fused error: {e}"))?
         };
 
         hidden_inout.copy_from_slice(y_buf.as_slice());
@@ -931,8 +931,8 @@ impl ModelSteeringAdapter {
         Ok(state_out)
     }
 
-    /// Applies Rank-1 SRL residual injection (`y <- y + s * u * (v^T * y)`) to a hidden-state
-    /// vector via [`SrlAdapter::eval_rank1_slices_fused`].
+    /// Applies Rank-1 Rank-1 residual residual injection (`y <- y + s * u * (v^T * y)`) to a hidden-state
+    /// vector via [`Rank1ResidualAdapter::eval_rank1_slices_fused`].
     ///
     /// # Errors
     ///
@@ -950,7 +950,7 @@ impl ModelSteeringAdapter {
         let d = hidden_inout.len();
         if d == 0 || u_vec.len() != d || v_vec.len() != d {
             return Err(format!(
-                "SRL hidden/u/v length mismatch: hidden={}, u={}, v={}",
+                "Rank-1 residual hidden/u/v length mismatch: hidden={}, u={}, v={}",
                 d,
                 u_vec.len(),
                 v_vec.len()
@@ -1077,7 +1077,7 @@ pub struct DynamicAttractorRecall<'a> {
     /// Highest Guard resonance minus highest Fact/Persona resonance (`> 0` indicates guard-dominant conflict).
     pub guard_conflict_margin: f32,
     /// `ActionHub` regime selected by the upper boundary stratum (`PassiveSidecar`, `InertialLayerSkip`,
-    /// `ExpressPhaseSteer`, `PspmSubHeadRoute`, `FullOrchestrationSrl`, `CrystallizeMacroBasin`, or `RepulsionEscape`).
+    /// `ExpressPhaseSteer`, `SubHeadRoute`, `FullOrchestration`, `CrystallizeMacroBasin`, or `RepulsionEscape`).
     pub action_decision: StigmergicActionDecision,
     /// Authoritative 128-byte core [`GatewayFrame`] synthesized and arbitrated by the pipeline.
     pub gateway_frame: GatewayFrame,
@@ -2047,12 +2047,12 @@ pub struct SourceTextRecord {
     pub energy: f32,
 }
 
-/// Video-codec-inspired GOP frame payload stored in the `.gcso` PPRC Track.
+/// Video-codec-inspired GOP frame payload stored in the `.gcso` KV-keyframe Track.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GopFrameKind {
-    /// Full I-Frame snapshot containing a validated 4-section ZIMMS `.gcso` container and active policy.
+    /// Full I-Frame snapshot containing a validated 4-section mapped-storage `.gcso` container and active policy.
     KeyframeI {
-        /// Serialized 4-section ZIMMS container bytes (`GcsoFourSectionView`).
+        /// Serialized 4-section mapped-storage container bytes (`GcsoFourSectionView`).
         zimms_4section: Vec<u8>,
         /// Calibrated recall policy at this keyframe.
         recall_policy: RecallPolicy,
@@ -2094,7 +2094,7 @@ pub struct SeekedContainerState {
     pub active_phase_q7: [gcso_q7_t; MAX_ATTENTION_HEADS],
     /// Reconstructed total gravitational energy.
     pub total_energy: f32,
-    /// Anchor IDs present in the keyframe's ZIMMS crystal section.
+    /// Anchor IDs present in the keyframe's mapped-storage crystal section.
     pub anchor_ids: Vec<u32>,
 }
 
@@ -2117,7 +2117,7 @@ pub trait AttractorContainerCodec {
     /// Returns `Ok(true)` if an I-Frame keyframe was emitted, `Ok(false)` for a P-Frame.
     ///
     /// # Errors
-    /// Returns an error if ZIMMS serialization or frame ordering fails.
+    /// Returns an error if mapped-storage serialization or frame ordering fails.
     fn record_step(
         &mut self,
         ctx: &TimelineStepContext<'_>,
@@ -2157,7 +2157,7 @@ pub trait SubtitleActivationEncoder {
 pub struct RebakeContext<'a> {
     /// Target model's steering adapter (defines the target [`RopeGeometry`]).
     pub adapter: &'a ModelSteeringAdapter,
-    /// Recall boundary policy applied when constructing re-baked ZIMMS keyframes.
+    /// Recall boundary policy applied when constructing re-baked mapped-storage keyframes.
     pub policy: &'a RecallPolicy,
     /// Adaptive GOP scene-cut detector used during re-baking.
     pub detector: &'a dyn TimelineCutDetector,
@@ -2196,7 +2196,7 @@ pub enum TimelineResumeOutcome {
 const GCSO_DUAL_MAGIC: &[u8; 8] = b"GCSODUAL";
 const GCSO_DUAL_VERSION: u32 = 1;
 
-/// Dual-Track (Subtitle Natural-Language Track + PPRC Video-Style GOP Track) `.gcso` container.
+/// Dual-Track (Subtitle Natural-Language Track + KV-keyframe Video-Style GOP Track) `.gcso` container.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GcsoDualTrackTimeline {
     model_fingerprint: u64,
@@ -2693,7 +2693,7 @@ impl AttractorContainerCodec for GcsoDualTrackTimeline {
             .ok_or_else(|| format!("no preceding I-Frame for target {target_frame_index}"))?;
 
         let key_frame = &self.frames[key_pos];
-        let (zimms_bytes, recall_policy) = match &key_frame.kind {
+        let (container_bytes, recall_policy) = match &key_frame.kind {
             GopFrameKind::KeyframeI {
                 zimms_4section,
                 recall_policy,
@@ -2703,12 +2703,13 @@ impl AttractorContainerCodec for GcsoDualTrackTimeline {
             }
         };
 
-        let mut aligned = vec![0_u8; zimms_bytes.len() + 128];
+        let mut aligned = vec![0_u8; container_bytes.len() + 128];
         let off = aligned.as_ptr().align_offset(128);
-        aligned[off..off + zimms_bytes.len()].copy_from_slice(zimms_bytes);
-        let view =
-            GcsoFourSectionView::from_zimms_bytes_zero_copy(&aligned[off..off + zimms_bytes.len()])
-                .map_err(|e| format!("ZIMMS zero-copy view validation failed: {e}"))?;
+        aligned[off..off + container_bytes.len()].copy_from_slice(container_bytes);
+        let view = GcsoFourSectionView::from_container_bytes_zero_copy(
+            &aligned[off..off + container_bytes.len()],
+        )
+        .map_err(|e| format!("mapped-storage zero-copy view validation failed: {e}"))?;
 
         let mut active_phase_q7 = view
             .crystals
@@ -3014,7 +3015,7 @@ mod tests {
             .expect("srl gate")
             .is_none());
 
-        // Repeated resonant steps accumulate density above srl_inject_density_thresh (1.50).
+        // Repeated resonant steps accumulate density above rank1_inject_density_thresh (1.50).
         let mut final_decision = d1;
         for _ in 0..8 {
             let mut q_rot_k: Vec<f32> = (0..len).map(|i| ((i % 7) as f32) * 0.1 - 0.25).collect();
@@ -3034,7 +3035,7 @@ mod tests {
         }
         assert!(matches!(
             final_decision,
-            StigmergicActionDecision::FullOrchestrationSrl
+            StigmergicActionDecision::FullOrchestration
                 | StigmergicActionDecision::CrystallizeMacroBasin
         ));
         let srl_res = adapter
@@ -3066,9 +3067,9 @@ mod tests {
         assert_eq!(baseline.steered_layers, 16);
         assert!(baseline.baseline_entropy > 0.40);
 
-        let low_load_srl = adapter.action_hub().thresholds.srl_inject_density_thresh;
+        let low_load_srl = adapter.action_hub().thresholds.rank1_inject_density_thresh;
         adapter.update_environment_telemetry(0.85, 0.70, 0x0F);
-        let high_load_srl = adapter.action_hub().thresholds.srl_inject_density_thresh;
+        let high_load_srl = adapter.action_hub().thresholds.rank1_inject_density_thresh;
         assert!(high_load_srl > low_load_srl);
 
         let mut alt_geom = RopeGeometry::phi4_mini();
@@ -4017,7 +4018,7 @@ mod tests {
             top_k_facts: 2,
             top_k_personas: 1,
         };
-        // Local channel sharply selects id_target while global channel prefers f1 slightly -> disagreement triggers PspmSubHeadRoute.
+        // Local channel sharply selects id_target while global channel prefers f1 slightly -> disagreement triggers SubHeadRoute.
         let recall = corpus
             .recall_for_query_with_strata_and_local_scores(
                 &adapter,
@@ -4031,7 +4032,7 @@ mod tests {
         assert!(recall.telemetry.channel_disagreement);
         assert_eq!(
             recall.action_decision,
-            StigmergicActionDecision::PspmSubHeadRoute
+            StigmergicActionDecision::SubHeadRoute
         );
         assert_eq!(
             recall.recalled_facts.first().map(|(e, _)| e.anchor_id),
@@ -4154,7 +4155,7 @@ mod tests {
         );
         assert_eq!(
             recall.action_decision,
-            StigmergicActionDecision::PspmSubHeadRoute
+            StigmergicActionDecision::SubHeadRoute
         );
     }
 
@@ -4284,7 +4285,7 @@ mod tests {
         );
         assert_eq!(
             recall.action_decision,
-            StigmergicActionDecision::PspmSubHeadRoute
+            StigmergicActionDecision::SubHeadRoute
         );
 
         // Weak noise OOD query below basin support must stay suppressed in cvoid.
@@ -4439,7 +4440,7 @@ mod tests {
         );
         assert_eq!(
             recall.action_decision,
-            StigmergicActionDecision::PspmSubHeadRoute
+            StigmergicActionDecision::SubHeadRoute
         );
         assert_eq!(
             recall

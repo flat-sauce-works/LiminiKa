@@ -6,7 +6,7 @@
 //! Gateway FFI bridges, Classical Online Toroidal $k$-Means / DP-Means macro clustering
 //! (single-frame & deferred-CRC32 batch), Coarse-to-Fine routing (centroid-only, candidate-trail,
 //! & fused Bayesian + Attention score modulation), Limina inter-memory bridging, 4-section
-//! `.gcso` zero-copy container persistence (with `gcso_zimms_descriptor_t` preamble &
+//! `.gcso` zero-copy container persistence (with `gcso_mapped_storage_descriptor_t` preamble &
 //! `CausalProvenanceReport` history), and FFI boundary safety primitives for the Geometric
 //! Cellular Sheaf Orchestrator (GCSO) core engine.
 //!
@@ -104,15 +104,15 @@ use crate::traits::primitives::{
 };
 use crate::traits::rope::{
     dispatch_fused_ripa_and_pspm_words_core, steer_from_swar_words_core_safe, PhaseSteering,
-    PspmRouter, SrlAdapter,
+    Rank1ResidualAdapter, SubHeadRouter,
 };
 use crate::traits::telemetry::{
     ContrastivePhaseBloomFilter, FastPathLedger, PagedBitmaskOps, StigmergicActionPtrOps,
     StigmergicSwarmOps, StigmergicTrailOps, SwarmResolutionReport, LEDGER_METRIC_PHASE_STEERED,
-    LEDGER_METRIC_PSPM_ROUTED, LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
-    MAX_ATTRACTOR_PULL_FORCE, NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
-    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
-    TRAIL_FLAG_SYNERGY_RESONANCE,
+    LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
+    LEDGER_METRIC_SUBHEAD_ROUTED, MAX_ATTRACTOR_PULL_FORCE, NUM_SWARM_MICRO_CELLS,
+    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
+    TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
 /// Helper macro to catch unwinding panics and safely bridge execution into C-ABI error status codes.
@@ -294,7 +294,7 @@ mod tests {
         let mut y_out = AlignedBuffer32::new([0.0f32; 4]);
         let u_vec = AlignedBuffer32::new([2.0f32; 4]);
         let v_vec = AlignedBuffer32::new([1.0f32; 4]);
-        let desc = gcso_srl_descriptor_t {
+        let desc = gcso_rank1_residual_descriptor_t {
             layer_idx: 0,
             rank: 1,
             u_vector_ptr: u_vec.as_ptr() as u64,
@@ -329,11 +329,11 @@ mod tests {
             );
             assert!((barrier - (1.0 / 512.0)).abs() < 1e-6);
             assert_eq!(
-                gcso_srl_eval_rank1(y_out.as_mut_ptr(), x_in.as_ptr(), &desc, 4, 4),
+                gcso_rank1_eval(y_out.as_mut_ptr(), x_in.as_ptr(), &desc, 4, 4),
                 GCSO_SUCCESS
             );
             assert_eq!(
-                gcso_srl_eval_rank1_fused(y_out.as_mut_ptr(), x_in.as_ptr(), &desc, 4, 4),
+                gcso_rank1_eval_fused(y_out.as_mut_ptr(), x_in.as_ptr(), &desc, 4, 4),
                 GCSO_SUCCESS
             );
             assert_eq!(
@@ -617,7 +617,7 @@ mod tests {
                 GCSO_SUCCESS
             );
         }
-        assert_eq!(frame.zimms_section_offset48, 0x0018_0000);
+        assert_eq!(frame.mapped_section_offset48, 0x0018_0000);
         assert_eq!(frame.target_anchor_id, 55);
         assert_eq!(report.dominant_slot, ATTRACTOR_SLOT_KNOWLEDGE);
 
@@ -803,7 +803,7 @@ mod tests {
         let mut c2f_macro_aid = 0u32;
         let mut c2f_coh_cnt = 0u32;
         let mut ledger = gcso_ledger_slot_t::default();
-        let pspm_cfg = gcso_pspm_config_t {
+        let subhead_cfg = gcso_subhead_config_t {
             num_fact_heads: 8,
             num_logic_heads: 4,
             num_explore_heads: 4,
@@ -868,7 +868,7 @@ mod tests {
                     1.0,
                     64,
                     0.25,
-                    &pspm_cfg,
+                    &subhead_cfg,
                     0.0,
                     &mut ledger,
                     q_buf.as_mut_ptr(),
@@ -890,7 +890,7 @@ mod tests {
             assert!(c2f_bayes_scores[1] > 1.0 && c2f_bayes_scores[0] < -0.5);
             assert_ne!(
                 ledger.telemetry_mini_ledger[0]
-                    & (LEDGER_METRIC_PHASE_STEERED | LEDGER_METRIC_PSPM_ROUTED),
+                    & (LEDGER_METRIC_PHASE_STEERED | LEDGER_METRIC_SUBHEAD_ROUTED),
                 0
             );
         }
@@ -937,7 +937,7 @@ mod tests {
         let reports_arr = [report];
         let mut container_buf = AlignedBuffer128::<u8, 768>::new([0u8; 768]);
         let mut req_len = 0usize;
-        let mut zimms_desc = gcso_zimms_descriptor_t::default();
+        let mut storage_desc = gcso_mapped_storage_descriptor_t::default();
         let mut nc_out = 0usize;
         let mut nt_out = 0usize;
         let mut nr_out = 0usize;
@@ -986,7 +986,7 @@ mod tests {
                 gcso_container_verify_four_section_with_reports_zero_copy(
                     container_buf.data.as_ptr(),
                     req_len,
-                    &mut zimms_desc,
+                    &mut storage_desc,
                     &mut nc_out,
                     &mut nt_out,
                     &mut nr_out,
@@ -998,8 +998,8 @@ mod tests {
                 ),
                 GCSO_SUCCESS
             );
-            assert_eq!(zimms_desc.file_size_bytes, req_len as u64);
-            assert_eq!(zimms_desc.flags, 4);
+            assert_eq!(storage_desc.file_size_bytes, req_len as u64);
+            assert_eq!(storage_desc.flags, 4);
             assert_eq!(nc_out, 1);
             assert_eq!(nt_out, 1);
             assert_eq!(nr_out, 1);
@@ -1319,8 +1319,11 @@ mod tests {
             assert_eq!(closed_loop_trail.cluster_id, 88);
             assert_eq!(closed_loop_trail.target_anchor_id, 88);
 
-            assert_eq!(gcso_zimms_close_mmap(&mut zimms_desc), GCSO_SUCCESS);
-            assert_eq!(zimms_desc.fd_handle, -1);
+            assert_eq!(
+                gcso_mapped_storage_close_mmap(&mut storage_desc),
+                GCSO_SUCCESS
+            );
+            assert_eq!(storage_desc.fd_handle, -1);
         }
     }
 
@@ -1467,7 +1470,7 @@ mod tests {
             );
             assert_eq!(
                 orch_report.decision,
-                StigmergicActionDecision::FullOrchestrationSrl as u8
+                StigmergicActionDecision::FullOrchestration as u8
             );
             assert_eq!(
                 gcso_action_hub_orchestrate_stigmergic_step_safe(

@@ -10,10 +10,10 @@
 //! - **[`PhaseSteeringEngine`]**: Compact 16-byte (`#[repr(C, align(16))]`) [`Pod`] state descriptor storing
 //!   `(head_dim, num_heads, ripa_clamp_max_rad, qdps_min_step_rad)`. Delegates all 50+ low-level
 //!   constant-time AVX2/SSE2 SIMD and 8-lane SWAR operations directly to the default trait methods
-//!   of [`PhaseSteering`], [`EntropyGatedPhaseLookup`], [`DynamicLayerSkipper`], [`PspmRouter`],
+//!   of [`PhaseSteering`], [`EntropyGatedPhaseLookup`], [`DynamicLayerSkipper`], [`SubHeadRouter`],
 //!   [`VisualAttentionSteering`], and [`crate::traits::BranchlessKernel`] (`crate::traits::rope`).
 //! - **[`PhaseSteeringClosedLoop`]**: Blanket-implemented extension trait
-//!   (`impl<T: PhaseSteering + PspmRouter + ?Sized> PhaseSteeringClosedLoop for T {}`) that equips
+//!   (`impl<T: PhaseSteering + SubHeadRouter + ?Sized> PhaseSteeringClosedLoop for T {}`) that equips
 //!   [`PhaseSteeringEngine`], [`crate::traits::ActionHub`], [`crate::traits::HotPathObserver`], and
 //!   [`crate::traits::ColdPathObserver`] with:
 //!   1. Closed-loop 8-cell SWAR Micro-Swarm resolution (`resolve_and_apply_swarm_phase_steering_safe`,
@@ -29,7 +29,7 @@
 //!      (`select_rewire_and_steer_bayesian_pointer_trail_safe`), combining sequential conditional
 //!      transition probability ($\prod_t P(M_t \mid M_{<t})$ $\times$ Attention phase interference)
 //!      with indirect pointer-chain routing in `ActionHub`.
-//!   4. Register-resident $SO(2)$ group-closure fused **Unified-Field RIPA + PSPM Sub-Head Pseudo-MoE
+//!   4. Register-resident $SO(2)$ group-closure fused **Unified-Field RIPA + sub-head router Sub-Head Pseudo-MoE
 //!      routing + multiplicative inverse-temperature logit sharpening/flattening**
 //!      (`steer_unified_field_pspm_and_inv_temperature_safe`) with zero intermediate stack buffers.
 //!   5. Orthogonal Procrustes trail feedback (`steer_trail_with_procrustes_feedback`) and Limina
@@ -42,7 +42,7 @@
 //!      `steer_crystallized_ensemble_zero_copy_safe`,
 //!      `steer_gateway_swarm_bayesian_and_crystallize_safe`), synthesizing any [`ManifoldGatewaySignal`]
 //!      into a 128-byte [`GatewayFrame`] and [`CausalProvenanceReport`] while executing $SO(2)$-fused
-//!      RIPA+PSPM steering and accumulating macro centroid distributions on $SO(2)^{64}$.
+//!      RIPA+sub-head router steering and accumulating macro centroid distributions on $SO(2)^{64}$.
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -70,7 +70,7 @@
 use core::mem::{align_of, offset_of, size_of};
 
 use crate::abi::{
-    gcso_config_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t,
+    gcso_config_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t, gcso_subhead_config_t,
     gcso_tagged_ptr_t, GCSO_ERROR_INVALID_ARGUMENT,
 };
 use crate::traits::aligned::{AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut32};
@@ -94,14 +94,14 @@ use crate::traits::primitives::{
     trail_phase_words_ref, SWAR_SPLAT_BYTE_64,
 };
 use crate::traits::primitives::{
-    GcsoResult, Pod, ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PSPM_ROUTE,
+    GcsoResult, Pod, ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_SUBHEAD_ROUTE,
     ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_REPULSION, DEFAULT_ENTROPY_EPS,
     DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD, MAX_ATTENTION_HEADS,
     MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
 };
 use crate::traits::rope::{
     dispatch_fused_ripa_and_pspm_words_core, ripa_upper_rot_dim, steer_from_swar_words_core_safe,
-    DynamicLayerSkipper, EntropyGatedPhaseLookup, PhaseSteering, PspmRouter,
+    DynamicLayerSkipper, EntropyGatedPhaseLookup, PhaseSteering, SubHeadRouter,
     VisualAttentionSteering,
 };
 use crate::traits::telemetry::{
@@ -286,7 +286,7 @@ fn finish_constant_time_swarm_qdps_and_steer(
 /// [`CrystallizedAttractorRecord::absorb_gateway_frame_with_words`] without reloading `frame.phase_deltas`.
 #[inline(always)]
 fn steer_gateway_signal_core_safe<
-    T: PhaseSteering + PspmRouter + ?Sized,
+    T: PhaseSteering + SubHeadRouter + ?Sized,
     S: ManifoldGatewaySignal + ?Sized,
 >(
     engine: &T,
@@ -479,16 +479,16 @@ fn route_macro_aligned_bayesian_trails_and_steer_core(
 // 1. Blanket-Implemented Closed-Loop DPSR + Swarm / Unified-Field / Limina / Gateway Trait
 // ===================================================================
 
-/// Blanket-implemented closed-loop steering trait uniting [`PhaseSteering`] and [`PspmRouter`]
+/// Blanket-implemented closed-loop steering trait uniting [`PhaseSteering`] and [`SubHeadRouter`]
 /// with [`StigmergicSwarmOps`], Single-Manifold Unified-Field resonance, Bayesian Pointer-Trail
 /// selection & Attention score modulation, Orthogonal Procrustes trail feedback, Limina
 /// inter-memory bridging, Online Toroidal $k$-Means / DP-Means Coarse-to-Fine routing, and
 /// 2-Origin Composite Manifold Gateway execution.
 ///
-/// Automatically implemented for all `T: PhaseSteering + PspmRouter + ?Sized` (including
+/// Automatically implemented for all `T: PhaseSteering + SubHeadRouter + ?Sized` (including
 /// [`PhaseSteeringEngine`], [`crate::traits::ActionHub`], [`crate::traits::HotPathObserver`],
 /// [`crate::traits::ColdPathObserver`], and [`crate::traits::FullStackGcsoEngine`]).
-pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
+pub trait PhaseSteeringClosedLoop: PhaseSteering + SubHeadRouter {
     /// Executes closed-loop 8-Cell SWAR Micro-Swarm consensus on `trail` against `target_phases`
     /// via [`StigmergicSwarmOps::try_resolve_action_in_swarm_to_words`] and steers `query_tensor`
     /// (and optionally `key_tensor`) directly from the 8 returned `u64` SWAR registers via
@@ -768,7 +768,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
 
     /// Combines **Sequential Conditional Transition Probability** ($P(M_1, \dots, M_T) = \prod_t P(M_t \mid M_{<t})$
     /// $\times$ Attention phase interference) and **Indirect Pointer-Chain Graph Routing** in `ActionHub`
-    /// directly on any `T: PhaseSteering + PspmRouter` in zero-copy, zero-allocation ($C_{\mathrm{alloc}} = 0$) mode.
+    /// directly on any `T: PhaseSteering + SubHeadRouter` in zero-copy, zero-allocation ($C_{\mathrm{alloc}} = 0$) mode.
     ///
     /// Returns `(selected_trail_id, bayesian_score, transition_coherence, transition_log_prob, found_coherent_transition)`.
     ///
@@ -831,7 +831,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
     }
 
     /// Combines **Order-Invariant Single-Manifold Unified-Field Resonance**, **RIPA Q/K Phase
-    /// Steering**, optional **Register-Resident $SO(2)$-Fused PSPM Sub-Head Pseudo-MoE**
+    /// Steering**, optional **Register-Resident $SO(2)$-Fused sub-head router Sub-Head Pseudo-MoE**
     /// (`dispatch_fused_ripa_and_pspm_words_core`, eliminating the 64-byte `phase_buf`
     /// stack spill), and optional **Multiplicative Inverse-Temperature Logit Scaling**
     /// ($\beta_{\mathrm{eff}} = \mathrm{clamp}(1.0 + \gamma \mathcal{C}_{\mathrm{phase}}, 0.25, 4.0)$)
@@ -841,7 +841,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `anchor_phases.len() != anchor_base_energies.len()`,
-    /// `min_step_rad < 0.0`, `max_rad <= 0.0`, or tensor/PSPM parameters are invalid.
+    /// `min_step_rad < 0.0`, `max_rad <= 0.0`, or tensor/sub-head router parameters are invalid.
     #[inline]
     fn steer_unified_field_pspm_and_inv_temperature_safe(
         &self,
@@ -849,7 +849,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
         anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
         repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
-        pspm_config_and_explore_pulse: Option<(&gcso_pspm_config_t, gcso_q7_t)>,
+        subhead_config_and_explore_pulse: Option<(&gcso_subhead_config_t, gcso_q7_t)>,
         logits_and_inv_temp_gain: Option<(&mut AlignedSliceMut32<'_, f32>, f32)>,
         min_step_rad: f32,
         max_rad: f32,
@@ -879,7 +879,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
             );
 
         let need_dom_w =
-            logits_and_inv_temp_gain.is_some() || pspm_config_and_explore_pulse.is_some();
+            logits_and_inv_temp_gain.is_some() || subhead_config_and_explore_pulse.is_some();
         let raw_eq_dom = (!need_dom_w)
             | ((active_cnt <= 1)
                 & ((anchor_phases.len() <= 1) | (init_pull <= DEFAULT_ENTROPY_EPS))
@@ -919,10 +919,10 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
         let filt_w = swar_q7_qdps_filter_words_64(&raw_w, step_u8);
         let filt_nonzero = swar_words_nonzero_64(&filt_w);
 
-        if let Some((pspm_cfg, explore_pulse_q7)) = pspm_config_and_explore_pulse {
-            let total_pspm_heads = (pspm_cfg.num_fact_heads as usize)
-                .checked_add(pspm_cfg.num_logic_heads as usize)
-                .and_then(|v| v.checked_add(pspm_cfg.num_explore_heads as usize))
+        if let Some((subhead_cfg, explore_pulse_q7)) = subhead_config_and_explore_pulse {
+            let total_pspm_heads = (subhead_cfg.num_fact_heads as usize)
+                .checked_add(subhead_cfg.num_logic_heads as usize)
+                .and_then(|v| v.checked_add(subhead_cfg.num_explore_heads as usize))
                 .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
             if total_pspm_heads > num_heads {
                 return Err(GCSO_ERROR_INVALID_ARGUMENT);
@@ -936,9 +936,9 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
             let is_default_ripa_pspm = filt_eq_dom
                 & (explore_pulse_q7 == 0)
                 & (total_pspm_heads == num_heads)
-                & (pspm_cfg.fact_phase_gain.to_bits() == 1.0_f32.to_bits())
-                & (pspm_cfg.logic_phase_gain.to_bits() == 1.0_f32.to_bits())
-                & (pspm_cfg.explore_phase_gain.to_bits() == 1.0_f32.to_bits())
+                & (subhead_cfg.fact_phase_gain.to_bits() == 1.0_f32.to_bits())
+                & (subhead_cfg.logic_phase_gain.to_bits() == 1.0_f32.to_bits())
+                & (subhead_cfg.explore_phase_gain.to_bits() == 1.0_f32.to_bits())
                 & (max_rad.to_bits() == DEFAULT_RIPA_CLAMP_MAX_RAD.to_bits())
                 & (num_heads > 0)
                 & (num_heads <= MAX_ATTENTION_HEADS);
@@ -975,7 +975,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
                     query_tensor,
                     &filt_w,
                     max_rad,
-                    pspm_cfg,
+                    subhead_cfg,
                     fact_w_ref,
                     logic_w_ref,
                     explore_w_ref,
@@ -1509,9 +1509,9 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
     /// Synthesizes any [`ManifoldGatewaySignal`] (such as a 2/3/4-tuple of
     /// `(SystemConstraintSignal, ObjectiveFactSignal, SubjectivePersonaSignal, ContradictionGuardSignal)`,
     /// a [`GatewayFrame`], or a [`CrystallizedAttractorRecord`]), folds its resonant 64-head phase
-    /// and 48-bit ZIMMS tagged pointer into `trail` in 8 register-resident `u64` SWAR words,
-    /// executes $SO(2)$ group-closure fused RIPA + PSPM sub-head routing on `query_tensor` when
-    /// `ACTION_MODE_PSPM_ROUTE` is active (or standard RIPA steering via `steer_from_swar_words_core_safe`),
+    /// and 48-bit mapped-storage tagged pointer into `trail` in 8 register-resident `u64` SWAR words,
+    /// executes $SO(2)$ group-closure fused RIPA + sub-head router sub-head routing on `query_tensor` when
+    /// `ACTION_MODE_SUBHEAD_ROUTE` is active (or standard RIPA steering via `steer_from_swar_words_core_safe`),
     /// and optionally scales `logits_opt` by `frame.effective_inv_temp`.
     ///
     /// Returns `(GatewayFrame, CausalProvenanceReport)`.
@@ -1573,7 +1573,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
     }
 
     /// Executes the closed-loop **2-Origin Composite Manifold Gateway $\to$ $SO(2)$-Fused
-    /// RIPA/PSPM Steering $\to$ Classical Online Toroidal $k$-Means / DP-Means Macro Clustering**
+    /// RIPA/sub-head router Steering $\to$ Classical Online Toroidal $k$-Means / DP-Means Macro Clustering**
     /// pipeline on `centroids: &mut [CrystallizedAttractorRecord]` in a single zero-allocation call.
     ///
     /// Returns `(GatewayFrame, CausalProvenanceReport, assigned_cluster_idx, assigned_anchor_id, centroid_coherence, updated_gravity_mass, spawned_new_cluster)`.
@@ -1868,7 +1868,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
 
     /// Executes the full end-to-end **2-Origin Composite Gateway $\to$ 8-Cell SWAR Micro-Swarm $\to$
     /// Bayesian Pointer-Chain Selection & Limina Bridging $\to$
-    /// Register-Resident $SO(2)$-Fused RIPA/PSPM Steering $\to$ `.gcso` Crystallization** pipeline.
+    /// Register-Resident $SO(2)$-Fused RIPA/sub-head router Steering $\to$ `.gcso` Crystallization** pipeline.
     ///
     /// Returns `(GatewayFrame, CausalProvenanceReport, SwarmResolutionReport, selected_trail_id, found_coherent_trail)`.
     ///
@@ -2014,7 +2014,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
             let clean_damping =
                 branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
             let swar_nonzero = swar_words_nonzero_64(&swar_words);
-            let use_pspm = ((frame.action_mode_flags & ACTION_MODE_PSPM_ROUTE) != 0)
+            let use_pspm = ((frame.action_mode_flags & ACTION_MODE_SUBHEAD_ROUTE) != 0)
                 & (swarm_report.quorum_mask == 0xFF);
             if use_pspm {
                 let is_default_ripa = (explore_pulse_q7 == 0)
@@ -2045,12 +2045,12 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
                         );
                     }
                 } else {
-                    let pspm_cfg = frame.to_pspm_config_for_heads(num_heads);
+                    let subhead_cfg = frame.to_subhead_config_for_heads(num_heads);
                     dispatch_fused_ripa_and_pspm_words_core(
                         query_tensor,
                         &swar_words,
                         frame.ripa_clamp_rad,
-                        &pspm_cfg,
+                        &subhead_cfg,
                         &swar_words,
                         &swar_words,
                         &swar_words,
@@ -2168,7 +2168,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + PspmRouter {
     }
 }
 
-impl<T: PhaseSteering + PspmRouter + ?Sized> PhaseSteeringClosedLoop for T {}
+impl<T: PhaseSteering + SubHeadRouter + ?Sized> PhaseSteeringClosedLoop for T {}
 
 // ===================================================================
 // 2. Primary DPSR Phase-Steering & Sub-Head Routing Engine (`16B` Pod)
@@ -2499,7 +2499,7 @@ impl EntropyGatedPhaseLookup for PhaseSteeringEngine {}
 
 impl DynamicLayerSkipper for PhaseSteeringEngine {}
 
-impl PspmRouter for PhaseSteeringEngine {}
+impl SubHeadRouter for PhaseSteeringEngine {}
 
 impl VisualAttentionSteering for PhaseSteeringEngine {}
 
@@ -2926,7 +2926,7 @@ mod tests {
             .unwrap();
         assert_eq!(slerp_t128.data[0], 32);
 
-        let pspm_cfg = gcso_pspm_config_t {
+        let subhead_cfg = gcso_subhead_config_t {
             num_fact_heads: 4,
             num_logic_heads: 8,
             num_explore_heads: 4,
@@ -2939,7 +2939,7 @@ mod tests {
         engine
             .dispatch_subhead_slot_ensemble_geodesic(
                 &mut q_pspm.as_aligned_slice_mut(),
-                &pspm_cfg,
+                &subhead_cfg,
                 &slot_bank.relax_slice::<16>(),
                 0,
                 1,
@@ -3026,7 +3026,7 @@ mod tests {
 
         let unified_anchors = [[-96i8; MAX_ATTENTION_HEADS], [30i8; MAX_ATTENTION_HEADS]];
         let unified_energies = [0.1f32, 3.5f32];
-        let pspm_cfg = gcso_pspm_config_t {
+        let subhead_cfg = gcso_subhead_config_t {
             num_fact_heads: 4,
             num_logic_heads: 8,
             num_explore_heads: 4,
@@ -3043,7 +3043,7 @@ mod tests {
                 &unified_anchors,
                 &unified_energies,
                 None,
-                Some((&pspm_cfg, 8i8)),
+                Some((&subhead_cfg, 8i8)),
                 Some((&mut branch_logits.as_aligned_slice_mut(), 1.0)),
                 0.01,
                 DEFAULT_RIPA_CLAMP_MAX_RAD,
@@ -3080,12 +3080,12 @@ mod tests {
                 Some(&mut gw_logits.as_aligned_slice_mut()),
             )
             .unwrap();
-        assert_eq!(gw_frame.zimms_section_offset48, 0x0024_0000);
+        assert_eq!(gw_frame.mapped_section_offset48, 0x0024_0000);
         assert_eq!(src_trail.target_anchor_id, 88);
         assert_eq!(gw_report.dominant_slot, ATTRACTOR_SLOT_KNOWLEDGE);
         assert!(grav_mass > 0.0 && crystal.sample_count == 1 && crystal.verify_integrity());
 
-        let scaled_cfg16 = gw_frame.to_pspm_config_for_heads(16);
+        let scaled_cfg16 = gw_frame.to_subhead_config_for_heads(16);
         assert_eq!(
             scaled_cfg16.num_fact_heads
                 + scaled_cfg16.num_logic_heads

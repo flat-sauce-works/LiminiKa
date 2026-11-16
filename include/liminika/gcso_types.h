@@ -43,7 +43,7 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_CRYSTAL_RECORD_MAGIC 0x4C545343U   /* "CSTL" in ASCII */
 #define GCSO_CRYSTAL_RECORD_VERSION 0x00000101U /* Unified v0.1.1 */
 #define GCSO_FOUR_SECTION_HEADER_BYTES 192U
-#define GCSO_ZIMMS_DESCRIPTOR_PREAMBLE_OFFSET 128U
+#define GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET 128U
 #define GCSO_Q7_PHASE_ARRAY_LEN 64U
 #define GCSO_BLOOM_FILTER_COUNTERS_LEN 64U
 #define GCSO_FAST_PATH_SHORTCUT_SLOTS 4U
@@ -88,8 +88,8 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_ACTION_MODE_DPSR_STEER (1U << 0)    /* 0x01U */
 #define GCSO_ACTION_MODE_LAYER_SKIP (1U << 1)    /* 0x02U */
 #define GCSO_ACTION_MODE_PHASE_REPULSE (1U << 2) /* 0x04U */
-#define GCSO_ACTION_MODE_PSPM_ROUTE (1U << 3)    /* 0x08U */
-#define GCSO_ACTION_MODE_SRL_INJECT (1U << 4)    /* 0x10U */
+#define GCSO_ACTION_MODE_SUBHEAD_ROUTE (1U << 3)    /* 0x08U */
+#define GCSO_ACTION_MODE_RANK1_INJECT (1U << 4)    /* 0x10U */
 #define GCSO_ACTION_MODE_ALL_MASK 0x1FU
 
 /* Canonical Action Mode Presets (1:1 parity with primitives.rs) */
@@ -97,9 +97,9 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_ACTION_PRESET_EXPRESS_PHASE (GCSO_ACTION_MODE_DPSR_STEER)
 #define GCSO_ACTION_PRESET_INERTIAL_SKIP (GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_LAYER_SKIP)
 #define GCSO_ACTION_PRESET_REPULSION_ESCAPE \
-    (GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_PHASE_REPULSE | GCSO_ACTION_MODE_PSPM_ROUTE)
+    (GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_PHASE_REPULSE | GCSO_ACTION_MODE_SUBHEAD_ROUTE)
 #define GCSO_ACTION_PRESET_FULL_ORCHESTRATION \
-    (GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_PSPM_ROUTE | GCSO_ACTION_MODE_SRL_INJECT)
+    (GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_SUBHEAD_ROUTE | GCSO_ACTION_MODE_RANK1_INJECT)
 
 /* Pointer Trail Status Flags (1:1 bit parity with telemetry.rs) */
 #define GCSO_TRAIL_FLAG_DPSR_ACTIVE (1U << 0)            /* 0x00000001U */
@@ -118,8 +118,8 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_LEDGER_METRIC_PHASE_STEERED (1U << 1)
 #define GCSO_LEDGER_METRIC_REPULSION_APPLIED (1U << 2)
 #define GCSO_LEDGER_METRIC_LAYER_SKIP_COMPENSATED (1U << 3)
-#define GCSO_LEDGER_METRIC_PSPM_ROUTED (1U << 4)
-#define GCSO_LEDGER_METRIC_SRL_INJECTED (1U << 5)
+#define GCSO_LEDGER_METRIC_SUBHEAD_ROUTED (1U << 4)
+#define GCSO_LEDGER_METRIC_RANK1_INJECTED (1U << 5)
 #define GCSO_LEDGER_METRIC_LAZY_UNWRAP_APPLIED (1U << 6)
 #define GCSO_LEDGER_METRIC_SLOT_SYNERGY_ACTIVE (1U << 7)
 #define GCSO_LEDGER_FLAG_COGNITIVE_TRAJECTORY (1U << 0)
@@ -163,9 +163,9 @@ typedef enum gcso_status GCSO_ENUM_UNDERLYING(int32_t){
     GCSO_ERROR_QDPS_UNDERFLOW = -31,
     GCSO_ERROR_EDBC_SINGULARITY = -40,
     GCSO_ERROR_CONTAINER_CORRUPTED = -50,
-    GCSO_ERROR_ZIMMS_MAPPING_FAILED = -51,
-    GCSO_ERROR_PSPM_ROUTING_FAILED = -60,
-    GCSO_ERROR_PPRC_SEEK_FAILED = -70,
+    GCSO_ERROR_MAPPED_STORAGE_FAILED = -51,
+    GCSO_ERROR_SUBHEAD_ROUTING_FAILED = -60,
+    GCSO_ERROR_KV_KEYFRAME_SEEK_FAILED = -70,
     GCSO_ERROR_OBSTRUCTION_UNRESOLVED = -80,
     GCSO_ERROR_EXTENSION_NOT_LOADED = -90,
     GCSO_ERROR_LEDGER_FULL = -91,
@@ -184,8 +184,8 @@ typedef enum gcso_anchor_type GCSO_ENUM_UNDERLYING(uint32_t){
  */
 typedef enum gcso_stigmergic_action_decision GCSO_ENUM_UNDERLYING(uint8_t){
     GCSO_DECISION_PASSIVE_SIDECAR = 0,        GCSO_DECISION_INERTIAL_LAYER_SKIP = 1,
-    GCSO_DECISION_EXPRESS_PHASE_STEER = 2,    GCSO_DECISION_PSPM_SUB_HEAD_ROUTE = 3,
-    GCSO_DECISION_FULL_ORCHESTRATION_SRL = 4, GCSO_DECISION_CRYSTALLIZE_MACRO_BASIN = 5,
+    GCSO_DECISION_EXPRESS_PHASE_STEER = 2,    GCSO_DECISION_SUBHEAD_ROUTE = 3,
+    GCSO_DECISION_FULL_ORCHESTRATION = 4, GCSO_DECISION_CRYSTALLIZE_MACRO_BASIN = 5,
     GCSO_DECISION_REPULSION_ESCAPE = 6} gcso_stigmergic_action_decision_enum_t;
 
 /**
@@ -301,7 +301,7 @@ typedef struct gcso_edbc_state gcso_edbc_state_t;
 /**
  * @brief Zero-copy memory mapped storage descriptor (64 bytes).
  */
-struct GCSO_ALIGN_PREFIX(32) gcso_zimms_descriptor {
+struct GCSO_ALIGN_PREFIX(32) gcso_mapped_storage_descriptor {
     uint64_t mapped_address;
     uint64_t file_size_bytes;
     uint64_t dma_buffer_handle;
@@ -309,12 +309,12 @@ struct GCSO_ALIGN_PREFIX(32) gcso_zimms_descriptor {
     int32_t fd_handle;
     uint8_t reserved[32];
 } GCSO_ALIGN_SUFFIX(32);
-typedef struct gcso_zimms_descriptor gcso_zimms_descriptor_t;
+typedef struct gcso_mapped_storage_descriptor gcso_mapped_storage_descriptor_t;
 
 /**
  * @brief Sub-head group router configuration descriptor (32 bytes).
  */
-struct GCSO_ALIGN_PREFIX(16) gcso_pspm_config {
+struct GCSO_ALIGN_PREFIX(16) gcso_subhead_config {
     uint16_t num_fact_heads;
     uint16_t num_logic_heads;
     uint16_t num_explore_heads;
@@ -324,12 +324,12 @@ struct GCSO_ALIGN_PREFIX(16) gcso_pspm_config {
     float explore_phase_gain;
     uint8_t reserved[12];
 } GCSO_ALIGN_SUFFIX(16);
-typedef struct gcso_pspm_config gcso_pspm_config_t;
+typedef struct gcso_subhead_config gcso_subhead_config_t;
 
 /**
- * @brief Sparse Residual Adapter Layer (SRL) Rank-1 descriptor (64 bytes).
+ * @brief Sparse Residual Adapter Layer (Rank-1 residual) Rank-1 descriptor (64 bytes).
  */
-struct GCSO_ALIGN_PREFIX(32) gcso_srl_descriptor {
+struct GCSO_ALIGN_PREFIX(32) gcso_rank1_residual_descriptor {
     uint32_t layer_idx;
     uint32_t rank;
     uint64_t u_vector_ptr;
@@ -339,7 +339,7 @@ struct GCSO_ALIGN_PREFIX(32) gcso_srl_descriptor {
     uint32_t flags;
     uint8_t reserved[24];
 } GCSO_ALIGN_SUFFIX(32);
-typedef struct gcso_srl_descriptor gcso_srl_descriptor_t;
+typedef struct gcso_rank1_residual_descriptor gcso_rank1_residual_descriptor_t;
 
 /**
  * @brief Unified binary snapshot container header structure (128 bytes).
@@ -351,7 +351,7 @@ struct GCSO_ALIGN_PREFIX(64) gcso_snapshot_header {
     uint64_t action_hub_offset;
     uint64_t attractor_field_offset;
     uint64_t dpsr_state_offset;
-    uint64_t srl_state_offset;
+    uint64_t rank1_state_offset;
     uint64_t edbc_state_offset;
     uint32_t checksum_crc32;
     uint32_t ledger_slot_offset;
@@ -361,9 +361,9 @@ struct GCSO_ALIGN_PREFIX(64) gcso_snapshot_header {
 typedef struct gcso_snapshot_header gcso_snapshot_header_t;
 
 /**
- * @brief PPRC Keyframe KV cache index header structure (64 bytes).
+ * @brief KV-keyframe Keyframe KV cache index header structure (64 bytes).
  */
-struct GCSO_ALIGN_PREFIX(32) gcso_pprc_keyframe_header {
+struct GCSO_ALIGN_PREFIX(32) gcso_kv_keyframe_header {
     uint32_t frame_type;
     uint32_t token_index;
     uint32_t gop_length;
@@ -374,7 +374,7 @@ struct GCSO_ALIGN_PREFIX(32) gcso_pprc_keyframe_header {
     uint64_t pcache_payload_offset;
     uint8_t reserved[24];
 } GCSO_ALIGN_SUFFIX(32);
-typedef struct gcso_pprc_keyframe_header gcso_pprc_keyframe_header_t;
+typedef struct gcso_kv_keyframe_header gcso_kv_keyframe_header_t;
 
 /**
  * @brief Stigmergic threshold configuration governing pheromone dynamics & 7-regime selection (32
@@ -385,8 +385,8 @@ struct GCSO_ALIGN_PREFIX(32) gcso_stigmergic_thresholds {
     float reinforcement_gain;
     float inertial_skip_entropy_thresh;
     float express_steer_density_thresh;
-    float pspm_route_density_thresh;
-    float srl_inject_density_thresh;
+    float subhead_route_density_thresh;
+    float rank1_inject_density_thresh;
     float crystallize_density_thresh;
     float contradiction_coherence_thresh;
 } GCSO_ALIGN_SUFFIX(32);
@@ -427,7 +427,7 @@ typedef struct gcso_swarm_resolution_report gcso_swarm_resolution_report_t;
  */
 struct GCSO_ALIGN_PREFIX(64) gcso_gateway_frame {
     uint64_t tagged_ptr;
-    uint64_t zimms_section_offset48;
+    uint64_t mapped_section_offset48;
     uint32_t target_anchor_id;
     float effective_energy;
     float ripa_clamp_rad;
@@ -441,12 +441,12 @@ struct GCSO_ALIGN_PREFIX(64) gcso_gateway_frame {
     uint8_t action_mode_flags;
     uint8_t active_swarm_cell_mask;
     uint8_t qdps_min_step_q7;
-    uint8_t pspm_fact_heads;
-    uint8_t pspm_logic_heads;
-    uint8_t pspm_explore_heads;
-    uint8_t pspm_fact_gain_q7;
-    uint8_t pspm_logic_gain_q7;
-    uint8_t pspm_explore_gain_q7;
+    uint8_t subhead_fact_heads;
+    uint8_t subhead_logic_heads;
+    uint8_t subhead_explore_heads;
+    uint8_t subhead_fact_gain_q7;
+    uint8_t subhead_logic_gain_q7;
+    uint8_t subhead_explore_gain_q7;
     gcso_q7_t mean_phase_tag_q7;
     uint16_t active_head_count;
     uint16_t frame_flags;
@@ -476,7 +476,7 @@ struct GCSO_ALIGN_PREFIX(64) gcso_crystallized_attractor_record {
     uint32_t version;
     uint32_t anchor_id;
     uint32_t sample_count;
-    uint64_t zimms_section_offset48;
+    uint64_t mapped_section_offset48;
     float base_energy;
     float resultant_r_bar;
     float von_mises_kappa;
@@ -556,11 +556,11 @@ typedef struct gcso_edbc_controller_opaque* gcso_edbc_controller_handle_t;
 struct gcso_dpsr_kernel_opaque;
 typedef struct gcso_dpsr_kernel_opaque* gcso_dpsr_kernel_handle_t;
 
-struct gcso_pspm_router_opaque;
-typedef struct gcso_pspm_router_opaque* gcso_pspm_router_handle_t;
+struct gcso_subhead_router_opaque;
+typedef struct gcso_subhead_router_opaque* gcso_subhead_router_handle_t;
 
-struct gcso_srl_adapter_opaque;
-typedef struct gcso_srl_adapter_opaque* gcso_srl_adapter_handle_t;
+struct gcso_rank1_residual_opaque;
+typedef struct gcso_rank1_residual_opaque* gcso_rank1_residual_handle_t;
 
 /* Static Assertions for Size Invariants Matching src/core/src/abi/ & traits/ */
 GCSO_STATIC_ASSERT(sizeof(gcso_status_t) == 4, "gcso_status_t size mismatch");
@@ -576,12 +576,12 @@ GCSO_STATIC_ASSERT(sizeof(gcso_pointer_trail_t) == 128, "gcso_pointer_trail_t si
 GCSO_STATIC_ASSERT(sizeof(gcso_ledger_slot_t) == 64, "gcso_ledger_slot_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_config_t) == 64, "gcso_config_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_edbc_state_t) == 64, "gcso_edbc_state_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_zimms_descriptor_t) == 64, "gcso_zimms_descriptor_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_pspm_config_t) == 32, "gcso_pspm_config_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_srl_descriptor_t) == 64, "gcso_srl_descriptor_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_mapped_storage_descriptor_t) == 64, "gcso_mapped_storage_descriptor_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_subhead_config_t) == 32, "gcso_subhead_config_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_rank1_residual_descriptor_t) == 64, "gcso_rank1_residual_descriptor_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_snapshot_header_t) == 128, "gcso_snapshot_header_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_pprc_keyframe_header_t) == 64,
-                   "gcso_pprc_keyframe_header_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_kv_keyframe_header_t) == 64,
+                   "gcso_kv_keyframe_header_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_stigmergic_thresholds_t) == 32,
                    "gcso_stigmergic_thresholds_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_action_orchestration_report_t) == 32,
@@ -611,15 +611,15 @@ GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_pointer_trail_t) == 128,
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_ledger_slot_t) == 64, "gcso_ledger_slot_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_config_t) == 16, "gcso_config_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_edbc_state_t) == 32, "gcso_edbc_state_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_zimms_descriptor_t) == 32,
-                   "gcso_zimms_descriptor_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_pspm_config_t) == 16, "gcso_pspm_config_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_srl_descriptor_t) == 32,
-                   "gcso_srl_descriptor_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_mapped_storage_descriptor_t) == 32,
+                   "gcso_mapped_storage_descriptor_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_subhead_config_t) == 16, "gcso_subhead_config_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_rank1_residual_descriptor_t) == 32,
+                   "gcso_rank1_residual_descriptor_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_snapshot_header_t) == 64,
                    "gcso_snapshot_header_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_pprc_keyframe_header_t) == 32,
-                   "gcso_pprc_keyframe_header_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_kv_keyframe_header_t) == 32,
+                   "gcso_kv_keyframe_header_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_stigmergic_thresholds_t) == 32,
                    "gcso_stigmergic_thresholds_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_action_orchestration_report_t) == 32,
@@ -733,46 +733,46 @@ GCSO_STATIC_ASSERT(offsetof(gcso_edbc_state_t, sample_temperature) == 20,
 GCSO_STATIC_ASSERT(offsetof(gcso_edbc_state_t, active_branch_mode) == 24,
                    "gcso_edbc_state_t::active_branch_mode offset mismatch");
 
-GCSO_STATIC_ASSERT(offsetof(gcso_zimms_descriptor_t, mapped_address) == 0,
-                   "gcso_zimms_descriptor_t::mapped_address offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_zimms_descriptor_t, file_size_bytes) == 8,
-                   "gcso_zimms_descriptor_t::file_size_bytes offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_zimms_descriptor_t, dma_buffer_handle) == 16,
-                   "gcso_zimms_descriptor_t::dma_buffer_handle offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_zimms_descriptor_t, flags) == 24,
-                   "gcso_zimms_descriptor_t::flags offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_zimms_descriptor_t, fd_handle) == 28,
-                   "gcso_zimms_descriptor_t::fd_handle offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_mapped_storage_descriptor_t, mapped_address) == 0,
+                   "gcso_mapped_storage_descriptor_t::mapped_address offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_mapped_storage_descriptor_t, file_size_bytes) == 8,
+                   "gcso_mapped_storage_descriptor_t::file_size_bytes offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_mapped_storage_descriptor_t, dma_buffer_handle) == 16,
+                   "gcso_mapped_storage_descriptor_t::dma_buffer_handle offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_mapped_storage_descriptor_t, flags) == 24,
+                   "gcso_mapped_storage_descriptor_t::flags offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_mapped_storage_descriptor_t, fd_handle) == 28,
+                   "gcso_mapped_storage_descriptor_t::fd_handle offset mismatch");
 
-GCSO_STATIC_ASSERT(offsetof(gcso_pspm_config_t, num_fact_heads) == 0,
-                   "gcso_pspm_config_t::num_fact_heads offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_pspm_config_t, num_logic_heads) == 2,
-                   "gcso_pspm_config_t::num_logic_heads offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_pspm_config_t, num_explore_heads) == 4,
-                   "gcso_pspm_config_t::num_explore_heads offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_pspm_config_t, flags) == 6,
-                   "gcso_pspm_config_t::flags offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_pspm_config_t, fact_phase_gain) == 8,
-                   "gcso_pspm_config_t::fact_phase_gain offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_pspm_config_t, logic_phase_gain) == 12,
-                   "gcso_pspm_config_t::logic_phase_gain offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_pspm_config_t, explore_phase_gain) == 16,
-                   "gcso_pspm_config_t::explore_phase_gain offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_subhead_config_t, num_fact_heads) == 0,
+                   "gcso_subhead_config_t::num_fact_heads offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_subhead_config_t, num_logic_heads) == 2,
+                   "gcso_subhead_config_t::num_logic_heads offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_subhead_config_t, num_explore_heads) == 4,
+                   "gcso_subhead_config_t::num_explore_heads offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_subhead_config_t, flags) == 6,
+                   "gcso_subhead_config_t::flags offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_subhead_config_t, fact_phase_gain) == 8,
+                   "gcso_subhead_config_t::fact_phase_gain offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_subhead_config_t, logic_phase_gain) == 12,
+                   "gcso_subhead_config_t::logic_phase_gain offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_subhead_config_t, explore_phase_gain) == 16,
+                   "gcso_subhead_config_t::explore_phase_gain offset mismatch");
 
-GCSO_STATIC_ASSERT(offsetof(gcso_srl_descriptor_t, layer_idx) == 0,
-                   "gcso_srl_descriptor_t::layer_idx offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_srl_descriptor_t, rank) == 4,
-                   "gcso_srl_descriptor_t::rank offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_srl_descriptor_t, u_vector_ptr) == 8,
-                   "gcso_srl_descriptor_t::u_vector_ptr offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_srl_descriptor_t, v_vector_ptr) == 16,
-                   "gcso_srl_descriptor_t::v_vector_ptr offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_srl_descriptor_t, gain_scalar_ptr) == 24,
-                   "gcso_srl_descriptor_t::gain_scalar_ptr offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_srl_descriptor_t, scale_factor) == 32,
-                   "gcso_srl_descriptor_t::scale_factor offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_srl_descriptor_t, flags) == 36,
-                   "gcso_srl_descriptor_t::flags offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_rank1_residual_descriptor_t, layer_idx) == 0,
+                   "gcso_rank1_residual_descriptor_t::layer_idx offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_rank1_residual_descriptor_t, rank) == 4,
+                   "gcso_rank1_residual_descriptor_t::rank offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_rank1_residual_descriptor_t, u_vector_ptr) == 8,
+                   "gcso_rank1_residual_descriptor_t::u_vector_ptr offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_rank1_residual_descriptor_t, v_vector_ptr) == 16,
+                   "gcso_rank1_residual_descriptor_t::v_vector_ptr offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_rank1_residual_descriptor_t, gain_scalar_ptr) == 24,
+                   "gcso_rank1_residual_descriptor_t::gain_scalar_ptr offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_rank1_residual_descriptor_t, scale_factor) == 32,
+                   "gcso_rank1_residual_descriptor_t::scale_factor offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_rank1_residual_descriptor_t, flags) == 36,
+                   "gcso_rank1_residual_descriptor_t::flags offset mismatch");
 
 GCSO_STATIC_ASSERT(offsetof(gcso_snapshot_header_t, magic) == 0,
                    "gcso_snapshot_header_t::magic offset mismatch");
@@ -786,8 +786,8 @@ GCSO_STATIC_ASSERT(offsetof(gcso_snapshot_header_t, attractor_field_offset) == 2
                    "gcso_snapshot_header_t::attractor_field_offset offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_snapshot_header_t, dpsr_state_offset) == 32,
                    "gcso_snapshot_header_t::dpsr_state_offset offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_snapshot_header_t, srl_state_offset) == 40,
-                   "gcso_snapshot_header_t::srl_state_offset offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_snapshot_header_t, rank1_state_offset) == 40,
+                   "gcso_snapshot_header_t::rank1_state_offset offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_snapshot_header_t, edbc_state_offset) == 48,
                    "gcso_snapshot_header_t::edbc_state_offset offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_snapshot_header_t, checksum_crc32) == 56,
@@ -797,22 +797,22 @@ GCSO_STATIC_ASSERT(offsetof(gcso_snapshot_header_t, ledger_slot_offset) == 60,
 GCSO_STATIC_ASSERT(offsetof(gcso_snapshot_header_t, timestamp_epoch_sec) == 64,
                    "gcso_snapshot_header_t::timestamp_epoch_sec offset mismatch");
 
-GCSO_STATIC_ASSERT(offsetof(gcso_pprc_keyframe_header_t, frame_type) == 0,
-                   "gcso_pprc_keyframe_header_t::frame_type offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_pprc_keyframe_header_t, token_index) == 4,
-                   "gcso_pprc_keyframe_header_t::token_index offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_pprc_keyframe_header_t, gop_length) == 8,
-                   "gcso_pprc_keyframe_header_t::gop_length offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_pprc_keyframe_header_t, composite_vector_length) == 12,
-                   "gcso_pprc_keyframe_header_t::composite_vector_length offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_pprc_keyframe_header_t, von_mises_kappa) == 16,
-                   "gcso_pprc_keyframe_header_t::von_mises_kappa offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_pprc_keyframe_header_t, sparse_scalar_residual) == 20,
-                   "gcso_pprc_keyframe_header_t::sparse_scalar_residual offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_pprc_keyframe_header_t, icache_payload_offset) == 24,
-                   "gcso_pprc_keyframe_header_t::icache_payload_offset offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_pprc_keyframe_header_t, pcache_payload_offset) == 32,
-                   "gcso_pprc_keyframe_header_t::pcache_payload_offset offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_kv_keyframe_header_t, frame_type) == 0,
+                   "gcso_kv_keyframe_header_t::frame_type offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_kv_keyframe_header_t, token_index) == 4,
+                   "gcso_kv_keyframe_header_t::token_index offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_kv_keyframe_header_t, gop_length) == 8,
+                   "gcso_kv_keyframe_header_t::gop_length offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_kv_keyframe_header_t, composite_vector_length) == 12,
+                   "gcso_kv_keyframe_header_t::composite_vector_length offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_kv_keyframe_header_t, von_mises_kappa) == 16,
+                   "gcso_kv_keyframe_header_t::von_mises_kappa offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_kv_keyframe_header_t, sparse_scalar_residual) == 20,
+                   "gcso_kv_keyframe_header_t::sparse_scalar_residual offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_kv_keyframe_header_t, icache_payload_offset) == 24,
+                   "gcso_kv_keyframe_header_t::icache_payload_offset offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_kv_keyframe_header_t, pcache_payload_offset) == 32,
+                   "gcso_kv_keyframe_header_t::pcache_payload_offset offset mismatch");
 
 /* Static Assertions for v0.1.1 Gateway, Toroidal k-Means, Swarm & Orchestration Structs */
 GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_thresholds_t, evaporation_retain) == 0,
@@ -838,8 +838,8 @@ GCSO_STATIC_ASSERT(offsetof(gcso_swarm_resolution_report_t, quorum_mask) == 12,
 
 GCSO_STATIC_ASSERT(offsetof(gcso_gateway_frame_t, tagged_ptr) == 0,
                    "gcso_gateway_frame_t::tagged_ptr offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_gateway_frame_t, zimms_section_offset48) == 8,
-                   "gcso_gateway_frame_t::zimms_section_offset48 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_gateway_frame_t, mapped_section_offset48) == 8,
+                   "gcso_gateway_frame_t::mapped_section_offset48 offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_gateway_frame_t, target_anchor_id) == 16,
                    "gcso_gateway_frame_t::target_anchor_id offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_gateway_frame_t, provenance_bits) == 44,
@@ -858,8 +858,8 @@ GCSO_STATIC_ASSERT(offsetof(gcso_causal_provenance_report_t, dominant_cause_code
 
 GCSO_STATIC_ASSERT(offsetof(gcso_crystallized_attractor_record_t, magic) == 0,
                    "gcso_crystallized_attractor_record_t::magic offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_crystallized_attractor_record_t, zimms_section_offset48) == 16,
-                   "gcso_crystallized_attractor_record_t::zimms_section_offset48 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_crystallized_attractor_record_t, mapped_section_offset48) == 16,
+                   "gcso_crystallized_attractor_record_t::mapped_section_offset48 offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_crystallized_attractor_record_t, provenance_bits) == 48,
                    "gcso_crystallized_attractor_record_t::provenance_bits offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_crystallized_attractor_record_t, checksum_crc32) == 52,

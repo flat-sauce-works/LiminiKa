@@ -435,7 +435,9 @@ impl LlmBackend for DummyBackend {
             );
         }
         if lower.contains("pprc") {
-            return Ok("PPRC encodes 128-byte I-Frame and 64-byte P-Frame packets.".to_string());
+            return Ok(
+                "KV-keyframe encodes 128-byte I-Frame and 64-byte P-Frame packets.".to_string(),
+            );
         }
         Ok(
             "LiminiKa does not modify weights; it operates as a sidecar within 2 to 4 GB VRAM."

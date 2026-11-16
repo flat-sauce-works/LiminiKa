@@ -276,7 +276,7 @@ gcso_context_serialize(gcso_context_handle_t context, uint8_t* GCSO_RESTRICT buf
         header->attractor_field_offset =
             payload_base + offsetof(gcso_context_opaque, prompt_anchor_count);
         header->dpsr_state_offset = payload_base + offsetof(gcso_context_opaque, accumulated_phase);
-        header->srl_state_offset = payload_base + offsetof(gcso_context_opaque, config);
+        header->rank1_state_offset = payload_base + offsetof(gcso_context_opaque, config);
         header->edbc_state_offset = payload_base + offsetof(gcso_context_opaque, step_count);
         header->ledger_slot_offset =
             static_cast<uint32_t>(payload_base + offsetof(gcso_context_opaque, active_token_id));
@@ -365,7 +365,7 @@ gcso_context_deserialize(const uint8_t* GCSO_RESTRICT buffer, size_t buffer_size
 }
 
 /**
- * @brief Seeks to a specific token index in the PPRC keyframe KV cache.
+ * @brief Seeks to a specific token index in the KV-keyframe keyframe KV cache.
  *
  * @param context Active context handle.
  * @param token_index Target token index to seek to.
@@ -373,15 +373,15 @@ gcso_context_deserialize(const uint8_t* GCSO_RESTRICT buffer, size_t buffer_size
  * aligned).
  * @return GCSO_SUCCESS or error code.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_pprc_seek_to_token(
+GCSO_API gcso_status_t GCSO_CALL gcso_kv_keyframe_seek_to_token(
     gcso_context_handle_t context, uint32_t token_index,
-    gcso_pprc_keyframe_header_t* GCSO_RESTRICT keyframe_header_out) GCSO_NOEXCEPT {
+    gcso_kv_keyframe_header_t* GCSO_RESTRICT keyframe_header_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(context == nullptr || keyframe_header_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(context) % alignof(gcso_context_opaque) != 0 ||
                       reinterpret_cast<uintptr_t>(keyframe_header_out) %
-                              alignof(gcso_pprc_keyframe_header_t) !=
+                              alignof(gcso_kv_keyframe_header_t) !=
                           0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
@@ -389,7 +389,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pprc_seek_to_token(
         if (GCSO_UNLIKELY(!context->is_initialized)) {
             return GCSO_ERROR_INVALID_STATE;
         }
-        std::memset(keyframe_header_out, 0, sizeof(gcso_pprc_keyframe_header_t));
+        std::memset(keyframe_header_out, 0, sizeof(gcso_kv_keyframe_header_t));
         keyframe_header_out->frame_type = 0U;
         keyframe_header_out->token_index = token_index;
         keyframe_header_out->gop_length = context->config.paged_block_size;

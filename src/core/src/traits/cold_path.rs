@@ -18,9 +18,9 @@
 //!   geodesic anchor folding (`branchless_q7_unified_field_fold_64`), dynamic 8-lane hardware
 //!   working cache projection, autonomous lane weight rebalancing, Product of Lie Group Rotations,
 //!   cross-slot synergy, and mutual inhibition.
-//! - **[`PersonaPatcher`], [`L2pSvdProjector`], [`PprcCache`], [`DnpPacketDispatcher`], & [`ZimmsStorage`]**:
+//! - **[`PersonaPatcher`], [`L2pSvdProjector`], [`KvKeyframeCache`], [`DnpPacketDispatcher`], & [`MappedStorage`]**:
 //!   Persistent topological mode quantization, training-free LoRA-to-Phase SVD projection,
-//!   keyframe PPRC trajectory & Limina joint-probability replay, 64B DNP packet codecs, and
+//!   keyframe KV-keyframe trajectory & Limina joint-probability replay, 64B DNP packet codecs, and
 //!   zero-copy `.gcso` persistence.
 //! - **[`ColdPathTrailCrystalExt`], [`AttractorSlotSynergyCoordinator`],
 //!   [`StigmergicCohomologyCoordinator`], [`BottomUpMacroCrystalCoordinator`],
@@ -68,7 +68,7 @@ use super::primitives::{
     CHEBYSHEV_COEFF_LEN, DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_ENTROPY_EPS,
     DEFAULT_PAGED_BLOCK_SIZE, DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD,
     DEFAULT_SLOT_COUPLING_MATRIX_8X8, GcsoResult, MAX_ANCHORS_PER_FIELD, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS, Pod, PprcKeyframePacket, PprcMotionDeltaPacket, Q7_PHASE_SCALE_RAD,
+    MAX_ATTRACTOR_DOMAINS, Pod, KvKeyframePacket, KvMotionDeltaPacket, Q7_PHASE_SCALE_RAD,
     finalize_snapshot_header_crc32,
     is_slot_pair_coupled, pack_action_slot_tag, unpack_action_mode_from_tag,
     unpack_attractor_slot_from_tag, verify_snapshot_payload_crc32,
@@ -87,8 +87,8 @@ use crate::abi::{
     GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_EDBC_SINGULARITY,
     GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE, gcso_anchor_type_t,
     gcso_capability_flags_t, gcso_config_t, gcso_ledger_slot_t, gcso_edbc_state_t,
-    gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t, gcso_q7_t,
-    gcso_snapshot_header_t, gcso_srl_descriptor_t, gcso_tagged_ptr_t, gcso_zimms_descriptor_t,
+    gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_kv_keyframe_header_t, gcso_q7_t,
+    gcso_snapshot_header_t, gcso_rank1_residual_descriptor_t, gcso_tagged_ptr_t, gcso_mapped_storage_descriptor_t,
 };
 use super::hot_path::{HotPathExecutionEngine, SwarmCellChunk};
 
@@ -935,7 +935,7 @@ pub trait EdbcBranchController: EntropyEvaluator {
         bifurcation_threshold: f32,
         tau_flux: f32,
         hysteresis_band: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
     ) -> (u32, gcso_tagged_ptr_t) {
         let next_mode = self.evaluate_branch_mode_transition(
             self.active_branch_mode(),
@@ -954,7 +954,7 @@ pub trait EdbcBranchController: EntropyEvaluator {
             is_repulsion,
             dominant_attractor_slot,
             low_entropy_skip_thresh,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
         );
         (next_mode, evolved_ptr)
     }
@@ -1222,15 +1222,15 @@ pub trait GcsoRuntimeContext: BranchlessKernel + Send + Sync {
     /// if the snapshot header magic, version (`0x00000101`), or payload checksum is invalid.
     fn deserialize(&mut self, buffer: &[u8]) -> GcsoResult<()>;
 
-    /// Seeks to a specific token position in the PPRC keyframe KV cache without forward passes.
+    /// Seeks to a specific token position in the KV-keyframe keyframe KV cache without forward passes.
     ///
     /// # Errors
-    /// Returns [`crate::abi::GCSO_ERROR_PPRC_SEEK_FAILED`] or [`GCSO_ERROR_INVALID_ARGUMENT`]
+    /// Returns [`crate::abi::GCSO_ERROR_KV_KEYFRAME_SEEK_FAILED`] or [`GCSO_ERROR_INVALID_ARGUMENT`]
     /// if `token_index` is out of bounds.
     fn seek_to_token(
         &mut self,
         token_index: u32,
-        header_out: &mut gcso_pprc_keyframe_header_t,
+        header_out: &mut gcso_kv_keyframe_header_t,
     ) -> GcsoResult<()>;
 }
 
@@ -2018,7 +2018,7 @@ pub trait MultiDomainAttractorSpace: BranchlessKernel + Send + Sync {
 }
 
 // ===================================================================
-// 6. Persona Patch, L2P-SVD, PPRC Keyframe Cache, DNP & ZIMMS Storage
+// 6. Persona Patch, L2P-SVD, KV-keyframe Keyframe Cache, DNP & mapped-storage Storage
 // ===================================================================
 
 /// Cold-path trait for dynamic persona phase modulation patches without altering base weights (**Macro Level**).
@@ -2187,7 +2187,7 @@ pub trait PersonaPatcher: BranchlessKernel + Send + Sync {
 /// Cold-path trait for Training-Free LoRA-to-Phase SVD Projection (L2P-SVD) (**Macro / Offline Level**).
 pub trait L2pSvdProjector: BranchlessKernel + Send + Sync {
     /// Projects fine-tuned LoRA matrices ($W_A \in \mathbb{R}^{r \times d_{\mathrm{in}}}, W_B \in \mathbb{R}^{d_{\mathrm{out}} \times r}$)
-    /// via first-order SVD approximation into phase profiles and Rank-1 SRL vectors (Section 5.2).
+    /// via first-order SVD approximation into phase profiles and Rank-1 Rank-1 residual vectors (Section 5.2).
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `rank == 0`, `dim_in == 0`, `dim_out == 0`,
@@ -2201,7 +2201,7 @@ pub trait L2pSvdProjector: BranchlessKernel + Send + Sync {
         rank: usize,
         dim_in: usize,
         dim_out: usize,
-        srl_out: &mut gcso_srl_descriptor_t,
+        rank1_out: &mut gcso_rank1_residual_descriptor_t,
         phase_profile_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
     ) -> GcsoResult<()> {
         if rank == 0
@@ -2237,12 +2237,12 @@ pub trait L2pSvdProjector: BranchlessKernel + Send + Sync {
         let norm_v_sq = sum_sq_f32_simd8(&a_slice[..dim_in]);
 
         let sigma_1 = branchless_flush_subnormal_f32(branchless_sqrt_f32(norm_u_sq * norm_v_sq));
-        srl_out.layer_idx = 0;
-        srl_out.rank = 1;
-        srl_out.u_vector_ptr = lora_b.as_ptr() as u64;
-        srl_out.v_vector_ptr = lora_a.as_ptr() as u64;
-        srl_out.gain_scalar_ptr = 0;
-        srl_out.scale_factor = branchless_select_f32(sigma_1 > 0.0, sigma_1, 1.0);
+        rank1_out.layer_idx = 0;
+        rank1_out.rank = 1;
+        rank1_out.u_vector_ptr = lora_b.as_ptr() as u64;
+        rank1_out.v_vector_ptr = lora_a.as_ptr() as u64;
+        rank1_out.gain_scalar_ptr = 0;
+        rank1_out.scale_factor = branchless_select_f32(sigma_1 > 0.0, sigma_1, 1.0);
 
         let out_phases = phase_profile_out.as_mut_slice();
         let num_heads = out_phases.len();
@@ -2288,7 +2288,7 @@ pub trait L2pSvdProjector: BranchlessKernel + Send + Sync {
         Ok(())
     }
 
-    /// Projects fine-tuned LoRA matrices into an SRL Rank-1 descriptor, a Q7 rotational phase
+    /// Projects fine-tuned LoRA matrices into an Rank-1 residual Rank-1 descriptor, a Q7 rotational phase
     /// profile, and an **Isotropic Block-Diagonal Scaling** vector $\mathbf{D}$ (Theorem 1.1 & Section 5.2).
     ///
     /// # Errors
@@ -2303,7 +2303,7 @@ pub trait L2pSvdProjector: BranchlessKernel + Send + Sync {
         rank: usize,
         dim_in: usize,
         dim_out: usize,
-        srl_out: &mut gcso_srl_descriptor_t,
+        rank1_out: &mut gcso_rank1_residual_descriptor_t,
         phase_profile_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
         block_scales_out: &mut AlignedSliceMut32<'_, f32>,
     ) -> GcsoResult<()> {
@@ -2317,7 +2317,7 @@ pub trait L2pSvdProjector: BranchlessKernel + Send + Sync {
             rank,
             dim_in,
             dim_out,
-            srl_out,
+            rank1_out,
             phase_profile_out,
         )?;
 
@@ -2331,21 +2331,21 @@ pub trait L2pSvdProjector: BranchlessKernel + Send + Sync {
             let mag = branchless_flush_subnormal_f32(branchless_sqrt_f32(pair_energy));
             *scale_slot = branchless_select_f32(mag > 1.0e-9, mag, 1.0);
         }
-        srl_out.gain_scalar_ptr = block_scales_out.as_ptr() as u64;
+        rank1_out.gain_scalar_ptr = block_scales_out.as_ptr() as u64;
         Ok(())
     }
 }
 
-/// Mezzo/Cold-path trait for Predictive Phase-Motion & Residual Compensation (PPRC) (**Mezzo / Storage Level**).
-pub trait PprcCache: BranchlessKernel + Send + Sync {
-    /// Seeks to `token_index` in the PPRC keyframe cache and populates `header_out`.
+/// Mezzo/Cold-path trait for Predictive Phase-Motion & Residual Compensation (KV-keyframe) (**Mezzo / Storage Level**).
+pub trait KvKeyframeCache: BranchlessKernel + Send + Sync {
+    /// Seeks to `token_index` in the KV-keyframe keyframe cache and populates `header_out`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `token_index` is out of bounds.
     fn seek_to_token(
         &mut self,
         token_index: u32,
-        header_out: &mut gcso_pprc_keyframe_header_t,
+        header_out: &mut gcso_kv_keyframe_header_t,
     ) -> GcsoResult<()>;
 
     /// Computes Circular Statistics resultant vector length $\bar{R}_c \in [0, 1]$ and von Mises
@@ -2360,7 +2360,7 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
         &self,
         pruned_phases: &AlignedSlice16<'_, gcso_q7_t>,
         token_weights: &AlignedSlice32<'_, f32>,
-        header_out: &mut gcso_pprc_keyframe_header_t,
+        header_out: &mut gcso_kv_keyframe_header_t,
     ) -> GcsoResult<(f32, f32)> {
         if pruned_phases.is_empty() || pruned_phases.len() != token_weights.len() {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
@@ -2560,7 +2560,7 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
         qdps_min_step_q7: u8,
         contradiction_threshold: f32,
         reconstructed_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-        header_out: &mut gcso_pprc_keyframe_header_t,
+        header_out: &mut gcso_kv_keyframe_header_t,
     ) -> GcsoResult<(f32, f32, f32, u32)> {
         if qdps_min_step_q7 > 127 || !branchless_is_finite_f32(contradiction_threshold) {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
@@ -2631,7 +2631,7 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
         Ok((clean_lp, r_bar, kappa_c, repulsed_count))
     }
 
-    /// Encodes a 128-byte [`PprcKeyframePacket`] (**I-Frame Key Anchor**, Section 4.3) from a
+    /// Encodes a 128-byte [`KvKeyframePacket`] (**I-Frame Key Anchor**, Section 4.3) from a
     /// 64-head Q7 phase profile (`anchor_phases`), computing Circular Statistics resultant vector
     /// length $\bar{R}_c \in [0, 1]$, von Mises concentration $\kappa_c$, resultant mean phase
     /// angle $\bar{\theta}_c$, and stamping the IEEE 802.3 CRC32 integrity checksum plus causal
@@ -2646,11 +2646,11 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
         provenance_bits: u32,
         cluster_id: u32,
         slot_id: u8,
-    ) -> PprcKeyframePacket {
+    ) -> KvKeyframePacket {
         let words = load_q7_words_64(anchor_phases);
         let (r_bar, mean_q7, kappa_c) = circular_resultant_from_words_64(&words);
         let theta_bar = branchless_flush_subnormal_f32((mean_q7 as f32) * Q7_PHASE_SCALE_RAD);
-        PprcKeyframePacket::new(
+        KvKeyframePacket::new(
             token_index,
             gop_length.max(1),
             r_bar,
@@ -2663,7 +2663,7 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
         )
     }
 
-    /// Encodes a 64-byte [`PprcMotionDeltaPacket`] (**P-Frame Predictive Phase-Motion Delta**
+    /// Encodes a 64-byte [`KvMotionDeltaPacket`] (**P-Frame Predictive Phase-Motion Delta**
     /// $\boldsymbol{\Delta\theta}_t$, Section 4.3) between `prev_phases` ($\boldsymbol{\theta}_{t-1}$)
     /// and `curr_phases` ($\boldsymbol{\theta}_t$) using 8-lane SWAR circular difference
     /// (`swar_q7_circular_diff_x8`), $S^1$ geodesic folding (`swar_q7_fold_s1_geodesic_x8`), and
@@ -2677,7 +2677,7 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
         prev_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         curr_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         qdps_min_step_q7: u8,
-    ) -> GcsoResult<PprcMotionDeltaPacket> {
+    ) -> GcsoResult<KvMotionDeltaPacket> {
         if qdps_min_step_q7 > 127 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -2696,11 +2696,11 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
         let filt_w = swar_q7_qdps_filter_words_64(&diff_folded, qdps_min_step_q7);
         let mut motion_deltas = [0i8; MAX_ATTENTION_HEADS];
         store_q7_words_64(&mut motion_deltas, &filt_w);
-        Ok(PprcMotionDeltaPacket::new(motion_deltas))
+        Ok(KvMotionDeltaPacket::new(motion_deltas))
     }
 
     /// Executes **Zero-Forward Latency Seek (Instantaneous Persona & Memory Replay)** over a
-    /// lightweight PPRC Variable GOP stream (`keyframe` I-Frame + `pframes[..seek_pframe_steps]`
+    /// lightweight KV-keyframe Variable GOP stream (`keyframe` I-Frame + `pframes[..seek_pframe_steps]`
     /// P-Frame deltas), reconstructing the historical 64-head persona & episodic memory state
     /// directly onto `trail_out` without running any LLM forward pass (Section 4.3).
     ///
@@ -2713,8 +2713,8 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
     #[inline]
     fn seek_and_reconstruct_persona_from_gop(
         &self,
-        keyframe: &PprcKeyframePacket,
-        pframes: &[PprcMotionDeltaPacket],
+        keyframe: &KvKeyframePacket,
+        pframes: &[KvMotionDeltaPacket],
         seek_pframe_steps: usize,
         qdps_min_step_q7: u8,
         contradiction_threshold: f32,
@@ -2803,41 +2803,41 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
         Ok((clean_lp, r_bar, kappa_c, virtual_pos_shift, repulsed_count))
     }
 
-    /// Serializes a lightweight PPRC Variable GOP stream (`1` 128-byte [`PprcKeyframePacket`] +
-    /// `pframes.len()` 64-byte [`PprcMotionDeltaPacket`]s) into `dst_bytes` (`128 + N * 64` bytes),
+    /// Serializes a lightweight KV-keyframe Variable GOP stream (`1` 128-byte [`KvKeyframePacket`] +
+    /// `pframes.len()` 64-byte [`KvMotionDeltaPacket`]s) into `dst_bytes` (`128 + N * 64` bytes),
     /// returning the total byte length written.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if `keyframe.verify_integrity()` fails, or
     /// [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `dst_bytes.len() < 128 + pframes.len() * 64`.
     #[inline]
-    fn pack_pprc_gop_stream_bytes(
+    fn pack_kv_gop_stream_bytes(
         &self,
-        keyframe: &PprcKeyframePacket,
-        pframes: &[PprcMotionDeltaPacket],
+        keyframe: &KvKeyframePacket,
+        pframes: &[KvMotionDeltaPacket],
         dst_bytes: &mut [u8],
     ) -> GcsoResult<usize> {
         keyframe.verify_integrity()?;
         let p_bytes = pframes
             .len()
-            .checked_mul(core::mem::size_of::<PprcMotionDeltaPacket>())
+            .checked_mul(core::mem::size_of::<KvMotionDeltaPacket>())
             .ok_or(GCSO_ERROR_BUFFER_TOO_SMALL)?;
-        let total_bytes = core::mem::size_of::<PprcKeyframePacket>()
+        let total_bytes = core::mem::size_of::<KvKeyframePacket>()
             .checked_add(p_bytes)
             .ok_or(GCSO_ERROR_BUFFER_TOO_SMALL)?;
         if dst_bytes.len() < total_bytes {
             return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
         }
         keyframe.write_unaligned_to(dst_bytes, 0)?;
-        PprcMotionDeltaPacket::write_unaligned_slice_to(
+        KvMotionDeltaPacket::write_unaligned_slice_to(
             pframes,
             dst_bytes,
-            core::mem::size_of::<PprcKeyframePacket>(),
+            core::mem::size_of::<KvKeyframePacket>(),
         )?;
         Ok(total_bytes)
     }
 
-    /// Unpacks a serialized PPRC Variable GOP byte stream (`stream_bytes`) in $\mathcal{O}(1)$
+    /// Unpacks a serialized KV-keyframe Variable GOP byte stream (`stream_bytes`) in $\mathcal{O}(1)$
     /// stack space ($C_{\mathrm{alloc}} = 0$) and executes **Zero-Forward Latency Seek** up to
     /// `seek_pframe_steps`, reconstructing the historical persona and episodic memory state onto
     /// `trail_out` (Section 4.3).
@@ -2849,7 +2849,7 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
     /// [`GCSO_ERROR_CONTAINER_CORRUPTED`] if the I-Frame header or CRC32 is invalid, or
     /// [`GCSO_ERROR_INVALID_ARGUMENT`] if parameters are out of range.
     #[inline]
-    fn unpack_and_seek_pprc_gop_stream_bytes(
+    fn unpack_and_seek_kv_gop_stream_bytes(
         &self,
         stream_bytes: &[u8],
         seek_pframe_steps: usize,
@@ -2861,8 +2861,8 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
         if qdps_min_step_q7 > 127 || !branchless_is_finite_f32(contradiction_threshold) {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        let iframe_size = core::mem::size_of::<PprcKeyframePacket>();
-        let pframe_size = core::mem::size_of::<PprcMotionDeltaPacket>();
+        let iframe_size = core::mem::size_of::<KvKeyframePacket>();
+        let pframe_size = core::mem::size_of::<KvMotionDeltaPacket>();
         let needed_bytes = seek_pframe_steps
             .checked_mul(pframe_size)
             .and_then(|b| b.checked_add(iframe_size))
@@ -2870,7 +2870,7 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
         if stream_bytes.len() < needed_bytes {
             return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
         }
-        let keyframe = PprcKeyframePacket::read_unaligned_from(stream_bytes, 0)?;
+        let keyframe = KvKeyframePacket::read_unaligned_from(stream_bytes, 0)?;
         keyframe.verify_integrity()?;
 
         let safe_thresh =
@@ -2882,7 +2882,7 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
         let mut step = 0usize;
         while step < seek_pframe_steps {
             let off = iframe_size + step * pframe_size;
-            let pframe = PprcMotionDeltaPacket::read_unaligned_from(stream_bytes, off)?;
+            let pframe = KvMotionDeltaPacket::read_unaligned_from(stream_bytes, off)?;
             let dw = load_q7_words_64(&pframe.motion_deltas);
             let coh = coherence_from_diff_words_64(
                 dw[0], dw[1], dw[2], dw[3], dw[4], dw[5], dw[6], dw[7],
@@ -3150,8 +3150,8 @@ pub trait DnpPacketDispatcher: BranchlessKernel + Send + Sync {
     }
 }
 
-/// Cold-path trait for Zero-Overhead In-Memory Mapped Storage (ZIMMS) (**Storage / Persistence Level**).
-pub trait ZimmsStorage: BranchlessKernel + Send + Sync {
+/// Cold-path trait for Zero-Overhead In-Memory Mapped Storage (mapped-storage) (**Storage / Persistence Level**).
+pub trait MappedStorage: BranchlessKernel + Send + Sync {
     /// Serializes active runtime state into a `.gcso` binary snapshot buffer.
     ///
     /// # Errors
@@ -3173,18 +3173,18 @@ pub trait ZimmsStorage: BranchlessKernel + Send + Sync {
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `file_path` is empty, or
-    /// [`crate::abi::GCSO_ERROR_ZIMMS_MAPPING_FAILED`] if OS `mmap` fails.
+    /// [`crate::abi::GCSO_ERROR_MAPPED_STORAGE_FAILED`] if OS `mmap` fails.
     fn open_mmap(
         &mut self,
         file_path: &str,
-        descriptor_out: &mut gcso_zimms_descriptor_t,
+        descriptor_out: &mut gcso_mapped_storage_descriptor_t,
     ) -> GcsoResult<()>;
 
-    /// Unmaps a zero-copy ZIMMS memory handle and releases Direct-DMA resources.
+    /// Unmaps a zero-copy mapped-storage memory handle and releases Direct-DMA resources.
     ///
     /// # Errors
     /// Returns [`crate::abi::GCSO_ERROR_IO_FAILURE`] if unmapping fails.
-    fn close_mmap(&mut self, descriptor: &mut gcso_zimms_descriptor_t) -> GcsoResult<()>;
+    fn close_mmap(&mut self, descriptor: &mut gcso_mapped_storage_descriptor_t) -> GcsoResult<()>;
 
     /// Retrieves the byte offset for a specific track in a `.gcso` container
     /// (`0` = `CORE`, `1` = `I-CACHE`, `2` = `P-CACHE`, `3` = `SNAPSHOT`).
@@ -3263,7 +3263,7 @@ pub trait ZimmsStorage: BranchlessKernel + Send + Sync {
     }
 
     /// Extracts a hardware-aligned zero-copy [`AlignedSlice`] (`AlignedSlice<'a, T, ALIGN>`) of `elem_count` elements
-    /// for `track_id` (`0..=3`) directly from a ZIMMS memory-mapped `.gcso` container buffer.
+    /// for `track_id` (`0..=3`) directly from a mapped-storage memory-mapped `.gcso` container buffer.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `track_id > 3` or `T` is zero-sized.
@@ -3476,7 +3476,7 @@ pub trait StigmergicCohomologyCoordinator:
         bifurcation_threshold: f32,
         tau_flux: f32,
         hysteresis_band: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         dominant_attractor_slot: u8,
         bloom_filter: &mut ContrastivePhaseBloomFilter,
         trail_inout: &mut gcso_pointer_trail_t,
@@ -3509,7 +3509,7 @@ pub trait StigmergicCohomologyCoordinator:
             bifurcation_threshold,
             tau_flux,
             hysteresis_band,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
         );
         trail_inout.current_ptr = evolved_ptr.raw();
         Ok((mean_obs, is_obstructed, next_mode, evolved_ptr))
@@ -3539,7 +3539,7 @@ pub trait StigmergicCohomologyCoordinator:
         bifurcation_threshold: f32,
         tau_flux: f32,
         hysteresis_band: f32,
-        high_density_srl_thresh: f32,
+        high_density_rank1_thresh: f32,
         dominant_attractor_slot: u8,
         qdps_min_step_rad: f32,
         ripa_max_rad: f32,
@@ -3625,7 +3625,7 @@ pub trait StigmergicCohomologyCoordinator:
             bifurcation_threshold,
             tau_flux,
             hysteresis_band,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
         );
         trail_chain[last_idx].current_ptr = evolved_ptr.raw();
 
@@ -4050,9 +4050,9 @@ impl<T> ColdPathObserver for T where
 {
 }
 
-/// Composite Cold-Path Orchestrator trait uniting Macro evaluation, attractor steering, and ZIMMS persistence.
+/// Composite Cold-Path Orchestrator trait uniting Macro evaluation, attractor steering, and mapped-storage persistence.
 pub trait ColdPathOrchestrator:
-    EntropyEvaluator + AttractorField + PersonaPatcher + L2pSvdProjector + PprcCache + ZimmsStorage
+    EntropyEvaluator + AttractorField + PersonaPatcher + L2pSvdProjector + KvKeyframeCache + MappedStorage
 {
 }
 
@@ -4061,8 +4061,8 @@ impl<T> ColdPathOrchestrator for T where
         + AttractorField
         + PersonaPatcher
         + L2pSvdProjector
-        + PprcCache
-        + ZimmsStorage
+        + KvKeyframeCache
+        + MappedStorage
         + ?Sized
 {
 }
@@ -4091,7 +4091,7 @@ impl<T> FullStackGcsoEngine for T where
 mod tests {
     use super::*;
     use crate::traits::primitives::pack_action_slot_tag;
-    use crate::abi::gcso_srl_descriptor_t;
+    use crate::abi::gcso_rank1_residual_descriptor_t;
     use crate::traits::primitives::{
         with_slot_pair_coupled_symmetric, ACTION_PRESET_EXPRESS_PHASE,
         ACTION_PRESET_FULL_ORCHESTRATION, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
@@ -4218,11 +4218,11 @@ mod tests {
         impl SystemCapabilityQuery for MockColdSystem {}
         impl L2pSvdProjector for MockColdSystem {}
         impl DnpPacketDispatcher for MockColdSystem {}
-        impl PprcCache for MockColdSystem {
+        impl KvKeyframeCache for MockColdSystem {
             fn seek_to_token(
                 &mut self,
                 token_index: u32,
-                header_out: &mut gcso_pprc_keyframe_header_t,
+                header_out: &mut gcso_kv_keyframe_header_t,
             ) -> GcsoResult<()> {
                 header_out.token_index = token_index;
                 Ok(())
@@ -4380,7 +4380,7 @@ mod tests {
 
         let lora_a = AlignedBuffer32::new([1.0f32; 16]);
         let lora_b = AlignedBuffer32::new([1.0f32; 16]);
-        let mut srl_desc = gcso_srl_descriptor_t::default();
+        let mut rank1_desc = gcso_rank1_residual_descriptor_t::default();
         let mut prof_out = AlignedBuffer16::new([0i8; 16]);
         let mut scales_out = AlignedBuffer32::new([0.0f32; 4]);
         sys.project_lora_with_block_scales(
@@ -4389,7 +4389,7 @@ mod tests {
             2,
             8,
             8,
-            &mut srl_desc,
+            &mut rank1_desc,
             &mut prof_out.as_aligned_slice_mut(),
             &mut scales_out.as_aligned_slice_mut(),
         )
@@ -4398,7 +4398,7 @@ mod tests {
 
         let phases = AlignedBuffer16::new([32i8; 16]);
         let weights = AlignedBuffer32::new([1.0f32; 16]);
-        let mut header = gcso_pprc_keyframe_header_t::default();
+        let mut header = gcso_kv_keyframe_header_t::default();
         let (r_bar, kappa) = sys
             .aggregate_pruned_kv_circular_stats(
                 &phases.as_aligned_slice(),
@@ -4410,11 +4410,11 @@ mod tests {
         assert!(kappa > 10.0);
         assert!((header.sparse_scalar_residual - (PI * 0.25)).abs() < 1e-3);
 
-        // Verify Limina PPRC P-Frame Chain Replay & Joint Probability Log-Likelihood
+        // Verify Limina KV-keyframe P-Frame Chain Replay & Joint Probability Log-Likelihood
         let icache_anchor = [24i8; MAX_ATTENTION_HEADS];
         let pframes = [[4i8; MAX_ATTENTION_HEADS], [4i8; MAX_ATTENTION_HEADS]];
         let mut replayed = [0i8; MAX_ATTENTION_HEADS];
-        let mut gop_hdr = gcso_pprc_keyframe_header_t::default();
+        let mut gop_hdr = gcso_kv_keyframe_header_t::default();
         let (gop_lp, gop_r, gop_k, gop_rep) = sys
             .replay_liminal_pframe_chain_with_joint_log_prob(
                 &icache_anchor,

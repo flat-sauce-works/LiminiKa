@@ -25,7 +25,7 @@
 //!     unified AVX2/SSE2 SIMD kernels ($SO(2)$ rotation, 8-head `sincos`, Procrustes, tree reductions).
 //! - **Lv.1 Pure Capability Lists (Registered into [`ActionHub`])**:
 //!   - `rope`: [`PhaseSteering`], [`EntropyGatedPhaseLookup`], [`DynamicLayerSkipper`],
-//!     [`PspmRouter`], [`SrlAdapter`], and [`VisualAttentionSteering`].
+//!     [`SubHeadRouter`], [`Rank1ResidualAdapter`], and [`VisualAttentionSteering`].
 //!   - `telemetry`: [`PagedBitmaskOps`], [`ContrastivePhaseBloomFilter`],
 //!     [`StigmergicActionPtrOps`], [`StigmergicTrailOps`], [`StigmergicSwarmOps`],
 //!     [`FastPathLedger`], and [`SwarmResolutionReport`].
@@ -36,8 +36,8 @@
 //! - **Lv.3 Macro Observer & Composite Gateway (`cold_path` & `gateway`)**:
 //!   - `cold_path`: [`EntropyEvaluator`], [`EdbcBranchController`], [`SheafCohomologyEvaluator`],
 //!     [`HierarchicalTreeTable`], [`AttractorField`], [`MultiDomainAttractorSpace`],
-//!     [`PersonaPatcher`], [`L2pSvdProjector`], [`PprcCache`], [`DnpPacketDispatcher`],
-//!     [`ZimmsStorage`], [`ColdPathTrailCrystalExt`], and blanket-implemented macro coordinators
+//!     [`PersonaPatcher`], [`L2pSvdProjector`], [`KvKeyframeCache`], [`DnpPacketDispatcher`],
+//!     [`MappedStorage`], [`ColdPathTrailCrystalExt`], and blanket-implemented macro coordinators
 //!     ([`ColdPathOrchestrator`], [`ColdPathObserver`], [`AttractorSlotSynergyCoordinator`],
 //!     [`StigmergicCohomologyCoordinator`], [`BottomUpMacroCrystalCoordinator`],
 //!     [`FullStackGcsoEngine`]).
@@ -87,7 +87,7 @@ pub mod aligned;
 pub mod branchless;
 #[rustfmt::skip]
 /// Lv.1 Capability 1: RoPE & inline tensor modulation (`PhaseSteering`, `EntropyGatedPhaseLookup`,
-/// `DynamicLayerSkipper`, `PspmRouter`, `SrlAdapter`, `VisualAttentionSteering`).
+/// `DynamicLayerSkipper`, `SubHeadRouter`, `Rank1ResidualAdapter`, `VisualAttentionSteering`).
 pub mod rope;
 #[rustfmt::skip]
 /// Lv.1 Capability 2: Stigmergic trails, internal telemetry & swarm intelligence (`PagedBitmaskOps`,
@@ -99,7 +99,7 @@ pub mod telemetry;
 pub mod hot_path;
 #[rustfmt::skip]
 /// Lv.3 Macro Observer: Trajectory analysis, EDBC pitchfork control, matrix-free cellular sheaf
-/// cohomology $H^1$, hierarchical trees, Single Unified Attractor Manifold, persona, L2P-SVD, PPRC, DNP, and ZIMMS storage.
+/// cohomology $H^1$, hierarchical trees, Single Unified Attractor Manifold, persona, L2P-SVD, KV-keyframe, DNP, and mapped-storage storage.
 pub mod cold_path;
 #[rustfmt::skip]
 /// Lv.3 Composite Manifold Gateway: 2-Origin Supertrait Hierarchy, $\mathcal{O}(1)$ Causal Provenance,
@@ -149,8 +149,9 @@ pub use self::cold_path::{
     AttractorField, AttractorSlotSynergyCoordinator, BottomUpMacroCrystalCoordinator,
     ColdPathObserver, ColdPathOrchestrator, ColdPathTrailCrystalExt, DnpPacketDispatcher,
     EdbcBranchController, EntropyEvaluator, FullStackGcsoEngine, GcsoRuntimeContext,
-    HierarchicalTreeTable, L2pSvdProjector, MultiDomainAttractorSpace, PersonaPatcher, PprcCache,
-    SheafCohomologyEvaluator, StigmergicCohomologyCoordinator, SystemCapabilityQuery, ZimmsStorage,
+    HierarchicalTreeTable, KvKeyframeCache, L2pSvdProjector, MappedStorage,
+    MultiDomainAttractorSpace, PersonaPatcher, SheafCohomologyEvaluator,
+    StigmergicCohomologyCoordinator, SystemCapabilityQuery,
 };
 pub use self::gateway::{
     mean_q7_phase_tag_64, project_bytes_swar_to_q7_64, project_bytes_swar_to_words_64,
@@ -172,7 +173,7 @@ pub use self::gateway::{
     DEFAULT_PERSONA_RIPA_CLAMP_RAD, DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
     DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, GCSO_CRYSTAL_RECORD_MAGIC,
     GCSO_CRYSTAL_RECORD_VERSION, GCSO_FOUR_SECTION_HEADER_BYTES,
-    GCSO_ZIMMS_DESCRIPTOR_PREAMBLE_OFFSET, ROOT_CAUSE_COHOMOLOGY_REPULSION,
+    GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET, ROOT_CAUSE_COHOMOLOGY_REPULSION,
     ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_PERSONA_FACT_COLLISION,
     ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
 };
@@ -225,10 +226,10 @@ pub use self::primitives::{
     GcsoActionHubOpaque, GcsoAttractorFieldHandle, GcsoAttractorFieldOpaque, GcsoContainerHandle,
     GcsoContainerOpaque, GcsoContextHandle, GcsoContextOpaque, GcsoDpsrKernelHandle,
     GcsoDpsrKernelOpaque, GcsoEdbcControllerHandle, GcsoEdbcControllerOpaque, GcsoLedgerSlotHandle,
-    GcsoLedgerSlotOpaque, GcsoPspmRouterHandle, GcsoPspmRouterOpaque, GcsoResult,
-    GcsoSrlAdapterHandle, GcsoSrlAdapterOpaque, Pod, PprcKeyframePacket, PprcMotionDeltaPacket,
+    GcsoLedgerSlotOpaque, GcsoRank1ResidualHandle, GcsoRank1ResidualOpaque, GcsoResult,
+    GcsoSubHeadRouterHandle, GcsoSubHeadRouterOpaque, KvKeyframePacket, KvMotionDeltaPacket, Pod,
     ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE,
-    ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE,
     ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR,
     ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_CUSTOM_5, ATTRACTOR_SLOT_CUSTOM_6,
     ATTRACTOR_SLOT_CUSTOM_7, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_KNOWLEDGE,
@@ -243,7 +244,8 @@ pub use self::primitives::{
 };
 pub use self::rope::{
     resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim, DynamicLayerSkipper,
-    EntropyGatedPhaseLookup, PhaseSteering, PspmRouter, SrlAdapter, VisualAttentionSteering,
+    EntropyGatedPhaseLookup, PhaseSteering, Rank1ResidualAdapter, SubHeadRouter,
+    VisualAttentionSteering,
 };
 pub use self::telemetry::{
     eval_bitmask_dyadic_ultrametric, swar_subswarm_resolve_x8, ContrastivePhaseBloomFilter,
@@ -252,8 +254,8 @@ pub use self::telemetry::{
     DEFAULT_BLOOM_MAX_MASS_THRESHOLD, DEFAULT_SWARM_QUORUM_THRESHOLD, DEFAULT_SWARM_TOLERANCE_Q7,
     HEADS_PER_SWARM_CELL, LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
     LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_LAZY_UNWRAP_APPLIED,
-    LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_PSPM_ROUTED, LEDGER_METRIC_REPULSION_APPLIED,
-    LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SRL_INJECTED, MAX_ATTRACTOR_PULL_FORCE,
+    LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_RANK1_INJECTED, LEDGER_METRIC_REPULSION_APPLIED,
+    LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SUBHEAD_ROUTED, MAX_ATTRACTOR_PULL_FORCE,
     MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
     TRAIL_FLAG_DPSR_ACTIVE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
     TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SWARM_ESCALATED, TRAIL_FLAG_SWARM_RESOLVED,
@@ -307,9 +309,9 @@ pub mod prelude {
         AttractorField, AttractorSlotSynergyCoordinator, BottomUpMacroCrystalCoordinator,
         ColdPathObserver, ColdPathOrchestrator, ColdPathTrailCrystalExt, DnpPacketDispatcher,
         EdbcBranchController, EntropyEvaluator, FullStackGcsoEngine, GcsoRuntimeContext,
-        HierarchicalTreeTable, L2pSvdProjector, MultiDomainAttractorSpace, PersonaPatcher,
-        PprcCache, SheafCohomologyEvaluator, StigmergicCohomologyCoordinator,
-        SystemCapabilityQuery, ZimmsStorage,
+        HierarchicalTreeTable, KvKeyframeCache, L2pSvdProjector, MappedStorage,
+        MultiDomainAttractorSpace, PersonaPatcher, SheafCohomologyEvaluator,
+        StigmergicCohomologyCoordinator, SystemCapabilityQuery,
     };
     pub use super::gateway::{
         mean_q7_phase_tag_64, project_bytes_swar_to_q7_64, project_bytes_swar_to_words_64,
@@ -329,7 +331,7 @@ pub mod prelude {
         DEFAULT_PERSONA_RIPA_CLAMP_RAD, DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
         DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, GCSO_CRYSTAL_RECORD_MAGIC,
         GCSO_CRYSTAL_RECORD_VERSION, GCSO_FOUR_SECTION_HEADER_BYTES,
-        GCSO_ZIMMS_DESCRIPTOR_PREAMBLE_OFFSET, ROOT_CAUSE_COHOMOLOGY_REPULSION,
+        GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET, ROOT_CAUSE_COHOMOLOGY_REPULSION,
         ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_PERSONA_FACT_COLLISION,
         ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
     };
@@ -360,9 +362,9 @@ pub mod prelude {
         unpack_action_mode_from_tag, unpack_attractor_slot_from_tag, update_crc32_ieee,
         validate_descriptor_header, validate_snapshot_header, verify_snapshot_payload_crc32,
         with_slot_pair_coupled, with_slot_pair_coupled_symmetric, FfiHandleMut, FfiHandleRef,
-        GcsoResult, Pod, PprcKeyframePacket, PprcMotionDeltaPacket, ACTION_MODE_DPSR_STEER,
-        ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PSPM_ROUTE,
-        ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
+        GcsoResult, KvKeyframePacket, KvMotionDeltaPacket, Pod, ACTION_MODE_DPSR_STEER,
+        ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_RANK1_INJECT,
+        ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
         ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
         ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
         ATTRACTOR_SLOT_SYSTEM_BASELINE, ATTRACTOR_SLOT_USER_CONTEXT,
@@ -370,7 +372,8 @@ pub mod prelude {
     };
     pub use super::rope::{
         resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim, DynamicLayerSkipper,
-        EntropyGatedPhaseLookup, PhaseSteering, PspmRouter, SrlAdapter, VisualAttentionSteering,
+        EntropyGatedPhaseLookup, PhaseSteering, Rank1ResidualAdapter, SubHeadRouter,
+        VisualAttentionSteering,
     };
     pub use super::telemetry::{
         eval_bitmask_dyadic_ultrametric, swar_subswarm_resolve_x8, ContrastivePhaseBloomFilter,
@@ -379,8 +382,8 @@ pub mod prelude {
         DEFAULT_BLOOM_MAX_MASS_THRESHOLD, DEFAULT_SWARM_QUORUM_THRESHOLD,
         DEFAULT_SWARM_TOLERANCE_Q7, HEADS_PER_SWARM_CELL, LEDGER_METRIC_FAST_PATH_HIT,
         LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_LAZY_UNWRAP_APPLIED,
-        LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_PSPM_ROUTED, LEDGER_METRIC_REPULSION_APPLIED,
-        LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SRL_INJECTED, MAX_ATTRACTOR_PULL_FORCE,
+        LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_RANK1_INJECTED, LEDGER_METRIC_REPULSION_APPLIED,
+        LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SUBHEAD_ROUTED, MAX_ATTRACTOR_PULL_FORCE,
         MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
         TRAIL_FLAG_DPSR_ACTIVE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
         TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SWARM_ESCALATED, TRAIL_FLAG_SWARM_RESOLVED,
@@ -395,10 +398,10 @@ pub mod prelude {
 
 const _: () = {
     use crate::abi::{
-        gcso_config_t, gcso_descriptor_header_t, gcso_edbc_state_t, gcso_ledger_slot_t,
-        gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t,
-        gcso_pspm_config_t, gcso_snapshot_header_t, gcso_srl_descriptor_t, gcso_tagged_ptr_t,
-        gcso_zimms_descriptor_t,
+        gcso_config_t, gcso_descriptor_header_t, gcso_edbc_state_t, gcso_kv_keyframe_header_t,
+        gcso_ledger_slot_t, gcso_mapped_storage_descriptor_t, gcso_paged_bitmask_t,
+        gcso_pointer_trail_t, gcso_rank1_residual_descriptor_t, gcso_snapshot_header_t,
+        gcso_subhead_config_t, gcso_tagged_ptr_t,
     };
     use core::mem::{align_of, offset_of, size_of};
 
@@ -414,7 +417,7 @@ const _: () = {
     assert!(PAGED_BITMASK_WORDS == 4);
     assert!(PAGED_BITMASK_BITS == 256);
     assert!(GCSO_FOUR_SECTION_HEADER_BYTES == 192);
-    assert!(GCSO_ZIMMS_DESCRIPTOR_PREAMBLE_OFFSET == 128);
+    assert!(GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET == 128);
 
     assert!((TAG_ACTION_MODE_MASK as u32) == 0x1F);
     assert!(TAG_ATTRACTOR_SLOT_SHIFT == 5);
@@ -456,40 +459,40 @@ const _: () = {
     assert!(offset_of!(gcso_ledger_slot_t, fast_path_shortcuts) == 24);
     assert!(offset_of!(gcso_ledger_slot_t, telemetry_mini_ledger) == 56);
 
-    assert!(size_of::<gcso_pprc_keyframe_header_t>() == 64);
-    assert!(align_of::<gcso_pprc_keyframe_header_t>() == 32);
-    assert!(offset_of!(gcso_pprc_keyframe_header_t, frame_type) == 0);
-    assert!(offset_of!(gcso_pprc_keyframe_header_t, icache_payload_offset) == 24);
-    assert!(offset_of!(gcso_pprc_keyframe_header_t, pcache_payload_offset) == 32);
+    assert!(size_of::<gcso_kv_keyframe_header_t>() == 64);
+    assert!(align_of::<gcso_kv_keyframe_header_t>() == 32);
+    assert!(offset_of!(gcso_kv_keyframe_header_t, frame_type) == 0);
+    assert!(offset_of!(gcso_kv_keyframe_header_t, icache_payload_offset) == 24);
+    assert!(offset_of!(gcso_kv_keyframe_header_t, pcache_payload_offset) == 32);
 
-    assert!(size_of::<PprcKeyframePacket>() == 128);
-    assert!(align_of::<PprcKeyframePacket>() == 64);
-    assert!(offset_of!(PprcKeyframePacket, header) == 0);
-    assert!(offset_of!(PprcKeyframePacket, anchor_phases) == 64);
-    assert!(size_of::<PprcMotionDeltaPacket>() == 64);
-    assert!(align_of::<PprcMotionDeltaPacket>() == 64);
-    assert!(offset_of!(PprcMotionDeltaPacket, motion_deltas) == 0);
+    assert!(size_of::<KvKeyframePacket>() == 128);
+    assert!(align_of::<KvKeyframePacket>() == 64);
+    assert!(offset_of!(KvKeyframePacket, header) == 0);
+    assert!(offset_of!(KvKeyframePacket, anchor_phases) == 64);
+    assert!(size_of::<KvMotionDeltaPacket>() == 64);
+    assert!(align_of::<KvMotionDeltaPacket>() == 64);
+    assert!(offset_of!(KvMotionDeltaPacket, motion_deltas) == 0);
 
-    assert!(size_of::<gcso_pspm_config_t>() == 32);
-    assert!(align_of::<gcso_pspm_config_t>() == 16);
-    assert!(offset_of!(gcso_pspm_config_t, num_fact_heads) == 0);
-    assert!(offset_of!(gcso_pspm_config_t, fact_phase_gain) == 8);
+    assert!(size_of::<gcso_subhead_config_t>() == 32);
+    assert!(align_of::<gcso_subhead_config_t>() == 16);
+    assert!(offset_of!(gcso_subhead_config_t, num_fact_heads) == 0);
+    assert!(offset_of!(gcso_subhead_config_t, fact_phase_gain) == 8);
 
     assert!(size_of::<gcso_edbc_state_t>() == 64);
     assert!(align_of::<gcso_edbc_state_t>() == 32);
     assert!(offset_of!(gcso_edbc_state_t, moving_z_entropy) == 0);
     assert!(offset_of!(gcso_edbc_state_t, active_branch_mode) == 24);
 
-    assert!(size_of::<gcso_srl_descriptor_t>() == 64);
-    assert!(align_of::<gcso_srl_descriptor_t>() == 32);
-    assert!(offset_of!(gcso_srl_descriptor_t, layer_idx) == 0);
-    assert!(offset_of!(gcso_srl_descriptor_t, u_vector_ptr) == 8);
-    assert!(offset_of!(gcso_srl_descriptor_t, v_vector_ptr) == 16);
+    assert!(size_of::<gcso_rank1_residual_descriptor_t>() == 64);
+    assert!(align_of::<gcso_rank1_residual_descriptor_t>() == 32);
+    assert!(offset_of!(gcso_rank1_residual_descriptor_t, layer_idx) == 0);
+    assert!(offset_of!(gcso_rank1_residual_descriptor_t, u_vector_ptr) == 8);
+    assert!(offset_of!(gcso_rank1_residual_descriptor_t, v_vector_ptr) == 16);
 
-    assert!(size_of::<gcso_zimms_descriptor_t>() == 64);
-    assert!(align_of::<gcso_zimms_descriptor_t>() == 32);
-    assert!(offset_of!(gcso_zimms_descriptor_t, mapped_address) == 0);
-    assert!(offset_of!(gcso_zimms_descriptor_t, file_size_bytes) == 8);
+    assert!(size_of::<gcso_mapped_storage_descriptor_t>() == 64);
+    assert!(align_of::<gcso_mapped_storage_descriptor_t>() == 32);
+    assert!(offset_of!(gcso_mapped_storage_descriptor_t, mapped_address) == 0);
+    assert!(offset_of!(gcso_mapped_storage_descriptor_t, file_size_bytes) == 8);
 
     assert!(size_of::<ContrastivePhaseBloomFilter>() == 64);
     assert!(align_of::<ContrastivePhaseBloomFilter>() == 64);
@@ -500,7 +503,7 @@ const _: () = {
 
     assert!(size_of::<GatewayFrame>() == 128);
     assert!(align_of::<GatewayFrame>() == 64);
-    assert!(offset_of!(GatewayFrame, pspm_fact_gain_q7) == 56);
+    assert!(offset_of!(GatewayFrame, subhead_fact_gain_q7) == 56);
     assert!(offset_of!(GatewayFrame, mean_phase_tag_q7) == 59);
     assert!(offset_of!(GatewayFrame, active_head_count) == 60);
     assert!(offset_of!(GatewayFrame, frame_flags) == 62);
@@ -533,7 +536,7 @@ mod tests {
     use super::*;
     use crate::abi::{
         gcso_anchor_type_t, gcso_config_t, gcso_edbc_state_t, gcso_ledger_slot_t,
-        gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t,
+        gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t, gcso_subhead_config_t,
         gcso_tagged_ptr_t,
     };
 
@@ -604,8 +607,8 @@ mod tests {
         }
     }
 
-    impl PspmRouter for MockActionHubComposite {}
-    impl SrlAdapter for MockActionHubComposite {}
+    impl SubHeadRouter for MockActionHubComposite {}
+    impl Rank1ResidualAdapter for MockActionHubComposite {}
 
     impl FastPathLedger for MockActionHubComposite {
         fn evaluate_auto_tune(
@@ -876,7 +879,7 @@ mod tests {
         let q_norm_after = sum_sq_f32_simd8(&q_buf.data);
         assert!((q_norm_before - q_norm_after).abs() < 1e-4);
 
-        let pspm_cfg = gcso_pspm_config_t {
+        let subhead_cfg = gcso_subhead_config_t {
             num_fact_heads: 1,
             num_logic_heads: 0,
             num_explore_heads: 1,
@@ -890,7 +893,7 @@ mod tests {
                 &trail.accumulated_phase_delta,
                 1,
                 &anchors,
-                Some((&pspm_cfg, 8)),
+                Some((&subhead_cfg, 8)),
                 DEFAULT_QDPS_MIN_STEP_RAD,
                 DEFAULT_RIPA_CLAMP_MAX_RAD,
                 Some(&mut q_buf.as_aligned_slice_mut()),
@@ -947,7 +950,7 @@ mod tests {
                 &centroids,
                 64,
                 DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
-                Some((&pspm_cfg, 4)),
+                Some((&subhead_cfg, 4)),
                 DEFAULT_QDPS_MIN_STEP_RAD,
                 DEFAULT_RIPA_CLAMP_MAX_RAD,
                 &mut trail,
@@ -1020,7 +1023,7 @@ mod tests {
                 1.0,
                 64,
                 0.25,
-                Some((&pspm_cfg, 4)),
+                Some((&subhead_cfg, 4)),
                 DEFAULT_QDPS_MIN_STEP_RAD,
                 DEFAULT_RIPA_CLAMP_MAX_RAD,
                 &mut ledger,
@@ -1105,7 +1108,7 @@ mod tests {
                 1,
                 64,
                 DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
-                Some((&pspm_cfg, 4)),
+                Some((&subhead_cfg, 4)),
                 DEFAULT_QDPS_MIN_STEP_RAD,
                 DEFAULT_RIPA_CLAMP_MAX_RAD,
                 Some(&mut q_buf.as_aligned_slice_mut()),
@@ -1117,7 +1120,7 @@ mod tests {
         assert!(lim_fs_coh > 0.80 && lim_fs_grav > 1.0);
 
         let mapped_view =
-            GcsoFourSectionView::from_zimms_bytes_zero_copy(&container_buf.data[..written])
+            GcsoFourSectionView::from_container_bytes_zero_copy(&container_buf.data[..written])
                 .unwrap();
         assert_eq!(mapped_view.trails[1].cluster_id, lim_aid1);
         assert_ne!(

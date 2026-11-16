@@ -937,31 +937,31 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_kernel_destroy(gcso_dpsr_kernel_handl
 }
 
 /**
- * @brief Allocates a PSPM router instance.
+ * @brief Allocates a sub-head router router instance.
  *
- * @param config PSPM router configuration pointer.
+ * @param config sub-head router router configuration pointer.
  * @param router_out Pointer to receive allocated router handle.
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL
-gcso_pspm_router_create(const gcso_pspm_config_t* GCSO_RESTRICT config,
-                        gcso_pspm_router_handle_t* GCSO_RESTRICT router_out) GCSO_NOEXCEPT {
+gcso_subhead_router_create(const gcso_subhead_config_t* GCSO_RESTRICT config,
+                        gcso_subhead_router_handle_t* GCSO_RESTRICT router_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(config == nullptr || router_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(config) % alignof(gcso_pspm_config_t) != 0 ||
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(config) % alignof(gcso_subhead_config_t) != 0 ||
                           reinterpret_cast<uintptr_t>(router_out) %
-                                  alignof(gcso_pspm_router_handle_t) !=
+                                  alignof(gcso_subhead_router_handle_t) !=
                               0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        auto* router = gcso_aligned_new<gcso_pspm_router_opaque>();
+        auto* router = gcso_aligned_new<gcso_subhead_router_opaque>();
         if (GCSO_UNLIKELY(router == nullptr)) {
             return GCSO_ERROR_OUT_OF_MEMORY;
         }
-        std::memcpy(&router->config, config, sizeof(gcso_pspm_config_t));
+        std::memcpy(&router->config, config, sizeof(gcso_subhead_config_t));
         router->is_active = true;
 
         *router_out = router;
@@ -972,21 +972,21 @@ gcso_pspm_router_create(const gcso_pspm_config_t* GCSO_RESTRICT config,
 }
 
 /**
- * @brief Dispatches PSPM head-group phase profiles in a single pass.
+ * @brief Dispatches sub-head router head-group phase profiles in a single pass.
  *
  * Single-Pass Head Group Ensembling: Splits attention heads into Fact, Logic, and Explore
  * sub-groups, applying unique phase profile gains in a single forward pass without parameter
  * duplication.
  *
  * @param query_tensor 32-byte aligned query tensor buffer.
- * @param pspm_cfg PSPM routing configuration.
+ * @param subhead_cfg sub-head router routing configuration.
  * @param head_dim Head dimension.
  * @return GCSO_SUCCESS or error status code.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_pspm_dispatch_single_pass(
-    float* GCSO_RESTRICT query_tensor, const gcso_pspm_config_t* GCSO_RESTRICT pspm_cfg,
+GCSO_API gcso_status_t GCSO_CALL gcso_subhead_dispatch_single_pass(
+    float* GCSO_RESTRICT query_tensor, const gcso_subhead_config_t* GCSO_RESTRICT subhead_cfg,
     size_t head_dim) GCSO_NOEXCEPT {
-    if (GCSO_UNLIKELY(query_tensor == nullptr || pspm_cfg == nullptr)) {
+    if (GCSO_UNLIKELY(query_tensor == nullptr || subhead_cfg == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     if (GCSO_UNLIKELY(head_dim == 0 || (head_dim % 2 != 0))) {
@@ -994,14 +994,14 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_dispatch_single_pass(
     }
     try {
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(query_tensor) % 32 != 0 ||
-                          reinterpret_cast<uintptr_t>(pspm_cfg) % alignof(gcso_pspm_config_t) !=
+                          reinterpret_cast<uintptr_t>(subhead_cfg) % alignof(gcso_subhead_config_t) !=
                               0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        const size_t fact_heads = static_cast<size_t>(pspm_cfg->num_fact_heads);
-        const size_t logic_heads = static_cast<size_t>(pspm_cfg->num_logic_heads);
-        const size_t explore_heads = static_cast<size_t>(pspm_cfg->num_explore_heads);
+        const size_t fact_heads = static_cast<size_t>(subhead_cfg->num_fact_heads);
+        const size_t logic_heads = static_cast<size_t>(subhead_cfg->num_logic_heads);
+        const size_t explore_heads = static_cast<size_t>(subhead_cfg->num_explore_heads);
 
         const size_t fact_elems = fact_heads * head_dim;
         const size_t logic_elems = logic_heads * head_dim;
@@ -1010,75 +1010,75 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_dispatch_single_pass(
         size_t i = 0;
         const size_t fact_simd = fact_elems & ~static_cast<size_t>(7);
 #if defined(__AVX2__)
-        const __m256 v_fact_gain = _mm256_set1_ps(pspm_cfg->fact_phase_gain);
+        const __m256 v_fact_gain = _mm256_set1_ps(subhead_cfg->fact_phase_gain);
         for (; i < fact_simd; i += 8) {
             _mm256_storeu_ps(query_tensor + i,
                              _mm256_mul_ps(_mm256_loadu_ps(query_tensor + i), v_fact_gain));
         }
 #else
         for (; i < fact_simd; i += 8) {
-            query_tensor[i + 0] *= pspm_cfg->fact_phase_gain;
-            query_tensor[i + 1] *= pspm_cfg->fact_phase_gain;
-            query_tensor[i + 2] *= pspm_cfg->fact_phase_gain;
-            query_tensor[i + 3] *= pspm_cfg->fact_phase_gain;
-            query_tensor[i + 4] *= pspm_cfg->fact_phase_gain;
-            query_tensor[i + 5] *= pspm_cfg->fact_phase_gain;
-            query_tensor[i + 6] *= pspm_cfg->fact_phase_gain;
-            query_tensor[i + 7] *= pspm_cfg->fact_phase_gain;
+            query_tensor[i + 0] *= subhead_cfg->fact_phase_gain;
+            query_tensor[i + 1] *= subhead_cfg->fact_phase_gain;
+            query_tensor[i + 2] *= subhead_cfg->fact_phase_gain;
+            query_tensor[i + 3] *= subhead_cfg->fact_phase_gain;
+            query_tensor[i + 4] *= subhead_cfg->fact_phase_gain;
+            query_tensor[i + 5] *= subhead_cfg->fact_phase_gain;
+            query_tensor[i + 6] *= subhead_cfg->fact_phase_gain;
+            query_tensor[i + 7] *= subhead_cfg->fact_phase_gain;
         }
 #endif
         for (; i < fact_elems; ++i) {
-            query_tensor[i] *= pspm_cfg->fact_phase_gain;
+            query_tensor[i] *= subhead_cfg->fact_phase_gain;
         }
 
         float* GCSO_RESTRICT logic_q = query_tensor + fact_elems;
         size_t j = 0;
         const size_t logic_simd = logic_elems & ~static_cast<size_t>(7);
 #if defined(__AVX2__)
-        const __m256 v_logic_gain = _mm256_set1_ps(pspm_cfg->logic_phase_gain);
+        const __m256 v_logic_gain = _mm256_set1_ps(subhead_cfg->logic_phase_gain);
         for (; j < logic_simd; j += 8) {
             _mm256_storeu_ps(logic_q + j,
                              _mm256_mul_ps(_mm256_loadu_ps(logic_q + j), v_logic_gain));
         }
 #else
         for (; j < logic_simd; j += 8) {
-            logic_q[j + 0] *= pspm_cfg->logic_phase_gain;
-            logic_q[j + 1] *= pspm_cfg->logic_phase_gain;
-            logic_q[j + 2] *= pspm_cfg->logic_phase_gain;
-            logic_q[j + 3] *= pspm_cfg->logic_phase_gain;
-            logic_q[j + 4] *= pspm_cfg->logic_phase_gain;
-            logic_q[j + 5] *= pspm_cfg->logic_phase_gain;
-            logic_q[j + 6] *= pspm_cfg->logic_phase_gain;
-            logic_q[j + 7] *= pspm_cfg->logic_phase_gain;
+            logic_q[j + 0] *= subhead_cfg->logic_phase_gain;
+            logic_q[j + 1] *= subhead_cfg->logic_phase_gain;
+            logic_q[j + 2] *= subhead_cfg->logic_phase_gain;
+            logic_q[j + 3] *= subhead_cfg->logic_phase_gain;
+            logic_q[j + 4] *= subhead_cfg->logic_phase_gain;
+            logic_q[j + 5] *= subhead_cfg->logic_phase_gain;
+            logic_q[j + 6] *= subhead_cfg->logic_phase_gain;
+            logic_q[j + 7] *= subhead_cfg->logic_phase_gain;
         }
 #endif
         for (; j < logic_elems; ++j) {
-            logic_q[j] *= pspm_cfg->logic_phase_gain;
+            logic_q[j] *= subhead_cfg->logic_phase_gain;
         }
 
         float* GCSO_RESTRICT explore_q = query_tensor + fact_elems + logic_elems;
         size_t k = 0;
         const size_t explore_simd = explore_elems & ~static_cast<size_t>(7);
 #if defined(__AVX2__)
-        const __m256 v_explore_gain = _mm256_set1_ps(pspm_cfg->explore_phase_gain);
+        const __m256 v_explore_gain = _mm256_set1_ps(subhead_cfg->explore_phase_gain);
         for (; k < explore_simd; k += 8) {
             _mm256_storeu_ps(explore_q + k,
                              _mm256_mul_ps(_mm256_loadu_ps(explore_q + k), v_explore_gain));
         }
 #else
         for (; k < explore_simd; k += 8) {
-            explore_q[k + 0] *= pspm_cfg->explore_phase_gain;
-            explore_q[k + 1] *= pspm_cfg->explore_phase_gain;
-            explore_q[k + 2] *= pspm_cfg->explore_phase_gain;
-            explore_q[k + 3] *= pspm_cfg->explore_phase_gain;
-            explore_q[k + 4] *= pspm_cfg->explore_phase_gain;
-            explore_q[k + 5] *= pspm_cfg->explore_phase_gain;
-            explore_q[k + 6] *= pspm_cfg->explore_phase_gain;
-            explore_q[k + 7] *= pspm_cfg->explore_phase_gain;
+            explore_q[k + 0] *= subhead_cfg->explore_phase_gain;
+            explore_q[k + 1] *= subhead_cfg->explore_phase_gain;
+            explore_q[k + 2] *= subhead_cfg->explore_phase_gain;
+            explore_q[k + 3] *= subhead_cfg->explore_phase_gain;
+            explore_q[k + 4] *= subhead_cfg->explore_phase_gain;
+            explore_q[k + 5] *= subhead_cfg->explore_phase_gain;
+            explore_q[k + 6] *= subhead_cfg->explore_phase_gain;
+            explore_q[k + 7] *= subhead_cfg->explore_phase_gain;
         }
 #endif
         for (; k < explore_elems; ++k) {
-            explore_q[k] *= pspm_cfg->explore_phase_gain;
+            explore_q[k] *= subhead_cfg->explore_phase_gain;
         }
 
         return GCSO_SUCCESS;
@@ -1088,17 +1088,17 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_dispatch_single_pass(
 }
 
 /**
- * @brief Destroys a PSPM router instance. Safe No-Op if NULL.
+ * @brief Destroys a sub-head router router instance. Safe No-Op if NULL.
  *
  * @param router Router handle to destroy (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_pspm_router_destroy(gcso_pspm_router_handle_t router)
+GCSO_API gcso_status_t GCSO_CALL gcso_subhead_router_destroy(gcso_subhead_router_handle_t router)
     GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(router == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(router) % alignof(gcso_pspm_router_opaque) !=
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(router) % alignof(gcso_subhead_router_opaque) !=
                       0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
@@ -1111,31 +1111,31 @@ GCSO_API gcso_status_t GCSO_CALL gcso_pspm_router_destroy(gcso_pspm_router_handl
 }
 
 /**
- * @brief Creates a Sparse Residual Adapter Layer (SRL) instance.
+ * @brief Creates a Sparse Residual Adapter Layer (Rank-1 residual) instance.
  *
- * @param descriptor Pointer to SRL descriptor.
+ * @param descriptor Pointer to Rank-1 residual descriptor.
  * @param adapter_out Pointer to receive allocated adapter handle.
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL
-gcso_srl_adapter_create(const gcso_srl_descriptor_t* GCSO_RESTRICT descriptor,
-                        gcso_srl_adapter_handle_t* GCSO_RESTRICT adapter_out) GCSO_NOEXCEPT {
+gcso_rank1_residual_create(const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT descriptor,
+                        gcso_rank1_residual_handle_t* GCSO_RESTRICT adapter_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(descriptor == nullptr || adapter_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
         if (GCSO_UNLIKELY(
-                reinterpret_cast<uintptr_t>(descriptor) % alignof(gcso_srl_descriptor_t) != 0 ||
-                reinterpret_cast<uintptr_t>(adapter_out) % alignof(gcso_srl_adapter_handle_t) !=
+                reinterpret_cast<uintptr_t>(descriptor) % alignof(gcso_rank1_residual_descriptor_t) != 0 ||
+                reinterpret_cast<uintptr_t>(adapter_out) % alignof(gcso_rank1_residual_handle_t) !=
                     0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        auto* adapter = gcso_aligned_new<gcso_srl_adapter_opaque>();
+        auto* adapter = gcso_aligned_new<gcso_rank1_residual_opaque>();
         if (GCSO_UNLIKELY(adapter == nullptr)) {
             return GCSO_ERROR_OUT_OF_MEMORY;
         }
-        std::memcpy(&adapter->descriptor, descriptor, sizeof(gcso_srl_descriptor_t));
+        std::memcpy(&adapter->descriptor, descriptor, sizeof(gcso_rank1_residual_descriptor_t));
         adapter->is_active = true;
 
         *adapter_out = adapter;
@@ -1146,41 +1146,41 @@ gcso_srl_adapter_create(const gcso_srl_descriptor_t* GCSO_RESTRICT descriptor,
 }
 
 /**
- * @brief Evaluates SRL Dynamic Rank-1 outer product. Executed in zero-allocation mode.
+ * @brief Evaluates Rank-1 residual Dynamic Rank-1 outer product. Executed in zero-allocation mode.
  * Formula: y = W_base * x + s (*) (u * (v^T * x)).
  *
  * @param y_out Output vector buffer to accumulate into in-place.
  * @param x_in Input vector buffer.
- * @param srl_desc SRL descriptor structure pointer.
+ * @param rank1_desc Rank-1 residual descriptor structure pointer.
  * @param dim_in Input vector dimension.
  * @param dim_out Output vector dimension.
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL
-gcso_srl_eval_rank1(float* GCSO_RESTRICT y_out, const float* GCSO_RESTRICT x_in,
-                    const gcso_srl_descriptor_t* GCSO_RESTRICT srl_desc, size_t dim_in,
+gcso_rank1_eval(float* GCSO_RESTRICT y_out, const float* GCSO_RESTRICT x_in,
+                    const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT rank1_desc, size_t dim_in,
                     size_t dim_out) GCSO_NOEXCEPT {
-    if (GCSO_UNLIKELY(y_out == nullptr || x_in == nullptr || srl_desc == nullptr)) {
+    if (GCSO_UNLIKELY(y_out == nullptr || x_in == nullptr || rank1_desc == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
-    if (GCSO_UNLIKELY(dim_in == 0 || dim_out == 0 || std::isnan(srl_desc->scale_factor) ||
-                      std::isinf(srl_desc->scale_factor))) {
+    if (GCSO_UNLIKELY(dim_in == 0 || dim_out == 0 || std::isnan(rank1_desc->scale_factor) ||
+                      std::isinf(rank1_desc->scale_factor))) {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(y_out) % 32 != 0 ||
                           reinterpret_cast<uintptr_t>(x_in) % 32 != 0 ||
-                          reinterpret_cast<uintptr_t>(srl_desc) % alignof(gcso_srl_descriptor_t) !=
+                          reinterpret_cast<uintptr_t>(rank1_desc) % alignof(gcso_rank1_residual_descriptor_t) !=
                               0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
         const auto* GCSO_RESTRICT vector_u =
-            reinterpret_cast<const float*>(static_cast<uintptr_t>(srl_desc->u_vector_ptr));
+            reinterpret_cast<const float*>(static_cast<uintptr_t>(rank1_desc->u_vector_ptr));
         const auto* GCSO_RESTRICT vector_v =
-            reinterpret_cast<const float*>(static_cast<uintptr_t>(srl_desc->v_vector_ptr));
+            reinterpret_cast<const float*>(static_cast<uintptr_t>(rank1_desc->v_vector_ptr));
         const auto* GCSO_RESTRICT gain_s =
-            reinterpret_cast<const float*>(static_cast<uintptr_t>(srl_desc->gain_scalar_ptr));
+            reinterpret_cast<const float*>(static_cast<uintptr_t>(rank1_desc->gain_scalar_ptr));
 
         if (GCSO_UNLIKELY(vector_u == nullptr || vector_v == nullptr)) {
             return GCSO_ERROR_NULL_POINTER;
@@ -1265,7 +1265,7 @@ gcso_srl_eval_rank1(float* GCSO_RESTRICT y_out, const float* GCSO_RESTRICT x_in,
             v_dot_x += vector_v[i] * x_in[i];
         }
 
-        const float scaled_dot = srl_desc->scale_factor * v_dot_x;
+        const float scaled_dot = rank1_desc->scale_factor * v_dot_x;
         size_t j = 0;
         const size_t simd_out = dim_out & ~static_cast<size_t>(7);
 
@@ -1333,18 +1333,18 @@ gcso_srl_eval_rank1(float* GCSO_RESTRICT y_out, const float* GCSO_RESTRICT x_in,
 }
 
 /**
- * @brief Evaluates in-place fused SRL Dynamic Rank-1 outer product accumulation.
+ * @brief Evaluates in-place fused Rank-1 residual Dynamic Rank-1 outer product accumulation.
  */
 GCSO_API gcso_status_t GCSO_CALL
-gcso_srl_eval_rank1_fused(float* GCSO_RESTRICT y_inout, const float* GCSO_RESTRICT x_in,
-                          const gcso_srl_descriptor_t* GCSO_RESTRICT srl_desc, size_t dim_in,
+gcso_rank1_eval_fused(float* GCSO_RESTRICT y_inout, const float* GCSO_RESTRICT x_in,
+                          const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT rank1_desc, size_t dim_in,
                           size_t dim_out) GCSO_NOEXCEPT {
-    return gcso_srl_eval_rank1(y_inout, x_in, srl_desc, dim_in, dim_out);
+    return gcso_rank1_eval(y_inout, x_in, rank1_desc, dim_in, dim_out);
 }
 
 /**
  * @brief L2P-SVD: First-order principal component projection of fine-tuned LoRA matrices
- * into phase profiles and Rank-1 SRL vectors without gradient training.
+ * into phase profiles and Rank-1 Rank-1 residual vectors without gradient training.
  *
  * Extracts the first principal component (rank-1 approximation) from fine-tuned LoRA matrices
  * (LoRA A: r x d_in and LoRA B: d_out x r) and converts pairing element angles (u0, u1) via atan2
@@ -1355,15 +1355,15 @@ gcso_srl_eval_rank1_fused(float* GCSO_RESTRICT y_inout, const float* GCSO_RESTRI
  * @param rank Rank size of input LoRA.
  * @param dim_in Input dimension size.
  * @param dim_out Output dimension size (must be even).
- * @param srl_out Output SRL descriptor structure to populate.
+ * @param rank1_out Output Rank-1 residual descriptor structure to populate.
  * @param phase_profile_out Output Q7 phase profile array pointer.
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_l2p_svd_project_lora(
     const float* GCSO_RESTRICT lora_a, const float* GCSO_RESTRICT lora_b, size_t rank,
-    size_t dim_in, size_t dim_out, gcso_srl_descriptor_t* GCSO_RESTRICT srl_out,
+    size_t dim_in, size_t dim_out, gcso_rank1_residual_descriptor_t* GCSO_RESTRICT rank1_out,
     gcso_q7_t* GCSO_RESTRICT phase_profile_out) GCSO_NOEXCEPT {
-    if (GCSO_UNLIKELY(lora_a == nullptr || lora_b == nullptr || srl_out == nullptr)) {
+    if (GCSO_UNLIKELY(lora_a == nullptr || lora_b == nullptr || rank1_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     if (GCSO_UNLIKELY(rank == 0 || dim_in == 0 || dim_out == 0 || (dim_out % 2 != 0))) {
@@ -1372,16 +1372,16 @@ GCSO_API gcso_status_t GCSO_CALL gcso_l2p_svd_project_lora(
     try {
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(lora_a) % 32 != 0 ||
                           reinterpret_cast<uintptr_t>(lora_b) % 32 != 0 ||
-                          reinterpret_cast<uintptr_t>(srl_out) % alignof(gcso_srl_descriptor_t) !=
+                          reinterpret_cast<uintptr_t>(rank1_out) % alignof(gcso_rank1_residual_descriptor_t) !=
                               0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        srl_out->u_vector_ptr = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(lora_b));
-        srl_out->v_vector_ptr = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(lora_a));
-        srl_out->gain_scalar_ptr = 0;
-        srl_out->scale_factor = 1.0f / static_cast<float>(rank);
-        srl_out->rank = 1;
+        rank1_out->u_vector_ptr = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(lora_b));
+        rank1_out->v_vector_ptr = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(lora_a));
+        rank1_out->gain_scalar_ptr = 0;
+        rank1_out->scale_factor = 1.0f / static_cast<float>(rank);
+        rank1_out->rank = 1;
 
         if (phase_profile_out != nullptr) {
             if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(phase_profile_out) % alignof(gcso_q7_t) !=
@@ -1410,17 +1410,17 @@ GCSO_API gcso_status_t GCSO_CALL gcso_l2p_svd_project_lora(
 }
 
 /**
- * @brief Destroys an SRL adapter instance. Safe No-Op if NULL.
+ * @brief Destroys an Rank-1 residual adapter instance. Safe No-Op if NULL.
  *
  * @param adapter Adapter handle to destroy (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_srl_adapter_destroy(gcso_srl_adapter_handle_t adapter)
+GCSO_API gcso_status_t GCSO_CALL gcso_rank1_residual_destroy(gcso_rank1_residual_handle_t adapter)
     GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(adapter == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(adapter) % alignof(gcso_srl_adapter_opaque) !=
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(adapter) % alignof(gcso_rank1_residual_opaque) !=
                       0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }

@@ -64,7 +64,7 @@ use super::primitives::{
 };
 use super::primitives::{
     ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE,
-    ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_MODE_SUBHEAD_ROUTE, ACTION_MODE_RANK1_INJECT, ACTION_PRESET_EXPRESS_PHASE,
     ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
     ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
     ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, LEDGER_HISTORY_LEN,
@@ -72,16 +72,16 @@ use super::primitives::{
     MAX_ATTENTION_HEADS, Pod, pack_action_slot_tag,
 };
 use super::rope::{
-    PhaseSteering, PhaseSteeringGeometryExt, PspmRouter, RopePairLayout, RopeSteeringTarget,
-    SrlAdapter, dispatch_fused_ripa_and_pspm_words_core, resolve_autonomous_swarm_rot_dim,
+    PhaseSteering, PhaseSteeringGeometryExt, SubHeadRouter, RopePairLayout, RopeSteeringTarget,
+    Rank1ResidualAdapter, dispatch_fused_ripa_and_pspm_words_core, resolve_autonomous_swarm_rot_dim,
     rotate_fused_self_ripa_and_pspm_default_words,
     rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words, steer_from_swar_words_core_safe,
 };
 use super::telemetry::{
     ContrastivePhaseBloomFilter, DEFAULT_SWARM_QUORUM_THRESHOLD, DEFAULT_SWARM_TOLERANCE_Q7,
     LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
-    LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_PSPM_ROUTED,
-    LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SRL_INJECTED,
+    LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_SUBHEAD_ROUTED,
+    LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_RANK1_INJECTED,
     MAX_ATTRACTOR_PULL_FORCE, NUM_SWARM_MICRO_CELLS, StigmergicSwarmOps, SwarmResolutionReport,
     TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
     TRAIL_FLAG_SYNERGY_RESONANCE,
@@ -89,7 +89,7 @@ use super::telemetry::{
 use super::{ActionHub, validate_optional_qk_tensors};
 use crate::abi::{
     GCSO_ABI_VERSION_HEX, GCSO_ERROR_INVALID_ARGUMENT, gcso_config_t, gcso_ledger_slot_t,
-    gcso_edbc_state_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t, gcso_srl_descriptor_t,
+    gcso_edbc_state_t, gcso_pointer_trail_t, gcso_subhead_config_t, gcso_q7_t, gcso_rank1_residual_descriptor_t,
     gcso_tagged_ptr_t,
 };
 
@@ -144,10 +144,10 @@ pub const DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO: f32 = 0.55;
 pub const GCSO_CRYSTAL_RECORD_MAGIC: u32 = 0x4C54_5343;
 /// Version constant for [`CrystallizedAttractorRecord`] binary serialization (`0x0000_0101` = v0.1.1).
 pub const GCSO_CRYSTAL_RECORD_VERSION: u32 = GCSO_ABI_VERSION_HEX;
-/// Fixed byte length (`192` bytes = `128B` `gcso_snapshot_header_t` + `64B` `gcso_zimms_descriptor_t`) of Section 0.
+/// Fixed byte length (`192` bytes = `128B` `gcso_snapshot_header_t` + `64B` `gcso_mapped_storage_descriptor_t`) of Section 0.
 pub const GCSO_FOUR_SECTION_HEADER_BYTES: usize = 192;
-/// Byte offset (`128`) within the 192-byte Section 0 preamble where [`crate::abi::gcso_zimms_descriptor_t`] is stored.
-pub const GCSO_ZIMMS_DESCRIPTOR_PREAMBLE_OFFSET: usize = 128;
+/// Byte offset (`128`) within the 192-byte Section 0 preamble where [`crate::abi::gcso_mapped_storage_descriptor_t`] is stored.
+pub const GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET: usize = 128;
 
 const INV_FACT_RIPA_CLAMP_RAD: f32 = 1.0 / DEFAULT_FACT_RIPA_CLAMP_RAD;
 pub(crate) const MAX_REGISTER_CACHED_CENTROIDS: usize = 16;
@@ -1063,7 +1063,7 @@ impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
         let dyn_gain =
             branchless_clamp_f32(self.base.reinforcement_gain * gain_scale * pressure_damp, 0.05, 1.25);
 
-        // Sustained high-pull trails gradually ease crystallization, while resource pressure raises skip/SRL gates.
+        // Sustained high-pull trails gradually ease crystallization, while resource pressure raises skip/Rank-1 residual gates.
         let sustained_pull = if trail.step_count >= 16 {
             branchless_clamp_f32((trail.attractor_pull_force - 0.65_f32) * 2.0_f32, 0.0, 1.0)
         } else {
@@ -1075,8 +1075,8 @@ impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
             0.45,
         );
         let express_thresh = self.base.express_steer_density_thresh * (1.0_f32 + 0.35_f32 * pressure);
-        let pspm_thresh = self.base.pspm_route_density_thresh * (1.0_f32 + 0.30_f32 * pressure);
-        let srl_thresh = self.base.srl_inject_density_thresh * (1.0_f32 + 0.50_f32 * pressure);
+        let pspm_thresh = self.base.subhead_route_density_thresh * (1.0_f32 + 0.30_f32 * pressure);
+        let srl_thresh = self.base.rank1_inject_density_thresh * (1.0_f32 + 0.50_f32 * pressure);
         let crystal_thresh =
             self.base.crystallize_density_thresh * (1.0_f32 - 0.15_f32 * sustained_pull + 0.25_f32 * pressure);
 
@@ -1102,8 +1102,8 @@ impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
             reinforcement_gain: dyn_gain,
             inertial_skip_entropy_thresh: skip_thresh,
             express_steer_density_thresh: express_thresh,
-            pspm_route_density_thresh: pspm_thresh,
-            srl_inject_density_thresh: srl_thresh,
+            subhead_route_density_thresh: pspm_thresh,
+            rank1_inject_density_thresh: srl_thresh,
             crystallize_density_thresh: crystal_thresh,
             contradiction_coherence_thresh: contradict_thresh,
         }
@@ -1115,7 +1115,7 @@ impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
 // ===================================================================
 
 /// **Origin 2 Parent Supertrait (`CognitiveGroundingSignal: CausalProvenanceSignal`)**:
-/// Common phase-projection and `.gcso` (ZIMMS) 48-bit section-offset addressing foundation.
+/// Common phase-projection and `.gcso` (mapped-storage) 48-bit section-offset addressing foundation.
 pub trait CognitiveGroundingSignal: CausalProvenanceSignal {
     /// Projects this grounding signal onto the 64-head $SO(2)^{64}$ Q7 phase manifold.
     fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS];
@@ -1138,9 +1138,9 @@ pub trait CognitiveGroundingSignal: CausalProvenanceSignal {
     /// Base gravitational pull energy $E_{\mathrm{base}} \ge 0$ of this grounding signal.
     fn grounding_base_energy(&self) -> f32;
 
-    /// Canonical 48-bit `.gcso` (ZIMMS) section or RAG record offset (`bits 0..=47` of `gcso_tagged_ptr_t`).
+    /// Canonical 48-bit `.gcso` (mapped-storage) section or RAG record offset (`bits 0..=47` of `gcso_tagged_ptr_t`).
     #[inline(always)]
-    fn zimms_section_offset48(&self) -> u64 {
+    fn mapped_section_offset48(&self) -> u64 {
         0
     }
 
@@ -1163,7 +1163,7 @@ pub trait CognitiveGroundingSignal: CausalProvenanceSignal {
         (
             self.project_grounding_words_64(),
             self.grounding_base_energy(),
-            self.zimms_section_offset48(),
+            self.mapped_section_offset48(),
             self.grounding_anchor_id(),
             self.active_head_count(),
         )
@@ -1188,8 +1188,8 @@ impl<T: CognitiveGroundingSignal + ?Sized> CognitiveGroundingSignal for &T {
         (**self).grounding_base_energy()
     }
     #[inline(always)]
-    fn zimms_section_offset48(&self) -> u64 {
-        (**self).zimms_section_offset48()
+    fn mapped_section_offset48(&self) -> u64 {
+        (**self).mapped_section_offset48()
     }
     #[inline(always)]
     fn grounding_anchor_id(&self) -> u32 {
@@ -1214,7 +1214,7 @@ pub trait ObjectiveFactSignal: CognitiveGroundingSignal {
         DEFAULT_FACT_RIPA_CLAMP_RAD
     }
 
-    /// PSPM `Fact` sub-head phase gain multiplier (defaults to `1.15`).
+    /// sub-head router `Fact` sub-head phase gain multiplier (defaults to `1.15`).
     #[inline(always)]
     fn fact_pspm_gain(&self) -> f32 {
         1.15
@@ -1241,7 +1241,7 @@ pub trait SubjectivePersonaSignal: CognitiveGroundingSignal {
         DEFAULT_PERSONA_RIPA_CLAMP_RAD
     }
 
-    /// PSPM `Explore` / `Logic` sub-head phase gain multiplier (defaults to `1.20`).
+    /// sub-head router `Explore` / `Logic` sub-head phase gain multiplier (defaults to `1.20`).
     #[inline(always)]
     fn persona_pspm_gain(&self) -> f32 {
         1.20
@@ -1320,7 +1320,7 @@ pub struct ObjectiveFact<T> {
     pub payload: T,
     /// Base gravitational pull energy $E_{\mathrm{fact}} \ge 0$.
     pub base_energy: f32,
-    /// Direct 48-bit `.gcso` (ZIMMS) section offset (`bits 0..=47`).
+    /// Direct 48-bit `.gcso` (mapped-storage) section offset (`bits 0..=47`).
     pub zimms_offset48: u64,
     /// Full 32-bit macro anchor ID on the unified manifold.
     pub anchor_id: u32,
@@ -1329,7 +1329,7 @@ pub struct ObjectiveFact<T> {
 }
 
 impl<T> ObjectiveFact<T> {
-    /// Constructs a new [`ObjectiveFact`] with explicit base energy, 48-bit ZIMMS offset, and 32-bit anchor ID.
+    /// Constructs a new [`ObjectiveFact`] with explicit base energy, 48-bit mapped-storage offset, and 32-bit anchor ID.
     #[inline(always)]
     #[must_use]
     pub const fn new(payload: T, base_energy: f32, zimms_offset48: u64, anchor_id: u32) -> Self {
@@ -1377,7 +1377,7 @@ impl<T: RawPhaseProjectable> CognitiveGroundingSignal for ObjectiveFact<T> {
         self.base_energy
     }
     #[inline(always)]
-    fn zimms_section_offset48(&self) -> u64 {
+    fn mapped_section_offset48(&self) -> u64 {
         self.zimms_offset48
     }
     #[inline(always)]
@@ -1401,7 +1401,7 @@ pub struct SubjectivePersona<T> {
     pub payload: T,
     /// Base gravitational pull energy $E_{\mathrm{persona}} \ge 0$.
     pub base_energy: f32,
-    /// Direct 48-bit `.gcso` (ZIMMS) persona section offset (`bits 0..=47`).
+    /// Direct 48-bit `.gcso` (mapped-storage) persona section offset (`bits 0..=47`).
     pub zimms_offset48: u64,
     /// Full 32-bit macro anchor ID on the unified manifold.
     pub anchor_id: u32,
@@ -1410,7 +1410,7 @@ pub struct SubjectivePersona<T> {
 }
 
 impl<T> SubjectivePersona<T> {
-    /// Constructs a new [`SubjectivePersona`] with explicit base energy, 48-bit ZIMMS offset, and 32-bit anchor ID.
+    /// Constructs a new [`SubjectivePersona`] with explicit base energy, 48-bit mapped-storage offset, and 32-bit anchor ID.
     #[inline(always)]
     #[must_use]
     pub const fn new(payload: T, base_energy: f32, zimms_offset48: u64, anchor_id: u32) -> Self {
@@ -1452,7 +1452,7 @@ impl<T: RawPhaseProjectable> CognitiveGroundingSignal for SubjectivePersona<T> {
         self.base_energy
     }
     #[inline(always)]
-    fn zimms_section_offset48(&self) -> u64 {
+    fn mapped_section_offset48(&self) -> u64 {
         self.zimms_offset48
     }
     #[inline(always)]
@@ -1813,8 +1813,8 @@ impl ContradictionGuardSignal for ContrastivePhaseBloomFilter {
 pub struct GatewayFrame {
     /// Synthesized 64-bit tagged pointer (`[Phase(8b) | Slot(3b) | ActionMode(5b) | ZimmsAddr(48b)]`, `offset 0..8`).
     pub tagged_ptr: u64,
-    /// Direct 48-bit `.gcso` (ZIMMS) section offset (`bits 0..=47`, `offset 8..16`).
-    pub zimms_section_offset48: u64,
+    /// Direct 48-bit `.gcso` (mapped-storage) section offset (`bits 0..=47`, `offset 8..16`).
+    pub mapped_section_offset48: u64,
     /// Full 32-bit macro attractor anchor ID on the Single Unified Attractor Manifold (`offset 16..20`).
     pub target_anchor_id: u32,
     /// Combined gravitational pull energy $E_{\mathrm{eff}} \ge 0$ (`offset 20..24`).
@@ -1841,18 +1841,18 @@ pub struct GatewayFrame {
     pub active_swarm_cell_mask: u8,
     /// Ceiling-rounded Q7 integer step filter cutoff (`0..=128`, `offset 52`).
     pub qdps_min_step_q7: u8,
-    /// Recommended PSPM `Fact` sub-head count (`offset 53`).
-    pub pspm_fact_heads: u8,
-    /// Recommended PSPM `Logic` sub-head count (`offset 54`).
-    pub pspm_logic_heads: u8,
-    /// Recommended PSPM `Explore` sub-head count (`offset 55`).
-    pub pspm_explore_heads: u8,
-    /// Quantized PSPM `Fact` sub-head phase gain in Q7 (`128` = `1.0x`, `offset 56`).
-    pub pspm_fact_gain_q7: u8,
-    /// Quantized PSPM `Logic` sub-head phase gain in Q7 (`128` = `1.0x`, `offset 57`).
-    pub pspm_logic_gain_q7: u8,
-    /// Quantized PSPM `Explore` sub-head phase gain in Q7 (`128` = `1.0x`, `offset 58`).
-    pub pspm_explore_gain_q7: u8,
+    /// Recommended sub-head router `Fact` sub-head count (`offset 53`).
+    pub subhead_fact_heads: u8,
+    /// Recommended sub-head router `Logic` sub-head count (`offset 54`).
+    pub subhead_logic_heads: u8,
+    /// Recommended sub-head router `Explore` sub-head count (`offset 55`).
+    pub subhead_explore_heads: u8,
+    /// Quantized sub-head router `Fact` sub-head phase gain in Q7 (`128` = `1.0x`, `offset 56`).
+    pub subhead_fact_gain_q7: u8,
+    /// Quantized sub-head router `Logic` sub-head phase gain in Q7 (`128` = `1.0x`, `offset 57`).
+    pub subhead_logic_gain_q7: u8,
+    /// Quantized sub-head router `Explore` sub-head phase gain in Q7 (`128` = `1.0x`, `offset 58`).
+    pub subhead_explore_gain_q7: u8,
     /// Fast 64-head SWAR arithmetic mean Q7 phase tag $\bar{\theta}_{Q7} \in [-127, 127]$ (`offset 59`).
     pub mean_phase_tag_q7: gcso_q7_t,
     /// Active attention head count for this frame (`1..=64`, defaults to `64`, `offset 60..62`).
@@ -1876,7 +1876,7 @@ impl Default for GatewayFrame {
                 0,
             )
             .raw(),
-            zimms_section_offset48: 0,
+            mapped_section_offset48: 0,
             target_anchor_id: 0,
             effective_energy: 0.0,
             ripa_clamp_rad: DEFAULT_RIPA_CLAMP_MAX_RAD,
@@ -1890,12 +1890,12 @@ impl Default for GatewayFrame {
             action_mode_flags: ACTION_PRESET_EXPRESS_PHASE,
             active_swarm_cell_mask: 0xFF,
             qdps_min_step_q7: branchless_rad_to_qdps_step_u8(DEFAULT_QDPS_MIN_STEP_RAD),
-            pspm_fact_heads: 24,
-            pspm_logic_heads: 24,
-            pspm_explore_heads: 16,
-            pspm_fact_gain_q7: 128,
-            pspm_logic_gain_q7: 128,
-            pspm_explore_gain_q7: 128,
+            subhead_fact_heads: 24,
+            subhead_logic_heads: 24,
+            subhead_explore_heads: 16,
+            subhead_fact_gain_q7: 128,
+            subhead_logic_gain_q7: 128,
+            subhead_explore_gain_q7: 128,
             mean_phase_tag_q7: 0,
             active_head_count: MAX_ATTENTION_HEADS as u16,
             frame_flags: 0,
@@ -1971,18 +1971,18 @@ impl GatewayFrame {
         }
     }
 
-    /// Converts the Gateway's recommended Fact/Logic/Explore head split into a [`gcso_pspm_config_t`]
+    /// Converts the Gateway's recommended Fact/Logic/Explore head split into a [`gcso_subhead_config_t`]
     /// scaled proportionally to `total_heads`.
     #[inline(always)]
     #[must_use]
-    pub const fn to_pspm_config_for_heads(&self, total_heads: usize) -> gcso_pspm_config_t {
+    pub const fn to_subhead_config_for_heads(&self, total_heads: usize) -> gcso_subhead_config_t {
         let h = if total_heads > MAX_ATTENTION_HEADS {
             MAX_ATTENTION_HEADS
         } else {
             total_heads
         };
         if h == 0 {
-            return gcso_pspm_config_t {
+            return gcso_subhead_config_t {
                 num_fact_heads: 0,
                 num_logic_heads: 0,
                 num_explore_heads: 0,
@@ -1993,32 +1993,32 @@ impl GatewayFrame {
                 reserved: [0; 12],
             };
         }
-        let f_raw = ((self.pspm_fact_heads as usize) * h + 32) >> 6;
-        let l_raw = ((self.pspm_logic_heads as usize) * h + 32) >> 6;
+        let f_raw = ((self.subhead_fact_heads as usize) * h + 32) >> 6;
+        let l_raw = ((self.subhead_logic_heads as usize) * h + 32) >> 6;
         let f_cnt = if f_raw > h { h } else { f_raw };
         let rem = h - f_cnt;
         let l_cnt = if l_raw > rem { rem } else { l_raw };
         let e_cnt = h - f_cnt - l_cnt;
-        gcso_pspm_config_t {
+        gcso_subhead_config_t {
             num_fact_heads: f_cnt as u16,
             num_logic_heads: l_cnt as u16,
             num_explore_heads: e_cnt as u16,
             flags: 1,
-            fact_phase_gain: (self.pspm_fact_gain_q7 as f32) * (1.0 / 128.0),
-            logic_phase_gain: (self.pspm_logic_gain_q7 as f32) * (1.0 / 128.0),
-            explore_phase_gain: (self.pspm_explore_gain_q7 as f32) * (1.0 / 128.0),
+            fact_phase_gain: (self.subhead_fact_gain_q7 as f32) * (1.0 / 128.0),
+            logic_phase_gain: (self.subhead_logic_gain_q7 as f32) * (1.0 / 128.0),
+            explore_phase_gain: (self.subhead_explore_gain_q7 as f32) * (1.0 / 128.0),
             reserved: [0; 12],
         }
     }
 
-    /// Returns `true` when all three PSPM sub-head group gains (`pspm_fact_gain_q7`,
-    /// `pspm_logic_gain_q7`, `pspm_explore_gain_q7`) equal unit gain (`128` in Q0.7).
+    /// Returns `true` when all three sub-head router sub-head group gains (`subhead_fact_gain_q7`,
+    /// `subhead_logic_gain_q7`, `subhead_explore_gain_q7`) equal unit gain (`128` in Q0.7).
     #[inline(always)]
     #[must_use]
     pub const fn has_unit_pspm_gains(&self) -> bool {
-        (self.pspm_fact_gain_q7 == 128)
-            & (self.pspm_logic_gain_q7 == 128)
-            & (self.pspm_explore_gain_q7 == 128)
+        (self.subhead_fact_gain_q7 == 128)
+            & (self.subhead_logic_gain_q7 == 128)
+            & (self.subhead_explore_gain_q7 == 128)
     }
 
     /// Autonomously derives the 8-cell Micro-Swarm step gain (`32..=128` in Q0.7) from this
@@ -2341,7 +2341,7 @@ fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGatewaySignal>(
     let mut best_e = 0.0_f32;
     let mut has_active = false;
 
-    let mut zimms_addr = 0u64;
+    let mut storage_addr = 0u64;
     let mut target_anchor_id = 0u32;
     let mut ripa_clamp_rad = DEFAULT_RIPA_CLAMP_MAX_RAD;
     let mut qdps_min_step_rad = DEFAULT_QDPS_MIN_STEP_RAD;
@@ -2400,7 +2400,7 @@ fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGatewaySignal>(
                 acc_is_uniform = f_w_uniform;
                 tot_e = f_e;
                 best_e = f_e;
-                zimms_addr = f.zimms_section_offset48;
+                storage_addr = f.mapped_section_offset48;
                 target_anchor_id = f.target_anchor_id;
                 ripa_clamp_rad = f.ripa_clamp_rad;
                 qdps_min_step_rad = f.qdps_min_step_rad;
@@ -2413,12 +2413,12 @@ fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGatewaySignal>(
                 action_flags = f.action_mode_flags;
                 swarm_mask = f.active_swarm_cell_mask;
                 qdps_step_q7 = f.qdps_min_step_q7;
-                pspm_fact = f.pspm_fact_heads;
-                pspm_logic = f.pspm_logic_heads;
-                pspm_explore = f.pspm_explore_heads;
-                fact_gain_q7 = f.pspm_fact_gain_q7;
-                logic_gain_q7 = f.pspm_logic_gain_q7;
-                explore_gain_q7 = f.pspm_explore_gain_q7;
+                pspm_fact = f.subhead_fact_heads;
+                pspm_logic = f.subhead_logic_heads;
+                pspm_explore = f.subhead_explore_heads;
+                fact_gain_q7 = f.subhead_fact_gain_q7;
+                logic_gain_q7 = f.subhead_logic_gain_q7;
+                explore_gain_q7 = f.subhead_explore_gain_q7;
                 active_heads = item_heads;
                 has_active = true;
             } else {
@@ -2455,22 +2455,22 @@ fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGatewaySignal>(
                     best_e = branchless_select_f32(take_dom, f_e, best_e);
                     target_anchor_id =
                         branchless_select_u32(take_dom, f.target_anchor_id, target_anchor_id);
-                    zimms_addr = branchless_select_u64(
-                        take_dom & (f.zimms_section_offset48 != 0),
-                        f.zimms_section_offset48,
-                        zimms_addr,
+                    storage_addr = branchless_select_u64(
+                        take_dom & (f.mapped_section_offset48 != 0),
+                        f.mapped_section_offset48,
+                        storage_addr,
                     );
                     dom_slot = branchless_select_u8(take_dom, f.dominant_slot, dom_slot);
-                    pspm_fact = branchless_select_u8(take_dom, f.pspm_fact_heads, pspm_fact);
-                    pspm_logic = branchless_select_u8(take_dom, f.pspm_logic_heads, pspm_logic);
+                    pspm_fact = branchless_select_u8(take_dom, f.subhead_fact_heads, pspm_fact);
+                    pspm_logic = branchless_select_u8(take_dom, f.subhead_logic_heads, pspm_logic);
                     pspm_explore =
-                        branchless_select_u8(take_dom, f.pspm_explore_heads, pspm_explore);
+                        branchless_select_u8(take_dom, f.subhead_explore_heads, pspm_explore);
                     fact_gain_q7 =
-                        branchless_select_u8(take_dom, f.pspm_fact_gain_q7, fact_gain_q7);
+                        branchless_select_u8(take_dom, f.subhead_fact_gain_q7, fact_gain_q7);
                     logic_gain_q7 =
-                        branchless_select_u8(take_dom, f.pspm_logic_gain_q7, logic_gain_q7);
+                        branchless_select_u8(take_dom, f.subhead_logic_gain_q7, logic_gain_q7);
                     explore_gain_q7 =
-                        branchless_select_u8(take_dom, f.pspm_explore_gain_q7, explore_gain_q7);
+                        branchless_select_u8(take_dom, f.subhead_explore_gain_q7, explore_gain_q7);
                     tot_e = new_tot;
                 }
                 action_flags |= f.action_mode_flags;
@@ -2492,7 +2492,7 @@ fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGatewaySignal>(
     let phase_deltas = words_to_q7_array_64(&acc_w);
     let tag_q7 = swar_q7_mean_i8_from_words_with_uniform_flag_64(&acc_w, acc_is_uniform);
     let packed_tag = pack_action_slot_tag(dom_slot, action_flags);
-    let tagged_ptr = gcso_tagged_ptr_t::pack(zimms_addr, packed_tag, tag_q7).raw();
+    let tagged_ptr = gcso_tagged_ptr_t::pack(storage_addr, packed_tag, tag_q7).raw();
     let out_energy = if use_query_resonance {
         branchless_min_f32(best_e, MAX_ATTRACTOR_PULL_FORCE)
     } else {
@@ -2501,7 +2501,7 @@ fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGatewaySignal>(
     (
         GatewayFrame {
             tagged_ptr,
-            zimms_section_offset48: zimms_addr,
+            mapped_section_offset48: storage_addr,
             target_anchor_id,
             effective_energy: out_energy,
             ripa_clamp_rad,
@@ -2515,12 +2515,12 @@ fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGatewaySignal>(
             action_mode_flags: action_flags,
             active_swarm_cell_mask: swarm_mask,
             qdps_min_step_q7: qdps_step_q7,
-            pspm_fact_heads: pspm_fact,
-            pspm_logic_heads: pspm_logic,
-            pspm_explore_heads: pspm_explore,
-            pspm_fact_gain_q7: fact_gain_q7,
-            pspm_logic_gain_q7: logic_gain_q7,
-            pspm_explore_gain_q7: explore_gain_q7,
+            subhead_fact_heads: pspm_fact,
+            subhead_logic_heads: pspm_logic,
+            subhead_explore_heads: pspm_explore,
+            subhead_fact_gain_q7: fact_gain_q7,
+            subhead_logic_gain_q7: logic_gain_q7,
+            subhead_explore_gain_q7: explore_gain_q7,
             mean_phase_tag_q7: tag_q7,
             active_head_count: active_heads,
             frame_flags: packed_tag as u16,
@@ -2685,7 +2685,7 @@ where
     let mut raw_clamp = DEFAULT_PERSONA_RIPA_CLAMP_RAD;
     let mut dom_slot = ATTRACTOR_SLOT_SYSTEM_BASELINE;
     let mut dom_anchor_id = 0u32;
-    let mut zimms_addr = 0u64;
+    let mut storage_addr = 0u64;
     let mut pspm_fact = 24u8;
     let mut pspm_logic = 24u8;
     let mut pspm_explore = 16u8;
@@ -2783,7 +2783,7 @@ where
             fact_id,
             branchless_select_u32(pers_id != 0, pers_id, fact_id),
         );
-        zimms_addr = branchless_select_u64(
+        storage_addr = branchless_select_u64(
             fact_addr != 0,
             fact_addr,
             branchless_select_u64(pers_addr != 0, pers_addr, 0),
@@ -2798,7 +2798,7 @@ where
         raw_clamp = fact_clamp;
         dom_slot = ATTRACTOR_SLOT_KNOWLEDGE;
         dom_anchor_id = fact_id;
-        zimms_addr = fact_addr;
+        storage_addr = fact_addr;
         pspm_fact = 36;
         pspm_logic = 20;
         pspm_explore = 8;
@@ -2809,7 +2809,7 @@ where
         raw_clamp = pers_clamp;
         dom_slot = ATTRACTOR_SLOT_PERSONA;
         dom_anchor_id = pers_id;
-        zimms_addr = pers_addr;
+        storage_addr = pers_addr;
         pspm_fact = 16;
         pspm_logic = 24;
         pspm_explore = 24;
@@ -2899,8 +2899,8 @@ where
     } else if force_skip {
         ACTION_PRESET_INERTIAL_SKIP
     } else if has_fact | has_persona {
-        ACTION_MODE_DPSR_STEER | ACTION_MODE_PSPM_ROUTE
-            | branchless_select_u8(eff_energy >= 2.0, ACTION_MODE_SRL_INJECT, 0)
+        ACTION_MODE_DPSR_STEER | ACTION_MODE_SUBHEAD_ROUTE
+            | branchless_select_u8(eff_energy >= 2.0, ACTION_MODE_RANK1_INJECT, 0)
     } else {
         ACTION_PRESET_EXPRESS_PHASE
     };
@@ -2940,13 +2940,13 @@ where
         None => swar_q7_mean_i8_from_words_with_uniform_flag_64(&blended_w, blended_uni),
     };
     let packed_tag = pack_action_slot_tag(dom_slot, action_flags);
-    let tagged_ptr = gcso_tagged_ptr_t::pack(zimms_addr, packed_tag, tag_q7).raw();
+    let tagged_ptr = gcso_tagged_ptr_t::pack(storage_addr, packed_tag, tag_q7).raw();
     let logic_gain_q7 = ((fact_gain_q7 as u16 + pers_gain_q7 as u16) >> 1) as u8;
 
     (
         GatewayFrame {
             tagged_ptr,
-            zimms_section_offset48: zimms_addr,
+            mapped_section_offset48: storage_addr,
             target_anchor_id: dom_anchor_id,
             effective_energy: eff_energy,
             ripa_clamp_rad: norm_ripa_clamp,
@@ -2960,12 +2960,12 @@ where
             action_mode_flags: action_flags,
             active_swarm_cell_mask: active_swarm_mask,
             qdps_min_step_q7: qdps_step_u8,
-            pspm_fact_heads: pspm_fact,
-            pspm_logic_heads: pspm_logic,
-            pspm_explore_heads: pspm_explore,
-            pspm_fact_gain_q7: fact_gain_q7,
-            pspm_logic_gain_q7: logic_gain_q7,
-            pspm_explore_gain_q7: pers_gain_q7,
+            subhead_fact_heads: pspm_fact,
+            subhead_logic_heads: pspm_logic,
+            subhead_explore_heads: pspm_explore,
+            subhead_fact_gain_q7: fact_gain_q7,
+            subhead_logic_gain_q7: logic_gain_q7,
+            subhead_explore_gain_q7: pers_gain_q7,
             mean_phase_tag_q7: tag_q7,
             active_head_count: active_heads,
             frame_flags: packed_tag as u16,
@@ -3413,8 +3413,8 @@ impl<S: CognitiveGroundingSignal + ManifoldGatewaySignal> CognitiveGroundingSign
     }
 
     #[inline(always)]
-    fn zimms_section_offset48(&self) -> u64 {
-        self.synthesize_gateway_frame().zimms_section_offset48
+    fn mapped_section_offset48(&self) -> u64 {
+        self.synthesize_gateway_frame().mapped_section_offset48
     }
 
     #[inline(always)]
@@ -3433,7 +3433,7 @@ impl<S: CognitiveGroundingSignal + ManifoldGatewaySignal> CognitiveGroundingSign
         (
             words,
             frame.effective_energy,
-            frame.zimms_section_offset48,
+            frame.mapped_section_offset48,
             frame.target_anchor_id,
             frame.active_head_count,
         )
@@ -3506,14 +3506,14 @@ impl<S: ContradictionGuardSignal + CognitiveGroundingSignal + ManifoldGatewaySig
 }
 
 // ===================================================================
-// 8. Re-Exports of `.gcso` Crystallized Attractor Record & 4-Section ZIMMS View
+// 8. Re-Exports of `.gcso` Crystallized Attractor Record & 4-Section mapped-storage View
 // ===================================================================
 
 pub use crate::crystal::CrystallizedAttractorRecord;
 pub use crate::storage::GcsoFourSectionView;
 
 // ===================================================================
-// 9. Blanket Extension Traits on `PhaseSteering + PspmRouter` & `ActionHub`
+// 9. Blanket Extension Traits on `PhaseSteering + SubHeadRouter` & `ActionHub`
 // ===================================================================
 
 #[inline]
@@ -3542,7 +3542,7 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
 
     let layer_skipped = (frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0;
     let mut steered = false;
-    let mut pspm_routed = false;
+    let mut subhead_routed = false;
 
     if layer_skipped {
         trail_inout.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
@@ -3563,7 +3563,7 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
         } else {
             swar_words_nonzero_64(&swar_words)
         };
-        if (frame.action_mode_flags & ACTION_MODE_PSPM_ROUTE) != 0
+        if (frame.action_mode_flags & ACTION_MODE_SUBHEAD_ROUTE) != 0
             && frame.active_swarm_cell_mask == 0xFF
         {
             let is_def_clamp = (frame.ripa_clamp_rad.to_bits()
@@ -3585,12 +3585,12 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
                                 rot_dim,
                             );
                         } else {
-                            let pspm_cfg = frame.to_pspm_config_for_heads(num_heads);
+                            let subhead_cfg = frame.to_subhead_config_for_heads(num_heads);
                             dispatch_fused_ripa_and_pspm_words_core(
                                 q,
                                 &swar_words,
                                 frame.ripa_clamp_rad,
-                                &pspm_cfg,
+                                &subhead_cfg,
                                 &swar_words,
                                 &swar_words,
                                 &swar_words,
@@ -3612,7 +3612,7 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
                             );
                         }
                     }
-                    pspm_routed = true;
+                    subhead_routed = true;
                 }
                 (Some(q), None) => {
                     if has_nonzero_words {
@@ -3627,12 +3627,12 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
                                 true,
                             );
                         } else {
-                            let pspm_cfg = frame.to_pspm_config_for_heads(num_heads);
+                            let subhead_cfg = frame.to_subhead_config_for_heads(num_heads);
                             dispatch_fused_ripa_and_pspm_words_core(
                                 q,
                                 &swar_words,
                                 frame.ripa_clamp_rad,
-                                &pspm_cfg,
+                                &subhead_cfg,
                                 &swar_words,
                                 &swar_words,
                                 &swar_words,
@@ -3643,7 +3643,7 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
                             )?;
                         }
                     }
-                    pspm_routed = true;
+                    subhead_routed = true;
                 }
                 (None, Some(k)) => {
                     if has_nonzero_words {
@@ -3701,7 +3701,7 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
         }
     }
 
-    Ok((layer_skipped, steered, pspm_routed))
+    Ok((layer_skipped, steered, subhead_routed))
 }
 
 #[inline(always)]
@@ -3777,10 +3777,10 @@ fn prepare_gateway_steering_state<T: PhaseSteering + ?Sized, S: ManifoldGatewayS
 }
 
 /// Blanket-implemented closed-loop Gateway & Crystallized Ensemble steering extension trait for
-/// any type implementing [`PhaseSteering`] + [`PspmRouter`].
-pub trait GatewayPhaseSteeringExt: PhaseSteering + PspmRouter {
+/// any type implementing [`PhaseSteering`] + [`SubHeadRouter`].
+pub trait GatewayPhaseSteeringExt: PhaseSteering + SubHeadRouter {
     /// Synthesizes any [`ManifoldGatewaySignal`] into a 128-byte [`GatewayFrame`] and register-resident
-    /// phase words, updates `trail_inout`, and executes $SO(2)$-fused RIPA + PSPM sub-head steering.
+    /// phase words, updates `trail_inout`, and executes $SO(2)$-fused RIPA + sub-head router sub-head steering.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if head dimensions, radian clamps, or tensor slices
@@ -4009,24 +4009,24 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering + PspmRouter {
     }
 }
 
-impl<T: PhaseSteering + PspmRouter + ?Sized> GatewayPhaseSteeringExt for T {}
+impl<T: PhaseSteering + SubHeadRouter + ?Sized> GatewayPhaseSteeringExt for T {}
 
-/// Blanket-implemented Gateway-driven Semantic Residual Layer (SRL) extension for any
-/// [`SrlAdapter`] engine.
+/// Blanket-implemented Gateway-driven Semantic Residual Layer (Rank-1 residual) extension for any
+/// [`Rank1ResidualAdapter`] engine.
 ///
 /// Derives a scale-invariant residual injection gain autonomously from the hidden state's
 /// L2 norm and [`GatewayFrame`] structural quantities (`effective_energy`, `ripa_clamp_rad`,
 /// `fact_persona_coherence`, `repulsion_severity`), eliminating manual scalar tuning.
-pub trait GatewaySrlSteeringExt: SrlAdapter {
-    /// Synthesizes `signal` into a [`GatewayFrame`] and applies norm-adaptive fused SRL
+pub trait GatewayRank1SteeringExt: Rank1ResidualAdapter {
+    /// Synthesizes `signal` into a [`GatewayFrame`] and applies norm-adaptive fused Rank-1 residual
     /// residual injection $\mathbf{y} \leftarrow \mathbf{y} + g_{\mathrm{struct}} (\mathbf{v}^\top \mathbf{x}) \mathbf{u}$.
     ///
     /// Returns `(frame, applied_structural_gain)`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slice lengths mismatch or `SrlAdapter` rejects inputs.
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slice lengths mismatch or `Rank1ResidualAdapter` rejects inputs.
     #[inline]
-    fn apply_gateway_srl_hidden_fused<S: ManifoldGatewaySignal + ?Sized>(
+    fn apply_gateway_rank1_hidden_fused<S: ManifoldGatewaySignal + ?Sized>(
         &self,
         signal: &S,
         y_out: &mut AlignedSliceMut32<'_, f32>,
@@ -4059,7 +4059,7 @@ pub trait GatewaySrlSteeringExt: SrlAdapter {
     }
 }
 
-impl<T: SrlAdapter + ?Sized> GatewaySrlSteeringExt for T {}
+impl<T: Rank1ResidualAdapter + ?Sized> GatewayRank1SteeringExt for T {}
 
 /// Blanket-implemented extension trait equipping any [`ActionHub`] with single-call
 /// [`ManifoldGatewaySignal`] ingestion, Online Toroidal $k$-Means / DP-Means macro clustering,
@@ -4079,7 +4079,7 @@ pub trait ActionHubGatewayExt: ActionHub {
         mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-        srl_activation_and_desc: Option<(&AlignedSlice32<'_, f32>, &gcso_srl_descriptor_t)>,
+        rank1_activation_and_desc: Option<(&AlignedSlice32<'_, f32>, &gcso_rank1_residual_descriptor_t)>,
     ) -> GcsoResult<(
         GatewayFrame,
         CausalProvenanceReport,
@@ -4133,7 +4133,7 @@ pub trait ActionHubGatewayExt: ActionHub {
                 0,
             );
 
-        let (layer_skipped, steered, pspm_routed) = accumulate_trail_and_steer_gateway_words_core(
+        let (layer_skipped, steered, subhead_routed) = accumulate_trail_and_steer_gateway_words_core(
             &frame,
             &frm_w,
             trail_out,
@@ -4149,11 +4149,11 @@ pub trait ActionHubGatewayExt: ActionHub {
             metrics |= LEDGER_METRIC_LAYER_SKIP_COMPENSATED;
         } else {
             metrics |= branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
-                | branchless_select_u8(pspm_routed, LEDGER_METRIC_PSPM_ROUTED, 0);
-            if let (Some(q), Some((x_in, desc))) = (query_tensor, srl_activation_and_desc) {
-                if (frame.action_mode_flags & ACTION_MODE_SRL_INJECT) != 0 {
+                | branchless_select_u8(subhead_routed, LEDGER_METRIC_SUBHEAD_ROUTED, 0);
+            if let (Some(q), Some((x_in, desc))) = (query_tensor, rank1_activation_and_desc) {
+                if (frame.action_mode_flags & ACTION_MODE_RANK1_INJECT) != 0 {
                     self.eval_rank1_fused(q, x_in, desc)?;
-                    metrics |= LEDGER_METRIC_SRL_INJECTED;
+                    metrics |= LEDGER_METRIC_RANK1_INJECTED;
                 }
             }
         }
@@ -4163,7 +4163,7 @@ pub trait ActionHubGatewayExt: ActionHub {
     }
 
     /// Ingests any [`ManifoldGatewaySignal`] into `self`, steps `trail_out` and `ledger_slot`,
-    /// and executes $SO(2)$-fused RIPA + PSPM sub-head steering.
+    /// and executes $SO(2)$-fused RIPA + sub-head router sub-head steering.
     ///
     /// # Errors
     /// Propagates any validation or execution error from [`ActionHub`].
@@ -4176,7 +4176,7 @@ pub trait ActionHubGatewayExt: ActionHub {
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-        srl_activation_and_desc: Option<(&AlignedSlice32<'_, f32>, &gcso_srl_descriptor_t)>,
+        rank1_activation_and_desc: Option<(&AlignedSlice32<'_, f32>, &gcso_rank1_residual_descriptor_t)>,
     ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport)> {
         let (frame, report, _frm_w) = self.ingest_gateway_and_steer_with_words_core(
             signal,
@@ -4185,7 +4185,7 @@ pub trait ActionHubGatewayExt: ActionHub {
             query_tensor,
             key_tensor,
             logits_opt,
-            srl_activation_and_desc,
+            rank1_activation_and_desc,
         )?;
         Ok((frame, report))
     }
@@ -4301,14 +4301,14 @@ pub trait ActionHubGatewayExt: ActionHub {
     /// Applies pheromone **evaporation + resonance-weighted reinforcement** to `trail_out`,
     /// evaluates the 7-regime [`StigmergicActionDecision`] ladder via `thresholds`, and
     /// autonomously executes only the interventions authorized by `decision`:
-    /// - `PassiveSidecar` / `InertialLayerSkip`: zero interference (skips RoPE & SRL).
-    /// - `ExpressPhaseSteer` / `PspmSubHeadRoute`: geometry-aware RoPE phase steering only.
-    /// - `FullOrchestrationSrl` / `CrystallizeMacroBasin`: RoPE phase steering + norm-adaptive SRL.
-    /// - `RepulsionEscape`: suppresses positive SRL injection and applies damped repulsion guard.
+    /// - `PassiveSidecar` / `InertialLayerSkip`: zero interference (skips RoPE & Rank-1 residual).
+    /// - `ExpressPhaseSteer` / `SubHeadRoute`: geometry-aware RoPE phase steering only.
+    /// - `FullOrchestration` / `CrystallizeMacroBasin`: RoPE phase steering + norm-adaptive Rank-1 residual.
+    /// - `RepulsionEscape`: suppresses positive Rank-1 residual injection and applies damped repulsion guard.
     ///
     /// # Errors
     /// Propagates any validation or execution error from [`ActionHub`],
-    /// [`PhaseSteeringGeometryExt`], or [`GatewaySrlSteeringExt`].
+    /// [`PhaseSteeringGeometryExt`], or [`GatewayRank1SteeringExt`].
     #[inline]
     fn orchestrate_gateway_layer_safe<
         S: ManifoldGatewaySignal + ?Sized,
@@ -4346,7 +4346,7 @@ pub trait ActionHubGatewayExt: ActionHub {
 
         // Evaporate stale pheromone and deposit new pheromone weighted by resonance energy and
         // active-head trajectory self-coherence (`prev_w` vs `frm_w`) so multi-layer traversal
-        // dynamically transitions across Express, PSPM, SRL, and Crystal instead of saturating.
+        // dynamically transitions across Express, sub-head router, Rank-1 residual, and Crystal instead of saturating.
         let prev_rho =
             branchless_flush_subnormal_f32(branchless_relu_f32(trail_out.stigmergic_density));
         let energy_gate = branchless_clamp_f32(frame.effective_energy, 0.0, 1.0);
@@ -4487,14 +4487,14 @@ pub trait ActionHubGatewayExt: ActionHub {
 
             if matches!(
                 decision,
-                StigmergicActionDecision::FullOrchestrationSrl
+                StigmergicActionDecision::FullOrchestration
                     | StigmergicActionDecision::CrystallizeMacroBasin
             ) {
                 if let Some((y_mut, x_in, u_vec, v_vec)) = srl_hidden {
-                    let _ = GatewaySrlSteeringExt::apply_gateway_srl_hidden_fused(
+                    let _ = GatewayRank1SteeringExt::apply_gateway_rank1_hidden_fused(
                         self, signal, y_mut, x_in, u_vec, v_vec,
                     )?;
-                    metrics |= LEDGER_METRIC_SRL_INJECTED;
+                    metrics |= LEDGER_METRIC_RANK1_INJECTED;
                 }
             }
 
@@ -4621,7 +4621,7 @@ pub trait ActionHubGatewayExt: ActionHub {
     }
 
     /// Executes the complete closed-loop **2-Origin Gateway $\to$ Classical Online Toroidal
-    /// $k$-Means / DP-Means Macro Clustering (`centroids`) $\to$ `ActionHub` / `RoPE` / `PSPM`
+    /// $k$-Means / DP-Means Macro Clustering (`centroids`) $\to$ `ActionHub` / `RoPE` / `sub-head router`
     /// Steering** pipeline in a single zero-allocation call.
     ///
     /// # Errors
@@ -4749,8 +4749,8 @@ impl CognitiveGroundingSignal for CrystallizedAttractorRecord {
         self.phase_gravity_mass
     }
     #[inline(always)]
-    fn zimms_section_offset48(&self) -> u64 {
-        self.zimms_section_offset48
+    fn mapped_section_offset48(&self) -> u64 {
+        self.mapped_section_offset48
     }
     #[inline(always)]
     fn grounding_anchor_id(&self) -> u32 {
@@ -4781,9 +4781,9 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                 pack_action_slot_tag(self.dominant_slot, ACTION_PRESET_PASSIVE_SIDECAR);
             return (
                 GatewayFrame {
-                    tagged_ptr: gcso_tagged_ptr_t::pack(self.zimms_section_offset48, packed_tag, 0)
+                    tagged_ptr: gcso_tagged_ptr_t::pack(self.mapped_section_offset48, packed_tag, 0)
                         .raw(),
-                    zimms_section_offset48: self.zimms_section_offset48,
+                    mapped_section_offset48: self.mapped_section_offset48,
                     target_anchor_id: self.anchor_id,
                     dominant_slot: self.dominant_slot,
                     action_mode_flags: ACTION_PRESET_PASSIVE_SIDECAR,
@@ -4801,7 +4801,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
         let eff_action = self.action_mode_flags;
         let packed_tag = pack_action_slot_tag(self.dominant_slot, eff_action);
         let tagged_ptr =
-            gcso_tagged_ptr_t::pack(self.zimms_section_offset48, packed_tag, tag_q7).raw();
+            gcso_tagged_ptr_t::pack(self.mapped_section_offset48, packed_tag, tag_q7).raw();
         let prov_bits = self.provenance_bits
             | branchless_select_u32(is_mature, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, 0);
 
@@ -4819,7 +4819,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
         (
             GatewayFrame {
                 tagged_ptr,
-                zimms_section_offset48: self.zimms_section_offset48,
+                mapped_section_offset48: self.mapped_section_offset48,
                 target_anchor_id: self.anchor_id,
                 effective_energy: branchless_min_f32(
                     self.phase_gravity_mass,
@@ -4836,12 +4836,12 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                 action_mode_flags: eff_action,
                 active_swarm_cell_mask: self.active_swarm_mask,
                 qdps_min_step_q7: branchless_rad_to_qdps_step_u8(DEFAULT_QDPS_MIN_STEP_RAD),
-                pspm_fact_heads: pspm_fact,
-                pspm_logic_heads: pspm_logic,
-                pspm_explore_heads: pspm_explore,
-                pspm_fact_gain_q7: fact_gain_q7,
-                pspm_logic_gain_q7: logic_gain_q7,
-                pspm_explore_gain_q7: explore_gain_q7,
+                subhead_fact_heads: pspm_fact,
+                subhead_logic_heads: pspm_logic,
+                subhead_explore_heads: pspm_explore,
+                subhead_fact_gain_q7: fact_gain_q7,
+                subhead_logic_gain_q7: logic_gain_q7,
+                subhead_explore_gain_q7: explore_gain_q7,
                 mean_phase_tag_q7: tag_q7,
                 active_head_count: MAX_ATTENTION_HEADS as u16,
                 frame_flags: packed_tag as u16,
@@ -4857,7 +4857,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
         if !is_active {
             return (
                 GatewayFrame {
-                    zimms_section_offset48: self.zimms_section_offset48,
+                    mapped_section_offset48: self.mapped_section_offset48,
                     target_anchor_id: self.anchor_id,
                     dominant_slot: self.dominant_slot,
                     action_mode_flags: ACTION_PRESET_PASSIVE_SIDECAR,
@@ -4886,7 +4886,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
         (
             GatewayFrame {
                 tagged_ptr: 0,
-                zimms_section_offset48: self.zimms_section_offset48,
+                mapped_section_offset48: self.mapped_section_offset48,
                 target_anchor_id: self.anchor_id,
                 effective_energy: branchless_min_f32(
                     self.phase_gravity_mass,
@@ -4903,12 +4903,12 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                 action_mode_flags: self.action_mode_flags,
                 active_swarm_cell_mask: self.active_swarm_mask,
                 qdps_min_step_q7: branchless_rad_to_qdps_step_u8(DEFAULT_QDPS_MIN_STEP_RAD),
-                pspm_fact_heads: pspm_fact,
-                pspm_logic_heads: pspm_logic,
-                pspm_explore_heads: pspm_explore,
-                pspm_fact_gain_q7: fact_gain_q7,
-                pspm_logic_gain_q7: logic_gain_q7,
-                pspm_explore_gain_q7: explore_gain_q7,
+                subhead_fact_heads: pspm_fact,
+                subhead_logic_heads: pspm_logic,
+                subhead_explore_heads: pspm_explore,
+                subhead_fact_gain_q7: fact_gain_q7,
+                subhead_logic_gain_q7: logic_gain_q7,
+                subhead_explore_gain_q7: explore_gain_q7,
                 mean_phase_tag_q7: 0,
                 active_head_count: MAX_ATTENTION_HEADS as u16,
                 frame_flags: 0,
@@ -4942,7 +4942,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
         let mut weighted_inv_temp = 0.0_f32;
         let mut weighted_coh = 0.0_f32;
         let mut dom_idx = 0usize;
-        let mut dom_zimms_addr = 0u64;
+        let mut dom_storage_addr = 0u64;
         let mut action_flags = ACTION_PRESET_PASSIVE_SIDECAR;
         let mut swarm_mask = 0xFFu8;
         let mut prov_bits = 0u32;
@@ -4975,7 +4975,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                     weighted_inv_temp = f_e * rec.effective_inv_temp;
                     weighted_coh = f_e * rec.resultant_r_bar;
                     dom_idx = i;
-                    dom_zimms_addr = rec.zimms_section_offset48;
+                    dom_storage_addr = rec.mapped_section_offset48;
                     action_flags = rec.action_mode_flags;
                     swarm_mask = rec.active_swarm_mask;
                     prov_bits = rec_prov;
@@ -5010,13 +5010,13 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                     let take_dom = f_e > best_e;
                     best_e = branchless_select_f32(take_dom, f_e, best_e);
                     dom_idx = branchless_select_usize(take_dom, i, dom_idx);
-                    dom_zimms_addr = branchless_select_u64(
-                        take_dom & (rec.zimms_section_offset48 != 0),
-                        rec.zimms_section_offset48,
+                    dom_storage_addr = branchless_select_u64(
+                        take_dom & (rec.mapped_section_offset48 != 0),
+                        rec.mapped_section_offset48,
                         branchless_select_u64(
-                            dom_zimms_addr != 0,
-                            dom_zimms_addr,
-                            rec.zimms_section_offset48,
+                            dom_storage_addr != 0,
+                            dom_storage_addr,
+                            rec.mapped_section_offset48,
                         ),
                     );
                     action_flags |= rec.action_mode_flags;
@@ -5062,12 +5062,12 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
         let phase_deltas = words_to_q7_array_64(&acc_w);
         let tag_q7 = swar_q7_mean_i8_from_words_with_uniform_flag_64(&acc_w, acc_is_uniform);
         let packed_tag = pack_action_slot_tag(dom_slot, action_flags);
-        let tagged_ptr = gcso_tagged_ptr_t::pack(dom_zimms_addr, packed_tag, tag_q7).raw();
+        let tagged_ptr = gcso_tagged_ptr_t::pack(dom_storage_addr, packed_tag, tag_q7).raw();
 
         (
             GatewayFrame {
                 tagged_ptr,
-                zimms_section_offset48: dom_zimms_addr,
+                mapped_section_offset48: dom_storage_addr,
                 target_anchor_id: dom.anchor_id,
                 effective_energy: branchless_min_f32(tot_e, MAX_ATTRACTOR_PULL_FORCE),
                 ripa_clamp_rad: DEFAULT_RIPA_CLAMP_MAX_RAD,
@@ -5081,12 +5081,12 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                 action_mode_flags: action_flags,
                 active_swarm_cell_mask: swarm_mask,
                 qdps_min_step_q7: branchless_rad_to_qdps_step_u8(DEFAULT_QDPS_MIN_STEP_RAD),
-                pspm_fact_heads: pspm_fact,
-                pspm_logic_heads: pspm_logic,
-                pspm_explore_heads: pspm_explore,
-                pspm_fact_gain_q7: fact_gain_q7,
-                pspm_logic_gain_q7: logic_gain_q7,
-                pspm_explore_gain_q7: explore_gain_q7,
+                subhead_fact_heads: pspm_fact,
+                subhead_logic_heads: pspm_logic,
+                subhead_explore_heads: pspm_explore,
+                subhead_fact_gain_q7: fact_gain_q7,
+                subhead_logic_gain_q7: logic_gain_q7,
+                subhead_explore_gain_q7: explore_gain_q7,
                 mean_phase_tag_q7: tag_q7,
                 active_head_count: MAX_ATTENTION_HEADS as u16,
                 frame_flags: packed_tag as u16,
@@ -5679,7 +5679,7 @@ impl ManifoldGatewaySignal for CognitiveTrajectoryLedger {
         let pspm_logic = branchless_select_u8(peel_dominates, 20, 24);
         let pspm_explore = MAX_ATTENTION_HEADS as u8 - pspm_fact - pspm_logic;
         let action_mode = if peel_dominates {
-            ACTION_MODE_DPSR_STEER | ACTION_MODE_PSPM_ROUTE
+            ACTION_MODE_DPSR_STEER | ACTION_MODE_SUBHEAD_ROUTE
         } else {
             ACTION_PRESET_EXPRESS_PHASE
         };
@@ -5693,9 +5693,9 @@ impl ManifoldGatewaySignal for CognitiveTrajectoryLedger {
                 dominant_slot: ATTRACTOR_SLOT_PERSONA,
                 action_mode_flags: action_mode,
                 active_swarm_cell_mask: 0xFF,
-                pspm_fact_heads: pspm_fact,
-                pspm_logic_heads: pspm_logic,
-                pspm_explore_heads: pspm_explore,
+                subhead_fact_heads: pspm_fact,
+                subhead_logic_heads: pspm_logic,
+                subhead_explore_heads: pspm_explore,
                 mean_phase_tag_q7: tag_q7,
                 active_head_count: MAX_ATTENTION_HEADS as u16,
                 frame_flags: packed_tag as u16,
@@ -5962,7 +5962,7 @@ impl<A: StigmergicScaleLayer, B: StigmergicScaleLayer> ManifoldGatewaySignal
         (
             GatewayFrame {
                 tagged_ptr: dom.tagged_ptr,
-                zimms_section_offset48: dom.zimms_section_offset48,
+                mapped_section_offset48: dom.mapped_section_offset48,
                 target_anchor_id: dom.target_anchor_id,
                 effective_energy: branchless_min_f32(tot, MAX_ATTRACTOR_PULL_FORCE),
                 repulsion_severity: rep,
@@ -6280,7 +6280,7 @@ impl ManifoldGatewaySignal for gcso_pointer_trail_t {
         (
             GatewayFrame {
                 tagged_ptr: self.current_ptr,
-                zimms_section_offset48: ptr.unpack_addr(),
+                mapped_section_offset48: ptr.unpack_addr(),
                 target_anchor_id: self.target_anchor_id,
                 effective_energy: branchless_min_f32(
                     branchless_max_f32(self.attractor_pull_force, self.stigmergic_density),
@@ -6503,10 +6503,10 @@ const _: () = {
     assert!(size_of::<GatewayFrame>() == 128);
     assert!(align_of::<GatewayFrame>() == 64);
     assert!(offset_of!(GatewayFrame, tagged_ptr) == 0);
-    assert!(offset_of!(GatewayFrame, zimms_section_offset48) == 8);
+    assert!(offset_of!(GatewayFrame, mapped_section_offset48) == 8);
     assert!(offset_of!(GatewayFrame, target_anchor_id) == 16);
     assert!(offset_of!(GatewayFrame, effective_energy) == 20);
-    assert!(offset_of!(GatewayFrame, pspm_fact_gain_q7) == 56);
+    assert!(offset_of!(GatewayFrame, subhead_fact_gain_q7) == 56);
     assert!(offset_of!(GatewayFrame, mean_phase_tag_q7) == 59);
     assert!(offset_of!(GatewayFrame, active_head_count) == 60);
     assert!(offset_of!(GatewayFrame, frame_flags) == 62);
@@ -6518,13 +6518,13 @@ const _: () = {
     assert!(offset_of!(CrystallizedAttractorRecord, version) == 4);
     assert!(offset_of!(CrystallizedAttractorRecord, anchor_id) == 8);
     assert!(offset_of!(CrystallizedAttractorRecord, sample_count) == 12);
-    assert!(offset_of!(CrystallizedAttractorRecord, zimms_section_offset48) == 16);
+    assert!(offset_of!(CrystallizedAttractorRecord, mapped_section_offset48) == 16);
     assert!(offset_of!(CrystallizedAttractorRecord, checksum_crc32) == 52);
     assert!(offset_of!(CrystallizedAttractorRecord, dominant_slot) == 56);
     assert!(offset_of!(CrystallizedAttractorRecord, reserved_align64) == 60);
     assert!(offset_of!(CrystallizedAttractorRecord, phase_profile) == 64);
     assert!(GCSO_FOUR_SECTION_HEADER_BYTES == 192);
-    assert!(GCSO_ZIMMS_DESCRIPTOR_PREAMBLE_OFFSET == 128);
+    assert!(GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET == 128);
     assert!(
         CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_PERSONA, 0).verify_integrity()
     );
@@ -6556,7 +6556,7 @@ mod tests {
         let (frame, words) = (&sys, &fact, &persona_aligned).synthesize_gateway_frame_with_words();
         assert_eq!(words, load_q7_words_64(&frame.phase_deltas));
         let report = frame.to_causal_report();
-        assert_eq!(frame.zimms_section_offset48, 0x0012_3400);
+        assert_eq!(frame.mapped_section_offset48, 0x0012_3400);
         assert_eq!(frame.target_anchor_id, 77);
         assert_eq!(frame.dominant_slot, ATTRACTOR_SLOT_KNOWLEDGE);
         assert_eq!(report.dominant_cause_code, ROOT_CAUSE_NOMINAL);
@@ -6692,14 +6692,14 @@ mod tests {
         assert!(routed_coh > 0.95 && routed_grav > 1.0);
 
         let mut zimms_buf = AlignedBuffer64::<u8, 384>::new([0u8; 384]);
-        let written = CrystallizedAttractorRecord::write_records_to_zimms_bytes(
+        let written = CrystallizedAttractorRecord::write_records_to_container_bytes(
             &centroids,
             &mut zimms_buf.data,
         )
         .unwrap();
         assert_eq!(written, 384);
         let restored =
-            CrystallizedAttractorRecord::slice_from_zimms_bytes_zero_copy(&zimms_buf.data, 3)
+            CrystallizedAttractorRecord::slice_from_container_bytes_zero_copy(&zimms_buf.data, 3)
                 .unwrap();
         assert_eq!(restored[0].anchor_id, 101);
         assert_eq!(restored[1].anchor_id, 202);
@@ -6719,7 +6719,7 @@ mod tests {
         )
         .unwrap();
         let no_rep_view =
-            GcsoFourSectionView::from_zimms_bytes_zero_copy(&container_buf.data[..no_rep_len])
+            GcsoFourSectionView::from_container_bytes_zero_copy(&container_buf.data[..no_rep_len])
                 .unwrap();
         assert_eq!(no_rep_view.crystals.len(), 2);
 
@@ -6760,11 +6760,11 @@ mod tests {
         assert!(r_grav > 1.0);
 
         let view =
-            GcsoFourSectionView::from_zimms_bytes_zero_copy(&container_buf.data[..total_len])
+            GcsoFourSectionView::from_container_bytes_zero_copy(&container_buf.data[..total_len])
                 .unwrap();
         assert_eq!(view.header.attractor_field_offset, 192);
-        assert_eq!(view.zimms_descriptor.file_size_bytes, total_len as u64);
-        assert_eq!(view.zimms_descriptor.flags, 4);
+        assert_eq!(view.mapped_storage_descriptor.file_size_bytes, total_len as u64);
+        assert_eq!(view.mapped_storage_descriptor.flags, 4);
         assert_eq!(view.crystals.len(), 3);
         assert_eq!(view.trails.len(), 1);
         assert_eq!(view.trails[0].cluster_id, 202);
@@ -6853,12 +6853,12 @@ mod tests {
         probe.baseline_inter_layer_coherence = 0.90;
         let high_coh_t = policy.resolve_thresholds(&low_pressure, &probe, &trail, 0.40);
         // Models with weaker natural inter-layer coherence receive higher calibrated deposit gain
-        // so equilibrium pheromone density stays within the Express..SRL band without hand tuning.
+        // so equilibrium pheromone density stays within the Express..Rank-1 residual band without hand tuning.
         assert!(low_coh_t.reinforcement_gain > high_coh_t.reinforcement_gain);
 
         let stressed_t = policy.resolve_thresholds(&high_pressure, &probe, &trail, 0.40);
         assert!(stressed_t.inertial_skip_entropy_thresh > high_coh_t.inertial_skip_entropy_thresh);
-        assert!(stressed_t.srl_inject_density_thresh > high_coh_t.srl_inject_density_thresh);
+        assert!(stressed_t.rank1_inject_density_thresh > high_coh_t.rank1_inject_density_thresh);
         assert!(stressed_t.crystallize_density_thresh > high_coh_t.crystallize_density_thresh);
     }
 

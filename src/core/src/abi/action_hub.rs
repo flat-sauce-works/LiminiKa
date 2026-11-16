@@ -255,7 +255,7 @@ pub unsafe extern "C" fn gcso_action_hub_evolve_trail_mode(
     repulsion_triggered: u8,
     dominant_attractor_slot: u8,
     low_entropy_skip_thresh: f32,
-    high_density_srl_thresh: f32,
+    high_density_rank1_thresh: f32,
     evolved_ptr_out: *mut u64,
 ) -> GcsoStatus {
     ffi_boundary!({
@@ -272,7 +272,7 @@ pub unsafe extern "C" fn gcso_action_hub_evolve_trail_mode(
             repulsion_triggered != 0,
             dominant_attractor_slot,
             low_entropy_skip_thresh,
-            high_density_srl_thresh,
+            high_density_rank1_thresh,
         );
         if let Some(mut out_p) = out_ptr_opt {
             *out_p = evolved.raw();
@@ -843,7 +843,7 @@ pub unsafe extern "C" fn gcso_action_hub_route_coarse_to_fine_trail_and_steer_qk
 
 /// Executes **Full Coarse-to-Fine Bayesian Routing ($\mathcal{O}(K)$ Macro Centroids $\to$
 /// $\mathcal{O}(M)$ Local Pointer Trails) + Limina Slerp Bridging + Optional Pre-Softmax Attention
-/// Score Modulation + $SO(2)$-Fused RIPA/PSPM Steering + Optional FastPathLedger Telemetry** in a single
+/// Score Modulation + $SO(2)$-Fused RIPA/sub-head router Steering + Optional FastPathLedger Telemetry** in a single
 /// zero-allocation C-ABI call ($C_{\mathrm{alloc}} = 0$).
 ///
 /// # Safety
@@ -865,7 +865,7 @@ pub unsafe extern "C" fn gcso_action_hub_route_coarse_to_fine_bayesian_and_steer
     repulsion_penalty: f32,
     fine_interpolation_u7: u8,
     contradiction_threshold: f32,
-    pspm_cfg_opt: *const gcso_pspm_config_t,
+    subhead_cfg_opt: *const gcso_subhead_config_t,
     min_step_rad: f32,
     ledger_slot_inout: *mut gcso_ledger_slot_t,
     query_tensor: *mut f32,
@@ -958,7 +958,7 @@ pub unsafe extern "C" fn gcso_action_hub_route_coarse_to_fine_bayesian_and_steer
                     slice::from_raw_parts(candidate_trails, num_candidates),
                 ),
                 (
-                    FfiHandleRef::from_raw_opt(pspm_cfg_opt)?,
+                    FfiHandleRef::from_raw_opt(subhead_cfg_opt)?,
                     FfiHandleMut::from_raw_opt(ledger_slot_inout)?,
                 ),
             )
@@ -1003,7 +1003,7 @@ pub unsafe extern "C" fn gcso_action_hub_route_coarse_to_fine_bayesian_and_steer
             DEFAULT_RIPA_CLAMP_MAX_RAD,
         );
         let mut steered = false;
-        let mut pspm_routed = false;
+        let mut subhead_routed = false;
 
         if (src_trail.flags & TRAIL_FLAG_INERTIAL_SKIP_ACTIVE) == 0 {
             let min_step_q7 = branchless_rad_to_qdps_step_u8(min_step_rad);
@@ -1013,7 +1013,7 @@ pub unsafe extern "C" fn gcso_action_hub_route_coarse_to_fine_bayesian_and_steer
                 swar_q7_qdps_filter_words_64(&steer_words, min_step_q7)
             };
             let swar_nonzero = swar_words_nonzero_64(&swar_words);
-            if let Some(ref pspm_cfg) = pspm_ref_opt {
+            if let Some(ref subhead_cfg) = pspm_ref_opt {
                 let fact_w_ref = if swar_words_equal_64(&win_w, &steer_words) {
                     &steer_words
                 } else {
@@ -1023,7 +1023,7 @@ pub unsafe extern "C" fn gcso_action_hub_route_coarse_to_fine_bayesian_and_steer
                     &mut q_aligned,
                     &swar_words,
                     eff_ripa,
-                    pspm_cfg,
+                    subhead_cfg,
                     fact_w_ref,
                     &steer_words,
                     &steer_words,
@@ -1033,7 +1033,7 @@ pub unsafe extern "C" fn gcso_action_hub_route_coarse_to_fine_bayesian_and_steer
                     true,
                 )?;
                 steered = true;
-                pspm_routed = true;
+                subhead_routed = true;
                 if let Some(ref mut k) = k_opt {
                     if swar_nonzero {
                         steer_from_swar_words_core_safe(
@@ -1067,7 +1067,7 @@ pub unsafe extern "C" fn gcso_action_hub_route_coarse_to_fine_bayesian_and_steer
 
         if let Some(mut ledger_slot) = ledger_mut_opt {
             let metrics = branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
-                | branchless_select_u8(pspm_routed, LEDGER_METRIC_PSPM_ROUTED, 0)
+                | branchless_select_u8(subhead_routed, LEDGER_METRIC_SUBHEAD_ROUTED, 0)
                 | branchless_select_u8(found, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, 0)
                 | branchless_select_u8(!found, LEDGER_METRIC_REPULSION_APPLIED, 0);
             let _ = AbiLedgerDispatcher.telemetry_push(&mut ledger_slot, metrics);

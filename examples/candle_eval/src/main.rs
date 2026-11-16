@@ -1267,7 +1267,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let vram_before = query_nvidia_smi_vram();
     println!(
-        "LiminiKa Candle Eval (RoPE + EDBC + SRL via liminika-adapter) | device={:?} | layers={} heads={}/{} head_dim={} rotary_dim={}",
+        "LiminiKa Candle Eval (RoPE + EDBC + Rank-1 residual via liminika-adapter) | device={:?} | layers={} heads={}/{} head_dim={} rotary_dim={}",
         device,
         adapter.geometry().num_layers,
         adapter.geometry().num_q_heads,
@@ -1297,7 +1297,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t_bake = Instant::now();
         let baked = bake_via_adapter(&mut model, &tokenizer, &adapter, cfg.hidden_size, &suite)?;
         println!(
-            "Baked {} x {} Q7 phase deltas + {}-dim SRL vectors via ModelSteeringAdapter in {:.2?}.",
+            "Baked {} x {} Q7 phase deltas + {}-dim Rank-1 residual vectors via ModelSteeringAdapter in {:.2?}.",
             baked.per_layer_q7.len(),
             adapter.geometry().num_q_heads,
             cfg.hidden_size,
@@ -1345,7 +1345,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             probe_res.baseline_entropy,
             adapter.action_hub().thresholds.reinforcement_gain,
             adapter.action_hub().thresholds.inertial_skip_entropy_thresh,
-            adapter.action_hub().thresholds.srl_inject_density_thresh,
+            adapter.action_hub().thresholds.rank1_inject_density_thresh,
         );
 
         if !step2_only {
@@ -1356,7 +1356,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("RoPE (Top16, 0.10)", 0xFFFF_0000, 0.10, 0.00, false, false),
                 ("Top16 + GW(Fact)", 0xFFFF_0000, -1.00, 0.00, false, false),
                 (
-                    "Top16 + GW(Fact+SRL)",
+                    "Top16 + GW(Fact+Rank-1 residual)",
                     0xFFFF_0000,
                     -1.00,
                     -1.00,
@@ -1531,7 +1531,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let counts = adapter.action_hub_decision_counts();
                     let total: u64 = counts.iter().sum::<u64>().max(1);
                     println!(
-                    "   [ActionHub] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% PSPM={:.1}% SRL={:.1}% Crystal={:.1}% Repulse={:.1}%",
+                    "   [ActionHub] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% sub-head router={:.1}% Rank-1 residual={:.1}% Crystal={:.1}% Repulse={:.1}%",
                     total,
                     counts[0] as f64 / total as f64 * 100.0,
                     counts[1] as f64 / total as f64 * 100.0,
@@ -1548,7 +1548,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let d_sum: u64 = tr.delta.iter().sum::<u64>().max(1);
                         if rope_rad <= -1.5 {
                             println!(
-                            "   [P{}:{}] d_lp={:+.3} hit={}/forb={} rho={:.3} steps={} H={:.3} | Pas={} Skp={} Exp={} PSPM={} SRL={} Cry={} Rep={} | {}",
+                            "   [P{}:{}] d_lp={:+.3} hit={}/forb={} rho={:.3} steps={} H={:.3} | Pas={} Skp={} Exp={} sub-head router={} Rank-1 residual={} Cry={} Rep={} | {}",
                             idx + 1,
                             tr.slot,
                             tr.d_lp,
@@ -1690,7 +1690,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         d[i] = counts_after[i].saturating_sub(counts_before[i]);
                     }
                     println!(
-                    "  [{turn_name}] rho={:.3} steps={} H={:.3} modes=[Pas={} Skp={} Exp={} PSPM={} SRL={} Cry={} Rep={}] => {text}",
+                    "  [{turn_name}] rho={:.3} steps={} H={:.3} modes=[Pas={} Skp={} Exp={} sub-head router={} Rank-1 residual={} Cry={} Rep={}] => {text}",
                     trail.stigmergic_density,
                     trail.step_count,
                     adapter.action_hub().last_entropy_h_tilde,

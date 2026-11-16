@@ -1,12 +1,12 @@
 // name: src/core/src/traits/rope/subhead_routing.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Parallel Sub-Head Phase Modulation (PspmRouter) trait and dispatch helpers.
+//! Parallel Sub-Head Phase Modulation (SubHeadRouter) trait and dispatch helpers.
 
 use super::*;
 
 // ===================================================================
-// 4. Parallel Sub-Head Phase Modulation (`PspmRouter`)
+// 4. Parallel Sub-Head Phase Modulation (`SubHeadRouter`)
 // ===================================================================
 
 #[inline(always)]
@@ -89,7 +89,7 @@ pub(super) const fn compute_pspm_eff_word_x8(
 #[inline(always)]
 pub(super) fn dispatch_subhead_profiles_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
-    config: &gcso_pspm_config_t,
+    config: &gcso_subhead_config_t,
     fact_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     logic_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     explore_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
@@ -156,7 +156,7 @@ pub(super) fn dispatch_subhead_profiles_core(
     Ok(())
 }
 
-/// Assembles the 8 effective `u64` SWAR PSPM phase words across `[0..total_heads]` from three
+/// Assembles the 8 effective `u64` SWAR sub-head router phase words across `[0..total_heads]` from three
 /// 8-word arrays (`fact_w`, `logic_w`, `explore_w`), evaluating `compute_pspm_eff_word_x8` only
 /// on the cells actually spanned by each subgroup (`8` word transforms total for aligned splits).
 #[inline]
@@ -454,7 +454,7 @@ pub(super) fn eval_fused_ripa_pspm_pair_u8(
 }
 
 /// Rotates `t_slice` across `0..total_heads` when `base_ripa_words` is byte-uniform (`b_u8`) and
-/// the 3 PSPM subgroups (`0..fact_h`, `fact_h..logic_end`, `logic_end..total_heads`) each have
+/// the 3 sub-head router subgroups (`0..fact_h`, `fact_h..logic_end`, `logic_end..total_heads`) each have
 /// constant effective Q7 bytes `(f_u8, l_u8, e_u8)`, coalescing adjacent subgroups when their
 /// effective bytes match (`1..=3` calls to `rotate_ripa_upper_heads_uniform_sincos`).
 #[inline]
@@ -988,7 +988,7 @@ pub(crate) fn dispatch_fused_ripa_and_pspm_words_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     base_ripa_words: &[u64; NUM_SWARM_CELLS],
     base_ripa_max_rad: f32,
-    config: &gcso_pspm_config_t,
+    config: &gcso_subhead_config_t,
     fact_words: &[u64; NUM_SWARM_CELLS],
     logic_words: &[u64; NUM_SWARM_CELLS],
     explore_words: &[u64; NUM_SWARM_CELLS],
@@ -1143,7 +1143,7 @@ pub(crate) fn dispatch_fused_ripa_words_and_pspm_profiles_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     base_ripa_words: &[u64; NUM_SWARM_CELLS],
     base_ripa_max_rad: f32,
-    config: &gcso_pspm_config_t,
+    config: &gcso_subhead_config_t,
     fact_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     logic_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     explore_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
@@ -1214,7 +1214,7 @@ pub(crate) fn dispatch_fused_ripa_words_and_pspm_profiles_core(
 }
 
 /// Fuses **RIPA Phase Steering** (`base_ripa_phases`, `base_ripa_max_rad`) and
-/// **PSPM Upper-Quarter ($d_{\mathrm{head}}/4$) Sub-Head Routing** into a **single memory pass**
+/// **sub-head router Upper-Quarter ($d_{\mathrm{head}}/4$) Sub-Head Routing** into a **single memory pass**
 /// over `tensor` by loading `base_ripa_phases` into 8 `u64` SWAR registers and delegating to
 /// `dispatch_fused_ripa_words_and_pspm_profiles_core`.
 #[inline(always)]
@@ -1222,7 +1222,7 @@ pub(crate) fn dispatch_fused_ripa_and_pspm_profiles_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     base_ripa_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     base_ripa_max_rad: f32,
-    config: &gcso_pspm_config_t,
+    config: &gcso_subhead_config_t,
     fact_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     logic_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     explore_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
@@ -1250,7 +1250,7 @@ pub(crate) fn dispatch_fused_ripa_and_pspm_profiles_core(
 #[inline(always)]
 pub(super) fn dispatch_subhead_slot_ensemble_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
-    config: &gcso_pspm_config_t,
+    config: &gcso_subhead_config_t,
     slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
     fact_slot_id: u8,
     logic_slot_id: u8,
@@ -1283,8 +1283,8 @@ pub(super) fn dispatch_subhead_slot_ensemble_core(
     )
 }
 
-/// Trait for Parallel Sub-Head Phase Modulation (PSPM) Pseudo-MoE Routing (**Micro / Mezzo Level**, Section 2.4).
-pub trait PspmRouter: BranchlessKernel {
+/// Trait for Parallel Sub-Head Phase Modulation (sub-head router) Pseudo-MoE Routing (**Micro / Mezzo Level**, Section 2.4).
+pub trait SubHeadRouter: BranchlessKernel {
     /// Validates `config` sub-head counts (`Fact + Logic + Explore > 0`) and returns
     /// `(fact_heads, logic_heads, explore_heads, total_heads, rot_dim)`.
     ///
@@ -1295,7 +1295,7 @@ pub trait PspmRouter: BranchlessKernel {
     fn validate_pspm_layout(
         &self,
         tensor: &AlignedSliceMut32<'_, f32>,
-        config: &gcso_pspm_config_t,
+        config: &gcso_subhead_config_t,
         head_dim: usize,
     ) -> GcsoResult<(usize, usize, usize, usize, usize)> {
         if head_dim == 0 || (head_dim & 1) != 0 {
@@ -1318,7 +1318,7 @@ pub trait PspmRouter: BranchlessKernel {
         Ok((fact_h, logic_h, explore_h, total_heads, rot_dim))
     }
 
-    /// Executes single-pass PSPM sub-head routing across Fact, Logic, and Exploration head groups (Section 2.4).
+    /// Executes single-pass sub-head router sub-head routing across Fact, Logic, and Exploration head groups (Section 2.4).
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is zero or odd, `total_heads == 0`,
@@ -1327,7 +1327,7 @@ pub trait PspmRouter: BranchlessKernel {
     fn dispatch_single_pass(
         &self,
         tensor: &mut AlignedSliceMut32<'_, f32>,
-        config: &gcso_pspm_config_t,
+        config: &gcso_subhead_config_t,
         head_dim: usize,
     ) -> GcsoResult<()> {
         let (fact_h, logic_h, _explore_h, total_heads, rot_dim) =
@@ -1390,7 +1390,7 @@ pub trait PspmRouter: BranchlessKernel {
         Ok(())
     }
 
-    /// Executes single-pass PSPM sub-head routing using per-head Q7 `phase_deltas` scaled by
+    /// Executes single-pass sub-head router sub-head routing using per-head Q7 `phase_deltas` scaled by
     /// each sub-group's phase gain (`fact_phase_gain`, `logic_phase_gain`, `explore_phase_gain`)
     /// plus an exploration pulse `explore_pulse_q7`.
     ///
@@ -1401,7 +1401,7 @@ pub trait PspmRouter: BranchlessKernel {
     fn dispatch_single_pass_with_phases(
         &self,
         tensor: &mut AlignedSliceMut32<'_, f32>,
-        config: &gcso_pspm_config_t,
+        config: &gcso_subhead_config_t,
         phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
         max_rad: f32,
         explore_pulse_q7: gcso_q7_t,
@@ -1520,7 +1520,7 @@ pub trait PspmRouter: BranchlessKernel {
     fn dispatch_subhead_unified_anchors(
         &self,
         tensor: &mut AlignedSliceMut32<'_, f32>,
-        config: &gcso_pspm_config_t,
+        config: &gcso_subhead_config_t,
         fact_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         logic_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         explore_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
@@ -1542,7 +1542,7 @@ pub trait PspmRouter: BranchlessKernel {
         )
     }
 
-    /// Executes **Single-Pass $SO(2)$ Group-Closure Fused RIPA + Unified-Manifold PSPM Sub-Head
+    /// Executes **Single-Pass $SO(2)$ Group-Closure Fused RIPA + Unified-Manifold sub-head router Sub-Head
     /// Routing**, rotating the shared upper $\frac{1}{4}d_{\mathrm{head}}$ low-frequency pairs by
     /// the composite angle $\theta_{\mathrm{ripa}} + \theta_{\mathrm{pspm}}$ in a single traversal.
     ///
@@ -1555,7 +1555,7 @@ pub trait PspmRouter: BranchlessKernel {
         tensor: &mut AlignedSliceMut32<'_, f32>,
         base_ripa_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         base_ripa_max_rad: f32,
-        config: &gcso_pspm_config_t,
+        config: &gcso_subhead_config_t,
         fact_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         logic_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         explore_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
@@ -1579,7 +1579,7 @@ pub trait PspmRouter: BranchlessKernel {
         )
     }
 
-    /// Executes **Single-Pass $SO(2)$ Group-Closure Fused RIPA + 8-Slot Ensemble PSPM Sub-Head
+    /// Executes **Single-Pass $SO(2)$ Group-Closure Fused RIPA + 8-Slot Ensemble sub-head router Sub-Head
     /// Routing**, rotating the shared upper $\frac{1}{4}d_{\mathrm{head}}$ low-frequency pairs by
     /// the composite angle $\theta_{\mathrm{ripa}} + \theta_{\mathrm{pspm}}$ in a single traversal.
     ///
@@ -1592,7 +1592,7 @@ pub trait PspmRouter: BranchlessKernel {
         tensor: &mut AlignedSliceMut32<'_, f32>,
         base_ripa_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         base_ripa_max_rad: f32,
-        config: &gcso_pspm_config_t,
+        config: &gcso_subhead_config_t,
         slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
         fact_slot_id: u8,
         logic_slot_id: u8,
@@ -1639,7 +1639,7 @@ pub trait PspmRouter: BranchlessKernel {
     fn dispatch_subhead_slot_ensemble(
         &self,
         tensor: &mut AlignedSliceMut32<'_, f32>,
-        config: &gcso_pspm_config_t,
+        config: &gcso_subhead_config_t,
         slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
         fact_slot_id: u8,
         logic_slot_id: u8,
@@ -1671,7 +1671,7 @@ pub trait PspmRouter: BranchlessKernel {
     fn dispatch_subhead_slot_ensemble_geodesic(
         &self,
         tensor: &mut AlignedSliceMut32<'_, f32>,
-        config: &gcso_pspm_config_t,
+        config: &gcso_subhead_config_t,
         slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
         fact_slot_id: u8,
         logic_slot_id: u8,
@@ -1694,7 +1694,7 @@ pub trait PspmRouter: BranchlessKernel {
         )
     }
 
-    /// Executes single-pass PSPM sub-head routing gated by `tagged_ptr`'s `ACTION_MODE_PSPM_ROUTE` bit (`0x08`).
+    /// Executes single-pass sub-head router sub-head routing gated by `tagged_ptr`'s `ACTION_MODE_SUBHEAD_ROUTE` bit (`0x08`).
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` or `tensor` bounds are invalid.
@@ -1703,18 +1703,18 @@ pub trait PspmRouter: BranchlessKernel {
         &self,
         tagged_ptr: gcso_tagged_ptr_t,
         tensor: &mut AlignedSliceMut32<'_, f32>,
-        config: &gcso_pspm_config_t,
+        config: &gcso_subhead_config_t,
         head_dim: usize,
     ) -> GcsoResult<bool> {
         let _ = self.validate_pspm_layout(tensor, config, head_dim)?;
-        if !ptr_has_action_mode(tagged_ptr, ACTION_MODE_PSPM_ROUTE) {
+        if !ptr_has_action_mode(tagged_ptr, ACTION_MODE_SUBHEAD_ROUTE) {
             return Ok(false);
         }
         self.dispatch_single_pass(tensor, config, head_dim)?;
         Ok(true)
     }
 
-    /// Executes single-pass PSPM sub-head routing with per-head Q7 `phase_deltas` gated by `tagged_ptr`.
+    /// Executes single-pass sub-head router sub-head routing with per-head Q7 `phase_deltas` gated by `tagged_ptr`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim`, `max_rad`, or slice bounds are invalid.
@@ -1723,7 +1723,7 @@ pub trait PspmRouter: BranchlessKernel {
         &self,
         tagged_ptr: gcso_tagged_ptr_t,
         tensor: &mut AlignedSliceMut32<'_, f32>,
-        config: &gcso_pspm_config_t,
+        config: &gcso_subhead_config_t,
         phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
         max_rad: f32,
         explore_pulse_q7: gcso_q7_t,
@@ -1737,7 +1737,7 @@ pub trait PspmRouter: BranchlessKernel {
         if phase_deltas.len() < total_heads {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        if !ptr_has_action_mode(tagged_ptr, ACTION_MODE_PSPM_ROUTE) {
+        if !ptr_has_action_mode(tagged_ptr, ACTION_MODE_SUBHEAD_ROUTE) {
             return Ok(false);
         }
         self.dispatch_single_pass_with_phases(

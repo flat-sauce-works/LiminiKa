@@ -39,10 +39,10 @@ impl FastPathLedger for AbiLedgerDispatcher {
 }
 
 pub(super) struct AbiPspmDispatcher;
-impl PspmRouter for AbiPspmDispatcher {}
+impl SubHeadRouter for AbiPspmDispatcher {}
 
 pub(super) struct AbiSrlDispatcher;
-impl SrlAdapter for AbiSrlDispatcher {}
+impl Rank1ResidualAdapter for AbiSrlDispatcher {}
 
 pub(super) struct AbiL2pDispatcher;
 impl L2pSvdProjector for AbiL2pDispatcher {}
@@ -284,11 +284,11 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_ptrs_with_words(
     recommend_layer_skip: u8,
     fact_phases: *const gcso_q7_t,
     fact_confidence: f32,
-    fact_zimms_offset48: u64,
+    fact_mapped_offset48: u64,
     fact_anchor_id: u32,
     persona_phases: *const gcso_q7_t,
     persona_strength: f32,
-    persona_zimms_offset48: u64,
+    persona_mapped_offset48: u64,
     persona_anchor_id: u32,
     bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
     contradiction_threshold: f32,
@@ -302,7 +302,7 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_ptrs_with_words(
         Some(ObjectiveFact::new(
             AbiPhaseRef64(f_ref),
             fact_confidence,
-            fact_zimms_offset48,
+            fact_mapped_offset48,
             fact_anchor_id,
         ))
     };
@@ -314,7 +314,7 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_ptrs_with_words(
         Some(SubjectivePersona::new(
             AbiPhaseRef64(p_ref),
             persona_strength,
-            persona_zimms_offset48,
+            persona_mapped_offset48,
             persona_anchor_id,
         ))
     };
@@ -347,12 +347,12 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_bytes_with_words(
     fact_bytes: *const u8,
     fact_byte_len: usize,
     fact_confidence: f32,
-    fact_zimms_offset48: u64,
+    fact_mapped_offset48: u64,
     fact_anchor_id: u32,
     persona_bytes: *const u8,
     persona_byte_len: usize,
     persona_strength: f32,
-    persona_zimms_offset48: u64,
+    persona_mapped_offset48: u64,
     persona_anchor_id: u32,
     bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
     contradiction_threshold: f32,
@@ -375,7 +375,7 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_bytes_with_words(
         Some(ObjectiveFact::new(
             f_slice,
             fact_confidence,
-            fact_zimms_offset48,
+            fact_mapped_offset48,
             fact_anchor_id,
         ))
     };
@@ -391,7 +391,7 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_bytes_with_words(
         Some(SubjectivePersona::new(
             p_slice,
             persona_strength,
-            persona_zimms_offset48,
+            persona_mapped_offset48,
             persona_anchor_id,
         ))
     };
@@ -425,13 +425,13 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_f32_with_words(
     fact_len: usize,
     fact_projection_gain: f32,
     fact_confidence: f32,
-    fact_zimms_offset48: u64,
+    fact_mapped_offset48: u64,
     fact_anchor_id: u32,
     persona_values: *const f32,
     persona_len: usize,
     persona_projection_gain: f32,
     persona_strength: f32,
-    persona_zimms_offset48: u64,
+    persona_mapped_offset48: u64,
     persona_anchor_id: u32,
     bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
     contradiction_threshold: f32,
@@ -465,7 +465,7 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_f32_with_words(
                 gain: fact_projection_gain,
             },
             fact_confidence,
-            fact_zimms_offset48,
+            fact_mapped_offset48,
             fact_anchor_id,
         ))
     };
@@ -484,7 +484,7 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_f32_with_words(
                 gain: persona_projection_gain,
             },
             persona_strength,
-            persona_zimms_offset48,
+            persona_mapped_offset48,
             persona_anchor_id,
         ))
     };
@@ -506,7 +506,7 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_f32_with_words(
 
 /// Unified register-resident core helper for [`GatewayFrame`] steering across FFI entry points:
 /// loads `frame_ref.phase_deltas` once into 8 `u64` SWAR registers (`frm_w`), updates `trail`,
-/// steers `q_aligned` (and optional `k_opt`) with $SO(2)$-fused RIPA + PSPM routing, optionally
+/// steers `q_aligned` (and optional `k_opt`) with $SO(2)$-fused RIPA + sub-head router routing, optionally
 /// scales `logits_opt`, and returns `report` without copying `GatewayFrame`.
 #[inline]
 pub(super) fn steer_gateway_frame_with_words_core_safe(
@@ -932,18 +932,18 @@ pub(super) fn bridge_trail_words_slerp_u7(
     steer_words
 }
 
-/// Synchronizes `src_trail.current_ptr` with a winning macro centroid's 48-bit ZIMMS section address and tags.
+/// Synchronizes `src_trail.current_ptr` with a winning macro centroid's 48-bit mapped-storage section address and tags.
 #[inline(always)]
 pub(super) fn sync_winner_centroid_ptr_to_trail(
     src_trail: &mut gcso_pointer_trail_t,
     winner: &CrystallizedAttractorRecord,
 ) {
-    if winner.sample_count > 0 && winner.zimms_section_offset48 != 0 {
+    if winner.sample_count > 0 && winner.mapped_section_offset48 != 0 {
         let packed_tag = pack_action_slot_tag(winner.dominant_slot, winner.action_mode_flags);
         let cur_phase = gcso_tagged_ptr_t(src_trail.current_ptr).unpack_phase();
         src_trail.prev_ptr = src_trail.current_ptr;
         src_trail.current_ptr =
-            gcso_tagged_ptr_t::pack(winner.zimms_section_offset48, packed_tag, cur_phase).raw();
+            gcso_tagged_ptr_t::pack(winner.mapped_section_offset48, packed_tag, cur_phase).raw();
     }
 }
 

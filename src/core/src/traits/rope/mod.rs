@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Lv.1 Capability 1: RoPE & Inline Tensor Modulation traits (`PhaseSteering`,
-//! `EntropyGatedPhaseLookup`, `DynamicLayerSkipper`, `PspmRouter`, `SrlAdapter`,
+//! `EntropyGatedPhaseLookup`, `DynamicLayerSkipper`, `SubHeadRouter`, `Rank1ResidualAdapter`,
 //! and `VisualAttentionSteering`) registered into [`super::ActionHub`] for the
 //! Geometric Cellular Sheaf Orchestrator (GCSO).
 //!
@@ -23,12 +23,12 @@
 //!   single bounds check and zero inner branches, (3) hardware `TZCNT` sub-word run-length stride,
 //!   and (4) sequential 32-float unrolled `Q`/`K` rotation (`apply_phase_steering_slice_with_sincos`) when
 //!   `q_run.len() >= 128` (`512B`) to eliminate 2-stream 4KB page-offset Load-Store Queue aliasing.
-//! - **Zero-Arithmetic Direct 256-Entry LUT Fast Path in PSPM Sub-Head Routing**: When
+//! - **Zero-Arithmetic Direct 256-Entry LUT Fast Path in sub-head router Sub-Head Routing**: When
 //!   `is_default_ripa && gain_u7 == 128 && pulse_q7 == 0`, `rotate_pspm_subgroup_with_slot_phases`
 //!   and `rotate_fused_ripa_pspm_subgroup_words` select `Q7_GEODESIC_DEFAULT_RIPA_SINCOS_REF` or
 //!   `Q7_DEFAULT_RIPA_SINCOS_REF` outside the head loop and index `lut[(slot_q7 as u8) as usize]`
 //!   directly with zero per-head integer folding/scaling arithmetic and zero cache-branch jitter.
-//! - **Single-Evaluation $SO(2)$ Group-Closure RIPA + PSPM Fusion**: Because both RIPA and PSPM
+//! - **Single-Evaluation $SO(2)$ Group-Closure RIPA + sub-head router Fusion**: Because both RIPA and sub-head router
 //!   operate on the upper low-frequency quarter `rot_dim`, `dispatch_fused_ripa_words_and_pspm_profiles_core`
 //!   fuses $\mathbf{R}(\theta_{\mathrm{ripa}})\mathbf{R}(\theta_{\mathrm{pspm}}) = \mathbf{R}(\theta_{\mathrm{ripa}} + \theta_{\mathrm{pspm}})$
 //!   via `eval_fused_ripa_pspm_sincos_q7_fast` (evaluating the trigonometric polynomial once per
@@ -63,17 +63,17 @@ use super::aligned::{
     AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut, AlignedSliceMut16,
     AlignedSliceMut32, DisjointMutPair, DisjointMutTriple,
 };
-use super::branchless::{BranchlessKernel, add_scalar_f32_slice_unrolled8, branchless_phase_coherence_inv_temp_scale, branchless_q7_coherence_and_resultant_64, branchless_q7_unified_field_fold_words_with_init_weight_64, clamp_angles_ripa_in_place_simd8, coherence_from_word_arrays_64, dot_f32_unrolled4, modulate_attention_scores_by_bayesian_trails_64, modulate_attention_scores_by_phase_bank_64, norm_l2_underflow_resilient_f32, procrustes_q7_slice_simd, rotate_so2_2d_xy_slice_simd, rotate_so2_3d_txy_slice_simd, rotate_so2_slice_unrolled16, scale_f32_slice_unrolled8, sincos_f32_x8_simd, srl_accum_outer_product_simd, srl_write_outer_product_simd};
+use super::branchless::{BranchlessKernel, add_scalar_f32_slice_unrolled8, branchless_phase_coherence_inv_temp_scale, branchless_q7_coherence_and_resultant_64, branchless_q7_unified_field_fold_words_with_init_weight_64, clamp_angles_ripa_in_place_simd8, coherence_from_word_arrays_64, dot_f32_unrolled4, modulate_attention_scores_by_bayesian_trails_64, modulate_attention_scores_by_phase_bank_64, norm_l2_underflow_resilient_f32, procrustes_q7_slice_simd, rotate_so2_2d_xy_slice_simd, rotate_so2_3d_txy_slice_simd, rotate_so2_slice_unrolled16, scale_f32_slice_unrolled8, sincos_f32_x8_simd, rank1_accum_outer_product_simd, rank1_write_outer_product_simd};
 use super::primitives::{DEFAULT_RIPA_Q7_TO_NORM_SCALE, F32_MIN_POSITIVE_NORMAL, Q7_DEFAULT_RIPA_SINCOS_REF, Q7_FULL_COS_I16_REF, Q7_FUSED_SELF_DEFAULT_RIPA_SINCOS_REF, Q7_FUSED_SELF_GEODESIC_RIPA_SINCOS_REF, Q7_GEODESIC_DEFAULT_RIPA_SINCOS_REF, Q7_SINCOS_LUT_256_REF, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_inv_pos_f32, branchless_is_finite_f32, branchless_min_f32, branchless_q7_add_sat, branchless_q7_circular_diff, branchless_q7_fold_s1_geodesic, branchless_q7_scale_u7, branchless_qdps_filter_q7, branchless_rad_to_q7, branchless_rad_to_qdps_step_u8, branchless_relu_f32, branchless_rotate_so2_pair_scaled, branchless_select_f32, branchless_select_u32, branchless_select_u8, branchless_sincos_f32, branchless_sincos_q7, branchless_sincos_q7_ripa_preinv, branchless_splitmix64, eval_fused_ripa_pspm_sincos_q7_fast, eval_geodesic_ripa_sincos_q7_fast, eval_ripa_sincos_q7_fast, fast_inv_len_f32, fast_inv_pos_normal_f32, is_word_array_uniform_64, load_q7_words_64, load_q7_x8_slice, sanitize_inplace_gain_f32, store_q7_words_64, store_q7_x8_slice, swar_add_sat_q7_slice_in_place, swar_circular_diff_and_fold_geodesic_q7_slices, swar_circular_diff_q7_slices, swar_fold_s1_geodesic_q7_slice_in_place, swar_q7_add_sat_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_qdps_filter_words_64, swar_q7_qdps_filter_x8, swar_q7_scale_le128_with_bias_x8, swar_q7_scale_le128_x8, swar_q7_scale_u7_x8, swar_qdps_filter_q7_slice_in_place, swar_sub_sat_q7_slices, swar_u8_sum_x8};
 use super::primitives::{
-    ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT,
+    ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_SUBHEAD_ROUTE, ACTION_MODE_RANK1_INJECT,
     DEFAULT_RIPA_CLAMP_MAX_RAD, GcsoResult, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
     PAGED_BITMASK_BITS, Q7_PHASE_SCALE_RAD, unpack_action_mode_from_tag,
 };
 use crate::abi::{
     GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER,
-    GCSO_ERROR_NULL_POINTER, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pspm_config_t,
-    gcso_q7_t, gcso_srl_descriptor_t, gcso_tagged_ptr_t,
+    GCSO_ERROR_NULL_POINTER, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_subhead_config_t,
+    gcso_q7_t, gcso_rank1_residual_descriptor_t, gcso_tagged_ptr_t,
 };
 use core::f32::consts::{FRAC_PI_2, LN_2};
 use core::mem::align_of;
@@ -135,10 +135,10 @@ mod adapters;
 pub use adapters::*;
 
 const _: () = {
-    assert!(size_of::<gcso_pspm_config_t>() == 32);
-    assert!(align_of::<gcso_pspm_config_t>() == 16);
-    assert!(size_of::<gcso_srl_descriptor_t>() == 64);
-    assert!(align_of::<gcso_srl_descriptor_t>() == 32);
+    assert!(size_of::<gcso_subhead_config_t>() == 32);
+    assert!(align_of::<gcso_subhead_config_t>() == 16);
+    assert!(size_of::<gcso_rank1_residual_descriptor_t>() == 64);
+    assert!(align_of::<gcso_rank1_residual_descriptor_t>() == 32);
     assert!(NUM_SWARM_CELLS * HEADS_PER_CELL == MAX_ATTENTION_HEADS);
 };
 
@@ -163,8 +163,8 @@ mod tests {
     }
     impl EntropyGatedPhaseLookup for DummyRopeEngine {}
     impl DynamicLayerSkipper for DummyRopeEngine {}
-    impl PspmRouter for DummyRopeEngine {}
-    impl SrlAdapter for DummyRopeEngine {}
+    impl SubHeadRouter for DummyRopeEngine {}
+    impl Rank1ResidualAdapter for DummyRopeEngine {}
     impl VisualAttentionSteering for DummyRopeEngine {}
 
     #[test]

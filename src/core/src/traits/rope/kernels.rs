@@ -6,7 +6,7 @@
 use super::*;
 use crate::traits::branchless::atan2_to_q7_word_x8_simd;
 
-/// Computes the RIPA / PSPM upper low-frequency rotation dimension
+/// Computes the RIPA / sub-head router upper low-frequency rotation dimension
 /// `rot_dim = ((head_dim / 4) & !1).max(2)` (even integer in `2..=head_dim`).
 #[inline(always)]
 #[must_use]

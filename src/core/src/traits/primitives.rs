@@ -43,9 +43,9 @@ use core::slice;
 
 use crate::abi::{
     gcso_config_t, gcso_ledger_slot_t, gcso_descriptor_header_t, gcso_edbc_state_t,
-    gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t, gcso_pspm_config_t,
-    gcso_q7_t, gcso_snapshot_header_t, gcso_srl_descriptor_t, gcso_status_t, gcso_tagged_ptr_t,
-    gcso_zimms_descriptor_t, GcsoStatus, GCSO_ABI_VERSION_HEX, GCSO_ERROR_BUFFER_TOO_SMALL,
+    gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_kv_keyframe_header_t, gcso_subhead_config_t,
+    gcso_q7_t, gcso_snapshot_header_t, gcso_rank1_residual_descriptor_t, gcso_status_t, gcso_tagged_ptr_t,
+    gcso_mapped_storage_descriptor_t, GcsoStatus, GCSO_ABI_VERSION_HEX, GCSO_ERROR_BUFFER_TOO_SMALL,
     GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER,
     GCSO_ERROR_NULL_POINTER, GCSO_ERROR_VERSION_MISMATCH,
 };
@@ -55,8 +55,8 @@ pub use crate::abi::{
     GcsoActionHubHandle, GcsoActionHubOpaque, GcsoAttractorFieldHandle, GcsoAttractorFieldOpaque,
     GcsoContainerHandle, GcsoContainerOpaque, GcsoContextHandle, GcsoContextOpaque,
     GcsoLedgerSlotHandle, GcsoLedgerSlotOpaque, GcsoDpsrKernelHandle, GcsoDpsrKernelOpaque,
-    GcsoEdbcControllerHandle, GcsoEdbcControllerOpaque, GcsoPspmRouterHandle, GcsoPspmRouterOpaque,
-    GcsoSrlAdapterHandle, GcsoSrlAdapterOpaque,
+    GcsoEdbcControllerHandle, GcsoEdbcControllerOpaque, GcsoSubHeadRouterHandle, GcsoSubHeadRouterOpaque,
+    GcsoRank1ResidualHandle, GcsoRank1ResidualOpaque,
 };
 
 /// Type alias for GCSO core result responses mapping to [`GcsoStatus`].
@@ -237,11 +237,11 @@ pub const ACTION_MODE_LAYER_SKIP: u8 = 1 << 1;
 /// Action Mode Bit 2 (`0x04`): Enable Contrastive Phase Bloom Filter anti-phase repulsion ($-\boldsymbol{\Delta\theta}$).
 pub const ACTION_MODE_PHASE_REPULSE: u8 = 1 << 2;
 
-/// Action Mode Bit 3 (`0x08`): Enable single-pass PSPM sub-head group routing (Fact / Logic / Explore).
-pub const ACTION_MODE_PSPM_ROUTE: u8 = 1 << 3;
+/// Action Mode Bit 3 (`0x08`): Enable single-pass sub-head router sub-head group routing (Fact / Logic / Explore).
+pub const ACTION_MODE_SUBHEAD_ROUTE: u8 = 1 << 3;
 
-/// Action Mode Bit 4 (`0x10`): Enable SRL Dynamic Rank-1 outer product residual injection ($\mathbf{u}\mathbf{v}^T$).
-pub const ACTION_MODE_SRL_INJECT: u8 = 1 << 4;
+/// Action Mode Bit 4 (`0x10`): Enable Rank-1 residual Dynamic Rank-1 outer product residual injection ($\mathbf{u}\mathbf{v}^T$).
+pub const ACTION_MODE_RANK1_INJECT: u8 = 1 << 4;
 
 /// Composite Action Mode preset for passive sidecar observation (`0x00`).
 pub const ACTION_PRESET_PASSIVE_SIDECAR: u8 = 0x00;
@@ -252,13 +252,13 @@ pub const ACTION_PRESET_EXPRESS_PHASE: u8 = ACTION_MODE_DPSR_STEER;
 /// Composite Action Mode preset for low-entropy inertial layer-skipping fast-forward (`0x03`).
 pub const ACTION_PRESET_INERTIAL_SKIP: u8 = ACTION_MODE_DPSR_STEER | ACTION_MODE_LAYER_SKIP;
 
-/// Composite Action Mode preset for anti-hallucination repulsion and PSPM exploration routing (`0x0D`).
+/// Composite Action Mode preset for anti-hallucination repulsion and sub-head router exploration routing (`0x0D`).
 pub const ACTION_PRESET_REPULSION_ESCAPE: u8 =
-    ACTION_MODE_DPSR_STEER | ACTION_MODE_PHASE_REPULSE | ACTION_MODE_PSPM_ROUTE;
+    ACTION_MODE_DPSR_STEER | ACTION_MODE_PHASE_REPULSE | ACTION_MODE_SUBHEAD_ROUTE;
 
 /// Composite Action Mode preset for full-stack deep persona & knowledge orchestration (`0x19`).
 pub const ACTION_PRESET_FULL_ORCHESTRATION: u8 =
-    ACTION_MODE_DPSR_STEER | ACTION_MODE_PSPM_ROUTE | ACTION_MODE_SRL_INJECT;
+    ACTION_MODE_DPSR_STEER | ACTION_MODE_SUBHEAD_ROUTE | ACTION_MODE_RANK1_INJECT;
 
 /// Bitmask extracting the 5-bit Action Mode flags from an 8-bit `gcso_tagged_ptr_t` tag (`bits 0..=4`).
 pub const TAG_ACTION_MODE_MASK: u8 = 0x1F;
@@ -334,7 +334,7 @@ const fn raw_regions_overlap_or_same_zst(
 
 /// Marker trait for Plain Old Data (`Pod`) types that contain no uninitialized padding traps,
 /// can be safely zero-initialized, viewed as raw byte slices, and cast across aligned SIMD
-/// or ZIMMS memory-mapped boundaries.
+/// or mapped-storage memory-mapped boundaries.
 ///
 /// # Safety
 /// Implementing types must be `#[repr(C)]`, `#[repr(transparent)]`, or primitive numeric types,
@@ -676,13 +676,13 @@ impl_pod_for_primitives!(
     gcso_ledger_slot_t,
     gcso_config_t,
     gcso_edbc_state_t,
-    gcso_zimms_descriptor_t,
-    gcso_pspm_config_t,
-    gcso_srl_descriptor_t,
+    gcso_mapped_storage_descriptor_t,
+    gcso_subhead_config_t,
+    gcso_rank1_residual_descriptor_t,
     gcso_snapshot_header_t,
-    gcso_pprc_keyframe_header_t,
-    PprcKeyframePacket,
-    PprcMotionDeltaPacket,
+    gcso_kv_keyframe_header_t,
+    KvKeyframePacket,
+    KvMotionDeltaPacket,
 );
 
 // SAFETY: Fixed-size arrays of `Pod` elements have contiguous layout with no extra padding traps.
@@ -750,7 +750,7 @@ pub const fn init_snapshot_header(
         action_hub_offset: hdr_size,
         attractor_field_offset: hdr_size,
         dpsr_state_offset: hdr_size,
-        srl_state_offset: hdr_size,
+        rank1_state_offset: hdr_size,
         edbc_state_offset: hdr_size,
         checksum_crc32: 0,
         ledger_slot_offset: hdr_size as u32,
@@ -788,8 +788,8 @@ pub const fn validate_snapshot_header(
         & (header.attractor_field_offset <= total)
         & (header.dpsr_state_offset >= min_hdr)
         & (header.dpsr_state_offset <= total)
-        & (header.srl_state_offset >= min_hdr)
-        & (header.srl_state_offset <= total)
+        & (header.rank1_state_offset >= min_hdr)
+        & (header.rank1_state_offset <= total)
         & (header.edbc_state_offset >= min_hdr)
         & (header.edbc_state_offset <= total)
         & (daes_off >= min_hdr)
@@ -842,9 +842,9 @@ pub fn verify_snapshot_payload_crc32(
     Ok(())
 }
 
-/// 128-byte cacheline-aligned Plain Old Data (`Pod`) **PPRC Keyframe (I-Frame) Packet** (Section 4.3).
+/// 128-byte cacheline-aligned Plain Old Data (`Pod`) **KV-keyframe Keyframe (I-Frame) Packet** (Section 4.3).
 ///
-/// Packs the 64-byte [`gcso_pprc_keyframe_header_t`] metadata header (`offset 0..64`) and the
+/// Packs the 64-byte [`gcso_kv_keyframe_header_t`] metadata header (`offset 0..64`) and the
 /// uncompressed 64-head Q7 phase anchor snapshot (`offset 64..128`) for lightweight video-codec-style
 /// `.gcso` memory & persona streams (Steam Workshop distribution ready).
 ///
@@ -855,18 +855,18 @@ pub fn verify_snapshot_payload_crc32(
 /// - `reserved[12]`: 3-bit working-lane `slot_id` (`0..=7`).
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PprcKeyframePacket {
-    /// 64-byte C-ABI v0.1.1 PPRC keyframe index header (`offset 0..64`, `frame_type == 0`).
-    pub header: gcso_pprc_keyframe_header_t,
+pub struct KvKeyframePacket {
+    /// 64-byte C-ABI v0.1.1 KV-keyframe keyframe index header (`offset 0..64`, `frame_type == 0`).
+    pub header: gcso_kv_keyframe_header_t,
     /// 64-head Q7 phase anchor snapshot on $SO(2)^{64}$ (`offset 64..128`).
     pub anchor_phases: [gcso_q7_t; MAX_ATTENTION_HEADS],
 }
 
-impl Default for PprcKeyframePacket {
+impl Default for KvKeyframePacket {
     #[inline(always)]
     fn default() -> Self {
         Self {
-            header: gcso_pprc_keyframe_header_t {
+            header: gcso_kv_keyframe_header_t {
                 frame_type: 0,
                 token_index: 0,
                 gop_length: 1,
@@ -882,7 +882,7 @@ impl Default for PprcKeyframePacket {
     }
 }
 
-impl PprcKeyframePacket {
+impl KvKeyframePacket {
     /// Computes the IEEE 802.3 CRC32 checksum over the 64-head `anchor_phases` payload in `const fn` mode.
     #[inline(always)]
     #[must_use]
@@ -896,7 +896,7 @@ impl PprcKeyframePacket {
         compute_crc32_ieee(&raw_bytes)
     }
 
-    /// Constructs a 128-byte [`PprcKeyframePacket`] (I-Frame Key Anchor) stamped with IEEE 802.3
+    /// Constructs a 128-byte [`KvKeyframePacket`] (I-Frame Key Anchor) stamped with IEEE 802.3
     /// CRC32 integrity protection and causal provenance metadata.
     #[inline(always)]
     #[must_use]
@@ -931,7 +931,7 @@ impl PprcKeyframePacket {
         reserved[12] = slot_id & ATTRACTOR_SLOT_ID_MASK;
 
         Self {
-            header: gcso_pprc_keyframe_header_t {
+            header: gcso_kv_keyframe_header_t {
                 frame_type: 0,
                 token_index,
                 gop_length: if gop_length > 0 { gop_length } else { 1 },
@@ -1007,26 +1007,26 @@ impl PprcKeyframePacket {
     }
 }
 
-/// 64-byte cacheline-aligned Plain Old Data (`Pod`) **PPRC Predictive Motion Delta (P-Frame) Packet** (Section 4.3).
+/// 64-byte cacheline-aligned Plain Old Data (`Pod`) **KV-keyframe Predictive Motion Delta (P-Frame) Packet** (Section 4.3).
 ///
 /// Stores the 64-head inter-step Q7 phase motion vector $\boldsymbol{\Delta\theta}_t \in \mathrm{Q7}^{64}$
 /// (`offset 0..64`) between consecutive steps inside a Variable Group of Pictures (GOP) memory/persona stream.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PprcMotionDeltaPacket {
+pub struct KvMotionDeltaPacket {
     /// 64-head Q7 predictive phase motion delta vector $\boldsymbol{\Delta\theta}_t$ (`offset 0..64`).
     pub motion_deltas: [gcso_q7_t; MAX_ATTENTION_HEADS],
 }
 
-impl Default for PprcMotionDeltaPacket {
+impl Default for KvMotionDeltaPacket {
     #[inline(always)]
     fn default() -> Self {
         Self::new([0; MAX_ATTENTION_HEADS])
     }
 }
 
-impl PprcMotionDeltaPacket {
-    /// Constructs a 64-byte aligned [`PprcMotionDeltaPacket`] from `motion_deltas`.
+impl KvMotionDeltaPacket {
+    /// Constructs a 64-byte aligned [`KvMotionDeltaPacket`] from `motion_deltas`.
     #[inline(always)]
     #[must_use]
     pub const fn new(motion_deltas: [gcso_q7_t; MAX_ATTENTION_HEADS]) -> Self {
@@ -1573,7 +1573,7 @@ pub(crate) struct AlignedLut16x256<T>(pub [[T; 256]; 16]);
 
 /// 64B-aligned 16KB Slice-by-16 IEEE 802.3 CRC32 lookup table (`0xEDB8_8320` reflected polynomial)
 /// enabling 16-byte (`2 x u64`) parallel XOR-table folding per step (`16x` fewer serial dependency
-/// steps than byte-serial lookup and `2x` fewer than Slice-by-8 on `.gcso` ZIMMS containers and
+/// steps than byte-serial lookup and `2x` fewer than Slice-by-8 on `.gcso` mapped-storage containers and
 /// 128-byte `CrystallizedAttractorRecord` blocks).
 pub(crate) const CRC32_IEEE_SLICE16_LUT: AlignedLut16x256<u32> = {
     let mut lut = [[0u32; 256]; 16];
@@ -1860,12 +1860,12 @@ const fn build_q7_fused_self_ripa_sincos_lut(fold_geodesic: bool) -> AlignedLut2
 }
 
 /// Precomputed 64-byte-aligned 2KB LUT of fused $SO(2)$ double-rotation `(sin(2*theta), cos(2*theta))`
-/// when `base_ripa_q7 == pspm_slot_q7` under `DEFAULT_RIPA_CLAMP_MAX_RAD` (non-geodesic PSPM).
+/// when `base_ripa_q7 == pspm_slot_q7` under `DEFAULT_RIPA_CLAMP_MAX_RAD` (non-geodesic sub-head router).
 pub(crate) const Q7_FUSED_SELF_DEFAULT_RIPA_SINCOS_LUT_256: AlignedLut256<(f32, f32)> =
     build_q7_fused_self_ripa_sincos_lut(false);
 
 /// Precomputed 64-byte-aligned 2KB LUT of fused $SO(2)$ double-rotation `(sin(theta_b + theta_p), cos(theta_b + theta_p))`
-/// when `base_ripa_q7 == pspm_slot_q7` under `DEFAULT_RIPA_CLAMP_MAX_RAD` (geodesic PSPM).
+/// when `base_ripa_q7 == pspm_slot_q7` under `DEFAULT_RIPA_CLAMP_MAX_RAD` (geodesic sub-head router).
 pub(crate) const Q7_FUSED_SELF_GEODESIC_RIPA_SINCOS_LUT_256: AlignedLut256<(f32, f32)> =
     build_q7_fused_self_ripa_sincos_lut(true);
 
@@ -2208,8 +2208,8 @@ pub(crate) const CRC32_CRYSTAL_AID_BYTE1_LUT: AlignedLut256<u32> = {
 pub(crate) const CRC32_CRYSTAL_AID_BYTE1_REF: &[u32; 256] = &CRC32_CRYSTAL_AID_BYTE1_LUT.0;
 
 /// 64B-aligned 1KB GF(2) differential CRC32 table for byte-1 (`(zoff >> 8) & 0xFF`, `offset 17`)
-/// of `zimms_section_offset48` inside a 128-byte `CrystallizedAttractorRecord`, pre-shifted by
-/// 96 bytes via $L^6$ so 4KB-aligned ZIMMS section offsets fold in 1 lookup stage (`0` serial $L^6$ stages).
+/// of `mapped_section_offset48` inside a 128-byte `CrystallizedAttractorRecord`, pre-shifted by
+/// 96 bytes via $L^6$ so 4KB-aligned mapped-storage section offsets fold in 1 lookup stage (`0` serial $L^6$ stages).
 pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE1_LUT: AlignedLut256<u32> = {
     let mut lut = [0u32; 256];
     let mut d = 0usize;
@@ -2220,12 +2220,12 @@ pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE1_LUT: AlignedLut256<u32> = {
     AlignedLut256(lut)
 };
 
-/// Promoted `.rodata` reference to the 1KB `zimms_section_offset48` byte-1 differential CRC32 table.
+/// Promoted `.rodata` reference to the 1KB `mapped_section_offset48` byte-1 differential CRC32 table.
 pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE1_REF: &[u32; 256] = &CRC32_CRYSTAL_ZOFF_BYTE1_LUT.0;
 
 /// 64B-aligned 1KB GF(2) differential CRC32 table for byte-2 (`(zoff >> 16) & 0xFF`, `offset 18`)
-/// of `zimms_section_offset48` inside a 128-byte `CrystallizedAttractorRecord`, pre-shifted by
-/// 96 bytes via $L^6$ so 64KB-aligned ZIMMS section offsets fold in 1 lookup stage (`0` serial $L^6$ stages).
+/// of `mapped_section_offset48` inside a 128-byte `CrystallizedAttractorRecord`, pre-shifted by
+/// 96 bytes via $L^6$ so 64KB-aligned mapped-storage section offsets fold in 1 lookup stage (`0` serial $L^6$ stages).
 pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE2_LUT: AlignedLut256<u32> = {
     let mut lut = [0u32; 256];
     let mut d = 0usize;
@@ -2236,12 +2236,12 @@ pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE2_LUT: AlignedLut256<u32> = {
     AlignedLut256(lut)
 };
 
-/// Promoted `.rodata` reference to the 1KB `zimms_section_offset48` byte-2 differential CRC32 table.
+/// Promoted `.rodata` reference to the 1KB `mapped_section_offset48` byte-2 differential CRC32 table.
 pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE2_REF: &[u32; 256] = &CRC32_CRYSTAL_ZOFF_BYTE2_LUT.0;
 
 /// 64B-aligned 1KB GF(2) differential CRC32 table for byte-3 (`(zoff >> 24) & 0xFF`, `offset 19`)
-/// of `zimms_section_offset48` inside a 128-byte `CrystallizedAttractorRecord`, pre-shifted by
-/// 96 bytes via $L^6$ so 64KB-aligned ZIMMS section offsets fold in 1 lookup stage (`0` serial $L^6$ stages).
+/// of `mapped_section_offset48` inside a 128-byte `CrystallizedAttractorRecord`, pre-shifted by
+/// 96 bytes via $L^6$ so 64KB-aligned mapped-storage section offsets fold in 1 lookup stage (`0` serial $L^6$ stages).
 pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE3_LUT: AlignedLut256<u32> = {
     let mut lut = [0u32; 256];
     let mut d = 0usize;
@@ -2252,7 +2252,7 @@ pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE3_LUT: AlignedLut256<u32> = {
     AlignedLut256(lut)
 };
 
-/// Promoted `.rodata` reference to the 1KB `zimms_section_offset48` byte-3 differential CRC32 table.
+/// Promoted `.rodata` reference to the 1KB `mapped_section_offset48` byte-3 differential CRC32 table.
 pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE3_REF: &[u32; 256] = &CRC32_CRYSTAL_ZOFF_BYTE3_LUT.0;
 
 /// 64B-aligned 1KB GF(2) differential CRC32 table for byte-0 `provenance_bits` values
@@ -2372,7 +2372,7 @@ pub(crate) const fn crc32_crystal_gm36_final_u32(gm_bits: u32) -> u32 {
 }
 
 /// Evaluates the exact 128B final GF(2) CRC32 contribution of a 32-bit word at `offset 16..20`
-/// (`zimms_section_offset48 as u32`) using the L1D-resident `CRC32_IEEE_SLICE16_REF` and `CRC32_IEEE_L6_REF` tables.
+/// (`mapped_section_offset48 as u32`) using the L1D-resident `CRC32_IEEE_SLICE16_REF` and `CRC32_IEEE_L6_REF` tables.
 #[inline(always)]
 pub(crate) const fn crc32_crystal_zoff16_final_u32(zoff_lo: u32) -> u32 {
     if zoff_lo == 0 {
@@ -2471,7 +2471,7 @@ pub(crate) const fn crc32_fold_stamped_crystal_128b(crc: u32, record_crc32: u32)
 }
 
 /// Updates a stamped `CrystallizedAttractorRecord`'s IEEE 802.3 `checksum_crc32` in $\mathcal{O}(1)$
-/// via GF(2) linearity when `phase_profile` (`offset 64..128`), `anchor_id`, `zimms_section_offset48`,
+/// via GF(2) linearity when `phase_profile` (`offset 64..128`), `anchor_id`, `mapped_section_offset48`,
 /// `resultant_r_bar`, and `von_mises_kappa` remained stationary while `sample_count` (`offset 12..16`),
 /// `base_energy` (`offset 24..28`), `phase_gravity_mass` (`offset 36..40`), `ripa_clamp_rad`
 /// (`offset 40..44`), `effective_inv_temp` (`offset 44..48`), `provenance_bits` (`offset 48..52`),
@@ -2603,9 +2603,9 @@ pub(crate) const CRYSTAL_CRC32_KAPPA_MAX_FINAL_CONTRIB: u32 =
 pub(crate) const CRC32_L4_INITIAL_SEED: u32 = crc32_step_l4(0xFFFF_FFFFu32);
 
 /// Precomputed 64-byte IEEE 802.3 CRC32 accumulator state over the invariant fields of a default
-/// 4-section `.gcso` `gcso_zimms_descriptor_t` (`mapped_address = 0`, `file_size_bytes = 0`,
+/// 4-section `.gcso` `gcso_mapped_storage_descriptor_t` (`mapped_address = 0`, `file_size_bytes = 0`,
 /// `dma_buffer_handle = 0`, `flags = 4`, `fd_handle = -1`, `reserved = [0; 32]`).
-pub(crate) const CRC32_ZIMMS_DESC_BASE_SEED: u32 =
+pub(crate) const CRC32_MAPPED_STORAGE_DESC_BASE_SEED: u32 =
     CRC32_L4_INITIAL_SEED ^ crc32_step_l2(crc32_slice16_indep_u64x2(0, 0xFFFF_FFFF_0000_0004u64));
 
 /// Evaluates the 64-byte header (`offset 0..64`) GF(2) differential IEEE 802.3 CRC32 state
@@ -2616,7 +2616,7 @@ pub(crate) const CRC32_ZIMMS_DESC_BASE_SEED: u32 =
 pub(crate) const fn crc32_crystal_header_delta_c3(
     delta_anchor_id: u32,
     delta_sample_count: u32,
-    delta_zimms_offset48: u64,
+    delta_mapped_offset48: u64,
     delta_base_energy_bits: u32,
     delta_r_bar_bits: u32,
     delta_kappa_bits: u32,
@@ -2657,8 +2657,8 @@ pub(crate) const fn crc32_crystal_header_delta_c3(
         aid_c ^ sc_c
     };
 
-    let z_lo = (delta_zimms_offset48 as u32) ^ c0;
-    let z_hi = (delta_zimms_offset48 >> 32) as u32;
+    let z_lo = (delta_mapped_offset48 as u32) ^ c0;
+    let z_hi = (delta_mapped_offset48 >> 32) as u32;
     let z_c = if (z_lo | z_hi) == 0 {
         0
     } else if (c0 == 0) & (z_hi == 0) & ((z_lo & 0xFF) == 0) {
@@ -2735,7 +2735,7 @@ pub(crate) const fn crc32_update_crystal_absorption_delta(
     old_crc32: u32,
     delta_anchor_id: u32,
     delta_sample_count: u32,
-    delta_zimms_offset48: u64,
+    delta_mapped_offset48: u64,
     delta_base_energy_bits: u32,
     delta_r_bar_bits: u32,
     delta_kappa_bits: u32,
@@ -2750,7 +2750,7 @@ pub(crate) const fn crc32_update_crystal_absorption_delta(
     let (final_xor, c3) = crc32_crystal_header_delta_c3(
         delta_anchor_id,
         delta_sample_count,
-        delta_zimms_offset48,
+        delta_mapped_offset48,
         delta_base_energy_bits,
         delta_r_bar_bits,
         delta_kappa_bits,
@@ -5359,10 +5359,10 @@ const _: () = {
     assert!(coupled_slot_row_mask(DEFAULT_SLOT_COUPLING_MATRIX_8X8, 3) == 0xFF);
     assert!(coupled_slot_count(DEFAULT_SLOT_COUPLING_MATRIX_8X8, 3) == 8);
     assert!(compute_crc32_ieee(b"123456789") == 0xCBF4_3926);
-    assert!(size_of::<PprcKeyframePacket>() == 128);
-    assert!(align_of::<PprcKeyframePacket>() == 64);
-    assert!(size_of::<PprcMotionDeltaPacket>() == 64);
-    assert!(align_of::<PprcMotionDeltaPacket>() == 64);
+    assert!(size_of::<KvKeyframePacket>() == 128);
+    assert!(align_of::<KvKeyframePacket>() == 64);
+    assert!(size_of::<KvMotionDeltaPacket>() == 64);
+    assert!(align_of::<KvMotionDeltaPacket>() == 64);
 };
 
 #[cfg(test)]
@@ -5378,8 +5378,8 @@ mod tests {
         assert_eq!(size_of::<GcsoAttractorFieldHandle>(), size_of::<*mut ()>());
         assert_eq!(size_of::<GcsoEdbcControllerHandle>(), size_of::<*mut ()>());
         assert_eq!(size_of::<GcsoDpsrKernelHandle>(), size_of::<*mut ()>());
-        assert_eq!(size_of::<GcsoPspmRouterHandle>(), size_of::<*mut ()>());
-        assert_eq!(size_of::<GcsoSrlAdapterHandle>(), size_of::<*mut ()>());
+        assert_eq!(size_of::<GcsoSubHeadRouterHandle>(), size_of::<*mut ()>());
+        assert_eq!(size_of::<GcsoRank1ResidualHandle>(), size_of::<*mut ()>());
     }
 
     #[test]
