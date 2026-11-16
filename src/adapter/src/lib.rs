@@ -1541,6 +1541,44 @@ impl TextAttractorCorpus {
         self.fit_common_mode_subspace(3);
     }
 
+    /// Appends external orthonormal prior directions (e.g., startup base-model framing modes)
+    /// into the common-mode projection basis via modified Gram-Schmidt orthogonalization.
+    pub fn extend_common_mode_basis(&mut self, extra_dirs: &[Vec<f32>], max_total: usize) {
+        let Some(expected_dim) = self
+            .entries
+            .first()
+            .map(|e| e.residual_sig.len())
+            .filter(|&d| d > 0)
+        else {
+            return;
+        };
+        for dir in extra_dirs {
+            if self.common_mode_basis.len() >= max_total {
+                break;
+            }
+            if dir.len() != expected_dim {
+                continue;
+            }
+            let mut orth = dir.clone();
+            for existing in &self.common_mode_basis {
+                let dot: f64 = orth
+                    .iter()
+                    .zip(existing.iter())
+                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                    .sum();
+                let d = dot as f32;
+                for (dst, &c) in orth.iter_mut().zip(existing.iter()) {
+                    *dst -= d * c;
+                }
+            }
+            let norm_sq: f64 = orth.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+            if norm_sq >= 0.25 {
+                Self::l2_normalize_in_place(&mut orth);
+                self.common_mode_basis.push(orth);
+            }
+        }
+    }
+
     /// Returns common-mode-projected normalized signatures across the corpus.
     fn projected_corpus_sigs(&self) -> Vec<Vec<f32>> {
         self.entries

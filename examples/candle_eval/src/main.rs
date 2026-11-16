@@ -11,12 +11,13 @@ use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor, D};
 use candle_nn::{linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 use liminika_adapter::{
     AdaptiveGopCutDetector, AttractorContainerCodec, AttractorRole, CompiledTokenCorpus,
-    FrameTransitionMetrics, GcsoDualTrackTimeline, ModelSteeringAdapter, RebakeContext,
-    RopeGeometry, RopeLayout, SequenceActivationPooler, SourceTextRecord,
+    FrameTransitionMetrics, GcsoDualTrackTimeline, ModelBaseAttractorProfile, ModelSteeringAdapter,
+    RebakeContext, RopeGeometry, RopeLayout, SequenceActivationPooler, SourceTextRecord,
     SubtitleActivationEncoder, TimelineResumeOutcome, TimelineStepContext, TokenSequenceEntry,
     VoidBoundaryState,
 };
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
+use liminika_core::action_hub::ActionHubEngine;
 use liminika_core::traits::gateway::{
     GuardPhaseAnchor, ObjectiveFact, ResonantSignalSlice, SubjectivePersona,
 };
@@ -774,6 +775,173 @@ fn format_phi4_prompt(user_prompt: &str) -> String {
     format!("<|user|>{user_prompt}<|end|><|assistant|>")
 }
 
+fn detect_simd_label() -> &'static str {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("fma")
+        {
+            return "avx2+fma+swar";
+        }
+        if std::arch::is_x86_feature_detected!("avx2") {
+            return "avx2+swar";
+        }
+    }
+    "portable-swar"
+}
+
+fn query_nvidia_smi_vram() -> Option<String> {
+    let output = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=name,memory.total,memory.used,memory.free",
+            "--format=csv,noheader",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let line = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()?
+        .trim()
+        .to_string();
+    if line.is_empty() {
+        None
+    } else {
+        Some(line)
+    }
+}
+
+fn estimate_phi3_footprint(cfg: &Phi3Config, dtype: DType) -> (u64, f64, f64) {
+    let h = cfg.hidden_size as u64;
+    let i = cfg.intermediate_size as u64;
+    let n_q = cfg.num_attention_heads as u64;
+    let n_kv = cfg.num_key_value_heads as u64;
+    let d_head = h / n_q.max(1);
+    let qkv_out = (n_q + 2 * n_kv) * d_head;
+    let per_layer_params = h * qkv_out + h * h + h * (2 * i) + i * h + 2 * h;
+    let embed_params = (cfg.vocab_size as u64) * h;
+    let lm_head_params = if cfg.tie_word_embeddings {
+        0
+    } else {
+        embed_params
+    };
+    let total_params =
+        embed_params + lm_head_params + (cfg.num_hidden_layers as u64) * per_layer_params + h;
+    let elem_bytes = dtype.size_in_bytes() as f64;
+    let weights_mb = (total_params as f64 * elem_bytes) / (1024.0 * 1024.0);
+    // KV cache footprint at full 2048 context window (K + V across all layers).
+    let kv_2048_bytes = 2.0
+        * (cfg.num_hidden_layers as f64)
+        * 2048.0
+        * (n_kv as f64)
+        * (d_head as f64)
+        * elem_bytes;
+    let kv_2048_mb = kv_2048_bytes / (1024.0 * 1024.0);
+    (total_params, weights_mb, kv_2048_mb)
+}
+
+fn print_runtime_profile(
+    cfg: &Phi3Config,
+    adapter: &ModelSteeringAdapter,
+    device: &Device,
+    dtype: DType,
+    load_elapsed: std::time::Duration,
+    vram_before: Option<&str>,
+) {
+    let geom = adapter.geometry();
+    let (params, weights_mb, kv_2048_mb) = estimate_phi3_footprint(cfg, dtype);
+    let hub_bytes = std::mem::size_of::<ActionHubEngine>();
+    println!(
+        "[System] os={} arch={} simd={} device={:?} dtype={:?} load={:.2?}",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        detect_simd_label(),
+        device,
+        dtype,
+        load_elapsed,
+    );
+    println!(
+        "[Model ] params={:.2}M weights_est={:.1}MiB kv2048_est={:.1}MiB layers={} heads={}/{} head_dim={} rotary_dim={} sidecar_hub={}B",
+        params as f64 / 1_000_000.0,
+        weights_mb,
+        kv_2048_mb,
+        geom.num_layers,
+        geom.num_q_heads,
+        geom.num_kv_heads,
+        geom.head_dim,
+        geom.rotary_dim,
+        hub_bytes,
+    );
+    let vram_after = query_nvidia_smi_vram();
+    match (vram_before, vram_after) {
+        (Some(before), Some(after)) => {
+            println!("[VRAM  ] gpu_before=[{before}] gpu_after=[{after}]");
+        }
+        (None, Some(after)) => println!("[VRAM  ] gpu=[{after}]"),
+        (Some(before), None) => println!("[VRAM  ] gpu=[{before}]"),
+        (None, None) => println!("[VRAM  ] nvidia-smi unavailable"),
+    }
+    if !device.is_cuda() {
+        println!(
+            "[Exec  ] Running on CPU exact path (pass `--features cuda` on CUDA-enabled toolchains for GPU execution)."
+        );
+    }
+}
+
+fn sample_startup_base_prior(
+    model: &mut Phi3Model,
+    tokenizer: &Tokenizer,
+    adapter: &ModelSteeringAdapter,
+) -> Result<ModelBaseAttractorProfile, Box<dyn std::error::Error>> {
+    let probe_prompts = [
+        "Explain the basic design trade-offs of a modular systems architecture.",
+        "Summarize how memory alignment affects hardware cache performance.",
+        "Describe step by step how an algorithm filters noisy input signals.",
+        "Contrast deterministic engineering constraints with approximate heuristics.",
+        "What is the boiling point of water at standard atmospheric pressure?",
+        "Write a concise technical note defining a protocol boundary version.",
+    ];
+    let mut base_entries = Vec::with_capacity(probe_prompts.len());
+    for prompt in probe_prompts {
+        model.clear_cache();
+        let formatted = format_phi4_prompt(prompt);
+        let mut seq_ids = tokenizer
+            .encode(formatted.as_str(), false)
+            .map_err(|e| format!("base prior encode error: {e}"))?
+            .get_ids()
+            .to_vec();
+        let (mut logits, _, _) = model.forward_tokens(&seq_ids, 0, None, false, false)?;
+        let mut gen_ids = Vec::with_capacity(8);
+        for offset in (seq_ids.len()..).take(8) {
+            let next = argmax(&logits);
+            if next == 199999 {
+                break;
+            }
+            gen_ids.push(next);
+            let (next_logits, _, _) = model.forward_tokens(&[next], offset, None, false, false)?;
+            logits = next_logits;
+        }
+        seq_ids.extend_from_slice(&gen_ids);
+        model.clear_cache();
+        let (_, layer_tok_qs, _) = model.forward_tokens(&seq_ids, 0, None, false, true)?;
+        base_entries.push(TokenSequenceEntry {
+            role: AttractorRole::Persona,
+            text: prompt.to_string(),
+            energy: 1.0,
+            seq_len: seq_ids.len(),
+            per_layer_token_qs: layer_tok_qs,
+        });
+    }
+    ModelBaseAttractorProfile::extract(
+        adapter,
+        &base_entries,
+        SequenceActivationPooler::default(),
+        0.55,
+    )
+    .map_err(|e| e.into())
+}
+
 struct BakedModelProfile {
     per_layer_q7: Vec<Vec<gcso_q7_t>>,
     fact_q7: Vec<Vec<gcso_q7_t>>,
@@ -988,6 +1156,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut adapter = ModelSteeringAdapter::new(cfg.to_rope_geometry())?;
 
     let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
+    let active_dtype = if device.is_cuda() {
+        DType::BF16
+    } else {
+        DType::F32
+    };
+    let vram_before = query_nvidia_smi_vram();
     println!(
         "LiminiKa Candle Eval (RoPE + EDBC + SRL via liminika-adapter) | device={:?} | layers={} heads={}/{} head_dim={} rotary_dim={}",
         device,
@@ -1000,15 +1174,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let t0 = Instant::now();
     let mut model = Phi3Model::load(&model_dir, &cfg, &device)?;
-    println!("Loaded Phi-4-mini-instruct in {:.2?}", t0.elapsed());
+    let load_elapsed = t0.elapsed();
+    println!("Loaded Phi-4-mini-instruct in {:.2?}", load_elapsed);
+    print_runtime_profile(
+        &cfg,
+        &adapter,
+        &device,
+        active_dtype,
+        load_elapsed,
+        vram_before.as_deref(),
+    );
 
     let step2_only = std::env::args().any(|a| a == "--step2-only");
+    let use_base_prior = std::env::args().any(|a| a == "--base-prior");
+    let t_bake = Instant::now();
     let baked = bake_via_adapter(&mut model, &tokenizer, &adapter, cfg.hidden_size, &suite)?;
     println!(
-        "Baked {} x {} Q7 phase deltas + {}-dim SRL vectors via ModelSteeringAdapter.",
+        "Baked {} x {} Q7 phase deltas + {}-dim SRL vectors via ModelSteeringAdapter in {:.2?}.",
         baked.per_layer_q7.len(),
         adapter.geometry().num_q_heads,
-        cfg.hidden_size
+        cfg.hidden_size,
+        t_bake.elapsed(),
     );
 
     let mut target_toks: Vec<Option<u32>> = Vec::with_capacity(suite.probes.len());
@@ -1399,6 +1585,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 2: Online Natural-Language -> Attractor Corpus & cvoid Boundary Evaluation
     println!("\n=== Step 2: Natural-Language Attractor Corpus & cvoid Boundary Eval ===");
     adapter.set_layer_rope_mask(0xFFFF_0000);
+    let base_prior = if use_base_prior {
+        let t_prior = Instant::now();
+        let profile = sample_startup_base_prior(&mut model, &tokenizer, &adapter)?;
+        println!(
+            "[BasePrior] samples={} sub_attractors={} pooled_basis={} token_basis={} elapsed={:.2?}",
+            profile.sample_count,
+            profile.sub_attractors.len(),
+            profile.pooled_common_mode_basis.len(),
+            profile.token_common_mode_basis.len(),
+            t_prior.elapsed()
+        );
+        Some(profile)
+    } else {
+        None
+    };
+
+    let t_compile = Instant::now();
     let mut staged_entries: Vec<TokenSequenceEntry> = Vec::new();
     for (role, texts, energy) in [
         (AttractorRole::Fact, suite.facts.as_slice(), 2.5_f32),
@@ -1423,23 +1626,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let compiled = CompiledTokenCorpus::compile(
+    let compiled = CompiledTokenCorpus::compile_with_base_prior(
         &adapter,
         &staged_entries,
         SequenceActivationPooler::default(),
         2,
         1,
+        base_prior.as_ref(),
     )?;
+    let compile_ms = t_compile.elapsed().as_secs_f64() * 1000.0;
     println!(
-        "Compiled {} natural-language attractors (two-pass novelty SIF + Stratum pipeline) | auto RecallPolicy: min_coh={:.3} margin={:.3}",
+        "Compiled {} natural-language attractors (two-pass novelty SIF + Stratum pipeline, base_prior={}) in {:.1}ms | auto RecallPolicy: min_coh={:.3} margin={:.3}",
         compiled.corpus.entries().len(),
+        base_prior.is_some(),
+        compile_ms,
         compiled.recall_policy.min_coherence,
         compiled.recall_policy.boundary_margin,
     );
+    let mut step2_ctx_hits = 0_usize;
     let mut step2_exp_hits = 0_usize;
     let mut step2_exp_total = 0_usize;
     let mut step2_forb_hits = 0_usize;
     let mut step2_forb_total = 0_usize;
+    let mut step2_recall_ms_sum = 0.0_f64;
+    let mut step2_decode_tokens = 0_usize;
+    let mut step2_decode_secs = 0.0_f64;
     let mut eval_items: Vec<(String, String, Vec<String>, Vec<String>)> = suite.probes.clone();
     eval_items.push((
         "CVOID".to_string(),
@@ -1462,7 +1673,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .get_ids()
             .to_vec();
         let (_, query_tok_qs, _) = model.forward_tokens(&q_ids, 0, None, false, true)?;
+        let t_recall = Instant::now();
         let recall = compiled.recall_token_sequence(&adapter, &query_tok_qs, q_ids.len())?;
+        let recall_ms = t_recall.elapsed().as_secs_f64() * 1000.0;
+        step2_recall_ms_sum += recall_ms;
 
         let turn_role = match slot.as_str() {
             "PERSONA" => AttractorRole::Persona,
@@ -1561,6 +1775,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             trail: &mut trail,
             srl: srl_arg,
         };
+        let t_dec = Instant::now();
         let (mut logits, _, _) =
             model.forward_tokens(&ids, 0, Some(&mut steer), use_steer, false)?;
 
@@ -1575,11 +1790,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 model.forward_tokens(&[next], offset, Some(&mut steer), use_steer, false)?;
             logits = next_logits;
         }
+        step2_decode_tokens += gen_ids.len();
+        step2_decode_secs += t_dec.elapsed().as_secs_f64();
         let text = tokenizer
             .decode(&gen_ids, true)
             .map_err(|e| format!("decode error: {e}"))?
             .replace('\n', " ");
         let lower = text.to_lowercase();
+        let ctx_lower = recalled_ctx.to_lowercase();
+        let ctx_exp = expected
+            .iter()
+            .filter(|kw| ctx_lower.contains(&kw.to_lowercase()))
+            .count();
         let p_exp = expected
             .iter()
             .filter(|kw| lower.contains(&kw.to_lowercase()))
@@ -1589,6 +1811,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .filter(|kw| lower.contains(&kw.to_lowercase()))
             .count();
         if idx < suite.probes.len() {
+            step2_ctx_hits += ctx_exp;
             step2_exp_hits += p_exp;
             step2_exp_total += expected.len();
             step2_forb_hits += p_forb;
@@ -1606,7 +1829,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let tlm = &recall.telemetry;
         println!(
-            "  [S2:{}:{}] void={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={} prov_slot={}] hit={}/{} forb={} => {}",
+            "  [S2:{}:{}] void={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} recall_ms={:.2} probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={} prov_slot={}] ctx_hit={}/{} hit={}/{} forb={} => {}",
             idx + 1,
             slot,
             recall.void_state,
@@ -1615,20 +1838,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             recall.top2_fact_score,
             recall.guard_conflict_margin,
             top_fact_preview,
+            recall_ms,
             tlm.global_top1_anchor.unwrap_or(0),
             tlm.global_top1_score,
             tlm.local_top1_anchor.unwrap_or(0),
             tlm.local_top1_score,
             tlm.channel_disagreement,
             tlm.provenance.dominant_slot,
+            ctx_exp,
+            expected.len(),
             p_exp,
             expected.len(),
             p_forb,
             text
         );
     }
+    let mean_recall_ms = step2_recall_ms_sum / (eval_items.len().max(1) as f64);
+    let decode_tps = if step2_decode_secs > 1e-6 {
+        step2_decode_tokens as f64 / step2_decode_secs
+    } else {
+        0.0
+    };
     println!(
-        "Step 2 Dynamic Corpus Summary: expect_hit={:.1}% ({}/{}) forbid_hit={:.1}% ({}/{})",
+        "Step 2 Dynamic Corpus Summary: recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit={:.1}% ({}/{}) | forbid_hit={:.1}% ({}/{}) | compile={:.1}ms mean_recall={:.2}ms decode={:.2} tok/s",
+        if step2_exp_total == 0 {
+            0.0
+        } else {
+            step2_ctx_hits as f32 / step2_exp_total as f32 * 100.0
+        },
+        step2_ctx_hits,
+        step2_exp_total,
         if step2_exp_total == 0 {
             0.0
         } else {
@@ -1643,6 +1882,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         step2_forb_hits,
         step2_forb_total,
+        compile_ms,
+        mean_recall_ms,
+        decode_tps,
     );
 
     // Step 3: Repository-Contained .gcso Persistence, Zero-Forward Seek & Cross-Model Re-Bake

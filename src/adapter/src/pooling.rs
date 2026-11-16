@@ -248,6 +248,139 @@ pub struct TokenSequenceEntry {
     pub per_layer_token_qs: Vec<Vec<f32>>,
 }
 
+/// Startup base-model attractor profile distilled from unsteered baseline generations/prompts.
+///
+/// Captures the host model's own background linguistic gravity (layer-wise mean direction, global
+/// and token-level common-mode framing subspaces, and online cosine-clustered sub-basins) so
+/// external knowledge compilation can orthogonalize against the model's default priors.
+#[derive(Debug, Clone)]
+pub struct ModelBaseAttractorProfile {
+    /// Mean unsteered Q direction per transformer layer.
+    pub novelty_reference_per_layer: Vec<Vec<f32>>,
+    /// Orthonormal global framing/prior directions extracted from unsteered model sequences.
+    pub pooled_common_mode_basis: Vec<Vec<f32>>,
+    /// Orthonormal token-level framing/sink directions extracted from unsteered model tokens.
+    pub token_common_mode_basis: Vec<Vec<f32>>,
+    /// Distinct regime sub-attractors (`[cluster_k][steered_dim]`) partitioned from the base model.
+    pub sub_attractors: Vec<Vec<f32>>,
+    /// Number of unsteered startup sequences processed to construct this profile.
+    pub sample_count: usize,
+}
+
+impl ModelBaseAttractorProfile {
+    /// Extracts a [`ModelBaseAttractorProfile`] from unsteered startup sequences via two-pass
+    /// pooling, PCA common-mode fitting, and cosine-threshold online sub-basin partitioning.
+    ///
+    /// # Errors
+    /// Returns an error if `samples` is empty or any sample's tensor shape disagrees with `adapter`.
+    pub fn extract(
+        adapter: &ModelSteeringAdapter,
+        samples: &[TokenSequenceEntry],
+        pooler: SequenceActivationPooler,
+        merge_cosine_thresh: f32,
+    ) -> Result<Self, String> {
+        if samples.is_empty() {
+            return Err("cannot extract ModelBaseAttractorProfile from empty samples".to_string());
+        }
+        let geom = adapter.geometry();
+        let num_layers = geom.num_layers;
+        let dim = geom.q_rot_len();
+        let n = samples.len() as f32;
+
+        let mut novelty_reference_per_layer = vec![vec![0.0_f32; dim]; num_layers];
+        for s in samples {
+            if s.per_layer_token_qs.len() != num_layers {
+                return Err(format!(
+                    "sample layer count mismatch: expected {num_layers}, got {}",
+                    s.per_layer_token_qs.len()
+                ));
+            }
+            for (l, flat) in s.per_layer_token_qs.iter().enumerate() {
+                let u = SequenceActivationPooler::uniform_unit_mean(flat, s.seq_len, dim)?;
+                for (dst, &src) in novelty_reference_per_layer[l].iter_mut().zip(u.iter()) {
+                    *dst += src / n;
+                }
+            }
+        }
+
+        let ref_slices: Vec<&[f32]> = novelty_reference_per_layer
+            .iter()
+            .map(Vec::as_slice)
+            .collect();
+        let mut pooled_sigs: Vec<Vec<f32>> = Vec::with_capacity(samples.len());
+        let mut raw_tok_sigs: Vec<Vec<Vec<f32>>> = Vec::with_capacity(samples.len());
+        for s in samples {
+            let pooled = pooler.pool_sequence(
+                &s.per_layer_token_qs,
+                s.seq_len,
+                dim,
+                Some(&novelty_reference_per_layer),
+            )?;
+            let p_refs: Vec<&[f32]> = pooled.iter().map(Vec::as_slice).collect();
+            pooled_sigs.push(TextAttractorCorpus::build_steered_residual_sig(
+                geom,
+                &p_refs,
+                &ref_slices,
+            ));
+            raw_tok_sigs.push(CompiledTokenCorpus::build_raw_token_sigs_for_entry(
+                adapter,
+                &s.per_layer_token_qs,
+                s.seq_len,
+                &novelty_reference_per_layer,
+            )?);
+        }
+
+        let pooled_common_mode_basis =
+            TextAttractorCorpus::fit_common_mode_subspace_from_sigs(&pooled_sigs, 3);
+        let token_common_mode_basis =
+            CompiledTokenCorpus::fit_cross_entry_token_common_mode(&raw_tok_sigs, 6);
+
+        // Partition the base model's unsteered responses into coherent regime sub-attractors.
+        let thresh = merge_cosine_thresh.clamp(0.10, 0.99);
+        let mut sub_attractors: Vec<Vec<f32>> = Vec::new();
+        let mut cluster_counts: Vec<usize> = Vec::new();
+        for sig in &pooled_sigs {
+            let norm: f32 = sig.iter().map(|&v| v * v).sum::<f32>().sqrt();
+            if norm <= 1e-6 {
+                continue;
+            }
+            let best = sub_attractors
+                .iter()
+                .enumerate()
+                .map(|(idx, c)| (idx, TextAttractorCorpus::cosine_f32(sig, c)))
+                .max_by(|a, b| a.1.total_cmp(&b.1));
+            match best {
+                Some((best_idx, sim)) if sim >= thresh => {
+                    let count = cluster_counts[best_idx] as f32;
+                    let lr = 1.0 / (count + 1.0);
+                    let mut sum_sq = 0.0_f64;
+                    for (dst, &src) in sub_attractors[best_idx].iter_mut().zip(sig.iter()) {
+                        *dst = (1.0 - lr) * *dst + lr * src;
+                        sum_sq += f64::from(*dst) * f64::from(*dst);
+                    }
+                    let inv = (1.0 / sum_sq.sqrt().max(1e-12)) as f32;
+                    for v in &mut sub_attractors[best_idx] {
+                        *v *= inv;
+                    }
+                    cluster_counts[best_idx] += 1;
+                }
+                _ => {
+                    sub_attractors.push(sig.clone());
+                    cluster_counts.push(1);
+                }
+            }
+        }
+
+        Ok(Self {
+            novelty_reference_per_layer,
+            pooled_common_mode_basis,
+            token_common_mode_basis,
+            sub_attractors,
+            sample_count: samples.len(),
+        })
+    }
+}
+
 /// Self-contained Cold-Path corpus compiled from raw multi-token Q activations via two-pass
 /// unsupervised centroid estimation + SIF novelty pooling + salient token point clouds.
 #[derive(Debug, Clone)]
@@ -468,6 +601,46 @@ impl CompiledTokenCorpus {
         }
         Ok(out)
     }
+    fn merge_orthonormal_basis(
+        base: &[Vec<f32>],
+        extra: &[Vec<f32>],
+        max_total: usize,
+    ) -> Vec<Vec<f32>> {
+        let mut out = base.to_vec();
+        let Some(expected_dim) = out.first().or_else(|| extra.first()).map(Vec::len) else {
+            return out;
+        };
+        for dir in extra {
+            if out.len() >= max_total {
+                break;
+            }
+            if dir.len() != expected_dim {
+                continue;
+            }
+            let mut orth = dir.clone();
+            for existing in &out {
+                let dot: f64 = orth
+                    .iter()
+                    .zip(existing.iter())
+                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                    .sum();
+                let d = dot as f32;
+                for (dst, &c) in orth.iter_mut().zip(existing.iter()) {
+                    *dst -= d * c;
+                }
+            }
+            let norm_sq: f64 = orth.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+            if norm_sq >= 0.25 {
+                let inv = (1.0 / norm_sq.sqrt()) as f32;
+                for v in &mut orth {
+                    *v *= inv;
+                }
+                out.push(orth);
+            }
+        }
+        out
+    }
+
     /// Compiles a list of raw token-sequence captures into a calibrated [`CompiledTokenCorpus`].
     ///
     /// Pass 1 computes an unsupervised uniform-mean centroid across all entries to serve as a
@@ -484,6 +657,23 @@ impl CompiledTokenCorpus {
         top_k_facts: usize,
         top_k_personas: usize,
     ) -> Result<Self, String> {
+        Self::compile_with_base_prior(adapter, entries, pooler, top_k_facts, top_k_personas, None)
+    }
+
+    /// Compiles raw token-sequence captures while optionally incorporating a pre-rendered
+    /// [`ModelBaseAttractorProfile`] so the host LLM's background framing and default gravity
+    /// directions are orthogonalized before calibrating recall boundaries.
+    ///
+    /// # Errors
+    /// Returns an error if `entries` is empty or any layer tensor shape disagrees with `adapter`.
+    pub fn compile_with_base_prior(
+        adapter: &ModelSteeringAdapter,
+        entries: &[TokenSequenceEntry],
+        pooler: SequenceActivationPooler,
+        top_k_facts: usize,
+        top_k_personas: usize,
+        base_prior: Option<&ModelBaseAttractorProfile>,
+    ) -> Result<Self, String> {
         if entries.is_empty() {
             return Err("cannot compile an empty TokenSequenceEntry slice".to_string());
         }
@@ -491,7 +681,8 @@ impl CompiledTokenCorpus {
         let dim = adapter.geometry().q_rot_len();
         let n = entries.len() as f32;
 
-        // Pass 1: unsupervised uniform centroid over unit-normalized token vectors.
+        // Pass 1: unsupervised uniform centroid over unit-normalized token vectors, optionally
+        // blended with the startup base-model reference when available.
         let mut novelty_reference_per_layer = vec![vec![0.0_f32; dim]; num_layers];
         for entry in entries {
             if entry.per_layer_token_qs.len() != num_layers {
@@ -504,6 +695,20 @@ impl CompiledTokenCorpus {
                 let u = SequenceActivationPooler::uniform_unit_mean(flat, entry.seq_len, dim)?;
                 for (dst, &src) in novelty_reference_per_layer[l].iter_mut().zip(u.iter()) {
                     *dst += src / n;
+                }
+            }
+        }
+        if let Some(prior) = base_prior {
+            if prior.novelty_reference_per_layer.len() == num_layers {
+                for (dst_layer, prior_layer) in novelty_reference_per_layer
+                    .iter_mut()
+                    .zip(prior.novelty_reference_per_layer.iter())
+                {
+                    if dst_layer.len() == prior_layer.len() {
+                        for (dst, &src) in dst_layer.iter_mut().zip(prior_layer.iter()) {
+                            *dst = 0.70 * *dst + 0.30 * src;
+                        }
+                    }
                 }
             }
         }
@@ -543,6 +748,9 @@ impl CompiledTokenCorpus {
             )?;
         }
         corpus.fit_common_mode_projection();
+        if let Some(prior) = base_prior {
+            corpus.extend_common_mode_basis(&prior.pooled_common_mode_basis, 5);
+        }
         let recall_policy = corpus.calibrate_recall_policy(top_k_facts, top_k_personas);
 
         // Estimate unsupervised token-space common mode across entries (distinct from pooled
@@ -556,8 +764,12 @@ impl CompiledTokenCorpus {
                 &novelty_reference_per_layer,
             )?);
         }
-        let token_common_mode_basis =
-            Self::fit_cross_entry_token_common_mode(&per_entry_raw_toks, 10);
+        let corpus_tok_basis = Self::fit_cross_entry_token_common_mode(&per_entry_raw_toks, 10);
+        let token_common_mode_basis = if let Some(prior) = base_prior {
+            Self::merge_orthonormal_basis(&corpus_tok_basis, &prior.token_common_mode_basis, 12)
+        } else {
+            corpus_tok_basis
+        };
 
         let mut entry_token_sigs: Vec<Vec<Vec<f32>>> = Vec::with_capacity(entries.len());
         for entry in entries {
@@ -1223,6 +1435,128 @@ mod tests {
         assert!(
             recalled_ids.contains(&3) && recalled_ids.contains(&4),
             "expected Alpha(#3) and Beta(#4), got {recalled_ids:?}"
+        );
+    }
+
+    #[test]
+    fn model_base_attractor_profile_partitions_sub_basins_and_orthogonalizes_corpus_prior() {
+        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let geom = adapter.geometry();
+        let dim = geom.q_rot_len();
+        let num_layers = geom.num_layers;
+
+        let make_seq = |tok_specs: &[(usize, f32)]| -> Vec<Vec<f32>> {
+            let s = tok_specs.len();
+            let mut per_layer = vec![vec![0.0_f32; s * dim]; num_layers];
+            for layer_buf in &mut per_layer {
+                for (t, &(d_idx, framing_strength)) in tok_specs.iter().enumerate() {
+                    layer_buf[t * dim] = framing_strength;
+                    let pos = d_idx % dim;
+                    layer_buf[t * dim + pos] = 1.0;
+                }
+            }
+            per_layer
+        };
+
+        // Six baseline unsteered samples spanning two distinct model regimes (`20` and `60`)
+        // plus shared model framing along dimension `0`.
+        let base_samples = vec![
+            TokenSequenceEntry {
+                role: AttractorRole::Persona,
+                text: "Base regime A sample 1".to_string(),
+                energy: 1.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq(&[(20, 0.85), (21, 0.70)]),
+            },
+            TokenSequenceEntry {
+                role: AttractorRole::Persona,
+                text: "Base regime A sample 2".to_string(),
+                energy: 1.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq(&[(20, 0.80), (21, 0.65)]),
+            },
+            TokenSequenceEntry {
+                role: AttractorRole::Persona,
+                text: "Base regime A sample 3".to_string(),
+                energy: 1.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq(&[(20, 0.90), (21, 0.75)]),
+            },
+            TokenSequenceEntry {
+                role: AttractorRole::Persona,
+                text: "Base regime B sample 1".to_string(),
+                energy: 1.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq(&[(60, 0.85), (61, 0.70)]),
+            },
+            TokenSequenceEntry {
+                role: AttractorRole::Persona,
+                text: "Base regime B sample 2".to_string(),
+                energy: 1.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq(&[(60, 0.80), (61, 0.65)]),
+            },
+            TokenSequenceEntry {
+                role: AttractorRole::Persona,
+                text: "Base regime B sample 3".to_string(),
+                energy: 1.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq(&[(60, 0.90), (61, 0.75)]),
+            },
+        ];
+
+        let prior = ModelBaseAttractorProfile::extract(
+            &adapter,
+            &base_samples,
+            SequenceActivationPooler::default(),
+            0.50,
+        )
+        .expect("extract prior");
+        assert_eq!(prior.sample_count, 6);
+        assert_eq!(
+            prior.sub_attractors.len(),
+            2,
+            "expected two distinct base sub-attractors, got {}",
+            prior.sub_attractors.len()
+        );
+        assert!(
+            !prior.pooled_common_mode_basis.is_empty(),
+            "expected at least one global base-model framing component"
+        );
+
+        // Compile external facts with the base-model prior and verify recall selects target #2.
+        let facts = vec![
+            TokenSequenceEntry {
+                role: AttractorRole::Fact,
+                text: "Fact Alpha".to_string(),
+                energy: 2.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq(&[(30, 0.85), (31, 0.65)]),
+            },
+            TokenSequenceEntry {
+                role: AttractorRole::Fact,
+                text: "Fact Beta".to_string(),
+                energy: 2.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq(&[(80, 0.85), (81, 0.65)]),
+            },
+        ];
+        let compiled = CompiledTokenCorpus::compile_with_base_prior(
+            &adapter,
+            &facts,
+            SequenceActivationPooler::default(),
+            2,
+            1,
+            Some(&prior),
+        )
+        .expect("compile with base prior");
+        let query = make_seq(&[(80, 0.90), (81, 0.75)]);
+        let recall = compiled
+            .recall_token_sequence(&adapter, &query, 2)
+            .expect("recall with base prior");
+        assert_eq!(
+            recall.recalled_facts.first().map(|(e, _)| e.anchor_id),
+            Some(2)
         );
     }
 }
