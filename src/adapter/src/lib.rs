@@ -34,9 +34,11 @@ use liminika_core::traits::telemetry::SwarmResolutionReport;
 use liminika_core::traits::SrlAdapter;
 
 pub mod pooling;
+pub mod reflection;
 pub mod stratum;
 
 pub use pooling::*;
+pub use reflection::*;
 pub use stratum::*;
 
 /// Memory pairing convention used by an LLM's Rotary Position Embedding (RoPE).

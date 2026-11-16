@@ -10,11 +10,12 @@ use std::time::Instant;
 use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor, D};
 use candle_nn::{linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 use liminika_adapter::{
-    AdaptiveGopCutDetector, AttractorContainerCodec, AttractorRole, CompiledTokenCorpus,
-    FrameTransitionMetrics, GcsoDualTrackTimeline, ModelBaseAttractorProfile, ModelSteeringAdapter,
-    RebakeContext, RopeGeometry, RopeLayout, SequenceActivationPooler, SourceTextRecord,
-    SubtitleActivationEncoder, TimelineResumeOutcome, TimelineStepContext, TokenSequenceEntry,
-    VoidBoundaryState,
+    AdaptiveGopCutDetector, AttractorContainerCodec, AttractorRole, AttractorTrajectoryEvaluator,
+    CompiledTokenCorpus, FrameTransitionMetrics, GcsoDualTrackTimeline,
+    ManifoldReflectionEvaluator, ModelBaseAttractorProfile, ModelSteeringAdapter, RebakeContext,
+    ReflectionCritique, ReflectionPolicy, ReflectionSelection, RopeGeometry, RopeLayout,
+    SequenceActivationPooler, SourceTextRecord, SubtitleActivationEncoder, TimelineResumeOutcome,
+    TimelineStepContext, TokenSequenceEntry, TrajectoryManifoldSnapshot, VoidBoundaryState,
 };
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::action_hub::ActionHubEngine;
@@ -34,6 +35,7 @@ type LayerResonantSlices<'a> = (
 
 type ForwardTokensOutput = (Vec<f32>, Vec<Vec<f32>>, Vec<f32>);
 
+#[derive(Clone, Copy)]
 struct ResonantAnchors<'a> {
     facts: &'a [Vec<ObjectiveFact<[i8; 64]>>],
     personas: &'a [Vec<SubjectivePersona<[i8; 64]>>],
@@ -1140,6 +1142,96 @@ fn out_push_q7(
     Ok(())
 }
 
+struct SteerDecodeConfig<'a> {
+    q7s: Option<&'a [Vec<gcso_q7_t>]>,
+    persona_q7s: Option<&'a [Vec<gcso_q7_t>]>,
+    resonant_ctx: Option<ResonantAnchors<'a>>,
+    rope_rad: f32,
+    srl: Option<(&'a [f32], &'a [f32], f32)>,
+    use_steer: bool,
+}
+
+fn generate_steered_reply(
+    model: &mut Phi3Model,
+    tokenizer: &Tokenizer,
+    adapter: &mut ModelSteeringAdapter,
+    formatted_prompt: &str,
+    cfg: &SteerDecodeConfig<'_>,
+) -> Result<(String, usize, f64), Box<dyn std::error::Error>> {
+    model.clear_cache();
+    adapter.reset_action_hub_stats();
+    let mut trail = gcso_pointer_trail_t::default();
+    let ids = tokenizer
+        .encode(formatted_prompt, false)
+        .map_err(|e| format!("encode error: {e}"))?
+        .get_ids()
+        .to_vec();
+
+    let mut steer = ForwardSteer {
+        adapter,
+        q7s: cfg.q7s,
+        persona_q7s: cfg.persona_q7s,
+        resonant_ctx: cfg.resonant_ctx,
+        rope_rad: cfg.rope_rad,
+        trail: &mut trail,
+        srl: cfg.srl,
+    };
+    let t_dec = Instant::now();
+    let (mut logits, _, _) =
+        model.forward_tokens(&ids, 0, Some(&mut steer), cfg.use_steer, false)?;
+
+    let mut gen_ids = Vec::with_capacity(48);
+    for offset in (ids.len()..).take(48) {
+        let next = argmax(&logits);
+        if next == 199999 {
+            break;
+        }
+        gen_ids.push(next);
+        let (next_logits, _, _) =
+            model.forward_tokens(&[next], offset, Some(&mut steer), cfg.use_steer, false)?;
+        logits = next_logits;
+    }
+    let decode_secs = t_dec.elapsed().as_secs_f64();
+    let text = tokenizer
+        .decode(&gen_ids, true)
+        .map_err(|e| format!("decode error: {e}"))?
+        .replace('\n', " ");
+    Ok((text, gen_ids.len(), decode_secs))
+}
+
+fn critique_generated_draft(
+    model: &mut Phi3Model,
+    tokenizer: &Tokenizer,
+    adapter: &ModelSteeringAdapter,
+    compiled: &CompiledTokenCorpus,
+    query_snap: &TrajectoryManifoldSnapshot,
+    draft_text: &str,
+    reflection_policy: &ReflectionPolicy,
+) -> Result<Option<ReflectionCritique>, Box<dyn std::error::Error>> {
+    let trimmed = draft_text.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let draft_ids = tokenizer
+        .encode(trimmed, false)
+        .map_err(|e| format!("draft encode error: {e}"))?
+        .get_ids()
+        .to_vec();
+    if draft_ids.is_empty() {
+        return Ok(None);
+    }
+    model.clear_cache();
+    let (_, draft_tok_qs, _) = model.forward_tokens(&draft_ids, 0, None, false, true)?;
+    let draft_recall = compiled.recall_token_sequence(adapter, &draft_tok_qs, draft_ids.len())?;
+    let draft_snap = TrajectoryManifoldSnapshot::from_recall(&draft_recall);
+    Ok(Some(ManifoldReflectionEvaluator.assess_trajectory(
+        query_snap,
+        &draft_snap,
+        &compiled.recall_policy,
+        reflection_policy,
+    )))
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -1199,6 +1291,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let step2_only = std::env::args().any(|a| a == "--step2-only");
     let use_base_prior = std::env::args().any(|a| a == "--base-prior");
+    let no_reflect = std::env::args().any(|a| a == "--no-reflect");
     let t_bake = Instant::now();
     let baked = bake_via_adapter(&mut model, &tokenizer, &adapter, cfg.hidden_size, &suite)?;
     println!(
@@ -1663,6 +1756,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut step2_recall_ms_sum = 0.0_f64;
     let mut step2_decode_tokens = 0_usize;
     let mut step2_decode_secs = 0.0_f64;
+    let reflection_policy = if no_reflect {
+        ReflectionPolicy {
+            max_retries: 0,
+            ..ReflectionPolicy::default()
+        }
+    } else {
+        ReflectionPolicy::default()
+    };
+    let mut reflect_triggers = 0_usize;
+    let mut reflect_adopted = 0_usize;
     let mut eval_items: Vec<(String, String, Vec<String>, Vec<String>)> = suite.probes.clone();
     eval_items.push((
         "CVOID".to_string(),
@@ -1738,8 +1841,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect::<Vec<_>>()
             .join(" ");
 
-        let active_prompt = if matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace)
-            || recall.guard_conflict_margin > 0.05
+        let dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
+        let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);
+        let query_snap = TrajectoryManifoldSnapshot::from_recall(&recall);
+        let top_fact_preview = if recall.recalled_facts.is_empty() {
+            "none".to_string()
+        } else {
+            recall
+                .recalled_facts
+                .iter()
+                .map(|(e, _)| format!("#{}", e.anchor_id))
+                .collect::<Vec<_>>()
+                .join("+")
+        };
+        let tlm = recall.telemetry;
+        let query_void_state = recall.void_state;
+        let query_action_decision = recall.action_decision;
+        let query_top1 = recall.top1_fact_score;
+        let query_top2 = recall.top2_fact_score;
+        let query_guard_m = recall.guard_conflict_margin;
+
+        let active_prompt = if matches!(query_void_state, VoidBoundaryState::CvoidEmptySpace)
+            || query_guard_m > 0.05
             || recalled_ctx.is_empty()
         {
             format_phi4_prompt(prompt)
@@ -1747,18 +1870,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             format_phi4_prompt(&format!("[Context: {recalled_ctx}]\n{prompt}"))
         };
 
-        model.clear_cache();
-        adapter.reset_action_hub_stats();
-        let mut trail = gcso_pointer_trail_t::default();
-        let ids = tokenizer
-            .encode(active_prompt.as_str(), false)
-            .map_err(|e| format!("encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-
-        let dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
-        let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);
-        let use_steer = !matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace)
+        let use_steer = !matches!(query_void_state, VoidBoundaryState::CvoidEmptySpace)
             && !dyn_facts.is_empty();
         let res_ctx = if use_steer {
             Some(ResonantAnchors {
@@ -1778,36 +1890,135 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             None
         };
 
-        let mut steer = ForwardSteer {
-            adapter: &mut adapter,
+        let pass1_cfg = SteerDecodeConfig {
             q7s: Some(baked.fact_q7.as_slice()),
             persona_q7s: Some(baked.persona_q7.as_slice()),
             resonant_ctx: res_ctx,
             rope_rad,
-            trail: &mut trail,
             srl: srl_arg,
+            use_steer,
         };
-        let t_dec = Instant::now();
-        let (mut logits, _, _) =
-            model.forward_tokens(&ids, 0, Some(&mut steer), use_steer, false)?;
+        let (mut text, p1_tokens, p1_secs) = generate_steered_reply(
+            &mut model,
+            &tokenizer,
+            &mut adapter,
+            active_prompt.as_str(),
+            &pass1_cfg,
+        )?;
+        step2_decode_tokens += p1_tokens;
+        step2_decode_secs += p1_secs;
 
-        let mut gen_ids = Vec::with_capacity(48);
-        for offset in (ids.len()..).take(48) {
-            let next = argmax(&logits);
-            if next == 199999 {
-                break;
+        let mut reflect_note = if no_reflect {
+            "off".to_string()
+        } else {
+            "skip".to_string()
+        };
+        if !no_reflect && reflection_policy.max_retries > 0 {
+            if let Some(pass1_crit) = critique_generated_draft(
+                &mut model,
+                &tokenizer,
+                &adapter,
+                &compiled,
+                &query_snap,
+                &text,
+                &reflection_policy,
+            )? {
+                if pass1_crit.directive.rethink_recommended {
+                    reflect_triggers += 1;
+                    let cue = pass1_crit.corrective_instruction(&text).unwrap_or_default();
+                    let retry_prompt = if pass1_crit.directive.suppress_injection
+                        || recalled_ctx.is_empty()
+                    {
+                        format_phi4_prompt(&format!("{cue}\n{prompt}"))
+                    } else {
+                        format_phi4_prompt(&format!("[Context: {recalled_ctx}]\n{cue}\n{prompt}"))
+                    };
+                    let retry_use_steer = !pass1_crit.directive.suppress_injection
+                        && (!dyn_facts.is_empty() || pass1_crit.directive.inject_guard_repulsion);
+                    let retry_res = if retry_use_steer {
+                        Some(ResonantAnchors {
+                            facts: dyn_facts.as_slice(),
+                            personas: dyn_personas.as_slice(),
+                            guards: baked.guard_anchors_per_layer.as_slice(),
+                            negs: baked.neg_sum.as_slice(),
+                            poss: baked.pos_sum.as_slice(),
+                        })
+                    } else {
+                        None
+                    };
+                    let retry_rope = if retry_use_steer {
+                        pass1_cfg.rope_rad + pass1_crit.directive.rope_rad_delta
+                    } else {
+                        0.0
+                    };
+                    let retry_srl = if retry_use_steer {
+                        Some((
+                            baked.srl_u.as_slice(),
+                            baked.srl_v.as_slice(),
+                            -1.00 + pass1_crit.directive.srl_scale_delta,
+                        ))
+                    } else {
+                        None
+                    };
+                    let retry_cfg = SteerDecodeConfig {
+                        q7s: Some(baked.fact_q7.as_slice()),
+                        persona_q7s: Some(baked.persona_q7.as_slice()),
+                        resonant_ctx: retry_res,
+                        rope_rad: retry_rope,
+                        srl: retry_srl,
+                        use_steer: retry_use_steer,
+                    };
+                    let (p2_text, p2_tokens, p2_secs) = generate_steered_reply(
+                        &mut model,
+                        &tokenizer,
+                        &mut adapter,
+                        retry_prompt.as_str(),
+                        &retry_cfg,
+                    )?;
+                    step2_decode_tokens += p2_tokens;
+                    step2_decode_secs += p2_secs;
+                    if let Some(pass2_crit) = critique_generated_draft(
+                        &mut model,
+                        &tokenizer,
+                        &adapter,
+                        &compiled,
+                        &query_snap,
+                        &p2_text,
+                        &reflection_policy,
+                    )? {
+                        let pick = ManifoldReflectionEvaluator.select_better_pass(
+                            &reflection_policy,
+                            &pass1_crit,
+                            &pass2_crit,
+                        );
+                        if matches!(pick, ReflectionSelection::Pass2) {
+                            reflect_adopted += 1;
+                            text = p2_text;
+                            reflect_note = format!(
+                                "{:?}->{:?}(P2,{:+.2}->{:+.2})",
+                                pass1_crit.trigger,
+                                pass2_crit.trigger,
+                                pass1_crit.alignment_score,
+                                pass2_crit.alignment_score
+                            );
+                        } else {
+                            reflect_note = format!(
+                                "{:?}->{:?}(P1,{:+.2}->{:+.2})",
+                                pass1_crit.trigger,
+                                pass2_crit.trigger,
+                                pass1_crit.alignment_score,
+                                pass2_crit.alignment_score
+                            );
+                        }
+                    } else {
+                        reflect_note = format!("{:?}(P1)", pass1_crit.trigger);
+                    }
+                } else {
+                    reflect_note = format!("{:?}(0)", pass1_crit.trigger);
+                }
             }
-            gen_ids.push(next);
-            let (next_logits, _, _) =
-                model.forward_tokens(&[next], offset, Some(&mut steer), use_steer, false)?;
-            logits = next_logits;
         }
-        step2_decode_tokens += gen_ids.len();
-        step2_decode_secs += t_dec.elapsed().as_secs_f64();
-        let text = tokenizer
-            .decode(&gen_ids, true)
-            .map_err(|e| format!("decode error: {e}"))?
-            .replace('\n', " ");
+
         let lower = text.to_lowercase();
         let ctx_lower = recalled_ctx.to_lowercase();
         let ctx_exp = expected
@@ -1829,28 +2040,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             step2_forb_hits += p_forb;
             step2_forb_total += forbidden.len();
         }
-        let top_fact_preview = if recall.recalled_facts.is_empty() {
-            "none".to_string()
-        } else {
-            recall
-                .recalled_facts
-                .iter()
-                .map(|(e, _)| format!("#{}", e.anchor_id))
-                .collect::<Vec<_>>()
-                .join("+")
-        };
-        let tlm = &recall.telemetry;
         println!(
-            "  [S2:{}:{}] void={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} recall_ms={:.2} probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={} prov_slot={}] ctx_hit={}/{} hit={}/{} forb={} => {}",
+            "  [S2:{}:{}] void={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} recall_ms={:.2} reflect={} probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={} prov_slot={}] ctx_hit={}/{} hit={}/{} forb={} => {}",
             idx + 1,
             slot,
-            recall.void_state,
-            recall.action_decision,
-            recall.top1_fact_score,
-            recall.top2_fact_score,
-            recall.guard_conflict_margin,
+            query_void_state,
+            query_action_decision,
+            query_top1,
+            query_top2,
+            query_guard_m,
             top_fact_preview,
             recall_ms,
+            reflect_note,
             tlm.global_top1_anchor.unwrap_or(0),
             tlm.global_top1_score,
             tlm.local_top1_anchor.unwrap_or(0),
@@ -1872,7 +2073,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         0.0
     };
     println!(
-        "Step 2 Dynamic Corpus Summary: recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit={:.1}% ({}/{}) | forbid_hit={:.1}% ({}/{}) | compile={:.1}ms mean_recall={:.2}ms decode={:.2} tok/s",
+        "Step 2 Dynamic Corpus Summary: recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit={:.1}% ({}/{}) | forbid_hit={:.1}% ({}/{}) | reflect=({}/{}) | compile={:.1}ms mean_recall={:.2}ms decode={:.2} tok/s",
         if step2_exp_total == 0 {
             0.0
         } else {
@@ -1894,6 +2095,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         step2_forb_hits,
         step2_forb_total,
+        reflect_adopted,
+        reflect_triggers,
         compile_ms,
         mean_recall_ms,
         decode_tps,
