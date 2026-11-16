@@ -1289,403 +1289,420 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vram_before.as_deref(),
     );
 
-    let step2_only = std::env::args().any(|a| a == "--step2-only");
+    let recall_only = std::env::args().any(|a| a == "--recall-only");
+    let step2_only = std::env::args().any(|a| a == "--step2-only") || recall_only;
     let use_base_prior = std::env::args().any(|a| a == "--base-prior");
     let no_reflect = std::env::args().any(|a| a == "--no-reflect");
-    let t_bake = Instant::now();
-    let baked = bake_via_adapter(&mut model, &tokenizer, &adapter, cfg.hidden_size, &suite)?;
-    println!(
-        "Baked {} x {} Q7 phase deltas + {}-dim SRL vectors via ModelSteeringAdapter in {:.2?}.",
-        baked.per_layer_q7.len(),
-        adapter.geometry().num_q_heads,
-        cfg.hidden_size,
-        t_bake.elapsed(),
-    );
-
-    let mut target_toks: Vec<Option<u32>> = Vec::with_capacity(suite.probes.len());
-    for (_, _, expected, _) in &suite.probes {
-        let tok = expected.first().and_then(|kw| {
-            tokenizer
-                .encode(kw.as_str(), false)
-                .ok()
-                .and_then(|enc| enc.get_ids().first().copied())
-        });
-        target_toks.push(tok);
-    }
-
-    let mut baselines: Vec<Vec<f32>> = Vec::with_capacity(suite.probes.len());
-    let mut base_entropies: Vec<f32> = Vec::with_capacity(suite.probes.len());
-    for (_, prompt, _, _) in &suite.probes {
-        model.clear_cache();
-        let formatted = format_phi4_prompt(prompt);
-        let ids = tokenizer
-            .encode(formatted.as_str(), false)
-            .map_err(|e| format!("encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let (logits, _, _) = model.forward_tokens(&ids, 0, None, false, false)?;
-        let h_t = adapter.measure_edbc_entropy(&logits)?.moving_z_entropy;
-        base_entropies.push(h_t);
-        baselines.push(logits);
-    }
-
-    adapter.set_layer_rope_mask(0xFFFF_0000);
-    let pos_slices: Vec<&[f32]> = baked.pos_sum.iter().map(Vec::as_slice).collect();
-    let neg_slices: Vec<&[f32]> = baked.neg_sum.iter().map(Vec::as_slice).collect();
-    let probe_res = adapter.calibrate_manifold_probe(&pos_slices, &neg_slices, &base_entropies)?;
-    println!(
-        "[EnvProbe epoch={}] heads={} steered_layers={} coh={:.3} H0={:.3} => dyn_gain={:.3} skip_H={:.3} srl_rho={:.3}",
-        probe_res.probe_epoch,
-        probe_res.active_heads,
-        probe_res.steered_layers,
-        probe_res.baseline_inter_layer_coherence,
-        probe_res.baseline_entropy,
-        adapter.action_hub().thresholds.reinforcement_gain,
-        adapter.action_hub().thresholds.inertial_skip_entropy_thresh,
-        adapter.action_hub().thresholds.srl_inject_density_thresh,
-    );
-
-    if !step2_only {
-        // Compare manual max_rad vs Gateway structural hyperparameters vs Resonant slice vs ActionHub.
-        // tuple: (label, layer_mask, rope_rad, srl_scale, use_two_origin, use_resonant_slice)
-        let configs: [(&str, u64, f32, f32, bool, bool); 6] = [
-            ("Baseline", 0xFFFF_FFFF, 0.00, 0.00, false, false),
-            ("RoPE (Top16, 0.10)", 0xFFFF_0000, 0.10, 0.00, false, false),
-            ("Top16 + GW(Fact)", 0xFFFF_0000, -1.00, 0.00, false, false),
-            (
-                "Top16 + GW(Fact+SRL)",
-                0xFFFF_0000,
-                -1.00,
-                -1.00,
-                false,
-                false,
-            ),
-            (
-                "Top16 + GW(Resonant)",
-                0xFFFF_0000,
-                -1.00,
-                -1.00,
-                false,
-                true,
-            ),
-            ("Top16 + ActionHub", 0xFFFF_0000, -2.00, -1.00, false, true),
-        ];
-
+    let baked_opt: Option<BakedModelProfile> = if !recall_only {
+        let t_bake = Instant::now();
+        let baked = bake_via_adapter(&mut model, &tokenizer, &adapter, cfg.hidden_size, &suite)?;
         println!(
-            "\n{:>20} | {:>10} | {:>12} | {:>11} | {:>11}",
-            "mode", "mean_KL", "d_logprob", "expect_hit", "forbid_hit"
+            "Baked {} x {} Q7 phase deltas + {}-dim SRL vectors via ModelSteeringAdapter in {:.2?}.",
+            baked.per_layer_q7.len(),
+            adapter.geometry().num_q_heads,
+            cfg.hidden_size,
+            t_bake.elapsed(),
         );
 
-        for (label, layer_mask, rope_rad, srl_scale, use_two_origin, use_resonant) in configs {
-            adapter.set_layer_rope_mask(layer_mask);
-            adapter.reset_action_hub_stats();
-            let use_edbc = rope_rad <= -1.5;
-            let mut sum_kl = 0.0_f32;
-            let mut sum_d_lp = 0.0_f32;
-            let mut d_lp_count = 0_usize;
-            let mut exp_hits = 0_usize;
-            let mut exp_total = 0_usize;
-            let mut forb_hits = 0_usize;
-            let mut forb_total = 0_usize;
-            let mut p1_sample = String::new();
-            let mut probe_traces: Vec<ProbeTrace> = Vec::new();
+        let mut target_toks: Vec<Option<u32>> = Vec::with_capacity(suite.probes.len());
+        for (_, _, expected, _) in &suite.probes {
+            let tok = expected.first().and_then(|kw| {
+                tokenizer
+                    .encode(kw.as_str(), false)
+                    .ok()
+                    .and_then(|enc| enc.get_ids().first().copied())
+            });
+            target_toks.push(tok);
+        }
 
-            for (p_idx, ((slot, prompt, expected, forbidden), base_logits)) in
-                suite.probes.iter().zip(baselines.iter()).enumerate()
-            {
-                model.clear_cache();
-                let counts_before = *adapter.action_hub_decision_counts();
-                let formatted = format_phi4_prompt(prompt);
-                let ids = tokenizer
-                    .encode(formatted.as_str(), false)
-                    .map_err(|e| format!("encode error: {e}"))?
-                    .get_ids()
-                    .to_vec();
-                let mut trail = gcso_pointer_trail_t::default();
-                let q7_primary = if use_two_origin {
-                    baked.fact_q7.as_slice()
-                } else {
-                    baked.per_layer_q7.as_slice()
-                };
-                let q7_persona = if use_two_origin {
-                    Some(baked.persona_q7.as_slice())
-                } else {
-                    None
-                };
-                let res_ctx = if use_resonant {
-                    Some(ResonantAnchors {
-                        facts: baked.fact_anchors_per_layer.as_slice(),
-                        personas: baked.persona_anchors_per_layer.as_slice(),
-                        guards: baked.guard_anchors_per_layer.as_slice(),
-                        negs: baked.neg_sum.as_slice(),
-                        poss: baked.pos_sum.as_slice(),
-                    })
-                } else {
-                    None
-                };
-                let srl_arg = if srl_scale != 0.0 {
-                    Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), srl_scale))
-                } else {
-                    None
-                };
-                let mut steer = ForwardSteer {
-                    adapter: &mut adapter,
-                    q7s: Some(q7_primary),
-                    persona_q7s: q7_persona,
-                    resonant_ctx: res_ctx,
-                    rope_rad,
-                    trail: &mut trail,
-                    srl: srl_arg,
-                };
-                let (mut logits, _, _) =
-                    model.forward_tokens(&ids, 0, Some(&mut steer), use_edbc, false)?;
-                sum_kl += kl_div(base_logits, &logits);
+        let mut baselines: Vec<Vec<f32>> = Vec::with_capacity(suite.probes.len());
+        let mut base_entropies: Vec<f32> = Vec::with_capacity(suite.probes.len());
+        for (_, prompt, _, _) in &suite.probes {
+            model.clear_cache();
+            let formatted = format_phi4_prompt(prompt);
+            let ids = tokenizer
+                .encode(formatted.as_str(), false)
+                .map_err(|e| format!("encode error: {e}"))?
+                .get_ids()
+                .to_vec();
+            let (logits, _, _) = model.forward_tokens(&ids, 0, None, false, false)?;
+            let h_t = adapter.measure_edbc_entropy(&logits)?.moving_z_entropy;
+            base_entropies.push(h_t);
+            baselines.push(logits);
+        }
 
-                let mut probe_d_lp = 0.0_f32;
-                if let Some(tok) = target_toks[p_idx] {
-                    probe_d_lp = token_logprob(&logits, tok) - token_logprob(base_logits, tok);
-                    sum_d_lp += probe_d_lp;
-                    d_lp_count += 1;
-                }
+        adapter.set_layer_rope_mask(0xFFFF_0000);
+        let pos_slices: Vec<&[f32]> = baked.pos_sum.iter().map(Vec::as_slice).collect();
+        let neg_slices: Vec<&[f32]> = baked.neg_sum.iter().map(Vec::as_slice).collect();
+        let probe_res =
+            adapter.calibrate_manifold_probe(&pos_slices, &neg_slices, &base_entropies)?;
+        println!(
+            "[EnvProbe epoch={}] heads={} steered_layers={} coh={:.3} H0={:.3} => dyn_gain={:.3} skip_H={:.3} srl_rho={:.3}",
+            probe_res.probe_epoch,
+            probe_res.active_heads,
+            probe_res.steered_layers,
+            probe_res.baseline_inter_layer_coherence,
+            probe_res.baseline_entropy,
+            adapter.action_hub().thresholds.reinforcement_gain,
+            adapter.action_hub().thresholds.inertial_skip_entropy_thresh,
+            adapter.action_hub().thresholds.srl_inject_density_thresh,
+        );
 
-                let mut gen_ids = Vec::with_capacity(48);
-                for offset in (ids.len()..).take(48) {
-                    let next = argmax(&logits);
-                    if next == 199999 {
-                        break;
-                    }
-                    gen_ids.push(next);
-                    let (next_logits, _, _) =
-                        model.forward_tokens(&[next], offset, Some(&mut steer), use_edbc, false)?;
-                    logits = next_logits;
-                }
-                let text = tokenizer
-                    .decode(&gen_ids, true)
-                    .map_err(|e| format!("decode error: {e}"))?;
-                let clean_text = text.replace('\n', " ");
-                if p_idx == 0 {
-                    p1_sample = clean_text.clone();
-                }
-                let lower = text.to_lowercase();
-                let p_exp = expected
-                    .iter()
-                    .filter(|kw| lower.contains(&kw.to_lowercase()))
-                    .count();
-                let p_forb = forbidden
-                    .iter()
-                    .filter(|kw| lower.contains(&kw.to_lowercase()))
-                    .count();
-                exp_hits += p_exp;
-                exp_total += expected.len();
-                forb_hits += p_forb;
-                forb_total += forbidden.len();
+        if !step2_only {
+            // Compare manual max_rad vs Gateway structural hyperparameters vs Resonant slice vs ActionHub.
+            // tuple: (label, layer_mask, rope_rad, srl_scale, use_two_origin, use_resonant_slice)
+            let configs: [(&str, u64, f32, f32, bool, bool); 6] = [
+                ("Baseline", 0xFFFF_FFFF, 0.00, 0.00, false, false),
+                ("RoPE (Top16, 0.10)", 0xFFFF_0000, 0.10, 0.00, false, false),
+                ("Top16 + GW(Fact)", 0xFFFF_0000, -1.00, 0.00, false, false),
+                (
+                    "Top16 + GW(Fact+SRL)",
+                    0xFFFF_0000,
+                    -1.00,
+                    -1.00,
+                    false,
+                    false,
+                ),
+                (
+                    "Top16 + GW(Resonant)",
+                    0xFFFF_0000,
+                    -1.00,
+                    -1.00,
+                    false,
+                    true,
+                ),
+                ("Top16 + ActionHub", 0xFFFF_0000, -2.00, -1.00, false, true),
+            ];
 
-                let counts_after = *adapter.action_hub_decision_counts();
-                let mut delta = [0_u64; 7];
-                for i in 0..7 {
-                    delta[i] = counts_after[i].saturating_sub(counts_before[i]);
-                }
-                probe_traces.push(ProbeTrace {
-                    slot: slot.clone(),
-                    text: clean_text,
-                    d_lp: probe_d_lp,
-                    p_exp,
-                    p_forb,
-                    delta,
-                    rho: trail.stigmergic_density,
-                    steps: trail.step_count,
-                    h_tilde: adapter.action_hub().last_entropy_h_tilde,
-                });
-            }
-
-            let n = suite.probes.len() as f32;
-            let mean_d_lp = if d_lp_count == 0 {
-                0.0
-            } else {
-                sum_d_lp / d_lp_count as f32
-            };
-            let eh = if exp_total == 0 {
-                0.0
-            } else {
-                exp_hits as f32 / exp_total as f32 * 100.0
-            };
-            let fh = if forb_total == 0 {
-                0.0
-            } else {
-                forb_hits as f32 / forb_total as f32 * 100.0
-            };
             println!(
-                "{label:>20} | {:>10.4} | {mean_d_lp:>+12.4} | {eh:>10.1}% | {fh:>10.1}%",
-                sum_kl / n
+                "\n{:>20} | {:>10} | {:>12} | {:>11} | {:>11}",
+                "mode", "mean_KL", "d_logprob", "expect_hit", "forbid_hit"
             );
-            println!("   [P1] {p1_sample}");
-            if rope_rad <= -1.5 {
-                let counts = adapter.action_hub_decision_counts();
-                let total: u64 = counts.iter().sum::<u64>().max(1);
-                println!(
-                "   [ActionHub] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% PSPM={:.1}% SRL={:.1}% Crystal={:.1}% Repulse={:.1}%",
-                total,
-                counts[0] as f64 / total as f64 * 100.0,
-                counts[1] as f64 / total as f64 * 100.0,
-                counts[2] as f64 / total as f64 * 100.0,
-                counts[3] as f64 / total as f64 * 100.0,
-                counts[4] as f64 / total as f64 * 100.0,
-                counts[5] as f64 / total as f64 * 100.0,
-                counts[6] as f64 / total as f64 * 100.0,
-            );
-            }
-            if label == "Baseline" || label == "Top16 + ActionHub" {
-                println!("   --- Per-Probe Trace ({label}) ---");
-                for (idx, tr) in probe_traces.iter().enumerate() {
-                    let d_sum: u64 = tr.delta.iter().sum::<u64>().max(1);
-                    if rope_rad <= -1.5 {
-                        println!(
-                        "   [P{}:{}] d_lp={:+.3} hit={}/forb={} rho={:.3} steps={} H={:.3} | Pas={} Skp={} Exp={} PSPM={} SRL={} Cry={} Rep={} | {}",
-                        idx + 1,
-                        tr.slot,
-                        tr.d_lp,
-                        tr.p_exp,
-                        tr.p_forb,
-                        tr.rho,
-                        tr.steps,
-                        tr.h_tilde,
-                        tr.delta[0],
-                        tr.delta[1],
-                        tr.delta[2],
-                        tr.delta[3],
-                        tr.delta[4],
-                        tr.delta[5],
-                        tr.delta[6],
-                        tr.text
-                    );
-                        let _ = d_sum;
+
+            for (label, layer_mask, rope_rad, srl_scale, use_two_origin, use_resonant) in configs {
+                adapter.set_layer_rope_mask(layer_mask);
+                adapter.reset_action_hub_stats();
+                let use_edbc = rope_rad <= -1.5;
+                let mut sum_kl = 0.0_f32;
+                let mut sum_d_lp = 0.0_f32;
+                let mut d_lp_count = 0_usize;
+                let mut exp_hits = 0_usize;
+                let mut exp_total = 0_usize;
+                let mut forb_hits = 0_usize;
+                let mut forb_total = 0_usize;
+                let mut p1_sample = String::new();
+                let mut probe_traces: Vec<ProbeTrace> = Vec::new();
+
+                for (p_idx, ((slot, prompt, expected, forbidden), base_logits)) in
+                    suite.probes.iter().zip(baselines.iter()).enumerate()
+                {
+                    model.clear_cache();
+                    let counts_before = *adapter.action_hub_decision_counts();
+                    let formatted = format_phi4_prompt(prompt);
+                    let ids = tokenizer
+                        .encode(formatted.as_str(), false)
+                        .map_err(|e| format!("encode error: {e}"))?
+                        .get_ids()
+                        .to_vec();
+                    let mut trail = gcso_pointer_trail_t::default();
+                    let q7_primary = if use_two_origin {
+                        baked.fact_q7.as_slice()
                     } else {
-                        println!(
-                            "   [P{}:{}] hit={}/forb={} | {}",
+                        baked.per_layer_q7.as_slice()
+                    };
+                    let q7_persona = if use_two_origin {
+                        Some(baked.persona_q7.as_slice())
+                    } else {
+                        None
+                    };
+                    let res_ctx = if use_resonant {
+                        Some(ResonantAnchors {
+                            facts: baked.fact_anchors_per_layer.as_slice(),
+                            personas: baked.persona_anchors_per_layer.as_slice(),
+                            guards: baked.guard_anchors_per_layer.as_slice(),
+                            negs: baked.neg_sum.as_slice(),
+                            poss: baked.pos_sum.as_slice(),
+                        })
+                    } else {
+                        None
+                    };
+                    let srl_arg = if srl_scale != 0.0 {
+                        Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), srl_scale))
+                    } else {
+                        None
+                    };
+                    let mut steer = ForwardSteer {
+                        adapter: &mut adapter,
+                        q7s: Some(q7_primary),
+                        persona_q7s: q7_persona,
+                        resonant_ctx: res_ctx,
+                        rope_rad,
+                        trail: &mut trail,
+                        srl: srl_arg,
+                    };
+                    let (mut logits, _, _) =
+                        model.forward_tokens(&ids, 0, Some(&mut steer), use_edbc, false)?;
+                    sum_kl += kl_div(base_logits, &logits);
+
+                    let mut probe_d_lp = 0.0_f32;
+                    if let Some(tok) = target_toks[p_idx] {
+                        probe_d_lp = token_logprob(&logits, tok) - token_logprob(base_logits, tok);
+                        sum_d_lp += probe_d_lp;
+                        d_lp_count += 1;
+                    }
+
+                    let mut gen_ids = Vec::with_capacity(48);
+                    for offset in (ids.len()..).take(48) {
+                        let next = argmax(&logits);
+                        if next == 199999 {
+                            break;
+                        }
+                        gen_ids.push(next);
+                        let (next_logits, _, _) = model.forward_tokens(
+                            &[next],
+                            offset,
+                            Some(&mut steer),
+                            use_edbc,
+                            false,
+                        )?;
+                        logits = next_logits;
+                    }
+                    let text = tokenizer
+                        .decode(&gen_ids, true)
+                        .map_err(|e| format!("decode error: {e}"))?;
+                    let clean_text = text.replace('\n', " ");
+                    if p_idx == 0 {
+                        p1_sample = clean_text.clone();
+                    }
+                    let lower = text.to_lowercase();
+                    let p_exp = expected
+                        .iter()
+                        .filter(|kw| lower.contains(&kw.to_lowercase()))
+                        .count();
+                    let p_forb = forbidden
+                        .iter()
+                        .filter(|kw| lower.contains(&kw.to_lowercase()))
+                        .count();
+                    exp_hits += p_exp;
+                    exp_total += expected.len();
+                    forb_hits += p_forb;
+                    forb_total += forbidden.len();
+
+                    let counts_after = *adapter.action_hub_decision_counts();
+                    let mut delta = [0_u64; 7];
+                    for i in 0..7 {
+                        delta[i] = counts_after[i].saturating_sub(counts_before[i]);
+                    }
+                    probe_traces.push(ProbeTrace {
+                        slot: slot.clone(),
+                        text: clean_text,
+                        d_lp: probe_d_lp,
+                        p_exp,
+                        p_forb,
+                        delta,
+                        rho: trail.stigmergic_density,
+                        steps: trail.step_count,
+                        h_tilde: adapter.action_hub().last_entropy_h_tilde,
+                    });
+                }
+
+                let n = suite.probes.len() as f32;
+                let mean_d_lp = if d_lp_count == 0 {
+                    0.0
+                } else {
+                    sum_d_lp / d_lp_count as f32
+                };
+                let eh = if exp_total == 0 {
+                    0.0
+                } else {
+                    exp_hits as f32 / exp_total as f32 * 100.0
+                };
+                let fh = if forb_total == 0 {
+                    0.0
+                } else {
+                    forb_hits as f32 / forb_total as f32 * 100.0
+                };
+                println!(
+                    "{label:>20} | {:>10.4} | {mean_d_lp:>+12.4} | {eh:>10.1}% | {fh:>10.1}%",
+                    sum_kl / n
+                );
+                println!("   [P1] {p1_sample}");
+                if rope_rad <= -1.5 {
+                    let counts = adapter.action_hub_decision_counts();
+                    let total: u64 = counts.iter().sum::<u64>().max(1);
+                    println!(
+                    "   [ActionHub] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% PSPM={:.1}% SRL={:.1}% Crystal={:.1}% Repulse={:.1}%",
+                    total,
+                    counts[0] as f64 / total as f64 * 100.0,
+                    counts[1] as f64 / total as f64 * 100.0,
+                    counts[2] as f64 / total as f64 * 100.0,
+                    counts[3] as f64 / total as f64 * 100.0,
+                    counts[4] as f64 / total as f64 * 100.0,
+                    counts[5] as f64 / total as f64 * 100.0,
+                    counts[6] as f64 / total as f64 * 100.0,
+                );
+                }
+                if label == "Baseline" || label == "Top16 + ActionHub" {
+                    println!("   --- Per-Probe Trace ({label}) ---");
+                    for (idx, tr) in probe_traces.iter().enumerate() {
+                        let d_sum: u64 = tr.delta.iter().sum::<u64>().max(1);
+                        if rope_rad <= -1.5 {
+                            println!(
+                            "   [P{}:{}] d_lp={:+.3} hit={}/forb={} rho={:.3} steps={} H={:.3} | Pas={} Skp={} Exp={} PSPM={} SRL={} Cry={} Rep={} | {}",
                             idx + 1,
                             tr.slot,
+                            tr.d_lp,
                             tr.p_exp,
                             tr.p_forb,
+                            tr.rho,
+                            tr.steps,
+                            tr.h_tilde,
+                            tr.delta[0],
+                            tr.delta[1],
+                            tr.delta[2],
+                            tr.delta[3],
+                            tr.delta[4],
+                            tr.delta[5],
+                            tr.delta[6],
                             tr.text
                         );
+                            let _ = d_sum;
+                        } else {
+                            println!(
+                                "   [P{}:{}] hit={}/forb={} | {}",
+                                idx + 1,
+                                tr.slot,
+                                tr.p_exp,
+                                tr.p_forb,
+                                tr.text
+                            );
+                        }
                     }
                 }
             }
-        }
 
-        // Multi-turn context switching check on a single persistent KV cache & stigmergic trail:
-        // Turn 1 (FACT) -> Turn 2 (PERSONA) -> Turn 3 (GUARD)
-        println!("\n=== Multi-Turn Context Switch Check (Persistent Trail & KV Cache) ===");
-        let turns = [
-            ("Turn1:FACT", suite.probes[0].1.as_str()),
-            ("Turn2:PERSONA", suite.probes[5].1.as_str()),
-            ("Turn3:GUARD", suite.probes[4].1.as_str()),
-        ];
-        for &(mode_label, layer_mask, rope_rad, srl_scale, use_edbc, use_resonant) in &[
-            (
-                "Baseline",
-                0xFFFF_FFFF_u64,
-                0.00_f32,
-                0.00_f32,
-                false,
-                false,
-            ),
-            (
-                "ActionHub",
-                0xFFFF_0000_u64,
-                -2.00_f32,
-                -1.00_f32,
-                true,
-                true,
-            ),
-        ] {
-            adapter.set_layer_rope_mask(layer_mask);
-            adapter.reset_action_hub_stats();
-            model.clear_cache();
-            let mut trail = gcso_pointer_trail_t::default();
-            let mut offset = 0_usize;
-            println!("-- {mode_label} --");
-            for (turn_name, prompt) in turns {
-                let counts_before = *adapter.action_hub_decision_counts();
-                let turn_text = if offset == 0 {
-                    format_phi4_prompt(prompt)
-                } else {
-                    format!("<|end|><|user|>{prompt}<|end|><|assistant|>")
-                };
-                let ids = tokenizer
-                    .encode(turn_text.as_str(), false)
-                    .map_err(|e| format!("encode error: {e}"))?
-                    .get_ids()
-                    .to_vec();
-                let q7_primary = if use_resonant {
-                    baked.fact_q7.as_slice()
-                } else {
-                    baked.per_layer_q7.as_slice()
-                };
-                let q7_persona = if use_resonant {
-                    Some(baked.persona_q7.as_slice())
-                } else {
-                    None
-                };
-                let res_ctx = if use_resonant {
-                    Some(ResonantAnchors {
-                        facts: baked.fact_anchors_per_layer.as_slice(),
-                        personas: baked.persona_anchors_per_layer.as_slice(),
-                        guards: baked.guard_anchors_per_layer.as_slice(),
-                        negs: baked.neg_sum.as_slice(),
-                        poss: baked.pos_sum.as_slice(),
-                    })
-                } else {
-                    None
-                };
-                let srl_arg = if srl_scale != 0.0 {
-                    Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), srl_scale))
-                } else {
-                    None
-                };
-                let mut steer = ForwardSteer {
-                    adapter: &mut adapter,
-                    q7s: Some(q7_primary),
-                    persona_q7s: q7_persona,
-                    resonant_ctx: res_ctx,
-                    rope_rad,
-                    trail: &mut trail,
-                    srl: srl_arg,
-                };
-                let (mut logits, _, _) =
-                    model.forward_tokens(&ids, offset, Some(&mut steer), use_edbc, false)?;
-                offset += ids.len();
-                let mut gen_ids = Vec::with_capacity(48);
-                for _ in 0..48 {
-                    let next = argmax(&logits);
-                    gen_ids.push(next);
-                    let (next_logits, _, _) =
-                        model.forward_tokens(&[next], offset, Some(&mut steer), use_edbc, false)?;
-                    logits = next_logits;
-                    offset += 1;
-                    if next == 199999 {
-                        break;
+            // Multi-turn context switching check on a single persistent KV cache & stigmergic trail:
+            // Turn 1 (FACT) -> Turn 2 (PERSONA) -> Turn 3 (GUARD)
+            println!("\n=== Multi-Turn Context Switch Check (Persistent Trail & KV Cache) ===");
+            let turns = [
+                ("Turn1:FACT", suite.probes[0].1.as_str()),
+                ("Turn2:PERSONA", suite.probes[5].1.as_str()),
+                ("Turn3:GUARD", suite.probes[4].1.as_str()),
+            ];
+            for &(mode_label, layer_mask, rope_rad, srl_scale, use_edbc, use_resonant) in &[
+                (
+                    "Baseline",
+                    0xFFFF_FFFF_u64,
+                    0.00_f32,
+                    0.00_f32,
+                    false,
+                    false,
+                ),
+                (
+                    "ActionHub",
+                    0xFFFF_0000_u64,
+                    -2.00_f32,
+                    -1.00_f32,
+                    true,
+                    true,
+                ),
+            ] {
+                adapter.set_layer_rope_mask(layer_mask);
+                adapter.reset_action_hub_stats();
+                model.clear_cache();
+                let mut trail = gcso_pointer_trail_t::default();
+                let mut offset = 0_usize;
+                println!("-- {mode_label} --");
+                for (turn_name, prompt) in turns {
+                    let counts_before = *adapter.action_hub_decision_counts();
+                    let turn_text = if offset == 0 {
+                        format_phi4_prompt(prompt)
+                    } else {
+                        format!("<|end|><|user|>{prompt}<|end|><|assistant|>")
+                    };
+                    let ids = tokenizer
+                        .encode(turn_text.as_str(), false)
+                        .map_err(|e| format!("encode error: {e}"))?
+                        .get_ids()
+                        .to_vec();
+                    let q7_primary = if use_resonant {
+                        baked.fact_q7.as_slice()
+                    } else {
+                        baked.per_layer_q7.as_slice()
+                    };
+                    let q7_persona = if use_resonant {
+                        Some(baked.persona_q7.as_slice())
+                    } else {
+                        None
+                    };
+                    let res_ctx = if use_resonant {
+                        Some(ResonantAnchors {
+                            facts: baked.fact_anchors_per_layer.as_slice(),
+                            personas: baked.persona_anchors_per_layer.as_slice(),
+                            guards: baked.guard_anchors_per_layer.as_slice(),
+                            negs: baked.neg_sum.as_slice(),
+                            poss: baked.pos_sum.as_slice(),
+                        })
+                    } else {
+                        None
+                    };
+                    let srl_arg = if srl_scale != 0.0 {
+                        Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), srl_scale))
+                    } else {
+                        None
+                    };
+                    let mut steer = ForwardSteer {
+                        adapter: &mut adapter,
+                        q7s: Some(q7_primary),
+                        persona_q7s: q7_persona,
+                        resonant_ctx: res_ctx,
+                        rope_rad,
+                        trail: &mut trail,
+                        srl: srl_arg,
+                    };
+                    let (mut logits, _, _) =
+                        model.forward_tokens(&ids, offset, Some(&mut steer), use_edbc, false)?;
+                    offset += ids.len();
+                    let mut gen_ids = Vec::with_capacity(48);
+                    for _ in 0..48 {
+                        let next = argmax(&logits);
+                        gen_ids.push(next);
+                        let (next_logits, _, _) = model.forward_tokens(
+                            &[next],
+                            offset,
+                            Some(&mut steer),
+                            use_edbc,
+                            false,
+                        )?;
+                        logits = next_logits;
+                        offset += 1;
+                        if next == 199999 {
+                            break;
+                        }
                     }
+                    let text = tokenizer
+                        .decode(&gen_ids, true)
+                        .map_err(|e| format!("decode error: {e}"))?
+                        .replace('\n', " ");
+                    let counts_after = *adapter.action_hub_decision_counts();
+                    let mut d = [0_u64; 7];
+                    for i in 0..7 {
+                        d[i] = counts_after[i].saturating_sub(counts_before[i]);
+                    }
+                    println!(
+                    "  [{turn_name}] rho={:.3} steps={} H={:.3} modes=[Pas={} Skp={} Exp={} PSPM={} SRL={} Cry={} Rep={}] => {text}",
+                    trail.stigmergic_density,
+                    trail.step_count,
+                    adapter.action_hub().last_entropy_h_tilde,
+                    d[0], d[1], d[2], d[3], d[4], d[5], d[6],
+                );
                 }
-                let text = tokenizer
-                    .decode(&gen_ids, true)
-                    .map_err(|e| format!("decode error: {e}"))?
-                    .replace('\n', " ");
-                let counts_after = *adapter.action_hub_decision_counts();
-                let mut d = [0_u64; 7];
-                for i in 0..7 {
-                    d[i] = counts_after[i].saturating_sub(counts_before[i]);
-                }
-                println!(
-                "  [{turn_name}] rho={:.3} steps={} H={:.3} modes=[Pas={} Skp={} Exp={} PSPM={} SRL={} Cry={} Rep={}] => {text}",
-                trail.stigmergic_density,
-                trail.step_count,
-                adapter.action_hub().last_entropy_h_tilde,
-                d[0], d[1], d[2], d[3], d[4], d[5], d[6],
-            );
             }
         }
-    }
+        Some(baked)
+    } else {
+        None
+    };
 
     // Step 2: Online Natural-Language -> Attractor Corpus & cvoid Boundary Evaluation
     println!("\n=== Step 2: Natural-Language Attractor Corpus & cvoid Boundary Eval ===");
@@ -1731,7 +1748,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let compiled = CompiledTokenCorpus::compile_with_base_prior(
+    let mut compiled = CompiledTokenCorpus::compile_with_base_prior(
         &adapter,
         &staged_entries,
         SequenceActivationPooler::default(),
@@ -1739,6 +1756,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         1,
         base_prior.as_ref(),
     )?;
+    let prefix_ids = tokenizer
+        .encode("Item:", false)
+        .map_err(|e| format!("alias prefix encode error: {e}"))?
+        .get_ids()
+        .to_vec();
+    for (entry_idx, entry) in staged_entries.iter().enumerate() {
+        if entry.role != AttractorRole::Fact {
+            continue;
+        }
+        let first_word = entry
+            .text
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_end_matches([',', '.', ':', ';']);
+        if first_word.len() < 2 {
+            continue;
+        }
+        let ids_raw = tokenizer
+            .encode(first_word, false)
+            .map_err(|e| format!("alias raw encode error: {e}"))?
+            .get_ids()
+            .to_vec();
+        let spaced_word = format!(" {first_word}");
+        let ids_spaced = tokenizer
+            .encode(spaced_word.as_str(), false)
+            .map_err(|e| format!("alias spaced encode error: {e}"))?
+            .get_ids()
+            .to_vec();
+        let disjoint_bpe_split = !ids_raw.is_empty()
+            && !ids_spaced.is_empty()
+            && ids_raw.iter().all(|id| !ids_spaced.contains(id));
+        if disjoint_bpe_split {
+            let mut full_ids = prefix_ids.clone();
+            full_ids.extend_from_slice(&ids_spaced);
+            model.clear_cache();
+            let (_, alias_tok_qs, _) = model.forward_tokens(&full_ids, 0, None, false, true)?;
+            let dim = adapter.geometry().q_rot_len();
+            let start = prefix_ids.len() * dim;
+            let end = full_ids.len() * dim;
+            let sliced_qs: Vec<Vec<f32>> = alias_tok_qs
+                .into_iter()
+                .map(|layer| layer[start..end].to_vec())
+                .collect();
+            compiled.register_bpe_prefix_alias_tokens(
+                &adapter,
+                entry_idx,
+                &sliced_qs,
+                ids_spaced.len(),
+            )?;
+        }
+    }
     let compile_ms = t_compile.elapsed().as_secs_f64() * 1000.0;
     println!(
         "Compiled {} natural-language attractors (two-pass novelty SIF + Stratum pipeline, base_prior={}) in {:.1}ms | auto RecallPolicy: min_coh={:.3} margin={:.3}",
@@ -1861,163 +1930,170 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let query_top2 = recall.top2_fact_score;
         let query_guard_m = recall.guard_conflict_margin;
 
-        let active_prompt = if matches!(query_void_state, VoidBoundaryState::CvoidEmptySpace)
-            || query_guard_m > 0.05
-            || recalled_ctx.is_empty()
-        {
-            format_phi4_prompt(prompt)
-        } else {
-            format_phi4_prompt(&format!("[Context: {recalled_ctx}]\n{prompt}"))
-        };
+        let (text, reflect_note) = if let Some(baked) = baked_opt.as_ref() {
+            let active_prompt = if matches!(query_void_state, VoidBoundaryState::CvoidEmptySpace)
+                || query_guard_m > 0.05
+                || recalled_ctx.is_empty()
+            {
+                format_phi4_prompt(prompt)
+            } else {
+                format_phi4_prompt(&format!("[Context: {recalled_ctx}]\n{prompt}"))
+            };
 
-        let use_steer = !matches!(query_void_state, VoidBoundaryState::CvoidEmptySpace)
-            && !dyn_facts.is_empty();
-        let res_ctx = if use_steer {
-            Some(ResonantAnchors {
-                facts: dyn_facts.as_slice(),
-                personas: dyn_personas.as_slice(),
-                guards: baked.guard_anchors_per_layer.as_slice(),
-                negs: baked.neg_sum.as_slice(),
-                poss: baked.pos_sum.as_slice(),
-            })
-        } else {
-            None
-        };
-        let rope_rad = if use_steer { -2.00 } else { 0.00 };
-        let srl_arg = if use_steer {
-            Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), -1.00))
-        } else {
-            None
-        };
+            let use_steer = !matches!(query_void_state, VoidBoundaryState::CvoidEmptySpace)
+                && !dyn_facts.is_empty();
+            let res_ctx = if use_steer {
+                Some(ResonantAnchors {
+                    facts: dyn_facts.as_slice(),
+                    personas: dyn_personas.as_slice(),
+                    guards: baked.guard_anchors_per_layer.as_slice(),
+                    negs: baked.neg_sum.as_slice(),
+                    poss: baked.pos_sum.as_slice(),
+                })
+            } else {
+                None
+            };
+            let rope_rad = if use_steer { -2.00 } else { 0.00 };
+            let srl_arg = if use_steer {
+                Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), -1.00))
+            } else {
+                None
+            };
 
-        let pass1_cfg = SteerDecodeConfig {
-            q7s: Some(baked.fact_q7.as_slice()),
-            persona_q7s: Some(baked.persona_q7.as_slice()),
-            resonant_ctx: res_ctx,
-            rope_rad,
-            srl: srl_arg,
-            use_steer,
-        };
-        let (mut text, p1_tokens, p1_secs) = generate_steered_reply(
-            &mut model,
-            &tokenizer,
-            &mut adapter,
-            active_prompt.as_str(),
-            &pass1_cfg,
-        )?;
-        step2_decode_tokens += p1_tokens;
-        step2_decode_secs += p1_secs;
-
-        let mut reflect_note = if no_reflect {
-            "off".to_string()
-        } else {
-            "skip".to_string()
-        };
-        if !no_reflect && reflection_policy.max_retries > 0 {
-            if let Some(pass1_crit) = critique_generated_draft(
+            let pass1_cfg = SteerDecodeConfig {
+                q7s: Some(baked.fact_q7.as_slice()),
+                persona_q7s: Some(baked.persona_q7.as_slice()),
+                resonant_ctx: res_ctx,
+                rope_rad,
+                srl: srl_arg,
+                use_steer,
+            };
+            let (mut text, p1_tokens, p1_secs) = generate_steered_reply(
                 &mut model,
                 &tokenizer,
-                &adapter,
-                &compiled,
-                &query_snap,
-                &text,
-                &reflection_policy,
-            )? {
-                if pass1_crit.directive.rethink_recommended {
-                    reflect_triggers += 1;
-                    let cue = pass1_crit.corrective_instruction(&text).unwrap_or_default();
-                    let retry_prompt = if pass1_crit.directive.suppress_injection
-                        || recalled_ctx.is_empty()
-                    {
-                        format_phi4_prompt(&format!("{cue}\n{prompt}"))
-                    } else {
-                        format_phi4_prompt(&format!("[Context: {recalled_ctx}]\n{cue}\n{prompt}"))
-                    };
-                    let retry_use_steer = !pass1_crit.directive.suppress_injection
-                        && (!dyn_facts.is_empty() || pass1_crit.directive.inject_guard_repulsion);
-                    let retry_res = if retry_use_steer {
-                        Some(ResonantAnchors {
-                            facts: dyn_facts.as_slice(),
-                            personas: dyn_personas.as_slice(),
-                            guards: baked.guard_anchors_per_layer.as_slice(),
-                            negs: baked.neg_sum.as_slice(),
-                            poss: baked.pos_sum.as_slice(),
-                        })
-                    } else {
-                        None
-                    };
-                    let retry_rope = if retry_use_steer {
-                        pass1_cfg.rope_rad + pass1_crit.directive.rope_rad_delta
-                    } else {
-                        0.0
-                    };
-                    let retry_srl = if retry_use_steer {
-                        Some((
-                            baked.srl_u.as_slice(),
-                            baked.srl_v.as_slice(),
-                            -1.00 + pass1_crit.directive.srl_scale_delta,
-                        ))
-                    } else {
-                        None
-                    };
-                    let retry_cfg = SteerDecodeConfig {
-                        q7s: Some(baked.fact_q7.as_slice()),
-                        persona_q7s: Some(baked.persona_q7.as_slice()),
-                        resonant_ctx: retry_res,
-                        rope_rad: retry_rope,
-                        srl: retry_srl,
-                        use_steer: retry_use_steer,
-                    };
-                    let (p2_text, p2_tokens, p2_secs) = generate_steered_reply(
-                        &mut model,
-                        &tokenizer,
-                        &mut adapter,
-                        retry_prompt.as_str(),
-                        &retry_cfg,
-                    )?;
-                    step2_decode_tokens += p2_tokens;
-                    step2_decode_secs += p2_secs;
-                    if let Some(pass2_crit) = critique_generated_draft(
-                        &mut model,
-                        &tokenizer,
-                        &adapter,
-                        &compiled,
-                        &query_snap,
-                        &p2_text,
-                        &reflection_policy,
-                    )? {
-                        let pick = ManifoldReflectionEvaluator.select_better_pass(
-                            &reflection_policy,
-                            &pass1_crit,
-                            &pass2_crit,
-                        );
-                        if matches!(pick, ReflectionSelection::Pass2) {
-                            reflect_adopted += 1;
-                            text = p2_text;
-                            reflect_note = format!(
-                                "{:?}->{:?}(P2,{:+.2}->{:+.2})",
-                                pass1_crit.trigger,
-                                pass2_crit.trigger,
-                                pass1_crit.alignment_score,
-                                pass2_crit.alignment_score
-                            );
+                &mut adapter,
+                active_prompt.as_str(),
+                &pass1_cfg,
+            )?;
+            step2_decode_tokens += p1_tokens;
+            step2_decode_secs += p1_secs;
+
+            let mut reflect_note = if no_reflect {
+                "off".to_string()
+            } else {
+                "skip".to_string()
+            };
+            if !no_reflect && reflection_policy.max_retries > 0 {
+                if let Some(pass1_crit) = critique_generated_draft(
+                    &mut model,
+                    &tokenizer,
+                    &adapter,
+                    &compiled,
+                    &query_snap,
+                    &text,
+                    &reflection_policy,
+                )? {
+                    if pass1_crit.directive.rethink_recommended {
+                        reflect_triggers += 1;
+                        let cue = pass1_crit.corrective_instruction(&text).unwrap_or_default();
+                        let retry_prompt =
+                            if pass1_crit.directive.suppress_injection || recalled_ctx.is_empty() {
+                                format_phi4_prompt(&format!("{cue}\n{prompt}"))
+                            } else {
+                                format_phi4_prompt(&format!(
+                                    "[Context: {recalled_ctx}]\n{cue}\n{prompt}"
+                                ))
+                            };
+                        let retry_use_steer = !pass1_crit.directive.suppress_injection
+                            && (!dyn_facts.is_empty()
+                                || pass1_crit.directive.inject_guard_repulsion);
+                        let retry_res = if retry_use_steer {
+                            Some(ResonantAnchors {
+                                facts: dyn_facts.as_slice(),
+                                personas: dyn_personas.as_slice(),
+                                guards: baked.guard_anchors_per_layer.as_slice(),
+                                negs: baked.neg_sum.as_slice(),
+                                poss: baked.pos_sum.as_slice(),
+                            })
                         } else {
-                            reflect_note = format!(
-                                "{:?}->{:?}(P1,{:+.2}->{:+.2})",
-                                pass1_crit.trigger,
-                                pass2_crit.trigger,
-                                pass1_crit.alignment_score,
-                                pass2_crit.alignment_score
+                            None
+                        };
+                        let retry_rope = if retry_use_steer {
+                            pass1_cfg.rope_rad + pass1_crit.directive.rope_rad_delta
+                        } else {
+                            0.0
+                        };
+                        let retry_srl = if retry_use_steer {
+                            Some((
+                                baked.srl_u.as_slice(),
+                                baked.srl_v.as_slice(),
+                                -1.00 + pass1_crit.directive.srl_scale_delta,
+                            ))
+                        } else {
+                            None
+                        };
+                        let retry_cfg = SteerDecodeConfig {
+                            q7s: Some(baked.fact_q7.as_slice()),
+                            persona_q7s: Some(baked.persona_q7.as_slice()),
+                            resonant_ctx: retry_res,
+                            rope_rad: retry_rope,
+                            srl: retry_srl,
+                            use_steer: retry_use_steer,
+                        };
+                        let (p2_text, p2_tokens, p2_secs) = generate_steered_reply(
+                            &mut model,
+                            &tokenizer,
+                            &mut adapter,
+                            retry_prompt.as_str(),
+                            &retry_cfg,
+                        )?;
+                        step2_decode_tokens += p2_tokens;
+                        step2_decode_secs += p2_secs;
+                        if let Some(pass2_crit) = critique_generated_draft(
+                            &mut model,
+                            &tokenizer,
+                            &adapter,
+                            &compiled,
+                            &query_snap,
+                            &p2_text,
+                            &reflection_policy,
+                        )? {
+                            let pick = ManifoldReflectionEvaluator.select_better_pass(
+                                &reflection_policy,
+                                &pass1_crit,
+                                &pass2_crit,
                             );
+                            if matches!(pick, ReflectionSelection::Pass2) {
+                                reflect_adopted += 1;
+                                text = p2_text;
+                                reflect_note = format!(
+                                    "{:?}->{:?}(P2,{:+.2}->{:+.2})",
+                                    pass1_crit.trigger,
+                                    pass2_crit.trigger,
+                                    pass1_crit.alignment_score,
+                                    pass2_crit.alignment_score
+                                );
+                            } else {
+                                reflect_note = format!(
+                                    "{:?}->{:?}(P1,{:+.2}->{:+.2})",
+                                    pass1_crit.trigger,
+                                    pass2_crit.trigger,
+                                    pass1_crit.alignment_score,
+                                    pass2_crit.alignment_score
+                                );
+                            }
+                        } else {
+                            reflect_note = format!("{:?}(P1)", pass1_crit.trigger);
                         }
                     } else {
-                        reflect_note = format!("{:?}(P1)", pass1_crit.trigger);
+                        reflect_note = format!("{:?}(0)", pass1_crit.trigger);
                     }
-                } else {
-                    reflect_note = format!("{:?}(0)", pass1_crit.trigger);
                 }
             }
-        }
+            (text, reflect_note)
+        } else {
+            (String::new(), "skip(recall_only)".to_string())
+        };
 
         let lower = text.to_lowercase();
         let ctx_lower = recalled_ctx.to_lowercase();
@@ -2102,121 +2178,123 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         decode_tps,
     );
 
-    // Step 3: Repository-Contained .gcso Persistence, Zero-Forward Seek & Cross-Model Re-Bake
-    println!("\n=== Step 3: Dual-Track .gcso GOP Seek & Cross-Model Re-Bake ===");
-    let containers_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("containers");
-    let gcso_path = containers_dir.join("phi4_session.gcso");
-    let written_bytes = timeline.save_to_path(&gcso_path)?;
-    let reloaded = GcsoDualTrackTimeline::load_from_path(&gcso_path)?;
-    let active_fp = GcsoDualTrackTimeline::geometry_fingerprint(adapter.geometry());
-    println!(
-        "Saved & Reloaded .gcso ({}): {} bytes | frames={} | keyframes={:?} | fp_match={}",
-        gcso_path.display(),
-        written_bytes,
-        reloaded.frames().len(),
-        reloaded.keyframe_positions(),
-        reloaded.model_fingerprint() == active_fp,
-    );
+    if !recall_only {
+        // Step 3: Repository-Contained .gcso Persistence, Zero-Forward Seek & Cross-Model Re-Bake
+        println!("\n=== Step 3: Dual-Track .gcso GOP Seek & Cross-Model Re-Bake ===");
+        let containers_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("containers");
+        let gcso_path = containers_dir.join("phi4_session.gcso");
+        let written_bytes = timeline.save_to_path(&gcso_path)?;
+        let reloaded = GcsoDualTrackTimeline::load_from_path(&gcso_path)?;
+        let active_fp = GcsoDualTrackTimeline::geometry_fingerprint(adapter.geometry());
+        println!(
+            "Saved & Reloaded .gcso ({}): {} bytes | frames={} | keyframes={:?} | fp_match={}",
+            gcso_path.display(),
+            written_bytes,
+            reloaded.frames().len(),
+            reloaded.keyframe_positions(),
+            reloaded.model_fingerprint() == active_fp,
+        );
 
-    struct SubtitleModelProjector<'a> {
-        model: &'a mut Phi3Model,
-        tokenizer: &'a Tokenizer,
-        model_rotary_dim: usize,
-        target_rotary_dim: usize,
-    }
-
-    impl SubtitleActivationEncoder for SubtitleModelProjector<'_> {
-        fn encode_subtitle_activations(
-            &mut self,
-            record: &SourceTextRecord,
-        ) -> Result<Vec<Vec<f32>>, String> {
-            self.model.clear_cache();
-            let prompt = format_phi4_prompt(&record.text);
-            let ids = self
-                .tokenizer
-                .encode(prompt.as_str(), false)
-                .map_err(|e| format!("rebake encode error: {e}"))?
-                .get_ids()
-                .to_vec();
-            let (_, query_tok_qs, _) = self
-                .model
-                .forward_tokens(&ids, 0, None, false, true)
-                .map_err(|e| format!("rebake forward error: {e}"))?;
-            let mut out = Vec::with_capacity(query_tok_qs.len());
-            for tok_flat in query_tok_qs {
-                let mut layer_q = SequenceActivationPooler::uniform_unit_mean(
-                    &tok_flat,
-                    ids.len(),
-                    self.model_rotary_dim,
-                )?;
-                layer_q.resize(self.target_rotary_dim, 0.0);
-                out.push(layer_q);
-            }
-            Ok(out)
+        struct SubtitleModelProjector<'a> {
+            model: &'a mut Phi3Model,
+            tokenizer: &'a Tokenizer,
+            model_rotary_dim: usize,
+            target_rotary_dim: usize,
         }
-    }
 
-    let mut same_projector = SubtitleModelProjector {
-        model: &mut model,
-        tokenizer: &tokenizer,
-        model_rotary_dim: adapter.geometry().q_rot_len(),
-        target_rotary_dim: adapter.geometry().q_rot_len(),
-    };
-    let same_ctx = RebakeContext {
-        adapter: &adapter,
-        policy: &compiled.recall_policy,
-        detector: &cut_detector,
-        centroid_layers: &[],
-        up_to_frame: None,
-    };
-    if let TimelineResumeOutcome::FastResumed { seek_state } =
-        reloaded.resume_or_rebake(&same_ctx, &mut same_projector, 2)?
-    {
-        println!(
-            "Same-Model FastResumed(frame=2): keyframe={} p_frames={} total_energy={:.2} anchors={}",
-            seek_state.keyframe_index,
-            seek_state.p_frames_applied,
-            seek_state.total_energy,
-            seek_state.anchor_ids.len(),
-        );
-    }
+        impl SubtitleActivationEncoder for SubtitleModelProjector<'_> {
+            fn encode_subtitle_activations(
+                &mut self,
+                record: &SourceTextRecord,
+            ) -> Result<Vec<Vec<f32>>, String> {
+                self.model.clear_cache();
+                let prompt = format_phi4_prompt(&record.text);
+                let ids = self
+                    .tokenizer
+                    .encode(prompt.as_str(), false)
+                    .map_err(|e| format!("rebake encode error: {e}"))?
+                    .get_ids()
+                    .to_vec();
+                let (_, query_tok_qs, _) = self
+                    .model
+                    .forward_tokens(&ids, 0, None, false, true)
+                    .map_err(|e| format!("rebake forward error: {e}"))?;
+                let mut out = Vec::with_capacity(query_tok_qs.len());
+                for tok_flat in query_tok_qs {
+                    let mut layer_q = SequenceActivationPooler::uniform_unit_mean(
+                        &tok_flat,
+                        ids.len(),
+                        self.model_rotary_dim,
+                    )?;
+                    layer_q.resize(self.target_rotary_dim, 0.0);
+                    out.push(layer_q);
+                }
+                Ok(out)
+            }
+        }
 
-    let mut alt_geom = RopeGeometry::phi4_mini();
-    alt_geom.head_dim = 128;
-    alt_geom.rotary_dim = 128;
-    let alt_adapter = ModelSteeringAdapter::new(alt_geom)?;
-    let mut alt_projector = SubtitleModelProjector {
-        model: &mut model,
-        tokenizer: &tokenizer,
-        model_rotary_dim: adapter.geometry().q_rot_len(),
-        target_rotary_dim: alt_adapter.geometry().q_rot_len(),
-    };
-    let alt_ctx = RebakeContext {
-        adapter: &alt_adapter,
-        policy: &compiled.recall_policy,
-        detector: &cut_detector,
-        centroid_layers: &[],
-        up_to_frame: None,
-    };
-    if let TimelineResumeOutcome::Rebaked {
-        timeline: rebaked_tl,
-        seek_state,
-        source_fingerprint,
-        target_fingerprint,
-        rebaked_frames,
-        ..
-    } = reloaded.resume_or_rebake(&alt_ctx, &mut alt_projector, 2)?
-    {
-        let rebaked_path = containers_dir.join("phi4_rebaked_alt.gcso");
-        let rebaked_bytes = rebaked_tl.save_to_path(&rebaked_path)?;
-        println!(
-            "Cross-Model EnvProbe Rebaked: src_fp=0x{source_fingerprint:016x} -> dst_fp=0x{target_fingerprint:016x} | frames={rebaked_frames} | saved={} ({rebaked_bytes} bytes) | seek_frame2_anchors={}",
-            rebaked_path.display(),
-            seek_state.anchor_ids.len(),
-        );
+        let mut same_projector = SubtitleModelProjector {
+            model: &mut model,
+            tokenizer: &tokenizer,
+            model_rotary_dim: adapter.geometry().q_rot_len(),
+            target_rotary_dim: adapter.geometry().q_rot_len(),
+        };
+        let same_ctx = RebakeContext {
+            adapter: &adapter,
+            policy: &compiled.recall_policy,
+            detector: &cut_detector,
+            centroid_layers: &[],
+            up_to_frame: None,
+        };
+        if let TimelineResumeOutcome::FastResumed { seek_state } =
+            reloaded.resume_or_rebake(&same_ctx, &mut same_projector, 2)?
+        {
+            println!(
+                "Same-Model FastResumed(frame=2): keyframe={} p_frames={} total_energy={:.2} anchors={}",
+                seek_state.keyframe_index,
+                seek_state.p_frames_applied,
+                seek_state.total_energy,
+                seek_state.anchor_ids.len(),
+            );
+        }
+
+        let mut alt_geom = RopeGeometry::phi4_mini();
+        alt_geom.head_dim = 128;
+        alt_geom.rotary_dim = 128;
+        let alt_adapter = ModelSteeringAdapter::new(alt_geom)?;
+        let mut alt_projector = SubtitleModelProjector {
+            model: &mut model,
+            tokenizer: &tokenizer,
+            model_rotary_dim: adapter.geometry().q_rot_len(),
+            target_rotary_dim: alt_adapter.geometry().q_rot_len(),
+        };
+        let alt_ctx = RebakeContext {
+            adapter: &alt_adapter,
+            policy: &compiled.recall_policy,
+            detector: &cut_detector,
+            centroid_layers: &[],
+            up_to_frame: None,
+        };
+        if let TimelineResumeOutcome::Rebaked {
+            timeline: rebaked_tl,
+            seek_state,
+            source_fingerprint,
+            target_fingerprint,
+            rebaked_frames,
+            ..
+        } = reloaded.resume_or_rebake(&alt_ctx, &mut alt_projector, 2)?
+        {
+            let rebaked_path = containers_dir.join("phi4_rebaked_alt.gcso");
+            let rebaked_bytes = rebaked_tl.save_to_path(&rebaked_path)?;
+            println!(
+                "Cross-Model EnvProbe Rebaked: src_fp=0x{source_fingerprint:016x} -> dst_fp=0x{target_fingerprint:016x} | frames={rebaked_frames} | saved={} ({rebaked_bytes} bytes) | seek_frame2_anchors={}",
+                rebaked_path.display(),
+                seek_state.anchor_ids.len(),
+            );
+        }
     }
 
     Ok(())

@@ -785,6 +785,41 @@ impl CompiledTokenCorpus {
             entry_token_sigs.push(salient.into_iter().map(|(_, sig, _)| sig).collect());
         }
 
+        let (entry_token_weights, entry_token_hub_bias, global_token_hub_mean) =
+            Self::recompute_token_specificity_and_hubness(&entry_token_sigs);
+
+        let geom = adapter.geometry();
+        let steered_layers = (0..geom.num_layers)
+            .filter(|&l| geom.is_rope_layer(l))
+            .count()
+            .max(1) as u16;
+        let probe_baseline = ManifoldProbeBaseline {
+            active_heads: geom.num_q_heads.min(MAX_ATTENTION_HEADS) as u16,
+            steered_layers,
+            baseline_entropy: 0.35,
+            baseline_inter_layer_coherence: recall_policy.min_coherence,
+            baseline_guard_noise_floor: 0.45,
+            probe_epoch: 1,
+        };
+
+        Ok(Self {
+            corpus,
+            novelty_reference_per_layer,
+            corpus_centroid_per_layer,
+            token_common_mode_basis,
+            entry_token_sigs,
+            entry_token_weights,
+            entry_token_hub_bias,
+            global_token_hub_mean,
+            probe_baseline,
+            recall_policy,
+            pooler,
+        })
+    }
+
+    fn recompute_token_specificity_and_hubness(
+        entry_token_sigs: &[Vec<Vec<f32>>],
+    ) -> (Vec<Vec<f32>>, Vec<f32>, f32) {
         // Estimate cross-entry doc-token specificity weights (`1 / (1 + sum_{j!=i} max_sim_+^2)`)
         // and leave-one-out empirical MaxSim hubness baseline per entry.
         let n_entries = entry_token_sigs.len();
@@ -829,33 +864,60 @@ impl CompiledTokenCorpus {
             global_token_hub_mean = entry_token_hub_bias.iter().sum::<f32>() / (n_entries as f32);
         }
 
-        let geom = adapter.geometry();
-        let steered_layers = (0..geom.num_layers)
-            .filter(|&l| geom.is_rope_layer(l))
-            .count()
-            .max(1) as u16;
-        let probe_baseline = ManifoldProbeBaseline {
-            active_heads: geom.num_q_heads.min(MAX_ATTENTION_HEADS) as u16,
-            steered_layers,
-            baseline_entropy: 0.35,
-            baseline_inter_layer_coherence: recall_policy.min_coherence,
-            baseline_guard_noise_floor: 0.45,
-            probe_epoch: 1,
-        };
-
-        Ok(Self {
-            corpus,
-            novelty_reference_per_layer,
-            corpus_centroid_per_layer,
-            token_common_mode_basis,
-            entry_token_sigs,
+        (
             entry_token_weights,
             entry_token_hub_bias,
             global_token_hub_mean,
-            probe_baseline,
-            recall_policy,
-            pooler,
-        })
+        )
+    }
+
+    /// Appends auxiliary per-layer token Q activations (such as a space-prefixed BPE alias of a
+    /// sentence-initial token) into `entry_idx`'s salient token cloud without altering `pooled_q`
+    /// or `corpus_centroid_per_layer`, then recalibrates cross-entry token specificity weights.
+    ///
+    /// # Errors
+    /// Returns an error if `entry_idx` is out of range or `alias_token_qs` mismatches `adapter`.
+    pub fn register_bpe_prefix_alias_tokens(
+        &mut self,
+        adapter: &ModelSteeringAdapter,
+        entry_idx: usize,
+        alias_token_qs: &[Vec<f32>],
+        alias_seq_len: usize,
+    ) -> Result<(), String> {
+        if entry_idx >= self.entry_token_sigs.len() {
+            return Err(format!(
+                "entry_idx {entry_idx} out of range (len={})",
+                self.entry_token_sigs.len()
+            ));
+        }
+        let num_layers = adapter.geometry().num_layers;
+        if alias_token_qs.len() != num_layers {
+            return Err(format!(
+                "alias layer count mismatch: expected {num_layers}, got {}",
+                alias_token_qs.len()
+            ));
+        }
+        if alias_seq_len == 0 {
+            return Ok(());
+        }
+        let salient = Self::extract_salient_token_sigs_indexed(
+            adapter,
+            alias_token_qs,
+            alias_seq_len,
+            &self.novelty_reference_per_layer,
+            &self.token_common_mode_basis,
+            alias_seq_len,
+            self.pooler,
+        )?;
+        for (_, sig, _) in salient {
+            self.entry_token_sigs[entry_idx].push(sig);
+        }
+        let (weights, hub_bias, global_hub_mean) =
+            Self::recompute_token_specificity_and_hubness(&self.entry_token_sigs);
+        self.entry_token_weights = weights;
+        self.entry_token_hub_bias = hub_bias;
+        self.global_token_hub_mean = global_hub_mean;
+        Ok(())
     }
 
     /// Pools a raw query token sequence using the frozen pooler and recalls via the default
@@ -877,17 +939,17 @@ impl CompiledTokenCorpus {
         )
     }
 
-    /// Pools a raw query token sequence and recalls through a caller-supplied [`StratumPipeline`].
+    /// Builds an uncollapsed [`LocalChannelObservation`] (bidirectional Chamfer scores and
+    /// per-token resonance deposits) for a query token sequence.
     ///
     /// # Errors
-    /// Returns an error if layer count, token length, or stratum inference fails.
-    pub fn recall_token_sequence_with_strata<'a>(
-        &'a self,
+    /// Returns an error if layer count or token slice dimensions mismatch `adapter`.
+    pub fn build_local_observation(
+        &self,
         adapter: &ModelSteeringAdapter,
         query_token_qs: &[Vec<f32>],
         query_seq_len: usize,
-        pipeline: &StratumPipeline<'_>,
-    ) -> Result<DynamicAttractorRecall<'a>, String> {
+    ) -> Result<LocalChannelObservation, String> {
         let num_layers = adapter.geometry().num_layers;
         let dim = adapter.geometry().q_rot_len();
         if query_token_qs.len() != num_layers {
@@ -896,12 +958,6 @@ impl CompiledTokenCorpus {
                 query_token_qs.len()
             ));
         }
-        let pooled_q = self.pooler.pool_sequence(
-            query_token_qs,
-            query_seq_len,
-            dim,
-            Some(&self.novelty_reference_per_layer),
-        )?;
         let query_salient = Self::extract_salient_token_sigs_indexed(
             adapter,
             query_token_qs,
@@ -1066,12 +1122,40 @@ impl CompiledTokenCorpus {
             }
         }
 
-        let obs = LocalChannelObservation {
+        Ok(LocalChannelObservation {
             combined_scores,
             q_to_d_scores,
             d_to_q_scores,
             token_deposits,
-        };
+        })
+    }
+
+    /// Pools a raw query token sequence and recalls through a caller-supplied [`StratumPipeline`].
+    ///
+    /// # Errors
+    /// Returns an error if layer count, token length, or stratum inference fails.
+    pub fn recall_token_sequence_with_strata<'a>(
+        &'a self,
+        adapter: &ModelSteeringAdapter,
+        query_token_qs: &[Vec<f32>],
+        query_seq_len: usize,
+        pipeline: &StratumPipeline<'_>,
+    ) -> Result<DynamicAttractorRecall<'a>, String> {
+        let num_layers = adapter.geometry().num_layers;
+        let dim = adapter.geometry().q_rot_len();
+        if query_token_qs.len() != num_layers {
+            return Err(format!(
+                "query layer count mismatch: expected {num_layers}, got {}",
+                query_token_qs.len()
+            ));
+        }
+        let pooled_q = self.pooler.pool_sequence(
+            query_token_qs,
+            query_seq_len,
+            dim,
+            Some(&self.novelty_reference_per_layer),
+        )?;
+        let obs = self.build_local_observation(adapter, query_token_qs, query_seq_len)?;
         let q_refs: Vec<&[f32]> = pooled_q.iter().map(Vec::as_slice).collect();
         let centroid_refs: Vec<&[f32]> = self
             .corpus_centroid_per_layer
@@ -1557,6 +1641,73 @@ mod tests {
         assert_eq!(
             recall.recalled_facts.first().map(|(e, _)| e.anchor_id),
             Some(2)
+        );
+    }
+
+    #[test]
+    fn register_bpe_prefix_alias_tokens_preserves_pooled_sigs_and_enables_split_token_recall() {
+        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let num_layers = adapter.geometry().num_layers;
+        let dim = adapter.geometry().q_rot_len();
+        let make_seq = |toks: &[(usize, f32)]| -> Vec<Vec<f32>> {
+            let mut per_layer = Vec::with_capacity(num_layers);
+            for _ in 0..num_layers {
+                let mut flat = vec![0.0_f32; toks.len() * dim];
+                for (t, &(slot, amp)) in toks.iter().enumerate() {
+                    flat[t * dim + slot] = amp;
+                    flat[t * dim + (slot + 1) % dim] = 0.20;
+                }
+                per_layer.push(flat);
+            }
+            per_layer
+        };
+
+        let entries = vec![
+            TokenSequenceEntry {
+                role: AttractorRole::Fact,
+                text: "Overview Fact".to_string(),
+                energy: 2.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq(&[(10, 0.9), (12, 0.7)]),
+            },
+            TokenSequenceEntry {
+                role: AttractorRole::Fact,
+                text: "Initial-split Fact".to_string(),
+                energy: 2.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq(&[(40, 0.9), (12, 0.7)]),
+            },
+        ];
+
+        let mut compiled = CompiledTokenCorpus::compile(
+            &adapter,
+            &entries,
+            SequenceActivationPooler::default(),
+            2,
+            1,
+        )
+        .expect("compile");
+        let before_sig = compiled.corpus.entries()[1].residual_sig.clone();
+
+        // Register space-prefixed alias tokens at orthogonal dimensions (70, 72) for entry 1.
+        let alias_qs = make_seq(&[(70, 0.95), (72, 0.90)]);
+        compiled
+            .register_bpe_prefix_alias_tokens(&adapter, 1, &alias_qs, 2)
+            .expect("register alias");
+        assert_eq!(compiled.corpus.entries()[1].residual_sig, before_sig);
+        assert_eq!(compiled.entry_token_sigs[1].len(), 4);
+
+        let err = compiled.register_bpe_prefix_alias_tokens(&adapter, 9, &alias_qs, 2);
+        assert!(err.is_err());
+
+        let obs = compiled
+            .build_local_observation(&adapter, &alias_qs, 2)
+            .expect("obs");
+        assert!(
+            obs.q_to_d_scores[1] > obs.q_to_d_scores[0],
+            "expected entry 1 alias match ({}) > entry 0 ({})",
+            obs.q_to_d_scores[1],
+            obs.q_to_d_scores[0]
         );
     }
 }

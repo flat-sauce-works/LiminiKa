@@ -109,6 +109,8 @@ pub struct TrajectoryManifoldSnapshot {
     pub top_fact_q7: [i8; MAX_ATTENTION_HEADS],
     /// Ordered list of recalled Fact anchor IDs.
     pub recalled_fact_anchors: Vec<u32>,
+    /// Ordered `(anchor_id, last_layer_q7)` pairs for all recalled Fact basins in this trajectory.
+    pub recalled_fact_q7s: Vec<(u32, [i8; MAX_ATTENTION_HEADS])>,
     /// Core `ActionHub` regime decision associated with this recall.
     pub action_decision: StigmergicActionDecision,
     /// Synthesized 128-byte core `GatewayFrame`.
@@ -129,6 +131,19 @@ impl TrajectoryManifoldSnapshot {
             .iter()
             .map(|(e, _)| e.anchor_id)
             .collect();
+        let recalled_fact_q7s = recall
+            .recalled_facts
+            .iter()
+            .map(|(e, _)| {
+                (
+                    e.anchor_id,
+                    e.per_layer_q7
+                        .last()
+                        .copied()
+                        .unwrap_or([0_i8; MAX_ATTENTION_HEADS]),
+                )
+            })
+            .collect();
         Self {
             void_state: recall.void_state,
             top1_fact_score: recall.top1_fact_score,
@@ -138,9 +153,20 @@ impl TrajectoryManifoldSnapshot {
             top_fact_anchor,
             top_fact_q7,
             recalled_fact_anchors,
+            recalled_fact_q7s,
             action_decision: recall.action_decision,
             gateway_frame: recall.gateway_frame,
         }
+    }
+
+    /// Returns query Fact anchor IDs that were omitted from `draft.recalled_fact_anchors`.
+    #[must_use]
+    pub fn missing_coalition_anchors(&self, draft: &Self) -> Vec<u32> {
+        self.recalled_fact_anchors
+            .iter()
+            .copied()
+            .filter(|id| !draft.recalled_fact_anchors.contains(id))
+            .collect()
     }
 }
 
@@ -300,8 +326,18 @@ impl ManifoldReflectionEvaluator {
                     .synthesize_gateway_frame()
             }
             ReflectionTriggerKind::VoidDrift | ReflectionTriggerKind::BoundaryAmbiguity => {
-                let anchor_id = query.top_fact_anchor.unwrap_or(1);
-                ObjectiveFact::new(query.top_fact_q7, 2.5, 0, anchor_id).synthesize_gateway_frame()
+                let missing_ids = query.missing_coalition_anchors(draft);
+                if let Some((missing_anchor_id, missing_q7)) = missing_ids
+                    .iter()
+                    .find_map(|id| query.recalled_fact_q7s.iter().find(|(qid, _)| qid == id))
+                {
+                    ObjectiveFact::new(*missing_q7, 2.5, 0, *missing_anchor_id)
+                        .synthesize_gateway_frame()
+                } else {
+                    let anchor_id = query.top_fact_anchor.unwrap_or(1);
+                    ObjectiveFact::new(query.top_fact_q7, 2.5, 0, anchor_id)
+                        .synthesize_gateway_frame()
+                }
             }
             ReflectionTriggerKind::VoidHallucination => {
                 SystemConstraint::new((), 0.25, 0.0, 0xFF).synthesize_gateway_frame()
@@ -500,6 +536,10 @@ mod tests {
         guard_margin: f32,
         anchors: Vec<u32>,
     ) -> TrajectoryManifoldSnapshot {
+        let recalled_fact_q7s = anchors
+            .iter()
+            .map(|&id| (id, [4_i8; MAX_ATTENTION_HEADS]))
+            .collect();
         TrajectoryManifoldSnapshot {
             void_state,
             top1_fact_score: top1_fact,
@@ -509,6 +549,7 @@ mod tests {
             top_fact_anchor: anchors.first().copied(),
             top_fact_q7: [4_i8; MAX_ATTENTION_HEADS],
             recalled_fact_anchors: anchors,
+            recalled_fact_q7s,
             action_decision: StigmergicActionDecision::PassiveSidecar,
             gateway_frame: GatewayFrame::default(),
         }
@@ -611,5 +652,40 @@ mod tests {
         assert_eq!(crit.trigger, ReflectionTriggerKind::VoidHallucination);
         assert!(crit.directive.rethink_recommended);
         assert!(crit.directive.suppress_injection);
+    }
+
+    #[test]
+    fn reflection_targets_omitted_coalition_anchor_in_corrective_gateway_frame() {
+        let eval = ManifoldReflectionEvaluator;
+        let recall_policy = RecallPolicy::default();
+        let policy = ReflectionPolicy::default();
+
+        let mut query = make_snapshot(
+            VoidBoundaryState::InsideBasin,
+            0.68,
+            0.62,
+            -0.25,
+            vec![5, 6],
+        );
+        let q7_five = [3_i8; MAX_ATTENTION_HEADS];
+        let q7_six = [21_i8; MAX_ATTENTION_HEADS];
+        query.top_fact_q7 = q7_five;
+        query.recalled_fact_q7s = vec![(5, q7_five), (6, q7_six)];
+
+        // Draft stayed liminal and omitted coalition anchor #6 while partially matching #5.
+        let draft = make_snapshot(
+            VoidBoundaryState::LiminalBoundary,
+            0.38,
+            0.36,
+            -0.20,
+            vec![5],
+        );
+        assert_eq!(query.missing_coalition_anchors(&draft), vec![6]);
+
+        let crit = eval.assess_trajectory(&query, &draft, &recall_policy, &policy);
+        assert_eq!(crit.trigger, ReflectionTriggerKind::BoundaryAmbiguity);
+        assert!(crit.directive.rethink_recommended);
+        assert_eq!(crit.gateway_frame.target_anchor_id, 6);
+        assert_eq!(crit.gateway_frame.phase_deltas, q7_six);
     }
 }

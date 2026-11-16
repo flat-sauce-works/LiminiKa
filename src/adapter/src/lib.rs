@@ -1434,8 +1434,6 @@ impl TextAttractorCorpus {
         }
     }
 
-    /// Estimates and stores an orthonormal common-mode subspace of up to `max_components`
-    /// directions via deflated power iteration + Gram-Schmidt orthogonalization.
     /// Estimates up to `max_components` orthonormal common-mode directions from `sigs` via
     /// deflated power iteration so shared template/attention-sink directions can be projected out.
     pub(crate) fn fit_common_mode_subspace_from_sigs(
@@ -1937,6 +1935,7 @@ impl TextAttractorCorpus {
         let recalled_facts = if suppress_facts {
             Vec::new()
         } else if signal.decomposition_triggered && !signal.linked_fact_indices.is_empty() {
+            let max_coalition = policy.top_k_facts.max(signal.linked_fact_indices.len());
             signal
                 .linked_fact_indices
                 .iter()
@@ -1946,7 +1945,7 @@ impl TextAttractorCorpus {
                         .filter(|e| e.role == AttractorRole::Fact)
                         .map(|e| (e, signal.candidate_scores[idx].max(score)))
                 })
-                .take(policy.top_k_facts)
+                .take(max_coalition)
                 .collect()
         } else {
             fact_scores
@@ -2354,31 +2353,24 @@ impl GcsoDualTrackTimeline {
         Self::from_bytes(&bytes)
     }
 
-    /// Checks `EnvProbe` compatibility against `ctx.adapter.geometry()` and either performs a
-    /// zero-forward GOP seek (`FastResumed`) or automatically re-bakes the Subtitle Track through
-    /// `encoder` into the target model's geometry (`Rebaked`).
+    /// Compiles a sequence of model-agnostic [`SourceTextRecord`] entries into a new
+    /// [`GcsoDualTrackTimeline`] and [`TextAttractorCorpus`] for `ctx.adapter.geometry()`
+    /// using `encoder`.
     ///
     /// # Errors
-    /// Returns an error if seeking, encoding subtitle activations, or recording re-baked frames fails.
-    pub fn resume_or_rebake<E: SubtitleActivationEncoder + ?Sized>(
-        &self,
+    /// Returns an error if `subtitles` is empty, activation encoding fails, or GOP recording fails.
+    pub fn bake_from_subtitle_records<E: SubtitleActivationEncoder + ?Sized>(
+        subtitles: &[SourceTextRecord],
         ctx: &RebakeContext<'_>,
         encoder: &mut E,
-        target_frame: u64,
-    ) -> Result<TimelineResumeOutcome, String> {
-        let target_fp = Self::geometry_fingerprint(ctx.adapter.geometry());
-        if self.model_fingerprint == target_fp {
-            let seek_state = self.seek_zero_forward(target_frame)?;
-            return Ok(TimelineResumeOutcome::FastResumed { seek_state });
-        }
-
-        let subtitles = self.export_subtitle_track(ctx.up_to_frame);
+    ) -> Result<(Self, TextAttractorCorpus), String> {
         if subtitles.is_empty() {
-            return Err("cannot re-bake an empty subtitle track".to_string());
+            return Err("cannot bake an empty subtitle track".to_string());
         }
 
+        let target_fp = Self::geometry_fingerprint(ctx.adapter.geometry());
         let mut encoded_records = Vec::with_capacity(subtitles.len());
-        for record in &subtitles {
+        for record in subtitles {
             encoded_records.push(encoder.encode_subtitle_activations(record)?);
         }
 
@@ -2469,6 +2461,31 @@ impl GcsoDualTrackTimeline {
                 frames_since_keyframe + 1
             };
         }
+
+        Ok((rebaked_timeline, rebaked_corpus))
+    }
+
+    /// Checks `EnvProbe` compatibility against `ctx.adapter.geometry()` and either performs a
+    /// zero-forward GOP seek (`FastResumed`) or automatically re-bakes the Subtitle Track through
+    /// `encoder` into the target model's geometry (`Rebaked`).
+    ///
+    /// # Errors
+    /// Returns an error if seeking, encoding subtitle activations, or recording re-baked frames fails.
+    pub fn resume_or_rebake<E: SubtitleActivationEncoder + ?Sized>(
+        &self,
+        ctx: &RebakeContext<'_>,
+        encoder: &mut E,
+        target_frame: u64,
+    ) -> Result<TimelineResumeOutcome, String> {
+        let target_fp = Self::geometry_fingerprint(ctx.adapter.geometry());
+        if self.model_fingerprint == target_fp {
+            let seek_state = self.seek_zero_forward(target_frame)?;
+            return Ok(TimelineResumeOutcome::FastResumed { seek_state });
+        }
+
+        let subtitles = self.export_subtitle_track(ctx.up_to_frame);
+        let (rebaked_timeline, rebaked_corpus) =
+            Self::bake_from_subtitle_records(&subtitles, ctx, encoder)?;
 
         let effective_target = subtitles
             .iter()
@@ -4295,5 +4312,126 @@ mod tests {
             .expect("ood recall");
         assert_eq!(ood_recall.void_state, VoidBoundaryState::CvoidEmptySpace);
         assert!(ood_recall.recalled_facts.is_empty());
+    }
+
+    #[test]
+    fn residual_peeling_decomposer_chains_three_disjoint_specialists_beyond_top_k_two() {
+        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let len = adapter.geometry().q_rot_len();
+        let num_layers = adapter.geometry().num_layers;
+        let centroid = vec![0.0_f32; len];
+        let refs: Vec<&[f32]> = vec![centroid.as_slice(); num_layers];
+
+        let mut f_hub = vec![0.0_f32; len];
+        let mut f_a = vec![0.0_f32; len];
+        let mut f_b = vec![0.0_f32; len];
+        let mut f_c = vec![0.0_f32; len];
+        f_hub[0] = 1.0;
+        f_a[1] = 1.0;
+        f_b[2] = 1.0;
+        f_c[3] = 1.0;
+
+        let mut corpus = TextAttractorCorpus::new();
+        let _id_hub = corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Overview hub",
+                &vec![f_hub.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("hub");
+        let id_a = corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Specialist alpha",
+                &vec![f_a.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("spec_a");
+        let id_b = corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Specialist beta",
+                &vec![f_b.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("spec_b");
+        let id_c = corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Specialist gamma",
+                &vec![f_c.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("spec_c");
+
+        let mut query = vec![0.0_f32; len];
+        query[0] = 0.70;
+        query[1] = 0.25;
+        query[2] = 0.25;
+        query[3] = 0.25;
+        let policy = RecallPolicy {
+            min_coherence: 0.20,
+            boundary_margin: 0.04,
+            guard_suppress_margin: 0.0,
+            top_k_facts: 2,
+            top_k_personas: 1,
+        };
+
+        let obs = LocalChannelObservation {
+            combined_scores: vec![0.14, 0.12, 0.10, 0.09],
+            q_to_d_scores: vec![0.10, 0.12, 0.11, 0.10],
+            d_to_q_scores: vec![0.02, 0.08, 0.08, 0.07],
+            token_deposits: vec![
+                TokenResonanceDeposit {
+                    disc_weight: 0.40,
+                    entry_excess: vec![-0.12, 0.55, -0.12, -0.12],
+                    token_phase_words: [0; 8],
+                },
+                TokenResonanceDeposit {
+                    disc_weight: 0.40,
+                    entry_excess: vec![-0.12, -0.12, 0.52, -0.12],
+                    token_phase_words: [0; 8],
+                },
+                TokenResonanceDeposit {
+                    disc_weight: 0.40,
+                    entry_excess: vec![-0.12, -0.12, -0.12, 0.48],
+                    token_phase_words: [0; 8],
+                },
+            ],
+        };
+
+        let recall = corpus
+            .recall_for_query_with_strata_observation(
+                &adapter,
+                &vec![query.as_slice(); num_layers],
+                &refs,
+                &policy,
+                &StratumPipeline::default(),
+                Some(obs),
+            )
+            .expect("3-hop recall");
+        let ids: Vec<u32> = recall
+            .recalled_facts
+            .iter()
+            .map(|(e, _)| e.anchor_id)
+            .collect();
+        assert_eq!(ids.len(), 3, "expected 3 chained specialists, got {ids:?}");
+        assert!(
+            ids.contains(&id_a) && ids.contains(&id_b) && ids.contains(&id_c),
+            "expected {id_a}, {id_b}, {id_c} in coalition, got {ids:?}"
+        );
+        assert_eq!(
+            recall.action_decision,
+            StigmergicActionDecision::PspmSubHeadRoute
+        );
     }
 }

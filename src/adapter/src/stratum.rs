@@ -816,19 +816,54 @@ impl<'a> StratumPipeline<'a> {
     }
 }
 
+/// Trait abstracting multi-point stigmergic coalition decomposition over token resonance
+/// deposits and 8-cell Micro-Swarm phase consensus (`ActionHubEngine`).
+pub trait StigmergicCoalitionDecomposer: Send + Sync {
+    /// Decomposes a multi-token query's residual resonance field into an ordered chain of
+    /// complementary Fact attractors (`t0 -> t1 -> ...`) inside `hub`.
+    fn decompose_fact_coalition(
+        &self,
+        ctx: &StratumContext<'_>,
+        signal: &mut StratumSignal,
+        hub: &mut ActionHubEngine,
+        selected_indices: &[usize],
+        trail_states: &[gcso_pointer_trail_t],
+        last_layer: usize,
+    );
+}
+
+/// Default [`StigmergicCoalitionDecomposer`] applying symmetric Partition-of-Unity lateral
+/// inhibition across token profiles and iterative residual peeling up to `max_coalition_hops`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResidualPeelingSwarmDecomposer {
+    /// Maximum number of Fact trails linked into a single decomposed pointer chain (`>= 2`).
+    pub max_coalition_hops: usize,
+}
+
+impl Default for ResidualPeelingSwarmDecomposer {
+    fn default() -> Self {
+        Self {
+            max_coalition_hops: 3,
+        }
+    }
+}
+
 /// Stratum 0.75: multi-token late-interaction resonance stratum arbitrating global pooled
-/// resonance against `local_token_scores` via statistical unimodality and 8-cell Micro-Swarm
-/// phase consensus (`StigmergicSwarmOps`).
+/// resonance against `local_token_scores` via statistical unimodality, 8-cell Micro-Swarm
+/// phase consensus (`StigmergicSwarmOps`), and [`StigmergicCoalitionDecomposer`].
 #[derive(Debug, Clone, Copy)]
 pub struct LocalTokenResonanceStratum {
     /// Gain applied when promoting non-negative local contrast under sharper local unimodality.
     pub token_contrast_gain: f32,
+    /// Stigmergic decomposer building multi-hop Fact coalitions on residual token fields.
+    pub decomposer: ResidualPeelingSwarmDecomposer,
 }
 
 impl Default for LocalTokenResonanceStratum {
     fn default() -> Self {
         Self {
             token_contrast_gain: 0.45,
+            decomposer: ResidualPeelingSwarmDecomposer::default(),
         }
     }
 }
@@ -1030,10 +1065,13 @@ impl LocalTokenResonanceStratum {
 
         (hub, selected_indices, trail_states)
     }
+}
 
-    /// Evaluates bimodal residual-peeling set cover over Fact trails when multiple specialized
+impl StigmergicCoalitionDecomposer for ResidualPeelingSwarmDecomposer {
+    /// Evaluates multi-hop residual-peeling set cover over Fact trails when multiple specialized
     /// attractors jointly explain distinct query tokens that single global pooling collapses.
-    fn try_decompose_fact_coalition(
+    fn decompose_fact_coalition(
+        &self,
         ctx: &StratumContext<'_>,
         signal: &mut StratumSignal,
         hub: &mut ActionHubEngine,
@@ -1043,6 +1081,7 @@ impl LocalTokenResonanceStratum {
     ) {
         let n_entries = ctx.entries.len();
         if ctx.policy.top_k_facts < 2
+            || self.max_coalition_hops < 2
             || signal.token_deposits.is_empty()
             || signal.q_to_d_scores.len() != n_entries
             || signal.d_to_q_scores.len() != n_entries
@@ -1244,8 +1283,65 @@ impl LocalTokenResonanceStratum {
             (cand_b, cand_a)
         };
 
-        // Wire the decomposed coalition onto `ActionHubEngine` inline trails as a linked chain
-        // and notify the `StigmergicActionReceptor`.
+        let mut coalition = vec![first_idx, second_idx];
+        let hop_cap = self
+            .max_coalition_hops
+            .min(ACTION_HUB_INLINE_TRAILS)
+            .min(fact_idxs.len());
+        if hop_cap >= 3 {
+            let mut best_third: Option<(usize, f32)> = None;
+            for &k in &fact_idxs {
+                if k == first_idx || k == second_idx {
+                    continue;
+                }
+                if signal.q_to_d_scores[k] <= 0.0 && signal.local_token_scores[k] <= 0.0 {
+                    continue;
+                }
+                let mut res_gain = 0.0_f32;
+                let mut has_specialist_peak = false;
+                for (d, &w) in signal.token_deposits.iter().zip(decomp_weights.iter()) {
+                    let pair_ex = d.entry_excess[first_idx]
+                        .max(d.entry_excess[second_idx])
+                        .max(0.0);
+                    let ex_k = d.entry_excess[k];
+                    if ex_k <= pair_ex {
+                        continue;
+                    }
+                    let other_rem_max = fact_idxs
+                        .iter()
+                        .copied()
+                        .filter(|&m| m != first_idx && m != second_idx && m != k)
+                        .map(|m| d.entry_excess[m].max(0.0))
+                        .fold(0.0_f32, f32::max);
+                    let rem_excl = if ex_k > 1e-6 {
+                        ((ex_k - other_rem_max) / ex_k).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let delta = ex_k - pair_ex;
+                    let eff_w = w + 0.0015 * rem_excl;
+                    res_gain += eff_w * delta;
+                    if ex_k >= 0.08 && delta >= 0.025 && rem_excl >= 0.40 {
+                        has_specialist_peak = true;
+                    }
+                }
+                res_gain /= total_decomp_w;
+                if res_gain >= 0.004 && has_specialist_peak {
+                    let score = res_gain
+                        + 0.20 * signal.q_to_d_scores[k].max(0.0)
+                        + 0.15 * signal.d_to_q_scores[k].max(0.0);
+                    if best_third.is_none_or(|(_, best_s)| score > best_s) {
+                        best_third = Some((k, score));
+                    }
+                }
+            }
+            if let Some((third_idx, _)) = best_third {
+                coalition.push(third_idx);
+            }
+        }
+
+        // Wire the decomposed coalition onto `ActionHubEngine` inline trails as a closed pointer
+        // ring and notify the `StigmergicActionReceptor`.
         let make_trail_for = |entry_idx: usize| -> gcso_pointer_trail_t {
             if let Some(pos) = selected_indices.iter().position(|&idx| idx == entry_idx) {
                 trail_states[pos]
@@ -1263,15 +1359,15 @@ impl LocalTokenResonanceStratum {
                 t
             }
         };
-        let mut t0 = make_trail_for(first_idx);
-        let mut t1 = make_trail_for(second_idx);
-        t0.linked_trail_id = 1;
-        t1.linked_trail_id = 0;
-        t0.stigmergic_density = t0.stigmergic_density.max(0.65);
-        t1.stigmergic_density = t1.stigmergic_density.max(0.60);
-        hub.trails[0] = t0;
-        hub.trails[1] = t1;
-        hub.active_count = hub.active_count.max(2);
+        let chain_len = coalition.len();
+        for (m, &entry_idx) in coalition.iter().enumerate() {
+            let mut t = make_trail_for(entry_idx);
+            t.linked_trail_id = ((m + 1) % chain_len) as u32;
+            let min_rho = (0.65 - 0.05 * (m as f32)).max(0.50);
+            t.stigmergic_density = t.stigmergic_density.max(min_rho);
+            hub.trails[m] = t;
+        }
+        hub.active_count = hub.active_count.max(chain_len as u32);
 
         let mut chain_trail = gcso_pointer_trail_t::default();
         chain_trail.copy_from_fast(&hub.trails[0]);
@@ -1279,7 +1375,7 @@ impl LocalTokenResonanceStratum {
         if let Ok((chain_report, _hops, _term_idx, _term_anchor, _mean_coh)) = hub
             .traverse_pointer_chain_and_orchestrate(
                 0,
-                2,
+                chain_len,
                 0.58,
                 &mut chain_trail,
                 None,
@@ -1296,21 +1392,27 @@ impl LocalTokenResonanceStratum {
         }
 
         let first_score = (g_fact_top1_score + 0.035).max(ctx.policy.min_coherence * 1.15);
-        let second_score = (first_score - 0.015).max(ctx.policy.min_coherence * 0.95);
-        signal.candidate_scores[first_idx] = signal.candidate_scores[first_idx].max(first_score);
-        signal.candidate_scores[second_idx] = signal.candidate_scores[second_idx].max(second_score);
-        signal.stigmergic_weights[first_idx] =
-            (signal.stigmergic_weights[first_idx] * 1.35).clamp(0.4, 2.5);
-        signal.stigmergic_weights[second_idx] =
-            (signal.stigmergic_weights[second_idx] * 1.30).clamp(0.4, 2.5);
-        signal.linked_fact_indices = vec![
-            (first_idx, signal.candidate_scores[first_idx]),
-            (second_idx, signal.candidate_scores[second_idx]),
-        ];
+        signal.linked_fact_indices.clear();
+        for (m, &entry_idx) in coalition.iter().enumerate() {
+            let floor_score = (first_score - 0.015 * (m as f32))
+                .max(ctx.policy.min_coherence * if m == 0 { 1.15 } else { 0.95 });
+            signal.candidate_scores[entry_idx] =
+                signal.candidate_scores[entry_idx].max(floor_score);
+            let boost = (1.35 - 0.05 * (m as f32)).max(1.15);
+            signal.stigmergic_weights[entry_idx] =
+                (signal.stigmergic_weights[entry_idx] * boost).clamp(0.4, 2.5);
+            signal
+                .linked_fact_indices
+                .push((entry_idx, signal.candidate_scores[entry_idx]));
+        }
         signal.decomposition_triggered = true;
         signal.local_channel_preferred = true;
-        signal.swarm_report =
-            Self::resolve_pair_swarm(ctx.entries, first_idx, second_idx, last_layer);
+        signal.swarm_report = LocalTokenResonanceStratum::resolve_pair_swarm(
+            ctx.entries,
+            coalition[0],
+            coalition[1],
+            last_layer,
+        );
     }
 }
 
@@ -1355,9 +1457,9 @@ impl SocietyStratum for LocalTokenResonanceStratum {
             .clamp(0.35, 2.5);
         }
 
-        // First test whether Fact tokens form a genuinely bimodal compound coalition better solved
-        // via ActionHub linked trails than unimodal winner-take-all sharpening.
-        Self::try_decompose_fact_coalition(
+        // First test whether Fact tokens form a multi-basin compound coalition better solved via
+        // ActionHub linked trails than unimodal winner-take-all sharpening.
+        self.decomposer.decompose_fact_coalition(
             ctx,
             signal,
             &mut hub,
