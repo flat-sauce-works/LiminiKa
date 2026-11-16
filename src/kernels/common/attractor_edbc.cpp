@@ -576,9 +576,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_persona_apply_patch(gcso_context_handle_t 
  * @param storage_out Descriptor structure pointer to populate.
  * @return GCSO_SUCCESS or GCSO_ERROR_MAPPED_STORAGE_FAILED.
  */
-GCSO_API gcso_status_t GCSO_CALL
-gcso_mapped_storage_open_mmap(const char* GCSO_RESTRICT file_path,
-                     gcso_mapped_storage_descriptor_t* GCSO_RESTRICT storage_out) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL gcso_mapped_storage_open_mmap(
+    const char* GCSO_RESTRICT file_path,
+    gcso_mapped_storage_descriptor_t* GCSO_RESTRICT storage_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(file_path == nullptr || storage_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -586,8 +586,9 @@ gcso_mapped_storage_open_mmap(const char* GCSO_RESTRICT file_path,
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(
-                reinterpret_cast<uintptr_t>(storage_out) % alignof(gcso_mapped_storage_descriptor_t) != 0)) {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(storage_out) %
+                              alignof(gcso_mapped_storage_descriptor_t) !=
+                          0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
         std::memset(storage_out, 0, sizeof(gcso_mapped_storage_descriptor_t));
@@ -607,14 +608,15 @@ gcso_mapped_storage_open_mmap(const char* GCSO_RESTRICT file_path,
  * @param storage_desc Descriptor structure pointer to clear.
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL
-gcso_mapped_storage_close_mmap(gcso_mapped_storage_descriptor_t* GCSO_RESTRICT storage_desc) GCSO_NOEXCEPT {
+GCSO_API gcso_status_t GCSO_CALL gcso_mapped_storage_close_mmap(
+    gcso_mapped_storage_descriptor_t* GCSO_RESTRICT storage_desc) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(storage_desc == nullptr)) {
         return GCSO_SUCCESS;
     }
     try {
-        if (GCSO_UNLIKELY(
-                reinterpret_cast<uintptr_t>(storage_desc) % alignof(gcso_mapped_storage_descriptor_t) != 0)) {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(storage_desc) %
+                              alignof(gcso_mapped_storage_descriptor_t) !=
+                          0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
         std::memset(storage_desc, 0, sizeof(gcso_mapped_storage_descriptor_t));

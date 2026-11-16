@@ -88,8 +88,8 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_ACTION_MODE_DPSR_STEER (1U << 0)    /* 0x01U */
 #define GCSO_ACTION_MODE_LAYER_SKIP (1U << 1)    /* 0x02U */
 #define GCSO_ACTION_MODE_PHASE_REPULSE (1U << 2) /* 0x04U */
-#define GCSO_ACTION_MODE_SUBHEAD_ROUTE (1U << 3)    /* 0x08U */
-#define GCSO_ACTION_MODE_RANK1_INJECT (1U << 4)    /* 0x10U */
+#define GCSO_ACTION_MODE_SUBHEAD_ROUTE (1U << 3) /* 0x08U */
+#define GCSO_ACTION_MODE_RANK1_INJECT (1U << 4)  /* 0x10U */
 #define GCSO_ACTION_MODE_ALL_MASK 0x1FU
 
 /* Canonical Action Mode Presets (1:1 parity with primitives.rs) */
@@ -183,9 +183,9 @@ typedef enum gcso_anchor_type GCSO_ENUM_UNDERLYING(uint32_t){
  * @brief 7-regime stigmergic action decisions matching Rust StigmergicActionDecision (0..=6).
  */
 typedef enum gcso_stigmergic_action_decision GCSO_ENUM_UNDERLYING(uint8_t){
-    GCSO_DECISION_PASSIVE_SIDECAR = 0,        GCSO_DECISION_INERTIAL_LAYER_SKIP = 1,
-    GCSO_DECISION_EXPRESS_PHASE_STEER = 2,    GCSO_DECISION_SUBHEAD_ROUTE = 3,
-    GCSO_DECISION_FULL_ORCHESTRATION = 4, GCSO_DECISION_CRYSTALLIZE_MACRO_BASIN = 5,
+    GCSO_DECISION_PASSIVE_SIDECAR = 0,     GCSO_DECISION_INERTIAL_LAYER_SKIP = 1,
+    GCSO_DECISION_EXPRESS_PHASE_STEER = 2, GCSO_DECISION_SUBHEAD_ROUTE = 3,
+    GCSO_DECISION_FULL_ORCHESTRATION = 4,  GCSO_DECISION_CRYSTALLIZE_MACRO_BASIN = 5,
     GCSO_DECISION_REPULSION_ESCAPE = 6} gcso_stigmergic_action_decision_enum_t;
 
 /**
@@ -577,9 +577,11 @@ GCSO_STATIC_ASSERT(sizeof(gcso_pointer_trail_t) == 128, "gcso_pointer_trail_t si
 GCSO_STATIC_ASSERT(sizeof(gcso_ledger_slot_t) == 64, "gcso_ledger_slot_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_config_t) == 64, "gcso_config_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_edbc_state_t) == 64, "gcso_edbc_state_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_mapped_storage_descriptor_t) == 64, "gcso_mapped_storage_descriptor_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_mapped_storage_descriptor_t) == 64,
+                   "gcso_mapped_storage_descriptor_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_subhead_config_t) == 32, "gcso_subhead_config_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_rank1_residual_descriptor_t) == 64, "gcso_rank1_residual_descriptor_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_rank1_residual_descriptor_t) == 64,
+                   "gcso_rank1_residual_descriptor_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_snapshot_header_t) == 128, "gcso_snapshot_header_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_kv_keyframe_header_t) == 64,
                    "gcso_kv_keyframe_header_t size mismatch");
@@ -613,7 +615,8 @@ GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_config_t) == 16, "gcso_config_t alignment m
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_edbc_state_t) == 32, "gcso_edbc_state_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_mapped_storage_descriptor_t) == 32,
                    "gcso_mapped_storage_descriptor_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_subhead_config_t) == 16, "gcso_subhead_config_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_subhead_config_t) == 16,
+                   "gcso_subhead_config_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_rank1_residual_descriptor_t) == 32,
                    "gcso_rank1_residual_descriptor_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_snapshot_header_t) == 64,

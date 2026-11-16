@@ -306,7 +306,7 @@ struct GCSO_ALIGNAS(16) gcso_dpsr_kernel_opaque {
  */
 struct GCSO_ALIGNAS(16) gcso_subhead_router_opaque {
     gcso_subhead_config_t config; ///< Sub-head group allocation configuration.
-    bool is_active;            ///< Lifecycle state flag.
+    bool is_active;               ///< Lifecycle state flag.
 };
 
 /**
@@ -315,7 +315,7 @@ struct GCSO_ALIGNAS(16) gcso_subhead_router_opaque {
  */
 struct GCSO_ALIGNAS(32) gcso_rank1_residual_opaque {
     gcso_rank1_residual_descriptor_t descriptor; ///< Rank-1 outer product descriptor layout.
-    bool is_active;                   ///< Lifecycle state flag.
+    bool is_active;                              ///< Lifecycle state flag.
 };
 
 /**
