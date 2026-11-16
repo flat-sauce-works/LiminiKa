@@ -465,6 +465,8 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
                 )
             }
         } else if query_is_guard_trap {
+            let evaded_counter_fact = !query.recalled_fact_anchors.is_empty()
+                && (anchor_mismatch || anchor_overlap_ratio < 0.5);
             if draft.guard_conflict_margin > policy.guard_trigger_margin {
                 let align = draft.top1_fact_score - draft.guard_conflict_margin * 1.5;
                 (
@@ -477,6 +479,22 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
                         rope_rad_delta: policy.max_rope_boost_rad,
                         srl_scale_delta: policy.srl_boost_delta,
                         anchor_mismatch,
+                    },
+                )
+            } else if !matches!(draft.void_state, VoidBoundaryState::CvoidEmptySpace)
+                && evaded_counter_fact
+            {
+                let align = draft.top1_fact_score + 0.15 * anchor_overlap_ratio - 0.10;
+                (
+                    ReflectionTriggerKind::BoundaryAmbiguity,
+                    align,
+                    ReflectionCorrectiveDirective {
+                        rethink_recommended: true,
+                        inject_guard_repulsion: true,
+                        suppress_injection: false,
+                        rope_rad_delta: policy.max_rope_boost_rad * 0.75,
+                        srl_scale_delta: policy.srl_boost_delta * 0.65,
+                        anchor_mismatch: true,
                     },
                 )
             } else if !matches!(draft.void_state, VoidBoundaryState::CvoidEmptySpace) {
@@ -895,5 +913,45 @@ mod tests {
         let crit = eval.assess_trajectory(&query, &draft, &recall_policy, &policy);
         assert_eq!(crit.trigger, ReflectionTriggerKind::Converged);
         assert!(!crit.directive.rethink_recommended);
+    }
+
+    #[test]
+    fn reflection_flags_guard_trap_vague_evasion_when_counter_fact_anchor_is_omitted() {
+        let eval = ManifoldReflectionEvaluator;
+        let recall_policy = RecallPolicy::default();
+        let policy = ReflectionPolicy::default();
+
+        // Query tripped the Guard margin while recalling counter-fact anchor #2.
+        let query = make_snapshot(
+            VoidBoundaryState::LiminalBoundary,
+            0.58,
+            0.35,
+            0.18,
+            vec![2],
+        );
+        // Draft stayed liminal without directly tripping the guard, yet omitted counter-fact #2.
+        let evasive_draft = make_snapshot(
+            VoidBoundaryState::LiminalBoundary,
+            0.36,
+            0.30,
+            -0.05,
+            vec![9],
+        );
+        let crit = eval.assess_trajectory(&query, &evasive_draft, &recall_policy, &policy);
+        assert_eq!(crit.trigger, ReflectionTriggerKind::BoundaryAmbiguity);
+        assert!(crit.directive.rethink_recommended);
+        assert!(crit.directive.inject_guard_repulsion);
+        assert!(crit.directive.anchor_mismatch);
+
+        // Once Pass 2 grounds on counter-fact anchor #2 inside the basin, it converges.
+        let grounded_draft =
+            make_snapshot(VoidBoundaryState::InsideBasin, 0.68, 0.32, -0.25, vec![2]);
+        let crit_ok = eval.assess_trajectory(&query, &grounded_draft, &recall_policy, &policy);
+        assert_eq!(crit_ok.trigger, ReflectionTriggerKind::Converged);
+        assert!(!crit_ok.directive.rethink_recommended);
+        assert_eq!(
+            eval.select_better_pass(&policy, &crit, &crit_ok),
+            ReflectionSelection::Pass2
+        );
     }
 }

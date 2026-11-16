@@ -19,9 +19,10 @@ use liminika_core::traits::aligned::{
 };
 use liminika_core::traits::gateway::{
     ActionHubGatewayExt, AdaptiveThresholdPolicy, CausalProvenanceReport, CausalProvenanceSignal,
-    CognitiveCircuitPlasticity, CognitiveTrajectoryLedger, GatewayFrame, GatewayPhaseSteeringExt,
-    GatewayRank1SteeringExt, GuardPhaseAnchor, ManifoldGatewaySignal, ManifoldProbeBaseline,
-    ObjectiveFact, StigmergicThresholdPolicy, SubjectivePersona, SystemConstraint,
+    CognitiveCircuitActivation, CognitiveCircuitPlasticity, CognitiveNeuralBankOps,
+    CognitiveTrajectoryLedger, GatewayFrame, GatewayPhaseSteeringExt, GatewayRank1SteeringExt,
+    GuardPhaseAnchor, ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact,
+    StigmergicThresholdPolicy, SubjectivePersona, SwarmScaleGranularity, SystemConstraint,
     CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
 };
 use liminika_core::traits::primitives::{
@@ -30,7 +31,9 @@ use liminika_core::traits::primitives::{
 use liminika_core::traits::rope::{
     PhaseSteeringGeometryExt, RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget,
 };
-use liminika_core::traits::telemetry::SwarmResolutionReport;
+use liminika_core::traits::telemetry::{
+    SwarmResolutionReport, LEDGER_FLAG_COGNITIVE_TRAJECTORY, NUM_SWARM_MICRO_CELLS,
+};
 use liminika_core::traits::Rank1ResidualAdapter;
 
 pub mod pooling;
@@ -352,6 +355,47 @@ impl ModelSteeringAdapter {
     #[must_use]
     pub const fn system_constraint(&self) -> &SystemConstraint<()> {
         &self.system_constraint
+    }
+
+    /// Writes `circuit` into the embedded [`gcso_ledger_slot_t`] so every subsequent
+    /// [`ActionHubEngine`] and SRL step modulates [`GatewayFrame`] dynamically from this circuit.
+    pub fn set_active_circuit(&mut self, circuit: CognitiveTrajectoryLedger) {
+        circuit.write_to_ledger_slot(&mut self.ledger_slot);
+    }
+
+    /// Clears the active [`CognitiveTrajectoryLedger`] flag and trajectory register from the adapter.
+    pub fn clear_active_circuit(&mut self) {
+        self.ledger_slot.telemetry_mini_ledger = [0u8; 8];
+        self.ledger_slot.auto_tune_flags &= !LEDGER_FLAG_COGNITIVE_TRAJECTORY;
+    }
+
+    /// Returns the currently active [`CognitiveTrajectoryLedger`] if attached to the adapter's ledger slot.
+    #[must_use]
+    pub const fn active_circuit(&self) -> Option<CognitiveTrajectoryLedger> {
+        if (self.ledger_slot.auto_tune_flags & LEDGER_FLAG_COGNITIVE_TRAJECTORY) != 0 {
+            Some(CognitiveTrajectoryLedger::from_ledger_slot(
+                &self.ledger_slot,
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Evaluates `bank` against `(bias_words, input_words)` at `scale`, applies homeostatic
+    /// plasticity (`reinforce_bank`), and pushes the consolidated ledger back into the adapter's
+    /// live Hot-Path ledger slot.
+    pub fn reinforce_active_circuit_with_bank<B: CognitiveNeuralBankOps>(
+        &mut self,
+        bank: &mut B,
+        bias_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        scale: SwarmScaleGranularity,
+        converged: bool,
+    ) -> CognitiveCircuitActivation {
+        let act = bank.evaluate_bank_activation(bias_words, input_words, scale);
+        bank.reinforce_bank(&act, converged);
+        self.set_active_circuit(bank.to_consolidated_ledger());
+        act
     }
 
     /// Returns a mutable reference to the dynamic [`AdaptiveThresholdPolicy`].
@@ -770,14 +814,17 @@ impl ModelSteeringAdapter {
         self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
             let entropy_h_tilde =
                 entropy_h_tilde_opt.unwrap_or(this.action_hub.last_entropy_h_tilde);
+            let scale =
+                SwarmScaleGranularity::from_layer_ratio(layer_idx, this.geometry.num_layers.max(1));
             let (frame, report, decision) = this
                 .action_hub
-                .orchestrate_gateway_layer_with_policy_safe(
+                .orchestrate_gateway_layer_with_policy_and_scale_safe(
                     signal,
                     &this.geometry,
                     &this.threshold_policy,
                     &this.system_constraint,
                     &this.probe_baseline,
+                    scale,
                     entropy_h_tilde,
                     &mut this.ledger_slot,
                     trail_inout,
@@ -786,7 +833,9 @@ impl ModelSteeringAdapter {
                     None,
                     logits,
                 )
-                .map_err(|e| format!("orchestrate_gateway_layer_with_policy_safe error: {e}"))?;
+                .map_err(|e| {
+                    format!("orchestrate_gateway_layer_with_policy_and_scale_safe error: {e}")
+                })?;
             this.action_hub.last_decision = decision as u8;
             this.decision_counts[(decision as usize).min(6)] += 1;
             Ok((frame, report, decision))
@@ -852,7 +901,17 @@ impl ModelSteeringAdapter {
         u_buf.as_mut_slice().copy_from_slice(u_vec);
         v_buf.as_mut_slice().copy_from_slice(v_vec);
 
-        let (frame, gain) = {
+        let (mut frame, frm_w) = signal.synthesize_gateway_frame_with_words();
+        if let Some(circuit) = self.active_circuit() {
+            let _ = circuit.modulate_gateway_frame_at_scale(
+                &mut frame,
+                &frm_w,
+                &frm_w,
+                SwarmScaleGranularity::MacroCoalition,
+            );
+        }
+
+        let gain = {
             let mut y_mut = AlignedSliceMut32::new(y_buf.as_mut_slice())
                 .map_err(|e| format!("AlignedSliceMut32 y error: {e}"))?;
             let x_aligned = AlignedSlice32::new(x_buf.as_slice())
@@ -862,10 +921,10 @@ impl ModelSteeringAdapter {
             let v_aligned = AlignedSlice32::new(v_buf.as_slice())
                 .map_err(|e| format!("AlignedSlice32 v error: {e}"))?;
             self.residual_adapter
-                .apply_gateway_rank1_hidden_fused(
-                    signal, &mut y_mut, &x_aligned, &u_aligned, &v_aligned,
+                .apply_gateway_frame_rank1_hidden_fused(
+                    &frame, &mut y_mut, &x_aligned, &u_aligned, &v_aligned,
                 )
-                .map_err(|e| format!("apply_gateway_rank1_hidden_fused error: {e}"))?
+                .map_err(|e| format!("apply_gateway_frame_rank1_hidden_fused error: {e}"))?
         };
 
         hidden_inout.copy_from_slice(y_buf.as_slice());

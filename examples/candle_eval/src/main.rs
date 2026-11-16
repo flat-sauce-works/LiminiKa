@@ -405,13 +405,8 @@ impl RotaryCache {
                     .to_vec1::<f32>()?;
                 let tok_stride = num_heads * rot;
                 if max_rad < 0.0 {
-                    if let Some((
-                        fact_anchors,
-                        persona_anchors,
-                        _guard_anchors,
-                        neg_ref,
-                        _pos_ref,
-                    )) = resonant_opt
+                    if let Some((fact_anchors, persona_anchors, guard_anchors, neg_ref, _pos_ref)) =
+                        resonant_opt
                     {
                         for tok in 0..seq_len {
                             let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
@@ -422,12 +417,24 @@ impl RotaryCache {
                             if max_rad <= -1.5 {
                                 let persona_res =
                                     ResonantSignalSlice::from_q7_probe(persona_anchors, &probe);
-                                let composite = (fact_res, persona_res);
-                                adapter
-                                    .orchestrate_layer_rope_with_action_hub(
-                                        layer_idx, &composite, trail, None, 128, slice, None,
-                                    )
-                                    .map_err(candle_core::Error::Msg)?;
+                                if guard_anchors.is_empty() {
+                                    let composite = (fact_res, persona_res);
+                                    adapter
+                                        .orchestrate_layer_rope_with_action_hub(
+                                            layer_idx, &composite, trail, None, 128, slice, None,
+                                        )
+                                        .map_err(candle_core::Error::Msg)?;
+                                } else {
+                                    let guard_res =
+                                        ResonantSignalSlice::from_q7_probe(guard_anchors, &probe);
+                                    let sys_res = *adapter.system_constraint();
+                                    let composite = (sys_res, fact_res, persona_res, guard_res);
+                                    adapter
+                                        .orchestrate_layer_rope_with_action_hub(
+                                            layer_idx, &composite, trail, None, 128, slice, None,
+                                        )
+                                        .map_err(candle_core::Error::Msg)?;
+                                }
                             } else {
                                 adapter
                                     .steer_layer_with_gateway(
@@ -920,39 +927,99 @@ impl Phi3Model {
                     let rope_rad = st.rope_rad;
                     let mut h_vec = last.squeeze(0)?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
                     if srl_scale < 0.0 {
-                        let mut fact_arr = [0i8; 64];
-                        if let Some(last_q7) = q7s.and_then(|qs| qs.last()) {
-                            let n = last_q7.len().min(64);
-                            fact_arr[..n].copy_from_slice(&last_q7[..n]);
-                        }
-                        let fact = ObjectiveFact::new(fact_arr, 2.5, 0, 1);
-                        if let Some(last_p) = persona_q7s.and_then(|ps| ps.last()) {
-                            let mut persona_arr = [0i8; 64];
-                            let pn = last_p.len().min(64);
-                            persona_arr[..pn].copy_from_slice(&last_p[..pn]);
-                            let persona = SubjectivePersona::new(persona_arr, 1.5, 0, 101);
-                            let composite = (fact, persona);
-                            if rope_rad <= -1.5 {
+                        let last_layer_idx = self.layers.len().saturating_sub(1);
+                        let dyn_srl = st
+                            .resonant_ctx
+                            .and_then(|rc| rc.layer_slices(last_layer_idx))
+                            .filter(|(fa, _, _, _, _)| !fa.is_empty());
+                        if let Some((fact_anchors, persona_anchors, guard_anchors, _, _)) = dyn_srl
+                        {
+                            let fact_res = ResonantSignalSlice::from_trail(fact_anchors, st.trail);
+                            if !persona_anchors.is_empty() && !guard_anchors.is_empty() {
+                                let persona_res =
+                                    ResonantSignalSlice::from_trail(persona_anchors, st.trail);
+                                let guard_res =
+                                    ResonantSignalSlice::from_trail(guard_anchors, st.trail);
+                                let sys_res = *ad.system_constraint();
+                                let composite = (sys_res, fact_res, persona_res, guard_res);
+                                if rope_rad <= -1.5 {
+                                    let _ = ad
+                                        .orchestrate_layer_srl_with_action_hub(
+                                            &composite, &mut h_vec, u_vec, v_vec,
+                                        )
+                                        .map_err(candle_core::Error::Msg)?;
+                                } else {
+                                    let _ = ad
+                                        .apply_srl_with_gateway(
+                                            &composite, &mut h_vec, u_vec, v_vec,
+                                        )
+                                        .map_err(candle_core::Error::Msg)?;
+                                }
+                            } else if !persona_anchors.is_empty() {
+                                let persona_res =
+                                    ResonantSignalSlice::from_trail(persona_anchors, st.trail);
+                                let composite = (fact_res, persona_res);
+                                if rope_rad <= -1.5 {
+                                    let _ = ad
+                                        .orchestrate_layer_srl_with_action_hub(
+                                            &composite, &mut h_vec, u_vec, v_vec,
+                                        )
+                                        .map_err(candle_core::Error::Msg)?;
+                                } else {
+                                    let _ = ad
+                                        .apply_srl_with_gateway(
+                                            &composite, &mut h_vec, u_vec, v_vec,
+                                        )
+                                        .map_err(candle_core::Error::Msg)?;
+                                }
+                            } else if rope_rad <= -1.5 {
                                 let _ = ad
                                     .orchestrate_layer_srl_with_action_hub(
-                                        &composite, &mut h_vec, u_vec, v_vec,
+                                        &fact_res, &mut h_vec, u_vec, v_vec,
                                     )
                                     .map_err(candle_core::Error::Msg)?;
                             } else {
                                 let _ = ad
-                                    .apply_srl_with_gateway(&composite, &mut h_vec, u_vec, v_vec)
+                                    .apply_srl_with_gateway(&fact_res, &mut h_vec, u_vec, v_vec)
                                     .map_err(candle_core::Error::Msg)?;
                             }
-                        } else if rope_rad <= -1.5 {
-                            let _ = ad
-                                .orchestrate_layer_srl_with_action_hub(
-                                    &fact, &mut h_vec, u_vec, v_vec,
-                                )
-                                .map_err(candle_core::Error::Msg)?;
                         } else {
-                            let _ = ad
-                                .apply_srl_with_gateway(&fact, &mut h_vec, u_vec, v_vec)
-                                .map_err(candle_core::Error::Msg)?;
+                            let mut fact_arr = [0i8; 64];
+                            if let Some(last_q7) = q7s.and_then(|qs| qs.last()) {
+                                let n = last_q7.len().min(64);
+                                fact_arr[..n].copy_from_slice(&last_q7[..n]);
+                            }
+                            let fact = ObjectiveFact::new(fact_arr, 2.5, 0, 1);
+                            if let Some(last_p) = persona_q7s.and_then(|ps| ps.last()) {
+                                let mut persona_arr = [0i8; 64];
+                                let pn = last_p.len().min(64);
+                                persona_arr[..pn].copy_from_slice(&last_p[..pn]);
+                                let persona = SubjectivePersona::new(persona_arr, 1.5, 0, 101);
+                                let composite = (fact, persona);
+                                if rope_rad <= -1.5 {
+                                    let _ = ad
+                                        .orchestrate_layer_srl_with_action_hub(
+                                            &composite, &mut h_vec, u_vec, v_vec,
+                                        )
+                                        .map_err(candle_core::Error::Msg)?;
+                                } else {
+                                    let _ = ad
+                                        .apply_srl_with_gateway(
+                                            &composite, &mut h_vec, u_vec, v_vec,
+                                        )
+                                        .map_err(candle_core::Error::Msg)?;
+                                }
+                            } else if rope_rad <= -1.5 {
+                                let _ = ad
+                                    .orchestrate_layer_srl_with_action_hub(
+                                        &fact, &mut h_vec, u_vec, v_vec,
+                                    )
+                                    .map_err(candle_core::Error::Msg)?;
+                            } else {
+                                let _ = ad
+                                    .apply_srl_with_gateway(&fact, &mut h_vec, u_vec, v_vec)
+                                    .map_err(candle_core::Error::Msg)?;
+                            }
                         }
                     } else {
                         ad.apply_srl_hidden_fused(&mut h_vec, u_vec, v_vec, srl_scale)
@@ -1500,10 +1567,12 @@ fn generate_steered_reply_with_offset(
     let (mut logits, _, _) =
         model.forward_tokens(&ids, start_offset, Some(&mut steer), cfg.use_steer, false)?;
 
-    let mut gen_ids = Vec::with_capacity(48);
-    for offset in (start_offset + ids.len()..).take(48) {
+    const MAX_GEN_TOKENS: usize = 64;
+    let mut gen_ids = Vec::with_capacity(MAX_GEN_TOKENS);
+    for offset in (start_offset + ids.len()..).take(MAX_GEN_TOKENS) {
         let next = argmax(&logits);
-        if next == 199999 {
+        if next == 199999 || next == 200020 {
+            gen_ids.push(next);
             break;
         }
         gen_ids.push(next);
@@ -2316,6 +2385,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             t_kv.elapsed().as_secs_f64() * 1_000_000.0,
             &recall.gateway_frame.phase_deltas,
         );
+        if active_persona_bank.is_some() {
+            adapter.set_active_circuit(query_snap.cognitive_trajectory);
+        } else {
+            adapter.clear_active_circuit();
+        }
         let top_fact_preview = if recall.recalled_facts.is_empty() {
             "none".to_string()
         } else {
@@ -2514,6 +2588,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                     bank.reinforce_bank(&crit.layer_activation, converged);
                 }
+                adapter.set_active_circuit(bank.to_consolidated_ledger());
             }
             (text, reflect_note)
         } else {
@@ -2758,6 +2833,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     t_mt_kv.elapsed().as_secs_f64() * 1_000_000.0,
                     &recall.gateway_frame.phase_deltas,
                 );
+                if active_persona_bank.is_some() {
+                    adapter.set_active_circuit(turn_snap.cognitive_trajectory);
+                } else {
+                    adapter.clear_active_circuit();
+                }
 
                 let dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
                 let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);

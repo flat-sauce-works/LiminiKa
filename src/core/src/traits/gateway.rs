@@ -4153,8 +4153,28 @@ pub trait GatewayRank1SteeringExt: Rank1ResidualAdapter {
         v_vec: &AlignedSlice32<'_, f32>,
     ) -> GcsoResult<(GatewayFrame, f32)> {
         let frame = signal.synthesize_gateway_frame();
+        let gain = self.apply_gateway_frame_rank1_hidden_fused(
+            &frame, y_out, x_in, u_vec, v_vec,
+        )?;
+        Ok((frame, gain))
+    }
+
+    /// Applies norm-adaptive fused Rank-1 residual injection from an already synthesized or
+    /// circuit-modulated [`GatewayFrame`].
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slice lengths mismatch or `Rank1ResidualAdapter` rejects inputs.
+    #[inline]
+    fn apply_gateway_frame_rank1_hidden_fused(
+        &self,
+        frame: &GatewayFrame,
+        y_out: &mut AlignedSliceMut32<'_, f32>,
+        x_in: &AlignedSlice32<'_, f32>,
+        u_vec: &AlignedSlice32<'_, f32>,
+        v_vec: &AlignedSlice32<'_, f32>,
+    ) -> GcsoResult<f32> {
         if (frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0 {
-            return Ok((frame, 0.0));
+            return Ok(0.0);
         }
         // Rank-1 outer product `(v^T x) u` already scales linearly with `||x||_2`,
         // so `structural_gain` must be a dimensionless ratio derived from Gateway physics.
@@ -4173,7 +4193,7 @@ pub trait GatewayRank1SteeringExt: Rank1ResidualAdapter {
         if structural_gain > 0.0 {
             self.eval_rank1_slices_fused(y_out, x_in, u_vec, v_vec, None, structural_gain)?;
         }
-        Ok((frame, structural_gain))
+        Ok(structural_gain)
     }
 }
 
@@ -4440,6 +4460,51 @@ pub trait ActionHubGatewayExt: ActionHub {
         ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         unresolved_damping_u7: u8,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        srl_hidden: Option<(
+            &mut AlignedSliceMut32<'_, f32>,
+            &AlignedSlice32<'_, f32>,
+            &AlignedSlice32<'_, f32>,
+            &AlignedSlice32<'_, f32>,
+        )>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport, StigmergicActionDecision)> {
+        self.orchestrate_gateway_layer_with_scale_safe(
+            signal,
+            geometry,
+            thresholds,
+            SwarmScaleGranularity::TypeGateway,
+            entropy_h_tilde,
+            ledger_slot,
+            trail_out,
+            unresolved_damping_u7,
+            query_tensor,
+            srl_hidden,
+            logits_opt,
+        )
+    }
+
+    /// Scale-aware variant of [`Self::orchestrate_gateway_layer_safe`] that closes the feedback
+    /// loop from `ledger_slot`'s active [`CognitiveTrajectoryLedger`] (when
+    /// [`LEDGER_FLAG_COGNITIVE_TRAJECTORY`] is set) back onto the synthesized [`GatewayFrame`]
+    /// at the caller's [`SwarmScaleGranularity`] prior to causal inspection and steering.
+    ///
+    /// # Errors
+    /// Propagates any validation or execution error from [`ActionHub`].
+    #[inline]
+    fn orchestrate_gateway_layer_with_scale_safe<
+        S: ManifoldGatewaySignal + ?Sized,
+        G: RopeSteeringTarget + ?Sized,
+    >(
+        &mut self,
+        signal: &S,
+        geometry: &G,
+        thresholds: &StigmergicThresholds,
+        scale: SwarmScaleGranularity,
+        entropy_h_tilde: f32,
+        ledger_slot: &mut gcso_ledger_slot_t,
+        trail_out: &mut gcso_pointer_trail_t,
+        unresolved_damping_u7: u8,
         mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         srl_hidden: Option<(
             &mut AlignedSliceMut32<'_, f32>,
@@ -4450,7 +4515,16 @@ pub trait ActionHubGatewayExt: ActionHub {
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport, StigmergicActionDecision)> {
         let geom = geometry.rope_geometry();
-        let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
+        let (mut frame, frm_w) = signal.synthesize_gateway_frame_with_words();
+        if (ledger_slot.auto_tune_flags & LEDGER_FLAG_COGNITIVE_TRAJECTORY) != 0 {
+            let circuit = CognitiveTrajectoryLedger::from_ledger_slot(ledger_slot);
+            let ref_w = if trail_out.step_count > 0 {
+                trail_phase_words_ref(trail_out)
+            } else {
+                &frm_w
+            };
+            let _ = circuit.modulate_gateway_frame_at_scale(&mut frame, &frm_w, ref_w, scale);
+        }
         let report = frame.to_causal_report();
         let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
             frame.qdps_min_step_rad,
@@ -4609,8 +4683,8 @@ pub trait ActionHubGatewayExt: ActionHub {
                     | StigmergicActionDecision::CrystallizeMacroBasin
             ) {
                 if let Some((y_mut, x_in, u_vec, v_vec)) = srl_hidden {
-                    let _ = GatewayRank1SteeringExt::apply_gateway_rank1_hidden_fused(
-                        self, signal, y_mut, x_in, u_vec, v_vec,
+                    let _ = GatewayRank1SteeringExt::apply_gateway_frame_rank1_hidden_fused(
+                        self, &frame, y_mut, x_in, u_vec, v_vec,
                     )?;
                     metrics |= LEDGER_METRIC_RANK1_INJECTED;
                 }
@@ -4659,12 +4733,62 @@ pub trait ActionHubGatewayExt: ActionHub {
         )>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport, StigmergicActionDecision)> {
+        self.orchestrate_gateway_layer_with_policy_and_scale_safe(
+            signal,
+            geometry,
+            policy,
+            system,
+            probe,
+            SwarmScaleGranularity::TypeGateway,
+            entropy_h_tilde,
+            ledger_slot,
+            trail_out,
+            unresolved_damping_u7,
+            query_tensor,
+            srl_hidden,
+            logits_opt,
+        )
+    }
+
+    /// Scale-aware variant of [`Self::orchestrate_gateway_layer_with_policy_safe`] allowing
+    /// per-layer traversal across `MacroCoalition -> TypeGateway -> CellTrail -> PointerBit`.
+    ///
+    /// # Errors
+    /// Propagates any error from [`Self::orchestrate_gateway_layer_with_scale_safe`].
+    #[inline]
+    fn orchestrate_gateway_layer_with_policy_and_scale_safe<
+        S: ManifoldGatewaySignal + ?Sized,
+        G: RopeSteeringTarget + ?Sized,
+        P: StigmergicThresholdPolicy + ?Sized,
+        C: SystemConstraintSignal + ?Sized,
+    >(
+        &mut self,
+        signal: &S,
+        geometry: &G,
+        policy: &P,
+        system: &C,
+        probe: &ManifoldProbeBaseline,
+        scale: SwarmScaleGranularity,
+        entropy_h_tilde: f32,
+        ledger_slot: &mut gcso_ledger_slot_t,
+        trail_out: &mut gcso_pointer_trail_t,
+        unresolved_damping_u7: u8,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        srl_hidden: Option<(
+            &mut AlignedSliceMut32<'_, f32>,
+            &AlignedSlice32<'_, f32>,
+            &AlignedSlice32<'_, f32>,
+            &AlignedSlice32<'_, f32>,
+        )>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport, StigmergicActionDecision)> {
         let dyn_thresholds =
             policy.resolve_thresholds(system, probe, trail_out, entropy_h_tilde);
-        self.orchestrate_gateway_layer_safe(
+        self.orchestrate_gateway_layer_with_scale_safe(
             signal,
             geometry,
             &dyn_thresholds,
+            scale,
             entropy_h_tilde,
             ledger_slot,
             trail_out,
@@ -5882,6 +6006,86 @@ impl CognitiveTrajectoryLedger {
         };
         base.intensity_q7 = adj_peel.max(adj_fuse).max(adj_repulse);
         base
+    }
+
+    /// Evaluates this trajectory circuit against `(frm_w, trail_w)` at `scale` and modulates
+    /// `frame`'s PSPM head allocation, sub-head gains, EDBC inverse-temperature scale, and
+    /// anti-resonance guard severity in place without dataset-specific constants.
+    ///
+    /// When the trajectory ledger is empty (`trajectory_depth == 0`), `frame` is returned unmodified.
+    #[inline]
+    pub fn modulate_gateway_frame_at_scale(
+        &self,
+        frame: &mut GatewayFrame,
+        frm_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        trail_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        scale: SwarmScaleGranularity,
+    ) -> CognitiveCircuitActivation {
+        let act = self.evaluate_circuit_activation(frm_w, trail_w, scale);
+        if act.trajectory_depth == 0 {
+            return act;
+        }
+        const MIN_BUCKET_HEADS: u8 = 8;
+        match act.op_kind() {
+            CognitiveOpKind::DecomposePeel | CognitiveOpKind::RouteSubHead => {
+                let shift = ((act.peel_gate_q7.saturating_sub(56)) >> 3).min(8);
+                let take_logic = (shift >> 1)
+                    .min(frame.subhead_logic_heads.saturating_sub(MIN_BUCKET_HEADS));
+                let rem = shift.saturating_sub(take_logic);
+                let take_explore =
+                    rem.min(frame.subhead_explore_heads.saturating_sub(MIN_BUCKET_HEADS));
+                let gained = take_logic.saturating_add(take_explore);
+                frame.subhead_logic_heads = frame.subhead_logic_heads.saturating_sub(take_logic);
+                frame.subhead_explore_heads =
+                    frame.subhead_explore_heads.saturating_sub(take_explore);
+                frame.subhead_fact_heads = frame.subhead_fact_heads.saturating_add(gained);
+                frame.subhead_fact_gain_q7 =
+                    frame.subhead_fact_gain_q7.saturating_add(act.peel_gate_q7 >> 3);
+            }
+            CognitiveOpKind::SynthesizeFuse | CognitiveOpKind::CrystallizeCommit => {
+                let shift = ((act.fuse_gate_q7.saturating_sub(56)) >> 3).min(8);
+                let take_fact = (shift >> 1)
+                    .min(frame.subhead_fact_heads.saturating_sub(MIN_BUCKET_HEADS));
+                let rem = shift.saturating_sub(take_fact);
+                let take_explore =
+                    rem.min(frame.subhead_explore_heads.saturating_sub(MIN_BUCKET_HEADS));
+                let gained = take_fact.saturating_add(take_explore);
+                frame.subhead_fact_heads = frame.subhead_fact_heads.saturating_sub(take_fact);
+                frame.subhead_explore_heads =
+                    frame.subhead_explore_heads.saturating_sub(take_explore);
+                frame.subhead_logic_heads = frame.subhead_logic_heads.saturating_add(gained);
+                frame.subhead_logic_gain_q7 =
+                    frame.subhead_logic_gain_q7.saturating_add(act.fuse_gate_q7 >> 3);
+                let boost = 1.0_f32 + (f32::from(act.fuse_gate_q7) * (0.25_f32 / 128.0_f32));
+                frame.effective_inv_temp =
+                    branchless_clamp_f32(frame.effective_inv_temp * boost, 0.25, 4.0);
+            }
+            CognitiveOpKind::RepulseAudit => {
+                let corroborated = act.circuit_resonance_q7 < 0
+                    || frame.fact_persona_coherence < 0.0
+                    || frame.repulsion_severity > 0.25;
+                if corroborated {
+                    let sev_floor = branchless_clamp_f32(
+                        f32::from(act.repulse_sensitivity_q7) / 128.0_f32,
+                        0.55,
+                        1.0,
+                    );
+                    frame.repulsion_severity =
+                        branchless_max_f32(frame.repulsion_severity, sev_floor);
+                    frame.action_mode_flags |= ACTION_MODE_PHASE_REPULSE;
+                    frame.provenance_bits |= CAUSAL_CAUSE_COHOMOLOGY_REPULSION;
+                    frame.subhead_explore_gain_q7 = frame
+                        .subhead_explore_gain_q7
+                        .saturating_add(act.repulse_sensitivity_q7 >> 3);
+                }
+            }
+            CognitiveOpKind::BridgeShift | CognitiveOpKind::SteerAlign | CognitiveOpKind::Observe => {
+                let inc = act.intensity_q7 >> 4;
+                frame.subhead_fact_gain_q7 = frame.subhead_fact_gain_q7.saturating_add(inc);
+                frame.subhead_logic_gain_q7 = frame.subhead_logic_gain_q7.saturating_add(inc);
+            }
+        }
+        act
     }
 
     /// Packs this [`CognitiveTrajectoryLedger`] into a 64-byte C-ABI [`gcso_ledger_slot_t`]
@@ -9175,5 +9379,106 @@ mod tests {
                 ..
             }
         ));
+
+        // 4-tuple (SystemConstraint, ObjectiveFact, SubjectivePersona, GuardPhaseAnchor) composes guard severity,
+        // and CognitiveTrajectoryLedger::modulate_gateway_frame_at_scale routes PSPM/EDBC cleanly.
+        let guard = GuardPhaseAnchor::new([24i8; MAX_ATTENTION_HEADS], 0.85, 0.5);
+        let guard_composite = (
+            SystemConstraint::new((), 0.0, 0.0, 0xFF),
+            ObjectiveFact::new([24i8; MAX_ATTENTION_HEADS], 2.0, 0, 11),
+            SubjectivePersona::new([20i8; MAX_ATTENTION_HEADS], 1.5, 0, 22),
+            guard,
+        );
+        let mut g_frame = guard_composite.synthesize_gateway_frame();
+        assert!(g_frame.repulsion_severity >= 0.55);
+        assert_ne!(g_frame.provenance_bits & CAUSAL_AXIS_CONTRADICTION_GUARD, 0);
+
+        let mut peel_ledger = CognitiveTrajectoryLedger::new();
+        peel_ledger.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::CellTrail,
+            CognitiveOpKind::DecomposePeel,
+            7,
+        ));
+        peel_ledger.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::PointerBit,
+            CognitiveOpKind::DecomposePeel,
+            7,
+        ));
+        let mut peel_frame = GatewayFrame::default();
+        let mut arr_a = [16i8; MAX_ATTENTION_HEADS];
+        for h in &mut arr_a[8..16] {
+            *h = -80;
+        }
+        let w_a = load_q7_words_64(&arr_a);
+        let w_b = load_q7_words_64(&[16i8; MAX_ATTENTION_HEADS]);
+        let peel_act = peel_ledger.modulate_gateway_frame_at_scale(
+            &mut peel_frame,
+            &w_a,
+            &w_b,
+            SwarmScaleGranularity::CellTrail,
+        );
+        assert_eq!(peel_act.op_kind(), CognitiveOpKind::DecomposePeel);
+        assert!(peel_frame.subhead_fact_heads > GatewayFrame::default().subhead_fact_heads);
+        assert_eq!(
+            peel_frame.subhead_fact_heads
+                + peel_frame.subhead_logic_heads
+                + peel_frame.subhead_explore_heads,
+            MAX_ATTENTION_HEADS as u8
+        );
+
+        let mut fuse_ledger = CognitiveTrajectoryLedger::new();
+        fuse_ledger.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::TypeGateway,
+            CognitiveOpKind::SynthesizeFuse,
+            7,
+        ));
+        fuse_ledger.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::MacroCoalition,
+            CognitiveOpKind::CrystallizeCommit,
+            7,
+        ));
+        let mut fuse_slot = gcso_ledger_slot_t::default();
+        fuse_ledger.write_to_ledger_slot(&mut fuse_slot);
+        let mut hub = crate::action_hub::ActionHubEngine::with_dimensions_and_thresholds(
+            64,
+            64,
+            16,
+            crate::action_hub::StigmergicThresholds::default(),
+        )
+        .unwrap();
+        let mut trail = gcso_pointer_trail_t::default();
+        let policy = AdaptiveThresholdPolicy::default();
+        let sys = SystemConstraint::new((), 0.0, 0.0, 0xFF);
+        let probe = ManifoldProbeBaseline::new();
+        let geom = crate::traits::rope::RopeGeometryDescriptor {
+            layout: RopePairLayout::HalfSplit,
+            head_dim: 64,
+            rotary_dim: 64,
+            num_heads: 64,
+        };
+        let sig = (
+            ObjectiveFact::new([18i8; MAX_ATTENTION_HEADS], 2.0, 0, 1),
+            SubjectivePersona::new([18i8; MAX_ATTENTION_HEADS], 1.5, 0, 2),
+        );
+        let (mod_frame, _, _) = hub
+            .orchestrate_gateway_layer_with_policy_and_scale_safe(
+                &sig,
+                &geom,
+                &policy,
+                &sys,
+                &probe,
+                SwarmScaleGranularity::MacroCoalition,
+                0.35,
+                &mut fuse_slot,
+                &mut trail,
+                128,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(mod_frame.effective_inv_temp > 1.0);
+        assert!(mod_frame.subhead_logic_heads >= GatewayFrame::default().subhead_logic_heads);
+        let _ = &mut g_frame;
     }
 }
