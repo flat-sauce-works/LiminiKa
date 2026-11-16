@@ -4312,6 +4312,14 @@ mod tests {
             .expect("ood recall");
         assert_eq!(ood_recall.void_state, VoidBoundaryState::CvoidEmptySpace);
         assert!(ood_recall.recalled_facts.is_empty());
+        assert_eq!(
+            ood_recall
+                .telemetry
+                .cognitive_trajectory
+                .latest_step()
+                .map(|s| s.op()),
+            Some(liminika_core::traits::gateway::CognitiveOpKind::Observe)
+        );
     }
 
     #[test]
@@ -4432,6 +4440,14 @@ mod tests {
         assert_eq!(
             recall.action_decision,
             StigmergicActionDecision::PspmSubHeadRoute
+        );
+        assert_eq!(
+            recall
+                .telemetry
+                .cognitive_trajectory
+                .latest_step()
+                .map(|s| s.op()),
+            Some(liminika_core::traits::gateway::CognitiveOpKind::DecomposePeel)
         );
     }
 }

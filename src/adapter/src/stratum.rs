@@ -19,8 +19,9 @@ use liminika_core::action_hub::{
     StigmergicThresholds, ACTION_HUB_INLINE_TRAILS,
 };
 use liminika_core::traits::gateway::{
-    CausalProvenanceReport, GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact,
-    SubjectivePersona,
+    ActionHubScaleOrchestrator, CausalProvenanceReport, CognitiveCircuitActivation,
+    CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, GatewayFrame, GuardPhaseAnchor,
+    ManifoldGatewaySignal, ObjectiveFact, ScaleLayerNode, SubjectivePersona, SwarmScaleGranularity,
 };
 use liminika_core::traits::primitives::{load_q7_words_64, GcsoResult, MAX_ATTENTION_HEADS};
 use liminika_core::traits::telemetry::{
@@ -104,6 +105,10 @@ pub struct StratumProbeTelemetry {
     pub channel_disagreement: bool,
     /// Core 16-byte causal provenance report synthesized via [`GatewayFrame::to_causal_report`].
     pub provenance: CausalProvenanceReport,
+    /// Recorded 8-step multi-scale cognitive trajectory from `ActionHub` DAES mini ledger.
+    pub cognitive_trajectory: CognitiveTrajectoryLedger,
+    /// Latest pseudo-neural cognitive circuit gating activation computed from trajectory history.
+    pub layer_activation: CognitiveCircuitActivation,
 }
 
 /// Bottom-up and top-down signal flowing across a Society-of-Mind [`StratumPipeline`].
@@ -689,6 +694,64 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
         signal.gateway_frame = frame;
         signal.telemetry.final_top1_anchor = final_top1_anchor;
         signal.telemetry.provenance = frame.to_causal_report();
+
+        // Execute cross-scale ActionHub orchestration so Gateway synthesis, Stigmergy, and
+        // recorded CognitiveTrajectoryLedger close into one unified DAES ledger.
+        let mut boundary_hub = ActionHubEngine::new();
+        let mut daes_slot = Default::default();
+        signal
+            .telemetry
+            .cognitive_trajectory
+            .write_to_daes_slot(&mut daes_slot);
+        let mut boundary_trail = gcso_pointer_trail_t::default();
+        boundary_trail
+            .copy_from_with_words_fast(&gcso_pointer_trail_t::default(), frame.phase_words_ref());
+        let scale_stack = [
+            ScaleLayerNode::new(frame, SwarmScaleGranularity::TypeGateway),
+            ScaleLayerNode::new(
+                signal
+                    .telemetry
+                    .cognitive_trajectory
+                    .synthesize_gateway_frame(),
+                SwarmScaleGranularity::MacroCoalition,
+            ),
+        ];
+        if let Ok((proj, mut ledger, _rep)) = boundary_hub.orchestrate_adaptive_depth_n(
+            &scale_stack,
+            scale_stack.len(),
+            gcso_tagged_ptr_t(frame.tagged_ptr),
+            frame.phase_words_ref(),
+            &mut daes_slot,
+            &mut boundary_trail,
+            None,
+        ) {
+            let final_op = match action_decision {
+                StigmergicActionDecision::RepulsionEscape => CognitiveOpKind::RepulseAudit,
+                StigmergicActionDecision::CrystallizeMacroBasin => {
+                    CognitiveOpKind::CrystallizeCommit
+                }
+                StigmergicActionDecision::PspmSubHeadRoute => {
+                    if signal.decomposition_triggered {
+                        CognitiveOpKind::DecomposePeel
+                    } else {
+                        CognitiveOpKind::RouteSubHead
+                    }
+                }
+                StigmergicActionDecision::FullOrchestrationSrl
+                | StigmergicActionDecision::ExpressPhaseSteer => CognitiveOpKind::SynthesizeFuse,
+                StigmergicActionDecision::PassiveSidecar
+                | StigmergicActionDecision::InertialLayerSkip => CognitiveOpKind::Observe,
+            };
+            let intensity = (proj.activation.intensity_q7 >> 4).clamp(1, 7);
+            ledger.push_step(CognitiveStepOp::pack(
+                SwarmScaleGranularity::MacroCoalition,
+                final_op,
+                intensity,
+            ));
+            ledger.write_to_daes_slot(&mut boundary_hub.daes_slot);
+            signal.telemetry.cognitive_trajectory = ledger;
+            signal.telemetry.layer_activation = proj.activation;
+        }
         Ok(())
     }
 
@@ -1445,8 +1508,47 @@ impl SocietyStratum for LocalTokenResonanceStratum {
         let (mut hub, selected_indices, trail_states) =
             Self::deposit_token_swarm_trails(ctx.entries, signal, last_layer);
 
+        let mut ledger = CognitiveTrajectoryLedger::from_daes_slot(&hub.daes_slot);
+        if !signal.token_deposits.is_empty() {
+            ledger.push_step(CognitiveStepOp::pack(
+                SwarmScaleGranularity::PointerBit,
+                CognitiveOpKind::Observe,
+                (signal.token_deposits.len().min(7)) as u8,
+            ));
+        }
+
         // Run core 8-cell Micro-Swarm consensus between the global and local winners' 64-head Q7 profiles.
         signal.swarm_report = Self::resolve_pair_swarm(ctx.entries, g_idx, l_idx, last_layer);
+        let g_words = load_q7_words_64(
+            &ctx.entries[g_idx]
+                .per_layer_q7
+                .get(last_layer)
+                .copied()
+                .unwrap_or([0_i8; MAX_ATTENTION_HEADS]),
+        );
+        let l_words = load_q7_words_64(
+            &ctx.entries[l_idx]
+                .per_layer_q7
+                .get(last_layer)
+                .copied()
+                .unwrap_or([0_i8; MAX_ATTENTION_HEADS]),
+        );
+        let cell_activation = ledger.evaluate_circuit_activation(
+            &g_words,
+            &l_words,
+            SwarmScaleGranularity::CellTrail,
+        );
+        ledger.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::CellTrail,
+            if g_idx != l_idx {
+                CognitiveOpKind::BridgeShift
+            } else {
+                CognitiveOpKind::RouteSubHead
+            },
+            signal.swarm_report.resolved_cell_count.min(7),
+        ));
+        ledger.write_to_daes_slot(&mut hub.daes_slot);
+        signal.telemetry.layer_activation = cell_activation;
 
         let global_local_sharper = g_idx != l_idx && l_score > 0.0 && l_sharp > g_sharp * 1.15;
         signal.local_channel_preferred = global_local_sharper;
@@ -1467,6 +1569,15 @@ impl SocietyStratum for LocalTokenResonanceStratum {
             &trail_states,
             last_layer,
         );
+        if signal.decomposition_triggered {
+            ledger.push_step(CognitiveStepOp::pack(
+                SwarmScaleGranularity::MacroCoalition,
+                CognitiveOpKind::DecomposePeel,
+                (signal.linked_fact_indices.len().min(7)) as u8,
+            ));
+            ledger.write_to_daes_slot(&mut hub.daes_slot);
+        }
+        signal.telemetry.cognitive_trajectory = ledger;
 
         // Arbitrate per causal role subspace (Fact / Persona / Guard) so a strong Persona style
         // hub cannot mask Fact-level disagreement between global pooling and token-level MaxSim.

@@ -12,7 +12,8 @@
 use crate::{DynamicAttractorRecall, RecallPolicy, VoidBoundaryState};
 use liminika_core::action_hub::StigmergicActionDecision;
 use liminika_core::traits::gateway::{
-    CausalProvenanceSignal, GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact,
+    CausalProvenanceSignal, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
+    GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact, SwarmScaleGranularity,
     SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
 };
 use liminika_core::traits::primitives::MAX_ATTENTION_HEADS;
@@ -115,6 +116,8 @@ pub struct TrajectoryManifoldSnapshot {
     pub action_decision: StigmergicActionDecision,
     /// Synthesized 128-byte core `GatewayFrame`.
     pub gateway_frame: GatewayFrame,
+    /// Multi-scale cognitive step trajectory captured during this recall.
+    pub cognitive_trajectory: CognitiveTrajectoryLedger,
 }
 
 impl TrajectoryManifoldSnapshot {
@@ -156,6 +159,7 @@ impl TrajectoryManifoldSnapshot {
             recalled_fact_q7s,
             action_decision: recall.action_decision,
             gateway_frame: recall.gateway_frame,
+            cognitive_trajectory: recall.telemetry.cognitive_trajectory,
         }
     }
 
@@ -183,6 +187,8 @@ pub struct ReflectionCritique {
     pub directive: ReflectionCorrectiveDirective,
     /// Synthesized core 128-byte `GatewayFrame` reflecting corrective Fact pull or Guard repulsion.
     pub gateway_frame: GatewayFrame,
+    /// Updated cognitive trajectory ledger recording this closed-loop reflection transition.
+    pub cognitive_trajectory: CognitiveTrajectoryLedger,
 }
 
 impl ReflectionCritique {
@@ -514,12 +520,29 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
         };
 
         let gateway_frame = Self::synthesize_corrective_frame(trigger, query, draft);
+        let mut cognitive_trajectory = query.cognitive_trajectory;
+        let step_op = match trigger {
+            ReflectionTriggerKind::GuardAttraction | ReflectionTriggerKind::VoidHallucination => {
+                CognitiveOpKind::RepulseAudit
+            }
+            ReflectionTriggerKind::VoidDrift | ReflectionTriggerKind::BoundaryAmbiguity => {
+                CognitiveOpKind::BridgeShift
+            }
+            ReflectionTriggerKind::Converged => CognitiveOpKind::CrystallizeCommit,
+            ReflectionTriggerKind::ConsistentVoidAbstention => CognitiveOpKind::Observe,
+        };
+        cognitive_trajectory.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::MacroCoalition,
+            step_op,
+            if directive.rethink_recommended { 6 } else { 3 },
+        ));
         ReflectionCritique {
             trigger,
             alignment_score,
             anchor_overlap_ratio,
             directive,
             gateway_frame,
+            cognitive_trajectory,
         }
     }
 }
@@ -552,6 +575,7 @@ mod tests {
             recalled_fact_q7s,
             action_decision: StigmergicActionDecision::PassiveSidecar,
             gateway_frame: GatewayFrame::default(),
+            cognitive_trajectory: CognitiveTrajectoryLedger::new(),
         }
     }
 
@@ -608,6 +632,13 @@ mod tests {
             0
         );
         assert!(crit_guard.corrective_instruction("wrong claim").is_some());
+        assert_eq!(
+            crit_guard
+                .cognitive_trajectory
+                .latest_step()
+                .map(|s| s.op()),
+            Some(CognitiveOpKind::RepulseAudit)
+        );
 
         let recovered_draft =
             make_snapshot(VoidBoundaryState::InsideBasin, 0.74, 0.42, -0.32, vec![2]);

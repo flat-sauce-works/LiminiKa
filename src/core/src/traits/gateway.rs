@@ -56,20 +56,20 @@ use super::primitives::{
     branchless_sincos_q7_ripa, branchless_splitmix64, crc32_block64_zero_seed_words,
     crc32_step_block64_words, crc32_step_l16, crc32_step_l4, crc32_step_l8,
     fast_inv_pos_normal_f32, is_word_array_uniform_64, load_q7_words_64, store_q7_words_64,
-    swar_q7_circular_add_x8,
-    swar_q7_circular_diff_x8, swar_q7_mean_i8_from_words_64,
-    swar_q7_mean_i8_from_words_with_uniform_flag_64, swar_q7_neg_sat_x8,
-    swar_q7_qdps_filter_words_64, swar_q7_qdps_filter_words_with_uniform_flag_64,
-    swar_q7_scale_le128_with_bias_x8, trail_phase_words_mut, trail_phase_words_ref,
+    swar_q7_abs_u8_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
+    swar_q7_mean_i8_from_words_64, swar_q7_mean_i8_from_words_with_uniform_flag_64,
+    swar_q7_neg_sat_x8, swar_q7_qdps_filter_words_64,
+    swar_q7_qdps_filter_words_with_uniform_flag_64, swar_q7_scale_le128_with_bias_x8,
+    trail_phase_words_mut, trail_phase_words_ref,
 };
 use super::primitives::{
     ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE,
     ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
     ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
     ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
-    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_ENTROPY_EPS,
-    DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD, GcsoResult, MAX_ATTENTION_HEADS, Pod,
-    pack_action_slot_tag,
+    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, DAES_MINI_LEDGER_LEN,
+    DEFAULT_ENTROPY_EPS, DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD, GcsoResult,
+    MAX_ATTENTION_HEADS, Pod, pack_action_slot_tag,
 };
 use super::rope::{
     PhaseSteering, PhaseSteeringGeometryExt, PspmRouter, RopePairLayout, RopeSteeringTarget,
@@ -80,8 +80,9 @@ use super::rope::{
 use super::telemetry::{
     ContrastivePhaseBloomFilter, DAES_METRIC_FAST_PATH_HIT, DAES_METRIC_LAYER_SKIP_COMPENSATED,
     DAES_METRIC_PHASE_STEERED, DAES_METRIC_PSPM_ROUTED, DAES_METRIC_REPULSION_APPLIED,
-    DAES_METRIC_SLOT_SYNERGY_ACTIVE, DAES_METRIC_SRL_INJECTED, MAX_ATTRACTOR_PULL_FORCE,
-    NUM_SWARM_MICRO_CELLS, SwarmResolutionReport, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
+    DAES_METRIC_SLOT_SYNERGY_ACTIVE, DAES_METRIC_SRL_INJECTED, DEFAULT_SWARM_QUORUM_THRESHOLD,
+    DEFAULT_SWARM_TOLERANCE_Q7, MAX_ATTRACTOR_PULL_FORCE, NUM_SWARM_MICRO_CELLS,
+    StigmergicSwarmOps, SwarmResolutionReport, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
     TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 use super::{ActionHub, validate_optional_qk_tensors};
@@ -5101,7 +5102,1391 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
 }
 
 // ===================================================================
-// 10. Compile-Time Layout Verification & Unit Tests
+// 11. Multi-Scale Swarm Hierarchy, Stigmergic Layer Management &
+//     Pseudo-Neural Cognitive Trajectory Circuit
+// ===================================================================
+
+/// Multi-scale granularity tier within the self-similar GCSO swarm hierarchy.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum SwarmScaleGranularity {
+    /// Scale 0: 64-bit tagged pointer and single 8-head `u64` SWAR register.
+    PointerBit = 0,
+    /// Scale 1: 128-byte pointer trail (`8` cells x `8` heads) with local inhibition.
+    CellTrail = 1,
+    /// Scale 2: Type-level blanket composition and 128-byte [`GatewayFrame`] interference.
+    #[default]
+    TypeGateway = 2,
+    /// Scale 3..N: Macro-level multi-hop pointer ring and cross-stratum coalition cascade.
+    MacroCoalition = 3,
+}
+
+impl SwarmScaleGranularity {
+    /// Converts a raw 2-bit integer (`0..=3`) into a [`SwarmScaleGranularity`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn from_u8(val: u8) -> Self {
+        match val & 0x03 {
+            0 => Self::PointerBit,
+            1 => Self::CellTrail,
+            2 => Self::TypeGateway,
+            _ => Self::MacroCoalition,
+        }
+    }
+
+    /// Maps `(layer_index, total_layers)` monotonically across the 4 structural scales,
+    /// progressing from coarse macro context (`MacroCoalition`) to fine residual (`PointerBit`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn from_layer_ratio(layer_index: usize, total_layers: usize) -> Self {
+        let safe_total = if total_layers == 0 { 1 } else { total_layers };
+        let clamped_idx = if layer_index >= safe_total {
+            safe_total - 1
+        } else {
+            layer_index
+        };
+        let q4 = (clamped_idx * 4) / safe_total;
+        match q4 {
+            0 => Self::MacroCoalition,
+            1 => Self::TypeGateway,
+            2 => Self::CellTrail,
+            _ => Self::PointerBit,
+        }
+    }
+
+    /// Derives the scale-adjusted Micro-Swarm quorum threshold (`3..=7` out of 8 cells).
+    #[inline(always)]
+    #[must_use]
+    pub const fn swarm_quorum_requirement(self, base_quorum: u8) -> u8 {
+        let safe_base = if base_quorum == 0 {
+            1
+        } else if base_quorum > 8 {
+            8
+        } else {
+            base_quorum
+        };
+        let adj = match self {
+            Self::PointerBit => safe_base.saturating_sub(2),
+            Self::CellTrail => safe_base.saturating_sub(1),
+            Self::TypeGateway => safe_base,
+            Self::MacroCoalition => {
+                let v = safe_base.saturating_add(1);
+                if v > 7 { 7 } else { v }
+            }
+        };
+        if adj < 2 { 2 } else { adj }
+    }
+
+    /// Derives the scale-adjusted Q7 circular phase tolerance (`4..=32`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn swarm_tolerance_q7(self, base_tol_q7: u8) -> u8 {
+        let safe = if base_tol_q7 < 4 { 4 } else { base_tol_q7 };
+        let scaled = match self {
+            Self::PointerBit => safe,
+            Self::CellTrail => safe.saturating_add(4),
+            Self::TypeGateway => safe.saturating_add(8),
+            Self::MacroCoalition => safe.saturating_add(14),
+        };
+        if scaled > 40 { 40 } else { scaled }
+    }
+
+    /// Derives the stigmergic peeling strength in Q0.7 (`24..=128`) from this scale and `layer_index / total_layers`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn layer_peel_gain_q7(self, layer_index: usize, total_layers: usize) -> u8 {
+        let safe_total = if total_layers == 0 { 1 } else { total_layers };
+        let base_q7: u8 = match self {
+            Self::PointerBit => 40,
+            Self::CellTrail => 64,
+            Self::TypeGateway => 96,
+            Self::MacroCoalition => 112,
+        };
+        let clamped_idx = if layer_index > 8 { 8 } else { layer_index } as u8;
+        let depth_decay = (clamped_idx.saturating_mul(96)) / (safe_total as u8);
+        let out = base_q7.saturating_sub(depth_decay >> 2);
+        if out < 24 { 24 } else { out }
+    }
+}
+
+/// Functional cognitive trigger recorded along a multi-scale reasoning trajectory.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum CognitiveOpKind {
+    /// Low-interference baseline observation.
+    #[default]
+    Observe = 0,
+    /// Orthogonal residual peeling and coalition decomposition.
+    DecomposePeel = 1,
+    /// Coherent cross-basin synthesis and integration.
+    SynthesizeFuse = 2,
+    /// Contrastive Guard audit and anti-phase repulsion check.
+    RepulseAudit = 3,
+    /// Inter-basin perspective shift across a liminal boundary.
+    BridgeShift = 4,
+    /// RoPE phase steering and alignment correction.
+    SteerAlign = 5,
+    /// Specialized sub-head (`Fact / Logic / Explore`) routing.
+    RouteSubHead = 6,
+    /// Macro attractor crystallization and structural commitment.
+    CrystallizeCommit = 7,
+}
+
+impl CognitiveOpKind {
+    /// Converts a raw 3-bit identifier (`0..=7`) into a [`CognitiveOpKind`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn from_u8(val: u8) -> Self {
+        match val & 0x07 {
+            0 => Self::Observe,
+            1 => Self::DecomposePeel,
+            2 => Self::SynthesizeFuse,
+            3 => Self::RepulseAudit,
+            4 => Self::BridgeShift,
+            5 => Self::SteerAlign,
+            6 => Self::RouteSubHead,
+            _ => Self::CrystallizeCommit,
+        }
+    }
+}
+
+/// 1-byte compact encoding of a single multi-scale cognitive action step (`[Scale(2b) | Op(3b) | Intensity(3b)]`).
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct CognitiveStepOp(
+    /// Raw packed 8-bit cognitive step descriptor (`0` indicates an unrecorded slot).
+    pub u8,
+);
+
+// SAFETY: `CognitiveStepOp` is a 1-byte `#[repr(transparent)]` wrapper around `u8`.
+unsafe impl Pod for CognitiveStepOp {}
+
+impl CognitiveStepOp {
+    /// Packs `granularity` (2 bits), `op` (3 bits), and `intensity_0_to_7` (3 bits) into 1 byte.
+    #[inline(always)]
+    #[must_use]
+    pub const fn pack(
+        granularity: SwarmScaleGranularity,
+        op: CognitiveOpKind,
+        intensity_0_to_7: u8,
+    ) -> Self {
+        let g = ((granularity as u8) & 0x03) << 6;
+        let o = ((op as u8) & 0x07) << 3;
+        let i = intensity_0_to_7 & 0x07;
+        Self(g | o | i)
+    }
+
+    /// Returns `true` when this slot holds a recorded cognitive step (`raw != 0`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_active(self) -> bool {
+        self.0 != 0
+    }
+
+    /// Unpacks the 2-bit [`SwarmScaleGranularity`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn granularity(self) -> SwarmScaleGranularity {
+        SwarmScaleGranularity::from_u8(self.0 >> 6)
+    }
+
+    /// Unpacks the 3-bit [`CognitiveOpKind`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn op(self) -> CognitiveOpKind {
+        CognitiveOpKind::from_u8(self.0 >> 3)
+    }
+
+    /// Unpacks the 3-bit quantized firing intensity (`0..=7`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn intensity(self) -> u8 {
+        self.0 & 0x07
+    }
+
+    /// Projects this cognitive step into a non-wrapping signed Q7 phase contribution (`[-120, +120]`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn to_signed_q7(self) -> gcso_q7_t {
+        if self.0 == 0 {
+            return 0;
+        }
+        let mag = (16i16) + ((self.intensity() as i16) * 8) + (((self.granularity() as u8) as i16) * 12);
+        let clamped = if mag > 120 { 120 } else { mag };
+        match self.op() {
+            CognitiveOpKind::RepulseAudit | CognitiveOpKind::DecomposePeel => -(clamped as i8),
+            _ => clamped as i8,
+        }
+    }
+}
+
+/// 8-byte C-ABI register-resident activation output produced by evaluating a pseudo-neural
+/// [`CognitiveTrajectoryLedger`] node at a given scale.
+#[repr(C, align(8))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CognitiveCircuitActivation {
+    /// Propensity in Q0.7 (`0..=128`) to decompose / peel orthogonal residuals.
+    pub peel_gate_q7: u8,
+    /// Propensity in Q0.7 (`0..=128`) to fuse / integrate coherent basins.
+    pub fuse_gate_q7: u8,
+    /// Contrastive Guard sensitivity in Q0.7 (`0..=128`).
+    pub repulse_sensitivity_q7: u8,
+    /// Selected [`CognitiveOpKind`] discriminant (`0..=7`).
+    pub selected_op: u8,
+    /// Preferred next [`SwarmScaleGranularity`] discriminant (`0..=3`) for perspective transition.
+    pub preferred_next_scale: u8,
+    /// Firing intensity in Q0.7 (`0..=128`).
+    pub intensity_q7: u8,
+    /// Signed SWAR alignment (`-127..=127`) between the circuit bias and input field at this scale.
+    pub circuit_resonance_q7: gcso_q7_t,
+    /// Active recorded step count observed inside the trajectory ledger (`0..=8`).
+    pub trajectory_depth: u8,
+}
+
+// SAFETY: `CognitiveCircuitActivation` is 8-byte `#[repr(C, align(8))]` of `u8`/`i8` fields with zero padding.
+unsafe impl Pod for CognitiveCircuitActivation {}
+
+impl CognitiveCircuitActivation {
+    /// Returns the typed [`CognitiveOpKind`] selected by this circuit activation.
+    #[inline(always)]
+    #[must_use]
+    pub const fn op_kind(&self) -> CognitiveOpKind {
+        CognitiveOpKind::from_u8(self.selected_op)
+    }
+
+    /// Returns the typed preferred next [`SwarmScaleGranularity`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn next_scale(&self) -> SwarmScaleGranularity {
+        SwarmScaleGranularity::from_u8(self.preferred_next_scale)
+    }
+}
+
+/// 8-byte (`#[repr(C, align(8))]`) chronological trajectory ledger encoding the last 8
+/// multi-scale cognitive operations (`[Scale | Op | Intensity]`) inside a single `u64` register.
+///
+/// Mirrors [`gcso_daes_slot_t::telemetry_mini_ledger`] 1:1 so observed scale transitions and
+/// reasoning habits act directly as reusable persona circuit parameters via
+/// [`ManifoldGatewaySignal`] and [`StigmergicScaleLayer`].
+#[repr(C, align(8))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct CognitiveTrajectoryLedger {
+    /// Chronological byte slots where index `0` is the most recent [`CognitiveStepOp`].
+    pub steps: [u8; DAES_MINI_LEDGER_LEN],
+}
+
+// SAFETY: `CognitiveTrajectoryLedger` is `#[repr(C, align(8))]` wrapping `[u8; 8]` with zero padding.
+unsafe impl Pod for CognitiveTrajectoryLedger {}
+
+#[inline(always)]
+#[must_use]
+const fn swar_mean_u8_le128_x8(w: u64) -> u8 {
+    let even = w & 0x00FF_00FF_00FF_00FF;
+    let odd = (w >> 8) & 0x00FF_00FF_00FF_00FF;
+    let sum16 = even.wrapping_add(odd);
+    let total = (sum16.wrapping_mul(0x0001_0001_0001_0001) >> 48) as u16;
+    ((total + 4) >> 3) as u8
+}
+
+impl CognitiveTrajectoryLedger {
+    /// Creates an empty [`CognitiveTrajectoryLedger`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            steps: [0u8; DAES_MINI_LEDGER_LEN],
+        }
+    }
+
+    /// Constructs a [`CognitiveTrajectoryLedger`] from a packed 64-bit word.
+    #[inline(always)]
+    #[must_use]
+    pub const fn from_u64(raw: u64) -> Self {
+        Self {
+            steps: raw.to_le_bytes(),
+        }
+    }
+
+    /// Converts the 8-byte chronological trajectory into a single `u64` register word.
+    #[inline(always)]
+    #[must_use]
+    pub const fn to_u64(self) -> u64 {
+        u64::from_le_bytes(self.steps)
+    }
+
+    /// Loads the cognitive trajectory directly from `slot.telemetry_mini_ledger`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn from_daes_slot(slot: &gcso_daes_slot_t) -> Self {
+        Self {
+            steps: slot.telemetry_mini_ledger,
+        }
+    }
+
+    /// Stores this trajectory back into `slot.telemetry_mini_ledger`.
+    #[inline(always)]
+    pub const fn write_to_daes_slot(&self, slot: &mut gcso_daes_slot_t) {
+        slot.telemetry_mini_ledger = self.steps;
+    }
+
+    /// Shifts chronological history by one byte and pushes `step` into slot `0`.
+    #[inline(always)]
+    pub fn push_step(&mut self, step: CognitiveStepOp) {
+        let next = (self.to_u64() << 8) | u64::from(step.0);
+        *self = Self::from_u64(next);
+    }
+
+    /// Returns the most recent recorded [`CognitiveStepOp`], if non-zero.
+    #[inline(always)]
+    #[must_use]
+    pub const fn latest_step(&self) -> Option<CognitiveStepOp> {
+        if self.steps[0] == 0 {
+            None
+        } else {
+            Some(CognitiveStepOp(self.steps[0]))
+        }
+    }
+
+    /// Returns the `age`-th newest recorded [`CognitiveStepOp`] (`0..8`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn step_at(&self, age: usize) -> CognitiveStepOp {
+        CognitiveStepOp(self.steps[age & 7])
+    }
+
+    /// Returns a constant-time histogram of [`CognitiveOpKind`] counts (`[u8; 8]`) and active step count.
+    #[inline(always)]
+    #[must_use]
+    pub const fn op_counts(&self) -> ([u8; 8], u8) {
+        let mut counts = [0u8; 8];
+        let mut active = 0u8;
+        let mut i = 0usize;
+        while i < DAES_MINI_LEDGER_LEN {
+            let s = CognitiveStepOp(self.steps[i]);
+            if s.is_active() {
+                let op = (s.0 >> 3) as usize & 0x07;
+                counts[op] += 1;
+                active += 1;
+            }
+            i += 1;
+        }
+        (counts, active)
+    }
+
+    /// Returns the count of recorded steps at each [`SwarmScaleGranularity`] level (`0..4`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn scale_counts(&self) -> [u8; 4] {
+        let mut counts = [0u8; 4];
+        let mut i = 0usize;
+        while i < DAES_MINI_LEDGER_LEN {
+            let s = CognitiveStepOp(self.steps[i]);
+            if s.is_active() {
+                counts[(s.granularity() as usize) & 3] += 1;
+            }
+            i += 1;
+        }
+        counts
+    }
+
+    /// Lifts the 8 chronological steps into an 8-cell x 8-head $SO(2)^{64}$ SWAR phase field
+    /// with zero heap allocations.
+    #[inline(always)]
+    #[must_use]
+    pub const fn to_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+        let mut words = [0u64; NUM_SWARM_MICRO_CELLS];
+        let mut c = 0usize;
+        while c < NUM_SWARM_MICRO_CELLS {
+            let s = CognitiveStepOp(self.steps[c]);
+            let base_q7 = s.to_signed_q7();
+            let b0 = (base_q7 as u8) as u64;
+            // Spread each step's polarity across the 8 heads of cell `c` weighted by scale index.
+            let splat = b0.wrapping_mul(SWAR_SPLAT_BYTE_64);
+            let sign_mask = ((s.0 != 0) as u64).wrapping_neg();
+            words[c] = splat & sign_mask;
+            c += 1;
+        }
+        words
+    }
+
+    /// Evaluates the pseudo-neural activation of a cognitive circuit at `scale` using branchless
+    /// integer SWAR phase closeness between `input_words` and `circuit_bias_words`, modulated by
+    /// the trajectory ledger's recent transitions.
+    #[inline(always)]
+    #[must_use]
+    pub fn evaluate_circuit_activation(
+        &self,
+        circuit_bias_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        scale: SwarmScaleGranularity,
+    ) -> CognitiveCircuitActivation {
+        let cell_idx = (scale as usize) & (NUM_SWARM_MICRO_CELLS - 1);
+        let diff_local = swar_q7_circular_diff_x8(input_words[cell_idx], circuit_bias_words[cell_idx]);
+        let abs_local = swar_q7_abs_u8_x8(diff_local);
+        let mean_diff_local = swar_mean_u8_le128_x8(abs_local);
+
+        let mut total_diff = 0u16;
+        let mut c = 0usize;
+        while c < NUM_SWARM_MICRO_CELLS {
+            let d = swar_q7_circular_diff_x8(input_words[c], circuit_bias_words[c]);
+            total_diff += u16::from(swar_mean_u8_le128_x8(swar_q7_abs_u8_x8(d)));
+            c += 1;
+        }
+        let mean_diff_global = ((total_diff + 4) >> 3) as u8;
+        // Branchless closeness in `0..=128`: `128` = identical phase, `64` = orthogonal, `0` = antipodal.
+        let local_close = 128u8.saturating_sub(mean_diff_local);
+        let global_close = 128u8.saturating_sub(mean_diff_global);
+        let signed_resonance = (i16::from(local_close) - 64).clamp(-127, 127) as gcso_q7_t;
+
+        let (op_hist, depth) = self.op_counts();
+        let scale_hist = self.scale_counts();
+        let peel_hist = op_hist[CognitiveOpKind::DecomposePeel as usize]
+            .saturating_add(op_hist[CognitiveOpKind::RouteSubHead as usize]);
+        let fuse_hist = op_hist[CognitiveOpKind::SynthesizeFuse as usize]
+            .saturating_add(op_hist[CognitiveOpKind::CrystallizeCommit as usize]);
+        let repulse_hist = op_hist[CognitiveOpKind::RepulseAudit as usize];
+
+        let divergence = local_close.abs_diff(global_close);
+        let peel_raw = 48u16
+            + u16::from(divergence)
+            + u16::from(peel_hist) * 8
+            + if scale == SwarmScaleGranularity::CellTrail { 12 } else { 0 };
+        let fuse_raw = 40u16
+            + (u16::from(global_close) >> 1)
+            + u16::from(fuse_hist) * 8
+            + if scale == SwarmScaleGranularity::MacroCoalition { 10 } else { 0 };
+        let repulse_raw = 32u16
+            + (u16::from(128u8.saturating_sub(global_close)) >> 1)
+            + u16::from(repulse_hist) * 12;
+
+        let peel_gate_q7 = peel_raw.min(128) as u8;
+        let fuse_gate_q7 = fuse_raw.min(128) as u8;
+        let repulse_sensitivity_q7 = repulse_raw.min(128) as u8;
+
+        // Branchless multi-gate arbitration across neural propensities.
+        let repulse_dominant = repulse_sensitivity_q7 >= 96 && global_close <= 36;
+        let peel_dominant = peel_gate_q7 > fuse_gate_q7 && peel_gate_q7 >= 56;
+        let selected_op = if repulse_dominant {
+            CognitiveOpKind::RepulseAudit
+        } else if peel_dominant {
+            if scale == SwarmScaleGranularity::CellTrail {
+                CognitiveOpKind::DecomposePeel
+            } else {
+                CognitiveOpKind::RouteSubHead
+            }
+        } else if divergence >= 28 {
+            CognitiveOpKind::BridgeShift
+        } else if global_close >= 88 {
+            CognitiveOpKind::SynthesizeFuse
+        } else {
+            CognitiveOpKind::SteerAlign
+        };
+
+        // Perspective movement tendency derived from both the selected operation and scale momentum.
+        let top_down_bias = scale_hist[SwarmScaleGranularity::MacroCoalition as usize]
+            >= scale_hist[SwarmScaleGranularity::PointerBit as usize];
+        let next_scale = match selected_op {
+            CognitiveOpKind::DecomposePeel => SwarmScaleGranularity::PointerBit,
+            CognitiveOpKind::RouteSubHead | CognitiveOpKind::BridgeShift => {
+                SwarmScaleGranularity::CellTrail
+            }
+            CognitiveOpKind::RepulseAudit => SwarmScaleGranularity::TypeGateway,
+            CognitiveOpKind::SynthesizeFuse | CognitiveOpKind::CrystallizeCommit => {
+                if top_down_bias {
+                    SwarmScaleGranularity::MacroCoalition
+                } else {
+                    SwarmScaleGranularity::TypeGateway
+                }
+            }
+            _ => scale,
+        };
+        let peak_gate = peel_gate_q7.max(fuse_gate_q7).max(repulse_sensitivity_q7);
+
+        CognitiveCircuitActivation {
+            peel_gate_q7,
+            fuse_gate_q7,
+            repulse_sensitivity_q7,
+            selected_op: selected_op as u8,
+            preferred_next_scale: next_scale as u8,
+            intensity_q7: peak_gate,
+            circuit_resonance_q7: signed_resonance,
+            trajectory_depth: depth,
+        }
+    }
+}
+
+impl RawPhaseProjectable for CognitiveTrajectoryLedger {
+    #[inline(always)]
+    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+        words_to_q7_array_64(&self.to_phase_words_64())
+    }
+
+    #[inline(always)]
+    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+        self.to_phase_words_64()
+    }
+}
+
+impl CausalProvenanceSignal for CognitiveTrajectoryLedger {
+    #[inline(always)]
+    fn causal_provenance_bits(&self) -> u32 {
+        let (hist, depth) = self.op_counts();
+        if depth == 0 {
+            return 0;
+        }
+        let repulse_active = hist[CognitiveOpKind::RepulseAudit as usize]
+            > hist[CognitiveOpKind::SynthesizeFuse as usize];
+        CAUSAL_AXIS_SUBJECTIVE_PERSONA
+            | branchless_select_u32(repulse_active, CAUSAL_CAUSE_COHOMOLOGY_REPULSION, 0)
+    }
+}
+
+impl CognitiveGroundingSignal for CognitiveTrajectoryLedger {
+    #[inline(always)]
+    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+        self.project_to_q7_64()
+    }
+
+    #[inline(always)]
+    fn project_grounding_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+        self.to_phase_words_64()
+    }
+
+    #[inline(always)]
+    fn grounding_base_energy(&self) -> f32 {
+        let (_hist, depth) = self.op_counts();
+        (depth as f32) * 0.25
+    }
+}
+
+impl SubjectivePersonaSignal for CognitiveTrajectoryLedger {}
+
+impl ManifoldGatewaySignal for CognitiveTrajectoryLedger {
+    #[inline(always)]
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+        let words = self.to_phase_words_64();
+        let (hist, depth) = self.op_counts();
+        if depth == 0 {
+            return (GatewayFrame::default(), [0u64; NUM_SWARM_MICRO_CELLS]);
+        }
+        let tag_q7 = fast_mean_q7_tag_from_words_64(&words);
+        let peel_dominates =
+            hist[CognitiveOpKind::DecomposePeel as usize] > hist[CognitiveOpKind::SynthesizeFuse as usize];
+        let pspm_fact = branchless_select_u8(peel_dominates, 32, 20);
+        let pspm_logic = branchless_select_u8(peel_dominates, 20, 24);
+        let pspm_explore = MAX_ATTENTION_HEADS as u8 - pspm_fact - pspm_logic;
+        let action_mode = if peel_dominates {
+            ACTION_MODE_DPSR_STEER | ACTION_MODE_PSPM_ROUTE
+        } else {
+            ACTION_PRESET_EXPRESS_PHASE
+        };
+        let packed_tag = pack_action_slot_tag(ATTRACTOR_SLOT_PERSONA, action_mode);
+        let prov = self.causal_provenance_bits();
+        (
+            GatewayFrame {
+                tagged_ptr: gcso_tagged_ptr_t::pack(0, packed_tag, tag_q7).raw(),
+                effective_energy: (depth as f32) * 0.25,
+                provenance_bits: prov,
+                dominant_slot: ATTRACTOR_SLOT_PERSONA,
+                action_mode_flags: action_mode,
+                active_swarm_cell_mask: 0xFF,
+                pspm_fact_heads: pspm_fact,
+                pspm_logic_heads: pspm_logic,
+                pspm_explore_heads: pspm_explore,
+                mean_phase_tag_q7: tag_q7,
+                active_head_count: MAX_ATTENTION_HEADS as u16,
+                frame_flags: packed_tag as u16,
+                phase_deltas: words_to_q7_array_64(&words),
+                ..GatewayFrame::default()
+            },
+            words,
+        )
+    }
+
+    #[inline(always)]
+    fn synthesize_gateway_frame(&self) -> GatewayFrame {
+        self.synthesize_gateway_frame_with_words().0
+    }
+}
+
+/// Output of projecting an input SWAR phase field through one or more [`StigmergicScaleLayer`] tiers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScaleLayerProjection {
+    /// Composite 128-byte [`GatewayFrame`] synthesized at this layer boundary.
+    pub frame: GatewayFrame,
+    /// Orthogonal contribution explained/peeled by this layer across 64 heads.
+    pub peeled_words: [u64; NUM_SWARM_MICRO_CELLS],
+    /// Remaining unexplained Q7 phase residual forwarded to layer `layer_index + 1`.
+    pub residual_words: [u64; NUM_SWARM_MICRO_CELLS],
+    /// Granularity tier executed at this projection step.
+    pub granularity: SwarmScaleGranularity,
+    /// Zero-based starting layer index across the active stack (`0..total_layers`).
+    pub layer_index: usize,
+    /// Total effective layer count $N$ across the active cascade.
+    pub total_layers: usize,
+    /// Pseudo-neural gating activation computed from trajectory history and phase resonance.
+    pub activation: CognitiveCircuitActivation,
+    /// Compact 1-byte cognitive step emitted for recording into [`CognitiveTrajectoryLedger`].
+    pub emitted_step: CognitiveStepOp,
+}
+
+/// Branchless core helper projecting `signal` at a specific [`SwarmScaleGranularity`] and layer
+/// depth ratio `layer_index / total_layers` with zero dynamic allocations.
+#[inline]
+pub fn project_gateway_signal_at_scale<S: ManifoldGatewaySignal + ?Sized>(
+    signal: &S,
+    granularity: SwarmScaleGranularity,
+    input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+    ledger: &CognitiveTrajectoryLedger,
+    layer_index: usize,
+    total_layers: usize,
+) -> ScaleLayerProjection {
+    let safe_total = if total_layers == 0 { 1 } else { total_layers };
+    let (mut frame, frm_w) = signal.synthesize_gateway_frame_with_words();
+    let activation = ledger.evaluate_circuit_activation(&frm_w, input_words, granularity);
+    let base_gain_q7 = granularity.layer_peel_gain_q7(layer_index, safe_total);
+    let gate_mod = if activation.op_kind() == CognitiveOpKind::RepulseAudit {
+        activation.repulse_sensitivity_q7
+    } else {
+        ((u16::from(base_gain_q7) + u16::from(activation.intensity_q7)) >> 1) as u8
+    };
+    let s_u64 = u64::from(gate_mod.min(128));
+    let bias = (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+    let active_mask = match granularity {
+        SwarmScaleGranularity::PointerBit => 1u8 << (layer_index & 7),
+        SwarmScaleGranularity::CellTrail => {
+            if frame.active_swarm_cell_mask == 0 {
+                0x0F
+            } else {
+                frame.active_swarm_cell_mask
+            }
+        }
+        SwarmScaleGranularity::TypeGateway | SwarmScaleGranularity::MacroCoalition => 0xFF,
+    };
+
+    let mut peeled_words = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut residual_words = *input_words;
+    let mut c = 0usize;
+    while c < NUM_SWARM_MICRO_CELLS {
+        if ((active_mask >> c) & 1) != 0 {
+            let scaled = swar_q7_scale_le128_with_bias_x8(frm_w[c], s_u64, bias);
+            peeled_words[c] = scaled;
+            residual_words[c] = swar_q7_circular_diff_x8(input_words[c], scaled);
+        }
+        c += 1;
+    }
+
+    let eff_op = if frame.is_repulsed() {
+        CognitiveOpKind::RepulseAudit
+    } else {
+        activation.op_kind()
+    };
+    let intensity_0_to_7 = (activation.intensity_q7 >> 4).min(7);
+    let emitted_step = CognitiveStepOp::pack(granularity, eff_op, intensity_0_to_7);
+    frame.active_swarm_cell_mask = active_mask;
+
+    ScaleLayerProjection {
+        frame,
+        peeled_words,
+        residual_words,
+        granularity,
+        layer_index,
+        total_layers: safe_total,
+        activation,
+        emitted_step,
+    }
+}
+
+/// Core Layer Management Trait rooted directly in [`ManifoldGatewaySignal`].
+///
+/// Governs multi-scale granularity (`PointerBit` -> `CellTrail` -> `TypeGateway` -> `MacroCoalition`),
+/// structural depth composition (`N +/- 1` via tuples `(A, B)`, arrays `[T; N]`, or slices), and
+/// orthogonal residual peeling guided by [`CognitiveTrajectoryLedger`].
+pub trait StigmergicScaleLayer: ManifoldGatewaySignal {
+    /// Returns the primary [`SwarmScaleGranularity`] owned by this layer.
+    #[inline(always)]
+    fn scale_granularity(&self) -> SwarmScaleGranularity {
+        SwarmScaleGranularity::TypeGateway
+    }
+
+    /// Returns the structural layer count `N >= 1` composed within this value.
+    #[inline(always)]
+    fn layer_count(&self) -> usize {
+        1
+    }
+
+    /// Projects `input_words` through this layer at `(layer_index, total_layers)` using
+    /// `ledger`, returning the peeled field, orthogonal residual, and emitted cognitive step.
+    fn project_scale_layer(
+        &self,
+        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        ledger: &CognitiveTrajectoryLedger,
+        layer_index: usize,
+        total_layers: usize,
+    ) -> ScaleLayerProjection {
+        project_gateway_signal_at_scale(
+            self,
+            self.scale_granularity(),
+            input_words,
+            ledger,
+            layer_index,
+            total_layers.max(self.layer_count()),
+        )
+    }
+}
+
+/// Zero-cost explicit-scale wrapper promoting any [`ManifoldGatewaySignal`] into a
+/// [`StigmergicScaleLayer`] pinned to `granularity`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScaleLayerNode<T> {
+    /// Underlying signal implementing [`ManifoldGatewaySignal`].
+    pub signal: T,
+    /// Assigned [`SwarmScaleGranularity`] tier inside a multi-layer stack.
+    pub granularity: SwarmScaleGranularity,
+}
+
+impl<T> ScaleLayerNode<T> {
+    /// Wraps `signal` at `granularity`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn new(signal: T, granularity: SwarmScaleGranularity) -> Self {
+        Self { signal, granularity }
+    }
+}
+
+impl<T: CausalProvenanceSignal> CausalProvenanceSignal for ScaleLayerNode<T> {
+    #[inline(always)]
+    fn causal_provenance_bits(&self) -> u32 {
+        self.signal.causal_provenance_bits()
+    }
+
+    #[inline(always)]
+    fn causal_anomaly_severity(&self) -> f32 {
+        self.signal.causal_anomaly_severity()
+    }
+}
+
+impl<T: ManifoldGatewaySignal> ManifoldGatewaySignal for ScaleLayerNode<T> {
+    #[inline(always)]
+    fn synthesize_gateway_frame(&self) -> GatewayFrame {
+        self.signal.synthesize_gateway_frame()
+    }
+
+    #[inline(always)]
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+        self.signal.synthesize_gateway_frame_with_words()
+    }
+}
+
+impl<T: ManifoldGatewaySignal> StigmergicScaleLayer for ScaleLayerNode<T> {
+    #[inline(always)]
+    fn scale_granularity(&self) -> SwarmScaleGranularity {
+        self.granularity
+    }
+}
+
+impl<T: StigmergicScaleLayer + ?Sized> StigmergicScaleLayer for &T {
+    #[inline(always)]
+    fn scale_granularity(&self) -> SwarmScaleGranularity {
+        (**self).scale_granularity()
+    }
+
+    #[inline(always)]
+    fn layer_count(&self) -> usize {
+        (**self).layer_count()
+    }
+
+    #[inline(always)]
+    fn project_scale_layer(
+        &self,
+        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        ledger: &CognitiveTrajectoryLedger,
+        layer_index: usize,
+        total_layers: usize,
+    ) -> ScaleLayerProjection {
+        (**self).project_scale_layer(input_words, ledger, layer_index, total_layers)
+    }
+}
+
+/// Composite 2-layer [`StigmergicScaleLayer`] adapter chaining any lower layer `A` into
+/// upper layer `B` via orthogonal residual peeling with zero heap allocations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayeredScalePair<A, B>(
+    /// First (typically coarser or lower-tier) scale layer.
+    pub A,
+    /// Second layer receiving the unpeeled orthogonal residual from `self.0`.
+    pub B,
+);
+
+impl<A: StigmergicScaleLayer, B: StigmergicScaleLayer> CausalProvenanceSignal
+    for LayeredScalePair<A, B>
+{
+    #[inline(always)]
+    fn causal_provenance_bits(&self) -> u32 {
+        self.0.causal_provenance_bits() | self.1.causal_provenance_bits()
+    }
+
+    #[inline(always)]
+    fn causal_anomaly_severity(&self) -> f32 {
+        branchless_max_f32(self.0.causal_anomaly_severity(), self.1.causal_anomaly_severity())
+    }
+}
+
+impl<A: StigmergicScaleLayer, B: StigmergicScaleLayer> ManifoldGatewaySignal
+    for LayeredScalePair<A, B>
+{
+    #[inline(always)]
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+        let (f0, w0) = self.0.synthesize_gateway_frame_with_words();
+        let (f1, w1) = self.1.synthesize_gateway_frame_with_words();
+        let uni0 = is_word_array_uniform_64(&w0);
+        let uni1 = is_word_array_uniform_64(&w1);
+        let e0 = branchless_flush_subnormal_f32(branchless_relu_f32(f0.effective_energy));
+        let e1 = branchless_flush_subnormal_f32(branchless_relu_f32(f1.effective_energy));
+        let tot = e0 + e1;
+        let s_u64 = if tot > DEFAULT_ENTROPY_EPS {
+            let ratio = branchless_clamp_f32(e1 * fast_inv_pos_normal_f32(tot), 0.0, 1.0);
+            ((ratio * 128.0 + 0.5) as u64).min(128)
+        } else {
+            64
+        };
+        let bias = (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+        let (fused_w, fused_uni) = swar_slerp_words_with_uniform_flag_64(&w0, uni0, &w1, uni1, s_u64, bias);
+        let rep = branchless_max_f32(f0.repulsion_severity, f1.repulsion_severity);
+        let tag_q7 = swar_q7_mean_i8_from_words_with_uniform_flag_64(&fused_w, fused_uni);
+        let dom = if e1 > e0 { f1 } else { f0 };
+        let prov = f0.provenance_bits | f1.provenance_bits;
+        (
+            GatewayFrame {
+                tagged_ptr: dom.tagged_ptr,
+                zimms_section_offset48: dom.zimms_section_offset48,
+                target_anchor_id: dom.target_anchor_id,
+                effective_energy: branchless_min_f32(tot, MAX_ATTRACTOR_PULL_FORCE),
+                repulsion_severity: rep,
+                provenance_bits: prov,
+                dominant_cause_code: f0.dominant_cause_code.max(f1.dominant_cause_code),
+                dominant_slot: dom.dominant_slot,
+                action_mode_flags: f0.action_mode_flags | f1.action_mode_flags,
+                active_swarm_cell_mask: f0.active_swarm_cell_mask | f1.active_swarm_cell_mask,
+                mean_phase_tag_q7: tag_q7,
+                phase_deltas: words_to_q7_array_64(&fused_w),
+                ..dom
+            },
+            fused_w,
+        )
+    }
+
+    #[inline(always)]
+    fn synthesize_gateway_frame(&self) -> GatewayFrame {
+        self.synthesize_gateway_frame_with_words().0
+    }
+}
+
+impl<A: StigmergicScaleLayer, B: StigmergicScaleLayer> StigmergicScaleLayer
+    for LayeredScalePair<A, B>
+{
+    #[inline(always)]
+    fn scale_granularity(&self) -> SwarmScaleGranularity {
+        let ga = self.0.scale_granularity();
+        let gb = self.1.scale_granularity();
+        if gb > ga { gb } else { ga }
+    }
+
+    #[inline(always)]
+    fn layer_count(&self) -> usize {
+        self.0.layer_count() + self.1.layer_count()
+    }
+
+    #[inline]
+    fn project_scale_layer(
+        &self,
+        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        ledger: &CognitiveTrajectoryLedger,
+        layer_index: usize,
+        total_layers: usize,
+    ) -> ScaleLayerProjection {
+        let a_layers = self.0.layer_count();
+        let total = total_layers.max(self.layer_count());
+        let proj_a = self
+            .0
+            .project_scale_layer(input_words, ledger, layer_index, total);
+        let mut mid_ledger = *ledger;
+        mid_ledger.push_step(proj_a.emitted_step);
+        let proj_b = self.1.project_scale_layer(
+            &proj_a.residual_words,
+            &mid_ledger,
+            layer_index + a_layers,
+            total,
+        );
+        let (frame, _w) = self.synthesize_gateway_frame_with_words();
+        let mut combined_peeled = [0u64; NUM_SWARM_MICRO_CELLS];
+        let mut c = 0usize;
+        while c < NUM_SWARM_MICRO_CELLS {
+            combined_peeled[c] =
+                swar_q7_circular_add_x8(proj_a.peeled_words[c], proj_b.peeled_words[c]);
+            c += 1;
+        }
+        ScaleLayerProjection {
+            frame,
+            peeled_words: combined_peeled,
+            residual_words: proj_b.residual_words,
+            granularity: proj_b.granularity,
+            layer_index,
+            total_layers: total,
+            activation: proj_b.activation,
+            emitted_step: proj_b.emitted_step,
+        }
+    }
+}
+
+impl<
+        A: StigmergicScaleLayer + ObjectiveFactSignal,
+        B: StigmergicScaleLayer + SubjectivePersonaSignal,
+    > StigmergicScaleLayer for (A, B)
+{
+    #[inline(always)]
+    fn scale_granularity(&self) -> SwarmScaleGranularity {
+        let ga = self.0.scale_granularity();
+        let gb = self.1.scale_granularity();
+        if gb > ga { gb } else { ga }
+    }
+
+    #[inline(always)]
+    fn layer_count(&self) -> usize {
+        self.0.layer_count() + self.1.layer_count()
+    }
+
+    #[inline]
+    fn project_scale_layer(
+        &self,
+        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        ledger: &CognitiveTrajectoryLedger,
+        layer_index: usize,
+        total_layers: usize,
+    ) -> ScaleLayerProjection {
+        let a_layers = self.0.layer_count();
+        let total = total_layers.max(self.layer_count());
+        let proj_a = self
+            .0
+            .project_scale_layer(input_words, ledger, layer_index, total);
+        let mut mid_ledger = *ledger;
+        mid_ledger.push_step(proj_a.emitted_step);
+        let proj_b = self.1.project_scale_layer(
+            &proj_a.residual_words,
+            &mid_ledger,
+            layer_index + a_layers,
+            total,
+        );
+        let (frame, _w) = self.synthesize_gateway_frame_with_words();
+        let mut combined_peeled = [0u64; NUM_SWARM_MICRO_CELLS];
+        let mut c = 0usize;
+        while c < NUM_SWARM_MICRO_CELLS {
+            combined_peeled[c] =
+                swar_q7_circular_add_x8(proj_a.peeled_words[c], proj_b.peeled_words[c]);
+            c += 1;
+        }
+        ScaleLayerProjection {
+            frame,
+            peeled_words: combined_peeled,
+            residual_words: proj_b.residual_words,
+            granularity: proj_b.granularity,
+            layer_index,
+            total_layers: total,
+            activation: proj_b.activation,
+            emitted_step: proj_b.emitted_step,
+        }
+    }
+}
+
+impl<T: StigmergicScaleLayer> StigmergicScaleLayer for [T] {
+    #[inline(always)]
+    fn scale_granularity(&self) -> SwarmScaleGranularity {
+        if self.is_empty() {
+            SwarmScaleGranularity::TypeGateway
+        } else {
+            self[0].scale_granularity()
+        }
+    }
+
+    #[inline]
+    fn layer_count(&self) -> usize {
+        let mut total = 0usize;
+        let mut i = 0usize;
+        while i < self.len() {
+            total += self[i].layer_count();
+            i += 1;
+        }
+        total.max(1)
+    }
+
+    #[inline]
+    fn project_scale_layer(
+        &self,
+        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        ledger: &CognitiveTrajectoryLedger,
+        layer_index: usize,
+        total_layers: usize,
+    ) -> ScaleLayerProjection {
+        if self.is_empty() {
+            return ScaleLayerProjection {
+                frame: GatewayFrame::default(),
+                peeled_words: [0u64; NUM_SWARM_MICRO_CELLS],
+                residual_words: *input_words,
+                granularity: SwarmScaleGranularity::TypeGateway,
+                layer_index,
+                total_layers: total_layers.max(1),
+                activation: CognitiveCircuitActivation::default(),
+                emitted_step: CognitiveStepOp::default(),
+            };
+        }
+        let own_layers = self.layer_count();
+        let total = total_layers.max(own_layers);
+        let mut cur_residual = *input_words;
+        let mut cur_ledger = *ledger;
+        let mut combined_peeled = [0u64; NUM_SWARM_MICRO_CELLS];
+        let mut cursor = layer_index;
+        let mut last_proj = self[0].project_scale_layer(&cur_residual, &cur_ledger, cursor, total);
+        let mut c = 0usize;
+        while c < NUM_SWARM_MICRO_CELLS {
+            combined_peeled[c] = last_proj.peeled_words[c];
+            c += 1;
+        }
+        cur_residual = last_proj.residual_words;
+        cur_ledger.push_step(last_proj.emitted_step);
+        cursor += self[0].layer_count();
+        let mut i = 1usize;
+        while i < self.len() {
+            let p = self[i].project_scale_layer(&cur_residual, &cur_ledger, cursor, total);
+            let mut k = 0usize;
+            while k < NUM_SWARM_MICRO_CELLS {
+                combined_peeled[k] = swar_q7_circular_add_x8(combined_peeled[k], p.peeled_words[k]);
+                k += 1;
+            }
+            cur_residual = p.residual_words;
+            cur_ledger.push_step(p.emitted_step);
+            cursor += self[i].layer_count();
+            last_proj = p;
+            i += 1;
+        }
+        let (frame, _w) = self.synthesize_gateway_frame_with_words();
+        ScaleLayerProjection {
+            frame,
+            peeled_words: combined_peeled,
+            residual_words: cur_residual,
+            granularity: last_proj.granularity,
+            layer_index,
+            total_layers: total,
+            activation: last_proj.activation,
+            emitted_step: last_proj.emitted_step,
+        }
+    }
+}
+
+impl<T: StigmergicScaleLayer, const N: usize> StigmergicScaleLayer for [T; N] {
+    #[inline(always)]
+    fn scale_granularity(&self) -> SwarmScaleGranularity {
+        self.as_slice().scale_granularity()
+    }
+
+    #[inline(always)]
+    fn layer_count(&self) -> usize {
+        self.as_slice().layer_count()
+    }
+
+    #[inline(always)]
+    fn project_scale_layer(
+        &self,
+        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        ledger: &CognitiveTrajectoryLedger,
+        layer_index: usize,
+        total_layers: usize,
+    ) -> ScaleLayerProjection {
+        self.as_slice()
+            .project_scale_layer(input_words, ledger, layer_index, total_layers)
+    }
+}
+
+impl StigmergicScaleLayer for GatewayFrame {
+    #[inline(always)]
+    fn scale_granularity(&self) -> SwarmScaleGranularity {
+        SwarmScaleGranularity::TypeGateway
+    }
+}
+
+impl<P: RawPhaseProjectable + Clone> StigmergicScaleLayer for ObjectiveFact<P> {
+    #[inline(always)]
+    fn scale_granularity(&self) -> SwarmScaleGranularity {
+        SwarmScaleGranularity::CellTrail
+    }
+}
+
+impl<P: RawPhaseProjectable + Clone> StigmergicScaleLayer for SubjectivePersona<P> {
+    #[inline(always)]
+    fn scale_granularity(&self) -> SwarmScaleGranularity {
+        SwarmScaleGranularity::MacroCoalition
+    }
+}
+
+impl StigmergicScaleLayer for GuardPhaseAnchor {
+    #[inline(always)]
+    fn scale_granularity(&self) -> SwarmScaleGranularity {
+        SwarmScaleGranularity::TypeGateway
+    }
+}
+
+impl StigmergicScaleLayer for CrystallizedAttractorRecord {
+    #[inline(always)]
+    fn scale_granularity(&self) -> SwarmScaleGranularity {
+        SwarmScaleGranularity::MacroCoalition
+    }
+}
+
+impl StigmergicScaleLayer for CognitiveTrajectoryLedger {
+    #[inline(always)]
+    fn scale_granularity(&self) -> SwarmScaleGranularity {
+        self.latest_step()
+            .map(CognitiveStepOp::granularity)
+            .unwrap_or(SwarmScaleGranularity::TypeGateway)
+    }
+}
+
+impl CausalProvenanceSignal for gcso_pointer_trail_t {
+    #[inline(always)]
+    fn causal_provenance_bits(&self) -> u32 {
+        let rep = (self.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0;
+        let has_anchor = self.target_anchor_id != 0;
+        branchless_select_u32(has_anchor, CAUSAL_AXIS_OBJECTIVE_FACT, 0)
+            | branchless_select_u32(rep, CAUSAL_AXIS_CONTRADICTION_GUARD | CAUSAL_CAUSE_COHOMOLOGY_REPULSION, 0)
+    }
+}
+
+impl ManifoldGatewaySignal for gcso_pointer_trail_t {
+    #[inline(always)]
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+        let w = *trail_phase_words_ref(self);
+        let tag_q7 = fast_mean_q7_tag_from_words_64(&w);
+        let ptr = gcso_tagged_ptr_t(self.current_ptr);
+        let rep = (self.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0;
+        let dom_slot = ptr.unpack_tag() & ATTRACTOR_SLOT_ID_MASK;
+        let action_flags = branchless_select_u8(
+            rep,
+            ACTION_PRESET_REPULSION_ESCAPE,
+            ACTION_PRESET_EXPRESS_PHASE,
+        );
+        let packed_tag = pack_action_slot_tag(dom_slot, action_flags);
+        (
+            GatewayFrame {
+                tagged_ptr: self.current_ptr,
+                zimms_section_offset48: ptr.unpack_addr(),
+                target_anchor_id: self.target_anchor_id,
+                effective_energy: branchless_min_f32(
+                    branchless_max_f32(self.attractor_pull_force, self.stigmergic_density),
+                    MAX_ATTRACTOR_PULL_FORCE,
+                ),
+                repulsion_severity: branchless_select_f32(rep, 0.85, 0.0),
+                provenance_bits: self.causal_provenance_bits(),
+                dominant_cause_code: branchless_select_u8(
+                    rep,
+                    ROOT_CAUSE_COHOMOLOGY_REPULSION,
+                    ROOT_CAUSE_NOMINAL,
+                ),
+                dominant_slot: dom_slot,
+                action_mode_flags: action_flags,
+                active_swarm_cell_mask: ((self.flags & crate::traits::telemetry::TRAIL_SWARM_QUORUM_MASK)
+                    >> crate::traits::telemetry::TRAIL_SWARM_QUORUM_SHIFT) as u8,
+                mean_phase_tag_q7: tag_q7,
+                active_head_count: MAX_ATTENTION_HEADS as u16,
+                frame_flags: packed_tag as u16,
+                phase_deltas: self.accumulated_phase_delta,
+                ..GatewayFrame::default()
+            },
+            w,
+        )
+    }
+
+    #[inline(always)]
+    fn synthesize_gateway_frame(&self) -> GatewayFrame {
+        self.synthesize_gateway_frame_with_words().0
+    }
+}
+
+impl StigmergicScaleLayer for gcso_pointer_trail_t {
+    #[inline(always)]
+    fn scale_granularity(&self) -> SwarmScaleGranularity {
+        if self.linked_trail_id != 0 {
+            SwarmScaleGranularity::MacroCoalition
+        } else {
+            SwarmScaleGranularity::CellTrail
+        }
+    }
+}
+
+/// Blanket-implemented bridge coupling [`StigmergicSwarmOps`] with [`StigmergicScaleLayer`]
+/// so Micro-Swarm quorum thresholds, tolerances, and active cell masks adapt automatically
+/// to the active granularity tier and layer depth `(layer_index, total_layers)`.
+pub trait StigmergicLayeredSwarmExt: StigmergicSwarmOps {
+    /// Resolves `target_words` inside the 8-cell SWAR Micro-Swarm using parameters derived
+    /// structurally from `(granularity, layer_index, total_layers)` and optional Bloom guards.
+    #[inline(always)]
+    fn resolve_swarm_with_scale_layer(
+        &mut self,
+        action_ptr: gcso_tagged_ptr_t,
+        target_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        granularity: SwarmScaleGranularity,
+        layer_index: usize,
+        total_layers: usize,
+        active_cell_mask: u8,
+        bloom_filter: Option<&ContrastivePhaseBloomFilter>,
+    ) -> (SwarmResolutionReport, [u64; NUM_SWARM_MICRO_CELLS]) {
+        let gain_q7 = granularity.layer_peel_gain_q7(layer_index, total_layers);
+        let tol_q7 = granularity.swarm_tolerance_q7(DEFAULT_SWARM_TOLERANCE_Q7);
+        let quorum = granularity.swarm_quorum_requirement(DEFAULT_SWARM_QUORUM_THRESHOLD);
+        let mask = if active_cell_mask == 0 { 0xFF } else { active_cell_mask };
+        self.try_resolve_action_in_swarm_from_words(
+            action_ptr,
+            target_words,
+            mask,
+            gain_q7,
+            2,
+            tol_q7,
+            quorum,
+            0.40,
+            0.15,
+            bloom_filter,
+            3,
+            96,
+        )
+    }
+}
+
+impl<T: StigmergicSwarmOps + ?Sized> StigmergicLayeredSwarmExt for T {}
+
+/// Cross-scale [`ActionHub`] orchestrator uniting [`StigmergicScaleLayer`],
+/// [`CognitiveTrajectoryLedger`], and [`StigmergicLayeredSwarmExt`] in zero-allocation mode.
+pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
+    /// Projects `layer` across `input_words`, resolves the active pointer trail in the Micro-Swarm
+    /// at the activated granularity tier, and records the emitted [`CognitiveStepOp`] into
+    /// `daes_slot.telemetry_mini_ledger`.
+    ///
+    /// # Errors
+    /// Propagates any error from [`super::hot_path::PointerActionHub::step_pointer`] or
+    /// [`super::telemetry::DaesScratchpad::telemetry_push`].
+    #[inline]
+    fn orchestrate_scale_layer(
+        &mut self,
+        layer: &(impl StigmergicScaleLayer + ?Sized),
+        input_ptr: gcso_tagged_ptr_t,
+        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        daes_slot: &mut gcso_daes_slot_t,
+        trail_out: &mut gcso_pointer_trail_t,
+        layer_index: usize,
+        total_layers: usize,
+        bloom_filter: Option<&ContrastivePhaseBloomFilter>,
+    ) -> GcsoResult<(
+        ScaleLayerProjection,
+        CognitiveTrajectoryLedger,
+        SwarmResolutionReport,
+    )> {
+        let mut ledger = CognitiveTrajectoryLedger::from_daes_slot(daes_slot);
+        let proj = layer.project_scale_layer(input_words, &ledger, layer_index, total_layers);
+        let eff_ptr = gcso_tagged_ptr_t(if input_ptr.is_null() {
+            proj.frame.tagged_ptr
+        } else {
+            input_ptr.raw()
+        });
+        let (report, _resolved_w) = trail_out.resolve_swarm_with_scale_layer(
+            eff_ptr,
+            &proj.peeled_words,
+            proj.granularity,
+            layer_index,
+            total_layers,
+            proj.frame.active_swarm_cell_mask,
+            bloom_filter,
+        );
+        self.step_pointer(report.evolved_ptr.raw(), trail_out)?;
+        ledger.push_step(proj.emitted_step);
+        ledger.write_to_daes_slot(daes_slot);
+        daes_slot.telemetry_ring_head = daes_slot.telemetry_ring_head.wrapping_add(1);
+        Ok((proj, ledger, report))
+    }
+
+    /// Executes an elastic `N`-layer cascade (`depth_n` in `1..=layers.len()`) across a slice of
+    /// [`StigmergicScaleLayer`] stages, forwarding orthogonal residuals from coarse layers to fine
+    /// layers and updating `daes_slot`'s [`CognitiveTrajectoryLedger`] at every scale step.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `layers` is empty or `depth_n == 0`, or
+    /// propagates pointer/telemetry errors.
+    #[inline]
+    fn orchestrate_adaptive_depth_n<L: StigmergicScaleLayer>(
+        &mut self,
+        layers: &[L],
+        depth_n: usize,
+        input_ptr: gcso_tagged_ptr_t,
+        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        daes_slot: &mut gcso_daes_slot_t,
+        trail_out: &mut gcso_pointer_trail_t,
+        bloom_filter: Option<&ContrastivePhaseBloomFilter>,
+    ) -> GcsoResult<(
+        ScaleLayerProjection,
+        CognitiveTrajectoryLedger,
+        SwarmResolutionReport,
+    )> {
+        let active_n = depth_n.min(layers.len());
+        if active_n == 0 {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let mut last_proj = self
+            .orchestrate_scale_layer(
+                &layers[0],
+                input_ptr,
+                input_words,
+                daes_slot,
+                trail_out,
+                0,
+                active_n,
+                bloom_filter,
+            )?;
+        let mut combined_peeled = last_proj.0.peeled_words;
+        let mut residual = last_proj.0.residual_words;
+        let mut ledger = last_proj.1;
+
+        let mut i = 1usize;
+        while i < active_n {
+            let step_res = self.orchestrate_scale_layer(
+                &layers[i],
+                last_proj.2.evolved_ptr,
+                &residual,
+                daes_slot,
+                trail_out,
+                i,
+                active_n,
+                bloom_filter,
+            )?;
+            let mut c = 0usize;
+            while c < NUM_SWARM_MICRO_CELLS {
+                combined_peeled[c] =
+                    swar_q7_circular_add_x8(combined_peeled[c], step_res.0.peeled_words[c]);
+                c += 1;
+            }
+            residual = step_res.0.residual_words;
+            ledger = step_res.1;
+            last_proj = step_res;
+            i += 1;
+        }
+
+        let mut final_proj = last_proj.0;
+        final_proj.peeled_words = combined_peeled;
+        final_proj.residual_words = residual;
+        final_proj.total_layers = active_n;
+        Ok((final_proj, ledger, last_proj.2))
+    }
+}
+
+impl<T: ActionHub + ActionHubGatewayExt + ?Sized> ActionHubScaleOrchestrator for T {}
+
+// ===================================================================
+// 12. Compile-Time Layout Verification & Unit Tests
 // ===================================================================
 
 const _: () = {
@@ -5143,6 +6528,12 @@ const _: () = {
     assert!(
         CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0).verify_integrity()
     );
+    assert!(size_of::<CognitiveStepOp>() == 1);
+    assert!(align_of::<CognitiveStepOp>() == 1);
+    assert!(size_of::<CognitiveCircuitActivation>() == 8);
+    assert!(align_of::<CognitiveCircuitActivation>() == 8);
+    assert!(size_of::<CognitiveTrajectoryLedger>() == DAES_MINI_LEDGER_LEN);
+    assert!(align_of::<CognitiveTrajectoryLedger>() == 8);
 };
 
 #[cfg(test)]
@@ -5466,5 +6857,126 @@ mod tests {
         assert!(stressed_t.inertial_skip_entropy_thresh > high_coh_t.inertial_skip_entropy_thresh);
         assert!(stressed_t.srl_inject_density_thresh > high_coh_t.srl_inject_density_thresh);
         assert!(stressed_t.crystallize_density_thresh > high_coh_t.crystallize_density_thresh);
+    }
+
+    #[test]
+    fn test_multi_scale_layer_cascade_and_cognitive_trajectory_circuit() {
+        // 1. Compare two distinct cognitive circuits encoded solely via CognitiveTrajectoryLedger.
+        let mut peel_heavy = CognitiveTrajectoryLedger::new();
+        peel_heavy.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::MacroCoalition,
+            CognitiveOpKind::DecomposePeel,
+            6,
+        ));
+        peel_heavy.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::CellTrail,
+            CognitiveOpKind::DecomposePeel,
+            7,
+        ));
+        peel_heavy.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::PointerBit,
+            CognitiveOpKind::RouteSubHead,
+            5,
+        ));
+
+        let mut fuse_heavy = CognitiveTrajectoryLedger::new();
+        fuse_heavy.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::PointerBit,
+            CognitiveOpKind::SynthesizeFuse,
+            5,
+        ));
+        fuse_heavy.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::CellTrail,
+            CognitiveOpKind::SynthesizeFuse,
+            6,
+        ));
+        fuse_heavy.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::MacroCoalition,
+            CognitiveOpKind::CrystallizeCommit,
+            7,
+        ));
+
+        let input_phases = [32i8; MAX_ATTENTION_HEADS];
+        let input_words = load_q7_words_64(&input_phases);
+        let bias_words = load_q7_words_64(&[30i8; MAX_ATTENTION_HEADS]);
+
+        let act_peel = peel_heavy.evaluate_circuit_activation(
+            &bias_words,
+            &input_words,
+            SwarmScaleGranularity::CellTrail,
+        );
+        let act_fuse = fuse_heavy.evaluate_circuit_activation(
+            &bias_words,
+            &input_words,
+            SwarmScaleGranularity::MacroCoalition,
+        );
+        assert!(act_peel.peel_gate_q7 > act_fuse.peel_gate_q7);
+        assert!(act_fuse.fuse_gate_q7 > act_peel.fuse_gate_q7);
+        assert_eq!(act_peel.trajectory_depth, 3);
+        assert_eq!(act_fuse.trajectory_depth, 3);
+
+        // Verify CognitiveTrajectoryLedger acts as a composable SubjectivePersona Gateway origin.
+        let fact = ObjectiveFact::new([28i8; MAX_ATTENTION_HEADS], 2.5, 0x0010_0000, 101);
+        let composite_frame = (&fact, &peel_heavy).synthesize_gateway_frame();
+        assert_ne!(
+            composite_frame.provenance_bits & CAUSAL_AXIS_OBJECTIVE_FACT,
+            0
+        );
+        assert_ne!(
+            composite_frame.provenance_bits & CAUSAL_AXIS_SUBJECTIVE_PERSONA,
+            0
+        );
+
+        // 2. Verify recursive LayeredScalePair & tuple/array StigmergicScaleLayer scaling (N = 1, 2, 3).
+        let l0 = ScaleLayerNode::new(fact, SwarmScaleGranularity::MacroCoalition);
+        let l1 = ScaleLayerNode::new(
+            SubjectivePersona::new([16i8; MAX_ATTENTION_HEADS], 1.5, 0x0020_0000, 202),
+            SwarmScaleGranularity::CellTrail,
+        );
+        let l2 = ScaleLayerNode::new(peel_heavy, SwarmScaleGranularity::PointerBit);
+        let tuple_stack = LayeredScalePair(LayeredScalePair(&l0, &l1), &l2);
+        assert_eq!(l0.layer_count(), 1);
+        assert_eq!(LayeredScalePair(&l0, &l1).layer_count(), 2);
+        assert_eq!(tuple_stack.layer_count(), 3);
+
+        let proj_1 = l0.project_scale_layer(&input_words, &peel_heavy, 0, 1);
+        let proj_3 = tuple_stack.project_scale_layer(&input_words, &peel_heavy, 0, 3);
+        assert_eq!(proj_1.total_layers, 1);
+        assert_eq!(proj_3.total_layers, 3);
+        // Additional layers peel more signal energy, changing the unpeeled residual field.
+        assert_ne!(proj_1.residual_words, input_words);
+        assert_ne!(proj_3.residual_words, proj_1.residual_words);
+
+        // 3. Verify ActionHubScaleOrchestrator executes zero-alloc elastic depth-N cascades and persists trajectory.
+        let mut hub = crate::action_hub::ActionHubEngine::new();
+        let mut daes = gcso_daes_slot_t::default();
+        let mut trail = gcso_pointer_trail_t {
+            accumulated_phase_delta: [24i8; MAX_ATTENTION_HEADS],
+            stigmergic_density: 1.0,
+            ..Default::default()
+        };
+        let layer_array = [
+            ScaleLayerNode::new(
+                GatewayFrame::default(),
+                SwarmScaleGranularity::MacroCoalition,
+            ),
+            ScaleLayerNode::new(l0.signal.synthesize_gateway_frame(), SwarmScaleGranularity::CellTrail),
+            ScaleLayerNode::new(peel_heavy.synthesize_gateway_frame(), SwarmScaleGranularity::PointerBit),
+        ];
+        let (orch_proj, updated_ledger, swarm_rep) = hub
+            .orchestrate_adaptive_depth_n(
+                &layer_array,
+                3,
+                gcso_tagged_ptr_t::default(),
+                &input_words,
+                &mut daes,
+                &mut trail,
+                None,
+            )
+            .unwrap();
+        assert_eq!(orch_proj.total_layers, 3);
+        assert!(updated_ledger.latest_step().is_some());
+        assert_eq!(daes.telemetry_mini_ledger, updated_ledger.steps);
+        assert_eq!(swarm_rep.evolved_ptr.raw(), trail.current_ptr);
     }
 }
