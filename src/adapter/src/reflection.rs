@@ -555,13 +555,20 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
             );
 
         // If the pseudo-neural trajectory circuit detects omitted compound decomposition (`DecomposePeel`)
-        // alongside incomplete Fact anchor coverage on a grounded query, escalate to BoundaryAmbiguity.
+        // alongside substantial Fact anchor omission (<= 55% coverage, top-anchor mismatch, liminal
+        // boundary, or negative phase resonance) on a grounded query, escalate to BoundaryAmbiguity.
+        // Majority-covered `InsideBasin` drafts with positive phase resonance avoid over-thinking.
         let peel_floor_q7 = AdaptiveThresholdPolicy::default().peel_escalation_floor_q7();
+        let substantial_omission = anchor_overlap_ratio <= 0.55
+            || (anchor_overlap_ratio < 1.0
+                && (anchor_mismatch
+                    || matches!(draft.void_state, VoidBoundaryState::LiminalBoundary)
+                    || cross_activation.circuit_resonance_q7 < 0));
         let (trigger, alignment_score, mut directive) = if query_is_grounded
             && matches!(trigger, ReflectionTriggerKind::Converged)
             && matches!(cross_activation.op_kind(), CognitiveOpKind::DecomposePeel)
             && cross_activation.peel_gate_q7 >= peel_floor_q7
-            && anchor_overlap_ratio < 1.0
+            && substantial_omission
         {
             (
                 ReflectionTriggerKind::BoundaryAmbiguity,
@@ -844,5 +851,49 @@ mod tests {
         );
         assert!(crit.layer_activation.peel_gate_q7 >= 84);
         assert!(crit.directive.rope_rad_delta.abs() > (policy.max_rope_boost_rad * 0.75).abs());
+    }
+
+    #[test]
+    fn reflection_avoids_overthinking_when_majority_coalition_converges_inside_basin() {
+        use liminika_core::traits::gateway::SwarmScaleGranularity;
+
+        let eval = ManifoldReflectionEvaluator;
+        let recall_policy = RecallPolicy::default();
+        let policy = ReflectionPolicy::default();
+
+        let mut query = make_snapshot(
+            VoidBoundaryState::InsideBasin,
+            0.65,
+            0.60,
+            -0.25,
+            vec![1, 6, 5],
+        );
+        query.cognitive_trajectory.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::CellTrail,
+            CognitiveOpKind::DecomposePeel,
+            6,
+        ));
+        query.gateway_frame =
+            ObjectiveFact::new([24_i8; MAX_ATTENTION_HEADS], 2.5, 0, 1).synthesize_gateway_frame();
+
+        // Draft covers the primary pair (2/3 = 0.67 > 0.55) inside the basin with aligned phase.
+        let mut draft = make_snapshot(
+            VoidBoundaryState::InsideBasin,
+            0.62,
+            0.55,
+            -0.22,
+            vec![1, 6],
+        );
+        draft.cognitive_trajectory.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::MacroCoalition,
+            CognitiveOpKind::Observe,
+            3,
+        ));
+        draft.gateway_frame =
+            ObjectiveFact::new([24_i8; MAX_ATTENTION_HEADS], 2.2, 0, 1).synthesize_gateway_frame();
+
+        let crit = eval.assess_trajectory(&query, &draft, &recall_policy, &policy);
+        assert_eq!(crit.trigger, ReflectionTriggerKind::Converged);
+        assert!(!crit.directive.rethink_recommended);
     }
 }
