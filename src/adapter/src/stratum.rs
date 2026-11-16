@@ -627,6 +627,10 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
         let mut frame = signal
             .map_to_gateway_with_persona_floor(ctx.entries, last_layer, persona_floor)
             .frame;
+        frame.active_head_count = (ctx.num_q_heads as u16).clamp(
+            1,
+            liminika_core::traits::primitives::MAX_ATTENTION_HEADS as u16,
+        );
 
         let repulsed = repulsed_by_guard || frame.is_repulsed();
         let has_active_persona = top1_persona_score >= persona_floor;
@@ -885,13 +889,17 @@ impl<'a> StratumPipeline<'a> {
                 .first()
                 .map(|e| e.per_layer_q7.len().saturating_sub(1))
                 .unwrap_or(0);
-            let frame = signal
+            let mut frame = signal
                 .map_to_gateway_with_persona_floor(
                     ctx.entries,
                     last_layer,
                     ctx.policy.min_coherence * 0.75,
                 )
                 .frame;
+            frame.active_head_count = (ctx.num_q_heads as u16).clamp(
+                1,
+                liminika_core::traits::primitives::MAX_ATTENTION_HEADS as u16,
+            );
             signal.gateway_frame = frame;
             signal.telemetry.final_top1_anchor = final_top1_anchor;
             signal.telemetry.provenance = frame.to_causal_report();

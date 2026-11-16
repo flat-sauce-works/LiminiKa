@@ -1133,6 +1133,35 @@ impl<'a> DynamicAttractorRecall<'a> {
             })
             .collect()
     }
+
+    /// Concatenates all recalled Fact and Persona attractor texts in recall order.
+    #[must_use]
+    pub fn recalled_context_text(&self) -> String {
+        self.recalled_facts
+            .iter()
+            .map(|(e, _)| e.text.as_str())
+            .chain(self.recalled_personas.iter().map(|(e, _)| e.text.as_str()))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Computes a deterministic 64-bit FNV-1a context fingerprint across recalled attractors,
+    /// returning `0` when the query lies in ungrounded `CvoidEmptySpace` or recalled text is empty.
+    #[must_use]
+    pub fn context_fingerprint_u64(&self) -> u64 {
+        if matches!(self.void_state, VoidBoundaryState::CvoidEmptySpace) {
+            return 0;
+        }
+        let ctx = self.recalled_context_text();
+        if ctx.is_empty() {
+            return 0;
+        }
+        ctx.as_bytes()
+            .iter()
+            .fold(0xCBF2_9CE4_8422_2325_u64, |h, &b| {
+                (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3)
+            })
+    }
 }
 
 /// Policy parameters controlling top-K attractor recall and `cvoid` boundary classification.

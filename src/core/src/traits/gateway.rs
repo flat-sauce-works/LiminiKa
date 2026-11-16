@@ -1045,6 +1045,47 @@ pub trait CognitiveCircuitThresholdPolicy {
     fn peel_escalation_floor_q7(&self) -> u8 {
         84
     }
+
+    /// Derives the scale-invariant $S^{H-1}$ phase-resonance acceptance floor (`[24, 96]` in Q7)
+    /// from the $2 / \sqrt{H}$ concentration-of-measure noise floor and cache occupancy pressure.
+    #[inline]
+    fn kv_resonance_floor_for_heads_q7(
+        &self,
+        active_heads: u16,
+        occupied_slots: usize,
+        capacity: usize,
+    ) -> gcso_q7_t {
+        let h = f32::from(active_heads.clamp(1, MAX_ATTENTION_HEADS as u16));
+        let half = 0.5_f32 * h;
+        let y0 = f32::from_bits(0x5f37_5a86_u32.wrapping_sub(h.to_bits() >> 1));
+        let y1 = y0 * (1.5_f32 - half * y0 * y0);
+        let inv_sqrt_h = y1 * (1.5_f32 - half * y1 * y1);
+        let base_floor = 2.0_f32 * inv_sqrt_h * 127.0_f32;
+        let cap = capacity.max(1) as f32;
+        let occ_ratio = branchless_clamp_f32((occupied_slots as f32) * fast_inv_pos_normal_f32(cap), 0.0, 1.0);
+        let pressure_relax = 1.0_f32 - 0.15_f32 * occ_ratio;
+        let raw = (base_floor * pressure_relax + 0.5_f32) as i32;
+        raw.clamp(24, 96) as gcso_q7_t
+    }
+
+    /// Returns the circular coherence threshold below which P-Frame seek steps trigger repulsion.
+    #[inline(always)]
+    fn kv_contradiction_threshold(&self) -> f32 {
+        0.35
+    }
+
+    /// Derives the circuit composition blend weight (`16..=96` in Q7) from `frame`'s
+    /// Fact-Persona coherence so aligned frames reinforce faster without hardcoded mixing ratios.
+    #[inline(always)]
+    fn kv_circuit_blend_q7(&self, frame: &GatewayFrame) -> u8 {
+        let coh = if branchless_is_finite_f32(frame.fact_persona_coherence) {
+            branchless_clamp_f32(frame.fact_persona_coherence, -1.0, 1.0)
+        } else {
+            0.0
+        };
+        let raw = ((0.5_f32 + 0.5_f32 * coh) * 96.0_f32 + 0.5_f32) as i32;
+        raw.clamp(16, 96) as u8
+    }
 }
 
 impl CognitiveCircuitThresholdPolicy for AdaptiveThresholdPolicy {
@@ -1066,6 +1107,31 @@ impl CognitiveCircuitThresholdPolicy for AdaptiveThresholdPolicy {
         let def_evap = crate::action_hub::DEFAULT_STIGMERGIC_EVAPORATION_RETAIN;
         let margin_adj = ((self.base.evaporation_retain.clamp(0.50, 0.99) - def_evap) * 80.0) as i32;
         (84 + margin_adj).clamp(64, 112) as u8
+    }
+
+    #[inline]
+    fn kv_resonance_floor_for_heads_q7(
+        &self,
+        active_heads: u16,
+        occupied_slots: usize,
+        capacity: usize,
+    ) -> gcso_q7_t {
+        let h = f32::from(active_heads.clamp(1, MAX_ATTENTION_HEADS as u16));
+        let half = 0.5_f32 * h;
+        let y0 = f32::from_bits(0x5f37_5a86_u32.wrapping_sub(h.to_bits() >> 1));
+        let y1 = y0 * (1.5_f32 - half * y0 * y0);
+        let inv_sqrt_h = y1 * (1.5_f32 - half * y1 * y1);
+        let def_gain = crate::action_hub::DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN;
+        let gain_shift = ((self.base.reinforcement_gain.clamp(0.10, 1.50) - def_gain) * 16.0) as i32;
+        let cap = capacity.max(1) as f32;
+        let occ_ratio = branchless_clamp_f32((occupied_slots as f32) * fast_inv_pos_normal_f32(cap), 0.0, 1.0);
+        let base_floor = 2.0_f32 * inv_sqrt_h * 127.0_f32 * (1.0_f32 - 0.15_f32 * occ_ratio);
+        ((base_floor + 0.5_f32) as i32 + gain_shift).clamp(24, 96) as gcso_q7_t
+    }
+
+    #[inline(always)]
+    fn kv_contradiction_threshold(&self) -> f32 {
+        branchless_clamp_f32(self.base.contradiction_coherence_thresh, 0.15, 0.75)
     }
 }
 
@@ -6951,6 +7017,170 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
             .with_reconstructed_phases(restored_phases, count as u32, r_bar)
             .synthesize_gateway_frame())
     }
+
+    /// Returns the number of currently occupied I-Frame slots (`<= N`).
+    #[inline]
+    #[must_use]
+    pub fn occupied_slot_count(&self) -> usize {
+        let mut count = 0usize;
+        let mut i = 0usize;
+        while i < N {
+            if self.base.slots[i].is_occupied() {
+                count += 1;
+            }
+            i += 1;
+        }
+        count
+    }
+
+    /// Executes one full autonomous GOP KV-cache step (void gate, $S^{H-1}$ resonance lookup,
+    /// Zero-Forward Seek replay, cognitive circuit composition, and P-Frame/I-Frame update)
+    /// deriving all gating thresholds from `policy` and `frame` invariants.
+    ///
+    /// # Errors
+    /// Propagates [`GCSO_ERROR_INVALID_ARGUMENT`] or keyframe CRC errors from slot seek/append.
+    #[inline]
+    pub fn step_with_gateway_autonomous<Pol: CognitiveCircuitThresholdPolicy + ?Sized>(
+        &mut self,
+        context_hash: u64,
+        token_index: u32,
+        frame: &GatewayFrame,
+        circuit: &mut CognitiveTrajectoryLedger,
+        activation: CognitiveCircuitActivation,
+        policy: &Pol,
+        epoch: u32,
+    ) -> GcsoResult<RamPhaseKvStepOutcome> {
+        self.step_with_gateway_and_override(
+            context_hash,
+            token_index,
+            frame,
+            circuit,
+            activation,
+            policy,
+            None,
+            epoch,
+        )
+    }
+
+    /// Executes [`Self::step_with_gateway_autonomous`] with an optional diagnostic
+    /// `override_min_resonance_q7` (when `None`, derives the $2 / \sqrt{H}$ floor from `policy`).
+    ///
+    /// # Errors
+    /// Propagates [`GCSO_ERROR_INVALID_ARGUMENT`] or keyframe CRC errors from slot seek/append.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    pub fn step_with_gateway_and_override<Pol: CognitiveCircuitThresholdPolicy + ?Sized>(
+        &mut self,
+        context_hash: u64,
+        token_index: u32,
+        frame: &GatewayFrame,
+        circuit: &mut CognitiveTrajectoryLedger,
+        activation: CognitiveCircuitActivation,
+        policy: &Pol,
+        override_min_resonance_q7: Option<gcso_q7_t>,
+        epoch: u32,
+    ) -> GcsoResult<RamPhaseKvStepOutcome> {
+        let ungrounded_void =
+            context_hash == 0 && (frame.provenance_bits & CAUSAL_AXIS_OBJECTIVE_FACT) == 0;
+        if ungrounded_void {
+            return Ok(RamPhaseKvStepOutcome::SkippedVoid);
+        }
+        let occupied = self.occupied_slot_count();
+        let min_resonance_q7 = override_min_resonance_q7.unwrap_or_else(|| {
+            policy.kv_resonance_floor_for_heads_q7(frame.active_head_count, occupied, N)
+        });
+        if let Some((slot_idx, exact_hit, resonance_q7)) = self.lookup_context_or_resonate(
+            context_hash,
+            frame.phase_words_ref(),
+            min_resonance_q7,
+            epoch,
+        ) {
+            let qdps_step = frame.qdps_min_step_q7.max(1);
+            let mut seek_r_bar = 1.0_f32;
+            let mut seek_repulsed = 0_u32;
+            let mut seek_executed = false;
+            if self.slot_pframe_count(slot_idx) > 0 {
+                let (_restored, _lp, r_bar, repulsed) = self.seek_slot_history(
+                    slot_idx,
+                    qdps_step,
+                    policy.kv_contradiction_threshold(),
+                    epoch,
+                )?;
+                seek_r_bar = r_bar;
+                seek_repulsed = repulsed;
+                seek_executed = true;
+            }
+            let cached_circuit = self.entries()[slot_idx].circuit;
+            if cached_circuit.latest_step().is_some() {
+                let blend_q7 = policy.kv_circuit_blend_q7(frame);
+                *circuit = cached_circuit.compose_persona_circuit(circuit, blend_q7);
+            }
+            self.append_context_pframe(slot_idx, &frame.phase_deltas, qdps_step, epoch)?;
+            let pframe_count = self.slot_pframe_count(slot_idx);
+            return Ok(RamPhaseKvStepOutcome::ResonatedSeeked {
+                slot_idx,
+                exact_hit,
+                resonance_q7,
+                min_resonance_q7,
+                pframe_count,
+                seek_r_bar,
+                seek_repulsed,
+                seek_executed,
+            });
+        }
+        if context_hash != 0 {
+            if let Some(slot_idx) = self.store_keyframe_and_reset_gop(
+                context_hash,
+                token_index,
+                frame.target_anchor_id,
+                &frame.phase_deltas,
+                *circuit,
+                activation,
+                epoch,
+            ) {
+                return Ok(RamPhaseKvStepOutcome::StoredKeyframe {
+                    slot_idx,
+                    min_resonance_q7,
+                });
+            }
+        }
+        Ok(RamPhaseKvStepOutcome::Unbacked)
+    }
+}
+
+/// Outcome returned by [`RamPhaseKvGopCache::step_with_gateway_autonomous`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RamPhaseKvStepOutcome {
+    /// Query carried neither a context fingerprint nor factual grounding (`cvoid`).
+    SkippedVoid,
+    /// No existing slot resonated above the autonomous threshold; stored a new I-Frame slot.
+    StoredKeyframe {
+        /// Allocated slot index.
+        slot_idx: usize,
+        /// Autonomous or overridden resonance floor applied during lookup.
+        min_resonance_q7: gcso_q7_t,
+    },
+    /// Matched an existing I-Frame slot by exact hash or phase resonance, replayed P-Frames, and appended a delta.
+    ResonatedSeeked {
+        /// Matched slot index.
+        slot_idx: usize,
+        /// True on exact `context_hash` match.
+        exact_hit: bool,
+        /// Resonance score (`127` on exact match).
+        resonance_q7: gcso_q7_t,
+        /// Autonomous or overridden resonance floor applied during lookup.
+        min_resonance_q7: gcso_q7_t,
+        /// Total valid P-Frames now in `slot_idx`.
+        pframe_count: usize,
+        /// Circular resultant concentration $\bar{R}$ from Zero-Forward Seek (`1.0` if no prior P-Frames).
+        seek_r_bar: f32,
+        /// Count of repulsed P-Frame transitions during Zero-Forward Seek.
+        seek_repulsed: u32,
+        /// True when prior P-Frames were replayed via Zero-Forward Seek.
+        seek_executed: bool,
+    },
+    /// Cache capacity is zero or `context_hash == 0` prevented keyframe storage.
+    Unbacked,
 }
 
 impl<const N: usize, const P: usize> RamPhaseKvCacheOps for RamPhaseKvGopCache<N, P> {
@@ -8888,5 +9118,62 @@ mod tests {
         assert!(orth_cache
             .lookup_context_or_resonate(0x4444, &[0u64; NUM_SWARM_MICRO_CELLS], 16, 4)
             .is_none());
+
+        // Autonomous S^(H-1) concentration-of-measure resonance floor scales inversely with sqrt(H)
+        // and steps RamPhaseKvGopCache through SkippedVoid -> StoredKeyframe -> ResonatedSeeked.
+        let policy = AdaptiveThresholdPolicy::default();
+        let floor_h8 = policy.kv_resonance_floor_for_heads_q7(8, 0, 16);
+        let floor_h24 = policy.kv_resonance_floor_for_heads_q7(24, 0, 16);
+        let floor_h64 = policy.kv_resonance_floor_for_heads_q7(64, 0, 16);
+        assert!(floor_h8 > floor_h24 && floor_h24 > floor_h64);
+        assert!((46..=58).contains(&floor_h24));
+
+        let mut auto_cache: LowSpecPhaseKvGopCache = RamPhaseKvGopCache::new();
+        let mut auto_circuit = circuit;
+        let void_frame = GatewayFrame::default();
+        assert_eq!(
+            auto_cache
+                .step_with_gateway_autonomous(0, 1, &void_frame, &mut auto_circuit, act, &policy, 1)
+                .unwrap(),
+            RamPhaseKvStepOutcome::SkippedVoid
+        );
+        let mut fact_arr = [0i8; MAX_ATTENTION_HEADS];
+        fact_arr[0] = 24;
+        fact_arr[1] = -12;
+        let mut fact_frame = ObjectiveFact::new(fact_arr, 2.5, 0, 77).synthesize_gateway_frame();
+        fact_frame.active_head_count = 24;
+        assert!(matches!(
+            auto_cache
+                .step_with_gateway_autonomous(
+                    0x5555,
+                    10,
+                    &fact_frame,
+                    &mut auto_circuit,
+                    act,
+                    &policy,
+                    2
+                )
+                .unwrap(),
+            RamPhaseKvStepOutcome::StoredKeyframe { slot_idx: 0, .. }
+        ));
+        assert!(matches!(
+            auto_cache
+                .step_with_gateway_autonomous(
+                    0x6666,
+                    12,
+                    &fact_frame,
+                    &mut auto_circuit,
+                    act,
+                    &policy,
+                    3
+                )
+                .unwrap(),
+            RamPhaseKvStepOutcome::ResonatedSeeked {
+                slot_idx: 0,
+                exact_hit: false,
+                pframe_count: 1,
+                ..
+            }
+        ));
     }
 }

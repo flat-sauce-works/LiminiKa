@@ -21,10 +21,11 @@ use liminika_adapter::{
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::action_hub::ActionHubEngine;
 use liminika_core::traits::gateway::{
-    CognitiveCircuitPlasticity, CognitiveNeuralBankOps, CognitiveOpKind, CognitiveStepOp,
-    CognitiveTrajectoryLedger, GuardPhaseAnchor, HybridScaleCircuit, ObjectiveFact,
-    RamPhaseKvCacheOps, ResonantSignalSlice, StandardCognitiveBank, StandardPhaseKvGopCache,
-    SubjectivePersona, SwarmScaleGranularity,
+    AdaptiveThresholdPolicy, CognitiveCircuitPlasticity, CognitiveCircuitThresholdPolicy,
+    CognitiveNeuralBankOps, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
+    GuardPhaseAnchor, HybridScaleCircuit, ObjectiveFact, RamPhaseKvCacheOps, RamPhaseKvStepOutcome,
+    ResonantSignalSlice, StandardCognitiveBank, StandardPhaseKvGopCache, SubjectivePersona,
+    SwarmScaleGranularity,
 };
 use serde::Deserialize;
 use tokenizers::Tokenizer;
@@ -67,15 +68,84 @@ fn parse_circuit_mode<'a>(args: impl IntoIterator<Item = &'a str>) -> CircuitPro
     CircuitProfileMode::None
 }
 
-fn parse_kv_min_res<'a>(args: impl IntoIterator<Item = &'a str>) -> gcso_q7_t {
+fn parse_kv_min_res<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<gcso_q7_t> {
     for arg in args {
         if let Some(val) = arg.strip_prefix("--kv-min-res=") {
             if let Ok(parsed) = val.parse::<i8>() {
-                return parsed.clamp(-127, 127);
+                return Some(parsed.clamp(-127, 127));
             }
         }
     }
-    48
+    None
+}
+
+#[derive(Default)]
+struct KvTraceStats {
+    lookups: usize,
+    exact_hits: usize,
+    res_hits: usize,
+    pframes_appended: usize,
+    pframe_seeks: usize,
+    pframe_repulsed: usize,
+    lookup_us_sum: f64,
+}
+
+impl KvTraceStats {
+    fn record_outcome(
+        &mut self,
+        outcome: RamPhaseKvStepOutcome,
+        elapsed_us: f64,
+        phase_deltas: &[gcso_q7_t; 64],
+    ) -> String {
+        self.lookups += 1;
+        self.lookup_us_sum += elapsed_us;
+        let ph_l1: u32 = phase_deltas
+            .iter()
+            .map(|&v| u32::from(v.unsigned_abs()))
+            .sum();
+        let ph_head = &phase_deltas[..6];
+        match outcome {
+            RamPhaseKvStepOutcome::SkippedVoid => "VOID(skip)".to_string(),
+            RamPhaseKvStepOutcome::Unbacked => format!("VOID(miss,l1={ph_l1},h={ph_head:?})"),
+            RamPhaseKvStepOutcome::StoredKeyframe {
+                slot_idx,
+                min_resonance_q7,
+            } => format!("STORE(s{slot_idx},min={min_resonance_q7},l1={ph_l1},h={ph_head:?})"),
+            RamPhaseKvStepOutcome::ResonatedSeeked {
+                slot_idx,
+                exact_hit,
+                resonance_q7,
+                min_resonance_q7,
+                pframe_count,
+                seek_r_bar,
+                seek_repulsed,
+                seek_executed,
+            } => {
+                if exact_hit {
+                    self.exact_hits += 1;
+                } else {
+                    self.res_hits += 1;
+                }
+                self.pframes_appended += 1;
+                let seek_note = if seek_executed {
+                    self.pframe_seeks += 1;
+                    self.pframe_repulsed += seek_repulsed as usize;
+                    format!(" seek_r={seek_r_bar:.2} rep={seek_repulsed}")
+                } else {
+                    String::new()
+                };
+                if exact_hit {
+                    format!(
+                        "EXACT(s{slot_idx},pf={pframe_count},min={min_resonance_q7},l1={ph_l1},h={ph_head:?}{seek_note})"
+                    )
+                } else {
+                    format!(
+                        "RES(s{slot_idx},r={resonance_q7},min={min_resonance_q7},pf={pframe_count},l1={ph_l1},h={ph_head:?}{seek_note})"
+                    )
+                }
+            }
+        }
+    }
 }
 
 fn parse_quant_mode<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<GgmlDType> {
@@ -2143,13 +2213,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut reflect_triggers = 0_usize;
     let mut reflect_adopted = 0_usize;
     let mut ram_kv_cache = StandardPhaseKvGopCache::new();
-    let mut ram_kv_lookups = 0_usize;
-    let mut ram_kv_exact_hits = 0_usize;
-    let mut ram_kv_res_hits = 0_usize;
-    let mut ram_kv_pframes_appended = 0_usize;
-    let mut ram_kv_pframe_seeks = 0_usize;
-    let mut ram_kv_pframe_repulsed = 0_usize;
-    let mut ram_kv_lookup_us_sum = 0.0_f64;
+    let mut kv_stats = KvTraceStats::default();
+    let kv_policy = AdaptiveThresholdPolicy::default();
     let mut eval_items: Vec<(String, String, Vec<String>, Vec<String>)> = suite.probes.clone();
     eval_items.push((
         "CVOID".to_string(),
@@ -2220,113 +2285,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             frames_since_keyframe + 1
         };
 
-        let recalled_ctx: String = recall
-            .recalled_facts
-            .iter()
-            .map(|(e, _)| e.text.as_str())
-            .chain(
-                recall
-                    .recalled_personas
-                    .iter()
-                    .map(|(e, _)| e.text.as_str()),
-            )
-            .collect::<Vec<_>>()
-            .join(" ");
+        let recalled_ctx = recall.recalled_context_text();
 
         let dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
         let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);
         let mut query_snap = TrajectoryManifoldSnapshot::from_recall(&recall);
         if let Some(ref bank) = active_persona_bank {
             let cons = bank.to_consolidated_ledger();
-            query_snap.cognitive_trajectory =
-                cons.compose_persona_circuit(&query_snap.cognitive_trajectory, 64);
+            query_snap.cognitive_trajectory = cons.compose_persona_circuit(
+                &query_snap.cognitive_trajectory,
+                kv_policy.kv_circuit_blend_q7(&recall.gateway_frame),
+            );
         }
-        let ctx_hash = if recalled_ctx.is_empty() {
-            0_u64
-        } else {
-            recalled_ctx
-                .as_bytes()
-                .iter()
-                .fold(0xCBF2_9CE4_8422_2325_u64, |h, &b| {
-                    (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3)
-                })
-        };
-        let ph_l1: u32 = recall
-            .gateway_frame
-            .phase_deltas
-            .iter()
-            .map(|&v| v.unsigned_abs() as u32)
-            .sum();
-        let ph_head = &recall.gateway_frame.phase_deltas[..6];
-        ram_kv_lookups += 1;
+        let ctx_hash = recall.context_fingerprint_u64();
         let t_kv = Instant::now();
-        let kv_hit = if matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace) {
-            None
-        } else {
-            ram_kv_cache.lookup_context_or_resonate(
+        let kv_outcome = ram_kv_cache
+            .step_with_gateway_and_override(
                 ctx_hash,
-                recall.gateway_frame.phase_words_ref(),
+                q_ids.len() as u32,
+                &recall.gateway_frame,
+                &mut query_snap.cognitive_trajectory,
+                recall.telemetry.layer_activation,
+                &kv_policy,
                 kv_min_res,
                 (idx + 1) as u32,
             )
-        };
-        let kv_note = if matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace) {
-            "VOID(skip)".to_string()
-        } else if let Some((slot_idx, exact, res_q7)) = kv_hit {
-            if exact {
-                ram_kv_exact_hits += 1;
-            } else {
-                ram_kv_res_hits += 1;
-            }
-            let mut seek_note = String::new();
-            if ram_kv_cache.slot_pframe_count(slot_idx) > 0 {
-                if let Ok((_restored, _lp, r_bar, repulsed)) =
-                    ram_kv_cache.seek_slot_history(slot_idx, 1, 0.35, (idx + 1) as u32)
-                {
-                    ram_kv_pframe_seeks += 1;
-                    ram_kv_pframe_repulsed += repulsed as usize;
-                    seek_note = format!(" seek_r={r_bar:.2} rep={repulsed}");
-                }
-            }
-            let cached_circuit = ram_kv_cache.entries()[slot_idx].circuit;
-            if cached_circuit.latest_step().is_some() {
-                query_snap.cognitive_trajectory =
-                    cached_circuit.compose_persona_circuit(&query_snap.cognitive_trajectory, 64);
-            }
-            if ram_kv_cache
-                .append_context_pframe(
-                    slot_idx,
-                    &recall.gateway_frame.phase_deltas,
-                    1,
-                    (idx + 1) as u32,
-                )
-                .is_ok()
-            {
-                ram_kv_pframes_appended += 1;
-            }
-            let pf_n = ram_kv_cache.slot_pframe_count(slot_idx);
-            if exact {
-                format!("EXACT(s{slot_idx},pf={pf_n},l1={ph_l1},h={ph_head:?}{seek_note})")
-            } else {
-                format!("RES(s{slot_idx},r={res_q7},pf={pf_n},l1={ph_l1},h={ph_head:?}{seek_note})")
-            }
-        } else if ctx_hash != 0 {
-            match ram_kv_cache.store_keyframe_and_reset_gop(
-                ctx_hash,
-                q_ids.len() as u32,
-                query_snap.top_fact_anchor.unwrap_or(0),
-                &recall.gateway_frame.phase_deltas,
-                query_snap.cognitive_trajectory,
-                recall.telemetry.layer_activation,
-                (idx + 1) as u32,
-            ) {
-                Some(slot_idx) => format!("STORE(s{slot_idx},l1={ph_l1},h={ph_head:?})"),
-                None => "MISS(unbacked)".to_string(),
-            }
-        } else {
-            format!("VOID(miss,l1={ph_l1},h={ph_head:?})")
-        };
-        ram_kv_lookup_us_sum += t_kv.elapsed().as_secs_f64() * 1_000_000.0;
+            .map_err(|e| format!("ram_kv_cache error: {e}"))?;
+        let kv_note = kv_stats.record_outcome(
+            kv_outcome,
+            t_kv.elapsed().as_secs_f64() * 1_000_000.0,
+            &recall.gateway_frame.phase_deltas,
+        );
         let top_fact_preview = if recall.recalled_facts.is_empty() {
             "none".to_string()
         } else {
@@ -2614,36 +2603,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         mean_recall_ms,
         decode_tps,
     );
-    let ram_kv_occupied = ram_kv_cache
-        .entries()
-        .iter()
-        .filter(|e| e.is_occupied())
-        .count();
-    let ram_kv_total_hits = ram_kv_exact_hits + ram_kv_res_hits;
-    let ram_kv_hit_rate = if ram_kv_lookups == 0 {
+    let ram_kv_occupied = ram_kv_cache.occupied_slot_count();
+    let ram_kv_total_hits = kv_stats.exact_hits + kv_stats.res_hits;
+    let ram_kv_hit_rate = if kv_stats.lookups == 0 {
         0.0
     } else {
-        ram_kv_total_hits as f64 / ram_kv_lookups as f64 * 100.0
+        ram_kv_total_hits as f64 / kv_stats.lookups as f64 * 100.0
     };
-    let ram_kv_avg_us = if ram_kv_lookups == 0 {
+    let ram_kv_avg_us = if kv_stats.lookups == 0 {
         0.0
     } else {
-        ram_kv_lookup_us_sum / ram_kv_lookups as f64
+        kv_stats.lookup_us_sum / kv_stats.lookups as f64
+    };
+    let kv_mode_label = match kv_min_res {
+        Some(v) => format!("override={v}"),
+        None => "auto(2/sqrt(H))".to_string(),
     };
     println!(
         "RAM Phase-KV GOP Cache ({} KB / {} slots, zero-VRAM, min_res={}): occupied={} hits={}/{} ({:.1}%: exact={} res={}) pframes={} seeks={} repulsed={} avg_lookup={:.2} us",
         core::mem::size_of::<StandardPhaseKvGopCache>() / 1024,
         ram_kv_cache.entries().len(),
-        kv_min_res,
+        kv_mode_label,
         ram_kv_occupied,
         ram_kv_total_hits,
-        ram_kv_lookups,
+        kv_stats.lookups,
         ram_kv_hit_rate,
-        ram_kv_exact_hits,
-        ram_kv_res_hits,
-        ram_kv_pframes_appended,
-        ram_kv_pframe_seeks,
-        ram_kv_pframe_repulsed,
+        kv_stats.exact_hits,
+        kv_stats.res_hits,
+        kv_stats.pframes_appended,
+        kv_stats.pframe_seeks,
+        kv_stats.pframe_repulsed,
         ram_kv_avg_us,
     );
 
@@ -2702,10 +2691,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ];
 
             let mut mt_kv_cache = StandardPhaseKvGopCache::new();
-            let mut mt_exact_hits = 0_usize;
-            let mut mt_res_hits = 0_usize;
-            let mut mt_pframes = 0_usize;
-            let mut mt_seeks = 0_usize;
+            let mut mt_kv_stats = KvTraceStats::default();
             let mut mt_exp_hits = 0_usize;
             let mut mt_exp_total = 0_usize;
             let mut mt_forb_hits = 0_usize;
@@ -2743,98 +2729,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     q_ids.len(),
                     prior_circuit,
                 )?;
-                let recalled_ctx: String = recall
-                    .recalled_facts
-                    .iter()
-                    .map(|(e, _)| e.text.as_str())
-                    .chain(
-                        recall
-                            .recalled_personas
-                            .iter()
-                            .map(|(e, _)| e.text.as_str()),
-                    )
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                let recalled_ctx = recall.recalled_context_text();
                 let mut turn_snap = TrajectoryManifoldSnapshot::from_recall(&recall);
                 if let Some(ref bank) = active_persona_bank {
                     let cons = bank.to_consolidated_ledger();
-                    turn_snap.cognitive_trajectory =
-                        cons.compose_persona_circuit(&turn_snap.cognitive_trajectory, 64);
+                    turn_snap.cognitive_trajectory = cons.compose_persona_circuit(
+                        &turn_snap.cognitive_trajectory,
+                        kv_policy.kv_circuit_blend_q7(&recall.gateway_frame),
+                    );
                 }
 
-                let ctx_hash = if recalled_ctx.is_empty() {
-                    0_u64
-                } else {
-                    recalled_ctx
-                        .as_bytes()
-                        .iter()
-                        .fold(0xCBF2_9CE4_8422_2325_u64, |h, &b| {
-                            (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3)
-                        })
-                };
-                let mt_kv_note = if matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace)
-                {
-                    "VOID(skip)".to_string()
-                } else if let Some((slot_idx, exact, res_q7)) = mt_kv_cache
-                    .lookup_context_or_resonate(
+                let ctx_hash = recall.context_fingerprint_u64();
+                let t_mt_kv = Instant::now();
+                let mt_outcome = mt_kv_cache
+                    .step_with_gateway_and_override(
                         ctx_hash,
-                        recall.gateway_frame.phase_words_ref(),
+                        q_ids.len() as u32,
+                        &recall.gateway_frame,
+                        &mut turn_snap.cognitive_trajectory,
+                        recall.telemetry.layer_activation,
+                        &kv_policy,
                         kv_min_res,
                         (t_idx + 1) as u32,
                     )
-                {
-                    if exact {
-                        mt_exact_hits += 1;
-                    } else {
-                        mt_res_hits += 1;
-                    }
-                    let mut seek_note = String::new();
-                    if mt_kv_cache.slot_pframe_count(slot_idx) > 0 {
-                        if let Ok((_restored, _lp, r_bar, repulsed)) =
-                            mt_kv_cache.seek_slot_history(slot_idx, 1, 0.35, (t_idx + 1) as u32)
-                        {
-                            mt_seeks += 1;
-                            seek_note = format!(" seek_r={r_bar:.2} rep={repulsed}");
-                        }
-                    }
-                    let cached_circuit = mt_kv_cache.entries()[slot_idx].circuit;
-                    if cached_circuit.latest_step().is_some() {
-                        turn_snap.cognitive_trajectory = cached_circuit
-                            .compose_persona_circuit(&turn_snap.cognitive_trajectory, 64);
-                    }
-                    if mt_kv_cache
-                        .append_context_pframe(
-                            slot_idx,
-                            &recall.gateway_frame.phase_deltas,
-                            1,
-                            (t_idx + 1) as u32,
-                        )
-                        .is_ok()
-                    {
-                        mt_pframes += 1;
-                    }
-                    let pf_n = mt_kv_cache.slot_pframe_count(slot_idx);
-                    if exact {
-                        format!("EXACT(s{slot_idx},pf={pf_n}{seek_note})")
-                    } else {
-                        format!("RES(s{slot_idx},r={res_q7},pf={pf_n}{seek_note})")
-                    }
-                } else if ctx_hash != 0 {
-                    match mt_kv_cache.store_keyframe_and_reset_gop(
-                        ctx_hash,
-                        q_ids.len() as u32,
-                        turn_snap.top_fact_anchor.unwrap_or(0),
-                        &recall.gateway_frame.phase_deltas,
-                        turn_snap.cognitive_trajectory,
-                        recall.telemetry.layer_activation,
-                        (t_idx + 1) as u32,
-                    ) {
-                        Some(slot_idx) => format!("STORE(s{slot_idx})"),
-                        None => "MISS(unbacked)".to_string(),
-                    }
-                } else {
-                    "VOID(miss)".to_string()
-                };
+                    .map_err(|e| format!("mt_kv_cache error: {e}"))?;
+                let mt_kv_note = mt_kv_stats.record_outcome(
+                    mt_outcome,
+                    t_mt_kv.elapsed().as_secs_f64() * 1_000_000.0,
+                    &recall.gateway_frame.phase_deltas,
+                );
 
                 let dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
                 let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);
@@ -3055,12 +2978,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     reply_text
                 );
             }
-            let mt_occ = mt_kv_cache
-                .entries()
-                .iter()
-                .filter(|e| e.is_occupied())
-                .count();
-            let mt_hits = mt_exact_hits + mt_res_hits;
+            let mt_occ = mt_kv_cache.occupied_slot_count();
+            let mt_hits = mt_kv_stats.exact_hits + mt_kv_stats.res_hits;
             let mt_tps = if mt_decode_secs > 1e-6 {
                 mt_decode_tokens as f64 / mt_decode_secs
             } else {
@@ -3084,10 +3003,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 mt_forb_total,
                 mt_occ,
                 mt_hits,
-                mt_exact_hits,
-                mt_res_hits,
-                mt_pframes,
-                mt_seeks,
+                mt_kv_stats.exact_hits,
+                mt_kv_stats.res_hits,
+                mt_kv_stats.pframes_appended,
+                mt_kv_stats.pframe_seeks,
                 mt_tps,
             );
             if let Some(vram_end) = query_nvidia_smi_vram() {
