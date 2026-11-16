@@ -931,11 +931,32 @@ impl CompiledTokenCorpus {
         query_token_qs: &[Vec<f32>],
         query_seq_len: usize,
     ) -> Result<DynamicAttractorRecall<'a>, String> {
-        self.recall_token_sequence_with_strata(
+        self.recall_token_sequence_with_strata_and_circuit(
             adapter,
             query_token_qs,
             query_seq_len,
             &StratumPipeline::default(),
+            None,
+        )
+    }
+
+    /// Scores a raw query token sequence while seeding Pass 1 stratum inference with `prior_circuit`.
+    ///
+    /// # Errors
+    /// Returns an error if layer count, token length, or stratum inference fails.
+    pub fn recall_token_sequence_with_circuit<'a>(
+        &'a self,
+        adapter: &ModelSteeringAdapter,
+        query_token_qs: &[Vec<f32>],
+        query_seq_len: usize,
+        prior_circuit: Option<liminika_core::traits::gateway::CognitiveTrajectoryLedger>,
+    ) -> Result<DynamicAttractorRecall<'a>, String> {
+        self.recall_token_sequence_with_strata_and_circuit(
+            adapter,
+            query_token_qs,
+            query_seq_len,
+            &StratumPipeline::default(),
+            prior_circuit,
         )
     }
 
@@ -1141,6 +1162,28 @@ impl CompiledTokenCorpus {
         query_seq_len: usize,
         pipeline: &StratumPipeline<'_>,
     ) -> Result<DynamicAttractorRecall<'a>, String> {
+        self.recall_token_sequence_with_strata_and_circuit(
+            adapter,
+            query_token_qs,
+            query_seq_len,
+            pipeline,
+            None,
+        )
+    }
+
+    /// Scores a raw query token sequence using a custom [`StratumPipeline`] and optional prior
+    /// [`CognitiveTrajectoryLedger`](liminika_core::traits::gateway::CognitiveTrajectoryLedger).
+    ///
+    /// # Errors
+    /// Returns an error if layer count, token length, or stratum inference fails.
+    pub fn recall_token_sequence_with_strata_and_circuit<'a>(
+        &'a self,
+        adapter: &ModelSteeringAdapter,
+        query_token_qs: &[Vec<f32>],
+        query_seq_len: usize,
+        pipeline: &StratumPipeline<'_>,
+        prior_circuit: Option<liminika_core::traits::gateway::CognitiveTrajectoryLedger>,
+    ) -> Result<DynamicAttractorRecall<'a>, String> {
         let num_layers = adapter.geometry().num_layers;
         let dim = adapter.geometry().q_rot_len();
         if query_token_qs.len() != num_layers {
@@ -1162,14 +1205,16 @@ impl CompiledTokenCorpus {
             .iter()
             .map(Vec::as_slice)
             .collect();
-        self.corpus.recall_for_query_with_strata_observation(
-            adapter,
-            &q_refs,
-            &centroid_refs,
-            &self.recall_policy,
-            pipeline,
-            Some(obs),
-        )
+        self.corpus
+            .recall_for_query_with_strata_observation_and_circuit(
+                adapter,
+                &q_refs,
+                &centroid_refs,
+                &self.recall_policy,
+                pipeline,
+                Some(obs),
+                prior_circuit,
+            )
     }
 }
 

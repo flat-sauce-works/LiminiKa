@@ -1823,6 +1823,35 @@ impl TextAttractorCorpus {
         pipeline: &StratumPipeline<'_>,
         local_observation: Option<LocalChannelObservation>,
     ) -> Result<DynamicAttractorRecall<'_>, String> {
+        self.recall_for_query_with_strata_observation_and_circuit(
+            adapter,
+            query_per_layer_q,
+            baseline_ref_per_layer,
+            policy,
+            pipeline,
+            local_observation,
+            None,
+        )
+    }
+
+    /// Scores a query's per-layer Q activations against the corpus using a custom [`StratumPipeline`],
+    /// an optional [`LocalChannelObservation`], and an optional prior [`CognitiveTrajectoryLedger`]
+    /// injected at the start of Pass 1 stratum inference.
+    ///
+    /// # Errors
+    /// Returns an error if query/baseline layer slices mismatch `adapter.geometry()`,
+    /// observation vectors mismatch `self.entries().len()`, or a stratum fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn recall_for_query_with_strata_observation_and_circuit(
+        &self,
+        adapter: &ModelSteeringAdapter,
+        query_per_layer_q: &[&[f32]],
+        baseline_ref_per_layer: &[&[f32]],
+        policy: &RecallPolicy,
+        pipeline: &StratumPipeline<'_>,
+        local_observation: Option<LocalChannelObservation>,
+        prior_circuit: Option<CognitiveTrajectoryLedger>,
+    ) -> Result<DynamicAttractorRecall<'_>, String> {
         if query_per_layer_q.len() != baseline_ref_per_layer.len() {
             return Err(format!(
                 "query/baseline layer mismatch: {} vs {}",
@@ -1903,7 +1932,10 @@ impl TextAttractorCorpus {
             gateway_frame: GatewayFrame::default(),
             swarm_report: SwarmResolutionReport::default(),
             local_channel_preferred: false,
-            telemetry: StratumProbeTelemetry::default(),
+            telemetry: StratumProbeTelemetry {
+                cognitive_trajectory: prior_circuit.unwrap_or_default(),
+                ..StratumProbeTelemetry::default()
+            },
         };
         let stratum_ctx = StratumContext {
             entries: &self.entries,

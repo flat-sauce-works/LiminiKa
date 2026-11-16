@@ -20,8 +20,9 @@ use liminika_adapter::{
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::action_hub::ActionHubEngine;
 use liminika_core::traits::gateway::{
-    CognitiveCircuitPlasticity, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
-    GuardPhaseAnchor, ObjectiveFact, ResonantSignalSlice, SubjectivePersona, SwarmScaleGranularity,
+    CognitiveCircuitPlasticity, CognitiveNeuralBankOps, CognitiveOpKind, CognitiveStepOp,
+    CognitiveTrajectoryLedger, GuardPhaseAnchor, HybridScaleCircuit, ObjectiveFact,
+    ResonantSignalSlice, StandardCognitiveBank, SubjectivePersona, SwarmScaleGranularity,
 };
 use serde::Deserialize;
 use tokenizers::Tokenizer;
@@ -1386,12 +1387,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .find_map(|a| a.strip_prefix("--save-persona-gcso="))
         .map(PathBuf::from)
         .or_else(|| persona_gcso_in.clone());
-    let mut active_persona_circuit =
-        resolve_persona_circuit(circuit_mode, persona_gcso_in.as_deref());
-    if let Some(pc) = active_persona_circuit {
+    let active_persona_circuit = resolve_persona_circuit(circuit_mode, persona_gcso_in.as_deref());
+    let mut active_persona_bank: Option<StandardCognitiveBank> = active_persona_circuit.map(|pc| {
+        if matches!(circuit_mode, CircuitProfileMode::Hybrid(_)) {
+            let micro = build_preset_circuit(CircuitProfileMode::Analytical).unwrap_or(pc);
+            let macro_c = build_preset_circuit(CircuitProfileMode::Integrative).unwrap_or(pc);
+            let hybrid = HybridScaleCircuit::new(micro, macro_c);
+            let mut bank = StandardCognitiveBank::from_ledger(hybrid.to_blended_ledger(64));
+            bank.units[1] = macro_c;
+            bank.units[2] = micro;
+            bank
+        } else {
+            StandardCognitiveBank::from_ledger(pc)
+        }
+    });
+    if let Some(ref bank) = active_persona_bank {
+        let cons = bank.to_consolidated_ledger();
         println!(
-            "Persona Cognitive Circuit active: mode={:?} steps={:02x?}",
-            circuit_mode, pc.steps
+            "Persona Cognitive Bank active (RAM 256B / 256 steps): mode={:?} consolidated={:02x?}",
+            circuit_mode, cons.steps
         );
     }
     let baked_opt: Option<BakedModelProfile> = if !recall_only {
@@ -1958,8 +1972,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .get_ids()
             .to_vec();
         let (_, query_tok_qs, _) = model.forward_tokens(&q_ids, 0, None, false, true)?;
+        let prior_circuit = active_persona_bank
+            .as_ref()
+            .map(CognitiveNeuralBankOps::to_consolidated_ledger);
         let t_recall = Instant::now();
-        let recall = compiled.recall_token_sequence(&adapter, &query_tok_qs, q_ids.len())?;
+        let recall = compiled.recall_token_sequence_with_circuit(
+            &adapter,
+            &query_tok_qs,
+            q_ids.len(),
+            prior_circuit,
+        )?;
         let recall_ms = t_recall.elapsed().as_secs_f64() * 1000.0;
         step2_recall_ms_sum += recall_ms;
 
@@ -2014,9 +2036,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
         let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);
         let mut query_snap = TrajectoryManifoldSnapshot::from_recall(&recall);
-        if let Some(pc) = active_persona_circuit {
+        if let Some(ref bank) = active_persona_bank {
+            let cons = bank.to_consolidated_ledger();
             query_snap.cognitive_trajectory =
-                pc.compose_persona_circuit(&query_snap.cognitive_trajectory, 64);
+                cons.compose_persona_circuit(&query_snap.cognitive_trajectory, 64);
         }
         let top_fact_preview = if recall.recalled_facts.is_empty() {
             "none".to_string()
@@ -2088,6 +2111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 "skip".to_string()
             };
+            let mut chosen_crit: Option<ReflectionCritique> = None;
             if !no_reflect && reflection_policy.max_retries > 0 {
                 if let Some(pass1_crit) = critique_generated_draft(
                     &mut model,
@@ -2171,10 +2195,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if matches!(pick, ReflectionSelection::Pass2) {
                                 reflect_adopted += 1;
                                 text = p2_text;
-                                if let Some(ref mut pc) = active_persona_circuit {
-                                    ManifoldReflectionEvaluator
-                                        .update_persona_circuit(pc, &pass2_crit);
-                                }
                                 reflect_note = format!(
                                     "{:?}->{:?}(P2,{:+.2}->{:+.2},[{:?}->{:?}])",
                                     pass1_crit.trigger,
@@ -2184,11 +2204,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     pass1_crit.layer_activation.op_kind(),
                                     pass2_crit.layer_activation.op_kind()
                                 );
+                                chosen_crit = Some(pass2_crit);
                             } else {
-                                if let Some(ref mut pc) = active_persona_circuit {
-                                    ManifoldReflectionEvaluator
-                                        .update_persona_circuit(pc, &pass1_crit);
-                                }
                                 reflect_note = format!(
                                     "{:?}->{:?}(P1,{:+.2}->{:+.2},[{:?}->{:?}])",
                                     pass1_crit.trigger,
@@ -2198,19 +2215,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     pass1_crit.layer_activation.op_kind(),
                                     pass2_crit.layer_activation.op_kind()
                                 );
+                                chosen_crit = Some(pass1_crit);
                             }
                         } else {
-                            if let Some(ref mut pc) = active_persona_circuit {
-                                ManifoldReflectionEvaluator.update_persona_circuit(pc, &pass1_crit);
-                            }
                             reflect_note = format!("{:?}(P1)", pass1_crit.trigger);
+                            chosen_crit = Some(pass1_crit);
                         }
                     } else {
-                        if let Some(ref mut pc) = active_persona_circuit {
-                            ManifoldReflectionEvaluator.update_persona_circuit(pc, &pass1_crit);
-                        }
                         reflect_note = format!("{:?}(0)", pass1_crit.trigger);
+                        chosen_crit = Some(pass1_crit);
                     }
+                }
+            }
+            if let Some(ref mut bank) = active_persona_bank {
+                if let Some(step) = recall.telemetry.cognitive_trajectory.latest_step() {
+                    bank.push_step_hierarchical(step);
+                }
+                if let Some(ref crit) = chosen_crit {
+                    let converged = matches!(
+                        crit.trigger,
+                        liminika_adapter::ReflectionTriggerKind::Converged
+                            | liminika_adapter::ReflectionTriggerKind::ConsistentVoidAbstention
+                    );
+                    bank.reinforce_bank(&crit.layer_activation, converged);
                 }
             }
             (text, reflect_note)
@@ -2418,9 +2445,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 seek_state.anchor_ids.len(),
             );
         }
-        if let Some(pc) = active_persona_circuit {
+        if let Some(ref bank) = active_persona_bank {
+            let pc = bank.to_consolidated_ledger();
+            let active_units = bank.units().iter().filter(|u| u.op_counts().1 > 0).count();
+            let total_steps: usize = bank
+                .units()
+                .iter()
+                .map(|u| usize::from(u.op_counts().1))
+                .sum();
             println!(
-                "Updated Persona Cognitive Circuit after evaluation: steps={:02x?}",
+                "Updated Persona Cognitive Bank (units={active_units}/{}, total_steps={total_steps}): consolidated={:02x?}",
+                bank.units().len(),
                 pc.steps
             );
             if let Some(save_path) = persona_gcso_out.as_deref() {
@@ -2490,5 +2525,16 @@ mod tests {
         assert_ne!(a, i);
         assert_ne!(h, a);
         assert_ne!(h, i);
+
+        let mut bank = StandardCognitiveBank::from_ledger(h);
+        for _ in 0..12 {
+            bank.push_step_hierarchical(CognitiveStepOp::pack(
+                SwarmScaleGranularity::CellTrail,
+                CognitiveOpKind::DecomposePeel,
+                5,
+            ));
+        }
+        assert!(bank.units[1].op_counts().1 > 0);
+        assert!(bank.to_consolidated_ledger().latest_step().is_some());
     }
 }

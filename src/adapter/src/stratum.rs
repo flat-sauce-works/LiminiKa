@@ -19,9 +19,10 @@ use liminika_core::action_hub::{
     StigmergicThresholds, ACTION_HUB_INLINE_TRAILS,
 };
 use liminika_core::traits::gateway::{
-    ActionHubScaleOrchestrator, CausalProvenanceReport, CognitiveCircuitActivation,
-    CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, GatewayFrame, GuardPhaseAnchor,
-    ManifoldGatewaySignal, ObjectiveFact, ScaleLayerNode, SubjectivePersona, SwarmScaleGranularity,
+    ActionHubScaleOrchestrator, AdaptiveThresholdPolicy, CausalProvenanceReport,
+    CognitiveCircuitActivation, CognitiveCircuitThresholdPolicy, CognitiveOpKind, CognitiveStepOp,
+    CognitiveTrajectoryLedger, GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal,
+    ObjectiveFact, ScaleLayerNode, SubjectivePersona, SwarmScaleGranularity,
 };
 use liminika_core::traits::primitives::{load_q7_words_64, GcsoResult, MAX_ATTENTION_HEADS};
 use liminika_core::traits::telemetry::{
@@ -640,6 +641,19 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
             && signal.swarm_report.resolved_cell_count < 6;
 
         let thresholds = StigmergicThresholds::default();
+        let circuit_policy = AdaptiveThresholdPolicy::default();
+        let cell_act = signal.telemetry.layer_activation;
+        let circuit_peel_active = matches!(
+            cell_act.op_kind(),
+            CognitiveOpKind::DecomposePeel | CognitiveOpKind::RouteSubHead
+        ) && cell_act.peel_gate_q7
+            >= circuit_policy.peel_escalation_floor_q7();
+        let circuit_fuse_active = matches!(
+            cell_act.op_kind(),
+            CognitiveOpKind::SynthesizeFuse | CognitiveOpKind::CrystallizeCommit
+        ) && cell_act.fuse_gate_q7
+            >= circuit_policy.early_exit_fuse_floor_q7();
+
         let (rho, h_tilde) = if repulsed {
             (frame.effective_energy, 0.75_f32)
         } else if is_total_cvoid {
@@ -647,8 +661,10 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
         } else if signal.local_channel_preferred
             || signal.decomposition_triggered
             || (channel_disagreement && partial_swarm_consensus)
+            || (circuit_peel_active
+                && !matches!(decision.void_state, VoidBoundaryState::CvoidEmptySpace))
         {
-            // Bifurcated or local-sharpened channel triggers sub-head router sub-head routing via core ladder.
+            // Bifurcated, local-sharpened, or circuit-peel-biased channel triggers sub-head routing.
             (
                 thresholds
                     .subhead_route_density_thresh
@@ -660,6 +676,11 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
         {
             // Persona-only active grounding outside factual basins uses lightweight ExpressPhaseSteer.
             (thresholds.express_steer_density_thresh.max(0.45), 0.35_f32)
+        } else if circuit_fuse_active && margin_ratio >= 1.2 {
+            let boost = thresholds
+                .crystallize_density_thresh
+                .max(frame.effective_energy * 1.5);
+            (boost, 0.40_f32)
         } else if matches!(decision.void_state, VoidBoundaryState::LiminalBoundary) {
             (thresholds.express_steer_density_thresh.max(0.45), 0.35_f32)
         } else if margin_ratio >= 2.0 {

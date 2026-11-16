@@ -6019,6 +6019,261 @@ impl ManifoldGatewaySignal for HybridScaleCircuit {
     }
 }
 
+/// Trait abstracting scalable, host-RAM-resident pseudo-neural circuit banks built out of
+/// uniform 8-byte [`CognitiveTrajectoryLedger`] units.
+///
+/// Allows CPU/RAM capacity to scale the effective reasoning horizon (e.g. `N = 8, 32, 128` units
+/// for 64 to 1,024+ cognitive steps) with zero disk I/O and zero GPU VRAM overhead, folding the
+/// active ensemble down to a single 8-byte activation or ledger at the Hot-Path boundary.
+pub trait CognitiveNeuralBankOps {
+    /// Returns an immutable slice over all [`CognitiveTrajectoryLedger`] units in this bank.
+    fn units(&self) -> &[CognitiveTrajectoryLedger];
+
+    /// Returns a mutable slice over all [`CognitiveTrajectoryLedger`] units in this bank.
+    fn units_mut(&mut self) -> &mut [CognitiveTrajectoryLedger];
+
+    /// Pushes `step` into the front working unit (`units[0]`), spilling evicted steps hierarchically
+    /// into deeper RAM units without discarding long-horizon context.
+    #[inline]
+    fn push_step_hierarchical(&mut self, step: CognitiveStepOp) {
+        let units = self.units_mut();
+        if units.is_empty() || !step.is_active() {
+            return;
+        }
+        let mut carry = step;
+        let mut idx = 0usize;
+        while idx < units.len() && carry.is_active() {
+            let evicted = CognitiveStepOp(units[idx].steps[LEDGER_HISTORY_LEN - 1]);
+            units[idx].push_step(carry);
+            carry = evicted;
+            idx += 1;
+        }
+    }
+
+    /// Applies homeostatic plasticity across the working unit and consolidates coherent habits
+    /// into the next bank tier when `converged` is true.
+    #[inline]
+    fn reinforce_bank(&mut self, activation: &CognitiveCircuitActivation, converged: bool) {
+        let units = self.units_mut();
+        if units.is_empty() {
+            return;
+        }
+        units[0].reinforce_from_activation(activation, converged);
+        if converged && units.len() > 1 && activation.circuit_resonance_q7 >= 24 {
+            if let Some(latest) = units[0].latest_step() {
+                units[1].reinforce_from_activation(
+                    &CognitiveCircuitActivation {
+                        selected_op: latest.op() as u8,
+                        preferred_next_scale: latest.granularity() as u8,
+                        ..*activation
+                    },
+                    true,
+                );
+            }
+        }
+    }
+
+    /// Evaluates all active units on CPU using branchless integer SWAR resonance and folds the
+    /// multi-unit ensemble into a single 8-byte [`CognitiveCircuitActivation`].
+    #[inline]
+    fn evaluate_bank_activation(
+        &self,
+        bias_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        scale: SwarmScaleGranularity,
+    ) -> CognitiveCircuitActivation {
+        let units = self.units();
+        if units.is_empty() {
+            return CognitiveCircuitActivation::default();
+        }
+        let mut peel_acc = 0u64;
+        let mut fuse_acc = 0u64;
+        let mut repulse_acc = 0u64;
+        let mut res_acc = 0i64;
+        let mut weight_sum = 0u64;
+        let mut best_weight = 0u64;
+        let mut best_act = units[0].evaluate_circuit_activation(bias_words, input_words, scale);
+        let mut total_depth = 0u16;
+
+        let mut i = 0usize;
+        while i < units.len() {
+            let (_, depth) = units[i].op_counts();
+            if depth == 0 {
+                i += 1;
+                continue;
+            }
+            total_depth = total_depth.saturating_add(u16::from(depth));
+            let act = units[i].evaluate_circuit_activation(bias_words, input_words, scale);
+            let recency_bonus = if i == 0 { 32u64 } else { 0u64 };
+            let res_w = (128i32 + i32::from(act.circuit_resonance_q7)).max(1) as u64;
+            let w = res_w + recency_bonus;
+
+            peel_acc += u64::from(act.peel_gate_q7) * w;
+            fuse_acc += u64::from(act.fuse_gate_q7) * w;
+            repulse_acc += u64::from(act.repulse_sensitivity_q7) * w;
+            res_acc += i64::from(act.circuit_resonance_q7) * (w as i64);
+            weight_sum += w;
+            if w > best_weight {
+                best_weight = w;
+                best_act = act;
+            }
+            i += 1;
+        }
+
+        if weight_sum == 0 {
+            return best_act;
+        }
+        let peel_gate_q7 = (peel_acc / weight_sum).min(128) as u8;
+        let fuse_gate_q7 = (fuse_acc / weight_sum).min(128) as u8;
+        let repulse_sensitivity_q7 = (repulse_acc / weight_sum).min(128) as u8;
+        let circuit_resonance_q7 = (res_acc / (weight_sum as i64)).clamp(-127, 127) as gcso_q7_t;
+        let intensity_q7 = peel_gate_q7.max(fuse_gate_q7).max(repulse_sensitivity_q7);
+        CognitiveCircuitActivation {
+            peel_gate_q7,
+            fuse_gate_q7,
+            repulse_sensitivity_q7,
+            selected_op: best_act.selected_op,
+            preferred_next_scale: best_act.preferred_next_scale,
+            intensity_q7,
+            circuit_resonance_q7,
+            trajectory_depth: total_depth.min(255) as u8,
+        }
+    }
+
+    /// Folds the multi-unit RAM bank into a single 8-byte [`CognitiveTrajectoryLedger`] suitable
+    /// for `.gcso` persistence or [`ManifoldGatewaySignal`] synthesis.
+    #[inline]
+    fn to_consolidated_ledger(&self) -> CognitiveTrajectoryLedger {
+        let units = self.units();
+        if units.is_empty() {
+            return CognitiveTrajectoryLedger::new();
+        }
+        let mut acc = units[0];
+        let mut active_count = 1u16;
+        let mut i = 1usize;
+        while i < units.len() {
+            if units[i].op_counts().1 > 0 {
+                let blend = (128u16 / (active_count + 1)).clamp(1, 64) as u8;
+                acc = acc.compose_persona_circuit(&units[i], blend);
+                active_count += 1;
+            }
+            i += 1;
+        }
+        acc
+    }
+}
+
+impl CognitiveNeuralBankOps for [CognitiveTrajectoryLedger] {
+    #[inline(always)]
+    fn units(&self) -> &[CognitiveTrajectoryLedger] {
+        self
+    }
+
+    #[inline(always)]
+    fn units_mut(&mut self) -> &mut [CognitiveTrajectoryLedger] {
+        self
+    }
+}
+
+/// Fixed-capacity, cacheline-aligned RAM-resident bank of `N` 8-byte [`CognitiveTrajectoryLedger`]
+/// units (`8 * N` bytes total; zero heap allocation, zero VRAM footprint).
+#[repr(C, align(64))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CognitiveCircuitBank<const N: usize> {
+    /// Contiguous array of 8-byte pseudo-neural circuit units (`index 0` = newest working memory).
+    pub units: [CognitiveTrajectoryLedger; N],
+}
+
+impl<const N: usize> Default for CognitiveCircuitBank<N> {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const N: usize> CognitiveCircuitBank<N> {
+    /// Creates an empty [`CognitiveCircuitBank`] of `N` units (`8 * N` steps capacity).
+    #[inline(always)]
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            units: [CognitiveTrajectoryLedger::new(); N],
+        }
+    }
+
+    /// Seeds the working unit (`units[0]`) from a persisted 8-byte [`CognitiveTrajectoryLedger`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn from_ledger(ledger: CognitiveTrajectoryLedger) -> Self {
+        let mut bank = Self::new();
+        if N > 0 {
+            bank.units[0] = ledger;
+        }
+        bank
+    }
+}
+
+impl<const N: usize> CognitiveNeuralBankOps for CognitiveCircuitBank<N> {
+    #[inline(always)]
+    fn units(&self) -> &[CognitiveTrajectoryLedger] {
+        &self.units
+    }
+
+    #[inline(always)]
+    fn units_mut(&mut self) -> &mut [CognitiveTrajectoryLedger] {
+        &mut self.units
+    }
+}
+
+impl<const N: usize> RawPhaseProjectable for CognitiveCircuitBank<N> {
+    #[inline]
+    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+        self.to_consolidated_ledger().project_to_q7_64()
+    }
+
+    #[inline]
+    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+        self.to_consolidated_ledger().to_phase_words_64()
+    }
+}
+
+impl<const N: usize> CausalProvenanceSignal for CognitiveCircuitBank<N> {
+    #[inline]
+    fn causal_provenance_bits(&self) -> u32 {
+        self.to_consolidated_ledger().causal_provenance_bits()
+    }
+}
+
+impl<const N: usize> CognitiveGroundingSignal for CognitiveCircuitBank<N> {
+    #[inline]
+    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+        self.project_to_q7_64()
+    }
+
+    #[inline]
+    fn grounding_base_energy(&self) -> f32 {
+        self.to_consolidated_ledger().grounding_base_energy()
+    }
+}
+
+impl<const N: usize> SubjectivePersonaSignal for CognitiveCircuitBank<N> {}
+
+impl<const N: usize> ManifoldGatewaySignal for CognitiveCircuitBank<N> {
+    #[inline]
+    fn synthesize_gateway_frame(&self) -> GatewayFrame {
+        self.to_consolidated_ledger().synthesize_gateway_frame()
+    }
+}
+
+/// Low-spec PC preset: 8 units = 64 bytes (single L1D cacheline, 64 cognitive steps).
+pub type LowSpecCognitiveBank = CognitiveCircuitBank<8>;
+
+/// Standard consumer PC preset: 32 units = 256 bytes (256 cognitive steps).
+pub type StandardCognitiveBank = CognitiveCircuitBank<32>;
+
+/// High-capacity RAM / Zen 4 L2 preset: 128 units = 1,024 bytes (1,024 cognitive steps).
+pub type HighCapCognitiveBank = CognitiveCircuitBank<128>;
+
 impl RawPhaseProjectable for CognitiveTrajectoryLedger {
     #[inline(always)]
     fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
@@ -7760,5 +8015,51 @@ mod tests {
             .unwrap();
         assert_eq!(proj.total_layers, 1);
         assert!(out_ledger.latest_step().is_some());
+    }
+
+    #[test]
+    fn test_scalable_ram_cognitive_circuit_bank_and_folding() {
+        let mut low: LowSpecCognitiveBank = CognitiveCircuitBank::new();
+        let mut high: HighCapCognitiveBank = CognitiveCircuitBank::new();
+        assert_eq!(size_of::<LowSpecCognitiveBank>(), 64);
+        assert_eq!(size_of::<HighCapCognitiveBank>(), 1024);
+
+        // Pushing 20 steps into an 8-unit bank spills evicted steps hierarchically into units[1..3].
+        for idx in 0..20u8 {
+            let step = CognitiveStepOp::pack(
+                SwarmScaleGranularity::from_u8(idx & 3),
+                if (idx & 1) == 0 {
+                    CognitiveOpKind::DecomposePeel
+                } else {
+                    CognitiveOpKind::SynthesizeFuse
+                },
+                ((idx % 6) + 1) as u8,
+            );
+            low.push_step_hierarchical(step);
+            high.push_step_hierarchical(step);
+        }
+        assert_eq!(low.units[0].op_counts().1, 8);
+        assert_eq!(low.units[1].op_counts().1, 8);
+        assert_eq!(low.units[2].op_counts().1, 4);
+        assert_eq!(low.units[3].op_counts().1, 0);
+
+        let input_words = load_q7_words_64(&[24i8; MAX_ATTENTION_HEADS]);
+        let bias_words = load_q7_words_64(&[22i8; MAX_ATTENTION_HEADS]);
+        let bank_act = high.evaluate_bank_activation(
+            &bias_words,
+            &input_words,
+            SwarmScaleGranularity::CellTrail,
+        );
+        assert_eq!(bank_act.trajectory_depth, 20);
+        assert!(bank_act.intensity_q7 > 0);
+
+        // Bank acts directly as a ManifoldGatewaySignal via consolidated 8-byte folding.
+        let frame = high.synthesize_gateway_frame();
+        assert_ne!(frame.provenance_bits & CAUSAL_AXIS_SUBJECTIVE_PERSONA, 0);
+
+        // Slice implementation allows runtime-sized RAM banks without fixed const N.
+        let mut dynamic_units = [CognitiveTrajectoryLedger::new(); 4];
+        dynamic_units.as_mut_slice().reinforce_bank(&bank_act, true);
+        assert!(dynamic_units[0].latest_step().is_some());
     }
 }
