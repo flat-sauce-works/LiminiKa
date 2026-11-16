@@ -21,8 +21,8 @@ use liminika_adapter::{
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::action_hub::ActionHubEngine;
 use liminika_core::traits::gateway::{
-    AdaptiveThresholdPolicy, CognitiveCircuitPlasticity, CognitiveCircuitThresholdPolicy,
-    CognitiveNeuralBankOps, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
+    AdaptiveThresholdPolicy, CognitiveCircuitBankOps, CognitiveCircuitPlasticity,
+    CognitiveCircuitThresholdPolicy, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
     GuardPhaseAnchor, HybridScaleCircuit, ObjectiveFact, RamPhaseKvCacheOps, RamPhaseKvStepOutcome,
     ResonantSignalSlice, StandardCognitiveBank, StandardPhaseKvGopCache, SubjectivePersona,
     SwarmScaleGranularity,
@@ -2308,7 +2308,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (_, query_tok_qs, _) = model.forward_tokens(&q_ids, 0, None, false, true)?;
         let prior_circuit = active_persona_bank
             .as_ref()
-            .map(CognitiveNeuralBankOps::to_consolidated_ledger);
+            .map(CognitiveCircuitBankOps::to_consolidated_ledger);
         let t_recall = Instant::now();
         let recall = compiled.recall_token_sequence_with_circuit(
             &adapter,
@@ -2797,7 +2797,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let prior_circuit = active_persona_bank
                     .as_ref()
-                    .map(CognitiveNeuralBankOps::to_consolidated_ledger);
+                    .map(CognitiveCircuitBankOps::to_consolidated_ledger);
                 let recall = compiled.recall_token_sequence_with_circuit(
                     &adapter,
                     &query_tok_qs,

@@ -190,7 +190,7 @@ pub struct ReflectionCritique {
     pub gateway_frame: GatewayFrame,
     /// Updated cognitive trajectory ledger recording this closed-loop reflection transition.
     pub cognitive_trajectory: CognitiveTrajectoryLedger,
-    /// Cross-trajectory pseudo-neural circuit activation comparing query and draft reasoning paths.
+    /// Cross-trajectory stigmergic cognitive circuit activation comparing query and draft reasoning paths.
     pub layer_activation: CognitiveCircuitActivation,
 }
 
@@ -572,7 +572,7 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
                 draft.gateway_frame.phase_words_ref(),
             );
 
-        // If the pseudo-neural trajectory circuit detects omitted compound decomposition (`DecomposePeel`)
+        // If the stigmergic cognitive circuit detects omitted compound decomposition (`DecomposePeel`)
         // alongside substantial Fact anchor omission (<= 55% coverage, top-anchor mismatch, liminal
         // boundary, or negative phase resonance) on a grounded query, escalate to BoundaryAmbiguity.
         // Majority-covered `InsideBasin` drafts with positive phase resonance avoid over-thinking.

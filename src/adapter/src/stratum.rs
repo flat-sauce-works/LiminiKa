@@ -108,7 +108,7 @@ pub struct StratumProbeTelemetry {
     pub provenance: CausalProvenanceReport,
     /// Recorded 8-step multi-scale cognitive trajectory from `ActionHub` FastPathLedger mini ledger.
     pub cognitive_trajectory: CognitiveTrajectoryLedger,
-    /// Latest pseudo-neural cognitive circuit gating activation computed from trajectory history.
+    /// Latest stigmergic cognitive circuit gating activation computed from trajectory history.
     pub layer_activation: CognitiveCircuitActivation,
 }
 

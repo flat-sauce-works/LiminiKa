@@ -19,7 +19,7 @@ use liminika_core::traits::aligned::{
 };
 use liminika_core::traits::gateway::{
     ActionHubGatewayExt, AdaptiveThresholdPolicy, CausalProvenanceReport, CausalProvenanceSignal,
-    CognitiveCircuitActivation, CognitiveCircuitPlasticity, CognitiveNeuralBankOps,
+    CognitiveCircuitActivation, CognitiveCircuitBankOps, CognitiveCircuitPlasticity,
     CognitiveTrajectoryLedger, GatewayFrame, GatewayPhaseSteeringExt, GatewayRank1SteeringExt,
     GuardPhaseAnchor, ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact,
     StigmergicThresholdPolicy, SubjectivePersona, SwarmScaleGranularity, SystemConstraint,
@@ -384,7 +384,7 @@ impl ModelSteeringAdapter {
     /// Evaluates `bank` against `(bias_words, input_words)` at `scale`, applies homeostatic
     /// plasticity (`reinforce_bank`), and pushes the consolidated ledger back into the adapter's
     /// live Hot-Path ledger slot.
-    pub fn reinforce_active_circuit_with_bank<B: CognitiveNeuralBankOps>(
+    pub fn reinforce_active_circuit_with_bank<B: CognitiveCircuitBankOps>(
         &mut self,
         bank: &mut B,
         bias_words: &[u64; NUM_SWARM_MICRO_CELLS],
@@ -2360,7 +2360,7 @@ impl GcsoDualTrackTimeline {
         }
     }
 
-    /// Attaches a [`CognitiveTrajectoryLedger`] (pseudo-neural persona reasoning circuit) to be
+    /// Attaches a [`CognitiveTrajectoryLedger`] (stigmergic persona reasoning circuit) to be
     /// persisted inside subsequent I-frame `.gcso` 4-section snapshots.
     pub fn set_persona_circuit(&mut self, circuit: CognitiveTrajectoryLedger) {
         self.persona_circuit = Some(circuit);
