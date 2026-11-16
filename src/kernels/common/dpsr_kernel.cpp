@@ -945,15 +945,15 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_kernel_destroy(gcso_dpsr_kernel_handl
  */
 GCSO_API gcso_status_t GCSO_CALL
 gcso_subhead_router_create(const gcso_subhead_config_t* GCSO_RESTRICT config,
-                        gcso_subhead_router_handle_t* GCSO_RESTRICT router_out) GCSO_NOEXCEPT {
+                           gcso_subhead_router_handle_t* GCSO_RESTRICT router_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(config == nullptr || router_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(config) % alignof(gcso_subhead_config_t) != 0 ||
-                          reinterpret_cast<uintptr_t>(router_out) %
-                                  alignof(gcso_subhead_router_handle_t) !=
-                              0)) {
+        if (GCSO_UNLIKELY(
+                reinterpret_cast<uintptr_t>(config) % alignof(gcso_subhead_config_t) != 0 ||
+                reinterpret_cast<uintptr_t>(router_out) % alignof(gcso_subhead_router_handle_t) !=
+                    0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
@@ -993,9 +993,9 @@ GCSO_API gcso_status_t GCSO_CALL gcso_subhead_dispatch_single_pass(
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(query_tensor) % 32 != 0 ||
-                          reinterpret_cast<uintptr_t>(subhead_cfg) % alignof(gcso_subhead_config_t) !=
-                              0)) {
+        if (GCSO_UNLIKELY(
+                reinterpret_cast<uintptr_t>(query_tensor) % 32 != 0 ||
+                reinterpret_cast<uintptr_t>(subhead_cfg) % alignof(gcso_subhead_config_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
@@ -1119,15 +1119,17 @@ GCSO_API gcso_status_t GCSO_CALL gcso_subhead_router_destroy(gcso_subhead_router
  */
 GCSO_API gcso_status_t GCSO_CALL
 gcso_rank1_residual_create(const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT descriptor,
-                        gcso_rank1_residual_handle_t* GCSO_RESTRICT adapter_out) GCSO_NOEXCEPT {
+                           gcso_rank1_residual_handle_t* GCSO_RESTRICT adapter_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(descriptor == nullptr || adapter_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(
-                reinterpret_cast<uintptr_t>(descriptor) % alignof(gcso_rank1_residual_descriptor_t) != 0 ||
-                reinterpret_cast<uintptr_t>(adapter_out) % alignof(gcso_rank1_residual_handle_t) !=
-                    0)) {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(descriptor) %
+                                  alignof(gcso_rank1_residual_descriptor_t) !=
+                              0 ||
+                          reinterpret_cast<uintptr_t>(adapter_out) %
+                                  alignof(gcso_rank1_residual_handle_t) !=
+                              0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
@@ -1158,8 +1160,8 @@ gcso_rank1_residual_create(const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT
  */
 GCSO_API gcso_status_t GCSO_CALL
 gcso_rank1_eval(float* GCSO_RESTRICT y_out, const float* GCSO_RESTRICT x_in,
-                    const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT rank1_desc, size_t dim_in,
-                    size_t dim_out) GCSO_NOEXCEPT {
+                const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT rank1_desc, size_t dim_in,
+                size_t dim_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(y_out == nullptr || x_in == nullptr || rank1_desc == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -1170,7 +1172,8 @@ gcso_rank1_eval(float* GCSO_RESTRICT y_out, const float* GCSO_RESTRICT x_in,
     try {
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(y_out) % 32 != 0 ||
                           reinterpret_cast<uintptr_t>(x_in) % 32 != 0 ||
-                          reinterpret_cast<uintptr_t>(rank1_desc) % alignof(gcso_rank1_residual_descriptor_t) !=
+                          reinterpret_cast<uintptr_t>(rank1_desc) %
+                                  alignof(gcso_rank1_residual_descriptor_t) !=
                               0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
@@ -1337,8 +1340,8 @@ gcso_rank1_eval(float* GCSO_RESTRICT y_out, const float* GCSO_RESTRICT x_in,
  */
 GCSO_API gcso_status_t GCSO_CALL
 gcso_rank1_eval_fused(float* GCSO_RESTRICT y_inout, const float* GCSO_RESTRICT x_in,
-                          const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT rank1_desc, size_t dim_in,
-                          size_t dim_out) GCSO_NOEXCEPT {
+                      const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT rank1_desc,
+                      size_t dim_in, size_t dim_out) GCSO_NOEXCEPT {
     return gcso_rank1_eval(y_inout, x_in, rank1_desc, dim_in, dim_out);
 }
 
@@ -1372,7 +1375,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_l2p_svd_project_lora(
     try {
         if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(lora_a) % 32 != 0 ||
                           reinterpret_cast<uintptr_t>(lora_b) % 32 != 0 ||
-                          reinterpret_cast<uintptr_t>(rank1_out) % alignof(gcso_rank1_residual_descriptor_t) !=
+                          reinterpret_cast<uintptr_t>(rank1_out) %
+                                  alignof(gcso_rank1_residual_descriptor_t) !=
                               0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }

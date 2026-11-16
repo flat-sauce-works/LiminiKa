@@ -746,11 +746,11 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_kernel_destroy(gcso_dpsr_kernel_handl
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_subhead_router_create(const gcso_subhead_config_t* GCSO_RESTRICT config,
-                        gcso_subhead_router_handle_t* GCSO_RESTRICT router_out) GCSO_NOEXCEPT;
+                           gcso_subhead_router_handle_t* GCSO_RESTRICT router_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Dispatches sub-head router head-group phase profiles (Fact, Logic, Explore) in a single pass.
- * Corresponds to SubHeadRouter::dispatch_single_pass in liminika_core::traits.
+ * @brief Dispatches sub-head router head-group phase profiles (Fact, Logic, Explore) in a single
+ * pass. Corresponds to SubHeadRouter::dispatch_single_pass in liminika_core::traits.
  * @param query_tensor 32-byte aligned query tensor buffer.
  * @param subhead_cfg sub-head router routing configuration (16-byte aligned).
  * @param head_dim Head dimension (must be even).
@@ -777,7 +777,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_subhead_router_destroy(gcso_subhead_router
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_rank1_residual_create(const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT descriptor,
-                        gcso_rank1_residual_handle_t* GCSO_RESTRICT adapter_out) GCSO_NOEXCEPT;
+                           gcso_rank1_residual_handle_t* GCSO_RESTRICT adapter_out) GCSO_NOEXCEPT;
 
 /**
  * @brief Evaluates Rank-1 residual Dynamic Rank-1 outer product: y = alpha * s (*) (u * (v^T * x)).
@@ -791,12 +791,12 @@ gcso_rank1_residual_create(const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_rank1_eval(float* GCSO_RESTRICT y_out, const float* GCSO_RESTRICT x_in,
-                    const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT rank1_desc, size_t dim_in,
-                    size_t dim_out) GCSO_NOEXCEPT;
+                const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT rank1_desc, size_t dim_in,
+                size_t dim_out) GCSO_NOEXCEPT;
 
 /**
- * @brief L2P-SVD: Projects fine-tuned LoRA matrices via SVD into phase profiles and Rank-1 residual vectors.
- * Corresponds to L2pSvdProjector trait in liminika_core::traits.
+ * @brief L2P-SVD: Projects fine-tuned LoRA matrices via SVD into phase profiles and Rank-1 residual
+ * vectors. Corresponds to L2pSvdProjector trait in liminika_core::traits.
  * @param lora_a Pointer to LoRA A matrix buffer (32-byte aligned).
  * @param lora_b Pointer to LoRA B matrix buffer (32-byte aligned).
  * @param rank Rank size of input LoRA.
@@ -1043,9 +1043,9 @@ gcso_persona_apply_patch(gcso_context_handle_t context, const uint8_t* GCSO_REST
  * @param storage_out Descriptor structure pointer to populate (32-byte aligned).
  * @return GCSO_SUCCESS or GCSO_ERROR_MAPPED_STORAGE_FAILED.
  */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_mapped_storage_open_mmap(const char* GCSO_RESTRICT file_path,
-                     gcso_mapped_storage_descriptor_t* GCSO_RESTRICT storage_out) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_mapped_storage_open_mmap(
+    const char* GCSO_RESTRICT file_path,
+    gcso_mapped_storage_descriptor_t* GCSO_RESTRICT storage_out) GCSO_NOEXCEPT;
 
 /**
  * @brief Unmaps zero-copy mapped-storage memory handle and releases Direct DMA resources.
@@ -1053,8 +1053,8 @@ gcso_mapped_storage_open_mmap(const char* GCSO_RESTRICT file_path,
  * @param storage_desc Descriptor structure pointer to clear (32-byte aligned).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_mapped_storage_close_mmap(gcso_mapped_storage_descriptor_t* GCSO_RESTRICT storage_desc) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_mapped_storage_close_mmap(
+    gcso_mapped_storage_descriptor_t* GCSO_RESTRICT storage_desc) GCSO_NOEXCEPT;
 
 // ===================================================================
 // 7. Tagged Pointer, 2-Origin Composite Manifold Gateway, Online
@@ -1236,8 +1236,8 @@ gcso_dpsr_apply_soft_phase_damping(float* GCSO_RESTRICT query_tensor, size_t hea
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_rank1_eval_fused(float* GCSO_RESTRICT y_inout, const float* GCSO_RESTRICT x_in,
-                          const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT rank1_desc, size_t dim_in,
-                          size_t dim_out) GCSO_NOEXCEPT;
+                      const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT rank1_desc,
+                      size_t dim_in, size_t dim_out) GCSO_NOEXCEPT;
 
 /**
  * @brief Projects an arbitrary byte slice into a 64-head Q7 phase profile via 64-bit SWAR mixing.
@@ -1295,8 +1295,9 @@ gcso_dpsr_steer_and_kmeans_crystallize_gateway_frame_safe(
     float* GCSO_RESTRICT updated_gravity_mass_out) GCSO_NOEXCEPT;
 
 /**
- * @brief One-shot 2-Origin Multi-Blanket Gateway synthesis, SO(2)-fused RIPA/sub-head router steering, and
- * optional Online Toroidal k-Means / DP-Means macro crystallization from Q7 phase pointers.
+ * @brief One-shot 2-Origin Multi-Blanket Gateway synthesis, SO(2)-fused RIPA/sub-head router
+ * steering, and optional Online Toroidal k-Means / DP-Means macro crystallization from Q7 phase
+ * pointers.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_gateway_synthesize_kmeans_and_steer_qk_safe(
     float vram_pressure, float gpu_frame_overrun, uint8_t active_swarm_cell_mask,
@@ -1316,8 +1317,8 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_gateway_synthesize_kmeans_a
     float* GCSO_RESTRICT updated_gravity_mass_out) GCSO_NOEXCEPT;
 
 /**
- * @brief One-shot Raw-Byte 2-Origin Gateway synthesis, SO(2)-fused RIPA/sub-head router steering, and optional
- * Online Toroidal k-Means / DP-Means macro crystallization.
+ * @brief One-shot Raw-Byte 2-Origin Gateway synthesis, SO(2)-fused RIPA/sub-head router steering,
+ * and optional Online Toroidal k-Means / DP-Means macro crystallization.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_gateway_project_bytes_synthesize_kmeans_and_steer_qk_safe(
@@ -1338,8 +1339,8 @@ gcso_gateway_project_bytes_synthesize_kmeans_and_steer_qk_safe(
     float* GCSO_RESTRICT updated_gravity_mass_out) GCSO_NOEXCEPT;
 
 /**
- * @brief One-shot Raw-f32 Embedding 2-Origin Gateway synthesis, SO(2)-fused RIPA/sub-head router steering, and
- * optional Online Toroidal k-Means / DP-Means macro crystallization.
+ * @brief One-shot Raw-f32 Embedding 2-Origin Gateway synthesis, SO(2)-fused RIPA/sub-head router
+ * steering, and optional Online Toroidal k-Means / DP-Means macro crystallization.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_gateway_project_f32_synthesize_kmeans_and_steer_qk_safe(
@@ -1432,8 +1433,8 @@ gcso_action_hub_route_coarse_to_fine_and_steer_qk_safe(
     float* GCSO_RESTRICT gravity_pull_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Serializes num_records Section-1 CrystallizedAttractorRecords into a .gcso (mapped-storage) byte
- * buffer with IEEE 802.3 CRC32 stamping.
+ * @brief Serializes num_records Section-1 CrystallizedAttractorRecords into a .gcso
+ * (mapped-storage) byte buffer with IEEE 802.3 CRC32 stamping.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_container_write_crystallized_records_zero_copy(
     const gcso_crystallized_attractor_record_t* GCSO_RESTRICT records, size_t num_records,
@@ -1479,8 +1480,9 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_container_write_four_sectio
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_container_verify_four_section_with_reports_zero_copy(
     const uint8_t* GCSO_RESTRICT container_bytes, size_t byte_len,
-    gcso_mapped_storage_descriptor_t* GCSO_RESTRICT storage_desc_out, size_t* GCSO_RESTRICT num_crystals_out,
-    size_t* GCSO_RESTRICT num_trails_out, size_t* GCSO_RESTRICT num_reports_out,
+    gcso_mapped_storage_descriptor_t* GCSO_RESTRICT storage_desc_out,
+    size_t* GCSO_RESTRICT num_crystals_out, size_t* GCSO_RESTRICT num_trails_out,
+    size_t* GCSO_RESTRICT num_reports_out,
     const gcso_crystallized_attractor_record_t** GCSO_RESTRICT crystals_ptr_out,
     const gcso_pointer_trail_t** GCSO_RESTRICT trails_ptr_out,
     const gcso_contrastive_bloom_filter_t** GCSO_RESTRICT bloom_ptr_out,
