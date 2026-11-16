@@ -364,7 +364,8 @@ gcso_action_hub_route_coarse_to_fine_trail_and_steer_qk_safe(
 
 /**
  * @brief Executes full Coarse-to-Fine Bayesian routing, Limina Slerp bridging, optional pre-Softmax
- * Attention score modulation, SO(2)-fused RIPA/sub-head router steering, and optional FastPathLedger telemetry logging.
+ * Attention score modulation, SO(2)-fused RIPA/sub-head router steering, and optional
+ * FastPathLedger telemetry logging.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_action_hub_route_coarse_to_fine_bayesian_and_steer_qk_safe(
@@ -497,17 +498,17 @@ gcso_ledger_reset_telemetry(gcso_ledger_slot_t* GCSO_RESTRICT slot) GCSO_NOEXCEP
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_ledger_fast_path_lookup(const gcso_ledger_slot_t* GCSO_RESTRICT slot, uint64_t input_key,
-                           uint64_t* GCSO_RESTRICT shortcut_out) GCSO_NOEXCEPT;
+                             uint64_t* GCSO_RESTRICT shortcut_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Pushes profiling metric bytes to the FastPathLedger telemetry ring ledger in zero-allocation mode.
- * Corresponds to FastPathLedger::telemetry_push in liminika_core::traits.
+ * @brief Pushes profiling metric bytes to the FastPathLedger telemetry ring ledger in
+ * zero-allocation mode. Corresponds to FastPathLedger::telemetry_push in liminika_core::traits.
  * @param slot Target ledger slot structure pointer (64-byte aligned).
  * @param metric_code Metric identifier byte code.
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER.
  */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_ledger_telemetry_push(gcso_ledger_slot_t* GCSO_RESTRICT slot, uint8_t metric_code) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_ledger_telemetry_push(
+    gcso_ledger_slot_t* GCSO_RESTRICT slot, uint8_t metric_code) GCSO_NOEXCEPT;
 
 /**
  * @brief Sets the ledger slot operating mode (0 = Scratchpad, 1 = Plugin, 2 = Shared IPC Buffer).
@@ -529,14 +530,15 @@ gcso_ledger_set_mode(gcso_ledger_slot_t* GCSO_RESTRICT slot, uint32_t mode) GCSO
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_ledger_evaluate_auto_tune(const gcso_ledger_slot_t* GCSO_RESTRICT slot,
-                             gcso_config_t* GCSO_RESTRICT config_out) GCSO_NOEXCEPT;
+                               gcso_config_t* GCSO_RESTRICT config_out) GCSO_NOEXCEPT;
 
 /**
  * @brief Destroys a ledger slot instance and frees allocated scratchpad memory.
  * @param slot Handle to ledger slot instance (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_ledger_slot_destroy(gcso_ledger_slot_handle_t slot) GCSO_NOEXCEPT;
+GCSO_API gcso_status_t GCSO_CALL gcso_ledger_slot_destroy(gcso_ledger_slot_handle_t slot)
+    GCSO_NOEXCEPT;
 
 // ===================================================================
 // 4. Phase Steering (DPSR), QDPS, sub-head router & Residual Adapter (Rank-1 residual) Interface
