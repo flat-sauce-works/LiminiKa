@@ -22,7 +22,7 @@ use liminika_core::action_hub::ActionHubEngine;
 use liminika_core::traits::gateway::{
     CognitiveCircuitPlasticity, CognitiveNeuralBankOps, CognitiveOpKind, CognitiveStepOp,
     CognitiveTrajectoryLedger, GuardPhaseAnchor, HybridScaleCircuit, ObjectiveFact,
-    RamPhaseKvCacheOps, ResonantSignalSlice, StandardCognitiveBank, StandardPhaseKvCache,
+    RamPhaseKvCacheOps, ResonantSignalSlice, StandardCognitiveBank, StandardPhaseKvGopCache,
     SubjectivePersona, SwarmScaleGranularity,
 };
 use serde::Deserialize;
@@ -1951,9 +1951,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut reflect_triggers = 0_usize;
     let mut reflect_adopted = 0_usize;
-    let mut ram_kv_cache = StandardPhaseKvCache::new();
+    let mut ram_kv_cache = StandardPhaseKvGopCache::new();
+    let mut ram_kv_lookups = 0_usize;
     let mut ram_kv_exact_hits = 0_usize;
     let mut ram_kv_res_hits = 0_usize;
+    let mut ram_kv_pframes_appended = 0_usize;
+    let mut ram_kv_pframe_seeks = 0_usize;
+    let mut ram_kv_pframe_repulsed = 0_usize;
+    let mut ram_kv_lookup_us_sum = 0.0_f64;
     let mut eval_items: Vec<(String, String, Vec<String>, Vec<String>)> = suite.probes.clone();
     eval_items.push((
         "CVOID".to_string(),
@@ -2055,25 +2060,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3)
                 })
         };
-        if let Some((slot_idx, exact, _res)) = ram_kv_cache.lookup_context_or_resonate(
+        ram_kv_lookups += 1;
+        let t_kv = Instant::now();
+        let kv_hit = ram_kv_cache.lookup_context_or_resonate(
             ctx_hash,
             recall.gateway_frame.phase_words_ref(),
             16,
             (idx + 1) as u32,
-        ) {
+        );
+        if let Some((slot_idx, exact, _res)) = kv_hit {
             if exact {
                 ram_kv_exact_hits += 1;
             } else {
                 ram_kv_res_hits += 1;
             }
-            let cached_circuit = ram_kv_cache.slots[slot_idx].circuit;
+            if ram_kv_cache.slot_pframe_count(slot_idx) > 0 {
+                if let Ok((_restored, _lp, _r_bar, repulsed)) =
+                    ram_kv_cache.seek_slot_history(slot_idx, 1, 0.35, (idx + 1) as u32)
+                {
+                    ram_kv_pframe_seeks += 1;
+                    ram_kv_pframe_repulsed += repulsed as usize;
+                }
+            }
+            let cached_circuit = ram_kv_cache.entries()[slot_idx].circuit;
             if cached_circuit.latest_step().is_some() {
                 query_snap.cognitive_trajectory =
                     cached_circuit.compose_persona_circuit(&query_snap.cognitive_trajectory, 64);
             }
-        }
-        if ctx_hash != 0 {
-            ram_kv_cache.store_context_keyframe(
+            if ram_kv_cache
+                .append_context_pframe(
+                    slot_idx,
+                    &recall.gateway_frame.phase_deltas,
+                    1,
+                    (idx + 1) as u32,
+                )
+                .is_ok()
+            {
+                ram_kv_pframes_appended += 1;
+            }
+        } else if ctx_hash != 0 {
+            let _ = ram_kv_cache.store_keyframe_and_reset_gop(
                 ctx_hash,
                 q_ids.len() as u32,
                 query_snap.top_fact_anchor.unwrap_or(0),
@@ -2083,6 +2109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 (idx + 1) as u32,
             );
         }
+        ram_kv_lookup_us_sum += t_kv.elapsed().as_secs_f64() * 1_000_000.0;
         let top_fact_preview = if recall.recalled_facts.is_empty() {
             "none".to_string()
         } else {
@@ -2374,13 +2401,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .filter(|e| e.is_occupied())
         .count();
+    let ram_kv_total_hits = ram_kv_exact_hits + ram_kv_res_hits;
+    let ram_kv_hit_rate = if ram_kv_lookups == 0 {
+        0.0
+    } else {
+        ram_kv_total_hits as f64 / ram_kv_lookups as f64 * 100.0
+    };
+    let ram_kv_avg_us = if ram_kv_lookups == 0 {
+        0.0
+    } else {
+        ram_kv_lookup_us_sum / ram_kv_lookups as f64
+    };
     println!(
-        "RAM Phase-KV Cache ({} KB / {} slots, zero-VRAM): occupied={} exact_hits={} resonance_hits={}",
-        core::mem::size_of::<StandardPhaseKvCache>() / 1024,
+        "RAM Phase-KV GOP Cache ({} KB / {} slots, zero-VRAM): occupied={} hits={}/{} ({:.1}%: exact={} res={}) pframes={} seeks={} repulsed={} avg_lookup={:.2} us",
+        core::mem::size_of::<StandardPhaseKvGopCache>() / 1024,
         ram_kv_cache.entries().len(),
         ram_kv_occupied,
+        ram_kv_total_hits,
+        ram_kv_lookups,
+        ram_kv_hit_rate,
         ram_kv_exact_hits,
         ram_kv_res_hits,
+        ram_kv_pframes_appended,
+        ram_kv_pframe_seeks,
+        ram_kv_pframe_repulsed,
+        ram_kv_avg_us,
     );
 
     if !recall_only {

@@ -57,8 +57,8 @@ use super::aligned::{
     AlignedBuffer16, AlignedSlice, AlignedSlice16, AlignedSlice32, AlignedSlice64,
     AlignedSliceMut16, AlignedSliceMut32, AlignedSliceMut64,
 };
-use super::branchless::{BranchlessKernel, atan2_interleaved_pairs_to_q7_word_x8_simd, atan2_to_q7_word_x8_simd, branchless_fast_transition_log_prob, branchless_q7_inhibit_64, branchless_q7_inhibit_words_64, branchless_q7_synergy_fuse_64, branchless_q7_synergy_fuse_words_64, branchless_q7_transition_log_prob_words_64, branchless_q7_unified_field_fold_words_with_init_weight_64, chebyshev_deg3_filter_slice_simd8, circular_r_bar_from_words_64, circular_resultant_from_words_64, coherence_from_diff_words_64, coherence_from_word_arrays_64, coherence_from_word_arrays_with_uniform_flag_64, diff_norm_sq_f32_unrolled4, dot_and_norms_f32_unrolled4, hodge_obstruction_and_dual_pairing_f32, max_pos_f32_unrolled4};
-use super::primitives::{DEFAULT_MAX_VALID_Z_SCORE, branchless_abs_f32, branchless_atan2_f32, branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_copysign_f32, branchless_eyring_kramers_escape, branchless_flush_subnormal_f32, branchless_hysteresis_quantize_depth, branchless_inv_pos_f32, branchless_is_finite_f32, branchless_is_nan_f32, branchless_max_f32, branchless_min_f32, branchless_popcount_rsqrt_u32, branchless_q7_accumulate_64, branchless_q7_add_sat, branchless_q7_conjugate_64, branchless_q7_qdps_filter_64, branchless_rad_to_q7, branchless_relu_f32, branchless_rsqrt_f32, branchless_sanitize_z_score_f32, branchless_select_f32, branchless_select_q7, branchless_select_u32, branchless_select_u8, branchless_sincos_q7, branchless_splitmix64, branchless_sqrt_f32, branchless_tanh_f32, branchless_von_mises_kappa, crc32_block64_zero_seed_words, fast_inv_len_f32, fast_inv_pos_normal_f32, is_word_array_uniform_64, load_q7_word_at, load_q7_words_64, store_q7_word_at, store_q7_words_64, swar_q7_add_sat_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8, swar_q7_qdps_filter_words_64, swar_q7_scale_le128_with_bias_x8, swar_q7_sub_sat_x8, trail_phase_words_mut, trail_phase_words_ref};
+use super::branchless::{BranchlessKernel, apply_pframe_motion_step_words_64, atan2_interleaved_pairs_to_q7_word_x8_simd, atan2_to_q7_word_x8_simd, branchless_fast_transition_log_prob, branchless_q7_inhibit_64, branchless_q7_inhibit_words_64, branchless_q7_synergy_fuse_64, branchless_q7_synergy_fuse_words_64, branchless_q7_transition_log_prob_words_64, branchless_q7_unified_field_fold_words_with_init_weight_64, chebyshev_deg3_filter_slice_simd8, circular_r_bar_from_words_64, circular_resultant_from_words_64, coherence_from_diff_words_64, coherence_from_word_arrays_64, coherence_from_word_arrays_with_uniform_flag_64, diff_norm_sq_f32_unrolled4, dot_and_norms_f32_unrolled4, encode_pframe_motion_delta_64, finalize_pframe_chain_words_64, hodge_obstruction_and_dual_pairing_f32, max_pos_f32_unrolled4, seek_pframe_chain_words_64};
+use super::primitives::{DEFAULT_MAX_VALID_Z_SCORE, branchless_abs_f32, branchless_atan2_f32, branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_copysign_f32, branchless_eyring_kramers_escape, branchless_flush_subnormal_f32, branchless_hysteresis_quantize_depth, branchless_inv_pos_f32, branchless_is_finite_f32, branchless_is_nan_f32, branchless_max_f32, branchless_min_f32, branchless_popcount_rsqrt_u32, branchless_q7_accumulate_64, branchless_q7_add_sat, branchless_q7_conjugate_64, branchless_q7_qdps_filter_64, branchless_rad_to_q7, branchless_relu_f32, branchless_rsqrt_f32, branchless_sanitize_z_score_f32, branchless_select_f32, branchless_select_q7, branchless_select_u32, branchless_select_u8, branchless_sincos_q7, branchless_splitmix64, branchless_sqrt_f32, branchless_tanh_f32, branchless_von_mises_kappa, crc32_block64_zero_seed_words, fast_inv_len_f32, fast_inv_pos_normal_f32, is_word_array_uniform_64, load_q7_word_at, load_q7_words_64, store_q7_word_at, store_q7_words_64, swar_q7_add_sat_x8, swar_q7_circular_add_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8, swar_q7_qdps_filter_words_64, swar_q7_scale_le128_with_bias_x8, swar_q7_sub_sat_x8, trail_phase_words_mut, trail_phase_words_ref};
 use super::gateway::{
     ActionHubGatewayExt, CausalProvenanceReport, CrystallizedAttractorRecord, GatewayFrame,
     ManifoldGatewaySignal,
@@ -2678,25 +2678,7 @@ pub trait KvKeyframeCache: BranchlessKernel + Send + Sync {
         curr_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         qdps_min_step_q7: u8,
     ) -> GcsoResult<KvMotionDeltaPacket> {
-        if qdps_min_step_q7 > 127 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        let pw = load_q7_words_64(prev_phases);
-        let cw = load_q7_words_64(curr_phases);
-        let diff_folded = [
-            swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(cw[0], pw[0])),
-            swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(cw[1], pw[1])),
-            swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(cw[2], pw[2])),
-            swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(cw[3], pw[3])),
-            swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(cw[4], pw[4])),
-            swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(cw[5], pw[5])),
-            swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(cw[6], pw[6])),
-            swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(cw[7], pw[7])),
-        ];
-        let filt_w = swar_q7_qdps_filter_words_64(&diff_folded, qdps_min_step_q7);
-        let mut motion_deltas = [0i8; MAX_ATTENTION_HEADS];
-        store_q7_words_64(&mut motion_deltas, &filt_w);
-        Ok(KvMotionDeltaPacket::new(motion_deltas))
+        encode_pframe_motion_delta_64(prev_phases, curr_phases, qdps_min_step_q7)
     }
 
     /// Executes **Zero-Forward Latency Seek (Instantaneous Persona & Memory Replay)** over a
@@ -2722,66 +2704,16 @@ pub trait KvKeyframeCache: BranchlessKernel + Send + Sync {
         trail_out: &mut gcso_pointer_trail_t,
     ) -> GcsoResult<(f32, f32, f32, f32, u32)> {
         keyframe.verify_integrity()?;
-        if seek_pframe_steps > pframes.len()
-            || qdps_min_step_q7 > 127
-            || !branchless_is_finite_f32(contradiction_threshold)
-        {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        let safe_thresh =
-            branchless_clamp_f32(branchless_abs_f32(contradiction_threshold), 0.0, 1.0);
-        let mut cur_w = load_q7_words_64(&keyframe.anchor_phases);
-        let mut joint_log_prob = 0.0_f32;
-        let mut repulsed_count = 0u32;
-
-        for pframe in &pframes[..seek_pframe_steps] {
-            let dw = load_q7_words_64(&pframe.motion_deltas);
-            let coh = coherence_from_diff_words_64(
-                dw[0], dw[1], dw[2], dw[3], dw[4], dw[5], dw[6], dw[7],
-            );
-            let log_p = branchless_fast_transition_log_prob(coh);
-            if coh < -safe_thresh {
-                cur_w = [
-                    swar_q7_circular_add_x8(cur_w[0], swar_q7_neg_sat_x8(dw[0])),
-                    swar_q7_circular_add_x8(cur_w[1], swar_q7_neg_sat_x8(dw[1])),
-                    swar_q7_circular_add_x8(cur_w[2], swar_q7_neg_sat_x8(dw[2])),
-                    swar_q7_circular_add_x8(cur_w[3], swar_q7_neg_sat_x8(dw[3])),
-                    swar_q7_circular_add_x8(cur_w[4], swar_q7_neg_sat_x8(dw[4])),
-                    swar_q7_circular_add_x8(cur_w[5], swar_q7_neg_sat_x8(dw[5])),
-                    swar_q7_circular_add_x8(cur_w[6], swar_q7_neg_sat_x8(dw[6])),
-                    swar_q7_circular_add_x8(cur_w[7], swar_q7_neg_sat_x8(dw[7])),
-                ];
-                repulsed_count = repulsed_count.wrapping_add(1);
-            } else {
-                cur_w = [
-                    swar_q7_circular_add_x8(cur_w[0], dw[0]),
-                    swar_q7_circular_add_x8(cur_w[1], dw[1]),
-                    swar_q7_circular_add_x8(cur_w[2], dw[2]),
-                    swar_q7_circular_add_x8(cur_w[3], dw[3]),
-                    swar_q7_circular_add_x8(cur_w[4], dw[4]),
-                    swar_q7_circular_add_x8(cur_w[5], dw[5]),
-                    swar_q7_circular_add_x8(cur_w[6], dw[6]),
-                    swar_q7_circular_add_x8(cur_w[7], dw[7]),
-                ];
-            }
-            joint_log_prob += log_p;
-        }
-
-        let folded_w = [
-            swar_q7_fold_s1_geodesic_x8(cur_w[0]),
-            swar_q7_fold_s1_geodesic_x8(cur_w[1]),
-            swar_q7_fold_s1_geodesic_x8(cur_w[2]),
-            swar_q7_fold_s1_geodesic_x8(cur_w[3]),
-            swar_q7_fold_s1_geodesic_x8(cur_w[4]),
-            swar_q7_fold_s1_geodesic_x8(cur_w[5]),
-            swar_q7_fold_s1_geodesic_x8(cur_w[6]),
-            swar_q7_fold_s1_geodesic_x8(cur_w[7]),
-        ];
-        let filt_w = swar_q7_qdps_filter_words_64(&folded_w, qdps_min_step_q7);
+        let (filt_w, clean_lp, repulsed_count) = seek_pframe_chain_words_64(
+            &keyframe.anchor_phases,
+            pframes,
+            seek_pframe_steps,
+            qdps_min_step_q7,
+            contradiction_threshold,
+        )?;
         store_q7_words_64(&mut trail_out.accumulated_phase_delta, &filt_w);
 
         let (r_bar, mean_q7, kappa_c) = circular_resultant_from_words_64(&filt_w);
-        let clean_lp = branchless_flush_subnormal_f32(joint_log_prob);
         let mean_rad = (mean_q7 as f32) * Q7_PHASE_SCALE_RAD;
         let virtual_pos_shift = self.compute_virtual_position_shift(mean_rad, mean_base_rope_freq);
 
@@ -2883,50 +2815,16 @@ pub trait KvKeyframeCache: BranchlessKernel + Send + Sync {
         while step < seek_pframe_steps {
             let off = iframe_size + step * pframe_size;
             let pframe = KvMotionDeltaPacket::read_unaligned_from(stream_bytes, off)?;
-            let dw = load_q7_words_64(&pframe.motion_deltas);
-            let coh = coherence_from_diff_words_64(
-                dw[0], dw[1], dw[2], dw[3], dw[4], dw[5], dw[6], dw[7],
-            );
-            let log_p = branchless_fast_transition_log_prob(coh);
-            if coh < -safe_thresh {
-                cur_w = [
-                    swar_q7_circular_add_x8(cur_w[0], swar_q7_neg_sat_x8(dw[0])),
-                    swar_q7_circular_add_x8(cur_w[1], swar_q7_neg_sat_x8(dw[1])),
-                    swar_q7_circular_add_x8(cur_w[2], swar_q7_neg_sat_x8(dw[2])),
-                    swar_q7_circular_add_x8(cur_w[3], swar_q7_neg_sat_x8(dw[3])),
-                    swar_q7_circular_add_x8(cur_w[4], swar_q7_neg_sat_x8(dw[4])),
-                    swar_q7_circular_add_x8(cur_w[5], swar_q7_neg_sat_x8(dw[5])),
-                    swar_q7_circular_add_x8(cur_w[6], swar_q7_neg_sat_x8(dw[6])),
-                    swar_q7_circular_add_x8(cur_w[7], swar_q7_neg_sat_x8(dw[7])),
-                ];
-                repulsed_count = repulsed_count.wrapping_add(1);
-            } else {
-                cur_w = [
-                    swar_q7_circular_add_x8(cur_w[0], dw[0]),
-                    swar_q7_circular_add_x8(cur_w[1], dw[1]),
-                    swar_q7_circular_add_x8(cur_w[2], dw[2]),
-                    swar_q7_circular_add_x8(cur_w[3], dw[3]),
-                    swar_q7_circular_add_x8(cur_w[4], dw[4]),
-                    swar_q7_circular_add_x8(cur_w[5], dw[5]),
-                    swar_q7_circular_add_x8(cur_w[6], dw[6]),
-                    swar_q7_circular_add_x8(cur_w[7], dw[7]),
-                ];
-            }
+            let (log_p, repulsed) =
+                apply_pframe_motion_step_words_64(&mut cur_w, &pframe, safe_thresh);
             joint_log_prob += log_p;
+            if repulsed {
+                repulsed_count = repulsed_count.wrapping_add(1);
+            }
             step += 1;
         }
 
-        let folded_w = [
-            swar_q7_fold_s1_geodesic_x8(cur_w[0]),
-            swar_q7_fold_s1_geodesic_x8(cur_w[1]),
-            swar_q7_fold_s1_geodesic_x8(cur_w[2]),
-            swar_q7_fold_s1_geodesic_x8(cur_w[3]),
-            swar_q7_fold_s1_geodesic_x8(cur_w[4]),
-            swar_q7_fold_s1_geodesic_x8(cur_w[5]),
-            swar_q7_fold_s1_geodesic_x8(cur_w[6]),
-            swar_q7_fold_s1_geodesic_x8(cur_w[7]),
-        ];
-        let filt_w = swar_q7_qdps_filter_words_64(&folded_w, qdps_min_step_q7);
+        let filt_w = finalize_pframe_chain_words_64(&cur_w, qdps_min_step_q7);
         store_q7_words_64(&mut trail_out.accumulated_phase_delta, &filt_w);
 
         let (r_bar, mean_q7, kappa_c) = circular_resultant_from_words_64(&filt_w);

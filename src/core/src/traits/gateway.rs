@@ -42,9 +42,10 @@ use super::aligned::{
 use super::branchless::{
     BranchlessKernel, atan2_interleaved_pairs_to_q7_word_x8_simd, atan2_to_q7_word_x8_simd,
     branchless_phase_coherence_inv_temp_scale, branchless_q7_circular_resultant_64,
-    coherence_from_uniform_words_x8, coherence_from_word_arrays_with_both_uniform_flags_64,
-    scale_f32_slice_unrolled8, swar_slerp_words_with_uniform_flag_64, swar_words_equal_64,
-    swar_words_nonzero_64,
+    circular_resultant_from_words_64, coherence_from_uniform_words_x8,
+    coherence_from_word_arrays_with_both_uniform_flags_64, encode_pframe_motion_delta_64,
+    scale_f32_slice_unrolled8, seek_pframe_chain_words_64,
+    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64,
 };
 use super::primitives::{
     SWAR_LOW7_MASK_64, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, branchless_abs_f32,
@@ -69,7 +70,7 @@ use super::primitives::{
     ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
     ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, LEDGER_HISTORY_LEN,
     DEFAULT_ENTROPY_EPS, DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD, GcsoResult,
-    KvKeyframePacket, MAX_ATTENTION_HEADS, Pod, pack_action_slot_tag,
+    KvKeyframePacket, KvMotionDeltaPacket, MAX_ATTENTION_HEADS, Pod, pack_action_slot_tag,
 };
 use super::rope::{
     PhaseSteering, PhaseSteeringGeometryExt, SubHeadRouter, RopePairLayout, RopeSteeringTarget,
@@ -6318,6 +6319,32 @@ impl RamPhaseKvEntry {
     pub const fn is_occupied(&self) -> bool {
         self.context_hash != 0
     }
+
+    /// Returns a copy of this entry whose keyframe phases and token index reflect a Zero-Forward
+    /// Seek reconstruction.
+    #[inline]
+    #[must_use]
+    pub fn with_reconstructed_phases(
+        &self,
+        restored_phases: [gcso_q7_t; MAX_ATTENTION_HEADS],
+        token_shift: u32,
+        r_bar: f32,
+    ) -> Self {
+        Self {
+            keyframe: KvKeyframePacket::new(
+                self.keyframe.header.token_index.wrapping_add(token_shift),
+                self.keyframe.header.gop_length,
+                r_bar,
+                1.0 + r_bar * 4.0,
+                0.0,
+                self.keyframe.provenance_bits(),
+                self.keyframe.cluster_id(),
+                self.keyframe.slot_id(),
+                restored_phases,
+            ),
+            ..*self
+        }
+    }
 }
 
 impl RawPhaseProjectable for RamPhaseKvEntry {
@@ -6506,6 +6533,99 @@ pub trait RamPhaseKvCacheOps {
         }
         None
     }
+
+    /// Encodes a 64-byte P-Frame [`KvMotionDeltaPacket`] relative to the keyframe stored in
+    /// `slot_idx` and `curr_phases`.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `slot_idx` is out of bounds or unoccupied, or
+    /// `qdps_min_step_q7 > 127`. Also propagates [`KvKeyframePacket::verify_integrity`] errors.
+    #[inline]
+    fn encode_slot_pframe_delta(
+        &self,
+        slot_idx: usize,
+        curr_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        qdps_min_step_q7: u8,
+    ) -> GcsoResult<KvMotionDeltaPacket> {
+        let entries = self.entries();
+        let entry = entries.get(slot_idx).ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        if !entry.is_occupied() {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        entry.keyframe.verify_integrity()?;
+        encode_pframe_motion_delta_64(&entry.keyframe.anchor_phases, curr_phases, qdps_min_step_q7)
+    }
+
+    /// Executes Zero-Forward Seek on `slot_idx` by replaying `pframes[..seek_steps]` onto the
+    /// slot's verified I-Frame [`KvKeyframePacket`], updating LRU metadata and returning
+    /// `(restored_phases, joint_log_prob, r_bar, repulsed_count)`.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `slot_idx` is out of bounds / unoccupied,
+    /// `seek_steps > pframes.len()`, `qdps_min_step_q7 > 127`, or `contradiction_threshold` is
+    /// non-finite; propagates [`KvKeyframePacket::verify_integrity`] errors on corrupted frames.
+    #[inline]
+    fn seek_slot_with_pframes(
+        &mut self,
+        slot_idx: usize,
+        pframes: &[KvMotionDeltaPacket],
+        seek_steps: usize,
+        qdps_min_step_q7: u8,
+        contradiction_threshold: f32,
+        epoch: u32,
+    ) -> GcsoResult<([gcso_q7_t; MAX_ATTENTION_HEADS], f32, f32, u32)> {
+        let entries = self.entries_mut();
+        let entry = entries
+            .get_mut(slot_idx)
+            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        if !entry.is_occupied() {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        entry.keyframe.verify_integrity()?;
+        let (filt_w, clean_lp, repulsed_count) = seek_pframe_chain_words_64(
+            &entry.keyframe.anchor_phases,
+            pframes,
+            seek_steps,
+            qdps_min_step_q7,
+            contradiction_threshold,
+        )?;
+        let (r_bar, _mean_q7, _kappa_c) = circular_resultant_from_words_64(&filt_w);
+        let mut restored_phases = [0i8; MAX_ATTENTION_HEADS];
+        store_q7_words_64(&mut restored_phases, &filt_w);
+        entry.reuse_count = entry.reuse_count.saturating_add(1);
+        entry.last_used_epoch = epoch;
+        Ok((restored_phases, clean_lp, r_bar, repulsed_count))
+    }
+
+    /// Reconstructs a 128-byte [`GatewayFrame`] by Zero-Forward Seeking `slot_idx` through
+    /// `pframes[..seek_steps]` and composing the reconstructed KV-phase state with the slot's
+    /// stored [`CognitiveTrajectoryLedger`].
+    ///
+    /// # Errors
+    /// Propagates errors from [`RamPhaseKvCacheOps::seek_slot_with_pframes`].
+    #[inline]
+    fn synthesize_seeked_gateway_frame(
+        &mut self,
+        slot_idx: usize,
+        pframes: &[KvMotionDeltaPacket],
+        seek_steps: usize,
+        qdps_min_step_q7: u8,
+        contradiction_threshold: f32,
+        epoch: u32,
+    ) -> GcsoResult<GatewayFrame> {
+        let (restored_phases, _clean_lp, r_bar, _repulsed_count) = self.seek_slot_with_pframes(
+            slot_idx,
+            pframes,
+            seek_steps,
+            qdps_min_step_q7,
+            contradiction_threshold,
+            epoch,
+        )?;
+        let entry = &self.entries()[slot_idx];
+        Ok(entry
+            .with_reconstructed_phases(restored_phases, seek_steps as u32, r_bar)
+            .synthesize_gateway_frame())
+    }
 }
 
 impl RamPhaseKvCacheOps for [RamPhaseKvEntry] {
@@ -6596,6 +6716,233 @@ pub type StandardPhaseKvCache = RamPhaseKvCache<64>;
 
 /// High-capacity RAM / Zen 4 L2 preset: 256 slots = 49,152 bytes (48 KB, inside L2 1 MB).
 pub type HighCapPhaseKvCache = RamPhaseKvCache<256>;
+
+/// Host-RAM compressed KV-phase GOP cache pairing `N` 192-byte I-Frame slots
+/// ([`RamPhaseKvCache<N>`]) with per-slot fixed-capacity rings of `P` 64-byte P-Frame motion
+/// delta packets ([`KvMotionDeltaPacket`]), enabling Zero-Forward Seek context replay across
+/// extended multi-turn histories with zero heap allocation.
+#[repr(C, align(64))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RamPhaseKvGopCache<const N: usize, const P: usize> {
+    /// Base I-Frame + cognitive circuit cache slots.
+    pub base: RamPhaseKvCache<N>,
+    /// Per-slot ring buffer of 64-byte P-Frame phase-motion deltas.
+    pub pframes: [[KvMotionDeltaPacket; P]; N],
+    /// Last reconstructed/stored 64-head phase per slot (used to encode incremental P-Frame steps).
+    pub last_phases: [[gcso_q7_t; MAX_ATTENTION_HEADS]; N],
+    /// Number of valid P-Frames currently stored in each slot's ring (`<= P`).
+    pub pframe_counts: [u8; N],
+    /// Next write index in each slot's P-Frame ring (`< P`).
+    pub pframe_heads: [u8; N],
+}
+
+impl<const N: usize, const P: usize> Default for RamPhaseKvGopCache<N, P> {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
+    /// Creates an empty [`RamPhaseKvGopCache`] with `N` I-Frame slots and `P` P-Frames per slot.
+    #[inline(always)]
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            base: RamPhaseKvCache::new(),
+            pframes: [[KvMotionDeltaPacket {
+                motion_deltas: [0; MAX_ATTENTION_HEADS],
+            }; P]; N],
+            last_phases: [[0; MAX_ATTENTION_HEADS]; N],
+            pframe_counts: [0; N],
+            pframe_heads: [0; N],
+        }
+    }
+
+    /// Stores or updates a context I-Frame keyframe, resets that slot's P-Frame ring, and returns
+    /// the slot index when `context_hash != 0` and `N > 0`.
+    #[inline]
+    pub fn store_keyframe_and_reset_gop(
+        &mut self,
+        context_hash: u64,
+        token_index: u32,
+        anchor_id: u32,
+        phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        circuit: CognitiveTrajectoryLedger,
+        activation: CognitiveCircuitActivation,
+        epoch: u32,
+    ) -> Option<usize> {
+        if context_hash == 0 || N == 0 {
+            return None;
+        }
+        self.base.store_context_keyframe(
+            context_hash,
+            token_index,
+            anchor_id,
+            phases,
+            circuit,
+            activation,
+            epoch,
+        );
+        let mut idx = 0usize;
+        while idx < N {
+            if self.base.slots[idx].context_hash == context_hash {
+                self.last_phases[idx] = *phases;
+                self.pframe_counts[idx] = 0;
+                self.pframe_heads[idx] = 0;
+                return Some(idx);
+            }
+            idx += 1;
+        }
+        None
+    }
+
+    /// Encodes and appends a 64-byte P-Frame [`KvMotionDeltaPacket`] from the slot's previous
+    /// phase state to `curr_phases`, updating the slot's LRU epoch.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `slot_idx >= N`, the slot is unoccupied,
+    /// `P == 0`, or `qdps_min_step_q7 > 127`.
+    #[inline]
+    pub fn append_context_pframe(
+        &mut self,
+        slot_idx: usize,
+        curr_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        qdps_min_step_q7: u8,
+        epoch: u32,
+    ) -> GcsoResult<()> {
+        if slot_idx >= N || P == 0 || !self.base.slots[slot_idx].is_occupied() {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let delta = encode_pframe_motion_delta_64(
+            &self.last_phases[slot_idx],
+            curr_phases,
+            qdps_min_step_q7,
+        )?;
+        let head = usize::from(self.pframe_heads[slot_idx]) % P;
+        self.pframes[slot_idx][head] = delta;
+        self.pframe_heads[slot_idx] = ((head + 1) % P) as u8;
+        let count = usize::from(self.pframe_counts[slot_idx]);
+        if count < P {
+            self.pframe_counts[slot_idx] = (count + 1) as u8;
+        }
+        self.last_phases[slot_idx] = *curr_phases;
+        self.base.slots[slot_idx].last_used_epoch = epoch;
+        Ok(())
+    }
+
+    /// Returns the number of valid P-Frames stored for `slot_idx`.
+    #[inline(always)]
+    #[must_use]
+    pub fn slot_pframe_count(&self, slot_idx: usize) -> usize {
+        if slot_idx >= N {
+            0
+        } else {
+            usize::from(self.pframe_counts[slot_idx])
+        }
+    }
+
+    /// Returns the total number of valid P-Frames across all occupied slots.
+    #[inline]
+    #[must_use]
+    pub fn total_stored_pframes(&self) -> usize {
+        let mut total = 0usize;
+        let mut i = 0usize;
+        while i < N {
+            if self.base.slots[i].is_occupied() {
+                total += usize::from(self.pframe_counts[i]);
+            }
+            i += 1;
+        }
+        total
+    }
+
+    /// Collects the slot's P-Frame ring in chronological order and runs Zero-Forward Seek
+    /// reconstruction onto `(restored_phases, joint_log_prob, r_bar, repulsed_count)`.
+    ///
+    /// # Errors
+    /// Propagates errors from [`RamPhaseKvCacheOps::seek_slot_with_pframes`].
+    #[inline]
+    pub fn seek_slot_history(
+        &mut self,
+        slot_idx: usize,
+        qdps_min_step_q7: u8,
+        contradiction_threshold: f32,
+        epoch: u32,
+    ) -> GcsoResult<([gcso_q7_t; MAX_ATTENTION_HEADS], f32, f32, u32)> {
+        if slot_idx >= N || !self.base.slots[slot_idx].is_occupied() {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let count = usize::from(self.pframe_counts[slot_idx]).min(P);
+        let mut ordered = [KvMotionDeltaPacket {
+            motion_deltas: [0; MAX_ATTENTION_HEADS],
+        }; P];
+        if count > 0 && P > 0 {
+            let head = usize::from(self.pframe_heads[slot_idx]) % P;
+            let start = (head + P - count) % P;
+            let mut k = 0usize;
+            while k < count {
+                ordered[k] = self.pframes[slot_idx][(start + k) % P];
+                k += 1;
+            }
+        }
+        self.seek_slot_with_pframes(
+            slot_idx,
+            &ordered[..count],
+            count,
+            qdps_min_step_q7,
+            contradiction_threshold,
+            epoch,
+        )
+    }
+
+    /// Reconstructs a 128-byte [`GatewayFrame`] from `slot_idx`'s I-Frame and accumulated P-Frame
+    /// ring history without running an LLM forward pass.
+    ///
+    /// # Errors
+    /// Propagates errors from [`RamPhaseKvGopCache::seek_slot_history`].
+    #[inline]
+    pub fn synthesize_slot_history_gateway_frame(
+        &mut self,
+        slot_idx: usize,
+        qdps_min_step_q7: u8,
+        contradiction_threshold: f32,
+        epoch: u32,
+    ) -> GcsoResult<GatewayFrame> {
+        let (restored_phases, _clean_lp, r_bar, _repulsed) = self.seek_slot_history(
+            slot_idx,
+            qdps_min_step_q7,
+            contradiction_threshold,
+            epoch,
+        )?;
+        let count = self.slot_pframe_count(slot_idx);
+        let entry = &self.base.slots[slot_idx];
+        Ok(entry
+            .with_reconstructed_phases(restored_phases, count as u32, r_bar)
+            .synthesize_gateway_frame())
+    }
+}
+
+impl<const N: usize, const P: usize> RamPhaseKvCacheOps for RamPhaseKvGopCache<N, P> {
+    #[inline(always)]
+    fn entries(&self) -> &[RamPhaseKvEntry] {
+        self.base.entries()
+    }
+
+    #[inline(always)]
+    fn entries_mut(&mut self) -> &mut [RamPhaseKvEntry] {
+        self.base.entries_mut()
+    }
+}
+
+/// Low-spec PC GOP cache preset: 16 I-Frame slots × 4 P-Frames/slot (~8 KB, fits in L1D).
+pub type LowSpecPhaseKvGopCache = RamPhaseKvGopCache<16, 4>;
+
+/// Standard PC GOP cache preset: 64 I-Frame slots × 8 P-Frames/slot (~48 KB, fits in L2).
+pub type StandardPhaseKvGopCache = RamPhaseKvGopCache<64, 8>;
+
+/// High-capacity RAM / Zen 4 L2 GOP cache preset: 256 I-Frame slots × 8 P-Frames/slot (~192 KB).
+pub type HighCapPhaseKvGopCache = RamPhaseKvGopCache<256, 8>;
 
 impl RawPhaseProjectable for CognitiveTrajectoryLedger {
     #[inline(always)]
@@ -8449,5 +8796,46 @@ mod tests {
             .store_context_keyframe(3, 0, 3, &phases_a, circuit_a, act_a, 30);
         assert_eq!(tiny[0].context_hash, 3);
         assert_eq!(tiny[1].context_hash, 2);
+    }
+
+    #[test]
+    fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
+        let mut gop_cache: LowSpecPhaseKvGopCache = RamPhaseKvGopCache::new();
+        let mut circuit = CognitiveTrajectoryLedger::new();
+        circuit.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::CellTrail,
+            CognitiveOpKind::SynthesizeFuse,
+            5,
+        ));
+        let act = CognitiveCircuitActivation::default();
+        let p0 = [10i8; MAX_ATTENTION_HEADS];
+        let p1 = [18i8; MAX_ATTENTION_HEADS];
+        let p2 = [28i8; MAX_ATTENTION_HEADS];
+        let p3 = [36i8; MAX_ATTENTION_HEADS];
+
+        let slot = gop_cache
+            .store_keyframe_and_reset_gop(0xCAFE_0001, 100, 7, &p0, circuit, act, 1)
+            .expect("slot allocated");
+        assert_eq!(gop_cache.slot_pframe_count(slot), 0);
+
+        gop_cache.append_context_pframe(slot, &p1, 1, 2).unwrap();
+        gop_cache.append_context_pframe(slot, &p2, 1, 3).unwrap();
+        gop_cache.append_context_pframe(slot, &p3, 1, 4).unwrap();
+        assert_eq!(gop_cache.slot_pframe_count(slot), 3);
+        assert_eq!(gop_cache.total_stored_pframes(), 3);
+
+        let (restored, log_p, r_bar, repulsed) =
+            gop_cache.seek_slot_history(slot, 1, 0.35, 5).unwrap();
+        assert_eq!(restored, p3);
+        assert!(log_p.is_finite());
+        assert!(r_bar > 0.9);
+        assert_eq!(repulsed, 0);
+
+        let frame = gop_cache
+            .synthesize_slot_history_gateway_frame(slot, 1, 0.35, 6)
+            .unwrap();
+        assert_ne!(frame.provenance_bits & CAUSAL_AXIS_OBJECTIVE_FACT, 0);
+        assert_ne!(frame.provenance_bits & CAUSAL_AXIS_SUBJECTIVE_PERSONA, 0);
+        assert_eq!(gop_cache.entries()[slot].reuse_count, 2);
     }
 }

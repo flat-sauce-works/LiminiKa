@@ -38,7 +38,8 @@
 use core::arch::x86_64::*;
 
 use super::primitives::{
-    DEFAULT_ENTROPY_EPS, F32_MIN_POSITIVE_NORMAL, INV_64_Q14_F32, INV_8_Q14_F32,
+    DEFAULT_ENTROPY_EPS, F32_MIN_POSITIVE_NORMAL, GcsoResult,
+    INV_64_Q14_F32, INV_8_Q14_F32, KvMotionDeltaPacket,
     MAX_ATTENTION_HEADS, MAX_BAYESIAN_STIGMERGIC_DENSITY, MAX_PHASE_INTERFERENCE_INV_TEMP,
     MIN_PHASE_INTERFERENCE_INV_TEMP, POPCOUNT_RSQRT_LUT_257_REF, Q14_BIAS_X8_I32,
     Q7_FULL_COS_I16_REF, Q7_FULL_COS_REF, Q7_FULL_SINCOS_BIASED_U64_REF, SUBNORMAL_SQ_RISK_FLOOR,
@@ -63,7 +64,8 @@ use super::primitives::{
     is_word_array_uniform_64, load_q7_words_64, sanitize_inplace_gain_f32, store_q7_words_64,
     store_q7_x8_slice, swar_q7_add_sat_x4, swar_q7_add_sat_x8, swar_q7_circular_add_x8,
     swar_q7_circular_diff_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_mean_i8_from_words_64,
-    swar_q7_neg_sat_x8, swar_q7_qdps_filter_x8, swar_q7_scale_le128_with_bias_x8,
+    swar_q7_neg_sat_x8, swar_q7_qdps_filter_words_64, swar_q7_qdps_filter_x8,
+    swar_q7_scale_le128_with_bias_x8,
     swar_q7_scale_u7_x8, swar_q7_sub_sat_x4, swar_q7_sub_sat_x8, swar_u8_add_sat_x8,
     swar_u8_halve_decay_x8, swar_u8_max_x8, swar_u8_sub_sat_x8,
 };
@@ -78,7 +80,7 @@ use super::primitives::{
 };
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 use super::primitives::Q14_BIAS_X64_I32;
-use crate::abi::gcso_q7_t;
+use crate::abi::{GCSO_ERROR_INVALID_ARGUMENT, gcso_q7_t};
 use core::f32::consts::{LN_2, PI};
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use core::f32::consts::FRAC_PI_2;
@@ -6524,6 +6526,137 @@ pub(crate) fn rank1_accum_outer_product_simd(
             }
         }
     }
+}
+
+/// Encodes a 64-byte [`KvMotionDeltaPacket`] (P-Frame Predictive Phase-Motion Delta) between
+/// `prev_phases` and `curr_phases` using 8-lane SWAR circular difference, $S^1$ geodesic folding,
+/// and QDPS step filtering.
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `qdps_min_step_q7 > 127`.
+#[inline]
+pub fn encode_pframe_motion_delta_64(
+    prev_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    curr_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    qdps_min_step_q7: u8,
+) -> GcsoResult<KvMotionDeltaPacket> {
+    if qdps_min_step_q7 > 127 {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    }
+    let pw = load_q7_words_64(prev_phases);
+    let cw = load_q7_words_64(curr_phases);
+    let diff_folded = [
+        swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(cw[0], pw[0])),
+        swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(cw[1], pw[1])),
+        swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(cw[2], pw[2])),
+        swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(cw[3], pw[3])),
+        swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(cw[4], pw[4])),
+        swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(cw[5], pw[5])),
+        swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(cw[6], pw[6])),
+        swar_q7_fold_s1_geodesic_x8(swar_q7_circular_diff_x8(cw[7], pw[7])),
+    ];
+    let filt_w = swar_q7_qdps_filter_words_64(&diff_folded, qdps_min_step_q7);
+    let mut motion_deltas = [0i8; MAX_ATTENTION_HEADS];
+    store_q7_words_64(&mut motion_deltas, &filt_w);
+    Ok(KvMotionDeltaPacket::new(motion_deltas))
+}
+
+/// Applies a single 64-byte [`KvMotionDeltaPacket`] onto `cur_w` during Zero-Forward Seek,
+/// negating the delta when transition coherence drops below `-safe_thresh` (contradiction guard).
+///
+/// Returns `(step_log_prob, repulsed)`.
+#[inline(always)]
+#[must_use]
+pub fn apply_pframe_motion_step_words_64(
+    cur_w: &mut [u64; 8],
+    pframe: &KvMotionDeltaPacket,
+    safe_thresh: f32,
+) -> (f32, bool) {
+    let dw = load_q7_words_64(&pframe.motion_deltas);
+    let coh = coherence_from_diff_words_64(
+        dw[0], dw[1], dw[2], dw[3], dw[4], dw[5], dw[6], dw[7],
+    );
+    let log_p = branchless_fast_transition_log_prob(coh);
+    let repulsed = coh < -safe_thresh;
+    if repulsed {
+        *cur_w = [
+            swar_q7_circular_add_x8(cur_w[0], swar_q7_neg_sat_x8(dw[0])),
+            swar_q7_circular_add_x8(cur_w[1], swar_q7_neg_sat_x8(dw[1])),
+            swar_q7_circular_add_x8(cur_w[2], swar_q7_neg_sat_x8(dw[2])),
+            swar_q7_circular_add_x8(cur_w[3], swar_q7_neg_sat_x8(dw[3])),
+            swar_q7_circular_add_x8(cur_w[4], swar_q7_neg_sat_x8(dw[4])),
+            swar_q7_circular_add_x8(cur_w[5], swar_q7_neg_sat_x8(dw[5])),
+            swar_q7_circular_add_x8(cur_w[6], swar_q7_neg_sat_x8(dw[6])),
+            swar_q7_circular_add_x8(cur_w[7], swar_q7_neg_sat_x8(dw[7])),
+        ];
+    } else {
+        *cur_w = [
+            swar_q7_circular_add_x8(cur_w[0], dw[0]),
+            swar_q7_circular_add_x8(cur_w[1], dw[1]),
+            swar_q7_circular_add_x8(cur_w[2], dw[2]),
+            swar_q7_circular_add_x8(cur_w[3], dw[3]),
+            swar_q7_circular_add_x8(cur_w[4], dw[4]),
+            swar_q7_circular_add_x8(cur_w[5], dw[5]),
+            swar_q7_circular_add_x8(cur_w[6], dw[6]),
+            swar_q7_circular_add_x8(cur_w[7], dw[7]),
+        ];
+    }
+    (log_p, repulsed)
+}
+
+/// Applies $S^1$ geodesic folding and QDPS step filtering to an accumulated 64-head phase word array.
+#[inline(always)]
+#[must_use]
+pub fn finalize_pframe_chain_words_64(cur_w: &[u64; 8], qdps_min_step_q7: u8) -> [u64; 8] {
+    let folded_w = [
+        swar_q7_fold_s1_geodesic_x8(cur_w[0]),
+        swar_q7_fold_s1_geodesic_x8(cur_w[1]),
+        swar_q7_fold_s1_geodesic_x8(cur_w[2]),
+        swar_q7_fold_s1_geodesic_x8(cur_w[3]),
+        swar_q7_fold_s1_geodesic_x8(cur_w[4]),
+        swar_q7_fold_s1_geodesic_x8(cur_w[5]),
+        swar_q7_fold_s1_geodesic_x8(cur_w[6]),
+        swar_q7_fold_s1_geodesic_x8(cur_w[7]),
+    ];
+    swar_q7_qdps_filter_words_64(&folded_w, qdps_min_step_q7)
+}
+
+/// Reconstructs a 64-head phase state by replaying `pframes[..seek_steps]` onto `anchor_phases`
+/// without any LLM forward pass (Zero-Forward Seek).
+///
+/// Returns `(reconstructed_words, joint_log_prob, repulsed_count)`.
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `seek_steps > pframes.len()`,
+/// `qdps_min_step_q7 > 127`, or `contradiction_threshold` is non-finite.
+#[inline]
+pub fn seek_pframe_chain_words_64(
+    anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    pframes: &[KvMotionDeltaPacket],
+    seek_steps: usize,
+    qdps_min_step_q7: u8,
+    contradiction_threshold: f32,
+) -> GcsoResult<([u64; 8], f32, u32)> {
+    if seek_steps > pframes.len()
+        || qdps_min_step_q7 > 127
+        || !branchless_is_finite_f32(contradiction_threshold)
+    {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    }
+    let safe_thresh =
+        branchless_clamp_f32(branchless_abs_f32(contradiction_threshold), 0.0, 1.0);
+    let mut cur_w = load_q7_words_64(anchor_phases);
+    let mut joint_log_prob = 0.0_f32;
+    let mut repulsed_count = 0u32;
+    for pframe in &pframes[..seek_steps] {
+        let (log_p, repulsed) = apply_pframe_motion_step_words_64(&mut cur_w, pframe, safe_thresh);
+        joint_log_prob += log_p;
+        if repulsed {
+            repulsed_count = repulsed_count.wrapping_add(1);
+        }
+    }
+    let filt_w = finalize_pframe_chain_words_64(&cur_w, qdps_min_step_q7);
+    Ok((filt_w, branchless_flush_subnormal_f32(joint_log_prob), repulsed_count))
 }
 
 #[cfg(test)]
