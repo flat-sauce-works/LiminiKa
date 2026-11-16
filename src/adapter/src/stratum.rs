@@ -1508,7 +1508,16 @@ impl SocietyStratum for LocalTokenResonanceStratum {
         let (mut hub, selected_indices, trail_states) =
             Self::deposit_token_swarm_trails(ctx.entries, signal, last_layer);
 
-        let mut ledger = CognitiveTrajectoryLedger::from_ledger_slot(&hub.ledger_slot);
+        let mut ledger = if signal
+            .telemetry
+            .cognitive_trajectory
+            .latest_step()
+            .is_some()
+        {
+            signal.telemetry.cognitive_trajectory
+        } else {
+            CognitiveTrajectoryLedger::from_ledger_slot(&hub.ledger_slot)
+        };
         if !signal.token_deposits.is_empty() {
             ledger.push_step(CognitiveStepOp::pack(
                 SwarmScaleGranularity::PointerBit,

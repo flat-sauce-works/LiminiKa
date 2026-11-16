@@ -12,10 +12,10 @@
 use crate::{DynamicAttractorRecall, RecallPolicy, VoidBoundaryState};
 use liminika_core::action_hub::StigmergicActionDecision;
 use liminika_core::traits::gateway::{
-    CausalProvenanceSignal, CognitiveCircuitActivation, CognitiveCircuitPlasticity,
-    CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, GatewayFrame, GuardPhaseAnchor,
-    ManifoldGatewaySignal, ObjectiveFact, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
-    CAUSAL_AXIS_OBJECTIVE_FACT,
+    AdaptiveThresholdPolicy, CausalProvenanceSignal, CognitiveCircuitActivation,
+    CognitiveCircuitPlasticity, CognitiveCircuitThresholdPolicy, CognitiveOpKind, CognitiveStepOp,
+    CognitiveTrajectoryLedger, GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal,
+    ObjectiveFact, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
 };
 use liminika_core::traits::primitives::MAX_ATTENTION_HEADS;
 
@@ -556,10 +556,11 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
 
         // If the pseudo-neural trajectory circuit detects omitted compound decomposition (`DecomposePeel`)
         // alongside incomplete Fact anchor coverage on a grounded query, escalate to BoundaryAmbiguity.
+        let peel_floor_q7 = AdaptiveThresholdPolicy::default().peel_escalation_floor_q7();
         let (trigger, alignment_score, mut directive) = if query_is_grounded
             && matches!(trigger, ReflectionTriggerKind::Converged)
             && matches!(cross_activation.op_kind(), CognitiveOpKind::DecomposePeel)
-            && cross_activation.peel_gate_q7 >= 84
+            && cross_activation.peel_gate_q7 >= peel_floor_q7
             && anchor_overlap_ratio < 1.0
         {
             (

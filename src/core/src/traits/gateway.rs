@@ -1017,6 +1017,57 @@ impl AdaptiveThresholdPolicy {
     }
 }
 
+/// Calibratable Q0.7 integer gating thresholds for [`CognitiveTrajectoryLedger`] cascades
+/// and closed-loop self-reflection, avoiding hardcoded dataset-specific constants.
+pub trait CognitiveCircuitThresholdPolicy {
+    /// Minimum `fuse_gate_q7` required for adaptive early-exit (`0..=128`).
+    fn early_exit_fuse_floor_q7(&self) -> u8 {
+        96
+    }
+
+    /// Maximum `repulse_sensitivity_q7` allowed during early-exit (`0..=128`).
+    fn early_exit_repulse_ceiling_q7(&self) -> u8 {
+        72
+    }
+
+    /// Maximum mean residual phase deviation (`0..=128`) tolerated for early-exit.
+    fn early_exit_residual_max_q7(&self) -> u8 {
+        16
+    }
+
+    /// Minimum firing intensity (`0..=128`) triggering bounded 1-step recurrent refinement.
+    fn recurrent_refine_intensity_floor_q7(&self) -> u8 {
+        80
+    }
+
+    /// Minimum `peel_gate_q7` (`0..=128`) for escalating omitted compound decomposition.
+    fn peel_escalation_floor_q7(&self) -> u8 {
+        84
+    }
+}
+
+impl CognitiveCircuitThresholdPolicy for AdaptiveThresholdPolicy {
+    #[inline(always)]
+    fn early_exit_fuse_floor_q7(&self) -> u8 {
+        let def_gain = crate::action_hub::DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN;
+        let coh_shift = ((self.base.reinforcement_gain.clamp(0.10, 1.50) - def_gain) * 32.0) as i32;
+        (96 + coh_shift).clamp(72, 120) as u8
+    }
+
+    #[inline(always)]
+    fn early_exit_residual_max_q7(&self) -> u8 {
+        let scaled = ((16.0 * 1.85) / self.max_scale.clamp(0.8, 3.0)) as i32;
+        scaled.clamp(8, 32) as u8
+    }
+
+    #[inline(always)]
+    fn peel_escalation_floor_q7(&self) -> u8 {
+        let def_evap = crate::action_hub::DEFAULT_STIGMERGIC_EVAPORATION_RETAIN;
+        let margin_adj = ((self.base.evaporation_retain.clamp(0.50, 0.99) - def_evap) * 80.0) as i32;
+        (84 + margin_adj).clamp(64, 112) as u8
+    }
+}
+
 impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
     #[inline]
     fn resolve_thresholds<C: SystemConstraintSignal + ?Sized>(
@@ -5874,6 +5925,100 @@ impl CognitiveCircuitPlasticity for CognitiveTrajectoryLedger {
     }
 }
 
+/// Hierarchical scale-specialized hybrid circuit pairing a micro-scale (`PointerBit`/`CellTrail`)
+/// [`CognitiveTrajectoryLedger`] with a macro-scale (`TypeGateway`/`MacroCoalition`) ledger.
+///
+/// Implements [`ManifoldGatewaySignal`] and [`StigmergicScaleLayer`] directly so callers can compose
+/// analytical micro-peeling with integrative macro-fusion in zero-allocation cascades.
+#[repr(C, align(8))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HybridScaleCircuit {
+    /// Micro-scale circuit governing fine-grained decomposition and sub-head routing.
+    pub micro_circuit: CognitiveTrajectoryLedger,
+    /// Macro-scale circuit governing basin fusion and guard repulsion.
+    pub macro_circuit: CognitiveTrajectoryLedger,
+}
+
+impl HybridScaleCircuit {
+    /// Creates a new [`HybridScaleCircuit`] from distinct micro and macro trajectory ledgers.
+    #[inline(always)]
+    #[must_use]
+    pub const fn new(
+        micro_circuit: CognitiveTrajectoryLedger,
+        macro_circuit: CognitiveTrajectoryLedger,
+    ) -> Self {
+        Self {
+            micro_circuit,
+            macro_circuit,
+        }
+    }
+
+    /// Selects the active ledger corresponding to `granularity`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn circuit_for_scale(&self, granularity: SwarmScaleGranularity) -> &CognitiveTrajectoryLedger {
+        match granularity {
+            SwarmScaleGranularity::PointerBit | SwarmScaleGranularity::CellTrail => {
+                &self.micro_circuit
+            }
+            SwarmScaleGranularity::TypeGateway | SwarmScaleGranularity::MacroCoalition => {
+                &self.macro_circuit
+            }
+        }
+    }
+
+    /// Flattens this hierarchical hybrid into a single blended 8-byte [`CognitiveTrajectoryLedger`].
+    #[inline]
+    #[must_use]
+    pub fn to_blended_ledger(&self, macro_weight_q7: u8) -> CognitiveTrajectoryLedger {
+        self.micro_circuit
+            .compose_persona_circuit(&self.macro_circuit, macro_weight_q7)
+    }
+}
+
+impl RawPhaseProjectable for HybridScaleCircuit {
+    #[inline(always)]
+    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+        self.to_blended_ledger(64).project_to_q7_64()
+    }
+
+    #[inline(always)]
+    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+        self.to_blended_ledger(64).to_phase_words_64()
+    }
+}
+
+impl CausalProvenanceSignal for HybridScaleCircuit {
+    #[inline(always)]
+    fn causal_provenance_bits(&self) -> u32 {
+        self.micro_circuit.causal_provenance_bits() | self.macro_circuit.causal_provenance_bits()
+    }
+}
+
+impl CognitiveGroundingSignal for HybridScaleCircuit {
+    #[inline(always)]
+    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+        self.project_to_q7_64()
+    }
+
+    #[inline(always)]
+    fn grounding_base_energy(&self) -> f32 {
+        branchless_max_f32(
+            self.micro_circuit.grounding_base_energy(),
+            self.macro_circuit.grounding_base_energy(),
+        )
+    }
+}
+
+impl SubjectivePersonaSignal for HybridScaleCircuit {}
+
+impl ManifoldGatewaySignal for HybridScaleCircuit {
+    #[inline]
+    fn synthesize_gateway_frame(&self) -> GatewayFrame {
+        self.to_blended_ledger(64).synthesize_gateway_frame()
+    }
+}
+
 impl RawPhaseProjectable for CognitiveTrajectoryLedger {
     #[inline(always)]
     fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
@@ -6509,6 +6654,39 @@ impl StigmergicScaleLayer for CognitiveTrajectoryLedger {
     }
 }
 
+impl StigmergicScaleLayer for HybridScaleCircuit {
+    #[inline(always)]
+    fn scale_granularity(&self) -> SwarmScaleGranularity {
+        SwarmScaleGranularity::CellTrail
+    }
+
+    #[inline(always)]
+    fn layer_count(&self) -> usize {
+        2
+    }
+
+    #[inline]
+    fn project_scale_layer(
+        &self,
+        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        ledger: &CognitiveTrajectoryLedger,
+        layer_index: usize,
+        total_layers: usize,
+    ) -> ScaleLayerProjection {
+        let g = SwarmScaleGranularity::from_layer_ratio(layer_index, total_layers);
+        let active_circuit = self.circuit_for_scale(g);
+        let merged = active_circuit.compose_persona_circuit(ledger, 64);
+        project_gateway_signal_at_scale(
+            active_circuit,
+            g,
+            input_words,
+            &merged,
+            layer_index,
+            total_layers,
+        )
+    }
+}
+
 impl CausalProvenanceSignal for gcso_pointer_trail_t {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
@@ -6670,12 +6848,7 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
     }
 
     /// Executes an elastic `N`-layer cascade (`depth_n` in `1..=layers.len()`) across a slice of
-    /// [`StigmergicScaleLayer`] stages, forwarding orthogonal residuals from coarse layers to fine
-    /// layers and updating `ledger_slot`'s [`CognitiveTrajectoryLedger`] at every scale step.
-    ///
-    /// Uses [`CognitiveCircuitActivation`] gating for adaptive early-exit when coherent basin fusion
-    /// has already converged on low residual energy, and performs a bounded single-step recurrent
-    /// residual refinement pass when `DecomposePeel` or `RepulseAudit` remains strongly active.
+    /// [`StigmergicScaleLayer`] stages using `AdaptiveThresholdPolicy::default()`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `layers` is empty or `depth_n == 0`, or
@@ -6690,6 +6863,45 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
         ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
+    ) -> GcsoResult<(
+        ScaleLayerProjection,
+        CognitiveTrajectoryLedger,
+        SwarmResolutionReport,
+    )> {
+        let default_policy = AdaptiveThresholdPolicy::default();
+        self.orchestrate_adaptive_depth_n_with_policy(
+            layers,
+            depth_n,
+            input_ptr,
+            input_words,
+            ledger_slot,
+            trail_out,
+            bloom_filter,
+            &default_policy,
+        )
+    }
+
+    /// Executes an elastic `N`-layer cascade (`depth_n` in `1..=layers.len()`) across a slice of
+    /// [`StigmergicScaleLayer`] stages, deriving early-exit and recurrent-refinement thresholds
+    /// from `circuit_policy`.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `layers` is empty or `depth_n == 0`, or
+    /// propagates pointer/telemetry errors.
+    #[inline]
+    fn orchestrate_adaptive_depth_n_with_policy<
+        L: StigmergicScaleLayer,
+        P: CognitiveCircuitThresholdPolicy + ?Sized,
+    >(
+        &mut self,
+        layers: &[L],
+        depth_n: usize,
+        input_ptr: gcso_tagged_ptr_t,
+        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        ledger_slot: &mut gcso_ledger_slot_t,
+        trail_out: &mut gcso_pointer_trail_t,
+        bloom_filter: Option<&ContrastivePhaseBloomFilter>,
+        circuit_policy: &P,
     ) -> GcsoResult<(
         ScaleLayerProjection,
         CognitiveTrajectoryLedger,
@@ -6710,6 +6922,11 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
         if active_n == 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
+        let fuse_floor = circuit_policy.early_exit_fuse_floor_q7();
+        let repulse_ceil = circuit_policy.early_exit_repulse_ceiling_q7();
+        let res_max = circuit_policy.early_exit_residual_max_q7();
+        let refine_floor = circuit_policy.recurrent_refine_intensity_floor_q7();
+
         let mut last_proj = self
             .orchestrate_scale_layer(
                 &layers[0],
@@ -6731,9 +6948,9 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
             let converged_early = matches!(
                 act.op_kind(),
                 CognitiveOpKind::SynthesizeFuse | CognitiveOpKind::CrystallizeCommit
-            ) && act.fuse_gate_q7 >= 96
-                && act.repulse_sensitivity_q7 < 72
-                && residual_mean_abs_q7(&residual) <= 16;
+            ) && act.fuse_gate_q7 >= fuse_floor
+                && act.repulse_sensitivity_q7 < repulse_ceil
+                && residual_mean_abs_q7(&residual) <= res_max;
             if converged_early {
                 break;
             }
@@ -6768,8 +6985,8 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
                 tail_act.op_kind(),
                 CognitiveOpKind::DecomposePeel | CognitiveOpKind::RepulseAudit
             )
-            && tail_act.intensity_q7 >= 80
-            && residual_mean_abs_q7(&residual) > 16
+            && tail_act.intensity_q7 >= refine_floor
+            && residual_mean_abs_q7(&residual) > res_max
         {
             let refine_res = self.orchestrate_scale_layer(
                 &layers[active_n - 1],
@@ -7477,5 +7694,71 @@ mod tests {
         let view = GcsoFourSectionView::from_container_bytes_zero_copy(&buf[off..off + written])
             .unwrap();
         assert_eq!(view.cognitive_trajectory_ledger(), Some(blended));
+    }
+
+    #[test]
+    fn test_hybrid_scale_circuit_and_adaptive_threshold_policy() {
+        let mut micro = CognitiveTrajectoryLedger::new();
+        micro.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::CellTrail,
+            CognitiveOpKind::DecomposePeel,
+            6,
+        ));
+        let mut macro_c = CognitiveTrajectoryLedger::new();
+        macro_c.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::MacroCoalition,
+            CognitiveOpKind::SynthesizeFuse,
+            7,
+        ));
+
+        let hybrid = HybridScaleCircuit::new(micro, macro_c);
+        assert_eq!(hybrid.layer_count(), 2);
+        assert_eq!(
+            *hybrid.circuit_for_scale(SwarmScaleGranularity::PointerBit),
+            micro
+        );
+        assert_eq!(
+            *hybrid.circuit_for_scale(SwarmScaleGranularity::MacroCoalition),
+            macro_c
+        );
+
+        let input_words = load_q7_words_64(&[20i8; MAX_ATTENTION_HEADS]);
+        let p_coarse = hybrid.project_scale_layer(&input_words, &macro_c, 0, 2);
+        let p_fine = hybrid.project_scale_layer(&input_words, &micro, 1, 2);
+        assert_eq!(p_coarse.granularity, SwarmScaleGranularity::MacroCoalition);
+        assert_eq!(p_fine.granularity, SwarmScaleGranularity::CellTrail);
+        assert_ne!(p_coarse.peeled_words, p_fine.peeled_words);
+
+        let strict_policy = AdaptiveThresholdPolicy::new(StigmergicThresholds {
+            reinforcement_gain: 1.20,
+            evaporation_retain: 0.70,
+            ..StigmergicThresholds::default()
+        });
+        let relaxed_policy = AdaptiveThresholdPolicy::new(StigmergicThresholds {
+            reinforcement_gain: 0.25,
+            evaporation_retain: 0.96,
+            ..StigmergicThresholds::default()
+        });
+        assert!(strict_policy.early_exit_fuse_floor_q7() > relaxed_policy.early_exit_fuse_floor_q7());
+        assert!(strict_policy.peel_escalation_floor_q7() < relaxed_policy.peel_escalation_floor_q7());
+
+        let mut hub = crate::action_hub::ActionHubEngine::new();
+        let mut slot = gcso_ledger_slot_t::default();
+        let mut trail = gcso_pointer_trail_t::default();
+        let layers = [hybrid];
+        let (proj, out_ledger, _) = hub
+            .orchestrate_adaptive_depth_n_with_policy(
+                &layers,
+                1,
+                gcso_tagged_ptr_t::default(),
+                &input_words,
+                &mut slot,
+                &mut trail,
+                None,
+                &strict_policy,
+            )
+            .unwrap();
+        assert_eq!(proj.total_layers, 1);
+        assert!(out_ledger.latest_step().is_some());
     }
 }

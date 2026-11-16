@@ -20,7 +20,8 @@ use liminika_adapter::{
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::action_hub::ActionHubEngine;
 use liminika_core::traits::gateway::{
-    GuardPhaseAnchor, ObjectiveFact, ResonantSignalSlice, SubjectivePersona,
+    CognitiveCircuitPlasticity, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
+    GuardPhaseAnchor, ObjectiveFact, ResonantSignalSlice, SubjectivePersona, SwarmScaleGranularity,
 };
 use serde::Deserialize;
 use tokenizers::Tokenizer;
@@ -32,6 +33,87 @@ type LayerResonantSlices<'a> = (
     &'a [f32],
     &'a [f32],
 );
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CircuitProfileMode {
+    None,
+    Analytical,
+    Integrative,
+    Hybrid(u8),
+}
+
+fn parse_circuit_mode<'a>(args: impl IntoIterator<Item = &'a str>) -> CircuitProfileMode {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--circuit=") {
+            if val.eq_ignore_ascii_case("analytical") {
+                return CircuitProfileMode::Analytical;
+            }
+            if val.eq_ignore_ascii_case("integrative") {
+                return CircuitProfileMode::Integrative;
+            }
+            if val.eq_ignore_ascii_case("hybrid") {
+                return CircuitProfileMode::Hybrid(64);
+            }
+            if let Some(blend_str) = val.strip_prefix("hybrid:") {
+                if let Ok(blend) = blend_str.parse::<u8>() {
+                    return CircuitProfileMode::Hybrid(blend.min(128));
+                }
+            }
+        }
+    }
+    CircuitProfileMode::None
+}
+
+fn build_preset_circuit(mode: CircuitProfileMode) -> Option<CognitiveTrajectoryLedger> {
+    let mut analytical = CognitiveTrajectoryLedger::new();
+    analytical.push_step(CognitiveStepOp::pack(
+        SwarmScaleGranularity::CellTrail,
+        CognitiveOpKind::DecomposePeel,
+        6,
+    ));
+    analytical.push_step(CognitiveStepOp::pack(
+        SwarmScaleGranularity::PointerBit,
+        CognitiveOpKind::RouteSubHead,
+        6,
+    ));
+
+    let mut integrative = CognitiveTrajectoryLedger::new();
+    integrative.push_step(CognitiveStepOp::pack(
+        SwarmScaleGranularity::TypeGateway,
+        CognitiveOpKind::SynthesizeFuse,
+        6,
+    ));
+    integrative.push_step(CognitiveStepOp::pack(
+        SwarmScaleGranularity::MacroCoalition,
+        CognitiveOpKind::CrystallizeCommit,
+        7,
+    ));
+
+    match mode {
+        CircuitProfileMode::None => None,
+        CircuitProfileMode::Analytical => Some(analytical),
+        CircuitProfileMode::Integrative => Some(integrative),
+        CircuitProfileMode::Hybrid(blend_q7) => {
+            Some(analytical.compose_persona_circuit(&integrative, blend_q7))
+        }
+    }
+}
+
+fn resolve_persona_circuit(
+    mode: CircuitProfileMode,
+    load_path: Option<&Path>,
+) -> Option<CognitiveTrajectoryLedger> {
+    let loaded = load_path
+        .and_then(|p| GcsoDualTrackTimeline::load_from_path(p).ok())
+        .and_then(|tl| tl.persona_circuit());
+    let preset = build_preset_circuit(mode);
+    match (loaded, preset) {
+        (Some(base), Some(ov)) => Some(base.compose_persona_circuit(&ov, 64)),
+        (Some(base), None) => Some(base),
+        (None, Some(ov)) => Some(ov),
+        (None, None) => None,
+    }
+}
 
 type ForwardTokensOutput = (Vec<f32>, Vec<Vec<f32>>, Vec<f32>);
 
@@ -1289,10 +1371,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vram_before.as_deref(),
     );
 
-    let recall_only = std::env::args().any(|a| a == "--recall-only");
-    let step2_only = std::env::args().any(|a| a == "--step2-only") || recall_only;
-    let use_base_prior = std::env::args().any(|a| a == "--base-prior");
-    let no_reflect = std::env::args().any(|a| a == "--no-reflect");
+    let cli_args: Vec<String> = std::env::args().collect();
+    let recall_only = cli_args.iter().any(|a| a == "--recall-only");
+    let step2_only = cli_args.iter().any(|a| a == "--step2-only") || recall_only;
+    let use_base_prior = cli_args.iter().any(|a| a == "--base-prior");
+    let no_reflect = cli_args.iter().any(|a| a == "--no-reflect");
+    let circuit_mode = parse_circuit_mode(cli_args.iter().map(String::as_str));
+    let persona_gcso_in = cli_args
+        .iter()
+        .find_map(|a| a.strip_prefix("--persona-gcso="))
+        .map(PathBuf::from);
+    let persona_gcso_out = cli_args
+        .iter()
+        .find_map(|a| a.strip_prefix("--save-persona-gcso="))
+        .map(PathBuf::from)
+        .or_else(|| persona_gcso_in.clone());
+    let mut active_persona_circuit =
+        resolve_persona_circuit(circuit_mode, persona_gcso_in.as_deref());
+    if let Some(pc) = active_persona_circuit {
+        println!(
+            "Persona Cognitive Circuit active: mode={:?} steps={:02x?}",
+            circuit_mode, pc.steps
+        );
+    }
     let baked_opt: Option<BakedModelProfile> = if !recall_only {
         let t_bake = Instant::now();
         let baked = bake_via_adapter(&mut model, &tokenizer, &adapter, cfg.hidden_size, &suite)?;
@@ -1912,7 +2013,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
         let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);
-        let query_snap = TrajectoryManifoldSnapshot::from_recall(&recall);
+        let mut query_snap = TrajectoryManifoldSnapshot::from_recall(&recall);
+        if let Some(pc) = active_persona_circuit {
+            query_snap.cognitive_trajectory =
+                pc.compose_persona_circuit(&query_snap.cognitive_trajectory, 64);
+        }
         let top_fact_preview = if recall.recalled_facts.is_empty() {
             "none".to_string()
         } else {
@@ -2066,6 +2171,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if matches!(pick, ReflectionSelection::Pass2) {
                                 reflect_adopted += 1;
                                 text = p2_text;
+                                if let Some(ref mut pc) = active_persona_circuit {
+                                    ManifoldReflectionEvaluator
+                                        .update_persona_circuit(pc, &pass2_crit);
+                                }
                                 reflect_note = format!(
                                     "{:?}->{:?}(P2,{:+.2}->{:+.2},[{:?}->{:?}])",
                                     pass1_crit.trigger,
@@ -2076,6 +2185,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     pass2_crit.layer_activation.op_kind()
                                 );
                             } else {
+                                if let Some(ref mut pc) = active_persona_circuit {
+                                    ManifoldReflectionEvaluator
+                                        .update_persona_circuit(pc, &pass1_crit);
+                                }
                                 reflect_note = format!(
                                     "{:?}->{:?}(P1,{:+.2}->{:+.2},[{:?}->{:?}])",
                                     pass1_crit.trigger,
@@ -2087,9 +2200,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 );
                             }
                         } else {
+                            if let Some(ref mut pc) = active_persona_circuit {
+                                ManifoldReflectionEvaluator.update_persona_circuit(pc, &pass1_crit);
+                            }
                             reflect_note = format!("{:?}(P1)", pass1_crit.trigger);
                         }
                     } else {
+                        if let Some(ref mut pc) = active_persona_circuit {
+                            ManifoldReflectionEvaluator.update_persona_circuit(pc, &pass1_crit);
+                        }
                         reflect_note = format!("{:?}(0)", pass1_crit.trigger);
                     }
                 }
@@ -2299,7 +2418,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 seek_state.anchor_ids.len(),
             );
         }
+        if let Some(pc) = active_persona_circuit {
+            println!(
+                "Updated Persona Cognitive Circuit after evaluation: steps={:02x?}",
+                pc.steps
+            );
+            if let Some(save_path) = persona_gcso_out.as_deref() {
+                let mut pc_tl = GcsoDualTrackTimeline::new(
+                    GcsoDualTrackTimeline::geometry_fingerprint(adapter.geometry()),
+                );
+                pc_tl.set_persona_circuit(pc);
+                pc_tl.record_step(
+                    &TimelineStepContext {
+                        adapter: &adapter,
+                        corpus: &compiled.corpus,
+                        policy: &compiled.recall_policy,
+                        detector: &cut_detector,
+                    },
+                    SourceTextRecord {
+                        frame_index: 0,
+                        timestamp_epoch_sec: 1_700_000_000,
+                        role: AttractorRole::Persona,
+                        text: format!("persona_circuit:{:?}", circuit_mode),
+                        energy: 1.8,
+                    },
+                    &FrameTransitionMetrics {
+                        phase_l1_delta: 0.0,
+                        void_state: VoidBoundaryState::InsideBasin,
+                        frames_since_keyframe: 0,
+                        new_cluster_spawned: true,
+                    },
+                )?;
+                let saved_bytes = pc_tl.save_to_path(save_path)?;
+                println!(
+                    "Saved Persona Cognitive Circuit to {} ({saved_bytes} bytes).",
+                    save_path.display()
+                );
+            }
+        }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn circuit_profile_modes_parse_and_compose_hybrid_without_weights() {
+        assert_eq!(
+            parse_circuit_mode(["candle_eval", "--circuit=analytical"]),
+            CircuitProfileMode::Analytical
+        );
+        assert_eq!(
+            parse_circuit_mode(["candle_eval", "--circuit=integrative"]),
+            CircuitProfileMode::Integrative
+        );
+        assert_eq!(
+            parse_circuit_mode(["candle_eval", "--circuit=hybrid"]),
+            CircuitProfileMode::Hybrid(64)
+        );
+        assert_eq!(
+            parse_circuit_mode(["candle_eval", "--circuit=hybrid:96"]),
+            CircuitProfileMode::Hybrid(96)
+        );
+
+        let a = build_preset_circuit(CircuitProfileMode::Analytical).unwrap();
+        let i = build_preset_circuit(CircuitProfileMode::Integrative).unwrap();
+        let h = build_preset_circuit(CircuitProfileMode::Hybrid(64)).unwrap();
+        assert_ne!(a, i);
+        assert_ne!(h, a);
+        assert_ne!(h, i);
+    }
 }
