@@ -100,12 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             use liminika_adapter::GcsoDualTrackTimeline;
 
             let dir = args.next().unwrap_or_else(|| "containers".to_string());
-            let mut entries: Vec<_> = std::fs::read_dir(&dir)?
-                .filter_map(Result::ok)
-                .map(|e| e.path())
-                .filter(|p| p.extension().and_then(|ext| ext.to_str()) == Some("gcso"))
-                .collect();
-            entries.sort();
+            let entries = collect_gcso_paths_creating_dir(std::path::Path::new(&dir))?;
 
             if entries.is_empty() {
                 println!("No .gcso containers found in '{}'.", dir);
@@ -280,4 +275,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 5. Clean up allocated context resources
     unsafe { liminika_core::abi::gcso_context_destroy(ctx_handle) };
     Ok(())
+}
+
+/// Ensures `dir` exists on demand (resilient when `.gitkeep` is absent) and returns sorted `.gcso`
+/// container paths inside it.
+fn collect_gcso_paths_creating_dir(
+    dir: &std::path::Path,
+) -> std::io::Result<Vec<std::path::PathBuf>> {
+    if !dir.exists() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(dir)?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|ext| ext.to_str()) == Some("gcso"))
+        .collect();
+    entries.sort();
+    Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_gcso_paths_creating_dir;
+
+    #[test]
+    fn gcso_list_creates_missing_directory_on_demand() {
+        let base =
+            std::env::temp_dir().join(format!("liminika_cli_missing_dir_{}", std::process::id()));
+        let target = base.join("nested").join("containers");
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(!target.exists());
+
+        let found = collect_gcso_paths_creating_dir(&target)
+            .expect("missing containers directory should be created automatically");
+        assert!(target.is_dir());
+        assert!(found.is_empty());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

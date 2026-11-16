@@ -3302,6 +3302,23 @@ mod tests {
             .expect("load .gcso from repository containers/");
         assert_eq!(loaded, timeline);
         let _ = std::fs::remove_file(&repo_container);
+
+        // Also verify automatic creation of missing nested parent directories when `.gitkeep` is absent.
+        let nested_base = std::env::temp_dir().join(format!(
+            "liminika_adapter_autocreated_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&nested_base);
+        let nested_path = nested_base.join("containers").join("nested_test.gcso");
+        assert!(!nested_base.exists());
+        let nested_written = timeline
+            .save_to_path(&nested_path)
+            .expect("save .gcso should auto-create missing parent directories");
+        assert_eq!(nested_written, bytes.len());
+        let nested_loaded =
+            GcsoDualTrackTimeline::load_from_path(&nested_path).expect("load auto-created .gcso");
+        assert_eq!(nested_loaded, timeline);
+        let _ = std::fs::remove_dir_all(&nested_base);
     }
 
     #[test]

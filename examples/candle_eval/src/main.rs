@@ -1144,7 +1144,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()?;
-    let model_dir = repo_root.join("models/Phi-4-mini-instruct");
+    let models_root = repo_root.join("models");
+    if !models_root.exists() {
+        std::fs::create_dir_all(&models_root)?;
+    }
+    let model_dir = models_root.join("Phi-4-mini-instruct");
+    if !model_dir.is_dir() {
+        return Err(format!(
+            "model directory '{}' not found (base '{}' is ready; place Phi-4-mini-instruct weights there)",
+            model_dir.display(),
+            models_root.display()
+        )
+        .into());
+    }
     let fixture_path = repo_root.join("tests/fixtures/gcso_eval_samples.txt");
 
     let cfg: Phi3Config =
