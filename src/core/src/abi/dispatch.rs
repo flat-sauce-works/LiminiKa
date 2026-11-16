@@ -12,12 +12,12 @@ use super::*;
 pub(super) struct AbiSystemDispatcher;
 impl SystemCapabilityQuery for AbiSystemDispatcher {}
 
-pub(super) struct AbiDaesDispatcher;
-impl DaesScratchpad for AbiDaesDispatcher {
+pub(super) struct AbiLedgerDispatcher;
+impl FastPathLedger for AbiLedgerDispatcher {
     #[inline]
     fn evaluate_auto_tune(
         &self,
-        slot: &gcso_daes_slot_t,
+        slot: &gcso_ledger_slot_t,
         config_out: &mut gcso_config_t,
     ) -> GcsoResult<()> {
         if config_out.head_dim == 0 {
@@ -33,7 +33,7 @@ impl DaesScratchpad for AbiDaesDispatcher {
         );
         let damping = 1.0 - 0.025 * (spike_count as f32);
         config_out.ripa_clamp_max_rad = branchless_clamp_f32(base_ripa * damping, 0.01, 0.25);
-        config_out.daes_mode = (slot.mode & 0xFF) as u8;
+        config_out.ledger_mode = (slot.mode & 0xFF) as u8;
         Ok(())
     }
 }

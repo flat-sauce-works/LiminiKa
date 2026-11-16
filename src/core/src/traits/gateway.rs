@@ -67,7 +67,7 @@ use super::primitives::{
     ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
     ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
     ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
-    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, DAES_MINI_LEDGER_LEN,
+    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, LEDGER_HISTORY_LEN,
     DEFAULT_ENTROPY_EPS, DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD, GcsoResult,
     MAX_ATTENTION_HEADS, Pod, pack_action_slot_tag,
 };
@@ -78,16 +78,17 @@ use super::rope::{
     rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words, steer_from_swar_words_core_safe,
 };
 use super::telemetry::{
-    ContrastivePhaseBloomFilter, DAES_METRIC_FAST_PATH_HIT, DAES_METRIC_LAYER_SKIP_COMPENSATED,
-    DAES_METRIC_PHASE_STEERED, DAES_METRIC_PSPM_ROUTED, DAES_METRIC_REPULSION_APPLIED,
-    DAES_METRIC_SLOT_SYNERGY_ACTIVE, DAES_METRIC_SRL_INJECTED, DEFAULT_SWARM_QUORUM_THRESHOLD,
-    DEFAULT_SWARM_TOLERANCE_Q7, MAX_ATTRACTOR_PULL_FORCE, NUM_SWARM_MICRO_CELLS,
-    StigmergicSwarmOps, SwarmResolutionReport, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
-    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
+    ContrastivePhaseBloomFilter, DEFAULT_SWARM_QUORUM_THRESHOLD, DEFAULT_SWARM_TOLERANCE_Q7,
+    LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
+    LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_PSPM_ROUTED,
+    LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SRL_INJECTED,
+    MAX_ATTRACTOR_PULL_FORCE, NUM_SWARM_MICRO_CELLS, StigmergicSwarmOps, SwarmResolutionReport,
+    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
+    TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 use super::{ActionHub, validate_optional_qk_tensors};
 use crate::abi::{
-    GCSO_ABI_VERSION_HEX, GCSO_ERROR_INVALID_ARGUMENT, gcso_config_t, gcso_daes_slot_t,
+    GCSO_ABI_VERSION_HEX, GCSO_ERROR_INVALID_ARGUMENT, gcso_config_t, gcso_ledger_slot_t,
     gcso_edbc_state_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t, gcso_srl_descriptor_t,
     gcso_tagged_ptr_t,
 };
@@ -4065,7 +4066,7 @@ impl<T: SrlAdapter + ?Sized> GatewaySrlSteeringExt for T {}
 /// online basin consolidation, and `.gcso` crystallization.
 pub trait ActionHubGatewayExt: ActionHub {
     /// Internal register-resident helper that ingests `signal` via `synthesize_gateway_frame_with_words`,
-    /// steps `trail_out` and `daes_slot`, and steers `query_tensor` / `key_tensor` directly from registers.
+    /// steps `trail_out` and `ledger_slot`, and steers `query_tensor` / `key_tensor` directly from registers.
     ///
     /// # Errors
     /// Propagates any validation or execution error from [`ActionHub`].
@@ -4073,7 +4074,7 @@ pub trait ActionHubGatewayExt: ActionHub {
     fn ingest_gateway_and_steer_with_words_core<S: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         signal: &S,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -4094,7 +4095,7 @@ pub trait ActionHubGatewayExt: ActionHub {
         )?;
 
         let (bypass_hit, effective_ptr) =
-            self.resolve_or_pass_tagged_ptr(daes_slot, gcso_tagged_ptr_t(frame.tagged_ptr));
+            self.resolve_or_pass_tagged_ptr(ledger_slot, gcso_tagged_ptr_t(frame.tagged_ptr));
         let frm_nonzero = swar_words_nonzero_64(&frm_w);
         if frm_nonzero {
             *trail_phase_words_mut(trail_out) = frm_w;
@@ -4122,13 +4123,13 @@ pub trait ActionHubGatewayExt: ActionHub {
 
         let is_repulsed = report.is_cohomology_repulsion()
             | ((frame.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0);
-        let mut metrics = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(is_repulsed, DAES_METRIC_REPULSION_APPLIED, 0)
+        let mut metrics = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(is_repulsed, LEDGER_METRIC_REPULSION_APPLIED, 0)
             | branchless_select_u8(
                 (frame.provenance_bits
                     & (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_SUBJECTIVE_PERSONA))
                     == (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_SUBJECTIVE_PERSONA),
-                DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+                LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
                 0,
             );
 
@@ -4145,23 +4146,23 @@ pub trait ActionHubGatewayExt: ActionHub {
         )?;
 
         if layer_skipped {
-            metrics |= DAES_METRIC_LAYER_SKIP_COMPENSATED;
+            metrics |= LEDGER_METRIC_LAYER_SKIP_COMPENSATED;
         } else {
-            metrics |= branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-                | branchless_select_u8(pspm_routed, DAES_METRIC_PSPM_ROUTED, 0);
+            metrics |= branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+                | branchless_select_u8(pspm_routed, LEDGER_METRIC_PSPM_ROUTED, 0);
             if let (Some(q), Some((x_in, desc))) = (query_tensor, srl_activation_and_desc) {
                 if (frame.action_mode_flags & ACTION_MODE_SRL_INJECT) != 0 {
                     self.eval_rank1_fused(q, x_in, desc)?;
-                    metrics |= DAES_METRIC_SRL_INJECTED;
+                    metrics |= LEDGER_METRIC_SRL_INJECTED;
                 }
             }
         }
 
-        let _ = self.telemetry_push(daes_slot, metrics);
+        let _ = self.telemetry_push(ledger_slot, metrics);
         Ok((frame, report, frm_w))
     }
 
-    /// Ingests any [`ManifoldGatewaySignal`] into `self`, steps `trail_out` and `daes_slot`,
+    /// Ingests any [`ManifoldGatewaySignal`] into `self`, steps `trail_out` and `ledger_slot`,
     /// and executes $SO(2)$-fused RIPA + PSPM sub-head steering.
     ///
     /// # Errors
@@ -4170,7 +4171,7 @@ pub trait ActionHubGatewayExt: ActionHub {
     fn ingest_gateway_and_steer_safe<S: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         signal: &S,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -4179,7 +4180,7 @@ pub trait ActionHubGatewayExt: ActionHub {
     ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport)> {
         let (frame, report, _frm_w) = self.ingest_gateway_and_steer_with_words_core(
             signal,
-            daes_slot,
+            ledger_slot,
             trail_out,
             query_tensor,
             key_tensor,
@@ -4189,7 +4190,7 @@ pub trait ActionHubGatewayExt: ActionHub {
         Ok((frame, report))
     }
 
-    /// Ingests any [`ManifoldGatewaySignal`] into `self`, steps `trail_out` and `daes_slot`,
+    /// Ingests any [`ManifoldGatewaySignal`] into `self`, steps `trail_out` and `ledger_slot`,
     /// modulates damping autonomously from the trail's stigmergic density and frame energy,
     /// and steers `query_tensor` according to `geometry` (`Interleaved` or `HalfSplit`).
     ///
@@ -4203,7 +4204,7 @@ pub trait ActionHubGatewayExt: ActionHub {
         &mut self,
         signal: &S,
         geometry: &G,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         unresolved_damping_u7: u8,
         mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -4223,7 +4224,7 @@ pub trait ActionHubGatewayExt: ActionHub {
         }
 
         let (bypass_hit, effective_ptr) =
-            self.resolve_or_pass_tagged_ptr(daes_slot, gcso_tagged_ptr_t(frame.tagged_ptr));
+            self.resolve_or_pass_tagged_ptr(ledger_slot, gcso_tagged_ptr_t(frame.tagged_ptr));
         let frm_nonzero = swar_words_nonzero_64(&frm_w);
         let next_w = if frm_nonzero {
             *trail_phase_words_mut(trail_out) = frm_w;
@@ -4251,20 +4252,20 @@ pub trait ActionHubGatewayExt: ActionHub {
 
         let is_repulsed = report.is_cohomology_repulsion()
             | ((frame.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0);
-        let mut metrics = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(is_repulsed, DAES_METRIC_REPULSION_APPLIED, 0)
+        let mut metrics = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(is_repulsed, LEDGER_METRIC_REPULSION_APPLIED, 0)
             | branchless_select_u8(
                 (frame.provenance_bits
                     & (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_SUBJECTIVE_PERSONA))
                     == (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_SUBJECTIVE_PERSONA),
-                DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+                LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
                 0,
             );
 
         let layer_skipped = (frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0;
         if layer_skipped {
             trail_out.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
-            metrics |= DAES_METRIC_LAYER_SKIP_COMPENSATED;
+            metrics |= LEDGER_METRIC_LAYER_SKIP_COMPENSATED;
         } else if let Some(q) = query_tensor.as_deref_mut() {
             let clean_damping =
                 branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
@@ -4281,7 +4282,7 @@ pub trait ActionHubGatewayExt: ActionHub {
                     &p_aligned,
                     frame.ripa_clamp_rad,
                 )?;
-                metrics |= DAES_METRIC_PHASE_STEERED;
+                metrics |= LEDGER_METRIC_PHASE_STEERED;
             }
         }
 
@@ -4291,7 +4292,7 @@ pub trait ActionHubGatewayExt: ActionHub {
             }
         }
 
-        let _ = self.telemetry_push(daes_slot, metrics);
+        let _ = self.telemetry_push(ledger_slot, metrics);
         Ok((frame, report))
     }
 
@@ -4318,7 +4319,7 @@ pub trait ActionHubGatewayExt: ActionHub {
         geometry: &G,
         thresholds: &StigmergicThresholds,
         entropy_h_tilde: f32,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         unresolved_damping_u7: u8,
         mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -4387,7 +4388,7 @@ pub trait ActionHubGatewayExt: ActionHub {
         };
 
         let (bypass_hit, effective_ptr) =
-            self.resolve_or_pass_tagged_ptr(daes_slot, gcso_tagged_ptr_t(frame.tagged_ptr));
+            self.resolve_or_pass_tagged_ptr(ledger_slot, gcso_tagged_ptr_t(frame.tagged_ptr));
         let next_w = if frm_nonzero {
             *trail_phase_words_mut(trail_out) = frm_w;
             frm_w
@@ -4438,13 +4439,13 @@ pub trait ActionHubGatewayExt: ActionHub {
             & !(TRAIL_FLAG_REPULSION_ACTIVE | TRAIL_FLAG_INERTIAL_SKIP_ACTIVE))
             | extra_flags;
 
-        let mut metrics = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(is_repulsed, DAES_METRIC_REPULSION_APPLIED, 0)
+        let mut metrics = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(is_repulsed, LEDGER_METRIC_REPULSION_APPLIED, 0)
             | branchless_select_u8(
                 (frame.provenance_bits
                     & (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_SUBJECTIVE_PERSONA))
                     == (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_SUBJECTIVE_PERSONA),
-                DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+                LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
                 0,
             );
 
@@ -4455,7 +4456,7 @@ pub trait ActionHubGatewayExt: ActionHub {
 
         if is_passive_or_skip {
             if matches!(decision, StigmergicActionDecision::InertialLayerSkip) {
-                metrics |= DAES_METRIC_LAYER_SKIP_COMPENSATED;
+                metrics |= LEDGER_METRIC_LAYER_SKIP_COMPENSATED;
             }
         } else {
             if let Some(q) = query_tensor.as_deref_mut() {
@@ -4480,7 +4481,7 @@ pub trait ActionHubGatewayExt: ActionHub {
                         &p_aligned,
                         frame.ripa_clamp_rad,
                     )?;
-                    metrics |= DAES_METRIC_PHASE_STEERED;
+                    metrics |= LEDGER_METRIC_PHASE_STEERED;
                 }
             }
 
@@ -4493,7 +4494,7 @@ pub trait ActionHubGatewayExt: ActionHub {
                     let _ = GatewaySrlSteeringExt::apply_gateway_srl_hidden_fused(
                         self, signal, y_mut, x_in, u_vec, v_vec,
                     )?;
-                    metrics |= DAES_METRIC_SRL_INJECTED;
+                    metrics |= LEDGER_METRIC_SRL_INJECTED;
                 }
             }
 
@@ -4504,7 +4505,7 @@ pub trait ActionHubGatewayExt: ActionHub {
             }
         }
 
-        let _ = self.telemetry_push(daes_slot, metrics);
+        let _ = self.telemetry_push(ledger_slot, metrics);
         Ok((frame, report, decision))
     }
 
@@ -4528,7 +4529,7 @@ pub trait ActionHubGatewayExt: ActionHub {
         system: &C,
         probe: &ManifoldProbeBaseline,
         entropy_h_tilde: f32,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         unresolved_damping_u7: u8,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -4547,7 +4548,7 @@ pub trait ActionHubGatewayExt: ActionHub {
             geometry,
             &dyn_thresholds,
             entropy_h_tilde,
-            daes_slot,
+            ledger_slot,
             trail_out,
             unresolved_damping_u7,
             query_tensor,
@@ -4565,7 +4566,7 @@ pub trait ActionHubGatewayExt: ActionHub {
     fn ingest_gateway_swarm_and_crystallize_safe<S: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         signal: &S,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         crystal_record: &mut CrystallizedAttractorRecord,
         step_gain_u7: u8,
@@ -4587,7 +4588,7 @@ pub trait ActionHubGatewayExt: ActionHub {
     )> {
         let (frame, report, init_frm_w) = self.ingest_gateway_and_steer_with_words_core(
             signal,
-            daes_slot,
+            ledger_slot,
             trail_out,
             query_tensor,
             key_tensor,
@@ -4631,7 +4632,7 @@ pub trait ActionHubGatewayExt: ActionHub {
         signal: &S,
         centroids: &mut [CrystallizedAttractorRecord],
         split_coherence_thresh: f32,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -4639,7 +4640,7 @@ pub trait ActionHubGatewayExt: ActionHub {
     ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport, usize, u32, f32, bool)> {
         let (frame, report, frm_w) = self.ingest_gateway_and_steer_with_words_core(
             signal,
-            daes_slot,
+            ledger_slot,
             trail_out,
             query_tensor,
             key_tensor,
@@ -4674,7 +4675,7 @@ pub trait ActionHubGatewayExt: ActionHub {
         merge_coherence_thresh: f32,
         min_gravity_mass: f32,
         evaporative_decay_factor: f32,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -4694,7 +4695,7 @@ pub trait ActionHubGatewayExt: ActionHub {
                 signal,
                 centroids,
                 split_coherence_thresh,
-                daes_slot,
+                ledger_slot,
                 trail_out,
                 query_tensor,
                 key_tensor,
@@ -5365,14 +5366,14 @@ impl CognitiveCircuitActivation {
 /// 8-byte (`#[repr(C, align(8))]`) chronological trajectory ledger encoding the last 8
 /// multi-scale cognitive operations (`[Scale | Op | Intensity]`) inside a single `u64` register.
 ///
-/// Mirrors [`gcso_daes_slot_t::telemetry_mini_ledger`] 1:1 so observed scale transitions and
+/// Mirrors [`gcso_ledger_slot_t::telemetry_mini_ledger`] 1:1 so observed scale transitions and
 /// reasoning habits act directly as reusable persona circuit parameters via
 /// [`ManifoldGatewaySignal`] and [`StigmergicScaleLayer`].
 #[repr(C, align(8))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct CognitiveTrajectoryLedger {
     /// Chronological byte slots where index `0` is the most recent [`CognitiveStepOp`].
-    pub steps: [u8; DAES_MINI_LEDGER_LEN],
+    pub steps: [u8; LEDGER_HISTORY_LEN],
 }
 
 // SAFETY: `CognitiveTrajectoryLedger` is `#[repr(C, align(8))]` wrapping `[u8; 8]` with zero padding.
@@ -5394,7 +5395,7 @@ impl CognitiveTrajectoryLedger {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            steps: [0u8; DAES_MINI_LEDGER_LEN],
+            steps: [0u8; LEDGER_HISTORY_LEN],
         }
     }
 
@@ -5417,16 +5418,18 @@ impl CognitiveTrajectoryLedger {
     /// Loads the cognitive trajectory directly from `slot.telemetry_mini_ledger`.
     #[inline(always)]
     #[must_use]
-    pub const fn from_daes_slot(slot: &gcso_daes_slot_t) -> Self {
+    pub const fn from_ledger_slot(slot: &gcso_ledger_slot_t) -> Self {
         Self {
             steps: slot.telemetry_mini_ledger,
         }
     }
 
-    /// Stores this trajectory back into `slot.telemetry_mini_ledger`.
+    /// Stores this trajectory back into `slot.telemetry_mini_ledger` and sets
+    /// [`LEDGER_FLAG_COGNITIVE_TRAJECTORY`] in `slot.auto_tune_flags`.
     #[inline(always)]
-    pub const fn write_to_daes_slot(&self, slot: &mut gcso_daes_slot_t) {
+    pub const fn write_to_ledger_slot(&self, slot: &mut gcso_ledger_slot_t) {
         slot.telemetry_mini_ledger = self.steps;
+        slot.auto_tune_flags |= LEDGER_FLAG_COGNITIVE_TRAJECTORY;
     }
 
     /// Shifts chronological history by one byte and pushes `step` into slot `0`.
@@ -5461,7 +5464,7 @@ impl CognitiveTrajectoryLedger {
         let mut counts = [0u8; 8];
         let mut active = 0u8;
         let mut i = 0usize;
-        while i < DAES_MINI_LEDGER_LEN {
+        while i < LEDGER_HISTORY_LEN {
             let s = CognitiveStepOp(self.steps[i]);
             if s.is_active() {
                 let op = (s.0 >> 3) as usize & 0x07;
@@ -5479,7 +5482,7 @@ impl CognitiveTrajectoryLedger {
     pub const fn scale_counts(&self) -> [u8; 4] {
         let mut counts = [0u8; 4];
         let mut i = 0usize;
-        while i < DAES_MINI_LEDGER_LEN {
+        while i < LEDGER_HISTORY_LEN {
             let s = CognitiveStepOp(self.steps[i]);
             if s.is_active() {
                 counts[(s.granularity() as usize) & 3] += 1;
@@ -6366,18 +6369,18 @@ impl<T: StigmergicSwarmOps + ?Sized> StigmergicLayeredSwarmExt for T {}
 pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
     /// Projects `layer` across `input_words`, resolves the active pointer trail in the Micro-Swarm
     /// at the activated granularity tier, and records the emitted [`CognitiveStepOp`] into
-    /// `daes_slot.telemetry_mini_ledger`.
+    /// `ledger_slot.telemetry_mini_ledger`.
     ///
     /// # Errors
     /// Propagates any error from [`super::hot_path::PointerActionHub::step_pointer`] or
-    /// [`super::telemetry::DaesScratchpad::telemetry_push`].
+    /// [`super::telemetry::FastPathLedger::telemetry_push`].
     #[inline]
     fn orchestrate_scale_layer(
         &mut self,
         layer: &(impl StigmergicScaleLayer + ?Sized),
         input_ptr: gcso_tagged_ptr_t,
         input_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         layer_index: usize,
         total_layers: usize,
@@ -6387,7 +6390,7 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
         CognitiveTrajectoryLedger,
         SwarmResolutionReport,
     )> {
-        let mut ledger = CognitiveTrajectoryLedger::from_daes_slot(daes_slot);
+        let mut ledger = CognitiveTrajectoryLedger::from_ledger_slot(ledger_slot);
         let proj = layer.project_scale_layer(input_words, &ledger, layer_index, total_layers);
         let eff_ptr = gcso_tagged_ptr_t(if input_ptr.is_null() {
             proj.frame.tagged_ptr
@@ -6405,14 +6408,14 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
         );
         self.step_pointer(report.evolved_ptr.raw(), trail_out)?;
         ledger.push_step(proj.emitted_step);
-        ledger.write_to_daes_slot(daes_slot);
-        daes_slot.telemetry_ring_head = daes_slot.telemetry_ring_head.wrapping_add(1);
+        ledger.write_to_ledger_slot(ledger_slot);
+        ledger_slot.telemetry_ring_head = ledger_slot.telemetry_ring_head.wrapping_add(1);
         Ok((proj, ledger, report))
     }
 
     /// Executes an elastic `N`-layer cascade (`depth_n` in `1..=layers.len()`) across a slice of
     /// [`StigmergicScaleLayer`] stages, forwarding orthogonal residuals from coarse layers to fine
-    /// layers and updating `daes_slot`'s [`CognitiveTrajectoryLedger`] at every scale step.
+    /// layers and updating `ledger_slot`'s [`CognitiveTrajectoryLedger`] at every scale step.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `layers` is empty or `depth_n == 0`, or
@@ -6424,7 +6427,7 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
         depth_n: usize,
         input_ptr: gcso_tagged_ptr_t,
         input_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
     ) -> GcsoResult<(
@@ -6441,7 +6444,7 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
                 &layers[0],
                 input_ptr,
                 input_words,
-                daes_slot,
+                ledger_slot,
                 trail_out,
                 0,
                 active_n,
@@ -6457,7 +6460,7 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
                 &layers[i],
                 last_proj.2.evolved_ptr,
                 &residual,
-                daes_slot,
+                ledger_slot,
                 trail_out,
                 i,
                 active_n,
@@ -6532,14 +6535,14 @@ const _: () = {
     assert!(align_of::<CognitiveStepOp>() == 1);
     assert!(size_of::<CognitiveCircuitActivation>() == 8);
     assert!(align_of::<CognitiveCircuitActivation>() == 8);
-    assert!(size_of::<CognitiveTrajectoryLedger>() == DAES_MINI_LEDGER_LEN);
+    assert!(size_of::<CognitiveTrajectoryLedger>() == LEDGER_HISTORY_LEN);
     assert!(align_of::<CognitiveTrajectoryLedger>() == 8);
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abi::gcso_daes_slot_t;
+    use crate::abi::gcso_ledger_slot_t;
     use crate::traits::aligned::{AlignedBuffer128, AlignedBuffer64};
     use crate::traits::telemetry::TRAIL_FLAG_LIMINAL_BEAT_ACTIVE;
 
@@ -6702,7 +6705,7 @@ mod tests {
         assert_eq!(restored[1].anchor_id, 202);
 
         let bloom = ContrastivePhaseBloomFilter::new();
-        let daes = gcso_daes_slot_t::default();
+        let ledger = gcso_ledger_slot_t::default();
         let reports_arr = [f1.to_causal_report(), f2.to_causal_report()];
         let trails_arr = [query_trail];
         let mut container_buf = AlignedBuffer128::<u8, 1024>::new([0u8; 1024]);
@@ -6710,7 +6713,7 @@ mod tests {
             &centroids[..2],
             &trails_arr,
             Some(&bloom),
-            Some(&daes),
+            Some(&ledger),
             1_774_900_000,
             &mut container_buf.data,
         )
@@ -6724,7 +6727,7 @@ mod tests {
             &centroids,
             &trails_arr,
             Some(&bloom),
-            Some(&daes),
+            Some(&ledger),
             &reports_arr,
             1_774_900_000,
             &mut container_buf.data,
@@ -6766,9 +6769,9 @@ mod tests {
         assert_eq!(view.trails.len(), 1);
         assert_eq!(view.trails[0].cluster_id, 202);
         assert_eq!(view.provenance_reports.len(), 2);
-        assert!(view.bloom.is_some() && view.daes.is_some());
-        assert_eq!(view.daes.unwrap().telemetry_ring_head, 1);
-        assert_ne!(view.daes.unwrap().fast_path_bypass_mask, 0);
+        assert!(view.bloom.is_some() && view.ledger.is_some());
+        assert_eq!(view.ledger.unwrap().telemetry_ring_head, 1);
+        assert_ne!(view.ledger.unwrap().fast_path_bypass_mask, 0);
 
         // Verify Top-2 Liminal Bifurcation Routing between two balanced attractors
         let mut lim_centroids = [
@@ -6949,7 +6952,7 @@ mod tests {
 
         // 3. Verify ActionHubScaleOrchestrator executes zero-alloc elastic depth-N cascades and persists trajectory.
         let mut hub = crate::action_hub::ActionHubEngine::new();
-        let mut daes = gcso_daes_slot_t::default();
+        let mut ledger = gcso_ledger_slot_t::default();
         let mut trail = gcso_pointer_trail_t {
             accumulated_phase_delta: [24i8; MAX_ATTENTION_HEADS],
             stigmergic_density: 1.0,
@@ -6969,14 +6972,14 @@ mod tests {
                 3,
                 gcso_tagged_ptr_t::default(),
                 &input_words,
-                &mut daes,
+                &mut ledger,
                 &mut trail,
                 None,
             )
             .unwrap();
         assert_eq!(orch_proj.total_layers, 3);
         assert!(updated_ledger.latest_step().is_some());
-        assert_eq!(daes.telemetry_mini_ledger, updated_ledger.steps);
+        assert_eq!(ledger.telemetry_mini_ledger, updated_ledger.steps);
         assert_eq!(swarm_rep.evolved_ptr.raw(), trail.current_ptr);
     }
 }

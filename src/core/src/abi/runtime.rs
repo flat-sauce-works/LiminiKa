@@ -339,7 +339,7 @@ pub unsafe extern "C" fn gcso_context_serialize(
         header.srl_state_offset = 192;
         header.edbc_state_offset = 192;
         const ZERO_PAYLOAD_192_CRC32: u32 = branchless_crc32_ieee(&[0u8; 192]);
-        header.daes_slot_offset = 256;
+        header.ledger_slot_offset = 256;
         header.checksum_crc32 = ZERO_PAYLOAD_192_CRC32;
 
         header.write_unaligned_to(out_bytes, 0)?;
@@ -484,7 +484,7 @@ pub unsafe extern "C" fn gcso_container_write_four_section_with_reports_zero_cop
     trails: *const gcso_pointer_trail_t,
     num_trails: usize,
     bloom_opt: *const gcso_contrastive_bloom_filter_t,
-    daes_opt: *const gcso_daes_slot_t,
+    ledger_opt: *const gcso_ledger_slot_t,
     reports: *const gcso_causal_provenance_report_t,
     num_reports: usize,
     timestamp_epoch_sec: u64,
@@ -499,7 +499,7 @@ pub unsafe extern "C" fn gcso_container_write_four_section_with_reports_zero_cop
             num_crystals,
             num_trails,
             !bloom_opt.is_null(),
-            !daes_opt.is_null(),
+            !ledger_opt.is_null(),
             num_reports,
         )?;
 
@@ -534,11 +534,11 @@ pub unsafe extern "C" fn gcso_container_write_four_section_with_reports_zero_cop
             unsafe { slice::from_raw_parts(reports, num_reports) }
         };
         // SAFETY: Validated optional pointers and destination buffer length.
-        let ((bloom_ref, daes_ref), dst_slice) = unsafe {
+        let ((bloom_ref, ledger_ref), dst_slice) = unsafe {
             (
                 (
                     FfiHandleRef::from_raw_opt(bloom_opt)?,
-                    FfiHandleRef::from_raw_opt(daes_opt)?,
+                    FfiHandleRef::from_raw_opt(ledger_opt)?,
                 ),
                 slice::from_raw_parts_mut(out_bytes, required),
             )
@@ -548,7 +548,7 @@ pub unsafe extern "C" fn gcso_container_write_four_section_with_reports_zero_cop
             crystals_slice,
             trails_slice,
             bloom_ref.as_deref(),
-            daes_ref.as_deref(),
+            ledger_ref.as_deref(),
             reports_slice,
             timestamp_epoch_sec,
             dst_slice,
@@ -569,7 +569,7 @@ pub unsafe extern "C" fn gcso_container_write_four_section_zero_copy(
     trails: *const gcso_pointer_trail_t,
     num_trails: usize,
     bloom_opt: *const gcso_contrastive_bloom_filter_t,
-    daes_opt: *const gcso_daes_slot_t,
+    ledger_opt: *const gcso_ledger_slot_t,
     timestamp_epoch_sec: u64,
     out_bytes: *mut u8,
     buffer_size_inout: *mut usize,
@@ -582,7 +582,7 @@ pub unsafe extern "C" fn gcso_container_write_four_section_zero_copy(
             trails,
             num_trails,
             bloom_opt,
-            daes_opt,
+            ledger_opt,
             ptr::null(),
             0,
             timestamp_epoch_sec,
@@ -609,7 +609,7 @@ pub unsafe extern "C" fn gcso_container_verify_four_section_with_reports_zero_co
     crystals_ptr_out: *mut *const gcso_crystallized_attractor_record_t,
     trails_ptr_out: *mut *const gcso_pointer_trail_t,
     bloom_ptr_out: *mut *const gcso_contrastive_bloom_filter_t,
-    daes_ptr_out: *mut *const gcso_daes_slot_t,
+    ledger_ptr_out: *mut *const gcso_ledger_slot_t,
     reports_ptr_out: *mut *const gcso_causal_provenance_report_t,
 ) -> GcsoStatus {
     ffi_boundary!({
@@ -654,9 +654,9 @@ pub unsafe extern "C" fn gcso_container_verify_four_section_with_reports_zero_co
             };
         }
         // SAFETY: `FfiHandleMut::from_raw_opt` validates optional output pointers.
-        if let Some(mut dp_out) = unsafe { FfiHandleMut::from_raw_opt(daes_ptr_out)? } {
-            *dp_out = match view.daes {
-                Some(d_ref) => d_ref as *const gcso_daes_slot_t,
+        if let Some(mut dp_out) = unsafe { FfiHandleMut::from_raw_opt(ledger_ptr_out)? } {
+            *dp_out = match view.ledger {
+                Some(d_ref) => d_ref as *const gcso_ledger_slot_t,
                 None => ptr::null(),
             };
         }

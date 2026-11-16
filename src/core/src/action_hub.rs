@@ -44,14 +44,14 @@
 //!
 //! 2. **Zero-Allocation L1D-Resident Sidecar Pointer Table ([`ActionHubEngine`])**:
 //!    Packs a 16-slot inline trail table (`[gcso_pointer_trail_t; 16]` = 2,048 bytes), an 8-lane
-//!    working phase cache window (`AlignedBuffer64<gcso_q7_t, 512>`), a 64-byte [`gcso_daes_slot_t`]
+//!    working phase cache window (`AlignedBuffer64<gcso_q7_t, 512>`), a 64-byte [`gcso_ledger_slot_t`]
 //!    scratchpad, a 64-byte [`ContrastivePhaseBloomFilter`], [`StigmergicThresholds`], and a
 //!    [`PhaseSteeringEngine`] into an exact **2,816-byte (`22 x 128B`), 128-byte cacheline-aligned [`Pod`]
 //!    structure** ($C_{\mathrm{alloc}} = 0$).
 //!
 //! 3. **Blanket Trait Closure**:
 //!    Because [`ActionHubEngine`] implements [`PhaseSteering`], [`PointerActionHub`], [`PspmRouter`],
-//!    [`SrlAdapter`], [`DaesScratchpad`], [`SwarmCellChunk`], [`CausalProvenanceSignal`],
+//!    [`SrlAdapter`], [`FastPathLedger`], [`SwarmCellChunk`], [`CausalProvenanceSignal`],
 //!    [`crate::traits::SystemConstraintSignal`], and [`ManifoldGatewaySignal`], it automatically
 //!    receives the blanket implementations of [`ActionHub`], [`HotPathExecutionEngine`],
 //!    [`HotPathObserver`], [`FractalCascadeCoordinator`], [`ActionHubGatewayExt`],
@@ -84,7 +84,7 @@
 use core::mem::{align_of, offset_of, size_of};
 
 use crate::abi::{
-    gcso_config_t, gcso_daes_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
+    gcso_config_t, gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
     gcso_pspm_config_t, gcso_q7_t, gcso_tagged_ptr_t, GCSO_ERROR_INVALID_ARGUMENT,
 };
 use crate::phase_steering::{PhaseSteeringEngine, DEFAULT_DPSR_HEAD_DIM, DEFAULT_DPSR_NUM_HEADS};
@@ -117,9 +117,8 @@ use crate::traits::primitives::{
     ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
     ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR,
     ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION,
-    DAES_MINI_LEDGER_LEN, DAES_SHORTCUT_SLOTS, DEFAULT_ACTION_HUB_CAPACITY,
-    DEFAULT_RIPA_CLAMP_MAX_RAD, DEFAULT_SLOT_COUPLING_MATRIX_8X8, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS,
+    DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_RIPA_CLAMP_MAX_RAD, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+    FAST_PATH_SHORTCUT_SLOTS, LEDGER_HISTORY_LEN, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
 };
 use crate::traits::rope::{
     dispatch_fused_ripa_and_pspm_words_core, resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim,
@@ -128,10 +127,10 @@ use crate::traits::rope::{
 };
 use crate::traits::telemetry::{
     select_rewire_bridge_and_modulate_with_preloaded_words_64, ContrastivePhaseBloomFilter,
-    DaesScratchpad, StigmergicActionPtrOps, StigmergicSwarmOps, StigmergicTrailOps,
-    DAES_METRIC_FAST_PATH_HIT, DAES_METRIC_LAYER_SKIP_COMPENSATED, DAES_METRIC_PHASE_STEERED,
-    DAES_METRIC_PSPM_ROUTED, DAES_METRIC_REPULSION_APPLIED, DAES_METRIC_SLOT_SYNERGY_ACTIVE,
-    DAES_METRIC_SRL_INJECTED, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY,
+    FastPathLedger, StigmergicActionPtrOps, StigmergicSwarmOps, StigmergicTrailOps,
+    LEDGER_METRIC_FAST_PATH_HIT, LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED,
+    LEDGER_METRIC_PSPM_ROUTED, LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
+    LEDGER_METRIC_SRL_INJECTED, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY,
     NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_DPSR_ACTIVE,
     TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
     TRAIL_FLAG_SYNERGY_RESONANCE,
@@ -930,15 +929,15 @@ impl<A: StigmergicActionReceptor, B: StigmergicActionReceptor> StigmergicActionR
 // 2. `ActionHubEngine` — 2,816-Byte L1D-Resident Sidecar Pointer Table
 // ===================================================================
 
-impl gcso_daes_slot_t {
+impl gcso_ledger_slot_t {
     /// Executes strictly branchless $\mathcal{O}(1)$ fast-path shortcut lookup directly in-place
-    /// on `self` without copying the 64-byte `gcso_daes_slot_t` onto the stack.
+    /// on `self` without copying the 64-byte `gcso_ledger_slot_t` onto the stack.
     #[inline(always)]
     #[must_use]
     pub(crate) const fn lookup_fast_path_branchless(&self, input_key: u64) -> (bool, u64) {
         let mask_hit = ((self.fast_path_bypass_mask & input_key) != 0) & (self.mode == 0);
         let idx = ((input_key.wrapping_mul(0x9E37_79B9_7F4A_7C15)) >> 62) as usize;
-        let candidate = self.fast_path_shortcuts[idx & (DAES_SHORTCUT_SLOTS - 1)];
+        let candidate = self.fast_path_shortcuts[idx & (FAST_PATH_SHORTCUT_SLOTS - 1)];
         let fallback = self.fast_path_shortcuts[0];
         let resolved = branchless_select_u64(candidate != 0, candidate, fallback);
         let valid_hit = mask_hit & (resolved != 0);
@@ -958,10 +957,10 @@ impl gcso_daes_slot_t {
         (hit, gcso_tagged_ptr_t(eff_raw))
     }
 
-    /// Pushes a profiling metric byte code (`DAES_METRIC_*`) into `self.telemetry_mini_ledger` in-place.
+    /// Pushes a profiling metric byte code (`LEDGER_METRIC_*`) into `self.telemetry_mini_ledger` in-place.
     #[inline(always)]
     pub(crate) fn push_telemetry_metric(&mut self, metric_code: u8) {
-        let head = (self.telemetry_ring_head as usize) & (DAES_MINI_LEDGER_LEN - 1);
+        let head = (self.telemetry_ring_head as usize) & (LEDGER_HISTORY_LEN - 1);
         self.telemetry_mini_ledger[head] = metric_code;
         self.telemetry_ring_head = self.telemetry_ring_head.wrapping_add(1);
     }
@@ -973,7 +972,7 @@ impl gcso_daes_slot_t {
 /// # Memory Layout (2,816 Bytes = `22 x 128B` Cache-Line Pairs, Zero Implicit Padding)
 /// - `0..2048` (`2048B`): `trails: [gcso_pointer_trail_t; 16]` (16 inline 128B pointer trails)
 /// - `2048..2560` (`512B`): `slot_phase_bank: AlignedBuffer64<gcso_q7_t, 512>` (8 working lanes $\times$ 64 heads)
-/// - `2560..2624` (`64B`): `daes_slot: gcso_daes_slot_t` (DAES fast-path shortcuts & telemetry ring)
+/// - `2560..2624` (`64B`): `ledger_slot: gcso_ledger_slot_t` (FastPathLedger fast-path shortcuts & telemetry ring)
 /// - `2624..2688` (`64B`): `bloom_filter: ContrastivePhaseBloomFilter` (128-bucket 4-bit Bloom filter)
 /// - `2688..2816` (`128B`): `thresholds` (`32B`) + `slot_weights` (`32B`) + `dpsr` (`16B`) +
 ///   control & telemetry registers (`48B`).
@@ -985,7 +984,7 @@ pub struct ActionHubEngine {
     /// 8-lane working phase cache window (`8 x 64B = 512` bytes, 64-byte aligned).
     pub slot_phase_bank: AlignedBuffer64<gcso_q7_t, HUB_SLOT_BANK_LEN>,
     /// Dynamic Adaptive Extension Scratchpad (64 bytes, 64-byte aligned).
-    pub daes_slot: gcso_daes_slot_t,
+    pub ledger_slot: gcso_ledger_slot_t,
     /// Contrastive Phase Bloom Filter for $\mathcal{O}(1)$ anti-phase repulsion (64 bytes, 64-byte aligned).
     pub bloom_filter: ContrastivePhaseBloomFilter,
     /// Stigmergic threshold regime governing pheromone dynamics and next-action selection (32 bytes).
@@ -1060,7 +1059,7 @@ impl ActionHubEngine {
                 reserved_padding: [0; 8],
             }; ACTION_HUB_INLINE_TRAILS],
             slot_phase_bank: AlignedBuffer64::new([0; HUB_SLOT_BANK_LEN]),
-            daes_slot: gcso_daes_slot_t {
+            ledger_slot: gcso_ledger_slot_t {
                 mode: 0,
                 telemetry_ring_head: 0,
                 telemetry_ring_tail: 0,
@@ -1142,7 +1141,7 @@ impl ActionHubEngine {
         let mut hub = Self::new();
         hub.dpsr = dpsr;
         hub.capacity = config.action_hub_capacity;
-        hub.daes_slot.mode = u32::from(config.daes_mode);
+        hub.ledger_slot.mode = u32::from(config.ledger_mode);
         Ok(hub)
     }
 
@@ -1396,7 +1395,7 @@ impl ActionHubEngine {
 
     /// Executes the primary **Stigmergic Threshold Action-Selecting Orchestration Step** in
     /// zero-allocation constant-time mode ($C_{\mathrm{alloc}} = 0$):
-    /// 1. Resolves DAES fast-path shortcut (`resolve_or_pass_tagged_ptr`).
+    /// 1. Resolves FastPathLedger fast-path shortcut (`resolve_or_pass_tagged_ptr`).
     /// 2. Advances `trail_inout` pointer & accumulates embedded Q7 phase.
     /// 3. Evaluates `self.bloom_filter` contrastive anti-phase repulsion (`apply_phase_conjugate_repulsion_words`).
     /// 4. Scans populated inline trails `self.trails[..active_len]` via
@@ -1409,7 +1408,7 @@ impl ActionHubEngine {
     ///    [`StigmergicActionDecision`] (`PassiveSidecar`, `InertialLayerSkip`, `ExpressPhaseSteer`,
     ///    `PspmSubHeadRoute`, `FullOrchestrationSrl`, `CrystallizeMacroBasin`, or `RepulsionEscape`).
     /// 7. Executes the selected action on `query_tensor` / `key_tensor` / `logits_opt` and logs
-    ///    telemetry into `self.daes_slot`.
+    ///    telemetry into `self.ledger_slot`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `query_tensor` and `key_tensor` alias or have
@@ -1471,7 +1470,7 @@ impl ActionHubEngine {
             }
         }
 
-        let (bypass_hit, eff_ptr) = self.daes_slot.resolve_or_pass_in_place(input_ptr);
+        let (bypass_hit, eff_ptr) = self.ledger_slot.resolve_or_pass_in_place(input_ptr);
 
         self.step_counter = self.step_counter.wrapping_add(1);
         trail_inout.record_pointer_transition(eff_ptr.raw(), 1, 0.0);
@@ -1625,14 +1624,14 @@ impl ActionHubEngine {
             )?;
 
         let srl_flag = (mode_flags & ACTION_MODE_SRL_INJECT) != 0;
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(pspm_routed, DAES_METRIC_PSPM_ROUTED, 0)
-            | branchless_select_u8(srl_flag, DAES_METRIC_SRL_INJECTED, 0)
-            | branchless_select_u8(skip_compensated, DAES_METRIC_LAYER_SKIP_COMPENSATED, 0)
-            | branchless_select_u8(contradiction_repulsed, DAES_METRIC_REPULSION_APPLIED, 0)
-            | branchless_select_u8(found_coherent, DAES_METRIC_SLOT_SYNERGY_ACTIVE, 0);
-        self.daes_slot.push_telemetry_metric(metric);
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(pspm_routed, LEDGER_METRIC_PSPM_ROUTED, 0)
+            | branchless_select_u8(srl_flag, LEDGER_METRIC_SRL_INJECTED, 0)
+            | branchless_select_u8(skip_compensated, LEDGER_METRIC_LAYER_SKIP_COMPENSATED, 0)
+            | branchless_select_u8(contradiction_repulsed, LEDGER_METRIC_REPULSION_APPLIED, 0)
+            | branchless_select_u8(found_coherent, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, 0);
+        self.ledger_slot.push_telemetry_metric(metric);
 
         self.last_selected_trail_id = selected_id;
         self.last_entropy_h_tilde = branchless_select_f32(
@@ -2015,11 +2014,11 @@ impl VisualAttentionSteering for ActionHubEngine {}
 impl PspmRouter for ActionHubEngine {}
 impl SrlAdapter for ActionHubEngine {}
 
-impl DaesScratchpad for ActionHubEngine {
+impl FastPathLedger for ActionHubEngine {
     #[inline]
     fn evaluate_auto_tune(
         &self,
-        slot: &gcso_daes_slot_t,
+        slot: &gcso_ledger_slot_t,
         config_out: &mut gcso_config_t,
     ) -> GcsoResult<()> {
         let word = u64::from_le_bytes(slot.telemetry_mini_ledger);
@@ -2032,8 +2031,8 @@ impl DaesScratchpad for ActionHubEngine {
         config_out.ripa_clamp_max_rad = branchless_clamp_f32(base_ripa * damping, 0.01, 0.25);
         config_out.qdps_min_step_rad = self.dpsr.qdps_min_step_rad();
         config_out.action_hub_capacity = self.capacity;
-        config_out.daes_mode = (slot.mode & 0xFF) as u8;
-        let _ = DAES_MINI_LEDGER_LEN;
+        config_out.ledger_mode = (slot.mode & 0xFF) as u8;
+        let _ = LEDGER_HISTORY_LEN;
         Ok(())
     }
 }
@@ -2347,7 +2346,7 @@ const _: () = {
     assert!(size_of::<ActionHubEngine>() == 2816 && align_of::<ActionHubEngine>() == 128);
     assert!(offset_of!(ActionHubEngine, trails) == 0);
     assert!(offset_of!(ActionHubEngine, slot_phase_bank) == 2048);
-    assert!(offset_of!(ActionHubEngine, daes_slot) == 2560);
+    assert!(offset_of!(ActionHubEngine, ledger_slot) == 2560);
     assert!(offset_of!(ActionHubEngine, bloom_filter) == 2624);
     assert!(offset_of!(ActionHubEngine, thresholds) == 2688);
 

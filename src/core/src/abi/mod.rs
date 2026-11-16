@@ -107,9 +107,9 @@ use crate::traits::rope::{
     PspmRouter, SrlAdapter,
 };
 use crate::traits::telemetry::{
-    ContrastivePhaseBloomFilter, DaesScratchpad, PagedBitmaskOps, StigmergicActionPtrOps,
-    StigmergicSwarmOps, StigmergicTrailOps, SwarmResolutionReport, DAES_METRIC_PHASE_STEERED,
-    DAES_METRIC_PSPM_ROUTED, DAES_METRIC_REPULSION_APPLIED, DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+    ContrastivePhaseBloomFilter, FastPathLedger, PagedBitmaskOps, StigmergicActionPtrOps,
+    StigmergicSwarmOps, StigmergicTrailOps, SwarmResolutionReport, LEDGER_METRIC_PHASE_STEERED,
+    LEDGER_METRIC_PSPM_ROUTED, LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
     MAX_ATTRACTOR_PULL_FORCE, NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
     TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
     TRAIL_FLAG_SYNERGY_RESONANCE,
@@ -802,7 +802,7 @@ mod tests {
         let mut c2f_bayes_scores = [0.0f32, 0.0f32];
         let mut c2f_macro_aid = 0u32;
         let mut c2f_coh_cnt = 0u32;
-        let mut daes = gcso_daes_slot_t::default();
+        let mut ledger = gcso_ledger_slot_t::default();
         let pspm_cfg = gcso_pspm_config_t {
             num_fact_heads: 8,
             num_logic_heads: 4,
@@ -870,7 +870,7 @@ mod tests {
                     0.25,
                     &pspm_cfg,
                     0.0,
-                    &mut daes,
+                    &mut ledger,
                     q_buf.as_mut_ptr(),
                     k_buf.as_mut_ptr(),
                     &mut c2f_cand_win_k,
@@ -889,8 +889,8 @@ mod tests {
             assert_eq!(c2f_coh_cnt, 1);
             assert!(c2f_bayes_scores[1] > 1.0 && c2f_bayes_scores[0] < -0.5);
             assert_ne!(
-                daes.telemetry_mini_ledger[0]
-                    & (DAES_METRIC_PHASE_STEERED | DAES_METRIC_PSPM_ROUTED),
+                ledger.telemetry_mini_ledger[0]
+                    & (LEDGER_METRIC_PHASE_STEERED | LEDGER_METRIC_PSPM_ROUTED),
                 0
             );
         }
@@ -944,7 +944,7 @@ mod tests {
         let mut c_ptr: *const gcso_crystallized_attractor_record_t = ptr::null();
         let mut t_ptr: *const gcso_pointer_trail_t = ptr::null();
         let mut b_ptr: *const gcso_contrastive_bloom_filter_t = ptr::null();
-        let mut d_ptr: *const gcso_daes_slot_t = ptr::null();
+        let mut d_ptr: *const gcso_ledger_slot_t = ptr::null();
         let mut r_ptr: *const gcso_causal_provenance_report_t = ptr::null();
 
         // SAFETY: Local stack buffers satisfy 128B alignment and disjointness invariants.
@@ -956,7 +956,7 @@ mod tests {
                     cand_trails.as_ptr(),
                     1,
                     &bloom,
-                    &daes,
+                    &ledger,
                     reports_arr.as_ptr(),
                     1,
                     1_774_900_000,
@@ -973,7 +973,7 @@ mod tests {
                     cand_trails.as_ptr(),
                     1,
                     &bloom,
-                    &daes,
+                    &ledger,
                     reports_arr.as_ptr(),
                     1,
                     1_774_900_000,

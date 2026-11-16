@@ -31,7 +31,7 @@
 #![allow(clippy::field_reassign_with_default)]
 
 use crate::abi::{
-    gcso_config_t, gcso_daes_slot_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t,
+    gcso_config_t, gcso_ledger_slot_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t,
     gcso_snapshot_header_t, gcso_zimms_descriptor_t, GCSO_ERROR_BUFFER_TOO_SMALL,
     GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER,
 };
@@ -48,12 +48,13 @@ use crate::traits::primitives::{
     crc32_fold_stamped_crystal_128b, crc32_slice16_indep_hi1_u32, crc32_slice16_indep_lo1_u32,
     crc32_step_block64_words, crc32_step_l16, crc32_step_l3, crc32_step_l32, crc32_step_l4,
     crc32_step_l8, init_snapshot_header, validate_snapshot_header, verify_snapshot_payload_crc32,
-    ACTION_MODE_PSPM_ROUTE, CRC32_ZIMMS_DESC_BASE_SEED, DAES_MINI_LEDGER_LEN, DAES_SHORTCUT_SLOTS,
+    ACTION_MODE_PSPM_ROUTE, CRC32_ZIMMS_DESC_BASE_SEED, FAST_PATH_SHORTCUT_SLOTS,
+    LEDGER_HISTORY_LEN,
 };
 pub use crate::traits::primitives::{PprcKeyframePacket, PprcMotionDeltaPacket};
 use crate::traits::telemetry::{
-    ContrastivePhaseBloomFilter, DAES_METRIC_PHASE_STEERED, DAES_METRIC_PSPM_ROUTED,
-    DAES_METRIC_REPULSION_APPLIED, DAES_METRIC_SLOT_SYNERGY_ACTIVE, NUM_SWARM_MICRO_CELLS,
+    ContrastivePhaseBloomFilter, LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_PSPM_ROUTED,
+    LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, NUM_SWARM_MICRO_CELLS,
 };
 use crate::traits::{DnpPacketDispatcher, GcsoResult, Pod, PprcCache, ZimmsStorage};
 use core::mem::{align_of, offset_of, size_of};
@@ -201,8 +202,8 @@ pub struct GcsoFourSectionView<'a> {
     pub trails: &'a [gcso_pointer_trail_t],
     /// Section 3a: Optional zero-copy reference to the 64-byte Contrastive Phase Bloom Filter.
     pub bloom: Option<&'a ContrastivePhaseBloomFilter>,
-    /// Section 3b: Optional zero-copy reference to the 64-byte DAES telemetry & shortcut slot.
-    pub daes: Option<&'a gcso_daes_slot_t>,
+    /// Section 3b: Optional zero-copy reference to the 64-byte FastPathLedger telemetry & shortcut slot.
+    pub ledger: Option<&'a gcso_ledger_slot_t>,
     /// Section 3c: Zero-copy slice of 16-byte [`CausalProvenanceReport`] diagnostic history entries.
     pub provenance_reports: &'a [CausalProvenanceReport],
 }
@@ -217,9 +218,9 @@ impl<'a> GcsoFourSectionView<'a> {
         num_crystals: usize,
         num_trails: usize,
         has_bloom: bool,
-        has_daes: bool,
+        has_ledger: bool,
     ) -> GcsoResult<usize> {
-        Self::required_byte_len_with_reports(num_crystals, num_trails, has_bloom, has_daes, 0)
+        Self::required_byte_len_with_reports(num_crystals, num_trails, has_bloom, has_ledger, 0)
     }
 
     /// Computes the exact 128-byte-aligned container byte length required for the 4 sections including `num_reports`.
@@ -231,7 +232,7 @@ impl<'a> GcsoFourSectionView<'a> {
         num_crystals: usize,
         num_trails: usize,
         has_bloom: bool,
-        has_daes: bool,
+        has_ledger: bool,
         num_reports: usize,
     ) -> GcsoResult<usize> {
         let off_crystals = GCSO_FOUR_SECTION_HEADER_BYTES;
@@ -255,15 +256,15 @@ impl<'a> GcsoFourSectionView<'a> {
         } else {
             0
         };
-        let Some(off_daes) = off_bloom.checked_add(bloom_bytes) else {
+        let Some(off_ledger) = off_bloom.checked_add(bloom_bytes) else {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         };
-        let daes_bytes = if has_daes {
-            size_of::<gcso_daes_slot_t>()
+        let ledger_bytes = if has_ledger {
+            size_of::<gcso_ledger_slot_t>()
         } else {
             0
         };
-        let Some(off_reports) = off_daes.checked_add(daes_bytes) else {
+        let Some(off_reports) = off_ledger.checked_add(ledger_bytes) else {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         };
         let Some(reports_bytes) = num_reports.checked_mul(size_of::<CausalProvenanceReport>())
@@ -281,7 +282,7 @@ impl<'a> GcsoFourSectionView<'a> {
         Ok((min_end + 127) & !127usize)
     }
 
-    /// Serializes `crystals`, `trails`, `bloom_opt`, and `daes_opt` into `dst_bytes` and stamps IEEE 802.3 CRC32s.
+    /// Serializes `crystals`, `trails`, `bloom_opt`, and `ledger_opt` into `dst_bytes` and stamps IEEE 802.3 CRC32s.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `dst_bytes.len() < required_byte_len(...)`.
@@ -290,7 +291,7 @@ impl<'a> GcsoFourSectionView<'a> {
         crystals: &[CrystallizedAttractorRecord],
         trails: &[gcso_pointer_trail_t],
         bloom_opt: Option<&ContrastivePhaseBloomFilter>,
-        daes_opt: Option<&gcso_daes_slot_t>,
+        ledger_opt: Option<&gcso_ledger_slot_t>,
         timestamp_epoch_sec: u64,
         dst_bytes: &mut [u8],
     ) -> GcsoResult<usize> {
@@ -298,14 +299,14 @@ impl<'a> GcsoFourSectionView<'a> {
             crystals,
             trails,
             bloom_opt,
-            daes_opt,
+            ledger_opt,
             &[],
             timestamp_epoch_sec,
             dst_bytes,
         )
     }
 
-    /// Serializes `crystals`, `trails`, `bloom_opt`, `daes_opt`, and `provenance_reports` into `dst_bytes`.
+    /// Serializes `crystals`, `trails`, `bloom_opt`, `ledger_opt`, and `provenance_reports` into `dst_bytes`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `dst_bytes.len() < required_byte_len_with_reports(...)`.
@@ -314,7 +315,7 @@ impl<'a> GcsoFourSectionView<'a> {
         crystals: &[CrystallizedAttractorRecord],
         trails: &[gcso_pointer_trail_t],
         bloom_opt: Option<&ContrastivePhaseBloomFilter>,
-        daes_opt: Option<&gcso_daes_slot_t>,
+        ledger_opt: Option<&gcso_ledger_slot_t>,
         provenance_reports: &[CausalProvenanceReport],
         timestamp_epoch_sec: u64,
         dst_bytes: &mut [u8],
@@ -323,7 +324,7 @@ impl<'a> GcsoFourSectionView<'a> {
             crystals.len(),
             trails.len(),
             bloom_opt.is_some(),
-            daes_opt.is_some(),
+            ledger_opt.is_some(),
             provenance_reports.len(),
         )?;
         if dst_bytes.len() < total_len {
@@ -347,8 +348,8 @@ impl<'a> GcsoFourSectionView<'a> {
                 0
             };
         let off_reports = off_daes
-            + if daes_opt.is_some() {
-                size_of::<gcso_daes_slot_t>()
+            + if ledger_opt.is_some() {
+                size_of::<gcso_ledger_slot_t>()
             } else {
                 0
             };
@@ -362,8 +363,8 @@ impl<'a> GcsoFourSectionView<'a> {
         if let Some(bloom) = bloom_opt {
             bloom.write_unaligned_to(buf, off_bloom)?;
         }
-        if let Some(daes) = daes_opt {
-            daes.write_unaligned_to(buf, off_daes)?;
+        if let Some(ledger) = ledger_opt {
+            ledger.write_unaligned_to(buf, off_daes)?;
         }
         CausalProvenanceReport::write_unaligned_slice_to(provenance_reports, buf, off_reports)?;
         if total_len > end_reports {
@@ -392,10 +393,10 @@ impl<'a> GcsoFourSectionView<'a> {
         header.dpsr_state_offset = after_crystals as u64;
         header.edbc_state_offset = off_bloom as u64;
         header.action_hub_offset = off_trails as u64;
-        header.daes_slot_offset = off_daes as u32;
+        header.ledger_slot_offset = off_daes as u32;
         header.checksum_crc32 = checksum_crc32;
         header.reserved_padding[0] = u8::from(bloom_opt.is_some());
-        header.reserved_padding[1] = u8::from(daes_opt.is_some());
+        header.reserved_padding[1] = u8::from(ledger_opt.is_some());
         let rep_cnt = (provenance_reports.len().min(u32::MAX as usize) as u32).to_le_bytes();
         header.reserved_padding[4] = rep_cnt[0];
         header.reserved_padding[5] = rep_cnt[1];
@@ -437,7 +438,7 @@ impl<'a> GcsoFourSectionView<'a> {
         let end_crystals = header.dpsr_state_offset as usize;
         let off_trails = header.action_hub_offset as usize;
         let off_bloom = header.edbc_state_offset as usize;
-        let off_daes = header.daes_slot_offset as usize;
+        let off_daes = header.ledger_slot_offset as usize;
 
         if off_crystals < GCSO_FOUR_SECTION_HEADER_BYTES
             || off_crystals > end_crystals
@@ -509,15 +510,15 @@ impl<'a> GcsoFourSectionView<'a> {
             None
         };
 
-        let has_daes = has_daes_flag & ((total_len - off_daes) >= size_of::<gcso_daes_slot_t>());
-        let daes = if has_daes {
-            Some(gcso_daes_slot_t::from_bytes_at(bytes, off_daes)?)
+        let has_daes = has_daes_flag & ((total_len - off_daes) >= size_of::<gcso_ledger_slot_t>());
+        let ledger = if has_daes {
+            Some(gcso_ledger_slot_t::from_bytes_at(bytes, off_daes)?)
         } else {
             None
         };
         let off_reports = off_daes
             + if has_daes {
-                size_of::<gcso_daes_slot_t>()
+                size_of::<gcso_ledger_slot_t>()
             } else {
                 0
             };
@@ -533,7 +534,7 @@ impl<'a> GcsoFourSectionView<'a> {
             crystals,
             trails,
             bloom,
-            daes,
+            ledger,
             provenance_reports,
         })
     }
@@ -565,7 +566,7 @@ impl<'a> GcsoFourSectionView<'a> {
         let end_crystals = header.dpsr_state_offset as usize;
         let off_trails = header.action_hub_offset as usize;
         let off_bloom = header.edbc_state_offset as usize;
-        let off_daes = header.daes_slot_offset as usize;
+        let off_daes = header.ledger_slot_offset as usize;
 
         if off_crystals < GCSO_FOUR_SECTION_HEADER_BYTES
             || off_crystals > end_crystals
@@ -605,24 +606,25 @@ impl<'a> GcsoFourSectionView<'a> {
         zimms_bytes: &mut [u8],
         header: &gcso_snapshot_header_t,
         total_len: usize,
-        off_daes: usize,
+        off_ledger: usize,
         metric_code: u8,
         shortcut_ptr: u64,
     ) -> GcsoResult<bool> {
-        let has_daes = (header.reserved_padding[1] != 0)
-            & ((total_len - off_daes) >= size_of::<gcso_daes_slot_t>());
-        if has_daes {
-            let daes_mut = gcso_daes_slot_t::from_bytes_mut_at(zimms_bytes, off_daes)?;
-            let ring_head = (daes_mut.telemetry_ring_head as usize) & (DAES_MINI_LEDGER_LEN - 1);
-            daes_mut.telemetry_mini_ledger[ring_head] = metric_code;
-            daes_mut.telemetry_ring_head = daes_mut.telemetry_ring_head.wrapping_add(1);
+        let has_ledger = (header.reserved_padding[1] != 0)
+            & ((total_len - off_ledger) >= size_of::<gcso_ledger_slot_t>());
+        if has_ledger {
+            let ledger_mut = gcso_ledger_slot_t::from_bytes_mut_at(zimms_bytes, off_ledger)?;
+            let ring_head = (ledger_mut.telemetry_ring_head as usize) & (LEDGER_HISTORY_LEN - 1);
+            ledger_mut.telemetry_mini_ledger[ring_head] = metric_code;
+            ledger_mut.telemetry_ring_head = ledger_mut.telemetry_ring_head.wrapping_add(1);
             if shortcut_ptr != 0 {
                 let sc_idx = ((shortcut_ptr.wrapping_mul(0x9E37_79B9_7F4A_7C15)) >> 62) as usize;
-                daes_mut.fast_path_shortcuts[sc_idx & (DAES_SHORTCUT_SLOTS - 1)] = shortcut_ptr;
-                daes_mut.fast_path_bypass_mask |= shortcut_ptr;
+                ledger_mut.fast_path_shortcuts[sc_idx & (FAST_PATH_SHORTCUT_SLOTS - 1)] =
+                    shortcut_ptr;
+                ledger_mut.fast_path_bypass_mask |= shortcut_ptr;
             }
         }
-        Ok(has_daes)
+        Ok(has_ledger)
     }
 
     #[inline]
@@ -831,15 +833,15 @@ impl<'a> GcsoFourSectionView<'a> {
 
         let metric_code = branchless_select_u8(
             rep.is_cohomology_repulsion(),
-            DAES_METRIC_REPULSION_APPLIED,
-            DAES_METRIC_PHASE_STEERED,
+            LEDGER_METRIC_REPULSION_APPLIED,
+            LEDGER_METRIC_PHASE_STEERED,
         ) | branchless_select_u8(
             (frame.action_mode_flags & ACTION_MODE_PSPM_ROUTE) != 0,
-            DAES_METRIC_PSPM_ROUTED,
+            LEDGER_METRIC_PSPM_ROUTED,
             0,
         ) | branchless_select_u8(
             (frame.provenance_bits & CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED) != 0,
-            DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+            LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
             0,
         );
         let shortcut_ptr =
@@ -862,7 +864,7 @@ impl<'a> GcsoFourSectionView<'a> {
         if num_reports > 0 {
             let off_reports = off_daes
                 + if has_daes {
-                    size_of::<gcso_daes_slot_t>()
+                    size_of::<gcso_ledger_slot_t>()
                 } else {
                     0
                 };
@@ -962,7 +964,7 @@ impl<'a> GcsoFourSectionView<'a> {
     /// Routes `trails[trail_idx]` in-place against the top-2 macro centroids in `zimms_bytes`
     /// and returns both the routing metadata and the 3 register-resident 8-word phase arrays
     /// `(raw_w, fact_w, logic_w)` together with `(header, total_len, off_daes, updated_ptr)` so
-    /// optional Q/K steering callers can fuse their DAES telemetry bits before finalizing the header.
+    /// optional Q/K steering callers can fuse their FastPathLedger telemetry bits before finalizing the header.
     #[inline(always)]
     pub(crate) fn route_four_section_top2_liminal_core_in_place(
         zimms_bytes: &mut [u8],
@@ -1039,7 +1041,7 @@ impl<'a> GcsoFourSectionView<'a> {
     /// **Zero-Copy In-Place Top-2 Liminal Bifurcation Routing on a 4-Section `.gcso` Container**:
     /// Routes `trails[trail_idx]` inside Section 2 against the Top-2 nearest macro centroids in
     /// Section 1 (`crystals`) via [`CrystallizedAttractorRecord::route_top2_liminal_centroids_64`],
-    /// updates Section 3b (`daes`) telemetry if present, and stamps `header.checksum_crc32` in-place.
+    /// updates Section 3b (`ledger`) telemetry if present, and stamps `header.checksum_crc32` in-place.
     ///
     /// Returns `(primary_idx, secondary_idx, primary_anchor_id, secondary_anchor_id, blended_coherence, total_gravity, is_liminal_bifurcation)`.
     ///
@@ -1074,8 +1076,11 @@ impl<'a> GcsoFourSectionView<'a> {
             pull_step_u7,
             liminal_gravity_ratio_thresh,
         )?;
-        let metric_code =
-            branchless_select_u8((aid1 != 0) | is_liminal, DAES_METRIC_SLOT_SYNERGY_ACTIVE, 0);
+        let metric_code = branchless_select_u8(
+            (aid1 != 0) | is_liminal,
+            LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
+            0,
+        );
         let _ = Self::update_four_section_daes_in_place(
             zimms_bytes,
             &header,
@@ -1098,7 +1103,7 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abi::{gcso_daes_slot_t, gcso_pointer_trail_t, gcso_tagged_ptr_t};
+    use crate::abi::{gcso_ledger_slot_t, gcso_pointer_trail_t, gcso_tagged_ptr_t};
     use crate::traits::aligned::AlignedBuffer64;
     use crate::traits::primitives::{ATTRACTOR_SLOT_PERSONA, MAX_ATTENTION_HEADS};
     use crate::traits::CAUSAL_AXIS_SUBJECTIVE_PERSONA;
@@ -1108,7 +1113,7 @@ mod tests {
         let engine = MappedStorageEngine::new(4096, 1);
         assert_eq!(engine.validate(), Ok(()));
 
-        let daes_slot = gcso_daes_slot_t {
+        let ledger_slot = gcso_ledger_slot_t {
             mode: 1,
             ..Default::default()
         };
@@ -1116,7 +1121,7 @@ mod tests {
         let phases = [12i8; MAX_ATTENTION_HEADS];
         let crc = engine
             .encode_dnp_phase_packet(
-                &daes_slot,
+                &ledger_slot,
                 2,
                 0x09,
                 &phases,
@@ -1126,7 +1131,7 @@ mod tests {
         let mut trail = gcso_pointer_trail_t::default();
         let (slot, mode, is_repulsion) = engine
             .decode_and_apply_dnp_packet_to_trail(
-                &daes_slot,
+                &ledger_slot,
                 &packet_buf.as_aligned_slice(),
                 crc,
                 0.5,
@@ -1141,7 +1146,7 @@ mod tests {
 
         let rep_crc = engine
             .encode_dnp_phase_packet(
-                &daes_slot,
+                &ledger_slot,
                 3,
                 0x05,
                 &phases,
@@ -1151,7 +1156,7 @@ mod tests {
         let mut rep_trail = gcso_pointer_trail_t::default();
         let (rep_slot, rep_mode, rep_is_repulsion) = engine
             .decode_and_apply_dnp_packet_to_trail(
-                &daes_slot,
+                &ledger_slot,
                 &packet_buf.as_aligned_slice(),
                 rep_crc,
                 0.5,

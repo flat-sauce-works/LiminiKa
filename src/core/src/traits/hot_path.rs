@@ -14,7 +14,7 @@
 //!   synchronization (both saturating and circular $S^1$ geodesic-folded).
 //! - **[`HotPathExecutionEngine`] / [`FractalCascadeCoordinator`] / [`HotPathObserver`]**:
 //!   Blanket-implemented micro observers over [`super::ActionHub`] that drive constant-time
-//!   $\mathcal{O}(1)$ `Pointer -> DAES -> Bloom Repulsion -> Unified Field / Toroidal k-Means / Limina / Swarm -> QDPS/RIPA/RoPE -> PSPM/SRL`
+//!   $\mathcal{O}(1)$ `Pointer -> FastPathLedger -> Bloom Repulsion -> Unified Field / Toroidal k-Means / Limina / Swarm -> QDPS/RIPA/RoPE -> PSPM/SRL`
 //!   token cascades with type-level [`BranchlessKernel`] enforcement.
 
 #![deny(unsafe_code)]
@@ -54,9 +54,9 @@ use super::rope::steer_from_swar_words_core_safe;
 use super::telemetry::{
     eval_bitmask_dyadic_ultrametric, select_rewire_bridge_and_modulate_with_preloaded_words_64,
     ContrastivePhaseBloomFilter, PagedBitmaskOps, StigmergicActionPtrOps, StigmergicSwarmOps,
-    StigmergicTrailOps, SwarmResolutionReport, DAES_METRIC_FAST_PATH_HIT,
-    DAES_METRIC_LAYER_SKIP_COMPENSATED, DAES_METRIC_LAZY_UNWRAP_APPLIED, DAES_METRIC_PHASE_STEERED,
-    DAES_METRIC_PSPM_ROUTED, DAES_METRIC_REPULSION_APPLIED, DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+    StigmergicTrailOps, SwarmResolutionReport, LEDGER_METRIC_FAST_PATH_HIT,
+    LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_LAZY_UNWRAP_APPLIED, LEDGER_METRIC_PHASE_STEERED,
+    LEDGER_METRIC_PSPM_ROUTED, LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
     MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS,
     TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
@@ -65,7 +65,7 @@ use super::{
     accumulate_q7_slice_into_words_64, fuse_lazy_unwrap_and_qdps_from_words_64, ActionHub,
 };
 use crate::abi::{
-    gcso_daes_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t,
+    gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t,
     gcso_srl_descriptor_t, gcso_tagged_ptr_t, GCSO_ERROR_INVALID_ARGUMENT,
 };
 
@@ -1155,28 +1155,28 @@ pub trait HotPathExecutionEngine: ActionHub {}
 impl<T: ActionHub + ?Sized> HotPathExecutionEngine for T {}
 
 /// Blanket-implemented Lv.2 Micro-Observer coordinator that drives constant-time
-/// $\mathcal{O}(1)$ `ActionHub -> DAES -> Bloom Repulsion -> Unified Field / Toroidal k-Means / Limina / Swarm -> QDPS/RIPA/RoPE -> PSPM/SRL`
+/// $\mathcal{O}(1)$ `ActionHub -> FastPathLedger -> Bloom Repulsion -> Unified Field / Toroidal k-Means / Limina / Swarm -> QDPS/RIPA/RoPE -> PSPM/SRL`
 /// token cascades.
 pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     /// Executes a constant-time per-token stigmergic cascade over [`ActionHub`]:
     /// 1. Validates tensor dimensions, `GCSO_RESTRICT` disjointness, and radian thresholds.
-    /// 2. Resolves `input_ptr` against `daes_slot`'s $\mathcal{O}(1)$ shortcut table, steps the
+    /// 2. Resolves `input_ptr` against `ledger_slot`'s $\mathcal{O}(1)$ shortcut table, steps the
     ///    pointer transition in `trail_out`, and applies [`ContrastivePhaseBloomFilter`] repulsion.
     /// 3. Filters `trail_out.accumulated_phase_delta` via 8-lane SWAR QDPS and steers
     ///    `query_tensor` and/or `key_tensor` with RIPA soft-clamping (`ripa_max_rad`).
-    /// 4. Pushes the combined telemetry metric code (`DAES_METRIC_*`) into `daes_slot`.
+    /// 4. Pushes the combined telemetry metric code (`LEDGER_METRIC_*`) into `ledger_slot`.
     ///
     /// Returns the observed Bloom repulsion bucket density (`0..=255`).
     ///
     /// # Errors
     /// Propagates any error from [`ActionHub::validate_hub_cascade_params`],
     /// [`ActionHub::step_hub_with_bloom_repulsion`], [`ActionHub::filter_qdps_and_steer_qk_safe`],
-    /// or [`super::telemetry::DaesScratchpad::telemetry_push`].
+    /// or [`super::telemetry::FastPathLedger::telemetry_push`].
     #[inline]
     fn execute_stigmergic_token_cascade(
         &mut self,
         input_ptr: u64,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
@@ -1195,7 +1195,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         let (bypass_hit, _eff_ptr, density, repulsion_active, post_rep_words) = self
             .step_hub_with_bloom_repulsion_to_words(
                 gcso_tagged_ptr_t(input_ptr),
-                daes_slot,
+                ledger_slot,
                 bloom_filter,
                 repulsion_threshold,
                 repulsion_scale_u7,
@@ -1210,10 +1210,10 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             query_tensor,
             key_tensor,
         );
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0);
-        self.telemetry_push(daes_slot, metric)?;
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0);
+        self.telemetry_push(ledger_slot, metric)?;
         Ok(density)
     }
 
@@ -1236,7 +1236,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     fn execute_unified_field_token_cascade(
         &mut self,
         input_ptr: u64,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
@@ -1258,7 +1258,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         let (bypass_hit, _eff_ptr, density, repulsion_active, init_w) = self
             .step_hub_with_bloom_repulsion_to_words(
                 gcso_tagged_ptr_t(input_ptr),
-                daes_slot,
+                ledger_slot,
                 bloom_filter,
                 repulsion_threshold,
                 repulsion_scale_u7,
@@ -1281,17 +1281,17 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             query_tensor,
             key_tensor,
         );
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
-            | branchless_select_u8(active_anchors > 0, DAES_METRIC_SLOT_SYNERGY_ACTIVE, 0);
-        self.telemetry_push(daes_slot, metric)?;
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
+            | branchless_select_u8(active_anchors > 0, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, 0);
+        self.telemetry_push(ledger_slot, metric)?;
         Ok((density, final_pull, mean_coh, active_anchors))
     }
 
     /// Executes a **Single-Pass $SO(2)$ Group-Closure Unified-Field + PSPM Sub-Head Pseudo-MoE +
     /// Inverse-Temperature Logit Sharpening** token cascade over [`ActionHub`]:
-    /// 1. Steps `input_ptr` with `daes_slot` shortcut resolution and `bloom_filter` repulsion.
+    /// 1. Steps `input_ptr` with `ledger_slot` shortcut resolution and `bloom_filter` repulsion.
     /// 2. Folds `anchor_phases` and `anchor_base_energies` on the Single Unified Attractor Manifold.
     /// 3. Applies 8-lane SWAR QDPS step filtering in registers and, when `pspm_config_and_pulse`
     ///    is `Some`, fuses RIPA phase steering and PSPM Fact/Logic/Explore sub-head routing into a
@@ -1309,7 +1309,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     fn execute_unified_field_pspm_and_inv_temp_cascade(
         &mut self,
         input_ptr: u64,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
@@ -1333,7 +1333,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         let (bypass_hit, _eff_ptr, density, repulsion_active, init_w) = self
             .step_hub_with_bloom_repulsion_to_words(
                 gcso_tagged_ptr_t(input_ptr),
-                daes_slot,
+                ledger_slot,
                 bloom_filter,
                 repulsion_threshold,
                 repulsion_scale_u7,
@@ -1424,12 +1424,12 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             }
         }
 
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(pspm_routed, DAES_METRIC_PSPM_ROUTED, 0)
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
-            | branchless_select_u8(active_anchors > 0, DAES_METRIC_SLOT_SYNERGY_ACTIVE, 0);
-        self.telemetry_push(daes_slot, metric)?;
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(pspm_routed, LEDGER_METRIC_PSPM_ROUTED, 0)
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
+            | branchless_select_u8(active_anchors > 0, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, 0);
+        self.telemetry_push(ledger_slot, metric)?;
         Ok((
             density,
             final_pull,
@@ -1441,11 +1441,11 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
 
     /// Executes a **Coarse-to-Fine Online Toroidal $k$-Means / DP-Means Macro-Centroid** token
     /// cascade ($\mathcal{O}(K)$ 64-bit SWAR) over [`ActionHub`]:
-    /// 1. Steps `input_ptr` with `daes_slot` shortcut resolution and `bloom_filter` repulsion.
+    /// 1. Steps `input_ptr` with `ledger_slot` shortcut resolution and `bloom_filter` repulsion.
     /// 2. Routes `trail_out` to the highest-gravity coherent macro centroid $k^*$ in `centroids`
     ///    and steers `query_tensor` and/or `key_tensor` directly from register-resident SWAR words
     ///    via [`ActionHub::route_coarse_to_fine_and_steer_qk_safe`].
-    /// 3. Pushes combined DAES telemetry metrics into `daes_slot`.
+    /// 3. Pushes combined FastPathLedger telemetry metrics into `ledger_slot`.
     ///
     /// Returns `(repulsion_density, selected_cluster_idx, selected_anchor_id, centroid_coherence, gravity_pull)`.
     ///
@@ -1455,7 +1455,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     fn execute_coarse_to_fine_kmeans_token_cascade(
         &mut self,
         input_ptr: u64,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
@@ -1476,7 +1476,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         let (bypass_hit, _eff_ptr, density, repulsion_active, init_w) = self
             .step_hub_with_bloom_repulsion_to_words(
                 gcso_tagged_ptr_t(input_ptr),
-                daes_slot,
+                ledger_slot,
                 bloom_filter,
                 repulsion_threshold,
                 repulsion_scale_u7,
@@ -1498,22 +1498,22 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             query_tensor,
             key_tensor,
         );
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
-            | branchless_select_u8(anchor_id != 0, DAES_METRIC_SLOT_SYNERGY_ACTIVE, 0);
-        self.telemetry_push(daes_slot, metric)?;
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
+            | branchless_select_u8(anchor_id != 0, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, 0);
+        self.telemetry_push(ledger_slot, metric)?;
         Ok((density, cluster_idx, anchor_id, coh, grav))
     }
 
     /// Executes a **Top-2 Liminal Bifurcation Macro-Centroid + Dual-Centroid PSPM** token cascade
     /// ($\mathcal{O}(K)$ 64-bit SWAR) over [`ActionHub`]:
-    /// 1. Steps `input_ptr` with `daes_slot` shortcut resolution and `bloom_filter` repulsion.
+    /// 1. Steps `input_ptr` with `ledger_slot` shortcut resolution and `bloom_filter` repulsion.
     /// 2. Routes `trail_out` against the Top-2 macro centroids $(k_1^*, k_2^*)$ in `centroids`,
     ///    bridging inter-memory *Limina* boundaries along the shortest $S^1$ geodesic when
     ///    $G_2 \ge \tau_{\mathrm{limina}} G_1$, and steers `query_tensor` / `key_tensor` with
     ///    register-resident PSPM sub-head routing via [`ActionHub::route_top2_liminal_and_steer_qk_safe`].
-    /// 3. Pushes combined DAES telemetry metrics into `daes_slot`.
+    /// 3. Pushes combined FastPathLedger telemetry metrics into `ledger_slot`.
     ///
     /// Returns `(repulsion_density, primary_idx, secondary_idx, primary_anchor_id, secondary_anchor_id, blended_coherence, total_gravity, is_liminal_bifurcation)`.
     ///
@@ -1523,7 +1523,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     fn execute_top2_liminal_kmeans_token_cascade(
         &mut self,
         input_ptr: u64,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
@@ -1547,7 +1547,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         let (bypass_hit, _eff_ptr, density, repulsion_active, init_w) = self
             .step_hub_with_bloom_repulsion_to_words(
                 gcso_tagged_ptr_t(input_ptr),
-                daes_slot,
+                ledger_slot,
                 bloom_filter,
                 repulsion_threshold,
                 repulsion_scale_u7,
@@ -1574,16 +1574,16 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             key_tensor,
         )?;
         let pspm_routed = has_q & pspm_config_and_pulse.is_some();
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(pspm_routed, DAES_METRIC_PSPM_ROUTED, 0)
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(pspm_routed, LEDGER_METRIC_PSPM_ROUTED, 0)
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
             | branchless_select_u8(
                 (aid1 != 0) | is_liminal,
-                DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+                LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
                 0,
             );
-        self.telemetry_push(daes_slot, metric)?;
+        self.telemetry_push(ledger_slot, metric)?;
         Ok((
             density, idx1, idx2, aid1, aid2, eff_coh, tot_grav, is_liminal,
         ))
@@ -1592,7 +1592,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     /// Executes a **Limina Bayesian Pointer-Trail + Attention Phase-Interference** token cascade
     /// combining sequential conditional transition probability ($\prod_t P(M_t \mid M_{<t})$ $\times$
     /// Attention phase interference) and stigmergic pointer-chain routing in [`ActionHub`]:
-    /// 1. Steps `input_ptr` with `daes_slot` shortcut resolution and `bloom_filter` repulsion.
+    /// 1. Steps `input_ptr` with `ledger_slot` shortcut resolution and `bloom_filter` repulsion.
     /// 2. Folds `anchor_phases` and `anchor_base_energies` on the single unified manifold via
     ///    [`PointerActionHub::orchestrate_unified_field_resonance`].
     /// 3. If `prev_memory_trail` is provided, bridges the inter-memory **Limina** gap via
@@ -1613,7 +1613,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     fn execute_liminal_bayesian_pointer_cascade(
         &mut self,
         input_ptr: u64,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
@@ -1645,7 +1645,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         let (bypass_hit, _eff_ptr, density, mut repulsion_active, step_w) = self
             .step_hub_with_bloom_repulsion_to_words(
                 gcso_tagged_ptr_t(input_ptr),
-                daes_slot,
+                ledger_slot,
                 bloom_filter,
                 repulsion_threshold,
                 repulsion_scale_u7,
@@ -1693,15 +1693,15 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             query_tensor,
             key_tensor,
         );
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
             | branchless_select_u8(
                 (active_anchors > 0) | prev_memory_trail.is_some(),
-                DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+                LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
                 0,
             );
-        self.telemetry_push(daes_slot, metric)?;
+        self.telemetry_push(ledger_slot, metric)?;
         Ok((
             density,
             trail_out.attractor_pull_force,
@@ -1715,7 +1715,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     /// probability ($\prod_t P(M_t \mid M_{<t})$ $\times$ Attention phase interference) and
     /// stigmergic pointer-chain rewiring in [`ActionHub`] in zero-allocation
     /// ($C_{\mathrm{alloc}} = 0$) mode:
-    /// 1. Resolves `input_ptr` against `daes_slot`, steps `trail_out` (identified by `src_trail_id`),
+    /// 1. Resolves `input_ptr` against `ledger_slot`, steps `trail_out` (identified by `src_trail_id`),
     ///    and applies `bloom_filter` phase-conjugate repulsion.
     /// 2. Folds `anchor_phases` and `anchor_base_energies` on the Single Unified Attractor Manifold
     ///    onto `trail_out` via [`PointerActionHub::orchestrate_unified_field_resonance`].
@@ -1740,7 +1740,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         &mut self,
         src_trail_id: u32,
         input_ptr: u64,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
@@ -1779,7 +1779,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         let (bypass_hit, _eff_ptr, _density, mut repulsion_active, init_w) = self
             .step_hub_with_bloom_repulsion_to_words(
                 gcso_tagged_ptr_t(input_ptr),
-                daes_slot,
+                ledger_slot,
                 bloom_filter,
                 repulsion_threshold,
                 repulsion_scale_u7,
@@ -1852,15 +1852,15 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             query_tensor,
             key_tensor,
         );
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
             | branchless_select_u8(
                 (active_anchors > 0) | found,
-                DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+                LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
                 0,
             );
-        self.telemetry_push(daes_slot, metric)?;
+        self.telemetry_push(ledger_slot, metric)?;
         Ok((
             selected_id,
             bayes_score,
@@ -1884,7 +1884,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     fn execute_unified_field_swarm_token_cascade(
         &mut self,
         input_ptr: gcso_tagged_ptr_t,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
         active_cell_mask: u8,
@@ -1908,7 +1908,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             query_tensor.as_deref(),
             key_tensor.as_deref(),
         )?;
-        let (bypass_hit, effective_ptr) = self.resolve_or_pass_tagged_ptr(daes_slot, input_ptr);
+        let (bypass_hit, effective_ptr) = self.resolve_or_pass_tagged_ptr(ledger_slot, input_ptr);
         let (report, resolved_words) = self.step_and_resolve_in_unified_field_swarm_to_words(
             effective_ptr,
             anchor_phases,
@@ -1958,11 +1958,11 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             }
         }
         let repulsion_active = (trail_out.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0;
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
-            | DAES_METRIC_SLOT_SYNERGY_ACTIVE;
-        self.telemetry_push(daes_slot, metric)?;
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
+            | LEDGER_METRIC_SLOT_SYNERGY_ACTIVE;
+        self.telemetry_push(ledger_slot, metric)?;
         Ok(report)
     }
 
@@ -1978,7 +1978,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     fn execute_full_hot_path_token_cascade(
         &mut self,
         input_ptr: u64,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
@@ -1999,7 +1999,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         let (bypass_hit, _eff_ptr, density, repulsion_active, post_rep_words) = self
             .step_hub_with_bloom_repulsion_to_words(
                 gcso_tagged_ptr_t(input_ptr),
-                daes_slot,
+                ledger_slot,
                 bloom_filter,
                 repulsion_threshold,
                 repulsion_scale_u7,
@@ -2019,11 +2019,11 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         } else {
             0
         };
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
             | extra_metrics;
-        self.telemetry_push(daes_slot, metric)?;
+        self.telemetry_push(ledger_slot, metric)?;
         Ok(density)
     }
 
@@ -2040,7 +2040,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     fn execute_lazy_unwrap_token_cascade(
         &mut self,
         input_ptr: u64,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
@@ -2062,7 +2062,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         let (bypass_hit, _eff_ptr, density, repulsion_active, q_w) = self
             .step_hub_with_bloom_repulsion_to_words(
                 gcso_tagged_ptr_t(input_ptr),
-                daes_slot,
+                ledger_slot,
                 bloom_filter,
                 repulsion_threshold,
                 repulsion_scale_u7,
@@ -2089,11 +2089,11 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
                 None,
             );
         }
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | DAES_METRIC_PHASE_STEERED
-            | DAES_METRIC_LAZY_UNWRAP_APPLIED
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0);
-        self.telemetry_push(daes_slot, metric)?;
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | LEDGER_METRIC_PHASE_STEERED
+            | LEDGER_METRIC_LAZY_UNWRAP_APPLIED
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0);
+        self.telemetry_push(ledger_slot, metric)?;
         Ok(density)
     }
 
@@ -2110,7 +2110,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     fn execute_geodesic_lazy_unwrap_token_cascade(
         &mut self,
         input_ptr: u64,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
@@ -2132,7 +2132,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         let (bypass_hit, _eff_ptr, density, repulsion_active, q_w) = self
             .step_hub_with_bloom_repulsion_to_words(
                 gcso_tagged_ptr_t(input_ptr),
-                daes_slot,
+                ledger_slot,
                 bloom_filter,
                 repulsion_threshold,
                 repulsion_scale_u7,
@@ -2159,11 +2159,11 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
                 None,
             );
         }
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | DAES_METRIC_PHASE_STEERED
-            | DAES_METRIC_LAZY_UNWRAP_APPLIED
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0);
-        self.telemetry_push(daes_slot, metric)?;
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | LEDGER_METRIC_PHASE_STEERED
+            | LEDGER_METRIC_LAZY_UNWRAP_APPLIED
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0);
+        self.telemetry_push(ledger_slot, metric)?;
         Ok(density)
     }
 
@@ -2179,7 +2179,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     fn execute_layer_skip_compensated_cascade(
         &mut self,
         input_ptr: u64,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
@@ -2203,7 +2203,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         let (bypass_hit, _eff_ptr, density, repulsion_active, mut cur_w) = self
             .step_hub_with_bloom_repulsion_to_words(
                 gcso_tagged_ptr_t(input_ptr),
-                daes_slot,
+                ledger_slot,
                 bloom_filter,
                 repulsion_threshold,
                 repulsion_scale_u7,
@@ -2226,11 +2226,11 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             query_tensor,
             key_tensor,
         );
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
-            | branchless_select_u8(skip_layer, DAES_METRIC_LAYER_SKIP_COMPENSATED, 0);
-        self.telemetry_push(daes_slot, metric)?;
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
+            | branchless_select_u8(skip_layer, LEDGER_METRIC_LAYER_SKIP_COMPENSATED, 0);
+        self.telemetry_push(ledger_slot, metric)?;
         Ok(density)
     }
 
@@ -2249,7 +2249,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     fn execute_slot_synergy_token_cascade(
         &mut self,
         input_ptr: u64,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
@@ -2273,7 +2273,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         let (bypass_hit, _eff_ptr, density, repulsion_active, init_w) = self
             .step_hub_with_bloom_repulsion_to_words(
                 gcso_tagged_ptr_t(input_ptr),
-                daes_slot,
+                ledger_slot,
                 bloom_filter,
                 repulsion_threshold,
                 repulsion_scale_u7,
@@ -2298,11 +2298,11 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             query_tensor,
             key_tensor,
         );
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
-            | DAES_METRIC_SLOT_SYNERGY_ACTIVE;
-        self.telemetry_push(daes_slot, metric)?;
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
+            | LEDGER_METRIC_SLOT_SYNERGY_ACTIVE;
+        self.telemetry_push(ledger_slot, metric)?;
         Ok((density, damped_pull, mean_coh, active_neighbors))
     }
 
@@ -2320,7 +2320,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
     fn execute_swarm_quorum_token_cascade(
         &mut self,
         input_ptr: gcso_tagged_ptr_t,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
         slot_weights: &[f32; MAX_ATTRACTOR_DOMAINS],
         coupling_matrix_8x8: u64,
@@ -2345,7 +2345,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             query_tensor.as_deref(),
             key_tensor.as_deref(),
         )?;
-        let (bypass_hit, effective_ptr) = self.resolve_or_pass_tagged_ptr(daes_slot, input_ptr);
+        let (bypass_hit, effective_ptr) = self.resolve_or_pass_tagged_ptr(ledger_slot, input_ptr);
         let (report, resolved_words) = self.step_and_resolve_in_swarm_to_words(
             effective_ptr,
             slot_phase_bank,
@@ -2396,11 +2396,11 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
             }
         }
         let repulsion_active = (trail_out.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0;
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
-            | DAES_METRIC_SLOT_SYNERGY_ACTIVE;
-        self.telemetry_push(daes_slot, metric)?;
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
+            | LEDGER_METRIC_SLOT_SYNERGY_ACTIVE;
+        self.telemetry_push(ledger_slot, metric)?;
         Ok(report)
     }
 }
@@ -2410,7 +2410,7 @@ impl<T: ActionHub + ?Sized> FractalCascadeCoordinator for T {}
 /// Unified Lv.2 Micro Observer trait over [`ActionHub`] (`traits/hot_path.rs`).
 ///
 /// Observes [`ActionHub`] as a strictly branchless, constant-time $\mathcal{O}(1)$
-/// `Pointer -> DAES -> Unified Field / Toroidal k-Means / Limina / Swarm -> RoPE (DPSR/RIPA/QDPS) -> PSPM/SRL`
+/// `Pointer -> FastPathLedger -> Unified Field / Toroidal k-Means / Limina / Swarm -> RoPE (DPSR/RIPA/QDPS) -> PSPM/SRL`
 /// execution pipeline.
 pub trait HotPathObserver: HotPathExecutionEngine + FractalCascadeCoordinator {}
 
@@ -2430,7 +2430,7 @@ mod tests {
         PhaseSteering, PspmRouter, SrlAdapter, VisualAttentionSteering,
     };
     use crate::traits::telemetry::{
-        DaesScratchpad, DEFAULT_SWARM_QUORUM_THRESHOLD, DEFAULT_SWARM_TOLERANCE_Q7,
+        FastPathLedger, DEFAULT_SWARM_QUORUM_THRESHOLD, DEFAULT_SWARM_TOLERANCE_Q7,
         TRAIL_FLAG_SYNERGY_RESONANCE,
     };
     use crate::traits::{AlignedBuffer16, AlignedBuffer32, AlignedBuffer64};
@@ -2509,10 +2509,10 @@ mod tests {
         }
     }
 
-    impl DaesScratchpad for MinimalHotPathEngine {
+    impl FastPathLedger for MinimalHotPathEngine {
         fn evaluate_auto_tune(
             &self,
-            _slot: &gcso_daes_slot_t,
+            _slot: &gcso_ledger_slot_t,
             _config_out: &mut gcso_config_t,
         ) -> GcsoResult<()> {
             Ok(())
@@ -2543,7 +2543,7 @@ mod tests {
             .unwrap();
         assert!(wrap_bus.data[0].abs() <= 64);
 
-        let mut daes = gcso_daes_slot_t::default();
+        let mut ledger = gcso_ledger_slot_t::default();
         let bloom = ContrastivePhaseBloomFilter::new();
         let mut q_buf = AlignedBuffer32::new([1.0f32; 16]);
         let ctx_phases = AlignedBuffer16::new([8i8; 16]);
@@ -2558,7 +2558,7 @@ mod tests {
         let density = engine
             .execute_geodesic_lazy_unwrap_token_cascade(
                 ptr.raw(),
-                &mut daes,
+                &mut ledger,
                 &bloom,
                 2,
                 128,
@@ -2571,7 +2571,7 @@ mod tests {
             .unwrap();
         assert_eq!(density, 0);
         assert_ne!(
-            daes.telemetry_mini_ledger[0] & DAES_METRIC_LAZY_UNWRAP_APPLIED,
+            ledger.telemetry_mini_ledger[0] & LEDGER_METRIC_LAZY_UNWRAP_APPLIED,
             0
         );
 
@@ -2582,7 +2582,7 @@ mod tests {
         let (uf_rep, uf_pull, uf_coh, uf_cnt) = engine
             .execute_unified_field_token_cascade(
                 ptr.raw(),
-                &mut daes,
+                &mut ledger,
                 &bloom,
                 2,
                 128,
@@ -2618,7 +2618,7 @@ mod tests {
         let (_rep_d, pspm_pull, pspm_coh, inv_temp, pspm_dom) = engine
             .execute_unified_field_pspm_and_inv_temp_cascade(
                 ptr.raw(),
-                &mut daes,
+                &mut ledger,
                 &bloom,
                 2,
                 128,
@@ -2652,7 +2652,7 @@ mod tests {
         let (_c2f_rep, c2f_idx, c2f_aid, c2f_coh, c2f_grav) = engine
             .execute_coarse_to_fine_kmeans_token_cascade(
                 ptr.raw(),
-                &mut daes,
+                &mut ledger,
                 &bloom,
                 2,
                 128,
@@ -2676,7 +2676,7 @@ mod tests {
         let (_lim_rep, idx1, idx2, aid1, aid2, lim_coh, lim_grav, is_lim) = engine
             .execute_top2_liminal_kmeans_token_cascade(
                 ptr.raw(),
-                &mut daes,
+                &mut ledger,
                 &bloom,
                 2,
                 128,
@@ -2744,7 +2744,7 @@ mod tests {
             .execute_autonomous_pointer_trail_attention_cascade(
                 10,
                 ptr.raw(),
-                &mut daes,
+                &mut ledger,
                 &bloom,
                 2,
                 128,
@@ -2866,12 +2866,12 @@ mod tests {
         assert_ne!(trail.flags & TRAIL_FLAG_SYNERGY_RESONANCE, 0);
 
         let mut swarm_trail = gcso_pointer_trail_t::default();
-        let mut daes = gcso_daes_slot_t::default();
+        let mut ledger = gcso_ledger_slot_t::default();
         let mut q_swarm = AlignedBuffer32::new([1.0f32; 16]);
         let swarm_rep = engine
             .execute_swarm_quorum_token_cascade(
                 init_ptr,
-                &mut daes,
+                &mut ledger,
                 &bank_slice16,
                 &weights,
                 DEFAULT_SLOT_COUPLING_MATRIX_8X8,
@@ -2901,7 +2901,7 @@ mod tests {
         let uf_swarm_rep = engine
             .execute_unified_field_swarm_token_cascade(
                 init_ptr,
-                &mut daes,
+                &mut ledger,
                 &uf_anchors,
                 &uf_energies,
                 0xFF,

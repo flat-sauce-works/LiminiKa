@@ -112,8 +112,8 @@ define_status_codes!(
     (GCSO_ERROR_PSPM_ROUTING_FAILED, -60, b"GCSO_ERROR_PSPM_ROUTING_FAILED\0", "GCSO_ERROR_PSPM_ROUTING_FAILED", "PSPM sub-head group phase routing evaluation failed."),
     (GCSO_ERROR_PPRC_SEEK_FAILED, -70, b"GCSO_ERROR_PPRC_SEEK_FAILED\0", "GCSO_ERROR_PPRC_SEEK_FAILED", "PPRC keyframe index lookup or token seek operation failed."),
     (GCSO_ERROR_OBSTRUCTION_UNRESOLVED, -80, b"GCSO_ERROR_OBSTRUCTION_UNRESOLVED\0", "GCSO_ERROR_OBSTRUCTION_UNRESOLVED", "Unresolved cohomological obstruction class $H^1(K; \\mathcal{F})$ encountered."),
-    (GCSO_ERROR_EXTENSION_NOT_LOADED, -90, b"GCSO_ERROR_EXTENSION_NOT_LOADED\0", "GCSO_ERROR_EXTENSION_NOT_LOADED", "Dynamic extension module not loaded or inactive in DAES slot."),
-    (GCSO_ERROR_DAES_SCRATCHPAD_FULL, -91, b"GCSO_ERROR_DAES_SCRATCHPAD_FULL\0", "GCSO_ERROR_DAES_SCRATCHPAD_FULL", "DAES dynamic scratchpad fast-path table or ring buffer fully occupied."),
+    (GCSO_ERROR_EXTENSION_NOT_LOADED, -90, b"GCSO_ERROR_EXTENSION_NOT_LOADED\0", "GCSO_ERROR_EXTENSION_NOT_LOADED", "Dynamic extension module not loaded or inactive in ledger slot."),
+    (GCSO_ERROR_LEDGER_FULL, -91, b"GCSO_ERROR_LEDGER_FULL\0", "GCSO_ERROR_LEDGER_FULL", "FastPathLedger fast-path table or ring buffer fully occupied."),
     (GCSO_ERROR_UNKNOWN, -0x7FFF_FFFF, b"GCSO_ERROR_UNKNOWN\0", "GCSO_ERROR_UNKNOWN", "Unknown internal system error."),
 );
 
@@ -208,10 +208,10 @@ define_opaque_handles!(
         "Opaque Action Hub (Sidecar Pointer Table) handle (`gcso_action_hub_handle_t`)."
     ),
     (
-        GcsoDaesSlotOpaque,
-        GcsoDaesSlotHandle,
-        gcso_daes_slot_handle_t,
-        "Opaque DAES extension scratchpad slot handle (`gcso_daes_slot_handle_t`)."
+        GcsoLedgerSlotOpaque,
+        GcsoLedgerSlotHandle,
+        gcso_ledger_slot_handle_t,
+        "Opaque FastPathLedger extension scratchpad slot handle (`gcso_ledger_slot_handle_t`)."
     ),
     (
         GcsoAttractorFieldOpaque,
@@ -455,10 +455,10 @@ impl Default for gcso_pointer_trail_t {
     }
 }
 
-/// Dynamic Adaptive Extension Scratchpad (DAES) slot layout (64 bytes, 1 cache line, Section 5.4.F).
+/// Dynamic Adaptive Extension Scratchpad (FastPathLedger) slot layout (64 bytes, 1 cache line, Section 5.4.F).
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct gcso_daes_slot_t {
+pub struct gcso_ledger_slot_t {
     /// Active extension execution mode (`0` = Scratchpad, `1` = DNP Plugin, `2` = Shared IPC Buffer).
     pub mode: u32,
     /// Ring buffer head write index.
@@ -503,8 +503,8 @@ pub struct gcso_config_t {
     pub enable_cuda_warp_shuffle: u8,
     /// Strict enforcement of zero dynamic allocations on Hot Path (`1` = strict).
     pub enable_zero_alloc_strict: u8,
-    /// Initial operational mode for DAES scratchpad (`0`, `1`, or `2`).
-    pub daes_mode: u8,
+    /// Initial operational mode for FastPathLedger (`0`, `1`, or `2`).
+    pub ledger_mode: u8,
     /// Reserved alignment and configuration flags.
     pub reserved_flags: u8,
     /// Active rotated dimensions per head (`0` defaults to full `head_dim`; smaller for partial RoPE).
@@ -643,8 +643,8 @@ pub struct gcso_snapshot_header_t {
     pub edbc_state_offset: u64,
     /// CRC32 integrity checksum over snapshot payload.
     pub checksum_crc32: u32,
-    /// Byte offset to DAES scratchpad state section.
-    pub daes_slot_offset: u32,
+    /// Byte offset to FastPathLedger state section.
+    pub ledger_slot_offset: u32,
     /// Epoch timestamp of snapshot serialization (seconds).
     pub timestamp_epoch_sec: u64,
     /// Padding to enforce exact 128-byte size and 64-byte cacheline alignment (56 bytes).
@@ -664,7 +664,7 @@ impl Default for gcso_snapshot_header_t {
             srl_state_offset: 0,
             edbc_state_offset: 0,
             checksum_crc32: 0,
-            daes_slot_offset: 0,
+            ledger_slot_offset: 0,
             timestamp_epoch_sec: 0,
             reserved_padding: [0; 56],
         }
@@ -706,7 +706,7 @@ const _: () = {
     );
     assert!(size_of::<gcso_paged_bitmask_t>() == 32 && align_of::<gcso_paged_bitmask_t>() == 32);
     assert!(size_of::<gcso_pointer_trail_t>() == 128 && align_of::<gcso_pointer_trail_t>() == 128);
-    assert!(size_of::<gcso_daes_slot_t>() == 64 && align_of::<gcso_daes_slot_t>() == 64);
+    assert!(size_of::<gcso_ledger_slot_t>() == 64 && align_of::<gcso_ledger_slot_t>() == 64);
     assert!(
         size_of::<gcso_stigmergic_thresholds_t>() == 32
             && align_of::<gcso_stigmergic_thresholds_t>() == 32
@@ -762,17 +762,17 @@ const _: () = {
     assert!(offset_of!(gcso_config_t, head_dim) == 0);
     assert!(offset_of!(gcso_config_t, qdps_min_step_rad) == 20);
     assert!(offset_of!(gcso_config_t, action_hub_capacity) == 32);
-    assert!(offset_of!(gcso_config_t, daes_mode) == 38);
+    assert!(offset_of!(gcso_config_t, ledger_mode) == 38);
     assert!(offset_of!(gcso_snapshot_header_t, magic) == 0);
     assert!(offset_of!(gcso_snapshot_header_t, version) == 4);
     assert!(offset_of!(gcso_snapshot_header_t, total_size) == 8);
     assert!(offset_of!(gcso_snapshot_header_t, checksum_crc32) == 56);
-    assert!(offset_of!(gcso_snapshot_header_t, daes_slot_offset) == 60);
+    assert!(offset_of!(gcso_snapshot_header_t, ledger_slot_offset) == 60);
     assert!(offset_of!(gcso_snapshot_header_t, timestamp_epoch_sec) == 64);
-    assert!(offset_of!(gcso_daes_slot_t, mode) == 0);
-    assert!(offset_of!(gcso_daes_slot_t, fast_path_bypass_mask) == 16);
-    assert!(offset_of!(gcso_daes_slot_t, fast_path_shortcuts) == 24);
-    assert!(offset_of!(gcso_daes_slot_t, telemetry_mini_ledger) == 56);
+    assert!(offset_of!(gcso_ledger_slot_t, mode) == 0);
+    assert!(offset_of!(gcso_ledger_slot_t, fast_path_bypass_mask) == 16);
+    assert!(offset_of!(gcso_ledger_slot_t, fast_path_shortcuts) == 24);
+    assert!(offset_of!(gcso_ledger_slot_t, telemetry_mini_ledger) == 56);
     assert!(offset_of!(gcso_pspm_config_t, num_fact_heads) == 0);
     assert!(offset_of!(gcso_pspm_config_t, fact_phase_gain) == 8);
     assert!(offset_of!(gcso_edbc_state_t, moving_z_entropy) == 0);

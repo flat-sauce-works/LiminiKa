@@ -92,10 +92,10 @@ impl_stateless_handle_destroy!(
     ),
 
     (
-        gcso_daes_slot_destroy,
-        GcsoDaesSlotHandle,
-        "Destroys a DAES dynamic scratchpad slot handle.",
-        "`handle` must be `NULL` or a valid DAES slot handle. `NULL` safely returns `GCSO_SUCCESS`."
+        gcso_ledger_slot_destroy,
+        GcsoLedgerSlotHandle,
+        "Destroys a ledger slot handle.",
+        "`handle` must be `NULL` or a valid ledger slot handle. `NULL` safely returns `GCSO_SUCCESS`."
     ),
     (
         gcso_pspm_router_destroy,

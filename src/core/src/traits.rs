@@ -28,7 +28,7 @@
 //!     [`PspmRouter`], [`SrlAdapter`], and [`VisualAttentionSteering`].
 //!   - `telemetry`: [`PagedBitmaskOps`], [`ContrastivePhaseBloomFilter`],
 //!     [`StigmergicActionPtrOps`], [`StigmergicTrailOps`], [`StigmergicSwarmOps`],
-//!     [`DaesScratchpad`], and [`SwarmResolutionReport`].
+//!     [`FastPathLedger`], and [`SwarmResolutionReport`].
 //! - **Lv.2 Micro Observer (`hot_path`)**:
 //!   - [`PointerActionHub`], [`SwarmCellChunk`], and blanket-implemented [`HotPathExecutionEngine`] /
 //!     [`HotPathObserver`] / [`FractalCascadeCoordinator`] observing [`ActionHub`] as a constant-time
@@ -91,7 +91,7 @@ pub mod branchless;
 pub mod rope;
 #[rustfmt::skip]
 /// Lv.1 Capability 2: Stigmergic trails, internal telemetry & swarm intelligence (`PagedBitmaskOps`,
-/// `ContrastivePhaseBloomFilter`, `StigmergicActionPtrOps`, `StigmergicTrailOps`, `StigmergicSwarmOps`, `DaesScratchpad`).
+/// `ContrastivePhaseBloomFilter`, `StigmergicActionPtrOps`, `StigmergicTrailOps`, `StigmergicSwarmOps`, `FastPathLedger`).
 pub mod telemetry;
 #[rustfmt::skip]
 /// Lv.2 Micro Observer: `PointerActionHub`, `SwarmCellChunk`, and constant-time `ActionHub` -> RoPE
@@ -223,9 +223,9 @@ pub use self::primitives::{
     validate_snapshot_header, verify_snapshot_payload_crc32, with_slot_pair_coupled,
     with_slot_pair_coupled_symmetric, FfiHandleMut, FfiHandleRef, GcsoActionHubHandle,
     GcsoActionHubOpaque, GcsoAttractorFieldHandle, GcsoAttractorFieldOpaque, GcsoContainerHandle,
-    GcsoContainerOpaque, GcsoContextHandle, GcsoContextOpaque, GcsoDaesSlotHandle,
-    GcsoDaesSlotOpaque, GcsoDpsrKernelHandle, GcsoDpsrKernelOpaque, GcsoEdbcControllerHandle,
-    GcsoEdbcControllerOpaque, GcsoPspmRouterHandle, GcsoPspmRouterOpaque, GcsoResult,
+    GcsoContainerOpaque, GcsoContextHandle, GcsoContextOpaque, GcsoDpsrKernelHandle,
+    GcsoDpsrKernelOpaque, GcsoEdbcControllerHandle, GcsoEdbcControllerOpaque, GcsoLedgerSlotHandle,
+    GcsoLedgerSlotOpaque, GcsoPspmRouterHandle, GcsoPspmRouterOpaque, GcsoResult,
     GcsoSrlAdapterHandle, GcsoSrlAdapterOpaque, Pod, PprcKeyframePacket, PprcMotionDeltaPacket,
     ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE,
     ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
@@ -234,9 +234,9 @@ pub use self::primitives::{
     ATTRACTOR_SLOT_CUSTOM_7, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_KNOWLEDGE,
     ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE,
     ATTRACTOR_SLOT_USER_CONTEXT, CHEBYSHEV_COEFF_LEN, CHEBYSHEV_FILTER_DEGREE,
-    DAES_MINI_LEDGER_LEN, DAES_SHORTCUT_SLOTS, DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_ENTROPY_EPS,
-    DEFAULT_PAGED_BLOCK_SIZE, DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD,
-    DEFAULT_SLOT_COUPLING_MATRIX_8X8, GCSO_SNAPSHOT_MAGIC_U32, MAX_ANCHORS_PER_FIELD,
+    DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_ENTROPY_EPS, DEFAULT_PAGED_BLOCK_SIZE,
+    DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+    FAST_PATH_SHORTCUT_SLOTS, GCSO_SNAPSHOT_MAGIC_U32, LEDGER_HISTORY_LEN, MAX_ANCHORS_PER_FIELD,
     MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, MAX_SURROGATE_ENTROPY_LN2, PAGED_BITMASK_BITS,
     PAGED_BITMASK_WORDS, Q7_MAX, Q7_MIN, Q7_PHASE_INV_SCALE_RAD, Q7_PHASE_SCALE_RAD, Q7_UNIT_SCALE,
     Q7_ZERO, TAG_ACTION_MODE_MASK, TAG_ATTRACTOR_SLOT_SHIFT,
@@ -247,17 +247,17 @@ pub use self::rope::{
 };
 pub use self::telemetry::{
     eval_bitmask_dyadic_ultrametric, swar_subswarm_resolve_x8, ContrastivePhaseBloomFilter,
-    DaesScratchpad, PagedBitmaskOps, StigmergicActionPtrOps, StigmergicSwarmOps,
-    StigmergicTrailOps, SwarmResolutionReport, DAES_METRIC_FAST_PATH_HIT,
-    DAES_METRIC_LAYER_SKIP_COMPENSATED, DAES_METRIC_LAZY_UNWRAP_APPLIED, DAES_METRIC_PHASE_STEERED,
-    DAES_METRIC_PSPM_ROUTED, DAES_METRIC_REPULSION_APPLIED, DAES_METRIC_SLOT_SYNERGY_ACTIVE,
-    DAES_METRIC_SRL_INJECTED, DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS, DEFAULT_BLOOM_MAX_MASS_THRESHOLD,
-    DEFAULT_SWARM_QUORUM_THRESHOLD, DEFAULT_SWARM_TOLERANCE_Q7, HEADS_PER_SWARM_CELL,
-    MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS,
-    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_DPSR_ACTIVE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
-    TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SWARM_ESCALATED,
-    TRAIL_FLAG_SWARM_RESOLVED, TRAIL_FLAG_SYNERGY_RESONANCE, TRAIL_SWARM_QUORUM_MASK,
-    TRAIL_SWARM_QUORUM_SHIFT,
+    FastPathLedger, PagedBitmaskOps, StigmergicActionPtrOps, StigmergicSwarmOps,
+    StigmergicTrailOps, SwarmResolutionReport, DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS,
+    DEFAULT_BLOOM_MAX_MASS_THRESHOLD, DEFAULT_SWARM_QUORUM_THRESHOLD, DEFAULT_SWARM_TOLERANCE_Q7,
+    HEADS_PER_SWARM_CELL, LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
+    LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_LAZY_UNWRAP_APPLIED,
+    LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_PSPM_ROUTED, LEDGER_METRIC_REPULSION_APPLIED,
+    LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SRL_INJECTED, MAX_ATTRACTOR_PULL_FORCE,
+    MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
+    TRAIL_FLAG_DPSR_ACTIVE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
+    TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SWARM_ESCALATED, TRAIL_FLAG_SWARM_RESOLVED,
+    TRAIL_FLAG_SYNERGY_RESONANCE, TRAIL_SWARM_QUORUM_MASK, TRAIL_SWARM_QUORUM_SHIFT,
 };
 
 pub(crate) use self::action_hub::{
@@ -374,17 +374,17 @@ pub mod prelude {
     };
     pub use super::telemetry::{
         eval_bitmask_dyadic_ultrametric, swar_subswarm_resolve_x8, ContrastivePhaseBloomFilter,
-        DaesScratchpad, PagedBitmaskOps, StigmergicActionPtrOps, StigmergicSwarmOps,
-        StigmergicTrailOps, SwarmResolutionReport, DAES_METRIC_FAST_PATH_HIT,
-        DAES_METRIC_LAYER_SKIP_COMPENSATED, DAES_METRIC_LAZY_UNWRAP_APPLIED,
-        DAES_METRIC_PHASE_STEERED, DAES_METRIC_PSPM_ROUTED, DAES_METRIC_REPULSION_APPLIED,
-        DAES_METRIC_SLOT_SYNERGY_ACTIVE, DAES_METRIC_SRL_INJECTED,
-        DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS, DEFAULT_BLOOM_MAX_MASS_THRESHOLD,
-        DEFAULT_SWARM_QUORUM_THRESHOLD, DEFAULT_SWARM_TOLERANCE_Q7, HEADS_PER_SWARM_CELL,
-        MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS,
-        TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_DPSR_ACTIVE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
-        TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SWARM_ESCALATED,
-        TRAIL_FLAG_SWARM_RESOLVED, TRAIL_FLAG_SYNERGY_RESONANCE,
+        FastPathLedger, PagedBitmaskOps, StigmergicActionPtrOps, StigmergicSwarmOps,
+        StigmergicTrailOps, SwarmResolutionReport, DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS,
+        DEFAULT_BLOOM_MAX_MASS_THRESHOLD, DEFAULT_SWARM_QUORUM_THRESHOLD,
+        DEFAULT_SWARM_TOLERANCE_Q7, HEADS_PER_SWARM_CELL, LEDGER_METRIC_FAST_PATH_HIT,
+        LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_LAZY_UNWRAP_APPLIED,
+        LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_PSPM_ROUTED, LEDGER_METRIC_REPULSION_APPLIED,
+        LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SRL_INJECTED, MAX_ATTRACTOR_PULL_FORCE,
+        MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
+        TRAIL_FLAG_DPSR_ACTIVE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
+        TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SWARM_ESCALATED, TRAIL_FLAG_SWARM_RESOLVED,
+        TRAIL_FLAG_SYNERGY_RESONANCE,
     };
     pub use super::ActionHub;
 }
@@ -395,7 +395,7 @@ pub mod prelude {
 
 const _: () = {
     use crate::abi::{
-        gcso_config_t, gcso_daes_slot_t, gcso_descriptor_header_t, gcso_edbc_state_t,
+        gcso_config_t, gcso_descriptor_header_t, gcso_edbc_state_t, gcso_ledger_slot_t,
         gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t,
         gcso_pspm_config_t, gcso_snapshot_header_t, gcso_srl_descriptor_t, gcso_tagged_ptr_t,
         gcso_zimms_descriptor_t,
@@ -442,7 +442,7 @@ const _: () = {
     assert!(align_of::<gcso_config_t>() == 16);
     assert!(offset_of!(gcso_config_t, head_dim) == 0);
     assert!(offset_of!(gcso_config_t, qdps_min_step_rad) == 20);
-    assert!(offset_of!(gcso_config_t, daes_mode) == 38);
+    assert!(offset_of!(gcso_config_t, ledger_mode) == 38);
 
     assert!(size_of::<gcso_snapshot_header_t>() == 128);
     assert!(align_of::<gcso_snapshot_header_t>() == 64);
@@ -450,11 +450,11 @@ const _: () = {
     assert!(offset_of!(gcso_snapshot_header_t, checksum_crc32) == 56);
     assert!(offset_of!(gcso_snapshot_header_t, timestamp_epoch_sec) == 64);
 
-    assert!(size_of::<gcso_daes_slot_t>() == 64);
-    assert!(align_of::<gcso_daes_slot_t>() == 64);
-    assert!(offset_of!(gcso_daes_slot_t, mode) == 0);
-    assert!(offset_of!(gcso_daes_slot_t, fast_path_shortcuts) == 24);
-    assert!(offset_of!(gcso_daes_slot_t, telemetry_mini_ledger) == 56);
+    assert!(size_of::<gcso_ledger_slot_t>() == 64);
+    assert!(align_of::<gcso_ledger_slot_t>() == 64);
+    assert!(offset_of!(gcso_ledger_slot_t, mode) == 0);
+    assert!(offset_of!(gcso_ledger_slot_t, fast_path_shortcuts) == 24);
+    assert!(offset_of!(gcso_ledger_slot_t, telemetry_mini_ledger) == 56);
 
     assert!(size_of::<gcso_pprc_keyframe_header_t>() == 64);
     assert!(align_of::<gcso_pprc_keyframe_header_t>() == 32);
@@ -532,7 +532,7 @@ const _: () = {
 mod tests {
     use super::*;
     use crate::abi::{
-        gcso_anchor_type_t, gcso_config_t, gcso_daes_slot_t, gcso_edbc_state_t,
+        gcso_anchor_type_t, gcso_config_t, gcso_edbc_state_t, gcso_ledger_slot_t,
         gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t,
         gcso_tagged_ptr_t,
     };
@@ -607,10 +607,10 @@ mod tests {
     impl PspmRouter for MockActionHubComposite {}
     impl SrlAdapter for MockActionHubComposite {}
 
-    impl DaesScratchpad for MockActionHubComposite {
+    impl FastPathLedger for MockActionHubComposite {
         fn evaluate_auto_tune(
             &self,
-            _slot: &gcso_daes_slot_t,
+            _slot: &gcso_ledger_slot_t,
             _config_out: &mut gcso_config_t,
         ) -> GcsoResult<()> {
             Ok(())
@@ -768,7 +768,7 @@ mod tests {
             .unwrap();
         assert!((lmax - 6.0).abs() < 1e-5);
 
-        let mut daes = gcso_daes_slot_t::default();
+        let mut ledger = gcso_ledger_slot_t::default();
         let mut bloom = ContrastivePhaseBloomFilter::new();
         let mut q_buf = AlignedBuffer32::new([1.0f32; 16]);
         let mut trail = gcso_pointer_trail_t::default();
@@ -782,7 +782,7 @@ mod tests {
         let density = hub
             .execute_stigmergic_token_cascade(
                 input_ptr.raw(),
-                &mut daes,
+                &mut ledger,
                 &bloom,
                 2,
                 128,
@@ -794,7 +794,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(density, 0);
-        assert_ne!(daes.telemetry_mini_ledger[0] & DAES_METRIC_PHASE_STEERED, 0);
+        assert_ne!(
+            ledger.telemetry_mini_ledger[0] & LEDGER_METRIC_PHASE_STEERED,
+            0
+        );
 
         trail.stigmergic_density = 1.5;
         let mut trails = [trail];
@@ -901,13 +904,13 @@ mod tests {
             CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_PERSONA, 0),
         ];
         let fact_sig = ObjectiveFact::new([22i8; MAX_ATTENTION_HEADS], 3.0, 0x0010_0000, 303);
-        let mut daes = gcso_daes_slot_t::default();
+        let mut ledger = gcso_ledger_slot_t::default();
         let (_frame, _rep, c_idx, c_id, c_mass, spawned) = hub
             .ingest_gateway_kmeans_and_steer_safe(
                 &fact_sig,
                 &mut centroids,
                 DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
-                &mut daes,
+                &mut ledger,
                 &mut trail,
                 Some(&mut q_buf.as_aligned_slice_mut()),
                 Some(&mut k_buf.as_aligned_slice_mut()),
@@ -1020,7 +1023,7 @@ mod tests {
                 Some((&pspm_cfg, 4)),
                 DEFAULT_QDPS_MIN_STEP_RAD,
                 DEFAULT_RIPA_CLAMP_MAX_RAD,
-                &mut daes,
+                &mut ledger,
                 Some(&mut q_buf.as_aligned_slice_mut()),
                 Some(&mut k_buf.as_aligned_slice_mut()),
             )
@@ -1036,7 +1039,7 @@ mod tests {
                 &centroids,
                 DEFAULT_QDPS_MIN_STEP_RAD,
                 DEFAULT_RIPA_CLAMP_MAX_RAD,
-                &mut daes,
+                &mut ledger,
                 &mut trail,
                 Some(&mut q_buf.as_aligned_slice_mut()),
                 None,
@@ -1051,7 +1054,7 @@ mod tests {
             &centroids,
             &cand_trails,
             None,
-            Some(&daes),
+            Some(&ledger),
             &[],
             999,
             &mut container_buf.data,

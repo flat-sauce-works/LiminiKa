@@ -1,12 +1,12 @@
 // name: src/core/src/abi/action_hub.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Action Hub orchestration, Limina bridging, Bayesian trail rewiring, and DAES acceleration FFI.
+//! Action Hub orchestration, Limina bridging, Bayesian trail rewiring, and FastPathLedger acceleration FFI.
 
 use super::*;
 
 // ===================================================================
-// 3. Action Hub, Limina Bridging, Bayesian Trail Rewiring & DAES Interface
+// 3. Action Hub, Limina Bridging, Bayesian Trail Rewiring & FastPathLedger Interface
 // ===================================================================
 
 /// Allocates an Action Hub (Sidecar Pointer Table) instance with the specified slot capacity.
@@ -843,7 +843,7 @@ pub unsafe extern "C" fn gcso_action_hub_route_coarse_to_fine_trail_and_steer_qk
 
 /// Executes **Full Coarse-to-Fine Bayesian Routing ($\mathcal{O}(K)$ Macro Centroids $\to$
 /// $\mathcal{O}(M)$ Local Pointer Trails) + Limina Slerp Bridging + Optional Pre-Softmax Attention
-/// Score Modulation + $SO(2)$-Fused RIPA/PSPM Steering + Optional DAES Telemetry** in a single
+/// Score Modulation + $SO(2)$-Fused RIPA/PSPM Steering + Optional FastPathLedger Telemetry** in a single
 /// zero-allocation C-ABI call ($C_{\mathrm{alloc}} = 0$).
 ///
 /// # Safety
@@ -867,7 +867,7 @@ pub unsafe extern "C" fn gcso_action_hub_route_coarse_to_fine_bayesian_and_steer
     contradiction_threshold: f32,
     pspm_cfg_opt: *const gcso_pspm_config_t,
     min_step_rad: f32,
-    daes_slot_inout: *mut gcso_daes_slot_t,
+    ledger_slot_inout: *mut gcso_ledger_slot_t,
     query_tensor: *mut f32,
     key_tensor: *mut f32,
     winning_centroid_idx_out: *mut usize,
@@ -948,7 +948,7 @@ pub unsafe extern "C" fn gcso_action_hub_route_coarse_to_fine_bayesian_and_steer
         let (_engine, mut q_aligned, mut k_opt) =
             unsafe { bind_qk_32(query_tensor, key_tensor, head_dim, num_heads)? };
         // SAFETY: Validated non-null, aligned, and disjoint above.
-        let (((mut src_trail, centroids_slice), cand_slice), (pspm_ref_opt, daes_mut_opt)) = unsafe {
+        let (((mut src_trail, centroids_slice), cand_slice), (pspm_ref_opt, ledger_mut_opt)) = unsafe {
             (
                 (
                     (
@@ -959,7 +959,7 @@ pub unsafe extern "C" fn gcso_action_hub_route_coarse_to_fine_bayesian_and_steer
                 ),
                 (
                     FfiHandleRef::from_raw_opt(pspm_cfg_opt)?,
-                    FfiHandleMut::from_raw_opt(daes_slot_inout)?,
+                    FfiHandleMut::from_raw_opt(ledger_slot_inout)?,
                 ),
             )
         };
@@ -1065,12 +1065,12 @@ pub unsafe extern "C" fn gcso_action_hub_route_coarse_to_fine_bayesian_and_steer
             }
         }
 
-        if let Some(mut daes_slot) = daes_mut_opt {
-            let metrics = branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-                | branchless_select_u8(pspm_routed, DAES_METRIC_PSPM_ROUTED, 0)
-                | branchless_select_u8(found, DAES_METRIC_SLOT_SYNERGY_ACTIVE, 0)
-                | branchless_select_u8(!found, DAES_METRIC_REPULSION_APPLIED, 0);
-            let _ = AbiDaesDispatcher.telemetry_push(&mut daes_slot, metrics);
+        if let Some(mut ledger_slot) = ledger_mut_opt {
+            let metrics = branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+                | branchless_select_u8(pspm_routed, LEDGER_METRIC_PSPM_ROUTED, 0)
+                | branchless_select_u8(found, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, 0)
+                | branchless_select_u8(!found, LEDGER_METRIC_REPULSION_APPLIED, 0);
+            let _ = AbiLedgerDispatcher.telemetry_push(&mut ledger_slot, metrics);
         }
 
         // SAFETY: `write_opt_out` validates optional output pointers.
@@ -1501,12 +1501,14 @@ pub unsafe extern "C" fn gcso_action_hub_paged_block_warp_bitmask(
     })
 }
 
-/// Allocates a DAES dynamic scratchpad slot handle.
+/// Allocates a ledger slot handle.
 ///
 /// # Safety
 /// `slot_out` must be a non-null, naturally aligned writable handle pointer.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_daes_slot_create(slot_out: *mut GcsoDaesSlotHandle) -> GcsoStatus {
+pub unsafe extern "C" fn gcso_ledger_slot_create(
+    slot_out: *mut GcsoLedgerSlotHandle,
+) -> GcsoStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
         let mut out_handle = unsafe { FfiHandleMut::from_raw(slot_out)? };
@@ -1518,24 +1520,24 @@ pub unsafe extern "C" fn gcso_daes_slot_create(slot_out: *mut GcsoDaesSlotHandle
 /// Resets the active telemetry mini ledger and cache hit counters in-place.
 ///
 /// # Safety
-/// `slot` must be a non-null, 64-byte aligned writable [`gcso_daes_slot_t`] pointer.
+/// `slot` must be a non-null, 64-byte aligned writable [`gcso_ledger_slot_t`] pointer.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_daes_reset_telemetry(slot: *mut gcso_daes_slot_t) -> GcsoStatus {
+pub unsafe extern "C" fn gcso_ledger_reset_telemetry(slot: *mut gcso_ledger_slot_t) -> GcsoStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and 64B alignment.
         let mut slot_mut = unsafe { FfiHandleMut::from_raw(slot)? };
-        AbiDaesDispatcher.reset_telemetry(&mut slot_mut)?;
+        AbiLedgerDispatcher.reset_telemetry(&mut slot_mut)?;
         Ok(GCSO_SUCCESS)
     })
 }
 
-/// Executes an $\mathcal{O}(1)$ branchless fast-path shortcut lookup in the DAES scratchpad.
+/// Executes an $\mathcal{O}(1)$ branchless fast-path shortcut lookup in the FastPathLedger.
 ///
 /// # Safety
 /// `slot` and `shortcut_out` must be non-null and naturally aligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_daes_fast_path_lookup(
-    slot: *const gcso_daes_slot_t,
+pub unsafe extern "C" fn gcso_ledger_fast_path_lookup(
+    slot: *const gcso_ledger_slot_t,
     input_key: u64,
     shortcut_out: *mut u64,
 ) -> GcsoStatus {
@@ -1548,49 +1550,52 @@ pub unsafe extern "C" fn gcso_daes_fast_path_lookup(
             )
         };
 
-        *out_val = AbiDaesDispatcher.fast_path_lookup(&slot_ref, input_key)?;
+        *out_val = AbiLedgerDispatcher.fast_path_lookup(&slot_ref, input_key)?;
         Ok(GCSO_SUCCESS)
     })
 }
 
-/// Pushes a profiling metric byte to the DAES telemetry ring ledger in zero-allocation mode.
+/// Pushes a profiling metric byte to the FastPathLedger telemetry ring ledger in zero-allocation mode.
 ///
 /// # Safety
-/// `slot` must be a non-null, 64-byte aligned writable [`gcso_daes_slot_t`] pointer.
+/// `slot` must be a non-null, 64-byte aligned writable [`gcso_ledger_slot_t`] pointer.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_daes_telemetry_push(
-    slot: *mut gcso_daes_slot_t,
+pub unsafe extern "C" fn gcso_ledger_telemetry_push(
+    slot: *mut gcso_ledger_slot_t,
     metric_code: u8,
 ) -> GcsoStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and 64B alignment.
         let mut slot_mut = unsafe { FfiHandleMut::from_raw(slot)? };
-        AbiDaesDispatcher.telemetry_push(&mut slot_mut, metric_code)?;
+        AbiLedgerDispatcher.telemetry_push(&mut slot_mut, metric_code)?;
         Ok(GCSO_SUCCESS)
     })
 }
 
-/// Sets the operating mode of a DAES slot (`0` = Scratchpad, `1` = Plugin, `2` = Shared IPC Buffer).
+/// Sets the operating mode of a ledger slot (`0` = Scratchpad, `1` = Plugin, `2` = Shared IPC Buffer).
 ///
 /// # Safety
-/// `slot` must be a non-null, 64-byte aligned writable [`gcso_daes_slot_t`] pointer.
+/// `slot` must be a non-null, 64-byte aligned writable [`gcso_ledger_slot_t`] pointer.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_daes_set_mode(slot: *mut gcso_daes_slot_t, mode: u32) -> GcsoStatus {
+pub unsafe extern "C" fn gcso_ledger_set_mode(
+    slot: *mut gcso_ledger_slot_t,
+    mode: u32,
+) -> GcsoStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and 64B alignment.
         let mut slot_mut = unsafe { FfiHandleMut::from_raw(slot)? };
-        AbiDaesDispatcher.set_mode(&mut slot_mut, mode)?;
+        AbiLedgerDispatcher.set_mode(&mut slot_mut, mode)?;
         Ok(GCSO_SUCCESS)
     })
 }
 
-/// Evaluates the DAES telemetry ring ledger to auto-tune runtime configuration parameters.
+/// Evaluates the FastPathLedger telemetry ring ledger to auto-tune runtime configuration parameters.
 ///
 /// # Safety
 /// `slot` and `config_out` must be non-null and naturally aligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_daes_evaluate_auto_tune(
-    slot: *const gcso_daes_slot_t,
+pub unsafe extern "C" fn gcso_ledger_evaluate_auto_tune(
+    slot: *const gcso_ledger_slot_t,
     config_out: *mut gcso_config_t,
 ) -> GcsoStatus {
     ffi_boundary!({
@@ -1602,7 +1607,7 @@ pub unsafe extern "C" fn gcso_daes_evaluate_auto_tune(
             )
         };
 
-        AbiDaesDispatcher.evaluate_auto_tune(&slot_ref, &mut cfg_mut)?;
+        AbiLedgerDispatcher.evaluate_auto_tune(&slot_ref, &mut cfg_mut)?;
         Ok(GCSO_SUCCESS)
     })
 }

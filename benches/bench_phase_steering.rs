@@ -23,7 +23,7 @@ use criterion::{
     criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
 use liminika_core::abi::{
-    gcso_daes_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t,
+    gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t,
     gcso_tagged_ptr_t,
 };
 use liminika_core::phase_steering::{PhaseSteeringClosedLoop, PhaseSteeringEngine};
@@ -2985,13 +2985,13 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
                 ..Default::default()
             }];
             let bloom = ContrastivePhaseBloomFilter::new();
-            let daes = gcso_daes_slot_t::default();
+            let ledger = gcso_ledger_slot_t::default();
             let mut container = AlignedBuffer128::<u8, 768>::new([0u8; 768]);
             let written = GcsoFourSectionView::write_four_section_container_to_bytes(
                 &crystals,
                 &trails,
                 Some(&bloom),
-                Some(&daes),
+                Some(&ledger),
                 1_774_900_000,
                 &mut container.data,
             )

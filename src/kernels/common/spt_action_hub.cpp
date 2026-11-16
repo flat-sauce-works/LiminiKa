@@ -365,33 +365,33 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_destroy(gcso_action_hub_handle_
 }
 
 // ===================================================================
-// Dynamic Adaptive Extension Scratchpad (DAES) Multi-Layer Controls
+// Dynamic Adaptive Extension Scratchpad (FastPathLedger) Multi-Layer Controls
 // ===================================================================
 
 /**
- * @brief Allocates and initializes a DAES slot instance using strongly-typed handles.
+ * @brief Allocates and initializes a ledger slot instance using strongly-typed handles.
  *
- * @param slot_out Pointer to receive allocated DAES slot handle.
+ * @param slot_out Pointer to receive allocated ledger slot handle.
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL
-gcso_daes_slot_create(gcso_daes_slot_handle_t* GCSO_RESTRICT slot_out) GCSO_NOEXCEPT {
+gcso_ledger_slot_create(gcso_ledger_slot_handle_t* GCSO_RESTRICT slot_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
         if (GCSO_UNLIKELY(
-                reinterpret_cast<uintptr_t>(slot_out) % alignof(gcso_daes_slot_handle_t) != 0)) {
+                reinterpret_cast<uintptr_t>(slot_out) % alignof(gcso_ledger_slot_handle_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
 
-        auto* slot = gcso_aligned_new<gcso_daes_slot_t>();
+        auto* slot = gcso_aligned_new<gcso_ledger_slot_t>();
         if (GCSO_UNLIKELY(slot == nullptr)) {
             return GCSO_ERROR_OUT_OF_MEMORY;
         }
-        std::memset(slot, 0, sizeof(gcso_daes_slot_t));
+        std::memset(slot, 0, sizeof(gcso_ledger_slot_t));
 
-        *slot_out = reinterpret_cast<gcso_daes_slot_handle_t>(slot);
+        *slot_out = reinterpret_cast<gcso_ledger_slot_handle_t>(slot);
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;
@@ -399,18 +399,18 @@ gcso_daes_slot_create(gcso_daes_slot_handle_t* GCSO_RESTRICT slot_out) GCSO_NOEX
 }
 
 /**
- * @brief Resets active DAES telemetry mini ledger and cache hit counters in-place.
+ * @brief Resets active FastPathLedger telemetry mini ledger and cache hit counters in-place.
  *
- * @param slot Target DAES slot structure pointer to reset (64-byte aligned).
+ * @param slot Target ledger slot structure pointer to reset (64-byte aligned).
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER / GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_daes_reset_telemetry(gcso_daes_slot_t* GCSO_RESTRICT slot)
+GCSO_API gcso_status_t GCSO_CALL gcso_ledger_reset_telemetry(gcso_ledger_slot_t* GCSO_RESTRICT slot)
     GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(slot) % alignof(gcso_daes_slot_t) != 0)) {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(slot) % alignof(gcso_ledger_slot_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
         slot->telemetry_ring_head = 0;
@@ -425,25 +425,25 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_reset_telemetry(gcso_daes_slot_t* GCS
 }
 
 /**
- * @brief Executes O(1) fast-path shortcut lookup in DAES dynamic scratchpad.
+ * @brief Executes O(1) fast-path shortcut lookup in FastPathLedger.
  *
  * Mode Check: Operates in Mode 0 (Fast-Path & Telemetry Scratchpad Mode).
- * Calculates hash slot index from input key across the 4 shortcut registers in the DAES 64B
+ * Calculates hash slot index from input key across the 4 shortcut registers in the FastPathLedger 64B
  * cacheline slot.
  *
- * @param slot Pointer to DAES slot structure.
+ * @param slot Pointer to ledger slot structure.
  * @param input_key Raw key address to look up.
  * @param shortcut_out Pointer to store bypassed address result.
  * @return GCSO_SUCCESS or GCSO_ERROR_INVALID_STATE.
  */
 GCSO_API gcso_status_t GCSO_CALL
-gcso_daes_fast_path_lookup(const gcso_daes_slot_t* GCSO_RESTRICT slot, uint64_t input_key,
+gcso_ledger_fast_path_lookup(const gcso_ledger_slot_t* GCSO_RESTRICT slot, uint64_t input_key,
                            uint64_t* GCSO_RESTRICT shortcut_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot == nullptr || shortcut_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(slot) % alignof(gcso_daes_slot_t) != 0 ||
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(slot) % alignof(gcso_ledger_slot_t) != 0 ||
                           reinterpret_cast<uintptr_t>(shortcut_out) % alignof(uint64_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
@@ -462,19 +462,19 @@ gcso_daes_fast_path_lookup(const gcso_daes_slot_t* GCSO_RESTRICT slot, uint64_t 
 }
 
 /**
- * @brief Pushes profiling metric bytes to the DAES telemetry ring ledger in zero-allocation mode.
+ * @brief Pushes profiling metric bytes to the FastPathLedger telemetry ring ledger in zero-allocation mode.
  *
- * @param slot Target DAES slot structure pointer.
+ * @param slot Target ledger slot structure pointer.
  * @param metric_code Metric identifier byte code.
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_daes_telemetry_push(gcso_daes_slot_t* GCSO_RESTRICT slot,
+GCSO_API gcso_status_t GCSO_CALL gcso_ledger_telemetry_push(gcso_ledger_slot_t* GCSO_RESTRICT slot,
                                                           uint8_t metric_code) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(slot) % alignof(gcso_daes_slot_t) != 0)) {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(slot) % alignof(gcso_ledger_slot_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
         const uint16_t idx = static_cast<uint16_t>(slot->telemetry_ring_head & 7U);
@@ -487,13 +487,13 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_telemetry_push(gcso_daes_slot_t* GCSO
 }
 
 /**
- * @brief Sets the DAES slot operating mode (0 = Scratchpad, 1 = Plugin, 2 = Shared IPC Buffer).
+ * @brief Sets the ledger slot operating mode (0 = Scratchpad, 1 = Plugin, 2 = Shared IPC Buffer).
  *
- * @param slot Pointer to DAES slot structure.
+ * @param slot Pointer to ledger slot structure.
  * @param mode Desired mode index (0, 1, or 2).
  * @return GCSO_SUCCESS or GCSO_ERROR_INVALID_ARGUMENT.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_daes_set_mode(gcso_daes_slot_t* GCSO_RESTRICT slot,
+GCSO_API gcso_status_t GCSO_CALL gcso_ledger_set_mode(gcso_ledger_slot_t* GCSO_RESTRICT slot,
                                                     uint32_t mode) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
@@ -502,7 +502,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_set_mode(gcso_daes_slot_t* GCSO_RESTR
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(slot) % alignof(gcso_daes_slot_t) != 0)) {
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(slot) % alignof(gcso_ledger_slot_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
         slot->mode = mode;
@@ -516,21 +516,21 @@ GCSO_API gcso_status_t GCSO_CALL gcso_daes_set_mode(gcso_daes_slot_t* GCSO_RESTR
  * @brief Evaluates telemetry ledger to auto-tune PSPM routing ratios, RIPA bounds & EDBC
  * thresholds.
  *
- * Self-Optimization Loop: Analyzes cache hit counts from DAES scratchpad to adaptively adjust
+ * Self-Optimization Loop: Analyzes cache hit counts from FastPathLedger to adaptively adjust
  * minimum QDPS step thresholds and maximum RIPA clamp bounds in runtime config.
  *
- * @param slot Const DAES slot structure pointer.
+ * @param slot Const ledger slot structure pointer.
  * @param config_out Pointer to receive updated auto-tuned configuration structure.
  * @return GCSO_SUCCESS or error code.
  */
 GCSO_API gcso_status_t GCSO_CALL
-gcso_daes_evaluate_auto_tune(const gcso_daes_slot_t* GCSO_RESTRICT slot,
+gcso_ledger_evaluate_auto_tune(const gcso_ledger_slot_t* GCSO_RESTRICT slot,
                              gcso_config_t* GCSO_RESTRICT config_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot == nullptr || config_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     try {
-        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(slot) % alignof(gcso_daes_slot_t) != 0 ||
+        if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(slot) % alignof(gcso_ledger_slot_t) != 0 ||
                           reinterpret_cast<uintptr_t>(config_out) % alignof(gcso_config_t) != 0)) {
             return GCSO_ERROR_MISALIGNED_POINTER;
         }
@@ -548,7 +548,7 @@ gcso_daes_evaluate_auto_tune(const gcso_daes_slot_t* GCSO_RESTRICT slot,
             config_out->ripa_clamp_max_rad = 0.050f;
         }
 
-        config_out->daes_mode = static_cast<uint8_t>(slot->mode & 0xFF);
+        config_out->ledger_mode = static_cast<uint8_t>(slot->mode & 0xFF);
 
         return GCSO_SUCCESS;
     } catch (...) {
@@ -557,21 +557,21 @@ gcso_daes_evaluate_auto_tune(const gcso_daes_slot_t* GCSO_RESTRICT slot,
 }
 
 /**
- * @brief Destroys a DAES slot instance. Safe No-Op if NULL.
+ * @brief Destroys a ledger slot instance. Safe No-Op if NULL.
  *
- * @param slot Handle to DAES slot instance (safe no-op if NULL).
+ * @param slot Handle to ledger slot instance (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_daes_slot_destroy(gcso_daes_slot_handle_t slot)
+GCSO_API gcso_status_t GCSO_CALL gcso_ledger_slot_destroy(gcso_ledger_slot_handle_t slot)
     GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot == nullptr)) {
         return GCSO_SUCCESS;
     }
-    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(slot) % alignof(gcso_daes_slot_t) != 0)) {
+    if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(slot) % alignof(gcso_ledger_slot_t) != 0)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
     try {
-        gcso_aligned_delete(reinterpret_cast<gcso_daes_slot_t*>(slot));
+        gcso_aligned_delete(reinterpret_cast<gcso_ledger_slot_t*>(slot));
         return GCSO_SUCCESS;
     } catch (...) {
         return GCSO_ERROR_PANIC_CAUGHT;

@@ -50,16 +50,16 @@ use super::rope::{
 };
 use super::telemetry::{
     select_rewire_bridge_and_modulate_with_preloaded_words_64, ContrastivePhaseBloomFilter,
-    DaesScratchpad, StigmergicTrailOps, DAES_METRIC_PHASE_STEERED,
-    DAES_METRIC_PSPM_ROUTED, DAES_METRIC_REPULSION_APPLIED, DAES_METRIC_SLOT_SYNERGY_ACTIVE,
-    DAES_METRIC_SRL_INJECTED, MAX_ATTRACTOR_PULL_FORCE, NUM_SWARM_MICRO_CELLS,
+    FastPathLedger, StigmergicTrailOps, LEDGER_METRIC_PHASE_STEERED,
+    LEDGER_METRIC_PSPM_ROUTED, LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
+    LEDGER_METRIC_SRL_INJECTED, MAX_ATTRACTOR_PULL_FORCE, NUM_SWARM_MICRO_CELLS,
     TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
     TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
 use core::mem::size_of;
 use crate::abi::{
-    gcso_daes_slot_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t, gcso_snapshot_header_t,
+    gcso_ledger_slot_t, gcso_pointer_trail_t, gcso_pspm_config_t, gcso_q7_t, gcso_snapshot_header_t,
     gcso_srl_descriptor_t, gcso_tagged_ptr_t, GCSO_ERROR_INVALID_ARGUMENT,
 };
 
@@ -323,7 +323,7 @@ pub fn fuse_lazy_unwrap_and_qdps_into_aligned_64(
 /// `ActionHub` bundles the fundamental constant-time capabilities registered on the engine:
 /// - [`BranchlessKernel`]: Type-level constant-time execution guarantee.
 /// - [`PointerActionHub`]: $\mathcal{O}(1)$ tagged-pointer transition table and stigmergic trail state.
-/// - [`DaesScratchpad`]: 64-byte fast-path shortcut table and 8-byte ring telemetry ledger.
+/// - [`FastPathLedger`]: 64-byte fast-path shortcut table and 8-byte ring telemetry ledger.
 /// - [`PhaseSteering`]: Inline $SO(2)^{d_{\mathrm{head}}/2}$ DPSR/RIPA/QDPS phase & Bayesian-Attention modulation.
 /// - [`PspmRouter`]: Single-pass Fact/Logic/Explore sub-head and Unified-Field Pseudo-MoE routing.
 /// - [`SrlAdapter`]: Dynamic Rank-1 outer product residual injection ($\mathbf{u}\mathbf{v}^T$).
@@ -331,7 +331,7 @@ pub fn fuse_lazy_unwrap_and_qdps_into_aligned_64(
 /// Both [`super::HotPathObserver`] (`traits/hot_path.rs`), [`super::ColdPathObserver`] (`traits/cold_path.rs`),
 /// and [`super::ActionHubGatewayExt`] (`traits/gateway.rs`) observe and mutate `ActionHub` via blanket implementations.
 pub trait ActionHub:
-    BranchlessKernel + PhaseSteering + PointerActionHub + PspmRouter + SrlAdapter + DaesScratchpad
+    BranchlessKernel + PhaseSteering + PointerActionHub + PspmRouter + SrlAdapter + FastPathLedger
 {
     /// Validates `head_dim`, `num_heads <= MAX_ATTENTION_HEADS`, `qdps_min_step_rad >= 0.0`,
     /// `ripa_max_rad > 0.0`, and optional Query/Key tensor lengths and `GCSO_RESTRICT` disjointness.
@@ -362,7 +362,7 @@ pub trait ActionHub:
         Ok((head_dim, num_heads, expected_len))
     }
 
-    /// Resolves `input_ptr` against `daes_slot`'s $\mathcal{O}(1)$ shortcut table, advances the
+    /// Resolves `input_ptr` against `ledger_slot`'s $\mathcal{O}(1)$ shortcut table, advances the
     /// pointer transition in `trail_out`, evaluates `bloom_filter` anti-phase repulsion in-place,
     /// and returns `(bypass_hit, effective_ptr, repulsion_density, repulsion_active, post_repulsion_words)`
     /// directly in 8 `u64` SWAR registers (`0` stack reload for downstream QDPS/RIPA or unified-field kernels).
@@ -373,7 +373,7 @@ pub trait ActionHub:
     fn step_hub_with_bloom_repulsion_to_words(
         &mut self,
         input_ptr: gcso_tagged_ptr_t,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
@@ -385,7 +385,7 @@ pub trait ActionHub:
         bool,
         [u64; NUM_SWARM_MICRO_CELLS],
     )> {
-        let (bypass_hit, effective_ptr) = self.resolve_or_pass_tagged_ptr(daes_slot, input_ptr);
+        let (bypass_hit, effective_ptr) = self.resolve_or_pass_tagged_ptr(ledger_slot, input_ptr);
         self.step_pointer(effective_ptr.raw(), trail_out)?;
 
         let (density, repulsion_active, words) = bloom_filter
@@ -398,7 +398,7 @@ pub trait ActionHub:
         Ok((bypass_hit, effective_ptr, density, repulsion_active, words))
     }
 
-    /// Resolves `input_ptr` against `daes_slot`'s $\mathcal{O}(1)$ shortcut table, advances the
+    /// Resolves `input_ptr` against `ledger_slot`'s $\mathcal{O}(1)$ shortcut table, advances the
     /// pointer transition in `trail_out`, and evaluates `bloom_filter` anti-phase repulsion in-place.
     ///
     /// Returns `(bypass_hit, effective_ptr, repulsion_density, repulsion_active)`.
@@ -409,7 +409,7 @@ pub trait ActionHub:
     fn step_hub_with_bloom_repulsion(
         &mut self,
         input_ptr: gcso_tagged_ptr_t,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
@@ -418,7 +418,7 @@ pub trait ActionHub:
         let (bypass_hit, effective_ptr, density, repulsion_active, _words) = self
             .step_hub_with_bloom_repulsion_to_words(
                 input_ptr,
-                daes_slot,
+                ledger_slot,
                 bloom_filter,
                 repulsion_threshold,
                 repulsion_scale_u7,
@@ -938,7 +938,7 @@ pub trait ActionHub:
 
     /// Executes **Full Coarse-to-Fine Macro-to-Micro Routing ($\mathcal{O}(K)$ Macro Centroids $\to$
     /// $\mathcal{O}(M)$ Local Pointer Trails) + Continuous Geodesic Affinity Prior + Bayesian Pointer
-    /// Rewiring + $SO(2)$-Fused RIPA/PSPM Steering + DAES Telemetry** directly on `ActionHub`:
+    /// Rewiring + $SO(2)$-Fused RIPA/PSPM Steering + FastPathLedger Telemetry** directly on `ActionHub`:
     /// 1. **Coarse Step ($\mathcal{O}(K)$)**: Routes `src_trail` to the highest-gravity coherent
     ///    macro centroid $k^*$ in `centroids` via
     ///    [`CrystallizedAttractorRecord::route_coarse_to_fine_trail_64`] and pre-aligns
@@ -951,7 +951,7 @@ pub trait ActionHub:
     ///    [`Self::select_rewire_bridge_and_modulate_hub_bayesian_trails`], calling
     ///    `self.link_hallucinated_trails(src_trail_id, j^*)` and modulating `attention_scores`.
     /// 3. **Execution & Telemetry Step**: Steers `query_tensor` and/or `key_tensor` via
-    ///    [`Self::filter_qdps_and_steer_qk_with_pspm_words_safe`] and records DAES telemetry in `daes_slot`.
+    ///    [`Self::filter_qdps_and_steer_qk_with_pspm_words_safe`] and records FastPathLedger telemetry in `ledger_slot`.
     ///
     /// Returns `(macro_cluster_idx, macro_anchor_id, selected_trail_id, bayesian_score, found_coherent, steered)`.
     ///
@@ -975,7 +975,7 @@ pub trait ActionHub:
         pspm_config_and_pulse: Option<(&gcso_pspm_config_t, gcso_q7_t)>,
         qdps_min_step_rad: f32,
         ripa_max_rad: f32,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<(usize, u32, u32, f32, bool, bool)> {
@@ -1035,11 +1035,11 @@ pub trait ActionHub:
             (false, false)
         };
 
-        let metrics = branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(pspm_routed, DAES_METRIC_PSPM_ROUTED, 0)
-            | branchless_select_u8(found, DAES_METRIC_SLOT_SYNERGY_ACTIVE, 0)
-            | branchless_select_u8(!found, DAES_METRIC_REPULSION_APPLIED, 0);
-        let _ = self.telemetry_push(daes_slot, metrics);
+        let metrics = branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(pspm_routed, LEDGER_METRIC_PSPM_ROUTED, 0)
+            | branchless_select_u8(found, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, 0)
+            | branchless_select_u8(!found, LEDGER_METRIC_REPULSION_APPLIED, 0);
+        let _ = self.telemetry_push(ledger_slot, metrics);
 
         Ok((
             macro_idx,
@@ -1056,7 +1056,7 @@ pub trait ActionHub:
     /// 1. Validates optional `query_tensor` / `key_tensor` parameters upfront for strong error atomicity
     ///    (ensuring `zimms_bytes` is never mutated if tensor layout or `GCSO_RESTRICT` invariants fail).
     /// 2. Synthesizes `signal` and evolves Section 1 (`crystals`), Section 2 (`trails[trail_idx]`),
-    ///    Section 3a (`bloom`), Section 3b (`daes`), Section 3c (`provenance_reports`), and the
+    ///    Section 3a (`bloom`), Section 3b (`ledger`), Section 3c (`provenance_reports`), and the
     ///    Section 0 IEEE 802.3 CRC32 checksum in-place via
     ///    [`GcsoFourSectionView::evolve_four_section_kmeans_in_place`].
     /// 3. Extracts the updated trail's 8 SWAR phase words directly via
@@ -1186,7 +1186,7 @@ pub trait ActionHub:
     }
 
     /// Executes **In-Place 4-Section `.gcso` Zero-Copy Top-2 Liminal Bifurcation Routing +
-    /// Dual-Centroid ($k_1^*, k_2^*$) PSPM Sub-Head Steering + Section-3b DAES Telemetry +
+    /// Dual-Centroid ($k_1^*, k_2^*$) PSPM Sub-Head Steering + Section-3b FastPathLedger Telemetry +
     /// Single-Pass IEEE 802.3 CRC32 Refresh** on `ActionHub` using 100% safe disjoint slice
     /// splitting (`zimms_bytes.split_at_mut(off_trails)` + [`Pod::slice_from_bytes_at`] /
     /// [`Pod::slice_from_bytes_mut_at`]):
@@ -1199,7 +1199,7 @@ pub trait ActionHub:
     ///    and secondary centroid words (`logic_w`, $k_2^*$) returned directly in 8-word SWAR registers
     ///    to steer `query_tensor` and/or `key_tensor` via
     ///    [`Self::filter_qdps_and_steer_qk_with_pspm_words_safe`].
-    /// 4. Updates Section 3b (`gcso_daes_slot_t`) telemetry in-place if present and restamps the
+    /// 4. Updates Section 3b (`gcso_ledger_slot_t`) telemetry in-place if present and restamps the
     ///    Section 0 IEEE 802.3 CRC32 checksum in a single pass.
     ///
     /// Returns `(primary_idx, secondary_idx, primary_anchor_id, secondary_anchor_id, blended_coherence, total_gravity, is_liminal_bifurcation, steered)`.
@@ -1271,9 +1271,9 @@ pub trait ActionHub:
             (false, false)
         };
 
-        let metric_code = branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(pspm_routed, DAES_METRIC_PSPM_ROUTED, 0)
-            | branchless_select_u8((aid1 != 0) | is_liminal, DAES_METRIC_SLOT_SYNERGY_ACTIVE, 0);
+        let metric_code = branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(pspm_routed, LEDGER_METRIC_PSPM_ROUTED, 0)
+            | branchless_select_u8((aid1 != 0) | is_liminal, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, 0);
         let _ = GcsoFourSectionView::update_four_section_daes_in_place(
             zimms_bytes,
             &header,
@@ -1296,8 +1296,8 @@ pub trait ActionHub:
     /// Folds a zero-copy slice of `.gcso` [`CrystallizedAttractorRecord`]s (`records`) onto
     /// `trail.accumulated_phase_delta` in 8 register-resident `u64` SWAR words weighted by
     /// **Phase-Proximity Gravity**, steers `query_tensor` and/or `key_tensor` directly from the
-    /// folded SWAR words via [`Self::filter_qdps_words_and_steer_qk_safe`], and pushes DAES
-    /// telemetry to `daes_slot`.
+    /// folded SWAR words via [`Self::filter_qdps_words_and_steer_qk_safe`], and pushes FastPathLedger
+    /// telemetry to `ledger_slot`.
     ///
     /// Returns `(total_gravity_pull, dominant_anchor_id, steered)`.
     ///
@@ -1309,7 +1309,7 @@ pub trait ActionHub:
         records: &[CrystallizedAttractorRecord],
         qdps_min_step_rad: f32,
         ripa_max_rad: f32,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         trail: &mut gcso_pointer_trail_t,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -1346,9 +1346,9 @@ pub trait ActionHub:
             key_tensor,
         );
 
-        let metrics = branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(dom_id != 0, DAES_METRIC_SLOT_SYNERGY_ACTIVE, 0);
-        let _ = self.telemetry_push(daes_slot, metrics);
+        let metrics = branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(dom_id != 0, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, 0);
+        let _ = self.telemetry_push(ledger_slot, metrics);
         Ok((tot_pull, dom_id, steered))
     }
 
@@ -1665,7 +1665,7 @@ pub trait ActionHub:
 
     /// Executes optional single-pass PSPM sub-head routing (`pspm_config`) and SRL Rank-1 outer
     /// product residual injection (`srl_activation_and_desc`) on `query_tensor`, returning the
-    /// accumulated DAES telemetry metric bitmask (`DAES_METRIC_PSPM_ROUTED | DAES_METRIC_SRL_INJECTED`).
+    /// accumulated FastPathLedger telemetry metric bitmask (`LEDGER_METRIC_PSPM_ROUTED | LEDGER_METRIC_SRL_INJECTED`).
     ///
     /// # Errors
     /// Propagates any error from [`PspmRouter::dispatch_single_pass`] or [`SrlAdapter::eval_rank1_fused`].
@@ -1680,11 +1680,11 @@ pub trait ActionHub:
         let mut extra_metrics = 0u8;
         if let Some(cfg) = pspm_config {
             self.dispatch_single_pass(query_tensor, cfg, head_dim)?;
-            extra_metrics |= DAES_METRIC_PSPM_ROUTED;
+            extra_metrics |= LEDGER_METRIC_PSPM_ROUTED;
         }
         if let Some((x_in, desc)) = srl_activation_and_desc {
             self.eval_rank1_fused(query_tensor, x_in, desc)?;
-            extra_metrics |= DAES_METRIC_SRL_INJECTED;
+            extra_metrics |= LEDGER_METRIC_SRL_INJECTED;
         }
         Ok(extra_metrics)
     }
@@ -1696,7 +1696,7 @@ impl<T> ActionHub for T where
         + PointerActionHub
         + PspmRouter
         + SrlAdapter
-        + DaesScratchpad
+        + FastPathLedger
         + ?Sized
 {
 }

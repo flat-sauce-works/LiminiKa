@@ -7,7 +7,7 @@
 //! unified, zero-external-dependency bridge for external LLM runtimes (Candle, `llama.cpp`,
 //! and CLI evaluation harnesses).
 
-use liminika_core::abi::{gcso_daes_slot_t, gcso_edbc_state_t, gcso_pointer_trail_t, gcso_q7_t};
+use liminika_core::abi::{gcso_edbc_state_t, gcso_ledger_slot_t, gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::action_hub::{ActionHubEngine, StigmergicActionDecision, StigmergicThresholds};
 use liminika_core::crystal::CrystallizedAttractorRecord;
 use liminika_core::entropy_control::EntropyController;
@@ -242,7 +242,7 @@ pub struct ModelSteeringAdapter {
     geometry: RopeGeometry,
     phase_engine: PhaseSteeringEngine,
     action_hub: Box<ActionHubEngine>,
-    daes_slot: gcso_daes_slot_t,
+    ledger_slot: gcso_ledger_slot_t,
     decision_counts: [u64; 7],
     entropy_controller: EntropyController,
     residual_adapter: ResidualAdapterEngine,
@@ -283,7 +283,7 @@ impl ModelSteeringAdapter {
             .map_err(|e| format!("ActionHubEngine::with_dimensions_and_thresholds failed: {e}"))?,
         );
         action_hub.last_entropy_h_tilde = 0.35;
-        let daes_slot = gcso_daes_slot_t::default();
+        let ledger_slot = gcso_ledger_slot_t::default();
         let entropy_controller = EntropyController::new(gcso_edbc_state_t::default());
         let residual_adapter = ResidualAdapterEngine::new(1.0, 0, 1);
         let system_constraint = SystemConstraint::new((), 0.0, 0.0, 0xFF);
@@ -296,7 +296,7 @@ impl ModelSteeringAdapter {
             geometry,
             phase_engine,
             action_hub,
-            daes_slot,
+            ledger_slot,
             decision_counts: [0; 7],
             entropy_controller,
             residual_adapter,
@@ -458,7 +458,7 @@ impl ModelSteeringAdapter {
     }
 
     /// Safely re-allocates and re-initializes the Cold-Path engines (`PhaseSteeringEngine`,
-    /// `ActionHubEngine`, and `daes_slot`) when the underlying LLM or RoPE geometry changes
+    /// `ActionHubEngine`, and `ledger_slot`) when the underlying LLM or RoPE geometry changes
     /// during a periodic environment probe, returning the new `probe_epoch`.
     ///
     /// # Errors
@@ -497,7 +497,7 @@ impl ModelSteeringAdapter {
         self.geometry = new_geometry;
         self.phase_engine = new_phase_engine;
         self.action_hub = new_action_hub;
-        self.daes_slot = gcso_daes_slot_t::default();
+        self.ledger_slot = gcso_ledger_slot_t::default();
         self.decision_counts = [0; 7];
         self.probe_baseline = next_probe;
         Ok(self.probe_baseline.probe_epoch)
@@ -712,7 +712,7 @@ impl ModelSteeringAdapter {
 
     /// Routes [`ManifoldGatewaySignal`] through the embedded [`ActionHubEngine`] via
     /// [`ActionHubGatewayExt::ingest_gateway_and_steer_for_geometry_safe`], allowing the hub's
-    /// stigmergic trail density, DAES fast-path state, and frame energy to autonomously modulate
+    /// stigmergic trail density, FastPathLedger fast-path state, and frame energy to autonomously modulate
     /// steering across layers and tokens.
     ///
     /// # Errors
@@ -732,7 +732,7 @@ impl ModelSteeringAdapter {
                 .ingest_gateway_and_steer_for_geometry_safe(
                     signal,
                     &this.geometry,
-                    &mut this.daes_slot,
+                    &mut this.ledger_slot,
                     trail_inout,
                     unresolved_damping_u7,
                     Some(q),
@@ -779,7 +779,7 @@ impl ModelSteeringAdapter {
                     &this.system_constraint,
                     &this.probe_baseline,
                     entropy_h_tilde,
-                    &mut this.daes_slot,
+                    &mut this.ledger_slot,
                     trail_inout,
                     unresolved_damping_u7,
                     Some(q),

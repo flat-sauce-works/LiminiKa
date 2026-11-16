@@ -278,7 +278,7 @@ gcso_context_serialize(gcso_context_handle_t context, uint8_t* GCSO_RESTRICT buf
         header->dpsr_state_offset = payload_base + offsetof(gcso_context_opaque, accumulated_phase);
         header->srl_state_offset = payload_base + offsetof(gcso_context_opaque, config);
         header->edbc_state_offset = payload_base + offsetof(gcso_context_opaque, step_count);
-        header->daes_slot_offset =
+        header->ledger_slot_offset =
             static_cast<uint32_t>(payload_base + offsetof(gcso_context_opaque, active_token_id));
         header->timestamp_epoch_sec = 1774900000ULL;
 

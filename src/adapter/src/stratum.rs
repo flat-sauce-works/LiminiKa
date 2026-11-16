@@ -105,7 +105,7 @@ pub struct StratumProbeTelemetry {
     pub channel_disagreement: bool,
     /// Core 16-byte causal provenance report synthesized via [`GatewayFrame::to_causal_report`].
     pub provenance: CausalProvenanceReport,
-    /// Recorded 8-step multi-scale cognitive trajectory from `ActionHub` DAES mini ledger.
+    /// Recorded 8-step multi-scale cognitive trajectory from `ActionHub` FastPathLedger mini ledger.
     pub cognitive_trajectory: CognitiveTrajectoryLedger,
     /// Latest pseudo-neural cognitive circuit gating activation computed from trajectory history.
     pub layer_activation: CognitiveCircuitActivation,
@@ -696,13 +696,13 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
         signal.telemetry.provenance = frame.to_causal_report();
 
         // Execute cross-scale ActionHub orchestration so Gateway synthesis, Stigmergy, and
-        // recorded CognitiveTrajectoryLedger close into one unified DAES ledger.
+        // recorded CognitiveTrajectoryLedger close into one unified FastPathLedger ledger.
         let mut boundary_hub = ActionHubEngine::new();
-        let mut daes_slot = Default::default();
+        let mut ledger_slot = Default::default();
         signal
             .telemetry
             .cognitive_trajectory
-            .write_to_daes_slot(&mut daes_slot);
+            .write_to_ledger_slot(&mut ledger_slot);
         let mut boundary_trail = gcso_pointer_trail_t::default();
         boundary_trail
             .copy_from_with_words_fast(&gcso_pointer_trail_t::default(), frame.phase_words_ref());
@@ -721,7 +721,7 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
             scale_stack.len(),
             gcso_tagged_ptr_t(frame.tagged_ptr),
             frame.phase_words_ref(),
-            &mut daes_slot,
+            &mut ledger_slot,
             &mut boundary_trail,
             None,
         ) {
@@ -748,7 +748,7 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
                 final_op,
                 intensity,
             ));
-            ledger.write_to_daes_slot(&mut boundary_hub.daes_slot);
+            ledger.write_to_ledger_slot(&mut boundary_hub.ledger_slot);
             signal.telemetry.cognitive_trajectory = ledger;
             signal.telemetry.layer_activation = proj.activation;
         }
@@ -1508,7 +1508,7 @@ impl SocietyStratum for LocalTokenResonanceStratum {
         let (mut hub, selected_indices, trail_states) =
             Self::deposit_token_swarm_trails(ctx.entries, signal, last_layer);
 
-        let mut ledger = CognitiveTrajectoryLedger::from_daes_slot(&hub.daes_slot);
+        let mut ledger = CognitiveTrajectoryLedger::from_ledger_slot(&hub.ledger_slot);
         if !signal.token_deposits.is_empty() {
             ledger.push_step(CognitiveStepOp::pack(
                 SwarmScaleGranularity::PointerBit,
@@ -1547,7 +1547,7 @@ impl SocietyStratum for LocalTokenResonanceStratum {
             },
             signal.swarm_report.resolved_cell_count.min(7),
         ));
-        ledger.write_to_daes_slot(&mut hub.daes_slot);
+        ledger.write_to_ledger_slot(&mut hub.ledger_slot);
         signal.telemetry.layer_activation = cell_activation;
 
         let global_local_sharper = g_idx != l_idx && l_score > 0.0 && l_sharp > g_sharp * 1.15;
@@ -1575,7 +1575,7 @@ impl SocietyStratum for LocalTokenResonanceStratum {
                 CognitiveOpKind::DecomposePeel,
                 (signal.linked_fact_indices.len().min(7)) as u8,
             ));
-            ledger.write_to_daes_slot(&mut hub.daes_slot);
+            ledger.write_to_ledger_slot(&mut hub.ledger_slot);
         }
         signal.telemetry.cognitive_trajectory = ledger;
 

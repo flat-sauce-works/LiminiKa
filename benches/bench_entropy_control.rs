@@ -21,7 +21,7 @@ use criterion::{
     criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
 use liminika_core::abi::{
-    gcso_daes_slot_t, gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t,
+    gcso_edbc_state_t, gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t,
     gcso_tagged_ptr_t,
 };
 use liminika_core::entropy_control::{
@@ -2297,7 +2297,7 @@ fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
             let base_trails = [base_trail];
             let mut trail = base_trail;
             let bloom = ContrastivePhaseBloomFilter::new();
-            let daes = gcso_daes_slot_t::default();
+            let ledger = gcso_ledger_slot_t::default();
             let mut container_buf = AlignedBuffer128::<u8, 1024>::new([0u8; 1024]);
             let mut engine = base_engine;
             for _ in 0..8 {
@@ -2306,7 +2306,7 @@ fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
                     &records,
                     &base_trails,
                     Some(&bloom),
-                    Some(&daes),
+                    Some(&ledger),
                     1_774_900_000,
                     &mut container_buf.data,
                 )
@@ -2331,7 +2331,7 @@ fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
                     black_box(&records),
                     black_box(&base_trails),
                     black_box(Some(&bloom)),
-                    black_box(Some(&daes)),
+                    black_box(Some(&ledger)),
                     black_box(1_774_900_000),
                     black_box(&mut container_buf.data),
                 )

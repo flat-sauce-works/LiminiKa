@@ -5,7 +5,7 @@
 //! Bayesian pointer-trail transition scoring & rewiring, single-manifold unified-field resonance
 //! with 32-bit `target_anchor_id` preservation, and micro-swarm intelligence (`PagedBitmaskOps`,
 //! `ContrastivePhaseBloomFilter`, `StigmergicActionPtrOps`, `StigmergicTrailOps`,
-//! `StigmergicSwarmOps`, `DaesScratchpad`, and `SwarmResolutionReport`) registered into
+//! `StigmergicSwarmOps`, `FastPathLedger`, and `SwarmResolutionReport`) registered into
 //! [`super::ActionHub`] for the Geometric Cellular Sheaf Orchestrator (GCSO).
 //!
 //! Core inner-loop reductions execute via branchless SWAR bit-parallel arithmetic (`0 fdiv`
@@ -65,14 +65,14 @@ use super::primitives::{
     ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE,
     ACTION_MODE_PSPM_ROUTE, ACTION_MODE_SRL_INJECT, ACTION_PRESET_EXPRESS_PHASE,
     ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_REPULSION_ESCAPE,
-    ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION, DAES_MINI_LEDGER_LEN, DAES_SHORTCUT_SLOTS,
+    ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION, LEDGER_HISTORY_LEN, FAST_PATH_SHORTCUT_SLOTS,
     DEFAULT_ENTROPY_EPS, GcsoResult, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PAGED_BITMASK_BITS,
     Pod,
     coupled_slot_row_mask, is_slot_pair_coupled, pack_action_slot_tag, unpack_action_mode_from_tag,
     unpack_attractor_slot_from_tag,
 };
 use crate::abi::{
-    GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE, gcso_config_t, gcso_daes_slot_t,
+    GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE, gcso_config_t, gcso_ledger_slot_t,
     gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t, gcso_tagged_ptr_t,
 };
 use core::mem::{align_of, size_of};
@@ -121,22 +121,25 @@ pub const TRAIL_SWARM_QUORUM_SHIFT: u32 = 8;
 /// Bitmask (`0x0000_FF00`) isolating the 8-bit Micro-Swarm Quorum bitmask inside `gcso_pointer_trail_t::flags`.
 pub const TRAIL_SWARM_QUORUM_MASK: u32 = 0x0000_FF00;
 
-/// DAES telemetry metric bit (`0x01`): Fast-path bypass shortcut hit in `gcso_daes_slot_t`.
-pub const DAES_METRIC_FAST_PATH_HIT: u8 = 1 << 0;
-/// DAES telemetry metric bit (`0x02`): Inline DPSR/RIPA phase steering applied.
-pub const DAES_METRIC_PHASE_STEERED: u8 = 1 << 1;
-/// DAES telemetry metric bit (`0x04`): Contrastive Phase Bloom Filter repulsion triggered.
-pub const DAES_METRIC_REPULSION_APPLIED: u8 = 1 << 2;
-/// DAES telemetry metric bit (`0x08`): Intermediate layer skipped with SWAR phase compensation.
-pub const DAES_METRIC_LAYER_SKIP_COMPENSATED: u8 = 1 << 3;
-/// DAES telemetry metric bit (`0x10`): PSPM single-pass sub-head routing executed.
-pub const DAES_METRIC_PSPM_ROUTED: u8 = 1 << 4;
-/// DAES telemetry metric bit (`0x20`): SRL Dynamic Rank-1 residual adapter injected.
-pub const DAES_METRIC_SRL_INJECTED: u8 = 1 << 5;
-/// DAES telemetry metric bit (`0x40`): Lazy Phase Unwrapping relative shift applied.
-pub const DAES_METRIC_LAZY_UNWRAP_APPLIED: u8 = 1 << 6;
-/// DAES telemetry metric bit (`0x80`): Unified-field or cross-slot attractor synergy / mutual inhibition active.
-pub const DAES_METRIC_SLOT_SYNERGY_ACTIVE: u8 = 1 << 7;
+/// FastPathLedger telemetry metric bit (`0x01`): Fast-path bypass shortcut hit in `gcso_ledger_slot_t`.
+pub const LEDGER_METRIC_FAST_PATH_HIT: u8 = 1 << 0;
+/// FastPathLedger telemetry metric bit (`0x02`): Inline DPSR/RIPA phase steering applied.
+pub const LEDGER_METRIC_PHASE_STEERED: u8 = 1 << 1;
+/// FastPathLedger telemetry metric bit (`0x04`): Contrastive Phase Bloom Filter repulsion triggered.
+pub const LEDGER_METRIC_REPULSION_APPLIED: u8 = 1 << 2;
+/// FastPathLedger telemetry metric bit (`0x08`): Intermediate layer skipped with SWAR phase compensation.
+pub const LEDGER_METRIC_LAYER_SKIP_COMPENSATED: u8 = 1 << 3;
+/// FastPathLedger telemetry metric bit (`0x10`): PSPM single-pass sub-head routing executed.
+pub const LEDGER_METRIC_PSPM_ROUTED: u8 = 1 << 4;
+/// FastPathLedger telemetry metric bit (`0x20`): SRL Dynamic Rank-1 residual adapter injected.
+pub const LEDGER_METRIC_SRL_INJECTED: u8 = 1 << 5;
+/// FastPathLedger telemetry metric bit (`0x40`): Lazy Phase Unwrapping relative shift applied.
+pub const LEDGER_METRIC_LAZY_UNWRAP_APPLIED: u8 = 1 << 6;
+/// FastPathLedger telemetry metric bit (`0x80`): Unified-field or cross-slot attractor synergy / mutual inhibition active.
+pub const LEDGER_METRIC_SLOT_SYNERGY_ACTIVE: u8 = 1 << 7;
+/// `gcso_ledger_slot_t::auto_tune_flags` bit (`0x01`): `telemetry_mini_ledger` stores chronological
+/// [`crate::traits::gateway::CognitiveStepOp`] records (`[Scale | Op | Intensity]`) rather than legacy metric masks.
+pub const LEDGER_FLAG_COGNITIVE_TRAJECTORY: u32 = 1 << 0;
 
 // ===================================================================
 // Internal Zero-Cost SWAR 64-Byte Word Helpers
@@ -5161,23 +5164,23 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
 }
 
 // ===================================================================
-// 7. Dynamic Adaptive Extension Scratchpad (`DaesScratchpad`)
+// 7. Dynamic Adaptive Extension Scratchpad (`FastPathLedger`)
 // ===================================================================
 
-/// Lv.1 Capability Trait for the 64-byte Dynamic Adaptive Extension Scratchpad (DAES):
+/// Lv.1 Capability Trait for the 64-byte Dynamic Adaptive Extension Scratchpad (FastPathLedger):
 /// $\mathcal{O}(1)$ fast-path tagged pointer shortcuts, 8-byte circular telemetry mini-ledger,
 /// and dynamic parameter auto-tuning.
-pub trait DaesScratchpad: BranchlessKernel {
+pub trait FastPathLedger: BranchlessKernel {
     /// Resets active telemetry mini ledger and cache counters in-place.
     ///
     /// # Errors
     /// Returns an error status only if a custom implementor rejects resetting a locked slot.
     #[inline(always)]
-    fn reset_telemetry(&mut self, slot: &mut gcso_daes_slot_t) -> GcsoResult<()> {
+    fn reset_telemetry(&mut self, slot: &mut gcso_ledger_slot_t) -> GcsoResult<()> {
         slot.telemetry_ring_head = 0;
         slot.telemetry_ring_tail = 0;
         slot.cache_hit_count = 0;
-        slot.telemetry_mini_ledger = [0u8; DAES_MINI_LEDGER_LEN];
+        slot.telemetry_mini_ledger = [0u8; LEDGER_HISTORY_LEN];
         Ok(())
     }
 
@@ -5186,7 +5189,7 @@ pub trait DaesScratchpad: BranchlessKernel {
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_STATE`] if `slot.mode != 0` or no matching non-zero shortcut is registered.
     #[inline(always)]
-    fn fast_path_lookup(&self, slot: &gcso_daes_slot_t, input_key: u64) -> GcsoResult<u64> {
+    fn fast_path_lookup(&self, slot: &gcso_ledger_slot_t, input_key: u64) -> GcsoResult<u64> {
         let (hit, val) = self.fast_path_lookup_branchless(slot, input_key);
         if hit {
             Ok(val)
@@ -5198,21 +5201,21 @@ pub trait DaesScratchpad: BranchlessKernel {
     /// Executes strictly branchless $\mathcal{O}(1)$ fast-path lookup across all 4 shortcut registers.
     #[inline(always)]
     #[must_use]
-    fn fast_path_lookup_branchless(&self, slot: &gcso_daes_slot_t, input_key: u64) -> (bool, u64) {
+    fn fast_path_lookup_branchless(&self, slot: &gcso_ledger_slot_t, input_key: u64) -> (bool, u64) {
         let mask_hit = ((slot.fast_path_bypass_mask & input_key) != 0) & (slot.mode == 0);
         let idx = ((input_key.wrapping_mul(0x9E37_79B9_7F4A_7C15)) >> 62) as usize;
-        let candidate = slot.fast_path_shortcuts[idx & (DAES_SHORTCUT_SLOTS - 1)];
+        let candidate = slot.fast_path_shortcuts[idx & (FAST_PATH_SHORTCUT_SLOTS - 1)];
         let fallback = slot.fast_path_shortcuts[0];
         let resolved = branchless_select_u64(candidate != 0, candidate, fallback);
         let valid_hit = mask_hit & (resolved != 0);
         (valid_hit, branchless_select_u64(valid_hit, resolved, 0))
     }
 
-    /// Branchlessly resolves `input_ptr` against the DAES fast-path shortcut table in $\mathcal{O}(1)$.
+    /// Branchlessly resolves `input_ptr` against the FastPathLedger fast-path shortcut table in $\mathcal{O}(1)$.
     #[inline(always)]
     fn resolve_or_pass_tagged_ptr(
         &self,
-        slot: &mut gcso_daes_slot_t,
+        slot: &mut gcso_ledger_slot_t,
         input_ptr: gcso_tagged_ptr_t,
     ) -> (bool, gcso_tagged_ptr_t) {
         let (hit, shortcut_raw) = self.fast_path_lookup_branchless(slot, input_ptr.raw());
@@ -5221,26 +5224,26 @@ pub trait DaesScratchpad: BranchlessKernel {
         (hit, gcso_tagged_ptr_t(eff_raw))
     }
 
-    /// Registers a 64-bit tagged pointer shortcut into the DAES fast-path table in $\mathcal{O}(1)$.
+    /// Registers a 64-bit tagged pointer shortcut into the FastPathLedger fast-path table in $\mathcal{O}(1)$.
     #[inline(always)]
     fn register_fast_path_shortcut(
         &mut self,
-        slot: &mut gcso_daes_slot_t,
+        slot: &mut gcso_ledger_slot_t,
         input_key: u64,
         target_shortcut: u64,
     ) {
         let idx = ((input_key.wrapping_mul(0x9E37_79B9_7F4A_7C15)) >> 62) as usize;
-        slot.fast_path_shortcuts[idx & (DAES_SHORTCUT_SLOTS - 1)] = target_shortcut;
+        slot.fast_path_shortcuts[idx & (FAST_PATH_SHORTCUT_SLOTS - 1)] = target_shortcut;
         slot.fast_path_bypass_mask |= branchless_select_u64(target_shortcut != 0, input_key, 0);
     }
 
-    /// Pushes a profiling metric byte code (`DAES_METRIC_*`) into the DAES telemetry ring ledger in-place.
+    /// Pushes a profiling metric byte code (`LEDGER_METRIC_*`) into the FastPathLedger telemetry ring ledger in-place.
     ///
     /// # Errors
-    /// Returns [`crate::abi::GCSO_ERROR_DAES_SCRATCHPAD_FULL`] only if non-overwriting ring semantics are enforced.
+    /// Returns [`crate::abi::GCSO_ERROR_LEDGER_FULL`] only if non-overwriting ring semantics are enforced.
     #[inline(always)]
-    fn telemetry_push(&mut self, slot: &mut gcso_daes_slot_t, metric_code: u8) -> GcsoResult<()> {
-        let head = (slot.telemetry_ring_head as usize) & (DAES_MINI_LEDGER_LEN - 1);
+    fn telemetry_push(&mut self, slot: &mut gcso_ledger_slot_t, metric_code: u8) -> GcsoResult<()> {
+        let head = (slot.telemetry_ring_head as usize) & (LEDGER_HISTORY_LEN - 1);
         slot.telemetry_mini_ledger[head] = metric_code;
         slot.telemetry_ring_head = slot.telemetry_ring_head.wrapping_add(1);
         Ok(())
@@ -5250,7 +5253,7 @@ pub trait DaesScratchpad: BranchlessKernel {
     /// returning `(combined_metric_or_mask, active_entry_count)`.
     #[inline(always)]
     #[must_use]
-    fn telemetry_snapshot_metrics(&self, slot: &gcso_daes_slot_t) -> (u8, u32) {
+    fn telemetry_snapshot_metrics(&self, slot: &gcso_ledger_slot_t) -> (u8, u32) {
         let word = u64::from_le_bytes(slot.telemetry_mini_ledger);
         let fold32 = (word as u32) | ((word >> 32) as u32);
         let fold16 = (fold32 & 0xFFFF) | (fold32 >> 16);
@@ -5258,12 +5261,12 @@ pub trait DaesScratchpad: BranchlessKernel {
         (combined_mask, swar_u8_nonzero_count_x8(word))
     }
 
-    /// Sets the operating mode of the DAES slot (`0` = Scratchpad, `1` = Plugin, `2` = Shared IPC Buffer).
+    /// Sets the operating mode of the ledger slot (`0` = Scratchpad, `1` = Plugin, `2` = Shared IPC Buffer).
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `mode > 2`.
     #[inline(always)]
-    fn set_mode(&mut self, slot: &mut gcso_daes_slot_t, mode: u32) -> GcsoResult<()> {
+    fn set_mode(&mut self, slot: &mut gcso_ledger_slot_t, mode: u32) -> GcsoResult<()> {
         if mode > 2 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -5277,13 +5280,13 @@ pub trait DaesScratchpad: BranchlessKernel {
     /// Returns [`GCSO_ERROR_INVALID_STATE`] if `slot` is in an incompatible mode.
     fn evaluate_auto_tune(
         &self,
-        slot: &gcso_daes_slot_t,
+        slot: &gcso_ledger_slot_t,
         config_out: &mut gcso_config_t,
     ) -> GcsoResult<()>;
 
     /// Returns the cumulative cache hit count recorded in the slot.
     #[inline(always)]
-    fn cache_hit_count(&self, slot: &gcso_daes_slot_t) -> u32 {
+    fn cache_hit_count(&self, slot: &gcso_ledger_slot_t) -> u32 {
         slot.cache_hit_count
     }
 }
@@ -5312,10 +5315,10 @@ mod tests {
     use crate::traits::primitives::ATTRACTOR_SLOT_PERSONA;
 
     struct DummyDaes;
-    impl DaesScratchpad for DummyDaes {
+    impl FastPathLedger for DummyDaes {
         fn evaluate_auto_tune(
             &self,
-            _slot: &gcso_daes_slot_t,
+            _slot: &gcso_ledger_slot_t,
             _config_out: &mut gcso_config_t,
         ) -> GcsoResult<()> {
             Ok(())
@@ -5408,20 +5411,20 @@ mod tests {
         assert_eq!(trail.cluster_id, 1);
 
         let mut daes_ctrl = DummyDaes;
-        let mut daes_slot = gcso_daes_slot_t::default();
-        daes_ctrl.register_fast_path_shortcut(&mut daes_slot, init_ptr.raw(), 0x9999);
-        let (hit, resolved_ptr) = daes_ctrl.resolve_or_pass_tagged_ptr(&mut daes_slot, init_ptr);
+        let mut ledger_slot = gcso_ledger_slot_t::default();
+        daes_ctrl.register_fast_path_shortcut(&mut ledger_slot, init_ptr.raw(), 0x9999);
+        let (hit, resolved_ptr) = daes_ctrl.resolve_or_pass_tagged_ptr(&mut ledger_slot, init_ptr);
         assert!(hit && resolved_ptr.raw() == 0x9999);
         daes_ctrl
             .telemetry_push(
-                &mut daes_slot,
-                DAES_METRIC_FAST_PATH_HIT | DAES_METRIC_PHASE_STEERED,
+                &mut ledger_slot,
+                LEDGER_METRIC_FAST_PATH_HIT | LEDGER_METRIC_PHASE_STEERED,
             )
             .unwrap();
-        let (mask, count) = daes_ctrl.telemetry_snapshot_metrics(&daes_slot);
+        let (mask, count) = daes_ctrl.telemetry_snapshot_metrics(&ledger_slot);
         assert_eq!(
             (mask, count),
-            (DAES_METRIC_FAST_PATH_HIT | DAES_METRIC_PHASE_STEERED, 1)
+            (LEDGER_METRIC_FAST_PATH_HIT | LEDGER_METRIC_PHASE_STEERED, 1)
         );
     }
 

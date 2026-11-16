@@ -207,7 +207,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_container_destroy(gcso_container_handle_t 
 GCSO_API gcso_status_t GCSO_CALL gcso_container_close(gcso_container_handle_t handle) GCSO_NOEXCEPT;
 
 // ===================================================================
-// 3. Action Hub, Stigmergic Pointer Trail & DAES Acceleration Interface
+// 3. Action Hub, Stigmergic Pointer Trail & FastPathLedger Acceleration Interface
 // ===================================================================
 
 /**
@@ -364,7 +364,7 @@ gcso_action_hub_route_coarse_to_fine_trail_and_steer_qk_safe(
 
 /**
  * @brief Executes full Coarse-to-Fine Bayesian routing, Limina Slerp bridging, optional pre-Softmax
- * Attention score modulation, SO(2)-fused RIPA/PSPM steering, and optional DAES telemetry logging.
+ * Attention score modulation, SO(2)-fused RIPA/PSPM steering, and optional FastPathLedger telemetry logging.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_action_hub_route_coarse_to_fine_bayesian_and_steer_qk_safe(
@@ -375,7 +375,7 @@ gcso_action_hub_route_coarse_to_fine_bayesian_and_steer_qk_safe(
     size_t num_heads, float phase_interference_gain, float stigmergic_prior_gain,
     float pointer_link_bonus, float repulsion_penalty, uint8_t fine_interpolation_u7,
     float contradiction_threshold, const gcso_pspm_config_t* GCSO_RESTRICT pspm_cfg_opt,
-    float min_step_rad, gcso_daes_slot_t* GCSO_RESTRICT daes_slot_inout,
+    float min_step_rad, gcso_ledger_slot_t* GCSO_RESTRICT ledger_slot_inout,
     float* GCSO_RESTRICT query_tensor, float* GCSO_RESTRICT key_tensor,
     size_t* GCSO_RESTRICT winning_centroid_idx_out, uint32_t* GCSO_RESTRICT macro_anchor_id_out,
     uint32_t* GCSO_RESTRICT selected_trail_id_out, float* GCSO_RESTRICT bayesian_score_out,
@@ -470,73 +470,73 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_destroy(gcso_action_hub_handle_
     GCSO_NOEXCEPT;
 
 /**
- * @brief Allocates and initializes a DAES slot.
- * Corresponds to DaesScratchpad trait in liminika_core::traits.
- * @param slot_out Pointer to receive allocated DAES slot handle.
+ * @brief Allocates and initializes a ledger slot.
+ * Corresponds to FastPathLedger trait in liminika_core::traits.
+ * @param slot_out Pointer to receive allocated ledger slot handle.
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_daes_slot_create(gcso_daes_slot_handle_t* GCSO_RESTRICT slot_out) GCSO_NOEXCEPT;
+gcso_ledger_slot_create(gcso_ledger_slot_handle_t* GCSO_RESTRICT slot_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Resets active DAES telemetry mini ledger and cache hit counters in-place.
- * Corresponds to DaesScratchpad::reset_telemetry in liminika_core::traits.
- * @param slot Target DAES slot structure pointer to reset (64-byte aligned).
+ * @brief Resets active FastPathLedger telemetry mini ledger and cache hit counters in-place.
+ * Corresponds to FastPathLedger::reset_telemetry in liminika_core::traits.
+ * @param slot Target ledger slot structure pointer to reset (64-byte aligned).
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_daes_reset_telemetry(gcso_daes_slot_t* GCSO_RESTRICT slot) GCSO_NOEXCEPT;
+gcso_ledger_reset_telemetry(gcso_ledger_slot_t* GCSO_RESTRICT slot) GCSO_NOEXCEPT;
 
 /**
- * @brief Executes O(1) fast-path shortcut lookup in DAES dynamic scratchpad.
- * Corresponds to DaesScratchpad::fast_path_lookup in liminika_core::traits.
- * @param slot Pointer to DAES slot structure (64-byte aligned).
+ * @brief Executes O(1) fast-path shortcut lookup in FastPathLedger.
+ * Corresponds to FastPathLedger::fast_path_lookup in liminika_core::traits.
+ * @param slot Pointer to ledger slot structure (64-byte aligned).
  * @param input_key Raw key address to look up.
  * @param shortcut_out Pointer to store bypassed address result.
  * @return GCSO_SUCCESS or GCSO_ERROR_INVALID_STATE.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_daes_fast_path_lookup(const gcso_daes_slot_t* GCSO_RESTRICT slot, uint64_t input_key,
+gcso_ledger_fast_path_lookup(const gcso_ledger_slot_t* GCSO_RESTRICT slot, uint64_t input_key,
                            uint64_t* GCSO_RESTRICT shortcut_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Pushes profiling metric bytes to the DAES telemetry ring ledger in zero-allocation mode.
- * Corresponds to DaesScratchpad::telemetry_push in liminika_core::traits.
- * @param slot Target DAES slot structure pointer (64-byte aligned).
+ * @brief Pushes profiling metric bytes to the FastPathLedger telemetry ring ledger in zero-allocation mode.
+ * Corresponds to FastPathLedger::telemetry_push in liminika_core::traits.
+ * @param slot Target ledger slot structure pointer (64-byte aligned).
  * @param metric_code Metric identifier byte code.
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_daes_telemetry_push(gcso_daes_slot_t* GCSO_RESTRICT slot, uint8_t metric_code) GCSO_NOEXCEPT;
+gcso_ledger_telemetry_push(gcso_ledger_slot_t* GCSO_RESTRICT slot, uint8_t metric_code) GCSO_NOEXCEPT;
 
 /**
- * @brief Sets the DAES slot operating mode (0 = Scratchpad, 1 = Plugin, 2 = Shared IPC Buffer).
- * Corresponds to DaesScratchpad::set_mode in liminika_core::traits.
- * @param slot Pointer to DAES slot structure (64-byte aligned).
+ * @brief Sets the ledger slot operating mode (0 = Scratchpad, 1 = Plugin, 2 = Shared IPC Buffer).
+ * Corresponds to FastPathLedger::set_mode in liminika_core::traits.
+ * @param slot Pointer to ledger slot structure (64-byte aligned).
  * @param mode Desired mode index (0, 1, or 2).
  * @return GCSO_SUCCESS or GCSO_ERROR_INVALID_ARGUMENT.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_daes_set_mode(gcso_daes_slot_t* GCSO_RESTRICT slot, uint32_t mode) GCSO_NOEXCEPT;
+gcso_ledger_set_mode(gcso_ledger_slot_t* GCSO_RESTRICT slot, uint32_t mode) GCSO_NOEXCEPT;
 
 /**
  * @brief Evaluates telemetry ledger to auto-tune PSPM routing ratios, RIPA bounds & EDBC
- * thresholds. Corresponds to DaesScratchpad::evaluate_auto_tune in liminika_core::traits.
- * @param slot Const DAES slot structure pointer (64-byte aligned).
+ * thresholds. Corresponds to FastPathLedger::evaluate_auto_tune in liminika_core::traits.
+ * @param slot Const ledger slot structure pointer (64-byte aligned).
  * @param config_out Pointer to receive updated auto-tuned configuration structure (16-byte
  * aligned).
  * @return GCSO_SUCCESS or error code.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_daes_evaluate_auto_tune(const gcso_daes_slot_t* GCSO_RESTRICT slot,
+gcso_ledger_evaluate_auto_tune(const gcso_ledger_slot_t* GCSO_RESTRICT slot,
                              gcso_config_t* GCSO_RESTRICT config_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Destroys a DAES slot instance and frees allocated scratchpad memory.
- * @param slot Handle to DAES slot instance (safe no-op if NULL).
+ * @brief Destroys a ledger slot instance and frees allocated scratchpad memory.
+ * @param slot Handle to ledger slot instance (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_daes_slot_destroy(gcso_daes_slot_handle_t slot) GCSO_NOEXCEPT;
+GCSO_API gcso_status_t GCSO_CALL gcso_ledger_slot_destroy(gcso_ledger_slot_handle_t slot) GCSO_NOEXCEPT;
 
 // ===================================================================
 // 4. Phase Steering (DPSR), QDPS, PSPM & Residual Adapter (SRL) Interface
@@ -1455,7 +1455,7 @@ gcso_container_write_four_section_with_reports_zero_copy(
     const gcso_crystallized_attractor_record_t* GCSO_RESTRICT crystals, size_t num_crystals,
     const gcso_pointer_trail_t* GCSO_RESTRICT trails, size_t num_trails,
     const gcso_contrastive_bloom_filter_t* GCSO_RESTRICT bloom_opt,
-    const gcso_daes_slot_t* GCSO_RESTRICT daes_opt,
+    const gcso_ledger_slot_t* GCSO_RESTRICT ledger_opt,
     const gcso_causal_provenance_report_t* GCSO_RESTRICT reports, size_t num_reports,
     uint64_t timestamp_epoch_sec, uint8_t* GCSO_RESTRICT out_bytes,
     size_t* GCSO_RESTRICT buffer_size_inout) GCSO_NOEXCEPT;
@@ -1467,7 +1467,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_container_write_four_sectio
     const gcso_crystallized_attractor_record_t* GCSO_RESTRICT crystals, size_t num_crystals,
     const gcso_pointer_trail_t* GCSO_RESTRICT trails, size_t num_trails,
     const gcso_contrastive_bloom_filter_t* GCSO_RESTRICT bloom_opt,
-    const gcso_daes_slot_t* GCSO_RESTRICT daes_opt, uint64_t timestamp_epoch_sec,
+    const gcso_ledger_slot_t* GCSO_RESTRICT ledger_opt, uint64_t timestamp_epoch_sec,
     uint8_t* GCSO_RESTRICT out_bytes, size_t* GCSO_RESTRICT buffer_size_inout) GCSO_NOEXCEPT;
 
 /**
@@ -1482,7 +1482,7 @@ gcso_container_verify_four_section_with_reports_zero_copy(
     const gcso_crystallized_attractor_record_t** GCSO_RESTRICT crystals_ptr_out,
     const gcso_pointer_trail_t** GCSO_RESTRICT trails_ptr_out,
     const gcso_contrastive_bloom_filter_t** GCSO_RESTRICT bloom_ptr_out,
-    const gcso_daes_slot_t** GCSO_RESTRICT daes_ptr_out,
+    const gcso_ledger_slot_t** GCSO_RESTRICT ledger_ptr_out,
     const gcso_causal_provenance_report_t** GCSO_RESTRICT reports_ptr_out) GCSO_NOEXCEPT;
 
 /**

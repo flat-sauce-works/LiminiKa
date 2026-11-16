@@ -196,8 +196,8 @@ GCSO_NODISCARD GCSO_API const char* GCSO_CALL gcso_status_to_string(gcso_status_
             return "GCSO_ERROR_OBSTRUCTION_UNRESOLVED";
         case GCSO_ERROR_EXTENSION_NOT_LOADED:
             return "GCSO_ERROR_EXTENSION_NOT_LOADED";
-        case GCSO_ERROR_DAES_SCRATCHPAD_FULL:
-            return "GCSO_ERROR_DAES_SCRATCHPAD_FULL";
+        case GCSO_ERROR_LEDGER_FULL:
+            return "GCSO_ERROR_LEDGER_FULL";
         case GCSO_ERROR_UNKNOWN:
         default:
             return "GCSO_ERROR_UNKNOWN";
@@ -273,7 +273,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_config_init_default(gcso_config_t* GCSO_RE
         config->action_hub_capacity = 256;
         config->enable_cuda_warp_shuffle = 1;
         config->enable_zero_alloc_strict = 1;
-        config->daes_mode = 0; // Default: Fast-Path & Telemetry Scratchpad Mode
+        config->ledger_mode = 0; // Default: Fast-Path & Telemetry Scratchpad Mode
         config->reserved_flags = 0;
         return GCSO_SUCCESS;
     } catch (...) {
@@ -304,7 +304,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_config_validate(const gcso_config_t* GCSO_
             std::isfinite(config->entropy_singularity_eps) &&
             (config->entropy_singularity_eps > 0.0f);
         const bool valid_caps = (config->max_prompt_anchors != 0U) &&
-                                (config->action_hub_capacity != 0U) && (config->daes_mode <= 2U);
+                                (config->action_hub_capacity != 0U) && (config->ledger_mode <= 2U);
 
         return (valid_dims && valid_scales && valid_caps) ? GCSO_SUCCESS
                                                           : GCSO_ERROR_INVALID_ARGUMENT;

@@ -9,10 +9,10 @@
 //! # Architecture: `1 + 8` Flat Trait Topology (`ActionHub` + 2 Observers + Gateway)
 //! - **`ActionHub` (Core Sidecar State & Capability Ledger, [`crate::traits::ActionHub`])**: The
 //!   foundational micro composite ledger of state and branchless capabilities (`BranchlessKernel +
-//!   PhaseSteering + PointerActionHub + PspmRouter + SrlAdapter + DaesScratchpad`), completely
+//!   PhaseSteering + PointerActionHub + PspmRouter + SrlAdapter + FastPathLedger`), completely
 //!   agnostic to Hot vs. Cold Path execution.
 //! - **Lv.2 Micro Observer ([`crate::traits::HotPathObserver`])**: Drives constant-time $\mathcal{O}(1)$
-//!   per-token cascades (`Pointer -> DAES -> Bloom Repulsion -> Unified Field / Limina / Swarm ->
+//!   per-token cascades (`Pointer -> FastPathLedger -> Bloom Repulsion -> Unified Field / Limina / Swarm ->
 //!   QDPS/RIPA/RoPE -> PSPM/SRL`) with zero dynamic allocations ($C_{\mathrm{alloc}} = 0$).
 //! - **Lv.3 Macro Observer ([`crate::traits::ColdPathObserver`])**: Evaluates trajectory telemetry,
 //!   moving Z-score entropy ($\tilde{H} \in [0, \ln 2]$), sliding-window flux ($\Phi_M(t)$),
@@ -117,8 +117,8 @@ pub mod runtime;
 // ===================================================================
 
 pub use crate::abi::{
-    gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_daes_slot_t,
-    gcso_descriptor_header_t, gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
+    gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_descriptor_header_t,
+    gcso_edbc_state_t, gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
     gcso_pprc_keyframe_header_t, gcso_pspm_config_t, gcso_q7_t, gcso_snapshot_header_t,
     gcso_srl_descriptor_t, gcso_status_t, gcso_tagged_ptr_t, gcso_zimms_descriptor_t,
     GcsoAnchorType, GcsoStatus, GCSO_CAP_CPU_BASELINE, GCSO_CAP_CUDA_BACKEND,
@@ -156,9 +156,9 @@ pub use crate::traits::{
     BottomUpMacroCrystalCoordinator, BranchlessKernel, CausalProvenanceReport,
     CausalProvenanceSignal, CognitiveGroundingSignal, ColdPathObserver, ColdPathOrchestrator,
     ColdPathTrailCrystalExt, ContradictionGuard, ContradictionGuardSignal,
-    ContrastivePhaseBloomFilter, CrystallizedAttractorRecord, DaesScratchpad, DisjointMutPair,
-    DisjointMutTriple, DisjointRefMut, DnpPacketDispatcher, DynamicLayerSkipper,
-    EdbcBranchController, EntropyEvaluator, EntropyGatedPhaseLookup, FfiHandleMut, FfiHandleRef,
+    ContrastivePhaseBloomFilter, CrystallizedAttractorRecord, DisjointMutPair, DisjointMutTriple,
+    DisjointRefMut, DnpPacketDispatcher, DynamicLayerSkipper, EdbcBranchController,
+    EntropyEvaluator, EntropyGatedPhaseLookup, FastPathLedger, FfiHandleMut, FfiHandleRef,
     FractalCascadeCoordinator, FullStackGcsoEngine, GatewayFrame, GatewayPhaseSteeringExt,
     GcsoFourSectionView, GcsoResult, GcsoRuntimeContext, HierarchicalTreeTable,
     HotPathExecutionEngine, HotPathObserver, L2pSvdProjector, ManifoldGatewaySignal,
@@ -206,8 +206,8 @@ pub use crate::runtime::{
 /// Unified-Field & Bayesian-Attention kernels, types, and alignment wrappers.
 pub mod prelude {
     pub use crate::abi::{
-        gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_daes_slot_t,
-        gcso_descriptor_header_t, gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
+        gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_descriptor_header_t,
+        gcso_edbc_state_t, gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
         gcso_pprc_keyframe_header_t, gcso_pspm_config_t, gcso_q7_t, gcso_snapshot_header_t,
         gcso_srl_descriptor_t, gcso_status_t, gcso_tagged_ptr_t, gcso_zimms_descriptor_t,
         GcsoAnchorType, GcsoStatus, GCSO_ABI_VERSION_HEX, GCSO_ABI_VERSION_STRING, GCSO_SUCCESS,

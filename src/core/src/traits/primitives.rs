@@ -42,7 +42,7 @@ use core::ptr::{self, NonNull};
 use core::slice;
 
 use crate::abi::{
-    gcso_config_t, gcso_daes_slot_t, gcso_descriptor_header_t, gcso_edbc_state_t,
+    gcso_config_t, gcso_ledger_slot_t, gcso_descriptor_header_t, gcso_edbc_state_t,
     gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t, gcso_pspm_config_t,
     gcso_q7_t, gcso_snapshot_header_t, gcso_srl_descriptor_t, gcso_status_t, gcso_tagged_ptr_t,
     gcso_zimms_descriptor_t, GcsoStatus, GCSO_ABI_VERSION_HEX, GCSO_ERROR_BUFFER_TOO_SMALL,
@@ -54,7 +54,7 @@ use crate::abi::{
 pub use crate::abi::{
     GcsoActionHubHandle, GcsoActionHubOpaque, GcsoAttractorFieldHandle, GcsoAttractorFieldOpaque,
     GcsoContainerHandle, GcsoContainerOpaque, GcsoContextHandle, GcsoContextOpaque,
-    GcsoDaesSlotHandle, GcsoDaesSlotOpaque, GcsoDpsrKernelHandle, GcsoDpsrKernelOpaque,
+    GcsoLedgerSlotHandle, GcsoLedgerSlotOpaque, GcsoDpsrKernelHandle, GcsoDpsrKernelOpaque,
     GcsoEdbcControllerHandle, GcsoEdbcControllerOpaque, GcsoPspmRouterHandle, GcsoPspmRouterOpaque,
     GcsoSrlAdapterHandle, GcsoSrlAdapterOpaque,
 };
@@ -123,11 +123,11 @@ pub const PAGED_BITMASK_WORDS: usize = 4;
 /// Total number of discrete bits in a `gcso_paged_bitmask_t` (`256`).
 pub const PAGED_BITMASK_BITS: u32 = 256;
 
-/// Number of fast-path shortcut slots in a `gcso_daes_slot_t` (`4`).
-pub const DAES_SHORTCUT_SLOTS: usize = 4;
+/// Number of fast-path shortcut slots in a `gcso_ledger_slot_t` (`4`).
+pub const FAST_PATH_SHORTCUT_SLOTS: usize = 4;
 
-/// Byte length of the circular mini telemetry ledger in a `gcso_daes_slot_t` (`8`).
-pub const DAES_MINI_LEDGER_LEN: usize = 8;
+/// Byte length of the circular mini telemetry ledger in a `gcso_ledger_slot_t` (`8`).
+pub const LEDGER_HISTORY_LEN: usize = 8;
 
 /// Binary magic constant for `.gcso` snapshot headers (`0x4F534347` = ASCII `"GCSO"`).
 pub const GCSO_SNAPSHOT_MAGIC_U32: u32 = 0x4F53_4347;
@@ -673,7 +673,7 @@ impl_pod_for_primitives!(
     gcso_descriptor_header_t,
     gcso_paged_bitmask_t,
     gcso_pointer_trail_t,
-    gcso_daes_slot_t,
+    gcso_ledger_slot_t,
     gcso_config_t,
     gcso_edbc_state_t,
     gcso_zimms_descriptor_t,
@@ -753,7 +753,7 @@ pub const fn init_snapshot_header(
         srl_state_offset: hdr_size,
         edbc_state_offset: hdr_size,
         checksum_crc32: 0,
-        daes_slot_offset: hdr_size as u32,
+        ledger_slot_offset: hdr_size as u32,
         timestamp_epoch_sec,
         reserved_padding: [0; 56],
     }
@@ -779,7 +779,7 @@ pub const fn validate_snapshot_header(
     }
     let min_hdr = size_of::<gcso_snapshot_header_t>() as u64;
     let total = header.total_size;
-    let daes_off = header.daes_slot_offset as u64;
+    let daes_off = header.ledger_slot_offset as u64;
     let offsets_in_bounds = (total >= min_hdr)
         & ((available_bytes as u64) >= total)
         & (header.action_hub_offset >= min_hdr)
@@ -5374,7 +5374,7 @@ mod tests {
         assert_eq!(size_of::<GcsoContextHandle>(), size_of::<*mut ()>());
         assert_eq!(size_of::<GcsoContainerHandle>(), size_of::<*mut ()>());
         assert_eq!(size_of::<GcsoActionHubHandle>(), size_of::<*mut ()>());
-        assert_eq!(size_of::<GcsoDaesSlotHandle>(), size_of::<*mut ()>());
+        assert_eq!(size_of::<GcsoLedgerSlotHandle>(), size_of::<*mut ()>());
         assert_eq!(size_of::<GcsoAttractorFieldHandle>(), size_of::<*mut ()>());
         assert_eq!(size_of::<GcsoEdbcControllerHandle>(), size_of::<*mut ()>());
         assert_eq!(size_of::<GcsoDpsrKernelHandle>(), size_of::<*mut ()>());

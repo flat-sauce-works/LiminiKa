@@ -46,8 +46,8 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_ZIMMS_DESCRIPTOR_PREAMBLE_OFFSET 128U
 #define GCSO_Q7_PHASE_ARRAY_LEN 64U
 #define GCSO_BLOOM_FILTER_COUNTERS_LEN 64U
-#define GCSO_DAES_SHORTCUTS_LEN 4U
-#define GCSO_DAES_MINI_LEDGER_LEN 8U
+#define GCSO_FAST_PATH_SHORTCUT_SLOTS 4U
+#define GCSO_LEDGER_HISTORY_LEN 8U
 #define GCSO_PAGED_BITMASK_WORDS 4U
 #define GCSO_NUM_SWARM_MICRO_CELLS 8U
 #define GCSO_MAX_ATTRACTOR_DOMAINS 8U
@@ -113,15 +113,16 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_TRAIL_SWARM_QUORUM_SHIFT 8U
 #define GCSO_TRAIL_SWARM_QUORUM_MASK 0x0000FF00U
 
-/* DAES Telemetry Ring Ledger Metric Bitflags (1:1 bit parity with telemetry.rs) */
-#define GCSO_DAES_METRIC_FAST_PATH_HIT (1U << 0)
-#define GCSO_DAES_METRIC_PHASE_STEERED (1U << 1)
-#define GCSO_DAES_METRIC_REPULSION_APPLIED (1U << 2)
-#define GCSO_DAES_METRIC_LAYER_SKIP_COMPENSATED (1U << 3)
-#define GCSO_DAES_METRIC_PSPM_ROUTED (1U << 4)
-#define GCSO_DAES_METRIC_SRL_INJECTED (1U << 5)
-#define GCSO_DAES_METRIC_LAZY_UNWRAP_APPLIED (1U << 6)
-#define GCSO_DAES_METRIC_SLOT_SYNERGY_ACTIVE (1U << 7)
+/* FastPathLedger Telemetry Ring Ledger Metric Bitflags (1:1 bit parity with telemetry.rs) */
+#define GCSO_LEDGER_METRIC_FAST_PATH_HIT (1U << 0)
+#define GCSO_LEDGER_METRIC_PHASE_STEERED (1U << 1)
+#define GCSO_LEDGER_METRIC_REPULSION_APPLIED (1U << 2)
+#define GCSO_LEDGER_METRIC_LAYER_SKIP_COMPENSATED (1U << 3)
+#define GCSO_LEDGER_METRIC_PSPM_ROUTED (1U << 4)
+#define GCSO_LEDGER_METRIC_SRL_INJECTED (1U << 5)
+#define GCSO_LEDGER_METRIC_LAZY_UNWRAP_APPLIED (1U << 6)
+#define GCSO_LEDGER_METRIC_SLOT_SYNERGY_ACTIVE (1U << 7)
+#define GCSO_LEDGER_FLAG_COGNITIVE_TRAJECTORY (1U << 0)
 
 /* 4-Axis Causal Provenance Bitflags & Root Cause Codes (1:1 parity with gateway.rs) */
 #define GCSO_CAUSAL_AXIS_SYSTEM_CONSTRAINT (1U << 0)
@@ -167,7 +168,7 @@ typedef enum gcso_status GCSO_ENUM_UNDERLYING(int32_t){
     GCSO_ERROR_PPRC_SEEK_FAILED = -70,
     GCSO_ERROR_OBSTRUCTION_UNRESOLVED = -80,
     GCSO_ERROR_EXTENSION_NOT_LOADED = -90,
-    GCSO_ERROR_DAES_SCRATCHPAD_FULL = -91,
+    GCSO_ERROR_LEDGER_FULL = -91,
     GCSO_ERROR_UNKNOWN = -0x7FFFFFFF} gcso_status_t;
 
 /**
@@ -237,19 +238,19 @@ struct GCSO_ALIGN_PREFIX(128) gcso_pointer_trail {
 typedef struct gcso_pointer_trail gcso_pointer_trail_t;
 
 /**
- * @brief Dynamic Adaptive Extension Scratchpad (DAES) slot layout (64 bytes).
+ * @brief Dynamic Adaptive Extension Scratchpad (FastPathLedger) slot layout (64 bytes).
  */
-struct GCSO_ALIGN_PREFIX(64) gcso_daes_slot {
+struct GCSO_ALIGN_PREFIX(64) gcso_ledger_slot {
     uint32_t mode;
     uint16_t telemetry_ring_head;
     uint16_t telemetry_ring_tail;
     uint32_t cache_hit_count;
     uint32_t auto_tune_flags;
     uint64_t fast_path_bypass_mask;
-    uint64_t fast_path_shortcuts[GCSO_DAES_SHORTCUTS_LEN];
-    uint8_t telemetry_mini_ledger[GCSO_DAES_MINI_LEDGER_LEN];
+    uint64_t fast_path_shortcuts[GCSO_FAST_PATH_SHORTCUT_SLOTS];
+    uint8_t telemetry_mini_ledger[GCSO_LEDGER_HISTORY_LEN];
 } GCSO_ALIGN_SUFFIX(64);
-typedef struct gcso_daes_slot gcso_daes_slot_t;
+typedef struct gcso_ledger_slot gcso_ledger_slot_t;
 
 /**
  * @brief Global configuration descriptor structure aligned to 16 bytes (64 bytes total).
@@ -274,7 +275,7 @@ struct GCSO_ALIGN_PREFIX(16) gcso_config {
     uint32_t action_hub_capacity;
     uint8_t enable_cuda_warp_shuffle;
     uint8_t enable_zero_alloc_strict;
-    uint8_t daes_mode;
+    uint8_t ledger_mode;
     uint8_t reserved_flags;
     uint32_t rotary_dim;
     uint8_t rope_layout;
@@ -353,7 +354,7 @@ struct GCSO_ALIGN_PREFIX(64) gcso_snapshot_header {
     uint64_t srl_state_offset;
     uint64_t edbc_state_offset;
     uint32_t checksum_crc32;
-    uint32_t daes_slot_offset;
+    uint32_t ledger_slot_offset;
     uint64_t timestamp_epoch_sec;
     uint8_t reserved_padding[56];
 } GCSO_ALIGN_SUFFIX(64);
@@ -501,6 +502,34 @@ struct GCSO_ALIGN_PREFIX(64) gcso_contrastive_bloom_filter {
 } GCSO_ALIGN_SUFFIX(64);
 typedef struct gcso_contrastive_bloom_filter gcso_contrastive_bloom_filter_t;
 
+/**
+ * @brief 1-byte compact cognitive step opcode ([Scale(2b) | Op(3b) | Intensity(3b)]).
+ */
+typedef uint8_t gcso_cognitive_step_op_t;
+
+/**
+ * @brief 8-byte register-resident activation output of a cognitive trajectory circuit node.
+ */
+struct GCSO_ALIGN_PREFIX(8) gcso_cognitive_circuit_activation {
+    uint8_t peel_gate_q7;
+    uint8_t fuse_gate_q7;
+    uint8_t repulse_sensitivity_q7;
+    uint8_t selected_op;
+    uint8_t preferred_next_scale;
+    uint8_t intensity_q7;
+    gcso_q7_t circuit_resonance_q7;
+    uint8_t trajectory_depth;
+} GCSO_ALIGN_SUFFIX(8);
+typedef struct gcso_cognitive_circuit_activation gcso_cognitive_circuit_activation_t;
+
+/**
+ * @brief 8-byte chronological cognitive trajectory ledger mirroring gcso_ledger_slot_t::telemetry_mini_ledger.
+ */
+struct GCSO_ALIGN_PREFIX(8) gcso_cognitive_trajectory_ledger {
+    gcso_cognitive_step_op_t steps[GCSO_LEDGER_HISTORY_LEN];
+} GCSO_ALIGN_SUFFIX(8);
+typedef struct gcso_cognitive_trajectory_ledger gcso_cognitive_trajectory_ledger_t;
+
 /*
  * Strongly-Typed Opaque Handles eliminating generic raw `c_void` / `void*` pointers.
  * Each domain component has a distinct opaque type to prevent type confusion at compile time.
@@ -515,8 +544,8 @@ typedef struct gcso_container_opaque* gcso_container_handle_t;
 struct gcso_action_hub_opaque;
 typedef struct gcso_action_hub_opaque* gcso_action_hub_handle_t;
 
-struct gcso_daes_slot_opaque;
-typedef struct gcso_daes_slot_opaque* gcso_daes_slot_handle_t;
+struct gcso_ledger_slot_opaque;
+typedef struct gcso_ledger_slot_opaque* gcso_ledger_slot_handle_t;
 
 struct gcso_attractor_field_opaque;
 typedef struct gcso_attractor_field_opaque* gcso_attractor_field_handle_t;
@@ -544,7 +573,7 @@ GCSO_STATIC_ASSERT(sizeof(gcso_descriptor_header_t) == 8, "gcso_descriptor_heade
 GCSO_STATIC_ASSERT(sizeof(gcso_raw_buffer_t) == 32, "gcso_raw_buffer_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_paged_bitmask_t) == 32, "gcso_paged_bitmask_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_pointer_trail_t) == 128, "gcso_pointer_trail_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_daes_slot_t) == 64, "gcso_daes_slot_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_ledger_slot_t) == 64, "gcso_ledger_slot_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_config_t) == 64, "gcso_config_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_edbc_state_t) == 64, "gcso_edbc_state_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_zimms_descriptor_t) == 64, "gcso_zimms_descriptor_t size mismatch");
@@ -566,6 +595,12 @@ GCSO_STATIC_ASSERT(sizeof(gcso_crystallized_attractor_record_t) == 128,
                    "gcso_crystallized_attractor_record_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_contrastive_bloom_filter_t) == 64,
                    "gcso_contrastive_bloom_filter_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_cognitive_step_op_t) == 1,
+                   "gcso_cognitive_step_op_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_cognitive_circuit_activation_t) == 8,
+                   "gcso_cognitive_circuit_activation_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_cognitive_trajectory_ledger_t) == 8,
+                   "gcso_cognitive_trajectory_ledger_t size mismatch");
 
 /* Static Assertions for Alignment Invariants Matching src/core/src/abi/ & traits/ */
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_raw_buffer_t) == 16, "gcso_raw_buffer_t alignment mismatch");
@@ -573,7 +608,7 @@ GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_paged_bitmask_t) == 32,
                    "gcso_paged_bitmask_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_pointer_trail_t) == 128,
                    "gcso_pointer_trail_t alignment mismatch");
-GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_daes_slot_t) == 64, "gcso_daes_slot_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_ledger_slot_t) == 64, "gcso_ledger_slot_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_config_t) == 16, "gcso_config_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_edbc_state_t) == 32, "gcso_edbc_state_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_zimms_descriptor_t) == 32,
@@ -640,21 +675,21 @@ GCSO_STATIC_ASSERT(offsetof(gcso_pointer_trail_t, accumulated_phase_delta) == 56
 GCSO_STATIC_ASSERT(offsetof(gcso_pointer_trail_t, reserved_padding) == 120,
                    "gcso_pointer_trail_t::reserved_padding offset mismatch");
 
-GCSO_STATIC_ASSERT(offsetof(gcso_daes_slot_t, mode) == 0, "gcso_daes_slot_t::mode offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_daes_slot_t, telemetry_ring_head) == 4,
-                   "gcso_daes_slot_t::telemetry_ring_head offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_daes_slot_t, telemetry_ring_tail) == 6,
-                   "gcso_daes_slot_t::telemetry_ring_tail offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_daes_slot_t, cache_hit_count) == 8,
-                   "gcso_daes_slot_t::cache_hit_count offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_daes_slot_t, auto_tune_flags) == 12,
-                   "gcso_daes_slot_t::auto_tune_flags offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_daes_slot_t, fast_path_bypass_mask) == 16,
-                   "gcso_daes_slot_t::fast_path_bypass_mask offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_daes_slot_t, fast_path_shortcuts) == 24,
-                   "gcso_daes_slot_t::fast_path_shortcuts offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_daes_slot_t, telemetry_mini_ledger) == 56,
-                   "gcso_daes_slot_t::telemetry_mini_ledger offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_ledger_slot_t, mode) == 0, "gcso_ledger_slot_t::mode offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_ledger_slot_t, telemetry_ring_head) == 4,
+                   "gcso_ledger_slot_t::telemetry_ring_head offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_ledger_slot_t, telemetry_ring_tail) == 6,
+                   "gcso_ledger_slot_t::telemetry_ring_tail offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_ledger_slot_t, cache_hit_count) == 8,
+                   "gcso_ledger_slot_t::cache_hit_count offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_ledger_slot_t, auto_tune_flags) == 12,
+                   "gcso_ledger_slot_t::auto_tune_flags offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_ledger_slot_t, fast_path_bypass_mask) == 16,
+                   "gcso_ledger_slot_t::fast_path_bypass_mask offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_ledger_slot_t, fast_path_shortcuts) == 24,
+                   "gcso_ledger_slot_t::fast_path_shortcuts offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_ledger_slot_t, telemetry_mini_ledger) == 56,
+                   "gcso_ledger_slot_t::telemetry_mini_ledger offset mismatch");
 
 GCSO_STATIC_ASSERT(offsetof(gcso_config_t, head_dim) == 0,
                    "gcso_config_t::head_dim offset mismatch");
@@ -678,8 +713,8 @@ GCSO_STATIC_ASSERT(offsetof(gcso_config_t, enable_cuda_warp_shuffle) == 36,
                    "gcso_config_t::enable_cuda_warp_shuffle offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_config_t, enable_zero_alloc_strict) == 37,
                    "gcso_config_t::enable_zero_alloc_strict offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_config_t, daes_mode) == 38,
-                   "gcso_config_t::daes_mode offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_config_t, ledger_mode) == 38,
+                   "gcso_config_t::ledger_mode offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_config_t, reserved_flags) == 39,
                    "gcso_config_t::reserved_flags offset mismatch");
 
@@ -757,8 +792,8 @@ GCSO_STATIC_ASSERT(offsetof(gcso_snapshot_header_t, edbc_state_offset) == 48,
                    "gcso_snapshot_header_t::edbc_state_offset offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_snapshot_header_t, checksum_crc32) == 56,
                    "gcso_snapshot_header_t::checksum_crc32 offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_snapshot_header_t, daes_slot_offset) == 60,
-                   "gcso_snapshot_header_t::daes_slot_offset offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_snapshot_header_t, ledger_slot_offset) == 60,
+                   "gcso_snapshot_header_t::ledger_slot_offset offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_snapshot_header_t, timestamp_epoch_sec) == 64,
                    "gcso_snapshot_header_t::timestamp_epoch_sec offset mismatch");
 

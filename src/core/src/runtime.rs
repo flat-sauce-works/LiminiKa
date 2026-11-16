@@ -31,8 +31,8 @@
 #![allow(clippy::needless_return)]
 
 use crate::abi::{
-    gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_daes_slot_t,
-    gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t,
+    gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_edbc_state_t,
+    gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t,
     gcso_pspm_config_t, gcso_q7_t, gcso_snapshot_header_t, gcso_srl_descriptor_t,
     gcso_tagged_ptr_t, gcso_zimms_descriptor_t, GCSO_CAP_CPU_BASELINE, GCSO_CAP_CUDA_BACKEND,
     GCSO_CAP_METAL_BACKEND, GCSO_CAP_VULKAN_BACKEND,
@@ -47,8 +47,8 @@ use crate::traits::{
     ActionHub, ActionHubGatewayExt, AlignedBuffer64, AlignedSlice16, AlignedSlice32,
     AlignedSliceMut16, AlignedSliceMut32, AttractorField, AttractorSlotSynergyCoordinator,
     BottomUpMacroCrystalCoordinator, CausalProvenanceSignal, ColdPathObserver,
-    ContrastivePhaseBloomFilter, DaesScratchpad, DnpPacketDispatcher, DynamicLayerSkipper,
-    EdbcBranchController, EntropyEvaluator, EntropyGatedPhaseLookup, FractalCascadeCoordinator,
+    ContrastivePhaseBloomFilter, DnpPacketDispatcher, DynamicLayerSkipper, EdbcBranchController,
+    EntropyEvaluator, EntropyGatedPhaseLookup, FastPathLedger, FractalCascadeCoordinator,
     FullStackGcsoEngine, GatewayFrame, GatewayPhaseSteeringExt, GcsoResult, GcsoRuntimeContext,
     HierarchicalTreeTable, HotPathObserver, L2pSvdProjector, ManifoldGatewaySignal,
     MultiDomainAttractorSpace, PersonaPatcher, PhaseSteering, Pod, PointerActionHub, PprcCache,
@@ -75,14 +75,14 @@ use crate::traits::primitives::{
 };
 use crate::traits::primitives::{
     finalize_snapshot_header_crc32, init_snapshot_header, verify_snapshot_payload_crc32,
-    ATTRACTOR_SLOT_ID_MASK, DAES_MINI_LEDGER_LEN, DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_ENTROPY_EPS,
+    ATTRACTOR_SLOT_ID_MASK, DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_ENTROPY_EPS,
     DEFAULT_PAGED_BLOCK_SIZE, DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD,
-    MAX_ATTENTION_HEADS, Q7_PHASE_SCALE_RAD,
+    LEDGER_HISTORY_LEN, MAX_ATTENTION_HEADS, Q7_PHASE_SCALE_RAD,
 };
 use crate::traits::{
     accumulate_q7_slice_into_words_64, select_rewire_bridge_and_modulate_with_preloaded_words_64,
-    DAES_METRIC_FAST_PATH_HIT, DAES_METRIC_LAYER_SKIP_COMPENSATED, DAES_METRIC_PHASE_STEERED,
-    DAES_METRIC_REPULSION_APPLIED, DAES_METRIC_SLOT_SYNERGY_ACTIVE, MAX_ATTRACTOR_PULL_FORCE,
+    LEDGER_METRIC_FAST_PATH_HIT, LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED,
+    LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, MAX_ATTRACTOR_PULL_FORCE,
 };
 
 /// Convenient crate-level result type alias for GCSO operations.
@@ -158,7 +158,7 @@ impl Config {
                 action_hub_capacity: DEFAULT_ACTION_HUB_CAPACITY,
                 enable_cuda_warp_shuffle: 1,
                 enable_zero_alloc_strict: 1,
-                daes_mode: 0,
+                ledger_mode: 0,
                 reserved_flags: 0,
                 rotary_dim: 0,
                 rope_layout: 0,
@@ -276,11 +276,11 @@ impl Config {
         self
     }
 
-    /// Configures DAES scratchpad operating mode (`0` = Scratchpad, `1` = Plugin, `2` = Shared IPC).
+    /// Configures FastPathLedger operating mode (`0` = Scratchpad, `1` = Plugin, `2` = Shared IPC).
     #[inline(always)]
     #[must_use]
-    pub const fn with_daes_mode(mut self, daes_mode: u8) -> Self {
-        self.raw.daes_mode = daes_mode;
+    pub const fn with_ledger_mode(mut self, ledger_mode: u8) -> Self {
+        self.raw.ledger_mode = ledger_mode;
         self
     }
 
@@ -337,7 +337,7 @@ impl Config {
     /// # Errors
     /// Returns [`crate::abi::GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is odd or zero,
     /// `num_heads` is zero or exceeds `64`, `paged_block_size` is neither `16` nor `32`,
-    /// `daes_mode > 2`, capacity bounds are zero, or any floating-point threshold is non-finite
+    /// `ledger_mode > 2`, capacity bounds are zero, or any floating-point threshold is non-finite
     /// or outside its valid domain.
     #[inline]
     pub fn validate(&self) -> Result<()> {
@@ -358,7 +358,7 @@ impl Config {
 
         let valid_edbc_and_caps = (self.raw.max_prompt_anchors != 0)
             & (self.raw.action_hub_capacity != 0)
-            & (self.raw.daes_mode <= 2)
+            & (self.raw.ledger_mode <= 2)
             & branchless_is_finite_f32(self.hysteresis_band)
             & (self.hysteresis_band >= 0.0)
             & branchless_is_finite_f32(self.tau_flux)
@@ -379,7 +379,7 @@ impl Config {
 // ===================================================================
 
 /// High-level safe Rust runtime context integrating [`ActionHub`],
-/// [`HotPathObserver`] (Micro Observer: DPSR, DAES, PSPM, SRL, Contrastive Phase Bloom Filter,
+/// [`HotPathObserver`] (Micro Observer: DPSR, FastPathLedger, PSPM, SRL, Contrastive Phase Bloom Filter,
 /// Limina bridging, and Bayesian pointer-trail Attention modulation), and [`ColdPathObserver`]
 /// (Macro Observer: EDBC, Single Unified Attractor Manifold, 8-Lane Working Cache Window,
 /// Sheaf Cohomology $H^1$, L2P-SVD, PPRC, and ZIMMS Storage).
@@ -559,18 +559,18 @@ impl RuntimeContext {
         &mut self.action_hub.bloom_filter
     }
 
-    /// Returns an immutable reference to the active [`gcso_daes_slot_t`] scratchpad.
+    /// Returns an immutable reference to the active [`gcso_ledger_slot_t`] scratchpad.
     #[inline(always)]
     #[must_use]
-    pub const fn daes_slot(&self) -> &gcso_daes_slot_t {
-        &self.action_hub.daes_slot
+    pub const fn ledger_slot(&self) -> &gcso_ledger_slot_t {
+        &self.action_hub.ledger_slot
     }
 
-    /// Returns a mutable reference to the active [`gcso_daes_slot_t`] scratchpad.
+    /// Returns a mutable reference to the active [`gcso_ledger_slot_t`] scratchpad.
     #[inline(always)]
     #[must_use]
-    pub fn daes_slot_mut(&mut self) -> &mut gcso_daes_slot_t {
-        &mut self.action_hub.daes_slot
+    pub fn ledger_slot_mut(&mut self) -> &mut gcso_ledger_slot_t {
+        &mut self.action_hub.ledger_slot
     }
 
     /// Returns an immutable 16-byte aligned slice view over the 8-lane Q7 working phase bank (`512` bytes).
@@ -668,7 +668,7 @@ impl RuntimeContext {
 
     /// Executes a per-token Hot Path step integrating DPSR phase steering, EDBC entropy evaluation,
     /// Single Unified Attractor Manifold superposition, Contrastive Phase Bloom Filter repulsion,
-    /// and DAES telemetry logging in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
+    /// and FastPathLedger telemetry logging in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
     ///
     /// # Errors
     /// Returns [`crate::abi::GCSO_ERROR_INVALID_ARGUMENT`] if `query_tensor` and `key_tensor`
@@ -745,9 +745,9 @@ impl RuntimeContext {
                 | branchless_select_u32(repulsion_active, TRAIL_FLAG_REPULSION_ACTIVE, 0);
         }
 
-        let metric = DAES_METRIC_PHASE_STEERED
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0);
-        self.action_hub.daes_slot.push_telemetry_metric(metric);
+        let metric = LEDGER_METRIC_PHASE_STEERED
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0);
+        self.action_hub.ledger_slot.push_telemetry_metric(metric);
 
         Ok(())
     }
@@ -756,7 +756,7 @@ impl RuntimeContext {
     /// slice of anchors (`anchor_phases`, `anchor_base_energies`) without requiring an 8-slot
     /// domain restriction:
     /// 1. Evaluates EDBC entropy on `token_z_score`.
-    /// 2. Steps `input_tagged_ptr` with DAES fast-path shortcut lookup and `bloom_filter` repulsion.
+    /// 2. Steps `input_tagged_ptr` with FastPathLedger fast-path shortcut lookup and `bloom_filter` repulsion.
     /// 3. Folds all unified-field anchors via [`PointerActionHub::orchestrate_unified_field_resonance`],
     ///    binding the 32-bit dominant resonant anchor ID into `trail_out.target_anchor_id`.
     /// 4. Optionally modulates candidate memory Attention scores (`attention_scores`) by
@@ -800,7 +800,7 @@ impl RuntimeContext {
         )?;
         let (bypass_hit, eff_ptr) = self
             .action_hub
-            .daes_slot
+            .ledger_slot
             .resolve_or_pass_in_place(input_tagged_ptr);
         self.step_pointer(eff_ptr.raw(), trail_out)?;
         let (density, repulsion_active) = self
@@ -829,11 +829,11 @@ impl RuntimeContext {
             query_tensor,
             key_tensor,
         );
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
-            | branchless_select_u8(active_cnt > 0, DAES_METRIC_SLOT_SYNERGY_ACTIVE, 0);
-        self.action_hub.daes_slot.push_telemetry_metric(metric);
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
+            | branchless_select_u8(active_cnt > 0, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, 0);
+        self.action_hub.ledger_slot.push_telemetry_metric(metric);
 
         if let Some(scores) = attention_scores {
             if !anchor_phases.is_empty() && !scores.is_empty() {
@@ -905,7 +905,7 @@ impl RuntimeContext {
         )?;
         let (bypass_hit, eff_ptr) = self
             .action_hub
-            .daes_slot
+            .ledger_slot
             .resolve_or_pass_in_place(input_tagged_ptr);
         self.step_pointer(eff_ptr.raw(), trail_out)?;
         let (_density, mut repulsion_active) = self
@@ -984,15 +984,15 @@ impl RuntimeContext {
             query_tensor,
             key_tensor,
         );
-        let metric = branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
             | branchless_select_u8(
                 (active_anchors > 0) | found_coherent,
-                DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+                LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
                 0,
             );
-        self.action_hub.daes_slot.push_telemetry_metric(metric);
+        self.action_hub.ledger_slot.push_telemetry_metric(metric);
 
         Ok((
             selected_id,
@@ -1003,7 +1003,7 @@ impl RuntimeContext {
         ))
     }
 
-    /// Executes the Pointer-Driven Stigmergic Mode Cascade on this context's internal DAES
+    /// Executes the Pointer-Driven Stigmergic Mode Cascade on this context's internal FastPathLedger
     /// scratchpad and Contrastive Phase Bloom Filter in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
     ///
     /// # Errors
@@ -1043,7 +1043,7 @@ impl RuntimeContext {
         )?;
         let (bypass_hit, eff_ptr) = self
             .action_hub
-            .daes_slot
+            .ledger_slot
             .resolve_or_pass_in_place(input_tagged_ptr);
         self.step_pointer(eff_ptr.raw(), trail_out)?;
         self.finish_pointer_cascade_tail(
@@ -1072,7 +1072,7 @@ impl RuntimeContext {
     /// Executes the full Slot-Bank Pointer Cascade integrating [`RuntimeContext`]'s internal
     /// 8-lane Q7 working phase bank (`slot_phase_bank`), cross-lane coupling matrix
     /// (`slot_coupling_matrix`), mutual inhibition from [`ATTRACTOR_SLOT_REPULSION`], EDBC
-    /// entropy evaluation, and DAES telemetry logging in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
+    /// entropy evaluation, and FastPathLedger telemetry logging in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
     ///
     /// Returns `(evolved_tagged_ptr, bloom_repulsion_density, effective_pull_force, phase_coherence)`.
     ///
@@ -1126,7 +1126,7 @@ impl RuntimeContext {
         )?;
         let (bypass_hit, eff_ptr) = self
             .action_hub
-            .daes_slot
+            .ledger_slot
             .resolve_or_pass_in_place(input_tagged_ptr);
         self.step_pointer(eff_ptr.raw(), trail_out)?;
 
@@ -1154,7 +1154,7 @@ impl RuntimeContext {
             num_heads,
             bypass_hit,
             input_tagged_ptr.has_action_mode(ACTION_MODE_LAYER_SKIP),
-            DAES_METRIC_SLOT_SYNERGY_ACTIVE,
+            LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
             layer_skip_comp_profile,
             query_tensor,
             key_tensor,
@@ -1236,12 +1236,12 @@ impl RuntimeContext {
             srl_activation_and_desc,
         )?;
         let metric = base_metric_bits
-            | branchless_select_u8(bypass_hit, DAES_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, DAES_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, DAES_METRIC_REPULSION_APPLIED, 0)
-            | branchless_select_u8(skip_compensated, DAES_METRIC_LAYER_SKIP_COMPENSATED, 0)
+            | branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
+            | branchless_select_u8(skip_compensated, LEDGER_METRIC_LAYER_SKIP_COMPENSATED, 0)
             | extra_metrics;
-        self.action_hub.daes_slot.push_telemetry_metric(metric);
+        self.action_hub.ledger_slot.push_telemetry_metric(metric);
 
         Ok((evolved_ptr, density))
     }
@@ -1397,7 +1397,7 @@ impl RuntimeContext {
         let header_size = core::mem::size_of::<gcso_snapshot_header_t>(); // 128 bytes
         let context_data_size = 64usize; // 64-byte aligned context & attractor metadata block
         let edbc_size = core::mem::size_of::<gcso_edbc_state_t>(); // 64 bytes
-        let daes_size = core::mem::size_of::<gcso_daes_slot_t>(); // 64 bytes
+        let daes_size = core::mem::size_of::<gcso_ledger_slot_t>(); // 64 bytes
 
         let total_required = header_size + context_data_size + edbc_size + daes_size; // 320 bytes
 
@@ -1430,7 +1430,7 @@ impl RuntimeContext {
         let edbc_state = self.edbc.state();
         edbc_state.write_unaligned_to(buffer, edbc_off)?;
         self.action_hub
-            .daes_slot
+            .ledger_slot
             .write_unaligned_to(buffer, daes_off)?;
 
         let mut header = init_snapshot_header(total_required as u64, 1_774_900_000);
@@ -1439,7 +1439,7 @@ impl RuntimeContext {
         header.dpsr_state_offset = edbc_off as u64;
         header.srl_state_offset = edbc_off as u64;
         header.edbc_state_offset = edbc_off as u64;
-        header.daes_slot_offset = daes_off as u32;
+        header.ledger_slot_offset = daes_off as u32;
         finalize_snapshot_header_crc32(&mut header, &buffer[..total_required])?;
 
         header.write_unaligned_to(buffer, 0)?;
@@ -1469,7 +1469,7 @@ impl RuntimeContext {
 
         let action_hub_off = header.action_hub_offset as usize;
         let edbc_off = header.edbc_state_offset as usize;
-        let daes_off = header.daes_slot_offset as usize;
+        let daes_off = header.ledger_slot_offset as usize;
 
         if action_hub_off < header_size || edbc_off < action_hub_off || daes_off < edbc_off {
             return Err(crate::abi::GCSO_ERROR_CONTAINER_CORRUPTED);
@@ -1515,9 +1515,10 @@ impl RuntimeContext {
             self.edbc.set_tau_flux(self.config.tau_flux);
         }
 
-        let daes_size = core::mem::size_of::<gcso_daes_slot_t>();
+        let daes_size = core::mem::size_of::<gcso_ledger_slot_t>();
         if buffer.len() >= daes_off + daes_size {
-            self.action_hub.daes_slot = gcso_daes_slot_t::read_unaligned_from(buffer, daes_off)?;
+            self.action_hub.ledger_slot =
+                gcso_ledger_slot_t::read_unaligned_from(buffer, daes_off)?;
         }
 
         Ok(())
@@ -1562,8 +1563,8 @@ impl GcsoRuntimeContext for RuntimeContext {
         self.action_hub.reset()?;
         self.clear_all_domains()?;
         self.action_hub.bloom_filter.clear();
-        self.action_hub.daes_slot = gcso_daes_slot_t {
-            mode: u32::from(self.config.raw.daes_mode),
+        self.action_hub.ledger_slot = gcso_ledger_slot_t {
+            mode: u32::from(self.config.raw.ledger_mode),
             ..Default::default()
         };
         Ok(())
@@ -1751,11 +1752,11 @@ impl PointerActionHub for RuntimeContext {
     }
 }
 
-impl DaesScratchpad for RuntimeContext {
+impl FastPathLedger for RuntimeContext {
     #[inline]
     fn evaluate_auto_tune(
         &self,
-        slot: &gcso_daes_slot_t,
+        slot: &gcso_ledger_slot_t,
         config_out: &mut gcso_config_t,
     ) -> Result<()> {
         *config_out = self.config.raw;
@@ -1770,8 +1771,8 @@ impl DaesScratchpad for RuntimeContext {
         );
         let damping = 1.0 - 0.025 * (spike_count as f32);
         config_out.ripa_clamp_max_rad = branchless_clamp_f32(base_ripa * damping, 0.01, 0.25);
-        config_out.daes_mode = (slot.mode & 0xFF) as u8;
-        let _ = DAES_MINI_LEDGER_LEN;
+        config_out.ledger_mode = (slot.mode & 0xFF) as u8;
+        let _ = LEDGER_HISTORY_LEN;
         Ok(())
     }
 }

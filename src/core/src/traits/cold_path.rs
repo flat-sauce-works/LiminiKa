@@ -86,7 +86,7 @@ use crate::abi::{
     GCSO_CAP_CUDA_BACKEND, GCSO_CAP_METAL_BACKEND, GCSO_CAP_VULKAN_BACKEND,
     GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_EDBC_SINGULARITY,
     GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE, gcso_anchor_type_t,
-    gcso_capability_flags_t, gcso_config_t, gcso_daes_slot_t, gcso_edbc_state_t,
+    gcso_capability_flags_t, gcso_config_t, gcso_ledger_slot_t, gcso_edbc_state_t,
     gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_pprc_keyframe_header_t, gcso_q7_t,
     gcso_snapshot_header_t, gcso_srl_descriptor_t, gcso_tagged_ptr_t, gcso_zimms_descriptor_t,
 };
@@ -1142,7 +1142,7 @@ pub trait SystemCapabilityQuery: BranchlessKernel + Send + Sync {
             action_hub_capacity: DEFAULT_ACTION_HUB_CAPACITY,
             enable_cuda_warp_shuffle: 1,
             enable_zero_alloc_strict: 1,
-            daes_mode: 0,
+            ledger_mode: 0,
             reserved_flags: 0,
             rotary_dim: 0,
             rope_layout: 0,
@@ -1172,7 +1172,7 @@ pub trait SystemCapabilityQuery: BranchlessKernel + Send + Sync {
             & (config.entropy_singularity_eps > 0.0);
         let valid_caps = (config.max_prompt_anchors != 0)
             & (config.action_hub_capacity != 0)
-            & (config.daes_mode <= 2);
+            & (config.ledger_mode <= 2);
 
         if valid_dims & valid_scales & valid_caps {
             Ok(())
@@ -2953,20 +2953,20 @@ pub trait PprcCache: BranchlessKernel + Send + Sync {
     }
 }
 
-/// Trait for Dynamic Node Protocol (GCSO-DNP) distributed phase synchronization (**DAES Mode 1 / Boundary Layer**).
+/// Trait for Dynamic Node Protocol (GCSO-DNP) distributed phase synchronization (**FastPathLedger Mode 1 / Boundary Layer**).
 pub trait DnpPacketDispatcher: BranchlessKernel + Send + Sync {
     /// Dispatches a compact 64-byte GCSO-DNP phase/repulsion synchronization packet in zero-allocation mode.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_STATE`] if `daes_slot.mode != 1` (Network Plugin Mode).
+    /// Returns [`GCSO_ERROR_INVALID_STATE`] if `ledger_slot.mode != 1` (Network Plugin Mode).
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
     #[inline]
     fn dispatch_dnp_packet(
         &mut self,
-        daes_slot: &gcso_daes_slot_t,
+        ledger_slot: &gcso_ledger_slot_t,
         packet_payload: &AlignedSlice64<'_, u8>,
     ) -> GcsoResult<()> {
-        if daes_slot.mode != 1 {
+        if ledger_slot.mode != 1 {
             return Err(GCSO_ERROR_INVALID_STATE);
         }
         if packet_payload.len() < 64 {
@@ -2979,18 +2979,18 @@ pub trait DnpPacketDispatcher: BranchlessKernel + Send + Sync {
     /// packet (`packet_out`) using bulk `Pod` copy and returns its branchless IEEE 802.3 CRC32 integrity tag.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_STATE`] if `daes_slot.mode != 1`.
+    /// Returns [`GCSO_ERROR_INVALID_STATE`] if `ledger_slot.mode != 1`.
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_out.len() < 64` or `source_slot_id >= 8`.
     #[inline]
     fn encode_dnp_phase_packet(
         &self,
-        daes_slot: &gcso_daes_slot_t,
+        ledger_slot: &gcso_ledger_slot_t,
         source_slot_id: u8,
         action_mode_flags: u8,
         phase_deltas: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         packet_out: &mut AlignedSliceMut64<'_, u8>,
     ) -> GcsoResult<u32> {
-        if daes_slot.mode != 1 {
+        if ledger_slot.mode != 1 {
             return Err(GCSO_ERROR_INVALID_STATE);
         }
         if packet_out.len() < MAX_ATTENTION_HEADS
@@ -3015,18 +3015,18 @@ pub trait DnpPacketDispatcher: BranchlessKernel + Send + Sync {
     /// 8 register-resident `u64` SWAR words and the recovered 8-bit tag byte.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_STATE`] if `daes_slot.mode != 1`.
+    /// Returns [`GCSO_ERROR_INVALID_STATE`] if `ledger_slot.mode != 1`.
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
     /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if the upper 24 bits of the IEEE 802.3 CRC32
     /// checksum do not match `expected_crc32`.
     #[inline(always)]
     fn decode_and_verify_dnp_words(
         &self,
-        daes_slot: &gcso_daes_slot_t,
+        ledger_slot: &gcso_ledger_slot_t,
         packet_payload: &AlignedSlice64<'_, u8>,
         expected_crc32: u32,
     ) -> GcsoResult<([u64; 8], u8)> {
-        if daes_slot.mode != 1 {
+        if ledger_slot.mode != 1 {
             return Err(GCSO_ERROR_INVALID_STATE);
         }
         if packet_payload.len() < MAX_ATTENTION_HEADS {
@@ -3071,19 +3071,19 @@ pub trait DnpPacketDispatcher: BranchlessKernel + Send + Sync {
     /// a 64-head Q7 phase/repulsion vector (`phases_out`), returning the recovered 8-bit tag byte.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_STATE`] if `daes_slot.mode != 1`.
+    /// Returns [`GCSO_ERROR_INVALID_STATE`] if `ledger_slot.mode != 1`.
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
     /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if the upper 24 bits of the IEEE 802.3 CRC32
     /// checksum do not match `expected_crc32`.
     #[inline]
     fn decode_and_verify_dnp_packet(
         &self,
-        daes_slot: &gcso_daes_slot_t,
+        ledger_slot: &gcso_ledger_slot_t,
         packet_payload: &AlignedSlice64<'_, u8>,
         expected_crc32: u32,
         phases_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> GcsoResult<u8> {
-        match self.decode_and_verify_dnp_words(daes_slot, packet_payload, expected_crc32) {
+        match self.decode_and_verify_dnp_words(ledger_slot, packet_payload, expected_crc32) {
             Ok((payload_words, tag_byte)) => {
                 store_q7_words_64(phases_out, &payload_words);
                 Ok(tag_byte)
@@ -3105,7 +3105,7 @@ pub trait DnpPacketDispatcher: BranchlessKernel + Send + Sync {
     #[inline]
     fn decode_and_apply_dnp_packet_to_trail(
         &self,
-        daes_slot: &gcso_daes_slot_t,
+        ledger_slot: &gcso_ledger_slot_t,
         packet_payload: &AlignedSlice64<'_, u8>,
         expected_crc32: u32,
         inhibition_strength: f32,
@@ -3113,7 +3113,7 @@ pub trait DnpPacketDispatcher: BranchlessKernel + Send + Sync {
         trail: &mut gcso_pointer_trail_t,
     ) -> GcsoResult<(u8, u8, bool)> {
         let (payload_words, tag_byte) =
-            self.decode_and_verify_dnp_words(daes_slot, packet_payload, expected_crc32)?;
+            self.decode_and_verify_dnp_words(ledger_slot, packet_payload, expected_crc32)?;
         let slot_id = unpack_attractor_slot_from_tag(tag_byte);
         let mode_flags = unpack_action_mode_from_tag(tag_byte);
         let is_repulsion =
@@ -3982,7 +3982,7 @@ pub trait ColdPathObserver:
         beta_pitchfork: f32,
         explore_head_start: usize,
         bloom_filter: &mut ContrastivePhaseBloomFilter,
-        daes_slot: &mut gcso_daes_slot_t,
+        ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -4000,7 +4000,7 @@ pub trait ColdPathObserver:
                 signal,
                 centroids,
                 split_coherence_thresh,
-                daes_slot,
+                ledger_slot,
                 trail_out,
                 query_tensor,
                 key_tensor,
@@ -4429,7 +4429,7 @@ mod tests {
         assert_eq!(replayed[0], 32);
         assert!(gop_lp > -0.05 && (gop_r - 1.0).abs() < 1e-4 && gop_k > 10.0);
 
-        let daes_net = gcso_daes_slot_t {
+        let daes_net = gcso_ledger_slot_t {
             mode: 1,
             ..Default::default()
         };
