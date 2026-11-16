@@ -13,14 +13,78 @@ use crate::{
     AttractorVoidPerspective, CoherenceGuardGate, RecallBoundaryGate, RecallBoundaryMetrics,
     RecallGateDecision, RecallPolicy, TextAttractorCorpus, TextAttractorEntry, VoidBoundaryState,
 };
-use liminika_core::abi::gcso_pointer_trail_t;
-use liminika_core::action_hub::{StigmergicActionDecision, StigmergicThresholds};
+use liminika_core::abi::{gcso_pointer_trail_t, gcso_tagged_ptr_t};
+use liminika_core::action_hub::{
+    ActionHubEngine, ActionOrchestrationReport, StigmergicActionDecision, StigmergicActionReceptor,
+    StigmergicThresholds, ACTION_HUB_INLINE_TRAILS,
+};
 use liminika_core::traits::gateway::{
     CausalProvenanceReport, GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact,
     SubjectivePersona,
 };
-use liminika_core::traits::primitives::{load_q7_words_64, MAX_ATTENTION_HEADS};
-use liminika_core::traits::telemetry::{StigmergicSwarmOps, SwarmResolutionReport};
+use liminika_core::traits::primitives::{load_q7_words_64, GcsoResult, MAX_ATTENTION_HEADS};
+use liminika_core::traits::telemetry::{
+    StigmergicSwarmOps, SwarmResolutionReport, NUM_SWARM_MICRO_CELLS,
+};
+
+/// Uncollapsed per-query-token resonance observation deposited into stigmergic swarm trails.
+#[derive(Debug, Clone)]
+pub struct TokenResonanceDeposit {
+    /// Unsupervised token discriminability weight (`w_t * disc^2`, or uniform fallback weight).
+    pub disc_weight: f32,
+    /// Per-corpus-entry centered MaxSim excess (`row_sim[i] - mean_row`) for this token.
+    pub entry_excess: Vec<f32>,
+    /// Pre-baked 64-head Q7 phase words (`[u64; 8]`) for 8-cell Micro-Swarm evaluation at the
+    /// final active RoPE layer.
+    pub token_phase_words: [u64; NUM_SWARM_MICRO_CELLS],
+}
+
+/// Uncollapsed local multi-token channel observation passed into [`TextAttractorCorpus`].
+#[derive(Debug, Clone, Default)]
+pub struct LocalChannelObservation {
+    /// Combined symmetric Chamfer score (`0.65 * q_to_d + 0.35 * d_to_q`) per corpus entry.
+    pub combined_scores: Vec<f32>,
+    /// Independent query-to-doc discriminative centered MaxSim scores per corpus entry.
+    pub q_to_d_scores: Vec<f32>,
+    /// Independent doc-to-query Chamfer specificity coverage scores per corpus entry.
+    pub d_to_q_scores: Vec<f32>,
+    /// Uncollapsed per-query-token resonance deposits evaluated by the stigmergic swarm.
+    pub token_deposits: Vec<TokenResonanceDeposit>,
+}
+
+/// [`StigmergicActionReceptor`] tracking multi-trail pointer emergence when [`ActionHubEngine`]
+/// links disjoint factual sub-basins across residual unexplained query tokens.
+#[derive(Debug, Clone, Default)]
+pub struct ActionHubInterpretiveReceptor {
+    /// Ordered sequence of dominant anchor IDs observed during trail emergence.
+    pub emerged_anchor_chain: Vec<u32>,
+    /// Last core [`ActionOrchestrationReport`] emitted upon stigmergic emergence.
+    pub last_report: Option<ActionOrchestrationReport>,
+}
+
+impl StigmergicActionReceptor for ActionHubInterpretiveReceptor {
+    fn on_stigmergic_action_emerged(
+        &mut self,
+        _frame: &GatewayFrame,
+        report: &ActionOrchestrationReport,
+        trail: &gcso_pointer_trail_t,
+    ) -> GcsoResult<()> {
+        self.last_report = Some(*report);
+        if report.dominant_anchor_id != 0
+            && !self
+                .emerged_anchor_chain
+                .contains(&report.dominant_anchor_id)
+        {
+            self.emerged_anchor_chain.push(report.dominant_anchor_id);
+        }
+        if trail.target_anchor_id != 0
+            && !self.emerged_anchor_chain.contains(&trail.target_anchor_id)
+        {
+            self.emerged_anchor_chain.push(trail.target_anchor_id);
+        }
+        Ok(())
+    }
+}
 
 /// Per-query diagnostic telemetry bridging adapter stratum channels with [`liminika_core`]
 /// [`CausalProvenanceReport`] so `ActionHub` and evaluation harnesses observe channel agreement.
@@ -54,6 +118,16 @@ pub struct StratumSignal {
     /// Independent per-attractor multi-token MaxSim score (`-1.0..=1.0`) supplied by a
     /// representation sensor, or empty when operating in single-vector mode.
     pub local_token_scores: Vec<f32>,
+    /// Independent query-to-doc discriminative centered MaxSim scores per corpus entry.
+    pub q_to_d_scores: Vec<f32>,
+    /// Independent doc-to-query Chamfer specificity coverage scores per corpus entry.
+    pub d_to_q_scores: Vec<f32>,
+    /// Uncollapsed per-query-token resonance deposits evaluated by the stigmergic swarm.
+    pub token_deposits: Vec<TokenResonanceDeposit>,
+    /// Ordered multi-trail Fact decomposition `(entry_idx, score)` selected by [`ActionHubEngine`].
+    pub linked_fact_indices: Vec<(usize, f32)>,
+    /// True when [`ActionHubEngine`] interpretive decomposition linked disjoint Fact sub-basins.
+    pub decomposition_triggered: bool,
     /// Per-attractor local `cvoid` gap depth (`0.0` = deep inside basin).
     pub local_void_depths: Vec<f32>,
     /// Per-attractor stigmergic pointer trace / pheromone strength (`>= 0.0`).
@@ -566,6 +640,7 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
         } else if is_total_cvoid {
             (0.0_f32, 0.0_f32)
         } else if signal.local_channel_preferred
+            || signal.decomposition_triggered
             || (channel_disagreement && partial_swarm_consensus)
         {
             // Bifurcated or local-sharpened channel triggers PSPM sub-head routing via core ladder.
@@ -826,6 +901,417 @@ impl LocalTokenResonanceStratum {
         );
         swarm_report
     }
+
+    /// Selects up to `ACTION_HUB_INLINE_TRAILS` (16) active attractor candidates covering global,
+    /// combined local, and single-token specialist peaks, then deposits uncollapsed token
+    /// observations through the 8-cell Micro-Swarm into an [`ActionHubEngine`].
+    fn deposit_token_swarm_trails(
+        entries: &[TextAttractorEntry],
+        signal: &mut StratumSignal,
+        last_layer: usize,
+    ) -> (ActionHubEngine, Vec<usize>, Vec<gcso_pointer_trail_t>) {
+        let n_entries = entries.len();
+        let mut hub = ActionHubEngine::new();
+        for entry in entries {
+            if entry.role == AttractorRole::Guard {
+                let g_q7 = entry
+                    .per_layer_q7
+                    .get(last_layer)
+                    .copied()
+                    .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
+                let g_words = load_q7_words_64(&g_q7);
+                hub.bloom_filter
+                    .insert_repulsive_pattern_words_weighted(&g_words, 2);
+            }
+        }
+
+        let mut ranked: Vec<(usize, f32)> = (0..n_entries)
+            .map(|i| {
+                let g = signal.candidate_scores.get(i).copied().unwrap_or(0.0);
+                let l = signal.local_token_scores.get(i).copied().unwrap_or(0.0);
+                let tok_peak = signal
+                    .token_deposits
+                    .iter()
+                    .filter_map(|d| d.entry_excess.get(i).copied())
+                    .fold(0.0_f32, f32::max);
+                (i, g.max(l).max(tok_peak * 0.8))
+            })
+            .collect();
+        ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+        ranked.truncate(ACTION_HUB_INLINE_TRAILS);
+
+        let selected_indices: Vec<usize> = ranked.iter().map(|&(i, _)| i).collect();
+        let mut trail_states: Vec<gcso_pointer_trail_t> = selected_indices
+            .iter()
+            .map(|&entry_idx| {
+                let q7 = entries[entry_idx]
+                    .per_layer_q7
+                    .get(last_layer)
+                    .copied()
+                    .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
+                let words = load_q7_words_64(&q7);
+                let mut trail = gcso_pointer_trail_t::default();
+                trail.copy_from_with_words_fast(&gcso_pointer_trail_t::default(), &words);
+                trail.target_anchor_id = entries[entry_idx].anchor_id;
+                trail.user_data = entry_idx as u64;
+                trail.stigmergic_density = signal
+                    .candidate_scores
+                    .get(entry_idx)
+                    .copied()
+                    .unwrap_or(0.0)
+                    .max(0.0)
+                    * 0.5;
+                trail
+            })
+            .collect();
+
+        if signal.token_deposits.is_empty() {
+            return (hub, selected_indices, trail_states);
+        }
+
+        let mut bloom_repulsions = vec![0_u32; selected_indices.len()];
+        for dep in &signal.token_deposits {
+            if dep.disc_weight <= 0.0 || dep.entry_excess.len() != n_entries {
+                continue;
+            }
+            let max_ex = dep.entry_excess.iter().copied().fold(0.0_f32, f32::max);
+            if max_ex <= 1e-6 {
+                continue;
+            }
+            for (slot, &entry_idx) in selected_indices.iter().enumerate() {
+                let ex = dep.entry_excess[entry_idx];
+                if ex <= 0.0 {
+                    continue;
+                }
+                let tok_coh = (ex / max_ex).clamp(0.0, 1.0);
+                if tok_coh < 0.45 {
+                    continue;
+                }
+                let (rep, _swarm_w) = trail_states[slot].try_resolve_action_in_swarm_from_words(
+                    gcso_tagged_ptr_t::default(),
+                    &dep.token_phase_words,
+                    0xFF,
+                    64,
+                    4,
+                    24,
+                    4,
+                    0.45,
+                    0.15,
+                    Some(&hub.bloom_filter),
+                    3,
+                    96,
+                );
+                let consensus = (rep.resolved_cell_count as f32) / (NUM_SWARM_MICRO_CELLS as f32);
+                let bloom_repulsed = rep.stigmergic_delta_density < 0.0;
+                if bloom_repulsed {
+                    bloom_repulsions[slot] += 1;
+                }
+                let weighted_coh = (tok_coh * (0.5 + 0.5 * consensus)).clamp(0.0, 1.0);
+                hub.evaporate_and_deposit_pheromone(
+                    &mut trail_states[slot],
+                    weighted_coh,
+                    bloom_repulsed,
+                );
+            }
+        }
+
+        for (slot, &entry_idx) in selected_indices.iter().enumerate() {
+            let density = trail_states[slot].stigmergic_density;
+            if density > 0.0 {
+                let factor = if bloom_repulsions[slot] > 0 {
+                    0.75
+                } else {
+                    1.0 + 0.25 * density.min(1.5)
+                };
+                signal.stigmergic_weights[entry_idx] =
+                    (signal.stigmergic_weights[entry_idx] * factor).clamp(0.30, 2.5);
+            }
+        }
+
+        (hub, selected_indices, trail_states)
+    }
+
+    /// Evaluates bimodal residual-peeling set cover over Fact trails when multiple specialized
+    /// attractors jointly explain distinct query tokens that single global pooling collapses.
+    fn try_decompose_fact_coalition(
+        ctx: &StratumContext<'_>,
+        signal: &mut StratumSignal,
+        hub: &mut ActionHubEngine,
+        selected_indices: &[usize],
+        trail_states: &[gcso_pointer_trail_t],
+        last_layer: usize,
+    ) {
+        let n_entries = ctx.entries.len();
+        if ctx.policy.top_k_facts < 2
+            || signal.token_deposits.is_empty()
+            || signal.q_to_d_scores.len() != n_entries
+            || signal.d_to_q_scores.len() != n_entries
+        {
+            return;
+        }
+
+        let max_guard_raw = ctx
+            .entries
+            .iter()
+            .zip(signal.candidate_scores.iter())
+            .filter(|(e, _)| e.role == AttractorRole::Guard)
+            .map(|(_, &s)| s)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let max_non_guard_raw = ctx
+            .entries
+            .iter()
+            .zip(signal.candidate_scores.iter())
+            .filter(|(e, _)| e.role != AttractorRole::Guard)
+            .map(|(_, &s)| s)
+            .fold(f32::NEG_INFINITY, f32::max);
+        if max_guard_raw.is_finite()
+            && max_non_guard_raw.is_finite()
+            && (max_guard_raw - max_non_guard_raw) > ctx.policy.guard_suppress_margin
+        {
+            return;
+        }
+
+        let fact_idxs: Vec<usize> = ctx
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.role == AttractorRole::Fact)
+            .map(|(i, _)| i)
+            .collect();
+        if fact_idxs.len() < 2 {
+            return;
+        }
+
+        let total_disc_w: f32 = signal
+            .token_deposits
+            .iter()
+            .map(|d| d.disc_weight.max(0.0))
+            .sum();
+        if total_disc_w <= 1e-8 {
+            return;
+        }
+
+        // Compute Fact-exclusivity and cross-token redundancy weights per token deposit so
+        // repeated subwords of a shared corpus qualifier cannot drown out distinct single-Fact
+        // specialist concepts during compound decomposition.
+        let n_dep = signal.token_deposits.len();
+        let mut decomp_weights = vec![0.0_f32; n_dep];
+        let mut fact_profiles: Vec<Vec<f32>> = Vec::with_capacity(n_dep);
+        for (idx, d) in signal.token_deposits.iter().enumerate() {
+            let mut pos_vals: Vec<f32> = fact_idxs
+                .iter()
+                .map(|&fi| d.entry_excess[fi].max(0.0))
+                .collect();
+            let norm: f32 = pos_vals.iter().map(|&v| v * v).sum::<f32>().sqrt();
+            let mut sorted_vals = pos_vals.clone();
+            sorted_vals.sort_by(|a, b| b.total_cmp(a));
+            let f_top1 = sorted_vals.first().copied().unwrap_or(0.0);
+            let f_top2 = sorted_vals.get(1).copied().unwrap_or(0.0);
+            let exclusivity = if f_top1 > 1e-6 {
+                ((f_top1 - f_top2) / f_top1).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let mut redundancy_damp = 1.0_f32;
+            if norm > 1e-6 {
+                for v in &mut pos_vals {
+                    *v /= norm;
+                }
+                let mut max_prev_cos = 0.0_f32;
+                for prev in &fact_profiles {
+                    let c: f32 = pos_vals.iter().zip(prev.iter()).map(|(&a, &b)| a * b).sum();
+                    if c > max_prev_cos {
+                        max_prev_cos = c;
+                    }
+                }
+                if max_prev_cos > 0.75 && exclusivity < 0.50 {
+                    redundancy_damp = (1.0 - max_prev_cos * max_prev_cos).max(0.50);
+                }
+            }
+            fact_profiles.push(pos_vals);
+            decomp_weights[idx] =
+                d.disc_weight.max(0.0) * (0.40 + 0.60 * exclusivity) * redundancy_damp;
+        }
+        let total_decomp_w: f32 = decomp_weights.iter().sum();
+        if total_decomp_w <= 1e-8 {
+            return;
+        }
+
+        let (g_fact_top1, g_fact_top1_score) = fact_idxs
+            .iter()
+            .map(|&i| (i, signal.candidate_scores[i]))
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap_or((fact_idxs[0], -1.0));
+        let excl_q_to_d_for = |fact_idx: usize| -> f32 {
+            signal
+                .token_deposits
+                .iter()
+                .zip(decomp_weights.iter())
+                .map(|(d, &w)| w * d.entry_excess[fact_idx])
+                .sum::<f32>()
+                / total_decomp_w
+        };
+        let excl_single_scores: Vec<(usize, f32)> =
+            fact_idxs.iter().map(|&i| (i, excl_q_to_d_for(i))).collect();
+        let g_top1_excl = excl_q_to_d_for(g_fact_top1);
+
+        let mut best_pair: Option<(usize, usize, f32, f32, f32)> = None;
+        for a in 0..fact_idxs.len() {
+            let (i, gain_i) = excl_single_scores[a];
+            let gain_i_pos = gain_i.max(0.0);
+            if gain_i_pos <= 0.004 {
+                continue;
+            }
+            for &(j, gain_j) in &excl_single_scores[(a + 1)..] {
+                let gain_j_pos = gain_j.max(0.0);
+                if gain_j_pos <= 0.004 {
+                    continue;
+                }
+                let joint_excl = signal
+                    .token_deposits
+                    .iter()
+                    .zip(decomp_weights.iter())
+                    .map(|(d, &w)| w * d.entry_excess[i].max(d.entry_excess[j]))
+                    .sum::<f32>()
+                    / total_decomp_w;
+                let second_contrib = (joint_excl - gain_i_pos)
+                    .min(joint_excl - gain_j_pos)
+                    .max(0.0);
+                if second_contrib <= 0.012 {
+                    continue;
+                }
+                let pair_d_to_q = 0.5 * (signal.d_to_q_scores[i] + signal.d_to_q_scores[j]);
+                let utility = 0.70 * joint_excl + 0.25 * second_contrib + 0.20 * pair_d_to_q;
+                if best_pair.is_none_or(|(_, _, _, _, best_u)| utility > best_u) {
+                    best_pair = Some((i, j, joint_excl, second_contrib, utility));
+                }
+            }
+        }
+
+        let Some((cand_a, cand_b, joint_excl, second_contrib, _utility)) = best_pair else {
+            return;
+        };
+
+        // Ensure no single Fact `k` subsumes `>= 78%` of `{cand_a, cand_b}`'s covered token mass.
+        let max_subsumption = fact_idxs
+            .iter()
+            .map(|&k| {
+                signal
+                    .token_deposits
+                    .iter()
+                    .zip(decomp_weights.iter())
+                    .map(|(d, &w)| {
+                        let ex_k = d.entry_excess[k];
+                        let ex_pair = d.entry_excess[cand_a].max(d.entry_excess[cand_b]);
+                        w * ex_k.min(ex_pair)
+                    })
+                    .sum::<f32>()
+                    / total_decomp_w
+            })
+            .fold(0.0_f32, f32::max);
+
+        let raw_joint_q_to_d = signal
+            .token_deposits
+            .iter()
+            .map(|d| d.disc_weight.max(0.0) * d.entry_excess[cand_a].max(d.entry_excess[cand_b]))
+            .sum::<f32>()
+            / total_disc_w;
+        let basin_supported =
+            g_fact_top1_score >= ctx.policy.min_coherence * 0.55 || raw_joint_q_to_d >= 0.065;
+        let strictly_bimodal = joint_excl >= 0.040
+            && second_contrib >= 0.015
+            && second_contrib >= 0.25 * joint_excl
+            && (joint_excl - max_subsumption) >= 0.22 * joint_excl;
+        let global_chamfer_top1 =
+            0.70 * g_top1_excl.max(0.0) + 0.20 * signal.d_to_q_scores[g_fact_top1];
+        let pair_chamfer = 0.70 * joint_excl
+            + 0.20 * 0.5 * (signal.d_to_q_scores[cand_a] + signal.d_to_q_scores[cand_b]);
+        let outperforms_global_hub = (cand_a != g_fact_top1
+            && cand_b != g_fact_top1
+            && pair_chamfer > global_chamfer_top1 + 0.020)
+            || signal.candidate_scores[cand_a] < ctx.policy.min_coherence * 0.75
+            || signal.candidate_scores[cand_b] < ctx.policy.min_coherence * 0.75;
+
+        if !(basin_supported && strictly_bimodal && outperforms_global_hub) {
+            return;
+        }
+
+        let solo_rank_score =
+            |idx: usize| -> f32 { excl_q_to_d_for(idx) + 0.35 * signal.d_to_q_scores[idx] };
+        let (first_idx, second_idx) = if solo_rank_score(cand_a) >= solo_rank_score(cand_b) {
+            (cand_a, cand_b)
+        } else {
+            (cand_b, cand_a)
+        };
+
+        // Wire the decomposed coalition onto `ActionHubEngine` inline trails as a linked chain
+        // and notify the `StigmergicActionReceptor`.
+        let make_trail_for = |entry_idx: usize| -> gcso_pointer_trail_t {
+            if let Some(pos) = selected_indices.iter().position(|&idx| idx == entry_idx) {
+                trail_states[pos]
+            } else {
+                let q7 = ctx.entries[entry_idx]
+                    .per_layer_q7
+                    .get(last_layer)
+                    .copied()
+                    .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
+                let words = load_q7_words_64(&q7);
+                let mut t = gcso_pointer_trail_t::default();
+                t.copy_from_with_words_fast(&gcso_pointer_trail_t::default(), &words);
+                t.target_anchor_id = ctx.entries[entry_idx].anchor_id;
+                t.user_data = entry_idx as u64;
+                t
+            }
+        };
+        let mut t0 = make_trail_for(first_idx);
+        let mut t1 = make_trail_for(second_idx);
+        t0.linked_trail_id = 1;
+        t1.linked_trail_id = 0;
+        t0.stigmergic_density = t0.stigmergic_density.max(0.65);
+        t1.stigmergic_density = t1.stigmergic_density.max(0.60);
+        hub.trails[0] = t0;
+        hub.trails[1] = t1;
+        hub.active_count = hub.active_count.max(2);
+
+        let mut chain_trail = gcso_pointer_trail_t::default();
+        chain_trail.copy_from_fast(&hub.trails[0]);
+        let mut receptor = ActionHubInterpretiveReceptor::default();
+        if let Ok((chain_report, _hops, _term_idx, _term_anchor, _mean_coh)) = hub
+            .traverse_pointer_chain_and_orchestrate(
+                0,
+                2,
+                0.58,
+                &mut chain_trail,
+                None,
+                None,
+                None,
+                None,
+            )
+        {
+            let _ = receptor.on_stigmergic_action_emerged(
+                &signal.gateway_frame,
+                &chain_report,
+                &chain_trail,
+            );
+        }
+
+        let first_score = (g_fact_top1_score + 0.035).max(ctx.policy.min_coherence * 1.15);
+        let second_score = (first_score - 0.015).max(ctx.policy.min_coherence * 0.95);
+        signal.candidate_scores[first_idx] = signal.candidate_scores[first_idx].max(first_score);
+        signal.candidate_scores[second_idx] = signal.candidate_scores[second_idx].max(second_score);
+        signal.stigmergic_weights[first_idx] =
+            (signal.stigmergic_weights[first_idx] * 1.35).clamp(0.4, 2.5);
+        signal.stigmergic_weights[second_idx] =
+            (signal.stigmergic_weights[second_idx] * 1.30).clamp(0.4, 2.5);
+        signal.linked_fact_indices = vec![
+            (first_idx, signal.candidate_scores[first_idx]),
+            (second_idx, signal.candidate_scores[second_idx]),
+        ];
+        signal.decomposition_triggered = true;
+        signal.local_channel_preferred = true;
+        signal.swarm_report =
+            Self::resolve_pair_swarm(ctx.entries, first_idx, second_idx, last_layer);
+    }
 }
 
 impl SocietyStratum for LocalTokenResonanceStratum {
@@ -853,6 +1339,10 @@ impl SocietyStratum for LocalTokenResonanceStratum {
             .first()
             .map(|e| e.per_layer_q7.len().saturating_sub(1))
             .unwrap_or(0);
+        // Deposit uncollapsed per-token observations onto 8-cell Micro-Swarm trails in ActionHub.
+        let (mut hub, selected_indices, trail_states) =
+            Self::deposit_token_swarm_trails(ctx.entries, signal, last_layer);
+
         // Run core 8-cell Micro-Swarm consensus between the global and local winners' 64-head Q7 profiles.
         signal.swarm_report = Self::resolve_pair_swarm(ctx.entries, g_idx, l_idx, last_layer);
 
@@ -862,8 +1352,19 @@ impl SocietyStratum for LocalTokenResonanceStratum {
         if g_idx == l_idx && l_score > 0.0 {
             signal.stigmergic_weights[g_idx] = (signal.stigmergic_weights[g_idx]
                 * (1.0 + 0.35 * l_score.min(1.0)))
-            .clamp(0.35, 2.0);
+            .clamp(0.35, 2.5);
         }
+
+        // First test whether Fact tokens form a genuinely bimodal compound coalition better solved
+        // via ActionHub linked trails than unimodal winner-take-all sharpening.
+        Self::try_decompose_fact_coalition(
+            ctx,
+            signal,
+            &mut hub,
+            &selected_indices,
+            &trail_states,
+            last_layer,
+        );
 
         // Arbitrate per causal role subspace (Fact / Persona / Guard) so a strong Persona style
         // hub cannot mask Fact-level disagreement between global pooling and token-level MaxSim.
@@ -872,6 +1373,9 @@ impl SocietyStratum for LocalTokenResonanceStratum {
             AttractorRole::Persona,
             AttractorRole::Guard,
         ] {
+            if role == AttractorRole::Fact && signal.decomposition_triggered {
+                continue;
+            }
             let idxs: Vec<usize> = ctx
                 .entries
                 .iter()
@@ -897,7 +1401,7 @@ impl SocietyStratum for LocalTokenResonanceStratum {
                 if l_r_top1 > 0.0 {
                     signal.stigmergic_weights[g_r_idx] = (signal.stigmergic_weights[g_r_idx]
                         * (1.0 + 0.25 * l_r_top1.min(1.0)))
-                    .clamp(0.35, 2.0);
+                    .clamp(0.35, 2.5);
                 }
                 continue;
             }
@@ -925,7 +1429,7 @@ impl SocietyStratum for LocalTokenResonanceStratum {
                 let pos_contrast = (signal.local_token_scores[i] - l_r_mean).max(0.0);
                 if pos_contrast > 0.0 {
                     signal.stigmergic_weights[i] =
-                        (signal.stigmergic_weights[i] * (1.0 + pos_contrast)).clamp(0.35, 2.0);
+                        (signal.stigmergic_weights[i] * (1.0 + pos_contrast)).clamp(0.35, 2.5);
                 }
             }
         }

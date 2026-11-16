@@ -1754,6 +1754,37 @@ impl TextAttractorCorpus {
         pipeline: &StratumPipeline<'_>,
         local_token_scores: Option<&[f32]>,
     ) -> Result<DynamicAttractorRecall<'_>, String> {
+        let obs = local_token_scores.map(|scores| LocalChannelObservation {
+            combined_scores: scores.to_vec(),
+            ..Default::default()
+        });
+        self.recall_for_query_with_strata_observation(
+            adapter,
+            query_per_layer_q,
+            baseline_ref_per_layer,
+            policy,
+            pipeline,
+            obs,
+        )
+    }
+
+    /// Scores a query's per-layer Q activations through a [`StratumPipeline`] while preserving an
+    /// uncollapsed [`LocalChannelObservation`] (bidirectional Chamfer scores + per-token swarm
+    /// deposits) for [`liminika_core::action_hub::ActionHubEngine`] trail decomposition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if query/baseline layer slices mismatch `adapter.geometry()`,
+    /// observation vectors mismatch `self.entries().len()`, or a stratum fails.
+    pub fn recall_for_query_with_strata_observation(
+        &self,
+        adapter: &ModelSteeringAdapter,
+        query_per_layer_q: &[&[f32]],
+        baseline_ref_per_layer: &[&[f32]],
+        policy: &RecallPolicy,
+        pipeline: &StratumPipeline<'_>,
+        local_observation: Option<LocalChannelObservation>,
+    ) -> Result<DynamicAttractorRecall<'_>, String> {
         if query_per_layer_q.len() != baseline_ref_per_layer.len() {
             return Err(format!(
                 "query/baseline layer mismatch: {} vs {}",
@@ -1788,19 +1819,32 @@ impl TextAttractorCorpus {
             .map(|sig| Self::cosine_f32(&query_sig, sig))
             .collect();
         let n_entries = entry_sigs.len();
-        let token_channel = match local_token_scores {
-            Some(scores) if scores.len() == n_entries => scores.to_vec(),
-            Some(scores) => {
-                return Err(format!(
-                    "local_token_scores length mismatch: expected {n_entries}, got {}",
-                    scores.len()
-                ));
+        let (token_channel, q_to_d_scores, d_to_q_scores, token_deposits) = match local_observation
+        {
+            Some(obs) => {
+                if obs.combined_scores.len() != n_entries {
+                    return Err(format!(
+                        "local_token_scores length mismatch: expected {n_entries}, got {}",
+                        obs.combined_scores.len()
+                    ));
+                }
+                (
+                    obs.combined_scores,
+                    obs.q_to_d_scores,
+                    obs.d_to_q_scores,
+                    obs.token_deposits,
+                )
             }
-            None => Vec::new(),
+            None => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
         };
         let initial_signal = StratumSignal {
             candidate_scores: raw_cosines.clone(),
             local_token_scores: token_channel,
+            q_to_d_scores,
+            d_to_q_scores,
+            token_deposits,
+            linked_fact_indices: Vec::new(),
+            decomposition_triggered: false,
             local_void_depths: raw_cosines
                 .iter()
                 .map(|&s| (policy.min_coherence - s).max(0.0))
@@ -1852,6 +1896,18 @@ impl TextAttractorCorpus {
             || signal.gate_decision.suppress_fact_injection;
         let recalled_facts = if suppress_facts {
             Vec::new()
+        } else if signal.decomposition_triggered && !signal.linked_fact_indices.is_empty() {
+            signal
+                .linked_fact_indices
+                .iter()
+                .filter_map(|&(idx, score)| {
+                    self.entries
+                        .get(idx)
+                        .filter(|e| e.role == AttractorRole::Fact)
+                        .map(|e| (e, signal.candidate_scores[idx].max(score)))
+                })
+                .take(policy.top_k_facts)
+                .collect()
         } else {
             fact_scores
                 .into_iter()
@@ -4026,5 +4082,161 @@ mod tests {
             recall.action_decision,
             StigmergicActionDecision::PspmSubHeadRoute
         );
+    }
+
+    #[test]
+    fn action_hub_compound_decomposition_links_disjoint_specialists_while_respecting_cvoid() {
+        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let len = adapter.geometry().q_rot_len();
+        let num_layers = adapter.geometry().num_layers;
+        let centroid = vec![0.0_f32; len];
+        let refs: Vec<&[f32]> = vec![centroid.as_slice(); num_layers];
+
+        let mut f_hub = vec![0.0_f32; len];
+        let mut f_shared_peer = vec![0.0_f32; len];
+        let mut f_spec_a = vec![0.0_f32; len];
+        let mut f_spec_b = vec![0.0_f32; len];
+        f_hub[0] = 0.85;
+        f_hub[1] = 0.52;
+        f_shared_peer[0] = 0.85;
+        f_shared_peer[4] = 0.52;
+        f_spec_a[2] = 1.0;
+        f_spec_b[3] = 1.0;
+
+        let mut corpus = TextAttractorCorpus::new();
+        let id_hub = corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Domain overview hub",
+                &vec![f_hub.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("hub");
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Domain shared sibling",
+                &vec![f_shared_peer.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("peer");
+        let id_a = corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Specialist A",
+                &vec![f_spec_a.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("spec_a");
+        let id_b = corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Fact,
+                "Specialist B",
+                &vec![f_spec_b.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("spec_b");
+
+        let mut query = vec![0.0_f32; len];
+        query[0] = 0.90;
+        query[1] = 0.30;
+        query[2] = 0.22;
+        query[3] = 0.22;
+        let policy = RecallPolicy {
+            min_coherence: 0.20,
+            boundary_margin: 0.04,
+            guard_suppress_margin: 0.0,
+            top_k_facts: 2,
+            top_k_personas: 1,
+        };
+
+        // Shared qualifier tokens spike across both entry 0 & 1, whereas disjoint specialist
+        // tokens spike cleanly onto entry 2 and entry 3.
+        let obs = LocalChannelObservation {
+            combined_scores: vec![0.18, 0.02, 0.08, 0.08],
+            q_to_d_scores: vec![0.16, 0.03, 0.10, 0.10],
+            d_to_q_scores: vec![0.05, -0.02, 0.08, 0.08],
+            token_deposits: vec![
+                TokenResonanceDeposit {
+                    disc_weight: 0.35,
+                    entry_excess: vec![0.40, 0.35, -0.25, -0.25],
+                    token_phase_words: [0; 8],
+                },
+                TokenResonanceDeposit {
+                    disc_weight: 0.35,
+                    entry_excess: vec![0.40, 0.34, -0.25, -0.25],
+                    token_phase_words: [0; 8],
+                },
+                TokenResonanceDeposit {
+                    disc_weight: 0.45,
+                    entry_excess: vec![-0.15, -0.15, 0.60, -0.15],
+                    token_phase_words: [0; 8],
+                },
+                TokenResonanceDeposit {
+                    disc_weight: 0.45,
+                    entry_excess: vec![-0.15, -0.15, -0.15, 0.60],
+                    token_phase_words: [0; 8],
+                },
+            ],
+        };
+
+        let recall = corpus
+            .recall_for_query_with_strata_observation(
+                &adapter,
+                &vec![query.as_slice(); num_layers],
+                &refs,
+                &policy,
+                &StratumPipeline::default(),
+                Some(obs),
+            )
+            .expect("compound recall");
+        let ids: Vec<u32> = recall
+            .recalled_facts
+            .iter()
+            .map(|(e, _)| e.anchor_id)
+            .collect();
+        assert_eq!(ids.len(), 2, "expected 2 decomposed facts, got {ids:?}");
+        assert!(
+            ids.contains(&id_a) && ids.contains(&id_b),
+            "expected specialists {id_a} and {id_b}, got {ids:?} (hub={id_hub})"
+        );
+        assert_eq!(
+            recall.action_decision,
+            StigmergicActionDecision::PspmSubHeadRoute
+        );
+
+        // Weak noise OOD query below basin support must stay suppressed in cvoid.
+        let mut ood_q = vec![0.0_f32; len];
+        ood_q[15] = 1.0;
+        let weak_obs = LocalChannelObservation {
+            combined_scores: vec![0.01, 0.0, 0.01, 0.01],
+            q_to_d_scores: vec![0.01, 0.0, 0.01, 0.01],
+            d_to_q_scores: vec![0.0, 0.0, 0.0, 0.0],
+            token_deposits: vec![TokenResonanceDeposit {
+                disc_weight: 0.05,
+                entry_excess: vec![0.01, -0.01, 0.01, -0.01],
+                token_phase_words: [0; 8],
+            }],
+        };
+        let ood_recall = corpus
+            .recall_for_query_with_strata_observation(
+                &adapter,
+                &vec![ood_q.as_slice(); num_layers],
+                &refs,
+                &policy,
+                &StratumPipeline::default(),
+                Some(weak_obs),
+            )
+            .expect("ood recall");
+        assert_eq!(ood_recall.void_state, VoidBoundaryState::CvoidEmptySpace);
+        assert!(ood_recall.recalled_facts.is_empty());
     }
 }

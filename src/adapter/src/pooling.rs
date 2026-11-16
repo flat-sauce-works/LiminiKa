@@ -10,11 +10,12 @@
 //! backends and CLI entrypoints.
 
 use crate::{
-    AttractorRole, DynamicAttractorRecall, ModelSteeringAdapter, RecallPolicy, StratumPipeline,
-    TextAttractorCorpus,
+    AttractorRole, DynamicAttractorRecall, LocalChannelObservation, ModelSteeringAdapter,
+    RecallPolicy, StratumPipeline, TextAttractorCorpus, TokenResonanceDeposit,
 };
 use liminika_core::traits::gateway::ManifoldProbeBaseline;
-use liminika_core::traits::primitives::MAX_ATTENTION_HEADS;
+use liminika_core::traits::primitives::{load_q7_words_64, MAX_ATTENTION_HEADS};
+use liminika_core::traits::telemetry::NUM_SWARM_MICRO_CELLS;
 
 /// Unsupervised strategy collapsing per-token Q activations (`[seq_len, dim]`) into `[dim]`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -395,7 +396,7 @@ impl CompiledTokenCorpus {
         Ok(out)
     }
 
-    fn extract_salient_token_sigs(
+    fn extract_salient_token_sigs_indexed(
         adapter: &ModelSteeringAdapter,
         per_layer_token_qs: &[Vec<f32>],
         seq_len: usize,
@@ -403,7 +404,7 @@ impl CompiledTokenCorpus {
         token_common_mode_basis: &[Vec<f32>],
         max_tokens: usize,
         pooler: SequenceActivationPooler,
-    ) -> Result<Vec<(Vec<f32>, f32)>, String> {
+    ) -> Result<Vec<(usize, Vec<f32>, f32)>, String> {
         let geom = adapter.geometry();
         let dim = geom.q_rot_len();
         if seq_len == 0 || max_tokens == 0 {
@@ -463,7 +464,7 @@ impl CompiledTokenCorpus {
                 &raw_tok_sigs[t],
                 token_common_mode_basis,
             );
-            out.push((proj_tok_sig, w));
+            out.push((t, proj_tok_sig, w));
         }
         Ok(out)
     }
@@ -560,7 +561,7 @@ impl CompiledTokenCorpus {
 
         let mut entry_token_sigs: Vec<Vec<Vec<f32>>> = Vec::with_capacity(entries.len());
         for entry in entries {
-            let salient = Self::extract_salient_token_sigs(
+            let salient = Self::extract_salient_token_sigs_indexed(
                 adapter,
                 &entry.per_layer_token_qs,
                 entry.seq_len,
@@ -569,7 +570,7 @@ impl CompiledTokenCorpus {
                 24,
                 pooler,
             )?;
-            entry_token_sigs.push(salient.into_iter().map(|(sig, _)| sig).collect());
+            entry_token_sigs.push(salient.into_iter().map(|(_, sig, _)| sig).collect());
         }
 
         // Estimate cross-entry doc-token specificity weights (`1 / (1 + sum_{j!=i} max_sim_+^2)`)
@@ -689,7 +690,7 @@ impl CompiledTokenCorpus {
             dim,
             Some(&self.novelty_reference_per_layer),
         )?;
-        let query_salient = Self::extract_salient_token_sigs(
+        let query_salient = Self::extract_salient_token_sigs_indexed(
             adapter,
             query_token_qs,
             query_seq_len,
@@ -699,7 +700,14 @@ impl CompiledTokenCorpus {
             self.pooler,
         )?;
         let n_docs = self.entry_token_sigs.len();
-        let mut local_token_scores = vec![0.0_f32; n_docs];
+        let mut combined_scores = vec![0.0_f32; n_docs];
+        let mut q_to_d_scores = vec![0.0_f32; n_docs];
+        let mut d_to_q_scores = vec![0.0_f32; n_docs];
+        let mut token_deposits: Vec<TokenResonanceDeposit> = Vec::new();
+        let last_rope_layer = (0..num_layers)
+            .rfind(|&l| adapter.geometry().is_rope_layer(l))
+            .unwrap_or(0);
+
         if n_docs > 0 && !query_salient.is_empty() {
             // Unsupervised token-level discriminative centering (ColBERT-IDF equivalent):
             // down-weight query tokens that respond uniformly across all corpus entries and
@@ -709,7 +717,7 @@ impl CompiledTokenCorpus {
             let mut raw_weighted_sums = vec![0.0_f32; n_docs];
             let mut total_raw_weight = 0.0_f32;
 
-            for (q_tok, w_t) in &query_salient {
+            for (tok_idx, q_tok, w_t) in &query_salient {
                 let mut row_sims = vec![0.0_f32; n_docs];
                 let mut sum_row = 0.0_f32;
                 let mut max_row = f32::NEG_INFINITY;
@@ -749,10 +757,37 @@ impl CompiledTokenCorpus {
                 let disc = (max_row - mean_row).max(0.0);
                 let eff_w = *w_t * disc * disc;
                 if eff_w > 1e-8 {
+                    let mut entry_excess = Vec::with_capacity(n_docs);
                     for (dst, &s) in weighted_sums.iter_mut().zip(row_sims.iter()) {
-                        *dst += eff_w * (s - mean_row);
+                        let ex = s - mean_row;
+                        *dst += eff_w * ex;
+                        entry_excess.push(ex);
                     }
                     total_disc_weight += eff_w;
+
+                    let mut token_phase_words = [0_u64; NUM_SWARM_MICRO_CELLS];
+                    let start = tok_idx.saturating_mul(dim);
+                    let end = start.saturating_add(dim);
+                    if let (Some(layer_flat), Some(ref_slice)) = (
+                        query_token_qs.get(last_rope_layer),
+                        self.novelty_reference_per_layer.get(last_rope_layer),
+                    ) {
+                        if end <= layer_flat.len() {
+                            if let Ok(q7) =
+                                adapter.bake_layer_procrustes_q7(ref_slice, &layer_flat[start..end])
+                            {
+                                let mut arr64 = [0_i8; MAX_ATTENTION_HEADS];
+                                let n = q7.len().min(MAX_ATTENTION_HEADS);
+                                arr64[..n].copy_from_slice(&q7[..n]);
+                                token_phase_words = load_q7_words_64(&arr64);
+                            }
+                        }
+                    }
+                    token_deposits.push(TokenResonanceDeposit {
+                        disc_weight: eff_w,
+                        entry_excess,
+                        token_phase_words,
+                    });
                 }
                 for (dst, &s) in raw_weighted_sums.iter_mut().zip(row_sims.iter()) {
                     *dst += *w_t * s;
@@ -776,7 +811,7 @@ impl CompiledTokenCorpus {
                     let spec = doc_weights.and_then(|ws| ws.get(k).copied()).unwrap_or(1.0);
                     let max_q = query_salient
                         .iter()
-                        .map(|(q_tok, _)| TextAttractorCorpus::cosine_f32(d_tok, q_tok))
+                        .map(|(_, q_tok, _)| TextAttractorCorpus::cosine_f32(d_tok, q_tok))
                         .fold(f32::NEG_INFINITY, f32::max);
                     if max_q.is_finite() {
                         sum_cov += spec * max_q;
@@ -804,31 +839,40 @@ impl CompiledTokenCorpus {
                     } else {
                         d_to_q[i] - mean_d_to_q
                     };
-                    local_token_scores[i] = 0.65 * q_to_d_score + 0.35 * d_to_q_centered;
+                    q_to_d_scores[i] = q_to_d_score;
+                    d_to_q_scores[i] = d_to_q_centered;
+                    combined_scores[i] = 0.65 * q_to_d_score + 0.35 * d_to_q_centered;
                 }
             } else if total_raw_weight > 1e-12 {
                 for (i, &ws) in raw_weighted_sums.iter().enumerate() {
                     let raw_maxsim = ws / total_raw_weight;
                     let hub_shift = self.entry_token_hub_bias.get(i).copied().unwrap_or(0.0)
                         - self.global_token_hub_mean;
-                    local_token_scores[i] = raw_maxsim - 0.65 * hub_shift;
+                    q_to_d_scores[i] = raw_maxsim;
+                    combined_scores[i] = raw_maxsim - 0.65 * hub_shift;
                 }
             }
         }
 
+        let obs = LocalChannelObservation {
+            combined_scores,
+            q_to_d_scores,
+            d_to_q_scores,
+            token_deposits,
+        };
         let q_refs: Vec<&[f32]> = pooled_q.iter().map(Vec::as_slice).collect();
         let centroid_refs: Vec<&[f32]> = self
             .corpus_centroid_per_layer
             .iter()
             .map(Vec::as_slice)
             .collect();
-        self.corpus.recall_for_query_with_strata_and_local_scores(
+        self.corpus.recall_for_query_with_strata_observation(
             adapter,
             &q_refs,
             &centroid_refs,
             &self.recall_policy,
             pipeline,
-            Some(&local_token_scores),
+            Some(obs),
         )
     }
 }
@@ -1002,6 +1046,11 @@ mod tests {
         let signal = StratumSignal {
             candidate_scores: vec![0.45, 0.30],
             local_token_scores: vec![0.60, 0.25],
+            q_to_d_scores: vec![],
+            d_to_q_scores: vec![],
+            token_deposits: vec![],
+            linked_fact_indices: vec![],
+            decomposition_triggered: false,
             local_void_depths: vec![0.0, 0.0],
             stigmergic_weights: vec![1.2, 1.0],
             boundary_metrics: RecallBoundaryMetrics {
@@ -1090,6 +1139,90 @@ mod tests {
         assert!(
             max_w0 > min_w0 * 1.25,
             "unique token must have strictly higher specificity weight than cross-entry shared token: min={min_w0} max={max_w0}"
+        );
+    }
+
+    #[test]
+    fn compiled_token_corpus_decomposes_bimodal_compound_query_end_to_end() {
+        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let geom = adapter.geometry();
+        let dim = geom.q_rot_len();
+        let num_layers = geom.num_layers;
+
+        let make_seq_with_tokens = |token_dims: &[usize]| -> Vec<Vec<f32>> {
+            let s = token_dims.len();
+            let mut per_layer = vec![vec![0.0_f32; s * dim]; num_layers];
+            for layer_buf in &mut per_layer {
+                for (t, &d_idx) in token_dims.iter().enumerate() {
+                    let pos = d_idx % dim;
+                    layer_buf[t * dim + pos] = 1.0;
+                    layer_buf[t * dim + ((pos + 2) % dim)] = 0.25;
+                }
+            }
+            per_layer
+        };
+
+        let entries = vec![
+            TokenSequenceEntry {
+                role: AttractorRole::Fact,
+                text: "Overview Hub (10, 12, 14)".to_string(),
+                energy: 2.0,
+                seq_len: 3,
+                per_layer_token_qs: make_seq_with_tokens(&[10, 12, 14]),
+            },
+            TokenSequenceEntry {
+                role: AttractorRole::Fact,
+                text: "Shared Sibling (10, 20)".to_string(),
+                energy: 2.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq_with_tokens(&[10, 20]),
+            },
+            TokenSequenceEntry {
+                role: AttractorRole::Fact,
+                text: "Specialist Alpha (35, 39)".to_string(),
+                energy: 2.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq_with_tokens(&[35, 39]),
+            },
+            TokenSequenceEntry {
+                role: AttractorRole::Fact,
+                text: "Specialist Beta (55, 59)".to_string(),
+                energy: 2.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq_with_tokens(&[55, 59]),
+            },
+            TokenSequenceEntry {
+                role: AttractorRole::Guard,
+                text: "Forbidden Guard (75, 79)".to_string(),
+                energy: 2.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq_with_tokens(&[75, 79]),
+            },
+        ];
+
+        let compiled = CompiledTokenCorpus::compile(
+            &adapter,
+            &entries,
+            SequenceActivationPooler::default(),
+            2,
+            1,
+        )
+        .expect("compile");
+
+        // Query asks about shared domain framing (10, 10) plus both Alpha (35) and Beta (55).
+        let q_seq = make_seq_with_tokens(&[10, 10, 35, 55]);
+        let recall = compiled
+            .recall_token_sequence(&adapter, &q_seq, 4)
+            .expect("bimodal recall");
+        let recalled_ids: Vec<u32> = recall
+            .recalled_facts
+            .iter()
+            .map(|(e, _)| e.anchor_id)
+            .collect();
+        assert_eq!(recalled_ids.len(), 2, "got {recalled_ids:?}");
+        assert!(
+            recalled_ids.contains(&3) && recalled_ids.contains(&4),
+            "expected Alpha(#3) and Beta(#4), got {recalled_ids:?}"
         );
     }
 }
