@@ -5512,9 +5512,83 @@ impl CognitiveTrajectoryLedger {
         words
     }
 
+    /// Computes branchless temporal synaptic transition statistics across adjacent recorded
+    /// steps (`prev -> curr`): `(bottom_up_momentum, top_down_peel_momentum, repulse_streak, net_scale_velocity)`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn synaptic_transition_stats(&self) -> (u8, u8, u8, i8) {
+        let mut bottom_up = 0u16;
+        let mut top_down_peel = 0u16;
+        let mut repulse_streak = 0u16;
+        let mut scale_vel = 0i16;
+
+        let latest = CognitiveStepOp(self.steps[0]);
+        if latest.is_active() && matches!(latest.op(), CognitiveOpKind::RepulseAudit) {
+            repulse_streak += 12;
+        }
+
+        let mut i = 0usize;
+        while i + 1 < LEDGER_HISTORY_LEN {
+            let curr = CognitiveStepOp(self.steps[i]);
+            let prev = CognitiveStepOp(self.steps[i + 1]);
+            if curr.is_active() && prev.is_active() {
+                let curr_s = curr.granularity() as i16;
+                let prev_s = prev.granularity() as i16;
+                let ds = curr_s - prev_s;
+                scale_vel += ds;
+                if ds > 0 {
+                    bottom_up += 6;
+                } else if ds < 0 {
+                    top_down_peel += 6;
+                }
+
+                let prev_peel = matches!(
+                    prev.op(),
+                    CognitiveOpKind::DecomposePeel | CognitiveOpKind::RouteSubHead
+                );
+                let curr_fuse = matches!(
+                    curr.op(),
+                    CognitiveOpKind::SynthesizeFuse | CognitiveOpKind::CrystallizeCommit
+                );
+                if prev_peel && curr_fuse {
+                    bottom_up += 10;
+                }
+                if matches!(curr.op(), CognitiveOpKind::DecomposePeel)
+                    && matches!(prev.op(), CognitiveOpKind::DecomposePeel)
+                {
+                    top_down_peel += 8;
+                }
+                if matches!(curr.op(), CognitiveOpKind::RepulseAudit) {
+                    repulse_streak += if i == 0 { 10 } else { 6 };
+                }
+            }
+            i += 1;
+        }
+
+        let bu = if bottom_up > 48 { 48 } else { bottom_up as u8 };
+        let td = if top_down_peel > 48 {
+            48
+        } else {
+            top_down_peel as u8
+        };
+        let rs = if repulse_streak > 48 {
+            48
+        } else {
+            repulse_streak as u8
+        };
+        let vel = if scale_vel > 64 {
+            64
+        } else if scale_vel < -64 {
+            -64
+        } else {
+            scale_vel as i8
+        };
+        (bu, td, rs, vel)
+    }
+
     /// Evaluates the pseudo-neural activation of a cognitive circuit at `scale` using branchless
     /// integer SWAR phase closeness between `input_words` and `circuit_bias_words`, modulated by
-    /// the trajectory ledger's recent transitions.
+    /// the trajectory ledger's recent transitions and temporal synaptic momentum.
     #[inline(always)]
     #[must_use]
     pub fn evaluate_circuit_activation(
@@ -5543,6 +5617,8 @@ impl CognitiveTrajectoryLedger {
 
         let (op_hist, depth) = self.op_counts();
         let scale_hist = self.scale_counts();
+        let (bottom_up_mom, top_down_peel_mom, repulse_streak, net_scale_vel) =
+            self.synaptic_transition_stats();
         let peel_hist = op_hist[CognitiveOpKind::DecomposePeel as usize]
             .saturating_add(op_hist[CognitiveOpKind::RouteSubHead as usize]);
         let fuse_hist = op_hist[CognitiveOpKind::SynthesizeFuse as usize]
@@ -5550,17 +5626,20 @@ impl CognitiveTrajectoryLedger {
         let repulse_hist = op_hist[CognitiveOpKind::RepulseAudit as usize];
 
         let divergence = local_close.abs_diff(global_close);
-        let peel_raw = 48u16
+        let peel_raw = 44u16
             + u16::from(divergence)
-            + u16::from(peel_hist) * 8
-            + if scale == SwarmScaleGranularity::CellTrail { 12 } else { 0 };
-        let fuse_raw = 40u16
+            + u16::from(peel_hist) * 7
+            + u16::from(top_down_peel_mom)
+            + if scale == SwarmScaleGranularity::CellTrail { 10 } else { 0 };
+        let fuse_raw = 36u16
             + (u16::from(global_close) >> 1)
-            + u16::from(fuse_hist) * 8
+            + u16::from(fuse_hist) * 7
+            + u16::from(bottom_up_mom)
             + if scale == SwarmScaleGranularity::MacroCoalition { 10 } else { 0 };
-        let repulse_raw = 32u16
+        let repulse_raw = 28u16
             + (u16::from(128u8.saturating_sub(global_close)) >> 1)
-            + u16::from(repulse_hist) * 12;
+            + u16::from(repulse_hist) * 10
+            + u16::from(repulse_streak);
 
         let peel_gate_q7 = peel_raw.min(128) as u8;
         let fuse_gate_q7 = fuse_raw.min(128) as u8;
@@ -5585,9 +5664,10 @@ impl CognitiveTrajectoryLedger {
             CognitiveOpKind::SteerAlign
         };
 
-        // Perspective movement tendency derived from both the selected operation and scale momentum.
+        // Perspective movement tendency derived from both the selected operation and scale velocity.
         let top_down_bias = scale_hist[SwarmScaleGranularity::MacroCoalition as usize]
-            >= scale_hist[SwarmScaleGranularity::PointerBit as usize];
+            >= scale_hist[SwarmScaleGranularity::PointerBit as usize]
+            || net_scale_vel > 0;
         let next_scale = match selected_op {
             CognitiveOpKind::DecomposePeel => SwarmScaleGranularity::PointerBit,
             CognitiveOpKind::RouteSubHead | CognitiveOpKind::BridgeShift => {
@@ -5615,6 +5695,75 @@ impl CognitiveTrajectoryLedger {
             circuit_resonance_q7: signed_resonance,
             trajectory_depth: depth,
         }
+    }
+
+    /// Evaluates cross-trajectory pseudo-neural resonance between a query's [`CognitiveTrajectoryLedger`]
+    /// (`self`) and a draft's [`CognitiveTrajectoryLedger`] (`draft`) over their 64-head phase fields.
+    ///
+    /// Detects structural reasoning deficits such as compound decomposition omitted in the draft,
+    /// guard repulsion streaks, and scale-horizon mismatch for closed-loop self-reflection.
+    #[inline(always)]
+    #[must_use]
+    pub fn evaluate_cross_trajectory_activation(
+        &self,
+        draft: &Self,
+        query_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        draft_words: &[u64; NUM_SWARM_MICRO_CELLS],
+    ) -> CognitiveCircuitActivation {
+        let mut base = draft.evaluate_circuit_activation(
+            query_words,
+            draft_words,
+            SwarmScaleGranularity::MacroCoalition,
+        );
+        let (q_ops, q_depth) = self.op_counts();
+        let (d_ops, d_depth) = draft.op_counts();
+        let (d_bu, _, d_repulse_streak, _) = draft.synaptic_transition_stats();
+
+        let q_peel = q_ops[CognitiveOpKind::DecomposePeel as usize]
+            .saturating_add(q_ops[CognitiveOpKind::RouteSubHead as usize]);
+        let d_peel = d_ops[CognitiveOpKind::DecomposePeel as usize]
+            .saturating_add(d_ops[CognitiveOpKind::RouteSubHead as usize]);
+        let peel_deficit = q_peel.saturating_sub(d_peel);
+
+        let d_repulse = d_ops[CognitiveOpKind::RepulseAudit as usize];
+        let depth_gap = q_depth.saturating_sub(d_depth);
+
+        let adj_peel = (u16::from(base.peel_gate_q7)
+            + u16::from(peel_deficit) * 18
+            + u16::from(depth_gap) * 6)
+            .min(128) as u8;
+        let adj_repulse = (u16::from(base.repulse_sensitivity_q7)
+            + u16::from(d_repulse) * 14
+            + (u16::from(d_repulse_streak) >> 1))
+            .min(128) as u8;
+        let adj_fuse = (u16::from(base.fuse_gate_q7) + (u16::from(d_bu) >> 1))
+            .saturating_sub(u16::from(peel_deficit) * 12)
+            .min(128) as u8;
+
+        base.peel_gate_q7 = adj_peel;
+        base.repulse_sensitivity_q7 = adj_repulse;
+        base.fuse_gate_q7 = adj_fuse;
+
+        let selected_op = if adj_repulse >= 92 && base.circuit_resonance_q7 <= 16 {
+            CognitiveOpKind::RepulseAudit
+        } else if peel_deficit > 0 && adj_peel >= adj_fuse {
+            CognitiveOpKind::DecomposePeel
+        } else if adj_fuse >= 80 && base.circuit_resonance_q7 >= 24 {
+            CognitiveOpKind::CrystallizeCommit
+        } else {
+            base.op_kind()
+        };
+        base.selected_op = selected_op as u8;
+        base.preferred_next_scale = match selected_op {
+            CognitiveOpKind::DecomposePeel => SwarmScaleGranularity::CellTrail as u8,
+            CognitiveOpKind::RepulseAudit => SwarmScaleGranularity::TypeGateway as u8,
+            CognitiveOpKind::CrystallizeCommit | CognitiveOpKind::SynthesizeFuse => {
+                SwarmScaleGranularity::MacroCoalition as u8
+            }
+            _ => base.preferred_next_scale,
+        };
+        base.intensity_q7 = adj_peel.max(adj_fuse).max(adj_repulse);
+        base
     }
 }
 
@@ -6417,6 +6566,10 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
     /// [`StigmergicScaleLayer`] stages, forwarding orthogonal residuals from coarse layers to fine
     /// layers and updating `ledger_slot`'s [`CognitiveTrajectoryLedger`] at every scale step.
     ///
+    /// Uses [`CognitiveCircuitActivation`] gating for adaptive early-exit when coherent basin fusion
+    /// has already converged on low residual energy, and performs a bounded single-step recurrent
+    /// residual refinement pass when `DecomposePeel` or `RepulseAudit` remains strongly active.
+    ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `layers` is empty or `depth_n == 0`, or
     /// propagates pointer/telemetry errors.
@@ -6435,6 +6588,17 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
         CognitiveTrajectoryLedger,
         SwarmResolutionReport,
     )> {
+        #[inline(always)]
+        const fn residual_mean_abs_q7(words: &[u64; NUM_SWARM_MICRO_CELLS]) -> u8 {
+            let mut sum = 0u16;
+            let mut c = 0usize;
+            while c < NUM_SWARM_MICRO_CELLS {
+                sum += swar_mean_u8_le128_x8(swar_q7_abs_u8_x8(words[c])) as u16;
+                c += 1;
+            }
+            ((sum + 4) >> 3) as u8
+        }
+
         let active_n = depth_n.min(layers.len());
         if active_n == 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
@@ -6456,6 +6620,17 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
 
         let mut i = 1usize;
         while i < active_n {
+            let act = last_proj.0.activation;
+            let converged_early = matches!(
+                act.op_kind(),
+                CognitiveOpKind::SynthesizeFuse | CognitiveOpKind::CrystallizeCommit
+            ) && act.fuse_gate_q7 >= 96
+                && act.repulse_sensitivity_q7 < 72
+                && residual_mean_abs_q7(&residual) <= 16;
+            if converged_early {
+                break;
+            }
+
             let step_res = self.orchestrate_scale_layer(
                 &layers[i],
                 last_proj.2.evolved_ptr,
@@ -6476,6 +6651,38 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
             ledger = step_res.1;
             last_proj = step_res;
             i += 1;
+        }
+
+        // Bounded single-step recurrent residual refinement when high-intensity peeling or guard
+        // repulsion persists at the end of a multi-layer cascade.
+        let tail_act = last_proj.0.activation;
+        if active_n >= 2
+            && matches!(
+                tail_act.op_kind(),
+                CognitiveOpKind::DecomposePeel | CognitiveOpKind::RepulseAudit
+            )
+            && tail_act.intensity_q7 >= 80
+            && residual_mean_abs_q7(&residual) > 16
+        {
+            let refine_res = self.orchestrate_scale_layer(
+                &layers[active_n - 1],
+                last_proj.2.evolved_ptr,
+                &residual,
+                ledger_slot,
+                trail_out,
+                active_n - 1,
+                active_n,
+                bloom_filter,
+            )?;
+            let mut c = 0usize;
+            while c < NUM_SWARM_MICRO_CELLS {
+                combined_peeled[c] =
+                    swar_q7_circular_add_x8(combined_peeled[c], refine_res.0.peeled_words[c]);
+                c += 1;
+            }
+            residual = refine_res.0.residual_words;
+            ledger = refine_res.1;
+            last_proj = refine_res;
         }
 
         let mut final_proj = last_proj.0;
@@ -6981,5 +7188,107 @@ mod tests {
         assert!(updated_ledger.latest_step().is_some());
         assert_eq!(ledger.telemetry_mini_ledger, updated_ledger.steps);
         assert_eq!(swarm_rep.evolved_ptr.raw(), trail.current_ptr);
+    }
+
+    #[test]
+    fn test_synaptic_transitions_cross_trajectory_and_adaptive_cascade() {
+        // 1. Temporal synaptic momentum differentiates bottom-up integration from peel streaks.
+        let mut bu_cycle = CognitiveTrajectoryLedger::new();
+        bu_cycle.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::PointerBit,
+            CognitiveOpKind::DecomposePeel,
+            6,
+        ));
+        bu_cycle.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::CellTrail,
+            CognitiveOpKind::RouteSubHead,
+            6,
+        ));
+        bu_cycle.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::MacroCoalition,
+            CognitiveOpKind::SynthesizeFuse,
+            7,
+        ));
+        let (bu_mom, td_mom, rep_streak, net_vel) = bu_cycle.synaptic_transition_stats();
+        assert!(bu_mom > td_mom);
+        assert_eq!(rep_streak, 0);
+        assert!(net_vel > 0);
+
+        let mut peel_streak = CognitiveTrajectoryLedger::new();
+        peel_streak.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::MacroCoalition,
+            CognitiveOpKind::DecomposePeel,
+            6,
+        ));
+        peel_streak.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::CellTrail,
+            CognitiveOpKind::DecomposePeel,
+            7,
+        ));
+        let (p_bu, p_td, _, p_vel) = peel_streak.synaptic_transition_stats();
+        assert!(p_td > p_bu);
+        assert!(p_vel < 0);
+
+        // 2. Cross-trajectory activation catches omitted decomposition in a shallow draft.
+        let mut shallow_draft = CognitiveTrajectoryLedger::new();
+        shallow_draft.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::MacroCoalition,
+            CognitiveOpKind::Observe,
+            3,
+        ));
+        let q_words = load_q7_words_64(&[24i8; MAX_ATTENTION_HEADS]);
+        let d_words = load_q7_words_64(&[20i8; MAX_ATTENTION_HEADS]);
+        let cross = peel_streak.evaluate_cross_trajectory_activation(
+            &shallow_draft,
+            &q_words,
+            &d_words,
+        );
+        assert_eq!(cross.op_kind(), CognitiveOpKind::DecomposePeel);
+        assert!(cross.peel_gate_q7 >= 80);
+
+        // 3. Adaptive early-exit skips redundant deeper layers when residual energy is low and
+        //    fuse_gate_q7 is already saturated.
+        let mut hub = crate::action_hub::ActionHubEngine::new();
+        let mut early_slot = gcso_ledger_slot_t::default();
+        let mut early_ledger = CognitiveTrajectoryLedger::new();
+        early_ledger.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::PointerBit,
+            CognitiveOpKind::DecomposePeel,
+            5,
+        ));
+        early_ledger.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::CellTrail,
+            CognitiveOpKind::SynthesizeFuse,
+            7,
+        ));
+        early_ledger.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::MacroCoalition,
+            CognitiveOpKind::CrystallizeCommit,
+            7,
+        ));
+        early_ledger.write_to_ledger_slot(&mut early_slot);
+
+        let aligned_words = load_q7_words_64(&[8i8; MAX_ATTENTION_HEADS]);
+        let aligned_frame =
+            ObjectiveFact::new([8i8; MAX_ATTENTION_HEADS], 3.0, 0, 1).synthesize_gateway_frame();
+        let early_layers = [
+            ScaleLayerNode::new(aligned_frame, SwarmScaleGranularity::MacroCoalition),
+            ScaleLayerNode::new(aligned_frame, SwarmScaleGranularity::CellTrail),
+            ScaleLayerNode::new(aligned_frame, SwarmScaleGranularity::PointerBit),
+        ];
+        let mut early_trail = gcso_pointer_trail_t::default();
+        let (_, out_early, _) = hub
+            .orchestrate_adaptive_depth_n(
+                &early_layers,
+                3,
+                gcso_tagged_ptr_t::default(),
+                &aligned_words,
+                &mut early_slot,
+                &mut early_trail,
+                None,
+            )
+            .unwrap();
+        // Early-exit stopped after layer 0, so only 1 step was added (3 -> 4 total steps).
+        assert_eq!(out_early.op_counts().1, 4);
     }
 }

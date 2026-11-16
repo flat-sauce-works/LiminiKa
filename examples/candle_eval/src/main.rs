@@ -2067,19 +2067,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 reflect_adopted += 1;
                                 text = p2_text;
                                 reflect_note = format!(
-                                    "{:?}->{:?}(P2,{:+.2}->{:+.2})",
+                                    "{:?}->{:?}(P2,{:+.2}->{:+.2},[{:?}->{:?}])",
                                     pass1_crit.trigger,
                                     pass2_crit.trigger,
                                     pass1_crit.alignment_score,
-                                    pass2_crit.alignment_score
+                                    pass2_crit.alignment_score,
+                                    pass1_crit.layer_activation.op_kind(),
+                                    pass2_crit.layer_activation.op_kind()
                                 );
                             } else {
                                 reflect_note = format!(
-                                    "{:?}->{:?}(P1,{:+.2}->{:+.2})",
+                                    "{:?}->{:?}(P1,{:+.2}->{:+.2},[{:?}->{:?}])",
                                     pass1_crit.trigger,
                                     pass2_crit.trigger,
                                     pass1_crit.alignment_score,
-                                    pass2_crit.alignment_score
+                                    pass2_crit.alignment_score,
+                                    pass1_crit.layer_activation.op_kind(),
+                                    pass2_crit.layer_activation.op_kind()
                                 );
                             }
                         } else {

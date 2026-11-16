@@ -12,9 +12,9 @@
 use crate::{DynamicAttractorRecall, RecallPolicy, VoidBoundaryState};
 use liminika_core::action_hub::StigmergicActionDecision;
 use liminika_core::traits::gateway::{
-    CausalProvenanceSignal, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
-    GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact, SwarmScaleGranularity,
-    SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
+    CausalProvenanceSignal, CognitiveCircuitActivation, CognitiveOpKind, CognitiveStepOp,
+    CognitiveTrajectoryLedger, GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal,
+    ObjectiveFact, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
 };
 use liminika_core::traits::primitives::MAX_ATTENTION_HEADS;
 
@@ -189,6 +189,8 @@ pub struct ReflectionCritique {
     pub gateway_frame: GatewayFrame,
     /// Updated cognitive trajectory ledger recording this closed-loop reflection transition.
     pub cognitive_trajectory: CognitiveTrajectoryLedger,
+    /// Cross-trajectory pseudo-neural circuit activation comparing query and draft reasoning paths.
+    pub layer_activation: CognitiveCircuitActivation,
 }
 
 impl ReflectionCritique {
@@ -286,6 +288,16 @@ pub trait AttractorTrajectoryEvaluator {
         );
         if !p2_unsafe
             && pass2.alignment_score >= pass1.alignment_score + policy.alignment_improvement_eps
+        {
+            return ReflectionSelection::Pass2;
+        }
+        if !p2_unsafe
+            && (pass2.alignment_score - pass1.alignment_score).abs()
+                < policy.alignment_improvement_eps
+            && pass2.layer_activation.repulse_sensitivity_q7
+                < pass1.layer_activation.repulse_sensitivity_q7
+            && pass2.layer_activation.circuit_resonance_q7
+                > pass1.layer_activation.circuit_resonance_q7
         {
             return ReflectionSelection::Pass2;
         }
@@ -519,6 +531,44 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
             }
         };
 
+        let cross_activation = query
+            .cognitive_trajectory
+            .evaluate_cross_trajectory_activation(
+                &draft.cognitive_trajectory,
+                query.gateway_frame.phase_words_ref(),
+                draft.gateway_frame.phase_words_ref(),
+            );
+
+        // If the pseudo-neural trajectory circuit detects omitted compound decomposition (`DecomposePeel`)
+        // alongside incomplete Fact anchor coverage on a grounded query, escalate to BoundaryAmbiguity.
+        let (trigger, alignment_score, mut directive) = if query_is_grounded
+            && matches!(trigger, ReflectionTriggerKind::Converged)
+            && matches!(cross_activation.op_kind(), CognitiveOpKind::DecomposePeel)
+            && cross_activation.peel_gate_q7 >= 84
+            && anchor_overlap_ratio < 1.0
+        {
+            (
+                ReflectionTriggerKind::BoundaryAmbiguity,
+                alignment_score - 0.05,
+                ReflectionCorrectiveDirective {
+                    rethink_recommended: true,
+                    inject_guard_repulsion: false,
+                    suppress_injection: false,
+                    rope_rad_delta: policy.max_rope_boost_rad * 0.75,
+                    srl_scale_delta: policy.srl_boost_delta * 0.65,
+                    anchor_mismatch: true,
+                },
+            )
+        } else {
+            (trigger, alignment_score, directive)
+        };
+
+        if directive.rethink_recommended && !directive.suppress_injection {
+            let circuit_gain = 1.0 + 0.25 * (f32::from(cross_activation.intensity_q7) / 128.0);
+            directive.rope_rad_delta *= circuit_gain;
+            directive.srl_scale_delta *= circuit_gain;
+        }
+
         let gateway_frame = Self::synthesize_corrective_frame(trigger, query, draft);
         let mut cognitive_trajectory = query.cognitive_trajectory;
         let step_op = match trigger {
@@ -526,15 +576,24 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
                 CognitiveOpKind::RepulseAudit
             }
             ReflectionTriggerKind::VoidDrift | ReflectionTriggerKind::BoundaryAmbiguity => {
-                CognitiveOpKind::BridgeShift
+                if matches!(cross_activation.op_kind(), CognitiveOpKind::DecomposePeel) {
+                    CognitiveOpKind::DecomposePeel
+                } else {
+                    CognitiveOpKind::BridgeShift
+                }
             }
             ReflectionTriggerKind::Converged => CognitiveOpKind::CrystallizeCommit,
             ReflectionTriggerKind::ConsistentVoidAbstention => CognitiveOpKind::Observe,
         };
+        let intensity = if directive.rethink_recommended {
+            (cross_activation.intensity_q7 >> 4).clamp(5, 7)
+        } else {
+            (cross_activation.intensity_q7 >> 5).clamp(2, 5)
+        };
         cognitive_trajectory.push_step(CognitiveStepOp::pack(
-            SwarmScaleGranularity::MacroCoalition,
+            cross_activation.next_scale(),
             step_op,
-            if directive.rethink_recommended { 6 } else { 3 },
+            intensity,
         ));
         ReflectionCritique {
             trigger,
@@ -543,6 +602,7 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
             directive,
             gateway_frame,
             cognitive_trajectory,
+            layer_activation: cross_activation,
         }
     }
 }
@@ -718,5 +778,55 @@ mod tests {
         assert!(crit.directive.rethink_recommended);
         assert_eq!(crit.gateway_frame.target_anchor_id, 6);
         assert_eq!(crit.gateway_frame.phase_deltas, q7_six);
+    }
+
+    #[test]
+    fn reflection_escalates_omitted_compound_decomposition_via_cognitive_circuit() {
+        use liminika_core::traits::gateway::SwarmScaleGranularity;
+
+        let eval = ManifoldReflectionEvaluator;
+        let recall_policy = RecallPolicy::default();
+        let policy = ReflectionPolicy::default();
+
+        let mut query = make_snapshot(
+            VoidBoundaryState::InsideBasin,
+            0.70,
+            0.64,
+            -0.25,
+            vec![101, 102],
+        );
+        query.cognitive_trajectory.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::CellTrail,
+            CognitiveOpKind::DecomposePeel,
+            6,
+        ));
+        query.cognitive_trajectory.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::PointerBit,
+            CognitiveOpKind::RouteSubHead,
+            5,
+        ));
+        query.gateway_frame = ObjectiveFact::new([24_i8; MAX_ATTENTION_HEADS], 2.5, 0, 101)
+            .synthesize_gateway_frame();
+
+        // Draft appears converged by scalar Fact score alone, yet only observed one anchor
+        // without performing compound decomposition.
+        let mut draft = make_snapshot(VoidBoundaryState::InsideBasin, 0.66, 0.25, -0.25, vec![101]);
+        draft.cognitive_trajectory.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::MacroCoalition,
+            CognitiveOpKind::Observe,
+            3,
+        ));
+        draft.gateway_frame = ObjectiveFact::new([24_i8; MAX_ATTENTION_HEADS], 2.0, 0, 101)
+            .synthesize_gateway_frame();
+
+        let crit = eval.assess_trajectory(&query, &draft, &recall_policy, &policy);
+        assert_eq!(crit.trigger, ReflectionTriggerKind::BoundaryAmbiguity);
+        assert!(crit.directive.rethink_recommended);
+        assert_eq!(
+            crit.layer_activation.op_kind(),
+            CognitiveOpKind::DecomposePeel
+        );
+        assert!(crit.layer_activation.peel_gate_q7 >= 84);
+        assert!(crit.directive.rope_rad_delta.abs() > (policy.max_rope_boost_rad * 0.75).abs());
     }
 }
