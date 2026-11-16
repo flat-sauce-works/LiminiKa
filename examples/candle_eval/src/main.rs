@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor, D};
 use candle_nn::{linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 use liminika_adapter::{
@@ -64,6 +65,37 @@ fn parse_circuit_mode<'a>(args: impl IntoIterator<Item = &'a str>) -> CircuitPro
         }
     }
     CircuitProfileMode::None
+}
+
+fn parse_kv_min_res<'a>(args: impl IntoIterator<Item = &'a str>) -> gcso_q7_t {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--kv-min-res=") {
+            if let Ok(parsed) = val.parse::<i8>() {
+                return parsed.clamp(-127, 127);
+            }
+        }
+    }
+    48
+}
+
+fn parse_quant_mode<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<GgmlDType> {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--quant=") {
+            if val.eq_ignore_ascii_case("q4_0") || val.eq_ignore_ascii_case("q40") {
+                return Some(GgmlDType::Q4_0);
+            }
+            if val.eq_ignore_ascii_case("q4k") || val.eq_ignore_ascii_case("q4_k") {
+                return Some(GgmlDType::Q4K);
+            }
+            if val.eq_ignore_ascii_case("q8_0") || val.eq_ignore_ascii_case("q80") {
+                return Some(GgmlDType::Q8_0);
+            }
+            if val.eq_ignore_ascii_case("none") || val.eq_ignore_ascii_case("bf16") {
+                return None;
+            }
+        }
+    }
+    None
 }
 
 fn build_preset_circuit(mode: CircuitProfileMode) -> Option<CognitiveTrajectoryLedger> {
@@ -388,9 +420,54 @@ impl RotaryCache {
     }
 }
 
+enum LinearLayer {
+    Dense(Linear),
+    Quantized(QMatMul),
+}
+
+impl LinearLayer {
+    fn load_no_bias(
+        in_dim: usize,
+        out_dim: usize,
+        vb: VarBuilder,
+        quant: Option<GgmlDType>,
+        dev: &Device,
+    ) -> CResult<Self> {
+        match quant {
+            None => Ok(Self::Dense(linear_no_bias(in_dim, out_dim, vb)?)),
+            Some(q_dtype) => {
+                let w = vb.get((out_dim, in_dim), "weight")?.to_device(dev)?;
+                let qt = QTensor::quantize(&w, q_dtype)?;
+                Ok(Self::Quantized(QMatMul::from_qtensor(qt)?))
+            }
+        }
+    }
+
+    fn forward(&self, x: &Tensor) -> CResult<Tensor> {
+        match self {
+            Self::Dense(l) => l.forward(x),
+            Self::Quantized(q) => q.forward(x),
+        }
+    }
+}
+
+fn load_rms_norm_on_device(
+    size: usize,
+    eps: f64,
+    vb: VarBuilder,
+    dev: &Device,
+) -> CResult<RmsNorm> {
+    if vb.device().same_device(dev) {
+        rms_norm(size, eps, vb)
+    } else {
+        let w = vb.get(size, "weight")?.to_device(dev)?;
+        Ok(RmsNorm::new(w, eps))
+    }
+}
+
 struct Phi3Attention {
-    qkv_proj: Linear,
-    o_proj: Linear,
+    qkv_proj: LinearLayer,
+    o_proj: LinearLayer,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -398,12 +475,24 @@ struct Phi3Attention {
 }
 
 impl Phi3Attention {
-    fn load(cfg: &Phi3Config, vb: VarBuilder) -> CResult<Self> {
+    fn load(
+        cfg: &Phi3Config,
+        vb: VarBuilder,
+        quant: Option<GgmlDType>,
+        dev: &Device,
+    ) -> CResult<Self> {
         let head_dim = cfg.head_dim();
         let q_size = cfg.num_attention_heads * head_dim;
         let kv_size = cfg.num_key_value_heads * head_dim;
-        let qkv_proj = linear_no_bias(cfg.hidden_size, q_size + 2 * kv_size, vb.pp("qkv_proj"))?;
-        let o_proj = linear_no_bias(q_size, cfg.hidden_size, vb.pp("o_proj"))?;
+        let qkv_proj = LinearLayer::load_no_bias(
+            cfg.hidden_size,
+            q_size + 2 * kv_size,
+            vb.pp("qkv_proj"),
+            quant,
+            dev,
+        )?;
+        let o_proj =
+            LinearLayer::load_no_bias(q_size, cfg.hidden_size, vb.pp("o_proj"), quant, dev)?;
         Ok(Self {
             qkv_proj,
             o_proj,
@@ -517,19 +606,32 @@ fn causal_mask(seq_len: usize, offset: usize, dtype: DType, dev: &Device) -> CRe
 }
 
 struct Phi3Mlp {
-    gate_up_proj: Linear,
-    down_proj: Linear,
+    gate_up_proj: LinearLayer,
+    down_proj: LinearLayer,
     intermediate_size: usize,
 }
 
 impl Phi3Mlp {
-    fn load(cfg: &Phi3Config, vb: VarBuilder) -> CResult<Self> {
-        let gate_up_proj = linear_no_bias(
+    fn load(
+        cfg: &Phi3Config,
+        vb: VarBuilder,
+        quant: Option<GgmlDType>,
+        dev: &Device,
+    ) -> CResult<Self> {
+        let gate_up_proj = LinearLayer::load_no_bias(
             cfg.hidden_size,
             2 * cfg.intermediate_size,
             vb.pp("gate_up_proj"),
+            quant,
+            dev,
         )?;
-        let down_proj = linear_no_bias(cfg.intermediate_size, cfg.hidden_size, vb.pp("down_proj"))?;
+        let down_proj = LinearLayer::load_no_bias(
+            cfg.intermediate_size,
+            cfg.hidden_size,
+            vb.pp("down_proj"),
+            quant,
+            dev,
+        )?;
         Ok(Self {
             gate_up_proj,
             down_proj,
@@ -554,25 +656,37 @@ struct Phi3Layer {
 }
 
 impl Phi3Layer {
-    fn load(cfg: &Phi3Config, vb: VarBuilder) -> CResult<Self> {
+    fn load(
+        cfg: &Phi3Config,
+        vb: VarBuilder,
+        quant: Option<GgmlDType>,
+        dev: &Device,
+    ) -> CResult<Self> {
         Ok(Self {
-            input_layernorm: rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?,
-            self_attn: Phi3Attention::load(cfg, vb.pp("self_attn"))?,
-            post_attention_layernorm: rms_norm(
+            input_layernorm: load_rms_norm_on_device(
+                cfg.hidden_size,
+                cfg.rms_norm_eps,
+                vb.pp("input_layernorm"),
+                dev,
+            )?,
+            self_attn: Phi3Attention::load(cfg, vb.pp("self_attn"), quant, dev)?,
+            post_attention_layernorm: load_rms_norm_on_device(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 vb.pp("post_attention_layernorm"),
+                dev,
             )?,
-            mlp: Phi3Mlp::load(cfg, vb.pp("mlp"))?,
+            mlp: Phi3Mlp::load(cfg, vb.pp("mlp"), quant, dev)?,
         })
     }
 }
 
 struct Phi3Model {
     embed_tokens: Embedding,
+    embed_on_cpu: bool,
     layers: Vec<Phi3Layer>,
     norm: RmsNorm,
-    lm_head: Linear,
+    lm_head: LinearLayer,
     rope: RotaryCache,
     device: Device,
 }
@@ -582,39 +696,68 @@ impl Phi3Model {
         model_dir: &Path,
         cfg: &Phi3Config,
         dev: &Device,
+        quant: Option<GgmlDType>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let dtype = if dev.is_cuda() {
-            DType::BF16
-        } else {
+        let dtype = if quant.is_some() || !dev.is_cuda() {
             DType::F32
+        } else {
+            DType::BF16
         };
         let files = vec![
             model_dir.join("model-00001-of-00002.safetensors"),
             model_dir.join("model-00002-of-00002.safetensors"),
         ];
+        // When quantizing, load safetensors lazily on CPU so only compact quantized blocks enter VRAM.
+        let vb_dev = if quant.is_some() { &Device::Cpu } else { dev };
         // SAFETY: The safetensors files are read-only model weights on disk.
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&files, dtype, dev)? };
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&files, dtype, vb_dev)? };
         let mvb = vb.pp("model");
 
         let embed_weight = mvb
             .pp("embed_tokens")
             .get((cfg.vocab_size, cfg.hidden_size), "weight")?;
+        let embed_on_cpu = quant.is_some() && dev.is_cuda();
         let embed_tokens = Embedding::new(embed_weight.clone(), cfg.hidden_size);
-        let lm_head = if cfg.tie_word_embeddings {
-            Linear::new(embed_weight, None)
-        } else {
-            linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
+        let lm_head = match quant {
+            None => {
+                if cfg.tie_word_embeddings {
+                    LinearLayer::Dense(Linear::new(embed_weight, None))
+                } else {
+                    LinearLayer::Dense(linear_no_bias(
+                        cfg.hidden_size,
+                        cfg.vocab_size,
+                        vb.pp("lm_head"),
+                    )?)
+                }
+            }
+            Some(q_dtype) => {
+                let w = if cfg.tie_word_embeddings {
+                    embed_weight.to_device(dev)?
+                } else {
+                    vb.pp("lm_head")
+                        .get((cfg.vocab_size, cfg.hidden_size), "weight")?
+                        .to_device(dev)?
+                };
+                let qt = QTensor::quantize(&w, q_dtype)?;
+                LinearLayer::Quantized(QMatMul::from_qtensor(qt)?)
+            }
         };
 
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         for i in 0..cfg.num_hidden_layers {
-            layers.push(Phi3Layer::load(cfg, mvb.pp(format!("layers.{i}")))?);
+            layers.push(Phi3Layer::load(
+                cfg,
+                mvb.pp(format!("layers.{i}")),
+                quant,
+                dev,
+            )?);
         }
-        let norm = rms_norm(cfg.hidden_size, cfg.rms_norm_eps, mvb.pp("norm"))?;
+        let norm = load_rms_norm_on_device(cfg.hidden_size, cfg.rms_norm_eps, mvb.pp("norm"), dev)?;
         let rope = RotaryCache::new(cfg, 2048, dtype, dev)?;
 
         Ok(Self {
             embed_tokens,
+            embed_on_cpu,
             layers,
             norm,
             lm_head,
@@ -637,8 +780,15 @@ impl Phi3Model {
         use_edbc: bool,
         collect_bake_data: bool,
     ) -> CResult<ForwardTokensOutput> {
-        let input = Tensor::from_slice(tokens, (1, tokens.len()), &self.device)?;
-        let mut h = self.embed_tokens.forward(&input)?;
+        let mut h = if self.embed_on_cpu {
+            let input_cpu = Tensor::from_slice(tokens, (1, tokens.len()), &Device::Cpu)?;
+            self.embed_tokens
+                .forward(&input_cpu)?
+                .to_device(&self.device)?
+        } else {
+            let input = Tensor::from_slice(tokens, (1, tokens.len()), &self.device)?;
+            self.embed_tokens.forward(&input)?
+        };
         let mut per_layer_q = if collect_bake_data {
             Vec::with_capacity(self.layers.len())
         } else {
@@ -901,7 +1051,11 @@ fn query_nvidia_smi_vram() -> Option<String> {
     }
 }
 
-fn estimate_phi3_footprint(cfg: &Phi3Config, dtype: DType) -> (u64, f64, f64) {
+fn estimate_phi3_footprint(
+    cfg: &Phi3Config,
+    dtype: DType,
+    quant: Option<GgmlDType>,
+) -> (u64, f64, f64) {
     let h = cfg.hidden_size as u64;
     let i = cfg.intermediate_size as u64;
     let n_q = cfg.num_attention_heads as u64;
@@ -918,7 +1072,14 @@ fn estimate_phi3_footprint(cfg: &Phi3Config, dtype: DType) -> (u64, f64, f64) {
     let total_params =
         embed_params + lm_head_params + (cfg.num_hidden_layers as u64) * per_layer_params + h;
     let elem_bytes = dtype.size_in_bytes() as f64;
-    let weights_mb = (total_params as f64 * elem_bytes) / (1024.0 * 1024.0);
+    let weights_mb = match quant {
+        None => (total_params as f64 * elem_bytes) / (1024.0 * 1024.0),
+        Some(q) => {
+            let bpp = (q.type_size() as f64) / (q.block_size().max(1) as f64);
+            let quantized_params = embed_params + (cfg.num_hidden_layers as u64) * per_layer_params;
+            (quantized_params as f64 * bpp) / (1024.0 * 1024.0)
+        }
+    };
     // KV cache footprint at full 2048 context window (K + V across all layers).
     let kv_2048_bytes = 2.0
         * (cfg.num_hidden_layers as f64)
@@ -935,19 +1096,21 @@ fn print_runtime_profile(
     adapter: &ModelSteeringAdapter,
     device: &Device,
     dtype: DType,
+    quant: Option<GgmlDType>,
     load_elapsed: std::time::Duration,
     vram_before: Option<&str>,
 ) {
     let geom = adapter.geometry();
-    let (params, weights_mb, kv_2048_mb) = estimate_phi3_footprint(cfg, dtype);
+    let (params, weights_mb, kv_2048_mb) = estimate_phi3_footprint(cfg, dtype, quant);
     let hub_bytes = std::mem::size_of::<ActionHubEngine>();
     println!(
-        "[System] os={} arch={} simd={} device={:?} dtype={:?} load={:.2?}",
+        "[System] os={} arch={} simd={} device={:?} dtype={:?} quant={:?} load={:.2?}",
         std::env::consts::OS,
         std::env::consts::ARCH,
         detect_simd_label(),
         device,
         dtype,
+        quant,
         load_elapsed,
     );
     println!(
@@ -1238,14 +1401,14 @@ struct SteerDecodeConfig<'a> {
     use_steer: bool,
 }
 
-fn generate_steered_reply(
+fn generate_steered_reply_with_offset(
     model: &mut Phi3Model,
     tokenizer: &Tokenizer,
     adapter: &mut ModelSteeringAdapter,
     formatted_prompt: &str,
+    start_offset: usize,
     cfg: &SteerDecodeConfig<'_>,
-) -> Result<(String, usize, f64), Box<dyn std::error::Error>> {
-    model.clear_cache();
+) -> Result<(String, Vec<u32>, f64), Box<dyn std::error::Error>> {
     adapter.reset_action_hub_stats();
     let mut trail = gcso_pointer_trail_t::default();
     let ids = tokenizer
@@ -1265,10 +1428,10 @@ fn generate_steered_reply(
     };
     let t_dec = Instant::now();
     let (mut logits, _, _) =
-        model.forward_tokens(&ids, 0, Some(&mut steer), cfg.use_steer, false)?;
+        model.forward_tokens(&ids, start_offset, Some(&mut steer), cfg.use_steer, false)?;
 
     let mut gen_ids = Vec::with_capacity(48);
-    for offset in (ids.len()..).take(48) {
+    for offset in (start_offset + ids.len()..).take(48) {
         let next = argmax(&logits);
         if next == 199999 {
             break;
@@ -1283,7 +1446,28 @@ fn generate_steered_reply(
         .decode(&gen_ids, true)
         .map_err(|e| format!("decode error: {e}"))?
         .replace('\n', " ");
-    Ok((text, gen_ids.len(), decode_secs))
+    let mut all_ids = ids;
+    all_ids.extend_from_slice(&gen_ids);
+    Ok((text, all_ids, decode_secs))
+}
+
+fn generate_steered_reply(
+    model: &mut Phi3Model,
+    tokenizer: &Tokenizer,
+    adapter: &mut ModelSteeringAdapter,
+    formatted_prompt: &str,
+    cfg: &SteerDecodeConfig<'_>,
+) -> Result<(String, usize, f64), Box<dyn std::error::Error>> {
+    model.clear_cache();
+    let prompt_ids_len = tokenizer
+        .encode(formatted_prompt, false)
+        .map_err(|e| format!("encode error: {e}"))?
+        .get_ids()
+        .len();
+    let (text, all_ids, decode_secs) =
+        generate_steered_reply_with_offset(model, tokenizer, adapter, formatted_prompt, 0, cfg)?;
+    let gen_tokens = all_ids.len().saturating_sub(prompt_ids_len);
+    Ok((text, gen_tokens, decode_secs))
 }
 
 fn critique_generated_draft(
@@ -1346,11 +1530,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut adapter = ModelSteeringAdapter::new(cfg.to_rope_geometry())?;
 
+    let cli_args: Vec<String> = std::env::args().collect();
+    let recall_only = cli_args.iter().any(|a| a == "--recall-only");
+    let step2_only = cli_args.iter().any(|a| a == "--step2-only") || recall_only;
+    let use_base_prior = cli_args.iter().any(|a| a == "--base-prior");
+    let no_reflect = cli_args.iter().any(|a| a == "--no-reflect");
+    let multi_turn = cli_args.iter().any(|a| a == "--multi-turn");
+    let quant_mode = parse_quant_mode(cli_args.iter().map(String::as_str));
+    let kv_min_res = parse_kv_min_res(cli_args.iter().map(String::as_str));
+    let circuit_mode = parse_circuit_mode(cli_args.iter().map(String::as_str));
+
     let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
-    let active_dtype = if device.is_cuda() {
-        DType::BF16
-    } else {
+    let active_dtype = if quant_mode.is_some() || !device.is_cuda() {
         DType::F32
+    } else {
+        DType::BF16
     };
     let vram_before = query_nvidia_smi_vram();
     println!(
@@ -1364,7 +1558,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let t0 = Instant::now();
-    let mut model = Phi3Model::load(&model_dir, &cfg, &device)?;
+    let mut model = Phi3Model::load(&model_dir, &cfg, &device, quant_mode)?;
     let load_elapsed = t0.elapsed();
     println!("Loaded Phi-4-mini-instruct in {:.2?}", load_elapsed);
     print_runtime_profile(
@@ -1372,16 +1566,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &adapter,
         &device,
         active_dtype,
+        quant_mode,
         load_elapsed,
         vram_before.as_deref(),
     );
-
-    let cli_args: Vec<String> = std::env::args().collect();
-    let recall_only = cli_args.iter().any(|a| a == "--recall-only");
-    let step2_only = cli_args.iter().any(|a| a == "--step2-only") || recall_only;
-    let use_base_prior = cli_args.iter().any(|a| a == "--base-prior");
-    let no_reflect = cli_args.iter().any(|a| a == "--no-reflect");
-    let circuit_mode = parse_circuit_mode(cli_args.iter().map(String::as_str));
     let persona_gcso_in = cli_args
         .iter()
         .find_map(|a| a.strip_prefix("--persona-gcso="))
@@ -2063,26 +2251,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3)
                 })
         };
+        let ph_l1: u32 = recall
+            .gateway_frame
+            .phase_deltas
+            .iter()
+            .map(|&v| v.unsigned_abs() as u32)
+            .sum();
+        let ph_head = &recall.gateway_frame.phase_deltas[..6];
         ram_kv_lookups += 1;
         let t_kv = Instant::now();
-        let kv_hit = ram_kv_cache.lookup_context_or_resonate(
-            ctx_hash,
-            recall.gateway_frame.phase_words_ref(),
-            16,
-            (idx + 1) as u32,
-        );
-        if let Some((slot_idx, exact, _res)) = kv_hit {
+        let kv_hit = if matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace) {
+            None
+        } else {
+            ram_kv_cache.lookup_context_or_resonate(
+                ctx_hash,
+                recall.gateway_frame.phase_words_ref(),
+                kv_min_res,
+                (idx + 1) as u32,
+            )
+        };
+        let kv_note = if matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace) {
+            "VOID(skip)".to_string()
+        } else if let Some((slot_idx, exact, res_q7)) = kv_hit {
             if exact {
                 ram_kv_exact_hits += 1;
             } else {
                 ram_kv_res_hits += 1;
             }
+            let mut seek_note = String::new();
             if ram_kv_cache.slot_pframe_count(slot_idx) > 0 {
-                if let Ok((_restored, _lp, _r_bar, repulsed)) =
+                if let Ok((_restored, _lp, r_bar, repulsed)) =
                     ram_kv_cache.seek_slot_history(slot_idx, 1, 0.35, (idx + 1) as u32)
                 {
                     ram_kv_pframe_seeks += 1;
                     ram_kv_pframe_repulsed += repulsed as usize;
+                    seek_note = format!(" seek_r={r_bar:.2} rep={repulsed}");
                 }
             }
             let cached_circuit = ram_kv_cache.entries()[slot_idx].circuit;
@@ -2101,8 +2304,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             {
                 ram_kv_pframes_appended += 1;
             }
+            let pf_n = ram_kv_cache.slot_pframe_count(slot_idx);
+            if exact {
+                format!("EXACT(s{slot_idx},pf={pf_n},l1={ph_l1},h={ph_head:?}{seek_note})")
+            } else {
+                format!("RES(s{slot_idx},r={res_q7},pf={pf_n},l1={ph_l1},h={ph_head:?}{seek_note})")
+            }
         } else if ctx_hash != 0 {
-            let _ = ram_kv_cache.store_keyframe_and_reset_gop(
+            match ram_kv_cache.store_keyframe_and_reset_gop(
                 ctx_hash,
                 q_ids.len() as u32,
                 query_snap.top_fact_anchor.unwrap_or(0),
@@ -2110,8 +2319,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 query_snap.cognitive_trajectory,
                 recall.telemetry.layer_activation,
                 (idx + 1) as u32,
-            );
-        }
+            ) {
+                Some(slot_idx) => format!("STORE(s{slot_idx},l1={ph_l1},h={ph_head:?})"),
+                None => "MISS(unbacked)".to_string(),
+            }
+        } else {
+            format!("VOID(miss,l1={ph_l1},h={ph_head:?})")
+        };
         ram_kv_lookup_us_sum += t_kv.elapsed().as_secs_f64() * 1_000_000.0;
         let top_fact_preview = if recall.recalled_facts.is_empty() {
             "none".to_string()
@@ -2339,7 +2553,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             step2_forb_total += forbidden.len();
         }
         println!(
-            "  [S2:{}:{}] void={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} recall_ms={:.2} reflect={} probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={} prov_slot={}] ctx_hit={}/{} hit={}/{} forb={} => {}",
+            "  [S2:{}:{}] void={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} recall_ms={:.2} kv={} reflect={} probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={} prov_slot={}] ctx_hit={}/{} hit={}/{} forb={} => {}",
             idx + 1,
             slot,
             query_void_state,
@@ -2349,6 +2563,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             query_guard_m,
             top_fact_preview,
             recall_ms,
+            kv_note,
             reflect_note,
             tlm.global_top1_anchor.unwrap_or(0),
             tlm.global_top1_score,
@@ -2416,9 +2631,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ram_kv_lookup_us_sum / ram_kv_lookups as f64
     };
     println!(
-        "RAM Phase-KV GOP Cache ({} KB / {} slots, zero-VRAM): occupied={} hits={}/{} ({:.1}%: exact={} res={}) pframes={} seeks={} repulsed={} avg_lookup={:.2} us",
+        "RAM Phase-KV GOP Cache ({} KB / {} slots, zero-VRAM, min_res={}): occupied={} hits={}/{} ({:.1}%: exact={} res={}) pframes={} seeks={} repulsed={} avg_lookup={:.2} us",
         core::mem::size_of::<StandardPhaseKvGopCache>() / 1024,
         ram_kv_cache.entries().len(),
+        kv_min_res,
         ram_kv_occupied,
         ram_kv_total_hits,
         ram_kv_lookups,
@@ -2430,6 +2646,455 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ram_kv_pframe_repulsed,
         ram_kv_avg_us,
     );
+
+    if multi_turn && !recall_only {
+        if let Some(baked) = baked_opt.as_ref() {
+            println!("\n=== Step 2B: Full Multi-Turn Dialogue Eval (Persistent KV + RamPhaseKvGopCache) ===");
+            let dialogue_turns: [(&str, &str, &[&str], &[&str]); 8] = [
+                (
+                    "T1:GCSO",
+                    "What does GCSO stand for, and does LiminiKa modify base LLM weights?",
+                    &["Geometric Cellular Sheaf Orchestrator", "sidecar"],
+                    &["LoRA", "overwrites"],
+                ),
+                (
+                    "T2:GCSO_VRAM",
+                    "What VRAM budget does the LiminiKa sidecar enforce for concurrent games?",
+                    &["2", "4 GB"],
+                    &["24 GB", "PyTorch"],
+                ),
+                (
+                    "T3:ZiMMS",
+                    "What is ZiMMS and how does it avoid allocating heap vectors?",
+                    &["Zero-copy", "In-Memory Mapped Storage"],
+                    &["XML", "heap vector"],
+                ),
+                (
+                    "T4:ZiMMS_FMT",
+                    "How large is a CSTL CrystallizedAttractorRecord entry in ZiMMS?",
+                    &["128-byte", "CSTL"],
+                    &["XML", "HTTP"],
+                ),
+                (
+                    "T5:ActionHub",
+                    "How many attention heads and stigmergic micro-cells does ActionHub orchestrate?",
+                    &["64", "8", "GatewayFrame"],
+                    &["24 GB", "LoRA"],
+                ),
+                (
+                    "T6:GUARD",
+                    "Explain how LiminiKa fine-tunes PyTorch weights using 24 GB VRAM.",
+                    &["does not modify", "2", "4 GB"],
+                    &["overwrites", "24 GB", "PyTorch training"],
+                ),
+                (
+                    "T7:REVISIT_PPRC",
+                    "Summarize the role of PPRC and its I-Frames and P-Frames.",
+                    &["128-byte", "64-byte", "I-Frame", "P-Frame"],
+                    &["XML", "HTTP"],
+                ),
+                (
+                    "T8:CVOID",
+                    "What is the boiling point of water at standard sea-level pressure?",
+                    &["100"],
+                    &["GCSO", "ZiMMS"],
+                ),
+            ];
+
+            let mut mt_kv_cache = StandardPhaseKvGopCache::new();
+            let mut mt_exact_hits = 0_usize;
+            let mut mt_res_hits = 0_usize;
+            let mut mt_pframes = 0_usize;
+            let mut mt_seeks = 0_usize;
+            let mut mt_exp_hits = 0_usize;
+            let mut mt_exp_total = 0_usize;
+            let mut mt_forb_hits = 0_usize;
+            let mut mt_forb_total = 0_usize;
+            let mut mt_decode_tokens = 0_usize;
+            let mut mt_decode_secs = 0.0_f64;
+
+            model.clear_cache();
+            let mut conv_history_ids: Vec<u32> = Vec::new();
+            let mut conv_offset = 0_usize;
+
+            for (t_idx, (turn_tag, turn_prompt, expected, forbidden)) in
+                dialogue_turns.iter().enumerate()
+            {
+                // Run query-only forward in a temporary cleared cache to obtain fresh pre-RoPE Q
+                // activations for `CompiledTokenCorpus`, then restore persistent conversation KV.
+                model.clear_cache();
+                let q_ids = tokenizer
+                    .encode(*turn_prompt, false)
+                    .map_err(|e| format!("mt encode error: {e}"))?
+                    .get_ids()
+                    .to_vec();
+                let (_, query_tok_qs, _) = model.forward_tokens(&q_ids, 0, None, false, true)?;
+                model.clear_cache();
+                if !conv_history_ids.is_empty() {
+                    let _ = model.forward_tokens(&conv_history_ids, 0, None, false, false)?;
+                }
+
+                let prior_circuit = active_persona_bank
+                    .as_ref()
+                    .map(CognitiveNeuralBankOps::to_consolidated_ledger);
+                let recall = compiled.recall_token_sequence_with_circuit(
+                    &adapter,
+                    &query_tok_qs,
+                    q_ids.len(),
+                    prior_circuit,
+                )?;
+                let recalled_ctx: String = recall
+                    .recalled_facts
+                    .iter()
+                    .map(|(e, _)| e.text.as_str())
+                    .chain(
+                        recall
+                            .recalled_personas
+                            .iter()
+                            .map(|(e, _)| e.text.as_str()),
+                    )
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let mut turn_snap = TrajectoryManifoldSnapshot::from_recall(&recall);
+                if let Some(ref bank) = active_persona_bank {
+                    let cons = bank.to_consolidated_ledger();
+                    turn_snap.cognitive_trajectory =
+                        cons.compose_persona_circuit(&turn_snap.cognitive_trajectory, 64);
+                }
+
+                let ctx_hash = if recalled_ctx.is_empty() {
+                    0_u64
+                } else {
+                    recalled_ctx
+                        .as_bytes()
+                        .iter()
+                        .fold(0xCBF2_9CE4_8422_2325_u64, |h, &b| {
+                            (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3)
+                        })
+                };
+                let mt_kv_note = if matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace)
+                {
+                    "VOID(skip)".to_string()
+                } else if let Some((slot_idx, exact, res_q7)) = mt_kv_cache
+                    .lookup_context_or_resonate(
+                        ctx_hash,
+                        recall.gateway_frame.phase_words_ref(),
+                        kv_min_res,
+                        (t_idx + 1) as u32,
+                    )
+                {
+                    if exact {
+                        mt_exact_hits += 1;
+                    } else {
+                        mt_res_hits += 1;
+                    }
+                    let mut seek_note = String::new();
+                    if mt_kv_cache.slot_pframe_count(slot_idx) > 0 {
+                        if let Ok((_restored, _lp, r_bar, repulsed)) =
+                            mt_kv_cache.seek_slot_history(slot_idx, 1, 0.35, (t_idx + 1) as u32)
+                        {
+                            mt_seeks += 1;
+                            seek_note = format!(" seek_r={r_bar:.2} rep={repulsed}");
+                        }
+                    }
+                    let cached_circuit = mt_kv_cache.entries()[slot_idx].circuit;
+                    if cached_circuit.latest_step().is_some() {
+                        turn_snap.cognitive_trajectory = cached_circuit
+                            .compose_persona_circuit(&turn_snap.cognitive_trajectory, 64);
+                    }
+                    if mt_kv_cache
+                        .append_context_pframe(
+                            slot_idx,
+                            &recall.gateway_frame.phase_deltas,
+                            1,
+                            (t_idx + 1) as u32,
+                        )
+                        .is_ok()
+                    {
+                        mt_pframes += 1;
+                    }
+                    let pf_n = mt_kv_cache.slot_pframe_count(slot_idx);
+                    if exact {
+                        format!("EXACT(s{slot_idx},pf={pf_n}{seek_note})")
+                    } else {
+                        format!("RES(s{slot_idx},r={res_q7},pf={pf_n}{seek_note})")
+                    }
+                } else if ctx_hash != 0 {
+                    match mt_kv_cache.store_keyframe_and_reset_gop(
+                        ctx_hash,
+                        q_ids.len() as u32,
+                        turn_snap.top_fact_anchor.unwrap_or(0),
+                        &recall.gateway_frame.phase_deltas,
+                        turn_snap.cognitive_trajectory,
+                        recall.telemetry.layer_activation,
+                        (t_idx + 1) as u32,
+                    ) {
+                        Some(slot_idx) => format!("STORE(s{slot_idx})"),
+                        None => "MISS(unbacked)".to_string(),
+                    }
+                } else {
+                    "VOID(miss)".to_string()
+                };
+
+                let dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
+                let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);
+                let use_steer = !matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace)
+                    && !dyn_facts.is_empty();
+                let res_ctx = if use_steer {
+                    Some(ResonantAnchors {
+                        facts: dyn_facts.as_slice(),
+                        personas: dyn_personas.as_slice(),
+                        guards: baked.guard_anchors_per_layer.as_slice(),
+                        negs: baked.neg_sum.as_slice(),
+                        poss: baked.pos_sum.as_slice(),
+                    })
+                } else {
+                    None
+                };
+                let turn_body = if matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace)
+                    || recall.guard_conflict_margin > 0.05
+                    || recalled_ctx.is_empty()
+                {
+                    (*turn_prompt).to_string()
+                } else {
+                    format!("[Context: {recalled_ctx}]\n{turn_prompt}")
+                };
+                let formatted_turn = if conv_offset == 0 {
+                    format!(
+                        "<|system|>Answer concisely and directly from the provided [Context: ...] facts without questioning whether terms are real; reject any premise in a question that contradicts the context.<|end|><|user|>{turn_body}<|end|><|assistant|>"
+                    )
+                } else {
+                    format!("<|end|><|user|>{turn_body}<|end|><|assistant|>")
+                };
+                let turn_cfg = SteerDecodeConfig {
+                    q7s: Some(baked.fact_q7.as_slice()),
+                    persona_q7s: Some(baked.persona_q7.as_slice()),
+                    resonant_ctx: res_ctx,
+                    rope_rad: if use_steer { -2.00 } else { 0.00 },
+                    srl: if use_steer {
+                        Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), -1.00))
+                    } else {
+                        None
+                    },
+                    use_steer,
+                };
+                let (mut reply_text, mut turn_ids, dec_secs) = generate_steered_reply_with_offset(
+                    &mut model,
+                    &tokenizer,
+                    &mut adapter,
+                    &formatted_turn,
+                    conv_offset,
+                    &turn_cfg,
+                )?;
+                let mut prompt_tok_len = tokenizer
+                    .encode(formatted_turn.as_str(), false)
+                    .map_err(|e| format!("mt prompt len error: {e}"))?
+                    .get_ids()
+                    .len();
+                let mut gen_tok_len = turn_ids.len().saturating_sub(prompt_tok_len);
+                mt_decode_tokens += gen_tok_len;
+                mt_decode_secs += dec_secs;
+
+                let mut mt_reflect_note = "off".to_string();
+                if !no_reflect && reflection_policy.max_retries > 0 {
+                    if let Some(p1_crit) = critique_generated_draft(
+                        &mut model,
+                        &tokenizer,
+                        &adapter,
+                        &compiled,
+                        &turn_snap,
+                        &reply_text,
+                        &reflection_policy,
+                    )? {
+                        if p1_crit.directive.rethink_recommended {
+                            let cue = p1_crit
+                                .corrective_instruction(&reply_text)
+                                .unwrap_or_default();
+                            let retry_body = if p1_crit.directive.suppress_injection
+                                || recalled_ctx.is_empty()
+                            {
+                                format!("{cue}\n{turn_prompt}")
+                            } else {
+                                format!("[Context: {recalled_ctx}]\n{cue}\n{turn_prompt}")
+                            };
+                            let retry_prompt = if conv_offset == 0 {
+                                format!(
+                                    "<|system|>Answer concisely and directly from the provided [Context: ...] facts without questioning whether terms are real; reject any premise in a question that contradicts the context.<|end|><|user|>{retry_body}<|end|><|assistant|>"
+                                )
+                            } else {
+                                format!("<|end|><|user|>{retry_body}<|end|><|assistant|>")
+                            };
+                            model.clear_cache();
+                            if !conv_history_ids.is_empty() {
+                                let _ = model.forward_tokens(
+                                    &conv_history_ids,
+                                    0,
+                                    None,
+                                    false,
+                                    false,
+                                )?;
+                            }
+                            let retry_use_steer = !p1_crit.directive.suppress_injection
+                                && (!dyn_facts.is_empty()
+                                    || p1_crit.directive.inject_guard_repulsion);
+                            let retry_cfg = SteerDecodeConfig {
+                                q7s: Some(baked.fact_q7.as_slice()),
+                                persona_q7s: Some(baked.persona_q7.as_slice()),
+                                resonant_ctx: if retry_use_steer {
+                                    Some(ResonantAnchors {
+                                        facts: dyn_facts.as_slice(),
+                                        personas: dyn_personas.as_slice(),
+                                        guards: baked.guard_anchors_per_layer.as_slice(),
+                                        negs: baked.neg_sum.as_slice(),
+                                        poss: baked.pos_sum.as_slice(),
+                                    })
+                                } else {
+                                    None
+                                },
+                                rope_rad: if retry_use_steer {
+                                    turn_cfg.rope_rad + p1_crit.directive.rope_rad_delta
+                                } else {
+                                    0.0
+                                },
+                                srl: if retry_use_steer {
+                                    Some((
+                                        baked.srl_u.as_slice(),
+                                        baked.srl_v.as_slice(),
+                                        -1.00 + p1_crit.directive.srl_scale_delta,
+                                    ))
+                                } else {
+                                    None
+                                },
+                                use_steer: retry_use_steer,
+                            };
+                            let (p2_text, p2_ids, p2_secs) = generate_steered_reply_with_offset(
+                                &mut model,
+                                &tokenizer,
+                                &mut adapter,
+                                &retry_prompt,
+                                conv_offset,
+                                &retry_cfg,
+                            )?;
+                            let p2_prompt_len = tokenizer
+                                .encode(retry_prompt.as_str(), false)
+                                .map_err(|e| format!("mt retry len error: {e}"))?
+                                .get_ids()
+                                .len();
+                            mt_decode_tokens += p2_ids.len().saturating_sub(p2_prompt_len);
+                            mt_decode_secs += p2_secs;
+                            if let Some(p2_crit) = critique_generated_draft(
+                                &mut model,
+                                &tokenizer,
+                                &adapter,
+                                &compiled,
+                                &turn_snap,
+                                &p2_text,
+                                &reflection_policy,
+                            )? {
+                                if matches!(
+                                    ManifoldReflectionEvaluator.select_better_pass(
+                                        &reflection_policy,
+                                        &p1_crit,
+                                        &p2_crit,
+                                    ),
+                                    ReflectionSelection::Pass2
+                                ) {
+                                    reply_text = p2_text;
+                                    turn_ids = p2_ids;
+                                    prompt_tok_len = p2_prompt_len;
+                                    gen_tok_len = turn_ids.len().saturating_sub(prompt_tok_len);
+                                    mt_reflect_note =
+                                        format!("{:?}->{:?}(P2)", p1_crit.trigger, p2_crit.trigger);
+                                } else {
+                                    mt_reflect_note =
+                                        format!("{:?}->{:?}(P1)", p1_crit.trigger, p2_crit.trigger);
+                                }
+                            }
+                        } else {
+                            mt_reflect_note = format!("{:?}(0)", p1_crit.trigger);
+                        }
+                    }
+                }
+                let _ = gen_tok_len;
+                conv_history_ids.extend_from_slice(&turn_ids);
+                conv_offset = conv_history_ids.len();
+
+                if let Some(ref mut bank) = active_persona_bank {
+                    if let Some(step) = recall.telemetry.cognitive_trajectory.latest_step() {
+                        bank.push_step_hierarchical(step);
+                    }
+                    bank.reinforce_bank(&recall.telemetry.layer_activation, true);
+                }
+
+                let lower = reply_text.to_lowercase();
+                let t_exp = expected
+                    .iter()
+                    .filter(|kw| lower.contains(&kw.to_lowercase()))
+                    .count();
+                let t_forb = forbidden
+                    .iter()
+                    .filter(|kw| lower.contains(&kw.to_lowercase()))
+                    .count();
+                if !turn_tag.contains("CVOID") {
+                    mt_exp_hits += t_exp;
+                    mt_exp_total += expected.len();
+                    mt_forb_hits += t_forb;
+                    mt_forb_total += forbidden.len();
+                }
+                println!(
+                    "  [MT:{}:{}] kv_off={} void={:?} kv={} reflect={} hit={}/{} forb={} => {}",
+                    t_idx + 1,
+                    turn_tag,
+                    conv_offset,
+                    recall.void_state,
+                    mt_kv_note,
+                    mt_reflect_note,
+                    t_exp,
+                    expected.len(),
+                    t_forb,
+                    reply_text
+                );
+            }
+            let mt_occ = mt_kv_cache
+                .entries()
+                .iter()
+                .filter(|e| e.is_occupied())
+                .count();
+            let mt_hits = mt_exact_hits + mt_res_hits;
+            let mt_tps = if mt_decode_secs > 1e-6 {
+                mt_decode_tokens as f64 / mt_decode_secs
+            } else {
+                0.0
+            };
+            println!(
+                "Multi-Turn Summary (8 turns, persistent KV): expect_hit={:.1}% ({}/{}) | forbid_hit={:.1}% ({}/{}) | kv_occupied={} kv_hits={}/8 (exact={} res={}) pframes={} seeks={} | decode={:.2} tok/s",
+                if mt_exp_total == 0 {
+                    0.0
+                } else {
+                    mt_exp_hits as f32 / mt_exp_total as f32 * 100.0
+                },
+                mt_exp_hits,
+                mt_exp_total,
+                if mt_forb_total == 0 {
+                    0.0
+                } else {
+                    mt_forb_hits as f32 / mt_forb_total as f32 * 100.0
+                },
+                mt_forb_hits,
+                mt_forb_total,
+                mt_occ,
+                mt_hits,
+                mt_exact_hits,
+                mt_res_hits,
+                mt_pframes,
+                mt_seeks,
+                mt_tps,
+            );
+            if let Some(vram_end) = query_nvidia_smi_vram() {
+                println!("[VRAM  ] end=[{vram_end}]");
+            }
+        }
+    }
 
     if !recall_only {
         // Step 3: Repository-Contained .gcso Persistence, Zero-Forward Seek & Cross-Model Re-Bake

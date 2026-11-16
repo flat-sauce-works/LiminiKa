@@ -6480,8 +6480,14 @@ pub trait RamPhaseKvCacheOps {
         };
     }
 
-    /// Looks up an exact `context_hash` match (O(N) cacheline scan) or falls back to the highest
-    /// SWAR phase-resonance slot when `min_resonance_q7` is exceeded, updating LRU metadata on hit.
+    /// Looks up an exact `context_hash` match (`O(N)` cacheline scan) or falls back to the highest
+    /// active-phase resonance slot when `min_resonance_q7` is met or exceeded, updating LRU metadata
+    /// on hit.
+    ///
+    /// Resonance combines scale-invariant tangent cosine similarity
+    /// (`tangent_cosine_active_heads_64`) with un-truncated SWAR circular proximity across all 64
+    /// lanes, mapped into `[-127, 127]`. All-zero query or entry phase vectors yield `0` resonance
+    /// so ungrounded queries do not falsely alias occupied slots.
     ///
     /// Returns `Some((slot_index, exact_hit, resonance_q7))`.
     #[inline]
@@ -6496,6 +6502,7 @@ pub trait RamPhaseKvCacheOps {
         if entries.is_empty() {
             return None;
         }
+        let query_nonzero = swar_words_nonzero_64(query_words);
         let mut best_idx: Option<usize> = None;
         let mut best_res: gcso_q7_t = i8::MIN;
         let mut i = 0usize;
@@ -6509,20 +6516,43 @@ pub trait RamPhaseKvCacheOps {
                 entries[i].last_used_epoch = epoch;
                 return Some((i, true, 127));
             }
-            let e_words = load_q7_words_64(&entries[i].keyframe.anchor_phases);
-            let mut total_diff = 0u16;
-            let mut c = 0usize;
-            while c < NUM_SWARM_MICRO_CELLS {
-                let d = swar_q7_circular_diff_x8(query_words[c], e_words[c]);
-                total_diff += u16::from(swar_mean_u8_le128_x8(swar_q7_abs_u8_x8(d)));
-                c += 1;
-            }
-            let mean_diff = ((total_diff + 4) >> 3) as u8;
-            let closeness = 128u8.saturating_sub(mean_diff);
-            let res_q7 = (i16::from(closeness) - 64).clamp(-127, 127) as gcso_q7_t;
-            if res_q7 >= min_resonance_q7 && res_q7 > best_res {
-                best_res = res_q7;
-                best_idx = Some(i);
+            if query_nonzero {
+                let e_words = load_q7_words_64(&entries[i].keyframe.anchor_phases);
+                let res_q7 = if swar_words_nonzero_64(&e_words) {
+                    let cos = tangent_cosine_active_heads_64(
+                        query_words,
+                        &e_words,
+                        MAX_ATTENTION_HEADS as u16,
+                    );
+                    let mut sum_diff = 0u32;
+                    let mut c = 0usize;
+                    while c < NUM_SWARM_MICRO_CELLS {
+                        let abs_w =
+                            swar_q7_abs_u8_x8(swar_q7_circular_diff_x8(query_words[c], e_words[c]));
+                        let even = abs_w & 0x00FF_00FF_00FF_00FF;
+                        let odd = (abs_w >> 8) & 0x00FF_00FF_00FF_00FF;
+                        let cell_sum = ((even.wrapping_add(odd))
+                            .wrapping_mul(0x0001_0001_0001_0001)
+                            >> 48) as u32;
+                        sum_diff += cell_sum;
+                        c += 1;
+                    }
+                    let prox =
+                        branchless_clamp_f32(1.0 - (sum_diff as f32) * (1.0 / 8192.0), 0.0, 1.0);
+                    let scaled = branchless_select_f32(cos > 0.0, cos * prox, cos) * 127.0;
+                    let rounded = if scaled >= 0.0 {
+                        scaled + 0.5
+                    } else {
+                        scaled - 0.5
+                    };
+                    (rounded as i32).clamp(-127, 127) as gcso_q7_t
+                } else {
+                    0
+                };
+                if res_q7 >= min_resonance_q7 && res_q7 > best_res {
+                    best_res = res_q7;
+                    best_idx = Some(i);
+                }
             }
             i += 1;
         }
@@ -8837,5 +8867,26 @@ mod tests {
         assert_ne!(frame.provenance_bits & CAUSAL_AXIS_OBJECTIVE_FACT, 0);
         assert_ne!(frame.provenance_bits & CAUSAL_AXIS_SUBJECTIVE_PERSONA, 0);
         assert_eq!(gop_cache.entries()[slot].reuse_count, 2);
+
+        // Small-amplitude orthogonal, opposite, and zero vectors must not falsely collide.
+        let mut orth_cache: LowSpecPhaseKvGopCache = RamPhaseKvGopCache::new();
+        let mut topic_a = [0i8; MAX_ATTENTION_HEADS];
+        topic_a[0] = -1;
+        let mut topic_b = [0i8; MAX_ATTENTION_HEADS];
+        topic_b[4] = -1;
+        let mut topic_neg = [0i8; MAX_ATTENTION_HEADS];
+        topic_neg[0] = 1;
+        orth_cache
+            .store_keyframe_and_reset_gop(0x1111, 1, 1, &topic_a, circuit, act, 1)
+            .unwrap();
+        assert!(orth_cache
+            .lookup_context_or_resonate(0x2222, &load_q7_words_64(&topic_b), 16, 2)
+            .is_none());
+        assert!(orth_cache
+            .lookup_context_or_resonate(0x3333, &load_q7_words_64(&topic_neg), 16, 3)
+            .is_none());
+        assert!(orth_cache
+            .lookup_context_or_resonate(0x4444, &[0u64; NUM_SWARM_MICRO_CELLS], 16, 4)
+            .is_none());
     }
 }
