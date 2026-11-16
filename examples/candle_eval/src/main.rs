@@ -478,15 +478,18 @@ impl Phi3Attention {
         let v = repeat_kv(v, self.num_heads / self.num_kv_heads)?;
 
         let scale = 1.0 / (self.head_dim as f64).sqrt();
-        let mut att = (q.matmul(&k.transpose(D::Minus2, D::Minus1)?)? * scale)?;
+        let q = q.contiguous()?;
+        let k_t = k.transpose(D::Minus2, D::Minus1)?.contiguous()?;
+        let mut att = (q.matmul(&k_t)? * scale)?;
         if seq_len > 1 {
             let mask = causal_mask(seq_len, offset, x.dtype(), x.device())?;
             att = att.broadcast_add(&mask)?;
         }
         let probs = candle_nn::ops::softmax_last_dim(&att)?;
         let ctx = probs
-            .matmul(&v)?
+            .matmul(&v.contiguous()?)?
             .transpose(1, 2)?
+            .contiguous()?
             .reshape((b, seq_len, q_dim))?;
         Ok((self.o_proj.forward(&ctx)?, q_heads))
     }
