@@ -523,7 +523,8 @@ struct GCSO_ALIGN_PREFIX(8) gcso_cognitive_circuit_activation {
 typedef struct gcso_cognitive_circuit_activation gcso_cognitive_circuit_activation_t;
 
 /**
- * @brief 8-byte chronological cognitive trajectory ledger mirroring gcso_ledger_slot_t::telemetry_mini_ledger.
+ * @brief 8-byte chronological cognitive trajectory ledger mirroring
+ * gcso_ledger_slot_t::telemetry_mini_ledger.
  */
 struct GCSO_ALIGN_PREFIX(8) gcso_cognitive_trajectory_ledger {
     gcso_cognitive_step_op_t steps[GCSO_LEDGER_HISTORY_LEN];
@@ -595,8 +596,7 @@ GCSO_STATIC_ASSERT(sizeof(gcso_crystallized_attractor_record_t) == 128,
                    "gcso_crystallized_attractor_record_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_contrastive_bloom_filter_t) == 64,
                    "gcso_contrastive_bloom_filter_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_cognitive_step_op_t) == 1,
-                   "gcso_cognitive_step_op_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_cognitive_step_op_t) == 1, "gcso_cognitive_step_op_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_cognitive_circuit_activation_t) == 8,
                    "gcso_cognitive_circuit_activation_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_cognitive_trajectory_ledger_t) == 8,
@@ -675,7 +675,8 @@ GCSO_STATIC_ASSERT(offsetof(gcso_pointer_trail_t, accumulated_phase_delta) == 56
 GCSO_STATIC_ASSERT(offsetof(gcso_pointer_trail_t, reserved_padding) == 120,
                    "gcso_pointer_trail_t::reserved_padding offset mismatch");
 
-GCSO_STATIC_ASSERT(offsetof(gcso_ledger_slot_t, mode) == 0, "gcso_ledger_slot_t::mode offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_ledger_slot_t, mode) == 0,
+                   "gcso_ledger_slot_t::mode offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_ledger_slot_t, telemetry_ring_head) == 4,
                    "gcso_ledger_slot_t::telemetry_ring_head offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_ledger_slot_t, telemetry_ring_tail) == 6,

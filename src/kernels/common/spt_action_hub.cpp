@@ -428,8 +428,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_ledger_reset_telemetry(gcso_ledger_slot_t*
  * @brief Executes O(1) fast-path shortcut lookup in FastPathLedger.
  *
  * Mode Check: Operates in Mode 0 (Fast-Path & Telemetry Scratchpad Mode).
- * Calculates hash slot index from input key across the 4 shortcut registers in the FastPathLedger 64B
- * cacheline slot.
+ * Calculates hash slot index from input key across the 4 shortcut registers in the FastPathLedger
+ * 64B cacheline slot.
  *
  * @param slot Pointer to ledger slot structure.
  * @param input_key Raw key address to look up.
@@ -438,7 +438,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_ledger_reset_telemetry(gcso_ledger_slot_t*
  */
 GCSO_API gcso_status_t GCSO_CALL
 gcso_ledger_fast_path_lookup(const gcso_ledger_slot_t* GCSO_RESTRICT slot, uint64_t input_key,
-                           uint64_t* GCSO_RESTRICT shortcut_out) GCSO_NOEXCEPT {
+                             uint64_t* GCSO_RESTRICT shortcut_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot == nullptr || shortcut_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -462,14 +462,15 @@ gcso_ledger_fast_path_lookup(const gcso_ledger_slot_t* GCSO_RESTRICT slot, uint6
 }
 
 /**
- * @brief Pushes profiling metric bytes to the FastPathLedger telemetry ring ledger in zero-allocation mode.
+ * @brief Pushes profiling metric bytes to the FastPathLedger telemetry ring ledger in
+ * zero-allocation mode.
  *
  * @param slot Target ledger slot structure pointer.
  * @param metric_code Metric identifier byte code.
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_ledger_telemetry_push(gcso_ledger_slot_t* GCSO_RESTRICT slot,
-                                                          uint8_t metric_code) GCSO_NOEXCEPT {
+                                                            uint8_t metric_code) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -494,7 +495,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_ledger_telemetry_push(gcso_ledger_slot_t* 
  * @return GCSO_SUCCESS or GCSO_ERROR_INVALID_ARGUMENT.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_ledger_set_mode(gcso_ledger_slot_t* GCSO_RESTRICT slot,
-                                                    uint32_t mode) GCSO_NOEXCEPT {
+                                                      uint32_t mode) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -525,7 +526,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_ledger_set_mode(gcso_ledger_slot_t* GCSO_R
  */
 GCSO_API gcso_status_t GCSO_CALL
 gcso_ledger_evaluate_auto_tune(const gcso_ledger_slot_t* GCSO_RESTRICT slot,
-                             gcso_config_t* GCSO_RESTRICT config_out) GCSO_NOEXCEPT {
+                               gcso_config_t* GCSO_RESTRICT config_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(slot == nullptr || config_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
