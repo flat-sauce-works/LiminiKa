@@ -69,7 +69,7 @@ use super::primitives::{
     ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
     ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, LEDGER_HISTORY_LEN,
     DEFAULT_ENTROPY_EPS, DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD, GcsoResult,
-    MAX_ATTENTION_HEADS, Pod, pack_action_slot_tag,
+    KvKeyframePacket, MAX_ATTENTION_HEADS, Pod, pack_action_slot_tag,
 };
 use super::rope::{
     PhaseSteering, PhaseSteeringGeometryExt, SubHeadRouter, RopePairLayout, RopeSteeringTarget,
@@ -6274,6 +6274,329 @@ pub type StandardCognitiveBank = CognitiveCircuitBank<32>;
 /// High-capacity RAM / Zen 4 L2 preset: 128 units = 1,024 bytes (1,024 cognitive steps).
 pub type HighCapCognitiveBank = CognitiveCircuitBank<128>;
 
+/// 192-byte (`#[repr(C, align(64))]`) host-RAM entry pairing a compressed 128-byte
+/// [`KvKeyframePacket`] (64-head Q7 KV-phase anchor) with an 8-byte [`CognitiveTrajectoryLedger`]
+/// and [`CognitiveCircuitActivation`], acting as a zero-VRAM associative context KV cache slot.
+#[repr(C, align(64))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RamPhaseKvEntry {
+    /// Compressed 128-byte I-Frame KV-phase anchor (`offset 0..128`).
+    pub keyframe: KvKeyframePacket,
+    /// Cognitive trajectory active when this context chunk was crystallized (`offset 128..136`).
+    pub circuit: CognitiveTrajectoryLedger,
+    /// Pseudo-neural activation recorded at storage time (`offset 136..144`).
+    pub last_activation: CognitiveCircuitActivation,
+    /// Deterministic 64-bit context chunk key (`0` indicates an empty slot, `offset 144..152`).
+    pub context_hash: u64,
+    /// Number of cache hits / associative recalls (`offset 152..156`).
+    pub reuse_count: u32,
+    /// Monotonic logical epoch of the most recent store or hit (`offset 156..160`).
+    pub last_used_epoch: u32,
+    /// Reserved zero padding aligning the entry to 3 cachelines (`192` bytes, `offset 160..192`).
+    pub reserved_pad: [u8; 32],
+}
+
+impl Default for RamPhaseKvEntry {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            keyframe: KvKeyframePacket::default(),
+            circuit: CognitiveTrajectoryLedger::new(),
+            last_activation: CognitiveCircuitActivation::default(),
+            context_hash: 0,
+            reuse_count: 0,
+            last_used_epoch: 0,
+            reserved_pad: [0u8; 32],
+        }
+    }
+}
+
+impl RamPhaseKvEntry {
+    /// Returns `true` when this slot holds a populated context keyframe (`context_hash != 0`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_occupied(&self) -> bool {
+        self.context_hash != 0
+    }
+}
+
+impl RawPhaseProjectable for RamPhaseKvEntry {
+    #[inline(always)]
+    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+        self.keyframe.anchor_phases
+    }
+
+    #[inline(always)]
+    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+        load_q7_words_64(&self.keyframe.anchor_phases)
+    }
+}
+
+impl CausalProvenanceSignal for RamPhaseKvEntry {
+    #[inline(always)]
+    fn causal_provenance_bits(&self) -> u32 {
+        self.keyframe.provenance_bits() | self.circuit.causal_provenance_bits()
+    }
+}
+
+impl CognitiveGroundingSignal for RamPhaseKvEntry {
+    #[inline(always)]
+    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+        self.keyframe.anchor_phases
+    }
+
+    #[inline(always)]
+    fn grounding_base_energy(&self) -> f32 {
+        (1.0 + self.keyframe.header.composite_vector_length).clamp(0.5, 4.0)
+    }
+
+    #[inline(always)]
+    fn grounding_anchor_id(&self) -> u32 {
+        self.keyframe.cluster_id()
+    }
+}
+
+impl ObjectiveFactSignal for RamPhaseKvEntry {}
+
+impl ManifoldGatewaySignal for RamPhaseKvEntry {
+    #[inline]
+    fn synthesize_gateway_frame(&self) -> GatewayFrame {
+        (self, &self.circuit).synthesize_gateway_frame()
+    }
+}
+
+/// Trait governing host-RAM-resident compressed KV-phase caching (`KvKeyframePacket` +
+/// `CognitiveTrajectoryLedger`), allowing CPU/RAM capacity to absorb long-context memory
+/// without expanding GPU VRAM or triggering disk I/O.
+pub trait RamPhaseKvCacheOps {
+    /// Returns an immutable slice over all [`RamPhaseKvEntry`] cache slots.
+    fn entries(&self) -> &[RamPhaseKvEntry];
+
+    /// Returns a mutable slice over all [`RamPhaseKvEntry`] cache slots.
+    fn entries_mut(&mut self) -> &mut [RamPhaseKvEntry];
+
+    /// Stores or updates a compressed 64-head KV-phase keyframe and its cognitive circuit in RAM,
+    /// evicting the least-recently-used (`last_used_epoch`) slot when full.
+    #[inline]
+    fn store_context_keyframe(
+        &mut self,
+        context_hash: u64,
+        token_index: u32,
+        anchor_id: u32,
+        phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        circuit: CognitiveTrajectoryLedger,
+        activation: CognitiveCircuitActivation,
+        epoch: u32,
+    ) {
+        if context_hash == 0 {
+            return;
+        }
+        let entries = self.entries_mut();
+        if entries.is_empty() {
+            return;
+        }
+        let words = load_q7_words_64(phases);
+        let mut norm_approx = 0u16;
+        let mut c = 0usize;
+        while c < NUM_SWARM_MICRO_CELLS {
+            norm_approx += u16::from(swar_mean_u8_le128_x8(swar_q7_abs_u8_x8(words[c])));
+            c += 1;
+        }
+        let r_bar_approx = ((norm_approx as f32) / (8.0 * 127.0)).clamp(0.0, 1.0);
+        let keyframe = KvKeyframePacket::new(
+            token_index,
+            1,
+            r_bar_approx,
+            1.0 + r_bar_approx * 4.0,
+            0.0,
+            CAUSAL_AXIS_OBJECTIVE_FACT | circuit.causal_provenance_bits(),
+            anchor_id,
+            ATTRACTOR_SLOT_KNOWLEDGE,
+            *phases,
+        );
+
+        let mut target_idx = 0usize;
+        let mut oldest_epoch = u32::MAX;
+        let mut found_exact_or_empty = false;
+        let mut i = 0usize;
+        while i < entries.len() {
+            if entries[i].context_hash == context_hash {
+                target_idx = i;
+                found_exact_or_empty = true;
+                break;
+            }
+            if !entries[i].is_occupied() {
+                target_idx = i;
+                found_exact_or_empty = true;
+                break;
+            }
+            if entries[i].last_used_epoch < oldest_epoch {
+                oldest_epoch = entries[i].last_used_epoch;
+                target_idx = i;
+            }
+            i += 1;
+        }
+        let prev_reuse = if found_exact_or_empty && entries[target_idx].context_hash == context_hash
+        {
+            entries[target_idx].reuse_count.saturating_add(1)
+        } else {
+            0
+        };
+        entries[target_idx] = RamPhaseKvEntry {
+            keyframe,
+            circuit,
+            last_activation: activation,
+            context_hash,
+            reuse_count: prev_reuse,
+            last_used_epoch: epoch,
+            reserved_pad: [0u8; 32],
+        };
+    }
+
+    /// Looks up an exact `context_hash` match (O(N) cacheline scan) or falls back to the highest
+    /// SWAR phase-resonance slot when `min_resonance_q7` is exceeded, updating LRU metadata on hit.
+    ///
+    /// Returns `Some((slot_index, exact_hit, resonance_q7))`.
+    #[inline]
+    fn lookup_context_or_resonate(
+        &mut self,
+        context_hash: u64,
+        query_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        min_resonance_q7: gcso_q7_t,
+        epoch: u32,
+    ) -> Option<(usize, bool, gcso_q7_t)> {
+        let entries = self.entries_mut();
+        if entries.is_empty() {
+            return None;
+        }
+        let mut best_idx: Option<usize> = None;
+        let mut best_res: gcso_q7_t = i8::MIN;
+        let mut i = 0usize;
+        while i < entries.len() {
+            if !entries[i].is_occupied() {
+                i += 1;
+                continue;
+            }
+            if context_hash != 0 && entries[i].context_hash == context_hash {
+                entries[i].reuse_count = entries[i].reuse_count.saturating_add(1);
+                entries[i].last_used_epoch = epoch;
+                return Some((i, true, 127));
+            }
+            let e_words = load_q7_words_64(&entries[i].keyframe.anchor_phases);
+            let mut total_diff = 0u16;
+            let mut c = 0usize;
+            while c < NUM_SWARM_MICRO_CELLS {
+                let d = swar_q7_circular_diff_x8(query_words[c], e_words[c]);
+                total_diff += u16::from(swar_mean_u8_le128_x8(swar_q7_abs_u8_x8(d)));
+                c += 1;
+            }
+            let mean_diff = ((total_diff + 4) >> 3) as u8;
+            let closeness = 128u8.saturating_sub(mean_diff);
+            let res_q7 = (i16::from(closeness) - 64).clamp(-127, 127) as gcso_q7_t;
+            if res_q7 >= min_resonance_q7 && res_q7 > best_res {
+                best_res = res_q7;
+                best_idx = Some(i);
+            }
+            i += 1;
+        }
+        if let Some(idx) = best_idx {
+            entries[idx].reuse_count = entries[idx].reuse_count.saturating_add(1);
+            entries[idx].last_used_epoch = epoch;
+            return Some((idx, false, best_res));
+        }
+        None
+    }
+}
+
+impl RamPhaseKvCacheOps for [RamPhaseKvEntry] {
+    #[inline(always)]
+    fn entries(&self) -> &[RamPhaseKvEntry] {
+        self
+    }
+
+    #[inline(always)]
+    fn entries_mut(&mut self) -> &mut [RamPhaseKvEntry] {
+        self
+    }
+}
+
+/// Fixed-capacity, cacheline-aligned host-RAM compressed KV-phase cache (`192 * N` bytes).
+#[repr(C, align(64))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RamPhaseKvCache<const N: usize> {
+    /// Contiguous array of 192-byte compressed KV-phase + cognitive circuit slots.
+    pub slots: [RamPhaseKvEntry; N],
+}
+
+impl<const N: usize> Default for RamPhaseKvCache<N> {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const N: usize> RamPhaseKvCache<N> {
+    /// Creates an empty [`RamPhaseKvCache`] of `N` slots (`192 * N` bytes).
+    #[inline(always)]
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            slots: [RamPhaseKvEntry {
+                keyframe: KvKeyframePacket {
+                    header: crate::abi::gcso_kv_keyframe_header_t {
+                        frame_type: 0,
+                        token_index: 0,
+                        gop_length: 1,
+                        composite_vector_length: 0.0,
+                        von_mises_kappa: 0.0,
+                        sparse_scalar_residual: 0.0,
+                        icache_payload_offset: 0,
+                        pcache_payload_offset: 0,
+                        reserved: [0; 24],
+                    },
+                    anchor_phases: [0; MAX_ATTENTION_HEADS],
+                },
+                circuit: CognitiveTrajectoryLedger::new(),
+                last_activation: CognitiveCircuitActivation {
+                    peel_gate_q7: 0,
+                    fuse_gate_q7: 0,
+                    repulse_sensitivity_q7: 0,
+                    selected_op: 0,
+                    preferred_next_scale: 0,
+                    intensity_q7: 0,
+                    circuit_resonance_q7: 0,
+                    trajectory_depth: 0,
+                },
+                context_hash: 0,
+                reuse_count: 0,
+                last_used_epoch: 0,
+                reserved_pad: [0u8; 32],
+            }; N],
+        }
+    }
+}
+
+impl<const N: usize> RamPhaseKvCacheOps for RamPhaseKvCache<N> {
+    #[inline(always)]
+    fn entries(&self) -> &[RamPhaseKvEntry] {
+        &self.slots
+    }
+
+    #[inline(always)]
+    fn entries_mut(&mut self) -> &mut [RamPhaseKvEntry] {
+        &mut self.slots
+    }
+}
+
+/// Low-spec PC preset: 16 slots = 3,072 bytes (~3 KB, fits inside L1D alongside LUTs).
+pub type LowSpecPhaseKvCache = RamPhaseKvCache<16>;
+
+/// Standard PC preset: 64 slots = 12,288 bytes (12 KB, comfortably inside L1D/L2).
+pub type StandardPhaseKvCache = RamPhaseKvCache<64>;
+
+/// High-capacity RAM / Zen 4 L2 preset: 256 slots = 49,152 bytes (48 KB, inside L2 1 MB).
+pub type HighCapPhaseKvCache = RamPhaseKvCache<256>;
+
 impl RawPhaseProjectable for CognitiveTrajectoryLedger {
     #[inline(always)]
     fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
@@ -7323,6 +7646,14 @@ const _: () = {
     assert!(align_of::<CognitiveCircuitActivation>() == 8);
     assert!(size_of::<CognitiveTrajectoryLedger>() == LEDGER_HISTORY_LEN);
     assert!(align_of::<CognitiveTrajectoryLedger>() == 8);
+    assert!(size_of::<RamPhaseKvEntry>() == 192);
+    assert!(align_of::<RamPhaseKvEntry>() == 64);
+    assert!(offset_of!(RamPhaseKvEntry, keyframe) == 0);
+    assert!(offset_of!(RamPhaseKvEntry, circuit) == 128);
+    assert!(offset_of!(RamPhaseKvEntry, last_activation) == 136);
+    assert!(offset_of!(RamPhaseKvEntry, context_hash) == 144);
+    assert!(offset_of!(RamPhaseKvEntry, reuse_count) == 152);
+    assert!(offset_of!(RamPhaseKvEntry, last_used_epoch) == 156);
 };
 
 #[cfg(test)]
@@ -8061,5 +8392,62 @@ mod tests {
         let mut dynamic_units = [CognitiveTrajectoryLedger::new(); 4];
         dynamic_units.as_mut_slice().reinforce_bank(&bank_act, true);
         assert!(dynamic_units[0].latest_step().is_some());
+    }
+
+    #[test]
+    fn test_ram_phase_kv_cache_exact_hit_resonance_lru_and_gateway_synthesis() {
+        let mut cache: LowSpecPhaseKvCache = RamPhaseKvCache::new();
+        assert_eq!(size_of::<LowSpecPhaseKvCache>(), 16 * 192);
+
+        let mut circuit_a = CognitiveTrajectoryLedger::new();
+        circuit_a.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::CellTrail,
+            CognitiveOpKind::DecomposePeel,
+            6,
+        ));
+        let phases_a = [24i8; MAX_ATTENTION_HEADS];
+        let act_a = CognitiveCircuitActivation {
+            peel_gate_q7: 96,
+            intensity_q7: 96,
+            ..Default::default()
+        };
+
+        cache.store_context_keyframe(0xAAAA_0001, 10, 101, &phases_a, circuit_a, act_a, 1);
+
+        // 1. Exact context hash hit returns slot 0 with exact_hit = true and bumps reuse_count.
+        let q_words_a = load_q7_words_64(&phases_a);
+        let (idx, exact, res) = cache
+            .lookup_context_or_resonate(0xAAAA_0001, &q_words_a, 16, 2)
+            .expect("exact hit");
+        assert_eq!(idx, 0);
+        assert!(exact);
+        assert_eq!(res, 127);
+        assert_eq!(cache.slots[0].reuse_count, 1);
+        assert!(cache.slots[0].keyframe.verify_integrity().is_ok());
+
+        // 2. Unknown hash still resonates associatively when query phases align with stored keyframe.
+        let q_words_near = load_q7_words_64(&[22i8; MAX_ATTENTION_HEADS]);
+        let (res_idx, exact_2, res_score) = cache
+            .lookup_context_or_resonate(0xBBBB_0002, &q_words_near, 16, 3)
+            .expect("associative resonance hit");
+        assert_eq!(res_idx, 0);
+        assert!(!exact_2);
+        assert!(res_score >= 16);
+
+        // 3. Cached entry directly synthesizes a composite GatewayFrame (Fact + Persona circuit).
+        let frame = cache.slots[0].synthesize_gateway_frame();
+        assert_ne!(frame.provenance_bits & CAUSAL_AXIS_OBJECTIVE_FACT, 0);
+        assert_ne!(frame.provenance_bits & CAUSAL_AXIS_SUBJECTIVE_PERSONA, 0);
+
+        // 4. LRU eviction replaces oldest epoch when capacity is full.
+        let mut tiny = [RamPhaseKvEntry::default(); 2];
+        tiny.as_mut_slice()
+            .store_context_keyframe(1, 0, 1, &phases_a, circuit_a, act_a, 10);
+        tiny.as_mut_slice()
+            .store_context_keyframe(2, 0, 2, &phases_a, circuit_a, act_a, 20);
+        tiny.as_mut_slice()
+            .store_context_keyframe(3, 0, 3, &phases_a, circuit_a, act_a, 30);
+        assert_eq!(tiny[0].context_hash, 3);
+        assert_eq!(tiny[1].context_hash, 2);
     }
 }

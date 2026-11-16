@@ -22,7 +22,8 @@ use liminika_core::action_hub::ActionHubEngine;
 use liminika_core::traits::gateway::{
     CognitiveCircuitPlasticity, CognitiveNeuralBankOps, CognitiveOpKind, CognitiveStepOp,
     CognitiveTrajectoryLedger, GuardPhaseAnchor, HybridScaleCircuit, ObjectiveFact,
-    ResonantSignalSlice, StandardCognitiveBank, SubjectivePersona, SwarmScaleGranularity,
+    RamPhaseKvCacheOps, ResonantSignalSlice, StandardCognitiveBank, StandardPhaseKvCache,
+    SubjectivePersona, SwarmScaleGranularity,
 };
 use serde::Deserialize;
 use tokenizers::Tokenizer;
@@ -1950,6 +1951,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut reflect_triggers = 0_usize;
     let mut reflect_adopted = 0_usize;
+    let mut ram_kv_cache = StandardPhaseKvCache::new();
+    let mut ram_kv_exact_hits = 0_usize;
+    let mut ram_kv_res_hits = 0_usize;
     let mut eval_items: Vec<(String, String, Vec<String>, Vec<String>)> = suite.probes.clone();
     eval_items.push((
         "CVOID".to_string(),
@@ -2040,6 +2044,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let cons = bank.to_consolidated_ledger();
             query_snap.cognitive_trajectory =
                 cons.compose_persona_circuit(&query_snap.cognitive_trajectory, 64);
+        }
+        let ctx_hash = if recalled_ctx.is_empty() {
+            0_u64
+        } else {
+            recalled_ctx
+                .as_bytes()
+                .iter()
+                .fold(0xCBF2_9CE4_8422_2325_u64, |h, &b| {
+                    (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3)
+                })
+        };
+        if let Some((slot_idx, exact, _res)) = ram_kv_cache.lookup_context_or_resonate(
+            ctx_hash,
+            recall.gateway_frame.phase_words_ref(),
+            16,
+            (idx + 1) as u32,
+        ) {
+            if exact {
+                ram_kv_exact_hits += 1;
+            } else {
+                ram_kv_res_hits += 1;
+            }
+            let cached_circuit = ram_kv_cache.slots[slot_idx].circuit;
+            if cached_circuit.latest_step().is_some() {
+                query_snap.cognitive_trajectory =
+                    cached_circuit.compose_persona_circuit(&query_snap.cognitive_trajectory, 64);
+            }
+        }
+        if ctx_hash != 0 {
+            ram_kv_cache.store_context_keyframe(
+                ctx_hash,
+                q_ids.len() as u32,
+                query_snap.top_fact_anchor.unwrap_or(0),
+                &recall.gateway_frame.phase_deltas,
+                query_snap.cognitive_trajectory,
+                recall.telemetry.layer_activation,
+                (idx + 1) as u32,
+            );
         }
         let top_fact_preview = if recall.recalled_facts.is_empty() {
             "none".to_string()
@@ -2326,6 +2368,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         compile_ms,
         mean_recall_ms,
         decode_tps,
+    );
+    let ram_kv_occupied = ram_kv_cache
+        .entries()
+        .iter()
+        .filter(|e| e.is_occupied())
+        .count();
+    println!(
+        "RAM Phase-KV Cache ({} KB / {} slots, zero-VRAM): occupied={} exact_hits={} resonance_hits={}",
+        core::mem::size_of::<StandardPhaseKvCache>() / 1024,
+        ram_kv_cache.entries().len(),
+        ram_kv_occupied,
+        ram_kv_exact_hits,
+        ram_kv_res_hits,
     );
 
     if !recall_only {
