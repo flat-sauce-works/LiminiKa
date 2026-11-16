@@ -37,6 +37,7 @@ use crate::abi::{
 };
 use crate::crystal::CrystallizedAttractorRecord;
 use crate::traits::aligned::is_aligned_to;
+use crate::traits::gateway::CognitiveTrajectoryLedger;
 use crate::traits::gateway::{
     compute_aligned64_payload_crc32_ieee, update_aligned64_blocks_crc32_raw,
     CausalProvenanceReport, GatewayFrame, ManifoldGatewaySignal,
@@ -53,8 +54,9 @@ use crate::traits::primitives::{
 };
 pub use crate::traits::primitives::{KvKeyframePacket, KvMotionDeltaPacket};
 use crate::traits::telemetry::{
-    ContrastivePhaseBloomFilter, LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_REPULSION_APPLIED,
-    LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SUBHEAD_ROUTED, NUM_SWARM_MICRO_CELLS,
+    ContrastivePhaseBloomFilter, LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_PHASE_STEERED,
+    LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
+    LEDGER_METRIC_SUBHEAD_ROUTED, NUM_SWARM_MICRO_CELLS,
 };
 use crate::traits::{DnpPacketDispatcher, GcsoResult, KvKeyframeCache, MappedStorage, Pod};
 use core::mem::{align_of, offset_of, size_of};
@@ -542,6 +544,19 @@ impl<'a> GcsoFourSectionView<'a> {
             ledger,
             provenance_reports,
         })
+    }
+
+    /// Zero-copy extraction of the persisted [`CognitiveTrajectoryLedger`] from `self.ledger`,
+    /// returning `Some` when [`LEDGER_FLAG_COGNITIVE_TRAJECTORY`] is active.
+    #[inline(always)]
+    #[must_use]
+    pub const fn cognitive_trajectory_ledger(&self) -> Option<CognitiveTrajectoryLedger> {
+        match self.ledger {
+            Some(slot) if (slot.auto_tune_flags & LEDGER_FLAG_COGNITIVE_TRAJECTORY) != 0 => {
+                Some(CognitiveTrajectoryLedger::from_ledger_slot(slot))
+            }
+            _ => None,
+        }
     }
 
     #[inline(always)]

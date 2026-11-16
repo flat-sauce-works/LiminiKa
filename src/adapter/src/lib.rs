@@ -19,10 +19,10 @@ use liminika_core::traits::aligned::{
 };
 use liminika_core::traits::gateway::{
     ActionHubGatewayExt, AdaptiveThresholdPolicy, CausalProvenanceReport, CausalProvenanceSignal,
-    GatewayFrame, GatewayPhaseSteeringExt, GatewayRank1SteeringExt, GuardPhaseAnchor,
-    ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact, StigmergicThresholdPolicy,
-    SubjectivePersona, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
-    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
+    CognitiveCircuitPlasticity, CognitiveTrajectoryLedger, GatewayFrame, GatewayPhaseSteeringExt,
+    GatewayRank1SteeringExt, GuardPhaseAnchor, ManifoldGatewaySignal, ManifoldProbeBaseline,
+    ObjectiveFact, StigmergicThresholdPolicy, SubjectivePersona, SystemConstraint,
+    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
 };
 use liminika_core::traits::primitives::{
     ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, MAX_ATTENTION_HEADS,
@@ -2202,6 +2202,7 @@ pub struct GcsoDualTrackTimeline {
     model_fingerprint: u64,
     frames: Vec<GopTimelineFrame>,
     seek_index: Vec<usize>,
+    persona_circuit: Option<CognitiveTrajectoryLedger>,
 }
 
 impl GcsoDualTrackTimeline {
@@ -2235,7 +2236,66 @@ impl GcsoDualTrackTimeline {
             model_fingerprint,
             frames: Vec::new(),
             seek_index: Vec::new(),
+            persona_circuit: None,
         }
+    }
+
+    /// Attaches a [`CognitiveTrajectoryLedger`] (pseudo-neural persona reasoning circuit) to be
+    /// persisted inside subsequent I-frame `.gcso` 4-section snapshots.
+    pub fn set_persona_circuit(&mut self, circuit: CognitiveTrajectoryLedger) {
+        self.persona_circuit = Some(circuit);
+    }
+
+    /// Returns the active [`CognitiveTrajectoryLedger`] if set in memory, or extracts the most
+    /// recent persisted circuit from the timeline's I-frame `.gcso` 4-section snapshots.
+    #[must_use]
+    pub fn persona_circuit(&self) -> Option<CognitiveTrajectoryLedger> {
+        self.persona_circuit
+            .or_else(|| Self::extract_circuit_from_frames(&self.frames))
+    }
+
+    /// Composes this container's persona circuit (`self`) with `overlay` using the core
+    /// [`CognitiveCircuitPlasticity::compose_persona_circuit`] trait (`blend_q7` in `0..=128`).
+    #[must_use]
+    pub fn compose_persona_circuits(
+        &self,
+        overlay: &Self,
+        blend_q7: u8,
+    ) -> Option<CognitiveTrajectoryLedger> {
+        match (self.persona_circuit(), overlay.persona_circuit()) {
+            (Some(base), Some(ov)) => Some(base.compose_persona_circuit(&ov, blend_q7)),
+            (Some(base), None) => Some(base),
+            (None, Some(ov)) => Some(ov),
+            (None, None) => None,
+        }
+    }
+
+    fn extract_circuit_from_snapshot(snapshot: &[u8]) -> Option<CognitiveTrajectoryLedger> {
+        if snapshot.is_empty() {
+            return None;
+        }
+        if (snapshot.as_ptr() as usize).is_multiple_of(128) {
+            return GcsoFourSectionView::from_container_bytes_zero_copy(snapshot)
+                .ok()
+                .and_then(|v| v.cognitive_trajectory_ledger());
+        }
+        let mut aligned = vec![0_u8; snapshot.len() + 128];
+        let off = aligned.as_ptr().align_offset(128);
+        aligned[off..off + snapshot.len()].copy_from_slice(snapshot);
+        GcsoFourSectionView::from_container_bytes_zero_copy(&aligned[off..off + snapshot.len()])
+            .ok()
+            .and_then(|v| v.cognitive_trajectory_ledger())
+    }
+
+    fn extract_circuit_from_frames(
+        frames: &[GopTimelineFrame],
+    ) -> Option<CognitiveTrajectoryLedger> {
+        frames.iter().rev().find_map(|f| match &f.kind {
+            GopFrameKind::KeyframeI { zimms_4section, .. } => {
+                Self::extract_circuit_from_snapshot(zimms_4section)
+            }
+            GopFrameKind::DeltaP { .. } => None,
+        })
     }
 
     /// Returns the geometry fingerprint this compiled GOP track was baked for.
@@ -2267,6 +2327,7 @@ impl GcsoDualTrackTimeline {
     fn build_zimms_snapshot(
         corpus: &TextAttractorCorpus,
         timestamp_epoch_sec: u64,
+        persona_circuit: Option<&CognitiveTrajectoryLedger>,
     ) -> Result<Vec<u8>, String> {
         let mut crystals = Vec::with_capacity(corpus.entries().len().max(1));
         for entry in corpus.entries() {
@@ -2290,11 +2351,12 @@ impl GcsoDualTrackTimeline {
         }
         let trail = gcso_pointer_trail_t::default();
         let trails = [trail];
+        let ledger_slot = persona_circuit.map(CognitiveTrajectoryLedger::to_persona_ledger_slot);
         let req_len = GcsoFourSectionView::required_byte_len_with_reports(
             crystals.len(),
             trails.len(),
             false,
-            false,
+            ledger_slot.is_some(),
             0,
         )
         .map_err(|e| format!("required_byte_len error: {e}"))?;
@@ -2304,7 +2366,7 @@ impl GcsoDualTrackTimeline {
             &crystals,
             &trails,
             None,
-            None,
+            ledger_slot.as_ref(),
             &[],
             timestamp_epoch_sec,
             &mut aligned[off..off + req_len],
@@ -2619,10 +2681,12 @@ impl GcsoDualTrackTimeline {
                 kind,
             });
         }
+        let persona_circuit = Self::extract_circuit_from_frames(&frames);
         Ok(Self {
             model_fingerprint,
             frames,
             seek_index,
+            persona_circuit,
         })
     }
 }
@@ -2641,8 +2705,11 @@ impl AttractorContainerCodec for GcsoDualTrackTimeline {
             self.model_fingerprint = fp;
         }
         if emit_i {
-            let zimms_4section =
-                Self::build_zimms_snapshot(ctx.corpus, source.timestamp_epoch_sec)?;
+            let zimms_4section = Self::build_zimms_snapshot(
+                ctx.corpus,
+                source.timestamp_epoch_sec,
+                self.persona_circuit.as_ref(),
+            )?;
             let idx = self.frames.len();
             self.seek_index.push(idx);
             self.frames.push(GopTimelineFrame {
@@ -3339,6 +3406,110 @@ mod tests {
             GcsoDualTrackTimeline::load_from_path(&nested_path).expect("load auto-created .gcso");
         assert_eq!(nested_loaded, timeline);
         let _ = std::fs::remove_dir_all(&nested_base);
+    }
+
+    #[test]
+    fn dual_track_timeline_persists_composes_and_updates_persona_circuit() {
+        use crate::reflection::{
+            AttractorTrajectoryEvaluator, ManifoldReflectionEvaluator, ReflectionPolicy,
+            TrajectoryManifoldSnapshot,
+        };
+        use liminika_core::traits::gateway::{
+            CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, SwarmScaleGranularity,
+        };
+
+        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("geometry");
+        let policy = RecallPolicy::default();
+        let detector = AdaptiveGopCutDetector::default();
+        let mut corpus = TextAttractorCorpus::new();
+        let q_rot_len = adapter.geometry().num_q_heads * adapter.geometry().rotary_dim;
+        let q_vec = vec![0.15_f32; q_rot_len];
+        let r_vec = vec![0.0_f32; q_rot_len];
+        let qb_slices = vec![q_vec.as_slice(); adapter.geometry().num_layers];
+        let refs = vec![r_vec.as_slice(); adapter.geometry().num_layers];
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                AttractorRole::Persona,
+                "Calm analytical persona",
+                &qb_slices,
+                &refs,
+                1.8,
+            )
+            .expect("ingest persona");
+
+        let mut base_circuit = CognitiveTrajectoryLedger::new();
+        base_circuit.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::CellTrail,
+            CognitiveOpKind::DecomposePeel,
+            6,
+        ));
+        base_circuit.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::MacroCoalition,
+            CognitiveOpKind::SynthesizeFuse,
+            7,
+        ));
+
+        let mut tl_base = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
+            adapter.geometry(),
+        ));
+        tl_base.set_persona_circuit(base_circuit);
+        tl_base
+            .record_step(
+                &TimelineStepContext {
+                    adapter: &adapter,
+                    corpus: &corpus,
+                    policy: &policy,
+                    detector: &detector,
+                },
+                SourceTextRecord {
+                    frame_index: 0,
+                    timestamp_epoch_sec: 1_700_000_000,
+                    role: AttractorRole::Persona,
+                    text: "Calm analytical persona".to_string(),
+                    energy: 1.8,
+                },
+                &FrameTransitionMetrics {
+                    phase_l1_delta: 0.0,
+                    void_state: VoidBoundaryState::InsideBasin,
+                    frames_since_keyframe: 0,
+                    new_cluster_spawned: true,
+                },
+            )
+            .expect("record I-frame");
+
+        let encoded = tl_base.to_bytes();
+        let decoded = GcsoDualTrackTimeline::from_bytes(&encoded).expect("decode .gcso");
+        assert_eq!(decoded.persona_circuit(), Some(base_circuit));
+
+        // Compose with a second timeline's overlay circuit and apply reflection plasticity.
+        let mut overlay_circuit = CognitiveTrajectoryLedger::new();
+        overlay_circuit.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::PointerBit,
+            CognitiveOpKind::RouteSubHead,
+            5,
+        ));
+        let mut tl_overlay = GcsoDualTrackTimeline::new(tl_base.model_fingerprint());
+        tl_overlay.set_persona_circuit(overlay_circuit);
+
+        let mut composed = decoded
+            .compose_persona_circuits(&tl_overlay, 64)
+            .expect("composed circuit");
+        assert_ne!(composed, base_circuit);
+
+        let recall = corpus
+            .recall_for_query(&adapter, &qb_slices, &refs, &policy)
+            .expect("recall");
+        let query_snap = TrajectoryManifoldSnapshot::from_recall(&recall);
+        let draft_snap = query_snap.clone();
+        let critique = ManifoldReflectionEvaluator.assess_trajectory(
+            &query_snap,
+            &draft_snap,
+            &policy,
+            &ReflectionPolicy::default(),
+        );
+        ManifoldReflectionEvaluator.update_persona_circuit(&mut composed, &critique);
+        assert!(composed.latest_step().is_some());
     }
 
     #[test]

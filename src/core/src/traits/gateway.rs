@@ -5765,6 +5765,113 @@ impl CognitiveTrajectoryLedger {
         base.intensity_q7 = adj_peel.max(adj_fuse).max(adj_repulse);
         base
     }
+
+    /// Packs this [`CognitiveTrajectoryLedger`] into a 64-byte C-ABI [`gcso_ledger_slot_t`]
+    /// marked with [`LEDGER_FLAG_COGNITIVE_TRAJECTORY`] for `.gcso` persistence.
+    #[inline(always)]
+    #[must_use]
+    pub fn to_persona_ledger_slot(&self) -> gcso_ledger_slot_t {
+        let mut slot = gcso_ledger_slot_t::default();
+        self.write_to_ledger_slot(&mut slot);
+        slot.telemetry_ring_head = u16::from(self.op_counts().1);
+        slot
+    }
+}
+
+/// Trait governing domain-agnostic long-term plasticity and compositional blending over
+/// register-resident pseudo-neural cognitive circuits.
+///
+/// Updates are driven strictly by geometric convergence and circuit activation invariants so
+/// learned reasoning habits remain invariant across datasets and domains.
+pub trait CognitiveCircuitPlasticity: Sized {
+    /// Updates the circuit from a completed [`CognitiveCircuitActivation`] and convergence flag
+    /// using bounded homeostatic plasticity (LTP on coherent convergence, LTD/shift on drift).
+    fn reinforce_from_activation(
+        &mut self,
+        activation: &CognitiveCircuitActivation,
+        converged: bool,
+    );
+
+    /// Blends `self` (base persona circuit) with `overlay` (adapted session circuit) according to
+    /// `blend_q7` (`0..=128`), preserving active scale transitions from both circuits.
+    fn compose_persona_circuit(&self, overlay: &Self, blend_q7: u8) -> Self;
+}
+
+impl CognitiveCircuitPlasticity for CognitiveTrajectoryLedger {
+    #[inline]
+    fn reinforce_from_activation(
+        &mut self,
+        activation: &CognitiveCircuitActivation,
+        converged: bool,
+    ) {
+        if converged && activation.circuit_resonance_q7 >= 16 {
+            let op = activation.op_kind();
+            let scale = activation.next_scale();
+            let target_intensity = (3 + ((activation.intensity_q7 >> 5) & 3)).min(7);
+            if let Some(latest) = self.latest_step() {
+                if latest.op() == op && latest.granularity() == scale {
+                    // Homeostatic saturation: strengthen in-place rather than flooding all 8 slots.
+                    let boosted = latest.intensity().saturating_add(1).min(7);
+                    self.steps[0] = CognitiveStepOp::pack(scale, op, boosted).0;
+                    return;
+                }
+            }
+            self.push_step(CognitiveStepOp::pack(scale, op, target_intensity));
+        } else if !converged {
+            let corrective_op = if activation.repulse_sensitivity_q7 >= 84 {
+                CognitiveOpKind::RepulseAudit
+            } else {
+                CognitiveOpKind::BridgeShift
+            };
+            let intensity = (4 + ((activation.intensity_q7 >> 6) & 3)).min(7);
+            self.push_step(CognitiveStepOp::pack(
+                activation.next_scale(),
+                corrective_op,
+                intensity,
+            ));
+        }
+    }
+
+    #[inline]
+    fn compose_persona_circuit(&self, overlay: &Self, blend_q7: u8) -> Self {
+        let w_overlay = u16::from(blend_q7.min(128));
+        if w_overlay == 0 {
+            return *self;
+        }
+        if w_overlay == 128 {
+            return *overlay;
+        }
+        let w_base = 128u16 - w_overlay;
+        let mut out_steps = [0u8; LEDGER_HISTORY_LEN];
+        let mut i = 0usize;
+        while i < LEDGER_HISTORY_LEN {
+            let b_step = CognitiveStepOp(self.steps[i]);
+            let o_step = CognitiveStepOp(overlay.steps[i]);
+            out_steps[i] = match (b_step.is_active(), o_step.is_active()) {
+                (false, false) => 0,
+                (true, false) => {
+                    let scaled =
+                        ((u16::from(b_step.intensity()) * w_base) >> 7).clamp(1, 7) as u8;
+                    CognitiveStepOp::pack(b_step.granularity(), b_step.op(), scaled).0
+                }
+                (false, true) => {
+                    let scaled =
+                        ((u16::from(o_step.intensity()) * w_overlay) >> 7).clamp(1, 7) as u8;
+                    CognitiveStepOp::pack(o_step.granularity(), o_step.op(), scaled).0
+                }
+                (true, true) => {
+                    let b_score = u16::from(b_step.intensity()) * w_base;
+                    let o_score = u16::from(o_step.intensity()) * w_overlay;
+                    let blended_int =
+                        (((b_score + o_score) >> 7) as u8).clamp(1, 7);
+                    let dominant = if o_score > b_score { o_step } else { b_step };
+                    CognitiveStepOp::pack(dominant.granularity(), dominant.op(), blended_int).0
+                }
+            };
+            i += 1;
+        }
+        Self { steps: out_steps }
+    }
 }
 
 impl RawPhaseProjectable for CognitiveTrajectoryLedger {
@@ -7290,5 +7397,85 @@ mod tests {
             .unwrap();
         // Early-exit stopped after layer 0, so only 1 step was added (3 -> 4 total steps).
         assert_eq!(out_early.op_counts().1, 4);
+    }
+
+    #[test]
+    fn test_cognitive_circuit_plasticity_composition_and_four_section_roundtrip() {
+        let mut circuit = CognitiveTrajectoryLedger::new();
+        let act_fuse = CognitiveCircuitActivation {
+            peel_gate_q7: 30,
+            fuse_gate_q7: 110,
+            repulse_sensitivity_q7: 20,
+            selected_op: CognitiveOpKind::SynthesizeFuse as u8,
+            preferred_next_scale: SwarmScaleGranularity::MacroCoalition as u8,
+            intensity_q7: 96,
+            circuit_resonance_q7: 48,
+            trajectory_depth: 1,
+        };
+        circuit.reinforce_from_activation(&act_fuse, true);
+        let first_depth = circuit.op_counts().1;
+        assert_eq!(first_depth, 1);
+        let int_before = circuit.latest_step().unwrap().intensity();
+        // Repeating the identical converged activation strengthens in-place (homeostatic saturation)
+        // instead of flooding all 8 slots.
+        circuit.reinforce_from_activation(&act_fuse, true);
+        assert_eq!(circuit.op_counts().1, 1);
+        assert!(circuit.latest_step().unwrap().intensity() > int_before);
+
+        // Divergent outcome with high repulsion sensitivity shifts via RepulseAudit.
+        let act_repulse = CognitiveCircuitActivation {
+            repulse_sensitivity_q7: 96,
+            preferred_next_scale: SwarmScaleGranularity::TypeGateway as u8,
+            intensity_q7: 100,
+            ..Default::default()
+        };
+        circuit.reinforce_from_activation(&act_repulse, false);
+        assert_eq!(circuit.op_counts().1, 2);
+        assert_eq!(circuit.latest_step().unwrap().op(), CognitiveOpKind::RepulseAudit);
+
+        // Compositional blending between two circuits preserves both bounds and mid-blend.
+        let mut overlay = CognitiveTrajectoryLedger::new();
+        overlay.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::CellTrail,
+            CognitiveOpKind::DecomposePeel,
+            6,
+        ));
+        assert_eq!(circuit.compose_persona_circuit(&overlay, 0), circuit);
+        assert_eq!(circuit.compose_persona_circuit(&overlay, 128), overlay);
+        let blended = circuit.compose_persona_circuit(&overlay, 64);
+        assert_ne!(blended, circuit);
+        assert!(blended.op_counts().1 >= 2);
+
+        // Zero-copy 4-section .gcso roundtrip via to_persona_ledger_slot & cognitive_trajectory_ledger.
+        let slot = blended.to_persona_ledger_slot();
+        let crystals = [CrystallizedAttractorRecord::new_empty(
+            1,
+            crate::traits::primitives::ATTRACTOR_SLOT_PERSONA,
+            0,
+        )];
+        let trails = [gcso_pointer_trail_t::default()];
+        let req_len = GcsoFourSectionView::required_byte_len_with_reports(
+            crystals.len(),
+            trails.len(),
+            false,
+            true,
+            0,
+        )
+        .unwrap();
+        let mut buf = [0u8; 1024];
+        let off = buf.as_ptr().align_offset(128);
+        let written = GcsoFourSectionView::write_four_section_with_reports_to_bytes(
+            &crystals,
+            &trails,
+            None,
+            Some(&slot),
+            &[],
+            1_700_000_000,
+            &mut buf[off..off + req_len],
+        )
+        .unwrap();
+        let view = GcsoFourSectionView::from_container_bytes_zero_copy(&buf[off..off + written])
+            .unwrap();
+        assert_eq!(view.cognitive_trajectory_ledger(), Some(blended));
     }
 }

@@ -12,9 +12,10 @@
 use crate::{DynamicAttractorRecall, RecallPolicy, VoidBoundaryState};
 use liminika_core::action_hub::StigmergicActionDecision;
 use liminika_core::traits::gateway::{
-    CausalProvenanceSignal, CognitiveCircuitActivation, CognitiveOpKind, CognitiveStepOp,
-    CognitiveTrajectoryLedger, GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal,
-    ObjectiveFact, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
+    CausalProvenanceSignal, CognitiveCircuitActivation, CognitiveCircuitPlasticity,
+    CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, GatewayFrame, GuardPhaseAnchor,
+    ManifoldGatewaySignal, ObjectiveFact, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    CAUSAL_AXIS_OBJECTIVE_FACT,
 };
 use liminika_core::traits::primitives::MAX_ATTENTION_HEADS;
 
@@ -302,6 +303,20 @@ pub trait AttractorTrajectoryEvaluator {
             return ReflectionSelection::Pass2;
         }
         ReflectionSelection::Pass1
+    }
+
+    /// Updates a persistent [`CognitiveTrajectoryLedger`] (persona reasoning circuit) using the
+    /// core [`CognitiveCircuitPlasticity`] trait from the outcome of `critique`.
+    fn update_persona_circuit(
+        &self,
+        circuit: &mut CognitiveTrajectoryLedger,
+        critique: &ReflectionCritique,
+    ) {
+        let converged = matches!(
+            critique.trigger,
+            ReflectionTriggerKind::Converged | ReflectionTriggerKind::ConsistentVoidAbstention
+        );
+        circuit.reinforce_from_activation(&critique.layer_activation, converged);
     }
 }
 
