@@ -1144,6 +1144,53 @@ pub trait SwarmCellChunk: BranchlessKernel + Send + Sync {
     }
 }
 
+/// Approximation-oriented extension trait refining [`SwarmCellChunk`] for myopic PagedBlock
+/// granule stepping, Skip-Hop geodesic synchronization, and mask-gated reconstitution.
+pub trait StigmergicChunkOps: SwarmCellChunk {
+    /// Fragments a 64-head phase target across active granules gated by `mask` and reconstitutes
+    /// `trail_inout` in constant time.
+    ///
+    /// # Errors
+    /// Propagates any error returned by [`SwarmCellChunk::step_chunk`].
+    #[inline(always)]
+    fn reconstitute_chunk_granules_masked(
+        &mut self,
+        mask: &gcso_paged_bitmask_t,
+        chunk_len: u32,
+        action_ptr: gcso_tagged_ptr_t,
+        target_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        step_gain_u7: u8,
+        qdps_min_step_q7: u8,
+        tolerance_q7: u8,
+        quorum_threshold: u8,
+        entropy_h_tilde: f32,
+        low_entropy_skip_thresh: f32,
+        bloom_filter: Option<&ContrastivePhaseBloomFilter>,
+        repulsion_threshold: u8,
+        repulsion_scale_u7: u8,
+        trail_inout: &mut gcso_pointer_trail_t,
+    ) -> GcsoResult<super::telemetry::StigmergicReconstitutionReport> {
+        self.resolve_chunk_subswarms_masked(
+            mask,
+            chunk_len,
+            action_ptr,
+            target_phases,
+            step_gain_u7,
+            qdps_min_step_q7,
+            tolerance_q7,
+            quorum_threshold,
+            entropy_h_tilde,
+            low_entropy_skip_thresh,
+            bloom_filter,
+            repulsion_threshold,
+            repulsion_scale_u7,
+            trail_inout,
+        )
+    }
+}
+
+impl<T: SwarmCellChunk + ?Sized> StigmergicChunkOps for T {}
+
 // ===================================================================
 // 3. Lv.2 Micro Observers: `HotPathExecutionEngine`, `FractalCascadeCoordinator`, & `HotPathObserver`
 // ===================================================================

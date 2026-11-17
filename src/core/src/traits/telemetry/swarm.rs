@@ -694,6 +694,66 @@ pub trait StigmergicSwarmOps: StigmergicTrailOps {
     }
 }
 
+/// Primary C-ABI alias pairing [`SwarmResolutionReport`] with GCSO's `S = Stigmergic`
+/// fragmentation-and-reconstitution semantics (`16` bytes, `#[repr(C, align(16))]`).
+pub type StigmergicReconstitutionReport = SwarmResolutionReport;
+
+/// Approximation-first trait framing the 3-stage stigmergic compute pipeline:
+/// 1. **Fragmentation (Granulate)**: decompose a 64-head phase trajectory into 8 myopic `u64` SWAR granules.
+/// 2. **Stigmergic Drift**: steer each granule along local terrain pheromone trails without global planning.
+/// 3. **Reconstitution**: reassemble converged granules via quorum consensus into an approximate state transition.
+pub trait StigmergicReconstitutionOps: StigmergicSwarmOps {
+    /// Extracts the myopic 8-head `u64` SWAR word (`granule_idx` in `0..8`) during fragmentation.
+    #[inline(always)]
+    #[must_use]
+    fn granulate_phase_words(&self, granule_idx: usize) -> u64 {
+        self.extract_subswarm_word(granule_idx)
+    }
+
+    /// Writes a myopic 8-head `u64` SWAR granule word back into the trail buffer.
+    #[inline(always)]
+    fn write_granule_word(&mut self, granule_idx: usize, word: u64) {
+        self.write_subswarm_word(granule_idx, word);
+    }
+
+    /// Fragments the trail across 8 myopic granules, drifts each along `target_words` gated by
+    /// `active_granule_mask`, and reconstitutes the resulting state transition into
+    /// `(StigmergicReconstitutionReport, reconstituted_words)` in branchless constant time.
+    #[inline(always)]
+    fn reconstitute_from_stigmergy_words(
+        &mut self,
+        action_ptr: gcso_tagged_ptr_t,
+        target_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        active_granule_mask: u8,
+        step_gain_u7: u8,
+        qdps_min_step_q7: u8,
+        tolerance_q7: u8,
+        quorum_threshold: u8,
+        entropy_h_tilde: f32,
+        low_entropy_skip_thresh: f32,
+        bloom_filter: Option<&ContrastivePhaseBloomFilter>,
+        repulsion_threshold: u8,
+        repulsion_scale_u7: u8,
+    ) -> (StigmergicReconstitutionReport, [u64; NUM_STIGMERGIC_GRANULES]) {
+        self.try_resolve_action_in_swarm_from_words(
+            action_ptr,
+            target_words,
+            active_granule_mask,
+            step_gain_u7,
+            qdps_min_step_q7,
+            tolerance_q7,
+            quorum_threshold,
+            entropy_h_tilde,
+            low_entropy_skip_thresh,
+            bloom_filter,
+            repulsion_threshold,
+            repulsion_scale_u7,
+        )
+    }
+}
+
+impl<T: StigmergicSwarmOps + ?Sized> StigmergicReconstitutionOps for T {}
+
 impl gcso_pointer_trail_t {
     #[inline]
     pub(crate) fn try_resolve_action_in_swarm_with_cur_words(

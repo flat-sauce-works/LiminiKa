@@ -165,6 +165,22 @@ pub type gcso_stigmergic_thresholds_t = StigmergicThresholds;
 pub type gcso_action_orchestration_report_t = ActionOrchestrationReport;
 /// C-ABI type alias for the 8-bit Stigmergic Action Decision discriminant (`StigmergicActionDecision`).
 pub type gcso_stigmergic_action_decision_t = u8;
+/// C-ABI type alias for the 16-byte Stigmergic Reconstitution Report (`StigmergicReconstitutionReport`).
+pub type gcso_reconstitution_report_t = StigmergicReconstitutionReport;
+/// C-ABI type alias for the 8-byte Cognitive Trajectory Ledger (`CognitiveTrajectoryLedger`).
+pub type gcso_cognitive_trajectory_ledger_t = CognitiveTrajectoryLedger;
+/// C-ABI type alias for the 32-byte Epistemic Horizon Reading (`EpistemicHorizonReading`).
+pub type gcso_epistemic_horizon_reading_t = EpistemicHorizonReading;
+/// C-ABI type alias for the 32-byte Core Layer 0 `LiminalApertureField`.
+pub type gcso_liminal_aperture_field_t = LiminalApertureField;
+/// C-ABI type alias for the 32-byte Core Layer 1 `StigmergicGranuleField`.
+pub type gcso_stigmergic_granule_field_t = StigmergicGranuleField;
+/// C-ABI type alias for the 32-byte Venn-Overlap & Serendipity Report (`StigmergicVennSerendipityReport`).
+pub type gcso_stigmergic_venn_serendipity_report_t = StigmergicVennSerendipityReport;
+/// C-ABI type alias for the 64-byte Unified 2-Layer Autonomous Core Stack (`AutonomousCoreLayerStack`).
+pub type gcso_autonomous_core_layer_stack_t = AutonomousCoreLayerStack;
+/// C-ABI type alias for the 32-byte Self-Introspecting Topology Telemetry Snapshot.
+pub type gcso_liminal_topology_snapshot_t = LiminalTopologyTelemetrySnapshot;
 
 // ===================================================================
 // Strongly-Typed Opaque Handles
@@ -721,6 +737,36 @@ const _: () = {
         size_of::<gcso_mapped_storage_descriptor_t>() == 64
             && align_of::<gcso_mapped_storage_descriptor_t>() == 32
     );
+    assert!(
+        size_of::<gcso_reconstitution_report_t>() == 16
+            && align_of::<gcso_reconstitution_report_t>() == 16
+    );
+    assert!(
+        size_of::<gcso_epistemic_horizon_reading_t>() == 32
+            && align_of::<gcso_epistemic_horizon_reading_t>() == 16
+    );
+    assert!(
+        size_of::<gcso_liminal_aperture_field_t>() == 32
+            && align_of::<gcso_liminal_aperture_field_t>() == 16
+    );
+    assert!(
+        size_of::<gcso_stigmergic_granule_field_t>() == 32
+            && align_of::<gcso_stigmergic_granule_field_t>() == 16
+    );
+    assert!(
+        size_of::<gcso_stigmergic_venn_serendipity_report_t>() == 32
+            && align_of::<gcso_stigmergic_venn_serendipity_report_t>() == 16
+    );
+    assert!(
+        size_of::<gcso_autonomous_core_layer_stack_t>() == 64
+            && align_of::<gcso_autonomous_core_layer_stack_t>() == 64
+    );
+    assert!(
+        size_of::<gcso_liminal_topology_snapshot_t>() == 32
+            && align_of::<gcso_liminal_topology_snapshot_t>() == 16
+    );
+    assert!(offset_of!(gcso_autonomous_core_layer_stack_t, liminal_void_layer) == 0);
+    assert!(offset_of!(gcso_autonomous_core_layer_stack_t, stigmergic_layer) == 32);
     assert!(size_of::<gcso_subhead_config_t>() == 32 && align_of::<gcso_subhead_config_t>() == 16);
     assert!(
         size_of::<gcso_rank1_residual_descriptor_t>() == 64

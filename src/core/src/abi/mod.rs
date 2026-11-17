@@ -80,12 +80,16 @@ use crate::traits::branchless::{
 };
 use crate::traits::cold_path::{EntropyEvaluator, L2pSvdProjector, SystemCapabilityQuery};
 use crate::traits::gateway::{
+    evaluate_epistemic_horizon_words_64, evaluate_stigmergic_venn_and_serendipity_words_64,
     project_bytes_swar_to_words_64, project_f32_slice_to_q7_64, project_f32_slice_to_words_64,
-    synthesize_multi_origin_gateway_frame_with_words, CausalProvenanceReport,
-    CausalProvenanceSignal, CognitiveGroundingSignal, ContradictionGuard, ContradictionGuardSignal,
-    CrystallizedAttractorRecord, GatewayFrame, GcsoFourSectionView, ManifoldGatewaySignal,
-    ObjectiveFact, RawPhaseProjectable, SubjectivePersona, SystemConstraint,
-    CAUSAL_AXIS_CONTRADICTION_GUARD, GCSO_FOUR_SECTION_HEADER_BYTES,
+    synthesize_multi_origin_gateway_frame_with_words, AutonomousCoreLayerStack,
+    CausalProvenanceReport, CausalProvenanceSignal, CognitiveGroundingSignal,
+    CognitiveTrajectoryLedger, ContradictionGuard, ContradictionGuardSignal,
+    CrystallizedAttractorRecord, EpistemicHorizonReading, GatewayFrame, GcsoFourSectionView,
+    LiminalApertureField, LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, ObjectiveFact,
+    RawPhaseProjectable, StigmergicGranuleField, StigmergicVennSerendipityReport,
+    SubjectivePersona, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    GCSO_FOUR_SECTION_HEADER_BYTES,
 };
 use crate::traits::primitives::{
     branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_crc32_ieee,
@@ -108,10 +112,10 @@ use crate::traits::rope::{
 };
 use crate::traits::telemetry::{
     ContrastivePhaseBloomFilter, FastPathLedger, PagedBitmaskOps, StigmergicActionPtrOps,
-    StigmergicSwarmOps, StigmergicTrailOps, SwarmResolutionReport, LEDGER_METRIC_PHASE_STEERED,
-    LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
-    LEDGER_METRIC_SUBHEAD_ROUTED, MAX_ATTRACTOR_PULL_FORCE, NUM_SWARM_MICRO_CELLS,
-    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
+    StigmergicReconstitutionReport, StigmergicSwarmOps, StigmergicTrailOps, SwarmResolutionReport,
+    LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_REPULSION_APPLIED,
+    LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SUBHEAD_ROUTED, MAX_ATTRACTOR_PULL_FORCE,
+    NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
@@ -1496,5 +1500,106 @@ mod tests {
             assert!(orch_report.updated_density >= 1.50);
             assert_eq!(gcso_action_hub_destroy(hub_handle), GCSO_SUCCESS);
         }
+    }
+
+    #[test]
+    fn test_epistemic_venn_core_layers_and_mermaid_abi() {
+        let mut crystals = [
+            CrystallizedAttractorRecord::new_empty(11, ATTRACTOR_SLOT_KNOWLEDGE, 0),
+            CrystallizedAttractorRecord::new_empty(12, ATTRACTOR_SLOT_KNOWLEDGE, 0),
+            CrystallizedAttractorRecord::default(),
+        ];
+        let f0 = GatewayFrame {
+            target_anchor_id: 11,
+            effective_energy: 1.5,
+            dominant_slot: ATTRACTOR_SLOT_KNOWLEDGE,
+            phase_deltas: [16i8; MAX_ATTENTION_HEADS],
+            ..GatewayFrame::default()
+        };
+        let mut p1 = [16i8; MAX_ATTENTION_HEADS];
+        for h in 48..56 {
+            p1[h] = -100;
+        }
+        let f1 = GatewayFrame {
+            target_anchor_id: 12,
+            effective_energy: 1.4,
+            dominant_slot: ATTRACTOR_SLOT_KNOWLEDGE,
+            phase_deltas: p1,
+            ..GatewayFrame::default()
+        };
+        let _ = crystals[0].absorb_gateway_frame(&f0);
+        let _ = crystals[1].absorb_gateway_frame(&f1);
+
+        let query_phases = [16i8; MAX_ATTENTION_HEADS];
+        let mut drifted_phases = [16i8; MAX_ATTENTION_HEADS];
+        for h in 48..56 {
+            drifted_phases[h] = 100;
+        }
+
+        let mut horizon = gcso_epistemic_horizon_reading_t::default();
+        let mut venn_report = gcso_stigmergic_venn_serendipity_report_t::default();
+        let mut did_nucleate = 0u8;
+        let mut stack = gcso_autonomous_core_layer_stack_t::default();
+        let ledger = gcso_cognitive_trajectory_ledger_t::default();
+        let mut mermaid_buf = [0u8; 2048];
+        let mut written = 0usize;
+
+        // SAFETY: Local stack buffers satisfy all alignment and disjointness invariants.
+        unsafe {
+            assert_eq!(
+                gcso_epistemic_evaluate_horizon(
+                    crystals.as_ptr(),
+                    crystals.len(),
+                    query_phases.as_ptr(),
+                    0.35,
+                    &mut horizon,
+                ),
+                GCSO_SUCCESS
+            );
+            assert_ne!(horizon.horizon_gate, 0.0);
+
+            assert_eq!(
+                gcso_stigmergic_evaluate_venn_and_serendipity(
+                    crystals.as_mut_ptr(),
+                    crystals.len(),
+                    query_phases.as_ptr(),
+                    drifted_phases.as_ptr(),
+                    0.70,
+                    16,
+                    1,
+                    701,
+                    &mut venn_report,
+                    &mut did_nucleate,
+                ),
+                GCSO_SUCCESS
+            );
+            assert_eq!(venn_report.serendipity_triggered, 1);
+            assert_eq!(did_nucleate, 1);
+            assert!(crystals[2].verify_integrity());
+
+            assert_eq!(gcso_core_layer_stack_init_default(&mut stack), GCSO_SUCCESS);
+            assert_eq!(
+                gcso_core_layer_stack_adapt(&mut stack, &ledger, &horizon, &venn_report),
+                GCSO_SUCCESS
+            );
+            assert_eq!(stack.stigmergic_layer.adaptation_epochs, 1);
+
+            assert_eq!(
+                gcso_liminal_topology_format_mermaid(
+                    &stack,
+                    &horizon,
+                    &venn_report,
+                    3,
+                    1,
+                    mermaid_buf.as_mut_ptr(),
+                    mermaid_buf.len(),
+                    &mut written,
+                ),
+                GCSO_SUCCESS
+            );
+        }
+        let s = core::str::from_utf8(&mermaid_buf[..written]).expect("valid utf8");
+        assert!(s.contains("Core Layer 0: LiminalVoid"));
+        assert!(s.contains("Core Layer 1: StigmergicGranuleField"));
     }
 }

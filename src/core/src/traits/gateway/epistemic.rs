@@ -20,7 +20,8 @@
 use super::*;
 use crate::crystal::DissipativeOverflowReport;
 use crate::traits::branchless::{LiminalVoid, branchless_q7_inhibit_words_64};
-use crate::traits::primitives::branchless_sincos_q7;
+use crate::traits::primitives::{branchless_sincos_q7, swar_u8_mean_round_x8};
+use crate::traits::telemetry::{DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, NUM_STIGMERGIC_GRANULES};
 
 /// Epistemic regime classification separating internal memory conflict from out-of-memory unknowability.
 #[repr(u8)]
@@ -969,6 +970,28 @@ pub trait EpistemicManifoldOps: RelativeAttractorNode {
         let e = branchless_relu_f32(self.relative_energy());
         pos * e
     }
+
+    /// Evaluates Venn-diagram multi-attractor aperture overlap and noise-driven serendipity in
+    /// [`LiminalVoid`] across a slice of `Self` (`0` allocations, `0` branches).
+    #[inline(always)]
+    fn evaluate_slice_venn_and_serendipity(
+        slice: &[Self],
+        query_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        noisy_drifted_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        aperture_floor: f32,
+        serendipity_floor_q7: u8,
+    ) -> StigmergicVennSerendipityReport
+    where
+        Self: Sized,
+    {
+        evaluate_stigmergic_venn_and_serendipity_words_64(
+            slice,
+            query_words,
+            noisy_drifted_words,
+            aperture_floor,
+            serendipity_floor_q7,
+        )
+    }
 }
 
 impl<T: RelativeAttractorNode + ?Sized> EpistemicManifoldOps for T {}
@@ -1411,6 +1434,18 @@ impl<'a> BufCursor<'a> {
         ];
         self.write_bytes(&out);
     }
+
+    #[inline]
+    fn write_hex_u8(&mut self, val: u8) {
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        let out = [
+            b'0',
+            b'x',
+            HEX[((val >> 4) & 0xF) as usize],
+            HEX[(val & 0xF) as usize],
+        ];
+        self.write_bytes(&out);
+    }
 }
 
 impl LiminalTopologyTelemetrySnapshot {
@@ -1436,10 +1471,12 @@ impl LiminalTopologyTelemetrySnapshot {
         }
     }
 
-    /// Renders this system snapshot as a `#![no_std]` zero-allocation Mermaid `flowchart TD` diagram
-    /// directly into `buf`, returning the exact byte count written.
     #[inline]
-    pub fn format_mermaid_flowchart(&self, buf: &mut [u8]) -> usize {
+    fn format_mermaid_flowchart_core(
+        &self,
+        layer1_opt: Option<(&StigmergicGranuleField, &StigmergicVennSerendipityReport)>,
+        buf: &mut [u8],
+    ) -> usize {
         let mut cur = BufCursor { buf, pos: 0 };
         let regime_str = match EpistemicRegime::from_code(self.regime_code) {
             EpistemicRegime::KnownCoherent => "KnownCoherent",
@@ -1447,7 +1484,26 @@ impl LiminalTopologyTelemetrySnapshot {
             EpistemicRegime::LiminalVoid => "LiminalVoid",
         };
         cur.write_str("flowchart TD\n");
-        cur.write_str("    LVOID[\"LiminalVoid (Root Unknowable Exterior)\"]\n");
+        cur.write_str("    LVOID[\"Core Layer 0: LiminalVoid (Epistemic Horizon & Exterior)\"]\n");
+
+        match layer1_opt {
+            Some((layer1, venn)) => {
+                cur.write_str("    STIG[\"Core Layer 1: StigmergicGranuleField | VennCore:");
+                cur.write_hex_u8(venn.venn_core_mask);
+                cur.write_str(" | Serendipity:");
+                cur.write_hex_u8(venn.serendipity_excursion_mask);
+                cur.write_str(" | Quorum:");
+                cur.write_u8_dec(layer1.quorum_threshold);
+                cur.write_str("/8 | Epochs:");
+                cur.write_u8_dec((layer1.adaptation_epochs & 0xFF) as u8);
+                cur.write_str("\"]\n");
+            }
+            None => {
+                cur.write_str("    STIG[\"Core Layer 1: Stigmergic Approximation | Apt:");
+                cur.write_hex_u16(APERTURE_SWARM_CONSENSUS);
+                cur.write_str("\"]\n");
+            }
+        }
 
         let mut i = 0usize;
         while i < 7 {
@@ -1493,8 +1549,424 @@ impl LiminalTopologyTelemetrySnapshot {
         cur.write_str("\"]\n");
 
         cur.write_str("    LVOID -. \"Cognitive Cut\" .-> N0 & N1 & N2 & N3 & N4 & N5 & N6\n");
+        cur.write_str("    LVOID <-->|\"Cross-Layer Feedback\"| STIG\n");
         cur.write_str("    N0 & N1 & N2 & N3 & N4 & N5 & N6 --> GW\n");
         cur.write_str("    GW --> HUB\n");
+        cur.write_str("    STIG -->|\"Frag / Drift / Reconstitute\"| HUB\n");
         cur.pos
+    }
+
+    /// Renders this system snapshot as a `#![no_std]` zero-allocation Mermaid `flowchart TD` diagram
+    /// directly into `buf`, returning the exact byte count written.
+    #[inline]
+    pub fn format_mermaid_flowchart(&self, buf: &mut [u8]) -> usize {
+        self.format_mermaid_flowchart_core(None, buf)
+    }
+
+    /// Renders both Core Layer 0 (`LiminalVoid`) and Core Layer 1 (`StigmergicGranuleField` + Venn
+    /// overlap & serendipity telemetry) as a `#![no_std]` zero-allocation Mermaid `flowchart TD` diagram.
+    #[inline]
+    pub fn format_core_layers_mermaid(
+        &self,
+        layer1: &StigmergicGranuleField,
+        venn: &StigmergicVennSerendipityReport,
+        buf: &mut [u8],
+    ) -> usize {
+        self.format_mermaid_flowchart_core(Some((layer1, venn)), buf)
+    }
+}
+
+// ===================================================================
+// Venn-Diagram Overlap, Noise-Driven Serendipity & 2-Layer Autonomous Core Stack
+// ===================================================================
+
+/// Branchless 32-byte (`#[repr(C, align(16))]`) report capturing Venn-diagram overlap across the
+/// 8 SWAR granules (`venn_core_mask`, `venn_penumbra_mask`) and serendipitous approximation-noise
+/// excursions into [`LiminalVoid`] (`serendipity_excursion_mask`, `serendipity_triggered`).
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct StigmergicVennSerendipityReport {
+    /// Cooperative resonance energy accumulated across granules covered by `>= 2` attractors (`offset 0..4`).
+    pub venn_intersection_energy: f32,
+    /// Attenuated fringe energy across granules covered by exactly `1` attractor (`offset 4..8`).
+    pub penumbra_attenuation_energy: f32,
+    /// Residual noise excursion energy outside all attractors' apertures (`offset 8..12`).
+    pub void_excursion_energy: f32,
+    /// Dominant attractor anchor ID participating in the highest-overlap Venn region (`offset 12..16`).
+    pub dominant_overlap_anchor_id: u32,
+    /// Packed 8-head `u64` SWAR granule word of the strongest noisy excursion in `LiminalVoid` (`offset 16..24`).
+    pub serendipitous_seed_word: u64,
+    /// 8-bit mask where bit `g == 1` iff granule `g` is covered by `>= 2` attractors (`offset 24`).
+    pub venn_core_mask: u8,
+    /// 8-bit mask where bit `g == 1` iff granule `g` is covered by exactly `1` attractor (`offset 25`).
+    pub venn_penumbra_mask: u8,
+    /// 8-bit mask where bit `g == 1` iff granule `g` lies outside all attractors (`overlap == 0`, `offset 26`).
+    pub void_exterior_mask: u8,
+    /// 8-bit mask where bit `g == 1` iff granule `g` lies in `void_exterior_mask` with drift `>= floor` (`offset 27`).
+    pub serendipity_excursion_mask: u8,
+    /// Maximum number of attractors overlapping on any single granule (`offset 28`).
+    pub max_overlap_depth: u8,
+    /// Granule index (`0..=7`) hosting `serendipitous_seed_word` (`offset 29`).
+    pub serendipitous_granule_idx: u8,
+    /// `1` if approximation noise in `LiminalVoid` triggered unknown attractor discovery, `0` otherwise (`offset 30`).
+    pub serendipity_triggered: u8,
+    /// Explicit 1-byte alignment padding (`offset 31`).
+    pub reserved_align: u8,
+}
+
+/// Evaluates Venn-diagram multi-attractor cognitive aperture overlap and noise-driven serendipity
+/// in [`LiminalVoid`] across the 8 SWAR granules (`0` allocations, `0` data-dependent branches).
+#[inline]
+#[must_use]
+pub fn evaluate_stigmergic_venn_and_serendipity_words_64<Node: RelativeAttractorNode>(
+    nodes: &[Node],
+    query_words: &[u64; NUM_STIGMERGIC_GRANULES],
+    noisy_drifted_words: &[u64; NUM_STIGMERGIC_GRANULES],
+    aperture_floor: f32,
+    serendipity_floor_q7: u8,
+) -> StigmergicVennSerendipityReport {
+    let safe_floor = branchless_max_f32(branchless_relu_f32(aperture_floor), DEFAULT_ENTROPY_EPS);
+    let safe_serendipity_floor = branchless_select_u8(
+        serendipity_floor_q7 < 4,
+        4,
+        branchless_select_u8(serendipity_floor_q7 > 120, 120, serendipity_floor_q7),
+    );
+
+    let mut overlap_counts = [0u8; NUM_STIGMERGIC_GRANULES];
+    let mut granule_energy = [0.0_f32; NUM_STIGMERGIC_GRANULES];
+    let mut granule_best_pull = [0.0_f32; NUM_STIGMERGIC_GRANULES];
+    let mut granule_best_anchor = [0u32; NUM_STIGMERGIC_GRANULES];
+
+    let mut idx = 0usize;
+    while idx < nodes.len() {
+        let node = &nodes[idx];
+        let e = branchless_relu_f32(node.relative_energy());
+        let nw = node.relative_phase_words_64();
+        let aid = node.relative_anchor_id();
+        let active_e = e > DEFAULT_ENTROPY_EPS;
+
+        let mut g = 0usize;
+        while g < NUM_STIGMERGIC_GRANULES {
+            let coh = coherence_from_uniform_words_x8(noisy_drifted_words[g], nw[g]);
+            let covered = active_e & (coh >= safe_floor);
+            overlap_counts[g] = overlap_counts[g].saturating_add(u8::from(covered));
+            let pull_g = branchless_select_f32(covered, branchless_relu_f32(coh) * e, 0.0);
+            granule_energy[g] += pull_g;
+            let better = covered & (pull_g > granule_best_pull[g]);
+            granule_best_pull[g] = branchless_select_f32(better, pull_g, granule_best_pull[g]);
+            granule_best_anchor[g] = branchless_select_u32(better, aid, granule_best_anchor[g]);
+            g += 1;
+        }
+        idx += 1;
+    }
+
+    let mut venn_intersection_energy = 0.0_f32;
+    let mut penumbra_attenuation_energy = 0.0_f32;
+    let mut void_excursion_energy = 0.0_f32;
+    let mut dominant_overlap_anchor_id = 0u32;
+    let mut best_core_score = 0.0_f32;
+    let mut best_any_anchor_id = 0u32;
+    let mut best_any_pull = 0.0_f32;
+    let mut serendipitous_seed_word = 0u64;
+    let mut venn_core_mask = 0u8;
+    let mut venn_penumbra_mask = 0u8;
+    let mut void_exterior_mask = 0u8;
+    let mut serendipity_excursion_mask = 0u8;
+    let mut max_overlap_depth = 0u8;
+    let mut best_serendip_q7 = 0u8;
+    let mut serendipitous_granule_idx = 0u8;
+    let mut serendipity_triggered = 0u8;
+
+    let mut g = 0usize;
+    while g < NUM_STIGMERGIC_GRANULES {
+        let ov = overlap_counts[g];
+        let bit = 1u8 << g;
+        let is_core = ov >= 2;
+        let is_penumbra = ov == 1;
+        let is_void = ov == 0;
+
+        venn_core_mask |= branchless_select_u8(is_core, bit, 0);
+        venn_penumbra_mask |= branchless_select_u8(is_penumbra, bit, 0);
+        void_exterior_mask |= branchless_select_u8(is_void, bit, 0);
+
+        let depth_gt = ov > max_overlap_depth;
+        max_overlap_depth = branchless_select_u8(depth_gt, ov, max_overlap_depth);
+
+        let coop_factor = 1.0 + 0.35 * (f32::from(ov.saturating_sub(1)));
+        let core_e = branchless_select_f32(is_core, granule_energy[g] * coop_factor, 0.0);
+        let pen_e = branchless_select_f32(is_penumbra, granule_energy[g] * 0.5, 0.0);
+        venn_intersection_energy += core_e;
+        penumbra_attenuation_energy += pen_e;
+
+        let take_core_dom = is_core & (core_e > best_core_score);
+        best_core_score = branchless_select_f32(take_core_dom, core_e, best_core_score);
+        dominant_overlap_anchor_id = branchless_select_u32(
+            take_core_dom,
+            granule_best_anchor[g],
+            dominant_overlap_anchor_id,
+        );
+        let take_any_dom = (!is_void) & (granule_best_pull[g] > best_any_pull);
+        best_any_pull = branchless_select_f32(take_any_dom, granule_best_pull[g], best_any_pull);
+        best_any_anchor_id =
+            branchless_select_u32(take_any_dom, granule_best_anchor[g], best_any_anchor_id);
+
+        let drift_word = swar_q7_circular_diff_x8(noisy_drifted_words[g], query_words[g]);
+        let drift_q7 = swar_u8_mean_round_x8(swar_q7_abs_u8_x8(drift_word));
+        let serendip = is_void & (drift_q7 >= safe_serendipity_floor);
+        serendipity_excursion_mask |= branchless_select_u8(serendip, bit, 0);
+        void_excursion_energy +=
+            branchless_select_f32(is_void, f32::from(drift_q7) * (1.0 / 127.0), 0.0);
+
+        let take_serendip = serendip & (drift_q7 > best_serendip_q7);
+        best_serendip_q7 = branchless_select_u8(take_serendip, drift_q7, best_serendip_q7);
+        serendipitous_seed_word = branchless_select_u64(
+            take_serendip,
+            noisy_drifted_words[g],
+            serendipitous_seed_word,
+        );
+        serendipitous_granule_idx =
+            branchless_select_u8(take_serendip, g as u8, serendipitous_granule_idx);
+        serendipity_triggered |= u8::from(serendip);
+        g += 1;
+    }
+
+    let final_dom_id = branchless_select_u32(
+        venn_core_mask != 0,
+        dominant_overlap_anchor_id,
+        best_any_anchor_id,
+    );
+
+    StigmergicVennSerendipityReport {
+        venn_intersection_energy,
+        penumbra_attenuation_energy,
+        void_excursion_energy,
+        dominant_overlap_anchor_id: final_dom_id,
+        serendipitous_seed_word,
+        venn_core_mask,
+        venn_penumbra_mask,
+        void_exterior_mask,
+        serendipity_excursion_mask,
+        max_overlap_depth,
+        serendipitous_granule_idx,
+        serendipity_triggered,
+        reserved_align: 0,
+    }
+}
+
+/// Autonomous Core Layer 1 controller (`#[repr(C, align(16))]`, 32 B) governing per-granule
+/// stigmergic approximation parameters, Venn-overlap reinforcement, and serendipitous noise discovery.
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StigmergicGranuleField {
+    /// Per-granule pheromone step gain in Q0.7 (`[32..=127]`, `offset 0..8`).
+    pub granule_step_gain_q7: [u8; NUM_STIGMERGIC_GRANULES],
+    /// Per-granule tolerated phase approximation residual in Q7 (`[2..=32]`, `offset 8..16`).
+    pub granule_noise_tolerance_q7: [u8; NUM_STIGMERGIC_GRANULES],
+    /// Per-granule local terrain pheromone density in Q0.7 (`[8..=127]`, `offset 16..24`).
+    pub granule_pheromone_q7: [u8; NUM_STIGMERGIC_GRANULES],
+    /// Active Venn overlap core mask across the 8 SWAR granules (`offset 24`).
+    pub venn_overlap_mask: u8,
+    /// Mask of granules whose approximation noise reached `LiminalVoid` discovery (`offset 25`).
+    pub serendipity_excursion_mask: u8,
+    /// Adaptive granule consensus quorum requirement (`4..=7` out of 8, `offset 26`).
+    pub quorum_threshold: u8,
+    /// Q7 threshold above which noisy excursions in `LiminalVoid` nucleate a new attractor (`offset 27`).
+    pub serendipity_floor_q7: u8,
+    /// Monotonic count of Core Layer 1 self-adaptation epochs (`offset 28..32`).
+    pub adaptation_epochs: u32,
+}
+
+impl Default for StigmergicGranuleField {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StigmergicGranuleField {
+    /// Constructs a neutral 32-byte [`StigmergicGranuleField`] baseline.
+    #[inline(always)]
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            granule_step_gain_q7: [96; NUM_STIGMERGIC_GRANULES],
+            granule_noise_tolerance_q7: [4; NUM_STIGMERGIC_GRANULES],
+            granule_pheromone_q7: [32; NUM_STIGMERGIC_GRANULES],
+            venn_overlap_mask: 0,
+            serendipity_excursion_mask: 0,
+            quorum_threshold: DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
+            serendipity_floor_q7: 24,
+            adaptation_epochs: 0,
+        }
+    }
+
+    /// Branchlessly adapts per-granule pheromone gains, tolerated approximation noise, and
+    /// serendipity discovery floors from `horizon`, `venn_report`, and `ledger`.
+    #[inline]
+    pub fn adapt_from_horizon_and_venn_branchless(
+        &mut self,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+        ledger: &CognitiveTrajectoryLedger,
+    ) {
+        let (op_hist, _depth) = ledger.op_counts();
+        let peel_dom = op_hist[CognitiveOpKind::DecomposePeel as usize]
+            > op_hist[CognitiveOpKind::SynthesizeFuse as usize];
+        let mut g = 0usize;
+        while g < NUM_STIGMERGIC_GRANULES {
+            let bit = 1u8 << g;
+            let in_core = (venn_report.venn_core_mask & bit) != 0;
+            let in_penumbra = (venn_report.venn_penumbra_mask & bit) != 0;
+            let in_serendip = (venn_report.serendipity_excursion_mask & bit) != 0;
+
+            let sg0 = self.granule_step_gain_q7[g];
+            let sg_core = branchless_select_u8(in_core, sg0.saturating_add(6).min(127), sg0);
+            let sg_ser =
+                branchless_select_u8(in_serendip, sg_core.saturating_add(8).min(127), sg_core);
+            self.granule_step_gain_q7[g] = branchless_select_u8(
+                !in_core & !in_penumbra & !in_serendip,
+                sg_ser.saturating_sub(2).max(32),
+                sg_ser,
+            );
+
+            // High Venn overlap tolerates coarser low-spec noise; edge penumbra tightens precision.
+            let nt0 = self.granule_noise_tolerance_q7[g];
+            let nt_core = branchless_select_u8(in_core, nt0.saturating_add(2).min(28), nt0);
+            let nt_pen =
+                branchless_select_u8(in_penumbra, nt_core.saturating_sub(1).max(3), nt_core);
+            self.granule_noise_tolerance_q7[g] =
+                branchless_select_u8(in_serendip, nt_pen.saturating_add(2).min(24), nt_pen);
+
+            let ph0 = self.granule_pheromone_q7[g];
+            let ph_core = branchless_select_u8(in_core, ph0.saturating_add(8).min(127), ph0);
+            let ph_pen =
+                branchless_select_u8(in_penumbra, ph_core.saturating_add(2).min(127), ph_core);
+            let ph_ser = branchless_select_u8(in_serendip, ph_pen.max(48), ph_pen);
+            self.granule_pheromone_q7[g] = branchless_select_u8(
+                !in_core & !in_penumbra & !in_serendip,
+                ph_ser.saturating_sub(4).max(8),
+                ph_ser,
+            );
+            g += 1;
+        }
+
+        let core_cnt = venn_report.venn_core_mask.count_ones() as u8;
+        let in_conflict = horizon.is_internal_conflict();
+        self.quorum_threshold = branchless_select_u8(
+            in_conflict,
+            self.quorum_threshold.saturating_add(1).min(7),
+            branchless_select_u8(
+                core_cnt >= 4,
+                self.quorum_threshold.saturating_sub(1).max(4),
+                self.quorum_threshold,
+            ),
+        );
+        self.serendipity_floor_q7 = branchless_select_u8(
+            in_conflict,
+            self.serendipity_floor_q7.saturating_add(4).min(64),
+            branchless_select_u8(
+                peel_dom & (core_cnt < 3),
+                self.serendipity_floor_q7.saturating_sub(2).max(12),
+                self.serendipity_floor_q7,
+            ),
+        );
+        self.venn_overlap_mask = venn_report.venn_core_mask;
+        self.serendipity_excursion_mask = venn_report.serendipity_excursion_mask;
+        self.adaptation_epochs = self.adaptation_epochs.wrapping_add(1);
+    }
+}
+
+/// Unified 64-byte (1 cache line, `#[repr(C, align(64))]`) 2-layer autonomous core stack pairing:
+/// - **Layer 0 ([`LiminalApertureField`])**: Epistemic Horizon & Trait Apertures (`Void` boundary)
+/// - **Layer 1 ([`StigmergicGranuleField`])**: Stigmergic Fragmentation, Venn Overlap & Serendipity
+#[repr(C, align(64))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AutonomousCoreLayerStack {
+    /// Core Layer 0: Epistemic Horizon & Trait Cognitive Aperture Controller (`offset 0..32`).
+    pub liminal_void_layer: LiminalApertureField,
+    /// Core Layer 1: Stigmergic Granule Approximation & Serendipity Controller (`offset 32..64`).
+    pub stigmergic_layer: StigmergicGranuleField,
+}
+
+impl AutonomousCoreLayerStack {
+    /// Constructs a neutral 64-byte [`AutonomousCoreLayerStack`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            liminal_void_layer: LiminalApertureField::new(),
+            stigmergic_layer: StigmergicGranuleField::new(),
+        }
+    }
+
+    /// Branchlessly co-adapts Layer 0 (`LiminalApertureField`) and Layer 1 (`StigmergicGranuleField`)
+    /// with cross-layer feedback (serendipitous discovery in Layer 1 widens Layer 0's horizon).
+    #[inline]
+    pub fn adapt_layers_branchless(
+        &mut self,
+        ledger: &CognitiveTrajectoryLedger,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+        overflow_opt: Option<&DissipativeOverflowReport>,
+    ) {
+        self.liminal_void_layer
+            .adapt_from_circuit_and_overflow_branchless(ledger, horizon, overflow_opt);
+        let discovered = venn_report.serendipity_triggered != 0;
+        self.liminal_void_layer.void_floor_q7[1] = branchless_select_u8(
+            discovered,
+            self.liminal_void_layer.void_floor_q7[1]
+                .saturating_sub(4)
+                .max(8),
+            self.liminal_void_layer.void_floor_q7[1],
+        );
+        self.liminal_void_layer.void_floor_q7[6] = branchless_select_u8(
+            discovered,
+            self.liminal_void_layer.void_floor_q7[6]
+                .saturating_sub(4)
+                .max(8),
+            self.liminal_void_layer.void_floor_q7[6],
+        );
+        self.liminal_void_layer.aperture_gain_q7[6] = branchless_select_u8(
+            discovered,
+            self.liminal_void_layer.aperture_gain_q7[6]
+                .saturating_add(6)
+                .min(127),
+            self.liminal_void_layer.aperture_gain_q7[6],
+        );
+        self.liminal_void_layer.active_aperture_mask |=
+            branchless_select_u32(discovered, (1 << 1) | (1 << 6), 0);
+
+        self.stigmergic_layer
+            .adapt_from_horizon_and_venn_branchless(horizon, venn_report, ledger);
+    }
+
+    /// Branchlessly modulates `frame` across both autonomous core layers (`LiminalVoid` gating +
+    /// Venn-overlap cooperative amplification + active granule mask).
+    #[inline(always)]
+    #[must_use]
+    pub fn modulate_gateway_frame_branchless(
+        &self,
+        frame: GatewayFrame,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> GatewayFrame {
+        let mut out = self
+            .liminal_void_layer
+            .modulate_gateway_frame_branchless(frame, horizon);
+        let core_cnt = venn_report.venn_core_mask.count_ones() as f32;
+        let has_venn = (venn_report.venn_core_mask | venn_report.venn_penumbra_mask) != 0;
+        let coop_boost = branchless_clamp_f32(1.0 + 0.05 * core_cnt, 1.0, 1.40);
+        let void_gated = horizon.is_liminal_void()
+            | (horizon.total_memory_support < self.liminal_void_layer.channel_void_floor_f32(1));
+        out.effective_energy = branchless_select_f32(
+            !void_gated & (venn_report.venn_core_mask != 0),
+            out.effective_energy * coop_boost,
+            out.effective_energy,
+        );
+        let active_granules =
+            venn_report.venn_core_mask | venn_report.venn_penumbra_mask | venn_report.serendipity_excursion_mask;
+        out.active_swarm_cell_mask =
+            branchless_select_u8(has_venn, active_granules, out.active_swarm_cell_mask);
+        out
     }
 }

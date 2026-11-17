@@ -1899,9 +1899,23 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
     assert!(adapter.aperture_field().void_floor_q7[2] > initial_persona_floor);
     assert_eq!(adapter.aperture_field().adaptation_epochs, 1);
 
+    let venn = StigmergicVennSerendipityReport {
+        venn_core_mask: 0x0F,
+        venn_penumbra_mask: 0x10,
+        void_exterior_mask: 0xE0,
+        serendipity_excursion_mask: 0x40,
+        serendipity_triggered: 1,
+        ..Default::default()
+    };
+    adapter.adapt_core_layers(&conflict_horizon, &venn, None);
+    assert_eq!(adapter.aperture_field().adaptation_epochs, 2);
+    assert_eq!(adapter.stigmergic_granule_field().adaptation_epochs, 2);
+    assert_eq!(adapter.stigmergic_granule_field().venn_overlap_mask, 0x0F);
+
     let mermaid = adapter.render_liminal_topology_mermaid(5, 2);
     assert!(mermaid.starts_with("flowchart TD\n"));
     assert!(mermaid.contains("LiminalVoid"));
+    assert!(mermaid.contains("Core Layer 1: StigmergicGranuleField"));
     assert!(mermaid.contains("ManifoldGatewaySignal"));
     assert!(mermaid.contains("ActionHub"));
     assert!(mermaid.contains("Crystals:5"));

@@ -772,3 +772,301 @@ pub unsafe extern "C" fn gcso_edbc_controller_destroy(
         Ok(GCSO_SUCCESS)
     })
 }
+
+/// Evaluates [`gcso_epistemic_horizon_reading_t`] over `num_records` crystallized attractor
+/// records relative to a 64-head Q7 query phase vector (`query_phases`) without branching.
+///
+/// # Safety
+/// `query_phases` (64 bytes) and `reading_out` (16-byte aligned) must be non-null; if
+/// `num_records > 0`, `records` must be non-null and 64-byte aligned with `num_records` valid items.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_epistemic_evaluate_horizon(
+    records: *const gcso_crystallized_attractor_record_t,
+    num_records: usize,
+    query_phases: *const gcso_q7_t,
+    horizon_floor: f32,
+    reading_out: *mut gcso_epistemic_horizon_reading_t,
+) -> GcsoStatus {
+    ffi_boundary!({
+        if !branchless_is_finite_f32(horizon_floor) {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let records_slice: &[CrystallizedAttractorRecord] = if num_records == 0 {
+            &[]
+        } else {
+            validate_ptr(records)?;
+            let byte_len = num_records
+                .checked_mul(size_of::<CrystallizedAttractorRecord>())
+                .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+            if raw_byte_ranges_overlap(
+                records as usize,
+                byte_len,
+                reading_out as usize,
+                size_of::<EpistemicHorizonReading>(),
+            ) {
+                return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            }
+            // SAFETY: Validated non-null, 64B aligned, bounds checked, and disjoint above.
+            unsafe { slice::from_raw_parts(records, num_records) }
+        };
+        // SAFETY: `ref_phase64_from_raw` and `FfiHandleMut::from_raw` validate pointers & alignment.
+        let (q_ref, mut out_ref) = unsafe {
+            (
+                ref_phase64_from_raw(query_phases)?,
+                FfiHandleMut::from_raw(reading_out)?,
+            )
+        };
+        let q_words = load_q7_words_64(q_ref);
+        *out_ref =
+            evaluate_epistemic_horizon_words_64(records_slice, &q_words, None, horizon_floor);
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Evaluates Venn-diagram multi-attractor overlap and noise-driven serendipity in `LiminalVoid`
+/// across `centroids_inout[0..num_centroids]` (`query_phases` vs `drifted_phases`). When
+/// `nucleate_on_discovery != 0` and approximation noise triggers unknown attractor discovery,
+/// autonomously nucleates a new crystallized attractor into an empty or weaker centroid slot.
+///
+/// # Safety
+/// `query_phases`, `drifted_phases`, and `report_out` (16B aligned) must be non-null; if
+/// `num_centroids > 0`, `centroids_inout` must be non-null and 64B aligned and disjoint from
+/// `report_out` and `did_nucleate_out`.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_stigmergic_evaluate_venn_and_serendipity(
+    centroids_inout: *mut gcso_crystallized_attractor_record_t,
+    num_centroids: usize,
+    query_phases: *const gcso_q7_t,
+    drifted_phases: *const gcso_q7_t,
+    aperture_floor: f32,
+    serendipity_floor_q7: u8,
+    nucleate_on_discovery: u8,
+    new_anchor_id: u32,
+    report_out: *mut gcso_stigmergic_venn_serendipity_report_t,
+    did_nucleate_out: *mut u8,
+) -> GcsoStatus {
+    ffi_boundary!({
+        if !branchless_is_finite_f32(aperture_floor) {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        // SAFETY: Validate non-null phase buffers and aligned output handle.
+        let ((q_ref, d_ref), mut rep_out) = unsafe {
+            (
+                (
+                    ref_phase64_from_raw(query_phases)?,
+                    ref_phase64_from_raw(drifted_phases)?,
+                ),
+                FfiHandleMut::from_raw(report_out)?,
+            )
+        };
+        let q_words = load_q7_words_64(q_ref);
+        let d_words = load_q7_words_64(d_ref);
+
+        let mut did_nucleate = 0u8;
+        let venn = if num_centroids == 0 {
+            evaluate_stigmergic_venn_and_serendipity_words_64::<CrystallizedAttractorRecord>(
+                &[],
+                &q_words,
+                &d_words,
+                aperture_floor,
+                serendipity_floor_q7,
+            )
+        } else {
+            validate_ptr(centroids_inout)?;
+            let byte_len = num_centroids
+                .checked_mul(size_of::<CrystallizedAttractorRecord>())
+                .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+            if raw_byte_ranges_overlap(
+                centroids_inout as usize,
+                byte_len,
+                report_out as usize,
+                size_of::<StigmergicVennSerendipityReport>(),
+            ) || (!did_nucleate_out.is_null()
+                && raw_byte_ranges_overlap(
+                    centroids_inout as usize,
+                    byte_len,
+                    did_nucleate_out as usize,
+                    size_of::<u8>(),
+                ))
+            {
+                return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            }
+            // SAFETY: Validated non-null, 64B aligned, bounds-checked, and disjoint above.
+            let centroids = unsafe { slice::from_raw_parts_mut(centroids_inout, num_centroids) };
+            let report = evaluate_stigmergic_venn_and_serendipity_words_64(
+                centroids,
+                &q_words,
+                &d_words,
+                aperture_floor,
+                serendipity_floor_q7,
+            );
+            if nucleate_on_discovery != 0 && report.serendipity_triggered != 0 {
+                let (_slot, _aid, ok) =
+                    CrystallizedAttractorRecord::nucleate_serendipitous_attractor_from_void_64(
+                        centroids,
+                        &report,
+                        &d_words,
+                        new_anchor_id,
+                        None,
+                    );
+                did_nucleate = u8::from(ok);
+            }
+            report
+        };
+
+        *rep_out = venn;
+        // SAFETY: `write_opt_out` validates optional alignment and non-nullness.
+        unsafe {
+            write_opt_out(did_nucleate_out, did_nucleate)?;
+        }
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Initializes a 64-byte [`gcso_autonomous_core_layer_stack_t`] (Core Layer 0: `LiminalApertureField`,
+/// Core Layer 1: `StigmergicGranuleField`) with canonical defaults.
+///
+/// # Safety
+/// `stack_out` must be non-null and 64-byte aligned.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_core_layer_stack_init_default(
+    stack_out: *mut gcso_autonomous_core_layer_stack_t,
+) -> GcsoStatus {
+    ffi_boundary!({
+        // SAFETY: Validates non-nullness and 64B alignment.
+        let mut out_ref = unsafe { FfiHandleMut::from_raw(stack_out)? };
+        *out_ref = AutonomousCoreLayerStack::new();
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Branchlessly adapts both Core Layer 0 (`LiminalVoid`) and Core Layer 1 (`Stigmergic`) inside
+/// `stack_inout` from `horizon`, `venn_report`, and optional `ledger`.
+///
+/// # Safety
+/// `stack_inout` (64B aligned), `horizon` (16B aligned), and `venn_report` (16B aligned) must be
+/// non-null and non-overlapping; `ledger` may be `NULL` or 8-byte aligned.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_core_layer_stack_adapt(
+    stack_inout: *mut gcso_autonomous_core_layer_stack_t,
+    ledger: *const gcso_cognitive_trajectory_ledger_t,
+    horizon: *const gcso_epistemic_horizon_reading_t,
+    venn_report: *const gcso_stigmergic_venn_serendipity_report_t,
+) -> GcsoStatus {
+    ffi_boundary!({
+        validate_ptr(stack_inout)?;
+        validate_ptr(horizon)?;
+        validate_ptr(venn_report)?;
+        if raw_byte_ranges_overlap(
+            stack_inout as usize,
+            size_of::<AutonomousCoreLayerStack>(),
+            horizon as usize,
+            size_of::<EpistemicHorizonReading>(),
+        ) || raw_byte_ranges_overlap(
+            stack_inout as usize,
+            size_of::<AutonomousCoreLayerStack>(),
+            venn_report as usize,
+            size_of::<StigmergicVennSerendipityReport>(),
+        ) {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        // SAFETY: Validated non-null, aligned, and disjoint above.
+        let ((mut stack_ref, ledger_opt), (horizon_ref, venn_ref)) = unsafe {
+            (
+                (
+                    FfiHandleMut::from_raw(stack_inout)?,
+                    FfiHandleRef::from_raw_opt(ledger)?,
+                ),
+                (
+                    FfiHandleRef::from_raw(horizon)?,
+                    FfiHandleRef::from_raw(venn_report)?,
+                ),
+            )
+        };
+        let ledger_val = match ledger_opt {
+            Some(l) => *l,
+            None => CognitiveTrajectoryLedger::default(),
+        };
+        stack_ref.adapt_layers_branchless(&ledger_val, &horizon_ref, &venn_ref, None);
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Formats the live 2-layer Core Topology (`LiminalVoid` Layer 0, `StigmergicGranuleField` Layer 1,
+/// and the trait aperture table) as a `#![no_std]` zero-allocation Mermaid `flowchart TD` diagram
+/// into `out_buf[0..buf_cap]`. Pass `out_buf = NULL` to query the required byte length in
+/// `bytes_written_out`.
+///
+/// # Safety
+/// `stack` (64B aligned) and `horizon` (16B aligned) must be non-null; `venn_report` may be `NULL`
+/// or 16B aligned. If `out_buf` is non-null, it must reference `buf_cap` writable bytes disjoint from
+/// `bytes_written_out`.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_liminal_topology_format_mermaid(
+    stack: *const gcso_autonomous_core_layer_stack_t,
+    horizon: *const gcso_epistemic_horizon_reading_t,
+    venn_report: *const gcso_stigmergic_venn_serendipity_report_t,
+    active_crystals: u8,
+    spawned_daughters: u8,
+    out_buf: *mut u8,
+    buf_cap: usize,
+    bytes_written_out: *mut usize,
+) -> GcsoStatus {
+    ffi_boundary!({
+        // SAFETY: Validates required and optional pointers and natural alignment.
+        let ((stack_ref, horizon_ref), venn_opt) = unsafe {
+            (
+                (
+                    FfiHandleRef::from_raw(stack)?,
+                    FfiHandleRef::from_raw(horizon)?,
+                ),
+                FfiHandleRef::from_raw_opt(venn_report)?,
+            )
+        };
+        let venn_val = match venn_opt {
+            Some(v) => *v,
+            None => StigmergicVennSerendipityReport::default(),
+        };
+        let snap = LiminalTopologyTelemetrySnapshot::capture(
+            &stack_ref.liminal_void_layer,
+            &horizon_ref,
+            active_crystals,
+            spawned_daughters,
+        );
+        let mut scratch = [0u8; 2048];
+        let needed =
+            snap.format_core_layers_mermaid(&stack_ref.stigmergic_layer, &venn_val, &mut scratch);
+
+        if out_buf.is_null() {
+            // SAFETY: `write_opt_out` validates optional output pointer.
+            unsafe {
+                write_opt_out(bytes_written_out, needed)?;
+            }
+            return Ok(GCSO_SUCCESS);
+        }
+
+        if !bytes_written_out.is_null()
+            && raw_byte_ranges_overlap(
+                out_buf as usize,
+                buf_cap,
+                bytes_written_out as usize,
+                size_of::<usize>(),
+            )
+        {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        // SAFETY: `write_opt_out` validates optional output pointer.
+        unsafe {
+            write_opt_out(bytes_written_out, needed)?;
+        }
+        if buf_cap < needed {
+            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+        }
+        // SAFETY: `out_buf` is non-null, `buf_cap >= needed`, and `scratch[..needed]` is initialized.
+        unsafe {
+            let dst = slice::from_raw_parts_mut(out_buf, needed);
+            dst.copy_from_slice(&scratch[..needed]);
+        }
+        Ok(GCSO_SUCCESS)
+    })
+}

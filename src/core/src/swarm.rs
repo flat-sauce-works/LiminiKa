@@ -1,9 +1,9 @@
 // name: src/core/src/swarm.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Concrete 64-byte cacheline-aligned [`SwarmEngine`] `Pod` state descriptor applying the
-//! [`SwarmCellChunk`], [`HierarchicalTreeTable`], [`PagedBitmaskOps`], and [`StigmergicSwarmOps`]
-//! traits from [`crate::traits`].
+//! Concrete 64-byte cacheline-aligned [`StigmergicGranuleEngine`] (aliased as [`SwarmEngine`])
+//! `Pod` state descriptor applying [`StigmergicChunkOps`], [`HierarchicalTreeTable`],
+//! [`PagedBitmaskOps`], and [`StigmergicReconstitutionOps`] from [`crate::traits`].
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -35,32 +35,36 @@ use crate::abi::{
 };
 use crate::traits::primitives::MAX_ATTENTION_HEADS;
 use crate::traits::{
-    store_q7_words_64, GcsoResult, HierarchicalTreeTable, PagedBitmaskOps, Pod, StigmergicSwarmOps,
-    SwarmCellChunk, SwarmResolutionReport, NUM_SWARM_MICRO_CELLS,
+    store_q7_words_64, GcsoResult, HierarchicalTreeTable, PagedBitmaskOps, Pod,
+    StigmergicReconstitutionOps, StigmergicReconstitutionReport, SwarmCellChunk,
+    NUM_STIGMERGIC_GRANULES,
 };
 use core::mem::{align_of, offset_of, size_of};
 
-/// 64-byte cacheline-aligned Plain Old Data (`Pod`) state engine for the 8-cell SWAR Micro-Swarm
-/// and QDPT/CPT hierarchical pointer cascade.
+/// 64-byte cacheline-aligned Plain Old Data (`Pod`) state engine for the 8-granule SWAR
+/// stigmergic approximation-and-reconstitution field and QDPT/CPT hierarchical pointer cascade.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SwarmEngine {
-    /// 64-head Q7 phase profile partitioned into 8 Micro-Swarm cells of 8 heads each (`offset 0..64`).
+pub struct StigmergicGranuleEngine {
+    /// 64-head Q7 phase profile partitioned into 8 myopic SWAR granules of 8 heads each (`offset 0..64`).
     pub cell_phases: [gcso_q7_t; MAX_ATTENTION_HEADS],
 }
 
-// SAFETY: `SwarmEngine` is a 64-byte aligned array of 64 `i8` values with no padding traps.
-unsafe impl Pod for SwarmEngine {}
+/// Backward-compatible alias for [`StigmergicGranuleEngine`].
+pub type SwarmEngine = StigmergicGranuleEngine;
 
-impl Default for SwarmEngine {
+// SAFETY: `StigmergicGranuleEngine` is a 64-byte aligned array of 64 `i8` values with no padding traps.
+unsafe impl Pod for StigmergicGranuleEngine {}
+
+impl Default for StigmergicGranuleEngine {
     #[inline(always)]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SwarmEngine {
-    /// Constructs a zero-initialized 64-byte [`SwarmEngine`].
+impl StigmergicGranuleEngine {
+    /// Constructs a zero-initialized 64-byte [`StigmergicGranuleEngine`].
     #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
@@ -69,54 +73,54 @@ impl SwarmEngine {
         }
     }
 
-    /// Constructs a 64-byte [`SwarmEngine`] initialized with `cell_phases`.
+    /// Constructs a 64-byte [`StigmergicGranuleEngine`] initialized with `cell_phases`.
     #[inline(always)]
     #[must_use]
     pub const fn from_phases(cell_phases: [gcso_q7_t; MAX_ATTENTION_HEADS]) -> Self {
         Self { cell_phases }
     }
 
-    /// Reinterprets the 64-byte phase buffer as 8 packed 64-bit SWAR cell words in $\mathcal{O}(1)$.
+    /// Reinterprets the 64-byte phase buffer as 8 packed 64-bit SWAR granule words in $\mathcal{O}(1)$.
     #[inline(always)]
     #[must_use]
-    pub const fn words_ref(&self) -> &[u64; NUM_SWARM_MICRO_CELLS] {
-        // SAFETY: `SwarmEngine` is 64-byte aligned (`#[repr(C, align(64))]`) and `cell_phases` is at offset 0.
+    pub const fn words_ref(&self) -> &[u64; NUM_STIGMERGIC_GRANULES] {
+        // SAFETY: `StigmergicGranuleEngine` is 64-byte aligned (`#[repr(C, align(64))]`) and `cell_phases` is at offset 0.
         unsafe {
             &*(self
                 .cell_phases
                 .as_ptr()
-                .cast::<[u64; NUM_SWARM_MICRO_CELLS]>())
+                .cast::<[u64; NUM_STIGMERGIC_GRANULES]>())
         }
     }
 
-    /// Mutably reinterprets the 64-byte phase buffer as 8 packed 64-bit SWAR cell words in $\mathcal{O}(1)$.
+    /// Mutably reinterprets the 64-byte phase buffer as 8 packed 64-bit SWAR granule words in $\mathcal{O}(1)$.
     #[inline(always)]
     #[must_use]
-    pub const fn words_mut(&mut self) -> &mut [u64; NUM_SWARM_MICRO_CELLS] {
-        // SAFETY: `SwarmEngine` is 64-byte aligned (`#[repr(C, align(64))]`) and `cell_phases` is at offset 0.
+    pub const fn words_mut(&mut self) -> &mut [u64; NUM_STIGMERGIC_GRANULES] {
+        // SAFETY: `StigmergicGranuleEngine` is 64-byte aligned (`#[repr(C, align(64))]`) and `cell_phases` is at offset 0.
         unsafe {
             &mut *(self
                 .cell_phases
                 .as_mut_ptr()
-                .cast::<[u64; NUM_SWARM_MICRO_CELLS]>())
+                .cast::<[u64; NUM_STIGMERGIC_GRANULES]>())
         }
     }
 
-    /// Resolves `trail` against this engine's 8 Micro-Swarm cells via
-    /// [`StigmergicSwarmOps::try_resolve_action_in_swarm_from_words`] and synchronizes
-    /// `self.cell_phases` with the resolved SWAR phase words in $\mathcal{O}(1)$.
+    /// Fragments, stigmergically drifts, and reconstitutes `trail` against this engine's 8 myopic
+    /// granules via [`StigmergicReconstitutionOps::reconstitute_from_stigmergy_words`], keeping
+    /// `self.cell_phases` synchronized with the reconstituted SWAR words in $\mathcal{O}(1)$.
     #[inline(always)]
-    pub fn resolve_trail_in_swarm(
+    pub fn reconstitute_trail_stigmergically(
         &mut self,
         trail: &mut gcso_pointer_trail_t,
         step_gain_u7: u8,
         qdps_step_q7: u8,
         tolerance_q7: u8,
         quorum_threshold: u8,
-    ) -> SwarmResolutionReport {
+    ) -> StigmergicReconstitutionReport {
         let target_words = *self.words_ref();
         let action_ptr = gcso_tagged_ptr_t(trail.current_ptr);
-        let (report, next_words) = trail.try_resolve_action_in_swarm_from_words(
+        let (report, next_words) = trail.reconstitute_from_stigmergy_words(
             action_ptr,
             &target_words,
             0xFF,
@@ -133,9 +137,28 @@ impl SwarmEngine {
         store_q7_words_64(&mut self.cell_phases, &next_words);
         report
     }
+
+    /// Resolves `trail` against this engine's 8 granules (delegates to [`Self::reconstitute_trail_stigmergically`]).
+    #[inline(always)]
+    pub fn resolve_trail_in_swarm(
+        &mut self,
+        trail: &mut gcso_pointer_trail_t,
+        step_gain_u7: u8,
+        qdps_step_q7: u8,
+        tolerance_q7: u8,
+        quorum_threshold: u8,
+    ) -> StigmergicReconstitutionReport {
+        self.reconstitute_trail_stigmergically(
+            trail,
+            step_gain_u7,
+            qdps_step_q7,
+            tolerance_q7,
+            quorum_threshold,
+        )
+    }
 }
 
-impl SwarmCellChunk for SwarmEngine {
+impl SwarmCellChunk for StigmergicGranuleEngine {
     #[inline(always)]
     fn step_chunk(&mut self, mask: &gcso_paged_bitmask_t, chunk_len: u32) -> GcsoResult<()> {
         if chunk_len == 0 {
@@ -146,12 +169,12 @@ impl SwarmCellChunk for SwarmEngine {
     }
 }
 
-impl HierarchicalTreeTable for SwarmEngine {}
+impl HierarchicalTreeTable for StigmergicGranuleEngine {}
 
 const _: () = {
-    assert!(size_of::<SwarmEngine>() == 64);
-    assert!(align_of::<SwarmEngine>() == 64);
-    assert!(offset_of!(SwarmEngine, cell_phases) == 0);
+    assert!(size_of::<StigmergicGranuleEngine>() == 64);
+    assert!(align_of::<StigmergicGranuleEngine>() == 64);
+    assert!(offset_of!(StigmergicGranuleEngine, cell_phases) == 0);
 };
 
 #[cfg(test)]

@@ -172,6 +172,15 @@ pub const APERTURE_ACTION_HUB_WIDE: u32 = 0x0000_FFFF;
 /// Number of dynamic channel slots tracked by `LiminalApertureField`.
 pub const NUM_LIMINAL_APERTURE_CHANNELS: usize = 8;
 
+/// Number of orthogonal self-tuning autonomous core layers (`Layer 0: LiminalVoid`, `Layer 1: Stigmergic`).
+pub const NUM_CORE_AUTONOMOUS_LAYERS: usize = 2;
+
+/// Autonomous Core Layer 0 identifier: Epistemic Horizon & Trait Aperture (`LiminalApertureField`).
+pub const CORE_LAYER_LIMINAL_VOID: usize = 0;
+
+/// Autonomous Core Layer 1 identifier: Stigmergic Granule Approximation, Venn Overlap & Serendipity (`StigmergicGranuleField`).
+pub const CORE_LAYER_STIGMERGIC: usize = 1;
+
 /// Default $8 \times 8$ Attractor Slot coupling bitmatrix (`u64`) enabling symmetric cross-slot
 /// synergy across all 8 parallel attractor domain slots.
 pub const DEFAULT_SLOT_COUPLING_MATRIX_8X8: u64 = 0xFFFF_FFFF_FFFF_FFFF;

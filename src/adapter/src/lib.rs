@@ -18,13 +18,15 @@ use liminika_core::traits::aligned::{
     AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32,
 };
 use liminika_core::traits::gateway::{
-    ActionHubGatewayExt, AdaptiveThresholdPolicy, CausalProvenanceReport, CausalProvenanceSignal,
-    CognitiveCircuitActivation, CognitiveCircuitBankOps, CognitiveCircuitPlasticity,
-    CognitiveTrajectoryLedger, DissipativeOverflowReport, EpistemicHorizonReading, GatewayFrame,
-    GatewayPhaseSteeringExt, GatewayRank1SteeringExt, GuardPhaseAnchor, LiminalApertureField,
-    LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact,
-    StigmergicThresholdPolicy, SubjectivePersona, SwarmScaleGranularity, SystemConstraint,
-    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
+    ActionHubGatewayExt, AdaptiveThresholdPolicy, AutonomousCoreLayerStack, CausalProvenanceReport,
+    CausalProvenanceSignal, CognitiveCircuitActivation, CognitiveCircuitBankOps,
+    CognitiveCircuitPlasticity, CognitiveTrajectoryLedger, DissipativeOverflowReport,
+    EpistemicHorizonReading, GatewayFrame, GatewayPhaseSteeringExt, GatewayRank1SteeringExt,
+    GuardPhaseAnchor, LiminalApertureField, LiminalTopologyTelemetrySnapshot,
+    ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact, StigmergicGranuleField,
+    StigmergicThresholdPolicy, StigmergicVennSerendipityReport, SubjectivePersona,
+    SwarmScaleGranularity, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
 };
 use liminika_core::traits::primitives::{
     ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, MAX_ATTENTION_HEADS,

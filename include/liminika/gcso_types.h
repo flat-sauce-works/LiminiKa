@@ -49,8 +49,48 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_FAST_PATH_SHORTCUT_SLOTS 4U
 #define GCSO_LEDGER_HISTORY_LEN 8U
 #define GCSO_PAGED_BITMASK_WORDS 4U
-#define GCSO_NUM_SWARM_MICRO_CELLS 8U
+#define GCSO_NUM_STIGMERGIC_GRANULES 8U
+#define GCSO_NUM_SWARM_MICRO_CELLS GCSO_NUM_STIGMERGIC_GRANULES
 #define GCSO_MAX_ATTRACTOR_DOMAINS 8U
+#define GCSO_NUM_LIMINAL_APERTURE_CHANNELS 8U
+#define GCSO_NUM_CORE_AUTONOMOUS_LAYERS 2U
+#define GCSO_CORE_LAYER_LIMINAL_VOID 0U
+#define GCSO_CORE_LAYER_STIGMERGIC 1U
+
+/* LiminalVoid Cognitive Aperture Bitmasks (1:1 with primitives/constants_pod.rs) */
+#define GCSO_APERTURE_SYSTEM_CONSTRAINT (1U << 0)
+#define GCSO_APERTURE_OBJECTIVE_FACT (1U << 1)
+#define GCSO_APERTURE_SUBJECTIVE_PERSONA (1U << 2)
+#define GCSO_APERTURE_CONTRADICTION_GUARD (1U << 3)
+#define GCSO_APERTURE_CAUSAL_PROVENANCE 0x0000000FU
+#define GCSO_APERTURE_COGNITIVE_CIRCUIT (1U << 4)
+#define GCSO_APERTURE_KV_PHASE_CACHE (1U << 5)
+#define GCSO_APERTURE_RELATIVE_COUPLING (1U << 6)
+#define GCSO_APERTURE_DISSIPATIVE_CRYSTAL (1U << 7)
+#define GCSO_APERTURE_MANIFOLD_GATEWAY 0x000000FFU
+#define GCSO_APERTURE_PHASE_STEERING (1U << 8)
+#define GCSO_APERTURE_SUBHEAD_ROUTING (1U << 9)
+#define GCSO_APERTURE_RANK1_RESIDUAL (1U << 10)
+#define GCSO_APERTURE_POINTER_TRAIL (1U << 11)
+#define GCSO_APERTURE_FAST_PATH_LEDGER (1U << 12)
+#define GCSO_APERTURE_SWARM_CONSENSUS (1U << 13)
+#define GCSO_APERTURE_COHOMOLOGY_EDBC (1U << 14)
+#define GCSO_APERTURE_MAPPED_STORAGE (1U << 15)
+#define GCSO_APERTURE_ACTION_HUB_WIDE 0x0000FFFFU
+
+/* Cognitive Trajectory Scale Granularity & Op Identifiers */
+#define GCSO_SCALE_POINTER_BIT 0U
+#define GCSO_SCALE_CELL_TRAIL 1U
+#define GCSO_SCALE_TYPE_GATEWAY 2U
+#define GCSO_SCALE_MACRO_COALITION 3U
+#define GCSO_COG_OP_OBSERVE 0U
+#define GCSO_COG_OP_DECOMPOSE_PEEL 1U
+#define GCSO_COG_OP_SYNTHESIZE_FUSE 2U
+#define GCSO_COG_OP_REPULSE_AUDIT 3U
+#define GCSO_COG_OP_BRIDGE_SHIFT 4U
+#define GCSO_COG_OP_STEER_ALIGN 5U
+#define GCSO_COG_OP_ROUTE_SUBHEAD 6U
+#define GCSO_COG_OP_CRYSTALLIZE_COMMIT 7U
 
 /* Hardware Capability Bitmask Constants */
 #define GCSO_CAP_CPU_BASELINE (1ULL << 0)
@@ -187,6 +227,14 @@ typedef enum gcso_stigmergic_action_decision GCSO_ENUM_UNDERLYING(uint8_t){
     GCSO_DECISION_EXPRESS_PHASE_STEER = 2, GCSO_DECISION_SUBHEAD_ROUTE = 3,
     GCSO_DECISION_FULL_ORCHESTRATION = 4,  GCSO_DECISION_CRYSTALLIZE_MACRO_BASIN = 5,
     GCSO_DECISION_REPULSION_ESCAPE = 6} gcso_stigmergic_action_decision_enum_t;
+
+/**
+ * @brief 3-regime epistemic horizon classification matching Rust EpistemicRegime (0..=2).
+ */
+typedef enum gcso_epistemic_regime GCSO_ENUM_UNDERLYING(uint8_t){
+    GCSO_EPISTEMIC_KNOWN_COHERENT = 0,
+    GCSO_EPISTEMIC_INTERNAL_CONFLICT = 1,
+    GCSO_EPISTEMIC_LIMINAL_VOID = 2} gcso_epistemic_regime_enum_t;
 
 /**
  * @brief Descriptor header for size and ABI version validation.
@@ -421,6 +469,10 @@ struct GCSO_ALIGN_PREFIX(16) gcso_swarm_resolution_report {
     uint8_t hot_path_resolved;
 } GCSO_ALIGN_SUFFIX(16);
 typedef struct gcso_swarm_resolution_report gcso_swarm_resolution_report_t;
+/**
+ * @brief Primary S-initial alias for the 16-byte Stigmergic Reconstitution report.
+ */
+typedef gcso_swarm_resolution_report_t gcso_reconstitution_report_t;
 
 /**
  * @brief 2-Origin Composite Manifold Gateway frame (128 bytes, 64-byte cacheline aligned).
@@ -531,6 +583,94 @@ struct GCSO_ALIGN_PREFIX(8) gcso_cognitive_trajectory_ledger {
 } GCSO_ALIGN_SUFFIX(8);
 typedef struct gcso_cognitive_trajectory_ledger gcso_cognitive_trajectory_ledger_t;
 
+/**
+ * @brief Branchless epistemic horizon measurement over a finite local memory manifold (32 bytes).
+ */
+struct GCSO_ALIGN_PREFIX(16) gcso_epistemic_horizon_reading {
+    float total_memory_support;
+    float peak_positive_affinity;
+    float internal_conflict_energy;
+    float horizon_gate;
+    float conflict_severity;
+    uint32_t dominant_anchor_id;
+    uint32_t opposing_anchor_id;
+    uint8_t regime_code;
+    uint8_t reserved_align[3];
+} GCSO_ALIGN_SUFFIX(16);
+typedef struct gcso_epistemic_horizon_reading gcso_epistemic_horizon_reading_t;
+
+/**
+ * @brief Core Layer 0 autonomous LiminalVoid aperture controller (32 bytes, 16-byte aligned).
+ */
+struct GCSO_ALIGN_PREFIX(16) gcso_liminal_aperture_field {
+    uint8_t void_floor_q7[GCSO_NUM_LIMINAL_APERTURE_CHANNELS];
+    uint8_t aperture_gain_q7[GCSO_NUM_LIMINAL_APERTURE_CHANNELS];
+    gcso_q7_t phase_shift_q7[GCSO_NUM_LIMINAL_APERTURE_CHANNELS];
+    uint32_t active_aperture_mask;
+    uint32_t adaptation_epochs;
+} GCSO_ALIGN_SUFFIX(16);
+typedef struct gcso_liminal_aperture_field gcso_liminal_aperture_field_t;
+
+/**
+ * @brief Core Layer 1 autonomous Stigmergic granule approximation controller (32 bytes, 16-byte
+ * aligned).
+ */
+struct GCSO_ALIGN_PREFIX(16) gcso_stigmergic_granule_field {
+    uint8_t granule_step_gain_q7[GCSO_NUM_STIGMERGIC_GRANULES];
+    uint8_t granule_noise_tolerance_q7[GCSO_NUM_STIGMERGIC_GRANULES];
+    uint8_t granule_pheromone_q7[GCSO_NUM_STIGMERGIC_GRANULES];
+    uint8_t venn_overlap_mask;
+    uint8_t serendipity_excursion_mask;
+    uint8_t quorum_threshold;
+    uint8_t serendipity_floor_q7;
+    uint32_t adaptation_epochs;
+} GCSO_ALIGN_SUFFIX(16);
+typedef struct gcso_stigmergic_granule_field gcso_stigmergic_granule_field_t;
+
+/**
+ * @brief Venn-diagram multi-attractor overlap and LiminalVoid serendipity report (32 bytes).
+ */
+struct GCSO_ALIGN_PREFIX(16) gcso_stigmergic_venn_serendipity_report {
+    float venn_intersection_energy;
+    float penumbra_attenuation_energy;
+    float void_excursion_energy;
+    uint32_t dominant_overlap_anchor_id;
+    uint64_t serendipitous_seed_word;
+    uint8_t venn_core_mask;
+    uint8_t venn_penumbra_mask;
+    uint8_t void_exterior_mask;
+    uint8_t serendipity_excursion_mask;
+    uint8_t max_overlap_depth;
+    uint8_t serendipitous_granule_idx;
+    uint8_t serendipity_triggered;
+    uint8_t reserved_align;
+} GCSO_ALIGN_SUFFIX(16);
+typedef struct gcso_stigmergic_venn_serendipity_report gcso_stigmergic_venn_serendipity_report_t;
+
+/**
+ * @brief Unified 2-layer autonomous core stack (64 bytes = 1 cache line, 64-byte aligned).
+ */
+struct GCSO_ALIGN_PREFIX(64) gcso_autonomous_core_layer_stack {
+    gcso_liminal_aperture_field_t liminal_void_layer;
+    gcso_stigmergic_granule_field_t stigmergic_layer;
+} GCSO_ALIGN_SUFFIX(64);
+typedef struct gcso_autonomous_core_layer_stack gcso_autonomous_core_layer_stack_t;
+
+/**
+ * @brief Self-introspecting Liminal topology telemetry snapshot (32 bytes, 16-byte aligned).
+ */
+struct GCSO_ALIGN_PREFIX(16) gcso_liminal_topology_snapshot {
+    uint8_t void_floor_q7[GCSO_NUM_LIMINAL_APERTURE_CHANNELS];
+    uint8_t aperture_gain_q7[GCSO_NUM_LIMINAL_APERTURE_CHANNELS];
+    gcso_q7_t phase_shift_q7[GCSO_NUM_LIMINAL_APERTURE_CHANNELS];
+    uint32_t active_aperture_mask;
+    uint8_t regime_code;
+    uint8_t conflict_severity_q7;
+    uint8_t active_crystals;
+    uint8_t spawned_daughters;
+} GCSO_ALIGN_SUFFIX(16);
+typedef struct gcso_liminal_topology_snapshot gcso_liminal_topology_snapshot_t;
+
 /*
  * Strongly-Typed Opaque Handles eliminating generic raw `c_void` / `void*` pointers.
  * Each domain component has a distinct opaque type to prevent type confusion at compile time.
@@ -591,6 +731,8 @@ GCSO_STATIC_ASSERT(sizeof(gcso_action_orchestration_report_t) == 32,
                    "gcso_action_orchestration_report_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_swarm_resolution_report_t) == 16,
                    "gcso_swarm_resolution_report_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_reconstitution_report_t) == 16,
+                   "gcso_reconstitution_report_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_gateway_frame_t) == 128, "gcso_gateway_frame_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_causal_provenance_report_t) == 16,
                    "gcso_causal_provenance_report_t size mismatch");
@@ -603,6 +745,18 @@ GCSO_STATIC_ASSERT(sizeof(gcso_cognitive_circuit_activation_t) == 8,
                    "gcso_cognitive_circuit_activation_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_cognitive_trajectory_ledger_t) == 8,
                    "gcso_cognitive_trajectory_ledger_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_epistemic_horizon_reading_t) == 32,
+                   "gcso_epistemic_horizon_reading_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_liminal_aperture_field_t) == 32,
+                   "gcso_liminal_aperture_field_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_stigmergic_granule_field_t) == 32,
+                   "gcso_stigmergic_granule_field_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_stigmergic_venn_serendipity_report_t) == 32,
+                   "gcso_stigmergic_venn_serendipity_report_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_autonomous_core_layer_stack_t) == 64,
+                   "gcso_autonomous_core_layer_stack_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_liminal_topology_snapshot_t) == 32,
+                   "gcso_liminal_topology_snapshot_t size mismatch");
 
 /* Static Assertions for Alignment Invariants Matching src/core/src/abi/ & traits/ */
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_raw_buffer_t) == 16, "gcso_raw_buffer_t alignment mismatch");
@@ -629,6 +783,8 @@ GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_action_orchestration_report_t) == 32,
                    "gcso_action_orchestration_report_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_swarm_resolution_report_t) == 16,
                    "gcso_swarm_resolution_report_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_reconstitution_report_t) == 16,
+                   "gcso_reconstitution_report_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_gateway_frame_t) == 64,
                    "gcso_gateway_frame_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_causal_provenance_report_t) == 16,
@@ -637,6 +793,22 @@ GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_crystallized_attractor_record_t) == 64,
                    "gcso_crystallized_attractor_record_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_contrastive_bloom_filter_t) == 64,
                    "gcso_contrastive_bloom_filter_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_cognitive_circuit_activation_t) == 8,
+                   "gcso_cognitive_circuit_activation_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_cognitive_trajectory_ledger_t) == 8,
+                   "gcso_cognitive_trajectory_ledger_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_epistemic_horizon_reading_t) == 16,
+                   "gcso_epistemic_horizon_reading_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_liminal_aperture_field_t) == 16,
+                   "gcso_liminal_aperture_field_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_stigmergic_granule_field_t) == 16,
+                   "gcso_stigmergic_granule_field_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_stigmergic_venn_serendipity_report_t) == 16,
+                   "gcso_stigmergic_venn_serendipity_report_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_autonomous_core_layer_stack_t) == 64,
+                   "gcso_autonomous_core_layer_stack_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_liminal_topology_snapshot_t) == 16,
+                   "gcso_liminal_topology_snapshot_t alignment mismatch");
 
 /* Static Assertions for Exact Field Offsets Matching Rust abi/ & traits/ */
 GCSO_STATIC_ASSERT(offsetof(gcso_descriptor_header_t, struct_size) == 0,
@@ -875,6 +1047,69 @@ GCSO_STATIC_ASSERT(offsetof(gcso_crystallized_attractor_record_t, phase_profile)
 
 GCSO_STATIC_ASSERT(offsetof(gcso_contrastive_bloom_filter_t, counters) == 0,
                    "gcso_contrastive_bloom_filter_t::counters offset mismatch");
+
+GCSO_STATIC_ASSERT(offsetof(gcso_reconstitution_report_t, evolved_ptr) == 0,
+                   "gcso_reconstitution_report_t::evolved_ptr offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_reconstitution_report_t, quorum_mask) == 12,
+                   "gcso_reconstitution_report_t::quorum_mask offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_reconstitution_report_t, hot_path_resolved) == 15,
+                   "gcso_reconstitution_report_t::hot_path_resolved offset mismatch");
+
+GCSO_STATIC_ASSERT(offsetof(gcso_cognitive_circuit_activation_t, peel_gate_q7) == 0,
+                   "gcso_cognitive_circuit_activation_t::peel_gate_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_cognitive_circuit_activation_t, trajectory_depth) == 7,
+                   "gcso_cognitive_circuit_activation_t::trajectory_depth offset mismatch");
+
+GCSO_STATIC_ASSERT(offsetof(gcso_cognitive_trajectory_ledger_t, steps) == 0,
+                   "gcso_cognitive_trajectory_ledger_t::steps offset mismatch");
+
+GCSO_STATIC_ASSERT(offsetof(gcso_epistemic_horizon_reading_t, total_memory_support) == 0,
+                   "gcso_epistemic_horizon_reading_t::total_memory_support offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_epistemic_horizon_reading_t, dominant_anchor_id) == 20,
+                   "gcso_epistemic_horizon_reading_t::dominant_anchor_id offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_epistemic_horizon_reading_t, regime_code) == 28,
+                   "gcso_epistemic_horizon_reading_t::regime_code offset mismatch");
+
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_aperture_field_t, void_floor_q7) == 0,
+                   "gcso_liminal_aperture_field_t::void_floor_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_aperture_field_t, active_aperture_mask) == 24,
+                   "gcso_liminal_aperture_field_t::active_aperture_mask offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_aperture_field_t, adaptation_epochs) == 28,
+                   "gcso_liminal_aperture_field_t::adaptation_epochs offset mismatch");
+
+GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_granule_field_t, granule_step_gain_q7) == 0,
+                   "gcso_stigmergic_granule_field_t::granule_step_gain_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_granule_field_t, venn_overlap_mask) == 24,
+                   "gcso_stigmergic_granule_field_t::venn_overlap_mask offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_granule_field_t, serendipity_floor_q7) == 27,
+                   "gcso_stigmergic_granule_field_t::serendipity_floor_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_granule_field_t, adaptation_epochs) == 28,
+                   "gcso_stigmergic_granule_field_t::adaptation_epochs offset mismatch");
+
+GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_venn_serendipity_report_t, venn_intersection_energy) == 0,
+                   "gcso_stigmergic_venn_serendipity_report_t::venn_intersection_energy offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_venn_serendipity_report_t, dominant_overlap_anchor_id) == 12,
+                   "gcso_stigmergic_venn_serendipity_report_t::dominant_overlap_anchor_id offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_venn_serendipity_report_t, serendipitous_seed_word) == 16,
+                   "gcso_stigmergic_venn_serendipity_report_t::serendipitous_seed_word offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_venn_serendipity_report_t, venn_core_mask) == 24,
+                   "gcso_stigmergic_venn_serendipity_report_t::venn_core_mask offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_venn_serendipity_report_t, serendipity_triggered) == 30,
+                   "gcso_stigmergic_venn_serendipity_report_t::serendipity_triggered offset mismatch");
+
+GCSO_STATIC_ASSERT(offsetof(gcso_autonomous_core_layer_stack_t, liminal_void_layer) == 0,
+                   "gcso_autonomous_core_layer_stack_t::liminal_void_layer offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_autonomous_core_layer_stack_t, stigmergic_layer) == 32,
+                   "gcso_autonomous_core_layer_stack_t::stigmergic_layer offset mismatch");
+
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_topology_snapshot_t, void_floor_q7) == 0,
+                   "gcso_liminal_topology_snapshot_t::void_floor_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_topology_snapshot_t, active_aperture_mask) == 24,
+                   "gcso_liminal_topology_snapshot_t::active_aperture_mask offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_topology_snapshot_t, regime_code) == 28,
+                   "gcso_liminal_topology_snapshot_t::regime_code offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_topology_snapshot_t, spawned_daughters) == 31,
+                   "gcso_liminal_topology_snapshot_t::spawned_daughters offset mismatch");
 
 GCSO_EXTERN_C_END
 

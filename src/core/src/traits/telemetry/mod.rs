@@ -82,14 +82,22 @@ use core::slice;
 // 1. Telemetry, Trail, Anti-Saturation & Swarm Quorum Constants
 // ===================================================================
 
-/// Number of parallel 8-head SWAR Micro-Swarm cells partitioning the 64 attention heads (`8`).
-pub const NUM_SWARM_MICRO_CELLS: usize = 8;
-/// Number of attention heads per SWAR Micro-Swarm cell (`8` heads = 1 `u64` SWAR register).
-pub const HEADS_PER_SWARM_CELL: usize = MAX_ATTENTION_HEADS / NUM_SWARM_MICRO_CELLS;
-/// Default Swarm Quorum threshold (`6` out of `8` Micro-Swarm cells = 75% consensus).
-pub const DEFAULT_SWARM_QUORUM_THRESHOLD: u8 = 6;
+/// Number of parallel 8-head SWAR Stigmergic Granules partitioning the 64 attention heads (`8`).
+pub const NUM_STIGMERGIC_GRANULES: usize = 8;
+/// Backward-compatible alias for [`NUM_STIGMERGIC_GRANULES`].
+pub const NUM_SWARM_MICRO_CELLS: usize = NUM_STIGMERGIC_GRANULES;
+/// Number of attention heads per SWAR Stigmergic Granule (`8` heads = 1 `u64` SWAR register).
+pub const HEADS_PER_STIGMERGIC_GRANULE: usize = MAX_ATTENTION_HEADS / NUM_STIGMERGIC_GRANULES;
+/// Backward-compatible alias for [`HEADS_PER_STIGMERGIC_GRANULE`].
+pub const HEADS_PER_SWARM_CELL: usize = HEADS_PER_STIGMERGIC_GRANULE;
+/// Default Stigmergic Reconstitution Quorum threshold (`6` out of `8` granules = 75% consensus).
+pub const DEFAULT_STIGMERGIC_QUORUM_THRESHOLD: u8 = 6;
+/// Backward-compatible alias for [`DEFAULT_STIGMERGIC_QUORUM_THRESHOLD`].
+pub const DEFAULT_SWARM_QUORUM_THRESHOLD: u8 = DEFAULT_STIGMERGIC_QUORUM_THRESHOLD;
 /// Default Q7 circular phase residual tolerance (`4` Q7 steps $\approx 0.098\text{ rad}$).
-pub const DEFAULT_SWARM_TOLERANCE_Q7: u8 = 4;
+pub const DEFAULT_STIGMERGIC_TOLERANCE_Q7: u8 = 4;
+/// Backward-compatible alias for [`DEFAULT_STIGMERGIC_TOLERANCE_Q7`].
+pub const DEFAULT_SWARM_TOLERANCE_Q7: u8 = DEFAULT_STIGMERGIC_TOLERANCE_Q7;
 
 /// Default total counter mass threshold (`128`) triggering branchless SWAR halving in [`ContrastivePhaseBloomFilter`].
 pub const DEFAULT_BLOOM_MAX_MASS_THRESHOLD: u32 = 128;

@@ -106,7 +106,8 @@ pub use crate::traits::primitives::{
     APERTURE_MAPPED_STORAGE, APERTURE_OBJECTIVE_FACT, APERTURE_PHASE_STEERING,
     APERTURE_POINTER_TRAIL, APERTURE_RANK1_RESIDUAL, APERTURE_RELATIVE_COUPLING,
     APERTURE_SUBJECTIVE_PERSONA, APERTURE_SUBHEAD_ROUTING, APERTURE_SWARM_CONSENSUS,
-    APERTURE_SYSTEM_CONSTRAINT, NUM_LIMINAL_APERTURE_CHANNELS,
+    APERTURE_SYSTEM_CONSTRAINT, CORE_LAYER_LIMINAL_VOID, CORE_LAYER_STIGMERGIC,
+    NUM_CORE_AUTONOMOUS_LAYERS, NUM_LIMINAL_APERTURE_CHANNELS,
 };
 
 pub mod circuit;
@@ -116,7 +117,13 @@ pub mod kv_cache;
 pub mod orchestrator;
 pub mod signals;
 
-pub use self::circuit::*;
+pub use self::circuit::{
+    project_gateway_signal_at_scale, CognitiveCircuitActivation, CognitiveCircuitBank,
+    CognitiveCircuitBankOps, CognitiveCircuitPlasticity, CognitiveOpKind, CognitiveStepOp,
+    CognitiveTrajectoryLedger, HighCapCognitiveBank, HybridScaleCircuit, LayeredScalePair,
+    LowSpecCognitiveBank, ScaleLayerNode, ScaleLayerProjection, StandardCognitiveBank,
+    StigmergicScaleGranularity, StigmergicScaleLayer, SwarmScaleGranularity,
+};
 pub use self::epistemic::*;
 pub use self::frame::*;
 pub use self::kv_cache::*;
@@ -192,12 +199,34 @@ const _: () = {
     assert!(align_of::<LiminalTopologyTelemetrySnapshot>() == 16);
     assert!(offset_of!(LiminalTopologyTelemetrySnapshot, active_aperture_mask) == 24);
     assert!(offset_of!(LiminalTopologyTelemetrySnapshot, spawned_daughters) == 31);
+    assert!(size_of::<StigmergicVennSerendipityReport>() == 32);
+    assert!(align_of::<StigmergicVennSerendipityReport>() == 16);
+    assert!(offset_of!(StigmergicVennSerendipityReport, dominant_overlap_anchor_id) == 12);
+    assert!(offset_of!(StigmergicVennSerendipityReport, serendipitous_seed_word) == 16);
+    assert!(offset_of!(StigmergicVennSerendipityReport, venn_core_mask) == 24);
+    assert!(offset_of!(StigmergicVennSerendipityReport, serendipity_triggered) == 30);
+    assert!(size_of::<StigmergicGranuleField>() == 32);
+    assert!(align_of::<StigmergicGranuleField>() == 16);
+    assert!(offset_of!(StigmergicGranuleField, venn_overlap_mask) == 24);
+    assert!(offset_of!(StigmergicGranuleField, adaptation_epochs) == 28);
+    assert!(size_of::<AutonomousCoreLayerStack>() == 64);
+    assert!(align_of::<AutonomousCoreLayerStack>() == 64);
+    assert!(offset_of!(AutonomousCoreLayerStack, liminal_void_layer) == 0);
+    assert!(offset_of!(AutonomousCoreLayerStack, stigmergic_layer) == 32);
 };
 
+// SAFETY: `EpistemicHorizonReading` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
+unsafe impl Pod for EpistemicHorizonReading {}
 // SAFETY: `LiminalApertureField` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
 unsafe impl Pod for LiminalApertureField {}
 // SAFETY: `LiminalTopologyTelemetrySnapshot` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
 unsafe impl Pod for LiminalTopologyTelemetrySnapshot {}
+// SAFETY: `StigmergicVennSerendipityReport` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
+unsafe impl Pod for StigmergicVennSerendipityReport {}
+// SAFETY: `StigmergicGranuleField` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
+unsafe impl Pod for StigmergicGranuleField {}
+// SAFETY: `AutonomousCoreLayerStack` is `#[repr(C, align(64))]`, exact size 64 bytes with zero padding.
+unsafe impl Pod for AutonomousCoreLayerStack {}
 
 
 #[cfg(test)]

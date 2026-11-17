@@ -1528,6 +1528,55 @@ gcso_container_map_route_coarse_to_fine_and_steer_four_section_zero_copy_safe(
     float* GCSO_RESTRICT best_coherence_out, uint8_t* GCSO_RESTRICT bloom_repulsed_out,
     uint8_t* GCSO_RESTRICT found_out) GCSO_NOEXCEPT;
 
+/**
+ * @brief Evaluates the 3-regime Epistemic Horizon separation (KnownCoherent, InternalConflict,
+ * LiminalVoid) over `num_records` crystallized attractor records relative to `query_phases`.
+ */
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_epistemic_evaluate_horizon(
+    const gcso_crystallized_attractor_record_t* GCSO_RESTRICT records, size_t num_records,
+    const gcso_q7_t* GCSO_RESTRICT query_phases, float horizon_floor,
+    gcso_epistemic_horizon_reading_t* GCSO_RESTRICT reading_out) GCSO_NOEXCEPT;
+
+/**
+ * @brief Evaluates multi-attractor Venn-diagram aperture overlap across the 8 SWAR granules and
+ * approximation-noise excursions into LiminalVoid, optionally nucleating a new attractor record.
+ */
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_stigmergic_evaluate_venn_and_serendipity(
+    gcso_crystallized_attractor_record_t* GCSO_RESTRICT centroids_inout, size_t num_centroids,
+    const gcso_q7_t* GCSO_RESTRICT query_phases, const gcso_q7_t* GCSO_RESTRICT drifted_phases,
+    float aperture_floor, uint8_t serendipity_floor_q7, uint8_t nucleate_on_discovery,
+    uint32_t new_anchor_id,
+    gcso_stigmergic_venn_serendipity_report_t* GCSO_RESTRICT report_out,
+    uint8_t* GCSO_RESTRICT did_nucleate_out) GCSO_NOEXCEPT;
+
+/**
+ * @brief Initializes a 64-byte 2-layer autonomous core stack (Layer 0: LiminalVoid, Layer 1:
+ * Stigmergic).
+ */
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_core_layer_stack_init_default(
+    gcso_autonomous_core_layer_stack_t* GCSO_RESTRICT stack_out) GCSO_NOEXCEPT;
+
+/**
+ * @brief Branchlessly co-adapts Core Layer 0 (LiminalApertureField) and Core Layer 1
+ * (StigmergicGranuleField) with cross-layer Venn/Serendipity feedback.
+ */
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_core_layer_stack_adapt(
+    gcso_autonomous_core_layer_stack_t* GCSO_RESTRICT stack_inout,
+    const gcso_cognitive_trajectory_ledger_t* GCSO_RESTRICT ledger,
+    const gcso_epistemic_horizon_reading_t* GCSO_RESTRICT horizon,
+    const gcso_stigmergic_venn_serendipity_report_t* GCSO_RESTRICT venn_report) GCSO_NOEXCEPT;
+
+/**
+ * @brief Formats the live 2-layer Core Topology as a zero-allocation Mermaid flowchart TD diagram
+ * into caller-provided `out_buf`. Pass `out_buf == NULL` to query the required buffer length.
+ */
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_liminal_topology_format_mermaid(
+    const gcso_autonomous_core_layer_stack_t* GCSO_RESTRICT stack,
+    const gcso_epistemic_horizon_reading_t* GCSO_RESTRICT horizon,
+    const gcso_stigmergic_venn_serendipity_report_t* GCSO_RESTRICT venn_report,
+    uint8_t active_crystals, uint8_t spawned_daughters, uint8_t* GCSO_RESTRICT out_buf,
+    size_t buf_cap, size_t* GCSO_RESTRICT bytes_written_out) GCSO_NOEXCEPT;
+
 GCSO_EXTERN_C_END
 
 #endif // LIMINIKA_GCSO_ABI_H

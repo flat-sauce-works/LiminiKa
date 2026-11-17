@@ -44,10 +44,11 @@ use crate::traits::branchless::{
     swar_words_equal_64,
 };
 use crate::traits::gateway::{
-    GatewayFrame, ManifoldGatewaySignal, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
-    CAUSAL_CAUSE_COHOMOLOGY_REPULSION, DEFAULT_FACT_RIPA_CLAMP_RAD, DEFAULT_PERSONA_RIPA_CLAMP_RAD,
-    GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION, MAX_REGISTER_CACHED_CENTROIDS,
-    ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_NOMINAL,
+    GatewayFrame, ManifoldGatewaySignal, StigmergicVennSerendipityReport,
+    CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
+    DEFAULT_FACT_RIPA_CLAMP_RAD, DEFAULT_PERSONA_RIPA_CLAMP_RAD, GCSO_CRYSTAL_RECORD_MAGIC,
+    GCSO_CRYSTAL_RECORD_VERSION, MAX_REGISTER_CACHED_CENTROIDS, ROOT_CAUSE_COHOMOLOGY_REPULSION,
+    ROOT_CAUSE_NOMINAL,
 };
 use crate::traits::primitives::{
     branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_lerp_f32,
@@ -64,20 +65,21 @@ use crate::traits::primitives::{
     load_q7_words_64, pack_action_slot_tag, store_q7_words_64, swar_q7_circular_diff_x8,
     swar_q7_mean_i8_from_words_with_uniform_flag_64, trail_phase_words_mut, trail_phase_words_ref,
     GcsoResult, Pod, ACTION_MODE_PHASE_REPULSE, ACTION_PRESET_EXPRESS_PHASE,
-    ACTION_PRESET_PASSIVE_SIDECAR, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_PERSONA,
-    CRC32_CRYSTAL_ACTION_BYTE57_REF, CRC32_CRYSTAL_AID_BYTE0_REF, CRC32_CRYSTAL_AID_BYTE1_REF,
-    CRC32_CRYSTAL_PROV_BYTE0_REF, CRC32_CRYSTAL_PROV_BYTE1_REF, CRC32_CRYSTAL_SC_BYTE0_REF,
-    CRC32_CRYSTAL_SLOT_BYTE56_LUT_8, CRC32_CRYSTAL_ZOFF_BYTE1_REF, CRC32_CRYSTAL_ZOFF_BYTE2_REF,
-    CRC32_CRYSTAL_ZOFF_BYTE3_REF, CRC32_IEEE_SLICE16_REF, CRYSTAL_CRC32_DEFAULT_W5_FINAL_CONTRIB,
-    CRYSTAL_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB, CRYSTAL_CRC32_KAPPA_MAX_FINAL_CONTRIB,
-    CRYSTAL_CRC32_RBAR_ONE_FINAL_CONTRIB, CRYSTAL_CRC32_W0_FINAL_CONTRIB, DEFAULT_ENTROPY_EPS,
-    DEFAULT_PHASE_GRAVITY_EPS, DEFAULT_RIPA_CLAMP_MAX_RAD, MAX_ATTENTION_HEADS, Q7_FULL_COS_REF,
+    ACTION_PRESET_PASSIVE_SIDECAR, ATTRACTOR_SLOT_CUSTOM_7, ATTRACTOR_SLOT_ID_MASK,
+    ATTRACTOR_SLOT_PERSONA, CRC32_CRYSTAL_ACTION_BYTE57_REF, CRC32_CRYSTAL_AID_BYTE0_REF,
+    CRC32_CRYSTAL_AID_BYTE1_REF, CRC32_CRYSTAL_PROV_BYTE0_REF, CRC32_CRYSTAL_PROV_BYTE1_REF,
+    CRC32_CRYSTAL_SC_BYTE0_REF, CRC32_CRYSTAL_SLOT_BYTE56_LUT_8, CRC32_CRYSTAL_ZOFF_BYTE1_REF,
+    CRC32_CRYSTAL_ZOFF_BYTE2_REF, CRC32_CRYSTAL_ZOFF_BYTE3_REF, CRC32_IEEE_SLICE16_REF,
+    CRYSTAL_CRC32_DEFAULT_W5_FINAL_CONTRIB, CRYSTAL_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB,
+    CRYSTAL_CRC32_KAPPA_MAX_FINAL_CONTRIB, CRYSTAL_CRC32_RBAR_ONE_FINAL_CONTRIB,
+    CRYSTAL_CRC32_W0_FINAL_CONTRIB, DEFAULT_ENTROPY_EPS, DEFAULT_PHASE_GRAVITY_EPS,
+    DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD, MAX_ATTENTION_HEADS, Q7_FULL_COS_REF,
     SWAR_SPLAT_BYTE_64, VON_MISES_KAPPA_AT_MAX_R_BITS,
 };
 use crate::traits::telemetry::{
-    MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS,
-    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
-    TRAIL_FLAG_SYNERGY_RESONANCE,
+    MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, NUM_STIGMERGIC_GRANULES,
+    NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
+    TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
 // ===================================================================
@@ -1691,6 +1693,87 @@ impl CrystallizedAttractorRecord {
             trail_opt,
         );
         (frame, report)
+    }
+
+    /// Autonomously nucleates a new attractor inside `centroids` when approximation noise in
+    /// [`StigmergicVennSerendipityReport`] pushes a fragmented granule outside all existing
+    /// attractors' Venn apertures into [`crate::traits::LiminalVoid`] (`serendipity_triggered != 0`).
+    ///
+    /// Returns `(spawned_slot_idx, spawned_anchor_id, did_nucleate)` in branchless constant time
+    /// relative to centroid slot contents.
+    #[inline]
+    pub fn nucleate_serendipitous_attractor_from_void_64(
+        centroids: &mut [Self],
+        venn_report: &StigmergicVennSerendipityReport,
+        drifted_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        new_anchor_id: u32,
+        trail_opt: Option<&mut gcso_pointer_trail_t>,
+    ) -> (usize, u32, bool) {
+        if (venn_report.serendipity_triggered == 0) || centroids.is_empty() {
+            return (0, 0, false);
+        }
+        let mut empty_idx = 0usize;
+        let mut has_empty = false;
+        let mut weakest_idx = 0usize;
+        let mut weakest_mass = f32::MAX;
+        let mut i = 0usize;
+        while i < centroids.len() {
+            let rec = &centroids[i];
+            let is_empty = rec.sample_count == 0;
+            let take_empty = (!has_empty) & is_empty;
+            empty_idx = branchless_select_usize(take_empty, i, empty_idx);
+            has_empty |= is_empty;
+
+            let take_weak = (!is_empty) & (rec.phase_gravity_mass < weakest_mass);
+            weakest_idx = branchless_select_usize(take_weak, i, weakest_idx);
+            weakest_mass = branchless_select_f32(take_weak, rec.phase_gravity_mass, weakest_mass);
+            i += 1;
+        }
+
+        let seed_energy = branchless_max_f32(venn_report.void_excursion_energy, 0.25);
+        let can_evict = (!has_empty) & (seed_energy > weakest_mass);
+        if !(has_empty | can_evict) {
+            return (0, 0, false);
+        }
+        let target_idx = branchless_select_usize(has_empty, empty_idx, weakest_idx);
+        let eff_anchor_id =
+            branchless_select_u32(new_anchor_id != 0, new_anchor_id, (target_idx as u32) + 1);
+
+        let mut seed_frame = GatewayFrame {
+            target_anchor_id: eff_anchor_id,
+            effective_energy: seed_energy,
+            ripa_clamp_rad: DEFAULT_RIPA_CLAMP_MAX_RAD,
+            qdps_min_step_rad: DEFAULT_QDPS_MIN_STEP_RAD,
+            effective_inv_temp: 1.0,
+            provenance_bits: CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
+            dominant_slot: ATTRACTOR_SLOT_CUSTOM_7,
+            action_mode_flags: ACTION_PRESET_EXPRESS_PHASE,
+            active_swarm_cell_mask: venn_report.serendipity_excursion_mask | 0x01,
+            ..GatewayFrame::default()
+        };
+        *seed_frame.phase_words_mut() = *drifted_words;
+        seed_frame.mean_phase_tag_q7 =
+            swar_q7_mean_i8_from_words_with_uniform_flag_64(drifted_words, false);
+
+        centroids[target_idx].init_spawned_slot_header_in_place(
+            eff_anchor_id,
+            ATTRACTOR_SLOT_CUSTOM_7,
+            0,
+        );
+        let empty_cur = [0u64; NUM_STIGMERGIC_GRANULES];
+        let (final_aid, _coh, _mass) = Self::commit_frame_absorption_at_index(
+            centroids,
+            target_idx,
+            true,
+            1.0,
+            true,
+            is_word_array_uniform_64(drifted_words),
+            &empty_cur,
+            &seed_frame,
+            drifted_words,
+            trail_opt,
+        );
+        (target_idx, final_aid, true)
     }
 
     /// **Classical Online Toroidal $k$-Means / DP-Means Closed-Loop E+M Step ($\mathcal{O}(K)$)**:

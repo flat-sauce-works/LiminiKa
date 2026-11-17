@@ -1458,3 +1458,119 @@ fn fractal_relative_node_self_similarity_across_trail_crystal_and_nested_arrays(
     assert_eq!(legacy_anchor.relative_anchor_id(), 55);
     assert_eq!(roundtrip_snap.relative_anchor_id(), 55);
 }
+
+#[test]
+fn stigmergic_venn_overlap_serendipity_and_core_layer_stack_feedback() {
+    use crate::abi::gcso_pointer_trail_t;
+    use crate::traits::primitives::load_q7_words_64;
+
+    // Two attractors with mixed per-granule profiles:
+    // - Granules 0..4 share phase `16` -> Venn intersection core (`overlap == 2`)
+    // - Granule 4 covers only node A (`24`) -> Venn penumbra (`overlap == 1`)
+    // - Granules 5..8 are orthogonal (`-100` vs `+100`), leaving a window around `0..100`
+    let mut phases_a = [16i8; MAX_ATTENTION_HEADS];
+    let mut phases_b = [16i8; MAX_ATTENTION_HEADS];
+    for h in 32..40 {
+        phases_a[h] = 24;
+        phases_b[h] = -96;
+    }
+    for h in 40..64 {
+        phases_a[h] = -100;
+        phases_b[h] = 100;
+    }
+    let nodes = [
+        ObjectiveFact::new(phases_a, 1.5, 0x1000, 101),
+        ObjectiveFact::new(phases_b, 1.4, 0x2000, 102),
+    ];
+
+    let mut q_phases = [16i8; MAX_ATTENTION_HEADS];
+    for h in 32..40 {
+        q_phases[h] = 24;
+    }
+    for h in 40..64 {
+        q_phases[h] = 0;
+    }
+    let query_w = load_q7_words_64(&q_phases);
+
+    // Approximation noise pushes granule 6 (heads 48..56) to `40` outside both attractors (`-100`, `+100`)
+    let mut drifted_phases = q_phases;
+    for h in 48..56 {
+        drifted_phases[h] = 40;
+    }
+    let drifted_w = load_q7_words_64(&drifted_phases);
+
+    let venn = ObjectiveFact::<[gcso_q7_t; MAX_ATTENTION_HEADS]>::evaluate_slice_venn_and_serendipity(
+        &nodes,
+        &query_w,
+        &drifted_w,
+        0.70,
+        16,
+    );
+    assert_eq!(venn.venn_core_mask & 0x0F, 0x0F);
+    assert_eq!(venn.venn_penumbra_mask & (1 << 4), 1 << 4);
+    assert_ne!(venn.void_exterior_mask & (1 << 6), 0);
+    assert_eq!(venn.serendipity_triggered, 1);
+    assert_ne!(venn.serendipity_excursion_mask & (1 << 6), 0);
+    assert_eq!(venn.serendipitous_granule_idx, 6);
+    assert!(venn.venn_intersection_energy > venn.penumbra_attenuation_energy);
+
+    // Autonomous Core Layer Stack co-adaptation: Layer 1 noise discovery widens Layer 0 Fact aperture
+    let mut stack = AutonomousCoreLayerStack::new();
+    let init_void_floor_fact = stack.liminal_void_layer.void_floor_q7[1];
+    let init_tol_g0 = stack.stigmergic_layer.granule_noise_tolerance_q7[0];
+    let ledger = CognitiveTrajectoryLedger::default();
+    let horizon = EpistemicHorizonReading {
+        total_memory_support: 1.5,
+        peak_positive_affinity: 0.85,
+        internal_conflict_energy: 0.0,
+        horizon_gate: 1.0,
+        conflict_severity: 0.0,
+        dominant_anchor_id: 101,
+        opposing_anchor_id: 0,
+        regime_code: EpistemicRegime::KnownCoherent as u8,
+        reserved_align: [0; 3],
+    };
+    stack.adapt_layers_branchless(&ledger, &horizon, &venn, None);
+    assert!(stack.liminal_void_layer.void_floor_q7[1] < init_void_floor_fact);
+    assert!(stack.stigmergic_layer.granule_noise_tolerance_q7[0] > init_tol_g0);
+    assert_eq!(stack.stigmergic_layer.venn_overlap_mask, venn.venn_core_mask);
+
+    // Serendipitous attractor birth annexes the exterior granule out of LiminalVoid
+    let mut c0 = CrystallizedAttractorRecord::default();
+    let _ = c0.absorb_gateway_frame(&nodes[0].synthesize_gateway_frame());
+    let mut c1 = CrystallizedAttractorRecord::default();
+    let _ = c1.absorb_gateway_frame(&nodes[1].synthesize_gateway_frame());
+    let mut crystals = [c0, c1, CrystallizedAttractorRecord::default()];
+    let mut trail = gcso_pointer_trail_t::default();
+    let (slot_idx, spawned_aid, did_nucleate) =
+        CrystallizedAttractorRecord::nucleate_serendipitous_attractor_from_void_64(
+            &mut crystals,
+            &venn,
+            &drifted_w,
+            901,
+            Some(&mut trail),
+        );
+    assert!(did_nucleate);
+    assert_eq!(slot_idx, 2);
+    assert_eq!(spawned_aid, 901);
+    assert!(crystals[2].verify_integrity());
+
+    let post_venn = evaluate_stigmergic_venn_and_serendipity_words_64(
+        &crystals,
+        &query_w,
+        &drifted_w,
+        0.70,
+        16,
+    );
+    // Granule 6 is no longer in the void exterior because Crystal 2 now covers it!
+    assert_eq!(post_venn.void_exterior_mask & (1 << 6), 0);
+
+    // Verify zero-alloc Core Layer 0 + Layer 1 Mermaid output
+    let snap = LiminalTopologyTelemetrySnapshot::capture(&stack.liminal_void_layer, &horizon, 3, 1);
+    let mut mermaid_buf = [0u8; 2048];
+    let len = snap.format_core_layers_mermaid(&stack.stigmergic_layer, &venn, &mut mermaid_buf);
+    let txt = core::str::from_utf8(&mermaid_buf[..len]).expect("valid utf8 mermaid");
+    assert!(txt.contains("Core Layer 0: LiminalVoid"));
+    assert!(txt.contains("Core Layer 1: StigmergicGranuleField"));
+    assert!(txt.contains("Cross-Layer Feedback"));
+}

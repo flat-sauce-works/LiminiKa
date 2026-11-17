@@ -214,8 +214,9 @@ pub struct ModelSteeringAdapter {
     system_constraint: SystemConstraint<()>,
     probe_baseline: ManifoldProbeBaseline,
     threshold_policy: AdaptiveThresholdPolicy,
-    aperture_field: LiminalApertureField,
+    core_layers: AutonomousCoreLayerStack,
     last_horizon: EpistemicHorizonReading,
+    last_venn_report: StigmergicVennSerendipityReport,
 }
 
 impl ModelSteeringAdapter {
@@ -270,8 +271,9 @@ impl ModelSteeringAdapter {
             system_constraint,
             probe_baseline,
             threshold_policy,
-            aperture_field: LiminalApertureField::default(),
+            core_layers: AutonomousCoreLayerStack::new(),
             last_horizon: EpistemicHorizonReading::default(),
+            last_venn_report: StigmergicVennSerendipityReport::default(),
         })
     }
 
@@ -349,7 +351,7 @@ impl ModelSteeringAdapter {
 
     /// Evaluates `bank` against `(bias_words, input_words)` at `scale`, applies homeostatic
     /// plasticity (`reinforce_bank`), and pushes the consolidated ledger back into the adapter's
-    /// live Hot-Path ledger slot.
+    /// live Hot-Path ledger slot while co-adapting both Core Layer 0 (`LiminalVoid`) and Core Layer 1 (`Stigmergic`).
     pub fn reinforce_active_circuit_with_bank<B: CognitiveCircuitBankOps>(
         &mut self,
         bank: &mut B,
@@ -363,21 +365,34 @@ impl ModelSteeringAdapter {
         let ledger = bank.to_consolidated_ledger();
         self.set_active_circuit(ledger);
         let horizon = self.last_horizon;
-        self.aperture_field
-            .adapt_from_circuit_and_overflow_branchless(&ledger, &horizon, None);
+        let venn = self.last_venn_report;
+        self.core_layers
+            .adapt_layers_branchless(&ledger, &horizon, &venn, None);
         act
     }
 
-    /// Returns a shared reference to the live [`LiminalApertureField`] governing dynamic
-    /// `LiminalVoid` channel thresholds and cognitive window gains.
+    /// Returns a shared reference to the live Core Layer 0 [`LiminalApertureField`] governing
+    /// dynamic `LiminalVoid` channel thresholds and cognitive window gains.
     #[must_use]
     pub const fn aperture_field(&self) -> &LiminalApertureField {
-        &self.aperture_field
+        &self.core_layers.liminal_void_layer
     }
 
-    /// Returns a mutable reference to the live [`LiminalApertureField`].
+    /// Returns a mutable reference to the live Core Layer 0 [`LiminalApertureField`].
     pub fn aperture_field_mut(&mut self) -> &mut LiminalApertureField {
-        &mut self.aperture_field
+        &mut self.core_layers.liminal_void_layer
+    }
+
+    /// Returns a shared reference to the live Core Layer 1 [`StigmergicGranuleField`].
+    #[must_use]
+    pub const fn stigmergic_granule_field(&self) -> &StigmergicGranuleField {
+        &self.core_layers.stigmergic_layer
+    }
+
+    /// Returns a shared reference to the unified 2-layer [`AutonomousCoreLayerStack`].
+    #[must_use]
+    pub const fn core_layer_stack(&self) -> &AutonomousCoreLayerStack {
+        &self.core_layers
     }
 
     /// Returns the most recently observed [`EpistemicHorizonReading`].
@@ -386,22 +401,40 @@ impl ModelSteeringAdapter {
         &self.last_horizon
     }
 
-    /// Updates `last_horizon` and adapts [`LiminalApertureField`] branchlessly from the active
-    /// cognitive circuit trajectory, `horizon`, and optional [`DissipativeOverflowReport`].
+    /// Returns the most recently observed [`StigmergicVennSerendipityReport`].
+    #[must_use]
+    pub const fn last_venn_serendipity_report(&self) -> &StigmergicVennSerendipityReport {
+        &self.last_venn_report
+    }
+
+    /// Updates `last_horizon` and adapts Core Layer 0 (`LiminalApertureField`) branchlessly.
     pub fn adapt_liminal_aperture(
         &mut self,
         horizon: &EpistemicHorizonReading,
         overflow_opt: Option<&DissipativeOverflowReport>,
     ) {
+        let venn = self.last_venn_report;
+        self.adapt_core_layers(horizon, &venn, overflow_opt);
+    }
+
+    /// Updates both Core Layer 0 (`LiminalVoid`) and Core Layer 1 (`Stigmergic`) branchlessly from
+    /// the active cognitive circuit trajectory, `horizon`, `venn_report`, and optional `overflow_opt`.
+    pub fn adapt_core_layers(
+        &mut self,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+        overflow_opt: Option<&DissipativeOverflowReport>,
+    ) {
         self.last_horizon = *horizon;
+        self.last_venn_report = *venn_report;
         let ledger = self.active_circuit().unwrap_or_default();
-        self.aperture_field
-            .adapt_from_circuit_and_overflow_branchless(&ledger, horizon, overflow_opt);
+        self.core_layers
+            .adapt_layers_branchless(&ledger, horizon, venn_report, overflow_opt);
     }
 
     /// Captures the live [`LiminalTopologyTelemetrySnapshot`] and renders a self-introspecting
-    /// Mermaid `flowchart TD` diagram of the active trait hierarchy, cognitive aperture masks,
-    /// `LiminalVoid` floors, and crystal populations.
+    /// 2-layer Mermaid `flowchart TD` diagram covering Core Layer 0 (`LiminalVoid`), Core Layer 1
+    /// (`StigmergicGranuleField`), cognitive aperture masks, and crystal populations.
     #[must_use]
     pub fn render_liminal_topology_mermaid(
         &self,
@@ -409,13 +442,17 @@ impl ModelSteeringAdapter {
         spawned_daughters: u8,
     ) -> String {
         let snap = LiminalTopologyTelemetrySnapshot::capture(
-            &self.aperture_field,
+            &self.core_layers.liminal_void_layer,
             &self.last_horizon,
             active_crystals,
             spawned_daughters,
         );
         let mut buf = [0u8; 2048];
-        let written = snap.format_mermaid_flowchart(&mut buf);
+        let written = snap.format_core_layers_mermaid(
+            &self.core_layers.stigmergic_layer,
+            &self.last_venn_report,
+            &mut buf,
+        );
         String::from_utf8_lossy(&buf[..written]).into_owned()
     }
 
@@ -931,10 +968,12 @@ impl ModelSteeringAdapter {
                 SwarmScaleGranularity::MacroCoalition,
             );
         }
-        if self.aperture_field.adaptation_epochs > 0 {
-            frame = self
-                .aperture_field
-                .modulate_gateway_frame_branchless(frame, &self.last_horizon);
+        if self.core_layers.liminal_void_layer.adaptation_epochs > 0 {
+            frame = self.core_layers.modulate_gateway_frame_branchless(
+                frame,
+                &self.last_horizon,
+                &self.last_venn_report,
+            );
         }
 
         let gain = {

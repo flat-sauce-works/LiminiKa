@@ -12,13 +12,13 @@ use super::*;
 //     Stigmergic Cognitive Phase Circuit
 // ===================================================================
 
-/// Multi-scale granularity tier within the self-similar GCSO swarm hierarchy.
+/// Multi-scale granularity tier within the self-similar GCSO hierarchy.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub enum SwarmScaleGranularity {
     /// Scale 0: 64-bit tagged pointer and single 8-head `u64` SWAR register.
     PointerBit = 0,
-    /// Scale 1: 128-byte pointer trail (`8` cells x `8` heads) with local inhibition.
+    /// Scale 1: 128-byte pointer trail (`8` granules x `8` heads) with local inhibition.
     CellTrail = 1,
     /// Scale 2: Type-level blanket composition and 128-byte [`GatewayFrame`] interference.
     #[default]
@@ -26,6 +26,10 @@ pub enum SwarmScaleGranularity {
     /// Scale 3..N: Macro-level multi-hop pointer ring and cross-stratum coalition cascade.
     MacroCoalition = 3,
 }
+
+/// Primary `S`-initial alias for [`SwarmScaleGranularity`] emphasizing stigmergic multi-scale
+/// fragmentation (`0..=3`).
+pub type StigmergicScaleGranularity = SwarmScaleGranularity;
 
 impl SwarmScaleGranularity {
     /// Converts a raw 2-bit integer (`0..=3`) into a [`SwarmScaleGranularity`].
