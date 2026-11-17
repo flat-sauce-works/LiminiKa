@@ -3,6 +3,7 @@
 
 //! Declarative DSL frontend crate for LiminiKa (staged for post-core integration).
 
+/// Returns the `liminika-dsl` crate version string.
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }

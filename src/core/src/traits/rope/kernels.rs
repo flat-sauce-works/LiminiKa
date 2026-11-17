@@ -1826,8 +1826,8 @@ pub(super) fn apply_ripa_half_split_slice_core(
         for (a, b) in x1.iter_mut().zip(x2.iter_mut()) {
             let va = *a;
             let vb = *b;
-            *a = va.mul_add(cos_t, -vb * sin_t);
-            *b = va.mul_add(sin_t, vb * cos_t);
+            *a = va * cos_t - vb * sin_t;
+            *b = va * sin_t + vb * cos_t;
         }
     }
 }
@@ -1860,8 +1860,8 @@ pub(super) fn procrustes_q7_half_split_slice(
             let mut sum_cos = 0.0_f32;
             let mut sum_sin = 0.0_f32;
             for i in 0..half_rot {
-                sum_cos += s1[i].mul_add(t1[i], s2[i] * t2[i]);
-                sum_sin += s1[i].mul_add(t2[i], -s2[i] * t1[i]);
+                sum_cos += s1[i] * t1[i] + s2[i] * t2[i];
+                sum_sin += s1[i] * t2[i] - s2[i] * t1[i];
             }
             cos_arr[lane] = sum_cos;
             sin_arr[lane] = sum_sin;

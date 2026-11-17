@@ -594,7 +594,7 @@ impl<T> BottomUpMacroCrystalCoordinator for T where
 
 /// Unified Lv.3 Macro Observer trait over [`ActionHub`] (`traits/cold_path.rs`).
 ///
-/// Observes [`super::telemetry`] trajectories from [`ActionHub`] to evaluate EDBC pitchfork
+/// Observes [`crate::traits::telemetry`] trajectories from [`ActionHub`] to evaluate EDBC pitchfork
 /// bifurcations, matrix-free cellular sheaf cohomology $H^1(K; \mathcal{F})$, unified-field
 /// attractor crystallization, and Online Toroidal $k$-Means / DP-Means macro distribution steering.
 pub trait ColdPathObserver:

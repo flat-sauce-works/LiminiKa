@@ -1,6 +1,8 @@
 // name: src/cli/src/main.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+//! Command-line entry point for inspecting, baking, and evaluating LiminiKa GCSO containers.
+
 mod eval_runner;
 mod eval_samples;
 
@@ -8,6 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("LiminiKa GCSO Core Engine v0.1.1");
 
     // 1. Obtain version string from dynamic C-ABI
+    // SAFETY: `gcso_abi_get_version_string` returns a static NUL-terminated C string literal.
     let version_str = unsafe {
         let ptr = liminika_core::abi::gcso_abi_get_version_string();
         std::ffi::CStr::from_ptr(ptr).to_str()?
@@ -16,11 +19,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Initialize runtime base configuration via C-ABI
     let mut config = liminika_core::abi::gcso_config_t::default();
+    // SAFETY: `&mut config` points to a valid, uniquely borrowed `gcso_config_t`.
     let status = unsafe { liminika_core::abi::gcso_config_init_default(&mut config) };
     assert_eq!(status, liminika_core::abi::GCSO_SUCCESS);
 
     // 3. Allocate context instance handle
     let mut ctx_handle: liminika_core::abi::GcsoContextHandle = std::ptr::null_mut();
+    // SAFETY: `&config` and `&mut ctx_handle` are valid, aligned stack references.
     let status = unsafe { liminika_core::abi::gcso_context_create(&config, &mut ctx_handle) };
     assert_eq!(status, liminika_core::abi::GCSO_SUCCESS);
 
@@ -251,6 +256,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 5. Clean up allocated context resources
+    // SAFETY: `ctx_handle` was initialized by `gcso_context_create` and is destroyed once.
     unsafe { liminika_core::abi::gcso_context_destroy(ctx_handle) };
     Ok(())
 }

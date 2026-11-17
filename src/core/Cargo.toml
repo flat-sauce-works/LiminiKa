@@ -12,7 +12,7 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "Core execution engine library for the Geometric Cellular Sheaf Orchestrator (GCSO)"
-readme = "../../README.md"
+readme.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true

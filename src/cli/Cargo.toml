@@ -21,3 +21,6 @@ vulkan = ["liminika-core/vulkan"]
 liminika-adapter = { path = "../adapter" }
 liminika-core = { path = "../core" }
 liminika-dsl = { path = "../dsl" }
+
+[lints]
+workspace = true
