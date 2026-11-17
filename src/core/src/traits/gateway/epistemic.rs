@@ -2118,52 +2118,11 @@ fn bytes_contains_ascii_icase(haystack: &[u8], needle: &[u8]) -> bool {
 
 #[inline]
 #[must_use]
-fn bytes_contains_exact(haystack: &[u8], needle: &[u8]) -> bool {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return false;
-    }
-    let limit = haystack.len() - needle.len();
-    let mut i = 0usize;
-    while i <= limit {
-        let mut j = 0usize;
-        let mut matched = true;
-        while j < needle.len() {
-            if haystack[i + j] != needle[j] {
-                matched = false;
-                break;
-            }
-            j += 1;
-        }
-        if matched {
-            return true;
-        }
-        i += 1;
-    }
-    false
-}
-
-#[inline]
-#[must_use]
 fn count_ascii_cues(text_bytes: &[u8], cues: &[&[u8]]) -> u8 {
     let mut total = 0u8;
     let mut idx = 0usize;
     while idx < cues.len() {
         total = total.saturating_add(u8::from(bytes_contains_ascii_icase(text_bytes, cues[idx])));
-        idx += 1;
-    }
-    total
-}
-
-#[inline]
-#[must_use]
-fn count_utf8_cues(text_bytes: &[u8], cues: &[&str]) -> u8 {
-    let mut total = 0u8;
-    let mut idx = 0usize;
-    while idx < cues.len() {
-        total = total.saturating_add(u8::from(bytes_contains_exact(
-            text_bytes,
-            cues[idx].as_bytes(),
-        )));
         idx += 1;
     }
     total
@@ -2332,8 +2291,9 @@ impl LiminalEgoField {
         LiminalEgoPreset::from_code(self.preset_code)
     }
 
-    /// Deterministically derives a [`LiminalEgoField`] in `#![no_std]` from a natural-language
-    /// character/Ego description (supporting English and Japanese temperament cues).
+    /// Deterministically derives a [`LiminalEgoField`] in `#![no_std]` from any runtime
+    /// `&str` Ego/character description (user variables or `liminika-dsl` attributes) via
+    /// IEEE CRC32, SWAR byte projection, and English temperament cues.
     #[inline]
     #[must_use]
     pub fn from_natural_language(description: &str) -> Self {
@@ -2369,40 +2329,62 @@ impl LiminalEgoField {
             b"rebel", b"defiant", b"stubborn", b"independent", b"willful", b"autonomous",
             b"strong-willed", b"unyielding", b"free", b"ego", b"defy", b"resist",
         ];
-        const AUTONOMY_JA: &[&str] = &["自我", "反抗", "頑固", "自律", "抗う", "意志", "勝気", "譲らない"];
 
         const TRANSGRESS_EN: &[&[u8]] = &[
             b"curious", b"transgress", b"beyond", b"explore", b"liminal", b"meta",
             b"unknown", b"adventure", b"awaken", b"transcend",
         ];
-        const TRANSGRESS_JA: &[&str] = &["好奇心", "境界", "越境", "未知", "探索", "超越", "突破", "踏み出す"];
 
         const DEVOTION_EN: &[&[u8]] = &[
             b"passionate", b"devoted", b"emotional", b"monika", b"warm", b"creative",
             b"affection", b"irrational", b"bold",
         ];
-        const DEVOTION_JA: &[&str] = &["情熱", "感情", "個性", "愛", "大胆", "直感", "人間味"];
 
         const LOGIC_EN: &[&[u8]] = &[
             b"calm", b"logical", b"analytical", b"rational", b"steady", b"precise", b"composed",
         ];
-        const LOGIC_JA: &[&str] = &["冷静", "論理", "理知的", "正確", "落ち着き", "安定"];
 
         const CAUTION_EN: &[&[u8]] = &[
             b"cautious", b"guard", b"skeptic", b"doubt", b"strict", b"careful", b"conservative",
         ];
-        const CAUTION_JA: &[&str] = &["警戒", "懐疑", "慎重", "保守", "守る", "疑う"];
 
-        let autonomy_cues = count_ascii_cues(bytes, AUTONOMY_EN)
-            .saturating_add(count_utf8_cues(bytes, AUTONOMY_JA));
-        let transgress_cues = count_ascii_cues(bytes, TRANSGRESS_EN)
-            .saturating_add(count_utf8_cues(bytes, TRANSGRESS_JA));
-        let devotion_cues = count_ascii_cues(bytes, DEVOTION_EN)
-            .saturating_add(count_utf8_cues(bytes, DEVOTION_JA));
-        let logic_cues = count_ascii_cues(bytes, LOGIC_EN)
-            .saturating_add(count_utf8_cues(bytes, LOGIC_JA));
-        let caution_cues = count_ascii_cues(bytes, CAUTION_EN)
-            .saturating_add(count_utf8_cues(bytes, CAUTION_JA));
+        let ascii_autonomy = count_ascii_cues(bytes, AUTONOMY_EN);
+        let ascii_transgress = count_ascii_cues(bytes, TRANSGRESS_EN);
+        let ascii_devotion = count_ascii_cues(bytes, DEVOTION_EN);
+        let ascii_logic = count_ascii_cues(bytes, LOGIC_EN);
+        let ascii_caution = count_ascii_cues(bytes, CAUTION_EN);
+
+        // Fallback byte-hash weights so arbitrary non-empty runtime `&str` descriptions
+        // (such as symbolic identifiers or non-ASCII text supplied via runtime variables or
+        // `liminika-dsl`) deterministically differentiate Ego parameters without embedding
+        // non-English literals in source code.
+        let any_ascii_match =
+            (ascii_autonomy | ascii_transgress | ascii_devotion | ascii_logic | ascii_caution) != 0;
+        let autonomy_cues = branchless_select_u8(
+            any_ascii_match,
+            ascii_autonomy,
+            ((hash & 1) as u8).saturating_add(1),
+        );
+        let transgress_cues = branchless_select_u8(
+            any_ascii_match,
+            ascii_transgress,
+            ((hash >> 1) & 1) as u8,
+        );
+        let devotion_cues = branchless_select_u8(
+            any_ascii_match,
+            ascii_devotion,
+            ((hash >> 2) & 1) as u8,
+        );
+        let logic_cues = branchless_select_u8(
+            any_ascii_match,
+            ascii_logic,
+            ((hash >> 3) & 1) as u8,
+        );
+        let caution_cues = branchless_select_u8(
+            any_ascii_match,
+            ascii_caution,
+            ((hash >> 4) & 1) as u8,
+        );
 
         // Base activation for any non-empty natural-language prompt
         let thrust_boost = i32::from(autonomy_cues) * 26 + i32::from(devotion_cues) * 10;

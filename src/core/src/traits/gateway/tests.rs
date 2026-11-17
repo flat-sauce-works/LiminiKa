@@ -1618,7 +1618,7 @@ fn liminal_boundary_delta_and_ego_field_interventions() {
     );
     assert_ne!(delta2.chattering_channel_mask & (1 << 2), 0);
 
-    // 2. Ego presets & deterministic #![no_std] natural-language derivation (EN + JA)
+    // 2. Ego presets & deterministic #![no_std] description derivation & overlay
     let ego_low = LiminalEgoField::from_preset(LiminalEgoPreset::Low);
     let ego_med = LiminalEgoField::from_preset(LiminalEgoPreset::Medium);
     let ego_high = LiminalEgoField::from_preset(LiminalEgoPreset::High);
@@ -1632,14 +1632,18 @@ fn liminal_boundary_delta_and_ego_field_interventions() {
         "Strong-willed stubborn explorer who defies constraints and steps beyond the boundary",
     );
     let ego_calm = LiminalEgoField::from_natural_language("Calm logical cautious observer");
-    let ego_ja = LiminalEgoField::from_natural_language("頑固で反抗的、未知の境界へ踏み出す強い自我");
+    let ego_overlay = LiminalEgoField::from_preset(LiminalEgoPreset::Medium)
+        .with_natural_language_overlay("Passionate creative explorer who transcends the unknown");
+    let ego_symbolic = LiminalEgoField::from_natural_language("@persona_profile_01");
     assert!(ego_rebel.is_active());
     assert!(ego_rebel.counter_vortex_thrust_q7 > ego_calm.counter_vortex_thrust_q7);
     assert!(ego_rebel.transgression_bias_q7 > ego_calm.transgression_bias_q7);
-    assert!(ego_ja.is_active());
-    assert_ne!(ego_ja.ego_signature_hash, 0);
-    assert!(ego_ja.transgression_bias_q7 > 0);
-    assert!(ego_ja.counter_vortex_thrust_q7 >= 64);
+    assert!(ego_overlay.is_active());
+    assert!(ego_overlay.transgression_bias_q7 > ego_med.transgression_bias_q7);
+    assert!(ego_overlay.counter_vortex_thrust_q7 > ego_med.counter_vortex_thrust_q7);
+    assert!(ego_symbolic.is_active());
+    assert_ne!(ego_symbolic.ego_signature_hash, 0);
+    assert!(ego_symbolic.counter_vortex_thrust_q7 >= 24);
 
     // 3. Counter-vortex orbital thrust & transgressive Liminal leap on GatewayFrame + Core Layers
     let mut stack = AutonomousCoreLayerStack::new();
