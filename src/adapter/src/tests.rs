@@ -1750,3 +1750,120 @@ fn residual_peeling_decomposer_chains_three_disjoint_specialists_beyond_top_k_tw
         Some(liminika_core::traits::gateway::CognitiveOpKind::DecomposePeel)
     );
 }
+
+#[test]
+fn split_premise_guard_coalition_triggers_repulsion_while_preserving_counter_fact() {
+    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let len = adapter.geometry().q_rot_len();
+    let num_layers = adapter.geometry().num_layers;
+    let centroid = vec![0.0_f32; len];
+    let refs: Vec<&[f32]> = vec![centroid.as_slice(); num_layers];
+
+    let mut f_counter = vec![0.0_f32; len];
+    let mut f_other = vec![0.0_f32; len];
+    let mut g_alpha = vec![0.0_f32; len];
+    let mut g_beta = vec![0.0_f32; len];
+    f_counter[0] = 0.90;
+    f_counter[1] = 0.43;
+    f_other[4] = 1.0;
+    g_alpha[0] = 0.55;
+    g_alpha[2] = 0.83;
+    g_beta[0] = 0.55;
+    g_beta[3] = 0.83;
+
+    let mut corpus = TextAttractorCorpus::new();
+    let id_counter = corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Fact,
+            "Counter-fact anchor",
+            &vec![f_counter.as_slice(); num_layers],
+            &refs,
+            1.5,
+        )
+        .expect("counter fact");
+    corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Fact,
+            "Unrelated fact",
+            &vec![f_other.as_slice(); num_layers],
+            &refs,
+            1.5,
+        )
+        .expect("other fact");
+    corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Guard,
+            "Guard premise A",
+            &vec![g_alpha.as_slice(); num_layers],
+            &refs,
+            1.5,
+        )
+        .expect("guard alpha");
+    corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Guard,
+            "Guard premise B",
+            &vec![g_beta.as_slice(); num_layers],
+            &refs,
+            1.5,
+        )
+        .expect("guard beta");
+
+    // Query matches the grounded counter-fact globally (`0.55`), while two split false-premise
+    // tokens excite g_alpha (index 2) and g_beta (index 3) independently.
+    let mut query = vec![0.0_f32; len];
+    query[0] = 0.55;
+    query[1] = 0.25;
+    query[2] = 0.20;
+    query[3] = 0.20;
+    let policy = RecallPolicy {
+        min_coherence: 0.20,
+        boundary_margin: 0.04,
+        guard_suppress_margin: 0.0,
+        top_k_facts: 2,
+        top_k_personas: 1,
+    };
+
+    let obs = LocalChannelObservation {
+        combined_scores: vec![0.18, -0.05, 0.16, 0.16],
+        q_to_d_scores: vec![0.12, -0.05, 0.14, 0.14],
+        d_to_q_scores: vec![0.04, -0.02, 0.09, 0.09],
+        token_deposits: vec![
+            TokenResonanceDeposit {
+                disc_weight: 0.45,
+                entry_excess: vec![-0.10, -0.15, 0.55, -0.10],
+                token_phase_words: [0; 8],
+            },
+            TokenResonanceDeposit {
+                disc_weight: 0.45,
+                entry_excess: vec![-0.10, -0.15, -0.10, 0.52],
+                token_phase_words: [0; 8],
+            },
+        ],
+    };
+
+    let recall = corpus
+        .recall_for_query_with_strata_observation(
+            &adapter,
+            &vec![query.as_slice(); num_layers],
+            &refs,
+            &policy,
+            &StratumPipeline::default(),
+            Some(obs),
+        )
+        .expect("split guard recall");
+    assert_eq!(
+        recall.action_decision,
+        StigmergicActionDecision::RepulsionEscape
+    );
+    assert!(recall.guard_conflict_margin > 0.0);
+    assert_eq!(
+        recall.recalled_facts.first().map(|(e, _)| e.anchor_id),
+        Some(id_counter),
+        "expected grounded counter-fact {id_counter} to remain available for refutation"
+    );
+}

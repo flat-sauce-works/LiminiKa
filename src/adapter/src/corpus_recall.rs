@@ -1008,7 +1008,13 @@ impl TextAttractorCorpus {
         let suppress_facts = directive.repulse_guard
             || directive.suppress_injection
             || signal.gate_decision.suppress_fact_injection;
-        let recalled_facts = if suppress_facts {
+        let has_grounded_counter_fact = directive.repulse_guard
+            && signal.boundary_metrics.top1_fact_score >= policy.min_coherence * 0.65;
+        let recalled_facts = if has_grounded_counter_fact {
+            // Surface the strongest grounded counter-fact so downstream generation and reflection
+            // can actively refute the false premise while preserving `RepulsionEscape` gating.
+            fact_scores.into_iter().take(1).collect()
+        } else if suppress_facts {
             Vec::new()
         } else if signal.decomposition_triggered && !signal.linked_fact_indices.is_empty() {
             let max_coalition = policy.top_k_facts.max(signal.linked_fact_indices.len());

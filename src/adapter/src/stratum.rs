@@ -223,8 +223,56 @@ pub trait SocietyStratum {
     }
 }
 
+/// Applies leave-one-out top-k viewing-angle contrast across a subset of corpus `indices`
+/// to eliminate `1/N` self-dilution bias across differently sized role populations.
+#[allow(clippy::too_many_arguments)]
+fn apply_loo_top_k_contrast_on_indices(
+    cos_matrix: &[Vec<f32>],
+    indices: &[usize],
+    num_axes: usize,
+    top_k: usize,
+    gain: f32,
+    multiply_weight: bool,
+    weight_min: f32,
+    weight_max: f32,
+    signal: &mut StratumSignal,
+) {
+    let n_sub = indices.len();
+    if n_sub <= 1 || num_axes == 0 || top_k == 0 {
+        return;
+    }
+    let mut axis_sum = vec![0.0_f32; num_axes];
+    for &i in indices {
+        for (a, &val) in cos_matrix[i].iter().enumerate().take(num_axes) {
+            axis_sum[a] += val;
+        }
+    }
+    let denom = (n_sub - 1) as f32;
+    let k = top_k.min(num_axes);
+    for &i in indices {
+        let row = &cos_matrix[i];
+        let mut diffs: Vec<f32> = (0..num_axes)
+            .map(|a| {
+                let loo_mean = (axis_sum[a] - row[a]) / denom;
+                row[a] - loo_mean
+            })
+            .collect();
+        diffs.sort_by(|a, b| b.total_cmp(a));
+        let top_contrast = diffs[..k].iter().sum::<f32>() / (k as f32);
+        let pos = signal.candidate_scores[i].max(0.0);
+        signal.candidate_scores[i] += gain * pos * top_contrast;
+        let base_w = if multiply_weight {
+            signal.stigmergic_weights[i]
+        } else {
+            1.0
+        };
+        signal.stigmergic_weights[i] =
+            (base_w * (1.0 + top_contrast)).clamp(weight_min, weight_max);
+    }
+}
+
 /// Stratum 0 (`n = 0`): local feature worker extracting per-layer viewing-angle contrast relative
-/// to same-role peers on common-mode-projected signatures and recording stigmergic weights.
+/// to the unified corpus manifold on common-mode-projected signatures and recording stigmergic weights.
 #[derive(Debug, Clone, Copy)]
 pub struct LocalFeatureWorkerStratum {
     /// Weight applied to top-layer viewing-angle contrast modulated by positive global support.
@@ -278,6 +326,7 @@ impl SocietyStratum for LocalFeatureWorkerStratum {
                         );
                     }
                 }
+                let top_l = (num_steered / 4).max(1);
                 for role in [
                     AttractorRole::Fact,
                     AttractorRole::Persona,
@@ -290,26 +339,17 @@ impl SocietyStratum for LocalFeatureWorkerStratum {
                         .filter(|(_, e)| e.role == role)
                         .map(|(i, _)| i)
                         .collect();
-                    if idxs.len() <= 1 {
-                        continue;
-                    }
-                    let mut role_layer_mean = vec![0.0_f32; num_steered];
-                    for &i in &idxs {
-                        for (l, mean_slot) in role_layer_mean.iter_mut().enumerate() {
-                            *mean_slot += layer_cos[i][l] / (idxs.len() as f32);
-                        }
-                    }
-                    let top_l = (num_steered / 4).max(1);
-                    for &i in &idxs {
-                        let mut diffs: Vec<f32> = (0..num_steered)
-                            .map(|l| layer_cos[i][l] - role_layer_mean[l])
-                            .collect();
-                        diffs.sort_by(|a, b| b.total_cmp(a));
-                        let top_contrast = diffs[..top_l].iter().sum::<f32>() / (top_l as f32);
-                        let pos = signal.candidate_scores[i].max(0.0);
-                        signal.candidate_scores[i] += self.layer_contrast_gain * pos * top_contrast;
-                        signal.stigmergic_weights[i] = (1.0 + top_contrast).clamp(0.5, 1.5);
-                    }
+                    apply_loo_top_k_contrast_on_indices(
+                        &layer_cos,
+                        &idxs,
+                        num_steered,
+                        top_l,
+                        self.layer_contrast_gain,
+                        false,
+                        0.5,
+                        1.5,
+                        signal,
+                    );
                 }
             }
         }
@@ -426,26 +466,17 @@ impl SocietyStratum for HeadAngleWorkerStratum {
                 .filter(|(_, e)| e.role == role)
                 .map(|(i, _)| i)
                 .collect();
-            if idxs.len() <= 1 {
-                continue;
-            }
-            let mut role_head_mean = vec![0.0_f32; n_heads];
-            for &i in &idxs {
-                for (h, mean_slot) in role_head_mean.iter_mut().enumerate() {
-                    *mean_slot += head_cos[i][h] / (idxs.len() as f32);
-                }
-            }
-            for &i in &idxs {
-                let mut diffs: Vec<f32> = (0..n_heads)
-                    .map(|h| head_cos[i][h] - role_head_mean[h])
-                    .collect();
-                diffs.sort_by(|a, b| b.total_cmp(a));
-                let top_contrast = diffs[..top_k_heads].iter().sum::<f32>() / (top_k_heads as f32);
-                let pos = signal.candidate_scores[i].max(0.0);
-                signal.candidate_scores[i] += self.head_contrast_gain * pos * top_contrast;
-                signal.stigmergic_weights[i] =
-                    (signal.stigmergic_weights[i] * (1.0 + top_contrast)).clamp(0.4, 2.0);
-            }
+            apply_loo_top_k_contrast_on_indices(
+                &head_cos,
+                &idxs,
+                n_heads,
+                top_k_heads,
+                self.head_contrast_gain,
+                true,
+                0.4,
+                2.0,
+                signal,
+            );
         }
         Ok(())
     }
@@ -1159,6 +1190,149 @@ impl LocalTokenResonanceStratum {
     }
 }
 
+struct RoleCoalitionPair {
+    cand_a: usize,
+    cand_b: usize,
+    joint_excl: f32,
+    second_contrib: f32,
+    pair_chamfer: f32,
+    max_subsumption: f32,
+    decomp_weights: Vec<f32>,
+    total_decomp_w: f32,
+}
+
+/// Evaluates role-scoped exclusivity weights and finds the highest-utility 2-attractor
+/// coalition over `token_deposits` for any `AttractorRole` (`Fact` or `Guard`).
+fn evaluate_role_coalition_pair(
+    token_deposits: &[TokenResonanceDeposit],
+    d_to_q_scores: &[f32],
+    role_idxs: &[usize],
+) -> Option<(RoleCoalitionPair, Vec<(usize, f32)>)> {
+    if role_idxs.len() < 2 || token_deposits.is_empty() {
+        return None;
+    }
+    let n_dep = token_deposits.len();
+    let mut decomp_weights = vec![0.0_f32; n_dep];
+    let mut role_profiles: Vec<Vec<f32>> = Vec::with_capacity(n_dep);
+    for (idx, d) in token_deposits.iter().enumerate() {
+        let mut pos_vals: Vec<f32> = role_idxs
+            .iter()
+            .map(|&ri| d.entry_excess[ri].max(0.0))
+            .collect();
+        let norm: f32 = pos_vals.iter().map(|&v| v * v).sum::<f32>().sqrt();
+        let mut sorted_vals = pos_vals.clone();
+        sorted_vals.sort_by(|a, b| b.total_cmp(a));
+        let r_top1 = sorted_vals.first().copied().unwrap_or(0.0);
+        let r_top2 = sorted_vals.get(1).copied().unwrap_or(0.0);
+        let exclusivity = if r_top1 > 1e-6 {
+            ((r_top1 - r_top2) / r_top1).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let mut redundancy_damp = 1.0_f32;
+        if norm > 1e-6 {
+            for v in &mut pos_vals {
+                *v /= norm;
+            }
+            let mut max_prev_cos = 0.0_f32;
+            for prev in &role_profiles {
+                let c: f32 = pos_vals.iter().zip(prev.iter()).map(|(&a, &b)| a * b).sum();
+                if c > max_prev_cos {
+                    max_prev_cos = c;
+                }
+            }
+            if max_prev_cos > 0.75 && exclusivity < 0.50 {
+                redundancy_damp = (1.0 - max_prev_cos * max_prev_cos).max(0.50);
+            }
+        }
+        role_profiles.push(pos_vals);
+        decomp_weights[idx] =
+            d.disc_weight.max(0.0) * (0.40 + 0.60 * exclusivity) * redundancy_damp;
+    }
+    let total_decomp_w: f32 = decomp_weights.iter().sum();
+    if total_decomp_w <= 1e-8 {
+        return None;
+    }
+
+    let excl_single_scores: Vec<(usize, f32)> = role_idxs
+        .iter()
+        .map(|&ri| {
+            let s = token_deposits
+                .iter()
+                .zip(decomp_weights.iter())
+                .map(|(d, &w)| w * d.entry_excess[ri])
+                .sum::<f32>()
+                / total_decomp_w;
+            (ri, s)
+        })
+        .collect();
+
+    let mut best_pair: Option<(usize, usize, f32, f32, f32)> = None;
+    for a in 0..role_idxs.len() {
+        let (i, gain_i) = excl_single_scores[a];
+        let gain_i_pos = gain_i.max(0.0);
+        if gain_i_pos <= 0.004 {
+            continue;
+        }
+        for &(j, gain_j) in &excl_single_scores[(a + 1)..] {
+            let gain_j_pos = gain_j.max(0.0);
+            if gain_j_pos <= 0.004 {
+                continue;
+            }
+            let joint_excl = token_deposits
+                .iter()
+                .zip(decomp_weights.iter())
+                .map(|(d, &w)| w * d.entry_excess[i].max(d.entry_excess[j]))
+                .sum::<f32>()
+                / total_decomp_w;
+            let second_contrib = (joint_excl - gain_i_pos)
+                .min(joint_excl - gain_j_pos)
+                .max(0.0);
+            if second_contrib <= 0.012 {
+                continue;
+            }
+            let pair_d_to_q = 0.5 * (d_to_q_scores[i] + d_to_q_scores[j]);
+            let utility = 0.70 * joint_excl + 0.25 * second_contrib + 0.20 * pair_d_to_q;
+            if best_pair.is_none_or(|(_, _, _, _, best_u)| utility > best_u) {
+                best_pair = Some((i, j, joint_excl, second_contrib, utility));
+            }
+        }
+    }
+
+    let (cand_a, cand_b, joint_excl, second_contrib, _utility) = best_pair?;
+    let max_subsumption = role_idxs
+        .iter()
+        .map(|&k| {
+            token_deposits
+                .iter()
+                .zip(decomp_weights.iter())
+                .map(|(d, &w)| {
+                    let ex_k = d.entry_excess[k];
+                    let ex_pair = d.entry_excess[cand_a].max(d.entry_excess[cand_b]);
+                    w * ex_k.min(ex_pair)
+                })
+                .sum::<f32>()
+                / total_decomp_w
+        })
+        .fold(0.0_f32, f32::max);
+    let pair_chamfer =
+        0.70 * joint_excl + 0.20 * 0.5 * (d_to_q_scores[cand_a] + d_to_q_scores[cand_b]);
+
+    Some((
+        RoleCoalitionPair {
+            cand_a,
+            cand_b,
+            joint_excl,
+            second_contrib,
+            pair_chamfer,
+            max_subsumption,
+            decomp_weights,
+            total_decomp_w,
+        },
+        excl_single_scores,
+    ))
+}
+
 impl StigmergicCoalitionDecomposer for ResidualPeelingSwarmDecomposer {
     /// Evaluates multi-hop residual-peeling set cover over Fact trails when multiple specialized
     /// attractors jointly explain distinct query tokens that single global pooling collapses.
@@ -1222,51 +1396,21 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingSwarmDecomposer {
             return;
         }
 
-        // Compute Fact-exclusivity and cross-token redundancy weights per token deposit so
-        // repeated subwords of a shared corpus qualifier cannot drown out distinct single-Fact
-        // specialist concepts during compound decomposition.
-        let n_dep = signal.token_deposits.len();
-        let mut decomp_weights = vec![0.0_f32; n_dep];
-        let mut fact_profiles: Vec<Vec<f32>> = Vec::with_capacity(n_dep);
-        for (idx, d) in signal.token_deposits.iter().enumerate() {
-            let mut pos_vals: Vec<f32> = fact_idxs
-                .iter()
-                .map(|&fi| d.entry_excess[fi].max(0.0))
-                .collect();
-            let norm: f32 = pos_vals.iter().map(|&v| v * v).sum::<f32>().sqrt();
-            let mut sorted_vals = pos_vals.clone();
-            sorted_vals.sort_by(|a, b| b.total_cmp(a));
-            let f_top1 = sorted_vals.first().copied().unwrap_or(0.0);
-            let f_top2 = sorted_vals.get(1).copied().unwrap_or(0.0);
-            let exclusivity = if f_top1 > 1e-6 {
-                ((f_top1 - f_top2) / f_top1).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let mut redundancy_damp = 1.0_f32;
-            if norm > 1e-6 {
-                for v in &mut pos_vals {
-                    *v /= norm;
-                }
-                let mut max_prev_cos = 0.0_f32;
-                for prev in &fact_profiles {
-                    let c: f32 = pos_vals.iter().zip(prev.iter()).map(|(&a, &b)| a * b).sum();
-                    if c > max_prev_cos {
-                        max_prev_cos = c;
-                    }
-                }
-                if max_prev_cos > 0.75 && exclusivity < 0.50 {
-                    redundancy_damp = (1.0 - max_prev_cos * max_prev_cos).max(0.50);
-                }
-            }
-            fact_profiles.push(pos_vals);
-            decomp_weights[idx] =
-                d.disc_weight.max(0.0) * (0.40 + 0.60 * exclusivity) * redundancy_damp;
-        }
-        let total_decomp_w: f32 = decomp_weights.iter().sum();
-        if total_decomp_w <= 1e-8 {
+        let Some((pair, excl_single_scores)) =
+            evaluate_role_coalition_pair(&signal.token_deposits, &signal.d_to_q_scores, &fact_idxs)
+        else {
             return;
-        }
+        };
+        let RoleCoalitionPair {
+            cand_a,
+            cand_b,
+            joint_excl,
+            second_contrib,
+            pair_chamfer,
+            max_subsumption,
+            decomp_weights,
+            total_decomp_w,
+        } = pair;
 
         let (g_fact_top1, g_fact_top1_score) = fact_idxs
             .iter()
@@ -1274,72 +1418,13 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingSwarmDecomposer {
             .max_by(|a, b| a.1.total_cmp(&b.1))
             .unwrap_or((fact_idxs[0], -1.0));
         let excl_q_to_d_for = |fact_idx: usize| -> f32 {
-            signal
-                .token_deposits
+            excl_single_scores
                 .iter()
-                .zip(decomp_weights.iter())
-                .map(|(d, &w)| w * d.entry_excess[fact_idx])
-                .sum::<f32>()
-                / total_decomp_w
+                .find(|&&(idx, _)| idx == fact_idx)
+                .map(|&(_, s)| s)
+                .unwrap_or(0.0)
         };
-        let excl_single_scores: Vec<(usize, f32)> =
-            fact_idxs.iter().map(|&i| (i, excl_q_to_d_for(i))).collect();
         let g_top1_excl = excl_q_to_d_for(g_fact_top1);
-
-        let mut best_pair: Option<(usize, usize, f32, f32, f32)> = None;
-        for a in 0..fact_idxs.len() {
-            let (i, gain_i) = excl_single_scores[a];
-            let gain_i_pos = gain_i.max(0.0);
-            if gain_i_pos <= 0.004 {
-                continue;
-            }
-            for &(j, gain_j) in &excl_single_scores[(a + 1)..] {
-                let gain_j_pos = gain_j.max(0.0);
-                if gain_j_pos <= 0.004 {
-                    continue;
-                }
-                let joint_excl = signal
-                    .token_deposits
-                    .iter()
-                    .zip(decomp_weights.iter())
-                    .map(|(d, &w)| w * d.entry_excess[i].max(d.entry_excess[j]))
-                    .sum::<f32>()
-                    / total_decomp_w;
-                let second_contrib = (joint_excl - gain_i_pos)
-                    .min(joint_excl - gain_j_pos)
-                    .max(0.0);
-                if second_contrib <= 0.012 {
-                    continue;
-                }
-                let pair_d_to_q = 0.5 * (signal.d_to_q_scores[i] + signal.d_to_q_scores[j]);
-                let utility = 0.70 * joint_excl + 0.25 * second_contrib + 0.20 * pair_d_to_q;
-                if best_pair.is_none_or(|(_, _, _, _, best_u)| utility > best_u) {
-                    best_pair = Some((i, j, joint_excl, second_contrib, utility));
-                }
-            }
-        }
-
-        let Some((cand_a, cand_b, joint_excl, second_contrib, _utility)) = best_pair else {
-            return;
-        };
-
-        // Ensure no single Fact `k` subsumes `>= 78%` of `{cand_a, cand_b}`'s covered token mass.
-        let max_subsumption = fact_idxs
-            .iter()
-            .map(|&k| {
-                signal
-                    .token_deposits
-                    .iter()
-                    .zip(decomp_weights.iter())
-                    .map(|(d, &w)| {
-                        let ex_k = d.entry_excess[k];
-                        let ex_pair = d.entry_excess[cand_a].max(d.entry_excess[cand_b]);
-                        w * ex_k.min(ex_pair)
-                    })
-                    .sum::<f32>()
-                    / total_decomp_w
-            })
-            .fold(0.0_f32, f32::max);
 
         let raw_joint_q_to_d = signal
             .token_deposits
@@ -1355,11 +1440,7 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingSwarmDecomposer {
             && (joint_excl - max_subsumption) >= 0.22 * joint_excl;
         let global_chamfer_top1 =
             0.70 * g_top1_excl.max(0.0) + 0.20 * signal.d_to_q_scores[g_fact_top1];
-        let pair_chamfer = 0.70 * joint_excl
-            + 0.20 * 0.5 * (signal.d_to_q_scores[cand_a] + signal.d_to_q_scores[cand_b]);
-        let outperforms_global_hub = (cand_a != g_fact_top1
-            && cand_b != g_fact_top1
-            && pair_chamfer > global_chamfer_top1 + 0.020)
+        let outperforms_global_hub = pair_chamfer > global_chamfer_top1 + 0.020
             || signal.candidate_scores[cand_a] < ctx.policy.min_coherence * 0.75
             || signal.candidate_scores[cand_b] < ctx.policy.min_coherence * 0.75;
 
@@ -1637,7 +1718,7 @@ impl SocietyStratum for LocalTokenResonanceStratum {
             if idxs.len() <= 1 {
                 continue;
             }
-            let Some((g_r_idx, _g_r_top1, _g_r_top2, g_r_mean, g_r_std, g_r_sharp)) =
+            let Some((g_r_idx, g_r_top1, _g_r_top2, g_r_mean, g_r_std, g_r_sharp)) =
                 Self::channel_sharpness_on_indices(&signal.candidate_scores, &idxs, 0.05)
             else {
                 continue;
@@ -1648,30 +1729,44 @@ impl SocietyStratum for LocalTokenResonanceStratum {
                 continue;
             };
 
-            if g_r_idx == l_r_idx {
-                if l_r_top1 > 0.0 {
-                    signal.stigmergic_weights[g_r_idx] = (signal.stigmergic_weights[g_r_idx]
-                        * (1.0 + 0.25 * l_r_top1.min(1.0)))
-                    .clamp(0.35, 2.5);
-                }
+            let energy_floor = ctx.policy.min_coherence * 0.50;
+            if g_r_top1 < energy_floor && l_r_top1 < energy_floor {
                 continue;
             }
 
             let l_r_margin = (l_r_top1 - l_r_top2).max(0.0);
-            let role_local_sharper = (global_local_sharper && l_r_top1 > 0.04)
-                || (l_r_top1 > 0.04 && l_r_margin >= 0.025 && l_r_sharp > g_r_sharp * 1.15);
+            let agree_floor = ctx.policy.min_coherence * 0.65;
+            let role_local_sharper =
+                (global_local_sharper && g_r_idx != l_r_idx && l_r_top1 > 0.04)
+                    || (l_r_margin >= 0.025
+                        && l_r_sharp > g_r_sharp * 1.15
+                        && ((g_r_idx != l_r_idx && l_r_top1 >= energy_floor)
+                            || (g_r_idx == l_r_idx
+                                && g_r_top1 >= agree_floor
+                                && l_r_top1 >= agree_floor)));
+
+            if g_r_idx == l_r_idx && l_r_top1 > 0.0 {
+                signal.stigmergic_weights[g_r_idx] = (signal.stigmergic_weights[g_r_idx]
+                    * (1.0 + 0.25 * l_r_top1.min(1.0)))
+                .clamp(0.35, 2.5);
+            }
             if !role_local_sharper {
                 continue;
             }
 
-            if role == AttractorRole::Fact {
+            if role == AttractorRole::Fact && g_r_idx != l_r_idx {
                 signal.local_channel_preferred = true;
                 signal.swarm_report =
                     Self::resolve_pair_swarm(ctx.entries, g_r_idx, l_r_idx, last_layer);
             }
 
             let alpha = (self.token_contrast_gain * 1.6).clamp(0.0, 0.80);
-            let scale = g_r_std.max(0.10);
+            let basin_scale_floor = ctx.policy.min_coherence * 0.75;
+            let scale = if g_r_top1 >= basin_scale_floor || l_r_top1 >= basin_scale_floor {
+                g_r_std.max(0.10)
+            } else {
+                g_r_std.max(0.03)
+            };
             for &i in &idxs {
                 let z_loc = ((signal.local_token_scores[i] - l_r_mean) / l_r_std).clamp(-2.0, 3.0);
                 let matched_loc = g_r_mean + z_loc * scale;
@@ -1681,6 +1776,58 @@ impl SocietyStratum for LocalTokenResonanceStratum {
                 if pos_contrast > 0.0 {
                     signal.stigmergic_weights[i] =
                         (signal.stigmergic_weights[i] * (1.0 + pos_contrast)).clamp(0.35, 2.5);
+                }
+            }
+        }
+
+        // Symmetric fractal Guard coalition check: when false premises split across multiple
+        // ContrastiveGuard entries (`PyTorch` + `24 GB VRAM`) that jointly cover discriminative
+        // token deposits better than any single Fact, elevate the Guard coalition so the upper
+        // boundary stratum detects the multi-premise trap.
+        if !signal.decomposition_triggered
+            && !signal.token_deposits.is_empty()
+            && signal.d_to_q_scores.len() == n_entries
+            && signal.q_to_d_scores.len() == n_entries
+        {
+            let guard_idxs: Vec<usize> = ctx
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.role == AttractorRole::Guard)
+                .map(|(i, _)| i)
+                .collect();
+            if let Some((g_pair, _)) = evaluate_role_coalition_pair(
+                &signal.token_deposits,
+                &signal.d_to_q_scores,
+                &guard_idxs,
+            ) {
+                let g_bimodal = g_pair.joint_excl >= 0.040
+                    && g_pair.second_contrib >= 0.015
+                    && g_pair.second_contrib >= 0.25 * g_pair.joint_excl
+                    && (g_pair.joint_excl - g_pair.max_subsumption) >= 0.22 * g_pair.joint_excl;
+                let best_fact_chamfer = ctx
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| e.role == AttractorRole::Fact)
+                    .map(|(i, _)| {
+                        0.70 * signal.q_to_d_scores[i].max(0.0) + 0.20 * signal.d_to_q_scores[i]
+                    })
+                    .fold(0.0_f32, f32::max);
+                if g_bimodal && g_pair.pair_chamfer > best_fact_chamfer + 0.010 {
+                    let max_fact_score = ctx
+                        .entries
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, e)| e.role == AttractorRole::Fact)
+                        .map(|(i, _)| signal.candidate_scores[i])
+                        .fold(0.0_f32, f32::max);
+                    let guard_floor = (max_fact_score + (g_pair.pair_chamfer - best_fact_chamfer))
+                        .max(ctx.policy.min_coherence);
+                    signal.candidate_scores[g_pair.cand_a] =
+                        signal.candidate_scores[g_pair.cand_a].max(guard_floor);
+                    signal.candidate_scores[g_pair.cand_b] =
+                        signal.candidate_scores[g_pair.cand_b].max(guard_floor);
                 }
             }
         }

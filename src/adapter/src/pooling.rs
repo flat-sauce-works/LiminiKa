@@ -11,7 +11,7 @@
 
 use crate::{
     AttractorRole, DynamicAttractorRecall, LocalChannelObservation, ModelSteeringAdapter,
-    RecallPolicy, StratumPipeline, TextAttractorCorpus, TokenResonanceDeposit,
+    RecallPolicy, StratumPipeline, TextAttractorCorpus, TextAttractorEntry, TokenResonanceDeposit,
 };
 use liminika_core::traits::gateway::ManifoldProbeBaseline;
 use liminika_core::traits::primitives::{load_q7_words_64, MAX_ATTENTION_HEADS};
@@ -786,7 +786,7 @@ impl CompiledTokenCorpus {
         }
 
         let (entry_token_weights, entry_token_hub_bias, global_token_hub_mean) =
-            Self::recompute_token_specificity_and_hubness(&entry_token_sigs);
+            Self::recompute_token_specificity_and_hubness(&entry_token_sigs, corpus.entries());
 
         let geom = adapter.geometry();
         let steered_layers = (0..geom.num_layers)
@@ -819,17 +819,24 @@ impl CompiledTokenCorpus {
 
     fn recompute_token_specificity_and_hubness(
         entry_token_sigs: &[Vec<Vec<f32>>],
+        entries: &[TextAttractorEntry],
     ) -> (Vec<Vec<f32>>, Vec<f32>, f32) {
-        // Estimate cross-entry doc-token specificity weights (`1 / (1 + sum_{j!=i} max_sim_+^2)`)
-        // and leave-one-out empirical MaxSim hubness baseline per entry.
+        // Estimate same-role cross-entry doc-token specificity weights
+        // (`1 / (1 + sum_{j!=i, role_j == role_i} max_sim_+^2)`) so contrastive Guards echoing
+        // factual entity names do not dilute factual token specificity, alongside leave-one-out
+        // empirical MaxSim hubness baselines.
         let n_entries = entry_token_sigs.len();
         let mut entry_token_weights: Vec<Vec<f32>> = Vec::with_capacity(n_entries);
         for i in 0..n_entries {
+            let role_i = entries.get(i).map(|e| e.role);
             let mut weights_i = Vec::with_capacity(entry_token_sigs[i].len());
             for d_tok in &entry_token_sigs[i] {
                 let mut other_sim_sq = 0.0_f32;
                 for (j, other_toks) in entry_token_sigs.iter().enumerate() {
-                    if i == j || other_toks.is_empty() {
+                    let same_role = role_i
+                        .zip(entries.get(j).map(|e| e.role))
+                        .is_none_or(|(ri, rj)| ri == rj);
+                    if i == j || other_toks.is_empty() || !same_role {
                         continue;
                     }
                     let best_j = other_toks
@@ -912,8 +919,10 @@ impl CompiledTokenCorpus {
         for (_, sig, _) in salient {
             self.entry_token_sigs[entry_idx].push(sig);
         }
-        let (weights, hub_bias, global_hub_mean) =
-            Self::recompute_token_specificity_and_hubness(&self.entry_token_sigs);
+        let (weights, hub_bias, global_hub_mean) = Self::recompute_token_specificity_and_hubness(
+            &self.entry_token_sigs,
+            self.corpus.entries(),
+        );
         self.entry_token_weights = weights;
         self.entry_token_hub_bias = hub_bias;
         self.global_token_hub_mean = global_hub_mean;
@@ -1753,6 +1762,65 @@ mod tests {
             "expected entry 1 alias match ({}) > entry 0 ({})",
             obs.q_to_d_scores[1],
             obs.q_to_d_scores[0]
+        );
+    }
+
+    #[test]
+    fn same_role_token_specificity_ignores_contrastive_guard_echoes() {
+        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+        let num_layers = adapter.geometry().num_layers;
+        let dim = adapter.geometry().q_rot_len();
+        let make_seq = |toks: &[(usize, f32)]| -> Vec<Vec<f32>> {
+            let mut per_layer = Vec::with_capacity(num_layers);
+            for _ in 0..num_layers {
+                let mut flat = vec![0.0_f32; toks.len() * dim];
+                for (t, &(slot, amp)) in toks.iter().enumerate() {
+                    flat[t * dim + slot] = amp;
+                    flat[t * dim + (slot + 1) % dim] = 0.15;
+                }
+                per_layer.push(flat);
+            }
+            per_layer
+        };
+
+        // Entry 0 (Fact) and Entry 2 (Guard) share entity token slot 30, while Entry 1 (Fact)
+        // shares token slot 50 with nothing else; Guard echo must not dilute Entry 0's specificity.
+        let entries = vec![
+            TokenSequenceEntry {
+                role: AttractorRole::Fact,
+                text: "Entity Fact".to_string(),
+                energy: 2.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq(&[(30, 0.95), (70, 0.85)]),
+            },
+            TokenSequenceEntry {
+                role: AttractorRole::Fact,
+                text: "Other Fact".to_string(),
+                energy: 2.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq(&[(50, 0.95), (90, 0.85)]),
+            },
+            TokenSequenceEntry {
+                role: AttractorRole::Guard,
+                text: "Contrastive Guard echoing entity".to_string(),
+                energy: 2.0,
+                seq_len: 2,
+                per_layer_token_qs: make_seq(&[(30, 0.95), (110, 0.85)]),
+            },
+        ];
+
+        let compiled = CompiledTokenCorpus::compile(
+            &adapter,
+            &entries,
+            SequenceActivationPooler::default(),
+            2,
+            1,
+        )
+        .expect("compile");
+        assert!(
+            compiled.entry_token_weights[0].iter().all(|&w| w > 0.85),
+            "Guard echo should not penalize Fact token specificity: {:?}",
+            compiled.entry_token_weights[0]
         );
     }
 }

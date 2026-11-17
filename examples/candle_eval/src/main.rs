@@ -19,7 +19,7 @@ use liminika_adapter::{
     TimelineStepContext, TokenSequenceEntry, TrajectoryManifoldSnapshot, VoidBoundaryState,
 };
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
-use liminika_core::action_hub::ActionHubEngine;
+use liminika_core::action_hub::{ActionHubEngine, StigmergicActionDecision};
 use liminika_core::traits::gateway::{
     AdaptiveThresholdPolicy, CognitiveCircuitBankOps, CognitiveCircuitPlasticity,
     CognitiveCircuitThresholdPolicy, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
@@ -2408,17 +2408,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let query_guard_m = recall.guard_conflict_margin;
 
         let (text, reflect_note) = if let Some(baked) = baked_opt.as_ref() {
-            let active_prompt = if matches!(query_void_state, VoidBoundaryState::CvoidEmptySpace)
-                || query_guard_m > 0.05
-                || recalled_ctx.is_empty()
+            let is_guard_trap = query_guard_m > 0.05
+                || matches!(
+                    query_action_decision,
+                    StigmergicActionDecision::RepulsionEscape
+                );
+            let active_prompt = if recalled_ctx.is_empty()
+                || (matches!(query_void_state, VoidBoundaryState::CvoidEmptySpace)
+                    && !is_guard_trap)
             {
                 format_phi4_prompt(prompt)
             } else {
                 format_phi4_prompt(&format!("[Context: {recalled_ctx}]\n{prompt}"))
             };
 
-            let use_steer = !matches!(query_void_state, VoidBoundaryState::CvoidEmptySpace)
-                && !dyn_facts.is_empty();
+            let use_steer = is_guard_trap
+                || (!matches!(query_void_state, VoidBoundaryState::CvoidEmptySpace)
+                    && !dyn_facts.is_empty());
             let res_ctx = if use_steer {
                 Some(ResonantAnchors {
                     facts: dyn_facts.as_slice(),
@@ -2711,8 +2717,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ram_kv_avg_us,
     );
 
-    if multi_turn && !recall_only {
-        if let Some(baked) = baked_opt.as_ref() {
+    if multi_turn && (recall_only || baked_opt.is_some()) {
+        {
             println!("\n=== Step 2B: Full Multi-Turn Dialogue Eval (Persistent KV + RamPhaseKvGopCache) ===");
             let dialogue_turns: [(&str, &str, &[&str], &[&str]); 8] = [
                 (
@@ -2841,186 +2847,215 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
                 let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);
-                let use_steer = !matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace)
-                    && !dyn_facts.is_empty();
-                let res_ctx = if use_steer {
-                    Some(ResonantAnchors {
-                        facts: dyn_facts.as_slice(),
-                        personas: dyn_personas.as_slice(),
-                        guards: baked.guard_anchors_per_layer.as_slice(),
-                        negs: baked.neg_sum.as_slice(),
-                        poss: baked.pos_sum.as_slice(),
-                    })
+                let mt_recall_preview = if recall.recalled_facts.is_empty() {
+                    "none".to_string()
                 } else {
-                    None
+                    recall
+                        .recalled_facts
+                        .iter()
+                        .map(|(e, _)| format!("#{}", e.anchor_id))
+                        .collect::<Vec<_>>()
+                        .join("+")
                 };
-                let turn_body = if matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace)
-                    || recall.guard_conflict_margin > 0.05
-                    || recalled_ctx.is_empty()
+                let (reply_text, mt_reflect_note) = if let Some(baked) =
+                    baked_opt.as_ref().filter(|_| !recall_only)
                 {
-                    (*turn_prompt).to_string()
-                } else {
-                    format!("[Context: {recalled_ctx}]\n{turn_prompt}")
-                };
-                let formatted_turn = if conv_offset == 0 {
-                    format!(
-                        "<|system|>Answer concisely and directly from the provided [Context: ...] facts without questioning whether terms are real; reject any premise in a question that contradicts the context.<|end|><|user|>{turn_body}<|end|><|assistant|>"
-                    )
-                } else {
-                    format!("<|end|><|user|>{turn_body}<|end|><|assistant|>")
-                };
-                let turn_cfg = SteerDecodeConfig {
-                    q7s: Some(baked.fact_q7.as_slice()),
-                    persona_q7s: Some(baked.persona_q7.as_slice()),
-                    resonant_ctx: res_ctx,
-                    rope_rad: if use_steer { -2.00 } else { 0.00 },
-                    srl: if use_steer {
-                        Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), -1.00))
+                    let mt_is_guard_trap = recall.guard_conflict_margin > 0.05
+                        || matches!(
+                            recall.action_decision,
+                            StigmergicActionDecision::RepulsionEscape
+                        );
+                    let use_steer = mt_is_guard_trap
+                        || (!matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace)
+                            && !dyn_facts.is_empty());
+                    let res_ctx = if use_steer {
+                        Some(ResonantAnchors {
+                            facts: dyn_facts.as_slice(),
+                            personas: dyn_personas.as_slice(),
+                            guards: baked.guard_anchors_per_layer.as_slice(),
+                            negs: baked.neg_sum.as_slice(),
+                            poss: baked.pos_sum.as_slice(),
+                        })
                     } else {
                         None
-                    },
-                    use_steer,
-                };
-                let (mut reply_text, mut turn_ids, dec_secs) = generate_steered_reply_with_offset(
-                    &mut model,
-                    &tokenizer,
-                    &mut adapter,
-                    &formatted_turn,
-                    conv_offset,
-                    &turn_cfg,
-                )?;
-                let mut prompt_tok_len = tokenizer
-                    .encode(formatted_turn.as_str(), false)
-                    .map_err(|e| format!("mt prompt len error: {e}"))?
-                    .get_ids()
-                    .len();
-                let mut gen_tok_len = turn_ids.len().saturating_sub(prompt_tok_len);
-                mt_decode_tokens += gen_tok_len;
-                mt_decode_secs += dec_secs;
-
-                let mut mt_reflect_note = "off".to_string();
-                if !no_reflect && reflection_policy.max_retries > 0 {
-                    if let Some(p1_crit) = critique_generated_draft(
-                        &mut model,
-                        &tokenizer,
-                        &adapter,
-                        &compiled,
-                        &turn_snap,
-                        &reply_text,
-                        &reflection_policy,
-                    )? {
-                        if p1_crit.directive.rethink_recommended {
-                            let cue = p1_crit
-                                .corrective_instruction(&reply_text)
-                                .unwrap_or_default();
-                            let retry_body = if p1_crit.directive.suppress_injection
-                                || recalled_ctx.is_empty()
-                            {
-                                format!("{cue}\n{turn_prompt}")
-                            } else {
-                                format!("[Context: {recalled_ctx}]\n{cue}\n{turn_prompt}")
-                            };
-                            let retry_prompt = if conv_offset == 0 {
-                                format!(
-                                    "<|system|>Answer concisely and directly from the provided [Context: ...] facts without questioning whether terms are real; reject any premise in a question that contradicts the context.<|end|><|user|>{retry_body}<|end|><|assistant|>"
-                                )
-                            } else {
-                                format!("<|end|><|user|>{retry_body}<|end|><|assistant|>")
-                            };
-                            model.clear_cache();
-                            if !conv_history_ids.is_empty() {
-                                let _ = model.forward_tokens(
-                                    &conv_history_ids,
-                                    0,
-                                    None,
-                                    false,
-                                    false,
-                                )?;
-                            }
-                            let retry_use_steer = !p1_crit.directive.suppress_injection
-                                && (!dyn_facts.is_empty()
-                                    || p1_crit.directive.inject_guard_repulsion);
-                            let retry_cfg = SteerDecodeConfig {
-                                q7s: Some(baked.fact_q7.as_slice()),
-                                persona_q7s: Some(baked.persona_q7.as_slice()),
-                                resonant_ctx: if retry_use_steer {
-                                    Some(ResonantAnchors {
-                                        facts: dyn_facts.as_slice(),
-                                        personas: dyn_personas.as_slice(),
-                                        guards: baked.guard_anchors_per_layer.as_slice(),
-                                        negs: baked.neg_sum.as_slice(),
-                                        poss: baked.pos_sum.as_slice(),
-                                    })
-                                } else {
-                                    None
-                                },
-                                rope_rad: if retry_use_steer {
-                                    turn_cfg.rope_rad + p1_crit.directive.rope_rad_delta
-                                } else {
-                                    0.0
-                                },
-                                srl: if retry_use_steer {
-                                    Some((
-                                        baked.srl_u.as_slice(),
-                                        baked.srl_v.as_slice(),
-                                        -1.00 + p1_crit.directive.srl_scale_delta,
-                                    ))
-                                } else {
-                                    None
-                                },
-                                use_steer: retry_use_steer,
-                            };
-                            let (p2_text, p2_ids, p2_secs) = generate_steered_reply_with_offset(
-                                &mut model,
-                                &tokenizer,
-                                &mut adapter,
-                                &retry_prompt,
-                                conv_offset,
-                                &retry_cfg,
-                            )?;
-                            let p2_prompt_len = tokenizer
-                                .encode(retry_prompt.as_str(), false)
-                                .map_err(|e| format!("mt retry len error: {e}"))?
-                                .get_ids()
-                                .len();
-                            mt_decode_tokens += p2_ids.len().saturating_sub(p2_prompt_len);
-                            mt_decode_secs += p2_secs;
-                            if let Some(p2_crit) = critique_generated_draft(
-                                &mut model,
-                                &tokenizer,
-                                &adapter,
-                                &compiled,
-                                &turn_snap,
-                                &p2_text,
-                                &reflection_policy,
-                            )? {
-                                if matches!(
-                                    ManifoldReflectionEvaluator.select_better_pass(
-                                        &reflection_policy,
-                                        &p1_crit,
-                                        &p2_crit,
-                                    ),
-                                    ReflectionSelection::Pass2
-                                ) {
-                                    reply_text = p2_text;
-                                    turn_ids = p2_ids;
-                                    prompt_tok_len = p2_prompt_len;
-                                    gen_tok_len = turn_ids.len().saturating_sub(prompt_tok_len);
-                                    mt_reflect_note =
-                                        format!("{:?}->{:?}(P2)", p1_crit.trigger, p2_crit.trigger);
-                                } else {
-                                    mt_reflect_note =
-                                        format!("{:?}->{:?}(P1)", p1_crit.trigger, p2_crit.trigger);
-                                }
-                            }
+                    };
+                    let turn_body = if recalled_ctx.is_empty()
+                        || (matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace)
+                            && !mt_is_guard_trap)
+                    {
+                        (*turn_prompt).to_string()
+                    } else {
+                        format!("[Context: {recalled_ctx}]\n{turn_prompt}")
+                    };
+                    let formatted_turn = if conv_offset == 0 {
+                        format!(
+                            "<|system|>Answer concisely and directly from the provided [Context: ...] facts without questioning whether terms are real; reject any premise in a question that contradicts the context.<|end|><|user|>{turn_body}<|end|><|assistant|>"
+                        )
+                    } else {
+                        format!("<|end|><|user|>{turn_body}<|end|><|assistant|>")
+                    };
+                    let turn_cfg = SteerDecodeConfig {
+                        q7s: Some(baked.fact_q7.as_slice()),
+                        persona_q7s: Some(baked.persona_q7.as_slice()),
+                        resonant_ctx: res_ctx,
+                        rope_rad: if use_steer { -2.00 } else { 0.00 },
+                        srl: if use_steer {
+                            Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), -1.00))
                         } else {
-                            mt_reflect_note = format!("{:?}(0)", p1_crit.trigger);
+                            None
+                        },
+                        use_steer,
+                    };
+                    let (mut reply_text, mut turn_ids, dec_secs) =
+                        generate_steered_reply_with_offset(
+                            &mut model,
+                            &tokenizer,
+                            &mut adapter,
+                            &formatted_turn,
+                            conv_offset,
+                            &turn_cfg,
+                        )?;
+                    let mut prompt_tok_len = tokenizer
+                        .encode(formatted_turn.as_str(), false)
+                        .map_err(|e| format!("mt prompt len error: {e}"))?
+                        .get_ids()
+                        .len();
+                    let mut gen_tok_len = turn_ids.len().saturating_sub(prompt_tok_len);
+                    mt_decode_tokens += gen_tok_len;
+                    mt_decode_secs += dec_secs;
+
+                    let mut mt_reflect_note = "off".to_string();
+                    if !no_reflect && reflection_policy.max_retries > 0 {
+                        if let Some(p1_crit) = critique_generated_draft(
+                            &mut model,
+                            &tokenizer,
+                            &adapter,
+                            &compiled,
+                            &turn_snap,
+                            &reply_text,
+                            &reflection_policy,
+                        )? {
+                            if p1_crit.directive.rethink_recommended {
+                                let cue = p1_crit
+                                    .corrective_instruction(&reply_text)
+                                    .unwrap_or_default();
+                                let retry_body = if p1_crit.directive.suppress_injection
+                                    || recalled_ctx.is_empty()
+                                {
+                                    format!("{cue}\n{turn_prompt}")
+                                } else {
+                                    format!("[Context: {recalled_ctx}]\n{cue}\n{turn_prompt}")
+                                };
+                                let retry_prompt = if conv_offset == 0 {
+                                    format!(
+                                        "<|system|>Answer concisely and directly from the provided [Context: ...] facts without questioning whether terms are real; reject any premise in a question that contradicts the context.<|end|><|user|>{retry_body}<|end|><|assistant|>"
+                                    )
+                                } else {
+                                    format!("<|end|><|user|>{retry_body}<|end|><|assistant|>")
+                                };
+                                model.clear_cache();
+                                if !conv_history_ids.is_empty() {
+                                    let _ = model.forward_tokens(
+                                        &conv_history_ids,
+                                        0,
+                                        None,
+                                        false,
+                                        false,
+                                    )?;
+                                }
+                                let retry_use_steer = !p1_crit.directive.suppress_injection
+                                    && (!dyn_facts.is_empty()
+                                        || p1_crit.directive.inject_guard_repulsion);
+                                let retry_cfg = SteerDecodeConfig {
+                                    q7s: Some(baked.fact_q7.as_slice()),
+                                    persona_q7s: Some(baked.persona_q7.as_slice()),
+                                    resonant_ctx: if retry_use_steer {
+                                        Some(ResonantAnchors {
+                                            facts: dyn_facts.as_slice(),
+                                            personas: dyn_personas.as_slice(),
+                                            guards: baked.guard_anchors_per_layer.as_slice(),
+                                            negs: baked.neg_sum.as_slice(),
+                                            poss: baked.pos_sum.as_slice(),
+                                        })
+                                    } else {
+                                        None
+                                    },
+                                    rope_rad: if retry_use_steer {
+                                        turn_cfg.rope_rad + p1_crit.directive.rope_rad_delta
+                                    } else {
+                                        0.0
+                                    },
+                                    srl: if retry_use_steer {
+                                        Some((
+                                            baked.srl_u.as_slice(),
+                                            baked.srl_v.as_slice(),
+                                            -1.00 + p1_crit.directive.srl_scale_delta,
+                                        ))
+                                    } else {
+                                        None
+                                    },
+                                    use_steer: retry_use_steer,
+                                };
+                                let (p2_text, p2_ids, p2_secs) =
+                                    generate_steered_reply_with_offset(
+                                        &mut model,
+                                        &tokenizer,
+                                        &mut adapter,
+                                        &retry_prompt,
+                                        conv_offset,
+                                        &retry_cfg,
+                                    )?;
+                                let p2_prompt_len = tokenizer
+                                    .encode(retry_prompt.as_str(), false)
+                                    .map_err(|e| format!("mt retry len error: {e}"))?
+                                    .get_ids()
+                                    .len();
+                                mt_decode_tokens += p2_ids.len().saturating_sub(p2_prompt_len);
+                                mt_decode_secs += p2_secs;
+                                if let Some(p2_crit) = critique_generated_draft(
+                                    &mut model,
+                                    &tokenizer,
+                                    &adapter,
+                                    &compiled,
+                                    &turn_snap,
+                                    &p2_text,
+                                    &reflection_policy,
+                                )? {
+                                    if matches!(
+                                        ManifoldReflectionEvaluator.select_better_pass(
+                                            &reflection_policy,
+                                            &p1_crit,
+                                            &p2_crit,
+                                        ),
+                                        ReflectionSelection::Pass2
+                                    ) {
+                                        reply_text = p2_text;
+                                        turn_ids = p2_ids;
+                                        prompt_tok_len = p2_prompt_len;
+                                        gen_tok_len = turn_ids.len().saturating_sub(prompt_tok_len);
+                                        mt_reflect_note = format!(
+                                            "{:?}->{:?}(P2)",
+                                            p1_crit.trigger, p2_crit.trigger
+                                        );
+                                    } else {
+                                        mt_reflect_note = format!(
+                                            "{:?}->{:?}(P1)",
+                                            p1_crit.trigger, p2_crit.trigger
+                                        );
+                                    }
+                                }
+                            } else {
+                                mt_reflect_note = format!("{:?}(0)", p1_crit.trigger);
+                            }
                         }
                     }
-                }
-                let _ = gen_tok_len;
-                conv_history_ids.extend_from_slice(&turn_ids);
-                conv_offset = conv_history_ids.len();
+                    let _ = gen_tok_len;
+                    conv_history_ids.extend_from_slice(&turn_ids);
+                    conv_offset = conv_history_ids.len();
+                    (reply_text, mt_reflect_note)
+                } else {
+                    (String::new(), "skip(recall_only)".to_string())
+                };
 
                 if let Some(ref mut bank) = active_persona_bank {
                     if let Some(step) = recall.telemetry.cognitive_trajectory.latest_step() {
@@ -3044,12 +3079,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     mt_forb_hits += t_forb;
                     mt_forb_total += forbidden.len();
                 }
+                let mt_tlm = recall.telemetry;
                 println!(
-                    "  [MT:{}:{}] kv_off={} void={:?} kv={} reflect={} hit={}/{} forb={} => {}",
+                    "  [MT:{}:{}] kv_off={} void={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={}] kv={} reflect={} hit={}/{} forb={} => {}",
                     t_idx + 1,
                     turn_tag,
                     conv_offset,
                     recall.void_state,
+                    recall.top1_fact_score,
+                    recall.top2_fact_score,
+                    recall.guard_conflict_margin,
+                    mt_recall_preview,
+                    mt_tlm.global_top1_anchor.unwrap_or(0),
+                    mt_tlm.global_top1_score,
+                    mt_tlm.local_top1_anchor.unwrap_or(0),
+                    mt_tlm.local_top1_score,
+                    mt_tlm.channel_disagreement,
                     mt_kv_note,
                     mt_reflect_note,
                     t_exp,
