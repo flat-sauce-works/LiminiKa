@@ -923,8 +923,8 @@ pub unsafe extern "C" fn gcso_stigmergic_evaluate_venn_and_serendipity(
     })
 }
 
-/// Initializes a 64-byte [`gcso_autonomous_core_layer_stack_t`] (Core Layer 0: `LiminalApertureField`,
-/// Core Layer 1: `StigmergicGranuleField`) with canonical defaults.
+/// Initializes a 128-byte [`gcso_autonomous_core_layer_stack_t`] (Core Layer 0: `LiminalApertureField`,
+/// Core Layer 1: `StigmergicGranuleField`, Core Layer 2: `LiminalEgoField`) with canonical defaults.
 ///
 /// # Safety
 /// `stack_out` must be non-null and 64-byte aligned.
@@ -940,8 +940,8 @@ pub unsafe extern "C" fn gcso_core_layer_stack_init_default(
     })
 }
 
-/// Branchlessly adapts both Core Layer 0 (`Liminal`) and Core Layer 1 (`Stigmergic`) inside
-/// `stack_inout` from `horizon`, `venn_report`, and optional `ledger`.
+/// Branchlessly adapts Core Layer 0 (`Liminal`) and Core Layer 1 (`Stigmergic`) inside the
+/// 128-byte `stack_inout` from `horizon`, `venn_report`, and optional `ledger`.
 ///
 /// # Safety
 /// `stack_inout` (64B aligned), `horizon` (16B aligned), and `venn_report` (16B aligned) must be
@@ -992,10 +992,10 @@ pub unsafe extern "C" fn gcso_core_layer_stack_adapt(
     })
 }
 
-/// Formats the live 2-layer Core Topology (`Liminal` Layer 0, `StigmergicGranuleField` Layer 1,
-/// and the trait aperture table) as a `#![no_std]` zero-allocation Mermaid `flowchart TD` diagram
-/// into `out_buf[0..buf_cap]`. Pass `out_buf = NULL` to query the required byte length in
-/// `bytes_written_out`.
+/// Formats the live 3-layer Core Topology (`Liminal` Layer 0, `StigmergicGranuleField` Layer 1,
+/// `LiminalEgoField` Layer 2, and the trait aperture table) as a `#![no_std]` zero-allocation
+/// Mermaid `flowchart TD` diagram into `out_buf[0..buf_cap]`. Pass `out_buf = NULL` to query the
+/// required byte length in `bytes_written_out`.
 ///
 /// # Safety
 /// `stack` (64B aligned) and `horizon` (16B aligned) must be non-null; `venn_report` may be `NULL`
@@ -1034,8 +1034,7 @@ pub unsafe extern "C" fn gcso_liminal_topology_format_mermaid(
             spawned_daughters,
         );
         let mut scratch = [0u8; 2048];
-        let needed =
-            snap.format_core_layers_mermaid(&stack_ref.stigmergic_layer, &venn_val, &mut scratch);
+        let needed = snap.format_three_core_layers_mermaid(&stack_ref, &venn_val, &mut scratch);
 
         if out_buf.is_null() {
             // SAFETY: `write_opt_out` validates optional output pointer.

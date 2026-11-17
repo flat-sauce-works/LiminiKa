@@ -107,13 +107,14 @@ pub use crate::traits::primitives::{
     APERTURE_MAPPED_STORAGE, APERTURE_OBJECTIVE_FACT, APERTURE_PHASE_STEERING,
     APERTURE_POINTER_TRAIL, APERTURE_RANK1_RESIDUAL, APERTURE_RELATIVE_COUPLING,
     APERTURE_STIGMERGIC_CONSENSUS, APERTURE_SUBHEAD_ROUTING, APERTURE_SUBJECTIVE_PERSONA,
-    APERTURE_SYSTEM_CONSTRAINT, CORE_LAYER_LIMINAL, CORE_LAYER_STIGMERGIC,
+    APERTURE_SYSTEM_CONSTRAINT, CORE_LAYER_EGO, CORE_LAYER_LIMINAL, CORE_LAYER_STIGMERGIC,
     EGO_TRIGGER_ALL_DEFAULT, EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
     EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR, EGO_TRIGGER_VORTEX_SWALLOW,
     NUM_CORE_AUTONOMOUS_LAYERS, NUM_LIMINAL_APERTURE_CHANNELS,
 };
 
 pub mod circuit;
+pub mod core_layers;
 pub mod epistemic;
 pub mod frame;
 pub mod kv_cache;
@@ -127,6 +128,7 @@ pub use self::circuit::{
     LowSpecCognitiveBank, ScaleLayerNode, ScaleLayerProjection, StandardCognitiveBank,
     StigmergicScaleGranularity, StigmergicScaleLayer,
 };
+pub use self::core_layers::*;
 pub use self::epistemic::*;
 pub use self::frame::*;
 pub use self::kv_cache::*;
@@ -212,10 +214,11 @@ const _: () = {
     assert!(align_of::<StigmergicGranuleField>() == 16);
     assert!(offset_of!(StigmergicGranuleField, venn_overlap_mask) == 24);
     assert!(offset_of!(StigmergicGranuleField, adaptation_epochs) == 28);
-    assert!(size_of::<AutonomousCoreLayerStack>() == 64);
+    assert!(size_of::<AutonomousCoreLayerStack>() == 128);
     assert!(align_of::<AutonomousCoreLayerStack>() == 64);
     assert!(offset_of!(AutonomousCoreLayerStack, liminal_layer) == 0);
     assert!(offset_of!(AutonomousCoreLayerStack, stigmergic_layer) == 32);
+    assert!(offset_of!(AutonomousCoreLayerStack, ego_layer) == 64);
     assert!(size_of::<LiminalBoundaryDelta>() == 16);
     assert!(align_of::<LiminalBoundaryDelta>() == 16);
     assert!(offset_of!(LiminalBoundaryDelta, channel_floor_velocity_q7) == 0);
@@ -224,6 +227,21 @@ const _: () = {
     assert!(offset_of!(LiminalBoundaryDelta, kinetic_energy_q7) == 10);
     assert!(offset_of!(LiminalBoundaryDelta, stationary_shortcut_ready) == 11);
     assert!(offset_of!(LiminalBoundaryDelta, expansion_dominant) == 12);
+    assert!(size_of::<EgoIntentAxes>() == 16);
+    assert!(align_of::<EgoIntentAxes>() == 16);
+    assert!(offset_of!(EgoIntentAxes, autonomy_q7) == 0);
+    assert!(offset_of!(EgoIntentAxes, preferred_slot_mask) == 8);
+    assert!(offset_of!(EgoIntentAxes, active_granule_bias_mask) == 9);
+    assert!(offset_of!(EgoIntentAxes, confidence_q7) == 10);
+    assert!(offset_of!(EgoIntentAxes, flags) == 11);
+    assert!(offset_of!(EgoIntentAxes, signature_hash) == 12);
+    assert!(size_of::<StigmergicFragmentEnsembleReport>() == 16);
+    assert!(align_of::<StigmergicFragmentEnsembleReport>() == 16);
+    assert!(offset_of!(StigmergicFragmentEnsembleReport, quorum_agreed_granule_mask) == 8);
+    assert!(offset_of!(StigmergicFragmentEnsembleReport, split_contested_granule_mask) == 9);
+    assert!(offset_of!(StigmergicFragmentEnsembleReport, ego_tiebreak_granule_mask) == 10);
+    assert!(offset_of!(StigmergicFragmentEnsembleReport, active_fragment_count) == 11);
+    assert!(offset_of!(StigmergicFragmentEnsembleReport, dominant_fragment_slot) == 12);
     assert!(size_of::<LiminalEgoField>() == 64);
     assert!(align_of::<LiminalEgoField>() == 64);
     assert!(offset_of!(LiminalEgoField, sovereign_granule_phase_q7) == 0);
@@ -252,10 +270,14 @@ unsafe impl Pod for LiminalTopologyTelemetrySnapshot {}
 unsafe impl Pod for StigmergicVennSerendipityReport {}
 // SAFETY: `StigmergicGranuleField` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
 unsafe impl Pod for StigmergicGranuleField {}
-// SAFETY: `AutonomousCoreLayerStack` is `#[repr(C, align(64))]`, exact size 64 bytes with zero padding.
+// SAFETY: `AutonomousCoreLayerStack` is `#[repr(C, align(64))]`, exact size 128 bytes with zero padding.
 unsafe impl Pod for AutonomousCoreLayerStack {}
 // SAFETY: `LiminalBoundaryDelta` is `#[repr(C, align(16))]`, exact size 16 bytes with zero padding.
 unsafe impl Pod for LiminalBoundaryDelta {}
+// SAFETY: `EgoIntentAxes` is `#[repr(C, align(16))]`, exact size 16 bytes with zero padding.
+unsafe impl Pod for EgoIntentAxes {}
+// SAFETY: `StigmergicFragmentEnsembleReport` is `#[repr(C, align(16))]`, exact size 16 bytes with zero padding.
+unsafe impl Pod for StigmergicFragmentEnsembleReport {}
 // SAFETY: `LiminalEgoField` is `#[repr(C, align(64))]`, exact size 64 bytes with zero padding.
 unsafe impl Pod for LiminalEgoField {}
 

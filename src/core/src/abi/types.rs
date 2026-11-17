@@ -177,12 +177,16 @@ pub type gcso_liminal_aperture_field_t = LiminalApertureField;
 pub type gcso_stigmergic_granule_field_t = StigmergicGranuleField;
 /// C-ABI type alias for the 32-byte Venn-Overlap & Serendipity Report (`StigmergicVennSerendipityReport`).
 pub type gcso_stigmergic_venn_serendipity_report_t = StigmergicVennSerendipityReport;
-/// C-ABI type alias for the 64-byte Unified 2-Layer Autonomous Core Stack (`AutonomousCoreLayerStack`).
+/// C-ABI type alias for the 128-byte Unified 3-Layer Autonomous Core Stack (`AutonomousCoreLayerStack`).
 pub type gcso_autonomous_core_layer_stack_t = AutonomousCoreLayerStack;
 /// C-ABI type alias for the 32-byte Self-Introspecting Topology Telemetry Snapshot.
 pub type gcso_liminal_topology_snapshot_t = LiminalTopologyTelemetrySnapshot;
 /// C-ABI type alias for the 16-byte Temporal Boundary Velocity Analyzer (`LiminalBoundaryDelta`).
 pub type gcso_liminal_boundary_delta_t = LiminalBoundaryDelta;
+/// C-ABI type alias for the 16-byte Normalized Intermediate Ego Intent Axes (`EgoIntentAxes`).
+pub type gcso_ego_intent_axes_t = EgoIntentAxes;
+/// C-ABI type alias for the 16-byte Fragmented Micro-Ensemble Report (`StigmergicFragmentEnsembleReport`).
+pub type gcso_stigmergic_fragment_ensemble_report_t = StigmergicFragmentEnsembleReport;
 /// C-ABI type alias for the 64-byte Wide-Aperture Subjective Ego Field (`LiminalEgoField`).
 pub type gcso_liminal_ego_field_t = LiminalEgoField;
 
@@ -762,7 +766,7 @@ const _: () = {
             && align_of::<gcso_stigmergic_venn_serendipity_report_t>() == 16
     );
     assert!(
-        size_of::<gcso_autonomous_core_layer_stack_t>() == 64
+        size_of::<gcso_autonomous_core_layer_stack_t>() == 128
             && align_of::<gcso_autonomous_core_layer_stack_t>() == 64
     );
     assert!(
@@ -771,12 +775,36 @@ const _: () = {
     );
     assert!(offset_of!(gcso_autonomous_core_layer_stack_t, liminal_layer) == 0);
     assert!(offset_of!(gcso_autonomous_core_layer_stack_t, stigmergic_layer) == 32);
+    assert!(offset_of!(gcso_autonomous_core_layer_stack_t, ego_layer) == 64);
     assert!(
         size_of::<gcso_liminal_boundary_delta_t>() == 16
             && align_of::<gcso_liminal_boundary_delta_t>() == 16
     );
     assert!(offset_of!(gcso_liminal_boundary_delta_t, kinetic_energy_q7) == 10);
     assert!(offset_of!(gcso_liminal_boundary_delta_t, stationary_shortcut_ready) == 11);
+    assert!(
+        size_of::<gcso_ego_intent_axes_t>() == 16 && align_of::<gcso_ego_intent_axes_t>() == 16
+    );
+    assert!(offset_of!(gcso_ego_intent_axes_t, preferred_slot_mask) == 8);
+    assert!(offset_of!(gcso_ego_intent_axes_t, active_granule_bias_mask) == 9);
+    assert!(offset_of!(gcso_ego_intent_axes_t, flags) == 11);
+    assert!(offset_of!(gcso_ego_intent_axes_t, signature_hash) == 12);
+    assert!(
+        size_of::<gcso_stigmergic_fragment_ensemble_report_t>() == 16
+            && align_of::<gcso_stigmergic_fragment_ensemble_report_t>() == 16
+    );
+    assert!(
+        offset_of!(
+            gcso_stigmergic_fragment_ensemble_report_t,
+            quorum_agreed_granule_mask
+        ) == 8
+    );
+    assert!(
+        offset_of!(
+            gcso_stigmergic_fragment_ensemble_report_t,
+            ego_tiebreak_granule_mask
+        ) == 10
+    );
     assert!(
         size_of::<gcso_liminal_ego_field_t>() == 64 && align_of::<gcso_liminal_ego_field_t>() == 64
     );

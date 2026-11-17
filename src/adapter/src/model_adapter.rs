@@ -215,7 +215,6 @@ pub struct ModelSteeringAdapter {
     probe_baseline: ManifoldProbeBaseline,
     threshold_policy: AdaptiveThresholdPolicy,
     core_layers: AutonomousCoreLayerStack,
-    ego_field: LiminalEgoField,
     last_boundary_delta: LiminalBoundaryDelta,
     last_horizon: EpistemicHorizonReading,
     last_venn_report: StigmergicVennSerendipityReport,
@@ -274,7 +273,6 @@ impl ModelSteeringAdapter {
             probe_baseline,
             threshold_policy,
             core_layers: AutonomousCoreLayerStack::new(),
-            ego_field: LiminalEgoField::new(),
             last_boundary_delta: LiminalBoundaryDelta::default(),
             last_horizon: EpistemicHorizonReading::default(),
             last_venn_report: StigmergicVennSerendipityReport::default(),
@@ -393,10 +391,15 @@ impl ModelSteeringAdapter {
         &self.core_layers.stigmergic_layer
     }
 
-    /// Returns a shared reference to the unified 2-layer [`AutonomousCoreLayerStack`].
+    /// Returns a shared reference to the unified 3-layer [`AutonomousCoreLayerStack`].
     #[must_use]
     pub const fn core_layer_stack(&self) -> &AutonomousCoreLayerStack {
         &self.core_layers
+    }
+
+    /// Returns a mutable reference to the unified 3-layer [`AutonomousCoreLayerStack`].
+    pub fn core_layer_stack_mut(&mut self) -> &mut AutonomousCoreLayerStack {
+        &mut self.core_layers
     }
 
     /// Returns the most recently observed [`EpistemicHorizonReading`].
@@ -411,30 +414,50 @@ impl ModelSteeringAdapter {
         &self.last_venn_report
     }
 
-    /// Returns a shared reference to the live 64-byte [`LiminalEgoField`].
+    /// Returns a shared reference to the live 64-byte Core Layer 2 [`LiminalEgoField`].
     #[must_use]
     pub const fn ego_field(&self) -> &LiminalEgoField {
-        &self.ego_field
+        &self.core_layers.ego_layer
     }
 
-    /// Returns a mutable reference to the live 64-byte [`LiminalEgoField`].
+    /// Returns a mutable reference to the live 64-byte Core Layer 2 [`LiminalEgoField`].
     pub fn ego_field_mut(&mut self) -> &mut LiminalEgoField {
-        &mut self.ego_field
+        &mut self.core_layers.ego_layer
     }
 
-    /// Replaces the adapter's active [`LiminalEgoField`].
+    /// Replaces the adapter's active Core Layer 2 [`LiminalEgoField`].
     pub fn set_ego_field(&mut self, ego: LiminalEgoField) {
-        self.ego_field = ego;
+        self.core_layers.ego_layer = ego;
     }
 
-    /// Configures [`LiminalEgoField`] from a coarse [`LiminalEgoPreset`] (`Custom`, `Low`, `Medium`, `High`).
+    /// Configures Core Layer 2 [`LiminalEgoField`] from a coarse [`LiminalEgoPreset`] (`Custom`, `Low`, `Medium`, `High`).
     pub fn configure_ego_from_preset(&mut self, preset: LiminalEgoPreset) {
-        self.ego_field = LiminalEgoField::from_preset(preset);
+        self.core_layers.ego_layer = LiminalEgoField::from_preset(preset);
     }
 
-    /// Derives [`LiminalEgoField`] deterministically from a natural-language Ego description.
+    /// Configures Core Layer 2 [`LiminalEgoField`] from intermediate normalized [`EgoIntentAxes`].
+    pub fn configure_ego_from_intent_axes(&mut self, axes: &EgoIntentAxes) {
+        self.core_layers.ego_layer = LiminalEgoField::from_intent_axes(axes);
+    }
+
+    /// Smoothly blends an [`EgoIntentAxes`] overlay onto the current Ego state (`weight_q7` in `0..=127`).
+    pub fn blend_ego_intent_axes(&mut self, overlay: &EgoIntentAxes, weight_q7: u8) {
+        let base_axes = self.core_layers.ego_layer.extract_intent_axes();
+        let blended = base_axes.blend_lerp_q7(overlay, weight_q7);
+        self.core_layers.ego_layer = LiminalEgoField::from_intent_axes(&blended);
+    }
+
+    /// Derives Core Layer 2 [`LiminalEgoField`] deterministically from a natural-language Ego description.
     pub fn configure_ego_from_natural_language(&mut self, description: &str) {
-        self.ego_field = LiminalEgoField::from_natural_language(description);
+        self.core_layers.ego_layer = LiminalEgoField::from_natural_language(description);
+    }
+
+    /// Overlays natural-language Ego cues onto the existing Core Layer 2 [`LiminalEgoField`].
+    pub fn overlay_ego_from_natural_language(&mut self, description: &str) {
+        self.core_layers.ego_layer = self
+            .core_layers
+            .ego_layer
+            .with_natural_language_overlay(description);
     }
 
     /// Returns the most recent temporal [`LiminalBoundaryDelta`] between aperture epochs.
@@ -453,18 +476,32 @@ impl ModelSteeringAdapter {
         self.adapt_core_layers(horizon, &venn, overflow_opt);
     }
 
-    /// Updates both Core Layer 0 (`Liminal`) and Core Layer 1 (`Stigmergic`) branchlessly, computes
-    /// the temporal [`LiminalBoundaryDelta`], and applies [`LiminalEgoField`] boundary interventions.
+    /// Updates Core Layer 0 (`Liminal`), Layer 1 (`Stigmergic`), and Layer 2 (`Ego`)
+    /// branchlessly, leveraging `LiminalBoundaryDelta::stationary_shortcut_ready` to skip
+    /// redundant adaptation churn when boundaries are quiescent without stagnation triggers.
     pub fn adapt_core_layers(
         &mut self,
         horizon: &EpistemicHorizonReading,
         venn_report: &StigmergicVennSerendipityReport,
         overflow_opt: Option<&DissipativeOverflowReport>,
     ) {
-        let prev_layer0 = self.core_layers.liminal_layer;
-        let prev_venn = self.last_venn_report.venn_core_mask;
+        let stagnation_drive =
+            (self.core_layers.ego_layer.trigger_mask & EGO_TRIGGER_BOUNDARY_STAGNATION) != 0;
+        let can_shortcut = self.core_layers.liminal_layer.adaptation_epochs > 0
+            && self.last_boundary_delta.stationary_shortcut_ready == 1
+            && self.last_horizon.regime_code == horizon.regime_code
+            && venn_report.serendipity_triggered == 0
+            && self.last_venn_report.venn_core_mask == venn_report.venn_core_mask
+            && overflow_opt.is_none()
+            && !stagnation_drive;
         self.last_horizon = *horizon;
         self.last_venn_report = *venn_report;
+        if can_shortcut {
+            return;
+        }
+
+        let prev_layer0 = self.core_layers.liminal_layer;
+        let prev_venn = self.core_layers.stigmergic_layer.venn_overlap_mask;
         let ledger = self.active_circuit().unwrap_or_default();
         self.core_layers
             .adapt_layers_branchless(&ledger, horizon, venn_report, overflow_opt);
@@ -475,24 +512,26 @@ impl ModelSteeringAdapter {
             venn_report.venn_core_mask,
             &self.last_boundary_delta,
         );
-        if self.ego_field.is_active() {
+        if self.core_layers.ego_layer.is_active() {
             let preview = GatewayFrame {
                 effective_energy: horizon.total_memory_support,
                 ..GatewayFrame::default()
             };
-            let _ = self.ego_field.intervene_on_layers_and_frame_branchless(
-                &mut self.core_layers,
-                &self.last_boundary_delta,
-                horizon,
-                venn_report,
-                preview,
-            );
+            let _ = self
+                .core_layers
+                .intervene_ego_and_modulate_frame_branchless(
+                    &self.last_boundary_delta,
+                    horizon,
+                    venn_report,
+                    preview,
+                );
         }
     }
 
     /// Captures the live [`LiminalTopologyTelemetrySnapshot`] and renders a self-introspecting
-    /// 2-layer Mermaid `flowchart TD` diagram covering Core Layer 0 (`Liminal`), Core Layer 1
-    /// (`StigmergicGranuleField`), cognitive aperture masks, and crystal populations.
+    /// 3-layer Mermaid `flowchart TD` diagram covering Core Layer 0 (`Liminal`), Core Layer 1
+    /// (`StigmergicGranuleField`), Core Layer 2 (`LiminalEgoField`), cognitive aperture masks,
+    /// and crystal populations.
     #[must_use]
     pub fn render_liminal_topology_mermaid(
         &self,
@@ -506,8 +545,8 @@ impl ModelSteeringAdapter {
             spawned_daughters,
         );
         let mut buf = [0u8; 2048];
-        let written = snap.format_core_layers_mermaid(
-            &self.core_layers.stigmergic_layer,
+        let written = snap.format_three_core_layers_mermaid(
+            &self.core_layers,
             &self.last_venn_report,
             &mut buf,
         );
@@ -987,19 +1026,60 @@ impl ModelSteeringAdapter {
         }
     }
 
-    /// Applies norm-adaptive Rank-1 residual residual injection driven purely by a [`ManifoldGatewaySignal`]
-    /// via [`GatewayRank1SteeringExt::apply_gateway_rank1_hidden_fused`] without manual scale tuning.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if slice lengths mismatch or `liminika-core` rejects the inputs.
-    pub fn apply_srl_with_gateway<S: ManifoldGatewaySignal + ?Sized>(
-        &self,
+    /// Evaluates a slice of fragmented signals (`fragments`) as a subspace micro-ensemble over
+    /// the live 3-layer [`AutonomousCoreLayerStack`], updating Ego intervention state in place.
+    pub fn synthesize_fragment_ensemble<S: ManifoldGatewaySignal>(
+        &mut self,
+        fragments: &[S],
+    ) -> (
+        GatewayFrame,
+        [u64; NUM_STIGMERGIC_GRANULES],
+        StigmergicFragmentEnsembleReport,
+    ) {
+        S::synthesize_fragment_ensemble_with_core_layers(
+            fragments,
+            &mut self.core_layers,
+            &self.last_boundary_delta,
+            &self.last_horizon,
+            &self.last_venn_report,
+        )
+    }
+
+    fn synthesize_srl_gateway_frame_with_state<S: ManifoldGatewaySignal + ?Sized>(
         signal: &S,
+        circuit: Option<CognitiveTrajectoryLedger>,
+        stack: &mut AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> GatewayFrame {
+        let (mut frame, frm_w) = signal.synthesize_gateway_frame_with_words();
+        if let Some(c) = circuit {
+            let _ = c.modulate_gateway_frame_at_scale(
+                &mut frame,
+                &frm_w,
+                &frm_w,
+                StigmergicScaleGranularity::MacroCoalition,
+            );
+        }
+        if stack.liminal_layer.adaptation_epochs > 0 || stack.ego_layer.is_active() {
+            frame = stack.intervene_ego_and_modulate_frame_branchless(
+                delta,
+                horizon,
+                venn_report,
+                frame,
+            );
+        }
+        frame
+    }
+
+    fn apply_srl_frame_internal(
+        &self,
+        frame: &GatewayFrame,
         hidden_inout: &mut [f32],
         u_vec: &[f32],
         v_vec: &[f32],
-    ) -> Result<(GatewayFrame, f32), String> {
+    ) -> Result<f32, String> {
         let d = hidden_inout.len();
         if d == 0 || u_vec.len() != d || v_vec.len() != d {
             return Err(format!(
@@ -1019,34 +1099,6 @@ impl ModelSteeringAdapter {
         u_buf.as_mut_slice().copy_from_slice(u_vec);
         v_buf.as_mut_slice().copy_from_slice(v_vec);
 
-        let (mut frame, frm_w) = signal.synthesize_gateway_frame_with_words();
-        if let Some(circuit) = self.active_circuit() {
-            let _ = circuit.modulate_gateway_frame_at_scale(
-                &mut frame,
-                &frm_w,
-                &frm_w,
-                StigmergicScaleGranularity::MacroCoalition,
-            );
-        }
-        if self.core_layers.liminal_layer.adaptation_epochs > 0 || self.ego_field.is_active() {
-            frame = self.core_layers.modulate_gateway_frame_branchless(
-                frame,
-                &self.last_horizon,
-                &self.last_venn_report,
-            );
-            if self.ego_field.is_active() {
-                let mut ego = self.ego_field;
-                let mut stack = self.core_layers;
-                frame = ego.intervene_on_layers_and_frame_branchless(
-                    &mut stack,
-                    &self.last_boundary_delta,
-                    &self.last_horizon,
-                    &self.last_venn_report,
-                    frame,
-                );
-            }
-        }
-
         let gain = {
             let mut y_mut = AlignedSliceMut32::new(y_buf.as_mut_slice())
                 .map_err(|e| format!("AlignedSliceMut32 y error: {e}"))?;
@@ -1058,12 +1110,65 @@ impl ModelSteeringAdapter {
                 .map_err(|e| format!("AlignedSlice32 v error: {e}"))?;
             self.residual_adapter
                 .apply_gateway_frame_rank1_hidden_fused(
-                    &frame, &mut y_mut, &x_aligned, &u_aligned, &v_aligned,
+                    frame, &mut y_mut, &x_aligned, &u_aligned, &v_aligned,
                 )
                 .map_err(|e| format!("apply_gateway_frame_rank1_hidden_fused error: {e}"))?
         };
 
         hidden_inout.copy_from_slice(y_buf.as_slice());
+        Ok(gain)
+    }
+
+    /// Applies norm-adaptive Rank-1 residual injection driven purely by a [`ManifoldGatewaySignal`]
+    /// via [`GatewayRank1SteeringExt::apply_gateway_frame_rank1_hidden_fused`] without manual
+    /// scale tuning (shared `&self` snapshot path for read-only forward passes).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if slice lengths mismatch or `liminika-core` rejects the inputs.
+    pub fn apply_srl_with_gateway<S: ManifoldGatewaySignal + ?Sized>(
+        &self,
+        signal: &S,
+        hidden_inout: &mut [f32],
+        u_vec: &[f32],
+        v_vec: &[f32],
+    ) -> Result<(GatewayFrame, f32), String> {
+        let mut stack_snapshot = self.core_layers;
+        let frame = Self::synthesize_srl_gateway_frame_with_state(
+            signal,
+            self.active_circuit(),
+            &mut stack_snapshot,
+            &self.last_boundary_delta,
+            &self.last_horizon,
+            &self.last_venn_report,
+        );
+        let gain = self.apply_srl_frame_internal(&frame, hidden_inout, u_vec, v_vec)?;
+        Ok((frame, gain))
+    }
+
+    /// Mutable counterpart to [`Self::apply_srl_with_gateway`] that persists Core Layer 0/1/2
+    /// Ego interventions and epoch counters directly onto `self.core_layers`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if slice lengths mismatch or `liminika-core` rejects the inputs.
+    pub fn apply_srl_with_gateway_mut<S: ManifoldGatewaySignal + ?Sized>(
+        &mut self,
+        signal: &S,
+        hidden_inout: &mut [f32],
+        u_vec: &[f32],
+        v_vec: &[f32],
+    ) -> Result<(GatewayFrame, f32), String> {
+        let circuit = self.active_circuit();
+        let frame = Self::synthesize_srl_gateway_frame_with_state(
+            signal,
+            circuit,
+            &mut self.core_layers,
+            &self.last_boundary_delta,
+            &self.last_horizon,
+            &self.last_venn_report,
+        );
+        let gain = self.apply_srl_frame_internal(&frame, hidden_inout, u_vec, v_vec)?;
         Ok((frame, gain))
     }
 

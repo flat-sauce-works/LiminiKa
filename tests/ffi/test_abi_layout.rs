@@ -152,7 +152,7 @@ fn test_gcso_types_abi_layout_invariants() {
 
     assert_eq!(
         size_of::<liminika_core::abi::gcso_autonomous_core_layer_stack_t>(),
-        64
+        128
     );
     assert_eq!(
         align_of::<liminika_core::abi::gcso_autonomous_core_layer_stack_t>(),
@@ -171,6 +171,13 @@ fn test_gcso_types_abi_layout_invariants() {
             stigmergic_layer
         ),
         32
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::gcso_autonomous_core_layer_stack_t,
+            ego_layer
+        ),
+        64
     );
 
     assert_eq!(
@@ -203,6 +210,43 @@ fn test_gcso_types_abi_layout_invariants() {
             stationary_shortcut_ready
         ),
         11
+    );
+
+    assert_eq!(size_of::<liminika_core::abi::gcso_ego_intent_axes_t>(), 16);
+    assert_eq!(align_of::<liminika_core::abi::gcso_ego_intent_axes_t>(), 16);
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::gcso_ego_intent_axes_t,
+            preferred_slot_mask
+        ),
+        8
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::gcso_ego_intent_axes_t, signature_hash),
+        12
+    );
+
+    assert_eq!(
+        size_of::<liminika_core::abi::gcso_stigmergic_fragment_ensemble_report_t>(),
+        16
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::gcso_stigmergic_fragment_ensemble_report_t>(),
+        16
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::gcso_stigmergic_fragment_ensemble_report_t,
+            quorum_agreed_granule_mask
+        ),
+        8
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::gcso_stigmergic_fragment_ensemble_report_t,
+            ego_tiebreak_granule_mask
+        ),
+        10
     );
 
     assert_eq!(

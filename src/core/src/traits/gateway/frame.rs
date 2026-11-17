@@ -6,6 +6,7 @@
 use super::*;
 #[allow(unused_imports)]
 use super::signals::*;
+use crate::traits::primitives::{MAX_ATTRACTOR_DOMAINS, TAG_ACTION_MODE_MASK, swar_q7_avg_round_x8};
 
 // ===================================================================
 // 6. Single Composite Gateway Frame (`GatewayFrame` 128B Pod) & Trait
@@ -401,6 +402,490 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
     {
         fold_gateway_slice_with_query_words_core(slice, None)
     }
+
+    /// Evaluates this signal through its live dynamic cognitive aperture against all three core
+    /// layers (`Liminal` + `Stigmergic` + `Ego`) prior to final frame synthesis, gating out-of-window
+    /// SWAR granules and applying in-place three-layer Ego modulation.
+    #[inline]
+    fn synthesize_gateway_with_core_layers(
+        &self,
+        stack: &mut AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
+        let (dyn_mask, dyn_gain_q7, dyn_shift_q7) = self.resolve_dynamic_core_aperture(stack);
+        let (mut frame, mut words) = self.synthesize_gateway_frame_with_words();
+        apply_dynamic_aperture_to_frame_and_words(
+            &mut frame,
+            &mut words,
+            dyn_mask,
+            dyn_gain_q7,
+            dyn_shift_q7,
+        );
+        let modulated = stack.intervene_ego_and_modulate_frame_branchless(
+            delta,
+            horizon,
+            venn_report,
+            frame,
+        );
+        let out_words = *modulated.phase_words_ref();
+        (modulated, out_words)
+    }
+
+    /// Dynamically routes and combines `self` (`A`) and `other` (`B`) across the 8 SWAR granules
+    /// according to their live core-layer cognitive apertures:
+    /// - `mask_a & !mask_b`: exclusive routing to `A`
+    /// - `!mask_a & mask_b`: exclusive routing to `B`
+    /// - `mask_a & mask_b`: Venn overlap cooperative fusion or Layer 2 Ego conflict tie-breaking
+    /// - `!mask_a & !mask_b`: gated to `Liminal` exterior (`0`)
+    #[inline]
+    fn combine_pair_with_core_layers<B: ManifoldGatewaySignal>(
+        &self,
+        other: &B,
+        stack: &mut AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
+        let (mask_a, gain_a, shift_a) = self.resolve_dynamic_core_aperture(stack);
+        let (mask_b, gain_b, shift_b) = other.resolve_dynamic_core_aperture(stack);
+        let (fa, wa) = self.synthesize_gateway_frame_with_words();
+        let (fb, wb) = other.synthesize_gateway_frame_with_words();
+
+        let ea = branchless_flush_subnormal_f32(branchless_relu_f32(fa.effective_energy));
+        let eb = branchless_flush_subnormal_f32(branchless_relu_f32(fb.effective_energy));
+        let tot_e = ea + eb;
+        let safe_tot = branchless_select_f32(tot_e > DEFAULT_ENTROPY_EPS, tot_e, 1.0);
+        let ratio_b = branchless_clamp_f32(eb * fast_inv_pos_normal_f32(safe_tot), 0.0, 1.0);
+        let s_u64 = ((ratio_b * 128.0 + 0.5) as u8).min(128) as u64;
+        let inv_s = 128u64.wrapping_sub(s_u64);
+        let bias_a = s_u64.wrapping_mul(SWAR_SPLAT_BYTE_64);
+        let bias_b = inv_s.wrapping_mul(SWAR_SPLAT_BYTE_64);
+
+        let ego_active = stack.ego_layer.is_active();
+        let mut out_words = [0u64; NUM_STIGMERGIC_GRANULES];
+        let mut g = 0usize;
+        while g < NUM_STIGMERGIC_GRANULES {
+            let bit = 1u8 << g;
+            let in_a = (mask_a & bit) != 0;
+            let in_b = (mask_b & bit) != 0;
+
+            let aw = shape_granule_word_by_aperture(wa[g], gain_a, shift_a);
+            let bw = shape_granule_word_by_aperture(wb[g], gain_b, shift_b);
+
+            let coh = coherence_from_uniform_words_x8(aw, bw);
+            let conflict = coh < -0.25;
+            let blended = swar_q7_circular_add_x8(
+                swar_q7_scale_le128_with_bias_x8(aw, inv_s, bias_a),
+                swar_q7_scale_le128_with_bias_x8(bw, s_u64, bias_b),
+            );
+            let ego_phase_word = (stack.ego_layer.sovereign_granule_phase_q7[g] as u8 as u64)
+                .wrapping_mul(SWAR_SPLAT_BYTE_64);
+            let coh_ea = coherence_from_uniform_words_x8(aw, ego_phase_word);
+            let coh_eb = coherence_from_uniform_words_x8(bw, ego_phase_word);
+            let prefer_b_tie = branchless_select_u8(
+                ego_active,
+                u8::from(coh_eb > coh_ea),
+                u8::from(eb > ea),
+            ) != 0;
+            let conflict_choice = branchless_select_u64(prefer_b_tie, bw, aw);
+            let overlap_w = branchless_select_u64(conflict, conflict_choice, blended);
+
+            let mut gw = branchless_select_u64(in_a & !in_b, aw, 0);
+            gw = branchless_select_u64(!in_a & in_b, bw, gw);
+            gw = branchless_select_u64(in_a & in_b, overlap_w, gw);
+            out_words[g] = gw;
+            g += 1;
+        }
+
+        let dom_a = ea >= eb;
+        let combined_mask = mask_a | mask_b;
+        let overlap_mask = mask_a & mask_b;
+        let coop_bonus = 1.0 + 0.04 * (overlap_mask.count_ones() as f32);
+        let eff_energy = branchless_min_f32(
+            branchless_select_f32(
+                combined_mask != 0,
+                (ea + eb) * 0.5 * coop_bonus
+                    + 0.5 * branchless_max_f32(ea, eb),
+                0.0,
+            ),
+            MAX_ATTRACTOR_PULL_FORCE,
+        );
+        let mut combined = GatewayFrame {
+            tagged_ptr: 0,
+            mapped_section_offset48: branchless_select_u64(
+                dom_a & (fa.mapped_section_offset48 != 0),
+                fa.mapped_section_offset48,
+                branchless_select_u64(
+                    fb.mapped_section_offset48 != 0,
+                    fb.mapped_section_offset48,
+                    fa.mapped_section_offset48,
+                ),
+            ),
+            target_anchor_id: branchless_select_u32(dom_a, fa.target_anchor_id, fb.target_anchor_id),
+            effective_energy: eff_energy,
+            ripa_clamp_rad: branchless_lerp_f32(fa.ripa_clamp_rad, fb.ripa_clamp_rad, ratio_b),
+            qdps_min_step_rad: branchless_min_f32(fa.qdps_min_step_rad, fb.qdps_min_step_rad),
+            effective_inv_temp: branchless_lerp_f32(
+                fa.effective_inv_temp,
+                fb.effective_inv_temp,
+                ratio_b,
+            ),
+            fact_persona_coherence: branchless_lerp_f32(
+                fa.fact_persona_coherence,
+                fb.fact_persona_coherence,
+                ratio_b,
+            ),
+            repulsion_severity: branchless_max_f32(fa.repulsion_severity, fb.repulsion_severity),
+            provenance_bits: fa.provenance_bits | fb.provenance_bits,
+            dominant_cause_code: branchless_select_u8(
+                fa.dominant_cause_code >= fb.dominant_cause_code,
+                fa.dominant_cause_code,
+                fb.dominant_cause_code,
+            ),
+            dominant_slot: branchless_select_u8(dom_a, fa.dominant_slot, fb.dominant_slot),
+            action_mode_flags: fa.action_mode_flags | fb.action_mode_flags,
+            active_swarm_cell_mask: combined_mask & (fa.active_swarm_cell_mask | fb.active_swarm_cell_mask),
+            qdps_min_step_q7: branchless_select_u8(
+                fa.qdps_min_step_q7 <= fb.qdps_min_step_q7,
+                fa.qdps_min_step_q7,
+                fb.qdps_min_step_q7,
+            ),
+            subhead_fact_heads: branchless_select_u8(dom_a, fa.subhead_fact_heads, fb.subhead_fact_heads),
+            subhead_logic_heads: branchless_select_u8(dom_a, fa.subhead_logic_heads, fb.subhead_logic_heads),
+            subhead_explore_heads: branchless_select_u8(dom_a, fa.subhead_explore_heads, fb.subhead_explore_heads),
+            subhead_fact_gain_q7: branchless_select_u8(dom_a, fa.subhead_fact_gain_q7, fb.subhead_fact_gain_q7),
+            subhead_logic_gain_q7: branchless_select_u8(dom_a, fa.subhead_logic_gain_q7, fb.subhead_logic_gain_q7),
+            subhead_explore_gain_q7: branchless_select_u8(dom_a, fa.subhead_explore_gain_q7, fb.subhead_explore_gain_q7),
+            mean_phase_tag_q7: 0,
+            active_head_count: fa.active_head_count.min(fb.active_head_count).max(1),
+            frame_flags: 0,
+            phase_deltas: words_to_q7_array_64(&out_words),
+        };
+        let tag_q7 = swar_q7_mean_i8_from_words_64(combined.phase_words_ref());
+        let ptr_tag = pack_action_slot_tag(
+            combined.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
+            combined.action_mode_flags,
+        );
+        combined.mean_phase_tag_q7 = tag_q7;
+        combined.frame_flags = ptr_tag as u16;
+        combined.tagged_ptr =
+            gcso_tagged_ptr_t::pack(combined.mapped_section_offset48, ptr_tag, tag_q7).raw();
+
+        let modulated = stack.intervene_ego_and_modulate_frame_branchless(
+            delta,
+            horizon,
+            venn_report,
+            combined,
+        );
+        let final_words = *modulated.phase_words_ref();
+        (modulated, final_words)
+    }
+
+    /// Aggregates a slice of fragmented signal experts (`fragments`) across the 8 SWAR granules
+    /// using per-fragment dynamic core apertures, quorum agreement amplification, Layer 0
+    /// uncertainty damping, and Layer 2 Ego tie-breaking (`0` heap allocations).
+    #[inline]
+    fn synthesize_fragment_ensemble_with_core_layers(
+        fragments: &[Self],
+        stack: &mut AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> (
+        GatewayFrame,
+        [u64; NUM_STIGMERGIC_GRANULES],
+        StigmergicFragmentEnsembleReport,
+    )
+    where
+        Self: Sized,
+    {
+        if fragments.is_empty() {
+            return (
+                GatewayFrame::default(),
+                [0u64; NUM_STIGMERGIC_GRANULES],
+                StigmergicFragmentEnsembleReport::default(),
+            );
+        }
+
+        let mut pos_votes = [0u8; NUM_STIGMERGIC_GRANULES];
+        let mut neg_votes = [0u8; NUM_STIGMERGIC_GRANULES];
+        let mut pos_energy = [0.0_f32; NUM_STIGMERGIC_GRANULES];
+        let mut neg_energy = [0.0_f32; NUM_STIGMERGIC_GRANULES];
+        let mut pos_words = [0u64; NUM_STIGMERGIC_GRANULES];
+        let mut neg_words = [0u64; NUM_STIGMERGIC_GRANULES];
+        let mut slot_votes = [0.0_f32; MAX_ATTRACTOR_DOMAINS];
+
+        let mut active_frag_count = 0u8;
+        let mut best_e = 0.0_f32;
+        let mut seed_frame = fragments[0].synthesize_gateway_frame();
+        let mut prov_bits = 0u32;
+        let mut rep_sev = 0.0_f32;
+        let mut action_flags = 0u8;
+
+        let mut idx = 0usize;
+        while idx < fragments.len() {
+            let frag = &fragments[idx];
+            if !frag.has_active_gateway_ensemble_signal() {
+                idx += 1;
+                continue;
+            }
+            let (frag_mask, frag_gain_q7, frag_shift_q7) = frag.resolve_dynamic_core_aperture(stack);
+            let (f, fw) = frag.synthesize_gateway_ensemble_item();
+            let raw_e = branchless_flush_subnormal_f32(branchless_relu_f32(f.effective_energy));
+            let f_e = raw_e * ((f32::from(frag_gain_q7) + 32.0) * (1.0 / 128.0));
+
+            if f_e > DEFAULT_ENTROPY_EPS || f.provenance_bits != 0 {
+                active_frag_count = active_frag_count.saturating_add(1);
+                prov_bits |= f.provenance_bits;
+                rep_sev = branchless_max_f32(rep_sev, f.repulsion_severity);
+                action_flags |= f.action_mode_flags;
+                let s_idx = usize::from(f.dominant_slot & ATTRACTOR_SLOT_ID_MASK);
+                slot_votes[s_idx] += f_e;
+                if f_e > best_e {
+                    best_e = f_e;
+                    seed_frame = f;
+                }
+
+                let mut g = 0usize;
+                while g < NUM_STIGMERGIC_GRANULES {
+                    let bit = 1u8 << g;
+                    let shaped = shape_granule_word_by_aperture(fw[g], frag_gain_q7, frag_shift_q7);
+                    let in_window = ((frag_mask & bit) != 0) & (f_e > DEFAULT_ENTROPY_EPS) & (shaped != 0);
+                    if in_window {
+                        let mean_g = swar_q7_mean_i8_from_words_64(&[shaped; 8]);
+                        if mean_g >= 0 {
+                            let new_pe = pos_energy[g] + f_e;
+                            if pos_votes[g] == 0 {
+                                pos_words[g] = shaped;
+                            } else {
+                                let w_ratio = branchless_clamp_f32(
+                                    f_e * fast_inv_pos_normal_f32(branchless_max_f32(new_pe, DEFAULT_ENTROPY_EPS)),
+                                    0.0,
+                                    1.0,
+                                );
+                                let s_u64 = ((w_ratio * 128.0 + 0.5) as u8).min(128) as u64;
+                                let inv_s = 128u64.wrapping_sub(s_u64);
+                                pos_words[g] = swar_q7_circular_add_x8(
+                                    swar_q7_scale_le128_with_bias_x8(
+                                        pos_words[g],
+                                        inv_s,
+                                        s_u64.wrapping_mul(SWAR_SPLAT_BYTE_64),
+                                    ),
+                                    swar_q7_scale_le128_with_bias_x8(
+                                        shaped,
+                                        s_u64,
+                                        inv_s.wrapping_mul(SWAR_SPLAT_BYTE_64),
+                                    ),
+                                );
+                            }
+                            pos_energy[g] = new_pe;
+                            pos_votes[g] = pos_votes[g].saturating_add(1);
+                        } else {
+                            let new_ne = neg_energy[g] + f_e;
+                            if neg_votes[g] == 0 {
+                                neg_words[g] = shaped;
+                            } else {
+                                let w_ratio = branchless_clamp_f32(
+                                    f_e * fast_inv_pos_normal_f32(branchless_max_f32(new_ne, DEFAULT_ENTROPY_EPS)),
+                                    0.0,
+                                    1.0,
+                                );
+                                let s_u64 = ((w_ratio * 128.0 + 0.5) as u8).min(128) as u64;
+                                let inv_s = 128u64.wrapping_sub(s_u64);
+                                neg_words[g] = swar_q7_circular_add_x8(
+                                    swar_q7_scale_le128_with_bias_x8(
+                                        neg_words[g],
+                                        inv_s,
+                                        s_u64.wrapping_mul(SWAR_SPLAT_BYTE_64),
+                                    ),
+                                    swar_q7_scale_le128_with_bias_x8(
+                                        shaped,
+                                        s_u64,
+                                        inv_s.wrapping_mul(SWAR_SPLAT_BYTE_64),
+                                    ),
+                                );
+                            }
+                            neg_energy[g] = new_ne;
+                            neg_votes[g] = neg_votes[g].saturating_add(1);
+                        }
+                    }
+                    g += 1;
+                }
+            }
+            idx += 1;
+        }
+
+        let ego_active = stack.ego_layer.is_active();
+        let mut out_words = [0u64; NUM_STIGMERGIC_GRANULES];
+        let mut quorum_agreed_mask = 0u8;
+        let mut split_contested_mask = 0u8;
+        let mut ego_tiebreak_mask = 0u8;
+        let mut consensus_energy = 0.0_f32;
+        let mut active_granule_mask = 0u8;
+
+        let mut g = 0usize;
+        while g < NUM_STIGMERGIC_GRANULES {
+            let bit = 1u8 << g;
+            let pv = pos_votes[g];
+            let nv = neg_votes[g];
+            let has_any = (pv | nv) != 0;
+            active_granule_mask |= branchless_select_u8(has_any, bit, 0);
+
+            let maj_votes = pv.max(nv);
+            let min_votes = pv.min(nv);
+            let agreed = (maj_votes >= 2) & (maj_votes > min_votes);
+            let contested = (pv > 0) & (nv > 0) & (pv == nv);
+            quorum_agreed_mask |= branchless_select_u8(agreed, bit, 0);
+            split_contested_mask |= branchless_select_u8(contested, bit, 0);
+
+            let ego_can_break = ego_active & (stack.ego_layer.granule_autonomy_q7[g] >= 16);
+            let ego_tie = contested & ego_can_break;
+            ego_tiebreak_mask |= branchless_select_u8(ego_tie, bit, 0);
+
+            let ego_pref_pos = stack.ego_layer.sovereign_granule_phase_q7[g] >= 0;
+            let e_pref_pos = pos_energy[g] >= neg_energy[g];
+            let choose_pos = branchless_select_u8(
+                contested,
+                branchless_select_u8(ego_can_break, u8::from(ego_pref_pos), u8::from(e_pref_pos)),
+                u8::from((pv > nv) | ((pv == nv) & e_pref_pos)),
+            ) != 0;
+
+            let chosen_w = branchless_select_u64(choose_pos, pos_words[g], neg_words[g]);
+            let ego_word = (stack.ego_layer.sovereign_granule_phase_q7[g] as u8 as u64)
+                .wrapping_mul(SWAR_SPLAT_BYTE_64);
+            let damped_contested =
+                swar_q7_scale_le128_with_bias_x8(chosen_w, 64, 64u64.wrapping_mul(SWAR_SPLAT_BYTE_64));
+            let ego_resolved = swar_q7_avg_round_x8(chosen_w, ego_word);
+
+            let gw = branchless_select_u64(
+                !has_any,
+                0,
+                branchless_select_u64(
+                    ego_tie,
+                    ego_resolved,
+                    branchless_select_u64(contested, damped_contested, chosen_w),
+                ),
+            );
+            out_words[g] = gw;
+
+            let win_e = branchless_select_f32(choose_pos, pos_energy[g], neg_energy[g]);
+            let ag_mult = 1.0 + 0.12 * f32::from(maj_votes.saturating_sub(1).min(4));
+            let g_contrib = branchless_select_f32(
+                agreed,
+                win_e * ag_mult,
+                branchless_select_f32(contested & !ego_can_break, win_e * 0.5, win_e),
+            );
+            consensus_energy += g_contrib * (1.0 / (NUM_STIGMERGIC_GRANULES as f32));
+            g += 1;
+        }
+
+        let mut dom_slot = seed_frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK;
+        let mut best_slot_score = -1.0_f32;
+        let mut s = 0usize;
+        while s < MAX_ATTRACTOR_DOMAINS {
+            let mut sc = slot_votes[s];
+            if ego_active {
+                sc += f32::from(stack.ego_layer.slot_affinity_bias_q7[s].max(0)) * (1.0 / 64.0);
+            }
+            if sc > best_slot_score {
+                best_slot_score = sc;
+                dom_slot = s as u8;
+            }
+            s += 1;
+        }
+
+        let agreed_cnt = quorum_agreed_mask.count_ones() as f32;
+        let diversity_gain = if active_frag_count > 1 {
+            1.0 + 0.08 * agreed_cnt
+        } else {
+            1.0
+        };
+
+        let mut out_frame = seed_frame;
+        out_frame.effective_energy =
+            branchless_min_f32(consensus_energy * diversity_gain, MAX_ATTRACTOR_PULL_FORCE);
+        out_frame.provenance_bits = prov_bits;
+        out_frame.repulsion_severity = rep_sev;
+        out_frame.dominant_slot = dom_slot;
+        out_frame.action_mode_flags = branchless_select_u8(
+            action_flags != 0,
+            action_flags & TAG_ACTION_MODE_MASK,
+            out_frame.action_mode_flags,
+        );
+        out_frame.active_swarm_cell_mask = active_granule_mask;
+        *out_frame.phase_words_mut() = out_words;
+        let tag_q7 = swar_q7_mean_i8_from_words_64(out_frame.phase_words_ref());
+        let ptr_tag = pack_action_slot_tag(dom_slot, out_frame.action_mode_flags);
+        out_frame.mean_phase_tag_q7 = tag_q7;
+        out_frame.frame_flags = ptr_tag as u16;
+        out_frame.tagged_ptr =
+            gcso_tagged_ptr_t::pack(out_frame.mapped_section_offset48, ptr_tag, tag_q7).raw();
+
+        let modulated = stack.intervene_ego_and_modulate_frame_branchless(
+            delta,
+            horizon,
+            venn_report,
+            out_frame,
+        );
+        let final_words = *modulated.phase_words_ref();
+        let report = StigmergicFragmentEnsembleReport {
+            ensemble_consensus_energy: modulated.effective_energy,
+            ensemble_diversity_gain: diversity_gain,
+            quorum_agreed_granule_mask: quorum_agreed_mask,
+            split_contested_granule_mask: split_contested_mask,
+            ego_tiebreak_granule_mask: ego_tiebreak_mask,
+            active_fragment_count: active_frag_count,
+            dominant_fragment_slot: modulated.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
+            reserved: [0; 3],
+        };
+        (modulated, final_words, report)
+    }
+}
+
+#[inline(always)]
+#[must_use]
+fn shape_granule_word_by_aperture(word: u64, gain_q7: u8, shift_q7: i8) -> u64 {
+    let shift_word = (shift_q7 as u8 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
+    let shifted = swar_q7_circular_add_x8(word, shift_word);
+    let scale128 = (u64::from(gain_q7) + 32).min(128);
+    let bias = (128u64.wrapping_sub(scale128)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+    swar_q7_scale_le128_with_bias_x8(shifted, scale128, bias)
+}
+
+#[inline(always)]
+fn apply_dynamic_aperture_to_frame_and_words(
+    frame: &mut GatewayFrame,
+    words: &mut [u64; NUM_STIGMERGIC_GRANULES],
+    dyn_mask: u8,
+    dyn_gain_q7: u8,
+    dyn_shift_q7: i8,
+) {
+    let mut g = 0usize;
+    while g < NUM_STIGMERGIC_GRANULES {
+        let open = ((dyn_mask >> g) & 1) != 0;
+        let shaped = shape_granule_word_by_aperture(words[g], dyn_gain_q7, dyn_shift_q7);
+        words[g] = branchless_select_u64(open, shaped, 0);
+        g += 1;
+    }
+    let open_frac = f32::from(dyn_mask.count_ones() as u8) * (1.0 / (NUM_STIGMERGIC_GRANULES as f32));
+    let gain_scale = (f32::from(dyn_gain_q7) + 32.0) * (1.0 / 128.0);
+    frame.effective_energy = branchless_min_f32(
+        branchless_relu_f32(frame.effective_energy) * open_frac * gain_scale,
+        MAX_ATTRACTOR_PULL_FORCE,
+    );
+    frame.active_swarm_cell_mask &= dyn_mask;
+    *frame.phase_words_mut() = *words;
+    let tag_q7 = swar_q7_mean_i8_from_words_64(frame.phase_words_ref());
+    let ptr_tag = pack_action_slot_tag(
+        frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
+        frame.action_mode_flags,
+    );
+    frame.mean_phase_tag_q7 = tag_q7;
+    frame.frame_flags = ptr_tag as u16;
+    frame.tagged_ptr =
+        gcso_tagged_ptr_t::pack(frame.mapped_section_offset48, ptr_tag, tag_q7).raw();
 }
 
 /// Folds an arbitrary-length slice of [`ManifoldGatewaySignal`] items into a single
@@ -768,6 +1253,27 @@ impl<T: ManifoldGatewaySignal + ?Sized> ManifoldGatewaySignal for &T {
     #[inline(always)]
     fn has_active_gateway_ensemble_signal(&self) -> bool {
         (**self).has_active_gateway_ensemble_signal()
+    }
+    #[inline]
+    fn synthesize_gateway_with_core_layers(
+        &self,
+        stack: &mut AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
+        (**self).synthesize_gateway_with_core_layers(stack, delta, horizon, venn_report)
+    }
+    #[inline]
+    fn combine_pair_with_core_layers<B: ManifoldGatewaySignal>(
+        &self,
+        other: &B,
+        stack: &mut AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
+        (**self).combine_pair_with_core_layers(other, stack, delta, horizon, venn_report)
     }
 }
 

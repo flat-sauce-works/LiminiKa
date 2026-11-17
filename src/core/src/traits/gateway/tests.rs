@@ -1702,3 +1702,195 @@ fn liminal_boundary_delta_and_ego_field_interventions() {
         0
     );
 }
+
+#[test]
+fn ego_intent_axes_blending_and_three_layer_core_stack() {
+    let neutral = EgoIntentAxes::new();
+    assert!(!neutral.is_active());
+
+    let base_axes = EgoIntentAxes::new()
+        .with_autonomy_q7(20)
+        .with_logic_q7(90)
+        .with_caution_q7(70)
+        .with_preferred_slot_mask(1 << ATTRACTOR_SLOT_KNOWLEDGE);
+    let bold_axes = EgoIntentAxes::new()
+        .with_autonomy_q7(100)
+        .with_transgression_q7(88)
+        .with_devotion_q7(80)
+        .with_defiance_q7(84)
+        .with_preferred_slot_mask(1 << ATTRACTOR_SLOT_PERSONA)
+        .with_active_granule_bias_mask(0xF0);
+
+    assert!(base_axes.is_active());
+    let keep_base = base_axes.blend_lerp_q7(&bold_axes, 0);
+    assert_eq!(keep_base.logic_q7, base_axes.logic_q7);
+    let mid_blend = base_axes.blend_lerp_q7(&bold_axes, 64);
+    assert!(mid_blend.autonomy_q7 > base_axes.autonomy_q7);
+    assert!(mid_blend.autonomy_q7 < bold_axes.autonomy_q7);
+    assert!(mid_blend.transgression_q7 > 0);
+    let full_overlay = base_axes.blend_lerp_q7(&bold_axes, 127);
+    assert_eq!(full_overlay.autonomy_q7, bold_axes.autonomy_q7);
+    assert_eq!(full_overlay.active_granule_bias_mask, 0xF0);
+
+    let ego_from_axes = LiminalEgoField::from_intent_axes(&bold_axes);
+    assert!(ego_from_axes.is_active());
+    assert!(ego_from_axes.counter_vortex_thrust_q7 >= 60);
+    assert!(ego_from_axes.transgression_bias_q7 > 0);
+    let roundtrip = ego_from_axes.extract_intent_axes();
+    assert!(roundtrip.is_active());
+    assert!(roundtrip.transgression_q7 > 0);
+
+    // Unified 128-byte 3-layer stack (`Layer 0` + `Layer 1` + `Layer 2 Ego`)
+    let mut stack = AutonomousCoreLayerStack::new();
+    stack.ego_layer = ego_from_axes;
+    let delta = LiminalBoundaryDelta::default();
+    let horizon = EpistemicHorizonReading {
+        total_memory_support: 2.0,
+        peak_positive_affinity: 0.9,
+        horizon_gate: 1.0,
+        dominant_anchor_id: 77,
+        regime_code: EpistemicRegime::KnownCoherent as u8,
+        ..Default::default()
+    };
+    let venn = StigmergicVennSerendipityReport {
+        venn_core_mask: 0x0F,
+        void_exterior_mask: 0xF0,
+        ..Default::default()
+    };
+    let mut frame = GatewayFrame {
+        effective_energy: 8.0,
+        ..Default::default()
+    };
+    *frame.phase_words_mut() = [0x2424_2424_2424_2424u64; NUM_STIGMERGIC_GRANULES];
+    let modulated = stack.intervene_ego_and_modulate_frame_branchless(&delta, &horizon, &venn, frame);
+    assert!(stack.ego_layer.intervention_epochs >= 1);
+    assert_ne!(stack.ego_layer.last_intervened_mask, 0);
+    assert_ne!(modulated.phase_words_ref(), frame.phase_words_ref());
+
+    let snap = LiminalTopologyTelemetrySnapshot::capture(&stack.liminal_layer, &horizon, 4, 1);
+    let mut buf = [0u8; 2048];
+    let len = snap.format_three_core_layers_mermaid(&stack, &venn, &mut buf);
+    let txt = core::str::from_utf8(&buf[..len]).expect("valid utf8 mermaid");
+    assert!(txt.contains("Core Layer 0: Liminal"));
+    assert!(txt.contains("Core Layer 1: StigmergicGranuleField"));
+    assert!(txt.contains("Core Layer 2: LiminalEgoField"));
+    assert!(txt.contains("Top-Down Intervention"));
+}
+
+#[test]
+fn dynamic_trait_aperture_routing_and_fragmented_micro_ensemble() {
+    let mut stack = AutonomousCoreLayerStack::new();
+    stack.liminal_layer.void_floor_q7[1] = 20;
+    stack.liminal_layer.void_floor_q7[2] = 96;
+    stack.stigmergic_layer.granule_pheromone_q7 = [56, 56, 56, 56, 12, 12, 12, 12];
+
+    let fact = ObjectiveFact::new([24i8; MAX_ATTENTION_HEADS], 2.5, 0, 10);
+    let persona = SubjectivePersona::new([-24i8; MAX_ATTENTION_HEADS], 2.0, 0, 20);
+
+    let (fact_mask, _, _) = fact.resolve_dynamic_core_aperture(&stack);
+    let (pers_mask_narrow, _, _) = persona.resolve_dynamic_core_aperture(&stack);
+    assert_eq!(fact_mask, 0xFF);
+    assert_eq!(pers_mask_narrow, 0x0F);
+
+    // Ego widens Persona's dynamic cognitive aperture across all 8 granules.
+    stack.ego_layer = LiminalEgoField::from_intent_axes(
+        &EgoIntentAxes::new()
+            .with_autonomy_q7(90)
+            .with_transgression_q7(80)
+            .with_devotion_q7(70),
+    );
+    stack.ego_layer.trait_floor_bias_q7[2] = -24;
+    let (pers_mask_wide, _, _) = persona.resolve_dynamic_core_aperture(&stack);
+    assert_eq!(pers_mask_wide, 0xFF);
+
+    // Partitioned routing: Fact owns upper 4 granules (`0xF0`), Persona owns lower 4 (`0x0F`).
+    let mut split_stack = AutonomousCoreLayerStack::new();
+    split_stack.liminal_layer.void_floor_q7[1] = 96; // requires >= 48
+    split_stack.liminal_layer.void_floor_q7[2] = 96; // requires >= 48
+    split_stack.stigmergic_layer.granule_pheromone_q7 = [12, 12, 12, 12, 56, 56, 56, 56];
+    split_stack.ego_layer = LiminalEgoField::from_intent_axes(
+        &EgoIntentAxes::new()
+            .with_transgression_q7(60)
+            .with_active_granule_bias_mask(0x0F),
+    );
+    split_stack.ego_layer.granule_autonomy_q7 = [88, 88, 88, 88, 0, 0, 0, 0];
+    split_stack.ego_layer.trigger_mask = EGO_TRIGGER_VORTEX_SWALLOW;
+    split_stack.ego_layer.vortex_escape_floor_q7 = 127; // keep slot routing clean for direct check
+    let (m_fact, _, _) = fact.resolve_dynamic_core_aperture(&split_stack);
+    let (m_pers, _, _) = persona.resolve_dynamic_core_aperture(&split_stack);
+    assert_eq!(m_fact, 0xF0);
+    assert_eq!(m_pers & 0x0F, 0x0F);
+
+    let delta = LiminalBoundaryDelta::default();
+    let horizon = EpistemicHorizonReading {
+        total_memory_support: 1.5,
+        horizon_gate: 1.0,
+        regime_code: EpistemicRegime::KnownCoherent as u8,
+        ..Default::default()
+    };
+    let venn = StigmergicVennSerendipityReport {
+        venn_core_mask: 0x0F,
+        ..Default::default()
+    };
+    let (paired, paired_w) = fact.combine_pair_with_core_layers(
+        &persona,
+        &mut split_stack,
+        &delta,
+        &horizon,
+        &venn,
+    );
+    assert!(paired.effective_energy > 0.0);
+    let lower_mean = swar_q7_mean_i8_from_words_64(&[paired_w[0]; 8]);
+    let upper_mean = swar_q7_mean_i8_from_words_64(&[paired_w[7]; 8]);
+    assert!(lower_mean < 0, "granules 0..4 should follow negative Persona phase");
+    assert!(upper_mean > 0, "granules 4..8 should follow positive Fact phase");
+
+    // Fragmented Micro-Ensemble: 4 fragments agree 3:1 on granules 0..6 and split 2:2 on granules 6..8.
+    let mut p0 = [28i8; MAX_ATTENTION_HEADS];
+    let mut p1 = [28i8; MAX_ATTENTION_HEADS];
+    let mut p2 = [28i8; MAX_ATTENTION_HEADS];
+    let mut p3 = [28i8; MAX_ATTENTION_HEADS];
+    for h in 48..64 {
+        p0[h] = 36;
+        p1[h] = 36;
+        p2[h] = -36;
+        p3[h] = -36;
+    }
+    let frags = [
+        ObjectiveFact::new(p0, 2.0, 0, 1),
+        ObjectiveFact::new(p1, 2.0, 0, 2),
+        ObjectiveFact::new(p2, 2.0, 0, 3),
+        ObjectiveFact::new(p3, 2.0, 0, 4),
+    ];
+
+    let mut passive_stack = AutonomousCoreLayerStack::new();
+    let (ens_f, _, ens_rep) = ObjectiveFact::synthesize_fragment_ensemble_with_core_layers(
+        &frags,
+        &mut passive_stack,
+        &delta,
+        &horizon,
+        &venn,
+    );
+    assert_eq!(ens_rep.active_fragment_count, 4);
+    assert_eq!(ens_rep.quorum_agreed_granule_mask, 0x3F);
+    assert_eq!(ens_rep.split_contested_granule_mask, 0xC0);
+    assert_eq!(ens_rep.ego_tiebreak_granule_mask, 0x00);
+    assert!(ens_rep.ensemble_diversity_gain > 1.0);
+    assert!(ens_f.effective_energy > 0.0);
+
+    // With active Ego, contested granules 6..8 are tie-broken by Ego sovereign headings.
+    let mut ego_stack = AutonomousCoreLayerStack::new();
+    ego_stack.ego_layer = LiminalEgoField::from_preset(LiminalEgoPreset::Medium);
+    ego_stack.ego_layer.sovereign_granule_phase_q7[6] = 48;
+    ego_stack.ego_layer.sovereign_granule_phase_q7[7] = -48;
+    let (_, ego_w, ego_rep) = ObjectiveFact::synthesize_fragment_ensemble_with_core_layers(
+        &frags,
+        &mut ego_stack,
+        &delta,
+        &horizon,
+        &venn,
+    );
+    assert_eq!(ego_rep.split_contested_granule_mask, 0xC0);
+    assert_eq!(ego_rep.ego_tiebreak_granule_mask, 0xC0);
+    assert_ne!(ego_w[6], 0);
+}

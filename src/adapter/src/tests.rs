@@ -1947,8 +1947,100 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
     assert!(mermaid.starts_with("flowchart TD\n"));
     assert!(mermaid.contains("Liminal"));
     assert!(mermaid.contains("Core Layer 1: StigmergicGranuleField"));
+    assert!(mermaid.contains("Core Layer 2: LiminalEgoField"));
     assert!(mermaid.contains("ManifoldGatewaySignal"));
     assert!(mermaid.contains("ActionHub"));
     assert!(mermaid.contains("Crystals:5"));
     assert!(mermaid.contains("Daughters:2"));
+}
+
+#[test]
+fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_srl() {
+    use liminika_core::traits::gateway::{
+        EgoIntentAxes, EpistemicHorizonReading, EpistemicRegime, ObjectiveFact,
+        StigmergicVennSerendipityReport,
+    };
+
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let base_axes = EgoIntentAxes::new().with_autonomy_q7(32).with_logic_q7(80);
+    adapter.configure_ego_from_intent_axes(&base_axes);
+    assert!(adapter.ego_field().is_active());
+
+    let overlay_axes = EgoIntentAxes::new()
+        .with_autonomy_q7(96)
+        .with_transgression_q7(84)
+        .with_devotion_q7(72);
+    adapter.blend_ego_intent_axes(&overlay_axes, 64);
+    assert!(adapter.ego_field().transgression_bias_q7 > 0);
+
+    adapter.overlay_ego_from_natural_language("curious rebel explorer");
+    assert!(adapter.ego_field().counter_vortex_thrust_q7 > 32);
+
+    // Prime the 3-layer core stack with an active support horizon so vortex capture triggers fire.
+    let active_horizon = EpistemicHorizonReading {
+        total_memory_support: 2.0,
+        peak_positive_affinity: 0.90,
+        horizon_gate: 1.0,
+        dominant_anchor_id: 1,
+        regime_code: EpistemicRegime::KnownCoherent as u8,
+        ..Default::default()
+    };
+    let active_venn = StigmergicVennSerendipityReport {
+        venn_core_mask: 0x0F,
+        void_exterior_mask: 0xF0,
+        ..Default::default()
+    };
+    adapter.adapt_core_layers(&active_horizon, &active_venn, None);
+
+    // Verify persistent Ego intervention via `apply_srl_with_gateway_mut` vs snapshot `&self` path.
+    let fact = ObjectiveFact::new([24i8; MAX_ATTENTION_HEADS], 6.5, 0, 1);
+    let mut hidden = vec![10.0, 0.0, 0.0, 0.0];
+    let u = vec![1.0, 0.0, 0.0, 0.0];
+    let v = vec![1.0, 0.0, 0.0, 0.0];
+    let epochs_before = adapter.ego_field().intervention_epochs;
+    let _ = adapter
+        .apply_srl_with_gateway(&fact, &mut hidden, &u, &v)
+        .expect("immutable srl");
+    assert_eq!(adapter.ego_field().intervention_epochs, epochs_before);
+
+    let _ = adapter
+        .apply_srl_with_gateway_mut(&fact, &mut hidden, &u, &v)
+        .expect("mutable srl");
+    assert!(adapter.ego_field().intervention_epochs > epochs_before);
+
+    // Fragmented micro-ensemble through adapter
+    let frags = [
+        ObjectiveFact::new([24i8; MAX_ATTENTION_HEADS], 2.0, 0, 1),
+        ObjectiveFact::new([24i8; MAX_ATTENTION_HEADS], 2.0, 0, 2),
+        ObjectiveFact::new([24i8; MAX_ATTENTION_HEADS], 2.0, 0, 3),
+    ];
+    let (ens_frame, _, ens_report) = adapter.synthesize_fragment_ensemble(&frags);
+    assert_eq!(ens_report.active_fragment_count, 3);
+    assert_ne!(ens_report.quorum_agreed_granule_mask, 0);
+    assert!(ens_frame.effective_energy > 0.0);
+
+    // Stationary shortcut skips redundant adaptation epochs once quiescent without stagnation trigger.
+    adapter.configure_ego_from_preset(LiminalEgoPreset::Custom);
+    let horizon = EpistemicHorizonReading {
+        total_memory_support: 1.5,
+        peak_positive_affinity: 0.90,
+        horizon_gate: 1.0,
+        dominant_anchor_id: 1,
+        regime_code: EpistemicRegime::KnownCoherent as u8,
+        ..Default::default()
+    };
+    let venn = StigmergicVennSerendipityReport {
+        venn_core_mask: 0x0F,
+        ..Default::default()
+    };
+    adapter.adapt_core_layers(&horizon, &venn, None);
+    adapter.adapt_core_layers(&horizon, &venn, None);
+    assert_eq!(adapter.last_boundary_delta().stationary_shortcut_ready, 1);
+    let settled_epochs = adapter.aperture_field().adaptation_epochs;
+    adapter.adapt_core_layers(&horizon, &venn, None);
+    assert_eq!(
+        adapter.aperture_field().adaptation_epochs,
+        settled_epochs,
+        "quiescent state without stagnation trigger should take stationary shortcut"
+    );
 }

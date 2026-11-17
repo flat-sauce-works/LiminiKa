@@ -1549,15 +1549,15 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_stigmergic_evaluate_venn_an
     uint8_t* GCSO_RESTRICT did_nucleate_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Initializes a 64-byte 2-layer autonomous core stack (Layer 0: Liminal, Layer 1:
- * Stigmergic).
+ * @brief Initializes a 128-byte 3-layer autonomous core stack (Layer 0: Liminal, Layer 1:
+ * Stigmergic, Layer 2: Ego).
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_core_layer_stack_init_default(
     gcso_autonomous_core_layer_stack_t* GCSO_RESTRICT stack_out) GCSO_NOEXCEPT;
 
 /**
  * @brief Branchlessly co-adapts Core Layer 0 (LiminalApertureField) and Core Layer 1
- * (StigmergicGranuleField) with cross-layer Venn/Serendipity feedback.
+ * (StigmergicGranuleField) inside the 128-byte stack with cross-layer Venn/Serendipity feedback.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_core_layer_stack_adapt(
     gcso_autonomous_core_layer_stack_t* GCSO_RESTRICT stack_inout,
@@ -1566,7 +1566,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_core_layer_stack_adapt(
     const gcso_stigmergic_venn_serendipity_report_t* GCSO_RESTRICT venn_report) GCSO_NOEXCEPT;
 
 /**
- * @brief Formats the live 2-layer Core Topology as a zero-allocation Mermaid flowchart TD diagram
+ * @brief Formats the live 3-layer Core Topology as a zero-allocation Mermaid flowchart TD diagram
  * into caller-provided `out_buf`. Pass `out_buf == NULL` to query the required buffer length.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_liminal_topology_format_mermaid(

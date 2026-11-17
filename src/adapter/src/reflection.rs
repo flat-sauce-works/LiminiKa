@@ -14,8 +14,9 @@ use liminika_core::action_hub::StigmergicActionDecision;
 use liminika_core::traits::gateway::{
     AdaptiveThresholdPolicy, CausalProvenanceSignal, CognitiveCircuitActivation,
     CognitiveCircuitPlasticity, CognitiveCircuitThresholdPolicy, CognitiveOpKind, CognitiveStepOp,
-    CognitiveTrajectoryLedger, GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal,
-    ObjectiveFact, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
+    CognitiveTrajectoryLedger, GatewayFrame, GuardPhaseAnchor, LiminalEgoField,
+    ManifoldGatewaySignal, ObjectiveFact, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    CAUSAL_AXIS_OBJECTIVE_FACT, EGO_TRIGGER_LIMINAL_EXTERIOR,
 };
 use liminika_core::traits::primitives::MAX_ATTENTION_HEADS;
 
@@ -264,6 +265,46 @@ pub trait AttractorTrajectoryEvaluator {
         recall_policy: &RecallPolicy,
         policy: &ReflectionPolicy,
     ) -> ReflectionCritique;
+
+    /// Evaluates `draft` relative to `query` while respecting active Core Layer 2 Ego
+    /// boundary-transgression intent (`LiminalEgoField`).
+    ///
+    /// When `ego` is actively exploring beyond `Liminal` horizons (`transgression_bias_q7 >= 24` or
+    /// `EGO_TRIGGER_LIMINAL_EXTERIOR` fired) and the draft introduces no Guard conflict, controlled
+    /// `BoundaryAmbiguity` / mild `VoidDrift` excursions are accepted as intentional exploration
+    /// (`ReflectionTriggerKind::Converged`) rather than penalized as accidental drift, while
+    /// Guard traps and ungrounded `VoidHallucination` remain strictly rejected.
+    fn assess_trajectory_with_ego(
+        &self,
+        query: &TrajectoryManifoldSnapshot,
+        draft: &TrajectoryManifoldSnapshot,
+        recall_policy: &RecallPolicy,
+        policy: &ReflectionPolicy,
+        ego: &LiminalEgoField,
+    ) -> ReflectionCritique {
+        let mut critique = self.assess_trajectory(query, draft, recall_policy, policy);
+        let ego_exploring = ego.is_active()
+            && (ego.transgression_bias_q7 >= 24
+                || (ego.last_intervened_mask & EGO_TRIGGER_LIMINAL_EXTERIOR) != 0);
+        let no_guard_conflict = draft.guard_conflict_margin <= policy.guard_trigger_margin;
+        let controlled_excursion =
+            matches!(
+                critique.trigger,
+                ReflectionTriggerKind::BoundaryAmbiguity | ReflectionTriggerKind::VoidDrift
+            ) && (!matches!(draft.void_state, VoidBoundaryState::LiminalExterior)
+                || ego.transgression_bias_q7 >= 36
+                || (ego.last_intervened_mask & EGO_TRIGGER_LIMINAL_EXTERIOR) != 0);
+
+        if ego_exploring && no_guard_conflict && controlled_excursion {
+            critique.trigger = ReflectionTriggerKind::Converged;
+            critique.directive.rethink_recommended = false;
+            critique.directive.inject_guard_repulsion = false;
+            critique.directive.suppress_injection = false;
+            critique.directive.rope_rad_delta = 0.0;
+            critique.directive.srl_scale_delta = 0.0;
+        }
+        critique
+    }
 
     /// Chooses between Pass 1 and a corrective Pass 2 using strictly geometric criteria.
     fn select_better_pass(
@@ -953,5 +994,82 @@ mod tests {
             eval.select_better_pass(&policy, &crit, &crit_ok),
             ReflectionSelection::Pass2
         );
+    }
+
+    #[test]
+    fn reflection_ego_allows_controlled_exploration_but_rejects_guard_and_hallucination() {
+        use liminika_core::traits::gateway::EgoIntentAxes;
+
+        let eval = ManifoldReflectionEvaluator;
+        let recall_policy = RecallPolicy::default();
+        let policy = ReflectionPolicy::default();
+
+        let ego = LiminalEgoField::from_intent_axes(
+            &EgoIntentAxes::new()
+                .with_autonomy_q7(80)
+                .with_transgression_q7(72),
+        );
+
+        let query = make_snapshot(
+            VoidBoundaryState::InsideBasin,
+            0.65,
+            0.35,
+            -0.25,
+            vec![1, 2],
+        );
+        // Draft explores across the LiminalBoundary with no Guard conflict.
+        let exploring_draft = make_snapshot(
+            VoidBoundaryState::LiminalBoundary,
+            0.40,
+            0.38,
+            -0.10,
+            vec![3],
+        );
+        let baseline_crit =
+            eval.assess_trajectory(&query, &exploring_draft, &recall_policy, &policy);
+        assert!(baseline_crit.directive.rethink_recommended);
+
+        let ego_crit = eval.assess_trajectory_with_ego(
+            &query,
+            &exploring_draft,
+            &recall_policy,
+            &policy,
+            &ego,
+        );
+        assert_eq!(ego_crit.trigger, ReflectionTriggerKind::Converged);
+        assert!(!ego_crit.directive.rethink_recommended);
+
+        // Guard attraction must still be rejected even with an active transgressive Ego.
+        let guard_draft = make_snapshot(
+            VoidBoundaryState::LiminalBoundary,
+            0.55,
+            0.25,
+            0.30,
+            vec![1],
+        );
+        let guard_crit =
+            eval.assess_trajectory_with_ego(&query, &guard_draft, &recall_policy, &policy, &ego);
+        assert_eq!(guard_crit.trigger, ReflectionTriggerKind::GuardAttraction);
+        assert!(guard_crit.directive.rethink_recommended);
+
+        // Ungrounded OOD query hallucination must still be suppressed.
+        let ood_query = make_snapshot(
+            VoidBoundaryState::LiminalExterior,
+            0.10,
+            0.05,
+            -0.20,
+            vec![],
+        );
+        let ood_hallucination =
+            make_snapshot(VoidBoundaryState::InsideBasin, 0.72, 0.30, -0.10, vec![99]);
+        let ood_crit = eval.assess_trajectory_with_ego(
+            &ood_query,
+            &ood_hallucination,
+            &recall_policy,
+            &policy,
+            &ego,
+        );
+        assert_eq!(ood_crit.trigger, ReflectionTriggerKind::VoidHallucination);
+        assert!(ood_crit.directive.suppress_injection);
     }
 }

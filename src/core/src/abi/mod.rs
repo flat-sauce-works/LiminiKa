@@ -85,10 +85,11 @@ use crate::traits::gateway::{
     synthesize_multi_origin_gateway_frame_with_words, AutonomousCoreLayerStack,
     CausalProvenanceReport, CausalProvenanceSignal, CognitiveGroundingSignal,
     CognitiveTrajectoryLedger, ContradictionGuard, ContradictionGuardSignal,
-    CrystallizedAttractorRecord, EpistemicHorizonReading, GatewayFrame, GcsoFourSectionView,
-    LiminalApertureField, LiminalBoundaryDelta, LiminalEgoField, LiminalEgoPreset,
-    LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, ObjectiveFact, RawPhaseProjectable,
-    StigmergicGranuleField, StigmergicVennSerendipityReport, SubjectivePersona, SystemConstraint,
+    CrystallizedAttractorRecord, EgoIntentAxes, EpistemicHorizonReading, GatewayFrame,
+    GcsoFourSectionView, LiminalApertureField, LiminalBoundaryDelta, LiminalEgoField,
+    LiminalEgoPreset, LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, ObjectiveFact,
+    RawPhaseProjectable, StigmergicFragmentEnsembleReport, StigmergicGranuleField,
+    StigmergicVennSerendipityReport, SubjectivePersona, SystemConstraint,
     CAUSAL_AXIS_CONTRADICTION_GUARD, GCSO_FOUR_SECTION_HEADER_BYTES,
 };
 use crate::traits::primitives::{
@@ -1603,6 +1604,7 @@ mod tests {
         let s = core::str::from_utf8(&mermaid_buf[..written]).expect("valid utf8");
         assert!(s.contains("Core Layer 0: Liminal"));
         assert!(s.contains("Core Layer 1: StigmergicGranuleField"));
+        assert!(s.contains("Core Layer 2: LiminalEgoField"));
 
         let mut ego_preset = gcso_liminal_ego_field_t::default();
         let mut ego_text = gcso_liminal_ego_field_t::default();

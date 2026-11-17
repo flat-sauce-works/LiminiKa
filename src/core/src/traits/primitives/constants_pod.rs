@@ -172,14 +172,17 @@ pub const APERTURE_ACTION_HUB_WIDE: u32 = 0x0000_FFFF;
 /// Number of dynamic channel slots tracked by `LiminalApertureField`.
 pub const NUM_LIMINAL_APERTURE_CHANNELS: usize = 8;
 
-/// Number of orthogonal self-tuning autonomous core layers (`Layer 0: Liminal`, `Layer 1: Stigmergic`).
-pub const NUM_CORE_AUTONOMOUS_LAYERS: usize = 2;
+/// Number of orthogonal self-tuning autonomous core layers (`Layer 0: Liminal`, `Layer 1: Stigmergic`, `Layer 2: Ego`).
+pub const NUM_CORE_AUTONOMOUS_LAYERS: usize = 3;
 
 /// Autonomous Core Layer 0 identifier: Epistemic Horizon & Trait Aperture (`LiminalApertureField`).
 pub const CORE_LAYER_LIMINAL: usize = 0;
 
 /// Autonomous Core Layer 1 identifier: Stigmergic Granule Approximation, Venn Overlap & Serendipity (`StigmergicGranuleField`).
 pub const CORE_LAYER_STIGMERGIC: usize = 1;
+
+/// Autonomous Core Layer 2 identifier: Wide-Aperture Subjective Ego & Top-Down Boundary Intervention (`LiminalEgoField`).
+pub const CORE_LAYER_EGO: usize = 2;
 
 /// Ego intervention trigger bit (`0x01`): Counter-vortex orbital thrust when attractor pull threatens capture.
 pub const EGO_TRIGGER_VORTEX_SWALLOW: u8 = 1 << 0;

@@ -53,9 +53,10 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_NUM_SWARM_MICRO_CELLS GCSO_NUM_STIGMERGIC_GRANULES
 #define GCSO_MAX_ATTRACTOR_DOMAINS 8U
 #define GCSO_NUM_LIMINAL_APERTURE_CHANNELS 8U
-#define GCSO_NUM_CORE_AUTONOMOUS_LAYERS 2U
+#define GCSO_NUM_CORE_AUTONOMOUS_LAYERS 3U
 #define GCSO_CORE_LAYER_LIMINAL 0U
 #define GCSO_CORE_LAYER_STIGMERGIC 1U
+#define GCSO_CORE_LAYER_EGO 2U
 
 /* Liminal Cognitive Aperture Bitmasks (1:1 with primitives/constants_pod.rs) */
 #define GCSO_APERTURE_SYSTEM_CONSTRAINT (1U << 0)
@@ -662,11 +663,71 @@ struct GCSO_ALIGN_PREFIX(16) gcso_stigmergic_venn_serendipity_report {
 typedef struct gcso_stigmergic_venn_serendipity_report gcso_stigmergic_venn_serendipity_report_t;
 
 /**
- * @brief Unified 2-layer autonomous core stack (64 bytes = 1 cache line, 64-byte aligned).
+ * @brief Normalized intermediate semantic Ego intent axes (16 bytes, 16-byte aligned).
+ */
+struct GCSO_ALIGN_PREFIX(16) gcso_ego_intent_axes {
+    int8_t autonomy_q7;
+    int8_t transgression_q7;
+    int8_t devotion_q7;
+    int8_t logic_q7;
+    int8_t caution_q7;
+    int8_t defiance_q7;
+    int8_t synergy_q7;
+    int8_t vitality_q7;
+    uint8_t preferred_slot_mask;
+    uint8_t active_granule_bias_mask;
+    uint8_t confidence_q7;
+    uint8_t flags;
+    uint32_t signature_hash;
+} GCSO_ALIGN_SUFFIX(16);
+typedef struct gcso_ego_intent_axes gcso_ego_intent_axes_t;
+
+/**
+ * @brief Wide-aperture Subjective Ego boundary redefinition controller (64 bytes, 64-byte aligned).
+ */
+struct GCSO_ALIGN_PREFIX(64) gcso_liminal_ego_field {
+    gcso_q7_t sovereign_granule_phase_q7[GCSO_NUM_STIGMERGIC_GRANULES];
+    int8_t trait_floor_bias_q7[GCSO_NUM_LIMINAL_APERTURE_CHANNELS];
+    int8_t trait_gain_bias_q7[GCSO_NUM_LIMINAL_APERTURE_CHANNELS];
+    int8_t slot_affinity_bias_q7[GCSO_MAX_ATTRACTOR_DOMAINS];
+    uint8_t granule_autonomy_q7[GCSO_NUM_STIGMERGIC_GRANULES];
+    uint8_t counter_vortex_thrust_q7;
+    uint8_t vortex_escape_floor_q7;
+    int8_t transgression_bias_q7;
+    uint8_t irrational_defiance_q7;
+    uint8_t trigger_mask;
+    uint8_t forced_action_mode_or_mask;
+    uint8_t suppressed_action_mode_mask;
+    uint8_t preset_code;
+    uint32_t ego_signature_hash;
+    uint32_t intervention_epochs;
+    uint8_t last_intervened_mask;
+    uint8_t reserved[7];
+} GCSO_ALIGN_SUFFIX(64);
+typedef struct gcso_liminal_ego_field gcso_liminal_ego_field_t;
+
+/**
+ * @brief Fragmented micro-ensemble consensus report across 8 SWAR granules (16 bytes, 16-byte aligned).
+ */
+struct GCSO_ALIGN_PREFIX(16) gcso_stigmergic_fragment_ensemble_report {
+    float ensemble_consensus_energy;
+    float ensemble_diversity_gain;
+    uint8_t quorum_agreed_granule_mask;
+    uint8_t split_contested_granule_mask;
+    uint8_t ego_tiebreak_granule_mask;
+    uint8_t active_fragment_count;
+    uint8_t dominant_fragment_slot;
+    uint8_t reserved[3];
+} GCSO_ALIGN_SUFFIX(16);
+typedef struct gcso_stigmergic_fragment_ensemble_report gcso_stigmergic_fragment_ensemble_report_t;
+
+/**
+ * @brief Unified 3-layer autonomous core stack (128 bytes = 2 cache lines, 64-byte aligned).
  */
 struct GCSO_ALIGN_PREFIX(64) gcso_autonomous_core_layer_stack {
     gcso_liminal_aperture_field_t liminal_layer;
     gcso_stigmergic_granule_field_t stigmergic_layer;
+    gcso_liminal_ego_field_t ego_layer;
 } GCSO_ALIGN_SUFFIX(64);
 typedef struct gcso_autonomous_core_layer_stack gcso_autonomous_core_layer_stack_t;
 
@@ -698,30 +759,6 @@ struct GCSO_ALIGN_PREFIX(16) gcso_liminal_boundary_delta {
     uint8_t reserved[3];
 } GCSO_ALIGN_SUFFIX(16);
 typedef struct gcso_liminal_boundary_delta gcso_liminal_boundary_delta_t;
-
-/**
- * @brief Wide-aperture Subjective Ego boundary redefinition controller (64 bytes, 64-byte aligned).
- */
-struct GCSO_ALIGN_PREFIX(64) gcso_liminal_ego_field {
-    gcso_q7_t sovereign_granule_phase_q7[GCSO_NUM_STIGMERGIC_GRANULES];
-    int8_t trait_floor_bias_q7[GCSO_NUM_LIMINAL_APERTURE_CHANNELS];
-    int8_t trait_gain_bias_q7[GCSO_NUM_LIMINAL_APERTURE_CHANNELS];
-    int8_t slot_affinity_bias_q7[GCSO_MAX_ATTRACTOR_DOMAINS];
-    uint8_t granule_autonomy_q7[GCSO_NUM_STIGMERGIC_GRANULES];
-    uint8_t counter_vortex_thrust_q7;
-    uint8_t vortex_escape_floor_q7;
-    int8_t transgression_bias_q7;
-    uint8_t irrational_defiance_q7;
-    uint8_t trigger_mask;
-    uint8_t forced_action_mode_or_mask;
-    uint8_t suppressed_action_mode_mask;
-    uint8_t preset_code;
-    uint32_t ego_signature_hash;
-    uint32_t intervention_epochs;
-    uint8_t last_intervened_mask;
-    uint8_t reserved[7];
-} GCSO_ALIGN_SUFFIX(64);
-typedef struct gcso_liminal_ego_field gcso_liminal_ego_field_t;
 
 /*
  * Strongly-Typed Opaque Handles eliminating generic raw `c_void` / `void*` pointers.
@@ -805,12 +842,16 @@ GCSO_STATIC_ASSERT(sizeof(gcso_stigmergic_granule_field_t) == 32,
                    "gcso_stigmergic_granule_field_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_stigmergic_venn_serendipity_report_t) == 32,
                    "gcso_stigmergic_venn_serendipity_report_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_autonomous_core_layer_stack_t) == 64,
+GCSO_STATIC_ASSERT(sizeof(gcso_autonomous_core_layer_stack_t) == 128,
                    "gcso_autonomous_core_layer_stack_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_liminal_topology_snapshot_t) == 32,
                    "gcso_liminal_topology_snapshot_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_liminal_boundary_delta_t) == 16,
                    "gcso_liminal_boundary_delta_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_ego_intent_axes_t) == 16,
+                   "gcso_ego_intent_axes_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_stigmergic_fragment_ensemble_report_t) == 16,
+                   "gcso_stigmergic_fragment_ensemble_report_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_liminal_ego_field_t) == 64,
                    "gcso_liminal_ego_field_t size mismatch");
 
@@ -867,6 +908,10 @@ GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_liminal_topology_snapshot_t) == 16,
                    "gcso_liminal_topology_snapshot_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_liminal_boundary_delta_t) == 16,
                    "gcso_liminal_boundary_delta_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_ego_intent_axes_t) == 16,
+                   "gcso_ego_intent_axes_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_stigmergic_fragment_ensemble_report_t) == 16,
+                   "gcso_stigmergic_fragment_ensemble_report_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_liminal_ego_field_t) == 64,
                    "gcso_liminal_ego_field_t alignment mismatch");
 
@@ -1165,6 +1210,24 @@ GCSO_STATIC_ASSERT(offsetof(gcso_autonomous_core_layer_stack_t, liminal_layer) =
                    "gcso_autonomous_core_layer_stack_t::liminal_layer offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_autonomous_core_layer_stack_t, stigmergic_layer) == 32,
                    "gcso_autonomous_core_layer_stack_t::stigmergic_layer offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_autonomous_core_layer_stack_t, ego_layer) == 64,
+                   "gcso_autonomous_core_layer_stack_t::ego_layer offset mismatch");
+
+GCSO_STATIC_ASSERT(offsetof(gcso_ego_intent_axes_t, preferred_slot_mask) == 8,
+                   "gcso_ego_intent_axes_t::preferred_slot_mask offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_ego_intent_axes_t, active_granule_bias_mask) == 9,
+                   "gcso_ego_intent_axes_t::active_granule_bias_mask offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_ego_intent_axes_t, flags) == 11,
+                   "gcso_ego_intent_axes_t::flags offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_ego_intent_axes_t, signature_hash) == 12,
+                   "gcso_ego_intent_axes_t::signature_hash offset mismatch");
+
+GCSO_STATIC_ASSERT(
+    offsetof(gcso_stigmergic_fragment_ensemble_report_t, quorum_agreed_granule_mask) == 8,
+    "gcso_stigmergic_fragment_ensemble_report_t::quorum_agreed_granule_mask offset mismatch");
+GCSO_STATIC_ASSERT(
+    offsetof(gcso_stigmergic_fragment_ensemble_report_t, ego_tiebreak_granule_mask) == 10,
+    "gcso_stigmergic_fragment_ensemble_report_t::ego_tiebreak_granule_mask offset mismatch");
 
 GCSO_STATIC_ASSERT(offsetof(gcso_liminal_topology_snapshot_t, void_floor_q7) == 0,
                    "gcso_liminal_topology_snapshot_t::void_floor_q7 offset mismatch");

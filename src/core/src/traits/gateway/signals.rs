@@ -581,6 +581,100 @@ pub trait CausalProvenanceSignal: Liminal + BranchlessKernel {
     fn causal_anomaly_severity(&self) -> f32 {
         0.0
     }
+
+    /// Branchlessly resolves this signal's live dynamic cognitive aperture
+    /// `(active_granule_mask, effective_gain_q7, phase_shift_q7)` across all three sheets of
+    /// [`AutonomousCoreLayerStack`] (`Layer 0: Liminal`, `Layer 1: Stigmergic`, `Layer 2: Ego`).
+    #[inline]
+    fn resolve_dynamic_core_aperture(&self, stack: &AutonomousCoreLayerStack) -> (u8, u8, i8) {
+        let bits = self.causal_provenance_bits();
+        let ego_active = stack.ego_layer.is_active();
+        let ego_trans_pos = ego_active & (stack.ego_layer.transgression_bias_q7 > 0);
+        let mut active_granule_mask = 0u8;
+        let mut weighted_gain_sum = 0u32;
+        let mut weighted_shift_sum = 0i32;
+        let mut active_axis_count = 0u32;
+
+        let mut ch = 0usize;
+        while ch < 4 {
+            let axis_on = ((bits >> ch) & 1) != 0;
+            let base_floor = i32::from(stack.liminal_layer.void_floor_q7[ch]);
+            let base_gain = i32::from(stack.liminal_layer.aperture_gain_q7[ch]);
+            let ego_floor_bias = branchless_select_i32(
+                ego_active,
+                i32::from(stack.ego_layer.trait_floor_bias_q7[ch]),
+                0,
+            );
+            let ego_gain_bias = branchless_select_i32(
+                ego_active,
+                i32::from(stack.ego_layer.trait_gain_bias_q7[ch]),
+                0,
+            );
+            let eff_floor = (base_floor + ego_floor_bias).clamp(4, 127) as u8;
+            let eff_gain = (base_gain + ego_gain_bias).clamp(16, 127) as u8;
+            let ap_open = ((stack.liminal_layer.active_aperture_mask >> ch) & 1) != 0;
+
+            let mut ch_mask = 0u8;
+            let mut g = 0usize;
+            while g < NUM_STIGMERGIC_GRANULES {
+                let bit = 1u8 << g;
+                let pher = stack.stigmergic_layer.granule_pheromone_q7[g];
+                let in_venn_core = (stack.stigmergic_layer.venn_overlap_mask & bit) != 0;
+                let in_serendip = (stack.stigmergic_layer.serendipity_excursion_mask & bit) != 0;
+                let ego_auto = stack.ego_layer.granule_autonomy_q7[g];
+
+                let venn_bonus = branchless_select_u8(in_venn_core, 24, 0);
+                let ch_accepts_ego_transgress =
+                    (ch == 2) | (stack.ego_layer.trait_floor_bias_q7[ch] < 0);
+                let ego_bonus = branchless_select_u8(
+                    ego_trans_pos & ch_accepts_ego_transgress & (ego_auto >= 24),
+                    ego_auto >> 1,
+                    0,
+                );
+                let eff_density = pher.saturating_add(venn_bonus).saturating_add(ego_bonus);
+
+                let req_floor = branchless_select_u8(
+                    ch == 2,
+                    (eff_floor >> 1).saturating_sub(branchless_select_u8(in_serendip, 8, 0)),
+                    eff_floor >> 1,
+                );
+                let g_open = ap_open & (eff_density >= req_floor);
+                ch_mask |= branchless_select_u8(g_open, bit, 0);
+                g += 1;
+            }
+
+            active_granule_mask |= branchless_select_u8(axis_on, ch_mask, 0);
+            weighted_gain_sum += branchless_select_u32(axis_on, u32::from(eff_gain), 0);
+            weighted_shift_sum +=
+                branchless_select_i32(axis_on, i32::from(stack.liminal_layer.phase_shift_q7[ch]), 0);
+            active_axis_count += u32::from(axis_on);
+            ch += 1;
+        }
+
+        let unattributed = active_axis_count == 0;
+        let has_layer1_mask =
+            (stack.stigmergic_layer.venn_overlap_mask | stack.stigmergic_layer.serendipity_excursion_mask)
+                != 0;
+        let fallback_mask = stack.stigmergic_layer.venn_overlap_mask
+            | stack.stigmergic_layer.serendipity_excursion_mask
+            | branchless_select_u8(ego_trans_pos | !has_layer1_mask, 0xFF, 0);
+        let out_mask = branchless_select_u8(unattributed, fallback_mask, active_granule_mask);
+        let out_gain = match active_axis_count {
+            0 => stack.liminal_layer.aperture_gain_q7[7],
+            1 => weighted_gain_sum.min(127) as u8,
+            2 => (weighted_gain_sum >> 1).min(127) as u8,
+            3 => ((weighted_gain_sum * 43) >> 7).min(127) as u8,
+            _ => (weighted_gain_sum >> 2).min(127) as u8,
+        };
+        let out_shift = match active_axis_count {
+            0 => stack.liminal_layer.phase_shift_q7[7],
+            1 => weighted_shift_sum.clamp(-127, 127) as i8,
+            2 => (weighted_shift_sum >> 1).clamp(-127, 127) as i8,
+            3 => ((weighted_shift_sum * 43) >> 7).clamp(-127, 127) as i8,
+            _ => (weighted_shift_sum >> 2).clamp(-127, 127) as i8,
+        };
+        (out_mask, out_gain.max(16), out_shift)
+    }
 }
 
 impl<T: CausalProvenanceSignal + ?Sized> CausalProvenanceSignal for &T {
@@ -591,6 +685,10 @@ impl<T: CausalProvenanceSignal + ?Sized> CausalProvenanceSignal for &T {
     #[inline(always)]
     fn causal_anomaly_severity(&self) -> f32 {
         (**self).causal_anomaly_severity()
+    }
+    #[inline(always)]
+    fn resolve_dynamic_core_aperture(&self, stack: &AutonomousCoreLayerStack) -> (u8, u8, i8) {
+        (**self).resolve_dynamic_core_aperture(stack)
     }
 }
 
