@@ -707,7 +707,8 @@ struct GCSO_ALIGN_PREFIX(64) gcso_liminal_ego_field {
 typedef struct gcso_liminal_ego_field gcso_liminal_ego_field_t;
 
 /**
- * @brief Fragmented micro-ensemble consensus report across 8 SWAR granules (16 bytes, 16-byte aligned).
+ * @brief Fragmented micro-ensemble consensus report across 8 SWAR granules (16 bytes, 16-byte
+ * aligned).
  */
 struct GCSO_ALIGN_PREFIX(16) gcso_stigmergic_fragment_ensemble_report {
     float ensemble_consensus_energy;
@@ -848,8 +849,7 @@ GCSO_STATIC_ASSERT(sizeof(gcso_liminal_topology_snapshot_t) == 32,
                    "gcso_liminal_topology_snapshot_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_liminal_boundary_delta_t) == 16,
                    "gcso_liminal_boundary_delta_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_ego_intent_axes_t) == 16,
-                   "gcso_ego_intent_axes_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_ego_intent_axes_t) == 16, "gcso_ego_intent_axes_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_stigmergic_fragment_ensemble_report_t) == 16,
                    "gcso_stigmergic_fragment_ensemble_report_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_liminal_ego_field_t) == 64,
