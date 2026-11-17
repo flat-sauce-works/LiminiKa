@@ -13,7 +13,7 @@ use liminika_core::abi::{
     GCSO_SUCCESS,
 };
 use liminika_core::traits::aligned::{AlignedBuffer16, AlignedBuffer32};
-use liminika_core::traits::telemetry::SwarmResolutionReport;
+use liminika_core::traits::telemetry::StigmergicReconstitutionReport;
 use liminika_core::traits::{DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD};
 
 struct ZeroAllocGuardAllocator;
@@ -71,7 +71,7 @@ fn test_context_step_token_zero_allocation_guarantee() {
         *slot = ((i as i8).wrapping_mul(7)).wrapping_sub(32);
     }
     let phase_buf = AlignedBuffer16::<i8, 64>::new(phases);
-    let mut swarm_report = SwarmResolutionReport::default();
+    let mut swarm_report = StigmergicReconstitutionReport::default();
 
     // 2. Enable Strict Zero-Allocation Guard for Hot Path.
     ENFORCE_ZERO_ALLOC.store(true, Ordering::SeqCst);

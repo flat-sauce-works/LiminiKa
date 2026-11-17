@@ -3,9 +3,9 @@
 
 //! Lv.1 Capability 2: Stigmergic trails, internal telemetry, inter-memory Limina bridging,
 //! Bayesian pointer-trail transition scoring & rewiring, single-manifold unified-field resonance
-//! with 32-bit `target_anchor_id` preservation, and micro-swarm intelligence (`PagedBitmaskOps`,
+//! with 32-bit `target_anchor_id` preservation, and stigmergic granule reconstitution (`PagedBitmaskOps`,
 //! `ContrastivePhaseBloomFilter`, `StigmergicActionPtrOps`, `StigmergicTrailOps`,
-//! `StigmergicSwarmOps`, `FastPathLedger`, and `SwarmResolutionReport`) registered into
+//! `StigmergicReconstitutionOps`, `FastPathLedger`, and `StigmergicReconstitutionReport`) registered into
 //! [`crate::traits::ActionHub`] for the Geometric Cellular Sheaf Orchestrator (GCSO).
 //!
 //! Core inner-loop reductions execute via branchless SWAR bit-parallel arithmetic (`0 fdiv`
@@ -84,20 +84,12 @@ use core::slice;
 
 /// Number of parallel 8-head SWAR Stigmergic Granules partitioning the 64 attention heads (`8`).
 pub const NUM_STIGMERGIC_GRANULES: usize = 8;
-/// Backward-compatible alias for [`NUM_STIGMERGIC_GRANULES`].
-pub const NUM_SWARM_MICRO_CELLS: usize = NUM_STIGMERGIC_GRANULES;
 /// Number of attention heads per SWAR Stigmergic Granule (`8` heads = 1 `u64` SWAR register).
 pub const HEADS_PER_STIGMERGIC_GRANULE: usize = MAX_ATTENTION_HEADS / NUM_STIGMERGIC_GRANULES;
-/// Backward-compatible alias for [`HEADS_PER_STIGMERGIC_GRANULE`].
-pub const HEADS_PER_SWARM_CELL: usize = HEADS_PER_STIGMERGIC_GRANULE;
 /// Default Stigmergic Reconstitution Quorum threshold (`6` out of `8` granules = 75% consensus).
 pub const DEFAULT_STIGMERGIC_QUORUM_THRESHOLD: u8 = 6;
-/// Backward-compatible alias for [`DEFAULT_STIGMERGIC_QUORUM_THRESHOLD`].
-pub const DEFAULT_SWARM_QUORUM_THRESHOLD: u8 = DEFAULT_STIGMERGIC_QUORUM_THRESHOLD;
 /// Default Q7 circular phase residual tolerance (`4` Q7 steps $\approx 0.098\text{ rad}$).
 pub const DEFAULT_STIGMERGIC_TOLERANCE_Q7: u8 = 4;
-/// Backward-compatible alias for [`DEFAULT_STIGMERGIC_TOLERANCE_Q7`].
-pub const DEFAULT_SWARM_TOLERANCE_Q7: u8 = DEFAULT_STIGMERGIC_TOLERANCE_Q7;
 
 /// Default total counter mass threshold (`128`) triggering branchless SWAR halving in [`ContrastivePhaseBloomFilter`].
 pub const DEFAULT_BLOOM_MAX_MASS_THRESHOLD: u32 = 128;
@@ -153,13 +145,13 @@ pub const LEDGER_FLAG_COGNITIVE_TRAJECTORY: u32 = 1 << 0;
 pub mod bitmask;
 pub mod bloom;
 pub mod ledger;
-pub mod swarm;
+pub mod stigmergy;
 pub mod trail;
 
 pub use self::bitmask::*;
 pub use self::bloom::*;
 pub use self::ledger::*;
-pub use self::swarm::*;
+pub use self::stigmergy::*;
 pub use self::trail::*;
 
 const _: () = {
@@ -169,9 +161,9 @@ const _: () = {
     assert!(align_of::<ContrastivePhaseBloomFilter>() == 64);
     assert!(size_of::<gcso_pointer_trail_t>() == 128);
     assert!(align_of::<gcso_pointer_trail_t>() == 128);
-    assert!(size_of::<SwarmResolutionReport>() == 16);
-    assert!(align_of::<SwarmResolutionReport>() == 16);
-    assert!(NUM_SWARM_MICRO_CELLS * HEADS_PER_SWARM_CELL == MAX_ATTENTION_HEADS);
+    assert!(size_of::<StigmergicReconstitutionReport>() == 16);
+    assert!(align_of::<StigmergicReconstitutionReport>() == 16);
+    assert!(NUM_STIGMERGIC_GRANULES * HEADS_PER_STIGMERGIC_GRANULE == MAX_ATTENTION_HEADS);
 
     let (next_w, res_q7, ok) =
         swar_subswarm_resolve_x8(0x1010_1010_1010_1010, 0x2020_2020_2020_2020, 128, 1, 2);

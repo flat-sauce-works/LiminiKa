@@ -78,8 +78,8 @@ use crate::traits::primitives::{
 };
 use crate::traits::telemetry::{
     MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, NUM_STIGMERGIC_GRANULES,
-    NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
-    TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
+    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
+    TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
 // ===================================================================
@@ -108,7 +108,7 @@ pub struct DissipativeOverflowReport {
     /// Updated phase-gravity mass of `landed_idx`.
     pub updated_gravity_mass: f32,
     /// Peeled 64-head SWAR residual phase words (`sample_w - primary_w`) propagated on overflow.
-    pub residual_words: [u64; NUM_SWARM_MICRO_CELLS],
+    pub residual_words: [u64; NUM_STIGMERGIC_GRANULES],
     /// `true` when `primary_idx` overflowed its capacity/coherence bound.
     pub overflowed: bool,
     /// `true` when the overflow residual settled onto an existing secondary attractor (`landed_idx != primary_idx`).
@@ -129,7 +129,7 @@ impl Default for DissipativeOverflowReport {
             scatter_coherence: 0.0,
             overflow_pressure: 0.0,
             updated_gravity_mass: 0.0,
-            residual_words: [0u64; NUM_SWARM_MICRO_CELLS],
+            residual_words: [0u64; NUM_STIGMERGIC_GRANULES],
             overflowed: false,
             scattered: false,
             spawned_new: false,
@@ -200,7 +200,7 @@ impl CrystallizedAttractorRecord {
     /// [`CrystallizedAttractorRecord`], guaranteed 64-byte aligned) as a zero-copy `&[u64; 8]` SWAR array.
     #[inline(always)]
     #[must_use]
-    pub const fn phase_words_ref(&self) -> &[u64; NUM_SWARM_MICRO_CELLS] {
+    pub const fn phase_words_ref(&self) -> &[u64; NUM_STIGMERGIC_GRANULES] {
         const _: () = assert!(cfg!(target_endian = "little"));
         // SAFETY: `CrystallizedAttractorRecord` is `#[repr(C, align(64))]` and `phase_profile`
         // is at exact byte offset 64 (`64 % 8 == 0`), with identical 64-byte layout to `[u64; 8]`.
@@ -208,7 +208,7 @@ impl CrystallizedAttractorRecord {
             &*(self
                 .phase_profile
                 .as_ptr()
-                .cast::<[u64; NUM_SWARM_MICRO_CELLS]>())
+                .cast::<[u64; NUM_STIGMERGIC_GRANULES]>())
         }
     }
 
@@ -216,7 +216,7 @@ impl CrystallizedAttractorRecord {
     /// [`CrystallizedAttractorRecord`], guaranteed 64-byte aligned) as a zero-copy `&mut [u64; 8]` SWAR array.
     #[inline(always)]
     #[must_use]
-    pub const fn phase_words_mut(&mut self) -> &mut [u64; NUM_SWARM_MICRO_CELLS] {
+    pub const fn phase_words_mut(&mut self) -> &mut [u64; NUM_STIGMERGIC_GRANULES] {
         const _: () = assert!(cfg!(target_endian = "little"));
         // SAFETY: `CrystallizedAttractorRecord` is `#[repr(C, align(64))]` and `phase_profile`
         // is at exact byte offset 64 (`64 % 8 == 0`), with identical 64-byte layout to `[u64; 8]`.
@@ -224,7 +224,7 @@ impl CrystallizedAttractorRecord {
             &mut *(self
                 .phase_profile
                 .as_mut_ptr()
-                .cast::<[u64; NUM_SWARM_MICRO_CELLS]>())
+                .cast::<[u64; NUM_STIGMERGIC_GRANULES]>())
         }
     }
 
@@ -257,7 +257,7 @@ impl CrystallizedAttractorRecord {
     #[inline(always)]
     fn clear_empty_in_place(&mut self, dominant_slot: u8) {
         self.init_spawned_slot_header_in_place(0, dominant_slot, 0);
-        *self.phase_words_mut() = [0u64; NUM_SWARM_MICRO_CELLS];
+        *self.phase_words_mut() = [0u64; NUM_STIGMERGIC_GRANULES];
     }
 
     #[inline(always)]
@@ -305,7 +305,7 @@ impl CrystallizedAttractorRecord {
     #[must_use]
     const fn compute_payload_crc32_with_words_raw(
         &self,
-        phase_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        phase_words: &[u64; NUM_STIGMERGIC_GRANULES],
     ) -> u32 {
         let w2 = self.mapped_section_offset48;
         let be_bits = self.base_energy.to_bits();
@@ -460,21 +460,21 @@ impl CrystallizedAttractorRecord {
 
     const EMPTY_CRYSTAL_CRC32_BY_SLOT: [u32; 8] = [
         Self::new_unstamped(0, 0, 0)
-            .compute_payload_crc32_with_words_raw(&[0u64; NUM_SWARM_MICRO_CELLS]),
+            .compute_payload_crc32_with_words_raw(&[0u64; NUM_STIGMERGIC_GRANULES]),
         Self::new_unstamped(0, 1, 0)
-            .compute_payload_crc32_with_words_raw(&[0u64; NUM_SWARM_MICRO_CELLS]),
+            .compute_payload_crc32_with_words_raw(&[0u64; NUM_STIGMERGIC_GRANULES]),
         Self::new_unstamped(0, 2, 0)
-            .compute_payload_crc32_with_words_raw(&[0u64; NUM_SWARM_MICRO_CELLS]),
+            .compute_payload_crc32_with_words_raw(&[0u64; NUM_STIGMERGIC_GRANULES]),
         Self::new_unstamped(0, 3, 0)
-            .compute_payload_crc32_with_words_raw(&[0u64; NUM_SWARM_MICRO_CELLS]),
+            .compute_payload_crc32_with_words_raw(&[0u64; NUM_STIGMERGIC_GRANULES]),
         Self::new_unstamped(0, 4, 0)
-            .compute_payload_crc32_with_words_raw(&[0u64; NUM_SWARM_MICRO_CELLS]),
+            .compute_payload_crc32_with_words_raw(&[0u64; NUM_STIGMERGIC_GRANULES]),
         Self::new_unstamped(0, 5, 0)
-            .compute_payload_crc32_with_words_raw(&[0u64; NUM_SWARM_MICRO_CELLS]),
+            .compute_payload_crc32_with_words_raw(&[0u64; NUM_STIGMERGIC_GRANULES]),
         Self::new_unstamped(0, 6, 0)
-            .compute_payload_crc32_with_words_raw(&[0u64; NUM_SWARM_MICRO_CELLS]),
+            .compute_payload_crc32_with_words_raw(&[0u64; NUM_STIGMERGIC_GRANULES]),
         Self::new_unstamped(0, 7, 0)
-            .compute_payload_crc32_with_words_raw(&[0u64; NUM_SWARM_MICRO_CELLS]),
+            .compute_payload_crc32_with_words_raw(&[0u64; NUM_STIGMERGIC_GRANULES]),
     ];
 
     /// Creates an empty, CRC32-stamped [`CrystallizedAttractorRecord`] ready to absorb sample points.
@@ -549,7 +549,7 @@ impl CrystallizedAttractorRecord {
     #[must_use]
     pub const fn compute_payload_crc32_with_words(
         &self,
-        phase_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        phase_words: &[u64; NUM_STIGMERGIC_GRANULES],
     ) -> u32 {
         self.compute_payload_crc32_with_words_raw(phase_words)
     }
@@ -564,7 +564,7 @@ impl CrystallizedAttractorRecord {
 
     /// Recomputes and stamps `self.checksum_crc32` in-place using pre-loaded `phase_words`.
     #[inline(always)]
-    pub fn stamp_crc32_with_words(&mut self, phase_words: &[u64; NUM_SWARM_MICRO_CELLS]) {
+    pub fn stamp_crc32_with_words(&mut self, phase_words: &[u64; NUM_STIGMERGIC_GRANULES]) {
         self.checksum_crc32 = self.compute_payload_crc32_with_words(phase_words);
     }
 
@@ -639,13 +639,13 @@ impl CrystallizedAttractorRecord {
     #[allow(clippy::too_many_arguments)]
     fn absorb_sample_words_with_cur_coh_and_uni_unstamped(
         &mut self,
-        cur_w: &[u64; NUM_SWARM_MICRO_CELLS],
-        sample_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
+        sample_w: &[u64; NUM_STIGMERGIC_GRANULES],
         precomputed_coh_opt: Option<f32>,
         uni_flags_opt: Option<(bool, bool)>,
         sample_energy: f32,
         add_count: u32,
-    ) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, bool) {
+    ) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, bool) {
         let clean_e = branchless_flush_subnormal_f32(branchless_relu_f32(sample_energy));
         if clean_e <= DEFAULT_ENTROPY_EPS || add_count == 0 {
             return (*cur_w, self.phase_gravity_mass, false);
@@ -712,11 +712,11 @@ impl CrystallizedAttractorRecord {
     #[inline(always)]
     fn absorb_sample_words_with_cur_unstamped(
         &mut self,
-        cur_w: &[u64; NUM_SWARM_MICRO_CELLS],
-        sample_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
+        sample_w: &[u64; NUM_STIGMERGIC_GRANULES],
         sample_energy: f32,
         add_count: u32,
-    ) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, bool) {
+    ) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, bool) {
         self.absorb_sample_words_with_cur_coh_and_uni_unstamped(
             cur_w,
             sample_w,
@@ -730,12 +730,12 @@ impl CrystallizedAttractorRecord {
     #[inline(always)]
     fn absorb_gateway_frame_with_cur_coh_and_uni_unstamped(
         &mut self,
-        cur_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
         frame: &GatewayFrame,
-        frame_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        frame_words: &[u64; NUM_STIGMERGIC_GRANULES],
         precomputed_coh_opt: Option<f32>,
         uni_flags_opt: Option<(bool, bool)>,
-    ) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, bool, bool) {
+    ) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, bool, bool) {
         if frame.is_repulsed() {
             return (*cur_w, self.phase_gravity_mass, false, false);
         }
@@ -779,10 +779,10 @@ impl CrystallizedAttractorRecord {
     #[inline(always)]
     fn absorb_gateway_frame_with_cur_unstamped(
         &mut self,
-        cur_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
         frame: &GatewayFrame,
-        frame_words: &[u64; NUM_SWARM_MICRO_CELLS],
-    ) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, bool, bool) {
+        frame_words: &[u64; NUM_STIGMERGIC_GRANULES],
+    ) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, bool, bool) {
         self.absorb_gateway_frame_with_cur_coh_and_uni_unstamped(
             cur_w,
             frame,
@@ -807,8 +807,8 @@ impl CrystallizedAttractorRecord {
         prev_temp_bits: u32,
         prev_prov: u32,
         prev_w7_lo: u32,
-        cur_w: &[u64; NUM_SWARM_MICRO_CELLS],
-        next_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
+        next_w: &[u64; NUM_STIGMERGIC_GRANULES],
         words_changed: bool,
     ) {
         if prev_crc != 0 {
@@ -906,7 +906,7 @@ impl CrystallizedAttractorRecord {
     pub fn absorb_gateway_frame_with_words(
         &mut self,
         frame: &GatewayFrame,
-        frame_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        frame_words: &[u64; NUM_STIGMERGIC_GRANULES],
     ) -> f32 {
         if frame.is_repulsed() {
             return self.phase_gravity_mass;
@@ -955,7 +955,7 @@ impl CrystallizedAttractorRecord {
     pub fn absorb_gateway_frame_with_words_and_overrides(
         &mut self,
         frame: &GatewayFrame,
-        frame_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        frame_words: &[u64; NUM_STIGMERGIC_GRANULES],
         dominant_slot_override: u8,
         action_mode_override: u8,
         extra_provenance_bits: u32,
@@ -1032,9 +1032,9 @@ impl CrystallizedAttractorRecord {
     #[must_use]
     pub(crate) fn find_nearest_toroidal_centroid_with_cache_64(
         centroids: &[Self],
-        sample_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        sample_words: &[u64; NUM_STIGMERGIC_GRANULES],
         word_cache_opt: Option<(
-            &[[u64; NUM_SWARM_MICRO_CELLS]; MAX_REGISTER_CACHED_CENTROIDS],
+            &[[u64; NUM_STIGMERGIC_GRANULES]; MAX_REGISTER_CACHED_CENTROIDS],
             u16,
             u16,
         )>,
@@ -1044,7 +1044,7 @@ impl CrystallizedAttractorRecord {
         f32,
         Option<usize>,
         usize,
-        [u64; NUM_SWARM_MICRO_CELLS],
+        [u64; NUM_STIGMERGIC_GRANULES],
         bool,
         bool,
         Option<u8>,
@@ -1057,7 +1057,7 @@ impl CrystallizedAttractorRecord {
                 0.0,
                 None,
                 0,
-                [0u64; NUM_SWARM_MICRO_CELLS],
+                [0u64; NUM_STIGMERGIC_GRANULES],
                 true,
                 true,
                 None,
@@ -1071,7 +1071,7 @@ impl CrystallizedAttractorRecord {
         let mut best_idx = 0usize;
         let mut best_coh = -2.0_f32;
         let mut best_mass = 0.0_f32;
-        let mut best_w = [0u64; NUM_SWARM_MICRO_CELLS];
+        let mut best_w = [0u64; NUM_STIGMERGIC_GRANULES];
         let mut best_is_uniform = false;
         let mut best_byte_diff: Option<u8> = None;
         let mut first_empty: Option<usize> = None;
@@ -1180,9 +1180,9 @@ impl CrystallizedAttractorRecord {
     #[must_use]
     fn find_nearest_toroidal_centroid_index_with_cache_64(
         centroids: &[Self],
-        sample_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        sample_words: &[u64; NUM_STIGMERGIC_GRANULES],
         word_cache_opt: Option<(
-            &[[u64; NUM_SWARM_MICRO_CELLS]; MAX_REGISTER_CACHED_CENTROIDS],
+            &[[u64; NUM_STIGMERGIC_GRANULES]; MAX_REGISTER_CACHED_CENTROIDS],
             u16,
             u16,
         )>,
@@ -1233,7 +1233,7 @@ impl CrystallizedAttractorRecord {
     #[must_use]
     pub fn find_nearest_toroidal_centroid_words_64(
         centroids: &[Self],
-        sample_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        sample_words: &[u64; NUM_STIGMERGIC_GRANULES],
     ) -> (usize, f32, f32, Option<usize>, usize) {
         let (best_idx, best_coh, best_grav, first_empty, weakest_idx, _any_active) =
             Self::find_nearest_toroidal_centroid_index_with_cache_64(centroids, sample_words, None);
@@ -1268,7 +1268,7 @@ impl CrystallizedAttractorRecord {
         self.dominant_cause_code = ROOT_CAUSE_NOMINAL;
         self.reserved_align64 = 0;
         if was_active {
-            *self.phase_words_mut() = [0u64; NUM_SWARM_MICRO_CELLS];
+            *self.phase_words_mut() = [0u64; NUM_STIGMERGIC_GRANULES];
         }
     }
 
@@ -1280,9 +1280,9 @@ impl CrystallizedAttractorRecord {
         best_coh: f32,
         empty_opt: Option<usize>,
         weakest_idx: usize,
-        best_w: [u64; NUM_SWARM_MICRO_CELLS],
+        best_w: [u64; NUM_STIGMERGIC_GRANULES],
         safe_split: f32,
-    ) -> (usize, bool, [u64; NUM_SWARM_MICRO_CELLS]) {
+    ) -> (usize, bool, [u64; NUM_STIGMERGIC_GRANULES]) {
         let needs_split = (centroids[nearest_idx].sample_count == 0) | (best_coh < safe_split);
         if needs_split {
             if let Some(empty_i) = empty_opt {
@@ -1296,7 +1296,7 @@ impl CrystallizedAttractorRecord {
                     frame.dominant_slot,
                     frame.mapped_section_offset48,
                 );
-                (empty_i, true, [0u64; NUM_SWARM_MICRO_CELLS])
+                (empty_i, true, [0u64; NUM_STIGMERGIC_GRANULES])
             } else if frame.effective_energy > centroids[weakest_idx].phase_gravity_mass {
                 let assigned_id = if frame.target_anchor_id != 0 {
                     frame.target_anchor_id
@@ -1308,7 +1308,7 @@ impl CrystallizedAttractorRecord {
                     frame.dominant_slot,
                     frame.mapped_section_offset48,
                 );
-                (weakest_idx, true, [0u64; NUM_SWARM_MICRO_CELLS])
+                (weakest_idx, true, [0u64; NUM_STIGMERGIC_GRANULES])
             } else {
                 (nearest_idx, false, best_w)
             }
@@ -1325,9 +1325,9 @@ impl CrystallizedAttractorRecord {
         best_coh: f32,
         best_is_uniform: bool,
         sample_is_uniform: bool,
-        cur_target_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        cur_target_w: &[u64; NUM_STIGMERGIC_GRANULES],
         frame: &GatewayFrame,
-        sample_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        sample_w: &[u64; NUM_STIGMERGIC_GRANULES],
         trail_opt: Option<&mut gcso_pointer_trail_t>,
     ) -> (u32, f32, f32) {
         let pre_coh = Some(branchless_select_f32(spawned_new, 1.0, best_coh));
@@ -1390,7 +1390,7 @@ impl CrystallizedAttractorRecord {
     pub(crate) fn step_online_toroidal_kmeans_frame_with_words_64(
         centroids: &mut [Self],
         frame: &GatewayFrame,
-        sample_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        sample_w: &[u64; NUM_STIGMERGIC_GRANULES],
         split_coherence_thresh: f32,
         trail_opt: Option<&mut gcso_pointer_trail_t>,
     ) -> (usize, u32, f32, f32, bool) {
@@ -1467,7 +1467,7 @@ impl CrystallizedAttractorRecord {
     pub fn step_dissipative_overflow_scatter_or_spawn_64(
         centroids: &mut [Self],
         frame: &GatewayFrame,
-        sample_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        sample_w: &[u64; NUM_STIGMERGIC_GRANULES],
         split_coherence_thresh: f32,
         trail_opt: Option<&mut gcso_pointer_trail_t>,
     ) -> DissipativeOverflowReport {
@@ -1529,7 +1529,7 @@ impl CrystallizedAttractorRecord {
         let mut best_2_coh = -2.0_f32;
         let mut best_2_uni = false;
         let mut any_2 = false;
-        let mut best_2_w = [0u64; NUM_SWARM_MICRO_CELLS];
+        let mut best_2_w = [0u64; NUM_STIGMERGIC_GRANULES];
         let mut i = 0usize;
         while i < k_len {
             let rec = &centroids[i];
@@ -1697,7 +1697,7 @@ impl CrystallizedAttractorRecord {
 
     /// Autonomously nucleates a new attractor inside `centroids` when approximation noise in
     /// [`StigmergicVennSerendipityReport`] pushes a fragmented granule outside all existing
-    /// attractors' Venn apertures into [`crate::traits::LiminalVoid`] (`serendipity_triggered != 0`).
+    /// attractors' Venn apertures into [`crate::traits::Liminal`] (`serendipity_triggered != 0`).
     ///
     /// Returns `(spawned_slot_idx, spawned_anchor_id, did_nucleate)` in branchless constant time
     /// relative to centroid slot contents.
@@ -1865,9 +1865,9 @@ impl CrystallizedAttractorRecord {
     }
     fn merge_other_centroid_words_in_place(
         &mut self,
-        w_a: &[u64; NUM_SWARM_MICRO_CELLS],
+        w_a: &[u64; NUM_STIGMERGIC_GRANULES],
         a_is_uniform: bool,
-        w_b: &[u64; NUM_SWARM_MICRO_CELLS],
+        w_b: &[u64; NUM_STIGMERGIC_GRANULES],
         b_is_uniform: bool,
         coh: f32,
         b_anchor_id: u32,
@@ -1884,7 +1884,7 @@ impl CrystallizedAttractorRecord {
         b_action_mode_flags: u8,
         b_active_swarm_mask: u8,
         b_dominant_cause_code: u8,
-    ) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    ) -> [u64; NUM_STIGMERGIC_GRANULES] {
         let b_dom = b_gravity_mass > self.phase_gravity_mass;
         let (
             cur_dom_w,
@@ -2190,9 +2190,9 @@ impl CrystallizedAttractorRecord {
     #[allow(clippy::too_many_arguments)]
     fn apply_macro_centroid_pull_to_trail_64(
         trail: &mut gcso_pointer_trail_t,
-        trail_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        trail_w: &[u64; NUM_STIGMERGIC_GRANULES],
         trail_is_uniform: bool,
-        target_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        target_w: &[u64; NUM_STIGMERGIC_GRANULES],
         target_is_uniform: bool,
         winner: &Self,
         anchor_id: u32,
@@ -2200,7 +2200,7 @@ impl CrystallizedAttractorRecord {
         tot_grav: f32,
         pull_step_u7: u8,
         extra_flags: u32,
-    ) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    ) -> [u64; NUM_STIGMERGIC_GRANULES] {
         let s_u64 = pull_step_u7.min(128) as u64;
         let bias_restore = (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
         let (bridged_w, bridged_uni) = swar_slerp_words_with_uniform_flag_64(
@@ -2238,15 +2238,15 @@ impl CrystallizedAttractorRecord {
     pub(crate) fn route_coarse_to_fine_trail_from_preloaded_words_64(
         centroids: &[Self],
         trail: &mut gcso_pointer_trail_t,
-        trail_w: [u64; NUM_SWARM_MICRO_CELLS],
+        trail_w: [u64; NUM_STIGMERGIC_GRANULES],
         pull_step_u7: u8,
     ) -> (
         usize,
         u32,
         f32,
         f32,
-        [u64; NUM_SWARM_MICRO_CELLS],
-        [u64; NUM_SWARM_MICRO_CELLS],
+        [u64; NUM_STIGMERGIC_GRANULES],
+        [u64; NUM_STIGMERGIC_GRANULES],
     ) {
         let (
             best_idx,
@@ -2269,7 +2269,7 @@ impl CrystallizedAttractorRecord {
                 0.0,
                 0.0,
                 trail_w,
-                [0u64; NUM_SWARM_MICRO_CELLS],
+                [0u64; NUM_STIGMERGIC_GRANULES],
             );
         }
 
@@ -2313,8 +2313,8 @@ impl CrystallizedAttractorRecord {
         u32,
         f32,
         f32,
-        [u64; NUM_SWARM_MICRO_CELLS],
-        [u64; NUM_SWARM_MICRO_CELLS],
+        [u64; NUM_STIGMERGIC_GRANULES],
+        [u64; NUM_STIGMERGIC_GRANULES],
     ) {
         let trail_w = *trail_phase_words_ref(trail);
         Self::route_coarse_to_fine_trail_from_preloaded_words_64(
@@ -2342,7 +2342,7 @@ impl CrystallizedAttractorRecord {
     pub(crate) fn route_top2_liminal_centroids_from_preloaded_words_64(
         centroids: &[Self],
         trail: &mut gcso_pointer_trail_t,
-        trail_w: [u64; NUM_SWARM_MICRO_CELLS],
+        trail_w: [u64; NUM_STIGMERGIC_GRANULES],
         pull_step_u7: u8,
         liminal_gravity_ratio_thresh: f32,
     ) -> (
@@ -2353,9 +2353,9 @@ impl CrystallizedAttractorRecord {
         f32,
         f32,
         bool,
-        [u64; NUM_SWARM_MICRO_CELLS],
-        [u64; NUM_SWARM_MICRO_CELLS],
-        [u64; NUM_SWARM_MICRO_CELLS],
+        [u64; NUM_STIGMERGIC_GRANULES],
+        [u64; NUM_STIGMERGIC_GRANULES],
+        [u64; NUM_STIGMERGIC_GRANULES],
     ) {
         let k_len = centroids.len();
         if k_len == 0 {
@@ -2510,7 +2510,7 @@ impl CrystallizedAttractorRecord {
                 swar_slerp_words_with_uniform_flag_64(&w1, w1_uni, &w2, w2_uni, s_lim, bias_lim);
             (tw, t_uni, w2)
         } else {
-            (w1, w1_uni, [0u64; NUM_SWARM_MICRO_CELLS])
+            (w1, w1_uni, [0u64; NUM_STIGMERGIC_GRANULES])
         };
 
         let win1 = &centroids[idx1];
@@ -2570,9 +2570,9 @@ impl CrystallizedAttractorRecord {
         f32,
         f32,
         bool,
-        [u64; NUM_SWARM_MICRO_CELLS],
-        [u64; NUM_SWARM_MICRO_CELLS],
-        [u64; NUM_SWARM_MICRO_CELLS],
+        [u64; NUM_STIGMERGIC_GRANULES],
+        [u64; NUM_STIGMERGIC_GRANULES],
+        [u64; NUM_STIGMERGIC_GRANULES],
     ) {
         let trail_w = *trail_phase_words_ref(trail);
         Self::route_top2_liminal_centroids_from_preloaded_words_64(
@@ -2816,7 +2816,7 @@ impl CrystallizedAttractorRecord {
         records: &[Self],
         trail_phases_inout: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
         init_pull_weight: f32,
-    ) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, u32, f32, f32) {
+    ) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, u32, f32, f32) {
         let init_w = load_q7_words_64(trail_phases_inout);
         let init_is_uniform = is_word_array_uniform_64(&init_w);
         let init_w0 = init_w[0];
@@ -2951,7 +2951,7 @@ impl CrystallizedAttractorRecord {
         records: &[Self],
         trail_phases_inout: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
         init_pull_weight: f32,
-    ) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, u32, f32) {
+    ) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, u32, f32) {
         let (acc_w, tot_pull, dom_id, dom_clamp, _mean_coh) =
             Self::fold_crystallized_ensemble_words_and_coherence_64(
                 records,

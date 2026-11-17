@@ -75,7 +75,7 @@ use crate::traits::primitives::{
 };
 use crate::traits::telemetry::{
     ContrastivePhaseBloomFilter, PagedBitmaskOps, MAX_ATTRACTOR_PULL_FORCE,
-    MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS,
+    MAX_STIGMERGIC_DENSITY, NUM_STIGMERGIC_GRANULES,
     StigmergicActionPtrOps, StigmergicTrailOps, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
     eval_bitmask_dyadic_ultrametric,
@@ -90,7 +90,7 @@ use crate::abi::{
     gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_kv_keyframe_header_t, gcso_q7_t,
     gcso_snapshot_header_t, gcso_rank1_residual_descriptor_t, gcso_tagged_ptr_t, gcso_mapped_storage_descriptor_t,
 };
-use crate::traits::hot_path::{HotPathExecutionEngine, SwarmCellChunk};
+use crate::traits::hot_path::{HotPathExecutionEngine, StigmergicChunkOps};
 
 pub(super) const BLOCK_NORM_CACHE_CAP: usize = 64;
 

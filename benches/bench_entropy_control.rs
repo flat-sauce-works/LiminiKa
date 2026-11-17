@@ -91,7 +91,7 @@ impl Drop for ScopedFtzdazGuard {
     }
 }
 
-/// Generic heap buffer with strict 32-byte (or 64-byte cacheline) alignment for SIMD LiminalVoid evaluation.
+/// Generic heap buffer with strict 32-byte (or 64-byte cacheline) alignment for SIMD Liminal evaluation.
 struct AlignedVectorBuffer<T, const ALIGN: usize = 32> {
     ptr: *mut T,
     layout: Layout,
@@ -2535,7 +2535,7 @@ fn bench_entropy_control_extreme_and_edge_cases(c: &mut Criterion) {
         });
     });
 
-    // 6. Barrier Evaluation Near Epsilon Singularity (LiminalVoid -> 0.0)
+    // 6. Barrier Evaluation Near Epsilon Singularity (Liminal -> 0.0)
     group.throughput(Throughput::Elements(1));
     group.bench_function("eval_barrier_epsilon_singularity_boundary", |b| {
         let _ftz = ScopedFtzdazGuard::new();

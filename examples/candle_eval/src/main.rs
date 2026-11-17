@@ -24,8 +24,8 @@ use liminika_core::traits::gateway::{
     AdaptiveThresholdPolicy, CognitiveCircuitBankOps, CognitiveCircuitPlasticity,
     CognitiveCircuitThresholdPolicy, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
     GuardPhaseAnchor, HybridScaleCircuit, ObjectiveFact, RamPhaseKvCacheOps, RamPhaseKvStepOutcome,
-    ResonantSignalSlice, StandardCognitiveBank, StandardPhaseKvGopCache, SubjectivePersona,
-    SwarmScaleGranularity,
+    ResonantSignalSlice, StandardCognitiveBank, StandardPhaseKvGopCache,
+    StigmergicScaleGranularity, SubjectivePersona,
 };
 use serde::Deserialize;
 use tokenizers::Tokenizer;
@@ -171,24 +171,24 @@ fn parse_quant_mode<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<GgmlD
 fn build_preset_circuit(mode: CircuitProfileMode) -> Option<CognitiveTrajectoryLedger> {
     let mut analytical = CognitiveTrajectoryLedger::new();
     analytical.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
         CognitiveOpKind::DecomposePeel,
         6,
     ));
     analytical.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::PointerBit,
+        StigmergicScaleGranularity::PointerBit,
         CognitiveOpKind::RouteSubHead,
         6,
     ));
 
     let mut integrative = CognitiveTrajectoryLedger::new();
     integrative.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::TypeGateway,
+        StigmergicScaleGranularity::TypeGateway,
         CognitiveOpKind::SynthesizeFuse,
         6,
     ));
     integrative.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::MacroCoalition,
+        StigmergicScaleGranularity::MacroCoalition,
         CognitiveOpKind::CrystallizeCommit,
         7,
     ));
@@ -2150,8 +2150,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    // Step 2: Online Natural-Language -> Attractor Corpus & LiminalVoid Boundary Evaluation
-    println!("\n=== Step 2: Natural-Language Attractor Corpus & LiminalVoid Boundary Eval ===");
+    // Step 2: Online Natural-Language -> Attractor Corpus & Liminal Boundary Evaluation
+    println!("\n=== Step 2: Natural-Language Attractor Corpus & Liminal Boundary Eval ===");
     adapter.set_layer_rope_mask(0xFFFF_0000);
     let base_prior = if use_base_prior {
         let t_prior = Instant::now();
@@ -2342,7 +2342,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 phase_l1_delta: (1.0 - recall.top1_fact_score).clamp(0.0, 1.0) * 0.25,
                 void_state: recall.void_state,
                 frames_since_keyframe,
-                new_cluster_spawned: matches!(recall.void_state, VoidBoundaryState::LiminalVoid),
+                new_cluster_spawned: matches!(
+                    recall.void_state,
+                    VoidBoundaryState::LiminalExterior
+                ),
             },
         )?;
         frames_since_keyframe = if emitted_i {
@@ -2411,7 +2414,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     StigmergicActionDecision::RepulsionEscape
                 );
             let active_prompt = if recalled_ctx.is_empty()
-                || (matches!(query_void_state, VoidBoundaryState::LiminalVoid) && !is_guard_trap)
+                || (matches!(query_void_state, VoidBoundaryState::LiminalExterior)
+                    && !is_guard_trap)
             {
                 format_phi4_prompt(prompt)
             } else {
@@ -2419,7 +2423,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let use_steer = is_guard_trap
-                || (!matches!(query_void_state, VoidBoundaryState::LiminalVoid)
+                || (!matches!(query_void_state, VoidBoundaryState::LiminalExterior)
                     && !dyn_facts.is_empty());
             let res_ctx = if use_steer {
                 Some(ResonantAnchors {
@@ -2862,7 +2866,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             StigmergicActionDecision::RepulsionEscape
                         );
                     let use_steer = mt_is_guard_trap
-                        || (!matches!(recall.void_state, VoidBoundaryState::LiminalVoid)
+                        || (!matches!(recall.void_state, VoidBoundaryState::LiminalExterior)
                             && !dyn_facts.is_empty());
                     let res_ctx = if use_steer {
                         Some(ResonantAnchors {
@@ -2876,7 +2880,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         None
                     };
                     let turn_body = if recalled_ctx.is_empty()
-                        || (matches!(recall.void_state, VoidBoundaryState::LiminalVoid)
+                        || (matches!(recall.void_state, VoidBoundaryState::LiminalExterior)
                             && !mt_is_guard_trap)
                     {
                         (*turn_prompt).to_string()
@@ -3337,7 +3341,7 @@ mod tests {
         let mut bank = StandardCognitiveBank::from_ledger(h);
         for _ in 0..12 {
             bank.push_step_hierarchical(CognitiveStepOp::pack(
-                SwarmScaleGranularity::CellTrail,
+                StigmergicScaleGranularity::CellTrail,
                 CognitiveOpKind::DecomposePeel,
                 5,
             ));

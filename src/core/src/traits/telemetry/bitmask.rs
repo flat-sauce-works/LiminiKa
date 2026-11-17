@@ -29,7 +29,7 @@ pub trait PagedBitmaskOps: Sized {
     /// Compresses the 256-bit PagedBlock bitmask into an **8-bit Micro-Swarm Activity Mask**.
     fn subswarm_activity_mask_8(&self) -> u8;
     /// Returns the active token count (`0..=32`) for each of the 8 Micro-Swarm 32-bit sub-regions.
-    fn subswarm_popcounts_8(&self) -> [u8; NUM_SWARM_MICRO_CELLS];
+    fn subswarm_popcounts_8(&self) -> [u8; NUM_STIGMERGIC_GRANULES];
     /// Computes bitwise NOT ($\neg \mathbf{M}_i$) in $\mathcal{O}(1)$.
     #[must_use]
     fn bitnot_mask(&self) -> Self;
@@ -168,7 +168,7 @@ impl PagedBitmaskOps for gcso_paged_bitmask_t {
     }
 
     #[inline(always)]
-    fn subswarm_popcounts_8(&self) -> [u8; NUM_SWARM_MICRO_CELLS] {
+    fn subswarm_popcounts_8(&self) -> [u8; NUM_STIGMERGIC_GRANULES] {
         [
             (self.bits[0] as u32).count_ones() as u8,
             ((self.bits[0] >> 32) as u32).count_ones() as u8,

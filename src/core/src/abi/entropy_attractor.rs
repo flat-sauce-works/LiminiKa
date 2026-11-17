@@ -1,12 +1,12 @@
 // name: src/core/src/abi/entropy_attractor.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Unified Attractor Manifold, Online Toroidal k-Means, synergy, Entropy Control (EDBC), and LiminalVoid FFI.
+//! Unified Attractor Manifold, Online Toroidal k-Means, synergy, Entropy Control (EDBC), and Liminal FFI.
 
 use super::*;
 
 // ===================================================================
-// 5. Single Unified Attractor Manifold, Online Toroidal k-Means, Synergy, EDBC & LiminalVoid Interface
+// 5. Single Unified Attractor Manifold, Online Toroidal k-Means, Synergy, EDBC & Liminal Interface
 // ===================================================================
 
 /// Allocates a Macro Attractor Field instance.
@@ -658,7 +658,7 @@ pub unsafe extern "C" fn gcso_edbc_eval_stateful(
     })
 }
 
-/// Computes the LiminalVoid Vector Alignment Metric ($\mathcal{L}_{\mathrm{void}}$) for
+/// Computes the Liminal Vector Alignment Metric ($\mathcal{L}_{\mathrm{void}}$) for
 /// Out-of-Distribution Latent Space over a 32-byte aligned Key vector.
 ///
 /// # Safety
@@ -823,7 +823,7 @@ pub unsafe extern "C" fn gcso_epistemic_evaluate_horizon(
     })
 }
 
-/// Evaluates Venn-diagram multi-attractor overlap and noise-driven serendipity in `LiminalVoid`
+/// Evaluates Venn-diagram multi-attractor overlap and noise-driven serendipity in `Liminal`
 /// across `centroids_inout[0..num_centroids]` (`query_phases` vs `drifted_phases`). When
 /// `nucleate_on_discovery != 0` and approximation noise triggers unknown attractor discovery,
 /// autonomously nucleates a new crystallized attractor into an empty or weaker centroid slot.
@@ -940,7 +940,7 @@ pub unsafe extern "C" fn gcso_core_layer_stack_init_default(
     })
 }
 
-/// Branchlessly adapts both Core Layer 0 (`LiminalVoid`) and Core Layer 1 (`Stigmergic`) inside
+/// Branchlessly adapts both Core Layer 0 (`Liminal`) and Core Layer 1 (`Stigmergic`) inside
 /// `stack_inout` from `horizon`, `venn_report`, and optional `ledger`.
 ///
 /// # Safety
@@ -992,7 +992,7 @@ pub unsafe extern "C" fn gcso_core_layer_stack_adapt(
     })
 }
 
-/// Formats the live 2-layer Core Topology (`LiminalVoid` Layer 0, `StigmergicGranuleField` Layer 1,
+/// Formats the live 2-layer Core Topology (`Liminal` Layer 0, `StigmergicGranuleField` Layer 1,
 /// and the trait aperture table) as a `#![no_std]` zero-allocation Mermaid `flowchart TD` diagram
 /// into `out_buf[0..buf_cap]`. Pass `out_buf = NULL` to query the required byte length in
 /// `bytes_written_out`.
@@ -1028,7 +1028,7 @@ pub unsafe extern "C" fn gcso_liminal_topology_format_mermaid(
             None => StigmergicVennSerendipityReport::default(),
         };
         let snap = LiminalTopologyTelemetrySnapshot::capture(
-            &stack_ref.liminal_void_layer,
+            &stack_ref.liminal_layer,
             &horizon_ref,
             active_crystals,
             spawned_daughters,
@@ -1067,6 +1067,188 @@ pub unsafe extern "C" fn gcso_liminal_topology_format_mermaid(
             let dst = slice::from_raw_parts_mut(out_buf, needed);
             dst.copy_from_slice(&scratch[..needed]);
         }
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Initializes a 64-byte [`gcso_liminal_ego_field_t`] from a preset template code
+/// (`0 = Custom`, `1 = Low`, `2 = Medium`, `3 = High`).
+///
+/// # Safety
+/// `ego_out` must be non-null and 64-byte aligned.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_ego_field_init_preset(
+    preset_code: u8,
+    ego_out: *mut gcso_liminal_ego_field_t,
+) -> GcsoStatus {
+    ffi_boundary!({
+        // SAFETY: Validates non-nullness and 64-byte natural alignment.
+        let mut out_ref = unsafe { FfiHandleMut::from_raw(ego_out)? };
+        *out_ref = LiminalEgoField::from_preset(LiminalEgoPreset::from_code(preset_code));
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Deterministically derives a 64-byte [`gcso_liminal_ego_field_t`] from UTF-8 natural-language
+/// text (`utf8_ptr[0..utf8_len]`) with zero heap allocations.
+///
+/// # Safety
+/// `ego_out` must be non-null and 64-byte aligned. When `utf8_len > 0`, `utf8_ptr` must be
+/// non-null, valid for `utf8_len` readable UTF-8 bytes, and disjoint from `ego_out`.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_ego_field_derive_from_text(
+    utf8_ptr: *const u8,
+    utf8_len: usize,
+    ego_out: *mut gcso_liminal_ego_field_t,
+) -> GcsoStatus {
+    ffi_boundary!({
+        // SAFETY: Validates non-nullness and 64-byte natural alignment.
+        let mut out_ref = unsafe { FfiHandleMut::from_raw(ego_out)? };
+        if utf8_len == 0 {
+            *out_ref = LiminalEgoField::new();
+            return Ok(GCSO_SUCCESS);
+        }
+        validate_ptr(utf8_ptr)?;
+        if raw_byte_ranges_overlap(
+            utf8_ptr as usize,
+            utf8_len,
+            ego_out as usize,
+            size_of::<LiminalEgoField>(),
+        ) {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        // SAFETY: Validated non-null, readable length `utf8_len`, and disjoint from `ego_out`.
+        let bytes = unsafe { slice::from_raw_parts(utf8_ptr, utf8_len) };
+        let text = core::str::from_utf8(bytes).map_err(|_| GCSO_ERROR_INVALID_ARGUMENT)?;
+        *out_ref = LiminalEgoField::from_natural_language(text);
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Branchlessly evaluates active Ego triggers across Layer 0/1 boundaries and `delta`,
+/// updating `ego_inout` and `stack_inout` and modulating `frame_inout` (counter-vortex orbital
+/// thrust and transgressive phase steering).
+///
+/// # Safety
+/// `ego_inout` (64B), `stack_inout` (64B), `delta` (16B), `horizon` (16B), and `frame_inout`
+/// (64B) must be non-null, naturally aligned, and mutually non-overlapping; `venn_report` may be
+/// `NULL` or 16B aligned and disjoint from mutable outputs.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_ego_field_intervene_frame(
+    ego_inout: *mut gcso_liminal_ego_field_t,
+    stack_inout: *mut gcso_autonomous_core_layer_stack_t,
+    delta: *const gcso_liminal_boundary_delta_t,
+    horizon: *const gcso_epistemic_horizon_reading_t,
+    venn_report: *const gcso_stigmergic_venn_serendipity_report_t,
+    frame_inout: *mut gcso_gateway_frame_t,
+) -> GcsoStatus {
+    ffi_boundary!({
+        validate_ptr(ego_inout)?;
+        validate_ptr(stack_inout)?;
+        validate_ptr(delta)?;
+        validate_ptr(horizon)?;
+        validate_ptr(frame_inout)?;
+
+        let ego_bytes = size_of::<LiminalEgoField>();
+        let stack_bytes = size_of::<AutonomousCoreLayerStack>();
+        let delta_bytes = size_of::<LiminalBoundaryDelta>();
+        let hor_bytes = size_of::<EpistemicHorizonReading>();
+        let venn_bytes = size_of::<StigmergicVennSerendipityReport>();
+        let frame_bytes = size_of::<GatewayFrame>();
+
+        if raw_byte_ranges_overlap(
+            ego_inout as usize,
+            ego_bytes,
+            stack_inout as usize,
+            stack_bytes,
+        ) || raw_byte_ranges_overlap(
+            ego_inout as usize,
+            ego_bytes,
+            frame_inout as usize,
+            frame_bytes,
+        ) || raw_byte_ranges_overlap(
+            stack_inout as usize,
+            stack_bytes,
+            frame_inout as usize,
+            frame_bytes,
+        ) || raw_byte_ranges_overlap(ego_inout as usize, ego_bytes, delta as usize, delta_bytes)
+            || raw_byte_ranges_overlap(ego_inout as usize, ego_bytes, horizon as usize, hor_bytes)
+            || raw_byte_ranges_overlap(
+                stack_inout as usize,
+                stack_bytes,
+                delta as usize,
+                delta_bytes,
+            )
+            || raw_byte_ranges_overlap(
+                stack_inout as usize,
+                stack_bytes,
+                horizon as usize,
+                hor_bytes,
+            )
+            || raw_byte_ranges_overlap(
+                frame_inout as usize,
+                frame_bytes,
+                delta as usize,
+                delta_bytes,
+            )
+            || raw_byte_ranges_overlap(
+                frame_inout as usize,
+                frame_bytes,
+                horizon as usize,
+                hor_bytes,
+            )
+            || (!venn_report.is_null()
+                && (raw_byte_ranges_overlap(
+                    ego_inout as usize,
+                    ego_bytes,
+                    venn_report as usize,
+                    venn_bytes,
+                ) || raw_byte_ranges_overlap(
+                    stack_inout as usize,
+                    stack_bytes,
+                    venn_report as usize,
+                    venn_bytes,
+                ) || raw_byte_ranges_overlap(
+                    frame_inout as usize,
+                    frame_bytes,
+                    venn_report as usize,
+                    venn_bytes,
+                )))
+        {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+
+        // SAFETY: Validated non-null, naturally aligned, and mutually disjoint above.
+        let (((mut ego_ref, mut stack_ref), mut frame_ref), ((delta_ref, horizon_ref), venn_opt)) = unsafe {
+            (
+                (
+                    (
+                        FfiHandleMut::from_raw(ego_inout)?,
+                        FfiHandleMut::from_raw(stack_inout)?,
+                    ),
+                    FfiHandleMut::from_raw(frame_inout)?,
+                ),
+                (
+                    (
+                        FfiHandleRef::from_raw(delta)?,
+                        FfiHandleRef::from_raw(horizon)?,
+                    ),
+                    FfiHandleRef::from_raw_opt(venn_report)?,
+                ),
+            )
+        };
+        let venn_val = match venn_opt {
+            Some(v) => *v,
+            None => StigmergicVennSerendipityReport::default(),
+        };
+        let next_frame = ego_ref.intervene_on_layers_and_frame_branchless(
+            &mut stack_ref,
+            &delta_ref,
+            &horizon_ref,
+            &venn_val,
+            *frame_ref,
+        );
+        *frame_ref = next_frame;
         Ok(GCSO_SUCCESS)
     })
 }

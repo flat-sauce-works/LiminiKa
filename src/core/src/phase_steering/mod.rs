@@ -106,10 +106,11 @@ use crate::traits::rope::{
 };
 use crate::traits::telemetry::{
     select_and_bridge_macro_aligned_bayesian_trail_core, ContrastivePhaseBloomFilter,
-    PagedBitmaskOps, StigmergicActionPtrOps, StigmergicSwarmOps, StigmergicTrailOps,
-    SwarmResolutionReport, HEADS_PER_SWARM_CELL, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY,
-    NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
-    TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
+    PagedBitmaskOps, StigmergicActionPtrOps, StigmergicReconstitutionOps,
+    StigmergicReconstitutionReport, StigmergicTrailOps, HEADS_PER_STIGMERGIC_GRANULE,
+    MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, NUM_STIGMERGIC_GRANULES,
+    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
+    TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 /// Default attention head dimension ($d_{\mathrm{head}} = 128$) for [`PhaseSteeringEngine::default`].
 pub const DEFAULT_DPSR_HEAD_DIM: u32 = 128;
@@ -154,12 +155,12 @@ pub(super) fn validate_closed_loop_tensors<T: PhaseSteering + ?Sized>(
 #[inline(always)]
 #[must_use]
 pub(super) const fn words_to_q7_array_64(
-    words: &[u64; NUM_SWARM_MICRO_CELLS],
+    words: &[u64; NUM_STIGMERGIC_GRANULES],
 ) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
     const _: () = assert!(cfg!(target_endian = "little"));
     // SAFETY: `[u64; 8]` and `[gcso_q7_t; 64]` have identical 64-byte size and Pod bit validity.
     unsafe {
-        core::mem::transmute::<[u64; NUM_SWARM_MICRO_CELLS], [gcso_q7_t; MAX_ATTENTION_HEADS]>(
+        core::mem::transmute::<[u64; NUM_STIGMERGIC_GRANULES], [gcso_q7_t; MAX_ATTENTION_HEADS]>(
             *words,
         )
     }
@@ -170,7 +171,7 @@ pub(super) const fn words_to_q7_array_64(
 /// without reloading `trail.accumulated_phase_delta` from memory.
 #[inline(always)]
 pub(super) fn filter_qdps_and_steer_from_words_64(
-    raw_words: &[u64; NUM_SWARM_MICRO_CELLS],
+    raw_words: &[u64; NUM_STIGMERGIC_GRANULES],
     min_step_rad: f32,
     max_rad: f32,
     head_dim: usize,
@@ -236,14 +237,14 @@ pub(super) fn filter_qdps_and_steer_from_phases_64(
 }
 
 /// Steers `query_tensor` (and optional `key_tensor`) directly from the 8 register-resident `u64`
-/// SWAR words (`swar_words`) returned by `StigmergicSwarmOps::*_to_words`, eliminating the
+/// SWAR words (`swar_words`) returned by `StigmergicReconstitutionOps::*_to_words`, eliminating the
 /// redundant memory reload of `trail.accumulated_phase_delta` and double QDPS filtering when
 /// `qdps_min_step_q7 <= 1`.
 #[inline(always)]
 pub(super) fn finish_constant_time_swarm_qdps_and_steer(
     evolved_ptr: gcso_tagged_ptr_t,
     quorum_mask: u8,
-    swar_words: &[u64; NUM_SWARM_MICRO_CELLS],
+    swar_words: &[u64; NUM_STIGMERGIC_GRANULES],
     qdps_min_step_q7: u8,
     unresolved_damping_u7: u8,
     head_dim: usize,
@@ -299,7 +300,7 @@ pub(super) fn steer_gateway_signal_core_safe<
 ) -> GcsoResult<(
     GatewayFrame,
     CausalProvenanceReport,
-    [u64; NUM_SWARM_MICRO_CELLS],
+    [u64; NUM_STIGMERGIC_GRANULES],
 )> {
     let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
     let report = frame.to_causal_report();
@@ -355,8 +356,8 @@ pub(super) fn steer_gateway_signal_core_safe<
 #[inline]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn route_macro_aligned_bayesian_trails_and_steer_core(
-    self_w: [u64; NUM_SWARM_MICRO_CELLS],
-    win_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    self_w: [u64; NUM_STIGMERGIC_GRANULES],
+    win_w: &[u64; NUM_STIGMERGIC_GRANULES],
     has_win_centroid: bool,
     primary_macro_anchor_id: u32,
     secondary_macro_anchor_id: u32,

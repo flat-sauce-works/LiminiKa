@@ -149,7 +149,7 @@ pub trait EntropyEvaluator: BranchlessKernel + Send + Sync {
         ))
     }
 
-    /// Computes the LiminalVoid Vector Alignment Metric ($\mathcal{L}_{\mathrm{void}} \in [0, 1]$)
+    /// Computes the Liminal Vector Alignment Metric ($\mathcal{L}_{\mathrm{void}} \in [0, 1]$)
     /// in division-free (`0 fdiv`) SIMD mode.
     ///
     /// # Errors

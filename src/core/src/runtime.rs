@@ -53,7 +53,7 @@ use crate::traits::{
     HierarchicalTreeTable, HotPathObserver, KvKeyframeCache, L2pSvdProjector,
     ManifoldGatewaySignal, MappedStorage, MultiDomainAttractorSpace, PersonaPatcher, PhaseSteering,
     Pod, PointerActionHub, Rank1ResidualAdapter, SheafCohomologyEvaluator, StigmergicActionPtrOps,
-    StigmergicCohomologyCoordinator, StigmergicTrailOps, SubHeadRouter, SwarmCellChunk,
+    StigmergicChunkOps, StigmergicCohomologyCoordinator, StigmergicTrailOps, SubHeadRouter,
     SystemCapabilityQuery, SystemConstraintSignal, VisualAttentionSteering, ACTION_MODE_LAYER_SKIP,
     ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE,
     DEFAULT_SLOT_COUPLING_MATRIX_8X8, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
@@ -592,7 +592,7 @@ impl RuntimeContext {
     fn slot_words_mut(
         &mut self,
         slot_idx: usize,
-    ) -> Result<&mut [u64; crate::traits::NUM_SWARM_MICRO_CELLS]> {
+    ) -> Result<&mut [u64; crate::traits::NUM_STIGMERGIC_GRANULES]> {
         if slot_idx >= MAX_ATTRACTOR_DOMAINS {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -605,7 +605,7 @@ impl RuntimeContext {
                 .as_mut_slice()
                 .as_mut_ptr()
                 .add(slot_idx * MAX_ATTENTION_HEADS)
-                as *mut [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
+                as *mut [u64; crate::traits::NUM_STIGMERGIC_GRANULES])
         })
     }
 
@@ -1280,7 +1280,7 @@ impl RuntimeContext {
     pub(crate) fn evaluate_multi_domain_superposition_words(
         &self,
         trail: &gcso_pointer_trail_t,
-    ) -> ([u64; crate::traits::NUM_SWARM_MICRO_CELLS], f32) {
+    ) -> ([u64; crate::traits::NUM_STIGMERGIC_GRANULES], f32) {
         let tw = *trail_phase_words_ref(trail);
         let tn = swar_words_nonzero_64(&tw);
         let (comp_w, base_pull) = self
@@ -1316,7 +1316,7 @@ impl RuntimeContext {
                             // 64-byte row `bank_2d[idx]` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
                             let slot_w = unsafe {
                                 &*(bank_2d[idx].as_ptr()
-                                    as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
+                                    as *const [u64; crate::traits::NUM_STIGMERGIC_GRANULES])
                             };
                             if swar_words_nonzero_64(slot_w) {
                                 let slot_is_uniform =
@@ -1370,7 +1370,7 @@ impl RuntimeContext {
                 // SAFETY: `bank_2d[rep_idx]` is 64-byte aligned.
                 let rep_words = unsafe {
                     &*(bank_2d[rep_idx].as_ptr()
-                        as *const [u64; crate::traits::NUM_SWARM_MICRO_CELLS])
+                        as *const [u64; crate::traits::NUM_STIGMERGIC_GRANULES])
                 };
                 if swar_words_nonzero_64(rep_words) {
                     let rep_strength =
@@ -1786,7 +1786,7 @@ impl FastPathLedger for RuntimeContext {
     }
 }
 
-impl SwarmCellChunk for RuntimeContext {
+impl StigmergicChunkOps for RuntimeContext {
     #[inline]
     fn step_chunk(&mut self, _mask: &gcso_paged_bitmask_t, chunk_len: u32) -> Result<()> {
         if chunk_len == 0 {
@@ -2164,7 +2164,7 @@ impl ManifoldGatewaySignal for RuntimeContext {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(
         &self,
-    ) -> (GatewayFrame, [u64; crate::traits::NUM_SWARM_MICRO_CELLS]) {
+    ) -> (GatewayFrame, [u64; crate::traits::NUM_STIGMERGIC_GRANULES]) {
         if self.action_hub.active_count > 0 {
             let (mut frame, words) = self.action_hub.synthesize_gateway_frame_with_words();
             frame.provenance_bits |= self.causal_provenance_bits();

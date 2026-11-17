@@ -27,10 +27,10 @@
 //!   - `rope`: [`PhaseSteering`], [`EntropyGatedPhaseLookup`], [`DynamicLayerSkipper`],
 //!     [`SubHeadRouter`], [`Rank1ResidualAdapter`], and [`VisualAttentionSteering`].
 //!   - `telemetry`: [`PagedBitmaskOps`], [`ContrastivePhaseBloomFilter`],
-//!     [`StigmergicActionPtrOps`], [`StigmergicTrailOps`], [`StigmergicSwarmOps`],
-//!     [`FastPathLedger`], and [`SwarmResolutionReport`].
+//!     [`StigmergicActionPtrOps`], [`StigmergicTrailOps`], [`StigmergicReconstitutionOps`],
+//!     [`FastPathLedger`], and [`StigmergicReconstitutionReport`].
 //! - **Lv.2 Micro Observer (`hot_path`)**:
-//!   - [`PointerActionHub`], [`SwarmCellChunk`], and blanket-implemented [`HotPathExecutionEngine`] /
+//!   - [`PointerActionHub`], [`StigmergicChunkOps`], and blanket-implemented [`HotPathExecutionEngine`] /
 //!     [`HotPathObserver`] / [`FractalCascadeCoordinator`] observing [`ActionHub`] as a constant-time
 //!     $\mathcal{O}(1)$ pointer-to-RoPE execution pipeline over the Single Unified Attractor Manifold.
 //! - **Lv.3 Macro Observer & Composite Gateway (`cold_path` & `gateway`)**:
@@ -91,10 +91,10 @@ pub mod branchless;
 pub mod rope;
 #[rustfmt::skip]
 /// Lv.1 Capability 2: Stigmergic trails, internal telemetry & swarm intelligence (`PagedBitmaskOps`,
-/// `ContrastivePhaseBloomFilter`, `StigmergicActionPtrOps`, `StigmergicTrailOps`, `StigmergicSwarmOps`, `FastPathLedger`).
+/// `ContrastivePhaseBloomFilter`, `StigmergicActionPtrOps`, `StigmergicTrailOps`, `StigmergicReconstitutionOps`, `FastPathLedger`).
 pub mod telemetry;
 #[rustfmt::skip]
-/// Lv.2 Micro Observer: `PointerActionHub`, `SwarmCellChunk`, and constant-time `ActionHub` -> RoPE
+/// Lv.2 Micro Observer: `PointerActionHub`, `StigmergicChunkOps`, and constant-time `ActionHub` -> RoPE
 /// execution engines (`HotPathExecutionEngine`, `HotPathObserver`, `FractalCascadeCoordinator`).
 pub mod hot_path;
 #[rustfmt::skip]
@@ -143,7 +143,7 @@ pub use self::branchless::{
     sum_abs_and_sq_f32_simd8, sum_abs_sq_and_max_f32_simd8, sum_sq_f32_simd8,
     swar_q7_geodesic_slerp_x8, swar_slerp_word_unchecked_x8, swar_slerp_word_with_bias_x8,
     swar_slerp_words_with_bias_64, swar_slerp_words_with_uniform_flag_64, swar_words_equal_64,
-    swar_words_nonzero_64, BranchlessKernel, LiminalVoid,
+    swar_words_nonzero_64, BranchlessKernel, Liminal,
 };
 pub use self::cold_path::{
     AttractorField, AttractorSlotSynergyCoordinator, BottomUpMacroCrystalCoordinator,
@@ -168,28 +168,31 @@ pub use self::gateway::{
     DissipativeOverflowReport, EpistemicHorizonReading, EpistemicManifoldOps, EpistemicRegime,
     GatewayFrame, GatewayPhaseSteeringExt, GcsoFourSectionView, HighCapCognitiveBank,
     HighCapPhaseKvCache, HighCapPhaseKvGopCache, HybridScaleCircuit, LayeredScalePair,
-    LiminalApertureField, LiminalHorizonNodeDescriptor, LiminalTopologyTelemetrySnapshot,
-    LowSpecCognitiveBank, LowSpecPhaseKvCache, LowSpecPhaseKvGopCache, ManifoldGatewaySignal,
-    ObjectiveFact, ObjectiveFactSignal, RamPhaseKvCache, RamPhaseKvCacheOps, RamPhaseKvEntry,
-    RamPhaseKvGopCache, RamPhaseKvStepOutcome, RawPhaseProjectable, RelativeAttractorNode,
-    RelativeCouplingMatrix, ScaleLayerNode, ScaleLayerProjection, StandardCognitiveBank,
-    StandardPhaseKvCache, StandardPhaseKvGopCache, StigmergicGranuleField,
-    StigmergicLayeredSwarmExt, StigmergicScaleGranularity, StigmergicScaleLayer,
-    StigmergicVennSerendipityReport, SubjectivePersona, SubjectivePersonaSignal,
-    SwarmScaleGranularity, SystemConstraint, SystemConstraintSignal, APERTURE_ACTION_HUB_WIDE,
-    APERTURE_CAUSAL_PROVENANCE, APERTURE_COGNITIVE_CIRCUIT, APERTURE_COHOMOLOGY_EDBC,
-    APERTURE_CONTRADICTION_GUARD, APERTURE_DISSIPATIVE_CRYSTAL, APERTURE_FAST_PATH_LEDGER,
-    APERTURE_KV_PHASE_CACHE, APERTURE_MANIFOLD_GATEWAY, APERTURE_MAPPED_STORAGE,
-    APERTURE_OBJECTIVE_FACT, APERTURE_PHASE_STEERING, APERTURE_POINTER_TRAIL,
-    APERTURE_RANK1_RESIDUAL, APERTURE_RELATIVE_COUPLING, APERTURE_SUBHEAD_ROUTING,
-    APERTURE_SUBJECTIVE_PERSONA, APERTURE_SWARM_CONSENSUS, APERTURE_SYSTEM_CONSTRAINT,
-    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
-    CAUSAL_AXIS_SYSTEM_CONSTRAINT, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
-    CAUSAL_CAUSE_COHOMOLOGY_REPULSION, CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK,
-    CAUSAL_CAUSE_PERSONA_FACT_COLLISION, CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, CORE_LAYER_LIMINAL_VOID,
-    CORE_LAYER_STIGMERGIC, DEFAULT_FACT_RIPA_CLAMP_RAD, DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
+    LiminalApertureField, LiminalBoundaryDelta, LiminalEgoField, LiminalEgoPreset,
+    LiminalHorizonNodeDescriptor, LiminalTopologyTelemetrySnapshot, LowSpecCognitiveBank,
+    LowSpecPhaseKvCache, LowSpecPhaseKvGopCache, ManifoldGatewaySignal, ObjectiveFact,
+    ObjectiveFactSignal, RamPhaseKvCache, RamPhaseKvCacheOps, RamPhaseKvEntry, RamPhaseKvGopCache,
+    RamPhaseKvStepOutcome, RawPhaseProjectable, RelativeAttractorNode, RelativeCouplingMatrix,
+    ScaleLayerNode, ScaleLayerProjection, StandardCognitiveBank, StandardPhaseKvCache,
+    StandardPhaseKvGopCache, StigmergicGranuleField, StigmergicLayeredSwarmExt,
+    StigmergicScaleGranularity, StigmergicScaleLayer, StigmergicVennSerendipityReport,
+    SubjectivePersona, SubjectivePersonaSignal, SystemConstraint, SystemConstraintSignal,
+    APERTURE_ACTION_HUB_WIDE, APERTURE_CAUSAL_PROVENANCE, APERTURE_COGNITIVE_CIRCUIT,
+    APERTURE_COHOMOLOGY_EDBC, APERTURE_CONTRADICTION_GUARD, APERTURE_DISSIPATIVE_CRYSTAL,
+    APERTURE_FAST_PATH_LEDGER, APERTURE_KV_PHASE_CACHE, APERTURE_MANIFOLD_GATEWAY,
+    APERTURE_MAPPED_STORAGE, APERTURE_OBJECTIVE_FACT, APERTURE_PHASE_STEERING,
+    APERTURE_POINTER_TRAIL, APERTURE_RANK1_RESIDUAL, APERTURE_RELATIVE_COUPLING,
+    APERTURE_STIGMERGIC_CONSENSUS, APERTURE_SUBHEAD_ROUTING, APERTURE_SUBJECTIVE_PERSONA,
+    APERTURE_SYSTEM_CONSTRAINT, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
+    CAUSAL_AXIS_SUBJECTIVE_PERSONA, CAUSAL_AXIS_SYSTEM_CONSTRAINT,
+    CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
+    CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, CAUSAL_CAUSE_PERSONA_FACT_COLLISION,
+    CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, CORE_LAYER_LIMINAL, CORE_LAYER_STIGMERGIC,
+    DEFAULT_FACT_RIPA_CLAMP_RAD, DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
     DEFAULT_PERSONA_FACT_COLLISION_THRESH, DEFAULT_PERSONA_RIPA_CLAMP_RAD,
     DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
+    EGO_TRIGGER_ALL_DEFAULT, EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
+    EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR, EGO_TRIGGER_VORTEX_SWALLOW,
     GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION, GCSO_FOUR_SECTION_HEADER_BYTES,
     GCSO_LIMINAL_HORIZON_TOPOLOGY, GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET, NUM_CORE_AUTONOMOUS_LAYERS,
     NUM_LIMINAL_APERTURE_CHANNELS, ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_FACT_RETRIEVAL_MISS,
@@ -197,7 +200,7 @@ pub use self::gateway::{
 };
 pub use self::hot_path::{
     FractalCascadeCoordinator, HotPathExecutionEngine, HotPathObserver, PointerActionHub,
-    StigmergicChunkOps, SwarmCellChunk,
+    StigmergicChunkOps,
 };
 pub use self::primitives::{
     branchless_abs_f32, branchless_atan2_f32, branchless_atan2_to_q7_fast, branchless_clamp_f32,
@@ -268,19 +271,17 @@ pub use self::rope::{
 pub use self::telemetry::{
     eval_bitmask_dyadic_ultrametric, swar_subswarm_resolve_x8, ContrastivePhaseBloomFilter,
     FastPathLedger, PagedBitmaskOps, StigmergicActionPtrOps, StigmergicReconstitutionOps,
-    StigmergicReconstitutionReport, StigmergicSwarmOps, StigmergicTrailOps, SwarmResolutionReport,
-    DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS, DEFAULT_BLOOM_MAX_MASS_THRESHOLD,
-    DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, DEFAULT_STIGMERGIC_TOLERANCE_Q7,
-    DEFAULT_SWARM_QUORUM_THRESHOLD, DEFAULT_SWARM_TOLERANCE_Q7, HEADS_PER_STIGMERGIC_GRANULE,
-    HEADS_PER_SWARM_CELL, LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
+    StigmergicReconstitutionReport, StigmergicTrailOps, DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS,
+    DEFAULT_BLOOM_MAX_MASS_THRESHOLD, DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
+    DEFAULT_STIGMERGIC_TOLERANCE_Q7, HEADS_PER_STIGMERGIC_GRANULE,
+    LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
     LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_LAZY_UNWRAP_APPLIED,
     LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_RANK1_INJECTED, LEDGER_METRIC_REPULSION_APPLIED,
     LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SUBHEAD_ROUTED, MAX_ATTRACTOR_PULL_FORCE,
-    MAX_STIGMERGIC_DENSITY, NUM_STIGMERGIC_GRANULES, NUM_SWARM_MICRO_CELLS,
-    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_DPSR_ACTIVE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
-    TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SWARM_ESCALATED,
-    TRAIL_FLAG_SWARM_RESOLVED, TRAIL_FLAG_SYNERGY_RESONANCE, TRAIL_SWARM_QUORUM_MASK,
-    TRAIL_SWARM_QUORUM_SHIFT,
+    MAX_STIGMERGIC_DENSITY, NUM_STIGMERGIC_GRANULES, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
+    TRAIL_FLAG_DPSR_ACTIVE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
+    TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SWARM_ESCALATED, TRAIL_FLAG_SWARM_RESOLVED,
+    TRAIL_FLAG_SYNERGY_RESONANCE, TRAIL_SWARM_QUORUM_MASK, TRAIL_SWARM_QUORUM_SHIFT,
 };
 
 pub(crate) use self::action_hub::{
@@ -326,7 +327,7 @@ pub mod prelude {
         modulate_attention_scores_by_phase_bank_64, sum_abs_and_sq_f32_simd8,
         sum_abs_sq_and_max_f32_simd8, sum_sq_f32_simd8, swar_q7_geodesic_slerp_x8,
         swar_slerp_word_unchecked_x8, swar_slerp_word_with_bias_x8, swar_slerp_words_with_bias_64,
-        BranchlessKernel, LiminalVoid,
+        BranchlessKernel, Liminal,
     };
     pub use super::cold_path::{
         AttractorField, AttractorSlotSynergyCoordinator, BottomUpMacroCrystalCoordinator,
@@ -346,25 +347,28 @@ pub mod prelude {
         CognitiveGroundingSignal, ContradictionGuard, ContradictionGuardSignal,
         CrystallizedAttractorRecord, DissipativeOverflowReport, EpistemicHorizonReading,
         EpistemicManifoldOps, EpistemicRegime, GatewayFrame, GatewayPhaseSteeringExt,
-        GcsoFourSectionView, LiminalApertureField, LiminalHorizonNodeDescriptor,
-        LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, ObjectiveFact,
-        ObjectiveFactSignal, RawPhaseProjectable, RelativeAttractorNode, RelativeCouplingMatrix,
-        StigmergicGranuleField, StigmergicScaleGranularity, StigmergicVennSerendipityReport,
-        SubjectivePersona, SubjectivePersonaSignal, SystemConstraint, SystemConstraintSignal,
+        GcsoFourSectionView, LiminalApertureField, LiminalBoundaryDelta, LiminalEgoField,
+        LiminalEgoPreset, LiminalHorizonNodeDescriptor, LiminalTopologyTelemetrySnapshot,
+        ManifoldGatewaySignal, ObjectiveFact, ObjectiveFactSignal, RawPhaseProjectable,
+        RelativeAttractorNode, RelativeCouplingMatrix, StigmergicGranuleField,
+        StigmergicScaleGranularity, StigmergicVennSerendipityReport, SubjectivePersona,
+        SubjectivePersonaSignal, SystemConstraint, SystemConstraintSignal,
         APERTURE_ACTION_HUB_WIDE, APERTURE_CAUSAL_PROVENANCE, APERTURE_COGNITIVE_CIRCUIT,
         APERTURE_COHOMOLOGY_EDBC, APERTURE_CONTRADICTION_GUARD, APERTURE_DISSIPATIVE_CRYSTAL,
         APERTURE_FAST_PATH_LEDGER, APERTURE_KV_PHASE_CACHE, APERTURE_MANIFOLD_GATEWAY,
         APERTURE_MAPPED_STORAGE, APERTURE_OBJECTIVE_FACT, APERTURE_PHASE_STEERING,
         APERTURE_POINTER_TRAIL, APERTURE_RANK1_RESIDUAL, APERTURE_RELATIVE_COUPLING,
-        APERTURE_SUBHEAD_ROUTING, APERTURE_SUBJECTIVE_PERSONA, APERTURE_SWARM_CONSENSUS,
+        APERTURE_STIGMERGIC_CONSENSUS, APERTURE_SUBHEAD_ROUTING, APERTURE_SUBJECTIVE_PERSONA,
         APERTURE_SYSTEM_CONSTRAINT, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
         CAUSAL_AXIS_SUBJECTIVE_PERSONA, CAUSAL_AXIS_SYSTEM_CONSTRAINT,
         CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
         CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, CAUSAL_CAUSE_PERSONA_FACT_COLLISION,
-        CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, CORE_LAYER_LIMINAL_VOID, CORE_LAYER_STIGMERGIC,
+        CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, CORE_LAYER_LIMINAL, CORE_LAYER_STIGMERGIC,
         DEFAULT_FACT_RIPA_CLAMP_RAD, DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
         DEFAULT_PERSONA_FACT_COLLISION_THRESH, DEFAULT_PERSONA_RIPA_CLAMP_RAD,
         DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
+        EGO_TRIGGER_ALL_DEFAULT, EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
+        EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR, EGO_TRIGGER_VORTEX_SWALLOW,
         GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION, GCSO_FOUR_SECTION_HEADER_BYTES,
         GCSO_LIMINAL_HORIZON_TOPOLOGY, GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET,
         NUM_CORE_AUTONOMOUS_LAYERS, NUM_LIMINAL_APERTURE_CHANNELS, ROOT_CAUSE_COHOMOLOGY_REPULSION,
@@ -373,7 +377,7 @@ pub mod prelude {
     };
     pub use super::hot_path::{
         FractalCascadeCoordinator, HotPathExecutionEngine, HotPathObserver, PointerActionHub,
-        StigmergicChunkOps, SwarmCellChunk,
+        StigmergicChunkOps,
     };
     pub use super::primitives::{
         branchless_atan2_to_q7_fast, branchless_crc32_ieee, branchless_flush_subnormal_f32,
@@ -414,18 +418,16 @@ pub mod prelude {
     pub use super::telemetry::{
         eval_bitmask_dyadic_ultrametric, swar_subswarm_resolve_x8, ContrastivePhaseBloomFilter,
         FastPathLedger, PagedBitmaskOps, StigmergicActionPtrOps, StigmergicReconstitutionOps,
-        StigmergicReconstitutionReport, StigmergicSwarmOps, StigmergicTrailOps,
-        SwarmResolutionReport, DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS, DEFAULT_BLOOM_MAX_MASS_THRESHOLD,
-        DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, DEFAULT_STIGMERGIC_TOLERANCE_Q7,
-        DEFAULT_SWARM_QUORUM_THRESHOLD, DEFAULT_SWARM_TOLERANCE_Q7, HEADS_PER_STIGMERGIC_GRANULE,
-        HEADS_PER_SWARM_CELL, LEDGER_METRIC_FAST_PATH_HIT, LEDGER_METRIC_LAYER_SKIP_COMPENSATED,
-        LEDGER_METRIC_LAZY_UNWRAP_APPLIED, LEDGER_METRIC_PHASE_STEERED,
-        LEDGER_METRIC_RANK1_INJECTED, LEDGER_METRIC_REPULSION_APPLIED,
+        StigmergicReconstitutionReport, StigmergicTrailOps, DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS,
+        DEFAULT_BLOOM_MAX_MASS_THRESHOLD, DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
+        DEFAULT_STIGMERGIC_TOLERANCE_Q7, HEADS_PER_STIGMERGIC_GRANULE, LEDGER_METRIC_FAST_PATH_HIT,
+        LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_LAZY_UNWRAP_APPLIED,
+        LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_RANK1_INJECTED, LEDGER_METRIC_REPULSION_APPLIED,
         LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SUBHEAD_ROUTED, MAX_ATTRACTOR_PULL_FORCE,
-        MAX_STIGMERGIC_DENSITY, NUM_STIGMERGIC_GRANULES, NUM_SWARM_MICRO_CELLS,
-        TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_DPSR_ACTIVE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
-        TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SWARM_ESCALATED,
-        TRAIL_FLAG_SWARM_RESOLVED, TRAIL_FLAG_SYNERGY_RESONANCE,
+        MAX_STIGMERGIC_DENSITY, NUM_STIGMERGIC_GRANULES, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
+        TRAIL_FLAG_DPSR_ACTIVE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
+        TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SWARM_ESCALATED, TRAIL_FLAG_SWARM_RESOLVED,
+        TRAIL_FLAG_SYNERGY_RESONANCE,
     };
     pub use super::{ActionHub, EntropyClosedLoopCoordinator, PhaseSteeringClosedLoop};
 }
@@ -447,9 +449,9 @@ const _: () = {
     assert!(MAX_ATTENTION_HEADS == 64);
     assert!(MAX_ANCHORS_PER_FIELD == 64);
     assert!(MAX_ATTRACTOR_DOMAINS == 8);
-    assert!(NUM_SWARM_MICRO_CELLS == 8);
-    assert!(HEADS_PER_SWARM_CELL == 8);
-    assert!(NUM_SWARM_MICRO_CELLS * HEADS_PER_SWARM_CELL == MAX_ATTENTION_HEADS);
+    assert!(NUM_STIGMERGIC_GRANULES == 8);
+    assert!(HEADS_PER_STIGMERGIC_GRANULE == 8);
+    assert!(NUM_STIGMERGIC_GRANULES * HEADS_PER_STIGMERGIC_GRANULE == MAX_ATTENTION_HEADS);
     assert!(CHEBYSHEV_FILTER_DEGREE == 3);
     assert!(CHEBYSHEV_COEFF_LEN == 4);
     assert!(PAGED_BITMASK_WORDS == 4);
@@ -534,8 +536,8 @@ const _: () = {
 
     assert!(size_of::<ContrastivePhaseBloomFilter>() == 64);
     assert!(align_of::<ContrastivePhaseBloomFilter>() == 64);
-    assert!(size_of::<SwarmResolutionReport>() == 16);
-    assert!(align_of::<SwarmResolutionReport>() == 16);
+    assert!(size_of::<StigmergicReconstitutionReport>() == 16);
+    assert!(align_of::<StigmergicReconstitutionReport>() == 16);
     assert!(size_of::<CausalProvenanceReport>() == 16);
     assert!(align_of::<CausalProvenanceReport>() == 16);
 

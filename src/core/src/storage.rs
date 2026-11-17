@@ -56,7 +56,7 @@ pub use crate::traits::primitives::{KvKeyframePacket, KvMotionDeltaPacket};
 use crate::traits::telemetry::{
     ContrastivePhaseBloomFilter, LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_PHASE_STEERED,
     LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
-    LEDGER_METRIC_SUBHEAD_ROUTED, NUM_SWARM_MICRO_CELLS,
+    LEDGER_METRIC_SUBHEAD_ROUTED, NUM_STIGMERGIC_GRANULES,
 };
 use crate::traits::{DnpPacketDispatcher, GcsoResult, KvKeyframeCache, MappedStorage, Pod};
 use core::mem::{align_of, offset_of, size_of};
@@ -921,7 +921,7 @@ impl<'a> GcsoFourSectionView<'a> {
         container_bytes: &mut [u8],
         trail_idx: usize,
         pull_step_u7: u8,
-    ) -> GcsoResult<(usize, u32, f32, f32, [u64; NUM_SWARM_MICRO_CELLS])> {
+    ) -> GcsoResult<(usize, u32, f32, f32, [u64; NUM_STIGMERGIC_GRANULES])> {
         let (
             mut header,
             total_len,
@@ -1000,9 +1000,9 @@ impl<'a> GcsoFourSectionView<'a> {
         f32,
         f32,
         bool,
-        [u64; NUM_SWARM_MICRO_CELLS],
-        [u64; NUM_SWARM_MICRO_CELLS],
-        [u64; NUM_SWARM_MICRO_CELLS],
+        [u64; NUM_STIGMERGIC_GRANULES],
+        [u64; NUM_STIGMERGIC_GRANULES],
+        [u64; NUM_STIGMERGIC_GRANULES],
         gcso_snapshot_header_t,
         usize,
         usize,

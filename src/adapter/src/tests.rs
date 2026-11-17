@@ -351,7 +351,7 @@ fn text_attractor_corpus_recalls_basin_and_detects_liminal_void_boundary() {
     let recall_void = corpus
         .recall_for_query(&adapter, &qv_slices, &refs, &policy)
         .expect("recall void");
-    assert_eq!(recall_void.void_state, VoidBoundaryState::LiminalVoid);
+    assert_eq!(recall_void.void_state, VoidBoundaryState::LiminalExterior);
     assert!(recall_void.recalled_facts.is_empty());
 }
 
@@ -479,7 +479,7 @@ fn dual_track_timeline_records_gop_seeks_zero_forward_and_roundtrips() {
             },
             &FrameTransitionMetrics {
                 phase_l1_delta: 0.10,
-                void_state: VoidBoundaryState::LiminalVoid,
+                void_state: VoidBoundaryState::LiminalExterior,
                 frames_since_keyframe: 2,
                 new_cluster_spawned: true,
             },
@@ -543,7 +543,7 @@ fn dual_track_timeline_persists_composes_and_updates_persona_circuit() {
         TrajectoryManifoldSnapshot,
     };
     use liminika_core::traits::gateway::{
-        CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, SwarmScaleGranularity,
+        CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, StigmergicScaleGranularity,
     };
 
     let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("geometry");
@@ -568,12 +568,12 @@ fn dual_track_timeline_persists_composes_and_updates_persona_circuit() {
 
     let mut base_circuit = CognitiveTrajectoryLedger::new();
     base_circuit.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
         CognitiveOpKind::DecomposePeel,
         6,
     ));
     base_circuit.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::MacroCoalition,
+        StigmergicScaleGranularity::MacroCoalition,
         CognitiveOpKind::SynthesizeFuse,
         7,
     ));
@@ -613,7 +613,7 @@ fn dual_track_timeline_persists_composes_and_updates_persona_circuit() {
     // Compose with a second timeline's overlay circuit and apply reflection plasticity.
     let mut overlay_circuit = CognitiveTrajectoryLedger::new();
     overlay_circuit.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::PointerBit,
+        StigmergicScaleGranularity::PointerBit,
         CognitiveOpKind::RouteSubHead,
         5,
     ));
@@ -836,7 +836,7 @@ fn coherence_guard_gate_flags_low_fact_coherence_as_liminal_void() {
         &policy,
     );
     assert!(decision.suppress_fact_injection);
-    assert_eq!(decision.void_state, VoidBoundaryState::LiminalVoid);
+    assert_eq!(decision.void_state, VoidBoundaryState::LiminalExterior);
 }
 
 #[test]
@@ -863,7 +863,7 @@ fn coherence_guard_gate_detects_sharp_winner_liminal_without_weakening_ood_limin
     assert!(!liminal.suppress_fact_injection);
     assert_eq!(liminal.void_state, VoidBoundaryState::LiminalBoundary);
 
-    // Flat out-of-domain noise remains strictly LiminalVoid.
+    // Flat out-of-domain noise remains strictly Liminal.
     let flat_ood = gate.evaluate(
         &RecallBoundaryMetrics {
             top1_fact_score: 0.15,
@@ -875,7 +875,7 @@ fn coherence_guard_gate_detects_sharp_winner_liminal_without_weakening_ood_limin
         &policy,
     );
     assert!(flat_ood.suppress_fact_injection);
-    assert_eq!(flat_ood.void_state, VoidBoundaryState::LiminalVoid);
+    assert_eq!(flat_ood.void_state, VoidBoundaryState::LiminalExterior);
 }
 
 #[test]
@@ -1127,7 +1127,7 @@ fn society_stratum_pipeline_supports_dynamic_add_remove_and_action_hub_arbitrati
         recall_guard.action_decision,
         StigmergicActionDecision::RepulsionEscape
     );
-    assert_eq!(recall_guard.void_state, VoidBoundaryState::LiminalVoid);
+    assert_eq!(recall_guard.void_state, VoidBoundaryState::LiminalExterior);
 }
 
 #[test]
@@ -1610,7 +1610,7 @@ fn action_hub_compound_decomposition_links_disjoint_specialists_while_respecting
             Some(weak_obs),
         )
         .expect("ood recall");
-    assert_eq!(ood_recall.void_state, VoidBoundaryState::LiminalVoid);
+    assert_eq!(ood_recall.void_state, VoidBoundaryState::LiminalExterior);
     assert!(ood_recall.recalled_facts.is_empty());
     assert_eq!(
         ood_recall
@@ -1876,7 +1876,7 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
     let mut peel_ledger = CognitiveTrajectoryLedger::default();
     for _ in 0..4 {
         peel_ledger.push_step(CognitiveStepOp::pack(
-            SwarmScaleGranularity::CellTrail,
+            StigmergicScaleGranularity::CellTrail,
             CognitiveOpKind::DecomposePeel,
             6,
         ));
@@ -1912,9 +1912,40 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
     assert_eq!(adapter.stigmergic_granule_field().adaptation_epochs, 2);
     assert_eq!(adapter.stigmergic_granule_field().venn_overlap_mask, 0x0F);
 
+    adapter.configure_ego_from_preset(LiminalEgoPreset::High);
+    assert!(adapter.ego_field().is_active());
+    adapter.configure_ego_from_natural_language(
+        "Strong-willed curious explorer who defies capture and steps beyond limits",
+    );
+    assert!(adapter.ego_field().transgression_bias_q7 > 0);
+    adapter.adapt_core_layers(&conflict_horizon, &venn, None);
+    assert!(adapter.ego_field().intervention_epochs >= 1);
+    assert!(adapter.last_boundary_delta().kinetic_energy_q7 > 0);
+
+    // Clamp Ego off & drive identical quiescence with quiescent ledger/Venn to observe stationary shortcut
+    adapter.configure_ego_from_preset(LiminalEgoPreset::Custom);
+    adapter.set_active_circuit(CognitiveTrajectoryLedger::default());
+    let quiescent_horizon = EpistemicHorizonReading {
+        total_memory_support: 1.5,
+        peak_positive_affinity: 0.90,
+        horizon_gate: 1.0,
+        dominant_anchor_id: 10,
+        regime_code: EpistemicRegime::KnownCoherent as u8,
+        ..Default::default()
+    };
+    let quiescent_venn = StigmergicVennSerendipityReport {
+        venn_core_mask: 0x0F,
+        venn_penumbra_mask: 0x10,
+        void_exterior_mask: 0xE0,
+        ..Default::default()
+    };
+    adapter.adapt_core_layers(&quiescent_horizon, &quiescent_venn, None);
+    adapter.adapt_core_layers(&quiescent_horizon, &quiescent_venn, None);
+    assert_eq!(adapter.last_boundary_delta().stationary_shortcut_ready, 1);
+
     let mermaid = adapter.render_liminal_topology_mermaid(5, 2);
     assert!(mermaid.starts_with("flowchart TD\n"));
-    assert!(mermaid.contains("LiminalVoid"));
+    assert!(mermaid.contains("Liminal"));
     assert!(mermaid.contains("Core Layer 1: StigmergicGranuleField"));
     assert!(mermaid.contains("ManifoldGatewaySignal"));
     assert!(mermaid.contains("ActionHub"));

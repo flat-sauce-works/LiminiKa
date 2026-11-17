@@ -54,10 +54,10 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_MAX_ATTRACTOR_DOMAINS 8U
 #define GCSO_NUM_LIMINAL_APERTURE_CHANNELS 8U
 #define GCSO_NUM_CORE_AUTONOMOUS_LAYERS 2U
-#define GCSO_CORE_LAYER_LIMINAL_VOID 0U
+#define GCSO_CORE_LAYER_LIMINAL 0U
 #define GCSO_CORE_LAYER_STIGMERGIC 1U
 
-/* LiminalVoid Cognitive Aperture Bitmasks (1:1 with primitives/constants_pod.rs) */
+/* Liminal Cognitive Aperture Bitmasks (1:1 with primitives/constants_pod.rs) */
 #define GCSO_APERTURE_SYSTEM_CONSTRAINT (1U << 0)
 #define GCSO_APERTURE_OBJECTIVE_FACT (1U << 1)
 #define GCSO_APERTURE_SUBJECTIVE_PERSONA (1U << 2)
@@ -73,10 +73,18 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_APERTURE_RANK1_RESIDUAL (1U << 10)
 #define GCSO_APERTURE_POINTER_TRAIL (1U << 11)
 #define GCSO_APERTURE_FAST_PATH_LEDGER (1U << 12)
-#define GCSO_APERTURE_SWARM_CONSENSUS (1U << 13)
+#define GCSO_APERTURE_STIGMERGIC_CONSENSUS (1U << 13)
 #define GCSO_APERTURE_COHOMOLOGY_EDBC (1U << 14)
 #define GCSO_APERTURE_MAPPED_STORAGE (1U << 15)
 #define GCSO_APERTURE_ACTION_HUB_WIDE 0x0000FFFFU
+
+/* LiminalEgoField Trigger Bitmasks (1:1 with primitives/constants_pod.rs) */
+#define GCSO_EGO_TRIGGER_VORTEX_SWALLOW (1U << 0)
+#define GCSO_EGO_TRIGGER_INTERNAL_CONFLICT (1U << 1)
+#define GCSO_EGO_TRIGGER_LIMINAL_EXTERIOR (1U << 2)
+#define GCSO_EGO_TRIGGER_BOUNDARY_CHATTER (1U << 3)
+#define GCSO_EGO_TRIGGER_BOUNDARY_STAGNATION (1U << 4)
+#define GCSO_EGO_TRIGGER_ALL_DEFAULT 0x1FU
 
 /* Cognitive Trajectory Scale Granularity & Op Identifiers */
 #define GCSO_SCALE_POINTER_BIT 0U
@@ -234,7 +242,16 @@ typedef enum gcso_stigmergic_action_decision GCSO_ENUM_UNDERLYING(uint8_t){
 typedef enum gcso_epistemic_regime GCSO_ENUM_UNDERLYING(uint8_t){
     GCSO_EPISTEMIC_KNOWN_COHERENT = 0,
     GCSO_EPISTEMIC_INTERNAL_CONFLICT = 1,
-    GCSO_EPISTEMIC_LIMINAL_VOID = 2} gcso_epistemic_regime_enum_t;
+    GCSO_EPISTEMIC_LIMINAL = 2} gcso_epistemic_regime_enum_t;
+
+/**
+ * @brief Subjective Ego preset intensity discriminant matching Rust LiminalEgoPreset (0..=3).
+ */
+typedef enum gcso_liminal_ego_preset GCSO_ENUM_UNDERLYING(uint8_t){
+    GCSO_EGO_PRESET_CUSTOM = 0,
+    GCSO_EGO_PRESET_LOW = 1,
+    GCSO_EGO_PRESET_MEDIUM = 2,
+    GCSO_EGO_PRESET_HIGH = 3} gcso_liminal_ego_preset_enum_t;
 
 /**
  * @brief Descriptor header for size and ABI version validation.
@@ -651,7 +668,7 @@ typedef struct gcso_stigmergic_venn_serendipity_report gcso_stigmergic_venn_sere
  * @brief Unified 2-layer autonomous core stack (64 bytes = 1 cache line, 64-byte aligned).
  */
 struct GCSO_ALIGN_PREFIX(64) gcso_autonomous_core_layer_stack {
-    gcso_liminal_aperture_field_t liminal_void_layer;
+    gcso_liminal_aperture_field_t liminal_layer;
     gcso_stigmergic_granule_field_t stigmergic_layer;
 } GCSO_ALIGN_SUFFIX(64);
 typedef struct gcso_autonomous_core_layer_stack gcso_autonomous_core_layer_stack_t;
@@ -670,6 +687,44 @@ struct GCSO_ALIGN_PREFIX(16) gcso_liminal_topology_snapshot {
     uint8_t spawned_daughters;
 } GCSO_ALIGN_SUFFIX(16);
 typedef struct gcso_liminal_topology_snapshot gcso_liminal_topology_snapshot_t;
+
+/**
+ * @brief Temporal boundary velocity & chattering analyzer (16 bytes, 16-byte aligned).
+ */
+struct GCSO_ALIGN_PREFIX(16) gcso_liminal_boundary_delta {
+    int8_t channel_floor_velocity_q7[GCSO_NUM_LIMINAL_APERTURE_CHANNELS];
+    uint8_t granule_transition_mask;
+    uint8_t chattering_channel_mask;
+    uint8_t kinetic_energy_q7;
+    uint8_t stationary_shortcut_ready;
+    uint8_t expansion_dominant;
+    uint8_t reserved[3];
+} GCSO_ALIGN_SUFFIX(16);
+typedef struct gcso_liminal_boundary_delta gcso_liminal_boundary_delta_t;
+
+/**
+ * @brief Wide-aperture Subjective Ego boundary redefinition controller (64 bytes, 64-byte aligned).
+ */
+struct GCSO_ALIGN_PREFIX(64) gcso_liminal_ego_field {
+    gcso_q7_t sovereign_granule_phase_q7[GCSO_NUM_STIGMERGIC_GRANULES];
+    int8_t trait_floor_bias_q7[GCSO_NUM_LIMINAL_APERTURE_CHANNELS];
+    int8_t trait_gain_bias_q7[GCSO_NUM_LIMINAL_APERTURE_CHANNELS];
+    int8_t slot_affinity_bias_q7[GCSO_MAX_ATTRACTOR_DOMAINS];
+    uint8_t granule_autonomy_q7[GCSO_NUM_STIGMERGIC_GRANULES];
+    uint8_t counter_vortex_thrust_q7;
+    uint8_t vortex_escape_floor_q7;
+    int8_t transgression_bias_q7;
+    uint8_t irrational_defiance_q7;
+    uint8_t trigger_mask;
+    uint8_t forced_action_mode_or_mask;
+    uint8_t suppressed_action_mode_mask;
+    uint8_t preset_code;
+    uint32_t ego_signature_hash;
+    uint32_t intervention_epochs;
+    uint8_t last_intervened_mask;
+    uint8_t reserved[7];
+} GCSO_ALIGN_SUFFIX(64);
+typedef struct gcso_liminal_ego_field gcso_liminal_ego_field_t;
 
 /*
  * Strongly-Typed Opaque Handles eliminating generic raw `c_void` / `void*` pointers.
@@ -757,6 +812,10 @@ GCSO_STATIC_ASSERT(sizeof(gcso_autonomous_core_layer_stack_t) == 64,
                    "gcso_autonomous_core_layer_stack_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_liminal_topology_snapshot_t) == 32,
                    "gcso_liminal_topology_snapshot_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_liminal_boundary_delta_t) == 16,
+                   "gcso_liminal_boundary_delta_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_liminal_ego_field_t) == 64,
+                   "gcso_liminal_ego_field_t size mismatch");
 
 /* Static Assertions for Alignment Invariants Matching src/core/src/abi/ & traits/ */
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_raw_buffer_t) == 16, "gcso_raw_buffer_t alignment mismatch");
@@ -809,6 +868,10 @@ GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_autonomous_core_layer_stack_t) == 64,
                    "gcso_autonomous_core_layer_stack_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_liminal_topology_snapshot_t) == 16,
                    "gcso_liminal_topology_snapshot_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_liminal_boundary_delta_t) == 16,
+                   "gcso_liminal_boundary_delta_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_liminal_ego_field_t) == 64,
+                   "gcso_liminal_ego_field_t alignment mismatch");
 
 /* Static Assertions for Exact Field Offsets Matching Rust abi/ & traits/ */
 GCSO_STATIC_ASSERT(offsetof(gcso_descriptor_header_t, struct_size) == 0,
@@ -1097,8 +1160,8 @@ GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_venn_serendipity_report_t, venn_core
 GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_venn_serendipity_report_t, serendipity_triggered) == 30,
                    "gcso_stigmergic_venn_serendipity_report_t::serendipity_triggered offset mismatch");
 
-GCSO_STATIC_ASSERT(offsetof(gcso_autonomous_core_layer_stack_t, liminal_void_layer) == 0,
-                   "gcso_autonomous_core_layer_stack_t::liminal_void_layer offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_autonomous_core_layer_stack_t, liminal_layer) == 0,
+                   "gcso_autonomous_core_layer_stack_t::liminal_layer offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_autonomous_core_layer_stack_t, stigmergic_layer) == 32,
                    "gcso_autonomous_core_layer_stack_t::stigmergic_layer offset mismatch");
 
@@ -1110,6 +1173,36 @@ GCSO_STATIC_ASSERT(offsetof(gcso_liminal_topology_snapshot_t, regime_code) == 28
                    "gcso_liminal_topology_snapshot_t::regime_code offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_liminal_topology_snapshot_t, spawned_daughters) == 31,
                    "gcso_liminal_topology_snapshot_t::spawned_daughters offset mismatch");
+
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_boundary_delta_t, channel_floor_velocity_q7) == 0,
+                   "gcso_liminal_boundary_delta_t::channel_floor_velocity_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_boundary_delta_t, kinetic_energy_q7) == 10,
+                   "gcso_liminal_boundary_delta_t::kinetic_energy_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_boundary_delta_t, stationary_shortcut_ready) == 11,
+                   "gcso_liminal_boundary_delta_t::stationary_shortcut_ready offset mismatch");
+
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, sovereign_granule_phase_q7) == 0,
+                   "gcso_liminal_ego_field_t::sovereign_granule_phase_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, trait_floor_bias_q7) == 8,
+                   "gcso_liminal_ego_field_t::trait_floor_bias_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, trait_gain_bias_q7) == 16,
+                   "gcso_liminal_ego_field_t::trait_gain_bias_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, slot_affinity_bias_q7) == 24,
+                   "gcso_liminal_ego_field_t::slot_affinity_bias_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, granule_autonomy_q7) == 32,
+                   "gcso_liminal_ego_field_t::granule_autonomy_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, counter_vortex_thrust_q7) == 40,
+                   "gcso_liminal_ego_field_t::counter_vortex_thrust_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, trigger_mask) == 44,
+                   "gcso_liminal_ego_field_t::trigger_mask offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, preset_code) == 47,
+                   "gcso_liminal_ego_field_t::preset_code offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, ego_signature_hash) == 48,
+                   "gcso_liminal_ego_field_t::ego_signature_hash offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, intervention_epochs) == 52,
+                   "gcso_liminal_ego_field_t::intervention_epochs offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, last_intervened_mask) == 56,
+                   "gcso_liminal_ego_field_t::last_intervened_mask offset mismatch");
 
 GCSO_EXTERN_C_END
 

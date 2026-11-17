@@ -73,8 +73,8 @@ fn test_paged_bitmask_bloom_trail_swarm_and_daes_constant_time() {
         &target_phases,
         64,
         1,
-        DEFAULT_SWARM_TOLERANCE_Q7,
-        DEFAULT_SWARM_QUORUM_THRESHOLD,
+        DEFAULT_STIGMERGIC_TOLERANCE_Q7,
+        DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
         0.10,
         0.15,
         None,
@@ -94,8 +94,8 @@ fn test_paged_bitmask_bloom_trail_swarm_and_daes_constant_time() {
         &unified_energies,
         128,
         1,
-        DEFAULT_SWARM_TOLERANCE_Q7,
-        DEFAULT_SWARM_QUORUM_THRESHOLD,
+        DEFAULT_STIGMERGIC_TOLERANCE_Q7,
+        DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
     );
     assert_eq!(unified_quorum, 0xFF);
     assert_eq!(trail.target_anchor_id, 1);

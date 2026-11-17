@@ -87,7 +87,7 @@ impl RawPhaseProjectable for RamPhaseKvEntry {
     }
 
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         load_q7_words_64(&self.keyframe.anchor_phases)
     }
 }
@@ -158,7 +158,7 @@ pub trait RamPhaseKvCacheOps {
         let words = load_q7_words_64(phases);
         let mut norm_approx = 0u16;
         let mut c = 0usize;
-        while c < NUM_SWARM_MICRO_CELLS {
+        while c < NUM_STIGMERGIC_GRANULES {
             norm_approx += u16::from(swar_mean_u8_le128_x8(swar_q7_abs_u8_x8(words[c])));
             c += 1;
         }
@@ -227,7 +227,7 @@ pub trait RamPhaseKvCacheOps {
     fn lookup_context_or_resonate(
         &mut self,
         context_hash: u64,
-        query_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        query_words: &[u64; NUM_STIGMERGIC_GRANULES],
         min_resonance_q7: gcso_q7_t,
         epoch: u32,
     ) -> Option<(usize, bool, gcso_q7_t)> {
@@ -259,7 +259,7 @@ pub trait RamPhaseKvCacheOps {
                     );
                     let mut sum_diff = 0u32;
                     let mut c = 0usize;
-                    while c < NUM_SWARM_MICRO_CELLS {
+                    while c < NUM_STIGMERGIC_GRANULES {
                         let abs_w =
                             swar_q7_abs_u8_x8(swar_q7_circular_diff_x8(query_words[c], e_words[c]));
                         let even = abs_w & 0x00FF_00FF_00FF_00FF;
@@ -818,7 +818,7 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
 /// Outcome returned by [`RamPhaseKvGopCache::step_with_gateway_autonomous`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RamPhaseKvStepOutcome {
-    /// Query carried neither a context fingerprint nor factual grounding (`LiminalVoid`).
+    /// Query carried neither a context fingerprint nor factual grounding (`Liminal`).
     SkippedVoid,
     /// No existing slot resonated above the autonomous threshold; stored a new I-Frame slot.
     StoredKeyframe {
@@ -878,7 +878,7 @@ impl RawPhaseProjectable for CognitiveTrajectoryLedger {
     }
 
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         self.to_phase_words_64()
     }
 }
@@ -904,7 +904,7 @@ impl CognitiveGroundingSignal for CognitiveTrajectoryLedger {
     }
 
     #[inline(always)]
-    fn project_grounding_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_grounding_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         self.to_phase_words_64()
     }
 
@@ -919,11 +919,11 @@ impl SubjectivePersonaSignal for CognitiveTrajectoryLedger {}
 
 impl ManifoldGatewaySignal for CognitiveTrajectoryLedger {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let words = self.to_phase_words_64();
         let (hist, depth) = self.op_counts();
         if depth == 0 {
-            return (GatewayFrame::default(), [0u64; NUM_SWARM_MICRO_CELLS]);
+            return (GatewayFrame::default(), [0u64; NUM_STIGMERGIC_GRANULES]);
         }
         let tag_q7 = fast_mean_q7_tag_from_words_64(&words);
         let peel_dominates =

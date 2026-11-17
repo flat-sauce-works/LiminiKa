@@ -78,7 +78,7 @@ fn test_gcso_types_abi_layout_invariants() {
         16
     );
 
-    // Verify LiminalVoid & 2-Layer Autonomous Core Stack structures
+    // Verify Liminal & 2-Layer Autonomous Core Stack structures
     assert_eq!(
         size_of::<liminika_core::abi::gcso_epistemic_horizon_reading_t>(),
         32
@@ -161,7 +161,7 @@ fn test_gcso_types_abi_layout_invariants() {
     assert_eq!(
         offset_of!(
             liminika_core::abi::gcso_autonomous_core_layer_stack_t,
-            liminal_void_layer
+            liminal_layer
         ),
         0
     );
@@ -180,5 +180,58 @@ fn test_gcso_types_abi_layout_invariants() {
     assert_eq!(
         align_of::<liminika_core::abi::gcso_liminal_topology_snapshot_t>(),
         16
+    );
+
+    assert_eq!(
+        size_of::<liminika_core::abi::gcso_liminal_boundary_delta_t>(),
+        16
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::gcso_liminal_boundary_delta_t>(),
+        16
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::gcso_liminal_boundary_delta_t,
+            kinetic_energy_q7
+        ),
+        10
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::gcso_liminal_boundary_delta_t,
+            stationary_shortcut_ready
+        ),
+        11
+    );
+
+    assert_eq!(
+        size_of::<liminika_core::abi::gcso_liminal_ego_field_t>(),
+        64
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::gcso_liminal_ego_field_t>(),
+        64
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::gcso_liminal_ego_field_t,
+            counter_vortex_thrust_q7
+        ),
+        40
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::gcso_liminal_ego_field_t,
+            ego_signature_hash
+        ),
+        48
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::gcso_liminal_ego_field_t,
+            last_intervened_mask
+        ),
+        56
     );
 }

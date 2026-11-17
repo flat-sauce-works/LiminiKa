@@ -1,7 +1,7 @@
-// name: src/core/src/traits/telemetry/swarm.rs
+// name: src/core/src/traits/telemetry/stigmergy.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! 8-cell x 8-head SWAR Micro-Swarm resolution and lateral phase consensus (`StigmergicSwarmOps`).
+//! 8-granule x 8-head SWAR stigmergic reconstitution and lateral phase consensus (`StigmergicReconstitutionOps`).
 
 use super::trail::*;
 use super::*;
@@ -109,9 +109,9 @@ pub(super) const fn precompute_swarm_step_params(
 #[inline]
 #[must_use]
 unsafe fn avx2_subswarm_resolve_words_64(
-    cur_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
     cur_is_uniform: bool,
-    tgt_base_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    tgt_base_w: &[u64; NUM_STIGMERGIC_GRANULES],
     tgt_is_uniform: bool,
     use_explicit_tgt: bool,
     ptr_phase_splat: u64,
@@ -119,7 +119,7 @@ unsafe fn avx2_subswarm_resolve_words_64(
     step_gain_u7: u8,
     qdps_min_step_q7: u8,
     tolerance_q7: u8,
-) -> ([u64; NUM_SWARM_MICRO_CELLS], u8, u32) {
+) -> ([u64; NUM_STIGMERGIC_GRANULES], u8, u32) {
     // SAFETY: Caller guarantees `target_feature = "avx2"`. Resolves all 8 Micro-Swarm cells (64 heads)
     // in parallel inside two 256-bit YMM registers (`_mm256_mulhi_epi16(d << 8, s << 1)` and `_mm256_sad_epu8`),
     // preserving 100% bit-for-bit identity with `swar_subswarm_resolve_with_bias_x8`.
@@ -219,7 +219,7 @@ unsafe fn avx2_subswarm_resolve_words_64(
         let res_arr = crate::traits::branchless::avx2_vec64_to_words64(res0_vec, res1_vec);
         let mut residual_sum = 0u32;
         let mut cell = 0usize;
-        while cell < NUM_SWARM_MICRO_CELLS {
+        while cell < NUM_STIGMERGIC_GRANULES {
             let cell_active = ((active_cell_mask >> cell) & 1) != 0;
             next_words[cell] = branchless_select_u64(cell_active, next_words[cell], cur_w[cell]);
             residual_sum += branchless_select_u32(cell_active, res_arr[cell] as u32, 0);
@@ -232,9 +232,9 @@ unsafe fn avx2_subswarm_resolve_words_64(
 #[inline(always)]
 #[must_use]
 pub(super) fn swar_subswarm_resolve_words_64(
-    cur_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
     cur_is_uniform: bool,
-    tgt_base_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    tgt_base_w: &[u64; NUM_STIGMERGIC_GRANULES],
     tgt_is_uniform: bool,
     use_explicit_tgt: bool,
     ptr_phase_splat: u64,
@@ -242,7 +242,7 @@ pub(super) fn swar_subswarm_resolve_words_64(
     step_gain_u7: u8,
     qdps_min_step_q7: u8,
     tolerance_q7: u8,
-) -> ([u64; NUM_SWARM_MICRO_CELLS], u8, u32) {
+) -> ([u64; NUM_STIGMERGIC_GRANULES], u8, u32) {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         // SAFETY: Guarded by `cfg(target_feature = "avx2")`.
@@ -277,7 +277,7 @@ pub(super) fn swar_subswarm_resolve_words_64(
         let mut prev_res = 0u8;
         let mut prev_ok = false;
         let mut cell = 0usize;
-        while cell < NUM_SWARM_MICRO_CELLS {
+        while cell < NUM_STIGMERGIC_GRANULES {
             let cell_active = ((active_cell_mask >> cell) & 1) != 0;
             let cw = cur_w[cell];
             let tw = branchless_select_u64(use_explicit_tgt, tgt_base_w[cell], ptr_phase_splat);
@@ -315,29 +315,29 @@ pub(super) fn swar_subswarm_resolve_words_64(
 
 
 // ===================================================================
-// 6. Constant-Time Closed-Loop Micro-Swarm Resolution (`StigmergicSwarmOps`)
+// 6. Constant-Time Closed-Loop Micro-Swarm Resolution (`StigmergicReconstitutionOps`)
 // ===================================================================
 
-/// 16-byte register-aligned summary returned when the 8-cell Micro-Swarm attempts to resolve
-/// an Action Hub command on the Hot Path and feeds back into the Stigmergic environment.
+/// 16-byte register-aligned summary returned when the 8-granule stigmergic field attempts to
+/// reconstitute an Action Hub command on the Hot Path and feeds back into pointer trails.
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SwarmResolutionReport {
+pub struct StigmergicReconstitutionReport {
     /// Feedback-evolved 64-bit tagged pointer ready for the Action Hub's next instruction step.
     pub evolved_ptr: gcso_tagged_ptr_t,
     /// Signed stigmergic density feedback ($\Delta\rho_{\mathrm{stigmergy}}$) applied to the trail.
     pub stigmergic_delta_density: f32,
-    /// 8-bit Micro-Swarm Quorum bitmask (`bit c == 1` iff 8-head cell $c \in 0..8$ converged).
+    /// 8-bit Stigmergic Quorum bitmask (`bit c == 1` iff 8-head granule $c \in 0..8$ converged).
     pub quorum_mask: u8,
-    /// Number of Micro-Swarm cells (`0..=8`) that resolved their sub-task within `tolerance_q7`.
+    /// Number of Stigmergic granules (`0..=8`) that resolved their sub-task within `tolerance_q7`.
     pub resolved_cell_count: u8,
-    /// Mean circular Q7 phase residual (`0..=128`) across all 64 heads after the Micro-Swarm step.
+    /// Mean circular Q7 phase residual (`0..=128`) across all 64 heads after the reconstitution step.
     pub mean_residual_q7: u8,
-    /// `1` if the Swarm achieved quorum on the Hot Path without Bloom repulsion, `0` if escalated.
+    /// `1` if stigmergic reconstitution achieved quorum on the Hot Path without Bloom repulsion, `0` if escalated.
     pub hot_path_resolved: u8,
 }
 
-impl Default for SwarmResolutionReport {
+impl Default for StigmergicReconstitutionReport {
     #[inline(always)]
     fn default() -> Self {
         Self {
@@ -351,10 +351,10 @@ impl Default for SwarmResolutionReport {
     }
 }
 
-// SAFETY: `SwarmResolutionReport` is a 16-byte `#[repr(C, align(16))]` structure with zero padding.
-unsafe impl Pod for SwarmResolutionReport {}
+// SAFETY: `StigmergicReconstitutionReport` is a 16-byte `#[repr(C, align(16))]` structure with zero padding.
+unsafe impl Pod for StigmergicReconstitutionReport {}
 
-/// Evaluates a single 8-head SWAR Micro-Swarm cell step on the circle group $S^1 \cong SO(2)$
+/// Evaluates a single 8-head SWAR Stigmergic Granule step on the circle group $S^1 \cong SO(2)$
 /// in **strictly constant time (`0` branches)** across all inputs.
 #[inline(always)]
 #[must_use]
@@ -379,8 +379,11 @@ pub const fn swar_subswarm_resolve_x8(
     )
 }
 
-/// Closed-loop trait uniting **Micro-Swarm Subdivision** and **Stigmergic Feedback**.
-pub trait StigmergicSwarmOps: StigmergicTrailOps {
+/// Approximation-first trait framing the 3-stage stigmergic compute pipeline:
+/// 1. **Fragmentation (Granulate)**: decompose a 64-head phase trajectory into 8 myopic `u64` SWAR granules.
+/// 2. **Stigmergic Drift**: steer each granule along local terrain pheromone trails without global planning.
+/// 3. **Reconstitution**: reassemble converged granules via quorum consensus into an approximate state transition.
+pub trait StigmergicReconstitutionOps: StigmergicTrailOps {
     /// Extracts the 8-head Q7 phase word (`u64`) belonging to Micro-Swarm cell `cell_idx` (`0..=7`).
     #[must_use]
     fn extract_subswarm_word(&self, cell_idx: usize) -> u64;
@@ -393,7 +396,7 @@ pub trait StigmergicSwarmOps: StigmergicTrailOps {
     fn try_resolve_action_in_swarm_from_words(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,
-        target_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        target_words: &[u64; NUM_STIGMERGIC_GRANULES],
         active_cell_mask: u8,
         step_gain_u7: u8,
         qdps_min_step_q7: u8,
@@ -404,11 +407,11 @@ pub trait StigmergicSwarmOps: StigmergicTrailOps {
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
-    ) -> (SwarmResolutionReport, [u64; NUM_SWARM_MICRO_CELLS]);
+    ) -> (StigmergicReconstitutionReport, [u64; NUM_STIGMERGIC_GRANULES]);
 
     /// Subdivides the Action Hub's target 64-head phase command into **8 parallel 8-head SWAR
     /// Micro-Swarm cells** gated by `active_cell_mask` in strictly constant time (`0` branches),
-    /// returning both `(SwarmResolutionReport, resolved_swar_words)` so downstream RoPE/RIPA kernels
+    /// returning both `(StigmergicReconstitutionReport, resolved_swar_words)` so downstream RoPE/RIPA kernels
     /// can steer directly from registers without re-loading `accumulated_phase_delta`.
     #[inline(always)]
     fn try_resolve_action_in_swarm_to_words(
@@ -425,7 +428,7 @@ pub trait StigmergicSwarmOps: StigmergicTrailOps {
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
-    ) -> (SwarmResolutionReport, [u64; NUM_SWARM_MICRO_CELLS]) {
+    ) -> (StigmergicReconstitutionReport, [u64; NUM_STIGMERGIC_GRANULES]) {
         let tgt_w = load_q7_words_64(target_phases);
         self.try_resolve_action_in_swarm_from_words(
             action_ptr,
@@ -460,7 +463,7 @@ pub trait StigmergicSwarmOps: StigmergicTrailOps {
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
-    ) -> SwarmResolutionReport {
+    ) -> StigmergicReconstitutionReport {
         self.try_resolve_action_in_swarm_to_words(
             action_ptr,
             target_phases,
@@ -493,7 +496,7 @@ pub trait StigmergicSwarmOps: StigmergicTrailOps {
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
-    ) -> SwarmResolutionReport {
+    ) -> StigmergicReconstitutionReport {
         self.try_resolve_action_in_swarm_masked(
             action_ptr,
             target_phases,
@@ -576,7 +579,7 @@ pub trait StigmergicSwarmOps: StigmergicTrailOps {
     /// via [`branchless_q7_unified_field_fold_words_with_init_weight_64`], resolves the composite
     /// phase target across the 8 Micro-Swarm cells (`active_cell_mask`), and recruits the dominant
     /// unified-field anchor on partial quorum in a single register-resident pass, returning both
-    /// `(SwarmResolutionReport, resolved_swar_words)`.
+    /// `(StigmergicReconstitutionReport, resolved_swar_words)`.
     fn resolve_unified_field_in_swarm_to_words(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,
@@ -592,7 +595,7 @@ pub trait StigmergicSwarmOps: StigmergicTrailOps {
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
-    ) -> (SwarmResolutionReport, [u64; NUM_SWARM_MICRO_CELLS]);
+    ) -> (StigmergicReconstitutionReport, [u64; NUM_STIGMERGIC_GRANULES]);
 
     /// Folds `anchor_phases` and `anchor_base_energies` on the Single Unified Attractor Manifold,
     /// resolves the composite phase target across the 8 Micro-Swarm cells (`active_cell_mask`),
@@ -614,7 +617,7 @@ pub trait StigmergicSwarmOps: StigmergicTrailOps {
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
-    ) -> SwarmResolutionReport {
+    ) -> StigmergicReconstitutionReport {
         self.resolve_unified_field_in_swarm_to_words(
             action_ptr,
             anchor_phases,
@@ -635,7 +638,7 @@ pub trait StigmergicSwarmOps: StigmergicTrailOps {
 
     /// Resolves `action_ptr`'s target working lane from `slot_phase_bank` (`[[gcso_q7_t; 64]; 8]`)
     /// across the 8 Micro-Swarm cells (`active_cell_mask`), recruits coupled neighbor lanes on
-    /// partial quorum entirely in registers, and returns `(SwarmResolutionReport, resolved_swar_words)`.
+    /// partial quorum entirely in registers, and returns `(StigmergicReconstitutionReport, resolved_swar_words)`.
     fn resolve_slot_bank_in_swarm_to_words(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,
@@ -652,7 +655,7 @@ pub trait StigmergicSwarmOps: StigmergicTrailOps {
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
-    ) -> (SwarmResolutionReport, [u64; NUM_SWARM_MICRO_CELLS]);
+    ) -> (StigmergicReconstitutionReport, [u64; NUM_STIGMERGIC_GRANULES]);
 
     /// Resolves `action_ptr`'s target working lane from `slot_phase_bank` (`[[gcso_q7_t; 64]; 8]`)
     /// across the 8 Micro-Swarm cells (`active_cell_mask`) and recruits coupled neighbor lanes on partial quorum.
@@ -673,7 +676,7 @@ pub trait StigmergicSwarmOps: StigmergicTrailOps {
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
-    ) -> SwarmResolutionReport {
+    ) -> StigmergicReconstitutionReport {
         self.resolve_slot_bank_in_swarm_to_words(
             action_ptr,
             slot_phase_bank,
@@ -692,17 +695,7 @@ pub trait StigmergicSwarmOps: StigmergicTrailOps {
         )
         .0
     }
-}
 
-/// Primary C-ABI alias pairing [`SwarmResolutionReport`] with GCSO's `S = Stigmergic`
-/// fragmentation-and-reconstitution semantics (`16` bytes, `#[repr(C, align(16))]`).
-pub type StigmergicReconstitutionReport = SwarmResolutionReport;
-
-/// Approximation-first trait framing the 3-stage stigmergic compute pipeline:
-/// 1. **Fragmentation (Granulate)**: decompose a 64-head phase trajectory into 8 myopic `u64` SWAR granules.
-/// 2. **Stigmergic Drift**: steer each granule along local terrain pheromone trails without global planning.
-/// 3. **Reconstitution**: reassemble converged granules via quorum consensus into an approximate state transition.
-pub trait StigmergicReconstitutionOps: StigmergicSwarmOps {
     /// Extracts the myopic 8-head `u64` SWAR word (`granule_idx` in `0..8`) during fragmentation.
     #[inline(always)]
     #[must_use]
@@ -752,15 +745,13 @@ pub trait StigmergicReconstitutionOps: StigmergicSwarmOps {
     }
 }
 
-impl<T: StigmergicSwarmOps + ?Sized> StigmergicReconstitutionOps for T {}
-
 impl gcso_pointer_trail_t {
     #[inline]
     pub(crate) fn try_resolve_action_in_swarm_with_cur_words(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,
-        cur_w: &[u64; NUM_SWARM_MICRO_CELLS],
-        target_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
+        target_words: &[u64; NUM_STIGMERGIC_GRANULES],
         has_active_anchors: bool,
         active_cell_mask: u8,
         step_gain_u7: u8,
@@ -772,7 +763,7 @@ impl gcso_pointer_trail_t {
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
-    ) -> (SwarmResolutionReport, [u64; NUM_SWARM_MICRO_CELLS]) {
+    ) -> (StigmergicReconstitutionReport, [u64; NUM_STIGMERGIC_GRANULES]) {
         let ptr_phase = action_ptr.unpack_phase();
         let ptr_phase_splat = ((ptr_phase as u8) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
         let cur_w = *cur_w;
@@ -818,12 +809,12 @@ impl gcso_pointer_trail_t {
                         tolerance_q7,
                     );
                     if active_cell_mask == 0xFF {
-                        next_words = [stepped_w0; NUM_SWARM_MICRO_CELLS];
+                        next_words = [stepped_w0; NUM_STIGMERGIC_GRANULES];
                         quorum_mask = branchless_select_u8(cell_ok, 0xFF, 0x00);
                         residual_sum = u32::from(cell_res) << 3;
                     } else {
                         let mut c = 0usize;
-                        while c < NUM_SWARM_MICRO_CELLS {
+                        while c < NUM_STIGMERGIC_GRANULES {
                             next_words[c] = branchless_select_u64(
                                 ((active_cell_mask >> c) & 1) != 0,
                                 stepped_w0,
@@ -956,7 +947,7 @@ impl gcso_pointer_trail_t {
             | branchless_select_u32(skip_on, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, 0);
 
         (
-            SwarmResolutionReport {
+            StigmergicReconstitutionReport {
                 evolved_ptr,
                 stigmergic_delta_density: delta_rho,
                 quorum_mask,
@@ -972,9 +963,9 @@ impl gcso_pointer_trail_t {
     fn recruit_single_anchor_stragglers_cold(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,
-        report: &mut SwarmResolutionReport,
-        next_words: &mut [u64; NUM_SWARM_MICRO_CELLS],
-        tgt_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        report: &mut StigmergicReconstitutionReport,
+        next_words: &mut [u64; NUM_STIGMERGIC_GRANULES],
+        tgt_w: &[u64; NUM_STIGMERGIC_GRANULES],
         total_pull: f32,
         step_gain_u7: u8,
         qdps_min_step_q7: u8,
@@ -1062,8 +1053,8 @@ impl gcso_pointer_trail_t {
     fn recruit_multi_anchor_stragglers_cold(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,
-        report: &mut SwarmResolutionReport,
-        next_words: &mut [u64; NUM_SWARM_MICRO_CELLS],
+        report: &mut StigmergicReconstitutionReport,
+        next_words: &mut [u64; NUM_STIGMERGIC_GRANULES],
         donor_anchor: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         total_pull: f32,
         step_gain_u7: u8,
@@ -1094,10 +1085,10 @@ impl gcso_pointer_trail_t {
         &mut self,
         action_ptr: gcso_tagged_ptr_t,
         slot_id: usize,
-        orig_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        target_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        report: &mut SwarmResolutionReport,
-        next_words: &mut [u64; NUM_SWARM_MICRO_CELLS],
+        orig_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        target_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        report: &mut StigmergicReconstitutionReport,
+        next_words: &mut [u64; NUM_STIGMERGIC_GRANULES],
         slot_phase_bank: &[[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS],
         slot_weights: &[f32; MAX_ATTRACTOR_DOMAINS],
         coupling_matrix_8x8: u64,
@@ -1118,7 +1109,7 @@ impl gcso_pointer_trail_t {
         while unresolved != 0 {
             let cell = unresolved.trailing_zeros() as usize;
             unresolved &= unresolved - 1;
-            let base = cell * HEADS_PER_SWARM_CELL;
+            let base = cell * HEADS_PER_STIGMERGIC_GRANULE;
             let slot_coupled = ((coupled_row >> cell) & 1) != 0;
             let slot_w = branchless_relu_f32(slot_weights[cell]);
             let use_neighbor = slot_coupled & (slot_w > 1.0e-6);
@@ -1196,16 +1187,16 @@ impl gcso_pointer_trail_t {
     }
 }
 
-impl StigmergicSwarmOps for gcso_pointer_trail_t {
+impl StigmergicReconstitutionOps for gcso_pointer_trail_t {
     #[inline(always)]
     fn extract_subswarm_word(&self, cell_idx: usize) -> u64 {
-        let safe_cell = cell_idx & (NUM_SWARM_MICRO_CELLS - 1);
+        let safe_cell = cell_idx & (NUM_STIGMERGIC_GRANULES - 1);
         trail_phase_words_ref(self)[safe_cell]
     }
 
     #[inline(always)]
     fn write_subswarm_word(&mut self, cell_idx: usize, word: u64) {
-        let safe_cell = cell_idx & (NUM_SWARM_MICRO_CELLS - 1);
+        let safe_cell = cell_idx & (NUM_STIGMERGIC_GRANULES - 1);
         trail_phase_words_mut(self)[safe_cell] = word;
     }
 
@@ -1213,7 +1204,7 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
     fn try_resolve_action_in_swarm_from_words(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,
-        target_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        target_words: &[u64; NUM_STIGMERGIC_GRANULES],
         active_cell_mask: u8,
         step_gain_u7: u8,
         qdps_min_step_q7: u8,
@@ -1224,7 +1215,7 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
-    ) -> (SwarmResolutionReport, [u64; NUM_SWARM_MICRO_CELLS]) {
+    ) -> (StigmergicReconstitutionReport, [u64; NUM_STIGMERGIC_GRANULES]) {
         let cur_w = *trail_phase_words_ref(self);
         self.try_resolve_action_in_swarm_with_cur_words(
             action_ptr,
@@ -1273,7 +1264,7 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
             while unresolved != 0 {
                 let cell = unresolved.trailing_zeros() as usize;
                 unresolved &= unresolved - 1;
-                let base = cell * HEADS_PER_SWARM_CELL;
+                let base = cell * HEADS_PER_STIGMERGIC_GRANULE;
                 let cur_w = self_w[cell];
                 let donor_w = load_q7_word_at(donor_phases, base);
                 let (candidate_w, _res, cell_resolved) = swar_subswarm_resolve_with_bias_x8(
@@ -1391,7 +1382,7 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
             while unresolved != 0 {
                 let cell = unresolved.trailing_zeros() as usize;
                 unresolved &= unresolved - 1;
-                let base = cell * HEADS_PER_SWARM_CELL;
+                let base = cell * HEADS_PER_STIGMERGIC_GRANULE;
                 let cur_w = self_w[cell];
                 let slot_coupled = ((coupled_row >> cell) & 1) != 0;
                 let slot_w = branchless_relu_f32(slot_weights[cell]);
@@ -1485,7 +1476,7 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
-    ) -> (SwarmResolutionReport, [u64; NUM_SWARM_MICRO_CELLS]) {
+    ) -> (StigmergicReconstitutionReport, [u64; NUM_STIGMERGIC_GRANULES]) {
         let count = anchor_phases.len().min(anchor_base_energies.len());
         let cur_w = *trail_phase_words_ref(self);
 
@@ -1496,11 +1487,11 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
             let tw = if has_active {
                 load_q7_words_64(&anchor_phases[0])
             } else {
-                [0u64; NUM_SWARM_MICRO_CELLS]
+                [0u64; NUM_STIGMERGIC_GRANULES]
             };
             (tw, clean_e, 0u32, has_active)
         } else if count == 0 {
-            ([0u64; NUM_SWARM_MICRO_CELLS], 0.0, 0u32, false)
+            ([0u64; NUM_STIGMERGIC_GRANULES], 0.0, 0u32, false)
         } else {
             let (tw, tp, _mc, did, ac) = branchless_q7_unified_field_fold_words_with_init_weight_64(
                 &cur_w,
@@ -1576,7 +1567,7 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
-    ) -> (SwarmResolutionReport, [u64; NUM_SWARM_MICRO_CELLS]) {
+    ) -> (StigmergicReconstitutionReport, [u64; NUM_STIGMERGIC_GRANULES]) {
         let orig_words = *trail_phase_words_ref(self);
         let slot_id = usize::from(action_ptr.target_attractor_slot() & ATTRACTOR_SLOT_ID_MASK);
         let target_words = load_q7_words_64(&slot_phase_bank[slot_id]);
@@ -1632,7 +1623,7 @@ impl StigmergicSwarmOps for gcso_pointer_trail_t {
         let peer_w = trail_phase_words_ref(peer_trail);
         let self_w = trail_phase_words_mut(self);
         let mut cell = 0usize;
-        while cell < NUM_SWARM_MICRO_CELLS {
+        while cell < NUM_STIGMERGIC_GRANULES {
             let s_ok = ((self_quorum >> cell) & 1) != 0;
             let p_ok = ((peer_quorum >> cell) & 1) != 0;
             let s_w = self_w[cell];

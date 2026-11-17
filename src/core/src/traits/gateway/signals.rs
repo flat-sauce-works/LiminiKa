@@ -84,10 +84,10 @@ pub(super) const fn swar_clamp_q7_min_to_neg127_x8(w: u64) -> u64 {
 /// (`[u64; 8]` representing 64 `gcso_q7_t` heads) using 8-byte SplitMix64 mixing and `-128 -> -127` clamping.
 #[inline]
 #[must_use]
-pub const fn project_bytes_swar_to_words_64(bytes: &[u8]) -> [u64; NUM_SWARM_MICRO_CELLS] {
+pub const fn project_bytes_swar_to_words_64(bytes: &[u8]) -> [u64; NUM_STIGMERGIC_GRANULES] {
     let len = bytes.len();
     if len == 0 {
-        return [0u64; NUM_SWARM_MICRO_CELLS];
+        return [0u64; NUM_STIGMERGIC_GRANULES];
     }
     let mut seed = (len as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let mut i = 0usize;
@@ -115,9 +115,9 @@ pub const fn project_bytes_swar_to_words_64(bytes: &[u8]) -> [u64; NUM_SWARM_MIC
         }
         seed = branchless_splitmix64(seed ^ tail);
     }
-    let mut words = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut words = [0u64; NUM_STIGMERGIC_GRANULES];
     let mut cell = 0usize;
-    while cell < NUM_SWARM_MICRO_CELLS {
+    while cell < NUM_STIGMERGIC_GRANULES {
         let mixed = branchless_splitmix64(
             seed.wrapping_add((cell as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)),
         );
@@ -140,15 +140,15 @@ pub const fn project_bytes_swar_to_q7_64(bytes: &[u8]) -> [gcso_q7_t; MAX_ATTENT
 /// 64-byte stack array roundtrip when synthesizing `ObjectiveFact<&[f32]>` or `SubjectivePersona<&[f32]>`.
 #[inline]
 #[must_use]
-pub fn project_f32_slice_to_words_64(values: &[f32]) -> [u64; NUM_SWARM_MICRO_CELLS] {
+pub fn project_f32_slice_to_words_64(values: &[f32]) -> [u64; NUM_STIGMERGIC_GRANULES] {
     let n = values.len();
     if n == 0 {
-        return [0u64; NUM_SWARM_MICRO_CELLS];
+        return [0u64; NUM_STIGMERGIC_GRANULES];
     }
-    let mut words = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut words = [0u64; NUM_STIGMERGIC_GRANULES];
     if n >= 128 {
         let mut cell = 0usize;
-        while cell < NUM_SWARM_MICRO_CELLS {
+        while cell < NUM_STIGMERGIC_GRANULES {
             let base_i = cell << 4;
             words[cell] = atan2_interleaved_pairs_to_q7_word_x8_simd(&values[base_i..base_i + 16]);
             cell += 1;
@@ -158,13 +158,13 @@ pub fn project_f32_slice_to_words_64(values: &[f32]) -> [u64; NUM_SWARM_MICRO_CE
     if (n >= 2) & ((n & (n - 1)) == 0) {
         if n == 2 {
             let b0 = branchless_atan2_to_q7_fast(values[1], values[0]) as u8;
-            return [(b0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64); NUM_SWARM_MICRO_CELLS];
+            return [(b0 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64); NUM_STIGMERGIC_GRANULES];
         }
         if n == 4 {
             let b0 = branchless_atan2_to_q7_fast(values[1], values[0]) as u8 as u64;
             let b1 = branchless_atan2_to_q7_fast(values[3], values[2]) as u8 as u64;
             let pair16 = b0 | (b1 << 8);
-            return [pair16.wrapping_mul(0x0001_0001_0001_0001); NUM_SWARM_MICRO_CELLS];
+            return [pair16.wrapping_mul(0x0001_0001_0001_0001); NUM_STIGMERGIC_GRANULES];
         }
         if n == 8 {
             let b0 = branchless_atan2_to_q7_fast(values[1], values[0]) as u8 as u64;
@@ -172,16 +172,16 @@ pub fn project_f32_slice_to_words_64(values: &[f32]) -> [u64; NUM_SWARM_MICRO_CE
             let b2 = branchless_atan2_to_q7_fast(values[5], values[4]) as u8 as u64;
             let b3 = branchless_atan2_to_q7_fast(values[7], values[6]) as u8 as u64;
             let quad32 = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
-            return [quad32 | (quad32 << 32); NUM_SWARM_MICRO_CELLS];
+            return [quad32 | (quad32 << 32); NUM_STIGMERGIC_GRANULES];
         }
         if n == 16 {
             let w0 = atan2_interleaved_pairs_to_q7_word_x8_simd(&values[..16]);
-            return [w0; NUM_SWARM_MICRO_CELLS];
+            return [w0; NUM_STIGMERGIC_GRANULES];
         }
         let unique_cells = branchless_select_usize(
-            (n >> 4) < NUM_SWARM_MICRO_CELLS,
+            (n >> 4) < NUM_STIGMERGIC_GRANULES,
             n >> 4,
-            NUM_SWARM_MICRO_CELLS,
+            NUM_STIGMERGIC_GRANULES,
         );
         let mut cell = 0usize;
         while cell < unique_cells {
@@ -189,14 +189,14 @@ pub fn project_f32_slice_to_words_64(values: &[f32]) -> [u64; NUM_SWARM_MICRO_CE
             words[cell] = atan2_interleaved_pairs_to_q7_word_x8_simd(&values[base_i..base_i + 16]);
             cell += 1;
         }
-        while cell < NUM_SWARM_MICRO_CELLS {
+        while cell < NUM_STIGMERGIC_GRANULES {
             words[cell] = words[cell & (unique_cells - 1)];
             cell += 1;
         }
         return words;
     }
     let mut cell = 0usize;
-    while cell < NUM_SWARM_MICRO_CELLS {
+    while cell < NUM_STIGMERGIC_GRANULES {
         let base_h = cell << 3;
         let sin_arr = [
             values[((base_h) << 1 | 1) % n],
@@ -287,11 +287,11 @@ pub(crate) fn compute_aligned64_payload_crc32_ieee(bytes: &[u8]) -> u32 {
 #[inline(always)]
 #[must_use]
 pub(crate) const fn words_to_q7_array_64(
-    words: &[u64; NUM_SWARM_MICRO_CELLS],
+    words: &[u64; NUM_STIGMERGIC_GRANULES],
 ) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
     // SAFETY: `[u64; 8]` and `[i8; 64]` have identical size (64 bytes) and Pod bit validity.
     unsafe {
-        core::mem::transmute::<[u64; NUM_SWARM_MICRO_CELLS], [gcso_q7_t; MAX_ATTENTION_HEADS]>(
+        core::mem::transmute::<[u64; NUM_STIGMERGIC_GRANULES], [gcso_q7_t; MAX_ATTENTION_HEADS]>(
             *words,
         )
     }
@@ -299,7 +299,7 @@ pub(crate) const fn words_to_q7_array_64(
 
 #[inline(always)]
 #[must_use]
-pub(crate) const fn fast_mean_q7_tag_from_words_64(words: &[u64; NUM_SWARM_MICRO_CELLS]) -> gcso_q7_t {
+pub(crate) const fn fast_mean_q7_tag_from_words_64(words: &[u64; NUM_STIGMERGIC_GRANULES]) -> gcso_q7_t {
     let raw = swar_q7_mean_i8_from_words_64(words);
     branchless_select_i8(raw == -128, -127, raw)
 }
@@ -311,7 +311,7 @@ pub trait RawPhaseProjectable: BranchlessKernel {
 
     /// Projects `self` directly into 8 register-resident `u64` SWAR words (`[u64; 8]`).
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         load_q7_words_64(&self.project_to_q7_64())
     }
 }
@@ -322,8 +322,8 @@ impl RawPhaseProjectable for () {
         [0i8; MAX_ATTENTION_HEADS]
     }
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
-        [0u64; NUM_SWARM_MICRO_CELLS]
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
+        [0u64; NUM_STIGMERGIC_GRANULES]
     }
 }
 
@@ -333,7 +333,7 @@ impl RawPhaseProjectable for [gcso_q7_t; MAX_ATTENTION_HEADS] {
         *self
     }
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         load_q7_words_64(self)
     }
 }
@@ -344,7 +344,7 @@ impl RawPhaseProjectable for [u8] {
         project_bytes_swar_to_q7_64(self)
     }
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         project_bytes_swar_to_words_64(self)
     }
 }
@@ -355,7 +355,7 @@ impl<const N: usize> RawPhaseProjectable for [u8; N] {
         project_bytes_swar_to_q7_64(self.as_slice())
     }
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         project_bytes_swar_to_words_64(self.as_slice())
     }
 }
@@ -366,7 +366,7 @@ impl RawPhaseProjectable for str {
         project_bytes_swar_to_q7_64(self.as_bytes())
     }
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         project_bytes_swar_to_words_64(self.as_bytes())
     }
 }
@@ -377,7 +377,7 @@ impl RawPhaseProjectable for &str {
         project_bytes_swar_to_q7_64(self.as_bytes())
     }
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         project_bytes_swar_to_words_64(self.as_bytes())
     }
 }
@@ -388,7 +388,7 @@ impl RawPhaseProjectable for &[u8] {
         project_bytes_swar_to_q7_64(self)
     }
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         project_bytes_swar_to_words_64(self)
     }
 }
@@ -399,7 +399,7 @@ impl RawPhaseProjectable for [f32] {
         project_f32_slice_to_q7_64(self)
     }
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         project_f32_slice_to_words_64(self)
     }
 }
@@ -410,7 +410,7 @@ impl RawPhaseProjectable for &[f32] {
         project_f32_slice_to_q7_64(self)
     }
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         project_f32_slice_to_words_64(self)
     }
 }
@@ -421,7 +421,7 @@ impl<const N: usize> RawPhaseProjectable for [f32; N] {
         project_f32_slice_to_q7_64(self.as_slice())
     }
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         project_f32_slice_to_words_64(self.as_slice())
     }
 }
@@ -432,7 +432,7 @@ impl<'a, const ALIGN: usize> RawPhaseProjectable for AlignedSlice<'a, f32, ALIGN
         project_f32_slice_to_q7_64(self.as_slice())
     }
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         project_f32_slice_to_words_64(self.as_slice())
     }
 }
@@ -443,7 +443,7 @@ impl<'a, const ALIGN: usize> RawPhaseProjectable for AlignedSlice<'a, u8, ALIGN>
         project_bytes_swar_to_q7_64(self.as_slice())
     }
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         project_bytes_swar_to_words_64(self.as_slice())
     }
 }
@@ -461,7 +461,7 @@ impl<'a, const ALIGN: usize> RawPhaseProjectable for AlignedSlice<'a, gcso_q7_t,
         }
     }
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         let s = self.as_slice();
         if s.len() >= MAX_ATTENTION_HEADS {
             // SAFETY: `s.len() >= 64` and `gcso_q7_t` has alignment 1.
@@ -479,7 +479,7 @@ impl RawPhaseProjectable for gcso_pointer_trail_t {
         self.accumulated_phase_delta
     }
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         *trail_phase_words_ref(self)
     }
 }
@@ -490,7 +490,7 @@ impl RawPhaseProjectable for GatewayFrame {
         self.phase_deltas
     }
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         *self.phase_words_ref()
     }
 }
@@ -501,7 +501,7 @@ impl RawPhaseProjectable for CrystallizedAttractorRecord {
         self.phase_profile
     }
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         *self.phase_words_ref()
     }
 }
@@ -558,9 +558,9 @@ impl CausalProvenanceReport {
     }
 }
 
-/// Root causal signal supertrait refining [`LiminalVoid`] into a finite 4-axis causal window
+/// Root causal signal supertrait refining [`Liminal`] into a finite 4-axis causal window
 /// for all signals entering the GCSO Manifold Gateway.
-pub trait CausalProvenanceSignal: LiminalVoid + BranchlessKernel {
+pub trait CausalProvenanceSignal: Liminal + BranchlessKernel {
     /// Static causal provenance cognitive aperture across system and grounding origins (`0x0000_000F`).
     const CAUSAL_APERTURE_MASK: u32 = APERTURE_CAUSAL_PROVENANCE;
 
@@ -904,7 +904,7 @@ pub trait StigmergicThresholdPolicy {
         trail: &gcso_pointer_trail_t,
         entropy_h_tilde: f32,
         circuit: Option<&CognitiveTrajectoryLedger>,
-        scale: SwarmScaleGranularity,
+        scale: StigmergicScaleGranularity,
     ) -> StigmergicThresholds {
         let base = self.resolve_thresholds(system, probe, trail, entropy_h_tilde);
         match circuit {
@@ -934,7 +934,7 @@ impl<T: StigmergicThresholdPolicy + ?Sized> StigmergicThresholdPolicy for &T {
         trail: &gcso_pointer_trail_t,
         entropy_h_tilde: f32,
         circuit: Option<&CognitiveTrajectoryLedger>,
-        scale: SwarmScaleGranularity,
+        scale: StigmergicScaleGranularity,
     ) -> StigmergicThresholds {
         (**self).resolve_thresholds_with_circuit(
             system,
@@ -1229,7 +1229,7 @@ pub trait CognitiveGroundingSignal: CausalProvenanceSignal {
 
     /// Projects this grounding signal directly into 8 register-resident `u64` SWAR words (`[u64; 8]`).
     #[inline(always)]
-    fn project_grounding_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_grounding_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         match self.grounding_phases_ref_64() {
             Some(arr_ref) => load_q7_words_64(arr_ref),
             None => load_q7_words_64(&self.project_grounding_phases_64()),
@@ -1260,7 +1260,7 @@ pub trait CognitiveGroundingSignal: CausalProvenanceSignal {
     /// Single-pass grounding envelope `(phase_words, base_energy, zimms_offset48, anchor_id, active_heads)`
     /// avoiding redundant slice folds on composite or resonant signals.
     #[inline(always)]
-    fn synthesize_grounding_envelope(&self) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, u64, u32, u16) {
+    fn synthesize_grounding_envelope(&self) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, u64, u32, u16) {
         (
             self.project_grounding_words_64(),
             self.grounding_base_energy(),
@@ -1281,7 +1281,7 @@ impl<T: CognitiveGroundingSignal + ?Sized> CognitiveGroundingSignal for &T {
         (**self).grounding_phases_ref_64()
     }
     #[inline(always)]
-    fn project_grounding_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_grounding_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         (**self).project_grounding_words_64()
     }
     #[inline(always)]
@@ -1301,7 +1301,7 @@ impl<T: CognitiveGroundingSignal + ?Sized> CognitiveGroundingSignal for &T {
         (**self).active_head_count()
     }
     #[inline(always)]
-    fn synthesize_grounding_envelope(&self) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, u64, u32, u16) {
+    fn synthesize_grounding_envelope(&self) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, u64, u32, u16) {
         (**self).synthesize_grounding_envelope()
     }
 }
@@ -1392,7 +1392,7 @@ pub trait ContradictionGuardSignal: CognitiveGroundingSignal {
     #[inline(always)]
     fn evaluate_repulsion_severity_from_words(
         &self,
-        candidate_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
         candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let _ = candidate_words;
@@ -1419,7 +1419,7 @@ impl<T: ContradictionGuardSignal + ?Sized> ContradictionGuardSignal for &T {
     #[inline(always)]
     fn evaluate_repulsion_severity_from_words(
         &self,
-        candidate_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
         candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> f32 {
         (**self).evaluate_repulsion_severity_from_words(candidate_words, candidate_phases)
@@ -1488,7 +1488,7 @@ impl<T: RawPhaseProjectable> CognitiveGroundingSignal for ObjectiveFact<T> {
         self.payload.project_to_q7_64()
     }
     #[inline(always)]
-    fn project_grounding_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_grounding_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         self.payload.project_to_words_64()
     }
     #[inline(always)]
@@ -1563,7 +1563,7 @@ impl<T: RawPhaseProjectable> CognitiveGroundingSignal for SubjectivePersona<T> {
         self.payload.project_to_q7_64()
     }
     #[inline(always)]
-    fn project_grounding_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_grounding_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         self.payload.project_to_words_64()
     }
     #[inline(always)]
@@ -1666,8 +1666,8 @@ impl<B: BranchlessKernel> CognitiveGroundingSignal for ContradictionGuard<B> {
         [0i8; MAX_ATTENTION_HEADS]
     }
     #[inline(always)]
-    fn project_grounding_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
-        [0u64; NUM_SWARM_MICRO_CELLS]
+    fn project_grounding_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
+        [0u64; NUM_STIGMERGIC_GRANULES]
     }
     #[inline(always)]
     fn grounding_base_energy(&self) -> f32 {
@@ -1688,7 +1688,7 @@ impl ContradictionGuardSignal for ContradictionGuard<ContrastivePhaseBloomFilter
     #[inline(always)]
     fn evaluate_repulsion_severity_from_words(
         &self,
-        candidate_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
         _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let obs_exceeded = self.cohomology_obstruction > self.obstruction_threshold;
@@ -1741,7 +1741,7 @@ impl ContradictionGuardSignal for ContradictionGuard<()> {
     #[inline(always)]
     fn evaluate_repulsion_severity_from_words(
         &self,
-        _candidate_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        _candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
         _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let obs_exceeded = self.cohomology_obstruction > self.obstruction_threshold;
@@ -1819,7 +1819,7 @@ impl CognitiveGroundingSignal for GuardPhaseAnchor {
     }
 
     #[inline(always)]
-    fn project_grounding_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_grounding_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         self.phase_deltas.project_to_words_64()
     }
 
@@ -1850,7 +1850,7 @@ impl ContradictionGuardSignal for GuardPhaseAnchor {
     #[inline(always)]
     fn evaluate_repulsion_severity_from_words(
         &self,
-        _candidate_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        _candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
         _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let obs_exceeded = self.cohomology_obstruction > self.obstruction_threshold;
@@ -1884,8 +1884,8 @@ impl CognitiveGroundingSignal for ContrastivePhaseBloomFilter {
         [0i8; MAX_ATTENTION_HEADS]
     }
     #[inline(always)]
-    fn project_grounding_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
-        [0u64; NUM_SWARM_MICRO_CELLS]
+    fn project_grounding_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
+        [0u64; NUM_STIGMERGIC_GRANULES]
     }
     #[inline(always)]
     fn grounding_base_energy(&self) -> f32 {
@@ -1905,7 +1905,7 @@ impl ContradictionGuardSignal for ContrastivePhaseBloomFilter {
     #[inline(always)]
     fn evaluate_repulsion_severity_from_words(
         &self,
-        candidate_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
         _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let density = self.query_repulsive_density_from_words(candidate_words);

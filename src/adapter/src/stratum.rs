@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Hierarchical Society-of-Mind strata (`n - 1 <-> n <-> n + 1`) built over [`liminika_core`]
-//! `ActionHub` and role-scoped `LiminalVoid` boundary geometry.
+//! `ActionHub` and role-scoped `Liminal` boundary geometry.
 //!
 //! Each [`SocietyStratum`] operates only on signals exposed by adjacent layers, allowing dynamic
 //! insertion, removal, or replacement via [`StratumPipeline`] without coupling lower feature
@@ -22,11 +22,11 @@ use liminika_core::traits::gateway::{
     ActionHubScaleOrchestrator, AdaptiveThresholdPolicy, CausalProvenanceReport,
     CognitiveCircuitActivation, CognitiveCircuitThresholdPolicy, CognitiveOpKind, CognitiveStepOp,
     CognitiveTrajectoryLedger, GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal,
-    ObjectiveFact, ScaleLayerNode, SubjectivePersona, SwarmScaleGranularity,
+    ObjectiveFact, ScaleLayerNode, StigmergicScaleGranularity, SubjectivePersona,
 };
 use liminika_core::traits::primitives::{load_q7_words_64, GcsoResult, MAX_ATTENTION_HEADS};
 use liminika_core::traits::telemetry::{
-    StigmergicSwarmOps, SwarmResolutionReport, NUM_SWARM_MICRO_CELLS,
+    StigmergicReconstitutionOps, StigmergicReconstitutionReport, NUM_STIGMERGIC_GRANULES,
 };
 
 /// Uncollapsed per-query-token resonance observation deposited into stigmergic swarm trails.
@@ -38,7 +38,7 @@ pub struct TokenResonanceDeposit {
     pub entry_excess: Vec<f32>,
     /// Pre-baked 64-head Q7 phase words (`[u64; 8]`) for 8-cell Micro-Swarm evaluation at the
     /// final active RoPE layer.
-    pub token_phase_words: [u64; NUM_SWARM_MICRO_CELLS],
+    pub token_phase_words: [u64; NUM_STIGMERGIC_GRANULES],
 }
 
 /// Uncollapsed local multi-token channel observation passed into [`TextAttractorCorpus`].
@@ -115,7 +115,7 @@ pub struct StratumProbeTelemetry {
 /// Bottom-up and top-down signal flowing across a Society-of-Mind [`StratumPipeline`].
 ///
 /// Lower strata (`n - 1`) populate local features and stigmergic pointer weights without needing
-/// global semantic awareness, while upper strata (`n + 1`) arbitrate `LiminalVoid` boundaries, Guard
+/// global semantic awareness, while upper strata (`n + 1`) arbitrate `Liminal` boundaries, Guard
 /// conflicts, and `ActionHub` regimes.
 #[derive(Debug, Clone)]
 pub struct StratumSignal {
@@ -134,20 +134,20 @@ pub struct StratumSignal {
     pub linked_fact_indices: Vec<(usize, f32)>,
     /// True when [`ActionHubEngine`] interpretive decomposition linked disjoint Fact sub-basins.
     pub decomposition_triggered: bool,
-    /// Per-attractor local `LiminalVoid` gap depth (`0.0` = deep inside basin).
+    /// Per-attractor local `Liminal` gap depth (`0.0` = deep inside basin).
     pub local_void_depths: Vec<f32>,
     /// Per-attractor stigmergic pointer trace / pheromone strength (`>= 0.0`).
     pub stigmergic_weights: Vec<f32>,
     /// Aggregated boundary metrics observed at the upper boundary stratum.
     pub boundary_metrics: RecallBoundaryMetrics,
-    /// Boundary gate decision (`InsideBasin`, `LiminalBoundary`, or `LiminalVoid`).
+    /// Boundary gate decision (`InsideBasin`, `LiminalBoundary`, or `Liminal`).
     pub gate_decision: RecallGateDecision,
     /// `ActionHub` regime chosen for top-down orchestration.
     pub action_decision: StigmergicActionDecision,
     /// Synthesized 128-byte core [`GatewayFrame`] serving as the universal arbitration gate.
     pub gateway_frame: GatewayFrame,
     /// 8-cell Micro-Swarm consensus report between global and local phase channels.
-    pub swarm_report: SwarmResolutionReport,
+    pub swarm_report: StigmergicReconstitutionReport,
     /// True when the local multi-token channel exhibits sharper unimodal support than global pooling.
     pub local_channel_preferred: bool,
     /// Cross-channel probe telemetry and core [`CausalProvenanceReport`].
@@ -157,13 +157,13 @@ pub struct StratumSignal {
 /// Top-down directive sent from stratum `n + 1` down to `n` and `n - 1` after upward inference.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StratumDirective {
-    /// Whether injection should be suppressed (`LiminalVoid` or Guard repulsion).
+    /// Whether injection should be suppressed (`Liminal` or Guard repulsion).
     pub suppress_injection: bool,
     /// Whether active Guard repulsion (`RepulsionEscape`) was triggered.
     pub repulse_guard: bool,
     /// Top-down gain multiplier (`0.0` when skipped/repulsed, `< 1.0` on liminal boundary, `>= 1.0` inside basin).
     pub top_down_gain: f32,
-    /// Minimum local `LiminalVoid` depth observed across the stack.
+    /// Minimum local `Liminal` depth observed across the stack.
     pub min_local_void_depth: f32,
 }
 
@@ -496,7 +496,7 @@ impl SocietyStratum for HeadAngleWorkerStratum {
 }
 
 /// Stratum 1 (`n = 1`): evaluates role-scoped local neighborhood baselines and perspective-dependent
-/// `LiminalVoid` depths via an [`AttractorVoidPerspective`] trait object.
+/// `Liminal` depths via an [`AttractorVoidPerspective`] trait object.
 pub struct PerspectiveDominoStratum<'a> {
     /// Perspective evaluator measuring `perspective_affinity` and `local_void_depth`.
     pub perspective: &'a dyn AttractorVoidPerspective,
@@ -665,9 +665,10 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
 
         let repulsed = repulsed_by_guard || frame.is_repulsed();
         let has_active_persona = top1_persona_score >= persona_floor;
-        let is_total_liminal_void = matches!(decision.void_state, VoidBoundaryState::LiminalVoid)
-            && !has_active_persona
-            && !repulsed;
+        let is_total_liminal_void =
+            matches!(decision.void_state, VoidBoundaryState::LiminalExterior)
+                && !has_active_persona
+                && !repulsed;
 
         let fact_margin = (top1_fact_score - top2_fact_score).max(0.0);
         let margin_ratio = (fact_margin / ctx.policy.boundary_margin.max(0.01)).clamp(0.0, 3.0);
@@ -697,7 +698,7 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
             || signal.decomposition_triggered
             || (channel_disagreement && partial_swarm_consensus)
             || (circuit_peel_active
-                && !matches!(decision.void_state, VoidBoundaryState::LiminalVoid))
+                && !matches!(decision.void_state, VoidBoundaryState::LiminalExterior))
         {
             // Bifurcated, local-sharpened, or circuit-peel-biased channel triggers sub-head routing.
             (
@@ -706,7 +707,7 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
                     .max(frame.effective_energy.min(1.35)),
                 0.65_f32,
             )
-        } else if matches!(decision.void_state, VoidBoundaryState::LiminalVoid)
+        } else if matches!(decision.void_state, VoidBoundaryState::LiminalExterior)
             && has_active_persona
         {
             // Persona-only active grounding outside factual basins uses lightweight ExpressPhaseSteer.
@@ -763,13 +764,13 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
         boundary_trail
             .copy_from_with_words_fast(&gcso_pointer_trail_t::default(), frame.phase_words_ref());
         let scale_stack = [
-            ScaleLayerNode::new(frame, SwarmScaleGranularity::TypeGateway),
+            ScaleLayerNode::new(frame, StigmergicScaleGranularity::TypeGateway),
             ScaleLayerNode::new(
                 signal
                     .telemetry
                     .cognitive_trajectory
                     .synthesize_gateway_frame(),
-                SwarmScaleGranularity::MacroCoalition,
+                StigmergicScaleGranularity::MacroCoalition,
             ),
         ];
         if let Ok((proj, mut ledger, _rep)) = boundary_hub.orchestrate_adaptive_depth_n(
@@ -800,7 +801,7 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
             };
             let intensity = (proj.activation.intensity_q7 >> 4).clamp(1, 7);
             ledger.push_step(CognitiveStepOp::pack(
-                SwarmScaleGranularity::MacroCoalition,
+                StigmergicScaleGranularity::MacroCoalition,
                 final_op,
                 intensity,
             ));
@@ -958,12 +959,12 @@ pub trait StigmergicCoalitionDecomposer: Send + Sync {
 /// Default [`StigmergicCoalitionDecomposer`] applying symmetric Partition-of-Unity lateral
 /// inhibition across token profiles and iterative residual peeling up to `max_coalition_hops`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ResidualPeelingSwarmDecomposer {
+pub struct ResidualPeelingStigmergicDecomposer {
     /// Maximum number of Fact trails linked into a single decomposed pointer chain (`>= 2`).
     pub max_coalition_hops: usize,
 }
 
-impl Default for ResidualPeelingSwarmDecomposer {
+impl Default for ResidualPeelingStigmergicDecomposer {
     fn default() -> Self {
         Self {
             max_coalition_hops: 3,
@@ -973,20 +974,20 @@ impl Default for ResidualPeelingSwarmDecomposer {
 
 /// Stratum 0.75: multi-token late-interaction resonance stratum arbitrating global pooled
 /// resonance against `local_token_scores` via statistical unimodality, 8-cell Micro-Swarm
-/// phase consensus (`StigmergicSwarmOps`), and [`StigmergicCoalitionDecomposer`].
+/// phase consensus (`StigmergicReconstitutionOps`), and [`StigmergicCoalitionDecomposer`].
 #[derive(Debug, Clone, Copy)]
 pub struct LocalTokenResonanceStratum {
     /// Gain applied when promoting non-negative local contrast under sharper local unimodality.
     pub token_contrast_gain: f32,
     /// Stigmergic decomposer building multi-hop Fact coalitions on residual token fields.
-    pub decomposer: ResidualPeelingSwarmDecomposer,
+    pub decomposer: ResidualPeelingStigmergicDecomposer,
 }
 
 impl Default for LocalTokenResonanceStratum {
     fn default() -> Self {
         Self {
             token_contrast_gain: 0.45,
-            decomposer: ResidualPeelingSwarmDecomposer::default(),
+            decomposer: ResidualPeelingStigmergicDecomposer::default(),
         }
     }
 }
@@ -1028,7 +1029,7 @@ impl LocalTokenResonanceStratum {
         g_idx: usize,
         l_idx: usize,
         last_layer: usize,
-    ) -> SwarmResolutionReport {
+    ) -> StigmergicReconstitutionReport {
         let g_q7 = entries[g_idx]
             .per_layer_q7
             .get(last_layer)
@@ -1159,7 +1160,7 @@ impl LocalTokenResonanceStratum {
                     3,
                     96,
                 );
-                let consensus = (rep.resolved_cell_count as f32) / (NUM_SWARM_MICRO_CELLS as f32);
+                let consensus = (rep.resolved_cell_count as f32) / (NUM_STIGMERGIC_GRANULES as f32);
                 let bloom_repulsed = rep.stigmergic_delta_density < 0.0;
                 if bloom_repulsed {
                     bloom_repulsions[slot] += 1;
@@ -1333,7 +1334,7 @@ fn evaluate_role_coalition_pair(
     ))
 }
 
-impl StigmergicCoalitionDecomposer for ResidualPeelingSwarmDecomposer {
+impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
     /// Evaluates multi-hop residual-peeling set cover over Fact trails when multiple specialized
     /// attractors jointly explain distinct query tokens that single global pooling collapses.
     fn decompose_fact_coalition(
@@ -1630,7 +1631,7 @@ impl SocietyStratum for LocalTokenResonanceStratum {
         };
         if !signal.token_deposits.is_empty() {
             ledger.push_step(CognitiveStepOp::pack(
-                SwarmScaleGranularity::PointerBit,
+                StigmergicScaleGranularity::PointerBit,
                 CognitiveOpKind::Observe,
                 (signal.token_deposits.len().min(7)) as u8,
             ));
@@ -1655,10 +1656,10 @@ impl SocietyStratum for LocalTokenResonanceStratum {
         let cell_activation = ledger.evaluate_circuit_activation(
             &g_words,
             &l_words,
-            SwarmScaleGranularity::CellTrail,
+            StigmergicScaleGranularity::CellTrail,
         );
         ledger.push_step(CognitiveStepOp::pack(
-            SwarmScaleGranularity::CellTrail,
+            StigmergicScaleGranularity::CellTrail,
             if g_idx != l_idx {
                 CognitiveOpKind::BridgeShift
             } else {
@@ -1690,7 +1691,7 @@ impl SocietyStratum for LocalTokenResonanceStratum {
         );
         if signal.decomposition_triggered {
             ledger.push_step(CognitiveStepOp::pack(
-                SwarmScaleGranularity::MacroCoalition,
+                StigmergicScaleGranularity::MacroCoalition,
                 CognitiveOpKind::DecomposePeel,
                 (signal.linked_fact_indices.len().min(7)) as u8,
             ));

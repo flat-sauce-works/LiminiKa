@@ -114,20 +114,20 @@ impl GatewayFrame {
     /// guaranteed 64-byte aligned by `#[repr(C, align(64))]`) as 8 native `u64` SWAR words (`&[u64; 8]`).
     #[inline(always)]
     #[must_use]
-    pub const fn phase_words_ref(&self) -> &[u64; NUM_SWARM_MICRO_CELLS] {
+    pub const fn phase_words_ref(&self) -> &[u64; NUM_STIGMERGIC_GRANULES] {
         // SAFETY: `GatewayFrame` is `#[repr(C, align(64))]` and `phase_deltas` is at byte offset 64
         // (64-byte aligned, >= 8-byte alignment of `u64`), with identical size (64 bytes) and `Pod` validity.
-        unsafe { &*(self.phase_deltas.as_ptr() as *const [u64; NUM_SWARM_MICRO_CELLS]) }
+        unsafe { &*(self.phase_deltas.as_ptr() as *const [u64; NUM_STIGMERGIC_GRANULES]) }
     }
 
     /// Borrows `self.phase_deltas` (`offset 64` of `#[repr(C, align(64))]` [`GatewayFrame`],
     /// guaranteed 64-byte aligned) as a zero-copy `&mut [u64; 8]` SWAR word array.
     #[inline(always)]
     #[must_use]
-    pub const fn phase_words_mut(&mut self) -> &mut [u64; NUM_SWARM_MICRO_CELLS] {
+    pub const fn phase_words_mut(&mut self) -> &mut [u64; NUM_STIGMERGIC_GRANULES] {
         // SAFETY: `GatewayFrame` is `#[repr(C, align(64))]` and `phase_deltas` is at byte offset 64
         // (64-byte aligned, >= 8-byte alignment of `u64`), with identical size (64 bytes) and `Pod` validity.
-        unsafe { &mut *(self.phase_deltas.as_mut_ptr() as *mut [u64; NUM_SWARM_MICRO_CELLS]) }
+        unsafe { &mut *(self.phase_deltas.as_mut_ptr() as *mut [u64; NUM_STIGMERGIC_GRANULES]) }
     }
 
     /// Returns `true` when this [`GatewayFrame`] carries an active cohomology or Bloom repulsion guard
@@ -369,7 +369,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
     /// SWAR phase words (`[u64; 8]`), eliminating stack store-to-load forwarding stalls across
     /// downstream ensemble folding, `ActionHub` steering, and Online Toroidal $k$-Means steps.
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let frame = self.synthesize_gateway_frame();
         let words = *frame.phase_words_ref();
         (frame, words)
@@ -379,7 +379,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
     /// `GatewayFrame.phase_deltas`, `mean_phase_tag_q7`, and `tagged_ptr` may be deferred until
     /// the outer `[T]` ensemble accumulator completes its final reduction.
     #[inline(always)]
-    fn synthesize_gateway_ensemble_item(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_ensemble_item(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         self.synthesize_gateway_frame_with_words()
     }
 
@@ -395,7 +395,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
     #[inline(always)]
     fn synthesize_gateway_slice_with_words(
         slice: &[Self],
-    ) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS])
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])
     where
         Self: Sized,
     {
@@ -408,16 +408,16 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
 /// by its $SO(2)^{64}$ phase coherence against `query_words_opt`.
 #[inline(always)]
 pub(super) fn mask_words_for_active_heads_64(
-    words: &[u64; NUM_SWARM_MICRO_CELLS],
+    words: &[u64; NUM_STIGMERGIC_GRANULES],
     active_heads: u16,
-) -> [u64; NUM_SWARM_MICRO_CELLS] {
+) -> [u64; NUM_STIGMERGIC_GRANULES] {
     if active_heads >= MAX_ATTENTION_HEADS as u16 {
         return *words;
     }
     let h = active_heads as usize;
-    let mut out = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut out = [0u64; NUM_STIGMERGIC_GRANULES];
     let mut w_idx = 0usize;
-    while w_idx < NUM_SWARM_MICRO_CELLS {
+    while w_idx < NUM_STIGMERGIC_GRANULES {
         let base = w_idx * 8;
         if base + 8 <= h {
             out[w_idx] = words[w_idx];
@@ -436,9 +436,9 @@ pub(super) fn mask_words_for_active_heads_64(
 /// the $(64 - H)$ inactive SIMD/SWAR lanes.
 #[inline(always)]
 pub(super) fn coherence_for_active_heads_64(
-    a: &[u64; NUM_SWARM_MICRO_CELLS],
+    a: &[u64; NUM_STIGMERGIC_GRANULES],
     a_uni: bool,
-    b: &[u64; NUM_SWARM_MICRO_CELLS],
+    b: &[u64; NUM_STIGMERGIC_GRANULES],
     b_uni: bool,
     active_heads: u16,
 ) -> f32 {
@@ -461,8 +461,8 @@ pub(super) fn coherence_for_active_heads_64(
 /// circular cosine bias when comparing heterogeneous tangent steering vectors.
 #[inline(always)]
 pub(super) fn tangent_cosine_active_heads_64(
-    a: &[u64; NUM_SWARM_MICRO_CELLS],
-    b: &[u64; NUM_SWARM_MICRO_CELLS],
+    a: &[u64; NUM_STIGMERGIC_GRANULES],
+    b: &[u64; NUM_STIGMERGIC_GRANULES],
     active_heads: u16,
 ) -> f32 {
     let h_usize = (active_heads.clamp(1, MAX_ATTENTION_HEADS as u16)) as usize;
@@ -495,12 +495,12 @@ pub(super) fn tangent_cosine_active_heads_64(
 /// (`[-127, +127]`) without modular $\pm 128$ wrapping overflow when $|b_h - a_h| > 127$.
 #[inline(always)]
 pub(super) fn swar_tangent_lerp_words_with_uniform_flag_64(
-    a: &[u64; NUM_SWARM_MICRO_CELLS],
+    a: &[u64; NUM_STIGMERGIC_GRANULES],
     a_uni: bool,
-    b: &[u64; NUM_SWARM_MICRO_CELLS],
+    b: &[u64; NUM_STIGMERGIC_GRANULES],
     b_uni: bool,
     s_u64: u64,
-) -> ([u64; NUM_SWARM_MICRO_CELLS], bool) {
+) -> ([u64; NUM_STIGMERGIC_GRANULES], bool) {
     let s = if s_u64 > 128 { 128 } else { s_u64 };
     if s == 0 {
         return (*a, a_uni);
@@ -515,11 +515,11 @@ pub(super) fn swar_tangent_lerp_words_with_uniform_flag_64(
         let a0 = swar_q7_scale_le128_with_bias_x8(a[0], inv_s, bias_a);
         let b0 = swar_q7_scale_le128_with_bias_x8(b[0], s, bias_b);
         let w0 = swar_q7_circular_add_x8(a0, b0);
-        return ([w0; NUM_SWARM_MICRO_CELLS], true);
+        return ([w0; NUM_STIGMERGIC_GRANULES], true);
     }
-    let mut out = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut out = [0u64; NUM_STIGMERGIC_GRANULES];
     let mut k = 0usize;
-    while k < NUM_SWARM_MICRO_CELLS {
+    while k < NUM_STIGMERGIC_GRANULES {
         let ak = swar_q7_scale_le128_with_bias_x8(a[k], inv_s, bias_a);
         let bk = swar_q7_scale_le128_with_bias_x8(b[k], s, bias_b);
         out[k] = swar_q7_circular_add_x8(ak, bk);
@@ -532,8 +532,8 @@ pub(super) fn swar_tangent_lerp_words_with_uniform_flag_64(
 #[inline(always)]
 pub(super) fn fold_gateway_slice_with_query_words_core<S: ManifoldGatewaySignal>(
     slice: &[S],
-    query_words_opt: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
-) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    query_words_opt: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
+) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
     fold_gateway_slice_with_query_words_and_heads_core(
         slice,
         query_words_opt,
@@ -544,12 +544,12 @@ pub(super) fn fold_gateway_slice_with_query_words_core<S: ManifoldGatewaySignal>
 #[inline]
 pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGatewaySignal>(
     slice: &[S],
-    query_words_opt: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
+    query_words_opt: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
     query_active_heads: u16,
-) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
     let len = slice.len();
     if len == 0 {
-        return (GatewayFrame::default(), [0u64; NUM_SWARM_MICRO_CELLS]);
+        return (GatewayFrame::default(), [0u64; NUM_STIGMERGIC_GRANULES]);
     }
     let use_query_resonance = query_words_opt.is_some_and(swar_words_nonzero_64);
     if len == 1 && !use_query_resonance {
@@ -557,7 +557,7 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
     }
     let q_is_uniform = query_words_opt.is_some_and(is_word_array_uniform_64);
 
-    let mut acc_w = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut acc_w = [0u64; NUM_STIGMERGIC_GRANULES];
     let mut acc_is_uniform = true;
     let mut tot_e = 0.0_f32;
     let mut best_e = 0.0_f32;
@@ -758,11 +758,11 @@ impl<T: ManifoldGatewaySignal + ?Sized> ManifoldGatewaySignal for &T {
         (**self).synthesize_gateway_frame()
     }
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         (**self).synthesize_gateway_frame_with_words()
     }
     #[inline(always)]
-    fn synthesize_gateway_ensemble_item(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_ensemble_item(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         (**self).synthesize_gateway_ensemble_item()
     }
     #[inline(always)]
@@ -788,7 +788,7 @@ impl ManifoldGatewaySignal for GatewayFrame {
         *self
     }
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         (*self, *self.phase_words_ref())
     }
 }
@@ -803,7 +803,7 @@ pub fn synthesize_multi_origin_gateway_frame_with_words<S, F, P, G>(
     fact_opt: Option<&F>,
     persona_opt: Option<&P>,
     guard_opt: Option<&G>,
-) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS])
+) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])
 where
     S: SystemConstraintSignal + ?Sized,
     F: ObjectiveFactSignal + ?Sized,
@@ -834,7 +834,7 @@ where
     let mut fact_id = 0u32;
     let mut fact_clamp = DEFAULT_FACT_RIPA_CLAMP_RAD;
     let mut fact_gain_q7 = 128u8;
-    let mut fact_w = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut fact_w = [0u64; NUM_STIGMERGIC_GRANULES];
     let mut fact_heads = MAX_ATTENTION_HEADS as u16;
 
     if let Some(fact) = fact_opt {
@@ -865,7 +865,7 @@ where
     let mut pers_id = 0u32;
     let mut pers_clamp = DEFAULT_PERSONA_RIPA_CLAMP_RAD;
     let mut pers_gain_q7 = 128u8;
-    let mut pers_w = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut pers_w = [0u64; NUM_STIGMERGIC_GRANULES];
     let mut pers_heads = MAX_ATTENTION_HEADS as u16;
 
     if let Some(pers) = persona_opt {
@@ -899,7 +899,7 @@ where
 
     let mut fp_coh = 1.0_f32;
     let mut collision = false;
-    let mut blended_w = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut blended_w = [0u64; NUM_STIGMERGIC_GRANULES];
     let mut blended_uni = true;
     #[allow(unused_mut)]
     let mut avx_precomputed_tag: Option<gcso_q7_t> = None;
@@ -972,7 +972,7 @@ where
         } else if both_uni {
             let bias_restore = (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
             let step0 = swar_q7_scale_le128_with_bias_x8(diff_w0, s_u64, bias_restore);
-            blended_w = [swar_q7_circular_add_x8(fact_w[0], step0); NUM_SWARM_MICRO_CELLS];
+            blended_w = [swar_q7_circular_add_x8(fact_w[0], step0); NUM_STIGMERGIC_GRANULES];
             blended_uni = true;
         } else if is_subspace {
             let (bw, bu) = swar_tangent_lerp_words_with_uniform_flag_64(
@@ -1048,7 +1048,7 @@ where
                         blended_w[0],
                         auth_u64,
                         bias_auth,
-                    ); NUM_SWARM_MICRO_CELLS];
+                    ); NUM_STIGMERGIC_GRANULES];
                 } else {
                     blended_w = [
                         swar_q7_scale_le128_with_bias_x8(blended_w[0], auth_u64, bias_auth),
@@ -1098,7 +1098,7 @@ where
         prov_bits |= CAUSAL_CAUSE_COHOMOLOGY_REPULSION;
         avx_precomputed_tag = None;
         if blended_uni {
-            blended_w = [swar_q7_neg_sat_x8(blended_w[0]); NUM_SWARM_MICRO_CELLS];
+            blended_w = [swar_q7_neg_sat_x8(blended_w[0]); NUM_STIGMERGIC_GRANULES];
         } else {
             blended_w = [
                 swar_q7_neg_sat_x8(blended_w[0]),
@@ -1222,7 +1222,7 @@ where
 
 impl<T: BranchlessKernel> ManifoldGatewaySignal for SystemConstraint<T> {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         synthesize_multi_origin_gateway_frame_with_words::<
             Self,
             ObjectiveFact<[u8; 0]>,
@@ -1238,7 +1238,7 @@ impl<T: BranchlessKernel> ManifoldGatewaySignal for SystemConstraint<T> {
 
 impl ManifoldGatewaySignal for gcso_edbc_state_t {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         synthesize_multi_origin_gateway_frame_with_words::<
             Self,
             ObjectiveFact<[u8; 0]>,
@@ -1254,7 +1254,7 @@ impl ManifoldGatewaySignal for gcso_edbc_state_t {
 
 impl ManifoldGatewaySignal for gcso_config_t {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         synthesize_multi_origin_gateway_frame_with_words::<
             Self,
             ObjectiveFact<[u8; 0]>,
@@ -1270,7 +1270,7 @@ impl ManifoldGatewaySignal for gcso_config_t {
 
 impl<T: RawPhaseProjectable> ManifoldGatewaySignal for ObjectiveFact<T> {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         synthesize_multi_origin_gateway_frame_with_words::<
             SystemConstraint<()>,
             Self,
@@ -1286,7 +1286,7 @@ impl<T: RawPhaseProjectable> ManifoldGatewaySignal for ObjectiveFact<T> {
 
 impl<T: RawPhaseProjectable> ManifoldGatewaySignal for SubjectivePersona<T> {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         synthesize_multi_origin_gateway_frame_with_words::<
             SystemConstraint<()>,
             ObjectiveFact<[u8; 0]>,
@@ -1305,7 +1305,7 @@ where
     Self: ContradictionGuardSignal,
 {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         synthesize_multi_origin_gateway_frame_with_words::<
             SystemConstraint<()>,
             ObjectiveFact<[u8; 0]>,
@@ -1321,7 +1321,7 @@ where
 
 impl ManifoldGatewaySignal for GuardPhaseAnchor {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         synthesize_multi_origin_gateway_frame_with_words::<
             SystemConstraint<()>,
             ObjectiveFact<[u8; 0]>,
@@ -1349,7 +1349,7 @@ impl<F: ObjectiveFactSignal, P: SubjectivePersonaSignal> CausalProvenanceSignal 
 
 impl<F: ObjectiveFactSignal, P: SubjectivePersonaSignal> ManifoldGatewaySignal for (F, P) {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         synthesize_multi_origin_gateway_frame_with_words::<
             SystemConstraint<()>,
             F,
@@ -1388,7 +1388,7 @@ impl<S: SystemConstraintSignal, F: ObjectiveFactSignal, P: SubjectivePersonaSign
     ManifoldGatewaySignal for (S, F, P)
 {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         synthesize_multi_origin_gateway_frame_with_words::<S, F, P, ContradictionGuard<()>>(
             Some(&self.0),
             Some(&self.1),
@@ -1439,7 +1439,7 @@ impl<
     > ManifoldGatewaySignal for (S, F, P, G)
 {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         synthesize_multi_origin_gateway_frame_with_words::<S, F, P, G>(
             Some(&self.0),
             Some(&self.1),
@@ -1473,10 +1473,10 @@ impl<T: ManifoldGatewaySignal> CausalProvenanceSignal for Option<T> {
 
 impl<T: ManifoldGatewaySignal> ManifoldGatewaySignal for Option<T> {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         match self {
             Some(inner) => inner.synthesize_gateway_frame_with_words(),
-            None => (GatewayFrame::default(), [0u64; NUM_SWARM_MICRO_CELLS]),
+            None => (GatewayFrame::default(), [0u64; NUM_STIGMERGIC_GRANULES]),
         }
     }
     #[inline(always)]
@@ -1517,7 +1517,7 @@ impl<T: ManifoldGatewaySignal> CausalProvenanceSignal for [T] {
 
 impl<T: ManifoldGatewaySignal> ManifoldGatewaySignal for [T] {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         T::synthesize_gateway_slice_with_words(self)
     }
 
@@ -1540,7 +1540,7 @@ impl<T: ManifoldGatewaySignal, const N: usize> CausalProvenanceSignal for [T; N]
 
 impl<T: ManifoldGatewaySignal, const N: usize> ManifoldGatewaySignal for [T; N] {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         self.as_slice().synthesize_gateway_frame_with_words()
     }
     #[inline(always)]
@@ -1556,7 +1556,7 @@ pub struct ResonantSignalSlice<'a, S: ManifoldGatewaySignal> {
     /// Dynamic slice of candidate Gateway signals (e.g. facts, personas, or attractor records).
     pub signals: &'a [S],
     /// Query-side 64-head Q7 phase words packed into 8 SWAR `u64` lanes.
-    pub query_phase_words: [u64; NUM_SWARM_MICRO_CELLS],
+    pub query_phase_words: [u64; NUM_STIGMERGIC_GRANULES],
     /// Active attention-head count $H \in [1, 64]$ of the query probe (excludes zero-padded lanes).
     pub active_heads: u16,
 }
@@ -1602,7 +1602,7 @@ impl<S: ManifoldGatewaySignal> CausalProvenanceSignal for ResonantSignalSlice<'_
 
 impl<S: ManifoldGatewaySignal> ManifoldGatewaySignal for ResonantSignalSlice<'_, S> {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         fold_gateway_slice_with_query_words_and_heads_core(
             self.signals,
             Some(&self.query_phase_words),
@@ -1625,7 +1625,7 @@ impl<S: CognitiveGroundingSignal + ManifoldGatewaySignal> CognitiveGroundingSign
     }
 
     #[inline(always)]
-    fn project_grounding_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_grounding_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         self.synthesize_gateway_frame_with_words().1
     }
 
@@ -1650,7 +1650,7 @@ impl<S: CognitiveGroundingSignal + ManifoldGatewaySignal> CognitiveGroundingSign
     }
 
     #[inline(always)]
-    fn synthesize_grounding_envelope(&self) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, u64, u32, u16) {
+    fn synthesize_grounding_envelope(&self) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, u64, u32, u16) {
         let (frame, words) = self.synthesize_gateway_frame_with_words();
         (
             words,
@@ -1687,7 +1687,7 @@ impl<S: ContradictionGuardSignal + CognitiveGroundingSignal + ManifoldGatewaySig
     #[inline]
     fn evaluate_repulsion_severity_from_words(
         &self,
-        candidate_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
         candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let mut max_coh = -1.0_f32;

@@ -93,7 +93,7 @@ impl RawPhaseProjectable for AbiPhaseRef64<'_> {
     }
 
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         load_q7_words_64(self.0)
     }
 }
@@ -119,7 +119,7 @@ impl RawPhaseProjectable for AbiF32EmbeddingRef<'_> {
     }
 
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         if self.gain > 0.0 {
             let q7 = branchless_project_f32_slice_to_q7_64(self.slice, self.gain);
             load_q7_words_64(&q7)
@@ -175,8 +175,8 @@ impl CognitiveGroundingSignal for AbiBorrowedBloomGuard<'_> {
     }
 
     #[inline(always)]
-    fn project_grounding_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
-        [0u64; NUM_SWARM_MICRO_CELLS]
+    fn project_grounding_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
+        [0u64; NUM_STIGMERGIC_GRANULES]
     }
 
     #[inline(always)]
@@ -203,7 +203,7 @@ impl ContradictionGuardSignal for AbiBorrowedBloomGuard<'_> {
     #[inline(always)]
     fn evaluate_repulsion_severity_from_words(
         &self,
-        candidate_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
         _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let density = if self.bloom.is_empty() {
@@ -240,7 +240,7 @@ pub(super) unsafe fn synthesize_multi_origin_generic_with_words<
     bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
     contradiction_threshold: f32,
     bloom_repulsion_threshold: u8,
-) -> GcsoResult<(GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS])> {
+) -> GcsoResult<(GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])> {
     // SAFETY: `FfiHandleRef::from_raw_opt` validates non-nullness and alignment of `bloom_filter_opt`.
     let bloom_ref_opt = unsafe { FfiHandleRef::from_raw_opt(bloom_filter_opt)? };
     let sys_sig =
@@ -293,7 +293,7 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_ptrs_with_words(
     bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
     contradiction_threshold: f32,
     bloom_repulsion_threshold: u8,
-) -> GcsoResult<(GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS])> {
+) -> GcsoResult<(GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])> {
     let fact_sig_opt = if fact_phases.is_null() {
         None
     } else {
@@ -357,7 +357,7 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_bytes_with_words(
     bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
     contradiction_threshold: f32,
     bloom_repulsion_threshold: u8,
-) -> GcsoResult<(GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS])> {
+) -> GcsoResult<(GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])> {
     if (fact_byte_len > 0 && fact_bytes.is_null())
         || (persona_byte_len > 0 && persona_bytes.is_null())
     {
@@ -436,7 +436,7 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_f32_with_words(
     bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
     contradiction_threshold: f32,
     bloom_repulsion_threshold: u8,
-) -> GcsoResult<(GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS])> {
+) -> GcsoResult<(GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])> {
     if !branchless_is_finite_f32(fact_projection_gain)
         || fact_projection_gain < 0.0
         || !branchless_is_finite_f32(persona_projection_gain)
@@ -511,7 +511,7 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_f32_with_words(
 #[inline]
 pub(super) fn steer_gateway_frame_with_words_core_safe(
     frame_ref: &GatewayFrame,
-    frm_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    frm_w: &[u64; NUM_STIGMERGIC_GRANULES],
     trail: &mut gcso_pointer_trail_t,
     unresolved_damping_u7: u8,
     head_dim: usize,
@@ -566,7 +566,7 @@ pub(super) fn steer_gateway_frame_with_words_core_safe(
 #[inline]
 pub(super) unsafe fn execute_gateway_frame_with_words_steer_and_optional_kmeans_ffi(
     frame: &GatewayFrame,
-    frm_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    frm_w: &[u64; NUM_STIGMERGIC_GRANULES],
     trail_inout: *mut gcso_pointer_trail_t,
     unresolved_damping_u7: u8,
     query_tensor: *mut f32,
@@ -711,7 +711,7 @@ pub(super) unsafe fn execute_gateway_frame_steer_and_optional_kmeans_ffi(
 /// pointer-trail routing entry points (fast-pathing uniform and all-zero filtered words).
 #[inline]
 pub(super) fn steer_routed_trail_words_qk_safe(
-    steer_words: &[u64; NUM_SWARM_MICRO_CELLS],
+    steer_words: &[u64; NUM_STIGMERGIC_GRANULES],
     trail_flags: u32,
     win_clamp_rad: f32,
     min_step_rad: f32,
@@ -918,7 +918,7 @@ pub(super) fn bridge_trail_words_slerp_u7(
     src_trail: &mut gcso_pointer_trail_t,
     cand_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     interpolation_u7: u8,
-) -> [u64; NUM_SWARM_MICRO_CELLS] {
+) -> [u64; NUM_STIGMERGIC_GRANULES] {
     let mut steer_words = *trail_phase_words_ref(src_trail);
     if interpolation_u7 > 0 {
         let cand_w = load_q7_words_64(cand_phases);

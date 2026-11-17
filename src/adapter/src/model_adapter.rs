@@ -215,6 +215,8 @@ pub struct ModelSteeringAdapter {
     probe_baseline: ManifoldProbeBaseline,
     threshold_policy: AdaptiveThresholdPolicy,
     core_layers: AutonomousCoreLayerStack,
+    ego_field: LiminalEgoField,
+    last_boundary_delta: LiminalBoundaryDelta,
     last_horizon: EpistemicHorizonReading,
     last_venn_report: StigmergicVennSerendipityReport,
 }
@@ -272,6 +274,8 @@ impl ModelSteeringAdapter {
             probe_baseline,
             threshold_policy,
             core_layers: AutonomousCoreLayerStack::new(),
+            ego_field: LiminalEgoField::new(),
+            last_boundary_delta: LiminalBoundaryDelta::default(),
             last_horizon: EpistemicHorizonReading::default(),
             last_venn_report: StigmergicVennSerendipityReport::default(),
         })
@@ -351,13 +355,13 @@ impl ModelSteeringAdapter {
 
     /// Evaluates `bank` against `(bias_words, input_words)` at `scale`, applies homeostatic
     /// plasticity (`reinforce_bank`), and pushes the consolidated ledger back into the adapter's
-    /// live Hot-Path ledger slot while co-adapting both Core Layer 0 (`LiminalVoid`) and Core Layer 1 (`Stigmergic`).
+    /// live Hot-Path ledger slot while co-adapting both Core Layer 0 (`Liminal`) and Core Layer 1 (`Stigmergic`).
     pub fn reinforce_active_circuit_with_bank<B: CognitiveCircuitBankOps>(
         &mut self,
         bank: &mut B,
-        bias_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        scale: SwarmScaleGranularity,
+        bias_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        scale: StigmergicScaleGranularity,
         converged: bool,
     ) -> CognitiveCircuitActivation {
         let act = bank.evaluate_bank_activation(bias_words, input_words, scale);
@@ -372,15 +376,15 @@ impl ModelSteeringAdapter {
     }
 
     /// Returns a shared reference to the live Core Layer 0 [`LiminalApertureField`] governing
-    /// dynamic `LiminalVoid` channel thresholds and cognitive window gains.
+    /// dynamic `Liminal` channel thresholds and cognitive window gains.
     #[must_use]
     pub const fn aperture_field(&self) -> &LiminalApertureField {
-        &self.core_layers.liminal_void_layer
+        &self.core_layers.liminal_layer
     }
 
     /// Returns a mutable reference to the live Core Layer 0 [`LiminalApertureField`].
     pub fn aperture_field_mut(&mut self) -> &mut LiminalApertureField {
-        &mut self.core_layers.liminal_void_layer
+        &mut self.core_layers.liminal_layer
     }
 
     /// Returns a shared reference to the live Core Layer 1 [`StigmergicGranuleField`].
@@ -407,6 +411,38 @@ impl ModelSteeringAdapter {
         &self.last_venn_report
     }
 
+    /// Returns a shared reference to the live 64-byte [`LiminalEgoField`].
+    #[must_use]
+    pub const fn ego_field(&self) -> &LiminalEgoField {
+        &self.ego_field
+    }
+
+    /// Returns a mutable reference to the live 64-byte [`LiminalEgoField`].
+    pub fn ego_field_mut(&mut self) -> &mut LiminalEgoField {
+        &mut self.ego_field
+    }
+
+    /// Replaces the adapter's active [`LiminalEgoField`].
+    pub fn set_ego_field(&mut self, ego: LiminalEgoField) {
+        self.ego_field = ego;
+    }
+
+    /// Configures [`LiminalEgoField`] from a coarse [`LiminalEgoPreset`] (`Custom`, `Low`, `Medium`, `High`).
+    pub fn configure_ego_from_preset(&mut self, preset: LiminalEgoPreset) {
+        self.ego_field = LiminalEgoField::from_preset(preset);
+    }
+
+    /// Derives [`LiminalEgoField`] deterministically from a natural-language Ego description.
+    pub fn configure_ego_from_natural_language(&mut self, description: &str) {
+        self.ego_field = LiminalEgoField::from_natural_language(description);
+    }
+
+    /// Returns the most recent temporal [`LiminalBoundaryDelta`] between aperture epochs.
+    #[must_use]
+    pub const fn last_boundary_delta(&self) -> &LiminalBoundaryDelta {
+        &self.last_boundary_delta
+    }
+
     /// Updates `last_horizon` and adapts Core Layer 0 (`LiminalApertureField`) branchlessly.
     pub fn adapt_liminal_aperture(
         &mut self,
@@ -417,23 +453,45 @@ impl ModelSteeringAdapter {
         self.adapt_core_layers(horizon, &venn, overflow_opt);
     }
 
-    /// Updates both Core Layer 0 (`LiminalVoid`) and Core Layer 1 (`Stigmergic`) branchlessly from
-    /// the active cognitive circuit trajectory, `horizon`, `venn_report`, and optional `overflow_opt`.
+    /// Updates both Core Layer 0 (`Liminal`) and Core Layer 1 (`Stigmergic`) branchlessly, computes
+    /// the temporal [`LiminalBoundaryDelta`], and applies [`LiminalEgoField`] boundary interventions.
     pub fn adapt_core_layers(
         &mut self,
         horizon: &EpistemicHorizonReading,
         venn_report: &StigmergicVennSerendipityReport,
         overflow_opt: Option<&DissipativeOverflowReport>,
     ) {
+        let prev_layer0 = self.core_layers.liminal_layer;
+        let prev_venn = self.last_venn_report.venn_core_mask;
         self.last_horizon = *horizon;
         self.last_venn_report = *venn_report;
         let ledger = self.active_circuit().unwrap_or_default();
         self.core_layers
             .adapt_layers_branchless(&ledger, horizon, venn_report, overflow_opt);
+        self.last_boundary_delta = LiminalBoundaryDelta::compute_branchless(
+            &prev_layer0,
+            &self.core_layers.liminal_layer,
+            prev_venn,
+            venn_report.venn_core_mask,
+            &self.last_boundary_delta,
+        );
+        if self.ego_field.is_active() {
+            let preview = GatewayFrame {
+                effective_energy: horizon.total_memory_support,
+                ..GatewayFrame::default()
+            };
+            let _ = self.ego_field.intervene_on_layers_and_frame_branchless(
+                &mut self.core_layers,
+                &self.last_boundary_delta,
+                horizon,
+                venn_report,
+                preview,
+            );
+        }
     }
 
     /// Captures the live [`LiminalTopologyTelemetrySnapshot`] and renders a self-introspecting
-    /// 2-layer Mermaid `flowchart TD` diagram covering Core Layer 0 (`LiminalVoid`), Core Layer 1
+    /// 2-layer Mermaid `flowchart TD` diagram covering Core Layer 0 (`Liminal`), Core Layer 1
     /// (`StigmergicGranuleField`), cognitive aperture masks, and crystal populations.
     #[must_use]
     pub fn render_liminal_topology_mermaid(
@@ -442,7 +500,7 @@ impl ModelSteeringAdapter {
         spawned_daughters: u8,
     ) -> String {
         let snap = LiminalTopologyTelemetrySnapshot::capture(
-            &self.core_layers.liminal_void_layer,
+            &self.core_layers.liminal_layer,
             &self.last_horizon,
             active_crystals,
             spawned_daughters,
@@ -872,8 +930,10 @@ impl ModelSteeringAdapter {
         self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
             let entropy_h_tilde =
                 entropy_h_tilde_opt.unwrap_or(this.action_hub.last_entropy_h_tilde);
-            let scale =
-                SwarmScaleGranularity::from_layer_ratio(layer_idx, this.geometry.num_layers.max(1));
+            let scale = StigmergicScaleGranularity::from_layer_ratio(
+                layer_idx,
+                this.geometry.num_layers.max(1),
+            );
             let (frame, report, decision) = this
                 .action_hub
                 .orchestrate_gateway_layer_with_policy_and_scale_safe(
@@ -965,15 +1025,26 @@ impl ModelSteeringAdapter {
                 &mut frame,
                 &frm_w,
                 &frm_w,
-                SwarmScaleGranularity::MacroCoalition,
+                StigmergicScaleGranularity::MacroCoalition,
             );
         }
-        if self.core_layers.liminal_void_layer.adaptation_epochs > 0 {
+        if self.core_layers.liminal_layer.adaptation_epochs > 0 || self.ego_field.is_active() {
             frame = self.core_layers.modulate_gateway_frame_branchless(
                 frame,
                 &self.last_horizon,
                 &self.last_venn_report,
             );
+            if self.ego_field.is_active() {
+                let mut ego = self.ego_field;
+                let mut stack = self.core_layers;
+                frame = ego.intervene_on_layers_and_frame_branchless(
+                    &mut stack,
+                    &self.last_boundary_delta,
+                    &self.last_horizon,
+                    &self.last_venn_report,
+                    frame,
+                );
+            }
         }
 
         let gain = {

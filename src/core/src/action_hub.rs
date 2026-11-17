@@ -51,7 +51,7 @@
 //!
 //! 3. **Blanket Trait Closure**:
 //!    Because [`ActionHubEngine`] implements [`PhaseSteering`], [`PointerActionHub`], [`SubHeadRouter`],
-//!    [`Rank1ResidualAdapter`], [`FastPathLedger`], [`SwarmCellChunk`], [`CausalProvenanceSignal`],
+//!    [`Rank1ResidualAdapter`], [`FastPathLedger`], [`StigmergicChunkOps`], [`CausalProvenanceSignal`],
 //!    [`crate::traits::SystemConstraintSignal`], and [`ManifoldGatewaySignal`], it automatically
 //!    receives the blanket implementations of [`ActionHub`], [`HotPathExecutionEngine`],
 //!    [`HotPathObserver`], [`FractalCascadeCoordinator`], [`ActionHubGatewayExt`],
@@ -103,7 +103,7 @@ use crate::traits::gateway::{
     DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE, ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_NOMINAL,
     ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
 };
-use crate::traits::hot_path::{PointerActionHub, SwarmCellChunk};
+use crate::traits::hot_path::{PointerActionHub, StigmergicChunkOps};
 use crate::traits::primitives::{
     branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
     branchless_is_finite_f32, branchless_max_f32, branchless_min_f32,
@@ -127,11 +127,11 @@ use crate::traits::rope::{
 };
 use crate::traits::telemetry::{
     select_rewire_bridge_and_modulate_with_preloaded_words_64, ContrastivePhaseBloomFilter,
-    FastPathLedger, StigmergicActionPtrOps, StigmergicSwarmOps, StigmergicTrailOps,
+    FastPathLedger, StigmergicActionPtrOps, StigmergicReconstitutionOps, StigmergicTrailOps,
     LEDGER_METRIC_FAST_PATH_HIT, LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED,
     LEDGER_METRIC_RANK1_INJECTED, LEDGER_METRIC_REPULSION_APPLIED,
     LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SUBHEAD_ROUTED, MAX_ATTRACTOR_PULL_FORCE,
-    MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
+    MAX_STIGMERGIC_DENSITY, NUM_STIGMERGIC_GRANULES, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
     TRAIL_FLAG_DPSR_ACTIVE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
     TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
@@ -547,7 +547,7 @@ impl StigmergicThresholds {
     #[allow(clippy::too_many_arguments)]
     fn execute_decision_steering_and_logit_scaling(
         decision: StigmergicActionDecision,
-        steer_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        steer_words: &[u64; NUM_STIGMERGIC_GRANULES],
         qdps_min_rad: f32,
         ripa_clamp: f32,
         head_dim: usize,
@@ -1234,7 +1234,7 @@ impl ActionHubEngine {
                 .as_mut_slice()
                 .as_mut_ptr()
                 .add(idx * MAX_ATTENTION_HEADS)
-                as *mut [u64; NUM_SWARM_MICRO_CELLS])
+                as *mut [u64; NUM_STIGMERGIC_GRANULES])
         };
         *dst_w = load_q7_words_64(phases);
         Ok(())
@@ -1326,7 +1326,7 @@ impl ActionHubEngine {
     pub(crate) fn copy_trail_and_words_to_slot_fast(
         dst: &mut gcso_pointer_trail_t,
         src: &gcso_pointer_trail_t,
-        phase_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        phase_words: &[u64; NUM_STIGMERGIC_GRANULES],
     ) {
         dst.copy_from_with_words_fast(src, phase_words);
     }
@@ -1456,7 +1456,7 @@ impl ActionHubEngine {
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
         accumulate_ptr_phase: bool,
-        macro_centroid_words: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
+        macro_centroid_words: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
     ) -> GcsoResult<ActionOrchestrationReport> {
         let qdps_min_rad = self.dpsr.qdps_min_step_rad();
         let ripa_clamp = self.dpsr.ripa_clamp_max_rad();
@@ -1530,7 +1530,7 @@ impl ActionHubEngine {
                     .as_slice()
                     .as_ptr()
                     .add(usize::from(pref_slot) * MAX_ATTENTION_HEADS)
-                    as *const [u64; NUM_SWARM_MICRO_CELLS])
+                    as *const [u64; NUM_STIGMERGIC_GRANULES])
             };
             let pref_enabled = ((self.slot_enabled_mask >> pref_slot) & 1) != 0;
             let slot_coh = if pref_enabled && swar_words_nonzero_64(pref_slot_w) {
@@ -1601,7 +1601,7 @@ impl ActionHubEngine {
                     .as_slice()
                     .as_ptr()
                     .add(usize::from(masked_target_slot) * MAX_ATTENTION_HEADS)
-                    as *const [u64; NUM_SWARM_MICRO_CELLS])
+                    as *const [u64; NUM_STIGMERGIC_GRANULES])
             };
             if swar_words_nonzero_64(slot_w) {
                 swar_or_avx2_q7_add_sat_words_64(&mut steer_words, slot_w);
@@ -2121,9 +2121,9 @@ impl PointerActionHub for ActionHubEngine {
                     .as_mut_slice()
                     .as_mut_ptr()
                     .add(slot_idx * MAX_ATTENTION_HEADS)
-                    as *mut [u64; NUM_SWARM_MICRO_CELLS])
+                    as *mut [u64; NUM_STIGMERGIC_GRANULES])
             };
-            swar_or_avx2_q7_add_sat_words_64(w, &[splat; NUM_SWARM_MICRO_CELLS]);
+            swar_or_avx2_q7_add_sat_words_64(w, &[splat; NUM_STIGMERGIC_GRANULES]);
         }
         Ok(())
     }
@@ -2185,7 +2185,7 @@ impl PointerActionHub for ActionHubEngine {
     }
 }
 
-impl SwarmCellChunk for ActionHubEngine {
+impl StigmergicChunkOps for ActionHubEngine {
     #[inline]
     fn step_chunk(&mut self, _mask: &gcso_paged_bitmask_t, chunk_len: u32) -> GcsoResult<()> {
         if chunk_len == 0 {
@@ -2253,7 +2253,9 @@ impl crate::traits::SystemConstraintSignal for ActionHubEngine {
 
 impl ManifoldGatewaySignal for ActionHubEngine {
     #[inline]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(
+        &self,
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let sel_idx = (self.last_selected_trail_id as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
         let latest_idx =
             (self.write_cursor.wrapping_sub(1) as usize) & (ACTION_HUB_INLINE_TRAILS - 1);

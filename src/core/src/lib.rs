@@ -6,8 +6,8 @@
 //! This crate serves as the primary low-level runtime engine for `LiminiKa`, implementing the
 //! Geometric Cellular Sheaf Orchestrator (GCSO) architecture targeting 2–4 GB VRAM environments.
 //!
-//! # Architecture: `LiminalVoid` Root + `1 + 8` Trait Topology (`ActionHub` + 2 Observers + Gateway)
-//! - **`LiminalVoid` ([`crate::traits::LiminalVoid`])**: Root epistemic supertrait defining the
+//! # Architecture: `Liminal` Root + `1 + 8` Trait Topology (`ActionHub` + 2 Observers + Gateway)
+//! - **`Liminal` ([`crate::traits::Liminal`])**: Root epistemic supertrait defining the
 //!   unknowable exterior beyond any trait's cognitive aperture (`!APERTURE_MASK`), gating
 //!   out-of-horizon steering cleanly to zero without data-dependent branches.
 //! - **`ActionHub` (Core Sidecar State & Capability Ledger, [`crate::traits::ActionHub`])**: The
@@ -31,13 +31,13 @@
 //! 2. **Fractal Self-Similarity & Indirect Pointer-Chain Routing in `ActionHub`**:
 //!    From 128-byte pointer trails (`gcso_pointer_trail_t`), 128-byte `GatewayFrame` /
 //!    `CrystallizedAttractorRecord` basins, up to nested composites `[Node; K]` and `(A, B)`,
-//!    every layer implements [`crate::traits::RelativeAttractorNode`] (`LiminalVoid`) with recursive
+//!    every layer implements [`crate::traits::RelativeAttractorNode`] (`Liminal`) with recursive
 //!    $SO(2)^{64}$ resultant folding (`fold_fractal_nodes_words_64`), dissipative overflow scatter /
 //!    autonomous daughter crystallization (`DissipativeOverflowReport`), and perspective-flipped signed
 //!    coupling (`RelativeCouplingMatrix`).
-//! 3. **`LiminalVoid`, Dynamic `LiminalApertureField`, & Liminal Bifurcation Routing**:
+//! 3. **`Liminal`, Dynamic `LiminalApertureField`, & Liminal Bifurcation Routing**:
 //!    Queries inside carved memory horizons separate coherent grounding ($H^0$) from internal
-//!    opposition ($H^1 \neq 0$), while out-of-horizon queries enter `EpistemicRegime::LiminalVoid`.
+//!    opposition ($H^1 \neq 0$), while out-of-horizon queries enter `EpistemicRegime::Liminal`.
 //!    [`crate::traits::LiminalApertureField`] shifts per-channel cognitive horizons branchlessly in
 //!    response to cognitive trajectory habits and dissipative overflow, exposing live Mermaid topology
 //!    self-introspection via [`crate::traits::LiminalTopologyTelemetrySnapshot`].
@@ -100,8 +100,8 @@ pub mod entropy_control;
 /// Dynamic Rank-1 Sparse Residual Adapter (`u * v^T`) and persona patching routines.
 pub mod residual_adapter;
 
-/// Cellular swarm coordination, Sidecar Pointer Table (SPT), and stigmergic routines.
-pub mod swarm;
+/// Cellular stigmergic coordination, Sidecar Pointer Table (SPT), and reconstitution engine.
+pub mod stigmergy;
 
 /// Core system contracts, `1 + 8` trait hierarchy, branchless primitives, and alignment guards.
 pub mod traits;
@@ -147,8 +147,8 @@ pub use crate::attractor::{
 pub use crate::entropy_control::{EntropyClosedLoopCoordinator, EntropyController};
 pub use crate::phase_steering::{PhaseSteeringClosedLoop, PhaseSteeringEngine};
 pub use crate::residual_adapter::ResidualAdapterEngine;
+pub use crate::stigmergy::StigmergicGranuleEngine;
 pub use crate::storage::MappedStorageEngine;
-pub use crate::swarm::{StigmergicGranuleEngine, SwarmEngine};
 pub use crate::traits::{
     evaluate_epistemic_horizon_words_64, evaluate_stigmergic_venn_and_serendipity_words_64,
     fold_fractal_nodes_words_64, resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim, ActionHub,
@@ -167,16 +167,16 @@ pub use crate::traits::{
     FractalCascadeCoordinator, FullStackGcsoEngine, GatewayFrame, GatewayPhaseSteeringExt,
     GcsoFourSectionView, GcsoResult, GcsoRuntimeContext, HierarchicalTreeTable,
     HotPathExecutionEngine, HotPathObserver, KvKeyframeCache, KvKeyframePacket,
-    KvMotionDeltaPacket, L2pSvdProjector, LiminalApertureField, LiminalHorizonNodeDescriptor,
-    LiminalTopologyTelemetrySnapshot, LiminalVoid, ManifoldGatewaySignal, MappedStorage,
+    KvMotionDeltaPacket, L2pSvdProjector, Liminal, LiminalApertureField, LiminalBoundaryDelta,
+    LiminalEgoField, LiminalEgoPreset, LiminalHorizonNodeDescriptor,
+    LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, MappedStorage,
     MultiDomainAttractorSpace, ObjectiveFact, ObjectiveFactSignal, PagedBitmaskOps, PersonaPatcher,
     PhaseSteering, Pod, PointerActionHub, Rank1ResidualAdapter, RawPhaseProjectable,
     RelativeAttractorNode, RelativeCouplingMatrix, SheafCohomologyEvaluator,
     StigmergicActionPtrOps, StigmergicChunkOps, StigmergicCohomologyCoordinator,
     StigmergicGranuleField, StigmergicReconstitutionOps, StigmergicReconstitutionReport,
-    StigmergicScaleGranularity, StigmergicSwarmOps, StigmergicTrailOps,
-    StigmergicVennSerendipityReport, SubHeadRouter, SubjectivePersona, SubjectivePersonaSignal,
-    SwarmCellChunk, SwarmResolutionReport, SystemCapabilityQuery, SystemConstraint,
+    StigmergicScaleGranularity, StigmergicTrailOps, StigmergicVennSerendipityReport, SubHeadRouter,
+    SubjectivePersona, SubjectivePersonaSignal, SystemCapabilityQuery, SystemConstraint,
     SystemConstraintSignal, VisualAttentionSteering, ACTION_MODE_DPSR_STEER,
     ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_RANK1_INJECT,
     ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
@@ -186,19 +186,21 @@ pub use crate::traits::{
     APERTURE_FAST_PATH_LEDGER, APERTURE_KV_PHASE_CACHE, APERTURE_MANIFOLD_GATEWAY,
     APERTURE_MAPPED_STORAGE, APERTURE_OBJECTIVE_FACT, APERTURE_PHASE_STEERING,
     APERTURE_POINTER_TRAIL, APERTURE_RANK1_RESIDUAL, APERTURE_RELATIVE_COUPLING,
-    APERTURE_SUBHEAD_ROUTING, APERTURE_SUBJECTIVE_PERSONA, APERTURE_SWARM_CONSENSUS,
+    APERTURE_STIGMERGIC_CONSENSUS, APERTURE_SUBHEAD_ROUTING, APERTURE_SUBJECTIVE_PERSONA,
     APERTURE_SYSTEM_CONSTRAINT, ATTRACTOR_SLOT_CUSTOM_5, ATTRACTOR_SLOT_CUSTOM_6,
     ATTRACTOR_SLOT_CUSTOM_7, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
     ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, ATTRACTOR_SLOT_USER_CONTEXT,
     CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
     CAUSAL_AXIS_SYSTEM_CONSTRAINT, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
     CAUSAL_CAUSE_COHOMOLOGY_REPULSION, CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK,
-    CAUSAL_CAUSE_PERSONA_FACT_COLLISION, CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, CORE_LAYER_LIMINAL_VOID,
+    CAUSAL_CAUSE_PERSONA_FACT_COLLISION, CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, CORE_LAYER_LIMINAL,
     CORE_LAYER_STIGMERGIC, DEFAULT_FACT_RIPA_CLAMP_RAD, DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
     DEFAULT_PERSONA_FACT_COLLISION_THRESH, DEFAULT_PERSONA_RIPA_CLAMP_RAD,
     DEFAULT_SLOT_COUPLING_MATRIX_8X8, DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
     DEFAULT_STIGMERGIC_TOLERANCE_Q7, DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
-    DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, GCSO_CRYSTAL_RECORD_MAGIC,
+    DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, EGO_TRIGGER_ALL_DEFAULT,
+    EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT,
+    EGO_TRIGGER_LIMINAL_EXTERIOR, EGO_TRIGGER_VORTEX_SWALLOW, GCSO_CRYSTAL_RECORD_MAGIC,
     GCSO_CRYSTAL_RECORD_VERSION, GCSO_FOUR_SECTION_HEADER_BYTES,
     GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET, HEADS_PER_STIGMERGIC_GRANULE, NUM_CORE_AUTONOMOUS_LAYERS,
     NUM_LIMINAL_APERTURE_CHANNELS, NUM_STIGMERGIC_GRANULES, ROOT_CAUSE_COHOMOLOGY_REPULSION,
@@ -246,8 +248,7 @@ pub mod prelude {
     pub use crate::entropy_control::{EntropyClosedLoopCoordinator, EntropyController};
     pub use crate::phase_steering::{PhaseSteeringClosedLoop, PhaseSteeringEngine};
     pub use crate::residual_adapter::ResidualAdapterEngine;
-    pub use crate::storage::MappedStorageEngine;
-    pub use crate::swarm::{StigmergicGranuleEngine, SwarmEngine};
+    pub use crate::stigmergy::StigmergicGranuleEngine;
     pub use crate::traits::prelude::*;
     pub use crate::{Config, Result, RuntimeContext};
 }

@@ -15,7 +15,7 @@ use super::*;
 /// Multi-scale granularity tier within the self-similar GCSO hierarchy.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-pub enum SwarmScaleGranularity {
+pub enum StigmergicScaleGranularity {
     /// Scale 0: 64-bit tagged pointer and single 8-head `u64` SWAR register.
     PointerBit = 0,
     /// Scale 1: 128-byte pointer trail (`8` granules x `8` heads) with local inhibition.
@@ -27,12 +27,8 @@ pub enum SwarmScaleGranularity {
     MacroCoalition = 3,
 }
 
-/// Primary `S`-initial alias for [`SwarmScaleGranularity`] emphasizing stigmergic multi-scale
-/// fragmentation (`0..=3`).
-pub type StigmergicScaleGranularity = SwarmScaleGranularity;
-
-impl SwarmScaleGranularity {
-    /// Converts a raw 2-bit integer (`0..=3`) into a [`SwarmScaleGranularity`].
+impl StigmergicScaleGranularity {
+    /// Converts a raw 2-bit integer (`0..=3`) into a [`StigmergicScaleGranularity`].
     #[inline(always)]
     #[must_use]
     pub const fn from_u8(val: u8) -> Self {
@@ -176,7 +172,7 @@ impl CognitiveStepOp {
     #[inline(always)]
     #[must_use]
     pub const fn pack(
-        granularity: SwarmScaleGranularity,
+        granularity: StigmergicScaleGranularity,
         op: CognitiveOpKind,
         intensity_0_to_7: u8,
     ) -> Self {
@@ -193,11 +189,11 @@ impl CognitiveStepOp {
         self.0 != 0
     }
 
-    /// Unpacks the 2-bit [`SwarmScaleGranularity`].
+    /// Unpacks the 2-bit [`StigmergicScaleGranularity`].
     #[inline(always)]
     #[must_use]
-    pub const fn granularity(self) -> SwarmScaleGranularity {
-        SwarmScaleGranularity::from_u8(self.0 >> 6)
+    pub const fn granularity(self) -> StigmergicScaleGranularity {
+        StigmergicScaleGranularity::from_u8(self.0 >> 6)
     }
 
     /// Unpacks the 3-bit [`CognitiveOpKind`].
@@ -243,7 +239,7 @@ pub struct CognitiveCircuitActivation {
     pub repulse_sensitivity_q7: u8,
     /// Selected [`CognitiveOpKind`] discriminant (`0..=7`).
     pub selected_op: u8,
-    /// Preferred next [`SwarmScaleGranularity`] discriminant (`0..=3`) for perspective transition.
+    /// Preferred next [`StigmergicScaleGranularity`] discriminant (`0..=3`) for perspective transition.
     pub preferred_next_scale: u8,
     /// Firing intensity in Q0.7 (`0..=128`).
     pub intensity_q7: u8,
@@ -264,11 +260,11 @@ impl CognitiveCircuitActivation {
         CognitiveOpKind::from_u8(self.selected_op)
     }
 
-    /// Returns the typed preferred next [`SwarmScaleGranularity`].
+    /// Returns the typed preferred next [`StigmergicScaleGranularity`].
     #[inline(always)]
     #[must_use]
-    pub const fn next_scale(&self) -> SwarmScaleGranularity {
-        SwarmScaleGranularity::from_u8(self.preferred_next_scale)
+    pub const fn next_scale(&self) -> StigmergicScaleGranularity {
+        StigmergicScaleGranularity::from_u8(self.preferred_next_scale)
     }
 }
 
@@ -385,7 +381,7 @@ impl CognitiveTrajectoryLedger {
         (counts, active)
     }
 
-    /// Returns the count of recorded steps at each [`SwarmScaleGranularity`] level (`0..4`).
+    /// Returns the count of recorded steps at each [`StigmergicScaleGranularity`] level (`0..4`).
     #[inline(always)]
     #[must_use]
     pub const fn scale_counts(&self) -> [u8; 4] {
@@ -405,10 +401,10 @@ impl CognitiveTrajectoryLedger {
     /// with zero heap allocations.
     #[inline(always)]
     #[must_use]
-    pub const fn to_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
-        let mut words = [0u64; NUM_SWARM_MICRO_CELLS];
+    pub const fn to_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
+        let mut words = [0u64; NUM_STIGMERGIC_GRANULES];
         let mut c = 0usize;
-        while c < NUM_SWARM_MICRO_CELLS {
+        while c < NUM_STIGMERGIC_GRANULES {
             let s = CognitiveStepOp(self.steps[c]);
             let base_q7 = s.to_signed_q7();
             let b0 = (base_q7 as u8) as u64;
@@ -502,18 +498,18 @@ impl CognitiveTrajectoryLedger {
     #[must_use]
     pub fn evaluate_circuit_activation(
         &self,
-        circuit_bias_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        scale: SwarmScaleGranularity,
+        circuit_bias_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        scale: StigmergicScaleGranularity,
     ) -> CognitiveCircuitActivation {
-        let cell_idx = (scale as usize) & (NUM_SWARM_MICRO_CELLS - 1);
+        let cell_idx = (scale as usize) & (NUM_STIGMERGIC_GRANULES - 1);
         let diff_local = swar_q7_circular_diff_x8(input_words[cell_idx], circuit_bias_words[cell_idx]);
         let abs_local = swar_q7_abs_u8_x8(diff_local);
         let mean_diff_local = swar_mean_u8_le128_x8(abs_local);
 
         let mut total_diff = 0u16;
         let mut c = 0usize;
-        while c < NUM_SWARM_MICRO_CELLS {
+        while c < NUM_STIGMERGIC_GRANULES {
             let d = swar_q7_circular_diff_x8(input_words[c], circuit_bias_words[c]);
             total_diff += u16::from(swar_mean_u8_le128_x8(swar_q7_abs_u8_x8(d)));
             c += 1;
@@ -539,12 +535,12 @@ impl CognitiveTrajectoryLedger {
             + u16::from(divergence)
             + u16::from(peel_hist) * 7
             + u16::from(top_down_peel_mom)
-            + if scale == SwarmScaleGranularity::CellTrail { 10 } else { 0 };
+            + if scale == StigmergicScaleGranularity::CellTrail { 10 } else { 0 };
         let fuse_raw = 36u16
             + (u16::from(global_close) >> 1)
             + u16::from(fuse_hist) * 7
             + u16::from(bottom_up_mom)
-            + if scale == SwarmScaleGranularity::MacroCoalition { 10 } else { 0 };
+            + if scale == StigmergicScaleGranularity::MacroCoalition { 10 } else { 0 };
         let repulse_raw = 28u16
             + (u16::from(128u8.saturating_sub(global_close)) >> 1)
             + u16::from(repulse_hist) * 10
@@ -560,7 +556,7 @@ impl CognitiveTrajectoryLedger {
         let selected_op = if repulse_dominant {
             CognitiveOpKind::RepulseAudit
         } else if peel_dominant {
-            if scale == SwarmScaleGranularity::CellTrail {
+            if scale == StigmergicScaleGranularity::CellTrail {
                 CognitiveOpKind::DecomposePeel
             } else {
                 CognitiveOpKind::RouteSubHead
@@ -574,20 +570,20 @@ impl CognitiveTrajectoryLedger {
         };
 
         // Perspective movement tendency derived from both the selected operation and scale velocity.
-        let top_down_bias = scale_hist[SwarmScaleGranularity::MacroCoalition as usize]
-            >= scale_hist[SwarmScaleGranularity::PointerBit as usize]
+        let top_down_bias = scale_hist[StigmergicScaleGranularity::MacroCoalition as usize]
+            >= scale_hist[StigmergicScaleGranularity::PointerBit as usize]
             || net_scale_vel > 0;
         let next_scale = match selected_op {
-            CognitiveOpKind::DecomposePeel => SwarmScaleGranularity::PointerBit,
+            CognitiveOpKind::DecomposePeel => StigmergicScaleGranularity::PointerBit,
             CognitiveOpKind::RouteSubHead | CognitiveOpKind::BridgeShift => {
-                SwarmScaleGranularity::CellTrail
+                StigmergicScaleGranularity::CellTrail
             }
-            CognitiveOpKind::RepulseAudit => SwarmScaleGranularity::TypeGateway,
+            CognitiveOpKind::RepulseAudit => StigmergicScaleGranularity::TypeGateway,
             CognitiveOpKind::SynthesizeFuse | CognitiveOpKind::CrystallizeCommit => {
                 if top_down_bias {
-                    SwarmScaleGranularity::MacroCoalition
+                    StigmergicScaleGranularity::MacroCoalition
                 } else {
-                    SwarmScaleGranularity::TypeGateway
+                    StigmergicScaleGranularity::TypeGateway
                 }
             }
             _ => scale,
@@ -616,13 +612,13 @@ impl CognitiveTrajectoryLedger {
     pub fn evaluate_cross_trajectory_activation(
         &self,
         draft: &Self,
-        query_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        draft_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        query_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        draft_words: &[u64; NUM_STIGMERGIC_GRANULES],
     ) -> CognitiveCircuitActivation {
         let mut base = draft.evaluate_circuit_activation(
             query_words,
             draft_words,
-            SwarmScaleGranularity::MacroCoalition,
+            StigmergicScaleGranularity::MacroCoalition,
         );
         let (q_ops, q_depth) = self.op_counts();
         let (d_ops, d_depth) = draft.op_counts();
@@ -664,10 +660,10 @@ impl CognitiveTrajectoryLedger {
         };
         base.selected_op = selected_op as u8;
         base.preferred_next_scale = match selected_op {
-            CognitiveOpKind::DecomposePeel => SwarmScaleGranularity::CellTrail as u8,
-            CognitiveOpKind::RepulseAudit => SwarmScaleGranularity::TypeGateway as u8,
+            CognitiveOpKind::DecomposePeel => StigmergicScaleGranularity::CellTrail as u8,
+            CognitiveOpKind::RepulseAudit => StigmergicScaleGranularity::TypeGateway as u8,
             CognitiveOpKind::CrystallizeCommit | CognitiveOpKind::SynthesizeFuse => {
-                SwarmScaleGranularity::MacroCoalition as u8
+                StigmergicScaleGranularity::MacroCoalition as u8
             }
             _ => base.preferred_next_scale,
         };
@@ -684,9 +680,9 @@ impl CognitiveTrajectoryLedger {
     pub fn modulate_gateway_frame_at_scale(
         &self,
         frame: &mut GatewayFrame,
-        frm_w: &[u64; NUM_SWARM_MICRO_CELLS],
-        trail_w: &[u64; NUM_SWARM_MICRO_CELLS],
-        scale: SwarmScaleGranularity,
+        frm_w: &[u64; NUM_STIGMERGIC_GRANULES],
+        trail_w: &[u64; NUM_STIGMERGIC_GRANULES],
+        scale: StigmergicScaleGranularity,
     ) -> CognitiveCircuitActivation {
         let act = self.evaluate_circuit_activation(frm_w, trail_w, scale);
         if act.trajectory_depth == 0 {
@@ -766,7 +762,7 @@ impl CognitiveTrajectoryLedger {
     pub fn bias_stigmergic_thresholds(
         &self,
         base: StigmergicThresholds,
-        scale: SwarmScaleGranularity,
+        scale: StigmergicScaleGranularity,
     ) -> StigmergicThresholds {
         let (op_hist, depth) = self.op_counts();
         if depth == 0 {
@@ -784,10 +780,10 @@ impl CognitiveTrajectoryLedger {
         let repulse_ratio = f32::from(repulse_hist) * inv_d;
 
         let scale_macro = match scale {
-            SwarmScaleGranularity::MacroCoalition => 1.0_f32,
-            SwarmScaleGranularity::TypeGateway => 0.75_f32,
-            SwarmScaleGranularity::CellTrail => 0.50_f32,
-            SwarmScaleGranularity::PointerBit => 0.25_f32,
+            StigmergicScaleGranularity::MacroCoalition => 1.0_f32,
+            StigmergicScaleGranularity::TypeGateway => 0.75_f32,
+            StigmergicScaleGranularity::CellTrail => 0.50_f32,
+            StigmergicScaleGranularity::PointerBit => 0.25_f32,
         };
         let scale_micro = 1.25_f32 - scale_macro;
 
@@ -984,12 +980,12 @@ impl HybridScaleCircuit {
     /// Selects the active ledger corresponding to `granularity`.
     #[inline(always)]
     #[must_use]
-    pub const fn circuit_for_scale(&self, granularity: SwarmScaleGranularity) -> &CognitiveTrajectoryLedger {
+    pub const fn circuit_for_scale(&self, granularity: StigmergicScaleGranularity) -> &CognitiveTrajectoryLedger {
         match granularity {
-            SwarmScaleGranularity::PointerBit | SwarmScaleGranularity::CellTrail => {
+            StigmergicScaleGranularity::PointerBit | StigmergicScaleGranularity::CellTrail => {
                 &self.micro_circuit
             }
-            SwarmScaleGranularity::TypeGateway | SwarmScaleGranularity::MacroCoalition => {
+            StigmergicScaleGranularity::TypeGateway | StigmergicScaleGranularity::MacroCoalition => {
                 &self.macro_circuit
             }
         }
@@ -1011,7 +1007,7 @@ impl RawPhaseProjectable for HybridScaleCircuit {
     }
 
     #[inline(always)]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         self.to_blended_ledger(64).to_phase_words_64()
     }
 }
@@ -1106,9 +1102,9 @@ pub trait CognitiveCircuitBankOps {
     #[inline]
     fn evaluate_bank_activation(
         &self,
-        bias_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        scale: SwarmScaleGranularity,
+        bias_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        scale: StigmergicScaleGranularity,
     ) -> CognitiveCircuitActivation {
         let units = self.units();
         if units.is_empty() {
@@ -1260,7 +1256,7 @@ impl<const N: usize> RawPhaseProjectable for CognitiveCircuitBank<N> {
     }
 
     #[inline]
-    fn project_to_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         self.to_consolidated_ledger().to_phase_words_64()
     }
 }
@@ -1309,11 +1305,11 @@ pub struct ScaleLayerProjection {
     /// Composite 128-byte [`GatewayFrame`] synthesized at this layer boundary.
     pub frame: GatewayFrame,
     /// Orthogonal contribution explained/peeled by this layer across 64 heads.
-    pub peeled_words: [u64; NUM_SWARM_MICRO_CELLS],
+    pub peeled_words: [u64; NUM_STIGMERGIC_GRANULES],
     /// Remaining unexplained Q7 phase residual forwarded to layer `layer_index + 1`.
-    pub residual_words: [u64; NUM_SWARM_MICRO_CELLS],
+    pub residual_words: [u64; NUM_STIGMERGIC_GRANULES],
     /// Granularity tier executed at this projection step.
-    pub granularity: SwarmScaleGranularity,
+    pub granularity: StigmergicScaleGranularity,
     /// Zero-based starting layer index across the active stack (`0..total_layers`).
     pub layer_index: usize,
     /// Total effective layer count $N$ across the active cascade.
@@ -1324,13 +1320,13 @@ pub struct ScaleLayerProjection {
     pub emitted_step: CognitiveStepOp,
 }
 
-/// Branchless core helper projecting `signal` at a specific [`SwarmScaleGranularity`] and layer
+/// Branchless core helper projecting `signal` at a specific [`StigmergicScaleGranularity`] and layer
 /// depth ratio `layer_index / total_layers` with zero dynamic allocations.
 #[inline]
 pub fn project_gateway_signal_at_scale<S: ManifoldGatewaySignal + ?Sized>(
     signal: &S,
-    granularity: SwarmScaleGranularity,
-    input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+    granularity: StigmergicScaleGranularity,
+    input_words: &[u64; NUM_STIGMERGIC_GRANULES],
     ledger: &CognitiveTrajectoryLedger,
     layer_index: usize,
     total_layers: usize,
@@ -1347,21 +1343,21 @@ pub fn project_gateway_signal_at_scale<S: ManifoldGatewaySignal + ?Sized>(
     let s_u64 = u64::from(gate_mod.min(128));
     let bias = (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
     let active_mask = match granularity {
-        SwarmScaleGranularity::PointerBit => 1u8 << (layer_index & 7),
-        SwarmScaleGranularity::CellTrail => {
+        StigmergicScaleGranularity::PointerBit => 1u8 << (layer_index & 7),
+        StigmergicScaleGranularity::CellTrail => {
             if frame.active_swarm_cell_mask == 0 {
                 0x0F
             } else {
                 frame.active_swarm_cell_mask
             }
         }
-        SwarmScaleGranularity::TypeGateway | SwarmScaleGranularity::MacroCoalition => 0xFF,
+        StigmergicScaleGranularity::TypeGateway | StigmergicScaleGranularity::MacroCoalition => 0xFF,
     };
 
-    let mut peeled_words = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut peeled_words = [0u64; NUM_STIGMERGIC_GRANULES];
     let mut residual_words = *input_words;
     let mut c = 0usize;
-    while c < NUM_SWARM_MICRO_CELLS {
+    while c < NUM_STIGMERGIC_GRANULES {
         if ((active_mask >> c) & 1) != 0 {
             let scaled = swar_q7_scale_le128_with_bias_x8(frm_w[c], s_u64, bias);
             peeled_words[c] = scaled;
@@ -1397,10 +1393,10 @@ pub fn project_gateway_signal_at_scale<S: ManifoldGatewaySignal + ?Sized>(
 /// structural depth composition (`N +/- 1` via tuples `(A, B)`, arrays `[T; N]`, or slices), and
 /// orthogonal residual peeling guided by [`CognitiveTrajectoryLedger`].
 pub trait StigmergicScaleLayer: ManifoldGatewaySignal {
-    /// Returns the primary [`SwarmScaleGranularity`] owned by this layer.
+    /// Returns the primary [`StigmergicScaleGranularity`] owned by this layer.
     #[inline(always)]
-    fn scale_granularity(&self) -> SwarmScaleGranularity {
-        SwarmScaleGranularity::TypeGateway
+    fn scale_granularity(&self) -> StigmergicScaleGranularity {
+        StigmergicScaleGranularity::TypeGateway
     }
 
     /// Returns the structural layer count `N >= 1` composed within this value.
@@ -1413,7 +1409,7 @@ pub trait StigmergicScaleLayer: ManifoldGatewaySignal {
     /// `ledger`, returning the peeled field, orthogonal residual, and emitted cognitive step.
     fn project_scale_layer(
         &self,
-        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
         ledger: &CognitiveTrajectoryLedger,
         layer_index: usize,
         total_layers: usize,
@@ -1435,15 +1431,15 @@ pub trait StigmergicScaleLayer: ManifoldGatewaySignal {
 pub struct ScaleLayerNode<T> {
     /// Underlying signal implementing [`ManifoldGatewaySignal`].
     pub signal: T,
-    /// Assigned [`SwarmScaleGranularity`] tier inside a multi-layer stack.
-    pub granularity: SwarmScaleGranularity,
+    /// Assigned [`StigmergicScaleGranularity`] tier inside a multi-layer stack.
+    pub granularity: StigmergicScaleGranularity,
 }
 
 impl<T> ScaleLayerNode<T> {
     /// Wraps `signal` at `granularity`.
     #[inline(always)]
     #[must_use]
-    pub const fn new(signal: T, granularity: SwarmScaleGranularity) -> Self {
+    pub const fn new(signal: T, granularity: StigmergicScaleGranularity) -> Self {
         Self { signal, granularity }
     }
 }
@@ -1467,21 +1463,21 @@ impl<T: ManifoldGatewaySignal> ManifoldGatewaySignal for ScaleLayerNode<T> {
     }
 
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         self.signal.synthesize_gateway_frame_with_words()
     }
 }
 
 impl<T: ManifoldGatewaySignal> StigmergicScaleLayer for ScaleLayerNode<T> {
     #[inline(always)]
-    fn scale_granularity(&self) -> SwarmScaleGranularity {
+    fn scale_granularity(&self) -> StigmergicScaleGranularity {
         self.granularity
     }
 }
 
 impl<T: StigmergicScaleLayer + ?Sized> StigmergicScaleLayer for &T {
     #[inline(always)]
-    fn scale_granularity(&self) -> SwarmScaleGranularity {
+    fn scale_granularity(&self) -> StigmergicScaleGranularity {
         (**self).scale_granularity()
     }
 
@@ -1493,7 +1489,7 @@ impl<T: StigmergicScaleLayer + ?Sized> StigmergicScaleLayer for &T {
     #[inline(always)]
     fn project_scale_layer(
         &self,
-        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
         ledger: &CognitiveTrajectoryLedger,
         layer_index: usize,
         total_layers: usize,
@@ -1530,7 +1526,7 @@ impl<A: StigmergicScaleLayer, B: StigmergicScaleLayer> ManifoldGatewaySignal
     for LayeredScalePair<A, B>
 {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let (f0, w0) = self.0.synthesize_gateway_frame_with_words();
         let (f1, w1) = self.1.synthesize_gateway_frame_with_words();
         let uni0 = is_word_array_uniform_64(&w0);
@@ -1580,7 +1576,7 @@ impl<A: StigmergicScaleLayer, B: StigmergicScaleLayer> StigmergicScaleLayer
     for LayeredScalePair<A, B>
 {
     #[inline(always)]
-    fn scale_granularity(&self) -> SwarmScaleGranularity {
+    fn scale_granularity(&self) -> StigmergicScaleGranularity {
         let ga = self.0.scale_granularity();
         let gb = self.1.scale_granularity();
         if gb > ga { gb } else { ga }
@@ -1594,7 +1590,7 @@ impl<A: StigmergicScaleLayer, B: StigmergicScaleLayer> StigmergicScaleLayer
     #[inline]
     fn project_scale_layer(
         &self,
-        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
         ledger: &CognitiveTrajectoryLedger,
         layer_index: usize,
         total_layers: usize,
@@ -1613,9 +1609,9 @@ impl<A: StigmergicScaleLayer, B: StigmergicScaleLayer> StigmergicScaleLayer
             total,
         );
         let (frame, _w) = self.synthesize_gateway_frame_with_words();
-        let mut combined_peeled = [0u64; NUM_SWARM_MICRO_CELLS];
+        let mut combined_peeled = [0u64; NUM_STIGMERGIC_GRANULES];
         let mut c = 0usize;
-        while c < NUM_SWARM_MICRO_CELLS {
+        while c < NUM_STIGMERGIC_GRANULES {
             combined_peeled[c] =
                 swar_q7_circular_add_x8(proj_a.peeled_words[c], proj_b.peeled_words[c]);
             c += 1;
@@ -1639,7 +1635,7 @@ impl<
     > StigmergicScaleLayer for (A, B)
 {
     #[inline(always)]
-    fn scale_granularity(&self) -> SwarmScaleGranularity {
+    fn scale_granularity(&self) -> StigmergicScaleGranularity {
         let ga = self.0.scale_granularity();
         let gb = self.1.scale_granularity();
         if gb > ga { gb } else { ga }
@@ -1653,7 +1649,7 @@ impl<
     #[inline]
     fn project_scale_layer(
         &self,
-        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
         ledger: &CognitiveTrajectoryLedger,
         layer_index: usize,
         total_layers: usize,
@@ -1672,9 +1668,9 @@ impl<
             total,
         );
         let (frame, _w) = self.synthesize_gateway_frame_with_words();
-        let mut combined_peeled = [0u64; NUM_SWARM_MICRO_CELLS];
+        let mut combined_peeled = [0u64; NUM_STIGMERGIC_GRANULES];
         let mut c = 0usize;
-        while c < NUM_SWARM_MICRO_CELLS {
+        while c < NUM_STIGMERGIC_GRANULES {
             combined_peeled[c] =
                 swar_q7_circular_add_x8(proj_a.peeled_words[c], proj_b.peeled_words[c]);
             c += 1;
@@ -1694,9 +1690,9 @@ impl<
 
 impl<T: StigmergicScaleLayer> StigmergicScaleLayer for [T] {
     #[inline(always)]
-    fn scale_granularity(&self) -> SwarmScaleGranularity {
+    fn scale_granularity(&self) -> StigmergicScaleGranularity {
         if self.is_empty() {
-            SwarmScaleGranularity::TypeGateway
+            StigmergicScaleGranularity::TypeGateway
         } else {
             self[0].scale_granularity()
         }
@@ -1716,7 +1712,7 @@ impl<T: StigmergicScaleLayer> StigmergicScaleLayer for [T] {
     #[inline]
     fn project_scale_layer(
         &self,
-        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
         ledger: &CognitiveTrajectoryLedger,
         layer_index: usize,
         total_layers: usize,
@@ -1724,9 +1720,9 @@ impl<T: StigmergicScaleLayer> StigmergicScaleLayer for [T] {
         if self.is_empty() {
             return ScaleLayerProjection {
                 frame: GatewayFrame::default(),
-                peeled_words: [0u64; NUM_SWARM_MICRO_CELLS],
+                peeled_words: [0u64; NUM_STIGMERGIC_GRANULES],
                 residual_words: *input_words,
-                granularity: SwarmScaleGranularity::TypeGateway,
+                granularity: StigmergicScaleGranularity::TypeGateway,
                 layer_index,
                 total_layers: total_layers.max(1),
                 activation: CognitiveCircuitActivation::default(),
@@ -1737,11 +1733,11 @@ impl<T: StigmergicScaleLayer> StigmergicScaleLayer for [T] {
         let total = total_layers.max(own_layers);
         let mut cur_residual = *input_words;
         let mut cur_ledger = *ledger;
-        let mut combined_peeled = [0u64; NUM_SWARM_MICRO_CELLS];
+        let mut combined_peeled = [0u64; NUM_STIGMERGIC_GRANULES];
         let mut cursor = layer_index;
         let mut last_proj = self[0].project_scale_layer(&cur_residual, &cur_ledger, cursor, total);
         let mut c = 0usize;
-        while c < NUM_SWARM_MICRO_CELLS {
+        while c < NUM_STIGMERGIC_GRANULES {
             combined_peeled[c] = last_proj.peeled_words[c];
             c += 1;
         }
@@ -1752,7 +1748,7 @@ impl<T: StigmergicScaleLayer> StigmergicScaleLayer for [T] {
         while i < self.len() {
             let p = self[i].project_scale_layer(&cur_residual, &cur_ledger, cursor, total);
             let mut k = 0usize;
-            while k < NUM_SWARM_MICRO_CELLS {
+            while k < NUM_STIGMERGIC_GRANULES {
                 combined_peeled[k] = swar_q7_circular_add_x8(combined_peeled[k], p.peeled_words[k]);
                 k += 1;
             }
@@ -1778,7 +1774,7 @@ impl<T: StigmergicScaleLayer> StigmergicScaleLayer for [T] {
 
 impl<T: StigmergicScaleLayer, const N: usize> StigmergicScaleLayer for [T; N] {
     #[inline(always)]
-    fn scale_granularity(&self) -> SwarmScaleGranularity {
+    fn scale_granularity(&self) -> StigmergicScaleGranularity {
         self.as_slice().scale_granularity()
     }
 
@@ -1790,7 +1786,7 @@ impl<T: StigmergicScaleLayer, const N: usize> StigmergicScaleLayer for [T; N] {
     #[inline(always)]
     fn project_scale_layer(
         &self,
-        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
         ledger: &CognitiveTrajectoryLedger,
         layer_index: usize,
         total_layers: usize,
@@ -1802,52 +1798,52 @@ impl<T: StigmergicScaleLayer, const N: usize> StigmergicScaleLayer for [T; N] {
 
 impl StigmergicScaleLayer for GatewayFrame {
     #[inline(always)]
-    fn scale_granularity(&self) -> SwarmScaleGranularity {
-        SwarmScaleGranularity::TypeGateway
+    fn scale_granularity(&self) -> StigmergicScaleGranularity {
+        StigmergicScaleGranularity::TypeGateway
     }
 }
 
 impl<P: RawPhaseProjectable + Clone> StigmergicScaleLayer for ObjectiveFact<P> {
     #[inline(always)]
-    fn scale_granularity(&self) -> SwarmScaleGranularity {
-        SwarmScaleGranularity::CellTrail
+    fn scale_granularity(&self) -> StigmergicScaleGranularity {
+        StigmergicScaleGranularity::CellTrail
     }
 }
 
 impl<P: RawPhaseProjectable + Clone> StigmergicScaleLayer for SubjectivePersona<P> {
     #[inline(always)]
-    fn scale_granularity(&self) -> SwarmScaleGranularity {
-        SwarmScaleGranularity::MacroCoalition
+    fn scale_granularity(&self) -> StigmergicScaleGranularity {
+        StigmergicScaleGranularity::MacroCoalition
     }
 }
 
 impl StigmergicScaleLayer for GuardPhaseAnchor {
     #[inline(always)]
-    fn scale_granularity(&self) -> SwarmScaleGranularity {
-        SwarmScaleGranularity::TypeGateway
+    fn scale_granularity(&self) -> StigmergicScaleGranularity {
+        StigmergicScaleGranularity::TypeGateway
     }
 }
 
 impl StigmergicScaleLayer for CrystallizedAttractorRecord {
     #[inline(always)]
-    fn scale_granularity(&self) -> SwarmScaleGranularity {
-        SwarmScaleGranularity::MacroCoalition
+    fn scale_granularity(&self) -> StigmergicScaleGranularity {
+        StigmergicScaleGranularity::MacroCoalition
     }
 }
 
 impl StigmergicScaleLayer for CognitiveTrajectoryLedger {
     #[inline(always)]
-    fn scale_granularity(&self) -> SwarmScaleGranularity {
+    fn scale_granularity(&self) -> StigmergicScaleGranularity {
         self.latest_step()
             .map(CognitiveStepOp::granularity)
-            .unwrap_or(SwarmScaleGranularity::TypeGateway)
+            .unwrap_or(StigmergicScaleGranularity::TypeGateway)
     }
 }
 
 impl StigmergicScaleLayer for HybridScaleCircuit {
     #[inline(always)]
-    fn scale_granularity(&self) -> SwarmScaleGranularity {
-        SwarmScaleGranularity::CellTrail
+    fn scale_granularity(&self) -> StigmergicScaleGranularity {
+        StigmergicScaleGranularity::CellTrail
     }
 
     #[inline(always)]
@@ -1858,12 +1854,12 @@ impl StigmergicScaleLayer for HybridScaleCircuit {
     #[inline]
     fn project_scale_layer(
         &self,
-        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
         ledger: &CognitiveTrajectoryLedger,
         layer_index: usize,
         total_layers: usize,
     ) -> ScaleLayerProjection {
-        let g = SwarmScaleGranularity::from_layer_ratio(layer_index, total_layers);
+        let g = StigmergicScaleGranularity::from_layer_ratio(layer_index, total_layers);
         let active_circuit = self.circuit_for_scale(g);
         let merged = active_circuit.compose_persona_circuit(ledger, 64);
         project_gateway_signal_at_scale(
@@ -1889,7 +1885,7 @@ impl CausalProvenanceSignal for gcso_pointer_trail_t {
 
 impl ManifoldGatewaySignal for gcso_pointer_trail_t {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let w = *trail_phase_words_ref(self);
         let tag_q7 = fast_mean_q7_tag_from_words_64(&w);
         let ptr = gcso_tagged_ptr_t(self.current_ptr);
@@ -1939,11 +1935,11 @@ impl ManifoldGatewaySignal for gcso_pointer_trail_t {
 
 impl StigmergicScaleLayer for gcso_pointer_trail_t {
     #[inline(always)]
-    fn scale_granularity(&self) -> SwarmScaleGranularity {
+    fn scale_granularity(&self) -> StigmergicScaleGranularity {
         if self.linked_trail_id != 0 {
-            SwarmScaleGranularity::MacroCoalition
+            StigmergicScaleGranularity::MacroCoalition
         } else {
-            SwarmScaleGranularity::CellTrail
+            StigmergicScaleGranularity::CellTrail
         }
     }
 }

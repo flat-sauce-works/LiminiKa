@@ -1530,7 +1530,7 @@ gcso_container_map_route_coarse_to_fine_and_steer_four_section_zero_copy_safe(
 
 /**
  * @brief Evaluates the 3-regime Epistemic Horizon separation (KnownCoherent, InternalConflict,
- * LiminalVoid) over `num_records` crystallized attractor records relative to `query_phases`.
+ * Liminal) over `num_records` crystallized attractor records relative to `query_phases`.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_epistemic_evaluate_horizon(
     const gcso_crystallized_attractor_record_t* GCSO_RESTRICT records, size_t num_records,
@@ -1539,7 +1539,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_epistemic_evaluate_horizon(
 
 /**
  * @brief Evaluates multi-attractor Venn-diagram aperture overlap across the 8 SWAR granules and
- * approximation-noise excursions into LiminalVoid, optionally nucleating a new attractor record.
+ * approximation-noise excursions across the Liminal boundary, optionally nucleating a new attractor.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_stigmergic_evaluate_venn_and_serendipity(
     gcso_crystallized_attractor_record_t* GCSO_RESTRICT centroids_inout, size_t num_centroids,
@@ -1550,7 +1550,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_stigmergic_evaluate_venn_an
     uint8_t* GCSO_RESTRICT did_nucleate_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Initializes a 64-byte 2-layer autonomous core stack (Layer 0: LiminalVoid, Layer 1:
+ * @brief Initializes a 64-byte 2-layer autonomous core stack (Layer 0: Liminal, Layer 1:
  * Stigmergic).
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_core_layer_stack_init_default(
@@ -1576,6 +1576,32 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_liminal_topology_format_mer
     const gcso_stigmergic_venn_serendipity_report_t* GCSO_RESTRICT venn_report,
     uint8_t active_crystals, uint8_t spawned_daughters, uint8_t* GCSO_RESTRICT out_buf,
     size_t buf_cap, size_t* GCSO_RESTRICT bytes_written_out) GCSO_NOEXCEPT;
+
+/**
+ * @brief Initializes a 64-byte LiminalEgoField from a preset code (0=Custom, 1=Low, 2=Medium,
+ * 3=High).
+ */
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_ego_field_init_preset(
+    uint8_t preset_code, gcso_liminal_ego_field_t* GCSO_RESTRICT ego_out) GCSO_NOEXCEPT;
+
+/**
+ * @brief Deterministically derives a 64-byte LiminalEgoField from UTF-8 natural-language text.
+ */
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_ego_field_derive_from_text(
+    const uint8_t* GCSO_RESTRICT utf8_ptr, size_t utf8_len,
+    gcso_liminal_ego_field_t* GCSO_RESTRICT ego_out) GCSO_NOEXCEPT;
+
+/**
+ * @brief Branchlessly evaluates Ego triggers across Core Layer 0/1 boundaries and temporal velocity,
+ * updating boundaries and injecting counter-vortex or transgressive phase steering into frame_inout.
+ */
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_ego_field_intervene_frame(
+    gcso_liminal_ego_field_t* GCSO_RESTRICT ego_inout,
+    gcso_autonomous_core_layer_stack_t* GCSO_RESTRICT stack_inout,
+    const gcso_liminal_boundary_delta_t* GCSO_RESTRICT delta,
+    const gcso_epistemic_horizon_reading_t* GCSO_RESTRICT horizon,
+    const gcso_stigmergic_venn_serendipity_report_t* GCSO_RESTRICT venn_report,
+    gcso_gateway_frame_t* GCSO_RESTRICT frame_inout) GCSO_NOEXCEPT;
 
 GCSO_EXTERN_C_END
 

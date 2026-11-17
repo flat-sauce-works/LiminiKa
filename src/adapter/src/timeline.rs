@@ -12,7 +12,7 @@ use super::*;
 pub struct FrameTransitionMetrics {
     /// Mean normalized L1 phase change relative to the previous frame (`0.0..=2.0`).
     pub phase_l1_delta: f32,
-    /// Current query boundary classification (`LiminalVoid` triggers scene-cut keyframe).
+    /// Current query boundary classification (`Liminal` triggers scene-cut keyframe).
     pub void_state: VoidBoundaryState,
     /// Number of P-Frames elapsed since the last I-Frame.
     pub frames_since_keyframe: usize,
@@ -27,7 +27,7 @@ pub trait TimelineCutDetector {
 }
 
 /// Default adaptive GOP detector inserting I-Frames on max GOP length, cluster crystallization,
-/// `LiminalVoid` boundary transitions, or large phase shifts.
+/// `Liminal` boundary transitions, or large phase shifts.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AdaptiveGopCutDetector {
     /// Maximum P-Frames allowed between I-Frames.
@@ -49,7 +49,7 @@ impl TimelineCutDetector for AdaptiveGopCutDetector {
     fn should_emit_keyframe(&self, metrics: &FrameTransitionMetrics) -> bool {
         metrics.frames_since_keyframe >= self.max_gop_len
             || metrics.new_cluster_spawned
-            || matches!(metrics.void_state, VoidBoundaryState::LiminalVoid)
+            || matches!(metrics.void_state, VoidBoundaryState::LiminalExterior)
             || metrics.phase_l1_delta >= self.phase_delta_cut_thresh
     }
 }
@@ -532,7 +532,7 @@ impl GcsoDualTrackTimeline {
                 &FrameTransitionMetrics {
                     phase_l1_delta: if idx == 0 { 0.0 } else { 0.08 },
                     void_state: if scene_cut {
-                        VoidBoundaryState::LiminalVoid
+                        VoidBoundaryState::LiminalExterior
                     } else {
                         VoidBoundaryState::InsideBasin
                     },

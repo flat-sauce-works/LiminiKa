@@ -1,7 +1,7 @@
 // name: src/adapter/src/corpus_recall.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Dynamic natural-language attractor corpus indexing, LiminalVoid boundary gates,
+//! Dynamic natural-language attractor corpus indexing, Liminal boundary gates,
 //! and persistent token-sequence recall ([`TextAttractorCorpus`]).
 
 use super::*;
@@ -22,10 +22,10 @@ pub enum AttractorRole {
 pub enum VoidBoundaryState {
     /// Query clearly resides inside a resonant attractor basin.
     InsideBasin,
-    /// Query sits on the `LiminalVoid` / liminal boundary between two competing attractors.
+    /// Query sits on the `Liminal` boundary between two competing attractors.
     LiminalBoundary,
-    /// Query falls in empty ungrounded space (`LiminalVoid`) below minimum resonance; avoid forced steering.
-    LiminalVoid,
+    /// Query falls in ungrounded exterior space outside all basins; avoid forced steering.
+    LiminalExterior,
 }
 
 /// Single natural-language-backed attractor entry compiled for the active model's RoPE manifold.
@@ -79,7 +79,7 @@ impl ManifoldGatewaySignal for TextAttractorEntry {
 /// Dynamic top-K recall result from [`TextAttractorCorpus::recall_for_query`].
 #[derive(Debug, Clone)]
 pub struct DynamicAttractorRecall<'a> {
-    /// Whether the query landed inside a basin, on a liminal boundary, or in `LiminalVoid` empty space.
+    /// Whether the query landed inside a basin, on a liminal boundary, or in `Liminal` empty space.
     pub void_state: VoidBoundaryState,
     /// Highest geometric resonance score among Fact attractors.
     pub top1_fact_score: f32,
@@ -87,7 +87,7 @@ pub struct DynamicAttractorRecall<'a> {
     pub top2_fact_score: f32,
     /// Highest geometric resonance score among Persona attractors.
     pub top1_persona_score: f32,
-    /// Smallest per-attractor local `LiminalVoid` depth observed across all attractors (`0.0` = deep in a basin).
+    /// Smallest per-attractor local `Liminal` depth observed across all attractors (`0.0` = deep in a basin).
     pub min_local_void_depth: f32,
     /// Highest Guard resonance minus highest Fact/Persona resonance (`> 0` indicates guard-dominant conflict).
     pub guard_conflict_margin: f32,
@@ -98,7 +98,7 @@ pub struct DynamicAttractorRecall<'a> {
     pub gateway_frame: GatewayFrame,
     /// Cross-channel probe telemetry and core [`CausalProvenanceReport`].
     pub telemetry: StratumProbeTelemetry,
-    /// Top-K recalled Fact entries (empty when `void_state == LiminalVoid`).
+    /// Top-K recalled Fact entries (empty when `void_state == Liminal`).
     pub recalled_facts: Vec<(&'a TextAttractorEntry, f32)>,
     /// Top-K recalled Persona entries (suppressed only on Guard repulsion).
     pub recalled_personas: Vec<(&'a TextAttractorEntry, f32)>,
@@ -161,10 +161,10 @@ impl<'a> DynamicAttractorRecall<'a> {
     }
 
     /// Computes a deterministic 64-bit FNV-1a context fingerprint across recalled attractors,
-    /// returning `0` when the query lies in ungrounded `LiminalVoid` or recalled text is empty.
+    /// returning `0` when the query lies in ungrounded `Liminal` or recalled text is empty.
     #[must_use]
     pub fn context_fingerprint_u64(&self) -> u64 {
-        if matches!(self.void_state, VoidBoundaryState::LiminalVoid) {
+        if matches!(self.void_state, VoidBoundaryState::LiminalExterior) {
             return 0;
         }
         let ctx = self.recalled_context_text();
@@ -179,14 +179,14 @@ impl<'a> DynamicAttractorRecall<'a> {
     }
 }
 
-/// Policy parameters controlling top-K attractor recall and `LiminalVoid` boundary classification.
+/// Policy parameters controlling top-K attractor recall and `Liminal` boundary classification.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RecallPolicy {
     /// Maximum number of fact attractors to return when inside a basin or liminal boundary.
     pub top_k_facts: usize,
     /// Maximum number of persona attractors to return.
     pub top_k_personas: usize,
-    /// Minimum top-1 geometric coherence required to stay inside an attractor basin (below this -> `LiminalVoid`).
+    /// Minimum top-1 geometric coherence required to stay inside an attractor basin (below this -> `Liminal`).
     pub min_coherence: f32,
     /// Minimum top-1 minus top-2 score gap to avoid `LiminalBoundary`.
     pub boundary_margin: f32,
@@ -224,13 +224,13 @@ pub struct RecallBoundaryMetrics {
 /// Decision produced by a [`RecallBoundaryGate`] for a query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecallGateDecision {
-    /// Classified boundary state (`InsideBasin`, `LiminalBoundary`, or `LiminalVoid`).
+    /// Classified boundary state (`InsideBasin`, `LiminalBoundary`, or `Liminal`).
     pub void_state: VoidBoundaryState,
-    /// Whether forced Fact/Persona attractor injection should be suppressed (e.g., `LiminalVoid` or Guard dominance).
+    /// Whether forced Fact/Persona attractor injection should be suppressed (e.g., `Liminal` or Guard dominance).
     pub suppress_fact_injection: bool,
 }
 
-/// Trait abstracting `LiminalVoid` boundary classification and Guard-conflict suppression policies.
+/// Trait abstracting `Liminal` boundary classification and Guard-conflict suppression policies.
 pub trait RecallBoundaryGate {
     /// Evaluates boundary metrics under the active [`RecallPolicy`].
     fn evaluate(
@@ -241,7 +241,7 @@ pub trait RecallBoundaryGate {
 }
 
 /// Relational neighborhood context observed from a single attractor's vantage point, enabling
-/// asymmetric, perspective-dependent `LiminalVoid` measurements (analogous to viewing a chain from the
+/// asymmetric, perspective-dependent `Liminal` measurements (analogous to viewing a chain from the
 /// left edge vs. the right edge or per-head Attention affinity).
 #[derive(Debug, Clone, Copy)]
 pub struct AttractorPerspectiveContext<'a> {
@@ -266,16 +266,16 @@ pub struct AttractorPerspectiveContext<'a> {
 pub struct PerspectiveVoidReading {
     /// Perspective-calibrated affinity score as viewed from this attractor's angle.
     pub perspective_affinity: f32,
-    /// Non-negative local `LiminalVoid` gap seen from this attractor (`0.0` = well inside basin).
+    /// Non-negative local `Liminal` gap seen from this attractor (`0.0` = well inside basin).
     pub local_void_depth: f32,
 }
 
-/// Trait computing perspective-dependent affinity and local `LiminalVoid` void depth per attractor.
+/// Trait computing perspective-dependent affinity and local `Liminal` void depth per attractor.
 ///
 /// Rather than judging every attractor from a single isotropic origin, each attractor can have a
 /// distinct local density and boundary geometry so central hubs do not eclipse peripheral basins.
 pub trait AttractorVoidPerspective {
-    /// Measures affinity and local `LiminalVoid` depth from `ctx.entry`'s vantage point.
+    /// Measures affinity and local `Liminal` depth from `ctx.entry`'s vantage point.
     fn measure_perspective(
         &self,
         ctx: &AttractorPerspectiveContext<'_>,
@@ -336,7 +336,7 @@ impl AttractorVoidPerspective for AsymmetricDominoVoidPerspective {
     }
 }
 
-/// Default [`RecallBoundaryGate`] enforcing both `LiminalVoid` coherence floor and Guard dominance suppression.
+/// Default [`RecallBoundaryGate`] enforcing both `Liminal` coherence floor and Guard dominance suppression.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CoherenceGuardGate;
 
@@ -348,7 +348,7 @@ impl RecallBoundaryGate for CoherenceGuardGate {
     ) -> RecallGateDecision {
         if metrics.guard_conflict_margin > policy.guard_suppress_margin {
             return RecallGateDecision {
-                void_state: VoidBoundaryState::LiminalVoid,
+                void_state: VoidBoundaryState::LiminalExterior,
                 suppress_fact_injection: true,
             };
         }
@@ -359,7 +359,7 @@ impl RecallBoundaryGate for CoherenceGuardGate {
 
         if metrics.top1_fact_score < policy.min_coherence && !sharp_liminal_match {
             RecallGateDecision {
-                void_state: VoidBoundaryState::LiminalVoid,
+                void_state: VoidBoundaryState::LiminalExterior,
                 suppress_fact_injection: true,
             }
         } else if sharp_liminal_match && metrics.top1_fact_score < policy.min_coherence
@@ -379,7 +379,7 @@ impl RecallBoundaryGate for CoherenceGuardGate {
 }
 
 /// Model-agnostic Cold-Path corpus that compiles natural-language logs, facts, personas, and
-/// contrastive guards into a dynamic attractor manifold with explicit `LiminalVoid` boundary detection.
+/// contrastive guards into a dynamic attractor manifold with explicit `Liminal` boundary detection.
 #[derive(Debug, Default, Clone)]
 pub struct TextAttractorCorpus {
     entries: Vec<TextAttractorEntry>,
@@ -969,12 +969,12 @@ impl TextAttractorCorpus {
                 guard_conflict_margin: 0.0,
             },
             gate_decision: RecallGateDecision {
-                void_state: VoidBoundaryState::LiminalVoid,
+                void_state: VoidBoundaryState::LiminalExterior,
                 suppress_fact_injection: true,
             },
             action_decision: StigmergicActionDecision::PassiveSidecar,
             gateway_frame: GatewayFrame::default(),
-            swarm_report: SwarmResolutionReport::default(),
+            swarm_report: StigmergicReconstitutionReport::default(),
             local_channel_preferred: false,
             telemetry: StratumProbeTelemetry {
                 cognitive_trajectory: prior_circuit.unwrap_or_default(),
@@ -1038,7 +1038,7 @@ impl TextAttractorCorpus {
                 .take(policy.top_k_facts)
                 .collect()
         };
-        // Persona grounding operates orthogonally to factual `LiminalVoid` gating and is suppressed only on Guard repulsion.
+        // Persona grounding operates orthogonally to factual `Liminal` gating and is suppressed only on Guard repulsion.
         let recalled_personas = if directive.repulse_guard {
             Vec::new()
         } else {

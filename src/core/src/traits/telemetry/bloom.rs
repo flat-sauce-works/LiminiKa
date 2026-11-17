@@ -3,7 +3,7 @@
 
 //! 64-byte constant-time Contrastive Phase Memory Counting Bloom Filter.
 
-use super::swarm::*;
+use super::stigmergy::*;
 use super::*;
 
 // ===================================================================

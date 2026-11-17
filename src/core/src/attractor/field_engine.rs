@@ -63,14 +63,14 @@ impl AttractorFieldEngine {
     /// [`AttractorFieldEngine`], guaranteed 64-byte cacheline-aligned) as a zero-copy `&[u64; 8]` SWAR array.
     #[inline(always)]
     #[must_use]
-    pub const fn repulsion_words_ref(&self) -> &[u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
+    pub const fn repulsion_words_ref(&self) -> &[u64; crate::traits::NUM_STIGMERGIC_GRANULES] {
         // SAFETY: `AttractorFieldEngine` is `#[repr(C, align(64))]` and `repulsion_phase_deltas`
         // is at byte offset 64 (`64 % 64 == 0`, >= 8-byte alignment of `u64`).
         unsafe {
             &*(self
                 .repulsion_phase_deltas
                 .as_ptr()
-                .cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>())
+                .cast::<[u64; crate::traits::NUM_STIGMERGIC_GRANULES]>())
         }
     }
 

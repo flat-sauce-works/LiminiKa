@@ -793,7 +793,7 @@ impl<T> ColdPathOrchestrator for T where
 pub trait FullStackGcsoEngine:
     HotPathExecutionEngine
     + ColdPathOrchestrator
-    + SwarmCellChunk
+    + StigmergicChunkOps
     + GcsoRuntimeContext
     + SystemCapabilityQuery
 {
@@ -802,7 +802,7 @@ pub trait FullStackGcsoEngine:
 impl<T> FullStackGcsoEngine for T where
     T: HotPathExecutionEngine
         + ColdPathOrchestrator
-        + SwarmCellChunk
+        + StigmergicChunkOps
         + GcsoRuntimeContext
         + SystemCapabilityQuery
         + ?Sized

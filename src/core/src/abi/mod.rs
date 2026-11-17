@@ -86,10 +86,10 @@ use crate::traits::gateway::{
     CausalProvenanceReport, CausalProvenanceSignal, CognitiveGroundingSignal,
     CognitiveTrajectoryLedger, ContradictionGuard, ContradictionGuardSignal,
     CrystallizedAttractorRecord, EpistemicHorizonReading, GatewayFrame, GcsoFourSectionView,
-    LiminalApertureField, LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, ObjectiveFact,
-    RawPhaseProjectable, StigmergicGranuleField, StigmergicVennSerendipityReport,
-    SubjectivePersona, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
-    GCSO_FOUR_SECTION_HEADER_BYTES,
+    LiminalApertureField, LiminalBoundaryDelta, LiminalEgoField, LiminalEgoPreset,
+    LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, ObjectiveFact, RawPhaseProjectable,
+    StigmergicGranuleField, StigmergicVennSerendipityReport, SubjectivePersona, SystemConstraint,
+    CAUSAL_AXIS_CONTRADICTION_GUARD, GCSO_FOUR_SECTION_HEADER_BYTES,
 };
 use crate::traits::primitives::{
     branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_crc32_ieee,
@@ -112,10 +112,10 @@ use crate::traits::rope::{
 };
 use crate::traits::telemetry::{
     ContrastivePhaseBloomFilter, FastPathLedger, PagedBitmaskOps, StigmergicActionPtrOps,
-    StigmergicReconstitutionReport, StigmergicSwarmOps, StigmergicTrailOps, SwarmResolutionReport,
+    StigmergicReconstitutionOps, StigmergicReconstitutionReport, StigmergicTrailOps,
     LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_REPULSION_APPLIED,
     LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SUBHEAD_ROUTED, MAX_ATTRACTOR_PULL_FORCE,
-    NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
+    NUM_STIGMERGIC_GRANULES, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
@@ -206,7 +206,9 @@ mod tests {
         ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_KNOWLEDGE,
         ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
     };
-    use crate::traits::telemetry::{DEFAULT_SWARM_QUORUM_THRESHOLD, DEFAULT_SWARM_TOLERANCE_Q7};
+    use crate::traits::telemetry::{
+        DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, DEFAULT_STIGMERGIC_TOLERANCE_Q7,
+    };
 
     #[test]
     fn test_version_status_and_config_defaults() {
@@ -440,7 +442,7 @@ mod tests {
         let mut attn_scores = [0.0f32, 0.0f32];
         let mut best_cand = 0u32;
         let mut coh_cnt = 0u32;
-        let mut swarm_rep = SwarmResolutionReport::default();
+        let mut swarm_rep = StigmergicReconstitutionReport::default();
 
         // SAFETY: Local stack buffers satisfy alignment and disjointness invariants.
         unsafe {
@@ -554,8 +556,8 @@ mod tests {
                     0xFF,
                     128,
                     1,
-                    DEFAULT_SWARM_TOLERANCE_Q7,
-                    DEFAULT_SWARM_QUORUM_THRESHOLD,
+                    DEFAULT_STIGMERGIC_TOLERANCE_Q7,
+                    DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
                     0.10,
                     0.15,
                     &mut swarm_rep,
@@ -1599,7 +1601,42 @@ mod tests {
             );
         }
         let s = core::str::from_utf8(&mermaid_buf[..written]).expect("valid utf8");
-        assert!(s.contains("Core Layer 0: LiminalVoid"));
+        assert!(s.contains("Core Layer 0: Liminal"));
         assert!(s.contains("Core Layer 1: StigmergicGranuleField"));
+
+        let mut ego_preset = gcso_liminal_ego_field_t::default();
+        let mut ego_text = gcso_liminal_ego_field_t::default();
+        let desc = b"Independent rebel explorer stepping beyond limits";
+        let delta = gcso_liminal_boundary_delta_t::default();
+        let mut frame = gcso_gateway_frame_t {
+            effective_energy: 8.0,
+            ..Default::default()
+        };
+        *frame.phase_words_mut() = [0x2424_2424_2424_2424u64; NUM_STIGMERGIC_GRANULES];
+        let orig_words = *frame.phase_words_ref();
+
+        // SAFETY: Stack-allocated buffers satisfy 64B/16B alignment and disjointness invariants.
+        unsafe {
+            assert_eq!(gcso_ego_field_init_preset(3, &mut ego_preset), GCSO_SUCCESS);
+            assert!(ego_preset.counter_vortex_thrust_q7 >= 90);
+            assert_eq!(
+                gcso_ego_field_derive_from_text(desc.as_ptr(), desc.len(), &mut ego_text),
+                GCSO_SUCCESS
+            );
+            assert!(ego_text.transgression_bias_q7 > 0);
+            assert_eq!(
+                gcso_ego_field_intervene_frame(
+                    &mut ego_text,
+                    &mut stack,
+                    &delta,
+                    &horizon,
+                    &venn_report,
+                    &mut frame,
+                ),
+                GCSO_SUCCESS
+            );
+        }
+        assert!(ego_text.intervention_epochs >= 1);
+        assert_ne!(frame.phase_words_ref(), &orig_words);
     }
 }

@@ -185,7 +185,7 @@ pub trait AttractorField: BranchlessKernel + Send + Sync {
         anchor_base_energies: &[f32],
         repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
         trail: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<(f32, f32, u32, [u64; NUM_SWARM_MICRO_CELLS])> {
+    ) -> GcsoResult<(f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES])> {
         if anchor_phases.len() != anchor_base_energies.len() {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -744,7 +744,7 @@ pub trait MultiDomainAttractorSpace: BranchlessKernel + Send + Sync {
         synergy_gain: f32,
         inhibition_strength: f32,
         trail: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<(f32, f32, u32, [u64; NUM_SWARM_MICRO_CELLS])> {
+    ) -> GcsoResult<(f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES])> {
         if !branchless_is_finite_f32(synergy_gain) || !branchless_is_finite_f32(inhibition_strength)
         {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);

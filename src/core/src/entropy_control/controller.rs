@@ -1022,7 +1022,9 @@ impl SystemConstraintSignal for EntropyController {
 
 impl ManifoldGatewaySignal for EntropyController {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(
+        &self,
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         synthesize_multi_origin_gateway_frame_with_words::<
             Self,
             ObjectiveFact<[u8; 0]>,

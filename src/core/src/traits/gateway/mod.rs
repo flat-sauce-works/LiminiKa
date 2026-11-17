@@ -40,7 +40,7 @@ use crate::traits::aligned::{
     is_aligned_to,
 };
 use crate::traits::branchless::{
-    BranchlessKernel, LiminalVoid, atan2_interleaved_pairs_to_q7_word_x8_simd,
+    BranchlessKernel, Liminal, atan2_interleaved_pairs_to_q7_word_x8_simd,
     atan2_to_q7_word_x8_simd,
     branchless_phase_coherence_inv_temp_scale, branchless_q7_circular_resultant_64,
     circular_resultant_from_words_64, coherence_from_uniform_words_x8,
@@ -81,11 +81,12 @@ use crate::traits::rope::{
     rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words, steer_from_swar_words_core_safe,
 };
 use crate::traits::telemetry::{
-    ContrastivePhaseBloomFilter, DEFAULT_SWARM_QUORUM_THRESHOLD, DEFAULT_SWARM_TOLERANCE_Q7,
-    LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
-    LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_SUBHEAD_ROUTED,
-    LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_RANK1_INJECTED,
-    MAX_ATTRACTOR_PULL_FORCE, NUM_SWARM_MICRO_CELLS, StigmergicSwarmOps, SwarmResolutionReport,
+    ContrastivePhaseBloomFilter, DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
+    DEFAULT_STIGMERGIC_TOLERANCE_Q7, LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
+    LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED,
+    LEDGER_METRIC_RANK1_INJECTED, LEDGER_METRIC_REPULSION_APPLIED,
+    LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SUBHEAD_ROUTED, MAX_ATTRACTOR_PULL_FORCE,
+    NUM_STIGMERGIC_GRANULES, StigmergicReconstitutionOps, StigmergicReconstitutionReport,
     TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
     TRAIL_FLAG_SYNERGY_RESONANCE,
 };
@@ -105,8 +106,10 @@ pub use crate::traits::primitives::{
     APERTURE_FAST_PATH_LEDGER, APERTURE_KV_PHASE_CACHE, APERTURE_MANIFOLD_GATEWAY,
     APERTURE_MAPPED_STORAGE, APERTURE_OBJECTIVE_FACT, APERTURE_PHASE_STEERING,
     APERTURE_POINTER_TRAIL, APERTURE_RANK1_RESIDUAL, APERTURE_RELATIVE_COUPLING,
-    APERTURE_SUBJECTIVE_PERSONA, APERTURE_SUBHEAD_ROUTING, APERTURE_SWARM_CONSENSUS,
-    APERTURE_SYSTEM_CONSTRAINT, CORE_LAYER_LIMINAL_VOID, CORE_LAYER_STIGMERGIC,
+    APERTURE_STIGMERGIC_CONSENSUS, APERTURE_SUBHEAD_ROUTING, APERTURE_SUBJECTIVE_PERSONA,
+    APERTURE_SYSTEM_CONSTRAINT, CORE_LAYER_LIMINAL, CORE_LAYER_STIGMERGIC,
+    EGO_TRIGGER_ALL_DEFAULT, EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
+    EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR, EGO_TRIGGER_VORTEX_SWALLOW,
     NUM_CORE_AUTONOMOUS_LAYERS, NUM_LIMINAL_APERTURE_CHANNELS,
 };
 
@@ -122,7 +125,7 @@ pub use self::circuit::{
     CognitiveCircuitBankOps, CognitiveCircuitPlasticity, CognitiveOpKind, CognitiveStepOp,
     CognitiveTrajectoryLedger, HighCapCognitiveBank, HybridScaleCircuit, LayeredScalePair,
     LowSpecCognitiveBank, ScaleLayerNode, ScaleLayerProjection, StandardCognitiveBank,
-    StigmergicScaleGranularity, StigmergicScaleLayer, SwarmScaleGranularity,
+    StigmergicScaleGranularity, StigmergicScaleLayer,
 };
 pub use self::epistemic::*;
 pub use self::frame::*;
@@ -211,8 +214,32 @@ const _: () = {
     assert!(offset_of!(StigmergicGranuleField, adaptation_epochs) == 28);
     assert!(size_of::<AutonomousCoreLayerStack>() == 64);
     assert!(align_of::<AutonomousCoreLayerStack>() == 64);
-    assert!(offset_of!(AutonomousCoreLayerStack, liminal_void_layer) == 0);
+    assert!(offset_of!(AutonomousCoreLayerStack, liminal_layer) == 0);
     assert!(offset_of!(AutonomousCoreLayerStack, stigmergic_layer) == 32);
+    assert!(size_of::<LiminalBoundaryDelta>() == 16);
+    assert!(align_of::<LiminalBoundaryDelta>() == 16);
+    assert!(offset_of!(LiminalBoundaryDelta, channel_floor_velocity_q7) == 0);
+    assert!(offset_of!(LiminalBoundaryDelta, granule_transition_mask) == 8);
+    assert!(offset_of!(LiminalBoundaryDelta, chattering_channel_mask) == 9);
+    assert!(offset_of!(LiminalBoundaryDelta, kinetic_energy_q7) == 10);
+    assert!(offset_of!(LiminalBoundaryDelta, stationary_shortcut_ready) == 11);
+    assert!(offset_of!(LiminalBoundaryDelta, expansion_dominant) == 12);
+    assert!(size_of::<LiminalEgoField>() == 64);
+    assert!(align_of::<LiminalEgoField>() == 64);
+    assert!(offset_of!(LiminalEgoField, sovereign_granule_phase_q7) == 0);
+    assert!(offset_of!(LiminalEgoField, trait_floor_bias_q7) == 8);
+    assert!(offset_of!(LiminalEgoField, trait_gain_bias_q7) == 16);
+    assert!(offset_of!(LiminalEgoField, slot_affinity_bias_q7) == 24);
+    assert!(offset_of!(LiminalEgoField, granule_autonomy_q7) == 32);
+    assert!(offset_of!(LiminalEgoField, counter_vortex_thrust_q7) == 40);
+    assert!(offset_of!(LiminalEgoField, vortex_escape_floor_q7) == 41);
+    assert!(offset_of!(LiminalEgoField, transgression_bias_q7) == 42);
+    assert!(offset_of!(LiminalEgoField, irrational_defiance_q7) == 43);
+    assert!(offset_of!(LiminalEgoField, trigger_mask) == 44);
+    assert!(offset_of!(LiminalEgoField, preset_code) == 47);
+    assert!(offset_of!(LiminalEgoField, ego_signature_hash) == 48);
+    assert!(offset_of!(LiminalEgoField, intervention_epochs) == 52);
+    assert!(offset_of!(LiminalEgoField, last_intervened_mask) == 56);
 };
 
 // SAFETY: `EpistemicHorizonReading` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
@@ -227,6 +254,10 @@ unsafe impl Pod for StigmergicVennSerendipityReport {}
 unsafe impl Pod for StigmergicGranuleField {}
 // SAFETY: `AutonomousCoreLayerStack` is `#[repr(C, align(64))]`, exact size 64 bytes with zero padding.
 unsafe impl Pod for AutonomousCoreLayerStack {}
+// SAFETY: `LiminalBoundaryDelta` is `#[repr(C, align(16))]`, exact size 16 bytes with zero padding.
+unsafe impl Pod for LiminalBoundaryDelta {}
+// SAFETY: `LiminalEgoField` is `#[repr(C, align(64))]`, exact size 64 bytes with zero padding.
+unsafe impl Pod for LiminalEgoField {}
 
 
 #[cfg(test)]

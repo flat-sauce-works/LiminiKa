@@ -109,7 +109,7 @@ pub const ATTRACTOR_SLOT_CUSTOM_7: u8 = 7;
 pub const ATTRACTOR_SLOT_ID_MASK: u8 = 0x07;
 
 // ===================================================================
-// 2b. LiminalVoid Cognitive Aperture Masks (Type-Level Horizon Boundaries)
+// 2b. Liminal Cognitive Aperture Masks (Type-Level Horizon Boundaries)
 // ===================================================================
 
 /// Cognitive aperture bit for Origin 1: hardware & QoS resource constraints (`SystemConstraintSignal`).
@@ -157,8 +157,8 @@ pub const APERTURE_POINTER_TRAIL: u32 = 1 << 11;
 /// Cognitive aperture bit for fast-path L1 ledger shortcuts (`FastPathLedger`).
 pub const APERTURE_FAST_PATH_LEDGER: u32 = 1 << 12;
 
-/// Cognitive aperture bit for 8-cell Micro-Swarm consensus (`StigmergicSwarmOps`).
-pub const APERTURE_SWARM_CONSENSUS: u32 = 1 << 13;
+/// Cognitive aperture bit for 8-granule stigmergic consensus (`StigmergicReconstitutionOps`).
+pub const APERTURE_STIGMERGIC_CONSENSUS: u32 = 1 << 13;
 
 /// Cognitive aperture bit for sheaf cohomology & EDBC entropy control.
 pub const APERTURE_COHOMOLOGY_EDBC: u32 = 1 << 14;
@@ -172,14 +172,27 @@ pub const APERTURE_ACTION_HUB_WIDE: u32 = 0x0000_FFFF;
 /// Number of dynamic channel slots tracked by `LiminalApertureField`.
 pub const NUM_LIMINAL_APERTURE_CHANNELS: usize = 8;
 
-/// Number of orthogonal self-tuning autonomous core layers (`Layer 0: LiminalVoid`, `Layer 1: Stigmergic`).
+/// Number of orthogonal self-tuning autonomous core layers (`Layer 0: Liminal`, `Layer 1: Stigmergic`).
 pub const NUM_CORE_AUTONOMOUS_LAYERS: usize = 2;
 
 /// Autonomous Core Layer 0 identifier: Epistemic Horizon & Trait Aperture (`LiminalApertureField`).
-pub const CORE_LAYER_LIMINAL_VOID: usize = 0;
+pub const CORE_LAYER_LIMINAL: usize = 0;
 
 /// Autonomous Core Layer 1 identifier: Stigmergic Granule Approximation, Venn Overlap & Serendipity (`StigmergicGranuleField`).
 pub const CORE_LAYER_STIGMERGIC: usize = 1;
+
+/// Ego intervention trigger bit (`0x01`): Counter-vortex orbital thrust when attractor pull threatens capture.
+pub const EGO_TRIGGER_VORTEX_SWALLOW: u8 = 1 << 0;
+/// Ego intervention trigger bit (`0x02`): Defiant intervention under internal contradiction (`H^1 != 0`).
+pub const EGO_TRIGGER_INTERNAL_CONFLICT: u8 = 1 << 1;
+/// Ego intervention trigger bit (`0x04`): Transgressive step when standing at a `Liminal` horizon boundary.
+pub const EGO_TRIGGER_LIMINAL_EXTERIOR: u8 = 1 << 2;
+/// Ego intervention trigger bit (`0x08`): Boundary damping when temporal boundary velocity oscillates.
+pub const EGO_TRIGGER_BOUNDARY_CHATTER: u8 = 1 << 3;
+/// Ego intervention trigger bit (`0x10`): Self-initiated perturbation when boundaries stagnate completely.
+pub const EGO_TRIGGER_BOUNDARY_STAGNATION: u8 = 1 << 4;
+/// Default active bitmask enabling all 5 deterministic `LiminalEgoField` triggers (`0x1F`).
+pub const EGO_TRIGGER_ALL_DEFAULT: u8 = 0x1F;
 
 /// Default $8 \times 8$ Attractor Slot coupling bitmatrix (`u64`) enabling symmetric cross-slot
 /// synergy across all 8 parallel attractor domain slots.

@@ -1,19 +1,20 @@
 // name: src/core/src/traits/branchless/kernel_trait.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Root [`LiminalVoid`] epistemic boundary supertrait and [`BranchlessKernel`] blanket trait
+//! Root [`Liminal`] epistemic boundary supertrait and [`BranchlessKernel`] blanket trait
 //! exposing branchless arithmetic and phase primitives.
 
 use super::phase_field::*;
 use super::*;
 
-/// Root epistemic supertrait representing the unknowable exterior beyond any cognitive window.
+/// Root epistemic supertrait representing the boundary separating cognizable state from the
+/// unknowable exterior.
 ///
 /// Every capability and signal trait in LiminiKa refines a specific cognitive aperture mask out of
-/// `LiminalVoid`. Any axis outside a trait's aperture (`!aperture_mask`) belongs strictly to the
+/// `Liminal`. Any axis outside a trait's aperture (`!aperture_mask`) belongs strictly to the
 /// unknowable exterior, while runtime values whose memory support falls below `void_floor` fold
-/// cleanly back into `LiminalVoid` (`0.0` / `0`) without data-dependent branches.
-pub trait LiminalVoid {
+/// cleanly back outside the boundary (`0.0` / `0`) without data-dependent branches.
+pub trait Liminal {
     /// Complete bitmask representing the unbounded unknowable exterior prior to any cognitive cut.
     const ROOT_UNKNOWABLE_VOID_MASK: u32 = u32::MAX;
 
@@ -29,16 +30,16 @@ pub trait LiminalVoid {
     }
 
     /// Gates a scalar value against the active cognitive horizon boundary without branches:
-    /// returns `value` when `support >= void_floor`, otherwise returns `0.0` (`LiminalVoid`).
+    /// returns `value` when `support >= void_floor`, otherwise returns `0.0` (`Liminal` exterior).
     #[inline(always)]
-    fn gate_f32_by_liminal_void(&self, value: f32, support: f32, void_floor: f32) -> f32 {
+    fn gate_f32_by_liminal(&self, value: f32, support: f32, void_floor: f32) -> f32 {
         branchless_select_f32(support >= void_floor, value, 0.0)
     }
 
     /// Gates a 64-head SWAR word array against the active cognitive horizon boundary via a single
-    /// uniform bitmask (`u64::MAX` when grounded, `0` in `LiminalVoid`).
+    /// uniform bitmask (`u64::MAX` when grounded, `0` outside the `Liminal` boundary).
     #[inline(always)]
-    fn gate_words_by_liminal_void_64(
+    fn gate_words_by_liminal_64(
         &self,
         words: &[u64; 8],
         support: f32,
@@ -58,12 +59,12 @@ pub trait LiminalVoid {
     }
 }
 
-impl<T: ?Sized> LiminalVoid for T {}
+impl<T: ?Sized> Liminal for T {}
 
 /// Blanket trait providing branchless bitwise multiplexers, `#![no_std]` transcendentals,
 /// division-free (`0 fdiv`) reciprocals, and 4/8-lane SWAR Q7 & `u8` arithmetic to all engine types
-/// on top of [`LiminalVoid`].
-pub trait BranchlessKernel: LiminalVoid {
+/// on top of [`Liminal`].
+pub trait BranchlessKernel: Liminal {
     /// Branchless bitwise selection for `u8`.
     #[inline(always)]
     fn select_u8(&self, cond: bool, if_true: u8, if_false: u8) -> u8 {

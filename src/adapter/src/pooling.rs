@@ -15,7 +15,7 @@ use crate::{
 };
 use liminika_core::traits::gateway::ManifoldProbeBaseline;
 use liminika_core::traits::primitives::{load_q7_words_64, MAX_ATTENTION_HEADS};
-use liminika_core::traits::telemetry::NUM_SWARM_MICRO_CELLS;
+use liminika_core::traits::telemetry::NUM_STIGMERGIC_GRANULES;
 
 /// Unsupervised strategy collapsing per-token Q activations (`[seq_len, dim]`) into `[dim]`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1063,7 +1063,7 @@ impl CompiledTokenCorpus {
                     }
                     total_disc_weight += eff_w;
 
-                    let mut token_phase_words = [0_u64; NUM_SWARM_MICRO_CELLS];
+                    let mut token_phase_words = [0_u64; NUM_STIGMERGIC_GRANULES];
                     let start = tok_idx.saturating_mul(dim);
                     let end = start.saturating_add(dim);
                     if let (Some(layer_flat), Some(ref_slice)) = (
@@ -1358,12 +1358,12 @@ mod tests {
             Some(3)
         );
 
-        // Completely out-of-domain entity (entity_dim = 500) must fall in LiminalVoid.
+        // Completely out-of-domain entity (entity_dim = 500) must fall in Liminal.
         let query_ood = make_seq(6, 500);
         let recall_ood = compiled
             .recall_token_sequence(&adapter, &query_ood, 7)
             .expect("recall OOD");
-        assert_eq!(recall_ood.void_state, VoidBoundaryState::LiminalVoid);
+        assert_eq!(recall_ood.void_state, VoidBoundaryState::LiminalExterior);
         assert!(recall_ood.recalled_facts.is_empty());
     }
 

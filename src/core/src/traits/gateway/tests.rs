@@ -327,34 +327,34 @@ fn test_multi_scale_layer_cascade_and_cognitive_trajectory_circuit() {
     // 1. Compare two distinct cognitive circuits encoded solely via CognitiveTrajectoryLedger.
     let mut peel_heavy = CognitiveTrajectoryLedger::new();
     peel_heavy.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::MacroCoalition,
+        StigmergicScaleGranularity::MacroCoalition,
         CognitiveOpKind::DecomposePeel,
         6,
     ));
     peel_heavy.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
         CognitiveOpKind::DecomposePeel,
         7,
     ));
     peel_heavy.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::PointerBit,
+        StigmergicScaleGranularity::PointerBit,
         CognitiveOpKind::RouteSubHead,
         5,
     ));
 
     let mut fuse_heavy = CognitiveTrajectoryLedger::new();
     fuse_heavy.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::PointerBit,
+        StigmergicScaleGranularity::PointerBit,
         CognitiveOpKind::SynthesizeFuse,
         5,
     ));
     fuse_heavy.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
         CognitiveOpKind::SynthesizeFuse,
         6,
     ));
     fuse_heavy.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::MacroCoalition,
+        StigmergicScaleGranularity::MacroCoalition,
         CognitiveOpKind::CrystallizeCommit,
         7,
     ));
@@ -366,12 +366,12 @@ fn test_multi_scale_layer_cascade_and_cognitive_trajectory_circuit() {
     let act_peel = peel_heavy.evaluate_circuit_activation(
         &bias_words,
         &input_words,
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
     );
     let act_fuse = fuse_heavy.evaluate_circuit_activation(
         &bias_words,
         &input_words,
-        SwarmScaleGranularity::MacroCoalition,
+        StigmergicScaleGranularity::MacroCoalition,
     );
     assert!(act_peel.peel_gate_q7 > act_fuse.peel_gate_q7);
     assert!(act_fuse.fuse_gate_q7 > act_peel.fuse_gate_q7);
@@ -391,12 +391,12 @@ fn test_multi_scale_layer_cascade_and_cognitive_trajectory_circuit() {
     );
 
     // 2. Verify recursive LayeredScalePair & tuple/array StigmergicScaleLayer scaling (N = 1, 2, 3).
-    let l0 = ScaleLayerNode::new(fact, SwarmScaleGranularity::MacroCoalition);
+    let l0 = ScaleLayerNode::new(fact, StigmergicScaleGranularity::MacroCoalition);
     let l1 = ScaleLayerNode::new(
         SubjectivePersona::new([16i8; MAX_ATTENTION_HEADS], 1.5, 0x0020_0000, 202),
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
     );
-    let l2 = ScaleLayerNode::new(peel_heavy, SwarmScaleGranularity::PointerBit);
+    let l2 = ScaleLayerNode::new(peel_heavy, StigmergicScaleGranularity::PointerBit);
     let tuple_stack = LayeredScalePair(LayeredScalePair(&l0, &l1), &l2);
     assert_eq!(l0.layer_count(), 1);
     assert_eq!(LayeredScalePair(&l0, &l1).layer_count(), 2);
@@ -421,10 +421,10 @@ fn test_multi_scale_layer_cascade_and_cognitive_trajectory_circuit() {
     let layer_array = [
         ScaleLayerNode::new(
             GatewayFrame::default(),
-            SwarmScaleGranularity::MacroCoalition,
+            StigmergicScaleGranularity::MacroCoalition,
         ),
-        ScaleLayerNode::new(l0.signal.synthesize_gateway_frame(), SwarmScaleGranularity::CellTrail),
-        ScaleLayerNode::new(peel_heavy.synthesize_gateway_frame(), SwarmScaleGranularity::PointerBit),
+        ScaleLayerNode::new(l0.signal.synthesize_gateway_frame(), StigmergicScaleGranularity::CellTrail),
+        ScaleLayerNode::new(peel_heavy.synthesize_gateway_frame(), StigmergicScaleGranularity::PointerBit),
     ];
     let (orch_proj, updated_ledger, swarm_rep) = hub
         .orchestrate_adaptive_depth_n(
@@ -448,17 +448,17 @@ fn test_synaptic_transitions_cross_trajectory_and_adaptive_cascade() {
     // 1. Temporal synaptic momentum differentiates bottom-up integration from peel streaks.
     let mut bu_cycle = CognitiveTrajectoryLedger::new();
     bu_cycle.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::PointerBit,
+        StigmergicScaleGranularity::PointerBit,
         CognitiveOpKind::DecomposePeel,
         6,
     ));
     bu_cycle.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
         CognitiveOpKind::RouteSubHead,
         6,
     ));
     bu_cycle.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::MacroCoalition,
+        StigmergicScaleGranularity::MacroCoalition,
         CognitiveOpKind::SynthesizeFuse,
         7,
     ));
@@ -469,12 +469,12 @@ fn test_synaptic_transitions_cross_trajectory_and_adaptive_cascade() {
 
     let mut peel_streak = CognitiveTrajectoryLedger::new();
     peel_streak.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::MacroCoalition,
+        StigmergicScaleGranularity::MacroCoalition,
         CognitiveOpKind::DecomposePeel,
         6,
     ));
     peel_streak.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
         CognitiveOpKind::DecomposePeel,
         7,
     ));
@@ -485,7 +485,7 @@ fn test_synaptic_transitions_cross_trajectory_and_adaptive_cascade() {
     // 2. Cross-trajectory activation catches omitted decomposition in a shallow draft.
     let mut shallow_draft = CognitiveTrajectoryLedger::new();
     shallow_draft.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::MacroCoalition,
+        StigmergicScaleGranularity::MacroCoalition,
         CognitiveOpKind::Observe,
         3,
     ));
@@ -505,17 +505,17 @@ fn test_synaptic_transitions_cross_trajectory_and_adaptive_cascade() {
     let mut early_slot = gcso_ledger_slot_t::default();
     let mut early_ledger = CognitiveTrajectoryLedger::new();
     early_ledger.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::PointerBit,
+        StigmergicScaleGranularity::PointerBit,
         CognitiveOpKind::DecomposePeel,
         5,
     ));
     early_ledger.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
         CognitiveOpKind::SynthesizeFuse,
         7,
     ));
     early_ledger.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::MacroCoalition,
+        StigmergicScaleGranularity::MacroCoalition,
         CognitiveOpKind::CrystallizeCommit,
         7,
     ));
@@ -525,9 +525,9 @@ fn test_synaptic_transitions_cross_trajectory_and_adaptive_cascade() {
     let aligned_frame =
         ObjectiveFact::new([8i8; MAX_ATTENTION_HEADS], 3.0, 0, 1).synthesize_gateway_frame();
     let early_layers = [
-        ScaleLayerNode::new(aligned_frame, SwarmScaleGranularity::MacroCoalition),
-        ScaleLayerNode::new(aligned_frame, SwarmScaleGranularity::CellTrail),
-        ScaleLayerNode::new(aligned_frame, SwarmScaleGranularity::PointerBit),
+        ScaleLayerNode::new(aligned_frame, StigmergicScaleGranularity::MacroCoalition),
+        ScaleLayerNode::new(aligned_frame, StigmergicScaleGranularity::CellTrail),
+        ScaleLayerNode::new(aligned_frame, StigmergicScaleGranularity::PointerBit),
     ];
     let mut early_trail = gcso_pointer_trail_t::default();
     let (_, out_early, _) = hub
@@ -553,7 +553,7 @@ fn test_cognitive_circuit_plasticity_composition_and_four_section_roundtrip() {
         fuse_gate_q7: 110,
         repulse_sensitivity_q7: 20,
         selected_op: CognitiveOpKind::SynthesizeFuse as u8,
-        preferred_next_scale: SwarmScaleGranularity::MacroCoalition as u8,
+        preferred_next_scale: StigmergicScaleGranularity::MacroCoalition as u8,
         intensity_q7: 96,
         circuit_resonance_q7: 48,
         trajectory_depth: 1,
@@ -571,7 +571,7 @@ fn test_cognitive_circuit_plasticity_composition_and_four_section_roundtrip() {
     // Divergent outcome with high repulsion sensitivity shifts via RepulseAudit.
     let act_repulse = CognitiveCircuitActivation {
         repulse_sensitivity_q7: 96,
-        preferred_next_scale: SwarmScaleGranularity::TypeGateway as u8,
+        preferred_next_scale: StigmergicScaleGranularity::TypeGateway as u8,
         intensity_q7: 100,
         ..Default::default()
     };
@@ -582,7 +582,7 @@ fn test_cognitive_circuit_plasticity_composition_and_four_section_roundtrip() {
     // Compositional blending between two circuits preserves both bounds and mid-blend.
     let mut overlay = CognitiveTrajectoryLedger::new();
     overlay.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
         CognitiveOpKind::DecomposePeel,
         6,
     ));
@@ -629,13 +629,13 @@ fn test_cognitive_circuit_plasticity_composition_and_four_section_roundtrip() {
 fn test_hybrid_scale_circuit_and_adaptive_threshold_policy() {
     let mut micro = CognitiveTrajectoryLedger::new();
     micro.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
         CognitiveOpKind::DecomposePeel,
         6,
     ));
     let mut macro_c = CognitiveTrajectoryLedger::new();
     macro_c.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::MacroCoalition,
+        StigmergicScaleGranularity::MacroCoalition,
         CognitiveOpKind::SynthesizeFuse,
         7,
     ));
@@ -643,19 +643,19 @@ fn test_hybrid_scale_circuit_and_adaptive_threshold_policy() {
     let hybrid = HybridScaleCircuit::new(micro, macro_c);
     assert_eq!(hybrid.layer_count(), 2);
     assert_eq!(
-        *hybrid.circuit_for_scale(SwarmScaleGranularity::PointerBit),
+        *hybrid.circuit_for_scale(StigmergicScaleGranularity::PointerBit),
         micro
     );
     assert_eq!(
-        *hybrid.circuit_for_scale(SwarmScaleGranularity::MacroCoalition),
+        *hybrid.circuit_for_scale(StigmergicScaleGranularity::MacroCoalition),
         macro_c
     );
 
     let input_words = load_q7_words_64(&[20i8; MAX_ATTENTION_HEADS]);
     let p_coarse = hybrid.project_scale_layer(&input_words, &macro_c, 0, 2);
     let p_fine = hybrid.project_scale_layer(&input_words, &micro, 1, 2);
-    assert_eq!(p_coarse.granularity, SwarmScaleGranularity::MacroCoalition);
-    assert_eq!(p_fine.granularity, SwarmScaleGranularity::CellTrail);
+    assert_eq!(p_coarse.granularity, StigmergicScaleGranularity::MacroCoalition);
+    assert_eq!(p_fine.granularity, StigmergicScaleGranularity::CellTrail);
     assert_ne!(p_coarse.peeled_words, p_fine.peeled_words);
 
     let strict_policy = AdaptiveThresholdPolicy::new(StigmergicThresholds {
@@ -701,7 +701,7 @@ fn test_scalable_ram_cognitive_circuit_bank_and_folding() {
     // Pushing 20 steps into an 8-unit bank spills evicted steps hierarchically into units[1..3].
     for idx in 0..20u8 {
         let step = CognitiveStepOp::pack(
-            SwarmScaleGranularity::from_u8(idx & 3),
+            StigmergicScaleGranularity::from_u8(idx & 3),
             if (idx & 1) == 0 {
                 CognitiveOpKind::DecomposePeel
             } else {
@@ -722,7 +722,7 @@ fn test_scalable_ram_cognitive_circuit_bank_and_folding() {
     let bank_act = high.evaluate_bank_activation(
         &bias_words,
         &input_words,
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
     );
     assert_eq!(bank_act.trajectory_depth, 20);
     assert!(bank_act.intensity_q7 > 0);
@@ -744,7 +744,7 @@ fn test_ram_phase_kv_cache_exact_hit_resonance_lru_and_gateway_synthesis() {
 
     let mut circuit_a = CognitiveTrajectoryLedger::new();
     circuit_a.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
         CognitiveOpKind::DecomposePeel,
         6,
     ));
@@ -799,7 +799,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     let mut gop_cache: LowSpecPhaseKvGopCache = RamPhaseKvGopCache::new();
     let mut circuit = CognitiveTrajectoryLedger::new();
     circuit.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
         CognitiveOpKind::SynthesizeFuse,
         5,
     ));
@@ -852,7 +852,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
         .lookup_context_or_resonate(0x3333, &load_q7_words_64(&topic_neg), 16, 3)
         .is_none());
     assert!(orth_cache
-        .lookup_context_or_resonate(0x4444, &[0u64; NUM_SWARM_MICRO_CELLS], 16, 4)
+        .lookup_context_or_resonate(0x4444, &[0u64; NUM_STIGMERGIC_GRANULES], 16, 4)
         .is_none());
 
     // Autonomous S^(H-1) concentration-of-measure resonance floor scales inversely with sqrt(H)
@@ -927,12 +927,12 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
 
     let mut peel_ledger = CognitiveTrajectoryLedger::new();
     peel_ledger.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
         CognitiveOpKind::DecomposePeel,
         7,
     ));
     peel_ledger.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::PointerBit,
+        StigmergicScaleGranularity::PointerBit,
         CognitiveOpKind::DecomposePeel,
         7,
     ));
@@ -947,7 +947,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
         &mut peel_frame,
         &w_a,
         &w_b,
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
     );
     assert_eq!(peel_act.op_kind(), CognitiveOpKind::DecomposePeel);
     assert!(peel_frame.subhead_fact_heads > GatewayFrame::default().subhead_fact_heads);
@@ -960,12 +960,12 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
 
     let mut fuse_ledger = CognitiveTrajectoryLedger::new();
     fuse_ledger.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::TypeGateway,
+        StigmergicScaleGranularity::TypeGateway,
         CognitiveOpKind::SynthesizeFuse,
         7,
     ));
     fuse_ledger.push_step(CognitiveStepOp::pack(
-        SwarmScaleGranularity::MacroCoalition,
+        StigmergicScaleGranularity::MacroCoalition,
         CognitiveOpKind::CrystallizeCommit,
         7,
     ));
@@ -999,7 +999,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
             &policy,
             &sys,
             &probe,
-            SwarmScaleGranularity::MacroCoalition,
+            StigmergicScaleGranularity::MacroCoalition,
             0.35,
             &mut fuse_slot,
             &mut trail,
@@ -1016,11 +1016,11 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     // StigmergicActionDecision regimes purely from Analytical vs Integrative circuit habits.
     let peel_thresh = peel_ledger.bias_stigmergic_thresholds(
         StigmergicThresholds::default(),
-        SwarmScaleGranularity::CellTrail,
+        StigmergicScaleGranularity::CellTrail,
     );
     let fuse_thresh = fuse_ledger.bias_stigmergic_thresholds(
         StigmergicThresholds::default(),
-        SwarmScaleGranularity::MacroCoalition,
+        StigmergicScaleGranularity::MacroCoalition,
     );
     assert!(peel_thresh.subhead_route_density_thresh < fuse_thresh.subhead_route_density_thresh);
     assert!(fuse_thresh.crystallize_density_thresh < peel_thresh.crystallize_density_thresh);
@@ -1040,7 +1040,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
             &policy,
             &sys,
             &probe,
-            SwarmScaleGranularity::CellTrail,
+            StigmergicScaleGranularity::CellTrail,
             0.45,
             &mut peel_hub_slot,
             &mut peel_trail,
@@ -1061,7 +1061,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
             &policy,
             &sys,
             &probe,
-            SwarmScaleGranularity::MacroCoalition,
+            StigmergicScaleGranularity::MacroCoalition,
             0.45,
             &mut fuse_hub_slot,
             &mut fuse_trail,
@@ -1085,7 +1085,7 @@ fn epistemic_horizon_separates_true_void_from_internal_conflict_branchlessly() {
     coupling.set_symmetric(0, 1, -120);
 
     // 1. Inside memory horizon and aligned with perspective #0 -> KnownCoherent.
-    let q_coherent = [0u64; NUM_SWARM_MICRO_CELLS];
+    let q_coherent = [0u64; NUM_STIGMERGIC_GRANULES];
     let (frame_coh, horizon_coh) =
         ObjectiveFact::synthesize_slice_relative_gateway(&nodes, coupling.row(0), &q_coherent, 0.35);
     assert_eq!(horizon_coh.regime(), EpistemicRegime::KnownCoherent);
@@ -1104,14 +1104,14 @@ fn epistemic_horizon_separates_true_void_from_internal_conflict_branchlessly() {
     assert!(frame_conf.is_repulsed());
     assert!(frame_conf.effective_energy > 0.0);
 
-    // 3. Outside carved memory cut (orthogonal to all memory nodes) -> LiminalVoid zeroes output cleanly.
+    // 3. Outside carved memory cut (orthogonal to all memory nodes) -> Liminal zeroes output cleanly.
     let q_void = load_q7_words_64(&[-64i8; MAX_ATTENTION_HEADS]);
     let (frame_void, horizon_void) =
         ObjectiveFact::synthesize_slice_relative_gateway(&nodes, coupling.row(0), &q_void, 0.35);
-    assert_eq!(horizon_void.regime(), EpistemicRegime::LiminalVoid);
+    assert_eq!(horizon_void.regime(), EpistemicRegime::Liminal);
     assert_eq!(horizon_void.horizon_gate, 0.0);
     assert_eq!(frame_void.effective_energy, 0.0);
-    assert_eq!(frame_void.phase_words_ref(), &[0u64; NUM_SWARM_MICRO_CELLS]);
+    assert_eq!(frame_void.phase_words_ref(), &[0u64; NUM_STIGMERGIC_GRANULES]);
     assert_eq!(frame_void.mean_phase_tag_q7, 0);
 }
 
@@ -1239,7 +1239,7 @@ fn dissipative_overflow_peels_residual_scatters_and_spawns_daughter_with_relativ
 }
 
 #[test]
-fn liminal_void_supertrait_aperture_shifting_and_mermaid_self_introspection() {
+fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
     // 1. Verify type-level cognitive aperture and unknowable void complement hierarchy.
     assert_eq!(
         <SystemConstraint<()> as SystemConstraintSignal>::SYSTEM_APERTURE_MASK,
@@ -1295,7 +1295,7 @@ fn liminal_void_supertrait_aperture_shifting_and_mermaid_self_introspection() {
     assert_eq!(cog_bits, 0x0000_0003);
     assert_eq!(ext_bits, 0x8000_0000);
 
-    // 2. Verify LiminalApertureField shifts Persona toward LiminalVoid under DecomposePeel + InternalConflict
+    // 2. Verify LiminalApertureField shifts Persona toward Liminal under DecomposePeel + InternalConflict
     //    while widening ObjectiveFact and ContradictionGuard.
     let mut field = LiminalApertureField::new();
     let init_f1 = field.void_floor_q7[1];
@@ -1307,7 +1307,7 @@ fn liminal_void_supertrait_aperture_shifting_and_mermaid_self_introspection() {
     let mut peel_ledger = CognitiveTrajectoryLedger::default();
     for _ in 0..4 {
         peel_ledger.push_step(CognitiveStepOp::pack(
-            SwarmScaleGranularity::CellTrail,
+            StigmergicScaleGranularity::CellTrail,
             CognitiveOpKind::DecomposePeel,
             6,
         ));
@@ -1336,7 +1336,7 @@ fn liminal_void_supertrait_aperture_shifting_and_mermaid_self_introspection() {
     let mut fuse_ledger = CognitiveTrajectoryLedger::default();
     for _ in 0..4 {
         fuse_ledger.push_step(CognitiveStepOp::pack(
-            SwarmScaleGranularity::MacroCoalition,
+            StigmergicScaleGranularity::MacroCoalition,
             CognitiveOpKind::SynthesizeFuse,
             6,
         ));
@@ -1382,7 +1382,7 @@ fn liminal_void_supertrait_aperture_shifting_and_mermaid_self_introspection() {
     let len = snap.format_mermaid_flowchart(&mut buf);
     let diagram = core::str::from_utf8(&buf[..len]).expect("valid utf8 mermaid");
     assert!(diagram.starts_with("flowchart TD\n"));
-    assert!(diagram.contains("LiminalVoid"));
+    assert!(diagram.contains("Liminal"));
     assert!(diagram.contains("ManifoldGatewaySignal"));
     assert!(diagram.contains("ActionHub"));
     assert!(diagram.contains("Crystals:4"));
@@ -1516,7 +1516,7 @@ fn stigmergic_venn_overlap_serendipity_and_core_layer_stack_feedback() {
 
     // Autonomous Core Layer Stack co-adaptation: Layer 1 noise discovery widens Layer 0 Fact aperture
     let mut stack = AutonomousCoreLayerStack::new();
-    let init_void_floor_fact = stack.liminal_void_layer.void_floor_q7[1];
+    let init_void_floor_fact = stack.liminal_layer.void_floor_q7[1];
     let init_tol_g0 = stack.stigmergic_layer.granule_noise_tolerance_q7[0];
     let ledger = CognitiveTrajectoryLedger::default();
     let horizon = EpistemicHorizonReading {
@@ -1531,11 +1531,11 @@ fn stigmergic_venn_overlap_serendipity_and_core_layer_stack_feedback() {
         reserved_align: [0; 3],
     };
     stack.adapt_layers_branchless(&ledger, &horizon, &venn, None);
-    assert!(stack.liminal_void_layer.void_floor_q7[1] < init_void_floor_fact);
+    assert!(stack.liminal_layer.void_floor_q7[1] < init_void_floor_fact);
     assert!(stack.stigmergic_layer.granule_noise_tolerance_q7[0] > init_tol_g0);
     assert_eq!(stack.stigmergic_layer.venn_overlap_mask, venn.venn_core_mask);
 
-    // Serendipitous attractor birth annexes the exterior granule out of LiminalVoid
+    // Serendipitous attractor birth annexes the exterior granule out of Liminal
     let mut c0 = CrystallizedAttractorRecord::default();
     let _ = c0.absorb_gateway_frame(&nodes[0].synthesize_gateway_frame());
     let mut c1 = CrystallizedAttractorRecord::default();
@@ -1566,11 +1566,135 @@ fn stigmergic_venn_overlap_serendipity_and_core_layer_stack_feedback() {
     assert_eq!(post_venn.void_exterior_mask & (1 << 6), 0);
 
     // Verify zero-alloc Core Layer 0 + Layer 1 Mermaid output
-    let snap = LiminalTopologyTelemetrySnapshot::capture(&stack.liminal_void_layer, &horizon, 3, 1);
+    let snap = LiminalTopologyTelemetrySnapshot::capture(&stack.liminal_layer, &horizon, 3, 1);
     let mut mermaid_buf = [0u8; 2048];
     let len = snap.format_core_layers_mermaid(&stack.stigmergic_layer, &venn, &mut mermaid_buf);
     let txt = core::str::from_utf8(&mermaid_buf[..len]).expect("valid utf8 mermaid");
-    assert!(txt.contains("Core Layer 0: LiminalVoid"));
+    assert!(txt.contains("Core Layer 0: Liminal"));
     assert!(txt.contains("Core Layer 1: StigmergicGranuleField"));
     assert!(txt.contains("Cross-Layer Feedback"));
+}
+
+#[test]
+fn liminal_boundary_delta_and_ego_field_interventions() {
+    // 1. Temporal boundary velocity, stationary fast-skip, outward expansion, and chatter detection
+    let mut prev_l0 = LiminalApertureField::new();
+    let cur_same = prev_l0;
+    let delta0 = LiminalBoundaryDelta::compute_branchless(
+        &prev_l0,
+        &cur_same,
+        0b0000_0011,
+        0b0000_0011,
+        &LiminalBoundaryDelta::default(),
+    );
+    assert_eq!(delta0.kinetic_energy_q7, 0);
+    assert_eq!(delta0.stationary_shortcut_ready, 1);
+    assert_eq!(delta0.chattering_channel_mask, 0);
+
+    let mut cur_expand = prev_l0;
+    cur_expand.void_floor_q7[2] = cur_expand.void_floor_q7[2].saturating_sub(6);
+    cur_expand.void_floor_q7[6] = cur_expand.void_floor_q7[6].saturating_sub(6);
+    let delta1 = LiminalBoundaryDelta::compute_branchless(
+        &prev_l0,
+        &cur_expand,
+        0b0000_0011,
+        0b0000_0111,
+        &delta0,
+    );
+    assert_eq!(delta1.stationary_shortcut_ready, 0);
+    assert_eq!(delta1.expansion_dominant, 1);
+    assert_eq!(delta1.granule_transition_mask, 0b0000_0100);
+    assert_eq!(delta1.channel_floor_velocity_q7[2], -6);
+
+    // Reverse sign on channel 2 -> chattering bit (1 << 2)
+    prev_l0 = cur_expand;
+    cur_expand.void_floor_q7[2] = cur_expand.void_floor_q7[2].saturating_add(5);
+    let delta2 = LiminalBoundaryDelta::compute_branchless(
+        &prev_l0,
+        &cur_expand,
+        0b0000_0111,
+        0b0000_0111,
+        &delta1,
+    );
+    assert_ne!(delta2.chattering_channel_mask & (1 << 2), 0);
+
+    // 2. Ego presets & deterministic #![no_std] natural-language derivation (EN + JA)
+    let ego_low = LiminalEgoField::from_preset(LiminalEgoPreset::Low);
+    let ego_med = LiminalEgoField::from_preset(LiminalEgoPreset::Medium);
+    let ego_high = LiminalEgoField::from_preset(LiminalEgoPreset::High);
+    assert!(ego_low.counter_vortex_thrust_q7 < ego_med.counter_vortex_thrust_q7);
+    assert!(ego_med.counter_vortex_thrust_q7 < ego_high.counter_vortex_thrust_q7);
+    assert!(ego_low.vortex_escape_floor_q7 > ego_high.vortex_escape_floor_q7);
+
+    assert!(!LiminalEgoField::from_natural_language("   ").is_active());
+
+    let mut ego_rebel = LiminalEgoField::from_natural_language(
+        "Strong-willed stubborn explorer who defies constraints and steps beyond the boundary",
+    );
+    let ego_calm = LiminalEgoField::from_natural_language("Calm logical cautious observer");
+    let ego_ja = LiminalEgoField::from_natural_language("頑固で反抗的、未知の境界へ踏み出す強い自我");
+    assert!(ego_rebel.is_active());
+    assert!(ego_rebel.counter_vortex_thrust_q7 > ego_calm.counter_vortex_thrust_q7);
+    assert!(ego_rebel.transgression_bias_q7 > ego_calm.transgression_bias_q7);
+    assert!(ego_ja.is_active());
+    assert_ne!(ego_ja.ego_signature_hash, 0);
+    assert!(ego_ja.transgression_bias_q7 > 0);
+    assert!(ego_ja.counter_vortex_thrust_q7 >= 64);
+
+    // 3. Counter-vortex orbital thrust & transgressive Liminal leap on GatewayFrame + Core Layers
+    let mut stack = AutonomousCoreLayerStack::new();
+    let venn = StigmergicVennSerendipityReport {
+        venn_core_mask: 0x0F,
+        void_exterior_mask: 0xF0,
+        ..Default::default()
+    };
+    let strong_capture_horizon = EpistemicHorizonReading {
+        total_memory_support: 2.5,
+        peak_positive_affinity: 0.92,
+        horizon_gate: 1.0,
+        dominant_anchor_id: 42,
+        regime_code: EpistemicRegime::KnownCoherent as u8,
+        ..Default::default()
+    };
+    let mut vortex_frame = GatewayFrame {
+        effective_energy: 8.0,
+        ..Default::default()
+    };
+    *vortex_frame.phase_words_mut() = [0x2424_2424_2424_2424u64; NUM_STIGMERGIC_GRANULES];
+
+    let before_floor2 = stack.liminal_layer.void_floor_q7[2];
+    let out_orbit = ego_rebel.intervene_on_layers_and_frame_branchless(
+        &mut stack,
+        &delta1,
+        &strong_capture_horizon,
+        &venn,
+        vortex_frame,
+    );
+    assert_ne!(
+        ego_rebel.last_intervened_mask & EGO_TRIGGER_VORTEX_SWALLOW,
+        0
+    );
+    assert_ne!(out_orbit.phase_words_ref(), vortex_frame.phase_words_ref());
+    assert!(stack.liminal_layer.void_floor_q7[2] <= before_floor2);
+
+    // Zero-gated Liminal exterior -> transgressive rebel dares step beyond rather than silence
+    let mut liminal_ego = LiminalEgoField::from_preset(LiminalEgoPreset::High);
+    let zeroed_horizon = EpistemicHorizonReading {
+        horizon_gate: 0.0,
+        regime_code: EpistemicRegime::Liminal as u8,
+        ..Default::default()
+    };
+    let zero_frame = GatewayFrame::default();
+    let out_transgress = liminal_ego.intervene_on_layers_and_frame_branchless(
+        &mut stack,
+        &delta0,
+        &zeroed_horizon,
+        &venn,
+        zero_frame,
+    );
+    assert!(out_transgress.effective_energy > 0.0);
+    assert_ne!(
+        liminal_ego.last_intervened_mask & EGO_TRIGGER_LIMINAL_EXTERIOR,
+        0
+    );
 }

@@ -108,7 +108,7 @@ use crate::traits::primitives::{
 use crate::traits::telemetry::{
     select_and_bridge_macro_aligned_bayesian_trail_core, ContrastivePhaseBloomFilter,
     StigmergicActionPtrOps, StigmergicTrailOps, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY,
-    NUM_SWARM_MICRO_CELLS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
+    NUM_STIGMERGIC_GRANULES, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
     TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 /// Normal entropy convergence mode (`Mode 0`: single stable attractor at origin $x^* = 0$).

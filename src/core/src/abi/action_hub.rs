@@ -1185,7 +1185,7 @@ pub unsafe extern "C" fn gcso_action_hub_route_coarse_to_fine_trail(
 }
 
 /// Resolves an Action Hub phase command across the 8 parallel 8-head SWAR Micro-Swarm cells on
-/// `trail_inout` in strictly constant time (`0` branches) and writes the [`SwarmResolutionReport`] to `report_out`.
+/// `trail_inout` in strictly constant time (`0` branches) and writes the [`StigmergicReconstitutionReport`] to `report_out`.
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `GCSO_RESTRICT` invariants.
@@ -1201,7 +1201,7 @@ pub unsafe extern "C" fn gcso_action_hub_resolve_trail_in_swarm(
     quorum_threshold: u8,
     entropy_h_tilde: f32,
     low_entropy_skip_thresh: f32,
-    report_out: *mut SwarmResolutionReport,
+    report_out: *mut StigmergicReconstitutionReport,
 ) -> GcsoStatus {
     ffi_boundary!({
         validate_ptr(trail_inout)?;

@@ -15,7 +15,7 @@ use super::*;
 #[inline]
 pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
     frame: &GatewayFrame,
-    frm_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    frm_w: &[u64; NUM_STIGMERGIC_GRANULES],
     trail_inout: &mut gcso_pointer_trail_t,
     unresolved_damping_u7: u8,
     head_dim: usize,
@@ -47,7 +47,7 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
         let swar_words = if frame.qdps_min_step_q7 <= 1 {
             next_w
         } else if frame.qdps_min_step_q7 > 127 {
-            [0u64; NUM_SWARM_MICRO_CELLS]
+            [0u64; NUM_STIGMERGIC_GRANULES]
         } else {
             swar_q7_qdps_filter_words_64(&next_w, frame.qdps_min_step_q7)
         };
@@ -202,14 +202,14 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
 
 #[inline(always)]
 pub(super) fn filter_and_damp_gateway_words(
-    next_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    next_w: &[u64; NUM_STIGMERGIC_GRANULES],
     qdps_min_step_q7: u8,
     unresolved_damping_u7: u8,
-) -> [u64; NUM_SWARM_MICRO_CELLS] {
+) -> [u64; NUM_STIGMERGIC_GRANULES] {
     let qdps_words = if qdps_min_step_q7 <= 1 {
         *next_w
     } else if qdps_min_step_q7 > 127 {
-        [0u64; NUM_SWARM_MICRO_CELLS]
+        [0u64; NUM_STIGMERGIC_GRANULES]
     } else {
         swar_q7_qdps_filter_words_64(next_w, qdps_min_step_q7)
     };
@@ -242,7 +242,7 @@ pub(super) fn prepare_gateway_steering_state<T: PhaseSteering + ?Sized, S: Manif
     key_tensor: Option<&AlignedSliceMut32<'_, f32>>,
 ) -> GcsoResult<(
     GatewayFrame,
-    [u64; NUM_SWARM_MICRO_CELLS],
+    [u64; NUM_STIGMERGIC_GRANULES],
     CausalProvenanceReport,
     usize,
     usize,
@@ -461,7 +461,7 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering + SubHeadRouter {
         let qdps_words = if min_step_q7 <= 1 {
             folded_w
         } else if min_step_q7 > 127 {
-            [0u64; NUM_SWARM_MICRO_CELLS]
+            [0u64; NUM_STIGMERGIC_GRANULES]
         } else {
             swar_q7_qdps_filter_words_64(&folded_w, min_step_q7)
         };
@@ -599,7 +599,7 @@ pub trait ActionHubGatewayExt: ActionHub {
     ) -> GcsoResult<(
         GatewayFrame,
         CausalProvenanceReport,
-        [u64; NUM_SWARM_MICRO_CELLS],
+        [u64; NUM_STIGMERGIC_GRANULES],
     )> {
         let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
         let report = frame.to_causal_report();
@@ -851,7 +851,7 @@ pub trait ActionHubGatewayExt: ActionHub {
             signal,
             geometry,
             thresholds,
-            SwarmScaleGranularity::TypeGateway,
+            StigmergicScaleGranularity::TypeGateway,
             entropy_h_tilde,
             ledger_slot,
             trail_out,
@@ -865,7 +865,7 @@ pub trait ActionHubGatewayExt: ActionHub {
     /// Scale-aware variant of [`Self::orchestrate_gateway_layer_safe`] that closes the feedback
     /// loop from `ledger_slot`'s active [`CognitiveTrajectoryLedger`] (when
     /// [`LEDGER_FLAG_COGNITIVE_TRAJECTORY`] is set) back onto the synthesized [`GatewayFrame`]
-    /// at the caller's [`SwarmScaleGranularity`] prior to causal inspection and steering.
+    /// at the caller's [`StigmergicScaleGranularity`] prior to causal inspection and steering.
     ///
     /// # Errors
     /// Propagates any validation or execution error from [`ActionHub`].
@@ -878,7 +878,7 @@ pub trait ActionHubGatewayExt: ActionHub {
         signal: &S,
         geometry: &G,
         thresholds: &StigmergicThresholds,
-        scale: SwarmScaleGranularity,
+        scale: StigmergicScaleGranularity,
         entropy_h_tilde: f32,
         ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
@@ -1117,7 +1117,7 @@ pub trait ActionHubGatewayExt: ActionHub {
             policy,
             system,
             probe,
-            SwarmScaleGranularity::TypeGateway,
+            StigmergicScaleGranularity::TypeGateway,
             entropy_h_tilde,
             ledger_slot,
             trail_out,
@@ -1146,7 +1146,7 @@ pub trait ActionHubGatewayExt: ActionHub {
         policy: &P,
         system: &C,
         probe: &ManifoldProbeBaseline,
-        scale: SwarmScaleGranularity,
+        scale: StigmergicScaleGranularity,
         entropy_h_tilde: f32,
         ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
@@ -1211,7 +1211,7 @@ pub trait ActionHubGatewayExt: ActionHub {
     ) -> GcsoResult<(
         GatewayFrame,
         CausalProvenanceReport,
-        SwarmResolutionReport,
+        StigmergicReconstitutionReport,
         f32,
     )> {
         let (frame, report, init_frm_w) = self.ingest_gateway_and_steer_with_words_core(
@@ -1369,7 +1369,7 @@ impl CognitiveGroundingSignal for CrystallizedAttractorRecord {
         Some(&self.phase_profile)
     }
     #[inline(always)]
-    fn project_grounding_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn project_grounding_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         *self.phase_words_ref()
     }
     #[inline(always)]
@@ -1402,7 +1402,7 @@ impl SubjectivePersonaSignal for CrystallizedAttractorRecord {
 
 impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
     #[inline(always)]
-    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_frame_with_words(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let is_active = (self.sample_count > 0) & (self.phase_gravity_mass > DEFAULT_ENTROPY_EPS);
         if !is_active {
             let packed_tag =
@@ -1420,7 +1420,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                     frame_flags: packed_tag as u16,
                     ..GatewayFrame::default()
                 },
-                [0u64; NUM_SWARM_MICRO_CELLS],
+                [0u64; NUM_STIGMERGIC_GRANULES],
             );
         }
         let is_mature = (self.sample_count >= 2) & (self.resultant_r_bar >= 0.45);
@@ -1480,7 +1480,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
     }
 
     #[inline(always)]
-    fn synthesize_gateway_ensemble_item(&self) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    fn synthesize_gateway_ensemble_item(&self) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let is_active = (self.sample_count > 0) & (self.phase_gravity_mass > DEFAULT_ENTROPY_EPS);
         if !is_active {
             return (
@@ -1493,7 +1493,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                     dominant_cause_code: self.dominant_cause_code,
                     ..GatewayFrame::default()
                 },
-                [0u64; NUM_SWARM_MICRO_CELLS],
+                [0u64; NUM_STIGMERGIC_GRANULES],
             );
         }
         let is_mature = (self.sample_count >= 2) & (self.resultant_r_bar >= 0.45);
@@ -1554,16 +1554,16 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
     #[inline]
     fn synthesize_gateway_slice_with_words(
         records: &[Self],
-    ) -> (GatewayFrame, [u64; NUM_SWARM_MICRO_CELLS]) {
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let len = records.len();
         if len == 0 {
-            return (GatewayFrame::default(), [0u64; NUM_SWARM_MICRO_CELLS]);
+            return (GatewayFrame::default(), [0u64; NUM_STIGMERGIC_GRANULES]);
         }
         if len == 1 {
             return records[0].synthesize_gateway_frame_with_words();
         }
 
-        let mut acc_w = [0u64; NUM_SWARM_MICRO_CELLS];
+        let mut acc_w = [0u64; NUM_STIGMERGIC_GRANULES];
         let mut acc_is_uniform = true;
         let mut tot_e = 0.0_f32;
         let mut best_e = 0.0_f32;
@@ -1731,26 +1731,26 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
 }
 
 
-/// Blanket-implemented bridge coupling [`StigmergicSwarmOps`] with [`StigmergicScaleLayer`]
+/// Blanket-implemented bridge coupling [`StigmergicReconstitutionOps`] with [`StigmergicScaleLayer`]
 /// so Micro-Swarm quorum thresholds, tolerances, and active cell masks adapt automatically
 /// to the active granularity tier and layer depth `(layer_index, total_layers)`.
-pub trait StigmergicLayeredSwarmExt: StigmergicSwarmOps {
+pub trait StigmergicLayeredSwarmExt: StigmergicReconstitutionOps {
     /// Resolves `target_words` inside the 8-cell SWAR Micro-Swarm using parameters derived
     /// structurally from `(granularity, layer_index, total_layers)` and optional Bloom guards.
     #[inline(always)]
     fn resolve_swarm_with_scale_layer(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,
-        target_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        granularity: SwarmScaleGranularity,
+        target_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        granularity: StigmergicScaleGranularity,
         layer_index: usize,
         total_layers: usize,
         active_cell_mask: u8,
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
-    ) -> (SwarmResolutionReport, [u64; NUM_SWARM_MICRO_CELLS]) {
+    ) -> (StigmergicReconstitutionReport, [u64; NUM_STIGMERGIC_GRANULES]) {
         let gain_q7 = granularity.layer_peel_gain_q7(layer_index, total_layers);
-        let tol_q7 = granularity.swarm_tolerance_q7(DEFAULT_SWARM_TOLERANCE_Q7);
-        let quorum = granularity.swarm_quorum_requirement(DEFAULT_SWARM_QUORUM_THRESHOLD);
+        let tol_q7 = granularity.swarm_tolerance_q7(DEFAULT_STIGMERGIC_TOLERANCE_Q7);
+        let quorum = granularity.swarm_quorum_requirement(DEFAULT_STIGMERGIC_QUORUM_THRESHOLD);
         let mask = if active_cell_mask == 0 { 0xFF } else { active_cell_mask };
         self.try_resolve_action_in_swarm_from_words(
             action_ptr,
@@ -1769,7 +1769,7 @@ pub trait StigmergicLayeredSwarmExt: StigmergicSwarmOps {
     }
 }
 
-impl<T: StigmergicSwarmOps + ?Sized> StigmergicLayeredSwarmExt for T {}
+impl<T: StigmergicReconstitutionOps + ?Sized> StigmergicLayeredSwarmExt for T {}
 
 /// Cross-scale [`ActionHub`] orchestrator uniting [`StigmergicScaleLayer`],
 /// [`CognitiveTrajectoryLedger`], and [`StigmergicLayeredSwarmExt`] in zero-allocation mode.
@@ -1786,7 +1786,7 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
         &mut self,
         layer: &(impl StigmergicScaleLayer + ?Sized),
         input_ptr: gcso_tagged_ptr_t,
-        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
         ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         layer_index: usize,
@@ -1795,7 +1795,7 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
     ) -> GcsoResult<(
         ScaleLayerProjection,
         CognitiveTrajectoryLedger,
-        SwarmResolutionReport,
+        StigmergicReconstitutionReport,
     )> {
         let mut ledger = CognitiveTrajectoryLedger::from_ledger_slot(ledger_slot);
         let proj = layer.project_scale_layer(input_words, &ledger, layer_index, total_layers);
@@ -1832,14 +1832,14 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
         layers: &[L],
         depth_n: usize,
         input_ptr: gcso_tagged_ptr_t,
-        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
         ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
     ) -> GcsoResult<(
         ScaleLayerProjection,
         CognitiveTrajectoryLedger,
-        SwarmResolutionReport,
+        StigmergicReconstitutionReport,
     )> {
         let default_policy = AdaptiveThresholdPolicy::default();
         self.orchestrate_adaptive_depth_n_with_policy(
@@ -1870,7 +1870,7 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
         layers: &[L],
         depth_n: usize,
         input_ptr: gcso_tagged_ptr_t,
-        input_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
         ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
@@ -1878,13 +1878,13 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
     ) -> GcsoResult<(
         ScaleLayerProjection,
         CognitiveTrajectoryLedger,
-        SwarmResolutionReport,
+        StigmergicReconstitutionReport,
     )> {
         #[inline(always)]
-        const fn residual_mean_abs_q7(words: &[u64; NUM_SWARM_MICRO_CELLS]) -> u8 {
+        const fn residual_mean_abs_q7(words: &[u64; NUM_STIGMERGIC_GRANULES]) -> u8 {
             let mut sum = 0u16;
             let mut c = 0usize;
-            while c < NUM_SWARM_MICRO_CELLS {
+            while c < NUM_STIGMERGIC_GRANULES {
                 sum += swar_mean_u8_le128_x8(swar_q7_abs_u8_x8(words[c])) as u16;
                 c += 1;
             }
@@ -1939,7 +1939,7 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
                 bloom_filter,
             )?;
             let mut c = 0usize;
-            while c < NUM_SWARM_MICRO_CELLS {
+            while c < NUM_STIGMERGIC_GRANULES {
                 combined_peeled[c] =
                     swar_q7_circular_add_x8(combined_peeled[c], step_res.0.peeled_words[c]);
                 c += 1;
@@ -1972,7 +1972,7 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
                 bloom_filter,
             )?;
             let mut c = 0usize;
-            while c < NUM_SWARM_MICRO_CELLS {
+            while c < NUM_STIGMERGIC_GRANULES {
                 combined_peeled[c] =
                     swar_q7_circular_add_x8(combined_peeled[c], refine_res.0.peeled_words[c]);
                 c += 1;

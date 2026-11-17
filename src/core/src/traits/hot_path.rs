@@ -10,7 +10,7 @@
 //!   zero-copy candidate-trail Attention score modulation (`modulate_attention_scores_by_candidate_trails`),
 //!   single-manifold unified-field resonance & single-scan 8-cell SWAR Micro-Swarm resolution
 //!   (preserving 32-bit `target_anchor_id`), and 8-lane working neighborhood synergy.
-//! - **[`SwarmCellChunk`]**: Mezzo PagedBlock chunk stepping and inter-layer Skip-Hop Bus
+//! - **[`StigmergicChunkOps`]**: Mezzo PagedBlock chunk stepping and inter-layer Skip-Hop Bus
 //!   synchronization (both saturating and circular $S^1$ geodesic-folded).
 //! - **[`HotPathExecutionEngine`] / [`FractalCascadeCoordinator`] / [`HotPathObserver`]**:
 //!   Blanket-implemented micro observers over [`super::ActionHub`] that drive constant-time
@@ -53,13 +53,14 @@ use super::primitives::{
 use super::rope::steer_from_swar_words_core_safe;
 use super::telemetry::{
     eval_bitmask_dyadic_ultrametric, select_rewire_bridge_and_modulate_with_preloaded_words_64,
-    ContrastivePhaseBloomFilter, PagedBitmaskOps, StigmergicActionPtrOps, StigmergicSwarmOps,
-    StigmergicTrailOps, SwarmResolutionReport, LEDGER_METRIC_FAST_PATH_HIT,
-    LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_LAZY_UNWRAP_APPLIED, LEDGER_METRIC_PHASE_STEERED,
-    LEDGER_METRIC_SUBHEAD_ROUTED, LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
-    MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, NUM_SWARM_MICRO_CELLS,
-    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
-    TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
+    ContrastivePhaseBloomFilter, PagedBitmaskOps, StigmergicActionPtrOps,
+    StigmergicReconstitutionOps, StigmergicReconstitutionReport, StigmergicTrailOps,
+    LEDGER_METRIC_FAST_PATH_HIT, LEDGER_METRIC_LAYER_SKIP_COMPENSATED,
+    LEDGER_METRIC_LAZY_UNWRAP_APPLIED, LEDGER_METRIC_PHASE_STEERED,
+    LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
+    LEDGER_METRIC_SUBHEAD_ROUTED, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY,
+    NUM_STIGMERGIC_GRANULES, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
+    TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 use super::{
     accumulate_q7_slice_into_words_64, fuse_lazy_unwrap_and_qdps_from_words_64, ActionHub,
@@ -247,7 +248,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
     }
 
     /// Register-resident variant of [`Self::orchestrate_unified_field_resonance`] accepting
-    /// pre-loaded `init_w: [u64; NUM_SWARM_MICRO_CELLS]` and returning
+    /// pre-loaded `init_w: [u64; NUM_STIGMERGIC_GRANULES]` and returning
     /// `(final_pull_force, mean_coherence, active_anchor_count, post_words)` in registers (`0` reload).
     ///
     /// # Errors
@@ -256,12 +257,12 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
     #[inline]
     fn orchestrate_unified_field_resonance_from_words(
         &self,
-        init_w: [u64; NUM_SWARM_MICRO_CELLS],
+        init_w: [u64; NUM_STIGMERGIC_GRANULES],
         anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
         repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
         trail: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<(f32, f32, u32, [u64; NUM_SWARM_MICRO_CELLS])> {
+    ) -> GcsoResult<(f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES])> {
         if anchor_phases.len() != anchor_base_energies.len() {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -293,7 +294,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
         anchor_base_energies: &[f32],
         repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
         trail: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<(f32, f32, u32, [u64; NUM_SWARM_MICRO_CELLS])> {
+    ) -> GcsoResult<(f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES])> {
         let init_w = *trail_phase_words_ref(trail);
         self.orchestrate_unified_field_resonance_from_words(
             init_w,
@@ -336,8 +337,8 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
 
     /// Advances `input_ptr` and resolves the composite phase trajectory of the **Single Unified
     /// Attractor Manifold** (`anchor_phases`, `anchor_base_energies`) across the 8 parallel
-    /// 8-head SWAR Micro-Swarm cells ([`StigmergicSwarmOps::resolve_unified_field_in_swarm_to_words`]),
-    /// returning both `(SwarmResolutionReport, resolved_swar_words)` in registers (`0` stack reload).
+    /// 8-head SWAR Micro-Swarm cells ([`StigmergicReconstitutionOps::resolve_unified_field_in_swarm_to_words`]),
+    /// returning both `(StigmergicReconstitutionReport, resolved_swar_words)` in registers (`0` stack reload).
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `anchor_phases.len() != anchor_base_energies.len()`
@@ -359,7 +360,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
         trail_out: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<(SwarmResolutionReport, [u64; NUM_SWARM_MICRO_CELLS])> {
+    ) -> GcsoResult<(StigmergicReconstitutionReport, [u64; NUM_STIGMERGIC_GRANULES])> {
         if anchor_phases.len() != anchor_base_energies.len()
             || qdps_min_step_rad < 0.0
             || !branchless_is_finite_f32(qdps_min_step_rad)
@@ -387,7 +388,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
 
     /// Advances `input_ptr` and resolves the composite phase trajectory of the **Single Unified
     /// Attractor Manifold** (`anchor_phases`, `anchor_base_energies`) across the 8 parallel
-    /// 8-head SWAR Micro-Swarm cells ([`StigmergicSwarmOps::resolve_unified_field_in_swarm_with_recruitment`]),
+    /// 8-head SWAR Micro-Swarm cells ([`StigmergicReconstitutionOps::resolve_unified_field_in_swarm_with_recruitment`]),
     /// recruiting the already-identified dominant unified-field donor anchor in $\mathcal{O}(1)$
     /// on partial quorum without re-scanning `anchor_phases`, while preserving the full 32-bit
     /// `trail_out.target_anchor_id` in `trail_out.cluster_id`.
@@ -412,7 +413,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
         trail_out: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<SwarmResolutionReport> {
+    ) -> GcsoResult<StigmergicReconstitutionReport> {
         Ok(self
             .step_and_resolve_in_unified_field_swarm_to_words(
                 input_ptr,
@@ -527,14 +528,14 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
     #[inline]
     fn orchestrate_neighborhood_synergy_from_bank_from_words(
         &self,
-        acc_w: [u64; NUM_SWARM_MICRO_CELLS],
+        acc_w: [u64; NUM_STIGMERGIC_GRANULES],
         slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
         slot_weights: &[f32; MAX_ATTRACTOR_DOMAINS],
         coupling_matrix_8x8: u64,
         synergy_gain: f32,
         inhibition_strength: f32,
         trail: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<(f32, f32, u32, [u64; NUM_SWARM_MICRO_CELLS])> {
+    ) -> GcsoResult<(f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES])> {
         if !branchless_is_finite_f32(synergy_gain) || !branchless_is_finite_f32(inhibition_strength)
         {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
@@ -582,8 +583,8 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
     }
 
     /// Advances `input_ptr` and resolves its target Attractor Slot phase command across the 8
-    /// parallel 8-head SWAR Micro-Swarm cells ([`StigmergicSwarmOps::resolve_slot_bank_in_swarm_to_words`]),
-    /// returning both `(SwarmResolutionReport, resolved_swar_words)` in registers (`0` stack reload).
+    /// parallel 8-head SWAR Micro-Swarm cells ([`StigmergicReconstitutionOps::resolve_slot_bank_in_swarm_to_words`]),
+    /// returning both `(StigmergicReconstitutionReport, resolved_swar_words)` in registers (`0` stack reload).
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] or [`crate::abi::GCSO_ERROR_MISALIGNED_POINTER`]
@@ -606,7 +607,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
         trail_out: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<(SwarmResolutionReport, [u64; NUM_SWARM_MICRO_CELLS])> {
+    ) -> GcsoResult<(StigmergicReconstitutionReport, [u64; NUM_STIGMERGIC_GRANULES])> {
         if qdps_min_step_rad < 0.0 || !branchless_is_finite_f32(qdps_min_step_rad) {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -633,7 +634,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
     }
 
     /// Advances `input_ptr` and resolves its target Attractor Slot phase command across the 8
-    /// parallel 8-head SWAR Micro-Swarm cells ([`StigmergicSwarmOps::resolve_slot_bank_in_swarm_with_recruitment`]),
+    /// parallel 8-head SWAR Micro-Swarm cells ([`StigmergicReconstitutionOps::resolve_slot_bank_in_swarm_with_recruitment`]),
     /// recruiting coupled neighbor slots from `slot_phase_bank` on partial quorum.
     ///
     /// # Errors
@@ -657,7 +658,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
         trail_out: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<SwarmResolutionReport> {
+    ) -> GcsoResult<StigmergicReconstitutionReport> {
         Ok(self
             .step_and_resolve_in_swarm_to_words(
                 input_ptr,
@@ -1000,7 +1001,7 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
 /// Mezzo-path trait for cellular swarm cell chunk step processing across PagedBlocks (**Mezzo Level**).
 ///
 /// Requires [`BranchlessKernel`] to enforce constant-time execution at the type level.
-pub trait SwarmCellChunk: BranchlessKernel + Send + Sync {
+pub trait StigmergicChunkOps: BranchlessKernel + Send + Sync {
     /// Updates local cellular swarm cell state across PagedBlock token chunk boundaries.
     ///
     /// # Errors
@@ -1087,7 +1088,7 @@ pub trait SwarmCellChunk: BranchlessKernel + Send + Sync {
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
         trail_inout: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<SwarmResolutionReport> {
+    ) -> GcsoResult<StigmergicReconstitutionReport> {
         self.step_chunk(mask, chunk_len)?;
         let mask8 = mask.subswarm_activity_mask_8();
         let active_cell_mask = branchless_select_u8(mask8 != 0, mask8, 0xFF);
@@ -1142,16 +1143,12 @@ pub trait SwarmCellChunk: BranchlessKernel + Send + Sync {
     ) -> f32 {
         eval_bitmask_dyadic_ultrametric(mask_a, mask_b, w_key)
     }
-}
 
-/// Approximation-oriented extension trait refining [`SwarmCellChunk`] for myopic PagedBlock
-/// granule stepping, Skip-Hop geodesic synchronization, and mask-gated reconstitution.
-pub trait StigmergicChunkOps: SwarmCellChunk {
     /// Fragments a 64-head phase target across active granules gated by `mask` and reconstitutes
     /// `trail_inout` in constant time.
     ///
     /// # Errors
-    /// Propagates any error returned by [`SwarmCellChunk::step_chunk`].
+    /// Propagates any error returned by [`StigmergicChunkOps::step_chunk`].
     #[inline(always)]
     fn reconstitute_chunk_granules_masked(
         &mut self,
@@ -1188,8 +1185,6 @@ pub trait StigmergicChunkOps: SwarmCellChunk {
         )
     }
 }
-
-impl<T: SwarmCellChunk + ?Sized> StigmergicChunkOps for T {}
 
 // ===================================================================
 // 3. Lv.2 Micro Observers: `HotPathExecutionEngine`, `FractalCascadeCoordinator`, & `HotPathObserver`
@@ -1409,7 +1404,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         } else if n_anc > 0 {
             load_q7_words_64(&anchor_phases[dom_idx])
         } else {
-            [0u64; NUM_SWARM_MICRO_CELLS]
+            [0u64; NUM_STIGMERGIC_GRANULES]
         };
         let fact_eq_raw = single_direct || (n_anc > 0 && swar_words_equal_64(&raw_words, &fact_w));
         let fact_ref = if fact_eq_raw { &raw_words } else { &fact_w };
@@ -1948,7 +1943,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         trail_out: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<SwarmResolutionReport> {
+    ) -> GcsoResult<StigmergicReconstitutionReport> {
         let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
             qdps_min_step_rad,
             ripa_max_rad,
@@ -2385,7 +2380,7 @@ pub trait FractalCascadeCoordinator: HotPathExecutionEngine {
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         trail_out: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<SwarmResolutionReport> {
+    ) -> GcsoResult<StigmergicReconstitutionReport> {
         let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
             qdps_min_step_rad,
             ripa_max_rad,
@@ -2477,7 +2472,7 @@ mod tests {
         PhaseSteering, SubHeadRouter, Rank1ResidualAdapter, VisualAttentionSteering,
     };
     use crate::traits::telemetry::{
-        FastPathLedger, DEFAULT_SWARM_QUORUM_THRESHOLD, DEFAULT_SWARM_TOLERANCE_Q7,
+        FastPathLedger, DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, DEFAULT_STIGMERGIC_TOLERANCE_Q7,
         TRAIL_FLAG_SYNERGY_RESONANCE,
     };
     use crate::traits::{AlignedBuffer16, AlignedBuffer32, AlignedBuffer64};
@@ -2547,7 +2542,7 @@ mod tests {
     impl Rank1ResidualAdapter for MinimalHotPathEngine {}
     impl VisualAttentionSteering for MinimalHotPathEngine {}
 
-    impl SwarmCellChunk for MinimalHotPathEngine {
+    impl StigmergicChunkOps for MinimalHotPathEngine {
         fn step_chunk(&mut self, _mask: &gcso_paged_bitmask_t, chunk_len: u32) -> GcsoResult<()> {
             if chunk_len == 0 {
                 return Err(GCSO_ERROR_INVALID_ARGUMENT);
@@ -2926,8 +2921,8 @@ mod tests {
                 128,
                 DEFAULT_QDPS_MIN_STEP_RAD,
                 DEFAULT_RIPA_CLAMP_MAX_RAD,
-                DEFAULT_SWARM_TOLERANCE_Q7,
-                DEFAULT_SWARM_QUORUM_THRESHOLD,
+                DEFAULT_STIGMERGIC_TOLERANCE_Q7,
+                DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
                 0.10,
                 0.15,
                 None,
@@ -2955,8 +2950,8 @@ mod tests {
                 128,
                 DEFAULT_QDPS_MIN_STEP_RAD,
                 DEFAULT_RIPA_CLAMP_MAX_RAD,
-                DEFAULT_SWARM_TOLERANCE_Q7,
-                DEFAULT_SWARM_QUORUM_THRESHOLD,
+                DEFAULT_STIGMERGIC_TOLERANCE_Q7,
+                DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
                 0.10,
                 0.15,
                 None,

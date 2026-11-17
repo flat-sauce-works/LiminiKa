@@ -181,6 +181,10 @@ pub type gcso_stigmergic_venn_serendipity_report_t = StigmergicVennSerendipityRe
 pub type gcso_autonomous_core_layer_stack_t = AutonomousCoreLayerStack;
 /// C-ABI type alias for the 32-byte Self-Introspecting Topology Telemetry Snapshot.
 pub type gcso_liminal_topology_snapshot_t = LiminalTopologyTelemetrySnapshot;
+/// C-ABI type alias for the 16-byte Temporal Boundary Velocity Analyzer (`LiminalBoundaryDelta`).
+pub type gcso_liminal_boundary_delta_t = LiminalBoundaryDelta;
+/// C-ABI type alias for the 64-byte Wide-Aperture Subjective Ego Field (`LiminalEgoField`).
+pub type gcso_liminal_ego_field_t = LiminalEgoField;
 
 // ===================================================================
 // Strongly-Typed Opaque Handles
@@ -765,8 +769,21 @@ const _: () = {
         size_of::<gcso_liminal_topology_snapshot_t>() == 32
             && align_of::<gcso_liminal_topology_snapshot_t>() == 16
     );
-    assert!(offset_of!(gcso_autonomous_core_layer_stack_t, liminal_void_layer) == 0);
+    assert!(offset_of!(gcso_autonomous_core_layer_stack_t, liminal_layer) == 0);
     assert!(offset_of!(gcso_autonomous_core_layer_stack_t, stigmergic_layer) == 32);
+    assert!(
+        size_of::<gcso_liminal_boundary_delta_t>() == 16
+            && align_of::<gcso_liminal_boundary_delta_t>() == 16
+    );
+    assert!(offset_of!(gcso_liminal_boundary_delta_t, kinetic_energy_q7) == 10);
+    assert!(offset_of!(gcso_liminal_boundary_delta_t, stationary_shortcut_ready) == 11);
+    assert!(
+        size_of::<gcso_liminal_ego_field_t>() == 64 && align_of::<gcso_liminal_ego_field_t>() == 64
+    );
+    assert!(offset_of!(gcso_liminal_ego_field_t, counter_vortex_thrust_q7) == 40);
+    assert!(offset_of!(gcso_liminal_ego_field_t, trigger_mask) == 44);
+    assert!(offset_of!(gcso_liminal_ego_field_t, ego_signature_hash) == 48);
+    assert!(offset_of!(gcso_liminal_ego_field_t, last_intervened_mask) == 56);
     assert!(size_of::<gcso_subhead_config_t>() == 32 && align_of::<gcso_subhead_config_t>() == 16);
     assert!(
         size_of::<gcso_rank1_residual_descriptor_t>() == 64
@@ -779,7 +796,10 @@ const _: () = {
         size_of::<gcso_kv_keyframe_header_t>() == 64
             && align_of::<gcso_kv_keyframe_header_t>() == 32
     );
-    assert!(size_of::<SwarmResolutionReport>() == 16 && align_of::<SwarmResolutionReport>() == 16);
+    assert!(
+        size_of::<StigmergicReconstitutionReport>() == 16
+            && align_of::<StigmergicReconstitutionReport>() == 16
+    );
     assert!(size_of::<gcso_gateway_frame_t>() == 128 && align_of::<gcso_gateway_frame_t>() == 64);
     assert!(
         size_of::<gcso_causal_provenance_report_t>() == 16

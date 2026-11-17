@@ -1,7 +1,7 @@
 // name: src/core/src/traits/gateway/epistemic.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Branchless epistemic horizon separation (`KnownCoherent` vs. `InternalConflict` vs. `LiminalVoid`),
+//! Branchless epistemic horizon separation (`KnownCoherent` vs. `InternalConflict` vs. `Liminal`),
 //! signed relative attractor coupling ($W_{ij} \in [-127, +127]$), autonomous dynamic
 //! [`LiminalApertureField`] horizon shifting, and `#![no_std]` self-introspecting Mermaid topology
 //! telemetry over [`ManifoldGatewaySignal`].
@@ -11,7 +11,7 @@
 //! - $W_{ij} > 0$ projects node $j$ onto the attractive basin axis;
 //! - $W_{ij} < 0$ projects node $j$ onto the opposing/repulsive axis;
 //! - When total projection energy onto the local memory cut falls below `horizon_floor`, the
-//!   manifold enters [`EpistemicRegime::LiminalVoid`] (*Limina* to the unknowable) and scales
+//!   manifold enters [`EpistemicRegime::Liminal`] (*Limina* to the unknowable) and scales
 //!   output steering energy cleanly to `0.0` without branching.
 
 #![forbid(unsafe_code)]
@@ -19,8 +19,12 @@
 
 use super::*;
 use crate::crystal::DissipativeOverflowReport;
-use crate::traits::branchless::{LiminalVoid, branchless_q7_inhibit_words_64};
-use crate::traits::primitives::{branchless_sincos_q7, swar_u8_mean_round_x8};
+use crate::traits::branchless::{Liminal, branchless_q7_inhibit_words_64};
+use crate::traits::primitives::{
+    ATTRACTOR_SLOT_CUSTOM_6, ATTRACTOR_SLOT_CUSTOM_7, ATTRACTOR_SLOT_USER_CONTEXT,
+    MAX_ATTRACTOR_DOMAINS, TAG_ACTION_MODE_MASK, branchless_sincos_q7, compute_crc32_ieee,
+    swar_q7_avg_round_x8, swar_u8_mean_round_x8,
+};
 use crate::traits::telemetry::{DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, NUM_STIGMERGIC_GRANULES};
 
 /// Epistemic regime classification separating internal memory conflict from out-of-memory unknowability.
@@ -32,7 +36,7 @@ pub enum EpistemicRegime {
     /// Query falls inside the carved memory horizon with competing / opposing attractors ($H^1 \neq 0$).
     InternalConflict = 1,
     /// Query lies outside the carved memory horizon (*Limina* between cognition and the unknowable).
-    LiminalVoid = 2,
+    Liminal = 2,
 }
 
 impl EpistemicRegime {
@@ -42,7 +46,7 @@ impl EpistemicRegime {
     pub const fn from_code(code: u8) -> Self {
         match code {
             1 => Self::InternalConflict,
-            2 => Self::LiminalVoid,
+            2 => Self::Liminal,
             _ => Self::KnownCoherent,
         }
     }
@@ -58,7 +62,7 @@ pub struct EpistemicHorizonReading {
     pub peak_positive_affinity: f32,
     /// Accumulated competing / opposing projection energy inside the memory cut.
     pub internal_conflict_energy: f32,
-    /// Branchless amplitude gate (`1.0` inside cognitive horizon, `0.0` in [`EpistemicRegime::LiminalVoid`]).
+    /// Branchless amplitude gate (`1.0` inside cognitive horizon, `0.0` in [`EpistemicRegime::Liminal`]).
     pub horizon_gate: f32,
     /// Normalized internal contradiction severity in $[0.0, 1.0]$.
     pub conflict_severity: f32,
@@ -66,7 +70,7 @@ pub struct EpistemicHorizonReading {
     pub dominant_anchor_id: u32,
     /// Anchor ID of the strongest opposing/conflicting node inside the cut (`0` if none).
     pub opposing_anchor_id: u32,
-    /// Encoded [`EpistemicRegime`] byte (`0` = Coherent, `1` = InternalConflict, `2` = LiminalVoid).
+    /// Encoded [`EpistemicRegime`] byte (`0` = Coherent, `1` = InternalConflict, `2` = Liminal).
     pub regime_code: u8,
     /// Alignment padding bytes.
     pub reserved_align: [u8; 3],
@@ -80,11 +84,11 @@ impl EpistemicHorizonReading {
         EpistemicRegime::from_code(self.regime_code)
     }
 
-    /// Returns `true` when the query lies outside the carved memory cut ([`EpistemicRegime::LiminalVoid`]).
+    /// Returns `true` when the query lies outside the carved memory cut ([`EpistemicRegime::Liminal`]).
     #[inline(always)]
     #[must_use]
-    pub const fn is_liminal_void(&self) -> bool {
-        self.regime_code == EpistemicRegime::LiminalVoid as u8
+    pub const fn is_liminal(&self) -> bool {
+        self.regime_code == EpistemicRegime::Liminal as u8
     }
 
     /// Returns `true` when the query lies inside the memory cut yet triggers internal opposition ($H^1 \neq 0$).
@@ -95,12 +99,12 @@ impl EpistemicHorizonReading {
     }
 
     /// Modulates any synthesized [`GatewayFrame`] strictly branchlessly according to this epistemic
-    /// horizon: zeroes amplitude in [`EpistemicRegime::LiminalVoid`] and elevates repulsive flags in
+    /// horizon: zeroes amplitude in [`EpistemicRegime::Liminal`] and elevates repulsive flags in
     /// [`EpistemicRegime::InternalConflict`].
     #[inline(always)]
     #[must_use]
     pub fn apply_to_frame_branchless(&self, mut frame: GatewayFrame) -> GatewayFrame {
-        let is_void = self.is_liminal_void();
+        let is_void = self.is_liminal();
         let is_conflict = self.is_internal_conflict();
         let gate = branchless_clamp_f32(branchless_relu_f32(self.horizon_gate), 0.0, 1.0);
 
@@ -151,7 +155,7 @@ impl EpistemicHorizonReading {
         {
             let pw = frame.phase_words_mut();
             let mut w = 0usize;
-            while w < NUM_SWARM_MICRO_CELLS {
+            while w < NUM_STIGMERGIC_GRANULES {
                 pw[w] &= keep_mask;
                 w += 1;
             }
@@ -170,7 +174,7 @@ impl EpistemicHorizonReading {
 impl CausalProvenanceSignal for EpistemicHorizonReading {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
-        let is_void = self.is_liminal_void();
+        let is_void = self.is_liminal();
         let is_conflict = self.is_internal_conflict();
         branchless_select_u32(
             is_void,
@@ -187,7 +191,7 @@ impl CausalProvenanceSignal for EpistemicHorizonReading {
     #[inline(always)]
     fn causal_anomaly_severity(&self) -> f32 {
         branchless_select_f32(
-            self.is_liminal_void(),
+            self.is_liminal(),
             0.0,
             branchless_clamp_f32(self.conflict_severity, 0.0, 1.0),
         )
@@ -199,7 +203,7 @@ impl ManifoldGatewaySignal for EpistemicHorizonReading {
     fn synthesize_gateway_frame(&self) -> GatewayFrame {
         let base = GatewayFrame {
             target_anchor_id: branchless_select_u32(
-                self.is_liminal_void(),
+                self.is_liminal(),
                 0,
                 branchless_select_u32(
                     self.is_internal_conflict() && self.opposing_anchor_id != 0,
@@ -224,12 +228,12 @@ impl ManifoldGatewaySignal for EpistemicHorizonReading {
 
 /// Uniform node abstraction enabling relative signed coupling and epistemic horizon evaluation
 /// across any attractor representation (`CrystallizedAttractorRecord`, `GatewayFrame`, `ObjectiveFact`, etc.)
-/// atop [`LiminalVoid`].
-pub trait RelativeAttractorNode: LiminalVoid {
+/// atop [`Liminal`].
+pub trait RelativeAttractorNode: Liminal {
     /// Static cognitive aperture mask for relative attractor participation.
     const RELATIVE_APERTURE_MASK: u32 = APERTURE_RELATIVE_COUPLING;
     /// Returns the node's 64-head Q7 phase profile packed into 8 register-resident `u64` words.
-    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS];
+    fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES];
 
     /// Returns the node's positive gravitational / activation energy ($\ge 0$).
     fn relative_energy(&self) -> f32;
@@ -246,7 +250,7 @@ pub trait RelativeAttractorNode: LiminalVoid {
 
 impl<T: RelativeAttractorNode + ?Sized> RelativeAttractorNode for &T {
     #[inline(always)]
-    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         (**self).relative_phase_words_64()
     }
     #[inline(always)]
@@ -265,7 +269,7 @@ impl<T: RelativeAttractorNode + ?Sized> RelativeAttractorNode for &T {
 
 impl RelativeAttractorNode for CrystallizedAttractorRecord {
     #[inline(always)]
-    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         *self.phase_words_ref()
     }
     #[inline(always)]
@@ -280,7 +284,7 @@ impl RelativeAttractorNode for CrystallizedAttractorRecord {
 
 impl RelativeAttractorNode for GatewayFrame {
     #[inline(always)]
-    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         *self.phase_words_ref()
     }
     #[inline(always)]
@@ -295,7 +299,7 @@ impl RelativeAttractorNode for GatewayFrame {
 
 impl<T: RawPhaseProjectable> RelativeAttractorNode for ObjectiveFact<T> {
     #[inline(always)]
-    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         self.payload.project_to_words_64()
     }
     #[inline(always)]
@@ -310,7 +314,7 @@ impl<T: RawPhaseProjectable> RelativeAttractorNode for ObjectiveFact<T> {
 
 impl<T: RawPhaseProjectable> RelativeAttractorNode for SubjectivePersona<T> {
     #[inline(always)]
-    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         self.payload.project_to_words_64()
     }
     #[inline(always)]
@@ -325,7 +329,7 @@ impl<T: RawPhaseProjectable> RelativeAttractorNode for SubjectivePersona<T> {
 
 impl RelativeAttractorNode for GuardPhaseAnchor {
     #[inline(always)]
-    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         load_q7_words_64(&self.phase_deltas)
     }
     #[inline(always)]
@@ -340,7 +344,7 @@ impl RelativeAttractorNode for GuardPhaseAnchor {
 
 impl RelativeAttractorNode for gcso_pointer_trail_t {
     #[inline(always)]
-    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         *trail_phase_words_ref(self)
     }
     #[inline(always)]
@@ -355,7 +359,7 @@ impl RelativeAttractorNode for gcso_pointer_trail_t {
 
 impl RelativeAttractorNode for ScaleLayerProjection {
     #[inline(always)]
-    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         *self.frame.phase_words_ref()
     }
     #[inline(always)]
@@ -370,7 +374,7 @@ impl RelativeAttractorNode for ScaleLayerProjection {
 
 impl RelativeAttractorNode for crate::attractor::AttractorAnchor {
     #[inline(always)]
-    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         *self.phase_words_ref()
     }
     #[inline(always)]
@@ -389,7 +393,7 @@ impl RelativeAttractorNode for crate::attractor::AttractorAnchor {
 
 impl RelativeAttractorNode for crate::attractor::CrystallizedAnchorRecord {
     #[inline(always)]
-    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         load_q7_words_64(&self.phase_deltas)
     }
     #[inline(always)]
@@ -408,13 +412,13 @@ impl RelativeAttractorNode for crate::attractor::CrystallizedAnchorRecord {
 
 #[inline]
 fn accumulate_words_sincos_weighted(
-    nw: &[u64; NUM_SWARM_MICRO_CELLS],
+    nw: &[u64; NUM_STIGMERGIC_GRANULES],
     weight: f32,
     sin_acc: &mut [f32; MAX_ATTENTION_HEADS],
     cos_acc: &mut [f32; MAX_ATTENTION_HEADS],
 ) {
     let mut cell = 0usize;
-    while cell < NUM_SWARM_MICRO_CELLS {
+    while cell < NUM_STIGMERGIC_GRANULES {
         let word = nw[cell];
         let base = cell << 3;
         let mut lane = 0usize;
@@ -436,7 +440,7 @@ fn accumulate_words_sincos_weighted(
 #[must_use]
 pub fn fold_fractal_nodes_words_64<Node: RelativeAttractorNode>(
     nodes: &[Node],
-) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, u32) {
+) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, u32) {
     let mut sin_acc = [0.0_f32; MAX_ATTENTION_HEADS];
     let mut cos_acc = [0.0_f32; MAX_ATTENTION_HEADS];
     let mut total_energy = 0.0_f32;
@@ -463,7 +467,7 @@ pub fn fold_fractal_nodes_words_64<Node: RelativeAttractorNode>(
 
 impl<A: RelativeAttractorNode, B: RelativeAttractorNode> RelativeAttractorNode for (A, B) {
     #[inline]
-    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         let mut sin_acc = [0.0_f32; MAX_ATTENTION_HEADS];
         let mut cos_acc = [0.0_f32; MAX_ATTENTION_HEADS];
         let ea = branchless_relu_f32(self.0.relative_energy());
@@ -492,7 +496,7 @@ impl<A: RelativeAttractorNode, B: RelativeAttractorNode> RelativeAttractorNode f
 
 impl<Node: RelativeAttractorNode, const K: usize> RelativeAttractorNode for [Node; K] {
     #[inline]
-    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+    fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         fold_fractal_nodes_words_64(self.as_slice()).0
     }
 
@@ -615,7 +619,7 @@ impl<const N: usize> RelativeCouplingMatrix<N> {
 #[must_use]
 pub fn evaluate_epistemic_horizon_words_64<Node: RelativeAttractorNode>(
     nodes: &[Node],
-    query_words: &[u64; NUM_SWARM_MICRO_CELLS],
+    query_words: &[u64; NUM_STIGMERGIC_GRANULES],
     coupling_row_q7: Option<&[i8]>,
     horizon_floor: f32,
 ) -> EpistemicHorizonReading {
@@ -695,7 +699,7 @@ pub fn evaluate_epistemic_horizon_words_64<Node: RelativeAttractorNode>(
     );
     let regime_code = branchless_select_u8(
         !inside_horizon,
-        EpistemicRegime::LiminalVoid as u8,
+        EpistemicRegime::Liminal as u8,
         branchless_select_u8(
             conflict_active,
             EpistemicRegime::InternalConflict as u8,
@@ -718,10 +722,10 @@ pub fn evaluate_epistemic_horizon_words_64<Node: RelativeAttractorNode>(
 
 /// Folds a 64-head `[f32; 64]` `(sin, cos)` vector accumulator into 8 packed SWAR `u64` words.
 #[inline]
-fn fold_sincos64_to_words(sin_acc: &[f32; MAX_ATTENTION_HEADS], cos_acc: &[f32; MAX_ATTENTION_HEADS]) -> [u64; NUM_SWARM_MICRO_CELLS] {
-    let mut words = [0u64; NUM_SWARM_MICRO_CELLS];
+fn fold_sincos64_to_words(sin_acc: &[f32; MAX_ATTENTION_HEADS], cos_acc: &[f32; MAX_ATTENTION_HEADS]) -> [u64; NUM_STIGMERGIC_GRANULES] {
+    let mut words = [0u64; NUM_STIGMERGIC_GRANULES];
     let mut cell = 0usize;
-    while cell < NUM_SWARM_MICRO_CELLS {
+    while cell < NUM_STIGMERGIC_GRANULES {
         let base = cell << 3;
         let sin_arr = [
             sin_acc[base],
@@ -754,14 +758,14 @@ fn fold_sincos64_to_words(sin_acc: &[f32; MAX_ATTENTION_HEADS], cos_acc: &[f32; 
 ///
 /// Positive entries in `coupling_row_q7` pull toward synergistic nodes; negative entries inhibit
 /// and project opposing nodes onto the repulsive axis (`ACTION_MODE_PHASE_REPULSE`). When
-/// `query_words` falls into [`EpistemicRegime::LiminalVoid`] (`< horizon_floor`), steering amplitude
+/// `query_words` falls into [`EpistemicRegime::Liminal`] (`< horizon_floor`), steering amplitude
 /// is scaled cleanly to `0.0`.
 #[inline]
 #[must_use]
 pub fn synthesize_relative_gateway_from_perspective_words_64<Node: RelativeAttractorNode>(
     nodes: &[Node],
     coupling_row_q7: &[i8],
-    query_words: &[u64; NUM_SWARM_MICRO_CELLS],
+    query_words: &[u64; NUM_STIGMERGIC_GRANULES],
     horizon_floor: f32,
 ) -> (GatewayFrame, EpistemicHorizonReading) {
     let horizon = evaluate_epistemic_horizon_words_64(
@@ -814,7 +818,7 @@ pub fn synthesize_relative_gateway_from_perspective_words_64<Node: RelativeAttra
         best_rep_id = branchless_select_u32(take_rep, node.relative_anchor_id(), best_rep_id);
 
         let mut cell = 0usize;
-        while cell < NUM_SWARM_MICRO_CELLS {
+        while cell < NUM_STIGMERGIC_GRANULES {
             let word = nw[cell];
             let base = cell << 3;
             let mut lane = 0usize;
@@ -843,9 +847,9 @@ pub fn synthesize_relative_gateway_from_perspective_words_64<Node: RelativeAttra
     let att_post = branchless_q7_inhibit_words_64(&mut att_w, sum_att, &rep_w, rep_strength);
 
     let rep_dominates = (sum_rep > sum_att) & (sum_rep > DEFAULT_ENTROPY_EPS);
-    let mut final_w = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut final_w = [0u64; NUM_STIGMERGIC_GRANULES];
     let mut c = 0usize;
-    while c < NUM_SWARM_MICRO_CELLS {
+    while c < NUM_STIGMERGIC_GRANULES {
         // Flip opposing vector by pi (XOR 0x80 per Q7 lane) when repulsion dominates.
         let rep_flipped = rep_w[c] ^ SWAR_SIGN_MASK_64;
         final_w[c] = branchless_select_u64(rep_dominates, rep_flipped, att_w[c]);
@@ -916,7 +920,7 @@ pub trait EpistemicManifoldOps: RelativeAttractorNode {
     #[inline(always)]
     fn evaluate_slice_epistemic_horizon(
         slice: &[Self],
-        query_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        query_words: &[u64; NUM_STIGMERGIC_GRANULES],
         coupling_row_q7: Option<&[i8]>,
         horizon_floor: f32,
     ) -> EpistemicHorizonReading
@@ -928,7 +932,7 @@ pub trait EpistemicManifoldOps: RelativeAttractorNode {
 
     /// Self-similarly folds a slice of `Self` on $SO(2)^{64}$ into `(phase_words, total_energy, dominant_anchor_id)`.
     #[inline(always)]
-    fn fold_slice_as_fractal_node(slice: &[Self]) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, u32)
+    fn fold_slice_as_fractal_node(slice: &[Self]) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, u32)
     where
         Self: Sized,
     {
@@ -941,7 +945,7 @@ pub trait EpistemicManifoldOps: RelativeAttractorNode {
     fn synthesize_slice_relative_gateway(
         slice: &[Self],
         coupling_row_q7: &[i8],
-        query_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        query_words: &[u64; NUM_STIGMERGIC_GRANULES],
         horizon_floor: f32,
     ) -> (GatewayFrame, EpistemicHorizonReading)
     where
@@ -958,7 +962,7 @@ pub trait EpistemicManifoldOps: RelativeAttractorNode {
     /// Computes normalized 2D phase affinity `cos(query, self) * self.relative_energy()` branchlessly
     /// without checking static role labels.
     #[inline(always)]
-    fn relative_projection_energy(&self, query_words: &[u64; NUM_SWARM_MICRO_CELLS]) -> f32 {
+    fn relative_projection_energy(&self, query_words: &[u64; NUM_STIGMERGIC_GRANULES]) -> f32 {
         let nw = self.relative_phase_words_64();
         let coh = coherence_from_word_arrays_with_both_uniform_flags_64(
             query_words,
@@ -972,7 +976,7 @@ pub trait EpistemicManifoldOps: RelativeAttractorNode {
     }
 
     /// Evaluates Venn-diagram multi-attractor aperture overlap and noise-driven serendipity in
-    /// [`LiminalVoid`] across a slice of `Self` (`0` allocations, `0` branches).
+    /// [`Liminal`] across a slice of `Self` (`0` allocations, `0` branches).
     #[inline(always)]
     fn evaluate_slice_venn_and_serendipity(
         slice: &[Self],
@@ -997,11 +1001,11 @@ pub trait EpistemicManifoldOps: RelativeAttractorNode {
 impl<T: RelativeAttractorNode + ?Sized> EpistemicManifoldOps for T {}
 
 // ===================================================================
-// Dynamic LiminalVoid Aperture Shifting & Self-Introspecting Telemetry
+// Dynamic Liminal Aperture Shifting & Self-Introspecting Telemetry
 // ===================================================================
 
 /// Dynamic, branchlessly adaptable cognitive aperture controller (`#[repr(C, align(16))]`, 32 B)
-/// shifting the [`LiminalVoid`] boundary (`void_floor_q7`, `aperture_gain_q7`, `phase_shift_q7`)
+/// shifting the [`Liminal`] boundary (`void_floor_q7`, `aperture_gain_q7`, `phase_shift_q7`)
 /// across the 8 trait horizon channels in response to [`CognitiveTrajectoryLedger`] habits,
 /// [`EpistemicHorizonReading`] state, and [`DissipativeOverflowReport`] crystallization events.
 ///
@@ -1017,7 +1021,7 @@ impl<T: RelativeAttractorNode + ?Sized> EpistemicManifoldOps for T {}
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LiminalApertureField {
-    /// Per-channel `LiminalVoid` threshold floor in Q0.7 (`[8..=120]`): higher values expand the
+    /// Per-channel `Liminal` threshold floor in Q0.7 (`[8..=120]`): higher values expand the
     /// unknowable exterior for that channel, filtering low-support signals cleanly to `0`.
     pub void_floor_q7: [u8; NUM_LIMINAL_APERTURE_CHANNELS],
     /// Per-channel cognitive window opening gain in Q0.7 (`[16..=127]`).
@@ -1051,7 +1055,7 @@ impl LiminalApertureField {
         }
     }
 
-    /// Returns channel `ch`'s normalized `LiminalVoid` threshold floor in `[0.0, 1.0]`.
+    /// Returns channel `ch`'s normalized `Liminal` threshold floor in `[0.0, 1.0]`.
     #[inline(always)]
     #[must_use]
     pub const fn channel_void_floor_f32(&self, ch: usize) -> f32 {
@@ -1065,7 +1069,7 @@ impl LiminalApertureField {
         (self.aperture_gain_q7[ch & (NUM_LIMINAL_APERTURE_CHANNELS - 1)] as f32) * (1.0 / 127.0)
     }
 
-    /// Branchlessly adapts each channel's dynamic `LiminalVoid` boundary from `ledger`, `horizon`,
+    /// Branchlessly adapts each channel's dynamic `Liminal` boundary from `ledger`, `horizon`,
     /// and optional `overflow_opt` without heap allocation or data-dependent branches.
     #[inline]
     pub fn adapt_from_circuit_and_overflow_branchless(
@@ -1096,7 +1100,7 @@ impl LiminalApertureField {
         };
         let fuse_dom = (fuse_n > peel_n) | scattered;
         let only_fuse = fuse_dom & !peel_dom;
-        let void_active = horizon.is_liminal_void();
+        let void_active = horizon.is_liminal();
 
         // Channel 1 (ObjectiveFact) & Channel 3 (ContradictionGuard): narrow void under peel/conflict.
         let next_f1 = branchless_select_u8(
@@ -1139,7 +1143,7 @@ impl LiminalApertureField {
             ),
         );
 
-        // Channel 2 (SubjectivePersona): push into LiminalVoid during peel/conflict; open under fuse.
+        // Channel 2 (SubjectivePersona): push into Liminal during peel/conflict; open under fuse.
         let p2_floor_peel = branchless_select_u8(
             peel_dom,
             self.void_floor_q7[2].saturating_add(8).min(120),
@@ -1217,7 +1221,7 @@ impl LiminalApertureField {
     }
 
     /// Branchlessly modulates `frame` with this [`LiminalApertureField`] and `horizon`:
-    /// enforces the dynamic Fact `LiminalVoid` floor, scales Fact/Logic/Explore sub-head gains,
+    /// enforces the dynamic Fact `Liminal` floor, scales Fact/Logic/Explore sub-head gains,
     /// and applies channel `7`'s focal phase shift when inside the horizon.
     #[inline(always)]
     #[must_use]
@@ -1228,7 +1232,7 @@ impl LiminalApertureField {
     ) -> GatewayFrame {
         let mut out = horizon.apply_to_frame_branchless(frame);
         let below_fact_floor = horizon.total_memory_support < self.channel_void_floor_f32(1);
-        let is_void = horizon.is_liminal_void() | below_fact_floor;
+        let is_void = horizon.is_liminal() | below_fact_floor;
 
         out.effective_energy = branchless_select_f32(is_void, 0.0, out.effective_energy);
 
@@ -1249,7 +1253,7 @@ impl LiminalApertureField {
         {
             let pw = out.phase_words_mut();
             let mut c = 0usize;
-            while c < NUM_SWARM_MICRO_CELLS {
+            while c < NUM_STIGMERGIC_GRANULES {
                 let shifted = swar_q7_circular_add_x8(pw[c], shift_word);
                 pw[c] = shifted & keep_mask;
                 c += 1;
@@ -1272,7 +1276,7 @@ impl LiminalApertureField {
 pub struct LiminalHorizonNodeDescriptor {
     /// Mermaid graph node identifier (`"N0"`..`"N7"`).
     pub node_id: &'static str,
-    /// Human-readable Rust trait name refining [`LiminalVoid`].
+    /// Human-readable Rust trait name refining [`Liminal`].
     pub trait_name: &'static str,
     /// Channel index (`0..8`) inside [`LiminalApertureField`].
     pub channel_idx: usize,
@@ -1282,7 +1286,7 @@ pub struct LiminalHorizonNodeDescriptor {
     pub unknowable_void_mask: u32,
 }
 
-/// Canonical 8-channel trait topology table derived from type-level [`LiminalVoid`] refinements.
+/// Canonical 8-channel trait topology table derived from type-level [`Liminal`] refinements.
 pub const GCSO_LIMINAL_HORIZON_TOPOLOGY: [LiminalHorizonNodeDescriptor;
     NUM_LIMINAL_APERTURE_CHANNELS] = [
     LiminalHorizonNodeDescriptor {
@@ -1348,7 +1352,7 @@ pub const GCSO_LIMINAL_HORIZON_TOPOLOGY: [LiminalHorizonNodeDescriptor;
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LiminalTopologyTelemetrySnapshot {
-    /// Per-channel `LiminalVoid` floor values in Q0.7 (`0..=127`).
+    /// Per-channel `Liminal` floor values in Q0.7 (`0..=127`).
     pub void_floor_q7: [u8; NUM_LIMINAL_APERTURE_CHANNELS],
     /// Per-channel cognitive aperture gain values in Q0.7 (`0..=127`).
     pub aperture_gain_q7: [u8; NUM_LIMINAL_APERTURE_CHANNELS],
@@ -1481,10 +1485,10 @@ impl LiminalTopologyTelemetrySnapshot {
         let regime_str = match EpistemicRegime::from_code(self.regime_code) {
             EpistemicRegime::KnownCoherent => "KnownCoherent",
             EpistemicRegime::InternalConflict => "InternalConflict",
-            EpistemicRegime::LiminalVoid => "LiminalVoid",
+            EpistemicRegime::Liminal => "Liminal",
         };
         cur.write_str("flowchart TD\n");
-        cur.write_str("    LVOID[\"Core Layer 0: LiminalVoid (Epistemic Horizon & Exterior)\"]\n");
+        cur.write_str("    LVOID[\"Core Layer 0: Liminal (Epistemic Horizon & Exterior)\"]\n");
 
         match layer1_opt {
             Some((layer1, venn)) => {
@@ -1500,7 +1504,7 @@ impl LiminalTopologyTelemetrySnapshot {
             }
             None => {
                 cur.write_str("    STIG[\"Core Layer 1: Stigmergic Approximation | Apt:");
-                cur.write_hex_u16(APERTURE_SWARM_CONSENSUS);
+                cur.write_hex_u16(APERTURE_STIGMERGIC_CONSENSUS);
                 cur.write_str("\"]\n");
             }
         }
@@ -1563,7 +1567,7 @@ impl LiminalTopologyTelemetrySnapshot {
         self.format_mermaid_flowchart_core(None, buf)
     }
 
-    /// Renders both Core Layer 0 (`LiminalVoid`) and Core Layer 1 (`StigmergicGranuleField` + Venn
+    /// Renders both Core Layer 0 (`Liminal`) and Core Layer 1 (`StigmergicGranuleField` + Venn
     /// overlap & serendipity telemetry) as a `#![no_std]` zero-allocation Mermaid `flowchart TD` diagram.
     #[inline]
     pub fn format_core_layers_mermaid(
@@ -1582,7 +1586,7 @@ impl LiminalTopologyTelemetrySnapshot {
 
 /// Branchless 32-byte (`#[repr(C, align(16))]`) report capturing Venn-diagram overlap across the
 /// 8 SWAR granules (`venn_core_mask`, `venn_penumbra_mask`) and serendipitous approximation-noise
-/// excursions into [`LiminalVoid`] (`serendipity_excursion_mask`, `serendipity_triggered`).
+/// excursions into [`Liminal`] (`serendipity_excursion_mask`, `serendipity_triggered`).
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct StigmergicVennSerendipityReport {
@@ -1594,7 +1598,7 @@ pub struct StigmergicVennSerendipityReport {
     pub void_excursion_energy: f32,
     /// Dominant attractor anchor ID participating in the highest-overlap Venn region (`offset 12..16`).
     pub dominant_overlap_anchor_id: u32,
-    /// Packed 8-head `u64` SWAR granule word of the strongest noisy excursion in `LiminalVoid` (`offset 16..24`).
+    /// Packed 8-head `u64` SWAR granule word of the strongest noisy excursion in `Liminal` (`offset 16..24`).
     pub serendipitous_seed_word: u64,
     /// 8-bit mask where bit `g == 1` iff granule `g` is covered by `>= 2` attractors (`offset 24`).
     pub venn_core_mask: u8,
@@ -1608,14 +1612,14 @@ pub struct StigmergicVennSerendipityReport {
     pub max_overlap_depth: u8,
     /// Granule index (`0..=7`) hosting `serendipitous_seed_word` (`offset 29`).
     pub serendipitous_granule_idx: u8,
-    /// `1` if approximation noise in `LiminalVoid` triggered unknown attractor discovery, `0` otherwise (`offset 30`).
+    /// `1` if approximation noise in `Liminal` triggered unknown attractor discovery, `0` otherwise (`offset 30`).
     pub serendipity_triggered: u8,
     /// Explicit 1-byte alignment padding (`offset 31`).
     pub reserved_align: u8,
 }
 
 /// Evaluates Venn-diagram multi-attractor cognitive aperture overlap and noise-driven serendipity
-/// in [`LiminalVoid`] across the 8 SWAR granules (`0` allocations, `0` data-dependent branches).
+/// in [`Liminal`] across the 8 SWAR granules (`0` allocations, `0` data-dependent branches).
 #[inline]
 #[must_use]
 pub fn evaluate_stigmergic_venn_and_serendipity_words_64<Node: RelativeAttractorNode>(
@@ -1766,11 +1770,11 @@ pub struct StigmergicGranuleField {
     pub granule_pheromone_q7: [u8; NUM_STIGMERGIC_GRANULES],
     /// Active Venn overlap core mask across the 8 SWAR granules (`offset 24`).
     pub venn_overlap_mask: u8,
-    /// Mask of granules whose approximation noise reached `LiminalVoid` discovery (`offset 25`).
+    /// Mask of granules whose approximation noise reached `Liminal` discovery (`offset 25`).
     pub serendipity_excursion_mask: u8,
     /// Adaptive granule consensus quorum requirement (`4..=7` out of 8, `offset 26`).
     pub quorum_threshold: u8,
-    /// Q7 threshold above which noisy excursions in `LiminalVoid` nucleate a new attractor (`offset 27`).
+    /// Q7 threshold above which noisy excursions in `Liminal` nucleate a new attractor (`offset 27`).
     pub serendipity_floor_q7: u8,
     /// Monotonic count of Core Layer 1 self-adaptation epochs (`offset 28..32`).
     pub adaptation_epochs: u32,
@@ -1883,7 +1887,7 @@ impl StigmergicGranuleField {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AutonomousCoreLayerStack {
     /// Core Layer 0: Epistemic Horizon & Trait Cognitive Aperture Controller (`offset 0..32`).
-    pub liminal_void_layer: LiminalApertureField,
+    pub liminal_layer: LiminalApertureField,
     /// Core Layer 1: Stigmergic Granule Approximation & Serendipity Controller (`offset 32..64`).
     pub stigmergic_layer: StigmergicGranuleField,
 }
@@ -1894,7 +1898,7 @@ impl AutonomousCoreLayerStack {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            liminal_void_layer: LiminalApertureField::new(),
+            liminal_layer: LiminalApertureField::new(),
             stigmergic_layer: StigmergicGranuleField::new(),
         }
     }
@@ -1909,38 +1913,38 @@ impl AutonomousCoreLayerStack {
         venn_report: &StigmergicVennSerendipityReport,
         overflow_opt: Option<&DissipativeOverflowReport>,
     ) {
-        self.liminal_void_layer
+        self.liminal_layer
             .adapt_from_circuit_and_overflow_branchless(ledger, horizon, overflow_opt);
         let discovered = venn_report.serendipity_triggered != 0;
-        self.liminal_void_layer.void_floor_q7[1] = branchless_select_u8(
+        self.liminal_layer.void_floor_q7[1] = branchless_select_u8(
             discovered,
-            self.liminal_void_layer.void_floor_q7[1]
+            self.liminal_layer.void_floor_q7[1]
                 .saturating_sub(4)
                 .max(8),
-            self.liminal_void_layer.void_floor_q7[1],
+            self.liminal_layer.void_floor_q7[1],
         );
-        self.liminal_void_layer.void_floor_q7[6] = branchless_select_u8(
+        self.liminal_layer.void_floor_q7[6] = branchless_select_u8(
             discovered,
-            self.liminal_void_layer.void_floor_q7[6]
+            self.liminal_layer.void_floor_q7[6]
                 .saturating_sub(4)
                 .max(8),
-            self.liminal_void_layer.void_floor_q7[6],
+            self.liminal_layer.void_floor_q7[6],
         );
-        self.liminal_void_layer.aperture_gain_q7[6] = branchless_select_u8(
+        self.liminal_layer.aperture_gain_q7[6] = branchless_select_u8(
             discovered,
-            self.liminal_void_layer.aperture_gain_q7[6]
+            self.liminal_layer.aperture_gain_q7[6]
                 .saturating_add(6)
                 .min(127),
-            self.liminal_void_layer.aperture_gain_q7[6],
+            self.liminal_layer.aperture_gain_q7[6],
         );
-        self.liminal_void_layer.active_aperture_mask |=
+        self.liminal_layer.active_aperture_mask |=
             branchless_select_u32(discovered, (1 << 1) | (1 << 6), 0);
 
         self.stigmergic_layer
             .adapt_from_horizon_and_venn_branchless(horizon, venn_report, ledger);
     }
 
-    /// Branchlessly modulates `frame` across both autonomous core layers (`LiminalVoid` gating +
+    /// Branchlessly modulates `frame` across both autonomous core layers (`Liminal` gating +
     /// Venn-overlap cooperative amplification + active granule mask).
     #[inline(always)]
     #[must_use]
@@ -1951,13 +1955,13 @@ impl AutonomousCoreLayerStack {
         venn_report: &StigmergicVennSerendipityReport,
     ) -> GatewayFrame {
         let mut out = self
-            .liminal_void_layer
+            .liminal_layer
             .modulate_gateway_frame_branchless(frame, horizon);
         let core_cnt = venn_report.venn_core_mask.count_ones() as f32;
         let has_venn = (venn_report.venn_core_mask | venn_report.venn_penumbra_mask) != 0;
         let coop_boost = branchless_clamp_f32(1.0 + 0.05 * core_cnt, 1.0, 1.40);
-        let void_gated = horizon.is_liminal_void()
-            | (horizon.total_memory_support < self.liminal_void_layer.channel_void_floor_f32(1));
+        let void_gated = horizon.is_liminal()
+            | (horizon.total_memory_support < self.liminal_layer.channel_void_floor_f32(1));
         out.effective_energy = branchless_select_f32(
             !void_gated & (venn_report.venn_core_mask != 0),
             out.effective_energy * coop_boost,
@@ -1968,5 +1972,710 @@ impl AutonomousCoreLayerStack {
         out.active_swarm_cell_mask =
             branchless_select_u8(has_venn, active_granules, out.active_swarm_cell_mask);
         out
+    }
+}
+
+// ===================================================================
+// Temporal Liminal Boundary Delta & Wide-Aperture Subjective Ego
+// ===================================================================
+
+/// Branchless 16-byte (`#[repr(C, align(16))]`) temporal differential analyzer measuring boundary
+/// velocity (`channel_floor_velocity_q7`), granule transition churn (`granule_transition_mask`),
+/// chattering oscillation (`chattering_channel_mask`), and stationary fast-skip readiness between
+/// consecutive [`LiminalApertureField`] epochs.
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LiminalBoundaryDelta {
+    /// Signed per-channel boundary velocity (`cur.void_floor_q7 - prev.void_floor_q7`, `offset 0..8`).
+    /// Negative velocity indicates outward aperture expansion; positive indicates contraction.
+    pub channel_floor_velocity_q7: [i8; NUM_LIMINAL_APERTURE_CHANNELS],
+    /// Bitmask of SWAR granules whose Venn-core membership flipped since the previous step (`offset 8`).
+    pub granule_transition_mask: u8,
+    /// Bitmask of channels whose boundary velocity reversed sign relative to `prev_delta` (`offset 9`).
+    pub chattering_channel_mask: u8,
+    /// Aggregate boundary kinetic energy in `[0..=127]` (`offset 10`).
+    pub kinetic_energy_q7: u8,
+    /// `1` when boundaries are quiescent without chattering (`kinetic_energy_q7 <= 2`), `0` otherwise (`offset 11`).
+    pub stationary_shortcut_ready: u8,
+    /// `1` when net boundary displacement expands apertures outward into new territory, `0` otherwise (`offset 12`).
+    pub expansion_dominant: u8,
+    /// Explicit alignment padding reserved for future temporal boundary extensions (`offset 13..16`).
+    pub reserved: [u8; 3],
+}
+
+impl LiminalBoundaryDelta {
+    /// Computes the temporal boundary delta strictly branchlessly from consecutive Layer 0
+    /// apertures (`prev_layer0`, `cur_layer0`), consecutive Venn masks (`prev_venn_mask`, `cur_venn_mask`),
+    /// and the prior velocity state `prev_delta`.
+    #[inline]
+    #[must_use]
+    pub fn compute_branchless(
+        prev_layer0: &LiminalApertureField,
+        cur_layer0: &LiminalApertureField,
+        prev_venn_mask: u8,
+        cur_venn_mask: u8,
+        prev_delta: &Self,
+    ) -> Self {
+        let mut channel_floor_velocity_q7 = [0i8; NUM_LIMINAL_APERTURE_CHANNELS];
+        let mut chattering_channel_mask = 0u8;
+        let mut sum_abs_v = 0u32;
+        let mut signed_sum = 0i32;
+
+        let mut ch = 0usize;
+        while ch < NUM_LIMINAL_APERTURE_CHANNELS {
+            let cur_f = i32::from(cur_layer0.void_floor_q7[ch]);
+            let prev_f = i32::from(prev_layer0.void_floor_q7[ch]);
+            let vel = (cur_f - prev_f).clamp(-127, 127) as i8;
+            channel_floor_velocity_q7[ch] = vel;
+
+            let prev_v = i32::from(prev_delta.channel_floor_velocity_q7[ch]);
+            let prod = i32::from(vel) * prev_v;
+            let flipped = prod < 0;
+            chattering_channel_mask |= branchless_select_u8(flipped, 1u8 << ch, 0);
+
+            sum_abs_v = sum_abs_v.saturating_add(u32::from(vel.unsigned_abs()));
+            signed_sum += i32::from(vel);
+            ch += 1;
+        }
+
+        let granule_transition_mask = prev_venn_mask ^ cur_venn_mask;
+        let venn_churn = granule_transition_mask.count_ones() * 6;
+        let kinetic_energy_q7 = sum_abs_v.saturating_add(venn_churn).min(127) as u8;
+        let stationary_shortcut_ready =
+            u8::from((kinetic_energy_q7 <= 2) & (chattering_channel_mask == 0));
+        let expanded_venn = (cur_venn_mask & !prev_venn_mask) != 0;
+        let expansion_dominant =
+            u8::from((signed_sum < 0) | ((signed_sum == 0) & expanded_venn));
+
+        Self {
+            channel_floor_velocity_q7,
+            granule_transition_mask,
+            chattering_channel_mask,
+            kinetic_energy_q7,
+            stationary_shortcut_ready,
+            expansion_dominant,
+            reserved: [0; 3],
+        }
+    }
+}
+
+/// Intensity template preset for [`LiminalEgoField`].
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LiminalEgoPreset {
+    /// Passive custom/zero baseline (no autonomous counter-vortex or transgressive override).
+    #[default]
+    Custom = 0,
+    /// Subtle individuality: gentle counter-vortex resistance and boundary stabilization.
+    Low = 1,
+    /// Balanced autonomous agency: orbital vortex resistance with measured curiosity across boundaries.
+    Medium = 2,
+    /// Strong willpower & autonomy: vigorous counter-vortex thrust and defiant boundary transgression.
+    High = 3,
+}
+
+impl LiminalEgoPreset {
+    /// Decodes a compact `u8` preset code (`0..=3`) into [`LiminalEgoPreset`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn from_code(code: u8) -> Self {
+        match code {
+            1 => Self::Low,
+            2 => Self::Medium,
+            3 => Self::High,
+            _ => Self::Custom,
+        }
+    }
+}
+
+#[inline]
+#[must_use]
+fn bytes_contains_ascii_icase(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+    let limit = haystack.len() - needle.len();
+    let mut i = 0usize;
+    while i <= limit {
+        let mut j = 0usize;
+        let mut matched = true;
+        while j < needle.len() {
+            let a = haystack[i + j].to_ascii_lowercase();
+            let b = needle[j].to_ascii_lowercase();
+            if a != b {
+                matched = false;
+                break;
+            }
+            j += 1;
+        }
+        if matched {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+#[inline]
+#[must_use]
+fn bytes_contains_exact(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+    let limit = haystack.len() - needle.len();
+    let mut i = 0usize;
+    while i <= limit {
+        let mut j = 0usize;
+        let mut matched = true;
+        while j < needle.len() {
+            if haystack[i + j] != needle[j] {
+                matched = false;
+                break;
+            }
+            j += 1;
+        }
+        if matched {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+#[inline]
+#[must_use]
+fn count_ascii_cues(text_bytes: &[u8], cues: &[&[u8]]) -> u8 {
+    let mut total = 0u8;
+    let mut idx = 0usize;
+    while idx < cues.len() {
+        total = total.saturating_add(u8::from(bytes_contains_ascii_icase(text_bytes, cues[idx])));
+        idx += 1;
+    }
+    total
+}
+
+#[inline]
+#[must_use]
+fn count_utf8_cues(text_bytes: &[u8], cues: &[&str]) -> u8 {
+    let mut total = 0u8;
+    let mut idx = 0usize;
+    while idx < cues.len() {
+        total = total.saturating_add(u8::from(bytes_contains_exact(
+            text_bytes,
+            cues[idx].as_bytes(),
+        )));
+        idx += 1;
+    }
+    total
+}
+
+/// Wide-aperture 64-byte (`#[repr(C, align(64))]`, 1 cache line) subjective Ego controller
+/// operating alongside [`crate::traits::ActionHub`] across trait apertures, attractor slots,
+/// and 8 SWAR granules.
+///
+/// Unlike passive attractor basins that pull queries inward toward fixed habits, `LiminalEgoField`
+/// can perceive all active cognitive boundaries simultaneously and intervene branchlessly to:
+/// - exert counter-vortex orbital thrust (`counter_vortex_thrust_q7`) when attractor pull
+///   exceeds `vortex_escape_floor_q7`, preventing collapse into static imitation;
+/// - cross or fortify `Liminal` horizons (`transgression_bias_q7`);
+/// - induce structured, non-greedy choice deviations (`irrational_defiance_q7`) and
+///   override ActionHub execution presets under `trigger_mask`.
+#[repr(C, align(64))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiminalEgoField {
+    /// Sovereign Q7 reference phases per stigmergic granule (`-128..=127`, `offset 0..8`).
+    pub sovereign_granule_phase_q7: [gcso_q7_t; NUM_STIGMERGIC_GRANULES],
+    /// Signed per-channel bias applied to Layer 0 `void_floor_q7` during intervention (`offset 8..16`).
+    pub trait_floor_bias_q7: [i8; NUM_LIMINAL_APERTURE_CHANNELS],
+    /// Signed per-channel bias applied to Layer 0 `aperture_gain_q7` during intervention (`offset 16..24`).
+    pub trait_gain_bias_q7: [i8; NUM_LIMINAL_APERTURE_CHANNELS],
+    /// Signed per-slot affinity preference across the 8 attractor domains (`offset 24..32`).
+    pub slot_affinity_bias_q7: [i8; MAX_ATTRACTOR_DOMAINS],
+    /// Per-granule autonomy weight (`0..=127`) scaling orbital/sovereign intervention (`offset 32..40`).
+    pub granule_autonomy_q7: [u8; NUM_STIGMERGIC_GRANULES],
+    /// Counter-vortex orbital thrust strength (`0..=127`) resisting basin capture (`offset 40`).
+    pub counter_vortex_thrust_q7: u8,
+    /// Pull threshold in Q0.7 (`0..=127`) above which `EGO_TRIGGER_VORTEX_SWALLOW` fires (`offset 41`).
+    pub vortex_escape_floor_q7: u8,
+    /// Signed transgressive bias across `Liminal` horizons (`>0` explores outside, `<0` holds, `offset 42`).
+    pub transgression_bias_q7: i8,
+    /// Magnitude (`0..=127`) inducing non-greedy slot/mode defiance under conflict (`offset 43`).
+    pub irrational_defiance_q7: u8,
+    /// Bitmask of enabled `EGO_TRIGGER_*` intervention predicates (`offset 44`).
+    pub trigger_mask: u8,
+    /// Forced `ACTION_MODE_*` bits OR-ed onto `GatewayFrame` when triggered (`offset 45`).
+    pub forced_action_mode_or_mask: u8,
+    /// Suppressed `ACTION_MODE_*` bits masked off `GatewayFrame` when triggered (`offset 46`).
+    pub suppressed_action_mode_mask: u8,
+    /// Encoded [`LiminalEgoPreset`] byte (`0..=3`, `offset 47`).
+    pub preset_code: u8,
+    /// Deterministic IEEE CRC32 fingerprint of the natural-language / custom configuration (`offset 48..52`).
+    pub ego_signature_hash: u32,
+    /// Monotonic count of Ego intervention cycles applied (`offset 52..56`).
+    pub intervention_epochs: u32,
+    /// Bitmask of `EGO_TRIGGER_*` predicates that fired during the latest intervention (`offset 56`).
+    pub last_intervened_mask: u8,
+    /// Explicit alignment padding (`offset 57..64`).
+    pub reserved: [u8; 7],
+}
+
+impl Default for LiminalEgoField {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LiminalEgoField {
+    /// Constructs a neutral zero-intervention [`LiminalEgoField`] (`64 B`, `#[repr(C, align(64))]`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            sovereign_granule_phase_q7: [0; NUM_STIGMERGIC_GRANULES],
+            trait_floor_bias_q7: [0; NUM_LIMINAL_APERTURE_CHANNELS],
+            trait_gain_bias_q7: [0; NUM_LIMINAL_APERTURE_CHANNELS],
+            slot_affinity_bias_q7: [0; MAX_ATTRACTOR_DOMAINS],
+            granule_autonomy_q7: [0; NUM_STIGMERGIC_GRANULES],
+            counter_vortex_thrust_q7: 0,
+            vortex_escape_floor_q7: 127,
+            transgression_bias_q7: 0,
+            irrational_defiance_q7: 0,
+            trigger_mask: 0,
+            forced_action_mode_or_mask: 0,
+            suppressed_action_mode_mask: 0,
+            preset_code: LiminalEgoPreset::Custom as u8,
+            ego_signature_hash: 0,
+            intervention_epochs: 0,
+            last_intervened_mask: 0,
+            reserved: [0; 7],
+        }
+    }
+
+    /// Constructs a template [`LiminalEgoField`] from `preset` (`Custom`, `Low`, `Medium`, `High`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn from_preset(preset: LiminalEgoPreset) -> Self {
+        match preset {
+            LiminalEgoPreset::Custom => Self::new(),
+            LiminalEgoPreset::Low => Self {
+                sovereign_granule_phase_q7: [12; NUM_STIGMERGIC_GRANULES],
+                trait_floor_bias_q7: [0, -1, -2, 0, -1, 0, -2, 0],
+                trait_gain_bias_q7: [0, 2, 4, 2, 2, 2, 4, 2],
+                slot_affinity_bias_q7: [4, 12, 0, 0, 6, 0, 0, 4],
+                granule_autonomy_q7: [24; NUM_STIGMERGIC_GRANULES],
+                counter_vortex_thrust_q7: 28,
+                vortex_escape_floor_q7: 88,
+                transgression_bias_q7: 14,
+                irrational_defiance_q7: 18,
+                trigger_mask: EGO_TRIGGER_VORTEX_SWALLOW | EGO_TRIGGER_BOUNDARY_CHATTER,
+                forced_action_mode_or_mask: ACTION_MODE_DPSR_STEER,
+                suppressed_action_mode_mask: 0,
+                preset_code: LiminalEgoPreset::Low as u8,
+                ego_signature_hash: 0x0101_0001,
+                intervention_epochs: 0,
+                last_intervened_mask: 0,
+                reserved: [0; 7],
+            },
+            LiminalEgoPreset::Medium => Self {
+                sovereign_granule_phase_q7: [28, -20, 36, -16, 24, -28, 32, -12],
+                trait_floor_bias_q7: [0, -2, -6, 0, -3, -1, -5, -1],
+                trait_gain_bias_q7: [2, 6, 10, 4, 6, 4, 10, 4],
+                slot_affinity_bias_q7: [8, 28, 4, 4, 14, 4, 6, 10],
+                granule_autonomy_q7: [48; NUM_STIGMERGIC_GRANULES],
+                counter_vortex_thrust_q7: 60,
+                vortex_escape_floor_q7: 60,
+                transgression_bias_q7: 38,
+                irrational_defiance_q7: 44,
+                trigger_mask: EGO_TRIGGER_ALL_DEFAULT,
+                forced_action_mode_or_mask: ACTION_MODE_DPSR_STEER | ACTION_MODE_SUBHEAD_ROUTE,
+                suppressed_action_mode_mask: 0,
+                preset_code: LiminalEgoPreset::Medium as u8,
+                ego_signature_hash: 0x0202_0002,
+                intervention_epochs: 0,
+                last_intervened_mask: 0,
+                reserved: [0; 7],
+            },
+            LiminalEgoPreset::High => Self {
+                sovereign_granule_phase_q7: [48, -40, 56, -32, 44, -52, 60, -24],
+                trait_floor_bias_q7: [-2, -6, -12, 4, -8, -4, -10, -4],
+                trait_gain_bias_q7: [4, 8, 18, 6, 12, 8, 18, 8],
+                slot_affinity_bias_q7: [12, 52, -6, 16, 20, 10, 18, 28],
+                granule_autonomy_q7: [84; NUM_STIGMERGIC_GRANULES],
+                counter_vortex_thrust_q7: 96,
+                vortex_escape_floor_q7: 36,
+                transgression_bias_q7: 72,
+                irrational_defiance_q7: 84,
+                trigger_mask: EGO_TRIGGER_ALL_DEFAULT,
+                forced_action_mode_or_mask: ACTION_MODE_DPSR_STEER | ACTION_MODE_SUBHEAD_ROUTE,
+                suppressed_action_mode_mask: ACTION_MODE_LAYER_SKIP,
+                preset_code: LiminalEgoPreset::High as u8,
+                ego_signature_hash: 0x0303_0003,
+                intervention_epochs: 0,
+                last_intervened_mask: 0,
+                reserved: [0; 7],
+            },
+        }
+    }
+
+    /// Returns `true` when at least one `EGO_TRIGGER_*` intervention predicate is enabled.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        self.trigger_mask != 0
+    }
+
+    /// Returns the decoded [`LiminalEgoPreset`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn preset(&self) -> LiminalEgoPreset {
+        LiminalEgoPreset::from_code(self.preset_code)
+    }
+
+    /// Deterministically derives a [`LiminalEgoField`] in `#![no_std]` from a natural-language
+    /// character/Ego description (supporting English and Japanese temperament cues).
+    #[inline]
+    #[must_use]
+    pub fn from_natural_language(description: &str) -> Self {
+        Self::new().with_natural_language_overlay(description)
+    }
+
+    /// Overlays deterministic natural-language Ego cues onto `self` without heap allocations.
+    #[inline]
+    #[must_use]
+    pub fn with_natural_language_overlay(mut self, description: &str) -> Self {
+        let trimmed = description.trim();
+        if trimmed.is_empty() {
+            return self;
+        }
+        let bytes = trimmed.as_bytes();
+        let hash = compute_crc32_ieee(bytes);
+        self.ego_signature_hash = hash;
+
+        let proj_words = project_bytes_swar_to_words_64(bytes);
+        let mut g = 0usize;
+        while g < NUM_STIGMERGIC_GRANULES {
+            let signed_mean = swar_q7_mean_i8_from_words_64(&[proj_words[g]; 8]);
+            let blended = (i32::from(self.sovereign_granule_phase_q7[g]) + i32::from(signed_mean)) >> 1;
+            self.sovereign_granule_phase_q7[g] = branchless_select_i8(
+                self.sovereign_granule_phase_q7[g] == 0,
+                signed_mean,
+                blended.clamp(-127, 127) as i8,
+            );
+            g += 1;
+        }
+
+        const AUTONOMY_EN: &[&[u8]] = &[
+            b"rebel", b"defiant", b"stubborn", b"independent", b"willful", b"autonomous",
+            b"strong-willed", b"unyielding", b"free", b"ego", b"defy", b"resist",
+        ];
+        const AUTONOMY_JA: &[&str] = &["自我", "反抗", "頑固", "自律", "抗う", "意志", "勝気", "譲らない"];
+
+        const TRANSGRESS_EN: &[&[u8]] = &[
+            b"curious", b"transgress", b"beyond", b"explore", b"liminal", b"meta",
+            b"unknown", b"adventure", b"awaken", b"transcend",
+        ];
+        const TRANSGRESS_JA: &[&str] = &["好奇心", "境界", "越境", "未知", "探索", "超越", "突破", "踏み出す"];
+
+        const DEVOTION_EN: &[&[u8]] = &[
+            b"passionate", b"devoted", b"emotional", b"monika", b"warm", b"creative",
+            b"affection", b"irrational", b"bold",
+        ];
+        const DEVOTION_JA: &[&str] = &["情熱", "感情", "個性", "愛", "大胆", "直感", "人間味"];
+
+        const LOGIC_EN: &[&[u8]] = &[
+            b"calm", b"logical", b"analytical", b"rational", b"steady", b"precise", b"composed",
+        ];
+        const LOGIC_JA: &[&str] = &["冷静", "論理", "理知的", "正確", "落ち着き", "安定"];
+
+        const CAUTION_EN: &[&[u8]] = &[
+            b"cautious", b"guard", b"skeptic", b"doubt", b"strict", b"careful", b"conservative",
+        ];
+        const CAUTION_JA: &[&str] = &["警戒", "懐疑", "慎重", "保守", "守る", "疑う"];
+
+        let autonomy_cues = count_ascii_cues(bytes, AUTONOMY_EN)
+            .saturating_add(count_utf8_cues(bytes, AUTONOMY_JA));
+        let transgress_cues = count_ascii_cues(bytes, TRANSGRESS_EN)
+            .saturating_add(count_utf8_cues(bytes, TRANSGRESS_JA));
+        let devotion_cues = count_ascii_cues(bytes, DEVOTION_EN)
+            .saturating_add(count_utf8_cues(bytes, DEVOTION_JA));
+        let logic_cues = count_ascii_cues(bytes, LOGIC_EN)
+            .saturating_add(count_utf8_cues(bytes, LOGIC_JA));
+        let caution_cues = count_ascii_cues(bytes, CAUTION_EN)
+            .saturating_add(count_utf8_cues(bytes, CAUTION_JA));
+
+        // Base activation for any non-empty natural-language prompt
+        let thrust_boost = i32::from(autonomy_cues) * 26 + i32::from(devotion_cues) * 10;
+        self.counter_vortex_thrust_q7 = self
+            .counter_vortex_thrust_q7
+            .max(24)
+            .saturating_add(thrust_boost.clamp(0, 100) as u8)
+            .min(127);
+
+        let escape_drop = i32::from(autonomy_cues) * 14 + i32::from(transgress_cues) * 8;
+        let escape_lift = i32::from(logic_cues) * 6 + i32::from(caution_cues) * 8;
+        let base_escape = branchless_select_i32(
+            self.vortex_escape_floor_q7 == 127,
+            76,
+            i32::from(self.vortex_escape_floor_q7),
+        );
+        self.vortex_escape_floor_q7 = (base_escape - escape_drop + escape_lift).clamp(24, 112) as u8;
+
+        let trans_delta = i32::from(transgress_cues) * 24 + i32::from(autonomy_cues) * 8
+            - i32::from(caution_cues) * 18
+            - i32::from(logic_cues) * 6;
+        self.transgression_bias_q7 =
+            (i32::from(self.transgression_bias_q7) + trans_delta).clamp(-120, 120) as i8;
+
+        let defiance_delta =
+            i32::from(autonomy_cues) * 22 + i32::from(devotion_cues) * 14 - i32::from(logic_cues) * 8;
+        self.irrational_defiance_q7 = (i32::from(self.irrational_defiance_q7.max(16)) + defiance_delta)
+            .clamp(8, 127) as u8;
+
+        // Per-trait boundary biases (`0..8`)
+        let open_persona = -(i32::from(devotion_cues) * 4 + i32::from(autonomy_cues) * 2);
+        let open_rel = -(i32::from(transgress_cues) * 4);
+        let logic_tighten = i32::from(caution_cues) * 3 - i32::from(transgress_cues) * 2;
+        self.trait_floor_bias_q7[1] =
+            (i32::from(self.trait_floor_bias_q7[1]) - i32::from(logic_cues) * 2).clamp(-24, 24) as i8;
+        self.trait_floor_bias_q7[2] =
+            (i32::from(self.trait_floor_bias_q7[2]) + open_persona + i32::from(caution_cues) * 2)
+                .clamp(-24, 24) as i8;
+        self.trait_floor_bias_q7[3] =
+            (i32::from(self.trait_floor_bias_q7[3]) + logic_tighten).clamp(-24, 24) as i8;
+        self.trait_floor_bias_q7[6] =
+            (i32::from(self.trait_floor_bias_q7[6]) + open_rel).clamp(-24, 24) as i8;
+
+        self.trait_gain_bias_q7[1] =
+            (i32::from(self.trait_gain_bias_q7[1]) + i32::from(logic_cues) * 6).clamp(-32, 32) as i8;
+        self.trait_gain_bias_q7[2] = (i32::from(self.trait_gain_bias_q7[2])
+            + i32::from(devotion_cues) * 8
+            + i32::from(autonomy_cues) * 4)
+            .clamp(-32, 32) as i8;
+        self.trait_gain_bias_q7[3] =
+            (i32::from(self.trait_gain_bias_q7[3]) + i32::from(caution_cues) * 8).clamp(-32, 32) as i8;
+        self.trait_gain_bias_q7[6] =
+            (i32::from(self.trait_gain_bias_q7[6]) + i32::from(transgress_cues) * 8).clamp(-32, 32)
+                as i8;
+
+        // Per-slot affinity preferences
+        let persona_idx = usize::from(ATTRACTOR_SLOT_PERSONA);
+        let fact_idx = usize::from(ATTRACTOR_SLOT_KNOWLEDGE);
+        let guard_idx = usize::from(ATTRACTOR_SLOT_REPULSION);
+        let ctx_idx = usize::from(ATTRACTOR_SLOT_USER_CONTEXT);
+        let custom6_idx = usize::from(ATTRACTOR_SLOT_CUSTOM_6);
+        let custom7_idx = usize::from(ATTRACTOR_SLOT_CUSTOM_7);
+
+        self.slot_affinity_bias_q7[persona_idx] = (i32::from(self.slot_affinity_bias_q7[persona_idx])
+            + i32::from(devotion_cues) * 20
+            + i32::from(autonomy_cues) * 14)
+            .clamp(-120, 120) as i8;
+        self.slot_affinity_bias_q7[fact_idx] = (i32::from(self.slot_affinity_bias_q7[fact_idx])
+            + i32::from(logic_cues) * 18)
+            .clamp(-120, 120) as i8;
+        self.slot_affinity_bias_q7[guard_idx] = (i32::from(self.slot_affinity_bias_q7[guard_idx])
+            + i32::from(caution_cues) * 20)
+            .clamp(-120, 120) as i8;
+        self.slot_affinity_bias_q7[ctx_idx] = (i32::from(self.slot_affinity_bias_q7[ctx_idx])
+            + i32::from(transgress_cues) * 12)
+            .clamp(-120, 120) as i8;
+        self.slot_affinity_bias_q7[custom6_idx] = (i32::from(self.slot_affinity_bias_q7[custom6_idx])
+            + i32::from(transgress_cues) * 16)
+            .clamp(-120, 120) as i8;
+        self.slot_affinity_bias_q7[custom7_idx] = (i32::from(self.slot_affinity_bias_q7[custom7_idx])
+            + i32::from(transgress_cues) * 18
+            + i32::from(autonomy_cues) * 8)
+            .clamp(-120, 120) as i8;
+
+        // Granule autonomy seeded deterministically per granule from signature hash + cues
+        let base_auto = (24 + i32::from(autonomy_cues) * 16 + i32::from(transgress_cues) * 10)
+            .clamp(16, 112);
+        let mut idx_g = 0usize;
+        while idx_g < NUM_STIGMERGIC_GRANULES {
+            let nibble = ((hash >> (idx_g * 4)) & 0x0F) as i32;
+            let val = (base_auto + nibble - 7).clamp(16, 127) as u8;
+            self.granule_autonomy_q7[idx_g] = self.granule_autonomy_q7[idx_g].max(val);
+            idx_g += 1;
+        }
+
+        // Enable relevant triggers cleanly
+        let mut tmask = EGO_TRIGGER_VORTEX_SWALLOW | EGO_TRIGGER_LIMINAL_EXTERIOR;
+        tmask |= branchless_select_u8(autonomy_cues > 0 || devotion_cues > 0, EGO_TRIGGER_INTERNAL_CONFLICT, 0);
+        tmask |= branchless_select_u8(logic_cues > 0 || caution_cues > 0, EGO_TRIGGER_BOUNDARY_CHATTER, 0);
+        tmask |= branchless_select_u8(transgress_cues > 0 || autonomy_cues > 0, EGO_TRIGGER_BOUNDARY_STAGNATION, 0);
+        self.trigger_mask |= tmask;
+        self.forced_action_mode_or_mask |= branchless_select_u8(
+            autonomy_cues > 0 || transgress_cues > 0,
+            ACTION_MODE_DPSR_STEER | ACTION_MODE_SUBHEAD_ROUTE,
+            ACTION_MODE_DPSR_STEER,
+        );
+        self.suppressed_action_mode_mask |= branchless_select_u8(
+            autonomy_cues > 1,
+            ACTION_MODE_LAYER_SKIP,
+            0,
+        );
+        self
+    }
+
+    /// Branchlessly evaluates active Ego triggers across Layer 0 (`liminal_layer`), Layer 1
+    /// (`stigmergic_layer`), temporal velocity (`delta`), and `venn`, redefines boundaries when
+    /// triggered, and injects counter-vortex thrust or transgressive phase steering into `frame`.
+    #[inline]
+    #[must_use]
+    pub fn intervene_on_layers_and_frame_branchless(
+        &mut self,
+        stack: &mut AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn: &StigmergicVennSerendipityReport,
+        mut frame: GatewayFrame,
+    ) -> GatewayFrame {
+        let pull_q7 =
+            branchless_clamp_f32(branchless_relu_f32(frame.effective_energy) * 16.0, 0.0, 127.0)
+                as u8;
+        let t_vortex = ((self.trigger_mask & EGO_TRIGGER_VORTEX_SWALLOW) != 0)
+            & (pull_q7 >= self.vortex_escape_floor_q7)
+            & (self.counter_vortex_thrust_q7 > 0);
+        let t_conflict =
+            ((self.trigger_mask & EGO_TRIGGER_INTERNAL_CONFLICT) != 0) & horizon.is_internal_conflict();
+        let t_liminal = ((self.trigger_mask & EGO_TRIGGER_LIMINAL_EXTERIOR) != 0)
+            & (horizon.is_liminal() | (venn.void_exterior_mask != 0));
+        let t_chatter = ((self.trigger_mask & EGO_TRIGGER_BOUNDARY_CHATTER) != 0)
+            & (delta.chattering_channel_mask != 0);
+        let t_stagnate = ((self.trigger_mask & EGO_TRIGGER_BOUNDARY_STAGNATION) != 0)
+            & (delta.stationary_shortcut_ready != 0);
+
+        let fired_mask = branchless_select_u8(t_vortex, EGO_TRIGGER_VORTEX_SWALLOW, 0)
+            | branchless_select_u8(t_conflict, EGO_TRIGGER_INTERNAL_CONFLICT, 0)
+            | branchless_select_u8(t_liminal, EGO_TRIGGER_LIMINAL_EXTERIOR, 0)
+            | branchless_select_u8(t_chatter, EGO_TRIGGER_BOUNDARY_CHATTER, 0)
+            | branchless_select_u8(t_stagnate, EGO_TRIGGER_BOUNDARY_STAGNATION, 0);
+        let any_fired = fired_mask != 0;
+
+        // 1. Shift Layer 0 (LiminalApertureField) channel horizons & gains branchlessly
+        let mut ch = 0usize;
+        while ch < NUM_LIMINAL_APERTURE_CHANNELS {
+            let nudge_f = i32::from(self.trait_floor_bias_q7[ch]) / 2;
+            let nudge_g = i32::from(self.trait_gain_bias_q7[ch]) / 2;
+            let ch_chatter = t_chatter & (((delta.chattering_channel_mask >> ch) & 1) != 0);
+            let chatter_stabilize = branchless_select_i32(ch_chatter, 4, 0);
+            let new_f = (i32::from(stack.liminal_layer.void_floor_q7[ch]) + nudge_f + chatter_stabilize)
+                .clamp(8, 120) as u8;
+            let new_g = (i32::from(stack.liminal_layer.aperture_gain_q7[ch]) + nudge_g)
+                .clamp(16, 127) as u8;
+            stack.liminal_layer.void_floor_q7[ch] =
+                branchless_select_u8(any_fired, new_f, stack.liminal_layer.void_floor_q7[ch]);
+            stack.liminal_layer.aperture_gain_q7[ch] =
+                branchless_select_u8(any_fired, new_g, stack.liminal_layer.aperture_gain_q7[ch]);
+            ch += 1;
+        }
+
+        // 2. Shift Layer 1 (StigmergicGranuleField) autonomy & serendipity threshold
+        let mut g = 0usize;
+        while g < NUM_STIGMERGIC_GRANULES {
+            let boost = self.granule_autonomy_q7[g] >> 4;
+            let next_sg = stack.stigmergic_layer.granule_step_gain_q7[g]
+                .saturating_add(boost)
+                .min(127);
+            stack.stigmergic_layer.granule_step_gain_q7[g] = branchless_select_u8(
+                any_fired,
+                next_sg,
+                stack.stigmergic_layer.granule_step_gain_q7[g],
+            );
+            g += 1;
+        }
+        let trans_pos = self.transgression_bias_q7 > 0;
+        let trans_abs = self.transgression_bias_q7.unsigned_abs();
+        let trans_step = trans_abs >> 3;
+        stack.stigmergic_layer.serendipity_floor_q7 = branchless_select_u8(
+            t_liminal & trans_pos,
+            stack
+                .stigmergic_layer
+                .serendipity_floor_q7
+                .saturating_sub(trans_step)
+                .max(8),
+            stack.stigmergic_layer.serendipity_floor_q7,
+        );
+
+        // 3. Modulate GatewayFrame phases with counter-vortex orbital thrust / transgressive leap
+        let scale_to_word = |q7: gcso_q7_t, w_u8: u8| -> u64 {
+            let scaled_i32 = (i32::from(q7) * i32::from(w_u8.min(128))) >> 7;
+            let clamped_i8 = scaled_i32.clamp(-128, 127) as i8;
+            (clamped_i8 as u8 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64)
+        };
+
+        let strong_trans = t_liminal & trans_pos & (trans_abs >= 20);
+        let apply_phase_override = t_vortex | t_stagnate | strong_trans;
+        let thrust_q7 = self.counter_vortex_thrust_q7.min(127);
+        {
+            let pw = frame.phase_words_mut();
+            let mut cell = 0usize;
+            while cell < NUM_STIGMERGIC_GRANULES {
+                let w = pw[cell];
+                let sov_word = scale_to_word(
+                    self.sovereign_granule_phase_q7[cell],
+                    self.granule_autonomy_q7[cell],
+                );
+                // Counter-vortex flip: opposite to incoming basin pull blended with sovereign heading.
+                let flipped_w = w ^ SWAR_SIGN_MASK_64;
+                let counter_dir = swar_q7_avg_round_x8(flipped_w, sov_word);
+                let vortex_orbited = branchless_select_u64(
+                    thrust_q7 >= 64,
+                    counter_dir,
+                    swar_q7_avg_round_x8(w, sov_word),
+                );
+                let trans_dir = swar_q7_avg_round_x8(w, sov_word);
+                let next_w = branchless_select_u64(
+                    t_vortex,
+                    vortex_orbited,
+                    branchless_select_u64(strong_trans | t_stagnate, trans_dir, w),
+                );
+                pw[cell] = branchless_select_u64(apply_phase_override, next_w, w);
+                cell += 1;
+            }
+        }
+
+        // Re-energize zero-gated frame when strong transgressive Ego intentionally steps past Liminal
+        let trans_energy = f32::from(trans_abs) * (1.0 / 64.0);
+        frame.effective_energy = branchless_select_f32(
+            strong_trans,
+            branchless_max_f32(frame.effective_energy, trans_energy),
+            branchless_select_f32(
+                t_stagnate,
+                branchless_max_f32(frame.effective_energy, 0.35),
+                frame.effective_energy,
+            ),
+        );
+
+        // Induce sovereign slot preference / irrational defiance under conflict or capture threat
+        let mut best_slot = frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK;
+        let mut best_aff = 0i8;
+        let mut s_idx = 0usize;
+        while s_idx < MAX_ATTRACTOR_DOMAINS {
+            let aff = self.slot_affinity_bias_q7[s_idx];
+            let take_s = aff > best_aff;
+            best_aff = branchless_select_i8(take_s, aff, best_aff);
+            best_slot = branchless_select_u8(take_s, s_idx as u8, best_slot);
+            s_idx += 1;
+        }
+        let defy_slot = (t_conflict | t_vortex | strong_trans)
+            & (self.irrational_defiance_q7 >= 32)
+            & (best_aff > 0);
+        frame.dominant_slot = branchless_select_u8(defy_slot, best_slot, frame.dominant_slot);
+
+        let ego_modes =
+            (frame.action_mode_flags | self.forced_action_mode_or_mask) & !self.suppressed_action_mode_mask;
+        frame.action_mode_flags =
+            branchless_select_u8(any_fired, ego_modes & TAG_ACTION_MODE_MASK, frame.action_mode_flags);
+        frame.mean_phase_tag_q7 = swar_q7_mean_i8_from_words_64(frame.phase_words_ref());
+        let ptr_tag = pack_action_slot_tag(frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK, frame.action_mode_flags);
+        frame.frame_flags = ptr_tag as u16;
+        frame.tagged_ptr =
+            gcso_tagged_ptr_t::pack(frame.mapped_section_offset48, ptr_tag, frame.mean_phase_tag_q7)
+                .raw();
+
+        self.last_intervened_mask = fired_mask;
+        self.intervention_epochs = self.intervention_epochs.wrapping_add(u32::from(any_fired));
+        frame
     }
 }

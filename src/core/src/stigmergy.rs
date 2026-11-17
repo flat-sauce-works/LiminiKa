@@ -1,9 +1,9 @@
-// name: src/core/src/swarm.rs
+// name: src/core/src/stigmergy.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Concrete 64-byte cacheline-aligned [`StigmergicGranuleEngine`] (aliased as [`SwarmEngine`])
-//! `Pod` state descriptor applying [`StigmergicChunkOps`], [`HierarchicalTreeTable`],
-//! [`PagedBitmaskOps`], and [`StigmergicReconstitutionOps`] from [`crate::traits`].
+//! Concrete 64-byte cacheline-aligned [`StigmergicGranuleEngine`] `Pod` state descriptor applying
+//! [`StigmergicChunkOps`], [`HierarchicalTreeTable`], [`PagedBitmaskOps`], and
+//! [`StigmergicReconstitutionOps`] from [`crate::traits`].
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -35,9 +35,8 @@ use crate::abi::{
 };
 use crate::traits::primitives::MAX_ATTENTION_HEADS;
 use crate::traits::{
-    store_q7_words_64, GcsoResult, HierarchicalTreeTable, PagedBitmaskOps, Pod,
-    StigmergicReconstitutionOps, StigmergicReconstitutionReport, SwarmCellChunk,
-    NUM_STIGMERGIC_GRANULES,
+    store_q7_words_64, GcsoResult, HierarchicalTreeTable, PagedBitmaskOps, Pod, StigmergicChunkOps,
+    StigmergicReconstitutionOps, StigmergicReconstitutionReport, NUM_STIGMERGIC_GRANULES,
 };
 use core::mem::{align_of, offset_of, size_of};
 
@@ -49,9 +48,6 @@ pub struct StigmergicGranuleEngine {
     /// 64-head Q7 phase profile partitioned into 8 myopic SWAR granules of 8 heads each (`offset 0..64`).
     pub cell_phases: [gcso_q7_t; MAX_ATTENTION_HEADS],
 }
-
-/// Backward-compatible alias for [`StigmergicGranuleEngine`].
-pub type SwarmEngine = StigmergicGranuleEngine;
 
 // SAFETY: `StigmergicGranuleEngine` is a 64-byte aligned array of 64 `i8` values with no padding traps.
 unsafe impl Pod for StigmergicGranuleEngine {}
@@ -158,7 +154,7 @@ impl StigmergicGranuleEngine {
     }
 }
 
-impl SwarmCellChunk for StigmergicGranuleEngine {
+impl StigmergicChunkOps for StigmergicGranuleEngine {
     #[inline(always)]
     fn step_chunk(&mut self, mask: &gcso_paged_bitmask_t, chunk_len: u32) -> GcsoResult<()> {
         if chunk_len == 0 {
@@ -185,7 +181,7 @@ mod tests {
 
     #[test]
     fn test_swarm_engine_bloom_and_bitmask_ops() {
-        let mut engine = SwarmEngine::from_phases([24i8; MAX_ATTENTION_HEADS]);
+        let mut engine = StigmergicGranuleEngine::from_phases([24i8; MAX_ATTENTION_HEADS]);
         assert_eq!(engine.words_ref(), &[0x1818_1818_1818_1818u64; 8]);
 
         let mut mask = gcso_paged_bitmask_t::default();

@@ -28,7 +28,7 @@
 #![allow(clippy::field_reassign_with_default)]
 
 use super::aligned::{AlignedBuffer16, AlignedSlice32, AlignedSliceMut32};
-use super::branchless::{swar_words_nonzero_64, BranchlessKernel, LiminalVoid};
+use super::branchless::{swar_words_nonzero_64, BranchlessKernel, Liminal};
 use super::gateway::{
     CrystallizedAttractorRecord, GatewayFrame, GcsoFourSectionView, ManifoldGatewaySignal,
 };
@@ -53,7 +53,7 @@ use super::telemetry::{
     select_rewire_bridge_and_modulate_with_preloaded_words_64, ContrastivePhaseBloomFilter,
     FastPathLedger, StigmergicTrailOps, LEDGER_METRIC_PHASE_STEERED,
     LEDGER_METRIC_SUBHEAD_ROUTED, LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
-    LEDGER_METRIC_RANK1_INJECTED, MAX_ATTRACTOR_PULL_FORCE, NUM_SWARM_MICRO_CELLS,
+    LEDGER_METRIC_RANK1_INJECTED, MAX_ATTRACTOR_PULL_FORCE, NUM_STIGMERGIC_GRANULES,
     TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
     TRAIL_FLAG_SYNERGY_RESONANCE,
 };
@@ -77,7 +77,7 @@ pub(crate) fn load_validated_four_section_trail_words_64(
     container_bytes: &[u8],
     trail_idx: usize,
     fallback_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-) -> [u64; NUM_SWARM_MICRO_CELLS] {
+) -> [u64; NUM_STIGMERGIC_GRANULES] {
     if let Ok(header) = gcso_snapshot_header_t::from_bytes_at(container_bytes, 0) {
         let off_trails = header.action_hub_offset as usize;
         let off_bloom = header.edbc_state_offset as usize;
@@ -103,7 +103,7 @@ pub(crate) fn load_validated_four_section_trail_words_64(
 /// eliminating 64-byte stack buffer spills and Store-to-Load Forwarding (STLF) reload stalls.
 #[inline(always)]
 pub(crate) fn accumulate_q7_slice_into_words_64(
-    acc_words: &mut [u64; NUM_SWARM_MICRO_CELLS],
+    acc_words: &mut [u64; NUM_STIGMERGIC_GRANULES],
     delta_slice: &[gcso_q7_t],
 ) {
     let limit = delta_slice.len().min(MAX_ATTENTION_HEADS);
@@ -176,13 +176,13 @@ pub(crate) fn validate_optional_qk_tensors(
 #[inline]
 #[must_use]
 pub(crate) fn fuse_lazy_unwrap_and_qdps_from_words_64(
-    q_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    q_w: &[u64; NUM_STIGMERGIC_GRANULES],
     query_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     context_slice: &[gcso_q7_t],
     num_heads: usize,
     qdps_min_step_rad: f32,
     fold_geodesic: bool,
-) -> [u64; NUM_SWARM_MICRO_CELLS] {
+) -> [u64; NUM_STIGMERGIC_GRANULES] {
     let min_step_q7 = branchless_rad_to_qdps_step_u8(qdps_min_step_rad);
     let limit = num_heads.min(MAX_ATTENTION_HEADS).min(context_slice.len());
 
@@ -202,7 +202,7 @@ pub(crate) fn fuse_lazy_unwrap_and_qdps_from_words_64(
                 } else {
                     swar_q7_qdps_filter_x8(raw0, min_step_q7)
                 };
-                return [filt0; NUM_SWARM_MICRO_CELLS];
+                return [filt0; NUM_STIGMERGIC_GRANULES];
             }
             let raw_w = if fold_geodesic {
                 [
@@ -231,7 +231,7 @@ pub(crate) fn fuse_lazy_unwrap_and_qdps_from_words_64(
         }
     }
 
-    let mut out_words = [0u64; NUM_SWARM_MICRO_CELLS];
+    let mut out_words = [0u64; NUM_STIGMERGIC_GRANULES];
     let mut h = 0usize;
     while h + 8 <= limit {
         let qw = load_q7_x8_slice(query_phases, h);
@@ -286,7 +286,7 @@ pub(crate) fn fuse_lazy_unwrap_and_qdps_words_64(
     num_heads: usize,
     qdps_min_step_rad: f32,
     fold_geodesic: bool,
-) -> [u64; NUM_SWARM_MICRO_CELLS] {
+) -> [u64; NUM_STIGMERGIC_GRANULES] {
     let q_w = load_q7_words_64(query_phases);
     fuse_lazy_unwrap_and_qdps_from_words_64(
         &q_w,
@@ -332,9 +332,9 @@ pub fn fuse_lazy_unwrap_and_qdps_into_aligned_64(
 /// Both [`super::HotPathObserver`] (`traits/hot_path.rs`), [`super::ColdPathObserver`] (`traits/cold_path.rs`),
 /// and [`super::ActionHubGatewayExt`] (`traits/gateway.rs`) observe and mutate `ActionHub` via blanket implementations.
 /// Broadest operational capability supertrait unifying Gateway origins, execution routers, and
-/// telemetry ledgers atop [`LiminalVoid`].
+/// telemetry ledgers atop [`Liminal`].
 pub trait ActionHub:
-    LiminalVoid
+    Liminal
     + BranchlessKernel
     + PhaseSteering
     + PointerActionHub
@@ -406,7 +406,7 @@ pub trait ActionHub:
         gcso_tagged_ptr_t,
         u8,
         bool,
-        [u64; NUM_SWARM_MICRO_CELLS],
+        [u64; NUM_STIGMERGIC_GRANULES],
     )> {
         let (bypass_hit, effective_ptr) = self.resolve_or_pass_tagged_ptr(ledger_slot, input_ptr);
         self.step_pointer(effective_ptr.raw(), trail_out)?;
@@ -456,7 +456,7 @@ pub trait ActionHub:
     #[inline(always)]
     fn steer_qdps_words_prevalidated_core(
         &self,
-        raw_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        raw_words: &[u64; NUM_STIGMERGIC_GRANULES],
         head_dim: usize,
         num_heads: usize,
         qdps_min_step_rad: f32,
@@ -528,7 +528,7 @@ pub trait ActionHub:
     #[inline(always)]
     fn filter_qdps_words_and_steer_qk_safe(
         &self,
-        raw_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        raw_words: &[u64; NUM_STIGMERGIC_GRANULES],
         qdps_min_step_rad: f32,
         ripa_max_rad: f32,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -587,9 +587,9 @@ pub trait ActionHub:
     #[inline]
     fn steer_qdps_pspm_words_prevalidated_core(
         &self,
-        raw_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        fact_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        logic_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        raw_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        fact_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        logic_words: &[u64; NUM_STIGMERGIC_GRANULES],
         subhead_config_and_pulse: Option<(&gcso_subhead_config_t, gcso_q7_t)>,
         head_dim: usize,
         num_heads: usize,
@@ -731,9 +731,9 @@ pub trait ActionHub:
     #[inline(always)]
     fn filter_qdps_and_steer_qk_with_pspm_words_safe(
         &self,
-        raw_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        fact_words: &[u64; NUM_SWARM_MICRO_CELLS],
-        logic_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        raw_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        fact_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        logic_words: &[u64; NUM_STIGMERGIC_GRANULES],
         subhead_config_and_pulse: Option<(&gcso_subhead_config_t, gcso_q7_t)>,
         qdps_min_step_rad: f32,
         ripa_max_rad: f32,
@@ -805,7 +805,7 @@ pub trait ActionHub:
                 load_q7_words_64(&anchor_phases[f_idx])
             }
         } else {
-            [0u64; NUM_SWARM_MICRO_CELLS]
+            [0u64; NUM_STIGMERGIC_GRANULES]
         };
         let logic_w = if n_anc > 1 {
             let l_idx = (dom_idx + 1) % n_anc;
@@ -1554,7 +1554,7 @@ pub trait ActionHub:
         interpolation_u7: u8,
         contradiction_threshold: f32,
         macro_anchor_id: u32,
-        win_w_opt: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
+        win_w_opt: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
         cluster_bonus_gain: f32,
     ) -> GcsoResult<(u32, f32, f32, u32, bool)> {
         let init_w = *trail_phase_words_ref(src_trail);
@@ -1590,7 +1590,7 @@ pub trait ActionHub:
         &mut self,
         src_trail_id: u32,
         src_trail: &mut gcso_pointer_trail_t,
-        src_trail_words: [u64; NUM_SWARM_MICRO_CELLS],
+        src_trail_words: [u64; NUM_STIGMERGIC_GRANULES],
         candidate_trails: &mut [gcso_pointer_trail_t],
         attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
         phase_interference_gain: f32,
@@ -1600,9 +1600,9 @@ pub trait ActionHub:
         interpolation_u7: u8,
         contradiction_threshold: f32,
         macro_anchor_id: u32,
-        win_w_opt: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
+        win_w_opt: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
         cluster_bonus_gain: f32,
-    ) -> GcsoResult<(u32, f32, f32, u32, bool, [u64; NUM_SWARM_MICRO_CELLS])> {
+    ) -> GcsoResult<(u32, f32, f32, u32, bool, [u64; NUM_STIGMERGIC_GRANULES])> {
         let (head_dim, _num_heads, _expected_len) = self.validate_head_layout()?;
         if candidate_trails.is_empty()
             || !branchless_is_finite_f32(phase_interference_gain)

@@ -382,14 +382,14 @@ pub(crate) struct MacroAlignedBayesianSelectionOutcome {
     pub(crate) best_coh: f32,
     pub(crate) coh_sum: f32,
     pub(crate) coh_cnt: usize,
-    pub(crate) self_words: [u64; NUM_SWARM_MICRO_CELLS],
+    pub(crate) self_words: [u64; NUM_STIGMERGIC_GRANULES],
     pub(crate) qdps_done: bool,
 }
 
 #[cold]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn fallback_scan_unpruned_macro_candidates_cold(
-    self_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    self_w: &[u64; NUM_STIGMERGIC_GRANULES],
     self_is_uniform: bool,
     self_is_byte_uniform: bool,
     self_b0: u8,
@@ -496,8 +496,8 @@ pub(super) fn fallback_scan_unpruned_macro_candidates_cold(
 #[inline]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn select_and_bridge_macro_aligned_bayesian_trail_core(
-    mut self_w: [u64; NUM_SWARM_MICRO_CELLS],
-    win_w_opt: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
+    mut self_w: [u64; NUM_STIGMERGIC_GRANULES],
+    win_w_opt: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
     primary_macro_anchor_id: u32,
     secondary_macro_anchor_id: u32,
     src_trail: &mut gcso_pointer_trail_t,
@@ -1098,11 +1098,11 @@ pub trait StigmergicTrailOps {
     /// SWAR registers `init_w` (`0` entry reload) and returning `(final_pull_force, mean_coherence, active_anchor_count, post_words)`.
     fn apply_unified_field_anchor_slice_resonance_from_words(
         &mut self,
-        init_w: [u64; NUM_SWARM_MICRO_CELLS],
+        init_w: [u64; NUM_STIGMERGIC_GRANULES],
         anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
         repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
-    ) -> (f32, f32, u32, [u64; NUM_SWARM_MICRO_CELLS]);
+    ) -> (f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES]);
 
     /// Folds an arbitrary slice of anchors (`anchor_phases`, `anchor_base_energies`) on the single
     /// unified phase manifold and returns `(final_pull_force, mean_coherence, active_anchor_count, post_words)`
@@ -1112,7 +1112,7 @@ pub trait StigmergicTrailOps {
         anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
         repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
-    ) -> (f32, f32, u32, [u64; NUM_SWARM_MICRO_CELLS]);
+    ) -> (f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES]);
 
     /// Folds an arbitrary slice of anchors (`anchor_phases`, `anchor_base_energies`) and optional
     /// repulsive phase inhibitor (`repulsion_phases_and_strength`) on a **single unified phase manifold**
@@ -1220,7 +1220,7 @@ pub trait StigmergicTrailOps {
         liminal_interpolation_u7: u8,
         repulsion_penalty: f32,
         _macro_anchor_id: u32,
-        _win_w_opt: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
+        _win_w_opt: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
         _cluster_bonus_gain: f32,
     ) -> (u32, f32, f32, u32, bool) {
         self.select_rewire_bridge_and_modulate_bayesian_trails(
@@ -1258,13 +1258,13 @@ pub trait StigmergicTrailOps {
     /// `(damped_pull_force, mean_coherence, active_neighbor_count, post_words)`.
     fn apply_neighborhood_synergy_from_bank_from_words(
         &mut self,
-        acc_w: [u64; NUM_SWARM_MICRO_CELLS],
+        acc_w: [u64; NUM_STIGMERGIC_GRANULES],
         slot_phase_bank: &[[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS],
         slot_weights: &[f32; MAX_ATTRACTOR_DOMAINS],
         coupling_matrix_8x8: u64,
         synergy_gain: f32,
         inhibition_strength: f32,
-    ) -> (f32, f32, u32, [u64; NUM_SWARM_MICRO_CELLS]);
+    ) -> (f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES]);
 
     /// Evaluates **8-Lane Coupled Neighborhood Synergy & Mutual Inhibition** and returns both
     /// `(damped_pull_force, mean_coherence, active_neighbor_count, post_words)` in registers (`0` exit reload).
@@ -1275,7 +1275,7 @@ pub trait StigmergicTrailOps {
         coupling_matrix_8x8: u64,
         synergy_gain: f32,
         inhibition_strength: f32,
-    ) -> (f32, f32, u32, [u64; NUM_SWARM_MICRO_CELLS]);
+    ) -> (f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES]);
 
     /// Unified single-source-of-truth evaluator for **8-Lane Coupled Neighborhood Synergy & Mutual Inhibition**
     /// across `slot_phase_bank` (`[[gcso_q7_t; 64]; 8]`) and `slot_weights` (`[f32; 8]`).
@@ -1295,7 +1295,7 @@ pub trait StigmergicTrailOps {
 #[inline]
 pub(crate) fn select_rewire_bridge_and_modulate_with_preloaded_words_64(
     trail: &mut gcso_pointer_trail_t,
-    mut self_w: [u64; NUM_SWARM_MICRO_CELLS],
+    mut self_w: [u64; NUM_STIGMERGIC_GRANULES],
     candidate_trails: &[gcso_pointer_trail_t],
     mut attention_scores_opt: Option<&mut [f32]>,
     head_dim: u32,
@@ -1306,9 +1306,9 @@ pub(crate) fn select_rewire_bridge_and_modulate_with_preloaded_words_64(
     liminal_interpolation_u7: u8,
     repulsion_penalty: f32,
     macro_anchor_id: u32,
-    win_w_opt: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
+    win_w_opt: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
     cluster_bonus_gain: f32,
-) -> (u32, f32, f32, u32, bool, [u64; NUM_SWARM_MICRO_CELLS], f32) {
+) -> (u32, f32, f32, u32, bool, [u64; NUM_STIGMERGIC_GRANULES], f32) {
     let cand_len = candidate_trails.len();
     if cand_len == 0 {
         return (trail.linked_trail_id, 0.0, 0.0, 0, false, self_w, 0.0);
@@ -1537,7 +1537,7 @@ impl gcso_pointer_trail_t {
     pub fn copy_from_with_words_fast(
         &mut self,
         src: &Self,
-        phase_words: &[u64; NUM_SWARM_MICRO_CELLS],
+        phase_words: &[u64; NUM_STIGMERGIC_GRANULES],
     ) {
         self.current_ptr = src.current_ptr;
         self.prev_ptr = src.prev_ptr;
@@ -1576,7 +1576,7 @@ impl gcso_pointer_trail_t {
         self.linked_trail_id = 0;
         self.attractor_pull_force = 0.0;
         self.flags = 0;
-        *trail_phase_words_mut(self) = [0u64; NUM_SWARM_MICRO_CELLS];
+        *trail_phase_words_mut(self) = [0u64; NUM_STIGMERGIC_GRANULES];
         self.reserved_padding = [0; 8];
     }
 }
@@ -1845,11 +1845,11 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
     #[inline]
     fn apply_unified_field_anchor_slice_resonance_from_words(
         &mut self,
-        init_w: [u64; NUM_SWARM_MICRO_CELLS],
+        init_w: [u64; NUM_STIGMERGIC_GRANULES],
         anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
         repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
-    ) -> (f32, f32, u32, [u64; NUM_SWARM_MICRO_CELLS]) {
+    ) -> (f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES]) {
         let (
             mut run_w,
             running_pull,
@@ -1905,7 +1905,7 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
         repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
-    ) -> (f32, f32, u32, [u64; NUM_SWARM_MICRO_CELLS]) {
+    ) -> (f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES]) {
         let init_w = *trail_phase_words_ref(self);
         self.apply_unified_field_anchor_slice_resonance_from_words(
             init_w,
@@ -2481,7 +2481,7 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         liminal_interpolation_u7: u8,
         repulsion_penalty: f32,
         macro_anchor_id: u32,
-        win_w_opt: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
+        win_w_opt: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
         cluster_bonus_gain: f32,
     ) -> (u32, f32, f32, u32, bool) {
         let init_w = *trail_phase_words_ref(self);
@@ -2571,13 +2571,13 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
     #[inline]
     fn apply_neighborhood_synergy_from_bank_from_words(
         &mut self,
-        mut acc_w: [u64; NUM_SWARM_MICRO_CELLS],
+        mut acc_w: [u64; NUM_STIGMERGIC_GRANULES],
         slot_phase_bank: &[[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS],
         slot_weights: &[f32; MAX_ATTRACTOR_DOMAINS],
         coupling_matrix_8x8: u64,
         synergy_gain: f32,
         inhibition_strength: f32,
-    ) -> (f32, f32, u32, [u64; NUM_SWARM_MICRO_CELLS]) {
+    ) -> (f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES]) {
         let primary_slot = u32::from(self.target_attractor_slot() & ATTRACTOR_SLOT_ID_MASK);
         let p_idx = primary_slot as usize;
         let primary_phase = &slot_phase_bank[p_idx];
@@ -2666,7 +2666,7 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         coupling_matrix_8x8: u64,
         synergy_gain: f32,
         inhibition_strength: f32,
-    ) -> (f32, f32, u32, [u64; NUM_SWARM_MICRO_CELLS]) {
+    ) -> (f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES]) {
         let acc_w = *trail_phase_words_ref(self);
         self.apply_neighborhood_synergy_from_bank_from_words(
             acc_w,

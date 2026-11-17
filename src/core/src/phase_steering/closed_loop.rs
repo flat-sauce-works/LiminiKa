@@ -12,7 +12,7 @@ use super::*;
 // ===================================================================
 
 /// Blanket-implemented closed-loop steering trait uniting [`PhaseSteering`] and [`SubHeadRouter`]
-/// with [`StigmergicSwarmOps`], Single-Manifold Unified-Field resonance, Bayesian Pointer-Trail
+/// with [`StigmergicReconstitutionOps`], Single-Manifold Unified-Field resonance, Bayesian Pointer-Trail
 /// selection & Attention score modulation, Orthogonal Procrustes trail feedback, Limina
 /// inter-memory bridging, Online Toroidal $k$-Means / DP-Means Coarse-to-Fine routing, and
 /// 2-Origin Composite Manifold Gateway execution.
@@ -22,7 +22,7 @@ use super::*;
 /// [`crate::traits::ColdPathObserver`], and [`crate::traits::FullStackGcsoEngine`]).
 pub trait PhaseSteeringClosedLoop: PhaseSteering + SubHeadRouter {
     /// Executes closed-loop 8-Cell SWAR Micro-Swarm consensus on `trail` against `target_phases`
-    /// via [`StigmergicSwarmOps::try_resolve_action_in_swarm_to_words`] and steers `query_tensor`
+    /// via [`StigmergicReconstitutionOps::try_resolve_action_in_swarm_to_words`] and steers `query_tensor`
     /// (and optionally `key_tensor`) directly from the 8 returned `u64` SWAR registers via
     /// `steer_from_swar_words_core_safe` without reloading `trail.accumulated_phase_delta`.
     ///
@@ -48,7 +48,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + SubHeadRouter {
         max_rad: f32,
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<SwarmResolutionReport> {
+    ) -> GcsoResult<StigmergicReconstitutionReport> {
         if min_step_rad < 0.0 || !branchless_is_finite_f32(min_step_rad) {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -116,7 +116,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + SubHeadRouter {
         max_rad: f32,
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<SwarmResolutionReport> {
+    ) -> GcsoResult<StigmergicReconstitutionReport> {
         if anchor_phases.len() != anchor_base_energies.len()
             || min_step_rad < 0.0
             || !branchless_is_finite_f32(min_step_rad)
@@ -170,7 +170,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + SubHeadRouter {
 
     /// Resolves `trail` in the 8-Cell Micro-Swarm against the optional 8-Lane Working Phase Bank
     /// (`slot_phase_bank`, `>= 512` bytes), recruits coupled neighbor lanes via
-    /// [`StigmergicSwarmOps::resolve_slot_bank_in_swarm_to_words`] on partial quorum,
+    /// [`StigmergicReconstitutionOps::resolve_slot_bank_in_swarm_to_words`] on partial quorum,
     /// and steers `query_tensor` (and optionally `key_tensor`) directly from the register-resident
     /// `swar_words` with geodesic RIPA soft-clamping.
     ///
@@ -198,7 +198,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + SubHeadRouter {
         max_rad: f32,
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<SwarmResolutionReport> {
+    ) -> GcsoResult<StigmergicReconstitutionReport> {
         if min_step_rad < 0.0 || !branchless_is_finite_f32(min_step_rad) {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -340,7 +340,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + SubHeadRouter {
         let self_w = *trail_phase_words_ref(src_trail);
         Ok(route_macro_aligned_bayesian_trails_and_steer_core(
             self_w,
-            &[0u64; NUM_SWARM_MICRO_CELLS],
+            &[0u64; NUM_STIGMERGIC_GRANULES],
             false,
             0,
             0,
@@ -528,7 +528,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + SubHeadRouter {
                 let tail_elems = (num_heads - total_pspm_heads) * head_dim;
                 let q_tail = &mut query_tensor.as_mut_slice()
                     [total_pspm_heads * head_dim..total_pspm_heads * head_dim + tail_elems];
-                let mut tail_words = [0u64; NUM_SWARM_MICRO_CELLS];
+                let mut tail_words = [0u64; NUM_STIGMERGIC_GRANULES];
                 let mut h = total_pspm_heads;
                 while h < num_heads {
                     let th = h - total_pspm_heads;
@@ -631,8 +631,8 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + SubHeadRouter {
             branchless_rad_to_qdps_step_u8(min_step_rad)
         };
         let active_cells = num_heads
-            .div_ceil(HEADS_PER_SWARM_CELL)
-            .min(NUM_SWARM_MICRO_CELLS);
+            .div_ceil(HEADS_PER_STIGMERGIC_GRANULE)
+            .min(NUM_STIGMERGIC_GRANULES);
         let is_unit_gain = clean_gain == 128;
         let is_bypass_step = step_u8 <= 1;
 
@@ -1402,7 +1402,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + SubHeadRouter {
     /// Bayesian Pointer-Chain Selection & Limina Bridging $\to$
     /// Register-Resident $SO(2)$-Fused RIPA/sub-head router Steering $\to$ `.gcso` Crystallization** pipeline.
     ///
-    /// Returns `(GatewayFrame, CausalProvenanceReport, SwarmResolutionReport, selected_trail_id, found_coherent_trail)`.
+    /// Returns `(GatewayFrame, CausalProvenanceReport, StigmergicReconstitutionReport, selected_trail_id, found_coherent_trail)`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if tensor dimensions or `GCSO_RESTRICT` non-aliasing
@@ -1437,7 +1437,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + SubHeadRouter {
     ) -> GcsoResult<(
         GatewayFrame,
         CausalProvenanceReport,
-        SwarmResolutionReport,
+        StigmergicReconstitutionReport,
         u32,
         bool,
     )> {
@@ -1646,7 +1646,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + SubHeadRouter {
     /// hyperparameters**, deriving all Swarm, Bayesian, and damping constants autonomously from
     /// the trait-composed `signal: &S` ([`ManifoldGatewaySignal`]).
     ///
-    /// Returns `(GatewayFrame, CausalProvenanceReport, SwarmResolutionReport, selected_trail_id, found_coherent_trail)`.
+    /// Returns `(GatewayFrame, CausalProvenanceReport, StigmergicReconstitutionReport, selected_trail_id, found_coherent_trail)`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if tensor dimensions or `GCSO_RESTRICT` non-aliasing
@@ -1666,7 +1666,7 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + SubHeadRouter {
     ) -> GcsoResult<(
         GatewayFrame,
         CausalProvenanceReport,
-        SwarmResolutionReport,
+        StigmergicReconstitutionReport,
         u32,
         bool,
     )> {

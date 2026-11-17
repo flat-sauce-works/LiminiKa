@@ -92,14 +92,14 @@ impl CrystallizedAnchorRecord {
     /// guaranteed 64-byte aligned by `#[repr(C, align(64))]`) as 8 native `u64` SWAR words (`&[u64; 8]`).
     #[inline(always)]
     #[must_use]
-    pub const fn phase_words_ref(&self) -> &[u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
+    pub const fn phase_words_ref(&self) -> &[u64; crate::traits::NUM_STIGMERGIC_GRANULES] {
         // SAFETY: `CrystallizedAnchorRecord` is `#[repr(C, align(64))]` and `phase_deltas` is at offset 0
         // (64-byte aligned, >= 8-byte alignment of `u64`), with identical size (64 bytes) and `Pod` validity.
         unsafe {
             &*(self
                 .phase_deltas
                 .as_ptr()
-                .cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>())
+                .cast::<[u64; crate::traits::NUM_STIGMERGIC_GRANULES]>())
         }
     }
 
@@ -107,14 +107,14 @@ impl CrystallizedAnchorRecord {
     /// [`CrystallizedAnchorRecord`], guaranteed 64-byte aligned) as a zero-copy `&mut [u64; 8]` SWAR array.
     #[inline(always)]
     #[must_use]
-    pub const fn phase_words_mut(&mut self) -> &mut [u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
+    pub const fn phase_words_mut(&mut self) -> &mut [u64; crate::traits::NUM_STIGMERGIC_GRANULES] {
         // SAFETY: `CrystallizedAnchorRecord` is `#[repr(C, align(64))]` and `phase_deltas` is at offset 0
         // (64-byte aligned, >= 8-byte alignment of `u64`), with identical size (64 bytes) and `Pod` validity.
         unsafe {
             &mut *(self
                 .phase_deltas
                 .as_mut_ptr()
-                .cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>())
+                .cast::<[u64; crate::traits::NUM_STIGMERGIC_GRANULES]>())
         }
     }
 
@@ -359,7 +359,7 @@ impl CognitiveGroundingSignal for CrystallizedAnchorRecord {
     }
 
     #[inline(always)]
-    fn project_grounding_words_64(&self) -> [u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
+    fn project_grounding_words_64(&self) -> [u64; crate::traits::NUM_STIGMERGIC_GRANULES] {
         *self.phase_words_ref()
     }
 
@@ -380,7 +380,7 @@ impl ManifoldGatewaySignal for CrystallizedAnchorRecord {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(
         &self,
-    ) -> (GatewayFrame, [u64; crate::traits::NUM_SWARM_MICRO_CELLS]) {
+    ) -> (GatewayFrame, [u64; crate::traits::NUM_STIGMERGIC_GRANULES]) {
         self.to_crystallized_attractor_record_unstamped()
             .synthesize_gateway_frame_with_words()
     }
@@ -488,14 +488,14 @@ impl AttractorGrowthSnapshot {
     /// [`AttractorGrowthSnapshot`], guaranteed 64-byte aligned) as a zero-copy `&[u64; 8]` SWAR array.
     #[inline(always)]
     #[must_use]
-    pub const fn persona_words_ref(&self) -> &[u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
+    pub const fn persona_words_ref(&self) -> &[u64; crate::traits::NUM_STIGMERGIC_GRANULES] {
         // SAFETY: `AttractorGrowthSnapshot` is `#[repr(C, align(64))]` and `persona_phase_profile`
         // is at byte offset 64 (64-byte aligned, >= 8-byte alignment of `u64`).
         unsafe {
             &*(self
                 .persona_phase_profile
                 .as_ptr()
-                .cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>())
+                .cast::<[u64; crate::traits::NUM_STIGMERGIC_GRANULES]>())
         }
     }
 
@@ -503,14 +503,14 @@ impl AttractorGrowthSnapshot {
     /// [`AttractorGrowthSnapshot`], guaranteed 64-byte aligned) as a zero-copy `&[u64; 8]` SWAR array.
     #[inline(always)]
     #[must_use]
-    pub const fn repulsion_words_ref(&self) -> &[u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
+    pub const fn repulsion_words_ref(&self) -> &[u64; crate::traits::NUM_STIGMERGIC_GRANULES] {
         // SAFETY: `AttractorGrowthSnapshot` is `#[repr(C, align(64))]` and `repulsion_phase_deltas`
         // is at byte offset 128 (64-byte aligned, >= 8-byte alignment of `u64`).
         unsafe {
             &*(self
                 .repulsion_phase_deltas
                 .as_ptr()
-                .cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>())
+                .cast::<[u64; crate::traits::NUM_STIGMERGIC_GRANULES]>())
         }
     }
 
@@ -956,7 +956,7 @@ impl CognitiveGroundingSignal for AttractorAnchor {
     }
 
     #[inline(always)]
-    fn project_grounding_words_64(&self) -> [u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
+    fn project_grounding_words_64(&self) -> [u64; crate::traits::NUM_STIGMERGIC_GRANULES] {
         *self.phase_words_ref()
     }
 
@@ -977,11 +977,11 @@ impl ManifoldGatewaySignal for AttractorAnchor {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(
         &self,
-    ) -> (GatewayFrame, [u64; crate::traits::NUM_SWARM_MICRO_CELLS]) {
+    ) -> (GatewayFrame, [u64; crate::traits::NUM_STIGMERGIC_GRANULES]) {
         if self.is_active == 0 {
             return (
                 GatewayFrame::zeroed(),
-                [0u64; crate::traits::NUM_SWARM_MICRO_CELLS],
+                [0u64; crate::traits::NUM_STIGMERGIC_GRANULES],
             );
         }
         CrystallizedAnchorRecord::from_anchor(self).synthesize_gateway_frame_with_words()
@@ -1001,14 +1001,14 @@ impl AttractorAnchor {
     /// guaranteed 64-byte cacheline-aligned by `#[repr(C, align(64))]`) as 8 native `u64` SWAR words (`&[u64; 8]`).
     #[inline(always)]
     #[must_use]
-    pub const fn phase_words_ref(&self) -> &[u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
+    pub const fn phase_words_ref(&self) -> &[u64; crate::traits::NUM_STIGMERGIC_GRANULES] {
         // SAFETY: `AttractorAnchor` is `#[repr(C, align(64))]` and `phase_deltas` is at byte offset 64
         // (64-byte aligned, >= 8-byte alignment of `u64`), with identical size (64 bytes) and `Pod` validity.
         unsafe {
             &*(self
                 .phase_deltas
                 .as_ptr()
-                .cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>())
+                .cast::<[u64; crate::traits::NUM_STIGMERGIC_GRANULES]>())
         }
     }
 
@@ -1016,14 +1016,14 @@ impl AttractorAnchor {
     /// [`AttractorAnchor`], guaranteed 64-byte cacheline-aligned) as a zero-copy `&mut [u64; 8]` SWAR array.
     #[inline(always)]
     #[must_use]
-    pub const fn phase_words_mut(&mut self) -> &mut [u64; crate::traits::NUM_SWARM_MICRO_CELLS] {
+    pub const fn phase_words_mut(&mut self) -> &mut [u64; crate::traits::NUM_STIGMERGIC_GRANULES] {
         // SAFETY: `AttractorAnchor` is `#[repr(C, align(64))]` and `phase_deltas` is at byte offset 64
         // (64-byte aligned, >= 8-byte alignment of `u64`), with identical size (64 bytes) and `Pod` validity.
         unsafe {
             &mut *(self
                 .phase_deltas
                 .as_mut_ptr()
-                .cast::<[u64; crate::traits::NUM_SWARM_MICRO_CELLS]>())
+                .cast::<[u64; crate::traits::NUM_STIGMERGIC_GRANULES]>())
         }
     }
 

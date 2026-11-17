@@ -709,7 +709,7 @@ pub(super) fn bridge_and_eval_liminal_trail_chain_single_pass(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn select_rewire_bridge_and_eval_log_prob_in_registers(
     src_trail: &mut gcso_pointer_trail_t,
-    preloaded_src_w_opt: Option<[u64; NUM_SWARM_MICRO_CELLS]>,
+    preloaded_src_w_opt: Option<[u64; NUM_STIGMERGIC_GRANULES]>,
     candidate_trails: &mut [gcso_pointer_trail_t],
     attention_scores_opt: Option<&mut [f32]>,
     head_dim: u32,
@@ -721,7 +721,7 @@ pub(super) fn select_rewire_bridge_and_eval_log_prob_in_registers(
     repulsion_penalty: f32,
     macro_anchor_id: u32,
     secondary_macro_anchor_id: u32,
-    win_w_opt: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
+    win_w_opt: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
     bloom_filter: &mut ContrastivePhaseBloomFilter,
 ) -> (u32, f32, f32, bool) {
     if candidate_trails.is_empty() {
@@ -812,14 +812,14 @@ pub(super) fn select_rewire_bridge_and_eval_log_prob_in_registers(
 }
 
 /// Applies Pitchfork Metastable Tunneling phase perturbation (`Lemma 3.1`) directly to
-/// register-resident `words_inout: &mut [u64; NUM_SWARM_MICRO_CELLS]` and writes only the
+/// register-resident `words_inout: &mut [u64; NUM_STIGMERGIC_GRANULES]` and writes only the
 /// perturbed exploration cells (`explore_head_start..MAX_ATTENTION_HEADS`) back to `phases_inout`,
 /// eliminating Store-to-Load Forwarding reload stalls in `step_edbc_tunneling_and_select_bayesian_core`.
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn inject_metastable_tunneling_perturbation_in_words_64(
     phases_inout: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-    words_inout: &mut [u64; NUM_SWARM_MICRO_CELLS],
+    words_inout: &mut [u64; NUM_STIGMERGIC_GRANULES],
     seed_ptr: gcso_tagged_ptr_t,
     void_score: f32,
     tau_eff: f32,
@@ -885,7 +885,7 @@ pub(super) fn inject_metastable_tunneling_perturbation_in_words_64(
     let xor_byte = u64::from(pos_u8 ^ neg_u8);
 
     let mut c = h >> 3;
-    while c < NUM_SWARM_MICRO_CELLS {
+    while c < NUM_STIGMERGIC_GRANULES {
         let bits_w = (hash >> c) & SWAR_SPLAT_BYTE_64;
         let pulse_w = pos_w ^ bits_w.wrapping_mul(xor_byte);
         let next_w = swar_q7_add_sat_x8(words_inout[c], pulse_w);
@@ -908,7 +908,7 @@ pub(super) fn step_edbc_tunneling_and_select_bayesian_core<
 >(
     engine: &mut E,
     src_trail: &mut gcso_pointer_trail_t,
-    preloaded_src_w_opt: Option<[u64; NUM_SWARM_MICRO_CELLS]>,
+    preloaded_src_w_opt: Option<[u64; NUM_STIGMERGIC_GRANULES]>,
     candidate_trails: &mut [gcso_pointer_trail_t],
     token_z_score: f32,
     void_score: f32,
@@ -926,7 +926,7 @@ pub(super) fn step_edbc_tunneling_and_select_bayesian_core<
     high_density_rank1_thresh: f32,
     macro_anchor_id: u32,
     secondary_macro_anchor_id: u32,
-    win_w_opt: Option<&[u64; NUM_SWARM_MICRO_CELLS]>,
+    win_w_opt: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
     bloom_filter: &mut ContrastivePhaseBloomFilter,
     mut attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
 ) -> GcsoResult<(
@@ -1096,7 +1096,7 @@ pub(super) fn step_via_gateway_frame_with_words_core<
     d0: f32,
     high_density_rank1_thresh: f32,
     frame: &GatewayFrame,
-    gw_w: &[u64; NUM_SWARM_MICRO_CELLS],
+    gw_w: &[u64; NUM_STIGMERGIC_GRANULES],
     trail: &mut gcso_pointer_trail_t,
     logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     crystal_record_opt: Option<&mut CrystallizedAttractorRecord>,
@@ -1192,7 +1192,7 @@ pub(super) fn step_via_gateway_frame_with_words_core<
                             s,
                             bias_restore,
                         );
-                        ([w0; NUM_SWARM_MICRO_CELLS], false, false)
+                        ([w0; NUM_STIGMERGIC_GRANULES], false, false)
                     } else {
                         // SAFETY: `target_feature = "avx2"` is enabled; loads `trail.accumulated_phase_delta`
                         // directly from L1D and converts `gw_w` via register moves (`avx2_words64_to_vec64_with_uniform`)

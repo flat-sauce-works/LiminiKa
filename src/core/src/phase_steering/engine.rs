@@ -35,7 +35,7 @@ const _: () = {
     assert!(offset_of!(PhaseSteeringEngine, num_heads) == 4);
     assert!(offset_of!(PhaseSteeringEngine, ripa_clamp_max_rad) == 8);
     assert!(offset_of!(PhaseSteeringEngine, qdps_min_step_rad) == 12);
-    assert!(NUM_SWARM_MICRO_CELLS * HEADS_PER_SWARM_CELL == MAX_ATTENTION_HEADS);
+    assert!(NUM_STIGMERGIC_GRANULES * HEADS_PER_STIGMERGIC_GRANULE == MAX_ATTENTION_HEADS);
 };
 
 impl Default for PhaseSteeringEngine {
