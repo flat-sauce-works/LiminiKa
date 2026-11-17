@@ -324,7 +324,7 @@ mod tests {
         // SAFETY: Local stack buffers satisfy alignment and disjointness invariants.
         unsafe {
             assert_eq!(
-                gcso_cvoid_eval_barrier_pitchfork(2.0, 1.0, 1.0, 1.0, 128, &mut barrier),
+                gcso_liminal_void_eval_barrier_pitchfork(2.0, 1.0, 1.0, 1.0, 128, &mut barrier),
                 GCSO_SUCCESS
             );
             assert!((barrier - (1.0 / 512.0)).abs() < 1e-6);

@@ -149,14 +149,14 @@ pub trait EntropyEvaluator: BranchlessKernel + Send + Sync {
         ))
     }
 
-    /// Computes the CVoid Coherent Vector Alignment Metric ($\mathcal{C}_{\mathrm{void}} \in [0, 1]$)
+    /// Computes the LiminalVoid Vector Alignment Metric ($\mathcal{L}_{\mathrm{void}} \in [0, 1]$)
     /// in division-free (`0 fdiv`) SIMD mode.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `key_vector` is empty.
     /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if any element or accumulated norm of `key_vector` is non-finite.
     #[inline]
-    fn eval_cvoid_dyadic128(
+    fn eval_liminal_void_dyadic128(
         &self,
         key_vector: &AlignedSlice32<'_, f32>,
         void_score_out: &mut f32,
@@ -184,7 +184,7 @@ pub trait EntropyEvaluator: BranchlessKernel + Send + Sync {
         Ok(())
     }
 
-    /// Calculates the Eyring-Kramers potential barrier height ($\Delta V = \tau_{\mathrm{eff}} / \mathcal{C}_{\mathrm{void}}$)
+    /// Calculates the Eyring-Kramers potential barrier height ($\Delta V = \tau_{\mathrm{eff}} / \mathcal{L}_{\mathrm{void}}$)
     /// in division-free (`0 fdiv`) mode.
     ///
     /// # Errors
@@ -204,7 +204,7 @@ pub trait EntropyEvaluator: BranchlessKernel + Send + Sync {
     }
 
     /// Evaluates the scale-invariant Pitchfork Bifurcation potential barrier height
-    /// $\Delta V = \frac{\alpha^2 (\mathcal{C}_{\mathrm{void}} - \tau_{\mathrm{eff}})^2}{4 \beta d_{\mathrm{head}}}$
+    /// $\Delta V = \frac{\alpha^2 (\mathcal{L}_{\mathrm{void}} - \tau_{\mathrm{eff}})^2}{4 \beta d_{\mathrm{head}}}$
     /// in division-free (`0 fdiv`) mode (Lemma 3.1).
     ///
     /// # Errors
@@ -213,13 +213,13 @@ pub trait EntropyEvaluator: BranchlessKernel + Send + Sync {
     #[inline]
     fn eval_barrier_pitchfork(
         &self,
-        cvoid: f32,
+        liminal_void: f32,
         tau_eff: f32,
         alpha: f32,
         beta: f32,
         head_dim: u32,
     ) -> GcsoResult<f32> {
-        if !branchless_is_finite_f32(cvoid)
+        if !branchless_is_finite_f32(liminal_void)
             || !branchless_is_finite_f32(tau_eff)
             || !branchless_is_finite_f32(alpha)
             || !branchless_is_finite_f32(beta)
@@ -229,7 +229,7 @@ pub trait EntropyEvaluator: BranchlessKernel + Send + Sync {
         {
             return Err(GCSO_ERROR_EDBC_SINGULARITY);
         }
-        let excess = branchless_relu_f32(cvoid - tau_eff);
+        let excess = branchless_relu_f32(liminal_void - tau_eff);
         let num = alpha * alpha * excess * excess;
         let den = 4.0 * beta * (head_dim as f32);
         Ok(branchless_flush_subnormal_f32(
@@ -244,13 +244,13 @@ pub trait EntropyEvaluator: BranchlessKernel + Send + Sync {
     #[inline]
     fn eval_eyring_kramers_escape_prob(
         &self,
-        cvoid: f32,
+        liminal_void: f32,
         tau_eff: f32,
         alpha: f32,
         beta: f32,
         d0: f32,
     ) -> GcsoResult<f32> {
-        if !branchless_is_finite_f32(cvoid)
+        if !branchless_is_finite_f32(liminal_void)
             || !branchless_is_finite_f32(tau_eff)
             || !branchless_is_finite_f32(alpha)
             || !branchless_is_finite_f32(beta)
@@ -261,7 +261,11 @@ pub trait EntropyEvaluator: BranchlessKernel + Send + Sync {
             return Err(GCSO_ERROR_EDBC_SINGULARITY);
         }
         Ok(branchless_eyring_kramers_escape(
-            cvoid, tau_eff, alpha, beta, d0,
+            liminal_void,
+            tau_eff,
+            alpha,
+            beta,
+            d0,
         ))
     }
 }
@@ -306,7 +310,7 @@ pub trait EdbcBranchController: EntropyEvaluator {
         current_mode: u32,
         moving_z_entropy: f32,
         sliding_flux: f32,
-        cvoid_score: f32,
+        void_score: f32,
         bifurcation_threshold: f32,
         tau_flux: f32,
         hysteresis_band: f32,
@@ -317,11 +321,11 @@ pub trait EdbcBranchController: EntropyEvaluator {
 
         let surge_triggered = (moving_z_entropy > upper_thresh)
             | (sliding_flux > (tau_flux + hyst))
-            | ((moving_z_entropy > bifurcation_threshold) & (cvoid_score >= upper_thresh));
+            | ((moving_z_entropy > bifurcation_threshold) & (void_score >= upper_thresh));
         let stay_active = (current_mode != 0) & (moving_z_entropy > lower_thresh);
         let active_non_normal = surge_triggered | stay_active;
 
-        let active_target = branchless_select_u32(cvoid_score >= bifurcation_threshold, 1, 2);
+        let active_target = branchless_select_u32(void_score >= bifurcation_threshold, 1, 2);
         branchless_select_u32(active_non_normal, active_target, 0)
     }
 
@@ -335,7 +339,7 @@ pub trait EdbcBranchController: EntropyEvaluator {
         dominant_attractor_slot: u8,
         moving_z_entropy: f32,
         sliding_flux: f32,
-        cvoid_score: f32,
+        void_score: f32,
         bifurcation_threshold: f32,
         tau_flux: f32,
         hysteresis_band: f32,
@@ -345,7 +349,7 @@ pub trait EdbcBranchController: EntropyEvaluator {
             self.active_branch_mode(),
             moving_z_entropy,
             sliding_flux,
-            cvoid_score,
+            void_score,
             bifurcation_threshold,
             tau_flux,
             hysteresis_band,
@@ -370,7 +374,7 @@ pub trait EdbcBranchController: EntropyEvaluator {
         &self,
         base_temperature: f32,
         moving_z_entropy: f32,
-        cvoid_score: f32,
+        void_score: f32,
         tau_eff: f32,
         alpha: f32,
         beta: f32,
@@ -394,7 +398,7 @@ pub trait EdbcBranchController: EntropyEvaluator {
         if mode == 2 {
             return branchless_clamp_f32(safe_base * (1.0 + 0.25 * norm_h), 0.05, 5.0);
         }
-        let escape_p = branchless_eyring_kramers_escape(cvoid_score, tau_eff, alpha, beta, d0);
+        let escape_p = branchless_eyring_kramers_escape(void_score, tau_eff, alpha, beta, d0);
         let explore_temp = safe_base * (1.0 + 0.35 * escape_p * norm_h);
         let candidate = branchless_select_f32(mode == 1, explore_temp, safe_base);
         branchless_clamp_f32(candidate, 0.05, 5.0)
@@ -412,7 +416,7 @@ pub trait EdbcBranchController: EntropyEvaluator {
         &self,
         phases_inout: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
         seed_ptr: gcso_tagged_ptr_t,
-        cvoid_score: f32,
+        void_score: f32,
         tau_eff: f32,
         alpha: f32,
         beta: f32,
@@ -422,7 +426,7 @@ pub trait EdbcBranchController: EntropyEvaluator {
         if explore_head_start > MAX_ATTENTION_HEADS {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        if !branchless_is_finite_f32(cvoid_score)
+        if !branchless_is_finite_f32(void_score)
             || !branchless_is_finite_f32(tau_eff)
             || !branchless_is_finite_f32(alpha)
             || !branchless_is_finite_f32(beta)
@@ -433,7 +437,7 @@ pub trait EdbcBranchController: EntropyEvaluator {
             return Err(GCSO_ERROR_EDBC_SINGULARITY);
         }
 
-        let excess = branchless_relu_f32(cvoid_score - tau_eff);
+        let excess = branchless_relu_f32(void_score - tau_eff);
         let safe_alpha = branchless_relu_f32(alpha);
         if excess <= 0.0 || safe_alpha <= 0.0 {
             return Ok(0.0);

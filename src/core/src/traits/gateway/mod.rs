@@ -40,7 +40,8 @@ use crate::traits::aligned::{
     is_aligned_to,
 };
 use crate::traits::branchless::{
-    BranchlessKernel, atan2_interleaved_pairs_to_q7_word_x8_simd, atan2_to_q7_word_x8_simd,
+    BranchlessKernel, LiminalVoid, atan2_interleaved_pairs_to_q7_word_x8_simd,
+    atan2_to_q7_word_x8_simd,
     branchless_phase_coherence_inv_temp_scale, branchless_q7_circular_resultant_64,
     circular_resultant_from_words_64, coherence_from_uniform_words_x8,
     coherence_from_word_arrays_with_both_uniform_flags_64, encode_pframe_motion_delta_64,
@@ -98,6 +99,15 @@ use crate::abi::{
 
 pub use crate::crystal::{CrystallizedAttractorRecord, DissipativeOverflowReport};
 pub use crate::storage::GcsoFourSectionView;
+pub use crate::traits::primitives::{
+    APERTURE_ACTION_HUB_WIDE, APERTURE_CAUSAL_PROVENANCE, APERTURE_COGNITIVE_CIRCUIT,
+    APERTURE_COHOMOLOGY_EDBC, APERTURE_CONTRADICTION_GUARD, APERTURE_DISSIPATIVE_CRYSTAL,
+    APERTURE_FAST_PATH_LEDGER, APERTURE_KV_PHASE_CACHE, APERTURE_MANIFOLD_GATEWAY,
+    APERTURE_MAPPED_STORAGE, APERTURE_OBJECTIVE_FACT, APERTURE_PHASE_STEERING,
+    APERTURE_POINTER_TRAIL, APERTURE_RANK1_RESIDUAL, APERTURE_RELATIVE_COUPLING,
+    APERTURE_SUBJECTIVE_PERSONA, APERTURE_SUBHEAD_ROUTING, APERTURE_SWARM_CONSENSUS,
+    APERTURE_SYSTEM_CONSTRAINT, NUM_LIMINAL_APERTURE_CHANNELS,
+};
 
 pub mod circuit;
 pub mod epistemic;
@@ -172,7 +182,20 @@ const _: () = {
     assert!(align_of::<EpistemicHorizonReading>() == 16);
     assert!(offset_of!(EpistemicHorizonReading, horizon_gate) == 12);
     assert!(offset_of!(EpistemicHorizonReading, regime_code) == 28);
+    assert!(size_of::<LiminalApertureField>() == 32);
+    assert!(align_of::<LiminalApertureField>() == 16);
+    assert!(offset_of!(LiminalApertureField, active_aperture_mask) == 24);
+    assert!(offset_of!(LiminalApertureField, adaptation_epochs) == 28);
+    assert!(size_of::<LiminalTopologyTelemetrySnapshot>() == 32);
+    assert!(align_of::<LiminalTopologyTelemetrySnapshot>() == 16);
+    assert!(offset_of!(LiminalTopologyTelemetrySnapshot, active_aperture_mask) == 24);
+    assert!(offset_of!(LiminalTopologyTelemetrySnapshot, spawned_daughters) == 31);
 };
+
+// SAFETY: `LiminalApertureField` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
+unsafe impl Pod for LiminalApertureField {}
+// SAFETY: `LiminalTopologyTelemetrySnapshot` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
+unsafe impl Pod for LiminalTopologyTelemetrySnapshot {}
 
 
 #[cfg(test)]

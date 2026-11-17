@@ -28,7 +28,7 @@
 #![allow(clippy::field_reassign_with_default)]
 
 use super::aligned::{AlignedBuffer16, AlignedSlice32, AlignedSliceMut32};
-use super::branchless::{swar_words_nonzero_64, BranchlessKernel};
+use super::branchless::{swar_words_nonzero_64, BranchlessKernel, LiminalVoid};
 use super::gateway::{
     CrystallizedAttractorRecord, GatewayFrame, GcsoFourSectionView, ManifoldGatewaySignal,
 };
@@ -41,7 +41,8 @@ use super::primitives::{
     load_q7_x8_slice, store_q7_words_64, swar_q7_add_sat_x8, swar_q7_circular_diff_x8,
     swar_q7_fold_s1_geodesic_x8, swar_q7_qdps_filter_words_64, swar_q7_qdps_filter_x8,
     swar_q7_sub_sat_x8, trail_phase_words_mut, trail_phase_words_ref, GcsoResult, Pod,
-    ACTION_MODE_LAYER_SKIP, DEFAULT_RIPA_CLAMP_MAX_RAD, MAX_ATTENTION_HEADS,
+    ACTION_MODE_LAYER_SKIP, APERTURE_ACTION_HUB_WIDE, DEFAULT_RIPA_CLAMP_MAX_RAD,
+    MAX_ATTENTION_HEADS,
 };
 use super::rope::{
     dispatch_fused_ripa_and_pspm_words_core, ripa_upper_rot_dim,
@@ -330,9 +331,31 @@ pub fn fuse_lazy_unwrap_and_qdps_into_aligned_64(
 ///
 /// Both [`super::HotPathObserver`] (`traits/hot_path.rs`), [`super::ColdPathObserver`] (`traits/cold_path.rs`),
 /// and [`super::ActionHubGatewayExt`] (`traits/gateway.rs`) observe and mutate `ActionHub` via blanket implementations.
+/// Broadest operational capability supertrait unifying Gateway origins, execution routers, and
+/// telemetry ledgers atop [`LiminalVoid`].
 pub trait ActionHub:
-    BranchlessKernel + PhaseSteering + PointerActionHub + SubHeadRouter + Rank1ResidualAdapter + FastPathLedger
+    LiminalVoid
+    + BranchlessKernel
+    + PhaseSteering
+    + PointerActionHub
+    + SubHeadRouter
+    + Rank1ResidualAdapter
+    + FastPathLedger
 {
+    /// Broadest cognitive aperture spanned across all gateway, steering, swarm, cohomology, and
+    /// mapped-storage capabilities (`0x0000_FFFF`).
+    const HUB_APERTURE_MASK: u32 = APERTURE_ACTION_HUB_WIDE;
+
+    /// Type-level complement identifying signals outside `ActionHub`'s horizon as unknowable (`!0xFFFF`).
+    const HUB_UNKNOWABLE_VOID_MASK: u32 = !Self::HUB_APERTURE_MASK;
+
+    /// Branchlessly partitions `signal_bits` into `(cognized_bits, unknowable_void_bits)` for
+    /// [`Self::HUB_APERTURE_MASK`].
+    #[inline(always)]
+    fn inspect_hub_horizon_partition(&self, signal_bits: u32) -> (u32, u32) {
+        self.partition_cognitive_and_unknowable_bits(Self::HUB_APERTURE_MASK, signal_bits)
+    }
+
     /// Validates `head_dim`, `num_heads <= MAX_ATTENTION_HEADS`, `qdps_min_step_rad >= 0.0`,
     /// `ripa_max_rad > 0.0`, and optional Query/Key tensor lengths and `GCSO_RESTRICT` disjointness.
     ///

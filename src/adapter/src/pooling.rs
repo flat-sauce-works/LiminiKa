@@ -1358,12 +1358,12 @@ mod tests {
             Some(3)
         );
 
-        // Completely out-of-domain entity (entity_dim = 500) must fall in CvoidEmptySpace.
+        // Completely out-of-domain entity (entity_dim = 500) must fall in LiminalVoid.
         let query_ood = make_seq(6, 500);
         let recall_ood = compiled
             .recall_token_sequence(&adapter, &query_ood, 7)
             .expect("recall OOD");
-        assert_eq!(recall_ood.void_state, VoidBoundaryState::CvoidEmptySpace);
+        assert_eq!(recall_ood.void_state, VoidBoundaryState::LiminalVoid);
         assert!(recall_ood.recalled_facts.is_empty());
     }
 

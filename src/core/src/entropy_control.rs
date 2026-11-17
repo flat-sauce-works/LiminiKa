@@ -15,7 +15,7 @@
 //!   that equips [`EntropyController`], [`crate::traits::ColdPathObserver`], and
 //!   [`crate::traits::FullStackGcsoEngine`] with:
 //!   1. Single-pass AVX2 $\mathcal{C}_{\mathrm{void}}$ + $\ell_1 / \ell_2$ coherence-ratio evaluation
-//!      (`eval_cvoid_with_coherence_ratio`) and strictly branchless `0-ln` Taylor-Estrin
+//!      (`eval_liminal_void_with_coherence_ratio`) and strictly branchless `0-ln` Taylor-Estrin
 //!      surrogate-to-Z-score stepping (`eval_surrogate_and_step`).
 //!   2. Single-pass register-chained Limina inter-memory trail-chain cohomology verification under
 //!      the Joint Probability Chain Rule $\sum_t \ln P(M_t \mid M_{t-1})$ with deterministic
@@ -287,13 +287,13 @@ pub const fn compute_moving_z_score_entropy(
 /// or `head_dim` is zero or odd.
 #[inline(always)]
 pub const fn eval_barrier_pitchfork(
-    cvoid: f32,
+    liminal_void: f32,
     tau_eff: f32,
     alpha: f32,
     beta: f32,
     head_dim: u32,
 ) -> GcsoResult<f32> {
-    let valid_params = branchless_is_finite_f32(cvoid)
+    let valid_params = branchless_is_finite_f32(liminal_void)
         & branchless_is_finite_f32(tau_eff)
         & branchless_is_finite_f32(alpha)
         & branchless_is_finite_f32(beta)
@@ -304,7 +304,7 @@ pub const fn eval_barrier_pitchfork(
         return Err(GCSO_ERROR_EDBC_SINGULARITY);
     }
 
-    let diff = branchless_relu_f32(cvoid - tau_eff);
+    let diff = branchless_relu_f32(liminal_void - tau_eff);
     let prod = alpha * diff;
     let num = prod * prod;
     let den = 4.0 * beta * (head_dim as f32);
@@ -326,7 +326,7 @@ const fn eval_temperature_for_mode(
     mode: u32,
     base_temperature: f32,
     moving_z_entropy: f32,
-    cvoid_score: f32,
+    void_score: f32,
     tau_eff: f32,
     alpha: f32,
     beta: f32,
@@ -346,7 +346,7 @@ const fn eval_temperature_for_mode(
     }
     let norm_h = branchless_clamp_f32(branchless_relu_f32(moving_z_entropy) * INV_LN_2, 0.0, 1.0);
     let candidate = if mode == EDBC_MODE_PITCHFORK_BIFURCATION {
-        let escape_p = branchless_eyring_kramers_escape(cvoid_score, tau_eff, alpha, beta, d0);
+        let escape_p = branchless_eyring_kramers_escape(void_score, tau_eff, alpha, beta, d0);
         safe_base * (1.0 + 0.35 * escape_p * norm_h)
     } else {
         safe_base * (1.0 + 0.25 * norm_h)
@@ -975,7 +975,7 @@ fn inject_metastable_tunneling_perturbation_in_words_64(
     phases_inout: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
     words_inout: &mut [u64; NUM_SWARM_MICRO_CELLS],
     seed_ptr: gcso_tagged_ptr_t,
-    cvoid_score: f32,
+    void_score: f32,
     tau_eff: f32,
     alpha: f32,
     beta: f32,
@@ -985,7 +985,7 @@ fn inject_metastable_tunneling_perturbation_in_words_64(
     if explore_head_start > MAX_ATTENTION_HEADS {
         return Err(GCSO_ERROR_INVALID_ARGUMENT);
     }
-    if !branchless_is_finite_f32(cvoid_score)
+    if !branchless_is_finite_f32(void_score)
         || !branchless_is_finite_f32(tau_eff)
         || !branchless_is_finite_f32(alpha)
         || !branchless_is_finite_f32(beta)
@@ -996,7 +996,7 @@ fn inject_metastable_tunneling_perturbation_in_words_64(
         return Err(GCSO_ERROR_EDBC_SINGULARITY);
     }
 
-    let excess = branchless_relu_f32(cvoid_score - tau_eff);
+    let excess = branchless_relu_f32(void_score - tau_eff);
     let safe_alpha = branchless_relu_f32(alpha);
     if excess <= 0.0 || safe_alpha <= 0.0 {
         return Ok(0.0);
@@ -1063,7 +1063,7 @@ fn step_edbc_tunneling_and_select_bayesian_core<E: EntropyClosedLoopCoordinator 
     preloaded_src_w_opt: Option<[u64; NUM_SWARM_MICRO_CELLS]>,
     candidate_trails: &mut [gcso_pointer_trail_t],
     token_z_score: f32,
-    cvoid_score: f32,
+    void_score: f32,
     alpha: f32,
     beta: f32,
     d0: f32,
@@ -1103,7 +1103,7 @@ fn step_edbc_tunneling_and_select_bayesian_core<E: EntropyClosedLoopCoordinator 
         st.active_branch_mode,
         st.moving_z_entropy,
         st.sliding_entropy_rate,
-        cvoid_score,
+        void_score,
         bif_thresh,
         DEFAULT_TAU_FLUX,
         DEFAULT_HYSTERESIS_BAND,
@@ -1119,7 +1119,7 @@ fn step_edbc_tunneling_and_select_bayesian_core<E: EntropyClosedLoopCoordinator 
             &mut src_trail.accumulated_phase_delta,
             &mut src_w,
             gcso_tagged_ptr_t(src_trail.current_ptr),
-            cvoid_score,
+            void_score,
             bif_thresh,
             alpha,
             beta,
@@ -1213,7 +1213,7 @@ fn step_edbc_tunneling_and_select_bayesian_core<E: EntropyClosedLoopCoordinator 
             st.active_branch_mode,
             DEFAULT_SAMPLE_TEMPERATURE,
             st.moving_z_entropy,
-            cvoid_score,
+            void_score,
             bif_thresh,
             alpha,
             beta,
@@ -1242,7 +1242,7 @@ fn step_via_gateway_frame_with_words_core<
 >(
     engine: &mut T,
     token_z_score: f32,
-    cvoid_score: f32,
+    void_score: f32,
     alpha: f32,
     beta: f32,
     d0: f32,
@@ -1262,7 +1262,7 @@ fn step_via_gateway_frame_with_words_core<
     if !branchless_is_finite_f32(high_density_rank1_thresh) {
         return Err(GCSO_ERROR_INVALID_ARGUMENT);
     }
-    if !branchless_is_finite_f32(cvoid_score)
+    if !branchless_is_finite_f32(void_score)
         || !branchless_is_finite_f32(alpha)
         || !branchless_is_finite_f32(beta)
         || !branchless_is_finite_f32(d0)
@@ -1287,7 +1287,7 @@ fn step_via_gateway_frame_with_words_core<
         raw_st.active_branch_mode,
         moving_z_entropy,
         sliding_entropy_rate,
-        cvoid_score,
+        void_score,
         bif_thresh,
         DEFAULT_TAU_FLUX,
         DEFAULT_HYSTERESIS_BAND,
@@ -1479,7 +1479,7 @@ fn step_via_gateway_frame_with_words_core<
             final_mode,
             DEFAULT_SAMPLE_TEMPERATURE,
             moving_z_entropy,
-            cvoid_score,
+            void_score,
             bif_thresh,
             alpha,
             beta,
@@ -1557,7 +1557,7 @@ pub trait EntropyClosedLoopCoordinator:
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `key_vector` is empty.
     /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if any element or accumulated norm is non-finite.
     #[inline(always)]
-    fn eval_cvoid_with_coherence_ratio(
+    fn eval_liminal_void_with_coherence_ratio(
         &self,
         key_vector: &AlignedSlice32<'_, f32>,
     ) -> GcsoResult<(f32, f32)> {
@@ -1633,7 +1633,7 @@ pub trait EntropyClosedLoopCoordinator:
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `trail_chain` is empty or thresholds are non-finite.
-    /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score` or `cvoid_score` is non-finite.
+    /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score` or `void_score` is non-finite.
     #[inline]
     fn step_with_liminal_trail_chain_and_bloom_guard(
         &mut self,
@@ -1642,7 +1642,7 @@ pub trait EntropyClosedLoopCoordinator:
         contradiction_threshold: f32,
         obstruction_threshold: f32,
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         high_density_rank1_thresh: f32,
         dominant_attractor_slot: u8,
         bloom_filter: &mut ContrastivePhaseBloomFilter,
@@ -1650,7 +1650,7 @@ pub trait EntropyClosedLoopCoordinator:
         if trail_chain.is_empty() {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        if !branchless_is_finite_f32(cvoid_score) {
+        if !branchless_is_finite_f32(void_score) {
             return Err(GCSO_ERROR_EDBC_SINGULARITY);
         }
 
@@ -1741,12 +1741,12 @@ pub trait EntropyClosedLoopCoordinator:
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `anchor_phases.len() != anchor_base_energies.len()`.
-    /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score` or `cvoid_score` is non-finite.
+    /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score` or `void_score` is non-finite.
     #[inline(always)]
     fn step_with_unified_field_and_pointer(
         &mut self,
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
         high_density_rank1_thresh: f32,
@@ -1755,7 +1755,7 @@ pub trait EntropyClosedLoopCoordinator:
         if anchor_phases.len() != anchor_base_energies.len() {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        if !branchless_is_finite_f32(cvoid_score) {
+        if !branchless_is_finite_f32(void_score) {
             return Err(GCSO_ERROR_EDBC_SINGULARITY);
         }
 
@@ -1822,7 +1822,7 @@ pub trait EntropyClosedLoopCoordinator:
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `candidate_trails` is empty, `explore_head_start > 64`,
     /// or gains/thresholds are non-finite.
-    /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score`, `cvoid_score`, `alpha`, `beta <= 0.0`,
+    /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score`, `void_score`, `alpha`, `beta <= 0.0`,
     /// `d0 <= 0.0`, or `head_dim` is invalid.
     #[inline(always)]
     fn step_with_bayesian_pointer_selection_and_tunneling(
@@ -1830,7 +1830,7 @@ pub trait EntropyClosedLoopCoordinator:
         src_trail: &mut gcso_pointer_trail_t,
         candidate_trails: &mut [gcso_pointer_trail_t],
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         alpha: f32,
         beta: f32,
         d0: f32,
@@ -1864,7 +1864,7 @@ pub trait EntropyClosedLoopCoordinator:
         {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        if !branchless_is_finite_f32(cvoid_score)
+        if !branchless_is_finite_f32(void_score)
             || !branchless_is_finite_f32(alpha)
             || !branchless_is_finite_f32(beta)
             || !branchless_is_finite_f32(d0)
@@ -1882,7 +1882,7 @@ pub trait EntropyClosedLoopCoordinator:
             None,
             candidate_trails,
             token_z_score,
-            cvoid_score,
+            void_score,
             alpha,
             beta,
             d0,
@@ -1926,7 +1926,7 @@ pub trait EntropyClosedLoopCoordinator:
         src_trail: &mut gcso_pointer_trail_t,
         candidate_trails: &mut [gcso_pointer_trail_t],
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         alpha: f32,
         beta: f32,
         d0: f32,
@@ -1962,7 +1962,7 @@ pub trait EntropyClosedLoopCoordinator:
         {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        if !branchless_is_finite_f32(cvoid_score)
+        if !branchless_is_finite_f32(void_score)
             || !branchless_is_finite_f32(alpha)
             || !branchless_is_finite_f32(beta)
             || !branchless_is_finite_f32(d0)
@@ -1997,7 +1997,7 @@ pub trait EntropyClosedLoopCoordinator:
             Some(bridged_w),
             candidate_trails,
             token_z_score,
-            cvoid_score,
+            void_score,
             alpha,
             beta,
             d0,
@@ -2053,7 +2053,7 @@ pub trait EntropyClosedLoopCoordinator:
         src_trail: &mut gcso_pointer_trail_t,
         candidate_trails: &mut [gcso_pointer_trail_t],
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         alpha: f32,
         beta: f32,
         d0: f32,
@@ -2093,7 +2093,7 @@ pub trait EntropyClosedLoopCoordinator:
         {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        if !branchless_is_finite_f32(cvoid_score)
+        if !branchless_is_finite_f32(void_score)
             || !branchless_is_finite_f32(alpha)
             || !branchless_is_finite_f32(beta)
             || !branchless_is_finite_f32(d0)
@@ -2129,7 +2129,7 @@ pub trait EntropyClosedLoopCoordinator:
             Some(bridged_w),
             candidate_trails,
             token_z_score,
-            cvoid_score,
+            void_score,
             alpha,
             beta,
             d0,
@@ -2194,7 +2194,7 @@ pub trait EntropyClosedLoopCoordinator:
         repulsion_penalty: f32,
         base_temperature: f32,
         moving_z_entropy: f32,
-        cvoid_score: f32,
+        void_score: f32,
         tau_eff: f32,
         alpha: f32,
         beta: f32,
@@ -2211,7 +2211,7 @@ pub trait EntropyClosedLoopCoordinator:
             || !branchless_is_finite_f32(repulsion_penalty)
             || !branchless_is_finite_f32(base_temperature)
             || !branchless_is_finite_f32(moving_z_entropy)
-            || !branchless_is_finite_f32(cvoid_score)
+            || !branchless_is_finite_f32(void_score)
         {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -2220,7 +2220,7 @@ pub trait EntropyClosedLoopCoordinator:
             self.active_branch_mode(),
             base_temperature,
             moving_z_entropy,
-            cvoid_score,
+            void_score,
             tau_eff,
             alpha,
             beta,
@@ -2257,7 +2257,7 @@ pub trait EntropyClosedLoopCoordinator:
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `qdpt_addr_offsets` is empty or mismatched with
     /// `qdpt_phase_deltas`. Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score` or
-    /// `cvoid_score` is non-finite.
+    /// `void_score` is non-finite.
     #[inline(always)]
     fn resolve_dyadic_tree_and_step_edbc(
         &mut self,
@@ -2269,11 +2269,11 @@ pub trait EntropyClosedLoopCoordinator:
         qdpt_addr_offsets: &[u64],
         qdpt_phase_deltas: &[gcso_q7_t],
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         high_density_rank1_thresh: f32,
         trail: &mut gcso_pointer_trail_t,
     ) -> GcsoResult<(gcso_edbc_state_t, u32, f32, gcso_tagged_ptr_t)> {
-        if !branchless_is_finite_f32(cvoid_score) {
+        if !branchless_is_finite_f32(void_score) {
             return Err(GCSO_ERROR_EDBC_SINGULARITY);
         }
         let (qdpt_lvl, d_v, cascaded_ptr) = self.resolve_dyadic_qdpt_and_cascade_ptr(
@@ -2326,7 +2326,7 @@ pub trait EntropyClosedLoopCoordinator:
     /// Executes a closed-loop EDBC step driven by a synthesized 128-byte [`GatewayFrame`]
     /// (**2-Origin Composite Manifold Gateway**):
     /// 1. Steps [`EntropyEvaluator::eval_stateful`] (`token_z_score`) and evaluates EDBC's
-    ///    Pitchfork/Repulsion branch mode against `cvoid_score` and `frame.dominant_cause_code`.
+    ///    Pitchfork/Repulsion branch mode against `void_score` and `frame.dominant_cause_code`.
     /// 2. Ingests `frame.phase_deltas` into `trail` in 8 register-resident `u64` SWAR words
     ///    (`next_w`), applying `frame.qdps_min_step_q7` step filtering and binding 32-bit
     ///    `frame.target_anchor_id` into `trail.target_anchor_id` and `trail.cluster_id`.
@@ -2346,13 +2346,13 @@ pub trait EntropyClosedLoopCoordinator:
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `high_density_rank1_thresh` is non-finite.
-    /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score`, `cvoid_score`, `alpha`,
+    /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score`, `void_score`, `alpha`,
     /// `beta <= 0.0`, or `d0 <= 0.0` is invalid.
     #[inline(always)]
     fn step_via_gateway_frame(
         &mut self,
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         alpha: f32,
         beta: f32,
         d0: f32,
@@ -2371,7 +2371,7 @@ pub trait EntropyClosedLoopCoordinator:
         step_via_gateway_frame_with_words_core(
             self,
             token_z_score,
-            cvoid_score,
+            void_score,
             alpha,
             beta,
             d0,
@@ -2397,7 +2397,7 @@ pub trait EntropyClosedLoopCoordinator:
     fn step_via_gateway_signal<G: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         alpha: f32,
         beta: f32,
         d0: f32,
@@ -2417,7 +2417,7 @@ pub trait EntropyClosedLoopCoordinator:
         step_via_gateway_frame_with_words_core(
             self,
             token_z_score,
-            cvoid_score,
+            void_score,
             alpha,
             beta,
             d0,
@@ -2443,7 +2443,7 @@ pub trait EntropyClosedLoopCoordinator:
     fn step_via_gateway_kmeans_64<G: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         alpha: f32,
         beta: f32,
         d0: f32,
@@ -2468,7 +2468,7 @@ pub trait EntropyClosedLoopCoordinator:
             step_via_gateway_frame_with_words_core(
                 self,
                 token_z_score,
-                cvoid_score,
+                void_score,
                 alpha,
                 beta,
                 d0,
@@ -2516,12 +2516,12 @@ pub trait EntropyClosedLoopCoordinator:
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `high_density_rank1_thresh` is non-finite.
-    /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score` or `cvoid_score` is non-finite.
+    /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score` or `void_score` is non-finite.
     #[inline(always)]
     fn step_with_crystallized_ensemble_and_pointer(
         &mut self,
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         records: &[CrystallizedAttractorRecord],
         high_density_rank1_thresh: f32,
         trail: &mut gcso_pointer_trail_t,
@@ -2529,7 +2529,7 @@ pub trait EntropyClosedLoopCoordinator:
         if !branchless_is_finite_f32(high_density_rank1_thresh) {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        if !branchless_is_finite_f32(cvoid_score) {
+        if !branchless_is_finite_f32(void_score) {
             return Err(GCSO_ERROR_EDBC_SINGULARITY);
         }
 
@@ -3043,13 +3043,13 @@ impl EntropyController {
         new_entropy
     }
 
-    /// Internal register-pipelined implementation of `eval_stateful_with_cvoid_and_pointer`
-    /// assuming `token_z_score` and `cvoid_score` have already been verified finite.
+    /// Internal register-pipelined implementation of `eval_stateful_with_liminal_void_and_pointer`
+    /// assuming `token_z_score` and `void_score` have already been verified finite.
     #[inline]
-    fn eval_stateful_with_cvoid_and_pointer_finite(
+    fn eval_stateful_with_liminal_void_and_pointer_finite(
         &mut self,
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         alpha: f32,
         beta: f32,
         d0: f32,
@@ -3072,7 +3072,7 @@ impl EntropyController {
             prev_mode,
             new_entropy,
             sliding_rate,
-            cvoid_score,
+            void_score,
             tau,
             tau_flux,
             delta,
@@ -3103,7 +3103,7 @@ impl EntropyController {
             resolved_mode,
             DEFAULT_SAMPLE_TEMPERATURE,
             new_entropy,
-            cvoid_score,
+            void_score,
             tau,
             alpha,
             beta,
@@ -3138,12 +3138,12 @@ impl EntropyController {
     /// $\mathcal{O}(1)$ [`gcso_tagged_ptr_t`] mode evolution.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score` or `cvoid_score` is non-finite.
+    /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score` or `void_score` is non-finite.
     #[inline(always)]
-    pub fn eval_stateful_with_cvoid_and_pointer(
+    pub fn eval_stateful_with_liminal_void_and_pointer(
         &mut self,
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         alpha: f32,
         beta: f32,
         d0: f32,
@@ -3152,12 +3152,12 @@ impl EntropyController {
         dominant_attractor_slot: u8,
         high_density_rank1_thresh: f32,
     ) -> GcsoResult<(gcso_edbc_state_t, gcso_tagged_ptr_t)> {
-        if !branchless_is_finite_f32(token_z_score) || !branchless_is_finite_f32(cvoid_score) {
+        if !branchless_is_finite_f32(token_z_score) || !branchless_is_finite_f32(void_score) {
             return Err(GCSO_ERROR_EDBC_SINGULARITY);
         }
-        Ok(self.eval_stateful_with_cvoid_and_pointer_finite(
+        Ok(self.eval_stateful_with_liminal_void_and_pointer_finite(
             token_z_score,
-            cvoid_score,
+            void_score,
             alpha,
             beta,
             d0,
@@ -3205,13 +3205,13 @@ impl EntropyController {
     /// SIMD $\mathcal{C}_{\mathrm{void}}$ + $\ell_1/\ell_2$ coherence evaluation on `key_vector`,
     /// and pointer-coupled EDBC mode evolution in a single zero-allocation call.
     ///
-    /// Returns `(edbc_state, evolved_ptr, cvoid_mean_sq, key_coherence_ratio)`.
+    /// Returns `(edbc_state, evolved_ptr, void_mean_sq, key_coherence_ratio)`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `key_vector` is empty.
     /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if key norms or entropy parameters are non-finite.
     #[inline(always)]
-    pub fn eval_surrogate_with_cvoid_and_pointer(
+    pub fn eval_surrogate_with_liminal_void_and_pointer(
         &mut self,
         p_max: f32,
         p_2nd: f32,
@@ -3229,7 +3229,7 @@ impl EntropyController {
         dominant_attractor_slot: u8,
         high_density_rank1_thresh: f32,
     ) -> GcsoResult<(gcso_edbc_state_t, gcso_tagged_ptr_t, f32, f32)> {
-        let (cvoid_score, coh_ratio) = self.eval_cvoid_with_coherence_ratio(key_vector)?;
+        let (void_score, coh_ratio) = self.eval_liminal_void_with_coherence_ratio(key_vector)?;
         let eps = self.state.singularity_eps;
         let h_surr = compute_sparse_surrogate_entropy(p_max, p_2nd, eps);
         let h_tilde = compute_moving_z_score_entropy(
@@ -3241,9 +3241,9 @@ impl EntropyController {
             alpha_z,
             gamma_mod,
         );
-        let (st, evolved_ptr) = self.eval_stateful_with_cvoid_and_pointer_finite(
+        let (st, evolved_ptr) = self.eval_stateful_with_liminal_void_and_pointer_finite(
             h_tilde,
-            cvoid_score,
+            void_score,
             alpha,
             beta,
             d0,
@@ -3252,10 +3252,10 @@ impl EntropyController {
             dominant_attractor_slot,
             high_density_rank1_thresh,
         );
-        Ok((st, evolved_ptr, cvoid_score, coh_ratio))
+        Ok((st, evolved_ptr, void_score, coh_ratio))
     }
 
-    /// Executes [`Self::eval_stateful_with_cvoid_and_pointer`] and, when the resulting branch mode
+    /// Executes [`Self::eval_stateful_with_liminal_void_and_pointer`] and, when the resulting branch mode
     /// is non-normal (`Mode 1` or `Mode 2`), injects a deterministic SplitMix64-signed
     /// **Metastable Tunneling Phase Perturbation** ($\pm x^*_\pm$, Lemma 3.1).
     ///
@@ -3267,7 +3267,7 @@ impl EntropyController {
     pub fn step_and_inject_tunneling_perturbation(
         &mut self,
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         alpha: f32,
         beta: f32,
         d0: f32,
@@ -3279,9 +3279,9 @@ impl EntropyController {
         high_density_rank1_thresh: f32,
         phases_inout: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> GcsoResult<(gcso_edbc_state_t, gcso_tagged_ptr_t, f32)> {
-        let (st, evolved_ptr) = self.eval_stateful_with_cvoid_and_pointer(
+        let (st, evolved_ptr) = self.eval_stateful_with_liminal_void_and_pointer(
             token_z_score,
-            cvoid_score,
+            void_score,
             alpha,
             beta,
             d0,
@@ -3295,7 +3295,7 @@ impl EntropyController {
             let x_star = self.inject_metastable_tunneling_perturbation(
                 phases_inout,
                 evolved_ptr,
-                cvoid_score,
+                void_score,
                 st.bifurcation_threshold,
                 alpha,
                 beta,
@@ -3324,7 +3324,7 @@ impl EntropyController {
     pub fn step_with_cohomology_and_bloom_guard(
         &mut self,
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         alpha: f32,
         beta: f32,
         d0: f32,
@@ -3347,9 +3347,9 @@ impl EntropyController {
                 obstruction_threshold,
             )?;
 
-        let (mut st, mut evolved_ptr) = self.eval_stateful_with_cvoid_and_pointer(
+        let (mut st, mut evolved_ptr) = self.eval_stateful_with_liminal_void_and_pointer(
             token_z_score,
-            cvoid_score,
+            void_score,
             alpha,
             beta,
             d0,
@@ -3423,7 +3423,7 @@ impl EntropyController {
     pub fn step_gateway_signal_with_defaults<G: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         gateway_signal: &G,
         trail: &mut gcso_pointer_trail_t,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -3437,7 +3437,7 @@ impl EntropyController {
     )> {
         self.step_via_gateway_signal(
             token_z_score,
-            cvoid_score,
+            void_score,
             1.2,
             0.8,
             0.5,
@@ -3461,7 +3461,7 @@ impl EntropyController {
     pub fn step_gateway_kmeans_with_defaults<G: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         gateway_signal: &G,
         centroids: &mut [CrystallizedAttractorRecord],
         trail: &mut gcso_pointer_trail_t,
@@ -3478,7 +3478,7 @@ impl EntropyController {
     )> {
         self.step_via_gateway_kmeans_64(
             token_z_score,
-            cvoid_score,
+            void_score,
             1.2,
             0.8,
             0.5,
@@ -3503,13 +3503,13 @@ impl EntropyController {
     pub fn step_crystallized_ensemble_with_defaults(
         &mut self,
         token_z_score: f32,
-        cvoid_score: f32,
+        void_score: f32,
         records: &[CrystallizedAttractorRecord],
         trail: &mut gcso_pointer_trail_t,
     ) -> GcsoResult<(gcso_edbc_state_t, gcso_tagged_ptr_t, f32, f32, u32)> {
         self.step_with_crystallized_ensemble_and_pointer(
             token_z_score,
-            cvoid_score,
+            void_score,
             records,
             1.5,
             trail,
@@ -3655,7 +3655,7 @@ impl EntropyEvaluator for EntropyController {
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `key_vector` is empty.
     /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if the accumulated sum-of-squares is `NaN` or `Inf`.
     #[inline(always)]
-    fn eval_cvoid_dyadic128(
+    fn eval_liminal_void_dyadic128(
         &self,
         key_vector: &AlignedSlice32<'_, f32>,
         void_score_out: &mut f32,
@@ -3736,7 +3736,7 @@ impl EdbcBranchController for EntropyController {
         &self,
         base_temperature: f32,
         moving_z_entropy: f32,
-        cvoid_score: f32,
+        void_score: f32,
         tau_eff: f32,
         alpha: f32,
         beta: f32,
@@ -3746,7 +3746,7 @@ impl EdbcBranchController for EntropyController {
             self.state.active_branch_mode,
             base_temperature,
             moving_z_entropy,
-            cvoid_score,
+            void_score,
             tau_eff,
             alpha,
             beta,
@@ -3882,7 +3882,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cvoid_barriers_pointer_coupled_cohomology_limina_and_unified_field() {
+    fn test_liminal_void_barriers_pointer_coupled_cohomology_limina_and_unified_field() {
         let mut engine = EntropyController::default();
         let mut arr = [2.0f32; 35];
         arr[32..].copy_from_slice(&[3.0f32; 3]);
@@ -3890,18 +3890,22 @@ mod tests {
         let slice = buf.as_aligned_slice();
 
         let mut score = 0.0f32;
-        engine.eval_cvoid_dyadic128(&slice, &mut score).unwrap();
+        engine
+            .eval_liminal_void_dyadic128(&slice, &mut score)
+            .unwrap();
         let expected = (32.0 * 4.0 + 3.0 * 9.0) / 35.0;
         assert!((score - expected).abs() < 1e-4);
 
-        let (mean_sq, coh) = engine.eval_cvoid_with_coherence_ratio(&slice).unwrap();
+        let (mean_sq, coh) = engine
+            .eval_liminal_void_with_coherence_ratio(&slice)
+            .unwrap();
         assert!((mean_sq - expected).abs() < 1e-4);
         assert!(coh > 0.95 && coh <= 1.0);
 
         let buf128 = AlignedBuffer32::new([2.0f32; 128]);
         let mut score128 = 0.0f32;
         engine
-            .eval_cvoid_dyadic128(&buf128.as_aligned_slice(), &mut score128)
+            .eval_liminal_void_dyadic128(&buf128.as_aligned_slice(), &mut score128)
             .unwrap();
         assert!((score128 - 4.0).abs() < 1e-6);
 
@@ -3927,7 +3931,7 @@ mod tests {
         );
         engine.state.moving_z_entropy = 2.0;
         let (st, evolved_ptr) = engine
-            .eval_stateful_with_cvoid_and_pointer(
+            .eval_stateful_with_liminal_void_and_pointer(
                 10.0,
                 0.2,
                 1.0,
@@ -4086,8 +4090,8 @@ mod tests {
         );
         assert_eq!(ptr_bad.target_attractor_slot(), ATTRACTOR_SLOT_REPULSION);
 
-        let (_st_surr, _ptr_surr, cvoid_s, coh_s) = engine
-            .eval_surrogate_with_cvoid_and_pointer(
+        let (_st_surr, _ptr_surr, void_s, coh_s) = engine
+            .eval_surrogate_with_liminal_void_and_pointer(
                 0.5,
                 0.5,
                 0.8,
@@ -4105,7 +4109,7 @@ mod tests {
                 1.5,
             )
             .unwrap();
-        assert!((cvoid_s - expected).abs() < 1e-4);
+        assert!((void_s - expected).abs() < 1e-4);
         assert!(coh_s > 0.95);
     }
 

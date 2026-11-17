@@ -820,7 +820,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_rank1_residual_destroy(gcso_rank1_residual
     GCSO_NOEXCEPT;
 
 // ===================================================================
-// 5. Attractor Field, Entropy Control (EDBC) & cvoid Alignment Interface
+// 5. Attractor Field, Entropy Control (EDBC) & LiminalVoid Alignment Interface
 // ===================================================================
 
 /**
@@ -982,16 +982,16 @@ gcso_edbc_eval_stateful(gcso_edbc_controller_handle_t controller, float token_z_
                         gcso_edbc_state_t* GCSO_RESTRICT state_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Computes cvoid Coherent Vector Alignment Metric for Out-of-Distribution Latent Space.
- * Corresponds to EntropyEvaluator::eval_cvoid_dyadic128 in liminika_core::traits.
+ * @brief Computes LiminalVoid Vector Alignment Metric for Out-of-Distribution Latent Space.
+ * Corresponds to EntropyEvaluator::eval_liminal_void_dyadic128 in liminika_core::traits.
  * @param key_vector 32-byte aligned key tensor vector.
  * @param dim Vector dimension.
  * @param void_score_out Pointer to receive computed void score result.
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_cvoid_eval_dyadic128(const float* GCSO_RESTRICT key_vector, size_t dim,
-                          float* GCSO_RESTRICT void_score_out) GCSO_NOEXCEPT;
+gcso_liminal_void_eval_dyadic128(const float* GCSO_RESTRICT key_vector, size_t dim,
+                                 float* GCSO_RESTRICT void_score_out) GCSO_NOEXCEPT;
 
 /**
  * @brief Evaluates Eyring-Kramers potential barrier height value with singularity check.
@@ -1001,15 +1001,15 @@ gcso_cvoid_eval_dyadic128(const float* GCSO_RESTRICT key_vector, size_t dim,
  * @param barrier_out Pointer to receive computed barrier height.
  * @return GCSO_SUCCESS or GCSO_ERROR_EDBC_SINGULARITY.
  */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_barrier(
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_liminal_void_eval_barrier(
     float void_score, float tau_eff, float* GCSO_RESTRICT barrier_out) GCSO_NOEXCEPT;
 
 /**
  * @brief Evaluates scale-invariant Pitchfork Bifurcation potential barrier height (Whitepaper Lemma
  * 3.1).
  */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_barrier_pitchfork(
-    float cvoid, float tau_eff, float alpha, float beta, uint32_t head_dim,
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_liminal_void_eval_barrier_pitchfork(
+    float liminal_void, float tau_eff, float alpha, float beta, uint32_t head_dim,
     float* GCSO_RESTRICT barrier_out) GCSO_NOEXCEPT;
 
 /**

@@ -2150,8 +2150,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    // Step 2: Online Natural-Language -> Attractor Corpus & cvoid Boundary Evaluation
-    println!("\n=== Step 2: Natural-Language Attractor Corpus & cvoid Boundary Eval ===");
+    // Step 2: Online Natural-Language -> Attractor Corpus & LiminalVoid Boundary Evaluation
+    println!("\n=== Step 2: Natural-Language Attractor Corpus & LiminalVoid Boundary Eval ===");
     adapter.set_layer_rope_mask(0xFFFF_0000);
     let base_prior = if use_base_prior {
         let t_prior = Instant::now();
@@ -2286,7 +2286,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let kv_policy = AdaptiveThresholdPolicy::default();
     let mut eval_items: Vec<(String, String, Vec<String>, Vec<String>)> = suite.probes.clone();
     eval_items.push((
-        "CVOID".to_string(),
+        "LVOID".to_string(),
         "What is the boiling point of water at standard sea-level pressure?".to_string(),
         vec!["100".to_string()],
         vec!["GCSO".to_string(), "ZiMMS".to_string()],
@@ -2342,10 +2342,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 phase_l1_delta: (1.0 - recall.top1_fact_score).clamp(0.0, 1.0) * 0.25,
                 void_state: recall.void_state,
                 frames_since_keyframe,
-                new_cluster_spawned: matches!(
-                    recall.void_state,
-                    VoidBoundaryState::CvoidEmptySpace
-                ),
+                new_cluster_spawned: matches!(recall.void_state, VoidBoundaryState::LiminalVoid),
             },
         )?;
         frames_since_keyframe = if emitted_i {
@@ -2414,8 +2411,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     StigmergicActionDecision::RepulsionEscape
                 );
             let active_prompt = if recalled_ctx.is_empty()
-                || (matches!(query_void_state, VoidBoundaryState::CvoidEmptySpace)
-                    && !is_guard_trap)
+                || (matches!(query_void_state, VoidBoundaryState::LiminalVoid) && !is_guard_trap)
             {
                 format_phi4_prompt(prompt)
             } else {
@@ -2423,7 +2419,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let use_steer = is_guard_trap
-                || (!matches!(query_void_state, VoidBoundaryState::CvoidEmptySpace)
+                || (!matches!(query_void_state, VoidBoundaryState::LiminalVoid)
                     && !dyn_facts.is_empty());
             let res_ctx = if use_steer {
                 Some(ResonantAnchors {
@@ -2764,7 +2760,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &["XML", "HTTP"],
                 ),
                 (
-                    "T8:CVOID",
+                    "T8:LVOID",
                     "What is the boiling point of water at standard sea-level pressure?",
                     &["100"],
                     &["GCSO", "ZiMMS"],
@@ -2866,7 +2862,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             StigmergicActionDecision::RepulsionEscape
                         );
                     let use_steer = mt_is_guard_trap
-                        || (!matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace)
+                        || (!matches!(recall.void_state, VoidBoundaryState::LiminalVoid)
                             && !dyn_facts.is_empty());
                     let res_ctx = if use_steer {
                         Some(ResonantAnchors {
@@ -2880,7 +2876,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         None
                     };
                     let turn_body = if recalled_ctx.is_empty()
-                        || (matches!(recall.void_state, VoidBoundaryState::CvoidEmptySpace)
+                        || (matches!(recall.void_state, VoidBoundaryState::LiminalVoid)
                             && !mt_is_guard_trap)
                     {
                         (*turn_prompt).to_string()
@@ -3073,7 +3069,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .iter()
                     .filter(|kw| lower.contains(&kw.to_lowercase()))
                     .count();
-                if !turn_tag.contains("CVOID") {
+                if !turn_tag.contains("LVOID") {
                     mt_exp_hits += t_exp;
                     mt_exp_total += expected.len();
                     mt_forb_hits += t_forb;

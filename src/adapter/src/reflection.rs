@@ -6,7 +6,7 @@
 //! Rather than blindly re-running generation on every token or turn, [`AttractorTrajectoryEvaluator`]
 //! inspects the geometric position of a generated draft on the compiled attractor manifold relative
 //! to the originating query. Retries are triggered only when the draft exhibits `Guard` attraction,
-//! manifold drift (`cvoid`), liminal ambiguity, or out-of-domain hallucination, and are strictly
+//! manifold drift (`LiminalVoid`), liminal ambiguity, or out-of-domain hallucination, and are strictly
 //! bounded by [`ReflectionPolicy::max_retries`].
 
 use crate::{DynamicAttractorRecall, RecallPolicy, VoidBoundaryState};
@@ -54,15 +54,15 @@ impl Default for ReflectionPolicy {
 pub enum ReflectionTriggerKind {
     /// Draft converged safely inside a grounded Fact basin without Guard dominance.
     Converged,
-    /// Out-of-domain query and draft both stayed cleanly outside the corpus (`cvoid`).
+    /// Out-of-domain query and draft both stayed cleanly outside the corpus (`LiminalVoid`).
     ConsistentVoidAbstention,
     /// Draft drifted toward a contrastive `Guard` attractor (`guard_conflict_margin` elevated).
     GuardAttraction,
-    /// Grounded query's draft dropped off-manifold into `cvoid` or suffered a severe resonance drop.
+    /// Grounded query's draft dropped off-manifold into `LiminalVoid` or suffered a severe resonance drop.
     VoidDrift,
     /// Draft landed in an unresolved `LiminalBoundary` or diverged from the query's top anchor.
     BoundaryAmbiguity,
-    /// Ungrounded (`cvoid`) query produced a draft that pulled unexpectedly into corpus attractors.
+    /// Ungrounded (`LiminalVoid`) query produced a draft that pulled unexpectedly into corpus attractors.
     VoidHallucination,
 }
 
@@ -320,7 +320,7 @@ pub trait AttractorTrajectoryEvaluator {
     }
 }
 
-/// Default [`AttractorTrajectoryEvaluator`] combining Fact-basin overlap, `cvoid` drift checks,
+/// Default [`AttractorTrajectoryEvaluator`] combining Fact-basin overlap, `LiminalVoid` drift checks,
 /// and `Guard` contradiction margins via `liminika_core` [`GatewayFrame`] synthesis.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ManifoldReflectionEvaluator;
@@ -393,14 +393,14 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
         let (anchor_overlap_ratio, anchor_mismatch) = Self::anchor_overlap(query, draft);
         let query_is_guard_trap = query.guard_conflict_margin > policy.guard_trigger_margin;
         let query_is_grounded =
-            !matches!(query.void_state, VoidBoundaryState::CvoidEmptySpace) && !query_is_guard_trap;
+            !matches!(query.void_state, VoidBoundaryState::LiminalVoid) && !query_is_guard_trap;
 
         let (trigger, alignment_score, directive) = if query_is_grounded {
             let guard_pen = draft.guard_conflict_margin.max(0.0) * 1.5;
             let void_pen = match draft.void_state {
                 VoidBoundaryState::InsideBasin => 0.0,
                 VoidBoundaryState::LiminalBoundary => 0.08,
-                VoidBoundaryState::CvoidEmptySpace => 0.25,
+                VoidBoundaryState::LiminalVoid => 0.25,
             };
             let align = draft.top1_fact_score + 0.20 * anchor_overlap_ratio - guard_pen - void_pen;
 
@@ -417,7 +417,7 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
                         anchor_mismatch,
                     },
                 )
-            } else if matches!(draft.void_state, VoidBoundaryState::CvoidEmptySpace)
+            } else if matches!(draft.void_state, VoidBoundaryState::LiminalVoid)
                 || (draft.top1_fact_score + policy.convergence_drop_tol < query.top1_fact_score
                     && anchor_overlap_ratio < 0.5)
             {
@@ -481,7 +481,7 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
                         anchor_mismatch,
                     },
                 )
-            } else if !matches!(draft.void_state, VoidBoundaryState::CvoidEmptySpace)
+            } else if !matches!(draft.void_state, VoidBoundaryState::LiminalVoid)
                 && evaded_counter_fact
             {
                 let align = draft.top1_fact_score + 0.15 * anchor_overlap_ratio - 0.10;
@@ -497,7 +497,7 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
                         anchor_mismatch: true,
                     },
                 )
-            } else if !matches!(draft.void_state, VoidBoundaryState::CvoidEmptySpace) {
+            } else if !matches!(draft.void_state, VoidBoundaryState::LiminalVoid) {
                 let align = draft.top1_fact_score + 0.15;
                 (
                     ReflectionTriggerKind::Converged,
@@ -527,7 +527,7 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
                 )
             }
         } else {
-            // Ungrounded OOD query (`CvoidEmptySpace` without Guard trap): trigger only on clear
+            // Ungrounded OOD query (`LiminalVoid` without Guard trap): trigger only on clear
             // Guard intrusion or strong Fact-basin hallucination well above `min_coherence`.
             let strong_basin_intrusion = matches!(draft.void_state, VoidBoundaryState::InsideBasin)
                 && draft.top1_fact_score >= recall_policy.min_coherence * 1.50;
@@ -693,20 +693,8 @@ mod tests {
         assert!(!critique.directive.rethink_recommended);
         assert!(critique.corrective_instruction("draft").is_none());
 
-        let ood_q = make_snapshot(
-            VoidBoundaryState::CvoidEmptySpace,
-            0.12,
-            0.09,
-            -0.10,
-            vec![],
-        );
-        let ood_d = make_snapshot(
-            VoidBoundaryState::CvoidEmptySpace,
-            0.10,
-            0.08,
-            -0.12,
-            vec![],
-        );
+        let ood_q = make_snapshot(VoidBoundaryState::LiminalVoid, 0.12, 0.09, -0.10, vec![]);
+        let ood_d = make_snapshot(VoidBoundaryState::LiminalVoid, 0.10, 0.08, -0.12, vec![]);
         let ood_crit = eval.assess_trajectory(&ood_q, &ood_d, &recall_policy, &policy);
         assert_eq!(
             ood_crit.trigger,
@@ -758,13 +746,7 @@ mod tests {
         let recall_policy = RecallPolicy::default();
         let policy = ReflectionPolicy::default();
 
-        let ood_q = make_snapshot(
-            VoidBoundaryState::CvoidEmptySpace,
-            0.15,
-            0.10,
-            -0.05,
-            vec![],
-        );
+        let ood_q = make_snapshot(VoidBoundaryState::LiminalVoid, 0.15, 0.10, -0.05, vec![]);
         let shallow_d = make_snapshot(
             VoidBoundaryState::LiminalBoundary,
             0.24,

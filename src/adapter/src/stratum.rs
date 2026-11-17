@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Hierarchical Society-of-Mind strata (`n - 1 <-> n <-> n + 1`) built over [`liminika_core`]
-//! `ActionHub` and role-scoped `cvoid` boundary geometry.
+//! `ActionHub` and role-scoped `LiminalVoid` boundary geometry.
 //!
 //! Each [`SocietyStratum`] operates only on signals exposed by adjacent layers, allowing dynamic
 //! insertion, removal, or replacement via [`StratumPipeline`] without coupling lower feature
@@ -115,7 +115,7 @@ pub struct StratumProbeTelemetry {
 /// Bottom-up and top-down signal flowing across a Society-of-Mind [`StratumPipeline`].
 ///
 /// Lower strata (`n - 1`) populate local features and stigmergic pointer weights without needing
-/// global semantic awareness, while upper strata (`n + 1`) arbitrate `cvoid` boundaries, Guard
+/// global semantic awareness, while upper strata (`n + 1`) arbitrate `LiminalVoid` boundaries, Guard
 /// conflicts, and `ActionHub` regimes.
 #[derive(Debug, Clone)]
 pub struct StratumSignal {
@@ -134,13 +134,13 @@ pub struct StratumSignal {
     pub linked_fact_indices: Vec<(usize, f32)>,
     /// True when [`ActionHubEngine`] interpretive decomposition linked disjoint Fact sub-basins.
     pub decomposition_triggered: bool,
-    /// Per-attractor local `cvoid` gap depth (`0.0` = deep inside basin).
+    /// Per-attractor local `LiminalVoid` gap depth (`0.0` = deep inside basin).
     pub local_void_depths: Vec<f32>,
     /// Per-attractor stigmergic pointer trace / pheromone strength (`>= 0.0`).
     pub stigmergic_weights: Vec<f32>,
     /// Aggregated boundary metrics observed at the upper boundary stratum.
     pub boundary_metrics: RecallBoundaryMetrics,
-    /// Boundary gate decision (`InsideBasin`, `LiminalBoundary`, or `CvoidEmptySpace`).
+    /// Boundary gate decision (`InsideBasin`, `LiminalBoundary`, or `LiminalVoid`).
     pub gate_decision: RecallGateDecision,
     /// `ActionHub` regime chosen for top-down orchestration.
     pub action_decision: StigmergicActionDecision,
@@ -157,13 +157,13 @@ pub struct StratumSignal {
 /// Top-down directive sent from stratum `n + 1` down to `n` and `n - 1` after upward inference.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StratumDirective {
-    /// Whether injection should be suppressed (`CvoidEmptySpace` or Guard repulsion).
+    /// Whether injection should be suppressed (`LiminalVoid` or Guard repulsion).
     pub suppress_injection: bool,
     /// Whether active Guard repulsion (`RepulsionEscape`) was triggered.
     pub repulse_guard: bool,
     /// Top-down gain multiplier (`0.0` when skipped/repulsed, `< 1.0` on liminal boundary, `>= 1.0` inside basin).
     pub top_down_gain: f32,
-    /// Minimum local `cvoid` depth observed across the stack.
+    /// Minimum local `LiminalVoid` depth observed across the stack.
     pub min_local_void_depth: f32,
 }
 
@@ -496,7 +496,7 @@ impl SocietyStratum for HeadAngleWorkerStratum {
 }
 
 /// Stratum 1 (`n = 1`): evaluates role-scoped local neighborhood baselines and perspective-dependent
-/// `cvoid` depths via an [`AttractorVoidPerspective`] trait object.
+/// `LiminalVoid` depths via an [`AttractorVoidPerspective`] trait object.
 pub struct PerspectiveDominoStratum<'a> {
     /// Perspective evaluator measuring `perspective_affinity` and `local_void_depth`.
     pub perspective: &'a dyn AttractorVoidPerspective,
@@ -504,7 +504,7 @@ pub struct PerspectiveDominoStratum<'a> {
 
 impl SocietyStratum for PerspectiveDominoStratum<'_> {
     fn name(&self) -> &'static str {
-        "perspective_domino_cvoid"
+        "perspective_domino_liminal_void"
     }
 
     fn infer_up(&self, ctx: &StratumContext<'_>, signal: &mut StratumSignal) -> Result<(), String> {
@@ -665,7 +665,7 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
 
         let repulsed = repulsed_by_guard || frame.is_repulsed();
         let has_active_persona = top1_persona_score >= persona_floor;
-        let is_total_cvoid = matches!(decision.void_state, VoidBoundaryState::CvoidEmptySpace)
+        let is_total_liminal_void = matches!(decision.void_state, VoidBoundaryState::LiminalVoid)
             && !has_active_persona
             && !repulsed;
 
@@ -691,13 +691,13 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
 
         let (rho, h_tilde) = if repulsed {
             (frame.effective_energy, 0.75_f32)
-        } else if is_total_cvoid {
+        } else if is_total_liminal_void {
             (0.0_f32, 0.0_f32)
         } else if signal.local_channel_preferred
             || signal.decomposition_triggered
             || (channel_disagreement && partial_swarm_consensus)
             || (circuit_peel_active
-                && !matches!(decision.void_state, VoidBoundaryState::CvoidEmptySpace))
+                && !matches!(decision.void_state, VoidBoundaryState::LiminalVoid))
         {
             // Bifurcated, local-sharpened, or circuit-peel-biased channel triggers sub-head routing.
             (
@@ -706,7 +706,7 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
                     .max(frame.effective_energy.min(1.35)),
                 0.65_f32,
             )
-        } else if matches!(decision.void_state, VoidBoundaryState::CvoidEmptySpace)
+        } else if matches!(decision.void_state, VoidBoundaryState::LiminalVoid)
             && has_active_persona
         {
             // Persona-only active grounding outside factual basins uses lightweight ExpressPhaseSteer.

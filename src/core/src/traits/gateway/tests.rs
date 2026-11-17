@@ -1104,11 +1104,11 @@ fn epistemic_horizon_separates_true_void_from_internal_conflict_branchlessly() {
     assert!(frame_conf.is_repulsed());
     assert!(frame_conf.effective_energy > 0.0);
 
-    // 3. Outside carved memory cut (orthogonal to all memory nodes) -> TrueVoid zeroes output cleanly.
+    // 3. Outside carved memory cut (orthogonal to all memory nodes) -> LiminalVoid zeroes output cleanly.
     let q_void = load_q7_words_64(&[-64i8; MAX_ATTENTION_HEADS]);
     let (frame_void, horizon_void) =
         ObjectiveFact::synthesize_slice_relative_gateway(&nodes, coupling.row(0), &q_void, 0.35);
-    assert_eq!(horizon_void.regime(), EpistemicRegime::TrueVoid);
+    assert_eq!(horizon_void.regime(), EpistemicRegime::LiminalVoid);
     assert_eq!(horizon_void.horizon_gate, 0.0);
     assert_eq!(frame_void.effective_energy, 0.0);
     assert_eq!(frame_void.phase_words_ref(), &[0u64; NUM_SWARM_MICRO_CELLS]);
@@ -1236,4 +1236,155 @@ fn dissipative_overflow_peels_residual_scatters_and_spawns_daughter_with_relativ
     assert!(pool[report_birth.landed_idx].verify_integrity());
     coupling.record_dissipative_transition_branchless(&report_birth, 96);
     assert!(coupling.row(report_birth.primary_idx)[report_birth.landed_idx] < 0);
+}
+
+#[test]
+fn liminal_void_supertrait_aperture_shifting_and_mermaid_self_introspection() {
+    // 1. Verify type-level cognitive aperture and unknowable void complement hierarchy.
+    assert_eq!(
+        <SystemConstraint<()> as SystemConstraintSignal>::SYSTEM_APERTURE_MASK,
+        APERTURE_SYSTEM_CONSTRAINT
+    );
+    assert_eq!(
+        <SystemConstraint<()> as SystemConstraintSignal>::SYSTEM_UNKNOWABLE_VOID_MASK,
+        !APERTURE_SYSTEM_CONSTRAINT
+    );
+    assert_eq!(
+        <ObjectiveFact<[i8; MAX_ATTENTION_HEADS]> as ObjectiveFactSignal>::FACT_APERTURE_MASK,
+        APERTURE_OBJECTIVE_FACT
+    );
+    assert_eq!(
+        <ObjectiveFact<[i8; MAX_ATTENTION_HEADS]> as ObjectiveFactSignal>::FACT_UNKNOWABLE_VOID_MASK,
+        !APERTURE_OBJECTIVE_FACT
+    );
+    assert_eq!(
+        <SubjectivePersona<[i8; MAX_ATTENTION_HEADS]> as SubjectivePersonaSignal>::PERSONA_APERTURE_MASK,
+        APERTURE_SUBJECTIVE_PERSONA
+    );
+    assert_eq!(
+        <SubjectivePersona<[i8; MAX_ATTENTION_HEADS]> as SubjectivePersonaSignal>::PERSONA_UNKNOWABLE_VOID_MASK,
+        !APERTURE_SUBJECTIVE_PERSONA
+    );
+    assert_eq!(
+        <ContradictionGuard as ContradictionGuardSignal>::GUARD_APERTURE_MASK,
+        APERTURE_CONTRADICTION_GUARD
+    );
+    assert_eq!(
+        <ContradictionGuard as ContradictionGuardSignal>::GUARD_UNKNOWABLE_VOID_MASK,
+        !APERTURE_CONTRADICTION_GUARD
+    );
+    assert_eq!(
+        <EpistemicHorizonReading as ManifoldGatewaySignal>::GATEWAY_APERTURE_MASK,
+        APERTURE_MANIFOLD_GATEWAY
+    );
+    assert_eq!(
+        <EpistemicHorizonReading as ManifoldGatewaySignal>::GATEWAY_UNKNOWABLE_VOID_MASK,
+        !APERTURE_MANIFOLD_GATEWAY
+    );
+    assert_eq!(
+        <crate::action_hub::ActionHubEngine as ActionHub>::HUB_APERTURE_MASK,
+        APERTURE_ACTION_HUB_WIDE
+    );
+    assert_eq!(
+        <crate::action_hub::ActionHubEngine as ActionHub>::HUB_UNKNOWABLE_VOID_MASK,
+        !APERTURE_ACTION_HUB_WIDE
+    );
+
+    let hub = crate::action_hub::ActionHubEngine::default();
+    let (cog_bits, ext_bits) = hub.inspect_hub_horizon_partition(0x8000_0003);
+    assert_eq!(cog_bits, 0x0000_0003);
+    assert_eq!(ext_bits, 0x8000_0000);
+
+    // 2. Verify LiminalApertureField shifts Persona toward LiminalVoid under DecomposePeel + InternalConflict
+    //    while widening ObjectiveFact and ContradictionGuard.
+    let mut field = LiminalApertureField::new();
+    let init_f1 = field.void_floor_q7[1];
+    let init_p2 = field.void_floor_q7[2];
+    let init_g3 = field.void_floor_q7[3];
+    let init_gain_f1 = field.aperture_gain_q7[1];
+    let init_gain_g3 = field.aperture_gain_q7[3];
+
+    let mut peel_ledger = CognitiveTrajectoryLedger::default();
+    for _ in 0..4 {
+        peel_ledger.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::CellTrail,
+            CognitiveOpKind::DecomposePeel,
+            6,
+        ));
+    }
+    let conflict_horizon = EpistemicHorizonReading {
+        total_memory_support: 1.5,
+        peak_positive_affinity: 0.75,
+        internal_conflict_energy: 0.90,
+        horizon_gate: 1.0,
+        conflict_severity: 0.78,
+        dominant_anchor_id: 1,
+        opposing_anchor_id: 2,
+        regime_code: EpistemicRegime::InternalConflict as u8,
+        reserved_align: [0; 3],
+    };
+    field.adapt_from_circuit_and_overflow_branchless(&peel_ledger, &conflict_horizon, None);
+    assert!(field.void_floor_q7[2] > init_p2);
+    assert!(field.void_floor_q7[1] < init_f1);
+    assert!(field.void_floor_q7[3] < init_g3);
+    assert!(field.aperture_gain_q7[1] > init_gain_f1);
+    assert!(field.aperture_gain_q7[3] > init_gain_g3);
+    assert_eq!(field.adaptation_epochs, 1);
+
+    // 3. Verify SynthesizeFuse + scattered overflow widens RelativeCoupling & shifts focal phase.
+    let init_rel6 = field.void_floor_q7[6];
+    let mut fuse_ledger = CognitiveTrajectoryLedger::default();
+    for _ in 0..4 {
+        fuse_ledger.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::MacroCoalition,
+            CognitiveOpKind::SynthesizeFuse,
+            6,
+        ));
+    }
+    let coherent_horizon = EpistemicHorizonReading {
+        total_memory_support: 1.8,
+        peak_positive_affinity: 0.92,
+        internal_conflict_energy: 0.0,
+        horizon_gate: 1.0,
+        conflict_severity: 0.0,
+        dominant_anchor_id: 1,
+        opposing_anchor_id: 0,
+        regime_code: EpistemicRegime::KnownCoherent as u8,
+        reserved_align: [0; 3],
+    };
+    let res_words = load_q7_words_64(&[24i8; MAX_ATTENTION_HEADS]);
+    let scatter_report = DissipativeOverflowReport {
+        primary_idx: 0,
+        landed_idx: 1,
+        primary_anchor_id: 1,
+        landed_anchor_id: 2,
+        primary_coherence: 0.70,
+        scatter_coherence: 0.88,
+        overflow_pressure: 0.45,
+        updated_gravity_mass: 1.5,
+        residual_words: res_words,
+        overflowed: true,
+        scattered: true,
+        spawned_new: false,
+    };
+    field.adapt_from_circuit_and_overflow_branchless(
+        &fuse_ledger,
+        &coherent_horizon,
+        Some(&scatter_report),
+    );
+    assert!(field.void_floor_q7[6] < init_rel6);
+    assert!(field.phase_shift_q7[6] > 0);
+    assert_eq!(field.adaptation_epochs, 2);
+
+    // 4. Verify zero-alloc #![no_std] Mermaid flowchart generation captures live state cleanly.
+    let snap = LiminalTopologyTelemetrySnapshot::capture(&field, &conflict_horizon, 4, 1);
+    let mut buf = [0u8; 2048];
+    let len = snap.format_mermaid_flowchart(&mut buf);
+    let diagram = core::str::from_utf8(&buf[..len]).expect("valid utf8 mermaid");
+    assert!(diagram.starts_with("flowchart TD\n"));
+    assert!(diagram.contains("LiminalVoid"));
+    assert!(diagram.contains("ManifoldGatewaySignal"));
+    assert!(diagram.contains("ActionHub"));
+    assert!(diagram.contains("Crystals:4"));
+    assert!(diagram.contains("Daughters:1"));
 }

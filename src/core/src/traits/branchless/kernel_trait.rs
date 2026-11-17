@@ -1,14 +1,69 @@
 // name: src/core/src/traits/branchless/kernel_trait.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! `BranchlessKernel` blanket trait exposing branchless arithmetic and phase primitives.
+//! Root [`LiminalVoid`] epistemic boundary supertrait and [`BranchlessKernel`] blanket trait
+//! exposing branchless arithmetic and phase primitives.
 
 use super::phase_field::*;
 use super::*;
 
+/// Root epistemic supertrait representing the unknowable exterior beyond any cognitive window.
+///
+/// Every capability and signal trait in LiminiKa refines a specific cognitive aperture mask out of
+/// `LiminalVoid`. Any axis outside a trait's aperture (`!aperture_mask`) belongs strictly to the
+/// unknowable exterior, while runtime values whose memory support falls below `void_floor` fold
+/// cleanly back into `LiminalVoid` (`0.0` / `0`) without data-dependent branches.
+pub trait LiminalVoid {
+    /// Complete bitmask representing the unbounded unknowable exterior prior to any cognitive cut.
+    const ROOT_UNKNOWABLE_VOID_MASK: u32 = u32::MAX;
+
+    /// Partitions `world_bits` into `(cognized_bits, unknowable_void_bits)` strictly branchlessly
+    /// for a trait's declared `aperture_mask`.
+    #[inline(always)]
+    fn partition_cognitive_and_unknowable_bits(
+        &self,
+        aperture_mask: u32,
+        world_bits: u32,
+    ) -> (u32, u32) {
+        (world_bits & aperture_mask, world_bits & !aperture_mask)
+    }
+
+    /// Gates a scalar value against the active cognitive horizon boundary without branches:
+    /// returns `value` when `support >= void_floor`, otherwise returns `0.0` (`LiminalVoid`).
+    #[inline(always)]
+    fn gate_f32_by_liminal_void(&self, value: f32, support: f32, void_floor: f32) -> f32 {
+        branchless_select_f32(support >= void_floor, value, 0.0)
+    }
+
+    /// Gates a 64-head SWAR word array against the active cognitive horizon boundary via a single
+    /// uniform bitmask (`u64::MAX` when grounded, `0` in `LiminalVoid`).
+    #[inline(always)]
+    fn gate_words_by_liminal_void_64(
+        &self,
+        words: &[u64; 8],
+        support: f32,
+        void_floor: f32,
+    ) -> [u64; 8] {
+        let mask = branchless_select_u64(support >= void_floor, u64::MAX, 0);
+        [
+            words[0] & mask,
+            words[1] & mask,
+            words[2] & mask,
+            words[3] & mask,
+            words[4] & mask,
+            words[5] & mask,
+            words[6] & mask,
+            words[7] & mask,
+        ]
+    }
+}
+
+impl<T: ?Sized> LiminalVoid for T {}
+
 /// Blanket trait providing branchless bitwise multiplexers, `#![no_std]` transcendentals,
-/// division-free (`0 fdiv`) reciprocals, and 4/8-lane SWAR Q7 & `u8` arithmetic to all engine types.
-pub trait BranchlessKernel {
+/// division-free (`0 fdiv`) reciprocals, and 4/8-lane SWAR Q7 & `u8` arithmetic to all engine types
+/// on top of [`LiminalVoid`].
+pub trait BranchlessKernel: LiminalVoid {
     /// Branchless bitwise selection for `u8`.
     #[inline(always)]
     fn select_u8(&self, cond: bool, if_true: u8, if_false: u8) -> u8 {
@@ -270,8 +325,15 @@ pub trait BranchlessKernel {
     }
     /// Branchless scale-invariant Eyring-Kramers tunneling escape probability.
     #[inline(always)]
-    fn eyring_kramers_escape(&self, cvoid: f32, tau_eff: f32, a: f32, b: f32, d0: f32) -> f32 {
-        branchless_eyring_kramers_escape(cvoid, tau_eff, a, b, d0)
+    fn eyring_kramers_escape(
+        &self,
+        liminal_void: f32,
+        tau_eff: f32,
+        a: f32,
+        b: f32,
+        d0: f32,
+    ) -> f32 {
+        branchless_eyring_kramers_escape(liminal_void, tau_eff, a, b, d0)
     }
     /// Branchless $SO(2)$ 2D rotation operator.
     #[inline(always)]

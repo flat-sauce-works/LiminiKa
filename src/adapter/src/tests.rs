@@ -281,7 +281,7 @@ fn cold_path_probe_calibrates_thresholds_and_rebinds_geometry() {
 }
 
 #[test]
-fn text_attractor_corpus_recalls_basin_and_detects_cvoid_boundary() {
+fn text_attractor_corpus_recalls_basin_and_detects_liminal_void_boundary() {
     let geom = RopeGeometry::phi4_mini();
     let mut adapter = ModelSteeringAdapter::new(geom).expect("phi4 geometry valid");
     adapter.set_layer_rope_mask(0xFFFF_0000);
@@ -351,7 +351,7 @@ fn text_attractor_corpus_recalls_basin_and_detects_cvoid_boundary() {
     let recall_void = corpus
         .recall_for_query(&adapter, &qv_slices, &refs, &policy)
         .expect("recall void");
-    assert_eq!(recall_void.void_state, VoidBoundaryState::CvoidEmptySpace);
+    assert_eq!(recall_void.void_state, VoidBoundaryState::LiminalVoid);
     assert!(recall_void.recalled_facts.is_empty());
 }
 
@@ -461,7 +461,7 @@ fn dual_track_timeline_records_gop_seeks_zero_forward_and_roundtrips() {
         .expect("frame 1");
     assert!(!is_i1);
 
-    // Frame 2: cvoid scene cut -> automatically emits a new I-Frame keyframe.
+    // Frame 2: liminal_void scene cut -> automatically emits a new I-Frame keyframe.
     let is_i2 = timeline
         .record_step(
             &TimelineStepContext {
@@ -479,7 +479,7 @@ fn dual_track_timeline_records_gop_seeks_zero_forward_and_roundtrips() {
             },
             &FrameTransitionMetrics {
                 phase_l1_delta: 0.10,
-                void_state: VoidBoundaryState::CvoidEmptySpace,
+                void_state: VoidBoundaryState::LiminalVoid,
                 frames_since_keyframe: 2,
                 new_cluster_spawned: true,
             },
@@ -816,7 +816,7 @@ fn dual_track_timeline_fast_resumes_and_rebakes_across_models() {
 }
 
 #[test]
-fn coherence_guard_gate_flags_low_fact_coherence_as_cvoid() {
+fn coherence_guard_gate_flags_low_fact_coherence_as_liminal_void() {
     let gate = CoherenceGuardGate;
     let policy = RecallPolicy {
         min_coherence: 0.16,
@@ -836,11 +836,11 @@ fn coherence_guard_gate_flags_low_fact_coherence_as_cvoid() {
         &policy,
     );
     assert!(decision.suppress_fact_injection);
-    assert_eq!(decision.void_state, VoidBoundaryState::CvoidEmptySpace);
+    assert_eq!(decision.void_state, VoidBoundaryState::LiminalVoid);
 }
 
 #[test]
-fn coherence_guard_gate_detects_sharp_winner_liminal_without_weakening_ood_cvoid() {
+fn coherence_guard_gate_detects_sharp_winner_liminal_without_weakening_ood_liminal_void() {
     let gate = CoherenceGuardGate;
     let policy = RecallPolicy {
         min_coherence: 0.19,
@@ -863,7 +863,7 @@ fn coherence_guard_gate_detects_sharp_winner_liminal_without_weakening_ood_cvoid
     assert!(!liminal.suppress_fact_injection);
     assert_eq!(liminal.void_state, VoidBoundaryState::LiminalBoundary);
 
-    // Flat out-of-domain noise remains strictly CvoidEmptySpace.
+    // Flat out-of-domain noise remains strictly LiminalVoid.
     let flat_ood = gate.evaluate(
         &RecallBoundaryMetrics {
             top1_fact_score: 0.15,
@@ -875,7 +875,7 @@ fn coherence_guard_gate_detects_sharp_winner_liminal_without_weakening_ood_cvoid
         &policy,
     );
     assert!(flat_ood.suppress_fact_injection);
-    assert_eq!(flat_ood.void_state, VoidBoundaryState::CvoidEmptySpace);
+    assert_eq!(flat_ood.void_state, VoidBoundaryState::LiminalVoid);
 }
 
 #[test]
@@ -1078,11 +1078,11 @@ fn society_stratum_pipeline_supports_dynamic_add_remove_and_action_hub_arbitrati
             "local_feature_worker",
             "head_angle_worker",
             "local_token_resonance",
-            "perspective_domino_cvoid",
+            "perspective_domino_liminal_void",
             "action_hub_boundary",
         ]
     );
-    let removed = pipeline.remove_stratum("perspective_domino_cvoid");
+    let removed = pipeline.remove_stratum("perspective_domino_liminal_void");
     assert!(removed.is_some());
     assert_eq!(
         pipeline.stratum_names(),
@@ -1127,7 +1127,7 @@ fn society_stratum_pipeline_supports_dynamic_add_remove_and_action_hub_arbitrati
         recall_guard.action_decision,
         StigmergicActionDecision::RepulsionEscape
     );
-    assert_eq!(recall_guard.void_state, VoidBoundaryState::CvoidEmptySpace);
+    assert_eq!(recall_guard.void_state, VoidBoundaryState::LiminalVoid);
 }
 
 #[test]
@@ -1195,7 +1195,7 @@ fn head_angle_worker_stratum_separates_specialized_head_attractor() {
 }
 
 #[test]
-fn persona_recall_survives_factual_cvoid_and_routes_via_gateway_frame() {
+fn persona_recall_survives_factual_liminal_void_and_routes_via_gateway_frame() {
     let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
@@ -1459,7 +1459,7 @@ fn per_role_local_token_resonance_arbitrates_fact_despite_persona_hub() {
 }
 
 #[test]
-fn action_hub_compound_decomposition_links_disjoint_specialists_while_respecting_cvoid() {
+fn action_hub_compound_decomposition_links_disjoint_specialists_while_respecting_liminal_void() {
     let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
@@ -1587,7 +1587,7 @@ fn action_hub_compound_decomposition_links_disjoint_specialists_while_respecting
         StigmergicActionDecision::SubHeadRoute
     );
 
-    // Weak noise OOD query below basin support must stay suppressed in cvoid.
+    // Weak noise OOD query below basin support must stay suppressed in liminal_void.
     let mut ood_q = vec![0.0_f32; len];
     ood_q[15] = 1.0;
     let weak_obs = LocalChannelObservation {
@@ -1610,7 +1610,7 @@ fn action_hub_compound_decomposition_links_disjoint_specialists_while_respecting
             Some(weak_obs),
         )
         .expect("ood recall");
-    assert_eq!(ood_recall.void_state, VoidBoundaryState::CvoidEmptySpace);
+    assert_eq!(ood_recall.void_state, VoidBoundaryState::LiminalVoid);
     assert!(ood_recall.recalled_facts.is_empty());
     assert_eq!(
         ood_recall
@@ -1866,4 +1866,44 @@ fn split_premise_guard_coalition_triggers_repulsion_while_preserving_counter_fac
         Some(id_counter),
         "expected grounded counter-fact {id_counter} to remain available for refutation"
     );
+}
+
+#[test]
+fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology() {
+    use liminika_core::traits::gateway::{CognitiveOpKind, CognitiveStepOp, EpistemicRegime};
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("phi4 mini");
+
+    let mut peel_ledger = CognitiveTrajectoryLedger::default();
+    for _ in 0..4 {
+        peel_ledger.push_step(CognitiveStepOp::pack(
+            SwarmScaleGranularity::CellTrail,
+            CognitiveOpKind::DecomposePeel,
+            6,
+        ));
+    }
+    adapter.set_active_circuit(peel_ledger);
+
+    let initial_persona_floor = adapter.aperture_field().void_floor_q7[2];
+    let conflict_horizon = EpistemicHorizonReading {
+        total_memory_support: 1.4,
+        peak_positive_affinity: 0.72,
+        internal_conflict_energy: 0.95,
+        horizon_gate: 1.0,
+        conflict_severity: 0.80,
+        dominant_anchor_id: 10,
+        opposing_anchor_id: 20,
+        regime_code: EpistemicRegime::InternalConflict as u8,
+        reserved_align: [0; 3],
+    };
+    adapter.adapt_liminal_aperture(&conflict_horizon, None);
+    assert!(adapter.aperture_field().void_floor_q7[2] > initial_persona_floor);
+    assert_eq!(adapter.aperture_field().adaptation_epochs, 1);
+
+    let mermaid = adapter.render_liminal_topology_mermaid(5, 2);
+    assert!(mermaid.starts_with("flowchart TD\n"));
+    assert!(mermaid.contains("LiminalVoid"));
+    assert!(mermaid.contains("ManifoldGatewaySignal"));
+    assert!(mermaid.contains("ActionHub"));
+    assert!(mermaid.contains("Crystals:5"));
+    assert!(mermaid.contains("Daughters:2"));
 }

@@ -163,6 +163,70 @@ pub const ATTRACTOR_SLOT_CUSTOM_7: u8 = 7;
 /// Bitmask isolating a valid 3-bit Attractor Domain Slot ID (`0..=7`).
 pub const ATTRACTOR_SLOT_ID_MASK: u8 = 0x07;
 
+// ===================================================================
+// 2b. LiminalVoid Cognitive Aperture Masks (Type-Level Horizon Boundaries)
+// ===================================================================
+
+/// Cognitive aperture bit for Origin 1: hardware & QoS resource constraints (`SystemConstraintSignal`).
+pub const APERTURE_SYSTEM_CONSTRAINT: u32 = 1 << 0;
+
+/// Cognitive aperture bit for Origin 2A: factual knowledge grounding (`ObjectiveFactSignal`).
+pub const APERTURE_OBJECTIVE_FACT: u32 = 1 << 1;
+
+/// Cognitive aperture bit for Origin 2B: subjective persona grounding (`SubjectivePersonaSignal`).
+pub const APERTURE_SUBJECTIVE_PERSONA: u32 = 1 << 2;
+
+/// Cognitive aperture bit for Origin 2C: contradiction guard grounding (`ContradictionGuardSignal`).
+pub const APERTURE_CONTRADICTION_GUARD: u32 = 1 << 3;
+
+/// Combined causal provenance cognitive aperture across system and grounding origins (`0x0000_000F`).
+pub const APERTURE_CAUSAL_PROVENANCE: u32 = 0x0000_000F;
+
+/// Cognitive aperture bit for recurrent cognitive circuit plasticity (`CognitiveTrajectoryLedger`).
+pub const APERTURE_COGNITIVE_CIRCUIT: u32 = 1 << 4;
+
+/// Cognitive aperture bit for phase KV context memory (`RamPhaseKvCacheOps`).
+pub const APERTURE_KV_PHASE_CACHE: u32 = 1 << 5;
+
+/// Cognitive aperture bit for perspective-relative attractor coupling (`RelativeCouplingMatrix`).
+pub const APERTURE_RELATIVE_COUPLING: u32 = 1 << 6;
+
+/// Cognitive aperture bit for dissipative overflow crystallization (`CrystallizedAttractorRecord`).
+pub const APERTURE_DISSIPATIVE_CRYSTAL: u32 = 1 << 7;
+
+/// Wide composite cognitive aperture spanned by [`crate::traits::gateway::ManifoldGatewaySignal`] (`0x0000_00FF`).
+pub const APERTURE_MANIFOLD_GATEWAY: u32 = 0x0000_00FF;
+
+/// Cognitive aperture bit for $SO(2)$ phase steering (`PhaseSteering`).
+pub const APERTURE_PHASE_STEERING: u32 = 1 << 8;
+
+/// Cognitive aperture bit for Fact/Logic/Explore sub-head routing (`SubHeadRouter`).
+pub const APERTURE_SUBHEAD_ROUTING: u32 = 1 << 9;
+
+/// Cognitive aperture bit for Rank-1 hidden residual injection (`Rank1ResidualAdapter`).
+pub const APERTURE_RANK1_RESIDUAL: u32 = 1 << 10;
+
+/// Cognitive aperture bit for tagged pointer transitions & trails (`PointerActionHub`).
+pub const APERTURE_POINTER_TRAIL: u32 = 1 << 11;
+
+/// Cognitive aperture bit for fast-path L1 ledger shortcuts (`FastPathLedger`).
+pub const APERTURE_FAST_PATH_LEDGER: u32 = 1 << 12;
+
+/// Cognitive aperture bit for 8-cell Micro-Swarm consensus (`StigmergicSwarmOps`).
+pub const APERTURE_SWARM_CONSENSUS: u32 = 1 << 13;
+
+/// Cognitive aperture bit for sheaf cohomology & EDBC entropy control.
+pub const APERTURE_COHOMOLOGY_EDBC: u32 = 1 << 14;
+
+/// Cognitive aperture bit for zero-copy `.gcso` mapped storage & ZiMMS I/O.
+pub const APERTURE_MAPPED_STORAGE: u32 = 1 << 15;
+
+/// Broadest operational cognitive aperture spanned by [`crate::traits::action_hub::ActionHub`] (`0x0000_FFFF`).
+pub const APERTURE_ACTION_HUB_WIDE: u32 = 0x0000_FFFF;
+
+/// Number of dynamic channel slots tracked by `LiminalApertureField`.
+pub const NUM_LIMINAL_APERTURE_CHANNELS: usize = 8;
+
 /// Default $8 \times 8$ Attractor Slot coupling bitmatrix (`u64`) enabling symmetric cross-slot
 /// synergy across all 8 parallel attractor domain slots.
 pub const DEFAULT_SLOT_COUPLING_MATRIX_8X8: u64 = 0xFFFF_FFFF_FFFF_FFFF;
@@ -3927,13 +3991,13 @@ pub const fn branchless_phase_proximity_gravity_f32(
 /// Branchless scale-invariant Eyring-Kramers Langevin pitchfork tunneling escape probability (Lemma 3.1).
 #[inline(always)]
 pub const fn branchless_eyring_kramers_escape(
-    cvoid: f32,
+    liminal_void: f32,
     tau_eff: f32,
     alpha: f32,
     beta: f32,
     d0: f32,
 ) -> f32 {
-    let valid = branchless_is_finite_f32(cvoid)
+    let valid = branchless_is_finite_f32(liminal_void)
         & branchless_is_finite_f32(tau_eff)
         & branchless_is_finite_f32(alpha)
         & branchless_is_finite_f32(beta)
@@ -3941,7 +4005,7 @@ pub const fn branchless_eyring_kramers_escape(
         & (beta > DEFAULT_ENTROPY_EPS)
         & (d0 > DEFAULT_ENTROPY_EPS);
     let safe_denom = branchless_select_f32(valid, 4.0 * beta * d0, 1.0);
-    let excess = branchless_relu_f32(cvoid - tau_eff);
+    let excess = branchless_relu_f32(liminal_void - tau_eff);
     let safe_alpha = branchless_select_f32(valid, alpha, 0.0);
     let ratio = (safe_alpha * safe_alpha * excess * excess) * fast_inv_pos_normal_f32(safe_denom);
     branchless_select_f32(valid, branchless_exp_f32(-ratio), 0.0)

@@ -91,7 +91,7 @@ impl Drop for ScopedFtzdazGuard {
     }
 }
 
-/// Generic heap buffer with strict 32-byte (or 64-byte cacheline) alignment for SIMD CVoid evaluation.
+/// Generic heap buffer with strict 32-byte (or 64-byte cacheline) alignment for SIMD LiminalVoid evaluation.
 struct AlignedVectorBuffer<T, const ALIGN: usize = 32> {
     ptr: *mut T,
     layout: Layout,
@@ -433,9 +433,9 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_entropy_control_cvoid_dyadic(c: &mut Criterion) {
+fn bench_entropy_control_liminal_void_dyadic(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("EntropyControl_CVoid_Dyadic_Vector_Alignment");
+    let mut group = c.benchmark_group("EntropyControl_LiminalVoid_Dyadic_Vector_Alignment");
     group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
@@ -443,29 +443,32 @@ fn bench_entropy_control_cvoid_dyadic(c: &mut Criterion) {
     group.measurement_time(Duration::from_millis(1350));
 
     let vector_dims = [128usize, 512, 2048, 8192, 32768, 65536, 131072, 262144];
-    let shared_cvoid_arena = AlignedVectorBuffer::<f32, 64>::new_heterogeneous_f32(262144, 0.65f32);
+    let shared_void_arena = AlignedVectorBuffer::<f32, 64>::new_heterogeneous_f32(262144, 0.65f32);
 
     for dim in vector_dims {
         let total_bytes = dim * std::mem::size_of::<f32>();
         group.throughput(Throughput::Bytes(total_bytes as u64));
 
         group.bench_with_input(
-            BenchmarkId::new("eval_cvoid_dyadic128", format!("dim_{dim}")),
+            BenchmarkId::new("eval_liminal_void_dyadic128", format!("dim_{dim}")),
             &dim,
             |b, &d| {
                 let _ftz = ScopedFtzdazGuard::new();
-                let slice_32 = AlignedSlice32::new(shared_cvoid_arena.as_prefix(d)).unwrap();
+                let slice_32 = AlignedSlice32::new(shared_void_arena.as_prefix(d)).unwrap();
                 let engine = EntropyController::default();
                 let mut void_score = 0.0f32;
                 for _ in 0..8 {
                     engine
-                        .eval_cvoid_dyadic128(&slice_32, &mut void_score)
+                        .eval_liminal_void_dyadic128(&slice_32, &mut void_score)
                         .unwrap();
                 }
 
                 b.iter(|| {
                     engine
-                        .eval_cvoid_dyadic128(black_box(&slice_32), black_box(&mut void_score))
+                        .eval_liminal_void_dyadic128(
+                            black_box(&slice_32),
+                            black_box(&mut void_score),
+                        )
                         .unwrap();
                     black_box(void_score);
                 });
@@ -477,27 +480,32 @@ fn bench_entropy_control_cvoid_dyadic(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(
         (coh_dim * std::mem::size_of::<f32>()) as u64,
     ));
-    group.bench_function("eval_cvoid_with_l1_l2_coherence_ratio_dim_4096", |b| {
-        let _ftz = ScopedFtzdazGuard::new();
-        let slice_32 = AlignedSlice32::new(shared_cvoid_arena.as_prefix(coh_dim)).unwrap();
-        let engine = EntropyController::default();
-        for _ in 0..8 {
-            let _ = engine.eval_cvoid_with_coherence_ratio(&slice_32).unwrap();
-        }
-
-        b.iter(|| {
-            let res = engine
-                .eval_cvoid_with_coherence_ratio(black_box(&slice_32))
-                .unwrap();
-            black_box(res);
-        });
-    });
-
     group.bench_function(
-        "eval_surrogate_with_cvoid_and_pointer_fused_dim_4096",
+        "eval_liminal_void_with_l1_l2_coherence_ratio_dim_4096",
         |b| {
             let _ftz = ScopedFtzdazGuard::new();
-            let slice_32 = AlignedSlice32::new(shared_cvoid_arena.as_prefix(coh_dim)).unwrap();
+            let slice_32 = AlignedSlice32::new(shared_void_arena.as_prefix(coh_dim)).unwrap();
+            let engine = EntropyController::default();
+            for _ in 0..8 {
+                let _ = engine
+                    .eval_liminal_void_with_coherence_ratio(&slice_32)
+                    .unwrap();
+            }
+
+            b.iter(|| {
+                let res = engine
+                    .eval_liminal_void_with_coherence_ratio(black_box(&slice_32))
+                    .unwrap();
+                black_box(res);
+            });
+        },
+    );
+
+    group.bench_function(
+        "eval_surrogate_with_liminal_void_and_pointer_fused_dim_4096",
+        |b| {
+            let _ftz = ScopedFtzdazGuard::new();
+            let slice_32 = AlignedSlice32::new(shared_void_arena.as_prefix(coh_dim)).unwrap();
             let mut base_engine = EntropyController::default().with_min_mode_dwell_steps(3);
             let mut st_warm = gcso_edbc_state_t::default();
             for _ in 0..8 {
@@ -514,7 +522,7 @@ fn bench_entropy_control_cvoid_dyadic(c: &mut Criterion) {
             for _ in 0..8 {
                 reset_engine_fast(&mut engine, &base_engine);
                 let _ = engine
-                    .eval_surrogate_with_cvoid_and_pointer(
+                    .eval_surrogate_with_liminal_void_and_pointer(
                         0.62f32,
                         0.31f32,
                         0.38f32,
@@ -537,7 +545,7 @@ fn bench_entropy_control_cvoid_dyadic(c: &mut Criterion) {
             b.iter(|| {
                 reset_engine_fast(&mut engine, &base_engine);
                 let res = engine
-                    .eval_surrogate_with_cvoid_and_pointer(
+                    .eval_surrogate_with_liminal_void_and_pointer(
                         black_box(0.62f32),
                         black_box(0.31f32),
                         black_box(0.38f32),
@@ -776,39 +784,42 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
 
     // 1. Pointer-Coupled EntropyControl Step + Eyring-Kramers Temperature + Stigmergic Mode Evolution
     group.throughput(Throughput::Elements(1));
-    group.bench_function("eval_stateful_with_cvoid_and_pointer_evolution", |b| {
-        let mut base_engine = EntropyController::default().with_min_mode_dwell_steps(3);
-        let mut st_warm = gcso_edbc_state_t::default();
-        for _ in 0..8 {
-            base_engine.eval_stateful(1.1f32, &mut st_warm).unwrap();
-        }
-        let ptr = gcso_tagged_ptr_t::pack_action(
-            0x4000,
-            ATTRACTOR_SLOT_PERSONA,
-            ACTION_PRESET_EXPRESS_PHASE,
-            16,
-        );
+    group.bench_function(
+        "eval_stateful_with_liminal_void_and_pointer_evolution",
+        |b| {
+            let mut base_engine = EntropyController::default().with_min_mode_dwell_steps(3);
+            let mut st_warm = gcso_edbc_state_t::default();
+            for _ in 0..8 {
+                base_engine.eval_stateful(1.1f32, &mut st_warm).unwrap();
+            }
+            let ptr = gcso_tagged_ptr_t::pack_action(
+                0x4000,
+                ATTRACTOR_SLOT_PERSONA,
+                ACTION_PRESET_EXPRESS_PHASE,
+                16,
+            );
 
-        let mut engine = base_engine;
+            let mut engine = base_engine;
 
-        b.iter(|| {
-            reset_engine_fast(&mut engine, &base_engine);
-            let res = engine
-                .eval_stateful_with_cvoid_and_pointer(
-                    black_box(2.2f32),
-                    black_box(0.35f32),
-                    black_box(1.2f32),
-                    black_box(0.8f32),
-                    black_box(0.5f32),
-                    black_box(ptr),
-                    black_box(1.1f32),
-                    black_box(ATTRACTOR_SLOT_KNOWLEDGE),
-                    black_box(1.5f32),
-                )
-                .unwrap();
-            black_box(res);
-        });
-    });
+            b.iter(|| {
+                reset_engine_fast(&mut engine, &base_engine);
+                let res = engine
+                    .eval_stateful_with_liminal_void_and_pointer(
+                        black_box(2.2f32),
+                        black_box(0.35f32),
+                        black_box(1.2f32),
+                        black_box(0.8f32),
+                        black_box(0.5f32),
+                        black_box(ptr),
+                        black_box(1.1f32),
+                        black_box(ATTRACTOR_SLOT_KNOWLEDGE),
+                        black_box(1.5f32),
+                    )
+                    .unwrap();
+                black_box(res);
+            });
+        },
+    );
 
     // 2. Closed-Loop Pitchfork Bifurcation + SplitMix64 Metastable Tunneling Perturbation
     group.throughput(Throughput::Elements(1));
@@ -2485,19 +2496,22 @@ fn bench_entropy_control_extreme_and_edge_cases(c: &mut Criterion) {
     for d in odd_dims {
         group.throughput(Throughput::Bytes((d * std::mem::size_of::<f32>()) as u64));
         group.bench_with_input(
-            BenchmarkId::new("cvoid_dyadic_odd_remainder", format!("dim_{d}")),
+            BenchmarkId::new("liminal_void_dyadic_odd_remainder", format!("dim_{d}")),
             &d,
             |b, &dim_size| {
                 let slice_32 = AlignedSlice32::new(shared_odd_arena.as_prefix(dim_size)).unwrap();
                 let engine = EntropyController::default();
                 let mut void_score = 0.0f32;
                 engine
-                    .eval_cvoid_dyadic128(&slice_32, &mut void_score)
+                    .eval_liminal_void_dyadic128(&slice_32, &mut void_score)
                     .unwrap();
 
                 b.iter(|| {
                     engine
-                        .eval_cvoid_dyadic128(black_box(&slice_32), black_box(&mut void_score))
+                        .eval_liminal_void_dyadic128(
+                            black_box(&slice_32),
+                            black_box(&mut void_score),
+                        )
                         .unwrap();
                     black_box(void_score);
                 });
@@ -2521,7 +2535,7 @@ fn bench_entropy_control_extreme_and_edge_cases(c: &mut Criterion) {
         });
     });
 
-    // 6. Barrier Evaluation Near Epsilon Singularity (CVoid -> 0.0)
+    // 6. Barrier Evaluation Near Epsilon Singularity (LiminalVoid -> 0.0)
     group.throughput(Throughput::Elements(1));
     group.bench_function("eval_barrier_epsilon_singularity_boundary", |b| {
         let _ftz = ScopedFtzdazGuard::new();
@@ -2539,7 +2553,7 @@ fn bench_entropy_control_extreme_and_edge_cases(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_entropy_control_stateful_eval,
-    bench_entropy_control_cvoid_dyadic,
+    bench_entropy_control_liminal_void_dyadic,
     bench_entropy_control_stream_simulation,
     bench_entropy_control_long_dialogue_reliability,
     bench_entropy_control_pointer_tunneling_and_cohomology,

@@ -1,15 +1,17 @@
 // name: src/core/src/traits/gateway/epistemic.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Branchless epistemic horizon separation (`KnownCoherent` vs. `InternalConflict` vs. `TrueVoid`)
-//! and signed relative attractor coupling ($W_{ij} \in [-127, +127]$) over [`ManifoldGatewaySignal`].
+//! Branchless epistemic horizon separation (`KnownCoherent` vs. `InternalConflict` vs. `LiminalVoid`),
+//! signed relative attractor coupling ($W_{ij} \in [-127, +127]$), autonomous dynamic
+//! [`LiminalApertureField`] horizon shifting, and `#![no_std]` self-introspecting Mermaid topology
+//! telemetry over [`ManifoldGatewaySignal`].
 //!
 //! Rather than hard-coding static `Fact`/`Guard` roles or branch-heavy conditionals, every
 //! attractor participates in a signed relational graph from the active perspective $i$:
 //! - $W_{ij} > 0$ projects node $j$ onto the attractive basin axis;
 //! - $W_{ij} < 0$ projects node $j$ onto the opposing/repulsive axis;
 //! - When total projection energy onto the local memory cut falls below `horizon_floor`, the
-//!   manifold enters [`EpistemicRegime::TrueVoid`] (*Limina* to the unknowable) and scales
+//!   manifold enters [`EpistemicRegime::LiminalVoid`] (*Limina* to the unknowable) and scales
 //!   output steering energy cleanly to `0.0` without branching.
 
 #![forbid(unsafe_code)]
@@ -17,7 +19,7 @@
 
 use super::*;
 use crate::crystal::DissipativeOverflowReport;
-use crate::traits::branchless::branchless_q7_inhibit_words_64;
+use crate::traits::branchless::{LiminalVoid, branchless_q7_inhibit_words_64};
 use crate::traits::primitives::branchless_sincos_q7;
 
 /// Epistemic regime classification separating internal memory conflict from out-of-memory unknowability.
@@ -29,7 +31,7 @@ pub enum EpistemicRegime {
     /// Query falls inside the carved memory horizon with competing / opposing attractors ($H^1 \neq 0$).
     InternalConflict = 1,
     /// Query lies outside the carved memory horizon (*Limina* between cognition and the unknowable).
-    TrueVoid = 2,
+    LiminalVoid = 2,
 }
 
 impl EpistemicRegime {
@@ -39,7 +41,7 @@ impl EpistemicRegime {
     pub const fn from_code(code: u8) -> Self {
         match code {
             1 => Self::InternalConflict,
-            2 => Self::TrueVoid,
+            2 => Self::LiminalVoid,
             _ => Self::KnownCoherent,
         }
     }
@@ -55,7 +57,7 @@ pub struct EpistemicHorizonReading {
     pub peak_positive_affinity: f32,
     /// Accumulated competing / opposing projection energy inside the memory cut.
     pub internal_conflict_energy: f32,
-    /// Branchless amplitude gate (`1.0` inside cognitive horizon, `0.0` in [`EpistemicRegime::TrueVoid`]).
+    /// Branchless amplitude gate (`1.0` inside cognitive horizon, `0.0` in [`EpistemicRegime::LiminalVoid`]).
     pub horizon_gate: f32,
     /// Normalized internal contradiction severity in $[0.0, 1.0]$.
     pub conflict_severity: f32,
@@ -63,7 +65,7 @@ pub struct EpistemicHorizonReading {
     pub dominant_anchor_id: u32,
     /// Anchor ID of the strongest opposing/conflicting node inside the cut (`0` if none).
     pub opposing_anchor_id: u32,
-    /// Encoded [`EpistemicRegime`] byte (`0` = Coherent, `1` = InternalConflict, `2` = TrueVoid).
+    /// Encoded [`EpistemicRegime`] byte (`0` = Coherent, `1` = InternalConflict, `2` = LiminalVoid).
     pub regime_code: u8,
     /// Alignment padding bytes.
     pub reserved_align: [u8; 3],
@@ -77,11 +79,11 @@ impl EpistemicHorizonReading {
         EpistemicRegime::from_code(self.regime_code)
     }
 
-    /// Returns `true` when the query lies outside the carved memory cut ([`EpistemicRegime::TrueVoid`]).
+    /// Returns `true` when the query lies outside the carved memory cut ([`EpistemicRegime::LiminalVoid`]).
     #[inline(always)]
     #[must_use]
-    pub const fn is_true_void(&self) -> bool {
-        self.regime_code == EpistemicRegime::TrueVoid as u8
+    pub const fn is_liminal_void(&self) -> bool {
+        self.regime_code == EpistemicRegime::LiminalVoid as u8
     }
 
     /// Returns `true` when the query lies inside the memory cut yet triggers internal opposition ($H^1 \neq 0$).
@@ -92,12 +94,12 @@ impl EpistemicHorizonReading {
     }
 
     /// Modulates any synthesized [`GatewayFrame`] strictly branchlessly according to this epistemic
-    /// horizon: zeroes amplitude in [`EpistemicRegime::TrueVoid`] and elevates repulsive flags in
+    /// horizon: zeroes amplitude in [`EpistemicRegime::LiminalVoid`] and elevates repulsive flags in
     /// [`EpistemicRegime::InternalConflict`].
     #[inline(always)]
     #[must_use]
     pub fn apply_to_frame_branchless(&self, mut frame: GatewayFrame) -> GatewayFrame {
-        let is_void = self.is_true_void();
+        let is_void = self.is_liminal_void();
         let is_conflict = self.is_internal_conflict();
         let gate = branchless_clamp_f32(branchless_relu_f32(self.horizon_gate), 0.0, 1.0);
 
@@ -167,7 +169,7 @@ impl EpistemicHorizonReading {
 impl CausalProvenanceSignal for EpistemicHorizonReading {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
-        let is_void = self.is_true_void();
+        let is_void = self.is_liminal_void();
         let is_conflict = self.is_internal_conflict();
         branchless_select_u32(
             is_void,
@@ -184,7 +186,7 @@ impl CausalProvenanceSignal for EpistemicHorizonReading {
     #[inline(always)]
     fn causal_anomaly_severity(&self) -> f32 {
         branchless_select_f32(
-            self.is_true_void(),
+            self.is_liminal_void(),
             0.0,
             branchless_clamp_f32(self.conflict_severity, 0.0, 1.0),
         )
@@ -196,7 +198,7 @@ impl ManifoldGatewaySignal for EpistemicHorizonReading {
     fn synthesize_gateway_frame(&self) -> GatewayFrame {
         let base = GatewayFrame {
             target_anchor_id: branchless_select_u32(
-                self.is_true_void(),
+                self.is_liminal_void(),
                 0,
                 branchless_select_u32(
                     self.is_internal_conflict() && self.opposing_anchor_id != 0,
@@ -220,8 +222,11 @@ impl ManifoldGatewaySignal for EpistemicHorizonReading {
 }
 
 /// Uniform node abstraction enabling relative signed coupling and epistemic horizon evaluation
-/// across any attractor representation (`CrystallizedAttractorRecord`, `GatewayFrame`, `ObjectiveFact`, etc.).
-pub trait RelativeAttractorNode {
+/// across any attractor representation (`CrystallizedAttractorRecord`, `GatewayFrame`, `ObjectiveFact`, etc.)
+/// atop [`LiminalVoid`].
+pub trait RelativeAttractorNode: LiminalVoid {
+    /// Static cognitive aperture mask for relative attractor participation.
+    const RELATIVE_APERTURE_MASK: u32 = APERTURE_RELATIVE_COUPLING;
     /// Returns the node's 64-head Q7 phase profile packed into 8 register-resident `u64` words.
     fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS];
 
@@ -520,7 +525,7 @@ pub fn evaluate_epistemic_horizon_words_64<Node: RelativeAttractorNode>(
     );
     let regime_code = branchless_select_u8(
         !inside_horizon,
-        EpistemicRegime::TrueVoid as u8,
+        EpistemicRegime::LiminalVoid as u8,
         branchless_select_u8(
             conflict_active,
             EpistemicRegime::InternalConflict as u8,
@@ -579,7 +584,7 @@ fn fold_sincos64_to_words(sin_acc: &[f32; MAX_ATTENTION_HEADS], cos_acc: &[f32; 
 ///
 /// Positive entries in `coupling_row_q7` pull toward synergistic nodes; negative entries inhibit
 /// and project opposing nodes onto the repulsive axis (`ACTION_MODE_PHASE_REPULSE`). When
-/// `query_words` falls into [`EpistemicRegime::TrueVoid`] (`< horizon_floor`), steering amplitude
+/// `query_words` falls into [`EpistemicRegime::LiminalVoid`] (`< horizon_floor`), steering amplitude
 /// is scaled cleanly to `0.0`.
 #[inline]
 #[must_use]
@@ -789,3 +794,529 @@ pub trait EpistemicManifoldOps: RelativeAttractorNode {
 }
 
 impl<T: RelativeAttractorNode + ?Sized> EpistemicManifoldOps for T {}
+
+// ===================================================================
+// Dynamic LiminalVoid Aperture Shifting & Self-Introspecting Telemetry
+// ===================================================================
+
+/// Dynamic, branchlessly adaptable cognitive aperture controller (`#[repr(C, align(16))]`, 32 B)
+/// shifting the [`LiminalVoid`] boundary (`void_floor_q7`, `aperture_gain_q7`, `phase_shift_q7`)
+/// across the 8 trait horizon channels in response to [`CognitiveTrajectoryLedger`] habits,
+/// [`EpistemicHorizonReading`] state, and [`DissipativeOverflowReport`] crystallization events.
+///
+/// Channel indices:
+/// - `0`: `SystemConstraintSignal`
+/// - `1`: `ObjectiveFactSignal`
+/// - `2`: `SubjectivePersonaSignal`
+/// - `3`: `ContradictionGuardSignal`
+/// - `4`: `CognitiveTrajectoryLedger` (`Circuit`)
+/// - `5`: `RamPhaseKvCacheOps` (`KvCache`)
+/// - `6`: `RelativeCouplingMatrix` (`RelativeCoupling`)
+/// - `7`: `ActionHub` (Wide Execution Aperture)
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiminalApertureField {
+    /// Per-channel `LiminalVoid` threshold floor in Q0.7 (`[8..=120]`): higher values expand the
+    /// unknowable exterior for that channel, filtering low-support signals cleanly to `0`.
+    pub void_floor_q7: [u8; NUM_LIMINAL_APERTURE_CHANNELS],
+    /// Per-channel cognitive window opening gain in Q0.7 (`[16..=127]`).
+    pub aperture_gain_q7: [u8; NUM_LIMINAL_APERTURE_CHANNELS],
+    /// Per-channel signed Q7 focal phase offset (`[-127..=127]`).
+    pub phase_shift_q7: [i8; NUM_LIMINAL_APERTURE_CHANNELS],
+    /// Active cognitive aperture bitmask reflecting dynamically open vs. collapsed channels.
+    pub active_aperture_mask: u32,
+    /// Monotonic count of autonomous aperture adaptation cycles applied.
+    pub adaptation_epochs: u32,
+}
+
+impl Default for LiminalApertureField {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LiminalApertureField {
+    /// Neutral baseline cognitive aperture configuration (`32 B`, `#[repr(C, align(16))]`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            void_floor_q7: [20, 28, 32, 24, 24, 24, 24, 16],
+            aperture_gain_q7: [96; NUM_LIMINAL_APERTURE_CHANNELS],
+            phase_shift_q7: [0; NUM_LIMINAL_APERTURE_CHANNELS],
+            active_aperture_mask: APERTURE_ACTION_HUB_WIDE,
+            adaptation_epochs: 0,
+        }
+    }
+
+    /// Returns channel `ch`'s normalized `LiminalVoid` threshold floor in `[0.0, 1.0]`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn channel_void_floor_f32(&self, ch: usize) -> f32 {
+        (self.void_floor_q7[ch & (NUM_LIMINAL_APERTURE_CHANNELS - 1)] as f32) * (1.0 / 127.0)
+    }
+
+    /// Returns channel `ch`'s normalized cognitive aperture gain in `[0.0, 1.0]`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn channel_gain_f32(&self, ch: usize) -> f32 {
+        (self.aperture_gain_q7[ch & (NUM_LIMINAL_APERTURE_CHANNELS - 1)] as f32) * (1.0 / 127.0)
+    }
+
+    /// Branchlessly adapts each channel's dynamic `LiminalVoid` boundary from `ledger`, `horizon`,
+    /// and optional `overflow_opt` without heap allocation or data-dependent branches.
+    #[inline]
+    pub fn adapt_from_circuit_and_overflow_branchless(
+        &mut self,
+        ledger: &CognitiveTrajectoryLedger,
+        horizon: &EpistemicHorizonReading,
+        overflow_opt: Option<&DissipativeOverflowReport>,
+    ) {
+        let (op_hist, _depth) = ledger.op_counts();
+        let peel_n = op_hist[CognitiveOpKind::DecomposePeel as usize]
+            .saturating_add(op_hist[CognitiveOpKind::RouteSubHead as usize]);
+        let fuse_n = op_hist[CognitiveOpKind::SynthesizeFuse as usize]
+            .saturating_add(op_hist[CognitiveOpKind::CrystallizeCommit as usize]);
+        let rep_n = op_hist[CognitiveOpKind::RepulseAudit as usize];
+
+        let peel_dom = (peel_n > fuse_n) | horizon.is_internal_conflict() | (rep_n > 0);
+        let scattered = match overflow_opt {
+            Some(r) => r.scattered,
+            None => false,
+        };
+        let spawned = match overflow_opt {
+            Some(r) => r.spawned_new & r.overflowed,
+            None => false,
+        };
+        let res_mean_q7 = match overflow_opt {
+            Some(r) => swar_q7_mean_i8_from_words_64(&r.residual_words),
+            None => 0,
+        };
+        let fuse_dom = (fuse_n > peel_n) | scattered;
+        let only_fuse = fuse_dom & !peel_dom;
+        let void_active = horizon.is_liminal_void();
+
+        // Channel 1 (ObjectiveFact) & Channel 3 (ContradictionGuard): narrow void under peel/conflict.
+        let next_f1 = branchless_select_u8(
+            peel_dom,
+            self.void_floor_q7[1].saturating_sub(4).max(8),
+            self.void_floor_q7[1],
+        );
+        self.void_floor_q7[1] = branchless_select_u8(
+            void_active,
+            next_f1.saturating_add(4).min(120),
+            next_f1,
+        );
+        self.aperture_gain_q7[1] = branchless_select_u8(
+            peel_dom,
+            self.aperture_gain_q7[1].saturating_add(8).min(127),
+            branchless_select_u8(
+                void_active,
+                self.aperture_gain_q7[1].saturating_sub(6).max(16),
+                self.aperture_gain_q7[1],
+            ),
+        );
+
+        let next_f3 = branchless_select_u8(
+            peel_dom,
+            self.void_floor_q7[3].saturating_sub(4).max(8),
+            self.void_floor_q7[3],
+        );
+        self.void_floor_q7[3] = branchless_select_u8(
+            void_active,
+            next_f3.saturating_add(4).min(120),
+            next_f3,
+        );
+        self.aperture_gain_q7[3] = branchless_select_u8(
+            peel_dom,
+            self.aperture_gain_q7[3].saturating_add(8).min(127),
+            branchless_select_u8(
+                void_active,
+                self.aperture_gain_q7[3].saturating_sub(6).max(16),
+                self.aperture_gain_q7[3],
+            ),
+        );
+
+        // Channel 2 (SubjectivePersona): push into LiminalVoid during peel/conflict; open under fuse.
+        let p2_floor_peel = branchless_select_u8(
+            peel_dom,
+            self.void_floor_q7[2].saturating_add(8).min(120),
+            self.void_floor_q7[2],
+        );
+        let p2_floor_fuse = branchless_select_u8(
+            only_fuse,
+            p2_floor_peel.saturating_sub(6).max(8),
+            p2_floor_peel,
+        );
+        self.void_floor_q7[2] = branchless_select_u8(
+            void_active,
+            p2_floor_fuse.saturating_add(4).min(120),
+            p2_floor_fuse,
+        );
+        let p2_gain_peel = branchless_select_u8(
+            peel_dom,
+            self.aperture_gain_q7[2].saturating_sub(8).max(24),
+            self.aperture_gain_q7[2],
+        );
+        let p2_gain_fuse = branchless_select_u8(
+            only_fuse,
+            p2_gain_peel.saturating_add(6).min(127),
+            p2_gain_peel,
+        );
+        self.aperture_gain_q7[2] = branchless_select_u8(
+            void_active,
+            p2_gain_fuse.saturating_sub(6).max(16),
+            p2_gain_fuse,
+        );
+
+        // Channel 5 (KvCache): open under integrative fuse or scatter transitions.
+        self.void_floor_q7[5] = branchless_select_u8(
+            fuse_dom,
+            self.void_floor_q7[5].saturating_sub(6).max(8),
+            self.void_floor_q7[5],
+        );
+        self.aperture_gain_q7[5] = branchless_select_u8(
+            fuse_dom,
+            self.aperture_gain_q7[5].saturating_add(6).min(127),
+            self.aperture_gain_q7[5],
+        );
+
+        // Channel 6 (RelativeCoupling): open under fuse/scatter/birth and track scattered phase shift.
+        let widen_rel = only_fuse | scattered | spawned;
+        self.void_floor_q7[6] = branchless_select_u8(
+            widen_rel,
+            self.void_floor_q7[6].saturating_sub(6).max(8),
+            self.void_floor_q7[6],
+        );
+        self.aperture_gain_q7[6] = branchless_select_u8(
+            widen_rel,
+            self.aperture_gain_q7[6].saturating_add(6).min(127),
+            self.aperture_gain_q7[6],
+        );
+        let blended_shift =
+            ((i32::from(self.phase_shift_q7[6]) + i32::from(res_mean_q7)) >> 1).clamp(-127, 127)
+                as i8;
+        self.phase_shift_q7[6] = branchless_select_i8(
+            scattered | spawned,
+            blended_shift,
+            self.phase_shift_q7[6],
+        );
+
+        // Recompute active_aperture_mask branchlessly from channel floor saturation (< 96).
+        let mut mask = APERTURE_ACTION_HUB_WIDE & !0x0000_00FF;
+        let mut ch = 0usize;
+        while ch < NUM_LIMINAL_APERTURE_CHANNELS {
+            let is_open = (self.void_floor_q7[ch] < 96) & (!void_active | (ch == 0) | (ch == 7));
+            mask |= branchless_select_u32(is_open, 1u32 << ch, 0);
+            ch += 1;
+        }
+        self.active_aperture_mask = mask;
+        self.adaptation_epochs = self.adaptation_epochs.wrapping_add(1);
+    }
+
+    /// Branchlessly modulates `frame` with this [`LiminalApertureField`] and `horizon`:
+    /// enforces the dynamic Fact `LiminalVoid` floor, scales Fact/Logic/Explore sub-head gains,
+    /// and applies channel `7`'s focal phase shift when inside the horizon.
+    #[inline(always)]
+    #[must_use]
+    pub fn modulate_gateway_frame_branchless(
+        &self,
+        frame: GatewayFrame,
+        horizon: &EpistemicHorizonReading,
+    ) -> GatewayFrame {
+        let mut out = horizon.apply_to_frame_branchless(frame);
+        let below_fact_floor = horizon.total_memory_support < self.channel_void_floor_f32(1);
+        let is_void = horizon.is_liminal_void() | below_fact_floor;
+
+        out.effective_energy = branchless_select_f32(is_void, 0.0, out.effective_energy);
+
+        let scale_gain = |base_q7: u8, ap_q7: u8| -> u8 {
+            let scaled = (u16::from(base_q7) * (u16::from(ap_q7) + 32)) >> 7;
+            scaled.clamp(16, 255) as u8
+        };
+        out.subhead_fact_gain_q7 =
+            scale_gain(out.subhead_fact_gain_q7, self.aperture_gain_q7[1]);
+        out.subhead_logic_gain_q7 =
+            scale_gain(out.subhead_logic_gain_q7, self.aperture_gain_q7[3]);
+        out.subhead_explore_gain_q7 =
+            scale_gain(out.subhead_explore_gain_q7, self.aperture_gain_q7[2]);
+
+        let shift_byte = self.phase_shift_q7[7] as u8 as u64;
+        let shift_word = shift_byte.wrapping_mul(SWAR_SPLAT_BYTE_64);
+        let keep_mask = branchless_select_u64(is_void, 0, u64::MAX);
+        {
+            let pw = out.phase_words_mut();
+            let mut c = 0usize;
+            while c < NUM_SWARM_MICRO_CELLS {
+                let shifted = swar_q7_circular_add_x8(pw[c], shift_word);
+                pw[c] = shifted & keep_mask;
+                c += 1;
+            }
+        }
+        out.mean_phase_tag_q7 = swar_q7_mean_i8_from_words_64(out.phase_words_ref());
+        let eff_slot = out.dominant_slot & ATTRACTOR_SLOT_ID_MASK;
+        let ptr_tag = pack_action_slot_tag(eff_slot, out.action_mode_flags);
+        out.frame_flags = ptr_tag as u16;
+        out.tagged_ptr =
+            gcso_tagged_ptr_t::pack(out.mapped_section_offset48, ptr_tag, out.mean_phase_tag_q7)
+                .raw();
+        out
+    }
+}
+
+/// Static compile-time descriptor binding a trait horizon node to its static cognitive aperture
+/// and unknowable exterior complement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiminalHorizonNodeDescriptor {
+    /// Mermaid graph node identifier (`"N0"`..`"N7"`).
+    pub node_id: &'static str,
+    /// Human-readable Rust trait name refining [`LiminalVoid`].
+    pub trait_name: &'static str,
+    /// Channel index (`0..8`) inside [`LiminalApertureField`].
+    pub channel_idx: usize,
+    /// Static cognitive aperture mask owned by this trait node.
+    pub static_aperture_mask: u32,
+    /// Type-level unknowable exterior complement (`!static_aperture_mask`).
+    pub unknowable_void_mask: u32,
+}
+
+/// Canonical 8-channel trait topology table derived from type-level [`LiminalVoid`] refinements.
+pub const GCSO_LIMINAL_HORIZON_TOPOLOGY: [LiminalHorizonNodeDescriptor;
+    NUM_LIMINAL_APERTURE_CHANNELS] = [
+    LiminalHorizonNodeDescriptor {
+        node_id: "N0",
+        trait_name: "SystemConstraintSignal",
+        channel_idx: 0,
+        static_aperture_mask: APERTURE_SYSTEM_CONSTRAINT,
+        unknowable_void_mask: !APERTURE_SYSTEM_CONSTRAINT,
+    },
+    LiminalHorizonNodeDescriptor {
+        node_id: "N1",
+        trait_name: "ObjectiveFactSignal",
+        channel_idx: 1,
+        static_aperture_mask: APERTURE_OBJECTIVE_FACT,
+        unknowable_void_mask: !APERTURE_OBJECTIVE_FACT,
+    },
+    LiminalHorizonNodeDescriptor {
+        node_id: "N2",
+        trait_name: "SubjectivePersonaSignal",
+        channel_idx: 2,
+        static_aperture_mask: APERTURE_SUBJECTIVE_PERSONA,
+        unknowable_void_mask: !APERTURE_SUBJECTIVE_PERSONA,
+    },
+    LiminalHorizonNodeDescriptor {
+        node_id: "N3",
+        trait_name: "ContradictionGuardSignal",
+        channel_idx: 3,
+        static_aperture_mask: APERTURE_CONTRADICTION_GUARD,
+        unknowable_void_mask: !APERTURE_CONTRADICTION_GUARD,
+    },
+    LiminalHorizonNodeDescriptor {
+        node_id: "N4",
+        trait_name: "CognitiveTrajectoryLedger",
+        channel_idx: 4,
+        static_aperture_mask: APERTURE_COGNITIVE_CIRCUIT,
+        unknowable_void_mask: !APERTURE_COGNITIVE_CIRCUIT,
+    },
+    LiminalHorizonNodeDescriptor {
+        node_id: "N5",
+        trait_name: "RamPhaseKvCacheOps",
+        channel_idx: 5,
+        static_aperture_mask: APERTURE_KV_PHASE_CACHE,
+        unknowable_void_mask: !APERTURE_KV_PHASE_CACHE,
+    },
+    LiminalHorizonNodeDescriptor {
+        node_id: "N6",
+        trait_name: "RelativeCouplingMatrix",
+        channel_idx: 6,
+        static_aperture_mask: APERTURE_RELATIVE_COUPLING,
+        unknowable_void_mask: !APERTURE_RELATIVE_COUPLING,
+    },
+    LiminalHorizonNodeDescriptor {
+        node_id: "N7",
+        trait_name: "ActionHub",
+        channel_idx: 7,
+        static_aperture_mask: APERTURE_ACTION_HUB_WIDE,
+        unknowable_void_mask: !APERTURE_ACTION_HUB_WIDE,
+    },
+];
+
+/// Compact `32`-byte (`#[repr(C, align(16))]`) self-introspecting telemetry snapshot capturing
+/// live [`LiminalApertureField`] boundaries, active epistemic regime, and crystal population counts.
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LiminalTopologyTelemetrySnapshot {
+    /// Per-channel `LiminalVoid` floor values in Q0.7 (`0..=127`).
+    pub void_floor_q7: [u8; NUM_LIMINAL_APERTURE_CHANNELS],
+    /// Per-channel cognitive aperture gain values in Q0.7 (`0..=127`).
+    pub aperture_gain_q7: [u8; NUM_LIMINAL_APERTURE_CHANNELS],
+    /// Per-channel signed focal phase shifts in Q7 (`-128..=127`).
+    pub phase_shift_q7: [i8; NUM_LIMINAL_APERTURE_CHANNELS],
+    /// Live active cognitive aperture bitmask.
+    pub active_aperture_mask: u32,
+    /// Encoded [`EpistemicRegime`] byte (`0`, `1`, `2`).
+    pub regime_code: u8,
+    /// Quantized conflict severity in Q0.7 (`0..=127`).
+    pub conflict_severity_q7: u8,
+    /// Number of active macro attractors currently populated.
+    pub active_crystals: u8,
+    /// Number of autonomously spawned daughter attractors recorded.
+    pub spawned_daughters: u8,
+}
+
+struct BufCursor<'a> {
+    buf: &'a mut [u8],
+    pos: usize,
+}
+
+impl<'a> BufCursor<'a> {
+    #[inline]
+    fn write_bytes(&mut self, bytes: &[u8]) {
+        let rem = self.buf.len().saturating_sub(self.pos);
+        let n = bytes.len().min(rem);
+        self.buf[self.pos..self.pos + n].copy_from_slice(&bytes[..n]);
+        self.pos += n;
+    }
+
+    #[inline]
+    fn write_str(&mut self, s: &str) {
+        self.write_bytes(s.as_bytes());
+    }
+
+    #[inline]
+    fn write_u8_dec(&mut self, val: u8) {
+        let mut tmp = [0u8; 3];
+        let mut v = val;
+        let mut len = 0usize;
+        if v >= 100 {
+            tmp[len] = b'0' + (v / 100);
+            len += 1;
+            v %= 100;
+            tmp[len] = b'0' + (v / 10);
+            len += 1;
+            tmp[len] = b'0' + (v % 10);
+            len += 1;
+        } else if v >= 10 {
+            tmp[len] = b'0' + (v / 10);
+            len += 1;
+            tmp[len] = b'0' + (v % 10);
+            len += 1;
+        } else {
+            tmp[len] = b'0' + v;
+            len += 1;
+        }
+        self.write_bytes(&tmp[..len]);
+    }
+
+    #[inline]
+    fn write_i8_dec(&mut self, val: i8) {
+        if val < 0 {
+            self.write_bytes(b"-");
+            self.write_u8_dec(val.unsigned_abs());
+        } else {
+            self.write_bytes(b"+");
+            self.write_u8_dec(val as u8);
+        }
+    }
+
+    #[inline]
+    fn write_hex_u16(&mut self, val: u32) {
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        let out = [
+            b'0',
+            b'x',
+            HEX[((val >> 12) & 0xF) as usize],
+            HEX[((val >> 8) & 0xF) as usize],
+            HEX[((val >> 4) & 0xF) as usize],
+            HEX[(val & 0xF) as usize],
+        ];
+        self.write_bytes(&out);
+    }
+}
+
+impl LiminalTopologyTelemetrySnapshot {
+    /// Captures a compact self-introspecting telemetry snapshot from `field` and `horizon`.
+    #[inline]
+    #[must_use]
+    pub fn capture(
+        field: &LiminalApertureField,
+        horizon: &EpistemicHorizonReading,
+        active_crystals: u8,
+        spawned_daughters: u8,
+    ) -> Self {
+        let sev = (branchless_clamp_f32(horizon.conflict_severity, 0.0, 1.0) * 127.0 + 0.5) as u8;
+        Self {
+            void_floor_q7: field.void_floor_q7,
+            aperture_gain_q7: field.aperture_gain_q7,
+            phase_shift_q7: field.phase_shift_q7,
+            active_aperture_mask: field.active_aperture_mask,
+            regime_code: horizon.regime_code,
+            conflict_severity_q7: sev,
+            active_crystals,
+            spawned_daughters,
+        }
+    }
+
+    /// Renders this system snapshot as a `#![no_std]` zero-allocation Mermaid `flowchart TD` diagram
+    /// directly into `buf`, returning the exact byte count written.
+    #[inline]
+    pub fn format_mermaid_flowchart(&self, buf: &mut [u8]) -> usize {
+        let mut cur = BufCursor { buf, pos: 0 };
+        let regime_str = match EpistemicRegime::from_code(self.regime_code) {
+            EpistemicRegime::KnownCoherent => "KnownCoherent",
+            EpistemicRegime::InternalConflict => "InternalConflict",
+            EpistemicRegime::LiminalVoid => "LiminalVoid",
+        };
+        cur.write_str("flowchart TD\n");
+        cur.write_str("    LVOID[\"LiminalVoid (Root Unknowable Exterior)\"]\n");
+
+        let mut i = 0usize;
+        while i < 7 {
+            let desc = &GCSO_LIMINAL_HORIZON_TOPOLOGY[i];
+            let ch = desc.channel_idx;
+            let active = (self.active_aperture_mask & (1u32 << ch)) != 0;
+            cur.write_str("    ");
+            cur.write_str(desc.node_id);
+            cur.write_str("[\"");
+            cur.write_str(desc.trait_name);
+            cur.write_str(" | Apt:");
+            cur.write_hex_u16(desc.static_aperture_mask);
+            cur.write_str(" | VoidFloor:");
+            cur.write_u8_dec(self.void_floor_q7[ch]);
+            cur.write_str("/127 | Gain:");
+            cur.write_u8_dec(self.aperture_gain_q7[ch]);
+            cur.write_str("/127 | Shift:");
+            cur.write_i8_dec(self.phase_shift_q7[ch]);
+            if active {
+                cur.write_str(" | ACTIVE\"]\n");
+            } else {
+                cur.write_str(" | COLLAPSED\"]\n");
+            }
+            i += 1;
+        }
+
+        cur.write_str("    GW[\"ManifoldGatewaySignal | Apt:");
+        cur.write_hex_u16(APERTURE_MANIFOLD_GATEWAY);
+        cur.write_str(" | Regime:");
+        cur.write_str(regime_str);
+        cur.write_str(" | Conflict:");
+        cur.write_u8_dec(self.conflict_severity_q7);
+        cur.write_str("/127\"]\n");
+
+        cur.write_str("    HUB[\"ActionHub | Apt:");
+        cur.write_hex_u16(APERTURE_ACTION_HUB_WIDE);
+        cur.write_str(" | VoidFloor:");
+        cur.write_u8_dec(self.void_floor_q7[7]);
+        cur.write_str("/127 | Crystals:");
+        cur.write_u8_dec(self.active_crystals);
+        cur.write_str(" | Daughters:");
+        cur.write_u8_dec(self.spawned_daughters);
+        cur.write_str("\"]\n");
+
+        cur.write_str("    LVOID -. \"Cognitive Cut\" .-> N0 & N1 & N2 & N3 & N4 & N5 & N6\n");
+        cur.write_str("    N0 & N1 & N2 & N3 & N4 & N5 & N6 --> GW\n");
+        cur.write_str("    GW --> HUB\n");
+        cur.pos
+    }
+}

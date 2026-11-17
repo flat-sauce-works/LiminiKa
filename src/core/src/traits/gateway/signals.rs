@@ -556,10 +556,23 @@ impl CausalProvenanceReport {
     }
 }
 
-/// Root supertrait for all signals entering the GCSO Manifold Gateway.
-pub trait CausalProvenanceSignal: BranchlessKernel {
+/// Root causal signal supertrait refining [`LiminalVoid`] into a finite 4-axis causal window
+/// for all signals entering the GCSO Manifold Gateway.
+pub trait CausalProvenanceSignal: LiminalVoid + BranchlessKernel {
+    /// Static causal provenance cognitive aperture across system and grounding origins (`0x0000_000F`).
+    const CAUSAL_APERTURE_MASK: u32 = APERTURE_CAUSAL_PROVENANCE;
+
+    /// Type-level complement identifying axes outside this causal window as unknowable (`!APERTURE`).
+    const CAUSAL_UNKNOWABLE_VOID_MASK: u32 = !Self::CAUSAL_APERTURE_MASK;
+
     /// Returns the bitwise provenance flags (`CAUSAL_AXIS_* | CAUSAL_CAUSE_*`) contributed by `self`.
     fn causal_provenance_bits(&self) -> u32;
+
+    /// Returns the active unknowable complement bitmask derived strictly as `!self.causal_provenance_bits()`.
+    #[inline(always)]
+    fn active_unknowable_void_bits(&self) -> u32 {
+        !self.causal_provenance_bits()
+    }
 
     /// Returns the normalized anomaly or constraint severity in $[0.0, 1.0]$.
     #[inline(always)]
@@ -586,6 +599,12 @@ impl<T: CausalProvenanceSignal + ?Sized> CausalProvenanceSignal for &T {
 /// **Origin 1 Supertrait (`SystemConstraintSignal: CausalProvenanceSignal`)**:
 /// Hardware resource, game-coexistence QoS, and EDBC entropy constraints governing compute budgeting.
 pub trait SystemConstraintSignal: CausalProvenanceSignal {
+    /// Static cognitive aperture bit isolating Origin 1 system & QoS telemetry (`1 << 0`).
+    const SYSTEM_APERTURE_MASK: u32 = APERTURE_SYSTEM_CONSTRAINT;
+
+    /// Complement bitmask outside Origin 1 (`!APERTURE_SYSTEM_CONSTRAINT`).
+    const SYSTEM_UNKNOWABLE_VOID_MASK: u32 = !Self::SYSTEM_APERTURE_MASK;
+
     /// Normalized VRAM / system memory pressure in $[0.0, 1.0]$.
     fn system_vram_pressure(&self) -> f32;
 
@@ -1190,6 +1209,13 @@ impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
 /// **Origin 2 Parent Supertrait (`CognitiveGroundingSignal: CausalProvenanceSignal`)**:
 /// Common phase-projection and `.gcso` (mapped-storage) 48-bit section-offset addressing foundation.
 pub trait CognitiveGroundingSignal: CausalProvenanceSignal {
+    /// Static cognitive aperture spanning Origin 2A (Fact), 2B (Persona), and 2C (Guard) (`0x0E`).
+    const GROUNDING_APERTURE_MASK: u32 =
+        APERTURE_OBJECTIVE_FACT | APERTURE_SUBJECTIVE_PERSONA | APERTURE_CONTRADICTION_GUARD;
+
+    /// Complement bitmask outside Origin 2 semantic grounding (`!GROUNDING_APERTURE_MASK`).
+    const GROUNDING_UNKNOWABLE_VOID_MASK: u32 = !Self::GROUNDING_APERTURE_MASK;
+
     /// Projects this grounding signal onto the 64-head $SO(2)^{64}$ Q7 phase manifold.
     fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS];
 
@@ -1281,6 +1307,12 @@ impl<T: CognitiveGroundingSignal + ?Sized> CognitiveGroundingSignal for &T {
 /// **Origin 2-A Subtrait (`ObjectiveFactSignal: CognitiveGroundingSignal`)**:
 /// External RAG chunks, database records, and objective conversation logs (`Slot 2`, narrow RIPA clamp `0.14 rad`).
 pub trait ObjectiveFactSignal: CognitiveGroundingSignal {
+    /// Narrow single-axis cognitive aperture for factual grounding (`1 << 1`).
+    const FACT_APERTURE_MASK: u32 = APERTURE_OBJECTIVE_FACT;
+
+    /// Complement bitmask treating non-factual axes as unknowable (`!APERTURE_OBJECTIVE_FACT`).
+    const FACT_UNKNOWABLE_VOID_MASK: u32 = !Self::FACT_APERTURE_MASK;
+
     /// RIPA phase clamp limit in radians for objective factual grounding (defaults to `0.14 rad`).
     #[inline(always)]
     fn fact_ripa_clamp_rad(&self) -> f32 {
@@ -1308,6 +1340,12 @@ impl<T: ObjectiveFactSignal + ?Sized> ObjectiveFactSignal for &T {
 /// **Origin 2-B Subtrait (`SubjectivePersonaSignal: CognitiveGroundingSignal`)**:
 /// System prompts, character beliefs, stylistic tone, and subjective episodic memory (`Slot 1`, wide RIPA clamp `0.24 rad`).
 pub trait SubjectivePersonaSignal: CognitiveGroundingSignal {
+    /// Narrow single-axis cognitive aperture for subjective persona tone (`1 << 2`).
+    const PERSONA_APERTURE_MASK: u32 = APERTURE_SUBJECTIVE_PERSONA;
+
+    /// Complement bitmask treating non-persona axes as unknowable (`!APERTURE_SUBJECTIVE_PERSONA`).
+    const PERSONA_UNKNOWABLE_VOID_MASK: u32 = !Self::PERSONA_APERTURE_MASK;
+
     /// RIPA phase clamp limit in radians for subjective persona modulation (defaults to `0.24 rad`).
     #[inline(always)]
     fn persona_ripa_clamp_rad(&self) -> f32 {
@@ -1336,6 +1374,12 @@ impl<T: SubjectivePersonaSignal + ?Sized> SubjectivePersonaSignal for &T {
 /// Sheaf cohomology obstruction ($H^1(K; \mathcal{F}) \neq 0$) and [`ContrastivePhaseBloomFilter`]
 /// repetition / self-contradiction guard triggering anti-phase $-\boldsymbol{\Delta\theta}$ escape.
 pub trait ContradictionGuardSignal: CognitiveGroundingSignal {
+    /// Single-axis cognitive aperture for contradiction guard repulsion (`1 << 3`).
+    const GUARD_APERTURE_MASK: u32 = APERTURE_CONTRADICTION_GUARD;
+
+    /// Complement bitmask treating non-guard axes as unknowable (`!APERTURE_CONTRADICTION_GUARD`).
+    const GUARD_UNKNOWABLE_VOID_MASK: u32 = !Self::GUARD_APERTURE_MASK;
+
     /// Evaluates repulsive severity in $[0.0, 1.0]$ against `candidate_phases`.
     fn evaluate_repulsion_severity(
         &self,
@@ -2212,6 +2256,23 @@ impl GatewayFrame {
 
 /// **The Single Composite Manifold Gateway Trait (`ManifoldGatewaySignal: CausalProvenanceSignal`)**.
 pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
+    /// Wide composite cognitive aperture combining causal origins, circuit plasticity, KV phase
+    /// cache, relative coupling, and dissipative crystallization (`0x0000_00FF`).
+    const GATEWAY_APERTURE_MASK: u32 = APERTURE_MANIFOLD_GATEWAY;
+
+    /// Complement bitmask outside the Gateway horizon (`!APERTURE_MANIFOLD_GATEWAY`).
+    const GATEWAY_UNKNOWABLE_VOID_MASK: u32 = !Self::GATEWAY_APERTURE_MASK;
+
+    /// Branchlessly partitions `self.causal_provenance_bits()` into
+    /// `(cognized_bits, unknowable_void_bits)` for [`Self::GATEWAY_APERTURE_MASK`].
+    #[inline(always)]
+    fn partition_gateway_horizon(&self) -> (u32, u32) {
+        self.partition_cognitive_and_unknowable_bits(
+            Self::GATEWAY_APERTURE_MASK,
+            self.causal_provenance_bits(),
+        )
+    }
+
     /// Synthesizes all constituent blanket signals into a 128-byte [`GatewayFrame`] in
     /// constant-time branchless arithmetic ($C_{\mathrm{alloc}} = 0$).
     fn synthesize_gateway_frame(&self) -> GatewayFrame;

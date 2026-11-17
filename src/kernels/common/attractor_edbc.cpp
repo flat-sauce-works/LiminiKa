@@ -258,7 +258,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_destroy(gcso_attractor_fie
 }
 
 // ===================================================================
-// EDBC Engine & CVoid Barrier Controls Implementation
+// EDBC Engine & LiminalVoid Barrier Controls Implementation
 // ===================================================================
 
 /**
@@ -358,7 +358,7 @@ gcso_edbc_eval_stateful(gcso_edbc_controller_handle_t controller, float token_z_
 }
 
 /**
- * @brief Computes CVoid Coherent Vector Alignment Metric for Out-of-Distribution Latent Space.
+ * @brief Computes LiminalVoid Vector Alignment Metric for Out-of-Distribution Latent Space.
  *
  * Evaluates the mean squared energy of key vector states across 128-byte dyadic cacheline pairs.
  * Uses 4 independent 256-bit AVX2 FMA accumulators (32 floats = 128 bytes per loop iteration)
@@ -370,8 +370,8 @@ gcso_edbc_eval_stateful(gcso_edbc_controller_handle_t controller, float token_z_
  * @return GCSO_SUCCESS or error status code.
  */
 GCSO_API gcso_status_t GCSO_CALL
-gcso_cvoid_eval_dyadic128(const float* GCSO_RESTRICT key_vector, size_t dim,
-                          float* GCSO_RESTRICT void_score_out) GCSO_NOEXCEPT {
+gcso_liminal_void_eval_dyadic128(const float* GCSO_RESTRICT key_vector, size_t dim,
+                                 float* GCSO_RESTRICT void_score_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(key_vector == nullptr || void_score_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
@@ -482,7 +482,7 @@ gcso_cvoid_eval_dyadic128(const float* GCSO_RESTRICT key_vector, size_t dim,
  * @param barrier_out Pointer to receive computed barrier height.
  * @return GCSO_SUCCESS or GCSO_ERROR_EDBC_SINGULARITY.
  */
-GCSO_API gcso_status_t GCSO_CALL gcso_cvoid_eval_barrier(
+GCSO_API gcso_status_t GCSO_CALL gcso_liminal_void_eval_barrier(
     float void_score, float tau_eff, float* GCSO_RESTRICT barrier_out) GCSO_NOEXCEPT {
     if (GCSO_UNLIKELY(barrier_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;

@@ -1,7 +1,8 @@
 // name: src/core/src/traits/branchless/mod.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Lv.0 Foundation 3: `BranchlessKernel` blanket trait, 64-head phase algebra
+//! Lv.0 Foundation 3: [`LiminalVoid`] root epistemic boundary supertrait, [`BranchlessKernel`]
+//! blanket trait, 64-head phase algebra
 //! (word-uniform accelerated coherence & circular resultant, register-resident unified-field
 //! folding, Phase-Proximity Gravity manifold folding, zero-hyperparameter resonant pull,
 //! $S^1$ geodesic weighted folding, Online Toroidal $k$-Means M-step centroid updates,

@@ -1,12 +1,12 @@
 // name: src/core/src/abi/entropy_attractor.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Unified Attractor Manifold, Online Toroidal k-Means, synergy, Entropy Control (EDBC), and CVoid FFI.
+//! Unified Attractor Manifold, Online Toroidal k-Means, synergy, Entropy Control (EDBC), and LiminalVoid FFI.
 
 use super::*;
 
 // ===================================================================
-// 5. Single Unified Attractor Manifold, Online Toroidal k-Means, Synergy, EDBC & CVoid Interface
+// 5. Single Unified Attractor Manifold, Online Toroidal k-Means, Synergy, EDBC & LiminalVoid Interface
 // ===================================================================
 
 /// Allocates a Macro Attractor Field instance.
@@ -658,13 +658,13 @@ pub unsafe extern "C" fn gcso_edbc_eval_stateful(
     })
 }
 
-/// Computes the CVoid Coherent Vector Alignment Metric ($\mathcal{C}_{\mathrm{void}}$) for
+/// Computes the LiminalVoid Vector Alignment Metric ($\mathcal{L}_{\mathrm{void}}$) for
 /// Out-of-Distribution Latent Space over a 32-byte aligned Key vector.
 ///
 /// # Safety
 /// `key_vector` (32B aligned) and `void_score_out` must be non-null and valid.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_cvoid_eval_dyadic128(
+pub unsafe extern "C" fn gcso_liminal_void_eval_dyadic128(
     key_vector: *const f32,
     dim: usize,
     void_score_out: *mut f32,
@@ -679,18 +679,18 @@ pub unsafe extern "C" fn gcso_cvoid_eval_dyadic128(
             )
         };
 
-        EntropyController::default().eval_cvoid_dyadic128(&key_aligned, &mut out_score)?;
+        EntropyController::default().eval_liminal_void_dyadic128(&key_aligned, &mut out_score)?;
         Ok(GCSO_SUCCESS)
     })
 }
 
-/// Evaluates the Eyring-Kramers potential barrier height ($\Delta V = \tau_{\mathrm{eff}} / \mathcal{C}_{\mathrm{void}}$)
+/// Evaluates the Eyring-Kramers potential barrier height ($\Delta V = \tau_{\mathrm{eff}} / \mathcal{L}_{\mathrm{void}}$)
 /// with branchless singularity guards.
 ///
 /// # Safety
 /// `barrier_out` must be non-null and naturally aligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_cvoid_eval_barrier(
+pub unsafe extern "C" fn gcso_liminal_void_eval_barrier(
     void_score: f32,
     tau_eff: f32,
     barrier_out: *mut f32,
@@ -704,13 +704,13 @@ pub unsafe extern "C" fn gcso_cvoid_eval_barrier(
 }
 
 /// Evaluates the scale-invariant Pitchfork Bifurcation potential barrier height ($\Delta V$)
-/// according to GCSO Whitepaper Lemma 3.1: $\Delta V = \frac{\alpha^2 (\mathcal{C}_{\mathrm{void}} - \tau_{\mathrm{eff}})^2}{4 \beta d_{\mathrm{head}}}$.
+/// according to GCSO Whitepaper Lemma 3.1: $\Delta V = \frac{\alpha^2 (\mathcal{L}_{\mathrm{void}} - \tau_{\mathrm{eff}})^2}{4 \beta d_{\mathrm{head}}}$.
 ///
 /// # Safety
 /// `barrier_out` must be non-null and naturally aligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_cvoid_eval_barrier_pitchfork(
-    cvoid: f32,
+pub unsafe extern "C" fn gcso_liminal_void_eval_barrier_pitchfork(
+    liminal_void: f32,
     tau_eff: f32,
     alpha: f32,
     beta: f32,
@@ -720,7 +720,7 @@ pub unsafe extern "C" fn gcso_cvoid_eval_barrier_pitchfork(
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
         let mut out_val = unsafe { FfiHandleMut::from_raw(barrier_out)? };
-        *out_val = eval_barrier_pitchfork(cvoid, tau_eff, alpha, beta, head_dim)?;
+        *out_val = eval_barrier_pitchfork(liminal_void, tau_eff, alpha, beta, head_dim)?;
         Ok(GCSO_SUCCESS)
     })
 }

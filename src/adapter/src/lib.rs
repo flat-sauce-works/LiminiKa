@@ -20,8 +20,9 @@ use liminika_core::traits::aligned::{
 use liminika_core::traits::gateway::{
     ActionHubGatewayExt, AdaptiveThresholdPolicy, CausalProvenanceReport, CausalProvenanceSignal,
     CognitiveCircuitActivation, CognitiveCircuitBankOps, CognitiveCircuitPlasticity,
-    CognitiveTrajectoryLedger, GatewayFrame, GatewayPhaseSteeringExt, GatewayRank1SteeringExt,
-    GuardPhaseAnchor, ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact,
+    CognitiveTrajectoryLedger, DissipativeOverflowReport, EpistemicHorizonReading, GatewayFrame,
+    GatewayPhaseSteeringExt, GatewayRank1SteeringExt, GuardPhaseAnchor, LiminalApertureField,
+    LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact,
     StigmergicThresholdPolicy, SubjectivePersona, SwarmScaleGranularity, SystemConstraint,
     CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
 };

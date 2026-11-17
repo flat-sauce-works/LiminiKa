@@ -818,7 +818,7 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
 /// Outcome returned by [`RamPhaseKvGopCache::step_with_gateway_autonomous`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RamPhaseKvStepOutcome {
-    /// Query carried neither a context fingerprint nor factual grounding (`cvoid`).
+    /// Query carried neither a context fingerprint nor factual grounding (`LiminalVoid`).
     SkippedVoid,
     /// No existing slot resonated above the autonomous threshold; stored a new I-Frame slot.
     StoredKeyframe {

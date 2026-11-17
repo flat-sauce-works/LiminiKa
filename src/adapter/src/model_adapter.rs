@@ -214,6 +214,8 @@ pub struct ModelSteeringAdapter {
     system_constraint: SystemConstraint<()>,
     probe_baseline: ManifoldProbeBaseline,
     threshold_policy: AdaptiveThresholdPolicy,
+    aperture_field: LiminalApertureField,
+    last_horizon: EpistemicHorizonReading,
 }
 
 impl ModelSteeringAdapter {
@@ -268,6 +270,8 @@ impl ModelSteeringAdapter {
             system_constraint,
             probe_baseline,
             threshold_policy,
+            aperture_field: LiminalApertureField::default(),
+            last_horizon: EpistemicHorizonReading::default(),
         })
     }
 
@@ -356,8 +360,63 @@ impl ModelSteeringAdapter {
     ) -> CognitiveCircuitActivation {
         let act = bank.evaluate_bank_activation(bias_words, input_words, scale);
         bank.reinforce_bank(&act, converged);
-        self.set_active_circuit(bank.to_consolidated_ledger());
+        let ledger = bank.to_consolidated_ledger();
+        self.set_active_circuit(ledger);
+        let horizon = self.last_horizon;
+        self.aperture_field
+            .adapt_from_circuit_and_overflow_branchless(&ledger, &horizon, None);
         act
+    }
+
+    /// Returns a shared reference to the live [`LiminalApertureField`] governing dynamic
+    /// `LiminalVoid` channel thresholds and cognitive window gains.
+    #[must_use]
+    pub const fn aperture_field(&self) -> &LiminalApertureField {
+        &self.aperture_field
+    }
+
+    /// Returns a mutable reference to the live [`LiminalApertureField`].
+    pub fn aperture_field_mut(&mut self) -> &mut LiminalApertureField {
+        &mut self.aperture_field
+    }
+
+    /// Returns the most recently observed [`EpistemicHorizonReading`].
+    #[must_use]
+    pub const fn last_horizon(&self) -> &EpistemicHorizonReading {
+        &self.last_horizon
+    }
+
+    /// Updates `last_horizon` and adapts [`LiminalApertureField`] branchlessly from the active
+    /// cognitive circuit trajectory, `horizon`, and optional [`DissipativeOverflowReport`].
+    pub fn adapt_liminal_aperture(
+        &mut self,
+        horizon: &EpistemicHorizonReading,
+        overflow_opt: Option<&DissipativeOverflowReport>,
+    ) {
+        self.last_horizon = *horizon;
+        let ledger = self.active_circuit().unwrap_or_default();
+        self.aperture_field
+            .adapt_from_circuit_and_overflow_branchless(&ledger, horizon, overflow_opt);
+    }
+
+    /// Captures the live [`LiminalTopologyTelemetrySnapshot`] and renders a self-introspecting
+    /// Mermaid `flowchart TD` diagram of the active trait hierarchy, cognitive aperture masks,
+    /// `LiminalVoid` floors, and crystal populations.
+    #[must_use]
+    pub fn render_liminal_topology_mermaid(
+        &self,
+        active_crystals: u8,
+        spawned_daughters: u8,
+    ) -> String {
+        let snap = LiminalTopologyTelemetrySnapshot::capture(
+            &self.aperture_field,
+            &self.last_horizon,
+            active_crystals,
+            spawned_daughters,
+        );
+        let mut buf = [0u8; 2048];
+        let written = snap.format_mermaid_flowchart(&mut buf);
+        String::from_utf8_lossy(&buf[..written]).into_owned()
     }
 
     /// Returns a mutable reference to the dynamic [`AdaptiveThresholdPolicy`].
@@ -871,6 +930,11 @@ impl ModelSteeringAdapter {
                 &frm_w,
                 SwarmScaleGranularity::MacroCoalition,
             );
+        }
+        if self.aperture_field.adaptation_epochs > 0 {
+            frame = self
+                .aperture_field
+                .modulate_gateway_frame_branchless(frame, &self.last_horizon);
         }
 
         let gain = {
