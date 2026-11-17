@@ -232,8 +232,7 @@ typedef enum gcso_stigmergic_action_decision GCSO_ENUM_UNDERLYING(uint8_t){
  * @brief 3-regime epistemic horizon classification matching Rust EpistemicRegime (0..=2).
  */
 typedef enum gcso_epistemic_regime GCSO_ENUM_UNDERLYING(uint8_t){
-    GCSO_EPISTEMIC_KNOWN_COHERENT = 0,
-    GCSO_EPISTEMIC_INTERNAL_CONFLICT = 1,
+    GCSO_EPISTEMIC_KNOWN_COHERENT = 0, GCSO_EPISTEMIC_INTERNAL_CONFLICT = 1,
     GCSO_EPISTEMIC_LIMINAL_VOID = 2} gcso_epistemic_regime_enum_t;
 
 /**
@@ -1086,16 +1085,20 @@ GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_granule_field_t, serendipity_floor_q
 GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_granule_field_t, adaptation_epochs) == 28,
                    "gcso_stigmergic_granule_field_t::adaptation_epochs offset mismatch");
 
-GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_venn_serendipity_report_t, venn_intersection_energy) == 0,
-                   "gcso_stigmergic_venn_serendipity_report_t::venn_intersection_energy offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_venn_serendipity_report_t, dominant_overlap_anchor_id) == 12,
-                   "gcso_stigmergic_venn_serendipity_report_t::dominant_overlap_anchor_id offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_venn_serendipity_report_t, serendipitous_seed_word) == 16,
-                   "gcso_stigmergic_venn_serendipity_report_t::serendipitous_seed_word offset mismatch");
+GCSO_STATIC_ASSERT(
+    offsetof(gcso_stigmergic_venn_serendipity_report_t, venn_intersection_energy) == 0,
+    "gcso_stigmergic_venn_serendipity_report_t::venn_intersection_energy offset mismatch");
+GCSO_STATIC_ASSERT(
+    offsetof(gcso_stigmergic_venn_serendipity_report_t, dominant_overlap_anchor_id) == 12,
+    "gcso_stigmergic_venn_serendipity_report_t::dominant_overlap_anchor_id offset mismatch");
+GCSO_STATIC_ASSERT(
+    offsetof(gcso_stigmergic_venn_serendipity_report_t, serendipitous_seed_word) == 16,
+    "gcso_stigmergic_venn_serendipity_report_t::serendipitous_seed_word offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_venn_serendipity_report_t, venn_core_mask) == 24,
                    "gcso_stigmergic_venn_serendipity_report_t::venn_core_mask offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_venn_serendipity_report_t, serendipity_triggered) == 30,
-                   "gcso_stigmergic_venn_serendipity_report_t::serendipity_triggered offset mismatch");
+GCSO_STATIC_ASSERT(
+    offsetof(gcso_stigmergic_venn_serendipity_report_t, serendipity_triggered) == 30,
+    "gcso_stigmergic_venn_serendipity_report_t::serendipity_triggered offset mismatch");
 
 GCSO_STATIC_ASSERT(offsetof(gcso_autonomous_core_layer_stack_t, liminal_void_layer) == 0,
                    "gcso_autonomous_core_layer_stack_t::liminal_void_layer offset mismatch");
