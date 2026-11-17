@@ -154,10 +154,10 @@ pub use self::cold_path::{
     StigmergicCohomologyCoordinator, SystemCapabilityQuery,
 };
 pub use self::gateway::{
-    evaluate_epistemic_horizon_words_64, mean_q7_phase_tag_64, project_bytes_swar_to_q7_64,
-    project_bytes_swar_to_words_64, project_f32_slice_to_q7_64, project_f32_slice_to_words_64,
-    project_gateway_signal_at_scale, synthesize_multi_origin_gateway_frame,
-    synthesize_multi_origin_gateway_frame_with_words,
+    evaluate_epistemic_horizon_words_64, fold_fractal_nodes_words_64, mean_q7_phase_tag_64,
+    project_bytes_swar_to_q7_64, project_bytes_swar_to_words_64, project_f32_slice_to_q7_64,
+    project_f32_slice_to_words_64, project_gateway_signal_at_scale,
+    synthesize_multi_origin_gateway_frame, synthesize_multi_origin_gateway_frame_with_words,
     synthesize_relative_gateway_from_perspective_words_64, ActionHubGatewayExt,
     ActionHubScaleOrchestrator, CausalProvenanceReport, CausalProvenanceSignal,
     CognitiveCircuitActivation, CognitiveCircuitBank, CognitiveCircuitBankOps,
@@ -284,6 +284,8 @@ pub(crate) use self::action_hub::{
 };
 pub use self::action_hub::{fuse_lazy_unwrap_and_qdps_into_aligned_64, ActionHub};
 pub(crate) use self::telemetry::select_rewire_bridge_and_modulate_with_preloaded_words_64;
+pub use crate::entropy_control::EntropyClosedLoopCoordinator;
+pub use crate::phase_steering::PhaseSteeringClosedLoop;
 
 // ===================================================================
 // Ergonomic Prelude Module
@@ -330,9 +332,10 @@ pub mod prelude {
         StigmergicCohomologyCoordinator, SystemCapabilityQuery,
     };
     pub use super::gateway::{
-        evaluate_epistemic_horizon_words_64, mean_q7_phase_tag_64, project_bytes_swar_to_q7_64,
-        project_bytes_swar_to_words_64, project_f32_slice_to_q7_64, project_f32_slice_to_words_64,
-        synthesize_multi_origin_gateway_frame, synthesize_multi_origin_gateway_frame_with_words,
+        evaluate_epistemic_horizon_words_64, fold_fractal_nodes_words_64, mean_q7_phase_tag_64,
+        project_bytes_swar_to_q7_64, project_bytes_swar_to_words_64, project_f32_slice_to_q7_64,
+        project_f32_slice_to_words_64, synthesize_multi_origin_gateway_frame,
+        synthesize_multi_origin_gateway_frame_with_words,
         synthesize_relative_gateway_from_perspective_words_64, ActionHubGatewayExt,
         CausalProvenanceReport, CausalProvenanceSignal, CognitiveGroundingSignal,
         ContradictionGuard, ContradictionGuardSignal, CrystallizedAttractorRecord,
@@ -414,7 +417,7 @@ pub mod prelude {
         TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SWARM_ESCALATED, TRAIL_FLAG_SWARM_RESOLVED,
         TRAIL_FLAG_SYNERGY_RESONANCE,
     };
-    pub use super::ActionHub;
+    pub use super::{ActionHub, EntropyClosedLoopCoordinator, PhaseSteeringClosedLoop};
 }
 
 // ===================================================================

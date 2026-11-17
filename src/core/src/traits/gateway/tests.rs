@@ -1388,3 +1388,73 @@ fn liminal_void_supertrait_aperture_shifting_and_mermaid_self_introspection() {
     assert!(diagram.contains("Crystals:4"));
     assert!(diagram.contains("Daughters:1"));
 }
+
+#[test]
+fn fractal_relative_node_self_similarity_across_trail_crystal_and_nested_arrays() {
+    use crate::abi::gcso_pointer_trail_t;
+    use crate::attractor::{AttractorAnchor, CrystallizedAnchorRecord};
+
+    let mut t0 = gcso_pointer_trail_t {
+        target_anchor_id: 10,
+        stigmergic_density: 1.5,
+        ..Default::default()
+    };
+    t0.accumulated_phase_delta = [0i8; MAX_ATTENTION_HEADS];
+
+    let mut t1 = gcso_pointer_trail_t {
+        target_anchor_id: 20,
+        stigmergic_density: 2.0,
+        ..Default::default()
+    };
+    t1.accumulated_phase_delta = [48i8; MAX_ATTENTION_HEADS];
+
+    // Fixed-size array [Trail; 2] and nested [[Trail; 2]; 2] act as self-similar RelativeAttractorNodes.
+    let pair_a = [t0, t0];
+    let pair_b = [t1, t1];
+    let nested = [pair_a, pair_b];
+    assert!(nested.relative_energy() > 6.5);
+    assert_eq!(nested[1].relative_anchor_id(), 20);
+
+    let mut coupling = RelativeCouplingMatrix::<2>::new();
+    coupling.set_symmetric(0, 1, -120);
+    let q_t1 = load_q7_words_64(&t1.accumulated_phase_delta);
+    let (frame_nested, horizon_nested) =
+        <[gcso_pointer_trail_t; 2]>::synthesize_slice_relative_gateway(
+            &nested,
+            coupling.row(0),
+            &q_t1,
+            0.35,
+        );
+    assert_eq!(horizon_nested.regime(), EpistemicRegime::InternalConflict);
+    assert_eq!(horizon_nested.opposing_anchor_id, 20);
+    assert!(frame_nested.is_repulsed());
+
+    // Heterogeneous pair (ObjectiveFact, SubjectivePersona) implements RelativeAttractorNode directly.
+    let fact = ObjectiveFact::new([0i8; MAX_ATTENTION_HEADS], 1.2, 0x0010_0000, 31);
+    let persona = SubjectivePersona::new([12i8; MAX_ATTENTION_HEADS], 2.5, 0x0020_0000, 32);
+    let hetero = (fact, persona);
+    assert!((hetero.relative_energy() - 3.7).abs() < 1e-5);
+    assert_eq!(hetero.relative_anchor_id(), 32);
+
+    // Bidirectional bridge between CrystallizedAnchorRecord and CrystallizedAttractorRecord.
+    let mut legacy_anchor = AttractorAnchor {
+        id: 55,
+        weight: 2.2,
+        pull_force: 1.8,
+        is_active: 1,
+        is_crystallized: 1,
+        phase_deltas: [20i8; MAX_ATTENTION_HEADS],
+        ..Default::default()
+    };
+    let snap_rec = CrystallizedAnchorRecord::from_anchor(&legacy_anchor);
+    let crystal_rec = snap_rec.to_crystal_record(ATTRACTOR_SLOT_KNOWLEDGE);
+    assert!(crystal_rec.verify_integrity());
+    assert_eq!(crystal_rec.anchor_id, 55);
+    assert_eq!(crystal_rec.dominant_slot, ATTRACTOR_SLOT_KNOWLEDGE);
+    let roundtrip_snap = CrystallizedAnchorRecord::from_crystal_record(&crystal_rec);
+    assert_eq!(roundtrip_snap.id, 55);
+    assert_eq!(roundtrip_snap.phase_deltas, legacy_anchor.phase_deltas);
+    legacy_anchor.id = 55;
+    assert_eq!(legacy_anchor.relative_anchor_id(), 55);
+    assert_eq!(roundtrip_snap.relative_anchor_id(), 55);
+}

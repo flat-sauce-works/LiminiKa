@@ -281,6 +281,19 @@ impl CrystallizedAnchorRecord {
         rec
     }
 
+    /// Converts this [`CrystallizedAnchorRecord`] into a CRC32-stamped [`CrystallizedAttractorRecord`]
+    /// assigned to an explicit `dominant_slot` lane (`ATTRACTOR_SLOT_*`), bridging the legacy
+    /// snapshot representation with [`crate::traits::gateway::RelativeCouplingMatrix`] and
+    /// dissipative crystallization.
+    #[inline]
+    #[must_use]
+    pub const fn to_crystal_record(&self, dominant_slot: u8) -> CrystallizedAttractorRecord {
+        let mut rec = self.to_crystallized_attractor_record_unstamped();
+        rec.dominant_slot = dominant_slot & ((MAX_ATTRACTOR_DOMAINS as u8) - 1);
+        rec.checksum_crc32 = rec.compute_payload_crc32_with_words(self.phase_words_ref());
+        rec
+    }
+
     /// Constructs a [`CrystallizedAnchorRecord`] from a 2-Origin Gateway / Online Toroidal $k$-Means
     /// [`CrystallizedAttractorRecord`].
     #[inline]
@@ -308,6 +321,13 @@ impl CrystallizedAnchorRecord {
             last_active_step: 0,
             reserved_padding: [0; 16],
         }
+    }
+
+    /// Alias bridging a [`CrystallizedAttractorRecord`] back into a [`CrystallizedAnchorRecord`].
+    #[inline]
+    #[must_use]
+    pub const fn from_crystal_record(rec: &CrystallizedAttractorRecord) -> Self {
+        Self::from_crystallized_attractor_record(rec)
     }
 }
 

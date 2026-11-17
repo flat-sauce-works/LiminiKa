@@ -111,12 +111,14 @@ pub use crate::traits::primitives::{
 
 pub mod circuit;
 pub mod epistemic;
+pub mod frame;
 pub mod kv_cache;
 pub mod orchestrator;
 pub mod signals;
 
 pub use self::circuit::*;
 pub use self::epistemic::*;
+pub use self::frame::*;
 pub use self::kv_cache::*;
 pub use self::orchestrator::*;
 pub use self::signals::*;

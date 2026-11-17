@@ -337,6 +337,175 @@ impl RelativeAttractorNode for GuardPhaseAnchor {
     }
 }
 
+impl RelativeAttractorNode for gcso_pointer_trail_t {
+    #[inline(always)]
+    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+        *trail_phase_words_ref(self)
+    }
+    #[inline(always)]
+    fn relative_energy(&self) -> f32 {
+        branchless_relu_f32(self.stigmergic_density)
+    }
+    #[inline(always)]
+    fn relative_anchor_id(&self) -> u32 {
+        self.target_anchor_id
+    }
+}
+
+impl RelativeAttractorNode for ScaleLayerProjection {
+    #[inline(always)]
+    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+        *self.frame.phase_words_ref()
+    }
+    #[inline(always)]
+    fn relative_energy(&self) -> f32 {
+        branchless_relu_f32(self.frame.effective_energy)
+    }
+    #[inline(always)]
+    fn relative_anchor_id(&self) -> u32 {
+        self.frame.target_anchor_id
+    }
+}
+
+impl RelativeAttractorNode for crate::attractor::AttractorAnchor {
+    #[inline(always)]
+    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+        *self.phase_words_ref()
+    }
+    #[inline(always)]
+    fn relative_energy(&self) -> f32 {
+        branchless_select_f32(
+            (self.is_active != 0) & (self.id != 0),
+            branchless_relu_f32(self.weight),
+            0.0,
+        )
+    }
+    #[inline(always)]
+    fn relative_anchor_id(&self) -> u32 {
+        self.id
+    }
+}
+
+impl RelativeAttractorNode for crate::attractor::CrystallizedAnchorRecord {
+    #[inline(always)]
+    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+        load_q7_words_64(&self.phase_deltas)
+    }
+    #[inline(always)]
+    fn relative_energy(&self) -> f32 {
+        branchless_select_f32(
+            (self.is_active != 0) & (self.id != 0),
+            branchless_relu_f32(self.weight),
+            0.0,
+        )
+    }
+    #[inline(always)]
+    fn relative_anchor_id(&self) -> u32 {
+        self.id
+    }
+}
+
+#[inline]
+fn accumulate_words_sincos_weighted(
+    nw: &[u64; NUM_SWARM_MICRO_CELLS],
+    weight: f32,
+    sin_acc: &mut [f32; MAX_ATTENTION_HEADS],
+    cos_acc: &mut [f32; MAX_ATTENTION_HEADS],
+) {
+    let mut cell = 0usize;
+    while cell < NUM_SWARM_MICRO_CELLS {
+        let word = nw[cell];
+        let base = cell << 3;
+        let mut lane = 0usize;
+        while lane < 8 {
+            let q7 = ((word >> (lane << 3)) & 0xFF) as u8 as i8;
+            let (s_val, c_val) = branchless_sincos_q7(q7);
+            let h = base + lane;
+            sin_acc[h] += weight * s_val;
+            cos_acc[h] += weight * c_val;
+            lane += 1;
+        }
+        cell += 1;
+    }
+}
+
+/// Self-similarly folds an arbitrary slice of [`RelativeAttractorNode`]s on $SO(2)^{64}$ into
+/// `(folded_phase_words, total_energy, dominant_anchor_id)` strictly branchlessly (`0` allocations).
+#[inline]
+#[must_use]
+pub fn fold_fractal_nodes_words_64<Node: RelativeAttractorNode>(
+    nodes: &[Node],
+) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, u32) {
+    let mut sin_acc = [0.0_f32; MAX_ATTENTION_HEADS];
+    let mut cos_acc = [0.0_f32; MAX_ATTENTION_HEADS];
+    let mut total_energy = 0.0_f32;
+    let mut best_energy = 0.0_f32;
+    let mut best_anchor_id = 0u32;
+
+    let mut idx = 0usize;
+    while idx < nodes.len() {
+        let node = &nodes[idx];
+        let e = branchless_relu_f32(node.relative_energy());
+        let nw = node.relative_phase_words_64();
+        accumulate_words_sincos_weighted(&nw, e, &mut sin_acc, &mut cos_acc);
+        total_energy += e;
+        let take_best = e > best_energy;
+        best_energy = branchless_select_f32(take_best, e, best_energy);
+        best_anchor_id =
+            branchless_select_u32(take_best, node.relative_anchor_id(), best_anchor_id);
+        idx += 1;
+    }
+
+    let words = fold_sincos64_to_words(&sin_acc, &cos_acc);
+    (words, total_energy, best_anchor_id)
+}
+
+impl<A: RelativeAttractorNode, B: RelativeAttractorNode> RelativeAttractorNode for (A, B) {
+    #[inline]
+    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+        let mut sin_acc = [0.0_f32; MAX_ATTENTION_HEADS];
+        let mut cos_acc = [0.0_f32; MAX_ATTENTION_HEADS];
+        let ea = branchless_relu_f32(self.0.relative_energy());
+        let eb = branchless_relu_f32(self.1.relative_energy());
+        accumulate_words_sincos_weighted(&self.0.relative_phase_words_64(), ea, &mut sin_acc, &mut cos_acc);
+        accumulate_words_sincos_weighted(&self.1.relative_phase_words_64(), eb, &mut sin_acc, &mut cos_acc);
+        fold_sincos64_to_words(&sin_acc, &cos_acc)
+    }
+
+    #[inline(always)]
+    fn relative_energy(&self) -> f32 {
+        branchless_relu_f32(self.0.relative_energy()) + branchless_relu_f32(self.1.relative_energy())
+    }
+
+    #[inline(always)]
+    fn relative_anchor_id(&self) -> u32 {
+        let ea = branchless_relu_f32(self.0.relative_energy());
+        let eb = branchless_relu_f32(self.1.relative_energy());
+        branchless_select_u32(
+            eb > ea,
+            self.1.relative_anchor_id(),
+            self.0.relative_anchor_id(),
+        )
+    }
+}
+
+impl<Node: RelativeAttractorNode, const K: usize> RelativeAttractorNode for [Node; K] {
+    #[inline]
+    fn relative_phase_words_64(&self) -> [u64; NUM_SWARM_MICRO_CELLS] {
+        fold_fractal_nodes_words_64(self.as_slice()).0
+    }
+
+    #[inline]
+    fn relative_energy(&self) -> f32 {
+        fold_fractal_nodes_words_64(self.as_slice()).1
+    }
+
+    #[inline]
+    fn relative_anchor_id(&self) -> u32 {
+        fold_fractal_nodes_words_64(self.as_slice()).2
+    }
+}
+
 /// Fixed-capacity stack-resident signed relational coupling matrix (`[[i8; N]; N]`) over $N$
 /// attractors (`#![no_std]`, $C_{\mathrm{alloc}} = 0$).
 ///
@@ -754,6 +923,15 @@ pub trait EpistemicManifoldOps: RelativeAttractorNode {
         Self: Sized,
     {
         evaluate_epistemic_horizon_words_64(slice, query_words, coupling_row_q7, horizon_floor)
+    }
+
+    /// Self-similarly folds a slice of `Self` on $SO(2)^{64}$ into `(phase_words, total_energy, dominant_anchor_id)`.
+    #[inline(always)]
+    fn fold_slice_as_fractal_node(slice: &[Self]) -> ([u64; NUM_SWARM_MICRO_CELLS], f32, u32)
+    where
+        Self: Sized,
+    {
+        fold_fractal_nodes_words_64(slice)
     }
 
     /// Synthesizes a perspective-relative [`GatewayFrame`] and [`EpistemicHorizonReading`] over

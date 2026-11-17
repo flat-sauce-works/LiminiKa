@@ -6,11 +6,14 @@
 //! This crate serves as the primary low-level runtime engine for `LiminiKa`, implementing the
 //! Geometric Cellular Sheaf Orchestrator (GCSO) architecture targeting 2–4 GB VRAM environments.
 //!
-//! # Architecture: `1 + 8` Flat Trait Topology (`ActionHub` + 2 Observers + Gateway)
+//! # Architecture: `LiminalVoid` Root + `1 + 8` Trait Topology (`ActionHub` + 2 Observers + Gateway)
+//! - **`LiminalVoid` ([`crate::traits::LiminalVoid`])**: Root epistemic supertrait defining the
+//!   unknowable exterior beyond any trait's cognitive aperture (`!APERTURE_MASK`), gating
+//!   out-of-horizon steering cleanly to zero without data-dependent branches.
 //! - **`ActionHub` (Core Sidecar State & Capability Ledger, [`crate::traits::ActionHub`])**: The
-//!   foundational micro composite ledger of state and branchless capabilities (`BranchlessKernel +
-//!   PhaseSteering + PointerActionHub + SubHeadRouter + Rank1ResidualAdapter + FastPathLedger`), completely
-//!   agnostic to Hot vs. Cold Path execution.
+//!   widest-aperture composite ledger (`HUB_APERTURE_MASK = 0x0000_FFFF`) combining
+//!   `BranchlessKernel + PhaseSteering + PointerActionHub + SubHeadRouter + Rank1ResidualAdapter +
+//!   FastPathLedger`, completely agnostic to Hot vs. Cold Path execution.
 //! - **Lv.2 Micro Observer ([`crate::traits::HotPathObserver`])**: Drives constant-time $\mathcal{O}(1)$
 //!   per-token cascades (`Pointer -> FastPathLedger -> Bloom Repulsion -> Unified Field / Limina / Swarm ->
 //!   QDPS/RIPA/RoPE -> sub-head router/Rank-1 residual`) with zero dynamic allocations ($C_{\mathrm{alloc}} = 0$).
@@ -25,19 +28,19 @@
 //!    Long-horizon persona and context consistency $P(M_1, \dots, M_T) = \prod_{t=1}^T P(M_t \mid M_{<t})$
 //!    is factored into local conditional transitions modulated in $\mathcal{O}(1)$ via RoPE phase
 //!    steering without modifying host model weights $W_Q, W_K$.
-//! 2. **Indirect Pointer-Chain Graph Routing in `ActionHub`**:
-//!    Rather than holding all knowledge inside active model parameters, the runtime maintains compact
-//!    64-bit tagged pointers ([`gcso_tagged_ptr_t`]) and 128-byte pointer trails ([`gcso_pointer_trail_t`])
-//!    that reference external `.gcso` storage offsets (`mapped_section_offset48`) and chain to subsequent
-//!    trail nodes (`linked_trail_id`). Traversing and reinforcing these pointer chains forms a sparse,
-//!    associative routing graph that bridges inter-basin **Limina** thresholds while repulsing
-//!    topological contradictions ($H^1(K; \mathcal{F}) \neq 0$) via Phase-Conjugate Attractor Repulsion ($-\boldsymbol{\Delta\theta}$).
-//! 3. **Coherence Void ($\mathcal{C}_{\mathrm{void}}$) & Liminal Bifurcation Routing**:
-//!    Representation-space sparsity and inter-basin dispersion are quantified via the dyadic
-//!    **Coherence Void** functional ($\mathcal{C}_{\mathrm{void}}$) and $\ell_1 / \ell_2$ coherence
-//!    ratios. When a trajectory enters the threshold boundary (*Limina*) between competing attractor
-//!    basins ($G_2 / G_1 \ge \tau_{\mathrm{liminal}}$), Top-2 geodesic midpoint interpolation bridges
-//!    both basins without collapsing into winner-take-all truncation or incoherent drift.
+//! 2. **Fractal Self-Similarity & Indirect Pointer-Chain Routing in `ActionHub`**:
+//!    From 128-byte pointer trails (`gcso_pointer_trail_t`), 128-byte `GatewayFrame` /
+//!    `CrystallizedAttractorRecord` basins, up to nested composites `[Node; K]` and `(A, B)`,
+//!    every layer implements [`crate::traits::RelativeAttractorNode`] (`LiminalVoid`) with recursive
+//!    $SO(2)^{64}$ resultant folding (`fold_fractal_nodes_words_64`), dissipative overflow scatter /
+//!    autonomous daughter crystallization (`DissipativeOverflowReport`), and perspective-flipped signed
+//!    coupling (`RelativeCouplingMatrix`).
+//! 3. **`LiminalVoid`, Dynamic `LiminalApertureField`, & Liminal Bifurcation Routing**:
+//!    Queries inside carved memory horizons separate coherent grounding ($H^0$) from internal
+//!    opposition ($H^1 \neq 0$), while out-of-horizon queries enter `EpistemicRegime::LiminalVoid`.
+//!    [`crate::traits::LiminalApertureField`] shifts per-channel cognitive horizons branchlessly in
+//!    response to cognitive trajectory habits and dissipative overflow, exposing live Mermaid topology
+//!    self-introspection via [`crate::traits::LiminalTopologyTelemetrySnapshot`].
 //! 4. **Single Unified Attractor Manifold**:
 //!    All anchors coexist on a single unified phase manifold ($SO(2)^{d_{\mathrm{head}}/2}$)
 //!    governed by zero-hyperparameter phase-proximity gravity (`branchless_q7_resonant_pull_64`),
@@ -147,31 +150,40 @@ pub use crate::residual_adapter::ResidualAdapterEngine;
 pub use crate::storage::MappedStorageEngine;
 pub use crate::swarm::SwarmEngine;
 pub use crate::traits::{
-    resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim, ActionHub, ActionHubGatewayExt,
-    AlignedBuffer128, AlignedBuffer16, AlignedBuffer256, AlignedBuffer32, AlignedBuffer512,
-    AlignedBuffer64, AlignedSlice, AlignedSlice128, AlignedSlice16, AlignedSlice256,
-    AlignedSlice32, AlignedSlice512, AlignedSlice64, AlignedSliceMut, AlignedSliceMut128,
-    AlignedSliceMut16, AlignedSliceMut256, AlignedSliceMut32, AlignedSliceMut512,
-    AlignedSliceMut64, AttractorField, AttractorSlotSynergyCoordinator,
+    fold_fractal_nodes_words_64, resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim, ActionHub,
+    ActionHubGatewayExt, AlignedBuffer128, AlignedBuffer16, AlignedBuffer256, AlignedBuffer32,
+    AlignedBuffer512, AlignedBuffer64, AlignedSlice, AlignedSlice128, AlignedSlice16,
+    AlignedSlice256, AlignedSlice32, AlignedSlice512, AlignedSlice64, AlignedSliceMut,
+    AlignedSliceMut128, AlignedSliceMut16, AlignedSliceMut256, AlignedSliceMut32,
+    AlignedSliceMut512, AlignedSliceMut64, AttractorField, AttractorSlotSynergyCoordinator,
     BottomUpMacroCrystalCoordinator, BranchlessKernel, CausalProvenanceReport,
     CausalProvenanceSignal, CognitiveGroundingSignal, ColdPathObserver, ColdPathOrchestrator,
     ColdPathTrailCrystalExt, ContradictionGuard, ContradictionGuardSignal,
     ContrastivePhaseBloomFilter, CrystallizedAttractorRecord, DisjointMutPair, DisjointMutTriple,
-    DisjointRefMut, DnpPacketDispatcher, DynamicLayerSkipper, EdbcBranchController,
-    EntropyEvaluator, EntropyGatedPhaseLookup, FastPathLedger, FfiHandleMut, FfiHandleRef,
+    DisjointRefMut, DissipativeOverflowReport, DnpPacketDispatcher, DynamicLayerSkipper,
+    EdbcBranchController, EntropyEvaluator, EntropyGatedPhaseLookup, EpistemicHorizonReading,
+    EpistemicManifoldOps, EpistemicRegime, FastPathLedger, FfiHandleMut, FfiHandleRef,
     FractalCascadeCoordinator, FullStackGcsoEngine, GatewayFrame, GatewayPhaseSteeringExt,
     GcsoFourSectionView, GcsoResult, GcsoRuntimeContext, HierarchicalTreeTable,
     HotPathExecutionEngine, HotPathObserver, KvKeyframeCache, KvKeyframePacket,
-    KvMotionDeltaPacket, L2pSvdProjector, ManifoldGatewaySignal, MappedStorage,
+    KvMotionDeltaPacket, L2pSvdProjector, LiminalApertureField, LiminalHorizonNodeDescriptor,
+    LiminalTopologyTelemetrySnapshot, LiminalVoid, ManifoldGatewaySignal, MappedStorage,
     MultiDomainAttractorSpace, ObjectiveFact, ObjectiveFactSignal, PagedBitmaskOps, PersonaPatcher,
     PhaseSteering, Pod, PointerActionHub, Rank1ResidualAdapter, RawPhaseProjectable,
-    SheafCohomologyEvaluator, StigmergicActionPtrOps, StigmergicCohomologyCoordinator,
-    StigmergicSwarmOps, StigmergicTrailOps, SubHeadRouter, SubjectivePersona,
-    SubjectivePersonaSignal, SwarmCellChunk, SwarmResolutionReport, SystemCapabilityQuery,
-    SystemConstraint, SystemConstraintSignal, VisualAttentionSteering, ACTION_MODE_DPSR_STEER,
-    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_RANK1_INJECT,
-    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
-    ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
+    RelativeAttractorNode, RelativeCouplingMatrix, SheafCohomologyEvaluator,
+    StigmergicActionPtrOps, StigmergicCohomologyCoordinator, StigmergicSwarmOps,
+    StigmergicTrailOps, SubHeadRouter, SubjectivePersona, SubjectivePersonaSignal, SwarmCellChunk,
+    SwarmResolutionReport, SystemCapabilityQuery, SystemConstraint, SystemConstraintSignal,
+    VisualAttentionSteering, ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP,
+    ACTION_MODE_PHASE_REPULSE, ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE,
+    ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP,
+    ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE, APERTURE_ACTION_HUB_WIDE,
+    APERTURE_CAUSAL_PROVENANCE, APERTURE_COGNITIVE_CIRCUIT, APERTURE_COHOMOLOGY_EDBC,
+    APERTURE_CONTRADICTION_GUARD, APERTURE_DISSIPATIVE_CRYSTAL, APERTURE_FAST_PATH_LEDGER,
+    APERTURE_KV_PHASE_CACHE, APERTURE_MANIFOLD_GATEWAY, APERTURE_MAPPED_STORAGE,
+    APERTURE_OBJECTIVE_FACT, APERTURE_PHASE_STEERING, APERTURE_POINTER_TRAIL,
+    APERTURE_RANK1_RESIDUAL, APERTURE_RELATIVE_COUPLING, APERTURE_SUBHEAD_ROUTING,
+    APERTURE_SUBJECTIVE_PERSONA, APERTURE_SWARM_CONSENSUS, APERTURE_SYSTEM_CONSTRAINT,
     ATTRACTOR_SLOT_CUSTOM_5, ATTRACTOR_SLOT_CUSTOM_6, ATTRACTOR_SLOT_CUSTOM_7,
     ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
     ATTRACTOR_SLOT_SYSTEM_BASELINE, ATTRACTOR_SLOT_USER_CONTEXT, CAUSAL_AXIS_CONTRADICTION_GUARD,
