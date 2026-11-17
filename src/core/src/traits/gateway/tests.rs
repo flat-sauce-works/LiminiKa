@@ -1074,3 +1074,166 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     assert_ne!(dec_peel, dec_fuse);
     let _ = &mut g_frame;
 }
+
+#[test]
+fn epistemic_horizon_separates_true_void_from_internal_conflict_branchlessly() {
+    let f0 = ObjectiveFact::new([0i8; MAX_ATTENTION_HEADS], 1.5, 0x0001_0000, 101);
+    let f1 = ObjectiveFact::new([20i8; MAX_ATTENTION_HEADS], 1.5, 0x0002_0000, 102);
+    let nodes = [f0, f1];
+
+    let mut coupling = RelativeCouplingMatrix::<2>::new();
+    coupling.set_symmetric(0, 1, -120);
+
+    // 1. Inside memory horizon and aligned with perspective #0 -> KnownCoherent.
+    let q_coherent = [0u64; NUM_SWARM_MICRO_CELLS];
+    let (frame_coh, horizon_coh) =
+        ObjectiveFact::synthesize_slice_relative_gateway(&nodes, coupling.row(0), &q_coherent, 0.35);
+    assert_eq!(horizon_coh.regime(), EpistemicRegime::KnownCoherent);
+    assert_eq!(horizon_coh.horizon_gate, 1.0);
+    assert_eq!(horizon_coh.dominant_anchor_id, 101);
+    assert!(frame_coh.effective_energy > 0.5);
+    assert!(!frame_coh.is_repulsed());
+
+    // 2. Inside memory horizon yet matching opposing node #1 from perspective #0 -> InternalConflict.
+    let q_conflict = load_q7_words_64(&[20i8; MAX_ATTENTION_HEADS]);
+    let (frame_conf, horizon_conf) =
+        ObjectiveFact::synthesize_slice_relative_gateway(&nodes, coupling.row(0), &q_conflict, 0.35);
+    assert_eq!(horizon_conf.regime(), EpistemicRegime::InternalConflict);
+    assert_eq!(horizon_conf.horizon_gate, 1.0);
+    assert_eq!(horizon_conf.opposing_anchor_id, 102);
+    assert!(frame_conf.is_repulsed());
+    assert!(frame_conf.effective_energy > 0.0);
+
+    // 3. Outside carved memory cut (orthogonal to all memory nodes) -> TrueVoid zeroes output cleanly.
+    let q_void = load_q7_words_64(&[-64i8; MAX_ATTENTION_HEADS]);
+    let (frame_void, horizon_void) =
+        ObjectiveFact::synthesize_slice_relative_gateway(&nodes, coupling.row(0), &q_void, 0.35);
+    assert_eq!(horizon_void.regime(), EpistemicRegime::TrueVoid);
+    assert_eq!(horizon_void.horizon_gate, 0.0);
+    assert_eq!(frame_void.effective_energy, 0.0);
+    assert_eq!(frame_void.phase_words_ref(), &[0u64; NUM_SWARM_MICRO_CELLS]);
+    assert_eq!(frame_void.mean_phase_tag_q7, 0);
+}
+
+#[test]
+fn relative_coupling_flips_repulsion_by_active_perspective_across_ten_nodes() {
+    let mut nodes = [CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0); 10];
+    let mut idx = 0usize;
+    while idx < nodes.len() {
+        let mut rec = CrystallizedAttractorRecord::new_empty(
+            (idx as u32) + 1,
+            ATTRACTOR_SLOT_KNOWLEDGE,
+            0x0010_0000 + ((idx as u64) << 12),
+        );
+        let q7 = ((idx as i32) * 24 - 108) as i8;
+        rec.phase_profile = [q7; MAX_ATTENTION_HEADS];
+        rec.sample_count = 8;
+        rec.phase_gravity_mass = 1.25;
+        rec.stamp_crc32();
+        nodes[idx] = rec;
+        idx += 1;
+    }
+
+    // 10-node relative graph: when belonging to node #2, node #1 is mutually opposing (and vice versa).
+    let mut matrix = RelativeCouplingMatrix::<10>::new();
+    matrix.reinforce_relation_branchless(1, 2, true, 120);
+    assert_eq!(matrix.row(2)[1], -120);
+    assert_eq!(matrix.row(1)[2], -120);
+    assert_eq!(matrix.row(2)[2], 127);
+
+    let q_node1 = load_q7_words_64(&nodes[1].phase_profile);
+    let q_node2 = load_q7_words_64(&nodes[2].phase_profile);
+
+    // Perspective #2 treats node #1 as opposing (`ACTION_MODE_PHASE_REPULSE`), while #2 itself stays attractive.
+    let (frame_from_2_on_1, hor_2_on_1) = CrystallizedAttractorRecord::synthesize_slice_relative_gateway(
+        &nodes,
+        matrix.row(2),
+        &q_node1,
+        0.40,
+    );
+    assert_eq!(hor_2_on_1.regime(), EpistemicRegime::InternalConflict);
+    assert_eq!(hor_2_on_1.opposing_anchor_id, nodes[1].anchor_id);
+    assert_ne!(frame_from_2_on_1.action_mode_flags & ACTION_MODE_PHASE_REPULSE, 0);
+
+    // Switching active perspective to #1 flips roles with zero code change: #1 becomes coherent, #2 opposes.
+    let (frame_from_1_on_1, hor_1_on_1) = CrystallizedAttractorRecord::synthesize_slice_relative_gateway(
+        &nodes,
+        matrix.row(1),
+        &q_node1,
+        0.40,
+    );
+    assert_eq!(hor_1_on_1.regime(), EpistemicRegime::KnownCoherent);
+    assert_eq!(hor_1_on_1.dominant_anchor_id, nodes[1].anchor_id);
+    assert_eq!(frame_from_1_on_1.action_mode_flags & ACTION_MODE_PHASE_REPULSE, 0);
+
+    let (frame_from_1_on_2, hor_1_on_2) = CrystallizedAttractorRecord::synthesize_slice_relative_gateway(
+        &nodes,
+        matrix.row(1),
+        &q_node2,
+        0.40,
+    );
+    assert_eq!(hor_1_on_2.regime(), EpistemicRegime::InternalConflict);
+    assert_eq!(hor_1_on_2.opposing_anchor_id, nodes[2].anchor_id);
+    assert_ne!(frame_from_1_on_2.action_mode_flags & ACTION_MODE_PHASE_REPULSE, 0);
+}
+
+#[test]
+fn dissipative_overflow_peels_residual_scatters_and_spawns_daughter_with_relative_coupling() {
+    let mut pool = [CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0); 4];
+    pool[0] = CrystallizedAttractorRecord::new_empty(11, ATTRACTOR_SLOT_KNOWLEDGE, 0x0010_0000);
+    pool[0].phase_profile = [0i8; MAX_ATTENTION_HEADS];
+    pool[0].sample_count = 32;
+    pool[0].base_energy = 2.0;
+    pool[0].phase_gravity_mass = 2.0;
+    pool[0].resultant_r_bar = 0.25;
+    pool[0].stamp_crc32();
+
+    // Secondary existing attractor captures scattered heterogeneous residuals when aligned.
+    pool[1] = CrystallizedAttractorRecord::new_empty(22, ATTRACTOR_SLOT_KNOWLEDGE, 0x0020_0000);
+    pool[1].phase_profile = [48i8; MAX_ATTENTION_HEADS];
+    pool[1].sample_count = 4;
+    pool[1].base_energy = 1.0;
+    pool[1].phase_gravity_mass = 1.0;
+    pool[1].resultant_r_bar = 0.90;
+    pool[1].stamp_crc32();
+
+    let mut coupling = RelativeCouplingMatrix::<4>::new();
+    let mut trail = crate::abi::gcso_pointer_trail_t::default();
+
+    // Case A: Closest to slot #0 (`|22-0| < |48-22|`), yet under high dispersion/saturation pressure,
+    // the peeled residual (`22 - 0 = 22`) matches slot #1 (`48`) and scatters onto slot #1.
+    let fact_scatter = ObjectiveFact::new([22i8; MAX_ATTENTION_HEADS], 1.5, 0x0030_0000, 90);
+    let (_, report_scatter) = CrystallizedAttractorRecord::step_dissipative_overflow_signal_64(
+        &mut pool,
+        &fact_scatter,
+        0.65,
+        Some(&mut trail),
+    );
+    assert!(report_scatter.overflowed);
+    assert!(report_scatter.scattered);
+    assert!(!report_scatter.spawned_new);
+    assert_eq!(report_scatter.primary_idx, 0);
+    assert_eq!(report_scatter.landed_idx, 1);
+    assert!(pool[0].verify_integrity());
+    assert!(pool[1].verify_integrity());
+    coupling.record_dissipative_transition_branchless(&report_scatter, 64);
+    assert_eq!(
+        coupling.row(report_scatter.primary_idx)[report_scatter.landed_idx],
+        64
+    );
+
+    // Case B: Saturated basin cannot absorb an orthogonal sample into any existing node -> autonomous daughter birth!
+    let fact_orphan = ObjectiveFact::new([-96i8; MAX_ATTENTION_HEADS], 1.8, 0x0040_0000, 91);
+    let (_, report_birth) = CrystallizedAttractorRecord::step_dissipative_overflow_signal_64(
+        &mut pool,
+        &fact_orphan,
+        0.65,
+        Some(&mut trail),
+    );
+    assert!(report_birth.overflowed);
+    assert!(report_birth.spawned_new);
+    assert_eq!(report_birth.landed_idx, 2);
+    assert!(pool[report_birth.landed_idx].verify_integrity());
+    coupling.record_dissipative_transition_branchless(&report_birth, 96);
+    assert!(coupling.row(report_birth.primary_idx)[report_birth.landed_idx] < 0);
+}

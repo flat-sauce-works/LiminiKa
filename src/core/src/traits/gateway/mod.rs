@@ -52,7 +52,8 @@ use crate::traits::primitives::{
     branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_crc32_ieee,
     branchless_flush_subnormal_f32, branchless_inv_pos_f32, branchless_is_finite_f32,
     branchless_lerp_f32, branchless_max_f32, branchless_min_f32, branchless_rad_to_qdps_step_u8,
-    branchless_relu_f32, branchless_select_f32, branchless_select_i8, branchless_select_u32,
+    branchless_relu_f32, branchless_select_f32, branchless_select_i32, branchless_select_i8,
+    branchless_select_u32,
     branchless_select_u64, branchless_select_u8, branchless_select_usize,
     branchless_sincos_q7_ripa, branchless_splitmix64, crc32_block64_zero_seed_words,
     crc32_step_block64_words, crc32_step_l16, crc32_step_l4, crc32_step_l8,
@@ -95,15 +96,17 @@ use crate::abi::{
 };
 
 
-pub use crate::crystal::CrystallizedAttractorRecord;
+pub use crate::crystal::{CrystallizedAttractorRecord, DissipativeOverflowReport};
 pub use crate::storage::GcsoFourSectionView;
 
 pub mod circuit;
+pub mod epistemic;
 pub mod kv_cache;
 pub mod orchestrator;
 pub mod signals;
 
 pub use self::circuit::*;
+pub use self::epistemic::*;
 pub use self::kv_cache::*;
 pub use self::orchestrator::*;
 pub use self::signals::*;
@@ -165,6 +168,10 @@ const _: () = {
     assert!(offset_of!(RamPhaseKvEntry, context_hash) == 144);
     assert!(offset_of!(RamPhaseKvEntry, reuse_count) == 152);
     assert!(offset_of!(RamPhaseKvEntry, last_used_epoch) == 156);
+    assert!(size_of::<EpistemicHorizonReading>() == 32);
+    assert!(align_of::<EpistemicHorizonReading>() == 16);
+    assert!(offset_of!(EpistemicHorizonReading, horizon_gate) == 12);
+    assert!(offset_of!(EpistemicHorizonReading, regime_code) == 28);
 };
 
 

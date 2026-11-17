@@ -54,14 +54,14 @@ use crate::traits::primitives::{
     branchless_maturity_scale_u32, branchless_max_f32, branchless_min_f32,
     branchless_phase_proximity_gravity_f32, branchless_popcount_rsqrt_u32,
     branchless_q7_default_gravity_from_diff_u8, branchless_relu_f32, branchless_rsqrt_f32,
-    branchless_select_f32, branchless_select_u32, branchless_select_usize,
+    branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_usize,
     crc32_crystal_be24_final_u32, crc32_crystal_gm36_final_u32, crc32_crystal_zoff16_final_u32,
     crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32, crc32_slice16_indep_hi1_u32,
     crc32_slice16_indep_lo1_u32, crc32_slice16_step_u64x2, crc32_step_block64_words, crc32_step_l3,
     crc32_step_l4, crc32_step_l5, crc32_step_l6, crc32_update_crystal_absorption_delta,
     crc32_update_crystal_energy_and_mass_delta, crc32_update_crystal_stationary_fields_delta,
     fast_inv_len_f32, fast_inv_pos_normal_f32, fast_ln_1p_bounded_f32, is_word_array_uniform_64,
-    load_q7_words_64, pack_action_slot_tag, store_q7_words_64,
+    load_q7_words_64, pack_action_slot_tag, store_q7_words_64, swar_q7_circular_diff_x8,
     swar_q7_mean_i8_from_words_with_uniform_flag_64, trail_phase_words_mut, trail_phase_words_ref,
     GcsoResult, Pod, ACTION_MODE_PHASE_REPULSE, ACTION_PRESET_EXPRESS_PHASE,
     ACTION_PRESET_PASSIVE_SIDECAR, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_PERSONA,
@@ -83,6 +83,57 @@ use crate::traits::telemetry::{
 // ===================================================================
 // 8. `.gcso` Crystallized Attractor Record & Online Toroidal $k$-Means / DP-Means
 // ===================================================================
+
+/// Outcome emitted by branchless dissipative overflow, residual scatter, and autonomous
+/// daughter-attractor birth (`CrystallizedAttractorRecord::step_dissipative_overflow_scatter_or_spawn_64`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DissipativeOverflowReport {
+    /// Nearest primary attractor slot index evaluated before overflow pressure.
+    pub primary_idx: usize,
+    /// Slot index where the sample or its peeled residual settled (`primary_idx`, secondary scatter target, or spawned daughter).
+    pub landed_idx: usize,
+    /// Anchor ID of `primary_idx`.
+    pub primary_anchor_id: u32,
+    /// Anchor ID of `landed_idx`.
+    pub landed_anchor_id: u32,
+    /// Raw phase coherence against `primary_idx`.
+    pub primary_coherence: f32,
+    /// Residual phase coherence against the best secondary scatter candidate.
+    pub scatter_coherence: f32,
+    /// Saturation/dispersion pressure subtracted from `primary_coherence` (`(1 - r_bar) * 0.35 + ln(1 + count) * 0.06`).
+    pub overflow_pressure: f32,
+    /// Updated phase-gravity mass of `landed_idx`.
+    pub updated_gravity_mass: f32,
+    /// Peeled 64-head SWAR residual phase words (`sample_w - primary_w`) propagated on overflow.
+    pub residual_words: [u64; NUM_SWARM_MICRO_CELLS],
+    /// `true` when `primary_idx` overflowed its capacity/coherence bound.
+    pub overflowed: bool,
+    /// `true` when the overflow residual settled onto an existing secondary attractor (`landed_idx != primary_idx`).
+    pub scattered: bool,
+    /// `true` when unsettled overflow autonomously spawned a new daughter attractor.
+    pub spawned_new: bool,
+}
+
+impl Default for DissipativeOverflowReport {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            primary_idx: 0,
+            landed_idx: 0,
+            primary_anchor_id: 0,
+            landed_anchor_id: 0,
+            primary_coherence: 0.0,
+            scatter_coherence: 0.0,
+            overflow_pressure: 0.0,
+            updated_gravity_mass: 0.0,
+            residual_words: [0u64; NUM_SWARM_MICRO_CELLS],
+            overflowed: false,
+            scattered: false,
+            spawned_new: false,
+        }
+    }
+}
 
 /// 128-byte (`#[repr(C, align(64))]`) [`Pod`] record representing a bottom-up crystallized
 /// macro attractor centroid on $SO(2)^{64}$ persisted inside `.gcso` (mapped-storage) containers.
@@ -1264,6 +1315,75 @@ impl CrystallizedAttractorRecord {
         }
     }
 
+    #[inline(always)]
+    fn commit_frame_absorption_at_index(
+        centroids: &mut [Self],
+        target_idx: usize,
+        spawned_new: bool,
+        best_coh: f32,
+        best_is_uniform: bool,
+        sample_is_uniform: bool,
+        cur_target_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        frame: &GatewayFrame,
+        sample_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        trail_opt: Option<&mut gcso_pointer_trail_t>,
+    ) -> (u32, f32, f32) {
+        let pre_coh = Some(branchless_select_f32(spawned_new, 1.0, best_coh));
+        let eff_best_uni = spawned_new | best_is_uniform;
+        let uni_flags = Some((eff_best_uni, sample_is_uniform));
+        let fallback_aid = (target_idx as u32) + 1;
+        let target = &mut centroids[target_idx];
+        let prev_crc = target.checksum_crc32;
+        let prev_count = target.sample_count;
+        let prev_aid = branchless_select_u32(spawned_new, 0, target.anchor_id);
+        let prev_zoff = branchless_select_u64(spawned_new, 0, target.mapped_section_offset48);
+        let prev_be_bits = target.base_energy.to_bits();
+        let prev_gm_bits = target.phase_gravity_mass.to_bits();
+        let prev_prov = target.provenance_bits;
+        let prev_rb_bits = target.resultant_r_bar.to_bits();
+        let prev_kp_bits = target.von_mises_kappa.to_bits();
+        let prev_clamp_bits = target.ripa_clamp_rad.to_bits();
+        let prev_temp_bits = target.effective_inv_temp.to_bits();
+        let prev_w7_lo = target.pack_w7_lo();
+        let (next_w, updated_mass, _modified, words_changed) = target
+            .absorb_gateway_frame_with_cur_coh_and_uni_unstamped(
+                cur_target_w,
+                frame,
+                sample_w,
+                pre_coh,
+                uni_flags,
+            );
+        let winning_anchor_id =
+            branchless_select_u32(target.anchor_id != 0, target.anchor_id, fallback_aid);
+        target.anchor_id = winning_anchor_id;
+        let eff_prev_count = branchless_select_u32(spawned_new, 0, prev_count);
+        target.stamp_or_update_absorption_crc32(
+            prev_crc,
+            prev_aid,
+            eff_prev_count,
+            prev_zoff,
+            prev_be_bits,
+            prev_rb_bits,
+            prev_kp_bits,
+            prev_gm_bits,
+            prev_clamp_bits,
+            prev_temp_bits,
+            prev_prov,
+            prev_w7_lo,
+            cur_target_w,
+            &next_w,
+            words_changed,
+        );
+        let final_coh = branchless_select_f32(spawned_new, 1.0, best_coh);
+
+        if let Some(trail) = trail_opt {
+            trail.target_anchor_id = winning_anchor_id;
+            trail.cluster_id = winning_anchor_id;
+            trail.flags |= TRAIL_FLAG_CRYSTALLIZED_CANDIDATE;
+        }
+        (winning_anchor_id, final_coh, updated_mass)
+    }
+
     #[inline]
     pub(crate) fn step_online_toroidal_kmeans_frame_with_words_64(
         centroids: &mut [Self],
@@ -1315,73 +1435,18 @@ impl CrystallizedAttractorRecord {
             best_w,
             safe_split,
         );
-
-        let pre_coh = if spawned_new {
-            Some(1.0)
-        } else {
-            Some(best_coh)
-        };
-        let uni_flags = Some((
-            if spawned_new { true } else { best_is_uniform },
+        let (winning_anchor_id, final_coh, updated_mass) = Self::commit_frame_absorption_at_index(
+            centroids,
+            target_idx,
+            spawned_new,
+            best_coh,
+            best_is_uniform,
             sample_is_uniform,
-        ));
-        let fallback_aid = (target_idx as u32) + 1;
-        let target = &mut centroids[target_idx];
-        let prev_crc = target.checksum_crc32;
-        let prev_count = target.sample_count;
-        let prev_aid = if spawned_new { 0 } else { target.anchor_id };
-        let prev_zoff = if spawned_new {
-            0
-        } else {
-            target.mapped_section_offset48
-        };
-        let prev_be_bits = target.base_energy.to_bits();
-        let prev_gm_bits = target.phase_gravity_mass.to_bits();
-        let prev_prov = target.provenance_bits;
-        let prev_rb_bits = target.resultant_r_bar.to_bits();
-        let prev_kp_bits = target.von_mises_kappa.to_bits();
-        let prev_clamp_bits = target.ripa_clamp_rad.to_bits();
-        let prev_temp_bits = target.effective_inv_temp.to_bits();
-        let prev_w7_lo = target.pack_w7_lo();
-        let (next_w, updated_mass, _modified, words_changed) = target
-            .absorb_gateway_frame_with_cur_coh_and_uni_unstamped(
-                &cur_target_w,
-                frame,
-                sample_w,
-                pre_coh,
-                uni_flags,
-            );
-        let winning_anchor_id = if target.anchor_id != 0 {
-            target.anchor_id
-        } else {
-            fallback_aid
-        };
-        target.anchor_id = winning_anchor_id;
-        let eff_prev_count = if !spawned_new { prev_count } else { 0 };
-        target.stamp_or_update_absorption_crc32(
-            prev_crc,
-            prev_aid,
-            eff_prev_count,
-            prev_zoff,
-            prev_be_bits,
-            prev_rb_bits,
-            prev_kp_bits,
-            prev_gm_bits,
-            prev_clamp_bits,
-            prev_temp_bits,
-            prev_prov,
-            prev_w7_lo,
             &cur_target_w,
-            &next_w,
-            words_changed,
+            frame,
+            sample_w,
+            trail_opt,
         );
-        let final_coh = if spawned_new { 1.0 } else { best_coh };
-
-        if let Some(trail) = trail_opt {
-            trail.target_anchor_id = winning_anchor_id;
-            trail.cluster_id = winning_anchor_id;
-            trail.flags |= TRAIL_FLAG_CRYSTALLIZED_CANDIDATE;
-        }
 
         (
             target_idx,
@@ -1390,6 +1455,242 @@ impl CrystallizedAttractorRecord {
             updated_mass,
             spawned_new,
         )
+    }
+
+    /// Branchless 3-stage **Dissipative Overflow -> Residual Scatter -> Autonomous Daughter Birth** step:
+    /// 1. Evaluates saturation & dispersion pressure (`1 - resultant_r_bar`, `sample_count`) on the nearest attractor $A_1$.
+    /// 2. If $A_1$ overflows (`effective_coh < split_coherence_thresh`), peels $A_1$'s phase from `sample_w` via SWAR circular subtraction and scans remaining active slots for a secondary basin $A_2$ without branches.
+    /// 3. If the overflow residual settles on $A_2$, absorbs into $A_2$ (`scattered = true`); otherwise autonomously spawns a daughter attractor into an empty or weaker slot (`spawned_new = true`).
+    #[inline]
+    pub fn step_dissipative_overflow_scatter_or_spawn_64(
+        centroids: &mut [Self],
+        frame: &GatewayFrame,
+        sample_w: &[u64; NUM_SWARM_MICRO_CELLS],
+        split_coherence_thresh: f32,
+        trail_opt: Option<&mut gcso_pointer_trail_t>,
+    ) -> DissipativeOverflowReport {
+        let k_len = centroids.len();
+        if k_len == 0 {
+            return DissipativeOverflowReport::default();
+        }
+
+        let is_repulsed = (frame.repulsion_severity > 0.50)
+            | ((frame.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0)
+            | (frame.dominant_cause_code == ROOT_CAUSE_COHOMOLOGY_REPULSION)
+            | ((frame.provenance_bits & CAUSAL_CAUSE_COHOMOLOGY_REPULSION) != 0);
+        let (idx_1, coh_1, _grav_1, empty_opt, weakest_idx, w_1, sample_uni, best_1_uni, _) =
+            Self::find_nearest_toroidal_centroid_with_cache_64(centroids, sample_w, None);
+        let primary_aid = centroids[idx_1].anchor_id;
+        let primary_count = centroids[idx_1].sample_count;
+        let primary_mass = centroids[idx_1].phase_gravity_mass;
+        let r_bar_1 = branchless_clamp_f32(centroids[idx_1].resultant_r_bar, 0.0, 1.0);
+        let overflow_pressure = branchless_clamp_f32(
+            (1.0 - r_bar_1) * 0.35 + fast_ln_1p_bounded_f32(primary_count as f32) * 0.06,
+            0.0,
+            0.85,
+        );
+        let res_w = [
+            swar_q7_circular_diff_x8(sample_w[0], w_1[0]),
+            swar_q7_circular_diff_x8(sample_w[1], w_1[1]),
+            swar_q7_circular_diff_x8(sample_w[2], w_1[2]),
+            swar_q7_circular_diff_x8(sample_w[3], w_1[3]),
+            swar_q7_circular_diff_x8(sample_w[4], w_1[4]),
+            swar_q7_circular_diff_x8(sample_w[5], w_1[5]),
+            swar_q7_circular_diff_x8(sample_w[6], w_1[6]),
+            swar_q7_circular_diff_x8(sample_w[7], w_1[7]),
+        ];
+
+        if is_repulsed {
+            return DissipativeOverflowReport {
+                primary_idx: idx_1,
+                landed_idx: idx_1,
+                primary_anchor_id: primary_aid,
+                landed_anchor_id: primary_aid,
+                primary_coherence: coh_1,
+                scatter_coherence: 0.0,
+                overflow_pressure,
+                updated_gravity_mass: primary_mass,
+                residual_words: res_w,
+                overflowed: false,
+                scattered: false,
+                spawned_new: false,
+            };
+        }
+
+        let safe_split = branchless_clamp_f32(split_coherence_thresh, -0.95, 0.95);
+        let has_primary = primary_count > 0;
+        let overflowed = has_primary & ((coh_1 - overflow_pressure) < safe_split);
+
+        // Branchless secondary scatter scan over `res_w` across all slots `i != idx_1`.
+        let res_uni = is_word_array_uniform_64(&res_w);
+        let mut best_2_idx = idx_1;
+        let mut best_2_coh = -2.0_f32;
+        let mut best_2_uni = false;
+        let mut any_2 = false;
+        let mut best_2_w = [0u64; NUM_SWARM_MICRO_CELLS];
+        let mut i = 0usize;
+        while i < k_len {
+            let rec = &centroids[i];
+            let eligible = (i != idx_1)
+                & (rec.sample_count > 0)
+                & (rec.phase_gravity_mass > DEFAULT_ENTROPY_EPS);
+            let cw = rec.phase_words_ref();
+            let c_uni = is_word_array_uniform_64(cw);
+            let raw_coh =
+                coherence_from_word_arrays_with_both_uniform_flags_64(&res_w, res_uni, cw, c_uni);
+            let eff_coh = branchless_select_f32(eligible, raw_coh, -2.0);
+            let take = eligible & ((!any_2) | (eff_coh > best_2_coh));
+            best_2_idx = branchless_select_usize(take, i, best_2_idx);
+            best_2_coh = branchless_select_f32(take, eff_coh, best_2_coh);
+            best_2_uni = (take & c_uni) | ((!take) & best_2_uni);
+            best_2_w = [
+                branchless_select_u64(take, cw[0], best_2_w[0]),
+                branchless_select_u64(take, cw[1], best_2_w[1]),
+                branchless_select_u64(take, cw[2], best_2_w[2]),
+                branchless_select_u64(take, cw[3], best_2_w[3]),
+                branchless_select_u64(take, cw[4], best_2_w[4]),
+                branchless_select_u64(take, cw[5], best_2_w[5]),
+                branchless_select_u64(take, cw[6], best_2_w[6]),
+                branchless_select_u64(take, cw[7], best_2_w[7]),
+            ];
+            any_2 |= eligible;
+            i += 1;
+        }
+        let clean_scatter_coh = branchless_select_f32(any_2, best_2_coh, 0.0);
+
+        let settled_on_scatter = overflowed & any_2 & (best_2_coh >= safe_split);
+        let needs_spawn = (!has_primary) | (overflowed & !settled_on_scatter);
+        let (has_empty, empty_i) = match empty_opt {
+            Some(idx) => (true, idx),
+            None => (false, 0),
+        };
+        let can_evict =
+            (!has_empty) & (frame.effective_energy > centroids[weakest_idx].phase_gravity_mass);
+        let spawn_slot = branchless_select_usize(has_empty, empty_i, weakest_idx);
+        let effective_spawn = needs_spawn & (has_empty | can_evict);
+
+        let target_idx = branchless_select_usize(
+            settled_on_scatter,
+            best_2_idx,
+            branchless_select_usize(effective_spawn, spawn_slot, idx_1),
+        );
+        let assigned_spawn_id = branchless_select_u32(
+            frame.target_anchor_id != 0,
+            frame.target_anchor_id,
+            (target_idx as u32) + 1,
+        );
+        if effective_spawn {
+            centroids[target_idx].init_spawned_slot_header_in_place(
+                assigned_spawn_id,
+                frame.dominant_slot,
+                frame.mapped_section_offset48,
+            );
+        }
+
+        let peel_for_daughter = effective_spawn & overflowed & (coh_1 >= safe_split);
+        let use_res_words = settled_on_scatter | peel_for_daughter;
+        let absorbed_w = [
+            branchless_select_u64(use_res_words, res_w[0], sample_w[0]),
+            branchless_select_u64(use_res_words, res_w[1], sample_w[1]),
+            branchless_select_u64(use_res_words, res_w[2], sample_w[2]),
+            branchless_select_u64(use_res_words, res_w[3], sample_w[3]),
+            branchless_select_u64(use_res_words, res_w[4], sample_w[4]),
+            branchless_select_u64(use_res_words, res_w[5], sample_w[5]),
+            branchless_select_u64(use_res_words, res_w[6], sample_w[6]),
+            branchless_select_u64(use_res_words, res_w[7], sample_w[7]),
+        ];
+        let absorbed_uni = (use_res_words & res_uni) | ((!use_res_words) & sample_uni);
+        let cur_target_w = [
+            branchless_select_u64(
+                effective_spawn,
+                0,
+                branchless_select_u64(settled_on_scatter, best_2_w[0], w_1[0]),
+            ),
+            branchless_select_u64(
+                effective_spawn,
+                0,
+                branchless_select_u64(settled_on_scatter, best_2_w[1], w_1[1]),
+            ),
+            branchless_select_u64(
+                effective_spawn,
+                0,
+                branchless_select_u64(settled_on_scatter, best_2_w[2], w_1[2]),
+            ),
+            branchless_select_u64(
+                effective_spawn,
+                0,
+                branchless_select_u64(settled_on_scatter, best_2_w[3], w_1[3]),
+            ),
+            branchless_select_u64(
+                effective_spawn,
+                0,
+                branchless_select_u64(settled_on_scatter, best_2_w[4], w_1[4]),
+            ),
+            branchless_select_u64(
+                effective_spawn,
+                0,
+                branchless_select_u64(settled_on_scatter, best_2_w[5], w_1[5]),
+            ),
+            branchless_select_u64(
+                effective_spawn,
+                0,
+                branchless_select_u64(settled_on_scatter, best_2_w[6], w_1[6]),
+            ),
+            branchless_select_u64(
+                effective_spawn,
+                0,
+                branchless_select_u64(settled_on_scatter, best_2_w[7], w_1[7]),
+            ),
+        ];
+        let target_coh = branchless_select_f32(settled_on_scatter, best_2_coh, coh_1);
+        let target_uni = (settled_on_scatter & best_2_uni) | ((!settled_on_scatter) & best_1_uni);
+        let (landed_aid, _final_coh, updated_mass) = Self::commit_frame_absorption_at_index(
+            centroids,
+            target_idx,
+            effective_spawn,
+            target_coh,
+            target_uni,
+            absorbed_uni,
+            &cur_target_w,
+            frame,
+            &absorbed_w,
+            trail_opt,
+        );
+
+        DissipativeOverflowReport {
+            primary_idx: idx_1,
+            landed_idx: target_idx,
+            primary_anchor_id: primary_aid,
+            landed_anchor_id: landed_aid,
+            primary_coherence: coh_1,
+            scatter_coherence: clean_scatter_coh,
+            overflow_pressure,
+            updated_gravity_mass: updated_mass,
+            residual_words: res_w,
+            overflowed,
+            scattered: settled_on_scatter,
+            spawned_new: effective_spawn,
+        }
+    }
+
+    /// Evaluates [`step_dissipative_overflow_scatter_or_spawn_64`](Self::step_dissipative_overflow_scatter_or_spawn_64)
+    /// directly from any [`ManifoldGatewaySignal`] implementor.
+    #[inline]
+    pub fn step_dissipative_overflow_signal_64<S: ManifoldGatewaySignal + ?Sized>(
+        centroids: &mut [Self],
+        signal: &S,
+        split_coherence_thresh: f32,
+        trail_opt: Option<&mut gcso_pointer_trail_t>,
+    ) -> (GatewayFrame, DissipativeOverflowReport) {
+        let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
+        let report = Self::step_dissipative_overflow_scatter_or_spawn_64(
+            centroids,
+            &frame,
+            &frm_w,
+            split_coherence_thresh,
+            trail_opt,
+        );
+        (frame, report)
     }
 
     /// **Classical Online Toroidal $k$-Means / DP-Means Closed-Loop E+M Step ($\mathcal{O}(K)$)**:
