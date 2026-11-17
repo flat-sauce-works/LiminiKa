@@ -1539,7 +1539,8 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_epistemic_evaluate_horizon(
 
 /**
  * @brief Evaluates multi-attractor Venn-diagram aperture overlap across the 8 SWAR granules and
- * approximation-noise excursions across the Liminal boundary, optionally nucleating a new attractor.
+ * approximation-noise excursions across the Liminal boundary, optionally nucleating a new
+ * attractor.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_stigmergic_evaluate_venn_and_serendipity(
     gcso_crystallized_attractor_record_t* GCSO_RESTRICT centroids_inout, size_t num_centroids,
@@ -1586,13 +1587,14 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_ego_field_init_preset(
 /**
  * @brief Deterministically derives a 64-byte LiminalEgoField from UTF-8 natural-language text.
  */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_ego_field_derive_from_text(
-    const uint8_t* GCSO_RESTRICT utf8_ptr, size_t utf8_len,
-    gcso_liminal_ego_field_t* GCSO_RESTRICT ego_out) GCSO_NOEXCEPT;
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
+gcso_ego_field_derive_from_text(const uint8_t* GCSO_RESTRICT utf8_ptr, size_t utf8_len,
+                                gcso_liminal_ego_field_t* GCSO_RESTRICT ego_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Branchlessly evaluates Ego triggers across Core Layer 0/1 boundaries and temporal velocity,
- * updating boundaries and injecting counter-vortex or transgressive phase steering into frame_inout.
+ * @brief Branchlessly evaluates Ego triggers across Core Layer 0/1 boundaries and temporal
+ * velocity, updating boundaries and injecting counter-vortex or transgressive phase steering into
+ * frame_inout.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_ego_field_intervene_frame(
     gcso_liminal_ego_field_t* GCSO_RESTRICT ego_inout,
