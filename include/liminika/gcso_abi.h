@@ -1545,8 +1545,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_stigmergic_evaluate_venn_an
     gcso_crystallized_attractor_record_t* GCSO_RESTRICT centroids_inout, size_t num_centroids,
     const gcso_q7_t* GCSO_RESTRICT query_phases, const gcso_q7_t* GCSO_RESTRICT drifted_phases,
     float aperture_floor, uint8_t serendipity_floor_q7, uint8_t nucleate_on_discovery,
-    uint32_t new_anchor_id,
-    gcso_stigmergic_venn_serendipity_report_t* GCSO_RESTRICT report_out,
+    uint32_t new_anchor_id, gcso_stigmergic_venn_serendipity_report_t* GCSO_RESTRICT report_out,
     uint8_t* GCSO_RESTRICT did_nucleate_out) GCSO_NOEXCEPT;
 
 /**
