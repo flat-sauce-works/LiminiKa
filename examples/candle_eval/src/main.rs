@@ -23,8 +23,8 @@ use liminika_core::action_hub::{ActionHubEngine, StigmergicActionDecision};
 use liminika_core::traits::gateway::{
     AdaptiveThresholdPolicy, CognitiveCircuitBankOps, CognitiveCircuitPlasticity,
     CognitiveCircuitThresholdPolicy, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
-    GuardPhaseAnchor, HybridScaleCircuit, ObjectiveFact, RamPhaseKvCacheOps, RamPhaseKvStepOutcome,
-    ResonantSignalSlice, StandardCognitiveBank, StandardPhaseKvGopCache,
+    GuardPhaseAnchor, HybridScaleCircuit, LiminalEgoPreset, ObjectiveFact, RamPhaseKvCacheOps,
+    RamPhaseKvStepOutcome, ResonantSignalSlice, StandardCognitiveBank, StandardPhaseKvGopCache,
     StigmergicScaleGranularity, SubjectivePersona,
 };
 use serde::Deserialize;
@@ -66,6 +66,45 @@ fn parse_circuit_mode<'a>(args: impl IntoIterator<Item = &'a str>) -> CircuitPro
         }
     }
     CircuitProfileMode::None
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EgoProfileMode {
+    Custom,
+    Preset(LiminalEgoPreset),
+    NaturalLanguage(String),
+}
+
+fn parse_ego_mode<'a>(args: impl IntoIterator<Item = &'a str>) -> EgoProfileMode {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--ego=") {
+            if val.eq_ignore_ascii_case("custom") || val.eq_ignore_ascii_case("off") {
+                return EgoProfileMode::Custom;
+            }
+            if val.eq_ignore_ascii_case("low") {
+                return EgoProfileMode::Preset(LiminalEgoPreset::Low);
+            }
+            if val.eq_ignore_ascii_case("medium") {
+                return EgoProfileMode::Preset(LiminalEgoPreset::Medium);
+            }
+            if val.eq_ignore_ascii_case("high") {
+                return EgoProfileMode::Preset(LiminalEgoPreset::High);
+            }
+            if let Some(desc) = val.strip_prefix("desc:") {
+                return EgoProfileMode::NaturalLanguage(desc.to_string());
+            }
+            return EgoProfileMode::NaturalLanguage(val.to_string());
+        }
+    }
+    EgoProfileMode::Custom
+}
+
+fn apply_ego_mode(adapter: &mut ModelSteeringAdapter, mode: &EgoProfileMode) {
+    match mode {
+        EgoProfileMode::Custom => adapter.configure_ego_from_preset(LiminalEgoPreset::Custom),
+        EgoProfileMode::Preset(p) => adapter.configure_ego_from_preset(*p),
+        EgoProfileMode::NaturalLanguage(desc) => adapter.configure_ego_from_natural_language(desc),
+    }
 }
 
 fn parse_kv_min_res<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<gcso_q7_t> {
@@ -918,10 +957,10 @@ impl Phi3Model {
             Vec::new()
         };
 
-        if let Some(st) = steer.as_deref() {
+        if let Some(st) = steer.as_deref_mut() {
             if let Some((u_vec, v_vec, srl_scale)) = st.srl {
                 if srl_scale != 0.0 {
-                    let ad: &ModelSteeringAdapter = st.adapter;
+                    let ad: &mut ModelSteeringAdapter = &mut *st.adapter;
                     let q7s = st.q7s;
                     let persona_q7s = st.persona_q7s;
                     let rope_rad = st.rope_rad;
@@ -950,7 +989,7 @@ impl Phi3Model {
                                         .map_err(candle_core::Error::Msg)?;
                                 } else {
                                     let _ = ad
-                                        .apply_srl_with_gateway(
+                                        .apply_srl_with_gateway_mut(
                                             &composite, &mut h_vec, u_vec, v_vec,
                                         )
                                         .map_err(candle_core::Error::Msg)?;
@@ -967,7 +1006,7 @@ impl Phi3Model {
                                         .map_err(candle_core::Error::Msg)?;
                                 } else {
                                     let _ = ad
-                                        .apply_srl_with_gateway(
+                                        .apply_srl_with_gateway_mut(
                                             &composite, &mut h_vec, u_vec, v_vec,
                                         )
                                         .map_err(candle_core::Error::Msg)?;
@@ -980,7 +1019,7 @@ impl Phi3Model {
                                     .map_err(candle_core::Error::Msg)?;
                             } else {
                                 let _ = ad
-                                    .apply_srl_with_gateway(&fact_res, &mut h_vec, u_vec, v_vec)
+                                    .apply_srl_with_gateway_mut(&fact_res, &mut h_vec, u_vec, v_vec)
                                     .map_err(candle_core::Error::Msg)?;
                             }
                         } else {
@@ -1004,7 +1043,7 @@ impl Phi3Model {
                                         .map_err(candle_core::Error::Msg)?;
                                 } else {
                                     let _ = ad
-                                        .apply_srl_with_gateway(
+                                        .apply_srl_with_gateway_mut(
                                             &composite, &mut h_vec, u_vec, v_vec,
                                         )
                                         .map_err(candle_core::Error::Msg)?;
@@ -1017,7 +1056,7 @@ impl Phi3Model {
                                     .map_err(candle_core::Error::Msg)?;
                             } else {
                                 let _ = ad
-                                    .apply_srl_with_gateway(&fact, &mut h_vec, u_vec, v_vec)
+                                    .apply_srl_with_gateway_mut(&fact, &mut h_vec, u_vec, v_vec)
                                     .map_err(candle_core::Error::Msg)?;
                             }
                         }
@@ -1634,12 +1673,15 @@ fn critique_generated_draft(
     let (_, draft_tok_qs, _) = model.forward_tokens(&draft_ids, 0, None, false, true)?;
     let draft_recall = compiled.recall_token_sequence(adapter, &draft_tok_qs, draft_ids.len())?;
     let draft_snap = TrajectoryManifoldSnapshot::from_recall(&draft_recall);
-    Ok(Some(ManifoldReflectionEvaluator.assess_trajectory(
-        query_snap,
-        &draft_snap,
-        &compiled.recall_policy,
-        reflection_policy,
-    )))
+    Ok(Some(
+        ManifoldReflectionEvaluator.assess_trajectory_with_ego(
+            query_snap,
+            &draft_snap,
+            &compiled.recall_policy,
+            reflection_policy,
+            adapter.ego_field(),
+        ),
+    ))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1678,6 +1720,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let quant_mode = parse_quant_mode(cli_args.iter().map(String::as_str));
     let kv_min_res = parse_kv_min_res(cli_args.iter().map(String::as_str));
     let circuit_mode = parse_circuit_mode(cli_args.iter().map(String::as_str));
+    let ego_mode = parse_ego_mode(cli_args.iter().map(String::as_str));
+    let ablate_ego = cli_args.iter().any(|a| a == "--ablate-ego");
+    apply_ego_mode(&mut adapter, &ego_mode);
+    if adapter.ego_field().is_active() {
+        println!(
+            "[Ego   ] active: thrust={} escape_floor={} transgress={} defiance={} trigger=0x{:02X} hash=0x{:08X}",
+            adapter.ego_field().counter_vortex_thrust_q7,
+            adapter.ego_field().vortex_escape_floor_q7,
+            adapter.ego_field().transgression_bias_q7,
+            adapter.ego_field().irrational_defiance_q7,
+            adapter.ego_field().trigger_mask,
+            adapter.ego_field().ego_signature_hash,
+        );
+    }
 
     let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
     let active_dtype = if quant_mode.is_some() || !device.is_cuda() {
@@ -2263,14 +2319,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         compiled.recall_policy.min_coherence,
         compiled.recall_policy.boundary_margin,
     );
-    let mut step2_ctx_hits = 0_usize;
-    let mut step2_exp_hits = 0_usize;
-    let mut step2_exp_total = 0_usize;
-    let mut step2_forb_hits = 0_usize;
-    let mut step2_forb_total = 0_usize;
-    let mut step2_recall_ms_sum = 0.0_f64;
-    let mut step2_decode_tokens = 0_usize;
-    let mut step2_decode_secs = 0.0_f64;
+    let step2_ego_runs: Vec<(&str, EgoProfileMode)> = if ablate_ego {
+        let active_ego = match &ego_mode {
+            EgoProfileMode::Custom => EgoProfileMode::Preset(LiminalEgoPreset::Medium),
+            other => other.clone(),
+        };
+        vec![("NoEgo", EgoProfileMode::Custom), ("Ego", active_ego)]
+    } else {
+        vec![("Active", ego_mode.clone())]
+    };
     let reflection_policy = if no_reflect {
         ReflectionPolicy {
             max_retries: 0,
@@ -2279,351 +2336,381 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         ReflectionPolicy::default()
     };
-    let mut reflect_triggers = 0_usize;
-    let mut reflect_adopted = 0_usize;
-    let mut ram_kv_cache = StandardPhaseKvGopCache::new();
-    let mut kv_stats = KvTraceStats::default();
     let kv_policy = AdaptiveThresholdPolicy::default();
-    let mut eval_items: Vec<(String, String, Vec<String>, Vec<String>)> = suite.probes.clone();
-    eval_items.push((
-        "LVOID".to_string(),
-        "What is the boiling point of water at standard sea-level pressure?".to_string(),
-        vec!["100".to_string()],
-        vec!["GCSO".to_string(), "ZiMMS".to_string()],
-    ));
-
+    let mut step2_ablation_summaries: Vec<String> = Vec::new();
     let cut_detector = AdaptiveGopCutDetector::default();
     let mut timeline = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
         adapter.geometry(),
     ));
-    let mut frames_since_keyframe = 0_usize;
-
-    for (idx, (slot, prompt, expected, forbidden)) in eval_items.iter().enumerate() {
-        model.clear_cache();
-        let q_ids = tokenizer
-            .encode(prompt.as_str(), false)
-            .map_err(|e| format!("encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let (_, query_tok_qs, _) = model.forward_tokens(&q_ids, 0, None, false, true)?;
-        let prior_circuit = active_persona_bank
-            .as_ref()
-            .map(CognitiveCircuitBankOps::to_consolidated_ledger);
-        let t_recall = Instant::now();
-        let recall = compiled.recall_token_sequence_with_circuit(
-            &adapter,
-            &query_tok_qs,
-            q_ids.len(),
-            prior_circuit,
-        )?;
-        let recall_ms = t_recall.elapsed().as_secs_f64() * 1000.0;
-        step2_recall_ms_sum += recall_ms;
-
-        let turn_role = match slot.as_str() {
-            "PERSONA" => AttractorRole::Persona,
-            "GUARD" => AttractorRole::Guard,
-            _ => AttractorRole::Fact,
-        };
-        let emitted_i = timeline.record_step(
-            &TimelineStepContext {
-                adapter: &adapter,
-                corpus: &compiled.corpus,
-                policy: &compiled.recall_policy,
-                detector: &cut_detector,
-            },
-            SourceTextRecord {
-                frame_index: idx as u64,
-                timestamp_epoch_sec: 1_700_000_000 + (idx as u64) * 10,
-                role: turn_role,
-                text: prompt.clone(),
-                energy: 1.5,
-            },
-            &FrameTransitionMetrics {
-                phase_l1_delta: (1.0 - recall.top1_fact_score).clamp(0.0, 1.0) * 0.25,
-                void_state: recall.void_state,
-                frames_since_keyframe,
-                new_cluster_spawned: matches!(
-                    recall.void_state,
-                    VoidBoundaryState::LiminalExterior
-                ),
-            },
-        )?;
-        frames_since_keyframe = if emitted_i {
-            0
-        } else {
-            frames_since_keyframe + 1
-        };
-
-        let recalled_ctx = recall.recalled_context_text();
-
-        let dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
-        let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);
-        let mut query_snap = TrajectoryManifoldSnapshot::from_recall(&recall);
-        if let Some(ref bank) = active_persona_bank {
-            let cons = bank.to_consolidated_ledger();
-            query_snap.cognitive_trajectory = cons.compose_persona_circuit(
-                &query_snap.cognitive_trajectory,
-                kv_policy.kv_circuit_blend_q7(&recall.gateway_frame),
-            );
+    for (run_label, run_ego_mode) in &step2_ego_runs {
+        timeline = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
+            adapter.geometry(),
+        ));
+        apply_ego_mode(&mut adapter, run_ego_mode);
+        if ablate_ego {
+            println!("\n-- Step 2 Ablation Pass: {run_label} --");
         }
-        let ctx_hash = recall.context_fingerprint_u64();
-        let t_kv = Instant::now();
-        let kv_outcome = ram_kv_cache
-            .step_with_gateway_and_override(
-                ctx_hash,
-                q_ids.len() as u32,
-                &recall.gateway_frame,
-                &mut query_snap.cognitive_trajectory,
-                recall.telemetry.layer_activation,
-                &kv_policy,
-                kv_min_res,
-                (idx + 1) as u32,
-            )
-            .map_err(|e| format!("ram_kv_cache error: {e}"))?;
-        let kv_note = kv_stats.record_outcome(
-            kv_outcome,
-            t_kv.elapsed().as_secs_f64() * 1_000_000.0,
-            &recall.gateway_frame.phase_deltas,
-        );
-        if active_persona_bank.is_some() {
-            adapter.set_active_circuit(query_snap.cognitive_trajectory);
-        } else {
-            adapter.clear_active_circuit();
-        }
-        let top_fact_preview = if recall.recalled_facts.is_empty() {
-            "none".to_string()
-        } else {
-            recall
-                .recalled_facts
-                .iter()
-                .map(|(e, _)| format!("#{}", e.anchor_id))
-                .collect::<Vec<_>>()
-                .join("+")
-        };
-        let tlm = recall.telemetry;
-        let query_void_state = recall.void_state;
-        let query_action_decision = recall.action_decision;
-        let query_top1 = recall.top1_fact_score;
-        let query_top2 = recall.top2_fact_score;
-        let query_guard_m = recall.guard_conflict_margin;
+        let mut step2_ctx_hits = 0_usize;
+        let mut step2_exp_hits = 0_usize;
+        let mut step2_exp_total = 0_usize;
+        let mut step2_forb_hits = 0_usize;
+        let mut step2_forb_total = 0_usize;
+        let mut step2_recall_ms_sum = 0.0_f64;
+        let mut step2_decode_tokens = 0_usize;
+        let mut step2_decode_secs = 0.0_f64;
+        let mut reflect_triggers = 0_usize;
+        let mut reflect_adopted = 0_usize;
+        let mut ram_kv_cache = StandardPhaseKvGopCache::new();
+        let mut kv_stats = KvTraceStats::default();
+        let mut eval_items: Vec<(String, String, Vec<String>, Vec<String>)> = suite.probes.clone();
+        eval_items.push((
+            "LVOID".to_string(),
+            "What is the boiling point of water at standard sea-level pressure?".to_string(),
+            vec!["100".to_string()],
+            vec!["GCSO".to_string(), "ZiMMS".to_string()],
+        ));
 
-        let (text, reflect_note) = if let Some(baked) = baked_opt.as_ref() {
-            let is_guard_trap = query_guard_m > 0.05
-                || matches!(
-                    query_action_decision,
-                    StigmergicActionDecision::RepulsionEscape
-                );
-            let active_prompt = if recalled_ctx.is_empty()
-                || (matches!(query_void_state, VoidBoundaryState::LiminalExterior)
-                    && !is_guard_trap)
-            {
-                format_phi4_prompt(prompt)
-            } else {
-                format_phi4_prompt(&format!("[Context: {recalled_ctx}]\n{prompt}"))
-            };
+        let mut frames_since_keyframe = 0_usize;
 
-            let use_steer = is_guard_trap
-                || (!matches!(query_void_state, VoidBoundaryState::LiminalExterior)
-                    && !dyn_facts.is_empty());
-            let res_ctx = if use_steer {
-                Some(ResonantAnchors {
-                    facts: dyn_facts.as_slice(),
-                    personas: dyn_personas.as_slice(),
-                    guards: baked.guard_anchors_per_layer.as_slice(),
-                    negs: baked.neg_sum.as_slice(),
-                    poss: baked.pos_sum.as_slice(),
-                })
-            } else {
-                None
-            };
-            let rope_rad = if use_steer { -2.00 } else { 0.00 };
-            let srl_arg = if use_steer {
-                Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), -1.00))
-            } else {
-                None
-            };
-
-            let pass1_cfg = SteerDecodeConfig {
-                q7s: Some(baked.fact_q7.as_slice()),
-                persona_q7s: Some(baked.persona_q7.as_slice()),
-                resonant_ctx: res_ctx,
-                rope_rad,
-                srl: srl_arg,
-                use_steer,
-            };
-            let (mut text, p1_tokens, p1_secs) = generate_steered_reply(
-                &mut model,
-                &tokenizer,
-                &mut adapter,
-                active_prompt.as_str(),
-                &pass1_cfg,
+        for (idx, (slot, prompt, expected, forbidden)) in eval_items.iter().enumerate() {
+            model.clear_cache();
+            let q_ids = tokenizer
+                .encode(prompt.as_str(), false)
+                .map_err(|e| format!("encode error: {e}"))?
+                .get_ids()
+                .to_vec();
+            let (_, query_tok_qs, _) = model.forward_tokens(&q_ids, 0, None, false, true)?;
+            let prior_circuit = active_persona_bank
+                .as_ref()
+                .map(CognitiveCircuitBankOps::to_consolidated_ledger);
+            let t_recall = Instant::now();
+            let recall = compiled.recall_token_sequence_with_circuit(
+                &adapter,
+                &query_tok_qs,
+                q_ids.len(),
+                prior_circuit,
             )?;
-            step2_decode_tokens += p1_tokens;
-            step2_decode_secs += p1_secs;
+            let recall_ms = t_recall.elapsed().as_secs_f64() * 1000.0;
+            step2_recall_ms_sum += recall_ms;
 
-            let mut reflect_note = if no_reflect {
-                "off".to_string()
-            } else {
-                "skip".to_string()
+            let turn_role = match slot.as_str() {
+                "PERSONA" => AttractorRole::Persona,
+                "GUARD" => AttractorRole::Guard,
+                _ => AttractorRole::Fact,
             };
-            let mut chosen_crit: Option<ReflectionCritique> = None;
-            if !no_reflect && reflection_policy.max_retries > 0 {
-                if let Some(pass1_crit) = critique_generated_draft(
+            let emitted_i = timeline.record_step(
+                &TimelineStepContext {
+                    adapter: &adapter,
+                    corpus: &compiled.corpus,
+                    policy: &compiled.recall_policy,
+                    detector: &cut_detector,
+                },
+                SourceTextRecord {
+                    frame_index: idx as u64,
+                    timestamp_epoch_sec: 1_700_000_000 + (idx as u64) * 10,
+                    role: turn_role,
+                    text: prompt.clone(),
+                    energy: 1.5,
+                },
+                &FrameTransitionMetrics {
+                    phase_l1_delta: (1.0 - recall.top1_fact_score).clamp(0.0, 1.0) * 0.25,
+                    void_state: recall.void_state,
+                    frames_since_keyframe,
+                    new_cluster_spawned: matches!(
+                        recall.void_state,
+                        VoidBoundaryState::LiminalExterior
+                    ),
+                },
+            )?;
+            frames_since_keyframe = if emitted_i {
+                0
+            } else {
+                frames_since_keyframe + 1
+            };
+
+            let recalled_ctx = recall.recalled_context_text();
+
+            let dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
+            let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);
+            let mut query_snap = TrajectoryManifoldSnapshot::from_recall(&recall);
+            if let Some(ref bank) = active_persona_bank {
+                let cons = bank.to_consolidated_ledger();
+                query_snap.cognitive_trajectory = cons.compose_persona_circuit(
+                    &query_snap.cognitive_trajectory,
+                    kv_policy.kv_circuit_blend_q7(&recall.gateway_frame),
+                );
+            }
+            let ctx_hash = recall.context_fingerprint_u64();
+            let t_kv = Instant::now();
+            let kv_outcome = ram_kv_cache
+                .step_with_gateway_and_override(
+                    ctx_hash,
+                    q_ids.len() as u32,
+                    &recall.gateway_frame,
+                    &mut query_snap.cognitive_trajectory,
+                    recall.telemetry.layer_activation,
+                    &kv_policy,
+                    kv_min_res,
+                    (idx + 1) as u32,
+                )
+                .map_err(|e| format!("ram_kv_cache error: {e}"))?;
+            let kv_note = kv_stats.record_outcome(
+                kv_outcome,
+                t_kv.elapsed().as_secs_f64() * 1_000_000.0,
+                &recall.gateway_frame.phase_deltas,
+            );
+            if active_persona_bank.is_some() {
+                adapter.set_active_circuit(query_snap.cognitive_trajectory);
+            } else {
+                adapter.clear_active_circuit();
+            }
+            let (core_hor, core_venn, ens_opt) =
+                adapter.sync_core_layers_from_recall(&recall, None);
+            let core_note = format!(
+                "reg={:?} l0={} l1={} ego={} sc={} venn=0x{:02X} ens={}",
+                core_hor.regime(),
+                adapter.aperture_field().adaptation_epochs,
+                adapter.stigmergic_granule_field().adaptation_epochs,
+                adapter.ego_field().intervention_epochs,
+                adapter.last_boundary_delta().stationary_shortcut_ready,
+                core_venn.venn_core_mask,
+                ens_opt.map_or(0, |r| r.active_fragment_count),
+            );
+            let top_fact_preview = if recall.recalled_facts.is_empty() {
+                "none".to_string()
+            } else {
+                recall
+                    .recalled_facts
+                    .iter()
+                    .map(|(e, _)| format!("#{}", e.anchor_id))
+                    .collect::<Vec<_>>()
+                    .join("+")
+            };
+            let tlm = recall.telemetry;
+            let query_void_state = recall.void_state;
+            let query_action_decision = recall.action_decision;
+            let query_top1 = recall.top1_fact_score;
+            let query_top2 = recall.top2_fact_score;
+            let query_guard_m = recall.guard_conflict_margin;
+
+            let (text, reflect_note) = if let Some(baked) = baked_opt.as_ref() {
+                let is_guard_trap = query_guard_m > 0.05
+                    || matches!(
+                        query_action_decision,
+                        StigmergicActionDecision::RepulsionEscape
+                    );
+                let active_prompt = if recalled_ctx.is_empty()
+                    || (matches!(query_void_state, VoidBoundaryState::LiminalExterior)
+                        && !is_guard_trap)
+                {
+                    format_phi4_prompt(prompt)
+                } else {
+                    format_phi4_prompt(&format!("[Context: {recalled_ctx}]\n{prompt}"))
+                };
+
+                let use_steer = is_guard_trap
+                    || (!matches!(query_void_state, VoidBoundaryState::LiminalExterior)
+                        && !dyn_facts.is_empty());
+                let res_ctx = if use_steer {
+                    Some(ResonantAnchors {
+                        facts: dyn_facts.as_slice(),
+                        personas: dyn_personas.as_slice(),
+                        guards: baked.guard_anchors_per_layer.as_slice(),
+                        negs: baked.neg_sum.as_slice(),
+                        poss: baked.pos_sum.as_slice(),
+                    })
+                } else {
+                    None
+                };
+                let rope_rad = if use_steer { -2.00 } else { 0.00 };
+                let srl_arg = if use_steer {
+                    Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), -1.00))
+                } else {
+                    None
+                };
+
+                let pass1_cfg = SteerDecodeConfig {
+                    q7s: Some(baked.fact_q7.as_slice()),
+                    persona_q7s: Some(baked.persona_q7.as_slice()),
+                    resonant_ctx: res_ctx,
+                    rope_rad,
+                    srl: srl_arg,
+                    use_steer,
+                };
+                let (mut text, p1_tokens, p1_secs) = generate_steered_reply(
                     &mut model,
                     &tokenizer,
-                    &adapter,
-                    &compiled,
-                    &query_snap,
-                    &text,
-                    &reflection_policy,
-                )? {
-                    if pass1_crit.directive.rethink_recommended {
-                        reflect_triggers += 1;
-                        let cue = pass1_crit.corrective_instruction(&text).unwrap_or_default();
-                        let retry_prompt =
-                            if pass1_crit.directive.suppress_injection || recalled_ctx.is_empty() {
+                    &mut adapter,
+                    active_prompt.as_str(),
+                    &pass1_cfg,
+                )?;
+                step2_decode_tokens += p1_tokens;
+                step2_decode_secs += p1_secs;
+
+                let mut reflect_note = if no_reflect {
+                    "off".to_string()
+                } else {
+                    "skip".to_string()
+                };
+                let mut chosen_crit: Option<ReflectionCritique> = None;
+                if !no_reflect && reflection_policy.max_retries > 0 {
+                    if let Some(pass1_crit) = critique_generated_draft(
+                        &mut model,
+                        &tokenizer,
+                        &adapter,
+                        &compiled,
+                        &query_snap,
+                        &text,
+                        &reflection_policy,
+                    )? {
+                        if pass1_crit.directive.rethink_recommended {
+                            reflect_triggers += 1;
+                            let cue = pass1_crit.corrective_instruction(&text).unwrap_or_default();
+                            let retry_prompt = if pass1_crit.directive.suppress_injection
+                                || recalled_ctx.is_empty()
+                            {
                                 format_phi4_prompt(&format!("{cue}\n{prompt}"))
                             } else {
                                 format_phi4_prompt(&format!(
                                     "[Context: {recalled_ctx}]\n{cue}\n{prompt}"
                                 ))
                             };
-                        let retry_use_steer = !pass1_crit.directive.suppress_injection
-                            && (!dyn_facts.is_empty()
-                                || pass1_crit.directive.inject_guard_repulsion);
-                        let retry_res = if retry_use_steer {
-                            Some(ResonantAnchors {
-                                facts: dyn_facts.as_slice(),
-                                personas: dyn_personas.as_slice(),
-                                guards: baked.guard_anchors_per_layer.as_slice(),
-                                negs: baked.neg_sum.as_slice(),
-                                poss: baked.pos_sum.as_slice(),
-                            })
-                        } else {
-                            None
-                        };
-                        let retry_rope = if retry_use_steer {
-                            pass1_cfg.rope_rad + pass1_crit.directive.rope_rad_delta
-                        } else {
-                            0.0
-                        };
-                        let retry_srl = if retry_use_steer {
-                            Some((
-                                baked.srl_u.as_slice(),
-                                baked.srl_v.as_slice(),
-                                -1.00 + pass1_crit.directive.srl_scale_delta,
-                            ))
-                        } else {
-                            None
-                        };
-                        let retry_cfg = SteerDecodeConfig {
-                            q7s: Some(baked.fact_q7.as_slice()),
-                            persona_q7s: Some(baked.persona_q7.as_slice()),
-                            resonant_ctx: retry_res,
-                            rope_rad: retry_rope,
-                            srl: retry_srl,
-                            use_steer: retry_use_steer,
-                        };
-                        let (p2_text, p2_tokens, p2_secs) = generate_steered_reply(
-                            &mut model,
-                            &tokenizer,
-                            &mut adapter,
-                            retry_prompt.as_str(),
-                            &retry_cfg,
-                        )?;
-                        step2_decode_tokens += p2_tokens;
-                        step2_decode_secs += p2_secs;
-                        if let Some(pass2_crit) = critique_generated_draft(
-                            &mut model,
-                            &tokenizer,
-                            &adapter,
-                            &compiled,
-                            &query_snap,
-                            &p2_text,
-                            &reflection_policy,
-                        )? {
-                            let pick = ManifoldReflectionEvaluator.select_better_pass(
-                                &reflection_policy,
-                                &pass1_crit,
-                                &pass2_crit,
-                            );
-                            if matches!(pick, ReflectionSelection::Pass2) {
-                                reflect_adopted += 1;
-                                text = p2_text;
-                                reflect_note = format!(
-                                    "{:?}->{:?}(P2,{:+.2}->{:+.2},[{:?}->{:?}])",
-                                    pass1_crit.trigger,
-                                    pass2_crit.trigger,
-                                    pass1_crit.alignment_score,
-                                    pass2_crit.alignment_score,
-                                    pass1_crit.layer_activation.op_kind(),
-                                    pass2_crit.layer_activation.op_kind()
-                                );
-                                chosen_crit = Some(pass2_crit);
+                            let retry_use_steer = !pass1_crit.directive.suppress_injection
+                                && (!dyn_facts.is_empty()
+                                    || pass1_crit.directive.inject_guard_repulsion);
+                            let retry_res = if retry_use_steer {
+                                Some(ResonantAnchors {
+                                    facts: dyn_facts.as_slice(),
+                                    personas: dyn_personas.as_slice(),
+                                    guards: baked.guard_anchors_per_layer.as_slice(),
+                                    negs: baked.neg_sum.as_slice(),
+                                    poss: baked.pos_sum.as_slice(),
+                                })
                             } else {
-                                reflect_note = format!(
-                                    "{:?}->{:?}(P1,{:+.2}->{:+.2},[{:?}->{:?}])",
-                                    pass1_crit.trigger,
-                                    pass2_crit.trigger,
-                                    pass1_crit.alignment_score,
-                                    pass2_crit.alignment_score,
-                                    pass1_crit.layer_activation.op_kind(),
-                                    pass2_crit.layer_activation.op_kind()
+                                None
+                            };
+                            let retry_rope = if retry_use_steer {
+                                pass1_cfg.rope_rad + pass1_crit.directive.rope_rad_delta
+                            } else {
+                                0.0
+                            };
+                            let retry_srl = if retry_use_steer {
+                                Some((
+                                    baked.srl_u.as_slice(),
+                                    baked.srl_v.as_slice(),
+                                    -1.00 + pass1_crit.directive.srl_scale_delta,
+                                ))
+                            } else {
+                                None
+                            };
+                            let retry_cfg = SteerDecodeConfig {
+                                q7s: Some(baked.fact_q7.as_slice()),
+                                persona_q7s: Some(baked.persona_q7.as_slice()),
+                                resonant_ctx: retry_res,
+                                rope_rad: retry_rope,
+                                srl: retry_srl,
+                                use_steer: retry_use_steer,
+                            };
+                            let (p2_text, p2_tokens, p2_secs) = generate_steered_reply(
+                                &mut model,
+                                &tokenizer,
+                                &mut adapter,
+                                retry_prompt.as_str(),
+                                &retry_cfg,
+                            )?;
+                            step2_decode_tokens += p2_tokens;
+                            step2_decode_secs += p2_secs;
+                            if let Some(pass2_crit) = critique_generated_draft(
+                                &mut model,
+                                &tokenizer,
+                                &adapter,
+                                &compiled,
+                                &query_snap,
+                                &p2_text,
+                                &reflection_policy,
+                            )? {
+                                let pick = ManifoldReflectionEvaluator.select_better_pass(
+                                    &reflection_policy,
+                                    &pass1_crit,
+                                    &pass2_crit,
                                 );
+                                if matches!(pick, ReflectionSelection::Pass2) {
+                                    reflect_adopted += 1;
+                                    text = p2_text;
+                                    reflect_note = format!(
+                                        "{:?}->{:?}(P2,{:+.2}->{:+.2},[{:?}->{:?}])",
+                                        pass1_crit.trigger,
+                                        pass2_crit.trigger,
+                                        pass1_crit.alignment_score,
+                                        pass2_crit.alignment_score,
+                                        pass1_crit.layer_activation.op_kind(),
+                                        pass2_crit.layer_activation.op_kind()
+                                    );
+                                    chosen_crit = Some(pass2_crit);
+                                } else {
+                                    reflect_note = format!(
+                                        "{:?}->{:?}(P1,{:+.2}->{:+.2},[{:?}->{:?}])",
+                                        pass1_crit.trigger,
+                                        pass2_crit.trigger,
+                                        pass1_crit.alignment_score,
+                                        pass2_crit.alignment_score,
+                                        pass1_crit.layer_activation.op_kind(),
+                                        pass2_crit.layer_activation.op_kind()
+                                    );
+                                    chosen_crit = Some(pass1_crit);
+                                }
+                            } else {
+                                reflect_note = format!("{:?}(P1)", pass1_crit.trigger);
                                 chosen_crit = Some(pass1_crit);
                             }
                         } else {
-                            reflect_note = format!("{:?}(P1)", pass1_crit.trigger);
+                            reflect_note = format!("{:?}(0)", pass1_crit.trigger);
                             chosen_crit = Some(pass1_crit);
                         }
-                    } else {
-                        reflect_note = format!("{:?}(0)", pass1_crit.trigger);
-                        chosen_crit = Some(pass1_crit);
                     }
                 }
-            }
-            if let Some(ref mut bank) = active_persona_bank {
-                if let Some(step) = recall.telemetry.cognitive_trajectory.latest_step() {
-                    bank.push_step_hierarchical(step);
+                if let Some(ref mut bank) = active_persona_bank {
+                    if let Some(step) = recall.telemetry.cognitive_trajectory.latest_step() {
+                        bank.push_step_hierarchical(step);
+                    }
+                    if let Some(ref crit) = chosen_crit {
+                        let converged = matches!(
+                            crit.trigger,
+                            liminika_adapter::ReflectionTriggerKind::Converged
+                                | liminika_adapter::ReflectionTriggerKind::ConsistentVoidAbstention
+                        );
+                        bank.reinforce_bank(&crit.layer_activation, converged);
+                    }
+                    adapter.set_active_circuit(bank.to_consolidated_ledger());
                 }
-                if let Some(ref crit) = chosen_crit {
-                    let converged = matches!(
-                        crit.trigger,
-                        liminika_adapter::ReflectionTriggerKind::Converged
-                            | liminika_adapter::ReflectionTriggerKind::ConsistentVoidAbstention
-                    );
-                    bank.reinforce_bank(&crit.layer_activation, converged);
-                }
-                adapter.set_active_circuit(bank.to_consolidated_ledger());
-            }
-            (text, reflect_note)
-        } else {
-            (String::new(), "skip(recall_only)".to_string())
-        };
+                (text, reflect_note)
+            } else {
+                (String::new(), "skip(recall_only)".to_string())
+            };
 
-        let lower = text.to_lowercase();
-        let ctx_lower = recalled_ctx.to_lowercase();
-        let ctx_exp = expected
-            .iter()
-            .filter(|kw| ctx_lower.contains(&kw.to_lowercase()))
-            .count();
-        let p_exp = expected
-            .iter()
-            .filter(|kw| lower.contains(&kw.to_lowercase()))
-            .count();
-        let p_forb = forbidden
-            .iter()
-            .filter(|kw| lower.contains(&kw.to_lowercase()))
-            .count();
-        if idx < suite.probes.len() {
-            step2_ctx_hits += ctx_exp;
-            step2_exp_hits += p_exp;
-            step2_exp_total += expected.len();
-            step2_forb_hits += p_forb;
-            step2_forb_total += forbidden.len();
-        }
-        println!(
-            "  [S2:{}:{}] void={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} recall_ms={:.2} kv={} reflect={} probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={} prov_slot={}] ctx_hit={}/{} hit={}/{} forb={} => {}",
+            let lower = text.to_lowercase();
+            let ctx_lower = recalled_ctx.to_lowercase();
+            let ctx_exp = expected
+                .iter()
+                .filter(|kw| ctx_lower.contains(&kw.to_lowercase()))
+                .count();
+            let p_exp = expected
+                .iter()
+                .filter(|kw| lower.contains(&kw.to_lowercase()))
+                .count();
+            let p_forb = forbidden
+                .iter()
+                .filter(|kw| lower.contains(&kw.to_lowercase()))
+                .count();
+            if idx < suite.probes.len() {
+                step2_ctx_hits += ctx_exp;
+                step2_exp_hits += p_exp;
+                step2_exp_total += expected.len();
+                step2_forb_hits += p_forb;
+                step2_forb_total += forbidden.len();
+            }
+            println!(
+            "  [S2:{}:{}] void={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} recall_ms={:.2} kv={} reflect={} core=[{}] probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={} prov_slot={}] ctx_hit={}/{} hit={}/{} forb={} => {}",
             idx + 1,
             slot,
             query_void_state,
@@ -2635,6 +2722,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             recall_ms,
             kv_note,
             reflect_note,
+            core_note,
             tlm.global_top1_anchor.unwrap_or(0),
             tlm.global_top1_score,
             tlm.local_top1_anchor.unwrap_or(0),
@@ -2648,15 +2736,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             p_forb,
             text
         );
-    }
-    let mean_recall_ms = step2_recall_ms_sum / (eval_items.len().max(1) as f64);
-    let decode_tps = if step2_decode_secs > 1e-6 {
-        step2_decode_tokens as f64 / step2_decode_secs
-    } else {
-        0.0
-    };
-    println!(
-        "Step 2 Dynamic Corpus Summary: recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit={:.1}% ({}/{}) | forbid_hit={:.1}% ({}/{}) | reflect=({}/{}) | compile={:.1}ms mean_recall={:.2}ms decode={:.2} tok/s",
+        }
+        let mean_recall_ms = step2_recall_ms_sum / (eval_items.len().max(1) as f64);
+        let decode_tps = if step2_decode_secs > 1e-6 {
+            step2_decode_tokens as f64 / step2_decode_secs
+        } else {
+            0.0
+        };
+        let summary_line = format!(
+        "Step 2 Dynamic Corpus Summary ({run_label}): recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit={:.1}% ({}/{}) | forbid_hit={:.1}% ({}/{}) | reflect=({}/{}) | core=[L0={} L1={} Ego={} fired=0x{:02X}] | compile={:.1}ms mean_recall={:.2}ms decode={:.2} tok/s",
         if step2_exp_total == 0 {
             0.0
         } else {
@@ -2680,27 +2768,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         step2_forb_total,
         reflect_adopted,
         reflect_triggers,
+        adapter.aperture_field().adaptation_epochs,
+        adapter.stigmergic_granule_field().adaptation_epochs,
+        adapter.ego_field().intervention_epochs,
+        adapter.ego_field().last_intervened_mask,
         compile_ms,
         mean_recall_ms,
         decode_tps,
     );
-    let ram_kv_occupied = ram_kv_cache.occupied_slot_count();
-    let ram_kv_total_hits = kv_stats.exact_hits + kv_stats.res_hits;
-    let ram_kv_hit_rate = if kv_stats.lookups == 0 {
-        0.0
-    } else {
-        ram_kv_total_hits as f64 / kv_stats.lookups as f64 * 100.0
-    };
-    let ram_kv_avg_us = if kv_stats.lookups == 0 {
-        0.0
-    } else {
-        kv_stats.lookup_us_sum / kv_stats.lookups as f64
-    };
-    let kv_mode_label = match kv_min_res {
-        Some(v) => format!("override={v}"),
-        None => "auto(2/sqrt(H))".to_string(),
-    };
-    println!(
+        println!("{summary_line}");
+        step2_ablation_summaries.push(summary_line);
+        if adapter.ego_field().is_active() {
+            println!(
+                "[CoreTopology]\n{}",
+                adapter.render_liminal_topology_mermaid(
+                    compiled.corpus.entries().len().min(255) as u8,
+                    0
+                )
+            );
+        }
+        let ram_kv_occupied = ram_kv_cache.occupied_slot_count();
+        let ram_kv_total_hits = kv_stats.exact_hits + kv_stats.res_hits;
+        let ram_kv_hit_rate = if kv_stats.lookups == 0 {
+            0.0
+        } else {
+            ram_kv_total_hits as f64 / kv_stats.lookups as f64 * 100.0
+        };
+        let ram_kv_avg_us = if kv_stats.lookups == 0 {
+            0.0
+        } else {
+            kv_stats.lookup_us_sum / kv_stats.lookups as f64
+        };
+        let kv_mode_label = match kv_min_res {
+            Some(v) => format!("override={v}"),
+            None => "auto(2/sqrt(H))".to_string(),
+        };
+        println!(
         "RAM Phase-KV GOP Cache ({} KB / {} slots, zero-VRAM, min_res={}): occupied={} hits={}/{} ({:.1}%: exact={} res={}) pframes={} seeks={} repulsed={} avg_lookup={:.2} us",
         core::mem::size_of::<StandardPhaseKvGopCache>() / 1024,
         ram_kv_cache.entries().len(),
@@ -2716,6 +2819,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         kv_stats.pframe_repulsed,
         ram_kv_avg_us,
     );
+    }
+    if step2_ablation_summaries.len() > 1 {
+        println!("\n=== Step 2 Ego Ablation Comparison ===");
+        for line in &step2_ablation_summaries {
+            println!("  {line}");
+        }
+    }
 
     if multi_turn && (recall_only || baked_opt.is_some()) {
         {
@@ -2844,6 +2954,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     adapter.clear_active_circuit();
                 }
+                let _ = adapter.sync_core_layers_from_recall(&recall, None);
 
                 let dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
                 let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);

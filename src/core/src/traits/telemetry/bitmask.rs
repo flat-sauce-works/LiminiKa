@@ -279,37 +279,15 @@ impl PagedBitmaskOps for gcso_paged_bitmask_t {
 
     #[inline(always)]
     fn dyadic_lca_depth(&self, other: &Self) -> u32 {
-        let d0 = self.bits[0] ^ other.bits[0];
-        let d1 = self.bits[1] ^ other.bits[1];
-        let d2 = self.bits[2] ^ other.bits[2];
-        let d3 = self.bits[3] ^ other.bits[3];
-        let eq0 = d0 == 0;
-        let eq01 = eq0 & (d1 == 0);
-        let eq012 = eq01 & (d2 == 0);
-        let all_zero = eq012 & (d3 == 0);
-        let active_w = branchless_select_u64(
-            eq0,
-            branchless_select_u64(eq01, branchless_select_u64(eq012, d3, d2), d1),
-            d0,
-        );
-        let base_lz = ((eq0 as u32) + (eq01 as u32) + (eq012 as u32)) << 6;
-        branchless_select_u32(
-            all_zero,
-            PAGED_BITMASK_BITS,
-            base_lz + (active_w | 1).leading_zeros(),
-        )
+        dyadic_lca_depth_raw(self, other)
     }
 }
 
-/// Evaluates the normalized pseudo-ultrametric tree distance $d_{\mathcal{V}}(x, y) \in [0, 1)$
-/// directly from two 256-bit dyadic bitmasks in $\mathcal{O}(1)$ (Lemma 1.1).
 #[inline(always)]
-#[must_use]
-pub const fn eval_bitmask_dyadic_ultrametric(
+const fn dyadic_lca_depth_raw(
     mask_x: &gcso_paged_bitmask_t,
     mask_y: &gcso_paged_bitmask_t,
-    w_key: f32,
-) -> f32 {
+) -> u32 {
     let d0 = mask_x.bits[0] ^ mask_y.bits[0];
     let d1 = mask_x.bits[1] ^ mask_y.bits[1];
     let d2 = mask_x.bits[2] ^ mask_y.bits[2];
@@ -324,11 +302,23 @@ pub const fn eval_bitmask_dyadic_ultrametric(
         d0,
     );
     let base_lz = ((eq0 as u32) + (eq01 as u32) + (eq012 as u32)) << 6;
-    let l_lca = branchless_select_u32(
+    branchless_select_u32(
         all_zero,
         PAGED_BITMASK_BITS,
         base_lz + (active_w | 1).leading_zeros(),
-    );
+    )
+}
+
+/// Evaluates the normalized pseudo-ultrametric tree distance $d_{\mathcal{V}}(x, y) \in [0, 1)$
+/// directly from two 256-bit dyadic bitmasks in $\mathcal{O}(1)$ (Lemma 1.1).
+#[inline(always)]
+#[must_use]
+pub const fn eval_bitmask_dyadic_ultrametric(
+    mask_x: &gcso_paged_bitmask_t,
+    mask_y: &gcso_paged_bitmask_t,
+    w_key: f32,
+) -> f32 {
+    let l_lca = dyadic_lca_depth_raw(mask_x, mask_y);
     let diff = PAGED_BITMASK_BITS.saturating_sub(l_lca) as f32;
     branchless_tanh_f32(branchless_relu_f32(w_key) * diff)
 }

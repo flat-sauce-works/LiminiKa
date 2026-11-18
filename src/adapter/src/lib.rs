@@ -18,19 +18,22 @@ use liminika_core::traits::aligned::{
     AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32,
 };
 use liminika_core::traits::gateway::{
-    ActionHubGatewayExt, AdaptiveThresholdPolicy, AutonomousCoreLayerStack, CausalProvenanceReport,
+    evaluate_stigmergic_venn_and_serendipity_words_64, ActionHubGatewayExt,
+    AdaptiveThresholdPolicy, AutonomousCoreLayerStack, CausalProvenanceReport,
     CausalProvenanceSignal, CognitiveCircuitActivation, CognitiveCircuitBankOps,
-    CognitiveCircuitPlasticity, CognitiveTrajectoryLedger, DissipativeOverflowReport,
-    EgoIntentAxes, EpistemicHorizonReading, GatewayFrame, GatewayPhaseSteeringExt,
-    GatewayRank1SteeringExt, GuardPhaseAnchor, LiminalApertureField, LiminalBoundaryDelta,
-    LiminalEgoField, LiminalEgoPreset, LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal,
-    ManifoldProbeBaseline, ObjectiveFact, StigmergicFragmentEnsembleReport, StigmergicGranuleField,
+    CognitiveCircuitPlasticity, CognitiveTrajectoryLedger, CoreLayerEvalContext,
+    DissipativeOverflowReport, EgoIntentAxes, EpistemicHorizonReading, EpistemicRegime,
+    GatewayFrame, GatewayPhaseSteeringExt, GatewayRank1SteeringExt, GuardPhaseAnchor,
+    LiminalApertureField, LiminalBoundaryDelta, LiminalEgoField, LiminalEgoPreset,
+    LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact,
+    RelativeAttractorNode, StigmergicFragmentEnsembleReport, StigmergicGranuleField,
     StigmergicScaleGranularity, StigmergicThresholdPolicy, StigmergicVennSerendipityReport,
     SubjectivePersona, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
     CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA, EGO_TRIGGER_BOUNDARY_STAGNATION,
 };
 use liminika_core::traits::primitives::{
-    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, MAX_ATTENTION_HEADS,
+    load_q7_words_64, swar_q7_circular_add_x8, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
+    ATTRACTOR_SLOT_REPULSION, MAX_ATTENTION_HEADS, SWAR_SPLAT_BYTE_64,
 };
 use liminika_core::traits::rope::{
     PhaseSteeringGeometryExt, RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget,

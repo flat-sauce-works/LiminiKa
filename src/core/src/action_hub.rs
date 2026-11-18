@@ -88,9 +88,7 @@ use crate::abi::{
     gcso_subhead_config_t, gcso_tagged_ptr_t, GCSO_ERROR_INVALID_ARGUMENT,
 };
 use crate::phase_steering::{PhaseSteeringEngine, DEFAULT_DPSR_HEAD_DIM, DEFAULT_DPSR_NUM_HEADS};
-use crate::traits::aligned::{
-    AlignedBuffer64, AlignedSlice16, AlignedSliceMut16, AlignedSliceMut32,
-};
+use crate::traits::aligned::{AlignedBuffer64, AlignedSlice16, AlignedSliceMut32};
 use crate::traits::branchless::{
     branchless_fast_transition_log_prob, coherence_from_word_arrays_64, scale_f32_slice_unrolled8,
     swar_words_nonzero_64,
@@ -109,8 +107,8 @@ use crate::traits::primitives::{
     branchless_is_finite_f32, branchless_max_f32, branchless_min_f32,
     branchless_rad_to_qdps_step_u8, branchless_relu_f32, branchless_select_f32,
     branchless_select_u32, branchless_select_u64, branchless_select_u8, branchless_select_usize,
-    fast_inv_len_f32, load_q7_words_64, swar_or_avx2_q7_add_sat_words_64,
-    swar_q7_qdps_filter_words_64, trail_phase_words_mut, trail_phase_words_ref, SWAR_SPLAT_BYTE_64,
+    fast_inv_len_f32, swar_or_avx2_q7_add_sat_words_64, swar_q7_qdps_filter_words_64,
+    trail_phase_words_mut, trail_phase_words_ref, SWAR_SPLAT_BYTE_64,
 };
 use crate::traits::primitives::{
     pack_action_slot_tag, unpack_attractor_slot_from_tag, GcsoResult, Pod, ACTION_MODE_DPSR_STEER,
@@ -122,8 +120,8 @@ use crate::traits::primitives::{
 };
 use crate::traits::rope::{
     dispatch_fused_ripa_and_pspm_words_core, resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim,
-    steer_from_swar_words_core_safe, DynamicLayerSkipper, EntropyGatedPhaseLookup, PhaseSteering,
-    Rank1ResidualAdapter, SubHeadRouter, VisualAttentionSteering,
+    steer_from_swar_words_core_safe, PhaseSteering, Rank1ResidualAdapter, SubHeadRouter,
+    VisualAttentionSteering,
 };
 use crate::traits::telemetry::{
     select_rewire_bridge_and_modulate_with_preloaded_words_64, ContrastivePhaseBloomFilter,
@@ -290,71 +288,6 @@ impl StigmergicThresholds {
             crystallize_density_thresh: DEFAULT_STIGMERGIC_CRYSTALLIZE_THRESH,
             contradiction_coherence_thresh: DEFAULT_STIGMERGIC_CONTRADICTION_THRESH,
         }
-    }
-
-    /// Sets the per-step pheromone retention factor $\lambda_{\mathrm{retain}} \in [0.0, 1.0]$.
-    #[inline(always)]
-    #[must_use]
-    pub const fn with_evaporation_retain(mut self, retain: f32) -> Self {
-        self.evaporation_retain = branchless_clamp_f32(branchless_relu_f32(retain), 0.0, 1.0);
-        self
-    }
-
-    /// Sets the pheromone reinforcement deposit gain $g_{\mathrm{reinforce}} \ge 0.0$.
-    #[inline(always)]
-    #[must_use]
-    pub const fn with_reinforcement_gain(mut self, gain: f32) -> Self {
-        self.reinforcement_gain = branchless_relu_f32(gain);
-        self
-    }
-
-    /// Sets the low-entropy inertial layer-skip threshold $\tau_{\mathrm{skip}}$.
-    #[inline(always)]
-    #[must_use]
-    pub const fn with_inertial_skip_entropy_thresh(mut self, thresh: f32) -> Self {
-        self.inertial_skip_entropy_thresh = branchless_relu_f32(thresh);
-        self
-    }
-
-    /// Sets the express RIPA phase steering density threshold $\tau_{\mathrm{steer}}$.
-    #[inline(always)]
-    #[must_use]
-    pub const fn with_express_steer_density_thresh(mut self, thresh: f32) -> Self {
-        self.express_steer_density_thresh = branchless_relu_f32(thresh);
-        self
-    }
-
-    /// Sets the sub-head router Sub-Head Pseudo-MoE routing density threshold $\tau_{\mathrm{pspm}}$.
-    #[inline(always)]
-    #[must_use]
-    pub const fn with_subhead_route_density_thresh(mut self, thresh: f32) -> Self {
-        self.subhead_route_density_thresh = branchless_relu_f32(thresh);
-        self
-    }
-
-    /// Sets the full orchestration + Rank-1 residual injection density threshold $\tau_{\mathrm{srl}}$.
-    #[inline(always)]
-    #[must_use]
-    pub const fn with_rank1_inject_density_thresh(mut self, thresh: f32) -> Self {
-        self.rank1_inject_density_thresh = branchless_relu_f32(thresh);
-        self
-    }
-
-    /// Sets the macro basin crystallization density threshold $\tau_{\mathrm{crystal}}$.
-    #[inline(always)]
-    #[must_use]
-    pub const fn with_crystallize_density_thresh(mut self, thresh: f32) -> Self {
-        self.crystallize_density_thresh = branchless_relu_f32(thresh);
-        self
-    }
-
-    /// Sets the directional contradiction coherence threshold $\tau_{\mathrm{contradict}} \in [0.0, 1.0]$.
-    #[inline(always)]
-    #[must_use]
-    pub const fn with_contradiction_coherence_thresh(mut self, thresh: f32) -> Self {
-        self.contradiction_coherence_thresh =
-            branchless_clamp_f32(branchless_abs_f32(thresh), 0.0, 1.0);
-        self
     }
 
     /// Validates that all threshold parameters are finite and ordered cleanly.
@@ -1150,14 +1083,6 @@ impl ActionHubEngine {
         Ok(hub)
     }
 
-    /// Sets the active [`StigmergicThresholds`] ladder.
-    #[inline(always)]
-    #[must_use]
-    pub const fn with_thresholds(mut self, thresholds: StigmergicThresholds) -> Self {
-        self.thresholds = thresholds;
-        self
-    }
-
     /// Returns the number of populated inline trails in `self.trails` (`0..=ACTION_HUB_INLINE_TRAILS`).
     #[inline(always)]
     #[must_use]
@@ -1169,101 +1094,11 @@ impl ActionHubEngine {
         )
     }
 
-    /// Returns an immutable slice over the currently populated inline pointer trails.
-    #[inline(always)]
-    #[must_use]
-    pub fn active_trails(&self) -> &[gcso_pointer_trail_t] {
-        &self.trails[..self.inline_active_len()]
-    }
-
-    /// Returns a mutable slice over the currently populated inline pointer trails.
-    #[inline(always)]
-    #[must_use]
-    pub fn active_trails_mut(&mut self) -> &mut [gcso_pointer_trail_t] {
-        let len = self.inline_active_len();
-        &mut self.trails[..len]
-    }
-
-    /// Returns an immutable reference to inline trail slot `trail_id & 15`.
-    #[inline(always)]
-    #[must_use]
-    pub const fn trail_slot(&self, trail_id: u32) -> &gcso_pointer_trail_t {
-        &self.trails[(trail_id as usize) & (ACTION_HUB_INLINE_TRAILS - 1)]
-    }
-
-    /// Returns a mutable reference to inline trail slot `trail_id & 15`.
-    #[inline(always)]
-    #[must_use]
-    pub fn trail_slot_mut(&mut self, trail_id: u32) -> &mut gcso_pointer_trail_t {
-        &mut self.trails[(trail_id as usize) & (ACTION_HUB_INLINE_TRAILS - 1)]
-    }
-
     /// Returns an immutable 16-byte aligned slice view over the 8-lane Q7 working phase bank (`512` bytes).
     #[inline(always)]
     #[must_use]
     pub const fn slot_phase_bank(&self) -> AlignedSlice16<'_, gcso_q7_t> {
         self.slot_phase_bank.relax_slice::<16>()
-    }
-
-    /// Returns a mutable 16-byte aligned slice view over the 8-lane Q7 working phase bank (`512` bytes).
-    #[inline(always)]
-    #[must_use]
-    pub fn slot_phase_bank_mut(&mut self) -> AlignedSliceMut16<'_, gcso_q7_t> {
-        self.slot_phase_bank.relax_slice_mut::<16>()
-    }
-
-    /// Sets the 64-head Q7 phase profile for a specific Attractor Working Lane (`0..=7`).
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `slot_id >= MAX_ATTRACTOR_DOMAINS`.
-    #[inline]
-    pub fn set_slot_phase_profile(
-        &mut self,
-        slot_id: u8,
-        phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    ) -> GcsoResult<()> {
-        let idx = usize::from(slot_id);
-        if idx >= MAX_ATTRACTOR_DOMAINS {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        // SAFETY: `self.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every 64-byte slot
-        // at byte offset `idx * 64` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
-        let dst_w = unsafe {
-            &mut *(self
-                .slot_phase_bank
-                .as_mut_slice()
-                .as_mut_ptr()
-                .add(idx * MAX_ATTENTION_HEADS)
-                as *mut [u64; NUM_STIGMERGIC_GRANULES])
-        };
-        *dst_w = load_q7_words_64(phases);
-        Ok(())
-    }
-
-    /// Evaluates the [`StigmergicThresholds`] ladder on `trail` and returns a 32-byte
-    /// [`ActionOrchestrationReport`] without mutating `self`.
-    #[inline(always)]
-    #[must_use]
-    pub const fn evaluate_stigmergic_thresholds(
-        &self,
-        trail: &gcso_pointer_trail_t,
-        entropy_h_tilde: f32,
-        phase_coherence: f32,
-        transition_log_prob: f32,
-        selected_trail_id: u32,
-        bloom_repulsion_density: u8,
-        dominant_slot: u8,
-    ) -> ActionOrchestrationReport {
-        self.thresholds.evaluate_report_on_trail(
-            trail,
-            self.repulsion_threshold,
-            entropy_h_tilde,
-            phase_coherence,
-            transition_log_prob,
-            selected_trail_id,
-            bloom_repulsion_density,
-            dominant_slot,
-        )
     }
 
     /// Applies per-step pheromone evaporation ($\rho_j \gets \rho_j \cdot \lambda_{\mathrm{retain}}$)
@@ -2013,8 +1848,6 @@ impl PhaseSteering for ActionHubEngine {
     }
 }
 
-impl EntropyGatedPhaseLookup for ActionHubEngine {}
-impl DynamicLayerSkipper for ActionHubEngine {}
 impl VisualAttentionSteering for ActionHubEngine {}
 impl SubHeadRouter for ActionHubEngine {}
 impl Rank1ResidualAdapter for ActionHubEngine {}

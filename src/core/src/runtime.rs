@@ -33,37 +33,32 @@
 use crate::abi::{
     gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_edbc_state_t,
     gcso_kv_keyframe_header_t, gcso_ledger_slot_t, gcso_mapped_storage_descriptor_t,
-    gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t, gcso_rank1_residual_descriptor_t,
-    gcso_snapshot_header_t, gcso_subhead_config_t, gcso_tagged_ptr_t, GCSO_CAP_CPU_BASELINE,
-    GCSO_CAP_CUDA_BACKEND, GCSO_CAP_METAL_BACKEND, GCSO_CAP_VULKAN_BACKEND,
+    gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t, gcso_snapshot_header_t,
+    gcso_tagged_ptr_t, GCSO_CAP_CPU_BASELINE, GCSO_CAP_CUDA_BACKEND, GCSO_CAP_METAL_BACKEND,
+    GCSO_CAP_VULKAN_BACKEND,
 };
-use crate::action_hub::{
-    ActionHubEngine, ActionOrchestrationReport, StigmergicThresholds, ACTION_HUB_INLINE_TRAILS,
-};
+use crate::action_hub::{ActionHubEngine, ACTION_HUB_INLINE_TRAILS};
 use crate::attractor::{MultiAttractorSpace, MAX_ANCHORS_PER_FIELD, MAX_ATTRACTOR_DOMAINS};
 use crate::entropy_control::{EntropyClosedLoopCoordinator, EntropyController};
 use crate::phase_steering::{PhaseSteeringClosedLoop, PhaseSteeringEngine};
 use crate::traits::{
     ActionHub, ActionHubGatewayExt, AlignedBuffer64, AlignedSlice16, AlignedSlice32,
-    AlignedSliceMut16, AlignedSliceMut32, AttractorField, AttractorSlotSynergyCoordinator,
-    BottomUpMacroCrystalCoordinator, CausalProvenanceSignal, ColdPathObserver,
-    ContrastivePhaseBloomFilter, DnpPacketDispatcher, DynamicLayerSkipper, EdbcBranchController,
-    EntropyEvaluator, EntropyGatedPhaseLookup, FastPathLedger, FractalCascadeCoordinator,
-    FullStackGcsoEngine, GatewayFrame, GatewayPhaseSteeringExt, GcsoResult, GcsoRuntimeContext,
-    HierarchicalTreeTable, HotPathObserver, KvKeyframeCache, L2pSvdProjector,
-    ManifoldGatewaySignal, MappedStorage, MultiDomainAttractorSpace, PersonaPatcher, PhaseSteering,
-    Pod, PointerActionHub, Rank1ResidualAdapter, SheafCohomologyEvaluator, StigmergicActionPtrOps,
-    StigmergicChunkOps, StigmergicCohomologyCoordinator, StigmergicTrailOps, SubHeadRouter,
-    SystemCapabilityQuery, SystemConstraintSignal, VisualAttentionSteering, ACTION_MODE_LAYER_SKIP,
-    ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE,
-    DEFAULT_SLOT_COUPLING_MATRIX_8X8, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
-    TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
+    AlignedSliceMut16, AlignedSliceMut32, AttractorField, CausalProvenanceSignal, ColdPathObserver,
+    ContrastivePhaseBloomFilter, DnpPacketDispatcher, EdbcBranchController, EntropyEvaluator,
+    FastPathLedger, FractalCascadeCoordinator, FullStackGcsoEngine, GatewayFrame,
+    GatewayPhaseSteeringExt, GcsoResult, GcsoRuntimeContext, HierarchicalTreeTable,
+    HotPathObserver, KvKeyframeCache, L2pSvdProjector, ManifoldGatewaySignal, MappedStorage,
+    MultiDomainAttractorSpace, PersonaPatcher, PhaseSteering, Pod, PointerActionHub,
+    Rank1ResidualAdapter, SheafCohomologyEvaluator, StigmergicActionPtrOps, StigmergicChunkOps,
+    StigmergicTrailOps, SubHeadRouter, SystemCapabilityQuery, SystemConstraintSignal,
+    VisualAttentionSteering, ACTION_MODE_LAYER_SKIP, ATTRACTOR_SLOT_PERSONA,
+    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+    TRAIL_FLAG_REPULSION_ACTIVE,
 };
 
 use crate::traits::branchless::{
-    branchless_fast_transition_log_prob, branchless_q7_inhibit_words_64,
-    coherence_from_word_arrays_with_both_uniform_flags_64, swar_slerp_words_with_uniform_flag_64,
-    swar_words_equal_64, swar_words_nonzero_64,
+    branchless_q7_inhibit_words_64, coherence_from_word_arrays_with_both_uniform_flags_64,
+    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64,
 };
 use crate::traits::primitives::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
@@ -80,9 +75,7 @@ use crate::traits::primitives::{
     LEDGER_HISTORY_LEN, MAX_ATTENTION_HEADS, Q7_PHASE_SCALE_RAD,
 };
 use crate::traits::{
-    accumulate_q7_slice_into_words_64, select_rewire_bridge_and_modulate_with_preloaded_words_64,
-    LEDGER_METRIC_FAST_PATH_HIT, LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED,
-    LEDGER_METRIC_REPULSION_APPLIED, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, MAX_ATTRACTOR_PULL_FORCE,
+    LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_REPULSION_APPLIED, MAX_ATTRACTOR_PULL_FORCE,
 };
 
 /// Convenient crate-level result type alias for GCSO operations.
@@ -389,9 +382,6 @@ impl Config {
 /// - [`ActionHub`]
 /// - [`crate::traits::HotPathExecutionEngine`] / [`HotPathObserver`] / [`FractalCascadeCoordinator`]
 /// - [`crate::traits::ColdPathOrchestrator`] / [`ColdPathObserver`]
-/// - [`AttractorSlotSynergyCoordinator`]
-/// - [`StigmergicCohomologyCoordinator`]
-/// - [`BottomUpMacroCrystalCoordinator`]
 /// - [`FullStackGcsoEngine`]
 #[derive(Debug)]
 pub struct RuntimeContext {
@@ -455,66 +445,6 @@ impl RuntimeContext {
     #[must_use]
     pub fn action_hub_mut(&mut self) -> &mut ActionHubEngine {
         &mut self.action_hub
-    }
-
-    /// Returns an immutable reference to the active [`StigmergicThresholds`] ladder.
-    #[inline(always)]
-    #[must_use]
-    pub const fn stigmergic_thresholds(&self) -> &StigmergicThresholds {
-        &self.action_hub.thresholds
-    }
-
-    /// Validates and updates the active [`StigmergicThresholds`] ladder.
-    ///
-    /// # Errors
-    /// Returns [`crate::abi::GCSO_ERROR_INVALID_ARGUMENT`] if any threshold is non-finite or out of order.
-    #[inline]
-    pub fn set_stigmergic_thresholds(&mut self, thresholds: StigmergicThresholds) -> Result<()> {
-        thresholds.validate()?;
-        self.action_hub.thresholds = thresholds;
-        Ok(())
-    }
-
-    /// Executes a closed-loop **EDBC Entropy Evaluation + Stigmergic Threshold Action Selection**
-    /// step via [`ActionHubEngine::orchestrate_next_action_step`] in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
-    ///
-    /// # Errors
-    /// Propagates any error from [`EntropyEvaluator::eval_stateful`] or
-    /// [`ActionHubEngine::orchestrate_next_action_step`].
-    #[inline]
-    pub fn step_stigmergic_action_orchestration(
-        &mut self,
-        input_tagged_ptr: gcso_tagged_ptr_t,
-        token_z_score: f32,
-        trail_inout: &mut gcso_pointer_trail_t,
-        attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> Result<ActionOrchestrationReport> {
-        let mut edbc_state = gcso_edbc_state_t::default();
-        self.edbc.eval_stateful(token_z_score, &mut edbc_state)?;
-        self.attractor_space.advance_step();
-        let (dom_slot, _dom_w) = self.find_dominant_domain();
-        let dom_slot_u8 = (dom_slot as u8) & ATTRACTOR_SLOT_ID_MASK;
-
-        self.action_hub.orchestrate_next_action_step(
-            input_tagged_ptr,
-            edbc_state.moving_z_entropy,
-            dom_slot_u8,
-            trail_inout,
-            attention_scores,
-            query_tensor,
-            key_tensor,
-            logits_opt,
-        )
-    }
-
-    /// Returns an immutable reference to the underlying [`PhaseSteeringEngine`].
-    #[inline(always)]
-    #[must_use]
-    pub const fn phase_steering_engine(&self) -> &PhaseSteeringEngine {
-        &self.dpsr
     }
 
     /// Returns an immutable reference to the underlying [`EntropyController`].
@@ -667,612 +597,6 @@ impl RuntimeContext {
     }
 
     /// Executes a per-token Hot Path step integrating DPSR phase steering, EDBC entropy evaluation,
-    /// Single Unified Attractor Manifold superposition, Contrastive Phase Bloom Filter repulsion,
-    /// and FastPathLedger telemetry logging in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
-    ///
-    /// # Errors
-    /// Returns [`crate::abi::GCSO_ERROR_INVALID_ARGUMENT`] if `query_tensor` and `key_tensor`
-    /// alias in memory or if tensor dimensions mismatch `head_dim * num_heads`.
-    /// Returns [`crate::abi::GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score` is non-finite.
-    #[inline]
-    pub fn step_token_with_zscore(
-        &mut self,
-        token_id: u32,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        phase_deltas: Option<&AlignedSlice16<'_, gcso_q7_t>>,
-        token_z_score: f32,
-        trail_out: Option<&mut gcso_pointer_trail_t>,
-    ) -> Result<()> {
-        if let (Some(q), Some(k)) = (query_tensor.as_deref(), key_tensor.as_deref()) {
-            q.ensure_disjoint_mut(k)?;
-        }
-
-        match (query_tensor, key_tensor, phase_deltas) {
-            (Some(q), Some(k), Some(p)) => {
-                self.dpsr.apply_phase_steering_fused(q, k, p)?;
-            }
-            (Some(q), None, Some(p)) => {
-                self.dpsr.apply_phase_steering(q, p)?;
-            }
-            (None, Some(k), Some(p)) => {
-                self.dpsr.apply_phase_steering(k, p)?;
-            }
-            _ => {}
-        }
-
-        let mut state_out = gcso_edbc_state_t::default();
-        self.edbc.eval_stateful(token_z_score, &mut state_out)?;
-
-        let next_step = self.action_hub.step_counter.wrapping_add(1);
-        self.action_hub.step_counter = next_step;
-        self.attractor_space.advance_step();
-        let cap = self.config.raw.action_hub_capacity;
-        let cur_active = self.action_hub.active_count;
-        self.action_hub.active_count =
-            branchless_select_u32(cur_active < cap, cur_active.wrapping_add(1), cur_active);
-
-        let mut repulsion_active = false;
-        if let Some(trail) = trail_out {
-            trail.prev_ptr = trail.current_ptr;
-            trail.current_ptr = u64::from(token_id);
-            trail.step_count = next_step as u32;
-            trail.stigmergic_density = branchless_select_f32(
-                trail.stigmergic_density > 1.0,
-                trail.stigmergic_density,
-                1.0,
-            );
-
-            let (mut phase_words, total_pull) =
-                self.evaluate_multi_domain_superposition_words(trail);
-
-            if let Some(p) = phase_deltas {
-                accumulate_q7_slice_into_words_64(&mut phase_words, p.as_slice());
-            }
-            let (_density, rep_trig) = self
-                .action_hub
-                .bloom_filter
-                .apply_phase_conjugate_repulsion_words(
-                    &mut phase_words,
-                    self.config.repulsion_threshold,
-                    self.config.repulsion_scale_u7,
-                );
-            repulsion_active = rep_trig;
-
-            trail.attractor_pull_force = total_pull;
-            *crate::traits::primitives::trail_phase_words_mut(trail) = phase_words;
-            trail.flags = state_out.active_branch_mode
-                | branchless_select_u32(repulsion_active, TRAIL_FLAG_REPULSION_ACTIVE, 0);
-        }
-
-        let metric = LEDGER_METRIC_PHASE_STEERED
-            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0);
-        self.action_hub.ledger_slot.push_telemetry_metric(metric);
-
-        Ok(())
-    }
-
-    /// Executes a **Single-Manifold Unified-Field** per-token cascade directly over an arbitrary
-    /// slice of anchors (`anchor_phases`, `anchor_base_energies`) without requiring an 8-slot
-    /// domain restriction:
-    /// 1. Evaluates EDBC entropy on `token_z_score`.
-    /// 2. Steps `input_tagged_ptr` with FastPathLedger fast-path shortcut lookup and `bloom_filter` repulsion.
-    /// 3. Folds all unified-field anchors via [`PointerActionHub::orchestrate_unified_field_resonance`],
-    ///    binding the 32-bit dominant resonant anchor ID into `trail_out.target_anchor_id`.
-    /// 4. Optionally modulates candidate memory Attention scores (`attention_scores`) by
-    ///    Attention $\times$ DPSR phase interference.
-    /// 5. Applies 8-lane SWAR QDPS filtering and RIPA soft-clamped phase steering to `query_tensor`
-    ///    and/or `key_tensor`.
-    ///
-    /// Returns `(repulsion_density, final_pull_force, mean_coherence, dominant_anchor_id)`.
-    ///
-    /// # Errors
-    /// Propagates any error from [`EntropyEvaluator::eval_stateful`] or
-    /// [`FractalCascadeCoordinator::execute_unified_field_token_cascade`].
-    #[inline]
-    pub fn step_unified_field_token_cascade(
-        &mut self,
-        input_tagged_ptr: gcso_tagged_ptr_t,
-        token_z_score: f32,
-        anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
-        anchor_base_energies: &[f32],
-        repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
-        attention_interference_gain: f32,
-        attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        trail_out: &mut gcso_pointer_trail_t,
-    ) -> Result<(u8, f32, f32, u32)> {
-        let mut edbc_state = gcso_edbc_state_t::default();
-        self.edbc.eval_stateful(token_z_score, &mut edbc_state)?;
-        self.attractor_space.advance_step();
-
-        let rep_thresh = self.config.repulsion_threshold;
-        let rep_scale = self.config.repulsion_scale_u7;
-        let qdps_min = self.config.raw.qdps_min_step_rad;
-        let ripa_max = self.config.raw.ripa_clamp_max_rad;
-
-        let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
-            qdps_min,
-            ripa_max,
-            query_tensor.as_deref(),
-            key_tensor.as_deref(),
-        )?;
-        let (bypass_hit, eff_ptr) = self
-            .action_hub
-            .ledger_slot
-            .resolve_or_pass_in_place(input_tagged_ptr);
-        self.step_pointer(eff_ptr.raw(), trail_out)?;
-        let (density, repulsion_active) = self
-            .action_hub
-            .bloom_filter
-            .apply_phase_conjugate_repulsion_words(
-                trail_phase_words_mut(trail_out),
-                rep_thresh,
-                rep_scale,
-            );
-        let init_w = *trail_phase_words_ref(trail_out);
-        let (final_pull, mean_coh, active_cnt, raw_words) = self
-            .orchestrate_unified_field_resonance_from_words(
-                init_w,
-                anchor_phases,
-                anchor_base_energies,
-                repulsion_phases_and_strength,
-                trail_out,
-            )?;
-        let steered = self.steer_qdps_words_prevalidated_core(
-            &raw_words,
-            head_dim,
-            num_heads,
-            qdps_min,
-            ripa_max,
-            query_tensor,
-            key_tensor,
-        );
-        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
-            | branchless_select_u8(active_cnt > 0, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, 0);
-        self.action_hub.ledger_slot.push_telemetry_metric(metric);
-
-        if let Some(scores) = attention_scores {
-            if !anchor_phases.is_empty() && !scores.is_empty() {
-                let _ = self.modulate_hub_attention_scores_by_unified_field(
-                    scores,
-                    trail_out,
-                    anchor_phases,
-                    attention_interference_gain,
-                )?;
-            }
-        }
-
-        Ok((density, final_pull, mean_coh, trail_out.target_anchor_id))
-    }
-
-    /// Executes the closed-loop **Autonomous Pointer-Trail Selection + Bayes-Attention
-    /// Interference** cascade uniting joint-probability attention phase interference and
-    /// stigmergic pointer-trail rewiring in [`ActionHub`] in zero-allocation ($C_{\mathrm{alloc}} = 0$) mode.
-    ///
-    /// Returns `(selected_trail_id, bayesian_score, transition_log_prob, dominant_anchor_id, found_coherent_transition)`.
-    ///
-    /// # Errors
-    /// Propagates any error from [`EntropyEvaluator::eval_stateful`] or
-    /// [`FractalCascadeCoordinator::execute_autonomous_pointer_trail_attention_cascade`].
-    #[inline]
-    pub fn step_autonomous_pointer_trail_attention_cascade(
-        &mut self,
-        src_trail_id: u32,
-        input_tagged_ptr: gcso_tagged_ptr_t,
-        token_z_score: f32,
-        candidate_trails: &mut [gcso_pointer_trail_t],
-        phase_interference_gain: f32,
-        stigmergic_prior_gain: f32,
-        pointer_link_bonus: f32,
-        repulsion_penalty: f32,
-        interpolation_u7: u8,
-        contradiction_threshold: f32,
-        anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
-        anchor_base_energies: &[f32],
-        repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
-        attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        trail_out: &mut gcso_pointer_trail_t,
-    ) -> Result<(u32, f32, f32, u32, bool)> {
-        let mut edbc_state = gcso_edbc_state_t::default();
-        self.edbc.eval_stateful(token_z_score, &mut edbc_state)?;
-        self.attractor_space.advance_step();
-
-        let rep_thresh = self.config.repulsion_threshold;
-        let rep_scale = self.config.repulsion_scale_u7;
-        let qdps_min = self.config.raw.qdps_min_step_rad;
-        let ripa_max = self.config.raw.ripa_clamp_max_rad;
-
-        if candidate_trails.is_empty()
-            || !branchless_is_finite_f32(phase_interference_gain)
-            || !branchless_is_finite_f32(stigmergic_prior_gain)
-            || !branchless_is_finite_f32(pointer_link_bonus)
-            || !branchless_is_finite_f32(repulsion_penalty)
-            || !branchless_is_finite_f32(contradiction_threshold)
-        {
-            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
-            qdps_min,
-            ripa_max,
-            query_tensor.as_deref(),
-            key_tensor.as_deref(),
-        )?;
-        let (bypass_hit, eff_ptr) = self
-            .action_hub
-            .ledger_slot
-            .resolve_or_pass_in_place(input_tagged_ptr);
-        self.step_pointer(eff_ptr.raw(), trail_out)?;
-        let (_density, mut repulsion_active) = self
-            .action_hub
-            .bloom_filter
-            .apply_phase_conjugate_repulsion_words(
-                trail_phase_words_mut(trail_out),
-                rep_thresh,
-                rep_scale,
-            );
-        let init_w = *trail_phase_words_ref(trail_out);
-        let (_final_pull, _mean_anc_coh, active_anchors, pre_bridge_words) = self
-            .orchestrate_unified_field_resonance_from_words(
-                init_w,
-                anchor_phases,
-                anchor_base_energies,
-                repulsion_phases_and_strength,
-                trail_out,
-            )?;
-
-        let scores_slice_opt = attention_scores
-            .filter(|s| !s.is_empty())
-            .map(AlignedSliceMut32::as_mut_slice);
-
-        let (selected_id, bayes_score, _mean_coh, _coh_cnt, found_coherent, final_words, best_coh) =
-            select_rewire_bridge_and_modulate_with_preloaded_words_64(
-                trail_out,
-                pre_bridge_words,
-                candidate_trails,
-                scores_slice_opt,
-                head_dim as u32,
-                phase_interference_gain,
-                stigmergic_prior_gain,
-                pointer_link_bonus,
-                contradiction_threshold,
-                interpolation_u7,
-                repulsion_penalty,
-                0,
-                None,
-                0.0,
-            );
-
-        let mut log_prob = 0.0_f32;
-        if found_coherent {
-            self.link_hallucinated_trails(src_trail_id, selected_id)?;
-            let dst_idx = (selected_id as usize).min(candidate_trails.len() - 1);
-            let dst_trail = &mut candidate_trails[dst_idx];
-            log_prob = branchless_fast_transition_log_prob(best_coh);
-            *trail_phase_words_mut(dst_trail) = final_words;
-            let dst_has_anchor = dst_trail.target_anchor_id != 0;
-            let inherited_anchor = branchless_select_u32(
-                dst_has_anchor,
-                dst_trail.target_anchor_id,
-                trail_out.target_anchor_id,
-            );
-            trail_out.target_anchor_id = inherited_anchor;
-            dst_trail.target_anchor_id = inherited_anchor;
-            if inherited_anchor != 0 {
-                trail_out.cluster_id = inherited_anchor;
-                dst_trail.cluster_id = inherited_anchor;
-            }
-            trail_out.flags |= TRAIL_FLAG_SYNERGY_RESONANCE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE;
-            dst_trail.flags |= TRAIL_FLAG_SYNERGY_RESONANCE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE;
-            dst_trail.sync_flags_with_current_ptr();
-        } else {
-            repulsion_active = true;
-        }
-        trail_out.sync_flags_with_current_ptr();
-
-        let steered = self.steer_qdps_words_prevalidated_core(
-            &final_words,
-            head_dim,
-            num_heads,
-            qdps_min,
-            ripa_max,
-            query_tensor,
-            key_tensor,
-        );
-        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
-            | branchless_select_u8(
-                (active_anchors > 0) | found_coherent,
-                LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
-                0,
-            );
-        self.action_hub.ledger_slot.push_telemetry_metric(metric);
-
-        Ok((
-            selected_id,
-            bayes_score,
-            log_prob,
-            trail_out.target_anchor_id,
-            found_coherent,
-        ))
-    }
-
-    /// Executes the Pointer-Driven Stigmergic Mode Cascade on this context's internal FastPathLedger
-    /// scratchpad and Contrastive Phase Bloom Filter in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
-    ///
-    /// # Errors
-    /// Returns [`crate::abi::GCSO_ERROR_INVALID_ARGUMENT`], [`crate::abi::GCSO_ERROR_NULL_POINTER`],
-    /// or [`crate::abi::GCSO_ERROR_MISALIGNED_POINTER`] if tensor slices or descriptors are invalid.
-    #[inline]
-    pub fn step_pointer_mode_cascade(
-        &mut self,
-        input_tagged_ptr: gcso_tagged_ptr_t,
-        token_z_score: f32,
-        low_entropy_skip_thresh: f32,
-        high_density_rank1_thresh: f32,
-        layer_skip_comp_profile: Option<&AlignedSlice16<'_, gcso_q7_t>>,
-        query_tensor: &mut AlignedSliceMut32<'_, f32>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        subhead_config: Option<&gcso_subhead_config_t>,
-        rank1_activation_and_desc: Option<(
-            &AlignedSlice32<'_, f32>,
-            &gcso_rank1_residual_descriptor_t,
-        )>,
-        trail_out: &mut gcso_pointer_trail_t,
-    ) -> Result<(gcso_tagged_ptr_t, u8)> {
-        let mut edbc_state = gcso_edbc_state_t::default();
-        self.edbc.eval_stateful(token_z_score, &mut edbc_state)?;
-        self.attractor_space.advance_step();
-
-        let (dom_slot, _dom_weight) = self.find_dominant_domain();
-        let dominant_slot_u8 = (dom_slot as u8) & ATTRACTOR_SLOT_ID_MASK;
-
-        let rep_thresh = self.config.repulsion_threshold;
-        let rep_scale = self.config.repulsion_scale_u7;
-        let qdps_min = self.config.raw.qdps_min_step_rad;
-        let ripa_max = self.config.raw.ripa_clamp_max_rad;
-
-        let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
-            qdps_min,
-            ripa_max,
-            Some(&*query_tensor),
-            key_tensor.as_deref(),
-        )?;
-        let (bypass_hit, eff_ptr) = self
-            .action_hub
-            .ledger_slot
-            .resolve_or_pass_in_place(input_tagged_ptr);
-        self.step_pointer(eff_ptr.raw(), trail_out)?;
-        self.finish_pointer_cascade_tail(
-            edbc_state.moving_z_entropy,
-            dominant_slot_u8,
-            low_entropy_skip_thresh,
-            high_density_rank1_thresh,
-            rep_thresh,
-            rep_scale,
-            qdps_min,
-            ripa_max,
-            head_dim,
-            num_heads,
-            bypass_hit,
-            false,
-            0,
-            layer_skip_comp_profile,
-            query_tensor,
-            key_tensor,
-            subhead_config,
-            rank1_activation_and_desc,
-            trail_out,
-        )
-    }
-
-    /// Executes the full Slot-Bank Pointer Cascade integrating [`RuntimeContext`]'s internal
-    /// 8-lane Q7 working phase bank (`slot_phase_bank`), cross-lane coupling matrix
-    /// (`slot_coupling_matrix`), mutual inhibition from [`ATTRACTOR_SLOT_REPULSION`], EDBC
-    /// entropy evaluation, and FastPathLedger telemetry logging in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
-    ///
-    /// Returns `(evolved_tagged_ptr, bloom_repulsion_density, effective_pull_force, phase_coherence)`.
-    ///
-    /// # Errors
-    /// Returns [`crate::abi::GCSO_ERROR_INVALID_ARGUMENT`], [`crate::abi::GCSO_ERROR_NULL_POINTER`],
-    /// or [`crate::abi::GCSO_ERROR_MISALIGNED_POINTER`] if slot indices, tensor slices, or descriptors are invalid.
-    #[inline]
-    pub fn step_slot_bank_pointer_cascade(
-        &mut self,
-        input_tagged_ptr: gcso_tagged_ptr_t,
-        secondary_slot: u8,
-        synergy_gain: f32,
-        inhibition_strength: f32,
-        token_z_score: f32,
-        low_entropy_skip_thresh: f32,
-        high_density_rank1_thresh: f32,
-        layer_skip_comp_profile: Option<&AlignedSlice16<'_, gcso_q7_t>>,
-        query_tensor: &mut AlignedSliceMut32<'_, f32>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        subhead_config: Option<&gcso_subhead_config_t>,
-        rank1_activation_and_desc: Option<(
-            &AlignedSlice32<'_, f32>,
-            &gcso_rank1_residual_descriptor_t,
-        )>,
-        trail_out: &mut gcso_pointer_trail_t,
-    ) -> Result<(gcso_tagged_ptr_t, u8, f32, f32)> {
-        let mut edbc_state = gcso_edbc_state_t::default();
-        self.edbc.eval_stateful(token_z_score, &mut edbc_state)?;
-        self.attractor_space.advance_step();
-
-        let (dom_slot, _dom_weight) = self.find_dominant_domain();
-        let dominant_slot_u8 = (dom_slot as u8) & ATTRACTOR_SLOT_ID_MASK;
-
-        let mut gated_weights = [0.0f32; MAX_ATTRACTOR_DOMAINS];
-        let mask = self.action_hub.slot_enabled_mask;
-        let weights = &self.action_hub.slot_weights;
-        let mut i = 0usize;
-        while i < MAX_ATTRACTOR_DOMAINS {
-            let enabled = ((mask >> i) & 1) != 0;
-            gated_weights[i] = branchless_select_f32(enabled, weights[i], 0.0);
-            i += 1;
-        }
-        let coupling = self.action_hub.coupling_matrix_8x8;
-        let rep_thresh = self.config.repulsion_threshold;
-        let rep_scale = self.config.repulsion_scale_u7;
-        let qdps_min = self.config.raw.qdps_min_step_rad;
-        let ripa_max = self.config.raw.ripa_clamp_max_rad;
-
-        let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
-            qdps_min,
-            ripa_max,
-            Some(&*query_tensor),
-            key_tensor.as_deref(),
-        )?;
-        let (bypass_hit, eff_ptr) = self
-            .action_hub
-            .ledger_slot
-            .resolve_or_pass_in_place(input_tagged_ptr);
-        self.step_pointer(eff_ptr.raw(), trail_out)?;
-
-        let bank_slice = self.action_hub.slot_phase_bank.relax_slice::<16>();
-        let (damped_pull, coherence) = self.orchestrate_cross_slot_synergy_from_bank(
-            &bank_slice,
-            &gated_weights,
-            secondary_slot,
-            coupling,
-            synergy_gain,
-            inhibition_strength,
-            trail_out,
-        )?;
-
-        let (evolved_ptr, density) = self.finish_pointer_cascade_tail(
-            edbc_state.moving_z_entropy,
-            dominant_slot_u8,
-            low_entropy_skip_thresh,
-            high_density_rank1_thresh,
-            rep_thresh,
-            rep_scale,
-            qdps_min,
-            ripa_max,
-            head_dim,
-            num_heads,
-            bypass_hit,
-            input_tagged_ptr.has_action_mode(ACTION_MODE_LAYER_SKIP),
-            LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
-            layer_skip_comp_profile,
-            query_tensor,
-            key_tensor,
-            subhead_config,
-            rank1_activation_and_desc,
-            trail_out,
-        )?;
-        Ok((evolved_ptr, density, damped_pull, coherence))
-    }
-
-    #[inline(always)]
-    #[allow(clippy::too_many_arguments)]
-    fn finish_pointer_cascade_tail(
-        &mut self,
-        moving_z_entropy: f32,
-        dominant_slot_u8: u8,
-        low_entropy_skip_thresh: f32,
-        high_density_rank1_thresh: f32,
-        rep_thresh: u8,
-        rep_scale: u8,
-        qdps_min: f32,
-        ripa_max: f32,
-        head_dim: usize,
-        num_heads: usize,
-        bypass_hit: bool,
-        force_skip_flag: bool,
-        base_metric_bits: u8,
-        layer_skip_comp_profile: Option<&AlignedSlice16<'_, gcso_q7_t>>,
-        query_tensor: &mut AlignedSliceMut32<'_, f32>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        subhead_config: Option<&gcso_subhead_config_t>,
-        rank1_activation_and_desc: Option<(
-            &AlignedSlice32<'_, f32>,
-            &gcso_rank1_residual_descriptor_t,
-        )>,
-        trail_out: &mut gcso_pointer_trail_t,
-    ) -> Result<(gcso_tagged_ptr_t, u8)> {
-        let (density, repulsion_active) = self
-            .action_hub
-            .bloom_filter
-            .apply_phase_conjugate_repulsion_words(
-                trail_phase_words_mut(trail_out),
-                rep_thresh,
-                rep_scale,
-            );
-        let evolved_ptr = trail_out.evolve_trail_mode_stigmergically(
-            moving_z_entropy,
-            repulsion_active,
-            dominant_slot_u8,
-            low_entropy_skip_thresh,
-            high_density_rank1_thresh,
-        );
-
-        let mut trail_w = *trail_phase_words_ref(trail_out);
-        let skip_active = evolved_ptr.has_action_mode(ACTION_MODE_LAYER_SKIP) | force_skip_flag;
-        let mut skip_compensated = false;
-        if let Some(comp) = layer_skip_comp_profile {
-            if skip_active {
-                if comp.len() < num_heads {
-                    return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
-                }
-                accumulate_q7_slice_into_words_64(&mut trail_w, &comp.as_slice()[..num_heads]);
-                *trail_phase_words_mut(trail_out) = trail_w;
-                trail_out.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
-                skip_compensated = true;
-            }
-        }
-
-        let steered = self.steer_qdps_words_prevalidated_core(
-            &trail_w,
-            head_dim,
-            num_heads,
-            qdps_min,
-            ripa_max,
-            Some(&mut *query_tensor),
-            key_tensor,
-        );
-        let extra_metrics = self.apply_optional_pspm_and_srl(
-            query_tensor,
-            head_dim,
-            subhead_config,
-            rank1_activation_and_desc,
-        )?;
-        let metric = base_metric_bits
-            | branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
-            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0)
-            | branchless_select_u8(skip_compensated, LEDGER_METRIC_LAYER_SKIP_COMPENSATED, 0)
-            | extra_metrics;
-        self.action_hub.ledger_slot.push_telemetry_metric(metric);
-
-        Ok((evolved_ptr, density))
-    }
-
-    /// Executes a sequence of token steps in zero-allocation mode (for prefill and batch decoding).
-    ///
-    /// # Errors
-    /// Propagates any error returned by [`GcsoRuntimeContext::step_token`].
-    #[inline]
-    pub fn step_sequence(
-        &mut self,
-        token_ids: &[u32],
-        mut trail_out: Option<&mut gcso_pointer_trail_t>,
-    ) -> Result<()> {
-        for &token_id in token_ids {
-            let trail_ref = trail_out.as_deref_mut();
-            self.step_token(token_id, None, None, trail_ref)?;
-        }
-        Ok(())
-    }
-
-    /// Evaluates unified multi-domain superposition across both `self.attractor_space` and
     /// `self.slot_phase_bank` directly in 8 register-resident `u64` SWAR words (`0` intermediate
     /// 64-byte stack buffers or store-reload round-trips).
     #[inline]
@@ -1597,7 +921,55 @@ impl GcsoRuntimeContext for RuntimeContext {
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         trail_out: Option<&mut gcso_pointer_trail_t>,
     ) -> Result<()> {
-        self.step_token_with_zscore(token_id, query_tensor, key_tensor, None, 0.0, trail_out)
+        if let (Some(q), Some(k)) = (query_tensor.as_deref(), key_tensor.as_deref()) {
+            q.ensure_disjoint_mut(k)?;
+        }
+
+        let mut state_out = gcso_edbc_state_t::default();
+        self.edbc.eval_stateful(0.0, &mut state_out)?;
+
+        let next_step = self.action_hub.step_counter.wrapping_add(1);
+        self.action_hub.step_counter = next_step;
+        self.attractor_space.advance_step();
+        let cap = self.config.raw.action_hub_capacity;
+        let cur_active = self.action_hub.active_count;
+        self.action_hub.active_count =
+            branchless_select_u32(cur_active < cap, cur_active.wrapping_add(1), cur_active);
+
+        let mut repulsion_active = false;
+        if let Some(trail) = trail_out {
+            trail.prev_ptr = trail.current_ptr;
+            trail.current_ptr = u64::from(token_id);
+            trail.step_count = next_step as u32;
+            trail.stigmergic_density = branchless_select_f32(
+                trail.stigmergic_density > 1.0,
+                trail.stigmergic_density,
+                1.0,
+            );
+
+            let (mut phase_words, total_pull) =
+                self.evaluate_multi_domain_superposition_words(trail);
+
+            let (_density, rep_trig) = self
+                .action_hub
+                .bloom_filter
+                .apply_phase_conjugate_repulsion_words(
+                    &mut phase_words,
+                    self.config.repulsion_threshold,
+                    self.config.repulsion_scale_u7,
+                );
+            repulsion_active = rep_trig;
+
+            trail.attractor_pull_force = total_pull;
+            *trail_phase_words_mut(trail) = phase_words;
+            trail.flags = state_out.active_branch_mode
+                | branchless_select_u32(repulsion_active, TRAIL_FLAG_REPULSION_ACTIVE, 0);
+        }
+
+        let metric = LEDGER_METRIC_PHASE_STEERED
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0);
+        self.action_hub.ledger_slot.push_telemetry_metric(metric);
+        Ok(())
     }
 
     #[inline]
@@ -2051,8 +1423,6 @@ impl KvKeyframeCache for RuntimeContext {
     }
 }
 
-impl EntropyGatedPhaseLookup for RuntimeContext {}
-impl DynamicLayerSkipper for RuntimeContext {}
 impl VisualAttentionSteering for RuntimeContext {}
 impl SubHeadRouter for RuntimeContext {}
 impl Rank1ResidualAdapter for RuntimeContext {}
@@ -2203,11 +1573,6 @@ const _: () = {
             + ColdPathObserver
             + FullStackGcsoEngine
             + FractalCascadeCoordinator
-            + AttractorSlotSynergyCoordinator
-            + StigmergicCohomologyCoordinator
-            + BottomUpMacroCrystalCoordinator
-            + EntropyGatedPhaseLookup
-            + DynamicLayerSkipper
             + VisualAttentionSteering
             + HierarchicalTreeTable
             + DnpPacketDispatcher,
@@ -2308,123 +1673,5 @@ mod tests {
             core::mem::size_of::<gcso_snapshot_header_t>() as u64
         );
         assert!(ctx.close_mmap(&mut desc).is_ok());
-    }
-
-    #[test]
-    fn test_runtime_context_slot_bank_unified_field_and_autonomous_pointer_cascades() {
-        let config = Config::new().with_head_dim(8).with_num_heads(2);
-        let mut ctx = RuntimeContext::new(config).unwrap();
-
-        ctx.apply_patch(&[32u8; 64]).unwrap();
-        ctx.set_slot_phase_profile(ATTRACTOR_SLOT_KNOWLEDGE, &[32i8; 64])
-            .unwrap();
-        ctx.set_domain_weight(u32::from(ATTRACTOR_SLOT_PERSONA), 2.0)
-            .unwrap();
-        ctx.set_domain_weight(u32::from(ATTRACTOR_SLOT_KNOWLEDGE), 2.0)
-            .unwrap();
-
-        let mut q_buf = AlignedBuffer32::new([1.0f32; 16]);
-        let comp_phases = AlignedBuffer16::new([4i8; 64]);
-        let mut trail = gcso_pointer_trail_t {
-            stigmergic_density: 2.0,
-            ..Default::default()
-        };
-
-        let input_ptr = gcso_tagged_ptr_t::pack_action(
-            0x0400,
-            ATTRACTOR_SLOT_KNOWLEDGE,
-            ACTION_PRESET_INERTIAL_SKIP,
-            16,
-        );
-
-        let (evolved_ptr, density, pull, coh) = ctx
-            .step_slot_bank_pointer_cascade(
-                input_ptr,
-                ATTRACTOR_SLOT_PERSONA,
-                0.5,
-                0.0,
-                0.5,
-                0.15,
-                1.50,
-                Some(&comp_phases.as_aligned_slice()),
-                &mut q_buf.as_aligned_slice_mut(),
-                None,
-                None,
-                None,
-                &mut trail,
-            )
-            .unwrap();
-
-        assert_eq!(density, 0);
-        assert!((coh - 1.0).abs() < 1e-4);
-        assert!(pull >= 6.0);
-        assert_ne!(trail.flags & TRAIL_FLAG_SYNERGY_RESONANCE, 0);
-        assert!(evolved_ptr.has_action_mode(ACTION_MODE_DPSR_STEER | ACTION_MODE_RANK1_INJECT));
-
-        // Verify Single-Manifold Unified-Field cascade & Autonomous Pointer-Trail Attention cascade
-        let unified_anchors = [[0i8; MAX_ATTENTION_HEADS], [32i8; MAX_ATTENTION_HEADS]];
-        let unified_energies = [0.0f32, 3.0f32];
-        let mut attn_scores = AlignedBuffer32::new([0.0f32; 8]);
-        let mut uf_trail = gcso_pointer_trail_t::default();
-
-        let (uf_rep, uf_pull, uf_coh, uf_dom) = ctx
-            .step_unified_field_token_cascade(
-                input_ptr,
-                0.3,
-                &unified_anchors,
-                &unified_energies,
-                None,
-                2.0,
-                Some(&mut attn_scores.as_aligned_slice_mut()),
-                Some(&mut q_buf.as_aligned_slice_mut()),
-                None,
-                &mut uf_trail,
-            )
-            .unwrap();
-        assert_eq!(uf_rep, 0);
-        assert_eq!(uf_dom, 1);
-        assert!(uf_pull > 5.0 && uf_coh > 0.90);
-        assert!(attn_scores.data[1] > 0.5);
-
-        let cand0 = gcso_pointer_trail_t {
-            stigmergic_density: 4.0,
-            accumulated_phase_delta: [-96i8; MAX_ATTENTION_HEADS],
-            ..Default::default()
-        };
-        let cand1 = gcso_pointer_trail_t {
-            stigmergic_density: 3.0,
-            accumulated_phase_delta: [28i8; MAX_ATTENTION_HEADS],
-            ..Default::default()
-        };
-        let mut candidates = [cand0, cand1];
-        let mut bayes_scores = AlignedBuffer32::new([0.0f32; 8]);
-        let mut auto_trail = gcso_pointer_trail_t::default();
-
-        let (sel_id, bayes_score, log_p, dom_id, found) = ctx
-            .step_autonomous_pointer_trail_attention_cascade(
-                1,
-                input_ptr,
-                0.3,
-                &mut candidates,
-                2.0,
-                0.5,
-                0.25,
-                1.0,
-                64,
-                0.25,
-                &unified_anchors,
-                &unified_energies,
-                None,
-                Some(&mut bayes_scores.as_aligned_slice_mut()),
-                Some(&mut q_buf.as_aligned_slice_mut()),
-                None,
-                &mut auto_trail,
-            )
-            .unwrap();
-        assert!(found);
-        assert_eq!(sel_id, 1);
-        assert_eq!(dom_id, 1);
-        assert!(bayes_score > 0.5 && log_p > -0.05);
-        assert!(bayes_scores.data[1] > 1.0 && bayes_scores.data[0] < -0.5);
     }
 }

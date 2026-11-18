@@ -24,8 +24,8 @@
 //!     64-head Single Unified Attractor Manifold & Bayesian-Attention phase algebra, and
 //!     unified AVX2/SSE2 SIMD kernels ($SO(2)$ rotation, 8-head `sincos`, Procrustes, tree reductions).
 //! - **Lv.1 Pure Capability Lists (Registered into [`ActionHub`])**:
-//!   - `rope`: [`PhaseSteering`], [`EntropyGatedPhaseLookup`], [`DynamicLayerSkipper`],
-//!     [`SubHeadRouter`], [`Rank1ResidualAdapter`], and [`VisualAttentionSteering`].
+//!   - `rope`: [`PhaseSteering`], [`SubHeadRouter`], [`Rank1ResidualAdapter`],
+//!     and [`VisualAttentionSteering`].
 //!   - `telemetry`: [`PagedBitmaskOps`], [`ContrastivePhaseBloomFilter`],
 //!     [`StigmergicActionPtrOps`], [`StigmergicTrailOps`], [`StigmergicReconstitutionOps`],
 //!     [`FastPathLedger`], and [`StigmergicReconstitutionReport`].
@@ -37,10 +37,8 @@
 //!   - `cold_path`: [`EntropyEvaluator`], [`EdbcBranchController`], [`SheafCohomologyEvaluator`],
 //!     [`HierarchicalTreeTable`], [`AttractorField`], [`MultiDomainAttractorSpace`],
 //!     [`PersonaPatcher`], [`L2pSvdProjector`], [`KvKeyframeCache`], [`DnpPacketDispatcher`],
-//!     [`MappedStorage`], [`ColdPathTrailCrystalExt`], and blanket-implemented macro coordinators
-//!     ([`ColdPathOrchestrator`], [`ColdPathObserver`], [`AttractorSlotSynergyCoordinator`],
-//!     [`StigmergicCohomologyCoordinator`], [`BottomUpMacroCrystalCoordinator`],
-//!     [`FullStackGcsoEngine`]).
+//!     [`MappedStorage`], [`ColdPathTrailCrystalExt`], and blanket-implemented macro markers
+//!     ([`ColdPathOrchestrator`], [`ColdPathObserver`], [`FullStackGcsoEngine`]).
 //!   - `gateway`: 2-Origin Supertrait Hierarchy ([`CausalProvenanceSignal`] ->
 //!     [`SystemConstraintSignal`] x [`CognitiveGroundingSignal`] \[[`ObjectiveFactSignal`],
 //!     [`SubjectivePersonaSignal`], [`ContradictionGuardSignal`]\]), Single Composite Gateway
@@ -86,8 +84,8 @@ pub mod aligned;
 /// phase algebra, and unified AVX2/SSE2 SIMD kernels.
 pub mod branchless;
 #[rustfmt::skip]
-/// Lv.1 Capability 1: RoPE & inline tensor modulation (`PhaseSteering`, `EntropyGatedPhaseLookup`,
-/// `DynamicLayerSkipper`, `SubHeadRouter`, `Rank1ResidualAdapter`, `VisualAttentionSteering`).
+/// Lv.1 Capability 1: RoPE & inline tensor modulation (`PhaseSteering`, `SubHeadRouter`,
+/// `Rank1ResidualAdapter`, `VisualAttentionSteering`).
 pub mod rope;
 #[rustfmt::skip]
 /// Lv.1 Capability 2: Stigmergic trails, internal telemetry & swarm intelligence (`PagedBitmaskOps`,
@@ -124,80 +122,73 @@ pub use self::aligned::{
 };
 pub use self::branchless::{
     branchless_fast_transition_log_prob, branchless_phase_coherence_inv_temp_scale,
-    branchless_project_f32_slice_to_q7_64, branchless_q7_attention_score_delta_64,
-    branchless_q7_bayesian_attention_score_delta_64, branchless_q7_circular_resultant_64,
-    branchless_q7_circular_weighted_step_64, branchless_q7_coherence_64,
+    branchless_project_f32_slice_to_q7_64, branchless_q7_coherence_64,
     branchless_q7_coherence_and_resultant_64, branchless_q7_gravity_fold_64,
     branchless_q7_inhibit_64, branchless_q7_inhibit_words_64, branchless_q7_resonant_pull_64,
-    branchless_q7_slerp_64, branchless_q7_synergy_fuse_64, branchless_q7_synergy_fuse_words_64,
+    branchless_q7_synergy_fuse_64, branchless_q7_synergy_fuse_words_64,
     branchless_q7_transition_log_prob_64, branchless_q7_transition_log_prob_words_64,
     branchless_q7_unified_field_fold_64, branchless_q7_unified_field_fold_with_init_weight_64,
     branchless_q7_unified_field_fold_words_with_init_weight_64,
-    branchless_toroidal_centroid_step_words_64,
-    branchless_toroidal_centroid_step_words_with_coh_64, circular_r_bar_from_words_64,
+    branchless_toroidal_centroid_step_words_64, circular_r_bar_from_words_64,
     circular_r_bar_from_words_with_uniform_flag_64, circular_resultant_from_words_64,
     coherence_from_diff_words_64, coherence_from_word_arrays_64,
     coherence_from_word_arrays_with_both_uniform_flags_64,
-    coherence_from_word_arrays_with_uniform_flag_64,
-    modulate_attention_scores_by_bayesian_trails_64, modulate_attention_scores_by_phase_bank_64,
-    sum_abs_and_sq_f32_simd8, sum_abs_sq_and_max_f32_simd8, sum_sq_f32_simd8,
-    swar_q7_geodesic_slerp_x8, swar_slerp_word_unchecked_x8, swar_slerp_word_with_bias_x8,
-    swar_slerp_words_with_bias_64, swar_slerp_words_with_uniform_flag_64, swar_words_equal_64,
-    swar_words_nonzero_64, BranchlessKernel, Liminal,
+    coherence_from_word_arrays_with_uniform_flag_64, sum_abs_and_sq_f32_simd8,
+    sum_abs_sq_and_max_f32_simd8, sum_sq_f32_simd8, swar_slerp_word_unchecked_x8,
+    swar_slerp_word_with_bias_x8, swar_slerp_words_with_bias_64,
+    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64,
+    BranchlessKernel, Liminal,
 };
 pub use self::cold_path::{
-    AttractorField, AttractorSlotSynergyCoordinator, BottomUpMacroCrystalCoordinator,
-    ColdPathObserver, ColdPathOrchestrator, ColdPathTrailCrystalExt, DnpPacketDispatcher,
-    EdbcBranchController, EntropyEvaluator, FullStackGcsoEngine, GcsoRuntimeContext,
-    HierarchicalTreeTable, KvKeyframeCache, L2pSvdProjector, MappedStorage,
-    MultiDomainAttractorSpace, PersonaPatcher, SheafCohomologyEvaluator,
-    StigmergicCohomologyCoordinator, SystemCapabilityQuery,
+    AttractorField, ColdPathObserver, ColdPathOrchestrator, ColdPathTrailCrystalExt,
+    DnpPacketDispatcher, EdbcBranchController, EntropyEvaluator, FullStackGcsoEngine,
+    GcsoRuntimeContext, HierarchicalTreeTable, KvKeyframeCache, L2pSvdProjector, MappedStorage,
+    MultiDomainAttractorSpace, PersonaPatcher, SheafCohomologyEvaluator, SystemCapabilityQuery,
 };
 pub use self::gateway::{
     evaluate_epistemic_horizon_words_64, evaluate_stigmergic_venn_and_serendipity_words_64,
-    fold_fractal_nodes_words_64, mean_q7_phase_tag_64, project_bytes_swar_to_q7_64,
-    project_bytes_swar_to_words_64, project_f32_slice_to_q7_64, project_f32_slice_to_words_64,
-    project_gateway_signal_at_scale, synthesize_multi_origin_gateway_frame,
-    synthesize_multi_origin_gateway_frame_with_words,
+    fold_fractal_nodes_words_64, project_bytes_swar_to_q7_64, project_bytes_swar_to_words_64,
+    project_f32_slice_to_q7_64, project_f32_slice_to_words_64, project_gateway_signal_at_scale,
+    synthesize_multi_origin_gateway_frame, synthesize_multi_origin_gateway_frame_with_words,
     synthesize_relative_gateway_from_perspective_words_64, ActionHubGatewayExt,
     ActionHubScaleOrchestrator, AutonomousCoreLayerStack, CausalProvenanceReport,
     CausalProvenanceSignal, CognitiveCircuitActivation, CognitiveCircuitBank,
     CognitiveCircuitBankOps, CognitiveCircuitPlasticity, CognitiveCircuitThresholdPolicy,
     CognitiveGroundingSignal, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
-    ContradictionGuard, ContradictionGuardSignal, CrystallizedAttractorRecord,
-    DissipativeOverflowReport, EgoIntentAxes, EpistemicHorizonReading, EpistemicManifoldOps,
-    EpistemicRegime, GatewayFrame, GatewayPhaseSteeringExt, GcsoFourSectionView,
-    HighCapCognitiveBank, HighCapPhaseKvCache, HighCapPhaseKvGopCache, HybridScaleCircuit,
-    LayeredScalePair, LiminalApertureField, LiminalBoundaryDelta, LiminalEgoField,
-    LiminalEgoPreset, LiminalHorizonNodeDescriptor, LiminalTopologyTelemetrySnapshot,
-    LowSpecCognitiveBank, LowSpecPhaseKvCache, LowSpecPhaseKvGopCache, ManifoldGatewaySignal,
-    ObjectiveFact, ObjectiveFactSignal, RamPhaseKvCache, RamPhaseKvCacheOps, RamPhaseKvEntry,
-    RamPhaseKvGopCache, RamPhaseKvStepOutcome, RawPhaseProjectable, RelativeAttractorNode,
-    RelativeCouplingMatrix, ScaleLayerNode, ScaleLayerProjection, StandardCognitiveBank,
-    StandardPhaseKvCache, StandardPhaseKvGopCache, StigmergicFragmentEnsembleReport,
-    StigmergicGranuleField, StigmergicLayeredSwarmExt, StigmergicScaleGranularity,
-    StigmergicScaleLayer, StigmergicVennSerendipityReport, SubjectivePersona,
-    SubjectivePersonaSignal, SystemConstraint, SystemConstraintSignal, APERTURE_ACTION_HUB_WIDE,
-    APERTURE_CAUSAL_PROVENANCE, APERTURE_COGNITIVE_CIRCUIT, APERTURE_COHOMOLOGY_EDBC,
-    APERTURE_CONTRADICTION_GUARD, APERTURE_DISSIPATIVE_CRYSTAL, APERTURE_FAST_PATH_LEDGER,
-    APERTURE_KV_PHASE_CACHE, APERTURE_MANIFOLD_GATEWAY, APERTURE_MAPPED_STORAGE,
-    APERTURE_OBJECTIVE_FACT, APERTURE_PHASE_STEERING, APERTURE_POINTER_TRAIL,
-    APERTURE_RANK1_RESIDUAL, APERTURE_RELATIVE_COUPLING, APERTURE_STIGMERGIC_CONSENSUS,
-    APERTURE_SUBHEAD_ROUTING, APERTURE_SUBJECTIVE_PERSONA, APERTURE_SYSTEM_CONSTRAINT,
-    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
-    CAUSAL_AXIS_SYSTEM_CONSTRAINT, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
-    CAUSAL_CAUSE_COHOMOLOGY_REPULSION, CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK,
-    CAUSAL_CAUSE_PERSONA_FACT_COLLISION, CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, CORE_LAYER_EGO,
-    CORE_LAYER_LIMINAL, CORE_LAYER_STIGMERGIC, DEFAULT_FACT_RIPA_CLAMP_RAD,
-    DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO, DEFAULT_PERSONA_FACT_COLLISION_THRESH,
-    DEFAULT_PERSONA_RIPA_CLAMP_RAD, DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
-    DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, EGO_TRIGGER_ALL_DEFAULT,
-    EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT,
-    EGO_TRIGGER_LIMINAL_EXTERIOR, EGO_TRIGGER_VORTEX_SWALLOW, GCSO_CRYSTAL_RECORD_MAGIC,
-    GCSO_CRYSTAL_RECORD_VERSION, GCSO_FOUR_SECTION_HEADER_BYTES, GCSO_LIMINAL_HORIZON_TOPOLOGY,
-    GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET, NUM_CORE_AUTONOMOUS_LAYERS, NUM_LIMINAL_APERTURE_CHANNELS,
-    ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL,
-    ROOT_CAUSE_PERSONA_FACT_COLLISION, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
+    ContradictionGuard, ContradictionGuardSignal, CoreLayerEvalContext,
+    CrystallizedAttractorRecord, DissipativeOverflowReport, EgoIntentAxes, EpistemicHorizonReading,
+    EpistemicManifoldOps, EpistemicRegime, GatewayFrame, GatewayPhaseSteeringExt,
+    GcsoFourSectionView, HighCapCognitiveBank, HighCapPhaseKvCache, HighCapPhaseKvGopCache,
+    HybridScaleCircuit, LayeredScalePair, LiminalApertureField, LiminalBoundaryDelta,
+    LiminalEgoField, LiminalEgoPreset, LiminalHorizonNodeDescriptor,
+    LiminalTopologyTelemetrySnapshot, LowSpecCognitiveBank, LowSpecPhaseKvCache,
+    LowSpecPhaseKvGopCache, ManifoldGatewaySignal, ObjectiveFact, ObjectiveFactSignal,
+    RamPhaseKvCache, RamPhaseKvCacheOps, RamPhaseKvEntry, RamPhaseKvGopCache,
+    RamPhaseKvStepOutcome, RawPhaseProjectable, RelativeAttractorNode, RelativeCouplingMatrix,
+    ScaleLayerNode, ScaleLayerProjection, StandardCognitiveBank, StandardPhaseKvCache,
+    StandardPhaseKvGopCache, StigmergicFragmentEnsembleReport, StigmergicGranuleField,
+    StigmergicLayeredSwarmExt, StigmergicScaleGranularity, StigmergicScaleLayer,
+    StigmergicVennSerendipityReport, SubjectivePersona, SubjectivePersonaSignal, SystemConstraint,
+    SystemConstraintSignal, APERTURE_ACTION_HUB_WIDE, APERTURE_CAUSAL_PROVENANCE,
+    APERTURE_COGNITIVE_CIRCUIT, APERTURE_COHOMOLOGY_EDBC, APERTURE_CONTRADICTION_GUARD,
+    APERTURE_DISSIPATIVE_CRYSTAL, APERTURE_FAST_PATH_LEDGER, APERTURE_KV_PHASE_CACHE,
+    APERTURE_MANIFOLD_GATEWAY, APERTURE_MAPPED_STORAGE, APERTURE_OBJECTIVE_FACT,
+    APERTURE_PHASE_STEERING, APERTURE_POINTER_TRAIL, APERTURE_RANK1_RESIDUAL,
+    APERTURE_RELATIVE_COUPLING, APERTURE_STIGMERGIC_CONSENSUS, APERTURE_SUBHEAD_ROUTING,
+    APERTURE_SUBJECTIVE_PERSONA, APERTURE_SYSTEM_CONSTRAINT, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA, CAUSAL_AXIS_SYSTEM_CONSTRAINT,
+    CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
+    CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, CAUSAL_CAUSE_PERSONA_FACT_COLLISION,
+    CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, CORE_LAYER_EGO, CORE_LAYER_LIMINAL, CORE_LAYER_STIGMERGIC,
+    DEFAULT_FACT_RIPA_CLAMP_RAD, DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
+    DEFAULT_PERSONA_FACT_COLLISION_THRESH, DEFAULT_PERSONA_RIPA_CLAMP_RAD,
+    DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
+    EGO_TRIGGER_ALL_DEFAULT, EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
+    EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR, EGO_TRIGGER_VORTEX_SWALLOW,
+    GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION, GCSO_FOUR_SECTION_HEADER_BYTES,
+    GCSO_LIMINAL_HORIZON_TOPOLOGY, GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET, NUM_CORE_AUTONOMOUS_LAYERS,
+    NUM_LIMINAL_APERTURE_CHANNELS, ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_FACT_RETRIEVAL_MISS,
+    ROOT_CAUSE_NOMINAL, ROOT_CAUSE_PERSONA_FACT_COLLISION, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
 };
 pub use self::hot_path::{
     FractalCascadeCoordinator, HotPathExecutionEngine, HotPathObserver, PointerActionHub,
@@ -265,9 +256,8 @@ pub use self::primitives::{
     Q7_ZERO, TAG_ACTION_MODE_MASK, TAG_ATTRACTOR_SLOT_SHIFT,
 };
 pub use self::rope::{
-    resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim, DynamicLayerSkipper,
-    EntropyGatedPhaseLookup, PhaseSteering, Rank1ResidualAdapter, SubHeadRouter,
-    VisualAttentionSteering,
+    resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim, PhaseSteering, Rank1ResidualAdapter,
+    SubHeadRouter, VisualAttentionSteering,
 };
 pub use self::telemetry::{
     eval_bitmask_dyadic_ultrametric, swar_subswarm_resolve_x8, ContrastivePhaseBloomFilter,
@@ -285,12 +275,8 @@ pub use self::telemetry::{
     TRAIL_FLAG_SYNERGY_RESONANCE, TRAIL_SWARM_QUORUM_MASK, TRAIL_SWARM_QUORUM_SHIFT,
 };
 
-pub(crate) use self::action_hub::{
-    accumulate_q7_slice_into_words_64, fuse_lazy_unwrap_and_qdps_from_words_64,
-    validate_optional_qk_tensors,
-};
-pub use self::action_hub::{fuse_lazy_unwrap_and_qdps_into_aligned_64, ActionHub};
-pub(crate) use self::telemetry::select_rewire_bridge_and_modulate_with_preloaded_words_64;
+pub(crate) use self::action_hub::validate_optional_qk_tensors;
+pub use self::action_hub::ActionHub;
 pub use crate::entropy_control::EntropyClosedLoopCoordinator;
 pub use crate::phase_steering::PhaseSteeringClosedLoop;
 
@@ -312,44 +298,37 @@ pub mod prelude {
     };
     pub use super::branchless::{
         branchless_phase_coherence_inv_temp_scale, branchless_project_f32_slice_to_q7_64,
-        branchless_q7_attention_score_delta_64, branchless_q7_bayesian_attention_score_delta_64,
-        branchless_q7_circular_resultant_64, branchless_q7_circular_weighted_step_64,
         branchless_q7_coherence_64, branchless_q7_coherence_and_resultant_64,
         branchless_q7_gravity_fold_64, branchless_q7_inhibit_64, branchless_q7_inhibit_words_64,
-        branchless_q7_resonant_pull_64, branchless_q7_slerp_64, branchless_q7_synergy_fuse_64,
+        branchless_q7_resonant_pull_64, branchless_q7_synergy_fuse_64,
         branchless_q7_synergy_fuse_words_64, branchless_q7_transition_log_prob_64,
         branchless_q7_transition_log_prob_words_64, branchless_q7_unified_field_fold_64,
         branchless_q7_unified_field_fold_with_init_weight_64,
         branchless_q7_unified_field_fold_words_with_init_weight_64,
-        branchless_toroidal_centroid_step_words_64,
-        branchless_toroidal_centroid_step_words_with_coh_64, circular_r_bar_from_words_64,
+        branchless_toroidal_centroid_step_words_64, circular_r_bar_from_words_64,
         circular_resultant_from_words_64, coherence_from_diff_words_64,
-        coherence_from_word_arrays_64, modulate_attention_scores_by_bayesian_trails_64,
-        modulate_attention_scores_by_phase_bank_64, sum_abs_and_sq_f32_simd8,
-        sum_abs_sq_and_max_f32_simd8, sum_sq_f32_simd8, swar_q7_geodesic_slerp_x8,
-        swar_slerp_word_unchecked_x8, swar_slerp_word_with_bias_x8, swar_slerp_words_with_bias_64,
-        BranchlessKernel, Liminal,
+        coherence_from_word_arrays_64, sum_abs_and_sq_f32_simd8, sum_abs_sq_and_max_f32_simd8,
+        sum_sq_f32_simd8, swar_slerp_word_unchecked_x8, swar_slerp_word_with_bias_x8,
+        swar_slerp_words_with_bias_64, BranchlessKernel, Liminal,
     };
     pub use super::cold_path::{
-        AttractorField, AttractorSlotSynergyCoordinator, BottomUpMacroCrystalCoordinator,
-        ColdPathObserver, ColdPathOrchestrator, ColdPathTrailCrystalExt, DnpPacketDispatcher,
-        EdbcBranchController, EntropyEvaluator, FullStackGcsoEngine, GcsoRuntimeContext,
-        HierarchicalTreeTable, KvKeyframeCache, L2pSvdProjector, MappedStorage,
-        MultiDomainAttractorSpace, PersonaPatcher, SheafCohomologyEvaluator,
-        StigmergicCohomologyCoordinator, SystemCapabilityQuery,
+        AttractorField, ColdPathObserver, ColdPathOrchestrator, ColdPathTrailCrystalExt,
+        DnpPacketDispatcher, EdbcBranchController, EntropyEvaluator, FullStackGcsoEngine,
+        GcsoRuntimeContext, HierarchicalTreeTable, KvKeyframeCache, L2pSvdProjector, MappedStorage,
+        MultiDomainAttractorSpace, PersonaPatcher, SheafCohomologyEvaluator, SystemCapabilityQuery,
     };
     pub use super::gateway::{
         evaluate_epistemic_horizon_words_64, evaluate_stigmergic_venn_and_serendipity_words_64,
-        fold_fractal_nodes_words_64, mean_q7_phase_tag_64, project_bytes_swar_to_q7_64,
-        project_bytes_swar_to_words_64, project_f32_slice_to_q7_64, project_f32_slice_to_words_64,
+        fold_fractal_nodes_words_64, project_bytes_swar_to_q7_64, project_bytes_swar_to_words_64,
+        project_f32_slice_to_q7_64, project_f32_slice_to_words_64,
         synthesize_multi_origin_gateway_frame, synthesize_multi_origin_gateway_frame_with_words,
         synthesize_relative_gateway_from_perspective_words_64, ActionHubGatewayExt,
         AutonomousCoreLayerStack, CausalProvenanceReport, CausalProvenanceSignal,
         CognitiveGroundingSignal, ContradictionGuard, ContradictionGuardSignal,
-        CrystallizedAttractorRecord, DissipativeOverflowReport, EgoIntentAxes,
-        EpistemicHorizonReading, EpistemicManifoldOps, EpistemicRegime, GatewayFrame,
-        GatewayPhaseSteeringExt, GcsoFourSectionView, LiminalApertureField, LiminalBoundaryDelta,
-        LiminalEgoField, LiminalEgoPreset, LiminalHorizonNodeDescriptor,
+        CoreLayerEvalContext, CrystallizedAttractorRecord, DissipativeOverflowReport,
+        EgoIntentAxes, EpistemicHorizonReading, EpistemicManifoldOps, EpistemicRegime,
+        GatewayFrame, GatewayPhaseSteeringExt, GcsoFourSectionView, LiminalApertureField,
+        LiminalBoundaryDelta, LiminalEgoField, LiminalEgoPreset, LiminalHorizonNodeDescriptor,
         LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, ObjectiveFact,
         ObjectiveFactSignal, RawPhaseProjectable, RelativeAttractorNode, RelativeCouplingMatrix,
         StigmergicFragmentEnsembleReport, StigmergicGranuleField, StigmergicScaleGranularity,
@@ -414,9 +393,8 @@ pub mod prelude {
         DEFAULT_SLOT_COUPLING_MATRIX_8X8,
     };
     pub use super::rope::{
-        resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim, DynamicLayerSkipper,
-        EntropyGatedPhaseLookup, PhaseSteering, Rank1ResidualAdapter, SubHeadRouter,
-        VisualAttentionSteering,
+        resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim, PhaseSteering, Rank1ResidualAdapter,
+        SubHeadRouter, VisualAttentionSteering,
     };
     pub use super::telemetry::{
         eval_bitmask_dyadic_ultrametric, swar_subswarm_resolve_x8, ContrastivePhaseBloomFilter,
@@ -579,8 +557,7 @@ mod tests {
     use super::*;
     use crate::abi::{
         gcso_anchor_type_t, gcso_config_t, gcso_edbc_state_t, gcso_ledger_slot_t,
-        gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t, gcso_subhead_config_t,
-        gcso_tagged_ptr_t,
+        gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t, gcso_tagged_ptr_t,
     };
 
     struct MockActionHubComposite {
@@ -815,7 +792,7 @@ mod tests {
         assert!((lmax - 6.0).abs() < 1e-5);
 
         let mut ledger = gcso_ledger_slot_t::default();
-        let mut bloom = ContrastivePhaseBloomFilter::new();
+        let bloom = ContrastivePhaseBloomFilter::new();
         let mut q_buf = AlignedBuffer32::new([1.0f32; 16]);
         let mut trail = gcso_pointer_trail_t::default();
         let input_ptr = gcso_tagged_ptr_t::pack_action(
@@ -844,343 +821,5 @@ mod tests {
             ledger.telemetry_mini_ledger[0] & LEDGER_METRIC_PHASE_STEERED,
             0
         );
-
-        trail.stigmergic_density = 1.5;
-        let mut trails = [trail];
-        let mut persona_out = [0i8; MAX_ATTENTION_HEADS];
-        let (mode, candidates, new_anchors, r_bar, kappa) = hub
-            .step_macro_crystallization_with_persona_and_tunneling(
-                &mut trails,
-                &mut bloom,
-                0.60,
-                0.25,
-                0.75,
-                0.45,
-                0.15,
-                0.02,
-                0.9,
-                0.8,
-                1.5,
-                0.5,
-                128,
-                48,
-                0.8,
-                &mut persona_out,
-            )
-            .unwrap();
-        assert_eq!(mode, 1);
-        assert_eq!(candidates, 1);
-        assert_eq!(new_anchors, 1);
-        assert!(r_bar > 0.85);
-        assert!(kappa > 3.0);
-    }
-
-    #[test]
-    fn test_action_hub_unified_field_kmeans_top2_liminal_and_bayesian_attention_modulation() {
-        let mut hub = MockActionHubComposite {
-            head_dim: 8,
-            num_heads: 2,
-            default_phase: 24,
-            branch_mode: 0,
-            crystallized_count: 1,
-        };
-
-        let mut trail = gcso_pointer_trail_t {
-            accumulated_phase_delta: [20i8; MAX_ATTENTION_HEADS],
-            attractor_pull_force: 3.2,
-            stigmergic_density: 2.4,
-            linked_trail_id: 1,
-            target_anchor_id: 42,
-            cluster_id: 42,
-            ..Default::default()
-        };
-
-        let anchors = [
-            [-60i8; MAX_ATTENTION_HEADS],
-            [20i8; MAX_ATTENTION_HEADS],
-            [0i8; MAX_ATTENTION_HEADS],
-        ];
-        let energies = [0.1f32, 3.5, 0.5];
-        let mut q_buf = AlignedBuffer32::new([1.0f32; 16]);
-        let mut k_buf = AlignedBuffer32::new([0.5f32; 16]);
-        let q_norm_before = sum_sq_f32_simd8(&q_buf.data);
-
-        let (steered, tot_pull, mean_coh, dom_idx) = hub
-            .filter_qdps_and_steer_qk_unified_field_safe(
-                &trail,
-                &anchors,
-                &energies,
-                DEFAULT_QDPS_MIN_STEP_RAD,
-                DEFAULT_RIPA_CLAMP_MAX_RAD,
-                Some(&mut q_buf.as_aligned_slice_mut()),
-                Some(&mut k_buf.as_aligned_slice_mut()),
-            )
-            .unwrap();
-        assert!(steered);
-        assert_eq!(dom_idx, 1);
-        assert!(tot_pull > 9.0 && mean_coh > 0.80);
-        let q_norm_after = sum_sq_f32_simd8(&q_buf.data);
-        assert!((q_norm_before - q_norm_after).abs() < 1e-4);
-
-        let subhead_cfg = gcso_subhead_config_t {
-            num_fact_heads: 1,
-            num_logic_heads: 0,
-            num_explore_heads: 1,
-            fact_phase_gain: 1.0,
-            logic_phase_gain: 1.0,
-            explore_phase_gain: 1.25,
-            ..Default::default()
-        };
-        let (steered_pspm, routed_pspm) = hub
-            .filter_qdps_and_steer_qk_with_unified_pspm_safe(
-                &trail.accumulated_phase_delta,
-                1,
-                &anchors,
-                Some((&subhead_cfg, 8)),
-                DEFAULT_QDPS_MIN_STEP_RAD,
-                DEFAULT_RIPA_CLAMP_MAX_RAD,
-                Some(&mut q_buf.as_aligned_slice_mut()),
-                Some(&mut k_buf.as_aligned_slice_mut()),
-            )
-            .unwrap();
-        assert!(steered_pspm && routed_pspm);
-
-        let mut centroids = [
-            CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0),
-            CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_PERSONA, 0),
-        ];
-        let fact_sig = ObjectiveFact::new([22i8; MAX_ATTENTION_HEADS], 3.0, 0x0010_0000, 303);
-        let mut ledger = gcso_ledger_slot_t::default();
-        let (_frame, _rep, c_idx, c_id, c_mass, spawned) = hub
-            .ingest_gateway_kmeans_and_steer_safe(
-                &fact_sig,
-                &mut centroids,
-                DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
-                &mut ledger,
-                &mut trail,
-                Some(&mut q_buf.as_aligned_slice_mut()),
-                Some(&mut k_buf.as_aligned_slice_mut()),
-                None,
-            )
-            .unwrap();
-        assert!(spawned);
-        assert_eq!(c_idx, 0);
-        assert_eq!(c_id, 303);
-        assert!(c_mass > 0.0);
-
-        let (routed_idx, routed_id, routed_coh, routed_grav, routed_steered) = hub
-            .route_coarse_to_fine_and_steer_qk_safe(
-                &centroids,
-                64,
-                DEFAULT_QDPS_MIN_STEP_RAD,
-                DEFAULT_RIPA_CLAMP_MAX_RAD,
-                &mut trail,
-                Some(&mut q_buf.as_aligned_slice_mut()),
-                None,
-            )
-            .unwrap();
-        assert_eq!(routed_idx, 0);
-        assert_eq!(routed_id, 303);
-        assert!(routed_coh > 0.90 && routed_grav > 1.0 && routed_steered);
-
-        // Populate second centroid to verify Top-2 Liminal Bifurcation Routing & Steering
-        let _ = centroids[1].absorb_sample_point_64(&[46i8; MAX_ATTENTION_HEADS], 3.0);
-        centroids[1].anchor_id = 404;
-        centroids[1].stamp_crc32();
-        trail.accumulated_phase_delta = [34i8; MAX_ATTENTION_HEADS];
-        let (idx1, idx2, aid1, aid2, lim_coh, lim_grav, is_liminal, lim_steered) = hub
-            .route_top2_liminal_and_steer_qk_safe(
-                &centroids,
-                64,
-                DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
-                Some((&subhead_cfg, 4)),
-                DEFAULT_QDPS_MIN_STEP_RAD,
-                DEFAULT_RIPA_CLAMP_MAX_RAD,
-                &mut trail,
-                Some(&mut q_buf.as_aligned_slice_mut()),
-                Some(&mut k_buf.as_aligned_slice_mut()),
-            )
-            .unwrap();
-        assert!(is_liminal && lim_steered);
-        assert!(idx1 != idx2 && aid1 != 0 && aid2 != 0);
-        assert!(lim_coh > 0.80 && lim_grav > 1.0);
-        assert_ne!(trail.flags & TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, 0);
-
-        let mut uf_scores = AlignedBuffer32::new([0.0f32; 3]);
-        trail.accumulated_phase_delta = [20i8; MAX_ATTENTION_HEADS];
-        let uf_coh = hub
-            .modulate_hub_attention_scores_by_unified_field(
-                &mut uf_scores.as_aligned_slice_mut(),
-                &trail,
-                &anchors,
-                1.2,
-            )
-            .unwrap();
-        assert!(uf_coh.is_finite());
-        assert!(uf_scores.data[1] > uf_scores.data[2]);
-        assert!(uf_scores.data[2] > uf_scores.data[0]);
-
-        let mut bayes_scores = AlignedBuffer32::new([0.0f32; 3]);
-        trail.linked_trail_id = 1;
-        let (mean_coh_b, best_cand) = hub
-            .modulate_hub_attention_scores_by_bayesian_trails(
-                &mut bayes_scores.as_aligned_slice_mut(),
-                &trail,
-                &anchors,
-                &energies,
-                1.2,
-                0.4,
-                0.75,
-            )
-            .unwrap();
-        assert!(mean_coh_b.is_finite());
-        assert_eq!(best_cand, 1);
-        assert!(bayes_scores.data[1] > uf_scores.data[1] + 1.0);
-
-        // Verify unstamped candidate trail (cluster_id == 0) is linked via continuous geodesic affinity
-        let cand0 = gcso_pointer_trail_t {
-            stigmergic_density: 3.0,
-            accumulated_phase_delta: [-96i8; MAX_ATTENTION_HEADS],
-            ..Default::default()
-        };
-        let cand1 = gcso_pointer_trail_t {
-            stigmergic_density: 3.5,
-            target_anchor_id: 0,
-            cluster_id: 0,
-            accumulated_phase_delta: [22i8; MAX_ATTENTION_HEADS],
-            ..Default::default()
-        };
-        let mut cand_trails = [cand0, cand1];
-        let mut cand_scores = AlignedBuffer32::new([0.0f32; 2]);
-        let (m_idx, m_id, sel_id, sel_score, found, c2f_steered) = hub
-            .route_coarse_to_fine_bayesian_and_steer_qk_safe(
-                0,
-                &centroids,
-                64,
-                &mut trail,
-                &mut cand_trails,
-                Some(&mut cand_scores.as_aligned_slice_mut()),
-                1.5,
-                0.5,
-                0.25,
-                1.0,
-                64,
-                0.25,
-                Some((&subhead_cfg, 4)),
-                DEFAULT_QDPS_MIN_STEP_RAD,
-                DEFAULT_RIPA_CLAMP_MAX_RAD,
-                &mut ledger,
-                Some(&mut q_buf.as_aligned_slice_mut()),
-                Some(&mut k_buf.as_aligned_slice_mut()),
-            )
-            .unwrap();
-        assert_eq!(m_idx, 0);
-        assert_eq!(m_id, 303);
-        assert!(found && sel_id == 1 && sel_score > 0.5 && c2f_steered);
-        assert_eq!(trail.target_anchor_id, 303);
-        assert!(cand_scores.data[1] > 1.0 && cand_scores.data[0] < -0.5);
-
-        let (ens_pull, ens_id, ens_steered) = hub
-            .steer_crystallized_ensemble_on_hub_safe(
-                &centroids,
-                DEFAULT_QDPS_MIN_STEP_RAD,
-                DEFAULT_RIPA_CLAMP_MAX_RAD,
-                &mut ledger,
-                &mut trail,
-                Some(&mut q_buf.as_aligned_slice_mut()),
-                None,
-            )
-            .unwrap();
-        assert_eq!(ens_id, 303);
-        assert!(ens_pull > 1.0 && ens_steered);
-
-        // Verify 4-Section `.gcso` zero-copy in-place evolution, Coarse-to-Fine, Top-2 Liminal routing & Q/K steering on ActionHub
-        let mut container_buf = AlignedBuffer128::new([0u8; 1024]);
-        let written = GcsoFourSectionView::write_four_section_with_reports_to_bytes(
-            &centroids,
-            &cand_trails,
-            None,
-            Some(&ledger),
-            &[],
-            999,
-            &mut container_buf.data,
-        )
-        .unwrap();
-        let (_ev_frame, ev_idx, ev_aid, ev_mass, _ev_spawned, _ev_merged, ev_steered) = hub
-            .evolve_four_section_kmeans_and_steer_qk_safe(
-                &mut container_buf.data[..written],
-                &fact_sig,
-                DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
-                DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
-                1,
-                Some(&mut q_buf.as_aligned_slice_mut()),
-                None,
-            )
-            .unwrap();
-        assert_eq!(ev_idx, 0);
-        assert_eq!(ev_aid, 303);
-        assert!(ev_mass > 1.0 && ev_steered);
-
-        let (fs_idx, fs_aid, fs_coh, fs_grav, fs_steered) = hub
-            .route_four_section_coarse_to_fine_and_steer_qk_safe(
-                &mut container_buf.data[..written],
-                1,
-                64,
-                DEFAULT_QDPS_MIN_STEP_RAD,
-                DEFAULT_RIPA_CLAMP_MAX_RAD,
-                Some(&mut q_buf.as_aligned_slice_mut()),
-                Some(&mut k_buf.as_aligned_slice_mut()),
-            )
-            .unwrap();
-        assert_eq!(fs_idx, 0);
-        assert_eq!(fs_aid, 303);
-        assert!(fs_coh > 0.90 && fs_grav > 1.0 && fs_steered);
-
-        let (
-            lim_idx1,
-            lim_idx2,
-            lim_aid1,
-            lim_aid2,
-            lim_fs_coh,
-            lim_fs_grav,
-            lim_fs_bif,
-            lim_fs_steered,
-        ) = hub
-            .route_four_section_top2_liminal_and_steer_qk_safe(
-                &mut container_buf.data[..written],
-                1,
-                64,
-                DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
-                Some((&subhead_cfg, 4)),
-                DEFAULT_QDPS_MIN_STEP_RAD,
-                DEFAULT_RIPA_CLAMP_MAX_RAD,
-                Some(&mut q_buf.as_aligned_slice_mut()),
-                Some(&mut k_buf.as_aligned_slice_mut()),
-            )
-            .unwrap();
-        assert!(lim_fs_bif && lim_fs_steered);
-        assert!(lim_idx1 != lim_idx2 && lim_aid1 != 0 && lim_aid2 != 0);
-        assert!(lim_fs_coh > 0.80 && lim_fs_grav > 1.0);
-
-        let mapped_view =
-            GcsoFourSectionView::from_container_bytes_zero_copy(&container_buf.data[..written])
-                .unwrap();
-        assert_eq!(mapped_view.trails[1].cluster_id, lim_aid1);
-        assert_ne!(
-            mapped_view.trails[1].flags & TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
-            0
-        );
-
-        let mut logits = AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0]);
-        let (t_coh, inv_temp) = hub
-            .modulate_hub_logit_inv_temperature(
-                &mut logits.as_aligned_slice_mut(),
-                &trail,
-                &trail.accumulated_phase_delta,
-                1.0,
-            )
-            .unwrap();
-        assert!((t_coh - 1.0).abs() < 1e-5 && (inv_temp - 2.0).abs() < 1e-5);
-        assert!((logits.data[0] - 2.0).abs() < 1e-5);
     }
 }

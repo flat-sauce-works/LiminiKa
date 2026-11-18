@@ -3,7 +3,7 @@
 
 //! Entropy-Driven Decoding Branch Controller (EDBC) core engine implementation.
 //!
-//! # Architectural Role (Thin `Pod` State Composite + Blanket Closed-Loop & Gateway Coordinator)
+//! # Architectural Role (Thin `Pod` State Composite + Blanket Surrogate Entropy Coordinator)
 //! - **[`EntropyController`]**: Compact 128-byte (2-cacheline, `#[repr(C, align(32))]`) [`Pod`] stateful
 //!   controller managing Moving Z-Score Normalized Attention Entropy $\tilde{H}$, the 8-slot
 //!   Sliding-Window Entropy Rate Integrator $\Phi_M(t)$ ($M = 5$), anti-chattering dwell-step
@@ -12,30 +12,8 @@
 //!   so `&EntropyController` can be used both standalone and inside `(S, F, P)` / `(S, F, P, G)` tuples.
 //! - **[`EntropyClosedLoopCoordinator`]**: Blanket-implemented extension trait
 //!   (`impl<T: EdbcBranchController + SheafCohomologyEvaluator + HierarchicalTreeTable + ?Sized> EntropyClosedLoopCoordinator for T {}`)
-//!   that equips [`EntropyController`], [`crate::traits::ColdPathObserver`], and
-//!   [`crate::traits::FullStackGcsoEngine`] with:
-//!   1. Single-pass AVX2 $\mathcal{C}_{\mathrm{void}}$ + $\ell_1 / \ell_2$ coherence-ratio evaluation
-//!      (`eval_liminal_void_with_coherence_ratio`) and strictly branchless `0-ln` Taylor-Estrin
-//!      surrogate-to-Z-score stepping (`eval_surrogate_and_step`).
-//!   2. Single-pass register-chained Limina inter-memory trail-chain cohomology verification under
-//!      the Joint Probability Chain Rule $\sum_t \ln P(M_t \mid M_{t-1})$ with deterministic
-//!      repulsion pointer override (`step_with_liminal_trail_chain_and_bloom_guard`).
-//!   3. Register-resident Single-Manifold Unified-Field EDBC pointer evolution
-//!      (`step_with_unified_field_and_pointer`), preserving 32-bit `target_anchor_id` in `cluster_id`.
-//!   4. Single-scan closed-loop **Pitchfork Metastable Tunneling + Bayesian Pointer-Trail selection,
-//!      rewiring, Limina bridging & Attention score modulation**
-//!      (`step_with_bayesian_pointer_selection_and_tunneling`,
-//!      `route_coarse_to_fine_and_step_bayesian_tunneling`), combining sequential conditional
-//!      transition probability ($\sum_t \ln P(M_t \mid M_{t-1})$ $\times$ Attention phase interference)
-//!      with indirect pointer-chain routing in `ActionHub`.
-//!   5. Loop-hoisted zero-copy candidate-trail Bayes-Attention score modulation coupled with EDBC
-//!      energy-guided inverse-temperature scaling (`modulate_candidate_trails_with_edbc_temperature`).
-//!   6. 256-bit dyadic tree QDPT depth resolution and pointer cascading
-//!      (`resolve_dyadic_tree_and_step_edbc`).
-//!   7. **2-Origin Composite Manifold Gateway, $\mathcal{O}(1)$ Causal Provenance, Online Toroidal
-//!      $k$-Means / DP-Means Macro Clustering & `.gcso` Sample-Driven Attractor Crystallization**
-//!      (`step_via_gateway_frame`, `step_via_gateway_signal`, `step_via_gateway_kmeans_64`,
-//!      `step_with_crystallized_ensemble_and_pointer`).
+//!   providing branchless `0-ln` Taylor-Estrin Top-2 surrogate-to-Z-score stepping
+//!   (`eval_surrogate_and_step`).
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -59,58 +37,34 @@
 #![allow(clippy::if_same_then_else)]
 #![allow(clippy::ifs_same_cond)]
 
-use core::f32::consts::{FRAC_PI_2, LN_2};
+use core::f32::consts::LN_2;
 use core::mem::{align_of, offset_of, size_of};
 
 use crate::abi::{
-    gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t, gcso_tagged_ptr_t,
-    GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT,
+    gcso_edbc_state_t, gcso_tagged_ptr_t, GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT,
 };
-use crate::traits::aligned::{AlignedSlice32, AlignedSliceMut32};
-#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-use crate::traits::branchless::coherence_from_word_arrays_with_both_uniform_flags_64;
-use crate::traits::branchless::{
-    branchless_fast_transition_log_prob, branchless_phase_coherence_inv_temp_scale,
-    branchless_q7_unified_field_fold_words_with_init_weight_64, scale_f32_slice_unrolled8,
-    sum_abs_and_sq_f32_simd8, sum_sq_f32_simd8, swar_words_equal_64,
-};
+use crate::traits::aligned::AlignedSlice32;
+use crate::traits::branchless::sum_sq_f32_simd8;
 use crate::traits::cold_path::{
     EdbcBranchController, EntropyEvaluator, HierarchicalTreeTable, SheafCohomologyEvaluator,
 };
 use crate::traits::gateway::{
     synthesize_multi_origin_gateway_frame, synthesize_multi_origin_gateway_frame_with_words,
-    CausalProvenanceReport, CausalProvenanceSignal, ContradictionGuard,
-    CrystallizedAttractorRecord, GatewayFrame, ManifoldGatewaySignal, ObjectiveFact,
+    CausalProvenanceSignal, ContradictionGuard, GatewayFrame, ManifoldGatewaySignal, ObjectiveFact,
     SubjectivePersona, SystemConstraintSignal, CAUSAL_AXIS_SYSTEM_CONSTRAINT,
-    CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
-    CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
-    ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
-};
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-use crate::traits::primitives::Q7_FULL_COS_REF;
-use crate::traits::primitives::{
-    branchless_abs_f32, branchless_clamp_f32, branchless_eyring_kramers_escape,
-    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_max_f32,
-    branchless_min_f32, branchless_popcount_rsqrt_u32, branchless_q7_add_sat, branchless_rad_to_q7,
-    branchless_relu_f32, branchless_rsqrt_f32, branchless_sanitize_z_score_f32,
-    branchless_select_f32, branchless_select_q7, branchless_select_u32, branchless_select_u64,
-    branchless_select_u8, branchless_splitmix64, branchless_sqrt_f32, fast_inv_len_f32,
-    fast_inv_pos_normal_f32, is_word_array_uniform_64, load_q7_words_64, store_q7_word_at,
-    store_q7_words_64, swar_q7_add_sat_x8, swar_q7_neg_sat_x8, swar_q7_qdps_filter_words_64,
-    tanh_lut_eval_nonneg, trail_phase_words_mut, trail_phase_words_ref, DEFAULT_MAX_VALID_Z_SCORE,
-    F32_MIN_POSITIVE_NORMAL, SWAR_SPLAT_BYTE_64,
+    CAUSAL_CAUSE_COHOMOLOGY_REPULSION, CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE,
 };
 use crate::traits::primitives::{
-    GcsoResult, Pod, ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_PRESET_INERTIAL_SKIP,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION,
-    DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS, MAX_SURROGATE_ENTROPY_LN2,
+    branchless_clamp_f32, branchless_eyring_kramers_escape, branchless_flush_subnormal_f32,
+    branchless_is_finite_f32, branchless_max_f32, branchless_min_f32, branchless_relu_f32,
+    branchless_sanitize_z_score_f32, branchless_select_f32, branchless_select_u32,
+    branchless_select_u8, fast_inv_len_f32, fast_inv_pos_normal_f32, tanh_lut_eval_nonneg,
+    DEFAULT_MAX_VALID_Z_SCORE, F32_MIN_POSITIVE_NORMAL,
 };
-use crate::traits::telemetry::{
-    select_and_bridge_macro_aligned_bayesian_trail_core, ContrastivePhaseBloomFilter,
-    StigmergicActionPtrOps, StigmergicTrailOps, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY,
-    NUM_STIGMERGIC_GRANULES, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
-    TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
+use crate::traits::primitives::{
+    GcsoResult, Pod, ATTRACTOR_SLOT_ID_MASK, DEFAULT_ENTROPY_EPS, MAX_SURROGATE_ENTROPY_LN2,
 };
+use crate::traits::telemetry::{StigmergicActionPtrOps, NUM_STIGMERGIC_GRANULES};
 /// Normal entropy convergence mode (`Mode 0`: single stable attractor at origin $x^* = 0$).
 pub const EDBC_MODE_NORMAL_ENTROPY: u32 = 0;
 

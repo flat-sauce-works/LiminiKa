@@ -414,6 +414,46 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
         horizon: &EpistemicHorizonReading,
         venn_report: &StigmergicVennSerendipityReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
+        let frame = self.synthesize_gateway_with_aperture_from_stack(stack);
+        let modulated = stack.intervene_ego_and_modulate_frame_branchless(
+            delta,
+            horizon,
+            venn_report,
+            frame,
+        );
+        let out_words = *modulated.phase_words_ref();
+        (modulated, out_words)
+    }
+
+    /// Read-only counterpart to [`Self::synthesize_gateway_with_core_layers`] for per-layer
+    /// Hot-Path RoPE steering: resolves the dynamic trait cognitive aperture and modulates `frame`
+    /// across all three core layers (`Liminal` + `Stigmergic` + `Ego`) without mutating `stack`.
+    #[inline]
+    fn synthesize_gateway_with_core_layers_readonly(
+        &self,
+        stack: &AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
+        let frame = self.synthesize_gateway_with_aperture_from_stack(stack);
+        let modulated = stack.modulate_gateway_frame_with_ego_readonly(
+            delta,
+            horizon,
+            venn_report,
+            frame,
+        );
+        let out_words = *modulated.phase_words_ref();
+        (modulated, out_words)
+    }
+
+    /// Shared helper resolving `self`'s dynamic cognitive aperture against `stack` and shaping
+    /// the base synthesized [`GatewayFrame`].
+    #[inline(always)]
+    fn synthesize_gateway_with_aperture_from_stack(
+        &self,
+        stack: &AutonomousCoreLayerStack,
+    ) -> GatewayFrame {
         let (dyn_mask, dyn_gain_q7, dyn_shift_q7) = self.resolve_dynamic_core_aperture(stack);
         let (mut frame, mut words) = self.synthesize_gateway_frame_with_words();
         apply_dynamic_aperture_to_frame_and_words(
@@ -423,14 +463,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
             dyn_gain_q7,
             dyn_shift_q7,
         );
-        let modulated = stack.intervene_ego_and_modulate_frame_branchless(
-            delta,
-            horizon,
-            venn_report,
-            frame,
-        );
-        let out_words = *modulated.phase_words_ref();
-        (modulated, out_words)
+        frame
     }
 
     /// Dynamically routes and combines `self` (`A`) and `other` (`B`) across the 8 SWAR granules
@@ -656,59 +689,21 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
                     if in_window {
                         let mean_g = swar_q7_mean_i8_from_words_64(&[shaped; 8]);
                         if mean_g >= 0 {
-                            let new_pe = pos_energy[g] + f_e;
-                            if pos_votes[g] == 0 {
-                                pos_words[g] = shaped;
-                            } else {
-                                let w_ratio = branchless_clamp_f32(
-                                    f_e * fast_inv_pos_normal_f32(branchless_max_f32(new_pe, DEFAULT_ENTROPY_EPS)),
-                                    0.0,
-                                    1.0,
-                                );
-                                let s_u64 = ((w_ratio * 128.0 + 0.5) as u8).min(128) as u64;
-                                let inv_s = 128u64.wrapping_sub(s_u64);
-                                pos_words[g] = swar_q7_circular_add_x8(
-                                    swar_q7_scale_le128_with_bias_x8(
-                                        pos_words[g],
-                                        inv_s,
-                                        s_u64.wrapping_mul(SWAR_SPLAT_BYTE_64),
-                                    ),
-                                    swar_q7_scale_le128_with_bias_x8(
-                                        shaped,
-                                        s_u64,
-                                        inv_s.wrapping_mul(SWAR_SPLAT_BYTE_64),
-                                    ),
-                                );
-                            }
-                            pos_energy[g] = new_pe;
-                            pos_votes[g] = pos_votes[g].saturating_add(1);
+                            accumulate_fragment_granule_vote(
+                                &mut pos_words[g],
+                                &mut pos_energy[g],
+                                &mut pos_votes[g],
+                                shaped,
+                                f_e,
+                            );
                         } else {
-                            let new_ne = neg_energy[g] + f_e;
-                            if neg_votes[g] == 0 {
-                                neg_words[g] = shaped;
-                            } else {
-                                let w_ratio = branchless_clamp_f32(
-                                    f_e * fast_inv_pos_normal_f32(branchless_max_f32(new_ne, DEFAULT_ENTROPY_EPS)),
-                                    0.0,
-                                    1.0,
-                                );
-                                let s_u64 = ((w_ratio * 128.0 + 0.5) as u8).min(128) as u64;
-                                let inv_s = 128u64.wrapping_sub(s_u64);
-                                neg_words[g] = swar_q7_circular_add_x8(
-                                    swar_q7_scale_le128_with_bias_x8(
-                                        neg_words[g],
-                                        inv_s,
-                                        s_u64.wrapping_mul(SWAR_SPLAT_BYTE_64),
-                                    ),
-                                    swar_q7_scale_le128_with_bias_x8(
-                                        shaped,
-                                        s_u64,
-                                        inv_s.wrapping_mul(SWAR_SPLAT_BYTE_64),
-                                    ),
-                                );
-                            }
-                            neg_energy[g] = new_ne;
-                            neg_votes[g] = neg_votes[g].saturating_add(1);
+                            accumulate_fragment_granule_vote(
+                                &mut neg_words[g],
+                                &mut neg_energy[g],
+                                &mut neg_votes[g],
+                                shaped,
+                                f_e,
+                            );
                         }
                     }
                     g += 1;
@@ -842,6 +837,42 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
         };
         (modulated, final_words, report)
     }
+}
+
+#[inline(always)]
+fn accumulate_fragment_granule_vote(
+    acc_word: &mut u64,
+    acc_energy: &mut f32,
+    acc_votes: &mut u8,
+    shaped: u64,
+    f_e: f32,
+) {
+    let new_e = *acc_energy + f_e;
+    if *acc_votes == 0 {
+        *acc_word = shaped;
+    } else {
+        let w_ratio = branchless_clamp_f32(
+            f_e * fast_inv_pos_normal_f32(branchless_max_f32(new_e, DEFAULT_ENTROPY_EPS)),
+            0.0,
+            1.0,
+        );
+        let s_u64 = ((w_ratio * 128.0 + 0.5) as u8).min(128) as u64;
+        let inv_s = 128u64.wrapping_sub(s_u64);
+        *acc_word = swar_q7_circular_add_x8(
+            swar_q7_scale_le128_with_bias_x8(
+                *acc_word,
+                inv_s,
+                s_u64.wrapping_mul(SWAR_SPLAT_BYTE_64),
+            ),
+            swar_q7_scale_le128_with_bias_x8(
+                shaped,
+                s_u64,
+                inv_s.wrapping_mul(SWAR_SPLAT_BYTE_64),
+            ),
+        );
+    }
+    *acc_energy = new_e;
+    *acc_votes = acc_votes.saturating_add(1);
 }
 
 #[inline(always)]
@@ -1263,6 +1294,16 @@ impl<T: ManifoldGatewaySignal + ?Sized> ManifoldGatewaySignal for &T {
         venn_report: &StigmergicVennSerendipityReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         (**self).synthesize_gateway_with_core_layers(stack, delta, horizon, venn_report)
+    }
+    #[inline]
+    fn synthesize_gateway_with_core_layers_readonly(
+        &self,
+        stack: &AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
+        (**self).synthesize_gateway_with_core_layers_readonly(stack, delta, horizon, venn_report)
     }
     #[inline]
     fn combine_pair_with_core_layers<B: ManifoldGatewaySignal>(

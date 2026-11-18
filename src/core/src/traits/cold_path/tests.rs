@@ -394,37 +394,4 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
     assert!((mean_coh - 1.0).abs() < 1e-4);
     assert!((final_pull - 6.0).abs() < 0.2);
     assert_ne!(trail.flags & TRAIL_FLAG_SYNERGY_RESONANCE, 0);
-
-    trail.stigmergic_density = 1.5;
-    let mut trails = [trail, trail];
-    let mut bloom = ContrastivePhaseBloomFilter::new();
-    let mut persona_out = [0i8; MAX_ATTENTION_HEADS];
-    let (chain_lp, rep_trans, candidates, new_anchors, p_r_bar, p_kappa) = sys
-        .step_liminal_chain_crystallization_with_persona_and_tunneling(
-            &mut trails,
-            64,
-            0.25,
-            &mut bloom,
-            0.60,
-            0.25,
-            0.75,
-            0.45,
-            0.15,
-            0.02,
-            0.9,
-            0.8,
-            1.5,
-            0.5,
-            128,
-            48,
-            0.8,
-            &mut persona_out,
-        )
-        .unwrap();
-    assert_eq!(rep_trans, 0);
-    assert!(chain_lp > -0.05);
-    assert_eq!(candidates, 2);
-    assert_eq!(new_anchors, 1);
-    assert_ne!(trails[1].flags & TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, 0);
-    assert!(p_r_bar > 0.85 && p_kappa > 3.0);
 }

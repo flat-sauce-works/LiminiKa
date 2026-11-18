@@ -87,20 +87,6 @@ fn test_paged_bitmask_bloom_trail_swarm_and_daes_constant_time() {
     assert_eq!(trail.cluster_id, 42);
     assert_eq!(report.evolved_ptr.target_attractor_slot(), 42 & 7);
 
-    let unified_anchors = [[0i8; MAX_ATTENTION_HEADS], [112i8; MAX_ATTENTION_HEADS]];
-    let unified_energies = [0.1f32, 2.5f32];
-    let unified_quorum = trail.recruit_unified_field_anchor_subswarms(
-        &unified_anchors,
-        &unified_energies,
-        128,
-        1,
-        DEFAULT_STIGMERGIC_TOLERANCE_Q7,
-        DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
-    );
-    assert_eq!(unified_quorum, 0xFF);
-    assert_eq!(trail.target_anchor_id, 1);
-    assert_eq!(trail.cluster_id, 1);
-
     let mut daes_ctrl = DummyDaes;
     let mut ledger_slot = gcso_ledger_slot_t::default();
     daes_ctrl.register_fast_path_shortcut(&mut ledger_slot, init_ptr.raw(), 0x9999);
@@ -190,8 +176,11 @@ fn test_liminal_bridge_order_invariant_unified_field_and_bayesian_pointer_rewire
 
     let candidates = [cand_bad, cand_good];
     let mut scores = [0.5f32, 0.5f32];
-    let (selected_id, best_score, mean_coh, coh_cnt, found) = mem_b
-        .select_rewire_bridge_and_modulate_bayesian_trails(
+    let self_w = crate::traits::primitives::load_q7_words_64(&mem_b.accumulated_phase_delta);
+    let (selected_id, best_score, mean_coh, coh_cnt, found, _bridged_w, _win_coh) =
+        select_rewire_bridge_and_modulate_with_preloaded_words_64(
+            &mut mem_b,
+            self_w,
             &candidates,
             Some(&mut scores),
             128,
@@ -201,6 +190,9 @@ fn test_liminal_bridge_order_invariant_unified_field_and_bayesian_pointer_rewire
             0.25,
             64,
             8.0,
+            0,
+            None,
+            0.0,
         );
     assert!(found && selected_id == 1 && coh_cnt == 1);
     assert_eq!(mem_b.linked_trail_id, 1);

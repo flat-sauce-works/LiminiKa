@@ -37,7 +37,7 @@ use crate::abi::{
 };
 use crate::traits::aligned::is_aligned_to;
 use crate::traits::branchless::{
-    branchless_q7_coherence_64, branchless_toroidal_centroid_step_words_with_coh_and_uni_64,
+    branchless_toroidal_centroid_step_words_with_coh_and_uni_64,
     branchless_toroidal_centroid_step_words_with_coh_uni_and_changed_64,
     coherence_above_floor_from_word_arrays_64, coherence_from_uniform_words_x8,
     coherence_from_word_arrays_with_both_uniform_flags_64, swar_slerp_words_with_uniform_flag_64,
@@ -226,32 +226,6 @@ impl CrystallizedAttractorRecord {
                 .as_mut_ptr()
                 .cast::<[u64; NUM_STIGMERGIC_GRANULES]>())
         }
-    }
-
-    /// Restores `self` from `base` using scalar field stores for the first 64-byte cache line
-    /// (`offset 0..64`) and 64-bit/SIMD word stores for `phase_profile` (`offset 64..128`),
-    /// avoiding 256-bit YMM store-to-scalar-load forwarding (STLF) pipeline stalls when
-    /// `self` is immediately inspected by scalar header loads in hot loops.
-    #[inline(always)]
-    pub fn restore_from(&mut self, base: &Self) {
-        self.magic = base.magic;
-        self.version = base.version;
-        self.anchor_id = base.anchor_id;
-        self.sample_count = base.sample_count;
-        self.mapped_section_offset48 = base.mapped_section_offset48;
-        self.base_energy = base.base_energy;
-        self.resultant_r_bar = base.resultant_r_bar;
-        self.von_mises_kappa = base.von_mises_kappa;
-        self.phase_gravity_mass = base.phase_gravity_mass;
-        self.ripa_clamp_rad = base.ripa_clamp_rad;
-        self.effective_inv_temp = base.effective_inv_temp;
-        self.provenance_bits = base.provenance_bits;
-        self.checksum_crc32 = base.checksum_crc32;
-        self.dominant_slot = base.dominant_slot;
-        self.action_mode_flags = base.action_mode_flags;
-        self.active_swarm_mask = base.active_swarm_mask;
-        self.dominant_cause_code = base.dominant_cause_code;
-        *self.phase_words_mut() = *base.phase_words_ref();
     }
 
     #[inline(always)]
@@ -710,24 +684,6 @@ impl CrystallizedAttractorRecord {
     }
 
     #[inline(always)]
-    fn absorb_sample_words_with_cur_unstamped(
-        &mut self,
-        cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
-        sample_w: &[u64; NUM_STIGMERGIC_GRANULES],
-        sample_energy: f32,
-        add_count: u32,
-    ) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, bool) {
-        self.absorb_sample_words_with_cur_coh_and_uni_unstamped(
-            cur_w,
-            sample_w,
-            None,
-            None,
-            sample_energy,
-            add_count,
-        )
-    }
-
-    #[inline(always)]
     fn absorb_gateway_frame_with_cur_coh_and_uni_unstamped(
         &mut self,
         cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -774,22 +730,6 @@ impl CrystallizedAttractorRecord {
                 1,
             );
         (next_w, mass, true, words_changed)
-    }
-
-    #[inline(always)]
-    fn absorb_gateway_frame_with_cur_unstamped(
-        &mut self,
-        cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
-        frame: &GatewayFrame,
-        frame_words: &[u64; NUM_STIGMERGIC_GRANULES],
-    ) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, bool, bool) {
-        self.absorb_gateway_frame_with_cur_coh_and_uni_unstamped(
-            cur_w,
-            frame,
-            frame_words,
-            None,
-            None,
-        )
     }
 
     #[inline(always)]
@@ -878,8 +818,15 @@ impl CrystallizedAttractorRecord {
         let prev_w7_lo = self.pack_w7_lo();
         let cur_w = *self.phase_words_ref();
         let sample_w = load_q7_words_64(sample_phases);
-        let (next_w, mass, words_changed) =
-            self.absorb_sample_words_with_cur_unstamped(&cur_w, &sample_w, sample_energy, 1);
+        let (next_w, mass, words_changed) = self
+            .absorb_sample_words_with_cur_coh_and_uni_unstamped(
+                &cur_w,
+                &sample_w,
+                None,
+                None,
+                sample_energy,
+                1,
+            );
         self.stamp_or_update_absorption_crc32(
             prev_crc,
             self.anchor_id,
@@ -900,132 +847,50 @@ impl CrystallizedAttractorRecord {
         mass
     }
 
-    /// Absorbs a [`GatewayFrame`] and its pre-loaded 8 `u64` SWAR words (`frame_words`) into this
-    /// centroid without reloading `frame.phase_deltas`, stamping `checksum_crc32` once at the end.
-    #[inline]
-    pub fn absorb_gateway_frame_with_words(
-        &mut self,
-        frame: &GatewayFrame,
-        frame_words: &[u64; NUM_STIGMERGIC_GRANULES],
-    ) -> f32 {
-        if frame.is_repulsed() {
-            return self.phase_gravity_mass;
-        }
-        let prev_crc = self.checksum_crc32;
-        let prev_aid = self.anchor_id;
-        let prev_count = self.sample_count;
-        let prev_zoff = self.mapped_section_offset48;
-        let prev_be_bits = self.base_energy.to_bits();
-        let prev_rb_bits = self.resultant_r_bar.to_bits();
-        let prev_kp_bits = self.von_mises_kappa.to_bits();
-        let prev_gm_bits = self.phase_gravity_mass.to_bits();
-        let prev_clamp_bits = self.ripa_clamp_rad.to_bits();
-        let prev_temp_bits = self.effective_inv_temp.to_bits();
-        let prev_prov = self.provenance_bits;
-        let prev_w7_lo = self.pack_w7_lo();
-        let cur_w = *self.phase_words_ref();
-        let (next_w, mass, modified, words_changed) =
-            self.absorb_gateway_frame_with_cur_unstamped(&cur_w, frame, frame_words);
-        if modified {
-            self.stamp_or_update_absorption_crc32(
-                prev_crc,
-                prev_aid,
-                prev_count,
-                prev_zoff,
-                prev_be_bits,
-                prev_rb_bits,
-                prev_kp_bits,
-                prev_gm_bits,
-                prev_clamp_bits,
-                prev_temp_bits,
-                prev_prov,
-                prev_w7_lo,
-                &cur_w,
-                &next_w,
-                words_changed,
-            );
-        }
-        mass
-    }
-
-    /// Absorbs a [`GatewayFrame`] and its pre-loaded 8 `u64` SWAR words (`frame_words`) with
-    /// explicit evolved `(dominant_slot_override, action_mode_override, extra_provenance_bits)`
-    /// without copying a 128-byte [`GatewayFrame`] on the stack.
-    #[inline]
-    pub fn absorb_gateway_frame_with_words_and_overrides(
-        &mut self,
-        frame: &GatewayFrame,
-        frame_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        dominant_slot_override: u8,
-        action_mode_override: u8,
-        extra_provenance_bits: u32,
-    ) -> f32 {
-        if frame.is_repulsed() {
-            return self.phase_gravity_mass;
-        }
-        let prev_crc = self.checksum_crc32;
-        let prev_aid = self.anchor_id;
-        let prev_count = self.sample_count;
-        let prev_zoff = self.mapped_section_offset48;
-        let prev_be_bits = self.base_energy.to_bits();
-        let prev_rb_bits = self.resultant_r_bar.to_bits();
-        let prev_kp_bits = self.von_mises_kappa.to_bits();
-        let prev_gm_bits = self.phase_gravity_mass.to_bits();
-        let prev_clamp_bits = self.ripa_clamp_rad.to_bits();
-        let prev_temp_bits = self.effective_inv_temp.to_bits();
-        let prev_prov = self.provenance_bits;
-        let prev_w7_lo = self.pack_w7_lo();
-        let cur_w = *self.phase_words_ref();
-        let (next_w, mass, modified, words_changed) =
-            self.absorb_gateway_frame_with_cur_unstamped(&cur_w, frame, frame_words);
-        if modified {
-            self.dominant_slot = dominant_slot_override;
-            self.action_mode_flags = action_mode_override;
-            self.provenance_bits |= extra_provenance_bits;
-            self.stamp_or_update_absorption_crc32(
-                prev_crc,
-                prev_aid,
-                prev_count,
-                prev_zoff,
-                prev_be_bits,
-                prev_rb_bits,
-                prev_kp_bits,
-                prev_gm_bits,
-                prev_clamp_bits,
-                prev_temp_bits,
-                prev_prov,
-                prev_w7_lo,
-                &cur_w,
-                &next_w,
-                words_changed,
-            );
-        }
-        mass
-    }
-
     /// Absorbs a [`GatewayFrame`] into this [`CrystallizedAttractorRecord`] and returns `phase_gravity_mass`.
-    #[inline(always)]
-    pub fn absorb_gateway_frame(&mut self, frame: &GatewayFrame) -> f32 {
-        self.absorb_gateway_frame_with_words(frame, frame.phase_words_ref())
-    }
-
-    /// Evaluates **Phase-Proximity Gravity** and cosine phase coherence between `query_phases` and `self`.
     #[inline]
-    #[must_use]
-    pub fn evaluate_phase_proximity_gravity_64(
-        &self,
-        query_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    ) -> (f32, f32) {
-        if self.sample_count == 0 || self.phase_gravity_mass <= DEFAULT_ENTROPY_EPS {
-            return (0.0, 0.0);
+    pub fn absorb_gateway_frame(&mut self, frame: &GatewayFrame) -> f32 {
+        let prev_crc = self.checksum_crc32;
+        let prev_aid = self.anchor_id;
+        let prev_count = self.sample_count;
+        let prev_zoff = self.mapped_section_offset48;
+        let prev_be_bits = self.base_energy.to_bits();
+        let prev_rb_bits = self.resultant_r_bar.to_bits();
+        let prev_kp_bits = self.von_mises_kappa.to_bits();
+        let prev_gm_bits = self.phase_gravity_mass.to_bits();
+        let prev_clamp_bits = self.ripa_clamp_rad.to_bits();
+        let prev_temp_bits = self.effective_inv_temp.to_bits();
+        let prev_prov = self.provenance_bits;
+        let prev_w7_lo = self.pack_w7_lo();
+        let cur_w = *self.phase_words_ref();
+        let (next_w, mass, touched, words_changed) = self
+            .absorb_gateway_frame_with_cur_coh_and_uni_unstamped(
+                &cur_w,
+                frame,
+                frame.phase_words_ref(),
+                None,
+                None,
+            );
+        if touched {
+            self.stamp_or_update_absorption_crc32(
+                prev_crc,
+                prev_aid,
+                prev_count,
+                prev_zoff,
+                prev_be_bits,
+                prev_rb_bits,
+                prev_kp_bits,
+                prev_gm_bits,
+                prev_clamp_bits,
+                prev_temp_bits,
+                prev_prov,
+                prev_w7_lo,
+                &cur_w,
+                &next_w,
+                words_changed,
+            );
         }
-        let coh = branchless_q7_coherence_64(query_phases, &self.phase_profile);
-        let grav = branchless_phase_proximity_gravity_f32(
-            self.phase_gravity_mass,
-            coh,
-            DEFAULT_PHASE_GRAVITY_EPS,
-        );
-        (grav, coh)
+        mass
     }
 
     #[inline]
@@ -1174,70 +1039,6 @@ impl CrystallizedAttractorRecord {
             best_is_uniform,
             best_byte_diff,
         )
-    }
-
-    #[inline(always)]
-    #[must_use]
-    fn find_nearest_toroidal_centroid_index_with_cache_64(
-        centroids: &[Self],
-        sample_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        word_cache_opt: Option<(
-            &[[u64; NUM_STIGMERGIC_GRANULES]; MAX_REGISTER_CACHED_CENTROIDS],
-            u16,
-            u16,
-        )>,
-    ) -> (usize, f32, f32, Option<usize>, usize, bool) {
-        let (
-            best_idx,
-            best_coh,
-            best_mass,
-            first_empty,
-            weakest_idx,
-            _best_w,
-            _sample_uni,
-            _best_uni,
-            best_byte_diff,
-        ) = Self::find_nearest_toroidal_centroid_with_cache_64(
-            centroids,
-            sample_words,
-            word_cache_opt,
-        );
-        let any_active = !centroids.is_empty()
-            && (centroids[best_idx].sample_count > 0)
-            && (best_mass > DEFAULT_ENTROPY_EPS);
-        let best_grav = if any_active {
-            match best_byte_diff {
-                Some(diff_u8) => branchless_q7_default_gravity_from_diff_u8(best_mass, diff_u8),
-                None => branchless_phase_proximity_gravity_f32(
-                    best_mass,
-                    best_coh,
-                    DEFAULT_PHASE_GRAVITY_EPS,
-                ),
-            }
-        } else {
-            0.0
-        };
-        (
-            best_idx,
-            best_coh,
-            best_grav,
-            first_empty,
-            weakest_idx,
-            any_active,
-        )
-    }
-
-    /// **Classical Online Toroidal $k$-Means E-Step ($\mathcal{O}(K)$ 64-Bit SWAR Nearest-Centroid Search)**:
-    /// Returns `(nearest_idx, best_coherence, best_gravity_pull, first_empty_slot_opt, weakest_slot_idx)`.
-    #[inline(always)]
-    #[must_use]
-    pub fn find_nearest_toroidal_centroid_words_64(
-        centroids: &[Self],
-        sample_words: &[u64; NUM_STIGMERGIC_GRANULES],
-    ) -> (usize, f32, f32, Option<usize>, usize) {
-        let (best_idx, best_coh, best_grav, first_empty, weakest_idx, _any_active) =
-            Self::find_nearest_toroidal_centroid_index_with_cache_64(centroids, sample_words, None);
-        (best_idx, best_coh, best_grav, first_empty, weakest_idx)
     }
 
     #[inline(always)]
@@ -2959,22 +2760,6 @@ impl CrystallizedAttractorRecord {
                 init_pull_weight,
             );
         (acc_w, tot_pull, dom_id, dom_clamp)
-    }
-
-    /// Folds a slice of `.gcso` [`CrystallizedAttractorRecord`]s onto `trail_phases_inout`
-    /// weighted by Phase-Proximity Gravity (`init_pull_weight = 0.0`).
-    #[inline(always)]
-    pub fn fold_crystallized_ensemble_64(
-        records: &[Self],
-        trail_phases_inout: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-    ) -> (f32, u32, f32) {
-        let (_w, tot_pull, dom_id, dom_clamp) =
-            Self::fold_crystallized_ensemble_words_with_init_pull_64(
-                records,
-                trail_phases_inout,
-                0.0,
-            );
-        (tot_pull, dom_id, dom_clamp)
     }
 
     /// Zero-copy deserialization of `count` [`CrystallizedAttractorRecord`]s from a 64-byte aligned

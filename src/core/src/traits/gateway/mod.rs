@@ -42,14 +42,14 @@ use crate::traits::aligned::{
 use crate::traits::branchless::{
     BranchlessKernel, Liminal, atan2_interleaved_pairs_to_q7_word_x8_simd,
     atan2_to_q7_word_x8_simd,
-    branchless_phase_coherence_inv_temp_scale, branchless_q7_circular_resultant_64,
+    branchless_phase_coherence_inv_temp_scale,
     circular_resultant_from_words_64, coherence_from_uniform_words_x8,
     coherence_from_word_arrays_with_both_uniform_flags_64, encode_pframe_motion_delta_64,
     scale_f32_slice_unrolled8, seek_pframe_chain_words_64,
     swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64,
 };
 use crate::traits::primitives::{
-    SWAR_LOW7_MASK_64, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, branchless_abs_f32,
+    SWAR_LOW7_MASK_64, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
     branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_crc32_ieee,
     branchless_flush_subnormal_f32, branchless_inv_pos_f32, branchless_is_finite_f32,
     branchless_lerp_f32, branchless_max_f32, branchless_min_f32, branchless_rad_to_qdps_step_u8,
@@ -85,15 +85,14 @@ use crate::traits::telemetry::{
     DEFAULT_STIGMERGIC_TOLERANCE_Q7, LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
     LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED,
     LEDGER_METRIC_RANK1_INJECTED, LEDGER_METRIC_REPULSION_APPLIED,
-    LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SUBHEAD_ROUTED, MAX_ATTRACTOR_PULL_FORCE,
+    LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, MAX_ATTRACTOR_PULL_FORCE,
     NUM_STIGMERGIC_GRANULES, StigmergicReconstitutionOps, StigmergicReconstitutionReport,
-    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
-    TRAIL_FLAG_SYNERGY_RESONANCE,
+    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
 };
 use crate::traits::{ActionHub, validate_optional_qk_tensors};
 use crate::abi::{
     GCSO_ABI_VERSION_HEX, GCSO_ERROR_INVALID_ARGUMENT, gcso_config_t, gcso_ledger_slot_t,
-    gcso_edbc_state_t, gcso_pointer_trail_t, gcso_subhead_config_t, gcso_q7_t, gcso_rank1_residual_descriptor_t,
+    gcso_edbc_state_t, gcso_pointer_trail_t, gcso_subhead_config_t, gcso_q7_t,
     gcso_tagged_ptr_t,
 };
 

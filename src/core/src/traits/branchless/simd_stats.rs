@@ -7,12 +7,13 @@ use super::*;
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
-pub(crate) unsafe fn avx2_hsum3_ps(v0: __m256, v1: __m256, v2: __m256) -> (f32, f32, f32) {
-    // SAFETY: Caller guarantees AVX2 is enabled.
-    unsafe {
-        let (s0, s1) = avx2_hsum2_ps(v0, v1);
-        (s0, s1, avx2_hsum_ps(v2))
-    }
+unsafe fn avx2_hsum3_ps(
+    v0: core::arch::x86_64::__m256,
+    v1: core::arch::x86_64::__m256,
+    v2: core::arch::x86_64::__m256,
+) -> (f32, f32, f32) {
+    // SAFETY: Caller guarantees `target_feature = "avx2"`.
+    unsafe { (avx2_hsum_ps(v0), avx2_hsum_ps(v1), avx2_hsum_ps(v2)) }
 }
 
 /// Evaluates $(\sum_i |x_i|, \sum_i x_i^2)$ across `slice` using a 32-float (2-pair tree-reduced)
@@ -690,89 +691,6 @@ pub(crate) fn scale_f32_slice_unrolled8(buf: &mut [f32], scale: f32) {
     {
         for val in buf.iter_mut() {
             *val = branchless_flush_subnormal_f32(*val * eff_scale);
-        }
-    }
-}
-
-/// Applies RIPA hyperbolic tangent soft-clamping ($\theta_{\mathrm{safe}} = \theta_{\max}\tanh(\theta / \theta_{\max})$)
-/// in-place across `angles` using an 8-float AVX2 Padé $(5, 4)$ rational polynomial + `_mm256_rcp_ps`
-/// 2-step Newton-Raphson reciprocal kernel (`<= 6` live YMM registers `ymm0..ymm5`, `0` Windows x64
-/// `xmm6..xmm15` stack saves, and branchless `NaN`/`±Inf`/subnormal flushing in the FP domain).
-#[inline(always)]
-pub(crate) fn clamp_angles_ripa_in_place_simd8(angles: &mut [f32], max_rad: f32) {
-    let len = angles.len();
-    if len == 0 {
-        return;
-    }
-    let inv_max = branchless_inv_pos_f32(max_rad);
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    {
-        let ptr = angles.as_mut_ptr();
-        // SAFETY: `target_feature = "avx2"` is enabled, and all loads/stores are bounds-checked against `len`.
-        // Constants are materialized inline (`vmovaps`/`vbroadcastss`) so peak live YMM usage is capped
-        // at 5 registers (`v`, `x`, `x2`, `x4`, `den`/`num`) <= 6 (`0` Windows x64 `xmm6..xmm15` stack saves).
-        unsafe {
-            let mut i = 0usize;
-            while i + 8 <= len {
-                let p = ptr.add(i);
-                let v = _mm256_loadu_ps(p);
-                let inf_exp = _mm256_castsi256_ps(_mm256_set1_epi32(0x7F80_0000));
-                let fin_mask = _mm256_cmp_ps::<_CMP_LT_OQ>(_mm256_and_ps(v, inf_exp), inf_exp);
-                let clean_v = _mm256_and_ps(v, fin_mask);
-                let u = _mm256_mul_ps(clean_v, _mm256_set1_ps(inv_max));
-                let x = _mm256_min_ps(
-                    _mm256_max_ps(u, _mm256_set1_ps(-TANH_LUT_MAX_X)),
-                    _mm256_set1_ps(TANH_LUT_MAX_X),
-                );
-                let x2 = _mm256_mul_ps(x, x);
-                let x4 = _mm256_mul_ps(x2, x2);
-                let num = _mm256_mul_ps(
-                    _mm256_mul_ps(x, _mm256_set1_ps(max_rad)),
-                    _mm256_add_ps(
-                        _mm256_add_ps(
-                            _mm256_set1_ps(945.0_f32),
-                            _mm256_mul_ps(_mm256_set1_ps(105.0_f32), x2),
-                        ),
-                        x4,
-                    ),
-                );
-                let den = _mm256_add_ps(
-                    _mm256_add_ps(
-                        _mm256_set1_ps(945.0_f32),
-                        _mm256_mul_ps(_mm256_set1_ps(420.0_f32), x2),
-                    ),
-                    _mm256_mul_ps(_mm256_set1_ps(15.0_f32), x4),
-                );
-                let r0 = _mm256_rcp_ps(den);
-                let two = _mm256_set1_ps(2.0_f32);
-                let r1 = _mm256_mul_ps(r0, _mm256_sub_ps(two, _mm256_mul_ps(den, r0)));
-                let r2 = _mm256_mul_ps(r1, _mm256_sub_ps(two, _mm256_mul_ps(den, r1)));
-                let prod = _mm256_mul_ps(num, r2);
-                let norm_mask = _mm256_cmp_ps::<_CMP_GT_OQ>(
-                    _mm256_and_ps(prod, inf_exp),
-                    _mm256_setzero_ps(),
-                );
-                _mm256_storeu_ps(p, _mm256_and_ps(prod, norm_mask));
-                i += 8;
-            }
-            while i < len {
-                let a = *ptr.add(i);
-                let clean_a = branchless_select_f32(branchless_is_finite_f32(a), a, 0.0);
-                *ptr.add(i) =
-                    branchless_flush_subnormal_f32(
-                        max_rad * branchless_tanh_f32(clean_a * inv_max),
-                    );
-                i += 1;
-            }
-        }
-    }
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-    {
-        for angle in angles.iter_mut() {
-            let a = *angle;
-            let clean_a = branchless_select_f32(branchless_is_finite_f32(a), a, 0.0);
-            *angle =
-                branchless_flush_subnormal_f32(max_rad * branchless_tanh_f32(clean_a * inv_max));
         }
     }
 }
@@ -1821,28 +1739,6 @@ pub(crate) unsafe fn avx2_rotate_so2_dispatch(
             *ptr.add(b + 1) = r1;
             b += 2;
         }
-    }
-}
-
-/// Bank-conflict-free 64B cache-line-staged 2-tensor (`Q`, `K`) AVX2 $SO(2)$ 32-float block rotation.
-///
-/// Rotates the two 64-byte cache lines of `qp` (`+0..+64B` and `+64..+128B`) via `avx2_rotate_so2_block32`
-/// before rotating `kp` with the same register-resident `(v_cos, v_sin)`. Pairing `p0` (`+0B`, bit 5 = 0)
-/// and `p1` (`+32B`, bit 5 = 1) inside each 64-byte cache line issues dual 256-bit loads to opposite L1D
-/// 32B cache banks rather than colliding `qp` and `kp` at identical 4KB page offsets `(qp ^ kp) & 0xFFF == 0`,
-/// while keeping peak live YMM usage `<= 6` (`ymm0..ymm5`, zero Windows x64 `xmm6..xmm15` stack spills).
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-#[inline(always)]
-pub(crate) unsafe fn avx2_rotate_so2_pair_block32(
-    qp: *mut f32,
-    kp: *mut f32,
-    v_cos: __m256,
-    v_sin: __m256,
-) {
-    // SAFETY: Caller guarantees `qp` and `kp` are disjoint, valid for 32 floats, and AVX2 is enabled.
-    unsafe {
-        avx2_rotate_so2_block32(qp, v_cos, v_sin);
-        avx2_rotate_so2_block32(kp, v_cos, v_sin);
     }
 }
 

@@ -213,37 +213,6 @@ pub(crate) unsafe fn avx2_scale_vec64(
     }
 }
 
-/// Filters all 64 signed Q7 phase lanes in `(v0, v1)` against `min_step_q7` in 8 AVX2 instructions
-/// (`vpabsb + vpmaxub + vpcmpeqb + vpand`), matching `swar_q7_qdps_filter_x8` bit-for-bit.
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-#[inline(always)]
-pub(crate) unsafe fn avx2_qdps_filter_vec64(
-    v0: core::arch::x86_64::__m256i,
-    v1: core::arch::x86_64::__m256i,
-    min_step_q7: u8,
-) -> (core::arch::x86_64::__m256i, core::arch::x86_64::__m256i) {
-    // SAFETY: Caller guarantees `target_feature = "avx2"`.
-    unsafe {
-        use core::arch::x86_64::{
-            _mm256_abs_epi8, _mm256_and_si256, _mm256_cmpeq_epi8, _mm256_max_epu8,
-            _mm256_set1_epi8, _mm256_setzero_si256,
-        };
-        if min_step_q7 <= 1 {
-            return (v0, v1);
-        }
-        if min_step_q7 > 127 {
-            let z = _mm256_setzero_si256();
-            return (z, z);
-        }
-        let v_step = _mm256_set1_epi8(min_step_q7 as i8);
-        let a0 = _mm256_abs_epi8(v0);
-        let a1 = _mm256_abs_epi8(v1);
-        let k0 = _mm256_cmpeq_epi8(_mm256_max_epu8(a0, v_step), a0);
-        let k1 = _mm256_cmpeq_epi8(_mm256_max_epu8(a1, v_step), a1);
-        (_mm256_and_si256(v0, k0), _mm256_and_si256(v1, k1))
-    }
-}
-
 /// Interpolates two 8-word (64-head) SWAR arrays (`a` and `b`) along the shortest-arc $S^1$
 /// geodesic using pre-evaluated word-uniformity flags (`a_is_uniform`, `b_is_uniform`),
 /// returning `(interpolated_words, out_is_uniform)` directly in 64-bit GPRs (`0` GPR-to-YMM or
@@ -333,77 +302,6 @@ pub const fn swar_slerp_words_with_bias_64(
     let a_uni = is_word_array_uniform_64(a);
     let b_uni = if a_uni { is_word_array_uniform_64(b) } else { false };
     swar_slerp_words_with_uniform_flag_64(a, a_uni, b, b_uni, s, bias_restore).0
-}
-
-/// True bit-parallel SWAR 8-lane shortest-arc geodesic interpolation on $S^1$ (`t_u7 in 0..=128`).
-#[inline(always)]
-pub const fn swar_q7_geodesic_slerp_x8(a_packed: u64, b_packed: u64, t_u7: u8) -> u64 {
-    let s = branchless_select_u8(t_u7 > 128, 128, t_u7) as u64;
-    let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-    swar_slerp_word_with_bias_x8(a_packed, b_packed, s, bias_restore)
-}
-
-/// Performs shortest-arc geodesic interpolation on $S^1$ across all 64 attention heads in strictly
-/// constant time, hoisting `bias_restore` once across all 8 SWAR words.
-#[inline(always)]
-pub fn branchless_q7_slerp_64(
-    phases_a: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    phases_b: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    t_u7: u8,
-) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
-    let s = branchless_select_u8(t_u7 > 128, 128, t_u7) as u64;
-    let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-    let a = load_q7_words_64(phases_a);
-    let b = load_q7_words_64(phases_b);
-    let out_w = swar_slerp_words_with_bias_64(&a, &b, s, bias_restore);
-    let mut out = [0i8; MAX_ATTENTION_HEADS];
-    store_q7_words_64(&mut out, &out_w);
-    out
-}
-
-/// Folds a candidate 64-head phase vector `candidate_phases` (with weight `candidate_weight`)
-/// into `running_phases` (with weight `running_weight`) along the shortest-arc $S^1$ geodesic
-/// in strictly constant time (`0 fdiv`). Returns the updated total weight.
-#[inline(always)]
-pub fn branchless_q7_circular_weighted_step_64(
-    running_phases: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-    running_weight: f32,
-    candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    candidate_weight: f32,
-) -> f32 {
-    let w_run = branchless_flush_subnormal_f32(branchless_relu_f32(running_weight));
-    let w_cand = branchless_flush_subnormal_f32(branchless_relu_f32(candidate_weight));
-    let total_w = w_run + w_cand;
-    if w_cand <= DEFAULT_ENTROPY_EPS {
-        return total_w;
-    }
-    if w_run <= DEFAULT_ENTROPY_EPS {
-        *running_phases = *candidate_phases;
-        return total_w;
-    }
-    let ratio_f32 = branchless_clamp_f32(
-        (w_cand * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
-        0.0,
-        128.0,
-    );
-    let s = (ratio_f32 as u8) as u64;
-    if s >= 128 {
-        *running_phases = *candidate_phases;
-    } else if s > 0 {
-        let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-        let a = load_q7_words_64(running_phases);
-        let b = load_q7_words_64(candidate_phases);
-        let a_uni = is_word_array_uniform_64(&a);
-        let b_uni = if a_uni {
-            is_word_array_uniform_64(&b)
-        } else {
-            false
-        };
-        let (out_w, _) =
-            swar_slerp_words_with_uniform_flag_64(&a, a_uni, &b, b_uni, s, bias_restore);
-        store_q7_words_64(running_phases, &out_w);
-    }
-    total_w
 }
 
 /// Sums 8 Q14 cosine values from a single packed `u64` circular-difference word in strictly
@@ -1752,65 +1650,6 @@ pub fn branchless_q7_transition_log_prob_64(
     )
 }
 
-/// Evaluates the **Attention $\times$ DPSR Phase-Interference Logit Delta**
-/// $\Delta z_{t,j} = \frac{\gamma}{\sqrt{d_{\mathrm{head}}}} \mathcal{C}_{\mathrm{phase}}(\boldsymbol{\theta}_t + \boldsymbol{\Delta\theta}, \boldsymbol{\theta}_j)$.
-#[inline(always)]
-pub fn branchless_q7_attention_score_delta_64(
-    query_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    key_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    head_dim: u32,
-    interference_gain: f32,
-) -> (f32, f32) {
-    let coh = branchless_q7_coherence_64(query_phases, key_phases);
-    let safe_dim = branchless_select_u32(head_dim > 0, head_dim, 128);
-    let rsqrt_d = if safe_dim <= 256 {
-        POPCOUNT_RSQRT_LUT_257_REF[safe_dim as usize]
-    } else {
-        branchless_rsqrt_f32(safe_dim as f32)
-    };
-    let clean_gain = branchless_flush_subnormal_f32(branchless_relu_f32(interference_gain));
-    (coh, branchless_flush_subnormal_f32(clean_gain * rsqrt_d * coh))
-}
-
-/// Evaluates the **Bayes-Attention Stigmergic Logit Delta** combining conditional phase-coherence
-/// interference and stigmergic pointer-chain priors
-/// in `const fn` constant time (`0` branches, `0 fdiv`), returning `(phase_coherence, bayesian_logit_delta)`.
-#[inline(always)]
-pub fn branchless_q7_bayesian_attention_score_delta_64(
-    query_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    key_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    key_stigmergic_density: f32,
-    is_pointer_linked: bool,
-    head_dim: u32,
-    interference_gain: f32,
-    stigmergic_prior_gain: f32,
-    pointer_link_bonus: f32,
-) -> (f32, f32) {
-    let (coh, attn_delta) = branchless_q7_attention_score_delta_64(
-        query_phases,
-        key_phases,
-        head_dim,
-        interference_gain,
-    );
-    let clean_rho = branchless_clamp_f32(
-        branchless_flush_subnormal_f32(branchless_relu_f32(key_stigmergic_density)),
-        0.0,
-        MAX_BAYESIAN_STIGMERGIC_DENSITY,
-    );
-    let prior_delta = branchless_flush_subnormal_f32(
-        branchless_relu_f32(stigmergic_prior_gain) * fast_ln_1p_bounded_f32(clean_rho),
-    );
-    let link_delta = branchless_select_f32(
-        is_pointer_linked,
-        branchless_flush_subnormal_f32(branchless_relu_f32(pointer_link_bonus)),
-        0.0,
-    );
-    (
-        coh,
-        branchless_flush_subnormal_f32(attn_delta + prior_delta + link_delta),
-    )
-}
-
 /// Computes the bounded **Phase-Interference Inverse-Temperature Scale**
 /// $\beta_{\mathrm{eff}} = \mathrm{clamp}(1.0 + \gamma \cdot \mathcal{C}_{\mathrm{phase}}, 0.25, 4.0)$.
 #[inline(always)]
@@ -1829,121 +1668,6 @@ pub const fn branchless_phase_coherence_inv_temp_scale(
         MIN_PHASE_INTERFERENCE_INV_TEMP,
         MAX_PHASE_INTERFERENCE_INV_TEMP,
     )
-}
-
-/// Directly modulates pre-Softmax candidate memory/key Attention scores (`attention_scores[..M]`)
-/// in-place by each memory $j$'s phase interference, preloading `query_phases` into 8 `u64` registers once.
-#[inline]
-pub fn modulate_attention_scores_by_phase_bank_64(
-    attention_scores: &mut [f32],
-    query_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    key_anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
-    head_dim: u32,
-    interference_gain: f32,
-) -> f32 {
-    let count = attention_scores.len().min(key_anchor_phases.len());
-    if count == 0 {
-        return 0.0;
-    }
-    let q = load_q7_words_64(query_phases);
-    let q_is_uniform = is_word_array_uniform_64(&q);
-    let safe_dim = branchless_select_u32(head_dim > 0, head_dim, 128);
-    let rsqrt_d = if safe_dim <= 256 {
-        POPCOUNT_RSQRT_LUT_257_REF[safe_dim as usize]
-    } else {
-        branchless_rsqrt_f32(safe_dim as f32)
-    };
-    let eff_scale =
-        branchless_flush_subnormal_f32(branchless_relu_f32(interference_gain) * rsqrt_d);
-
-    let q_w0 = q[0];
-    let q_b0 = (q_w0 & 0xFF) as u8;
-    let q_is_byte_uniform = q_is_uniform & (q_w0 == q_w0.rotate_right(8));
-    let mut coh_sum = 0.0_f32;
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    let mut vq_vecs: Option<(
-        core::arch::x86_64::__m256i,
-        core::arch::x86_64::__m256i,
-    )> = if q_is_uniform {
-        None
-    } else {
-        Some(unsafe { avx2_words64_to_vec64_with_uniform(&q, false) })
-    };
-    for (score_slot, key_p) in attention_scores[..count]
-        .iter_mut()
-        .zip(key_anchor_phases[..count].iter())
-    {
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-        let coh = {
-            if q_is_uniform {
-                let kw = load_q7_words_64(key_p);
-                if is_word_array_uniform_64(&kw) {
-                    let kw0 = kw[0];
-                    if kw0 == q_w0 {
-                        1.0
-                    } else if q_is_byte_uniform && (kw0 == kw0.rotate_right(8)) {
-                        Q7_FULL_COS_REF[q_b0.wrapping_sub(kw0 as u8) as usize]
-                    } else {
-                        coherence_from_word_arrays_with_both_uniform_flags_64(&q, true, &kw, true)
-                    }
-                } else {
-                    unsafe {
-                        use core::arch::x86_64::{
-                            __m256i, _mm256_loadu_si256, _mm256_set1_epi64x, _mm256_sub_epi8,
-                        };
-                        let (vq0, vq1) = match vq_vecs {
-                            Some(v) => v,
-                            None => {
-                                let z = _mm256_set1_epi64x(q_w0 as i64);
-                                let v = (z, z);
-                                vq_vecs = Some(v);
-                                v
-                            }
-                        };
-                        let kp = key_p.as_ptr().cast::<__m256i>();
-                        let vk0 = _mm256_loadu_si256(kp);
-                        let vk1 = _mm256_loadu_si256(kp.add(1));
-                        avx2_coherence_from_diff_vec64(
-                            _mm256_sub_epi8(vq0, vk0),
-                            _mm256_sub_epi8(vq1, vk1),
-                        )
-                    }
-                }
-            } else {
-                unsafe {
-                    use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
-                    let (vq0, vq1) =
-                        vq_vecs.unwrap_or_else(|| avx2_words64_to_vec64_with_uniform(&q, false));
-                    let kp = key_p.as_ptr().cast::<__m256i>();
-                    let vk0 = _mm256_loadu_si256(kp);
-                    let vk1 = _mm256_loadu_si256(kp.add(1));
-                    avx2_coherence_from_diff_vec64(
-                        _mm256_sub_epi8(vq0, vk0),
-                        _mm256_sub_epi8(vq1, vk1),
-                    )
-                }
-            }
-        };
-        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-        let coh = {
-            let kw = load_q7_words_64(key_p);
-            if q_is_uniform && is_word_array_uniform_64(&kw) {
-                let kw0 = kw[0];
-                if kw0 == q_w0 {
-                    1.0
-                } else if q_is_byte_uniform && (kw0 == kw0.rotate_right(8)) {
-                    Q7_FULL_COS_REF[q_b0.wrapping_sub(kw0 as u8) as usize]
-                } else {
-                    coherence_from_word_arrays_with_both_uniform_flags_64(&q, true, &kw, true)
-                }
-            } else {
-                coherence_from_word_arrays_with_both_uniform_flags_64(&q, q_is_uniform, &kw, false)
-            }
-        };
-        *score_slot = branchless_flush_subnormal_f32(*score_slot + eff_scale * coh);
-        coh_sum += coh;
-    }
-    branchless_clamp_f32(coh_sum * fast_inv_len_f32(count), -1.0, 1.0)
 }
 
 /// Directly modulates pre-Softmax candidate memory/key Attention scores (`attention_scores[..M]`)
@@ -2367,48 +2091,6 @@ pub fn circular_resultant_from_words_64(w: &[u64; 8]) -> (f32, gcso_q7_t, f32) {
     circular_resultant_from_words_with_uniform_flag_64(w, is_word_array_uniform_64(w))
 }
 
-/// Evaluates the 64-head circular statistics summary `(r_bar, mean_phase_q7, kappa_c)` (Section 4.2)
-/// using direct YMM vector loads on AVX2 (`0` Port-5 GPR-to-YMM inserts) or 8-word SWAR loads on scalar targets.
-#[inline(always)]
-pub fn branchless_q7_circular_resultant_64(
-    phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-) -> (f32, gcso_q7_t, f32) {
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    {
-        // SAFETY: `phases` is 64 bytes and `target_feature = "avx2"` is enabled.
-        return unsafe {
-            use core::arch::x86_64::{
-                __m256i, _mm256_broadcastb_epi8, _mm256_castsi256_si128, _mm256_loadu_si256,
-                _mm256_or_si256, _mm256_testz_si256, _mm256_xor_si256,
-            };
-            let pa = phases.as_ptr().cast::<__m256i>();
-            let va0 = _mm256_loadu_si256(pa);
-            let va1 = _mm256_loadu_si256(pa.add(1));
-            let bcast_a = _mm256_broadcastb_epi8(_mm256_castsi256_si128(va0));
-            let a_diff = _mm256_or_si256(
-                _mm256_xor_si256(va0, bcast_a),
-                _mm256_xor_si256(va1, bcast_a),
-            );
-            if _mm256_testz_si256(a_diff, a_diff) != 0 {
-                let q7 = phases[0];
-                return (
-                    1.0,
-                    branchless_select_i8(q7 == -128, 127, q7),
-                    VON_MISES_KAPPA_AT_MAX_R,
-                );
-            }
-            let (mean_sin, mean_cos) = avx2_mean_sincos_from_vec64(va0, va1);
-            let r_bar = fast_sqrt_unit_f32(mean_sin * mean_sin + mean_cos * mean_cos);
-            let mean_q7 = branchless_atan2_to_q7_fast(mean_sin, mean_cos);
-            (r_bar, mean_q7, branchless_von_mises_kappa(r_bar))
-        };
-    }
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-    {
-        circular_resultant_from_words_64(&load_q7_words_64(phases))
-    }
-}
-
 /// Evaluates both 64-head phase coherence $\mathcal{C}_{\mathrm{phase}}(a, b) \in [-1.0, 1.0]$ and
 /// circular resultant statistics $(\bar{R}_a, \bar{\theta}_{a,\mathrm{Q7}}, \kappa_a)$ in a single
 /// YMM-resident pass on AVX2 (`va0, va1` loaded once via `_mm256_loadu_si256` and shared across both
@@ -2804,39 +2486,6 @@ pub fn branchless_toroidal_centroid_step_words_with_coh_and_uni_64(
 }
 
 /// Executes an **Online Toroidal $k$-Means M-Step Centroid Update** in 8 register-resident `u64`
-/// SWAR words (`centroid_words`, `sample_words`) with an optional precomputed E-step phase
-/// coherence `precomputed_coh_opt`, in strictly constant time (`0` data-dependent branches on
-/// phase stationarity, normalized directional cosine weighting $w_{\mathrm{coh}} = \operatorname{clamp}(0.5(1 + \mathcal{C}_{\mathrm{phase}}), 0.25, 1.0)$).
-///
-/// Returns `(updated_centroid_words, next_base_energy, resultant_r_bar, von_mises_kappa)`.
-#[inline(always)]
-pub fn branchless_toroidal_centroid_step_words_with_coh_64(
-    centroid_words: &[u64; 8],
-    prev_sample_count: u32,
-    prev_base_energy: f32,
-    prev_r_bar: f32,
-    prev_kappa: f32,
-    sample_words: &[u64; 8],
-    precomputed_coh_opt: Option<f32>,
-    sample_energy: f32,
-) -> ([u64; 8], f32, f32, f32) {
-    let c_uni = is_word_array_uniform_64(centroid_words);
-    let sample_uni = is_word_array_uniform_64(sample_words);
-    branchless_toroidal_centroid_step_words_with_coh_and_uni_64(
-        centroid_words,
-        prev_sample_count,
-        prev_base_energy,
-        prev_r_bar,
-        prev_kappa,
-        sample_words,
-        precomputed_coh_opt,
-        sample_energy,
-        c_uni,
-        sample_uni,
-    )
-}
-
-/// Executes an **Online Toroidal $k$-Means M-Step Centroid Update** in 8 register-resident `u64`
 /// SWAR words (`centroid_words`, `sample_words`) in strictly constant time (`0` data-dependent
 /// branches on phase stationarity).
 ///
@@ -2851,7 +2500,9 @@ pub fn branchless_toroidal_centroid_step_words_64(
     sample_words: &[u64; 8],
     sample_energy: f32,
 ) -> ([u64; 8], f32, f32, f32) {
-    branchless_toroidal_centroid_step_words_with_coh_64(
+    let c_uni = is_word_array_uniform_64(centroid_words);
+    let sample_uni = is_word_array_uniform_64(sample_words);
+    branchless_toroidal_centroid_step_words_with_coh_and_uni_64(
         centroid_words,
         prev_sample_count,
         prev_base_energy,
@@ -2860,6 +2511,8 @@ pub fn branchless_toroidal_centroid_step_words_64(
         sample_words,
         None,
         sample_energy,
+        c_uni,
+        sample_uni,
     )
 }
 

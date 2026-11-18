@@ -77,11 +77,6 @@ impl EpisodicPhaseSample for CrystallizedAnchorRecord {
     }
 
     #[inline(always)]
-    fn preferred_working_lane(&self) -> u32 {
-        self.domain_id & ((MAX_ATTRACTOR_DOMAINS as u32) - 1)
-    }
-
-    #[inline(always)]
     fn sample_anchor_type(&self) -> gcso_anchor_type_t {
         self.anchor_type
     }
@@ -178,38 +173,6 @@ impl CrystallizedAnchorRecord {
         }
     }
 
-    /// Expands this 128-byte record back into a full 640-byte runtime [`AttractorAnchor`].
-    #[inline]
-    #[must_use]
-    pub const fn to_anchor(&self) -> AttractorAnchor {
-        let mut vector_data = [0.0_f32; MAX_EMBEDDING_DIM];
-        let mut i = 0usize;
-        while i < 16 {
-            vector_data[i] = (self.phase_deltas[i] as f32) * (1.0 / 128.0);
-            i += 1;
-        }
-        AttractorAnchor {
-            id: self.id,
-            anchor_type: self.anchor_type,
-            weight: self.weight,
-            pull_force: self.pull_force,
-            stigmergic_density: self.stigmergic_density,
-            half_life_steps: branchless_select_u32(
-                self.half_life_steps == 0,
-                1000,
-                self.half_life_steps,
-            ),
-            last_active_step: self.last_active_step,
-            domain_id: self.domain_id & ((MAX_ATTRACTOR_DOMAINS as u32) - 1),
-            vector_dim: 16,
-            is_active: self.is_active,
-            is_crystallized: self.is_crystallized,
-            reserved_padding: [0; 24],
-            phase_deltas: self.phase_deltas,
-            vector_data,
-        }
-    }
-
     /// Writes this 128-byte record directly into `dst` in-place, touching only Cache Line 0
     /// (`offset 0..64`), Cache Line 1 (`phase_deltas`, `offset 64..128`), and the first 16
     /// floats (`64` bytes) of `vector_data` without constructing a 640-byte stack temporary or
@@ -281,19 +244,6 @@ impl CrystallizedAnchorRecord {
         rec
     }
 
-    /// Converts this [`CrystallizedAnchorRecord`] into a CRC32-stamped [`CrystallizedAttractorRecord`]
-    /// assigned to an explicit `dominant_slot` lane (`ATTRACTOR_SLOT_*`), bridging the legacy
-    /// snapshot representation with [`crate::traits::gateway::RelativeCouplingMatrix`] and
-    /// dissipative crystallization.
-    #[inline]
-    #[must_use]
-    pub const fn to_crystal_record(&self, dominant_slot: u8) -> CrystallizedAttractorRecord {
-        let mut rec = self.to_crystallized_attractor_record_unstamped();
-        rec.dominant_slot = dominant_slot & ((MAX_ATTRACTOR_DOMAINS as u8) - 1);
-        rec.checksum_crc32 = rec.compute_payload_crc32_with_words(self.phase_words_ref());
-        rec
-    }
-
     /// Constructs a [`CrystallizedAnchorRecord`] from a 2-Origin Gateway / Online Toroidal $k$-Means
     /// [`CrystallizedAttractorRecord`].
     #[inline]
@@ -321,13 +271,6 @@ impl CrystallizedAnchorRecord {
             last_active_step: 0,
             reserved_padding: [0; 16],
         }
-    }
-
-    /// Alias bridging a [`CrystallizedAttractorRecord`] back into a [`CrystallizedAnchorRecord`].
-    #[inline]
-    #[must_use]
-    pub const fn from_crystal_record(rec: &CrystallizedAttractorRecord) -> Self {
-        Self::from_crystallized_attractor_record(rec)
     }
 }
 
@@ -483,20 +426,6 @@ impl AttractorGrowthSnapshot {
         self.composite_r_bar = r_bar;
         self.composite_kappa = branchless_von_mises_kappa(r_bar);
         prev_clear_end
-    }
-    /// Borrows `self.persona_phase_profile` (`offset 64` of `#[repr(C, align(64))]`
-    /// [`AttractorGrowthSnapshot`], guaranteed 64-byte aligned) as a zero-copy `&[u64; 8]` SWAR array.
-    #[inline(always)]
-    #[must_use]
-    pub const fn persona_words_ref(&self) -> &[u64; crate::traits::NUM_STIGMERGIC_GRANULES] {
-        // SAFETY: `AttractorGrowthSnapshot` is `#[repr(C, align(64))]` and `persona_phase_profile`
-        // is at byte offset 64 (64-byte aligned, >= 8-byte alignment of `u64`).
-        unsafe {
-            &*(self
-                .persona_phase_profile
-                .as_ptr()
-                .cast::<[u64; crate::traits::NUM_STIGMERGIC_GRANULES]>())
-        }
     }
 
     /// Borrows `self.repulsion_phase_deltas` (`offset 128` of `#[repr(C, align(64))]`
@@ -703,14 +632,6 @@ impl AttractorGrowthSnapshot {
         !crc
     }
 
-    /// Computes and stamps the IEEE 802.3 CRC32 checksum over payload bytes `[64..8448]`.
-    #[inline]
-    pub fn finalize_crc32(&mut self) -> u32 {
-        let crc = self.compute_payload_crc32();
-        self.payload_crc32 = crc;
-        crc
-    }
-
     /// Computes and stamps the IEEE 802.3 CRC32 checksum over payload bytes `[64..8448]`
     /// when `self.anchors[active_anchors..64]` is guaranteed to be zeroed.
     #[inline]
@@ -915,11 +836,6 @@ impl EpisodicPhaseSample for AttractorAnchor {
     fn sample_coherence_prior(&self) -> f32 {
         let r_bar = circular_r_bar_from_words_64(self.phase_words_ref());
         branchless_clamp_f32(r_bar, 0.25, 1.0)
-    }
-
-    #[inline(always)]
-    fn preferred_working_lane(&self) -> u32 {
-        self.domain_id & ((MAX_ATTRACTOR_DOMAINS as u32) - 1)
     }
 
     #[inline(always)]

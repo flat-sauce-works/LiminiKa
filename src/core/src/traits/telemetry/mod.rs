@@ -39,10 +39,10 @@ pub use crate::traits::primitives::swar_q7_circular_add_x8;
 use crate::traits::branchless::{
     BranchlessKernel, branchless_fast_transition_log_prob, branchless_q7_inhibit_words_64,
     branchless_q7_synergy_fuse_words_64, branchless_q7_unified_field_fold_words_with_flags_64,
-    branchless_q7_unified_field_fold_words_with_init_weight_64, circular_resultant_from_words_64,
+    circular_resultant_from_words_64,
     coherence_from_uniform_diff_word_x8, coherence_from_word_arrays_64,
     coherence_from_word_arrays_with_both_uniform_flags_64, swar_slerp_words_with_bias_64,
-    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64,
+    swar_slerp_words_with_uniform_flag_64, swar_words_nonzero_64,
 };
 use crate::traits::primitives::{
     DEFAULT_PHASE_GRAVITY_EPS, Q7_FULL_COS_REF, SWAR_EVEN_BYTES_64, SWAR_LOW7_MASK_64,
@@ -50,17 +50,15 @@ use crate::traits::primitives::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
     branchless_min_f32, branchless_phase_proximity_gravity_f32, branchless_popcount_rsqrt_u32,
     branchless_relu_f32, branchless_rsqrt_f32, branchless_select_f32, branchless_select_u32,
-    branchless_select_u64, branchless_select_u8, branchless_select_usize, branchless_splitmix64,
+    branchless_select_u64, branchless_select_u8, branchless_splitmix64,
     branchless_tanh_f32, fast_inv_len_f32, fast_ln_1p_bounded_f32, is_word_array_uniform_64,
-    load_q7_word_at, load_q7_words_64, store_q7_words_64, swar_or_avx2_q7_add_sat_words_64,
+    load_q7_words_64, store_q7_words_64, swar_or_avx2_q7_add_sat_words_64,
     swar_q7_abs_u8_x8, swar_q7_add_sat_x8,
     swar_q7_avg_round_x8, swar_q7_circular_diff_x8, swar_q7_neg_sat_x8,
     swar_q7_scale_le128_with_bias_x8, swar_u8_add_sat_x8, swar_u8_halve_decay_x8, swar_u8_max_x8,
     swar_u8_mean_round_x8, swar_u8_nonzero_count_x8, swar_u8_nonzero_msb_mask, swar_u8_sub_sat_x8,
     trail_phase_words_mut, trail_phase_words_ref,
 };
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-use crate::traits::primitives::branchless_rad_to_qdps_step_u8;
 use crate::traits::primitives::{
     ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE,
     ACTION_MODE_SUBHEAD_ROUTE, ACTION_MODE_RANK1_INJECT, ACTION_PRESET_EXPRESS_PHASE,
@@ -76,7 +74,6 @@ use crate::abi::{
     gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t, gcso_tagged_ptr_t,
 };
 use core::mem::{align_of, size_of};
-use core::slice;
 
 // ===================================================================
 // 1. Telemetry, Trail, Anti-Saturation & Swarm Quorum Constants

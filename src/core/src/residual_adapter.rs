@@ -126,7 +126,7 @@ mod tests {
         ACTION_PRESET_FULL_ORCHESTRATION, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
         DEFAULT_RIPA_CLAMP_MAX_RAD,
     };
-    use crate::traits::rope::{DynamicLayerSkipper, PhaseSteering};
+    use crate::traits::rope::PhaseSteering;
 
     struct DummyRopeEngine {
         head_dim: u32,
@@ -140,7 +140,6 @@ mod tests {
             self.num_heads
         }
     }
-    impl DynamicLayerSkipper for DummyRopeEngine {}
     impl SubHeadRouter for DummyRopeEngine {}
     impl Rank1ResidualAdapter for DummyRopeEngine {}
     impl VisualAttentionSteering for DummyRopeEngine {}

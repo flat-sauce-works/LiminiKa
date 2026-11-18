@@ -274,7 +274,13 @@ impl ModelSteeringAdapter {
             threshold_policy,
             core_layers: AutonomousCoreLayerStack::new(),
             last_boundary_delta: LiminalBoundaryDelta::default(),
-            last_horizon: EpistemicHorizonReading::default(),
+            last_horizon: EpistemicHorizonReading {
+                total_memory_support: 1.0,
+                peak_positive_affinity: 1.0,
+                horizon_gate: 1.0,
+                regime_code: EpistemicRegime::KnownCoherent as u8,
+                ..EpistemicHorizonReading::default()
+            },
             last_venn_report: StigmergicVennSerendipityReport::default(),
         })
     }
@@ -526,6 +532,100 @@ impl ModelSteeringAdapter {
                     preview,
                 );
         }
+    }
+
+    /// Synchronizes all three core layers (`Liminal`, `Stigmergic`, `Ego`), temporal boundary
+    /// delta (`LiminalBoundaryDelta`), and fragmented micro-ensemble consensus directly from a
+    /// live [`DynamicAttractorRecall`] outcome.
+    pub fn sync_core_layers_from_recall(
+        &mut self,
+        recall: &DynamicAttractorRecall<'_>,
+        query_words_opt: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
+    ) -> (
+        EpistemicHorizonReading,
+        StigmergicVennSerendipityReport,
+        Option<StigmergicFragmentEnsembleReport>,
+    ) {
+        let has_guard_conflict = recall.guard_conflict_margin > 0.0;
+        let regime_code = if has_guard_conflict
+            || matches!(recall.void_state, VoidBoundaryState::LiminalBoundary)
+        {
+            EpistemicRegime::InternalConflict as u8
+        } else if matches!(recall.void_state, VoidBoundaryState::LiminalExterior) {
+            EpistemicRegime::Liminal as u8
+        } else {
+            EpistemicRegime::KnownCoherent as u8
+        };
+        let is_liminal = regime_code == EpistemicRegime::Liminal as u8;
+        let horizon = EpistemicHorizonReading {
+            total_memory_support: (recall.top1_fact_score.max(0.0) * 2.0).max(if is_liminal {
+                0.0
+            } else {
+                0.35
+            }),
+            peak_positive_affinity: recall.top1_fact_score.max(0.0),
+            internal_conflict_energy: if has_guard_conflict {
+                recall.guard_conflict_margin.max(0.0)
+            } else {
+                (recall.top2_fact_score.max(0.0) * 0.5).max(0.0)
+            },
+            horizon_gate: if is_liminal { 0.0 } else { 1.0 },
+            conflict_severity: if has_guard_conflict {
+                recall.guard_conflict_margin.clamp(0.15, 1.0)
+            } else if regime_code == EpistemicRegime::InternalConflict as u8 {
+                0.25
+            } else {
+                0.0
+            },
+            dominant_anchor_id: recall
+                .recalled_facts
+                .first()
+                .map_or(0, |(e, _)| e.anchor_id),
+            opposing_anchor_id: recall.recalled_facts.get(1).map_or(0, |(e, _)| e.anchor_id),
+            regime_code,
+            reserved_align: [0; 3],
+        };
+
+        let q_words = query_words_opt
+            .copied()
+            .unwrap_or(*recall.gateway_frame.phase_words_ref());
+        let mut drifted_words = q_words;
+        for (g, w) in drifted_words.iter_mut().enumerate() {
+            let tol = self.core_layers.stigmergic_layer.granule_noise_tolerance_q7[g];
+            let nudge = u64::from(tol.min(16)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+            *w = swar_q7_circular_add_x8(*w, nudge);
+        }
+
+        let mut fact_fragments: Vec<ObjectiveFact<[i8; MAX_ATTENTION_HEADS]>> =
+            Vec::with_capacity(recall.recalled_facts.len());
+        for &(entry, score) in &recall.recalled_facts {
+            let q7 = entry
+                .per_layer_q7
+                .last()
+                .copied()
+                .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
+            let scaled_e = (entry.energy * score.clamp(0.25, 1.25)).max(0.25);
+            fact_fragments.push(ObjectiveFact::new(q7, scaled_e, 0, entry.anchor_id));
+        }
+
+        let aperture_floor =
+            f32::from(self.core_layers.liminal_layer.void_floor_q7[1]) * (1.0 / 127.0);
+        let venn = evaluate_stigmergic_venn_and_serendipity_words_64(
+            &fact_fragments,
+            &q_words,
+            &drifted_words,
+            aperture_floor,
+            self.core_layers.stigmergic_layer.serendipity_floor_q7,
+        );
+
+        self.adapt_core_layers(&horizon, &venn, None);
+        let ensemble_report = if fact_fragments.len() >= 2 {
+            let (_frame, _words, rep) = self.synthesize_fragment_ensemble(&fact_fragments);
+            Some(rep)
+        } else {
+            None
+        };
+        (horizon, venn, ensemble_report)
     }
 
     /// Captures the live [`LiminalTopologyTelemetrySnapshot`] and renders a self-introspecting
@@ -895,24 +995,35 @@ impl ModelSteeringAdapter {
         logits_opt: Option<&mut [f32]>,
     ) -> Result<Option<(GatewayFrame, CausalProvenanceReport)>, String> {
         self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
+            let core_ctx = (this.core_layers.liminal_layer.adaptation_epochs > 0
+                || this.core_layers.ego_layer.is_active())
+            .then_some(CoreLayerEvalContext {
+                stack: &this.core_layers,
+                delta: &this.last_boundary_delta,
+                horizon: &this.last_horizon,
+                venn: &this.last_venn_report,
+            });
             this.phase_engine
-                .steer_gateway_signal_for_geometry_safe(
+                .steer_gateway_signal_with_core_layers_for_geometry_safe(
                     signal,
                     &this.geometry,
+                    core_ctx,
                     trail_inout,
                     unresolved_damping_u7,
                     q,
                     None,
                     logits,
                 )
-                .map_err(|e| format!("steer_gateway_signal_for_geometry_safe error: {e}"))
+                .map_err(|e| {
+                    format!("steer_gateway_signal_with_core_layers_for_geometry_safe error: {e}")
+                })
         })
     }
 
     /// Routes [`ManifoldGatewaySignal`] through the embedded [`ActionHubEngine`] via
-    /// [`ActionHubGatewayExt::ingest_gateway_and_steer_for_geometry_safe`], allowing the hub's
-    /// stigmergic trail density, FastPathLedger fast-path state, and frame energy to autonomously modulate
-    /// steering across layers and tokens.
+    /// [`ActionHubGatewayExt::ingest_gateway_and_steer_with_core_layers_for_geometry_safe`],
+    /// allowing the hub's stigmergic trail density, FastPathLedger fast-path state, and live
+    /// 3-layer core stack (`Liminal` + `Stigmergic` + `Ego`) to autonomously modulate steering.
     ///
     /// # Errors
     ///
@@ -927,23 +1038,36 @@ impl ModelSteeringAdapter {
         logits_opt: Option<&mut [f32]>,
     ) -> Result<Option<(GatewayFrame, CausalProvenanceReport)>, String> {
         self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
+            let core_ctx = (this.core_layers.liminal_layer.adaptation_epochs > 0
+                || this.core_layers.ego_layer.is_active())
+            .then_some(CoreLayerEvalContext {
+                stack: &this.core_layers,
+                delta: &this.last_boundary_delta,
+                horizon: &this.last_horizon,
+                venn: &this.last_venn_report,
+            });
             this.action_hub
-                .ingest_gateway_and_steer_for_geometry_safe(
+                .ingest_gateway_and_steer_with_core_layers_for_geometry_safe(
                     signal,
                     &this.geometry,
+                    core_ctx,
                     &mut this.ledger_slot,
                     trail_inout,
                     unresolved_damping_u7,
                     Some(q),
                     logits,
                 )
-                .map_err(|e| format!("ingest_gateway_and_steer_for_geometry_safe error: {e}"))
+                .map_err(|e| {
+                    format!(
+                        "ingest_gateway_and_steer_with_core_layers_for_geometry_safe error: {e}"
+                    )
+                })
         })
     }
 
     /// Orchestrates a layer's RoPE steering via [`ActionHubEngine`] using stigmergic
-    /// evaporation + resonance-weighted reinforcement and records the selected
-    /// [`StigmergicActionDecision`] inside `action_hub.last_decision`.
+    /// evaporation + resonance-weighted reinforcement and the live 3-layer core stack, recording
+    /// the selected [`StigmergicActionDecision`] inside `action_hub.last_decision`.
     ///
     /// # Errors
     ///
@@ -973,11 +1097,20 @@ impl ModelSteeringAdapter {
                 layer_idx,
                 this.geometry.num_layers.max(1),
             );
+            let core_ctx = (this.core_layers.liminal_layer.adaptation_epochs > 0
+                || this.core_layers.ego_layer.is_active())
+            .then_some(CoreLayerEvalContext {
+                stack: &this.core_layers,
+                delta: &this.last_boundary_delta,
+                horizon: &this.last_horizon,
+                venn: &this.last_venn_report,
+            });
             let (frame, report, decision) = this
                 .action_hub
-                .orchestrate_gateway_layer_with_policy_and_scale_safe(
+                .orchestrate_gateway_layer_with_core_layers_safe(
                     signal,
                     &this.geometry,
+                    core_ctx,
                     &this.threshold_policy,
                     &this.system_constraint,
                     &this.probe_baseline,
@@ -991,7 +1124,7 @@ impl ModelSteeringAdapter {
                     logits,
                 )
                 .map_err(|e| {
-                    format!("orchestrate_gateway_layer_with_policy_and_scale_safe error: {e}")
+                    format!("orchestrate_gateway_layer_with_core_layers_safe error: {e}")
                 })?;
             this.action_hub.last_decision = decision as u8;
             this.decision_counts[(decision as usize).min(6)] += 1;
@@ -999,15 +1132,16 @@ impl ModelSteeringAdapter {
         })
     }
 
-    /// Executes norm-adaptive Rank-1 residual residual injection only when [`ActionHubEngine`]'s latest
+    /// Executes norm-adaptive Rank-1 residual injection only when [`ActionHubEngine`]'s latest
     /// [`StigmergicActionDecision`] authorizes full orchestration (`FullOrchestration` or
-    /// `CrystallizeMacroBasin`). Returns `Ok(None)` when bypassed by ActionHub.
+    /// `CrystallizeMacroBasin`), persisting Core Layer 0/1/2 Ego interventions onto `self.core_layers`.
+    /// Returns `Ok(None)` when bypassed by ActionHub.
     ///
     /// # Errors
     ///
     /// Returns an error if slice lengths mismatch or `liminika-core` rejects the inputs.
     pub fn orchestrate_layer_srl_with_action_hub<S: ManifoldGatewaySignal + ?Sized>(
-        &self,
+        &mut self,
         signal: &S,
         hidden_inout: &mut [f32],
         u_vec: &[f32],
@@ -1019,7 +1153,7 @@ impl ModelSteeringAdapter {
             StigmergicActionDecision::FullOrchestration
                 | StigmergicActionDecision::CrystallizeMacroBasin
         ) {
-            let res = self.apply_srl_with_gateway(signal, hidden_inout, u_vec, v_vec)?;
+            let res = self.apply_srl_with_gateway_mut(signal, hidden_inout, u_vec, v_vec)?;
             Ok(Some(res))
         } else {
             Ok(None)
@@ -1231,7 +1365,7 @@ impl ModelSteeringAdapter {
         Ok(state_out)
     }
 
-    /// Applies Rank-1 Rank-1 residual residual injection (`y <- y + s * u * (v^T * y)`) to a hidden-state
+    /// Applies Rank-1 residual injection (`y <- y + s * u * (v^T * y)`) to a hidden-state
     /// vector via [`Rank1ResidualAdapter::eval_rank1_slices_fused`].
     ///
     /// # Errors

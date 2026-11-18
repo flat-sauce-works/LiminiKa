@@ -2044,3 +2044,121 @@ fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_srl() {
         "quiescent state without stagnation trigger should take stationary shortcut"
     );
 }
+
+#[test]
+fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
+    use liminika_core::traits::gateway::{
+        EgoIntentAxes, EpistemicHorizonReading, EpistemicRegime, ObjectiveFact,
+        StigmergicVennSerendipityReport,
+    };
+
+    let geom = RopeGeometry::phi4_mini();
+    let mut base_adapter = ModelSteeringAdapter::new(geom.clone()).expect("base init");
+    let mut ego_adapter = ModelSteeringAdapter::new(geom.clone()).expect("ego init");
+    ego_adapter.configure_ego_from_intent_axes(
+        &EgoIntentAxes::new()
+            .with_autonomy_q7(96)
+            .with_transgression_q7(80)
+            .with_defiance_q7(72),
+    );
+    let horizon = EpistemicHorizonReading {
+        total_memory_support: 2.0,
+        peak_positive_affinity: 0.90,
+        horizon_gate: 1.0,
+        dominant_anchor_id: 1,
+        regime_code: EpistemicRegime::KnownCoherent as u8,
+        ..Default::default()
+    };
+    let venn = StigmergicVennSerendipityReport {
+        venn_core_mask: 0x0F,
+        void_exterior_mask: 0xF0,
+        ..Default::default()
+    };
+    ego_adapter.adapt_core_layers(&horizon, &venn, None);
+
+    let len = ego_adapter.geometry().q_rot_len();
+    let mut q_base: Vec<f32> = (0..len).map(|i| ((i % 7) as f32) * 0.1 - 0.25).collect();
+    let mut q_ego = q_base.clone();
+    let mut trail_base = gcso_pointer_trail_t::default();
+    let mut trail_ego = gcso_pointer_trail_t::default();
+    let fact = ObjectiveFact::new([24i8; MAX_ATTENTION_HEADS], 6.5, 0, 1);
+
+    // 1. RoPE gateway steering diverges when Core Layers + Ego are active without mutating per-layer epochs.
+    let epochs_before_rope = ego_adapter.ego_field().intervention_epochs;
+    let (f_base, _) = base_adapter
+        .steer_layer_with_gateway(0, &fact, &mut trail_base, 128, &mut q_base, None)
+        .expect("base rope")
+        .expect("active");
+    let (f_ego, _) = ego_adapter
+        .steer_layer_with_gateway(0, &fact, &mut trail_ego, 128, &mut q_ego, None)
+        .expect("ego rope")
+        .expect("active");
+    assert_ne!(f_base.phase_deltas, f_ego.phase_deltas);
+    assert_ne!(q_base, q_ego);
+    assert_eq!(
+        ego_adapter.ego_field().intervention_epochs,
+        epochs_before_rope,
+        "per-layer read-only RoPE modulation must not accumulate intervention epochs"
+    );
+
+    // 2. ActionHub RoPE + SRL orchestration wires Core Layers and persists Ego intervention on SRL.
+    let mut hidden = vec![10.0, 0.0, 0.0, 0.0];
+    let u = vec![1.0, 0.0, 0.0, 0.0];
+    let v = vec![1.0, 0.0, 0.0, 0.0];
+    for _ in 0..8 {
+        let mut q_tmp = q_ego.clone();
+        let _ = ego_adapter
+            .orchestrate_layer_rope_with_action_hub(
+                0,
+                &fact,
+                &mut trail_ego,
+                None,
+                128,
+                &mut q_tmp,
+                None,
+            )
+            .expect("action hub rope");
+    }
+    let srl_res = ego_adapter
+        .orchestrate_layer_srl_with_action_hub(&fact, &mut hidden, &u, &v)
+        .expect("action hub srl");
+    assert!(srl_res.is_some());
+    assert!(ego_adapter.ego_field().intervention_epochs > epochs_before_rope);
+
+    // 3. sync_core_layers_from_recall connects corpus recall into Layer 0/1/2 + ensemble.
+    let e1 = TextAttractorEntry {
+        anchor_id: 1,
+        role: AttractorRole::Fact,
+        text: "fact one".to_string(),
+        per_layer_q7: vec![[24i8; MAX_ATTENTION_HEADS]],
+        energy: 2.0,
+        residual_sig: vec![1.0, 0.0],
+    };
+    let e2 = TextAttractorEntry {
+        anchor_id: 2,
+        role: AttractorRole::Fact,
+        text: "fact two".to_string(),
+        per_layer_q7: vec![[24i8; MAX_ATTENTION_HEADS]],
+        energy: 1.8,
+        residual_sig: vec![0.9, 0.1],
+    };
+    let recall = DynamicAttractorRecall {
+        void_state: VoidBoundaryState::InsideBasin,
+        top1_fact_score: 0.85,
+        top2_fact_score: 0.72,
+        top1_persona_score: 0.20,
+        min_local_void_depth: 0.0,
+        guard_conflict_margin: -0.35,
+        action_decision: StigmergicActionDecision::FullOrchestration,
+        gateway_frame: f_ego,
+        telemetry: StratumProbeTelemetry::default(),
+        recalled_facts: vec![(&e1, 0.85), (&e2, 0.72)],
+        recalled_personas: Vec::new(),
+    };
+    let epochs_before_sync = ego_adapter.aperture_field().adaptation_epochs;
+    let (_hor, _venn, ens_opt) = ego_adapter.sync_core_layers_from_recall(&recall, None);
+    let ens_rep = ens_opt.expect("2 recalled facts must trigger fragmented micro-ensemble");
+    assert_eq!(ens_rep.active_fragment_count, 2);
+    assert_ne!(ens_rep.quorum_agreed_granule_mask, 0);
+    assert!(ego_adapter.aperture_field().adaptation_epochs > epochs_before_sync);
+}

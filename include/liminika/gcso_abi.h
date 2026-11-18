@@ -263,127 +263,6 @@ gcso_action_hub_step_pointer(gcso_context_handle_t context, uint64_t current_ptr
                              gcso_pointer_trail_t* GCSO_RESTRICT trail_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Evolves a pointer trail's embedded current_ptr Action Mode flags and Target Attractor Slot
- * in O(1) time.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_evolve_trail_mode(
-    gcso_pointer_trail_t* GCSO_RESTRICT trail_inout, float entropy_h_tilde,
-    uint8_t repulsion_triggered, uint8_t dominant_attractor_slot, float low_entropy_skip_thresh,
-    float high_density_rank1_thresh, uint64_t* GCSO_RESTRICT evolved_ptr_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Bridges the inter-memory Limina gap between prev_trail and curr_trail_inout in O(1) time.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_bridge_liminal_trails(
-    const gcso_pointer_trail_t* GCSO_RESTRICT prev_trail,
-    gcso_pointer_trail_t* GCSO_RESTRICT curr_trail_inout, uint8_t interpolation_u7,
-    float contradiction_threshold, float* GCSO_RESTRICT coherence_out,
-    float* GCSO_RESTRICT log_prob_out,
-    uint8_t* GCSO_RESTRICT contradiction_repulsed_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Scans candidate memory trails, selects the optimal coherent trail maximizing the
- * Bayes-Attention score, rewires linked_trail_id, and bridges the Limina gap.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_select_and_bridge_best_next_trail(
-    gcso_pointer_trail_t* GCSO_RESTRICT src_trail_inout,
-    gcso_pointer_trail_t* GCSO_RESTRICT candidate_trails_inout, size_t num_candidates,
-    uint32_t head_dim, float phase_interference_gain, float stigmergic_prior_gain,
-    float pointer_link_bonus, uint8_t interpolation_u7, float contradiction_threshold,
-    uint32_t* GCSO_RESTRICT selected_trail_id_out, float* GCSO_RESTRICT bayesian_score_out,
-    float* GCSO_RESTRICT log_prob_out, uint8_t* GCSO_RESTRICT found_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Directly modulates pre-Softmax Attention scores in-place from src_trail and
- * candidate_trails.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_action_hub_modulate_attention_scores_by_candidate_trails(
-    float* GCSO_RESTRICT attention_scores_inout,
-    const gcso_pointer_trail_t* GCSO_RESTRICT src_trail,
-    const gcso_pointer_trail_t* GCSO_RESTRICT candidate_trails, size_t num_candidates,
-    uint32_t head_dim, float phase_interference_gain, float stigmergic_prior_gain,
-    float pointer_link_bonus, float contradiction_threshold, float repulsion_penalty,
-    float* GCSO_RESTRICT mean_coherence_out, uint32_t* GCSO_RESTRICT best_candidate_id_out,
-    uint32_t* GCSO_RESTRICT coherent_count_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Executes single-pass fused Bayesian pointer-trail selection, rewiring, Limina Slerp
- * bridging, and optional pre-Softmax Attention score modulation.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_action_hub_select_bridge_and_modulate_bayesian_trails(
-    gcso_pointer_trail_t* GCSO_RESTRICT src_trail_inout,
-    const gcso_pointer_trail_t* GCSO_RESTRICT candidate_trails, size_t num_candidates,
-    float* GCSO_RESTRICT attention_scores_inout, uint32_t head_dim, float phase_interference_gain,
-    float stigmergic_prior_gain, float pointer_link_bonus, float contradiction_threshold,
-    uint8_t interpolation_u7, float repulsion_penalty,
-    uint32_t* GCSO_RESTRICT selected_trail_id_out, float* GCSO_RESTRICT bayesian_score_out,
-    float* GCSO_RESTRICT mean_coherence_out, uint32_t* GCSO_RESTRICT coherent_count_out,
-    uint8_t* GCSO_RESTRICT found_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Executes Coarse-to-Fine macro-centroid trail routing (O(K)) without Q/K tensor steering.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_route_coarse_to_fine_centroid_only(
-    gcso_pointer_trail_t* GCSO_RESTRICT trail_inout,
-    const gcso_crystallized_attractor_record_t* GCSO_RESTRICT centroids, size_t num_centroids,
-    uint8_t pull_step_u7, size_t* GCSO_RESTRICT winning_centroid_idx_out,
-    uint32_t* GCSO_RESTRICT selected_anchor_id_out, float* GCSO_RESTRICT centroid_coherence_out,
-    float* GCSO_RESTRICT gravity_pull_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Executes Coarse-to-Fine macro-to-micro pointer-trail routing (O(K + M)) across centroids
- * and candidate trails.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_route_coarse_to_fine_trail(
-    gcso_pointer_trail_t* GCSO_RESTRICT src_trail_inout,
-    const gcso_crystallized_attractor_record_t* GCSO_RESTRICT centroids, size_t num_centroids,
-    const gcso_pointer_trail_t* GCSO_RESTRICT candidate_trails, size_t num_candidates,
-    uint32_t head_dim, float phase_interference_gain, float stigmergic_prior_gain,
-    float pointer_link_bonus, float cluster_bonus_gain, float contradiction_threshold,
-    size_t* GCSO_RESTRICT winning_centroid_idx_out, uint32_t* GCSO_RESTRICT selected_trail_id_out,
-    float* GCSO_RESTRICT best_score_out, float* GCSO_RESTRICT best_coherence_out,
-    uint8_t* GCSO_RESTRICT found_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Executes single-pass fused Coarse-to-Fine macro-to-micro candidate-trail routing (O(K+M)),
- * Limina Slerp bridging, and in-register QDPS/RIPA phase steering.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_action_hub_route_coarse_to_fine_trail_and_steer_qk_safe(
-    gcso_pointer_trail_t* GCSO_RESTRICT src_trail_inout,
-    const gcso_crystallized_attractor_record_t* GCSO_RESTRICT centroids, size_t num_centroids,
-    const gcso_pointer_trail_t* GCSO_RESTRICT candidate_trails, size_t num_candidates,
-    size_t head_dim, size_t num_heads, float phase_interference_gain, float stigmergic_prior_gain,
-    float pointer_link_bonus, float cluster_bonus_gain, float contradiction_threshold,
-    uint8_t interpolation_u7, float min_step_rad, float* GCSO_RESTRICT query_tensor,
-    float* GCSO_RESTRICT key_tensor, size_t* GCSO_RESTRICT winning_centroid_idx_out,
-    uint32_t* GCSO_RESTRICT selected_trail_id_out, float* GCSO_RESTRICT best_score_out,
-    float* GCSO_RESTRICT best_coherence_out, uint8_t* GCSO_RESTRICT found_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Executes full Coarse-to-Fine Bayesian routing, Limina Slerp bridging, optional pre-Softmax
- * Attention score modulation, SO(2)-fused RIPA/sub-head router steering, and optional
- * FastPathLedger telemetry logging.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_action_hub_route_coarse_to_fine_bayesian_and_steer_qk_safe(
-    gcso_pointer_trail_t* GCSO_RESTRICT src_trail_inout,
-    const gcso_crystallized_attractor_record_t* GCSO_RESTRICT centroids, size_t num_centroids,
-    uint8_t coarse_pull_u7, const gcso_pointer_trail_t* GCSO_RESTRICT candidate_trails,
-    size_t num_candidates, float* GCSO_RESTRICT attention_scores_inout, size_t head_dim,
-    size_t num_heads, float phase_interference_gain, float stigmergic_prior_gain,
-    float pointer_link_bonus, float repulsion_penalty, uint8_t fine_interpolation_u7,
-    float contradiction_threshold, const gcso_subhead_config_t* GCSO_RESTRICT subhead_cfg_opt,
-    float min_step_rad, gcso_ledger_slot_t* GCSO_RESTRICT ledger_slot_inout,
-    float* GCSO_RESTRICT query_tensor, float* GCSO_RESTRICT key_tensor,
-    size_t* GCSO_RESTRICT winning_centroid_idx_out, uint32_t* GCSO_RESTRICT macro_anchor_id_out,
-    uint32_t* GCSO_RESTRICT selected_trail_id_out, float* GCSO_RESTRICT bayesian_score_out,
-    float* GCSO_RESTRICT mean_coherence_out, uint32_t* GCSO_RESTRICT coherent_count_out,
-    uint8_t* GCSO_RESTRICT found_out) GCSO_NOEXCEPT;
-
-/**
  * @brief Resolves an Action Hub phase command across the 8 parallel 8-head SWAR Micro-Swarm cells.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_resolve_trail_in_swarm(
@@ -585,22 +464,6 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_s
     size_t num_heads, float max_rad) GCSO_NOEXCEPT;
 
 /**
- * @brief Applies RIPA soft-bounded tanh clamping on HalfSplit RoPE channels with optional
- * partial rotary_dim (upper quarter of [0..rotary_dim] split-half pairs).
- * Corresponds to PhaseSteering::apply_phase_steering_half_split_safe in liminika_core::traits.
- * @param query_tensor 32-byte aligned query tensor buffer.
- * @param phase_deltas Q7 quantized phase delta array (Aligned 16-byte).
- * @param head_dim Full head dimension size (must be even).
- * @param rotary_dim Active rotated dimensions (even, 2 <= rotary_dim <= head_dim).
- * @param num_heads Total head count.
- * @param max_rad Maximum allowed phase limit in radians.
- * @return GCSO_SUCCESS or error status code.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering_half_split_safe(
-    float* GCSO_RESTRICT query_tensor, const gcso_q7_t* GCSO_RESTRICT phase_deltas, size_t head_dim,
-    size_t rotary_dim, size_t num_heads, float max_rad) GCSO_NOEXCEPT;
-
-/**
  * @brief Applies RIPA soft-bounded phase steering dispatched by gcso_config_t RoPE geometry
  * (Interleaved vs HalfSplit, partial rotary_dim, head_dim, num_heads, ripa_clamp_max_rad).
  * @param query_tensor 32-byte aligned query tensor buffer.
@@ -646,26 +509,6 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_steer_with_gateway_and
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_compute_procrustes_phase_delta_half_split(
     const float* GCSO_RESTRICT q_before, const float* GCSO_RESTRICT q_after, size_t head_dim,
     size_t rotary_dim, size_t num_heads, gcso_q7_t* GCSO_RESTRICT q7_phase_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Applies Order-Invariant Single-Manifold Unified-Field Phase Steering across num_anchors.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_unified_field_phase_steering_safe(
-    const gcso_q7_t* GCSO_RESTRICT trail_phases, float trail_init_weight,
-    const gcso_q7_t* GCSO_RESTRICT anchor_phases, const float* GCSO_RESTRICT anchor_base_energies,
-    size_t num_anchors, float min_step_rad, float max_rad, float* GCSO_RESTRICT query_tensor,
-    float* GCSO_RESTRICT key_tensor, size_t head_dim, size_t num_heads,
-    float* GCSO_RESTRICT total_pull_out, float* GCSO_RESTRICT mean_coherence_out,
-    uint32_t* GCSO_RESTRICT dominant_anchor_id_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Directly modulates pre-Softmax candidate memory/key Attention scores in-place by
- * Attention x DPSR Phase Interference across key_anchor_phases.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_modulate_attention_scores_by_phase_bank(
-    float* GCSO_RESTRICT attention_scores_inout, const gcso_q7_t* GCSO_RESTRICT query_phases,
-    const gcso_q7_t* GCSO_RESTRICT key_anchor_phases, size_t num_candidates, uint32_t head_dim,
-    float interference_gain, float* GCSO_RESTRICT mean_coherence_out) GCSO_NOEXCEPT;
 
 /**
  * @brief QDPS discrete filter: cuts off phase rotation steps falling below min_step_rad.
@@ -887,54 +730,6 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_inject_phas
     size_t num_heads, float gain) GCSO_NOEXCEPT;
 
 /**
- * @brief Evaluates Zero-Hyperparameter Phase-Proximity Gravity on the Single Unified Attractor
- * Phase Manifold between trail_phases and anchor_phases.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_attractor_eval_resonant_pull(
-    const gcso_q7_t* GCSO_RESTRICT trail_phases, const gcso_q7_t* GCSO_RESTRICT anchor_phases,
-    float base_energy, float* GCSO_RESTRICT resonant_pull_out,
-    float* GCSO_RESTRICT coherence_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Order-invariant folding of num_anchors on the Single Unified Attractor Phase Manifold.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_attractor_fold_unified_field(
-    const gcso_q7_t* GCSO_RESTRICT trail_phases, float trail_init_weight,
-    const gcso_q7_t* GCSO_RESTRICT anchor_phases, const float* GCSO_RESTRICT anchor_base_energies,
-    size_t num_anchors, gcso_q7_t* GCSO_RESTRICT folded_phases_out,
-    float* GCSO_RESTRICT total_pull_out, float* GCSO_RESTRICT mean_coherence_out,
-    uint32_t* GCSO_RESTRICT dominant_anchor_id_out,
-    uint32_t* GCSO_RESTRICT active_anchor_count_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Steers trail_inout in-place directly on the Single Unified Attractor Phase Manifold.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_attractor_steer_trail_unified_field(
-    gcso_pointer_trail_t* GCSO_RESTRICT trail_inout, const gcso_q7_t* GCSO_RESTRICT anchor_phases,
-    const float* GCSO_RESTRICT anchor_base_energies, size_t num_anchors,
-    const gcso_q7_t* GCSO_RESTRICT repulsion_phases, float inhibition_strength,
-    float* GCSO_RESTRICT final_pull_out, float* GCSO_RESTRICT mean_coherence_out,
-    uint32_t* GCSO_RESTRICT active_anchor_count_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Evaluates non-linear Cross-Slot Attractor Synergy and Liminal Beat Perturbation between
- * two 64-head Q7 attractor slot profiles gated by an 8x8 coupling bitmatrix.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_attractor_eval_cross_slot_synergy(
-    const gcso_q7_t* GCSO_RESTRICT phases_a, float weight_a,
-    const gcso_q7_t* GCSO_RESTRICT phases_b, float weight_b, uint32_t slot_a, uint32_t slot_b,
-    uint64_t coupling_matrix_8x8, float synergy_gain, gcso_q7_t* GCSO_RESTRICT fused_phases_out,
-    float* GCSO_RESTRICT effective_pull_out, float* GCSO_RESTRICT coherence_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Applies branchless Mutual Slot Inhibition in-place to a 64-head Q7 phase profile.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_attractor_apply_mutual_slot_inhibition(
-    gcso_q7_t* GCSO_RESTRICT target_phases_inout, float target_weight,
-    const gcso_q7_t* GCSO_RESTRICT inhibitor_phases, float inhibition_strength,
-    float* GCSO_RESTRICT damped_weight_out) GCSO_NOEXCEPT;
-
-/**
  * @brief Aggregates high-density pointer trails bottom-up to macro-crystallize new dynamic anchors.
  * Corresponds to AttractorField::aggregate_bottom_up in liminika_core::traits.
  * @param context Active context handle.
@@ -943,12 +738,6 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_attractor_apply_mutual_slot
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_aggregate_bottom_up(
     gcso_context_handle_t context, uint32_t* GCSO_RESTRICT new_anchor_count_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Clears all registered topological anchors from the attractor field.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_attractor_field_clear_anchors(gcso_attractor_field_handle_t field) GCSO_NOEXCEPT;
 
 /**
  * @brief Destroys an attractor field instance.
@@ -1280,43 +1069,6 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_steer_gateway_frame_sa
     gcso_causal_provenance_report_t* GCSO_RESTRICT report_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Executes single-pass fused 2-Origin Gateway Steering and Online Toroidal k-Means /
- * DP-Means macro crystallization.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_dpsr_steer_and_kmeans_crystallize_gateway_frame_safe(
-    const gcso_gateway_frame_t* GCSO_RESTRICT frame,
-    gcso_pointer_trail_t* GCSO_RESTRICT trail_inout, uint8_t unresolved_damping_u7,
-    float* GCSO_RESTRICT query_tensor, float* GCSO_RESTRICT key_tensor, size_t head_dim,
-    size_t num_heads, float* GCSO_RESTRICT logits_inout, size_t vocab_size,
-    gcso_crystallized_attractor_record_t* GCSO_RESTRICT centroids_inout, size_t num_centroids,
-    float split_coherence_threshold, gcso_causal_provenance_report_t* GCSO_RESTRICT report_out,
-    size_t* GCSO_RESTRICT assigned_centroid_idx_out, float* GCSO_RESTRICT assigned_coherence_out,
-    float* GCSO_RESTRICT updated_gravity_mass_out) GCSO_NOEXCEPT;
-
-/**
- * @brief One-shot 2-Origin Multi-Blanket Gateway synthesis, SO(2)-fused RIPA/sub-head router
- * steering, and optional Online Toroidal k-Means / DP-Means macro crystallization from Q7 phase
- * pointers.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_gateway_synthesize_kmeans_and_steer_qk_safe(
-    float vram_pressure, float gpu_frame_overrun, uint8_t active_swarm_cell_mask,
-    uint8_t recommend_layer_skip, const gcso_q7_t* GCSO_RESTRICT fact_phases, float fact_confidence,
-    uint64_t fact_mapped_offset48, uint32_t fact_anchor_id,
-    const gcso_q7_t* GCSO_RESTRICT persona_phases, float persona_strength,
-    uint64_t persona_mapped_offset48, uint32_t persona_anchor_id,
-    const gcso_contrastive_bloom_filter_t* GCSO_RESTRICT bloom_filter_opt,
-    float contradiction_threshold, uint8_t bloom_repulsion_threshold,
-    gcso_pointer_trail_t* GCSO_RESTRICT trail_inout, uint8_t unresolved_damping_u7,
-    float* GCSO_RESTRICT query_tensor, float* GCSO_RESTRICT key_tensor, size_t head_dim,
-    size_t num_heads, float* GCSO_RESTRICT logits_inout, size_t vocab_size,
-    gcso_crystallized_attractor_record_t* GCSO_RESTRICT centroids_inout, size_t num_centroids,
-    float split_coherence_threshold, gcso_gateway_frame_t* GCSO_RESTRICT frame_out,
-    gcso_causal_provenance_report_t* GCSO_RESTRICT report_out,
-    size_t* GCSO_RESTRICT assigned_centroid_idx_out, float* GCSO_RESTRICT assigned_coherence_out,
-    float* GCSO_RESTRICT updated_gravity_mass_out) GCSO_NOEXCEPT;
-
-/**
  * @brief One-shot Raw-Byte 2-Origin Gateway synthesis, SO(2)-fused RIPA/sub-head router steering,
  * and optional Online Toroidal k-Means / DP-Means macro crystallization.
  */
@@ -1362,41 +1114,6 @@ gcso_gateway_project_f32_synthesize_kmeans_and_steer_qk_safe(
     float* GCSO_RESTRICT updated_gravity_mass_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Synthesizes a closed-loop GatewayFrame and optional CausalProvenanceReport directly from
- * crystallized macro centroids.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_gateway_synthesize_from_crystallized_records(
-    const gcso_crystallized_attractor_record_t* GCSO_RESTRICT records, size_t num_records,
-    gcso_gateway_frame_t* GCSO_RESTRICT frame_out,
-    gcso_causal_provenance_report_t* GCSO_RESTRICT report_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Executes one-shot Closed-Loop Macro-Distribution Gateway Re-Injection and SO(2)-fused
- * RIPA/sub-head router steering from crystallized records.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_dpsr_steer_closed_loop_crystallized_gateway_safe(
-    const gcso_crystallized_attractor_record_t* GCSO_RESTRICT records, size_t num_records,
-    gcso_pointer_trail_t* GCSO_RESTRICT trail_inout, uint8_t unresolved_damping_u7,
-    float* GCSO_RESTRICT query_tensor, float* GCSO_RESTRICT key_tensor, size_t head_dim,
-    size_t num_heads, float* GCSO_RESTRICT logits_inout, size_t vocab_size,
-    gcso_gateway_frame_t* GCSO_RESTRICT frame_out,
-    gcso_causal_provenance_report_t* GCSO_RESTRICT report_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Folds num_records crystallized attractor centroids onto trail_inout via Phase-Proximity
- * Gravity and steers Query/Key tensors in zero-copy register-resident mode.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_dpsr_steer_crystallized_ensemble_zero_copy_safe(
-    const gcso_crystallized_attractor_record_t* GCSO_RESTRICT records, size_t num_records,
-    gcso_pointer_trail_t* GCSO_RESTRICT trail_inout, float min_step_rad,
-    float* GCSO_RESTRICT query_tensor, float* GCSO_RESTRICT key_tensor, size_t head_dim,
-    size_t num_heads, float* GCSO_RESTRICT total_pull_out,
-    uint32_t* GCSO_RESTRICT dominant_anchor_id_out,
-    float* GCSO_RESTRICT effective_ripa_rad_out) GCSO_NOEXCEPT;
-
-/**
  * @brief Executes Online Toroidal k-Means / DP-Means E+M step over K crystallized attractor
  * centroids.
  */
@@ -1418,36 +1135,6 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_attractor_step_online_toroi
     size_t* GCSO_RESTRICT last_assigned_idx_out, uint32_t* GCSO_RESTRICT last_anchor_id_out,
     float* GCSO_RESTRICT mean_batch_coherence_out,
     uint32_t* GCSO_RESTRICT spawned_clusters_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Executes Coarse-to-Fine macro-to-micro centroid routing and fused QK RIPA phase steering.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_action_hub_route_coarse_to_fine_and_steer_qk_safe(
-    gcso_pointer_trail_t* GCSO_RESTRICT trail_inout,
-    const gcso_crystallized_attractor_record_t* GCSO_RESTRICT centroids, size_t num_centroids,
-    uint8_t pull_step_u7, float min_step_rad, float* GCSO_RESTRICT query_tensor,
-    float* GCSO_RESTRICT key_tensor, size_t head_dim, size_t num_heads,
-    size_t* GCSO_RESTRICT winning_centroid_idx_out, uint32_t* GCSO_RESTRICT selected_anchor_id_out,
-    float* GCSO_RESTRICT centroid_coherence_out,
-    float* GCSO_RESTRICT gravity_pull_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Serializes num_records Section-1 CrystallizedAttractorRecords into a .gcso
- * (mapped-storage) byte buffer with IEEE 802.3 CRC32 stamping.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_container_write_crystallized_records_zero_copy(
-    const gcso_crystallized_attractor_record_t* GCSO_RESTRICT records, size_t num_records,
-    uint8_t* GCSO_RESTRICT out_bytes, size_t* GCSO_RESTRICT buffer_size_inout) GCSO_NOEXCEPT;
-
-/**
- * @brief Validates and zero-copy maps num_records Section-1 CrystallizedAttractorRecords from a
- * 64-byte aligned .gcso (mapped-storage) byte buffer.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_container_verify_crystallized_records_zero_copy(
-    const uint8_t* GCSO_RESTRICT container_bytes, size_t byte_len, size_t num_records,
-    const gcso_crystallized_attractor_record_t** GCSO_RESTRICT records_ptr_out) GCSO_NOEXCEPT;
 
 /**
  * @brief Serializes a 4-section .gcso unified binary container including Section 3c
@@ -1510,23 +1197,6 @@ gcso_container_map_and_steer_four_section_zero_copy_safe(
     size_t num_heads, size_t* GCSO_RESTRICT num_crystals_out, float* GCSO_RESTRICT total_pull_out,
     uint32_t* GCSO_RESTRICT dominant_anchor_id_out,
     float* GCSO_RESTRICT effective_ripa_rad_out) GCSO_NOEXCEPT;
-
-/**
- * @brief Maps a 128B-aligned 4-section .gcso container in-place, executes Coarse-to-Fine routing
- * (O(K+M)) over Section 1 centroids and Section 2 trails, applies Section 3a Bloom repulsion, and
- * steers Query/Key tensors.
- */
-GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
-gcso_container_map_route_coarse_to_fine_and_steer_four_section_zero_copy_safe(
-    const uint8_t* GCSO_RESTRICT container_bytes, size_t byte_len,
-    gcso_pointer_trail_t* GCSO_RESTRICT src_trail_inout, size_t head_dim, size_t num_heads,
-    float phase_interference_gain, float stigmergic_prior_gain, float pointer_link_bonus,
-    float cluster_bonus_gain, float contradiction_threshold, uint8_t interpolation_u7,
-    uint8_t bloom_repulsion_threshold, float min_step_rad, float* GCSO_RESTRICT query_tensor,
-    float* GCSO_RESTRICT key_tensor, size_t* GCSO_RESTRICT winning_centroid_idx_out,
-    uint32_t* GCSO_RESTRICT selected_trail_id_out, float* GCSO_RESTRICT best_score_out,
-    float* GCSO_RESTRICT best_coherence_out, uint8_t* GCSO_RESTRICT bloom_repulsed_out,
-    uint8_t* GCSO_RESTRICT found_out) GCSO_NOEXCEPT;
 
 /**
  * @brief Evaluates the 3-regime Epistemic Horizon separation (KnownCoherent, InternalConflict,

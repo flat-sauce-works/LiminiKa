@@ -233,10 +233,43 @@ pub(super) fn filter_and_damp_gateway_words(
     }
 }
 
+/// Borrowed read-only 3-layer core context (`Liminal` + `Stigmergic` + `Ego`) passed into
+/// per-layer Hot-Path RoPE steering and ActionHub orchestration.
+#[derive(Clone, Copy)]
+pub struct CoreLayerEvalContext<'a> {
+    /// Unified 3-layer autonomous core stack (`128 B`).
+    pub stack: &'a AutonomousCoreLayerStack,
+    /// Temporal boundary velocity between consecutive Layer 0 epochs.
+    pub delta: &'a LiminalBoundaryDelta,
+    /// Latest epistemic horizon reading (`KnownCoherent`, `InternalConflict`, or `Liminal`).
+    pub horizon: &'a EpistemicHorizonReading,
+    /// Latest Venn overlap & serendipity telemetry report across the 8 SWAR granules.
+    pub venn: &'a StigmergicVennSerendipityReport,
+}
+
+#[inline(always)]
+fn synthesize_signal_with_optional_core_layers<S: ManifoldGatewaySignal + ?Sized>(
+    signal: &S,
+    core_ctx: Option<CoreLayerEvalContext<'_>>,
+) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
+    if let Some(ctx) = core_ctx {
+        if ctx.stack.liminal_layer.adaptation_epochs > 0 || ctx.stack.ego_layer.is_active() {
+            return signal.synthesize_gateway_with_core_layers_readonly(
+                ctx.stack,
+                ctx.delta,
+                ctx.horizon,
+                ctx.venn,
+            );
+        }
+    }
+    signal.synthesize_gateway_frame_with_words()
+}
+
 #[inline(always)]
 pub(super) fn prepare_gateway_steering_state<T: PhaseSteering + ?Sized, S: ManifoldGatewaySignal + ?Sized>(
     engine: &T,
     signal: &S,
+    core_ctx: Option<CoreLayerEvalContext<'_>>,
     trail_inout: &mut gcso_pointer_trail_t,
     query_tensor: &AlignedSliceMut32<'_, f32>,
     key_tensor: Option<&AlignedSliceMut32<'_, f32>>,
@@ -247,7 +280,7 @@ pub(super) fn prepare_gateway_steering_state<T: PhaseSteering + ?Sized, S: Manif
     usize,
     usize,
 )> {
-    let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
+    let (frame, frm_w) = synthesize_signal_with_optional_core_layers(signal, core_ctx);
     let report = frame.to_causal_report();
     let (head_dim, num_heads, expected_len) = engine.validate_head_layout()?;
     if num_heads > MAX_ATTENTION_HEADS
@@ -294,6 +327,7 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering + SubHeadRouter {
         let (frame, frm_w, report, head_dim, num_heads) = prepare_gateway_steering_state(
             self,
             signal,
+            None,
             trail_inout,
             query_tensor,
             key_tensor.as_deref(),
@@ -335,9 +369,45 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering + SubHeadRouter {
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport)> {
+        self.steer_gateway_signal_with_core_layers_for_geometry_safe(
+            signal,
+            geometry,
+            None,
+            trail_inout,
+            unresolved_damping_u7,
+            query_tensor,
+            key_tensor,
+            logits_opt,
+        )
+    }
+
+    /// Core-layer-aware counterpart to [`Self::steer_gateway_signal_for_geometry_safe`] applying
+    /// dynamic trait cognitive apertures and read-only 3-layer modulation (`Liminal` + `Stigmergic` + `Ego`).
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `geometry`, radian clamps, or tensor slices
+    /// violate layout or `GCSO_RESTRICT` disjointness invariants.
+    #[inline]
+    fn steer_gateway_signal_with_core_layers_for_geometry_safe<
+        S: ManifoldGatewaySignal + ?Sized,
+        G: RopeSteeringTarget + ?Sized,
+    >(
+        &self,
+        signal: &S,
+        geometry: &G,
+        core_ctx: Option<CoreLayerEvalContext<'_>>,
+        trail_inout: &mut gcso_pointer_trail_t,
+        unresolved_damping_u7: u8,
+        query_tensor: &mut AlignedSliceMut32<'_, f32>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport)> {
         let geom = geometry.rope_geometry();
         geom.validate()?;
-        if geom.layout == RopePairLayout::Interleaved && geom.rotary_dim == geom.head_dim {
+        if core_ctx.is_none()
+            && geom.layout == RopePairLayout::Interleaved
+            && geom.rotary_dim == geom.head_dim
+        {
             return self.steer_gateway_signal_safe(
                 signal,
                 trail_inout,
@@ -351,6 +421,7 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering + SubHeadRouter {
         let (frame, frm_w, report, head_dim, num_heads) = prepare_gateway_steering_state(
             self,
             signal,
+            core_ctx,
             trail_inout,
             query_tensor,
             key_tensor.as_deref(),
@@ -411,98 +482,6 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering + SubHeadRouter {
         }
         Ok((frame, report))
     }
-
-    /// Folds a zero-copy slice of `.gcso` [`CrystallizedAttractorRecord`]s (`records`) onto
-    /// `trail_inout` weighted by **Phase-Proximity Gravity** directly in 8 `u64` SWAR registers.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if head dimensions, `min_step_rad`, or tensor slices
-    /// violate layout or `GCSO_RESTRICT` disjointness invariants.
-    #[inline]
-    fn steer_crystallized_ensemble_zero_copy_safe(
-        &self,
-        records: &[CrystallizedAttractorRecord],
-        trail_inout: &mut gcso_pointer_trail_t,
-        min_step_rad: f32,
-        query_tensor: &mut AlignedSliceMut32<'_, f32>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(f32, u32, f32)> {
-        let (head_dim, num_heads, expected_len) = self.validate_head_layout()?;
-        if num_heads > MAX_ATTENTION_HEADS
-            || min_step_rad < 0.0
-            || !branchless_is_finite_f32(min_step_rad)
-        {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        validate_optional_qk_tensors(Some(&*query_tensor), key_tensor.as_deref(), expected_len)?;
-
-        let init_pull =
-            branchless_flush_subnormal_f32(branchless_relu_f32(trail_inout.attractor_pull_force));
-        let (folded_w, tot_pull, dom_id, dom_clamp) =
-            CrystallizedAttractorRecord::fold_crystallized_ensemble_words_with_init_pull_64(
-                records,
-                &mut trail_inout.accumulated_phase_delta,
-                init_pull,
-            );
-
-        if dom_id != 0 {
-            trail_inout.target_anchor_id = dom_id;
-            trail_inout.cluster_id = dom_id;
-        }
-        trail_inout.attractor_pull_force = branchless_min_f32(tot_pull, MAX_ATTRACTOR_PULL_FORCE);
-        trail_inout.flags |= TRAIL_FLAG_CRYSTALLIZED_CANDIDATE | TRAIL_FLAG_SYNERGY_RESONANCE;
-
-        let eff_ripa = branchless_select_f32(
-            branchless_is_finite_f32(dom_clamp) & (dom_clamp > 0.0),
-            dom_clamp,
-            DEFAULT_RIPA_CLAMP_MAX_RAD,
-        );
-        let min_step_q7 = branchless_rad_to_qdps_step_u8(min_step_rad);
-        let qdps_words = if min_step_q7 <= 1 {
-            folded_w
-        } else if min_step_q7 > 127 {
-            [0u64; NUM_STIGMERGIC_GRANULES]
-        } else {
-            swar_q7_qdps_filter_words_64(&folded_w, min_step_q7)
-        };
-        let is_default_ripa = branchless_abs_f32(eff_ripa - DEFAULT_RIPA_CLAMP_MAX_RAD) <= 1.0e-5;
-        let swar_words = if is_default_ripa {
-            qdps_words
-        } else {
-            let ratio_u8 =
-                (branchless_clamp_f32(eff_ripa * (1.0 / DEFAULT_RIPA_CLAMP_MAX_RAD), 0.10, 1.0)
-                    * 128.0
-                    + 0.5) as u8;
-            let s_u64 = ratio_u8.min(128) as u64;
-            let bias_restore = (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-            [
-                swar_q7_scale_le128_with_bias_x8(qdps_words[0], s_u64, bias_restore),
-                swar_q7_scale_le128_with_bias_x8(qdps_words[1], s_u64, bias_restore),
-                swar_q7_scale_le128_with_bias_x8(qdps_words[2], s_u64, bias_restore),
-                swar_q7_scale_le128_with_bias_x8(qdps_words[3], s_u64, bias_restore),
-                swar_q7_scale_le128_with_bias_x8(qdps_words[4], s_u64, bias_restore),
-                swar_q7_scale_le128_with_bias_x8(qdps_words[5], s_u64, bias_restore),
-                swar_q7_scale_le128_with_bias_x8(qdps_words[6], s_u64, bias_restore),
-                swar_q7_scale_le128_with_bias_x8(qdps_words[7], s_u64, bias_restore),
-            ]
-        };
-
-        if swar_words_nonzero_64(&swar_words) {
-            steer_from_swar_words_core_safe(
-                &swar_words,
-                0xFF,
-                128,
-                head_dim,
-                num_heads,
-                false,
-                DEFAULT_RIPA_CLAMP_MAX_RAD,
-                query_tensor,
-                key_tensor,
-            );
-        }
-
-        Ok((tot_pull, dom_id, eff_ripa))
-    }
 }
 
 impl<T: PhaseSteering + SubHeadRouter + ?Sized> GatewayPhaseSteeringExt for T {}
@@ -514,28 +493,6 @@ impl<T: PhaseSteering + SubHeadRouter + ?Sized> GatewayPhaseSteeringExt for T {}
 /// L2 norm and [`GatewayFrame`] structural quantities (`effective_energy`, `ripa_clamp_rad`,
 /// `fact_persona_coherence`, `repulsion_severity`), eliminating manual scalar tuning.
 pub trait GatewayRank1SteeringExt: Rank1ResidualAdapter {
-    /// Synthesizes `signal` into a [`GatewayFrame`] and applies norm-adaptive fused Rank-1 residual
-    /// residual injection $\mathbf{y} \leftarrow \mathbf{y} + g_{\mathrm{struct}} (\mathbf{v}^\top \mathbf{x}) \mathbf{u}$.
-    ///
-    /// Returns `(frame, applied_structural_gain)`.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slice lengths mismatch or `Rank1ResidualAdapter` rejects inputs.
-    #[inline]
-    fn apply_gateway_rank1_hidden_fused<S: ManifoldGatewaySignal + ?Sized>(
-        &self,
-        signal: &S,
-        y_out: &mut AlignedSliceMut32<'_, f32>,
-        x_in: &AlignedSlice32<'_, f32>,
-        u_vec: &AlignedSlice32<'_, f32>,
-        v_vec: &AlignedSlice32<'_, f32>,
-    ) -> GcsoResult<(GatewayFrame, f32)> {
-        let frame = signal.synthesize_gateway_frame();
-        let gain = self.apply_gateway_frame_rank1_hidden_fused(
-            &frame, y_out, x_in, u_vec, v_vec,
-        )?;
-        Ok((frame, gain))
-    }
 
     /// Applies norm-adaptive fused Rank-1 residual injection from an already synthesized or
     /// circuit-modulated [`GatewayFrame`].
@@ -581,145 +538,21 @@ impl<T: Rank1ResidualAdapter + ?Sized> GatewayRank1SteeringExt for T {}
 /// [`ManifoldGatewaySignal`] ingestion, Online Toroidal $k$-Means / DP-Means macro clustering,
 /// online basin consolidation, and `.gcso` crystallization.
 pub trait ActionHubGatewayExt: ActionHub {
-    /// Internal register-resident helper that ingests `signal` via `synthesize_gateway_frame_with_words`,
-    /// steps `trail_out` and `ledger_slot`, and steers `query_tensor` / `key_tensor` directly from registers.
-    ///
-    /// # Errors
-    /// Propagates any validation or execution error from [`ActionHub`].
-    #[inline]
-    fn ingest_gateway_and_steer_with_words_core<S: ManifoldGatewaySignal + ?Sized>(
-        &mut self,
-        signal: &S,
-        ledger_slot: &mut gcso_ledger_slot_t,
-        trail_out: &mut gcso_pointer_trail_t,
-        mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-        rank1_activation_and_desc: Option<(&AlignedSlice32<'_, f32>, &gcso_rank1_residual_descriptor_t)>,
-    ) -> GcsoResult<(
-        GatewayFrame,
-        CausalProvenanceReport,
-        [u64; NUM_STIGMERGIC_GRANULES],
-    )> {
-        let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
-        let report = frame.to_causal_report();
-        let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
-            frame.qdps_min_step_rad,
-            frame.ripa_clamp_rad,
-            query_tensor.as_deref(),
-            key_tensor.as_deref(),
-        )?;
 
-        let (bypass_hit, effective_ptr) =
-            self.resolve_or_pass_tagged_ptr(ledger_slot, gcso_tagged_ptr_t(frame.tagged_ptr));
-        let frm_nonzero = swar_words_nonzero_64(&frm_w);
-        if frm_nonzero {
-            *trail_phase_words_mut(trail_out) = frm_w;
-        }
-        if frame.target_anchor_id != 0 {
-            trail_out.target_anchor_id = frame.target_anchor_id;
-            trail_out.cluster_id = frame.target_anchor_id;
-        } else {
-            trail_out.cluster_id = frame.dominant_slot as u32;
-        }
-        trail_out.attractor_pull_force = branchless_min_f32(
-            branchless_max_f32(trail_out.attractor_pull_force, frame.effective_energy),
-            MAX_ATTRACTOR_PULL_FORCE,
-        );
-        // When `frm_w` is non-zero, pass `effective_ptr.with_phase(0)` to `step_pointer` so
-        // `step_pointer` does not double-accumulate `mean_phase_tag_q7` onto `frm_w` and so
-        // `ActionHubEngine::trails[slot_idx]` receives the exact `GatewayFrame` phase profile.
-        let step_ptr = if frm_nonzero {
-            effective_ptr.with_phase(0)
-        } else {
-            effective_ptr
-        };
-        self.step_pointer(step_ptr.raw(), trail_out)?;
-        trail_out.current_ptr = effective_ptr.raw();
-
-        let is_repulsed = report.is_cohomology_repulsion()
-            | ((frame.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0);
-        let mut metrics = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
-            | branchless_select_u8(is_repulsed, LEDGER_METRIC_REPULSION_APPLIED, 0)
-            | branchless_select_u8(
-                (frame.provenance_bits
-                    & (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_SUBJECTIVE_PERSONA))
-                    == (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_SUBJECTIVE_PERSONA),
-                LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
-                0,
-            );
-
-        let (layer_skipped, steered, subhead_routed) = accumulate_trail_and_steer_gateway_words_core(
-            &frame,
-            &frm_w,
-            trail_out,
-            128,
-            head_dim,
-            num_heads,
-            query_tensor.as_deref_mut(),
-            key_tensor,
-            logits_opt,
-        )?;
-
-        if layer_skipped {
-            metrics |= LEDGER_METRIC_LAYER_SKIP_COMPENSATED;
-        } else {
-            metrics |= branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
-                | branchless_select_u8(subhead_routed, LEDGER_METRIC_SUBHEAD_ROUTED, 0);
-            if let (Some(q), Some((x_in, desc))) = (query_tensor, rank1_activation_and_desc) {
-                if (frame.action_mode_flags & ACTION_MODE_RANK1_INJECT) != 0 {
-                    self.eval_rank1_fused(q, x_in, desc)?;
-                    metrics |= LEDGER_METRIC_RANK1_INJECTED;
-                }
-            }
-        }
-
-        let _ = self.telemetry_push(ledger_slot, metrics);
-        Ok((frame, report, frm_w))
-    }
-
-    /// Ingests any [`ManifoldGatewaySignal`] into `self`, steps `trail_out` and `ledger_slot`,
-    /// and executes $SO(2)$-fused RIPA + sub-head router sub-head steering.
-    ///
-    /// # Errors
-    /// Propagates any validation or execution error from [`ActionHub`].
-    #[inline(always)]
-    fn ingest_gateway_and_steer_safe<S: ManifoldGatewaySignal + ?Sized>(
-        &mut self,
-        signal: &S,
-        ledger_slot: &mut gcso_ledger_slot_t,
-        trail_out: &mut gcso_pointer_trail_t,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-        rank1_activation_and_desc: Option<(&AlignedSlice32<'_, f32>, &gcso_rank1_residual_descriptor_t)>,
-    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport)> {
-        let (frame, report, _frm_w) = self.ingest_gateway_and_steer_with_words_core(
-            signal,
-            ledger_slot,
-            trail_out,
-            query_tensor,
-            key_tensor,
-            logits_opt,
-            rank1_activation_and_desc,
-        )?;
-        Ok((frame, report))
-    }
-
-    /// Ingests any [`ManifoldGatewaySignal`] into `self`, steps `trail_out` and `ledger_slot`,
-    /// modulates damping autonomously from the trail's stigmergic density and frame energy,
-    /// and steers `query_tensor` according to `geometry` (`Interleaved` or `HalfSplit`).
+    /// Synthesizes `signal` with dynamic trait cognitive apertures and optional 3-layer core
+    /// modulation (`core_ctx`), then steers `query_tensor` and optional `logits_opt` for `geometry`.
     ///
     /// # Errors
     /// Propagates any validation or execution error from [`ActionHub`] or [`PhaseSteeringGeometryExt`].
     #[inline]
-    fn ingest_gateway_and_steer_for_geometry_safe<
+    fn ingest_gateway_and_steer_with_core_layers_for_geometry_safe<
         S: ManifoldGatewaySignal + ?Sized,
         G: RopeSteeringTarget + ?Sized,
     >(
         &mut self,
         signal: &S,
         geometry: &G,
+        core_ctx: Option<CoreLayerEvalContext<'_>>,
         ledger_slot: &mut gcso_ledger_slot_t,
         trail_out: &mut gcso_pointer_trail_t,
         unresolved_damping_u7: u8,
@@ -727,7 +560,7 @@ pub trait ActionHubGatewayExt: ActionHub {
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport)> {
         let geom = geometry.rope_geometry();
-        let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
+        let (frame, frm_w) = synthesize_signal_with_optional_core_layers(signal, core_ctx);
         let report = frame.to_causal_report();
         let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
             frame.qdps_min_step_rad,
@@ -812,71 +645,20 @@ pub trait ActionHubGatewayExt: ActionHub {
         Ok((frame, report))
     }
 
-    /// Unified ActionHub-as-Orchestrator entry point for a transformer layer.
-    ///
-    /// Applies pheromone **evaporation + resonance-weighted reinforcement** to `trail_out`,
-    /// evaluates the 7-regime [`StigmergicActionDecision`] ladder via `thresholds`, and
-    /// autonomously executes only the interventions authorized by `decision`:
-    /// - `PassiveSidecar` / `InertialLayerSkip`: zero interference (skips RoPE & Rank-1 residual).
-    /// - `ExpressPhaseSteer` / `SubHeadRoute`: geometry-aware RoPE phase steering only.
-    /// - `FullOrchestration` / `CrystallizeMacroBasin`: RoPE phase steering + norm-adaptive Rank-1 residual.
-    /// - `RepulsionEscape`: suppresses positive Rank-1 residual injection and applies damped repulsion guard.
-    ///
-    /// # Errors
-    /// Propagates any validation or execution error from [`ActionHub`],
-    /// [`PhaseSteeringGeometryExt`], or [`GatewayRank1SteeringExt`].
-    #[inline]
-    fn orchestrate_gateway_layer_safe<
-        S: ManifoldGatewaySignal + ?Sized,
-        G: RopeSteeringTarget + ?Sized,
-    >(
-        &mut self,
-        signal: &S,
-        geometry: &G,
-        thresholds: &StigmergicThresholds,
-        entropy_h_tilde: f32,
-        ledger_slot: &mut gcso_ledger_slot_t,
-        trail_out: &mut gcso_pointer_trail_t,
-        unresolved_damping_u7: u8,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        srl_hidden: Option<(
-            &mut AlignedSliceMut32<'_, f32>,
-            &AlignedSlice32<'_, f32>,
-            &AlignedSlice32<'_, f32>,
-            &AlignedSlice32<'_, f32>,
-        )>,
-        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport, StigmergicActionDecision)> {
-        self.orchestrate_gateway_layer_with_scale_safe(
-            signal,
-            geometry,
-            thresholds,
-            StigmergicScaleGranularity::TypeGateway,
-            entropy_h_tilde,
-            ledger_slot,
-            trail_out,
-            unresolved_damping_u7,
-            query_tensor,
-            srl_hidden,
-            logits_opt,
-        )
-    }
-
-    /// Scale-aware variant of [`Self::orchestrate_gateway_layer_safe`] that closes the feedback
-    /// loop from `ledger_slot`'s active [`CognitiveTrajectoryLedger`] (when
-    /// [`LEDGER_FLAG_COGNITIVE_TRAJECTORY`] is set) back onto the synthesized [`GatewayFrame`]
-    /// at the caller's [`StigmergicScaleGranularity`] prior to causal inspection and steering.
+    /// Orchestrates scale-aware `signal` synthesis, 3-layer core modulation, and [`ActionHub`]
+    /// decision routing for `geometry`.
     ///
     /// # Errors
     /// Propagates any validation or execution error from [`ActionHub`].
     #[inline]
-    fn orchestrate_gateway_layer_with_scale_safe<
+    fn orchestrate_gateway_layer_with_scale_and_core_layers_safe<
         S: ManifoldGatewaySignal + ?Sized,
         G: RopeSteeringTarget + ?Sized,
     >(
         &mut self,
         signal: &S,
         geometry: &G,
+        core_ctx: Option<CoreLayerEvalContext<'_>>,
         thresholds: &StigmergicThresholds,
         scale: StigmergicScaleGranularity,
         entropy_h_tilde: f32,
@@ -893,7 +675,7 @@ pub trait ActionHubGatewayExt: ActionHub {
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport, StigmergicActionDecision)> {
         let geom = geometry.rope_geometry();
-        let (mut frame, frm_w) = signal.synthesize_gateway_frame_with_words();
+        let (mut frame, frm_w) = synthesize_signal_with_optional_core_layers(signal, core_ctx);
         if (ledger_slot.auto_tune_flags & LEDGER_FLAG_COGNITIVE_TRAJECTORY) != 0 {
             let circuit = CognitiveTrajectoryLedger::from_ledger_slot(ledger_slot);
             let ref_w = if trail_out.step_count > 0 {
@@ -1079,60 +861,11 @@ pub trait ActionHubGatewayExt: ActionHub {
         Ok((frame, report, decision))
     }
 
-    /// Policy-driven variant of [`Self::orchestrate_gateway_layer_safe`] that dynamically resolves
-    /// [`StigmergicThresholds`] via [`StigmergicThresholdPolicy`] from live system telemetry,
-    /// the calibrated [`ManifoldProbeBaseline`], the current pointer trail, and EDBC entropy.
+    /// Scale- and policy-aware layer orchestrator allowing per-layer traversal across
+    /// `MacroCoalition -> TypeGateway -> CellTrail -> PointerBit`.
     ///
     /// # Errors
-    /// Propagates any error from [`Self::orchestrate_gateway_layer_safe`].
-    #[inline]
-    fn orchestrate_gateway_layer_with_policy_safe<
-        S: ManifoldGatewaySignal + ?Sized,
-        G: RopeSteeringTarget + ?Sized,
-        P: StigmergicThresholdPolicy + ?Sized,
-        C: SystemConstraintSignal + ?Sized,
-    >(
-        &mut self,
-        signal: &S,
-        geometry: &G,
-        policy: &P,
-        system: &C,
-        probe: &ManifoldProbeBaseline,
-        entropy_h_tilde: f32,
-        ledger_slot: &mut gcso_ledger_slot_t,
-        trail_out: &mut gcso_pointer_trail_t,
-        unresolved_damping_u7: u8,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        srl_hidden: Option<(
-            &mut AlignedSliceMut32<'_, f32>,
-            &AlignedSlice32<'_, f32>,
-            &AlignedSlice32<'_, f32>,
-            &AlignedSlice32<'_, f32>,
-        )>,
-        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport, StigmergicActionDecision)> {
-        self.orchestrate_gateway_layer_with_policy_and_scale_safe(
-            signal,
-            geometry,
-            policy,
-            system,
-            probe,
-            StigmergicScaleGranularity::TypeGateway,
-            entropy_h_tilde,
-            ledger_slot,
-            trail_out,
-            unresolved_damping_u7,
-            query_tensor,
-            srl_hidden,
-            logits_opt,
-        )
-    }
-
-    /// Scale-aware variant of [`Self::orchestrate_gateway_layer_with_policy_safe`] allowing
-    /// per-layer traversal across `MacroCoalition -> TypeGateway -> CellTrail -> PointerBit`.
-    ///
-    /// # Errors
-    /// Propagates any error from [`Self::orchestrate_gateway_layer_with_scale_safe`].
+    /// Propagates any error from [`ActionHub`] or [`PhaseSteeringGeometryExt`].
     #[inline]
     fn orchestrate_gateway_layer_with_policy_and_scale_safe<
         S: ManifoldGatewaySignal + ?Sized,
@@ -1160,6 +893,58 @@ pub trait ActionHubGatewayExt: ActionHub {
         )>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport, StigmergicActionDecision)> {
+        self.orchestrate_gateway_layer_with_core_layers_safe(
+            signal,
+            geometry,
+            None,
+            policy,
+            system,
+            probe,
+            scale,
+            entropy_h_tilde,
+            ledger_slot,
+            trail_out,
+            unresolved_damping_u7,
+            query_tensor,
+            srl_hidden,
+            logits_opt,
+        )
+    }
+
+    /// Core-layer-aware counterpart to [`Self::orchestrate_gateway_layer_with_policy_and_scale_safe`]
+    /// connecting dynamic trait cognitive apertures and the 3-layer core stack (`Liminal` +
+    /// `Stigmergic` + `Ego`) directly into per-layer ActionHub RoPE/Rank-1 orchestration.
+    ///
+    /// # Errors
+    /// Propagates any error from [`Self::orchestrate_gateway_layer_with_scale_and_core_layers_safe`].
+    #[inline]
+    fn orchestrate_gateway_layer_with_core_layers_safe<
+        S: ManifoldGatewaySignal + ?Sized,
+        G: RopeSteeringTarget + ?Sized,
+        P: StigmergicThresholdPolicy + ?Sized,
+        C: SystemConstraintSignal + ?Sized,
+    >(
+        &mut self,
+        signal: &S,
+        geometry: &G,
+        core_ctx: Option<CoreLayerEvalContext<'_>>,
+        policy: &P,
+        system: &C,
+        probe: &ManifoldProbeBaseline,
+        scale: StigmergicScaleGranularity,
+        entropy_h_tilde: f32,
+        ledger_slot: &mut gcso_ledger_slot_t,
+        trail_out: &mut gcso_pointer_trail_t,
+        unresolved_damping_u7: u8,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        srl_hidden: Option<(
+            &mut AlignedSliceMut32<'_, f32>,
+            &AlignedSlice32<'_, f32>,
+            &AlignedSlice32<'_, f32>,
+            &AlignedSlice32<'_, f32>,
+        )>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport, StigmergicActionDecision)> {
         let circuit_opt = ((ledger_slot.auto_tune_flags & LEDGER_FLAG_COGNITIVE_TRAJECTORY) != 0)
             .then(|| CognitiveTrajectoryLedger::from_ledger_slot(ledger_slot));
         let dyn_thresholds = policy.resolve_thresholds_with_circuit(
@@ -1170,9 +955,10 @@ pub trait ActionHubGatewayExt: ActionHub {
             circuit_opt.as_ref(),
             scale,
         );
-        self.orchestrate_gateway_layer_with_scale_safe(
+        self.orchestrate_gateway_layer_with_scale_and_core_layers_safe(
             signal,
             geometry,
+            core_ctx,
             &dyn_thresholds,
             scale,
             entropy_h_tilde,
@@ -1185,167 +971,6 @@ pub trait ActionHubGatewayExt: ActionHub {
         )
     }
 
-    /// Ingests `signal`, resolves the 8-Cell SWAR Micro-Swarm on `trail_out`, and absorbs the
-    /// resulting [`GatewayFrame`] into `crystal_record`.
-    ///
-    /// # Errors
-    /// Propagates any validation or execution error from [`Self::ingest_gateway_and_steer_safe`].
-    #[inline(always)]
-    fn ingest_gateway_swarm_and_crystallize_safe<S: ManifoldGatewaySignal + ?Sized>(
-        &mut self,
-        signal: &S,
-        ledger_slot: &mut gcso_ledger_slot_t,
-        trail_out: &mut gcso_pointer_trail_t,
-        crystal_record: &mut CrystallizedAttractorRecord,
-        step_gain_u7: u8,
-        tolerance_q7: u8,
-        quorum_threshold: u8,
-        entropy_h_tilde: f32,
-        low_entropy_skip_thresh: f32,
-        bloom_filter: Option<&ContrastivePhaseBloomFilter>,
-        repulsion_threshold: u8,
-        repulsion_scale_u7: u8,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(
-        GatewayFrame,
-        CausalProvenanceReport,
-        StigmergicReconstitutionReport,
-        f32,
-    )> {
-        let (frame, report, init_frm_w) = self.ingest_gateway_and_steer_with_words_core(
-            signal,
-            ledger_slot,
-            trail_out,
-            query_tensor,
-            key_tensor,
-            logits_opt,
-            None,
-        )?;
-        let cur_trail_w = if swar_words_nonzero_64(&init_frm_w) {
-            init_frm_w
-        } else {
-            *trail_phase_words_ref(trail_out)
-        };
-        let (swarm_report, frm_w) = trail_out.try_resolve_action_in_swarm_with_cur_words(
-            gcso_tagged_ptr_t(frame.tagged_ptr),
-            &cur_trail_w,
-            &init_frm_w,
-            false,
-            frame.active_swarm_cell_mask,
-            step_gain_u7,
-            frame.qdps_min_step_q7,
-            tolerance_q7,
-            quorum_threshold,
-            entropy_h_tilde,
-            low_entropy_skip_thresh,
-            bloom_filter,
-            repulsion_threshold,
-            repulsion_scale_u7,
-        );
-        let grav_mass = crystal_record.absorb_gateway_frame_with_words(&frame, &frm_w);
-        Ok((frame, report, swarm_report, grav_mass))
-    }
-
-    /// Executes the complete closed-loop **2-Origin Gateway $\to$ Classical Online Toroidal
-    /// $k$-Means / DP-Means Macro Clustering (`centroids`) $\to$ `ActionHub` / `RoPE` / `sub-head router`
-    /// Steering** pipeline in a single zero-allocation call.
-    ///
-    /// # Errors
-    /// Propagates any error from [`Self::ingest_gateway_and_steer_safe`].
-    #[inline(always)]
-    fn ingest_gateway_kmeans_and_steer_safe<S: ManifoldGatewaySignal + ?Sized>(
-        &mut self,
-        signal: &S,
-        centroids: &mut [CrystallizedAttractorRecord],
-        split_coherence_thresh: f32,
-        ledger_slot: &mut gcso_ledger_slot_t,
-        trail_out: &mut gcso_pointer_trail_t,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport, usize, u32, f32, bool)> {
-        let (frame, report, frm_w) = self.ingest_gateway_and_steer_with_words_core(
-            signal,
-            ledger_slot,
-            trail_out,
-            query_tensor,
-            key_tensor,
-            logits_opt,
-            None,
-        )?;
-        let (cluster_idx, anchor_id, _coh, mass, spawned) =
-            CrystallizedAttractorRecord::step_online_toroidal_kmeans_frame_with_words_64(
-                centroids,
-                &frame,
-                &frm_w,
-                split_coherence_thresh,
-                Some(trail_out),
-            );
-        Ok((frame, report, cluster_idx, anchor_id, mass, spawned))
-    }
-
-    /// Executes the complete closed-loop **Gateway $\to$ `ActionHub` Steering $\to$ Online Toroidal
-    /// $k$-Means / DP-Means E+M Step $\to$ Autonomous Basin Consolidation & Evaporative Pruning**
-    /// (`merge_and_prune_centroids_64`) in a single zero-allocation call.
-    ///
-    /// Returns `(GatewayFrame, CausalProvenanceReport, assigned_cluster_idx, assigned_anchor_id, updated_gravity_mass, spawned_new_cluster, merged_clusters, pruned_clusters)`.
-    ///
-    /// # Errors
-    /// Propagates any error from [`Self::ingest_gateway_kmeans_and_steer_safe`].
-    #[inline]
-    fn ingest_gateway_kmeans_consolidate_and_steer_safe<S: ManifoldGatewaySignal + ?Sized>(
-        &mut self,
-        signal: &S,
-        centroids: &mut [CrystallizedAttractorRecord],
-        split_coherence_thresh: f32,
-        merge_coherence_thresh: f32,
-        min_gravity_mass: f32,
-        evaporative_decay_factor: f32,
-        ledger_slot: &mut gcso_ledger_slot_t,
-        trail_out: &mut gcso_pointer_trail_t,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(
-        GatewayFrame,
-        CausalProvenanceReport,
-        usize,
-        u32,
-        f32,
-        bool,
-        u32,
-        u32,
-    )> {
-        let (frame, report, cluster_idx, anchor_id, mass, spawned) = self
-            .ingest_gateway_kmeans_and_steer_safe(
-                signal,
-                centroids,
-                split_coherence_thresh,
-                ledger_slot,
-                trail_out,
-                query_tensor,
-                key_tensor,
-                logits_opt,
-            )?;
-        let (merged, pruned) = CrystallizedAttractorRecord::merge_and_prune_centroids_64(
-            centroids,
-            merge_coherence_thresh,
-            min_gravity_mass,
-            evaporative_decay_factor,
-        );
-        Ok((
-            frame,
-            report,
-            cluster_idx,
-            anchor_id,
-            mass,
-            spawned,
-            merged,
-            pruned,
-        ))
-    }
 }
 
 impl<T: ActionHub + ?Sized> ActionHubGatewayExt for T {}
@@ -1729,7 +1354,6 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
         self.synthesize_gateway_frame_with_words().0
     }
 }
-
 
 /// Blanket-implemented bridge coupling [`StigmergicReconstitutionOps`] with [`StigmergicScaleLayer`]
 /// so Micro-Swarm quorum thresholds, tolerances, and active cell masks adapt automatically

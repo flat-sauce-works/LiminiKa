@@ -45,6 +45,25 @@ pub struct TextAttractorEntry {
     pub(crate) residual_sig: Vec<f32>,
 }
 
+impl RelativeAttractorNode for TextAttractorEntry {
+    fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
+        let q7 = self
+            .per_layer_q7
+            .last()
+            .copied()
+            .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
+        load_q7_words_64(&q7)
+    }
+
+    fn relative_energy(&self) -> f32 {
+        self.energy
+    }
+
+    fn relative_anchor_id(&self) -> u32 {
+        self.anchor_id
+    }
+}
+
 impl CausalProvenanceSignal for TextAttractorEntry {
     fn causal_provenance_bits(&self) -> u32 {
         match self.role {

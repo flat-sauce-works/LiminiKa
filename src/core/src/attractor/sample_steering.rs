@@ -157,58 +157,61 @@ pub trait EpisodicPhaseSample {
     }
 }
 
-impl<T: EpisodicPhaseSample + ?Sized> EpisodicPhaseSample for &T {
-    #[inline(always)]
-    fn sample_phase_coords(&self, domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
-        (**self).sample_phase_coords(domain_salt)
-    }
-
-    #[inline(always)]
-    fn sample_mass(&self) -> f32 {
-        (**self).sample_mass()
-    }
-
-    #[inline(always)]
-    fn sample_coherence_prior(&self) -> f32 {
-        (**self).sample_coherence_prior()
-    }
-
-    #[inline(always)]
-    fn preferred_working_lane(&self) -> u32 {
-        (**self).preferred_working_lane()
-    }
-
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        (**self).sample_anchor_type()
-    }
+macro_rules! impl_episodic_ref_delegator {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl<T: EpisodicPhaseSample + ?Sized> EpisodicPhaseSample for $ty {
+                #[inline(always)]
+                fn sample_phase_coords(&self, domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+                    (**self).sample_phase_coords(domain_salt)
+                }
+                #[inline(always)]
+                fn sample_mass(&self) -> f32 {
+                    (**self).sample_mass()
+                }
+                #[inline(always)]
+                fn sample_coherence_prior(&self) -> f32 {
+                    (**self).sample_coherence_prior()
+                }
+                #[inline(always)]
+                fn preferred_working_lane(&self) -> u32 {
+                    (**self).preferred_working_lane()
+                }
+                #[inline(always)]
+                fn sample_anchor_type(&self) -> gcso_anchor_type_t {
+                    (**self).sample_anchor_type()
+                }
+            }
+        )+
+    };
 }
 
-impl<T: EpisodicPhaseSample + ?Sized> EpisodicPhaseSample for &mut T {
-    #[inline(always)]
-    fn sample_phase_coords(&self, domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
-        (**self).sample_phase_coords(domain_salt)
-    }
+impl_episodic_ref_delegator!(&T, &mut T);
 
-    #[inline(always)]
-    fn sample_mass(&self) -> f32 {
-        (**self).sample_mass()
-    }
-
-    #[inline(always)]
-    fn sample_coherence_prior(&self) -> f32 {
-        (**self).sample_coherence_prior()
-    }
-
-    #[inline(always)]
-    fn preferred_working_lane(&self) -> u32 {
-        (**self).preferred_working_lane()
-    }
-
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        (**self).sample_anchor_type()
-    }
+macro_rules! impl_episodic_f32_seq {
+    ($ty:ty $(; const $n:ident)? ; |$self_arg:ident| $as_slice:expr, $is_nonempty:expr) => {
+        impl $(<const $n: usize>)? EpisodicPhaseSample for $ty {
+            #[inline(always)]
+            fn sample_phase_coords(&self, _domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+                let $self_arg = self;
+                project_f32_slice_to_q7_phases($as_slice)
+            }
+            #[inline(always)]
+            fn sample_mass(&self) -> f32 {
+                let $self_arg = self;
+                let _ = $self_arg;
+                branchless_select_f32($is_nonempty, 1.0, 0.0)
+            }
+            #[inline(always)]
+            fn preferred_working_lane(&self) -> u32 {
+                DOMAIN_KNOWLEDGE
+            }
+            #[inline(always)]
+            fn sample_anchor_type(&self) -> gcso_anchor_type_t {
+                GCSO_ANCHOR_TYPE_EMBEDDING
+            }
+        }
+    };
 }
 
 impl EpisodicPhaseSample for str {
@@ -220,11 +223,6 @@ impl EpisodicPhaseSample for str {
     #[inline(always)]
     fn sample_mass(&self) -> f32 {
         branchless_select_f32(!self.is_empty(), 1.0, 0.0)
-    }
-
-    #[inline(always)]
-    fn preferred_working_lane(&self) -> u32 {
-        DOMAIN_PERSONA
     }
 
     #[inline(always)]
@@ -245,11 +243,6 @@ impl EpisodicPhaseSample for [u8] {
     }
 
     #[inline(always)]
-    fn preferred_working_lane(&self) -> u32 {
-        DOMAIN_PERSONA
-    }
-
-    #[inline(always)]
     fn sample_anchor_type(&self) -> gcso_anchor_type_t {
         GCSO_ANCHOR_TYPE_SYSTEM_PROMPT
     }
@@ -264,11 +257,6 @@ impl<const N: usize> EpisodicPhaseSample for [u8; N] {
     #[inline(always)]
     fn sample_mass(&self) -> f32 {
         branchless_select_f32(N > 0, 1.0, 0.0)
-    }
-
-    #[inline(always)]
-    fn preferred_working_lane(&self) -> u32 {
-        DOMAIN_PERSONA
     }
 
     #[inline(always)]
@@ -292,11 +280,6 @@ impl EpisodicPhaseSample for [gcso_q7_t; MAX_ATTENTION_HEADS] {
     fn sample_coherence_prior(&self) -> f32 {
         let r_bar = circular_r_bar_from_words_64(&load_q7_words_64(self));
         branchless_clamp_f32(r_bar, 0.25, 1.0)
-    }
-
-    #[inline(always)]
-    fn preferred_working_lane(&self) -> u32 {
-        DOMAIN_PERSONA
     }
 
     #[inline(always)]
@@ -332,81 +315,14 @@ impl<const ALIGN: usize> EpisodicPhaseSample for AlignedSlice<'_, gcso_q7_t, ALI
     }
 
     #[inline(always)]
-    fn preferred_working_lane(&self) -> u32 {
-        DOMAIN_PERSONA
-    }
-
-    #[inline(always)]
     fn sample_anchor_type(&self) -> gcso_anchor_type_t {
         GCSO_ANCHOR_TYPE_TOPOLOGICAL
     }
 }
 
-impl EpisodicPhaseSample for [f32] {
-    #[inline(always)]
-    fn sample_phase_coords(&self, _domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
-        project_f32_slice_to_q7_phases(self)
-    }
-
-    #[inline(always)]
-    fn sample_mass(&self) -> f32 {
-        branchless_select_f32(!self.is_empty(), 1.0, 0.0)
-    }
-
-    #[inline(always)]
-    fn preferred_working_lane(&self) -> u32 {
-        DOMAIN_KNOWLEDGE
-    }
-
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        GCSO_ANCHOR_TYPE_EMBEDDING
-    }
-}
-
-impl<const N: usize> EpisodicPhaseSample for [f32; N] {
-    #[inline(always)]
-    fn sample_phase_coords(&self, _domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
-        project_f32_slice_to_q7_phases(self.as_slice())
-    }
-
-    #[inline(always)]
-    fn sample_mass(&self) -> f32 {
-        branchless_select_f32(N > 0, 1.0, 0.0)
-    }
-
-    #[inline(always)]
-    fn preferred_working_lane(&self) -> u32 {
-        DOMAIN_KNOWLEDGE
-    }
-
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        GCSO_ANCHOR_TYPE_EMBEDDING
-    }
-}
-
-impl<const ALIGN: usize> EpisodicPhaseSample for AlignedSlice<'_, f32, ALIGN> {
-    #[inline(always)]
-    fn sample_phase_coords(&self, _domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
-        project_f32_slice_to_q7_phases(self.as_slice())
-    }
-
-    #[inline(always)]
-    fn sample_mass(&self) -> f32 {
-        branchless_select_f32(!self.is_empty(), 1.0, 0.0)
-    }
-
-    #[inline(always)]
-    fn preferred_working_lane(&self) -> u32 {
-        DOMAIN_KNOWLEDGE
-    }
-
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        GCSO_ANCHOR_TYPE_EMBEDDING
-    }
-}
+impl_episodic_f32_seq!([f32]; |s| s, !s.is_empty());
+impl_episodic_f32_seq!([f32; N]; const N; |s| s.as_slice(), N > 0);
+impl_episodic_f32_seq!(AlignedSlice<'_, f32, ALIGN>; const ALIGN; |s| s.as_slice(), !s.is_empty());
 
 impl EpisodicPhaseSample for gcso_pointer_trail_t {
     #[inline(always)]

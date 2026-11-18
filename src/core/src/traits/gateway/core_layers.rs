@@ -1309,20 +1309,21 @@ impl LiminalEgoField {
         self
     }
 
-    /// Branchlessly evaluates active Ego triggers directly across Core Layer 0 (`liminal_layer`),
-    /// Core Layer 1 (`stigmergic_layer`), temporal velocity (`delta`), and `venn`, updating both
-    /// sub-layers and injecting counter-vortex orbital thrust or transgressive phase steering into `frame`.
+    /// Purely computes the Ego trigger mask (`fired_mask`) and modulated [`GatewayFrame`] without
+    /// mutating `self`, `liminal_layer`, or `stigmergic_layer`. Used directly by read-only per-layer
+    /// Hot-Path RoPE modulation so multi-layer passes never accumulate repeated sub-layer shifts.
     #[inline]
     #[must_use]
-    pub fn intervene_on_sublayers_and_frame_branchless(
-        &mut self,
-        liminal_layer: &mut LiminalApertureField,
-        stigmergic_layer: &mut StigmergicGranuleField,
+    pub fn modulate_frame_pure(
+        &self,
+        liminal_layer: &LiminalApertureField,
+        stigmergic_layer: &StigmergicGranuleField,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
         venn: &StigmergicVennSerendipityReport,
         mut frame: GatewayFrame,
-    ) -> GatewayFrame {
+    ) -> (GatewayFrame, u8) {
+        let _ = (liminal_layer, stigmergic_layer);
         let pull_q7 =
             branchless_clamp_f32(branchless_relu_f32(frame.effective_energy) * 16.0, 0.0, 127.0)
                 as u8;
@@ -1345,57 +1346,15 @@ impl LiminalEgoField {
             | branchless_select_u8(t_stagnate, EGO_TRIGGER_BOUNDARY_STAGNATION, 0);
         let any_fired = fired_mask != 0;
 
-        // 1. Shift Layer 0 (LiminalApertureField) channel horizons & gains branchlessly
-        let mut ch = 0usize;
-        while ch < NUM_LIMINAL_APERTURE_CHANNELS {
-            let nudge_f = i32::from(self.trait_floor_bias_q7[ch]) / 2;
-            let nudge_g = i32::from(self.trait_gain_bias_q7[ch]) / 2;
-            let ch_chatter = t_chatter & (((delta.chattering_channel_mask >> ch) & 1) != 0);
-            let chatter_stabilize = branchless_select_i32(ch_chatter, 4, 0);
-            let new_f = (i32::from(liminal_layer.void_floor_q7[ch]) + nudge_f + chatter_stabilize)
-                .clamp(8, 120) as u8;
-            let new_g = (i32::from(liminal_layer.aperture_gain_q7[ch]) + nudge_g)
-                .clamp(16, 127) as u8;
-            liminal_layer.void_floor_q7[ch] =
-                branchless_select_u8(any_fired, new_f, liminal_layer.void_floor_q7[ch]);
-            liminal_layer.aperture_gain_q7[ch] =
-                branchless_select_u8(any_fired, new_g, liminal_layer.aperture_gain_q7[ch]);
-            ch += 1;
-        }
-
-        // 2. Shift Layer 1 (StigmergicGranuleField) autonomy & serendipity threshold
-        let mut g = 0usize;
-        while g < NUM_STIGMERGIC_GRANULES {
-            let boost = self.granule_autonomy_q7[g] >> 4;
-            let next_sg = stigmergic_layer.granule_step_gain_q7[g]
-                .saturating_add(boost)
-                .min(127);
-            stigmergic_layer.granule_step_gain_q7[g] = branchless_select_u8(
-                any_fired,
-                next_sg,
-                stigmergic_layer.granule_step_gain_q7[g],
-            );
-            g += 1;
-        }
-        let trans_pos = self.transgression_bias_q7 > 0;
-        let trans_abs = self.transgression_bias_q7.unsigned_abs();
-        let trans_step = trans_abs >> 3;
-        stigmergic_layer.serendipity_floor_q7 = branchless_select_u8(
-            t_liminal & trans_pos,
-            stigmergic_layer
-                .serendipity_floor_q7
-                .saturating_sub(trans_step)
-                .max(8),
-            stigmergic_layer.serendipity_floor_q7,
-        );
-
-        // 3. Modulate GatewayFrame phases with counter-vortex orbital thrust / transgressive leap
+        // Modulate GatewayFrame phases with counter-vortex orbital thrust / transgressive leap
         let scale_to_word = |q7: gcso_q7_t, w_u8: u8| -> u64 {
             let scaled_i32 = (i32::from(q7) * i32::from(w_u8.min(128))) >> 7;
             let clamped_i8 = scaled_i32.clamp(-128, 127) as i8;
             (clamped_i8 as u8 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64)
         };
 
+        let trans_pos = self.transgression_bias_q7 > 0;
+        let trans_abs = self.transgression_bias_q7.unsigned_abs();
         let strong_trans = t_liminal & trans_pos & (trans_abs >= 20);
         let apply_phase_override = t_vortex | t_stagnate | strong_trans;
         let thrust_q7 = self.counter_vortex_thrust_q7.min(127);
@@ -1408,7 +1367,7 @@ impl LiminalEgoField {
                     self.sovereign_granule_phase_q7[cell],
                     self.granule_autonomy_q7[cell],
                 );
-                // Counter-vortex flip: opposite to incoming basin pull blended with sovereign heading.
+                // Antipodal pi-radian SO(2) flip (`^ SWAR_SIGN_MASK_64`) blended with sovereign heading.
                 let flipped_w = w ^ SWAR_SIGN_MASK_64;
                 let counter_dir = swar_q7_avg_round_x8(flipped_w, sov_word);
                 let vortex_orbited = branchless_select_u64(
@@ -1466,9 +1425,82 @@ impl LiminalEgoField {
             gcso_tagged_ptr_t::pack(frame.mapped_section_offset48, ptr_tag, frame.mean_phase_tag_q7)
                 .raw();
 
+        (frame, fired_mask)
+    }
+
+    /// Branchlessly evaluates active Ego triggers directly across Core Layer 0 (`liminal_layer`),
+    /// Core Layer 1 (`stigmergic_layer`), temporal velocity (`delta`), and `venn`, updating both
+    /// sub-layers and injecting counter-vortex orbital thrust or transgressive phase steering into `frame`.
+    #[inline]
+    #[must_use]
+    pub fn intervene_on_sublayers_and_frame_branchless(
+        &mut self,
+        liminal_layer: &mut LiminalApertureField,
+        stigmergic_layer: &mut StigmergicGranuleField,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn: &StigmergicVennSerendipityReport,
+        frame: GatewayFrame,
+    ) -> GatewayFrame {
+        let (out_frame, fired_mask) = self.modulate_frame_pure(
+            liminal_layer,
+            stigmergic_layer,
+            delta,
+            horizon,
+            venn,
+            frame,
+        );
+        let any_fired = fired_mask != 0;
+        let t_liminal = (fired_mask & EGO_TRIGGER_LIMINAL_EXTERIOR) != 0;
+        let t_chatter = (fired_mask & EGO_TRIGGER_BOUNDARY_CHATTER) != 0;
+
+        // 1. Shift Layer 0 (LiminalApertureField) channel horizons & gains branchlessly
+        let mut ch = 0usize;
+        while ch < NUM_LIMINAL_APERTURE_CHANNELS {
+            let nudge_f = i32::from(self.trait_floor_bias_q7[ch]) / 2;
+            let nudge_g = i32::from(self.trait_gain_bias_q7[ch]) / 2;
+            let ch_chatter = t_chatter & (((delta.chattering_channel_mask >> ch) & 1) != 0);
+            let chatter_stabilize = branchless_select_i32(ch_chatter, 4, 0);
+            let new_f = (i32::from(liminal_layer.void_floor_q7[ch]) + nudge_f + chatter_stabilize)
+                .clamp(8, 120) as u8;
+            let new_g = (i32::from(liminal_layer.aperture_gain_q7[ch]) + nudge_g)
+                .clamp(16, 127) as u8;
+            liminal_layer.void_floor_q7[ch] =
+                branchless_select_u8(any_fired, new_f, liminal_layer.void_floor_q7[ch]);
+            liminal_layer.aperture_gain_q7[ch] =
+                branchless_select_u8(any_fired, new_g, liminal_layer.aperture_gain_q7[ch]);
+            ch += 1;
+        }
+
+        // 2. Shift Layer 1 (StigmergicGranuleField) autonomy & serendipity threshold
+        let mut g = 0usize;
+        while g < NUM_STIGMERGIC_GRANULES {
+            let boost = self.granule_autonomy_q7[g] >> 4;
+            let next_sg = stigmergic_layer.granule_step_gain_q7[g]
+                .saturating_add(boost)
+                .min(127);
+            stigmergic_layer.granule_step_gain_q7[g] = branchless_select_u8(
+                any_fired,
+                next_sg,
+                stigmergic_layer.granule_step_gain_q7[g],
+            );
+            g += 1;
+        }
+        let trans_pos = self.transgression_bias_q7 > 0;
+        let trans_abs = self.transgression_bias_q7.unsigned_abs();
+        let trans_step = trans_abs >> 3;
+        stigmergic_layer.serendipity_floor_q7 = branchless_select_u8(
+            t_liminal & trans_pos,
+            stigmergic_layer
+                .serendipity_floor_q7
+                .saturating_sub(trans_step)
+                .max(8),
+            stigmergic_layer.serendipity_floor_q7,
+        );
+
         self.last_intervened_mask = fired_mask;
         self.intervention_epochs = self.intervention_epochs.wrapping_add(u32::from(any_fired));
-        frame
+        out_frame
     }
 
     /// Branchlessly evaluates active Ego triggers across `stack`'s Layer 0 (`liminal_layer`),
@@ -1623,6 +1655,35 @@ impl AutonomousCoreLayerStack {
         out.active_swarm_cell_mask =
             branchless_select_u8(has_venn, active_granules, out.active_swarm_cell_mask);
         out
+    }
+
+    /// Branchlessly modulates `frame` across Layer 0 (`Liminal`), Layer 1 (`Stigmergic`), and
+    /// Layer 2 (`Ego`) **without mutating** sub-layer state or `intervention_epochs` (for read-only
+    /// per-layer Hot-Path RoPE modulation across all transformer layers).
+    #[inline]
+    #[must_use]
+    pub fn modulate_gateway_frame_with_ego_readonly(
+        &self,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+        frame: GatewayFrame,
+    ) -> GatewayFrame {
+        let modulated = self.modulate_gateway_frame_branchless(frame, horizon, venn_report);
+        if self.ego_layer.is_active() {
+            self.ego_layer
+                .modulate_frame_pure(
+                    &self.liminal_layer,
+                    &self.stigmergic_layer,
+                    delta,
+                    horizon,
+                    venn_report,
+                    modulated,
+                )
+                .0
+        } else {
+            modulated
+        }
     }
 
     /// Branchlessly modulates `frame` across Layer 0 (`Liminal`) and Layer 1 (`Stigmergic`) and,

@@ -72,11 +72,7 @@ use crate::traits::aligned::{
     DisjointMutPair, DisjointRefMut,
 };
 use crate::traits::branchless::{
-    branchless_fast_transition_log_prob, branchless_project_f32_slice_to_q7_64,
-    branchless_q7_inhibit_64, branchless_q7_resonant_pull_64, branchless_q7_synergy_fuse_64,
-    branchless_q7_unified_field_fold_words_with_init_weight_64,
-    modulate_attention_scores_by_phase_bank_64, sum_sq_f32_simd8, swar_slerp_words_with_bias_64,
-    swar_words_equal_64, swar_words_nonzero_64,
+    branchless_project_f32_slice_to_q7_64, sum_sq_f32_simd8, swar_words_nonzero_64,
 };
 use crate::traits::cold_path::{EntropyEvaluator, L2pSvdProjector, SystemCapabilityQuery};
 use crate::traits::gateway::{
@@ -87,10 +83,10 @@ use crate::traits::gateway::{
     CognitiveTrajectoryLedger, ContradictionGuard, ContradictionGuardSignal,
     CrystallizedAttractorRecord, EgoIntentAxes, EpistemicHorizonReading, GatewayFrame,
     GcsoFourSectionView, LiminalApertureField, LiminalBoundaryDelta, LiminalEgoField,
-    LiminalEgoPreset, LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, ObjectiveFact,
-    RawPhaseProjectable, StigmergicFragmentEnsembleReport, StigmergicGranuleField,
-    StigmergicVennSerendipityReport, SubjectivePersona, SystemConstraint,
-    CAUSAL_AXIS_CONTRADICTION_GUARD, GCSO_FOUR_SECTION_HEADER_BYTES,
+    LiminalEgoPreset, LiminalTopologyTelemetrySnapshot, ObjectiveFact, RawPhaseProjectable,
+    StigmergicFragmentEnsembleReport, StigmergicGranuleField, StigmergicVennSerendipityReport,
+    SubjectivePersona, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    GCSO_FOUR_SECTION_HEADER_BYTES,
 };
 use crate::traits::primitives::{
     branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_crc32_ieee,
@@ -98,26 +94,24 @@ use crate::traits::primitives::{
     branchless_q7_add_sat, branchless_q7_neg_sat, branchless_rad_to_qdps_step_u8,
     branchless_relu_f32, branchless_select_f32, branchless_select_u32, branchless_select_u8,
     branchless_splitmix64, branchless_sqrt_f32, load_q7_words_64, store_q7_words_64,
-    swar_q7_qdps_filter_words_64, trail_phase_words_mut, trail_phase_words_ref, SWAR_SPLAT_BYTE_64,
+    swar_q7_qdps_filter_words_64, trail_phase_words_mut,
 };
 use crate::traits::primitives::{
-    init_snapshot_header, is_slot_pair_coupled, pack_action_slot_tag, raw_byte_ranges_overlap,
+    init_snapshot_header, pack_action_slot_tag, raw_byte_ranges_overlap,
     unpack_action_mode_from_tag, unpack_attractor_slot_from_tag, validate_snapshot_header,
     FfiHandleMut, FfiHandleRef, GcsoResult, Pod, ACTION_PRESET_REPULSION_ESCAPE,
     ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION, DEFAULT_RIPA_CLAMP_MAX_RAD,
-    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PAGED_BITMASK_BITS,
+    MAX_ATTENTION_HEADS, PAGED_BITMASK_BITS,
 };
 use crate::traits::rope::{
-    dispatch_fused_ripa_and_pspm_words_core, steer_from_swar_words_core_safe, PhaseSteering,
-    Rank1ResidualAdapter, SubHeadRouter,
+    steer_from_swar_words_core_safe, PhaseSteering, Rank1ResidualAdapter, SubHeadRouter,
 };
 use crate::traits::telemetry::{
     ContrastivePhaseBloomFilter, FastPathLedger, PagedBitmaskOps, StigmergicActionPtrOps,
     StigmergicReconstitutionOps, StigmergicReconstitutionReport, StigmergicTrailOps,
-    LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_REPULSION_APPLIED,
-    LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SUBHEAD_ROUTED, MAX_ATTRACTOR_PULL_FORCE,
-    NUM_STIGMERGIC_GRANULES, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
-    TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
+    MAX_ATTRACTOR_PULL_FORCE, NUM_STIGMERGIC_GRANULES, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
+    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
+    TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
 /// Helper macro to catch unwinding panics and safely bridge execution into C-ABI error status codes.
@@ -198,14 +192,12 @@ pub use storage::*;
 mod tests {
     use super::*;
     use crate::action_hub::StigmergicActionDecision;
-    use crate::traits::aligned::{
-        AlignedBuffer128, AlignedBuffer16, AlignedBuffer32, AlignedBuffer64,
-    };
+    use crate::traits::aligned::{AlignedBuffer128, AlignedBuffer16, AlignedBuffer32};
     use crate::traits::gateway::DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE;
     use crate::traits::primitives::{
         ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP,
         ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_KNOWLEDGE,
-        ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+        ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
     };
     use crate::traits::telemetry::{
         DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, DEFAULT_STIGMERGIC_TOLERANCE_Q7,
@@ -366,52 +358,8 @@ mod tests {
     }
 
     #[test]
-    fn test_unified_field_limina_bridging_bayesian_attention_and_swarm_abi() {
-        let trail_phases = [32i8; MAX_ATTENTION_HEADS];
+    fn test_action_hub_swarm_resolution_abi() {
         let anchors_flat = [[-96i8; MAX_ATTENTION_HEADS], [32i8; MAX_ATTENTION_HEADS]];
-        let energies = [0.5f32, 3.0f32];
-        let mut res_pull = 0.0f32;
-        let mut res_coh = 0.0f32;
-        let mut folded_phases = [0i8; MAX_ATTENTION_HEADS];
-        let mut tot_pull = 0.0f32;
-        let mut mean_coh = 0.0f32;
-        let mut dom_id = 0u32;
-        let mut act_cnt = 0u32;
-
-        // SAFETY: Local stack buffers satisfy alignment and bounds invariants.
-        unsafe {
-            assert_eq!(
-                gcso_attractor_eval_resonant_pull(
-                    trail_phases.as_ptr(),
-                    anchors_flat[1].as_ptr(),
-                    2.5,
-                    &mut res_pull,
-                    &mut res_coh,
-                ),
-                GCSO_SUCCESS
-            );
-            assert!((res_coh - 1.0).abs() < 1e-4 && (res_pull - 5.0).abs() < 1e-4);
-
-            assert_eq!(
-                gcso_attractor_fold_unified_field(
-                    trail_phases.as_ptr(),
-                    1.0,
-                    anchors_flat.as_ptr().cast::<gcso_q7_t>(),
-                    energies.as_ptr(),
-                    2,
-                    folded_phases.as_mut_ptr(),
-                    &mut tot_pull,
-                    &mut mean_coh,
-                    &mut dom_id,
-                    &mut act_cnt,
-                ),
-                GCSO_SUCCESS
-            );
-        }
-        assert_eq!(dom_id, 1);
-        assert_eq!(act_cnt, 2);
-        assert!(tot_pull > 7.0 && mean_coh > 0.90);
-
         let mut src_trail = gcso_pointer_trail_t {
             current_ptr: gcso_tagged_ptr_pack_action(
                 0x1000,
@@ -422,133 +370,10 @@ mod tests {
             accumulated_phase_delta: [32i8; MAX_ATTENTION_HEADS],
             ..Default::default()
         };
-
-        let cand0 = gcso_pointer_trail_t {
-            stigmergic_density: 4.0,
-            accumulated_phase_delta: [-96i8; MAX_ATTENTION_HEADS],
-            ..Default::default()
-        };
-        let cand1 = gcso_pointer_trail_t {
-            stigmergic_density: 3.0,
-            target_anchor_id: 77,
-            accumulated_phase_delta: [36i8; MAX_ATTENTION_HEADS],
-            ..Default::default()
-        };
-        let mut candidates = [cand0, cand1];
-
-        let mut sel_id = 0u32;
-        let mut bayes_score = 0.0f32;
-        let mut bridge_lp = 0.0f32;
-        let mut found = 0u8;
-        let mut attn_scores = [0.0f32, 0.0f32];
-        let mut best_cand = 0u32;
-        let mut coh_cnt = 0u32;
         let mut swarm_rep = StigmergicReconstitutionReport::default();
 
         // SAFETY: Local stack buffers satisfy alignment and disjointness invariants.
         unsafe {
-            assert_eq!(
-                gcso_attractor_steer_trail_unified_field(
-                    &mut src_trail,
-                    anchors_flat.as_ptr().cast::<gcso_q7_t>(),
-                    energies.as_ptr(),
-                    2,
-                    ptr::null(),
-                    0.0,
-                    &mut tot_pull,
-                    &mut mean_coh,
-                    &mut act_cnt,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(src_trail.target_anchor_id, 1);
-            assert_eq!(src_trail.cluster_id, 1);
-
-            assert_eq!(
-                gcso_action_hub_select_and_bridge_best_next_trail(
-                    &mut src_trail,
-                    candidates.as_mut_ptr(),
-                    2,
-                    128,
-                    2.0,
-                    0.5,
-                    0.25,
-                    64,
-                    0.25,
-                    &mut sel_id,
-                    &mut bayes_score,
-                    &mut bridge_lp,
-                    &mut found,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(found, 1);
-            assert_eq!(sel_id, 1);
-            assert_eq!(src_trail.linked_trail_id, 1);
-            assert_eq!(src_trail.target_anchor_id, 77);
-            assert_eq!(src_trail.cluster_id, 77);
-            assert!(bayes_score > 0.5 && bridge_lp > -0.05);
-
-            assert_eq!(
-                gcso_action_hub_modulate_attention_scores_by_candidate_trails(
-                    attn_scores.as_mut_ptr(),
-                    &src_trail,
-                    candidates.as_ptr(),
-                    2,
-                    128,
-                    2.0,
-                    0.5,
-                    0.25,
-                    0.25,
-                    1.0,
-                    &mut mean_coh,
-                    &mut best_cand,
-                    &mut coh_cnt,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(best_cand, 1);
-            assert_eq!(coh_cnt, 1);
-            assert!(attn_scores[1] > 1.0 && attn_scores[0] < -0.5);
-
-            let mut fused_src_trail = gcso_pointer_trail_t {
-                accumulated_phase_delta: [32i8; MAX_ATTENTION_HEADS],
-                ..Default::default()
-            };
-            let mut fused_scores = [0.0f32, 0.0f32];
-            let mut fused_sel_id = 0u32;
-            let mut fused_b_score = 0.0f32;
-            let mut fused_m_coh = 0.0f32;
-            let mut fused_c_cnt = 0u32;
-            let mut fused_found = 0u8;
-            assert_eq!(
-                gcso_action_hub_select_bridge_and_modulate_bayesian_trails(
-                    &mut fused_src_trail,
-                    candidates.as_ptr(),
-                    2,
-                    fused_scores.as_mut_ptr(),
-                    128,
-                    2.0,
-                    0.5,
-                    0.25,
-                    0.25,
-                    64,
-                    1.0,
-                    &mut fused_sel_id,
-                    &mut fused_b_score,
-                    &mut fused_m_coh,
-                    &mut fused_c_cnt,
-                    &mut fused_found,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(fused_found, 1);
-            assert_eq!(fused_sel_id, 1);
-            assert_eq!(fused_c_cnt, 1);
-            assert_eq!(fused_src_trail.linked_trail_id, 1);
-            assert_eq!(fused_src_trail.cluster_id, 77);
-            assert!(fused_scores[1] > 1.0 && fused_scores[0] < -0.5);
-
             assert_eq!(
                 gcso_action_hub_resolve_trail_in_swarm(
                     &mut src_trail,
@@ -571,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn test_gateway_toroidal_kmeans_coarse_to_fine_and_four_section_container_abi() {
+    fn test_gateway_toroidal_kmeans_and_four_section_container_abi() {
         let mut fact_phases = [0i8; MAX_ATTENTION_HEADS];
         let mut persona_phases = [0i8; MAX_ATTENTION_HEADS];
         let emb_vals = [1.0f32, 0.5, -0.25, 0.75, 0.125, -0.5, 0.25, 0.875];
@@ -701,49 +526,6 @@ mod tests {
             assert_eq!(batch_last_id, 55);
             assert_eq!(batch_spawned, 0);
             assert!(batch_mean_coh > 0.95 && centroids[0].verify_integrity());
-
-            let mut c_idx = 99usize;
-            let mut c_id = 0u32;
-            let mut c_coh = 0.0f32;
-            let mut c_grav = 0.0f32;
-            assert_eq!(
-                gcso_action_hub_route_coarse_to_fine_centroid_only(
-                    &mut trail,
-                    centroids.as_ptr(),
-                    1,
-                    64,
-                    &mut c_idx,
-                    &mut c_id,
-                    &mut c_coh,
-                    &mut c_grav,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(c_idx, 0);
-            assert_eq!(c_id, 55);
-            assert!(c_coh > 0.90 && c_grav > 1.0);
-
-            let mut tot_pull = 0.0f32;
-            let mut dom_id = 0u32;
-            let mut eff_ripa = 0.0f32;
-            assert_eq!(
-                gcso_dpsr_steer_crystallized_ensemble_zero_copy_safe(
-                    centroids.as_ptr(),
-                    1,
-                    &mut trail,
-                    0.01,
-                    q_buf.as_mut_ptr(),
-                    ptr::null_mut(),
-                    4,
-                    16,
-                    &mut tot_pull,
-                    &mut dom_id,
-                    &mut eff_ripa,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(dom_id, 55);
-            assert!(tot_pull > 4.0 && eff_ripa > 0.05);
         }
 
         let cand_trails = [
@@ -761,184 +543,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let mut win_k = 99usize;
-        let mut sel_trail_id = 0u32;
-        let mut best_score = 0.0f32;
-        let mut best_coh = 0.0f32;
-        let mut found_route = 0u8;
-
-        // SAFETY: Local stack buffers satisfy alignment and disjointness invariants.
-        unsafe {
-            assert_eq!(
-                gcso_action_hub_route_coarse_to_fine_trail(
-                    &mut trail,
-                    centroids.as_ptr(),
-                    1,
-                    cand_trails.as_ptr(),
-                    2,
-                    128,
-                    2.0,
-                    0.5,
-                    0.25,
-                    0.50,
-                    0.25,
-                    &mut win_k,
-                    &mut sel_trail_id,
-                    &mut best_score,
-                    &mut best_coh,
-                    &mut found_route,
-                ),
-                GCSO_SUCCESS
-            );
-        }
-        assert_eq!(found_route, 1);
-        assert_eq!(win_k, 0);
-        assert_eq!(sel_trail_id, 1);
-        assert_eq!(trail.linked_trail_id, 1);
-        assert!(best_score > 0.5 && best_coh > 0.90);
-
-        let mut c2f_cand_steer_trail = gcso_pointer_trail_t {
-            accumulated_phase_delta: [24i8; MAX_ATTENTION_HEADS],
-            ..Default::default()
-        };
-        let mut c2f_cand_win_k = 99usize;
-        let mut c2f_cand_sel_id = 0u32;
-        let mut c2f_cand_score = 0.0f32;
-        let mut c2f_cand_coh = 0.0f32;
-        let mut c2f_cand_found = 0u8;
-        let mut c2f_bayes_scores = [0.0f32, 0.0f32];
-        let mut c2f_macro_aid = 0u32;
-        let mut c2f_coh_cnt = 0u32;
-        let mut ledger = gcso_ledger_slot_t::default();
-        let subhead_cfg = gcso_subhead_config_t {
-            num_fact_heads: 8,
-            num_logic_heads: 4,
-            num_explore_heads: 4,
-            fact_phase_gain: 1.0,
-            logic_phase_gain: 1.0,
-            explore_phase_gain: 1.15,
-            ..Default::default()
-        };
-
-        // SAFETY: Local stack buffers satisfy alignment and disjointness invariants.
-        unsafe {
-            assert_eq!(
-                gcso_action_hub_route_coarse_to_fine_trail_and_steer_qk_safe(
-                    &mut c2f_cand_steer_trail,
-                    centroids.as_ptr(),
-                    1,
-                    cand_trails.as_ptr(),
-                    2,
-                    4,
-                    16,
-                    2.0,
-                    0.5,
-                    0.25,
-                    0.50,
-                    0.25,
-                    64,
-                    0.0,
-                    q_buf.as_mut_ptr(),
-                    k_buf.as_mut_ptr(),
-                    &mut c2f_cand_win_k,
-                    &mut c2f_cand_sel_id,
-                    &mut c2f_cand_score,
-                    &mut c2f_cand_coh,
-                    &mut c2f_cand_found,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(c2f_cand_found, 1);
-            assert_eq!(c2f_cand_win_k, 0);
-            assert_eq!(c2f_cand_sel_id, 1);
-            assert_eq!(c2f_cand_steer_trail.linked_trail_id, 1);
-            assert_eq!(c2f_cand_steer_trail.cluster_id, 55);
-
-            let mut c2f_bayes_trail = gcso_pointer_trail_t {
-                accumulated_phase_delta: [24i8; MAX_ATTENTION_HEADS],
-                ..Default::default()
-            };
-            assert_eq!(
-                gcso_action_hub_route_coarse_to_fine_bayesian_and_steer_qk_safe(
-                    &mut c2f_bayes_trail,
-                    centroids.as_ptr(),
-                    1,
-                    64,
-                    cand_trails.as_ptr(),
-                    2,
-                    c2f_bayes_scores.as_mut_ptr(),
-                    4,
-                    16,
-                    2.0,
-                    0.5,
-                    0.25,
-                    1.0,
-                    64,
-                    0.25,
-                    &subhead_cfg,
-                    0.0,
-                    &mut ledger,
-                    q_buf.as_mut_ptr(),
-                    k_buf.as_mut_ptr(),
-                    &mut c2f_cand_win_k,
-                    &mut c2f_macro_aid,
-                    &mut c2f_cand_sel_id,
-                    &mut c2f_cand_score,
-                    &mut c2f_cand_coh,
-                    &mut c2f_coh_cnt,
-                    &mut c2f_cand_found,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(c2f_cand_found, 1);
-            assert_eq!(c2f_macro_aid, 55);
-            assert_eq!(c2f_cand_sel_id, 1);
-            assert_eq!(c2f_coh_cnt, 1);
-            assert!(c2f_bayes_scores[1] > 1.0 && c2f_bayes_scores[0] < -0.5);
-            assert_ne!(
-                ledger.telemetry_mini_ledger[0]
-                    & (LEDGER_METRIC_PHASE_STEERED | LEDGER_METRIC_SUBHEAD_ROUTED),
-                0
-            );
-        }
-
-        // Verify standalone Section-1 record zero-copy serialization and verification C-ABI
-        let mut rec_bytes_buf = AlignedBuffer64::<u8, 256>::new([0u8; 256]);
-        let mut rec_req_len = 0usize;
-        let mut verified_recs_ptr: *const gcso_crystallized_attractor_record_t = ptr::null();
-
-        // SAFETY: Local stack buffers satisfy 64B alignment and disjointness invariants.
-        unsafe {
-            assert_eq!(
-                gcso_container_write_crystallized_records_zero_copy(
-                    centroids.as_ptr(),
-                    1,
-                    ptr::null_mut(),
-                    &mut rec_req_len,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(rec_req_len, 128);
-            assert_eq!(
-                gcso_container_write_crystallized_records_zero_copy(
-                    centroids.as_ptr(),
-                    1,
-                    rec_bytes_buf.data.as_mut_ptr(),
-                    &mut rec_req_len,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(
-                gcso_container_verify_crystallized_records_zero_copy(
-                    rec_bytes_buf.data.as_ptr(),
-                    rec_req_len,
-                    1,
-                    &mut verified_recs_ptr,
-                ),
-                GCSO_SUCCESS
-            );
-            assert!(!verified_recs_ptr.is_null() && (*verified_recs_ptr).anchor_id == 55);
-        }
+        let ledger = gcso_ledger_slot_t::default();
 
         // Verify 4-section `.gcso` zero-copy serialization and verification C-ABI
         let reports_arr = [report];
@@ -1015,66 +620,6 @@ mod tests {
             assert!(!b_ptr.is_null() && !d_ptr.is_null());
             assert!(!r_ptr.is_null() && (*r_ptr).dominant_slot == ATTRACTOR_SLOT_KNOWLEDGE);
 
-            let mut fused_centroids = [CrystallizedAttractorRecord::default(); 2];
-            let mut fused_trail = gcso_pointer_trail_t::default();
-            let mut fused_idx = 99usize;
-            let mut fused_coh = 0.0f32;
-            let mut fused_mass = 0.0f32;
-            assert_eq!(
-                gcso_dpsr_steer_and_kmeans_crystallize_gateway_frame_safe(
-                    &frame,
-                    &mut fused_trail,
-                    64,
-                    q_buf.as_mut_ptr(),
-                    k_buf.as_mut_ptr(),
-                    4,
-                    16,
-                    logits.as_mut_ptr(),
-                    8,
-                    fused_centroids.as_mut_ptr(),
-                    2,
-                    DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
-                    &mut report,
-                    &mut fused_idx,
-                    &mut fused_coh,
-                    &mut fused_mass,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(fused_idx, 0);
-            assert_eq!(fused_trail.cluster_id, 55);
-            assert!(fused_mass > 0.0 && fused_centroids[0].verify_integrity());
-
-            let mut c2f_steer_trail = gcso_pointer_trail_t {
-                accumulated_phase_delta: [24i8; MAX_ATTENTION_HEADS],
-                ..Default::default()
-            };
-            let mut c2f_win_idx = 99usize;
-            let mut c2f_aid = 0u32;
-            let mut c2f_coh = 0.0f32;
-            let mut c2f_grav = 0.0f32;
-            assert_eq!(
-                gcso_action_hub_route_coarse_to_fine_and_steer_qk_safe(
-                    &mut c2f_steer_trail,
-                    fused_centroids.as_ptr(),
-                    2,
-                    64,
-                    0.0,
-                    q_buf.as_mut_ptr(),
-                    k_buf.as_mut_ptr(),
-                    4,
-                    16,
-                    &mut c2f_win_idx,
-                    &mut c2f_aid,
-                    &mut c2f_coh,
-                    &mut c2f_grav,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(c2f_win_idx, 0);
-            assert_eq!(c2f_aid, 55);
-            assert_eq!(c2f_steer_trail.cluster_id, 55);
-
             let mut zc_map_trail = gcso_pointer_trail_t::default();
             let mut zc_num_c = 0usize;
             let mut zc_pull = 0.0f32;
@@ -1101,55 +646,6 @@ mod tests {
             assert_eq!(zc_dom_id, 55);
             assert!(zc_pull > 0.0 && zc_ripa > 0.05);
             assert_eq!(zc_map_trail.cluster_id, 55);
-
-            let mut oneshot_centroids = [CrystallizedAttractorRecord::default(); 2];
-            let mut oneshot_trail = gcso_pointer_trail_t::default();
-            let mut oneshot_frame = gcso_gateway_frame_t::default();
-            let mut oneshot_report = gcso_causal_provenance_report_t::default();
-            let mut oneshot_idx = 99usize;
-            let mut oneshot_coh = 0.0f32;
-            let mut oneshot_mass = 0.0f32;
-            assert_eq!(
-                gcso_gateway_synthesize_kmeans_and_steer_qk_safe(
-                    0.10,
-                    0.05,
-                    0xFF,
-                    0,
-                    fact_phases.as_ptr(),
-                    3.0,
-                    0x0018_0000,
-                    55,
-                    persona_phases.as_ptr(),
-                    2.0,
-                    0x0004_0000,
-                    12,
-                    &bloom,
-                    0.15,
-                    4,
-                    &mut oneshot_trail,
-                    64,
-                    q_buf.as_mut_ptr(),
-                    k_buf.as_mut_ptr(),
-                    4,
-                    16,
-                    logits.as_mut_ptr(),
-                    8,
-                    oneshot_centroids.as_mut_ptr(),
-                    2,
-                    DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
-                    &mut oneshot_frame,
-                    &mut oneshot_report,
-                    &mut oneshot_idx,
-                    &mut oneshot_coh,
-                    &mut oneshot_mass,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(oneshot_idx, 0);
-            assert_eq!(oneshot_trail.cluster_id, 55);
-            assert_eq!(oneshot_frame.target_anchor_id, 55);
-            assert_eq!(oneshot_report.dominant_slot, ATTRACTOR_SLOT_KNOWLEDGE);
-            assert!(oneshot_mass > 0.0 && oneshot_centroids[0].verify_integrity());
 
             let mut raw_bytes_centroids = [CrystallizedAttractorRecord::default(); 2];
             let mut raw_bytes_trail = gcso_pointer_trail_t::default();
@@ -1200,46 +696,6 @@ mod tests {
             assert_eq!(raw_bytes_trail.cluster_id, 77);
             assert_eq!(raw_bytes_frame.target_anchor_id, 77);
             assert!(raw_bytes_mass > 0.0 && raw_bytes_centroids[0].verify_integrity());
-
-            let mut zc_c2f_trail = gcso_pointer_trail_t {
-                accumulated_phase_delta: [28i8; MAX_ATTENTION_HEADS],
-                ..Default::default()
-            };
-            let mut zc_c2f_win_k = 99usize;
-            let mut zc_c2f_sel_id = 0u32;
-            let mut zc_c2f_score = 0.0f32;
-            let mut zc_c2f_coh = 0.0f32;
-            let mut zc_c2f_rep = 1u8;
-            let mut zc_c2f_found = 0u8;
-            assert_eq!(
-                gcso_container_map_route_coarse_to_fine_and_steer_four_section_zero_copy_safe(
-                    container_buf.data.as_ptr(),
-                    req_len,
-                    &mut zc_c2f_trail,
-                    4,
-                    16,
-                    2.0,
-                    0.5,
-                    0.25,
-                    0.50,
-                    0.25,
-                    64,
-                    4,
-                    0.0,
-                    q_buf.as_mut_ptr(),
-                    k_buf.as_mut_ptr(),
-                    &mut zc_c2f_win_k,
-                    &mut zc_c2f_sel_id,
-                    &mut zc_c2f_score,
-                    &mut zc_c2f_coh,
-                    &mut zc_c2f_rep,
-                    &mut zc_c2f_found,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(zc_c2f_win_k, 0);
-            assert_eq!(zc_c2f_rep, 0);
-            assert_eq!(zc_c2f_trail.cluster_id, 55);
 
             let mut raw_f32_centroids = [CrystallizedAttractorRecord::default(); 2];
             let mut raw_f32_trail = gcso_pointer_trail_t::default();
@@ -1293,39 +749,6 @@ mod tests {
             assert_eq!(raw_f32_frame.target_anchor_id, 88);
             assert!(raw_f32_mass > 0.0 && raw_f32_centroids[0].verify_integrity());
 
-            let mut closed_loop_frame = gcso_gateway_frame_t::default();
-            let mut closed_loop_report = gcso_causal_provenance_report_t::default();
-            let mut closed_loop_trail = gcso_pointer_trail_t::default();
-            assert_eq!(
-                gcso_gateway_synthesize_from_crystallized_records(
-                    raw_f32_centroids.as_ptr(),
-                    2,
-                    &mut closed_loop_frame,
-                    &mut closed_loop_report,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(closed_loop_frame.target_anchor_id, 88);
-            assert_eq!(
-                gcso_dpsr_steer_closed_loop_crystallized_gateway_safe(
-                    raw_f32_centroids.as_ptr(),
-                    2,
-                    &mut closed_loop_trail,
-                    64,
-                    q_buf.as_mut_ptr(),
-                    k_buf.as_mut_ptr(),
-                    4,
-                    16,
-                    logits.as_mut_ptr(),
-                    8,
-                    &mut closed_loop_frame,
-                    &mut closed_loop_report,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(closed_loop_trail.cluster_id, 88);
-            assert_eq!(closed_loop_trail.target_anchor_id, 88);
-
             assert_eq!(
                 gcso_mapped_storage_close_mmap(&mut storage_desc),
                 GCSO_SUCCESS
@@ -1335,48 +758,7 @@ mod tests {
     }
 
     #[test]
-    fn test_synergy_inhibition_pointer_dpsr_and_snapshot_crc32() {
-        let persona_phases = [32i8; MAX_ATTENTION_HEADS];
-        let knowledge_phases = [32i8; MAX_ATTENTION_HEADS];
-        let repulsion_phases = [-96i8; MAX_ATTENTION_HEADS];
-        let mut fused_phases = [0i8; MAX_ATTENTION_HEADS];
-        let mut pull_out = 0.0f32;
-        let mut coh_out = 0.0f32;
-        let mut damped_weight = 0.0f32;
-
-        // SAFETY: Local stack buffers satisfy alignment and disjointness invariants.
-        unsafe {
-            assert_eq!(
-                gcso_attractor_eval_cross_slot_synergy(
-                    persona_phases.as_ptr(),
-                    2.0,
-                    knowledge_phases.as_ptr(),
-                    2.0,
-                    u32::from(ATTRACTOR_SLOT_PERSONA),
-                    u32::from(ATTRACTOR_SLOT_KNOWLEDGE),
-                    DEFAULT_SLOT_COUPLING_MATRIX_8X8,
-                    0.5,
-                    fused_phases.as_mut_ptr(),
-                    &mut pull_out,
-                    &mut coh_out,
-                ),
-                GCSO_SUCCESS
-            );
-            assert_eq!(
-                gcso_attractor_apply_mutual_slot_inhibition(
-                    fused_phases.as_mut_ptr(),
-                    pull_out,
-                    repulsion_phases.as_ptr(),
-                    0.5,
-                    &mut damped_weight,
-                ),
-                GCSO_SUCCESS
-            );
-        }
-        assert!((coh_out - 1.0).abs() < 1e-4);
-        assert!((damped_weight - 3.0).abs() < 0.1);
-        assert_eq!(fused_phases[0], 16);
-
+    fn test_pointer_dpsr_and_snapshot_crc32() {
         let passive_ptr = gcso_tagged_ptr_pack_action(
             0x1000,
             ATTRACTOR_SLOT_PERSONA,

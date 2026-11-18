@@ -194,31 +194,6 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     )
     .unwrap();
 
-    let (_ev_frame, ev_idx, ev_id, ev_mass, _ev_spawned, ev_merged) =
-        GcsoFourSectionView::evolve_four_section_kmeans_in_place(
-            &mut container_buf.data[..total_len],
-            &fact_a2,
-            DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
-            DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
-            0,
-        )
-        .unwrap();
-    assert_eq!(ev_idx, 0);
-    assert_eq!(ev_id, 101);
-    assert_eq!(ev_merged, 0);
-    assert!(ev_mass > 1.0);
-
-    let (r_idx, r_id, _r_coh, r_grav) =
-        GcsoFourSectionView::route_four_section_coarse_to_fine_in_place(
-            &mut container_buf.data[..total_len],
-            0,
-            32,
-        )
-        .unwrap();
-    assert_eq!(r_idx, 1);
-    assert_eq!(r_id, 202);
-    assert!(r_grav > 1.0);
-
     let view =
         GcsoFourSectionView::from_container_bytes_zero_copy(&container_buf.data[..total_len])
             .unwrap();
@@ -227,11 +202,8 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     assert_eq!(view.mapped_storage_descriptor.flags, 4);
     assert_eq!(view.crystals.len(), 3);
     assert_eq!(view.trails.len(), 1);
-    assert_eq!(view.trails[0].cluster_id, 202);
     assert_eq!(view.provenance_reports.len(), 2);
     assert!(view.bloom.is_some() && view.ledger.is_some());
-    assert_eq!(view.ledger.unwrap().telemetry_ring_head, 1);
-    assert_ne!(view.ledger.unwrap().fast_path_bypass_mask, 0);
 
     // Verify Top-2 Liminal Bifurcation Routing between two balanced attractors
     let mut lim_centroids = [
@@ -1439,6 +1411,7 @@ fn fractal_relative_node_self_similarity_across_trail_crystal_and_nested_arrays(
     // Bidirectional bridge between CrystallizedAnchorRecord and CrystallizedAttractorRecord.
     let mut legacy_anchor = AttractorAnchor {
         id: 55,
+        domain_id: u32::from(ATTRACTOR_SLOT_KNOWLEDGE),
         weight: 2.2,
         pull_force: 1.8,
         is_active: 1,
@@ -1447,11 +1420,12 @@ fn fractal_relative_node_self_similarity_across_trail_crystal_and_nested_arrays(
         ..Default::default()
     };
     let snap_rec = CrystallizedAnchorRecord::from_anchor(&legacy_anchor);
-    let crystal_rec = snap_rec.to_crystal_record(ATTRACTOR_SLOT_KNOWLEDGE);
+    let crystal_rec = snap_rec.to_crystallized_attractor_record();
     assert!(crystal_rec.verify_integrity());
     assert_eq!(crystal_rec.anchor_id, 55);
     assert_eq!(crystal_rec.dominant_slot, ATTRACTOR_SLOT_KNOWLEDGE);
-    let roundtrip_snap = CrystallizedAnchorRecord::from_crystal_record(&crystal_rec);
+    let roundtrip_snap =
+        CrystallizedAnchorRecord::from_crystallized_attractor_record(&crystal_rec);
     assert_eq!(roundtrip_snap.id, 55);
     assert_eq!(roundtrip_snap.phase_deltas, legacy_anchor.phase_deltas);
     legacy_anchor.id = 55;

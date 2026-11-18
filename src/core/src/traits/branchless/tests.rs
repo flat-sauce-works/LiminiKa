@@ -4,28 +4,25 @@
 use super::*;
 use crate::traits::primitives::{
     CRC32_UNIFORM56_PAD8_ZERO_SEED_REF, CRYSTAL_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB,
-    CRYSTAL_CRC32_KAPPA_MAX_FINAL_CONTRIB, VON_MISES_KAPPA_AT_MAX_R_BITS,
-    branchless_crc32_128b_words, branchless_update_crc32_ieee, crc32_block64_zero_seed_words,
-    crc32_slice16_dep_lo0, crc32_step_block64_words, crc32_step_l5,
+    CRYSTAL_CRC32_KAPPA_MAX_FINAL_CONTRIB, VON_MISES_KAPPA_AT_MAX_R_BITS, branchless_atan2_f32,
+    branchless_crc32_128b_words, branchless_crc32_ieee, branchless_update_crc32_ieee,
+    crc32_block64_zero_seed_words, crc32_slice16_dep_lo0, crc32_step_block64_words, crc32_step_l5,
     eval_fused_ripa_pspm_sincos_q7_fast, eval_ripa_sincos_q7_fast, swar_q7_pack_x8,
     swar_q7_unpack_x8,
 };
 use crate::traits::primitives::Q7_PHASE_SCALE_RAD;
 
-struct DummyKernel;
-
 #[test]
 fn test_branchless_kernel_blanket_inv_pos_crc32_and_constant_time_swar() {
-    let k = DummyKernel;
-    assert_eq!(k.select_u32(true, 10, 20), 10);
-    assert_eq!(k.select_f32(false, 1.5, -2.5), -2.5);
-    assert!((k.inv_pos_f32(4.0) - 0.25).abs() < 1.0e-6);
-    assert_eq!(k.inv_pos_f32(0.0), 0.0);
-    assert_eq!(k.inv_pos_f32(-2.0), 0.0);
-    assert_eq!(k.inv_pos_f32(f32::INFINITY), 0.0);
+    assert_eq!(branchless_select_u32(true, 10, 20), 10);
+    assert_eq!(branchless_select_f32(false, 1.5, -2.5), -2.5);
+    assert!((branchless_inv_pos_f32(4.0) - 0.25).abs() < 1.0e-6);
+    assert_eq!(branchless_inv_pos_f32(0.0), 0.0);
+    assert_eq!(branchless_inv_pos_f32(-2.0), 0.0);
+    assert_eq!(branchless_inv_pos_f32(f32::INFINITY), 0.0);
 
     // Standard IEEE 802.3 CRC32 test vector ("123456789" -> 0xCBF43926)
-    assert_eq!(k.crc32_ieee(b"123456789"), 0xCBF4_3926);
+    assert_eq!(branchless_crc32_ieee(b"123456789"), 0xCBF4_3926);
     let chained = branchless_update_crc32_ieee(branchless_crc32_ieee(b"1234"), b"56789");
     assert_eq!(chained, 0xCBF4_3926);
     for b_val in [0u8, 1, 28, 127, 128, 255] {
@@ -46,15 +43,15 @@ fn test_branchless_kernel_blanket_inv_pos_crc32_and_constant_time_swar() {
 
     let a = swar_q7_pack_x8(&[100, -100, 64, -64, 127, -128, 0, 12]);
     let b = swar_q7_pack_x8(&[50, -50, -64, 64, 10, -10, 0, -12]);
-    let sum = swar_q7_unpack_x8(k.q7_add_sat_x8(a, b));
+    let sum = swar_q7_unpack_x8(swar_q7_add_sat_x8(a, b));
     assert_eq!(sum, [127, -128, 0, 0, 127, -128, 0, 0]);
 
-    let slerp_mid = swar_q7_unpack_x8(k.q7_geodesic_slerp_x8(
-        swar_q7_pack_x8(&[-120; 8]),
-        swar_q7_pack_x8(&[120; 8]),
-        64,
-    ));
-    for lane in slerp_mid {
+    let w_a = [swar_q7_pack_x8(&[-120; 8]); 8];
+    let w_b = [swar_q7_pack_x8(&[120; 8]); 8];
+    let bias_64 = 64u64.wrapping_mul(crate::traits::primitives::SWAR_SPLAT_BYTE_64);
+    let (slerp_words, is_uni) = swar_slerp_words_with_uniform_flag_64(&w_a, true, &w_b, true, 64, bias_64);
+    assert!(is_uni);
+    for lane in swar_q7_unpack_x8(slerp_words[0]) {
         assert!(lane.unsigned_abs() >= 120);
     }
 
@@ -229,31 +226,4 @@ fn test_avx2_sincos_x8_3d_txy_lockstep_qkv_and_subnormal_norm_rescue() {
         crc32_step_block64_words(0xFFFF_FFFFu32, &w_trail_blk1) ^ 0xFFFF_FFFFu32,
         branchless_crc32_ieee(&raw_blk1)
     );
-
-    // Verify AVX2 / scalar RIPA angle clamp parity across finite, extreme, and non-finite inputs
-    let mut angles_simd = [
-        -12.0_f32,
-        -0.5,
-        -0.18,
-        -1.0e-39,
-        0.0,
-        0.09,
-        0.18,
-        0.5,
-        12.0,
-        f32::NAN,
-        f32::INFINITY,
-        f32::NEG_INFINITY,
-    ];
-    let mut angles_ref = angles_simd;
-    let max_rad = 0.18_f32;
-    let inv_max = branchless_inv_pos_f32(max_rad);
-    for a in angles_ref.iter_mut() {
-        let clean = branchless_select_f32(branchless_is_finite_f32(*a), *a, 0.0);
-        *a = branchless_flush_subnormal_f32(max_rad * branchless_tanh_f32(clean * inv_max));
-    }
-    clamp_angles_ripa_in_place_simd8(&mut angles_simd, max_rad);
-    for (got, exp) in angles_simd.iter().zip(angles_ref.iter()) {
-        assert!((got - exp).abs() <= 1.0e-6, "got={} exp={}", got, exp);
-    }
 }

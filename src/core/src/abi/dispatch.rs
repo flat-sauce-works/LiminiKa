@@ -761,8 +761,7 @@ pub(super) fn steer_routed_trail_words_qk_safe(
 }
 
 /// Shared register-resident crystallized ensemble folding + optional Bloom repulsion + QDPS/RIPA
-/// steering helper for [`gcso_dpsr_steer_crystallized_ensemble_zero_copy_safe`] and
-/// [`gcso_container_map_and_steer_four_section_zero_copy_safe`].
+/// steering helper for [`gcso_container_map_and_steer_four_section_zero_copy_safe`].
 #[inline]
 pub(super) fn steer_crystallized_records_with_optional_bloom_safe(
     records: &[CrystallizedAttractorRecord],
@@ -861,28 +860,6 @@ pub(super) unsafe fn mut_phase64_from_raw<'a>(
     Ok(unsafe { &mut *ptr.cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>() })
 }
 
-/// Reinterprets a raw `gcso_q7_t` pointer of `num_items * 64` bytes as a zero-copy slice of 64-head phase arrays.
-///
-/// # Safety
-/// When `num_items > 0`, `ptr` must be non-null and point to `num_items * 64` valid `gcso_q7_t` elements.
-#[inline(always)]
-pub(super) unsafe fn slice_of_phase64_from_raw<'a>(
-    ptr: *const gcso_q7_t,
-    num_items: usize,
-) -> GcsoResult<&'a [[gcso_q7_t; MAX_ATTENTION_HEADS]]> {
-    if num_items == 0 {
-        return Ok(&[]);
-    }
-    if ptr.is_null() {
-        return Err(GCSO_ERROR_NULL_POINTER);
-    }
-    let _total_bytes = num_items
-        .checked_mul(MAX_ATTENTION_HEADS)
-        .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
-    // SAFETY: Validated non-null and overflow-checked above.
-    Ok(unsafe { slice::from_raw_parts(ptr.cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>(), num_items) })
-}
-
 /// Validates a `PhaseSteeringEngine` configuration from `(head_dim, num_heads)` and returns `(engine, total_elements)`.
 #[inline(always)]
 pub(super) fn init_dpsr_engine(
@@ -909,42 +886,6 @@ pub(super) unsafe fn write_opt_out<T: Copy>(out_ptr: *mut T, val: T) -> GcsoResu
         *out_ref = val;
     }
     Ok(())
-}
-
-/// Bridges `src_trail.accumulated_phase_delta` toward `cand_phases` in 8 `u64` SWAR registers
-/// by `interpolation_u7` (`0..=128`) with a 1-word fast path when both profiles are word-uniform.
-#[inline(always)]
-pub(super) fn bridge_trail_words_slerp_u7(
-    src_trail: &mut gcso_pointer_trail_t,
-    cand_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    interpolation_u7: u8,
-) -> [u64; NUM_STIGMERGIC_GRANULES] {
-    let mut steer_words = *trail_phase_words_ref(src_trail);
-    if interpolation_u7 > 0 {
-        let cand_w = load_q7_words_64(cand_phases);
-        if !swar_words_equal_64(&steer_words, &cand_w) {
-            let s_u64 = branchless_select_u8(interpolation_u7 > 128, 128, interpolation_u7) as u64;
-            let bias_restore = (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-            steer_words = swar_slerp_words_with_bias_64(&steer_words, &cand_w, s_u64, bias_restore);
-            *trail_phase_words_mut(src_trail) = steer_words;
-        }
-    }
-    steer_words
-}
-
-/// Synchronizes `src_trail.current_ptr` with a winning macro centroid's 48-bit mapped-storage section address and tags.
-#[inline(always)]
-pub(super) fn sync_winner_centroid_ptr_to_trail(
-    src_trail: &mut gcso_pointer_trail_t,
-    winner: &CrystallizedAttractorRecord,
-) {
-    if winner.sample_count > 0 && winner.mapped_section_offset48 != 0 {
-        let packed_tag = pack_action_slot_tag(winner.dominant_slot, winner.action_mode_flags);
-        let cur_phase = gcso_tagged_ptr_t(src_trail.current_ptr).unpack_phase();
-        src_trail.prev_ptr = src_trail.current_ptr;
-        src_trail.current_ptr =
-            gcso_tagged_ptr_t::pack(winner.mapped_section_offset48, packed_tag, cur_phase).raw();
-    }
 }
 
 /// Validates and binds `query_tensor` (mandatory, 32B aligned) and `key_tensor` (optional, 32B

@@ -233,13 +233,6 @@ pub fn project_f32_slice_to_q7_64(values: &[f32]) -> [gcso_q7_t; MAX_ATTENTION_H
     words_to_q7_array_64(&words)
 }
 
-/// Computes the circular mean Q7 phase tag across 64 attention heads in branchless mode.
-#[inline(always)]
-#[must_use]
-pub fn mean_q7_phase_tag_64(phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> gcso_q7_t {
-    branchless_q7_circular_resultant_64(phases).1
-}
-
 #[inline(always)]
 #[must_use]
 pub(crate) fn update_aligned64_blocks_crc32_raw(mut crc: u32, bytes: &[u8]) -> u32 {
