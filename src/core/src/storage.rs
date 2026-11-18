@@ -59,7 +59,7 @@ use core::mem::{align_of, offset_of, size_of};
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MappedStorageEngine {
-    /// Embedded 64-byte C-ABI v0.1.1 mapped-storage memory-map & track descriptor (`offset 0..64`).
+    /// Embedded 64-byte C-ABI mapped-storage memory-map & track descriptor (`offset 0..64`).
     pub descriptor: gcso_mapped_storage_descriptor_t,
 }
 
@@ -261,30 +261,6 @@ impl<'a> GcsoFourSectionView<'a> {
             raw_end
         };
         Ok((min_end + 127) & !127usize)
-    }
-
-    /// Serializes `crystals`, `trails`, `bloom_opt`, and `ledger_opt` into `dst_bytes` and stamps IEEE 802.3 CRC32s.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `dst_bytes.len() < required_byte_len(...)`.
-    #[inline]
-    pub fn write_four_section_container_to_bytes(
-        crystals: &[CrystallizedAttractorRecord],
-        trails: &[gcso_pointer_trail_t],
-        bloom_opt: Option<&ContrastivePhaseBloomFilter>,
-        ledger_opt: Option<&gcso_ledger_slot_t>,
-        timestamp_epoch_sec: u64,
-        dst_bytes: &mut [u8],
-    ) -> GcsoResult<usize> {
-        Self::write_four_section_with_reports_to_bytes(
-            crystals,
-            trails,
-            bloom_opt,
-            ledger_opt,
-            &[],
-            timestamp_epoch_sec,
-            dst_bytes,
-        )
     }
 
     /// Serializes `crystals`, `trails`, `bloom_opt`, `ledger_opt`, and `provenance_reports` into `dst_bytes`.

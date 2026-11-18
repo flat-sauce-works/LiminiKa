@@ -1895,7 +1895,8 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
         regime_code: EpistemicRegime::InternalConflict as u8,
         reserved_align: [0; 3],
     };
-    adapter.adapt_liminal_aperture(&conflict_horizon, None);
+    let default_venn = *adapter.last_venn_serendipity_report();
+    adapter.adapt_core_layers(&conflict_horizon, &default_venn, None);
     assert!(adapter.aperture_field().void_floor_q7[2] > initial_persona_floor);
     assert_eq!(adapter.aperture_field().adaptation_epochs, 1);
 
@@ -1974,9 +1975,9 @@ fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_srl() {
     assert!(adapter.ego_field().transgression_bias_q7 > 0);
 
     adapter.overlay_ego_from_natural_language("curious rebel explorer");
-    assert!(adapter.ego_field().counter_vortex_thrust_q7 > 32);
+    assert!(adapter.ego_field().counter_basin_thrust_q7 > 32);
 
-    // Prime the 3-layer core stack with an active support horizon so vortex capture triggers fire.
+    // Prime the 3-layer core stack with an active support horizon so basin capture triggers fire.
     let active_horizon = EpistemicHorizonReading {
         total_memory_support: 2.0,
         peak_positive_affinity: 0.90,

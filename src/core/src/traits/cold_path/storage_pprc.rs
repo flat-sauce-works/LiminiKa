@@ -1094,7 +1094,7 @@ pub trait MappedStorage: BranchlessKernel + Send + Sync {
     /// # Errors
     /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if `container_bytes` is truncated, magic/offsets
     /// are invalid, or CRC32 verification fails.
-    /// Returns [`crate::abi::GCSO_ERROR_VERSION_MISMATCH`] if `version != 0x00000101`.
+    /// Returns [`crate::abi::GCSO_ERROR_VERSION_MISMATCH`] if `version != crate::abi::GCSO_ABI_VERSION_HEX`.
     #[inline]
     fn inspect_and_verify_container(
         &self,

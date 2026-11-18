@@ -218,6 +218,7 @@ pub struct ModelSteeringAdapter {
     last_boundary_delta: LiminalBoundaryDelta,
     last_horizon: EpistemicHorizonReading,
     last_venn_report: StigmergicVennSerendipityReport,
+    last_ensemble_report: Option<StigmergicFragmentEnsembleReport>,
 }
 
 impl ModelSteeringAdapter {
@@ -282,6 +283,7 @@ impl ModelSteeringAdapter {
                 ..EpistemicHorizonReading::default()
             },
             last_venn_report: StigmergicVennSerendipityReport::default(),
+            last_ensemble_report: None,
         })
     }
 
@@ -472,14 +474,10 @@ impl ModelSteeringAdapter {
         &self.last_boundary_delta
     }
 
-    /// Updates `last_horizon` and adapts Core Layer 0 (`LiminalApertureField`) branchlessly.
-    pub fn adapt_liminal_aperture(
-        &mut self,
-        horizon: &EpistemicHorizonReading,
-        overflow_opt: Option<&DissipativeOverflowReport>,
-    ) {
-        let venn = self.last_venn_report;
-        self.adapt_core_layers(horizon, &venn, overflow_opt);
+    /// Returns the most recent [`StigmergicFragmentEnsembleReport`] computed during recall sync.
+    #[must_use]
+    pub const fn last_ensemble_report(&self) -> Option<&StigmergicFragmentEnsembleReport> {
+        self.last_ensemble_report.as_ref()
     }
 
     /// Updates Core Layer 0 (`Liminal`), Layer 1 (`Stigmergic`), and Layer 2 (`Ego`)
@@ -621,10 +619,19 @@ impl ModelSteeringAdapter {
         self.adapt_core_layers(&horizon, &venn, None);
         let ensemble_report = if fact_fragments.len() >= 2 {
             let (_frame, _words, rep) = self.synthesize_fragment_ensemble(&fact_fragments);
+            let agreed_or_tie = rep.quorum_agreed_granule_mask | rep.ego_tiebreak_granule_mask;
+            for g in 0..NUM_STIGMERGIC_GRANULES {
+                let bit = 1u8 << g;
+                if (agreed_or_tie & bit) != 0 {
+                    let ph = &mut self.core_layers.stigmergic_layer.granule_pheromone_q7[g];
+                    *ph = ph.saturating_add(4).min(127);
+                }
+            }
             Some(rep)
         } else {
             None
         };
+        self.last_ensemble_report = ensemble_report;
         (horizon, venn, ensemble_report)
     }
 
@@ -985,6 +992,33 @@ impl ModelSteeringAdapter {
     /// # Errors
     ///
     /// Returns an error if `q_rot_inout` length mismatches or `liminika-core` rejects the inputs.
+    #[inline]
+    fn build_core_layer_ctx<'a>(
+        core_layers: &'a AutonomousCoreLayerStack,
+        last_boundary_delta: &'a LiminalBoundaryDelta,
+        last_horizon: &'a EpistemicHorizonReading,
+        last_venn_report: &'a StigmergicVennSerendipityReport,
+    ) -> Option<CoreLayerEvalContext<'a>> {
+        (core_layers.liminal_layer.adaptation_epochs > 0 || core_layers.ego_layer.is_active())
+            .then_some(CoreLayerEvalContext {
+                stack: core_layers,
+                delta: last_boundary_delta,
+                horizon: last_horizon,
+                venn: last_venn_report,
+            })
+    }
+
+    /// Steers a single token's rotated query slice (`num_q_heads * rotary_dim`) using a
+    /// [`ManifoldGatewaySignal`] composite so structural hyperparameters (`ripa_clamp_rad`,
+    /// `qdps_min_step_rad`, `effective_inv_temp`) are derived autonomously from Gateway physics
+    /// rather than manual scalar tuning.
+    ///
+    /// Layers disabled in `geometry.layer_rope_mask` (NoPE layers) are skipped in O(1),
+    /// returning `Ok(None)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `q_rot_inout` length mismatches or `liminika-core` rejects the inputs.
     pub fn steer_layer_with_gateway<S: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         layer_idx: usize,
@@ -995,14 +1029,12 @@ impl ModelSteeringAdapter {
         logits_opt: Option<&mut [f32]>,
     ) -> Result<Option<(GatewayFrame, CausalProvenanceReport)>, String> {
         self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
-            let core_ctx = (this.core_layers.liminal_layer.adaptation_epochs > 0
-                || this.core_layers.ego_layer.is_active())
-            .then_some(CoreLayerEvalContext {
-                stack: &this.core_layers,
-                delta: &this.last_boundary_delta,
-                horizon: &this.last_horizon,
-                venn: &this.last_venn_report,
-            });
+            let core_ctx = Self::build_core_layer_ctx(
+                &this.core_layers,
+                &this.last_boundary_delta,
+                &this.last_horizon,
+                &this.last_venn_report,
+            );
             this.phase_engine
                 .steer_gateway_signal_with_core_layers_for_geometry_safe(
                     signal,
@@ -1038,14 +1070,12 @@ impl ModelSteeringAdapter {
         logits_opt: Option<&mut [f32]>,
     ) -> Result<Option<(GatewayFrame, CausalProvenanceReport)>, String> {
         self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
-            let core_ctx = (this.core_layers.liminal_layer.adaptation_epochs > 0
-                || this.core_layers.ego_layer.is_active())
-            .then_some(CoreLayerEvalContext {
-                stack: &this.core_layers,
-                delta: &this.last_boundary_delta,
-                horizon: &this.last_horizon,
-                venn: &this.last_venn_report,
-            });
+            let core_ctx = Self::build_core_layer_ctx(
+                &this.core_layers,
+                &this.last_boundary_delta,
+                &this.last_horizon,
+                &this.last_venn_report,
+            );
             this.action_hub
                 .ingest_gateway_and_steer_with_core_layers_for_geometry_safe(
                     signal,
@@ -1097,14 +1127,12 @@ impl ModelSteeringAdapter {
                 layer_idx,
                 this.geometry.num_layers.max(1),
             );
-            let core_ctx = (this.core_layers.liminal_layer.adaptation_epochs > 0
-                || this.core_layers.ego_layer.is_active())
-            .then_some(CoreLayerEvalContext {
-                stack: &this.core_layers,
-                delta: &this.last_boundary_delta,
-                horizon: &this.last_horizon,
-                venn: &this.last_venn_report,
-            });
+            let core_ctx = Self::build_core_layer_ctx(
+                &this.core_layers,
+                &this.last_boundary_delta,
+                &this.last_horizon,
+                &this.last_venn_report,
+            );
             let (frame, report, decision) = this
                 .action_hub
                 .orchestrate_gateway_layer_with_core_layers_safe(
@@ -1179,29 +1207,17 @@ impl ModelSteeringAdapter {
         )
     }
 
-    fn synthesize_srl_gateway_frame_with_state<S: ManifoldGatewaySignal + ?Sized>(
-        signal: &S,
+    fn modulate_srl_circuit_frame(
         circuit: Option<CognitiveTrajectoryLedger>,
-        stack: &mut AutonomousCoreLayerStack,
-        delta: &LiminalBoundaryDelta,
-        horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicVennSerendipityReport,
+        mut frame: GatewayFrame,
+        frm_w: &[u64; NUM_STIGMERGIC_GRANULES],
     ) -> GatewayFrame {
-        let (mut frame, frm_w) = signal.synthesize_gateway_frame_with_words();
         if let Some(c) = circuit {
             let _ = c.modulate_gateway_frame_at_scale(
                 &mut frame,
-                &frm_w,
-                &frm_w,
+                frm_w,
+                frm_w,
                 StigmergicScaleGranularity::MacroCoalition,
-            );
-        }
-        if stack.liminal_layer.adaptation_epochs > 0 || stack.ego_layer.is_active() {
-            frame = stack.intervene_ego_and_modulate_frame_branchless(
-                delta,
-                horizon,
-                venn_report,
-                frame,
             );
         }
         frame
@@ -1267,21 +1283,25 @@ impl ModelSteeringAdapter {
         u_vec: &[f32],
         v_vec: &[f32],
     ) -> Result<(GatewayFrame, f32), String> {
-        let mut stack_snapshot = self.core_layers;
-        let frame = Self::synthesize_srl_gateway_frame_with_state(
-            signal,
-            self.active_circuit(),
-            &mut stack_snapshot,
-            &self.last_boundary_delta,
-            &self.last_horizon,
-            &self.last_venn_report,
-        );
+        let (raw_frame, frm_w) = if self.core_layers.liminal_layer.adaptation_epochs > 0
+            || self.core_layers.ego_layer.is_active()
+        {
+            signal.synthesize_gateway_with_core_layers_readonly(
+                &self.core_layers,
+                &self.last_boundary_delta,
+                &self.last_horizon,
+                &self.last_venn_report,
+            )
+        } else {
+            signal.synthesize_gateway_frame_with_words()
+        };
+        let frame = Self::modulate_srl_circuit_frame(self.active_circuit(), raw_frame, &frm_w);
         let gain = self.apply_srl_frame_internal(&frame, hidden_inout, u_vec, v_vec)?;
         Ok((frame, gain))
     }
 
-    /// Mutable counterpart to [`Self::apply_srl_with_gateway`] that persists Core Layer 0/1/2
-    /// Ego interventions and epoch counters directly onto `self.core_layers`.
+    /// Mutable counterpart to [`Self::apply_srl_with_gateway`] that evaluates dynamic cognitive
+    /// apertures and persists Core Layer 0/1/2 Ego interventions onto `self.core_layers`.
     ///
     /// # Errors
     ///
@@ -1294,14 +1314,19 @@ impl ModelSteeringAdapter {
         v_vec: &[f32],
     ) -> Result<(GatewayFrame, f32), String> {
         let circuit = self.active_circuit();
-        let frame = Self::synthesize_srl_gateway_frame_with_state(
-            signal,
-            circuit,
-            &mut self.core_layers,
-            &self.last_boundary_delta,
-            &self.last_horizon,
-            &self.last_venn_report,
-        );
+        let (raw_frame, frm_w) = if self.core_layers.liminal_layer.adaptation_epochs > 0
+            || self.core_layers.ego_layer.is_active()
+        {
+            signal.synthesize_gateway_with_core_layers(
+                &mut self.core_layers,
+                &self.last_boundary_delta,
+                &self.last_horizon,
+                &self.last_venn_report,
+            )
+        } else {
+            signal.synthesize_gateway_frame_with_words()
+        };
+        let frame = Self::modulate_srl_circuit_frame(circuit, raw_frame, &frm_w);
         let gain = self.apply_srl_frame_internal(&frame, hidden_inout, u_vec, v_vec)?;
         Ok((frame, gain))
     }

@@ -861,59 +861,10 @@ pub trait ActionHubGatewayExt: ActionHub {
         Ok((frame, report, decision))
     }
 
-    /// Scale- and policy-aware layer orchestrator allowing per-layer traversal across
-    /// `MacroCoalition -> TypeGateway -> CellTrail -> PointerBit`.
-    ///
-    /// # Errors
-    /// Propagates any error from [`ActionHub`] or [`PhaseSteeringGeometryExt`].
-    #[inline]
-    fn orchestrate_gateway_layer_with_policy_and_scale_safe<
-        S: ManifoldGatewaySignal + ?Sized,
-        G: RopeSteeringTarget + ?Sized,
-        P: StigmergicThresholdPolicy + ?Sized,
-        C: SystemConstraintSignal + ?Sized,
-    >(
-        &mut self,
-        signal: &S,
-        geometry: &G,
-        policy: &P,
-        system: &C,
-        probe: &ManifoldProbeBaseline,
-        scale: StigmergicScaleGranularity,
-        entropy_h_tilde: f32,
-        ledger_slot: &mut gcso_ledger_slot_t,
-        trail_out: &mut gcso_pointer_trail_t,
-        unresolved_damping_u7: u8,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        srl_hidden: Option<(
-            &mut AlignedSliceMut32<'_, f32>,
-            &AlignedSlice32<'_, f32>,
-            &AlignedSlice32<'_, f32>,
-            &AlignedSlice32<'_, f32>,
-        )>,
-        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport, StigmergicActionDecision)> {
-        self.orchestrate_gateway_layer_with_core_layers_safe(
-            signal,
-            geometry,
-            None,
-            policy,
-            system,
-            probe,
-            scale,
-            entropy_h_tilde,
-            ledger_slot,
-            trail_out,
-            unresolved_damping_u7,
-            query_tensor,
-            srl_hidden,
-            logits_opt,
-        )
-    }
-
-    /// Core-layer-aware counterpart to [`Self::orchestrate_gateway_layer_with_policy_and_scale_safe`]
-    /// connecting dynamic trait cognitive apertures and the 3-layer core stack (`Liminal` +
-    /// `Stigmergic` + `Ego`) directly into per-layer ActionHub RoPE/Rank-1 orchestration.
+    /// Scale-, policy-, and core-layer-aware layer orchestrator allowing per-layer traversal across
+    /// `MacroCoalition -> TypeGateway -> CellTrail -> PointerBit` while connecting dynamic trait
+    /// cognitive apertures and the 3-layer core stack (`Liminal` + `Stigmergic` + `Ego`) directly into
+    /// per-layer ActionHub RoPE/Rank-1 orchestration.
     ///
     /// # Errors
     /// Propagates any error from [`Self::orchestrate_gateway_layer_with_scale_and_core_layers_safe`].

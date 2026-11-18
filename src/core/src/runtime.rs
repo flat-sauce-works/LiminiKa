@@ -134,7 +134,7 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Creates a new default configuration instance strictly adhering to GCSO v0.1.1 invariants.
+    /// Creates a new default configuration instance adhering to GCSO architectural invariants.
     #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
@@ -717,7 +717,7 @@ impl RuntimeContext {
     }
 
     /// Serializes active runtime context state into a `.gcso` binary snapshot conforming to
-    /// GCSO ABI v0.1.1 (`0x00000101`), stamping an IEEE 802.3 CRC32 checksum over the payload.
+    /// [`crate::abi::GCSO_ABI_VERSION_HEX`], stamping an IEEE 802.3 CRC32 checksum over the payload.
     ///
     /// Supports two-pass sizing: passing an empty `buffer` writes the required byte size (`320` bytes)
     /// into `*required_size` and returns `Ok(())`.
@@ -781,13 +781,13 @@ impl RuntimeContext {
     }
 
     /// Deserializes a `.gcso` binary snapshot buffer to restore context state in-place with
-    /// ABI v0.1.1 header validation and IEEE 802.3 CRC32 payload integrity verification.
+    /// ABI header validation and IEEE 802.3 CRC32 payload integrity verification.
     ///
     /// # Errors
     /// Returns [`crate::abi::GCSO_ERROR_CONTAINER_CORRUPTED`] if the header magic, section
     /// offsets, buffer bounds, or payload CRC32 checksum are invalid.
     /// Returns [`crate::abi::GCSO_ERROR_VERSION_MISMATCH`] if the snapshot ABI version does not
-    /// match `0x00000101`.
+    /// match [`crate::abi::GCSO_ABI_VERSION_HEX`].
     #[inline]
     pub fn deserialize_from_bytes(&mut self, buffer: &[u8]) -> Result<()> {
         let header_size = core::mem::size_of::<gcso_snapshot_header_t>();
@@ -1661,8 +1661,15 @@ mod tests {
         let config = Config::new();
         let mut ctx = RuntimeContext::new(config).unwrap();
 
-        assert_eq!(ctx.abi_version(), (0, 1, 1));
-        assert_eq!(ctx.abi_version_string(), "0.1.1");
+        assert_eq!(
+            ctx.abi_version(),
+            (
+                crate::abi::GCSO_ABI_VERSION_MAJOR,
+                crate::abi::GCSO_ABI_VERSION_MINOR,
+                crate::abi::GCSO_ABI_VERSION_PATCH,
+            )
+        );
+        assert_eq!(ctx.abi_version_string(), env!("CARGO_PKG_VERSION"));
         assert_ne!(ctx.query_capability() & GCSO_CAP_CPU_BASELINE, 0);
 
         let mut desc = gcso_mapped_storage_descriptor_t::default();

@@ -45,7 +45,7 @@ use core::mem::{align_of, offset_of, size_of};
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResidualAdapterEngine {
-    /// Embedded 64-byte C-ABI v0.1.1 Rank-1 residual Rank-1 descriptor (`offset 0..64`).
+    /// Embedded 64-byte C-ABI Rank-1 residual descriptor (`offset 0..64`).
     pub descriptor: gcso_rank1_residual_descriptor_t,
 }
 
@@ -60,7 +60,7 @@ impl Default for ResidualAdapterEngine {
 }
 
 impl ResidualAdapterEngine {
-    /// Constructs a new 64-byte aligned [`ResidualAdapterEngine`] with canonical C-ABI v0.1.1 descriptor fields.
+    /// Constructs a new 64-byte aligned [`ResidualAdapterEngine`] with canonical C-ABI descriptor fields.
     #[inline(always)]
     #[must_use]
     pub const fn new(scale_factor: f32, layer_idx: u32, rank: u32) -> Self {

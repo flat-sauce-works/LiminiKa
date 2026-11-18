@@ -285,7 +285,14 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
     let mut cfg = gcso_config_t::default();
     sys.init_default_config(&mut cfg).unwrap();
     assert_eq!(sys.validate_config_invariants(&cfg), Ok(()));
-    assert_eq!(sys.abi_version(), (0, 1, 1));
+    assert_eq!(
+        sys.abi_version(),
+        (
+            crate::abi::GCSO_ABI_VERSION_MAJOR,
+            crate::abi::GCSO_ABI_VERSION_MINOR,
+            crate::abi::GCSO_ABI_VERSION_PATCH
+        )
+    );
 
     let hashed_p = sys.hash_prompt_to_phase_profile("LiminiKa Persona Anchor", 1);
     assert!(hashed_p.iter().any(|&x| x != 0));

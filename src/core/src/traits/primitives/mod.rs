@@ -1,7 +1,7 @@
-// name: src/core/src/traits/primitives.rs
+// name: src/core/src/traits/primitives/mod.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Lv.0 Foundation 1: Base C-ABI v0.1.1 (`0x00000101`) constants, Plain Old Data (`Pod`)
+//! Lv.0 Foundation 1: Base C-ABI constants (`GCSO_ABI_VERSION_HEX`), Plain Old Data (`Pod`)
 //! byte-level safety contracts, `.gcso` descriptor/snapshot validators, branchless IEEE 802.3
 //! CRC32 integrity primitives, TaggedPtr 5-bit ActionMode & 3-bit AttractorSlot codecs,
 //! $8 \times 8$ Attractor Slot coupling matrix helpers, and lifetime-bound FFI handle guards
@@ -75,7 +75,13 @@ pub use self::{
 
 // Compile-time structural and bitfield invariants for Layer 0 primitives.
 const _: () = {
-    assert!(GCSO_ABI_VERSION_HEX == 0x0000_0101);
+    assert!(
+        GCSO_ABI_VERSION_HEX
+            == ((crate::abi::GCSO_ABI_VERSION_MAJOR << 16)
+                | (crate::abi::GCSO_ABI_VERSION_MINOR << 8)
+                | crate::abi::GCSO_ABI_VERSION_PATCH)
+    );
+    assert!(GCSO_ABI_VERSION_HEX >= 0x0000_0102);
     assert!(MAX_ATTRACTOR_DOMAINS == 8);
     assert!(MAX_ANCHORS_PER_FIELD == 64);
     assert!(MAX_ATTENTION_HEADS == 64);

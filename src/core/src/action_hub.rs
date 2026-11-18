@@ -274,7 +274,7 @@ impl Default for StigmergicThresholds {
 }
 
 impl StigmergicThresholds {
-    /// Creates the canonical GCSO v0.1.1 stigmergic threshold ladder.
+    /// Creates the canonical GCSO stigmergic threshold ladder.
     #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
@@ -1510,6 +1510,67 @@ impl ActionHubEngine {
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `centroids` is empty, `split_coherence_thresh`
     /// is non-finite, or tensor slices are invalid.
     #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn commit_gateway_kmeans_and_select_action(
+        &mut self,
+        frame: &GatewayFrame,
+        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        entropy_h_tilde: f32,
+        centroids: &mut [CrystallizedAttractorRecord],
+        split_coherence_thresh: f32,
+        trail_inout: &mut gcso_pointer_trail_t,
+        attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+    ) -> GcsoResult<(ActionOrchestrationReport, usize, u32, f32, bool)> {
+        if frame.target_anchor_id != 0 {
+            trail_inout.target_anchor_id = frame.target_anchor_id;
+        }
+        trail_inout.attractor_pull_force = branchless_min_f32(
+            branchless_max_f32(trail_inout.attractor_pull_force, frame.effective_energy),
+            MAX_ATTRACTOR_PULL_FORCE,
+        );
+
+        let (assigned_idx, assigned_anchor_id, assigned_coh, _updated_mass, spawned_new) =
+            CrystallizedAttractorRecord::step_online_toroidal_kmeans_frame_with_words_64(
+                centroids,
+                frame,
+                input_words,
+                split_coherence_thresh,
+                Some(trail_inout),
+            );
+
+        let win_w = *centroids[assigned_idx].phase_words_ref();
+        let report = self.orchestrate_next_action_step_core(
+            gcso_tagged_ptr_t(frame.tagged_ptr),
+            entropy_h_tilde,
+            frame.dominant_slot,
+            trail_inout,
+            attention_scores,
+            query_tensor,
+            key_tensor,
+            logits_opt,
+            false,
+            Some(&win_w),
+        )?;
+
+        Ok((
+            report,
+            assigned_idx,
+            assigned_anchor_id,
+            assigned_coh,
+            spawned_new,
+        ))
+    }
+
+    /// Executes Gateway synthesis, Online Toroidal $k$-Means / DP-Means clustering, and
+    /// Stigmergic action selection in a single `#![no_std]` zero-allocation pass.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `centroids` is empty, `split_coherence_thresh`
+    /// is non-finite, or tensor slices are invalid.
+    #[inline]
     pub fn orchestrate_gateway_kmeans_and_select_action<S: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         signal: &S,
@@ -1536,36 +1597,19 @@ impl ActionHubEngine {
         if swar_words_nonzero_64(&frm_w) {
             *trail_phase_words_mut(trail_inout) = frm_w;
         }
-        if frame.target_anchor_id != 0 {
-            trail_inout.target_anchor_id = frame.target_anchor_id;
-        }
-        trail_inout.attractor_pull_force = branchless_min_f32(
-            branchless_max_f32(trail_inout.attractor_pull_force, frame.effective_energy),
-            MAX_ATTRACTOR_PULL_FORCE,
-        );
-
-        let (assigned_idx, assigned_anchor_id, assigned_coh, _updated_mass, spawned_new) =
-            CrystallizedAttractorRecord::step_online_toroidal_kmeans_frame_with_words_64(
-                centroids,
+        let (report, assigned_idx, assigned_anchor_id, assigned_coh, spawned_new) = self
+            .commit_gateway_kmeans_and_select_action(
                 &frame,
                 &frm_w,
+                entropy_h_tilde,
+                centroids,
                 split_coherence_thresh,
-                Some(trail_inout),
-            );
-
-        let win_w = *centroids[assigned_idx].phase_words_ref();
-        let report = self.orchestrate_next_action_step_core(
-            gcso_tagged_ptr_t(frame.tagged_ptr),
-            entropy_h_tilde,
-            frame.dominant_slot,
-            trail_inout,
-            attention_scores,
-            query_tensor,
-            key_tensor,
-            logits_opt,
-            false,
-            Some(&win_w),
-        )?;
+                trail_inout,
+                attention_scores,
+                query_tensor,
+                key_tensor,
+                logits_opt,
+            )?;
 
         Ok((
             frame,
@@ -1652,36 +1696,19 @@ impl ActionHubEngine {
             3,
             96,
         );
-        if frame.target_anchor_id != 0 {
-            trail_inout.target_anchor_id = frame.target_anchor_id;
-        }
-        trail_inout.attractor_pull_force = branchless_min_f32(
-            branchless_max_f32(trail_inout.attractor_pull_force, frame.effective_energy),
-            MAX_ATTRACTOR_PULL_FORCE,
-        );
-
-        let (assigned_idx, assigned_anchor_id, assigned_coh, _updated_mass, spawned_new) =
-            CrystallizedAttractorRecord::step_online_toroidal_kmeans_frame_with_words_64(
-                centroids,
+        let (report, assigned_idx, assigned_anchor_id, assigned_coh, spawned_new) = self
+            .commit_gateway_kmeans_and_select_action(
                 &frame,
                 &swarm_w,
+                entropy_h_tilde,
+                centroids,
                 DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
-                Some(trail_inout),
-            );
-
-        let win_w = *centroids[assigned_idx].phase_words_ref();
-        let report = self.orchestrate_next_action_step_core(
-            gcso_tagged_ptr_t(frame.tagged_ptr),
-            entropy_h_tilde,
-            frame.dominant_slot,
-            trail_inout,
-            attention_scores,
-            query_tensor,
-            key_tensor,
-            logits_opt,
-            false,
-            Some(&win_w),
-        )?;
+                trail_inout,
+                attention_scores,
+                query_tensor,
+                key_tensor,
+                logits_opt,
+            )?;
 
         if report.action_decision() != StigmergicActionDecision::PassiveSidecar {
             receptor.on_stigmergic_action_emerged(&frame, &report, trail_inout)?;

@@ -473,7 +473,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
     /// - `mask_a & mask_b`: Venn overlap cooperative fusion or Layer 2 Ego conflict tie-breaking
     /// - `!mask_a & !mask_b`: gated to `Liminal` exterior (`0`)
     #[inline]
-    fn combine_pair_with_core_layers<B: ManifoldGatewaySignal>(
+    fn combine_pair_with_core_layers<B: ManifoldGatewaySignal + ?Sized>(
         &self,
         other: &B,
         stack: &mut AutonomousCoreLayerStack,
@@ -481,132 +481,30 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
         horizon: &EpistemicHorizonReading,
         venn_report: &StigmergicVennSerendipityReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
-        let (mask_a, gain_a, shift_a) = self.resolve_dynamic_core_aperture(stack);
-        let (mask_b, gain_b, shift_b) = other.resolve_dynamic_core_aperture(stack);
-        let (fa, wa) = self.synthesize_gateway_frame_with_words();
-        let (fb, wb) = other.synthesize_gateway_frame_with_words();
-
-        let ea = branchless_flush_subnormal_f32(branchless_relu_f32(fa.effective_energy));
-        let eb = branchless_flush_subnormal_f32(branchless_relu_f32(fb.effective_energy));
-        let tot_e = ea + eb;
-        let safe_tot = branchless_select_f32(tot_e > DEFAULT_ENTROPY_EPS, tot_e, 1.0);
-        let ratio_b = branchless_clamp_f32(eb * fast_inv_pos_normal_f32(safe_tot), 0.0, 1.0);
-        let s_u64 = ((ratio_b * 128.0 + 0.5) as u8).min(128) as u64;
-        let inv_s = 128u64.wrapping_sub(s_u64);
-        let bias_a = s_u64.wrapping_mul(SWAR_SPLAT_BYTE_64);
-        let bias_b = inv_s.wrapping_mul(SWAR_SPLAT_BYTE_64);
-
-        let ego_active = stack.ego_layer.is_active();
-        let mut out_words = [0u64; NUM_STIGMERGIC_GRANULES];
-        let mut g = 0usize;
-        while g < NUM_STIGMERGIC_GRANULES {
-            let bit = 1u8 << g;
-            let in_a = (mask_a & bit) != 0;
-            let in_b = (mask_b & bit) != 0;
-
-            let aw = shape_granule_word_by_aperture(wa[g], gain_a, shift_a);
-            let bw = shape_granule_word_by_aperture(wb[g], gain_b, shift_b);
-
-            let coh = coherence_from_uniform_words_x8(aw, bw);
-            let conflict = coh < -0.25;
-            let blended = swar_q7_circular_add_x8(
-                swar_q7_scale_le128_with_bias_x8(aw, inv_s, bias_a),
-                swar_q7_scale_le128_with_bias_x8(bw, s_u64, bias_b),
-            );
-            let ego_phase_word = (stack.ego_layer.sovereign_granule_phase_q7[g] as u8 as u64)
-                .wrapping_mul(SWAR_SPLAT_BYTE_64);
-            let coh_ea = coherence_from_uniform_words_x8(aw, ego_phase_word);
-            let coh_eb = coherence_from_uniform_words_x8(bw, ego_phase_word);
-            let prefer_b_tie = branchless_select_u8(
-                ego_active,
-                u8::from(coh_eb > coh_ea),
-                u8::from(eb > ea),
-            ) != 0;
-            let conflict_choice = branchless_select_u64(prefer_b_tie, bw, aw);
-            let overlap_w = branchless_select_u64(conflict, conflict_choice, blended);
-
-            let mut gw = branchless_select_u64(in_a & !in_b, aw, 0);
-            gw = branchless_select_u64(!in_a & in_b, bw, gw);
-            gw = branchless_select_u64(in_a & in_b, overlap_w, gw);
-            out_words[g] = gw;
-            g += 1;
-        }
-
-        let dom_a = ea >= eb;
-        let combined_mask = mask_a | mask_b;
-        let overlap_mask = mask_a & mask_b;
-        let coop_bonus = 1.0 + 0.04 * (overlap_mask.count_ones() as f32);
-        let eff_energy = branchless_min_f32(
-            branchless_select_f32(
-                combined_mask != 0,
-                (ea + eb) * 0.5 * coop_bonus
-                    + 0.5 * branchless_max_f32(ea, eb),
-                0.0,
-            ),
-            MAX_ATTRACTOR_PULL_FORCE,
-        );
-        let mut combined = GatewayFrame {
-            tagged_ptr: 0,
-            mapped_section_offset48: branchless_select_u64(
-                dom_a & (fa.mapped_section_offset48 != 0),
-                fa.mapped_section_offset48,
-                branchless_select_u64(
-                    fb.mapped_section_offset48 != 0,
-                    fb.mapped_section_offset48,
-                    fa.mapped_section_offset48,
-                ),
-            ),
-            target_anchor_id: branchless_select_u32(dom_a, fa.target_anchor_id, fb.target_anchor_id),
-            effective_energy: eff_energy,
-            ripa_clamp_rad: branchless_lerp_f32(fa.ripa_clamp_rad, fb.ripa_clamp_rad, ratio_b),
-            qdps_min_step_rad: branchless_min_f32(fa.qdps_min_step_rad, fb.qdps_min_step_rad),
-            effective_inv_temp: branchless_lerp_f32(
-                fa.effective_inv_temp,
-                fb.effective_inv_temp,
-                ratio_b,
-            ),
-            fact_persona_coherence: branchless_lerp_f32(
-                fa.fact_persona_coherence,
-                fb.fact_persona_coherence,
-                ratio_b,
-            ),
-            repulsion_severity: branchless_max_f32(fa.repulsion_severity, fb.repulsion_severity),
-            provenance_bits: fa.provenance_bits | fb.provenance_bits,
-            dominant_cause_code: branchless_select_u8(
-                fa.dominant_cause_code >= fb.dominant_cause_code,
-                fa.dominant_cause_code,
-                fb.dominant_cause_code,
-            ),
-            dominant_slot: branchless_select_u8(dom_a, fa.dominant_slot, fb.dominant_slot),
-            action_mode_flags: fa.action_mode_flags | fb.action_mode_flags,
-            active_swarm_cell_mask: combined_mask & (fa.active_swarm_cell_mask | fb.active_swarm_cell_mask),
-            qdps_min_step_q7: branchless_select_u8(
-                fa.qdps_min_step_q7 <= fb.qdps_min_step_q7,
-                fa.qdps_min_step_q7,
-                fb.qdps_min_step_q7,
-            ),
-            subhead_fact_heads: branchless_select_u8(dom_a, fa.subhead_fact_heads, fb.subhead_fact_heads),
-            subhead_logic_heads: branchless_select_u8(dom_a, fa.subhead_logic_heads, fb.subhead_logic_heads),
-            subhead_explore_heads: branchless_select_u8(dom_a, fa.subhead_explore_heads, fb.subhead_explore_heads),
-            subhead_fact_gain_q7: branchless_select_u8(dom_a, fa.subhead_fact_gain_q7, fb.subhead_fact_gain_q7),
-            subhead_logic_gain_q7: branchless_select_u8(dom_a, fa.subhead_logic_gain_q7, fb.subhead_logic_gain_q7),
-            subhead_explore_gain_q7: branchless_select_u8(dom_a, fa.subhead_explore_gain_q7, fb.subhead_explore_gain_q7),
-            mean_phase_tag_q7: 0,
-            active_head_count: fa.active_head_count.min(fb.active_head_count).max(1),
-            frame_flags: 0,
-            phase_deltas: words_to_q7_array_64(&out_words),
-        };
-        let tag_q7 = swar_q7_mean_i8_from_words_64(combined.phase_words_ref());
-        let ptr_tag = pack_action_slot_tag(
-            combined.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
-            combined.action_mode_flags,
-        );
-        combined.mean_phase_tag_q7 = tag_q7;
-        combined.frame_flags = ptr_tag as u16;
-        combined.tagged_ptr =
-            gcso_tagged_ptr_t::pack(combined.mapped_section_offset48, ptr_tag, tag_q7).raw();
-
+        let combined = combine_pair_aperture_frame_pure(self, other, stack);
         let modulated = stack.intervene_ego_and_modulate_frame_branchless(
+            delta,
+            horizon,
+            venn_report,
+            combined,
+        );
+        let final_words = *modulated.phase_words_ref();
+        (modulated, final_words)
+    }
+
+    /// Read-only counterpart to [`Self::combine_pair_with_core_layers`] for per-layer
+    /// Hot-Path steering without mutating `stack`.
+    #[inline]
+    fn combine_pair_with_core_layers_readonly<B: ManifoldGatewaySignal + ?Sized>(
+        &self,
+        other: &B,
+        stack: &AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
+        let combined = combine_pair_aperture_frame_pure(self, other, stack);
+        let modulated = stack.modulate_gateway_frame_with_ego_readonly(
             delta,
             horizon,
             venn_report,
@@ -1306,7 +1204,7 @@ impl<T: ManifoldGatewaySignal + ?Sized> ManifoldGatewaySignal for &T {
         (**self).synthesize_gateway_with_core_layers_readonly(stack, delta, horizon, venn_report)
     }
     #[inline]
-    fn combine_pair_with_core_layers<B: ManifoldGatewaySignal>(
+    fn combine_pair_with_core_layers<B: ManifoldGatewaySignal + ?Sized>(
         &self,
         other: &B,
         stack: &mut AutonomousCoreLayerStack,
@@ -1316,6 +1214,266 @@ impl<T: ManifoldGatewaySignal + ?Sized> ManifoldGatewaySignal for &T {
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         (**self).combine_pair_with_core_layers(other, stack, delta, horizon, venn_report)
     }
+    #[inline]
+    fn combine_pair_with_core_layers_readonly<B: ManifoldGatewaySignal + ?Sized>(
+        &self,
+        other: &B,
+        stack: &AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
+        (**self).combine_pair_with_core_layers_readonly(other, stack, delta, horizon, venn_report)
+    }
+}
+
+#[inline]
+fn combine_pair_aperture_from_frames(
+    fa: GatewayFrame,
+    wa: [u64; NUM_STIGMERGIC_GRANULES],
+    (mask_a, gain_a, shift_a): (u8, u8, i8),
+    fb: GatewayFrame,
+    wb: [u64; NUM_STIGMERGIC_GRANULES],
+    (mask_b, gain_b, shift_b): (u8, u8, i8),
+    stack: &AutonomousCoreLayerStack,
+) -> GatewayFrame {
+    let ea = branchless_flush_subnormal_f32(branchless_relu_f32(fa.effective_energy));
+    let eb = branchless_flush_subnormal_f32(branchless_relu_f32(fb.effective_energy));
+    let tot_e = ea + eb;
+    let safe_tot = branchless_select_f32(tot_e > DEFAULT_ENTROPY_EPS, tot_e, 1.0);
+    let ratio_b = branchless_clamp_f32(eb * fast_inv_pos_normal_f32(safe_tot), 0.0, 1.0);
+    let s_u64 = ((ratio_b * 128.0 + 0.5) as u8).min(128) as u64;
+    let inv_s = 128u64.wrapping_sub(s_u64);
+    let bias_a = s_u64.wrapping_mul(SWAR_SPLAT_BYTE_64);
+    let bias_b = inv_s.wrapping_mul(SWAR_SPLAT_BYTE_64);
+
+    let ego_active = stack.ego_layer.is_active();
+    let mut out_words = [0u64; NUM_STIGMERGIC_GRANULES];
+    let mut g = 0usize;
+    while g < NUM_STIGMERGIC_GRANULES {
+        let bit = 1u8 << g;
+        let in_a = (mask_a & bit) != 0;
+        let in_b = (mask_b & bit) != 0;
+
+        let aw = shape_granule_word_by_aperture(wa[g], gain_a, shift_a);
+        let bw = shape_granule_word_by_aperture(wb[g], gain_b, shift_b);
+
+        let coh = coherence_from_uniform_words_x8(aw, bw);
+        let conflict = coh < -0.25;
+        let blended = swar_q7_circular_add_x8(
+            swar_q7_scale_le128_with_bias_x8(aw, inv_s, bias_a),
+            swar_q7_scale_le128_with_bias_x8(bw, s_u64, bias_b),
+        );
+        let ego_phase_word = (stack.ego_layer.sovereign_granule_phase_q7[g] as u8 as u64)
+            .wrapping_mul(SWAR_SPLAT_BYTE_64);
+        let coh_ea = coherence_from_uniform_words_x8(aw, ego_phase_word);
+        let coh_eb = coherence_from_uniform_words_x8(bw, ego_phase_word);
+        let prefer_b_tie = branchless_select_u8(
+            ego_active,
+            u8::from(coh_eb > coh_ea),
+            u8::from(eb > ea),
+        ) != 0;
+        let conflict_choice = branchless_select_u64(prefer_b_tie, bw, aw);
+        let overlap_w = branchless_select_u64(conflict, conflict_choice, blended);
+
+        let mut gw = branchless_select_u64(in_a & !in_b, aw, 0);
+        gw = branchless_select_u64(!in_a & in_b, bw, gw);
+        gw = branchless_select_u64(in_a & in_b, overlap_w, gw);
+        out_words[g] = gw;
+        g += 1;
+    }
+
+    let active_heads = fa.active_head_count.min(fb.active_head_count).max(1);
+    let pair_coh = if active_heads < MAX_ATTENTION_HEADS as u16 {
+        tangent_cosine_active_heads_64(&wa, &wb, active_heads)
+    } else {
+        coherence_from_word_arrays_with_both_uniform_flags_64(
+            &wa,
+            is_word_array_uniform_64(&wa),
+            &wb,
+            is_word_array_uniform_64(&wb),
+        )
+    };
+    let dom_a = ea >= eb;
+    let combined_mask = mask_a | mask_b;
+    let overlap_mask = mask_a & mask_b;
+    let coop_bonus = 1.0 + 0.04 * (overlap_mask.count_ones() as f32);
+    let eff_energy = branchless_min_f32(
+        branchless_select_f32(
+            combined_mask != 0,
+            (ea + eb) * 0.5 * coop_bonus + 0.5 * branchless_max_f32(ea, eb),
+            0.0,
+        ),
+        MAX_ATTRACTOR_PULL_FORCE,
+    );
+    let mut combined = GatewayFrame {
+        tagged_ptr: 0,
+        mapped_section_offset48: branchless_select_u64(
+            dom_a & (fa.mapped_section_offset48 != 0),
+            fa.mapped_section_offset48,
+            branchless_select_u64(
+                fb.mapped_section_offset48 != 0,
+                fb.mapped_section_offset48,
+                fa.mapped_section_offset48,
+            ),
+        ),
+        target_anchor_id: branchless_select_u32(dom_a, fa.target_anchor_id, fb.target_anchor_id),
+        effective_energy: eff_energy,
+        ripa_clamp_rad: branchless_lerp_f32(fa.ripa_clamp_rad, fb.ripa_clamp_rad, ratio_b),
+        qdps_min_step_rad: branchless_min_f32(fa.qdps_min_step_rad, fb.qdps_min_step_rad),
+        effective_inv_temp: branchless_lerp_f32(
+            fa.effective_inv_temp,
+            fb.effective_inv_temp,
+            ratio_b,
+        ),
+        fact_persona_coherence: pair_coh,
+        repulsion_severity: branchless_max_f32(fa.repulsion_severity, fb.repulsion_severity),
+        provenance_bits: fa.provenance_bits | fb.provenance_bits,
+        dominant_cause_code: branchless_select_u8(
+            fa.dominant_cause_code >= fb.dominant_cause_code,
+            fa.dominant_cause_code,
+            fb.dominant_cause_code,
+        ),
+        dominant_slot: branchless_select_u8(dom_a, fa.dominant_slot, fb.dominant_slot),
+        action_mode_flags: fa.action_mode_flags | fb.action_mode_flags,
+        active_swarm_cell_mask: combined_mask & (fa.active_swarm_cell_mask | fb.active_swarm_cell_mask),
+        qdps_min_step_q7: branchless_select_u8(
+            fa.qdps_min_step_q7 <= fb.qdps_min_step_q7,
+            fa.qdps_min_step_q7,
+            fb.qdps_min_step_q7,
+        ),
+        subhead_fact_heads: branchless_select_u8(dom_a, fa.subhead_fact_heads, fb.subhead_fact_heads),
+        subhead_logic_heads: branchless_select_u8(dom_a, fa.subhead_logic_heads, fb.subhead_logic_heads),
+        subhead_explore_heads: branchless_select_u8(dom_a, fa.subhead_explore_heads, fb.subhead_explore_heads),
+        subhead_fact_gain_q7: branchless_select_u8(dom_a, fa.subhead_fact_gain_q7, fb.subhead_fact_gain_q7),
+        subhead_logic_gain_q7: branchless_select_u8(dom_a, fa.subhead_logic_gain_q7, fb.subhead_logic_gain_q7),
+        subhead_explore_gain_q7: branchless_select_u8(dom_a, fa.subhead_explore_gain_q7, fb.subhead_explore_gain_q7),
+        mean_phase_tag_q7: 0,
+        active_head_count: active_heads,
+        frame_flags: 0,
+        phase_deltas: words_to_q7_array_64(&out_words),
+    };
+    let tag_q7 = swar_q7_mean_i8_from_words_64(combined.phase_words_ref());
+    let ptr_tag = pack_action_slot_tag(
+        combined.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
+        combined.action_mode_flags,
+    );
+    combined.mean_phase_tag_q7 = tag_q7;
+    combined.frame_flags = ptr_tag as u16;
+    combined.tagged_ptr =
+        gcso_tagged_ptr_t::pack(combined.mapped_section_offset48, ptr_tag, tag_q7).raw();
+    combined
+}
+
+#[inline]
+fn combine_pair_aperture_frame_pure<A: ManifoldGatewaySignal + ?Sized, B: ManifoldGatewaySignal + ?Sized>(
+    a: &A,
+    b: &B,
+    stack: &AutonomousCoreLayerStack,
+) -> GatewayFrame {
+    let ap_a = a.resolve_dynamic_core_aperture(stack);
+    let ap_b = b.resolve_dynamic_core_aperture(stack);
+    let (fa, wa) = a.synthesize_gateway_frame_with_words();
+    let (fb, wb) = b.synthesize_gateway_frame_with_words();
+    combine_pair_aperture_from_frames(fa, wa, ap_a, fb, wb, ap_b, stack)
+}
+
+#[inline]
+fn combine_fact_persona_aperture_frame_pure<
+    F: ObjectiveFactSignal + ?Sized,
+    P: SubjectivePersonaSignal + ?Sized,
+>(
+    fact: &F,
+    persona: &P,
+    stack: &AutonomousCoreLayerStack,
+) -> GatewayFrame {
+    let ap_a = fact.resolve_dynamic_core_aperture(stack);
+    let ap_b = persona.resolve_dynamic_core_aperture(stack);
+    let (fa, wa) = synthesize_multi_origin_gateway_frame_with_words::<
+        SystemConstraint<()>,
+        F,
+        SubjectivePersona<[i8; 64]>,
+        ContradictionGuard<()>,
+    >(None, Some(fact), None, None);
+    let (fb, wb) = synthesize_multi_origin_gateway_frame_with_words::<
+        SystemConstraint<()>,
+        ObjectiveFact<[i8; 64]>,
+        P,
+        ContradictionGuard<()>,
+    >(None, None, Some(persona), None);
+    combine_pair_aperture_from_frames(fa, wa, ap_a, fb, wb, ap_b, stack)
+}
+
+#[inline]
+fn apply_sys_and_guard_to_pair_frame<
+    S: SystemConstraintSignal + ?Sized,
+    G: ContradictionGuardSignal + ?Sized,
+>(
+    sys: &S,
+    guard_opt: Option<&G>,
+    mut frame: GatewayFrame,
+) -> GatewayFrame {
+    let mut prov_bits = frame.provenance_bits | sys.causal_provenance_bits() | CAUSAL_AXIS_SYSTEM_CONSTRAINT;
+    let active_swarm_mask = frame.active_swarm_cell_mask & sys.active_swarm_cells_mask();
+    let force_skip = sys.recommend_layer_skip();
+    let qdps_rad = branchless_max_f32(0.0, sys.qdps_min_step_rad_override());
+    let sys_sev = branchless_clamp_f32(sys.causal_anomaly_severity(), 0.0, 1.0);
+    if force_skip | (sys.active_swarm_cells_mask() != 0xFF) {
+        prov_bits |= CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE;
+    }
+
+    let mut rep_sev = branchless_max_f32(frame.repulsion_severity, sys_sev);
+    let words = *frame.phase_words_ref();
+    if let Some(guard) = guard_opt {
+        const ZERO_PHASES_64: [gcso_q7_t; MAX_ATTENTION_HEADS] = [0i8; MAX_ATTENTION_HEADS];
+        prov_bits |= guard.causal_provenance_bits() | CAUSAL_AXIS_CONTRADICTION_GUARD;
+        let g_sev = if guard.requires_phase_slice_for_repulsion() {
+            guard.evaluate_repulsion_severity_from_words(&words, &frame.phase_deltas)
+        } else {
+            guard.evaluate_repulsion_severity_from_words(&words, &ZERO_PHASES_64)
+        };
+        rep_sev = branchless_clamp_f32(
+            branchless_max_f32(rep_sev, branchless_max_f32(g_sev, guard.causal_anomaly_severity())),
+            0.0,
+            1.0,
+        );
+    }
+
+    let repulsion_triggered =
+        (rep_sev > 0.50) | ((prov_bits & CAUSAL_CAUSE_COHOMOLOGY_REPULSION) != 0);
+    if repulsion_triggered {
+        prov_bits |= CAUSAL_CAUSE_COHOMOLOGY_REPULSION;
+        let pw = frame.phase_words_mut();
+        let mut c = 0usize;
+        while c < NUM_STIGMERGIC_GRANULES {
+            pw[c] = swar_q7_neg_sat_x8(pw[c]);
+            c += 1;
+        }
+        frame.phase_deltas = words_to_q7_array_64(pw);
+        frame.dominant_slot = ATTRACTOR_SLOT_REPULSION;
+        rep_sev = branchless_max_f32(rep_sev, 0.85);
+        frame.action_mode_flags = ACTION_PRESET_REPULSION_ESCAPE;
+        frame.dominant_cause_code = ROOT_CAUSE_COHOMOLOGY_REPULSION;
+        frame.effective_inv_temp = 0.75;
+    } else if force_skip {
+        frame.action_mode_flags |= ACTION_MODE_LAYER_SKIP;
+    }
+
+    frame.provenance_bits = prov_bits;
+    frame.active_swarm_cell_mask = active_swarm_mask;
+    frame.qdps_min_step_rad = branchless_max_f32(frame.qdps_min_step_rad, qdps_rad);
+    frame.qdps_min_step_q7 = branchless_rad_to_qdps_step_u8(frame.qdps_min_step_rad);
+    frame.repulsion_severity = rep_sev;
+    let tag_q7 = swar_q7_mean_i8_from_words_64(frame.phase_words_ref());
+    let ptr_tag = pack_action_slot_tag(
+        frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
+        frame.action_mode_flags,
+    );
+    frame.mean_phase_tag_q7 = tag_q7;
+    frame.frame_flags = ptr_tag as u16;
+    frame.tagged_ptr =
+        gcso_tagged_ptr_t::pack(frame.mapped_section_offset48, ptr_tag, tag_q7).raw();
+    frame
 }
 
 impl CausalProvenanceSignal for GatewayFrame {
@@ -1908,6 +2066,42 @@ impl<F: ObjectiveFactSignal, P: SubjectivePersonaSignal> ManifoldGatewaySignal f
     fn synthesize_gateway_frame(&self) -> GatewayFrame {
         self.synthesize_gateway_frame_with_words().0
     }
+    #[inline]
+    fn synthesize_gateway_with_core_layers(
+        &self,
+        stack: &mut AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
+        let combined = combine_fact_persona_aperture_frame_pure(&self.0, &self.1, stack);
+        let modulated = stack.intervene_ego_and_modulate_frame_branchless(
+            delta,
+            horizon,
+            venn_report,
+            combined,
+        );
+        let words = *modulated.phase_words_ref();
+        (modulated, words)
+    }
+    #[inline]
+    fn synthesize_gateway_with_core_layers_readonly(
+        &self,
+        stack: &AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
+        let combined = combine_fact_persona_aperture_frame_pure(&self.0, &self.1, stack);
+        let modulated = stack.modulate_gateway_frame_with_ego_readonly(
+            delta,
+            horizon,
+            venn_report,
+            combined,
+        );
+        let words = *modulated.phase_words_ref();
+        (modulated, words)
+    }
 }
 
 impl<S: SystemConstraintSignal, F: ObjectiveFactSignal, P: SubjectivePersonaSignal>
@@ -1946,6 +2140,52 @@ impl<S: SystemConstraintSignal, F: ObjectiveFactSignal, P: SubjectivePersonaSign
     #[inline(always)]
     fn synthesize_gateway_frame(&self) -> GatewayFrame {
         self.synthesize_gateway_frame_with_words().0
+    }
+    #[inline]
+    fn synthesize_gateway_with_core_layers(
+        &self,
+        stack: &mut AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
+        let pair_frame = combine_fact_persona_aperture_frame_pure(&self.1, &self.2, stack);
+        let guarded = apply_sys_and_guard_to_pair_frame::<S, ContradictionGuard<()>>(
+            &self.0,
+            None,
+            pair_frame,
+        );
+        let modulated = stack.intervene_ego_and_modulate_frame_branchless(
+            delta,
+            horizon,
+            venn_report,
+            guarded,
+        );
+        let words = *modulated.phase_words_ref();
+        (modulated, words)
+    }
+    #[inline]
+    fn synthesize_gateway_with_core_layers_readonly(
+        &self,
+        stack: &AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
+        let pair_frame = combine_fact_persona_aperture_frame_pure(&self.1, &self.2, stack);
+        let guarded = apply_sys_and_guard_to_pair_frame::<S, ContradictionGuard<()>>(
+            &self.0,
+            None,
+            pair_frame,
+        );
+        let modulated = stack.modulate_gateway_frame_with_ego_readonly(
+            delta,
+            horizon,
+            venn_report,
+            guarded,
+        );
+        let words = *modulated.phase_words_ref();
+        (modulated, words)
     }
 }
 
@@ -1997,6 +2237,46 @@ impl<
     #[inline(always)]
     fn synthesize_gateway_frame(&self) -> GatewayFrame {
         self.synthesize_gateway_frame_with_words().0
+    }
+    #[inline]
+    fn synthesize_gateway_with_core_layers(
+        &self,
+        stack: &mut AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
+        let pair_frame = combine_fact_persona_aperture_frame_pure(&self.1, &self.2, stack);
+        let guarded =
+            apply_sys_and_guard_to_pair_frame(&self.0, Some(&self.3), pair_frame);
+        let modulated = stack.intervene_ego_and_modulate_frame_branchless(
+            delta,
+            horizon,
+            venn_report,
+            guarded,
+        );
+        let words = *modulated.phase_words_ref();
+        (modulated, words)
+    }
+    #[inline]
+    fn synthesize_gateway_with_core_layers_readonly(
+        &self,
+        stack: &AutonomousCoreLayerStack,
+        delta: &LiminalBoundaryDelta,
+        horizon: &EpistemicHorizonReading,
+        venn_report: &StigmergicVennSerendipityReport,
+    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
+        let pair_frame = combine_fact_persona_aperture_frame_pure(&self.1, &self.2, stack);
+        let guarded =
+            apply_sys_and_guard_to_pair_frame(&self.0, Some(&self.3), pair_frame);
+        let modulated = stack.modulate_gateway_frame_with_ego_readonly(
+            delta,
+            horizon,
+            venn_report,
+            guarded,
+        );
+        let words = *modulated.phase_words_ref();
+        (modulated, words)
     }
 }
 

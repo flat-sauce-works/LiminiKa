@@ -506,7 +506,7 @@ pub trait EdbcBranchController: EntropyEvaluator {
 
 /// Trait for querying system ABI versions and runtime compute capabilities (**Boundary / System Layer**).
 pub trait SystemCapabilityQuery: BranchlessKernel + Send + Sync {
-    /// Returns the semantic ABI version tuple `(major, minor, patch)` (`(0, 1, 1)`).
+    /// Returns the active semantic ABI version tuple `(major, minor, patch)`.
     #[inline(always)]
     fn abi_version(&self) -> (u32, u32, u32) {
         (
@@ -516,7 +516,7 @@ pub trait SystemCapabilityQuery: BranchlessKernel + Send + Sync {
         )
     }
 
-    /// Returns the static ABI version string (`"0.1.1"`).
+    /// Returns the static ABI version string ([`crate::abi::GCSO_ABI_VERSION_STRING`]).
     #[inline(always)]
     fn abi_version_string(&self) -> &'static str {
         crate::abi::GCSO_ABI_VERSION_STRING
@@ -532,7 +532,7 @@ pub trait SystemCapabilityQuery: BranchlessKernel + Send + Sync {
                 * GCSO_CAP_METAL_BACKEND)
     }
 
-    /// Populates default runtime configuration parameters conforming to GCSO v0.1.1 invariants.
+    /// Populates default runtime configuration parameters conforming to GCSO architectural invariants.
     ///
     /// # Errors
     /// Returns an error status only if a custom implementor rejects the target configuration state.
@@ -559,7 +559,7 @@ pub trait SystemCapabilityQuery: BranchlessKernel + Send + Sync {
         Ok(())
     }
 
-    /// Branchlessly validates a [`gcso_config_t`] descriptor against GCSO v0.1.1 architectural invariants.
+    /// Branchlessly validates a [`gcso_config_t`] descriptor against GCSO architectural invariants.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any dimension, scale, or capacity invariant is violated.
@@ -627,7 +627,7 @@ pub trait GcsoRuntimeContext: BranchlessKernel + Send + Sync {
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] or [`crate::abi::GCSO_ERROR_VERSION_MISMATCH`]
-    /// if the snapshot header magic, version (`0x00000101`), or payload checksum is invalid.
+    /// if the snapshot header magic, version ([`crate::abi::GCSO_ABI_VERSION_HEX`]), or payload checksum is invalid.
     fn deserialize(&mut self, buffer: &[u8]) -> GcsoResult<()>;
 
     /// Seeks to a specific token position in the KV-keyframe keyframe KV cache without forward passes.

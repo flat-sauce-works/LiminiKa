@@ -32,7 +32,7 @@ static void gcso_free_aligned(void* ptr) {
 
 /**
  * @brief Minimal C11 host harness demonstrating a GGUF / llama.cpp post-RoPE hook
- * using Phi-4-mini HalfSplit partial-RoPE geometry via LiminiKa C-ABI v0.1.1.
+ * using Phi-4-mini HalfSplit partial-RoPE geometry via the LiminiKa C-ABI.
  */
 int main(void) {
     gcso_config_t cfg;

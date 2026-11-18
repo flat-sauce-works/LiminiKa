@@ -27,7 +27,7 @@ pub unsafe extern "C" fn gcso_action_hub_create(
     })
 }
 
-/// Initializes a 32-byte [`gcso_stigmergic_thresholds_t`] structure with canonical v0.1.1 defaults.
+/// Initializes a 32-byte [`gcso_stigmergic_thresholds_t`] structure with canonical defaults.
 ///
 /// # Safety
 /// `thresholds_out` must be a non-null, 32-byte aligned writable [`gcso_stigmergic_thresholds_t`] pointer.

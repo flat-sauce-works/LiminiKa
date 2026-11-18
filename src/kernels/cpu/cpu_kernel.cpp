@@ -1,4 +1,4 @@
-// src/kernels/cpu/cpu_kernel.cpp
+// name: src/kernels/cpu/cpu_kernel.cpp
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 #include "liminika/gcso_abi.h"

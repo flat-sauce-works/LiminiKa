@@ -3,12 +3,12 @@
 
 /**
  * @file gcso_abi.h
- * @brief Public C-ABI v0.1.1 declarations for the LiminiKa Geometric Cellular Sheaf Orchestrator
+ * @brief Public C-ABI declarations for the LiminiKa Geometric Cellular Sheaf Orchestrator
  * (GCSO).
  *
- * This header defines the stable C11/C++20 FFI surface implemented by `src/core/src/abi/`.
- * C-ABI v0.1.1 function prefixes are preserved for binary compatibility and map to the
- * refactored Rust core modules as follows:
+ * This header defines the C11/C++20 FFI surface implemented by `src/core/src/abi/`.
+ * Function prefixes (`gcso_dpsr_*`, `gcso_edbc_*`, `gcso_srl_*`, `gcso_zimms_*`) map to the
+ * Rust core modules as follows:
  * - `gcso_dpsr_*`  -> `liminika_core::phase_steering` (`PhaseSteeringEngine`)
  * - `gcso_edbc_*`  -> `liminika_core::entropy_control` (`EntropyController`)
  * - `gcso_srl_*`   -> `liminika_core::residual_adapter` (`ResidualAdapterEngine`)
@@ -22,14 +22,15 @@
 #include "liminika/gcso_types.h"
 
 // ===================================================================
-// 0. Version Identifiers (Unified C-ABI v0.1.1 Specification)
+// 0. Version Identifiers (Unified C-ABI v0.1.2 Specification)
 // ===================================================================
 
 #define GCSO_ABI_VERSION_MAJOR 0U
 #define GCSO_ABI_VERSION_MINOR 1U
-#define GCSO_ABI_VERSION_PATCH 1U
-#define GCSO_ABI_VERSION_HEX 0x00000101U
-#define GCSO_ABI_VERSION_STRING "0.1.1"
+#define GCSO_ABI_VERSION_PATCH 2U
+#define GCSO_ABI_VERSION_HEX                                                                       \
+    ((GCSO_ABI_VERSION_MAJOR << 16U) | (GCSO_ABI_VERSION_MINOR << 8U) | GCSO_ABI_VERSION_PATCH)
+#define GCSO_ABI_VERSION_STRING "0.1.2"
 
 GCSO_EXTERN_C_BEGIN
 
@@ -38,7 +39,7 @@ GCSO_EXTERN_C_BEGIN
 // ===================================================================
 
 /**
- * @brief Retrieves the numeric version identifiers for the GCSO C-ABI (v0.1.1).
+ * @brief Retrieves the numeric version identifiers for the active GCSO C-ABI.
  * Corresponds to SystemCapabilityQuery trait in liminika_core::traits.
  * @param major Pointer to store the major version number (aligned to uint32_t).
  * @param minor Pointer to store the minor version number (aligned to uint32_t).
@@ -50,9 +51,9 @@ gcso_abi_get_version(uint32_t* GCSO_RESTRICT major, uint32_t* GCSO_RESTRICT mino
                      uint32_t* GCSO_RESTRICT patch) GCSO_NOEXCEPT;
 
 /**
- * @brief Returns the static semantic version string literal for the GCSO kernel engine ("0.1.1").
+ * @brief Returns the static semantic version string literal for the GCSO kernel engine.
  * Corresponds to SystemCapabilityQuery trait in liminika_core::traits.
- * @return Const pointer to null-terminated static version string.
+ * @return Const pointer to null-terminated static version string (`GCSO_ABI_VERSION_STRING`).
  */
 GCSO_NODISCARD GCSO_API const char* GCSO_CALL gcso_abi_get_version_string(void) GCSO_NOEXCEPT;
 
@@ -84,7 +85,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_config_init_default(gcso_config_t* GCSO_RESTRICT config) GCSO_NOEXCEPT;
 
 /**
- * @brief Validates a gcso_config_t descriptor against GCSO v0.1.1 architectural invariants.
+ * @brief Validates a gcso_config_t descriptor against GCSO architectural invariants.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_config_validate(const gcso_config_t* GCSO_RESTRICT config) GCSO_NOEXCEPT;
@@ -221,8 +222,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_create(
     uint32_t capacity, gcso_action_hub_handle_t* GCSO_RESTRICT hub_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Initializes a 32-byte gcso_stigmergic_thresholds_t structure with canonical v0.1.1
- * defaults.
+ * @brief Initializes a 32-byte gcso_stigmergic_thresholds_t structure with canonical defaults.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_init_default_thresholds(
     gcso_stigmergic_thresholds_t* GCSO_RESTRICT thresholds_out) GCSO_NOEXCEPT;
@@ -848,7 +848,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_mapped_storage_close_mmap(
 // ===================================================================
 // 7. Tagged Pointer, 2-Origin Composite Manifold Gateway, Online
 //    Toroidal k-Means, Coarse-to-Fine Routing & 4-Section .gcso
-//    Zero-Copy Persistence Interface (v0.1.1 Extensions)
+//    Zero-Copy Persistence Interface
 // ===================================================================
 
 /**
@@ -1263,8 +1263,8 @@ gcso_ego_field_derive_from_text(const uint8_t* GCSO_RESTRICT utf8_ptr, size_t ut
 
 /**
  * @brief Branchlessly evaluates Ego triggers across Core Layer 0/1 boundaries and temporal
- * velocity, updating boundaries and injecting counter-vortex or transgressive phase steering into
- * frame_inout.
+ * velocity, updating boundaries and injecting counter-basin orbital thrust or transgressive phase
+ * steering into frame_inout.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_ego_field_intervene_frame(
     gcso_liminal_ego_field_t* GCSO_RESTRICT ego_inout,
@@ -1273,6 +1273,9 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_ego_field_intervene_frame(
     const gcso_epistemic_horizon_reading_t* GCSO_RESTRICT horizon,
     const gcso_stigmergic_venn_serendipity_report_t* GCSO_RESTRICT venn_report,
     gcso_gateway_frame_t* GCSO_RESTRICT frame_inout) GCSO_NOEXCEPT;
+
+GCSO_STATIC_ASSERT(GCSO_CRYSTAL_RECORD_VERSION == GCSO_ABI_VERSION_HEX,
+                   "GCSO_CRYSTAL_RECORD_VERSION must match GCSO_ABI_VERSION_HEX");
 
 GCSO_EXTERN_C_END
 

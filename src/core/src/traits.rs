@@ -12,7 +12,7 @@
 //! (`HotPathObserver` and `ColdPathObserver`)** and the **single composite gateway (`ManifoldGatewaySignal`)**
 //! across a flat 8-submodule DAG:
 //! - **Lv.0 Foundation**:
-//!   - `primitives`: C-ABI v0.1.1 (`0x00000101`) constants, [`Pod`] safety contract, branchless
+//!   - `primitives`: Base C-ABI constants ([`crate::abi::GCSO_ABI_VERSION_HEX`]), [`Pod`] safety contract, branchless
 //!     IEEE 802.3 CRC32, 5-bit `ACTION_MODE_*` & 3-bit working-lane `ATTRACTOR_SLOT_*` tag codecs,
 //!     $8 \times 8$ slot coupling bitmatrix helpers, and lifetime-bound [`FfiHandleRef`] / [`FfiHandleMut`].
 //!   - `aligned`: Const-generic [`AlignedSlice`] / [`AlignedSliceMut`] (`16..512`B), $\mathcal{O}(1)$
@@ -71,7 +71,7 @@
 
 // Preserve strict architectural bottom-up dependency ordering (Lv.0 -> Lv.3) across rustfmt runs.
 #[rustfmt::skip]
-/// Lv.0 Foundation 1: Base C-ABI v0.1.1 constants, `Pod` safety contract, IEEE 802.3 CRC32,
+/// Lv.0 Foundation 1: Base C-ABI constants, `Pod` safety contract, IEEE 802.3 CRC32,
 /// 5-bit ActionMode & 3-bit working-lane AttractorSlot tag codecs, $8 \times 8$ coupling helpers, and FFI handle guards.
 pub mod primitives;
 #[rustfmt::skip]
@@ -159,36 +159,36 @@ pub use self::gateway::{
     CrystallizedAttractorRecord, DissipativeOverflowReport, EgoIntentAxes, EpistemicHorizonReading,
     EpistemicManifoldOps, EpistemicRegime, GatewayFrame, GatewayPhaseSteeringExt,
     GcsoFourSectionView, HighCapCognitiveBank, HighCapPhaseKvCache, HighCapPhaseKvGopCache,
-    HybridScaleCircuit, LayeredScalePair, LiminalApertureField, LiminalBoundaryDelta,
-    LiminalEgoField, LiminalEgoPreset, LiminalHorizonNodeDescriptor,
-    LiminalTopologyTelemetrySnapshot, LowSpecCognitiveBank, LowSpecPhaseKvCache,
-    LowSpecPhaseKvGopCache, ManifoldGatewaySignal, ObjectiveFact, ObjectiveFactSignal,
-    RamPhaseKvCache, RamPhaseKvCacheOps, RamPhaseKvEntry, RamPhaseKvGopCache,
-    RamPhaseKvStepOutcome, RawPhaseProjectable, RelativeAttractorNode, RelativeCouplingMatrix,
-    ScaleLayerNode, ScaleLayerProjection, StandardCognitiveBank, StandardPhaseKvCache,
-    StandardPhaseKvGopCache, StigmergicFragmentEnsembleReport, StigmergicGranuleField,
-    StigmergicLayeredSwarmExt, StigmergicScaleGranularity, StigmergicScaleLayer,
-    StigmergicVennSerendipityReport, SubjectivePersona, SubjectivePersonaSignal, SystemConstraint,
-    SystemConstraintSignal, APERTURE_ACTION_HUB_WIDE, APERTURE_CAUSAL_PROVENANCE,
-    APERTURE_COGNITIVE_CIRCUIT, APERTURE_COHOMOLOGY_EDBC, APERTURE_CONTRADICTION_GUARD,
-    APERTURE_DISSIPATIVE_CRYSTAL, APERTURE_FAST_PATH_LEDGER, APERTURE_KV_PHASE_CACHE,
-    APERTURE_MANIFOLD_GATEWAY, APERTURE_MAPPED_STORAGE, APERTURE_OBJECTIVE_FACT,
-    APERTURE_PHASE_STEERING, APERTURE_POINTER_TRAIL, APERTURE_RANK1_RESIDUAL,
-    APERTURE_RELATIVE_COUPLING, APERTURE_STIGMERGIC_CONSENSUS, APERTURE_SUBHEAD_ROUTING,
-    APERTURE_SUBJECTIVE_PERSONA, APERTURE_SYSTEM_CONSTRAINT, CAUSAL_AXIS_CONTRADICTION_GUARD,
-    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA, CAUSAL_AXIS_SYSTEM_CONSTRAINT,
-    CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
-    CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, CAUSAL_CAUSE_PERSONA_FACT_COLLISION,
-    CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, CORE_LAYER_EGO, CORE_LAYER_LIMINAL, CORE_LAYER_STIGMERGIC,
-    DEFAULT_FACT_RIPA_CLAMP_RAD, DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
-    DEFAULT_PERSONA_FACT_COLLISION_THRESH, DEFAULT_PERSONA_RIPA_CLAMP_RAD,
-    DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
-    EGO_TRIGGER_ALL_DEFAULT, EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
-    EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR, EGO_TRIGGER_VORTEX_SWALLOW,
-    GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION, GCSO_FOUR_SECTION_HEADER_BYTES,
-    GCSO_LIMINAL_HORIZON_TOPOLOGY, GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET, NUM_CORE_AUTONOMOUS_LAYERS,
-    NUM_LIMINAL_APERTURE_CHANNELS, ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_FACT_RETRIEVAL_MISS,
-    ROOT_CAUSE_NOMINAL, ROOT_CAUSE_PERSONA_FACT_COLLISION, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
+    HybridScaleCircuit, LiminalApertureField, LiminalBoundaryDelta, LiminalEgoField,
+    LiminalEgoPreset, LiminalHorizonNodeDescriptor, LiminalTopologyTelemetrySnapshot,
+    LowSpecCognitiveBank, LowSpecPhaseKvCache, LowSpecPhaseKvGopCache, ManifoldGatewaySignal,
+    ObjectiveFact, ObjectiveFactSignal, RamPhaseKvCache, RamPhaseKvCacheOps, RamPhaseKvEntry,
+    RamPhaseKvGopCache, RamPhaseKvStepOutcome, RawPhaseProjectable, RelativeAttractorNode,
+    RelativeCouplingMatrix, ScaleLayerNode, ScaleLayerProjection, StandardCognitiveBank,
+    StandardPhaseKvCache, StandardPhaseKvGopCache, StigmergicFragmentEnsembleReport,
+    StigmergicGranuleField, StigmergicLayeredSwarmExt, StigmergicScaleGranularity,
+    StigmergicScaleLayer, StigmergicVennSerendipityReport, SubjectivePersona,
+    SubjectivePersonaSignal, SystemConstraint, SystemConstraintSignal, APERTURE_ACTION_HUB_WIDE,
+    APERTURE_CAUSAL_PROVENANCE, APERTURE_COGNITIVE_CIRCUIT, APERTURE_COHOMOLOGY_EDBC,
+    APERTURE_CONTRADICTION_GUARD, APERTURE_DISSIPATIVE_CRYSTAL, APERTURE_FAST_PATH_LEDGER,
+    APERTURE_KV_PHASE_CACHE, APERTURE_MANIFOLD_GATEWAY, APERTURE_MAPPED_STORAGE,
+    APERTURE_OBJECTIVE_FACT, APERTURE_PHASE_STEERING, APERTURE_POINTER_TRAIL,
+    APERTURE_RANK1_RESIDUAL, APERTURE_RELATIVE_COUPLING, APERTURE_STIGMERGIC_CONSENSUS,
+    APERTURE_SUBHEAD_ROUTING, APERTURE_SUBJECTIVE_PERSONA, APERTURE_SYSTEM_CONSTRAINT,
+    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
+    CAUSAL_AXIS_SYSTEM_CONSTRAINT, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
+    CAUSAL_CAUSE_COHOMOLOGY_REPULSION, CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK,
+    CAUSAL_CAUSE_PERSONA_FACT_COLLISION, CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, CORE_LAYER_EGO,
+    CORE_LAYER_LIMINAL, CORE_LAYER_STIGMERGIC, DEFAULT_FACT_RIPA_CLAMP_RAD,
+    DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO, DEFAULT_PERSONA_FACT_COLLISION_THRESH,
+    DEFAULT_PERSONA_RIPA_CLAMP_RAD, DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
+    DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, EGO_TRIGGER_ALL_DEFAULT, EGO_TRIGGER_BASIN_CAPTURE,
+    EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT,
+    EGO_TRIGGER_LIMINAL_EXTERIOR, GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION,
+    GCSO_FOUR_SECTION_HEADER_BYTES, GCSO_LIMINAL_HORIZON_TOPOLOGY,
+    GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET, NUM_CORE_AUTONOMOUS_LAYERS, NUM_LIMINAL_APERTURE_CHANNELS,
+    ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL,
+    ROOT_CAUSE_PERSONA_FACT_COLLISION, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
 };
 pub use self::hot_path::{
     FractalCascadeCoordinator, HotPathExecutionEngine, HotPathObserver, PointerActionHub,
@@ -349,11 +349,11 @@ pub mod prelude {
         DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO, DEFAULT_PERSONA_FACT_COLLISION_THRESH,
         DEFAULT_PERSONA_RIPA_CLAMP_RAD, DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
         DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, EGO_TRIGGER_ALL_DEFAULT,
-        EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
-        EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR, EGO_TRIGGER_VORTEX_SWALLOW,
-        GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION, GCSO_FOUR_SECTION_HEADER_BYTES,
-        GCSO_LIMINAL_HORIZON_TOPOLOGY, GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET,
-        NUM_CORE_AUTONOMOUS_LAYERS, NUM_LIMINAL_APERTURE_CHANNELS, ROOT_CAUSE_COHOMOLOGY_REPULSION,
+        EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
+        EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR, GCSO_CRYSTAL_RECORD_MAGIC,
+        GCSO_CRYSTAL_RECORD_VERSION, GCSO_FOUR_SECTION_HEADER_BYTES, GCSO_LIMINAL_HORIZON_TOPOLOGY,
+        GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET, NUM_CORE_AUTONOMOUS_LAYERS,
+        NUM_LIMINAL_APERTURE_CHANNELS, ROOT_CAUSE_COHOMOLOGY_REPULSION,
         ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_PERSONA_FACT_COLLISION,
         ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
     };
@@ -414,7 +414,7 @@ pub mod prelude {
 }
 
 // ===================================================================
-// Compile-Time Ground Truth C-ABI v0.1.1 Layout & Structural Parity
+// Compile-Time Ground Truth C-ABI Layout & Structural Parity
 // ===================================================================
 
 const _: () = {
@@ -422,11 +422,18 @@ const _: () = {
         gcso_config_t, gcso_descriptor_header_t, gcso_edbc_state_t, gcso_kv_keyframe_header_t,
         gcso_ledger_slot_t, gcso_mapped_storage_descriptor_t, gcso_paged_bitmask_t,
         gcso_pointer_trail_t, gcso_rank1_residual_descriptor_t, gcso_snapshot_header_t,
-        gcso_subhead_config_t, gcso_tagged_ptr_t,
+        gcso_subhead_config_t, gcso_tagged_ptr_t, GCSO_ABI_VERSION_HEX, GCSO_ABI_VERSION_MAJOR,
+        GCSO_ABI_VERSION_MINOR, GCSO_ABI_VERSION_PATCH,
     };
     use core::mem::{align_of, offset_of, size_of};
 
-    assert!(crate::abi::GCSO_ABI_VERSION_HEX == 0x0000_0101);
+    assert!(
+        GCSO_ABI_VERSION_HEX
+            == ((GCSO_ABI_VERSION_MAJOR << 16)
+                | (GCSO_ABI_VERSION_MINOR << 8)
+                | GCSO_ABI_VERSION_PATCH)
+    );
+    assert!(GCSO_CRYSTAL_RECORD_VERSION == GCSO_ABI_VERSION_HEX);
     assert!(MAX_ATTENTION_HEADS == 64);
     assert!(MAX_ANCHORS_PER_FIELD == 64);
     assert!(MAX_ATTRACTOR_DOMAINS == 8);

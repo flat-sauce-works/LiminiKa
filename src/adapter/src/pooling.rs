@@ -747,7 +747,7 @@ impl CompiledTokenCorpus {
                 entry.energy,
             )?;
         }
-        corpus.fit_common_mode_projection();
+        corpus.fit_common_mode_subspace(3);
         if let Some(prior) = base_prior {
             corpus.extend_common_mode_basis(&prior.pooled_common_mode_basis, 5);
         }
@@ -1158,26 +1158,6 @@ impl CompiledTokenCorpus {
             d_to_q_scores,
             token_deposits,
         })
-    }
-
-    /// Pools a raw query token sequence and recalls through a caller-supplied [`StratumPipeline`].
-    ///
-    /// # Errors
-    /// Returns an error if layer count, token length, or stratum inference fails.
-    pub fn recall_token_sequence_with_strata<'a>(
-        &'a self,
-        adapter: &ModelSteeringAdapter,
-        query_token_qs: &[Vec<f32>],
-        query_seq_len: usize,
-        pipeline: &StratumPipeline<'_>,
-    ) -> Result<DynamicAttractorRecall<'a>, String> {
-        self.recall_token_sequence_with_strata_and_circuit(
-            adapter,
-            query_token_qs,
-            query_seq_len,
-            pipeline,
-            None,
-        )
     }
 
     /// Scores a raw query token sequence using a custom [`StratumPipeline`] and optional prior

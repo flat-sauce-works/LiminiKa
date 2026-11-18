@@ -342,7 +342,7 @@ impl ManifoldGatewaySignal for CrystallizedAnchorRecord {
 pub struct AttractorGrowthSnapshot {
     /// Binary magic constant (`GCSO_SNAPSHOT_MAGIC_U32 = 0x4F534347`, offset 0..4).
     pub magic: u32,
-    /// Unified ABI version (`GCSO_ABI_VERSION_HEX = 0x00000101`, offset 4..8).
+    /// Unified ABI version ([`GCSO_ABI_VERSION_HEX`], offset 4..8).
     pub abi_version: u32,
     /// Number of active anchor records stored in `anchors` (`0..=64`, offset 8..12).
     pub active_anchor_count: u32,
@@ -444,7 +444,7 @@ impl AttractorGrowthSnapshot {
     }
 
     /// Constructs an empty, header-initialized `AttractorGrowthSnapshot` stamped with magic `"GCSO"`
-    /// (`0x4F534347`) and ABI version `0.1.1` (`0x00000101`).
+    /// (`0x4F534347`) and [`GCSO_ABI_VERSION_HEX`].
     #[inline]
     #[must_use]
     pub const fn new() -> Self {
@@ -663,7 +663,7 @@ impl AttractorGrowthSnapshot {
         self.finalize_crc32_for_active_anchors(out_idx)
     }
 
-    /// Verifies the snapshot magic (`0x4F534347`), ABI version (`0x00000101`), anchor count bounds,
+    /// Verifies the snapshot magic (`0x4F534347`), ABI version ([`GCSO_ABI_VERSION_HEX`]), anchor count bounds,
     /// and IEEE 802.3 CRC32 payload checksum.
     ///
     /// # Errors

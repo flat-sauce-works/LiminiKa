@@ -184,8 +184,8 @@ pub const CORE_LAYER_STIGMERGIC: usize = 1;
 /// Autonomous Core Layer 2 identifier: Wide-Aperture Subjective Ego & Top-Down Boundary Intervention (`LiminalEgoField`).
 pub const CORE_LAYER_EGO: usize = 2;
 
-/// Ego intervention trigger bit (`0x01`): Counter-vortex orbital thrust when attractor pull threatens capture.
-pub const EGO_TRIGGER_VORTEX_SWALLOW: u8 = 1 << 0;
+/// Ego intervention trigger bit (`0x01`): Counter-basin orbital thrust when attractor pull threatens capture.
+pub const EGO_TRIGGER_BASIN_CAPTURE: u8 = 1 << 0;
 /// Ego intervention trigger bit (`0x02`): Defiant intervention under internal contradiction (`H^1 != 0`).
 pub const EGO_TRIGGER_INTERNAL_CONFLICT: u8 = 1 << 1;
 /// Ego intervention trigger bit (`0x04`): Transgressive step when standing at a `Liminal` horizon boundary.

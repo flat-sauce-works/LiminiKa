@@ -1,4 +1,4 @@
-// src/kernels/cuda/cuda_kernel.cu
+// name: src/kernels/cuda/cuda_kernel.cu
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 #include "liminika/gcso_abi.h"

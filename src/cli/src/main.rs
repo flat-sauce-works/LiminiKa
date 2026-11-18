@@ -7,7 +7,7 @@ mod eval_runner;
 mod eval_samples;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("LiminiKa GCSO Core Engine v0.1.1");
+    println!("LiminiKa GCSO Core Engine v{}", env!("CARGO_PKG_VERSION"));
 
     // 1. Obtain version string from dynamic C-ABI
     // SAFETY: `gcso_abi_get_version_string` returns a static NUL-terminated C string literal.
@@ -34,7 +34,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. Optional subcommand: `eval-check [fixture_path]`
     let mut args = std::env::args().skip(1);
     if let Some(cmd) = args.next() {
-        if cmd == "eval-check" {
+        if cmd == "check" {
+            let path = args.next().ok_or("usage: liminika check <file.lmnk>")?;
+            let raw = std::fs::read_to_string(&path)?;
+            let program = liminika_dsl::parse_and_validate_lmnk(&raw)
+                .map_err(|e| format!("failed to validate {path}: {e}"))?;
+            println!(
+                "Validated '{}': {} persona(s), {} session(s), {} target(s).",
+                path,
+                program.personas.len(),
+                program.sessions.len(),
+                program.targets.len()
+            );
+        } else if cmd == "eval-check" {
             let path = args
                 .next()
                 .unwrap_or_else(|| "tests/fixtures/gcso_eval_samples.txt".to_string());
@@ -245,13 +257,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         } else {
-            println!("Unknown or help command '{}'. Available subcommands:", cmd);
-            println!("  eval-check [fixture_path]");
-            println!("  eval-dry-run [fixture_path]");
-            println!("  gcso-list [containers_dir]");
-            println!("  gcso-inspect <file.gcso> [seek_frame]");
-            println!("  gcso-bake [fixture_path] [dst.gcso] [phi4-mini|alt-128]");
-            println!("  gcso-rebake <src.gcso> <dst.gcso> [phi4-mini|alt-128]");
+            eprintln!("Unknown command '{}'. Available subcommands:", cmd);
+            eprintln!("  check <file.lmnk>");
+            eprintln!("  eval-check [fixture_path]");
+            eprintln!("  eval-dry-run [fixture_path]");
+            eprintln!("  gcso-list [containers_dir]");
+            eprintln!("  gcso-inspect <file.gcso> [seek_frame]");
+            eprintln!("  gcso-bake [fixture_path] [dst.gcso] [phi4-mini|alt-128]");
+            eprintln!("  gcso-rebake <src.gcso> <dst.gcso> [phi4-mini|alt-128]");
+            return Err(format!("unknown subcommand '{cmd}'").into());
         }
     }
 

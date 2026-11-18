@@ -1,20 +1,34 @@
 // name: src/core/src/abi/types.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! C-ABI v0.1.1 constants, status codes, opaque handles, and #[repr(C)] POD structures.
+//! C-ABI constants, status codes, opaque handles, and `#[repr(C)]` POD structures.
 
 use super::*;
 
-/// Unified GCSO C-ABI Major Version Component (`0.1.1`).
+/// Unified GCSO C-ABI Major Version Component.
 pub const GCSO_ABI_VERSION_MAJOR: u32 = 0;
-/// Unified GCSO C-ABI Minor Version Component (`0.1.1`).
+/// Unified GCSO C-ABI Minor Version Component.
 pub const GCSO_ABI_VERSION_MINOR: u32 = 1;
-/// Unified GCSO C-ABI Patch Version Component (`0.1.1`).
-pub const GCSO_ABI_VERSION_PATCH: u32 = 1;
-/// Hexadecimal Representation of Unified ABI Version `0.1.1` (`0x00000101`).
-pub const GCSO_ABI_VERSION_HEX: u32 = 0x0000_0101;
-/// String Representation of Unified ABI Version `0.1.1`.
-pub const GCSO_ABI_VERSION_STRING: &str = "0.1.1";
+/// Unified GCSO C-ABI Patch Version Component.
+pub const GCSO_ABI_VERSION_PATCH: u32 = 2;
+/// Hexadecimal Representation of the active Unified ABI Version (`0x0000_0102`).
+pub const GCSO_ABI_VERSION_HEX: u32 =
+    (GCSO_ABI_VERSION_MAJOR << 16) | (GCSO_ABI_VERSION_MINOR << 8) | GCSO_ABI_VERSION_PATCH;
+/// String Representation of the active Unified ABI Version (derived from `Cargo.toml`).
+pub const GCSO_ABI_VERSION_STRING: &str = env!("CARGO_PKG_VERSION");
+/// NUL-terminated C string representation of the active Unified ABI Version.
+pub const GCSO_ABI_VERSION_CSTR: &core::ffi::CStr = c"0.1.2";
+
+const _: () = {
+    let c_bytes = GCSO_ABI_VERSION_CSTR.to_bytes();
+    let pkg_bytes = GCSO_ABI_VERSION_STRING.as_bytes();
+    assert!(c_bytes.len() == pkg_bytes.len());
+    let mut i = 0;
+    while i < c_bytes.len() {
+        assert!(c_bytes[i] == pkg_bytes[i]);
+        i += 1;
+    }
+};
 
 /// Capability bitmask flag indicating baseline CPU execution support.
 pub const GCSO_CAP_CPU_BASELINE: gcso_capability_flags_t = 1 << 0;
@@ -25,7 +39,7 @@ pub const GCSO_CAP_VULKAN_BACKEND: gcso_capability_flags_t = 1 << 2;
 /// Capability bitmask flag indicating Apple Metal simdgroup backend support.
 pub const GCSO_CAP_METAL_BACKEND: gcso_capability_flags_t = 1 << 3;
 
-/// Validates a C-ABI snapshot or descriptor version against the core version invariant (`0x00000101`).
+/// Validates a C-ABI snapshot or descriptor version against [`GCSO_ABI_VERSION_HEX`].
 ///
 /// # Errors
 /// Returns [`GCSO_ERROR_VERSION_MISMATCH`] if `version_hex != GCSO_ABI_VERSION_HEX`.
@@ -427,7 +441,7 @@ impl gcso_tagged_ptr_t {
 pub struct gcso_descriptor_header_t {
     /// Size of the enclosing descriptor structure in bytes.
     pub struct_size: u32,
-    /// ABI version bitmask (`0x00000101` for v0.1.1).
+    /// ABI version bitmask matching [`GCSO_ABI_VERSION_HEX`].
     pub abi_version: u32,
 }
 
@@ -651,7 +665,7 @@ pub struct gcso_rank1_residual_descriptor_t {
 pub struct gcso_snapshot_header_t {
     /// Format identifier magic constant (`0x4F534347` = ASCII `"GCSO"`).
     pub magic: u32,
-    /// Snapshot ABI version (`0x00000101` = v0.1.1).
+    /// Snapshot ABI version matching [`GCSO_ABI_VERSION_HEX`].
     pub version: u32,
     /// Total binary size of container payload in bytes.
     pub total_size: u64,
@@ -808,7 +822,8 @@ const _: () = {
     assert!(
         size_of::<gcso_liminal_ego_field_t>() == 64 && align_of::<gcso_liminal_ego_field_t>() == 64
     );
-    assert!(offset_of!(gcso_liminal_ego_field_t, counter_vortex_thrust_q7) == 40);
+    assert!(offset_of!(gcso_liminal_ego_field_t, counter_basin_thrust_q7) == 40);
+    assert!(offset_of!(gcso_liminal_ego_field_t, basin_escape_floor_q7) == 41);
     assert!(offset_of!(gcso_liminal_ego_field_t, trigger_mask) == 44);
     assert!(offset_of!(gcso_liminal_ego_field_t, ego_signature_hash) == 48);
     assert!(offset_of!(gcso_liminal_ego_field_t, last_intervened_mask) == 56);

@@ -1,4 +1,4 @@
-// name: src/core/src/entropy_control.rs
+// name: src/core/src/entropy_control/mod.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Entropy-Driven Decoding Branch Controller (EDBC) core engine implementation.

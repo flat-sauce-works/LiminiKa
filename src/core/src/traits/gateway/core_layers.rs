@@ -12,7 +12,7 @@
 //! - **Core Layer 1 ([`StigmergicGranuleField`], 32 B)**: Bottom-up 8-granule SWAR approximation,
 //!   Venn-overlap cooperative amplification, and noise-driven attractor nucleation.
 //! - **Core Layer 2 ([`LiminalEgoField`], 64 B)**: Top-down subjective agency perceiving Layer 0
-//!   horizons and Layer 1 attractor pulls simultaneously to exert counter-vortex orbital thrust,
+//!   horizons and Layer 1 attractor pulls simultaneously to exert counter-basin orbital thrust,
 //!   intentional horizon transgression, and non-greedy choice overrides.
 
 #![forbid(unsafe_code)]
@@ -424,14 +424,14 @@ impl LiminalBoundaryDelta {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LiminalEgoPreset {
-    /// Passive custom/zero baseline (no autonomous counter-vortex or transgressive override).
+    /// Passive custom/zero baseline (no autonomous counter-basin or transgressive override).
     #[default]
     Custom = 0,
-    /// Subtle individuality: gentle counter-vortex resistance and boundary stabilization.
+    /// Subtle individuality: gentle counter-basin resistance and boundary stabilization.
     Low = 1,
-    /// Balanced autonomous agency: orbital vortex resistance with measured curiosity across boundaries.
+    /// Balanced autonomous agency: orbital basin resistance with measured curiosity across boundaries.
     Medium = 2,
-    /// Strong willpower & autonomy: vigorous counter-vortex thrust and defiant boundary transgression.
+    /// Strong willpower & autonomy: vigorous counter-basin thrust and defiant boundary transgression.
     High = 3,
 }
 
@@ -902,8 +902,8 @@ impl EgoIntentAxes {
 /// Unlike passive attractor basins that pull queries inward toward fixed habits, `LiminalEgoField`
 /// perceives Layer 0 boundaries and Layer 1 attractor forces simultaneously and intervenes
 /// branchlessly to:
-/// - exert counter-vortex orbital thrust (`counter_vortex_thrust_q7`) when attractor pull
-///   exceeds `vortex_escape_floor_q7`, preventing collapse into static imitation;
+/// - exert counter-basin orbital thrust (`counter_basin_thrust_q7`) when attractor pull
+///   exceeds `basin_escape_floor_q7`, preventing collapse into static imitation;
 /// - cross or fortify `Liminal` horizons (`transgression_bias_q7`);
 /// - induce structured, non-greedy choice deviations (`irrational_defiance_q7`) and
 ///   override ActionHub execution presets under `trigger_mask`.
@@ -920,10 +920,10 @@ pub struct LiminalEgoField {
     pub slot_affinity_bias_q7: [i8; MAX_ATTRACTOR_DOMAINS],
     /// Per-granule autonomy weight (`0..=127`) scaling orbital/sovereign intervention (`offset 32..40`).
     pub granule_autonomy_q7: [u8; NUM_STIGMERGIC_GRANULES],
-    /// Counter-vortex orbital thrust strength (`0..=127`) resisting basin capture (`offset 40`).
-    pub counter_vortex_thrust_q7: u8,
-    /// Pull threshold in Q0.7 (`0..=127`) above which `EGO_TRIGGER_VORTEX_SWALLOW` fires (`offset 41`).
-    pub vortex_escape_floor_q7: u8,
+    /// Counter-basin orbital thrust strength (`0..=127`) resisting basin capture (`offset 40`).
+    pub counter_basin_thrust_q7: u8,
+    /// Pull threshold in Q0.7 (`0..=127`) above which `EGO_TRIGGER_BASIN_CAPTURE` fires (`offset 41`).
+    pub basin_escape_floor_q7: u8,
     /// Signed transgressive bias across `Liminal` horizons (`>0` explores outside, `<0` holds, `offset 42`).
     pub transgression_bias_q7: i8,
     /// Magnitude (`0..=127`) inducing non-greedy slot/mode defiance under conflict (`offset 43`).
@@ -964,8 +964,8 @@ impl LiminalEgoField {
             trait_gain_bias_q7: [0; NUM_LIMINAL_APERTURE_CHANNELS],
             slot_affinity_bias_q7: [0; MAX_ATTRACTOR_DOMAINS],
             granule_autonomy_q7: [0; NUM_STIGMERGIC_GRANULES],
-            counter_vortex_thrust_q7: 0,
-            vortex_escape_floor_q7: 127,
+            counter_basin_thrust_q7: 0,
+            basin_escape_floor_q7: 127,
             transgression_bias_q7: 0,
             irrational_defiance_q7: 0,
             trigger_mask: 0,
@@ -991,11 +991,11 @@ impl LiminalEgoField {
                 trait_gain_bias_q7: [0, 2, 4, 2, 2, 2, 4, 2],
                 slot_affinity_bias_q7: [4, 12, 0, 0, 6, 0, 0, 4],
                 granule_autonomy_q7: [24; NUM_STIGMERGIC_GRANULES],
-                counter_vortex_thrust_q7: 28,
-                vortex_escape_floor_q7: 88,
+                counter_basin_thrust_q7: 28,
+                basin_escape_floor_q7: 88,
                 transgression_bias_q7: 14,
                 irrational_defiance_q7: 18,
-                trigger_mask: EGO_TRIGGER_VORTEX_SWALLOW | EGO_TRIGGER_BOUNDARY_CHATTER,
+                trigger_mask: EGO_TRIGGER_BASIN_CAPTURE | EGO_TRIGGER_BOUNDARY_CHATTER,
                 forced_action_mode_or_mask: ACTION_MODE_DPSR_STEER,
                 suppressed_action_mode_mask: 0,
                 preset_code: LiminalEgoPreset::Low as u8,
@@ -1010,8 +1010,8 @@ impl LiminalEgoField {
                 trait_gain_bias_q7: [2, 6, 10, 4, 6, 4, 10, 4],
                 slot_affinity_bias_q7: [8, 28, 4, 4, 14, 4, 6, 10],
                 granule_autonomy_q7: [48; NUM_STIGMERGIC_GRANULES],
-                counter_vortex_thrust_q7: 60,
-                vortex_escape_floor_q7: 60,
+                counter_basin_thrust_q7: 60,
+                basin_escape_floor_q7: 60,
                 transgression_bias_q7: 38,
                 irrational_defiance_q7: 44,
                 trigger_mask: EGO_TRIGGER_ALL_DEFAULT,
@@ -1029,8 +1029,8 @@ impl LiminalEgoField {
                 trait_gain_bias_q7: [4, 8, 18, 6, 12, 8, 18, 8],
                 slot_affinity_bias_q7: [12, 52, -6, 16, 20, 10, 18, 28],
                 granule_autonomy_q7: [84; NUM_STIGMERGIC_GRANULES],
-                counter_vortex_thrust_q7: 96,
-                vortex_escape_floor_q7: 36,
+                counter_basin_thrust_q7: 96,
+                basin_escape_floor_q7: 36,
                 transgression_bias_q7: 72,
                 irrational_defiance_q7: 84,
                 trigger_mask: EGO_TRIGGER_ALL_DEFAULT,
@@ -1111,8 +1111,8 @@ impl LiminalEgoField {
 
         // Base activation + continuous axis projection (`0 fdiv`).
         let thrust_boost = ((aut_pos * 104 + dev_pos * 36) >> 7).clamp(0, 100);
-        self.counter_vortex_thrust_q7 = self
-            .counter_vortex_thrust_q7
+        self.counter_basin_thrust_q7 = self
+            .counter_basin_thrust_q7
             .max(24)
             .saturating_add(thrust_boost as u8)
             .min(127);
@@ -1120,11 +1120,11 @@ impl LiminalEgoField {
         let escape_drop = (aut_pos * 56 + trans_val.max(0) * 32) >> 7;
         let escape_lift = (log_pos * 24 + cau_pos * 32) >> 7;
         let base_escape = branchless_select_i32(
-            self.vortex_escape_floor_q7 == 127,
+            self.basin_escape_floor_q7 == 127,
             76,
-            i32::from(self.vortex_escape_floor_q7),
+            i32::from(self.basin_escape_floor_q7),
         );
-        self.vortex_escape_floor_q7 = (base_escape - escape_drop + escape_lift).clamp(24, 112) as u8;
+        self.basin_escape_floor_q7 = (base_escape - escape_drop + escape_lift).clamp(24, 112) as u8;
 
         let trans_delta = (trans_val * 108) >> 7;
         self.transgression_bias_q7 =
@@ -1213,7 +1213,7 @@ impl LiminalEgoField {
         }
 
         // Enable relevant triggers cleanly
-        let mut tmask = EGO_TRIGGER_VORTEX_SWALLOW | EGO_TRIGGER_LIMINAL_EXTERIOR;
+        let mut tmask = EGO_TRIGGER_BASIN_CAPTURE | EGO_TRIGGER_LIMINAL_EXTERIOR;
         tmask |= branchless_select_u8(
             (aut_pos > 16) | (dev_pos > 16) | (def_pos > 24),
             EGO_TRIGGER_INTERNAL_CONFLICT,
@@ -1266,7 +1266,7 @@ impl LiminalEgoField {
             gran_mask = 0xFF;
         }
         EgoIntentAxes {
-            autonomy_q7: self.counter_vortex_thrust_q7 as i8,
+            autonomy_q7: self.counter_basin_thrust_q7 as i8,
             transgression_q7: self.transgression_bias_q7,
             devotion_q7: self.slot_affinity_bias_q7[ATTRACTOR_SLOT_PERSONA as usize],
             logic_q7: self.slot_affinity_bias_q7[ATTRACTOR_SLOT_KNOWLEDGE as usize],
@@ -1327,9 +1327,9 @@ impl LiminalEgoField {
         let pull_q7 =
             branchless_clamp_f32(branchless_relu_f32(frame.effective_energy) * 16.0, 0.0, 127.0)
                 as u8;
-        let t_vortex = ((self.trigger_mask & EGO_TRIGGER_VORTEX_SWALLOW) != 0)
-            & (pull_q7 >= self.vortex_escape_floor_q7)
-            & (self.counter_vortex_thrust_q7 > 0);
+        let t_basin = ((self.trigger_mask & EGO_TRIGGER_BASIN_CAPTURE) != 0)
+            & (pull_q7 >= self.basin_escape_floor_q7)
+            & (self.counter_basin_thrust_q7 > 0);
         let t_conflict =
             ((self.trigger_mask & EGO_TRIGGER_INTERNAL_CONFLICT) != 0) & horizon.is_internal_conflict();
         let t_liminal = ((self.trigger_mask & EGO_TRIGGER_LIMINAL_EXTERIOR) != 0)
@@ -1339,14 +1339,14 @@ impl LiminalEgoField {
         let t_stagnate = ((self.trigger_mask & EGO_TRIGGER_BOUNDARY_STAGNATION) != 0)
             & (delta.stationary_shortcut_ready != 0);
 
-        let fired_mask = branchless_select_u8(t_vortex, EGO_TRIGGER_VORTEX_SWALLOW, 0)
+        let fired_mask = branchless_select_u8(t_basin, EGO_TRIGGER_BASIN_CAPTURE, 0)
             | branchless_select_u8(t_conflict, EGO_TRIGGER_INTERNAL_CONFLICT, 0)
             | branchless_select_u8(t_liminal, EGO_TRIGGER_LIMINAL_EXTERIOR, 0)
             | branchless_select_u8(t_chatter, EGO_TRIGGER_BOUNDARY_CHATTER, 0)
             | branchless_select_u8(t_stagnate, EGO_TRIGGER_BOUNDARY_STAGNATION, 0);
         let any_fired = fired_mask != 0;
 
-        // Modulate GatewayFrame phases with counter-vortex orbital thrust / transgressive leap
+        // Modulate GatewayFrame phases with counter-basin orbital thrust / transgressive leap
         let scale_to_word = |q7: gcso_q7_t, w_u8: u8| -> u64 {
             let scaled_i32 = (i32::from(q7) * i32::from(w_u8.min(128))) >> 7;
             let clamped_i8 = scaled_i32.clamp(-128, 127) as i8;
@@ -1356,8 +1356,8 @@ impl LiminalEgoField {
         let trans_pos = self.transgression_bias_q7 > 0;
         let trans_abs = self.transgression_bias_q7.unsigned_abs();
         let strong_trans = t_liminal & trans_pos & (trans_abs >= 20);
-        let apply_phase_override = t_vortex | t_stagnate | strong_trans;
-        let thrust_q7 = self.counter_vortex_thrust_q7.min(127);
+        let apply_phase_override = t_basin | t_stagnate | strong_trans;
+        let thrust_q7 = self.counter_basin_thrust_q7.min(127);
         {
             let pw = frame.phase_words_mut();
             let mut cell = 0usize;
@@ -1370,15 +1370,15 @@ impl LiminalEgoField {
                 // Antipodal pi-radian SO(2) flip (`^ SWAR_SIGN_MASK_64`) blended with sovereign heading.
                 let flipped_w = w ^ SWAR_SIGN_MASK_64;
                 let counter_dir = swar_q7_avg_round_x8(flipped_w, sov_word);
-                let vortex_orbited = branchless_select_u64(
+                let basin_orbited = branchless_select_u64(
                     thrust_q7 >= 64,
                     counter_dir,
                     swar_q7_avg_round_x8(w, sov_word),
                 );
                 let trans_dir = swar_q7_avg_round_x8(w, sov_word);
                 let next_w = branchless_select_u64(
-                    t_vortex,
-                    vortex_orbited,
+                    t_basin,
+                    basin_orbited,
                     branchless_select_u64(strong_trans | t_stagnate, trans_dir, w),
                 );
                 pw[cell] = branchless_select_u64(apply_phase_override, next_w, w);
@@ -1409,7 +1409,7 @@ impl LiminalEgoField {
             best_slot = branchless_select_u8(take_s, s_idx as u8, best_slot);
             s_idx += 1;
         }
-        let defy_slot = (t_conflict | t_vortex | strong_trans)
+        let defy_slot = (t_conflict | t_basin | strong_trans)
             & (self.irrational_defiance_q7 >= 32)
             & (best_aff > 0);
         frame.dominant_slot = branchless_select_u8(defy_slot, best_slot, frame.dominant_slot);
@@ -1430,7 +1430,7 @@ impl LiminalEgoField {
 
     /// Branchlessly evaluates active Ego triggers directly across Core Layer 0 (`liminal_layer`),
     /// Core Layer 1 (`stigmergic_layer`), temporal velocity (`delta`), and `venn`, updating both
-    /// sub-layers and injecting counter-vortex orbital thrust or transgressive phase steering into `frame`.
+    /// sub-layers and injecting counter-basin orbital thrust or transgressive phase steering into `frame`.
     #[inline]
     #[must_use]
     pub fn intervene_on_sublayers_and_frame_branchless(

@@ -1,4 +1,4 @@
-// src/kernels/metal/metal_kernel.mm
+// name: src/kernels/metal/metal_kernel.mm
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 #include "liminika/gcso_abi.h"

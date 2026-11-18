@@ -514,7 +514,7 @@ impl GcsoDualTrackTimeline {
                 record.energy,
             )?;
         }
-        rebaked_corpus.fit_common_mode_projection();
+        rebaked_corpus.fit_common_mode_subspace(3);
 
         let mut rebaked_timeline = Self::new(target_fp);
         let mut frames_since_keyframe = 0_usize;

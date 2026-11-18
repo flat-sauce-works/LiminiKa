@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 cmake_minimum_required(VERSION 3.18)
-project(LiminiKa VERSION 0.1.1 LANGUAGES C CXX)
+project(LiminiKa VERSION 0.1.2 LANGUAGES C CXX)
 
 # Enforce C11 and C++20 specifications for GCSO C-ABI and Kernel execution
 set(CMAKE_C_STANDARD 11)
@@ -112,9 +112,8 @@ if(NOT TARGET liminika_headers)
     endif()
 endif()
 
-# Enable CTest and register baseline C-ABI test target
+# Enable CTest (tests are registered in tests/CMakeLists.txt)
 enable_testing()
-add_test(NAME liminika_dummy_test COMMAND ${CMAKE_COMMAND} -E true)
 
 # Include kernels subdirectory if CMakeLists.txt exists
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/CMakeLists.txt")

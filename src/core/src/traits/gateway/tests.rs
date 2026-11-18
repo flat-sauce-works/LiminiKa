@@ -169,11 +169,12 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     let reports_arr = [f1.to_causal_report(), f2.to_causal_report()];
     let trails_arr = [query_trail];
     let mut container_buf = AlignedBuffer128::<u8, 1024>::new([0u8; 1024]);
-    let no_rep_len = GcsoFourSectionView::write_four_section_container_to_bytes(
+    let no_rep_len = GcsoFourSectionView::write_four_section_with_reports_to_bytes(
         &centroids[..2],
         &trails_arr,
         Some(&bloom),
         Some(&ledger),
+        &[],
         1_774_900_000,
         &mut container_buf.data,
     )
@@ -362,20 +363,34 @@ fn test_multi_scale_layer_cascade_and_cognitive_trajectory_circuit() {
         0
     );
 
-    // 2. Verify recursive LayeredScalePair & tuple/array StigmergicScaleLayer scaling (N = 1, 2, 3).
+    // 2. Verify tuple & array StigmergicScaleLayer scaling (N = 1, 2, 3).
     let l0 = ScaleLayerNode::new(fact, StigmergicScaleGranularity::MacroCoalition);
     let l1 = ScaleLayerNode::new(
         SubjectivePersona::new([16i8; MAX_ATTENTION_HEADS], 1.5, 0x0020_0000, 202),
         StigmergicScaleGranularity::CellTrail,
     );
     let l2 = ScaleLayerNode::new(peel_heavy, StigmergicScaleGranularity::PointerBit);
-    let tuple_stack = LayeredScalePair(LayeredScalePair(&l0, &l1), &l2);
+    let tuple_stack = (l0.signal, l1.signal);
+    let array_stack = [
+        ScaleLayerNode::new(
+            fact.synthesize_gateway_frame(),
+            StigmergicScaleGranularity::MacroCoalition,
+        ),
+        ScaleLayerNode::new(
+            l1.signal.synthesize_gateway_frame(),
+            StigmergicScaleGranularity::CellTrail,
+        ),
+        ScaleLayerNode::new(
+            l2.signal.synthesize_gateway_frame(),
+            StigmergicScaleGranularity::PointerBit,
+        ),
+    ];
     assert_eq!(l0.layer_count(), 1);
-    assert_eq!(LayeredScalePair(&l0, &l1).layer_count(), 2);
-    assert_eq!(tuple_stack.layer_count(), 3);
+    assert_eq!(tuple_stack.layer_count(), 2);
+    assert_eq!(array_stack.layer_count(), 3);
 
     let proj_1 = l0.project_scale_layer(&input_words, &peel_heavy, 0, 1);
-    let proj_3 = tuple_stack.project_scale_layer(&input_words, &peel_heavy, 0, 3);
+    let proj_3 = array_stack.project_scale_layer(&input_words, &peel_heavy, 0, 3);
     assert_eq!(proj_1.total_layers, 1);
     assert_eq!(proj_3.total_layers, 3);
     // Additional layers peel more signal energy, changing the unpeeled residual field.
@@ -965,9 +980,10 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
         SubjectivePersona::new([18i8; MAX_ATTENTION_HEADS], 1.5, 0, 2),
     );
     let (mod_frame, _, _) = hub
-        .orchestrate_gateway_layer_with_policy_and_scale_safe(
+        .orchestrate_gateway_layer_with_core_layers_safe(
             &sig,
             &geom,
+            None,
             &policy,
             &sys,
             &probe,
@@ -1006,9 +1022,10 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     peel_ledger.write_to_ledger_slot(&mut peel_hub_slot);
     let mut peel_trail = fixed_trail;
     let (_, _, dec_peel) = hub
-        .orchestrate_gateway_layer_with_policy_and_scale_safe(
+        .orchestrate_gateway_layer_with_core_layers_safe(
             &sig,
             &geom,
+            None,
             &policy,
             &sys,
             &probe,
@@ -1027,9 +1044,10 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     fuse_ledger.write_to_ledger_slot(&mut fuse_hub_slot);
     let mut fuse_trail = fixed_trail;
     let (_, _, dec_fuse) = hub
-        .orchestrate_gateway_layer_with_policy_and_scale_safe(
+        .orchestrate_gateway_layer_with_core_layers_safe(
             &sig,
             &geom,
+            None,
             &policy,
             &sys,
             &probe,
@@ -1350,8 +1368,11 @@ fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
 
     // 4. Verify zero-alloc #![no_std] Mermaid flowchart generation captures live state cleanly.
     let snap = LiminalTopologyTelemetrySnapshot::capture(&field, &conflict_horizon, 4, 1);
+    let mut stack = AutonomousCoreLayerStack::new();
+    stack.liminal_layer = field;
+    let empty_venn = StigmergicVennSerendipityReport::default();
     let mut buf = [0u8; 2048];
-    let len = snap.format_mermaid_flowchart(&mut buf);
+    let len = snap.format_three_core_layers_mermaid(&stack, &empty_venn, &mut buf);
     let diagram = core::str::from_utf8(&buf[..len]).expect("valid utf8 mermaid");
     assert!(diagram.starts_with("flowchart TD\n"));
     assert!(diagram.contains("Liminal"));
@@ -1539,10 +1560,10 @@ fn stigmergic_venn_overlap_serendipity_and_core_layer_stack_feedback() {
     // Granule 6 is no longer in the void exterior because Crystal 2 now covers it!
     assert_eq!(post_venn.void_exterior_mask & (1 << 6), 0);
 
-    // Verify zero-alloc Core Layer 0 + Layer 1 Mermaid output
+    // Verify zero-alloc Core Layer 0 + Layer 1 + Layer 2 Mermaid output
     let snap = LiminalTopologyTelemetrySnapshot::capture(&stack.liminal_layer, &horizon, 3, 1);
     let mut mermaid_buf = [0u8; 2048];
-    let len = snap.format_core_layers_mermaid(&stack.stigmergic_layer, &venn, &mut mermaid_buf);
+    let len = snap.format_three_core_layers_mermaid(&stack, &venn, &mut mermaid_buf);
     let txt = core::str::from_utf8(&mermaid_buf[..len]).expect("valid utf8 mermaid");
     assert!(txt.contains("Core Layer 0: Liminal"));
     assert!(txt.contains("Core Layer 1: StigmergicGranuleField"));
@@ -1596,9 +1617,9 @@ fn liminal_boundary_delta_and_ego_field_interventions() {
     let ego_low = LiminalEgoField::from_preset(LiminalEgoPreset::Low);
     let ego_med = LiminalEgoField::from_preset(LiminalEgoPreset::Medium);
     let ego_high = LiminalEgoField::from_preset(LiminalEgoPreset::High);
-    assert!(ego_low.counter_vortex_thrust_q7 < ego_med.counter_vortex_thrust_q7);
-    assert!(ego_med.counter_vortex_thrust_q7 < ego_high.counter_vortex_thrust_q7);
-    assert!(ego_low.vortex_escape_floor_q7 > ego_high.vortex_escape_floor_q7);
+    assert!(ego_low.counter_basin_thrust_q7 < ego_med.counter_basin_thrust_q7);
+    assert!(ego_med.counter_basin_thrust_q7 < ego_high.counter_basin_thrust_q7);
+    assert!(ego_low.basin_escape_floor_q7 > ego_high.basin_escape_floor_q7);
 
     assert!(!LiminalEgoField::from_natural_language("   ").is_active());
 
@@ -1610,16 +1631,16 @@ fn liminal_boundary_delta_and_ego_field_interventions() {
         .with_natural_language_overlay("Passionate creative explorer who transcends the unknown");
     let ego_symbolic = LiminalEgoField::from_natural_language("@persona_profile_01");
     assert!(ego_rebel.is_active());
-    assert!(ego_rebel.counter_vortex_thrust_q7 > ego_calm.counter_vortex_thrust_q7);
+    assert!(ego_rebel.counter_basin_thrust_q7 > ego_calm.counter_basin_thrust_q7);
     assert!(ego_rebel.transgression_bias_q7 > ego_calm.transgression_bias_q7);
     assert!(ego_overlay.is_active());
     assert!(ego_overlay.transgression_bias_q7 > ego_med.transgression_bias_q7);
-    assert!(ego_overlay.counter_vortex_thrust_q7 > ego_med.counter_vortex_thrust_q7);
+    assert!(ego_overlay.counter_basin_thrust_q7 > ego_med.counter_basin_thrust_q7);
     assert!(ego_symbolic.is_active());
     assert_ne!(ego_symbolic.ego_signature_hash, 0);
-    assert!(ego_symbolic.counter_vortex_thrust_q7 >= 24);
+    assert!(ego_symbolic.counter_basin_thrust_q7 >= 24);
 
-    // 3. Counter-vortex orbital thrust & transgressive Liminal leap on GatewayFrame + Core Layers
+    // 3. Counter-basin orbital thrust & transgressive Liminal leap on GatewayFrame + Core Layers
     let mut stack = AutonomousCoreLayerStack::new();
     let venn = StigmergicVennSerendipityReport {
         venn_core_mask: 0x0F,
@@ -1634,11 +1655,11 @@ fn liminal_boundary_delta_and_ego_field_interventions() {
         regime_code: EpistemicRegime::KnownCoherent as u8,
         ..Default::default()
     };
-    let mut vortex_frame = GatewayFrame {
+    let mut basin_frame = GatewayFrame {
         effective_energy: 8.0,
         ..Default::default()
     };
-    *vortex_frame.phase_words_mut() = [0x2424_2424_2424_2424u64; NUM_STIGMERGIC_GRANULES];
+    *basin_frame.phase_words_mut() = [0x2424_2424_2424_2424u64; NUM_STIGMERGIC_GRANULES];
 
     let before_floor2 = stack.liminal_layer.void_floor_q7[2];
     let out_orbit = ego_rebel.intervene_on_layers_and_frame_branchless(
@@ -1646,13 +1667,13 @@ fn liminal_boundary_delta_and_ego_field_interventions() {
         &delta1,
         &strong_capture_horizon,
         &venn,
-        vortex_frame,
+        basin_frame,
     );
     assert_ne!(
-        ego_rebel.last_intervened_mask & EGO_TRIGGER_VORTEX_SWALLOW,
+        ego_rebel.last_intervened_mask & EGO_TRIGGER_BASIN_CAPTURE,
         0
     );
-    assert_ne!(out_orbit.phase_words_ref(), vortex_frame.phase_words_ref());
+    assert_ne!(out_orbit.phase_words_ref(), basin_frame.phase_words_ref());
     assert!(stack.liminal_layer.void_floor_q7[2] <= before_floor2);
 
     // Zero-gated Liminal exterior -> transgressive rebel dares step beyond rather than silence
@@ -1708,7 +1729,7 @@ fn ego_intent_axes_blending_and_three_layer_core_stack() {
 
     let ego_from_axes = LiminalEgoField::from_intent_axes(&bold_axes);
     assert!(ego_from_axes.is_active());
-    assert!(ego_from_axes.counter_vortex_thrust_q7 >= 60);
+    assert!(ego_from_axes.counter_basin_thrust_q7 >= 60);
     assert!(ego_from_axes.transgression_bias_q7 > 0);
     let roundtrip = ego_from_axes.extract_intent_axes();
     assert!(roundtrip.is_active());
@@ -1788,8 +1809,8 @@ fn dynamic_trait_aperture_routing_and_fragmented_micro_ensemble() {
             .with_active_granule_bias_mask(0x0F),
     );
     split_stack.ego_layer.granule_autonomy_q7 = [88, 88, 88, 88, 0, 0, 0, 0];
-    split_stack.ego_layer.trigger_mask = EGO_TRIGGER_VORTEX_SWALLOW;
-    split_stack.ego_layer.vortex_escape_floor_q7 = 127; // keep slot routing clean for direct check
+    split_stack.ego_layer.trigger_mask = EGO_TRIGGER_BASIN_CAPTURE;
+    split_stack.ego_layer.basin_escape_floor_q7 = 127; // keep slot routing clean for direct check
     let (m_fact, _, _) = fact.resolve_dynamic_core_aperture(&split_stack);
     let (m_pers, _, _) = persona.resolve_dynamic_core_aperture(&split_stack);
     assert_eq!(m_fact, 0xF0);

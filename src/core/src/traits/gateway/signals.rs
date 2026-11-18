@@ -57,7 +57,7 @@ pub const DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO: f32 = 0.55;
 
 /// Magic identifier (`0x4C545343` = ASCII `"CSTL"`) for `.gcso` [`CrystallizedAttractorRecord`] blocks.
 pub const GCSO_CRYSTAL_RECORD_MAGIC: u32 = 0x4C54_5343;
-/// Version constant for [`CrystallizedAttractorRecord`] binary serialization (`0x0000_0101` = v0.1.1).
+/// Version constant for [`CrystallizedAttractorRecord`] binary serialization ([`GCSO_ABI_VERSION_HEX`]).
 pub const GCSO_CRYSTAL_RECORD_VERSION: u32 = GCSO_ABI_VERSION_HEX;
 /// Fixed byte length (`192` bytes = `128B` `gcso_snapshot_header_t` + `64B` `gcso_mapped_storage_descriptor_t`) of Section 0.
 pub const GCSO_FOUR_SECTION_HEADER_BYTES: usize = 192;

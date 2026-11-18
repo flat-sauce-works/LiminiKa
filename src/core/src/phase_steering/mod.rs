@@ -1,4 +1,4 @@
-// name: src/core/src/phase_steering.rs
+// name: src/core/src/phase_steering/mod.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Dynamic Phase-Shifted RoPE (DPSR), RIPA soft-clamping, 8-lane SWAR QDPS, and

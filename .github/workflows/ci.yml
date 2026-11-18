@@ -65,12 +65,19 @@ jobs:
           fi
 
       - name: Format Rust codebase
-        run: cargo fmt --all
+        run: |
+          cargo fmt --all
+          if [ -f "examples/candle_eval/Cargo.toml" ]; then
+            cargo fmt --manifest-path examples/candle_eval/Cargo.toml
+          fi
 
       - name: Sync Cargo.lock with Cargo.toml
         run: |
           if [ -f "Cargo.toml" ]; then
-            cargo update --workspace --offline 2>/dev/null || cargo generate-lockfile 2>/dev/null || true
+            cargo update --workspace --offline 2>/dev/null || true
+          fi
+          if [ -f "examples/candle_eval/Cargo.toml" ]; then
+            cargo update --manifest-path examples/candle_eval/Cargo.toml --workspace --offline 2>/dev/null || true
           fi
 
       - name: Format C/C++ & GPU Kernel codebase
@@ -258,33 +265,107 @@ jobs:
           fi
           echo "No non-permissive license keywords detected."
 
-      - name: Verify SPDX License Headers in Source Files
+      - name: Verify Mandatory Two-Line File Headers & SPDX Compliance
         run: |
-          echo "Checking SPDX License Headers in non-empty source files..."
-          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \) )
-          SLASH_FILES=$(find . "${EXCLUDE_ARGS[@]}" -prune -o \( \
-            -name "*.rs" -o -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
-            -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.mm" -o \
-            -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
-            -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o -name "*.hip" -o -name "*.cl" -o \
-            -name "*.h" -o -name "*.hpp" -o -name "*.inl" \
-          \) -type f -size +0c ! -name ".gitkeep" -exec grep -L "SPDX-License-Identifier: MIT OR Apache-2.0" {} + 2>/dev/null || true)
+          python3 - << 'PY'
+          import pathlib
+          import sys
 
-          HASH_FILES=$(find . "${EXCLUDE_ARGS[@]}" -prune -o \( \
-            -name "*.py" -o -name "*.lmnk" -o -name "*.sh" -o -name "CMakeLists.txt" -o -name "*.cmake" -o \
-            -name "*.yml" -o -name "*.yaml" \
-          \) -type f -size +0c ! -name ".gitkeep" -exec grep -L "SPDX-License-Identifier: MIT OR Apache-2.0" {} + 2>/dev/null || true)
+          exclude = {
+              "target", "build", "cmake-build", "_build", ".git", ".cargo",
+              ".venv", "node_modules", "vendor", "third_party", "3rdparty",
+              "__pycache__", ".cache", "models",
+          }
+          slash_exts = {
+              ".rs", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".inl",
+              ".cu", ".cuh", ".metal", ".mm", ".comp", ".vert", ".frag",
+              ".glsl", ".hlsl", ".wgsl", ".slang", ".hip", ".cl", ".lmnk",
+          }
+          hash_exts = {".py", ".sh", ".cmake", ".yml", ".yaml"}
+          hash_names = {"Cargo.toml", "CMakeLists.txt", "deny.toml"}
 
-          MISSING_FILES=""
-          if [ -n "$SLASH_FILES" ]; then MISSING_FILES="$SLASH_FILES"; fi
-          if [ -n "$HASH_FILES" ]; then MISSING_FILES="$(printf "%s\n%s" "$MISSING_FILES" "$HASH_FILES" | sed '/^$/d')"; fi
+          missing_header = []
+          missing_spdx = []
 
-          if [ -n "$MISSING_FILES" ]; then
-            echo "Error: The following non-empty source files are missing valid SPDX license headers:"
-            echo "$MISSING_FILES"
-            exit 1
-          fi
-          echo "All non-empty source files contain valid SPDX headers."
+          for p in sorted(pathlib.Path(".").rglob("*")):
+              if not p.is_file() or any(part in exclude or part.startswith("build-") or part.startswith("cmake-build") for part in p.parts):
+                  continue
+              if p.name == ".gitkeep" or p.stat().st_size == 0:
+                  continue
+              if p.suffix in slash_exts:
+                  prefix = "//"
+              elif p.suffix in hash_exts or p.name in hash_names:
+                  prefix = "#"
+              else:
+                  continue
+
+              lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+              rel = p.as_posix()
+              expected_line1 = f"{prefix} name: {rel}"
+              if not lines or lines[0].rstrip() != expected_line1:
+                  missing_header.append(f"{rel} (got {lines[0]!r}, expected {expected_line1!r})" if lines else rel)
+              if len(lines) < 2 or "SPDX-License-Identifier: MIT OR Apache-2.0" not in lines[1]:
+                  missing_spdx.append(rel)
+
+          if missing_header or missing_spdx:
+              if missing_header:
+                  print("Error: Missing or mismatched line-1 file header:", *missing_header, sep="\n  ")
+              if missing_spdx:
+                  print("Error: Missing SPDX header on line 2:", *missing_spdx, sep="\n  ")
+              sys.exit(1)
+          print("All source and config files passed two-line header and SPDX checks.")
+          PY
+
+      - name: Verify Cross-File Version & C-ABI Constant Parity
+        run: |
+          python3 - << 'PY'
+          import pathlib
+          import re
+          import sys
+
+          def read(path):
+              return pathlib.Path(path).read_text(encoding="utf-8")
+
+          root_ver_m = re.search(r'(?m)^version\s*=\s*"([^"]+)"', read("Cargo.toml"))
+          candle_ver_m = re.search(r'(?m)^version\s*=\s*"([^"]+)"', read("examples/candle_eval/Cargo.toml"))
+          root_cmake_m = re.search(r'project\(LiminiKa\s+VERSION\s+(\d+\.\d+\.\d+)', read("CMakeLists.txt"))
+          kern_cmake_m = re.search(r'project\(liminika_kernels\s+VERSION\s+(\d+\.\d+\.\d+)', read("src/kernels/CMakeLists.txt"))
+
+          abi_h = read("include/liminika/gcso_abi.h")
+          c_maj = int(re.search(r'#define\s+GCSO_ABI_VERSION_MAJOR\s+(\d+)U', abi_h).group(1))
+          c_min = int(re.search(r'#define\s+GCSO_ABI_VERSION_MINOR\s+(\d+)U', abi_h).group(1))
+          c_pat = int(re.search(r'#define\s+GCSO_ABI_VERSION_PATCH\s+(\d+)U', abi_h).group(1))
+          c_str = re.search(r'#define\s+GCSO_ABI_VERSION_STRING\s+"([^"]+)"', abi_h).group(1)
+
+          types_h = read("include/liminika/gcso_types.h")
+          c_crystal_hex = int(re.search(r'#define\s+GCSO_CRYSTAL_RECORD_VERSION\s+(0x[0-9A-Fa-f]+)U?', types_h).group(1), 16)
+
+          types_rs = read("src/core/src/abi/types.rs")
+          r_maj = int(re.search(r'pub\s+const\s+GCSO_ABI_VERSION_MAJOR:\s*u32\s*=\s*(\d+)', types_rs).group(1))
+          r_min = int(re.search(r'pub\s+const\s+GCSO_ABI_VERSION_MINOR:\s*u32\s*=\s*(\d+)', types_rs).group(1))
+          r_pat = int(re.search(r'pub\s+const\s+GCSO_ABI_VERSION_PATCH:\s*u32\s*=\s*(\d+)', types_rs).group(1))
+          r_cstr = re.search(r'pub\s+const\s+GCSO_ABI_VERSION_CSTR:[^=]*=\s*c"([^"]+)"', types_rs).group(1)
+
+          ver = root_ver_m.group(1)
+          parts = tuple(int(x) for x in ver.split("."))
+          expected_hex = (parts[0] << 16) | (parts[1] << 8) | parts[2]
+
+          checks = [
+              ("examples/candle_eval/Cargo.toml", candle_ver_m.group(1) == ver),
+              ("CMakeLists.txt", root_cmake_m.group(1) == ver),
+              ("src/kernels/CMakeLists.txt", kern_cmake_m.group(1) == ver),
+              ("gcso_abi.h tuple", (c_maj, c_min, c_pat) == parts),
+              ("gcso_abi.h string", c_str == ver),
+              ("gcso_types.h crystal hex", c_crystal_hex == expected_hex),
+              ("abi/types.rs tuple", (r_maj, r_min, r_pat) == parts),
+              ("abi/types.rs cstr", r_cstr == ver),
+          ]
+          failed = [name for name, ok in checks if not ok]
+          if failed:
+              print("Version parity check failed:", failed)
+              sys.exit(1)
+          print(f"All manifests, C headers, CMake files, and Rust ABI constants match version {ver} ({hex(expected_hex)}).")
+          PY
 
   # =========================================================================
   # 4. C/C++ & GPU KERNELS BUILD MATRIX
@@ -345,29 +426,43 @@ jobs:
           key: ${{ runner.os }}-cpp-${{ github.sha }}
           restore-keys: ${{ runner.os }}-cpp-
 
-      - name: Verify C-ABI Header Self-Containment & Layout Static Assertions (C11 & C++20)
-        if: runner.os == 'Linux'
+      - name: Verify C-ABI Header Self-Containment & Layout Static Assertions (Unix C11 & C++20)
+        if: runner.os != 'Windows'
         run: |
           echo "Checking C-ABI headers self-containment in include directory..."
-          if [ -d "include" ]; then
-            HEADERS=$(find include -type f \( -name "*.h" -o -name "*.hpp" \) -size +0c 2>/dev/null || true)
-            if [ -n "$HEADERS" ]; then
-              C_CC=$(command -v clang || command -v clang-21 || command -v clang-20 || command -v clang-19 || command -v clang-18 || command -v gcc)
-              CXX_CC=$(command -v clang++ || command -v clang++-21 || command -v clang++-20 || command -v clang++-19 || command -v clang++-18 || command -v g++)
-              for header in $HEADERS; do
-                if [[ "$header" == *.h ]]; then
-                  echo "Validating strict C11 inclusion for $header with $C_CC..."
-                  "$C_CC" -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -fsyntax-only -x c "$header"
-                fi
-                echo "Validating strict C++20 inclusion for $header with $CXX_CC..."
-                "$CXX_CC" -std=c++20 -Wall -Wextra -Wpedantic -Werror -Iinclude -fsyntax-only -x c++ "$header"
-              done
-            else
-              echo "No non-empty header files found under include."
-            fi
-          else
-            echo "Directory include does not exist yet."
+          HEADERS=$(find include -type f \( -name "*.h" -o -name "*.hpp" \) -size +0c | sort)
+          if [ -z "$HEADERS" ]; then
+            echo "Error: No headers found under include/"
+            exit 1
           fi
+          C_CC=$(command -v clang || command -v clang-21 || command -v clang-20 || command -v clang-19 || command -v clang-18 || command -v gcc)
+          CXX_CC=$(command -v clang++ || command -v clang++-21 || command -v clang++-20 || command -v clang++-19 || command -v clang++-18 || command -v g++)
+          for header in $HEADERS; do
+            if [[ "$header" == *.h ]]; then
+              echo "Validating strict C11 inclusion for $header with $C_CC..."
+              "$C_CC" -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -fsyntax-only -x c "$header"
+            fi
+            echo "Validating strict C++20 inclusion for $header with $CXX_CC..."
+            "$CXX_CC" -std=c++20 -Wall -Wextra -Wpedantic -Werror -Iinclude -fsyntax-only -x c++ "$header"
+          done
+
+      - name: Verify C-ABI Header Self-Containment & Layout Static Assertions (Windows C11 & C++20)
+        if: runner.os == 'Windows'
+        run: |
+          echo "Checking C-ABI headers self-containment in include directory with MSVC..."
+          HEADERS=$(find include -type f \( -name "*.h" -o -name "*.hpp" \) -size +0c | sort)
+          if [ -z "$HEADERS" ]; then
+            echo "Error: No headers found under include/"
+            exit 1
+          fi
+          for header in $HEADERS; do
+            if [[ "$header" == *.h ]]; then
+              echo "Validating strict C11 inclusion for $header with cl.exe..."
+              MSYS2_ARG_CONV_EXCL='*' cl.exe /nologo /Zs /std:c11 /TC /W4 /WX /wd4324 /utf-8 /Zc:preprocessor /Iinclude "$header"
+            fi
+            echo "Validating strict C++20 inclusion for $header with cl.exe..."
+            MSYS2_ARG_CONV_EXCL='*' cl.exe /nologo /Zs /std:c++20 /TP /W4 /WX /wd4324 /permissive- /utf-8 /Zc:preprocessor /Iinclude "$header"
+          done
 
       - name: Configure CMake (Linux with Vulkan & AVX2 enabled)
         if: runner.os == 'Linux'
@@ -436,14 +531,25 @@ jobs:
 
       - name: Run C/C++ unit tests
         run: |
-          if [ -d "build" ]; then
-            if [ "$RUNNER_OS" != "Windows" ]; then
-              ulimit -s 16384 || true
-            fi
-            ctest --test-dir build --output-on-failure --no-tests=ignore
-          else
-            echo "Build directory does not exist; skipping test execution."
+          if [ "$RUNNER_OS" != "Windows" ]; then
+            ulimit -s 16384 || true
           fi
+          ctest --test-dir build --output-on-failure --no-tests=error
+
+      - name: Build & Run C/C++ Smoke Tests with ASan + UBSan (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cmake -B build-asan -S . -GNinja \
+            -DLIMINIKA_ENABLE_AVX2=ON \
+            -DLIMINIKA_ENABLE_CUDA=OFF \
+            -DLIMINIKA_ENABLE_VULKAN=OFF \
+            -DLIMINIKA_ENABLE_METAL=OFF \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          cmake --build build-asan --target liminika_c_abi_smoke_test --parallel
+          ulimit -s 16384 || true
+          ctest --test-dir build-asan --output-on-failure --no-tests=error -R liminika_c_abi_smoke_test
 
   # =========================================================================
   # 5. RUST WORKSPACE CHECK & TEST MATRIX
@@ -522,48 +628,48 @@ jobs:
             echo "LIMINIKA_ENABLE_VULKAN=0" >> "$GITHUB_ENV"
           fi
 
-      - name: Run cargo clippy (no_std, default, and all-features)
+      - name: Run cargo check/clippy (no_std core, default, and all-features)
         run: |
-          if [ -f "Cargo.toml" ]; then
-            CARGO_FLAGS=""
-            if cargo metadata --format-version 1 --locked >/dev/null 2>&1; then
-              CARGO_FLAGS="--locked"
-            else
-              echo "Warning: Cargo.lock is out of sync with Cargo.toml. Running without --locked..."
-            fi
-            cargo clippy --workspace --all-targets --no-default-features $CARGO_FLAGS -- -D warnings
-            cargo clippy --workspace --all-targets $CARGO_FLAGS -- -D warnings
-            cargo clippy --workspace --all-targets --all-features $CARGO_FLAGS -- -D warnings
-          else
-            echo "No root Cargo.toml found; skipping cargo clippy."
-          fi
+          cargo metadata --format-version 1 --locked >/dev/null
+          cargo rustc --locked -p liminika-core --no-default-features --lib --crate-type rlib -- -D warnings
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: Check & test standalone examples/candle_eval crate
+        run: |
+          cargo clippy --locked --manifest-path examples/candle_eval/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path examples/candle_eval/Cargo.toml
 
       - name: Run cargo clippy & AVX2/FMA SIMD verification (x86_64 Linux)
         if: runner.os == 'Linux'
         env:
           RUSTFLAGS: "-C target-feature=+avx2,+fma"
         run: |
-          if [ -f "Cargo.toml" ]; then
-            ulimit -s 16384 || true
-            cargo clippy --workspace --all-targets --all-features -- -D warnings
-            cargo nextest run --workspace --lib --bins --tests --all-features
-          fi
+          ulimit -s 16384 || true
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo nextest run --locked --workspace --lib --bins --tests --all-features
 
       - name: Check Rust documentation integrity (Ubuntu only)
-        if: runner.os == 'Linux' && hashFiles('Cargo.toml') != ''
+        if: runner.os == 'Linux'
         env:
           RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --workspace --no-deps --all-features
+        run: cargo doc --locked --workspace --no-deps --all-features
 
       - name: Run Rust workspace unit, integration, & zero-alloc tests via nextest
         run: |
-          if [ -f "Cargo.toml" ]; then
-            if [ "$RUNNER_OS" != "Windows" ]; then
-              ulimit -s 16384 || true
-            fi
-            cargo test --workspace --doc --all-features
-            cargo nextest run --workspace --all-targets --all-features
+          if [ "$RUNNER_OS" != "Windows" ]; then
+            ulimit -s 16384 || true
           fi
+          cargo test --locked --workspace --doc --all-features
+          cargo nextest run --locked --workspace --all-targets --all-features
+
+      - name: Link & Execute C11 FFI Hook Example against liminika_core (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --locked -p liminika-core
+          cmake -B build-capi -S . -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build-capi --target gcso_phi4_gguf_hook_example --parallel
+          LD_LIBRARY_PATH="$PWD/target/debug:${LD_LIBRARY_PATH:-}" ./build-capi/examples/c_api/gcso_phi4_gguf_hook_example
 
   # =========================================================================
   # 6. DSL SPEC & EXAMPLES VALIDATION
@@ -588,29 +694,19 @@ jobs:
       - name: Enable Rust caching
         uses: Swatinem/rust-cache@v2
 
-      - name: Build DSL package & CLI parser
+      - name: Test DSL crate & Validate Example DSL files
         run: |
-          if [ -f "Cargo.toml" ]; then
-            cargo build --workspace
-          fi
-
-      - name: Validate Example DSL files
-        run: |
-          echo "Validating DSL files in repository..."
+          cargo test --locked -p liminika-dsl
           EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \) )
-          DSL_FILES=$(find . "${EXCLUDE_ARGS[@]}" -prune -o -name "*.lmnk" -type f -print 2>/dev/null || true)
-          if [ -n "$DSL_FILES" ]; then
-            HAS_CLI=0
-            if [ -f "Cargo.toml" ] && cargo metadata --format-version 1 2>/dev/null | grep -qE '"name":"(liminika-cli|liminika)"'; then
-              HAS_CLI=1
-            fi
-            for file in $DSL_FILES; do
-              echo "Checking $file..."
-              if [ "$HAS_CLI" -eq 1 ]; then
-                cargo run --workspace -- check "$file" || echo "CLI check command completed for $file"
-              fi
-            done
+          DSL_FILES=$(find . "${EXCLUDE_ARGS[@]}" -prune -o -name "*.lmnk" -type f -print)
+          if [ -z "$DSL_FILES" ]; then
+            echo "Error: No .lmnk DSL files found to validate."
+            exit 1
           fi
+          for file in $DSL_FILES; do
+            echo "Checking $file..."
+            cargo run --locked -p liminika-cli -- check "$file"
+          done
 
   # =========================================================================
   # 7. PYTHON SCRIPT SYNTAX & CLI VERIFICATION
@@ -682,12 +778,8 @@ jobs:
 
       - name: Install cffconvert & Validate CITATION.cff Schema
         run: |
-          if [ -f "CITATION.cff" ]; then
-            python -m pip install --quiet --retries 1 --timeout 10 --upgrade pip cffconvert || true
-            if command -v cffconvert >/dev/null 2>&1; then
-              cffconvert --validate
-            fi
-          fi
+          python -m pip install --quiet --retries 1 --timeout 10 cffconvert
+          cffconvert --validate
 
   # =========================================================================
   # 9. DOCUMENTATION INTEGRITY & LINK CHECK

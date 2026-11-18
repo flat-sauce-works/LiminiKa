@@ -103,7 +103,7 @@ GCSO_NODISCARD GCSO_API uint64_t GCSO_CALL gcso_tagged_ptr_evolve_mode_stigmergi
 }
 
 /**
- * @brief Retrieves the numeric version identifiers for the GCSO C-ABI (v0.1.1).
+ * @brief Retrieves the numeric version identifiers for the active GCSO C-ABI.
  *
  * @param major Pointer to store the major version number.
  * @param minor Pointer to store the minor version number.
@@ -133,7 +133,7 @@ gcso_abi_get_version(uint32_t* GCSO_RESTRICT major, uint32_t* GCSO_RESTRICT mino
 }
 
 /**
- * @brief Returns the static semantic version string literal for the GCSO kernel engine ("0.1.1").
+ * @brief Returns the static semantic version string literal for the GCSO kernel engine (`GCSO_ABI_VERSION_STRING`).
  *
  * @return Const pointer to null-terminated static version string.
  */
@@ -282,7 +282,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_config_init_default(gcso_config_t* GCSO_RE
 }
 
 /**
- * @brief Validates a gcso_config_t descriptor against GCSO v0.1.1 architectural invariants.
+ * @brief Validates a gcso_config_t descriptor against GCSO architectural invariants.
  */
 GCSO_API gcso_status_t GCSO_CALL gcso_config_validate(const gcso_config_t* GCSO_RESTRICT config)
     GCSO_NOEXCEPT {

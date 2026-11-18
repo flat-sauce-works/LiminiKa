@@ -1,3 +1,6 @@
+# name: src/dsl/Cargo.toml
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 [package]
 name = "liminika-dsl"
 version.workspace = true

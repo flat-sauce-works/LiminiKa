@@ -91,7 +91,7 @@ pub extern "C" fn gcso_tagged_ptr_evolve_mode_stigmergically(
 // 1. Version, Capability & Configuration Management
 // ===================================================================
 
-/// Queries the active GCSO runtime C-ABI version components (`0.1.1`).
+/// Queries the active GCSO runtime C-ABI version components.
 ///
 /// # Safety
 /// Pointers must be `NULL` or naturally aligned writable `u32` pointers.
@@ -127,13 +127,13 @@ pub unsafe extern "C" fn gcso_abi_get_version(
     })
 }
 
-/// Returns a static null-terminated C string representing the active ABI version (`"0.1.1"`).
+/// Returns a static null-terminated C string representing [`GCSO_ABI_VERSION_STRING`].
 ///
 /// # Safety
 /// Returned pointer is static and read-only.
 #[no_mangle]
 pub unsafe extern "C" fn gcso_abi_get_version_string() -> *const c_char {
-    c"0.1.1".as_ptr()
+    GCSO_ABI_VERSION_CSTR.as_ptr()
 }
 
 /// Converts a [`GcsoStatus`] code into a static null-terminated descriptive C string.
@@ -159,7 +159,7 @@ pub unsafe extern "C" fn gcso_abi_query_capability(flags: *mut u64) -> GcsoStatu
     })
 }
 
-/// Initializes a [`gcso_config_t`] structure with canonical v0.1.1 default hyperparameters.
+/// Initializes a [`gcso_config_t`] structure with canonical default hyperparameters.
 ///
 /// # Safety
 /// `config` must be a non-null, 16-byte aligned writable [`gcso_config_t`] pointer.
@@ -301,7 +301,7 @@ pub unsafe extern "C" fn gcso_context_step_token(
     })
 }
 
-/// Serializes active runtime state into `.gcso` binary format conforming to GCSO ABI v0.1.1,
+/// Serializes active runtime state into `.gcso` binary format conforming to [`GCSO_ABI_VERSION_HEX`],
 /// stamping an 8-byte unrolled LUT IEEE 802.3 CRC32 checksum ([`branchless_crc32_ieee`]) over the payload.
 ///
 /// # Safety
@@ -348,7 +348,7 @@ pub unsafe extern "C" fn gcso_context_serialize(
     })
 }
 
-/// Deserializes a `.gcso` binary snapshot to restore runtime state with ABI v0.1.1 and
+/// Deserializes a `.gcso` binary snapshot to restore runtime state with [`GCSO_ABI_VERSION_HEX`] and
 /// 8-byte unrolled LUT CRC32 verification ([`branchless_crc32_ieee`]).
 ///
 /// # Safety

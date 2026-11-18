@@ -11,7 +11,7 @@ use super::{constants_pod::*, lut_crc32::*, scalar_math::*, swar_ops::*};
 // 5. Descriptor & .gcso Snapshot Validators + Branchless IEEE 802.3 CRC32
 // ===================================================================
 
-/// Constructs a canonical `gcso_descriptor_header_t` for type `T` stamped with ABI version `0.1.1` (`0x00000101`).
+/// Constructs a canonical `gcso_descriptor_header_t` for type `T` stamped with [`GCSO_ABI_VERSION_HEX`].
 #[inline(always)]
 #[must_use]
 pub const fn init_descriptor_header<T>() -> gcso_descriptor_header_t {
@@ -21,7 +21,7 @@ pub const fn init_descriptor_header<T>() -> gcso_descriptor_header_t {
     }
 }
 
-/// Validates a `gcso_descriptor_header_t` against expected structure byte size and unified ABI version `0.1.1` (`0x00000101`).
+/// Validates a `gcso_descriptor_header_t` against expected structure byte size and [`GCSO_ABI_VERSION_HEX`].
 ///
 /// # Errors
 /// Returns [`GCSO_ERROR_VERSION_MISMATCH`] if `struct_size` or `abi_version` does not match.
@@ -54,7 +54,7 @@ pub const fn compute_crc32_ieee(bytes: &[u8]) -> u32 {
 }
 
 /// Constructs a canonical `gcso_snapshot_header_t` initialized with magic `"GCSO"` (`0x4F534347`),
-/// ABI version `0.1.1` (`0x00000101`), and `total_size`.
+/// [`GCSO_ABI_VERSION_HEX`], and `total_size`.
 #[inline(always)]
 #[must_use]
 pub const fn init_snapshot_header(
@@ -79,7 +79,7 @@ pub const fn init_snapshot_header(
 }
 
 /// Validates a `gcso_snapshot_header_t` against the `.gcso` container magic (`0x4F534347`),
-/// unified ABI version (`0x00000101`), and payload buffer bounds.
+/// [`GCSO_ABI_VERSION_HEX`], and payload buffer bounds.
 ///
 /// # Errors
 /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if `magic` is invalid, `total_size` is smaller than
@@ -175,7 +175,7 @@ pub fn verify_snapshot_payload_crc32(
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KvKeyframePacket {
-    /// 64-byte C-ABI v0.1.1 KV-keyframe keyframe index header (`offset 0..64`, `frame_type == 0`).
+    /// 64-byte C-ABI KV-keyframe index header (`offset 0..64`, `frame_type == 0`).
     pub header: gcso_kv_keyframe_header_t,
     /// 64-head Q7 phase anchor snapshot on $SO(2)^{64}$ (`offset 64..128`).
     pub anchor_phases: [gcso_q7_t; MAX_ATTENTION_HEADS],

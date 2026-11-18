@@ -1,7 +1,7 @@
 // name: tests/ffi/test_abi_layout.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Integration test verifying C-ABI v0.1.1 struct size, alignment, and field offset invariants.
+//! Integration test verifying C-ABI struct size, alignment, and field offset invariants.
 
 #[test]
 fn test_gcso_types_abi_layout_invariants() {
@@ -260,9 +260,24 @@ fn test_gcso_types_abi_layout_invariants() {
     assert_eq!(
         offset_of!(
             liminika_core::abi::gcso_liminal_ego_field_t,
-            counter_vortex_thrust_q7
+            counter_basin_thrust_q7
         ),
         40
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::gcso_liminal_ego_field_t,
+            basin_escape_floor_q7
+        ),
+        41
+    );
+    assert_eq!(
+        liminika_core::abi::GCSO_ABI_VERSION_STRING,
+        env!("CARGO_PKG_VERSION")
+    );
+    assert_eq!(
+        liminika_core::traits::GCSO_CRYSTAL_RECORD_VERSION,
+        liminika_core::abi::GCSO_ABI_VERSION_HEX
     );
     assert_eq!(
         offset_of!(

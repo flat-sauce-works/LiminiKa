@@ -31,125 +31,13 @@ use liminika_core::traits::{
     ACTION_PRESET_EXPRESS_PHASE, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
     DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS,
 };
-use std::alloc::{alloc, dealloc, Layout};
 use std::hint::black_box;
 use std::time::Duration;
 
-/// Scoped x86_64 MXCSR Flush-To-Zero (`FTZ`, bit 15 = `0x8000`) and Denormals-Are-Zero
-/// (`DAZ`, bit 6 = `0x0040`) guard preventing hardware subnormal microcode traps across
-/// multi-hundred-thousand-iteration Criterion linear sample batches.
-struct ScopedFtzdazGuard {
-    #[cfg(target_arch = "x86_64")]
-    prev_csr: u32,
-}
-
-impl ScopedFtzdazGuard {
-    #[inline(always)]
-    fn new() -> Self {
-        #[cfg(target_arch = "x86_64")]
-        // SAFETY: Reading and setting FTZ (`0x8000`) and DAZ (`0x0040`) bits in MXCSR via
-        // `stmxcsr` / `ldmxcsr` is safe per-thread floating-point state control.
-        unsafe {
-            let mut prev_csr = 0u32;
-            core::arch::asm!(
-                "stmxcsr [{p}]",
-                p = in(reg) &mut prev_csr,
-                options(nostack, preserves_flags),
-            );
-            let new_csr = prev_csr | 0x8040;
-            core::arch::asm!(
-                "ldmxcsr [{p}]",
-                p = in(reg) &new_csr,
-                options(readonly, nostack, preserves_flags),
-            );
-            Self { prev_csr }
-        }
-        #[cfg(not(target_arch = "x86_64"))]
-        {
-            Self {}
-        }
-    }
-}
-
-impl Drop for ScopedFtzdazGuard {
-    #[inline(always)]
-    fn drop(&mut self) {
-        #[cfg(target_arch = "x86_64")]
-        // SAFETY: Restores the previous MXCSR register state captured at construction via `ldmxcsr`.
-        unsafe {
-            core::arch::asm!(
-                "ldmxcsr [{p}]",
-                p = in(reg) &self.prev_csr,
-                options(readonly, nostack, preserves_flags),
-            );
-        }
-    }
-}
-
-/// Generic heap buffer with strict 32-byte (or 64-byte cacheline) alignment for SIMD Liminal evaluation.
-struct AlignedVectorBuffer<T, const ALIGN: usize = 32> {
-    ptr: *mut T,
-    layout: Layout,
-    len: usize,
-}
-
-impl<T: Copy, const ALIGN: usize> AlignedVectorBuffer<T, ALIGN> {
-    fn new(len: usize, initial_val: T) -> Self {
-        assert!(ALIGN > 0 && ALIGN.is_power_of_two());
-        let elem_size = std::mem::size_of::<T>();
-        assert!(len > 0 && elem_size > 0);
-        let byte_len = len.checked_mul(elem_size).expect("Byte length overflow");
-        let alloc_align = if ALIGN < 4096 { 4096 } else { ALIGN };
-        let layout = Layout::from_size_align(byte_len, alloc_align).expect("Invalid layout");
-        // SAFETY: `layout` has non-zero size and power-of-two alignment.
-        let ptr = unsafe { alloc(layout).cast::<T>() };
-        assert!(!ptr.is_null(), "Heap allocation failed");
-        // SAFETY: `ptr` is non-null and valid for `len` elements.
-        unsafe {
-            std::slice::from_raw_parts_mut(ptr, len).fill(initial_val);
-        }
-        Self { ptr, layout, len }
-    }
-
-    fn new_heterogeneous_f32(len: usize, base_val: f32) -> AlignedVectorBuffer<f32, ALIGN> {
-        let mut buf = AlignedVectorBuffer::<f32, ALIGN>::new(len, base_val);
-        for (i, elem) in buf.as_mut_slice().iter_mut().enumerate() {
-            let wave = (((i.wrapping_mul(17).wrapping_add((i >> 7).wrapping_mul(31))) & 255)
-                as f32)
-                * (1.0f32 / 255.0f32);
-            *elem = base_val + 0.90f32 * wave;
-        }
-        buf
-    }
-
-    #[inline(always)]
-    fn as_slice(&self) -> &[T] {
-        // SAFETY: `self.ptr` points to a valid allocation of `self.len` elements.
-        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
-    }
-
-    #[inline(always)]
-    fn as_mut_slice(&mut self) -> &mut [T] {
-        // SAFETY: `self.ptr` points to a valid and uniquely borrowed allocation of `self.len` elements.
-        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
-    }
-
-    #[inline(always)]
-    fn as_prefix(&self, prefix_len: usize) -> &[T] {
-        assert!(prefix_len <= self.len);
-        // SAFETY: `self.ptr` points to a valid allocation of `prefix_len <= self.len` elements.
-        unsafe { std::slice::from_raw_parts(self.ptr, prefix_len) }
-    }
-}
-
-impl<T, const ALIGN: usize> Drop for AlignedVectorBuffer<T, ALIGN> {
-    fn drop(&mut self) {
-        // SAFETY: `self.ptr` was allocated with `self.layout`.
-        unsafe {
-            dealloc(self.ptr.cast::<u8>(), self.layout);
-        }
-    }
-}
+mod common;
+use common::{
+    configured_noise_threshold, should_run_provisional_gcso, AlignedHeapBuffer, ScopedFtzdazGuard,
+};
 
 /// Generates a deterministic 64-supernode f32 field with non-zero spatial coboundary gradients
 /// across adjacent supernodes so Sheaf Cohomology and Hodge Obstruction kernels evaluate genuine
@@ -172,39 +60,6 @@ const fn make_heterogeneous_supernode_field_64(base_val: f32, spread: f32) -> [f
 #[inline(always)]
 fn reset_engine_fast(dst: &mut EntropyController, src: &EntropyController) {
     dst.restore_from(src);
-}
-
-/// Reads `LIMINIKA_NOISE_THRESHOLD` (defaulting to `0.025` = 2.5%) so every Criterion group
-/// suppresses sub-30ns RDTSC timer-quantum and background OS scheduler false alarms whether
-/// invoked via `python scripts/run_benchmarks.py` or bare `cargo bench`.
-#[inline]
-fn configured_noise_threshold() -> f64 {
-    std::env::var("LIMINIKA_NOISE_THRESHOLD")
-        .ok()
-        .and_then(|v| v.trim().parse::<f64>().ok())
-        .filter(|&v| v.is_finite() && v > 0.0 && v < 1.0)
-        .unwrap_or(0.025)
-}
-
-/// Determines whether the isolated pre-v1.0 `Provisional_GCSO_Container` benchmark group
-/// should be registered and executed.
-///
-/// Enabled only when `LIMINIKA_RUN_PROVISIONAL_GCSO` is set to `"1"`/`"true"`, or when the
-/// user explicitly passes a positional Criterion CLI filter targeting `Provisional_GCSO_Container`.
-#[inline]
-fn should_run_provisional_gcso() -> bool {
-    if let Ok(val) = std::env::var("LIMINIKA_RUN_PROVISIONAL_GCSO") {
-        let trimmed = val.trim();
-        if trimmed == "1" || trimmed.eq_ignore_ascii_case("true") {
-            return true;
-        }
-        if trimmed == "0" || trimmed.eq_ignore_ascii_case("false") {
-            return false;
-        }
-    }
-    std::env::args()
-        .skip(1)
-        .any(|arg| !arg.starts_with('-') && arg.to_ascii_lowercase().contains("provisional"))
 }
 
 fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
@@ -410,7 +265,7 @@ fn bench_entropy_control_liminal_void_dyadic(c: &mut Criterion) {
     group.measurement_time(Duration::from_millis(1350));
 
     let vector_dims = [128usize, 512, 2048, 8192, 32768, 65536, 131072, 262144];
-    let shared_void_arena = AlignedVectorBuffer::<f32, 64>::new_heterogeneous_f32(262144, 0.65f32);
+    let shared_void_arena = AlignedHeapBuffer::<f32, 64>::new_heterogeneous_f32(262144, 0.65f32);
 
     for dim in vector_dims {
         let total_bytes = dim * std::mem::size_of::<f32>();
@@ -478,7 +333,7 @@ fn bench_entropy_control_stream_simulation(c: &mut Criterion) {
             BenchmarkId::new("simulate_token_stream", format!("seq_{seq_len}")),
             &seq_len,
             |b, &len| {
-                let mut z_buf = AlignedVectorBuffer::<f32, 64>::new_heterogeneous_f32(len, 0.5f32);
+                let mut z_buf = AlignedHeapBuffer::<f32, 64>::new_heterogeneous_f32(len, 0.5f32);
                 for (i, slot) in z_buf.as_mut_slice().iter_mut().enumerate() {
                     let base = 0.5 + 1.5 * ((i as f32 * 0.017).sin().abs());
                     *slot = if i % 150 == 0 { base + 4.5 } else { base };
@@ -517,7 +372,7 @@ fn bench_entropy_control_long_dialogue_reliability(c: &mut Criterion) {
     group.measurement_time(Duration::from_millis(1100));
 
     let long_stream_len = 500000usize;
-    let mut shared_500k_buf = AlignedVectorBuffer::<f32, 64>::new(long_stream_len, 0.4f32);
+    let mut shared_500k_buf = AlignedHeapBuffer::<f32, 64>::new(long_stream_len, 0.4f32);
     for (i, slot) in shared_500k_buf.as_mut_slice().iter_mut().enumerate() {
         *slot = 0.4 + 1.8 * ((i as f32 * 0.003).sin().abs());
     }
@@ -553,7 +408,7 @@ fn bench_entropy_control_long_dialogue_reliability(c: &mut Criterion) {
     let chattering_len = 50000usize;
     let tau = 1.5f32;
     let delta = 0.15f32;
-    let mut shared_osc_50k = AlignedVectorBuffer::<f32, 64>::new(chattering_len, tau);
+    let mut shared_osc_50k = AlignedHeapBuffer::<f32, 64>::new(chattering_len, tau);
     for (i, slot) in shared_osc_50k.as_mut_slice().iter_mut().enumerate() {
         *slot = if (i & 1) == 0 {
             tau + delta + 0.08
@@ -869,7 +724,7 @@ fn bench_entropy_control_extreme_and_edge_cases(c: &mut Criterion) {
     group.measurement_time(Duration::from_millis(2200));
 
     let ultra_long_stream_len = 1000000usize;
-    let mut shared_1m_buf = AlignedVectorBuffer::<f32, 64>::new(ultra_long_stream_len, 0.5f32);
+    let mut shared_1m_buf = AlignedHeapBuffer::<f32, 64>::new(ultra_long_stream_len, 0.5f32);
     for (i, slot) in shared_1m_buf.as_mut_slice().iter_mut().enumerate() {
         *slot = if i % 10000 == 5000 {
             1.0e4f32
@@ -912,7 +767,7 @@ fn bench_entropy_control_extreme_and_edge_cases(c: &mut Criterion) {
         let _ftz = ScopedFtzdazGuard::new();
         let tau = 1.5f32;
         let delta = 0.15f32;
-        let mut osc_buf = AlignedVectorBuffer::<f32, 64>::new(boundary_osc_len, tau);
+        let mut osc_buf = AlignedHeapBuffer::<f32, 64>::new(boundary_osc_len, tau);
         for (i, slot) in osc_buf.as_mut_slice().iter_mut().enumerate() {
             *slot = if (i & 1) == 0 {
                 tau + delta + 0.05
@@ -944,7 +799,7 @@ fn bench_entropy_control_extreme_and_edge_cases(c: &mut Criterion) {
     group.throughput(Throughput::Elements(spike_stream_len as u64));
     group.bench_function("outlier_and_nonfinite_spike_recovery_stream", |b| {
         let _ftz = ScopedFtzdazGuard::new();
-        let mut spike_buf = AlignedVectorBuffer::<f32, 64>::new(spike_stream_len, 0.45f32);
+        let mut spike_buf = AlignedHeapBuffer::<f32, 64>::new(spike_stream_len, 0.45f32);
         for (i, slot) in spike_buf.as_mut_slice().iter_mut().enumerate() {
             *slot = match i & 63 {
                 16 => 1.0e9f32,
@@ -971,7 +826,7 @@ fn bench_entropy_control_extreme_and_edge_cases(c: &mut Criterion) {
     });
 
     // 4. Unaligned Dyadic Vector Remainder Handling
-    let shared_odd_arena = AlignedVectorBuffer::<f32, 64>::new_heterogeneous_f32(131073, 0.55f32);
+    let shared_odd_arena = AlignedHeapBuffer::<f32, 64>::new_heterogeneous_f32(131073, 0.55f32);
     let odd_dims = [65537usize, 131073usize];
     for d in odd_dims {
         group.throughput(Throughput::Bytes((d * std::mem::size_of::<f32>()) as u64));

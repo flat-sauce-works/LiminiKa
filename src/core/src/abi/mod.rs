@@ -11,8 +11,8 @@
 //! Cellular Sheaf Orchestrator (GCSO) core engine.
 //!
 //! # Architectural Role (Boundary Layer)
-//! This module forms the C11/C++20 and Rust FFI boundary barrier for `LiminiKa` (ABI v0.1.1,
-//! `0x00000101`). It enforces:
+//! This module forms the C11/C++20 and Rust FFI boundary barrier for `LiminiKa`
+//! (`GCSO_ABI_VERSION_HEX`). It enforces:
 //! - **1:1 Binary Layout Parity**: Compile-time `size_of`, `align_of`, and `offset_of` verification
 //!   matching C headers in `include/liminika/` (`c_abi_spec.md` Section 8.1).
 //! - **Exception & Panic Isolation**: [`ffi_boundary!`] intercepts unwinding Rust panics
@@ -223,7 +223,14 @@ mod tests {
             let c_str = CStr::from_ptr(gcso_status_to_string(GCSO_SUCCESS));
             assert_eq!(c_str.to_str().unwrap(), "GCSO_SUCCESS");
         }
-        assert_eq!((major, minor, patch), (0, 1, 1));
+        assert_eq!(
+            (major, minor, patch),
+            (
+                GCSO_ABI_VERSION_MAJOR,
+                GCSO_ABI_VERSION_MINOR,
+                GCSO_ABI_VERSION_PATCH
+            )
+        );
         assert_ne!(cap_flags & GCSO_CAP_CPU_BASELINE, 0);
         assert_eq!(config.head_dim, 128);
         assert_eq!(config.num_heads, 32);
@@ -1002,7 +1009,7 @@ mod tests {
         // SAFETY: Stack-allocated buffers satisfy 64B/16B alignment and disjointness invariants.
         unsafe {
             assert_eq!(gcso_ego_field_init_preset(3, &mut ego_preset), GCSO_SUCCESS);
-            assert!(ego_preset.counter_vortex_thrust_q7 >= 90);
+            assert!(ego_preset.counter_basin_thrust_q7 >= 90);
             assert_eq!(
                 gcso_ego_field_derive_from_text(desc.as_ptr(), desc.len(), &mut ego_text),
                 GCSO_SUCCESS

@@ -1509,7 +1509,7 @@ impl LiminalTopologyTelemetrySnapshot {
 
         if let Some(ego) = layer2_opt {
             cur.write_str("    EGO[\"Core Layer 2: LiminalEgoField | Thrust:");
-            cur.write_u8_dec(ego.counter_vortex_thrust_q7);
+            cur.write_u8_dec(ego.counter_basin_thrust_q7);
             cur.write_str("/127 | Transgress:");
             cur.write_i8_dec(ego.transgression_bias_q7);
             cur.write_str(" | Fired:");
@@ -1566,7 +1566,7 @@ impl LiminalTopologyTelemetrySnapshot {
         cur.write_str("    LVOID <-->|\"Cross-Layer Feedback\"| STIG\n");
         if layer2_opt.is_some() {
             cur.write_str("    EGO -. \"Top-Down Intervention\" .-> LVOID & STIG\n");
-            cur.write_str("    EGO -->|\"Counter-Vortex / Defiance\"| GW\n");
+            cur.write_str("    EGO -->|\"Counter-Basin / Defiance\"| GW\n");
         }
         cur.write_str("    N0 & N1 & N2 & N3 & N4 & N5 & N6 --> GW\n");
         cur.write_str("    GW --> HUB\n");
@@ -1574,28 +1574,9 @@ impl LiminalTopologyTelemetrySnapshot {
         cur.pos
     }
 
-    /// Renders this system snapshot as a `#![no_std]` zero-allocation Mermaid `flowchart TD` diagram
-    /// directly into `buf`, returning the exact byte count written.
-    #[inline]
-    pub fn format_mermaid_flowchart(&self, buf: &mut [u8]) -> usize {
-        self.format_mermaid_flowchart_core(None, None, buf)
-    }
-
-    /// Renders Core Layer 0 (`Liminal`) and Core Layer 1 (`StigmergicGranuleField` + Venn
-    /// overlap & serendipity telemetry) as a `#![no_std]` zero-allocation Mermaid `flowchart TD` diagram.
-    #[inline]
-    pub fn format_core_layers_mermaid(
-        &self,
-        layer1: &StigmergicGranuleField,
-        venn: &StigmergicVennSerendipityReport,
-        buf: &mut [u8],
-    ) -> usize {
-        self.format_mermaid_flowchart_core(Some((layer1, venn)), None, buf)
-    }
-
     /// Renders all three autonomous core layers (`Liminal` Layer 0, `StigmergicGranuleField`
     /// Layer 1, and `LiminalEgoField` Layer 2) alongside Venn overlap & serendipity telemetry as a
-    /// `#![no_std]` zero-allocation Mermaid `flowchart TD` diagram.
+    /// `#![no_std]` zero-allocation Mermaid `flowchart TD` diagram directly into `buf`.
     #[inline]
     pub fn format_three_core_layers_mermaid(
         &self,

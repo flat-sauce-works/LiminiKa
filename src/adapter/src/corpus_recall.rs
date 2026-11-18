@@ -588,7 +588,7 @@ impl TextAttractorCorpus {
     }
 
     /// Estimates up to `max_components` orthonormal common-mode directions from corpus signatures
-    /// via deflated power iteration.
+    /// via deflated power iteration (`3` components by default removes shared prompt bias).
     pub fn fit_common_mode_subspace(&mut self, max_components: usize) {
         let sigs: Vec<Vec<f32>> = self
             .entries
@@ -596,12 +596,6 @@ impl TextAttractorCorpus {
             .map(|e| e.residual_sig.clone())
             .collect();
         self.common_mode_basis = Self::fit_common_mode_subspace_from_sigs(&sigs, max_components);
-    }
-
-    /// Estimates and stores the dominant unsupervised common-mode subspace (up to 3 components)
-    /// so recall projects out shared prompt/template bias.
-    pub fn fit_common_mode_projection(&mut self) {
-        self.fit_common_mode_subspace(3);
     }
 
     /// Appends external orthonormal prior directions (e.g., startup base-model framing modes)
@@ -737,7 +731,8 @@ impl TextAttractorCorpus {
     }
 
     /// Re-bakes or scores a query's per-layer Q activations against the corpus purely via
-    /// steered-layer geometric cosine similarity (zero keyword heuristics), using the default
+    /// Scores a query's per-layer Q activations against the corpus using the default
+    /// 3-stratum Society-of-Mind pipeline, [`AsymmetricDominoVoidPerspective`], and
     /// [`CoherenceGuardGate`] to classify [`VoidBoundaryState`].
     ///
     /// # Errors
@@ -750,62 +745,17 @@ impl TextAttractorCorpus {
         baseline_ref_per_layer: &[&[f32]],
         policy: &RecallPolicy,
     ) -> Result<DynamicAttractorRecall<'_>, String> {
-        self.recall_for_query_with_gate(
-            adapter,
-            query_per_layer_q,
-            baseline_ref_per_layer,
-            policy,
-            &CoherenceGuardGate,
-        )
-    }
-
-    /// Scores a query's per-layer Q activations against the corpus using the default
-    /// [`AsymmetricDominoVoidPerspective`] and delegates boundary/guard gating to a
-    /// caller-supplied [`RecallBoundaryGate`] trait object.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if query/baseline layer slices mismatch `adapter.geometry()`.
-    pub fn recall_for_query_with_gate(
-        &self,
-        adapter: &ModelSteeringAdapter,
-        query_per_layer_q: &[&[f32]],
-        baseline_ref_per_layer: &[&[f32]],
-        policy: &RecallPolicy,
-        gate: &dyn RecallBoundaryGate,
-    ) -> Result<DynamicAttractorRecall<'_>, String> {
-        self.recall_for_query_with_perspective(
-            adapter,
-            query_per_layer_q,
-            baseline_ref_per_layer,
-            policy,
-            gate,
-            &AsymmetricDominoVoidPerspective::default(),
-        )
-    }
-
-    /// Scores a query's per-layer Q activations against the corpus using caller-supplied
-    /// [`AttractorVoidPerspective`] and [`RecallBoundaryGate`] trait objects inside the default
-    /// 3-stratum Society-of-Mind pipeline.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if query/baseline layer slices mismatch `adapter.geometry()`.
-    pub fn recall_for_query_with_perspective(
-        &self,
-        adapter: &ModelSteeringAdapter,
-        query_per_layer_q: &[&[f32]],
-        baseline_ref_per_layer: &[&[f32]],
-        policy: &RecallPolicy,
-        gate: &dyn RecallBoundaryGate,
-        perspective: &dyn AttractorVoidPerspective,
-    ) -> Result<DynamicAttractorRecall<'_>, String> {
+        let perspective = AsymmetricDominoVoidPerspective::default();
         let mut pipeline = StratumPipeline::new();
         pipeline.push_stratum(Box::new(LocalFeatureWorkerStratum::default()));
         pipeline.push_stratum(Box::new(HeadAngleWorkerStratum::default()));
         pipeline.push_stratum(Box::new(LocalTokenResonanceStratum::default()));
-        pipeline.push_stratum(Box::new(PerspectiveDominoStratum { perspective }));
-        pipeline.push_stratum(Box::new(ActionHubBoundaryStratum { gate }));
+        pipeline.push_stratum(Box::new(PerspectiveDominoStratum {
+            perspective: &perspective,
+        }));
+        pipeline.push_stratum(Box::new(ActionHubBoundaryStratum {
+            gate: &CoherenceGuardGate,
+        }));
         self.recall_for_query_with_strata(
             adapter,
             query_per_layer_q,

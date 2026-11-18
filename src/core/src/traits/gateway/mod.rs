@@ -6,7 +6,7 @@
 //!
 //! Macro-basin clustering ([`CrystallizedAttractorRecord`]) and 4-section `.gcso` zero-copy
 //! container persistence ([`GcsoFourSectionView`]) live in [`crate::crystal`] and
-//! [`crate::storage`] respectively and are re-exported here for backward compatibility.
+//! [`crate::storage`] respectively.
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -107,8 +107,8 @@ pub use crate::traits::primitives::{
     APERTURE_POINTER_TRAIL, APERTURE_RANK1_RESIDUAL, APERTURE_RELATIVE_COUPLING,
     APERTURE_STIGMERGIC_CONSENSUS, APERTURE_SUBHEAD_ROUTING, APERTURE_SUBJECTIVE_PERSONA,
     APERTURE_SYSTEM_CONSTRAINT, CORE_LAYER_EGO, CORE_LAYER_LIMINAL, CORE_LAYER_STIGMERGIC,
-    EGO_TRIGGER_ALL_DEFAULT, EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
-    EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR, EGO_TRIGGER_VORTEX_SWALLOW,
+    EGO_TRIGGER_ALL_DEFAULT, EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER,
+    EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR,
     NUM_CORE_AUTONOMOUS_LAYERS, NUM_LIMINAL_APERTURE_CHANNELS,
 };
 
@@ -123,7 +123,7 @@ pub mod signals;
 pub use self::circuit::{
     project_gateway_signal_at_scale, CognitiveCircuitActivation, CognitiveCircuitBank,
     CognitiveCircuitBankOps, CognitiveCircuitPlasticity, CognitiveOpKind, CognitiveStepOp,
-    CognitiveTrajectoryLedger, HighCapCognitiveBank, HybridScaleCircuit, LayeredScalePair,
+    CognitiveTrajectoryLedger, HighCapCognitiveBank, HybridScaleCircuit,
     LowSpecCognitiveBank, ScaleLayerNode, ScaleLayerProjection, StandardCognitiveBank,
     StigmergicScaleGranularity, StigmergicScaleLayer,
 };
@@ -248,8 +248,8 @@ const _: () = {
     assert!(offset_of!(LiminalEgoField, trait_gain_bias_q7) == 16);
     assert!(offset_of!(LiminalEgoField, slot_affinity_bias_q7) == 24);
     assert!(offset_of!(LiminalEgoField, granule_autonomy_q7) == 32);
-    assert!(offset_of!(LiminalEgoField, counter_vortex_thrust_q7) == 40);
-    assert!(offset_of!(LiminalEgoField, vortex_escape_floor_q7) == 41);
+    assert!(offset_of!(LiminalEgoField, counter_basin_thrust_q7) == 40);
+    assert!(offset_of!(LiminalEgoField, basin_escape_floor_q7) == 41);
     assert!(offset_of!(LiminalEgoField, transgression_bias_q7) == 42);
     assert!(offset_of!(LiminalEgoField, irrational_defiance_q7) == 43);
     assert!(offset_of!(LiminalEgoField, trigger_mask) == 44);

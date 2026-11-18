@@ -18,7 +18,7 @@ The ActionHub orchestrates 64 attention heads partitioned into 8 stigmergic micr
 RIPA stands for Rotational Invariance Phase Alignment and clamps per-layer RoPE phase deltas with ripa_clamp_max_rad to prevent coherence collapse.
 EDBC stands for Entropy-Driven Dynamic Boundary Control and regulates output logit temperature without weight updates.
 PPRC stands for Predictive Phase-Residual Compression and encodes 128-byte keyframe I-Frames alongside 64-byte delta P-Frames.
-The C-ABI boundary in gcso_abi.h targets version 0.1.1 (0x00000101) with zero heap allocations on the hot path.
+The C-ABI boundary in gcso_abi.h targets version 0.1.2 (0x00000102) with zero heap allocations on the hot path.
 
 [PERSONA_ATTRACTORS]
 State exact byte sizes, invariants, and slot indices first, then explain the architectural trade-off in one concise sentence.

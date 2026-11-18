@@ -1,0 +1,361 @@
+// name: examples/candle_eval/src/eval.rs
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! CLI profile parsers, KV-cache statistics, steered decoding, and reflection critique.
+
+use std::path::Path;
+use std::time::Instant;
+
+use candle_core::quantized::GgmlDType;
+use liminika_adapter::{
+    AttractorTrajectoryEvaluator, CompiledTokenCorpus, GcsoDualTrackTimeline,
+    ManifoldReflectionEvaluator, ModelSteeringAdapter, ReflectionCritique, ReflectionPolicy,
+    TrajectoryManifoldSnapshot,
+};
+use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
+use liminika_core::traits::gateway::{
+    CognitiveCircuitPlasticity, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
+    LiminalEgoPreset, RamPhaseKvStepOutcome, StigmergicScaleGranularity,
+};
+use tokenizers::Tokenizer;
+
+use crate::bake::argmax;
+use crate::model::{ForwardSteer, Phi3Model, ResonantAnchors};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CircuitProfileMode {
+    None,
+    Analytical,
+    Integrative,
+    Hybrid(u8),
+}
+
+pub(crate) fn parse_circuit_mode<'a>(
+    args: impl IntoIterator<Item = &'a str>,
+) -> CircuitProfileMode {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--circuit=") {
+            if val.eq_ignore_ascii_case("analytical") {
+                return CircuitProfileMode::Analytical;
+            }
+            if val.eq_ignore_ascii_case("integrative") {
+                return CircuitProfileMode::Integrative;
+            }
+            if val.eq_ignore_ascii_case("hybrid") {
+                return CircuitProfileMode::Hybrid(64);
+            }
+            if let Some(blend_str) = val.strip_prefix("hybrid:") {
+                if let Ok(blend) = blend_str.parse::<u8>() {
+                    return CircuitProfileMode::Hybrid(blend.min(128));
+                }
+            }
+        }
+    }
+    CircuitProfileMode::None
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EgoProfileMode {
+    Custom,
+    Preset(LiminalEgoPreset),
+    NaturalLanguage(String),
+}
+
+pub(crate) fn parse_ego_mode<'a>(args: impl IntoIterator<Item = &'a str>) -> EgoProfileMode {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--ego=") {
+            if val.eq_ignore_ascii_case("custom") || val.eq_ignore_ascii_case("off") {
+                return EgoProfileMode::Custom;
+            }
+            if val.eq_ignore_ascii_case("low") {
+                return EgoProfileMode::Preset(LiminalEgoPreset::Low);
+            }
+            if val.eq_ignore_ascii_case("medium") {
+                return EgoProfileMode::Preset(LiminalEgoPreset::Medium);
+            }
+            if val.eq_ignore_ascii_case("high") {
+                return EgoProfileMode::Preset(LiminalEgoPreset::High);
+            }
+            if let Some(desc) = val.strip_prefix("desc:") {
+                return EgoProfileMode::NaturalLanguage(desc.to_string());
+            }
+            return EgoProfileMode::NaturalLanguage(val.to_string());
+        }
+    }
+    EgoProfileMode::Custom
+}
+
+pub(crate) fn apply_ego_mode(adapter: &mut ModelSteeringAdapter, mode: &EgoProfileMode) {
+    match mode {
+        EgoProfileMode::Custom => adapter.configure_ego_from_preset(LiminalEgoPreset::Custom),
+        EgoProfileMode::Preset(p) => adapter.configure_ego_from_preset(*p),
+        EgoProfileMode::NaturalLanguage(desc) => adapter.configure_ego_from_natural_language(desc),
+    }
+}
+
+pub(crate) fn parse_kv_min_res<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<gcso_q7_t> {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--kv-min-res=") {
+            if let Ok(parsed) = val.parse::<i8>() {
+                return Some(parsed.clamp(-127, 127));
+            }
+        }
+    }
+    None
+}
+
+#[derive(Default)]
+pub(crate) struct KvTraceStats {
+    pub(crate) lookups: usize,
+    pub(crate) exact_hits: usize,
+    pub(crate) res_hits: usize,
+    pub(crate) pframes_appended: usize,
+    pub(crate) pframe_seeks: usize,
+    pub(crate) pframe_repulsed: usize,
+    pub(crate) lookup_us_sum: f64,
+}
+
+impl KvTraceStats {
+    pub(crate) fn record_outcome(
+        &mut self,
+        outcome: RamPhaseKvStepOutcome,
+        elapsed_us: f64,
+        phase_deltas: &[gcso_q7_t; 64],
+    ) -> String {
+        self.lookups += 1;
+        self.lookup_us_sum += elapsed_us;
+        let ph_l1: u32 = phase_deltas
+            .iter()
+            .map(|&v| u32::from(v.unsigned_abs()))
+            .sum();
+        let ph_head = &phase_deltas[..6];
+        match outcome {
+            RamPhaseKvStepOutcome::SkippedVoid => "VOID(skip)".to_string(),
+            RamPhaseKvStepOutcome::Unbacked => format!("VOID(miss,l1={ph_l1},h={ph_head:?})"),
+            RamPhaseKvStepOutcome::StoredKeyframe {
+                slot_idx,
+                min_resonance_q7,
+            } => format!("STORE(s{slot_idx},min={min_resonance_q7},l1={ph_l1},h={ph_head:?})"),
+            RamPhaseKvStepOutcome::ResonatedSeeked {
+                slot_idx,
+                exact_hit,
+                resonance_q7,
+                min_resonance_q7,
+                pframe_count,
+                seek_r_bar,
+                seek_repulsed,
+                seek_executed,
+            } => {
+                if exact_hit {
+                    self.exact_hits += 1;
+                } else {
+                    self.res_hits += 1;
+                }
+                self.pframes_appended += 1;
+                let seek_note = if seek_executed {
+                    self.pframe_seeks += 1;
+                    self.pframe_repulsed += seek_repulsed as usize;
+                    format!(" seek_r={seek_r_bar:.2} rep={seek_repulsed}")
+                } else {
+                    String::new()
+                };
+                if exact_hit {
+                    format!(
+                        "EXACT(s{slot_idx},pf={pframe_count},min={min_resonance_q7},l1={ph_l1},h={ph_head:?}{seek_note})"
+                    )
+                } else {
+                    format!(
+                        "RES(s{slot_idx},r={resonance_q7},min={min_resonance_q7},pf={pframe_count},l1={ph_l1},h={ph_head:?}{seek_note})"
+                    )
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn parse_quant_mode<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<GgmlDType> {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--quant=") {
+            if val.eq_ignore_ascii_case("q4_0") || val.eq_ignore_ascii_case("q40") {
+                return Some(GgmlDType::Q4_0);
+            }
+            if val.eq_ignore_ascii_case("q4k") || val.eq_ignore_ascii_case("q4_k") {
+                return Some(GgmlDType::Q4K);
+            }
+            if val.eq_ignore_ascii_case("q8_0") || val.eq_ignore_ascii_case("q80") {
+                return Some(GgmlDType::Q8_0);
+            }
+            if val.eq_ignore_ascii_case("none") || val.eq_ignore_ascii_case("bf16") {
+                return None;
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn build_preset_circuit(mode: CircuitProfileMode) -> Option<CognitiveTrajectoryLedger> {
+    let mut analytical = CognitiveTrajectoryLedger::new();
+    analytical.push_step(CognitiveStepOp::pack(
+        StigmergicScaleGranularity::CellTrail,
+        CognitiveOpKind::DecomposePeel,
+        6,
+    ));
+    analytical.push_step(CognitiveStepOp::pack(
+        StigmergicScaleGranularity::PointerBit,
+        CognitiveOpKind::RouteSubHead,
+        6,
+    ));
+
+    let mut integrative = CognitiveTrajectoryLedger::new();
+    integrative.push_step(CognitiveStepOp::pack(
+        StigmergicScaleGranularity::TypeGateway,
+        CognitiveOpKind::SynthesizeFuse,
+        6,
+    ));
+    integrative.push_step(CognitiveStepOp::pack(
+        StigmergicScaleGranularity::MacroCoalition,
+        CognitiveOpKind::CrystallizeCommit,
+        7,
+    ));
+
+    match mode {
+        CircuitProfileMode::None => None,
+        CircuitProfileMode::Analytical => Some(analytical),
+        CircuitProfileMode::Integrative => Some(integrative),
+        CircuitProfileMode::Hybrid(blend_q7) => {
+            Some(analytical.compose_persona_circuit(&integrative, blend_q7))
+        }
+    }
+}
+
+pub(crate) fn resolve_persona_circuit(
+    mode: CircuitProfileMode,
+    load_path: Option<&Path>,
+) -> Option<CognitiveTrajectoryLedger> {
+    let loaded = load_path
+        .and_then(|p| GcsoDualTrackTimeline::load_from_path(p).ok())
+        .and_then(|tl| tl.persona_circuit());
+    let preset = build_preset_circuit(mode);
+    match (loaded, preset) {
+        (Some(base), Some(ov)) => Some(base.compose_persona_circuit(&ov, 64)),
+        (Some(base), None) => Some(base),
+        (None, Some(ov)) => Some(ov),
+        (None, None) => None,
+    }
+}
+
+pub(crate) struct SteerDecodeConfig<'a> {
+    pub(crate) q7s: Option<&'a [Vec<gcso_q7_t>]>,
+    pub(crate) persona_q7s: Option<&'a [Vec<gcso_q7_t>]>,
+    pub(crate) resonant_ctx: Option<ResonantAnchors<'a>>,
+    pub(crate) rope_rad: f32,
+    pub(crate) srl: Option<(&'a [f32], &'a [f32], f32)>,
+    pub(crate) use_steer: bool,
+}
+
+pub(crate) fn generate_steered_reply_with_offset(
+    model: &mut Phi3Model,
+    tokenizer: &Tokenizer,
+    adapter: &mut ModelSteeringAdapter,
+    formatted_prompt: &str,
+    start_offset: usize,
+    cfg: &SteerDecodeConfig<'_>,
+) -> Result<(String, Vec<u32>, f64), Box<dyn std::error::Error>> {
+    adapter.reset_action_hub_stats();
+    let mut trail = gcso_pointer_trail_t::default();
+    let ids = tokenizer
+        .encode(formatted_prompt, false)
+        .map_err(|e| format!("encode error: {e}"))?
+        .get_ids()
+        .to_vec();
+
+    let mut steer = ForwardSteer {
+        adapter,
+        q7s: cfg.q7s,
+        persona_q7s: cfg.persona_q7s,
+        resonant_ctx: cfg.resonant_ctx,
+        rope_rad: cfg.rope_rad,
+        trail: &mut trail,
+        srl: cfg.srl,
+    };
+    let t_dec = Instant::now();
+    let (mut logits, _, _) =
+        model.forward_tokens(&ids, start_offset, Some(&mut steer), cfg.use_steer, false)?;
+
+    const MAX_GEN_TOKENS: usize = 64;
+    let mut gen_ids = Vec::with_capacity(MAX_GEN_TOKENS);
+    for offset in (start_offset + ids.len()..).take(MAX_GEN_TOKENS) {
+        let next = argmax(&logits);
+        if next == 199999 || next == 200020 {
+            gen_ids.push(next);
+            break;
+        }
+        gen_ids.push(next);
+        let (next_logits, _, _) =
+            model.forward_tokens(&[next], offset, Some(&mut steer), cfg.use_steer, false)?;
+        logits = next_logits;
+    }
+    let decode_secs = t_dec.elapsed().as_secs_f64();
+    let text = tokenizer
+        .decode(&gen_ids, true)
+        .map_err(|e| format!("decode error: {e}"))?
+        .replace('\n', " ");
+    let mut all_ids = ids;
+    all_ids.extend_from_slice(&gen_ids);
+    Ok((text, all_ids, decode_secs))
+}
+
+pub(crate) fn generate_steered_reply(
+    model: &mut Phi3Model,
+    tokenizer: &Tokenizer,
+    adapter: &mut ModelSteeringAdapter,
+    formatted_prompt: &str,
+    cfg: &SteerDecodeConfig<'_>,
+) -> Result<(String, usize, f64), Box<dyn std::error::Error>> {
+    model.clear_cache();
+    let prompt_ids_len = tokenizer
+        .encode(formatted_prompt, false)
+        .map_err(|e| format!("encode error: {e}"))?
+        .get_ids()
+        .len();
+    let (text, all_ids, decode_secs) =
+        generate_steered_reply_with_offset(model, tokenizer, adapter, formatted_prompt, 0, cfg)?;
+    let gen_tokens = all_ids.len().saturating_sub(prompt_ids_len);
+    Ok((text, gen_tokens, decode_secs))
+}
+
+pub(crate) fn critique_generated_draft(
+    model: &mut Phi3Model,
+    tokenizer: &Tokenizer,
+    adapter: &ModelSteeringAdapter,
+    compiled: &CompiledTokenCorpus,
+    query_snap: &TrajectoryManifoldSnapshot,
+    draft_text: &str,
+    reflection_policy: &ReflectionPolicy,
+) -> Result<Option<ReflectionCritique>, Box<dyn std::error::Error>> {
+    let trimmed = draft_text.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let draft_ids = tokenizer
+        .encode(trimmed, false)
+        .map_err(|e| format!("draft encode error: {e}"))?
+        .get_ids()
+        .to_vec();
+    if draft_ids.is_empty() {
+        return Ok(None);
+    }
+    model.clear_cache();
+    let (_, draft_tok_qs, _) = model.forward_tokens(&draft_ids, 0, None, false, true)?;
+    let draft_recall = compiled.recall_token_sequence(adapter, &draft_tok_qs, draft_ids.len())?;
+    let draft_snap = TrajectoryManifoldSnapshot::from_recall(&draft_recall);
+    Ok(Some(
+        ManifoldReflectionEvaluator.assess_trajectory_with_ego(
+            query_snap,
+            &draft_snap,
+            &compiled.recall_policy,
+            reflection_policy,
+            adapter.ego_field(),
+        ),
+    ))
+}

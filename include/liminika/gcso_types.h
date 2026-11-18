@@ -3,14 +3,13 @@
 
 /**
  * @file gcso_types.h
- * @brief C-ABI v0.1.1 POD types, bitmasks, status codes, and compile-time layout assertions.
+ * @brief C-ABI POD types, bitmasks, status codes, and compile-time layout assertions.
  *
  * All struct sizes, alignments, and field offsets in this header are verified at compile time
  * via `GCSO_STATIC_ASSERT` to maintain 1:1 ABI parity with `src/core/src/abi/` and
  * `src/core/src/traits/`.
  *
- * Legacy C-ABI v0.1.1 symbol prefixes (`dpsr`, `edbc`, `srl`, `zimms`) are preserved for binary
- * and source compatibility and map to the Rust core modules:
+ * C-ABI symbol prefixes (`dpsr`, `edbc`, `srl`, `zimms`) map to the Rust core modules:
  * - `dpsr`  -> `phase_steering` (`PhaseSteeringEngine`)
  * - `edbc`  -> `entropy_control` (`EntropyController`)
  * - `srl`   -> `residual_adapter` (`ResidualAdapterEngine`)
@@ -37,11 +36,11 @@ typedef uint64_t gcso_tagged_ptr_t;
 typedef uint8_t gcso_stigmergic_action_decision_t;
 
 /* ===================================================================
- * Domain Constant & Bitmask Identifiers (ABI v0.1.1, 1:1 with src/core)
+ * Domain Constant & Bitmask Identifiers (1:1 with src/core)
  * =================================================================== */
 #define GCSO_SNAPSHOT_MAGIC 0x4F534347U         /* "GCSO" in ASCII */
 #define GCSO_CRYSTAL_RECORD_MAGIC 0x4C545343U   /* "CSTL" in ASCII */
-#define GCSO_CRYSTAL_RECORD_VERSION 0x00000101U /* Unified v0.1.1 */
+#define GCSO_CRYSTAL_RECORD_VERSION 0x00000102U /* Unified v0.1.2 */
 #define GCSO_FOUR_SECTION_HEADER_BYTES 192U
 #define GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET 128U
 #define GCSO_Q7_PHASE_ARRAY_LEN 64U
@@ -80,7 +79,7 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_APERTURE_ACTION_HUB_WIDE 0x0000FFFFU
 
 /* LiminalEgoField Trigger Bitmasks (1:1 with primitives/constants_pod.rs) */
-#define GCSO_EGO_TRIGGER_VORTEX_SWALLOW (1U << 0)
+#define GCSO_EGO_TRIGGER_BASIN_CAPTURE (1U << 0)
 #define GCSO_EGO_TRIGGER_INTERNAL_CONFLICT (1U << 1)
 #define GCSO_EGO_TRIGGER_LIMINAL_EXTERIOR (1U << 2)
 #define GCSO_EGO_TRIGGER_BOUNDARY_CHATTER (1U << 3)
@@ -691,8 +690,8 @@ struct GCSO_ALIGN_PREFIX(64) gcso_liminal_ego_field {
     int8_t trait_gain_bias_q7[GCSO_NUM_LIMINAL_APERTURE_CHANNELS];
     int8_t slot_affinity_bias_q7[GCSO_MAX_ATTRACTOR_DOMAINS];
     uint8_t granule_autonomy_q7[GCSO_NUM_STIGMERGIC_GRANULES];
-    uint8_t counter_vortex_thrust_q7;
-    uint8_t vortex_escape_floor_q7;
+    uint8_t counter_basin_thrust_q7;
+    uint8_t basin_escape_floor_q7;
     int8_t transgression_bias_q7;
     uint8_t irrational_defiance_q7;
     uint8_t trigger_mask;
@@ -1095,7 +1094,7 @@ GCSO_STATIC_ASSERT(offsetof(gcso_kv_keyframe_header_t, icache_payload_offset) ==
 GCSO_STATIC_ASSERT(offsetof(gcso_kv_keyframe_header_t, pcache_payload_offset) == 32,
                    "gcso_kv_keyframe_header_t::pcache_payload_offset offset mismatch");
 
-/* Static Assertions for v0.1.1 Gateway, Toroidal k-Means, Swarm & Orchestration Structs */
+/* Static Assertions for Gateway, Toroidal k-Means, Swarm & Orchestration Structs */
 GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_thresholds_t, evaporation_retain) == 0,
                    "gcso_stigmergic_thresholds_t::evaporation_retain offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_stigmergic_thresholds_t, contradiction_coherence_thresh) == 28,
@@ -1255,8 +1254,10 @@ GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, slot_affinity_bias_q7) == 
                    "gcso_liminal_ego_field_t::slot_affinity_bias_q7 offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, granule_autonomy_q7) == 32,
                    "gcso_liminal_ego_field_t::granule_autonomy_q7 offset mismatch");
-GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, counter_vortex_thrust_q7) == 40,
-                   "gcso_liminal_ego_field_t::counter_vortex_thrust_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, counter_basin_thrust_q7) == 40,
+                   "gcso_liminal_ego_field_t::counter_basin_thrust_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, basin_escape_floor_q7) == 41,
+                   "gcso_liminal_ego_field_t::basin_escape_floor_q7 offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, trigger_mask) == 44,
                    "gcso_liminal_ego_field_t::trigger_mask offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, preset_code) == 47,
