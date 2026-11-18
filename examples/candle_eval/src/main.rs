@@ -1,4 +1,4 @@
-﻿// name: examples/candle_eval/src/main.rs
+// name: examples/candle_eval/src/main.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Thin Candle + Safetensors evaluation harness delegating all RoPE geometry mapping,

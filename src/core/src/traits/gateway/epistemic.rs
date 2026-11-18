@@ -141,7 +141,7 @@ impl EpistemicHorizonReading {
             (frame.provenance_bits & !CAUSAL_CAUSE_COHOMOLOGY_REPULSION)
                 | CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK,
             branchless_select_u32(
-                is_conflict,
+                high_repulse,
                 frame.provenance_bits | CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
                 frame.provenance_bits,
             ),
@@ -173,12 +173,13 @@ impl CausalProvenanceSignal for EpistemicHorizonReading {
     fn causal_provenance_bits(&self) -> u32 {
         let is_void = self.is_liminal();
         let is_conflict = self.is_internal_conflict();
+        let high_repulse = is_conflict & (self.conflict_severity > 0.50);
         branchless_select_u32(
             is_void,
             CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK,
             CAUSAL_AXIS_OBJECTIVE_FACT
                 | branchless_select_u32(
-                    is_conflict,
+                    high_repulse,
                     CAUSAL_AXIS_CONTRADICTION_GUARD | CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
                     0,
                 ),
