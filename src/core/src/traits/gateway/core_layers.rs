@@ -1330,20 +1330,23 @@ impl LiminalEgoField {
         let t_basin = ((self.trigger_mask & EGO_TRIGGER_BASIN_CAPTURE) != 0)
             & (pull_q7 >= self.basin_escape_floor_q7)
             & (self.counter_basin_thrust_q7 > 0);
-        let t_conflict =
-            ((self.trigger_mask & EGO_TRIGGER_INTERNAL_CONFLICT) != 0) & horizon.is_internal_conflict();
+        let t_conflict = ((self.trigger_mask & EGO_TRIGGER_INTERNAL_CONFLICT) != 0)
+            & horizon.is_internal_conflict()
+            & (horizon.conflict_severity > 0.35);
         let t_liminal = ((self.trigger_mask & EGO_TRIGGER_LIMINAL_EXTERIOR) != 0)
             & (horizon.is_liminal() | (venn.void_exterior_mask != 0));
         let t_chatter = ((self.trigger_mask & EGO_TRIGGER_BOUNDARY_CHATTER) != 0)
             & (delta.chattering_channel_mask != 0);
         let t_stagnate = ((self.trigger_mask & EGO_TRIGGER_BOUNDARY_STAGNATION) != 0)
             & (delta.stationary_shortcut_ready != 0);
+        let t_distortion = (self.trigger_mask & EGO_TRIGGER_LAYER_DISTORTION) != 0;
 
         let fired_mask = branchless_select_u8(t_basin, EGO_TRIGGER_BASIN_CAPTURE, 0)
             | branchless_select_u8(t_conflict, EGO_TRIGGER_INTERNAL_CONFLICT, 0)
             | branchless_select_u8(t_liminal, EGO_TRIGGER_LIMINAL_EXTERIOR, 0)
             | branchless_select_u8(t_chatter, EGO_TRIGGER_BOUNDARY_CHATTER, 0)
-            | branchless_select_u8(t_stagnate, EGO_TRIGGER_BOUNDARY_STAGNATION, 0);
+            | branchless_select_u8(t_stagnate, EGO_TRIGGER_BOUNDARY_STAGNATION, 0)
+            | branchless_select_u8(t_distortion, EGO_TRIGGER_LAYER_DISTORTION, 0);
         let any_fired = fired_mask != 0;
 
         // Modulate GatewayFrame phases with counter-basin orbital thrust / transgressive leap
@@ -1355,8 +1358,8 @@ impl LiminalEgoField {
 
         let trans_pos = self.transgression_bias_q7 > 0;
         let trans_abs = self.transgression_bias_q7.unsigned_abs();
-        let strong_trans = t_liminal & trans_pos & (trans_abs >= 20);
-        let apply_phase_override = t_basin | t_stagnate | strong_trans;
+        let strong_trans = (t_liminal | t_distortion) & trans_pos & (trans_abs >= 20);
+        let apply_phase_override = t_basin | t_stagnate | strong_trans | t_distortion;
         let thrust_q7 = self.counter_basin_thrust_q7.min(127);
         {
             let pw = frame.phase_words_mut();

@@ -15,7 +15,8 @@ use liminika_adapter::{
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::traits::gateway::{
     CognitiveCircuitPlasticity, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
-    CoreTelemetrySnapshot, LiminalEgoPreset, RamPhaseKvStepOutcome, StigmergicScaleGranularity,
+    CoreTelemetrySnapshot, LayerDistortionKind, LiminalEgoPreset, RamPhaseKvStepOutcome,
+    StigmergicScaleGranularity,
 };
 use tokenizers::Tokenizer;
 
@@ -287,9 +288,13 @@ pub(crate) struct StepTelemetryTotals {
     pub(crate) decision_counts: [u64; 7],
     pub(crate) excursion_steps: u64,
     pub(crate) ego_interventions: u64,
+    pub(crate) unaligned_ego_steps: u64,
+    pub(crate) passive_stall_steps: u64,
     pub(crate) escalation_swaps: u64,
     pub(crate) slide_in_count: u64,
     pub(crate) slide_out_count: u64,
+    pub(crate) distortion_wakeups: u64,
+    pub(crate) distortion_cooldowns: u64,
 }
 
 impl StepTelemetryTotals {
@@ -305,9 +310,43 @@ impl StepTelemetryTotals {
         }
         self.excursion_steps += snap.layer0.regime_counts[1] + snap.layer0.regime_counts[2];
         self.ego_interventions += snap.layer2.intervention_count;
+        self.unaligned_ego_steps += snap.layer2.unaligned_intervention_count;
+        self.passive_stall_steps += snap.layer0.passive_stall_events;
         self.escalation_swaps += snap.layer2.escalation_swaps;
         self.slide_in_count += snap.layer0.slide_in_count;
         self.slide_out_count += snap.layer0.slide_out_count;
+    }
+
+    pub(crate) fn saturation_pct(&self) -> f32 {
+        if self.continuous_standard_steps == 0 {
+            0.0
+        } else {
+            let max_c = self.decision_counts.iter().copied().max().unwrap_or(0);
+            max_c as f32 / self.continuous_standard_steps as f32 * 100.0
+        }
+    }
+
+    pub(crate) fn distortion_summary(&self) -> (LayerDistortionKind, f32, f32, f32) {
+        if self.continuous_standard_steps == 0 {
+            return (LayerDistortionKind::Aligned, 0.0, 0.0, 0.0);
+        }
+        let denom = self.continuous_standard_steps as f32;
+        let sat = self.saturation_pct() / 100.0;
+        let sat_excess = ((sat - 0.55) / 0.45).clamp(0.0, 1.0);
+        let ego_ratio = (self.ego_interventions as f32 / denom).clamp(0.0, 1.0);
+        let passive_stall = (self.passive_stall_steps as f32 / denom).clamp(0.0, 1.0);
+        let active_mismatch = (self.unaligned_ego_steps as f32 / denom).clamp(0.0, 1.0);
+        let pass_dist =
+            (0.5 * passive_stall + 0.5 * sat_excess * (1.0 - ego_ratio)).clamp(0.0, 1.0);
+        let act_dist = (0.6 * active_mismatch + 0.4 * sat_excess * ego_ratio).clamp(0.0, 1.0);
+        let kind = if act_dist >= 0.40 && ego_ratio >= 0.50 {
+            LayerDistortionKind::ActiveOverdrive
+        } else if pass_dist >= 0.40 {
+            LayerDistortionKind::PassiveSaturation
+        } else {
+            LayerDistortionKind::Aligned
+        };
+        (kind, sat * 100.0, pass_dist * 100.0, act_dist * 100.0)
     }
 
     pub(crate) fn decision_pct(&self, idx: usize) -> f32 {

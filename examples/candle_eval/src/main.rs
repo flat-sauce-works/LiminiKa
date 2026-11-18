@@ -768,6 +768,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut slow_loop_last_repulse_bias = 0_i8;
         let mut slow_loop_last_express_thresh =
             adapter.action_hub().thresholds.express_steer_density_thresh;
+        let mut slow_loop_last_rank1_thresh =
+            adapter.action_hub().thresholds.rank1_inject_density_thresh;
+        let mut slow_loop_last_skip_thresh =
+            adapter.action_hub().thresholds.inertial_skip_entropy_thresh;
         let mut step2_ctx_hits = 0_usize;
         let mut step2_exp_hits = 0_usize;
         let mut step2_exp_total = 0_usize;
@@ -1165,6 +1169,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     slow_loop_last_repulse_bias = adj.suggested_repulse_bias_q7;
                     slow_loop_last_express_thresh =
                         adj.tuned_thresholds.express_steer_density_thresh;
+                    slow_loop_last_rank1_thresh = adj.tuned_thresholds.rank1_inject_density_thresh;
+                    slow_loop_last_skip_thresh = adj.tuned_thresholds.inertial_skip_entropy_thresh;
+                    if adj.distortion.ego_wakeup_recommended {
+                        step_tlm.distortion_wakeups += 1;
+                    }
+                    if adj.distortion.ego_cooldown_recommended {
+                        step_tlm.distortion_cooldowns += 1;
+                    }
                 }
             }
             println!(
@@ -1275,19 +1287,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             spillover.retractions,
         );
         let slow_loop_line = format!(
-            "  [SlowLoop] epochs_applied={} dwell_delta={:+} repulse_bias={:+} express_thresh={:.3} slide_out_dwell={}",
+            "  [SlowLoop] epochs_applied={} dwell_delta={:+} repulse_bias={:+} skip_thresh={:.3} express_thresh={:.3} rank1_thresh={:.3} slide_out_dwell={}",
             slow_loop_epochs_applied,
             slow_loop_last_dwell_delta,
             slow_loop_last_repulse_bias,
+            slow_loop_last_skip_thresh,
             slow_loop_last_express_thresh,
+            slow_loop_last_rank1_thresh,
             guard_slot.slide_out_dwell,
+        );
+        let (dist_kind, dist_sat, dist_pass, dist_act) = step_tlm.distortion_summary();
+        let distortion_line = format!(
+            "  [Distortion] kind={:?} sat={:.1}% passive={:.1}% active={:.1}% wakeups={} cooldowns={}",
+            dist_kind,
+            dist_sat,
+            dist_pass,
+            dist_act,
+            step_tlm.distortion_wakeups,
+            step_tlm.distortion_cooldowns,
         );
         println!("{action_line}");
         println!("{core_line}");
         println!("{spillover_line}");
         println!("{slow_loop_line}");
+        println!("{distortion_line}");
         step2_ablation_summaries.push(format!(
-            "{summary_line}\n  {action_line}\n  {core_line}\n  {spillover_line}\n  {slow_loop_line}"
+            "{summary_line}\n  {action_line}\n  {core_line}\n  {spillover_line}\n  {slow_loop_line}\n  {distortion_line}"
         ));
         if adapter.ego_field().is_active() {
             println!(

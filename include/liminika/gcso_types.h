@@ -84,6 +84,7 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_EGO_TRIGGER_LIMINAL_EXTERIOR (1U << 2)
 #define GCSO_EGO_TRIGGER_BOUNDARY_CHATTER (1U << 3)
 #define GCSO_EGO_TRIGGER_BOUNDARY_STAGNATION (1U << 4)
+#define GCSO_EGO_TRIGGER_LAYER_DISTORTION (1U << 5)
 #define GCSO_EGO_TRIGGER_ALL_DEFAULT 0x1FU
 
 /* Cognitive Trajectory Scale Granularity & Op Identifiers */

@@ -194,6 +194,8 @@ pub const EGO_TRIGGER_LIMINAL_EXTERIOR: u8 = 1 << 2;
 pub const EGO_TRIGGER_BOUNDARY_CHATTER: u8 = 1 << 3;
 /// Ego intervention trigger bit (`0x10`): Self-initiated perturbation when boundaries stagnate completely.
 pub const EGO_TRIGGER_BOUNDARY_STAGNATION: u8 = 1 << 4;
+/// Ego intervention trigger bit (`0x20`): Corrective awakening when layer distortion or saturation is detected.
+pub const EGO_TRIGGER_LAYER_DISTORTION: u8 = 1 << 5;
 /// Default active bitmask enabling all 5 deterministic `LiminalEgoField` triggers (`0x1F`).
 pub const EGO_TRIGGER_ALL_DEFAULT: u8 = 0x1F;
 

@@ -2413,3 +2413,59 @@ fn adapter_residual_spillover_dimension_elevation_and_verified_cache() {
     assert_eq!(adapter.residual_spillover().cache_hits, 1);
     assert_eq!(adapter.telemetry_snapshot().system.experience_cache_hits, 1);
 }
+
+#[test]
+fn adapter_distortion_feedback_wakes_and_cools_ego_and_renders_mermaid() {
+    use liminika_core::traits::gateway::{
+        LayerDistortionKind, LayerDistortionReport, LiminalEgoPreset, EGO_TRIGGER_LAYER_DISTORTION,
+    };
+
+    let geom = RopeGeometry::phi4_mini();
+    let mut adapter = ModelSteeringAdapter::new(geom).expect("valid adapter");
+    adapter.configure_ego_from_preset(LiminalEgoPreset::Low);
+    let base_thrust = adapter.ego_field().counter_basin_thrust_q7;
+
+    // 1. Passive saturation wakes Ego with EGO_TRIGGER_LAYER_DISTORTION.
+    let passive = LayerDistortionReport {
+        action_saturation_ratio: 0.90,
+        passive_distortion_ratio: 0.80,
+        active_distortion_ratio: 0.0,
+        mismatch_ratio: 0.80,
+        kind: LayerDistortionKind::PassiveSaturation,
+        ego_wakeup_recommended: true,
+        ego_cooldown_recommended: false,
+    };
+    adapter.apply_distortion_ego_feedback(&passive);
+    assert_ne!(
+        adapter.ego_field().trigger_mask & EGO_TRIGGER_LAYER_DISTORTION,
+        0
+    );
+    assert!(adapter.ego_field().counter_basin_thrust_q7 >= 48);
+
+    // 2. Active overdrive cools down Ego thrust relative to configured baseline.
+    let active = LayerDistortionReport {
+        action_saturation_ratio: 0.90,
+        passive_distortion_ratio: 0.0,
+        active_distortion_ratio: 0.80,
+        mismatch_ratio: 0.80,
+        kind: LayerDistortionKind::ActiveOverdrive,
+        ego_wakeup_recommended: false,
+        ego_cooldown_recommended: true,
+    };
+    adapter.apply_distortion_ego_feedback(&active);
+    assert_eq!(
+        adapter.ego_field().trigger_mask & EGO_TRIGGER_LAYER_DISTORTION,
+        0
+    );
+    assert_eq!(
+        adapter.ego_field().counter_basin_thrust_q7,
+        base_thrust >> 1
+    );
+
+    // 3. Returning to Aligned restores configured Ego baseline and Mermaid renders LayerDistortion.
+    let aligned = LayerDistortionReport::default();
+    adapter.apply_distortion_ego_feedback(&aligned);
+    assert_eq!(adapter.ego_field().counter_basin_thrust_q7, base_thrust);
+    let mermaid = adapter.render_liminal_topology_mermaid(4, 1);
+    assert!(mermaid.contains("LayerDistortion"));
+}

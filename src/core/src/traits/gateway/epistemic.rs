@@ -1585,10 +1585,56 @@ impl LiminalTopologyTelemetrySnapshot {
         venn: &StigmergicVennSerendipityReport,
         buf: &mut [u8],
     ) -> usize {
-        self.format_mermaid_flowchart_core(
+        self.format_three_core_layers_mermaid_with_distortion(stack, venn, None, buf)
+    }
+
+    /// Renders all three autonomous core layers plus optional cross-layer [`LayerDistortionReport`]
+    /// diagnostics (`Aligned` / `PassiveSaturation` / `ActiveOverdrive`) into `buf`.
+    #[inline]
+    pub fn format_three_core_layers_mermaid_with_distortion(
+        &self,
+        stack: &AutonomousCoreLayerStack,
+        venn: &StigmergicVennSerendipityReport,
+        distortion_opt: Option<&super::telemetry_bank::LayerDistortionReport>,
+        buf: &mut [u8],
+    ) -> usize {
+        let base_len = self.format_mermaid_flowchart_core(
             Some((&stack.stigmergic_layer, venn)),
             Some(&stack.ego_layer),
             buf,
-        )
+        );
+        let Some(dist) = distortion_opt else {
+            return base_len;
+        };
+        let mut cur = BufCursor {
+            buf,
+            pos: base_len,
+        };
+        let kind_str = match dist.kind {
+            super::telemetry_bank::LayerDistortionKind::Aligned => "Aligned",
+            super::telemetry_bank::LayerDistortionKind::PassiveSaturation => "PassiveSaturation",
+            super::telemetry_bank::LayerDistortionKind::ActiveOverdrive => "ActiveOverdrive",
+        };
+        let sat_pct = (dist.action_saturation_ratio * 100.0).clamp(0.0, 100.0) as u8;
+        let pass_pct = (dist.passive_distortion_ratio * 100.0).clamp(0.0, 100.0) as u8;
+        let act_pct = (dist.active_distortion_ratio * 100.0).clamp(0.0, 100.0) as u8;
+        cur.write_str("    DIST[\"LayerDistortion | Kind:");
+        cur.write_str(kind_str);
+        cur.write_str(" | Sat:");
+        cur.write_u8_dec(sat_pct);
+        cur.write_str("% | Pass:");
+        cur.write_u8_dec(pass_pct);
+        cur.write_str("% | Act:");
+        cur.write_u8_dec(act_pct);
+        cur.write_str("%");
+        if dist.ego_wakeup_recommended {
+            cur.write_str(" | WAKEUP");
+        } else if dist.ego_cooldown_recommended {
+            cur.write_str(" | COOLDOWN");
+        }
+        cur.write_str("\"]\n");
+        cur.write_str("    HUB -. \"Saturation / Mismatch\" .-> DIST\n");
+        cur.write_str("    DIST <-->|\"Wakeup / Cooldown\"| EGO\n");
+        cur.pos
     }
 }

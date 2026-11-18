@@ -378,6 +378,7 @@ pub struct ModelSteeringAdapter {
     probe_baseline: ManifoldProbeBaseline,
     threshold_policy: AdaptiveThresholdPolicy,
     core_layers: AutonomousCoreLayerStack,
+    configured_ego: LiminalEgoField,
     last_boundary_delta: LiminalBoundaryDelta,
     last_horizon: EpistemicHorizonReading,
     last_venn_report: StigmergicVennSerendipityReport,
@@ -441,6 +442,7 @@ impl ModelSteeringAdapter {
             probe_baseline,
             threshold_policy,
             core_layers: AutonomousCoreLayerStack::new(),
+            configured_ego: LiminalEgoField::new(),
             last_boundary_delta: LiminalBoundaryDelta::default(),
             last_horizon: EpistemicHorizonReading {
                 total_memory_support: 1.0,
@@ -476,6 +478,7 @@ impl ModelSteeringAdapter {
     /// telemetry back to clean defaults for fair ablation pass isolation.
     pub fn reset_horizon_and_core_state(&mut self) {
         self.core_layers = AutonomousCoreLayerStack::new();
+        self.configured_ego = LiminalEgoField::new();
         self.last_boundary_delta = LiminalBoundaryDelta::default();
         self.last_horizon = EpistemicHorizonReading {
             regime_code: EpistemicRegime::KnownCoherent as u8,
@@ -538,8 +541,37 @@ impl ModelSteeringAdapter {
             self.action_hub.thresholds = adj.tuned_thresholds;
             let next_dwell = (2_i16 + i16::from(adj.suggested_slide_out_dwell_delta)).clamp(1, 8);
             self.coherence_guard_slot.slide_out_dwell = next_dwell as u16;
+            self.apply_distortion_ego_feedback(&adj.distortion);
         }
         adj
+    }
+
+    /// Applies closed-loop `Distortion <-> Ego` homeostatic control:
+    /// wakes Ego with `EGO_TRIGGER_LAYER_DISTORTION` on passive stalls/saturation, cools down
+    /// Ego thrust/defiance on active overdrive, and restores configured baselines when aligned.
+    pub fn apply_distortion_ego_feedback(&mut self, report: &LayerDistortionReport) {
+        if report.ego_wakeup_recommended {
+            self.core_layers.ego_layer.trigger_mask |=
+                EGO_TRIGGER_LAYER_DISTORTION | EGO_TRIGGER_BASIN_CAPTURE;
+            self.core_layers.ego_layer.counter_basin_thrust_q7 =
+                self.core_layers.ego_layer.counter_basin_thrust_q7.max(48);
+            if self.core_layers.ego_layer.transgression_bias_q7.abs() < 24 {
+                self.core_layers.ego_layer.transgression_bias_q7 = 24;
+            }
+        } else if report.ego_cooldown_recommended {
+            self.core_layers.ego_layer.trigger_mask &=
+                !(EGO_TRIGGER_LAYER_DISTORTION | EGO_TRIGGER_INTERNAL_CONFLICT);
+            self.core_layers.ego_layer.counter_basin_thrust_q7 =
+                self.configured_ego.counter_basin_thrust_q7 >> 1;
+            self.core_layers.ego_layer.irrational_defiance_q7 =
+                self.configured_ego.irrational_defiance_q7 >> 1;
+        } else {
+            let epochs = self.core_layers.ego_layer.intervention_epochs;
+            let last_mask = self.core_layers.ego_layer.last_intervened_mask;
+            self.core_layers.ego_layer = self.configured_ego;
+            self.core_layers.ego_layer.intervention_epochs = epochs;
+            self.core_layers.ego_layer.last_intervened_mask = last_mask;
+        }
     }
 
     /// Returns a shared reference to the embedded [`ActionHubEngine`].
@@ -678,36 +710,47 @@ impl ModelSteeringAdapter {
     /// Replaces the adapter's active Core Layer 2 [`LiminalEgoField`].
     pub fn set_ego_field(&mut self, ego: LiminalEgoField) {
         self.core_layers.ego_layer = ego;
+        self.configured_ego = ego;
     }
 
     /// Configures Core Layer 2 [`LiminalEgoField`] from a coarse [`LiminalEgoPreset`] (`Custom`, `Low`, `Medium`, `High`).
     pub fn configure_ego_from_preset(&mut self, preset: LiminalEgoPreset) {
-        self.core_layers.ego_layer = LiminalEgoField::from_preset(preset);
+        let ego = LiminalEgoField::from_preset(preset);
+        self.core_layers.ego_layer = ego;
+        self.configured_ego = ego;
     }
 
     /// Configures Core Layer 2 [`LiminalEgoField`] from intermediate normalized [`EgoIntentAxes`].
     pub fn configure_ego_from_intent_axes(&mut self, axes: &EgoIntentAxes) {
-        self.core_layers.ego_layer = LiminalEgoField::from_intent_axes(axes);
+        let ego = LiminalEgoField::from_intent_axes(axes);
+        self.core_layers.ego_layer = ego;
+        self.configured_ego = ego;
     }
 
     /// Smoothly blends an [`EgoIntentAxes`] overlay onto the current Ego state (`weight_q7` in `0..=127`).
     pub fn blend_ego_intent_axes(&mut self, overlay: &EgoIntentAxes, weight_q7: u8) {
         let base_axes = self.core_layers.ego_layer.extract_intent_axes();
         let blended = base_axes.blend_lerp_q7(overlay, weight_q7);
-        self.core_layers.ego_layer = LiminalEgoField::from_intent_axes(&blended);
+        let ego = LiminalEgoField::from_intent_axes(&blended);
+        self.core_layers.ego_layer = ego;
+        self.configured_ego = ego;
     }
 
     /// Derives Core Layer 2 [`LiminalEgoField`] deterministically from a natural-language Ego description.
     pub fn configure_ego_from_natural_language(&mut self, description: &str) {
-        self.core_layers.ego_layer = LiminalEgoField::from_natural_language(description);
+        let ego = LiminalEgoField::from_natural_language(description);
+        self.core_layers.ego_layer = ego;
+        self.configured_ego = ego;
     }
 
     /// Overlays natural-language Ego cues onto the existing Core Layer 2 [`LiminalEgoField`].
     pub fn overlay_ego_from_natural_language(&mut self, description: &str) {
-        self.core_layers.ego_layer = self
+        let ego = self
             .core_layers
             .ego_layer
             .with_natural_language_overlay(description);
+        self.core_layers.ego_layer = ego;
+        self.configured_ego = ego;
     }
 
     /// Returns the most recent temporal [`LiminalBoundaryDelta`] between aperture epochs.
@@ -957,9 +1000,11 @@ impl ModelSteeringAdapter {
             spawned_daughters,
         );
         let mut buf = [0u8; 2048];
-        let written = snap.format_three_core_layers_mermaid(
+        let distortion = self.telemetry_snapshot().distortion;
+        let written = snap.format_three_core_layers_mermaid_with_distortion(
             &self.core_layers,
             &self.last_venn_report,
+            Some(&distortion),
             &mut buf,
         );
         String::from_utf8_lossy(&buf[..written]).into_owned()

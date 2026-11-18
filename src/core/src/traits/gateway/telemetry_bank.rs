@@ -82,6 +82,8 @@ pub struct LiminalLayerTelemetry {
     pub slide_in_count: u64,
     /// Dynamic slide-out retractions (`slid_out_bits != 0`).
     pub slide_out_count: u64,
+    /// Steps stuck in conflict or liminal drift without Ego intervention (`last_intervened_mask == 0`).
+    pub passive_stall_events: u64,
 }
 
 /// Layer 1 (`Stigmergic`) telemetry domain: 7-regime `ActionHub` decisions, Venn overlap, and quorums.
@@ -106,6 +108,42 @@ pub struct EgoLayerTelemetry {
     pub tiebreak_count: u64,
     /// Steps where cold-path escalation swapped external phases into a working lane.
     pub escalation_swaps: u64,
+    /// Steps where Ego intervened yet ended in repulsion or unaligned conflict without Venn quorum.
+    pub unaligned_intervention_count: u64,
+}
+
+/// Classification of cross-layer geometric/control distortion relative to Layer 2 Ego alignment.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LayerDistortionKind {
+    /// Core layers and ActionHub remain balanced and aligned (`0`).
+    #[default]
+    Aligned = 0,
+    /// Passive saturation or drift without sufficient Ego corrective intervention (`1`).
+    PassiveSaturation = 1,
+    /// Excessive or unaligned Ego overdrive causing saturation or conflict mismatch (`2`).
+    ActiveOverdrive = 2,
+}
+
+/// Lazy-computed diagnostic summary of cross-layer distortion (`Distortion`) used to trigger
+/// corrective Ego awakening on passive stalls or Ego cooldown on active overdrive.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct LayerDistortionReport {
+    /// Largest decision share among the 7 `ActionHub` regimes (`0.0..=1.0`).
+    pub action_saturation_ratio: f32,
+    /// Passive distortion score combining unguided stalls and single-mode saturation (`0.0..=1.0`).
+    pub passive_distortion_ratio: f32,
+    /// Active overdrive distortion score combining unaligned Ego steps and saturated Ego bias (`0.0..=1.0`).
+    pub active_distortion_ratio: f32,
+    /// Overall cross-layer mismatch rate (`0.0..=1.0`).
+    pub mismatch_ratio: f32,
+    /// Dominant distortion state.
+    pub kind: LayerDistortionKind,
+    /// `true` when passive distortion warrants waking/boosting Layer 2 Ego.
+    pub ego_wakeup_recommended: bool,
+    /// `true` when active distortion warrants cooling down Layer 2 Ego thrust/defiance.
+    pub ego_cooldown_recommended: bool,
 }
 
 /// Vertical `+ System` execution spine telemetry: cross-layer EDBC, QoS, mode switches, and Slow-Loop state.
@@ -170,6 +208,8 @@ pub struct SlowLoopTelemetryAdjustment {
     pub suggested_slide_out_dwell_delta: i8,
     /// Bounded recommendation for repulsion bias in Q0.7 (`-16..=16`).
     pub suggested_repulse_bias_q7: i8,
+    /// Cross-layer distortion diagnosis evaluated over the epoch samples.
+    pub distortion: LayerDistortionReport,
 }
 
 /// Lazy-Pull unified telemetry snapshot combining `3 + System` domains, derived ratios, and
@@ -200,6 +240,8 @@ pub struct CoreTelemetrySnapshot {
     pub ego_intervention_ratio: f32,
     /// Compact 32-byte topological snapshot of live Layer 0 boundaries.
     pub topology: LiminalTopologyTelemetrySnapshot,
+    /// Cross-layer geometric/control distortion metrics (`Distortion`).
+    pub distortion: LayerDistortionReport,
     /// Bitmask of external `LatentHorizonSlot`s currently slid in.
     pub active_horizon_slots_mask: u32,
 }
@@ -249,6 +291,7 @@ impl CoreTelemetryBank {
                 stationary_shortcut_hits: 0,
                 slide_in_count: 0,
                 slide_out_count: 0,
+                passive_stall_events: 0,
             },
             layer1: StigmergicLayerTelemetry {
                 decision_counts: [0; 7],
@@ -259,6 +302,7 @@ impl CoreTelemetryBank {
                 intervention_count: 0,
                 tiebreak_count: 0,
                 escalation_swaps: 0,
+                unaligned_intervention_count: 0,
             },
             system: SystemSpineTelemetry {
                 total_steps: 0,
@@ -440,7 +484,7 @@ impl CoreTelemetryBank {
             self.layer1.quorum_core_hits = self.layer1.quorum_core_hits.saturating_add(1);
         }
 
-        // Layer 2: Ego
+        // Layer 2: Ego & cross-layer distortion accounting
         if ego.last_intervened_mask != 0 {
             self.layer2.intervention_count = self.layer2.intervention_count.saturating_add(1);
             if (ego.last_intervened_mask
@@ -448,6 +492,25 @@ impl CoreTelemetryBank {
                 != 0
             {
                 self.layer2.tiebreak_count = self.layer2.tiebreak_count.saturating_add(1);
+            }
+            let unaligned = matches!(decision, StigmergicActionDecision::RepulsionEscape)
+                || (horizon.is_internal_conflict() && venn.venn_core_mask == 0);
+            if unaligned {
+                self.layer2.unaligned_intervention_count =
+                    self.layer2.unaligned_intervention_count.saturating_add(1);
+            }
+        } else {
+            let stalled = (horizon.is_internal_conflict() || horizon.is_liminal())
+                && delta.stationary_shortcut_ready == 0
+                && matches!(
+                    decision,
+                    StigmergicActionDecision::FullOrchestration
+                        | StigmergicActionDecision::CrystallizeMacroBasin
+                        | StigmergicActionDecision::RepulsionEscape
+                );
+            if stalled {
+                self.layer0.passive_stall_events =
+                    self.layer0.passive_stall_events.saturating_add(1);
             }
         }
         if escalated {
@@ -510,6 +573,75 @@ impl CoreTelemetryBank {
         }
     }
 
+    /// Computes a Lazy-Pull cross-layer [`LayerDistortionReport`] diagnosing whether the core
+    /// is aligned, passively saturated/stalled, or actively overdriven by unaligned Ego bias.
+    #[inline]
+    #[must_use]
+    pub fn compute_distortion_report(&self) -> LayerDistortionReport {
+        if self.system.continuous_standard_steps == 0 {
+            return LayerDistortionReport::default();
+        }
+        let denom = self.system.continuous_standard_steps as f32;
+        let mut max_decision = 0_u64;
+        for &cnt in &self.layer1.decision_counts {
+            if cnt > max_decision {
+                max_decision = cnt;
+            }
+        }
+        let action_saturation_ratio = branchless_clamp_f32(max_decision as f32 / denom, 0.0, 1.0);
+        let sat_excess =
+            branchless_clamp_f32((action_saturation_ratio - 0.55) / 0.45, 0.0, 1.0);
+        let passive_stall_rate =
+            branchless_clamp_f32(self.layer0.passive_stall_events as f32 / denom, 0.0, 1.0);
+        let active_mismatch_rate = branchless_clamp_f32(
+            self.layer2.unaligned_intervention_count as f32 / denom,
+            0.0,
+            1.0,
+        );
+        let ego_ratio =
+            branchless_clamp_f32(self.layer2.intervention_count as f32 / denom, 0.0, 1.0);
+
+        let passive_distortion_ratio = branchless_clamp_f32(
+            0.5 * passive_stall_rate + 0.5 * sat_excess * (1.0 - ego_ratio),
+            0.0,
+            1.0,
+        );
+        let active_distortion_ratio = branchless_clamp_f32(
+            0.6 * active_mismatch_rate + 0.4 * sat_excess * ego_ratio,
+            0.0,
+            1.0,
+        );
+        let mismatch_ratio = branchless_clamp_f32(
+            (self.layer0.passive_stall_events + self.layer2.unaligned_intervention_count) as f32
+                / denom,
+            0.0,
+            1.0,
+        );
+
+        let enough_samples = self.system.continuous_standard_steps >= 16;
+        let ego_cooldown_recommended =
+            enough_samples && active_distortion_ratio >= 0.40 && ego_ratio >= 0.50;
+        let ego_wakeup_recommended =
+            enough_samples && !ego_cooldown_recommended && passive_distortion_ratio >= 0.40;
+        let kind = if ego_cooldown_recommended {
+            LayerDistortionKind::ActiveOverdrive
+        } else if ego_wakeup_recommended {
+            LayerDistortionKind::PassiveSaturation
+        } else {
+            LayerDistortionKind::Aligned
+        };
+
+        LayerDistortionReport {
+            action_saturation_ratio,
+            passive_distortion_ratio,
+            active_distortion_ratio,
+            mismatch_ratio,
+            kind,
+            ego_wakeup_recommended,
+            ego_cooldown_recommended,
+        }
+    }
+
     /// Computes a Lazy-Pull [`CoreTelemetrySnapshot`] combining `3 + System` counters, derived ratios,
     /// and live `stack` topological state without performing allocations.
     #[inline]
@@ -540,6 +672,7 @@ impl CoreTelemetryBank {
             active_crystals,
             spawned_daughters,
         );
+        let distortion = self.compute_distortion_report();
         let detailed = if matches!(self.active_mode, TelemetryVerbosityMode::Detailed)
             || self.detailed.detailed_captured_steps > 0
         {
@@ -573,6 +706,7 @@ impl CoreTelemetryBank {
                 0.0
             },
             topology,
+            distortion,
             active_horizon_slots_mask,
         }
     }
@@ -588,6 +722,7 @@ impl CoreTelemetryBank {
         base: &StigmergicThresholds,
         min_samples: u64,
     ) -> SlowLoopTelemetryAdjustment {
+        let distortion = self.compute_distortion_report();
         let req = min_samples.max(1);
         if matches!(self.active_mode, TelemetryVerbosityMode::Coarse)
             || self.system.continuous_standard_steps < req
@@ -598,6 +733,7 @@ impl CoreTelemetryBank {
                 tuned_thresholds: *base,
                 suggested_slide_out_dwell_delta: 0,
                 suggested_repulse_bias_q7: 0,
+                distortion,
             };
         }
 
@@ -607,6 +743,7 @@ impl CoreTelemetryBank {
             (self.layer0.regime_counts[1].saturating_add(self.layer0.regime_counts[2])) as f32
                 / denom;
         let skip_ratio = self.layer1.decision_counts[1] as f32 / denom;
+        let rank1_ratio = self.layer1.decision_counts[4] as f32 / denom;
         let repulse_ratio = self.layer1.decision_counts[6] as f32 / denom;
 
         // Layer 0 chatter -> bounded dwell hysteresis extension (prevents slot flapping).
@@ -618,9 +755,19 @@ impl CoreTelemetryBank {
             0
         };
 
-        // Layer 1 decision balance -> homeostatic ±15% density adjustment and repulsion-windup relief.
+        // Layer 1 decision balance -> homeostatic ±15% adjustments keeping the monotone ladder intact.
         let density_scale = branchless_clamp_f32(
-            1.0 - (repulse_ratio - 0.35) * 0.25 - (skip_ratio - 0.55) * 0.3,
+            1.0 - (repulse_ratio - 0.35) * 0.25 + (excursion_ratio - 0.40) * 0.10,
+            0.88,
+            1.12,
+        );
+        let rank1_scale = branchless_clamp_f32(
+            1.0 + (rank1_ratio - 0.40) * 0.35 - (skip_ratio - 0.25) * 0.20,
+            0.85,
+            1.15,
+        );
+        let skip_entropy_scale = branchless_clamp_f32(
+            1.0 + (rank1_ratio - 0.45) * 0.30 - (skip_ratio - 0.25) * 0.35,
             0.85,
             1.15,
         );
@@ -630,9 +777,32 @@ impl CoreTelemetryBank {
             1.12,
         );
 
+        let next_express = branchless_clamp_f32(
+            base.express_steer_density_thresh * density_scale,
+            0.05,
+            base.crystallize_density_thresh,
+        );
+        let next_subhead = branchless_clamp_f32(
+            base.subhead_route_density_thresh * density_scale,
+            next_express,
+            base.crystallize_density_thresh,
+        );
+        let next_rank1 = branchless_clamp_f32(
+            base.rank1_inject_density_thresh * rank1_scale,
+            next_subhead,
+            base.crystallize_density_thresh,
+        );
+        let next_skip_entropy = branchless_clamp_f32(
+            base.inertial_skip_entropy_thresh * skip_entropy_scale,
+            0.05,
+            0.55,
+        );
+
         let tuned_thresholds = StigmergicThresholds {
-            express_steer_density_thresh: base.express_steer_density_thresh * density_scale,
-            subhead_route_density_thresh: base.subhead_route_density_thresh * density_scale,
+            inertial_skip_entropy_thresh: next_skip_entropy,
+            express_steer_density_thresh: next_express,
+            subhead_route_density_thresh: next_subhead,
+            rank1_inject_density_thresh: next_rank1,
             contradiction_coherence_thresh: branchless_clamp_f32(
                 base.contradiction_coherence_thresh * contradict_scale,
                 0.05,
@@ -654,6 +824,7 @@ impl CoreTelemetryBank {
             tuned_thresholds,
             suggested_slide_out_dwell_delta: dwell_delta,
             suggested_repulse_bias_q7: raw_bias,
+            distortion,
         }
     }
 }
@@ -785,5 +956,68 @@ mod tests {
         assert!((snap.decision_ratios_pct[2] - 90.0).abs() < 1e-4);
         assert!((snap.decision_ratios_pct[6] - 10.0).abs() < 1e-4);
         assert!(snap.detailed.is_some());
+    }
+
+    #[test]
+    fn test_layer_distortion_report_and_slow_loop_rank1_skip_balance() {
+        let mut bank = CoreTelemetryBank::default();
+        let conflict = EpistemicHorizonReading {
+            regime_code: EpistemicRegime::InternalConflict as u8,
+            conflict_severity: 0.25,
+            ..EpistemicHorizonReading::default()
+        };
+        let stagnant_delta = LiminalBoundaryDelta::default();
+        let venn = StigmergicVennSerendipityReport::default();
+
+        // 1. Passive saturation under Rank-1 dominance without Ego intervention -> PassiveSaturation.
+        for _ in 0..20 {
+            bank.record_step(
+                StigmergicActionDecision::FullOrchestration,
+                &conflict,
+                &stagnant_delta,
+                &venn,
+                &LiminalEgoField::new(),
+                0,
+                0,
+                0,
+                false,
+                false,
+            );
+        }
+        let pass_dist = bank.compute_distortion_report();
+        assert_eq!(pass_dist.kind, LayerDistortionKind::PassiveSaturation);
+        assert!(pass_dist.ego_wakeup_recommended);
+        assert!(!pass_dist.ego_cooldown_recommended);
+
+        let base = StigmergicThresholds::default();
+        let adj = bank.evaluate_slow_loop_epoch(&base, 16);
+        assert!(adj.applied);
+        assert!(adj.tuned_thresholds.rank1_inject_density_thresh > base.rank1_inject_density_thresh);
+        assert!(adj.tuned_thresholds.inertial_skip_entropy_thresh > base.inertial_skip_entropy_thresh);
+        assert!(adj.tuned_thresholds.validate().is_ok());
+
+        // 2. Active overdrive under unaligned Ego intervention -> ActiveOverdrive.
+        bank.reset();
+        let mut active_ego =
+            LiminalEgoField::from_preset(crate::LiminalEgoPreset::High);
+        active_ego.last_intervened_mask = EGO_TRIGGER_INTERNAL_CONFLICT;
+        for _ in 0..20 {
+            bank.record_step(
+                StigmergicActionDecision::RepulsionEscape,
+                &conflict,
+                &stagnant_delta,
+                &venn,
+                &active_ego,
+                2,
+                0,
+                0,
+                false,
+                false,
+            );
+        }
+        let act_dist = bank.compute_distortion_report();
+        assert_eq!(act_dist.kind, LayerDistortionKind::ActiveOverdrive);
+        assert!(act_dist.ego_cooldown_recommended);
+        assert!(!act_dist.ego_wakeup_recommended);
     }
 }
