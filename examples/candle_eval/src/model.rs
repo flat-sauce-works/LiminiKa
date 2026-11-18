@@ -8,13 +8,16 @@ use std::path::Path;
 use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor, D};
 use candle_nn::{linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
-use liminika_adapter::{ModelSteeringAdapter, RopeGeometry, RopeLayout};
+use liminika_adapter::{
+    CorpusRecallEscalationProvider, ModelSteeringAdapter, RopeGeometry, RopeLayout,
+};
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::traits::gateway::{
     GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact, ResonantSignalSlice, SubjectivePersona,
 };
 use serde::Deserialize;
 
+use crate::eval::HorizonAblationMode;
 use crate::LayerResonantSlices;
 
 pub(crate) type ForwardTokensOutput = (Vec<f32>, Vec<Vec<f32>>, Vec<f32>);
@@ -48,7 +51,7 @@ impl<'a> ResonantAnchors<'a> {
     }
 }
 
-pub(crate) struct LayerSteer<'a> {
+pub(crate) struct LayerSteer<'a, 'c, 'e> {
     pub(crate) adapter: &'a mut ModelSteeringAdapter,
     pub(crate) layer_idx: usize,
     pub(crate) q7_deltas: &'a [gcso_q7_t],
@@ -56,9 +59,11 @@ pub(crate) struct LayerSteer<'a> {
     pub(crate) resonant_opt: Option<LayerResonantSlices<'a>>,
     pub(crate) max_rad: f32,
     pub(crate) trail: &'a mut gcso_pointer_trail_t,
+    pub(crate) horizon_mode: HorizonAblationMode,
+    pub(crate) escalation_provider: Option<&'e mut CorpusRecallEscalationProvider<'c>>,
 }
 
-pub(crate) struct ForwardSteer<'a> {
+pub(crate) struct ForwardSteer<'a, 'c, 'e> {
     pub(crate) adapter: &'a mut ModelSteeringAdapter,
     pub(crate) q7s: Option<&'a [Vec<gcso_q7_t>]>,
     pub(crate) persona_q7s: Option<&'a [Vec<gcso_q7_t>]>,
@@ -66,6 +71,46 @@ pub(crate) struct ForwardSteer<'a> {
     pub(crate) rope_rad: f32,
     pub(crate) trail: &'a mut gcso_pointer_trail_t,
     pub(crate) srl: Option<(&'a [f32], &'a [f32], f32)>,
+    pub(crate) horizon_mode: HorizonAblationMode,
+    pub(crate) escalation_provider: Option<&'e mut CorpusRecallEscalationProvider<'c>>,
+}
+
+fn dispatch_rope_orchestration<S: ManifoldGatewaySignal + ?Sized>(
+    adapter: &mut ModelSteeringAdapter,
+    horizon_mode: HorizonAblationMode,
+    escalation_provider: Option<&mut CorpusRecallEscalationProvider<'_>>,
+    layer_idx: usize,
+    signal: &S,
+    trail: &mut liminika_core::abi::gcso_pointer_trail_t,
+    slice: &mut [f32],
+) -> Result<(), String> {
+    if matches!(
+        horizon_mode,
+        HorizonAblationMode::Spillover | HorizonAblationMode::SlowLoop
+    ) {
+        if let Some(esc) = escalation_provider {
+            adapter.orchestrate_layer_rope_with_spillover(
+                layer_idx, signal, esc, trail, None, 128, slice, None,
+            )?;
+        } else {
+            let mut no_esc = ();
+            adapter.orchestrate_layer_rope_with_spillover(
+                layer_idx,
+                signal,
+                &mut no_esc,
+                trail,
+                None,
+                128,
+                slice,
+                None,
+            )?;
+        }
+    } else {
+        adapter.orchestrate_layer_rope_with_action_hub(
+            layer_idx, signal, trail, None, 128, slice, None,
+        )?;
+    }
+    Ok(())
 }
 
 pub(crate) struct ProbeTrace {
@@ -159,7 +204,7 @@ impl RotaryCache {
         &self,
         x: &Tensor,
         offset: usize,
-        steer: Option<LayerSteer<'_>>,
+        steer: Option<LayerSteer<'_, '_, '_>>,
     ) -> CResult<Tensor> {
         let (b, num_heads, seq_len, head_dim) = x.dims4()?;
         let rot = self.rotary_dim;
@@ -192,6 +237,8 @@ impl RotaryCache {
             resonant_opt,
             max_rad,
             trail,
+            horizon_mode,
+            mut escalation_provider,
         }) = steer
         {
             if max_rad != 0.0 && b == 1 {
@@ -217,21 +264,31 @@ impl RotaryCache {
                                     ResonantSignalSlice::from_q7_probe(persona_anchors, &probe);
                                 if guard_anchors.is_empty() {
                                     let composite = (fact_res, persona_res);
-                                    adapter
-                                        .orchestrate_layer_rope_with_action_hub(
-                                            layer_idx, &composite, trail, None, 128, slice, None,
-                                        )
-                                        .map_err(candle_core::Error::Msg)?;
+                                    dispatch_rope_orchestration(
+                                        adapter,
+                                        horizon_mode,
+                                        escalation_provider.as_deref_mut(),
+                                        layer_idx,
+                                        &composite,
+                                        trail,
+                                        slice,
+                                    )
+                                    .map_err(candle_core::Error::Msg)?;
                                 } else {
                                     let guard_res =
                                         ResonantSignalSlice::from_q7_probe(guard_anchors, &probe);
                                     let sys_res = *adapter.system_constraint();
                                     let composite = (sys_res, fact_res, persona_res, guard_res);
-                                    adapter
-                                        .orchestrate_layer_rope_with_action_hub(
-                                            layer_idx, &composite, trail, None, 128, slice, None,
-                                        )
-                                        .map_err(candle_core::Error::Msg)?;
+                                    dispatch_rope_orchestration(
+                                        adapter,
+                                        horizon_mode,
+                                        escalation_provider.as_deref_mut(),
+                                        layer_idx,
+                                        &composite,
+                                        trail,
+                                        slice,
+                                    )
+                                    .map_err(candle_core::Error::Msg)?;
                                 }
                             } else {
                                 adapter
@@ -387,7 +444,7 @@ impl Phi3Attention {
         x: &Tensor,
         rope: &RotaryCache,
         offset: usize,
-        steer: Option<LayerSteer<'_>>,
+        steer: Option<LayerSteer<'_, '_, '_>>,
         collect_q_heads: bool,
     ) -> CResult<(Tensor, Option<Vec<f32>>)> {
         let (b, seq_len, _) = x.dims3()?;
@@ -671,7 +728,7 @@ impl Phi3Model {
         &mut self,
         tokens: &[u32],
         offset: usize,
-        mut steer: Option<&mut ForwardSteer<'_>>,
+        mut steer: Option<&mut ForwardSteer<'_, '_, '_>>,
         use_edbc: bool,
         collect_bake_data: bool,
     ) -> CResult<ForwardTokensOutput> {
@@ -707,6 +764,8 @@ impl Phi3Model {
                             .and_then(|r| r.layer_slices(layer_idx)),
                         max_rad: st.rope_rad,
                         trail: &mut *st.trail,
+                        horizon_mode: st.horizon_mode,
+                        escalation_provider: st.escalation_provider.as_deref_mut(),
                     })
                 }),
                 _ => None,

@@ -618,11 +618,17 @@ impl CoreTelemetryBank {
             0
         };
 
-        // Layer 1 decision balance -> strictly clamped ±15% density threshold adjustment.
-        let density_scale =
-            branchless_clamp_f32(1.0 + (repulse_ratio - 0.25) * 0.4 - (skip_ratio - 0.55) * 0.3, 0.85, 1.15);
-        let contradict_scale =
-            branchless_clamp_f32(1.0 - (excursion_ratio - 0.30) * 0.25, 0.88, 1.12);
+        // Layer 1 decision balance -> homeostatic ±15% density adjustment and repulsion-windup relief.
+        let density_scale = branchless_clamp_f32(
+            1.0 - (repulse_ratio - 0.35) * 0.25 - (skip_ratio - 0.55) * 0.3,
+            0.85,
+            1.15,
+        );
+        let contradict_scale = branchless_clamp_f32(
+            1.0 + (repulse_ratio - 0.45) * 0.25 - (excursion_ratio - 0.30) * 0.15,
+            0.88,
+            1.12,
+        );
 
         let tuned_thresholds = StigmergicThresholds {
             express_steer_density_thresh: base.express_steer_density_thresh * density_scale,

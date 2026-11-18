@@ -1575,15 +1575,11 @@ pub struct HorizonDwellState {
 impl HorizonDwellState {
     /// Advances dwell hysteresis counters branchlessly and returns `(unstable, quiescent)`.
     #[inline(always)]
-    pub fn step_branchless(&mut self, destabilized: bool, stationary_ready: bool) -> (u16, u16) {
+    pub fn step_branchless(&mut self, destabilized: bool, _stationary_ready: bool) -> (u16, u16) {
         let next_unstable = self.unstable_dwell_steps.saturating_add(1);
         let next_quiescent = self.quiescent_dwell_steps.saturating_add(1);
         let unstable_out = if destabilized { next_unstable } else { 0 };
-        let quiescent_out = if (!destabilized) & stationary_ready {
-            next_quiescent
-        } else {
-            0
-        };
+        let quiescent_out = if !destabilized { next_quiescent } else { 0 };
         self.unstable_dwell_steps = unstable_out;
         self.quiescent_dwell_steps = quiescent_out;
         (unstable_out, quiescent_out)
@@ -1634,7 +1630,7 @@ impl HorizonTriggerInput {
     #[inline(always)]
     #[must_use]
     pub const fn can_retract(&self) -> bool {
-        self.stationary_shortcut_ready & !self.is_destabilized()
+        !self.is_destabilized()
     }
 
     /// Returns effective destabilization dwell steps (promoting explicit destabilization to `1`
@@ -1921,6 +1917,8 @@ pub struct HorizonEscalationRequest {
     pub trigger: HorizonTriggerInput,
     /// Target working lane (`0..=7`) reserved for swapped-in phases (typically `ATTRACTOR_SLOT_CUSTOM_7`).
     pub target_slot: u8,
+    /// Normalized depth scale along the model hierarchy (`0..=127`, where `0` = shallowest, `127` = deepest).
+    pub layer_scale_q7: u8,
     /// Active Layer 0 cognitive aperture mask at the time of escalation.
     pub desired_aperture_mask: u32,
     /// Current effective energy on the synthesized [`GatewayFrame`].

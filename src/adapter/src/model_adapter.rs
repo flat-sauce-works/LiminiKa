@@ -257,10 +257,10 @@ impl LatentHorizonSlot for CoherenceHorizonGuardSlot {
     ) {
         if self.activations == self.retractions {
             self.saved_aperture_mask = stack.liminal_layer.active_aperture_mask;
+            self.activations = self.activations.saturating_add(1);
         }
-        self.activations = self.activations.saturating_add(1);
         stack.liminal_layer.active_aperture_mask |= self.guard_aperture_bits;
-        if trigger.repulsion_severity > 0.25 || trigger.epistemic_regime != 0 {
+        if trigger.repulsion_severity > 0.25 {
             frame.action_mode_flags |= ACTION_MODE_PHASE_REPULSE;
         }
     }
@@ -336,10 +336,26 @@ impl HorizonEscalationProvider for CorpusRecallEscalationProvider<'_> {
         let Some(entry) = selected else {
             return Ok(None);
         };
-        let Some(last_q7) = entry.per_layer_q7.last() else {
+        let n_layers = entry.per_layer_q7.len();
+        if n_layers == 0 {
             return Ok(None);
-        };
-        *slot_phase_out = *last_q7;
+        }
+        if n_layers == 1 {
+            *slot_phase_out = entry.per_layer_q7[0];
+        } else {
+            let scale_q7 = usize::from(req.layer_scale_q7.min(127));
+            let scaled = scale_q7 * (n_layers - 1);
+            let idx0 = (scaled / 127).min(n_layers - 1);
+            let idx1 = (idx0 + 1).min(n_layers - 1);
+            let frac = (scaled % 127) as i32;
+            let w0 = 127 - frac;
+            let a0 = &entry.per_layer_q7[idx0];
+            let a1 = &entry.per_layer_q7[idx1];
+            for (dst, (&v0, &v1)) in slot_phase_out.iter_mut().zip(a0.iter().zip(a1.iter())) {
+                let interp = (i32::from(v0) * w0 + i32::from(v1) * frac + 63) / 127;
+                *dst = interp.clamp(-127, 127) as gcso_q7_t;
+            }
+        }
         self.escalation_calls = self.escalation_calls.saturating_add(1);
         Ok(Some(entry.energy.max(self.min_weight)))
     }
@@ -456,6 +472,28 @@ impl ModelSteeringAdapter {
         self.action_hub.last_entropy_h_tilde = 0.35;
     }
 
+    /// Resets core layers, horizon dwell/slots, spillover cache, thresholds, and `3 + System`
+    /// telemetry back to clean defaults for fair ablation pass isolation.
+    pub fn reset_horizon_and_core_state(&mut self) {
+        self.core_layers = AutonomousCoreLayerStack::new();
+        self.last_boundary_delta = LiminalBoundaryDelta::default();
+        self.last_horizon = EpistemicHorizonReading {
+            regime_code: EpistemicRegime::KnownCoherent as u8,
+            ..EpistemicHorizonReading::default()
+        };
+        self.last_venn_report = StigmergicVennSerendipityReport::default();
+        self.last_ensemble_report = None;
+        self.horizon_dwell = HorizonDwellState::default();
+        self.active_horizon_slots_mask = 0;
+        self.coherence_guard_slot = CoherenceHorizonGuardSlot::default();
+        *self.residual_spillover = DefaultResidualSpilloverSlot::default();
+        self.action_hub.thresholds = StigmergicThresholds::default();
+        self.action_hub.last_decision = 0;
+        self.action_hub.last_anomaly_severity = 0.0;
+        self.telemetry.set_policy(self.telemetry.policy());
+        self.reset_action_hub_stats();
+    }
+
     /// Returns a shared reference to the core `3 + System` [`CoreTelemetryBank`].
     #[must_use]
     pub const fn telemetry_bank(&self) -> &CoreTelemetryBank {
@@ -487,6 +525,21 @@ impl ModelSteeringAdapter {
     ) -> SlowLoopTelemetryAdjustment {
         let base = self.action_hub.thresholds;
         self.telemetry.evaluate_slow_loop_epoch(&base, min_samples)
+    }
+
+    /// Evaluates bounded Slow-Loop epoch adjustments and applies them to [`ActionHubEngine`]
+    /// thresholds and [`CoherenceHorizonGuardSlot`] dwell hysteresis when `applied == true`.
+    pub fn apply_slow_loop_telemetry_epoch(
+        &mut self,
+        min_samples: u64,
+    ) -> SlowLoopTelemetryAdjustment {
+        let adj = self.evaluate_slow_loop_telemetry(min_samples);
+        if adj.applied {
+            self.action_hub.thresholds = adj.tuned_thresholds;
+            let next_dwell = (2_i16 + i16::from(adj.suggested_slide_out_dwell_delta)).clamp(1, 8);
+            self.coherence_guard_slot.slide_out_dwell = next_dwell as u16;
+        }
+        adj
     }
 
     /// Returns a shared reference to the embedded [`ActionHubEngine`].
@@ -1439,9 +1492,12 @@ impl ModelSteeringAdapter {
                 unstable_dwell_steps: this.horizon_dwell.unstable_dwell_steps,
                 quiescent_dwell_steps: this.horizon_dwell.quiescent_dwell_steps,
             };
+            let num_layers_denom = this.geometry.num_layers.saturating_sub(1).max(1);
+            let layer_scale_q7 = ((layer_idx * 127) / num_layers_denom).min(127) as u8;
             let esc_req = HorizonEscalationRequest {
                 trigger: pre_trigger,
                 target_slot: ATTRACTOR_SLOT_CUSTOM_7,
+                layer_scale_q7,
                 desired_aperture_mask: this.core_layers.liminal_layer.active_aperture_mask,
                 current_frame_energy: this.last_horizon.total_memory_support,
             };

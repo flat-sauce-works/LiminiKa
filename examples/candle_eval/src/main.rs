@@ -1,4 +1,4 @@
-// name: examples/candle_eval/src/main.rs
+﻿// name: examples/candle_eval/src/main.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Thin Candle + Safetensors evaluation harness delegating all RoPE geometry mapping,
@@ -10,11 +10,11 @@ use std::time::Instant;
 use candle_core::{DType, Device};
 use liminika_adapter::{
     AdaptiveGopCutDetector, AttractorContainerCodec, AttractorRole, AttractorTrajectoryEvaluator,
-    CompiledTokenCorpus, FrameTransitionMetrics, GcsoDualTrackTimeline,
-    ManifoldReflectionEvaluator, ModelSteeringAdapter, RebakeContext, ReflectionCritique,
-    ReflectionPolicy, ReflectionSelection, RopeGeometry, SequenceActivationPooler,
-    SourceTextRecord, SubtitleActivationEncoder, TimelineResumeOutcome, TimelineStepContext,
-    TokenSequenceEntry, TrajectoryManifoldSnapshot, VoidBoundaryState,
+    CompiledTokenCorpus, CorpusRecallEscalationProvider, FrameTransitionMetrics,
+    GcsoDualTrackTimeline, ManifoldReflectionEvaluator, ModelSteeringAdapter, RebakeContext,
+    ReflectionCritique, ReflectionPolicy, ReflectionSelection, RopeGeometry,
+    SequenceActivationPooler, SourceTextRecord, SubtitleActivationEncoder, TimelineResumeOutcome,
+    TimelineStepContext, TokenSequenceEntry, TrajectoryManifoldSnapshot, VoidBoundaryState,
 };
 use liminika_core::abi::gcso_pointer_trail_t;
 use liminika_core::action_hub::StigmergicActionDecision;
@@ -44,9 +44,9 @@ use bake::{
 };
 use eval::{
     apply_ego_mode, build_preset_circuit, critique_generated_draft, generate_steered_reply,
-    generate_steered_reply_with_offset, parse_circuit_mode, parse_ego_mode, parse_kv_min_res,
-    parse_quant_mode, resolve_persona_circuit, CircuitProfileMode, EgoProfileMode, KvTraceStats,
-    SteerDecodeConfig,
+    generate_steered_reply_with_offset, parse_circuit_mode, parse_ego_mode, parse_horizon_mode,
+    parse_kv_min_res, parse_quant_mode, resolve_persona_circuit, CircuitProfileMode,
+    EgoProfileMode, HorizonAblationMode, KvTraceStats, SteerDecodeConfig, StepTelemetryTotals,
 };
 use model::{ForwardSteer, Phi3Config, Phi3Model, ProbeTrace, ResonantAnchors};
 
@@ -88,6 +88,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let circuit_mode = parse_circuit_mode(cli_args.iter().map(String::as_str));
     let ego_mode = parse_ego_mode(cli_args.iter().map(String::as_str));
     let ablate_ego = cli_args.iter().any(|a| a == "--ablate-ego");
+    let horizon_mode = parse_horizon_mode(cli_args.iter().map(String::as_str));
+    let ablate_horizon = cli_args.iter().any(|a| a == "--ablate-horizon");
     apply_ego_mode(&mut adapter, &ego_mode);
     if adapter.ego_field().is_active() {
         println!(
@@ -307,6 +309,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         rope_rad,
                         trail: &mut trail,
                         srl: srl_arg,
+                        horizon_mode: HorizonAblationMode::Core3,
+                        escalation_provider: None,
                     };
                     let (mut logits, _, _) =
                         model.forward_tokens(&ids, 0, Some(&mut steer), use_edbc, false)?;
@@ -540,6 +544,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         rope_rad,
                         trail: &mut trail,
                         srl: srl_arg,
+                        horizon_mode: HorizonAblationMode::Core3,
+                        escalation_provider: None,
                     };
                     let (mut logits, _, _) =
                         model.forward_tokens(&ids, offset, Some(&mut steer), use_edbc, false)?;
@@ -698,14 +704,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         compiled.recall_policy.min_coherence,
         compiled.recall_policy.boundary_margin,
     );
-    let step2_ego_runs: Vec<(&str, EgoProfileMode)> = if ablate_ego {
+    let step2_runs: Vec<(String, EgoProfileMode, HorizonAblationMode)> = if ablate_horizon {
+        vec![
+            (
+                format!("{:?}:Core3", ego_mode),
+                ego_mode.clone(),
+                HorizonAblationMode::Core3,
+            ),
+            (
+                format!("{:?}:Spillover", ego_mode),
+                ego_mode.clone(),
+                HorizonAblationMode::Spillover,
+            ),
+            (
+                format!("{:?}:SlowLoop", ego_mode),
+                ego_mode.clone(),
+                HorizonAblationMode::SlowLoop,
+            ),
+        ]
+    } else if ablate_ego {
         let active_ego = match &ego_mode {
             EgoProfileMode::Custom => EgoProfileMode::Preset(LiminalEgoPreset::Medium),
             other => other.clone(),
         };
-        vec![("NoEgo", EgoProfileMode::Custom), ("Ego", active_ego)]
+        vec![
+            ("NoEgo".to_string(), EgoProfileMode::Custom, horizon_mode),
+            ("Ego".to_string(), active_ego, horizon_mode),
+        ]
     } else {
-        vec![("Active", ego_mode.clone())]
+        vec![(
+            horizon_mode.label().to_string(),
+            ego_mode.clone(),
+            horizon_mode,
+        )]
     };
     let reflection_policy = if no_reflect {
         ReflectionPolicy {
@@ -721,14 +752,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut timeline = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
         adapter.geometry(),
     ));
-    for (run_label, run_ego_mode) in &step2_ego_runs {
+    for (run_label, run_ego_mode, run_horizon_mode) in &step2_runs {
         timeline = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
             adapter.geometry(),
         ));
+        adapter.reset_horizon_and_core_state();
         apply_ego_mode(&mut adapter, run_ego_mode);
-        if ablate_ego {
+        if ablate_ego || ablate_horizon {
             println!("\n-- Step 2 Ablation Pass: {run_label} --");
         }
+        let mut step_tlm = StepTelemetryTotals::default();
+        let mut esc_provider = CorpusRecallEscalationProvider::new(&compiled.corpus);
+        let mut slow_loop_epochs_applied = 0_u64;
+        let mut slow_loop_last_dwell_delta = 0_i8;
+        let mut slow_loop_last_repulse_bias = 0_i8;
+        let mut slow_loop_last_express_thresh =
+            adapter.action_hub().thresholds.express_steer_density_thresh;
         let mut step2_ctx_hits = 0_usize;
         let mut step2_exp_hits = 0_usize;
         let mut step2_exp_total = 0_usize;
@@ -908,21 +947,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     None
                 };
 
-                let pass1_cfg = SteerDecodeConfig {
+                let use_spillover = matches!(
+                    *run_horizon_mode,
+                    HorizonAblationMode::Spillover | HorizonAblationMode::SlowLoop
+                );
+                let mut pass1_cfg = SteerDecodeConfig {
                     q7s: Some(baked.fact_q7.as_slice()),
                     persona_q7s: Some(baked.persona_q7.as_slice()),
                     resonant_ctx: res_ctx,
                     rope_rad,
                     srl: srl_arg,
                     use_steer,
+                    horizon_mode: *run_horizon_mode,
+                    escalation_provider: if use_spillover {
+                        Some(&mut esc_provider)
+                    } else {
+                        None
+                    },
                 };
                 let (mut text, p1_tokens, p1_secs) = generate_steered_reply(
                     &mut model,
                     &tokenizer,
                     &mut adapter,
                     active_prompt.as_str(),
-                    &pass1_cfg,
+                    &mut pass1_cfg,
                 )?;
+                step_tlm.accumulate(&adapter.telemetry_snapshot());
                 step2_decode_tokens += p1_tokens;
                 step2_decode_secs += p1_secs;
 
@@ -982,21 +1032,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else {
                                 None
                             };
-                            let retry_cfg = SteerDecodeConfig {
+                            let mut retry_cfg = SteerDecodeConfig {
                                 q7s: Some(baked.fact_q7.as_slice()),
                                 persona_q7s: Some(baked.persona_q7.as_slice()),
                                 resonant_ctx: retry_res,
                                 rope_rad: retry_rope,
                                 srl: retry_srl,
                                 use_steer: retry_use_steer,
+                                horizon_mode: *run_horizon_mode,
+                                escalation_provider: if use_spillover {
+                                    Some(&mut esc_provider)
+                                } else {
+                                    None
+                                },
                             };
                             let (p2_text, p2_tokens, p2_secs) = generate_steered_reply(
                                 &mut model,
                                 &tokenizer,
                                 &mut adapter,
                                 retry_prompt.as_str(),
-                                &retry_cfg,
+                                &mut retry_cfg,
                             )?;
+                            step_tlm.accumulate(&adapter.telemetry_snapshot());
                             step2_decode_tokens += p2_tokens;
                             step2_decode_secs += p2_secs;
                             if let Some(pass2_crit) = critique_generated_draft(
@@ -1088,6 +1145,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 step2_forb_hits += p_forb;
                 step2_forb_total += forbidden.len();
             }
+            if matches!(
+                *run_horizon_mode,
+                HorizonAblationMode::Spillover | HorizonAblationMode::SlowLoop
+            ) {
+                let resolved = (p_exp > 0 || expected.is_empty()) && p_forb == 0;
+                let residual_phases = adapter.residual_spillover().active_spillover_residual_q7;
+                let _ = adapter.commit_spillover_experience(
+                    &residual_phases,
+                    recall.top1_fact_score.max(0.1),
+                    resolved,
+                );
+            }
+            if matches!(*run_horizon_mode, HorizonAblationMode::SlowLoop) {
+                let adj = adapter.apply_slow_loop_telemetry_epoch(64);
+                if adj.applied {
+                    slow_loop_epochs_applied += 1;
+                    slow_loop_last_dwell_delta = adj.suggested_slide_out_dwell_delta;
+                    slow_loop_last_repulse_bias = adj.suggested_repulse_bias_q7;
+                    slow_loop_last_express_thresh =
+                        adj.tuned_thresholds.express_steer_density_thresh;
+                }
+            }
             println!(
             "  [S2:{}:{}] void={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} recall_ms={:.2} kv={} reflect={} core=[{}] probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={} prov_slot={}] ctx_hit={}/{} hit={}/{} forb={} => {}",
             idx + 1,
@@ -1156,7 +1235,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         decode_tps,
     );
         println!("{summary_line}");
-        step2_ablation_summaries.push(summary_line);
+        let last_snap = adapter.telemetry_snapshot();
+        let guard_slot = adapter.coherence_guard_slot();
+        let dwell = adapter.horizon_dwell();
+        let spillover = adapter.residual_spillover();
+        let action_line = format!(
+            "  [ActionHub] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% sub-head={:.1}% Rank-1={:.1}% Crystal={:.1}% Repulse={:.1}%",
+            step_tlm.continuous_standard_steps,
+            step_tlm.decision_pct(0),
+            step_tlm.decision_pct(1),
+            step_tlm.decision_pct(2),
+            step_tlm.decision_pct(3),
+            step_tlm.decision_pct(4),
+            step_tlm.decision_pct(5),
+            step_tlm.decision_pct(6),
+        );
+        let core_line = format!(
+            "  [CoreTelemetry 3+System] mode={:?} steps={}(std={}) L0_exc={:.1}% L2_ego={:.1}% slide_in={} slide_out={} guard_act={} guard_ret={} dwell=({},{})",
+            last_snap.mode,
+            step_tlm.total_steps,
+            step_tlm.continuous_standard_steps,
+            step_tlm.excursion_pct(),
+            step_tlm.ego_pct(),
+            step_tlm.slide_in_count,
+            step_tlm.slide_out_count,
+            guard_slot.activations,
+            guard_slot.retractions,
+            dwell.unstable_dwell_steps,
+            dwell.quiescent_dwell_steps,
+        );
+        let spillover_line = format!(
+            "  [Spillover] esc_calls={} core_swaps={} hits={} stores={} evicts={} modulations={} retractions={}",
+            esc_provider.escalation_calls,
+            step_tlm.escalation_swaps,
+            spillover.cache_hits,
+            spillover.cache_stores,
+            spillover.cache_evictions,
+            spillover.spillover_modulations,
+            spillover.retractions,
+        );
+        let slow_loop_line = format!(
+            "  [SlowLoop] epochs_applied={} dwell_delta={:+} repulse_bias={:+} express_thresh={:.3} slide_out_dwell={}",
+            slow_loop_epochs_applied,
+            slow_loop_last_dwell_delta,
+            slow_loop_last_repulse_bias,
+            slow_loop_last_express_thresh,
+            guard_slot.slide_out_dwell,
+        );
+        println!("{action_line}");
+        println!("{core_line}");
+        println!("{spillover_line}");
+        println!("{slow_loop_line}");
+        step2_ablation_summaries.push(format!(
+            "{summary_line}\n  {action_line}\n  {core_line}\n  {spillover_line}\n  {slow_loop_line}"
+        ));
         if adapter.ego_field().is_active() {
             println!(
                 "[CoreTopology]\n{}",
@@ -1384,7 +1516,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         format!("<|end|><|user|>{turn_body}<|end|><|assistant|>")
                     };
-                    let turn_cfg = SteerDecodeConfig {
+                    let mut turn_cfg = SteerDecodeConfig {
                         q7s: Some(baked.fact_q7.as_slice()),
                         persona_q7s: Some(baked.persona_q7.as_slice()),
                         resonant_ctx: res_ctx,
@@ -1395,6 +1527,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             None
                         },
                         use_steer,
+                        horizon_mode,
+                        escalation_provider: None,
                     };
                     let (mut reply_text, mut turn_ids, dec_secs) =
                         generate_steered_reply_with_offset(
@@ -1403,7 +1537,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             &mut adapter,
                             &formatted_turn,
                             conv_offset,
-                            &turn_cfg,
+                            &mut turn_cfg,
                         )?;
                     let mut prompt_tok_len = tokenizer
                         .encode(formatted_turn.as_str(), false)
@@ -1456,7 +1590,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let retry_use_steer = !p1_crit.directive.suppress_injection
                                     && (!dyn_facts.is_empty()
                                         || p1_crit.directive.inject_guard_repulsion);
-                                let retry_cfg = SteerDecodeConfig {
+                                let mut retry_cfg = SteerDecodeConfig {
                                     q7s: Some(baked.fact_q7.as_slice()),
                                     persona_q7s: Some(baked.persona_q7.as_slice()),
                                     resonant_ctx: if retry_use_steer {
@@ -1485,6 +1619,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         None
                                     },
                                     use_steer: retry_use_steer,
+                                    horizon_mode,
+                                    escalation_provider: None,
                                 };
                                 let (p2_text, p2_ids, p2_secs) =
                                     generate_steered_reply_with_offset(
@@ -1493,7 +1629,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         &mut adapter,
                                         &retry_prompt,
                                         conv_offset,
-                                        &retry_cfg,
+                                        &mut retry_cfg,
                                     )?;
                                 let p2_prompt_len = tokenizer
                                     .encode(retry_prompt.as_str(), false)

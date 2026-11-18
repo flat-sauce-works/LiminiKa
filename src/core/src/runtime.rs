@@ -1290,6 +1290,7 @@ impl RuntimeContext {
         let esc_req = HorizonEscalationRequest {
             trigger,
             target_slot: ATTRACTOR_SLOT_CUSTOM_7,
+            layer_scale_q7: 64,
             desired_aperture_mask: self.core_layers.liminal_layer.active_aperture_mask,
             current_frame_energy: frame.effective_energy,
         };

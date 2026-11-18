@@ -8,14 +8,14 @@ use std::time::Instant;
 
 use candle_core::quantized::GgmlDType;
 use liminika_adapter::{
-    AttractorTrajectoryEvaluator, CompiledTokenCorpus, GcsoDualTrackTimeline,
-    ManifoldReflectionEvaluator, ModelSteeringAdapter, ReflectionCritique, ReflectionPolicy,
-    TrajectoryManifoldSnapshot,
+    AttractorTrajectoryEvaluator, CompiledTokenCorpus, CorpusRecallEscalationProvider,
+    GcsoDualTrackTimeline, ManifoldReflectionEvaluator, ModelSteeringAdapter, ReflectionCritique,
+    ReflectionPolicy, TrajectoryManifoldSnapshot,
 };
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::traits::gateway::{
     CognitiveCircuitPlasticity, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
-    LiminalEgoPreset, RamPhaseKvStepOutcome, StigmergicScaleGranularity,
+    CoreTelemetrySnapshot, LiminalEgoPreset, RamPhaseKvStepOutcome, StigmergicScaleGranularity,
 };
 use tokenizers::Tokenizer;
 
@@ -244,13 +244,106 @@ pub(crate) fn resolve_persona_circuit(
     }
 }
 
-pub(crate) struct SteerDecodeConfig<'a> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HorizonAblationMode {
+    Core3,
+    Spillover,
+    SlowLoop,
+}
+
+impl HorizonAblationMode {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Core3 => "Core3",
+            Self::Spillover => "Core3+Spillover",
+            Self::SlowLoop => "Core3+Spillover+SlowLoop",
+        }
+    }
+}
+
+pub(crate) fn parse_horizon_mode<'a>(
+    args: impl IntoIterator<Item = &'a str>,
+) -> HorizonAblationMode {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--horizon-mode=") {
+            if val.eq_ignore_ascii_case("spillover") {
+                return HorizonAblationMode::Spillover;
+            }
+            if val.eq_ignore_ascii_case("slow-loop") || val.eq_ignore_ascii_case("slow_loop") {
+                return HorizonAblationMode::SlowLoop;
+            }
+            if val.eq_ignore_ascii_case("core3") {
+                return HorizonAblationMode::Core3;
+            }
+        }
+    }
+    HorizonAblationMode::Core3
+}
+
+#[derive(Default)]
+pub(crate) struct StepTelemetryTotals {
+    pub(crate) total_steps: u64,
+    pub(crate) continuous_standard_steps: u64,
+    pub(crate) decision_counts: [u64; 7],
+    pub(crate) excursion_steps: u64,
+    pub(crate) ego_interventions: u64,
+    pub(crate) escalation_swaps: u64,
+    pub(crate) slide_in_count: u64,
+    pub(crate) slide_out_count: u64,
+}
+
+impl StepTelemetryTotals {
+    pub(crate) fn accumulate(&mut self, snap: &CoreTelemetrySnapshot) {
+        self.total_steps += snap.system.total_steps;
+        self.continuous_standard_steps += snap.system.continuous_standard_steps;
+        for (dst, &src) in self
+            .decision_counts
+            .iter_mut()
+            .zip(snap.layer1.decision_counts.iter())
+        {
+            *dst += src;
+        }
+        self.excursion_steps += snap.layer0.regime_counts[1] + snap.layer0.regime_counts[2];
+        self.ego_interventions += snap.layer2.intervention_count;
+        self.escalation_swaps += snap.layer2.escalation_swaps;
+        self.slide_in_count += snap.layer0.slide_in_count;
+        self.slide_out_count += snap.layer0.slide_out_count;
+    }
+
+    pub(crate) fn decision_pct(&self, idx: usize) -> f32 {
+        if self.continuous_standard_steps == 0 {
+            0.0
+        } else {
+            self.decision_counts[idx] as f32 / self.continuous_standard_steps as f32 * 100.0
+        }
+    }
+
+    pub(crate) fn excursion_pct(&self) -> f32 {
+        if self.continuous_standard_steps == 0 {
+            0.0
+        } else {
+            self.excursion_steps as f32 / self.continuous_standard_steps as f32 * 100.0
+        }
+    }
+
+    pub(crate) fn ego_pct(&self) -> f32 {
+        if self.continuous_standard_steps == 0 {
+            0.0
+        } else {
+            self.ego_interventions as f32 / self.continuous_standard_steps as f32 * 100.0
+        }
+    }
+}
+
+pub(crate) struct SteerDecodeConfig<'a, 'c, 'e> {
     pub(crate) q7s: Option<&'a [Vec<gcso_q7_t>]>,
     pub(crate) persona_q7s: Option<&'a [Vec<gcso_q7_t>]>,
     pub(crate) resonant_ctx: Option<ResonantAnchors<'a>>,
     pub(crate) rope_rad: f32,
     pub(crate) srl: Option<(&'a [f32], &'a [f32], f32)>,
     pub(crate) use_steer: bool,
+    pub(crate) horizon_mode: HorizonAblationMode,
+    pub(crate) escalation_provider: Option<&'e mut CorpusRecallEscalationProvider<'c>>,
 }
 
 pub(crate) fn generate_steered_reply_with_offset(
@@ -259,7 +352,7 @@ pub(crate) fn generate_steered_reply_with_offset(
     adapter: &mut ModelSteeringAdapter,
     formatted_prompt: &str,
     start_offset: usize,
-    cfg: &SteerDecodeConfig<'_>,
+    cfg: &mut SteerDecodeConfig<'_, '_, '_>,
 ) -> Result<(String, Vec<u32>, f64), Box<dyn std::error::Error>> {
     adapter.reset_action_hub_stats();
     let mut trail = gcso_pointer_trail_t::default();
@@ -277,6 +370,8 @@ pub(crate) fn generate_steered_reply_with_offset(
         rope_rad: cfg.rope_rad,
         trail: &mut trail,
         srl: cfg.srl,
+        horizon_mode: cfg.horizon_mode,
+        escalation_provider: cfg.escalation_provider.as_deref_mut(),
     };
     let t_dec = Instant::now();
     let (mut logits, _, _) =
@@ -310,7 +405,7 @@ pub(crate) fn generate_steered_reply(
     tokenizer: &Tokenizer,
     adapter: &mut ModelSteeringAdapter,
     formatted_prompt: &str,
-    cfg: &SteerDecodeConfig<'_>,
+    cfg: &mut SteerDecodeConfig<'_, '_, '_>,
 ) -> Result<(String, usize, f64), Box<dyn std::error::Error>> {
     model.clear_cache();
     let prompt_ids_len = tokenizer
