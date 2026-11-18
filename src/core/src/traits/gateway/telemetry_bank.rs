@@ -573,6 +573,103 @@ impl CoreTelemetryBank {
         }
     }
 
+    /// Accumulates counters from a pulled [`CoreTelemetrySnapshot`] into this bank, enabling
+    /// multi-pass or multi-probe aggregation using the exact same core distortion/ratio laws.
+    #[inline]
+    pub fn accumulate_snapshot(&mut self, snap: &CoreTelemetrySnapshot) {
+        for (dst, &src) in self
+            .layer0
+            .regime_counts
+            .iter_mut()
+            .zip(snap.layer0.regime_counts.iter())
+        {
+            *dst = dst.saturating_add(src);
+        }
+        self.layer0.chatter_events = self
+            .layer0
+            .chatter_events
+            .saturating_add(snap.layer0.chatter_events);
+        self.layer0.stationary_shortcut_hits = self
+            .layer0
+            .stationary_shortcut_hits
+            .saturating_add(snap.layer0.stationary_shortcut_hits);
+        self.layer0.slide_in_count = self
+            .layer0
+            .slide_in_count
+            .saturating_add(snap.layer0.slide_in_count);
+        self.layer0.slide_out_count = self
+            .layer0
+            .slide_out_count
+            .saturating_add(snap.layer0.slide_out_count);
+        self.layer0.passive_stall_events = self
+            .layer0
+            .passive_stall_events
+            .saturating_add(snap.layer0.passive_stall_events);
+
+        for (dst, &src) in self
+            .layer1
+            .decision_counts
+            .iter_mut()
+            .zip(snap.layer1.decision_counts.iter())
+        {
+            *dst = dst.saturating_add(src);
+        }
+        self.layer1.venn_serendipity_hits = self
+            .layer1
+            .venn_serendipity_hits
+            .saturating_add(snap.layer1.venn_serendipity_hits);
+        self.layer1.quorum_core_hits = self
+            .layer1
+            .quorum_core_hits
+            .saturating_add(snap.layer1.quorum_core_hits);
+
+        self.layer2.intervention_count = self
+            .layer2
+            .intervention_count
+            .saturating_add(snap.layer2.intervention_count);
+        self.layer2.tiebreak_count = self
+            .layer2
+            .tiebreak_count
+            .saturating_add(snap.layer2.tiebreak_count);
+        self.layer2.escalation_swaps = self
+            .layer2
+            .escalation_swaps
+            .saturating_add(snap.layer2.escalation_swaps);
+        self.layer2.unaligned_intervention_count = self
+            .layer2
+            .unaligned_intervention_count
+            .saturating_add(snap.layer2.unaligned_intervention_count);
+
+        self.system.total_steps = self.system.total_steps.saturating_add(snap.system.total_steps);
+        self.system.continuous_standard_steps = self
+            .system
+            .continuous_standard_steps
+            .saturating_add(snap.system.continuous_standard_steps);
+        self.system.qos_throttle_events = self
+            .system
+            .qos_throttle_events
+            .saturating_add(snap.system.qos_throttle_events);
+        self.system.edbc_bifurcation_events = self
+            .system
+            .edbc_bifurcation_events
+            .saturating_add(snap.system.edbc_bifurcation_events);
+        self.system.edbc_repulsion_events = self
+            .system
+            .edbc_repulsion_events
+            .saturating_add(snap.system.edbc_repulsion_events);
+        self.system.mode_promotions = self
+            .system
+            .mode_promotions
+            .saturating_add(snap.system.mode_promotions);
+        self.system.mode_demotions = self
+            .system
+            .mode_demotions
+            .saturating_add(snap.system.mode_demotions);
+        self.system.experience_cache_hits = snap.system.experience_cache_hits;
+        self.system.experience_cache_stores = snap.system.experience_cache_stores;
+        self.system.experience_cache_evictions = snap.system.experience_cache_evictions;
+    }
+
     /// Computes a Lazy-Pull cross-layer [`LayerDistortionReport`] diagnosing whether the core
     /// is aligned, passively saturated/stalled, or actively overdriven by unaligned Ego bias.
     #[inline]
@@ -582,47 +679,65 @@ impl CoreTelemetryBank {
             return LayerDistortionReport::default();
         }
         let denom = self.system.continuous_standard_steps as f32;
+        let inv_denom = 1.0_f32 / denom;
         let mut max_decision = 0_u64;
+        let mut hhi = 0.0_f32;
         for &cnt in &self.layer1.decision_counts {
             if cnt > max_decision {
                 max_decision = cnt;
             }
+            let p = (cnt as f32) * inv_denom;
+            hhi += p * p;
         }
-        let action_saturation_ratio = branchless_clamp_f32(max_decision as f32 / denom, 0.0, 1.0);
+        let action_saturation_ratio = branchless_clamp_f32((max_decision as f32) * inv_denom, 0.0, 1.0);
+        let concentration = branchless_clamp_f32((hhi - (1.0 / 7.0)) / (6.0 / 7.0), 0.0, 1.0);
         let sat_excess =
-            branchless_clamp_f32((action_saturation_ratio - 0.55) / 0.45, 0.0, 1.0);
+            branchless_clamp_f32((action_saturation_ratio - 0.45) / 0.55, 0.0, 1.0);
+        let sat_load = 0.5 * concentration + 0.5 * sat_excess;
         let passive_stall_rate =
-            branchless_clamp_f32(self.layer0.passive_stall_events as f32 / denom, 0.0, 1.0);
+            branchless_clamp_f32((self.layer0.passive_stall_events as f32) * inv_denom, 0.0, 1.0);
         let active_mismatch_rate = branchless_clamp_f32(
-            self.layer2.unaligned_intervention_count as f32 / denom,
+            (self.layer2.unaligned_intervention_count as f32) * inv_denom,
             0.0,
             1.0,
         );
         let ego_ratio =
-            branchless_clamp_f32(self.layer2.intervention_count as f32 / denom, 0.0, 1.0);
+            branchless_clamp_f32((self.layer2.intervention_count as f32) * inv_denom, 0.0, 1.0);
 
+        // Preserve total saturation load without diluting it by `ego_ratio`; attribute
+        // whether saturation persists passively (low Ego) or despite/from Ego (active).
         let passive_distortion_ratio = branchless_clamp_f32(
-            0.5 * passive_stall_rate + 0.5 * sat_excess * (1.0 - ego_ratio),
+            if passive_stall_rate > sat_load * (1.0 - 0.5 * ego_ratio) {
+                passive_stall_rate
+            } else {
+                sat_load * (1.0 - 0.5 * ego_ratio)
+            },
             0.0,
             1.0,
         );
         let active_distortion_ratio = branchless_clamp_f32(
-            0.6 * active_mismatch_rate + 0.4 * sat_excess * ego_ratio,
+            if active_mismatch_rate > sat_load * ego_ratio {
+                active_mismatch_rate
+            } else {
+                sat_load * ego_ratio
+            },
             0.0,
             1.0,
         );
         let mismatch_ratio = branchless_clamp_f32(
-            (self.layer0.passive_stall_events + self.layer2.unaligned_intervention_count) as f32
-                / denom,
+            ((self.layer0.passive_stall_events + self.layer2.unaligned_intervention_count) as f32)
+                * inv_denom,
             0.0,
             1.0,
         );
 
         let enough_samples = self.system.continuous_standard_steps >= 16;
-        let ego_cooldown_recommended =
-            enough_samples && active_distortion_ratio >= 0.40 && ego_ratio >= 0.50;
-        let ego_wakeup_recommended =
-            enough_samples && !ego_cooldown_recommended && passive_distortion_ratio >= 0.40;
+        let is_distorted = enough_samples
+            && (sat_load >= 0.40 || passive_stall_rate >= 0.35 || active_mismatch_rate >= 0.35);
+        let ego_cooldown_recommended = is_distorted
+            && ((active_distortion_ratio >= passive_distortion_ratio && ego_ratio >= 0.40)
+                || active_mismatch_rate >= 0.35);
+        let ego_wakeup_recommended = is_distorted && !ego_cooldown_recommended;
         let kind = if ego_cooldown_recommended {
             LayerDistortionKind::ActiveOverdrive
         } else if ego_wakeup_recommended {
@@ -1019,5 +1134,38 @@ mod tests {
         assert_eq!(act_dist.kind, LayerDistortionKind::ActiveOverdrive);
         assert!(act_dist.ego_cooldown_recommended);
         assert!(!act_dist.ego_wakeup_recommended);
+
+        // 3. High saturation (76%) with ~48% Ego must NOT falsely read as Aligned, and accumulate_snapshot merges cleanly.
+        let mut bank_a = CoreTelemetryBank::default();
+        let mut active_mid_ego = LiminalEgoField::from_preset(crate::LiminalEgoPreset::Medium);
+        let aligned_horizon = EpistemicHorizonReading {
+            regime_code: EpistemicRegime::KnownCoherent as u8,
+            ..EpistemicHorizonReading::default()
+        };
+        for i in 0..25 {
+            let dec = if i < 19 {
+                StigmergicActionDecision::FullOrchestration
+            } else {
+                StigmergicActionDecision::ExpressPhaseSteer
+            };
+            active_mid_ego.last_intervened_mask = if i < 12 { EGO_TRIGGER_BASIN_CAPTURE } else { 0 };
+            bank_a.record_step(
+                dec,
+                &aligned_horizon,
+                &stagnant_delta,
+                &venn,
+                &active_mid_ego,
+                0,
+                0,
+                0,
+                false,
+                false,
+            );
+        }
+        let sat_dist = bank_a.compute_distortion_report();
+        assert_ne!(sat_dist.kind, LayerDistortionKind::Aligned);
+        let mut merged = CoreTelemetryBank::default();
+        merged.accumulate_snapshot(&bank_a.snapshot(&AutonomousCoreLayerStack::new(), &aligned_horizon, 0, 0, 0));
+        assert_eq!(merged.compute_distortion_report().kind, sat_dist.kind);
     }
 }

@@ -2469,3 +2469,69 @@ fn adapter_distortion_feedback_wakes_and_cools_ego_and_renders_mermaid() {
     let mermaid = adapter.render_liminal_topology_mermaid(4, 1);
     assert!(mermaid.contains("LayerDistortion"));
 }
+
+#[test]
+fn test_slow_loop_updates_threshold_policy_without_exponential_drift() {
+    use liminika_core::action_hub::StigmergicThresholds;
+    use liminika_core::traits::gateway::{LayerDistortionKind, LayerDistortionReport};
+
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).unwrap();
+    let default_rank1 = StigmergicThresholds::default().rank1_inject_density_thresh;
+    let mut trail = gcso_pointer_trail_t {
+        stigmergic_density: 1.80,
+        ..gcso_pointer_trail_t::default()
+    };
+    let sig = ObjectiveFact::new([12_i8; 64], 1.5, 0, 1);
+    let mut q = vec![0.25_f32; 24 * 96];
+
+    for _ in 0..20 {
+        let _ = adapter
+            .orchestrate_layer_rope_with_action_hub(
+                0,
+                &sig,
+                &mut trail,
+                Some(0.45),
+                128,
+                &mut q,
+                None,
+            )
+            .unwrap();
+    }
+    let adj1 = adapter.apply_slow_loop_telemetry_epoch(16);
+    assert!(adj1.applied);
+    let first_rank1 = adj1.tuned_thresholds.rank1_inject_density_thresh;
+    assert_eq!(
+        adapter
+            .threshold_policy_mut()
+            .base
+            .rank1_inject_density_thresh,
+        first_rank1
+    );
+    assert_eq!(
+        adapter.action_hub().thresholds.rank1_inject_density_thresh,
+        first_rank1
+    );
+
+    // Second epoch over the same cumulative distribution must remain bounded against the
+    // calibrated base rather than compounding `1.15 * 1.15`.
+    let adj2 = adapter.apply_slow_loop_telemetry_epoch(16);
+    assert!(adj2.applied);
+    assert!(
+        adj2.tuned_thresholds.rank1_inject_density_thresh <= default_rank1 * 1.15 + 1e-4,
+        "Slow-Loop threshold drifted past bounded range: {}",
+        adj2.tuned_thresholds.rank1_inject_density_thresh
+    );
+
+    let custom_dist = LayerDistortionReport {
+        action_saturation_ratio: 0.85,
+        passive_distortion_ratio: 0.15,
+        active_distortion_ratio: 0.72,
+        mismatch_ratio: 0.40,
+        kind: LayerDistortionKind::ActiveOverdrive,
+        ego_wakeup_recommended: false,
+        ego_cooldown_recommended: true,
+    };
+    let mermaid = adapter.render_liminal_topology_mermaid_with_distortion(2, 0, &custom_dist);
+    assert!(mermaid.contains("Kind:ActiveOverdrive"));
+    assert!(mermaid.contains("COOLDOWN"));
+}

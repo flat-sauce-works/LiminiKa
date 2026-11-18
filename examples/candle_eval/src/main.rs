@@ -1296,13 +1296,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             slow_loop_last_rank1_thresh,
             guard_slot.slide_out_dwell,
         );
-        let (dist_kind, dist_sat, dist_pass, dist_act) = step_tlm.distortion_summary();
+        let dist_report = step_tlm.distortion_report();
         let distortion_line = format!(
             "  [Distortion] kind={:?} sat={:.1}% passive={:.1}% active={:.1}% wakeups={} cooldowns={}",
-            dist_kind,
-            dist_sat,
-            dist_pass,
-            dist_act,
+            dist_report.kind,
+            dist_report.action_saturation_ratio * 100.0,
+            dist_report.passive_distortion_ratio * 100.0,
+            dist_report.active_distortion_ratio * 100.0,
             step_tlm.distortion_wakeups,
             step_tlm.distortion_cooldowns,
         );
@@ -1317,9 +1317,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if adapter.ego_field().is_active() {
             println!(
                 "[CoreTopology]\n{}",
-                adapter.render_liminal_topology_mermaid(
+                adapter.render_liminal_topology_mermaid_with_distortion(
                     compiled.corpus.entries().len().min(255) as u8,
-                    0
+                    0,
+                    &dist_report,
                 )
             );
         }

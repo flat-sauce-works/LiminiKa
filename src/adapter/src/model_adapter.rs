@@ -377,6 +377,7 @@ pub struct ModelSteeringAdapter {
     system_constraint: SystemConstraint<()>,
     probe_baseline: ManifoldProbeBaseline,
     threshold_policy: AdaptiveThresholdPolicy,
+    calibrated_base_thresholds: StigmergicThresholds,
     core_layers: AutonomousCoreLayerStack,
     configured_ego: LiminalEgoField,
     last_boundary_delta: LiminalBoundaryDelta,
@@ -429,6 +430,7 @@ impl ModelSteeringAdapter {
         probe_baseline.active_heads = geometry.num_q_heads.min(64) as u16;
         probe_baseline.steered_layers = Self::compute_steered_layer_count(&geometry);
         let threshold_policy = AdaptiveThresholdPolicy::default();
+        let calibrated_base_thresholds = threshold_policy.base;
 
         Ok(Self {
             geometry,
@@ -441,6 +443,7 @@ impl ModelSteeringAdapter {
             system_constraint,
             probe_baseline,
             threshold_policy,
+            calibrated_base_thresholds,
             core_layers: AutonomousCoreLayerStack::new(),
             configured_ego: LiminalEgoField::new(),
             last_boundary_delta: LiminalBoundaryDelta::default(),
@@ -490,7 +493,8 @@ impl ModelSteeringAdapter {
         self.active_horizon_slots_mask = 0;
         self.coherence_guard_slot = CoherenceHorizonGuardSlot::default();
         *self.residual_spillover = DefaultResidualSpilloverSlot::default();
-        self.action_hub.thresholds = StigmergicThresholds::default();
+        self.threshold_policy.base = self.calibrated_base_thresholds;
+        self.action_hub.thresholds = self.calibrated_base_thresholds;
         self.action_hub.last_decision = 0;
         self.action_hub.last_anomaly_severity = 0.0;
         self.telemetry.set_policy(self.telemetry.policy());
@@ -526,18 +530,20 @@ impl ModelSteeringAdapter {
         &mut self,
         min_samples: u64,
     ) -> SlowLoopTelemetryAdjustment {
-        let base = self.action_hub.thresholds;
+        let base = self.calibrated_base_thresholds;
         self.telemetry.evaluate_slow_loop_epoch(&base, min_samples)
     }
 
-    /// Evaluates bounded Slow-Loop epoch adjustments and applies them to [`ActionHubEngine`]
-    /// thresholds and [`CoherenceHorizonGuardSlot`] dwell hysteresis when `applied == true`.
+    /// Evaluates bounded Slow-Loop epoch adjustments and applies them to [`AdaptiveThresholdPolicy`],
+    /// [`ActionHubEngine`] thresholds, and [`CoherenceHorizonGuardSlot`] dwell hysteresis when
+    /// `applied == true`.
     pub fn apply_slow_loop_telemetry_epoch(
         &mut self,
         min_samples: u64,
     ) -> SlowLoopTelemetryAdjustment {
         let adj = self.evaluate_slow_loop_telemetry(min_samples);
         if adj.applied {
+            self.threshold_policy.base = adj.tuned_thresholds;
             self.action_hub.thresholds = adj.tuned_thresholds;
             let next_dwell = (2_i16 + i16::from(adj.suggested_slide_out_dwell_delta)).clamp(1, 8);
             self.coherence_guard_slot.slide_out_dwell = next_dwell as u16;
@@ -993,6 +999,23 @@ impl ModelSteeringAdapter {
         active_crystals: u8,
         spawned_daughters: u8,
     ) -> String {
+        let distortion = self.telemetry_snapshot().distortion;
+        self.render_liminal_topology_mermaid_with_distortion(
+            active_crystals,
+            spawned_daughters,
+            &distortion,
+        )
+    }
+
+    /// Renders the live 3-layer Mermaid `flowchart TD` diagram using an explicit
+    /// [`LayerDistortionReport`] (such as a multi-probe cumulative report).
+    #[must_use]
+    pub fn render_liminal_topology_mermaid_with_distortion(
+        &self,
+        active_crystals: u8,
+        spawned_daughters: u8,
+        distortion: &LayerDistortionReport,
+    ) -> String {
         let snap = LiminalTopologyTelemetrySnapshot::capture(
             &self.core_layers.liminal_layer,
             &self.last_horizon,
@@ -1000,11 +1023,10 @@ impl ModelSteeringAdapter {
             spawned_daughters,
         );
         let mut buf = [0u8; 2048];
-        let distortion = self.telemetry_snapshot().distortion;
         let written = snap.format_three_core_layers_mermaid_with_distortion(
             &self.core_layers,
             &self.last_venn_report,
-            Some(&distortion),
+            Some(distortion),
             &mut buf,
         );
         String::from_utf8_lossy(&buf[..written]).into_owned()
