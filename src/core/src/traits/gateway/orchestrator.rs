@@ -666,7 +666,61 @@ pub trait ActionHubGatewayExt: ActionHub {
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport, StigmergicActionDecision)> {
         let geom = geometry.rope_geometry();
-        let (mut frame, frm_w) = synthesize_signal_with_optional_core_layers(signal, core_ctx);
+        let (mut frame, mut frm_w) = synthesize_signal_with_optional_core_layers(signal, core_ctx);
+        let lane_mask = self.workbench_lane_mask();
+        if lane_mask != 0 {
+            let venn_aperture_mask = core_ctx.map_or(0xFF_u8, |c| {
+                c.venn.venn_core_mask | c.venn.venn_penumbra_mask
+            });
+            if venn_aperture_mask != 0 {
+                let is_pre_repulsed = ((frame.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0)
+                    || frame.to_causal_report().is_cohomology_repulsion();
+                let mut lane = 1u8;
+                while lane < crate::traits::primitives::MAX_ATTRACTOR_DOMAINS as u8 {
+                    if (lane_mask & (1u8 << lane)) != 0 {
+                        let lane_eligible = if is_pre_repulsed {
+                            lane == crate::traits::primitives::ATTRACTOR_SLOT_REPULSION
+                                || lane == crate::traits::primitives::ATTRACTOR_SLOT_CUSTOM_7
+                        } else {
+                            lane != crate::traits::primitives::ATTRACTOR_SLOT_REPULSION
+                        };
+                        if lane_eligible {
+                            if let Some((slot_w, weight)) = self.workbench_lane_words_and_weight(lane)
+                            {
+                                if weight > 0.0 {
+                                    let shift = if weight >= 0.75 {
+                                        1u32
+                                    } else if weight >= 0.35 {
+                                        2u32
+                                    } else {
+                                        3u32
+                                    };
+                                    let mut scaled_w = [0u64; NUM_STIGMERGIC_GRANULES];
+                                    let mut g = 0usize;
+                                    while g < NUM_STIGMERGIC_GRANULES {
+                                        if (venn_aperture_mask & (1u8 << g)) != 0 {
+                                            let bytes = slot_w[g].to_le_bytes();
+                                            let mut out = [0u8; 8];
+                                            let mut b = 0usize;
+                                            while b < 8 {
+                                                out[b] = ((bytes[b] as i8) >> shift) as u8;
+                                                b += 1;
+                                            }
+                                            scaled_w[g] = u64::from_le_bytes(out);
+                                        }
+                                        g += 1;
+                                    }
+                                    crate::traits::primitives::swar_or_avx2_q7_add_sat_words_64(
+                                        &mut frm_w, &scaled_w,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    lane += 1;
+                }
+            }
+        }
         if (ledger_slot.auto_tune_flags & LEDGER_FLAG_COGNITIVE_TRAJECTORY) != 0 {
             let circuit = CognitiveTrajectoryLedger::from_ledger_slot(ledger_slot);
             let ref_w = if trail_out.step_count > 0 {

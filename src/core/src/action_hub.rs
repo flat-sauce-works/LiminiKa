@@ -2201,6 +2201,34 @@ impl PointerActionHub for ActionHubEngine {
     fn active_count(&self) -> u32 {
         self.active_count
     }
+
+    #[inline(always)]
+    fn workbench_lane_mask(&self) -> u8 {
+        self.slot_enabled_mask
+    }
+
+    #[inline]
+    fn workbench_lane_words_and_weight(
+        &self,
+        lane: u8,
+    ) -> Option<([u64; crate::NUM_STIGMERGIC_GRANULES], f32)> {
+        let idx = usize::from(lane);
+        if idx >= crate::traits::primitives::MAX_ATTRACTOR_DOMAINS
+            || ((self.slot_enabled_mask >> idx) & 1) == 0
+        {
+            return None;
+        }
+        let start = idx * MAX_ATTENTION_HEADS;
+        let end = start + MAX_ATTENTION_HEADS;
+        let mut arr = [0_i8; MAX_ATTENTION_HEADS];
+        arr.copy_from_slice(&self.slot_phase_bank.data[start..end]);
+        let words = crate::traits::primitives::load_q7_words_64(&arr);
+        if swar_words_nonzero_64(&words) {
+            Some((words, self.slot_weights[idx]))
+        } else {
+            None
+        }
+    }
 }
 
 impl StigmergicChunkOps for ActionHubEngine {

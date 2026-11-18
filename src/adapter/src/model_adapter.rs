@@ -1005,7 +1005,83 @@ impl ModelSteeringAdapter {
         };
         self.last_ensemble_report = ensemble_report;
         self.escalation_boundary_dirty = true;
-        self.active_workbench_preset = WorkbenchPreset::from_regime_code(horizon.regime_code);
+        let preset = if horizon.regime_code == EpistemicRegime::InternalConflict as u8 {
+            WorkbenchPreset::GuardDefense
+        } else if horizon.regime_code == EpistemicRegime::Liminal as u8 {
+            WorkbenchPreset::CreativeLiminal
+        } else if !recall.recalled_facts.is_empty() && recall.top1_fact_score >= 0.20 {
+            WorkbenchPreset::FactualGrounding
+        } else {
+            WorkbenchPreset::BalancedDialog
+        };
+
+        let mut specs: Vec<WorkbenchSlotSpec> = Vec::with_capacity(5);
+        let mut populated_mask = 0u8;
+        if let Some(&(entry, score)) = recall.recalled_facts.first() {
+            if let Some(&phases) = entry.per_layer_q7.last() {
+                let lane = liminika_core::traits::primitives::ATTRACTOR_SLOT_KNOWLEDGE;
+                populated_mask |= 1u8 << lane;
+                specs.push(WorkbenchSlotSpec {
+                    lane,
+                    weight: (entry.energy * score.clamp(0.25, 1.0)).clamp(0.15, 1.0),
+                    phases,
+                });
+            }
+        }
+        if let Some(&(entry, score)) = recall.recalled_facts.get(1) {
+            if let Some(&phases) = entry.per_layer_q7.last() {
+                let lane = liminika_core::traits::primitives::ATTRACTOR_SLOT_CUSTOM_5;
+                populated_mask |= 1u8 << lane;
+                specs.push(WorkbenchSlotSpec {
+                    lane,
+                    weight: (entry.energy * score.clamp(0.20, 0.90)).clamp(0.10, 0.90),
+                    phases,
+                });
+            }
+        }
+        if let Some(&(entry, score)) = recall.recalled_facts.get(2) {
+            if let Some(&phases) = entry.per_layer_q7.last() {
+                let lane = liminika_core::traits::primitives::ATTRACTOR_SLOT_CUSTOM_6;
+                populated_mask |= 1u8 << lane;
+                specs.push(WorkbenchSlotSpec {
+                    lane,
+                    weight: (entry.energy * score.clamp(0.15, 0.80)).clamp(0.10, 0.80),
+                    phases,
+                });
+            }
+        }
+        if let Some(&(entry, score)) = recall.recalled_personas.first() {
+            if let Some(&phases) = entry.per_layer_q7.last() {
+                let lane = liminika_core::traits::primitives::ATTRACTOR_SLOT_PERSONA;
+                populated_mask |= 1u8 << lane;
+                specs.push(WorkbenchSlotSpec {
+                    lane,
+                    weight: (entry.energy * score.clamp(0.20, 1.0)).clamp(0.15, 1.0),
+                    phases,
+                });
+            }
+        }
+        if has_guard_conflict {
+            let lane = liminika_core::traits::primitives::ATTRACTOR_SLOT_REPULSION;
+            populated_mask |= 1u8 << lane;
+            let mut rep_phases = [0_i8; MAX_ATTENTION_HEADS];
+            for (dst, &src) in rep_phases
+                .iter_mut()
+                .zip(recall.gateway_frame.phase_deltas.iter())
+            {
+                *dst = src.saturating_neg();
+            }
+            specs.push(WorkbenchSlotSpec {
+                lane,
+                weight: recall.guard_conflict_margin.clamp(0.35, 1.0),
+                phases: rep_phases,
+            });
+        }
+        let effective_mask = preset.recommended_lane_mask() & populated_mask;
+        let _ = self
+            .action_hub
+            .apply_workbench_preset_lanes(effective_mask, &specs);
+        self.active_workbench_preset = preset;
         (horizon, venn, ensemble_report)
     }
 

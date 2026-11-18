@@ -2621,4 +2621,31 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
     }
     assert_eq!(esc.escalation_calls, 1);
     assert_eq!(adapter.telemetry_snapshot().layer2.escalation_swaps, 1);
+
+    // 3. Enabled workbench lanes contribute granule-wise inside `venn_core_mask | venn_penumbra_mask`
+    //    and leave out-of-aperture (`void`) granules untouched.
+    adapter.reset_horizon_and_core_state();
+    adapter
+        .switch_workbench_preset(
+            WorkbenchPreset::FactualGrounding,
+            &[WorkbenchSlotSpec {
+                lane: liminika_core::traits::primitives::ATTRACTOR_SLOT_CUSTOM_5,
+                weight: 1.0,
+                phases: [24_i8; MAX_ATTENTION_HEADS],
+            }],
+        )
+        .expect("preset switch");
+    adapter.adapt_core_layers(
+        &liminika_core::traits::gateway::EpistemicHorizonReading::default(),
+        &liminika_core::traits::gateway::StigmergicVennSerendipityReport {
+            venn_core_mask: 0x0F,
+            ..liminika_core::traits::gateway::StigmergicVennSerendipityReport::default()
+        },
+        None,
+    );
+    let mut trail_venn = gcso_pointer_trail_t::default();
+    let _ = adapter
+        .orchestrate_layer_rope_with_action_hub(16, &sig, &mut trail_venn, None, 128, &mut q, None)
+        .expect("venn layer step");
+    assert!(trail_venn.accumulated_phase_delta[0] > trail_venn.accumulated_phase_delta[40]);
 }

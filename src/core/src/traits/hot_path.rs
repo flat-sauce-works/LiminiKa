@@ -91,6 +91,22 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
 
     /// Returns the active pointer trail count currently registered.
     fn active_count(&self) -> u32;
+
+    /// Returns the active 8-bit lane enable mask (`0..=7`) on the working phase workbench (`0` = none).
+    #[inline(always)]
+    fn workbench_lane_mask(&self) -> u8 {
+        0
+    }
+
+    /// Returns the 64-head SWAR words and non-negative lane weight for working-bank `lane` (`0..=7`)
+    /// when enabled and non-zero.
+    #[inline(always)]
+    fn workbench_lane_words_and_weight(
+        &self,
+        _lane: u8,
+    ) -> Option<([u64; crate::NUM_STIGMERGIC_GRANULES], f32)> {
+        None
+    }
 }
 
 // ===================================================================

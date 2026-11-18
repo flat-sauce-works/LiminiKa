@@ -1536,6 +1536,19 @@ impl PointerActionHub for RuntimeContext {
     fn active_count(&self) -> u32 {
         self.action_hub.active_count
     }
+
+    #[inline(always)]
+    fn workbench_lane_mask(&self) -> u8 {
+        self.action_hub.workbench_lane_mask()
+    }
+
+    #[inline]
+    fn workbench_lane_words_and_weight(
+        &self,
+        lane: u8,
+    ) -> Option<([u64; crate::NUM_STIGMERGIC_GRANULES], f32)> {
+        self.action_hub.workbench_lane_words_and_weight(lane)
+    }
 }
 
 impl FastPathLedger for RuntimeContext {
