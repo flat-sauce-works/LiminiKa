@@ -1,12 +1,12 @@
 // name: src/core/src/traits/cold_path/coordinators.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Cold-Path crystallization candidacy and full-stack blanket composite markers over [`ActionHub`].
+//! Cold-Path crystallization candidacy extension for pointer trails.
 
 use super::*;
 
 // ===================================================================
-// Blanket-Implemented Lv.3 Macro Observers & Full-Stack Composites
+// Cold-Path Crystallization Candidacy
 // ===================================================================
 
 /// Cold-path crystallization candidacy extension trait for [`gcso_pointer_trail_t`].
@@ -42,63 +42,4 @@ impl ColdPathTrailCrystalExt for gcso_pointer_trail_t {
             | branchless_select_u32(is_candidate, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, 0);
         is_candidate
     }
-}
-
-/// Unified Lv.3 Macro Observer trait over [`ActionHub`] (`traits/cold_path.rs`).
-pub trait ColdPathObserver:
-    ActionHub
-    + SheafCohomologyEvaluator
-    + EdbcBranchController
-    + AttractorField
-    + MultiDomainAttractorSpace
-    + PersonaPatcher
-{
-}
-
-impl<T> ColdPathObserver for T where
-    T: ActionHub
-        + SheafCohomologyEvaluator
-        + EdbcBranchController
-        + AttractorField
-        + MultiDomainAttractorSpace
-        + PersonaPatcher
-        + ?Sized
-{
-}
-
-/// Composite Cold-Path Orchestrator trait uniting Macro evaluation, attractor steering, and mapped-storage persistence.
-pub trait ColdPathOrchestrator:
-    EntropyEvaluator + AttractorField + PersonaPatcher + L2pSvdProjector + KvKeyframeCache + MappedStorage
-{
-}
-
-impl<T> ColdPathOrchestrator for T where
-    T: EntropyEvaluator
-        + AttractorField
-        + PersonaPatcher
-        + L2pSvdProjector
-        + KvKeyframeCache
-        + MappedStorage
-        + ?Sized
-{
-}
-
-/// Full-Stack Fractal GCSO Engine trait uniting Nano, Micro, Mezzo, and Macro contracts under static dispatch.
-pub trait FullStackGcsoEngine:
-    HotPathExecutionEngine
-    + ColdPathOrchestrator
-    + StigmergicChunkOps
-    + GcsoRuntimeContext
-    + SystemCapabilityQuery
-{
-}
-
-impl<T> FullStackGcsoEngine for T where
-    T: HotPathExecutionEngine
-        + ColdPathOrchestrator
-        + StigmergicChunkOps
-        + GcsoRuntimeContext
-        + SystemCapabilityQuery
-        + ?Sized
-{
 }

@@ -1,9 +1,8 @@
 // name: src/core/src/residual_adapter.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Concrete 64-byte cacheline-aligned [`ResidualAdapterEngine`] `Pod` state descriptor applying the
-//! [`SubHeadRouter`], [`Rank1ResidualAdapter`], [`VisualAttentionSteering`], [`PersonaPatcher`], and
-//! [`L2pSvdProjector`] traits from [`crate::traits`].
+//! Concrete 64-byte cacheline-aligned [`ResidualAdapterEngine`] `Pod` state descriptor applying
+//! [`PersonaPatcher`] and concrete Rank-1 residual / sub-head / L2P-SVD helpers from [`crate::traits`].
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -30,13 +29,13 @@
 #![allow(clippy::field_reassign_with_default)]
 
 use crate::abi::{gcso_rank1_residual_descriptor_t, GCSO_ERROR_INVALID_ARGUMENT};
+use crate::traits::aligned::{AlignedSlice32, AlignedSliceMut32};
 use crate::traits::branchless::circular_r_bar_from_words_64;
-use crate::traits::gateway::project_bytes_swar_to_words_64;
-use crate::traits::primitives::{branchless_clamp_f32, branchless_is_finite_f32};
-use crate::traits::{
-    GcsoResult, L2pSvdProjector, PersonaPatcher, Pod, Rank1ResidualAdapter, SubHeadRouter,
-    VisualAttentionSteering,
+use crate::traits::gateway::{
+    apply_gateway_frame_rank1_hidden_fused, project_bytes_swar_to_words_64, GatewayFrame,
 };
+use crate::traits::primitives::{branchless_clamp_f32, branchless_is_finite_f32};
+use crate::traits::{eval_rank1_slices_fused, GcsoResult, PersonaPatcher, Pod};
 use core::mem::{align_of, offset_of, size_of};
 
 /// 64-byte cacheline-aligned Plain Old Data (`Pod`) descriptor and execution engine for
@@ -92,12 +91,42 @@ impl ResidualAdapterEngine {
         }
         Ok(())
     }
+
+    /// Accumulates the fused Rank-1 outer product residual $\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
+    /// in-place into `y_inout` from hardware-aligned slices.
+    ///
+    /// # Errors
+    /// Propagates any validation or numerical singularity error from [`eval_rank1_slices_fused`].
+    #[inline]
+    pub fn eval_rank1_slices_fused(
+        &self,
+        y_inout: &mut AlignedSliceMut32<'_, f32>,
+        x_in: &AlignedSlice32<'_, f32>,
+        u_vec: &AlignedSlice32<'_, f32>,
+        v_vec: &AlignedSlice32<'_, f32>,
+        gain_vec: Option<&AlignedSlice32<'_, f32>>,
+        scale_factor: f32,
+    ) -> GcsoResult<()> {
+        eval_rank1_slices_fused(y_inout, x_in, u_vec, v_vec, gain_vec, scale_factor)
+    }
+
+    /// Applies norm-adaptive fused Rank-1 residual injection driven by `frame`.
+    ///
+    /// # Errors
+    /// Propagates any validation or numerical singularity error from [`apply_gateway_frame_rank1_hidden_fused`].
+    #[inline]
+    pub fn apply_gateway_frame_rank1_hidden_fused(
+        &self,
+        frame: &GatewayFrame,
+        y_out: &mut AlignedSliceMut32<'_, f32>,
+        x_in: &AlignedSlice32<'_, f32>,
+        u_vec: &AlignedSlice32<'_, f32>,
+        v_vec: &AlignedSlice32<'_, f32>,
+    ) -> GcsoResult<f32> {
+        apply_gateway_frame_rank1_hidden_fused(frame, y_out, x_in, u_vec, v_vec)
+    }
 }
 
-impl SubHeadRouter for ResidualAdapterEngine {}
-impl Rank1ResidualAdapter for ResidualAdapterEngine {}
-impl VisualAttentionSteering for ResidualAdapterEngine {}
-impl L2pSvdProjector for ResidualAdapterEngine {}
 impl PersonaPatcher for ResidualAdapterEngine {
     #[inline]
     fn apply_patch(&mut self, patch_data: &[u8]) -> GcsoResult<()> {
@@ -126,7 +155,10 @@ mod tests {
         ACTION_PRESET_FULL_ORCHESTRATION, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
         DEFAULT_RIPA_CLAMP_MAX_RAD,
     };
-    use crate::traits::rope::PhaseSteering;
+    use crate::traits::rope::{
+        detect_frame_mse_bitmask, dispatch_ripa_and_subhead_slot_ensemble_fused, eval_rank1_fused,
+        eval_rank1_pointer_gated_fused, PhaseSteering,
+    };
 
     struct DummyRopeEngine {
         head_dim: u32,
@@ -140,9 +172,6 @@ mod tests {
             self.num_heads
         }
     }
-    impl SubHeadRouter for DummyRopeEngine {}
-    impl Rank1ResidualAdapter for DummyRopeEngine {}
-    impl VisualAttentionSteering for DummyRopeEngine {}
 
     #[test]
     fn test_residual_adapter_engine_pod_and_persona_patch() {
@@ -161,6 +190,7 @@ mod tests {
             head_dim: 12,
             num_heads: 8,
         };
+        assert_eq!(eng.head_dim(), 12);
         let subhead_cfg = gcso_subhead_config_t {
             num_fact_heads: 2,
             num_logic_heads: 4,
@@ -172,7 +202,7 @@ mod tests {
         };
         let mut q_pspm = AlignedBuffer32::new([1.0_f32; 96]);
         let bank = AlignedBuffer64::<gcso_q7_t, 512>::splat(24);
-        eng.dispatch_ripa_and_subhead_slot_ensemble_fused(
+        dispatch_ripa_and_subhead_slot_ensemble_fused(
             &mut q_pspm.as_aligned_slice_mut(),
             &[16i8; 64],
             DEFAULT_RIPA_CLAMP_MAX_RAD,
@@ -210,14 +240,13 @@ mod tests {
             (ATTRACTOR_SLOT_PERSONA << 5) | ACTION_PRESET_FULL_ORCHESTRATION,
             0,
         );
-        let injected = eng
-            .eval_rank1_pointer_gated_fused(
-                ptr,
-                &mut y_srl.as_aligned_slice_mut(),
-                &x_srl.as_aligned_slice(),
-                &desc,
-            )
-            .unwrap();
+        let injected = eval_rank1_pointer_gated_fused(
+            ptr,
+            &mut y_srl.as_aligned_slice_mut(),
+            &x_srl.as_aligned_slice(),
+            &desc,
+        )
+        .unwrap();
         assert!(injected);
         assert!((y_srl.data[0] - 2.0).abs() < 1.0e-5);
 
@@ -225,7 +254,7 @@ mod tests {
             gain_scalar_ptr: g_srl.as_aligned_slice().as_ptr() as u64,
             ..desc
         };
-        eng.eval_rank1_fused(
+        eval_rank1_fused(
             &mut y_srl.as_aligned_slice_mut(),
             &x_srl.as_aligned_slice(),
             &desc_with_gain,
@@ -237,16 +266,15 @@ mod tests {
         let frame_prv = AlignedBuffer32::new([1.0_f32; 48]);
         frame_cur.data[0..12].fill(2.0);
         let mut mask = gcso_paged_bitmask_t::default();
-        let active_patches = eng
-            .detect_frame_mse_bitmask(
-                &frame_cur.as_aligned_slice(),
-                &frame_prv.as_aligned_slice(),
-                4,
-                12,
-                0.1,
-                &mut mask,
-            )
-            .unwrap();
+        let active_patches = detect_frame_mse_bitmask(
+            &frame_cur.as_aligned_slice(),
+            &frame_prv.as_aligned_slice(),
+            4,
+            12,
+            0.1,
+            &mut mask,
+        )
+        .unwrap();
         assert_eq!(active_patches, 1);
     }
 }

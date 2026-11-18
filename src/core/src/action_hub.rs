@@ -50,11 +50,10 @@
 //!    structure** ($C_{\mathrm{alloc}} = 0$).
 //!
 //! 3. **Blanket Trait Closure**:
-//!    Because [`ActionHubEngine`] implements [`PhaseSteering`], [`PointerActionHub`], [`SubHeadRouter`],
-//!    [`Rank1ResidualAdapter`], [`FastPathLedger`], [`StigmergicChunkOps`], [`CausalProvenanceSignal`],
+//!    Because [`ActionHubEngine`] implements [`PhaseSteering`], [`PointerActionHub`],
+//!    [`FastPathLedger`], [`StigmergicChunkOps`], [`CausalProvenanceSignal`],
 //!    [`crate::traits::SystemConstraintSignal`], and [`ManifoldGatewaySignal`], it automatically
-//!    receives the blanket implementations of [`ActionHub`], [`HotPathExecutionEngine`],
-//!    [`HotPathObserver`], [`FractalCascadeCoordinator`], [`ActionHubGatewayExt`],
+//!    receives the blanket implementations of [`ActionHub`], [`ActionHubGatewayExt`],
 //!    [`GatewayPhaseSteeringExt`], and [`crate::phase_steering::PhaseSteeringClosedLoop`].
 
 #![deny(missing_docs)]
@@ -120,8 +119,7 @@ use crate::traits::primitives::{
 };
 use crate::traits::rope::{
     dispatch_fused_ripa_and_pspm_words_core, resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim,
-    steer_from_swar_words_core_safe, PhaseSteering, Rank1ResidualAdapter, SubHeadRouter,
-    VisualAttentionSteering,
+    steer_from_swar_words_core_safe, PhaseSteering,
 };
 use crate::traits::telemetry::{
     select_rewire_bridge_and_modulate_with_preloaded_words_64, ContrastivePhaseBloomFilter,
@@ -133,10 +131,7 @@ use crate::traits::telemetry::{
     TRAIL_FLAG_DPSR_ACTIVE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
     TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
-use crate::traits::{
-    ActionHub, ActionHubGatewayExt, FractalCascadeCoordinator, GatewayPhaseSteeringExt,
-    HotPathExecutionEngine, HotPathObserver,
-};
+use crate::traits::{ActionHub, ActionHubGatewayExt, GatewayPhaseSteeringExt};
 
 /// Number of inline 128-byte [`gcso_pointer_trail_t`] cells stored inside [`ActionHubEngine`] (`16` = 2,048 bytes).
 pub const ACTION_HUB_INLINE_TRAILS: usize = 16;
@@ -1875,10 +1870,6 @@ impl PhaseSteering for ActionHubEngine {
     }
 }
 
-impl VisualAttentionSteering for ActionHubEngine {}
-impl SubHeadRouter for ActionHubEngine {}
-impl Rank1ResidualAdapter for ActionHubEngine {}
-
 impl FastPathLedger for ActionHubEngine {
     #[inline]
     fn evaluate_auto_tune(
@@ -2219,9 +2210,6 @@ const _: () = {
 
     const fn assert_action_hub_bounds<
         T: ActionHub
-            + HotPathExecutionEngine
-            + HotPathObserver
-            + FractalCascadeCoordinator
             + ActionHubGatewayExt
             + GatewayPhaseSteeringExt
             + crate::phase_steering::PhaseSteeringClosedLoop

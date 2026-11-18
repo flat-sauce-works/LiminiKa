@@ -26,8 +26,10 @@ use liminika_core::entropy_control::{
     EntropyController,
 };
 use liminika_core::traits::{
-    AlignedBuffer32, AlignedSlice32, ContrastivePhaseBloomFilter, EntropyEvaluator,
-    HierarchicalTreeTable, SheafCohomologyEvaluator, StigmergicActionPtrOps,
+    compute_tikhonov_chebyshev_coeffs_deg3, eval_chebyshev_spectral_filter_deg3,
+    eval_stigmergic_block_degrees, evaluate_hodge_obstruction_and_dual_pairing,
+    resolve_dyadic_qdpt_and_cascade_ptr, AlignedBuffer32, AlignedSlice32,
+    ContrastivePhaseBloomFilter, EntropyEvaluator, StigmergicActionPtrOps,
     ACTION_PRESET_EXPRESS_PHASE, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
     DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS,
 };
@@ -574,7 +576,6 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     group.bench_function(
         "matrix_free_stigmergic_block_degrees_and_chebyshev_deg3",
         |b| {
-            let engine = EntropyController::default();
             let masks: [gcso_paged_bitmask_t; 16] =
                 core::array::from_fn(|i| gcso_paged_bitmask_t {
                     bits: [
@@ -588,28 +589,25 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
             let mut filt_buf = AlignedBuffer32::new([0.0f32; 16]);
 
             b.iter(|| {
-                let lambda_max = engine
-                    .eval_stigmergic_block_degrees(
-                        black_box(&masks),
-                        black_box(&mut deg_buf.as_aligned_slice_mut()),
-                    )
-                    .unwrap();
-                let coeffs = engine
-                    .compute_tikhonov_chebyshev_coeffs_deg3(
-                        black_box(lambda_max.max(1.0)),
-                        black_box(0.05f32),
-                    )
-                    .unwrap();
+                let lambda_max = eval_stigmergic_block_degrees(
+                    black_box(&masks),
+                    black_box(&mut deg_buf.as_aligned_slice_mut()),
+                )
+                .unwrap();
+                let coeffs = compute_tikhonov_chebyshev_coeffs_deg3(
+                    black_box(lambda_max.max(1.0)),
+                    black_box(0.05f32),
+                )
+                .unwrap();
                 let deg_slice = deg_buf.as_aligned_slice();
                 let mut filt_slice = filt_buf.as_aligned_slice_mut();
-                engine
-                    .eval_chebyshev_spectral_filter_deg3(
-                        black_box(&deg_slice),
-                        black_box(&mut filt_slice),
-                        black_box(lambda_max.max(1.0)),
-                        black_box(&coeffs),
-                    )
-                    .unwrap();
+                eval_chebyshev_spectral_filter_deg3(
+                    black_box(&deg_slice),
+                    black_box(&mut filt_slice),
+                    black_box(lambda_max.max(1.0)),
+                    black_box(&coeffs),
+                )
+                .unwrap();
                 black_box(filt_slice.as_slice()[0]);
             });
         },
@@ -620,7 +618,6 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         (64 * 3 * core::mem::size_of::<f32>()) as u64,
     ));
     group.bench_function("hodge_obstruction_and_dual_homology_pairing_64", |b| {
-        let engine = EntropyController::default();
         let r_buf = AlignedBuffer32::new(make_heterogeneous_supernode_field_64(1.25f32, 0.35f32));
         let p_buf = AlignedBuffer32::new(make_heterogeneous_supernode_field_64(0.45f32, 0.20f32));
         let g_buf = AlignedBuffer32::new(make_heterogeneous_supernode_field_64(0.80f32, 0.28f32));
@@ -629,14 +626,13 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         let g_s = g_buf.as_aligned_slice();
 
         b.iter(|| {
-            let res = engine
-                .evaluate_hodge_obstruction_and_dual_pairing(
-                    black_box(&r_s),
-                    black_box(&p_s),
-                    black_box(&g_s),
-                    black_box(0.25f32),
-                )
-                .unwrap();
+            let res = evaluate_hodge_obstruction_and_dual_pairing(
+                black_box(&r_s),
+                black_box(&p_s),
+                black_box(&g_s),
+                black_box(0.25f32),
+            )
+            .unwrap();
             black_box(res);
         });
     });
@@ -644,7 +640,6 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     // 7A. 256-Bit Dyadic Pseudo-Ultrametric QDPT Resolution & Pointer Cascading
     group.throughput(Throughput::Elements(1));
     group.bench_function("resolve_dyadic_qdpt_and_cascade_tagged_ptr", |b| {
-        let engine = EntropyController::default();
         let parent_ptr = gcso_tagged_ptr_t::pack_action(
             0x8000,
             ATTRACTOR_SLOT_PERSONA,
@@ -661,18 +656,17 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         let deltas = [4i8, 8, 12, 16, 20, 24, 28, 32];
 
         b.iter(|| {
-            let res = engine
-                .resolve_dyadic_qdpt_and_cascade_ptr(
-                    black_box(parent_ptr),
-                    black_box(&curr_mask),
-                    black_box(&anchor_mask),
-                    black_box(0.15f32),
-                    black_box(3u32),
-                    black_box(0.10f32),
-                    black_box(&offsets),
-                    black_box(&deltas),
-                )
-                .unwrap();
+            let res = resolve_dyadic_qdpt_and_cascade_ptr(
+                black_box(parent_ptr),
+                black_box(&curr_mask),
+                black_box(&anchor_mask),
+                black_box(0.15f32),
+                black_box(3u32),
+                black_box(0.10f32),
+                black_box(&offsets),
+                black_box(&deltas),
+            )
+            .unwrap();
             black_box(res);
         });
     });

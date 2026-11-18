@@ -14,15 +14,8 @@ use core::f32::consts::PI;
 
 #[test]
 fn test_sheaf_cohomology_symmetric_degrees_dual_pairing_and_qdpt() {
-    struct MockSheafTree;
-    impl SheafCohomologyEvaluator for MockSheafTree {}
-    impl HierarchicalTreeTable for MockSheafTree {}
-
-    let evaluator = MockSheafTree;
     let degrees = AlignedBuffer32::new([2.0f32, 5.5, 3.0, 1.0, 4.0, 2.5, 1.5, 0.5]);
-    let lambda_max = evaluator
-        .eval_gershgorin_lambda_max(&degrees.as_aligned_slice())
-        .unwrap();
+    let lambda_max = eval_gershgorin_lambda_max(&degrees.as_aligned_slice()).unwrap();
     assert!((lambda_max - 11.0).abs() < 1e-5);
 
     let mut m0 = gcso_paged_bitmask_t::default();
@@ -36,41 +29,36 @@ fn test_sheaf_cohomology_symmetric_degrees_dual_pairing_and_qdpt() {
 
     let masks = [m0, m1, m2];
     let mut deg_out = AlignedBuffer32::new([0.0f32; 4]);
-    let lmax_blocks = evaluator
-        .eval_stigmergic_block_degrees(&masks, &mut deg_out.as_aligned_slice_mut())
-        .unwrap();
+    let lmax_blocks =
+        eval_stigmergic_block_degrees(&masks, &mut deg_out.as_aligned_slice_mut()).unwrap();
     assert!((deg_out.data[0] - 1.0).abs() < 1e-4);
     assert!((deg_out.data[1] - 1.0).abs() < 1e-4);
     assert_eq!(deg_out.data[2], 0.0);
     assert!((lmax_blocks - 2.0).abs() < 1e-4);
 
-    let coeffs = evaluator
-        .compute_tikhonov_chebyshev_coeffs_deg3(lambda_max, 0.1)
-        .unwrap();
+    let coeffs = compute_tikhonov_chebyshev_coeffs_deg3(lambda_max, 0.1).unwrap();
     let eig_in = AlignedBuffer32::new([0.0f32, 5.5, 11.0, 2.75, 1.0, 2.0, 3.0, 4.0, 8.0, 9.0]);
     let mut filt_out = AlignedBuffer32::new([0.0f32; 10]);
-    evaluator
-        .eval_chebyshev_spectral_filter_deg3(
-            &eig_in.as_aligned_slice(),
-            &mut filt_out.as_aligned_slice_mut(),
-            11.0,
-            &coeffs,
-        )
-        .unwrap();
+    eval_chebyshev_spectral_filter_deg3(
+        &eig_in.as_aligned_slice(),
+        &mut filt_out.as_aligned_slice_mut(),
+        11.0,
+        &coeffs,
+    )
+    .unwrap();
     assert!(filt_out.data[0] > filt_out.data[2]);
     assert!(filt_out.data[4] > filt_out.data[9]);
 
     let r = AlignedBuffer32::new([2.0f32, 2.0, 2.0, 2.0]);
     let p = AlignedBuffer32::new([0.5f32, 0.5, 0.5, 0.5]);
     let gamma = AlignedBuffer32::new([1.0f32, 1.0, 1.0, 1.0]);
-    let (mean_obs, dual_pair, obstructed) = evaluator
-        .evaluate_hodge_obstruction_and_dual_pairing(
-            &r.as_aligned_slice(),
-            &p.as_aligned_slice(),
-            &gamma.as_aligned_slice(),
-            1.0,
-        )
-        .unwrap();
+    let (mean_obs, dual_pair, obstructed) = evaluate_hodge_obstruction_and_dual_pairing(
+        &r.as_aligned_slice(),
+        &p.as_aligned_slice(),
+        &gamma.as_aligned_slice(),
+        1.0,
+    )
+    .unwrap();
     assert!(obstructed);
     assert!((mean_obs - 2.25).abs() < 1e-5);
     assert!((dual_pair - 1.0).abs() < 1e-5);
@@ -81,18 +69,17 @@ fn test_sheaf_cohomology_symmetric_degrees_dual_pairing_and_qdpt() {
         ACTION_PRESET_EXPRESS_PHASE,
         10,
     );
-    let (qdpt_lvl, _dv, cascaded_ptr) = evaluator
-        .resolve_dyadic_qdpt_and_cascade_ptr(
-            base_ptr,
-            &m0,
-            &m1,
-            0.05,
-            0,
-            0.1,
-            &[0x100, 0x200, 0x300, 0x400],
-            &[4, 8, 12, 16],
-        )
-        .unwrap();
+    let (qdpt_lvl, _dv, cascaded_ptr) = resolve_dyadic_qdpt_and_cascade_ptr(
+        base_ptr,
+        &m0,
+        &m1,
+        0.05,
+        0,
+        0.1,
+        &[0x100, 0x200, 0x300, 0x400],
+        &[4, 8, 12, 16],
+    )
+    .unwrap();
     assert_eq!(qdpt_lvl, 0);
     assert_eq!(cascaded_ptr.unpack_addr(), 0x1100);
     assert_eq!(cascaded_ptr.unpack_phase(), 14);
@@ -112,24 +99,19 @@ fn test_sheaf_cohomology_symmetric_degrees_dual_pairing_and_qdpt() {
     let mut chain = [t0, t1, t2];
     let mut bloom = ContrastivePhaseBloomFilter::new();
 
-    let (bridged_lp, rep_cnt) = evaluator
-        .bridge_and_filter_liminal_trail_chain(&mut chain, 64, 0.25, &mut bloom)
-        .unwrap();
+    let (bridged_lp, rep_cnt) =
+        bridge_and_filter_liminal_trail_chain(&mut chain, 64, 0.25, &mut bloom).unwrap();
     assert_eq!(rep_cnt, 0);
     assert!(bridged_lp > -0.10);
 
-    let (joint_lp, hol_obs, is_obs) = evaluator
-        .evaluate_trail_chain_cohomology_and_joint_log_prob(&chain, 0.20)
-        .unwrap();
+    let (joint_lp, hol_obs, is_obs) =
+        evaluate_trail_chain_cohomology_and_joint_log_prob(&chain, 0.20).unwrap();
     assert!(!is_obs && hol_obs < 0.05 && joint_lp > -0.05);
 }
 
 #[test]
 fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
     struct MockColdSystem;
-    impl SystemCapabilityQuery for MockColdSystem {}
-    impl L2pSvdProjector for MockColdSystem {}
-    impl DnpPacketDispatcher for MockColdSystem {}
     impl KvKeyframeCache for MockColdSystem {
         fn seek_to_token(
             &mut self,
@@ -283,10 +265,10 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
 
     let mut sys = MockColdSystem;
     let mut cfg = gcso_config_t::default();
-    sys.init_default_config(&mut cfg).unwrap();
-    assert_eq!(sys.validate_config_invariants(&cfg), Ok(()));
+    init_default_config(&mut cfg).unwrap();
+    assert_eq!(validate_config_invariants(&cfg), Ok(()));
     assert_eq!(
-        sys.abi_version(),
+        abi_version(),
         (
             crate::abi::GCSO_ABI_VERSION_MAJOR,
             crate::abi::GCSO_ABI_VERSION_MINOR,
@@ -302,7 +284,7 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
     let mut rank1_desc = gcso_rank1_residual_descriptor_t::default();
     let mut prof_out = AlignedBuffer16::new([0i8; 16]);
     let mut scales_out = AlignedBuffer32::new([0.0f32; 4]);
-    sys.project_lora_with_block_scales(
+    project_lora_with_block_scales(
         &lora_a.as_aligned_slice(),
         &lora_b.as_aligned_slice(),
         2,
@@ -354,24 +336,22 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
     };
     let src_phases = [28i8; MAX_ATTENTION_HEADS];
     let mut pkt_buf = AlignedBuffer64::<u8, 64>::zeroed();
-    let crc_tag = sys
-        .encode_dnp_phase_packet(
-            &daes_net,
-            ATTRACTOR_SLOT_PERSONA,
-            ACTION_PRESET_FULL_ORCHESTRATION,
-            &src_phases,
-            &mut pkt_buf.as_aligned_slice_mut(),
-        )
-        .unwrap();
+    let crc_tag = encode_dnp_phase_packet(
+        &daes_net,
+        ATTRACTOR_SLOT_PERSONA,
+        ACTION_PRESET_FULL_ORCHESTRATION,
+        &src_phases,
+        &mut pkt_buf.as_aligned_slice_mut(),
+    )
+    .unwrap();
     let mut decoded_phases = [0i8; MAX_ATTENTION_HEADS];
-    let recovered_tag = sys
-        .decode_and_verify_dnp_packet(
-            &daes_net,
-            &pkt_buf.as_aligned_slice(),
-            crc_tag,
-            &mut decoded_phases,
-        )
-        .unwrap();
+    let recovered_tag = decode_and_verify_dnp_packet(
+        &daes_net,
+        &pkt_buf.as_aligned_slice(),
+        crc_tag,
+        &mut decoded_phases,
+    )
+    .unwrap();
     assert_eq!(decoded_phases[0], 28);
     assert_eq!(
         recovered_tag,

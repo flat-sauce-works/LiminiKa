@@ -6,22 +6,21 @@
 //! This crate serves as the primary low-level runtime engine for `LiminiKa`, implementing the
 //! Geometric Cellular Sheaf Orchestrator (GCSO) architecture targeting 2–4 GB VRAM environments.
 //!
-//! # Architecture: `Liminal` Root + `1 + 8` Trait Topology (`ActionHub` + 2 Observers + Gateway)
+//! # Architecture: Two-Layer Hybrid Trait Topology (`Liminal` + `ActionHub` + Gateway)
 //! - **`Liminal` ([`crate::traits::Liminal`])**: Root epistemic supertrait defining the
 //!   unknowable exterior beyond any trait's cognitive aperture (`!APERTURE_MASK`), gating
 //!   out-of-horizon steering cleanly to zero without data-dependent branches.
 //! - **`ActionHub` (Core Sidecar State & Capability Ledger, [`crate::traits::ActionHub`])**: The
 //!   widest-aperture composite ledger (`HUB_APERTURE_MASK = 0x0000_FFFF`) combining
-//!   `BranchlessKernel + PhaseSteering + PointerActionHub + SubHeadRouter + Rank1ResidualAdapter +
-//!   FastPathLedger`, completely agnostic to Hot vs. Cold Path execution.
-//! - **Lv.2 Micro Observer ([`crate::traits::HotPathObserver`])**: Drives constant-time $\mathcal{O}(1)$
-//!   per-token cascades (`Pointer -> FastPathLedger -> Bloom Repulsion -> Unified Field / Limina / Swarm ->
-//!   QDPS/RIPA/RoPE -> sub-head router/Rank-1 residual`) with zero dynamic allocations ($C_{\mathrm{alloc}} = 0$).
-//! - **Lv.3 Macro Observer ([`crate::traits::ColdPathObserver`])**: Evaluates trajectory telemetry,
-//!   moving Z-score entropy ($\tilde{H} \in [0, \ln 2]$), sliding-window flux ($\Phi_M(t)$),
-//!   scale-invariant Langevin pitchfork bifurcations, matrix-free Gershgorin/Chebyshev sheaf
-//!   cohomology $H^1(K; \mathcal{F})$, Single Unified Attractor Manifold superposition, L2P-SVD
-//!   projection, KV-keyframe keyframe replay, and mapped-storage zero-copy `.gcso` persistence.
+//!   `BranchlessKernel + PhaseSteering + PointerActionHub + FastPathLedger`, completely agnostic
+//!   to Hot vs. Cold Path execution.
+//! - **Concrete Core Kernels**: Deterministic constant-time $\mathcal{O}(1)$ execution (`PhaseSteeringEngine`,
+//!   `ActionHubEngine`, `EntropyController`, `MultiAttractorSpace`, `MappedStorageEngine`, plus pure
+//!   sub-head routing, Rank-1 residual, visual steering, sheaf cohomology, L2P-SVD, and DNP functions)
+//!   with zero dynamic allocations ($C_{\mathrm{alloc}} = 0$).
+//! - **Latent Horizon Traits (`ManifoldGatewaySignal`, `StigmergicActionReceptor`)**: Thin boundary
+//!   contracts uniting `SystemConstraintSignal`, `ObjectiveFactSignal`, `SubjectivePersonaSignal`,
+//!   `ContradictionGuardSignal`, and external action/storage slots around the 3-layer core stack.
 //!
 //! # Core Mathematical & Systems Design Principles
 //! 1. **Sequential Conditional Transition Probability $\times$ Attention Phase Interference**:
@@ -150,67 +149,81 @@ pub use crate::residual_adapter::ResidualAdapterEngine;
 pub use crate::stigmergy::StigmergicGranuleEngine;
 pub use crate::storage::MappedStorageEngine;
 pub use crate::traits::{
-    evaluate_epistemic_horizon_words_64, evaluate_stigmergic_venn_and_serendipity_words_64,
-    fold_fractal_nodes_words_64, resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim, ActionHub,
-    ActionHubGatewayExt, AlignedBuffer128, AlignedBuffer16, AlignedBuffer256, AlignedBuffer32,
-    AlignedBuffer512, AlignedBuffer64, AlignedSlice, AlignedSlice128, AlignedSlice16,
-    AlignedSlice256, AlignedSlice32, AlignedSlice512, AlignedSlice64, AlignedSliceMut,
-    AlignedSliceMut128, AlignedSliceMut16, AlignedSliceMut256, AlignedSliceMut32,
+    abi_version_string, bridge_and_filter_liminal_trail_chain, cascade_action_slot_ptr,
+    cascade_tagged_ptr, compute_tikhonov_chebyshev_coeffs_deg3,
+    decode_and_apply_dnp_packet_to_trail, decode_and_verify_dnp_packet,
+    decode_and_verify_dnp_words, detect_and_record_obstruction_repulsion,
+    detect_frame_delta_bitmask, detect_frame_mse_bitmask, dispatch_dnp_packet,
+    dispatch_pointer_gated, dispatch_pointer_gated_with_phases,
+    dispatch_ripa_and_subhead_slot_ensemble_fused, dispatch_ripa_and_subhead_unified_anchors_fused,
+    dispatch_single_pass, dispatch_single_pass_with_phases, dispatch_subhead_slot_ensemble,
+    dispatch_subhead_slot_ensemble_geodesic, dispatch_subhead_unified_anchors,
+    encode_dnp_phase_packet, eval_chebyshev_spectral_filter_deg3, eval_gershgorin_lambda_max,
+    eval_pseudo_ultrametric_distance, eval_rank1, eval_rank1_fused, eval_rank1_pointer_gated_fused,
+    eval_rank1_slices, eval_rank1_slices_fused, eval_stigmergic_block_degrees,
+    evaluate_cohomological_obstruction, evaluate_epistemic_horizon_words_64,
+    evaluate_hodge_obstruction_and_dual_pairing, evaluate_stigmergic_venn_and_serendipity_words_64,
+    evaluate_trail_chain_cohomology_and_joint_log_prob, fold_fractal_nodes_words_64,
+    init_default_config, project_lora, project_lora_with_block_scales, quantize_depth_hysteresis,
+    query_capability, resolve_autonomous_swarm_rot_dim, resolve_dyadic_qdpt_and_cascade_ptr,
+    ripa_upper_rot_dim, steer_visual_grid_2d_bitmask_gated, steer_visual_grid_3d_bitmask_gated,
+    steer_visual_patch_2d, steer_visual_patch_3d, validate_config_invariants, validate_pspm_layout,
+    ActionHub, ActionHubGatewayExt, AlignedBuffer128, AlignedBuffer16, AlignedBuffer256,
+    AlignedBuffer32, AlignedBuffer512, AlignedBuffer64, AlignedSlice, AlignedSlice128,
+    AlignedSlice16, AlignedSlice256, AlignedSlice32, AlignedSlice512, AlignedSlice64,
+    AlignedSliceMut, AlignedSliceMut128, AlignedSliceMut16, AlignedSliceMut256, AlignedSliceMut32,
     AlignedSliceMut512, AlignedSliceMut64, AttractorField, AutonomousCoreLayerStack,
     BranchlessKernel, CausalProvenanceReport, CausalProvenanceSignal, CognitiveGroundingSignal,
-    ColdPathObserver, ColdPathOrchestrator, ColdPathTrailCrystalExt, ContradictionGuard,
-    ContradictionGuardSignal, ContrastivePhaseBloomFilter, CrystallizedAttractorRecord,
-    DisjointMutPair, DisjointMutTriple, DisjointRefMut, DissipativeOverflowReport,
-    DnpPacketDispatcher, EdbcBranchController, EgoIntentAxes, EntropyEvaluator,
-    EpistemicHorizonReading, EpistemicManifoldOps, EpistemicRegime, FastPathLedger, FfiHandleMut,
-    FfiHandleRef, FractalCascadeCoordinator, FullStackGcsoEngine, GatewayFrame,
-    GatewayPhaseSteeringExt, GcsoFourSectionView, GcsoResult, GcsoRuntimeContext,
-    HierarchicalTreeTable, HotPathExecutionEngine, HotPathObserver, KvKeyframeCache,
-    KvKeyframePacket, KvMotionDeltaPacket, L2pSvdProjector, Liminal, LiminalApertureField,
-    LiminalBoundaryDelta, LiminalEgoField, LiminalEgoPreset, LiminalHorizonNodeDescriptor,
-    LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, MappedStorage,
-    MultiDomainAttractorSpace, ObjectiveFact, ObjectiveFactSignal, PagedBitmaskOps, PersonaPatcher,
-    PhaseSteering, Pod, PointerActionHub, Rank1ResidualAdapter, RawPhaseProjectable,
-    RelativeAttractorNode, RelativeCouplingMatrix, SheafCohomologyEvaluator,
-    StigmergicActionPtrOps, StigmergicChunkOps, StigmergicFragmentEnsembleReport,
-    StigmergicGranuleField, StigmergicReconstitutionOps, StigmergicReconstitutionReport,
-    StigmergicScaleGranularity, StigmergicTrailOps, StigmergicVennSerendipityReport, SubHeadRouter,
-    SubjectivePersona, SubjectivePersonaSignal, SystemCapabilityQuery, SystemConstraint,
-    SystemConstraintSignal, VisualAttentionSteering, ACTION_MODE_DPSR_STEER,
-    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_RANK1_INJECT,
-    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
-    ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
-    APERTURE_ACTION_HUB_WIDE, APERTURE_CAUSAL_PROVENANCE, APERTURE_COGNITIVE_CIRCUIT,
-    APERTURE_COHOMOLOGY_EDBC, APERTURE_CONTRADICTION_GUARD, APERTURE_DISSIPATIVE_CRYSTAL,
-    APERTURE_FAST_PATH_LEDGER, APERTURE_KV_PHASE_CACHE, APERTURE_MANIFOLD_GATEWAY,
-    APERTURE_MAPPED_STORAGE, APERTURE_OBJECTIVE_FACT, APERTURE_PHASE_STEERING,
-    APERTURE_POINTER_TRAIL, APERTURE_RANK1_RESIDUAL, APERTURE_RELATIVE_COUPLING,
-    APERTURE_STIGMERGIC_CONSENSUS, APERTURE_SUBHEAD_ROUTING, APERTURE_SUBJECTIVE_PERSONA,
-    APERTURE_SYSTEM_CONSTRAINT, ATTRACTOR_SLOT_CUSTOM_5, ATTRACTOR_SLOT_CUSTOM_6,
-    ATTRACTOR_SLOT_CUSTOM_7, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
-    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, ATTRACTOR_SLOT_USER_CONTEXT,
-    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
-    CAUSAL_AXIS_SYSTEM_CONSTRAINT, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
-    CAUSAL_CAUSE_COHOMOLOGY_REPULSION, CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK,
-    CAUSAL_CAUSE_PERSONA_FACT_COLLISION, CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, CORE_LAYER_EGO,
-    CORE_LAYER_LIMINAL, CORE_LAYER_STIGMERGIC, DEFAULT_FACT_RIPA_CLAMP_RAD,
-    DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO, DEFAULT_PERSONA_FACT_COLLISION_THRESH,
-    DEFAULT_PERSONA_RIPA_CLAMP_RAD, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
-    DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, DEFAULT_STIGMERGIC_TOLERANCE_Q7,
-    DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
-    EGO_TRIGGER_ALL_DEFAULT, EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER,
-    EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR,
-    GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION, GCSO_FOUR_SECTION_HEADER_BYTES,
-    GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET, HEADS_PER_STIGMERGIC_GRANULE, NUM_CORE_AUTONOMOUS_LAYERS,
-    NUM_LIMINAL_APERTURE_CHANNELS, NUM_STIGMERGIC_GRANULES, ROOT_CAUSE_COHOMOLOGY_REPULSION,
-    ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_PERSONA_FACT_COLLISION,
-    ROOT_CAUSE_SYSTEM_QOS_THROTTLE, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_DPSR_ACTIVE,
-    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
-    TRAIL_FLAG_SWARM_ESCALATED, TRAIL_FLAG_SWARM_RESOLVED, TRAIL_FLAG_SYNERGY_RESONANCE,
+    ColdPathTrailCrystalExt, ContradictionGuard, ContradictionGuardSignal,
+    ContrastivePhaseBloomFilter, CrystallizedAttractorRecord, DisjointMutPair, DisjointMutTriple,
+    DisjointRefMut, DissipativeOverflowReport, EdbcBranchController, EgoIntentAxes,
+    EntropyEvaluator, EpistemicHorizonReading, EpistemicManifoldOps, EpistemicRegime,
+    FastPathLedger, FfiHandleMut, FfiHandleRef, GatewayFrame, GatewayPhaseSteeringExt,
+    GcsoFourSectionView, GcsoResult, HorizonEscalationProvider, HorizonEscalationRequest,
+    HorizonTriggerInput, KvKeyframeCache, KvKeyframePacket, KvMotionDeltaPacket, LatentHorizonSlot,
+    Liminal, LiminalApertureField, LiminalBoundaryDelta, LiminalEgoField, LiminalEgoPreset,
+    LiminalHorizonNodeDescriptor, LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal,
+    MappedStorage, MultiDomainAttractorSpace, ObjectiveFact, ObjectiveFactSignal, PagedBitmaskOps,
+    PersonaPatcher, PhaseSteering, Pod, PointerActionHub, RawPhaseProjectable,
+    RelativeAttractorNode, RelativeCouplingMatrix, StigmergicActionPtrOps, StigmergicChunkOps,
+    StigmergicFragmentEnsembleReport, StigmergicGranuleField, StigmergicReconstitutionOps,
+    StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicTrailOps,
+    StigmergicVennSerendipityReport, SubjectivePersona, SubjectivePersonaSignal, SystemConstraint,
+    SystemConstraintSignal, ACTION_MODE_DPSR_STEER, ACTION_MODE_LAYER_SKIP,
+    ACTION_MODE_PHASE_REPULSE, ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE,
+    ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP,
+    ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE, APERTURE_ACTION_HUB_WIDE,
+    APERTURE_CAUSAL_PROVENANCE, APERTURE_COGNITIVE_CIRCUIT, APERTURE_COHOMOLOGY_EDBC,
+    APERTURE_CONTRADICTION_GUARD, APERTURE_DISSIPATIVE_CRYSTAL, APERTURE_FAST_PATH_LEDGER,
+    APERTURE_KV_PHASE_CACHE, APERTURE_MANIFOLD_GATEWAY, APERTURE_MAPPED_STORAGE,
+    APERTURE_OBJECTIVE_FACT, APERTURE_PHASE_STEERING, APERTURE_POINTER_TRAIL,
+    APERTURE_RANK1_RESIDUAL, APERTURE_RELATIVE_COUPLING, APERTURE_STIGMERGIC_CONSENSUS,
+    APERTURE_SUBHEAD_ROUTING, APERTURE_SUBJECTIVE_PERSONA, APERTURE_SYSTEM_CONSTRAINT,
+    ATTRACTOR_SLOT_CUSTOM_5, ATTRACTOR_SLOT_CUSTOM_6, ATTRACTOR_SLOT_CUSTOM_7,
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
+    ATTRACTOR_SLOT_SYSTEM_BASELINE, ATTRACTOR_SLOT_USER_CONTEXT, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA, CAUSAL_AXIS_SYSTEM_CONSTRAINT,
+    CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
+    CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, CAUSAL_CAUSE_PERSONA_FACT_COLLISION,
+    CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, CORE_LAYER_EGO, CORE_LAYER_LIMINAL, CORE_LAYER_STIGMERGIC,
+    DEFAULT_FACT_RIPA_CLAMP_RAD, DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
+    DEFAULT_PERSONA_FACT_COLLISION_THRESH, DEFAULT_PERSONA_RIPA_CLAMP_RAD,
+    DEFAULT_SLOT_COUPLING_MATRIX_8X8, DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
+    DEFAULT_STIGMERGIC_TOLERANCE_Q7, DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
+    DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, EGO_TRIGGER_ALL_DEFAULT, EGO_TRIGGER_BASIN_CAPTURE,
+    EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT,
+    EGO_TRIGGER_LIMINAL_EXTERIOR, GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION,
+    GCSO_FOUR_SECTION_HEADER_BYTES, GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET,
+    HEADS_PER_STIGMERGIC_GRANULE, NUM_CORE_AUTONOMOUS_LAYERS, NUM_LIMINAL_APERTURE_CHANNELS,
+    NUM_STIGMERGIC_GRANULES, ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_FACT_RETRIEVAL_MISS,
+    ROOT_CAUSE_NOMINAL, ROOT_CAUSE_PERSONA_FACT_COLLISION, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
+    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_DPSR_ACTIVE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
+    TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SWARM_ESCALATED,
+    TRAIL_FLAG_SWARM_RESOLVED, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
 pub use crate::runtime::{
-    Config, Result, RuntimeContext, DEFAULT_BLOOM_REPULSION_SCALE_U7,
+    Config, OrchestratorStatusSnapshot, Result, RuntimeContext, DEFAULT_BLOOM_REPULSION_SCALE_U7,
     DEFAULT_BLOOM_REPULSION_THRESHOLD, DEFAULT_EDBC_BIFURCATION_THRESHOLD,
     DEFAULT_EDBC_HYSTERESIS_BAND, DEFAULT_EDBC_TAU_FLUX, DEFAULT_SLOT_WEIGHTS, SLOT_PHASE_BANK_LEN,
 };
@@ -248,7 +261,7 @@ pub mod prelude {
     pub use crate::residual_adapter::ResidualAdapterEngine;
     pub use crate::stigmergy::StigmergicGranuleEngine;
     pub use crate::traits::prelude::*;
-    pub use crate::{Config, Result, RuntimeContext};
+    pub use crate::{Config, OrchestratorStatusSnapshot, Result, RuntimeContext};
 }
 
 /// Static package version string constant obtained from `Cargo.toml`.

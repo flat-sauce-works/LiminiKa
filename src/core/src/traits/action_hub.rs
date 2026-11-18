@@ -31,11 +31,13 @@ use super::branchless::{swar_words_nonzero_64, BranchlessKernel, Liminal};
 use super::hot_path::PointerActionHub;
 use super::primitives::{
     branchless_is_finite_f32, branchless_rad_to_qdps_step_u8, branchless_select_u32,
-    swar_q7_qdps_filter_words_64, GcsoResult, APERTURE_ACTION_HUB_WIDE, MAX_ATTENTION_HEADS,
+    branchless_select_u8, swar_q7_qdps_filter_words_64, GcsoResult, APERTURE_ACTION_HUB_WIDE,
+    MAX_ATTENTION_HEADS,
 };
-use super::rope::{steer_from_swar_words_core_safe, PhaseSteering, Rank1ResidualAdapter, SubHeadRouter};
+use super::rope::{steer_from_swar_words_core_safe, PhaseSteering};
 use super::telemetry::{
-    ContrastivePhaseBloomFilter, FastPathLedger, NUM_STIGMERGIC_GRANULES,
+    ContrastivePhaseBloomFilter, FastPathLedger, LEDGER_METRIC_FAST_PATH_HIT,
+    LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_REPULSION_APPLIED, NUM_STIGMERGIC_GRANULES,
     TRAIL_FLAG_REPULSION_ACTIVE,
 };
 use crate::abi::{gcso_ledger_slot_t, gcso_pointer_trail_t, gcso_tagged_ptr_t, GCSO_ERROR_INVALID_ARGUMENT};
@@ -75,19 +77,13 @@ pub(crate) fn validate_optional_qk_tensors(
 }
 
 /// Core Composite Ledger (**Central Trait Registry / Super-Registry**) uniting the branchless
-/// foundation, RoPE steering kernels, $\mathcal{O}(1)$ pointer-trail transitions, sub-head
-/// routing, Rank-1 semantic residual injection, and FastPathLedger telemetry under static dispatch.
+/// foundation, RoPE steering kernels, $\mathcal{O}(1)$ pointer-trail transitions, and FastPathLedger
+/// telemetry under static dispatch.
 ///
-/// Both [`super::HotPathObserver`], [`super::ColdPathObserver`], and the Liminal Supertrait
-/// Blanket Extensions ([`super::gateway::ActionHubGatewayExt`]) observe this composite directly.
+/// The Liminal Supertrait Blanket Extensions ([`super::gateway::ActionHubGatewayExt`]) observe this
+/// composite directly.
 pub trait ActionHub:
-    BranchlessKernel
-    + Liminal
-    + PhaseSteering
-    + PointerActionHub
-    + SubHeadRouter
-    + Rank1ResidualAdapter
-    + FastPathLedger
+    BranchlessKernel + Liminal + PhaseSteering + PointerActionHub + FastPathLedger
 {
     /// Broadest cognitive aperture spanned across all gateway, steering, swarm, cohomology, and
     /// mapped-storage capabilities (`0x0000_FFFF`).
@@ -232,15 +228,68 @@ pub trait ActionHub:
         }
         true
     }
+
+    /// Executes a constant-time per-token stigmergic cascade over [`ActionHub`]:
+    /// 1. Validates tensor dimensions, `GCSO_RESTRICT` disjointness, and radian thresholds.
+    /// 2. Resolves `input_ptr` against `ledger_slot`'s $\mathcal{O}(1)$ shortcut table, steps the
+    ///    pointer transition in `trail_out`, and applies [`ContrastivePhaseBloomFilter`] repulsion.
+    /// 3. Filters `trail_out.accumulated_phase_delta` via 8-lane SWAR QDPS and steers
+    ///    `query_tensor` and/or `key_tensor` with RIPA soft-clamping (`ripa_max_rad`).
+    /// 4. Pushes the combined telemetry metric code (`LEDGER_METRIC_*`) into `ledger_slot`.
+    ///
+    /// Returns the observed Bloom repulsion bucket density (`0..=255`).
+    ///
+    /// # Errors
+    /// Propagates any error from [`ActionHub::validate_hub_cascade_params`],
+    /// [`ActionHub::step_hub_with_bloom_repulsion_to_words`], or
+    /// [`FastPathLedger::telemetry_push`].
+    #[inline]
+    fn execute_stigmergic_token_cascade(
+        &mut self,
+        input_ptr: u64,
+        ledger_slot: &mut gcso_ledger_slot_t,
+        bloom_filter: &ContrastivePhaseBloomFilter,
+        repulsion_threshold: u8,
+        repulsion_scale_u7: u8,
+        qdps_min_step_rad: f32,
+        ripa_max_rad: f32,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        trail_out: &mut gcso_pointer_trail_t,
+    ) -> GcsoResult<u8> {
+        let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
+            qdps_min_step_rad,
+            ripa_max_rad,
+            query_tensor.as_deref(),
+            key_tensor.as_deref(),
+        )?;
+        let (bypass_hit, _eff_ptr, density, repulsion_active, post_rep_words) = self
+            .step_hub_with_bloom_repulsion_to_words(
+                gcso_tagged_ptr_t(input_ptr),
+                ledger_slot,
+                bloom_filter,
+                repulsion_threshold,
+                repulsion_scale_u7,
+                trail_out,
+            )?;
+        let steered = self.steer_qdps_words_prevalidated_core(
+            &post_rep_words,
+            head_dim,
+            num_heads,
+            qdps_min_step_rad,
+            ripa_max_rad,
+            query_tensor,
+            key_tensor,
+        );
+        let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
+            | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
+            | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0);
+        self.telemetry_push(ledger_slot, metric)?;
+        Ok(density)
+    }
 }
 
 impl<T> ActionHub for T where
-    T: BranchlessKernel
-        + PhaseSteering
-        + PointerActionHub
-        + SubHeadRouter
-        + Rank1ResidualAdapter
-        + FastPathLedger
-        + ?Sized
+    T: BranchlessKernel + PhaseSteering + PointerActionHub + FastPathLedger + ?Sized
 {
 }

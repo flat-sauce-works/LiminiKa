@@ -7,9 +7,9 @@
 //! Coarse-to-Fine & Top-2 Liminal Bifurcation routing, and Ground Truth C-ABI contract assertions
 //! for the Geometric Cellular Sheaf Orchestrator (GCSO) engine.
 //!
-//! # Architectural Role (1 + 8 Flat Module Topology: `ActionHub` + 2 Observers + Gateway)
-//! The `crate::traits` hierarchy separates **the core sidecar state ledger (`ActionHub`)** from **two observers
-//! (`HotPathObserver` and `ColdPathObserver`)** and the **single composite gateway (`ManifoldGatewaySignal`)**
+//! # Architectural Role (Two-Layer Hybrid Topology: Concrete Core + Slide-In Horizon Traits)
+//! The `crate::traits` hierarchy separates **concrete deterministic core kernels (`pub fn` / struct
+//! methods)** from **latent slide-in horizon trait contracts (`Liminal`, `ActionHub`, `ManifoldGatewaySignal`)**
 //! across a flat 8-submodule DAG:
 //! - **Lv.0 Foundation**:
 //!   - `primitives`: Base C-ABI constants ([`crate::abi::GCSO_ABI_VERSION_HEX`]), [`Pod`] safety contract, branchless
@@ -23,22 +23,19 @@
 //!     `branchless_sqrt_f32` / `branchless_rsqrt_f32`, 4/8-lane SWAR Q7 & `u8` algebra,
 //!     64-head Single Unified Attractor Manifold & Bayesian-Attention phase algebra, and
 //!     unified AVX2/SSE2 SIMD kernels ($SO(2)$ rotation, 8-head `sincos`, Procrustes, tree reductions).
-//! - **Lv.1 Pure Capability Lists (Registered into [`ActionHub`])**:
-//!   - `rope`: [`PhaseSteering`], [`SubHeadRouter`], [`Rank1ResidualAdapter`],
-//!     and [`VisualAttentionSteering`].
+//! - **Lv.1 Capabilities (Registered into [`ActionHub`] + Concrete Pure Kernels)**:
+//!   - `rope`: [`PhaseSteering`] trait alongside pure sub-head routing, Rank-1 residual, and
+//!     2D/3D visual attention steering kernels.
 //!   - `telemetry`: [`PagedBitmaskOps`], [`ContrastivePhaseBloomFilter`],
 //!     [`StigmergicActionPtrOps`], [`StigmergicTrailOps`], [`StigmergicReconstitutionOps`],
 //!     [`FastPathLedger`], and [`StigmergicReconstitutionReport`].
-//! - **Lv.2 Micro Observer (`hot_path`)**:
-//!   - [`PointerActionHub`], [`StigmergicChunkOps`], and blanket-implemented [`HotPathExecutionEngine`] /
-//!     [`HotPathObserver`] / [`FractalCascadeCoordinator`] observing [`ActionHub`] as a constant-time
-//!     $\mathcal{O}(1)$ pointer-to-RoPE execution pipeline over the Single Unified Attractor Manifold.
-//! - **Lv.3 Macro Observer & Composite Gateway (`cold_path` & `gateway`)**:
-//!   - `cold_path`: [`EntropyEvaluator`], [`EdbcBranchController`], [`SheafCohomologyEvaluator`],
-//!     [`HierarchicalTreeTable`], [`AttractorField`], [`MultiDomainAttractorSpace`],
-//!     [`PersonaPatcher`], [`L2pSvdProjector`], [`KvKeyframeCache`], [`DnpPacketDispatcher`],
-//!     [`MappedStorage`], [`ColdPathTrailCrystalExt`], and blanket-implemented macro markers
-//!     ([`ColdPathOrchestrator`], [`ColdPathObserver`], [`FullStackGcsoEngine`]).
+//! - **Lv.2 Micro Capabilities (`hot_path`)**:
+//!   - [`PointerActionHub`] and [`StigmergicChunkOps`] feeding [`ActionHub::execute_stigmergic_token_cascade`].
+//! - **Lv.3 Macro Capabilities & Composite Gateway (`cold_path` & `gateway`)**:
+//!   - `cold_path`: [`EntropyEvaluator`], [`EdbcBranchController`], [`AttractorField`],
+//!     [`MultiDomainAttractorSpace`], [`PersonaPatcher`], [`KvKeyframeCache`], [`MappedStorage`],
+//!     [`ColdPathTrailCrystalExt`], and pure matrix-free cohomology, QDPT tree, L2P-SVD, DNP, and
+//!     capability query helpers.
 //!   - `gateway`: 2-Origin Supertrait Hierarchy ([`CausalProvenanceSignal`] ->
 //!     [`SystemConstraintSignal`] x [`CognitiveGroundingSignal`] \[[`ObjectiveFactSignal`],
 //!     [`SubjectivePersonaSignal`], [`ContradictionGuardSignal`]\]), Single Composite Gateway
@@ -84,16 +81,15 @@ pub mod aligned;
 /// phase algebra, and unified AVX2/SSE2 SIMD kernels.
 pub mod branchless;
 #[rustfmt::skip]
-/// Lv.1 Capability 1: RoPE & inline tensor modulation (`PhaseSteering`, `SubHeadRouter`,
-/// `Rank1ResidualAdapter`, `VisualAttentionSteering`).
+/// Lv.1 Capability 1: RoPE & inline tensor modulation (`PhaseSteering` trait plus pure
+/// sub-head routing, Rank-1 residual, and visual attention steering kernels).
 pub mod rope;
 #[rustfmt::skip]
 /// Lv.1 Capability 2: Stigmergic trails, internal telemetry & swarm intelligence (`PagedBitmaskOps`,
 /// `ContrastivePhaseBloomFilter`, `StigmergicActionPtrOps`, `StigmergicTrailOps`, `StigmergicReconstitutionOps`, `FastPathLedger`).
 pub mod telemetry;
 #[rustfmt::skip]
-/// Lv.2 Micro Observer: `PointerActionHub`, `StigmergicChunkOps`, and constant-time `ActionHub` -> RoPE
-/// execution engines (`HotPathExecutionEngine`, `HotPathObserver`, `FractalCascadeCoordinator`).
+/// Lv.2 Micro Capabilities: `PointerActionHub` and `StigmergicChunkOps`.
 pub mod hot_path;
 #[rustfmt::skip]
 /// Lv.3 Macro Observer: Trajectory analysis, EDBC pitchfork control, matrix-free cellular sheaf
@@ -140,12 +136,21 @@ pub use self::branchless::{
     BranchlessKernel, Liminal,
 };
 pub use self::cold_path::{
-    AttractorField, ColdPathObserver, ColdPathOrchestrator, ColdPathTrailCrystalExt,
-    DnpPacketDispatcher, EdbcBranchController, EntropyEvaluator, FullStackGcsoEngine,
-    GcsoRuntimeContext, HierarchicalTreeTable, KvKeyframeCache, L2pSvdProjector, MappedStorage,
-    MultiDomainAttractorSpace, PersonaPatcher, SheafCohomologyEvaluator, SystemCapabilityQuery,
+    abi_version, abi_version_string, bridge_and_filter_liminal_trail_chain,
+    cascade_action_slot_ptr, cascade_tagged_ptr, compute_tikhonov_chebyshev_coeffs_deg3,
+    decode_and_apply_dnp_packet_to_trail, decode_and_verify_dnp_packet,
+    decode_and_verify_dnp_words, detect_and_record_obstruction_repulsion, dispatch_dnp_packet,
+    encode_dnp_phase_packet, eval_chebyshev_spectral_filter_deg3, eval_gershgorin_lambda_max,
+    eval_pseudo_ultrametric_distance, eval_stigmergic_block_degrees,
+    evaluate_cohomological_obstruction, evaluate_hodge_obstruction_and_dual_pairing,
+    evaluate_trail_chain_cohomology_and_joint_log_prob, init_default_config, project_lora,
+    project_lora_with_block_scales, quantize_depth_hysteresis, query_capability,
+    resolve_dyadic_qdpt_and_cascade_ptr, validate_config_invariants, AttractorField,
+    ColdPathTrailCrystalExt, EdbcBranchController, EntropyEvaluator, KvKeyframeCache,
+    MappedStorage, MultiDomainAttractorSpace, PersonaPatcher,
 };
 pub use self::gateway::{
+    apply_gateway_frame_rank1_hidden_fused, apply_latent_horizon_slots,
     evaluate_epistemic_horizon_words_64, evaluate_stigmergic_venn_and_serendipity_words_64,
     fold_fractal_nodes_words_64, project_bytes_swar_to_q7_64, project_bytes_swar_to_words_64,
     project_f32_slice_to_q7_64, project_f32_slice_to_words_64, project_gateway_signal_at_scale,
@@ -159,7 +164,8 @@ pub use self::gateway::{
     CrystallizedAttractorRecord, DissipativeOverflowReport, EgoIntentAxes, EpistemicHorizonReading,
     EpistemicManifoldOps, EpistemicRegime, GatewayFrame, GatewayPhaseSteeringExt,
     GcsoFourSectionView, HighCapCognitiveBank, HighCapPhaseKvCache, HighCapPhaseKvGopCache,
-    HybridScaleCircuit, LiminalApertureField, LiminalBoundaryDelta, LiminalEgoField,
+    HorizonEscalationProvider, HorizonEscalationRequest, HorizonTriggerInput, HybridScaleCircuit,
+    LatentHorizonSlot, LiminalApertureField, LiminalBoundaryDelta, LiminalEgoField,
     LiminalEgoPreset, LiminalHorizonNodeDescriptor, LiminalTopologyTelemetrySnapshot,
     LowSpecCognitiveBank, LowSpecPhaseKvCache, LowSpecPhaseKvGopCache, ManifoldGatewaySignal,
     ObjectiveFact, ObjectiveFactSignal, RamPhaseKvCache, RamPhaseKvCacheOps, RamPhaseKvEntry,
@@ -190,10 +196,7 @@ pub use self::gateway::{
     ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL,
     ROOT_CAUSE_PERSONA_FACT_COLLISION, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
 };
-pub use self::hot_path::{
-    FractalCascadeCoordinator, HotPathExecutionEngine, HotPathObserver, PointerActionHub,
-    StigmergicChunkOps,
-};
+pub use self::hot_path::{PointerActionHub, StigmergicChunkOps};
 pub use self::primitives::{
     branchless_abs_f32, branchless_atan2_f32, branchless_atan2_to_q7_fast, branchless_clamp_f32,
     branchless_copysign_f32, branchless_cos_q7, branchless_crc32_128b_words, branchless_crc32_ieee,
@@ -256,8 +259,15 @@ pub use self::primitives::{
     Q7_ZERO, TAG_ACTION_MODE_MASK, TAG_ATTRACTOR_SLOT_SHIFT,
 };
 pub use self::rope::{
-    resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim, PhaseSteering, Rank1ResidualAdapter,
-    SubHeadRouter, VisualAttentionSteering,
+    detect_frame_delta_bitmask, detect_frame_mse_bitmask, dispatch_pointer_gated,
+    dispatch_pointer_gated_with_phases, dispatch_ripa_and_subhead_slot_ensemble_fused,
+    dispatch_ripa_and_subhead_unified_anchors_fused, dispatch_single_pass,
+    dispatch_single_pass_with_phases, dispatch_subhead_slot_ensemble,
+    dispatch_subhead_slot_ensemble_geodesic, dispatch_subhead_unified_anchors, eval_rank1,
+    eval_rank1_fused, eval_rank1_pointer_gated_fused, eval_rank1_slices, eval_rank1_slices_fused,
+    resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim, steer_visual_grid_2d_bitmask_gated,
+    steer_visual_grid_3d_bitmask_gated, steer_visual_patch_2d, steer_visual_patch_3d,
+    validate_pspm_layout, PhaseSteering,
 };
 pub use self::telemetry::{
     eval_bitmask_dyadic_ultrametric, swar_subswarm_resolve_x8, ContrastivePhaseBloomFilter,
@@ -312,12 +322,21 @@ pub mod prelude {
         swar_slerp_words_with_bias_64, BranchlessKernel, Liminal,
     };
     pub use super::cold_path::{
-        AttractorField, ColdPathObserver, ColdPathOrchestrator, ColdPathTrailCrystalExt,
-        DnpPacketDispatcher, EdbcBranchController, EntropyEvaluator, FullStackGcsoEngine,
-        GcsoRuntimeContext, HierarchicalTreeTable, KvKeyframeCache, L2pSvdProjector, MappedStorage,
-        MultiDomainAttractorSpace, PersonaPatcher, SheafCohomologyEvaluator, SystemCapabilityQuery,
+        abi_version, abi_version_string, bridge_and_filter_liminal_trail_chain,
+        cascade_action_slot_ptr, cascade_tagged_ptr, compute_tikhonov_chebyshev_coeffs_deg3,
+        decode_and_apply_dnp_packet_to_trail, decode_and_verify_dnp_packet,
+        decode_and_verify_dnp_words, detect_and_record_obstruction_repulsion, dispatch_dnp_packet,
+        encode_dnp_phase_packet, eval_chebyshev_spectral_filter_deg3, eval_gershgorin_lambda_max,
+        eval_pseudo_ultrametric_distance, eval_stigmergic_block_degrees,
+        evaluate_cohomological_obstruction, evaluate_hodge_obstruction_and_dual_pairing,
+        evaluate_trail_chain_cohomology_and_joint_log_prob, init_default_config, project_lora,
+        project_lora_with_block_scales, quantize_depth_hysteresis, query_capability,
+        resolve_dyadic_qdpt_and_cascade_ptr, validate_config_invariants, AttractorField,
+        ColdPathTrailCrystalExt, EdbcBranchController, EntropyEvaluator, KvKeyframeCache,
+        MappedStorage, MultiDomainAttractorSpace, PersonaPatcher,
     };
     pub use super::gateway::{
+        apply_gateway_frame_rank1_hidden_fused, apply_latent_horizon_slots,
         evaluate_epistemic_horizon_words_64, evaluate_stigmergic_venn_and_serendipity_words_64,
         fold_fractal_nodes_words_64, project_bytes_swar_to_q7_64, project_bytes_swar_to_words_64,
         project_f32_slice_to_q7_64, project_f32_slice_to_words_64,
@@ -327,7 +346,8 @@ pub mod prelude {
         CognitiveGroundingSignal, ContradictionGuard, ContradictionGuardSignal,
         CoreLayerEvalContext, CrystallizedAttractorRecord, DissipativeOverflowReport,
         EgoIntentAxes, EpistemicHorizonReading, EpistemicManifoldOps, EpistemicRegime,
-        GatewayFrame, GatewayPhaseSteeringExt, GcsoFourSectionView, LiminalApertureField,
+        GatewayFrame, GatewayPhaseSteeringExt, GcsoFourSectionView, HorizonEscalationProvider,
+        HorizonEscalationRequest, HorizonTriggerInput, LatentHorizonSlot, LiminalApertureField,
         LiminalBoundaryDelta, LiminalEgoField, LiminalEgoPreset, LiminalHorizonNodeDescriptor,
         LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, ObjectiveFact,
         ObjectiveFactSignal, RawPhaseProjectable, RelativeAttractorNode, RelativeCouplingMatrix,
@@ -357,10 +377,7 @@ pub mod prelude {
         ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_PERSONA_FACT_COLLISION,
         ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
     };
-    pub use super::hot_path::{
-        FractalCascadeCoordinator, HotPathExecutionEngine, HotPathObserver, PointerActionHub,
-        StigmergicChunkOps,
-    };
+    pub use super::hot_path::{PointerActionHub, StigmergicChunkOps};
     pub use super::primitives::{
         branchless_atan2_to_q7_fast, branchless_crc32_ieee, branchless_flush_subnormal_f32,
         branchless_inv_pos_f32, branchless_phase_proximity_gravity_f32,
@@ -393,8 +410,15 @@ pub mod prelude {
         DEFAULT_SLOT_COUPLING_MATRIX_8X8,
     };
     pub use super::rope::{
-        resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim, PhaseSteering, Rank1ResidualAdapter,
-        SubHeadRouter, VisualAttentionSteering,
+        detect_frame_delta_bitmask, detect_frame_mse_bitmask, dispatch_pointer_gated,
+        dispatch_pointer_gated_with_phases, dispatch_ripa_and_subhead_slot_ensemble_fused,
+        dispatch_ripa_and_subhead_unified_anchors_fused, dispatch_single_pass,
+        dispatch_single_pass_with_phases, dispatch_subhead_slot_ensemble,
+        dispatch_subhead_slot_ensemble_geodesic, dispatch_subhead_unified_anchors, eval_rank1,
+        eval_rank1_fused, eval_rank1_pointer_gated_fused, eval_rank1_slices,
+        eval_rank1_slices_fused, resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim,
+        steer_visual_grid_2d_bitmask_gated, steer_visual_grid_3d_bitmask_gated,
+        steer_visual_patch_2d, steer_visual_patch_3d, validate_pspm_layout, PhaseSteering,
     };
     pub use super::telemetry::{
         eval_bitmask_dyadic_ultrametric, swar_subswarm_resolve_x8, ContrastivePhaseBloomFilter,
@@ -634,9 +658,6 @@ mod tests {
         }
     }
 
-    impl SubHeadRouter for MockActionHubComposite {}
-    impl Rank1ResidualAdapter for MockActionHubComposite {}
-
     impl FastPathLedger for MockActionHubComposite {
         fn evaluate_auto_tune(
             &self,
@@ -646,8 +667,6 @@ mod tests {
             Ok(())
         }
     }
-
-    impl SheafCohomologyEvaluator for MockActionHubComposite {}
 
     impl EntropyEvaluator for MockActionHubComposite {
         fn eval_stateful(
@@ -765,9 +784,7 @@ mod tests {
 
     #[test]
     fn test_canonical_modules_and_action_hub_composite() {
-        fn assert_action_hub<T: ActionHub + HotPathObserver + ActionHubGatewayExt>(
-            hub: &T,
-        ) -> (u32, u32) {
+        fn assert_action_hub<T: ActionHub + ActionHubGatewayExt>(hub: &T) -> (u32, u32) {
             (
                 <T as rope::PhaseSteering>::head_dim(hub),
                 <T as rope::PhaseSteering>::num_heads(hub),
@@ -790,12 +807,7 @@ mod tests {
         );
 
         let deg = AlignedBuffer32::new([1.0f32, 3.0, 2.0, 0.5]);
-        let lmax =
-            <MockActionHubComposite as SheafCohomologyEvaluator>::eval_gershgorin_lambda_max(
-                &hub,
-                &deg.as_aligned_slice(),
-            )
-            .unwrap();
+        let lmax = eval_gershgorin_lambda_max(&deg.as_aligned_slice()).unwrap();
         assert!((lmax - 6.0).abs() < 1e-5);
 
         let mut ledger = gcso_ledger_slot_t::default();

@@ -113,7 +113,7 @@ pub unsafe extern "C" fn gcso_abi_get_version(
             )
         };
 
-        let (v_maj, v_min, v_pat) = AbiSystemDispatcher.abi_version();
+        let (v_maj, v_min, v_pat) = crate::abi_version();
         if let Some(mut p) = m_maj {
             *p = v_maj;
         }
@@ -154,7 +154,7 @@ pub unsafe extern "C" fn gcso_abi_query_capability(flags: *mut u64) -> GcsoStatu
     ffi_boundary!({
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and alignment.
         let mut out_flags = unsafe { FfiHandleMut::from_raw(flags)? };
-        *out_flags = AbiSystemDispatcher.query_capability();
+        *out_flags = query_capability();
         Ok(GCSO_SUCCESS)
     })
 }
@@ -168,7 +168,7 @@ pub unsafe extern "C" fn gcso_config_init_default(config: *mut gcso_config_t) ->
     ffi_boundary!({
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and alignment.
         let mut cfg = unsafe { FfiHandleMut::from_raw(config)? };
-        AbiSystemDispatcher.init_default_config(&mut cfg)?;
+        init_default_config(&mut cfg)?;
         Ok(GCSO_SUCCESS)
     })
 }
@@ -182,7 +182,7 @@ pub unsafe extern "C" fn gcso_config_validate(config: *const gcso_config_t) -> G
     ffi_boundary!({
         // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and alignment.
         let cfg = unsafe { FfiHandleRef::from_raw(config)? };
-        AbiSystemDispatcher.validate_config_invariants(&cfg)?;
+        validate_config_invariants(&cfg)?;
         Ok(GCSO_SUCCESS)
     })
 }

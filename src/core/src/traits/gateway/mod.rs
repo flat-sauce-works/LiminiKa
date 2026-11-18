@@ -75,10 +75,10 @@ use crate::traits::primitives::{
     KvKeyframePacket, KvMotionDeltaPacket, MAX_ATTENTION_HEADS, Pod, pack_action_slot_tag,
 };
 use crate::traits::rope::{
-    PhaseSteering, PhaseSteeringGeometryExt, SubHeadRouter, RopePairLayout, RopeSteeringTarget,
-    Rank1ResidualAdapter, dispatch_fused_ripa_and_pspm_words_core, resolve_autonomous_swarm_rot_dim,
-    rotate_fused_self_ripa_and_pspm_default_words,
+    dispatch_fused_ripa_and_pspm_words_core, eval_rank1_slices_fused,
+    resolve_autonomous_swarm_rot_dim, rotate_fused_self_ripa_and_pspm_default_words,
     rotate_fused_self_ripa_pspm_q_and_ripa_k_default_words, steer_from_swar_words_core_safe,
+    PhaseSteering, PhaseSteeringGeometryExt, RopePairLayout, RopeSteeringTarget,
 };
 use crate::traits::telemetry::{
     ContrastivePhaseBloomFilter, DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,

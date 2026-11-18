@@ -4,7 +4,7 @@
 //! Integration test enforcing zero dynamic heap allocation on the GCSO Hot Path.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::Cell;
 
 use liminika_core::abi::{
     gcso_action_hub_resolve_trail_in_swarm, gcso_config_init_default, gcso_config_t,
@@ -18,12 +18,15 @@ use liminika_core::traits::{DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RA
 
 struct ZeroAllocGuardAllocator;
 
-static ENFORCE_ZERO_ALLOC: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    static ENFORCE_ZERO_ALLOC: Cell<bool> = const { Cell::new(false) };
+}
 
-// SAFETY: Delegates directly to `std::alloc::System` while enforcing zero-allocation during Hot Path windows.
+// SAFETY: Delegates directly to `std::alloc::System` while enforcing zero-allocation during Hot Path windows on the active test thread.
 unsafe impl GlobalAlloc for ZeroAllocGuardAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if ENFORCE_ZERO_ALLOC.load(Ordering::Relaxed) {
+        if ENFORCE_ZERO_ALLOC.with(Cell::get) {
+            ENFORCE_ZERO_ALLOC.with(|flag| flag.set(false));
             panic!(
                 "Zero-Alloc Violation! Dynamic allocation detected in Hot-Path: {:?}",
                 layout
@@ -74,7 +77,7 @@ fn test_context_step_token_zero_allocation_guarantee() {
     let mut swarm_report = StigmergicReconstitutionReport::default();
 
     // 2. Enable Strict Zero-Allocation Guard for Hot Path.
-    ENFORCE_ZERO_ALLOC.store(true, Ordering::SeqCst);
+    ENFORCE_ZERO_ALLOC.with(|flag| flag.set(true));
 
     // 3. Execute Hot Path step loop (verified zero-allocation).
     for token_id in 0..100 {
@@ -124,8 +127,79 @@ fn test_context_step_token_zero_allocation_guarantee() {
     }
 
     // 4. Disable Guard before Cold Path cleanup.
-    ENFORCE_ZERO_ALLOC.store(false, Ordering::SeqCst);
+    ENFORCE_ZERO_ALLOC.with(|flag| flag.set(false));
     // SAFETY: `ctx_handle` was created by `gcso_context_create` and is destroyed once.
     let destroy_status = unsafe { gcso_context_destroy(ctx_handle) };
     assert_eq!(destroy_status, GCSO_SUCCESS);
+}
+
+#[test]
+fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
+    use liminika_core::traits::gateway::{
+        AutonomousCoreLayerStack, GatewayFrame, HorizonTriggerInput, LatentHorizonSlot,
+        ObjectiveFact, SubjectivePersona, SystemConstraint,
+    };
+    use liminika_core::traits::rope::{RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget};
+    use liminika_core::traits::EGO_TRIGGER_BOUNDARY_CHATTER;
+    use liminika_core::{Config, RuntimeContext};
+
+    struct TestGeom;
+    impl RopeSteeringTarget for TestGeom {
+        fn rope_geometry(&self) -> RopeGeometryDescriptor {
+            RopeGeometryDescriptor {
+                head_dim: 128,
+                num_heads: 32,
+                rotary_dim: 32,
+                layout: RopePairLayout::Interleaved,
+            }
+        }
+    }
+
+    struct ZeroAllocSlideSlot;
+    impl LatentHorizonSlot for ZeroAllocSlideSlot {
+        fn horizon_slot_mask(&self) -> u32 {
+            1 << 2
+        }
+
+        fn on_slide_in_modulate(
+            &mut self,
+            frame: &mut GatewayFrame,
+            stack: &mut AutonomousCoreLayerStack,
+            _trigger: &HorizonTriggerInput,
+        ) {
+            stack.liminal_layer.active_aperture_mask |= 1 << 5;
+            frame.phase_deltas[0] = 16;
+        }
+    }
+
+    let mut ctx = RuntimeContext::new(Config::new()).unwrap();
+    let mut q_buf = AlignedBuffer32::<f32, { 128 * 32 }>::new([1.0_f32; 128 * 32]);
+    let mut trail = gcso_pointer_trail_t::default();
+    let signal = (
+        SystemConstraint::new((), 0.2, 0.0, 0xFF),
+        ObjectiveFact::new([10i8; 64], 1.2, 0x2000, 11),
+        SubjectivePersona::new([0i8; 64], 0.0, 0, 0),
+    );
+    let mut slot = ZeroAllocSlideSlot;
+    let mut no_esc = ();
+
+    ENFORCE_ZERO_ALLOC.with(|flag| flag.set(true));
+    for step in 0..32 {
+        ctx.core_layers_mut().ego_layer.last_intervened_mask = if (step & 1) == 0 {
+            EGO_TRIGGER_BOUNDARY_CHATTER
+        } else {
+            0
+        };
+        ctx.last_boundary_delta_mut().stationary_shortcut_ready = u8::from((step & 1) != 0);
+        let res = ctx.pierce_and_orchestrate_step(
+            &signal,
+            &TestGeom,
+            &mut slot,
+            &mut no_esc,
+            &mut trail,
+            Some(&mut q_buf.as_aligned_slice_mut()),
+        );
+        assert!(res.is_ok());
+    }
+    ENFORCE_ZERO_ALLOC.with(|flag| flag.set(false));
 }

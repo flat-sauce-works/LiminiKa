@@ -74,7 +74,10 @@ use crate::traits::aligned::{
 use crate::traits::branchless::{
     branchless_project_f32_slice_to_q7_64, sum_sq_f32_simd8, swar_words_nonzero_64,
 };
-use crate::traits::cold_path::{EntropyEvaluator, L2pSvdProjector, SystemCapabilityQuery};
+use crate::traits::cold_path::{
+    init_default_config, project_lora, query_capability, validate_config_invariants,
+    EntropyEvaluator,
+};
 use crate::traits::gateway::{
     evaluate_epistemic_horizon_words_64, evaluate_stigmergic_venn_and_serendipity_words_64,
     project_bytes_swar_to_words_64, project_f32_slice_to_q7_64, project_f32_slice_to_words_64,
@@ -104,7 +107,8 @@ use crate::traits::primitives::{
     MAX_ATTENTION_HEADS, PAGED_BITMASK_BITS,
 };
 use crate::traits::rope::{
-    steer_from_swar_words_core_safe, PhaseSteering, Rank1ResidualAdapter, SubHeadRouter,
+    dispatch_single_pass, eval_rank1, eval_rank1_fused, steer_from_swar_words_core_safe,
+    PhaseSteering,
 };
 use crate::traits::telemetry::{
     ContrastivePhaseBloomFilter, FastPathLedger, PagedBitmaskOps, StigmergicActionPtrOps,

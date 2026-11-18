@@ -1283,472 +1283,463 @@ pub(super) fn dispatch_subhead_slot_ensemble_core(
     )
 }
 
-/// Trait for Parallel Sub-Head Phase Modulation (sub-head router) Pseudo-MoE Routing (**Micro / Mezzo Level**, Section 2.4).
-pub trait SubHeadRouter: BranchlessKernel {
-    /// Validates `config` sub-head counts (`Fact + Logic + Explore > 0`) and returns
-    /// `(fact_heads, logic_heads, explore_heads, total_heads, rot_dim)`.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim == 0`, `head_dim` is odd,
-    /// `total_heads == 0`, or `tensor.len() < total_heads * head_dim`.
-    #[inline(always)]
-    fn validate_pspm_layout(
-        &self,
-        tensor: &AlignedSliceMut32<'_, f32>,
-        config: &gcso_subhead_config_t,
-        head_dim: usize,
-    ) -> GcsoResult<(usize, usize, usize, usize, usize)> {
-        if head_dim == 0 || (head_dim & 1) != 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        let fact_h = config.num_fact_heads as usize;
-        let logic_h = config.num_logic_heads as usize;
-        let explore_h = config.num_explore_heads as usize;
-        let total_heads = fact_h
-            .checked_add(logic_h)
-            .and_then(|v| v.checked_add(explore_h))
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
-        let expected_len = total_heads
-            .checked_mul(head_dim)
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
-        if total_heads == 0 || tensor.len() < expected_len {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        let rot_dim = ripa_upper_rot_dim(head_dim);
-        Ok((fact_h, logic_h, explore_h, total_heads, rot_dim))
+// ===================================================================
+// Public Sub-Head Phase Modulation (PSPM) Routing Kernels
+// ===================================================================
+
+/// Validates `config` sub-head counts (`Fact + Logic + Explore > 0`) and returns
+/// `(fact_heads, logic_heads, explore_heads, total_heads, rot_dim)`.
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim == 0`, `head_dim` is odd,
+/// `total_heads == 0`, or `tensor.len() < total_heads * head_dim`.
+#[inline(always)]
+pub fn validate_pspm_layout(
+    tensor: &AlignedSliceMut32<'_, f32>,
+    config: &gcso_subhead_config_t,
+    head_dim: usize,
+) -> GcsoResult<(usize, usize, usize, usize, usize)> {
+    if head_dim == 0 || (head_dim & 1) != 0 {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
     }
+    let fact_h = config.num_fact_heads as usize;
+    let logic_h = config.num_logic_heads as usize;
+    let explore_h = config.num_explore_heads as usize;
+    let total_heads = fact_h
+        .checked_add(logic_h)
+        .and_then(|v| v.checked_add(explore_h))
+        .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+    let expected_len = total_heads
+        .checked_mul(head_dim)
+        .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+    if total_heads == 0 || tensor.len() < expected_len {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    }
+    let rot_dim = ripa_upper_rot_dim(head_dim);
+    Ok((fact_h, logic_h, explore_h, total_heads, rot_dim))
+}
 
-    /// Executes single-pass sub-head router sub-head routing across Fact, Logic, and Exploration head groups (Section 2.4).
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is zero or odd, `total_heads == 0`,
-    /// or `tensor` has fewer than `total_heads * head_dim` elements.
-    #[inline]
-    fn dispatch_single_pass(
-        &self,
-        tensor: &mut AlignedSliceMut32<'_, f32>,
-        config: &gcso_subhead_config_t,
-        head_dim: usize,
-    ) -> GcsoResult<()> {
-        let (fact_h, logic_h, _explore_h, total_heads, rot_dim) =
-            self.validate_pspm_layout(tensor, config, head_dim)?;
-        let t_slice = tensor.as_mut_slice();
+/// Executes single-pass sub-head routing across Fact, Logic, and Exploration head groups (Section 2.4).
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is zero or odd, `total_heads == 0`,
+/// or `tensor` has fewer than `total_heads * head_dim` elements.
+#[inline]
+pub fn dispatch_single_pass(
+    tensor: &mut AlignedSliceMut32<'_, f32>,
+    config: &gcso_subhead_config_t,
+    head_dim: usize,
+) -> GcsoResult<()> {
+    let (fact_h, logic_h, _explore_h, total_heads, rot_dim) =
+        validate_pspm_layout(tensor, config, head_dim)?;
+    let t_slice = tensor.as_mut_slice();
 
-        let fact_rad = branchless_clamp_f32(
-            branchless_select_f32(
-                branchless_is_finite_f32(config.fact_phase_gain),
-                config.fact_phase_gain,
-                1.0,
-            ) - 1.0,
-            -DEFAULT_RIPA_CLAMP_MAX_RAD,
-            DEFAULT_RIPA_CLAMP_MAX_RAD,
+    let fact_rad = branchless_clamp_f32(
+        branchless_select_f32(
+            branchless_is_finite_f32(config.fact_phase_gain),
+            config.fact_phase_gain,
+            1.0,
+        ) - 1.0,
+        -DEFAULT_RIPA_CLAMP_MAX_RAD,
+        DEFAULT_RIPA_CLAMP_MAX_RAD,
+    );
+    let logic_rad = branchless_clamp_f32(
+        branchless_select_f32(
+            branchless_is_finite_f32(config.logic_phase_gain),
+            config.logic_phase_gain,
+            1.0,
+        ) - 1.0,
+        -DEFAULT_RIPA_CLAMP_MAX_RAD,
+        DEFAULT_RIPA_CLAMP_MAX_RAD,
+    );
+    let explore_rad = branchless_clamp_f32(
+        branchless_select_f32(
+            branchless_is_finite_f32(config.explore_phase_gain),
+            config.explore_phase_gain,
+            1.0,
+        ) - 1.0,
+        -FRAC_PI_2,
+        FRAC_PI_2,
+    );
+
+    let logic_end = fact_h + logic_h;
+    if fact_h > 0 && fact_rad != 0.0 {
+        let (sin_f, cos_f) = branchless_sincos_half_pi_f32(fact_rad);
+        rotate_ripa_upper_heads_uniform_sincos(
+            t_slice, 0, fact_h, head_dim, rot_dim, sin_f, cos_f,
         );
-        let logic_rad = branchless_clamp_f32(
-            branchless_select_f32(
-                branchless_is_finite_f32(config.logic_phase_gain),
-                config.logic_phase_gain,
-                1.0,
-            ) - 1.0,
-            -DEFAULT_RIPA_CLAMP_MAX_RAD,
-            DEFAULT_RIPA_CLAMP_MAX_RAD,
+    }
+    if logic_h > 0 && logic_rad != 0.0 {
+        let (sin_l, cos_l) = branchless_sincos_half_pi_f32(logic_rad);
+        rotate_ripa_upper_heads_uniform_sincos(
+            t_slice, fact_h, logic_end, head_dim, rot_dim, sin_l, cos_l,
         );
-        let explore_rad = branchless_clamp_f32(
-            branchless_select_f32(
-                branchless_is_finite_f32(config.explore_phase_gain),
-                config.explore_phase_gain,
-                1.0,
-            ) - 1.0,
-            -FRAC_PI_2,
-            FRAC_PI_2,
+    }
+    if total_heads > logic_end && explore_rad != 0.0 {
+        let (sin_e, cos_e) = branchless_sincos_half_pi_f32(explore_rad);
+        rotate_ripa_upper_heads_uniform_sincos(
+            t_slice,
+            logic_end,
+            total_heads,
+            head_dim,
+            rot_dim,
+            sin_e,
+            cos_e,
         );
+    }
+    Ok(())
+}
 
-        let logic_end = fact_h + logic_h;
-        if fact_h > 0 && fact_rad != 0.0 {
-            let (sin_f, cos_f) = self.sincos_half_pi_f32(fact_rad);
-            rotate_ripa_upper_heads_uniform_sincos(
-                t_slice, 0, fact_h, head_dim, rot_dim, sin_f, cos_f,
-            );
-        }
-        if logic_h > 0 && logic_rad != 0.0 {
-            let (sin_l, cos_l) = self.sincos_half_pi_f32(logic_rad);
-            rotate_ripa_upper_heads_uniform_sincos(
-                t_slice, fact_h, logic_end, head_dim, rot_dim, sin_l, cos_l,
-            );
-        }
-        if total_heads > logic_end && explore_rad != 0.0 {
-            let (sin_e, cos_e) = self.sincos_half_pi_f32(explore_rad);
-            rotate_ripa_upper_heads_uniform_sincos(
-                t_slice,
-                logic_end,
-                total_heads,
-                head_dim,
-                rot_dim,
-                sin_e,
-                cos_e,
-            );
-        }
-        Ok(())
+/// Executes single-pass sub-head routing using per-head Q7 `phase_deltas` scaled by
+/// each sub-group's phase gain (`fact_phase_gain`, `logic_phase_gain`, `explore_phase_gain`)
+/// plus an exploration pulse `explore_pulse_q7`.
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is invalid, `max_rad <= 0.0`,
+/// `phase_deltas.len() < total_heads`, or `tensor` is too small.
+#[inline]
+pub fn dispatch_single_pass_with_phases(
+    tensor: &mut AlignedSliceMut32<'_, f32>,
+    config: &gcso_subhead_config_t,
+    phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
+    max_rad: f32,
+    explore_pulse_q7: gcso_q7_t,
+    head_dim: usize,
+) -> GcsoResult<()> {
+    if max_rad <= 0.0 || !branchless_is_finite_f32(max_rad) {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    }
+    let (fact_h, logic_h, _explore_h, total_heads, rot_dim) =
+        validate_pspm_layout(tensor, config, head_dim)?;
+    if phase_deltas.len() < total_heads {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
     }
 
-    /// Executes single-pass sub-head router sub-head routing using per-head Q7 `phase_deltas` scaled by
-    /// each sub-group's phase gain (`fact_phase_gain`, `logic_phase_gain`, `explore_phase_gain`)
-    /// plus an exploration pulse `explore_pulse_q7`.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is invalid, `max_rad <= 0.0`,
-    /// `phase_deltas.len() < total_heads`, or `tensor` is too small.
-    #[inline]
-    fn dispatch_single_pass_with_phases(
-        &self,
-        tensor: &mut AlignedSliceMut32<'_, f32>,
-        config: &gcso_subhead_config_t,
-        phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
-        max_rad: f32,
-        explore_pulse_q7: gcso_q7_t,
-        head_dim: usize,
-    ) -> GcsoResult<()> {
-        if max_rad <= 0.0 || !branchless_is_finite_f32(max_rad) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        let (fact_h, logic_h, _explore_h, total_heads, rot_dim) =
-            self.validate_pspm_layout(tensor, config, head_dim)?;
-        if phase_deltas.len() < total_heads {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
+    let (is_default, eff_max, q7_to_norm_scale) = resolve_ripa_norm_params(max_rad);
+    let upper_off = head_dim - rot_dim;
+    let t_slice = tensor.as_mut_slice();
+    let p_slice = phase_deltas.as_slice();
 
-        let (is_default, eff_max, q7_to_norm_scale) = resolve_ripa_norm_params(max_rad);
-        let upper_off = head_dim - rot_dim;
-        let t_slice = tensor.as_mut_slice();
-        let p_slice = phase_deltas.as_slice();
+    let f_gain_u7 = sanitize_pspm_gain_to_u7(config.fact_phase_gain);
+    let l_gain_u7 = sanitize_pspm_gain_to_u7(config.logic_phase_gain);
+    let e_gain_u7 = sanitize_pspm_gain_to_u7(config.explore_phase_gain);
 
-        let f_gain_u7 = sanitize_pspm_gain_to_u7(config.fact_phase_gain);
-        let l_gain_u7 = sanitize_pspm_gain_to_u7(config.logic_phase_gain);
-        let e_gain_u7 = sanitize_pspm_gain_to_u7(config.explore_phase_gain);
-
-        if total_heads <= MAX_ATTENTION_HEADS {
-            let raw_words = pack_q7_slice_to_swar_words_64(p_slice, total_heads);
-            let eff_words = build_pspm_eff_words_64(
-                &raw_words,
-                fact_h,
-                f_gain_u7,
-                &raw_words,
-                fact_h + logic_h,
-                l_gain_u7,
-                &raw_words,
-                total_heads,
-                e_gain_u7,
-                explore_pulse_q7,
-                false,
-            );
-            let active_cells = total_heads.div_ceil(HEADS_PER_CELL).min(NUM_SWARM_CELLS);
-            let cell_limit_mask = ((1u16 << active_cells) - 1) as u8;
-            steer_single_slice_from_eff_words_core(
-                t_slice,
-                &eff_words,
-                cell_limit_mask,
-                cell_limit_mask,
-                head_dim,
-                total_heads,
-                rot_dim,
-                upper_off,
-                false,
-                is_default,
-                eff_max,
-                q7_to_norm_scale,
-            );
-            return Ok(());
-        }
-
-        for (h, &p_q7) in p_slice.iter().enumerate().take(fact_h) {
-            let scaled_q7 = compute_pspm_eff_q7(p_q7, f_gain_u7, 0, false);
-            let (sin_t, cos_t) = eval_ripa_sincos_with_params(
-                scaled_q7,
-                false,
-                is_default,
-                eff_max,
-                q7_to_norm_scale,
-            );
-            let start = h * head_dim + upper_off;
-            rotate_ripa_upper_slice(&mut t_slice[start..start + rot_dim], sin_t, cos_t);
-        }
-        for (h, &p_q7) in p_slice
-            .iter()
-            .enumerate()
-            .take(fact_h + logic_h)
-            .skip(fact_h)
-        {
-            let scaled_q7 = compute_pspm_eff_q7(p_q7, l_gain_u7, 0, false);
-            let (sin_t, cos_t) = eval_ripa_sincos_with_params(
-                scaled_q7,
-                false,
-                is_default,
-                eff_max,
-                q7_to_norm_scale,
-            );
-            let start = h * head_dim + upper_off;
-            rotate_ripa_upper_slice(&mut t_slice[start..start + rot_dim], sin_t, cos_t);
-        }
-        for (h, &p_q7) in p_slice
-            .iter()
-            .enumerate()
-            .take(total_heads)
-            .skip(fact_h + logic_h)
-        {
-            let scaled_q7 = compute_pspm_eff_q7(p_q7, e_gain_u7, explore_pulse_q7, false);
-            let (sin_t, cos_t) = eval_ripa_sincos_with_params(
-                scaled_q7,
-                false,
-                is_default,
-                eff_max,
-                q7_to_norm_scale,
-            );
-            let start = h * head_dim + upper_off;
-            rotate_ripa_upper_slice(&mut t_slice[start..start + rot_dim], sin_t, cos_t);
-        }
-        Ok(())
-    }
-
-    /// Executes **Single-Pass Sub-Head Unified-Manifold Anchor Ensemble Routing** directly from
-    /// three 64-head phase profiles (`fact_anchor_phases`, `logic_anchor_phases`,
-    /// `explore_anchor_phases`) on the Single Unified Attractor Manifold without requiring a
-    /// 512-byte 8-slot phase bank.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is zero or odd, `total_heads == 0`,
-    /// `total_heads > 64`, `max_rad <= 0.0`, or `tensor` is too small.
-    #[inline]
-    fn dispatch_subhead_unified_anchors(
-        &self,
-        tensor: &mut AlignedSliceMut32<'_, f32>,
-        config: &gcso_subhead_config_t,
-        fact_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        logic_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        explore_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        max_rad: f32,
-        explore_pulse_q7: gcso_q7_t,
-        head_dim: usize,
-        fold_geodesic: bool,
-    ) -> GcsoResult<()> {
-        dispatch_subhead_profiles_core(
-            tensor,
-            config,
-            fact_anchor_phases,
-            logic_anchor_phases,
-            explore_anchor_phases,
-            max_rad,
+    if total_heads <= MAX_ATTENTION_HEADS {
+        let raw_words = pack_q7_slice_to_swar_words_64(p_slice, total_heads);
+        let eff_words = build_pspm_eff_words_64(
+            &raw_words,
+            fact_h,
+            f_gain_u7,
+            &raw_words,
+            fact_h + logic_h,
+            l_gain_u7,
+            &raw_words,
+            total_heads,
+            e_gain_u7,
             explore_pulse_q7,
-            head_dim,
-            fold_geodesic,
-        )
-    }
-
-    /// Executes **Single-Pass $SO(2)$ Group-Closure Fused RIPA + Unified-Manifold sub-head router Sub-Head
-    /// Routing**, rotating the shared upper $\frac{1}{4}d_{\mathrm{head}}$ low-frequency pairs by
-    /// the composite angle $\theta_{\mathrm{ripa}} + \theta_{\mathrm{pspm}}$ in a single traversal.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is zero or odd, `total_heads == 0`,
-    /// `total_heads > 64`, `base_ripa_max_rad <= 0.0`, `pspm_max_rad <= 0.0`, or `tensor` is too small.
-    #[inline]
-    fn dispatch_ripa_and_subhead_unified_anchors_fused(
-        &self,
-        tensor: &mut AlignedSliceMut32<'_, f32>,
-        base_ripa_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        base_ripa_max_rad: f32,
-        config: &gcso_subhead_config_t,
-        fact_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        logic_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        explore_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        pspm_max_rad: f32,
-        explore_pulse_q7: gcso_q7_t,
-        head_dim: usize,
-        fold_geodesic: bool,
-    ) -> GcsoResult<()> {
-        dispatch_fused_ripa_and_pspm_profiles_core(
-            tensor,
-            base_ripa_phases,
-            base_ripa_max_rad,
-            config,
-            fact_anchor_phases,
-            logic_anchor_phases,
-            explore_anchor_phases,
-            pspm_max_rad,
-            explore_pulse_q7,
-            head_dim,
-            fold_geodesic,
-        )
-    }
-
-    /// Executes **Single-Pass $SO(2)$ Group-Closure Fused RIPA + 8-Slot Ensemble sub-head router Sub-Head
-    /// Routing**, rotating the shared upper $\frac{1}{4}d_{\mathrm{head}}$ low-frequency pairs by
-    /// the composite angle $\theta_{\mathrm{ripa}} + \theta_{\mathrm{pspm}}$ in a single traversal.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slot IDs `>= 8`, `slot_phase_bank.len() < 512`,
-    /// `head_dim` is invalid, `base_ripa_max_rad <= 0.0`, `pspm_max_rad <= 0.0`, or `tensor` is too small.
-    #[inline]
-    fn dispatch_ripa_and_subhead_slot_ensemble_fused(
-        &self,
-        tensor: &mut AlignedSliceMut32<'_, f32>,
-        base_ripa_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        base_ripa_max_rad: f32,
-        config: &gcso_subhead_config_t,
-        slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
-        fact_slot_id: u8,
-        logic_slot_id: u8,
-        explore_slot_id: u8,
-        pspm_max_rad: f32,
-        explore_pulse_q7: gcso_q7_t,
-        head_dim: usize,
-        fold_geodesic: bool,
-    ) -> GcsoResult<()> {
-        let f_id = usize::from(fact_slot_id);
-        let l_id = usize::from(logic_slot_id);
-        let e_id = usize::from(explore_slot_id);
-        if f_id >= MAX_ATTRACTOR_DOMAINS
-            || l_id >= MAX_ATTRACTOR_DOMAINS
-            || e_id >= MAX_ATTRACTOR_DOMAINS
-        {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        let bank_2d =
-            slot_phase_bank.as_slot_bank::<MAX_ATTRACTOR_DOMAINS, MAX_ATTENTION_HEADS>()?;
-        dispatch_fused_ripa_and_pspm_profiles_core(
-            tensor,
-            base_ripa_phases,
-            base_ripa_max_rad,
-            config,
-            &bank_2d[f_id],
-            &bank_2d[l_id],
-            &bank_2d[e_id],
-            pspm_max_rad,
-            explore_pulse_q7,
-            head_dim,
-            fold_geodesic,
-        )
-    }
-
-    /// Executes **Single-Pass Sub-Head Attractor Slot Ensemble Routing** (Section 2.4):
-    /// simultaneously binds `Fact` heads to `fact_slot_id`, `Logic` heads to `logic_slot_id`,
-    /// and `Explore` heads to `explore_slot_id` from a 512-byte `slot_phase_bank`.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any slot ID `>= 8`, `slot_phase_bank.len() < 512`,
-    /// `head_dim` is invalid, `max_rad <= 0.0`, or `tensor` is too small.
-    #[inline]
-    fn dispatch_subhead_slot_ensemble(
-        &self,
-        tensor: &mut AlignedSliceMut32<'_, f32>,
-        config: &gcso_subhead_config_t,
-        slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
-        fact_slot_id: u8,
-        logic_slot_id: u8,
-        explore_slot_id: u8,
-        max_rad: f32,
-        explore_pulse_q7: gcso_q7_t,
-        head_dim: usize,
-    ) -> GcsoResult<()> {
-        dispatch_subhead_slot_ensemble_core(
-            tensor,
-            config,
-            slot_phase_bank,
-            fact_slot_id,
-            logic_slot_id,
-            explore_slot_id,
-            max_rad,
-            explore_pulse_q7,
-            head_dim,
             false,
-        )
-    }
-
-    /// Executes **Seam-Free $S^1$ Geodesic Sub-Head Attractor Slot Ensemble Routing** (Section 2.4 & 4.1).
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any slot ID `>= 8`, `slot_phase_bank.len() < 512`,
-    /// `head_dim` is invalid, `max_rad <= 0.0`, or `tensor` is too small.
-    #[inline]
-    fn dispatch_subhead_slot_ensemble_geodesic(
-        &self,
-        tensor: &mut AlignedSliceMut32<'_, f32>,
-        config: &gcso_subhead_config_t,
-        slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
-        fact_slot_id: u8,
-        logic_slot_id: u8,
-        explore_slot_id: u8,
-        max_rad: f32,
-        explore_pulse_q7: gcso_q7_t,
-        head_dim: usize,
-    ) -> GcsoResult<()> {
-        dispatch_subhead_slot_ensemble_core(
-            tensor,
-            config,
-            slot_phase_bank,
-            fact_slot_id,
-            logic_slot_id,
-            explore_slot_id,
-            max_rad,
-            explore_pulse_q7,
+        );
+        let active_cells = total_heads.div_ceil(HEADS_PER_CELL).min(NUM_SWARM_CELLS);
+        let cell_limit_mask = ((1u16 << active_cells) - 1) as u8;
+        steer_single_slice_from_eff_words_core(
+            t_slice,
+            &eff_words,
+            cell_limit_mask,
+            cell_limit_mask,
             head_dim,
-            true,
-        )
+            total_heads,
+            rot_dim,
+            upper_off,
+            false,
+            is_default,
+            eff_max,
+            q7_to_norm_scale,
+        );
+        return Ok(());
     }
 
-    /// Executes single-pass sub-head router sub-head routing gated by `tagged_ptr`'s `ACTION_MODE_SUBHEAD_ROUTE` bit (`0x08`).
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` or `tensor` bounds are invalid.
-    #[inline]
-    fn dispatch_pointer_gated(
-        &self,
-        tagged_ptr: gcso_tagged_ptr_t,
-        tensor: &mut AlignedSliceMut32<'_, f32>,
-        config: &gcso_subhead_config_t,
-        head_dim: usize,
-    ) -> GcsoResult<bool> {
-        let _ = self.validate_pspm_layout(tensor, config, head_dim)?;
-        if !ptr_has_action_mode(tagged_ptr, ACTION_MODE_SUBHEAD_ROUTE) {
-            return Ok(false);
-        }
-        self.dispatch_single_pass(tensor, config, head_dim)?;
-        Ok(true)
+    for (h, &p_q7) in p_slice.iter().enumerate().take(fact_h) {
+        let scaled_q7 = compute_pspm_eff_q7(p_q7, f_gain_u7, 0, false);
+        let (sin_t, cos_t) = eval_ripa_sincos_with_params(
+            scaled_q7,
+            false,
+            is_default,
+            eff_max,
+            q7_to_norm_scale,
+        );
+        let start = h * head_dim + upper_off;
+        rotate_ripa_upper_slice(&mut t_slice[start..start + rot_dim], sin_t, cos_t);
     }
+    for (h, &p_q7) in p_slice
+        .iter()
+        .enumerate()
+        .take(fact_h + logic_h)
+        .skip(fact_h)
+    {
+        let scaled_q7 = compute_pspm_eff_q7(p_q7, l_gain_u7, 0, false);
+        let (sin_t, cos_t) = eval_ripa_sincos_with_params(
+            scaled_q7,
+            false,
+            is_default,
+            eff_max,
+            q7_to_norm_scale,
+        );
+        let start = h * head_dim + upper_off;
+        rotate_ripa_upper_slice(&mut t_slice[start..start + rot_dim], sin_t, cos_t);
+    }
+    for (h, &p_q7) in p_slice
+        .iter()
+        .enumerate()
+        .take(total_heads)
+        .skip(fact_h + logic_h)
+    {
+        let scaled_q7 = compute_pspm_eff_q7(p_q7, e_gain_u7, explore_pulse_q7, false);
+        let (sin_t, cos_t) = eval_ripa_sincos_with_params(
+            scaled_q7,
+            false,
+            is_default,
+            eff_max,
+            q7_to_norm_scale,
+        );
+        let start = h * head_dim + upper_off;
+        rotate_ripa_upper_slice(&mut t_slice[start..start + rot_dim], sin_t, cos_t);
+    }
+    Ok(())
+}
 
-    /// Executes single-pass sub-head router sub-head routing with per-head Q7 `phase_deltas` gated by `tagged_ptr`.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim`, `max_rad`, or slice bounds are invalid.
-    #[inline]
-    fn dispatch_pointer_gated_with_phases(
-        &self,
-        tagged_ptr: gcso_tagged_ptr_t,
-        tensor: &mut AlignedSliceMut32<'_, f32>,
-        config: &gcso_subhead_config_t,
-        phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
-        max_rad: f32,
-        explore_pulse_q7: gcso_q7_t,
-        head_dim: usize,
-    ) -> GcsoResult<bool> {
-        if max_rad <= 0.0 || !branchless_is_finite_f32(max_rad) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        let (_f, _l, _e, total_heads, _rot_dim) =
-            self.validate_pspm_layout(tensor, config, head_dim)?;
-        if phase_deltas.len() < total_heads {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        if !ptr_has_action_mode(tagged_ptr, ACTION_MODE_SUBHEAD_ROUTE) {
-            return Ok(false);
-        }
-        self.dispatch_single_pass_with_phases(
-            tensor,
-            config,
-            phase_deltas,
-            max_rad,
-            explore_pulse_q7,
-            head_dim,
-        )?;
-        Ok(true)
+/// Executes **Single-Pass Sub-Head Unified-Manifold Anchor Ensemble Routing** directly from
+/// three 64-head phase profiles (`fact_anchor_phases`, `logic_anchor_phases`,
+/// `explore_anchor_phases`) on the Single Unified Attractor Manifold without requiring a
+/// 512-byte 8-slot phase bank.
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is zero or odd, `total_heads == 0`,
+/// `total_heads > 64`, `max_rad <= 0.0`, or `tensor` is too small.
+#[inline]
+pub fn dispatch_subhead_unified_anchors(
+    tensor: &mut AlignedSliceMut32<'_, f32>,
+    config: &gcso_subhead_config_t,
+    fact_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    logic_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    explore_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    max_rad: f32,
+    explore_pulse_q7: gcso_q7_t,
+    head_dim: usize,
+    fold_geodesic: bool,
+) -> GcsoResult<()> {
+    dispatch_subhead_profiles_core(
+        tensor,
+        config,
+        fact_anchor_phases,
+        logic_anchor_phases,
+        explore_anchor_phases,
+        max_rad,
+        explore_pulse_q7,
+        head_dim,
+        fold_geodesic,
+    )
+}
+
+/// Executes **Single-Pass $SO(2)$ Group-Closure Fused RIPA + Unified-Manifold Sub-Head
+/// Routing**, rotating the shared upper $\frac{1}{4}d_{\mathrm{head}}$ low-frequency pairs by
+/// the composite angle $\theta_{\mathrm{ripa}} + \theta_{\mathrm{pspm}}$ in a single traversal.
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is zero or odd, `total_heads == 0`,
+/// `total_heads > 64`, `base_ripa_max_rad <= 0.0`, `pspm_max_rad <= 0.0`, or `tensor` is too small.
+#[inline]
+pub fn dispatch_ripa_and_subhead_unified_anchors_fused(
+    tensor: &mut AlignedSliceMut32<'_, f32>,
+    base_ripa_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    base_ripa_max_rad: f32,
+    config: &gcso_subhead_config_t,
+    fact_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    logic_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    explore_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    pspm_max_rad: f32,
+    explore_pulse_q7: gcso_q7_t,
+    head_dim: usize,
+    fold_geodesic: bool,
+) -> GcsoResult<()> {
+    dispatch_fused_ripa_and_pspm_profiles_core(
+        tensor,
+        base_ripa_phases,
+        base_ripa_max_rad,
+        config,
+        fact_anchor_phases,
+        logic_anchor_phases,
+        explore_anchor_phases,
+        pspm_max_rad,
+        explore_pulse_q7,
+        head_dim,
+        fold_geodesic,
+    )
+}
+
+/// Executes **Single-Pass $SO(2)$ Group-Closure Fused RIPA + 8-Slot Ensemble Sub-Head
+/// Routing**, rotating the shared upper $\frac{1}{4}d_{\mathrm{head}}$ low-frequency pairs by
+/// the composite angle $\theta_{\mathrm{ripa}} + \theta_{\mathrm{pspm}}$ in a single traversal.
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slot IDs `>= 8`, `slot_phase_bank.len() < 512`,
+/// `head_dim` is invalid, `base_ripa_max_rad <= 0.0`, `pspm_max_rad <= 0.0`, or `tensor` is too small.
+#[inline]
+pub fn dispatch_ripa_and_subhead_slot_ensemble_fused(
+    tensor: &mut AlignedSliceMut32<'_, f32>,
+    base_ripa_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    base_ripa_max_rad: f32,
+    config: &gcso_subhead_config_t,
+    slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
+    fact_slot_id: u8,
+    logic_slot_id: u8,
+    explore_slot_id: u8,
+    pspm_max_rad: f32,
+    explore_pulse_q7: gcso_q7_t,
+    head_dim: usize,
+    fold_geodesic: bool,
+) -> GcsoResult<()> {
+    let f_id = usize::from(fact_slot_id);
+    let l_id = usize::from(logic_slot_id);
+    let e_id = usize::from(explore_slot_id);
+    if f_id >= MAX_ATTRACTOR_DOMAINS
+        || l_id >= MAX_ATTRACTOR_DOMAINS
+        || e_id >= MAX_ATTRACTOR_DOMAINS
+    {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
     }
+    let bank_2d =
+        slot_phase_bank.as_slot_bank::<MAX_ATTRACTOR_DOMAINS, MAX_ATTENTION_HEADS>()?;
+    dispatch_fused_ripa_and_pspm_profiles_core(
+        tensor,
+        base_ripa_phases,
+        base_ripa_max_rad,
+        config,
+        &bank_2d[f_id],
+        &bank_2d[l_id],
+        &bank_2d[e_id],
+        pspm_max_rad,
+        explore_pulse_q7,
+        head_dim,
+        fold_geodesic,
+    )
+}
+
+/// Executes **Single-Pass Sub-Head Attractor Slot Ensemble Routing** (Section 2.4):
+/// simultaneously binds `Fact` heads to `fact_slot_id`, `Logic` heads to `logic_slot_id`,
+/// and `Explore` heads to `explore_slot_id` from a 512-byte `slot_phase_bank`.
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any slot ID `>= 8`, `slot_phase_bank.len() < 512`,
+/// `head_dim` is invalid, `max_rad <= 0.0`, or `tensor` is too small.
+#[inline]
+pub fn dispatch_subhead_slot_ensemble(
+    tensor: &mut AlignedSliceMut32<'_, f32>,
+    config: &gcso_subhead_config_t,
+    slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
+    fact_slot_id: u8,
+    logic_slot_id: u8,
+    explore_slot_id: u8,
+    max_rad: f32,
+    explore_pulse_q7: gcso_q7_t,
+    head_dim: usize,
+) -> GcsoResult<()> {
+    dispatch_subhead_slot_ensemble_core(
+        tensor,
+        config,
+        slot_phase_bank,
+        fact_slot_id,
+        logic_slot_id,
+        explore_slot_id,
+        max_rad,
+        explore_pulse_q7,
+        head_dim,
+        false,
+    )
+}
+
+/// Executes **Seam-Free $S^1$ Geodesic Sub-Head Attractor Slot Ensemble Routing** (Section 2.4 & 4.1).
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any slot ID `>= 8`, `slot_phase_bank.len() < 512`,
+/// `head_dim` is invalid, `max_rad <= 0.0`, or `tensor` is too small.
+#[inline]
+pub fn dispatch_subhead_slot_ensemble_geodesic(
+    tensor: &mut AlignedSliceMut32<'_, f32>,
+    config: &gcso_subhead_config_t,
+    slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
+    fact_slot_id: u8,
+    logic_slot_id: u8,
+    explore_slot_id: u8,
+    max_rad: f32,
+    explore_pulse_q7: gcso_q7_t,
+    head_dim: usize,
+) -> GcsoResult<()> {
+    dispatch_subhead_slot_ensemble_core(
+        tensor,
+        config,
+        slot_phase_bank,
+        fact_slot_id,
+        logic_slot_id,
+        explore_slot_id,
+        max_rad,
+        explore_pulse_q7,
+        head_dim,
+        true,
+    )
+}
+
+/// Executes single-pass sub-head routing gated by `tagged_ptr`'s `ACTION_MODE_SUBHEAD_ROUTE` bit (`0x08`).
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` or `tensor` bounds are invalid.
+#[inline]
+pub fn dispatch_pointer_gated(
+    tagged_ptr: gcso_tagged_ptr_t,
+    tensor: &mut AlignedSliceMut32<'_, f32>,
+    config: &gcso_subhead_config_t,
+    head_dim: usize,
+) -> GcsoResult<bool> {
+    let _ = validate_pspm_layout(tensor, config, head_dim)?;
+    if !ptr_has_action_mode(tagged_ptr, ACTION_MODE_SUBHEAD_ROUTE) {
+        return Ok(false);
+    }
+    dispatch_single_pass(tensor, config, head_dim)?;
+    Ok(true)
+}
+
+/// Executes single-pass sub-head routing with per-head Q7 `phase_deltas` gated by `tagged_ptr`.
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim`, `max_rad`, or slice bounds are invalid.
+#[inline]
+pub fn dispatch_pointer_gated_with_phases(
+    tagged_ptr: gcso_tagged_ptr_t,
+    tensor: &mut AlignedSliceMut32<'_, f32>,
+    config: &gcso_subhead_config_t,
+    phase_deltas: &AlignedSlice16<'_, gcso_q7_t>,
+    max_rad: f32,
+    explore_pulse_q7: gcso_q7_t,
+    head_dim: usize,
+) -> GcsoResult<bool> {
+    if max_rad <= 0.0 || !branchless_is_finite_f32(max_rad) {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    }
+    let (_f, _l, _e, total_heads, _rot_dim) =
+        validate_pspm_layout(tensor, config, head_dim)?;
+    if phase_deltas.len() < total_heads {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    }
+    if !ptr_has_action_mode(tagged_ptr, ACTION_MODE_SUBHEAD_ROUTE) {
+        return Ok(false);
+    }
+    dispatch_single_pass_with_phases(
+        tensor,
+        config,
+        phase_deltas,
+        max_rad,
+        explore_pulse_q7,
+        head_dim,
+    )?;
+    Ok(true)
 }
 

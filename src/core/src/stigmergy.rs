@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Concrete 64-byte cacheline-aligned [`StigmergicGranuleEngine`] `Pod` state descriptor applying
-//! [`StigmergicChunkOps`], [`HierarchicalTreeTable`], [`PagedBitmaskOps`], and
-//! [`StigmergicReconstitutionOps`] from [`crate::traits`].
+//! [`StigmergicChunkOps`], [`PagedBitmaskOps`], and [`StigmergicReconstitutionOps`] from [`crate::traits`].
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -35,7 +34,7 @@ use crate::abi::{
 };
 use crate::traits::primitives::MAX_ATTENTION_HEADS;
 use crate::traits::{
-    store_q7_words_64, GcsoResult, HierarchicalTreeTable, PagedBitmaskOps, Pod, StigmergicChunkOps,
+    store_q7_words_64, GcsoResult, PagedBitmaskOps, Pod, StigmergicChunkOps,
     StigmergicReconstitutionOps, StigmergicReconstitutionReport, NUM_STIGMERGIC_GRANULES,
 };
 use core::mem::{align_of, offset_of, size_of};
@@ -164,8 +163,6 @@ impl StigmergicChunkOps for StigmergicGranuleEngine {
         Ok(())
     }
 }
-
-impl HierarchicalTreeTable for StigmergicGranuleEngine {}
 
 const _: () = {
     assert!(size_of::<StigmergicGranuleEngine>() == 64);

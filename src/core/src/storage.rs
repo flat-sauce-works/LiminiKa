@@ -3,8 +3,8 @@
 
 //! Zero-Copy In-Memory Mapped Storage (`MappedStorageEngine` 64B `Pod` state descriptor,
 //! `GcsoFourSectionView` 4-section `.gcso` container zero-copy persistence & in-place evolution,
-//! and KV-keyframe GOP keyframe/delta packets) applying the [`KvKeyframeCache`], [`DnpPacketDispatcher`],
-//! and [`MappedStorage`] traits from [`crate::traits`].
+//! and KV-keyframe GOP keyframe/delta packets) applying the [`KvKeyframeCache`] and
+//! [`MappedStorage`] traits from [`crate::traits`].
 
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -50,7 +50,7 @@ use crate::traits::primitives::{
 };
 pub use crate::traits::primitives::{KvKeyframePacket, KvMotionDeltaPacket};
 use crate::traits::telemetry::{ContrastivePhaseBloomFilter, LEDGER_FLAG_COGNITIVE_TRAJECTORY};
-use crate::traits::{DnpPacketDispatcher, GcsoResult, KvKeyframeCache, MappedStorage, Pod};
+use crate::traits::{GcsoResult, KvKeyframeCache, MappedStorage, Pod};
 use core::mem::{align_of, offset_of, size_of};
 
 /// 64-byte cacheline-aligned Plain Old Data (`Pod`) descriptor and execution engine for
@@ -116,8 +116,6 @@ impl KvKeyframeCache for MappedStorageEngine {
         Ok(())
     }
 }
-
-impl DnpPacketDispatcher for MappedStorageEngine {}
 
 impl MappedStorage for MappedStorageEngine {
     #[inline]
@@ -640,43 +638,40 @@ mod tests {
         };
         let mut packet_buf = AlignedBuffer64::new([0u8; 64]);
         let phases = [12i8; MAX_ATTENTION_HEADS];
-        let crc = engine
-            .encode_dnp_phase_packet(
-                &ledger_slot,
-                2,
-                0x09,
-                &phases,
-                &mut packet_buf.as_aligned_slice_mut(),
-            )
-            .unwrap();
+        let crc = crate::traits::encode_dnp_phase_packet(
+            &ledger_slot,
+            2,
+            0x09,
+            &phases,
+            &mut packet_buf.as_aligned_slice_mut(),
+        )
+        .unwrap();
         let mut trail = gcso_pointer_trail_t::default();
-        let (slot, mode, is_repulsion) = engine
-            .decode_and_apply_dnp_packet_to_trail(
-                &ledger_slot,
-                &packet_buf.as_aligned_slice(),
-                crc,
-                0.5,
-                None,
-                &mut trail,
-            )
-            .unwrap();
+        let (slot, mode, is_repulsion) = crate::traits::decode_and_apply_dnp_packet_to_trail(
+            &ledger_slot,
+            &packet_buf.as_aligned_slice(),
+            crc,
+            0.5,
+            None,
+            &mut trail,
+        )
+        .unwrap();
         assert_eq!(slot, 2);
         assert_eq!(mode, 0x09);
         assert!(!is_repulsion);
         assert_eq!(trail.accumulated_phase_delta[0], 12);
 
-        let rep_crc = engine
-            .encode_dnp_phase_packet(
-                &ledger_slot,
-                3,
-                0x05,
-                &phases,
-                &mut packet_buf.as_aligned_slice_mut(),
-            )
-            .unwrap();
+        let rep_crc = crate::traits::encode_dnp_phase_packet(
+            &ledger_slot,
+            3,
+            0x05,
+            &phases,
+            &mut packet_buf.as_aligned_slice_mut(),
+        )
+        .unwrap();
         let mut rep_trail = gcso_pointer_trail_t::default();
-        let (rep_slot, rep_mode, rep_is_repulsion) = engine
-            .decode_and_apply_dnp_packet_to_trail(
+        let (rep_slot, rep_mode, rep_is_repulsion) =
+            crate::traits::decode_and_apply_dnp_packet_to_trail(
                 &ledger_slot,
                 &packet_buf.as_aligned_slice(),
                 rep_crc,

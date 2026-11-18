@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! High-level configuration builder ([`Config`]) and unified full-stack runtime context
-//! ([`RuntimeContext`]) implementing [`ActionHub`], [`HotPathObserver`], [`ColdPathObserver`],
-//! [`ManifoldGatewaySignal`], and [`FullStackGcsoEngine`].
+//! ([`RuntimeContext`]) integrating [`ActionHub`], [`PhaseSteeringEngine`],
+//! [`EntropyController`], [`MultiAttractorSpace`], and [`ManifoldGatewaySignal`].
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -34,26 +34,26 @@ use crate::abi::{
     gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_edbc_state_t,
     gcso_kv_keyframe_header_t, gcso_ledger_slot_t, gcso_mapped_storage_descriptor_t,
     gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t, gcso_snapshot_header_t,
-    gcso_tagged_ptr_t, GCSO_CAP_CPU_BASELINE, GCSO_CAP_CUDA_BACKEND, GCSO_CAP_METAL_BACKEND,
-    GCSO_CAP_VULKAN_BACKEND,
+    gcso_tagged_ptr_t,
 };
 use crate::action_hub::{ActionHubEngine, ACTION_HUB_INLINE_TRAILS};
 use crate::attractor::{MultiAttractorSpace, MAX_ANCHORS_PER_FIELD, MAX_ATTRACTOR_DOMAINS};
 use crate::entropy_control::{EntropyClosedLoopCoordinator, EntropyController};
 use crate::phase_steering::{PhaseSteeringClosedLoop, PhaseSteeringEngine};
+use crate::traits::rope::{PhaseSteeringGeometryExt, RopeSteeringTarget};
 use crate::traits::{
-    ActionHub, ActionHubGatewayExt, AlignedBuffer64, AlignedSlice16, AlignedSlice32,
-    AlignedSliceMut16, AlignedSliceMut32, AttractorField, CausalProvenanceSignal, ColdPathObserver,
-    ContrastivePhaseBloomFilter, DnpPacketDispatcher, EdbcBranchController, EntropyEvaluator,
-    FastPathLedger, FractalCascadeCoordinator, FullStackGcsoEngine, GatewayFrame,
-    GatewayPhaseSteeringExt, GcsoResult, GcsoRuntimeContext, HierarchicalTreeTable,
-    HotPathObserver, KvKeyframeCache, L2pSvdProjector, ManifoldGatewaySignal, MappedStorage,
-    MultiDomainAttractorSpace, PersonaPatcher, PhaseSteering, Pod, PointerActionHub,
-    Rank1ResidualAdapter, SheafCohomologyEvaluator, StigmergicActionPtrOps, StigmergicChunkOps,
-    StigmergicTrailOps, SubHeadRouter, SystemCapabilityQuery, SystemConstraintSignal,
-    VisualAttentionSteering, ACTION_MODE_LAYER_SKIP, ATTRACTOR_SLOT_PERSONA,
-    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
-    TRAIL_FLAG_REPULSION_ACTIVE,
+    abi_version, abi_version_string, apply_latent_horizon_slots, query_capability, ActionHub,
+    ActionHubGatewayExt, AlignedBuffer16, AlignedBuffer64, AlignedSlice16, AlignedSlice32,
+    AlignedSliceMut16, AlignedSliceMut32, AttractorField, AutonomousCoreLayerStack,
+    CausalProvenanceReport, CausalProvenanceSignal, ContrastivePhaseBloomFilter,
+    EdbcBranchController, EntropyEvaluator, EpistemicHorizonReading, FastPathLedger, GatewayFrame,
+    GatewayPhaseSteeringExt, GcsoResult, HorizonEscalationProvider, HorizonEscalationRequest,
+    HorizonTriggerInput, KvKeyframeCache, LatentHorizonSlot, LiminalBoundaryDelta,
+    ManifoldGatewaySignal, MappedStorage, MultiDomainAttractorSpace, PersonaPatcher, PhaseSteering,
+    Pod, PointerActionHub, StigmergicActionPtrOps, StigmergicChunkOps, StigmergicTrailOps,
+    StigmergicVennSerendipityReport, SystemConstraintSignal, ACTION_MODE_LAYER_SKIP,
+    ATTRACTOR_SLOT_CUSTOM_7, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
+    ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_SLOT_COUPLING_MATRIX_8X8, TRAIL_FLAG_REPULSION_ACTIVE,
 };
 
 use crate::traits::branchless::{
@@ -371,18 +371,38 @@ impl Config {
 // High-Level Safe Rust Runtime Context Engine
 // ===================================================================
 
-/// High-level safe Rust runtime context integrating [`ActionHub`],
-/// [`HotPathObserver`] (Micro Observer: DPSR, FastPathLedger, sub-head router, Rank-1 residual, Contrastive Phase Bloom Filter,
-/// Limina bridging, and Bayesian pointer-trail Attention modulation), and [`ColdPathObserver`]
-/// (Macro Observer: EDBC, Single Unified Attractor Manifold, 8-Lane Working Cache Window,
-/// Sheaf Cohomology $H^1$, L2P-SVD, KV-keyframe, and mapped-storage Storage).
-///
-/// Because `RuntimeContext` implements all foundational Nano/Micro/Mezzo/Macro traits in
-/// [`crate::traits`], it automatically receives the blanket implementations of:
-/// - [`ActionHub`]
-/// - [`crate::traits::HotPathExecutionEngine`] / [`HotPathObserver`] / [`FractalCascadeCoordinator`]
-/// - [`crate::traits::ColdPathOrchestrator`] / [`ColdPathObserver`]
-/// - [`FullStackGcsoEngine`]
+/// Single-glance status snapshot summarizing the active concrete core engines, the 3-layer
+/// autonomous core stack (`Liminal` + `Stigmergic` + `Ego`), and dynamically slid-in horizon slots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OrchestratorStatusSnapshot {
+    /// Total tokens/steps processed by `ActionHubEngine`.
+    pub step_counter: u64,
+    /// Number of active trails registered in `ActionHubEngine`.
+    pub active_trail_count: u32,
+    /// Active EDBC branch mode (`0` = normal, `1` = bifurcation, `2` = repulsion).
+    pub edbc_branch_mode: u32,
+    /// Active anchor count in `MultiAttractorSpace`.
+    pub attractor_anchor_count: u32,
+    /// Bitmask of enabled working lanes (`0..=7`) in `ActionHubEngine`.
+    pub slot_enabled_mask: u8,
+    /// Active Layer 0 `Liminal` channel aperture mask (`8` channels).
+    pub liminal_aperture_mask: u32,
+    /// Active Layer 1 `Stigmergic` Venn-core granule mask.
+    pub stigmergic_venn_core_mask: u8,
+    /// Whether Layer 2 `LiminalEgoField` intervention is active.
+    pub ego_active: bool,
+    /// Monotonic count of Layer 2 Ego interventions applied.
+    pub ego_intervention_epochs: u32,
+    /// Whether Layer 0 boundaries are quiescent (`stationary_shortcut_ready != 0`).
+    pub stationary_shortcut_ready: bool,
+    /// Bitmask of external [`LatentHorizonSlot`] traits currently slid into the cognitive window.
+    pub active_horizon_slots_mask: u32,
+}
+
+/// High-level safe Rust single orchestrator facade integrating concrete core engines
+/// ([`ActionHubEngine`], [`PhaseSteeringEngine`], [`EntropyController`], [`MultiAttractorSpace`]),
+/// the 128-byte 3-layer core stack ([`AutonomousCoreLayerStack`]: `Liminal` + `Stigmergic` + `Ego`),
+/// and dynamic slide-in/slide-out [`LatentHorizonSlot`] boundaries.
 #[derive(Debug)]
 pub struct RuntimeContext {
     config: Config,
@@ -390,6 +410,11 @@ pub struct RuntimeContext {
     dpsr: PhaseSteeringEngine,
     edbc: EntropyController,
     attractor_space: MultiAttractorSpace,
+    core_layers: AutonomousCoreLayerStack,
+    last_boundary_delta: LiminalBoundaryDelta,
+    last_horizon: EpistemicHorizonReading,
+    last_venn_report: StigmergicVennSerendipityReport,
+    active_horizon_slots_mask: u32,
 }
 
 impl RuntimeContext {
@@ -423,7 +448,97 @@ impl RuntimeContext {
             dpsr,
             edbc,
             attractor_space: MultiAttractorSpace::new(),
+            core_layers: AutonomousCoreLayerStack::new(),
+            last_boundary_delta: LiminalBoundaryDelta::default(),
+            last_horizon: EpistemicHorizonReading::default(),
+            last_venn_report: StigmergicVennSerendipityReport::default(),
+            active_horizon_slots_mask: 0,
         })
+    }
+
+    /// Returns an immutable reference to the 128-byte 3-layer [`AutonomousCoreLayerStack`]
+    /// (`Layer 0: Liminal`, `Layer 1: Stigmergic`, `Layer 2: Ego`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn core_layers(&self) -> &AutonomousCoreLayerStack {
+        &self.core_layers
+    }
+
+    /// Returns a mutable reference to the 128-byte 3-layer [`AutonomousCoreLayerStack`].
+    #[inline(always)]
+    #[must_use]
+    pub fn core_layers_mut(&mut self) -> &mut AutonomousCoreLayerStack {
+        &mut self.core_layers
+    }
+
+    /// Returns an immutable reference to the latest Layer 0 [`LiminalBoundaryDelta`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn last_boundary_delta(&self) -> &LiminalBoundaryDelta {
+        &self.last_boundary_delta
+    }
+
+    /// Returns a mutable reference to the latest Layer 0 [`LiminalBoundaryDelta`].
+    #[inline(always)]
+    #[must_use]
+    pub fn last_boundary_delta_mut(&mut self) -> &mut LiminalBoundaryDelta {
+        &mut self.last_boundary_delta
+    }
+
+    /// Returns an immutable reference to the latest [`EpistemicHorizonReading`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn last_horizon(&self) -> &EpistemicHorizonReading {
+        &self.last_horizon
+    }
+
+    /// Returns a mutable reference to the latest [`EpistemicHorizonReading`].
+    #[inline(always)]
+    #[must_use]
+    pub fn last_horizon_mut(&mut self) -> &mut EpistemicHorizonReading {
+        &mut self.last_horizon
+    }
+
+    /// Returns an immutable reference to the latest [`StigmergicVennSerendipityReport`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn last_venn_report(&self) -> &StigmergicVennSerendipityReport {
+        &self.last_venn_report
+    }
+
+    /// Returns a mutable reference to the latest [`StigmergicVennSerendipityReport`].
+    #[inline(always)]
+    #[must_use]
+    pub fn last_venn_report_mut(&mut self) -> &mut StigmergicVennSerendipityReport {
+        &mut self.last_venn_report
+    }
+
+    /// Returns the bitmask of external [`LatentHorizonSlot`] boundaries currently slid into the
+    /// active cognitive window.
+    #[inline(always)]
+    #[must_use]
+    pub const fn active_horizon_slots_mask(&self) -> u32 {
+        self.active_horizon_slots_mask
+    }
+
+    /// Returns a single-glance [`OrchestratorStatusSnapshot`] summarizing concrete core engines,
+    /// 3-layer core stack state, and dynamically active horizon slots.
+    #[inline(always)]
+    #[must_use]
+    pub fn orchestrator_status(&self) -> OrchestratorStatusSnapshot {
+        OrchestratorStatusSnapshot {
+            step_counter: self.action_hub.step_counter,
+            active_trail_count: self.action_hub.active_count,
+            edbc_branch_mode: self.edbc.state().active_branch_mode,
+            attractor_anchor_count: self.attractor_space.system_field().active_count(),
+            slot_enabled_mask: self.action_hub.slot_enabled_mask,
+            liminal_aperture_mask: self.core_layers.liminal_layer.active_aperture_mask,
+            stigmergic_venn_core_mask: self.core_layers.stigmergic_layer.venn_overlap_mask,
+            ego_active: self.core_layers.ego_layer.is_active(),
+            ego_intervention_epochs: self.core_layers.ego_layer.intervention_epochs,
+            stationary_shortcut_ready: self.last_boundary_delta.stationary_shortcut_ready != 0,
+            active_horizon_slots_mask: self.active_horizon_slots_mask,
+        }
     }
 
     /// Returns an immutable reference to the active [`Config`].
@@ -859,39 +974,47 @@ impl RuntimeContext {
 }
 
 // ===================================================================
-// Trait Implementations for Core Architecture (`crate::traits`) Compliance
+// Inherent Runtime Orchestration & Lifecycle Methods
 // ===================================================================
 
-impl SystemCapabilityQuery for RuntimeContext {
+impl RuntimeContext {
+    /// Returns the active semantic ABI version tuple `(major, minor, patch)`.
     #[inline(always)]
-    fn abi_version(&self) -> (u32, u32, u32) {
-        crate::abi_version()
+    #[must_use]
+    pub const fn abi_version(&self) -> (u32, u32, u32) {
+        abi_version()
     }
 
+    /// Returns the static ABI version string ([`crate::abi::GCSO_ABI_VERSION_STRING`]).
     #[inline(always)]
-    fn abi_version_string(&self) -> &'static str {
-        crate::abi::GCSO_ABI_VERSION_STRING
+    #[must_use]
+    pub const fn abi_version_string(&self) -> &'static str {
+        abi_version_string()
     }
 
+    /// Queries active compute capability bitmask flags without branching.
     #[inline(always)]
-    fn query_capability(&self) -> gcso_capability_flags_t {
-        GCSO_CAP_CPU_BASELINE
-            | ((cfg!(feature = "cuda") as u64) * GCSO_CAP_CUDA_BACKEND)
-            | ((cfg!(feature = "vulkan") as u64) * GCSO_CAP_VULKAN_BACKEND)
-            | (((cfg!(target_os = "macos") || cfg!(feature = "metal")) as u64)
-                * GCSO_CAP_METAL_BACKEND)
+    #[must_use]
+    pub const fn query_capability(&self) -> gcso_capability_flags_t {
+        query_capability()
     }
 
+    /// Populates `config` with this runtime context's active raw configuration descriptor.
+    ///
+    /// # Errors
+    /// Never fails in the default implementation.
     #[inline(always)]
-    fn init_default_config(&self, config: &mut gcso_config_t) -> Result<()> {
+    pub fn init_default_config(&self, config: &mut gcso_config_t) -> Result<()> {
         *config = self.config.raw;
         Ok(())
     }
-}
 
-impl GcsoRuntimeContext for RuntimeContext {
+    /// Resets transient phase accumulators and step counters without freeing pre-allocated tables.
+    ///
+    /// # Errors
+    /// Propagates any reset error from [`ActionHubEngine::reset`] or [`RuntimeContext::clear_all_domains`].
     #[inline]
-    fn reset(&mut self) -> Result<()> {
+    pub fn reset(&mut self) -> Result<()> {
         self.edbc.reset();
         self.action_hub.reset()?;
         self.clear_all_domains()?;
@@ -900,11 +1023,20 @@ impl GcsoRuntimeContext for RuntimeContext {
             mode: u32::from(self.config.raw.ledger_mode),
             ..Default::default()
         };
+        self.core_layers = AutonomousCoreLayerStack::new();
+        self.last_boundary_delta = LiminalBoundaryDelta::default();
+        self.last_horizon = EpistemicHorizonReading::default();
+        self.last_venn_report = StigmergicVennSerendipityReport::default();
+        self.active_horizon_slots_mask = 0;
         Ok(())
     }
 
+    /// Registers a natural language system prompt text anchor in phase space as the primary baseline attractor.
+    ///
+    /// # Errors
+    /// Returns [`crate::abi::GCSO_ERROR_INVALID_ARGUMENT`] if `prompt` is empty or `weight` is non-finite.
     #[inline]
-    fn set_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> Result<()> {
+    pub fn set_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> Result<()> {
         self.attractor_space
             .system_field_mut()
             .add_system_prompt_anchor(prompt, weight)?;
@@ -913,8 +1045,12 @@ impl GcsoRuntimeContext for RuntimeContext {
         Ok(())
     }
 
+    /// Executes a per-token Hot Path inference step in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
+    ///
+    /// # Errors
+    /// Returns [`crate::abi::GCSO_ERROR_INVALID_ARGUMENT`] if `query_tensor` and `key_tensor` alias.
     #[inline]
-    fn step_token(
+    pub fn step_token(
         &mut self,
         token_id: u32,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -972,18 +1108,31 @@ impl GcsoRuntimeContext for RuntimeContext {
         Ok(())
     }
 
+    /// Serializes active runtime context state into a `.gcso` binary snapshot buffer.
+    ///
+    /// # Errors
+    /// Returns [`crate::abi::GCSO_ERROR_BUFFER_TOO_SMALL`] if `buffer.len() < *required_size`.
     #[inline]
-    fn serialize(&self, buffer: &mut [u8], required_size: &mut usize) -> Result<()> {
+    pub fn serialize(&self, buffer: &mut [u8], required_size: &mut usize) -> Result<()> {
         self.serialize_to_bytes(buffer, required_size)
     }
 
+    /// Deserializes a `.gcso` binary snapshot buffer to restore context state in-place.
+    ///
+    /// # Errors
+    /// Returns [`crate::abi::GCSO_ERROR_CONTAINER_CORRUPTED`] or [`crate::abi::GCSO_ERROR_VERSION_MISMATCH`]
+    /// if the snapshot header magic, version, or payload checksum is invalid.
     #[inline]
-    fn deserialize(&mut self, buffer: &[u8]) -> Result<()> {
+    pub fn deserialize(&mut self, buffer: &[u8]) -> Result<()> {
         self.deserialize_from_bytes(buffer)
     }
 
+    /// Seeks to a specific token position in the KV-keyframe cache without forward passes.
+    ///
+    /// # Errors
+    /// Never fails in the default implementation.
     #[inline]
-    fn seek_to_token(
+    pub fn seek_to_token(
         &mut self,
         token_index: u32,
         header_out: &mut gcso_kv_keyframe_header_t,
@@ -992,7 +1141,170 @@ impl GcsoRuntimeContext for RuntimeContext {
         header_out.frame_type = 0;
         Ok(())
     }
+
+    /// Executes a unified vertical orchestration pass that pierces all 3 core layers
+    /// (`Layer 0: Liminal` -> `Layer 1: Stigmergic` -> `Layer 2: Ego`), dynamically slides
+    /// dormant [`LatentHorizonSlot`] boundaries in or out based on live stability/anomaly
+    /// telemetry, optionally escalates unresolved excursion to an external
+    /// [`HorizonEscalationProvider`], updates `trail_out` / `ActionHubEngine`, and steers
+    /// `query_tensor` in strict zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
+    ///
+    /// Returns `(frame, report, slid_in_bits, slid_out_bits, escalated)`.
+    ///
+    /// # Errors
+    /// Propagates validation or steering errors from `geometry`, `query_tensor`, `ActionHubEngine`,
+    /// or `escalation_provider`.
+    #[inline]
+    pub fn pierce_and_orchestrate_step<
+        S: ManifoldGatewaySignal + ?Sized,
+        G: RopeSteeringTarget + ?Sized,
+        H: LatentHorizonSlot + ?Sized,
+        E: HorizonEscalationProvider + ?Sized,
+    >(
+        &mut self,
+        signal: &S,
+        geometry: &G,
+        latent_slots: &mut H,
+        escalation_provider: &mut E,
+        trail_out: &mut gcso_pointer_trail_t,
+        mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+    ) -> Result<(GatewayFrame, CausalProvenanceReport, u32, u32, bool)> {
+        let (head_dim, num_heads, _expected_len) = self.action_hub.validate_hub_cascade_params(
+            self.dpsr.qdps_min_step_rad(),
+            self.dpsr.ripa_clamp_max_rad(),
+            query_tensor.as_deref(),
+            None,
+        )?;
+        let geom = geometry.rope_geometry();
+        if geom.head_dim != head_dim || geom.num_heads != num_heads {
+            return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
+        }
+
+        // 1. Vertical 3-layer core stack piercing (Liminal -> Stigmergic -> Ego).
+        let (mut frame, mut frm_w) = signal.synthesize_gateway_with_core_layers(
+            &mut self.core_layers,
+            &self.last_boundary_delta,
+            &self.last_horizon,
+            &self.last_venn_report,
+        );
+
+        // 2. Evaluate stability / anomaly trigger and dynamically slide outer slots in or out.
+        let edbc_st = self.edbc.state();
+        let trigger = HorizonTriggerInput {
+            edbc_branch_mode: edbc_st.active_branch_mode,
+            moving_z_entropy: edbc_st.moving_z_entropy,
+            repulsion_severity: frame.repulsion_severity,
+            causal_root_cause: frame.dominant_cause_code,
+            epistemic_regime: self.last_horizon.regime_code,
+            stationary_shortcut_ready: self.last_boundary_delta.stationary_shortcut_ready != 0,
+            ego_active_triggers: self.core_layers.ego_layer.last_intervened_mask,
+        };
+        let (slid_in, slid_out) = apply_latent_horizon_slots(
+            latent_slots,
+            &mut self.active_horizon_slots_mask,
+            &trigger,
+            &mut frame,
+            &mut self.core_layers,
+        );
+        if slid_in != 0 || self.active_horizon_slots_mask != 0 {
+            frm_w = *frame.phase_words_ref();
+        }
+
+        // 3. Cold-path escalation swap-in when destabilized, or retract spare lane when quiescent.
+        let mut escalated = false;
+        let spare_bit = 1u8 << ATTRACTOR_SLOT_CUSTOM_7;
+        if trigger.is_destabilized() {
+            let mut escalated_phases = [0i8; MAX_ATTENTION_HEADS];
+            let req = HorizonEscalationRequest {
+                trigger,
+                target_slot: ATTRACTOR_SLOT_CUSTOM_7,
+                desired_aperture_mask: self.core_layers.liminal_layer.active_aperture_mask,
+                current_frame_energy: frame.effective_energy,
+            };
+            if let Some(weight) =
+                escalation_provider.try_escalate_horizon(&req, &mut escalated_phases)?
+            {
+                self.set_slot_phase_profile(ATTRACTOR_SLOT_CUSTOM_7, &escalated_phases)?;
+                self.action_hub.slot_weights[usize::from(ATTRACTOR_SLOT_CUSTOM_7)] =
+                    branchless_relu_f32(weight);
+                self.action_hub.slot_enabled_mask |= spare_bit;
+                escalated = true;
+            }
+        } else if trigger.can_retract() {
+            self.action_hub.slot_enabled_mask &= !spare_bit;
+            self.action_hub.slot_weights[usize::from(ATTRACTOR_SLOT_CUSTOM_7)] = 0.0;
+        }
+
+        // 4. Step ActionHub pointer trail + Bloom filter + RoPE phase steering (zero-alloc).
+        let bloom_snapshot = self.action_hub.bloom_filter;
+        let mut ledger_slot = self.action_hub.ledger_slot;
+        let (bypass_hit, _eff_ptr, _density, repulsion_active, post_rep_words) =
+            self.action_hub.step_hub_with_bloom_repulsion_to_words(
+                gcso_tagged_ptr_t(frame.tagged_ptr),
+                &mut ledger_slot,
+                &bloom_snapshot,
+                self.config.repulsion_threshold,
+                self.config.repulsion_scale_u7,
+                trail_out,
+            )?;
+        *trail_phase_words_mut(trail_out) = if swar_words_nonzero_64(&frm_w) {
+            frm_w
+        } else {
+            post_rep_words
+        };
+        trail_out.attractor_pull_force = branchless_min_f32(
+            branchless_max_f32(trail_out.attractor_pull_force, frame.effective_energy),
+            MAX_ATTRACTOR_PULL_FORCE,
+        );
+
+        let mut steered = false;
+        if (frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) == 0 {
+            if let Some(q) = query_tensor.as_deref_mut() {
+                let final_w = *trail_phase_words_ref(trail_out);
+                if swar_words_nonzero_64(&final_w) {
+                    let mut q7_stack = AlignedBuffer16::new([0i8; MAX_ATTENTION_HEADS]);
+                    store_q7_words_64(&mut q7_stack.data, &final_w);
+                    let p_aligned = AlignedSlice16::new(&q7_stack.data[..num_heads])?;
+                    self.dpsr.apply_phase_steering_for_geometry_safe(
+                        geometry,
+                        q,
+                        &p_aligned,
+                        frame.ripa_clamp_rad,
+                    )?;
+                    steered = true;
+                }
+            }
+        }
+
+        let metric = crate::traits::primitives::branchless_select_u8(
+            bypass_hit,
+            crate::traits::LEDGER_METRIC_FAST_PATH_HIT,
+            0,
+        ) | crate::traits::primitives::branchless_select_u8(
+            steered,
+            LEDGER_METRIC_PHASE_STEERED,
+            0,
+        ) | crate::traits::primitives::branchless_select_u8(
+            repulsion_active,
+            LEDGER_METRIC_REPULSION_APPLIED,
+            0,
+        );
+        ledger_slot.push_telemetry_metric(metric);
+        self.action_hub.ledger_slot = ledger_slot;
+
+        Ok((
+            frame,
+            frame.to_causal_report(),
+            slid_in,
+            slid_out,
+            escalated,
+        ))
+    }
 }
+
+// ===================================================================
+// Trait Implementations for Core Architecture (`crate::traits`) Compliance
+// ===================================================================
 
 impl PhaseSteering for RuntimeContext {
     #[inline(always)]
@@ -1423,14 +1735,6 @@ impl KvKeyframeCache for RuntimeContext {
     }
 }
 
-impl VisualAttentionSteering for RuntimeContext {}
-impl SubHeadRouter for RuntimeContext {}
-impl Rank1ResidualAdapter for RuntimeContext {}
-impl SheafCohomologyEvaluator for RuntimeContext {}
-impl HierarchicalTreeTable for RuntimeContext {}
-impl L2pSvdProjector for RuntimeContext {}
-impl DnpPacketDispatcher for RuntimeContext {}
-
 impl MappedStorage for RuntimeContext {
     #[inline]
     fn serialize_snapshot(&self, buffer: &mut [u8], required_size: &mut usize) -> Result<()> {
@@ -1557,8 +1861,8 @@ impl ManifoldGatewaySignal for RuntimeContext {
     }
 }
 
-// Compile-time verification that `RuntimeContext` satisfies `ActionHub`, `HotPathObserver`,
-// `ColdPathObserver`, and all Full-Stack & Coordinator trait bounds.
+// Compile-time verification that `RuntimeContext` satisfies `ActionHub` and
+// Gateway / Coordinator trait bounds.
 const _: () = {
     const fn assert_full_stack_bounds<
         T: ActionHub
@@ -1568,14 +1872,7 @@ const _: () = {
             + EntropyClosedLoopCoordinator
             + CausalProvenanceSignal
             + SystemConstraintSignal
-            + ManifoldGatewaySignal
-            + HotPathObserver
-            + ColdPathObserver
-            + FullStackGcsoEngine
-            + FractalCascadeCoordinator
-            + VisualAttentionSteering
-            + HierarchicalTreeTable
-            + DnpPacketDispatcher,
+            + ManifoldGatewaySignal,
     >() {
     }
     assert_full_stack_bounds::<RuntimeContext>();
@@ -1639,7 +1936,7 @@ mod tests {
             .serialize_to_bytes(&mut buffer, &mut required_size)
             .is_ok());
 
-        assert!(GcsoRuntimeContext::reset(&mut ctx).is_ok());
+        assert!(ctx.reset().is_ok());
         assert_eq!(ctx.step_counter(), 0);
         assert_eq!(ctx.anchor_count(), 0);
         assert!(ctx.deserialize_from_bytes(&buffer).is_ok());
@@ -1670,7 +1967,10 @@ mod tests {
             )
         );
         assert_eq!(ctx.abi_version_string(), env!("CARGO_PKG_VERSION"));
-        assert_ne!(ctx.query_capability() & GCSO_CAP_CPU_BASELINE, 0);
+        assert_ne!(
+            ctx.query_capability() & crate::abi::GCSO_CAP_CPU_BASELINE,
+            0
+        );
 
         let mut desc = gcso_mapped_storage_descriptor_t::default();
         assert!(ctx.open_mmap("test.gcso", &mut desc).is_ok());
@@ -1680,5 +1980,130 @@ mod tests {
             core::mem::size_of::<gcso_snapshot_header_t>() as u64
         );
         assert!(ctx.close_mmap(&mut desc).is_ok());
+    }
+
+    #[test]
+    fn test_runtime_context_vertical_piercing_and_dynamic_slide_in_out() {
+        use crate::traits::gateway::{ObjectiveFact, SubjectivePersona, SystemConstraint};
+        use crate::traits::rope::{RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget};
+        use crate::traits::{AlignedBuffer32, EGO_TRIGGER_BOUNDARY_CHATTER};
+
+        struct MockGeom;
+        impl RopeSteeringTarget for MockGeom {
+            fn rope_geometry(&self) -> RopeGeometryDescriptor {
+                RopeGeometryDescriptor {
+                    head_dim: 128,
+                    num_heads: 32,
+                    rotary_dim: 32,
+                    layout: RopePairLayout::Interleaved,
+                }
+            }
+        }
+
+        struct MockSlideInSlot {
+            invoked_count: u32,
+        }
+        impl LatentHorizonSlot for MockSlideInSlot {
+            fn horizon_slot_mask(&self) -> u32 {
+                1 << 3
+            }
+
+            fn on_slide_in_modulate(
+                &mut self,
+                frame: &mut GatewayFrame,
+                stack: &mut AutonomousCoreLayerStack,
+                _trigger: &HorizonTriggerInput,
+            ) {
+                self.invoked_count += 1;
+                stack.liminal_layer.active_aperture_mask |= 1 << 7;
+                frame.phase_deltas.fill(24);
+            }
+        }
+
+        struct MockEscalator {
+            calls: u32,
+        }
+        impl HorizonEscalationProvider for MockEscalator {
+            fn try_escalate_horizon(
+                &mut self,
+                _req: &HorizonEscalationRequest,
+                slot_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+            ) -> Result<Option<f32>> {
+                self.calls += 1;
+                slot_phase_out.fill(18);
+                Ok(Some(1.25))
+            }
+        }
+
+        let mut ctx = RuntimeContext::new(Config::new()).unwrap();
+        let mut q_buf = AlignedBuffer32::new([1.0_f32; 128 * 32]);
+        let mut trail = gcso_pointer_trail_t::default();
+        let signal = (
+            SystemConstraint::new((), 0.1, 0.0, 0xFF),
+            ObjectiveFact::new([12i8; 64], 1.5, 0x1000, 7),
+            SubjectivePersona::new([0i8; 64], 0.0, 0, 0),
+        );
+        let mut slot = MockSlideInSlot { invoked_count: 0 };
+        let mut escalator = MockEscalator { calls: 0 };
+
+        // 1. Nominal coherent state -> no slide-in, no escalation.
+        let (_f1, _r1, in1, out1, esc1) = ctx
+            .pierce_and_orchestrate_step(
+                &signal,
+                &MockGeom,
+                &mut slot,
+                &mut escalator,
+                &mut trail,
+                Some(&mut q_buf.as_aligned_slice_mut()),
+            )
+            .unwrap();
+        assert_eq!(in1, 0);
+        assert_eq!(out1, 0);
+        assert!(!esc1);
+        assert_eq!(slot.invoked_count, 0);
+        assert_eq!(ctx.active_horizon_slots_mask(), 0);
+
+        // 2. Destabilize via Layer 2 Ego trigger -> slot slides in & external escalator swaps lane 7.
+        ctx.core_layers_mut().ego_layer.last_intervened_mask = EGO_TRIGGER_BOUNDARY_CHATTER;
+        let (f2, _r2, in2, out2, esc2) = ctx
+            .pierce_and_orchestrate_step(
+                &signal,
+                &MockGeom,
+                &mut slot,
+                &mut escalator,
+                &mut trail,
+                Some(&mut q_buf.as_aligned_slice_mut()),
+            )
+            .unwrap();
+        assert_eq!(in2, 1 << 3);
+        assert_eq!(out2, 0);
+        assert!(esc2);
+        assert_eq!(slot.invoked_count, 1);
+        assert_eq!(escalator.calls, 1);
+        assert_eq!(f2.phase_deltas[0], 24);
+        assert_ne!(
+            ctx.orchestrator_status().liminal_aperture_mask & (1 << 7),
+            0
+        );
+        assert_eq!(ctx.active_horizon_slots_mask(), 1 << 3);
+
+        // 3. Stabilize -> slot automatically retracts (slides out) and lane 7 is disabled.
+        ctx.core_layers_mut().ego_layer.last_intervened_mask = 0;
+        ctx.last_boundary_delta_mut().stationary_shortcut_ready = 1;
+        let (_f3, _r3, in3, out3, esc3) = ctx
+            .pierce_and_orchestrate_step(
+                &signal,
+                &MockGeom,
+                &mut slot,
+                &mut escalator,
+                &mut trail,
+                Some(&mut q_buf.as_aligned_slice_mut()),
+            )
+            .unwrap();
+        assert_eq!(in3, 0);
+        assert_eq!(out3, 1 << 3);
+        assert!(!esc3);
+        assert_eq!(ctx.active_horizon_slots_mask(), 0);
+        assert_eq!(ctx.slot_enabled_mask() & (1 << ATTRACTOR_SLOT_CUSTOM_7), 0);
     }
 }

@@ -27,10 +27,12 @@ use liminika_core::abi::{
 };
 use liminika_core::phase_steering::{PhaseSteeringClosedLoop, PhaseSteeringEngine};
 use liminika_core::traits::{
-    AlignedBuffer16, AlignedBuffer32, AlignedBuffer64, AlignedSlice16, AlignedSlice32,
-    AlignedSliceMut16, CrystallizedAttractorRecord, PhaseSteering, SubHeadRouter,
-    VisualAttentionSteering, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
-    ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_RIPA_CLAMP_MAX_RAD,
+    detect_frame_delta_bitmask, dispatch_subhead_slot_ensemble,
+    dispatch_subhead_slot_ensemble_geodesic, steer_visual_grid_2d_bitmask_gated,
+    steer_visual_grid_3d_bitmask_gated, AlignedBuffer16, AlignedBuffer32, AlignedBuffer64,
+    AlignedSlice16, AlignedSlice32, AlignedSliceMut16, CrystallizedAttractorRecord, PhaseSteering,
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE,
+    DEFAULT_RIPA_CLAMP_MAX_RAD,
 };
 use std::hint::black_box;
 use std::time::Duration;
@@ -460,8 +462,6 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
     let num_heads = 64u32;
     let total_elements = (head_dim * num_heads) as usize;
     let tensor_bytes = total_elements * core::mem::size_of::<f32>();
-    let engine = PhaseSteeringEngine::new(head_dim, num_heads)
-        .expect("Failed 64-head PhaseSteeringEngine init");
     let mut shared_q_arena =
         AlignedHeapBuffer::<f32, 512>::new_with_phase_offset(total_elements, 1.0f32, 0);
 
@@ -492,35 +492,33 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
             ..Default::default()
         };
         for _ in 0..8 {
-            engine
-                .dispatch_subhead_slot_ensemble(
-                    &mut q_slice,
-                    &subhead_cfg,
-                    &bank_slice,
-                    ATTRACTOR_SLOT_SYSTEM_BASELINE,
-                    ATTRACTOR_SLOT_KNOWLEDGE,
-                    ATTRACTOR_SLOT_PERSONA,
-                    DEFAULT_RIPA_CLAMP_MAX_RAD,
-                    8i8,
-                    head_dim as usize,
-                )
-                .unwrap();
+            dispatch_subhead_slot_ensemble(
+                &mut q_slice,
+                &subhead_cfg,
+                &bank_slice,
+                ATTRACTOR_SLOT_SYSTEM_BASELINE,
+                ATTRACTOR_SLOT_KNOWLEDGE,
+                ATTRACTOR_SLOT_PERSONA,
+                DEFAULT_RIPA_CLAMP_MAX_RAD,
+                8i8,
+                head_dim as usize,
+            )
+            .unwrap();
         }
 
         b.iter(|| {
-            engine
-                .dispatch_subhead_slot_ensemble(
-                    black_box(&mut q_slice),
-                    black_box(&subhead_cfg),
-                    black_box(&bank_slice),
-                    black_box(ATTRACTOR_SLOT_SYSTEM_BASELINE),
-                    black_box(ATTRACTOR_SLOT_KNOWLEDGE),
-                    black_box(ATTRACTOR_SLOT_PERSONA),
-                    black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
-                    black_box(8i8),
-                    black_box(head_dim as usize),
-                )
-                .unwrap();
+            dispatch_subhead_slot_ensemble(
+                black_box(&mut q_slice),
+                black_box(&subhead_cfg),
+                black_box(&bank_slice),
+                black_box(ATTRACTOR_SLOT_SYSTEM_BASELINE),
+                black_box(ATTRACTOR_SLOT_KNOWLEDGE),
+                black_box(ATTRACTOR_SLOT_PERSONA),
+                black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
+                black_box(8i8),
+                black_box(head_dim as usize),
+            )
+            .unwrap();
             black_box(q_slice.as_slice()[0]);
         });
     });
@@ -549,35 +547,33 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
             ..Default::default()
         };
         for _ in 0..8 {
-            engine
-                .dispatch_subhead_slot_ensemble_geodesic(
-                    &mut q_slice,
-                    &subhead_cfg,
-                    &bank_slice,
-                    ATTRACTOR_SLOT_SYSTEM_BASELINE,
-                    ATTRACTOR_SLOT_KNOWLEDGE,
-                    ATTRACTOR_SLOT_PERSONA,
-                    DEFAULT_RIPA_CLAMP_MAX_RAD,
-                    8i8,
-                    head_dim as usize,
-                )
-                .unwrap();
+            dispatch_subhead_slot_ensemble_geodesic(
+                &mut q_slice,
+                &subhead_cfg,
+                &bank_slice,
+                ATTRACTOR_SLOT_SYSTEM_BASELINE,
+                ATTRACTOR_SLOT_KNOWLEDGE,
+                ATTRACTOR_SLOT_PERSONA,
+                DEFAULT_RIPA_CLAMP_MAX_RAD,
+                8i8,
+                head_dim as usize,
+            )
+            .unwrap();
         }
 
         b.iter(|| {
-            engine
-                .dispatch_subhead_slot_ensemble_geodesic(
-                    black_box(&mut q_slice),
-                    black_box(&subhead_cfg),
-                    black_box(&bank_slice),
-                    black_box(ATTRACTOR_SLOT_SYSTEM_BASELINE),
-                    black_box(ATTRACTOR_SLOT_KNOWLEDGE),
-                    black_box(ATTRACTOR_SLOT_PERSONA),
-                    black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
-                    black_box(8i8),
-                    black_box(head_dim as usize),
-                )
-                .unwrap();
+            dispatch_subhead_slot_ensemble_geodesic(
+                black_box(&mut q_slice),
+                black_box(&subhead_cfg),
+                black_box(&bank_slice),
+                black_box(ATTRACTOR_SLOT_SYSTEM_BASELINE),
+                black_box(ATTRACTOR_SLOT_KNOWLEDGE),
+                black_box(ATTRACTOR_SLOT_PERSONA),
+                black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
+                black_box(8i8),
+                black_box(head_dim as usize),
+            )
+            .unwrap();
             black_box(q_slice.as_slice()[0]);
         });
     });
@@ -696,32 +692,30 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
 
         let _ftz = ScopedFtzdazGuard::new();
         for _ in 0..8 {
-            let (delta_mask, _) = engine.detect_frame_delta_bitmask(&prev_mask, &curr_mask);
-            let _ = engine
-                .steer_visual_grid_2d_bitmask_gated(
-                    &mut grid_slice,
-                    &delta_mask,
-                    patch_dim,
-                    num_patches,
-                    16i8,
-                    -16i8,
-                )
-                .unwrap();
+            let (delta_mask, _) = detect_frame_delta_bitmask(&prev_mask, &curr_mask);
+            let _ = steer_visual_grid_2d_bitmask_gated(
+                &mut grid_slice,
+                &delta_mask,
+                patch_dim,
+                num_patches,
+                16i8,
+                -16i8,
+            )
+            .unwrap();
         }
 
         b.iter(|| {
             let (delta_mask, _changed) =
-                engine.detect_frame_delta_bitmask(black_box(&prev_mask), black_box(&curr_mask));
-            let steered = engine
-                .steer_visual_grid_2d_bitmask_gated(
-                    black_box(&mut grid_slice),
-                    black_box(&delta_mask),
-                    black_box(patch_dim),
-                    black_box(num_patches),
-                    black_box(16i8),
-                    black_box(-16i8),
-                )
-                .unwrap();
+                detect_frame_delta_bitmask(black_box(&prev_mask), black_box(&curr_mask));
+            let steered = steer_visual_grid_2d_bitmask_gated(
+                black_box(&mut grid_slice),
+                black_box(&delta_mask),
+                black_box(patch_dim),
+                black_box(num_patches),
+                black_box(16i8),
+                black_box(-16i8),
+            )
+            .unwrap();
             black_box((steered, grid_slice.as_slice()[0]));
         });
     });
@@ -754,34 +748,32 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
 
         let _ftz = ScopedFtzdazGuard::new();
         for _ in 0..8 {
-            let (delta_mask, _) = engine.detect_frame_delta_bitmask(&prev_mask, &curr_mask);
-            let _ = engine
-                .steer_visual_grid_3d_bitmask_gated(
-                    &mut grid_slice,
-                    &delta_mask,
-                    patch_dim_3d,
-                    num_patches,
-                    8i8,
-                    16i8,
-                    -16i8,
-                )
-                .unwrap();
+            let (delta_mask, _) = detect_frame_delta_bitmask(&prev_mask, &curr_mask);
+            let _ = steer_visual_grid_3d_bitmask_gated(
+                &mut grid_slice,
+                &delta_mask,
+                patch_dim_3d,
+                num_patches,
+                8i8,
+                16i8,
+                -16i8,
+            )
+            .unwrap();
         }
 
         b.iter(|| {
             let (delta_mask, _changed) =
-                engine.detect_frame_delta_bitmask(black_box(&prev_mask), black_box(&curr_mask));
-            let steered = engine
-                .steer_visual_grid_3d_bitmask_gated(
-                    black_box(&mut grid_slice),
-                    black_box(&delta_mask),
-                    black_box(patch_dim_3d),
-                    black_box(num_patches),
-                    black_box(8i8),
-                    black_box(16i8),
-                    black_box(-16i8),
-                )
-                .unwrap();
+                detect_frame_delta_bitmask(black_box(&prev_mask), black_box(&curr_mask));
+            let steered = steer_visual_grid_3d_bitmask_gated(
+                black_box(&mut grid_slice),
+                black_box(&delta_mask),
+                black_box(patch_dim_3d),
+                black_box(num_patches),
+                black_box(8i8),
+                black_box(16i8),
+                black_box(-16i8),
+            )
+            .unwrap();
             black_box((steered, grid_slice.as_slice()[0]));
         });
     });
@@ -810,8 +802,6 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
     let num_heads = 64u32;
     let total_elements = (head_dim * num_heads) as usize;
     let tensor_bytes = total_elements * core::mem::size_of::<f32>();
-    let engine = PhaseSteeringEngine::new(head_dim, num_heads)
-        .expect("Failed 64-head PhaseSteeringEngine init");
     let mut shared_q_arena =
         AlignedHeapBuffer::<f32, 512>::new_with_phase_offset(total_elements, 1.0f32, 0);
 
@@ -820,6 +810,8 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
     // 1. Provisional 2-Origin Composite Manifold Gateway + SO(2)-Fused RIPA/sub-head router Steering + `.gcso` Crystallization
     // 2. Provisional End-to-End 2-Origin Gateway -> 8-Cell Swarm -> Bayesian Trail Rewire -> Subhead -> `.gcso` Crystallization
     // 3. Provisional `.gcso` (MappedStorage) Zero-Copy Deserialization + Phase-Proximity Gravity Ensemble Gateway Steering
+    let engine = PhaseSteeringEngine::new(head_dim, num_heads)
+        .expect("Failed 64-head PhaseSteeringEngine init");
     group.bench_function(
         "storage_zero_copy_crystallized_ensemble_gateway_steer_64h",
         |b| {

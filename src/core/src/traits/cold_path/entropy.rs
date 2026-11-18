@@ -501,144 +501,92 @@ pub trait EdbcBranchController: EntropyEvaluator {
 }
 
 // ===================================================================
-// 4. System Capability & Runtime Context Facade Traits
+// 4. System Capability & Configuration Invariant Helpers
 // ===================================================================
 
-/// Trait for querying system ABI versions and runtime compute capabilities (**Boundary / System Layer**).
-pub trait SystemCapabilityQuery: BranchlessKernel + Send + Sync {
-    /// Returns the active semantic ABI version tuple `(major, minor, patch)`.
-    #[inline(always)]
-    fn abi_version(&self) -> (u32, u32, u32) {
-        (
-            GCSO_ABI_VERSION_MAJOR,
-            GCSO_ABI_VERSION_MINOR,
-            GCSO_ABI_VERSION_PATCH,
-        )
-    }
-
-    /// Returns the static ABI version string ([`crate::abi::GCSO_ABI_VERSION_STRING`]).
-    #[inline(always)]
-    fn abi_version_string(&self) -> &'static str {
-        crate::abi::GCSO_ABI_VERSION_STRING
-    }
-
-    /// Queries active compute capability bitmask flags without branching.
-    #[inline(always)]
-    fn query_capability(&self) -> gcso_capability_flags_t {
-        GCSO_CAP_CPU_BASELINE
-            | ((cfg!(feature = "cuda") as u64) * GCSO_CAP_CUDA_BACKEND)
-            | ((cfg!(feature = "vulkan") as u64) * GCSO_CAP_VULKAN_BACKEND)
-            | (((cfg!(target_os = "macos") || cfg!(feature = "metal")) as u64)
-                * GCSO_CAP_METAL_BACKEND)
-    }
-
-    /// Populates default runtime configuration parameters conforming to GCSO architectural invariants.
-    ///
-    /// # Errors
-    /// Returns an error status only if a custom implementor rejects the target configuration state.
-    #[inline(always)]
-    fn init_default_config(&self, config: &mut gcso_config_t) -> GcsoResult<()> {
-        *config = gcso_config_t {
-            head_dim: 128,
-            num_heads: 32,
-            paged_block_size: DEFAULT_PAGED_BLOCK_SIZE,
-            q7_phase_scale: Q7_PHASE_SCALE_RAD,
-            ripa_clamp_max_rad: DEFAULT_RIPA_CLAMP_MAX_RAD,
-            qdps_min_step_rad: DEFAULT_QDPS_MIN_STEP_RAD,
-            entropy_singularity_eps: DEFAULT_ENTROPY_EPS,
-            max_prompt_anchors: MAX_ANCHORS_PER_FIELD as u32,
-            action_hub_capacity: DEFAULT_ACTION_HUB_CAPACITY,
-            enable_cuda_warp_shuffle: 1,
-            enable_zero_alloc_strict: 1,
-            ledger_mode: 0,
-            reserved_flags: 0,
-            rotary_dim: 0,
-            rope_layout: 0,
-            reserved: [0; 19],
-        };
-        Ok(())
-    }
-
-    /// Branchlessly validates a [`gcso_config_t`] descriptor against GCSO architectural invariants.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any dimension, scale, or capacity invariant is violated.
-    #[inline(always)]
-    fn validate_config_invariants(&self, config: &gcso_config_t) -> GcsoResult<()> {
-        let valid_dims = (config.head_dim != 0)
-            & ((config.head_dim & 1) == 0)
-            & (config.num_heads != 0)
-            & ((config.num_heads as usize) <= MAX_ATTENTION_HEADS)
-            & ((config.paged_block_size == 16) | (config.paged_block_size == 32));
-        let valid_scales = branchless_is_finite_f32(config.q7_phase_scale)
-            & (config.q7_phase_scale > 0.0)
-            & branchless_is_finite_f32(config.ripa_clamp_max_rad)
-            & (config.ripa_clamp_max_rad > 0.0)
-            & branchless_is_finite_f32(config.qdps_min_step_rad)
-            & (config.qdps_min_step_rad >= 0.0)
-            & branchless_is_finite_f32(config.entropy_singularity_eps)
-            & (config.entropy_singularity_eps > 0.0);
-        let valid_caps = (config.max_prompt_anchors != 0)
-            & (config.action_hub_capacity != 0)
-            & (config.ledger_mode <= 2);
-
-        if valid_dims & valid_scales & valid_caps {
-            Ok(())
-        } else {
-            Err(GCSO_ERROR_INVALID_ARGUMENT)
-        }
-    }
+/// Returns the active semantic ABI version tuple `(major, minor, patch)`.
+#[inline(always)]
+#[must_use]
+pub const fn abi_version() -> (u32, u32, u32) {
+    (
+        GCSO_ABI_VERSION_MAJOR,
+        GCSO_ABI_VERSION_MINOR,
+        GCSO_ABI_VERSION_PATCH,
+    )
 }
 
-/// Unified Hot-Path Runtime Context trait for token-by-token inference loops (**Macro / Boundary Layer**).
-pub trait GcsoRuntimeContext: BranchlessKernel + Send + Sync {
-    /// Resets transient phase accumulators and step counters without freeing pre-allocated tables.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_STATE`] if the context is uninitialized or locked.
-    fn reset(&mut self) -> GcsoResult<()>;
+/// Returns the static ABI version string ([`crate::abi::GCSO_ABI_VERSION_STRING`]).
+#[inline(always)]
+#[must_use]
+pub const fn abi_version_string() -> &'static str {
+    crate::abi::GCSO_ABI_VERSION_STRING
+}
 
-    /// Registers a natural language system prompt text anchor in phase space as the primary baseline attractor.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `prompt` is empty or `weight` is non-finite.
-    fn set_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> GcsoResult<()>;
+/// Queries active compute capability bitmask flags without branching.
+#[inline(always)]
+#[must_use]
+pub const fn query_capability() -> gcso_capability_flags_t {
+    GCSO_CAP_CPU_BASELINE
+        | ((cfg!(feature = "cuda") as u64) * GCSO_CAP_CUDA_BACKEND)
+        | ((cfg!(feature = "vulkan") as u64) * GCSO_CAP_VULKAN_BACKEND)
+        | (((cfg!(target_os = "macos") || cfg!(feature = "metal")) as u64)
+            * GCSO_CAP_METAL_BACKEND)
+}
 
-    /// Executes a per-token Hot Path inference step in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `query_tensor` and `key_tensor` alias or have
-    /// lengths smaller than `head_dim * num_heads`.
-    fn step_token(
-        &mut self,
-        token_id: u32,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        trail_out: Option<&mut gcso_pointer_trail_t>,
-    ) -> GcsoResult<()>;
+/// Populates default runtime configuration parameters conforming to GCSO architectural invariants.
+///
+/// # Errors
+/// Never returns an error in the default implementation.
+#[inline(always)]
+pub fn init_default_config(config: &mut gcso_config_t) -> GcsoResult<()> {
+    *config = gcso_config_t {
+        head_dim: 128,
+        num_heads: 32,
+        paged_block_size: DEFAULT_PAGED_BLOCK_SIZE,
+        q7_phase_scale: Q7_PHASE_SCALE_RAD,
+        ripa_clamp_max_rad: DEFAULT_RIPA_CLAMP_MAX_RAD,
+        qdps_min_step_rad: DEFAULT_QDPS_MIN_STEP_RAD,
+        entropy_singularity_eps: DEFAULT_ENTROPY_EPS,
+        max_prompt_anchors: MAX_ANCHORS_PER_FIELD as u32,
+        action_hub_capacity: DEFAULT_ACTION_HUB_CAPACITY,
+        enable_cuda_warp_shuffle: 1,
+        enable_zero_alloc_strict: 1,
+        ledger_mode: 0,
+        reserved_flags: 0,
+        rotary_dim: 0,
+        rope_layout: 0,
+        reserved: [0; 19],
+    };
+    Ok(())
+}
 
-    /// Serializes active runtime context state into a `.gcso` binary snapshot buffer.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `buffer.len() < *required_size`.
-    fn serialize(&self, buffer: &mut [u8], required_size: &mut usize) -> GcsoResult<()>;
+/// Branchlessly validates a [`gcso_config_t`] descriptor against GCSO architectural invariants.
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any dimension, scale, or capacity invariant is violated.
+#[inline(always)]
+pub fn validate_config_invariants(config: &gcso_config_t) -> GcsoResult<()> {
+    let valid_dims = (config.head_dim != 0)
+        & ((config.head_dim & 1) == 0)
+        & (config.num_heads != 0)
+        & ((config.num_heads as usize) <= MAX_ATTENTION_HEADS)
+        & ((config.paged_block_size == 16) | (config.paged_block_size == 32));
+    let valid_scales = branchless_is_finite_f32(config.q7_phase_scale)
+        & (config.q7_phase_scale > 0.0)
+        & branchless_is_finite_f32(config.ripa_clamp_max_rad)
+        & (config.ripa_clamp_max_rad > 0.0)
+        & branchless_is_finite_f32(config.qdps_min_step_rad)
+        & (config.qdps_min_step_rad >= 0.0)
+        & branchless_is_finite_f32(config.entropy_singularity_eps)
+        & (config.entropy_singularity_eps > 0.0);
+    let valid_caps = (config.max_prompt_anchors != 0)
+        & (config.action_hub_capacity != 0)
+        & (config.ledger_mode <= 2);
 
-    /// Deserializes a `.gcso` binary snapshot buffer to restore context state in-place.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] or [`crate::abi::GCSO_ERROR_VERSION_MISMATCH`]
-    /// if the snapshot header magic, version ([`crate::abi::GCSO_ABI_VERSION_HEX`]), or payload checksum is invalid.
-    fn deserialize(&mut self, buffer: &[u8]) -> GcsoResult<()>;
-
-    /// Seeks to a specific token position in the KV-keyframe keyframe KV cache without forward passes.
-    ///
-    /// # Errors
-    /// Returns [`crate::abi::GCSO_ERROR_KV_KEYFRAME_SEEK_FAILED`] or [`GCSO_ERROR_INVALID_ARGUMENT`]
-    /// if `token_index` is out of bounds.
-    fn seek_to_token(
-        &mut self,
-        token_index: u32,
-        header_out: &mut gcso_kv_keyframe_header_t,
-    ) -> GcsoResult<()>;
+    if valid_dims & valid_scales & valid_caps {
+        Ok(())
+    } else {
+        Err(GCSO_ERROR_INVALID_ARGUMENT)
+    }
 }
 

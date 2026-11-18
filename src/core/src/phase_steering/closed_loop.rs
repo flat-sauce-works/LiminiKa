@@ -1,20 +1,19 @@
 // name: src/core/src/phase_steering/closed_loop.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Blanket-implemented [`PhaseSteeringClosedLoop`] over [`PhaseSteering`] and [`SubHeadRouter`].
+//! Blanket-implemented [`PhaseSteeringClosedLoop`] over [`PhaseSteering`].
 
 use super::*;
 
-/// Blanket-implemented closed-loop steering trait uniting [`PhaseSteering`] and [`SubHeadRouter`]
+/// Blanket-implemented closed-loop steering trait extending [`PhaseSteering`]
 /// for direct 128-byte [`GatewayFrame`] synthesis and $SO(2)$-fused RoPE steering.
 ///
-/// Automatically implemented for all `T: PhaseSteering + SubHeadRouter + ?Sized` (including
-/// [`PhaseSteeringEngine`], [`crate::traits::ActionHub`], [`crate::traits::HotPathObserver`],
-/// [`crate::traits::ColdPathObserver`], and [`crate::traits::FullStackGcsoEngine`]).
-pub trait PhaseSteeringClosedLoop: PhaseSteering + SubHeadRouter {
+/// Automatically implemented for all `T: PhaseSteering + ?Sized` (including
+/// [`PhaseSteeringEngine`], [`crate::traits::ActionHub`], and [`crate::RuntimeContext`]).
+pub trait PhaseSteeringClosedLoop: PhaseSteering {
     /// Synthesizes `signal` into a 128-byte [`GatewayFrame`] and [`CausalProvenanceReport`] via
     /// [`ManifoldGatewaySignal::synthesize_gateway_frame_with_words`], synchronizes `trail`,
-    /// executes $SO(2)$-fused RIPA + [`SubHeadRouter`] steering on `query_tensor` (and optional
+    /// executes $SO(2)$-fused RIPA + sub-head router steering on `query_tensor` (and optional
     /// `key_tensor`), and optionally scales `logits_opt` by `frame.effective_inv_temp`.
     ///
     /// # Errors
@@ -43,4 +42,4 @@ pub trait PhaseSteeringClosedLoop: PhaseSteering + SubHeadRouter {
     }
 }
 
-impl<T: PhaseSteering + SubHeadRouter + ?Sized> PhaseSteeringClosedLoop for T {}
+impl<T: PhaseSteering + ?Sized> PhaseSteeringClosedLoop for T {}

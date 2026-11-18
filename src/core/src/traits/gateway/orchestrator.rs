@@ -1,15 +1,15 @@
 // name: src/core/src/traits/gateway/orchestrator.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Blanket extension traits wiring [`ManifoldGatewaySignal`] into [`PhaseSteering`],
-//! [`Rank1ResidualAdapter`], and [`ActionHub`] orchestration.
+//! Blanket extension traits wiring [`ManifoldGatewaySignal`] into [`PhaseSteering`] and
+//! [`ActionHub`] orchestration, plus norm-adaptive Rank-1 residual injection helpers.
 
 use super::signals::*;
 use super::circuit::*;
 use super::*;
 
 // ===================================================================
-// 9. Blanket Extension Traits on `PhaseSteering + SubHeadRouter` & `ActionHub`
+// 9. Blanket Extension Traits on `PhaseSteering` & `ActionHub`
 // ===================================================================
 
 #[inline]
@@ -306,8 +306,8 @@ pub(super) fn prepare_gateway_steering_state<T: PhaseSteering + ?Sized, S: Manif
 }
 
 /// Blanket-implemented closed-loop Gateway & Crystallized Ensemble steering extension trait for
-/// any type implementing [`PhaseSteering`] + [`SubHeadRouter`].
-pub trait GatewayPhaseSteeringExt: PhaseSteering + SubHeadRouter {
+/// any type implementing [`PhaseSteering`].
+pub trait GatewayPhaseSteeringExt: PhaseSteering {
     /// Synthesizes any [`ManifoldGatewaySignal`] into a 128-byte [`GatewayFrame`] and register-resident
     /// phase words, updates `trail_inout`, and executes $SO(2)$-fused RIPA + sub-head router sub-head steering.
     ///
@@ -484,55 +484,46 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering + SubHeadRouter {
     }
 }
 
-impl<T: PhaseSteering + SubHeadRouter + ?Sized> GatewayPhaseSteeringExt for T {}
+impl<T: PhaseSteering + ?Sized> GatewayPhaseSteeringExt for T {}
 
-/// Blanket-implemented Gateway-driven Semantic Residual Layer (Rank-1 residual) extension for any
-/// [`Rank1ResidualAdapter`] engine.
+/// Applies norm-adaptive fused Rank-1 residual injection from an already synthesized or
+/// circuit-modulated [`GatewayFrame`].
 ///
 /// Derives a scale-invariant residual injection gain autonomously from the hidden state's
 /// L2 norm and [`GatewayFrame`] structural quantities (`effective_energy`, `ripa_clamp_rad`,
 /// `fact_persona_coherence`, `repulsion_severity`), eliminating manual scalar tuning.
-pub trait GatewayRank1SteeringExt: Rank1ResidualAdapter {
-
-    /// Applies norm-adaptive fused Rank-1 residual injection from an already synthesized or
-    /// circuit-modulated [`GatewayFrame`].
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slice lengths mismatch or `Rank1ResidualAdapter` rejects inputs.
-    #[inline]
-    fn apply_gateway_frame_rank1_hidden_fused(
-        &self,
-        frame: &GatewayFrame,
-        y_out: &mut AlignedSliceMut32<'_, f32>,
-        x_in: &AlignedSlice32<'_, f32>,
-        u_vec: &AlignedSlice32<'_, f32>,
-        v_vec: &AlignedSlice32<'_, f32>,
-    ) -> GcsoResult<f32> {
-        if (frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0 {
-            return Ok(0.0);
-        }
-        // Rank-1 outer product `(v^T x) u` already scales linearly with `||x||_2`,
-        // so `structural_gain` must be a dimensionless ratio derived from Gateway physics.
-        let energy_gate = branchless_clamp_f32(
-            frame.effective_energy * (1.0 - 0.5 * frame.repulsion_severity),
-            0.0,
-            4.0,
-        );
-        let coh_boost =
-            branchless_clamp_f32(0.5 + 0.5 * frame.fact_persona_coherence, 0.25, 1.0);
-        let structural_gain = branchless_flush_subnormal_f32(branchless_clamp_f32(
-            frame.ripa_clamp_rad * energy_gate * coh_boost * 0.125,
-            0.0,
-            0.05,
-        ));
-        if structural_gain > 0.0 {
-            self.eval_rank1_slices_fused(y_out, x_in, u_vec, v_vec, None, structural_gain)?;
-        }
-        Ok(structural_gain)
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slice lengths mismatch or Rank-1 residual evaluation rejects inputs.
+#[inline]
+pub fn apply_gateway_frame_rank1_hidden_fused(
+    frame: &GatewayFrame,
+    y_out: &mut AlignedSliceMut32<'_, f32>,
+    x_in: &AlignedSlice32<'_, f32>,
+    u_vec: &AlignedSlice32<'_, f32>,
+    v_vec: &AlignedSlice32<'_, f32>,
+) -> GcsoResult<f32> {
+    if (frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0 {
+        return Ok(0.0);
     }
+    // Rank-1 outer product `(v^T x) u` already scales linearly with `||x||_2`,
+    // so `structural_gain` must be a dimensionless ratio derived from Gateway physics.
+    let energy_gate = branchless_clamp_f32(
+        frame.effective_energy * (1.0 - 0.5 * frame.repulsion_severity),
+        0.0,
+        4.0,
+    );
+    let coh_boost = branchless_clamp_f32(0.5 + 0.5 * frame.fact_persona_coherence, 0.25, 1.0);
+    let structural_gain = branchless_flush_subnormal_f32(branchless_clamp_f32(
+        frame.ripa_clamp_rad * energy_gate * coh_boost * 0.125,
+        0.0,
+        0.05,
+    ));
+    if structural_gain > 0.0 {
+        eval_rank1_slices_fused(y_out, x_in, u_vec, v_vec, None, structural_gain)?;
+    }
+    Ok(structural_gain)
 }
-
-impl<T: Rank1ResidualAdapter + ?Sized> GatewayRank1SteeringExt for T {}
 
 /// Blanket-implemented extension trait equipping any [`ActionHub`] with single-call
 /// [`ManifoldGatewaySignal`] ingestion, Online Toroidal $k$-Means / DP-Means macro clustering,
@@ -843,8 +834,8 @@ pub trait ActionHubGatewayExt: ActionHub {
                     | StigmergicActionDecision::CrystallizeMacroBasin
             ) {
                 if let Some((y_mut, x_in, u_vec, v_vec)) = srl_hidden {
-                    let _ = GatewayRank1SteeringExt::apply_gateway_frame_rank1_hidden_fused(
-                        self, &frame, y_mut, x_in, u_vec, v_vec,
+                    let _ = apply_gateway_frame_rank1_hidden_fused(
+                        &frame, y_mut, x_in, u_vec, v_vec,
                     )?;
                     metrics |= LEDGER_METRIC_RANK1_INJECTED;
                 }
@@ -1566,4 +1557,211 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
 }
 
 impl<T: ActionHub + ActionHubGatewayExt + ?Sized> ActionHubScaleOrchestrator for T {}
+
+// ===================================================================
+// 10. Dynamic Slide-In / Slide-Out Horizon Slots & Cold-Path Escalation
+// ===================================================================
+
+/// Branchless diagnostic snapshot evaluated by the single orchestrator to decide whether
+/// dormant [`LatentHorizonSlot`] boundaries should slide into or retract from the active
+/// cognitive window.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct HorizonTriggerInput {
+    /// Active EDBC branch mode (`0` = normal, `1` = bifurcation, `2` = repulsion).
+    pub edbc_branch_mode: u32,
+    /// Latest moving Z-score normalized attention entropy ($\tilde{H}$).
+    pub moving_z_entropy: f32,
+    /// Latest repulsion severity observed on the synthesized [`GatewayFrame`] in $[0.0, 1.0]$.
+    pub repulsion_severity: f32,
+    /// Dominant causal root-cause code (`ROOT_CAUSE_*`).
+    pub causal_root_cause: u8,
+    /// Active [`EpistemicRegime`] byte (`0` = Coherent, `1` = InternalConflict, `2` = Liminal).
+    pub epistemic_regime: u8,
+    /// `true` when Layer 0 boundaries are quiescent without chattering (`stationary_shortcut_ready != 0`).
+    pub stationary_shortcut_ready: bool,
+    /// Bitmask of `EGO_TRIGGER_*` flags that fired on the latest Layer 2 Ego evaluation.
+    pub ego_active_triggers: u8,
+}
+
+impl HorizonTriggerInput {
+    /// Returns `true` when current concrete state indicates instability, conflict, or horizon
+    /// excursion requiring dormant latent horizon boundaries to slide in.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_destabilized(&self) -> bool {
+        (self.edbc_branch_mode != 0)
+            | (self.repulsion_severity > 0.25)
+            | (self.epistemic_regime != 0)
+            | (self.ego_active_triggers != 0)
+            | (self.causal_root_cause != ROOT_CAUSE_NOMINAL)
+    }
+
+    /// Returns `true` when boundaries are quiescent and coherent enough to retract optional
+    /// slide-in slots back to zero runtime overhead.
+    #[inline(always)]
+    #[must_use]
+    pub const fn can_retract(&self) -> bool {
+        self.stationary_shortcut_ready & !self.is_destabilized()
+    }
+}
+
+/// Thin latent boundary trait for outer capabilities (auxiliary attractors, contradiction guards,
+/// sensory channels, or Ego overrides) that remain dormant until the orchestrator dynamically
+/// slides them into the active cognitive aperture on instability or horizon excursion.
+pub trait LatentHorizonSlot {
+    /// Unique bitmask (`1 << k`) identifying this slot inside `active_horizon_slots_mask`.
+    fn horizon_slot_mask(&self) -> u32;
+
+    /// Returns `true` when this boundary should slide into the active cognitive window.
+    #[inline(always)]
+    fn should_slide_in(&self, trigger: &HorizonTriggerInput) -> bool {
+        trigger.is_destabilized()
+    }
+
+    /// Returns `true` when this boundary can safely retract out of the active cognitive window.
+    #[inline(always)]
+    fn should_slide_out(&self, trigger: &HorizonTriggerInput) -> bool {
+        trigger.can_retract()
+    }
+
+    /// Applies zero-allocation modulation to `frame` and the 3-layer core `stack` while active.
+    fn on_slide_in_modulate(
+        &mut self,
+        frame: &mut GatewayFrame,
+        stack: &mut AutonomousCoreLayerStack,
+        trigger: &HorizonTriggerInput,
+    );
+}
+
+impl LatentHorizonSlot for () {
+    #[inline(always)]
+    fn horizon_slot_mask(&self) -> u32 {
+        0
+    }
+
+    #[inline(always)]
+    fn should_slide_in(&self, _trigger: &HorizonTriggerInput) -> bool {
+        false
+    }
+
+    #[inline(always)]
+    fn should_slide_out(&self, _trigger: &HorizonTriggerInput) -> bool {
+        false
+    }
+
+    #[inline(always)]
+    fn on_slide_in_modulate(
+        &mut self,
+        _frame: &mut GatewayFrame,
+        _stack: &mut AutonomousCoreLayerStack,
+        _trigger: &HorizonTriggerInput,
+    ) {
+    }
+}
+
+impl<A: LatentHorizonSlot, B: LatentHorizonSlot> LatentHorizonSlot for (A, B) {
+    #[inline(always)]
+    fn horizon_slot_mask(&self) -> u32 {
+        self.0.horizon_slot_mask() | self.1.horizon_slot_mask()
+    }
+
+    #[inline(always)]
+    fn should_slide_in(&self, trigger: &HorizonTriggerInput) -> bool {
+        self.0.should_slide_in(trigger) | self.1.should_slide_in(trigger)
+    }
+
+    #[inline(always)]
+    fn should_slide_out(&self, trigger: &HorizonTriggerInput) -> bool {
+        self.0.should_slide_out(trigger) & self.1.should_slide_out(trigger)
+    }
+
+    #[inline(always)]
+    fn on_slide_in_modulate(
+        &mut self,
+        frame: &mut GatewayFrame,
+        stack: &mut AutonomousCoreLayerStack,
+        trigger: &HorizonTriggerInput,
+    ) {
+        if self.0.should_slide_in(trigger) {
+            self.0.on_slide_in_modulate(frame, stack, trigger);
+        }
+        if self.1.should_slide_in(trigger) {
+            self.1.on_slide_in_modulate(frame, stack, trigger);
+        }
+    }
+}
+
+/// Evaluates `slots` against `trigger`, updating `active_mask` (`slide-in` / `slide-out`) and
+/// modulating `frame` + `stack` in zero-allocation mode. Returns `(slid_in_bits, slid_out_bits)`.
+#[inline]
+pub fn apply_latent_horizon_slots<H: LatentHorizonSlot + ?Sized>(
+    slots: &mut H,
+    active_mask: &mut u32,
+    trigger: &HorizonTriggerInput,
+    frame: &mut GatewayFrame,
+    stack: &mut AutonomousCoreLayerStack,
+) -> (u32, u32) {
+    let slot_bit = slots.horizon_slot_mask();
+    if slot_bit == 0 {
+        return (0, 0);
+    }
+    let prev = *active_mask;
+    if slots.should_slide_in(trigger) {
+        *active_mask |= slot_bit;
+        slots.on_slide_in_modulate(frame, stack, trigger);
+        let slid_in = *active_mask & !prev;
+        return (slid_in, 0);
+    }
+    if slots.should_slide_out(trigger) {
+        *active_mask &= !slot_bit;
+        let slid_out = prev & !*active_mask;
+        return (0, slid_out);
+    }
+    if (*active_mask & slot_bit) != 0 {
+        slots.on_slide_in_modulate(frame, stack, trigger);
+    }
+    (0, 0)
+}
+
+/// Request descriptor passed to an external [`HorizonEscalationProvider`] when Hot-Path
+/// concrete engines and latent slots detect unresolved instability or epistemic excursion.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct HorizonEscalationRequest {
+    /// Stability / anomaly snapshot that triggered escalation.
+    pub trigger: HorizonTriggerInput,
+    /// Target working lane (`0..=7`) reserved for swapped-in phases (typically `ATTRACTOR_SLOT_CUSTOM_7`).
+    pub target_slot: u8,
+    /// Active Layer 0 cognitive aperture mask at the time of escalation.
+    pub desired_aperture_mask: u32,
+    /// Current effective energy on the synthesized [`GatewayFrame`].
+    pub current_frame_energy: f32,
+}
+
+/// Cold-path boundary trait allowing the orchestrator to pull external phases (e.g. from NVMe
+/// `.gcso` `ZiMMS` containers or `std` corpus recall) into a working lane when local Hot-Path
+/// resources cannot resolve destabilization.
+pub trait HorizonEscalationProvider {
+    /// Attempts to populate `slot_phase_out` with external phases for `req.target_slot`, returning
+    /// `Ok(Some(lane_weight))` when new phases were pulled in or `Ok(None)` when no swap-in occurred.
+    ///
+    /// # Errors
+    /// Returns a [`GcsoResult`] error code if external storage or recall fails.
+    fn try_escalate_horizon(
+        &mut self,
+        req: &HorizonEscalationRequest,
+        slot_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> GcsoResult<Option<f32>>;
+}
+
+impl HorizonEscalationProvider for () {
+    #[inline(always)]
+    fn try_escalate_horizon(
+        &mut self,
+        _req: &HorizonEscalationRequest,
+        _slot_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> GcsoResult<Option<f32>> {
+        Ok(None)
+    }
+}
 

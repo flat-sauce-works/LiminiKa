@@ -1,9 +1,9 @@
 // name: src/core/src/traits/cold_path/mod.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Lv.3 Macro Observer traits (`traits/cold_path.rs`) for the
+//! Lv.3 Macro capabilities (`traits/cold_path.rs`) for the
 //! Geometric Cellular Sheaf Orchestrator (GCSO):
-//! - **[`SheafCohomologyEvaluator`] & [`HierarchicalTreeTable`]**: Matrix-free $\mathcal{O}(N)$
+//! - **Sheaf Cohomology & Hierarchical Trees (`cohomology`)**: Pure matrix-free $\mathcal{O}(N)$
 //!   Gershgorin upper-bound evaluation ($\hat{\lambda}_{\max} = 2 \max_i D_{ii}$), `0-fdiv` 3rd-order
 //!   Chebyshev spectral filtering, dual homology-cohomology pairing
 //!   $\langle \mathbf{r}_{\mathrm{obs}}, \boldsymbol{\gamma} \rangle$, trail-chain joint
@@ -18,12 +18,11 @@
 //!   geodesic anchor folding (`branchless_q7_unified_field_fold_64`), dynamic 8-lane hardware
 //!   working cache projection, autonomous lane weight rebalancing, Product of Lie Group Rotations,
 //!   cross-slot synergy, and mutual inhibition.
-//! - **[`PersonaPatcher`], [`L2pSvdProjector`], [`KvKeyframeCache`], [`DnpPacketDispatcher`], & [`MappedStorage`]**:
+//! - **[`PersonaPatcher`], [`KvKeyframeCache`], [`MappedStorage`], L2P-SVD & DNP (`storage_pprc`)**:
 //!   Persistent topological mode quantization, training-free LoRA-to-Phase SVD projection,
 //!   keyframe KV-keyframe trajectory & Limina joint-probability replay, 64B DNP packet codecs, and
 //!   zero-copy `.gcso` persistence.
-//! - **[`ColdPathTrailCrystalExt`], [`ColdPathObserver`], [`ColdPathOrchestrator`], & [`FullStackGcsoEngine`]**:
-//!   Blanket-implemented macro observers and full-stack capability markers over [`crate::traits::ActionHub`].
+//! - **[`ColdPathTrailCrystalExt`]**: Trail crystallization candidacy evaluation.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -74,7 +73,6 @@ use crate::traits::telemetry::{
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
     eval_bitmask_dyadic_ultrametric,
 };
-use crate::traits::ActionHub;
 use crate::abi::{
     GCSO_ABI_VERSION_MAJOR, GCSO_ABI_VERSION_MINOR, GCSO_ABI_VERSION_PATCH, GCSO_CAP_CPU_BASELINE,
     GCSO_CAP_CUDA_BACKEND, GCSO_CAP_METAL_BACKEND, GCSO_CAP_VULKAN_BACKEND,
@@ -84,7 +82,6 @@ use crate::abi::{
     gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_kv_keyframe_header_t, gcso_q7_t,
     gcso_snapshot_header_t, gcso_rank1_residual_descriptor_t, gcso_tagged_ptr_t, gcso_mapped_storage_descriptor_t,
 };
-use crate::traits::hot_path::{HotPathExecutionEngine, StigmergicChunkOps};
 
 pub(super) const BLOCK_NORM_CACHE_CAP: usize = 64;
 

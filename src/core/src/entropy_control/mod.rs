@@ -11,7 +11,7 @@
 //!   **Origin 1 (`CausalProvenanceSignal` + `SystemConstraintSignal`)** and [`ManifoldGatewaySignal`]
 //!   so `&EntropyController` can be used both standalone and inside `(S, F, P)` / `(S, F, P, G)` tuples.
 //! - **[`EntropyClosedLoopCoordinator`]**: Blanket-implemented extension trait
-//!   (`impl<T: EdbcBranchController + SheafCohomologyEvaluator + HierarchicalTreeTable + ?Sized> EntropyClosedLoopCoordinator for T {}`)
+//!   (`impl<T: EdbcBranchController + ?Sized> EntropyClosedLoopCoordinator for T {}`)
 //!   providing branchless `0-ln` Taylor-Estrin Top-2 surrogate-to-Z-score stepping
 //!   (`eval_surrogate_and_step`).
 
@@ -45,9 +45,7 @@ use crate::abi::{
 };
 use crate::traits::aligned::AlignedSlice32;
 use crate::traits::branchless::sum_sq_f32_simd8;
-use crate::traits::cold_path::{
-    EdbcBranchController, EntropyEvaluator, HierarchicalTreeTable, SheafCohomologyEvaluator,
-};
+use crate::traits::cold_path::{EdbcBranchController, EntropyEvaluator};
 use crate::traits::gateway::{
     synthesize_multi_origin_gateway_frame, synthesize_multi_origin_gateway_frame_with_words,
     CausalProvenanceSignal, ContradictionGuard, GatewayFrame, ManifoldGatewaySignal, ObjectiveFact,

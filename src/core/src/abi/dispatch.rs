@@ -9,9 +9,6 @@ use super::*;
 // Internal Zero-Cost Stateless Trait Dispatchers & Validation Helpers
 // ===================================================================
 
-pub(super) struct AbiSystemDispatcher;
-impl SystemCapabilityQuery for AbiSystemDispatcher {}
-
 pub(super) struct AbiLedgerDispatcher;
 impl FastPathLedger for AbiLedgerDispatcher {
     #[inline]
@@ -21,7 +18,7 @@ impl FastPathLedger for AbiLedgerDispatcher {
         config_out: &mut gcso_config_t,
     ) -> GcsoResult<()> {
         if config_out.head_dim == 0 {
-            AbiSystemDispatcher.init_default_config(config_out)?;
+            crate::traits::cold_path::init_default_config(config_out)?;
         }
         // Single 64-bit SWAR instruction counting all 8 bytes >= 0x80 (`0` loops, `0` branches).
         let spike_count =
@@ -37,15 +34,6 @@ impl FastPathLedger for AbiLedgerDispatcher {
         Ok(())
     }
 }
-
-pub(super) struct AbiPspmDispatcher;
-impl SubHeadRouter for AbiPspmDispatcher {}
-
-pub(super) struct AbiSrlDispatcher;
-impl Rank1ResidualAdapter for AbiSrlDispatcher {}
-
-pub(super) struct AbiL2pDispatcher;
-impl L2pSvdProjector for AbiL2pDispatcher {}
 
 /// Branchlessly checks pointer non-nullness and natural alignment for type `T`.
 #[inline(always)]

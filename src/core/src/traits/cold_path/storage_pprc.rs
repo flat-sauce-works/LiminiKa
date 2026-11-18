@@ -172,156 +172,155 @@ pub trait PersonaPatcher: BranchlessKernel + Send + Sync {
     }
 }
 
-/// Cold-path trait for Training-Free LoRA-to-Phase SVD Projection (L2P-SVD) (**Macro / Offline Level**).
-pub trait L2pSvdProjector: BranchlessKernel + Send + Sync {
-    /// Projects fine-tuned LoRA matrices ($W_A \in \mathbb{R}^{r \times d_{\mathrm{in}}}, W_B \in \mathbb{R}^{d_{\mathrm{out}} \times r}$)
-    /// via first-order SVD approximation into phase profiles and Rank-1 Rank-1 residual vectors (Section 5.2).
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `rank == 0`, `dim_in == 0`, `dim_out == 0`,
-    /// `dim_out` is odd, matrix slices are smaller than `rank * dim_in` / `dim_out * rank`,
-    /// or `phase_profile_out` is empty.
-    #[inline]
-    fn project_lora(
-        &self,
-        lora_a: &AlignedSlice32<'_, f32>,
-        lora_b: &AlignedSlice32<'_, f32>,
-        rank: usize,
-        dim_in: usize,
-        dim_out: usize,
-        rank1_out: &mut gcso_rank1_residual_descriptor_t,
-        phase_profile_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
-    ) -> GcsoResult<()> {
-        if rank == 0
-            || dim_in == 0
-            || dim_out == 0
-            || (dim_out & 1) != 0
-            || lora_a.len()
-                < rank
-                    .checked_mul(dim_in)
-                    .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?
-            || lora_b.len()
-                < dim_out
-                    .checked_mul(rank)
-                    .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?
-            || phase_profile_out.is_empty()
-        {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+// ===================================================================
+// Training-Free LoRA-to-Phase SVD Projection (L2P-SVD)
+// ===================================================================
+
+/// Projects fine-tuned LoRA matrices ($W_A \in \mathbb{R}^{r \times d_{\mathrm{in}}}, W_B \in \mathbb{R}^{d_{\mathrm{out}} \times r}$)
+/// via first-order SVD approximation into phase profiles and Rank-1 residual vectors (Section 5.2).
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `rank == 0`, `dim_in == 0`, `dim_out == 0`,
+/// `dim_out` is odd, matrix slices are smaller than `rank * dim_in` / `dim_out * rank`,
+/// or `phase_profile_out` is empty.
+#[inline]
+pub fn project_lora(
+    lora_a: &AlignedSlice32<'_, f32>,
+    lora_b: &AlignedSlice32<'_, f32>,
+    rank: usize,
+    dim_in: usize,
+    dim_out: usize,
+    rank1_out: &mut gcso_rank1_residual_descriptor_t,
+    phase_profile_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
+) -> GcsoResult<()> {
+    if rank == 0
+        || dim_in == 0
+        || dim_out == 0
+        || (dim_out & 1) != 0
+        || lora_a.len()
+            < rank
+                .checked_mul(dim_in)
+                .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?
+        || lora_b.len()
+            < dim_out
+                .checked_mul(rank)
+                .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?
+        || phase_profile_out.is_empty()
+    {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    }
+
+    let b_slice = lora_b.as_slice();
+    let a_slice = lora_a.as_slice();
+
+    let norm_u_sq = if rank == 1 {
+        sum_sq_f32_simd8(&b_slice[..dim_out])
+    } else {
+        let mut total_u = 0.0_f32;
+        for i in 0..dim_out {
+            let v = b_slice[i * rank];
+            total_u += v * v;
         }
+        total_u
+    };
+    let norm_v_sq = sum_sq_f32_simd8(&a_slice[..dim_in]);
 
-        let b_slice = lora_b.as_slice();
-        let a_slice = lora_a.as_slice();
+    let sigma_1 = branchless_flush_subnormal_f32(branchless_sqrt_f32(norm_u_sq * norm_v_sq));
+    rank1_out.layer_idx = 0;
+    rank1_out.rank = 1;
+    rank1_out.u_vector_ptr = lora_b.as_ptr() as u64;
+    rank1_out.v_vector_ptr = lora_a.as_ptr() as u64;
+    rank1_out.gain_scalar_ptr = 0;
+    rank1_out.scale_factor = branchless_select_f32(sigma_1 > 0.0, sigma_1, 1.0);
 
-        let norm_u_sq = if rank == 1 {
-            sum_sq_f32_simd8(&b_slice[..dim_out])
+    let out_phases = phase_profile_out.as_mut_slice();
+    let num_heads = out_phases.len();
+    let num_pairs = (dim_out / 2).max(1);
+    let step_pairs = (num_pairs / num_heads.max(1)).max(1);
+    let full_cells = num_heads >> 3;
+    let mut cell = 0usize;
+    while cell < full_cells {
+        let h_base = cell << 3;
+        let word = if rank == 1 && step_pairs == 1 && (h_base + 8) <= num_pairs {
+            let base_f32 = h_base << 1;
+            atan2_interleaved_pairs_to_q7_word_x8_simd(&b_slice[base_f32..base_f32 + 16])
         } else {
-            let mut total_u = 0.0_f32;
-            for i in 0..dim_out {
-                let v = b_slice[i * rank];
-                total_u += v * v;
+            let mut sin_arr = [0.0_f32; 8];
+            let mut cos_arr = [0.0_f32; 8];
+            let mut lane = 0usize;
+            while lane < 8 {
+                let pair_idx = ((h_base + lane) * step_pairs) % num_pairs;
+                let base_idx = (pair_idx << 1) * rank;
+                cos_arr[lane] = b_slice[base_idx];
+                sin_arr[lane] = b_slice[base_idx + rank];
+                lane += 1;
             }
-            total_u
+            atan2_to_q7_word_x8_simd(&sin_arr, &cos_arr)
         };
-        let norm_v_sq = sum_sq_f32_simd8(&a_slice[..dim_in]);
-
-        let sigma_1 = branchless_flush_subnormal_f32(branchless_sqrt_f32(norm_u_sq * norm_v_sq));
-        rank1_out.layer_idx = 0;
-        rank1_out.rank = 1;
-        rank1_out.u_vector_ptr = lora_b.as_ptr() as u64;
-        rank1_out.v_vector_ptr = lora_a.as_ptr() as u64;
-        rank1_out.gain_scalar_ptr = 0;
-        rank1_out.scale_factor = branchless_select_f32(sigma_1 > 0.0, sigma_1, 1.0);
-
-        let out_phases = phase_profile_out.as_mut_slice();
-        let num_heads = out_phases.len();
-        let num_pairs = (dim_out / 2).max(1);
-        let step_pairs = (num_pairs / num_heads.max(1)).max(1);
-        let full_cells = num_heads >> 3;
-        let mut cell = 0usize;
-        while cell < full_cells {
-            let h_base = cell << 3;
-            let word = if rank == 1 && step_pairs == 1 && (h_base + 8) <= num_pairs {
-                let base_f32 = h_base << 1;
-                atan2_interleaved_pairs_to_q7_word_x8_simd(&b_slice[base_f32..base_f32 + 16])
-            } else {
-                let mut sin_arr = [0.0_f32; 8];
-                let mut cos_arr = [0.0_f32; 8];
-                let mut lane = 0usize;
-                while lane < 8 {
-                    let pair_idx = ((h_base + lane) * step_pairs) % num_pairs;
-                    let base_idx = (pair_idx << 1) * rank;
-                    cos_arr[lane] = b_slice[base_idx];
-                    sin_arr[lane] = b_slice[base_idx + rank];
-                    lane += 1;
-                }
-                atan2_to_q7_word_x8_simd(&sin_arr, &cos_arr)
-            };
-            let w_bytes = word.to_le_bytes();
-            let mut lane_out = 0usize;
-            while lane_out < 8 {
-                out_phases[h_base + lane_out] = w_bytes[lane_out] as gcso_q7_t;
-                lane_out += 1;
-            }
-            cell += 1;
+        let w_bytes = word.to_le_bytes();
+        let mut lane_out = 0usize;
+        while lane_out < 8 {
+            out_phases[h_base + lane_out] = w_bytes[lane_out] as gcso_q7_t;
+            lane_out += 1;
         }
-        let mut h = full_cells << 3;
-        while h < num_heads {
-            let pair_idx = (h * step_pairs) % num_pairs;
-            let base_idx = (pair_idx << 1) * rank;
-            out_phases[h] =
-                branchless_atan2_to_q7_fast(b_slice[base_idx + rank], b_slice[base_idx]);
-            h += 1;
-        }
-
-        Ok(())
+        cell += 1;
+    }
+    let mut h = full_cells << 3;
+    while h < num_heads {
+        let pair_idx = (h * step_pairs) % num_pairs;
+        let base_idx = (pair_idx << 1) * rank;
+        out_phases[h] =
+            branchless_atan2_to_q7_fast(b_slice[base_idx + rank], b_slice[base_idx]);
+        h += 1;
     }
 
-    /// Projects fine-tuned LoRA matrices into an Rank-1 residual Rank-1 descriptor, a Q7 rotational phase
-    /// profile, and an **Isotropic Block-Diagonal Scaling** vector $\mathbf{D}$ (Theorem 1.1 & Section 5.2).
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `rank == 0`, `dim_in == 0`, `dim_out == 0`,
-    /// `dim_out` is odd, matrix slices are too small, `phase_profile_out` is empty, or
-    /// `block_scales_out.len() < dim_out / 2`.
-    #[inline]
-    fn project_lora_with_block_scales(
-        &self,
-        lora_a: &AlignedSlice32<'_, f32>,
-        lora_b: &AlignedSlice32<'_, f32>,
-        rank: usize,
-        dim_in: usize,
-        dim_out: usize,
-        rank1_out: &mut gcso_rank1_residual_descriptor_t,
-        phase_profile_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
-        block_scales_out: &mut AlignedSliceMut32<'_, f32>,
-    ) -> GcsoResult<()> {
-        let num_pairs = dim_out / 2;
-        if num_pairs == 0 || block_scales_out.len() < num_pairs {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        self.project_lora(
-            lora_a,
-            lora_b,
-            rank,
-            dim_in,
-            dim_out,
-            rank1_out,
-            phase_profile_out,
-        )?;
+    Ok(())
+}
 
-        let b_slice = lora_b.as_slice();
-        let pair_stride = 2 * rank;
-        let scales_slice = &mut block_scales_out.as_mut_slice()[..num_pairs];
-
-        for (p_idx, scale_slot) in scales_slice.iter_mut().enumerate() {
-            let row0 = p_idx * pair_stride;
-            let pair_energy = sum_sq_f32_simd8(&b_slice[row0..row0 + pair_stride]);
-            let mag = branchless_flush_subnormal_f32(branchless_sqrt_f32(pair_energy));
-            *scale_slot = branchless_select_f32(mag > 1.0e-9, mag, 1.0);
-        }
-        rank1_out.gain_scalar_ptr = block_scales_out.as_ptr() as u64;
-        Ok(())
+/// Projects fine-tuned LoRA matrices into a Rank-1 residual descriptor, a Q7 rotational phase
+/// profile, and an **Isotropic Block-Diagonal Scaling** vector $\mathbf{D}$ (Theorem 1.1 & Section 5.2).
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `rank == 0`, `dim_in == 0`, `dim_out == 0`,
+/// `dim_out` is odd, matrix slices are too small, `phase_profile_out` is empty, or
+/// `block_scales_out.len() < dim_out / 2`.
+#[inline]
+pub fn project_lora_with_block_scales(
+    lora_a: &AlignedSlice32<'_, f32>,
+    lora_b: &AlignedSlice32<'_, f32>,
+    rank: usize,
+    dim_in: usize,
+    dim_out: usize,
+    rank1_out: &mut gcso_rank1_residual_descriptor_t,
+    phase_profile_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
+    block_scales_out: &mut AlignedSliceMut32<'_, f32>,
+) -> GcsoResult<()> {
+    let num_pairs = dim_out / 2;
+    if num_pairs == 0 || block_scales_out.len() < num_pairs {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
     }
+    project_lora(
+        lora_a,
+        lora_b,
+        rank,
+        dim_in,
+        dim_out,
+        rank1_out,
+        phase_profile_out,
+    )?;
+
+    let b_slice = lora_b.as_slice();
+    let pair_stride = 2 * rank;
+    let scales_slice = &mut block_scales_out.as_mut_slice()[..num_pairs];
+
+    for (p_idx, scale_slot) in scales_slice.iter_mut().enumerate() {
+        let row0 = p_idx * pair_stride;
+        let pair_energy = sum_sq_f32_simd8(&b_slice[row0..row0 + pair_stride]);
+        let mag = branchless_flush_subnormal_f32(branchless_sqrt_f32(pair_energy));
+        *scale_slot = branchless_select_f32(mag > 1.0e-9, mag, 1.0);
+    }
+    rank1_out.gain_scalar_ptr = block_scales_out.as_ptr() as u64;
+    Ok(())
 }
 
 /// Mezzo/Cold-path trait for Predictive Phase-Motion & Residual Compensation (KV-keyframe) (**Mezzo / Storage Level**).
@@ -839,201 +838,196 @@ pub trait KvKeyframeCache: BranchlessKernel + Send + Sync {
     }
 }
 
-/// Trait for Dynamic Node Protocol (GCSO-DNP) distributed phase synchronization (**FastPathLedger Mode 1 / Boundary Layer**).
-pub trait DnpPacketDispatcher: BranchlessKernel + Send + Sync {
-    /// Dispatches a compact 64-byte GCSO-DNP phase/repulsion synchronization packet in zero-allocation mode.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_STATE`] if `ledger_slot.mode != 1` (Network Plugin Mode).
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
-    #[inline]
-    fn dispatch_dnp_packet(
-        &mut self,
-        ledger_slot: &gcso_ledger_slot_t,
-        packet_payload: &AlignedSlice64<'_, u8>,
-    ) -> GcsoResult<()> {
-        if ledger_slot.mode != 1 {
-            return Err(GCSO_ERROR_INVALID_STATE);
-        }
-        if packet_payload.len() < 64 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        Ok(())
-    }
+// ===================================================================
+// Dynamic Node Protocol (GCSO-DNP) Distributed Phase Synchronization
+// ===================================================================
 
-    /// Encodes a 64-head Q7 phase/repulsion vector into a 64-byte cacheline-aligned GCSO-DNP
-    /// packet (`packet_out`) using bulk `Pod` copy and returns its branchless IEEE 802.3 CRC32 integrity tag.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_STATE`] if `ledger_slot.mode != 1`.
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_out.len() < 64` or `source_slot_id >= 8`.
-    #[inline]
-    fn encode_dnp_phase_packet(
-        &self,
-        ledger_slot: &gcso_ledger_slot_t,
-        source_slot_id: u8,
-        action_mode_flags: u8,
-        phase_deltas: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        packet_out: &mut AlignedSliceMut64<'_, u8>,
-    ) -> GcsoResult<u32> {
-        if ledger_slot.mode != 1 {
-            return Err(GCSO_ERROR_INVALID_STATE);
-        }
-        if packet_out.len() < MAX_ATTENTION_HEADS
-            || (source_slot_id as usize) >= MAX_ATTRACTOR_DOMAINS
-        {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        let phase_w = load_q7_words_64(phase_deltas);
-        let dst = &mut packet_out.as_mut_slice()[..MAX_ATTENTION_HEADS];
-        let mut cell = 0usize;
-        while cell < 8 {
-            let base = cell << 3;
-            dst[base..base + 8].copy_from_slice(&phase_w[cell].to_le_bytes());
-            cell += 1;
-        }
-        let tag_byte = pack_action_slot_tag(source_slot_id, action_mode_flags);
-        let crc = crc32_block64_zero_seed_words(&phase_w) ^ u32::from(tag_byte);
-        Ok(crc)
+/// Dispatches a compact 64-byte GCSO-DNP phase/repulsion synchronization packet in zero-allocation mode.
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_STATE`] if `ledger_slot.mode != 1` (Network Plugin Mode).
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
+#[inline]
+pub fn dispatch_dnp_packet(
+    ledger_slot: &gcso_ledger_slot_t,
+    packet_payload: &AlignedSlice64<'_, u8>,
+) -> GcsoResult<()> {
+    if ledger_slot.mode != 1 {
+        return Err(GCSO_ERROR_INVALID_STATE);
     }
-
-    /// Verifies and decodes a 64-byte cacheline-aligned GCSO-DNP packet (`packet_payload`) into
-    /// 8 register-resident `u64` SWAR words and the recovered 8-bit tag byte.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_STATE`] if `ledger_slot.mode != 1`.
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
-    /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if the upper 24 bits of the IEEE 802.3 CRC32
-    /// checksum do not match `expected_crc32`.
-    #[inline(always)]
-    fn decode_and_verify_dnp_words(
-        &self,
-        ledger_slot: &gcso_ledger_slot_t,
-        packet_payload: &AlignedSlice64<'_, u8>,
-        expected_crc32: u32,
-    ) -> GcsoResult<([u64; 8], u8)> {
-        if ledger_slot.mode != 1 {
-            return Err(GCSO_ERROR_INVALID_STATE);
-        }
-        if packet_payload.len() < MAX_ATTENTION_HEADS {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        let src = &packet_payload.as_slice()[..MAX_ATTENTION_HEADS];
-        let payload_words = [
-            u64::from_le_bytes([
-                src[0], src[1], src[2], src[3], src[4], src[5], src[6], src[7],
-            ]),
-            u64::from_le_bytes([
-                src[8], src[9], src[10], src[11], src[12], src[13], src[14], src[15],
-            ]),
-            u64::from_le_bytes([
-                src[16], src[17], src[18], src[19], src[20], src[21], src[22], src[23],
-            ]),
-            u64::from_le_bytes([
-                src[24], src[25], src[26], src[27], src[28], src[29], src[30], src[31],
-            ]),
-            u64::from_le_bytes([
-                src[32], src[33], src[34], src[35], src[36], src[37], src[38], src[39],
-            ]),
-            u64::from_le_bytes([
-                src[40], src[41], src[42], src[43], src[44], src[45], src[46], src[47],
-            ]),
-            u64::from_le_bytes([
-                src[48], src[49], src[50], src[51], src[52], src[53], src[54], src[55],
-            ]),
-            u64::from_le_bytes([
-                src[56], src[57], src[58], src[59], src[60], src[61], src[62], src[63],
-            ]),
-        ];
-        let raw_crc = crc32_block64_zero_seed_words(&payload_words);
-        let diff = raw_crc ^ expected_crc32;
-        if (diff & 0xFFFF_FF00) != 0 {
-            return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
-        }
-        Ok((payload_words, (diff & 0xFF) as u8))
+    if packet_payload.len() < 64 {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
     }
+    Ok(())
+}
 
-    /// Verifies and decodes a 64-byte cacheline-aligned GCSO-DNP packet (`packet_payload`) into
-    /// a 64-head Q7 phase/repulsion vector (`phases_out`), returning the recovered 8-bit tag byte.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_STATE`] if `ledger_slot.mode != 1`.
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
-    /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if the upper 24 bits of the IEEE 802.3 CRC32
-    /// checksum do not match `expected_crc32`.
-    #[inline]
-    fn decode_and_verify_dnp_packet(
-        &self,
-        ledger_slot: &gcso_ledger_slot_t,
-        packet_payload: &AlignedSlice64<'_, u8>,
-        expected_crc32: u32,
-        phases_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-    ) -> GcsoResult<u8> {
-        match self.decode_and_verify_dnp_words(ledger_slot, packet_payload, expected_crc32) {
-            Ok((payload_words, tag_byte)) => {
-                store_q7_words_64(phases_out, &payload_words);
-                Ok(tag_byte)
+/// Encodes a 64-head Q7 phase/repulsion vector into a 64-byte cacheline-aligned GCSO-DNP
+/// packet (`packet_out`) using bulk `Pod` copy and returns its branchless IEEE 802.3 CRC32 integrity tag.
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_STATE`] if `ledger_slot.mode != 1`.
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_out.len() < 64` or `source_slot_id >= 8`.
+#[inline]
+pub fn encode_dnp_phase_packet(
+    ledger_slot: &gcso_ledger_slot_t,
+    source_slot_id: u8,
+    action_mode_flags: u8,
+    phase_deltas: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    packet_out: &mut AlignedSliceMut64<'_, u8>,
+) -> GcsoResult<u32> {
+    if ledger_slot.mode != 1 {
+        return Err(GCSO_ERROR_INVALID_STATE);
+    }
+    if packet_out.len() < MAX_ATTENTION_HEADS || (source_slot_id as usize) >= MAX_ATTRACTOR_DOMAINS
+    {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    }
+    let phase_w = load_q7_words_64(phase_deltas);
+    let dst = &mut packet_out.as_mut_slice()[..MAX_ATTENTION_HEADS];
+    let mut cell = 0usize;
+    while cell < 8 {
+        let base = cell << 3;
+        dst[base..base + 8].copy_from_slice(&phase_w[cell].to_le_bytes());
+        cell += 1;
+    }
+    let tag_byte = pack_action_slot_tag(source_slot_id, action_mode_flags);
+    let crc = crc32_block64_zero_seed_words(&phase_w) ^ u32::from(tag_byte);
+    Ok(crc)
+}
+
+/// Verifies and decodes a 64-byte cacheline-aligned GCSO-DNP packet (`packet_payload`) into
+/// 8 register-resident `u64` SWAR words and the recovered 8-bit tag byte.
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_STATE`] if `ledger_slot.mode != 1`.
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
+/// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if the upper 24 bits of the IEEE 802.3 CRC32
+/// checksum do not match `expected_crc32`.
+#[inline(always)]
+pub fn decode_and_verify_dnp_words(
+    ledger_slot: &gcso_ledger_slot_t,
+    packet_payload: &AlignedSlice64<'_, u8>,
+    expected_crc32: u32,
+) -> GcsoResult<([u64; 8], u8)> {
+    if ledger_slot.mode != 1 {
+        return Err(GCSO_ERROR_INVALID_STATE);
+    }
+    if packet_payload.len() < MAX_ATTENTION_HEADS {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    }
+    let src = &packet_payload.as_slice()[..MAX_ATTENTION_HEADS];
+    let payload_words = [
+        u64::from_le_bytes([
+            src[0], src[1], src[2], src[3], src[4], src[5], src[6], src[7],
+        ]),
+        u64::from_le_bytes([
+            src[8], src[9], src[10], src[11], src[12], src[13], src[14], src[15],
+        ]),
+        u64::from_le_bytes([
+            src[16], src[17], src[18], src[19], src[20], src[21], src[22], src[23],
+        ]),
+        u64::from_le_bytes([
+            src[24], src[25], src[26], src[27], src[28], src[29], src[30], src[31],
+        ]),
+        u64::from_le_bytes([
+            src[32], src[33], src[34], src[35], src[36], src[37], src[38], src[39],
+        ]),
+        u64::from_le_bytes([
+            src[40], src[41], src[42], src[43], src[44], src[45], src[46], src[47],
+        ]),
+        u64::from_le_bytes([
+            src[48], src[49], src[50], src[51], src[52], src[53], src[54], src[55],
+        ]),
+        u64::from_le_bytes([
+            src[56], src[57], src[58], src[59], src[60], src[61], src[62], src[63],
+        ]),
+    ];
+    let raw_crc = crc32_block64_zero_seed_words(&payload_words);
+    let diff = raw_crc ^ expected_crc32;
+    if (diff & 0xFFFF_FF00) != 0 {
+        return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+    }
+    Ok((payload_words, (diff & 0xFF) as u8))
+}
+
+/// Verifies and decodes a 64-byte cacheline-aligned GCSO-DNP packet (`packet_payload`) into
+/// a 64-head Q7 phase/repulsion vector (`phases_out`), returning the recovered 8-bit tag byte.
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_STATE`] if `ledger_slot.mode != 1`.
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
+/// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if the upper 24 bits of the IEEE 802.3 CRC32
+/// checksum do not match `expected_crc32`.
+#[inline]
+pub fn decode_and_verify_dnp_packet(
+    ledger_slot: &gcso_ledger_slot_t,
+    packet_payload: &AlignedSlice64<'_, u8>,
+    expected_crc32: u32,
+    phases_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+) -> GcsoResult<u8> {
+    match decode_and_verify_dnp_words(ledger_slot, packet_payload, expected_crc32) {
+        Ok((payload_words, tag_byte)) => {
+            store_q7_words_64(phases_out, &payload_words);
+            Ok(tag_byte)
+        }
+        Err(err) => {
+            if err == GCSO_ERROR_CONTAINER_CORRUPTED {
+                *phases_out = [0i8; MAX_ATTENTION_HEADS];
             }
-            Err(err) => {
-                if err == GCSO_ERROR_CONTAINER_CORRUPTED {
-                    *phases_out = [0i8; MAX_ATTENTION_HEADS];
-                }
-                Err(err)
-            }
+            Err(err)
         }
     }
+}
 
-    /// Verifies a 64-byte GCSO-DNP packet and applies its decoded 64-head phase/repulsion vector
-    /// directly to `trail` (and `bloom_filter` if repulsive).
-    ///
-    /// # Errors
-    /// Propagates any error returned by [`Self::decode_and_verify_dnp_packet`].
-    #[inline]
-    fn decode_and_apply_dnp_packet_to_trail(
-        &self,
-        ledger_slot: &gcso_ledger_slot_t,
-        packet_payload: &AlignedSlice64<'_, u8>,
-        expected_crc32: u32,
-        inhibition_strength: f32,
-        bloom_filter: Option<&mut ContrastivePhaseBloomFilter>,
-        trail: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<(u8, u8, bool)> {
-        let (payload_words, tag_byte) =
-            self.decode_and_verify_dnp_words(ledger_slot, packet_payload, expected_crc32)?;
-        let slot_id = unpack_attractor_slot_from_tag(tag_byte);
-        let mode_flags = unpack_action_mode_from_tag(tag_byte);
-        let is_repulsion =
-            (slot_id == ATTRACTOR_SLOT_REPULSION) | ((mode_flags & ACTION_MODE_PHASE_REPULSE) != 0);
+/// Verifies a 64-byte GCSO-DNP packet and applies its decoded 64-head phase/repulsion vector
+/// directly to `trail` (and `bloom_filter` if repulsive).
+///
+/// # Errors
+/// Propagates any error returned by [`decode_and_verify_dnp_packet`].
+#[inline]
+pub fn decode_and_apply_dnp_packet_to_trail(
+    ledger_slot: &gcso_ledger_slot_t,
+    packet_payload: &AlignedSlice64<'_, u8>,
+    expected_crc32: u32,
+    inhibition_strength: f32,
+    bloom_filter: Option<&mut ContrastivePhaseBloomFilter>,
+    trail: &mut gcso_pointer_trail_t,
+) -> GcsoResult<(u8, u8, bool)> {
+    let (payload_words, tag_byte) =
+        decode_and_verify_dnp_words(ledger_slot, packet_payload, expected_crc32)?;
+    let slot_id = unpack_attractor_slot_from_tag(tag_byte);
+    let mode_flags = unpack_action_mode_from_tag(tag_byte);
+    let is_repulsion =
+        (slot_id == ATTRACTOR_SLOT_REPULSION) | ((mode_flags & ACTION_MODE_PHASE_REPULSE) != 0);
 
-        if is_repulsion {
-            if let Some(bf) = bloom_filter {
-                bf.insert_repulsive_pattern_words_weighted(&payload_words, 1);
-            }
-            let cur_pull = trail.attractor_pull_force;
-            let damped = branchless_q7_inhibit_words_64(
-                trail_phase_words_mut(trail),
-                cur_pull,
-                &payload_words,
-                inhibition_strength,
-            );
-            trail.attractor_pull_force = branchless_min_f32(
-                branchless_flush_subnormal_f32(damped),
-                MAX_ATTRACTOR_PULL_FORCE,
-            );
-            trail.flags |= TRAIL_FLAG_REPULSION_ACTIVE;
-        } else {
-            let tw = trail_phase_words_mut(trail);
-            tw[0] = swar_q7_add_sat_x8(tw[0], payload_words[0]);
-            tw[1] = swar_q7_add_sat_x8(tw[1], payload_words[1]);
-            tw[2] = swar_q7_add_sat_x8(tw[2], payload_words[2]);
-            tw[3] = swar_q7_add_sat_x8(tw[3], payload_words[3]);
-            tw[4] = swar_q7_add_sat_x8(tw[4], payload_words[4]);
-            tw[5] = swar_q7_add_sat_x8(tw[5], payload_words[5]);
-            tw[6] = swar_q7_add_sat_x8(tw[6], payload_words[6]);
-            tw[7] = swar_q7_add_sat_x8(tw[7], payload_words[7]);
+    if is_repulsion {
+        if let Some(bf) = bloom_filter {
+            bf.insert_repulsive_pattern_words_weighted(&payload_words, 1);
         }
-        Ok((slot_id, mode_flags, is_repulsion))
+        let cur_pull = trail.attractor_pull_force;
+        let damped = branchless_q7_inhibit_words_64(
+            trail_phase_words_mut(trail),
+            cur_pull,
+            &payload_words,
+            inhibition_strength,
+        );
+        trail.attractor_pull_force = branchless_min_f32(
+            branchless_flush_subnormal_f32(damped),
+            MAX_ATTRACTOR_PULL_FORCE,
+        );
+        trail.flags |= TRAIL_FLAG_REPULSION_ACTIVE;
+    } else {
+        let tw = trail_phase_words_mut(trail);
+        tw[0] = swar_q7_add_sat_x8(tw[0], payload_words[0]);
+        tw[1] = swar_q7_add_sat_x8(tw[1], payload_words[1]);
+        tw[2] = swar_q7_add_sat_x8(tw[2], payload_words[2]);
+        tw[3] = swar_q7_add_sat_x8(tw[3], payload_words[3]);
+        tw[4] = swar_q7_add_sat_x8(tw[4], payload_words[4]);
+        tw[5] = swar_q7_add_sat_x8(tw[5], payload_words[5]);
+        tw[6] = swar_q7_add_sat_x8(tw[6], payload_words[6]);
+        tw[7] = swar_q7_add_sat_x8(tw[7], payload_words[7]);
     }
+    Ok((slot_id, mode_flags, is_repulsion))
 }
 
 /// Cold-path trait for Zero-Overhead In-Memory Mapped Storage (mapped-storage) (**Storage / Persistence Level**).

@@ -854,7 +854,3 @@ impl EdbcBranchController for EntropyController {
         )
     }
 }
-
-impl SheafCohomologyEvaluator for EntropyController {}
-
-impl HierarchicalTreeTable for EntropyController {}

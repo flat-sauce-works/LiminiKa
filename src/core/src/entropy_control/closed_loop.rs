@@ -1,19 +1,16 @@
 // name: src/core/src/entropy_control/closed_loop.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Blanket-implemented [`EntropyClosedLoopCoordinator`] over EDBC, sheaf cohomology, and hierarchical trees.
+//! Blanket-implemented [`EntropyClosedLoopCoordinator`] over [`EdbcBranchController`].
 
 use super::kernels::*;
 use super::*;
 
-/// Blanket-implemented closed-loop coordinator uniting [`EdbcBranchController`],
-/// [`SheafCohomologyEvaluator`], and [`HierarchicalTreeTable`].
+/// Blanket-implemented closed-loop coordinator over [`EdbcBranchController`].
 ///
-/// Automatically implemented for all `T: EdbcBranchController + SheafCohomologyEvaluator + HierarchicalTreeTable + ?Sized`
-/// (including [`EntropyController`], [`crate::traits::ColdPathObserver`], and [`crate::traits::FullStackGcsoEngine`]).
-pub trait EntropyClosedLoopCoordinator:
-    EdbcBranchController + SheafCohomologyEvaluator + HierarchicalTreeTable
-{
+/// Automatically implemented for all `T: EdbcBranchController + ?Sized`
+/// (including [`EntropyController`] and [`crate::RuntimeContext`]).
+pub trait EntropyClosedLoopCoordinator: EdbcBranchController {
     /// Evaluates Top-2 sparse surrogate entropy via the branchless `0-ln` Taylor-Horner
     /// polynomial, combines it with inter-layer cosine distance into Moving Z-Score Normalized
     /// Attention Entropy $\tilde{H}$, and steps the EDBC controller via
@@ -53,7 +50,4 @@ pub trait EntropyClosedLoopCoordinator:
     }
 }
 
-impl<T> EntropyClosedLoopCoordinator for T where
-    T: EdbcBranchController + SheafCohomologyEvaluator + HierarchicalTreeTable + ?Sized
-{
-}
+impl<T: EdbcBranchController + ?Sized> EntropyClosedLoopCoordinator for T {}

@@ -1036,7 +1036,7 @@ pub unsafe extern "C" fn gcso_subhead_dispatch_single_pass(
         let mut q_aligned =
             unsafe { AlignedSliceMut32::from_raw_parts_mut(query_tensor, expected_len)? };
 
-        AbiPspmDispatcher.dispatch_single_pass(&mut q_aligned, &cfg, head_dim)?;
+        dispatch_single_pass(&mut q_aligned, &cfg, head_dim)?;
         Ok(GCSO_SUCCESS)
     })
 }
@@ -1087,7 +1087,7 @@ pub unsafe extern "C" fn gcso_rank1_eval(
         let mut io_guard =
             unsafe { DisjointRefMut::<f32, 32, 32>::from_raw_parts(x_in, dim_in, y_out, dim_out)? };
         let (x_slice, y_slice) = io_guard.as_ref_mut();
-        AbiSrlDispatcher.eval_rank1(y_slice, x_slice, &desc)?;
+        eval_rank1(y_slice, x_slice, &desc)?;
         Ok(GCSO_SUCCESS)
     })
 }
@@ -1118,7 +1118,7 @@ pub unsafe extern "C" fn gcso_rank1_eval_fused(
             DisjointRefMut::<f32, 32, 32>::from_raw_parts(x_in, dim_in, y_inout, dim_out)?
         };
         let (x_slice, y_slice) = io_guard.as_ref_mut();
-        AbiSrlDispatcher.eval_rank1_fused(y_slice, x_slice, &desc)?;
+        eval_rank1_fused(y_slice, x_slice, &desc)?;
         Ok(GCSO_SUCCESS)
     })
 }
@@ -1172,7 +1172,7 @@ pub unsafe extern "C" fn gcso_l2p_svd_project_lora(
             let mut p_aligned =
                 unsafe { AlignedSliceMut16::from_raw_parts_mut(phase_profile_out, num_heads)? };
 
-            AbiL2pDispatcher.project_lora(
+            project_lora(
                 &a_aligned,
                 &b_aligned,
                 rank,

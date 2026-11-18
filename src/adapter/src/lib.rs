@@ -23,13 +23,13 @@ use liminika_core::traits::gateway::{
     CausalProvenanceSignal, CognitiveCircuitActivation, CognitiveCircuitBankOps,
     CognitiveCircuitPlasticity, CognitiveTrajectoryLedger, CoreLayerEvalContext,
     DissipativeOverflowReport, EgoIntentAxes, EpistemicHorizonReading, EpistemicRegime,
-    GatewayFrame, GatewayPhaseSteeringExt, GatewayRank1SteeringExt, GuardPhaseAnchor,
-    LiminalApertureField, LiminalBoundaryDelta, LiminalEgoField, LiminalEgoPreset,
-    LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact,
-    RelativeAttractorNode, StigmergicFragmentEnsembleReport, StigmergicGranuleField,
-    StigmergicScaleGranularity, StigmergicThresholdPolicy, StigmergicVennSerendipityReport,
-    SubjectivePersona, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
-    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA, EGO_TRIGGER_BOUNDARY_STAGNATION,
+    GatewayFrame, GatewayPhaseSteeringExt, GuardPhaseAnchor, LiminalApertureField,
+    LiminalBoundaryDelta, LiminalEgoField, LiminalEgoPreset, LiminalTopologyTelemetrySnapshot,
+    ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact, RelativeAttractorNode,
+    StigmergicFragmentEnsembleReport, StigmergicGranuleField, StigmergicScaleGranularity,
+    StigmergicThresholdPolicy, StigmergicVennSerendipityReport, SubjectivePersona,
+    SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
+    CAUSAL_AXIS_SUBJECTIVE_PERSONA, EGO_TRIGGER_BOUNDARY_STAGNATION,
 };
 use liminika_core::traits::primitives::{
     load_q7_words_64, swar_q7_circular_add_x8, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
@@ -41,7 +41,6 @@ use liminika_core::traits::rope::{
 use liminika_core::traits::telemetry::{
     StigmergicReconstitutionReport, LEDGER_FLAG_COGNITIVE_TRAJECTORY, NUM_STIGMERGIC_GRANULES,
 };
-use liminika_core::traits::Rank1ResidualAdapter;
 
 pub mod pooling;
 pub mod reflection;

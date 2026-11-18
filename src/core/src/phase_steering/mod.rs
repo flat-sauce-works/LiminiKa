@@ -7,11 +7,10 @@
 //! # Architectural Role (Thin `Pod` State Composite + Blanket Closed-Loop Steering)
 //! - **[`PhaseSteeringEngine`]**: Compact 16-byte (`#[repr(C, align(16))]`) [`Pod`] state descriptor storing
 //!   `(head_dim, num_heads, ripa_clamp_max_rad, qdps_min_step_rad)`. Delegates low-level
-//!   constant-time AVX2/SSE2 SIMD and 8-lane SWAR operations directly to the default trait methods
-//!   of [`PhaseSteering`], [`SubHeadRouter`], [`VisualAttentionSteering`], and
+//!   constant-time AVX2/SSE2 SIMD and 8-lane SWAR operations directly to [`PhaseSteering`] and
 //!   [`crate::traits::BranchlessKernel`] (`crate::traits::rope`).
 //! - **[`PhaseSteeringClosedLoop`]**: Blanket-implemented extension trait
-//!   (`impl<T: PhaseSteering + SubHeadRouter + ?Sized> PhaseSteeringClosedLoop for T {}`) synthesizing
+//!   (`impl<T: PhaseSteering + ?Sized> PhaseSteeringClosedLoop for T {}`) synthesizing
 //!   any [`ManifoldGatewaySignal`] into a 128-byte [`GatewayFrame`] and [`CausalProvenanceReport`]
 //!   while executing $SO(2)$-fused RIPA+sub-head router steering (`steer_gateway_signal_safe`).
 
@@ -50,7 +49,7 @@ use crate::traits::primitives::{
     GcsoResult, Pod, DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD, MAX_ATTENTION_HEADS,
     Q7_PHASE_SCALE_RAD,
 };
-use crate::traits::rope::{PhaseSteering, SubHeadRouter, VisualAttentionSteering};
+use crate::traits::rope::PhaseSteering;
 use crate::traits::telemetry::{
     HEADS_PER_STIGMERGIC_GRANULE, MAX_STIGMERGIC_DENSITY, NUM_STIGMERGIC_GRANULES,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
@@ -97,7 +96,7 @@ pub(super) fn validate_closed_loop_tensors<T: PhaseSteering + ?Sized>(
 /// `(GatewayFrame, CausalProvenanceReport, frame_words_64)`.
 #[inline(always)]
 pub(super) fn steer_gateway_signal_core_safe<
-    T: PhaseSteering + SubHeadRouter + ?Sized,
+    T: PhaseSteering + ?Sized,
     S: ManifoldGatewaySignal + ?Sized,
 >(
     engine: &T,

@@ -1,9 +1,9 @@
 // name: src/core/src/traits/rope/mod.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Lv.1 Capability 1: RoPE & Inline Tensor Modulation traits (`PhaseSteering`,
-//! `SubHeadRouter`, `Rank1ResidualAdapter`, and `VisualAttentionSteering`) registered into
-//! [`super::ActionHub`] for the Geometric Cellular Sheaf Orchestrator (GCSO).
+//! Lv.1 Capability 1: RoPE & Inline Tensor Modulation ([`PhaseSteering`] trait plus pure
+//! sub-head routing, Rank-1 residual, and visual attention steering kernels) for the
+//! Geometric Cellular Sheaf Orchestrator (GCSO).
 //!
 //! # Key Optimizations & Architectural Guarantees
 //! - **RIPA Upper-Quarter ($d_{\mathrm{head}}/4$) Low-Frequency Slicing**: All RIPA soft-clamped
@@ -62,10 +62,10 @@ use super::aligned::{
     DisjointMutPair,
 };
 use super::branchless::{
-    BranchlessKernel, add_scalar_f32_slice_unrolled8, dot_f32_unrolled4,
-    norm_l2_underflow_resilient_f32, procrustes_q7_slice_simd, rank1_accum_outer_product_simd,
-    rank1_write_outer_product_simd, rotate_so2_2d_xy_slice_simd, rotate_so2_3d_txy_slice_simd,
-    rotate_so2_slice_unrolled16, scale_f32_slice_unrolled8, sincos_f32_x8_simd,
+    add_scalar_f32_slice_unrolled8, dot_f32_unrolled4, norm_l2_underflow_resilient_f32,
+    procrustes_q7_slice_simd, rank1_accum_outer_product_simd, rank1_write_outer_product_simd,
+    rotate_so2_2d_xy_slice_simd, rotate_so2_3d_txy_slice_simd, rotate_so2_slice_unrolled16,
+    scale_f32_slice_unrolled8, sincos_f32_x8_simd, BranchlessKernel,
 };
 use super::primitives::{
     DEFAULT_RIPA_Q7_TO_NORM_SCALE, F32_MIN_POSITIVE_NORMAL, Q7_DEFAULT_RIPA_SINCOS_REF,
@@ -74,8 +74,8 @@ use super::primitives::{
     SWAR_SPLAT_BYTE_64, branchless_clamp_f32, branchless_flush_subnormal_f32,
     branchless_inv_pos_f32, branchless_is_finite_f32, branchless_min_f32, branchless_q7_add_sat,
     branchless_q7_fold_s1_geodesic, branchless_q7_scale_u7, branchless_rad_to_qdps_step_u8,
-    branchless_select_f32, branchless_sincos_f32, branchless_sincos_q7,
-    branchless_sincos_q7_ripa_preinv, eval_fused_ripa_pspm_sincos_q7_fast,
+    branchless_select_f32, branchless_sincos_f32, branchless_sincos_half_pi_f32,
+    branchless_sincos_q7, branchless_sincos_q7_ripa_preinv, eval_fused_ripa_pspm_sincos_q7_fast,
     eval_geodesic_ripa_sincos_q7_fast, eval_ripa_sincos_q7_fast, fast_inv_len_f32,
     fast_inv_pos_normal_f32, is_word_array_uniform_64, load_q7_words_64, load_q7_x8_slice,
     swar_q7_add_sat_x8, swar_q7_circular_add_x8, swar_q7_fold_s1_geodesic_x8,
@@ -176,9 +176,6 @@ mod tests {
             self.num_heads
         }
     }
-    impl SubHeadRouter for DummyRopeEngine {}
-    impl Rank1ResidualAdapter for DummyRopeEngine {}
-    impl VisualAttentionSteering for DummyRopeEngine {}
 
     #[test]
     fn test_phase_steering_procrustes_damping_and_autonomous_aperture() {

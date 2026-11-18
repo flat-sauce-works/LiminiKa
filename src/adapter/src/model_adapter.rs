@@ -1276,7 +1276,7 @@ impl ModelSteeringAdapter {
     }
 
     /// Applies norm-adaptive Rank-1 residual injection driven purely by a [`ManifoldGatewaySignal`]
-    /// via [`GatewayRank1SteeringExt::apply_gateway_frame_rank1_hidden_fused`] without manual
+    /// via [`ResidualAdapterEngine::apply_gateway_frame_rank1_hidden_fused`] without manual
     /// scale tuning (shared `&self` snapshot path for read-only forward passes).
     ///
     /// # Errors
@@ -1397,7 +1397,7 @@ impl ModelSteeringAdapter {
     }
 
     /// Applies Rank-1 residual injection (`y <- y + s * u * (v^T * y)`) to a hidden-state
-    /// vector via [`Rank1ResidualAdapter::eval_rank1_slices_fused`].
+    /// vector via [`ResidualAdapterEngine::eval_rank1_slices_fused`].
     ///
     /// # Errors
     ///

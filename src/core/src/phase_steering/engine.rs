@@ -149,7 +149,3 @@ impl PhaseSteering for PhaseSteeringEngine {
         self.num_heads
     }
 }
-
-impl SubHeadRouter for PhaseSteeringEngine {}
-
-impl VisualAttentionSteering for PhaseSteeringEngine {}
