@@ -620,10 +620,16 @@ impl ModelSteeringAdapter {
         let ensemble_report = if fact_fragments.len() >= 2 {
             let (_frame, _words, rep) = self.synthesize_fragment_ensemble(&fact_fragments);
             let agreed_or_tie = rep.quorum_agreed_granule_mask | rep.ego_tiebreak_granule_mask;
-            for g in 0..NUM_STIGMERGIC_GRANULES {
+            for (g, ph) in self
+                .core_layers
+                .stigmergic_layer
+                .granule_pheromone_q7
+                .iter_mut()
+                .enumerate()
+                .take(NUM_STIGMERGIC_GRANULES)
+            {
                 let bit = 1u8 << g;
                 if (agreed_or_tie & bit) != 0 {
-                    let ph = &mut self.core_layers.stigmergic_layer.granule_pheromone_q7[g];
                     *ph = ph.saturating_add(4).min(127);
                 }
             }
