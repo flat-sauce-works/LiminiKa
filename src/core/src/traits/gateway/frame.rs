@@ -555,6 +555,13 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
         let mut rep_sev = 0.0_f32;
         let mut action_flags = 0u8;
 
+        let venn_has_info = (venn_report.venn_core_mask
+            | venn_report.venn_penumbra_mask
+            | venn_report.void_exterior_mask)
+            != 0;
+        let venn_core_boost = 1.25_f32
+            + 0.25_f32 * branchless_clamp_f32(venn_report.venn_intersection_energy * 0.25, 0.0, 1.0);
+
         let mut idx = 0usize;
         while idx < fragments.len() {
             let frag = &fragments[idx];
@@ -566,6 +573,14 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
             let (f, fw) = frag.synthesize_gateway_ensemble_item();
             let raw_e = branchless_flush_subnormal_f32(branchless_relu_f32(f.effective_energy));
             let f_e = raw_e * ((f32::from(frag_gain_q7) + 32.0) * (1.0 / 128.0));
+            let core_overlap_cnt = (frag_mask & venn_report.venn_core_mask).count_ones() as f32;
+            let pen_overlap_cnt = (frag_mask & venn_report.venn_penumbra_mask).count_ones() as f32;
+            let venn_frag_mult = if venn_has_info {
+                0.50_f32 + 0.20_f32 * core_overlap_cnt + 0.05_f32 * pen_overlap_cnt
+            } else {
+                1.0_f32
+            };
+            let venn_weighted_e = f_e * venn_frag_mult;
 
             if f_e > DEFAULT_ENTROPY_EPS || f.provenance_bits != 0 {
                 active_frag_count = active_frag_count.saturating_add(1);
@@ -573,9 +588,9 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
                 rep_sev = branchless_max_f32(rep_sev, f.repulsion_severity);
                 action_flags |= f.action_mode_flags;
                 let s_idx = usize::from(f.dominant_slot & ATTRACTOR_SLOT_ID_MASK);
-                slot_votes[s_idx] += f_e;
-                if f_e > best_e {
-                    best_e = f_e;
+                slot_votes[s_idx] += venn_weighted_e;
+                if venn_weighted_e > best_e {
+                    best_e = venn_weighted_e;
                     seed_frame = f;
                 }
 
@@ -585,6 +600,18 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
                     let shaped = shape_granule_word_by_aperture(fw[g], frag_gain_q7, frag_shift_q7);
                     let in_window = ((frag_mask & bit) != 0) & (f_e > DEFAULT_ENTROPY_EPS) & (shaped != 0);
                     if in_window {
+                        let venn_g_weight = if !venn_has_info {
+                            1.0_f32
+                        } else if (venn_report.venn_core_mask & bit) != 0 {
+                            venn_core_boost
+                        } else if (venn_report.venn_penumbra_mask & bit) != 0 {
+                            0.75_f32
+                        } else if (venn_report.serendipity_excursion_mask & bit) != 0 {
+                            0.90_f32
+                        } else {
+                            0.35_f32
+                        };
+                        let g_e = f_e * venn_g_weight;
                         let mean_g = swar_q7_mean_i8_from_words_64(&[shaped; 8]);
                         if mean_g >= 0 {
                             accumulate_fragment_granule_vote(
@@ -592,7 +619,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
                                 &mut pos_energy[g],
                                 &mut pos_votes[g],
                                 shaped,
-                                f_e,
+                                g_e,
                             );
                         } else {
                             accumulate_fragment_granule_vote(
@@ -600,7 +627,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
                                 &mut neg_energy[g],
                                 &mut neg_votes[g],
                                 shaped,
-                                f_e,
+                                g_e,
                             );
                         }
                     }

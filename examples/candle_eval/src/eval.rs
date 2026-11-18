@@ -363,7 +363,6 @@ pub(crate) fn generate_steered_reply_with_offset(
     start_offset: usize,
     cfg: &mut SteerDecodeConfig<'_, '_, '_>,
 ) -> Result<(String, Vec<u32>, f64), Box<dyn std::error::Error>> {
-    adapter.reset_action_hub_stats();
     let mut trail = gcso_pointer_trail_t::default();
     let ids = tokenizer
         .encode(formatted_prompt, false)

@@ -556,6 +556,9 @@ impl ModelSteeringAdapter {
     /// wakes Ego with `EGO_TRIGGER_LAYER_DISTORTION` on passive stalls/saturation, cools down
     /// Ego thrust/defiance on active overdrive, and restores configured baselines when aligned.
     pub fn apply_distortion_ego_feedback(&mut self, report: &LayerDistortionReport) {
+        if !self.configured_ego.is_active() {
+            return;
+        }
         if report.ego_wakeup_recommended {
             self.core_layers.ego_layer.trigger_mask |=
                 EGO_TRIGGER_LAYER_DISTORTION | EGO_TRIGGER_BASIN_CAPTURE;

@@ -999,11 +999,11 @@ impl TextAttractorCorpus {
                 .take(max_coalition)
                 .collect()
         } else {
+            let top1_s = fact_scores.first().map_or(0.0_f32, |(_, s)| *s);
+            let min_keep = (policy.min_coherence * 0.75).min(top1_s * 0.95);
             fact_scores
                 .into_iter()
-                .enumerate()
-                .filter(|(rank, (_, s))| *rank == 0 || *s >= policy.min_coherence * 0.75)
-                .map(|(_, pair)| pair)
+                .filter(|(_, s)| *s >= min_keep)
                 .take(policy.top_k_facts)
                 .collect()
         };

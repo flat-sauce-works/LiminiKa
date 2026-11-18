@@ -976,7 +976,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     active_prompt.as_str(),
                     &mut pass1_cfg,
                 )?;
-                step_tlm.accumulate(&adapter.telemetry_snapshot());
                 step2_decode_tokens += p1_tokens;
                 step2_decode_secs += p1_secs;
 
@@ -1057,7 +1056,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 retry_prompt.as_str(),
                                 &mut retry_cfg,
                             )?;
-                            step_tlm.accumulate(&adapter.telemetry_snapshot());
                             step2_decode_tokens += p2_tokens;
                             step2_decode_secs += p2_secs;
                             if let Some(pass2_crit) = critique_generated_draft(
@@ -1248,6 +1246,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
         println!("{summary_line}");
         let last_snap = adapter.telemetry_snapshot();
+        step_tlm.accumulate(&last_snap);
         let guard_slot = adapter.coherence_guard_slot();
         let dwell = adapter.horizon_dwell();
         let spillover = adapter.residual_spillover();

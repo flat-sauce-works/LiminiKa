@@ -877,35 +877,40 @@ impl CoreTelemetryBank {
             1.12,
         );
         let rank1_scale = branchless_clamp_f32(
-            1.0 + (rank1_ratio - 0.40) * 0.35 - (skip_ratio - 0.25) * 0.20,
+            1.0 + (rank1_ratio - 0.40) * 0.50 - (skip_ratio - 0.25) * 0.20,
             0.85,
-            1.15,
+            1.25,
         );
         let skip_entropy_scale = branchless_clamp_f32(
-            1.0 + (rank1_ratio - 0.45) * 0.30 - (skip_ratio - 0.25) * 0.35,
+            1.0 + (rank1_ratio - 0.45) * 0.35 - (skip_ratio - 0.25) * 0.35,
             0.85,
-            1.15,
+            1.20,
         );
         let contradict_scale = branchless_clamp_f32(
             1.0 + (repulse_ratio - 0.45) * 0.25 - (excursion_ratio - 0.30) * 0.15,
             0.88,
             1.12,
         );
+        let next_crystallize = branchless_clamp_f32(
+            base.crystallize_density_thresh * branchless_clamp_f32(rank1_scale, 0.90, 1.25),
+            base.subhead_route_density_thresh,
+            4.50,
+        );
 
         let next_express = branchless_clamp_f32(
             base.express_steer_density_thresh * density_scale,
             0.05,
-            base.crystallize_density_thresh,
+            next_crystallize,
         );
         let next_subhead = branchless_clamp_f32(
             base.subhead_route_density_thresh * density_scale,
             next_express,
-            base.crystallize_density_thresh,
+            next_crystallize,
         );
         let next_rank1 = branchless_clamp_f32(
             base.rank1_inject_density_thresh * rank1_scale,
             next_subhead,
-            base.crystallize_density_thresh,
+            next_crystallize,
         );
         let next_skip_entropy = branchless_clamp_f32(
             base.inertial_skip_entropy_thresh * skip_entropy_scale,
@@ -918,6 +923,7 @@ impl CoreTelemetryBank {
             express_steer_density_thresh: next_express,
             subhead_route_density_thresh: next_subhead,
             rank1_inject_density_thresh: next_rank1,
+            crystallize_density_thresh: next_crystallize,
             contradiction_coherence_thresh: branchless_clamp_f32(
                 base.contradiction_coherence_thresh * contradict_scale,
                 0.05,

@@ -1248,6 +1248,19 @@ impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
         let dyn_gain =
             branchless_clamp_f32(self.base.reinforcement_gain * gain_scale * pressure_damp, 0.05, 1.25);
 
+        // Scale density ladder thresholds covariantly with the equilibrium density shift
+        // (`dyn_gain / (1 - eff_retain)` relative to baseline) so low-coherence models do not
+        // saturate into Rank-1 orchestration.
+        let base_loss = (1.0_f32 - retain_0).max(0.01);
+        let eff_loss = (1.0_f32 - eff_retain).max(0.01);
+        let base_eq = self.base.reinforcement_gain * fast_inv_pos_normal_f32(base_loss);
+        let dyn_eq = dyn_gain * fast_inv_pos_normal_f32(eff_loss);
+        let eq_scale = branchless_clamp_f32(
+            dyn_eq * fast_inv_pos_normal_f32(base_eq.max(0.05)),
+            0.85,
+            2.00,
+        );
+
         // Sustained high-pull trails gradually ease crystallization, while resource pressure raises skip/Rank-1 residual gates.
         let sustained_pull = if trail.step_count >= 16 {
             branchless_clamp_f32((trail.attractor_pull_force - 0.65_f32) * 2.0_f32, 0.0, 1.0)
@@ -1259,11 +1272,15 @@ impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
             0.05,
             0.45,
         );
-        let express_thresh = self.base.express_steer_density_thresh * (1.0_f32 + 0.35_f32 * pressure);
-        let pspm_thresh = self.base.subhead_route_density_thresh * (1.0_f32 + 0.30_f32 * pressure);
-        let srl_thresh = self.base.rank1_inject_density_thresh * (1.0_f32 + 0.50_f32 * pressure);
-        let crystal_thresh =
-            self.base.crystallize_density_thresh * (1.0_f32 - 0.15_f32 * sustained_pull + 0.25_f32 * pressure);
+        let express_thresh =
+            self.base.express_steer_density_thresh * eq_scale * (1.0_f32 + 0.35_f32 * pressure);
+        let pspm_thresh =
+            self.base.subhead_route_density_thresh * eq_scale * (1.0_f32 + 0.30_f32 * pressure);
+        let srl_thresh =
+            self.base.rank1_inject_density_thresh * eq_scale * (1.0_f32 + 0.50_f32 * pressure);
+        let crystal_thresh = self.base.crystallize_density_thresh
+            * eq_scale
+            * (1.0_f32 - 0.15_f32 * sustained_pull + 0.25_f32 * pressure);
 
         // Gently relax contradiction sensitivity when probe observes noisy guard floor or high entropy.
         let h_valid = branchless_select_f32(
