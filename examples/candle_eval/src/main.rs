@@ -396,24 +396,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
                 println!("   [P1] {p1_sample}");
                 if rope_rad <= -1.5 {
-                    let counts = adapter.action_hub_decision_counts();
-                    let total: u64 = counts.iter().sum::<u64>().max(1);
+                    let snap = adapter.telemetry_snapshot();
                     println!(
                     "   [ActionHub] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% sub-head router={:.1}% Rank-1 residual={:.1}% Crystal={:.1}% Repulse={:.1}%",
-                    total,
-                    counts[0] as f64 / total as f64 * 100.0,
-                    counts[1] as f64 / total as f64 * 100.0,
-                    counts[2] as f64 / total as f64 * 100.0,
-                    counts[3] as f64 / total as f64 * 100.0,
-                    counts[4] as f64 / total as f64 * 100.0,
-                    counts[5] as f64 / total as f64 * 100.0,
-                    counts[6] as f64 / total as f64 * 100.0,
+                    snap.system.continuous_standard_steps,
+                    snap.decision_ratios_pct[0],
+                    snap.decision_ratios_pct[1],
+                    snap.decision_ratios_pct[2],
+                    snap.decision_ratios_pct[3],
+                    snap.decision_ratios_pct[4],
+                    snap.decision_ratios_pct[5],
+                    snap.decision_ratios_pct[6],
                 );
                     let guard_slot = adapter.coherence_guard_slot();
                     let dwell = adapter.horizon_dwell();
                     println!(
-                    "   [HorizonSlot] active_mask=0x{:08x} guard_activations={} guard_retractions={} unstable_dwell={} quiescent_dwell={}",
-                    adapter.active_horizon_slots_mask(),
+                    "   [CoreTelemetry 3+System] mode={:?} steps={}(std={}) L0_exc={:.1}% L2_ego={:.1}% guard_act={} guard_ret={} dwell=({},{})",
+                    snap.mode,
+                    snap.system.total_steps,
+                    snap.system.continuous_standard_steps,
+                    snap.liminal_excursion_ratio * 100.0,
+                    snap.ego_intervention_ratio * 100.0,
                     guard_slot.activations,
                     guard_slot.retractions,
                     dwell.unstable_dwell_steps,

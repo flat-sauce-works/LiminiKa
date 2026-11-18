@@ -119,6 +119,7 @@ pub mod frame;
 pub mod kv_cache;
 pub mod orchestrator;
 pub mod signals;
+pub mod telemetry_bank;
 
 pub use self::circuit::{
     project_gateway_signal_at_scale, CognitiveCircuitActivation, CognitiveCircuitBank,
@@ -133,6 +134,7 @@ pub use self::frame::*;
 pub use self::kv_cache::*;
 pub use self::orchestrator::*;
 pub use self::signals::*;
+pub use self::telemetry_bank::*;
 
 // ===================================================================
 // 12. Compile-Time Layout Verification & Unit Tests

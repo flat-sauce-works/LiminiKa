@@ -355,7 +355,7 @@ pub struct ModelSteeringAdapter {
     phase_engine: PhaseSteeringEngine,
     action_hub: Box<ActionHubEngine>,
     ledger_slot: gcso_ledger_slot_t,
-    decision_counts: [u64; 7],
+    telemetry: CoreTelemetryBank,
     entropy_controller: EntropyController,
     residual_adapter: ResidualAdapterEngine,
     system_constraint: SystemConstraint<()>,
@@ -417,7 +417,7 @@ impl ModelSteeringAdapter {
             phase_engine,
             action_hub,
             ledger_slot,
-            decision_counts: [0; 7],
+            telemetry: CoreTelemetryBank::default(),
             entropy_controller,
             residual_adapter,
             system_constraint,
@@ -440,17 +440,51 @@ impl ModelSteeringAdapter {
         })
     }
 
-    /// Returns the per-regime [`StigmergicActionDecision`] invocation counts (`0..=6`).
+    /// Returns the per-regime [`StigmergicActionDecision`] invocation counts (`0..=6`) from
+    /// Core Layer 1 (`StigmergicLayerTelemetry`).
     #[must_use]
     pub const fn action_hub_decision_counts(&self) -> &[u64; 7] {
-        &self.decision_counts
+        &self.telemetry.layer1.decision_counts
     }
 
-    /// Resets the per-regime [`StigmergicActionDecision`] invocation counters and restores
-    /// initial neutral entropy (`0.35`) for a fresh evaluation pass.
+    /// Resets the core `3 + System` telemetry bank and restores initial neutral entropy (`0.35`)
+    /// for a fresh evaluation pass.
     pub fn reset_action_hub_stats(&mut self) {
-        self.decision_counts = [0; 7];
+        self.telemetry.reset();
         self.action_hub.last_entropy_h_tilde = 0.35;
+    }
+
+    /// Returns a shared reference to the core `3 + System` [`CoreTelemetryBank`].
+    #[must_use]
+    pub const fn telemetry_bank(&self) -> &CoreTelemetryBank {
+        &self.telemetry
+    }
+
+    /// Updates the [`TelemetryCapturePolicy`] (`Pinned` vs `Auto` `Coarse`/`Standard`/`Detailed`).
+    pub fn set_telemetry_policy(&mut self, policy: TelemetryCapturePolicy) {
+        self.telemetry.set_policy(policy);
+    }
+
+    /// Pulls a Lazy-Pull [`CoreTelemetrySnapshot`] computed inside `liminika-core`.
+    #[must_use]
+    pub fn telemetry_snapshot(&self) -> CoreTelemetrySnapshot {
+        self.telemetry.snapshot(
+            &self.core_layers,
+            &self.last_horizon,
+            0,
+            0,
+            self.active_horizon_slots_mask,
+        )
+    }
+
+    /// Evaluates bounded Slow-Loop epoch threshold adjustments over continuous `Standard`/`Detailed`
+    /// samples without touching Hot-Path loops.
+    pub fn evaluate_slow_loop_telemetry(
+        &mut self,
+        min_samples: u64,
+    ) -> SlowLoopTelemetryAdjustment {
+        let base = self.action_hub.thresholds;
+        self.telemetry.evaluate_slow_loop_epoch(&base, min_samples)
     }
 
     /// Returns a shared reference to the embedded [`ActionHubEngine`].
@@ -982,7 +1016,7 @@ impl ModelSteeringAdapter {
         self.phase_engine = new_phase_engine;
         self.action_hub = new_action_hub;
         self.ledger_slot = gcso_ledger_slot_t::default();
-        self.decision_counts = [0; 7];
+        self.telemetry.reset();
         self.probe_baseline = next_probe;
         Ok(self.probe_baseline.probe_epoch)
     }
@@ -1371,7 +1405,8 @@ impl ModelSteeringAdapter {
                 desired_aperture_mask: this.core_layers.liminal_layer.active_aperture_mask,
                 current_frame_energy: this.last_horizon.total_memory_support,
             };
-            this.action_hub
+            let escalated = this
+                .action_hub
                 .apply_horizon_escalation(&esc_req, escalation_provider)
                 .map_err(|e| format!("apply_horizon_escalation error: {e}"))?;
 
@@ -1419,7 +1454,7 @@ impl ModelSteeringAdapter {
                 .step_branchless(trigger.is_destabilized(), trigger.stationary_shortcut_ready);
             trigger.unstable_dwell_steps = u_dwell;
             trigger.quiescent_dwell_steps = q_dwell;
-            let _ = apply_latent_horizon_slots(
+            let (slid_in, slid_out) = apply_latent_horizon_slots(
                 horizon_slots,
                 &mut this.active_horizon_slots_mask,
                 &trigger,
@@ -1427,8 +1462,23 @@ impl ModelSteeringAdapter {
                 &mut this.core_layers,
             );
 
+            let qos_throttled = frame.dominant_cause_code == ROOT_CAUSE_SYSTEM_QOS_THROTTLE;
+            let _ =
+                this.telemetry
+                    .evaluate_policy(trigger.is_destabilized(), q_dwell, qos_throttled);
+            this.telemetry.record_step(
+                decision,
+                &this.last_horizon,
+                &this.last_boundary_delta,
+                &this.last_venn_report,
+                &this.core_layers.ego_layer,
+                trigger.edbc_branch_mode,
+                slid_in,
+                slid_out,
+                escalated,
+                qos_throttled,
+            );
             this.action_hub.last_decision = decision as u8;
-            this.decision_counts[(decision as usize).min(6)] += 1;
             Ok((frame, report, decision))
         })
     }

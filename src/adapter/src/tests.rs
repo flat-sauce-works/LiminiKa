@@ -2166,7 +2166,9 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
 
 #[test]
 fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
-    use liminika_core::traits::gateway::{EpistemicHorizonReading, ObjectiveFact};
+    use liminika_core::traits::gateway::{
+        EpistemicHorizonReading, ObjectiveFact, TelemetryVerbosityMode,
+    };
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let q_len = adapter.geometry().q_rot_len();
@@ -2310,4 +2312,16 @@ fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
         adapter.action_hub().slot_enabled_mask & (1 << ATTRACTOR_SLOT_CUSTOM_7),
         0
     );
+
+    let snap = adapter.telemetry_snapshot();
+    assert_eq!(snap.system.total_steps, 4);
+    assert_eq!(snap.system.continuous_standard_steps, 4);
+    assert_eq!(snap.layer0.slide_in_count, 1);
+    assert_eq!(snap.layer0.slide_out_count, 1);
+    assert_eq!(snap.layer2.escalation_swaps, 1);
+    assert_eq!(snap.mode, TelemetryVerbosityMode::Standard);
+    assert!(snap.detailed.is_some());
+
+    let adj = adapter.evaluate_slow_loop_telemetry(4);
+    assert!(adj.applied);
 }

@@ -201,5 +201,7 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
         );
         assert!(res.is_ok());
     }
+    let snap = ctx.telemetry_snapshot();
+    assert_eq!(snap.system.total_steps, 32);
     ENFORCE_ZERO_ALLOC.with(|flag| flag.set(false));
 }

@@ -36,7 +36,7 @@ use crate::abi::{
     gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t, gcso_snapshot_header_t,
     gcso_tagged_ptr_t,
 };
-use crate::action_hub::{ActionHubEngine, ACTION_HUB_INLINE_TRAILS};
+use crate::action_hub::{ActionHubEngine, StigmergicActionDecision, ACTION_HUB_INLINE_TRAILS};
 use crate::attractor::{MultiAttractorSpace, MAX_ANCHORS_PER_FIELD, MAX_ATTRACTOR_DOMAINS};
 use crate::entropy_control::{EntropyClosedLoopCoordinator, EntropyController};
 use crate::phase_steering::{PhaseSteeringClosedLoop, PhaseSteeringEngine};
@@ -45,16 +45,17 @@ use crate::traits::{
     abi_version, abi_version_string, apply_latent_horizon_slots, query_capability, ActionHub,
     ActionHubGatewayExt, AlignedBuffer16, AlignedBuffer64, AlignedSlice16, AlignedSlice32,
     AlignedSliceMut16, AlignedSliceMut32, AttractorField, AutonomousCoreLayerStack,
-    CausalProvenanceReport, CausalProvenanceSignal, ContrastivePhaseBloomFilter,
-    EdbcBranchController, EntropyEvaluator, EpistemicHorizonReading, FastPathLedger, GatewayFrame,
-    GatewayPhaseSteeringExt, GcsoResult, HorizonDwellState, HorizonEscalationProvider,
-    HorizonEscalationRequest, HorizonTriggerInput, KvKeyframeCache, LatentHorizonSlot,
-    LiminalBoundaryDelta, ManifoldGatewaySignal, MappedStorage, MultiDomainAttractorSpace,
-    PersonaPatcher, PhaseSteering, Pod, PointerActionHub, StigmergicActionPtrOps,
-    StigmergicChunkOps, StigmergicTrailOps, StigmergicVennSerendipityReport,
-    SystemConstraintSignal, ACTION_MODE_LAYER_SKIP, ATTRACTOR_SLOT_CUSTOM_7,
+    CausalProvenanceReport, CausalProvenanceSignal, ContrastivePhaseBloomFilter, CoreTelemetryBank,
+    CoreTelemetrySnapshot, EdbcBranchController, EntropyEvaluator, EpistemicHorizonReading,
+    FastPathLedger, GatewayFrame, GatewayPhaseSteeringExt, GcsoResult, HorizonDwellState,
+    HorizonEscalationProvider, HorizonEscalationRequest, HorizonTriggerInput, KvKeyframeCache,
+    LatentHorizonSlot, LiminalBoundaryDelta, ManifoldGatewaySignal, MappedStorage,
+    MultiDomainAttractorSpace, PersonaPatcher, PhaseSteering, Pod, PointerActionHub,
+    StigmergicActionPtrOps, StigmergicChunkOps, StigmergicTrailOps,
+    StigmergicVennSerendipityReport, SystemConstraintSignal, TelemetryCapturePolicy,
+    ACTION_MODE_LAYER_SKIP, ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_CUSTOM_7,
     ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE,
-    DEFAULT_SLOT_COUPLING_MATRIX_8X8, TRAIL_FLAG_REPULSION_ACTIVE,
+    DEFAULT_SLOT_COUPLING_MATRIX_8X8, ROOT_CAUSE_SYSTEM_QOS_THROTTLE, TRAIL_FLAG_REPULSION_ACTIVE,
 };
 
 use crate::traits::branchless::{
@@ -421,6 +422,7 @@ pub struct RuntimeContext {
     last_venn_report: StigmergicVennSerendipityReport,
     horizon_dwell: HorizonDwellState,
     active_horizon_slots_mask: u32,
+    telemetry: CoreTelemetryBank,
 }
 
 impl RuntimeContext {
@@ -460,6 +462,7 @@ impl RuntimeContext {
             last_venn_report: StigmergicVennSerendipityReport::default(),
             horizon_dwell: HorizonDwellState::default(),
             active_horizon_slots_mask: 0,
+            telemetry: CoreTelemetryBank::default(),
         })
     }
 
@@ -533,6 +536,46 @@ impl RuntimeContext {
     #[must_use]
     pub const fn horizon_dwell(&self) -> HorizonDwellState {
         self.horizon_dwell
+    }
+
+    /// Returns a shared reference to the embedded `3 + System` [`CoreTelemetryBank`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn telemetry_bank(&self) -> &CoreTelemetryBank {
+        &self.telemetry
+    }
+
+    /// Returns a mutable reference to the embedded `3 + System` [`CoreTelemetryBank`].
+    #[inline(always)]
+    #[must_use]
+    pub fn telemetry_bank_mut(&mut self) -> &mut CoreTelemetryBank {
+        &mut self.telemetry
+    }
+
+    /// Updates the [`TelemetryCapturePolicy`] governing verbosity transitions (`Coarse` / `Standard` / `Detailed`).
+    #[inline(always)]
+    pub fn set_telemetry_policy(&mut self, policy: TelemetryCapturePolicy) {
+        self.telemetry.set_policy(policy);
+    }
+
+    /// Resets accumulated telemetry counters across `3 + System` domains.
+    #[inline(always)]
+    pub fn reset_telemetry(&mut self) {
+        self.telemetry.reset();
+    }
+
+    /// Computes a Lazy-Pull [`CoreTelemetrySnapshot`] combining `3 + System` counters, derived
+    /// ratios, and live Layer 0 topological state.
+    #[inline]
+    #[must_use]
+    pub fn telemetry_snapshot(&self) -> CoreTelemetrySnapshot {
+        self.telemetry.snapshot(
+            &self.core_layers,
+            &self.last_horizon,
+            self.attractor_space.system_field().active_count().min(255) as u8,
+            0,
+            self.active_horizon_slots_mask,
+        )
     }
 
     /// Returns a single-glance [`OrchestratorStatusSnapshot`] summarizing concrete core engines,
@@ -1310,6 +1353,36 @@ impl RuntimeContext {
         );
         ledger_slot.push_telemetry_metric(metric);
         self.action_hub.ledger_slot = ledger_slot;
+
+        let step_decision = if repulsion_active {
+            StigmergicActionDecision::RepulsionEscape
+        } else if steered && (frame.action_mode_flags & ACTION_MODE_SUBHEAD_ROUTE) != 0 {
+            StigmergicActionDecision::SubHeadRoute
+        } else if steered {
+            StigmergicActionDecision::ExpressPhaseSteer
+        } else if (frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0 {
+            StigmergicActionDecision::InertialLayerSkip
+        } else {
+            StigmergicActionDecision::PassiveSidecar
+        };
+        let qos_throttled = frame.dominant_cause_code == ROOT_CAUSE_SYSTEM_QOS_THROTTLE;
+        let _ = self.telemetry.evaluate_policy(
+            trigger.is_destabilized(),
+            quiescent_dwell,
+            qos_throttled,
+        );
+        self.telemetry.record_step(
+            step_decision,
+            &self.last_horizon,
+            &self.last_boundary_delta,
+            &self.last_venn_report,
+            &self.core_layers.ego_layer,
+            edbc_st.active_branch_mode,
+            slid_in,
+            slid_out,
+            escalated,
+            qos_throttled,
+        );
 
         Ok((
             frame,
