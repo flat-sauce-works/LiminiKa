@@ -2336,4 +2336,104 @@ mod tests {
         assert_eq!(out4, 1 << 4);
         assert_eq!(active_mask, 0);
     }
+
+    #[test]
+    fn test_residual_spillover_slot_cache_promotion_eviction_and_escalation() {
+        use crate::crystal::DissipativeOverflowReport;
+        use crate::traits::gateway::{
+            DefaultResidualSpilloverSlot, ObjectiveFact, SubjectivePersona, SystemConstraint,
+        };
+        use crate::traits::rope::{RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget};
+        use crate::traits::{AlignedBuffer32, EGO_TRIGGER_INTERNAL_CONFLICT};
+
+        struct Geom;
+        impl RopeSteeringTarget for Geom {
+            fn rope_geometry(&self) -> RopeGeometryDescriptor {
+                RopeGeometryDescriptor {
+                    head_dim: 128,
+                    num_heads: 32,
+                    rotary_dim: 32,
+                    layout: RopePairLayout::Interleaved,
+                }
+            }
+        }
+
+        let mut ctx = RuntimeContext::new(Config::new()).unwrap();
+        let mut q_buf = AlignedBuffer32::new([1.0_f32; 128 * 32]);
+        let mut trail = gcso_pointer_trail_t::default();
+        let signal = (
+            SystemConstraint::new((), 0.2, 0.0, 0xFF),
+            ObjectiveFact::new([20i8; 64], 1.5, 0x3000, 17),
+            SubjectivePersona::new([0i8; 64], 0.0, 0, 0),
+        );
+
+        let mut spillover = DefaultResidualSpilloverSlot::default();
+        let mut fallback_esc = ();
+        spillover.stage_overflow_report(&DissipativeOverflowReport {
+            overflowed: true,
+            residual_words: [0x1212_1212_1212_1212; 8],
+            ..DissipativeOverflowReport::default()
+        });
+
+        // 1. Step 1 destabilized -> held back by slide_in_dwell (2).
+        ctx.core_layers_mut().ego_layer.last_intervened_mask = EGO_TRIGGER_INTERNAL_CONFLICT;
+        let (_f1, _, in1, _, _) = ctx
+            .pierce_and_orchestrate_step(
+                &signal,
+                &Geom,
+                &mut spillover,
+                &mut fallback_esc,
+                &mut trail,
+                Some(&mut q_buf.as_aligned_slice_mut()),
+            )
+            .unwrap();
+        assert_eq!(in1, 0);
+        assert_eq!(spillover.spillover_modulations, 0);
+
+        // 2. Step 2 sustained destabilization -> spillover slides in (cache miss -> orthogonal elevation).
+        let (_f2, _, in2, _, _) = ctx
+            .pierce_and_orchestrate_step(
+                &signal,
+                &Geom,
+                &mut spillover,
+                &mut fallback_esc,
+                &mut trail,
+                Some(&mut q_buf.as_aligned_slice_mut()),
+            )
+            .unwrap();
+        assert_eq!(in2, spillover.slot_bit);
+        assert_eq!(spillover.spillover_modulations, 1);
+
+        // 3. Pollution guard: failed resolution stores nothing in experience cache.
+        let verified_phases = [0x12i8; 64];
+        let (stored_bad, _) = spillover.commit_verified_experience(0, &verified_phases, 0.9, false);
+        assert!(!stored_bad);
+        assert_eq!(spillover.cache_stores, 0);
+
+        // 4. Verified resolution promotes solution into Tier-1 RAM cache.
+        let (stored_ok, _) = spillover.commit_verified_experience(0, &verified_phases, 0.9, true);
+        assert!(stored_ok);
+        assert_eq!(spillover.cache_stores, 1);
+
+        // 5. Subsequent destabilization hits Tier-1 cache AND feeds HorizonEscalationProvider lane 7.
+        let mut escalator = spillover.clone();
+        let (_f3, _, _, _, esc3) = ctx
+            .pierce_and_orchestrate_step(
+                &signal,
+                &Geom,
+                &mut spillover,
+                &mut escalator,
+                &mut trail,
+                Some(&mut q_buf.as_aligned_slice_mut()),
+            )
+            .unwrap();
+        assert!(esc3);
+        assert_eq!(spillover.cache_hits, 1);
+
+        // 6. Contradiction penalty halves pheromone and evicts below floor on repeated penalty.
+        spillover.evict_pheromone_floor = 0.8;
+        let (_, evicted) = spillover.commit_verified_experience(0, &verified_phases, 0.0, false);
+        assert_eq!(evicted, 1);
+        assert!(spillover.cache_evictions >= 1);
+    }
 }

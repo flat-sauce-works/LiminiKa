@@ -369,6 +369,7 @@ pub struct ModelSteeringAdapter {
     horizon_dwell: HorizonDwellState,
     active_horizon_slots_mask: u32,
     coherence_guard_slot: CoherenceHorizonGuardSlot,
+    residual_spillover: Box<DefaultResidualSpilloverSlot>,
 }
 
 impl ModelSteeringAdapter {
@@ -437,6 +438,7 @@ impl ModelSteeringAdapter {
             horizon_dwell: HorizonDwellState::default(),
             active_horizon_slots_mask: 0,
             coherence_guard_slot: CoherenceHorizonGuardSlot::default(),
+            residual_spillover: Box::default(),
         })
     }
 
@@ -684,6 +686,44 @@ impl ModelSteeringAdapter {
     #[must_use]
     pub const fn coherence_guard_slot(&self) -> &CoherenceHorizonGuardSlot {
         &self.coherence_guard_slot
+    }
+
+    /// Returns a shared reference to the auxiliary [`DefaultResidualSpilloverSlot`] experience cache.
+    #[must_use]
+    pub fn residual_spillover(&self) -> &DefaultResidualSpilloverSlot {
+        &self.residual_spillover
+    }
+
+    /// Returns a mutable reference to the auxiliary [`DefaultResidualSpilloverSlot`] experience cache.
+    pub fn residual_spillover_mut(&mut self) -> &mut DefaultResidualSpilloverSlot {
+        &mut self.residual_spillover
+    }
+
+    /// Stages peeled 64-head residual phases from a saturated [`DissipativeOverflowReport`].
+    pub fn stage_overflow_residual(&mut self, report: &DissipativeOverflowReport) {
+        self.residual_spillover.stage_overflow_report(report);
+    }
+
+    /// Records verified post-step spillover outcome (`resolved && coherence > 0.0`) into the
+    /// Tier-1 RAM cache and updates `+ System` experience telemetry counters.
+    pub fn commit_spillover_experience(
+        &mut self,
+        residual_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        coherence: f32,
+        resolved: bool,
+    ) -> (bool, u32) {
+        let res = self.residual_spillover.commit_verified_experience(
+            0,
+            residual_phases,
+            coherence,
+            resolved,
+        );
+        self.telemetry.sync_experience_metrics(
+            self.residual_spillover.cache_hits,
+            self.residual_spillover.cache_stores,
+            self.residual_spillover.cache_evictions,
+        );
+        res
     }
 
     /// Updates Core Layer 0 (`Liminal`), Layer 1 (`Stigmergic`), and Layer 2 (`Ego`)
@@ -1481,6 +1521,62 @@ impl ModelSteeringAdapter {
             this.action_hub.last_decision = decision as u8;
             Ok((frame, report, decision))
         })
+    }
+
+    /// Orchestrates a layer's RoPE steering while pairing [`CoherenceHorizonGuardSlot`] and the
+    /// auxiliary [`DefaultResidualSpilloverSlot`] experience cache (with an optional external
+    /// [`HorizonEscalationProvider`]), syncing hits/stores/evictions to [`CoreTelemetryBank`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `q_rot_inout` length mismatches, `escalation_provider` fails, or
+    /// `liminika-core` rejects the inputs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn orchestrate_layer_rope_with_spillover<
+        S: ManifoldGatewaySignal + ?Sized,
+        E: HorizonEscalationProvider + ?Sized,
+    >(
+        &mut self,
+        layer_idx: usize,
+        signal: &S,
+        escalation_provider: &mut E,
+        trail_inout: &mut gcso_pointer_trail_t,
+        entropy_h_tilde_opt: Option<f32>,
+        unresolved_damping_u7: u8,
+        q_rot_inout: &mut [f32],
+        logits_opt: Option<&mut [f32]>,
+    ) -> Result<
+        Option<(
+            GatewayFrame,
+            CausalProvenanceReport,
+            StigmergicActionDecision,
+        )>,
+        String,
+    > {
+        let mut guard_slot = self.coherence_guard_slot;
+        let mut spillover_box = std::mem::take(&mut self.residual_spillover);
+        let res = {
+            let mut combined = (&mut guard_slot, &mut *spillover_box);
+            self.orchestrate_layer_rope_with_horizon_slots(
+                layer_idx,
+                signal,
+                &mut combined,
+                escalation_provider,
+                trail_inout,
+                entropy_h_tilde_opt,
+                unresolved_damping_u7,
+                q_rot_inout,
+                logits_opt,
+            )
+        };
+        self.coherence_guard_slot = guard_slot;
+        self.telemetry.sync_experience_metrics(
+            spillover_box.cache_hits,
+            spillover_box.cache_stores,
+            spillover_box.cache_evictions,
+        );
+        self.residual_spillover = spillover_box;
+        res
     }
 
     /// Executes norm-adaptive Rank-1 residual injection only when [`ActionHubEngine`]'s latest

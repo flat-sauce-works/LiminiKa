@@ -414,8 +414,61 @@ impl StigmergicActionPtrOps for gcso_tagged_ptr_t {
 }
 
 // ===================================================================
-// 5. Stigmergic Pointer Trail, Limina Bridging & Unified Resonance (`StigmergicTrailOps`)
+// 5. Shared Pheromone Density Laws (`PheromoneDensityOps`) & Pointer Trail
 // ===================================================================
+
+/// Shared branchless pheromone decay and coherence-weighted reinforcement law implemented by both
+/// hot pointer trails ([`gcso_pointer_trail_t`]) and RAM experience cache slots (`RamPhaseKvEntry`).
+pub trait PheromoneDensityOps {
+    /// Returns the raw non-negative pheromone density scalar for this record.
+    fn pheromone_density(&self) -> f32;
+
+    /// Updates the stored pheromone density scalar for this record.
+    fn set_pheromone_density(&mut self, density: f32);
+
+    /// Applies subnormal-safe temporal evaporative decay ($\rho \gets \min(\rho \cdot \lambda_{\mathrm{retain}}, \rho_{\max})$).
+    #[inline(always)]
+    fn evaporate_pheromone(&mut self, retain_factor: f32) -> f32 {
+        let clean_decay =
+            branchless_select_f32(retain_factor > 1.0, 1.0, branchless_relu_f32(retain_factor));
+        let decayed = branchless_relu_f32(self.pheromone_density()) * clean_decay;
+        let next = branchless_min_f32(branchless_flush_subnormal_f32(decayed), MAX_STIGMERGIC_DENSITY);
+        self.set_pheromone_density(next);
+        next
+    }
+
+    /// Executes a single closed-loop pheromone update step: temporal evaporation, followed by
+    /// coherence-weighted reinforcement (or immediate halving on contradiction repulsion).
+    #[inline(always)]
+    fn step_pheromone(
+        &mut self,
+        retain_factor: f32,
+        reinforcement_gain: f32,
+        phase_coherence: f32,
+        contradiction_repulsed: bool,
+    ) -> f32 {
+        let cur_rho = self.evaporate_pheromone(retain_factor);
+        let pos_coh = branchless_clamp_f32(branchless_relu_f32(phase_coherence), 0.0, 1.0);
+        let deposit = branchless_relu_f32(reinforcement_gain) * (1.0 + pos_coh);
+        let reinforced_rho = branchless_min_f32(cur_rho + deposit, MAX_STIGMERGIC_DENSITY);
+        let damped_rho = branchless_flush_subnormal_f32(cur_rho * 0.5);
+        let next_rho = branchless_select_f32(contradiction_repulsed, damped_rho, reinforced_rho);
+        self.set_pheromone_density(next_rho);
+        next_rho
+    }
+}
+
+impl PheromoneDensityOps for gcso_pointer_trail_t {
+    #[inline(always)]
+    fn pheromone_density(&self) -> f32 {
+        self.stigmergic_density
+    }
+
+    #[inline(always)]
+    fn set_pheromone_density(&mut self, density: f32) {
+        self.stigmergic_density = density;
+    }
+}
 
 /// Branchless $\mathcal{O}(1)$ stigmergic trail, pointer-mode orchestration, inter-memory Limina
 /// bridging, Bayesian pointer-trail transition scoring & rewiring, single-manifold unified-field
@@ -970,11 +1023,7 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
 
     #[inline(always)]
     fn apply_trail_evaporation(&mut self, decay_factor: f32) {
-        let clean_decay =
-            branchless_select_f32(decay_factor > 1.0, 1.0, branchless_relu_f32(decay_factor));
-        let decayed = branchless_relu_f32(self.stigmergic_density) * clean_decay;
-        self.stigmergic_density =
-            branchless_min_f32(branchless_flush_subnormal_f32(decayed), MAX_STIGMERGIC_DENSITY);
+        let _ = self.evaporate_pheromone(decay_factor);
     }
 
     #[inline(always)]

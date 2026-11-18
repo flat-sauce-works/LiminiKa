@@ -203,5 +203,31 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
     }
     let snap = ctx.telemetry_snapshot();
     assert_eq!(snap.system.total_steps, 32);
+
+    // Verify ResidualSpilloverHorizonSlot<4> + Tier-1 cache stays strictly zero-alloc.
+    let mut spillover = liminika_core::ResidualSpilloverHorizonSlot::<4>::new();
+    let mut no_esc2 = ();
+    for _ in 0..8 {
+        ctx.core_layers_mut().ego_layer.last_intervened_mask = EGO_TRIGGER_BOUNDARY_CHATTER;
+        let res = ctx.pierce_and_orchestrate_step(
+            &signal,
+            &TestGeom,
+            &mut spillover,
+            &mut no_esc2,
+            &mut trail,
+            Some(&mut q_buf.as_aligned_slice_mut()),
+        );
+        assert!(res.is_ok());
+    }
+    let _ = spillover.commit_verified_experience(0, &[12i8; 64], 0.9, true);
+    let _ = ctx.pierce_and_orchestrate_step(
+        &signal,
+        &TestGeom,
+        &mut spillover,
+        &mut no_esc2,
+        &mut trail,
+        Some(&mut q_buf.as_aligned_slice_mut()),
+    );
+    assert!(spillover.cache_hits >= 1);
     ENFORCE_ZERO_ALLOC.with(|flag| flag.set(false));
 }

@@ -2325,3 +2325,91 @@ fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
     let adj = adapter.evaluate_slow_loop_telemetry(4);
     assert!(adj.applied);
 }
+
+#[test]
+fn adapter_residual_spillover_dimension_elevation_and_verified_cache() {
+    use liminika_core::traits::gateway::{
+        DissipativeOverflowReport, EpistemicHorizonReading, ObjectiveFact,
+    };
+
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let q_len = adapter.geometry().q_rot_len();
+    let mut trail = gcso_pointer_trail_t::default();
+    let mut q_rot = vec![0.4_f32; q_len];
+    let mut no_esc = ();
+    let signal = ObjectiveFact::new([22i8; 64], 1.6, 0, 121);
+
+    adapter.adapt_core_layers(
+        &EpistemicHorizonReading {
+            total_memory_support: 0.3,
+            conflict_severity: 0.85,
+            regime_code: EpistemicRegime::InternalConflict as u8,
+            ..EpistemicHorizonReading::default()
+        },
+        &StigmergicVennSerendipityReport::default(),
+        None,
+    );
+    adapter.stage_overflow_residual(&DissipativeOverflowReport {
+        overflowed: true,
+        residual_words: [0x1414_1414_1414_1414; 8],
+        ..DissipativeOverflowReport::default()
+    });
+
+    // Step 1: CoherenceHorizonGuardSlot (dwell 1) enters; ResidualSpillover waits for dwell 2.
+    let _ = adapter
+        .orchestrate_layer_rope_with_spillover(
+            0,
+            &signal,
+            &mut no_esc,
+            &mut trail,
+            None,
+            128,
+            &mut q_rot,
+            None,
+        )
+        .expect("step 1");
+    assert_eq!(adapter.active_horizon_slots_mask(), 1 << 0);
+    assert_eq!(adapter.residual_spillover().spillover_modulations, 0);
+
+    // Step 2: Sustained conflict triggers ResidualSpilloverHorizonSlot alongside guard slot.
+    let _ = adapter
+        .orchestrate_layer_rope_with_spillover(
+            0,
+            &signal,
+            &mut no_esc,
+            &mut trail,
+            None,
+            128,
+            &mut q_rot,
+            None,
+        )
+        .expect("step 2");
+    assert_eq!(adapter.active_horizon_slots_mask(), (1 << 0) | (1 << 1));
+    assert_eq!(adapter.residual_spillover().spillover_modulations, 1);
+
+    // Commit verified outcome -> promotes to Tier-1 RAM cache & telemetry syncs cleanly.
+    let verified_phases = [0x14i8; 64];
+    let (stored, evicted) = adapter.commit_spillover_experience(&verified_phases, 0.92, true);
+    assert!(stored);
+    assert_eq!(evicted, 0);
+    assert_eq!(
+        adapter.telemetry_snapshot().system.experience_cache_stores,
+        1
+    );
+
+    // Step 3: Next step hits Tier-1 experience cache in O(1).
+    let _ = adapter
+        .orchestrate_layer_rope_with_spillover(
+            0,
+            &signal,
+            &mut no_esc,
+            &mut trail,
+            None,
+            128,
+            &mut q_rot,
+            None,
+        )
+        .expect("step 3");
+    assert_eq!(adapter.residual_spillover().cache_hits, 1);
+    assert_eq!(adapter.telemetry_snapshot().system.experience_cache_hits, 1);
+}

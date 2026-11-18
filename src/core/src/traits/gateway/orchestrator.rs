@@ -1755,6 +1755,64 @@ pub trait LatentHorizonSlot {
     }
 }
 
+impl<T: LatentHorizonSlot + ?Sized> LatentHorizonSlot for &mut T {
+    #[inline(always)]
+    fn horizon_slot_mask(&self) -> u32 {
+        (**self).horizon_slot_mask()
+    }
+
+    #[inline(always)]
+    fn min_slide_in_dwell(&self) -> u16 {
+        (**self).min_slide_in_dwell()
+    }
+
+    #[inline(always)]
+    fn min_slide_out_dwell(&self) -> u16 {
+        (**self).min_slide_out_dwell()
+    }
+
+    #[inline(always)]
+    fn should_slide_in(&self, trigger: &HorizonTriggerInput) -> bool {
+        (**self).should_slide_in(trigger)
+    }
+
+    #[inline(always)]
+    fn should_slide_out(&self, trigger: &HorizonTriggerInput) -> bool {
+        (**self).should_slide_out(trigger)
+    }
+
+    #[inline(always)]
+    fn on_slide_in_modulate(
+        &mut self,
+        frame: &mut GatewayFrame,
+        stack: &mut AutonomousCoreLayerStack,
+        trigger: &HorizonTriggerInput,
+    ) {
+        (**self).on_slide_in_modulate(frame, stack, trigger);
+    }
+
+    #[inline(always)]
+    fn on_slide_out(
+        &mut self,
+        frame: &mut GatewayFrame,
+        stack: &mut AutonomousCoreLayerStack,
+        trigger: &HorizonTriggerInput,
+    ) {
+        (**self).on_slide_out(frame, stack, trigger);
+    }
+
+    #[inline]
+    fn apply_horizon_slot(
+        &mut self,
+        active_mask: &mut u32,
+        trigger: &HorizonTriggerInput,
+        frame: &mut GatewayFrame,
+        stack: &mut AutonomousCoreLayerStack,
+    ) -> (u32, u32) {
+        (**self).apply_horizon_slot(active_mask, trigger, frame, stack)
+    }
+}
+
 impl LatentHorizonSlot for () {
     #[inline(always)]
     fn horizon_slot_mask(&self) -> u32 {

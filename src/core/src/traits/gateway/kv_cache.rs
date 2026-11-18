@@ -26,8 +26,10 @@ pub struct RamPhaseKvEntry {
     pub reuse_count: u32,
     /// Monotonic logical epoch of the most recent store or hit (`offset 156..160`).
     pub last_used_epoch: u32,
-    /// Reserved zero padding aligning the entry to 3 cachelines (`192` bytes, `offset 160..192`).
-    pub reserved_pad: [u8; 32],
+    /// Shared pheromone density updated via [`crate::traits::telemetry::PheromoneDensityOps`] (`offset 160..164`).
+    pub pheromone_density: f32,
+    /// Reserved zero padding aligning the entry to 3 cachelines (`192` bytes, `offset 164..192`).
+    pub reserved_pad: [u8; 28],
 }
 
 impl Default for RamPhaseKvEntry {
@@ -40,8 +42,21 @@ impl Default for RamPhaseKvEntry {
             context_hash: 0,
             reuse_count: 0,
             last_used_epoch: 0,
-            reserved_pad: [0u8; 32],
+            pheromone_density: 0.0,
+            reserved_pad: [0u8; 28],
         }
+    }
+}
+
+impl crate::traits::telemetry::PheromoneDensityOps for RamPhaseKvEntry {
+    #[inline(always)]
+    fn pheromone_density(&self) -> f32 {
+        self.pheromone_density
+    }
+
+    #[inline(always)]
+    fn set_pheromone_density(&mut self, density: f32) {
+        self.pheromone_density = density;
     }
 }
 
@@ -209,8 +224,64 @@ pub trait RamPhaseKvCacheOps {
             context_hash,
             reuse_count: prev_reuse,
             last_used_epoch: epoch,
-            reserved_pad: [0u8; 32],
+            pheromone_density: 1.0,
+            reserved_pad: [0u8; 28],
         };
+    }
+
+    /// Applies shared pheromone evaporation ([`crate::traits::telemetry::PheromoneDensityOps`])
+    /// across all occupied slots and clears stale entries whose density falls below `evict_floor`.
+    /// Returns the number of evicted slots.
+    #[inline]
+    fn evaporate_experience_cache(&mut self, retain_factor: f32, evict_floor: f32) -> u32 {
+        use crate::traits::telemetry::PheromoneDensityOps;
+        let entries = self.entries_mut();
+        let mut evicted = 0u32;
+        let mut i = 0usize;
+        while i < entries.len() {
+            if entries[i].is_occupied() {
+                let rho = entries[i].evaporate_pheromone(retain_factor);
+                if evict_floor > 0.0 && rho < evict_floor {
+                    entries[i] = RamPhaseKvEntry::default();
+                    evicted = evicted.saturating_add(1);
+                }
+            }
+            i += 1;
+        }
+        evicted
+    }
+
+    /// Applies shared closed-loop pheromone reinforcement (or halving on contradiction) to `slot_idx`,
+    /// evicting the slot if penalized below `evict_floor`. Returns `(updated_density, was_evicted)`.
+    #[inline]
+    fn step_slot_pheromone(
+        &mut self,
+        slot_idx: usize,
+        retain_factor: f32,
+        reinforcement_gain: f32,
+        phase_coherence: f32,
+        contradiction_repulsed: bool,
+        evict_floor: f32,
+    ) -> (f32, bool) {
+        use crate::traits::telemetry::PheromoneDensityOps;
+        let entries = self.entries_mut();
+        let Some(entry) = entries.get_mut(slot_idx) else {
+            return (0.0, false);
+        };
+        if !entry.is_occupied() {
+            return (0.0, false);
+        }
+        let next_rho = entry.step_pheromone(
+            retain_factor,
+            reinforcement_gain,
+            phase_coherence,
+            contradiction_repulsed,
+        );
+        if contradiction_repulsed && evict_floor > 0.0 && next_rho < evict_floor {
+            *entry = RamPhaseKvEntry::default();
+            return (0.0, true);
+        }
+        (next_rho, false)
     }
 
     /// Looks up an exact `context_hash` match (`O(N)` cacheline scan) or falls back to the highest
@@ -453,7 +524,8 @@ impl<const N: usize> RamPhaseKvCache<N> {
                 context_hash: 0,
                 reuse_count: 0,
                 last_used_epoch: 0,
-                reserved_pad: [0u8; 32],
+                pheromone_density: 0.0,
+                reserved_pad: [0u8; 28],
             }; N],
         }
     }
@@ -962,6 +1034,312 @@ impl ManifoldGatewaySignal for CognitiveTrajectoryLedger {
     #[inline(always)]
     fn synthesize_gateway_frame(&self) -> GatewayFrame {
         self.synthesize_gateway_frame_with_words().0
+    }
+}
+
+// ===================================================================
+// Dynamic Residual Spillover Horizon Slot + Tier-1 Experience Cache
+// ===================================================================
+
+/// Tier-1 host-RAM experience cache backed by [`RamPhaseKvCache<16>`] (~3 KB, zero VRAM) paired
+/// with [`LatentHorizonSlot`] and [`HorizonEscalationProvider`].
+///
+/// Remains dormant when the 3-layer core stack handles tokens smoothly; slides in on sustained
+/// saturation or boundary conflict to elevate an orthogonal auxiliary phase subspace, recalls
+/// previously verified solutions in $\mathcal{O}(N)$ SWAR cacheline time, and commits newly
+/// resolved residual patterns only after post-step coherence recovery is confirmed.
+#[derive(Debug, Clone)]
+pub struct ResidualSpilloverHorizonSlot<const N: usize> {
+    /// Fixed-capacity Tier-1 host-RAM experience cache (`192 * N` bytes).
+    pub cache: RamPhaseKvCache<N>,
+    /// Unique bitmask (`1 << k`) claimed inside `active_horizon_slots_mask` (default `1 << 1`).
+    pub slot_bit: u32,
+    /// Consecutive destabilized steps required before sliding in (default `2`).
+    pub slide_in_dwell: u16,
+    /// Consecutive quiescent steps required before retracting (default `2`).
+    pub slide_out_dwell: u16,
+    /// Pheromone retention multiplier applied across steps (default `0.95`).
+    pub retain_factor: f32,
+    /// Base pheromone reinforcement gain when coherence recovers (default `0.35`).
+    pub reinforcement_gain: f32,
+    /// Minimum pheromone density required to avoid eviction (default `0.15`).
+    pub evict_pheromone_floor: f32,
+    /// Logical step counter for LRU / epoch ordering.
+    pub epoch: u32,
+    /// Total associative or exact hits served from `cache`.
+    pub cache_hits: u64,
+    /// Total verified residual solutions promoted into `cache`.
+    pub cache_stores: u64,
+    /// Total stale or contradicted cache slots evicted.
+    pub cache_evictions: u64,
+    /// Total miss-path orthogonal spillover modulations applied.
+    pub spillover_modulations: u64,
+    /// Total retractions executed via `on_slide_out`.
+    pub retractions: u64,
+    /// Staged or computed orthogonal residual phases for the active auxiliary dimension.
+    pub active_spillover_residual_q7: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    /// Most recent context hash associated with the active spillover step.
+    pub last_context_hash: u64,
+    /// Cache slot index hit on the latest slide-in step (for targeted contradiction penalty).
+    pub last_hit_slot: Option<usize>,
+    saved_aperture_mask: u32,
+    engaged: bool,
+    has_staged_residual: bool,
+}
+
+/// Default 16-slot (~3 KB) Tier-1 host-RAM residual spillover horizon slot.
+pub type DefaultResidualSpilloverSlot = ResidualSpilloverHorizonSlot<16>;
+
+impl<const N: usize> Default for ResidualSpilloverHorizonSlot<N> {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const N: usize> ResidualSpilloverHorizonSlot<N> {
+    /// Creates a dormant [`ResidualSpilloverHorizonSlot`] with L1-friendly defaults.
+    #[inline]
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            cache: RamPhaseKvCache::new(),
+            slot_bit: 1 << 1,
+            slide_in_dwell: 2,
+            slide_out_dwell: 2,
+            retain_factor: 0.95,
+            reinforcement_gain: 0.35,
+            evict_pheromone_floor: 0.15,
+            epoch: 0,
+            cache_hits: 0,
+            cache_stores: 0,
+            cache_evictions: 0,
+            spillover_modulations: 0,
+            retractions: 0,
+            active_spillover_residual_q7: [0; MAX_ATTENTION_HEADS],
+            last_context_hash: 0,
+            last_hit_slot: None,
+            saved_aperture_mask: 0,
+            engaged: false,
+            has_staged_residual: false,
+        }
+    }
+
+    /// Stages peeled 64-head residual words from a [`DissipativeOverflowReport`] when a primary
+    /// attractor lane saturated.
+    #[inline]
+    pub fn stage_overflow_report(&mut self, report: &DissipativeOverflowReport) {
+        if report.overflowed {
+            self.active_spillover_residual_q7 = words_to_q7_array_64(&report.residual_words);
+            self.has_staged_residual = true;
+        }
+    }
+
+    /// Manually stages an auxiliary 64-head residual vector for miss-path dimension elevation.
+    #[inline]
+    pub fn stage_residual_phases(&mut self, phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) {
+        self.active_spillover_residual_q7 = *phases;
+        self.has_staged_residual = true;
+    }
+
+    /// Commits post-step outcome feedback into `cache`, preventing noise pollution by storing new
+    /// residual patterns only when `resolved && coherence > 0.0`, and immediately penalizing a
+    /// misbehaving cached hit when `!resolved`. Returns `(stored_new, evicted_count)`.
+    #[inline]
+    pub fn commit_verified_experience(
+        &mut self,
+        context_hash: u64,
+        residual_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        coherence: f32,
+        resolved: bool,
+    ) -> (bool, u32) {
+        let key = if context_hash != 0 {
+            context_hash
+        } else {
+            self.last_context_hash
+        };
+        if resolved && coherence > 0.0 {
+            if key == 0 {
+                return (false, 0);
+            }
+            self.cache.store_context_keyframe(
+                key,
+                self.epoch,
+                0,
+                residual_phases,
+                CognitiveTrajectoryLedger::new(),
+                CognitiveCircuitActivation::default(),
+                self.epoch,
+            );
+            if let Some((idx, _, _)) = self.cache.lookup_context_or_resonate(
+                key,
+                &load_q7_words_64(residual_phases),
+                127,
+                self.epoch,
+            ) {
+                let _ = self.cache.step_slot_pheromone(
+                    idx,
+                    self.retain_factor,
+                    self.reinforcement_gain,
+                    coherence,
+                    false,
+                    self.evict_pheromone_floor,
+                );
+            }
+            self.cache_stores = self.cache_stores.saturating_add(1);
+            return (true, 0);
+        }
+        if !resolved {
+            if let Some(hit_idx) = self.last_hit_slot.take() {
+                let (_, evicted) = self.cache.step_slot_pheromone(
+                    hit_idx,
+                    self.retain_factor,
+                    self.reinforcement_gain,
+                    0.0,
+                    true,
+                    self.evict_pheromone_floor,
+                );
+                if evicted {
+                    self.cache_evictions = self.cache_evictions.saturating_add(1);
+                    return (false, 1);
+                }
+            }
+        }
+        (false, 0)
+    }
+
+    #[inline]
+    fn fold_context_hash(frame: &GatewayFrame, base_w: &[u64; NUM_STIGMERGIC_GRANULES]) -> u64 {
+        let mut h = if frame.tagged_ptr != 0 {
+            frame.tagged_ptr
+        } else {
+            base_w[0] ^ base_w[1].rotate_left(13) ^ base_w[2].rotate_left(29) ^ 0x9E37_79B9_7F4A_7C15
+        };
+        h = branchless_splitmix64(h);
+        if h == 0 {
+            1
+        } else {
+            h
+        }
+    }
+}
+
+impl<const N: usize> LatentHorizonSlot for ResidualSpilloverHorizonSlot<N> {
+    #[inline(always)]
+    fn horizon_slot_mask(&self) -> u32 {
+        self.slot_bit
+    }
+
+    #[inline(always)]
+    fn min_slide_in_dwell(&self) -> u16 {
+        self.slide_in_dwell.max(1)
+    }
+
+    #[inline(always)]
+    fn min_slide_out_dwell(&self) -> u16 {
+        self.slide_out_dwell.max(1)
+    }
+
+    #[inline]
+    fn on_slide_in_modulate(
+        &mut self,
+        frame: &mut GatewayFrame,
+        stack: &mut AutonomousCoreLayerStack,
+        _trigger: &HorizonTriggerInput,
+    ) {
+        if !self.engaged {
+            self.saved_aperture_mask = stack.liminal_layer.active_aperture_mask;
+            self.engaged = true;
+        }
+        self.epoch = self.epoch.wrapping_add(1);
+        let evicted = self
+            .cache
+            .evaporate_experience_cache(self.retain_factor, self.evict_pheromone_floor);
+        self.cache_evictions = self.cache_evictions.saturating_add(u64::from(evicted));
+
+        let mut frame_w = *frame.phase_words_ref();
+        let ctx_hash = Self::fold_context_hash(frame, &frame_w);
+        self.last_context_hash = ctx_hash;
+
+        if let Some((slot_idx, _, _)) =
+            self.cache
+                .lookup_context_or_resonate(ctx_hash, &frame_w, 32, self.epoch)
+        {
+            let cached_phases = self.cache.entries()[slot_idx].keyframe.anchor_phases;
+            self.active_spillover_residual_q7 = cached_phases;
+            let cached_w = load_q7_words_64(&cached_phases);
+            for (dst, &cw) in frame_w.iter_mut().zip(cached_w.iter()) {
+                *dst = swar_q7_circular_add_x8(*dst, cw);
+            }
+            *frame.phase_words_mut() = frame_w;
+            frame.action_mode_flags |= ACTION_MODE_SUBHEAD_ROUTE | ACTION_MODE_RANK1_INJECT;
+            stack.liminal_layer.active_aperture_mask |= 1 << 6;
+            self.last_hit_slot = Some(slot_idx);
+            self.cache_hits = self.cache_hits.saturating_add(1);
+            return;
+        }
+
+        self.last_hit_slot = None;
+        let residual_w = if self.has_staged_residual {
+            load_q7_words_64(&self.active_spillover_residual_q7)
+        } else {
+            // Orthogonal quadrature residual when no overflow residual was explicitly staged.
+            let mut ortho = [0u64; NUM_STIGMERGIC_GRANULES];
+            for (g, dst) in ortho.iter_mut().enumerate() {
+                let src = frame_w[(g + 2) & (NUM_STIGMERGIC_GRANULES - 1)];
+                *dst = swar_q7_scale_le128_with_bias_x8(src, 32, 0);
+            }
+            self.active_spillover_residual_q7 = words_to_q7_array_64(&ortho);
+            ortho
+        };
+        for (dst, &rw) in frame_w.iter_mut().zip(residual_w.iter()) {
+            *dst = swar_q7_circular_add_x8(*dst, rw);
+        }
+        *frame.phase_words_mut() = frame_w;
+        frame.action_mode_flags |= ACTION_MODE_SUBHEAD_ROUTE;
+        stack.liminal_layer.active_aperture_mask |= 1 << 6;
+        self.has_staged_residual = false;
+        self.spillover_modulations = self.spillover_modulations.saturating_add(1);
+    }
+
+    #[inline]
+    fn on_slide_out(
+        &mut self,
+        _frame: &mut GatewayFrame,
+        stack: &mut AutonomousCoreLayerStack,
+        _trigger: &HorizonTriggerInput,
+    ) {
+        let added = (1 << 6) & !self.saved_aperture_mask;
+        stack.liminal_layer.active_aperture_mask &= !added;
+        self.engaged = false;
+        self.last_hit_slot = None;
+        self.has_staged_residual = false;
+        self.retractions = self.retractions.saturating_add(1);
+    }
+}
+
+impl<const N: usize> HorizonEscalationProvider for ResidualSpilloverHorizonSlot<N> {
+    #[inline]
+    fn try_escalate_horizon(
+        &mut self,
+        req: &HorizonEscalationRequest,
+        slot_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> GcsoResult<Option<f32>> {
+        use crate::traits::telemetry::PheromoneDensityOps;
+        if !req.trigger.is_destabilized() {
+            return Ok(None);
+        }
+        let query_w = load_q7_words_64(&self.active_spillover_residual_q7);
+        if let Some((slot_idx, _, _)) =
+            self.cache
+                .lookup_context_or_resonate(self.last_context_hash, &query_w, 32, self.epoch)
+        {
+            let entry = &self.cache.entries()[slot_idx];
+            *slot_phase_out = entry.keyframe.anchor_phases;
+            let weight = branchless_clamp_f32(entry.pheromone_density(), 0.4, 2.0);
+            return Ok(Some(weight));
+        }
+        Ok(None)
     }
 }
 

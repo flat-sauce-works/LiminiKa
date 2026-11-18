@@ -128,6 +128,12 @@ pub struct SystemSpineTelemetry {
     pub mode_demotions: u64,
     /// Number of Slow-Loop epoch evaluations performed.
     pub slow_loop_epochs: u64,
+    /// Number of auxiliary residual spillover cache hits (`RamPhaseKvCache` recall).
+    pub experience_cache_hits: u64,
+    /// Number of verified auxiliary residual experiences promoted into RAM cache.
+    pub experience_cache_stores: u64,
+    /// Number of stale or contradicted cache entries evicted below pheromone floor.
+    pub experience_cache_evictions: u64,
     /// Latest bounded Slow-Loop repulse bias adjustment in Q0.7 (`-16..=16`).
     pub slow_loop_repulse_bias_q7: i8,
     /// Latest bounded Slow-Loop `min_slide_out_dwell` delta (`-1..=2`).
@@ -263,6 +269,9 @@ impl CoreTelemetryBank {
                 mode_promotions: 0,
                 mode_demotions: 0,
                 slow_loop_epochs: 0,
+                experience_cache_hits: 0,
+                experience_cache_stores: 0,
+                experience_cache_evictions: 0,
                 slow_loop_repulse_bias_q7: 0,
                 slow_loop_dwell_delta: 0,
                 reserved: [0; 6],
@@ -321,6 +330,15 @@ impl CoreTelemetryBank {
         self.layer2 = EgoLayerTelemetry::default();
         self.system = SystemSpineTelemetry::default();
         self.detailed = DetailedLayerTelemetry::default();
+    }
+
+    /// Synchronizes Tier-1 residual experience cache cumulative metrics (`hits`, `stores`,
+    /// `evictions`) onto `+ System` telemetry in zero-alloc mode.
+    #[inline(always)]
+    pub fn sync_experience_metrics(&mut self, hits: u64, stores: u64, evictions: u64) {
+        self.system.experience_cache_hits = hits;
+        self.system.experience_cache_stores = stores;
+        self.system.experience_cache_evictions = evictions;
     }
 
     /// Evaluates automatic verbosity policy with dwell anti-chattering and returns the updated mode.

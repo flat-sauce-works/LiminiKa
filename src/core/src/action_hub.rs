@@ -121,6 +121,7 @@ use crate::traits::rope::{
     dispatch_fused_ripa_and_pspm_words_core, resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim,
     steer_from_swar_words_core_safe, PhaseSteering,
 };
+use crate::traits::telemetry::PheromoneDensityOps;
 use crate::traits::telemetry::{
     select_rewire_bridge_and_modulate_with_preloaded_words_64, ContrastivePhaseBloomFilter,
     FastPathLedger, StigmergicActionPtrOps, StigmergicReconstitutionOps, StigmergicTrailOps,
@@ -1160,22 +1161,16 @@ impl ActionHubEngine {
         let active_len = self.inline_active_len();
         let mut i = 0usize;
         while i < active_len {
-            let decayed = branchless_flush_subnormal_f32(
-                branchless_relu_f32(self.trails[i].stigmergic_density) * retain,
-            );
-            self.trails[i].stigmergic_density = decayed;
+            let _ = self.trails[i].evaporate_pheromone(retain);
             i += 1;
         }
 
-        let cur_rho = branchless_flush_subnormal_f32(
-            branchless_relu_f32(trail_inout.stigmergic_density) * retain,
+        let next_rho = trail_inout.step_pheromone(
+            retain,
+            self.thresholds.reinforcement_gain,
+            phase_coherence,
+            contradiction_repulsed,
         );
-        let pos_coh = branchless_clamp_f32(branchless_relu_f32(phase_coherence), 0.0, 1.0);
-        let deposit = branchless_relu_f32(self.thresholds.reinforcement_gain) * (1.0 + pos_coh);
-        let reinforced_rho = branchless_min_f32(cur_rho + deposit, MAX_STIGMERGIC_DENSITY);
-        let damped_rho = branchless_flush_subnormal_f32(cur_rho * 0.5);
-        let next_rho = branchless_select_f32(contradiction_repulsed, damped_rho, reinforced_rho);
-        trail_inout.stigmergic_density = next_rho;
 
         let slot_idx = self.write_cursor & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
         Self::copy_trail_to_slot_fast(&mut self.trails[slot_idx as usize], trail_inout);
