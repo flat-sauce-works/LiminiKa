@@ -133,7 +133,8 @@ gcso_abi_get_version(uint32_t* GCSO_RESTRICT major, uint32_t* GCSO_RESTRICT mino
 }
 
 /**
- * @brief Returns the static semantic version string literal for the GCSO kernel engine (`GCSO_ABI_VERSION_STRING`).
+ * @brief Returns the static semantic version string literal for the GCSO kernel engine
+ * (`GCSO_ABI_VERSION_STRING`).
  *
  * @return Const pointer to null-terminated static version string.
  */

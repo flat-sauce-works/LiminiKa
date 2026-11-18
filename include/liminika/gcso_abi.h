@@ -28,7 +28,7 @@
 #define GCSO_ABI_VERSION_MAJOR 0U
 #define GCSO_ABI_VERSION_MINOR 1U
 #define GCSO_ABI_VERSION_PATCH 2U
-#define GCSO_ABI_VERSION_HEX                                                                       \
+#define GCSO_ABI_VERSION_HEX \
     ((GCSO_ABI_VERSION_MAJOR << 16U) | (GCSO_ABI_VERSION_MINOR << 8U) | GCSO_ABI_VERSION_PATCH)
 #define GCSO_ABI_VERSION_STRING "0.1.2"
 

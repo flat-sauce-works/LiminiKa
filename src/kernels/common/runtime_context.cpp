@@ -267,7 +267,7 @@ gcso_context_serialize(gcso_context_handle_t context, uint8_t* GCSO_RESTRICT buf
         std::memset(buffer, 0, required_bytes);
 
         auto* header = reinterpret_cast<gcso_snapshot_header_t*>(buffer);
-        header->magic = GCSO_SNAPSHOT_MAGIC;    // ASCII "GCSO" (0x4F534347)
+        header->magic = GCSO_SNAPSHOT_MAGIC; // ASCII "GCSO" (0x4F534347)
         header->version = GCSO_ABI_VERSION_HEX;
         header->total_size = static_cast<uint64_t>(required_bytes);
 
