@@ -388,6 +388,9 @@ pub struct ModelSteeringAdapter {
     active_horizon_slots_mask: u32,
     coherence_guard_slot: CoherenceHorizonGuardSlot,
     residual_spillover: Box<DefaultResidualSpilloverSlot>,
+    escalation_boundary_dirty: bool,
+    last_escalated_regime: u8,
+    active_workbench_preset: WorkbenchPreset,
 }
 
 impl ModelSteeringAdapter {
@@ -460,6 +463,9 @@ impl ModelSteeringAdapter {
             active_horizon_slots_mask: 0,
             coherence_guard_slot: CoherenceHorizonGuardSlot::default(),
             residual_spillover: Box::default(),
+            escalation_boundary_dirty: true,
+            last_escalated_regime: EpistemicRegime::KnownCoherent as u8,
+            active_workbench_preset: WorkbenchPreset::BalancedDialog,
         })
     }
 
@@ -497,6 +503,9 @@ impl ModelSteeringAdapter {
         self.action_hub.thresholds = self.calibrated_base_thresholds;
         self.action_hub.last_decision = 0;
         self.action_hub.last_anomaly_severity = 0.0;
+        self.escalation_boundary_dirty = true;
+        self.last_escalated_regime = EpistemicRegime::KnownCoherent as u8;
+        self.active_workbench_preset = WorkbenchPreset::BalancedDialog;
         self.telemetry.set_policy(self.telemetry.policy());
         self.reset_action_hub_stats();
     }
@@ -989,7 +998,34 @@ impl ModelSteeringAdapter {
             None
         };
         self.last_ensemble_report = ensemble_report;
+        self.escalation_boundary_dirty = true;
+        self.active_workbench_preset = WorkbenchPreset::from_regime_code(horizon.regime_code);
         (horizon, venn, ensemble_report)
+    }
+
+    /// Returns the currently active [`WorkbenchPreset`] selected for the 8-lane working bank.
+    #[must_use]
+    pub const fn active_workbench_preset(&self) -> WorkbenchPreset {
+        self.active_workbench_preset
+    }
+
+    /// Switches the 8-lane working phase workbench to `preset` and atomically swaps `specs`
+    /// into [`ActionHubEngine`], returning the number of lanes updated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any `spec.lane >= 8`.
+    pub fn switch_workbench_preset(
+        &mut self,
+        preset: WorkbenchPreset,
+        specs: &[WorkbenchSlotSpec],
+    ) -> Result<u8, String> {
+        let updated = self
+            .action_hub
+            .apply_workbench_preset_lanes(preset.recommended_lane_mask(), specs)
+            .map_err(|e| format!("apply_workbench_preset_lanes error: {e}"))?;
+        self.active_workbench_preset = preset;
+        Ok(updated)
     }
 
     /// Captures the live [`LiminalTopologyTelemetrySnapshot`] and renders a self-introspecting
@@ -1571,10 +1607,23 @@ impl ModelSteeringAdapter {
                 desired_aperture_mask: this.core_layers.liminal_layer.active_aperture_mask,
                 current_frame_energy: this.last_horizon.total_memory_support,
             };
-            let escalated = this
-                .action_hub
-                .apply_horizon_escalation(&esc_req, escalation_provider)
-                .map_err(|e| format!("apply_horizon_escalation error: {e}"))?;
+            let lane_bit = 1u8 << ATTRACTOR_SLOT_CUSTOM_7;
+            let lane_active = (this.action_hub.slot_enabled_mask & lane_bit) != 0;
+            let should_check_escalation = this.escalation_boundary_dirty
+                || pre_trigger.epistemic_regime != this.last_escalated_regime
+                || (lane_active && pre_trigger.can_retract())
+                || (!lane_active && pre_trigger.is_destabilized());
+            let escalated = if should_check_escalation {
+                let sw = this
+                    .action_hub
+                    .apply_horizon_escalation(&esc_req, escalation_provider)
+                    .map_err(|e| format!("apply_horizon_escalation error: {e}"))?;
+                this.escalation_boundary_dirty = false;
+                this.last_escalated_regime = pre_trigger.epistemic_regime;
+                sw
+            } else {
+                false
+            };
 
             let core_ctx = Self::build_core_layer_ctx(
                 &this.core_layers,

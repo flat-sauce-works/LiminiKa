@@ -51,6 +51,7 @@ pub mod pooling;
 pub mod reflection;
 pub mod stratum;
 
+pub use liminika_core::action_hub::{WorkbenchPreset, WorkbenchSlotSpec};
 pub use pooling::*;
 pub use reflection::*;
 pub use stratum::*;

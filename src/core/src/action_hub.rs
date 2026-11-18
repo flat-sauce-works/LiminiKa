@@ -113,9 +113,12 @@ use crate::traits::primitives::{
     pack_action_slot_tag, unpack_attractor_slot_from_tag, GcsoResult, Pod, ACTION_MODE_DPSR_STEER,
     ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE,
     ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION,
-    DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_RIPA_CLAMP_MAX_RAD, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
-    FAST_PATH_SHORTCUT_SLOTS, LEDGER_HISTORY_LEN, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_CUSTOM_5, ATTRACTOR_SLOT_CUSTOM_6,
+    ATTRACTOR_SLOT_CUSTOM_7, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_KNOWLEDGE,
+    ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE,
+    ATTRACTOR_SLOT_USER_CONTEXT, DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_RIPA_CLAMP_MAX_RAD,
+    DEFAULT_SLOT_COUPLING_MATRIX_8X8, FAST_PATH_SHORTCUT_SLOTS, LEDGER_HISTORY_LEN,
+    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
 };
 use crate::traits::rope::{
     dispatch_fused_ripa_and_pspm_words_core, resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim,
@@ -232,6 +235,93 @@ impl StigmergicActionDecision {
                 ACTION_PRESET_FULL_ORCHESTRATION
             }
             Self::RepulsionEscape => ACTION_PRESET_REPULSION_ESCAPE,
+        }
+    }
+}
+
+/// Preset regime profile for configuring [`ActionHubEngine`]'s 8-lane phase workbench
+/// at prompt or epistemic regime boundaries.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkbenchPreset {
+    /// Balanced dialogue profile enabling baseline, persona, fact, and user-context lanes (`0`).
+    #[default]
+    BalancedDialog = 0,
+    /// Factual grounding profile emphasizing knowledge, baseline, and custom specialist lanes (`1`).
+    FactualGrounding = 1,
+    /// Conflict/guard defense profile emphasizing repulsion, knowledge counter-anchor, and spare lane 7 (`2`).
+    GuardDefense = 2,
+    /// Exploratory liminal profile emphasizing persona, context, and custom lanes 5..=7 (`3`).
+    CreativeLiminal = 3,
+}
+
+impl WorkbenchPreset {
+    /// Maps an epistemic regime code (`0=KnownCoherent`, `1=InternalConflict`, `2=Liminal`) to
+    /// its default [`WorkbenchPreset`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn from_regime_code(regime_code: u8) -> Self {
+        match regime_code {
+            1 => Self::GuardDefense,
+            2 => Self::CreativeLiminal,
+            _ => Self::BalancedDialog,
+        }
+    }
+
+    /// Returns the 8-bit lane enable mask (`0..=7`) recommended for this preset.
+    #[inline(always)]
+    #[must_use]
+    pub const fn recommended_lane_mask(self) -> u8 {
+        match self {
+            Self::BalancedDialog => {
+                (1u8 << ATTRACTOR_SLOT_SYSTEM_BASELINE)
+                    | (1u8 << ATTRACTOR_SLOT_PERSONA)
+                    | (1u8 << ATTRACTOR_SLOT_KNOWLEDGE)
+                    | (1u8 << ATTRACTOR_SLOT_USER_CONTEXT)
+            }
+            Self::FactualGrounding => {
+                (1u8 << ATTRACTOR_SLOT_SYSTEM_BASELINE)
+                    | (1u8 << ATTRACTOR_SLOT_KNOWLEDGE)
+                    | (1u8 << ATTRACTOR_SLOT_CUSTOM_5)
+                    | (1u8 << ATTRACTOR_SLOT_CUSTOM_6)
+            }
+            Self::GuardDefense => {
+                (1u8 << ATTRACTOR_SLOT_SYSTEM_BASELINE)
+                    | (1u8 << ATTRACTOR_SLOT_KNOWLEDGE)
+                    | (1u8 << ATTRACTOR_SLOT_REPULSION)
+                    | (1u8 << ATTRACTOR_SLOT_CUSTOM_7)
+            }
+            Self::CreativeLiminal => {
+                (1u8 << ATTRACTOR_SLOT_PERSONA)
+                    | (1u8 << ATTRACTOR_SLOT_USER_CONTEXT)
+                    | (1u8 << ATTRACTOR_SLOT_CUSTOM_5)
+                    | (1u8 << ATTRACTOR_SLOT_CUSTOM_6)
+                    | (1u8 << ATTRACTOR_SLOT_CUSTOM_7)
+            }
+        }
+    }
+}
+
+/// Zero-alloc POD descriptor for swapping a single specialist lane (`0..=7`) on
+/// [`ActionHubEngine`]'s 8-lane working phase workbench.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WorkbenchSlotSpec {
+    /// Target lane index (`0..=7`).
+    pub lane: u8,
+    /// Non-negative lane weight.
+    pub weight: f32,
+    /// 64-head Q0.7 phase profile loaded into the lane.
+    pub phases: [gcso_q7_t; MAX_ATTENTION_HEADS],
+}
+
+impl Default for WorkbenchSlotSpec {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            lane: 0,
+            weight: 0.0,
+            phases: [0; MAX_ATTENTION_HEADS],
         }
     }
 }
@@ -1137,6 +1227,44 @@ impl ActionHubEngine {
             self.slot_weights[lane_idx] = 0.0;
         }
         Ok(false)
+    }
+
+    /// Returns the bitmask of currently enabled lanes (`0..=7`) on the 8-lane working phase bank.
+    #[inline(always)]
+    #[must_use]
+    pub const fn active_workbench_lane_mask(&self) -> u8 {
+        self.slot_enabled_mask
+    }
+
+    /// Atomically swaps a preset batch of specialist lanes into the 8-lane working phase bank
+    /// (`slot_phase_bank` + `slot_weights`) and updates `slot_enabled_mask` in zero-alloc
+    /// constant space, returning the count of updated lanes.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any `spec.lane >= MAX_ATTRACTOR_DOMAINS`.
+    #[inline]
+    pub fn apply_workbench_preset_lanes(
+        &mut self,
+        enable_mask: u8,
+        specs: &[WorkbenchSlotSpec],
+    ) -> GcsoResult<u8> {
+        let mut updated = 0u8;
+        let mut idx = 0usize;
+        while idx < specs.len() {
+            let spec = &specs[idx];
+            if usize::from(spec.lane) >= crate::traits::primitives::MAX_ATTRACTOR_DOMAINS {
+                return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            }
+            let lane_idx = usize::from(spec.lane);
+            let start = lane_idx * crate::traits::primitives::MAX_ATTENTION_HEADS;
+            let end = start + crate::traits::primitives::MAX_ATTENTION_HEADS;
+            self.slot_phase_bank.data[start..end].copy_from_slice(&spec.phases);
+            self.slot_weights[lane_idx] = branchless_relu_f32(spec.weight);
+            updated = updated.saturating_add(1);
+            idx += 1;
+        }
+        self.slot_enabled_mask = enable_mask;
+        Ok(updated)
     }
 
     /// Applies per-step pheromone evaporation ($\rho_j \gets \rho_j \cdot \lambda_{\mathrm{retain}}$)

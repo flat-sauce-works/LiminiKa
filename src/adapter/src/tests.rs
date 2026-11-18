@@ -2535,3 +2535,81 @@ fn test_slow_loop_updates_threshold_policy_without_exponential_drift() {
     assert!(mermaid.contains("Kind:ActiveOverdrive"));
     assert!(mermaid.contains("COOLDOWN"));
 }
+
+#[test]
+fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let q_len = adapter.geometry().q_rot_len();
+    let num_layers = adapter.geometry().num_layers;
+    let ref_q = vec![0.0_f32; q_len];
+    let guard_q: Vec<f32> = (0..q_len)
+        .map(|i| if (i & 1) == 0 { 0.8 } else { -0.4 })
+        .collect();
+    let ref_slices: Vec<&[f32]> = vec![ref_q.as_slice(); num_layers];
+    let guard_slices: Vec<&[f32]> = vec![guard_q.as_slice(); num_layers];
+
+    let mut corpus = TextAttractorCorpus::new();
+    corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Guard,
+            "Contradiction guard",
+            &guard_slices,
+            &ref_slices,
+            2.0,
+        )
+        .expect("ingest guard");
+
+    // 1. Switch 8-lane workbench preset atomically.
+    let specs = [
+        WorkbenchSlotSpec {
+            lane: ATTRACTOR_SLOT_CUSTOM_7,
+            weight: 1.25,
+            phases: [16_i8; MAX_ATTENTION_HEADS],
+        },
+        WorkbenchSlotSpec {
+            lane: ATTRACTOR_SLOT_KNOWLEDGE,
+            weight: 1.50,
+            phases: [8_i8; MAX_ATTENTION_HEADS],
+        },
+    ];
+    let updated = adapter
+        .switch_workbench_preset(WorkbenchPreset::FactualGrounding, &specs)
+        .expect("switch preset");
+    assert_eq!(updated, 2);
+    assert_eq!(
+        adapter.active_workbench_preset(),
+        WorkbenchPreset::FactualGrounding
+    );
+    assert_eq!(
+        adapter.action_hub().active_workbench_lane_mask(),
+        WorkbenchPreset::FactualGrounding.recommended_lane_mask()
+    );
+
+    // 2. Within the same destabilized regime across 16 steered layers, escalation runs once at
+    //    the regime boundary rather than repeating on every layer.
+    adapter.reset_horizon_and_core_state();
+    adapter.adapt_core_layers(
+        &liminika_core::traits::gateway::EpistemicHorizonReading {
+            total_memory_support: 0.4,
+            conflict_severity: 0.75,
+            regime_code: liminika_core::traits::gateway::EpistemicRegime::InternalConflict as u8,
+            ..liminika_core::traits::gateway::EpistemicHorizonReading::default()
+        },
+        &liminika_core::traits::gateway::StigmergicVennSerendipityReport::default(),
+        None,
+    );
+    let mut esc = CorpusRecallEscalationProvider::new(&corpus);
+    let mut trail = gcso_pointer_trail_t::default();
+    let sig = ObjectiveFact::new([12_i8; 64], 1.5, 0, 1);
+    let mut q = vec![0.25_f32; q_len];
+    for layer_idx in 0..num_layers {
+        let _ = adapter
+            .orchestrate_layer_rope_with_spillover(
+                layer_idx, &sig, &mut esc, &mut trail, None, 128, &mut q, None,
+            )
+            .expect("layer step");
+    }
+    assert_eq!(esc.escalation_calls, 1);
+    assert_eq!(adapter.telemetry_snapshot().layer2.escalation_swaps, 1);
+}
