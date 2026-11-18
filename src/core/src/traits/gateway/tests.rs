@@ -293,6 +293,12 @@ fn test_adaptive_threshold_policy_probe_and_telemetry_scaling() {
     assert!(stressed_t.inertial_skip_entropy_thresh > high_coh_t.inertial_skip_entropy_thresh);
     assert!(stressed_t.rank1_inject_density_thresh > high_coh_t.rank1_inject_density_thresh);
     assert!(stressed_t.crystallize_density_thresh > high_coh_t.crystallize_density_thresh);
+
+    // Higher baseline_entropy gauge origin proportionally lifts inertial_skip_entropy_thresh.
+    let mut high_h0_probe = probe;
+    high_h0_probe.baseline_entropy = 0.50;
+    let high_h0_t = policy.resolve_thresholds(&low_pressure, &high_h0_probe, &trail, 0.50);
+    assert!(high_h0_t.inertial_skip_entropy_thresh > high_coh_t.inertial_skip_entropy_thresh);
 }
 
 #[test]

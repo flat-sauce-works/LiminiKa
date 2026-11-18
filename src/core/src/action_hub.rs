@@ -440,8 +440,10 @@ impl StigmergicThresholds {
 
         let is_low_entropy_skip = (!is_repulsed) & (h_tilde <= self.inertial_skip_entropy_thresh);
         let srl_entropy_min = self.inertial_skip_entropy_thresh * 1.6_f32;
+        let pspm_entropy_fallback = self.inertial_skip_entropy_thresh * 3.6_f32;
         let ge_steer = rho >= self.express_steer_density_thresh;
-        let ge_pspm = (rho >= self.subhead_route_density_thresh) | (h_tilde >= 0.55);
+        let ge_pspm = (rho >= self.subhead_route_density_thresh)
+            | (ge_steer & (h_tilde >= pspm_entropy_fallback));
         let ge_srl = (rho >= self.rank1_inject_density_thresh) & (h_tilde > srl_entropy_min);
         let ge_crystal = (rho >= self.crystallize_density_thresh)
             & (coh >= DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE);
@@ -2418,6 +2420,14 @@ mod tests {
             thresh.select_action_decision(0.55, 0.30, 0.85, false, ATTRACTOR_SLOT_KNOWLEDGE);
         assert_eq!(dec2, StigmergicActionDecision::ExpressPhaseSteer);
         assert_eq!(flags2, ACTION_PRESET_EXPRESS_PHASE);
+
+        // 2b. High-entropy fallback requires at least express_steer_density_thresh; sub-express stays PassiveSidecar.
+        let (dec2_low, _, _, _) =
+            thresh.select_action_decision(0.10, 0.60, 0.85, false, ATTRACTOR_SLOT_KNOWLEDGE);
+        assert_eq!(dec2_low, StigmergicActionDecision::PassiveSidecar);
+        let (dec2_fb, _, _, _) =
+            thresh.select_action_decision(0.55, 0.60, 0.85, false, ATTRACTOR_SLOT_KNOWLEDGE);
+        assert_eq!(dec2_fb, StigmergicActionDecision::SubHeadRoute);
 
         // 3. SubHeadRoute: 0.85 <= density < 1.50
         let (dec3, flags3, _, _) =

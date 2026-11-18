@@ -882,9 +882,9 @@ impl CoreTelemetryBank {
             1.25,
         );
         let skip_entropy_scale = branchless_clamp_f32(
-            1.0 + (rank1_ratio - 0.45) * 0.35 - (skip_ratio - 0.25) * 0.35,
+            1.0 + (rank1_ratio - 0.55) * 0.20 - (skip_ratio - 0.10) * 0.35,
             0.85,
-            1.20,
+            1.08,
         );
         let contradict_scale = branchless_clamp_f32(
             1.0 + (repulse_ratio - 0.45) * 0.25 - (excursion_ratio - 0.30) * 0.15,

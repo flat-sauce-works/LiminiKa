@@ -1267,8 +1267,18 @@ impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
         } else {
             0.0_f32
         };
+        let ref_h0 = branchless_clamp_f32(
+            branchless_select_f32(
+                branchless_is_finite_f32(probe.baseline_entropy) & (probe.baseline_entropy > 0.01),
+                probe.baseline_entropy,
+                0.35,
+            ),
+            0.10,
+            0.90,
+        );
+        let h0_scale = branchless_clamp_f32(ref_h0 * (1.0_f32 / 0.35_f32), 0.80, 1.45);
         let skip_thresh = branchless_clamp_f32(
-            self.base.inertial_skip_entropy_thresh * (1.0_f32 + 0.75_f32 * pressure),
+            self.base.inertial_skip_entropy_thresh * h0_scale * (1.0_f32 + 0.75_f32 * pressure),
             0.05,
             0.45,
         );

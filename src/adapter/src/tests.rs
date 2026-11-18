@@ -2507,9 +2507,18 @@ fn test_slow_loop_updates_threshold_policy_without_exponential_drift() {
             .rank1_inject_density_thresh,
         first_rank1
     );
-    assert_eq!(
-        adapter.action_hub().thresholds.rank1_inject_density_thresh,
-        first_rank1
+    let policy_copy = *adapter.threshold_policy_mut();
+    let expected_resolved = policy_copy.resolve_thresholds(
+        adapter.system_constraint(),
+        adapter.probe_baseline(),
+        &gcso_pointer_trail_t::default(),
+        adapter.probe_baseline().baseline_entropy,
+    );
+    assert!(
+        (adapter.action_hub().thresholds.rank1_inject_density_thresh
+            - expected_resolved.rank1_inject_density_thresh)
+            .abs()
+            < 1e-6
     );
 
     // Second epoch over the same cumulative distribution must remain bounded against the

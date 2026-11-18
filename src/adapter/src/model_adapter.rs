@@ -553,7 +553,13 @@ impl ModelSteeringAdapter {
         let adj = self.evaluate_slow_loop_telemetry(min_samples);
         if adj.applied {
             self.threshold_policy.base = adj.tuned_thresholds;
-            self.action_hub.thresholds = adj.tuned_thresholds;
+            let neutral_trail = gcso_pointer_trail_t::default();
+            self.action_hub.thresholds = self.threshold_policy.resolve_thresholds(
+                &self.system_constraint,
+                &self.probe_baseline,
+                &neutral_trail,
+                self.probe_baseline.baseline_entropy,
+            );
             let next_dwell = (2_i16 + i16::from(adj.suggested_slide_out_dwell_delta)).clamp(1, 8);
             self.coherence_guard_slot.slide_out_dwell = next_dwell as u16;
             self.apply_distortion_ego_feedback(&adj.distortion);
