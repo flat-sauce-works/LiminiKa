@@ -2163,3 +2163,151 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
     assert_ne!(ens_rep.quorum_agreed_granule_mask, 0);
     assert!(ego_adapter.aperture_field().adaptation_epochs > epochs_before_sync);
 }
+
+#[test]
+fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
+    use liminika_core::traits::gateway::{EpistemicHorizonReading, ObjectiveFact};
+
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let q_len = adapter.geometry().q_rot_len();
+    let num_layers = adapter.geometry().num_layers;
+    let ref_q = vec![0.0_f32; q_len];
+    let guard_q: Vec<f32> = (0..q_len)
+        .map(|i| if (i & 1) == 0 { 0.8 } else { -0.4 })
+        .collect();
+    let ref_slices: Vec<&[f32]> = vec![ref_q.as_slice(); num_layers];
+    let guard_slices: Vec<&[f32]> = vec![guard_q.as_slice(); num_layers];
+
+    let mut corpus = TextAttractorCorpus::new();
+    corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Guard,
+            "Contradiction guard",
+            &guard_slices,
+            &ref_slices,
+            2.2,
+        )
+        .expect("ingest guard");
+
+    let mut escalation = CorpusRecallEscalationProvider::new(&corpus);
+    let mut custom_slot = CoherenceHorizonGuardSlot::default();
+    let mut trail = gcso_pointer_trail_t::default();
+    let signal = ObjectiveFact::new([18i8; 64], 1.5, 0, 99);
+    let mut q_rot = vec![0.5_f32; q_len];
+
+    // 1. Nominal coherent baseline -> slot dormant, no corpus escalation.
+    adapter.adapt_core_layers(
+        &EpistemicHorizonReading {
+            total_memory_support: 1.0,
+            peak_positive_affinity: 1.0,
+            horizon_gate: 1.0,
+            regime_code: EpistemicRegime::KnownCoherent as u8,
+            ..EpistemicHorizonReading::default()
+        },
+        &StigmergicVennSerendipityReport::default(),
+        None,
+    );
+    let (_, _, _) = adapter
+        .orchestrate_layer_rope_with_horizon_slots(
+            0,
+            &signal,
+            &mut custom_slot,
+            &mut escalation,
+            &mut trail,
+            None,
+            128,
+            &mut q_rot,
+            None,
+        )
+        .expect("coherent step")
+        .expect("steered layer 0");
+    assert_eq!(adapter.active_horizon_slots_mask(), 0);
+    assert_eq!(custom_slot.activations, 0);
+    assert_eq!(escalation.escalation_calls, 0);
+
+    // 2. Internal conflict enters -> guard slot slides in and CorpusRecallEscalationProvider populates lane 7.
+    adapter.adapt_core_layers(
+        &EpistemicHorizonReading {
+            total_memory_support: 0.4,
+            conflict_severity: 0.75,
+            regime_code: EpistemicRegime::InternalConflict as u8,
+            ..EpistemicHorizonReading::default()
+        },
+        &StigmergicVennSerendipityReport::default(),
+        None,
+    );
+    let (frame_conflict, _, _) = adapter
+        .orchestrate_layer_rope_with_horizon_slots(
+            0,
+            &signal,
+            &mut custom_slot,
+            &mut escalation,
+            &mut trail,
+            None,
+            128,
+            &mut q_rot,
+            None,
+        )
+        .expect("conflict step")
+        .expect("steered layer 0");
+    assert_eq!(adapter.active_horizon_slots_mask(), custom_slot.slot_bit);
+    assert_eq!(custom_slot.activations, 1);
+    assert_eq!(escalation.escalation_calls, 1);
+    assert_ne!(
+        frame_conflict.action_mode_flags & ACTION_MODE_PHASE_REPULSE,
+        0
+    );
+    assert_ne!(
+        adapter.action_hub().slot_enabled_mask & (1 << ATTRACTOR_SLOT_CUSTOM_7),
+        0
+    );
+
+    // 3. Quiescent step 1 holds (slide_out_dwell == 2); quiescent step 2 retracts cleanly.
+    adapter.adapt_core_layers(
+        &EpistemicHorizonReading {
+            total_memory_support: 1.2,
+            peak_positive_affinity: 1.0,
+            horizon_gate: 1.0,
+            regime_code: EpistemicRegime::KnownCoherent as u8,
+            ..EpistemicHorizonReading::default()
+        },
+        &StigmergicVennSerendipityReport::default(),
+        None,
+    );
+    let _ = adapter
+        .orchestrate_layer_rope_with_horizon_slots(
+            0,
+            &signal,
+            &mut custom_slot,
+            &mut escalation,
+            &mut trail,
+            None,
+            128,
+            &mut q_rot,
+            None,
+        )
+        .expect("recover step 1");
+    assert_eq!(adapter.active_horizon_slots_mask(), custom_slot.slot_bit);
+    assert_eq!(custom_slot.retractions, 0);
+
+    let _ = adapter
+        .orchestrate_layer_rope_with_horizon_slots(
+            0,
+            &signal,
+            &mut custom_slot,
+            &mut escalation,
+            &mut trail,
+            None,
+            128,
+            &mut q_rot,
+            None,
+        )
+        .expect("recover step 2");
+    assert_eq!(adapter.active_horizon_slots_mask(), 0);
+    assert_eq!(custom_slot.retractions, 1);
+    assert_eq!(
+        adapter.action_hub().slot_enabled_mask & (1 << ATTRACTOR_SLOT_CUSTOM_7),
+        0
+    );
+}

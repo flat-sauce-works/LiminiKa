@@ -409,6 +409,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     counts[5] as f64 / total as f64 * 100.0,
                     counts[6] as f64 / total as f64 * 100.0,
                 );
+                    let guard_slot = adapter.coherence_guard_slot();
+                    let dwell = adapter.horizon_dwell();
+                    println!(
+                    "   [HorizonSlot] active_mask=0x{:08x} guard_activations={} guard_retractions={} unstable_dwell={} quiescent_dwell={}",
+                    adapter.active_horizon_slots_mask(),
+                    guard_slot.activations,
+                    guard_slot.retractions,
+                    dwell.unstable_dwell_steps,
+                    dwell.quiescent_dwell_steps,
+                );
                 }
                 if label == "Baseline" || label == "Top16 + ActionHub" {
                     println!("   --- Per-Probe Trace ({label}) ---");

@@ -1096,6 +1096,48 @@ impl ActionHubEngine {
         self.slot_phase_bank.relax_slice::<16>()
     }
 
+    /// Evaluates external cold-path escalation (`escalation_provider`) against `req.trigger` and
+    /// swaps phases into `ATTRACTOR_SLOT_CUSTOM_7`, or cleanly clears and retracts that spare lane
+    /// when `req.trigger.can_retract()` holds.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `req.target_slot >= MAX_ATTRACTOR_DOMAINS` or
+    /// propagates any error returned by `escalation_provider`.
+    #[inline]
+    pub fn apply_horizon_escalation<
+        E: crate::traits::gateway::HorizonEscalationProvider + ?Sized,
+    >(
+        &mut self,
+        req: &crate::traits::gateway::HorizonEscalationRequest,
+        escalation_provider: &mut E,
+    ) -> GcsoResult<bool> {
+        if usize::from(req.target_slot) >= crate::traits::primitives::MAX_ATTRACTOR_DOMAINS {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let lane_idx = usize::from(req.target_slot);
+        let lane_bit = 1u8 << req.target_slot;
+        let start = lane_idx * crate::traits::primitives::MAX_ATTENTION_HEADS;
+        let end = start + crate::traits::primitives::MAX_ATTENTION_HEADS;
+        if req.trigger.is_destabilized() {
+            let mut escalated_phases = [0i8; crate::traits::primitives::MAX_ATTENTION_HEADS];
+            if let Some(weight) =
+                escalation_provider.try_escalate_horizon(req, &mut escalated_phases)?
+            {
+                self.slot_phase_bank.data[start..end].copy_from_slice(&escalated_phases);
+                self.slot_weights[lane_idx] = branchless_relu_f32(weight);
+                self.slot_enabled_mask |= lane_bit;
+                return Ok(true);
+            }
+        } else if req.trigger.can_retract() {
+            if (self.slot_enabled_mask & lane_bit) != 0 {
+                self.slot_phase_bank.data[start..end].fill(0);
+            }
+            self.slot_enabled_mask &= !lane_bit;
+            self.slot_weights[lane_idx] = 0.0;
+        }
+        Ok(false)
+    }
+
     /// Applies per-step pheromone evaporation ($\rho_j \gets \rho_j \cdot \lambda_{\mathrm{retain}}$)
     /// across all active inline trails in `self.trails`, deposits pheromone reinforcement
     /// $\Delta\rho = g_{\mathrm{reinforce}} \cdot (1 + \max(0, \mathcal{C}_{\mathrm{phase}}))$ onto

@@ -47,13 +47,14 @@ use crate::traits::{
     AlignedSliceMut16, AlignedSliceMut32, AttractorField, AutonomousCoreLayerStack,
     CausalProvenanceReport, CausalProvenanceSignal, ContrastivePhaseBloomFilter,
     EdbcBranchController, EntropyEvaluator, EpistemicHorizonReading, FastPathLedger, GatewayFrame,
-    GatewayPhaseSteeringExt, GcsoResult, HorizonEscalationProvider, HorizonEscalationRequest,
-    HorizonTriggerInput, KvKeyframeCache, LatentHorizonSlot, LiminalBoundaryDelta,
-    ManifoldGatewaySignal, MappedStorage, MultiDomainAttractorSpace, PersonaPatcher, PhaseSteering,
-    Pod, PointerActionHub, StigmergicActionPtrOps, StigmergicChunkOps, StigmergicTrailOps,
-    StigmergicVennSerendipityReport, SystemConstraintSignal, ACTION_MODE_LAYER_SKIP,
-    ATTRACTOR_SLOT_CUSTOM_7, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
-    ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_SLOT_COUPLING_MATRIX_8X8, TRAIL_FLAG_REPULSION_ACTIVE,
+    GatewayPhaseSteeringExt, GcsoResult, HorizonDwellState, HorizonEscalationProvider,
+    HorizonEscalationRequest, HorizonTriggerInput, KvKeyframeCache, LatentHorizonSlot,
+    LiminalBoundaryDelta, ManifoldGatewaySignal, MappedStorage, MultiDomainAttractorSpace,
+    PersonaPatcher, PhaseSteering, Pod, PointerActionHub, StigmergicActionPtrOps,
+    StigmergicChunkOps, StigmergicTrailOps, StigmergicVennSerendipityReport,
+    SystemConstraintSignal, ACTION_MODE_LAYER_SKIP, ATTRACTOR_SLOT_CUSTOM_7,
+    ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE,
+    DEFAULT_SLOT_COUPLING_MATRIX_8X8, TRAIL_FLAG_REPULSION_ACTIVE,
 };
 
 use crate::traits::branchless::{
@@ -397,6 +398,10 @@ pub struct OrchestratorStatusSnapshot {
     pub stationary_shortcut_ready: bool,
     /// Bitmask of external [`LatentHorizonSlot`] traits currently slid into the cognitive window.
     pub active_horizon_slots_mask: u32,
+    /// Consecutive destabilized steps observed by the orchestrator.
+    pub unstable_dwell_steps: u16,
+    /// Consecutive quiescent steps observed by the orchestrator.
+    pub quiescent_dwell_steps: u16,
 }
 
 /// High-level safe Rust single orchestrator facade integrating concrete core engines
@@ -414,6 +419,7 @@ pub struct RuntimeContext {
     last_boundary_delta: LiminalBoundaryDelta,
     last_horizon: EpistemicHorizonReading,
     last_venn_report: StigmergicVennSerendipityReport,
+    horizon_dwell: HorizonDwellState,
     active_horizon_slots_mask: u32,
 }
 
@@ -452,6 +458,7 @@ impl RuntimeContext {
             last_boundary_delta: LiminalBoundaryDelta::default(),
             last_horizon: EpistemicHorizonReading::default(),
             last_venn_report: StigmergicVennSerendipityReport::default(),
+            horizon_dwell: HorizonDwellState::default(),
             active_horizon_slots_mask: 0,
         })
     }
@@ -521,6 +528,13 @@ impl RuntimeContext {
         self.active_horizon_slots_mask
     }
 
+    /// Returns the consecutive destabilization / quiescence dwell tracker [`HorizonDwellState`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn horizon_dwell(&self) -> HorizonDwellState {
+        self.horizon_dwell
+    }
+
     /// Returns a single-glance [`OrchestratorStatusSnapshot`] summarizing concrete core engines,
     /// 3-layer core stack state, and dynamically active horizon slots.
     #[inline(always)]
@@ -538,6 +552,8 @@ impl RuntimeContext {
             ego_intervention_epochs: self.core_layers.ego_layer.intervention_epochs,
             stationary_shortcut_ready: self.last_boundary_delta.stationary_shortcut_ready != 0,
             active_horizon_slots_mask: self.active_horizon_slots_mask,
+            unstable_dwell_steps: self.horizon_dwell.unstable_dwell_steps,
+            quiescent_dwell_steps: self.horizon_dwell.quiescent_dwell_steps,
         }
     }
 
@@ -1180,17 +1196,26 @@ impl RuntimeContext {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
 
-        // 1. Vertical 3-layer core stack piercing (Liminal -> Stigmergic -> Ego).
+        // 1. Vertical 3-layer core stack piercing (Liminal -> Stigmergic -> Ego) + temporal delta.
+        let prev_layer0 = self.core_layers.liminal_layer;
+        let prev_venn = self.core_layers.stigmergic_layer.venn_overlap_mask;
         let (mut frame, mut frm_w) = signal.synthesize_gateway_with_core_layers(
             &mut self.core_layers,
             &self.last_boundary_delta,
             &self.last_horizon,
             &self.last_venn_report,
         );
+        self.last_boundary_delta = LiminalBoundaryDelta::compute_branchless(
+            &prev_layer0,
+            &self.core_layers.liminal_layer,
+            prev_venn,
+            self.last_venn_report.venn_core_mask,
+            &self.last_boundary_delta,
+        );
 
-        // 2. Evaluate stability / anomaly trigger and dynamically slide outer slots in or out.
+        // 2. Evaluate stability / anomaly trigger with dwell hysteresis and slide slots in/out.
         let edbc_st = self.edbc.state();
-        let trigger = HorizonTriggerInput {
+        let mut trigger = HorizonTriggerInput {
             edbc_branch_mode: edbc_st.active_branch_mode,
             moving_z_entropy: edbc_st.moving_z_entropy,
             repulsion_severity: frame.repulsion_severity,
@@ -1198,7 +1223,15 @@ impl RuntimeContext {
             epistemic_regime: self.last_horizon.regime_code,
             stationary_shortcut_ready: self.last_boundary_delta.stationary_shortcut_ready != 0,
             ego_active_triggers: self.core_layers.ego_layer.last_intervened_mask,
+            unstable_dwell_steps: 0,
+            quiescent_dwell_steps: 0,
         };
+        let (unstable_dwell, quiescent_dwell) = self
+            .horizon_dwell
+            .step_branchless(trigger.is_destabilized(), trigger.stationary_shortcut_ready);
+        trigger.unstable_dwell_steps = unstable_dwell;
+        trigger.quiescent_dwell_steps = quiescent_dwell;
+
         let (slid_in, slid_out) = apply_latent_horizon_slots(
             latent_slots,
             &mut self.active_horizon_slots_mask,
@@ -1206,34 +1239,20 @@ impl RuntimeContext {
             &mut frame,
             &mut self.core_layers,
         );
-        if slid_in != 0 || self.active_horizon_slots_mask != 0 {
+        if slid_in != 0 || slid_out != 0 || self.active_horizon_slots_mask != 0 {
             frm_w = *frame.phase_words_ref();
         }
 
-        // 3. Cold-path escalation swap-in when destabilized, or retract spare lane when quiescent.
-        let mut escalated = false;
-        let spare_bit = 1u8 << ATTRACTOR_SLOT_CUSTOM_7;
-        if trigger.is_destabilized() {
-            let mut escalated_phases = [0i8; MAX_ATTENTION_HEADS];
-            let req = HorizonEscalationRequest {
-                trigger,
-                target_slot: ATTRACTOR_SLOT_CUSTOM_7,
-                desired_aperture_mask: self.core_layers.liminal_layer.active_aperture_mask,
-                current_frame_energy: frame.effective_energy,
-            };
-            if let Some(weight) =
-                escalation_provider.try_escalate_horizon(&req, &mut escalated_phases)?
-            {
-                self.set_slot_phase_profile(ATTRACTOR_SLOT_CUSTOM_7, &escalated_phases)?;
-                self.action_hub.slot_weights[usize::from(ATTRACTOR_SLOT_CUSTOM_7)] =
-                    branchless_relu_f32(weight);
-                self.action_hub.slot_enabled_mask |= spare_bit;
-                escalated = true;
-            }
-        } else if trigger.can_retract() {
-            self.action_hub.slot_enabled_mask &= !spare_bit;
-            self.action_hub.slot_weights[usize::from(ATTRACTOR_SLOT_CUSTOM_7)] = 0.0;
-        }
+        // 3. Cold-path escalation swap-in when destabilized, or cleanly retract spare lane.
+        let esc_req = HorizonEscalationRequest {
+            trigger,
+            target_slot: ATTRACTOR_SLOT_CUSTOM_7,
+            desired_aperture_mask: self.core_layers.liminal_layer.active_aperture_mask,
+            current_frame_energy: frame.effective_energy,
+        };
+        let escalated = self
+            .action_hub
+            .apply_horizon_escalation(&esc_req, escalation_provider)?;
 
         // 4. Step ActionHub pointer trail + Bloom filter + RoPE phase steering (zero-alloc).
         let bloom_snapshot = self.action_hub.bloom_filter;
@@ -2105,5 +2124,143 @@ mod tests {
         assert!(!esc3);
         assert_eq!(ctx.active_horizon_slots_mask(), 0);
         assert_eq!(ctx.slot_enabled_mask() & (1 << ATTRACTOR_SLOT_CUSTOM_7), 0);
+        assert!(ctx.horizon_dwell().quiescent_dwell_steps >= 1);
+    }
+
+    #[test]
+    fn test_latent_horizon_slot_tuple_isolation_dwell_and_slide_out_cleanup() {
+        use crate::traits::gateway::{
+            apply_latent_horizon_slots, AutonomousCoreLayerStack, GatewayFrame, HorizonDwellState,
+            HorizonTriggerInput,
+        };
+
+        struct FastSlot {
+            slid_out_calls: u32,
+        }
+        impl LatentHorizonSlot for FastSlot {
+            fn horizon_slot_mask(&self) -> u32 {
+                1 << 1
+            }
+
+            fn should_slide_in(&self, trigger: &HorizonTriggerInput) -> bool {
+                trigger.repulsion_severity > 0.4
+            }
+
+            fn on_slide_in_modulate(
+                &mut self,
+                frame: &mut GatewayFrame,
+                _stack: &mut AutonomousCoreLayerStack,
+                _trigger: &HorizonTriggerInput,
+            ) {
+                frame.phase_deltas[1] = 32;
+            }
+
+            fn on_slide_out(
+                &mut self,
+                frame: &mut GatewayFrame,
+                _stack: &mut AutonomousCoreLayerStack,
+                _trigger: &HorizonTriggerInput,
+            ) {
+                self.slid_out_calls += 1;
+                frame.phase_deltas[1] = 0;
+            }
+        }
+
+        struct HysteresisSlot {
+            modulate_calls: u32,
+        }
+        impl LatentHorizonSlot for HysteresisSlot {
+            fn horizon_slot_mask(&self) -> u32 {
+                1 << 4
+            }
+
+            fn min_slide_in_dwell(&self) -> u16 {
+                2
+            }
+
+            fn min_slide_out_dwell(&self) -> u16 {
+                2
+            }
+
+            fn on_slide_in_modulate(
+                &mut self,
+                frame: &mut GatewayFrame,
+                stack: &mut AutonomousCoreLayerStack,
+                _trigger: &HorizonTriggerInput,
+            ) {
+                self.modulate_calls += 1;
+                stack.liminal_layer.active_aperture_mask |= 1 << 4;
+                frame.phase_deltas[4] = 48;
+            }
+        }
+
+        let mut pair = (
+            FastSlot { slid_out_calls: 0 },
+            HysteresisSlot { modulate_calls: 0 },
+        );
+        let mut active_mask = 0u32;
+        let mut dwell = HorizonDwellState::default();
+        let mut frame = GatewayFrame::default();
+        let mut stack = AutonomousCoreLayerStack::new();
+
+        // Step 1: Destabilized (step 1 of dwell, high repulsion) -> only FastSlot slides in!
+        let mut t1 = HorizonTriggerInput {
+            repulsion_severity: 0.6,
+            ..HorizonTriggerInput::default()
+        };
+        let (u1, q1) = dwell.step_branchless(t1.is_destabilized(), t1.stationary_shortcut_ready);
+        t1.unstable_dwell_steps = u1;
+        t1.quiescent_dwell_steps = q1;
+        let (in1, out1) =
+            apply_latent_horizon_slots(&mut pair, &mut active_mask, &t1, &mut frame, &mut stack);
+        assert_eq!(in1, 1 << 1);
+        assert_eq!(out1, 0);
+        assert_eq!(active_mask, 1 << 1);
+        assert_eq!(pair.1.modulate_calls, 0);
+
+        // Step 2: Destabilized persists (step 2 of dwell) -> HysteresisSlot now slides in independently.
+        let mut t2 = HorizonTriggerInput {
+            repulsion_severity: 0.6,
+            ..HorizonTriggerInput::default()
+        };
+        let (u2, q2) = dwell.step_branchless(t2.is_destabilized(), t2.stationary_shortcut_ready);
+        t2.unstable_dwell_steps = u2;
+        t2.quiescent_dwell_steps = q2;
+        let (in2, out2) =
+            apply_latent_horizon_slots(&mut pair, &mut active_mask, &t2, &mut frame, &mut stack);
+        assert_eq!(in2, 1 << 4);
+        assert_eq!(out2, 0);
+        assert_eq!(active_mask, (1 << 1) | (1 << 4));
+        assert_eq!(pair.1.modulate_calls, 1);
+
+        // Step 3: Quiescent (step 1 of dwell) -> FastSlot slides out with cleanup, HysteresisSlot holds!
+        let mut t3 = HorizonTriggerInput {
+            stationary_shortcut_ready: true,
+            ..HorizonTriggerInput::default()
+        };
+        let (u3, q3) = dwell.step_branchless(t3.is_destabilized(), t3.stationary_shortcut_ready);
+        t3.unstable_dwell_steps = u3;
+        t3.quiescent_dwell_steps = q3;
+        let (in3, out3) =
+            apply_latent_horizon_slots(&mut pair, &mut active_mask, &t3, &mut frame, &mut stack);
+        assert_eq!(in3, 0);
+        assert_eq!(out3, 1 << 1);
+        assert_eq!(active_mask, 1 << 4);
+        assert_eq!(pair.0.slid_out_calls, 1);
+        assert_eq!(frame.phase_deltas[1], 0);
+
+        // Step 4: Quiescent persists (step 2 of dwell) -> HysteresisSlot retracts.
+        let mut t4 = HorizonTriggerInput {
+            stationary_shortcut_ready: true,
+            ..HorizonTriggerInput::default()
+        };
+        let (u4, q4) = dwell.step_branchless(t4.is_destabilized(), t4.stationary_shortcut_ready);
+        t4.unstable_dwell_steps = u4;
+        t4.quiescent_dwell_steps = q4;
+        let (in4, out4) =
+            apply_latent_horizon_slots(&mut pair, &mut active_mask, &t4, &mut frame, &mut stack);
+        assert_eq!(in4, 0);
+        assert_eq!(out4, 1 << 4);
+        assert_eq!(active_mask, 0);
     }
 }

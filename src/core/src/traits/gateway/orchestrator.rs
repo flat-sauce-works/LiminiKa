@@ -1562,6 +1562,34 @@ impl<T: ActionHub + ActionHubGatewayExt + ?Sized> ActionHubScaleOrchestrator for
 // 10. Dynamic Slide-In / Slide-Out Horizon Slots & Cold-Path Escalation
 // ===================================================================
 
+/// Consecutive-step hysteresis tracker for dynamic [`LatentHorizonSlot`] slide-in / slide-out.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HorizonDwellState {
+    /// Consecutive steps during which horizon destabilization persisted.
+    pub unstable_dwell_steps: u16,
+    /// Consecutive steps during which boundaries stayed quiescent and ready for retraction.
+    pub quiescent_dwell_steps: u16,
+}
+
+impl HorizonDwellState {
+    /// Advances dwell hysteresis counters branchlessly and returns `(unstable, quiescent)`.
+    #[inline(always)]
+    pub fn step_branchless(&mut self, destabilized: bool, stationary_ready: bool) -> (u16, u16) {
+        let next_unstable = self.unstable_dwell_steps.saturating_add(1);
+        let next_quiescent = self.quiescent_dwell_steps.saturating_add(1);
+        let unstable_out = if destabilized { next_unstable } else { 0 };
+        let quiescent_out = if (!destabilized) & stationary_ready {
+            next_quiescent
+        } else {
+            0
+        };
+        self.unstable_dwell_steps = unstable_out;
+        self.quiescent_dwell_steps = quiescent_out;
+        (unstable_out, quiescent_out)
+    }
+}
+
 /// Branchless diagnostic snapshot evaluated by the single orchestrator to decide whether
 /// dormant [`LatentHorizonSlot`] boundaries should slide into or retract from the active
 /// cognitive window.
@@ -1582,6 +1610,10 @@ pub struct HorizonTriggerInput {
     pub stationary_shortcut_ready: bool,
     /// Bitmask of `EGO_TRIGGER_*` flags that fired on the latest Layer 2 Ego evaluation.
     pub ego_active_triggers: u8,
+    /// Consecutive destabilized steps observed by the orchestrator (`0` = single-shot default).
+    pub unstable_dwell_steps: u16,
+    /// Consecutive quiescent steps observed by the orchestrator (`0` = single-shot default).
+    pub quiescent_dwell_steps: u16,
 }
 
 impl HorizonTriggerInput {
@@ -1604,6 +1636,34 @@ impl HorizonTriggerInput {
     pub const fn can_retract(&self) -> bool {
         self.stationary_shortcut_ready & !self.is_destabilized()
     }
+
+    /// Returns effective destabilization dwell steps (promoting explicit destabilization to `1`
+    /// when single-shot callers leave `unstable_dwell_steps == 0`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn effective_unstable_dwell(&self) -> u16 {
+        if self.unstable_dwell_steps > 0 {
+            self.unstable_dwell_steps
+        } else if self.is_destabilized() {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// Returns effective quiescent dwell steps (promoting explicit `can_retract()` to `1`
+    /// when single-shot callers leave `quiescent_dwell_steps == 0`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn effective_quiescent_dwell(&self) -> u16 {
+        if self.quiescent_dwell_steps > 0 {
+            self.quiescent_dwell_steps
+        } else if self.can_retract() {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 /// Thin latent boundary trait for outer capabilities (auxiliary attractors, contradiction guards,
@@ -1612,6 +1672,18 @@ impl HorizonTriggerInput {
 pub trait LatentHorizonSlot {
     /// Unique bitmask (`1 << k`) identifying this slot inside `active_horizon_slots_mask`.
     fn horizon_slot_mask(&self) -> u32;
+
+    /// Minimum consecutive destabilized steps required before sliding this slot in (default `1`).
+    #[inline(always)]
+    fn min_slide_in_dwell(&self) -> u16 {
+        1
+    }
+
+    /// Minimum consecutive quiescent steps required before retracting this slot out (default `1`).
+    #[inline(always)]
+    fn min_slide_out_dwell(&self) -> u16 {
+        1
+    }
 
     /// Returns `true` when this boundary should slide into the active cognitive window.
     #[inline(always)]
@@ -1632,6 +1704,55 @@ pub trait LatentHorizonSlot {
         stack: &mut AutonomousCoreLayerStack,
         trigger: &HorizonTriggerInput,
     );
+
+    /// Performs optional zero-allocation cleanup on `frame` and `stack` when sliding back out.
+    #[inline(always)]
+    fn on_slide_out(
+        &mut self,
+        _frame: &mut GatewayFrame,
+        _stack: &mut AutonomousCoreLayerStack,
+        _trigger: &HorizonTriggerInput,
+    ) {
+    }
+
+    /// Evaluates this slot (or nested tuple of slots) against `trigger` and `active_mask`,
+    /// returning per-slot `(slid_in_bits, slid_out_bits)`.
+    #[inline]
+    fn apply_horizon_slot(
+        &mut self,
+        active_mask: &mut u32,
+        trigger: &HorizonTriggerInput,
+        frame: &mut GatewayFrame,
+        stack: &mut AutonomousCoreLayerStack,
+    ) -> (u32, u32) {
+        let slot_bit = self.horizon_slot_mask();
+        if slot_bit == 0 {
+            return (0, 0);
+        }
+        let was_active = (*active_mask & slot_bit) == slot_bit;
+        let enter_ready = self.should_slide_in(trigger)
+            && trigger.effective_unstable_dwell() >= self.min_slide_in_dwell();
+        if enter_ready {
+            *active_mask |= slot_bit;
+            self.on_slide_in_modulate(frame, stack, trigger);
+            let slid_in = if was_active { 0 } else { slot_bit };
+            return (slid_in, 0);
+        }
+        let exit_ready = self.should_slide_out(trigger)
+            && trigger.effective_quiescent_dwell() >= self.min_slide_out_dwell();
+        if exit_ready {
+            *active_mask &= !slot_bit;
+            if was_active {
+                self.on_slide_out(frame, stack, trigger);
+                return (0, slot_bit);
+            }
+            return (0, 0);
+        }
+        if (*active_mask & slot_bit) != 0 {
+            self.on_slide_in_modulate(frame, stack, trigger);
+        }
+        (0, 0)
+    }
 }
 
 impl LatentHorizonSlot for () {
@@ -1690,10 +1811,39 @@ impl<A: LatentHorizonSlot, B: LatentHorizonSlot> LatentHorizonSlot for (A, B) {
             self.1.on_slide_in_modulate(frame, stack, trigger);
         }
     }
+
+    #[inline(always)]
+    fn on_slide_out(
+        &mut self,
+        frame: &mut GatewayFrame,
+        stack: &mut AutonomousCoreLayerStack,
+        trigger: &HorizonTriggerInput,
+    ) {
+        self.0.on_slide_out(frame, stack, trigger);
+        self.1.on_slide_out(frame, stack, trigger);
+    }
+
+    #[inline]
+    fn apply_horizon_slot(
+        &mut self,
+        active_mask: &mut u32,
+        trigger: &HorizonTriggerInput,
+        frame: &mut GatewayFrame,
+        stack: &mut AutonomousCoreLayerStack,
+    ) -> (u32, u32) {
+        let (in_a, out_a) = self
+            .0
+            .apply_horizon_slot(active_mask, trigger, frame, stack);
+        let (in_b, out_b) = self
+            .1
+            .apply_horizon_slot(active_mask, trigger, frame, stack);
+        (in_a | in_b, out_a | out_b)
+    }
 }
 
-/// Evaluates `slots` against `trigger`, updating `active_mask` (`slide-in` / `slide-out`) and
-/// modulating `frame` + `stack` in zero-allocation mode. Returns `(slid_in_bits, slid_out_bits)`.
+/// Evaluates `slots` against `trigger`, updating `active_mask` (`slide-in` / `slide-out`) per
+/// individual slot and modulating `frame` + `stack` in zero-allocation mode. Returns
+/// `(slid_in_bits, slid_out_bits)`.
 #[inline]
 pub fn apply_latent_horizon_slots<H: LatentHorizonSlot + ?Sized>(
     slots: &mut H,
@@ -1702,26 +1852,7 @@ pub fn apply_latent_horizon_slots<H: LatentHorizonSlot + ?Sized>(
     frame: &mut GatewayFrame,
     stack: &mut AutonomousCoreLayerStack,
 ) -> (u32, u32) {
-    let slot_bit = slots.horizon_slot_mask();
-    if slot_bit == 0 {
-        return (0, 0);
-    }
-    let prev = *active_mask;
-    if slots.should_slide_in(trigger) {
-        *active_mask |= slot_bit;
-        slots.on_slide_in_modulate(frame, stack, trigger);
-        let slid_in = *active_mask & !prev;
-        return (slid_in, 0);
-    }
-    if slots.should_slide_out(trigger) {
-        *active_mask &= !slot_bit;
-        let slid_out = prev & !*active_mask;
-        return (0, slid_out);
-    }
-    if (*active_mask & slot_bit) != 0 {
-        slots.on_slide_in_modulate(frame, stack, trigger);
-    }
-    (0, 0)
+    slots.apply_horizon_slot(active_mask, trigger, frame, stack)
 }
 
 /// Request descriptor passed to an external [`HorizonEscalationProvider`] when Hot-Path

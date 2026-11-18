@@ -198,6 +198,153 @@ impl RopeSteeringTarget for RopeGeometry {
     }
 }
 
+/// Adapter-level [`LatentHorizonSlot`] that remains dormant during coherent nominal tokens
+/// and dynamically widens Core Layer 0 guard apertures + enables `ACTION_MODE_PHASE_REPULSE`
+/// when instability, epistemic conflict, or `Liminal` void excursion persists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoherenceHorizonGuardSlot {
+    /// Bitmask (`1 << k`) claimed inside `active_horizon_slots_mask` (default `1 << 0`).
+    pub slot_bit: u32,
+    /// Minimum consecutive destabilized steps before sliding in (default `1`).
+    pub slide_in_dwell: u16,
+    /// Minimum consecutive quiescent steps before retracting out (default `2`).
+    pub slide_out_dwell: u16,
+    /// Layer 0 aperture bits activated while this boundary is slid in.
+    pub guard_aperture_bits: u32,
+    /// Total times `on_slide_in_modulate` fired.
+    pub activations: u64,
+    /// Total times `on_slide_out` cleanly retracted this boundary.
+    pub retractions: u64,
+    saved_aperture_mask: u32,
+}
+
+impl Default for CoherenceHorizonGuardSlot {
+    fn default() -> Self {
+        Self {
+            slot_bit: 1,
+            slide_in_dwell: 1,
+            slide_out_dwell: 2,
+            guard_aperture_bits: (1 << 3) | (1 << 7),
+            activations: 0,
+            retractions: 0,
+            saved_aperture_mask: 0,
+        }
+    }
+}
+
+impl LatentHorizonSlot for CoherenceHorizonGuardSlot {
+    #[inline(always)]
+    fn horizon_slot_mask(&self) -> u32 {
+        self.slot_bit
+    }
+
+    #[inline(always)]
+    fn min_slide_in_dwell(&self) -> u16 {
+        self.slide_in_dwell.max(1)
+    }
+
+    #[inline(always)]
+    fn min_slide_out_dwell(&self) -> u16 {
+        self.slide_out_dwell.max(1)
+    }
+
+    #[inline]
+    fn on_slide_in_modulate(
+        &mut self,
+        frame: &mut GatewayFrame,
+        stack: &mut AutonomousCoreLayerStack,
+        trigger: &HorizonTriggerInput,
+    ) {
+        if self.activations == self.retractions {
+            self.saved_aperture_mask = stack.liminal_layer.active_aperture_mask;
+        }
+        self.activations = self.activations.saturating_add(1);
+        stack.liminal_layer.active_aperture_mask |= self.guard_aperture_bits;
+        if trigger.repulsion_severity > 0.25 || trigger.epistemic_regime != 0 {
+            frame.action_mode_flags |= ACTION_MODE_PHASE_REPULSE;
+        }
+    }
+
+    #[inline]
+    fn on_slide_out(
+        &mut self,
+        _frame: &mut GatewayFrame,
+        stack: &mut AutonomousCoreLayerStack,
+        _trigger: &HorizonTriggerInput,
+    ) {
+        let added_only = self.guard_aperture_bits & !self.saved_aperture_mask;
+        stack.liminal_layer.active_aperture_mask &= !added_only;
+        self.retractions = self.retractions.saturating_add(1);
+    }
+}
+
+/// Cold-path [`HorizonEscalationProvider`] backed by a compiled [`TextAttractorCorpus`],
+/// swapping the strongest Guard (under conflict/repulsion) or Fact phase signature into
+/// `ATTRACTOR_SLOT_CUSTOM_7` only when Hot-Path triggers detect destabilization.
+#[derive(Debug)]
+pub struct CorpusRecallEscalationProvider<'a> {
+    corpus: &'a TextAttractorCorpus,
+    /// Minimum lane weight assigned to escalated corpus entries.
+    pub min_weight: f32,
+    /// Number of cold-path escalation swaps performed.
+    pub escalation_calls: u64,
+}
+
+impl<'a> CorpusRecallEscalationProvider<'a> {
+    /// Creates a new escalation provider backed by `corpus`.
+    #[must_use]
+    pub const fn new(corpus: &'a TextAttractorCorpus) -> Self {
+        Self {
+            corpus,
+            min_weight: 0.5,
+            escalation_calls: 0,
+        }
+    }
+}
+
+impl HorizonEscalationProvider for CorpusRecallEscalationProvider<'_> {
+    fn try_escalate_horizon(
+        &mut self,
+        req: &HorizonEscalationRequest,
+        slot_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> GcsoResult<Option<f32>> {
+        if !req.trigger.is_destabilized() || self.corpus.entries().is_empty() {
+            return Ok(None);
+        }
+        let prefer_guard = req.trigger.epistemic_regime == EpistemicRegime::InternalConflict as u8
+            || req.trigger.repulsion_severity > 0.25;
+        let preferred_role = if prefer_guard {
+            AttractorRole::Guard
+        } else {
+            AttractorRole::Fact
+        };
+
+        let selected = self
+            .corpus
+            .entries()
+            .iter()
+            .filter(|e| e.role == preferred_role && !e.per_layer_q7.is_empty())
+            .max_by(|a, b| a.energy.total_cmp(&b.energy))
+            .or_else(|| {
+                self.corpus
+                    .entries()
+                    .iter()
+                    .filter(|e| !e.per_layer_q7.is_empty())
+                    .max_by(|a, b| a.energy.total_cmp(&b.energy))
+            });
+
+        let Some(entry) = selected else {
+            return Ok(None);
+        };
+        let Some(last_q7) = entry.per_layer_q7.last() else {
+            return Ok(None);
+        };
+        *slot_phase_out = *last_q7;
+        self.escalation_calls = self.escalation_calls.saturating_add(1);
+        Ok(Some(entry.energy.max(self.min_weight)))
+    }
+}
+
 /// Unified model-connection and optimization adapter over [`liminika_core`].
 ///
 /// Bridges a target LLM's [`RopeGeometry`] to [`PhaseSteeringEngine`],
@@ -219,6 +366,9 @@ pub struct ModelSteeringAdapter {
     last_horizon: EpistemicHorizonReading,
     last_venn_report: StigmergicVennSerendipityReport,
     last_ensemble_report: Option<StigmergicFragmentEnsembleReport>,
+    horizon_dwell: HorizonDwellState,
+    active_horizon_slots_mask: u32,
+    coherence_guard_slot: CoherenceHorizonGuardSlot,
 }
 
 impl ModelSteeringAdapter {
@@ -284,6 +434,9 @@ impl ModelSteeringAdapter {
             },
             last_venn_report: StigmergicVennSerendipityReport::default(),
             last_ensemble_report: None,
+            horizon_dwell: HorizonDwellState::default(),
+            active_horizon_slots_mask: 0,
+            coherence_guard_slot: CoherenceHorizonGuardSlot::default(),
         })
     }
 
@@ -478,6 +631,25 @@ impl ModelSteeringAdapter {
     #[must_use]
     pub const fn last_ensemble_report(&self) -> Option<&StigmergicFragmentEnsembleReport> {
         self.last_ensemble_report.as_ref()
+    }
+
+    /// Returns the bitmask of external [`LatentHorizonSlot`] boundaries currently slid into the
+    /// adapter's active cognitive window.
+    #[must_use]
+    pub const fn active_horizon_slots_mask(&self) -> u32 {
+        self.active_horizon_slots_mask
+    }
+
+    /// Returns the live consecutive destabilization / quiescence dwell tracker [`HorizonDwellState`].
+    #[must_use]
+    pub const fn horizon_dwell(&self) -> HorizonDwellState {
+        self.horizon_dwell
+    }
+
+    /// Returns a shared reference to the built-in [`CoherenceHorizonGuardSlot`].
+    #[must_use]
+    pub const fn coherence_guard_slot(&self) -> &CoherenceHorizonGuardSlot {
+        &self.coherence_guard_slot
     }
 
     /// Updates Core Layer 0 (`Liminal`), Layer 1 (`Stigmergic`), and Layer 2 (`Ego`)
@@ -1102,8 +1274,8 @@ impl ModelSteeringAdapter {
     }
 
     /// Orchestrates a layer's RoPE steering via [`ActionHubEngine`] using stigmergic
-    /// evaporation + resonance-weighted reinforcement and the live 3-layer core stack, recording
-    /// the selected [`StigmergicActionDecision`] inside `action_hub.last_decision`.
+    /// evaporation + resonance-weighted reinforcement, the live 3-layer core stack, and the
+    /// built-in dormant-until-destabilized [`CoherenceHorizonGuardSlot`].
     ///
     /// # Errors
     ///
@@ -1126,6 +1298,55 @@ impl ModelSteeringAdapter {
         )>,
         String,
     > {
+        let mut guard_slot = self.coherence_guard_slot;
+        let mut no_escalator = ();
+        let res = self.orchestrate_layer_rope_with_horizon_slots(
+            layer_idx,
+            signal,
+            &mut guard_slot,
+            &mut no_escalator,
+            trail_inout,
+            entropy_h_tilde_opt,
+            unresolved_damping_u7,
+            q_rot_inout,
+            logits_opt,
+        );
+        self.coherence_guard_slot = guard_slot;
+        res
+    }
+
+    /// Extended layer-wise orchestration pass pairing [`ActionHubEngine`] + 3-layer core stack
+    /// piercing with caller-supplied [`LatentHorizonSlot`] boundaries (dynamic slide-in/out with
+    /// dwell hysteresis) and an optional cold-path [`HorizonEscalationProvider`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `q_rot_inout` length mismatches, `escalation_provider` fails, or
+    /// `liminika-core` rejects the inputs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn orchestrate_layer_rope_with_horizon_slots<
+        S: ManifoldGatewaySignal + ?Sized,
+        H: LatentHorizonSlot + ?Sized,
+        E: HorizonEscalationProvider + ?Sized,
+    >(
+        &mut self,
+        layer_idx: usize,
+        signal: &S,
+        horizon_slots: &mut H,
+        escalation_provider: &mut E,
+        trail_inout: &mut gcso_pointer_trail_t,
+        entropy_h_tilde_opt: Option<f32>,
+        unresolved_damping_u7: u8,
+        q_rot_inout: &mut [f32],
+        logits_opt: Option<&mut [f32]>,
+    ) -> Result<
+        Option<(
+            GatewayFrame,
+            CausalProvenanceReport,
+            StigmergicActionDecision,
+        )>,
+        String,
+    > {
         self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
             let entropy_h_tilde =
                 entropy_h_tilde_opt.unwrap_or(this.action_hub.last_entropy_h_tilde);
@@ -1133,13 +1354,34 @@ impl ModelSteeringAdapter {
                 layer_idx,
                 this.geometry.num_layers.max(1),
             );
+            let pre_trigger = HorizonTriggerInput {
+                edbc_branch_mode: this.entropy_controller.state().active_branch_mode,
+                moving_z_entropy: entropy_h_tilde,
+                repulsion_severity: this.last_horizon.conflict_severity,
+                causal_root_cause: ROOT_CAUSE_NOMINAL,
+                epistemic_regime: this.last_horizon.regime_code,
+                stationary_shortcut_ready: this.last_boundary_delta.stationary_shortcut_ready != 0,
+                ego_active_triggers: this.core_layers.ego_layer.last_intervened_mask,
+                unstable_dwell_steps: this.horizon_dwell.unstable_dwell_steps,
+                quiescent_dwell_steps: this.horizon_dwell.quiescent_dwell_steps,
+            };
+            let esc_req = HorizonEscalationRequest {
+                trigger: pre_trigger,
+                target_slot: ATTRACTOR_SLOT_CUSTOM_7,
+                desired_aperture_mask: this.core_layers.liminal_layer.active_aperture_mask,
+                current_frame_energy: this.last_horizon.total_memory_support,
+            };
+            this.action_hub
+                .apply_horizon_escalation(&esc_req, escalation_provider)
+                .map_err(|e| format!("apply_horizon_escalation error: {e}"))?;
+
             let core_ctx = Self::build_core_layer_ctx(
                 &this.core_layers,
                 &this.last_boundary_delta,
                 &this.last_horizon,
                 &this.last_venn_report,
             );
-            let (frame, report, decision) = this
+            let (mut frame, report, decision) = this
                 .action_hub
                 .orchestrate_gateway_layer_with_core_layers_safe(
                     signal,
@@ -1160,6 +1402,31 @@ impl ModelSteeringAdapter {
                 .map_err(|e| {
                     format!("orchestrate_gateway_layer_with_core_layers_safe error: {e}")
                 })?;
+
+            let mut trigger = HorizonTriggerInput {
+                edbc_branch_mode: this.entropy_controller.state().active_branch_mode,
+                moving_z_entropy: entropy_h_tilde,
+                repulsion_severity: frame.repulsion_severity,
+                causal_root_cause: frame.dominant_cause_code,
+                epistemic_regime: this.last_horizon.regime_code,
+                stationary_shortcut_ready: this.last_boundary_delta.stationary_shortcut_ready != 0,
+                ego_active_triggers: this.core_layers.ego_layer.last_intervened_mask,
+                unstable_dwell_steps: 0,
+                quiescent_dwell_steps: 0,
+            };
+            let (u_dwell, q_dwell) = this
+                .horizon_dwell
+                .step_branchless(trigger.is_destabilized(), trigger.stationary_shortcut_ready);
+            trigger.unstable_dwell_steps = u_dwell;
+            trigger.quiescent_dwell_steps = q_dwell;
+            let _ = apply_latent_horizon_slots(
+                horizon_slots,
+                &mut this.active_horizon_slots_mask,
+                &trigger,
+                &mut frame,
+                &mut this.core_layers,
+            );
+
             this.action_hub.last_decision = decision as u8;
             this.decision_counts[(decision as usize).min(6)] += 1;
             Ok((frame, report, decision))
