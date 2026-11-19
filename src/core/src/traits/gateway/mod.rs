@@ -113,6 +113,7 @@ pub use crate::traits::primitives::{
 };
 
 pub mod circuit;
+pub mod compute_pool;
 pub mod core_layers;
 pub mod epistemic;
 pub mod frame;
@@ -128,6 +129,7 @@ pub use self::circuit::{
     LowSpecCognitiveBank, ScaleLayerNode, ScaleLayerProjection, StandardCognitiveBank,
     StigmergicScaleGranularity, StigmergicScaleLayer,
 };
+pub use self::compute_pool::*;
 pub use self::core_layers::*;
 pub use self::epistemic::*;
 pub use self::frame::*;

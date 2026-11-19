@@ -876,6 +876,20 @@ fn coherence_guard_gate_detects_sharp_winner_liminal_without_weakening_ood_limin
     );
     assert!(flat_ood.suppress_fact_injection);
     assert_eq!(flat_ood.void_state, VoidBoundaryState::LiminalExterior);
+
+    // Single-token OOD outlier noise below 0.85 * min_coherence must not bleed into LiminalBoundary.
+    let ood_outlier = gate.evaluate(
+        &RecallBoundaryMetrics {
+            top1_fact_score: 0.141,
+            top2_fact_score: 0.037,
+            top1_persona_score: 0.311,
+            max_guard_score: 0.01,
+            guard_conflict_margin: -0.301,
+        },
+        &policy,
+    );
+    assert!(ood_outlier.suppress_fact_injection);
+    assert_eq!(ood_outlier.void_state, VoidBoundaryState::LiminalExterior);
 }
 
 #[test]

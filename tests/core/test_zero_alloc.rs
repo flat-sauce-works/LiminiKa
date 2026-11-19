@@ -261,5 +261,17 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
     };
     let mut mock_esc = liminika_core::DefaultResidualSpilloverSlot::default();
     let _ = wb_hub.apply_horizon_escalation(&esc_req, &mut esc_lane, &mut mock_esc);
+
+    // Verify Step 4 label-free AnonymousComputePool dispatch & exit reward remain strictly zero-alloc.
+    ctx.compute_pool_mut()
+        .set_slot_masks(0b1111, 0b0001, 0, 0b1110);
+    let dispatch = ctx.step_compute_dispatch(liminika_core::traits::SystemPressureReading {
+        frame_time_pressure_q15: 20000,
+        bandwidth_pressure_q15: 10000,
+        l3_load_pressure_q15: 9000,
+        irreversible_step: 0,
+        _pad: 0,
+    });
+    ctx.commit_compute_exit_reward(dispatch.execute_mask, 96);
     ENFORCE_ZERO_ALLOC.with(|flag| flag.set(false));
 }

@@ -372,7 +372,7 @@ impl RecallBoundaryGate for CoherenceGuardGate {
             };
         }
         let margin = metrics.top1_fact_score - metrics.top2_fact_score;
-        let sharp_liminal_match = metrics.top1_fact_score >= policy.min_coherence * 0.65
+        let sharp_liminal_match = metrics.top1_fact_score >= policy.min_coherence * 0.85
             && margin >= policy.boundary_margin
             && metrics.top1_fact_score >= metrics.top2_fact_score.max(0.0) * 1.5;
 

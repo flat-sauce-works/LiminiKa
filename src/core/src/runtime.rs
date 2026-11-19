@@ -48,18 +48,19 @@ use crate::traits::rope::{PhaseSteeringGeometryExt, RopeSteeringTarget};
 use crate::traits::{
     abi_version, abi_version_string, apply_latent_horizon_slots, query_capability, ActionHub,
     ActionHubGatewayExt, AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut16,
-    AlignedSliceMut32, AttractorField, AutonomousCoreLayerStack, CausalProvenanceReport,
-    CausalProvenanceSignal, ContrastivePhaseBloomFilter, CoreTelemetryBank, CoreTelemetrySnapshot,
-    EdbcBranchController, EntropyEvaluator, EpistemicHorizonReading, EpistemicRegime,
-    FastPathLedger, GatewayFrame, GatewayPhaseSteeringExt, GcsoResult, HorizonDwellState,
-    HorizonEscalationProvider, HorizonEscalationRequest, HorizonTriggerInput, KvKeyframeCache,
-    LatentHorizonSlot, LiminalBoundaryDelta, ManifoldGatewaySignal, MappedStorage,
-    MultiDomainAttractorSpace, PersonaPatcher, PhaseSteering, Pod, PointerActionHub,
-    StigmergicActionPtrOps, StigmergicChunkOps, StigmergicTrailOps,
-    StigmergicVennSerendipityReport, SystemConstraintSignal, TelemetryCapturePolicy,
-    ACTION_MODE_LAYER_SKIP, ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_PERSONA,
-    ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
-    ROOT_CAUSE_SYSTEM_QOS_THROTTLE, TRAIL_FLAG_REPULSION_ACTIVE, WORKBENCH_LANE_FLAG_REPULSION,
+    AlignedSliceMut32, AnonymousComputePool, AttractorField, AutonomousCoreLayerStack,
+    CausalProvenanceReport, CausalProvenanceSignal, ComputeDispatchMask,
+    ContrastivePhaseBloomFilter, CoreTelemetryBank, CoreTelemetrySnapshot, EdbcBranchController,
+    EntropyEvaluator, EpistemicHorizonReading, EpistemicRegime, FastPathLedger, GatewayFrame,
+    GatewayPhaseSteeringExt, GcsoResult, HorizonDwellState, HorizonEscalationProvider,
+    HorizonEscalationRequest, HorizonTriggerInput, KvKeyframeCache, LatentHorizonSlot,
+    LiminalBoundaryDelta, ManifoldGatewaySignal, MappedStorage, MultiDomainAttractorSpace,
+    PersonaPatcher, PhaseSteering, Pod, PointerActionHub, StigmergicActionPtrOps,
+    StigmergicChunkOps, StigmergicTrailOps, StigmergicVennSerendipityReport,
+    SystemConstraintSignal, SystemPressureReading, TelemetryCapturePolicy, ACTION_MODE_LAYER_SKIP,
+    ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE,
+    DEFAULT_SLOT_COUPLING_MATRIX_8X8, ROOT_CAUSE_SYSTEM_QOS_THROTTLE, TRAIL_FLAG_REPULSION_ACTIVE,
+    WORKBENCH_LANE_FLAG_REPULSION,
 };
 
 use crate::traits::branchless::{
@@ -435,6 +436,7 @@ pub struct RuntimeContext {
     sandbox_workbench_lane: Option<u8>,
     probe_baseline: ManifoldProbeBaseline,
     telemetry: CoreTelemetryBank,
+    compute_pool: AnonymousComputePool,
 }
 
 impl RuntimeContext {
@@ -476,6 +478,7 @@ impl RuntimeContext {
             sandbox_workbench_lane: None,
             probe_baseline: ManifoldProbeBaseline::new(),
             telemetry: CoreTelemetryBank::default(),
+            compute_pool: AnonymousComputePool::default(),
         })
     }
 
@@ -583,6 +586,35 @@ impl RuntimeContext {
     #[must_use]
     pub fn telemetry_bank_mut(&mut self) -> &mut CoreTelemetryBank {
         &mut self.telemetry
+    }
+
+    /// Returns a shared reference to the Step 4 label-free [`AnonymousComputePool`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn compute_pool(&self) -> &AnonymousComputePool {
+        &self.compute_pool
+    }
+
+    /// Returns a mutable reference to the Step 4 label-free [`AnonymousComputePool`].
+    #[inline(always)]
+    #[must_use]
+    pub fn compute_pool_mut(&mut self) -> &mut AnonymousComputePool {
+        &mut self.compute_pool
+    }
+
+    /// Evaluates external `+ System` Gauge-Zero pressure and emits a pre-execution
+    /// [`ComputeDispatchMask`] without heap allocation or `fdiv`.
+    #[inline]
+    pub fn step_compute_dispatch(&mut self, reading: SystemPressureReading) -> ComputeDispatchMask {
+        self.compute_pool.step_dispatch(reading)
+    }
+
+    /// Updates Step 4 slot contribution pheromones strictly from an exit scalar reward (`0..=127`)
+    /// without mid-layer D2H synchronization.
+    #[inline]
+    pub fn commit_compute_exit_reward(&mut self, executed_mask: u64, reward_q7: u8) {
+        self.compute_pool
+            .commit_exit_reward(executed_mask, reward_q7);
     }
 
     /// Updates the [`TelemetryCapturePolicy`] governing verbosity transitions (`Coarse` / `Standard` / `Detailed`).

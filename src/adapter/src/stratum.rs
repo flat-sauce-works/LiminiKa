@@ -694,6 +694,11 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
             (frame.effective_energy, 0.75_f32)
         } else if is_total_liminal_void {
             (0.0_f32, 0.0_f32)
+        } else if matches!(decision.void_state, VoidBoundaryState::LiminalExterior)
+            && has_active_persona
+        {
+            // Persona-only active grounding outside factual basins uses lightweight ExpressPhaseSteer.
+            (thresholds.express_steer_density_thresh.max(0.45), 0.35_f32)
         } else if signal.local_channel_preferred
             || signal.decomposition_triggered
             || (channel_disagreement && partial_swarm_consensus)
@@ -707,11 +712,6 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
                     .max(frame.effective_energy.min(1.35)),
                 0.65_f32,
             )
-        } else if matches!(decision.void_state, VoidBoundaryState::LiminalExterior)
-            && has_active_persona
-        {
-            // Persona-only active grounding outside factual basins uses lightweight ExpressPhaseSteer.
-            (thresholds.express_steer_density_thresh.max(0.45), 0.35_f32)
         } else if circuit_fuse_active && margin_ratio >= 1.2 {
             let boost = thresholds
                 .crystallize_density_thresh
