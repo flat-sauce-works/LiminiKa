@@ -73,6 +73,7 @@ pub(crate) struct ForwardSteer<'a, 'c, 'e> {
     pub(crate) srl: Option<(&'a [f32], &'a [f32], f32)>,
     pub(crate) horizon_mode: HorizonAblationMode,
     pub(crate) escalation_provider: Option<&'e mut CorpusRecallEscalationProvider<'c>>,
+    pub(crate) compute_dispatch: Option<liminika_adapter::ComputeDispatchMask>,
 }
 
 fn dispatch_rope_orchestration<S: ManifoldGatewaySignal + ?Sized>(
@@ -749,25 +750,32 @@ impl Phi3Model {
 
         for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
             let steer_ref = match steer.as_deref_mut() {
-                Some(st) if st.rope_rad != 0.0 => st.q7s.and_then(|qs| {
-                    qs.get(layer_idx).map(|q7| LayerSteer {
-                        adapter: &mut *st.adapter,
-                        layer_idx,
-                        q7_deltas: q7.as_slice(),
-                        persona_opt: st
-                            .persona_q7s
-                            .and_then(|ps| ps.get(layer_idx))
-                            .map(Vec::as_slice),
-                        resonant_opt: st
-                            .resonant_ctx
-                            .as_ref()
-                            .and_then(|r| r.layer_slices(layer_idx)),
-                        max_rad: st.rope_rad,
-                        trail: &mut *st.trail,
-                        horizon_mode: st.horizon_mode,
-                        escalation_provider: st.escalation_provider.as_deref_mut(),
+                Some(st) if st.rope_rad != 0.0 => st
+                    .q7s
+                    .filter(|_| {
+                        !st.compute_dispatch.is_some_and(|d| {
+                            layer_idx < 64 && (d.bypass_mask & (1_u64 << layer_idx)) != 0
+                        })
                     })
-                }),
+                    .and_then(|qs| {
+                        qs.get(layer_idx).map(|q7| LayerSteer {
+                            adapter: &mut *st.adapter,
+                            layer_idx,
+                            q7_deltas: q7.as_slice(),
+                            persona_opt: st
+                                .persona_q7s
+                                .and_then(|ps| ps.get(layer_idx))
+                                .map(Vec::as_slice),
+                            resonant_opt: st
+                                .resonant_ctx
+                                .as_ref()
+                                .and_then(|r| r.layer_slices(layer_idx)),
+                            max_rad: st.rope_rad,
+                            trail: &mut *st.trail,
+                            horizon_mode: st.horizon_mode,
+                            escalation_provider: st.escalation_provider.as_deref_mut(),
+                        })
+                    }),
                 _ => None,
             };
             let normed = layer.input_layernorm.forward(&h)?;

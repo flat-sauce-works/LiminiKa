@@ -380,6 +380,7 @@ pub(crate) fn generate_steered_reply_with_offset(
         srl: cfg.srl,
         horizon_mode: cfg.horizon_mode,
         escalation_provider: cfg.escalation_provider.as_deref_mut(),
+        compute_dispatch: None,
     };
     let t_dec = Instant::now();
     let prefill_dispatch = steer.adapter.step_compute_dispatch(SystemPressureReading {
@@ -389,6 +390,7 @@ pub(crate) fn generate_steered_reply_with_offset(
         irreversible_step: 1,
         _pad: 0,
     });
+    steer.compute_dispatch = Some(prefill_dispatch);
     let (mut logits, _, _) =
         model.forward_tokens(&ids, start_offset, Some(&mut steer), cfg.use_steer, false)?;
     steer
@@ -408,7 +410,13 @@ pub(crate) fn generate_steered_reply_with_offset(
         let (next_logits, _, _) =
             model.forward_tokens(&[next], offset, Some(&mut steer), cfg.use_steer, false)?;
         let tok_ms = t_tok.elapsed().as_secs_f64() * 1000.0;
-        let pressure_q15 = ((tok_ms / 50.0).clamp(0.0, 1.0) * 32767.0) as u16;
+        let pressure_q15 = ((tok_ms / 120.0).clamp(0.0, 1.0) * 32767.0) as u16;
+        if gen_ids.len() == 4 && steer.adapter.compute_pool().baseline_pressure_q15 == 8192 {
+            steer
+                .adapter
+                .compute_pool_mut()
+                .reanchor_baseline_pressure(pressure_q15);
+        }
         let tok_dispatch = steer.adapter.step_compute_dispatch(SystemPressureReading {
             frame_time_pressure_q15: pressure_q15,
             bandwidth_pressure_q15: pressure_q15,
@@ -424,6 +432,7 @@ pub(crate) fn generate_steered_reply_with_offset(
         steer
             .adapter
             .commit_compute_exit_reward(tok_dispatch.execute_mask, exit_reward);
+        steer.compute_dispatch = Some(tok_dispatch);
         logits = next_logits;
     }
     let decode_secs = t_dec.elapsed().as_secs_f64();

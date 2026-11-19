@@ -311,6 +311,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         srl: srl_arg,
                         horizon_mode: HorizonAblationMode::Core3,
                         escalation_provider: None,
+                        compute_dispatch: None,
                     };
                     let (mut logits, _, _) =
                         model.forward_tokens(&ids, 0, Some(&mut steer), use_edbc, false)?;
@@ -546,6 +547,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         srl: srl_arg,
                         horizon_mode: HorizonAblationMode::Core3,
                         escalation_provider: None,
+                        compute_dispatch: None,
                     };
                     let (mut logits, _, _) =
                         model.forward_tokens(&ids, offset, Some(&mut steer), use_edbc, false)?;
