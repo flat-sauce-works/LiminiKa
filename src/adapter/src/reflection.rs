@@ -374,7 +374,7 @@ pub struct ReflectionGateInput {
     pub boundary_sensitivity_q7: u8,
     /// True when the query contains an undigested Known Unknown ($O \setminus S$) exterior pointer.
     pub has_undigested_known_unknown: bool,
-    /// Exit EDBC / top-k entropy (`0.0..=1.0`).
+    /// Exit `EntropyController` / top-k entropy (`0.0..=1.0`).
     pub exit_entropy_h_tilde: f32,
     /// Guard conflict margin (`max_guard_score - top1_fact_score`).
     pub guard_conflict_margin: f32,

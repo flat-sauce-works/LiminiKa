@@ -955,7 +955,7 @@ impl ModelSteeringAdapter {
     }
 
     /// Writes `circuit` into the embedded [`gcso_ledger_slot_t`] so every subsequent
-    /// [`ActionHubEngine`] and SRL step modulates [`GatewayFrame`] dynamically from this circuit.
+    /// [`ActionHubEngine`] and the rank-1 residual step modulates [`GatewayFrame`] dynamically from this circuit.
     pub fn set_active_circuit(&mut self, circuit: CognitiveTrajectoryLedger) {
         circuit.write_to_ledger_slot(&mut self.ledger_slot);
     }
@@ -1716,7 +1716,7 @@ impl ModelSteeringAdapter {
         Ok(self.probe_baseline.probe_epoch)
     }
 
-    /// Returns a mutable reference to the embedded [`EntropyController`] (EDBC).
+    /// Returns a mutable reference to the embedded [`EntropyController`].
     pub fn entropy_controller_mut(&mut self) -> &mut EntropyController {
         &mut self.entropy_controller
     }
@@ -1774,7 +1774,7 @@ impl ModelSteeringAdapter {
         Ok(q7_buf.as_slice().to_vec())
     }
 
-    /// Applies RIPA-bounded phase steering to a single token's rotated query slice
+    /// Applies soft-bounded (`PhaseClamp`) phase steering to a single token's rotated query slice
     /// (`num_q_heads * rotary_dim`) using [`PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe`].
     ///
     /// Layers disabled in `geometry.layer_rope_mask` (NoPE layers) are skipped in O(1).

@@ -2115,7 +2115,7 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
         "per-layer read-only RoPE modulation must not accumulate intervention epochs"
     );
 
-    // 2. ActionHub RoPE + SRL orchestration wires Core Layers and persists Ego intervention on SRL.
+    // 2. ActionHub RoPE + rank-1 residual orchestration wires Core Layers and persists Ego intervention on the residual path.
     let mut hidden = vec![10.0, 0.0, 0.0, 0.0];
     let u = vec![1.0, 0.0, 0.0, 0.0];
     let v = vec![1.0, 0.0, 0.0, 0.0];
