@@ -33,6 +33,7 @@ jobs:
     name: Auto-Format Codebase Before Testing
     if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
 
@@ -117,6 +118,7 @@ jobs:
     needs: auto-format
     if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     outputs:
@@ -140,10 +142,11 @@ jobs:
           filters: |
             cpp:
               - 'include/**'
-              - 'src/**'
-              - 'examples/**'
-              - 'tests/**'
-              - 'benches/**'
+              - 'src/kernels/**'
+              - 'examples/c_api/**'
+              - 'examples/CMakeLists.txt'
+              - 'tests/ffi/**'
+              - 'tests/CMakeLists.txt'
               - 'cmake/**'
               - 'CMakeLists.txt'
               - '**/CMakeLists.txt'
@@ -179,6 +182,7 @@ jobs:
               - 'Cargo.toml'
               - '**/Cargo.toml'
               - '**/build.rs'
+              - 'Cargo.lock'
               - '**/Cargo.lock'
               - 'deny.toml'
               - '**/*.rs'
@@ -198,6 +202,7 @@ jobs:
             license:
               - 'Cargo.toml'
               - '**/Cargo.toml'
+              - 'Cargo.lock'
               - '**/Cargo.lock'
               - 'deny.toml'
               - 'LICENSE*'
@@ -208,8 +213,13 @@ jobs:
               - 'examples/**'
               - 'benches/**'
               - 'cmake/**'
+              - 'CMakeLists.txt'
               - '**/CMakeLists.txt'
               - '**/build.rs'
+              - '.clang-format'
+              - '.editorconfig'
+              - '.gitignore'
+              - '.gitattributes'
               - '.github/workflows/**'
             meta:
               - 'CITATION.cff'
@@ -226,8 +236,9 @@ jobs:
   license-safety-check:
     name: License & Dependency Safety
     needs: [auto-format, changes]
-    if: ${{ always() && !cancelled() && (needs.changes.outputs.license == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ always() && !cancelled() && (needs.changes.outputs.license == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
 
@@ -275,6 +286,7 @@ jobs:
               "target", "build", "cmake-build", "_build", ".git", ".cargo",
               ".venv", "node_modules", "vendor", "third_party", "3rdparty",
               "__pycache__", ".cache", "models", "containers",
+              ".agent", ".agents", ".antigravity", ".gemini", ".idx", ".vscode", ".idea",
           }
           slash_exts = {
               ".rs", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".inl",
@@ -381,15 +393,19 @@ jobs:
 
           root = pathlib.Path("src/core/src")
           rules = [
-              ("Lv.0 liminal -> Lv.1..4", "liminal", re.compile(r"crate::(foundation|stigmergy|drivers|runtime)\b")),
-              ("Lv.1 foundation -> Lv.2..4", "foundation", re.compile(r"crate::(stigmergy|drivers|runtime)\b")),
-              ("Lv.2 stigmergy -> Lv.3..4", "stigmergy", re.compile(r"crate::(drivers|runtime)\b")),
-              ("Lv.3 drivers -> Lv.4", "drivers", re.compile(r"crate::runtime\b")),
-              ("drivers/spine -> drivers/ego", "drivers/spine", re.compile(r"(crate::drivers::ego|super::super::ego|super::ego)\b")),
-              ("drivers/ego -> drivers/spine", "drivers/ego", re.compile(r"(crate::drivers::spine|super::super::spine|super::spine)\b")),
+              ("Lv.0 liminal -> Lv.1..4", "liminal", re.compile(r"\bcrate::(?:(foundation|stigmergy|drivers|runtime)\b|\{[^}]*\b(foundation|stigmergy|drivers|runtime)\b)")),
+              ("Lv.1 foundation -> Lv.2..4", "foundation", re.compile(r"\bcrate::(?:(stigmergy|drivers|runtime)\b|\{[^}]*\b(stigmergy|drivers|runtime)\b)")),
+              ("Lv.2 stigmergy -> Lv.3..4", "stigmergy", re.compile(r"\bcrate::(?:(drivers|runtime)\b|\{[^}]*\b(drivers|runtime)\b)")),
+              ("Lv.3 drivers -> Lv.4", "drivers", re.compile(r"\bcrate::(?:runtime\b|\{[^}]*\bruntime\b)")),
+              ("drivers/spine -> drivers/ego", "drivers/spine", re.compile(r"\b(?:crate::drivers::|(?:super::)+)(?:ego\b|\{[^}]*\bego\b)")),
+              ("drivers/ego -> drivers/spine", "drivers/ego", re.compile(r"\b(?:crate::drivers::|(?:super::)+)(?:spine\b|\{[^}]*\bspine\b)")),
           ]
 
           violations = []
+          for legacy in (root / "traits", root / "traits.rs"):
+              if legacy.exists():
+                  violations.append(f"Deprecated legacy traits path exists: {legacy.as_posix()}")
+
           for label, sub, pat in rules:
               sub_dir = root / sub
               rs_files = sorted(sub_dir.rglob("*.rs"))
@@ -397,9 +413,12 @@ jobs:
                   violations.append(f"{label}: directory {sub_dir.as_posix()} is missing or contains no .rs files")
                   continue
               for f in rs_files:
-                  for lineno, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
-                      if pat.search(line):
-                          violations.append(f"{label}: {f.as_posix()}:{lineno}: {line.strip()}")
+                  text = f.read_text(encoding="utf-8")
+                  lines = text.splitlines()
+                  for m in pat.finditer(text):
+                      lineno = text.count("\n", 0, m.start()) + 1
+                      snippet = lines[lineno - 1].strip() if 1 <= lineno <= len(lines) else m.group(0)
+                      violations.append(f"{label}: {f.as_posix()}:{lineno}: {snippet}")
 
           if violations:
               print("Error: 5-layer unidirectional DAG or driver isolation violation detected:", *violations, sep="\n  ")
@@ -413,12 +432,13 @@ jobs:
   cpp-build-matrix:
     name: C/C++ & GPU Kernels Build (${{ matrix.os }})
     needs: [auto-format, changes]
-    if: ${{ always() && !cancelled() && (needs.changes.outputs.cpp == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ always() && !cancelled() && (needs.changes.outputs.cpp == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     permissions:
       contents: read
 
@@ -451,12 +471,22 @@ jobs:
       - name: Install Build Dependencies & Cache Tools (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install ninja cmake ccache clang-format || true
+          if ! command -v ninja >/dev/null 2>&1 || ! command -v cmake >/dev/null 2>&1 || ! command -v ccache >/dev/null 2>&1 || ! command -v clang-format >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install ninja cmake ccache clang-format || true
+          fi
 
       - name: Install Build Dependencies & Cache Tools (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install ninja ccache llvm --no-progress || true
+          PKGS=()
+          command -v ninja >/dev/null 2>&1 || PKGS+=(ninja)
+          command -v ccache >/dev/null 2>&1 || PKGS+=(ccache)
+          if [ ! -f "C:/Program Files/LLVM/bin/clang.exe" ] && ! command -v clang >/dev/null 2>&1; then
+            PKGS+=(llvm)
+          fi
+          if [ "${#PKGS[@]}" -gt 0 ]; then
+            choco install "${PKGS[@]}" --no-progress || true
+          fi
 
       - name: Setup Compiler Cache
         if: runner.os != 'Linux' || hashFiles('/usr/bin/ccache', '/usr/local/bin/ccache') != ''
@@ -597,12 +627,13 @@ jobs:
   rust-check-matrix:
     name: Rust Workspace (${{ matrix.os }})
     needs: [auto-format, changes]
-    if: ${{ always() && !cancelled() && (needs.changes.outputs.rust == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ always() && !cancelled() && (needs.changes.outputs.rust == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     permissions:
       contents: read
 
@@ -631,13 +662,24 @@ jobs:
       - name: Install C/C++ & LLVM Dependencies for FFI/Bindgen (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install cmake ninja llvm || true
-          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> $GITHUB_ENV
+          LLVM_PREFIX=$(brew --prefix llvm 2>/dev/null || true)
+          if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1 || [ -z "$LLVM_PREFIX" ] || [ ! -d "$LLVM_PREFIX/lib" ]; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install cmake ninja llvm || true
+            LLVM_PREFIX=$(brew --prefix llvm 2>/dev/null || true)
+          fi
+          echo "LIBCLANG_PATH=${LLVM_PREFIX}/lib" >> "$GITHUB_ENV"
 
       - name: Install C/C++ & LLVM Dependencies for FFI/Bindgen (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install ninja llvm --no-progress || true
+          PKGS=()
+          command -v ninja >/dev/null 2>&1 || PKGS+=(ninja)
+          if [ ! -f "C:/Program Files/LLVM/bin/clang.exe" ] && ! command -v clang >/dev/null 2>&1; then
+            PKGS+=(llvm)
+          fi
+          if [ "${#PKGS[@]}" -gt 0 ]; then
+            choco install "${PKGS[@]}" --no-progress || true
+          fi
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $GITHUB_ENV
           echo "LLVM_CONFIG_PATH=C:\Program Files\LLVM\bin\llvm-config.exe" >> $GITHUB_ENV
           echo "C:\Program Files\LLVM\bin" >> $GITHUB_PATH
@@ -717,8 +759,9 @@ jobs:
   dsl-validation:
     name: Validate DSL Spec & Examples
     needs: [auto-format, changes]
-    if: ${{ always() && !cancelled() && (needs.changes.outputs.dsl == 'true' || needs.changes.outputs.rust == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ always() && !cancelled() && (needs.changes.outputs.dsl == 'true' || needs.changes.outputs.rust == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     permissions:
       contents: read
 
@@ -754,8 +797,9 @@ jobs:
   python-check:
     name: Python Script Syntax Verification
     needs: [auto-format, changes]
-    if: ${{ always() && !cancelled() && (needs.changes.outputs.python == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ always() && !cancelled() && (needs.changes.outputs.python == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
 
@@ -800,8 +844,9 @@ jobs:
   meta-citation-check:
     name: Validate Meta & Citation Files
     needs: [auto-format, changes]
-    if: ${{ always() && !cancelled() && (needs.changes.outputs.meta == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ always() && !cancelled() && (needs.changes.outputs.meta == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
 
@@ -827,8 +872,9 @@ jobs:
   docs-check:
     name: Documentation Integrity & Link Check
     needs: [auto-format, changes]
-    if: ${{ always() && !cancelled() && (needs.changes.outputs.docs == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ always() && !cancelled() && (needs.changes.outputs.docs == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
 
