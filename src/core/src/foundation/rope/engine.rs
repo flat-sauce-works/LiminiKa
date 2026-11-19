@@ -4,6 +4,7 @@
 //! Compact 16B [Pod] [PhaseSteeringEngine] and core RoPE trait delegations.
 
 use super::*;
+use crate::liminal::{Active, ActiveScope, Scoped};
 
 // ===================================================================
 // 2. Primary Phase-Steering & Sub-Head Routing Engine (`16B` Pod)
@@ -131,6 +132,81 @@ impl PhaseSteeringEngine {
     pub const fn expected_tensor_len(&self) -> usize {
         (self.head_dim as usize) * (self.num_heads as usize)
     }
+
+    /// Non-generic [`Active`] closure entry point for [`PhaseSteering::apply_phase_steering`].
+    ///
+    /// Keeps the underlying AVX2/scalar RoPE kernel strictly non-generic (`0 B` L1I duplication)
+    /// while statically excluding [`crate::liminal::Void`] and unclassified origins at compile time.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slice lengths are insufficient.
+    #[inline(always)]
+    pub fn apply_phase_steering_active(
+        &self,
+        tensor: &mut AlignedSliceMut32<'_, f32>,
+        phase_deltas: Scoped<Active, &AlignedSlice16<'_, gcso_q7_t>>,
+    ) -> GcsoResult<()> {
+        self.apply_phase_steering(tensor, phase_deltas.active_ref())
+    }
+
+    /// Zero-cost closure shell folding any [`ActiveScope`] refinement into [`Active`] and
+    /// delegating to [`Self::apply_phase_steering_active`].
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slice lengths are insufficient.
+    #[inline(always)]
+    pub fn apply_phase_steering_scoped<B: ActiveScope>(
+        &self,
+        tensor: &mut AlignedSliceMut32<'_, f32>,
+        phase_deltas: Scoped<B, &AlignedSlice16<'_, gcso_q7_t>>,
+    ) -> GcsoResult<()> {
+        self.apply_phase_steering_active(tensor, phase_deltas.seal_active())
+    }
+
+    /// Non-generic [`Active`] closure entry point for
+    /// [`PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe`].
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if geometry or slice lengths are invalid.
+    #[inline(always)]
+    pub fn apply_phase_steering_for_geometry_safe_active<G: RopeSteeringTarget + ?Sized>(
+        &self,
+        geometry: &G,
+        tensor: &mut AlignedSliceMut32<'_, f32>,
+        phase_deltas: Scoped<Active, &AlignedSlice16<'_, gcso_q7_t>>,
+        max_rad: f32,
+    ) -> GcsoResult<()> {
+        self.apply_phase_steering_for_geometry_safe(
+            geometry,
+            tensor,
+            phase_deltas.active_ref(),
+            max_rad,
+        )
+    }
+
+    /// Zero-cost closure shell folding any [`ActiveScope`] refinement into [`Active`] and
+    /// delegating to [`Self::apply_phase_steering_for_geometry_safe_active`].
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if geometry or slice lengths are invalid.
+    #[inline(always)]
+    pub fn apply_phase_steering_for_geometry_safe_scoped<
+        B: ActiveScope,
+        G: RopeSteeringTarget + ?Sized,
+    >(
+        &self,
+        geometry: &G,
+        tensor: &mut AlignedSliceMut32<'_, f32>,
+        phase_deltas: Scoped<B, &AlignedSlice16<'_, gcso_q7_t>>,
+        max_rad: f32,
+    ) -> GcsoResult<()> {
+        self.apply_phase_steering_for_geometry_safe_active(
+            geometry,
+            tensor,
+            phase_deltas.seal_active(),
+            max_rad,
+        )
+    }
 }
 
 // ===================================================================
@@ -146,5 +222,49 @@ impl PhaseSteering for PhaseSteeringEngine {
     #[inline(always)]
     fn num_heads(&self) -> u32 {
         self.num_heads
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::liminal::ScopedCut;
+
+    #[repr(align(32))]
+    struct Align32<T>(T);
+
+    #[test]
+    fn test_active_closure_gate_matches_non_generic_rope_kernel_bit_exact() {
+        let engine = PhaseSteeringEngine::new(16, 4).unwrap();
+        let mut raw_buf = Align32([0.0_f32; 64]);
+        let mut gated_buf = Align32([0.0_f32; 64]);
+        for (i, slot) in raw_buf.0.iter_mut().enumerate() {
+            *slot = ((i as f32) * 0.13) - 2.0;
+        }
+        gated_buf.0 = raw_buf.0;
+
+        let deltas_raw = Align32([12_i8, -18, 27, -9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let deltas_slice = AlignedSlice16::new(&deltas_raw.0[..4]).unwrap();
+
+        {
+            let mut raw_mut = AlignedSliceMut32::new(&mut raw_buf.0).unwrap();
+            engine
+                .apply_phase_steering(&mut raw_mut, &deltas_slice)
+                .unwrap();
+        }
+        {
+            let mut gated_mut = AlignedSliceMut32::new(&mut gated_buf.0).unwrap();
+            let scoped = match Scoped::from_boundary(&deltas_slice).cut_by_lacuna_q7(true, 12, 4) {
+                ScopedCut::Exterior(ext) => ext,
+                _ => panic!("expected exterior active cut"),
+            };
+            engine
+                .apply_phase_steering_scoped(&mut gated_mut, scoped)
+                .unwrap();
+        }
+
+        for (lhs, rhs) in raw_buf.0.iter().zip(gated_buf.0.iter()) {
+            assert_eq!(lhs.to_bits(), rhs.to_bits());
+        }
     }
 }

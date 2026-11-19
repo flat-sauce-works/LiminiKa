@@ -3059,3 +3059,71 @@ fn test_entropy_controller_init_setters_and_reset() {
     .unwrap();
     assert!(h > 0.0 && out_state.moving_z_entropy == h);
 }
+
+#[test]
+fn test_stationary_skip_and_spine_bypass_do_not_misdiagnose_passive_saturation() {
+    use crate::drivers::{LayerDistortionKind, LiminalEgoField};
+    use crate::liminal::LiminalBoundaryDelta;
+    use crate::runtime::EpistemicHorizonReading;
+    use crate::stigmergy::{
+        StigmergicActionDecision, StigmergicOverlapSerendipityReport, StigmergicThresholds,
+        DEFAULT_DERIVATIVE_ALPHA_Q7,
+    };
+
+    let mut bank = CoreTelemetryBank::default();
+    let horizon = EpistemicHorizonReading::default();
+    let delta = LiminalBoundaryDelta {
+        stationary_shortcut_ready: 1,
+        ..LiminalBoundaryDelta::default()
+    };
+    let venn = StigmergicOverlapSerendipityReport::default();
+    let ego_off = LiminalEgoField::default();
+
+    // Simulate `byp=on` profile: high InertialLayerSkip (~72%) + modest PassiveSidecar (~19%)
+    // + active ExpressPhaseSteer (~9%) + Spine whole-token bypass events.
+    for i in 0..100 {
+        let dec = if i < 72 {
+            StigmergicActionDecision::InertialLayerSkip
+        } else if i < 91 {
+            StigmergicActionDecision::PassiveSidecar
+        } else {
+            StigmergicActionDecision::ExpressPhaseSteer
+        };
+        bank.record_step(
+            dec, &horizon, &delta, &venn, &ego_off, 0, 0, 0, false, false,
+        );
+        if i % 2 == 0 {
+            bank.record_whole_token_bypass();
+        }
+    }
+
+    let report = bank.compute_distortion_report();
+    assert_eq!(report.kind, LayerDistortionKind::Aligned);
+    assert!(!report.ego_wakeup_recommended);
+    let adj = bank.evaluate_slow_loop_epoch(&StigmergicThresholds::default(), 16);
+    assert!(adj.applied);
+    assert_eq!(
+        adj.suggested_derivative_alpha_q7,
+        DEFAULT_DERIVATIVE_ALPHA_Q7
+    );
+
+    // Genuine passive stagnation (dominant PassiveSidecar) must still trigger PassiveSaturation.
+    let mut stagnant_bank = CoreTelemetryBank::default();
+    for _ in 0..80 {
+        stagnant_bank.record_step(
+            StigmergicActionDecision::PassiveSidecar,
+            &horizon,
+            &delta,
+            &venn,
+            &ego_off,
+            0,
+            0,
+            0,
+            false,
+            false,
+        );
+    }
+    let stagnant_report = stagnant_bank.compute_distortion_report();
+    assert_eq!(stagnant_report.kind, LayerDistortionKind::PassiveSaturation);
+    assert!(stagnant_report.ego_wakeup_recommended);
+}

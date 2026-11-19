@@ -676,13 +676,18 @@ impl ModelSteeringAdapter {
             self.effective_spine_guard_and_repulsion(obs.repulsion_active != 0);
         obs.repulsion_active = u8::from(repulsion_active);
         self.passive_saturation_probe_steps = self.passive_saturation_probe_steps.saturating_sub(1);
-        self.compute_pool
+        let veto = self
+            .compute_pool
             .evaluate_whole_token_steering_bypass_with_spine(
                 obs,
                 &mut self.system_spine,
                 guard_active,
                 dispatch,
-            )
+            );
+        if dispatch.whole_token_steering_bypass != 0 {
+            self.telemetry.record_whole_token_bypass();
+        }
+        veto
     }
 
     /// Evaluates token-level whole-steering bypass on `obs`, mutating `dispatch` and mirroring
@@ -1814,17 +1819,23 @@ impl ModelSteeringAdapter {
         let q7_buf = AlignedQ7Buffer16::from_slice(q7_deltas);
         let q7_aligned = AlignedSlice16::new(q7_buf.as_slice())
             .map_err(|e| format!("AlignedSlice16 error: {e}"))?;
+        let Some(active_q7) = liminika_core::liminal::Scoped::from_boundary(&q7_aligned)
+            .cut_by_lacuna(max_rad.is_finite() && max_rad > 0.0, max_rad, 0.0)
+            .into_active()
+        else {
+            return Ok(());
+        };
         {
             let mut tensor_mut = AlignedSliceMut32::new(work_buf.as_mut_slice())
                 .map_err(|e| format!("AlignedSliceMut32 error: {e}"))?;
             self.phase_engine
-                .apply_phase_steering_for_geometry_safe(
+                .apply_phase_steering_for_geometry_safe_active(
                     &self.geometry,
                     &mut tensor_mut,
-                    &q7_aligned,
+                    active_q7,
                     max_rad,
                 )
-                .map_err(|e| format!("apply_phase_steering_for_geometry_safe error: {e}"))?;
+                .map_err(|e| format!("apply_phase_steering_for_geometry_safe_active error: {e}"))?;
         }
 
         q_rot_inout.copy_from_slice(work_buf.as_slice());

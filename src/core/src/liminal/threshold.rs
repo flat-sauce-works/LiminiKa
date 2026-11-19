@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+use crate::liminal::axiom::BitCut32;
 use crate::liminal::constants::{
     NUM_LIMINAL_THRESHOLD_CHANNELS, THRESHOLD_ACTION_HUB_WIDE, THRESHOLD_COGNITIVE_CIRCUIT,
     THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_KV_PHASE_CACHE, THRESHOLD_OBJECTIVE_FACT,
@@ -25,14 +26,15 @@ pub trait Liminal {
     const ROOT_UNKNOWABLE_VOID_MASK: u32 = u32::MAX;
 
     /// Partitions `world_bits` into `(cognized_bits, unknowable_void_bits)` strictly branchlessly
-    /// for a trait's declared `threshold_mask`.
+    /// for a trait's declared `threshold_mask` via [`BitCut32::split`].
     #[inline(always)]
     fn partition_cognitive_and_unknowable_bits(
         &self,
         threshold_mask: u32,
         world_bits: u32,
     ) -> (u32, u32) {
-        (world_bits & threshold_mask, world_bits & !threshold_mask)
+        let cut = BitCut32::split(world_bits, threshold_mask);
+        (cut.inside, cut.outside)
     }
 }
 

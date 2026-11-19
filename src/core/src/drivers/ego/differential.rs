@@ -20,7 +20,7 @@ use crate::foundation::{
     swar_q7_scale_le128_with_bias_x8, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
-    branchless_select_u32, branchless_select_u8, gcso_q7_t, EpistemicPartition,
+    branchless_select_u32, branchless_select_u8, gcso_q7_t, EpistemicPartition, Scoped, ScopedCut,
     ATTRACTOR_SLOT_SYSTEM_BASELINE, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
     SCOPE_REGION_KNOWN_UNKNOWN, SCOPE_REGION_SELF_EXCLUSIVE, SCOPE_REGION_SHARED_CORE,
 };
@@ -220,17 +220,28 @@ impl EgoDifferentialNet {
                 && node.reinforce_count >= 4
                 && (node.flags & DISTORTION_DELTA_FLAG_CONSOLIDATED_IFRAME) == 0
             {
-                let mut rec = CrystallizedAttractorRecord::new_empty(
-                    node.anchor_ref_id,
-                    ATTRACTOR_SLOT_SYSTEM_BASELINE,
-                    0,
-                );
-                rec.phase_profile = node.delta_phase_q7;
-                rec.base_energy = f32::from(node.gain_q7) * (1.0 / 127.0);
-                rec.sample_count = node.reinforce_count;
-                rec.stamp_crc32();
-                node.flags |= DISTORTION_DELTA_FLAG_CONSOLIDATED_IFRAME;
-                crystallized = Some(rec);
+                let bridge_count = node.reinforce_count.min(u32::from(u8::MAX)) as u8;
+                let grounded_profile = match Scoped::from_delta(node.delta_phase_q7)
+                    .cut_by_lacuna_q7(true, node.gain_q7.max(1), 0)
+                {
+                    ScopedCut::SelfRef(aligned) => Some(aligned.seal_grounded()),
+                    ScopedCut::Exterior(spec) => spec
+                        .bridge_to_shared(bridge_count)
+                        .ok()
+                        .map(Scoped::seal_grounded),
+                    ScopedCut::Void(_) => None,
+                };
+                if let Some(grounded) = grounded_profile {
+                    let rec = CrystallizedAttractorRecord::from_grounded_delta_64(
+                        node.anchor_ref_id,
+                        ATTRACTOR_SLOT_SYSTEM_BASELINE,
+                        node.reinforce_count,
+                        f32::from(node.gain_q7) * (1.0 / 127.0),
+                        grounded,
+                    );
+                    node.flags |= DISTORTION_DELTA_FLAG_CONSOLIDATED_IFRAME;
+                    crystallized = Some(rec);
+                }
             }
 
             if current_epoch.saturating_sub(node.last_active_epoch) >= 4 {

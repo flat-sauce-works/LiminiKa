@@ -764,6 +764,13 @@ impl CoreTelemetryBank {
         self.true_void_aperture_zeros = 0;
     }
 
+    /// Records a `SystemSpine` whole-token stationary bypass event without polluting
+    /// stigmergic action saturation counters.
+    #[inline(always)]
+    pub fn record_whole_token_bypass(&mut self) {
+        self.whole_token_bypass_events = self.whole_token_bypass_events.saturating_add(1);
+    }
+
     /// Records lightweight `2 Primitives x 2 Drivers` structural attribution, P-Frame chain hops,
     /// `DistortionTension` events, Venn $O \setminus S$ sandbox staging, and pre-inference bypass hits.
     #[inline]
@@ -1229,9 +1236,15 @@ impl CoreTelemetryBank {
         }
         let denom = self.system.continuous_standard_steps as f32;
         let inv_denom = 1.0_f32 / denom;
+        let skip_idx = StigmergicActionDecision::InertialLayerSkip as usize;
         let mut max_decision = 0_u64;
         let mut hhi = 0.0_f32;
-        for &cnt in &self.layer1.decision_counts {
+        for (idx, &cnt) in self.layer1.decision_counts.iter().enumerate() {
+            // Intentional stationary shortcuts (`InertialLayerSkip` / `SelfRef` passthrough)
+            // are healthy low-entropy skips, not pathological stigmergic over-integration.
+            if idx == skip_idx {
+                continue;
+            }
             if cnt > max_decision {
                 max_decision = cnt;
             }

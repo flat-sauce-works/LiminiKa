@@ -51,8 +51,8 @@ use crate::foundation::{
     VON_MISES_KAPPA_AT_MAX_R_BITS,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_usize, gcso_q7_t, GcsoResult,
-    ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR, ATTRACTOR_SLOT_ID_MASK,
+    branchless_select_f32, branchless_select_usize, gcso_q7_t, GcsoResult, Grounded, GroundedScope,
+    Scoped, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR, ATTRACTOR_SLOT_ID_MASK,
     ATTRACTOR_SLOT_PERSONA, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, DEFAULT_ENTROPY_EPS,
     DEFAULT_FACT_PHASE_CLAMP_RAD, DEFAULT_PERSONA_PHASE_CLAMP_RAD, DEFAULT_PHASE_CLAMP_MAX_RAD,
     GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION, GCSO_ERROR_BUFFER_TOO_SMALL,
@@ -779,6 +779,70 @@ impl CrystallizedAttractorRecord {
         mass
     }
 
+    /// Non-generic [`Grounded`] closure entry point for [`Self::absorb_sample_point_64`].
+    ///
+    /// Statically excludes [`crate::liminal::Void`], [`crate::liminal::BoundaryViolation`], and
+    /// unbridged [`crate::liminal::SpeculativeDiscovery`] from crystallizing into persistent
+    /// attractor memory without monomorphizing the absorption body.
+    #[inline(always)]
+    pub fn absorb_sample_point_grounded_64(
+        &mut self,
+        sample_phases: Scoped<Grounded, &[gcso_q7_t; MAX_ATTENTION_HEADS]>,
+        sample_energy: f32,
+    ) -> f32 {
+        self.absorb_sample_point_64(sample_phases.grounded_ref(), sample_energy)
+    }
+
+    /// Zero-cost closure shell folding any [`GroundedScope`] refinement into [`Grounded`] and
+    /// delegating to [`Self::absorb_sample_point_grounded_64`].
+    #[inline(always)]
+    pub fn absorb_sample_point_scoped_64<B: GroundedScope>(
+        &mut self,
+        sample_phases: Scoped<B, &[gcso_q7_t; MAX_ATTENTION_HEADS]>,
+        sample_energy: f32,
+    ) -> f32 {
+        self.absorb_sample_point_grounded_64(sample_phases.seal_grounded(), sample_energy)
+    }
+
+    /// Non-generic [`Grounded`] closure constructor crystallizing a verified phase profile into a
+    /// CRC32-stamped I-Frame [`CrystallizedAttractorRecord`].
+    #[inline(always)]
+    #[must_use]
+    pub fn from_grounded_delta_64(
+        anchor_id: u32,
+        dominant_slot: u8,
+        sample_count: u32,
+        base_energy: f32,
+        phase_profile: Scoped<Grounded, [gcso_q7_t; MAX_ATTENTION_HEADS]>,
+    ) -> Self {
+        let mut rec = Self::new_empty(anchor_id, dominant_slot, 0);
+        rec.phase_profile = phase_profile.into_inner();
+        rec.base_energy = base_energy;
+        rec.sample_count = sample_count;
+        rec.stamp_crc32();
+        rec
+    }
+
+    /// Zero-cost closure shell folding any [`GroundedScope`] phase profile into [`Grounded`] and
+    /// delegating to [`Self::from_grounded_delta_64`].
+    #[inline(always)]
+    #[must_use]
+    pub fn from_scoped_delta_64<B: GroundedScope>(
+        anchor_id: u32,
+        dominant_slot: u8,
+        sample_count: u32,
+        base_energy: f32,
+        phase_profile: Scoped<B, [gcso_q7_t; MAX_ATTENTION_HEADS]>,
+    ) -> Self {
+        Self::from_grounded_delta_64(
+            anchor_id,
+            dominant_slot,
+            sample_count,
+            base_energy,
+            phase_profile.seal_grounded(),
+        )
+    }
+
     #[inline]
     #[must_use]
     pub(crate) fn find_nearest_toroidal_centroid_with_cache_64(
@@ -1111,5 +1175,43 @@ impl RawPhaseProjectable for CrystallizedAttractorRecord {
     #[inline(always)]
     fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         *self.phase_words_ref()
+    }
+}
+
+#[cfg(test)]
+mod grounded_gate_tests {
+    use super::*;
+    use crate::liminal::{BridgedDiscovery, ScopedCut, SpeculativeDiscovery, VerifiedAligned};
+
+    #[test]
+    fn test_grounded_closure_gate_allows_verified_and_bridged_blocks_unbridged() {
+        let phases = [18_i8; MAX_ATTENTION_HEADS];
+
+        let mut direct = CrystallizedAttractorRecord::new_empty(7, ATTRACTOR_SLOT_PERSONA, 0);
+        let direct_mass = direct.absorb_sample_point_64(&phases, 1.5);
+
+        let mut aligned_rec = CrystallizedAttractorRecord::new_empty(7, ATTRACTOR_SLOT_PERSONA, 0);
+        let verified: VerifiedAligned<&[gcso_q7_t; MAX_ATTENTION_HEADS]> =
+            match Scoped::from_boundary(&phases).cut_by_lacuna_q7(true, 1, 4) {
+                ScopedCut::SelfRef(s) => s,
+                _ => panic!("expected verified aligned cut"),
+            };
+        let aligned_mass = aligned_rec.absorb_sample_point_scoped_64(verified, 1.5);
+        assert_eq!(aligned_mass.to_bits(), direct_mass.to_bits());
+        assert_eq!(aligned_rec, direct);
+
+        let spec: SpeculativeDiscovery<&[gcso_q7_t; MAX_ATTENTION_HEADS]> =
+            match Scoped::from_delta(&phases).cut_by_lacuna_q7(true, 24, 4) {
+                ScopedCut::Exterior(e) => e,
+                _ => panic!("expected speculative discovery cut"),
+            };
+        let blocked = spec.bridge_to_shared(0).unwrap_err();
+        let bridged: BridgedDiscovery<&[gcso_q7_t; MAX_ATTENTION_HEADS]> =
+            blocked.bridge_to_shared(1).unwrap();
+
+        let mut bridged_rec = CrystallizedAttractorRecord::new_empty(7, ATTRACTOR_SLOT_PERSONA, 0);
+        let bridged_mass = bridged_rec.absorb_sample_point_scoped_64(bridged, 1.5);
+        assert_eq!(bridged_mass.to_bits(), direct_mass.to_bits());
+        assert_eq!(bridged_rec, direct);
     }
 }

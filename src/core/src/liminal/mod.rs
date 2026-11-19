@@ -10,16 +10,16 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod axiom;
 pub mod constants;
-pub mod lacuna;
-pub mod scope;
+pub mod partition;
 pub mod select;
 pub mod threshold;
 
+pub use self::axiom::*;
 pub(crate) use self::constants::MAX_REGISTER_CACHED_CENTROIDS;
 pub use self::constants::*;
-pub use self::lacuna::*;
-pub use self::scope::*;
+pub use self::partition::*;
 pub use self::select::*;
 pub use self::threshold::*;
 

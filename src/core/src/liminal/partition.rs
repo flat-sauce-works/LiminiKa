@@ -1,131 +1,14 @@
-// name: src/core/src/liminal/scope.rs
+// name: src/core/src/liminal/partition.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Zero-sized boundary scope markers (`Interior`, `Shared`, `Exterior`, `Void`), transparent
-//! [`Scoped<B, T>`] wrapper, [`EpistemicRegime`], and 4-region Venn epistemic partitioning
-//! ($S \setminus O$, $S \cap O$, $O \setminus S$, $\overline{S \cup O}$).
+//! [`EpistemicRegime`] classification and branchless 16-byte 4-region Venn epistemic partitioning
+//! ($S \setminus O$, $S \cap O$, $O \setminus S$, $\overline{S \cup O}$) aligned with [`BitCut8`].
 
 #![forbid(unsafe_code)]
 
-use core::marker::PhantomData;
-use core::mem::size_of;
-
+use crate::liminal::axiom::BitCut8;
 use crate::liminal::constants::{AttributionTag, NUM_STIGMERGIC_GRANULES};
 use crate::liminal::select::branchless_select_u8;
-
-// ===================================================================
-// 1. Zero-Sized Scope Markers & Transparent Scoped Wrapper
-// ===================================================================
-
-/// Zero-sized scope marker for self-exclusive interior state ($S \setminus O$).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Interior;
-
-/// Zero-sized scope marker for shared bridge state ($S \cap O$).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Shared;
-
-/// Zero-sized scope marker for observed exterior state ($O \setminus S$, sandbox-isolated).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Exterior;
-
-/// Zero-sized scope marker for unknowable void outside cognitive scope ($\overline{S \cup O}$).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Void;
-
-/// Marker trait implemented strictly for active cognitive scope markers ([`Interior`],
-/// [`Shared`], [`Exterior`]) and intentionally excluded for [`Void`].
-pub trait ActiveScope {}
-
-impl ActiveScope for Interior {}
-impl ActiveScope for Shared {}
-impl ActiveScope for Exterior {}
-
-/// Zero-overhead `#[repr(transparent)]` type-level tag binding value `T` to boundary scope `B`.
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Scoped<B, T> {
-    value: T,
-    _scope: PhantomData<B>,
-}
-
-impl<B, T> Scoped<B, T> {
-    /// Wraps `value` in boundary scope `B` with zero runtime overhead.
-    #[inline(always)]
-    #[must_use]
-    pub const fn new(value: T) -> Self {
-        Self {
-            value,
-            _scope: PhantomData,
-        }
-    }
-
-    /// Consumes the scope wrapper and returns the inner `T`.
-    #[inline(always)]
-    #[must_use]
-    pub fn into_inner(self) -> T {
-        self.value
-    }
-
-    /// Borrows the wrapped value immutably.
-    #[inline(always)]
-    #[must_use]
-    #[allow(clippy::should_implement_trait)]
-    pub const fn as_ref(&self) -> &T {
-        &self.value
-    }
-
-    /// Borrows the wrapped value mutably.
-    #[inline(always)]
-    #[must_use]
-    #[allow(clippy::should_implement_trait)]
-    pub fn as_mut(&mut self) -> &mut T {
-        &mut self.value
-    }
-
-    /// Re-tags the wrapped value into another boundary scope `B2`.
-    #[inline(always)]
-    #[must_use]
-    pub fn retag<B2>(self) -> Scoped<B2, T> {
-        Scoped::new(self.value)
-    }
-}
-
-impl<B, T> AsRef<T> for Scoped<B, T> {
-    #[inline(always)]
-    fn as_ref(&self) -> &T {
-        &self.value
-    }
-}
-
-impl<B, T> AsMut<T> for Scoped<B, T> {
-    #[inline(always)]
-    fn as_mut(&mut self) -> &mut T {
-        &mut self.value
-    }
-}
-
-impl<B: ActiveScope, T> Scoped<B, T> {
-    /// Borrows a value statically guaranteed not to belong to [`Void`].
-    #[inline(always)]
-    #[must_use]
-    pub const fn active_ref(&self) -> &T {
-        &self.value
-    }
-}
-
-const _: () = {
-    assert!(size_of::<Interior>() == 0);
-    assert!(size_of::<Shared>() == 0);
-    assert!(size_of::<Exterior>() == 0);
-    assert!(size_of::<Void>() == 0);
-    assert!(size_of::<Scoped<Interior, u64>>() == size_of::<u64>());
-    assert!(size_of::<Scoped<Void, u64>>() == size_of::<u64>());
-};
-
-// ===================================================================
-// 2. Epistemic Regime & 4-Region Venn Partition
-// ===================================================================
 
 /// Epistemic regime classification separating internal memory conflict from out-of-memory unknowability.
 #[repr(u8)]
@@ -198,6 +81,45 @@ pub struct EpistemicPartition {
     pub reserved_align: [u8; 3],
 }
 
+impl EpistemicPartition {
+    /// Returns `true` when both shared bridge and validated exterior regions are empty
+    /// (zero-aperture non-observation).
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_void(&self) -> bool {
+        self.true_void_aperture_zero != 0
+    }
+
+    /// Returns `true` when shared bridge support exists with zero validated exterior gap.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_self_aligned(&self) -> bool {
+        (self.shared_core_mask != 0) & (self.known_unknown_mask == 0)
+    }
+
+    /// Returns `true` when validated exterior granules ($O \setminus S$) are present.
+    #[inline(always)]
+    #[must_use]
+    pub const fn has_exterior_gap(&self) -> bool {
+        self.known_unknown_mask != 0
+    }
+
+    /// Returns `true` when self-exclusive interior granules ($S \setminus O$) are present.
+    #[inline(always)]
+    #[must_use]
+    pub const fn has_interior_excess(&self) -> bool {
+        self.self_exclusive_mask != 0
+    }
+
+    /// Returns the raw 4-quadrant atomic [`BitCut8`] refinement of `(self_mask, other_mask)`:
+    /// `((S & O, S & !O), (!S & O, !S & !O))`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn quadrant_cuts(&self) -> (BitCut8, BitCut8) {
+        BitCut8::split(0xFF, self.self_mask).refine(self.other_mask)
+    }
+}
+
 /// Evaluates the branchless 4-region Venn partition across 8 SWAR granules (`0 alloc`, `0 fdiv`,
 /// `0` data-dependent branches).
 ///
@@ -223,9 +145,10 @@ pub fn evaluate_epistemic_partition_branchless(
         g += 1;
     }
 
-    let shared_core_mask = self_mask & other_mask;
-    let self_exclusive_mask = self_mask & !other_mask;
-    let raw_ext_mask = !self_mask & other_mask;
+    let (in_self, out_self) = BitCut8::split(0xFF, self_mask).refine(other_mask);
+    let shared_core_mask = in_self.inside;
+    let self_exclusive_mask = in_self.outside;
+    let raw_ext_mask = out_self.inside;
     let bridge_count = shared_core_mask.count_ones() as u8;
     let ext_cnt = raw_ext_mask.count_ones() as u8;
 
@@ -292,19 +215,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_scoped_wrapper_and_active_markers() {
-        let interior = Scoped::<Interior, u32>::new(10);
-        let shared = Scoped::<Shared, u32>::new(20);
-        let exterior = Scoped::<Exterior, u32>::new(30);
-        assert_eq!(*interior.active_ref(), 10);
-        assert_eq!(*shared.active_ref(), 20);
-        assert_eq!(*exterior.active_ref(), 30);
-
-        let moved_void: Scoped<Void, u32> = exterior.retag::<Void>();
-        assert_eq!(moved_void.into_inner(), 30);
-    }
-
-    #[test]
     fn test_epistemic_partition_four_regions_and_noise_deadband() {
         let noise_tol = [10u8; NUM_STIGMERGIC_GRANULES];
 
@@ -319,6 +229,10 @@ mod tests {
         assert_eq!(vp_noise.true_void_aperture_zero, 1);
         assert_eq!(vp_noise.sandbox_eligible, 0);
         assert_eq!(vp_noise.boundary_sensitivity_q7, 0);
+        assert!(vp_noise.is_void());
+        assert!(!vp_noise.is_self_aligned());
+        assert!(!vp_noise.has_exterior_gap());
+        assert!(vp_noise.has_interior_excess());
 
         // 2. Bridged `S & O` + `O \ S` stages validated Known Unknown into sandbox without copy.
         let bridged = [80, 72, 0, 0, 92, 88, 0, 0];
@@ -329,12 +243,22 @@ mod tests {
         assert_eq!(vp_ext.bridge_count, 2);
         assert_eq!(vp_ext.sandbox_eligible, 1);
         assert_eq!(vp_ext.true_void_aperture_zero, 0);
+        assert!(!vp_ext.is_void());
+        assert!(!vp_ext.is_self_aligned());
+        assert!(vp_ext.has_exterior_gap());
+        assert!(!vp_ext.has_interior_excess());
         // 4/8 active granules -> 4 * 0.5 * 0.5 = 1.0 -> 127 in Q0.7.
         assert_eq!(vp_ext.boundary_sensitivity_q7, 127);
+        let (in_self, out_self) = vp_ext.quadrant_cuts();
+        assert_eq!(in_self.inside, vp_ext.shared_core_mask);
+        assert_eq!(in_self.outside, vp_ext.self_exclusive_mask);
+        assert_eq!(out_self.inside, vp_ext.known_unknown_mask);
+        assert_eq!(out_self.outside, vp_ext.true_void_mask);
 
-        // 3. 8/8 saturation -> p = 1.0 -> 4p(1-p) == 0 boundary sensitivity.
+        // 3. 8/8 saturation -> p = 1.0 -> 4p(1-p) == 0 boundary sensitivity, self-aligned.
         let full = [90u8; NUM_STIGMERGIC_GRANULES];
         let vp_full = evaluate_epistemic_partition_branchless(0xFF, &full, &noise_tol, 40);
         assert_eq!(vp_full.boundary_sensitivity_q7, 0);
+        assert!(vp_full.is_self_aligned());
     }
 }
