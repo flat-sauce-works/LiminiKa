@@ -116,7 +116,8 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_TAG_ACTION_MODE_MASK 0x1FU
 #define GCSO_TAG_ATTRACTOR_SLOT_SHIFT 5U
 
-/* 3-Bit Semantic Attractor Provenance / Affinity Identifiers (0..7, matching primitives.rs; decoupled from physical workbench lanes 0..7) */
+/* 3-Bit Semantic Attractor Provenance / Affinity Identifiers (0..7, matching primitives.rs;
+ * decoupled from physical workbench lanes 0..7) */
 #define GCSO_ATTRACTOR_SLOT_SYSTEM_BASELINE 0U
 #define GCSO_ATTRACTOR_SLOT_PERSONA 1U
 #define GCSO_ATTRACTOR_SLOT_KNOWLEDGE 2U

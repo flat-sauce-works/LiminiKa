@@ -274,10 +274,10 @@ struct GCSO_ALIGNAS(64) gcso_context_opaque {
  * Aligned to 32 bytes for optimized vector lookup and cacheline efficiency.
  */
 struct GCSO_ALIGNAS(32) gcso_action_hub_opaque {
-    uint32_t capacity;       ///< Maximum tagged pointer slot capacity.
-    uint32_t active_count;   ///< Current active pointer trail count.
-    uint64_t last_trail_ptr; ///< Address of most recently transitioned pointer trail.
-    bool is_active;          ///< Lifecycle state flag.
+    uint32_t capacity;           ///< Maximum tagged pointer slot capacity.
+    uint32_t active_count;       ///< Current active pointer trail count.
+    uint64_t last_trail_ptr;     ///< Address of most recently transitioned pointer trail.
+    bool is_active;              ///< Lifecycle state flag.
     uint8_t slot_enabled_mask;   ///< Bitmask of enabled anonymous workbench lanes (0..7).
     uint8_t slot_pinned_mask;    ///< Bitmask of explicitly pinned workbench lanes (0..7).
     uint8_t slot_repulsion_mask; ///< Bitmask of anti-phase repulsion workbench lanes (0..7).
