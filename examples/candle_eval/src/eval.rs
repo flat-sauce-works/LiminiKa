@@ -10,7 +10,7 @@ use candle_core::quantized::GgmlDType;
 use liminika_adapter::{
     AttractorTrajectoryEvaluator, CompiledTokenCorpus, CorpusRecallEscalationProvider,
     GcsoDualTrackTimeline, ManifoldReflectionEvaluator, ModelSteeringAdapter, ReflectionCritique,
-    ReflectionPolicy, TrajectoryManifoldSnapshot,
+    ReflectionPolicy, SystemPressureReading, TrajectoryManifoldSnapshot,
 };
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::traits::gateway::{
@@ -382,8 +382,18 @@ pub(crate) fn generate_steered_reply_with_offset(
         escalation_provider: cfg.escalation_provider.as_deref_mut(),
     };
     let t_dec = Instant::now();
+    let prefill_dispatch = steer.adapter.step_compute_dispatch(SystemPressureReading {
+        frame_time_pressure_q15: 8192,
+        bandwidth_pressure_q15: 8192,
+        l3_load_pressure_q15: 8192,
+        irreversible_step: 1,
+        _pad: 0,
+    });
     let (mut logits, _, _) =
         model.forward_tokens(&ids, start_offset, Some(&mut steer), cfg.use_steer, false)?;
+    steer
+        .adapter
+        .commit_compute_exit_reward(prefill_dispatch.execute_mask, 96);
 
     const MAX_GEN_TOKENS: usize = 64;
     let mut gen_ids = Vec::with_capacity(MAX_GEN_TOKENS);
@@ -394,8 +404,26 @@ pub(crate) fn generate_steered_reply_with_offset(
             break;
         }
         gen_ids.push(next);
+        let t_tok = Instant::now();
         let (next_logits, _, _) =
             model.forward_tokens(&[next], offset, Some(&mut steer), cfg.use_steer, false)?;
+        let tok_ms = t_tok.elapsed().as_secs_f64() * 1000.0;
+        let pressure_q15 = ((tok_ms / 50.0).clamp(0.0, 1.0) * 32767.0) as u16;
+        let tok_dispatch = steer.adapter.step_compute_dispatch(SystemPressureReading {
+            frame_time_pressure_q15: pressure_q15,
+            bandwidth_pressure_q15: pressure_q15,
+            l3_load_pressure_q15: pressure_q15 >> 1,
+            irreversible_step: 0,
+            _pad: 0,
+        });
+        let exit_reward = if steer.adapter.action_hub().last_entropy_h_tilde < 0.70 {
+            96
+        } else {
+            48
+        };
+        steer
+            .adapter
+            .commit_compute_exit_reward(tok_dispatch.execute_mask, exit_reward);
         logits = next_logits;
     }
     let decode_secs = t_dec.elapsed().as_secs_f64();

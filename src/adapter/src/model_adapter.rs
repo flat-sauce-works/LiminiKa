@@ -393,6 +393,7 @@ pub struct ModelSteeringAdapter {
     escalated_workbench_lane: Option<u8>,
     sandbox_workbench_lane: Option<u8>,
     active_workbench_preset: WorkbenchPreset,
+    compute_pool: AnonymousComputePool,
 }
 
 impl ModelSteeringAdapter {
@@ -436,6 +437,20 @@ impl ModelSteeringAdapter {
         probe_baseline.steered_layers = Self::compute_steered_layer_count(&geometry);
         let threshold_policy = AdaptiveThresholdPolicy::default();
         let calibrated_base_thresholds = threshold_policy.base;
+        let mut compute_pool = AnonymousComputePool::default();
+        let n_slots = geometry.num_layers.min(64);
+        let active_slots = if n_slots == 64 {
+            u64::MAX
+        } else {
+            (1_u64 << n_slots) - 1
+        };
+        let pinned_slots = if n_slots == 0 {
+            0
+        } else {
+            1_u64 | (1_u64 << (n_slots - 1))
+        };
+        let reversible_slots = geometry.layer_rope_mask & active_slots & !pinned_slots;
+        compute_pool.set_slot_masks(active_slots, pinned_slots, 0, reversible_slots);
 
         Ok(Self {
             geometry,
@@ -470,6 +485,7 @@ impl ModelSteeringAdapter {
             escalated_workbench_lane: None,
             sandbox_workbench_lane: None,
             active_workbench_preset: WorkbenchPreset::BalancedDialog,
+            compute_pool,
         })
     }
 
@@ -521,6 +537,31 @@ impl ModelSteeringAdapter {
     #[must_use]
     pub const fn telemetry_bank(&self) -> &CoreTelemetryBank {
         &self.telemetry
+    }
+
+    /// Returns a shared reference to the Step 4 label-free [`AnonymousComputePool`].
+    #[must_use]
+    pub const fn compute_pool(&self) -> &AnonymousComputePool {
+        &self.compute_pool
+    }
+
+    /// Returns a mutable reference to the Step 4 label-free [`AnonymousComputePool`].
+    #[must_use]
+    pub fn compute_pool_mut(&mut self) -> &mut AnonymousComputePool {
+        &mut self.compute_pool
+    }
+
+    /// Evaluates external `+ System` Gauge-Zero pressure and emits a pre-execution
+    /// [`ComputeDispatchMask`] for this adapter's anonymous compute slots.
+    pub fn step_compute_dispatch(&mut self, reading: SystemPressureReading) -> ComputeDispatchMask {
+        self.compute_pool.step_dispatch(reading)
+    }
+
+    /// Updates Step 4 slot contribution pheromones strictly from an exit scalar reward (`0..=127`)
+    /// without mid-layer D2H synchronization.
+    pub fn commit_compute_exit_reward(&mut self, executed_mask: u64, reward_q7: u8) {
+        self.compute_pool
+            .commit_exit_reward(executed_mask, reward_q7);
     }
 
     /// Updates the [`TelemetryCapturePolicy`] (`Pinned` vs `Auto` `Coarse`/`Standard`/`Detailed`).

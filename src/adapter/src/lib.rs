@@ -52,6 +52,10 @@ pub mod reflection;
 pub mod stratum;
 
 pub use liminika_core::action_hub::{WorkbenchLanePlacement, WorkbenchPreset, WorkbenchSlotSpec};
+pub use liminika_core::traits::gateway::{
+    AnonymousComputePool, ComputeDispatchMask, ComputePoolConfig, ComputePressureRegime,
+    SystemPressureReading,
+};
 pub use pooling::*;
 pub use reflection::*;
 pub use stratum::*;

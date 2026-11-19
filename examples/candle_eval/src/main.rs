@@ -1355,13 +1355,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             step_tlm.distortion_wakeups,
             step_tlm.distortion_cooldowns,
         );
+        let cp = adapter.compute_pool();
+        let compute_pool_line = format!(
+            "  [ComputePool] regime={:?} ema_p={} base_p={} dwell={} lane={} slots(active={} pinned={} rev={})",
+            cp.regime,
+            cp.ema_pressure_q15,
+            cp.baseline_pressure_q15,
+            cp.lane_switch_dwell,
+            cp.primary_lane,
+            cp.active_mask.count_ones(),
+            cp.pinned_mask.count_ones(),
+            cp.reversible_mask.count_ones(),
+        );
         println!("{action_line}");
         println!("{core_line}");
         println!("{spillover_line}");
         println!("{slow_loop_line}");
         println!("{distortion_line}");
+        println!("{compute_pool_line}");
         step2_ablation_summaries.push(format!(
-            "{summary_line}\n  {action_line}\n  {core_line}\n  {spillover_line}\n  {slow_loop_line}\n  {distortion_line}"
+            "{summary_line}\n  {action_line}\n  {core_line}\n  {spillover_line}\n  {slow_loop_line}\n  {distortion_line}\n  {compute_pool_line}"
         ));
         if adapter.ego_field().is_active() {
             println!(
