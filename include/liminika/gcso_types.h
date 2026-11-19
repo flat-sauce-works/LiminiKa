@@ -819,7 +819,8 @@ struct GCSO_ALIGN_PREFIX(16) gcso_liminal_venn_partition {
 typedef struct gcso_liminal_venn_partition gcso_liminal_venn_partition_t;
 
 /**
- * @brief Mechanical SystemSpineState owning physical pinned isolation masks (32 bytes, 16-byte aligned).
+ * @brief Mechanical SystemSpineState owning physical pinned isolation masks (32 bytes, 16-byte
+ * aligned).
  */
 struct GCSO_ALIGN_PREFIX(16) gcso_system_spine_state {
     uint32_t pinned_aperture_mask;
@@ -985,8 +986,7 @@ GCSO_STATIC_ASSERT(sizeof(gcso_liminal_venn_partition_t) == 16,
                    "gcso_liminal_venn_partition_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_system_spine_state_t) == 32,
                    "gcso_system_spine_state_t size mismatch");
-GCSO_STATIC_ASSERT(sizeof(gcso_distortion_delta_t) == 128,
-                   "gcso_distortion_delta_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_distortion_delta_t) == 128, "gcso_distortion_delta_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_distortion_tension_t) == 32,
                    "gcso_distortion_tension_t size mismatch");
 
