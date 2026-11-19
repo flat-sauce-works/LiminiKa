@@ -50,6 +50,7 @@ build/
 **/build/
 build-*/
 cmake-build-*/
+_build/
 /bin/
 /lib/
 
@@ -162,6 +163,9 @@ snapshots/*
 # Logs & Temporary Files
 # -----------------------------------------------------------------------------
 *.log
+*.tmp
+*.bak
+nul
 /logs/
 /tmp/
 /temp/

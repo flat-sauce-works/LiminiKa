@@ -84,7 +84,7 @@ jobs:
         run: |
           CLANG_FORMAT_BIN=$(command -v clang-format || command -v clang-format-21 || command -v clang-format-20 || command -v clang-format-19 || command -v clang-format-18 || find /usr/lib/llvm-* -name clang-format -type f -executable 2>/dev/null | sort -V | tail -n 1 || true)
           if [ -n "$CLANG_FORMAT_BIN" ]; then
-            EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \) )
+            EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
             find . "${EXCLUDE_ARGS[@]}" -prune -o \( \
               -name "*.h" -o -name "*.hpp" -o -name "*.inl" -o \
               -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
@@ -97,7 +97,7 @@ jobs:
 
       - name: Format Python codebase
         run: |
-          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \) )
+          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
           find . "${EXCLUDE_ARGS[@]}" -prune -o -name "*.py" -type f -size +0c -exec autopep8 --in-place --max-line-length 120 {} + 2>/dev/null || true
 
       - name: Commit formatting changes if needed
@@ -179,7 +179,7 @@ jobs:
               - 'Cargo.toml'
               - '**/Cargo.toml'
               - '**/build.rs'
-              - 'Cargo.lock'
+              - '**/Cargo.lock'
               - 'deny.toml'
               - '**/*.rs'
               - '.github/workflows/**'
@@ -198,7 +198,7 @@ jobs:
             license:
               - 'Cargo.toml'
               - '**/Cargo.toml'
-              - 'Cargo.lock'
+              - '**/Cargo.lock'
               - 'deny.toml'
               - 'LICENSE*'
               - 'src/**'
@@ -254,7 +254,7 @@ jobs:
       - name: Scan Copyleft & Non-Permissive License Keywords
         run: |
           echo "Scanning codebase for strict permissive compliance (blocking Copyleft/Non-Commercial)..."
-          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \) )
+          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
           FORBIDDEN_PATTERNS="GPL-1.0|GPL-2.0|GPL-3.0|LGPL-2.1|LGPL-3.0|AGPL-3.0|SSPL-1.0|CC-BY-NC|MPL-1.1|MPL-2.0|EPL-1.0|EPL-2.0|CDDL-1.0|EUPL-1.1|EUPL-1.2|PolyForm|CPAL-1.0|Watcom-1.0"
           FOUND_VIOLATIONS=$(find . "${EXCLUDE_ARGS[@]}" -prune -o -type f -size +0c ! -name "deny.toml" ! -name "ci.yml" ! -name "*.md" -exec grep -E -H -n "$FORBIDDEN_PATTERNS" {} + 2>/dev/null || true)
 
@@ -274,7 +274,7 @@ jobs:
           exclude = {
               "target", "build", "cmake-build", "_build", ".git", ".cargo",
               ".venv", "node_modules", "vendor", "third_party", "3rdparty",
-              "__pycache__", ".cache", "models",
+              "__pycache__", ".cache", "models", "containers",
           }
           slash_exts = {
               ".rs", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".inl",
@@ -282,7 +282,10 @@ jobs:
               ".glsl", ".hlsl", ".wgsl", ".slang", ".hip", ".cl", ".lmnk",
           }
           hash_exts = {".py", ".sh", ".cmake", ".yml", ".yaml"}
-          hash_names = {"Cargo.toml", "CMakeLists.txt", "deny.toml"}
+          hash_names = {
+              "Cargo.toml", "CMakeLists.txt", "deny.toml",
+              ".clang-format", ".editorconfig", ".gitignore", ".gitattributes",
+          }
 
           missing_header = []
           missing_spdx = []
@@ -340,11 +343,12 @@ jobs:
           types_h = read("include/liminika/gcso_types.h")
           c_crystal_hex = int(re.search(r'#define\s+GCSO_CRYSTAL_RECORD_VERSION\s+(0x[0-9A-Fa-f]+)U?', types_h).group(1), 16)
 
-          types_rs = read("src/core/src/abi/types.rs")
-          r_maj = int(re.search(r'pub\s+const\s+GCSO_ABI_VERSION_MAJOR:\s*u32\s*=\s*(\d+)', types_rs).group(1))
-          r_min = int(re.search(r'pub\s+const\s+GCSO_ABI_VERSION_MINOR:\s*u32\s*=\s*(\d+)', types_rs).group(1))
-          r_pat = int(re.search(r'pub\s+const\s+GCSO_ABI_VERSION_PATCH:\s*u32\s*=\s*(\d+)', types_rs).group(1))
-          r_cstr = re.search(r'pub\s+const\s+GCSO_ABI_VERSION_CSTR:[^=]*=\s*c"([^"]+)"', types_rs).group(1)
+          constants_rs = read("src/core/src/liminal/constants.rs")
+          r_maj = int(re.search(r'pub\s+const\s+GCSO_ABI_VERSION_MAJOR:\s*u32\s*=\s*(\d+)', constants_rs).group(1))
+          r_min = int(re.search(r'pub\s+const\s+GCSO_ABI_VERSION_MINOR:\s*u32\s*=\s*(\d+)', constants_rs).group(1))
+          r_pat = int(re.search(r'pub\s+const\s+GCSO_ABI_VERSION_PATCH:\s*u32\s*=\s*(\d+)', constants_rs).group(1))
+          r_cstr = re.search(r'pub\s+const\s+GCSO_ABI_VERSION_CSTR:[^=]*=\s*c"([^"]+)"', constants_rs).group(1)
+          abi_types_rs = read("src/core/src/runtime/abi/types.rs")
 
           ver = root_ver_m.group(1)
           parts = tuple(int(x) for x in ver.split("."))
@@ -357,14 +361,50 @@ jobs:
               ("gcso_abi.h tuple", (c_maj, c_min, c_pat) == parts),
               ("gcso_abi.h string", c_str == ver),
               ("gcso_types.h crystal hex", c_crystal_hex == expected_hex),
-              ("abi/types.rs tuple", (r_maj, r_min, r_pat) == parts),
-              ("abi/types.rs cstr", r_cstr == ver),
+              ("liminal/constants.rs tuple", (r_maj, r_min, r_pat) == parts),
+              ("liminal/constants.rs cstr", r_cstr == ver),
+              ("runtime/abi/types.rs re-export", "GCSO_ABI_VERSION_MAJOR" in abi_types_rs and "GCSO_ABI_VERSION_CSTR" in abi_types_rs),
           ]
           failed = [name for name, ok in checks if not ok]
           if failed:
               print("Version parity check failed:", failed)
               sys.exit(1)
           print(f"All manifests, C headers, CMake files, and Rust ABI constants match version {ver} ({hex(expected_hex)}).")
+          PY
+
+      - name: Verify 5-Layer Unidirectional DAG & Driver Isolation
+        run: |
+          python3 - << 'PY'
+          import pathlib
+          import re
+          import sys
+
+          root = pathlib.Path("src/core/src")
+          rules = [
+              ("Lv.0 liminal -> Lv.1..4", "liminal", re.compile(r"crate::(foundation|stigmergy|drivers|runtime)\b")),
+              ("Lv.1 foundation -> Lv.2..4", "foundation", re.compile(r"crate::(stigmergy|drivers|runtime)\b")),
+              ("Lv.2 stigmergy -> Lv.3..4", "stigmergy", re.compile(r"crate::(drivers|runtime)\b")),
+              ("Lv.3 drivers -> Lv.4", "drivers", re.compile(r"crate::runtime\b")),
+              ("drivers/spine -> drivers/ego", "drivers/spine", re.compile(r"(crate::drivers::ego|super::super::ego|super::ego)\b")),
+              ("drivers/ego -> drivers/spine", "drivers/ego", re.compile(r"(crate::drivers::spine|super::super::spine|super::spine)\b")),
+          ]
+
+          violations = []
+          for label, sub, pat in rules:
+              sub_dir = root / sub
+              rs_files = sorted(sub_dir.rglob("*.rs"))
+              if not rs_files:
+                  violations.append(f"{label}: directory {sub_dir.as_posix()} is missing or contains no .rs files")
+                  continue
+              for f in rs_files:
+                  for lineno, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+                      if pat.search(line):
+                          violations.append(f"{label}: {f.as_posix()}:{lineno}: {line.strip()}")
+
+          if violations:
+              print("Error: 5-layer unidirectional DAG or driver isolation violation detected:", *violations, sep="\n  ")
+              sys.exit(1)
+          print("All 5-layer unidirectional DAG and spine/ego isolation invariants passed (0 violations).")
           PY
 
   # =========================================================================
@@ -697,7 +737,7 @@ jobs:
       - name: Test DSL crate & Validate Example DSL files
         run: |
           cargo test --locked -p liminika-dsl
-          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \) )
+          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
           DSL_FILES=$(find . "${EXCLUDE_ARGS[@]}" -prune -o -name "*.lmnk" -type f -print)
           if [ -z "$DSL_FILES" ]; then
             echo "Error: No .lmnk DSL files found to validate."
@@ -733,7 +773,7 @@ jobs:
       - name: Verify Python Syntax, CLI Smoke Checks & Unit Tests
         run: |
           echo "Verifying Python syntax..."
-          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache \) )
+          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
           PY_FILES=$(find . "${EXCLUDE_ARGS[@]}" -prune -o -name "*.py" -type f -print 2>/dev/null || true)
           if [ -n "$PY_FILES" ]; then
             echo "$PY_FILES" | xargs python -m py_compile

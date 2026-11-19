@@ -12,17 +12,32 @@ trim_trailing_whitespace = true
 indent_style = space
 indent_size = 4
 
-# Use 2-space indentation for configuration, documentation, and metadata files
-[*.{yml,yaml,md,toml,json,cmake}]
+# Rust, C/C++, CUDA, and Metal source files
+[*.{rs,c,h,cpp,hpp,cc,cxx,cu,cuh,metal,mm}]
+indent_size = 4
+max_line_length = 100
+
+# CMake build scripts
+[{CMakeLists.txt,*.cmake}]
+indent_size = 4
+
+# Use 2-space indentation for configuration and metadata files
+[*.{yml,yaml,toml,json}]
 indent_size = 2
 
-[CMakeLists.txt]
+# Markdown documentation (preserve trailing two-space line breaks)
+[*.md]
 indent_size = 2
+trim_trailing_whitespace = false
 
 # LiminiKa DSL Source Files
 [*.lmnk]
 indent_size = 4
 
 # Force tab indentation for Makefiles
-[Makefile]
+[{Makefile,*.mk}]
 indent_style = tab
+
+# Windows Batch scripts require CRLF line endings
+[*.{bat,cmd}]
+end_of_line = crlf
