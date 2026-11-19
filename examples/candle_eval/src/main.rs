@@ -1028,14 +1028,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else if let Some(ref conds) = fair_bench_conditions {
         conds
             .iter()
-            .map(|&(cond, cond_no_reflect)| {
+            .map(|&(cond, cond_no_reflect, byp_override)| {
                 let run_ref_mode = if cond_no_reflect {
                     ReflectMode::Off
                 } else {
                     reflect_mode
                 };
+                let run_pre_bypass = byp_override.unwrap_or(enable_pre_bypass);
                 let lbl = if matches!(cond, FairBenchCondition::LiminiKaHybrid) {
-                    format!("{}(reflect={})", cond.label(), run_ref_mode.label())
+                    format!(
+                        "C:Hybrid(ref={},byp={})",
+                        run_ref_mode.label(),
+                        if run_pre_bypass { "on" } else { "off" }
+                    )
                 } else {
                     cond.label().to_string()
                 };
@@ -1047,7 +1052,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     horizon_mode,
                     cond,
                     reflect_mode: run_ref_mode,
-                    enable_pre_bypass,
+                    enable_pre_bypass: run_pre_bypass,
                     temperature,
                     rng_seed,
                 }

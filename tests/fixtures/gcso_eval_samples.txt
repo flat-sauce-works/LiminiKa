@@ -3,6 +3,7 @@
 #
 # Synthetic evaluation fixture for real-LLM RoPE steering experiments.
 # Domain: LiminiKa / GCSO architectural facts (absent from pre-trained LLM weights).
+# Note: Uncontaminated historical domain fixture using legacy acronyms (Zero Data Contamination); decoupled from live plain-English C-ABI symbols.
 #
 # Format:
 #   [FACT_ATTRACTORS]       -> One factual statement per line (ObjectiveFact / Slot 2)

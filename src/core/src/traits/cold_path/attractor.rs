@@ -464,12 +464,16 @@ pub trait MultiDomainAttractorSpace: BranchlessKernel + Send + Sync {
         let has_max = max_pull > 1.0e-6;
         let inv_max = branchless_inv_pos_f32(branchless_select_f32(has_max, max_pull, 1.0));
 
-        for slot_id in 0..MAX_ATTRACTOR_DOMAINS {
-            let p = pulls[slot_id];
+        for (slot_id, (&p, weight_slot)) in pulls
+            .iter()
+            .zip(weights.iter_mut())
+            .enumerate()
+            .take(MAX_ATTRACTOR_DOMAINS)
+        {
             let norm_w = branchless_clamp_f32(0.25 + 1.75 * (p * inv_max), 0.25, 2.0);
             let w = branchless_select_f32(has_max & (p > 0.0), norm_w, 1.0);
             self.set_domain_weight(slot_id as u32, w)?;
-            weights[slot_id] = w;
+            *weight_slot = w;
         }
         Ok(weights)
     }

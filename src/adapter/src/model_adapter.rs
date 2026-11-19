@@ -694,8 +694,13 @@ impl ModelSteeringAdapter {
             };
             let shift_base = local_ego.transgression_bias_q7;
             let mut phases = [0 as gcso_q7_t; MAX_ATTENTION_HEADS];
-            for g in 0..NUM_STIGMERGIC_GRANULES {
-                let gv = i32::from(local_ego.sovereign_granule_phase_q7[g]);
+            for (g, &gv_q7) in local_ego
+                .sovereign_granule_phase_q7
+                .iter()
+                .enumerate()
+                .take(NUM_STIGMERGIC_GRANULES)
+            {
+                let gv = i32::from(gv_q7);
                 let signed = if (desc.hop_depth & 1) == 0 && ((g & 1) == 1) {
                     -gv
                 } else {

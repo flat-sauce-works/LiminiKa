@@ -924,12 +924,16 @@ impl EgoDifferentialNet {
         self.epoch = current_epoch;
         let mut crystallized: Option<CrystallizedAttractorRecord> = None;
 
-        for idx in 0..MAX_EGO_PFRAME_NODES {
+        for (idx, node) in self
+            .nodes
+            .iter_mut()
+            .enumerate()
+            .take(MAX_EGO_PFRAME_NODES)
+        {
             let bit = 1u8 << idx;
             if (self.active_node_mask & bit) == 0 {
                 continue;
             }
-            let node = &mut self.nodes[idx];
             if !node.is_active() {
                 self.active_node_mask &= !bit;
                 continue;

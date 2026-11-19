@@ -600,9 +600,9 @@ impl FairBenchCondition {
 pub(crate) fn parse_fair_bench_conditions<'a>(
     args: impl IntoIterator<Item = &'a str>,
     default_no_reflect: bool,
-) -> Option<Vec<(FairBenchCondition, bool)>> {
+) -> Option<Vec<(FairBenchCondition, bool, Option<bool>)>> {
     let mut fair_all = false;
-    let mut selected: Vec<(FairBenchCondition, bool)> = Vec::new();
+    let mut selected: Vec<(FairBenchCondition, bool, Option<bool>)> = Vec::new();
     for arg in args {
         if arg == "--fair-bench" {
             fair_all = true;
@@ -610,20 +610,30 @@ pub(crate) fn parse_fair_bench_conditions<'a>(
             for tok in val.split(',').map(str::trim) {
                 match tok.to_ascii_lowercase().as_str() {
                     "a" | "vanilla-full" => {
-                        selected.push((FairBenchCondition::VanillaFullRag, true))
+                        selected.push((FairBenchCondition::VanillaFullRag, true, Some(false)))
                     }
-                    "b" | "vanilla-min" => selected.push((FairBenchCondition::VanillaMinRag, true)),
-                    "c" | "hybrid" => {
-                        selected.push((FairBenchCondition::LiminiKaHybrid, default_no_reflect))
+                    "b" | "vanilla-min" => {
+                        selected.push((FairBenchCondition::VanillaMinRag, true, Some(false)))
                     }
+                    "c" | "hybrid" => selected.push((
+                        FairBenchCondition::LiminiKaHybrid,
+                        default_no_reflect,
+                        None,
+                    )),
                     "c-noreflect" | "c-off" => {
-                        selected.push((FairBenchCondition::LiminiKaHybrid, true))
+                        selected.push((FairBenchCondition::LiminiKaHybrid, true, None))
+                    }
+                    "c-byp-off" | "c(byp=off)" => {
+                        selected.push((FairBenchCondition::LiminiKaHybrid, true, Some(false)))
+                    }
+                    "c-byp-on" | "c(byp=on)" => {
+                        selected.push((FairBenchCondition::LiminiKaHybrid, true, Some(true)))
                     }
                     "c-reflect" | "c-on" => {
-                        selected.push((FairBenchCondition::LiminiKaHybrid, false))
+                        selected.push((FairBenchCondition::LiminiKaHybrid, false, None))
                     }
                     "d" | "zero-ctx" => {
-                        selected.push((FairBenchCondition::LiminiKaZeroContext, true))
+                        selected.push((FairBenchCondition::LiminiKaZeroContext, true, None))
                     }
                     "all" => fair_all = true,
                     _ => {}
@@ -633,11 +643,11 @@ pub(crate) fn parse_fair_bench_conditions<'a>(
     }
     if fair_all {
         Some(vec![
-            (FairBenchCondition::VanillaFullRag, true),
-            (FairBenchCondition::VanillaMinRag, true),
-            (FairBenchCondition::LiminiKaHybrid, true),
-            (FairBenchCondition::LiminiKaHybrid, false),
-            (FairBenchCondition::LiminiKaZeroContext, true),
+            (FairBenchCondition::VanillaFullRag, true, Some(false)),
+            (FairBenchCondition::VanillaMinRag, true, Some(false)),
+            (FairBenchCondition::LiminiKaHybrid, true, None),
+            (FairBenchCondition::LiminiKaHybrid, false, None),
+            (FairBenchCondition::LiminiKaZeroContext, true, None),
         ])
     } else if !selected.is_empty() {
         Some(selected)
