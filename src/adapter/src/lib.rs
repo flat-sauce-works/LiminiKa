@@ -53,6 +53,8 @@ pub use liminika_core::drivers::{
     AnonymousComputePool, ComputeDispatchMask, ComputePoolConfig, ComputePressureRegime,
     DistortionDelta, DistortionTension, DistortionTensionStateCode, EgoDifferentialNet,
     EgoIntentAxes, SystemPressureReading, SystemSpineState, TokenBypassObservation,
+    SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_NONE, SPINE_BYPASS_VETO_PINNED_LOCK,
+    SPINE_BYPASS_VETO_REPULSION_ACTIVE,
 };
 pub use liminika_core::liminal::{
     evaluate_epistemic_partition_branchless, AttributionTag, DriverKind, EpistemicPartition,

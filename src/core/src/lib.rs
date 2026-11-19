@@ -267,7 +267,8 @@ pub use crate::drivers::{
     DecodingGate, DistortionDelta, DistortionTension, DistortionTensionStateCode,
     EgoDifferentialNet, EgoIntentAxes, EntropyController, EntropyEvaluator, LayerDistortionKind,
     LayerDistortionReport, LiminalEgoField, LiminalEgoPreset, SystemPressureReading,
-    SystemSpineState, TokenBypassObservation,
+    SystemSpineState, TokenBypassObservation, SPINE_BYPASS_VETO_GUARD_ACTIVE,
+    SPINE_BYPASS_VETO_NONE, SPINE_BYPASS_VETO_PINNED_LOCK, SPINE_BYPASS_VETO_REPULSION_ACTIVE,
 };
 
 pub use crate::runtime::{

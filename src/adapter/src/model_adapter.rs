@@ -402,6 +402,8 @@ pub struct ModelSteeringAdapter {
     prev_sandbox_coherence: f32,
     prev_sandbox_assim_drift: f32,
     sandbox_promotions: u64,
+    turn_guard_active: bool,
+    passive_saturation_probe_steps: u8,
 }
 
 impl ModelSteeringAdapter {
@@ -505,6 +507,8 @@ impl ModelSteeringAdapter {
             prev_sandbox_coherence: 0.0,
             prev_sandbox_assim_drift: 1.0,
             sandbox_promotions: 0,
+            turn_guard_active: false,
+            passive_saturation_probe_steps: 0,
         })
     }
 
@@ -557,6 +561,8 @@ impl ModelSteeringAdapter {
         self.prev_sandbox_coherence = 0.0;
         self.prev_sandbox_assim_drift = 1.0;
         self.sandbox_promotions = 0;
+        self.turn_guard_active = false;
+        self.passive_saturation_probe_steps = 0;
         self.telemetry.set_policy(self.telemetry.policy());
         self.reset_action_hub_stats();
     }
@@ -639,6 +645,46 @@ impl ModelSteeringAdapter {
         );
     }
 
+    /// Resolves step/turn-local effective `(guard_active, repulsion_active)` signals for
+    /// `SystemSpineState` bypass veto gating without latching onto session-persistent
+    /// `ActionHubEngine::slot_repulsion_mask`.
+    #[must_use]
+    pub fn effective_spine_guard_and_repulsion(&self, obs_repulsion: bool) -> (bool, bool) {
+        let guard_slot_slid_in = (self.coherence_guard_slot.activations
+            > self.coherence_guard_slot.retractions)
+            && (self.last_horizon.conflict_severity > 0.25);
+        let guard_active =
+            self.turn_guard_active || guard_slot_slid_in || self.passive_saturation_probe_steps > 0;
+        let action_repulse = liminika_core::stigmergy::StigmergicActionDecision::from_u8(
+            self.action_hub.last_decision,
+        )
+            == liminika_core::stigmergy::StigmergicActionDecision::RepulsionEscape;
+        let entropy_repulse = self.entropy_controller.is_repulsion_mode();
+        let repulsion_active = obs_repulsion || action_repulse || entropy_repulse;
+        (guard_active, repulsion_active)
+    }
+
+    /// Evaluates token-level whole-steering bypass on `obs` jointly with [`SystemSpineState`]
+    /// physical `pinned` / guard / repulsion vetoes, returning the active `SPINE_BYPASS_VETO_*`
+    /// bitmask.
+    pub fn evaluate_whole_token_bypass_with_spine(
+        &mut self,
+        mut obs: TokenBypassObservation,
+        dispatch: &mut ComputeDispatchMask,
+    ) -> u8 {
+        let (guard_active, repulsion_active) =
+            self.effective_spine_guard_and_repulsion(obs.repulsion_active != 0);
+        obs.repulsion_active = u8::from(repulsion_active);
+        self.passive_saturation_probe_steps = self.passive_saturation_probe_steps.saturating_sub(1);
+        self.compute_pool
+            .evaluate_whole_token_steering_bypass_with_spine(
+                obs,
+                &mut self.system_spine,
+                guard_active,
+                dispatch,
+            )
+    }
+
     /// Evaluates token-level whole-steering bypass on `obs`, mutating `dispatch` and mirroring
     /// active bypass state onto [`SystemSpineState`].
     pub fn evaluate_whole_token_bypass(
@@ -646,13 +692,8 @@ impl ModelSteeringAdapter {
         obs: TokenBypassObservation,
         dispatch: &mut ComputeDispatchMask,
     ) -> bool {
-        let bypass = self
-            .compute_pool
-            .evaluate_whole_token_steering_bypass(obs, dispatch);
-        self.system_spine.whole_token_bypass_active = u8::from(bypass);
-        self.system_spine.bypass_dwell_steps = self.compute_pool.whole_token_calm_dwell;
-        self.system_spine.bypass_cooldown_steps = self.compute_pool.re_bypass_cooldown;
-        bypass
+        let _ = self.evaluate_whole_token_bypass_with_spine(obs, dispatch);
+        dispatch.whole_token_steering_bypass != 0
     }
 
     /// Exports active [`EgoDifferentialNet`] P-Frame nodes as model-agnostic
@@ -742,10 +783,28 @@ impl ModelSteeringAdapter {
         self.distortion_tension = DistortionTension::new(self.configured_ego.is_active());
     }
 
+    /// Evaluates external `+ System` Gauge-Zero pressure jointly with [`SystemSpineState`]
+    /// physical `pinned` / guard / repulsion vetoes and emits a pre-execution
+    /// [`ComputeDispatchMask`] for this adapter's anonymous compute slots.
+    pub fn step_compute_dispatch_with_spine(
+        &mut self,
+        reading: SystemPressureReading,
+        repulsion_active: bool,
+    ) -> ComputeDispatchMask {
+        let (guard_active, eff_repulsion) =
+            self.effective_spine_guard_and_repulsion(repulsion_active);
+        self.compute_pool.step_dispatch_with_spine(
+            reading,
+            &self.system_spine,
+            guard_active,
+            eff_repulsion,
+        )
+    }
+
     /// Evaluates external `+ System` Gauge-Zero pressure and emits a pre-execution
     /// [`ComputeDispatchMask`] for this adapter's anonymous compute slots.
     pub fn step_compute_dispatch(&mut self, reading: SystemPressureReading) -> ComputeDispatchMask {
-        self.compute_pool.step_dispatch(reading)
+        self.step_compute_dispatch_with_spine(reading, false)
     }
 
     /// Updates slot contribution pheromones strictly from an exit scalar reward (`0..=127`)
@@ -813,6 +872,9 @@ impl ModelSteeringAdapter {
                     adj.distortion.kind,
                     liminika_core::drivers::LayerDistortionKind::PassiveSaturation
                 );
+            if passive_sat {
+                self.passive_saturation_probe_steps = self.passive_saturation_probe_steps.max(2);
+            }
             self.distortion_tension.step_slow_loop_excitation(
                 passive_sat,
                 self.last_boundary_delta.chatter_potential_u8,
@@ -1176,6 +1238,18 @@ impl ModelSteeringAdapter {
         Option<StigmergicFragmentEnsembleReport>,
     ) {
         let has_guard_conflict = recall.guard_conflict_margin > 0.0;
+        let guard_turn = has_guard_conflict
+            || matches!(
+                recall.action_decision,
+                liminika_core::stigmergy::StigmergicActionDecision::RepulsionEscape
+            );
+        self.turn_guard_active = guard_turn;
+        if guard_turn {
+            self.system_spine
+                .pin_compute_slots(self.compute_pool.active_mask);
+        } else {
+            self.system_spine.clear_pinned_compute_slots();
+        }
         self.last_venn_partition = recall.venn_partition;
         self.system_spine.ood_void_locked = u8::from(
             matches!(recall.void_state, VoidBoundaryState::LiminalExterior)

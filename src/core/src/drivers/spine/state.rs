@@ -19,6 +19,15 @@ use crate::liminal::{
 // 3. System Spine State & Physical `pinned` Isolation (32 B)
 // ===================================================================
 
+/// No spine bypass veto active (`0x00`).
+pub const SPINE_BYPASS_VETO_NONE: u8 = 0x00;
+/// Bypass vetoed because a contradiction guard boundary is active (`1 << 0`).
+pub const SPINE_BYPASS_VETO_GUARD_ACTIVE: u8 = 1 << 0;
+/// Bypass vetoed because phase-conjugate repulsion is active (`1 << 1`).
+pub const SPINE_BYPASS_VETO_REPULSION_ACTIVE: u8 = 1 << 1;
+/// Bypass vetoed because an irreversible step lock or pinned compute mask is active (`1 << 2`).
+pub const SPINE_BYPASS_VETO_PINNED_LOCK: u8 = 1 << 2;
+
 /// Mechanical execution spine (`32 B`, `#[repr(C, align(16))]`, `DriverKind::System` = I-Frame).
 ///
 /// Owns physical `pinned` masks isolating irreversible steps, memory safety, OOD aperture-0 locks,
@@ -115,6 +124,65 @@ impl SystemSpineState {
         let eff_modes = ego_modes | preserved_modes;
         let full_lock = (self.ood_void_locked != 0) | (self.irreversible_step_lock != 0);
         (full_lock, eff_slot, eff_modes)
+    }
+
+    /// Pins compute slots in `pinned_compute_mask` so Fast-Loop bypass cannot skip them.
+    #[inline(always)]
+    pub const fn pin_compute_slots(&mut self, slot_mask: u64) {
+        self.pinned_compute_mask |= slot_mask;
+    }
+
+    /// Unpins compute slots from `pinned_compute_mask`.
+    #[inline(always)]
+    pub const fn unpin_compute_slots(&mut self, slot_mask: u64) {
+        self.pinned_compute_mask &= !slot_mask;
+    }
+
+    /// Clears all bits in `pinned_compute_mask`.
+    #[inline(always)]
+    pub const fn clear_pinned_compute_slots(&mut self) {
+        self.pinned_compute_mask = 0;
+    }
+
+    /// Evaluates branchless whole-token bypass veto flags (`SPINE_BYPASS_VETO_*`).
+    ///
+    /// Explicitly excludes `ood_void_locked` so OOD (`Lacuna::Void`) does not trigger
+    /// guard/repulsion bypass vetoes.
+    #[inline(always)]
+    #[must_use]
+    pub const fn evaluate_whole_token_bypass_veto_branchless(
+        &self,
+        guard_active: bool,
+        repulsion_active: bool,
+    ) -> u8 {
+        let g = (guard_active as u8) * SPINE_BYPASS_VETO_GUARD_ACTIVE;
+        let r = (repulsion_active as u8) * SPINE_BYPASS_VETO_REPULSION_ACTIVE;
+        let pinned = (self.irreversible_step_lock != 0) | (self.pinned_compute_mask != 0);
+        let p = (pinned as u8) * SPINE_BYPASS_VETO_PINNED_LOCK;
+        g | r | p
+    }
+
+    /// Returns `true` only when `candidate_bypass` is requested and no spine bypass veto is set.
+    #[inline(always)]
+    #[must_use]
+    pub const fn should_bypass_whole_token_branchless(
+        &self,
+        candidate_bypass: bool,
+        guard_active: bool,
+        repulsion_active: bool,
+    ) -> bool {
+        candidate_bypass
+            & (self.evaluate_whole_token_bypass_veto_branchless(guard_active, repulsion_active)
+                == SPINE_BYPASS_VETO_NONE)
+    }
+
+    /// Masks a candidate layer bypass bitmask against `pinned_compute_mask` and `veto_mask`
+    /// without branches: returns `0` when `veto_mask != 0`, else `raw_bypass_mask & !pinned`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn mask_layer_bypass_with_pinned(&self, raw_bypass_mask: u64, veto_mask: u8) -> u64 {
+        let allow_mask = ((veto_mask == SPINE_BYPASS_VETO_NONE) as u64).wrapping_neg();
+        (raw_bypass_mask & !self.pinned_compute_mask) & allow_mask
     }
 }
 

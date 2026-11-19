@@ -1217,6 +1217,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut step2_whole_token_bypass_hits = 0_usize;
         let mut step2_decode_tokens_steered = 0_usize;
         let mut step2_instability_recoveries = 0_usize;
+        let mut step2_spine_veto_guard = 0_usize;
+        let mut step2_spine_veto_repulse = 0_usize;
+        let mut step2_spine_veto_pin = 0_usize;
         let mut reflect_triggers = 0_usize;
         let mut reflect_adopted = 0_usize;
         let mut reflect_gate_skipped = 0_usize;
@@ -1483,6 +1486,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     whole_token_bypass_hits: 0,
                     decode_tokens_total: 0,
                     instability_recoveries: 0,
+                    spine_veto_guard_hits: 0,
+                    spine_veto_repulse_hits: 0,
+                    spine_veto_pin_hits: 0,
                 };
                 let (mut text, p1_in_tokens, p1_tokens, p1_secs) = generate_steered_reply(
                     &mut model,
@@ -1499,6 +1505,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 step2_whole_token_bypass_hits += pass1_cfg.whole_token_bypass_hits;
                 step2_decode_tokens_steered += pass1_cfg.decode_tokens_total;
                 step2_instability_recoveries += pass1_cfg.instability_recoveries;
+                step2_spine_veto_guard += pass1_cfg.spine_veto_guard_hits;
+                step2_spine_veto_repulse += pass1_cfg.spine_veto_repulse_hits;
+                step2_spine_veto_pin += pass1_cfg.spine_veto_pin_hits;
 
                 let mut reflect_note = if run_no_reflect {
                     "off".to_string()
@@ -1612,6 +1621,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 whole_token_bypass_hits: 0,
                                 decode_tokens_total: 0,
                                 instability_recoveries: 0,
+                                spine_veto_guard_hits: 0,
+                                spine_veto_repulse_hits: 0,
+                                spine_veto_pin_hits: 0,
                             };
                             let (p2_text, p2_in_tokens, p2_tokens, p2_secs) =
                                 generate_steered_reply(
@@ -1629,6 +1641,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             step2_whole_token_bypass_hits += retry_cfg.whole_token_bypass_hits;
                             step2_decode_tokens_steered += retry_cfg.decode_tokens_total;
                             step2_instability_recoveries += retry_cfg.instability_recoveries;
+                            step2_spine_veto_guard += retry_cfg.spine_veto_guard_hits;
+                            step2_spine_veto_repulse += retry_cfg.spine_veto_repulse_hits;
+                            step2_spine_veto_pin += retry_cfg.spine_veto_pin_hits;
                             if let Some(pass2_crit) = critique_generated_draft(
                                 &mut model,
                                 &tokenizer,
@@ -1970,7 +1985,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             step2_steer_bypass_hits as f64 / step2_steer_eligible_layers as f64 * 100.0
         };
         let compute_pool_line = format!(
-            "  [ComputePool] regime={:?} ema_p={} base_p={} dwell={} lane={} slots(active={} pinned={} rev={}) layer_byp={}/{} ({:.1}%) whole_tok_byp={}/{} ({:.1}%) recov={}",
+            "  [ComputePool] regime={:?} ema_p={} base_p={} dwell={} lane={} slots(active={} pinned={} rev={}) layer_byp={}/{} ({:.1}%) whole_tok_byp={}/{} ({:.1}%) recov={} spine_veto=(g={},r={},p={})",
             cp.regime,
             cp.ema_pressure_q15,
             cp.baseline_pressure_q15,
@@ -1986,6 +2001,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             step2_decode_tokens_steered,
             whole_bypass_pct,
             step2_instability_recoveries,
+            step2_spine_veto_guard,
+            step2_spine_veto_repulse,
+            step2_spine_veto_pin,
         );
         println!("{action_line}");
         println!("{core_line}");
@@ -2440,6 +2458,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         whole_token_bypass_hits: 0,
                         decode_tokens_total: 0,
                         instability_recoveries: 0,
+                        spine_veto_guard_hits: 0,
+                        spine_veto_repulse_hits: 0,
+                        spine_veto_pin_hits: 0,
                     };
                     let (mut reply_text, mut turn_ids, dec_secs) =
                         generate_steered_reply_with_offset(
@@ -2578,6 +2599,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     whole_token_bypass_hits: 0,
                                     decode_tokens_total: 0,
                                     instability_recoveries: 0,
+                                    spine_veto_guard_hits: 0,
+                                    spine_veto_repulse_hits: 0,
+                                    spine_veto_pin_hits: 0,
                                 };
                                 let (p2_text, p2_ids, p2_secs) =
                                     generate_steered_reply_with_offset(

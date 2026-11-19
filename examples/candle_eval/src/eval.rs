@@ -13,7 +13,11 @@ use liminika_adapter::{
     ReflectionPolicy, SystemPressureReading, TrajectoryManifoldSnapshot,
 };
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
-use liminika_core::drivers::{LayerDistortionReport, LiminalEgoPreset, TokenBypassObservation};
+use liminika_core::drivers::{
+    LayerDistortionReport, LiminalEgoPreset, TokenBypassObservation,
+    SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_PINNED_LOCK,
+    SPINE_BYPASS_VETO_REPULSION_ACTIVE,
+};
 use liminika_core::liminal::ACTION_MODE_PHASE_REPULSE;
 use liminika_core::runtime::{CoreTelemetryBank, CoreTelemetrySnapshot, RamPhaseKvStepOutcome};
 use liminika_core::stigmergy::{
@@ -773,6 +777,9 @@ pub(crate) struct SteerDecodeConfig<'a, 'c, 'e> {
     pub(crate) whole_token_bypass_hits: usize,
     pub(crate) decode_tokens_total: usize,
     pub(crate) instability_recoveries: usize,
+    pub(crate) spine_veto_guard_hits: usize,
+    pub(crate) spine_veto_repulse_hits: usize,
+    pub(crate) spine_veto_pin_hits: usize,
 }
 
 pub(crate) fn generate_steered_reply_with_offset(
@@ -808,13 +815,16 @@ pub(crate) fn generate_steered_reply_with_offset(
     steer.adapter.compute_pool_mut().whole_token_calm_dwell = 0;
     steer.adapter.compute_pool_mut().re_bypass_cooldown = 0;
     steer.adapter.action_hub_mut().last_entropy_h_tilde = 0.0;
-    let mut prefill_dispatch = steer.adapter.step_compute_dispatch(SystemPressureReading {
-        frame_time_pressure_q15: 8192,
-        bandwidth_pressure_q15: 8192,
-        l3_load_pressure_q15: 8192,
-        irreversible_step: 1,
-        _pad: 0,
-    });
+    let mut prefill_dispatch = steer.adapter.step_compute_dispatch_with_spine(
+        SystemPressureReading {
+            frame_time_pressure_q15: 8192,
+            bandwidth_pressure_q15: 8192,
+            l3_load_pressure_q15: 8192,
+            irreversible_step: 1,
+            _pad: 0,
+        },
+        false,
+    );
     prefill_dispatch.whole_token_steering_bypass = 0;
     steer.compute_dispatch = Some(prefill_dispatch);
     let (mut logits, _, _) =
@@ -871,8 +881,7 @@ pub(crate) fn generate_steered_reply_with_offset(
             steer.adapter.action_hub_mut().last_entropy_h_tilde = logit_entropy;
         }
         let exit_entropy_q7 = ((logit_entropy - 0.15).max(0.0) * 127.0).clamp(0.0, 127.0) as u8;
-        let repulsion_active = (steer.adapter.action_hub().slot_repulsion_mask != 0)
-            || ((steer.trail.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0)
+        let repulsion_active = ((steer.trail.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0)
             || ((((steer.trail.current_ptr >> 48) as u8) & ACTION_MODE_PHASE_REPULSE) != 0);
         let sens_q7 = steer.adapter.last_venn_partition().boundary_sensitivity_q7;
         let guard_prox_q7 = if repulsion_active { 88 } else { sens_q7 >> 2 };
@@ -887,13 +896,16 @@ pub(crate) fn generate_steered_reply_with_offset(
             steer.adapter.signal_compute_instability();
             cfg.instability_recoveries += 1;
         }
-        let mut tok_dispatch = steer.adapter.step_compute_dispatch(SystemPressureReading {
-            frame_time_pressure_q15: pressure_q15,
-            bandwidth_pressure_q15: pressure_q15,
-            l3_load_pressure_q15: pressure_q15 >> 1,
-            irreversible_step: 0,
-            _pad: 0,
-        });
+        let mut tok_dispatch = steer.adapter.step_compute_dispatch_with_spine(
+            SystemPressureReading {
+                frame_time_pressure_q15: pressure_q15,
+                bandwidth_pressure_q15: pressure_q15,
+                l3_load_pressure_q15: pressure_q15 >> 1,
+                irreversible_step: 0,
+                _pad: 0,
+            },
+            repulsion_active,
+        );
         if cfg.use_steer && cfg.enable_pre_bypass {
             let ego_active_boundary = steer.adapter.ego_field().is_active() && sens_q7 >= 80;
             let obs = TokenBypassObservation {
@@ -906,9 +918,18 @@ pub(crate) fn generate_steered_reply_with_offset(
                 min_calm_dwell: 2,
                 _pad: 0,
             };
-            let _ = steer
+            let veto_mask = steer
                 .adapter
-                .evaluate_whole_token_bypass(obs, &mut tok_dispatch);
+                .evaluate_whole_token_bypass_with_spine(obs, &mut tok_dispatch);
+            if (veto_mask & SPINE_BYPASS_VETO_GUARD_ACTIVE) != 0 {
+                cfg.spine_veto_guard_hits += 1;
+            }
+            if (veto_mask & SPINE_BYPASS_VETO_REPULSION_ACTIVE) != 0 {
+                cfg.spine_veto_repulse_hits += 1;
+            }
+            if (veto_mask & SPINE_BYPASS_VETO_PINNED_LOCK) != 0 {
+                cfg.spine_veto_pin_hits += 1;
+            }
         } else {
             tok_dispatch.whole_token_steering_bypass = 0;
         }
