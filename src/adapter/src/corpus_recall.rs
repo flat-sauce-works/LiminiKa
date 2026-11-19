@@ -122,7 +122,7 @@ pub struct DynamicAttractorRecall<'a> {
     /// Top-K recalled Persona entries (suppressed only on Guard repulsion).
     pub recalled_personas: Vec<(&'a TextAttractorEntry, f32)>,
     /// Branchless 4-region Venn partition (`S & O`, `S \ O`, `O \ S`, True Void) for this query.
-    pub venn_partition: LiminalVennPartition,
+    pub venn_partition: EpistemicPartition,
     /// Non-copy exterior Known Unknown ($O \setminus S$) pointers routed strictly through sandbox staging.
     pub exterior_sandbox_facts: Vec<(&'a TextAttractorEntry, f32)>,
     /// True when a validated Known Unknown ($O \setminus S$) exterior pointer was staged via $S \cap O$ bridge.
@@ -131,7 +131,7 @@ pub struct DynamicAttractorRecall<'a> {
 
 impl<'a> DynamicAttractorRecall<'a> {
     /// Materializes per-layer `ObjectiveFact<[i8; 64]>` anchors for
-    /// [`ResonantSignalSlice`](liminika_core::traits::gateway::ResonantSignalSlice).
+    /// [`ResonantSignalSlice`](liminika_core::runtime::ResonantSignalSlice).
     #[must_use]
     pub fn build_fact_anchors_per_layer(
         &self,
@@ -153,7 +153,7 @@ impl<'a> DynamicAttractorRecall<'a> {
     }
 
     /// Materializes per-layer `SubjectivePersona<[i8; 64]>` anchors for
-    /// [`ResonantSignalSlice`](liminika_core::traits::gateway::ResonantSignalSlice).
+    /// [`ResonantSignalSlice`](liminika_core::runtime::ResonantSignalSlice).
     #[must_use]
     pub fn build_persona_anchors_per_layer(
         &self,
@@ -857,7 +857,7 @@ impl TextAttractorCorpus {
 
     /// Scores a query's per-layer Q activations through a [`StratumPipeline`] while preserving an
     /// uncollapsed [`LocalChannelObservation`] (bidirectional Chamfer scores + per-token swarm
-    /// deposits) for [`liminika_core::action_hub::ActionHubEngine`] trail decomposition.
+    /// deposits) for [`liminika_core::stigmergy::ActionHubEngine`] trail decomposition.
     ///
     /// # Errors
     ///
@@ -1107,7 +1107,7 @@ impl TextAttractorCorpus {
             .cognitive_substrate()
             .stigmergy
             .granule_noise_tolerance_q7;
-        let venn_partition = evaluate_liminal_venn_partition_branchless(
+        let venn_partition = evaluate_epistemic_partition_branchless(
             self_mask,
             &other_granule_density_q7,
             &substrate_tol,

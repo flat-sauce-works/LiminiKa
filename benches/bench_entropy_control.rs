@@ -21,17 +21,21 @@ use criterion::{
     criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
 use liminika_core::abi::{gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_q7_t, gcso_tagged_ptr_t};
-use liminika_core::entropy_control::{
+use liminika_core::drivers::spine::entropy::{
     compute_moving_z_score_entropy, compute_sparse_surrogate_entropy, eval_barrier_pitchfork,
-    EntropyController,
+    EntropyController, EntropyEvaluator,
 };
-use liminika_core::traits::{
+use liminika_core::foundation::{
     compute_tikhonov_chebyshev_coeffs_deg3, eval_chebyshev_spectral_filter_deg3,
-    eval_stigmergic_block_degrees, evaluate_hodge_obstruction_and_dual_pairing,
-    resolve_dyadic_qdpt_and_cascade_ptr, AlignedBuffer32, AlignedSlice32,
-    ContrastivePhaseBloomFilter, EntropyEvaluator, StigmergicActionPtrOps,
+    evaluate_hodge_obstruction_and_dual_pairing, AlignedBuffer32, AlignedSlice32,
+};
+use liminika_core::liminal::{
     ACTION_PRESET_EXPRESS_PHASE, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
     DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS,
+};
+use liminika_core::stigmergy::{
+    eval_stigmergic_block_degrees, resolve_dyadic_qdpt_and_cascade_ptr,
+    ContrastivePhaseBloomFilter, StigmergicActionPtrOps,
 };
 use std::hint::black_box;
 use std::time::Duration;

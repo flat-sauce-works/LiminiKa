@@ -234,7 +234,7 @@ pub struct LogicalPFrameDescriptor {
     pub hop_depth: u8,
     /// 8-granule Venn trigger bitmask.
     pub venn_trigger_mask: u8,
-    /// Venn region selector bitmask (`VENN_REGION_*`).
+    /// Scope overlap region selector bitmask (`SCOPE_REGION_*`).
     pub venn_region_selector: u8,
     /// Stigmergic pheromone density in Q0.7 (`0..=127`).
     pub pheromone_q7: u8,

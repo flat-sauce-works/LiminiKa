@@ -12,8 +12,8 @@ use liminika_adapter::{
     TokenSequenceEntry,
 };
 use liminika_core::abi::gcso_q7_t;
-use liminika_core::action_hub::ActionHubEngine;
-use liminika_core::traits::gateway::{GuardPhaseAnchor, ObjectiveFact, SubjectivePersona};
+use liminika_core::runtime::{GuardPhaseAnchor, ObjectiveFact, SubjectivePersona};
+use liminika_core::stigmergy::ActionHubEngine;
 use tokenizers::Tokenizer;
 
 use crate::model::{Phi3Config, Phi3Model};

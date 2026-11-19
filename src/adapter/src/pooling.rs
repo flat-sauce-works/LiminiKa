@@ -13,9 +13,9 @@ use crate::{
     AttractorRole, DynamicAttractorRecall, LocalChannelObservation, ModelSteeringAdapter,
     RecallPolicy, StratumPipeline, TextAttractorCorpus, TextAttractorEntry, TokenResonanceDeposit,
 };
-use liminika_core::traits::gateway::ManifoldProbeBaseline;
-use liminika_core::traits::primitives::{load_q7_words_64, MAX_ATTENTION_HEADS};
-use liminika_core::traits::telemetry::NUM_STIGMERGIC_GRANULES;
+use liminika_core::foundation::load_q7_words_64;
+use liminika_core::liminal::{MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
+use liminika_core::runtime::ManifoldProbeBaseline;
 
 /// Unsupervised strategy collapsing per-token Q activations (`[seq_len, dim]`) into `[dim]`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -958,7 +958,7 @@ impl CompiledTokenCorpus {
         adapter: &ModelSteeringAdapter,
         query_token_qs: &[Vec<f32>],
         query_seq_len: usize,
-        prior_circuit: Option<liminika_core::traits::gateway::CognitiveTrajectoryLedger>,
+        prior_circuit: Option<liminika_core::stigmergy::CognitiveTrajectoryLedger>,
     ) -> Result<DynamicAttractorRecall<'a>, String> {
         self.recall_token_sequence_with_strata_and_circuit(
             adapter,
@@ -1161,7 +1161,7 @@ impl CompiledTokenCorpus {
     }
 
     /// Scores a raw query token sequence using a custom [`StratumPipeline`] and optional prior
-    /// [`CognitiveTrajectoryLedger`](liminika_core::traits::gateway::CognitiveTrajectoryLedger).
+    /// [`CognitiveTrajectoryLedger`](liminika_core::stigmergy::CognitiveTrajectoryLedger).
     ///
     /// # Errors
     /// Returns an error if layer count, token length, or stratum inference fails.
@@ -1171,7 +1171,7 @@ impl CompiledTokenCorpus {
         query_token_qs: &[Vec<f32>],
         query_seq_len: usize,
         pipeline: &StratumPipeline<'_>,
-        prior_circuit: Option<liminika_core::traits::gateway::CognitiveTrajectoryLedger>,
+        prior_circuit: Option<liminika_core::stigmergy::CognitiveTrajectoryLedger>,
     ) -> Result<DynamicAttractorRecall<'a>, String> {
         let num_layers = adapter.geometry().num_layers;
         let dim = adapter.geometry().q_rot_len();
@@ -1353,7 +1353,7 @@ mod tests {
             RecallBoundaryMetrics, RecallGateDecision, StratumProbeTelemetry, StratumSignal,
             TextAttractorEntry,
         };
-        use liminika_core::action_hub::StigmergicActionDecision;
+        use liminika_core::stigmergy::StigmergicActionDecision;
 
         let entries = vec![
             TextAttractorEntry {

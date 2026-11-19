@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 #![allow(missing_docs)]
 
-use liminika_core::traits::{AlignedSlice, AlignedSliceMut};
+use liminika_core::foundation::{AlignedSlice, AlignedSliceMut};
 use std::alloc::{alloc, dealloc, Layout};
 
 /// Scoped x86_64 MXCSR Flush-To-Zero (`FTZ`, bit 15 = `0x8000`) and Denormals-Are-Zero

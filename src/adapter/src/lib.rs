@@ -8,59 +8,60 @@
 //! and CLI evaluation harnesses).
 
 use liminika_core::abi::{gcso_edbc_state_t, gcso_ledger_slot_t, gcso_pointer_trail_t, gcso_q7_t};
-use liminika_core::action_hub::{ActionHubEngine, StigmergicActionDecision, StigmergicThresholds};
-use liminika_core::crystal::CrystallizedAttractorRecord;
-use liminika_core::entropy_control::EntropyController;
-use liminika_core::phase_steering::PhaseSteeringEngine;
-use liminika_core::residual_adapter::ResidualAdapterEngine;
-use liminika_core::storage::GcsoFourSectionView;
-use liminika_core::traits::aligned::{
-    AlignedSlice16, AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32,
+use liminika_core::drivers::{
+    EntropyController, LayerDistortionReport, LiminalEgoField, LiminalEgoPreset,
+    DISTORTION_DELTA_FLAG_ACTIVE, DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID,
 };
-use liminika_core::traits::gateway::{
-    apply_latent_horizon_slots, evaluate_stigmergic_venn_and_serendipity_words_64,
-    ActionHubGatewayExt, AdaptiveThresholdPolicy, AutonomousCoreLayerStack, CausalProvenanceReport,
-    CausalProvenanceSignal, CognitiveCircuitActivation, CognitiveCircuitBankOps,
-    CognitiveCircuitPlasticity, CognitiveTrajectoryLedger, CoreLayerEvalContext, CoreTelemetryBank,
-    CoreTelemetrySnapshot, DefaultResidualSpilloverSlot, DissipativeOverflowReport,
-    EpistemicHorizonReading, EpistemicRegime, GatewayFrame, GatewayPhaseSteeringExt,
+use liminika_core::foundation::{
+    load_q7_words_64, swar_q7_circular_add_x8, AlignedSlice16, AlignedSlice32, AlignedSliceMut16,
+    AlignedSliceMut32, PhaseSteeringEngine, PhaseSteeringGeometryExt, ResidualAdapterEngine,
+    RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget, SWAR_SPLAT_BYTE_64,
+};
+use liminika_core::liminal::{
+    EpistemicRegime, GcsoResult, LiminalBoundaryDelta, LiminalThresholdField,
+    ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
+    ATTRACTOR_SLOT_REPULSION, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
+    CAUSAL_AXIS_SUBJECTIVE_PERSONA, EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_STAGNATION,
+    EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LAYER_DISTORTION, MAX_ATTENTION_HEADS,
+    NUM_STIGMERGIC_GRANULES, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
+    WORKBENCH_LANE_FLAG_REPULSION,
+};
+use liminika_core::runtime::{
+    apply_latent_horizon_slots, ActionHubGatewayExt, AdaptiveThresholdPolicy,
+    AutonomousCoreLayerStack, CausalProvenanceReport, CausalProvenanceSignal, CoreLayerEvalContext,
+    CoreTelemetryBank, CoreTelemetrySnapshot, DefaultResidualSpilloverSlot,
+    EpistemicHorizonReading, GatewayFrame, GatewayPhaseSteeringExt, GcsoFourSectionView,
     GuardPhaseAnchor, HorizonDwellState, HorizonEscalationProvider, HorizonEscalationRequest,
-    HorizonTriggerInput, LatentHorizonSlot, LayerDistortionReport, LiminalApertureField,
-    LiminalBoundaryDelta, LiminalEgoField, LiminalEgoPreset, LiminalTopologyTelemetrySnapshot,
-    ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact, RelativeAttractorNode,
-    SlowLoopTelemetryAdjustment, StigmergicFragmentEnsembleReport, StigmergicGranuleField,
-    StigmergicScaleGranularity, StigmergicThresholdPolicy, StigmergicVennSerendipityReport,
-    SubjectivePersona, SystemConstraint, TelemetryCapturePolicy, CAUSAL_AXIS_CONTRADICTION_GUARD,
-    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA, DISTORTION_DELTA_FLAG_ACTIVE,
-    DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID, EGO_TRIGGER_BASIN_CAPTURE,
-    EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LAYER_DISTORTION,
-    ROOT_CAUSE_NOMINAL, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
+    HorizonTriggerInput, LatentHorizonSlot, LiminalTopologyTelemetrySnapshot,
+    ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact, SlowLoopTelemetryAdjustment,
+    StigmergicThresholdPolicy, SubjectivePersona, SystemConstraint, TelemetryCapturePolicy,
 };
-use liminika_core::traits::primitives::{
-    load_q7_words_64, swar_q7_circular_add_x8, GcsoResult, ACTION_MODE_PHASE_REPULSE,
-    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
-    MAX_ATTENTION_HEADS, SWAR_SPLAT_BYTE_64, WORKBENCH_LANE_FLAG_REPULSION,
-};
-use liminika_core::traits::rope::{
-    PhaseSteeringGeometryExt, RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget,
-};
-use liminika_core::traits::telemetry::{
-    StigmergicReconstitutionReport, LEDGER_FLAG_COGNITIVE_TRAJECTORY, NUM_STIGMERGIC_GRANULES,
+use liminika_core::stigmergy::{
+    evaluate_stigmergic_overlap_and_serendipity_words_64, ActionHubEngine,
+    CognitiveCircuitActivation, CognitiveCircuitBankOps, CognitiveCircuitPlasticity,
+    CognitiveTrajectoryLedger, CrystallizedAttractorRecord, DissipativeOverflowReport,
+    RelativeAttractorNode, StigmergicActionDecision, StigmergicFragmentEnsembleReport,
+    StigmergicGranuleField, StigmergicOverlapSerendipityReport, StigmergicReconstitutionReport,
+    StigmergicScaleGranularity, StigmergicThresholds, LEDGER_FLAG_COGNITIVE_TRAJECTORY,
 };
 
 pub mod pooling;
 pub mod reflection;
 pub mod stratum;
 
-pub use liminika_core::action_hub::{WorkbenchLanePlacement, WorkbenchPreset, WorkbenchSlotSpec};
-pub use liminika_core::traits::gateway::{
-    evaluate_liminal_venn_partition_branchless, AnonymousComputePool, CognitiveSubstrate,
-    ComputeDispatchMask, ComputePoolConfig, ComputePressureRegime, DistortionDelta,
-    DistortionTension, DistortionTensionStateCode, EgoDifferentialNet, EgoIntentAxes,
-    LiminalVennPartition, SystemPressureReading, SystemSpineState, TokenBypassObservation,
-    VENN_REGION_KNOWN_UNKNOWN, VENN_REGION_SELF_EXCLUSIVE, VENN_REGION_SHARED_CORE,
+pub use liminika_core::drivers::{
+    AnonymousComputePool, ComputeDispatchMask, ComputePoolConfig, ComputePressureRegime,
+    DistortionDelta, DistortionTension, DistortionTensionStateCode, EgoDifferentialNet,
+    EgoIntentAxes, SystemPressureReading, SystemSpineState, TokenBypassObservation,
 };
-pub use liminika_core::traits::primitives::{AttributionTag, DriverKind, SubstrateKind};
+pub use liminika_core::liminal::{
+    evaluate_epistemic_partition_branchless, AttributionTag, DriverKind, EpistemicPartition,
+    SubstrateKind, SCOPE_REGION_KNOWN_UNKNOWN, SCOPE_REGION_SELF_EXCLUSIVE,
+    SCOPE_REGION_SHARED_CORE,
+};
+pub use liminika_core::stigmergy::{
+    CognitiveSubstrate, WorkbenchLanePlacement, WorkbenchPreset, WorkbenchSlotSpec,
+};
 pub use pooling::*;
 pub use reflection::*;
 pub use stratum::*;

@@ -382,7 +382,7 @@ pub struct ModelSteeringAdapter {
     configured_ego: LiminalEgoField,
     last_boundary_delta: LiminalBoundaryDelta,
     last_horizon: EpistemicHorizonReading,
-    last_venn_report: StigmergicVennSerendipityReport,
+    last_venn_report: StigmergicOverlapSerendipityReport,
     last_ensemble_report: Option<StigmergicFragmentEnsembleReport>,
     horizon_dwell: HorizonDwellState,
     active_horizon_slots_mask: u32,
@@ -395,7 +395,7 @@ pub struct ModelSteeringAdapter {
     active_workbench_preset: WorkbenchPreset,
     compute_pool: AnonymousComputePool,
     system_spine: SystemSpineState,
-    last_venn_partition: LiminalVennPartition,
+    last_venn_partition: EpistemicPartition,
     distortion_tension: DistortionTension,
     ego_differential_net: EgoDifferentialNet,
     sandbox_promotion_streak: u8,
@@ -485,7 +485,7 @@ impl ModelSteeringAdapter {
                 regime_code: EpistemicRegime::KnownCoherent as u8,
                 ..EpistemicHorizonReading::default()
             },
-            last_venn_report: StigmergicVennSerendipityReport::default(),
+            last_venn_report: StigmergicOverlapSerendipityReport::default(),
             last_ensemble_report: None,
             horizon_dwell: HorizonDwellState::default(),
             active_horizon_slots_mask: 0,
@@ -498,7 +498,7 @@ impl ModelSteeringAdapter {
             active_workbench_preset: WorkbenchPreset::BalancedDialog,
             compute_pool,
             system_spine: SystemSpineState::new(),
-            last_venn_partition: LiminalVennPartition::default(),
+            last_venn_partition: EpistemicPartition::default(),
             distortion_tension: DistortionTension::new(false),
             ego_differential_net: EgoDifferentialNet::new_empty(1),
             sandbox_promotion_streak: 0,
@@ -533,7 +533,7 @@ impl ModelSteeringAdapter {
             regime_code: EpistemicRegime::KnownCoherent as u8,
             ..EpistemicHorizonReading::default()
         };
-        self.last_venn_report = StigmergicVennSerendipityReport::default();
+        self.last_venn_report = StigmergicOverlapSerendipityReport::default();
         self.last_ensemble_report = None;
         self.horizon_dwell = HorizonDwellState::default();
         self.active_horizon_slots_mask = 0;
@@ -550,7 +550,7 @@ impl ModelSteeringAdapter {
         let _ = self.action_hub.release_all_workbench_lanes();
         self.active_workbench_preset = WorkbenchPreset::BalancedDialog;
         self.system_spine = SystemSpineState::new();
-        self.last_venn_partition = LiminalVennPartition::default();
+        self.last_venn_partition = EpistemicPartition::default();
         self.distortion_tension = DistortionTension::new(false);
         self.ego_differential_net = EgoDifferentialNet::new_empty(saved_hops);
         self.sandbox_promotion_streak = 0;
@@ -591,9 +591,9 @@ impl ModelSteeringAdapter {
         &self.system_spine
     }
 
-    /// Returns the most recent branchless 4-region [`LiminalVennPartition`].
+    /// Returns the most recent branchless 4-region [`EpistemicPartition`].
     #[must_use]
-    pub const fn last_venn_partition(&self) -> &LiminalVennPartition {
+    pub const fn last_venn_partition(&self) -> &EpistemicPartition {
         &self.last_venn_partition
     }
 
@@ -684,7 +684,7 @@ impl ModelSteeringAdapter {
         let mut net = EgoDifferentialNet::new_empty(self.ego_differential_net.max_hops);
         for (slot, desc) in descriptors
             .iter()
-            .take(liminika_core::traits::gateway::MAX_EGO_PFRAME_NODES)
+            .take(liminika_core::drivers::MAX_EGO_PFRAME_NODES)
             .enumerate()
         {
             let local_ego = if desc.intent_delta.is_active() {
@@ -811,7 +811,7 @@ impl ModelSteeringAdapter {
             let passive_sat = adj.distortion.ego_wakeup_recommended
                 || matches!(
                     adj.distortion.kind,
-                    liminika_core::traits::gateway::LayerDistortionKind::PassiveSaturation
+                    liminika_core::drivers::LayerDistortionKind::PassiveSaturation
                 );
             self.distortion_tension.step_slow_loop_excitation(
                 passive_sat,
@@ -938,15 +938,15 @@ impl ModelSteeringAdapter {
         act
     }
 
-    /// Returns a shared reference to the live Core Layer 0 [`LiminalApertureField`] governing
+    /// Returns a shared reference to the live Core Layer 0 [`LiminalThresholdField`] governing
     /// dynamic `Liminal` channel thresholds and cognitive window gains.
     #[must_use]
-    pub const fn aperture_field(&self) -> &LiminalApertureField {
+    pub const fn aperture_field(&self) -> &LiminalThresholdField {
         &self.core_layers.liminal_layer
     }
 
-    /// Returns a mutable reference to the live Core Layer 0 [`LiminalApertureField`].
-    pub fn aperture_field_mut(&mut self) -> &mut LiminalApertureField {
+    /// Returns a mutable reference to the live Core Layer 0 [`LiminalThresholdField`].
+    pub fn aperture_field_mut(&mut self) -> &mut LiminalThresholdField {
         &mut self.core_layers.liminal_layer
     }
 
@@ -973,9 +973,9 @@ impl ModelSteeringAdapter {
         &self.last_horizon
     }
 
-    /// Returns the most recently observed [`StigmergicVennSerendipityReport`].
+    /// Returns the most recently observed [`StigmergicOverlapSerendipityReport`].
     #[must_use]
-    pub const fn last_venn_serendipity_report(&self) -> &StigmergicVennSerendipityReport {
+    pub const fn last_venn_serendipity_report(&self) -> &StigmergicOverlapSerendipityReport {
         &self.last_venn_report
     }
 
@@ -1117,7 +1117,7 @@ impl ModelSteeringAdapter {
     pub fn adapt_core_layers(
         &mut self,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicVennSerendipityReport,
+        venn_report: &StigmergicOverlapSerendipityReport,
         overflow_opt: Option<&DissipativeOverflowReport>,
     ) {
         let stagnation_drive =
@@ -1172,7 +1172,7 @@ impl ModelSteeringAdapter {
         query_words_opt: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
     ) -> (
         EpistemicHorizonReading,
-        StigmergicVennSerendipityReport,
+        StigmergicOverlapSerendipityReport,
         Option<StigmergicFragmentEnsembleReport>,
     ) {
         let has_guard_conflict = recall.guard_conflict_margin > 0.0;
@@ -1250,7 +1250,7 @@ impl ModelSteeringAdapter {
 
         let aperture_floor =
             f32::from(self.core_layers.liminal_layer.void_floor_q7[1]) * (1.0 / 127.0);
-        let venn = evaluate_stigmergic_venn_and_serendipity_words_64(
+        let venn = evaluate_stigmergic_overlap_and_serendipity_words_64(
             &fact_fragments,
             &q_words,
             &drifted_words,
@@ -1831,9 +1831,9 @@ impl ModelSteeringAdapter {
         core_layers: &'a AutonomousCoreLayerStack,
         last_boundary_delta: &'a LiminalBoundaryDelta,
         last_horizon: &'a EpistemicHorizonReading,
-        last_venn_report: &'a StigmergicVennSerendipityReport,
+        last_venn_report: &'a StigmergicOverlapSerendipityReport,
         derivative_alpha_q7: u8,
-        last_venn_partition: &'a LiminalVennPartition,
+        last_venn_partition: &'a EpistemicPartition,
         system_spine: &'a SystemSpineState,
         ego_differential_net: &'a EgoDifferentialNet,
         distortion_tension: &'a DistortionTension,
@@ -2031,7 +2031,7 @@ impl ModelSteeringAdapter {
                 this.geometry.num_layers.max(1),
             );
             let pre_trigger = HorizonTriggerInput {
-                edbc_branch_mode: this.entropy_controller.state().active_branch_mode,
+                entropy_gate_mode: this.entropy_controller.state().active_branch_mode,
                 moving_z_entropy: entropy_h_tilde,
                 repulsion_severity: this.last_horizon.conflict_severity,
                 causal_root_cause: ROOT_CAUSE_NOMINAL,
@@ -2113,7 +2113,7 @@ impl ModelSteeringAdapter {
                 })?;
 
             let mut trigger = HorizonTriggerInput {
-                edbc_branch_mode: this.entropy_controller.state().active_branch_mode,
+                entropy_gate_mode: this.entropy_controller.state().active_branch_mode,
                 moving_z_entropy: entropy_h_tilde,
                 repulsion_severity: frame.repulsion_severity,
                 causal_root_cause: frame.dominant_cause_code,
@@ -2146,7 +2146,7 @@ impl ModelSteeringAdapter {
                 &this.last_boundary_delta,
                 &this.last_venn_report,
                 &this.core_layers.ego_layer,
-                trigger.edbc_branch_mode,
+                trigger.entropy_gate_mode,
                 slid_in,
                 slid_out,
                 escalated,
@@ -2168,7 +2168,7 @@ impl ModelSteeringAdapter {
                 decision,
                 this.configured_ego.is_active(),
                 exterior_granule_mask,
-                liminika_core::traits::primitives::trail_phase_words_ref(trail_inout),
+                liminika_core::stigmergy::trail_phase_words_ref(trail_inout),
                 frame.effective_energy,
                 3,
                 3,

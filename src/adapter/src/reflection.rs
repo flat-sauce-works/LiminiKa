@@ -10,15 +10,19 @@
 //! bounded by [`ReflectionPolicy::max_retries`].
 
 use crate::{DynamicAttractorRecall, RecallPolicy, VoidBoundaryState};
-use liminika_core::action_hub::StigmergicActionDecision;
-use liminika_core::traits::gateway::{
-    AdaptiveThresholdPolicy, CausalProvenanceSignal, CognitiveCircuitActivation,
-    CognitiveCircuitPlasticity, CognitiveCircuitThresholdPolicy, CognitiveOpKind, CognitiveStepOp,
-    CognitiveTrajectoryLedger, GatewayFrame, GuardPhaseAnchor, LiminalEgoField,
-    ManifoldGatewaySignal, ObjectiveFact, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
-    CAUSAL_AXIS_OBJECTIVE_FACT, EGO_TRIGGER_LIMINAL_EXTERIOR,
+use liminika_core::drivers::LiminalEgoField;
+use liminika_core::liminal::{
+    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, EGO_TRIGGER_LIMINAL_EXTERIOR,
+    MAX_ATTENTION_HEADS,
 };
-use liminika_core::traits::primitives::MAX_ATTENTION_HEADS;
+use liminika_core::runtime::{
+    AdaptiveThresholdPolicy, CausalProvenanceSignal, CognitiveCircuitThresholdPolicy, GatewayFrame,
+    GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact, SystemConstraint,
+};
+use liminika_core::stigmergy::{
+    CognitiveCircuitActivation, CognitiveCircuitPlasticity, CognitiveOpKind, CognitiveStepOp,
+    CognitiveTrajectoryLedger, StigmergicActionDecision,
+};
 
 /// Policy governing bounded, event-triggered closed-loop reflection retries.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -366,7 +370,7 @@ pub trait AttractorTrajectoryEvaluator {
 /// undigested Known Unknowns ($O \setminus S$), exit entropy spikes, or Guard traps.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReflectionGateInput {
-    /// $4p(1-p)$ boundary sensitivity in Q0.7 (`0..=127`) from [`liminika_core::traits::gateway::LiminalVennPartition`].
+    /// $4p(1-p)$ boundary sensitivity in Q0.7 (`0..=127`) from [`liminika_core::liminal::EpistemicPartition`].
     pub boundary_sensitivity_q7: u8,
     /// True when the query contains an undigested Known Unknown ($O \setminus S$) exterior pointer.
     pub has_undigested_known_unknown: bool,
@@ -747,7 +751,7 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liminika_core::traits::gateway::CausalProvenanceSignal;
+    use liminika_core::runtime::CausalProvenanceSignal;
 
     fn make_snapshot(
         void_state: VoidBoundaryState,
@@ -919,7 +923,7 @@ mod tests {
 
     #[test]
     fn reflection_escalates_omitted_compound_decomposition_via_cognitive_circuit() {
-        use liminika_core::traits::gateway::StigmergicScaleGranularity;
+        use liminika_core::stigmergy::StigmergicScaleGranularity;
 
         let eval = ManifoldReflectionEvaluator;
         let recall_policy = RecallPolicy::default();
@@ -969,7 +973,7 @@ mod tests {
 
     #[test]
     fn reflection_avoids_overthinking_when_majority_coalition_converges_inside_basin() {
-        use liminika_core::traits::gateway::StigmergicScaleGranularity;
+        use liminika_core::stigmergy::StigmergicScaleGranularity;
 
         let eval = ManifoldReflectionEvaluator;
         let recall_policy = RecallPolicy::default();
@@ -1053,7 +1057,7 @@ mod tests {
 
     #[test]
     fn reflection_ego_allows_controlled_exploration_but_rejects_guard_and_hallucination() {
-        use liminika_core::traits::gateway::EgoIntentAxes;
+        use liminika_core::drivers::EgoIntentAxes;
 
         let eval = ManifoldReflectionEvaluator;
         let recall_policy = RecallPolicy::default();

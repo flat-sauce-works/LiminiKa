@@ -12,7 +12,7 @@ use liminika_adapter::{
     CorpusRecallEscalationProvider, ModelSteeringAdapter, RopeGeometry, RopeLayout,
 };
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
-use liminika_core::traits::gateway::{
+use liminika_core::runtime::{
     GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact, ResonantSignalSlice, SubjectivePersona,
 };
 use serde::Deserialize;

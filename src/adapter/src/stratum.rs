@@ -14,19 +14,18 @@ use crate::{
     RecallGateDecision, RecallPolicy, TextAttractorCorpus, TextAttractorEntry, VoidBoundaryState,
 };
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_tagged_ptr_t};
-use liminika_core::action_hub::{
-    ActionHubEngine, ActionOrchestrationReport, StigmergicActionDecision, StigmergicActionReceptor,
-    StigmergicThresholds, ACTION_HUB_INLINE_TRAILS,
-};
-use liminika_core::traits::gateway::{
+use liminika_core::foundation::load_q7_words_64;
+use liminika_core::liminal::{GcsoResult, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
+use liminika_core::runtime::{
     ActionHubScaleOrchestrator, AdaptiveThresholdPolicy, CausalProvenanceReport,
-    CognitiveCircuitActivation, CognitiveCircuitThresholdPolicy, CognitiveOpKind, CognitiveStepOp,
-    CognitiveTrajectoryLedger, GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal,
-    ObjectiveFact, ScaleLayerNode, StigmergicScaleGranularity, SubjectivePersona,
+    CognitiveCircuitThresholdPolicy, GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal,
+    ObjectiveFact, ScaleLayerNode, StigmergicActionReceptor, SubjectivePersona,
 };
-use liminika_core::traits::primitives::{load_q7_words_64, GcsoResult, MAX_ATTENTION_HEADS};
-use liminika_core::traits::telemetry::{
-    StigmergicReconstitutionOps, StigmergicReconstitutionReport, NUM_STIGMERGIC_GRANULES,
+use liminika_core::stigmergy::{
+    ActionHubEngine, ActionOrchestrationReport, CognitiveCircuitActivation, CognitiveOpKind,
+    CognitiveStepOp, CognitiveTrajectoryLedger, StigmergicActionDecision,
+    StigmergicReconstitutionOps, StigmergicReconstitutionReport, StigmergicScaleGranularity,
+    StigmergicThresholds, ACTION_HUB_INLINE_TRAILS,
 };
 
 /// Uncollapsed per-query-token resonance observation deposited into stigmergic swarm trails.
@@ -658,10 +657,8 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
         let mut frame = signal
             .map_to_gateway_with_persona_floor(ctx.entries, last_layer, persona_floor)
             .frame;
-        frame.active_head_count = (ctx.num_q_heads as u16).clamp(
-            1,
-            liminika_core::traits::primitives::MAX_ATTENTION_HEADS as u16,
-        );
+        frame.active_head_count =
+            (ctx.num_q_heads as u16).clamp(1, liminika_core::liminal::MAX_ATTENTION_HEADS as u16);
 
         let repulsed = repulsed_by_guard || frame.is_repulsed();
         let has_active_persona = top1_persona_score >= persona_floor;
@@ -928,10 +925,8 @@ impl<'a> StratumPipeline<'a> {
                     ctx.policy.min_coherence * 0.75,
                 )
                 .frame;
-            frame.active_head_count = (ctx.num_q_heads as u16).clamp(
-                1,
-                liminika_core::traits::primitives::MAX_ATTENTION_HEADS as u16,
-            );
+            frame.active_head_count = (ctx.num_q_heads as u16)
+                .clamp(1, liminika_core::liminal::MAX_ATTENTION_HEADS as u16);
             signal.gateway_frame = frame;
             signal.telemetry.final_top1_anchor = final_top1_anchor;
             signal.telemetry.provenance = frame.to_causal_report();

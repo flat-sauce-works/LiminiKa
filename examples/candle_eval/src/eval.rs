@@ -13,13 +13,13 @@ use liminika_adapter::{
     ReflectionPolicy, SystemPressureReading, TrajectoryManifoldSnapshot,
 };
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
-use liminika_core::traits::gateway::{
+use liminika_core::drivers::{LayerDistortionReport, LiminalEgoPreset, TokenBypassObservation};
+use liminika_core::liminal::ACTION_MODE_PHASE_REPULSE;
+use liminika_core::runtime::{CoreTelemetryBank, CoreTelemetrySnapshot, RamPhaseKvStepOutcome};
+use liminika_core::stigmergy::{
     CognitiveCircuitPlasticity, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
-    CoreTelemetryBank, CoreTelemetrySnapshot, LayerDistortionReport, LiminalEgoPreset,
-    RamPhaseKvStepOutcome, StigmergicScaleGranularity, TokenBypassObservation,
+    StigmergicScaleGranularity, TRAIL_FLAG_REPULSION_ACTIVE,
 };
-use liminika_core::traits::primitives::ACTION_MODE_PHASE_REPULSE;
-use liminika_core::traits::telemetry::TRAIL_FLAG_REPULSION_ACTIVE;
 use tokenizers::Tokenizer;
 
 use crate::bake::argmax;

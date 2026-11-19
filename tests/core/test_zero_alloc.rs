@@ -12,9 +12,9 @@ use liminika_core::abi::{
     gcso_dpsr_apply_phase_steering_fused_safe, gcso_pointer_trail_t, GcsoContextHandle,
     GCSO_SUCCESS,
 };
-use liminika_core::traits::aligned::{AlignedBuffer16, AlignedBuffer32};
-use liminika_core::traits::telemetry::StigmergicReconstitutionReport;
-use liminika_core::traits::{DEFAULT_QDPS_MIN_STEP_RAD, DEFAULT_RIPA_CLAMP_MAX_RAD};
+use liminika_core::foundation::{AlignedBuffer16, AlignedBuffer32};
+use liminika_core::liminal::{DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD};
+use liminika_core::stigmergy::StigmergicReconstitutionReport;
 
 struct ZeroAllocGuardAllocator;
 
@@ -102,7 +102,7 @@ fn test_context_step_token_zero_allocation_guarantee() {
                 phase_buf.as_slice().as_ptr(),
                 HEAD_DIM,
                 NUM_HEADS,
-                DEFAULT_RIPA_CLAMP_MAX_RAD,
+                DEFAULT_PHASE_CLAMP_MAX_RAD,
             )
         };
         assert_eq!(steer_status, GCSO_SUCCESS);
@@ -115,7 +115,7 @@ fn test_context_step_token_zero_allocation_guarantee() {
                 phase_buf.as_slice().as_ptr(),
                 0xFF,
                 64,
-                ((DEFAULT_QDPS_MIN_STEP_RAD / core::f32::consts::PI) * 128.0) as u8,
+                ((DEFAULT_PHASE_STEP_MIN_RAD / core::f32::consts::PI) * 128.0) as u8,
                 16,
                 4,
                 0.5,
@@ -135,12 +135,12 @@ fn test_context_step_token_zero_allocation_guarantee() {
 
 #[test]
 fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
-    use liminika_core::traits::gateway::{
+    use liminika_core::foundation::{RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget};
+    use liminika_core::liminal::EGO_TRIGGER_BOUNDARY_CHATTER;
+    use liminika_core::runtime::{
         AutonomousCoreLayerStack, GatewayFrame, HorizonTriggerInput, LatentHorizonSlot,
         ObjectiveFact, SubjectivePersona, SystemConstraint,
     };
-    use liminika_core::traits::rope::{RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget};
-    use liminika_core::traits::EGO_TRIGGER_BOUNDARY_CHATTER;
     use liminika_core::{Config, RuntimeContext};
 
     struct TestGeom;
@@ -252,8 +252,8 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
     let _ = wb_hub.decay_and_reclaim_workbench_lanes(0.5, 0.25);
     let _ = wb_hub.release_unpinned_lanes();
     let mut esc_lane = None;
-    let esc_req = liminika_core::traits::HorizonEscalationRequest {
-        trigger: liminika_core::traits::HorizonTriggerInput {
+    let esc_req = liminika_core::runtime::HorizonEscalationRequest {
+        trigger: liminika_core::runtime::HorizonTriggerInput {
             repulsion_severity: 0.8,
             ..Default::default()
         },
@@ -266,7 +266,7 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
     // SystemSpine isolation, DistortionDelta P-Frame chain, and DistortionTension remain zero-alloc.
     ctx.compute_pool_mut()
         .set_slot_masks(0b1111, 0b0001, 0, 0b1110);
-    let mut dispatch = ctx.step_compute_dispatch(liminika_core::traits::SystemPressureReading {
+    let mut dispatch = ctx.step_compute_dispatch(liminika_core::drivers::SystemPressureReading {
         frame_time_pressure_q15: 20000,
         bandwidth_pressure_q15: 10000,
         l3_load_pressure_q15: 9000,
@@ -275,7 +275,7 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
     });
     ctx.commit_compute_exit_reward(dispatch.execute_mask, 96);
     let _ = ctx.compute_pool_mut().evaluate_whole_token_steering_bypass(
-        liminika_core::traits::TokenBypassObservation {
+        liminika_core::drivers::TokenBypassObservation {
             irreversible_step: 0,
             liminal_stationary: 1,
             boundary_sensitivity_q7: 16,
@@ -287,7 +287,7 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
         },
         &mut dispatch,
     );
-    let part = liminika_core::evaluate_liminal_venn_partition_branchless(
+    let part = liminika_core::evaluate_epistemic_partition_branchless(
         0b0000_0011,
         &[80, 72, 0, 0, 96, 88, 0, 0],
         &[4; 8],

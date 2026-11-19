@@ -25,15 +25,18 @@ use criterion::{
 use liminika_core::abi::{
     gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t, gcso_subhead_config_t,
 };
-use liminika_core::phase_steering::{PhaseSteeringClosedLoop, PhaseSteeringEngine};
-use liminika_core::traits::{
+use liminika_core::foundation::{
     detect_frame_delta_bitmask, dispatch_subhead_slot_ensemble,
     dispatch_subhead_slot_ensemble_geodesic, steer_visual_grid_2d_bitmask_gated,
     steer_visual_grid_3d_bitmask_gated, AlignedBuffer16, AlignedBuffer32, AlignedBuffer64,
-    AlignedSlice16, AlignedSlice32, AlignedSliceMut16, CrystallizedAttractorRecord, PhaseSteering,
-    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE,
-    DEFAULT_RIPA_CLAMP_MAX_RAD,
+    AlignedSlice16, AlignedSlice32, AlignedSliceMut16, PhaseSteering, PhaseSteeringEngine,
 };
+use liminika_core::liminal::{
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE,
+    DEFAULT_PHASE_CLAMP_MAX_RAD,
+};
+use liminika_core::runtime::PhaseSteeringClosedLoop;
+use liminika_core::stigmergy::CrystallizedAttractorRecord;
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -253,7 +256,7 @@ fn bench_phase_steering_operations(c: &mut Criterion) {
                         .apply_phase_steering_safe(
                             &mut q_slice,
                             &p_slice,
-                            DEFAULT_RIPA_CLAMP_MAX_RAD,
+                            DEFAULT_PHASE_CLAMP_MAX_RAD,
                         )
                         .unwrap();
                 }
@@ -263,7 +266,7 @@ fn bench_phase_steering_operations(c: &mut Criterion) {
                         .apply_phase_steering_safe(
                             black_box(&mut q_slice),
                             black_box(&p_slice),
-                            black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
+                            black_box(DEFAULT_PHASE_CLAMP_MAX_RAD),
                         )
                         .unwrap();
                     black_box(q_slice.as_slice()[0]);
@@ -430,7 +433,7 @@ fn bench_phase_steering_long_context_and_procrustes(c: &mut Criterion) {
         for _ in 0..8 {
             let mut warm = seed_buf;
             let mut w_slice = warm.as_aligned_slice_mut();
-            engine.qdps_filter_step(&mut w_slice, 0.12f32).unwrap();
+            engine.phase_step_filter(&mut w_slice, 0.12f32).unwrap();
         }
 
         b.iter_batched(
@@ -438,7 +441,7 @@ fn bench_phase_steering_long_context_and_procrustes(c: &mut Criterion) {
             |mut local| {
                 let mut p_slice = local.as_aligned_slice_mut();
                 engine
-                    .qdps_filter_step(black_box(&mut p_slice), black_box(0.12f32))
+                    .phase_step_filter(black_box(&mut p_slice), black_box(0.12f32))
                     .unwrap();
                 black_box(p_slice.as_slice()[0]);
             },
@@ -499,7 +502,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 ATTRACTOR_SLOT_SYSTEM_BASELINE,
                 ATTRACTOR_SLOT_KNOWLEDGE,
                 ATTRACTOR_SLOT_PERSONA,
-                DEFAULT_RIPA_CLAMP_MAX_RAD,
+                DEFAULT_PHASE_CLAMP_MAX_RAD,
                 8i8,
                 head_dim as usize,
             )
@@ -514,7 +517,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 black_box(ATTRACTOR_SLOT_SYSTEM_BASELINE),
                 black_box(ATTRACTOR_SLOT_KNOWLEDGE),
                 black_box(ATTRACTOR_SLOT_PERSONA),
-                black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
+                black_box(DEFAULT_PHASE_CLAMP_MAX_RAD),
                 black_box(8i8),
                 black_box(head_dim as usize),
             )
@@ -554,7 +557,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 ATTRACTOR_SLOT_SYSTEM_BASELINE,
                 ATTRACTOR_SLOT_KNOWLEDGE,
                 ATTRACTOR_SLOT_PERSONA,
-                DEFAULT_RIPA_CLAMP_MAX_RAD,
+                DEFAULT_PHASE_CLAMP_MAX_RAD,
                 8i8,
                 head_dim as usize,
             )
@@ -569,7 +572,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 black_box(ATTRACTOR_SLOT_SYSTEM_BASELINE),
                 black_box(ATTRACTOR_SLOT_KNOWLEDGE),
                 black_box(ATTRACTOR_SLOT_PERSONA),
-                black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
+                black_box(DEFAULT_PHASE_CLAMP_MAX_RAD),
                 black_box(8i8),
                 black_box(head_dim as usize),
             )
@@ -1032,7 +1035,7 @@ fn bench_phase_steering_extreme_and_edge_cases(c: &mut Criterion) {
                 .apply_phase_steering_geodesic_safe(
                     &mut q_slice,
                     &p_slice,
-                    DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    DEFAULT_PHASE_CLAMP_MAX_RAD,
                 )
                 .unwrap();
         }
@@ -1042,7 +1045,7 @@ fn bench_phase_steering_extreme_and_edge_cases(c: &mut Criterion) {
                 .apply_phase_steering_geodesic_safe(
                     black_box(&mut q_slice),
                     black_box(&p_slice),
-                    black_box(DEFAULT_RIPA_CLAMP_MAX_RAD),
+                    black_box(DEFAULT_PHASE_CLAMP_MAX_RAD),
                 )
                 .unwrap();
             black_box(q_slice.as_slice()[0]);

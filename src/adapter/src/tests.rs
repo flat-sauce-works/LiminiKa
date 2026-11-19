@@ -68,10 +68,8 @@ fn adapter_steps_edbc_and_applies_srl_residual() {
 
 #[test]
 fn adapter_steers_via_gateway_trait_composition() {
-    use liminika_core::traits::gateway::{
-        ObjectiveFact, SubjectivePersona, CAUSAL_AXIS_OBJECTIVE_FACT,
-        CAUSAL_AXIS_SUBJECTIVE_PERSONA,
-    };
+    use liminika_core::liminal::{CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA};
+    use liminika_core::runtime::{ObjectiveFact, SubjectivePersona};
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
@@ -114,7 +112,7 @@ fn adapter_steers_via_gateway_trait_composition() {
 
 #[test]
 fn adapter_resonates_arbitrary_slice_without_hardcoded_count() {
-    use liminika_core::traits::gateway::{ObjectiveFact, ResonantSignalSlice};
+    use liminika_core::runtime::{ObjectiveFact, ResonantSignalSlice};
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
@@ -145,7 +143,7 @@ fn adapter_resonates_arbitrary_slice_without_hardcoded_count() {
 
 #[test]
 fn adapter_steers_via_action_hub_and_builds_stigmergic_density() {
-    use liminika_core::traits::gateway::{ObjectiveFact, ResonantSignalSlice};
+    use liminika_core::runtime::{ObjectiveFact, ResonantSignalSlice};
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
@@ -172,7 +170,7 @@ fn adapter_steers_via_action_hub_and_builds_stigmergic_density() {
 
 #[test]
 fn action_hub_orchestrator_gates_rope_and_srl_by_stigmergic_density() {
-    use liminika_core::traits::gateway::{ObjectiveFact, ResonantSignalSlice};
+    use liminika_core::runtime::{ObjectiveFact, ResonantSignalSlice};
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
@@ -542,7 +540,7 @@ fn dual_track_timeline_persists_composes_and_updates_persona_circuit() {
         AttractorTrajectoryEvaluator, ManifoldReflectionEvaluator, ReflectionPolicy,
         TrajectoryManifoldSnapshot,
     };
-    use liminika_core::traits::gateway::{
+    use liminika_core::stigmergy::{
         CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, StigmergicScaleGranularity,
     };
 
@@ -1632,7 +1630,7 @@ fn action_hub_compound_decomposition_links_disjoint_specialists_while_respecting
             .cognitive_trajectory
             .latest_step()
             .map(|s| s.op()),
-        Some(liminika_core::traits::gateway::CognitiveOpKind::Observe)
+        Some(liminika_core::stigmergy::CognitiveOpKind::Observe)
     );
 }
 
@@ -1761,7 +1759,7 @@ fn residual_peeling_decomposer_chains_three_disjoint_specialists_beyond_top_k_tw
             .cognitive_trajectory
             .latest_step()
             .map(|s| s.op()),
-        Some(liminika_core::traits::gateway::CognitiveOpKind::DecomposePeel)
+        Some(liminika_core::stigmergy::CognitiveOpKind::DecomposePeel)
     );
 }
 
@@ -1884,7 +1882,8 @@ fn split_premise_guard_coalition_triggers_repulsion_while_preserving_counter_fac
 
 #[test]
 fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology() {
-    use liminika_core::traits::gateway::{CognitiveOpKind, CognitiveStepOp, EpistemicRegime};
+    use liminika_core::liminal::EpistemicRegime;
+    use liminika_core::stigmergy::{CognitiveOpKind, CognitiveStepOp};
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("phi4 mini");
 
     let mut peel_ledger = CognitiveTrajectoryLedger::default();
@@ -1914,7 +1913,7 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
     assert!(adapter.aperture_field().void_floor_q7[2] > initial_persona_floor);
     assert_eq!(adapter.aperture_field().adaptation_epochs, 1);
 
-    let venn = StigmergicVennSerendipityReport {
+    let venn = StigmergicOverlapSerendipityReport {
         venn_core_mask: 0x0F,
         venn_penumbra_mask: 0x10,
         void_exterior_mask: 0xE0,
@@ -1948,7 +1947,7 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
         regime_code: EpistemicRegime::KnownCoherent as u8,
         ..Default::default()
     };
-    let quiescent_venn = StigmergicVennSerendipityReport {
+    let quiescent_venn = StigmergicOverlapSerendipityReport {
         venn_core_mask: 0x0F,
         venn_penumbra_mask: 0x10,
         void_exterior_mask: 0xE0,
@@ -1971,10 +1970,10 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
 
 #[test]
 fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_srl() {
-    use liminika_core::traits::gateway::{
-        EgoIntentAxes, EpistemicHorizonReading, EpistemicRegime, ObjectiveFact,
-        StigmergicVennSerendipityReport,
-    };
+    use liminika_core::drivers::EgoIntentAxes;
+    use liminika_core::liminal::EpistemicRegime;
+    use liminika_core::runtime::{EpistemicHorizonReading, ObjectiveFact};
+    use liminika_core::stigmergy::StigmergicOverlapSerendipityReport;
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let base_axes = EgoIntentAxes::new().with_autonomy_q7(32).with_logic_q7(80);
@@ -2000,7 +1999,7 @@ fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_srl() {
         regime_code: EpistemicRegime::KnownCoherent as u8,
         ..Default::default()
     };
-    let active_venn = StigmergicVennSerendipityReport {
+    let active_venn = StigmergicOverlapSerendipityReport {
         venn_core_mask: 0x0F,
         void_exterior_mask: 0xF0,
         ..Default::default()
@@ -2044,7 +2043,7 @@ fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_srl() {
         regime_code: EpistemicRegime::KnownCoherent as u8,
         ..Default::default()
     };
-    let venn = StigmergicVennSerendipityReport {
+    let venn = StigmergicOverlapSerendipityReport {
         venn_core_mask: 0x0F,
         ..Default::default()
     };
@@ -2062,10 +2061,10 @@ fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_srl() {
 
 #[test]
 fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
-    use liminika_core::traits::gateway::{
-        EgoIntentAxes, EpistemicHorizonReading, EpistemicRegime, ObjectiveFact,
-        StigmergicVennSerendipityReport,
-    };
+    use liminika_core::drivers::EgoIntentAxes;
+    use liminika_core::liminal::EpistemicRegime;
+    use liminika_core::runtime::{EpistemicHorizonReading, ObjectiveFact};
+    use liminika_core::stigmergy::StigmergicOverlapSerendipityReport;
 
     let geom = RopeGeometry::phi4_mini();
     let mut base_adapter = ModelSteeringAdapter::new(geom.clone()).expect("base init");
@@ -2084,7 +2083,7 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
         regime_code: EpistemicRegime::KnownCoherent as u8,
         ..Default::default()
     };
-    let venn = StigmergicVennSerendipityReport {
+    let venn = StigmergicOverlapSerendipityReport {
         venn_core_mask: 0x0F,
         void_exterior_mask: 0xF0,
         ..Default::default()
@@ -2169,7 +2168,7 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
         telemetry: StratumProbeTelemetry::default(),
         recalled_facts: vec![(&e1, 0.85), (&e2, 0.72)],
         recalled_personas: Vec::new(),
-        venn_partition: LiminalVennPartition::default(),
+        venn_partition: EpistemicPartition::default(),
         exterior_sandbox_facts: Vec::new(),
         is_known_unknown_exterior: false,
     };
@@ -2183,9 +2182,7 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
 
 #[test]
 fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
-    use liminika_core::traits::gateway::{
-        EpistemicHorizonReading, ObjectiveFact, TelemetryVerbosityMode,
-    };
+    use liminika_core::runtime::{EpistemicHorizonReading, ObjectiveFact, TelemetryVerbosityMode};
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let q_len = adapter.geometry().q_rot_len();
@@ -2224,7 +2221,7 @@ fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
             regime_code: EpistemicRegime::KnownCoherent as u8,
             ..EpistemicHorizonReading::default()
         },
-        &StigmergicVennSerendipityReport::default(),
+        &StigmergicOverlapSerendipityReport::default(),
         None,
     );
     let (_, _, _) = adapter
@@ -2253,7 +2250,7 @@ fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
             regime_code: EpistemicRegime::InternalConflict as u8,
             ..EpistemicHorizonReading::default()
         },
-        &StigmergicVennSerendipityReport::default(),
+        &StigmergicOverlapSerendipityReport::default(),
         None,
     );
     let (frame_conflict, _, _) = adapter
@@ -2295,7 +2292,7 @@ fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
             regime_code: EpistemicRegime::KnownCoherent as u8,
             ..EpistemicHorizonReading::default()
         },
-        &StigmergicVennSerendipityReport::default(),
+        &StigmergicOverlapSerendipityReport::default(),
         None,
     );
     let _ = adapter
@@ -2347,9 +2344,8 @@ fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
 
 #[test]
 fn adapter_residual_spillover_dimension_elevation_and_verified_cache() {
-    use liminika_core::traits::gateway::{
-        DissipativeOverflowReport, EpistemicHorizonReading, ObjectiveFact,
-    };
+    use liminika_core::runtime::{EpistemicHorizonReading, ObjectiveFact};
+    use liminika_core::stigmergy::DissipativeOverflowReport;
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let q_len = adapter.geometry().q_rot_len();
@@ -2365,7 +2361,7 @@ fn adapter_residual_spillover_dimension_elevation_and_verified_cache() {
             regime_code: EpistemicRegime::InternalConflict as u8,
             ..EpistemicHorizonReading::default()
         },
-        &StigmergicVennSerendipityReport::default(),
+        &StigmergicOverlapSerendipityReport::default(),
         None,
     );
     adapter.stage_overflow_residual(&DissipativeOverflowReport {
@@ -2435,9 +2431,8 @@ fn adapter_residual_spillover_dimension_elevation_and_verified_cache() {
 
 #[test]
 fn adapter_distortion_feedback_wakes_and_cools_ego_and_renders_mermaid() {
-    use liminika_core::traits::gateway::{
-        LayerDistortionKind, LayerDistortionReport, LiminalEgoPreset, EGO_TRIGGER_LAYER_DISTORTION,
-    };
+    use liminika_core::drivers::{LayerDistortionKind, LayerDistortionReport, LiminalEgoPreset};
+    use liminika_core::liminal::EGO_TRIGGER_LAYER_DISTORTION;
 
     let geom = RopeGeometry::phi4_mini();
     let mut adapter = ModelSteeringAdapter::new(geom).expect("valid adapter");
@@ -2491,8 +2486,8 @@ fn adapter_distortion_feedback_wakes_and_cools_ego_and_renders_mermaid() {
 
 #[test]
 fn test_slow_loop_updates_threshold_policy_without_exponential_drift() {
-    use liminika_core::action_hub::StigmergicThresholds;
-    use liminika_core::traits::gateway::{LayerDistortionKind, LayerDistortionReport};
+    use liminika_core::drivers::{LayerDistortionKind, LayerDistortionReport};
+    use liminika_core::stigmergy::StigmergicThresholds;
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).unwrap();
     let default_rank1 = StigmergicThresholds::default().rank1_inject_density_thresh;
@@ -2588,9 +2583,7 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
         )
         .expect("ingest guard");
 
-    use liminika_core::traits::primitives::{
-        WORKBENCH_LANE_FLAG_PINNED, WORKBENCH_LANE_FLAG_SANDBOX,
-    };
+    use liminika_core::liminal::{WORKBENCH_LANE_FLAG_PINNED, WORKBENCH_LANE_FLAG_SANDBOX};
 
     // 1. Switch 8-lane workbench preset atomically using AutoFree + pinned explicit lanes.
     let specs = [
@@ -2639,13 +2632,13 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
     adapter.reset_horizon_and_core_state();
     assert_eq!(adapter.action_hub().active_workbench_lane_mask(), 0);
     adapter.adapt_core_layers(
-        &liminika_core::traits::gateway::EpistemicHorizonReading {
+        &liminika_core::runtime::EpistemicHorizonReading {
             total_memory_support: 0.4,
             conflict_severity: 0.75,
-            regime_code: liminika_core::traits::gateway::EpistemicRegime::InternalConflict as u8,
-            ..liminika_core::traits::gateway::EpistemicHorizonReading::default()
+            regime_code: liminika_core::liminal::EpistemicRegime::InternalConflict as u8,
+            ..liminika_core::runtime::EpistemicHorizonReading::default()
         },
-        &liminika_core::traits::gateway::StigmergicVennSerendipityReport::default(),
+        &liminika_core::stigmergy::StigmergicOverlapSerendipityReport::default(),
         None,
     );
     let mut esc = CorpusRecallEscalationProvider::new(&corpus);
@@ -2683,11 +2676,11 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
         .expect("preset switch");
     assert_eq!(adapter.action_hub().workbench_sandbox_mask(), 1 << 6);
     adapter.adapt_core_layers(
-        &liminika_core::traits::gateway::EpistemicHorizonReading::default(),
-        &liminika_core::traits::gateway::StigmergicVennSerendipityReport {
+        &liminika_core::runtime::EpistemicHorizonReading::default(),
+        &liminika_core::stigmergy::StigmergicOverlapSerendipityReport {
             venn_core_mask: 0x0F,
             void_exterior_mask: 0xF0,
-            ..liminika_core::traits::gateway::StigmergicVennSerendipityReport::default()
+            ..liminika_core::stigmergy::StigmergicOverlapSerendipityReport::default()
         },
         None,
     );

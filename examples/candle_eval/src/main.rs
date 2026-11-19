@@ -18,12 +18,14 @@ use liminika_adapter::{
     TimelineStepContext, TokenSequenceEntry, TrajectoryManifoldSnapshot, VoidBoundaryState,
 };
 use liminika_core::abi::gcso_pointer_trail_t;
-use liminika_core::action_hub::StigmergicActionDecision;
-use liminika_core::traits::gateway::{
-    AdaptiveThresholdPolicy, CognitiveCircuitBankOps, CognitiveCircuitPlasticity,
-    CognitiveCircuitThresholdPolicy, GuardPhaseAnchor, HybridScaleCircuit, LiminalEgoPreset,
-    ObjectiveFact, RamPhaseKvCacheOps, StandardCognitiveBank, StandardPhaseKvGopCache,
-    SubjectivePersona,
+use liminika_core::drivers::LiminalEgoPreset;
+use liminika_core::runtime::{
+    AdaptiveThresholdPolicy, CognitiveCircuitThresholdPolicy, GuardPhaseAnchor, HybridScaleCircuit,
+    ObjectiveFact, RamPhaseKvCacheOps, StandardPhaseKvGopCache, SubjectivePersona,
+};
+use liminika_core::stigmergy::{
+    CognitiveCircuitBankOps, CognitiveCircuitPlasticity, StandardCognitiveBank,
+    StigmergicActionDecision,
 };
 use tokenizers::Tokenizer;
 
@@ -2930,9 +2932,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liminika_core::traits::gateway::{
-        CognitiveOpKind, CognitiveStepOp, StigmergicScaleGranularity,
-    };
+    use liminika_core::stigmergy::{CognitiveOpKind, CognitiveStepOp, StigmergicScaleGranularity};
 
     #[test]
     fn circuit_profile_modes_parse_and_compose_hybrid_without_weights() {
