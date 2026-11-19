@@ -750,12 +750,18 @@ impl Phi3Model {
             Vec::new()
         };
 
+        let whole_bypass = steer
+            .as_deref()
+            .and_then(|st| st.compute_dispatch)
+            .is_some_and(|d| d.whole_token_steering_bypass != 0);
+
         for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
             let steer_ref = match steer.as_deref_mut() {
                 Some(st) if st.rope_rad != 0.0 => {
-                    let bypassed = st.compute_dispatch.is_some_and(|d| {
-                        layer_idx < 64 && (d.bypass_mask & (1_u64 << layer_idx)) != 0
-                    });
+                    let bypassed = whole_bypass
+                        || st.compute_dispatch.is_some_and(|d| {
+                            layer_idx < 64 && (d.bypass_mask & (1_u64 << layer_idx)) != 0
+                        });
                     if st.q7s.is_some() {
                         st.steer_eligible_layers += 1;
                         if bypassed {
@@ -809,72 +815,78 @@ impl Phi3Model {
             Vec::new()
         };
 
-        if let Some(st) = steer.as_deref_mut() {
-            if let Some((u_vec, v_vec, srl_scale)) = st.srl {
-                if srl_scale != 0.0 {
-                    let ad: &mut ModelSteeringAdapter = &mut *st.adapter;
-                    let q7s = st.q7s;
-                    let persona_q7s = st.persona_q7s;
-                    let rope_rad = st.rope_rad;
-                    let mut h_vec = last.squeeze(0)?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
-                    if srl_scale < 0.0 {
-                        let last_layer_idx = self.layers.len().saturating_sub(1);
-                        let dyn_srl = st
-                            .resonant_ctx
-                            .and_then(|rc| rc.layer_slices(last_layer_idx))
-                            .filter(|(fa, _, _, _, _)| !fa.is_empty());
-                        if let Some((fact_anchors, persona_anchors, guard_anchors, _, _)) = dyn_srl
-                        {
-                            let fact_res = ResonantSignalSlice::from_trail(fact_anchors, st.trail);
-                            if !persona_anchors.is_empty() && !guard_anchors.is_empty() {
-                                let persona_res =
-                                    ResonantSignalSlice::from_trail(persona_anchors, st.trail);
-                                let guard_res =
-                                    ResonantSignalSlice::from_trail(guard_anchors, st.trail);
-                                let sys_res = *ad.system_constraint();
-                                let composite = (sys_res, fact_res, persona_res, guard_res);
-                                dispatch_srl_signal(
-                                    ad, rope_rad, &composite, &mut h_vec, u_vec, v_vec,
-                                )?;
-                            } else if !persona_anchors.is_empty() {
-                                let persona_res =
-                                    ResonantSignalSlice::from_trail(persona_anchors, st.trail);
-                                let composite = (fact_res, persona_res);
-                                dispatch_srl_signal(
-                                    ad, rope_rad, &composite, &mut h_vec, u_vec, v_vec,
-                                )?;
+        if !whole_bypass {
+            if let Some(st) = steer.as_deref_mut() {
+                if let Some((u_vec, v_vec, srl_scale)) = st.srl {
+                    if srl_scale != 0.0 {
+                        let ad: &mut ModelSteeringAdapter = &mut *st.adapter;
+                        let q7s = st.q7s;
+                        let persona_q7s = st.persona_q7s;
+                        let rope_rad = st.rope_rad;
+                        let mut h_vec = last.squeeze(0)?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+                        if srl_scale < 0.0 {
+                            let last_layer_idx = self.layers.len().saturating_sub(1);
+                            let dyn_srl = st
+                                .resonant_ctx
+                                .and_then(|rc| rc.layer_slices(last_layer_idx))
+                                .filter(|(fa, _, _, _, _)| !fa.is_empty());
+                            if let Some((fact_anchors, persona_anchors, guard_anchors, _, _)) =
+                                dyn_srl
+                            {
+                                let fact_res =
+                                    ResonantSignalSlice::from_trail(fact_anchors, st.trail);
+                                if !persona_anchors.is_empty() && !guard_anchors.is_empty() {
+                                    let persona_res =
+                                        ResonantSignalSlice::from_trail(persona_anchors, st.trail);
+                                    let guard_res =
+                                        ResonantSignalSlice::from_trail(guard_anchors, st.trail);
+                                    let sys_res = *ad.system_constraint();
+                                    let composite = (sys_res, fact_res, persona_res, guard_res);
+                                    dispatch_srl_signal(
+                                        ad, rope_rad, &composite, &mut h_vec, u_vec, v_vec,
+                                    )?;
+                                } else if !persona_anchors.is_empty() {
+                                    let persona_res =
+                                        ResonantSignalSlice::from_trail(persona_anchors, st.trail);
+                                    let composite = (fact_res, persona_res);
+                                    dispatch_srl_signal(
+                                        ad, rope_rad, &composite, &mut h_vec, u_vec, v_vec,
+                                    )?;
+                                } else {
+                                    dispatch_srl_signal(
+                                        ad, rope_rad, &fact_res, &mut h_vec, u_vec, v_vec,
+                                    )?;
+                                }
                             } else {
-                                dispatch_srl_signal(
-                                    ad, rope_rad, &fact_res, &mut h_vec, u_vec, v_vec,
-                                )?;
+                                let mut fact_arr = [0i8; 64];
+                                if let Some(last_q7) = q7s.and_then(|qs| qs.last()) {
+                                    let n = last_q7.len().min(64);
+                                    fact_arr[..n].copy_from_slice(&last_q7[..n]);
+                                }
+                                let fact = ObjectiveFact::new(fact_arr, 2.5, 0, 1);
+                                if let Some(last_p) = persona_q7s.and_then(|ps| ps.last()) {
+                                    let mut persona_arr = [0i8; 64];
+                                    let pn = last_p.len().min(64);
+                                    persona_arr[..pn].copy_from_slice(&last_p[..pn]);
+                                    let persona = SubjectivePersona::new(persona_arr, 1.5, 0, 101);
+                                    let composite = (fact, persona);
+                                    dispatch_srl_signal(
+                                        ad, rope_rad, &composite, &mut h_vec, u_vec, v_vec,
+                                    )?;
+                                } else {
+                                    dispatch_srl_signal(
+                                        ad, rope_rad, &fact, &mut h_vec, u_vec, v_vec,
+                                    )?;
+                                }
                             }
                         } else {
-                            let mut fact_arr = [0i8; 64];
-                            if let Some(last_q7) = q7s.and_then(|qs| qs.last()) {
-                                let n = last_q7.len().min(64);
-                                fact_arr[..n].copy_from_slice(&last_q7[..n]);
-                            }
-                            let fact = ObjectiveFact::new(fact_arr, 2.5, 0, 1);
-                            if let Some(last_p) = persona_q7s.and_then(|ps| ps.last()) {
-                                let mut persona_arr = [0i8; 64];
-                                let pn = last_p.len().min(64);
-                                persona_arr[..pn].copy_from_slice(&last_p[..pn]);
-                                let persona = SubjectivePersona::new(persona_arr, 1.5, 0, 101);
-                                let composite = (fact, persona);
-                                dispatch_srl_signal(
-                                    ad, rope_rad, &composite, &mut h_vec, u_vec, v_vec,
-                                )?;
-                            } else {
-                                dispatch_srl_signal(ad, rope_rad, &fact, &mut h_vec, u_vec, v_vec)?;
-                            }
+                            ad.apply_srl_hidden_fused(&mut h_vec, u_vec, v_vec, srl_scale)
+                                .map_err(candle_core::Error::Msg)?;
                         }
-                    } else {
-                        ad.apply_srl_hidden_fused(&mut h_vec, u_vec, v_vec, srl_scale)
-                            .map_err(candle_core::Error::Msg)?;
+                        let len = h_vec.len();
+                        last = Tensor::from_vec(h_vec, (1, len), &self.device)?
+                            .to_dtype(last.dtype())?;
                     }
-                    let len = h_vec.len();
-                    last =
-                        Tensor::from_vec(h_vec, (1, len), &self.device)?.to_dtype(last.dtype())?;
                 }
             }
         }
@@ -885,7 +897,7 @@ impl Phi3Model {
             .squeeze(0)?
             .to_dtype(DType::F32)?
             .to_vec1::<f32>()?;
-        if use_edbc {
+        if use_edbc && !whole_bypass {
             if let Some(st) = steer {
                 let ad = &mut *st.adapter;
                 if st.rope_rad <= -1.5 {

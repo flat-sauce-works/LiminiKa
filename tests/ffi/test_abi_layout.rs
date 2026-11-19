@@ -7,6 +7,9 @@
 fn test_gcso_types_abi_layout_invariants() {
     use std::mem::{align_of, offset_of, size_of};
 
+    assert_eq!(liminika_core::abi::GCSO_ABI_VERSION_HEX, 0x0000_0103);
+    assert_eq!(liminika_core::abi::GCSO_ABI_VERSION_STRING, "0.1.3");
+
     // Verify 128-byte, 128-byte-aligned gcso_pointer_trail_t
     assert_eq!(size_of::<liminika_core::abi::gcso_pointer_trail_t>(), 128);
     assert_eq!(align_of::<liminika_core::abi::gcso_pointer_trail_t>(), 128);
@@ -329,4 +332,101 @@ fn test_gcso_types_abi_layout_invariants() {
     assert_eq!(liminika_core::traits::WORKBENCH_LANE_FLAG_PINNED, 1 << 0);
     assert_eq!(liminika_core::traits::WORKBENCH_LANE_FLAG_REPULSION, 1 << 1);
     assert_eq!(liminika_core::traits::WORKBENCH_LANE_FLAG_SANDBOX, 1 << 2);
+
+    // Unified v0.1.3 2 Primitives x 2 Drivers & Distortion ABI types
+    assert_eq!(size_of::<liminika_core::abi::gcso_attribution_tag_t>(), 1);
+    assert_eq!(
+        size_of::<liminika_core::abi::gcso_cognitive_substrate_t>(),
+        64
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::gcso_cognitive_substrate_t>(),
+        64
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::gcso_cognitive_substrate_t, stigmergy),
+        32
+    );
+    assert_eq!(
+        size_of::<liminika_core::abi::gcso_liminal_venn_partition_t>(),
+        16
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::gcso_liminal_venn_partition_t>(),
+        16
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::gcso_liminal_venn_partition_t,
+            known_unknown_mask
+        ),
+        4
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::gcso_liminal_venn_partition_t,
+            boundary_sensitivity_q7
+        ),
+        8
+    );
+    assert_eq!(
+        size_of::<liminika_core::abi::gcso_system_spine_state_t>(),
+        32
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::gcso_system_spine_state_t>(),
+        16
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::gcso_system_spine_state_t,
+            pinned_compute_mask
+        ),
+        8
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::gcso_system_spine_state_t,
+            whole_token_bypass_active
+        ),
+        24
+    );
+    assert_eq!(
+        size_of::<liminika_core::abi::gcso_distortion_delta_t>(),
+        128
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::gcso_distortion_delta_t>(),
+        64
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::gcso_distortion_delta_t, intent_delta),
+        16
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::gcso_distortion_delta_t, delta_phase_q7),
+        64
+    );
+    assert_eq!(
+        size_of::<liminika_core::abi::gcso_distortion_tension_t>(),
+        32
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::gcso_distortion_tension_t>(),
+        16
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::gcso_distortion_tension_t,
+            immediate_damping_events
+        ),
+        8
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::gcso_distortion_tension_t,
+            slow_excitation_events
+        ),
+        12
+    );
 }

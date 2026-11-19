@@ -26,11 +26,19 @@ namespace {
 constexpr void check_static_abi_invariants() noexcept {
     static_assert(GCSO_ABI_VERSION_MAJOR == 0U);
     static_assert(GCSO_ABI_VERSION_MINOR == 1U);
-    static_assert(GCSO_ABI_VERSION_PATCH == 2U);
-    static_assert(GCSO_ABI_VERSION_HEX == 0x00000102U);
+    static_assert(GCSO_ABI_VERSION_PATCH == 3U);
+    static_assert(GCSO_ABI_VERSION_HEX == 0x00000103U);
     static_assert(GCSO_CRYSTAL_RECORD_VERSION == GCSO_ABI_VERSION_HEX);
     static_assert(sizeof(gcso_liminal_ego_field_t) == 64U);
     static_assert(alignof(gcso_liminal_ego_field_t) == 64U);
+    static_assert(sizeof(gcso_cognitive_substrate_t) == 64U);
+    static_assert(alignof(gcso_cognitive_substrate_t) == 64U);
+    static_assert(sizeof(gcso_liminal_venn_partition_t) == 16U);
+    static_assert(sizeof(gcso_system_spine_state_t) == 32U);
+    static_assert(sizeof(gcso_distortion_delta_t) == 128U);
+    static_assert(alignof(gcso_distortion_delta_t) == 64U);
+    static_assert(sizeof(gcso_distortion_tension_t) == 32U);
+    static_assert(GCSO_ATTRIBUTION_TAG(GCSO_SUBSTRATE_STIGMERGY, GCSO_DRIVER_EGO) == 3U);
     static_assert(offsetof(gcso_liminal_ego_field_t, counter_basin_thrust_q7) == 40U);
     static_assert(offsetof(gcso_liminal_ego_field_t, basin_escape_floor_q7) == 41U);
     static_assert(GCSO_ATTRACTOR_SLOT_TEMPORAL == 5U);
@@ -55,7 +63,7 @@ void test_version_and_capabilities() {
     const char* version_str = gcso_abi_get_version_string();
     GCSO_TEST_CHECK(version_str != nullptr);
     GCSO_TEST_CHECK(std::strcmp(version_str, GCSO_ABI_VERSION_STRING) == 0);
-    GCSO_TEST_CHECK(std::strcmp(version_str, "0.1.2") == 0);
+    GCSO_TEST_CHECK(std::strcmp(version_str, "0.1.3") == 0);
 
     const char* ok_str = gcso_status_to_string(GCSO_SUCCESS);
     GCSO_TEST_CHECK(ok_str != nullptr);
@@ -163,6 +171,24 @@ void test_edbc_controller_and_ego_pod() {
     ego.basin_escape_floor_q7 = 16;
     ego.trigger_mask = GCSO_EGO_TRIGGER_BASIN_CAPTURE;
     GCSO_TEST_CHECK((ego.trigger_mask & GCSO_EGO_TRIGGER_BASIN_CAPTURE) != 0U);
+
+    const uint8_t other_density[8] = {80, 72, 0, 0, 90, 95, 0, 0};
+    const uint8_t noise_tol[8] = {4, 4, 4, 4, 4, 4, 4, 4};
+    alignas(16) gcso_liminal_venn_partition_t part{};
+    GCSO_TEST_CHECK(gcso_liminal_evaluate_venn_partition(0x03U, other_density, noise_tol, 40U,
+                                                         &part) == GCSO_SUCCESS);
+    GCSO_TEST_CHECK(part.shared_core_mask == 0x03U);
+    GCSO_TEST_CHECK(part.known_unknown_mask == 0x30U);
+    GCSO_TEST_CHECK(part.boundary_sensitivity_q7 > 0U);
+
+    alignas(16) gcso_distortion_tension_t tension{};
+    tension.deadband_low_q7 = 16U;
+    tension.deadband_high_q7 = 84U;
+    tension.effective_ego_scale_q7 = 96U;
+    GCSO_TEST_CHECK(gcso_distortion_tension_step_hot_path(&tension, 110U, 32U, 96U, 96U, 1U) ==
+                    GCSO_SUCCESS);
+    GCSO_TEST_CHECK(tension.effective_ego_scale_q7 == 0U);
+    GCSO_TEST_CHECK(tension.immediate_damping_events == 1U);
 }
 
 } // namespace

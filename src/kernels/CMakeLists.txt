@@ -3,11 +3,11 @@
 # -------------------------------------------------------------------
 # LiminiKa GCSO Kernels Build Configuration
 # Targets: C11 / C++20 CPU, CUDA, Metal, and Vulkan Compute Kernels
-# Unified Version: 0.1.2
+# Unified Version: 0.1.3
 # -------------------------------------------------------------------
 
 cmake_minimum_required(VERSION 3.18)
-project(liminika_kernels VERSION 0.1.2 LANGUAGES C CXX)
+project(liminika_kernels VERSION 0.1.3 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)

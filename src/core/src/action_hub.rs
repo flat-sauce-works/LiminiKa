@@ -3494,6 +3494,10 @@ mod tests {
             horizon: &horizon,
             venn: &venn,
             derivative_alpha_q7: DEFAULT_DERIVATIVE_ALPHA_Q7,
+            venn_partition: None,
+            spine: None,
+            ego_net: None,
+            tension: None,
         });
         let thresh = StigmergicThresholds::new();
 

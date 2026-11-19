@@ -14,6 +14,7 @@ use super::core_layers::{
     AutonomousCoreLayerStack, LiminalBoundaryDelta, LiminalEgoField,
     StigmergicVennSerendipityReport,
 };
+use super::distortion::{DistortionTension, LiminalVennPartition};
 use super::epistemic::{
     EpistemicHorizonReading, EpistemicRegime, LiminalTopologyTelemetrySnapshot,
 };
@@ -278,6 +279,22 @@ pub struct CoreTelemetrySnapshot {
     pub assimilation_drift: f32,
     /// Consecutive steps where $D_{\mathrm{assim}}$ exceeded the drift threshold (with hysteresis).
     pub assimilation_drift_dwell: u16,
+    /// `2 Primitives x 2 Drivers` structural attribution counts indexed by `AttributionTag::raw()` (`0..=3`).
+    pub attribution_counts: [u64; 4],
+    /// Cumulative `SystemSpine` token-level whole-steering bypass hits (`0` D2H syncs).
+    pub whole_token_bypass_events: u64,
+    /// Cumulative [`DistortionTension`] immediate Hot-Path Ego damping events.
+    pub immediate_tension_damps: u64,
+    /// Cumulative [`DistortionTension`] Slow-Loop stagnation excitation events.
+    pub slow_tension_excites: u64,
+    /// Cumulative P-Frame chain evaluations with `>= 1` hop traversed.
+    pub pframe_chain_evals: u64,
+    /// Cumulative P-Frame hops traversed across [`crate::traits::gateway::EgoDifferentialNet`].
+    pub pframe_total_hops: u64,
+    /// Cumulative steps where validated $O \setminus S$ staged an isolated non-copy sandbox lane.
+    pub known_unknown_sandbox_stages: u64,
+    /// Cumulative steps where True Void ($\overline{S \cup O}$) locked aperture to `0`.
+    pub true_void_aperture_zeros: u64,
 }
 
 /// Standalone `#![no_std]` zero-alloc `3 + System` telemetry bank stored beside compute engines.
@@ -305,6 +322,14 @@ pub struct CoreTelemetryBank {
     assimilation_drift_dwell: u16,
     sandbox_coherence_improve_dwell: u16,
     derivative_alpha_q7: u8,
+    attribution_counts: [u64; 4],
+    whole_token_bypass_events: u64,
+    immediate_tension_damps: u64,
+    slow_tension_excites: u64,
+    pframe_chain_evals: u64,
+    pframe_total_hops: u64,
+    known_unknown_sandbox_stages: u64,
+    true_void_aperture_zeros: u64,
 }
 
 impl Default for CoreTelemetryBank {
@@ -376,6 +401,14 @@ impl CoreTelemetryBank {
             assimilation_drift_dwell: 0,
             sandbox_coherence_improve_dwell: 0,
             derivative_alpha_q7: crate::action_hub::DEFAULT_DERIVATIVE_ALPHA_Q7,
+            attribution_counts: [0; 4],
+            whole_token_bypass_events: 0,
+            immediate_tension_damps: 0,
+            slow_tension_excites: 0,
+            pframe_chain_evals: 0,
+            pframe_total_hops: 0,
+            known_unknown_sandbox_stages: 0,
+            true_void_aperture_zeros: 0,
         }
     }
 
@@ -445,6 +478,51 @@ impl CoreTelemetryBank {
         self.assimilation_drift_dwell = 0;
         self.sandbox_coherence_improve_dwell = 0;
         self.derivative_alpha_q7 = crate::action_hub::DEFAULT_DERIVATIVE_ALPHA_Q7;
+        self.attribution_counts = [0; 4];
+        self.whole_token_bypass_events = 0;
+        self.immediate_tension_damps = 0;
+        self.slow_tension_excites = 0;
+        self.pframe_chain_evals = 0;
+        self.pframe_total_hops = 0;
+        self.known_unknown_sandbox_stages = 0;
+        self.true_void_aperture_zeros = 0;
+    }
+
+    /// Records lightweight `2 Primitives x 2 Drivers` structural attribution, P-Frame chain hops,
+    /// `DistortionTension` events, Venn $O \setminus S$ sandbox staging, and pre-inference bypass hits.
+    #[inline]
+    pub fn record_two_by_two_step(
+        &mut self,
+        tag_raw: u8,
+        whole_token_bypass: bool,
+        venn_partition: &LiminalVennPartition,
+        tension: &DistortionTension,
+        pframe_hops: u8,
+    ) {
+        let idx = usize::from(tag_raw & 0x03);
+        self.attribution_counts[idx] = self.attribution_counts[idx].saturating_add(1);
+        if whole_token_bypass {
+            self.whole_token_bypass_events = self.whole_token_bypass_events.saturating_add(1);
+        }
+        if venn_partition.sandbox_eligible != 0 {
+            self.known_unknown_sandbox_stages =
+                self.known_unknown_sandbox_stages.saturating_add(1);
+        }
+        if venn_partition.true_void_aperture_zero != 0 {
+            self.true_void_aperture_zeros = self.true_void_aperture_zeros.saturating_add(1);
+        }
+        if pframe_hops > 0 {
+            self.pframe_chain_evals = self.pframe_chain_evals.saturating_add(1);
+            self.pframe_total_hops = self
+                .pframe_total_hops
+                .saturating_add(u64::from(pframe_hops));
+        }
+        self.immediate_tension_damps = self
+            .immediate_tension_damps
+            .max(u64::from(tension.immediate_damping_events));
+        self.slow_tension_excites = self
+            .slow_tension_excites
+            .max(u64::from(tension.slow_excitation_events));
     }
 
     /// Updates `0 fdiv` rolling Q0.15 EMAs ($\alpha = 1/32$) and gauge-relative assimilation drift
@@ -830,6 +908,34 @@ impl CoreTelemetryBank {
         self.system.experience_cache_hits = snap.system.experience_cache_hits;
         self.system.experience_cache_stores = snap.system.experience_cache_stores;
         self.system.experience_cache_evictions = snap.system.experience_cache_evictions;
+        for (dst, &src) in self
+            .attribution_counts
+            .iter_mut()
+            .zip(snap.attribution_counts.iter())
+        {
+            *dst = dst.saturating_add(src);
+        }
+        self.whole_token_bypass_events = self
+            .whole_token_bypass_events
+            .saturating_add(snap.whole_token_bypass_events);
+        self.immediate_tension_damps = self
+            .immediate_tension_damps
+            .saturating_add(snap.immediate_tension_damps);
+        self.slow_tension_excites = self
+            .slow_tension_excites
+            .saturating_add(snap.slow_tension_excites);
+        self.pframe_chain_evals = self
+            .pframe_chain_evals
+            .saturating_add(snap.pframe_chain_evals);
+        self.pframe_total_hops = self
+            .pframe_total_hops
+            .saturating_add(snap.pframe_total_hops);
+        self.known_unknown_sandbox_stages = self
+            .known_unknown_sandbox_stages
+            .saturating_add(snap.known_unknown_sandbox_stages);
+        self.true_void_aperture_zeros = self
+            .true_void_aperture_zeros
+            .saturating_add(snap.true_void_aperture_zeros);
     }
 
     /// Computes a Lazy-Pull cross-layer [`LayerDistortionReport`] diagnosing whether the core
@@ -990,6 +1096,14 @@ impl CoreTelemetryBank {
             guard_ema: f32::from(self.guard_ema_q15) * EMA_Q15_TO_F32,
             assimilation_drift: f32::from(self.assimilation_drift_q15) * EMA_Q15_TO_F32,
             assimilation_drift_dwell: self.assimilation_drift_dwell,
+            attribution_counts: self.attribution_counts,
+            whole_token_bypass_events: self.whole_token_bypass_events,
+            immediate_tension_damps: self.immediate_tension_damps,
+            slow_tension_excites: self.slow_tension_excites,
+            pframe_chain_evals: self.pframe_chain_evals,
+            pframe_total_hops: self.pframe_total_hops,
+            known_unknown_sandbox_stages: self.known_unknown_sandbox_stages,
+            true_void_aperture_zeros: self.true_void_aperture_zeros,
         }
     }
 

@@ -394,6 +394,14 @@ pub struct ModelSteeringAdapter {
     sandbox_workbench_lane: Option<u8>,
     active_workbench_preset: WorkbenchPreset,
     compute_pool: AnonymousComputePool,
+    system_spine: SystemSpineState,
+    last_venn_partition: LiminalVennPartition,
+    distortion_tension: DistortionTension,
+    ego_differential_net: EgoDifferentialNet,
+    sandbox_promotion_streak: u8,
+    prev_sandbox_coherence: f32,
+    prev_sandbox_assim_drift: f32,
+    sandbox_promotions: u64,
 }
 
 impl ModelSteeringAdapter {
@@ -489,6 +497,14 @@ impl ModelSteeringAdapter {
             sandbox_workbench_lane: None,
             active_workbench_preset: WorkbenchPreset::BalancedDialog,
             compute_pool,
+            system_spine: SystemSpineState::new(),
+            last_venn_partition: LiminalVennPartition::default(),
+            distortion_tension: DistortionTension::new(false),
+            ego_differential_net: EgoDifferentialNet::new_empty(1),
+            sandbox_promotion_streak: 0,
+            prev_sandbox_coherence: 0.0,
+            prev_sandbox_assim_drift: 1.0,
+            sandbox_promotions: 0,
         })
     }
 
@@ -499,16 +515,17 @@ impl ModelSteeringAdapter {
         &self.telemetry.layer1.decision_counts
     }
 
-    /// Resets the core `3 + System` telemetry bank and restores initial neutral entropy (`0.35`)
+    /// Resets the `2 Primitives x 2 Drivers` telemetry bank and restores initial neutral entropy (`0.35`)
     /// for a fresh evaluation pass.
     pub fn reset_action_hub_stats(&mut self) {
         self.telemetry.reset();
         self.action_hub.last_entropy_h_tilde = 0.35;
     }
 
-    /// Resets core layers, horizon dwell/slots, spillover cache, thresholds, and `3 + System`
+    /// Resets core layers, horizon dwell/slots, spillover cache, thresholds, and `2 Primitives x 2 Drivers`
     /// telemetry back to clean defaults for fair ablation pass isolation.
     pub fn reset_horizon_and_core_state(&mut self) {
+        let saved_hops = self.ego_differential_net.max_hops;
         self.core_layers = AutonomousCoreLayerStack::new();
         self.configured_ego = LiminalEgoField::new();
         self.last_boundary_delta = LiminalBoundaryDelta::default();
@@ -532,26 +549,192 @@ impl ModelSteeringAdapter {
         self.sandbox_workbench_lane = None;
         let _ = self.action_hub.release_all_workbench_lanes();
         self.active_workbench_preset = WorkbenchPreset::BalancedDialog;
+        self.system_spine = SystemSpineState::new();
+        self.last_venn_partition = LiminalVennPartition::default();
+        self.distortion_tension = DistortionTension::new(false);
+        self.ego_differential_net = EgoDifferentialNet::new_empty(saved_hops);
+        self.sandbox_promotion_streak = 0;
+        self.prev_sandbox_coherence = 0.0;
+        self.prev_sandbox_assim_drift = 1.0;
+        self.sandbox_promotions = 0;
         self.telemetry.set_policy(self.telemetry.policy());
         self.reset_action_hub_stats();
     }
 
-    /// Returns a shared reference to the core `3 + System` [`CoreTelemetryBank`].
+    /// Returns a shared reference to the `2 Primitives x 2 Drivers` [`CoreTelemetryBank`].
     #[must_use]
     pub const fn telemetry_bank(&self) -> &CoreTelemetryBank {
         &self.telemetry
     }
 
-    /// Returns a shared reference to the Step 4 label-free [`AnonymousComputePool`].
+    /// Returns a shared reference to the label-free [`AnonymousComputePool`].
     #[must_use]
     pub const fn compute_pool(&self) -> &AnonymousComputePool {
         &self.compute_pool
     }
 
-    /// Returns a mutable reference to the Step 4 label-free [`AnonymousComputePool`].
+    /// Returns a mutable reference to the label-free [`AnonymousComputePool`].
     #[must_use]
     pub fn compute_pool_mut(&mut self) -> &mut AnonymousComputePool {
         &mut self.compute_pool
+    }
+
+    /// Returns the 64-byte unified [`CognitiveSubstrate`] (`Liminal` + `Stigmergy`).
+    #[must_use]
+    pub const fn cognitive_substrate(&self) -> CognitiveSubstrate {
+        self.core_layers.substrate()
+    }
+
+    /// Returns a shared reference to the mechanical [`SystemSpineState`] (`pinned` isolation barrier).
+    #[must_use]
+    pub const fn system_spine(&self) -> &SystemSpineState {
+        &self.system_spine
+    }
+
+    /// Returns the most recent branchless 4-region [`LiminalVennPartition`].
+    #[must_use]
+    pub const fn last_venn_partition(&self) -> &LiminalVennPartition {
+        &self.last_venn_partition
+    }
+
+    /// Returns a shared reference to the asymmetric homeostatic [`DistortionTension`] controller.
+    #[must_use]
+    pub const fn distortion_tension(&self) -> &DistortionTension {
+        &self.distortion_tension
+    }
+
+    /// Returns a shared reference to the P-Frame differential chain [`EgoDifferentialNet`].
+    #[must_use]
+    pub const fn ego_differential_net(&self) -> &EgoDifferentialNet {
+        &self.ego_differential_net
+    }
+
+    /// Returns cumulative multi-turn Known Unknown ($O \setminus S$) sandbox promotions.
+    #[must_use]
+    pub const fn sandbox_promotions(&self) -> u64 {
+        self.sandbox_promotions
+    }
+
+    /// Updates the maximum hop bound (`1..=4`) of [`EgoDifferentialNet`] and rebuilds active P-Frame nodes.
+    pub fn set_ego_max_hops(&mut self, max_hops: u8) {
+        self.ego_differential_net.max_hops = max_hops.clamp(1, 4);
+        if self.configured_ego.is_active() {
+            self.sync_ego_differential_net_from_configured();
+        }
+    }
+
+    /// Advances 1 Hot-Path [`DistortionTension`] step using the latest P-Frame delta norm and Venn sensitivity.
+    pub fn step_distortion_tension_hot_path(
+        &mut self,
+        exit_entropy_q7: u8,
+        guard_proximity_q7: u8,
+        active_overdrive: bool,
+    ) {
+        self.distortion_tension.step_hot_path_branchless(
+            self.ego_differential_net.last_delta_norm_q7,
+            self.last_venn_partition.boundary_sensitivity_q7,
+            exit_entropy_q7,
+            guard_proximity_q7,
+            active_overdrive,
+        );
+    }
+
+    /// Evaluates token-level whole-steering bypass on `obs`, mutating `dispatch` and mirroring
+    /// active bypass state onto [`SystemSpineState`].
+    pub fn evaluate_whole_token_bypass(
+        &mut self,
+        obs: TokenBypassObservation,
+        dispatch: &mut ComputeDispatchMask,
+    ) -> bool {
+        let bypass = self
+            .compute_pool
+            .evaluate_whole_token_steering_bypass(obs, dispatch);
+        self.system_spine.whole_token_bypass_active = u8::from(bypass);
+        self.system_spine.bypass_dwell_steps = self.compute_pool.whole_token_calm_dwell;
+        self.system_spine.bypass_cooldown_steps = self.compute_pool.re_bypass_cooldown;
+        bypass
+    }
+
+    /// Exports active [`EgoDifferentialNet`] P-Frame nodes as model-agnostic
+    /// [`LogicalPFrameDescriptor`]s for `.gcso` v2 persistence.
+    #[must_use]
+    pub fn export_logical_pframe_topology(&self) -> Vec<LogicalPFrameDescriptor> {
+        let mut out = Vec::new();
+        for (idx, node) in self.ego_differential_net.nodes.iter().enumerate() {
+            if ((self.ego_differential_net.active_node_mask >> idx) & 1) != 0 && node.is_active() {
+                out.push(LogicalPFrameDescriptor {
+                    node_id: node.node_id,
+                    anchor_ref_id: node.anchor_ref_id,
+                    next_hop_idx: node.next_hop_idx,
+                    hop_depth: node.hop_depth,
+                    venn_trigger_mask: node.venn_trigger_mask,
+                    venn_region_selector: node.venn_region_selector,
+                    pheromone_q7: node.pheromone_q7,
+                    gain_q7: node.gain_q7,
+                    intent_delta: node.intent_delta,
+                });
+            }
+        }
+        out
+    }
+
+    /// Re-bakes persisted [`LogicalPFrameDescriptor`]s into this model's 64-head Q7
+    /// [`EgoDifferentialNet`] upon `.gcso` v2 load or cross-model transcoding.
+    pub fn bake_logical_pframe_topology(&mut self, descriptors: &[LogicalPFrameDescriptor]) {
+        let mut net = EgoDifferentialNet::new_empty(self.ego_differential_net.max_hops);
+        for (slot, desc) in descriptors
+            .iter()
+            .take(liminika_core::traits::gateway::MAX_EGO_PFRAME_NODES)
+            .enumerate()
+        {
+            let local_ego = if desc.intent_delta.is_active() {
+                LiminalEgoField::from_intent_axes(&desc.intent_delta)
+            } else {
+                self.configured_ego
+            };
+            let shift_base = local_ego.transgression_bias_q7;
+            let mut phases = [0 as gcso_q7_t; MAX_ATTENTION_HEADS];
+            for g in 0..NUM_STIGMERGIC_GRANULES {
+                let gv = i32::from(local_ego.sovereign_granule_phase_q7[g]);
+                let signed = if (desc.hop_depth & 1) == 0 && ((g & 1) == 1) {
+                    -gv
+                } else {
+                    gv
+                };
+                let head_shift = match desc.hop_depth {
+                    1 => 4_i32,
+                    2 => i32::from(shift_base >> 2),
+                    _ => -i32::from(shift_base >> 2),
+                };
+                let base_s = (signed + head_shift).clamp(-127, 127);
+                let base_h = g << 3;
+                for k in 0..8 {
+                    let mod_off = ((k as i32) - 3) * (head_shift >> 4);
+                    phases[base_h + k] = (base_s + mod_off).clamp(-127, 127) as gcso_q7_t;
+                }
+            }
+            let mut node = DistortionDelta::new_empty(desc.node_id, desc.anchor_ref_id);
+            node.next_hop_idx = desc.next_hop_idx;
+            node.hop_depth = desc.hop_depth;
+            node.venn_trigger_mask = desc.venn_trigger_mask;
+            node.venn_region_selector = desc.venn_region_selector;
+            node.pheromone_q7 = desc.pheromone_q7;
+            node.gain_q7 = desc.gain_q7;
+            node.intent_delta = desc.intent_delta;
+            node.delta_phase_q7 = phases;
+            node.flags = DISTORTION_DELTA_FLAG_ACTIVE | DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID;
+            net.nodes[slot] = node;
+            net.active_node_mask |= 1u8 << slot;
+        }
+        self.ego_differential_net = net;
+    }
+
+    fn sync_ego_differential_net_from_configured(&mut self) {
+        let axes = self.configured_ego.extract_intent_axes();
+        let max_hops = self.ego_differential_net.max_hops;
+        self.ego_differential_net =
+            EgoDifferentialNet::from_ego_field_and_axes(&self.configured_ego, &axes, max_hops);
+        self.distortion_tension = DistortionTension::new(self.configured_ego.is_active());
     }
 
     /// Evaluates external `+ System` Gauge-Zero pressure and emits a pre-execution
@@ -601,8 +784,8 @@ impl ModelSteeringAdapter {
     }
 
     /// Evaluates bounded Slow-Loop epoch adjustments and applies them to [`AdaptiveThresholdPolicy`],
-    /// [`ActionHubEngine`] thresholds, and [`CoherenceHorizonGuardSlot`] dwell hysteresis when
-    /// `applied == true`.
+    /// [`ActionHubEngine`] thresholds, [`DistortionTension`], and [`EgoDifferentialNet`] GOP
+    /// maintenance when `applied == true`.
     pub fn apply_slow_loop_telemetry_epoch(
         &mut self,
         min_samples: u64,
@@ -620,6 +803,20 @@ impl ModelSteeringAdapter {
             let next_dwell = (2_i16 + i16::from(adj.suggested_slide_out_dwell_delta)).clamp(1, 8);
             self.coherence_guard_slot.slide_out_dwell = next_dwell as u16;
             self.apply_distortion_ego_feedback(&adj.distortion);
+            let passive_sat = adj.distortion.ego_wakeup_recommended
+                || matches!(
+                    adj.distortion.kind,
+                    liminika_core::traits::gateway::LayerDistortionKind::PassiveSaturation
+                );
+            self.distortion_tension.step_slow_loop_excitation(
+                passive_sat,
+                self.last_boundary_delta.chatter_potential_u8,
+                self.configured_ego.is_active(),
+            );
+            self.system_spine.slow_loop_epoch = self.system_spine.slow_loop_epoch.saturating_add(1);
+            let _ = self
+                .ego_differential_net
+                .consolidate_and_evaporate_cold_path(self.system_spine.slow_loop_epoch);
         }
         adj
     }
@@ -792,6 +989,7 @@ impl ModelSteeringAdapter {
     pub fn set_ego_field(&mut self, ego: LiminalEgoField) {
         self.core_layers.ego_layer = ego;
         self.configured_ego = ego;
+        self.sync_ego_differential_net_from_configured();
     }
 
     /// Configures Core Layer 2 [`LiminalEgoField`] from a coarse [`LiminalEgoPreset`] (`Custom`, `Low`, `Medium`, `High`).
@@ -799,6 +997,7 @@ impl ModelSteeringAdapter {
         let ego = LiminalEgoField::from_preset(preset);
         self.core_layers.ego_layer = ego;
         self.configured_ego = ego;
+        self.sync_ego_differential_net_from_configured();
     }
 
     /// Configures Core Layer 2 [`LiminalEgoField`] from intermediate normalized [`EgoIntentAxes`].
@@ -806,6 +1005,7 @@ impl ModelSteeringAdapter {
         let ego = LiminalEgoField::from_intent_axes(axes);
         self.core_layers.ego_layer = ego;
         self.configured_ego = ego;
+        self.sync_ego_differential_net_from_configured();
     }
 
     /// Smoothly blends an [`EgoIntentAxes`] overlay onto the current Ego state (`weight_q7` in `0..=127`).
@@ -815,6 +1015,7 @@ impl ModelSteeringAdapter {
         let ego = LiminalEgoField::from_intent_axes(&blended);
         self.core_layers.ego_layer = ego;
         self.configured_ego = ego;
+        self.sync_ego_differential_net_from_configured();
     }
 
     /// Derives Core Layer 2 [`LiminalEgoField`] deterministically from a natural-language Ego description.
@@ -822,6 +1023,7 @@ impl ModelSteeringAdapter {
         let ego = LiminalEgoField::from_natural_language(description);
         self.core_layers.ego_layer = ego;
         self.configured_ego = ego;
+        self.sync_ego_differential_net_from_configured();
     }
 
     /// Overlays natural-language Ego cues onto the existing Core Layer 2 [`LiminalEgoField`].
@@ -832,6 +1034,7 @@ impl ModelSteeringAdapter {
             .with_natural_language_overlay(description);
         self.core_layers.ego_layer = ego;
         self.configured_ego = ego;
+        self.sync_ego_differential_net_from_configured();
     }
 
     /// Returns the most recent temporal [`LiminalBoundaryDelta`] between aperture epochs.
@@ -968,6 +1171,17 @@ impl ModelSteeringAdapter {
         Option<StigmergicFragmentEnsembleReport>,
     ) {
         let has_guard_conflict = recall.guard_conflict_margin > 0.0;
+        self.last_venn_partition = recall.venn_partition;
+        self.system_spine.ood_void_locked = u8::from(
+            matches!(recall.void_state, VoidBoundaryState::LiminalExterior)
+                && !recall.is_known_unknown_exterior
+                && recall.guard_conflict_margin <= 0.05,
+        );
+        if !has_guard_conflict && self.configured_ego.is_active() {
+            self.distortion_tension.effective_ego_scale_q7 =
+                self.distortion_tension.effective_ego_scale_q7.max(48);
+            self.distortion_tension.suppression_cooldown_steps = 0;
+        }
         let regime_code = if has_guard_conflict
             || matches!(recall.void_state, VoidBoundaryState::LiminalBoundary)
         {
@@ -1127,10 +1341,66 @@ impl ModelSteeringAdapter {
                 }
             }
         }
+        let prev_was_sandbox = self.sandbox_workbench_lane.is_some();
         let _ = self.action_hub.apply_workbench_preset_lanes(&specs);
+        self.sandbox_workbench_lane = None;
+        let assim_drift = self.telemetry.assimilation_drift();
+        if prev_was_sandbox || recall.is_known_unknown_exterior {
+            let improved = prev_was_sandbox
+                && recall.top1_fact_score > self.prev_sandbox_coherence
+                && assim_drift <= self.prev_sandbox_assim_drift + 0.02;
+            self.sandbox_promotion_streak = if improved {
+                self.sandbox_promotion_streak.saturating_add(1)
+            } else {
+                0
+            };
+            self.prev_sandbox_coherence = recall.top1_fact_score;
+            self.prev_sandbox_assim_drift = assim_drift;
+        }
+        if !has_guard_conflict && recall.is_known_unknown_exterior {
+            if let Some(&(ext_entry, ext_score)) = recall.exterior_sandbox_facts.first() {
+                if let Some(&ext_phases) = ext_entry.per_layer_q7.last() {
+                    let ext_weight =
+                        (ext_entry.energy * ext_score.clamp(0.20, 0.90)).clamp(0.15, 0.95);
+                    if let Ok(lane) =
+                        self.action_hub
+                            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(
+                                ext_weight, ext_phases,
+                            ))
+                    {
+                        self.sandbox_workbench_lane = Some(lane);
+                        if self.sandbox_promotion_streak >= 2
+                            && self.action_hub.promote_sandbox_lane(lane).unwrap_or(false)
+                        {
+                            self.sandbox_promotions = self.sandbox_promotions.saturating_add(1);
+                            self.sandbox_workbench_lane = None;
+                            self.sandbox_promotion_streak = 0;
+                        }
+                    }
+                }
+            }
+        }
         if let Some(esc_lane) = self.escalated_workbench_lane {
             if (self.action_hub.slot_enabled_mask & (1u8 << esc_lane)) == 0 {
                 self.escalated_workbench_lane = None;
+            }
+        }
+        if self.core_layers.ego_layer.is_active() {
+            let (_p_frame, d_norm, hops, entry) = self
+                .ego_differential_net
+                .evaluate_pframe_chain_with_entry_branchless(
+                    &self.core_layers.ego_layer,
+                    &self.system_spine,
+                    &self.last_venn_partition,
+                    &self.core_layers.stigmergic_layer,
+                    &self.distortion_tension,
+                    recall.gateway_frame,
+                );
+            self.ego_differential_net.last_delta_norm_q7 = d_norm;
+            self.ego_differential_net.last_hops_traversed = hops;
+            if hops > 0 {
+                self.ego_differential_net
+                    .record_chain_activation(usize::from(entry), hops);
             }
         }
         self.active_workbench_preset = preset;
@@ -1551,12 +1821,17 @@ impl ModelSteeringAdapter {
     ///
     /// Returns an error if `q_rot_inout` length mismatches or `liminika-core` rejects the inputs.
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     fn build_core_layer_ctx<'a>(
         core_layers: &'a AutonomousCoreLayerStack,
         last_boundary_delta: &'a LiminalBoundaryDelta,
         last_horizon: &'a EpistemicHorizonReading,
         last_venn_report: &'a StigmergicVennSerendipityReport,
         derivative_alpha_q7: u8,
+        last_venn_partition: &'a LiminalVennPartition,
+        system_spine: &'a SystemSpineState,
+        ego_differential_net: &'a EgoDifferentialNet,
+        distortion_tension: &'a DistortionTension,
     ) -> Option<CoreLayerEvalContext<'a>> {
         (core_layers.liminal_layer.adaptation_epochs > 0 || core_layers.ego_layer.is_active())
             .then_some(CoreLayerEvalContext {
@@ -1565,6 +1840,10 @@ impl ModelSteeringAdapter {
                 horizon: last_horizon,
                 venn: last_venn_report,
                 derivative_alpha_q7,
+                venn_partition: Some(last_venn_partition),
+                spine: Some(system_spine),
+                ego_net: Some(ego_differential_net),
+                tension: Some(distortion_tension),
             })
     }
 
@@ -1595,6 +1874,10 @@ impl ModelSteeringAdapter {
                 &this.last_horizon,
                 &this.last_venn_report,
                 this.telemetry.derivative_alpha_q7(),
+                &this.last_venn_partition,
+                &this.system_spine,
+                &this.ego_differential_net,
+                &this.distortion_tension,
             );
             this.phase_engine
                 .steer_gateway_signal_with_core_layers_for_geometry_safe(
@@ -1616,7 +1899,7 @@ impl ModelSteeringAdapter {
     /// Routes [`ManifoldGatewaySignal`] through the embedded [`ActionHubEngine`] via
     /// [`ActionHubGatewayExt::ingest_gateway_and_steer_with_core_layers_for_geometry_safe`],
     /// allowing the hub's stigmergic trail density, FastPathLedger fast-path state, and live
-    /// 3-layer core stack (`Liminal` + `Stigmergic` + `Ego`) to autonomously modulate steering.
+    /// `2 Primitives x 2 Drivers` stack (`Liminal`/`Stigmergy` x `System`/`Ego`) to autonomously modulate steering.
     ///
     /// # Errors
     ///
@@ -1637,6 +1920,10 @@ impl ModelSteeringAdapter {
                 &this.last_horizon,
                 &this.last_venn_report,
                 this.telemetry.derivative_alpha_q7(),
+                &this.last_venn_partition,
+                &this.system_spine,
+                &this.ego_differential_net,
+                &this.distortion_tension,
             );
             this.action_hub
                 .ingest_gateway_and_steer_with_core_layers_for_geometry_safe(
@@ -1751,9 +2038,7 @@ impl ModelSteeringAdapter {
             };
             let num_layers_denom = this.geometry.num_layers.saturating_sub(1).max(1);
             let layer_scale_q7 = ((layer_idx * 127) / num_layers_denom).min(127) as u8;
-            let conflict_active = pre_trigger.epistemic_regime
-                == EpistemicRegime::InternalConflict as u8
-                || pre_trigger.repulsion_severity > 0.25;
+            let conflict_active = pre_trigger.repulsion_severity > 0.25;
             let esc_req = HorizonEscalationRequest {
                 trigger: pre_trigger,
                 placement: WorkbenchLanePlacement::AutoFree,
@@ -1795,6 +2080,10 @@ impl ModelSteeringAdapter {
                 &this.last_horizon,
                 &this.last_venn_report,
                 this.telemetry.derivative_alpha_q7(),
+                &this.last_venn_partition,
+                &this.system_spine,
+                &this.ego_differential_net,
+                &this.distortion_tension,
             );
             let (mut frame, report, decision) = this
                 .action_hub
@@ -2063,19 +2352,38 @@ impl ModelSteeringAdapter {
         u_vec: &[f32],
         v_vec: &[f32],
     ) -> Result<(GatewayFrame, f32), String> {
-        let (raw_frame, frm_w) = if self.core_layers.liminal_layer.adaptation_epochs > 0
+        let frame = if self.core_layers.liminal_layer.adaptation_epochs > 0
             || self.core_layers.ego_layer.is_active()
         {
-            signal.synthesize_gateway_with_core_layers_readonly(
-                &self.core_layers,
+            let raw_sys = signal.synthesize_gateway_with_aperture_from_stack(&self.core_layers);
+            let sys_baseline = self.core_layers.modulate_gateway_frame_branchless(
+                raw_sys,
+                &self.last_horizon,
+                &self.last_venn_report,
+            );
+            let ego_base = self.core_layers.modulate_gateway_frame_with_ego_readonly(
                 &self.last_boundary_delta,
                 &self.last_horizon,
                 &self.last_venn_report,
-            )
+                raw_sys,
+            );
+            let (p_frame, _, hops) = self.ego_differential_net.evaluate_pframe_chain_branchless(
+                &self.core_layers.ego_layer,
+                &self.system_spine,
+                &self.last_venn_partition,
+                &self.core_layers.stigmergic_layer,
+                &self.distortion_tension,
+                ego_base,
+            );
+            let cand = if hops > 0 { p_frame } else { ego_base };
+            let cand_w = *cand.phase_words_ref();
+            let modulated = Self::modulate_srl_circuit_frame(self.active_circuit(), cand, &cand_w);
+            self.system_spine
+                .enforce_pinned_isolation_branchless(&sys_baseline, modulated)
         } else {
-            signal.synthesize_gateway_frame_with_words()
+            let (raw_frame, frm_w) = signal.synthesize_gateway_frame_with_words();
+            Self::modulate_srl_circuit_frame(self.active_circuit(), raw_frame, &frm_w)
         };
-        let frame = Self::modulate_srl_circuit_frame(self.active_circuit(), raw_frame, &frm_w);
         let gain = self.apply_srl_frame_internal(&frame, hidden_inout, u_vec, v_vec)?;
         Ok((frame, gain))
     }
@@ -2094,19 +2402,47 @@ impl ModelSteeringAdapter {
         v_vec: &[f32],
     ) -> Result<(GatewayFrame, f32), String> {
         let circuit = self.active_circuit();
-        let (raw_frame, frm_w) = if self.core_layers.liminal_layer.adaptation_epochs > 0
+        let frame = if self.core_layers.liminal_layer.adaptation_epochs > 0
             || self.core_layers.ego_layer.is_active()
         {
-            signal.synthesize_gateway_with_core_layers(
+            let raw_sys = signal.synthesize_gateway_with_aperture_from_stack(&self.core_layers);
+            let sys_baseline = self.core_layers.modulate_gateway_frame_branchless(
+                raw_sys,
+                &self.last_horizon,
+                &self.last_venn_report,
+            );
+            let (ego_frame, _ego_w) = signal.synthesize_gateway_with_core_layers(
                 &mut self.core_layers,
                 &self.last_boundary_delta,
                 &self.last_horizon,
                 &self.last_venn_report,
-            )
+            );
+            let (p_frame, d_norm, hops, entry) = self
+                .ego_differential_net
+                .evaluate_pframe_chain_with_entry_branchless(
+                    &self.core_layers.ego_layer,
+                    &self.system_spine,
+                    &self.last_venn_partition,
+                    &self.core_layers.stigmergic_layer,
+                    &self.distortion_tension,
+                    ego_frame,
+                );
+            self.ego_differential_net.last_delta_norm_q7 = d_norm;
+            let cand = if hops > 0 {
+                self.ego_differential_net
+                    .record_chain_activation(usize::from(entry), hops);
+                p_frame
+            } else {
+                ego_frame
+            };
+            let cand_w = *cand.phase_words_ref();
+            let modulated = Self::modulate_srl_circuit_frame(circuit, cand, &cand_w);
+            self.system_spine
+                .enforce_pinned_isolation_branchless(&sys_baseline, modulated)
         } else {
-            signal.synthesize_gateway_frame_with_words()
+            let (raw_frame, frm_w) = signal.synthesize_gateway_frame_with_words();
+            Self::modulate_srl_circuit_frame(circuit, raw_frame, &frm_w)
         };
-        let frame = Self::modulate_srl_circuit_frame(circuit, raw_frame, &frm_w);
         let gain = self.apply_srl_frame_internal(&frame, hidden_inout, u_vec, v_vec)?;
         Ok((frame, gain))
     }

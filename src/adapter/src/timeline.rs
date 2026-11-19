@@ -217,7 +217,32 @@ pub enum TimelineResumeOutcome {
 }
 
 pub(crate) const GCSO_DUAL_MAGIC: &[u8; 8] = b"GCSODUAL";
-pub(crate) const GCSO_DUAL_VERSION: u32 = 1;
+pub(crate) const GCSO_DUAL_VERSION: u32 = 2;
+
+/// Model-agnostic logical P-Frame node descriptor persisted in `.gcso` v2 containers so
+/// portable [`EgoDifferentialNet`] chains can be re-baked to any target model's 64-head Q7 space
+/// upon load without modifying base weights.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LogicalPFrameDescriptor {
+    /// Logical P-Frame node identifier (`1..`).
+    pub node_id: u32,
+    /// Reference logical I-Frame anchor identifier.
+    pub anchor_ref_id: u32,
+    /// Next hop index (`0..8`, or `0xFFFF` if terminal).
+    pub next_hop_idx: u16,
+    /// Hop depth along the chain (`1..=4`).
+    pub hop_depth: u8,
+    /// 8-granule Venn trigger bitmask.
+    pub venn_trigger_mask: u8,
+    /// Venn region selector bitmask (`VENN_REGION_*`).
+    pub venn_region_selector: u8,
+    /// Stigmergic pheromone density in Q0.7 (`0..=127`).
+    pub pheromone_q7: u8,
+    /// Directed delta scaling gain in Q0.7 (`0..=127`).
+    pub gain_q7: u8,
+    /// Model-agnostic semantic Ego intent axes transition (`16 B`).
+    pub intent_delta: EgoIntentAxes,
+}
 
 /// Dual-Track (Subtitle Natural-Language Track + KV-keyframe Video-Style GOP Track) `.gcso` container.
 #[derive(Debug, Clone, PartialEq)]
@@ -226,6 +251,7 @@ pub struct GcsoDualTrackTimeline {
     frames: Vec<GopTimelineFrame>,
     seek_index: Vec<usize>,
     persona_circuit: Option<CognitiveTrajectoryLedger>,
+    logical_pframe_topology: Vec<LogicalPFrameDescriptor>,
 }
 
 impl GcsoDualTrackTimeline {
@@ -260,7 +286,19 @@ impl GcsoDualTrackTimeline {
             frames: Vec::new(),
             seek_index: Vec::new(),
             persona_circuit: None,
+            logical_pframe_topology: Vec::new(),
         }
+    }
+
+    /// Attaches model-agnostic logical P-Frame topology descriptors for `.gcso` v2 persistence.
+    pub fn set_logical_pframe_topology(&mut self, topology: Vec<LogicalPFrameDescriptor>) {
+        self.logical_pframe_topology = topology;
+    }
+
+    /// Returns persisted model-agnostic logical P-Frame topology descriptors.
+    #[must_use]
+    pub fn logical_pframe_topology(&self) -> &[LogicalPFrameDescriptor] {
+        &self.logical_pframe_topology
     }
 
     /// Attaches a [`CognitiveTrajectoryLedger`] (stigmergic persona reasoning circuit) to be
@@ -569,8 +607,9 @@ impl GcsoDualTrackTimeline {
         }
 
         let subtitles = self.export_subtitle_track(ctx.up_to_frame);
-        let (rebaked_timeline, rebaked_corpus) =
+        let (mut rebaked_timeline, rebaked_corpus) =
             Self::bake_from_subtitle_records(&subtitles, ctx, encoder)?;
+        rebaked_timeline.set_logical_pframe_topology(self.logical_pframe_topology.clone());
 
         let effective_target = subtitles
             .iter()
@@ -705,11 +744,63 @@ impl GcsoDualTrackTimeline {
             });
         }
         let persona_circuit = Self::extract_circuit_from_frames(&frames);
+        let topo_count =
+            u32::from_le_bytes(read_exact(&mut cursor, 4)?.try_into().map_err(|_| "tcnt")?)
+                as usize;
+        if topo_count > 64 {
+            return Err(format!(
+                "excessive logical P-Frame topology count: {topo_count}"
+            ));
+        }
+        let mut logical_pframe_topology = Vec::with_capacity(topo_count);
+        for _ in 0..topo_count {
+            let node_id =
+                u32::from_le_bytes(read_exact(&mut cursor, 4)?.try_into().map_err(|_| "nid")?);
+            let anchor_ref_id =
+                u32::from_le_bytes(read_exact(&mut cursor, 4)?.try_into().map_err(|_| "ari")?);
+            let next_hop_idx =
+                u16::from_le_bytes(read_exact(&mut cursor, 2)?.try_into().map_err(|_| "nhi")?);
+            let hop_depth = read_exact(&mut cursor, 1)?[0];
+            let venn_trigger_mask = read_exact(&mut cursor, 1)?[0];
+            let venn_region_selector = read_exact(&mut cursor, 1)?[0];
+            let pheromone_q7 = read_exact(&mut cursor, 1)?[0];
+            let gain_q7 = read_exact(&mut cursor, 1)?[0];
+            let ax = read_exact(&mut cursor, 12)?;
+            let sig_hash =
+                u32::from_le_bytes(read_exact(&mut cursor, 4)?.try_into().map_err(|_| "sh")?);
+            let intent_delta = EgoIntentAxes {
+                autonomy_q7: ax[0] as i8,
+                transgression_q7: ax[1] as i8,
+                devotion_q7: ax[2] as i8,
+                logic_q7: ax[3] as i8,
+                caution_q7: ax[4] as i8,
+                defiance_q7: ax[5] as i8,
+                synergy_q7: ax[6] as i8,
+                vitality_q7: ax[7] as i8,
+                preferred_slot_mask: ax[8],
+                active_granule_bias_mask: ax[9],
+                confidence_q7: ax[10],
+                flags: ax[11],
+                signature_hash: sig_hash,
+            };
+            logical_pframe_topology.push(LogicalPFrameDescriptor {
+                node_id,
+                anchor_ref_id,
+                next_hop_idx,
+                hop_depth,
+                venn_trigger_mask,
+                venn_region_selector,
+                pheromone_q7,
+                gain_q7,
+                intent_delta,
+            });
+        }
         Ok(Self {
             model_fingerprint,
             frames,
             seek_index,
             persona_circuit,
+            logical_pframe_topology,
         })
     }
 }
@@ -889,6 +980,30 @@ impl AttractorContainerCodec for GcsoDualTrackTimeline {
                     out.extend_from_slice(&target_anchor_id.to_le_bytes());
                 }
             }
+        }
+        out.extend_from_slice(&(self.logical_pframe_topology.len() as u32).to_le_bytes());
+        for d in &self.logical_pframe_topology {
+            out.extend_from_slice(&d.node_id.to_le_bytes());
+            out.extend_from_slice(&d.anchor_ref_id.to_le_bytes());
+            out.extend_from_slice(&d.next_hop_idx.to_le_bytes());
+            out.push(d.hop_depth);
+            out.push(d.venn_trigger_mask);
+            out.push(d.venn_region_selector);
+            out.push(d.pheromone_q7);
+            out.push(d.gain_q7);
+            out.push(d.intent_delta.autonomy_q7 as u8);
+            out.push(d.intent_delta.transgression_q7 as u8);
+            out.push(d.intent_delta.devotion_q7 as u8);
+            out.push(d.intent_delta.logic_q7 as u8);
+            out.push(d.intent_delta.caution_q7 as u8);
+            out.push(d.intent_delta.defiance_q7 as u8);
+            out.push(d.intent_delta.synergy_q7 as u8);
+            out.push(d.intent_delta.vitality_q7 as u8);
+            out.push(d.intent_delta.preferred_slot_mask);
+            out.push(d.intent_delta.active_granule_bias_mask);
+            out.push(d.intent_delta.confidence_q7);
+            out.push(d.intent_delta.flags);
+            out.extend_from_slice(&d.intent_delta.signature_hash.to_le_bytes());
         }
         out
     }

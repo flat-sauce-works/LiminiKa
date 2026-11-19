@@ -2169,6 +2169,9 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
         telemetry: StratumProbeTelemetry::default(),
         recalled_facts: vec![(&e1, 0.85), (&e2, 0.72)],
         recalled_personas: Vec::new(),
+        venn_partition: LiminalVennPartition::default(),
+        exterior_sandbox_facts: Vec::new(),
+        is_known_unknown_exterior: false,
     };
     let epochs_before_sync = ego_adapter.aperture_field().adaptation_epochs;
     let (_hor, _venn, ens_opt) = ego_adapter.sync_core_layers_from_recall(&recall, None);
@@ -2709,4 +2712,34 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
         trail_no_sb.accumulated_phase_delta[0]
     );
     assert!(trail_venn.accumulated_phase_delta[40] > trail_no_sb.accumulated_phase_delta[40]);
+}
+
+#[test]
+fn gcso_v2_logical_pframe_topology_roundtrip_and_cross_model_rebake() {
+    let mut src_adapter =
+        ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("src adapter");
+    src_adapter.configure_ego_from_preset(LiminalEgoPreset::Medium);
+    let topo = src_adapter.export_logical_pframe_topology();
+    assert_eq!(topo.len(), 3);
+
+    let mut tl = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
+        src_adapter.geometry(),
+    ));
+    tl.set_logical_pframe_topology(topo.clone());
+
+    let encoded = tl.to_bytes();
+    let decoded = GcsoDualTrackTimeline::from_bytes(&encoded).expect("decode v2");
+    assert_eq!(decoded.logical_pframe_topology(), topo.as_slice());
+
+    let mut alt_geom = RopeGeometry::phi4_mini();
+    alt_geom.head_dim = 128;
+    alt_geom.rotary_dim = 128;
+    let mut alt_adapter = ModelSteeringAdapter::new(alt_geom).expect("alt adapter");
+    alt_adapter.bake_logical_pframe_topology(decoded.logical_pframe_topology());
+    assert_eq!(
+        alt_adapter.ego_differential_net().active_node_mask & 0x07,
+        0x07
+    );
+    assert!(alt_adapter.ego_differential_net().nodes[0].is_baked_active());
+    assert!(alt_adapter.ego_differential_net().nodes[2].is_baked_active());
 }

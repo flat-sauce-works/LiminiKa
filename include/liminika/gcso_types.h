@@ -40,7 +40,7 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
  * =================================================================== */
 #define GCSO_SNAPSHOT_MAGIC 0x4F534347U         /* "GCSO" in ASCII */
 #define GCSO_CRYSTAL_RECORD_MAGIC 0x4C545343U   /* "CSTL" in ASCII */
-#define GCSO_CRYSTAL_RECORD_VERSION 0x00000102U /* Unified v0.1.2 */
+#define GCSO_CRYSTAL_RECORD_VERSION 0x00000103U /* Unified v0.1.3 */
 #define GCSO_FOUR_SECTION_HEADER_BYTES 192U
 #define GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET 128U
 #define GCSO_Q7_PHASE_ARRAY_LEN 64U
@@ -56,6 +56,23 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_CORE_LAYER_LIMINAL 0U
 #define GCSO_CORE_LAYER_STIGMERGIC 1U
 #define GCSO_CORE_LAYER_EGO 2U
+
+/* 2 Primitives x 2 Drivers Structural Attribution Identifiers (1:1 with constants_pod.rs) */
+#define GCSO_SUBSTRATE_LIMINAL 0U
+#define GCSO_SUBSTRATE_STIGMERGY 1U
+#define GCSO_DRIVER_SYSTEM 0U
+#define GCSO_DRIVER_EGO 1U
+#define GCSO_ATTRIBUTION_TAG(substrate, driver) \
+    ((uint8_t)(((uint8_t)(substrate) & 1U) | (((uint8_t)(driver) & 1U) << 1U)))
+#define GCSO_MAX_EGO_PFRAME_NODES 8U
+#define GCSO_DISTORTION_DELTA_NO_NEXT_HOP 0xFFFFU
+#define GCSO_MAX_DISTORTION_CHAIN_HOPS 4U
+#define GCSO_DISTORTION_DELTA_FLAG_ACTIVE (1U << 0)
+#define GCSO_DISTORTION_DELTA_FLAG_CONSOLIDATED_IFRAME (1U << 1)
+#define GCSO_DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID (1U << 2)
+#define GCSO_VENN_REGION_SHARED_CORE (1U << 0)
+#define GCSO_VENN_REGION_SELF_EXCLUSIVE (1U << 1)
+#define GCSO_VENN_REGION_KNOWN_UNKNOWN (1U << 2)
 
 /* Liminal Cognitive Aperture Bitmasks (1:1 with primitives/constants_pod.rs) */
 #define GCSO_APERTURE_SYSTEM_CONSTRAINT (1U << 0)
@@ -766,6 +783,108 @@ struct GCSO_ALIGN_PREFIX(16) gcso_liminal_boundary_delta {
 } GCSO_ALIGN_SUFFIX(16);
 typedef struct gcso_liminal_boundary_delta gcso_liminal_boundary_delta_t;
 
+/**
+ * @brief Lightweight 2-bit attribution tag byte ([Driver(1b) | Substrate(1b)]).
+ */
+typedef uint8_t gcso_attribution_tag_t;
+
+/**
+ * @brief Unified 64-byte single-cacheline CognitiveSubstrate (Liminal + Stigmergy).
+ */
+struct GCSO_ALIGN_PREFIX(64) gcso_cognitive_substrate {
+    gcso_liminal_aperture_field_t liminal;
+    gcso_stigmergic_granule_field_t stigmergy;
+} GCSO_ALIGN_SUFFIX(64);
+typedef struct gcso_cognitive_substrate gcso_cognitive_substrate_t;
+
+/**
+ * @brief Branchless 16-byte 4-region Venn partition across 8 SWAR granules.
+ */
+struct GCSO_ALIGN_PREFIX(16) gcso_liminal_venn_partition {
+    uint8_t self_mask;
+    uint8_t other_mask;
+    uint8_t shared_core_mask;
+    uint8_t self_exclusive_mask;
+    uint8_t known_unknown_mask;
+    uint8_t true_void_mask;
+    uint8_t bridge_count;
+    uint8_t other_concentration_q7;
+    uint8_t boundary_sensitivity_q7;
+    uint8_t known_unknown_density_q7;
+    uint8_t sandbox_eligible;
+    uint8_t true_void_aperture_zero;
+    uint8_t attribution_tag;
+    uint8_t reserved_align[3];
+} GCSO_ALIGN_SUFFIX(16);
+typedef struct gcso_liminal_venn_partition gcso_liminal_venn_partition_t;
+
+/**
+ * @brief Mechanical SystemSpineState owning physical pinned isolation masks (32 bytes, 16-byte aligned).
+ */
+struct GCSO_ALIGN_PREFIX(16) gcso_system_spine_state {
+    uint32_t pinned_aperture_mask;
+    uint8_t pinned_slot_mask;
+    uint8_t pinned_action_mode_mask;
+    uint8_t ood_void_locked;
+    uint8_t irreversible_step_lock;
+    uint64_t pinned_compute_mask;
+    uint32_t gauge_anchor_epoch;
+    uint32_t slow_loop_epoch;
+    uint8_t whole_token_bypass_active;
+    uint8_t bypass_dwell_steps;
+    uint8_t bypass_cooldown_steps;
+    uint8_t attribution_tag;
+    uint8_t reserved_align[4];
+} GCSO_ALIGN_SUFFIX(16);
+typedef struct gcso_system_spine_state gcso_system_spine_state_t;
+
+/**
+ * @brief Directed 128-byte P-Frame differential node relative to SystemSpine I-Frame trajectory.
+ */
+struct GCSO_ALIGN_PREFIX(64) gcso_distortion_delta {
+    uint32_t node_id;
+    uint32_t anchor_ref_id;
+    uint16_t next_hop_idx;
+    uint8_t hop_depth;
+    uint8_t venn_trigger_mask;
+    uint8_t venn_region_selector;
+    uint8_t pheromone_q7;
+    uint8_t gain_q7;
+    uint8_t attribution_tag;
+    gcso_ego_intent_axes_t intent_delta;
+    uint32_t reinforce_count;
+    uint32_t last_active_epoch;
+    uint32_t checksum_crc32;
+    uint32_t flags;
+    uint8_t reserved_header[16];
+    gcso_q7_t delta_phase_q7[GCSO_Q7_PHASE_ARRAY_LEN];
+} GCSO_ALIGN_SUFFIX(64);
+typedef struct gcso_distortion_delta gcso_distortion_delta_t;
+
+/**
+ * @brief Asymmetric 32-byte homeostatic DistortionTension state (16-byte aligned).
+ */
+struct GCSO_ALIGN_PREFIX(16) gcso_distortion_tension {
+    uint8_t tension_q7;
+    uint8_t deadband_low_q7;
+    uint8_t deadband_high_q7;
+    uint8_t effective_ego_scale_q7;
+    uint8_t excitation_potential_u8;
+    uint8_t suppression_cooldown_steps;
+    uint8_t boundary_sensitivity_q7;
+    uint8_t state_code;
+    uint32_t immediate_damping_events;
+    uint32_t slow_excitation_events;
+    uint8_t last_ego_delta_norm_q7;
+    uint8_t attribution_tag;
+    uint8_t guard_proximity_q7;
+    uint8_t exit_entropy_q7;
+    uint32_t cumulative_delta_l1;
+    uint32_t step_epochs;
+    uint8_t reserved_align[4];
+} GCSO_ALIGN_SUFFIX(16);
+typedef struct gcso_distortion_tension gcso_distortion_tension_t;
+
 /*
  * Strongly-Typed Opaque Handles eliminating generic raw `c_void` / `void*` pointers.
  * Each domain component has a distinct opaque type to prevent type confusion at compile time.
@@ -859,6 +978,17 @@ GCSO_STATIC_ASSERT(sizeof(gcso_stigmergic_fragment_ensemble_report_t) == 16,
                    "gcso_stigmergic_fragment_ensemble_report_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_liminal_ego_field_t) == 64,
                    "gcso_liminal_ego_field_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_attribution_tag_t) == 1, "gcso_attribution_tag_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_cognitive_substrate_t) == 64,
+                   "gcso_cognitive_substrate_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_liminal_venn_partition_t) == 16,
+                   "gcso_liminal_venn_partition_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_system_spine_state_t) == 32,
+                   "gcso_system_spine_state_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_distortion_delta_t) == 128,
+                   "gcso_distortion_delta_t size mismatch");
+GCSO_STATIC_ASSERT(sizeof(gcso_distortion_tension_t) == 32,
+                   "gcso_distortion_tension_t size mismatch");
 
 /* Static Assertions for Alignment Invariants Matching src/core/src/abi/ & traits/ */
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_raw_buffer_t) == 16, "gcso_raw_buffer_t alignment mismatch");
@@ -919,6 +1049,16 @@ GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_stigmergic_fragment_ensemble_report_t) == 1
                    "gcso_stigmergic_fragment_ensemble_report_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_liminal_ego_field_t) == 64,
                    "gcso_liminal_ego_field_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_cognitive_substrate_t) == 64,
+                   "gcso_cognitive_substrate_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_liminal_venn_partition_t) == 16,
+                   "gcso_liminal_venn_partition_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_system_spine_state_t) == 16,
+                   "gcso_system_spine_state_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_distortion_delta_t) == 64,
+                   "gcso_distortion_delta_t alignment mismatch");
+GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_distortion_tension_t) == 16,
+                   "gcso_distortion_tension_t alignment mismatch");
 
 /* Static Assertions for Exact Field Offsets Matching Rust abi/ & traits/ */
 GCSO_STATIC_ASSERT(offsetof(gcso_descriptor_header_t, struct_size) == 0,
@@ -1274,6 +1414,28 @@ GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, intervention_epochs) == 52
                    "gcso_liminal_ego_field_t::intervention_epochs offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_liminal_ego_field_t, last_intervened_mask) == 56,
                    "gcso_liminal_ego_field_t::last_intervened_mask offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_cognitive_substrate_t, liminal) == 0,
+                   "gcso_cognitive_substrate_t::liminal offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_cognitive_substrate_t, stigmergy) == 32,
+                   "gcso_cognitive_substrate_t::stigmergy offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_venn_partition_t, shared_core_mask) == 2,
+                   "gcso_liminal_venn_partition_t::shared_core_mask offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_venn_partition_t, known_unknown_mask) == 4,
+                   "gcso_liminal_venn_partition_t::known_unknown_mask offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_liminal_venn_partition_t, boundary_sensitivity_q7) == 8,
+                   "gcso_liminal_venn_partition_t::boundary_sensitivity_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_system_spine_state_t, pinned_compute_mask) == 8,
+                   "gcso_system_spine_state_t::pinned_compute_mask offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_system_spine_state_t, whole_token_bypass_active) == 24,
+                   "gcso_system_spine_state_t::whole_token_bypass_active offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_distortion_delta_t, intent_delta) == 16,
+                   "gcso_distortion_delta_t::intent_delta offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_distortion_delta_t, delta_phase_q7) == 64,
+                   "gcso_distortion_delta_t::delta_phase_q7 offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_distortion_tension_t, immediate_damping_events) == 8,
+                   "gcso_distortion_tension_t::immediate_damping_events offset mismatch");
+GCSO_STATIC_ASSERT(offsetof(gcso_distortion_tension_t, slow_excitation_events) == 12,
+                   "gcso_distortion_tension_t::slow_excitation_events offset mismatch");
 
 GCSO_EXTERN_C_END
 

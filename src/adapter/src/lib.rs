@@ -22,7 +22,7 @@ use liminika_core::traits::gateway::{
     ActionHubGatewayExt, AdaptiveThresholdPolicy, AutonomousCoreLayerStack, CausalProvenanceReport,
     CausalProvenanceSignal, CognitiveCircuitActivation, CognitiveCircuitBankOps,
     CognitiveCircuitPlasticity, CognitiveTrajectoryLedger, CoreLayerEvalContext, CoreTelemetryBank,
-    CoreTelemetrySnapshot, DefaultResidualSpilloverSlot, DissipativeOverflowReport, EgoIntentAxes,
+    CoreTelemetrySnapshot, DefaultResidualSpilloverSlot, DissipativeOverflowReport,
     EpistemicHorizonReading, EpistemicRegime, GatewayFrame, GatewayPhaseSteeringExt,
     GuardPhaseAnchor, HorizonDwellState, HorizonEscalationProvider, HorizonEscalationRequest,
     HorizonTriggerInput, LatentHorizonSlot, LayerDistortionReport, LiminalApertureField,
@@ -31,7 +31,8 @@ use liminika_core::traits::gateway::{
     SlowLoopTelemetryAdjustment, StigmergicFragmentEnsembleReport, StigmergicGranuleField,
     StigmergicScaleGranularity, StigmergicThresholdPolicy, StigmergicVennSerendipityReport,
     SubjectivePersona, SystemConstraint, TelemetryCapturePolicy, CAUSAL_AXIS_CONTRADICTION_GUARD,
-    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA, EGO_TRIGGER_BASIN_CAPTURE,
+    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA, DISTORTION_DELTA_FLAG_ACTIVE,
+    DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID, EGO_TRIGGER_BASIN_CAPTURE,
     EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LAYER_DISTORTION,
     ROOT_CAUSE_NOMINAL, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
 };
@@ -53,9 +54,13 @@ pub mod stratum;
 
 pub use liminika_core::action_hub::{WorkbenchLanePlacement, WorkbenchPreset, WorkbenchSlotSpec};
 pub use liminika_core::traits::gateway::{
-    AnonymousComputePool, ComputeDispatchMask, ComputePoolConfig, ComputePressureRegime,
-    SystemPressureReading,
+    evaluate_liminal_venn_partition_branchless, AnonymousComputePool, CognitiveSubstrate,
+    ComputeDispatchMask, ComputePoolConfig, ComputePressureRegime, DistortionDelta,
+    DistortionTension, DistortionTensionStateCode, EgoDifferentialNet, EgoIntentAxes,
+    LiminalVennPartition, SystemPressureReading, SystemSpineState, TokenBypassObservation,
+    VENN_REGION_KNOWN_UNKNOWN, VENN_REGION_SELF_EXCLUSIVE, VENN_REGION_SHARED_CORE,
 };
+pub use liminika_core::traits::primitives::{AttributionTag, DriverKind, SubstrateKind};
 pub use pooling::*;
 pub use reflection::*;
 pub use stratum::*;

@@ -948,3 +948,156 @@ pub unsafe extern "C" fn gcso_ego_field_intervene_frame(
         Ok(GCSO_SUCCESS)
     })
 }
+
+/// Evaluates the branchless 4-region Venn partition (`S & O`, `S & !O`, `!S & O` validated
+/// Known Unknown, and `!(S | O)` True Void) across 8 SWAR granules.
+///
+/// # Safety
+/// `other_granule_density_q7` (`8` bytes), `granule_noise_tolerance_q7` (`8` bytes), and
+/// `partition_out` (`16 B` aligned) must be non-null and non-overlapping.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_liminal_evaluate_venn_partition(
+    self_mask: u8,
+    other_granule_density_q7: *const u8,
+    granule_noise_tolerance_q7: *const u8,
+    concentration_floor_q7: u8,
+    partition_out: *mut gcso_liminal_venn_partition_t,
+) -> GcsoStatus {
+    ffi_boundary!({
+        validate_ptr(other_granule_density_q7)?;
+        validate_ptr(granule_noise_tolerance_q7)?;
+        validate_ptr(partition_out)?;
+        let part_bytes = size_of::<LiminalVennPartition>();
+        if raw_byte_ranges_overlap(
+            partition_out as usize,
+            part_bytes,
+            other_granule_density_q7 as usize,
+            NUM_STIGMERGIC_GRANULES,
+        ) || raw_byte_ranges_overlap(
+            partition_out as usize,
+            part_bytes,
+            granule_noise_tolerance_q7 as usize,
+            NUM_STIGMERGIC_GRANULES,
+        ) {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        // SAFETY: Pointers validated non-null, naturally aligned, and disjoint above.
+        let (other_s, tol_s, mut part_ref) = unsafe {
+            (
+                slice::from_raw_parts(other_granule_density_q7, NUM_STIGMERGIC_GRANULES),
+                slice::from_raw_parts(granule_noise_tolerance_q7, NUM_STIGMERGIC_GRANULES),
+                FfiHandleMut::from_raw(partition_out)?,
+            )
+        };
+        let mut other_arr = [0u8; NUM_STIGMERGIC_GRANULES];
+        other_arr.copy_from_slice(other_s);
+        let mut tol_arr = [0u8; NUM_STIGMERGIC_GRANULES];
+        tol_arr.copy_from_slice(tol_s);
+        *part_ref = evaluate_liminal_venn_partition_branchless(
+            self_mask,
+            &other_arr,
+            &tol_arr,
+            concentration_floor_q7,
+        );
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Executes 1 branchless Hot-Path asymmetric homeostatic tension step on `tension_inout`.
+///
+/// # Safety
+/// `tension_inout` must be non-null and 16-byte aligned.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_distortion_tension_step_hot_path(
+    tension_inout: *mut gcso_distortion_tension_t,
+    ego_delta_norm_q7: u8,
+    boundary_sensitivity_q7: u8,
+    exit_entropy_q7: u8,
+    guard_proximity_q7: u8,
+    active_overdrive: u8,
+) -> GcsoStatus {
+    ffi_boundary!({
+        // SAFETY: Validates non-nullness and 16-byte natural alignment.
+        let mut ten_ref = unsafe { FfiHandleMut::from_raw(tension_inout)? };
+        ten_ref.step_hot_path_branchless(
+            ego_delta_norm_q7,
+            boundary_sensitivity_q7,
+            exit_entropy_q7,
+            guard_proximity_q7,
+            active_overdrive != 0,
+        );
+        Ok(GCSO_SUCCESS)
+    })
+}
+
+/// Evaluates up to `max_hops` (`1..=4`) of a P-Frame [`gcso_distortion_delta_t`] pointer chain in
+/// zero-allocation mode, enforcing [`gcso_system_spine_state_t`] physical `pinned` isolation.
+///
+/// # Safety
+/// All required struct pointers (`nodes`, `ego`, `spine`, `venn`, `stigmergy`, `tension`,
+/// `frame_inout`) must be non-null, naturally aligned, and `frame_inout` / optional outputs
+/// (`delta_norm_out`, `hops_traversed_out`) must not overlap inputs.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_distortion_delta_apply_chain(
+    nodes: *const gcso_distortion_delta_t,
+    num_nodes: usize,
+    ego: *const gcso_liminal_ego_field_t,
+    spine: *const gcso_system_spine_state_t,
+    venn: *const gcso_liminal_venn_partition_t,
+    stigmergy: *const gcso_stigmergic_granule_field_t,
+    tension: *const gcso_distortion_tension_t,
+    max_hops: u8,
+    frame_inout: *mut gcso_gateway_frame_t,
+    delta_norm_out: *mut u8,
+    hops_traversed_out: *mut u8,
+) -> GcsoStatus {
+    ffi_boundary!({
+        validate_ptr(nodes)?;
+        if num_nodes > MAX_EGO_PFRAME_NODES {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        validate_ptr(frame_inout)?;
+        // SAFETY: Validated non-null and naturally aligned via `FfiHandleRef`/`FfiHandleMut` and slice checks.
+        let (ego_ref, spine_ref, venn_ref, stig_ref, ten_ref, mut frm_ref) = unsafe {
+            (
+                FfiHandleRef::from_raw(ego)?,
+                FfiHandleRef::from_raw(spine)?,
+                FfiHandleRef::from_raw(venn)?,
+                FfiHandleRef::from_raw(stigmergy)?,
+                FfiHandleRef::from_raw(tension)?,
+                FfiHandleMut::from_raw(frame_inout)?,
+            )
+        };
+        let nodes_bytes = num_nodes.saturating_mul(size_of::<DistortionDelta>());
+        if raw_byte_ranges_overlap(
+            frame_inout as usize,
+            size_of::<GatewayFrame>(),
+            nodes as usize,
+            nodes_bytes,
+        ) {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        // SAFETY: `nodes` is non-null, 64-byte aligned via `DistortionDelta`, and holds `num_nodes <= 8` elements.
+        let node_slice = unsafe {
+            validate_ptr_aligned(nodes, align_of::<DistortionDelta>())?;
+            slice::from_raw_parts(nodes, num_nodes)
+        };
+        let mut net = EgoDifferentialNet::new_empty(max_hops.min(MAX_DISTORTION_CHAIN_HOPS));
+        for (idx, n) in node_slice.iter().enumerate() {
+            net.nodes[idx] = *n;
+            if n.is_baked_active() {
+                net.active_node_mask |= 1u8 << idx;
+            }
+        }
+        let (out_frame, d_norm, hops) = net.evaluate_pframe_chain_branchless(
+            &ego_ref, &spine_ref, &venn_ref, &stig_ref, &ten_ref, *frm_ref,
+        );
+        *frm_ref = out_frame;
+        // SAFETY: `write_opt_out` validates nullness and alignment for optional scalar outputs.
+        unsafe {
+            write_opt_out(delta_norm_out, d_norm)?;
+            write_opt_out(hops_traversed_out, hops)?;
+        }
+        Ok(GCSO_SUCCESS)
+    })
+}

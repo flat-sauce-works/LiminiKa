@@ -115,6 +115,7 @@ pub use crate::traits::primitives::{
 pub mod circuit;
 pub mod compute_pool;
 pub mod core_layers;
+pub mod distortion;
 pub mod epistemic;
 pub mod frame;
 pub mod kv_cache;
@@ -131,6 +132,7 @@ pub use self::circuit::{
 };
 pub use self::compute_pool::*;
 pub use self::core_layers::*;
+pub use self::distortion::*;
 pub use self::epistemic::*;
 pub use self::frame::*;
 pub use self::kv_cache::*;
@@ -263,7 +265,56 @@ const _: () = {
     assert!(offset_of!(LiminalEgoField, ego_signature_hash) == 48);
     assert!(offset_of!(LiminalEgoField, intervention_epochs) == 52);
     assert!(offset_of!(LiminalEgoField, last_intervened_mask) == 56);
+
+    // Unified v0.1.3 2 Primitives x 2 Drivers & Distortion ABI invariants
+    assert!(size_of::<CognitiveSubstrate>() == 64 && align_of::<CognitiveSubstrate>() == 64);
+    assert!(offset_of!(CognitiveSubstrate, liminal) == 0);
+    assert!(offset_of!(CognitiveSubstrate, stigmergy) == 32);
+
+    assert!(size_of::<LiminalVennPartition>() == 16 && align_of::<LiminalVennPartition>() == 16);
+    assert!(offset_of!(LiminalVennPartition, shared_core_mask) == 2);
+    assert!(offset_of!(LiminalVennPartition, self_exclusive_mask) == 3);
+    assert!(offset_of!(LiminalVennPartition, known_unknown_mask) == 4);
+    assert!(offset_of!(LiminalVennPartition, true_void_mask) == 5);
+    assert!(offset_of!(LiminalVennPartition, boundary_sensitivity_q7) == 8);
+    assert!(offset_of!(LiminalVennPartition, sandbox_eligible) == 10);
+    assert!(offset_of!(LiminalVennPartition, true_void_aperture_zero) == 11);
+
+    assert!(size_of::<SystemSpineState>() == 32 && align_of::<SystemSpineState>() == 16);
+    assert!(offset_of!(SystemSpineState, pinned_aperture_mask) == 0);
+    assert!(offset_of!(SystemSpineState, pinned_slot_mask) == 4);
+    assert!(offset_of!(SystemSpineState, pinned_action_mode_mask) == 5);
+    assert!(offset_of!(SystemSpineState, ood_void_locked) == 6);
+    assert!(offset_of!(SystemSpineState, irreversible_step_lock) == 7);
+    assert!(offset_of!(SystemSpineState, pinned_compute_mask) == 8);
+    assert!(offset_of!(SystemSpineState, whole_token_bypass_active) == 24);
+
+    assert!(size_of::<DistortionDelta>() == 128 && align_of::<DistortionDelta>() == 64);
+    assert!(offset_of!(DistortionDelta, node_id) == 0);
+    assert!(offset_of!(DistortionDelta, next_hop_idx) == 8);
+    assert!(offset_of!(DistortionDelta, intent_delta) == 16);
+    assert!(offset_of!(DistortionDelta, flags) == 44);
+    assert!(offset_of!(DistortionDelta, delta_phase_q7) == 64);
+
+    assert!(size_of::<DistortionTension>() == 32 && align_of::<DistortionTension>() == 16);
+    assert!(offset_of!(DistortionTension, tension_q7) == 0);
+    assert!(offset_of!(DistortionTension, effective_ego_scale_q7) == 3);
+    assert!(offset_of!(DistortionTension, state_code) == 7);
+    assert!(offset_of!(DistortionTension, immediate_damping_events) == 8);
+    assert!(offset_of!(DistortionTension, slow_excitation_events) == 12);
+    assert!(offset_of!(DistortionTension, step_epochs) == 24);
 };
+
+// SAFETY: `CognitiveSubstrate` is `#[repr(C, align(64))]`, exact size 64 bytes with zero padding.
+unsafe impl Pod for CognitiveSubstrate {}
+// SAFETY: `LiminalVennPartition` is `#[repr(C, align(16))]`, exact size 16 bytes with zero padding.
+unsafe impl Pod for LiminalVennPartition {}
+// SAFETY: `SystemSpineState` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
+unsafe impl Pod for SystemSpineState {}
+// SAFETY: `DistortionDelta` is `#[repr(C, align(64))]`, exact size 128 bytes with zero padding.
+unsafe impl Pod for DistortionDelta {}
+// SAFETY: `DistortionTension` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
+unsafe impl Pod for DistortionTension {}
 
 // SAFETY: `EpistemicHorizonReading` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
 unsafe impl Pod for EpistemicHorizonReading {}

@@ -233,7 +233,7 @@ pub(super) fn filter_and_damp_gateway_words(
     }
 }
 
-/// Borrowed read-only 3-layer core context (`Liminal` + `Stigmergic` + `Ego`) passed into
+/// Borrowed read-only core context (`2 Primitives x 2 Drivers`) passed into
 /// per-layer Hot-Path RoPE steering and ActionHub orchestration.
 #[derive(Clone, Copy)]
 pub struct CoreLayerEvalContext<'a> {
@@ -247,6 +247,14 @@ pub struct CoreLayerEvalContext<'a> {
     pub venn: &'a StigmergicVennSerendipityReport,
     /// Read-only Slow-Loop Q0.7 derivative weight $\alpha \in [0, 127]$ for convex pheromone synthesis.
     pub derivative_alpha_q7: u8,
+    /// Optional 4-region branchless [`LiminalVennPartition`].
+    pub venn_partition: Option<&'a super::distortion::LiminalVennPartition>,
+    /// Optional [`SystemSpineState`] physical `pinned` isolation barrier.
+    pub spine: Option<&'a super::distortion::SystemSpineState>,
+    /// Optional P-Frame differential chain [`EgoDifferentialNet`].
+    pub ego_net: Option<&'a super::distortion::EgoDifferentialNet>,
+    /// Optional [`DistortionTension`] scaling the P-Frame delta amplitude.
+    pub tension: Option<&'a super::distortion::DistortionTension>,
 }
 
 #[inline(always)]
@@ -256,12 +264,42 @@ fn synthesize_signal_with_optional_core_layers<S: ManifoldGatewaySignal + ?Sized
 ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
     if let Some(ctx) = core_ctx {
         if ctx.stack.liminal_layer.adaptation_epochs > 0 || ctx.stack.ego_layer.is_active() {
-            return signal.synthesize_gateway_with_core_layers_readonly(
-                ctx.stack,
+            // Compute the pure `SystemSpine` I-Frame baseline BEFORE `LiminalEgoField` and
+            // `EgoDifferentialNet` mutate the frame so `pinned` isolation always anchors to
+            // pre-Ego state.
+            let raw_frame = signal.synthesize_gateway_with_aperture_from_stack(ctx.stack);
+            let sys_baseline =
+                ctx.stack
+                    .modulate_gateway_frame_branchless(raw_frame, ctx.horizon, ctx.venn);
+            let ego_base = ctx.stack.modulate_gateway_frame_with_ego_readonly(
                 ctx.delta,
                 ctx.horizon,
                 ctx.venn,
+                raw_frame,
             );
+            if let (Some(spine), Some(vp), Some(net), Some(tension)) =
+                (ctx.spine, ctx.venn_partition, ctx.ego_net, ctx.tension)
+            {
+                let (p_frame, _d_norm, hops) = net.evaluate_pframe_chain_branchless(
+                    &ctx.stack.ego_layer,
+                    spine,
+                    vp,
+                    &ctx.stack.stigmergic_layer,
+                    tension,
+                    ego_base,
+                );
+                let candidate = if hops > 0 { p_frame } else { ego_base };
+                let isolated = spine.enforce_pinned_isolation_branchless(&sys_baseline, candidate);
+                let w = *isolated.phase_words_ref();
+                return (isolated, w);
+            }
+            if let Some(spine) = ctx.spine {
+                let isolated = spine.enforce_pinned_isolation_branchless(&sys_baseline, ego_base);
+                let w = *isolated.phase_words_ref();
+                return (isolated, w);
+            }
+            let ego_w = *ego_base.phase_words_ref();
+            return (ego_base, ego_w);
         }
     }
     signal.synthesize_gateway_frame_with_words()

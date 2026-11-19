@@ -79,17 +79,19 @@ use crate::traits::cold_path::{
     EntropyEvaluator,
 };
 use crate::traits::gateway::{
-    evaluate_epistemic_horizon_words_64, evaluate_stigmergic_venn_and_serendipity_words_64,
-    project_bytes_swar_to_words_64, project_f32_slice_to_q7_64, project_f32_slice_to_words_64,
+    evaluate_epistemic_horizon_words_64, evaluate_liminal_venn_partition_branchless,
+    evaluate_stigmergic_venn_and_serendipity_words_64, project_bytes_swar_to_words_64,
+    project_f32_slice_to_q7_64, project_f32_slice_to_words_64,
     synthesize_multi_origin_gateway_frame_with_words, AutonomousCoreLayerStack,
-    CausalProvenanceReport, CausalProvenanceSignal, CognitiveGroundingSignal,
+    CausalProvenanceReport, CausalProvenanceSignal, CognitiveGroundingSignal, CognitiveSubstrate,
     CognitiveTrajectoryLedger, ContradictionGuard, ContradictionGuardSignal,
-    CrystallizedAttractorRecord, EgoIntentAxes, EpistemicHorizonReading, GatewayFrame,
-    GcsoFourSectionView, LiminalApertureField, LiminalBoundaryDelta, LiminalEgoField,
-    LiminalEgoPreset, LiminalTopologyTelemetrySnapshot, ObjectiveFact, RawPhaseProjectable,
+    CrystallizedAttractorRecord, DistortionDelta, DistortionTension, EgoDifferentialNet,
+    EgoIntentAxes, EpistemicHorizonReading, GatewayFrame, GcsoFourSectionView,
+    LiminalApertureField, LiminalBoundaryDelta, LiminalEgoField, LiminalEgoPreset,
+    LiminalTopologyTelemetrySnapshot, LiminalVennPartition, ObjectiveFact, RawPhaseProjectable,
     StigmergicFragmentEnsembleReport, StigmergicGranuleField, StigmergicVennSerendipityReport,
-    SubjectivePersona, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
-    GCSO_FOUR_SECTION_HEADER_BYTES,
+    SubjectivePersona, SystemConstraint, SystemSpineState, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    GCSO_FOUR_SECTION_HEADER_BYTES, MAX_DISTORTION_CHAIN_HOPS, MAX_EGO_PFRAME_NODES,
 };
 use crate::traits::primitives::{
     branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_crc32_ieee,
@@ -97,7 +99,7 @@ use crate::traits::primitives::{
     branchless_q7_add_sat, branchless_q7_neg_sat, branchless_rad_to_qdps_step_u8,
     branchless_relu_f32, branchless_select_f32, branchless_select_u32, branchless_select_u8,
     branchless_splitmix64, branchless_sqrt_f32, load_q7_words_64, store_q7_words_64,
-    swar_q7_qdps_filter_words_64, trail_phase_words_mut,
+    swar_q7_qdps_filter_words_64, trail_phase_words_mut, AttributionTag,
 };
 use crate::traits::primitives::{
     init_snapshot_header, pack_action_slot_tag, raw_byte_ranges_overlap,

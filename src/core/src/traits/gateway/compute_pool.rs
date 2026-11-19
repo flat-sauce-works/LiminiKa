@@ -1,9 +1,9 @@
 // name: src/core/src/traits/gateway/compute_pool.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Step 4: Label-Free Anonymous Compute Pool (`#![no_std]`, zero-alloc, zero-`fdiv`).
+//! Pre-Execution Label-Free Anonymous Compute Pool (`#![no_std]`, zero-alloc, zero-`fdiv`).
 //!
-//! Dual of the Phase A 8-lane memory workbench pool: manages up to 64 anonymous compute slots
+//! Dual of the 8-lane memory workbench pool: manages up to 64 anonymous compute slots
 //! (`u64` masks + Q0.7 contribution pheromones) and 8 anonymous execution lanes (externally
 //! bound to dGPU/CPU/iGPU) as a pure state machine that emits a pre-execution
 //! [`ComputeDispatchMask`].
@@ -134,12 +134,37 @@ pub struct ComputeDispatchMask {
     pub relative_pressure_q15: u16,
     /// Active Fast-Loop bypass pheromone floor in Q0.7.
     pub active_pheromone_floor_q7: u8,
-    /// Explicit alignment padding.
-    pub _pad: u8,
+    /// `1` when pre-inference `SystemSpine` token-level whole-steering bypass skips all layer hooks (`0` D2H syncs).
+    pub whole_token_steering_bypass: u8,
 }
 
 // SAFETY: `ComputeDispatchMask` is `#[repr(C)]` with primitive integer fields only.
 unsafe impl Pod for ComputeDispatchMask {}
+
+/// Observation bundle evaluated on each decode token to decide whole-token steering bypass (`0 alloc`, `0 fdiv`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TokenBypassObservation {
+    /// Non-zero on irreversible steps (e.g., prompt Prefill), forcing full-layer execution.
+    pub irreversible_step: u8,
+    /// Non-zero when `Liminal` boundaries are quiescent (`stationary_shortcut_ready != 0`).
+    pub liminal_stationary: u8,
+    /// $4p(1-p)$ boundary sensitivity in Q0.7 (`0..=127`).
+    pub boundary_sensitivity_q7: u8,
+    /// Non-zero when anti-phase repulsion (`slot_repulsion_mask != 0`) or Guard trap is active.
+    pub repulsion_active: u8,
+    /// Non-zero when exit logit entropy surged above baseline threshold.
+    pub exit_entropy_rising: u8,
+    /// Non-zero when active `EgoDifferentialNet` requires boundary modulation on this token.
+    pub ego_active_boundary: u8,
+    /// Minimum consecutive calm decode tokens required before re-engaging whole-token bypass (`>= 1`).
+    pub min_calm_dwell: u8,
+    /// Explicit alignment padding.
+    pub _pad: u8,
+}
+
+// SAFETY: `TokenBypassObservation` is `#[repr(C)]` with primitive `u8` fields only.
+unsafe impl Pod for TokenBypassObservation {}
 
 /// Label-free anonymous compute pool state machine (`#![no_std]`, zero-alloc, zero-`fdiv`).
 #[repr(C, align(64))]
@@ -177,6 +202,8 @@ pub struct AnonymousComputePool {
     pub lane_switch_dwell: u16,
     /// Remaining calm steps before Fast-Loop bypass may re-engage after an exit instability recovery.
     pub re_bypass_cooldown: u8,
+    /// Consecutive calm decode steps observed before token-level whole-steering bypass engages.
+    pub whole_token_calm_dwell: u8,
     /// Pool configuration thresholds.
     pub config: ComputePoolConfig,
 }
@@ -208,8 +235,48 @@ impl AnonymousComputePool {
             recovery_dwell: 0,
             lane_switch_dwell: 0,
             re_bypass_cooldown: 0,
+            whole_token_calm_dwell: 0,
             config,
         }
+    }
+
+    /// Evaluates token-level whole-steering bypass (`dispatch.whole_token_steering_bypass`) without
+    /// allocations or `fdiv`:
+    /// - **Immediate 1-step full recovery**: any irreversible step, repulsion activation, exit entropy
+    ///   spike, high $4p(1-p)$ boundary sensitivity (`>= 80`), or active Ego boundary triggers
+    ///   immediate `whole_token_steering_bypass = 0`, clears calm dwell, and arms `re_bypass_cooldown`.
+    /// - **Asymmetric re-bypass dwell**: only once `re_bypass_cooldown == 0`, `liminal_stationary != 0`,
+    ///   and calm dwell reaches `obs.min_calm_dwell.max(2)` does `whole_token_steering_bypass` flip to `1`.
+    #[inline]
+    pub fn evaluate_whole_token_steering_bypass(
+        &mut self,
+        obs: TokenBypassObservation,
+        dispatch: &mut ComputeDispatchMask,
+    ) -> bool {
+        let unsafe_or_boundary = (obs.irreversible_step != 0)
+            | (obs.repulsion_active != 0)
+            | (obs.exit_entropy_rising != 0)
+            | (obs.boundary_sensitivity_q7 >= 80)
+            | (obs.ego_active_boundary != 0);
+
+        if unsafe_or_boundary {
+            self.whole_token_calm_dwell = 0;
+            self.re_bypass_cooldown = self.config.min_re_bypass_dwell.max(2);
+            dispatch.whole_token_steering_bypass = 0;
+            return false;
+        }
+
+        if obs.liminal_stationary == 0 {
+            self.whole_token_calm_dwell = 0;
+            dispatch.whole_token_steering_bypass = 0;
+            return false;
+        }
+
+        self.whole_token_calm_dwell = self.whole_token_calm_dwell.saturating_add(1);
+        let req_dwell = obs.min_calm_dwell.max(2);
+        let ready = (self.re_bypass_cooldown == 0) & (self.whole_token_calm_dwell >= req_dwell);
+        dispatch.whole_token_steering_bypass = u8::from(ready);
+        ready
     }
 
     /// Triggers immediate 1-step full-layer recovery and arms asymmetric re-bypass dwell hysteresis.
@@ -403,7 +470,7 @@ impl AnonymousComputePool {
             slow_loop_migration_ready,
             relative_pressure_q15: rel_q15,
             active_pheromone_floor_q7: pheromone_floor_q7,
-            _pad: 0,
+            whole_token_steering_bypass: 0,
         }
     }
 

@@ -230,6 +230,124 @@ pub const EGO_TRIGGER_LAYER_DISTORTION: u8 = 1 << 5;
 /// Default active bitmask enabling all 5 deterministic `LiminalEgoField` triggers (`0x1F`).
 pub const EGO_TRIGGER_ALL_DEFAULT: u8 = 0x1F;
 
+// ===================================================================
+// 2c. 2 Primitives x 2 Drivers Lightweight Attribution Tags
+// ===================================================================
+
+/// Geometric substrate primitive classifier (`SubstrateKind`).
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SubstrateKind {
+    /// Boundary, cognitive aperture, and Venn partition domain (`0`).
+    #[default]
+    Liminal = 0,
+    /// Local 8-granule quorum, noise deadband, and volatile trace field (`1`).
+    Stigmergy = 1,
+}
+
+impl SubstrateKind {
+    /// Decodes a [`SubstrateKind`] branchlessly from bit 0 of a raw tag byte.
+    #[inline(always)]
+    #[must_use]
+    pub const fn from_bit(bit: u8) -> Self {
+        if (bit & 1) == 0 {
+            Self::Liminal
+        } else {
+            Self::Stigmergy
+        }
+    }
+}
+
+/// Orthogonal execution driver classifier (`DriverKind`).
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DriverKind {
+    /// Deterministic mechanical optimization spine / I-Frame baseline (`0`).
+    #[default]
+    System = 0,
+    /// Anisotropic intentional differential noise / P-Frame network (`1`).
+    Ego = 1,
+}
+
+impl DriverKind {
+    /// Decodes a [`DriverKind`] branchlessly from bit 0 of a shifted driver field.
+    #[inline(always)]
+    #[must_use]
+    pub const fn from_bit(bit: u8) -> Self {
+        if (bit & 1) == 0 {
+            Self::System
+        } else {
+            Self::Ego
+        }
+    }
+}
+
+/// Packed 2-bit structural attribution tag (`[Driver(1b) | Substrate(1b)]`) inside a 1-byte
+/// `Pod` wrapper for zero-cost telemetry and bypass provenance without marker-trait bloat.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AttributionTag(pub u8);
+
+impl AttributionTag {
+    /// Packs `(substrate, driver)` into a 2-bit attribution tag byte.
+    #[inline(always)]
+    #[must_use]
+    pub const fn new(substrate: SubstrateKind, driver: DriverKind) -> Self {
+        Self((substrate as u8) | ((driver as u8) << 1))
+    }
+
+    /// Attribution tag for (`Liminal`, `System`).
+    pub const LIMINAL_SYSTEM: Self = Self::new(SubstrateKind::Liminal, DriverKind::System);
+    /// Attribution tag for (`Liminal`, `Ego`).
+    pub const LIMINAL_EGO: Self = Self::new(SubstrateKind::Liminal, DriverKind::Ego);
+    /// Attribution tag for (`Stigmergy`, `System`).
+    pub const STIGMERGY_SYSTEM: Self = Self::new(SubstrateKind::Stigmergy, DriverKind::System);
+    /// Attribution tag for (`Stigmergy`, `Ego`).
+    pub const STIGMERGY_EGO: Self = Self::new(SubstrateKind::Stigmergy, DriverKind::Ego);
+
+    /// Returns the raw byte representation (`bits 0..=1`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn raw(self) -> u8 {
+        self.0 & 0x03
+    }
+
+    /// Extracts the [`SubstrateKind`] primitive axis (`bit 0`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn substrate(self) -> SubstrateKind {
+        SubstrateKind::from_bit(self.0)
+    }
+
+    /// Extracts the [`DriverKind`] orthogonal driver axis (`bit 1`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn driver(self) -> DriverKind {
+        DriverKind::from_bit(self.0 >> 1)
+    }
+
+    /// Returns `true` when attributed to the deterministic [`DriverKind::System`] spine.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_system(self) -> bool {
+        (self.0 & (1 << 1)) == 0
+    }
+
+    /// Returns `true` when attributed to the differential [`DriverKind::Ego`] operator.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_ego(self) -> bool {
+        (self.0 & (1 << 1)) != 0
+    }
+}
+
+/// Branchless constructor helper mirroring `AttributionTag::new`.
+#[inline(always)]
+#[must_use]
+pub const fn pack_attribution_tag(substrate: SubstrateKind, driver: DriverKind) -> u8 {
+    AttributionTag::new(substrate, driver).raw()
+}
+
 /// Default $8 \times 8$ Attractor Slot coupling bitmatrix (`u64`) enabling symmetric cross-slot
 /// synergy across all 8 parallel attractor domain slots.
 pub const DEFAULT_SLOT_COUPLING_MATRIX_8X8: u64 = 0xFFFF_FFFF_FFFF_FFFF;
@@ -750,6 +868,7 @@ impl_pod_for_primitives!(
     gcso_kv_keyframe_header_t,
     KvKeyframePacket,
     KvMotionDeltaPacket,
+    AttributionTag,
 );
 
 // SAFETY: Fixed-size arrays of `Pod` elements have contiguous layout with no extra padding traps.

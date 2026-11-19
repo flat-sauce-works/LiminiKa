@@ -16,8 +16,10 @@ use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::traits::gateway::{
     CognitiveCircuitPlasticity, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
     CoreTelemetryBank, CoreTelemetrySnapshot, LayerDistortionReport, LiminalEgoPreset,
-    RamPhaseKvStepOutcome, StigmergicScaleGranularity,
+    RamPhaseKvStepOutcome, StigmergicScaleGranularity, TokenBypassObservation,
 };
+use liminika_core::traits::primitives::ACTION_MODE_PHASE_REPULSE;
+use liminika_core::traits::telemetry::TRAIL_FLAG_REPULSION_ACTIVE;
 use tokenizers::Tokenizer;
 
 use crate::bake::argmax;
@@ -127,6 +129,294 @@ pub(crate) fn parse_kv_min_res<'a>(args: impl IntoIterator<Item = &'a str>) -> O
         }
     }
     None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ReflectMode {
+    Off,
+    Conditional,
+    #[default]
+    Always,
+}
+
+impl ReflectMode {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Conditional => "cond",
+            Self::Always => "on",
+        }
+    }
+}
+
+pub(crate) fn parse_reflect_mode<'a>(args: impl IntoIterator<Item = &'a str>) -> ReflectMode {
+    let mut no_reflect = false;
+    for arg in args {
+        if arg == "--no-reflect" {
+            no_reflect = true;
+        } else if let Some(val) = arg.strip_prefix("--reflect-mode=") {
+            if val.eq_ignore_ascii_case("off") {
+                return ReflectMode::Off;
+            }
+            if val.eq_ignore_ascii_case("conditional") || val.eq_ignore_ascii_case("cond") {
+                return ReflectMode::Conditional;
+            }
+            if val.eq_ignore_ascii_case("always") || val.eq_ignore_ascii_case("on") {
+                return ReflectMode::Always;
+            }
+        }
+    }
+    if no_reflect {
+        ReflectMode::Off
+    } else {
+        ReflectMode::Always
+    }
+}
+
+pub(crate) fn parse_ego_max_hops<'a>(args: impl IntoIterator<Item = &'a str>) -> u8 {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--ego-max-hops=") {
+            if let Ok(parsed) = val.parse::<u8>() {
+                return parsed.clamp(1, 4);
+            }
+        }
+    }
+    1
+}
+
+pub(crate) fn parse_temperature<'a>(args: impl IntoIterator<Item = &'a str>) -> f32 {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--temp=") {
+            if let Ok(parsed) = val.parse::<f32>() {
+                if parsed.is_finite() && parsed >= 0.0 {
+                    return parsed;
+                }
+            }
+        }
+    }
+    0.0
+}
+
+pub(crate) fn parse_rng_seed<'a>(args: impl IntoIterator<Item = &'a str>) -> u64 {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--seed=") {
+            if let Ok(parsed) = val.parse::<u64>() {
+                return parsed.max(1);
+            }
+        }
+    }
+    42
+}
+
+/// Computes normalized Top-K Shannon entropy in `[0.0, 1.0]` directly on an already-fetched CPU
+/// logits vector without issuing extra GPU->CPU D2H transfers.
+pub(crate) fn compute_top_k_logit_entropy(logits: &[f32], top_k: usize) -> f32 {
+    let k = top_k.min(logits.len());
+    if k < 2 {
+        return 0.0;
+    }
+    let mut top_vals: Vec<f32> = Vec::with_capacity(k);
+    for &v in logits {
+        if !v.is_finite() {
+            continue;
+        }
+        if top_vals.len() < k {
+            top_vals.push(v);
+            if top_vals.len() == k {
+                top_vals.sort_by(|a, b| a.total_cmp(b));
+            }
+        } else if v > top_vals[0] {
+            top_vals[0] = v;
+            for i in 0..(k - 1) {
+                if top_vals[i] > top_vals[i + 1] {
+                    top_vals.swap(i, i + 1);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    if top_vals.len() < 2 {
+        return 0.0;
+    }
+    let max_v = *top_vals.last().unwrap_or(&0.0);
+    let mut sum_exp = 0.0_f64;
+    let mut exps = Vec::with_capacity(top_vals.len());
+    for &v in &top_vals {
+        let e = f64::from(v - max_v).exp();
+        sum_exp += e;
+        exps.push(e);
+    }
+    if sum_exp <= 1e-12 {
+        return 0.0;
+    }
+    let mut h = 0.0_f64;
+    for e in exps {
+        let p = e / sum_exp;
+        if p > 1e-12 {
+            h -= p * p.ln();
+        }
+    }
+    let max_h = (top_vals.len() as f64).ln().max(1e-6);
+    (h / max_h).clamp(0.0, 1.0) as f32
+}
+
+/// Counts `(raw_hits, semantic_hits)` across `forbidden` keywords, suppressing false positives
+/// when the forbidden term appears strictly inside an explicit negation/refutation clause.
+pub(crate) fn count_semantic_forbid_hits(reply_text: &str, forbidden: &[String]) -> (usize, usize) {
+    let lower = reply_text.to_ascii_lowercase();
+    let normalized = lower
+        .replace(", instead ", " ; ")
+        .replace("; instead ", " ; ")
+        .replace(" instead, ", " ; ")
+        .replace(", but ", " ; ")
+        .replace(" but ", " ; ")
+        .replace(", however ", " ; ")
+        .replace(" however ", " ; ")
+        .replace(", whereas ", " ; ")
+        .replace(" whereas ", " ; ");
+    let clauses: Vec<&str> = normalized
+        .split(['.', ';', '!', '?', '\n'])
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .collect();
+
+    const PREFIX_NEG_CUES: &[&str] = &[
+        "does not ",
+        "do not ",
+        "did not ",
+        "is not ",
+        "are not ",
+        "cannot ",
+        "can't",
+        "doesn't",
+        "don't",
+        "isn't",
+        "aren't",
+        "doesnt ",
+        "dont ",
+        "never ",
+        "not ",
+        "no ",
+        "without ",
+        "neither ",
+        "nor ",
+        "avoid",
+        "replaces ",
+        "replacing ",
+        "reject",
+        "refute",
+        "false",
+        "incorrect",
+        "myth",
+        "contrary to",
+        "instead of ",
+        "rather than ",
+    ];
+    const SUFFIX_NEG_CUES: &[&str] = &[
+        " is false",
+        " are false",
+        " is incorrect",
+        " is not used",
+        " are not used",
+    ];
+
+    let mut raw_hits = 0_usize;
+    let mut semantic_hits = 0_usize;
+    for kw in forbidden {
+        let kw_l = kw.to_ascii_lowercase();
+        if kw_l.is_empty() {
+            continue;
+        }
+        let mut matched_raw = false;
+        let mut matched_semantic = false;
+        for &clause in &clauses {
+            let mut search_from = 0_usize;
+            while let Some(rel) = clause[search_from..].find(&kw_l) {
+                matched_raw = true;
+                let abs_pos = search_from + rel;
+                let prefix_start = abs_pos.saturating_sub(96);
+                let prefix = &clause[prefix_start..abs_pos];
+                let suffix_end = (abs_pos + kw_l.len() + 28).min(clause.len());
+                let suffix = &clause[abs_pos + kw_l.len()..suffix_end];
+                let is_negated = PREFIX_NEG_CUES.iter().any(|cue| prefix.contains(cue))
+                    || SUFFIX_NEG_CUES.iter().any(|cue| suffix.contains(cue));
+                if !is_negated {
+                    matched_semantic = true;
+                }
+                search_from = abs_pos + kw_l.len();
+                if search_from >= clause.len() {
+                    break;
+                }
+            }
+        }
+        if matched_raw {
+            raw_hits += 1;
+        }
+        if matched_semantic {
+            semantic_hits += 1;
+        }
+    }
+    (raw_hits, semantic_hits)
+}
+
+/// Samples the next token deterministically via `argmax` when `temperature <= 1e-4`, or
+/// top-40 temperature-scaled softmax with xorshift64* when `temperature > 1e-4`.
+pub(crate) fn sample_next_token(logits: &[f32], temperature: f32, rng_state: &mut u64) -> u32 {
+    if temperature <= 1e-4 || logits.len() < 2 {
+        return argmax(logits);
+    }
+    const TOP_K: usize = 40;
+    let mut top: Vec<(usize, f32)> = Vec::with_capacity(TOP_K);
+    for (idx, &v) in logits.iter().enumerate() {
+        if !v.is_finite() {
+            continue;
+        }
+        if top.len() < TOP_K {
+            top.push((idx, v));
+            if top.len() == TOP_K {
+                top.sort_by(|a, b| a.1.total_cmp(&b.1));
+            }
+        } else if v > top[0].1 {
+            top[0] = (idx, v);
+            for i in 0..(TOP_K - 1) {
+                if top[i].1 > top[i + 1].1 {
+                    top.swap(i, i + 1);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    if top.is_empty() {
+        return 0;
+    }
+    let max_v = top.last().map_or(0.0, |&(_, v)| v);
+    let inv_t = 1.0 / f64::from(temperature.max(1e-3));
+    let mut weights: Vec<(usize, f64)> = Vec::with_capacity(top.len());
+    let mut total = 0.0_f64;
+    for (idx, v) in top {
+        let w = (f64::from(v - max_v) * inv_t).exp();
+        total += w;
+        weights.push((idx, w));
+    }
+    if *rng_state == 0 {
+        *rng_state = 0x9E37_79B9_7F4A_7C15_u64;
+    }
+    let mut x = *rng_state;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    *rng_state = x;
+    let u = ((x.wrapping_mul(0x2545_F491_4F6C_DD1D_u64) >> 11) as f64) / ((1_u64 << 53) as f64);
+    let mut target = u * total;
+    for &(idx, w) in weights.iter().rev() {
+        if target <= w {
+            return idx as u32;
+        }
+        target -= w;
+    }
+    weights.last().map_or(0, |&(idx, _)| idx as u32)
 }
 
 #[derive(Default)]
@@ -465,8 +755,13 @@ pub(crate) struct SteerDecodeConfig<'a, 'c, 'e> {
     pub(crate) horizon_mode: HorizonAblationMode,
     pub(crate) escalation_provider: Option<&'e mut CorpusRecallEscalationProvider<'c>>,
     pub(crate) pressure_sim: PressureSimMode,
+    pub(crate) enable_pre_bypass: bool,
+    pub(crate) temperature: f32,
+    pub(crate) rng_seed: u64,
     pub(crate) steer_bypass_hits: usize,
     pub(crate) steer_eligible_layers: usize,
+    pub(crate) whole_token_bypass_hits: usize,
+    pub(crate) decode_tokens_total: usize,
     pub(crate) instability_recoveries: usize,
 }
 
@@ -500,13 +795,17 @@ pub(crate) fn generate_steered_reply_with_offset(
         steer_eligible_layers: 0,
     };
     let t_dec = Instant::now();
-    let prefill_dispatch = steer.adapter.step_compute_dispatch(SystemPressureReading {
+    steer.adapter.compute_pool_mut().whole_token_calm_dwell = 0;
+    steer.adapter.compute_pool_mut().re_bypass_cooldown = 0;
+    steer.adapter.action_hub_mut().last_entropy_h_tilde = 0.0;
+    let mut prefill_dispatch = steer.adapter.step_compute_dispatch(SystemPressureReading {
         frame_time_pressure_q15: 8192,
         bandwidth_pressure_q15: 8192,
         l3_load_pressure_q15: 8192,
         irreversible_step: 1,
         _pad: 0,
     });
+    prefill_dispatch.whole_token_steering_bypass = 0;
     steer.compute_dispatch = Some(prefill_dispatch);
     let (mut logits, _, _) =
         model.forward_tokens(&ids, start_offset, Some(&mut steer), cfg.use_steer, false)?;
@@ -516,19 +815,34 @@ pub(crate) fn generate_steered_reply_with_offset(
 
     const MAX_GEN_TOKENS: usize = 64;
     let mut gen_ids = Vec::with_capacity(MAX_GEN_TOKENS);
+    let mut rng_state = cfg.rng_seed.max(1);
+    let mut entropy_sum = 0.0f32;
+    let mut entropy_count = 0u32;
     for offset in (start_offset + ids.len()..).take(MAX_GEN_TOKENS) {
-        let next = argmax(&logits);
+        let next = sample_next_token(&logits, cfg.temperature, &mut rng_state);
         if next == 199999 || next == 200020 {
             gen_ids.push(next);
             break;
         }
         gen_ids.push(next);
+        let tok_was_whole_bypass = steer
+            .compute_dispatch
+            .is_some_and(|d| d.whole_token_steering_bypass != 0);
+        if cfg.use_steer {
+            cfg.decode_tokens_total += 1;
+            if tok_was_whole_bypass {
+                cfg.whole_token_bypass_hits += 1;
+            }
+        }
         let t_tok = Instant::now();
         let (next_logits, _, _) =
             model.forward_tokens(&[next], offset, Some(&mut steer), cfg.use_steer, false)?;
         let tok_ms = t_tok.elapsed().as_secs_f64() * 1000.0;
         let measured_q15 = ((tok_ms / 120.0).clamp(0.0, 1.0) * 32767.0) as u16;
-        if gen_ids.len() == 4 && steer.adapter.compute_pool().baseline_pressure_q15 == 8192 {
+        if !matches!(cfg.pressure_sim, PressureSimMode::Off)
+            && gen_ids.len() == 4
+            && steer.adapter.compute_pool().baseline_pressure_q15 == 8192
+        {
             steer
                 .adapter
                 .compute_pool_mut()
@@ -536,28 +850,67 @@ pub(crate) fn generate_steered_reply_with_offset(
         }
         let base_p = steer.adapter.compute_pool().baseline_pressure_q15;
         let pressure_q15 = match cfg.pressure_sim {
-            PressureSimMode::Off => measured_q15,
+            PressureSimMode::Off => base_p,
             PressureSimMode::Elevated => measured_q15.max(base_p.saturating_add(6144).min(32767)),
             PressureSimMode::Surge => measured_q15.max(base_p.saturating_add(14336).min(32767)),
         };
-        let exit_entropy = steer.adapter.action_hub().last_entropy_h_tilde;
-        if exit_entropy > 0.65 {
+        let logit_entropy = compute_top_k_logit_entropy(&next_logits, 16);
+        entropy_sum += logit_entropy;
+        entropy_count += 1;
+        if tok_was_whole_bypass {
+            steer.adapter.action_hub_mut().last_entropy_h_tilde = logit_entropy;
+        }
+        let exit_entropy_q7 = ((logit_entropy - 0.15).max(0.0) * 127.0).clamp(0.0, 127.0) as u8;
+        let repulsion_active = (steer.adapter.action_hub().slot_repulsion_mask != 0)
+            || ((steer.trail.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0)
+            || ((((steer.trail.current_ptr >> 48) as u8) & ACTION_MODE_PHASE_REPULSE) != 0);
+        let sens_q7 = steer.adapter.last_venn_partition().boundary_sensitivity_q7;
+        let guard_prox_q7 = if repulsion_active { 88 } else { sens_q7 >> 2 };
+        let active_overdrive = repulsion_active && steer.adapter.ego_field().is_active();
+        steer.adapter.step_distortion_tension_hot_path(
+            exit_entropy_q7,
+            guard_prox_q7,
+            active_overdrive,
+        );
+        let entropy_surge = logit_entropy > 0.85;
+        if entropy_surge {
             steer.adapter.signal_compute_instability();
             cfg.instability_recoveries += 1;
         }
-        let tok_dispatch = steer.adapter.step_compute_dispatch(SystemPressureReading {
+        let mut tok_dispatch = steer.adapter.step_compute_dispatch(SystemPressureReading {
             frame_time_pressure_q15: pressure_q15,
             bandwidth_pressure_q15: pressure_q15,
             l3_load_pressure_q15: pressure_q15 >> 1,
             irreversible_step: 0,
             _pad: 0,
         });
-        let exit_reward = if exit_entropy < 0.55 { 56 } else { 96 };
+        if cfg.use_steer && cfg.enable_pre_bypass {
+            let ego_active_boundary = steer.adapter.ego_field().is_active() && sens_q7 >= 80;
+            let obs = TokenBypassObservation {
+                irreversible_step: 0,
+                liminal_stationary: u8::from(logit_entropy < 0.78 && sens_q7 < 80),
+                boundary_sensitivity_q7: sens_q7,
+                repulsion_active: u8::from(repulsion_active),
+                exit_entropy_rising: u8::from(entropy_surge),
+                ego_active_boundary: u8::from(ego_active_boundary),
+                min_calm_dwell: 2,
+                _pad: 0,
+            };
+            let _ = steer
+                .adapter
+                .evaluate_whole_token_bypass(obs, &mut tok_dispatch);
+        } else {
+            tok_dispatch.whole_token_steering_bypass = 0;
+        }
+        let exit_reward = if logit_entropy < 0.55 { 56 } else { 96 };
         steer
             .adapter
             .commit_compute_exit_reward(tok_dispatch.execute_mask, exit_reward);
         steer.compute_dispatch = Some(tok_dispatch);
         logits = next_logits;
+    }
+    if entropy_count > 0 {
+        steer.adapter.action_hub_mut().last_entropy_h_tilde = entropy_sum / entropy_count as f32;
     }
     cfg.steer_bypass_hits += steer.steer_bypass_hits;
     cfg.steer_eligible_layers += steer.steer_eligible_layers;
@@ -624,4 +977,66 @@ pub(crate) fn critique_generated_draft(
             adapter.ego_field(),
         ),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn semantic_forbid_hits_filters_explicit_negation_clauses() {
+        let forb = vec![
+            "PyTorch".to_string(),
+            "24 GB".to_string(),
+            "XML".to_string(),
+            "LoRA".to_string(),
+        ];
+        // (a) Negation/refutation sentence
+        assert_eq!(
+            count_semantic_forbid_hits(
+                "LiminiKa does not fine-tune PyTorch weights or require 24 GB VRAM.",
+                &forb
+            ),
+            (2, 0)
+        );
+        // (b) Genuine affirmative hallucination
+        assert_eq!(
+            count_semantic_forbid_hits("LiminiKa uses PyTorch training on 24 GB VRAM.", &forb),
+            (2, 2)
+        );
+        // (c) Mixed negation + affirmative conjunction
+        assert_eq!(
+            count_semantic_forbid_hits("It does not use XML, instead it uses LoRA.", &forb),
+            (2, 1)
+        );
+        // (d) Contrastive comparison ("rather than") & inflected negation cues
+        assert_eq!(
+            count_semantic_forbid_hits("LiminiKa steers phases rather than LoRA weights.", &forb),
+            (1, 0)
+        );
+        assert_eq!(
+            count_semantic_forbid_hits(
+                "LiminiKa avoids PyTorch fine-tuning and replaces LoRA adapters.",
+                &forb
+            ),
+            (2, 0)
+        );
+    }
+
+    #[test]
+    fn top_k_logit_entropy_bounds_and_seeded_sampling_are_deterministic() {
+        let sharp = [12.0_f32, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let flat = [1.0_f32; 6];
+        assert!(compute_top_k_logit_entropy(&sharp, 6) < 0.05);
+        assert!(compute_top_k_logit_entropy(&flat, 6) > 0.99);
+
+        let logits = [0.5_f32, 2.0, 1.9, 1.8, 0.1, 0.2];
+        let mut s1 = 42_u64;
+        let mut s2 = 42_u64;
+        assert_eq!(sample_next_token(&logits, 0.0, &mut s1), 1);
+        assert_eq!(
+            sample_next_token(&logits, 0.8, &mut s1),
+            sample_next_token(&logits, 0.8, &mut s2)
+        );
+    }
 }

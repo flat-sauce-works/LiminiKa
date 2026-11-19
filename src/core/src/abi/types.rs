@@ -10,14 +10,14 @@ pub const GCSO_ABI_VERSION_MAJOR: u32 = 0;
 /// Unified GCSO C-ABI Minor Version Component.
 pub const GCSO_ABI_VERSION_MINOR: u32 = 1;
 /// Unified GCSO C-ABI Patch Version Component.
-pub const GCSO_ABI_VERSION_PATCH: u32 = 2;
-/// Hexadecimal Representation of the active Unified ABI Version (`0x0000_0102`).
+pub const GCSO_ABI_VERSION_PATCH: u32 = 3;
+/// Hexadecimal Representation of the active Unified ABI Version (`0x0000_0103`).
 pub const GCSO_ABI_VERSION_HEX: u32 =
     (GCSO_ABI_VERSION_MAJOR << 16) | (GCSO_ABI_VERSION_MINOR << 8) | GCSO_ABI_VERSION_PATCH;
 /// String Representation of the active Unified ABI Version (derived from `Cargo.toml`).
 pub const GCSO_ABI_VERSION_STRING: &str = env!("CARGO_PKG_VERSION");
 /// NUL-terminated C string representation of the active Unified ABI Version.
-pub const GCSO_ABI_VERSION_CSTR: &core::ffi::CStr = c"0.1.2";
+pub const GCSO_ABI_VERSION_CSTR: &core::ffi::CStr = c"0.1.3";
 
 const _: () = {
     let c_bytes = GCSO_ABI_VERSION_CSTR.to_bytes();
@@ -203,6 +203,18 @@ pub type gcso_ego_intent_axes_t = EgoIntentAxes;
 pub type gcso_stigmergic_fragment_ensemble_report_t = StigmergicFragmentEnsembleReport;
 /// C-ABI type alias for the 64-byte Wide-Aperture Subjective Ego Field (`LiminalEgoField`).
 pub type gcso_liminal_ego_field_t = LiminalEgoField;
+/// C-ABI type alias for the 1-byte Attribution Tag (`AttributionTag`).
+pub type gcso_attribution_tag_t = AttributionTag;
+/// C-ABI type alias for the 64-byte Unified Substrate (`CognitiveSubstrate`).
+pub type gcso_cognitive_substrate_t = CognitiveSubstrate;
+/// C-ABI type alias for the 16-byte 4-Region Branchless Venn Partition (`LiminalVennPartition`).
+pub type gcso_liminal_venn_partition_t = LiminalVennPartition;
+/// C-ABI type alias for the 32-byte Physical Spine State (`SystemSpineState`).
+pub type gcso_system_spine_state_t = SystemSpineState;
+/// C-ABI type alias for the 128-byte Directed P-Frame Packet (`DistortionDelta`).
+pub type gcso_distortion_delta_t = DistortionDelta;
+/// C-ABI type alias for the 32-byte Asymmetric Homeostatic Tension (`DistortionTension`).
+pub type gcso_distortion_tension_t = DistortionTension;
 
 // ===================================================================
 // Strongly-Typed Opaque Handles
@@ -899,4 +911,34 @@ const _: () = {
     assert!(offset_of!(gcso_kv_keyframe_header_t, frame_type) == 0);
     assert!(offset_of!(gcso_kv_keyframe_header_t, icache_payload_offset) == 24);
     assert!(offset_of!(gcso_kv_keyframe_header_t, pcache_payload_offset) == 32);
+    assert!(size_of::<gcso_attribution_tag_t>() == 1 && align_of::<gcso_attribution_tag_t>() == 1);
+    assert!(
+        size_of::<gcso_cognitive_substrate_t>() == 64
+            && align_of::<gcso_cognitive_substrate_t>() == 64
+    );
+    assert!(offset_of!(gcso_cognitive_substrate_t, liminal) == 0);
+    assert!(offset_of!(gcso_cognitive_substrate_t, stigmergy) == 32);
+    assert!(
+        size_of::<gcso_liminal_venn_partition_t>() == 16
+            && align_of::<gcso_liminal_venn_partition_t>() == 16
+    );
+    assert!(offset_of!(gcso_liminal_venn_partition_t, known_unknown_mask) == 4);
+    assert!(offset_of!(gcso_liminal_venn_partition_t, boundary_sensitivity_q7) == 8);
+    assert!(
+        size_of::<gcso_system_spine_state_t>() == 32
+            && align_of::<gcso_system_spine_state_t>() == 16
+    );
+    assert!(offset_of!(gcso_system_spine_state_t, pinned_compute_mask) == 8);
+    assert!(offset_of!(gcso_system_spine_state_t, whole_token_bypass_active) == 24);
+    assert!(
+        size_of::<gcso_distortion_delta_t>() == 128 && align_of::<gcso_distortion_delta_t>() == 64
+    );
+    assert!(offset_of!(gcso_distortion_delta_t, intent_delta) == 16);
+    assert!(offset_of!(gcso_distortion_delta_t, delta_phase_q7) == 64);
+    assert!(
+        size_of::<gcso_distortion_tension_t>() == 32
+            && align_of::<gcso_distortion_tension_t>() == 16
+    );
+    assert!(offset_of!(gcso_distortion_tension_t, immediate_damping_events) == 8);
+    assert!(offset_of!(gcso_distortion_tension_t, slow_excitation_events) == 12);
 };

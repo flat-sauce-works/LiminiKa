@@ -81,7 +81,7 @@ const _: () = {
                 | (crate::abi::GCSO_ABI_VERSION_MINOR << 8)
                 | crate::abi::GCSO_ABI_VERSION_PATCH)
     );
-    assert!(GCSO_ABI_VERSION_HEX >= 0x0000_0102);
+    assert!(GCSO_ABI_VERSION_HEX >= 0x0000_0103);
     assert!(MAX_ATTRACTOR_DOMAINS == 8);
     assert!(MAX_ANCHORS_PER_FIELD == 64);
     assert!(MAX_ATTENTION_HEADS == 64);

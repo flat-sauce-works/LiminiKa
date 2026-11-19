@@ -1648,6 +1648,24 @@ impl AutonomousCoreLayerStack {
         }
     }
 
+    /// Returns a 64-byte [`CognitiveSubstrate`] view uniting the two foundational primitives
+    /// (`LiminalApertureField` + `StigmergicGranuleField`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn substrate(&self) -> super::distortion::CognitiveSubstrate {
+        super::distortion::CognitiveSubstrate {
+            liminal: self.liminal_layer,
+            stigmergy: self.stigmergic_layer,
+        }
+    }
+
+    /// Replaces the `Liminal` + `Stigmergy` halves from `substrate`.
+    #[inline(always)]
+    pub const fn set_substrate(&mut self, substrate: super::distortion::CognitiveSubstrate) {
+        self.liminal_layer = substrate.liminal;
+        self.stigmergic_layer = substrate.stigmergy;
+    }
+
     /// Branchlessly co-adapts Layer 0 (`LiminalApertureField`) and Layer 1 (`StigmergicGranuleField`)
     /// with cross-layer feedback (serendipitous discovery in Layer 1 widens Layer 0's horizon).
     #[inline]

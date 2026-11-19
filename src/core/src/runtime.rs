@@ -48,19 +48,20 @@ use crate::traits::rope::{PhaseSteeringGeometryExt, RopeSteeringTarget};
 use crate::traits::{
     abi_version, abi_version_string, apply_latent_horizon_slots, query_capability, ActionHub,
     ActionHubGatewayExt, AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut16,
-    AlignedSliceMut32, AnonymousComputePool, AttractorField, AutonomousCoreLayerStack,
-    CausalProvenanceReport, CausalProvenanceSignal, ComputeDispatchMask,
-    ContrastivePhaseBloomFilter, CoreTelemetryBank, CoreTelemetrySnapshot, EdbcBranchController,
-    EntropyEvaluator, EpistemicHorizonReading, EpistemicRegime, FastPathLedger, GatewayFrame,
+    AlignedSliceMut32, AnonymousComputePool, AttractorField, AttributionTag,
+    AutonomousCoreLayerStack, CausalProvenanceReport, CausalProvenanceSignal, ComputeDispatchMask,
+    ContrastivePhaseBloomFilter, CoreTelemetryBank, CoreTelemetrySnapshot, DistortionTension,
+    DriverKind, EdbcBranchController, EgoDifferentialNet, EntropyEvaluator,
+    EpistemicHorizonReading, EpistemicRegime, FastPathLedger, GatewayFrame,
     GatewayPhaseSteeringExt, GcsoResult, HorizonDwellState, HorizonEscalationProvider,
     HorizonEscalationRequest, HorizonTriggerInput, KvKeyframeCache, LatentHorizonSlot,
-    LiminalBoundaryDelta, ManifoldGatewaySignal, MappedStorage, MultiDomainAttractorSpace,
-    PersonaPatcher, PhaseSteering, Pod, PointerActionHub, StigmergicActionPtrOps,
-    StigmergicChunkOps, StigmergicTrailOps, StigmergicVennSerendipityReport,
-    SystemConstraintSignal, SystemPressureReading, TelemetryCapturePolicy, ACTION_MODE_LAYER_SKIP,
-    ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE,
-    DEFAULT_SLOT_COUPLING_MATRIX_8X8, ROOT_CAUSE_SYSTEM_QOS_THROTTLE, TRAIL_FLAG_REPULSION_ACTIVE,
-    WORKBENCH_LANE_FLAG_REPULSION,
+    LiminalBoundaryDelta, LiminalVennPartition, ManifoldGatewaySignal, MappedStorage,
+    MultiDomainAttractorSpace, PersonaPatcher, PhaseSteering, Pod, PointerActionHub,
+    StigmergicActionPtrOps, StigmergicChunkOps, StigmergicTrailOps,
+    StigmergicVennSerendipityReport, SubstrateKind, SystemConstraintSignal, SystemPressureReading,
+    SystemSpineState, TelemetryCapturePolicy, ACTION_MODE_LAYER_SKIP, ACTION_MODE_SUBHEAD_ROUTE,
+    ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+    ROOT_CAUSE_SYSTEM_QOS_THROTTLE, TRAIL_FLAG_REPULSION_ACTIVE, WORKBENCH_LANE_FLAG_REPULSION,
 };
 
 use crate::traits::branchless::{
@@ -437,6 +438,10 @@ pub struct RuntimeContext {
     probe_baseline: ManifoldProbeBaseline,
     telemetry: CoreTelemetryBank,
     compute_pool: AnonymousComputePool,
+    system_spine: SystemSpineState,
+    last_venn_partition: LiminalVennPartition,
+    distortion_tension: DistortionTension,
+    ego_differential_net: EgoDifferentialNet,
 }
 
 impl RuntimeContext {
@@ -479,6 +484,10 @@ impl RuntimeContext {
             probe_baseline: ManifoldProbeBaseline::new(),
             telemetry: CoreTelemetryBank::default(),
             compute_pool: AnonymousComputePool::default(),
+            system_spine: SystemSpineState::new(),
+            last_venn_partition: LiminalVennPartition::default(),
+            distortion_tension: DistortionTension::default(),
+            ego_differential_net: EgoDifferentialNet::default(),
         })
     }
 
@@ -588,18 +597,67 @@ impl RuntimeContext {
         &mut self.telemetry
     }
 
-    /// Returns a shared reference to the Step 4 label-free [`AnonymousComputePool`].
+    /// Returns a shared reference to the label-free [`AnonymousComputePool`].
     #[inline(always)]
     #[must_use]
     pub const fn compute_pool(&self) -> &AnonymousComputePool {
         &self.compute_pool
     }
 
-    /// Returns a mutable reference to the Step 4 label-free [`AnonymousComputePool`].
+    /// Returns a mutable reference to the label-free [`AnonymousComputePool`].
     #[inline(always)]
     #[must_use]
     pub fn compute_pool_mut(&mut self) -> &mut AnonymousComputePool {
         &mut self.compute_pool
+    }
+
+    /// Returns a shared reference to the [`SystemSpineState`] (`DriverKind::System`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn system_spine(&self) -> &SystemSpineState {
+        &self.system_spine
+    }
+
+    /// Returns a mutable reference to the [`SystemSpineState`].
+    #[inline(always)]
+    #[must_use]
+    pub fn system_spine_mut(&mut self) -> &mut SystemSpineState {
+        &mut self.system_spine
+    }
+
+    /// Returns the most recent branchless [`LiminalVennPartition`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn last_venn_partition(&self) -> &LiminalVennPartition {
+        &self.last_venn_partition
+    }
+
+    /// Returns a shared reference to the live [`DistortionTension`] homeostatic state.
+    #[inline(always)]
+    #[must_use]
+    pub const fn distortion_tension(&self) -> &DistortionTension {
+        &self.distortion_tension
+    }
+
+    /// Returns a mutable reference to the live [`DistortionTension`] homeostatic state.
+    #[inline(always)]
+    #[must_use]
+    pub fn distortion_tension_mut(&mut self) -> &mut DistortionTension {
+        &mut self.distortion_tension
+    }
+
+    /// Returns a shared reference to the inline [`EgoDifferentialNet`] P-Frame chain.
+    #[inline(always)]
+    #[must_use]
+    pub const fn ego_differential_net(&self) -> &EgoDifferentialNet {
+        &self.ego_differential_net
+    }
+
+    /// Returns a mutable reference to the inline [`EgoDifferentialNet`] P-Frame chain.
+    #[inline(always)]
+    #[must_use]
+    pub fn ego_differential_net_mut(&mut self) -> &mut EgoDifferentialNet {
+        &mut self.ego_differential_net
     }
 
     /// Evaluates external `+ System` Gauge-Zero pressure and emits a pre-execution
@@ -609,7 +667,7 @@ impl RuntimeContext {
         self.compute_pool.step_dispatch(reading)
     }
 
-    /// Updates Step 4 slot contribution pheromones strictly from an exit scalar reward (`0..=127`)
+    /// Updates slot contribution pheromones strictly from an exit scalar reward (`0..=127`)
     /// without mid-layer D2H synchronization.
     #[inline]
     pub fn commit_compute_exit_reward(&mut self, executed_mask: u64, reward_q7: u8) {
@@ -1187,6 +1245,10 @@ impl RuntimeContext {
         self.last_horizon = EpistemicHorizonReading::default();
         self.last_venn_report = StigmergicVennSerendipityReport::default();
         self.active_horizon_slots_mask = 0;
+        self.system_spine = SystemSpineState::new();
+        self.last_venn_partition = LiminalVennPartition::default();
+        self.distortion_tension = DistortionTension::new(false);
+        self.ego_differential_net = EgoDifferentialNet::default();
         Ok(())
     }
 
@@ -1339,15 +1401,48 @@ impl RuntimeContext {
             return Err(crate::abi::GCSO_ERROR_INVALID_ARGUMENT);
         }
 
-        // 1. Vertical 3-layer core stack piercing (Liminal -> Stigmergic -> Ego) + temporal delta.
+        // 1. Compute pure `SystemSpine` I-Frame baseline first, then pierce `Liminal` -> `Stigmergy`
+        //    -> `EgoDifferentialNet` and enforce physical `pinned` isolation.
         let prev_layer0 = self.core_layers.liminal_layer;
         let prev_venn = self.core_layers.stigmergic_layer.venn_overlap_mask;
-        let (mut frame, mut frm_w) = signal.synthesize_gateway_with_core_layers(
+        let raw_sys_frame = signal.synthesize_gateway_with_aperture_from_stack(&self.core_layers);
+        let sys_baseline = self.core_layers.modulate_gateway_frame_branchless(
+            raw_sys_frame,
+            &self.last_horizon,
+            &self.last_venn_report,
+        );
+        let (ego_frame, _ego_w) = signal.synthesize_gateway_with_core_layers(
             &mut self.core_layers,
             &self.last_boundary_delta,
             &self.last_horizon,
             &self.last_venn_report,
         );
+        self.core_layers.liminal_layer.active_aperture_mask =
+            self.system_spine.mask_ego_aperture_edits(
+                prev_layer0.active_aperture_mask,
+                self.core_layers.liminal_layer.active_aperture_mask,
+            );
+        let (pframe_frame, pframe_delta_q7, pframe_hops, pframe_entry) = self
+            .ego_differential_net
+            .evaluate_pframe_chain_with_entry_branchless(
+                &self.core_layers.ego_layer,
+                &self.system_spine,
+                &self.last_venn_partition,
+                &self.core_layers.stigmergic_layer,
+                &self.distortion_tension,
+                ego_frame,
+            );
+        let candidate_frame = if pframe_hops > 0 {
+            self.ego_differential_net
+                .record_chain_activation(usize::from(pframe_entry), pframe_hops);
+            pframe_frame
+        } else {
+            ego_frame
+        };
+        let mut frame = self
+            .system_spine
+            .enforce_pinned_isolation_branchless(&sys_baseline, candidate_frame);
+        let mut frm_w = *frame.phase_words_ref();
         self.last_boundary_delta = LiminalBoundaryDelta::compute_branchless(
             &prev_layer0,
             &self.core_layers.liminal_layer,
@@ -1480,6 +1575,39 @@ impl RuntimeContext {
             trigger.is_destabilized(),
             quiescent_dwell,
             qos_throttled,
+        );
+        let exit_ent_q7 = (branchless_clamp_f32(edbc_st.moving_z_entropy, 0.0, 1.0) * 127.0) as u8;
+        let guard_prox_q7 =
+            (branchless_clamp_f32(frame.repulsion_severity, 0.0, 1.0) * 127.0) as u8;
+        let active_overdrive = matches!(step_decision, StigmergicActionDecision::RepulsionEscape)
+            && self.core_layers.ego_layer.is_active();
+        self.distortion_tension.step_hot_path_branchless(
+            pframe_delta_q7,
+            self.last_venn_partition.boundary_sensitivity_q7,
+            exit_ent_q7,
+            guard_prox_q7,
+            active_overdrive,
+        );
+        let step_tag = AttributionTag::new(
+            if self.last_venn_partition.sandbox_eligible != 0
+                || self.core_layers.stigmergic_layer.venn_overlap_mask != 0
+            {
+                SubstrateKind::Stigmergy
+            } else {
+                SubstrateKind::Liminal
+            },
+            if pframe_hops > 0 || self.core_layers.ego_layer.last_intervened_mask != 0 {
+                DriverKind::Ego
+            } else {
+                DriverKind::System
+            },
+        );
+        self.telemetry.record_two_by_two_step(
+            step_tag.raw(),
+            self.system_spine.whole_token_bypass_active != 0,
+            &self.last_venn_partition,
+            &self.distortion_tension,
+            pframe_hops,
         );
         self.telemetry.record_step(
             step_decision,

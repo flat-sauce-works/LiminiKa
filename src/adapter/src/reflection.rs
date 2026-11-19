@@ -361,12 +361,67 @@ pub trait AttractorTrajectoryEvaluator {
     }
 }
 
+/// Inputs evaluated by [`ManifoldReflectionEvaluator::should_trigger_reflection`] to bypass
+/// redundant critique passes on calm grounded queries while firing selectively on boundary regions,
+/// undigested Known Unknowns ($O \setminus S$), exit entropy spikes, or Guard traps.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReflectionGateInput {
+    /// $4p(1-p)$ boundary sensitivity in Q0.7 (`0..=127`) from [`liminika_core::traits::gateway::LiminalVennPartition`].
+    pub boundary_sensitivity_q7: u8,
+    /// True when the query contains an undigested Known Unknown ($O \setminus S$) exterior pointer.
+    pub has_undigested_known_unknown: bool,
+    /// Exit EDBC / top-k entropy (`0.0..=1.0`).
+    pub exit_entropy_h_tilde: f32,
+    /// Guard conflict margin (`max_guard_score - top1_fact_score`).
+    pub guard_conflict_margin: f32,
+    /// True when the query lies strictly inside True Void ($\overline{S \cup O}$) without Guard threat.
+    pub is_true_void: bool,
+    /// Minimum Q0.7 $4p(1-p)$ boundary sensitivity required to trigger reflection (default `64`).
+    pub min_boundary_sensitivity_q7: u8,
+    /// Minimum exit entropy threshold required to trigger reflection (default `0.62`).
+    pub entropy_trigger_thresh: f32,
+    /// Guard conflict margin floor above which reflection fires unconditionally (default `0.02`).
+    pub guard_trigger_margin: f32,
+}
+
+impl Default for ReflectionGateInput {
+    fn default() -> Self {
+        Self {
+            boundary_sensitivity_q7: 0,
+            has_undigested_known_unknown: false,
+            exit_entropy_h_tilde: 0.0,
+            guard_conflict_margin: -0.25,
+            is_true_void: false,
+            min_boundary_sensitivity_q7: 64,
+            entropy_trigger_thresh: 0.62,
+            guard_trigger_margin: 0.02,
+        }
+    }
+}
+
 /// Default [`AttractorTrajectoryEvaluator`] combining Fact-basin overlap, `Liminal` drift checks,
 /// and `Guard` contradiction margins via `liminika_core` [`GatewayFrame`] synthesis.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ManifoldReflectionEvaluator;
 
 impl ManifoldReflectionEvaluator {
+    /// Returns `true` when reflection critique should run (Conditional Reflection Bypass):
+    /// skips calm inside-basin hits and pure True Void queries, triggering only on high $4p(1-p)$
+    /// boundary sensitivity, undigested $O \setminus S$, exit entropy spikes, or Guard conflict.
+    #[must_use]
+    pub fn should_trigger_reflection(&self, input: &ReflectionGateInput) -> bool {
+        if input.is_true_void
+            && input.guard_conflict_margin <= input.guard_trigger_margin
+            && input.exit_entropy_h_tilde < input.entropy_trigger_thresh
+        {
+            return false;
+        }
+        input.boundary_sensitivity_q7 >= input.min_boundary_sensitivity_q7
+            || input.has_undigested_known_unknown
+            || input.exit_entropy_h_tilde >= input.entropy_trigger_thresh
+            || input.guard_conflict_margin > input.guard_trigger_margin
+    }
+
     fn anchor_overlap(
         query: &TrajectoryManifoldSnapshot,
         draft: &TrajectoryManifoldSnapshot,
@@ -1071,5 +1126,50 @@ mod tests {
         );
         assert_eq!(ood_crit.trigger, ReflectionTriggerKind::VoidHallucination);
         assert!(ood_crit.directive.suppress_injection);
+    }
+
+    #[test]
+    fn conditional_reflection_gate_skips_calm_hits_and_triggers_on_boundary_or_entropy() {
+        let eval = ManifoldReflectionEvaluator;
+        let calm = ReflectionGateInput {
+            boundary_sensitivity_q7: 16,
+            has_undigested_known_unknown: false,
+            exit_entropy_h_tilde: 0.25,
+            guard_conflict_margin: -0.30,
+            is_true_void: false,
+            ..ReflectionGateInput::default()
+        };
+        assert!(!eval.should_trigger_reflection(&calm));
+
+        let void_calm = ReflectionGateInput {
+            is_true_void: true,
+            boundary_sensitivity_q7: 96, // ignored under peaceful True Void
+            ..calm
+        };
+        assert!(!eval.should_trigger_reflection(&void_calm));
+
+        let boundary_hit = ReflectionGateInput {
+            boundary_sensitivity_q7: 80,
+            ..calm
+        };
+        assert!(eval.should_trigger_reflection(&boundary_hit));
+
+        let known_unknown = ReflectionGateInput {
+            has_undigested_known_unknown: true,
+            ..calm
+        };
+        assert!(eval.should_trigger_reflection(&known_unknown));
+
+        let entropy_spike = ReflectionGateInput {
+            exit_entropy_h_tilde: 0.71,
+            ..calm
+        };
+        assert!(eval.should_trigger_reflection(&entropy_spike));
+
+        let guard_trap = ReflectionGateInput {
+            guard_conflict_margin: 0.08,
+            ..calm
+        };
+        assert!(eval.should_trigger_reflection(&guard_trap));
     }
 }

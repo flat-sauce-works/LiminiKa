@@ -121,6 +121,12 @@ pub struct DynamicAttractorRecall<'a> {
     pub recalled_facts: Vec<(&'a TextAttractorEntry, f32)>,
     /// Top-K recalled Persona entries (suppressed only on Guard repulsion).
     pub recalled_personas: Vec<(&'a TextAttractorEntry, f32)>,
+    /// Branchless 4-region Venn partition (`S & O`, `S \ O`, `O \ S`, True Void) for this query.
+    pub venn_partition: LiminalVennPartition,
+    /// Non-copy exterior Known Unknown ($O \setminus S$) pointers routed strictly through sandbox staging.
+    pub exterior_sandbox_facts: Vec<(&'a TextAttractorEntry, f32)>,
+    /// True when a validated Known Unknown ($O \setminus S$) exterior pointer was staged via $S \cap O$ bridge.
+    pub is_known_unknown_exterior: bool,
 }
 
 impl<'a> DynamicAttractorRecall<'a> {
@@ -179,14 +185,43 @@ impl<'a> DynamicAttractorRecall<'a> {
             .join(" ")
     }
 
+    /// Concatenates only recalled Fact attractor texts (delegating $S \cap O$ persona rules to steering).
+    #[must_use]
+    pub fn recalled_facts_only_context_text(&self) -> String {
+        self.recalled_facts
+            .iter()
+            .map(|(e, _)| e.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Concatenates non-copy Known Unknown ($O \setminus S$) exterior pointer texts staged via sandbox.
+    #[must_use]
+    pub fn exterior_pointer_context_text(&self) -> String {
+        self.exterior_sandbox_facts
+            .iter()
+            .map(|(e, _)| e.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     /// Computes a deterministic 64-bit FNV-1a context fingerprint across recalled attractors,
     /// returning `0` when the query lies in ungrounded `Liminal` or recalled text is empty.
     #[must_use]
     pub fn context_fingerprint_u64(&self) -> u64 {
-        if matches!(self.void_state, VoidBoundaryState::LiminalExterior) {
+        if matches!(self.void_state, VoidBoundaryState::LiminalExterior)
+            && !self.is_known_unknown_exterior
+        {
             return 0;
         }
-        let ctx = self.recalled_context_text();
+        let ctx = {
+            let main_ctx = self.recalled_context_text();
+            if main_ctx.is_empty() && self.is_known_unknown_exterior {
+                self.exterior_pointer_context_text()
+            } else {
+                main_ctx
+            }
+        };
         if ctx.is_empty() {
             return 0;
         }
@@ -373,6 +408,7 @@ impl RecallBoundaryGate for CoherenceGuardGate {
         }
         let margin = metrics.top1_fact_score - metrics.top2_fact_score;
         let sharp_liminal_match = metrics.top1_fact_score >= policy.min_coherence * 0.85
+            && metrics.top1_fact_score >= metrics.top1_persona_score
             && margin >= policy.boundary_margin
             && metrics.top1_fact_score >= metrics.top2_fact_score.max(0.0) * 1.5;
 
@@ -973,6 +1009,110 @@ impl TextAttractorCorpus {
         }
         fact_scores.sort_by(|a, b| b.1.total_cmp(&a.1));
         persona_scores.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let top1_fact_candidate = fact_scores.first().copied();
+        let top_any_entry = top1_fact_candidate.or_else(|| persona_scores.first().copied());
+
+        // Compute 8-granule 4-region Venn partition (`S & O`, `S \ O`, `O \ S`, True Void).
+        let self_mask = {
+            let mut g_abs = [0u32; NUM_STIGMERGIC_GRANULES];
+            let heads = geom.num_q_heads.max(1);
+            if let Some((entry, _)) = top_any_entry {
+                if let Some(q7) = entry.per_layer_q7.last() {
+                    let per_g = (heads / NUM_STIGMERGIC_GRANULES).max(1);
+                    for (g, g_slot) in g_abs.iter_mut().enumerate().take(NUM_STIGMERGIC_GRANULES) {
+                        let start = (g * per_g) % heads;
+                        let mut sum = 0u32;
+                        for off in 0..per_g {
+                            let h = (start + off) % heads;
+                            sum += u32::from(q7[h.min(MAX_ATTENTION_HEADS - 1)].unsigned_abs());
+                        }
+                        *g_slot = sum / (per_g as u32);
+                    }
+                }
+            }
+            let min_v = *g_abs.iter().min().unwrap_or(&0);
+            let max_v = *g_abs.iter().max().unwrap_or(&0);
+            if max_v == min_v {
+                0x55u8
+            } else {
+                let sum_v: u32 = g_abs.iter().sum();
+                let thresh = (sum_v * 9) / (NUM_STIGMERGIC_GRANULES as u32 * 10);
+                let mut mask = 0u8;
+                for (g, &val) in g_abs.iter().enumerate() {
+                    if val >= thresh {
+                        mask |= 1u8 << g;
+                    }
+                }
+                if mask == 0 || mask == 0xFF {
+                    0x55u8
+                } else {
+                    mask
+                }
+            }
+        };
+
+        let mut other_granule_density_q7 = [0u8; NUM_STIGMERGIC_GRANULES];
+        {
+            let align_num = signal
+                .boundary_metrics
+                .top1_fact_score
+                .max(signal.boundary_metrics.top1_persona_score)
+                .max(signal.telemetry.local_top1_score * 0.90)
+                .max(0.0);
+            let align_ratio = (align_num / policy.min_coherence.max(0.20)).clamp(0.0, 1.35);
+            let excess_align = (align_ratio - 0.35).max(0.0);
+            if excess_align > 0.0 {
+                let last_rope_layer = (0..query_per_layer_q.len())
+                    .rfind(|&l| geom.is_rope_layer(l))
+                    .unwrap_or(0);
+                let mut rel_energy = [1.0_f32; NUM_STIGMERGIC_GRANULES];
+                if let (Some(ql), Some(rl)) = (
+                    query_per_layer_q.get(last_rope_layer),
+                    baseline_ref_per_layer.get(last_rope_layer),
+                ) {
+                    let heads = geom.num_q_heads.max(1);
+                    let rdim = geom.rotary_dim.max(1);
+                    if ql.len() >= heads * rdim && rl.len() >= heads * rdim {
+                        let per_g = (heads / NUM_STIGMERGIC_GRANULES).max(1);
+                        let mut raw_e = [0.0_f32; NUM_STIGMERGIC_GRANULES];
+                        for (g, raw_slot) in
+                            raw_e.iter_mut().enumerate().take(NUM_STIGMERGIC_GRANULES)
+                        {
+                            let start_h = (g * per_g) % heads;
+                            let mut acc = 0.0_f64;
+                            for off in 0..per_g {
+                                let h = (start_h + off) % heads;
+                                let base = h * rdim;
+                                for d in 0..rdim {
+                                    let diff = f64::from(ql[base + d] - rl[base + d]);
+                                    acc += diff * diff;
+                                }
+                            }
+                            *raw_slot = (acc / ((per_g * rdim) as f64)).sqrt() as f32;
+                        }
+                        let mean_e =
+                            (raw_e.iter().sum::<f32>() / NUM_STIGMERGIC_GRANULES as f32).max(1e-6);
+                        for g in 0..NUM_STIGMERGIC_GRANULES {
+                            rel_energy[g] = (raw_e[g] / mean_e).clamp(0.25, 1.80);
+                        }
+                    }
+                }
+                for g in 0..NUM_STIGMERGIC_GRANULES {
+                    other_granule_density_q7[g] =
+                        ((excess_align * rel_energy[g] * 96.0).clamp(0.0, 127.0)) as u8;
+                }
+            }
+        }
+        let substrate_tol = adapter
+            .cognitive_substrate()
+            .stigmergy
+            .granule_noise_tolerance_q7;
+        let venn_partition = evaluate_liminal_venn_partition_branchless(
+            self_mask,
+            &other_granule_density_q7,
+            &substrate_tol,
+            28,
+        );
 
         let suppress_facts = directive.repulse_guard
             || directive.suppress_injection
@@ -1007,6 +1147,28 @@ impl TextAttractorCorpus {
                 .take(policy.top_k_facts)
                 .collect()
         };
+
+        // Route validated Known Unknown (`O \ S`) misses via `S & O` bridge without copying into `recalled_facts`.
+        let mut exterior_sandbox_facts = Vec::new();
+        if recalled_facts.is_empty()
+            && !directive.repulse_guard
+            && signal.boundary_metrics.guard_conflict_margin <= 0.0
+            && !signal.telemetry.channel_disagreement
+            && signal.boundary_metrics.top1_fact_score >= signal.boundary_metrics.top1_persona_score
+            && venn_partition.sandbox_eligible != 0
+            && venn_partition.bridge_count >= 2
+        {
+            if let Some((entry, score)) = top1_fact_candidate {
+                let meets_floor = signal.boundary_metrics.top1_fact_score
+                    >= policy.min_coherence * 0.88
+                    && signal.telemetry.local_top1_score >= policy.min_coherence * 0.75;
+                if meets_floor {
+                    exterior_sandbox_facts.push((entry, score));
+                }
+            }
+        }
+        let is_known_unknown_exterior = !exterior_sandbox_facts.is_empty();
+
         // Persona grounding operates orthogonally to factual `Liminal` gating and is suppressed only on Guard repulsion.
         let recalled_personas = if directive.repulse_guard {
             Vec::new()
@@ -1030,6 +1192,9 @@ impl TextAttractorCorpus {
             telemetry: signal.telemetry,
             recalled_facts,
             recalled_personas,
+            venn_partition,
+            exterior_sandbox_facts,
+            is_known_unknown_exterior,
         })
     }
 }

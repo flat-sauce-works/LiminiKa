@@ -262,10 +262,11 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
     let mut mock_esc = liminika_core::DefaultResidualSpilloverSlot::default();
     let _ = wb_hub.apply_horizon_escalation(&esc_req, &mut esc_lane, &mut mock_esc);
 
-    // Verify Step 4 label-free AnonymousComputePool dispatch & exit reward remain strictly zero-alloc.
+    // Verify label-free AnonymousComputePool dispatch, whole-token bypass, Venn partition,
+    // SystemSpine isolation, DistortionDelta P-Frame chain, and DistortionTension remain zero-alloc.
     ctx.compute_pool_mut()
         .set_slot_masks(0b1111, 0b0001, 0, 0b1110);
-    let dispatch = ctx.step_compute_dispatch(liminika_core::traits::SystemPressureReading {
+    let mut dispatch = ctx.step_compute_dispatch(liminika_core::traits::SystemPressureReading {
         frame_time_pressure_q15: 20000,
         bandwidth_pressure_q15: 10000,
         l3_load_pressure_q15: 9000,
@@ -273,5 +274,44 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
         _pad: 0,
     });
     ctx.commit_compute_exit_reward(dispatch.execute_mask, 96);
+    let _ = ctx.compute_pool_mut().evaluate_whole_token_steering_bypass(
+        liminika_core::traits::TokenBypassObservation {
+            irreversible_step: 0,
+            liminal_stationary: 1,
+            boundary_sensitivity_q7: 16,
+            repulsion_active: 0,
+            exit_entropy_rising: 0,
+            ego_active_boundary: 0,
+            min_calm_dwell: 2,
+            _pad: 0,
+        },
+        &mut dispatch,
+    );
+    let part = liminika_core::evaluate_liminal_venn_partition_branchless(
+        0b0000_0011,
+        &[80, 72, 0, 0, 96, 88, 0, 0],
+        &[4; 8],
+        40,
+    );
+    assert_eq!(part.shared_core_mask, 0b0000_0011);
+    assert_eq!(part.known_unknown_mask, 0b0011_0000);
+    let mut tension = liminika_core::DistortionTension::new(true);
+    tension.step_hot_path_branchless(40, part.boundary_sensitivity_q7, 32, 16, false);
+    let spine = liminika_core::SystemSpineState::new();
+    let ego = liminika_core::LiminalEgoField::from_preset(liminika_core::LiminalEgoPreset::Medium);
+    let net = liminika_core::EgoDifferentialNet::from_ego_field_and_axes(
+        &ego,
+        &ego.extract_intent_axes(),
+        3,
+    );
+    let stig = liminika_core::StigmergicGranuleField::new();
+    let _ = net.evaluate_pframe_chain_branchless(
+        &ego,
+        &spine,
+        &part,
+        &stig,
+        &tension,
+        liminika_core::GatewayFrame::default(),
+    );
     ENFORCE_ZERO_ALLOC.with(|flag| flag.set(false));
 }

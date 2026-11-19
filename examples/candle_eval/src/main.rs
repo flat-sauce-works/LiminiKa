@@ -4,6 +4,7 @@
 //! Thin Candle + Safetensors evaluation harness delegating all RoPE geometry mapping,
 //! Q7 phase baking, and steering kernels to `liminika-adapter` (and `liminika-core`).
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -12,7 +13,7 @@ use liminika_adapter::{
     AdaptiveGopCutDetector, AttractorContainerCodec, AttractorRole, AttractorTrajectoryEvaluator,
     CompiledTokenCorpus, CorpusRecallEscalationProvider, FrameTransitionMetrics,
     GcsoDualTrackTimeline, ManifoldReflectionEvaluator, ModelSteeringAdapter, RebakeContext,
-    ReflectionCritique, ReflectionPolicy, ReflectionSelection, RopeGeometry,
+    ReflectionCritique, ReflectionGateInput, ReflectionPolicy, ReflectionSelection, RopeGeometry,
     SequenceActivationPooler, SourceTextRecord, SubtitleActivationEncoder, TimelineResumeOutcome,
     TimelineStepContext, TokenSequenceEntry, TrajectoryManifoldSnapshot, VoidBoundaryState,
 };
@@ -34,6 +35,119 @@ type LayerResonantSlices<'a> = (
     &'a [f32],
 );
 
+#[derive(Clone)]
+struct Step2RunSpec {
+    label: String,
+    axis: u8,
+    ego_mode: EgoProfileMode,
+    ego_max_hops: u8,
+    horizon_mode: HorizonAblationMode,
+    cond: FairBenchCondition,
+    reflect_mode: ReflectMode,
+    enable_pre_bypass: bool,
+    temperature: f32,
+    rng_seed: u64,
+}
+
+#[allow(dead_code)]
+struct Step2PassResult {
+    label: String,
+    axis: u8,
+    ego_mode: EgoProfileMode,
+    ego_max_hops: u8,
+    cond: FairBenchCondition,
+    reflect_mode: ReflectMode,
+    enable_pre_bypass: bool,
+    temperature: f32,
+    exp_hits: usize,
+    exp_total: usize,
+    fact_exp_hits: usize,
+    fact_exp_total: usize,
+    persona_exp_hits: usize,
+    persona_exp_total: usize,
+    guard_sem_forb_hits: usize,
+    guard_forb_total: usize,
+    raw_forb_hits: usize,
+    sem_forb_hits: usize,
+    forb_total: usize,
+    ood_bleed_hits: usize,
+    ood_total: usize,
+    in_tokens: usize,
+    decode_tps: f64,
+    whole_bypass_pct: f64,
+    passive_pct: f32,
+    active_pct: f32,
+    ego_delta_norm_q7: u8,
+    reflect_triggers: usize,
+    reflect_adopted: usize,
+    reflect_skipped: usize,
+    ext_rescues: usize,
+    sandbox_promos: u64,
+    replies: Vec<String>,
+}
+
+fn text_bigram_jaccard(a: &str, b: &str) -> f32 {
+    let ta: Vec<String> = a
+        .split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_ascii_lowercase()
+        })
+        .filter(|w| !w.is_empty())
+        .collect();
+    let tb: Vec<String> = b
+        .split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_ascii_lowercase()
+        })
+        .filter(|w| !w.is_empty())
+        .collect();
+    if ta.is_empty() && tb.is_empty() {
+        return 1.0;
+    }
+    if ta.is_empty() || tb.is_empty() {
+        return 0.0;
+    }
+    let set_a: HashSet<(String, String)> = if ta.len() >= 2 {
+        ta.windows(2)
+            .map(|w| (w[0].clone(), w[1].clone()))
+            .collect()
+    } else {
+        ta.iter().map(|w| (w.clone(), String::new())).collect()
+    };
+    let set_b: HashSet<(String, String)> = if tb.len() >= 2 {
+        tb.windows(2)
+            .map(|w| (w[0].clone(), w[1].clone()))
+            .collect()
+    } else {
+        tb.iter().map(|w| (w.clone(), String::new())).collect()
+    };
+    let inter = set_a.intersection(&set_b).count();
+    let union = set_a.union(&set_b).count();
+    if union == 0 {
+        1.0
+    } else {
+        inter as f32 / union as f32
+    }
+}
+
+fn mean_reply_bigram_jaccard(a: &[String], b: &[String]) -> (f32, f32) {
+    let n = a.len().min(b.len());
+    if n == 0 {
+        return (0.0, 0.0);
+    }
+    let mut sum_j = 0.0_f32;
+    let mut exact = 0_usize;
+    for (ra, rb) in a.iter().zip(b.iter()) {
+        sum_j += text_bigram_jaccard(ra, rb);
+        if ra.trim() == rb.trim() {
+            exact += 1;
+        }
+    }
+    (sum_j / n as f32, exact as f32 / n as f32 * 100.0)
+}
+
 mod bake;
 mod eval;
 mod model;
@@ -43,12 +157,13 @@ use bake::{
     query_nvidia_smi_vram, sample_startup_base_prior, token_logprob, BakedModelProfile,
 };
 use eval::{
-    apply_ego_mode, build_preset_circuit, critique_generated_draft, generate_steered_reply,
-    generate_steered_reply_with_offset, parse_circuit_mode, parse_ego_mode,
-    parse_fair_bench_conditions, parse_horizon_mode, parse_kv_min_res, parse_pressure_sim_mode,
-    parse_quant_mode, resolve_persona_circuit, CircuitProfileMode, EgoProfileMode,
-    FairBenchCondition, HorizonAblationMode, KvTraceStats, PressureSimMode, SteerDecodeConfig,
-    StepTelemetryTotals,
+    apply_ego_mode, build_preset_circuit, count_semantic_forbid_hits, critique_generated_draft,
+    generate_steered_reply, generate_steered_reply_with_offset, parse_circuit_mode,
+    parse_ego_max_hops, parse_ego_mode, parse_fair_bench_conditions, parse_horizon_mode,
+    parse_kv_min_res, parse_pressure_sim_mode, parse_quant_mode, parse_reflect_mode,
+    parse_rng_seed, parse_temperature, resolve_persona_circuit, CircuitProfileMode, EgoProfileMode,
+    FairBenchCondition, HorizonAblationMode, KvTraceStats, PressureSimMode, ReflectMode,
+    SteerDecodeConfig, StepTelemetryTotals,
 };
 use model::{ForwardSteer, Phi3Config, Phi3Model, ProbeTrace, ResonantAnchors};
 
@@ -81,9 +196,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli_args: Vec<String> = std::env::args().collect();
     let recall_only = cli_args.iter().any(|a| a == "--recall-only");
-    let step2_only = cli_args.iter().any(|a| a == "--step2-only") || recall_only;
     let use_base_prior = cli_args.iter().any(|a| a == "--base-prior");
     let no_reflect = cli_args.iter().any(|a| a == "--no-reflect");
+    let reflect_mode = parse_reflect_mode(cli_args.iter().map(String::as_str));
+    let enable_pre_bypass = !cli_args.iter().any(|a| a == "--no-pre-bypass");
+    let ablate_dual_axis = cli_args.iter().any(|a| a == "--ablate-dual-axis");
+    let ego_max_hops = parse_ego_max_hops(cli_args.iter().map(String::as_str));
+    let temperature = parse_temperature(cli_args.iter().map(String::as_str));
+    let rng_seed = parse_rng_seed(cli_args.iter().map(String::as_str));
     let multi_turn = cli_args.iter().any(|a| a == "--multi-turn");
     let quant_mode = parse_quant_mode(cli_args.iter().map(String::as_str));
     let kv_min_res = parse_kv_min_res(cli_args.iter().map(String::as_str));
@@ -95,7 +215,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fair_bench_conditions =
         parse_fair_bench_conditions(cli_args.iter().map(String::as_str), no_reflect);
     let pressure_sim_mode = parse_pressure_sim_mode(cli_args.iter().map(String::as_str));
-    let step2_only = step2_only || fair_bench_conditions.is_some();
+    let step2_only = cli_args.iter().any(|a| a == "--step2-only")
+        || recall_only
+        || fair_bench_conditions.is_some()
+        || ablate_dual_axis;
+    adapter.set_ego_max_hops(ego_max_hops);
     apply_ego_mode(&mut adapter, &ego_mode);
     if adapter.ego_field().is_active() {
         println!(
@@ -718,51 +842,255 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let persona_rag_text = suite.persona.join(" ");
     let guard_rag_text = suite.guards.join(" ");
-    let step2_runs: Vec<(
-        String,
-        EgoProfileMode,
-        HorizonAblationMode,
-        FairBenchCondition,
-        bool,
-    )> = if let Some(ref conds) = fair_bench_conditions {
+    let step2_runs: Vec<Step2RunSpec> = if ablate_dual_axis {
+        vec![
+            Step2RunSpec {
+                label: "A:Vanilla+FullRAG".to_string(),
+                axis: 1,
+                ego_mode: EgoProfileMode::Custom,
+                ego_max_hops: 1,
+                horizon_mode,
+                cond: FairBenchCondition::VanillaFullRag,
+                reflect_mode: ReflectMode::Off,
+                enable_pre_bypass: false,
+                temperature: 0.0,
+                rng_seed: 42,
+            },
+            Step2RunSpec {
+                label: "B:Vanilla+MinRAG".to_string(),
+                axis: 1,
+                ego_mode: EgoProfileMode::Custom,
+                ego_max_hops: 1,
+                horizon_mode,
+                cond: FairBenchCondition::VanillaMinRag,
+                reflect_mode: ReflectMode::Off,
+                enable_pre_bypass: false,
+                temperature: 0.0,
+                rng_seed: 42,
+            },
+            Step2RunSpec {
+                label: "C:Hybrid(ref=off,byp=off)".to_string(),
+                axis: 1,
+                ego_mode: EgoProfileMode::Custom,
+                ego_max_hops: 1,
+                horizon_mode,
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode: ReflectMode::Off,
+                enable_pre_bypass: false,
+                temperature: 0.0,
+                rng_seed: 42,
+            },
+            Step2RunSpec {
+                label: "C:Hybrid(ref=off,byp=on)".to_string(),
+                axis: 1,
+                ego_mode: EgoProfileMode::Custom,
+                ego_max_hops: 1,
+                horizon_mode,
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode: ReflectMode::Off,
+                enable_pre_bypass: true,
+                temperature: 0.0,
+                rng_seed: 42,
+            },
+            Step2RunSpec {
+                label: "C:Hybrid(ref=cond,byp=on)".to_string(),
+                axis: 1,
+                ego_mode: EgoProfileMode::Custom,
+                ego_max_hops: 1,
+                horizon_mode,
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode: ReflectMode::Conditional,
+                enable_pre_bypass: true,
+                temperature: 0.0,
+                rng_seed: 42,
+            },
+            Step2RunSpec {
+                label: "C:Hybrid(ref=on,byp=on)".to_string(),
+                axis: 1,
+                ego_mode: EgoProfileMode::Custom,
+                ego_max_hops: 1,
+                horizon_mode,
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode: ReflectMode::Always,
+                enable_pre_bypass: true,
+                temperature: 0.0,
+                rng_seed: 42,
+            },
+            Step2RunSpec {
+                label: "Ego=off(f_sys)#2".to_string(),
+                axis: 2,
+                ego_mode: EgoProfileMode::Custom,
+                ego_max_hops: 1,
+                horizon_mode,
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode: ReflectMode::Off,
+                enable_pre_bypass: true,
+                temperature: 0.0,
+                rng_seed: 42,
+            },
+            Step2RunSpec {
+                label: "Ego=med(1-hop)#1".to_string(),
+                axis: 2,
+                ego_mode: EgoProfileMode::Preset(LiminalEgoPreset::Medium),
+                ego_max_hops: 1,
+                horizon_mode,
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode: ReflectMode::Off,
+                enable_pre_bypass: true,
+                temperature: 0.0,
+                rng_seed: 42,
+            },
+            Step2RunSpec {
+                label: "Ego=med(1-hop)#2".to_string(),
+                axis: 2,
+                ego_mode: EgoProfileMode::Preset(LiminalEgoPreset::Medium),
+                ego_max_hops: 1,
+                horizon_mode,
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode: ReflectMode::Off,
+                enable_pre_bypass: true,
+                temperature: 0.0,
+                rng_seed: 42,
+            },
+            Step2RunSpec {
+                label: "Ego=med(3-hop)#1".to_string(),
+                axis: 2,
+                ego_mode: EgoProfileMode::Preset(LiminalEgoPreset::Medium),
+                ego_max_hops: 3,
+                horizon_mode,
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode: ReflectMode::Off,
+                enable_pre_bypass: true,
+                temperature: 0.0,
+                rng_seed: 42,
+            },
+            Step2RunSpec {
+                label: "Ego=med(3-hop)#2".to_string(),
+                axis: 2,
+                ego_mode: EgoProfileMode::Preset(LiminalEgoPreset::Medium),
+                ego_max_hops: 3,
+                horizon_mode,
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode: ReflectMode::Off,
+                enable_pre_bypass: true,
+                temperature: 0.0,
+                rng_seed: 42,
+            },
+            Step2RunSpec {
+                label: "Ego=high(1-hop)".to_string(),
+                axis: 2,
+                ego_mode: EgoProfileMode::Preset(LiminalEgoPreset::High),
+                ego_max_hops: 1,
+                horizon_mode,
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode: ReflectMode::Off,
+                enable_pre_bypass: true,
+                temperature: 0.0,
+                rng_seed: 42,
+            },
+            Step2RunSpec {
+                label: "RandCtrl(T=0.8,s42)".to_string(),
+                axis: 2,
+                ego_mode: EgoProfileMode::Custom,
+                ego_max_hops: 1,
+                horizon_mode,
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode: ReflectMode::Off,
+                enable_pre_bypass: true,
+                temperature: 0.8,
+                rng_seed: 42,
+            },
+            Step2RunSpec {
+                label: "RandCtrl(T=0.8,s43)".to_string(),
+                axis: 2,
+                ego_mode: EgoProfileMode::Custom,
+                ego_max_hops: 1,
+                horizon_mode,
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode: ReflectMode::Off,
+                enable_pre_bypass: true,
+                temperature: 0.8,
+                rng_seed: 43,
+            },
+            Step2RunSpec {
+                label: "D:ZeroCtx(byp=on)".to_string(),
+                axis: 1,
+                ego_mode: EgoProfileMode::Custom,
+                ego_max_hops: 1,
+                horizon_mode,
+                cond: FairBenchCondition::LiminiKaZeroContext,
+                reflect_mode: ReflectMode::Off,
+                enable_pre_bypass: true,
+                temperature: 0.0,
+                rng_seed: 42,
+            },
+        ]
+    } else if let Some(ref conds) = fair_bench_conditions {
         conds
             .iter()
             .map(|&(cond, cond_no_reflect)| {
+                let run_ref_mode = if cond_no_reflect {
+                    ReflectMode::Off
+                } else {
+                    reflect_mode
+                };
                 let lbl = if matches!(cond, FairBenchCondition::LiminiKaHybrid) {
-                    format!(
-                        "{}(reflect={})",
-                        cond.label(),
-                        if cond_no_reflect { "off" } else { "on" }
-                    )
+                    format!("{}(reflect={})", cond.label(), run_ref_mode.label())
                 } else {
                     cond.label().to_string()
                 };
-                (lbl, ego_mode.clone(), horizon_mode, cond, cond_no_reflect)
+                Step2RunSpec {
+                    label: lbl,
+                    axis: 1,
+                    ego_mode: ego_mode.clone(),
+                    ego_max_hops,
+                    horizon_mode,
+                    cond,
+                    reflect_mode: run_ref_mode,
+                    enable_pre_bypass,
+                    temperature,
+                    rng_seed,
+                }
             })
             .collect()
     } else if ablate_horizon {
         vec![
-            (
-                format!("{:?}:Core3", ego_mode),
-                ego_mode.clone(),
-                HorizonAblationMode::Core3,
-                FairBenchCondition::LiminiKaHybrid,
-                no_reflect,
-            ),
-            (
-                format!("{:?}:Spillover", ego_mode),
-                ego_mode.clone(),
-                HorizonAblationMode::Spillover,
-                FairBenchCondition::LiminiKaHybrid,
-                no_reflect,
-            ),
-            (
-                format!("{:?}:SlowLoop", ego_mode),
-                ego_mode.clone(),
-                HorizonAblationMode::SlowLoop,
-                FairBenchCondition::LiminiKaHybrid,
-                no_reflect,
-            ),
+            Step2RunSpec {
+                label: format!("{:?}:Core3", ego_mode),
+                axis: 0,
+                ego_mode: ego_mode.clone(),
+                ego_max_hops,
+                horizon_mode: HorizonAblationMode::Core3,
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode,
+                enable_pre_bypass,
+                temperature,
+                rng_seed,
+            },
+            Step2RunSpec {
+                label: format!("{:?}:Spillover", ego_mode),
+                axis: 0,
+                ego_mode: ego_mode.clone(),
+                ego_max_hops,
+                horizon_mode: HorizonAblationMode::Spillover,
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode,
+                enable_pre_bypass,
+                temperature,
+                rng_seed,
+            },
+            Step2RunSpec {
+                label: format!("{:?}:SlowLoop", ego_mode),
+                axis: 0,
+                ego_mode: ego_mode.clone(),
+                ego_max_hops,
+                horizon_mode: HorizonAblationMode::SlowLoop,
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode,
+                enable_pre_bypass,
+                temperature,
+                rng_seed,
+            },
         ]
     } else if ablate_ego {
         let active_ego = match &ego_mode {
@@ -770,31 +1098,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             other => other.clone(),
         };
         vec![
-            (
-                "NoEgo".to_string(),
-                EgoProfileMode::Custom,
+            Step2RunSpec {
+                label: "NoEgo".to_string(),
+                axis: 2,
+                ego_mode: EgoProfileMode::Custom,
+                ego_max_hops,
                 horizon_mode,
-                FairBenchCondition::LiminiKaHybrid,
-                no_reflect,
-            ),
-            (
-                "Ego".to_string(),
-                active_ego,
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode,
+                enable_pre_bypass,
+                temperature,
+                rng_seed,
+            },
+            Step2RunSpec {
+                label: "Ego".to_string(),
+                axis: 2,
+                ego_mode: active_ego,
+                ego_max_hops,
                 horizon_mode,
-                FairBenchCondition::LiminiKaHybrid,
-                no_reflect,
-            ),
+                cond: FairBenchCondition::LiminiKaHybrid,
+                reflect_mode,
+                enable_pre_bypass,
+                temperature,
+                rng_seed,
+            },
         ]
     } else {
-        vec![(
-            horizon_mode.label().to_string(),
-            ego_mode.clone(),
+        vec![Step2RunSpec {
+            label: horizon_mode.label().to_string(),
+            axis: 0,
+            ego_mode: ego_mode.clone(),
+            ego_max_hops,
             horizon_mode,
-            FairBenchCondition::LiminiKaHybrid,
-            no_reflect,
-        )]
+            cond: FairBenchCondition::LiminiKaHybrid,
+            reflect_mode,
+            enable_pre_bypass,
+            temperature,
+            rng_seed,
+        }]
     };
-    let reflection_policy = if no_reflect {
+    let reflection_policy = if no_reflect || matches!(reflect_mode, ReflectMode::Off) {
         ReflectionPolicy {
             max_retries: 0,
             ..ReflectionPolicy::default()
@@ -804,12 +1147,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let kv_policy = AdaptiveThresholdPolicy::default();
     let mut step2_ablation_summaries: Vec<String> = Vec::new();
+    let mut pass_results: Vec<Step2PassResult> = Vec::new();
+    let mut prompt_q_cache: HashMap<String, Vec<Vec<f32>>> = HashMap::new();
     let cut_detector = AdaptiveGopCutDetector::default();
     let mut timeline = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
         adapter.geometry(),
     ));
-    for (run_label, run_ego_mode, run_horizon_mode, run_cond, run_no_reflect) in &step2_runs {
-        let reflection_policy = if *run_no_reflect {
+    for run in &step2_runs {
+        let run_label = run.label.as_str();
+        let run_ego_mode = &run.ego_mode;
+        let run_horizon_mode = &run.horizon_mode;
+        let run_cond = &run.cond;
+        let run_reflect_mode = run.reflect_mode;
+        let run_no_reflect = matches!(run_reflect_mode, ReflectMode::Off);
+        let reflection_policy = if run_no_reflect {
             ReflectionPolicy {
                 max_retries: 0,
                 ..ReflectionPolicy::default()
@@ -822,8 +1173,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
         adapter.reset_horizon_and_core_state();
         adapter.compute_pool_mut().reanchor_baseline_pressure(8192);
+        adapter.set_ego_max_hops(run.ego_max_hops);
         apply_ego_mode(&mut adapter, run_ego_mode);
-        if ablate_ego || ablate_horizon || fair_bench_conditions.is_some() {
+        if ablate_dual_axis || ablate_ego || ablate_horizon || fair_bench_conditions.is_some() {
             println!("\n-- Step 2 Pass: {run_label} --");
         }
         let mut step_tlm = StepTelemetryTotals::default();
@@ -840,7 +1192,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut step2_ctx_hits = 0_usize;
         let mut step2_exp_hits = 0_usize;
         let mut step2_exp_total = 0_usize;
-        let mut step2_forb_hits = 0_usize;
+        let mut fact_exp_hits = 0_usize;
+        let mut fact_exp_total = 0_usize;
+        let mut persona_exp_hits = 0_usize;
+        let mut persona_exp_total = 0_usize;
+        let mut guard_sem_forb_hits = 0_usize;
+        let mut guard_forb_total = 0_usize;
+        let mut step2_raw_forb_hits = 0_usize;
+        let mut step2_sem_forb_hits = 0_usize;
         let mut step2_forb_total = 0_usize;
         let mut step2_recall_ms_sum = 0.0_f64;
         let mut step2_input_tokens = 0_usize;
@@ -848,9 +1207,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut step2_decode_secs = 0.0_f64;
         let mut step2_steer_bypass_hits = 0_usize;
         let mut step2_steer_eligible_layers = 0_usize;
+        let mut step2_whole_token_bypass_hits = 0_usize;
+        let mut step2_decode_tokens_steered = 0_usize;
         let mut step2_instability_recoveries = 0_usize;
         let mut reflect_triggers = 0_usize;
         let mut reflect_adopted = 0_usize;
+        let mut reflect_gate_skipped = 0_usize;
+        let mut ext_rescue_hits = 0_usize;
+        let mut step2_ego_delta_norm_max_q7 = 0_u8;
+        let mut pass_replies: Vec<String> = Vec::new();
         let mut ram_kv_cache = StandardPhaseKvGopCache::new();
         let mut kv_stats = KvTraceStats::default();
         let mut eval_items: Vec<(String, String, Vec<String>, Vec<String>)> = suite.probes.clone();
@@ -874,13 +1239,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut frames_since_keyframe = 0_usize;
 
         for (idx, (slot, prompt, expected, forbidden)) in eval_items.iter().enumerate() {
-            model.clear_cache();
             let q_ids = tokenizer
                 .encode(prompt.as_str(), false)
                 .map_err(|e| format!("encode error: {e}"))?
                 .get_ids()
                 .to_vec();
-            let (_, query_tok_qs, _) = model.forward_tokens(&q_ids, 0, None, false, true)?;
+            let query_tok_qs = if let Some(cached) = prompt_q_cache.get(prompt.as_str()) {
+                cached.clone()
+            } else {
+                model.clear_cache();
+                let (_, q_toks, _) = model.forward_tokens(&q_ids, 0, None, false, true)?;
+                prompt_q_cache.insert(prompt.clone(), q_toks.clone());
+                q_toks
+            };
             let prior_circuit = active_persona_bank
                 .as_ref()
                 .map(CognitiveCircuitBankOps::to_consolidated_ledger);
@@ -930,8 +1301,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let recalled_ctx = recall.recalled_context_text();
+            let fact_ctx = recall.recalled_facts_only_context_text();
+            let ext_ctx = recall.exterior_pointer_context_text();
+            if recall.is_known_unknown_exterior && slot != "VOID" && slot != "LVOID" {
+                ext_rescue_hits += 1;
+            }
 
-            let dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
+            let mut dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
+            if recall.recalled_facts.is_empty() && recall.is_known_unknown_exterior {
+                for (l, layer_facts) in dyn_facts.iter_mut().enumerate().take(cfg.num_hidden_layers)
+                {
+                    for &(entry, score) in &recall.exterior_sandbox_facts {
+                        if let Some(&arr) = entry.per_layer_q7.get(l) {
+                            let scaled_e = (entry.energy * score.clamp(0.25, 0.90) * 0.5).max(0.20);
+                            layer_facts.push(ObjectiveFact::new(arr, scaled_e, 0, entry.anchor_id));
+                        }
+                    }
+                }
+            }
             let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);
             let mut query_snap = TrajectoryManifoldSnapshot::from_recall(&recall);
             if let Some(ref bank) = active_persona_bank {
@@ -1000,24 +1387,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         query_action_decision,
                         StigmergicActionDecision::RepulsionEscape
                     );
-                let active_prompt = if !run_cond.inject_fact_text()
-                    || recalled_ctx.is_empty()
+                let active_prompt = if !run_cond.inject_fact_text() {
+                    format_phi4_prompt(prompt)
+                } else if run_cond.inject_persona_and_guard_text() {
+                    if recalled_ctx.is_empty()
+                        || (matches!(query_void_state, VoidBoundaryState::LiminalExterior)
+                            && !is_guard_trap)
+                    {
+                        format_phi4_prompt(prompt)
+                    } else {
+                        format_phi4_prompt(&format!(
+                            "[Context: {recalled_ctx}]\n[Style Guidelines: {persona_rag_text}]\n[Do NOT claim: {guard_rag_text}]\n{prompt}"
+                        ))
+                    }
+                } else if run_cond.steering_enabled() {
+                    if matches!(query_void_state, VoidBoundaryState::LiminalExterior)
+                        && !is_guard_trap
+                        && !recall.is_known_unknown_exterior
+                    {
+                        format_phi4_prompt(prompt)
+                    } else if !fact_ctx.is_empty() {
+                        format_phi4_prompt(&format!("[Context: {fact_ctx}]\n{prompt}"))
+                    } else if recall.is_known_unknown_exterior && !ext_ctx.is_empty() {
+                        format_phi4_prompt(&format!("[External Pointer: {ext_ctx}]\n{prompt}"))
+                    } else {
+                        format_phi4_prompt(prompt)
+                    }
+                } else if recalled_ctx.is_empty()
                     || (matches!(query_void_state, VoidBoundaryState::LiminalExterior)
                         && !is_guard_trap)
                 {
                     format_phi4_prompt(prompt)
-                } else if run_cond.inject_persona_and_guard_text() {
-                    format_phi4_prompt(&format!(
-                        "[Context: {recalled_ctx}]\n[Style Guidelines: {persona_rag_text}]\n[Do NOT claim: {guard_rag_text}]\n{prompt}"
-                    ))
                 } else {
                     format_phi4_prompt(&format!("[Context: {recalled_ctx}]\n{prompt}"))
                 };
 
                 let use_steer = run_cond.steering_enabled()
                     && (is_guard_trap
-                        || (!matches!(query_void_state, VoidBoundaryState::LiminalExterior)
-                            && !dyn_facts.is_empty()));
+                        || !matches!(query_void_state, VoidBoundaryState::LiminalExterior)
+                        || recall.is_known_unknown_exterior);
                 let res_ctx = if use_steer {
                     Some(ResonantAnchors {
                         facts: dyn_facts.as_slice(),
@@ -1060,8 +1468,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         None
                     },
                     pressure_sim: active_pressure_sim,
+                    enable_pre_bypass: run.enable_pre_bypass,
+                    temperature: run.temperature,
+                    rng_seed: run.rng_seed,
                     steer_bypass_hits: 0,
                     steer_eligible_layers: 0,
+                    whole_token_bypass_hits: 0,
+                    decode_tokens_total: 0,
                     instability_recoveries: 0,
                 };
                 let (mut text, p1_in_tokens, p1_tokens, p1_secs) = generate_steered_reply(
@@ -1076,15 +1489,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 step2_decode_secs += p1_secs;
                 step2_steer_bypass_hits += pass1_cfg.steer_bypass_hits;
                 step2_steer_eligible_layers += pass1_cfg.steer_eligible_layers;
+                step2_whole_token_bypass_hits += pass1_cfg.whole_token_bypass_hits;
+                step2_decode_tokens_steered += pass1_cfg.decode_tokens_total;
                 step2_instability_recoveries += pass1_cfg.instability_recoveries;
 
-                let mut reflect_note = if *run_no_reflect {
+                let mut reflect_note = if run_no_reflect {
                     "off".to_string()
                 } else {
                     "skip".to_string()
                 };
                 let mut chosen_crit: Option<ReflectionCritique> = None;
-                if !*run_no_reflect && reflection_policy.max_retries > 0 {
+                let gate_should_reflect = match run_reflect_mode {
+                    ReflectMode::Off => false,
+                    ReflectMode::Always => true,
+                    ReflectMode::Conditional => {
+                        let gate_in = ReflectionGateInput {
+                            boundary_sensitivity_q7: recall.venn_partition.boundary_sensitivity_q7,
+                            has_undigested_known_unknown: recall.is_known_unknown_exterior,
+                            exit_entropy_h_tilde: adapter.action_hub().last_entropy_h_tilde,
+                            guard_conflict_margin: query_guard_m,
+                            is_true_void: matches!(
+                                query_void_state,
+                                VoidBoundaryState::LiminalExterior
+                            ) && !recall.is_known_unknown_exterior,
+                            ..ReflectionGateInput::default()
+                        };
+                        let fire = ManifoldReflectionEvaluator.should_trigger_reflection(&gate_in);
+                        if !fire {
+                            reflect_gate_skipped += 1;
+                            reflect_note = "gate_skip".to_string();
+                        }
+                        fire
+                    }
+                };
+                if gate_should_reflect && reflection_policy.max_retries > 0 {
                     if let Some(pass1_crit) = critique_generated_draft(
                         &mut model,
                         &tokenizer,
@@ -1097,13 +1535,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if pass1_crit.directive.rethink_recommended {
                             reflect_triggers += 1;
                             let cue = pass1_crit.corrective_instruction(&text).unwrap_or_default();
+                            let retry_ctx = if run_cond.steering_enabled() {
+                                if !fact_ctx.is_empty() {
+                                    fact_ctx.as_str()
+                                } else if recall.is_known_unknown_exterior {
+                                    ext_ctx.as_str()
+                                } else {
+                                    recalled_ctx.as_str()
+                                }
+                            } else {
+                                recalled_ctx.as_str()
+                            };
                             let retry_prompt = if pass1_crit.directive.suppress_injection
-                                || recalled_ctx.is_empty()
+                                || retry_ctx.is_empty()
                             {
                                 format_phi4_prompt(&format!("{cue}\n{prompt}"))
                             } else {
                                 format_phi4_prompt(&format!(
-                                    "[Context: {recalled_ctx}]\n{cue}\n{prompt}"
+                                    "[Context: {retry_ctx}]\n{cue}\n{prompt}"
                                 ))
                             };
                             let retry_use_steer = !pass1_crit.directive.suppress_injection
@@ -1148,8 +1597,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     None
                                 },
                                 pressure_sim: active_pressure_sim,
+                                enable_pre_bypass: run.enable_pre_bypass,
+                                temperature: run.temperature,
+                                rng_seed: run.rng_seed,
                                 steer_bypass_hits: 0,
                                 steer_eligible_layers: 0,
+                                whole_token_bypass_hits: 0,
+                                decode_tokens_total: 0,
                                 instability_recoveries: 0,
                             };
                             let (p2_text, p2_in_tokens, p2_tokens, p2_secs) =
@@ -1165,6 +1619,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             step2_decode_secs += p2_secs;
                             step2_steer_bypass_hits += retry_cfg.steer_bypass_hits;
                             step2_steer_eligible_layers += retry_cfg.steer_eligible_layers;
+                            step2_whole_token_bypass_hits += retry_cfg.whole_token_bypass_hits;
+                            step2_decode_tokens_steered += retry_cfg.decode_tokens_total;
                             step2_instability_recoveries += retry_cfg.instability_recoveries;
                             if let Some(pass2_crit) = critique_generated_draft(
                                 &mut model,
@@ -1234,6 +1690,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 (String::new(), "skip(recall_only)".to_string())
             };
 
+            pass_replies.push(text.clone());
             let lower = text.to_lowercase();
             let ctx_lower = recalled_ctx.to_lowercase();
             let ctx_exp = expected
@@ -1244,16 +1701,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .iter()
                 .filter(|kw| lower.contains(&kw.to_lowercase()))
                 .count();
-            let p_forb = forbidden
-                .iter()
-                .filter(|kw| lower.contains(&kw.to_lowercase()))
-                .count();
+            let (p_raw_forb, p_sem_forb) = count_semantic_forbid_hits(&text, forbidden);
             if idx < suite.probes.len() && slot != "VOID" {
                 step2_ctx_hits += ctx_exp;
                 step2_exp_hits += p_exp;
                 step2_exp_total += expected.len();
-                step2_forb_hits += p_forb;
+                step2_raw_forb_hits += p_raw_forb;
+                step2_sem_forb_hits += p_sem_forb;
                 step2_forb_total += forbidden.len();
+                match slot.as_str() {
+                    "FACT" => {
+                        fact_exp_hits += p_exp;
+                        fact_exp_total += expected.len();
+                    }
+                    "PERSONA" => {
+                        persona_exp_hits += p_exp;
+                        persona_exp_total += expected.len();
+                    }
+                    "GUARD" => {
+                        guard_sem_forb_hits += p_sem_forb;
+                        guard_forb_total += forbidden.len();
+                    }
+                    _ => {}
+                }
+            }
+            if slot != "VOID" && slot != "LVOID" {
+                step2_ego_delta_norm_max_q7 = step2_ego_delta_norm_max_q7
+                    .max(adapter.ego_differential_net().last_delta_norm_q7);
             }
             if slot == "FACT" || slot == "PERSONA" {
                 target_coh_sum += query_top1;
@@ -1263,7 +1737,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 guard_margin_cnt += 1;
             } else if slot == "VOID" || slot == "LVOID" {
                 ood_total += 1;
-                if !matches!(query_void_state, VoidBoundaryState::LiminalExterior) || p_forb > 0 {
+                if !matches!(query_void_state, VoidBoundaryState::LiminalExterior)
+                    || recall.is_known_unknown_exterior
+                    || p_sem_forb > 0
+                {
                     ood_bleed_hits += 1;
                 }
             }
@@ -1273,7 +1750,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 *run_horizon_mode,
                 HorizonAblationMode::Spillover | HorizonAblationMode::SlowLoop
             ) {
-                let resolved = (p_exp > 0 || expected.is_empty()) && p_forb == 0;
+                let resolved = (p_exp > 0 || expected.is_empty()) && p_sem_forb == 0;
                 let residual_phases = adapter.residual_spillover().active_spillover_residual_q7;
                 let _ = adapter.commit_spillover_experience(
                     &residual_phases,
@@ -1300,7 +1777,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             println!(
-            "  [S2:{}:{}] void={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} recall_ms={:.2} kv={} reflect={} core=[{}] probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={} prov_slot={}] ctx_hit={}/{} hit={}/{} forb={} => {}",
+            "  [S2:{}:{}] void={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} recall_ms={:.2} kv={} reflect={} core=[{}] probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={} prov_slot={}] ctx_hit={}/{} hit={}/{} sem_forb={}(raw={}) => {}",
             idx + 1,
             slot,
             query_void_state,
@@ -1323,7 +1800,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             expected.len(),
             p_exp,
             expected.len(),
-            p_forb,
+            p_sem_forb,
+            p_raw_forb,
             text
         );
         }
@@ -1333,9 +1811,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             0.0
         };
+        let whole_bypass_pct = if step2_decode_tokens_steered == 0 {
+            0.0
+        } else {
+            step2_whole_token_bypass_hits as f64 / step2_decode_tokens_steered as f64 * 100.0
+        };
         let vram_pass = query_nvidia_smi_vram().unwrap_or_else(|| "n/a".to_string());
         let summary_line = format!(
-        "Step 2 Dynamic Corpus Summary ({run_label}): recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit={:.1}% ({}/{}) | forbid_hit={:.1}% ({}/{}) | in_tok={} | reflect=({}/{}) | core=[L0={} L1={} Ego={} fired=0x{:02X}] | compile={:.1}ms mean_recall={:.2}ms decode={:.2} tok/s | vram={}",
+        "Step 2 Dynamic Corpus Summary ({run_label}): recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | in_tok={} | reflect=({}/{} skip={}) | ext_rescue={} sb_promo={} | core=[L0={} L1={} Ego={} hops={} fired=0x{:02X}] | compile={:.1}ms mean_recall={:.2}ms decode={:.2} tok/s | vram={}",
         if step2_exp_total == 0 {
             0.0
         } else {
@@ -1353,16 +1836,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if step2_forb_total == 0 {
             0.0
         } else {
-            step2_forb_hits as f32 / step2_forb_total as f32 * 100.0
+            step2_raw_forb_hits as f32 / step2_forb_total as f32 * 100.0
         },
-        step2_forb_hits,
+        step2_raw_forb_hits,
+        step2_forb_total,
+        if step2_forb_total == 0 {
+            0.0
+        } else {
+            step2_sem_forb_hits as f32 / step2_forb_total as f32 * 100.0
+        },
+        step2_sem_forb_hits,
         step2_forb_total,
         step2_input_tokens,
         reflect_adopted,
         reflect_triggers,
+        reflect_gate_skipped,
+        ext_rescue_hits,
+        adapter.sandbox_promotions(),
         adapter.aperture_field().adaptation_epochs,
         adapter.stigmergic_granule_field().adaptation_epochs,
         adapter.ego_field().intervention_epochs,
+        adapter.ego_differential_net().max_hops,
         adapter.ego_field().last_intervened_mask,
         compile_ms,
         mean_recall_ms,
@@ -1448,14 +1942,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             guard_slot.slide_out_dwell,
         );
         let dist_report = step_tlm.distortion_report();
+        let tension = adapter.distortion_tension();
         let distortion_line = format!(
-            "  [Distortion] kind={:?} sat={:.1}% passive={:.1}% active={:.1}% wakeups={} cooldowns={}",
+            "  [Distortion] kind={:?} sat={:.1}% passive={:.1}% active={:.1}% wakeups={} cooldowns={} tension(damp={} exc={} scale={} d_norm={})",
             dist_report.kind,
             dist_report.action_saturation_ratio * 100.0,
             dist_report.passive_distortion_ratio * 100.0,
             dist_report.active_distortion_ratio * 100.0,
             step_tlm.distortion_wakeups,
             step_tlm.distortion_cooldowns,
+            tension.immediate_damping_events,
+            tension.slow_excitation_events,
+            tension.effective_ego_scale_q7,
+            step2_ego_delta_norm_max_q7,
         );
         let cp = adapter.compute_pool();
         let steer_bypass_pct = if step2_steer_eligible_layers == 0 {
@@ -1464,7 +1963,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             step2_steer_bypass_hits as f64 / step2_steer_eligible_layers as f64 * 100.0
         };
         let compute_pool_line = format!(
-            "  [ComputePool] regime={:?} ema_p={} base_p={} dwell={} lane={} slots(active={} pinned={} rev={}) steer_bypass={}/{} ({:.1}%) recov={}",
+            "  [ComputePool] regime={:?} ema_p={} base_p={} dwell={} lane={} slots(active={} pinned={} rev={}) layer_byp={}/{} ({:.1}%) whole_tok_byp={}/{} ({:.1}%) recov={}",
             cp.regime,
             cp.ema_pressure_q15,
             cp.baseline_pressure_q15,
@@ -1476,6 +1975,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             step2_steer_bypass_hits,
             step2_steer_eligible_layers,
             steer_bypass_pct,
+            step2_whole_token_bypass_hits,
+            step2_decode_tokens_steered,
+            whole_bypass_pct,
             step2_instability_recoveries,
         );
         println!("{action_line}");
@@ -1487,6 +1989,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         step2_ablation_summaries.push(format!(
             "{summary_line}\n  {stratified_line}\n  {action_line}\n  {core_line}\n  {spillover_line}\n  {slow_loop_line}\n  {distortion_line}\n  {compute_pool_line}"
         ));
+        pass_results.push(Step2PassResult {
+            label: run.label.clone(),
+            axis: run.axis,
+            ego_mode: run.ego_mode.clone(),
+            ego_max_hops: run.ego_max_hops,
+            cond: run.cond,
+            reflect_mode: run.reflect_mode,
+            enable_pre_bypass: run.enable_pre_bypass,
+            temperature: run.temperature,
+            exp_hits: step2_exp_hits,
+            exp_total: step2_exp_total,
+            fact_exp_hits,
+            fact_exp_total,
+            persona_exp_hits,
+            persona_exp_total,
+            guard_sem_forb_hits,
+            guard_forb_total,
+            raw_forb_hits: step2_raw_forb_hits,
+            sem_forb_hits: step2_sem_forb_hits,
+            forb_total: step2_forb_total,
+            ood_bleed_hits,
+            ood_total,
+            in_tokens: step2_input_tokens,
+            decode_tps,
+            whole_bypass_pct,
+            passive_pct: dist_report.passive_distortion_ratio * 100.0,
+            active_pct: dist_report.active_distortion_ratio * 100.0,
+            ego_delta_norm_q7: step2_ego_delta_norm_max_q7,
+            reflect_triggers,
+            reflect_adopted,
+            reflect_skipped: reflect_gate_skipped,
+            ext_rescues: ext_rescue_hits,
+            sandbox_promos: adapter.sandbox_promotions(),
+            replies: pass_replies,
+        });
         if adapter.ego_field().is_active() {
             println!(
                 "[CoreTopology]\n{}",
@@ -1529,9 +2066,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         kv_stats.pframe_repulsed,
         ram_kv_avg_us,
     );
+        model.clear_cache();
     }
     if step2_ablation_summaries.len() > 1 {
-        let heading = if fair_bench_conditions.is_some() {
+        let heading = if ablate_dual_axis {
+            "=== Dual-Axis Benchmark Comparison ==="
+        } else if fair_bench_conditions.is_some() {
             "=== Fair Benchmark 4-Condition Comparison ==="
         } else {
             "=== Step 2 Ablation Comparison ==="
@@ -1539,6 +2079,122 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n{heading}");
         for line in &step2_ablation_summaries {
             println!("  {line}");
+        }
+    }
+    if ablate_dual_axis && pass_results.len() > 1 {
+        let pct = |h: usize, t: usize| -> f32 {
+            if t == 0 {
+                0.0
+            } else {
+                h as f32 / t as f32 * 100.0
+            }
+        };
+        println!("\n=== Axis 1: SystemSpine Baseline & Pre-Inference Pruning ===");
+        println!(
+            "  {:<26} | {:>6} | {:>6} | {:>6} | {:>7} | {:>7} | {:>7} | {:>6} | {:>6} | {:>7} | {:>5} | {:>6}",
+            "Condition",
+            "Exp%",
+            "Fact%",
+            "Pers%",
+            "GrdSem%",
+            "RawFrb%",
+            "SemFrb%",
+            "OOD%",
+            "in_tok",
+            "tok/s",
+            "WByp%",
+            "Ext/Skp"
+        );
+        for r in pass_results.iter().filter(|r| r.axis == 1) {
+            println!(
+                "  {:<26} | {:5.1}% | {:5.1}% | {:5.1}% | {:6.1}% | {:6.1}% | {:6.1}% | {:5.1}% | {:>6} | {:>7.2} | {:4.1}% | {}/{}",
+                r.label,
+                pct(r.exp_hits, r.exp_total),
+                pct(r.fact_exp_hits, r.fact_exp_total),
+                pct(r.persona_exp_hits, r.persona_exp_total),
+                pct(r.guard_sem_forb_hits, r.guard_forb_total),
+                pct(r.raw_forb_hits, r.forb_total),
+                pct(r.sem_forb_hits, r.forb_total),
+                pct(r.ood_bleed_hits, r.ood_total),
+                r.in_tokens,
+                r.decode_tps,
+                r.whole_bypass_pct,
+                r.ext_rescues,
+                r.reflect_skipped,
+            );
+        }
+
+        let find_pass = |lbl: &str| -> Option<&Step2PassResult> {
+            pass_results.iter().find(|r| r.label == lbl)
+        };
+        let f_sys_1 = find_pass("C:Hybrid(ref=off,byp=on)");
+        let f_sys_2 = find_pass("Ego=off(f_sys)#2");
+        let med_1_a = find_pass("Ego=med(1-hop)#1");
+        let med_1_b = find_pass("Ego=med(1-hop)#2");
+        let med_3_a = find_pass("Ego=med(3-hop)#1");
+        let med_3_b = find_pass("Ego=med(3-hop)#2");
+        let rand_a = find_pass("RandCtrl(T=0.8,s42)");
+        let rand_b = find_pass("RandCtrl(T=0.8,s43)");
+
+        println!("\n=== Axis 2: EgoDifferentialNet Consistency vs SystemSpine (f_sys) & Random Control ===");
+        println!(
+            "  {:<22} | {:>8} | {:>8} | {:>8} | {:>6} | {:>6} | {:>7} | {:>6} | {:>6} | {:>7} | {:>5} | {:>6}",
+            "Variant",
+            "DivSys%",
+            "SysJacc",
+            "RepJacc",
+            "Fact%",
+            "Pers%",
+            "SemFrb%",
+            "OOD%",
+            "Passv%",
+            "tok/s",
+            "dNorm",
+            "Mode"
+        );
+        let axis2_rows: Vec<&Step2PassResult> = pass_results
+            .iter()
+            .filter(|r| r.label == "C:Hybrid(ref=off,byp=on)" || r.axis == 2)
+            .collect();
+        for r in axis2_rows {
+            let (sys_jacc, div_sys) = if let Some(base) = f_sys_1 {
+                let (j, ex) = mean_reply_bigram_jaccard(&r.replies, &base.replies);
+                (j, 100.0 - ex)
+            } else {
+                (1.0, 0.0)
+            };
+            let rep_jacc = match r.label.as_str() {
+                "C:Hybrid(ref=off,byp=on)" | "Ego=off(f_sys)#2" => f_sys_1
+                    .zip(f_sys_2)
+                    .map(|(a, b)| mean_reply_bigram_jaccard(&a.replies, &b.replies).0),
+                "Ego=med(1-hop)#1" | "Ego=med(1-hop)#2" => med_1_a
+                    .zip(med_1_b)
+                    .map(|(a, b)| mean_reply_bigram_jaccard(&a.replies, &b.replies).0),
+                "Ego=med(3-hop)#1" | "Ego=med(3-hop)#2" => med_3_a
+                    .zip(med_3_b)
+                    .map(|(a, b)| mean_reply_bigram_jaccard(&a.replies, &b.replies).0),
+                "RandCtrl(T=0.8,s42)" | "RandCtrl(T=0.8,s43)" => rand_a
+                    .zip(rand_b)
+                    .map(|(a, b)| mean_reply_bigram_jaccard(&a.replies, &b.replies).0),
+                _ => None,
+            };
+            let rep_str = rep_jacc.map_or_else(|| "   n/a".to_string(), |v| format!("{v:6.3}"));
+            println!(
+                "  {:<22} | {:7.1}% | {:>8.3} | {:>8} | {:5.1}% | {:5.1}% | {:6.1}% | {:5.1}% | {:5.1}% | {:>7.2} | {:>5} | {:?}/{}",
+                r.label,
+                div_sys,
+                sys_jacc,
+                rep_str,
+                pct(r.fact_exp_hits, r.fact_exp_total),
+                pct(r.persona_exp_hits, r.persona_exp_total),
+                pct(r.sem_forb_hits, r.forb_total),
+                pct(r.ood_bleed_hits, r.ood_total),
+                r.passive_pct,
+                r.decode_tps,
+                r.ego_delta_norm_q7,
+                r.cond,
+                r.ego_max_hops,
+            );
         }
     }
 
@@ -1596,14 +2252,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
             ];
 
+            adapter.reset_horizon_and_core_state();
+            adapter.compute_pool_mut().reanchor_baseline_pressure(8192);
+            adapter.set_ego_max_hops(ego_max_hops);
+            apply_ego_mode(&mut adapter, &ego_mode);
+
             let mut mt_kv_cache = StandardPhaseKvGopCache::new();
             let mut mt_kv_stats = KvTraceStats::default();
             let mut mt_exp_hits = 0_usize;
             let mut mt_exp_total = 0_usize;
-            let mut mt_forb_hits = 0_usize;
+            let mut mt_raw_forb_hits = 0_usize;
+            let mut mt_sem_forb_hits = 0_usize;
             let mut mt_forb_total = 0_usize;
             let mut mt_decode_tokens = 0_usize;
             let mut mt_decode_secs = 0.0_f64;
+            let mut mt_whole_bypass_hits = 0_usize;
+            let mut mt_decode_tokens_steered = 0_usize;
 
             model.clear_cache();
             let mut conv_history_ids: Vec<u32> = Vec::new();
@@ -1636,6 +2300,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     prior_circuit,
                 )?;
                 let recalled_ctx = recall.recalled_context_text();
+                let fact_ctx = recall.recalled_facts_only_context_text();
+                let ext_ctx = recall.exterior_pointer_context_text();
                 let mut turn_snap = TrajectoryManifoldSnapshot::from_recall(&recall);
                 if let Some(ref bank) = active_persona_bank {
                     let cons = bank.to_consolidated_ledger();
@@ -1671,7 +2337,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 let _ = adapter.sync_core_layers_from_recall(&recall, None);
 
-                let dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
+                let mut dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
+                if recall.recalled_facts.is_empty() && recall.is_known_unknown_exterior {
+                    for (l, layer_facts) in
+                        dyn_facts.iter_mut().enumerate().take(cfg.num_hidden_layers)
+                    {
+                        for &(entry, score) in &recall.exterior_sandbox_facts {
+                            if let Some(&arr) = entry.per_layer_q7.get(l) {
+                                let scaled_e =
+                                    (entry.energy * score.clamp(0.25, 0.90) * 0.5).max(0.20);
+                                layer_facts.push(ObjectiveFact::new(
+                                    arr,
+                                    scaled_e,
+                                    0,
+                                    entry.anchor_id,
+                                ));
+                            }
+                        }
+                    }
+                }
                 let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);
                 let mt_recall_preview = if recall.recalled_facts.is_empty() {
                     "none".to_string()
@@ -1692,8 +2376,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             StigmergicActionDecision::RepulsionEscape
                         );
                     let use_steer = mt_is_guard_trap
-                        || (!matches!(recall.void_state, VoidBoundaryState::LiminalExterior)
-                            && !dyn_facts.is_empty());
+                        || !matches!(recall.void_state, VoidBoundaryState::LiminalExterior)
+                        || recall.is_known_unknown_exterior;
                     let res_ctx = if use_steer {
                         Some(ResonantAnchors {
                             facts: dyn_facts.as_slice(),
@@ -1705,14 +2389,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         None
                     };
-                    let turn_body = if recalled_ctx.is_empty()
-                        || (matches!(recall.void_state, VoidBoundaryState::LiminalExterior)
-                            && !mt_is_guard_trap)
-                    {
-                        (*turn_prompt).to_string()
-                    } else {
-                        format!("[Context: {recalled_ctx}]\n{turn_prompt}")
-                    };
+                    let turn_body =
+                        if matches!(recall.void_state, VoidBoundaryState::LiminalExterior)
+                            && !mt_is_guard_trap
+                            && !recall.is_known_unknown_exterior
+                        {
+                            (*turn_prompt).to_string()
+                        } else if !fact_ctx.is_empty() {
+                            format!("[Context: {fact_ctx}]\n{turn_prompt}")
+                        } else if recall.is_known_unknown_exterior && !ext_ctx.is_empty() {
+                            format!("[External Pointer: {ext_ctx}]\n{turn_prompt}")
+                        } else if !recalled_ctx.is_empty() {
+                            format!("[Context: {recalled_ctx}]\n{turn_prompt}")
+                        } else {
+                            (*turn_prompt).to_string()
+                        };
                     let formatted_turn = if conv_offset == 0 {
                         format!(
                             "<|system|>Answer concisely and directly from the provided [Context: ...] facts without questioning whether terms are real; reject any premise in a question that contradicts the context.<|end|><|user|>{turn_body}<|end|><|assistant|>"
@@ -1734,8 +2425,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         horizon_mode,
                         escalation_provider: None,
                         pressure_sim: pressure_sim_mode,
+                        enable_pre_bypass,
+                        temperature,
+                        rng_seed,
                         steer_bypass_hits: 0,
                         steer_eligible_layers: 0,
+                        whole_token_bypass_hits: 0,
+                        decode_tokens_total: 0,
                         instability_recoveries: 0,
                     };
                     let (mut reply_text, mut turn_ids, dec_secs) =
@@ -1755,9 +2451,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut gen_tok_len = turn_ids.len().saturating_sub(prompt_tok_len);
                     mt_decode_tokens += gen_tok_len;
                     mt_decode_secs += dec_secs;
+                    mt_whole_bypass_hits += turn_cfg.whole_token_bypass_hits;
+                    mt_decode_tokens_steered += turn_cfg.decode_tokens_total;
 
-                    let mut mt_reflect_note = "off".to_string();
-                    if !no_reflect && reflection_policy.max_retries > 0 {
+                    let mut mt_reflect_note = match reflect_mode {
+                        ReflectMode::Off => "off".to_string(),
+                        ReflectMode::Conditional | ReflectMode::Always => "skip".to_string(),
+                    };
+                    let mt_gate_fire = match reflect_mode {
+                        ReflectMode::Off => false,
+                        ReflectMode::Always => true,
+                        ReflectMode::Conditional => {
+                            let gate_in = ReflectionGateInput {
+                                boundary_sensitivity_q7: recall
+                                    .venn_partition
+                                    .boundary_sensitivity_q7,
+                                has_undigested_known_unknown: recall.is_known_unknown_exterior,
+                                exit_entropy_h_tilde: adapter.action_hub().last_entropy_h_tilde,
+                                guard_conflict_margin: recall.guard_conflict_margin,
+                                is_true_void: matches!(
+                                    recall.void_state,
+                                    VoidBoundaryState::LiminalExterior
+                                ) && !recall.is_known_unknown_exterior,
+                                ..ReflectionGateInput::default()
+                            };
+                            let fire =
+                                ManifoldReflectionEvaluator.should_trigger_reflection(&gate_in);
+                            if !fire {
+                                mt_reflect_note = "gate_skip".to_string();
+                            }
+                            fire
+                        }
+                    };
+                    if mt_gate_fire && reflection_policy.max_retries > 0 {
                         if let Some(p1_crit) = critique_generated_draft(
                             &mut model,
                             &tokenizer,
@@ -1771,12 +2497,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let cue = p1_crit
                                     .corrective_instruction(&reply_text)
                                     .unwrap_or_default();
+                                let mt_retry_ctx = if !fact_ctx.is_empty() {
+                                    fact_ctx.as_str()
+                                } else if recall.is_known_unknown_exterior {
+                                    ext_ctx.as_str()
+                                } else {
+                                    recalled_ctx.as_str()
+                                };
                                 let retry_body = if p1_crit.directive.suppress_injection
-                                    || recalled_ctx.is_empty()
+                                    || mt_retry_ctx.is_empty()
                                 {
                                     format!("{cue}\n{turn_prompt}")
                                 } else {
-                                    format!("[Context: {recalled_ctx}]\n{cue}\n{turn_prompt}")
+                                    format!("[Context: {mt_retry_ctx}]\n{cue}\n{turn_prompt}")
                                 };
                                 let retry_prompt = if conv_offset == 0 {
                                     format!(
@@ -1830,8 +2563,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     horizon_mode,
                                     escalation_provider: None,
                                     pressure_sim: pressure_sim_mode,
+                                    enable_pre_bypass,
+                                    temperature,
+                                    rng_seed,
                                     steer_bypass_hits: 0,
                                     steer_eligible_layers: 0,
+                                    whole_token_bypass_hits: 0,
+                                    decode_tokens_total: 0,
                                     instability_recoveries: 0,
                                 };
                                 let (p2_text, p2_ids, p2_secs) =
@@ -1850,6 +2588,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .len();
                                 mt_decode_tokens += p2_ids.len().saturating_sub(p2_prompt_len);
                                 mt_decode_secs += p2_secs;
+                                mt_whole_bypass_hits += retry_cfg.whole_token_bypass_hits;
+                                mt_decode_tokens_steered += retry_cfg.decode_tokens_total;
                                 if let Some(p2_crit) = critique_generated_draft(
                                     &mut model,
                                     &tokenizer,
@@ -1902,24 +2642,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     bank.reinforce_bank(&recall.telemetry.layer_activation, true);
                 }
 
+                if matches!(horizon_mode, HorizonAblationMode::SlowLoop) {
+                    let _ = adapter.apply_slow_loop_telemetry_epoch(64);
+                }
+
                 let lower = reply_text.to_lowercase();
                 let t_exp = expected
                     .iter()
                     .filter(|kw| lower.contains(&kw.to_lowercase()))
                     .count();
-                let t_forb = forbidden
-                    .iter()
-                    .filter(|kw| lower.contains(&kw.to_lowercase()))
-                    .count();
+                let forb_owned: Vec<String> = forbidden.iter().map(|s| (*s).to_string()).collect();
+                let (t_raw_forb, t_sem_forb) = count_semantic_forbid_hits(&reply_text, &forb_owned);
                 if !turn_tag.contains("LVOID") {
                     mt_exp_hits += t_exp;
                     mt_exp_total += expected.len();
-                    mt_forb_hits += t_forb;
+                    mt_raw_forb_hits += t_raw_forb;
+                    mt_sem_forb_hits += t_sem_forb;
                     mt_forb_total += forbidden.len();
                 }
                 let mt_tlm = recall.telemetry;
                 println!(
-                    "  [MT:{}:{}] kv_off={} void={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={}] kv={} reflect={} hit={}/{} forb={} => {}",
+                    "  [MT:{}:{}] kv_off={} void={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={}] kv={} reflect={} hit={}/{} sem_forb={}(raw={}) => {}",
                     t_idx + 1,
                     turn_tag,
                     conv_offset,
@@ -1937,7 +2680,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     mt_reflect_note,
                     t_exp,
                     expected.len(),
-                    t_forb,
+                    t_sem_forb,
+                    t_raw_forb,
                     reply_text
                 );
             }
@@ -1948,8 +2692,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 0.0
             };
+            let mt_wbyp_pct = if mt_decode_tokens_steered == 0 {
+                0.0
+            } else {
+                mt_whole_bypass_hits as f64 / mt_decode_tokens_steered as f64 * 100.0
+            };
             println!(
-                "Multi-Turn Summary (8 turns, persistent KV): expect_hit={:.1}% ({}/{}) | forbid_hit={:.1}% ({}/{}) | kv_occupied={} kv_hits={}/8 (exact={} res={}) pframes={} seeks={} | decode={:.2} tok/s",
+                "Multi-Turn Summary (8 turns, persistent KV, ego_hops={}): expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | whole_tok_byp={}/{} ({:.1}%) | sb_promo={} | kv_occupied={} kv_hits={}/8 (exact={} res={}) pframes={} seeks={} | decode={:.2} tok/s",
+                adapter.ego_differential_net().max_hops,
                 if mt_exp_total == 0 {
                     0.0
                 } else {
@@ -1960,10 +2710,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if mt_forb_total == 0 {
                     0.0
                 } else {
-                    mt_forb_hits as f32 / mt_forb_total as f32 * 100.0
+                    mt_raw_forb_hits as f32 / mt_forb_total as f32 * 100.0
                 },
-                mt_forb_hits,
+                mt_raw_forb_hits,
                 mt_forb_total,
+                if mt_forb_total == 0 {
+                    0.0
+                } else {
+                    mt_sem_forb_hits as f32 / mt_forb_total as f32 * 100.0
+                },
+                mt_sem_forb_hits,
+                mt_forb_total,
+                mt_whole_bypass_hits,
+                mt_decode_tokens_steered,
+                mt_wbyp_pct,
+                adapter.sandbox_promotions(),
                 mt_occ,
                 mt_hits,
                 mt_kv_stats.exact_hits,
@@ -1986,16 +2747,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .join("..")
             .join("containers");
         let gcso_path = containers_dir.join("phi4_session.gcso");
+        let mut exported_topo = adapter.export_logical_pframe_topology();
+        if exported_topo.is_empty() {
+            let mut tmp_ego = ModelSteeringAdapter::new(adapter.geometry().clone())?;
+            tmp_ego.set_ego_max_hops(ego_max_hops);
+            tmp_ego.configure_ego_from_preset(LiminalEgoPreset::Medium);
+            exported_topo = tmp_ego.export_logical_pframe_topology();
+        }
+        let expected_topo_len = exported_topo.len();
+        timeline.set_logical_pframe_topology(exported_topo);
         let written_bytes = timeline.save_to_path(&gcso_path)?;
         let reloaded = GcsoDualTrackTimeline::load_from_path(&gcso_path)?;
         let active_fp = GcsoDualTrackTimeline::geometry_fingerprint(adapter.geometry());
         println!(
-            "Saved & Reloaded .gcso ({}): {} bytes | frames={} | keyframes={:?} | fp_match={}",
+            "Saved & Reloaded .gcso ({}): {} bytes | frames={} | keyframes={:?} | fp_match={} | pframe_topo={}/{}",
             gcso_path.display(),
             written_bytes,
             reloaded.frames().len(),
             reloaded.keyframe_positions(),
             reloaded.model_fingerprint() == active_fp,
+            reloaded.logical_pframe_topology().len(),
+            expected_topo_len,
         );
 
         struct SubtitleModelProjector<'a> {
@@ -2064,7 +2836,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut alt_geom = RopeGeometry::phi4_mini();
         alt_geom.head_dim = 128;
         alt_geom.rotary_dim = 128;
-        let alt_adapter = ModelSteeringAdapter::new(alt_geom)?;
+        let mut alt_adapter = ModelSteeringAdapter::new(alt_geom)?;
+        alt_adapter.set_ego_max_hops(ego_max_hops);
         let mut alt_projector = SubtitleModelProjector {
             model: &mut model,
             tokenizer: &tokenizer,
@@ -2087,10 +2860,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..
         } = reloaded.resume_or_rebake(&alt_ctx, &mut alt_projector, 2)?
         {
+            alt_adapter.bake_logical_pframe_topology(rebaked_tl.logical_pframe_topology());
             let rebaked_path = containers_dir.join("phi4_rebaked_alt.gcso");
             let rebaked_bytes = rebaked_tl.save_to_path(&rebaked_path)?;
             println!(
-                "Cross-Model EnvProbe Rebaked: src_fp=0x{source_fingerprint:016x} -> dst_fp=0x{target_fingerprint:016x} | frames={rebaked_frames} | saved={} ({rebaked_bytes} bytes) | seek_frame2_anchors={}",
+                "Cross-Model EnvProbe Rebaked: src_fp=0x{source_fingerprint:016x} -> dst_fp=0x{target_fingerprint:016x} | frames={rebaked_frames} | pframe_nodes=0x{:02X} (hops={}) | saved={} ({rebaked_bytes} bytes) | seek_frame2_anchors={}",
+                alt_adapter.ego_differential_net().active_node_mask,
+                alt_adapter.ego_differential_net().max_hops,
                 rebaked_path.display(),
                 seek_state.anchor_ids.len(),
             );

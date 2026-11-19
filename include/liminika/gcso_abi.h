@@ -22,15 +22,15 @@
 #include "liminika/gcso_types.h"
 
 // ===================================================================
-// 0. Version Identifiers (Unified C-ABI v0.1.2 Specification)
+// 0. Version Identifiers (Unified C-ABI v0.1.3 Specification)
 // ===================================================================
 
 #define GCSO_ABI_VERSION_MAJOR 0U
 #define GCSO_ABI_VERSION_MINOR 1U
-#define GCSO_ABI_VERSION_PATCH 2U
+#define GCSO_ABI_VERSION_PATCH 3U
 #define GCSO_ABI_VERSION_HEX \
     ((GCSO_ABI_VERSION_MAJOR << 16U) | (GCSO_ABI_VERSION_MINOR << 8U) | GCSO_ABI_VERSION_PATCH)
-#define GCSO_ABI_VERSION_STRING "0.1.2"
+#define GCSO_ABI_VERSION_STRING "0.1.3"
 
 GCSO_EXTERN_C_BEGIN
 
@@ -1273,6 +1273,37 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_ego_field_intervene_frame(
     const gcso_epistemic_horizon_reading_t* GCSO_RESTRICT horizon,
     const gcso_stigmergic_venn_serendipity_report_t* GCSO_RESTRICT venn_report,
     gcso_gateway_frame_t* GCSO_RESTRICT frame_inout) GCSO_NOEXCEPT;
+
+/**
+ * @brief Evaluates the branchless 4-region Venn partition (S&O, S\O, validated O\S, True Void)
+ * across 8 SWAR granules.
+ */
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_liminal_evaluate_venn_partition(
+    uint8_t self_mask, const uint8_t* GCSO_RESTRICT other_granule_density_q7,
+    const uint8_t* GCSO_RESTRICT granule_noise_tolerance_q7, uint8_t concentration_floor_q7,
+    gcso_liminal_venn_partition_t* GCSO_RESTRICT partition_out) GCSO_NOEXCEPT;
+
+/**
+ * @brief Executes 1 branchless Hot-Path asymmetric homeostatic tension step.
+ */
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_distortion_tension_step_hot_path(
+    gcso_distortion_tension_t* GCSO_RESTRICT tension_inout, uint8_t ego_delta_norm_q7,
+    uint8_t boundary_sensitivity_q7, uint8_t exit_entropy_q7, uint8_t guard_proximity_q7,
+    uint8_t active_overdrive) GCSO_NOEXCEPT;
+
+/**
+ * @brief Evaluates up to max_hops (1..=4) of a P-Frame DistortionDelta pointer chain while
+ * enforcing SystemSpineState physical pinned isolation.
+ */
+GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_distortion_delta_apply_chain(
+    const gcso_distortion_delta_t* GCSO_RESTRICT nodes, size_t num_nodes,
+    const gcso_liminal_ego_field_t* GCSO_RESTRICT ego,
+    const gcso_system_spine_state_t* GCSO_RESTRICT spine,
+    const gcso_liminal_venn_partition_t* GCSO_RESTRICT venn,
+    const gcso_stigmergic_granule_field_t* GCSO_RESTRICT stigmergy,
+    const gcso_distortion_tension_t* GCSO_RESTRICT tension, uint8_t max_hops,
+    gcso_gateway_frame_t* GCSO_RESTRICT frame_inout, uint8_t* GCSO_RESTRICT delta_norm_out,
+    uint8_t* GCSO_RESTRICT hops_traversed_out) GCSO_NOEXCEPT;
 
 GCSO_STATIC_ASSERT(GCSO_CRYSTAL_RECORD_VERSION == GCSO_ABI_VERSION_HEX,
                    "GCSO_CRYSTAL_RECORD_VERSION must match GCSO_ABI_VERSION_HEX");

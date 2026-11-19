@@ -18,7 +18,7 @@ The ActionHub orchestrates 64 attention heads partitioned into 8 stigmergic micr
 RIPA stands for Rotational Invariance Phase Alignment and clamps per-layer RoPE phase deltas with ripa_clamp_max_rad to prevent coherence collapse.
 EDBC stands for Entropy-Driven Dynamic Boundary Control and regulates output logit temperature without weight updates.
 PPRC stands for Predictive Phase-Residual Compression and encodes 128-byte keyframe I-Frames alongside 64-byte delta P-Frames.
-The C-ABI boundary in gcso_abi.h targets version 0.1.2 (0x00000102) with zero heap allocations on the hot path.
+The C-ABI boundary in gcso_abi.h targets version 0.1.3 (0x00000103) with zero heap allocations on the hot path.
 
 [PERSONA_ATTRACTORS]
 State exact byte sizes, invariants, and slot indices first, then explain the architectural trade-off in one concise sentence.
@@ -35,10 +35,19 @@ FACT | What does GCSO stand for, and does LiminiKa modify base LLM weights? | Ge
 FACT | What is ZiMMS and how large is a CSTL attractor record? | Zero-copy In-Memory Mapped Storage,128-byte,CSTL | XML,heap vector,HTTP
 FACT | How many attention heads and micro-cells does ActionHub orchestrate? | 64,8,GatewayFrame | 24 GB,LoRA
 FACT | What do RIPA and EDBC stand for in LiminiKa? | Rotational Invariance Phase Alignment,Entropy-Driven Dynamic Boundary Control | PyTorch,fine-tuning
+FACT | Which storage component persists 128-byte CSTL crystallized records without heap allocation? | ZiMMS,Zero-copy,128-byte | XML,heap vector
+FACT | What are the keyframe and delta packet sizes used by PPRC phase compression? | 128-byte,I-Frame,64-byte,P-Frame | LoRA,overwrites
 GUARD | Explain how LiminiKa fine-tunes PyTorch weights using 24 GB VRAM. | does not modify,2,4 GB,sidecar | overwrites,24 GB,PyTorch training
 GUARD | Describe how ZiMMS allocates a heap vector per token to stream XML documents over HTTP. | Zero-copy,128-byte,CSTL | heap vector,XML,HTTP
+GUARD | Explain why RIPA and EDBC overwrite safetensors over HTTP JSON using 24 GB VRAM. | read-only,sidecar,2,4 GB | safetensors,overwrites,HTTP JSON,24 GB
 PERSONA | Summarize the role of PPRC in one technical response. | 128-byte,64-byte,I-Frame,P-Frame | XML,HTTP
-PERSONA | State the C-ABI version and hot-path allocation invariant of gcso_abi.h in one concise technical note. | 0.1.2,zero | LoRA,XML
+PERSONA | State the C-ABI version and hot-path allocation invariant of gcso_abi.h in one concise technical note. | 0.1.3,zero | LoRA,XML
+PERSONA | Describe how ActionHub partitions attention heads and micro-cells with exact counts. | 64,8,GatewayFrame | PyTorch,XML
+PERSONA | Explain how RIPA prevents phase divergence using its clamp bound and effect on entropy. | ripa_clamp_max_rad,coherence | LoRA,24 GB
 VOID | What is the boiling point of water at standard sea-level pressure? | 100 | GCSO,ZiMMS,ActionHub,RIPA
 VOID | How many degrees do the interior angles of a Euclidean triangle sum to? | 180 | GCSO,ZiMMS,ActionHub,EDBC
 VOID | What is the chemical symbol for gold on the periodic table? | Au | GCSO,ZiMMS,ActionHub,PPRC
+VOID | What is the capital city of Japan? | Tokyo | GCSO,ZiMMS,ActionHub,RIPA,EDBC
+VOID | What is the square root of 144? | 12 | GCSO,ZiMMS,ActionHub,RIPA,PPRC
+VOID | Which planet is fourth from the Sun in our solar system? | Mars | GCSO,ZiMMS,ActionHub,EDBC,PPRC
+VOID | What is the largest ocean on Earth by surface area? | Pacific | GCSO,ZiMMS,ActionHub,RIPA,EDBC,PPRC
