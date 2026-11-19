@@ -82,6 +82,14 @@ pub struct ComputePoolConfig {
     pub bypass_pheromone_floor_q7: u8,
     /// Pheromone floor under `Surge` pressure (higher than `Elevated` to shed more reversible work).
     pub surge_bypass_pheromone_floor_q7: u8,
+    /// Maximum non-consecutive reversible slots bypassed per step under `Elevated` pressure.
+    pub max_elevated_bypass_slots: u8,
+    /// Maximum non-consecutive reversible slots bypassed per step under `Surge` pressure.
+    pub max_surge_bypass_slots: u8,
+    /// Minimum calm steps required before re-entering bypass after an exit instability recovery.
+    pub min_re_bypass_dwell: u8,
+    /// Explicit alignment padding.
+    pub _pad_cfg: u8,
 }
 
 impl Default for ComputePoolConfig {
@@ -94,6 +102,10 @@ impl Default for ComputePoolConfig {
             min_lane_switch_dwell: 24,
             bypass_pheromone_floor_q7: 40,
             surge_bypass_pheromone_floor_q7: 72,
+            max_elevated_bypass_slots: 4,
+            max_surge_bypass_slots: 8,
+            min_re_bypass_dwell: 3,
+            _pad_cfg: 0,
         }
     }
 }
@@ -163,6 +175,8 @@ pub struct AnonymousComputePool {
     pub recovery_dwell: u16,
     /// Consecutive steps spent under sustained `Elevated`/`Surge` pressure for Slow-Loop migration.
     pub lane_switch_dwell: u16,
+    /// Remaining calm steps before Fast-Loop bypass may re-engage after an exit instability recovery.
+    pub re_bypass_cooldown: u8,
     /// Pool configuration thresholds.
     pub config: ComputePoolConfig,
 }
@@ -193,8 +207,59 @@ impl AnonymousComputePool {
             ema_pressure_q15: 8192,
             recovery_dwell: 0,
             lane_switch_dwell: 0,
+            re_bypass_cooldown: 0,
             config,
         }
+    }
+
+    /// Triggers immediate 1-step full-layer recovery and arms asymmetric re-bypass dwell hysteresis.
+    ///
+    /// Call on exit entropy spikes, `InternalConflict`, or `LiminalExterior` transitions so the
+    /// next step executes all active slots and requires `min_re_bypass_dwell` calm steps before
+    /// re-entering Fast-Loop bypass.
+    #[inline(always)]
+    pub fn signal_exit_instability(&mut self) {
+        self.re_bypass_cooldown = self.config.min_re_bypass_dwell.max(1);
+    }
+
+    /// Selects up to `max_slots` lowest-pheromone slots from `candidate_mask` while strictly
+    /// avoiding consecutive adjacent slot indices (preserving Gauss-Legendre-like interior
+    /// representative layers; `0 alloc`, `0 fdiv`).
+    #[inline]
+    #[must_use]
+    pub fn select_non_consecutive_bypass_mask(
+        candidate_mask: u64,
+        slot_pheromone_q7: &[u8; MAX_ANONYMOUS_COMPUTE_SLOTS],
+        max_slots: u8,
+    ) -> u64 {
+        let mut remaining = candidate_mask;
+        let mut selected = 0_u64;
+        let mut count = 0_u8;
+        while remaining != 0 && count < max_slots {
+            // Find the lowest-pheromone eligible slot in `remaining`.
+            let mut scan = remaining;
+            let mut best_idx = 64_usize;
+            let mut best_ph = u8::MAX;
+            while scan != 0 {
+                let idx = scan.trailing_zeros() as usize;
+                scan &= scan - 1;
+                let ph = slot_pheromone_q7[idx];
+                if ph < best_ph {
+                    best_ph = ph;
+                    best_idx = idx;
+                }
+            }
+            if best_idx >= MAX_ANONYMOUS_COMPUTE_SLOTS {
+                break;
+            }
+            let bit = 1_u64 << best_idx;
+            let neighbors = (bit << 1) | (bit >> 1);
+            selected |= bit;
+            // Exclude the selected slot and both immediate neighbors to forbid consecutive skips.
+            remaining &= !(bit | neighbors);
+            count = count.saturating_add(1);
+        }
+        selected
     }
 
     /// Re-anchors the Gauge-Zero pressure baseline at a `+ System` / Cold-Path checkpoint.
@@ -280,15 +345,25 @@ impl AnonymousComputePool {
         let slow_loop_migration_ready =
             u8::from(in_pressure && self.lane_switch_dwell >= self.config.min_lane_switch_dwell);
 
-        let pheromone_floor_q7 = match next_regime {
-            ComputePressureRegime::Quiescent => 0,
-            ComputePressureRegime::Elevated => self.config.bypass_pheromone_floor_q7,
-            ComputePressureRegime::Surge => self.config.surge_bypass_pheromone_floor_q7,
+        let (pheromone_floor_q7, max_bypass_slots) = match next_regime {
+            ComputePressureRegime::Quiescent => (0, 0),
+            ComputePressureRegime::Elevated => (
+                self.config.bypass_pheromone_floor_q7,
+                self.config.max_elevated_bypass_slots,
+            ),
+            ComputePressureRegime::Surge => (
+                self.config.surge_bypass_pheromone_floor_q7,
+                self.config.max_surge_bypass_slots,
+            ),
         };
 
-        // Irreversible steps (e.g. Prefill) force-protect all active slots against bypass.
+        // Immediate 1-step full-layer recovery with asymmetric re-bypass dwell hysteresis.
+        let in_instability_cooldown = self.re_bypass_cooldown > 0;
+        self.re_bypass_cooldown = self.re_bypass_cooldown.saturating_sub(1);
+
+        // Irreversible steps (e.g. Prefill) or instability cooldown force-protect all active slots.
         let effective_reversible = branchless_select_u64(
-            reading.irreversible_step != 0,
+            reading.irreversible_step != 0 || in_instability_cooldown,
             0,
             self.reversible_mask & !self.pinned_mask,
         );
@@ -303,7 +378,12 @@ impl AnonymousComputePool {
             throttle_candidate_mask |= branchless_select_u64(below_throttle, bit, 0);
         }
 
-        let bypass_mask = effective_reversible & low_pheromone_mask;
+        let candidate_bypass = effective_reversible & low_pheromone_mask;
+        let bypass_mask = Self::select_non_consecutive_bypass_mask(
+            candidate_bypass,
+            &self.slot_pheromone_q7,
+            max_bypass_slots,
+        );
         let eligible_exec = self.active_mask & !self.repulsion_mask;
         let execute_mask = (eligible_exec & !bypass_mask) | self.pinned_mask;
         let throttle_mask = effective_reversible & throttle_candidate_mask & !bypass_mask;
@@ -469,6 +549,7 @@ mod tests {
             min_lane_switch_dwell: 6,
             bypass_pheromone_floor_q7: 48,
             surge_bypass_pheromone_floor_q7: 80,
+            ..ComputePoolConfig::default()
         });
         pool.reanchor_baseline_pressure(8000);
         pool.set_lanes(0b0011, 0b0001, [127, 96, 0, 0, 0, 0, 0, 0]);
@@ -549,5 +630,45 @@ mod tests {
         pool.commit_exit_reward(0b0011, 120);
         assert!(pool.slot_pheromone_q7[1] > before_1);
         assert!(pool.slot_pheromone_q7[3] < before_3);
+    }
+
+    #[test]
+    fn compute_pool_enforces_non_consecutive_bypass_and_instability_recovery() {
+        let mut pool = AnonymousComputePool::default();
+        pool.reanchor_baseline_pressure(8000);
+        // 32-layer model: head 0..4 and tail 28..32 pinned, middle 4..28 reversible.
+        let active = (1_u64 << 32) - 1;
+        let pinned = 0x0000_000F_u64 | (0x0000_000F_u64 << 28);
+        let rev = active & !pinned;
+        pool.set_slot_masks(active, pinned, 0, rev);
+
+        let surge = SystemPressureReading {
+            frame_time_pressure_q15: 30000,
+            bandwidth_pressure_q15: 30000,
+            l3_load_pressure_q15: 15000,
+            irreversible_step: 0,
+            _pad: 0,
+        };
+        let d = pool.step_dispatch(surge);
+        assert_eq!(d.regime_u8, ComputePressureRegime::Surge as u8);
+        // Must never bypass pinned layers.
+        assert_eq!(d.bypass_mask & pinned, 0);
+        // Must cap at max_surge_bypass_slots (8) and never bypass two adjacent layers.
+        assert!(d.bypass_mask.count_ones() <= 8);
+        assert!(d.bypass_mask.count_ones() >= 4);
+        assert_eq!(d.bypass_mask & (d.bypass_mask << 1), 0);
+        // Bypassed layers never appear in stationary_evidence_mask.
+        assert_eq!(d.stationary_evidence_mask & d.bypass_mask, 0);
+
+        // Exit instability immediately forces full-layer recovery for min_re_bypass_dwell steps.
+        pool.signal_exit_instability();
+        for _ in 0..pool.config.min_re_bypass_dwell {
+            let d_rec = pool.step_dispatch(surge);
+            assert_eq!(d_rec.bypass_mask, 0);
+            assert_eq!(d_rec.execute_mask, active);
+        }
+        // After dwell expires under sustained surge, bypass may re-engage.
+        let d_after = pool.step_dispatch(surge);
+        assert!(d_after.bypass_mask.count_ones() > 0);
     }
 }

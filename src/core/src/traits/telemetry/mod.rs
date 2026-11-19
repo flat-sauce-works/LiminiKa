@@ -117,6 +117,8 @@ pub const TRAIL_FLAG_SWARM_ESCALATED: u32 = 1 << 7;
 pub const TRAIL_SWARM_QUORUM_SHIFT: u32 = 8;
 /// Bitmask (`0x0000_FF00`) isolating the 8-bit Micro-Swarm Quorum bitmask inside `gcso_pointer_trail_t::flags`.
 pub const TRAIL_SWARM_QUORUM_MASK: u32 = 0x0000_FF00;
+/// Trail flag bit (`0x0001_0000`): Previous step observed a positive pheromone rise above the granule noise deadband.
+pub const TRAIL_FLAG_PHEROMONE_RISING: u32 = 1 << 16;
 
 /// FastPathLedger telemetry metric bit (`0x01`): Fast-path bypass shortcut hit in `gcso_ledger_slot_t`.
 pub const LEDGER_METRIC_FAST_PATH_HIT: u8 = 1 << 0;

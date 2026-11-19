@@ -144,6 +144,12 @@ pub const DEFAULT_STIGMERGIC_EVAPORATION_RETAIN: f32 = 0.95;
 
 /// Default pheromone reinforcement gain ($g_{\mathrm{reinforce}} = 0.35$) deposited on coherent transitions.
 pub const DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN: f32 = 0.35;
+/// Default Q0.7 derivative weight $\alpha \in [0, 127]$ for convex integral/derivative pheromone synthesis.
+pub const DEFAULT_DERIVATIVE_ALPHA_Q7: u8 = 48;
+/// Minimum Q0.7 derivative weight permitted by Slow-Loop self-tuning.
+pub const MIN_DERIVATIVE_ALPHA_Q7: u8 = 16;
+/// Maximum Q0.7 derivative weight permitted by Slow-Loop self-tuning.
+pub const MAX_DERIVATIVE_ALPHA_Q7: u8 = 96;
 
 /// Default low-entropy threshold ($\tau_{\mathrm{skip}} = 0.15\text{ nats}$) triggering [`StigmergicActionDecision::InertialLayerSkip`].
 pub const DEFAULT_STIGMERGIC_INERTIAL_SKIP_ENTROPY: f32 = 0.15;
@@ -532,6 +538,57 @@ impl StigmergicThresholds {
         } else {
             Err(GCSO_ERROR_INVALID_ARGUMENT)
         }
+    }
+
+    /// Combines integrated pheromone density $\rho_{\mathrm{int}}$ with a deadband-guarded positive
+    /// rising derivative $\Delta\rho_+$ via a Q0.7 convex combination weighted by the branchless
+    /// $4p(1-p)$ boundary sensitivity gate (`0 fdiv`, `0 alloc`).
+    ///
+    /// Returns `(effective_rho, exceeds_deadband)` where `effective_rho` stays strictly within
+    /// `[0.0, MAX_STIGMERGIC_DENSITY]`, preserving the monotone threshold ladder.
+    #[inline]
+    #[must_use]
+    pub const fn compute_effective_density_calculus(
+        prev_rho: f32,
+        integral_rho: f32,
+        energy_gate: f32,
+        alpha_q7: u8,
+        noise_tolerance_q7: u8,
+        prev_rising: bool,
+    ) -> (f32, bool) {
+        let p_rho = branchless_flush_subnormal_f32(branchless_relu_f32(prev_rho));
+        let i_rho = branchless_min_f32(
+            branchless_flush_subnormal_f32(branchless_relu_f32(integral_rho)),
+            MAX_STIGMERGIC_DENSITY,
+        );
+        let e_gate = branchless_clamp_f32(energy_gate, 0.0, 1.0);
+
+        let raw_delta = branchless_relu_f32(i_rho - p_rho);
+        let deadband = (noise_tolerance_q7 as f32) * (1.0_f32 / 256.0_f32);
+        let exceeds_deadband = raw_delta > deadband;
+        let strong_rise = raw_delta > (deadband * 2.0_f32);
+        // Guard against single-step quantized noise spikes: require either 2 consecutive rising
+        // steps above deadband or a strong rise exceeding 2x deadband.
+        let confirmed_rise = exceeds_deadband & (prev_rising | strong_rise);
+
+        let p_norm = branchless_clamp_f32(i_rho * 0.25_f32 + e_gate * 0.5_f32, 0.0, 1.0);
+        let p_q7 = (p_norm * 127.0_f32) as u8;
+        let gate_q7 =
+            crate::traits::gateway::StigmergicGranuleField::boundary_sensitivity_gate_q7(p_q7);
+        let gate_f = (gate_q7 as f32) * (1.0_f32 / 128.0_f32);
+
+        let net_delta = branchless_relu_f32(raw_delta - deadband);
+        let deriv_scaled = branchless_min_f32(net_delta * 8.0_f32 * gate_f, MAX_STIGMERGIC_DENSITY);
+        let deriv_term = branchless_select_f32(confirmed_rise, deriv_scaled, 0.0_f32);
+
+        let clamped_alpha = if alpha_q7 > 127 { 127 } else { alpha_q7 };
+        let alpha_f = (clamped_alpha as f32) * (1.0_f32 / 128.0_f32);
+        let one_minus_alpha_f = ((128 - clamped_alpha) as f32) * (1.0_f32 / 128.0_f32);
+        let eff = branchless_min_f32(
+            branchless_flush_subnormal_f32(one_minus_alpha_f * i_rho + alpha_f * deriv_term),
+            MAX_STIGMERGIC_DENSITY,
+        );
+        (eff, exceeds_deadband)
     }
 
     /// Evaluates the 7-regime stigmergic threshold ladder in **strictly branchless constant time
@@ -3436,6 +3493,7 @@ mod tests {
             delta: &delta,
             horizon: &horizon,
             venn: &venn,
+            derivative_alpha_q7: DEFAULT_DERIVATIVE_ALPHA_Q7,
         });
         let thresh = StigmergicThresholds::new();
 
@@ -3684,5 +3742,39 @@ mod tests {
         assert_eq!(ev_od, SandboxLifecycleEvent::Released(1));
         assert_eq!(active_sandbox, None);
         assert_eq!(hub.slot_sandbox_mask, 0);
+    }
+
+    #[test]
+    fn test_stigmergic_calculus_convex_combination_and_boundary_gate() {
+        use crate::traits::gateway::StigmergicGranuleField;
+
+        // 1. 4p(1-p) boundary sensitivity gate vanishes at ignorance (0) and saturation (127), peaks at 64.
+        assert_eq!(StigmergicGranuleField::boundary_sensitivity_gate_q7(0), 0);
+        assert_eq!(StigmergicGranuleField::boundary_sensitivity_gate_q7(127), 0);
+        assert!(StigmergicGranuleField::boundary_sensitivity_gate_q7(64) >= 120);
+
+        // 2. alpha = 0 reduces identically to pure integral density.
+        let (eff_zero, _) =
+            StigmergicThresholds::compute_effective_density_calculus(0.10, 0.30, 0.80, 0, 4, true);
+        assert!((eff_zero - 0.30).abs() < 1e-6);
+
+        // 3. Single-step small noise just above deadband (0.015625) without prev_rising is suppressed.
+        let (eff_noise, rising_flag) = StigmergicThresholds::compute_effective_density_calculus(
+            0.10, 0.12, 0.80, 64, 4, false,
+        );
+        assert!(rising_flag);
+        assert!(eff_noise < 0.12);
+
+        // 4. Two consecutive rising steps (or strong rising edge) boost effective density into Express range.
+        let (eff_boost, _) =
+            StigmergicThresholds::compute_effective_density_calculus(0.10, 0.30, 0.80, 64, 4, true);
+        assert!(eff_boost > 0.45);
+        assert!(eff_boost <= MAX_STIGMERGIC_DENSITY);
+
+        // 5. Saturated steady state (delta == 0) is pulled down by (1 - alpha) to relieve PassiveSaturation.
+        let (eff_sat, rising_sat) =
+            StigmergicThresholds::compute_effective_density_calculus(2.00, 2.00, 0.90, 64, 4, true);
+        assert!(!rising_sat);
+        assert!(eff_sat < 1.10);
     }
 }

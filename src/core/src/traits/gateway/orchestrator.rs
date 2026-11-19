@@ -245,6 +245,8 @@ pub struct CoreLayerEvalContext<'a> {
     pub horizon: &'a EpistemicHorizonReading,
     /// Latest Venn overlap & serendipity telemetry report across the 8 SWAR granules.
     pub venn: &'a StigmergicVennSerendipityReport,
+    /// Read-only Slow-Loop Q0.7 derivative weight $\alpha \in [0, 127]$ for convex pheromone synthesis.
+    pub derivative_alpha_q7: u8,
 }
 
 #[inline(always)]
@@ -828,17 +830,42 @@ pub trait ActionHubGatewayExt: ActionHub {
                 1.0,
             )
         };
+        let (alpha_q7, noise_tol_q7) = match core_ctx {
+            Some(c) => (
+                c.derivative_alpha_q7,
+                c.stack.stigmergic_layer.mean_noise_tolerance_q7(),
+            ),
+            None => (0, 4),
+        };
+        let prev_rising =
+            (trail_out.flags & crate::traits::telemetry::TRAIL_FLAG_PHEROMONE_RISING) != 0;
+        let (effective_rho, now_rising) = StigmergicThresholds::compute_effective_density_calculus(
+            prev_rho,
+            next_rho,
+            energy_gate,
+            alpha_q7,
+            noise_tol_q7,
+            prev_rising,
+        );
         let (decision, _mode_flags, _target_slot, extra_flags) = thresholds
             .select_action_decision(
-                next_rho,
+                effective_rho,
                 entropy_h_tilde,
                 coh,
                 is_repulsed,
                 frame.dominant_slot,
             );
+        let rising_flag = branchless_select_u32(
+            now_rising,
+            crate::traits::telemetry::TRAIL_FLAG_PHEROMONE_RISING,
+            0,
+        );
         trail_out.flags = (trail_out.flags
-            & !(TRAIL_FLAG_REPULSION_ACTIVE | TRAIL_FLAG_INERTIAL_SKIP_ACTIVE))
-            | extra_flags;
+            & !(TRAIL_FLAG_REPULSION_ACTIVE
+                | TRAIL_FLAG_INERTIAL_SKIP_ACTIVE
+                | crate::traits::telemetry::TRAIL_FLAG_PHEROMONE_RISING))
+            | extra_flags
+            | rising_flag;
 
         let mut metrics = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
             | branchless_select_u8(is_repulsed, LEDGER_METRIC_REPULSION_APPLIED, 0)

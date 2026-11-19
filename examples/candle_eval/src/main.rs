@@ -44,9 +44,11 @@ use bake::{
 };
 use eval::{
     apply_ego_mode, build_preset_circuit, critique_generated_draft, generate_steered_reply,
-    generate_steered_reply_with_offset, parse_circuit_mode, parse_ego_mode, parse_horizon_mode,
-    parse_kv_min_res, parse_quant_mode, resolve_persona_circuit, CircuitProfileMode,
-    EgoProfileMode, HorizonAblationMode, KvTraceStats, SteerDecodeConfig, StepTelemetryTotals,
+    generate_steered_reply_with_offset, parse_circuit_mode, parse_ego_mode,
+    parse_fair_bench_conditions, parse_horizon_mode, parse_kv_min_res, parse_pressure_sim_mode,
+    parse_quant_mode, resolve_persona_circuit, CircuitProfileMode, EgoProfileMode,
+    FairBenchCondition, HorizonAblationMode, KvTraceStats, PressureSimMode, SteerDecodeConfig,
+    StepTelemetryTotals,
 };
 use model::{ForwardSteer, Phi3Config, Phi3Model, ProbeTrace, ResonantAnchors};
 
@@ -90,6 +92,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ablate_ego = cli_args.iter().any(|a| a == "--ablate-ego");
     let horizon_mode = parse_horizon_mode(cli_args.iter().map(String::as_str));
     let ablate_horizon = cli_args.iter().any(|a| a == "--ablate-horizon");
+    let fair_bench_conditions =
+        parse_fair_bench_conditions(cli_args.iter().map(String::as_str), no_reflect);
+    let pressure_sim_mode = parse_pressure_sim_mode(cli_args.iter().map(String::as_str));
+    let step2_only = step2_only || fair_bench_conditions.is_some();
     apply_ego_mode(&mut adapter, &ego_mode);
     if adapter.ego_field().is_active() {
         println!(
@@ -312,6 +318,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         horizon_mode: HorizonAblationMode::Core3,
                         escalation_provider: None,
                         compute_dispatch: None,
+                        steer_bypass_hits: 0,
+                        steer_eligible_layers: 0,
                     };
                     let (mut logits, _, _) =
                         model.forward_tokens(&ids, 0, Some(&mut steer), use_edbc, false)?;
@@ -548,6 +556,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         horizon_mode: HorizonAblationMode::Core3,
                         escalation_provider: None,
                         compute_dispatch: None,
+                        steer_bypass_hits: 0,
+                        steer_eligible_layers: 0,
                     };
                     let (mut logits, _, _) =
                         model.forward_tokens(&ids, offset, Some(&mut steer), use_edbc, false)?;
@@ -706,22 +716,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         compiled.recall_policy.min_coherence,
         compiled.recall_policy.boundary_margin,
     );
-    let step2_runs: Vec<(String, EgoProfileMode, HorizonAblationMode)> = if ablate_horizon {
+    let persona_rag_text = suite.persona.join(" ");
+    let guard_rag_text = suite.guards.join(" ");
+    let step2_runs: Vec<(
+        String,
+        EgoProfileMode,
+        HorizonAblationMode,
+        FairBenchCondition,
+        bool,
+    )> = if let Some(ref conds) = fair_bench_conditions {
+        conds
+            .iter()
+            .map(|&(cond, cond_no_reflect)| {
+                let lbl = if matches!(cond, FairBenchCondition::LiminiKaHybrid) {
+                    format!(
+                        "{}(reflect={})",
+                        cond.label(),
+                        if cond_no_reflect { "off" } else { "on" }
+                    )
+                } else {
+                    cond.label().to_string()
+                };
+                (lbl, ego_mode.clone(), horizon_mode, cond, cond_no_reflect)
+            })
+            .collect()
+    } else if ablate_horizon {
         vec![
             (
                 format!("{:?}:Core3", ego_mode),
                 ego_mode.clone(),
                 HorizonAblationMode::Core3,
+                FairBenchCondition::LiminiKaHybrid,
+                no_reflect,
             ),
             (
                 format!("{:?}:Spillover", ego_mode),
                 ego_mode.clone(),
                 HorizonAblationMode::Spillover,
+                FairBenchCondition::LiminiKaHybrid,
+                no_reflect,
             ),
             (
                 format!("{:?}:SlowLoop", ego_mode),
                 ego_mode.clone(),
                 HorizonAblationMode::SlowLoop,
+                FairBenchCondition::LiminiKaHybrid,
+                no_reflect,
             ),
         ]
     } else if ablate_ego {
@@ -730,14 +770,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             other => other.clone(),
         };
         vec![
-            ("NoEgo".to_string(), EgoProfileMode::Custom, horizon_mode),
-            ("Ego".to_string(), active_ego, horizon_mode),
+            (
+                "NoEgo".to_string(),
+                EgoProfileMode::Custom,
+                horizon_mode,
+                FairBenchCondition::LiminiKaHybrid,
+                no_reflect,
+            ),
+            (
+                "Ego".to_string(),
+                active_ego,
+                horizon_mode,
+                FairBenchCondition::LiminiKaHybrid,
+                no_reflect,
+            ),
         ]
     } else {
         vec![(
             horizon_mode.label().to_string(),
             ego_mode.clone(),
             horizon_mode,
+            FairBenchCondition::LiminiKaHybrid,
+            no_reflect,
         )]
     };
     let reflection_policy = if no_reflect {
@@ -754,14 +808,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut timeline = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
         adapter.geometry(),
     ));
-    for (run_label, run_ego_mode, run_horizon_mode) in &step2_runs {
+    for (run_label, run_ego_mode, run_horizon_mode, run_cond, run_no_reflect) in &step2_runs {
+        let reflection_policy = if *run_no_reflect {
+            ReflectionPolicy {
+                max_retries: 0,
+                ..ReflectionPolicy::default()
+            }
+        } else {
+            ReflectionPolicy::default()
+        };
         timeline = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
             adapter.geometry(),
         ));
         adapter.reset_horizon_and_core_state();
+        adapter.compute_pool_mut().reanchor_baseline_pressure(8192);
         apply_ego_mode(&mut adapter, run_ego_mode);
-        if ablate_ego || ablate_horizon {
-            println!("\n-- Step 2 Ablation Pass: {run_label} --");
+        if ablate_ego || ablate_horizon || fair_bench_conditions.is_some() {
+            println!("\n-- Step 2 Pass: {run_label} --");
         }
         let mut step_tlm = StepTelemetryTotals::default();
         let mut esc_provider = CorpusRecallEscalationProvider::new(&compiled.corpus);
@@ -780,8 +843,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut step2_forb_hits = 0_usize;
         let mut step2_forb_total = 0_usize;
         let mut step2_recall_ms_sum = 0.0_f64;
+        let mut step2_input_tokens = 0_usize;
         let mut step2_decode_tokens = 0_usize;
         let mut step2_decode_secs = 0.0_f64;
+        let mut step2_steer_bypass_hits = 0_usize;
+        let mut step2_steer_eligible_layers = 0_usize;
+        let mut step2_instability_recoveries = 0_usize;
         let mut reflect_triggers = 0_usize;
         let mut reflect_adopted = 0_usize;
         let mut ram_kv_cache = StandardPhaseKvGopCache::new();
@@ -933,18 +1000,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         query_action_decision,
                         StigmergicActionDecision::RepulsionEscape
                     );
-                let active_prompt = if recalled_ctx.is_empty()
+                let active_prompt = if !run_cond.inject_fact_text()
+                    || recalled_ctx.is_empty()
                     || (matches!(query_void_state, VoidBoundaryState::LiminalExterior)
                         && !is_guard_trap)
                 {
                     format_phi4_prompt(prompt)
+                } else if run_cond.inject_persona_and_guard_text() {
+                    format_phi4_prompt(&format!(
+                        "[Context: {recalled_ctx}]\n[Style Guidelines: {persona_rag_text}]\n[Do NOT claim: {guard_rag_text}]\n{prompt}"
+                    ))
                 } else {
                     format_phi4_prompt(&format!("[Context: {recalled_ctx}]\n{prompt}"))
                 };
 
-                let use_steer = is_guard_trap
-                    || (!matches!(query_void_state, VoidBoundaryState::LiminalExterior)
-                        && !dyn_facts.is_empty());
+                let use_steer = run_cond.steering_enabled()
+                    && (is_guard_trap
+                        || (!matches!(query_void_state, VoidBoundaryState::LiminalExterior)
+                            && !dyn_facts.is_empty()));
                 let res_ctx = if use_steer {
                     Some(ResonantAnchors {
                         facts: dyn_facts.as_slice(),
@@ -963,10 +1036,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     None
                 };
 
-                let use_spillover = matches!(
-                    *run_horizon_mode,
-                    HorizonAblationMode::Spillover | HorizonAblationMode::SlowLoop
-                );
+                let use_spillover = run_cond.steering_enabled()
+                    && matches!(
+                        *run_horizon_mode,
+                        HorizonAblationMode::Spillover | HorizonAblationMode::SlowLoop
+                    );
+                let active_pressure_sim = if run_cond.steering_enabled() {
+                    pressure_sim_mode
+                } else {
+                    PressureSimMode::Off
+                };
                 let mut pass1_cfg = SteerDecodeConfig {
                     q7s: Some(baked.fact_q7.as_slice()),
                     persona_q7s: Some(baked.persona_q7.as_slice()),
@@ -980,24 +1059,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         None
                     },
+                    pressure_sim: active_pressure_sim,
+                    steer_bypass_hits: 0,
+                    steer_eligible_layers: 0,
+                    instability_recoveries: 0,
                 };
-                let (mut text, p1_tokens, p1_secs) = generate_steered_reply(
+                let (mut text, p1_in_tokens, p1_tokens, p1_secs) = generate_steered_reply(
                     &mut model,
                     &tokenizer,
                     &mut adapter,
                     active_prompt.as_str(),
                     &mut pass1_cfg,
                 )?;
+                step2_input_tokens += p1_in_tokens;
                 step2_decode_tokens += p1_tokens;
                 step2_decode_secs += p1_secs;
+                step2_steer_bypass_hits += pass1_cfg.steer_bypass_hits;
+                step2_steer_eligible_layers += pass1_cfg.steer_eligible_layers;
+                step2_instability_recoveries += pass1_cfg.instability_recoveries;
 
-                let mut reflect_note = if no_reflect {
+                let mut reflect_note = if *run_no_reflect {
                     "off".to_string()
                 } else {
                     "skip".to_string()
                 };
                 let mut chosen_crit: Option<ReflectionCritique> = None;
-                if !no_reflect && reflection_policy.max_retries > 0 {
+                if !*run_no_reflect && reflection_policy.max_retries > 0 {
                     if let Some(pass1_crit) = critique_generated_draft(
                         &mut model,
                         &tokenizer,
@@ -1060,16 +1147,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 } else {
                                     None
                                 },
+                                pressure_sim: active_pressure_sim,
+                                steer_bypass_hits: 0,
+                                steer_eligible_layers: 0,
+                                instability_recoveries: 0,
                             };
-                            let (p2_text, p2_tokens, p2_secs) = generate_steered_reply(
-                                &mut model,
-                                &tokenizer,
-                                &mut adapter,
-                                retry_prompt.as_str(),
-                                &mut retry_cfg,
-                            )?;
+                            let (p2_text, p2_in_tokens, p2_tokens, p2_secs) =
+                                generate_steered_reply(
+                                    &mut model,
+                                    &tokenizer,
+                                    &mut adapter,
+                                    retry_prompt.as_str(),
+                                    &mut retry_cfg,
+                                )?;
+                            step2_input_tokens += p2_in_tokens;
                             step2_decode_tokens += p2_tokens;
                             step2_decode_secs += p2_secs;
+                            step2_steer_bypass_hits += retry_cfg.steer_bypass_hits;
+                            step2_steer_eligible_layers += retry_cfg.steer_eligible_layers;
+                            step2_instability_recoveries += retry_cfg.instability_recoveries;
                             if let Some(pass2_crit) = critique_generated_draft(
                                 &mut model,
                                 &tokenizer,
@@ -1237,8 +1333,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             0.0
         };
+        let vram_pass = query_nvidia_smi_vram().unwrap_or_else(|| "n/a".to_string());
         let summary_line = format!(
-        "Step 2 Dynamic Corpus Summary ({run_label}): recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit={:.1}% ({}/{}) | forbid_hit={:.1}% ({}/{}) | reflect=({}/{}) | core=[L0={} L1={} Ego={} fired=0x{:02X}] | compile={:.1}ms mean_recall={:.2}ms decode={:.2} tok/s",
+        "Step 2 Dynamic Corpus Summary ({run_label}): recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit={:.1}% ({}/{}) | forbid_hit={:.1}% ({}/{}) | in_tok={} | reflect=({}/{}) | core=[L0={} L1={} Ego={} fired=0x{:02X}] | compile={:.1}ms mean_recall={:.2}ms decode={:.2} tok/s | vram={}",
         if step2_exp_total == 0 {
             0.0
         } else {
@@ -1260,6 +1357,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         step2_forb_hits,
         step2_forb_total,
+        step2_input_tokens,
         reflect_adopted,
         reflect_triggers,
         adapter.aperture_field().adaptation_epochs,
@@ -1269,6 +1367,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         compile_ms,
         mean_recall_ms,
         decode_tps,
+        vram_pass,
     );
         println!("{summary_line}");
         let last_snap = adapter.telemetry_snapshot();
@@ -1338,8 +1437,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             spillover.retractions,
         );
         let slow_loop_line = format!(
-            "  [SlowLoop] epochs_applied={} dwell_delta={:+} repulse_bias={:+} skip_thresh={:.3} express_thresh={:.3} rank1_thresh={:.3} slide_out_dwell={}",
+            "  [SlowLoop] epochs_applied={} alpha_q7={} dwell_delta={:+} repulse_bias={:+} skip_thresh={:.3} express_thresh={:.3} rank1_thresh={:.3} slide_out_dwell={}",
             slow_loop_epochs_applied,
+            adapter.telemetry_bank().derivative_alpha_q7(),
             slow_loop_last_dwell_delta,
             slow_loop_last_repulse_bias,
             slow_loop_last_skip_thresh,
@@ -1358,8 +1458,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             step_tlm.distortion_cooldowns,
         );
         let cp = adapter.compute_pool();
+        let steer_bypass_pct = if step2_steer_eligible_layers == 0 {
+            0.0
+        } else {
+            step2_steer_bypass_hits as f64 / step2_steer_eligible_layers as f64 * 100.0
+        };
         let compute_pool_line = format!(
-            "  [ComputePool] regime={:?} ema_p={} base_p={} dwell={} lane={} slots(active={} pinned={} rev={})",
+            "  [ComputePool] regime={:?} ema_p={} base_p={} dwell={} lane={} slots(active={} pinned={} rev={}) steer_bypass={}/{} ({:.1}%) recov={}",
             cp.regime,
             cp.ema_pressure_q15,
             cp.baseline_pressure_q15,
@@ -1368,6 +1473,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cp.active_mask.count_ones(),
             cp.pinned_mask.count_ones(),
             cp.reversible_mask.count_ones(),
+            step2_steer_bypass_hits,
+            step2_steer_eligible_layers,
+            steer_bypass_pct,
+            step2_instability_recoveries,
         );
         println!("{action_line}");
         println!("{core_line}");
@@ -1376,7 +1485,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{distortion_line}");
         println!("{compute_pool_line}");
         step2_ablation_summaries.push(format!(
-            "{summary_line}\n  {action_line}\n  {core_line}\n  {spillover_line}\n  {slow_loop_line}\n  {distortion_line}\n  {compute_pool_line}"
+            "{summary_line}\n  {stratified_line}\n  {action_line}\n  {core_line}\n  {spillover_line}\n  {slow_loop_line}\n  {distortion_line}\n  {compute_pool_line}"
         ));
         if adapter.ego_field().is_active() {
             println!(
@@ -1422,7 +1531,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     }
     if step2_ablation_summaries.len() > 1 {
-        println!("\n=== Step 2 Ego Ablation Comparison ===");
+        let heading = if fair_bench_conditions.is_some() {
+            "=== Fair Benchmark 4-Condition Comparison ==="
+        } else {
+            "=== Step 2 Ablation Comparison ==="
+        };
+        println!("\n{heading}");
         for line in &step2_ablation_summaries {
             println!("  {line}");
         }
@@ -1619,6 +1733,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         use_steer,
                         horizon_mode,
                         escalation_provider: None,
+                        pressure_sim: pressure_sim_mode,
+                        steer_bypass_hits: 0,
+                        steer_eligible_layers: 0,
+                        instability_recoveries: 0,
                     };
                     let (mut reply_text, mut turn_ids, dec_secs) =
                         generate_steered_reply_with_offset(
@@ -1711,6 +1829,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     use_steer: retry_use_steer,
                                     horizon_mode,
                                     escalation_provider: None,
+                                    pressure_sim: pressure_sim_mode,
+                                    steer_bypass_hits: 0,
+                                    steer_eligible_layers: 0,
+                                    instability_recoveries: 0,
                                 };
                                 let (p2_text, p2_ids, p2_secs) =
                                     generate_steered_reply_with_offset(

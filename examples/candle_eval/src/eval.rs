@@ -23,6 +23,30 @@ use tokenizers::Tokenizer;
 use crate::bake::argmax;
 use crate::model::{ForwardSteer, Phi3Model, ResonantAnchors};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum PressureSimMode {
+    #[default]
+    Off,
+    Elevated,
+    Surge,
+}
+
+pub(crate) fn parse_pressure_sim_mode<'a>(
+    args: impl IntoIterator<Item = &'a str>,
+) -> PressureSimMode {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--pressure-sim=") {
+            if val.eq_ignore_ascii_case("elevated") {
+                return PressureSimMode::Elevated;
+            }
+            if val.eq_ignore_ascii_case("surge") {
+                return PressureSimMode::Surge;
+            }
+        }
+    }
+    PressureSimMode::Off
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CircuitProfileMode {
     None,
@@ -246,6 +270,93 @@ pub(crate) fn resolve_persona_circuit(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FairBenchCondition {
+    /// Condition A: Vanilla + Standard RAG (Fact + Persona + Guard text injected, Steer OFF).
+    VanillaFullRag,
+    /// Condition B: Vanilla + Minimal RAG (Fact text only, Steer OFF).
+    VanillaMinRag,
+    /// Condition C: LiminiKa Hybrid (Fact text only + RoPE/Rank-1/ActionHub Steer ON).
+    LiminiKaHybrid,
+    /// Condition D: LiminiKa Zero-Context (No text injection + RoPE/Rank-1/ActionHub Steer ON).
+    LiminiKaZeroContext,
+}
+
+impl FairBenchCondition {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::VanillaFullRag => "A:Vanilla+FullRAG",
+            Self::VanillaMinRag => "B:Vanilla+MinRAG",
+            Self::LiminiKaHybrid => "C:LiminiKa-Hybrid",
+            Self::LiminiKaZeroContext => "D:LiminiKa-ZeroCtx",
+        }
+    }
+
+    pub(crate) const fn steering_enabled(self) -> bool {
+        matches!(self, Self::LiminiKaHybrid | Self::LiminiKaZeroContext)
+    }
+
+    pub(crate) const fn inject_fact_text(self) -> bool {
+        matches!(
+            self,
+            Self::VanillaFullRag | Self::VanillaMinRag | Self::LiminiKaHybrid
+        )
+    }
+
+    pub(crate) const fn inject_persona_and_guard_text(self) -> bool {
+        matches!(self, Self::VanillaFullRag)
+    }
+}
+
+pub(crate) fn parse_fair_bench_conditions<'a>(
+    args: impl IntoIterator<Item = &'a str>,
+    default_no_reflect: bool,
+) -> Option<Vec<(FairBenchCondition, bool)>> {
+    let mut fair_all = false;
+    let mut selected: Vec<(FairBenchCondition, bool)> = Vec::new();
+    for arg in args {
+        if arg == "--fair-bench" {
+            fair_all = true;
+        } else if let Some(val) = arg.strip_prefix("--bench-cond=") {
+            for tok in val.split(',').map(str::trim) {
+                match tok.to_ascii_lowercase().as_str() {
+                    "a" | "vanilla-full" => {
+                        selected.push((FairBenchCondition::VanillaFullRag, true))
+                    }
+                    "b" | "vanilla-min" => selected.push((FairBenchCondition::VanillaMinRag, true)),
+                    "c" | "hybrid" => {
+                        selected.push((FairBenchCondition::LiminiKaHybrid, default_no_reflect))
+                    }
+                    "c-noreflect" | "c-off" => {
+                        selected.push((FairBenchCondition::LiminiKaHybrid, true))
+                    }
+                    "c-reflect" | "c-on" => {
+                        selected.push((FairBenchCondition::LiminiKaHybrid, false))
+                    }
+                    "d" | "zero-ctx" => {
+                        selected.push((FairBenchCondition::LiminiKaZeroContext, true))
+                    }
+                    "all" => fair_all = true,
+                    _ => {}
+                }
+            }
+        }
+    }
+    if fair_all {
+        Some(vec![
+            (FairBenchCondition::VanillaFullRag, true),
+            (FairBenchCondition::VanillaMinRag, true),
+            (FairBenchCondition::LiminiKaHybrid, true),
+            (FairBenchCondition::LiminiKaHybrid, false),
+            (FairBenchCondition::LiminiKaZeroContext, true),
+        ])
+    } else if !selected.is_empty() {
+        Some(selected)
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HorizonAblationMode {
     Core3,
     Spillover,
@@ -353,6 +464,10 @@ pub(crate) struct SteerDecodeConfig<'a, 'c, 'e> {
     pub(crate) use_steer: bool,
     pub(crate) horizon_mode: HorizonAblationMode,
     pub(crate) escalation_provider: Option<&'e mut CorpusRecallEscalationProvider<'c>>,
+    pub(crate) pressure_sim: PressureSimMode,
+    pub(crate) steer_bypass_hits: usize,
+    pub(crate) steer_eligible_layers: usize,
+    pub(crate) instability_recoveries: usize,
 }
 
 pub(crate) fn generate_steered_reply_with_offset(
@@ -381,6 +496,8 @@ pub(crate) fn generate_steered_reply_with_offset(
         horizon_mode: cfg.horizon_mode,
         escalation_provider: cfg.escalation_provider.as_deref_mut(),
         compute_dispatch: None,
+        steer_bypass_hits: 0,
+        steer_eligible_layers: 0,
     };
     let t_dec = Instant::now();
     let prefill_dispatch = steer.adapter.step_compute_dispatch(SystemPressureReading {
@@ -395,7 +512,7 @@ pub(crate) fn generate_steered_reply_with_offset(
         model.forward_tokens(&ids, start_offset, Some(&mut steer), cfg.use_steer, false)?;
     steer
         .adapter
-        .commit_compute_exit_reward(prefill_dispatch.execute_mask, 96);
+        .commit_compute_exit_reward(prefill_dispatch.execute_mask, 64);
 
     const MAX_GEN_TOKENS: usize = 64;
     let mut gen_ids = Vec::with_capacity(MAX_GEN_TOKENS);
@@ -410,12 +527,23 @@ pub(crate) fn generate_steered_reply_with_offset(
         let (next_logits, _, _) =
             model.forward_tokens(&[next], offset, Some(&mut steer), cfg.use_steer, false)?;
         let tok_ms = t_tok.elapsed().as_secs_f64() * 1000.0;
-        let pressure_q15 = ((tok_ms / 120.0).clamp(0.0, 1.0) * 32767.0) as u16;
+        let measured_q15 = ((tok_ms / 120.0).clamp(0.0, 1.0) * 32767.0) as u16;
         if gen_ids.len() == 4 && steer.adapter.compute_pool().baseline_pressure_q15 == 8192 {
             steer
                 .adapter
                 .compute_pool_mut()
-                .reanchor_baseline_pressure(pressure_q15);
+                .reanchor_baseline_pressure(measured_q15);
+        }
+        let base_p = steer.adapter.compute_pool().baseline_pressure_q15;
+        let pressure_q15 = match cfg.pressure_sim {
+            PressureSimMode::Off => measured_q15,
+            PressureSimMode::Elevated => measured_q15.max(base_p.saturating_add(6144).min(32767)),
+            PressureSimMode::Surge => measured_q15.max(base_p.saturating_add(14336).min(32767)),
+        };
+        let exit_entropy = steer.adapter.action_hub().last_entropy_h_tilde;
+        if exit_entropy > 0.65 {
+            steer.adapter.signal_compute_instability();
+            cfg.instability_recoveries += 1;
         }
         let tok_dispatch = steer.adapter.step_compute_dispatch(SystemPressureReading {
             frame_time_pressure_q15: pressure_q15,
@@ -424,17 +552,15 @@ pub(crate) fn generate_steered_reply_with_offset(
             irreversible_step: 0,
             _pad: 0,
         });
-        let exit_reward = if steer.adapter.action_hub().last_entropy_h_tilde < 0.70 {
-            96
-        } else {
-            48
-        };
+        let exit_reward = if exit_entropy < 0.55 { 56 } else { 96 };
         steer
             .adapter
             .commit_compute_exit_reward(tok_dispatch.execute_mask, exit_reward);
         steer.compute_dispatch = Some(tok_dispatch);
         logits = next_logits;
     }
+    cfg.steer_bypass_hits += steer.steer_bypass_hits;
+    cfg.steer_eligible_layers += steer.steer_eligible_layers;
     let decode_secs = t_dec.elapsed().as_secs_f64();
     let text = tokenizer
         .decode(&gen_ids, true)
@@ -451,7 +577,7 @@ pub(crate) fn generate_steered_reply(
     adapter: &mut ModelSteeringAdapter,
     formatted_prompt: &str,
     cfg: &mut SteerDecodeConfig<'_, '_, '_>,
-) -> Result<(String, usize, f64), Box<dyn std::error::Error>> {
+) -> Result<(String, usize, usize, f64), Box<dyn std::error::Error>> {
     model.clear_cache();
     let prompt_ids_len = tokenizer
         .encode(formatted_prompt, false)
@@ -461,7 +587,7 @@ pub(crate) fn generate_steered_reply(
     let (text, all_ids, decode_secs) =
         generate_steered_reply_with_offset(model, tokenizer, adapter, formatted_prompt, 0, cfg)?;
     let gen_tokens = all_ids.len().saturating_sub(prompt_ids_len);
-    Ok((text, gen_tokens, decode_secs))
+    Ok((text, prompt_ids_len, gen_tokens, decode_secs))
 }
 
 pub(crate) fn critique_generated_draft(

@@ -230,6 +230,8 @@ pub struct SlowLoopTelemetryAdjustment {
     pub suggested_slide_out_dwell_delta: i8,
     /// Bounded recommendation for repulsion bias in Q0.7 (`-16..=16`).
     pub suggested_repulse_bias_q7: i8,
+    /// Updated Q0.7 derivative weight $\alpha \in [16, 96]$ for convex integral/derivative pheromone synthesis.
+    pub suggested_derivative_alpha_q7: u8,
     /// Cross-layer distortion diagnosis evaluated over the epoch samples.
     pub distortion: LayerDistortionReport,
 }
@@ -302,6 +304,7 @@ pub struct CoreTelemetryBank {
     assimilation_drift_q15: u16,
     assimilation_drift_dwell: u16,
     sandbox_coherence_improve_dwell: u16,
+    derivative_alpha_q7: u8,
 }
 
 impl Default for CoreTelemetryBank {
@@ -372,7 +375,21 @@ impl CoreTelemetryBank {
             assimilation_drift_q15: 0,
             assimilation_drift_dwell: 0,
             sandbox_coherence_improve_dwell: 0,
+            derivative_alpha_q7: crate::action_hub::DEFAULT_DERIVATIVE_ALPHA_Q7,
         }
+    }
+
+    /// Returns the Slow-Loop Q0.7 derivative weight $\alpha \in [0, 127]$ (read-only on the Hot Path).
+    #[inline(always)]
+    #[must_use]
+    pub const fn derivative_alpha_q7(&self) -> u8 {
+        self.derivative_alpha_q7
+    }
+
+    /// Sets the Slow-Loop Q0.7 derivative weight $\alpha \in [0, 127]$ (e.g., `0` for pure integral ablation).
+    #[inline(always)]
+    pub fn set_derivative_alpha_q7(&mut self, alpha_q7: u8) {
+        self.derivative_alpha_q7 = alpha_q7.min(127);
     }
 
     /// Creates a bank pinned directly to a fixed [`TelemetryVerbosityMode`].
@@ -427,6 +444,7 @@ impl CoreTelemetryBank {
         self.assimilation_drift_q15 = 0;
         self.assimilation_drift_dwell = 0;
         self.sandbox_coherence_improve_dwell = 0;
+        self.derivative_alpha_q7 = crate::action_hub::DEFAULT_DERIVATIVE_ALPHA_Q7;
     }
 
     /// Updates `0 fdiv` rolling Q0.15 EMAs ($\alpha = 1/32$) and gauge-relative assimilation drift
@@ -997,6 +1015,7 @@ impl CoreTelemetryBank {
                 tuned_thresholds: *base,
                 suggested_slide_out_dwell_delta: 0,
                 suggested_repulse_bias_q7: 0,
+                suggested_derivative_alpha_q7: self.derivative_alpha_q7,
                 distortion,
             };
         }
@@ -1084,6 +1103,30 @@ impl CoreTelemetryBank {
         // Layer 2 / System bounded repulsion bias in [-16, 16].
         let raw_bias = ((excursion_ratio - 0.35) * 32.0).clamp(-16.0, 16.0) as i8;
 
+        // Slow-Loop relative derivative/integral balance alpha (Q0.7, read-only on Hot Path):
+        // PassiveSaturation (over-integration) -> push toward derivative (+12);
+        // ActiveOverdrive (over-differentiation) -> pull back toward integral (-12);
+        // Aligned -> gently relax toward nominal default.
+        let next_alpha = match distortion.kind {
+            LayerDistortionKind::PassiveSaturation => self
+                .derivative_alpha_q7
+                .saturating_add(12)
+                .min(crate::action_hub::MAX_DERIVATIVE_ALPHA_Q7),
+            LayerDistortionKind::ActiveOverdrive => self
+                .derivative_alpha_q7
+                .saturating_sub(12)
+                .max(crate::action_hub::MIN_DERIVATIVE_ALPHA_Q7),
+            LayerDistortionKind::Aligned => {
+                let nominal = crate::action_hub::DEFAULT_DERIVATIVE_ALPHA_Q7;
+                if self.derivative_alpha_q7 > nominal {
+                    self.derivative_alpha_q7.saturating_sub(2).max(nominal)
+                } else {
+                    self.derivative_alpha_q7.saturating_add(2).min(nominal)
+                }
+            }
+        };
+        self.derivative_alpha_q7 = next_alpha;
+
         self.system.slow_loop_epochs = self.system.slow_loop_epochs.saturating_add(1);
         self.system.slow_loop_dwell_delta = dwell_delta;
         self.system.slow_loop_repulse_bias_q7 = raw_bias;
@@ -1094,6 +1137,7 @@ impl CoreTelemetryBank {
             tuned_thresholds,
             suggested_slide_out_dwell_delta: dwell_delta,
             suggested_repulse_bias_q7: raw_bias,
+            suggested_derivative_alpha_q7: next_alpha,
             distortion,
         }
     }

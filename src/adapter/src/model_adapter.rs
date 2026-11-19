@@ -446,10 +446,13 @@ impl ModelSteeringAdapter {
         };
         let pinned_slots = if n_slots == 0 {
             0
+        } else if n_slots >= 12 {
+            // Protect head (0..4) and tail ((n-4)..n) layers as irreversible boundary anchors.
+            0x0000_000F_u64 | (0x0000_000F_u64 << (n_slots - 4))
         } else {
             1_u64 | (1_u64 << (n_slots - 1))
         };
-        let reversible_slots = geometry.layer_rope_mask & active_slots & !pinned_slots;
+        let reversible_slots = active_slots & !pinned_slots;
         compute_pool.set_slot_masks(active_slots, pinned_slots, 0, reversible_slots);
 
         Ok(Self {
@@ -557,11 +560,17 @@ impl ModelSteeringAdapter {
         self.compute_pool.step_dispatch(reading)
     }
 
-    /// Updates Step 4 slot contribution pheromones strictly from an exit scalar reward (`0..=127`)
+    /// Updates slot contribution pheromones strictly from an exit scalar reward (`0..=127`)
     /// without mid-layer D2H synchronization.
     pub fn commit_compute_exit_reward(&mut self, executed_mask: u64, reward_q7: u8) {
         self.compute_pool
             .commit_exit_reward(executed_mask, reward_q7);
+    }
+
+    /// Triggers immediate 1-step full-layer recovery in the anonymous compute pool with asymmetric
+    /// re-bypass dwell hysteresis (called on exit entropy spike, `InternalConflict`, or `LiminalExterior`).
+    pub fn signal_compute_instability(&mut self) {
+        self.compute_pool.signal_exit_instability();
     }
 
     /// Updates the [`TelemetryCapturePolicy`] (`Pinned` vs `Auto` `Coarse`/`Standard`/`Detailed`).
@@ -1547,6 +1556,7 @@ impl ModelSteeringAdapter {
         last_boundary_delta: &'a LiminalBoundaryDelta,
         last_horizon: &'a EpistemicHorizonReading,
         last_venn_report: &'a StigmergicVennSerendipityReport,
+        derivative_alpha_q7: u8,
     ) -> Option<CoreLayerEvalContext<'a>> {
         (core_layers.liminal_layer.adaptation_epochs > 0 || core_layers.ego_layer.is_active())
             .then_some(CoreLayerEvalContext {
@@ -1554,6 +1564,7 @@ impl ModelSteeringAdapter {
                 delta: last_boundary_delta,
                 horizon: last_horizon,
                 venn: last_venn_report,
+                derivative_alpha_q7,
             })
     }
 
@@ -1583,6 +1594,7 @@ impl ModelSteeringAdapter {
                 &this.last_boundary_delta,
                 &this.last_horizon,
                 &this.last_venn_report,
+                this.telemetry.derivative_alpha_q7(),
             );
             this.phase_engine
                 .steer_gateway_signal_with_core_layers_for_geometry_safe(
@@ -1624,6 +1636,7 @@ impl ModelSteeringAdapter {
                 &this.last_boundary_delta,
                 &this.last_horizon,
                 &this.last_venn_report,
+                this.telemetry.derivative_alpha_q7(),
             );
             this.action_hub
                 .ingest_gateway_and_steer_with_core_layers_for_geometry_safe(
@@ -1781,6 +1794,7 @@ impl ModelSteeringAdapter {
                 &this.last_boundary_delta,
                 &this.last_horizon,
                 &this.last_venn_report,
+                this.telemetry.derivative_alpha_q7(),
             );
             let (mut frame, report, decision) = this
                 .action_hub

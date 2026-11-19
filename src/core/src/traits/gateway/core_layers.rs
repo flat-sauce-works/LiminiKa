@@ -330,6 +330,34 @@ impl StigmergicGranuleField {
         self.serendipity_excursion_mask = venn_report.serendipity_excursion_mask;
         self.adaptation_epochs = self.adaptation_epochs.wrapping_add(1);
     }
+
+    /// Computes the branchless integer mean of `granule_noise_tolerance_q7` across all 8 granules (`0 fdiv`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn mean_noise_tolerance_q7(&self) -> u8 {
+        let sum = self.granule_noise_tolerance_q7[0] as u16
+            + self.granule_noise_tolerance_q7[1] as u16
+            + self.granule_noise_tolerance_q7[2] as u16
+            + self.granule_noise_tolerance_q7[3] as u16
+            + self.granule_noise_tolerance_q7[4] as u16
+            + self.granule_noise_tolerance_q7[5] as u16
+            + self.granule_noise_tolerance_q7[6] as u16
+            + self.granule_noise_tolerance_q7[7] as u16;
+        (sum >> 3) as u8
+    }
+
+    /// Evaluates the branchless self-differentiable boundary sensitivity gate $4p(1-p)$ in Q0.7 (`0 fdiv`).
+    ///
+    /// Vanishes at both ignorance (`p_q7 == 0`) and saturation (`p_q7 >= 127`) while peaking at the
+    /// transition boundary (`p_q7 == 64`, returning `126`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn boundary_sensitivity_gate_q7(p_q7: u8) -> u8 {
+        let p = if p_q7 > 127 { 127 } else { p_q7 };
+        let prod = (p as u32) * ((127 - p) as u32);
+        let scaled = prod >> 5;
+        if scaled > 127 { 127 } else { scaled as u8 }
+    }
 }
 
 // ===================================================================
