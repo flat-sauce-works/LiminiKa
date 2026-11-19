@@ -165,7 +165,7 @@ pub fn verify_snapshot_payload_crc32(
 ///
 /// Packs the 64-byte [`gcso_kv_keyframe_header_t`] metadata header (`offset 0..64`) and the
 /// uncompressed 64-head Q7 phase anchor snapshot (`offset 64..128`) for lightweight video-codec-style
-/// `.gcso` memory & persona streams (Steam Workshop distribution ready).
+/// `.gcso` memory & persona streams (portable container distribution ready).
 ///
 /// The 24-byte `header.reserved` field encodes:
 /// - `reserved[0..4]`: Little-endian IEEE 802.3 CRC32 checksum of `anchor_phases`.

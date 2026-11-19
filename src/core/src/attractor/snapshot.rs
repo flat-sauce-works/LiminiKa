@@ -336,7 +336,7 @@ impl ManifoldGatewaySignal for CrystallizedAnchorRecord {
 }
 
 /// Self-contained 8,448-byte (`8.25 KB`, 132 cachelines) 64-byte-aligned [`Pod`] snapshot structure
-/// for `.gcso` mapped-storage persistence and Steam Workshop distribution of a grown personality.
+/// for `.gcso` mapped-storage persistence and portable distribution of a grown personality.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AttractorGrowthSnapshot {

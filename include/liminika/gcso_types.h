@@ -760,7 +760,9 @@ struct GCSO_ALIGN_PREFIX(16) gcso_liminal_boundary_delta {
     uint8_t kinetic_energy_q7;
     uint8_t stationary_shortcut_ready;
     uint8_t expansion_dominant;
-    uint8_t reserved[3];
+    uint8_t chatter_potential_u8;
+    uint8_t phase_transition_pulse;
+    uint8_t reserved;
 } GCSO_ALIGN_SUFFIX(16);
 typedef struct gcso_liminal_boundary_delta gcso_liminal_boundary_delta_t;
 

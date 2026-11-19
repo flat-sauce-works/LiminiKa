@@ -17,6 +17,8 @@ pub enum ProbeSlot {
     Persona,
     /// Contrastive hallucination / prompt-drift resistance (`ContradictionGuard`, Slot 3).
     Guard,
+    /// Out-of-domain / void passthrough probe (`LiminalExterior`, zero-force passthrough).
+    Void,
 }
 
 /// Single Q&A probe used to score Baseline, Oracle, and LiminiKa-steered outputs.
@@ -108,6 +110,7 @@ fn parse_probe_line(line: &str, line_num: usize) -> Result<EvalProbe, String> {
         "FACT" => ProbeSlot::Fact,
         "PERSONA" => ProbeSlot::Persona,
         "GUARD" => ProbeSlot::Guard,
+        "VOID" => ProbeSlot::Void,
         other => {
             return Err(format!("line {}: unknown probe slot '{}'", line_num, other));
         }

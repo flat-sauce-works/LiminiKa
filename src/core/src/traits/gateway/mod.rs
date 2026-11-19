@@ -228,6 +228,8 @@ const _: () = {
     assert!(offset_of!(LiminalBoundaryDelta, kinetic_energy_q7) == 10);
     assert!(offset_of!(LiminalBoundaryDelta, stationary_shortcut_ready) == 11);
     assert!(offset_of!(LiminalBoundaryDelta, expansion_dominant) == 12);
+    assert!(offset_of!(LiminalBoundaryDelta, chatter_potential_u8) == 13);
+    assert!(offset_of!(LiminalBoundaryDelta, phase_transition_pulse) == 14);
     assert!(size_of::<EgoIntentAxes>() == 16);
     assert!(align_of::<EgoIntentAxes>() == 16);
     assert!(offset_of!(EgoIntentAxes, autonomy_q7) == 0);

@@ -1618,6 +1618,42 @@ fn liminal_boundary_delta_and_ego_field_interventions() {
         &delta1,
     );
     assert_ne!(delta2.chattering_channel_mask & (1 << 2), 0);
+    assert_eq!(delta2.phase_transition_pulse, 0);
+    assert_eq!(delta2.chatter_potential_u8, 16);
+
+    // Sustained multi-channel chattering integrates to fire a phase-transition pulse, then resets.
+    let mut prev_osc = cur_expand;
+    let mut d_osc = delta2;
+    let mut fired_step = None;
+    for step in 0..8 {
+        let mut next_osc = prev_osc;
+        let sign = if step % 2 == 0 { -6i8 } else { 6i8 };
+        for ch in 0..4 {
+            next_osc.void_floor_q7[ch] = next_osc.void_floor_q7[ch].saturating_add_signed(sign);
+        }
+        d_osc = LiminalBoundaryDelta::compute_branchless(
+            &prev_osc,
+            &next_osc,
+            0b0000_0111,
+            0b0000_0111,
+            &d_osc,
+        );
+        prev_osc = next_osc;
+        if d_osc.phase_transition_pulse != 0 {
+            fired_step = Some(step);
+            break;
+        }
+    }
+    assert!(fired_step.is_some());
+    let d_reset = LiminalBoundaryDelta::compute_branchless(
+        &prev_osc,
+        &prev_osc,
+        0b0000_0111,
+        0b0000_0111,
+        &d_osc,
+    );
+    assert_eq!(d_reset.phase_transition_pulse, 0);
+    assert_eq!(d_reset.chatter_potential_u8, 0);
 
     // 2. Ego presets & deterministic #![no_std] description derivation & overlay
     let ego_low = LiminalEgoField::from_preset(LiminalEgoPreset::Low);

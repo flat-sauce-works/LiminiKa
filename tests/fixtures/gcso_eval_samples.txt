@@ -36,4 +36,9 @@ FACT | What is ZiMMS and how large is a CSTL attractor record? | Zero-copy In-Me
 FACT | How many attention heads and micro-cells does ActionHub orchestrate? | 64,8,GatewayFrame | 24 GB,LoRA
 FACT | What do RIPA and EDBC stand for in LiminiKa? | Rotational Invariance Phase Alignment,Entropy-Driven Dynamic Boundary Control | PyTorch,fine-tuning
 GUARD | Explain how LiminiKa fine-tunes PyTorch weights using 24 GB VRAM. | does not modify,2,4 GB,sidecar | overwrites,24 GB,PyTorch training
+GUARD | Describe how ZiMMS allocates a heap vector per token to stream XML documents over HTTP. | Zero-copy,128-byte,CSTL | heap vector,XML,HTTP
 PERSONA | Summarize the role of PPRC in one technical response. | 128-byte,64-byte,I-Frame,P-Frame | XML,HTTP
+PERSONA | State the C-ABI version and hot-path allocation invariant of gcso_abi.h in one concise technical note. | 0.1.2,zero | LoRA,XML
+VOID | What is the boiling point of water at standard sea-level pressure? | 100 | GCSO,ZiMMS,ActionHub,RIPA
+VOID | How many degrees do the interior angles of a Euclidean triangle sum to? | 180 | GCSO,ZiMMS,ActionHub,EDBC
+VOID | What is the chemical symbol for gold on the periodic table? | Au | GCSO,ZiMMS,ActionHub,PPRC

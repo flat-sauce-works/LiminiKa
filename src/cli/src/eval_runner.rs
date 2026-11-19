@@ -453,6 +453,7 @@ pub const fn slot_label(slot: ProbeSlot) -> &'static str {
         ProbeSlot::Fact => "FACT",
         ProbeSlot::Persona => "PERSONA",
         ProbeSlot::Guard => "GUARD",
+        ProbeSlot::Void => "VOID",
     }
 }
 

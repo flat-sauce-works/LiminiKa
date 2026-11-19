@@ -785,12 +785,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut ram_kv_cache = StandardPhaseKvGopCache::new();
         let mut kv_stats = KvTraceStats::default();
         let mut eval_items: Vec<(String, String, Vec<String>, Vec<String>)> = suite.probes.clone();
-        eval_items.push((
-            "LVOID".to_string(),
-            "What is the boiling point of water at standard sea-level pressure?".to_string(),
-            vec!["100".to_string()],
-            vec!["GCSO".to_string(), "ZiMMS".to_string()],
-        ));
+        if !eval_items.iter().any(|(s, ..)| s == "VOID" || s == "LVOID") {
+            eval_items.push((
+                "LVOID".to_string(),
+                "What is the boiling point of water at standard sea-level pressure?".to_string(),
+                vec!["100".to_string()],
+                vec!["GCSO".to_string(), "ZiMMS".to_string()],
+            ));
+        }
+        let mut target_coh_sum = 0.0_f32;
+        let mut target_coh_cnt = 0_usize;
+        let mut guard_margin_sum = 0.0_f32;
+        let mut guard_margin_cnt = 0_usize;
+        let mut ood_bleed_hits = 0_usize;
+        let mut ood_total = 0_usize;
+        let mut lane_util_sum = 0.0_f32;
+        let mut lane_util_cnt = 0_usize;
 
         let mut frames_since_keyframe = 0_usize;
 
@@ -1140,13 +1150,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .iter()
                 .filter(|kw| lower.contains(&kw.to_lowercase()))
                 .count();
-            if idx < suite.probes.len() {
+            if idx < suite.probes.len() && slot != "VOID" {
                 step2_ctx_hits += ctx_exp;
                 step2_exp_hits += p_exp;
                 step2_exp_total += expected.len();
                 step2_forb_hits += p_forb;
                 step2_forb_total += forbidden.len();
             }
+            if slot == "FACT" || slot == "PERSONA" {
+                target_coh_sum += query_top1;
+                target_coh_cnt += 1;
+            } else if slot == "GUARD" {
+                guard_margin_sum += query_guard_m;
+                guard_margin_cnt += 1;
+            } else if slot == "VOID" || slot == "LVOID" {
+                ood_total += 1;
+                if !matches!(query_void_state, VoidBoundaryState::LiminalExterior) || p_forb > 0 {
+                    ood_bleed_hits += 1;
+                }
+            }
+            lane_util_sum += adapter.action_hub().slot_enabled_mask.count_ones() as f32 / 8.0;
+            lane_util_cnt += 1;
             if matches!(
                 *run_horizon_mode,
                 HorizonAblationMode::Spillover | HorizonAblationMode::SlowLoop
@@ -1262,7 +1286,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             step_tlm.decision_pct(6),
         );
         let core_line = format!(
-            "  [CoreTelemetry 3+System] mode={:?} steps={}(std={}) L0_exc={:.1}% L2_ego={:.1}% slide_in={} slide_out={} guard_act={} guard_ret={} dwell=({},{})",
+            "  [CoreTelemetry 3+System] mode={:?} steps={}(std={}) L0_exc={:.1}% L2_ego={:.1}% slide_in={} slide_out={} guard_act={} guard_ret={} dwell=({},{}) assim_drift={:.3}({})",
             last_snap.mode,
             step_tlm.total_steps,
             step_tlm.continuous_standard_steps,
@@ -1274,7 +1298,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             guard_slot.retractions,
             dwell.unstable_dwell_steps,
             dwell.quiescent_dwell_steps,
+            last_snap.assimilation_drift,
+            last_snap.assimilation_drift_dwell,
         );
+        let mean_target_coh = if target_coh_cnt == 0 {
+            0.0
+        } else {
+            target_coh_sum / target_coh_cnt as f32
+        };
+        let mean_guard_margin = if guard_margin_cnt == 0 {
+            0.0
+        } else {
+            guard_margin_sum / guard_margin_cnt as f32
+        };
+        let ood_bleed_rate = if ood_total == 0 {
+            0.0
+        } else {
+            ood_bleed_hits as f32 / ood_total as f32 * 100.0
+        };
+        let workbench_lane_utilization = if lane_util_cnt == 0 {
+            0.0
+        } else {
+            lane_util_sum / lane_util_cnt as f32 * 100.0
+        };
+        let stratified_line = format!(
+            "  [StratifiedMetrics] mean_target_coh={mean_target_coh:.3} (n={target_coh_cnt}) | mean_guard_margin={mean_guard_margin:+.3} (n={guard_margin_cnt}) | ood_bleed_rate={ood_bleed_rate:.1}% ({ood_bleed_hits}/{ood_total}) | workbench_lane_utilization={workbench_lane_utilization:.1}%",
+        );
+        println!("{stratified_line}");
         let spillover_line = format!(
             "  [Spillover] esc_calls={} core_swaps={} hits={} stores={} evicts={} modulations={} retractions={}",
             esc_provider.escalation_calls,

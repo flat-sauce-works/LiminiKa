@@ -336,10 +336,14 @@ impl StigmergicGranuleField {
 // 3. Temporal Liminal Boundary Delta (16 B)
 // ===================================================================
 
+/// Threshold for leaky integrate-and-fire phase transition pulse on [`LiminalBoundaryDelta`].
+pub const CHATTER_FIRE_THRESHOLD_U8: u8 = 64;
+
 /// Branchless 16-byte (`#[repr(C, align(16))]`) temporal differential analyzer measuring boundary
 /// velocity (`channel_floor_velocity_q7`), granule transition churn (`granule_transition_mask`),
-/// chattering oscillation (`chattering_channel_mask`), and stationary fast-skip readiness between
-/// consecutive [`LiminalApertureField`] epochs.
+/// chattering oscillation (`chattering_channel_mask`), leaky integrate-and-fire phase-transition
+/// pulses (`chatter_potential_u8`, `phase_transition_pulse`), and stationary fast-skip readiness
+/// between consecutive [`LiminalApertureField`] epochs.
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LiminalBoundaryDelta {
@@ -352,12 +356,16 @@ pub struct LiminalBoundaryDelta {
     pub chattering_channel_mask: u8,
     /// Aggregate boundary kinetic energy in `[0..=127]` (`offset 10`).
     pub kinetic_energy_q7: u8,
-    /// `1` when boundaries are quiescent without chattering (`kinetic_energy_q7 <= 2`), `0` otherwise (`offset 11`).
+    /// `1` when boundaries are quiescent without chattering or pulse fire (`offset 11`).
     pub stationary_shortcut_ready: u8,
     /// `1` when net boundary displacement expands apertures outward into new territory, `0` otherwise (`offset 12`).
     pub expansion_dominant: u8,
-    /// Explicit alignment padding reserved for future temporal boundary extensions (`offset 13..16`).
-    pub reserved: [u8; 3],
+    /// Leaky integrate-and-fire chattering membrane potential (`offset 13`).
+    pub chatter_potential_u8: u8,
+    /// `1` when `chatter_potential_u8` reaches [`CHATTER_FIRE_THRESHOLD_U8`] and fires a phase-transition pulse (`offset 14`).
+    pub phase_transition_pulse: u8,
+    /// Explicit alignment padding (`offset 15`).
+    pub reserved: u8,
 }
 
 impl LiminalBoundaryDelta {
@@ -398,8 +406,24 @@ impl LiminalBoundaryDelta {
         let granule_transition_mask = prev_venn_mask ^ cur_venn_mask;
         let venn_churn = granule_transition_mask.count_ones() * 6;
         let kinetic_energy_q7 = sum_abs_v.saturating_add(venn_churn).min(127) as u8;
-        let stationary_shortcut_ready =
-            u8::from((kinetic_energy_q7 <= 2) & (chattering_channel_mask == 0));
+
+        let prev_v = branchless_select_u8(
+            prev_delta.phase_transition_pulse != 0,
+            0,
+            prev_delta.chatter_potential_u8,
+        );
+        let leak_min = u8::from(prev_v > 0);
+        let leak = (prev_v >> 2).max(leak_min);
+        let decayed_v = prev_v.saturating_sub(leak);
+        let chatter_drive = (chattering_channel_mask.count_ones() as u8).saturating_mul(16);
+        let chatter_potential_u8 = decayed_v.saturating_add(chatter_drive);
+        let phase_transition_pulse = u8::from(chatter_potential_u8 >= CHATTER_FIRE_THRESHOLD_U8);
+
+        let stationary_shortcut_ready = u8::from(
+            (kinetic_energy_q7 <= 2)
+                & (chattering_channel_mask == 0)
+                & (phase_transition_pulse == 0),
+        );
         let expanded_venn = (cur_venn_mask & !prev_venn_mask) != 0;
         let expansion_dominant =
             u8::from((signed_sum < 0) | ((signed_sum == 0) & expanded_venn));
@@ -411,7 +435,9 @@ impl LiminalBoundaryDelta {
             kinetic_energy_q7,
             stationary_shortcut_ready,
             expansion_dominant,
-            reserved: [0; 3],
+            chatter_potential_u8,
+            phase_transition_pulse,
+            reserved: 0,
         }
     }
 }
@@ -1360,7 +1386,9 @@ impl LiminalEgoField {
 
         let trans_pos = self.transgression_bias_q7 > 0;
         let trans_abs = self.transgression_bias_q7.unsigned_abs();
-        let strong_trans = (t_liminal | t_distortion) & trans_pos & (trans_abs >= 20);
+        let strong_trans = (t_liminal | t_distortion | (t_chatter & (delta.phase_transition_pulse != 0)))
+            & trans_pos
+            & (trans_abs >= 20);
         let apply_phase_override = t_basin | t_stagnate | strong_trans | t_distortion;
         let thrust_q7 = self.counter_basin_thrust_q7.min(127);
         {
