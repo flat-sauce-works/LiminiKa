@@ -43,6 +43,7 @@ use crate::action_hub::{
 use crate::attractor::{MultiAttractorSpace, MAX_ANCHORS_PER_FIELD, MAX_ATTRACTOR_DOMAINS};
 use crate::entropy_control::{EntropyClosedLoopCoordinator, EntropyController};
 use crate::phase_steering::{PhaseSteeringClosedLoop, PhaseSteeringEngine};
+use crate::traits::gateway::ManifoldProbeBaseline;
 use crate::traits::rope::{PhaseSteeringGeometryExt, RopeSteeringTarget};
 use crate::traits::{
     abi_version, abi_version_string, apply_latent_horizon_slots, query_capability, ActionHub,
@@ -431,6 +432,8 @@ pub struct RuntimeContext {
     horizon_dwell: HorizonDwellState,
     active_horizon_slots_mask: u32,
     escalated_workbench_lane: Option<u8>,
+    sandbox_workbench_lane: Option<u8>,
+    probe_baseline: ManifoldProbeBaseline,
     telemetry: CoreTelemetryBank,
 }
 
@@ -470,6 +473,8 @@ impl RuntimeContext {
             horizon_dwell: HorizonDwellState::default(),
             active_horizon_slots_mask: 0,
             escalated_workbench_lane: None,
+            sandbox_workbench_lane: None,
+            probe_baseline: ManifoldProbeBaseline::new(),
             telemetry: CoreTelemetryBank::default(),
         })
     }
@@ -494,6 +499,26 @@ impl RuntimeContext {
     #[must_use]
     pub const fn last_boundary_delta(&self) -> &LiminalBoundaryDelta {
         &self.last_boundary_delta
+    }
+
+    /// Returns the active [`ManifoldProbeBaseline`] gauge origin used for assimilation drift.
+    #[inline(always)]
+    #[must_use]
+    pub const fn probe_baseline(&self) -> &ManifoldProbeBaseline {
+        &self.probe_baseline
+    }
+
+    /// Updates the [`ManifoldProbeBaseline`] gauge origin used for assimilation drift.
+    #[inline(always)]
+    pub const fn set_probe_baseline(&mut self, baseline: ManifoldProbeBaseline) {
+        self.probe_baseline = baseline;
+    }
+
+    /// Returns the physical workbench lane currently leased for an isolated sandbox hypothesis.
+    #[inline(always)]
+    #[must_use]
+    pub const fn sandbox_workbench_lane(&self) -> Option<u8> {
+        self.sandbox_workbench_lane
     }
 
     /// Returns a mutable reference to the latest Layer 0 [`LiminalBoundaryDelta`].
@@ -1435,6 +1460,27 @@ impl RuntimeContext {
             slid_out,
             escalated,
             qos_throttled,
+        );
+        let _ = self.telemetry.update_assimilation_ema(
+            edbc_st.moving_z_entropy,
+            frame.fact_persona_coherence,
+            frame.repulsion_severity,
+            &self.probe_baseline,
+            0.15_f32,
+        );
+        let exterior_granule_mask = (self.last_venn_report.void_exterior_mask
+            | self.last_venn_report.serendipity_excursion_mask)
+            & !self.last_venn_report.venn_core_mask;
+        let _ = self.action_hub.step_sandbox_hypothesis_lifecycle(
+            &mut self.telemetry,
+            &mut self.sandbox_workbench_lane,
+            step_decision,
+            self.core_layers.ego_layer.is_active(),
+            exterior_granule_mask,
+            trail_phase_words_ref(trail_out),
+            frame.effective_energy,
+            3,
+            3,
         );
 
         Ok((

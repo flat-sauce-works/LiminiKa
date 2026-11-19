@@ -17,13 +17,35 @@ use super::core_layers::{
 use super::epistemic::{
     EpistemicHorizonReading, EpistemicRegime, LiminalTopologyTelemetrySnapshot,
 };
+use super::signals::ManifoldProbeBaseline;
 use crate::action_hub::{StigmergicActionDecision, StigmergicThresholds};
 use crate::traits::primitives::{
-    branchless_clamp_f32, EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER,
-    EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR,
-    NUM_LIMINAL_APERTURE_CHANNELS,
+    branchless_clamp_f32, branchless_is_finite_f32, EGO_TRIGGER_BASIN_CAPTURE,
+    EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT,
+    EGO_TRIGGER_LIMINAL_EXTERIOR, NUM_LIMINAL_APERTURE_CHANNELS,
 };
 use crate::traits::telemetry::NUM_STIGMERGIC_GRANULES;
+
+const EMA_Q15_ONE: u16 = 32_768;
+const EMA_Q15_TO_F32: f32 = 1.0_f32 / 32_768.0_f32;
+
+#[inline(always)]
+fn f32_unit_to_q15(val: f32) -> u16 {
+    if !branchless_is_finite_f32(val) {
+        return 0;
+    }
+    let clamped = branchless_clamp_f32(val, 0.0_f32, 1.0_f32);
+    (clamped * 32_768.0_f32 + 0.5_f32) as u16
+}
+
+#[inline(always)]
+const fn step_ema_q15(prev: u16, sample: u16, initialized: bool) -> u16 {
+    if !initialized {
+        sample
+    } else {
+        (((prev as u32) * 31 + (sample as u32) + 16) >> 5) as u16
+    }
+}
 
 /// Granularity tier controlling how much telemetry is captured on each step.
 #[repr(u8)]
@@ -244,6 +266,16 @@ pub struct CoreTelemetrySnapshot {
     pub distortion: LayerDistortionReport,
     /// Bitmask of external `LatentHorizonSlot`s currently slid in.
     pub active_horizon_slots_mask: u32,
+    /// Rolling `0 fdiv` EMA ($\alpha = 1/32$) of normalized entropy (`0.0..=1.0`).
+    pub entropy_ema: f32,
+    /// Rolling `0 fdiv` EMA ($\alpha = 1/32$) of trajectory/phase coherence (`0.0..=1.0`).
+    pub coherence_ema: f32,
+    /// Rolling `0 fdiv` EMA ($\alpha = 1/32$) of guard noise/similarity (`0.0..=1.0`).
+    pub guard_ema: f32,
+    /// Gauge-relative assimilation drift $D_{\mathrm{assim}} \in [0.0, 1.0]$ from [`ManifoldProbeBaseline`].
+    pub assimilation_drift: f32,
+    /// Consecutive steps where $D_{\mathrm{assim}}$ exceeded the drift threshold (with hysteresis).
+    pub assimilation_drift_dwell: u16,
 }
 
 /// Standalone `#![no_std]` zero-alloc `3 + System` telemetry bank stored beside compute engines.
@@ -263,6 +295,13 @@ pub struct CoreTelemetryBank {
     pub system: SystemSpineTelemetry,
     /// Slide-in detailed counters (untouched unless `active_mode == Detailed`).
     pub detailed: DetailedLayerTelemetry,
+    ema_initialized: bool,
+    entropy_ema_q15: u16,
+    coherence_ema_q15: u16,
+    guard_ema_q15: u16,
+    assimilation_drift_q15: u16,
+    assimilation_drift_dwell: u16,
+    sandbox_coherence_improve_dwell: u16,
 }
 
 impl Default for CoreTelemetryBank {
@@ -326,6 +365,13 @@ impl CoreTelemetryBank {
                 ego_trigger_counts: [0; 5],
                 detailed_captured_steps: 0,
             },
+            ema_initialized: false,
+            entropy_ema_q15: 0,
+            coherence_ema_q15: 0,
+            guard_ema_q15: 0,
+            assimilation_drift_q15: 0,
+            assimilation_drift_dwell: 0,
+            sandbox_coherence_improve_dwell: 0,
         }
     }
 
@@ -374,6 +420,104 @@ impl CoreTelemetryBank {
         self.layer2 = EgoLayerTelemetry::default();
         self.system = SystemSpineTelemetry::default();
         self.detailed = DetailedLayerTelemetry::default();
+        self.ema_initialized = false;
+        self.entropy_ema_q15 = 0;
+        self.coherence_ema_q15 = 0;
+        self.guard_ema_q15 = 0;
+        self.assimilation_drift_q15 = 0;
+        self.assimilation_drift_dwell = 0;
+        self.sandbox_coherence_improve_dwell = 0;
+    }
+
+    /// Updates `0 fdiv` rolling Q0.15 EMAs ($\alpha = 1/32$) and gauge-relative assimilation drift
+    /// against `baseline` in `Standard` or `Detailed` mode, returning the updated drift dwell count.
+    ///
+    /// In [`TelemetryVerbosityMode::Coarse`], EMA updates and drift dwell accumulation pause
+    /// immediately to keep Hot-Path overhead zero.
+    #[inline]
+    pub fn update_assimilation_ema(
+        &mut self,
+        entropy: f32,
+        coherence: f32,
+        guard: f32,
+        baseline: &ManifoldProbeBaseline,
+        drift_threshold: f32,
+    ) -> u16 {
+        if matches!(self.active_mode, TelemetryVerbosityMode::Coarse) {
+            return self.assimilation_drift_dwell;
+        }
+        let ent_q15 = f32_unit_to_q15(entropy);
+        let coh_q15 = f32_unit_to_q15(coherence);
+        let grd_q15 = f32_unit_to_q15(guard);
+        let init = self.ema_initialized;
+        let prev_coh = self.coherence_ema_q15;
+
+        self.entropy_ema_q15 = step_ema_q15(self.entropy_ema_q15, ent_q15, init);
+        self.coherence_ema_q15 = step_ema_q15(self.coherence_ema_q15, coh_q15, init);
+        self.guard_ema_q15 = step_ema_q15(self.guard_ema_q15, grd_q15, init);
+        self.ema_initialized = true;
+
+        let h0 = f32_unit_to_q15(baseline.baseline_entropy);
+        let c0 = f32_unit_to_q15(baseline.baseline_inter_layer_coherence);
+        let g0 = f32_unit_to_q15(baseline.baseline_guard_noise_floor);
+
+        let coh_drop = c0.saturating_sub(self.coherence_ema_q15);
+        let ent_excess = self.entropy_ema_q15.saturating_sub(h0);
+        let guard_excess = self.guard_ema_q15.saturating_sub(g0);
+        let drift_raw =
+            u32::from(coh_drop) + (u32::from(ent_excess) >> 1) + (u32::from(guard_excess) >> 1);
+        self.assimilation_drift_q15 = drift_raw.min(u32::from(EMA_Q15_ONE)) as u16;
+
+        let tau_q15 = f32_unit_to_q15(drift_threshold).max(1);
+        let hysteresis_floor = tau_q15.saturating_sub(tau_q15 >> 3);
+        let enough_samples = self.system.continuous_standard_steps >= 16;
+        if enough_samples && self.assimilation_drift_q15 >= tau_q15 {
+            self.assimilation_drift_dwell = self.assimilation_drift_dwell.saturating_add(1);
+        } else if self.assimilation_drift_q15 < hysteresis_floor {
+            self.assimilation_drift_dwell = 0;
+        }
+
+        if init && (coh_q15 >= c0 || coh_q15 > prev_coh) {
+            self.sandbox_coherence_improve_dwell =
+                self.sandbox_coherence_improve_dwell.saturating_add(1);
+        } else {
+            self.sandbox_coherence_improve_dwell = 0;
+        }
+
+        self.assimilation_drift_dwell
+    }
+
+    /// Returns the latest gauge-relative assimilation drift $D_{\mathrm{assim}} \in [0.0, 1.0]$.
+    #[inline(always)]
+    #[must_use]
+    pub fn assimilation_drift(&self) -> f32 {
+        f32::from(self.assimilation_drift_q15) * EMA_Q15_TO_F32
+    }
+
+    /// Returns the consecutive assimilation drift dwell steps.
+    #[inline(always)]
+    #[must_use]
+    pub const fn assimilation_drift_dwell(&self) -> u16 {
+        self.assimilation_drift_dwell
+    }
+
+    /// Returns the consecutive coherence improvement steps observed for sandbox promotion.
+    #[inline(always)]
+    #[must_use]
+    pub const fn sandbox_coherence_improve_dwell(&self) -> u16 {
+        self.sandbox_coherence_improve_dwell
+    }
+
+    /// Resets the assimilation drift dwell counter (e.g., after sandbox promotion or release).
+    #[inline(always)]
+    pub const fn reset_assimilation_dwell(&mut self) {
+        self.assimilation_drift_dwell = 0;
+    }
+
+    /// Resets the sandbox coherence improvement dwell counter upon fresh sandbox nucleation.
+    #[inline(always)]
+    pub const fn reset_sandbox_improve_dwell(&mut self) {
+        self.sandbox_coherence_improve_dwell = 0;
     }
 
     /// Synchronizes Tier-1 residual experience cache cumulative metrics (`hits`, `stores`,
@@ -823,6 +967,11 @@ impl CoreTelemetryBank {
             topology,
             distortion,
             active_horizon_slots_mask,
+            entropy_ema: f32::from(self.entropy_ema_q15) * EMA_Q15_TO_F32,
+            coherence_ema: f32::from(self.coherence_ema_q15) * EMA_Q15_TO_F32,
+            guard_ema: f32::from(self.guard_ema_q15) * EMA_Q15_TO_F32,
+            assimilation_drift: f32::from(self.assimilation_drift_q15) * EMA_Q15_TO_F32,
+            assimilation_drift_dwell: self.assimilation_drift_dwell,
         }
     }
 
@@ -1173,5 +1322,60 @@ mod tests {
         let mut merged = CoreTelemetryBank::default();
         merged.accumulate_snapshot(&bank_a.snapshot(&AutonomousCoreLayerStack::new(), &aligned_horizon, 0, 0, 0));
         assert_eq!(merged.compute_distortion_report().kind, sat_dist.kind);
+    }
+
+    #[test]
+    fn test_assimilation_ema_and_coarse_pause() {
+        let baseline = ManifoldProbeBaseline {
+            baseline_entropy: 0.30,
+            baseline_inter_layer_coherence: 0.80,
+            baseline_guard_noise_floor: 0.25,
+            ..ManifoldProbeBaseline::new()
+        };
+        let mut coarse_bank = CoreTelemetryBank::with_mode(TelemetryVerbosityMode::Coarse);
+        assert_eq!(
+            coarse_bank.update_assimilation_ema(0.90, 0.10, 0.90, &baseline, 0.15),
+            0
+        );
+        assert_eq!(coarse_bank.assimilation_drift(), 0.0);
+
+        let mut bank = CoreTelemetryBank::with_mode(TelemetryVerbosityMode::Standard);
+        let horizon = EpistemicHorizonReading {
+            regime_code: EpistemicRegime::InternalConflict as u8,
+            ..EpistemicHorizonReading::default()
+        };
+        let delta = LiminalBoundaryDelta::default();
+        let venn = StigmergicVennSerendipityReport::default();
+        let ego = LiminalEgoField::new();
+        for _ in 0..20 {
+            bank.record_step(
+                StigmergicActionDecision::ExpressPhaseSteer,
+                &horizon,
+                &delta,
+                &venn,
+                &ego,
+                0,
+                0,
+                0,
+                false,
+                false,
+            );
+            let _ = bank.update_assimilation_ema(0.75, 0.25, 0.65, &baseline, 0.15);
+        }
+        assert!(bank.assimilation_drift() >= 0.15);
+        assert!(bank.assimilation_drift_dwell() >= 4);
+
+        let snap = bank.snapshot(&AutonomousCoreLayerStack::new(), &horizon, 0, 0, 0);
+        assert!(snap.entropy_ema > 0.30);
+        assert!(snap.coherence_ema < 0.80);
+        assert!(snap.guard_ema > 0.25);
+        assert_eq!(snap.assimilation_drift_dwell, bank.assimilation_drift_dwell());
+
+        // Verify coherence recovery resets drift dwell and increments improve dwell.
+        for _ in 0..48 {
+            let _ = bank.update_assimilation_ema(0.25, 0.90, 0.20, &baseline, 0.15);
+        }
+        assert_eq!(bank.assimilation_drift_dwell(), 0);
+        assert!(bank.sandbox_coherence_improve_dwell() >= 3);
     }
 }

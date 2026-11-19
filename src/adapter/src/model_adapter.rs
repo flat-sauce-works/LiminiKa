@@ -391,6 +391,7 @@ pub struct ModelSteeringAdapter {
     escalation_boundary_dirty: bool,
     last_escalated_regime: u8,
     escalated_workbench_lane: Option<u8>,
+    sandbox_workbench_lane: Option<u8>,
     active_workbench_preset: WorkbenchPreset,
 }
 
@@ -467,6 +468,7 @@ impl ModelSteeringAdapter {
             escalation_boundary_dirty: true,
             last_escalated_regime: EpistemicRegime::KnownCoherent as u8,
             escalated_workbench_lane: None,
+            sandbox_workbench_lane: None,
             active_workbench_preset: WorkbenchPreset::BalancedDialog,
         })
     }
@@ -508,6 +510,7 @@ impl ModelSteeringAdapter {
         self.escalation_boundary_dirty = true;
         self.last_escalated_regime = EpistemicRegime::KnownCoherent as u8;
         self.escalated_workbench_lane = None;
+        self.sandbox_workbench_lane = None;
         let _ = self.action_hub.release_all_workbench_lanes();
         self.active_workbench_preset = WorkbenchPreset::BalancedDialog;
         self.telemetry.set_policy(self.telemetry.policy());
@@ -1308,6 +1311,7 @@ impl ModelSteeringAdapter {
         self.phase_engine = new_phase_engine;
         self.action_hub = new_action_hub;
         self.ledger_slot = gcso_ledger_slot_t::default();
+        self.sandbox_workbench_lane = None;
         self.telemetry.reset();
         self.probe_baseline = next_probe;
         Ok(self.probe_baseline.probe_epoch)
@@ -1798,6 +1802,27 @@ impl ModelSteeringAdapter {
                 slid_out,
                 escalated,
                 qos_throttled,
+            );
+            let _ = this.telemetry.update_assimilation_ema(
+                entropy_h_tilde,
+                frame.fact_persona_coherence,
+                frame.repulsion_severity,
+                &this.probe_baseline,
+                0.15_f32,
+            );
+            let exterior_granule_mask = (this.last_venn_report.void_exterior_mask
+                | this.last_venn_report.serendipity_excursion_mask)
+                & !this.last_venn_report.venn_core_mask;
+            let _ = this.action_hub.step_sandbox_hypothesis_lifecycle(
+                &mut this.telemetry,
+                &mut this.sandbox_workbench_lane,
+                decision,
+                this.configured_ego.is_active(),
+                exterior_granule_mask,
+                liminika_core::traits::primitives::trail_phase_words_ref(trail_inout),
+                frame.effective_energy,
+                3,
+                3,
             );
             this.action_hub.last_decision = decision as u8;
             Ok((frame, report, decision))

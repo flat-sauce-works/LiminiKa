@@ -440,6 +440,19 @@ impl WorkbenchSlotSpec {
     }
 }
 
+/// Outcome emitted by [`ActionHubEngine::step_sandbox_hypothesis_lifecycle`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxLifecycleEvent {
+    /// No sandbox state transition occurred on this step.
+    Idle,
+    /// A new isolated sandbox lane was leased from the free pool.
+    Nucleated(u8),
+    /// An active sandbox lane was promoted in-place to standard full-aperture participation.
+    Promoted(u8),
+    /// Unpinned active sandbox lanes were released immediately due to repulsion or overdrive.
+    Released(u8),
+}
+
 /// 32-byte (`#[repr(C, align(32))]`) [`Pod`] threshold configuration governing autonomous
 /// stigmergic pheromone evaporation, reinforcement, and 7-regime next-action selection.
 #[repr(C, align(32))]
@@ -1537,6 +1550,101 @@ impl ActionHubEngine {
             released = released.saturating_add(1);
         }
         released
+    }
+
+    /// Drives the isolated sandbox hypothesis lifecycle in zero-alloc mode:
+    /// 1. Immediately releases unpinned sandbox lanes on [`StigmergicActionDecision::RepulsionEscape`]
+    ///    or [`crate::traits::gateway::LayerDistortionKind::ActiveOverdrive`].
+    /// 2. Promotes an active sandbox lane via [`Self::promote_sandbox_lane`] once consecutive
+    ///    coherence improvement reaches `promote_dwell_threshold`.
+    /// 3. On sustained assimilation drift (`drift_dwell >= drift_dwell_threshold`), when `ego_active`
+    ///    and `exterior_granule_mask != 0` (`(void_exterior_mask | serendipity_excursion_mask) & !venn_core_mask`),
+    ///    leases a free lane via [`WorkbenchSlotSpec::auto_sandbox`] masked strictly to `exterior_granule_mask`.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    pub fn step_sandbox_hypothesis_lifecycle(
+        &mut self,
+        telemetry: &mut crate::traits::gateway::CoreTelemetryBank,
+        active_sandbox_lane: &mut Option<u8>,
+        decision: StigmergicActionDecision,
+        ego_active: bool,
+        exterior_granule_mask: u8,
+        candidate_words: &[u64; crate::traits::telemetry::NUM_STIGMERGIC_GRANULES],
+        candidate_weight: f32,
+        drift_dwell_threshold: u16,
+        promote_dwell_threshold: u16,
+    ) -> SandboxLifecycleEvent {
+        let distortion = telemetry.compute_distortion_report();
+        if matches!(decision, StigmergicActionDecision::RepulsionEscape)
+            || matches!(
+                distortion.kind,
+                crate::traits::gateway::LayerDistortionKind::ActiveOverdrive
+            )
+        {
+            let released = self.release_sandbox_lanes();
+            *active_sandbox_lane = None;
+            telemetry.reset_assimilation_dwell();
+            telemetry.reset_sandbox_improve_dwell();
+            return if released > 0 {
+                SandboxLifecycleEvent::Released(released)
+            } else {
+                SandboxLifecycleEvent::Idle
+            };
+        }
+
+        if let Some(lane) = *active_sandbox_lane {
+            let lane_bit = if usize::from(lane) < MAX_ATTRACTOR_DOMAINS {
+                1u8 << lane
+            } else {
+                0
+            };
+            let still_sandbox = lane_bit != 0
+                && ((self.slot_enabled_mask & self.slot_sandbox_mask) & lane_bit) != 0;
+            if !still_sandbox {
+                *active_sandbox_lane = None;
+            } else if telemetry.sandbox_coherence_improve_dwell() >= promote_dwell_threshold.max(1)
+            {
+                if self.promote_sandbox_lane(lane).unwrap_or(false) {
+                    *active_sandbox_lane = None;
+                    telemetry.reset_assimilation_dwell();
+                    telemetry.reset_sandbox_improve_dwell();
+                    return SandboxLifecycleEvent::Promoted(lane);
+                }
+            } else {
+                return SandboxLifecycleEvent::Idle;
+            }
+        }
+
+        if active_sandbox_lane.is_none()
+            && ego_active
+            && exterior_granule_mask != 0
+            && telemetry.assimilation_drift_dwell() >= drift_dwell_threshold.max(1)
+        {
+            let mut masked_words = [0u64; crate::traits::telemetry::NUM_STIGMERGIC_GRANULES];
+            for (g, (dst, &src)) in masked_words
+                .iter_mut()
+                .zip(candidate_words.iter())
+                .enumerate()
+            {
+                let active_mask = (((exterior_granule_mask >> g) & 1) as u64).wrapping_neg();
+                *dst = src & active_mask;
+            }
+            if crate::traits::swar_words_nonzero_64(&masked_words) {
+                let mut phases = [0 as gcso_q7_t; MAX_ATTENTION_HEADS];
+                crate::traits::primitives::store_q7_words_64(&mut phases, &masked_words);
+                let weight =
+                    branchless_clamp_f32(branchless_relu_f32(candidate_weight), 0.125, 1.0);
+                if let Ok(lane) =
+                    self.allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(weight, phases))
+                {
+                    *active_sandbox_lane = Some(lane);
+                    telemetry.reset_sandbox_improve_dwell();
+                    return SandboxLifecycleEvent::Nucleated(lane);
+                }
+            }
+        }
+
+        SandboxLifecycleEvent::Idle
     }
 
     /// Evaluates external cold-path escalation (`escalation_provider`) against `req.trigger` and
@@ -3402,5 +3510,179 @@ mod tests {
             .unwrap();
         assert_eq!(trail_prom.accumulated_phase_delta[0], 30);
         assert_eq!(trail_prom.accumulated_phase_delta[40], 0);
+    }
+
+    #[test]
+    fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
+        use crate::traits::gateway::{
+            CoreTelemetryBank, EpistemicHorizonReading, EpistemicRegime, LiminalBoundaryDelta,
+            LiminalEgoField, ManifoldProbeBaseline, StigmergicVennSerendipityReport,
+            TelemetryVerbosityMode,
+        };
+        use crate::traits::primitives::EGO_TRIGGER_BASIN_CAPTURE;
+
+        let baseline = ManifoldProbeBaseline {
+            baseline_entropy: 0.30,
+            baseline_inter_layer_coherence: 0.80,
+            baseline_guard_noise_floor: 0.25,
+            ..ManifoldProbeBaseline::new()
+        };
+        let mut hub = ActionHubEngine::new();
+        let mut bank = CoreTelemetryBank::with_mode(TelemetryVerbosityMode::Standard);
+        let mut active_sandbox: Option<u8> = None;
+        let horizon = EpistemicHorizonReading {
+            regime_code: EpistemicRegime::InternalConflict as u8,
+            ..EpistemicHorizonReading::default()
+        };
+        let delta = LiminalBoundaryDelta::default();
+        let venn = StigmergicVennSerendipityReport::default();
+        let ego = LiminalEgoField::new();
+        let candidate_words = [0x0A0A_0A0A_0A0A_0A0A_u64; NUM_STIGMERGIC_GRANULES];
+
+        for _ in 0..20 {
+            bank.record_step(
+                StigmergicActionDecision::ExpressPhaseSteer,
+                &horizon,
+                &delta,
+                &venn,
+                &ego,
+                0,
+                0,
+                0,
+                false,
+                false,
+            );
+            let _ = bank.update_assimilation_ema(0.75, 0.25, 0.65, &baseline, 0.15);
+        }
+
+        // 1. Ego=off must never nucleate a sandbox lane.
+        let ev_off = hub.step_sandbox_hypothesis_lifecycle(
+            &mut bank,
+            &mut active_sandbox,
+            StigmergicActionDecision::ExpressPhaseSteer,
+            false,
+            0xF0,
+            &candidate_words,
+            0.5,
+            3,
+            3,
+        );
+        assert_eq!(ev_off, SandboxLifecycleEvent::Idle);
+        assert_eq!(active_sandbox, None);
+        assert_eq!(hub.slot_sandbox_mask, 0);
+
+        // 2. Ego=active + exterior granules -> nucleates one sandbox lane masked strictly to 0xF0.
+        let ev_nuc = hub.step_sandbox_hypothesis_lifecycle(
+            &mut bank,
+            &mut active_sandbox,
+            StigmergicActionDecision::ExpressPhaseSteer,
+            true,
+            0xF0,
+            &candidate_words,
+            0.5,
+            3,
+            3,
+        );
+        let lane = match ev_nuc {
+            SandboxLifecycleEvent::Nucleated(l) => l,
+            other => panic!("expected Nucleated, got {other:?}"),
+        };
+        assert_eq!(active_sandbox, Some(lane));
+        assert_ne!(hub.slot_sandbox_mask & (1u8 << lane), 0);
+        let row_start = usize::from(lane) * MAX_ATTENTION_HEADS;
+        assert_eq!(hub.slot_phase_bank.data[row_start], 0);
+        assert_eq!(hub.slot_phase_bank.data[row_start + 32], 10);
+
+        // 3. Consecutive coherence improvement promotes sandbox lane in-place.
+        for _ in 0..3 {
+            let _ = bank.update_assimilation_ema(0.25, 0.90, 0.20, &baseline, 0.15);
+        }
+        let ev_prom = hub.step_sandbox_hypothesis_lifecycle(
+            &mut bank,
+            &mut active_sandbox,
+            StigmergicActionDecision::ExpressPhaseSteer,
+            true,
+            0xF0,
+            &candidate_words,
+            0.5,
+            3,
+            3,
+        );
+        assert_eq!(ev_prom, SandboxLifecycleEvent::Promoted(lane));
+        assert_eq!(active_sandbox, None);
+        assert_eq!(hub.slot_sandbox_mask & (1u8 << lane), 0);
+        assert_ne!(hub.slot_enabled_mask & (1u8 << lane), 0);
+
+        // 4. Re-nucleate then verify RepulsionEscape releases sandbox immediately.
+        for _ in 0..40 {
+            let _ = bank.update_assimilation_ema(0.85, 0.15, 0.75, &baseline, 0.15);
+        }
+        let ev_nuc2 = hub.step_sandbox_hypothesis_lifecycle(
+            &mut bank,
+            &mut active_sandbox,
+            StigmergicActionDecision::ExpressPhaseSteer,
+            true,
+            0xF0,
+            &candidate_words,
+            0.5,
+            3,
+            3,
+        );
+        assert!(matches!(ev_nuc2, SandboxLifecycleEvent::Nucleated(_)));
+        let ev_rel = hub.step_sandbox_hypothesis_lifecycle(
+            &mut bank,
+            &mut active_sandbox,
+            StigmergicActionDecision::RepulsionEscape,
+            true,
+            0xF0,
+            &candidate_words,
+            0.5,
+            3,
+            3,
+        );
+        assert_eq!(ev_rel, SandboxLifecycleEvent::Released(1));
+        assert_eq!(active_sandbox, None);
+        assert_eq!(hub.slot_sandbox_mask, 0);
+
+        // 5. ActiveOverdrive distortion also releases any active sandbox lane immediately.
+        let mut active_ego =
+            LiminalEgoField::from_preset(crate::traits::gateway::LiminalEgoPreset::High);
+        active_ego.last_intervened_mask = EGO_TRIGGER_BASIN_CAPTURE;
+        for _ in 0..40 {
+            bank.record_step(
+                StigmergicActionDecision::RepulsionEscape,
+                &horizon,
+                &delta,
+                &venn,
+                &active_ego,
+                0,
+                0,
+                0,
+                false,
+                false,
+            );
+            let _ = bank.update_assimilation_ema(0.85, 0.15, 0.75, &baseline, 0.15);
+        }
+        let lane3 = hub
+            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(
+                0.5,
+                [1; MAX_ATTENTION_HEADS],
+            ))
+            .unwrap();
+        active_sandbox = Some(lane3);
+        let ev_od = hub.step_sandbox_hypothesis_lifecycle(
+            &mut bank,
+            &mut active_sandbox,
+            StigmergicActionDecision::ExpressPhaseSteer,
+            true,
+            0xF0,
+            &candidate_words,
+            0.5,
+            3,
+            3,
+        );
+        assert_eq!(ev_od, SandboxLifecycleEvent::Released(1));
+        assert_eq!(active_sandbox, None);
+        assert_eq!(hub.slot_sandbox_mask, 0);
     }
 }
