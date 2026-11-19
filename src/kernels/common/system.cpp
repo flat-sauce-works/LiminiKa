@@ -29,7 +29,7 @@ GCSO_FORCE_INLINE uint32_t select_u32(bool cond, uint32_t t, uint32_t f) noexcep
 }
 
 GCSO_FORCE_INLINE bool byte_ranges_overlap(uintptr_t a, size_t a_len, uintptr_t b,
-                                            size_t b_len) noexcept {
+                                           size_t b_len) noexcept {
     if (a_len == 0U || b_len == 0U) {
         return false;
     }
@@ -49,7 +49,7 @@ GCSO_FORCE_INLINE void store_q7_word8(gcso_q7_t* ptr, uint64_t w) noexcept {
 }
 
 GCSO_FORCE_INLINE uint64_t swar_scale_le128_with_bias_x8(uint64_t packed, uint64_t s,
-                                                          uint64_t bias_restore) noexcept {
+                                                         uint64_t bias_restore) noexcept {
     constexpr uint64_t SIGN_MASK = 0x8080808080808080ULL;
     constexpr uint64_t EVEN_MASK = 0x00FF00FF00FF00FFULL;
     constexpr uint64_t ODD_MASK = 0xFF00FF00FF00FF00ULL;
@@ -411,8 +411,8 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_liminal_evaluate_venn_parti
     uint8_t self_mask, const uint8_t* GCSO_RESTRICT other_granule_density_q7,
     const uint8_t* GCSO_RESTRICT granule_noise_tolerance_q7, uint8_t concentration_floor_q7,
     gcso_liminal_venn_partition_t* GCSO_RESTRICT partition_out) GCSO_NOEXCEPT {
-    if (GCSO_UNLIKELY(other_granule_density_q7 == nullptr || granule_noise_tolerance_q7 == nullptr ||
-                      partition_out == nullptr)) {
+    if (GCSO_UNLIKELY(other_granule_density_q7 == nullptr ||
+                      granule_noise_tolerance_q7 == nullptr || partition_out == nullptr)) {
         return GCSO_ERROR_NULL_POINTER;
     }
     if (GCSO_UNLIKELY(reinterpret_cast<uintptr_t>(partition_out) %
@@ -468,7 +468,8 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_liminal_evaluate_venn_parti
         const auto clamped_half_sum = static_cast<uint8_t>((half_sum > 127U) ? 127U : half_sum);
         const uint8_t unbridged_conc =
             (clamped_half_sum > clamped_peak) ? clamped_half_sum : clamped_peak;
-        const uint8_t bridged_conc = (clamped_peak > mean_ext_excess) ? clamped_peak : mean_ext_excess;
+        const uint8_t bridged_conc =
+            (clamped_peak > mean_ext_excess) ? clamped_peak : mean_ext_excess;
         const uint8_t other_concentration_q7 = select_u8(
             bridge_count >= 1U, bridged_conc, select_u8(ext_cnt >= 2U, unbridged_conc, 0U));
 
@@ -545,11 +546,12 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_distortion_tension_step_hot
         }
 
         const uint16_t sens_relief = static_cast<uint16_t>(boundary_sensitivity_q7 >> 3U);
-        const uint16_t accum = static_cast<uint16_t>(
-            static_cast<uint16_t>(tension_inout->last_ego_delta_norm_q7) +
-            static_cast<uint16_t>(tension_inout->guard_proximity_q7 >> 1U) +
-            static_cast<uint16_t>(tension_inout->exit_entropy_q7 >> 2U));
-        const uint16_t diff = (accum > sens_relief) ? static_cast<uint16_t>(accum - sens_relief) : 0U;
+        const uint16_t accum =
+            static_cast<uint16_t>(static_cast<uint16_t>(tension_inout->last_ego_delta_norm_q7) +
+                                  static_cast<uint16_t>(tension_inout->guard_proximity_q7 >> 1U) +
+                                  static_cast<uint16_t>(tension_inout->exit_entropy_q7 >> 2U));
+        const uint16_t diff =
+            (accum > sens_relief) ? static_cast<uint16_t>(accum - sens_relief) : 0U;
         const auto raw_tension = static_cast<uint8_t>((diff > 127U) ? 127U : diff);
         tension_inout->tension_q7 = raw_tension;
 
@@ -563,9 +565,10 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_distortion_tension_step_hot
         const uint8_t mild_floor =
             select_u8(tension_inout->effective_ego_scale_q7 > 0U, quarter_floored, 0U);
         const uint8_t damped_scale = select_u8(severe_guard, 0U, mild_floor);
-        const uint8_t cooled = (tension_inout->suppression_cooldown_steps > 0U)
-                                   ? static_cast<uint8_t>(tension_inout->suppression_cooldown_steps - 1U)
-                                   : 0U;
+        const uint8_t cooled =
+            (tension_inout->suppression_cooldown_steps > 0U)
+                ? static_cast<uint8_t>(tension_inout->suppression_cooldown_steps - 1U)
+                : 0U;
         const uint16_t recov_sum =
             static_cast<uint16_t>(tension_inout->effective_ego_scale_q7) + 8U;
         const auto recov_clamped = static_cast<uint8_t>((recov_sum > 96U) ? 96U : recov_sum);
@@ -612,17 +615,15 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_distortion_delta_apply_chai
             reinterpret_cast<uintptr_t>(ego) % alignof(gcso_liminal_ego_field_t) != 0U ||
             reinterpret_cast<uintptr_t>(spine) % alignof(gcso_system_spine_state_t) != 0U ||
             reinterpret_cast<uintptr_t>(venn) % alignof(gcso_liminal_venn_partition_t) != 0U ||
-            reinterpret_cast<uintptr_t>(stigmergy) %
-                    alignof(gcso_stigmergic_granule_field_t) !=
+            reinterpret_cast<uintptr_t>(stigmergy) % alignof(gcso_stigmergic_granule_field_t) !=
                 0U ||
             reinterpret_cast<uintptr_t>(tension) % alignof(gcso_distortion_tension_t) != 0U ||
             reinterpret_cast<uintptr_t>(frame_inout) % alignof(gcso_gateway_frame_t) != 0U)) {
         return GCSO_ERROR_MISALIGNED_POINTER;
     }
-    if (GCSO_UNLIKELY(byte_ranges_overlap(reinterpret_cast<uintptr_t>(frame_inout),
-                                          sizeof(gcso_gateway_frame_t),
-                                          reinterpret_cast<uintptr_t>(nodes),
-                                          num_nodes * sizeof(gcso_distortion_delta_t)))) {
+    if (GCSO_UNLIKELY(byte_ranges_overlap(
+            reinterpret_cast<uintptr_t>(frame_inout), sizeof(gcso_gateway_frame_t),
+            reinterpret_cast<uintptr_t>(nodes), num_nodes * sizeof(gcso_distortion_delta_t)))) {
         return GCSO_ERROR_INVALID_ARGUMENT;
     }
     try {
@@ -636,13 +637,13 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_distortion_delta_apply_chai
                 select_u8(venn->shared_core_mask != 0U, GCSO_VENN_REGION_SHARED_CORE, 0U) |
                 select_u8(venn->self_exclusive_mask != 0U, GCSO_VENN_REGION_SELF_EXCLUSIVE, 0U) |
                 select_u8(venn->known_unknown_mask != 0U, GCSO_VENN_REGION_KNOWN_UNKNOWN, 0U));
-            const uint8_t region_fallback = select_u8(
-                region_bits != 0U, region_bits,
-                static_cast<uint8_t>(GCSO_VENN_REGION_SHARED_CORE | GCSO_VENN_REGION_SELF_EXCLUSIVE));
+            const uint8_t region_fallback =
+                select_u8(region_bits != 0U, region_bits,
+                          static_cast<uint8_t>(GCSO_VENN_REGION_SHARED_CORE |
+                                               GCSO_VENN_REGION_SELF_EXCLUSIVE));
             const auto combined_support = static_cast<uint8_t>(
                 venn->shared_core_mask | venn->self_exclusive_mask | venn->known_unknown_mask);
-            const uint8_t support_mask =
-                select_u8(combined_support != 0U, combined_support, 0xFFU);
+            const uint8_t support_mask = select_u8(combined_support != 0U, combined_support, 0xFFU);
 
             static constexpr uint32_t BAKED_ACTIVE_MASK =
                 GCSO_DISTORTION_DELTA_FLAG_ACTIVE | GCSO_DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID;
@@ -666,9 +667,9 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_distortion_delta_apply_chai
 
             if (best_entry_score > 0U) {
                 const uint8_t clamped_hops = (max_hops == 0U) ? 1U
-                                           : (max_hops > GCSO_MAX_DISTORTION_CHAIN_HOPS)
-                                               ? GCSO_MAX_DISTORTION_CHAIN_HOPS
-                                               : max_hops;
+                                             : (max_hops > GCSO_MAX_DISTORTION_CHAIN_HOPS)
+                                                 ? GCSO_MAX_DISTORTION_CHAIN_HOPS
+                                                 : max_hops;
                 const uint32_t sens_boost_q7 =
                     (venn->boundary_sensitivity_q7 > 48U) ? venn->boundary_sensitivity_q7 : 48U;
                 const uint32_t eff_scale = tension->effective_ego_scale_q7;
@@ -699,17 +700,17 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_distortion_delta_apply_chai
                     if ((node.flags & BAKED_ACTIVE_MASK) != BAKED_ACTIVE_MASK) {
                         break;
                     }
-                    const uint32_t hop_w = (((static_cast<uint32_t>(node.gain_q7) * eff_scale) >> 7U) *
-                                            sens_boost_q7) >>
-                                           7U;
+                    const uint32_t hop_w =
+                        (((static_cast<uint32_t>(node.gain_q7) * eff_scale) >> 7U) *
+                         sens_boost_q7) >>
+                        7U;
                     uint64_t dens_w = (hop_w * mean_stig_ph) >> 7U;
                     if (dens_w < 8ULL) {
                         dens_w = 8ULL;
                     } else if (dens_w > 127ULL) {
                         dens_w = 127ULL;
                     }
-                    const uint64_t bias_restore =
-                        (128ULL - dens_w) * 0x0101010101010101ULL;
+                    const uint64_t bias_restore = (128ULL - dens_w) * 0x0101010101010101ULL;
                     for (size_t c = 0U; c < GCSO_NUM_STIGMERGIC_GRANULES; ++c) {
                         const uint64_t nw = load_q7_word8(&node.delta_phase_q7[c * 8U]);
                         const uint64_t dw = swar_scale_le128_with_bias_x8(nw, dens_w, bias_restore);
