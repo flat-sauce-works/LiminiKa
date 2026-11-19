@@ -2260,8 +2260,12 @@ fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
         frame_conflict.action_mode_flags & ACTION_MODE_PHASE_REPULSE,
         0
     );
+    let esc_lane = adapter
+        .escalated_workbench_lane()
+        .expect("leased escalation lane");
+    assert_ne!(adapter.action_hub().slot_enabled_mask & (1 << esc_lane), 0);
     assert_ne!(
-        adapter.action_hub().slot_enabled_mask & (1 << ATTRACTOR_SLOT_CUSTOM_7),
+        adapter.action_hub().slot_repulsion_mask & (1 << esc_lane),
         0
     );
 
@@ -2308,10 +2312,8 @@ fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
         .expect("recover step 2");
     assert_eq!(adapter.active_horizon_slots_mask(), 0);
     assert_eq!(custom_slot.retractions, 1);
-    assert_eq!(
-        adapter.action_hub().slot_enabled_mask & (1 << ATTRACTOR_SLOT_CUSTOM_7),
-        0
-    );
+    assert_eq!(adapter.escalated_workbench_lane(), None);
+    assert_eq!(adapter.action_hub().slot_enabled_mask & (1 << esc_lane), 0);
 
     let snap = adapter.telemetry_snapshot();
     assert_eq!(snap.system.total_steps, 4);
@@ -2569,18 +2571,20 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
         )
         .expect("ingest guard");
 
-    // 1. Switch 8-lane workbench preset atomically.
+    use liminika_core::traits::primitives::{
+        WORKBENCH_LANE_FLAG_PINNED, WORKBENCH_LANE_FLAG_SANDBOX,
+    };
+
+    // 1. Switch 8-lane workbench preset atomically using AutoFree + pinned explicit lanes.
     let specs = [
-        WorkbenchSlotSpec {
-            lane: ATTRACTOR_SLOT_CUSTOM_7,
-            weight: 1.25,
-            phases: [16_i8; MAX_ATTENTION_HEADS],
-        },
-        WorkbenchSlotSpec {
-            lane: ATTRACTOR_SLOT_KNOWLEDGE,
-            weight: 1.50,
-            phases: [8_i8; MAX_ATTENTION_HEADS],
-        },
+        WorkbenchSlotSpec::explicit(
+            5,
+            true,
+            WORKBENCH_LANE_FLAG_PINNED,
+            1.25,
+            [16_i8; MAX_ATTENTION_HEADS],
+        ),
+        WorkbenchSlotSpec::auto_free(1.50, [8_i8; MAX_ATTENTION_HEADS]),
     ];
     let updated = adapter
         .switch_workbench_preset(WorkbenchPreset::FactualGrounding, &specs)
@@ -2592,12 +2596,31 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
     );
     assert_eq!(
         adapter.action_hub().active_workbench_lane_mask(),
-        WorkbenchPreset::FactualGrounding.recommended_lane_mask()
+        (1 << 0) | (1 << 5)
     );
+    assert_eq!(adapter.action_hub().workbench_pinned_mask(), 1 << 5);
+
+    // Switching presets again preserves the pinned lane 5 and refreshes unpinned lanes.
+    let updated_2 = adapter
+        .switch_workbench_preset(
+            WorkbenchPreset::BalancedDialog,
+            &[WorkbenchSlotSpec::auto_free(
+                1.0,
+                [12_i8; MAX_ATTENTION_HEADS],
+            )],
+        )
+        .expect("switch preset preserving pinned lane");
+    assert_eq!(updated_2, 1);
+    assert_eq!(
+        adapter.action_hub().active_workbench_lane_mask(),
+        (1 << 0) | (1 << 5)
+    );
+    assert_eq!(adapter.action_hub().workbench_pinned_mask(), 1 << 5);
 
     // 2. Within the same destabilized regime across 16 steered layers, escalation runs once at
     //    the regime boundary rather than repeating on every layer.
     adapter.reset_horizon_and_core_state();
+    assert_eq!(adapter.action_hub().active_workbench_lane_mask(), 0);
     adapter.adapt_core_layers(
         &liminika_core::traits::gateway::EpistemicHorizonReading {
             total_memory_support: 0.4,
@@ -2621,24 +2644,32 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
     }
     assert_eq!(esc.escalation_calls, 1);
     assert_eq!(adapter.telemetry_snapshot().layer2.escalation_swaps, 1);
+    assert!(adapter.escalated_workbench_lane().is_some());
 
-    // 3. Enabled workbench lanes contribute granule-wise inside `venn_core_mask | venn_penumbra_mask`
-    //    and leave out-of-aperture (`void`) granules untouched.
+    // 3. Standard workbench lanes contribute inside `venn_core_mask | venn_penumbra_mask`, while
+    //    sandbox lanes act only inside `void_exterior_mask | serendipity_excursion_mask`.
     adapter.reset_horizon_and_core_state();
     adapter
         .switch_workbench_preset(
-            WorkbenchPreset::FactualGrounding,
-            &[WorkbenchSlotSpec {
-                lane: liminika_core::traits::primitives::ATTRACTOR_SLOT_CUSTOM_5,
-                weight: 1.0,
-                phases: [24_i8; MAX_ATTENTION_HEADS],
-            }],
+            WorkbenchPreset::CreativeLiminal,
+            &[
+                WorkbenchSlotSpec::auto_free(1.0, [24_i8; MAX_ATTENTION_HEADS]),
+                WorkbenchSlotSpec::explicit(
+                    6,
+                    false,
+                    WORKBENCH_LANE_FLAG_SANDBOX,
+                    1.0,
+                    [40_i8; MAX_ATTENTION_HEADS],
+                ),
+            ],
         )
         .expect("preset switch");
+    assert_eq!(adapter.action_hub().workbench_sandbox_mask(), 1 << 6);
     adapter.adapt_core_layers(
         &liminika_core::traits::gateway::EpistemicHorizonReading::default(),
         &liminika_core::traits::gateway::StigmergicVennSerendipityReport {
             venn_core_mask: 0x0F,
+            void_exterior_mask: 0xF0,
             ..liminika_core::traits::gateway::StigmergicVennSerendipityReport::default()
         },
         None,
@@ -2647,5 +2678,21 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
     let _ = adapter
         .orchestrate_layer_rope_with_action_hub(16, &sig, &mut trail_venn, None, 128, &mut q, None)
         .expect("venn layer step");
-    assert!(trail_venn.accumulated_phase_delta[0] > trail_venn.accumulated_phase_delta[40]);
+    assert!(trail_venn.accumulated_phase_delta[0] > 0);
+    assert!(trail_venn.accumulated_phase_delta[40] > 0);
+    // Verify sandbox lane 6 does not inflate venn_core_mask head 0 compared to standard-only pass.
+    let core_head_with_sandbox = trail_venn.accumulated_phase_delta[0];
+    let _ = adapter
+        .action_hub_mut()
+        .release_workbench_lane(6)
+        .expect("release sandbox");
+    let mut trail_no_sb = gcso_pointer_trail_t::default();
+    let _ = adapter
+        .orchestrate_layer_rope_with_action_hub(16, &sig, &mut trail_no_sb, None, 128, &mut q, None)
+        .expect("no-sandbox layer step");
+    assert_eq!(
+        core_head_with_sandbox,
+        trail_no_sb.accumulated_phase_delta[0]
+    );
+    assert!(trail_venn.accumulated_phase_delta[40] > trail_no_sb.accumulated_phase_delta[40]);
 }

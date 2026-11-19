@@ -33,6 +33,14 @@ constexpr void check_static_abi_invariants() noexcept {
     static_assert(alignof(gcso_liminal_ego_field_t) == 64U);
     static_assert(offsetof(gcso_liminal_ego_field_t, counter_basin_thrust_q7) == 40U);
     static_assert(offsetof(gcso_liminal_ego_field_t, basin_escape_floor_q7) == 41U);
+    static_assert(GCSO_ATTRACTOR_SLOT_TEMPORAL == 5U);
+    static_assert(GCSO_ATTRACTOR_SLOT_USER_INTENT == 6U);
+    static_assert(GCSO_ATTRACTOR_SLOT_CRYSTALLIZED == 7U);
+    static_assert(GCSO_WORKBENCH_LANE_COUNT == 8U);
+    static_assert(GCSO_WORKBENCH_LANE_AUTO == 0xFFU);
+    static_assert(GCSO_WORKBENCH_LANE_FLAG_PINNED == (1U << 0));
+    static_assert(GCSO_WORKBENCH_LANE_FLAG_REPULSION == (1U << 1));
+    static_assert(GCSO_WORKBENCH_LANE_FLAG_SANDBOX == (1U << 2));
 }
 
 void test_version_and_capabilities() {

@@ -24,7 +24,7 @@ use crate::traits::primitives::{
     fast_inv_pos_normal_f32, fast_ln_1p_bounded_f32, is_word_array_uniform_64,
     swar_q7_circular_diff_x8, swar_q7_mean_i8_from_words_with_uniform_flag_64,
     ACTION_MODE_PHASE_REPULSE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR,
-    ATTRACTOR_SLOT_CUSTOM_7, DEFAULT_ENTROPY_EPS, DEFAULT_QDPS_MIN_STEP_RAD,
+    ATTRACTOR_SLOT_CRYSTALLIZED, DEFAULT_ENTROPY_EPS, DEFAULT_QDPS_MIN_STEP_RAD,
     DEFAULT_RIPA_CLAMP_MAX_RAD,
 };
 use crate::traits::telemetry::{MAX_ATTRACTOR_PULL_FORCE, NUM_STIGMERGIC_GRANULES};
@@ -319,7 +319,7 @@ impl CrystallizedAttractorRecord {
             qdps_min_step_rad: DEFAULT_QDPS_MIN_STEP_RAD,
             effective_inv_temp: 1.0,
             provenance_bits: CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
-            dominant_slot: ATTRACTOR_SLOT_CUSTOM_7,
+            dominant_slot: ATTRACTOR_SLOT_CRYSTALLIZED,
             action_mode_flags: ACTION_PRESET_EXPRESS_PHASE,
             active_swarm_cell_mask: venn_report.serendipity_excursion_mask | 0x01,
             ..GatewayFrame::default()
@@ -330,7 +330,7 @@ impl CrystallizedAttractorRecord {
 
         centroids[target_idx].init_spawned_slot_header_in_place(
             eff_anchor_id,
-            ATTRACTOR_SLOT_CUSTOM_7,
+            ATTRACTOR_SLOT_CRYSTALLIZED,
             0,
         );
         let empty_cur = [0u64; NUM_STIGMERGIC_GRANULES];

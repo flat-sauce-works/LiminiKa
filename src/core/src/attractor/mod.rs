@@ -118,12 +118,12 @@ pub const DOMAIN_KNOWLEDGE: u32 = 2;
 pub const DOMAIN_PHASE_REPULSION: u32 = 3;
 /// Default attractor lane identifier for User Interaction Context (`4`).
 pub const DOMAIN_USER_INTERACTION: u32 = 4;
-/// Dynamic extension working lane identifier 5 (`Visual / Screen Co-Watching`).
-pub const DOMAIN_CUSTOM_5: u32 = 5;
-/// Dynamic extension working lane identifier 6 (`Mood / Circadian Drift`).
-pub const DOMAIN_CUSTOM_6: u32 = 6;
-/// Dynamic extension working lane identifier 7 (`Workshop Extension / Overflow`).
-pub const DOMAIN_CUSTOM_7: u32 = 7;
+/// Semantic domain identifier for Temporal / Visual Co-Watching Horizons (`5`).
+pub const DOMAIN_TEMPORAL: u32 = 5;
+/// Semantic domain identifier for User Intent / Circadian Drift (`6`).
+pub const DOMAIN_USER_INTENT: u32 = 6;
+/// Semantic domain identifier for Crystallized Macro-Basin Overflow (`7`).
+pub const DOMAIN_CRYSTALLIZED: u32 = 7;
 
 pub(super) const SNAPSHOT_HEADER_BYTES: usize = 64;
 

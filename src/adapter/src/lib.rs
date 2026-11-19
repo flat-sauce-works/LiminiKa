@@ -37,8 +37,8 @@ use liminika_core::traits::gateway::{
 };
 use liminika_core::traits::primitives::{
     load_q7_words_64, swar_q7_circular_add_x8, GcsoResult, ACTION_MODE_PHASE_REPULSE,
-    ATTRACTOR_SLOT_CUSTOM_7, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
-    ATTRACTOR_SLOT_REPULSION, MAX_ATTENTION_HEADS, SWAR_SPLAT_BYTE_64,
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
+    MAX_ATTENTION_HEADS, SWAR_SPLAT_BYTE_64, WORKBENCH_LANE_FLAG_REPULSION,
 };
 use liminika_core::traits::rope::{
     PhaseSteeringGeometryExt, RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget,
@@ -51,7 +51,7 @@ pub mod pooling;
 pub mod reflection;
 pub mod stratum;
 
-pub use liminika_core::action_hub::{WorkbenchPreset, WorkbenchSlotSpec};
+pub use liminika_core::action_hub::{WorkbenchLanePlacement, WorkbenchPreset, WorkbenchSlotSpec};
 pub use pooling::*;
 pub use reflection::*;
 pub use stratum::*;

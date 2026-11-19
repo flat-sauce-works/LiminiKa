@@ -669,45 +669,50 @@ pub trait ActionHubGatewayExt: ActionHub {
         let (mut frame, mut frm_w) = synthesize_signal_with_optional_core_layers(signal, core_ctx);
         let lane_mask = self.workbench_lane_mask();
         if lane_mask != 0 {
-            let venn_aperture_mask = core_ctx.map_or(0xFF_u8, |c| {
-                c.venn.venn_core_mask | c.venn.venn_penumbra_mask
-            });
-            if venn_aperture_mask != 0 {
-                let is_pre_repulsed = ((frame.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0)
-                    || frame.to_causal_report().is_cohomology_repulsion();
-                let mut lane = 1u8;
-                while lane < crate::traits::primitives::MAX_ATTRACTOR_DOMAINS as u8 {
-                    if (lane_mask & (1u8 << lane)) != 0 {
-                        let lane_eligible = if is_pre_repulsed {
-                            lane == crate::traits::primitives::ATTRACTOR_SLOT_REPULSION
-                                || lane == crate::traits::primitives::ATTRACTOR_SLOT_CUSTOM_7
-                        } else {
-                            lane != crate::traits::primitives::ATTRACTOR_SLOT_REPULSION
-                        };
-                        if lane_eligible {
-                            if let Some((slot_w, weight)) = self.workbench_lane_words_and_weight(lane)
-                            {
-                                if weight > 0.0 {
-                                    let shift = if weight >= 0.75 {
-                                        1u32
-                                    } else if weight >= 0.35 {
-                                        2u32
-                                    } else {
-                                        3u32
-                                    };
+            let rep_mask = self.workbench_repulsion_mask();
+            let sandbox_mask = self.workbench_sandbox_mask();
+            let is_pre_repulsed = ((frame.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0)
+                || frame.to_causal_report().is_cohomology_repulsion();
+            let mut eligible_lanes = branchless_select_u8(
+                is_pre_repulsed,
+                lane_mask & rep_mask,
+                lane_mask & !rep_mask,
+            );
+            if eligible_lanes != 0 {
+                let standard_granule_mask = core_ctx
+                    .map_or(0xFF_u8, |c| c.venn.venn_core_mask | c.venn.venn_penumbra_mask);
+                let sandbox_granule_mask = core_ctx.map_or(0x00_u8, |c| {
+                    (c.venn.void_exterior_mask | c.venn.serendipity_excursion_mask)
+                        & !c.venn.venn_core_mask
+                });
+                while eligible_lanes != 0 {
+                    let lane = eligible_lanes.trailing_zeros() as u8;
+                    eligible_lanes &= eligible_lanes - 1;
+                    let is_sandbox = ((sandbox_mask >> lane) & 1) != 0;
+                    let granule_mask = branchless_select_u8(
+                        is_sandbox,
+                        sandbox_granule_mask,
+                        standard_granule_mask,
+                    );
+                    if granule_mask != 0 {
+                        if let Some((slot_w, weight)) = self.workbench_lane_words_and_weight(lane) {
+                            if weight > 0.0 {
+                                let s = branchless_clamp_f32(weight * 64.0, 0.0, 64.0) as u64;
+                                if s != 0 {
+                                    let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(
+                                        crate::traits::primitives::SWAR_SPLAT_BYTE_64,
+                                    );
                                     let mut scaled_w = [0u64; NUM_STIGMERGIC_GRANULES];
                                     let mut g = 0usize;
                                     while g < NUM_STIGMERGIC_GRANULES {
-                                        if (venn_aperture_mask & (1u8 << g)) != 0 {
-                                            let bytes = slot_w[g].to_le_bytes();
-                                            let mut out = [0u8; 8];
-                                            let mut b = 0usize;
-                                            while b < 8 {
-                                                out[b] = ((bytes[b] as i8) >> shift) as u8;
-                                                b += 1;
-                                            }
-                                            scaled_w[g] = u64::from_le_bytes(out);
-                                        }
+                                        let g_active =
+                                            (((granule_mask >> g) & 1) as u64).wrapping_neg();
+                                        scaled_w[g] =
+                                            crate::traits::primitives::swar_q7_scale_le128_with_bias_x8(
+                                                slot_w[g],
+                                                s,
+                                                bias_restore,
+                                            ) & g_active;
                                         g += 1;
                                     }
                                     crate::traits::primitives::swar_or_avx2_q7_add_sat_words_64(
@@ -717,7 +722,6 @@ pub trait ActionHubGatewayExt: ActionHub {
                             }
                         }
                     }
-                    lane += 1;
                 }
             }
         }
@@ -1965,12 +1969,14 @@ pub fn apply_latent_horizon_slots<H: LatentHorizonSlot + ?Sized>(
 
 /// Request descriptor passed to an external [`HorizonEscalationProvider`] when Hot-Path
 /// concrete engines and latent slots detect unresolved instability or epistemic excursion.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HorizonEscalationRequest {
     /// Stability / anomaly snapshot that triggered escalation.
     pub trigger: HorizonTriggerInput,
-    /// Target working lane (`0..=7`) reserved for swapped-in phases (typically `ATTRACTOR_SLOT_CUSTOM_7`).
-    pub target_slot: u8,
+    /// Placement policy (`AutoFree` or `Explicit { lane, pin }`) on the 8-lane workbench pool.
+    pub placement: crate::action_hub::WorkbenchLanePlacement,
+    /// Optional `WORKBENCH_LANE_FLAG_*` bitmask applied when the escalated lane is allocated.
+    pub lane_flags: u8,
     /// Normalized depth scale along the model hierarchy (`0..=127`, where `0` = shallowest, `127` = deepest).
     pub layer_scale_q7: u8,
     /// Active Layer 0 cognitive aperture mask at the time of escalation.
@@ -1979,11 +1985,25 @@ pub struct HorizonEscalationRequest {
     pub current_frame_energy: f32,
 }
 
+impl Default for HorizonEscalationRequest {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            trigger: HorizonTriggerInput::default(),
+            placement: crate::action_hub::WorkbenchLanePlacement::AutoFree,
+            lane_flags: 0,
+            layer_scale_q7: 0,
+            desired_aperture_mask: 0,
+            current_frame_energy: 0.0,
+        }
+    }
+}
+
 /// Cold-path boundary trait allowing the orchestrator to pull external phases (e.g. from NVMe
-/// `.gcso` `ZiMMS` containers or `std` corpus recall) into a working lane when local Hot-Path
-/// resources cannot resolve destabilization.
+/// `.gcso` `ZiMMS` containers or `std` corpus recall) into an anonymous workbench lane when local
+/// Hot-Path resources cannot resolve destabilization.
 pub trait HorizonEscalationProvider {
-    /// Attempts to populate `slot_phase_out` with external phases for `req.target_slot`, returning
+    /// Attempts to populate `slot_phase_out` with external phases matching `req`, returning
     /// `Ok(Some(lane_weight))` when new phases were pulled in or `Ok(None)` when no swap-in occurred.
     ///
     /// # Errors

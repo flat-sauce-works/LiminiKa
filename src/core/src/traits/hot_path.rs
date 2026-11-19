@@ -98,6 +98,24 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
         0
     }
 
+    /// Returns the 8-bit bitmask of workbench lanes (`0..=7`) tagged with anti-phase repulsion behavior.
+    #[inline(always)]
+    fn workbench_repulsion_mask(&self) -> u8 {
+        0
+    }
+
+    /// Returns the 8-bit bitmask of workbench lanes (`0..=7`) tagged as isolated exterior-only sandbox hypotheses.
+    #[inline(always)]
+    fn workbench_sandbox_mask(&self) -> u8 {
+        0
+    }
+
+    /// Returns the 8-bit bitmask of workbench lanes (`0..=7`) explicitly pinned against auto-eviction or release.
+    #[inline(always)]
+    fn workbench_pinned_mask(&self) -> u8 {
+        0
+    }
+
     /// Returns the 64-head SWAR words and non-negative lane weight for working-bank `lane` (`0..=7`)
     /// when enabled and non-zero.
     #[inline(always)]

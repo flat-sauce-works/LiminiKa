@@ -293,4 +293,40 @@ fn test_gcso_types_abi_layout_invariants() {
         ),
         56
     );
+
+    // Verify ActionHubEngine 2,816 B Pod layout and anonymous workbench bitmasks
+    assert_eq!(size_of::<liminika_core::ActionHubEngine>(), 2816);
+    assert_eq!(align_of::<liminika_core::ActionHubEngine>(), 128);
+    assert_eq!(
+        offset_of!(liminika_core::ActionHubEngine, slot_enabled_mask),
+        2810
+    );
+    assert_eq!(
+        offset_of!(liminika_core::ActionHubEngine, last_decision),
+        2811
+    );
+    assert_eq!(
+        offset_of!(liminika_core::ActionHubEngine, slot_pinned_mask),
+        2812
+    );
+    assert_eq!(
+        offset_of!(liminika_core::ActionHubEngine, slot_repulsion_mask),
+        2813
+    );
+    assert_eq!(
+        offset_of!(liminika_core::ActionHubEngine, slot_sandbox_mask),
+        2814
+    );
+    assert_eq!(
+        offset_of!(liminika_core::ActionHubEngine, reserved_align128),
+        2815
+    );
+    assert_eq!(liminika_core::traits::ATTRACTOR_SLOT_TEMPORAL, 5);
+    assert_eq!(liminika_core::traits::ATTRACTOR_SLOT_USER_INTENT, 6);
+    assert_eq!(liminika_core::traits::ATTRACTOR_SLOT_CRYSTALLIZED, 7);
+    assert_eq!(liminika_core::traits::WORKBENCH_LANE_COUNT, 8);
+    assert_eq!(liminika_core::traits::WORKBENCH_LANE_AUTO, 0xFF);
+    assert_eq!(liminika_core::traits::WORKBENCH_LANE_FLAG_PINNED, 1 << 0);
+    assert_eq!(liminika_core::traits::WORKBENCH_LANE_FLAG_REPULSION, 1 << 1);
+    assert_eq!(liminika_core::traits::WORKBENCH_LANE_FLAG_SANDBOX, 1 << 2);
 }

@@ -36,26 +36,29 @@ use crate::abi::{
     gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t, gcso_snapshot_header_t,
     gcso_tagged_ptr_t,
 };
-use crate::action_hub::{ActionHubEngine, StigmergicActionDecision, ACTION_HUB_INLINE_TRAILS};
+use crate::action_hub::{
+    ActionHubEngine, StigmergicActionDecision, WorkbenchLanePlacement, WorkbenchSlotSpec,
+    ACTION_HUB_INLINE_TRAILS,
+};
 use crate::attractor::{MultiAttractorSpace, MAX_ANCHORS_PER_FIELD, MAX_ATTRACTOR_DOMAINS};
 use crate::entropy_control::{EntropyClosedLoopCoordinator, EntropyController};
 use crate::phase_steering::{PhaseSteeringClosedLoop, PhaseSteeringEngine};
 use crate::traits::rope::{PhaseSteeringGeometryExt, RopeSteeringTarget};
 use crate::traits::{
     abi_version, abi_version_string, apply_latent_horizon_slots, query_capability, ActionHub,
-    ActionHubGatewayExt, AlignedBuffer16, AlignedBuffer64, AlignedSlice16, AlignedSlice32,
-    AlignedSliceMut16, AlignedSliceMut32, AttractorField, AutonomousCoreLayerStack,
-    CausalProvenanceReport, CausalProvenanceSignal, ContrastivePhaseBloomFilter, CoreTelemetryBank,
-    CoreTelemetrySnapshot, EdbcBranchController, EntropyEvaluator, EpistemicHorizonReading,
+    ActionHubGatewayExt, AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut16,
+    AlignedSliceMut32, AttractorField, AutonomousCoreLayerStack, CausalProvenanceReport,
+    CausalProvenanceSignal, ContrastivePhaseBloomFilter, CoreTelemetryBank, CoreTelemetrySnapshot,
+    EdbcBranchController, EntropyEvaluator, EpistemicHorizonReading, EpistemicRegime,
     FastPathLedger, GatewayFrame, GatewayPhaseSteeringExt, GcsoResult, HorizonDwellState,
     HorizonEscalationProvider, HorizonEscalationRequest, HorizonTriggerInput, KvKeyframeCache,
     LatentHorizonSlot, LiminalBoundaryDelta, ManifoldGatewaySignal, MappedStorage,
     MultiDomainAttractorSpace, PersonaPatcher, PhaseSteering, Pod, PointerActionHub,
     StigmergicActionPtrOps, StigmergicChunkOps, StigmergicTrailOps,
     StigmergicVennSerendipityReport, SystemConstraintSignal, TelemetryCapturePolicy,
-    ACTION_MODE_LAYER_SKIP, ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_CUSTOM_7,
-    ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE,
-    DEFAULT_SLOT_COUPLING_MATRIX_8X8, ROOT_CAUSE_SYSTEM_QOS_THROTTLE, TRAIL_FLAG_REPULSION_ACTIVE,
+    ACTION_MODE_LAYER_SKIP, ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_PERSONA,
+    ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+    ROOT_CAUSE_SYSTEM_QOS_THROTTLE, TRAIL_FLAG_REPULSION_ACTIVE, WORKBENCH_LANE_FLAG_REPULSION,
 };
 
 use crate::traits::branchless::{
@@ -101,9 +104,8 @@ pub const DEFAULT_BLOOM_REPULSION_SCALE_U7: u8 = 128;
 /// Total Q7 phase elements across all 8 Attractor Working Lanes (`8 * 64 = 512` bytes).
 pub const SLOT_PHASE_BANK_LEN: usize = MAX_ATTRACTOR_DOMAINS * MAX_ATTENTION_HEADS;
 
-/// Default initial weights for the 8 parallel Attractor Working Lanes (`0..=7`).
-pub const DEFAULT_SLOT_WEIGHTS: [f32; MAX_ATTRACTOR_DOMAINS] =
-    [1.0, 1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5];
+/// Default initial weights for the 8 anonymous free-by-default Workbench Lanes (`0..=7`).
+pub const DEFAULT_SLOT_WEIGHTS: [f32; MAX_ATTRACTOR_DOMAINS] = [0.0; MAX_ATTRACTOR_DOMAINS];
 
 // ===================================================================
 // Safe High-Level Rust Configuration Wrapper & Fluent Builder
@@ -387,6 +389,12 @@ pub struct OrchestratorStatusSnapshot {
     pub attractor_anchor_count: u32,
     /// Bitmask of enabled working lanes (`0..=7`) in `ActionHubEngine`.
     pub slot_enabled_mask: u8,
+    /// Bitmask of explicitly pinned working lanes (`0..=7`) in `ActionHubEngine`.
+    pub slot_pinned_mask: u8,
+    /// Bitmask of anti-phase repulsion working lanes (`0..=7`) in `ActionHubEngine`.
+    pub slot_repulsion_mask: u8,
+    /// Bitmask of isolated exterior-only sandbox working lanes (`0..=7`) in `ActionHubEngine`.
+    pub slot_sandbox_mask: u8,
     /// Active Layer 0 `Liminal` channel aperture mask (`8` channels).
     pub liminal_aperture_mask: u32,
     /// Active Layer 1 `Stigmergic` Venn-core granule mask.
@@ -422,6 +430,7 @@ pub struct RuntimeContext {
     last_venn_report: StigmergicVennSerendipityReport,
     horizon_dwell: HorizonDwellState,
     active_horizon_slots_mask: u32,
+    escalated_workbench_lane: Option<u8>,
     telemetry: CoreTelemetryBank,
 }
 
@@ -439,8 +448,6 @@ impl RuntimeContext {
         action_hub.repulsion_threshold = config.repulsion_threshold;
         action_hub.repulsion_scale_u7 = config.repulsion_scale_u7;
         action_hub.coupling_matrix_8x8 = config.slot_coupling_matrix;
-        action_hub.slot_weights = DEFAULT_SLOT_WEIGHTS;
-        action_hub.slot_enabled_mask = 0xFF;
         let edbc_state = gcso_edbc_state_t {
             singularity_eps: config.raw.entropy_singularity_eps,
             bifurcation_threshold: config.bifurcation_threshold,
@@ -462,6 +469,7 @@ impl RuntimeContext {
             last_venn_report: StigmergicVennSerendipityReport::default(),
             horizon_dwell: HorizonDwellState::default(),
             active_horizon_slots_mask: 0,
+            escalated_workbench_lane: None,
             telemetry: CoreTelemetryBank::default(),
         })
     }
@@ -589,6 +597,9 @@ impl RuntimeContext {
             edbc_branch_mode: self.edbc.state().active_branch_mode,
             attractor_anchor_count: self.attractor_space.system_field().active_count(),
             slot_enabled_mask: self.action_hub.slot_enabled_mask,
+            slot_pinned_mask: self.action_hub.slot_pinned_mask,
+            slot_repulsion_mask: self.action_hub.slot_repulsion_mask,
+            slot_sandbox_mask: self.action_hub.slot_sandbox_mask,
             liminal_aperture_mask: self.core_layers.liminal_layer.active_aperture_mask,
             stigmergic_venn_core_mask: self.core_layers.stigmergic_layer.venn_overlap_mask,
             ego_active: self.core_layers.ego_layer.is_active(),
@@ -713,7 +724,7 @@ impl RuntimeContext {
         })
     }
 
-    /// Sets the 64-head Q7 phase profile for a specific Attractor Working Lane (`0..=7`).
+    /// Sets the 64-head Q7 phase profile for a specific Workbench Lane (`0..=7`) and enables it.
     ///
     /// # Errors
     /// Returns [`crate::abi::GCSO_ERROR_INVALID_ARGUMENT`] if `slot_id >= MAX_ATTRACTOR_DOMAINS`.
@@ -725,6 +736,7 @@ impl RuntimeContext {
     ) -> Result<()> {
         let dst_w = self.slot_words_mut(usize::from(slot_id))?;
         *dst_w = load_q7_words_64(phases);
+        self.action_hub.slot_enabled_mask |= 1u8 << slot_id;
         Ok(())
     }
 
@@ -735,11 +747,39 @@ impl RuntimeContext {
         &self.action_hub.slot_weights
     }
 
-    /// Returns the 8-bit bitmask of enabled Attractor Working Lanes (`bit i == 1` means lane `i` is active).
+    /// Returns the 8-bit bitmask of enabled Workbench Lanes (`bit i == 1` means lane `i` is active).
     #[inline(always)]
     #[must_use]
     pub const fn slot_enabled_mask(&self) -> u8 {
         self.action_hub.slot_enabled_mask
+    }
+
+    /// Returns the 8-bit bitmask of explicitly pinned Workbench Lanes (`0..=7`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn slot_pinned_mask(&self) -> u8 {
+        self.action_hub.slot_pinned_mask
+    }
+
+    /// Returns the 8-bit bitmask of anti-phase repulsion Workbench Lanes (`0..=7`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn slot_repulsion_mask(&self) -> u8 {
+        self.action_hub.slot_repulsion_mask
+    }
+
+    /// Returns the 8-bit bitmask of isolated exterior-only sandbox Workbench Lanes (`0..=7`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn slot_sandbox_mask(&self) -> u8 {
+        self.action_hub.slot_sandbox_mask
+    }
+
+    /// Returns the anonymous workbench lane (`0..=7`) currently leased by cold-path escalation, if any.
+    #[inline(always)]
+    #[must_use]
+    pub const fn escalated_workbench_lane(&self) -> Option<u8> {
+        self.escalated_workbench_lane
     }
 
     /// Returns the active 64-bit ($8 \times 8$) Attractor Working Lane coupling bitmatrix.
@@ -799,72 +839,67 @@ impl RuntimeContext {
             .slot_phase_bank
             .as_slot_bank::<MAX_ATTRACTOR_DOMAINS, MAX_ATTENTION_HEADS>()
         {
-            let rep_idx = usize::from(ATTRACTOR_SLOT_REPULSION);
             let enabled_mask = self.action_hub.slot_enabled_mask;
+            let rep_mask = self.action_hub.slot_repulsion_mask;
+            let sandbox_mask = self.action_hub.slot_sandbox_mask;
             let weights = &self.action_hub.slot_weights;
-            let mut idx = 0usize;
-            while idx < MAX_ATTRACTOR_DOMAINS {
-                if idx != rep_idx {
-                    let enabled = ((enabled_mask >> idx) & 1) != 0;
-                    if enabled {
-                        let base_e =
-                            branchless_flush_subnormal_f32(branchless_relu_f32(weights[idx]));
-                        if base_e > DEFAULT_ENTROPY_EPS {
-                            // SAFETY: `self.action_hub.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
-                            // 64-byte row `bank_2d[idx]` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
-                            let slot_w = unsafe {
-                                &*(bank_2d[idx].as_ptr()
-                                    as *const [u64; crate::traits::NUM_STIGMERGIC_GRANULES])
-                            };
-                            if swar_words_nonzero_64(slot_w) {
-                                let slot_is_uniform =
-                                    crate::traits::is_word_array_uniform_64(slot_w);
-                                let coh = if init_nonzero {
-                                    coherence_from_word_arrays_with_both_uniform_flags_64(
-                                        &init_w,
-                                        init_is_uniform,
-                                        slot_w,
-                                        slot_is_uniform,
-                                    )
-                                } else {
-                                    0.0
-                                };
-                                let res_pull = branchless_flush_subnormal_f32(
-                                    base_e * branchless_clamp_f32(1.0 + coh, 0.25, 2.0),
-                                );
-                                let total_w = running_pull + res_pull;
-                                if total_w > DEFAULT_ENTROPY_EPS
-                                    && !swar_words_equal_64(&run_w, slot_w)
-                                {
-                                    let ratio_f32 = branchless_clamp_f32(
-                                        (res_pull * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
-                                        0.0,
-                                        128.0,
-                                    );
-                                    let s = (ratio_f32 as u8) as u64;
-                                    let bias_restore =
-                                        (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-                                    let (next_w, next_uni) = swar_slerp_words_with_uniform_flag_64(
-                                        &run_w,
-                                        run_is_uniform,
-                                        slot_w,
-                                        slot_is_uniform,
-                                        s,
-                                        bias_restore,
-                                    );
-                                    run_w = next_w;
-                                    run_is_uniform = next_uni;
-                                }
-                                running_pull = total_w;
-                            }
+            let mut standard_bits = enabled_mask & !(rep_mask | sandbox_mask);
+            while standard_bits != 0 {
+                let idx = standard_bits.trailing_zeros() as usize;
+                standard_bits &= standard_bits - 1;
+                let base_e = branchless_flush_subnormal_f32(branchless_relu_f32(weights[idx]));
+                if base_e > DEFAULT_ENTROPY_EPS {
+                    // SAFETY: `self.action_hub.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
+                    // 64-byte row `bank_2d[idx]` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
+                    let slot_w = unsafe {
+                        &*(bank_2d[idx].as_ptr()
+                            as *const [u64; crate::traits::NUM_STIGMERGIC_GRANULES])
+                    };
+                    if swar_words_nonzero_64(slot_w) {
+                        let slot_is_uniform = crate::traits::is_word_array_uniform_64(slot_w);
+                        let coh = if init_nonzero {
+                            coherence_from_word_arrays_with_both_uniform_flags_64(
+                                &init_w,
+                                init_is_uniform,
+                                slot_w,
+                                slot_is_uniform,
+                            )
+                        } else {
+                            0.0
+                        };
+                        let res_pull = branchless_flush_subnormal_f32(
+                            base_e * branchless_clamp_f32(1.0 + coh, 0.25, 2.0),
+                        );
+                        let total_w = running_pull + res_pull;
+                        if total_w > DEFAULT_ENTROPY_EPS && !swar_words_equal_64(&run_w, slot_w) {
+                            let ratio_f32 = branchless_clamp_f32(
+                                (res_pull * fast_inv_pos_normal_f32(total_w)) * 128.0 + 0.5,
+                                0.0,
+                                128.0,
+                            );
+                            let s = (ratio_f32 as u8) as u64;
+                            let bias_restore =
+                                (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+                            let (next_w, next_uni) = swar_slerp_words_with_uniform_flag_64(
+                                &run_w,
+                                run_is_uniform,
+                                slot_w,
+                                slot_is_uniform,
+                                s,
+                                bias_restore,
+                            );
+                            run_w = next_w;
+                            run_is_uniform = next_uni;
                         }
+                        running_pull = total_w;
                     }
                 }
-                idx += 1;
             }
 
-            let rep_enabled = ((enabled_mask >> rep_idx) & 1) != 0;
-            if rep_enabled {
+            let mut rep_bits = enabled_mask & rep_mask;
+            while rep_bits != 0 {
+                let rep_idx = rep_bits.trailing_zeros() as usize;
+                rep_bits &= rep_bits - 1;
                 // SAFETY: `bank_2d[rep_idx]` is 64-byte aligned.
                 let rep_words = unsafe {
                     &*(bank_2d[rep_idx].as_ptr()
@@ -931,6 +966,9 @@ impl RuntimeContext {
         let rep_gain = self.attractor_space.system_field().repulsion_gain;
         ctx_buf[16..20].copy_from_slice(&rep_gain.to_le_bytes());
         ctx_buf[20] = self.action_hub.slot_enabled_mask;
+        ctx_buf[21] = self.action_hub.slot_pinned_mask;
+        ctx_buf[22] = self.action_hub.slot_repulsion_mask;
+        ctx_buf[23] = self.action_hub.slot_sandbox_mask;
         ctx_buf[24..32].copy_from_slice(&self.action_hub.coupling_matrix_8x8.to_le_bytes());
         f32::write_unaligned_slice_to(&self.action_hub.slot_weights, ctx_buf, 32)?;
 
@@ -988,6 +1026,11 @@ impl RuntimeContext {
             let sys_anchors = u32::read_unaligned_from(buffer, action_hub_off + 12)?;
             let rep_gain = f32::read_unaligned_from(buffer, action_hub_off + 16)?;
             self.action_hub.slot_enabled_mask = buffer[action_hub_off + 20];
+            if buffer.len() >= action_hub_off + 24 {
+                self.action_hub.slot_pinned_mask = buffer[action_hub_off + 21];
+                self.action_hub.slot_repulsion_mask = buffer[action_hub_off + 22];
+                self.action_hub.slot_sandbox_mask = buffer[action_hub_off + 23];
+            }
 
             if buffer.len() >= action_hub_off + 32 {
                 let coupling = u64::read_unaligned_from(buffer, action_hub_off + 24)?;
@@ -1286,17 +1329,26 @@ impl RuntimeContext {
             frm_w = *frame.phase_words_ref();
         }
 
-        // 3. Cold-path escalation swap-in when destabilized, or cleanly retract spare lane.
+        // 3. Cold-path escalation swap-in when destabilized, or cleanly retract the leased lane.
+        let is_conflict = trigger.epistemic_regime == EpistemicRegime::InternalConflict as u8
+            || trigger.repulsion_severity > 0.25;
         let esc_req = HorizonEscalationRequest {
             trigger,
-            target_slot: ATTRACTOR_SLOT_CUSTOM_7,
+            placement: WorkbenchLanePlacement::AutoFree,
+            lane_flags: if is_conflict {
+                WORKBENCH_LANE_FLAG_REPULSION
+            } else {
+                0
+            },
             layer_scale_q7: 64,
             desired_aperture_mask: self.core_layers.liminal_layer.active_aperture_mask,
             current_frame_energy: frame.effective_energy,
         };
-        let escalated = self
-            .action_hub
-            .apply_horizon_escalation(&esc_req, escalation_provider)?;
+        let escalated = self.action_hub.apply_horizon_escalation(
+            &esc_req,
+            &mut self.escalated_workbench_lane,
+            escalation_provider,
+        )?;
 
         // 4. Step ActionHub pointer trail + Bloom filter + RoPE phase steering (zero-alloc).
         let bloom_snapshot = self.action_hub.bloom_filter;
@@ -1542,6 +1594,21 @@ impl PointerActionHub for RuntimeContext {
         self.action_hub.workbench_lane_mask()
     }
 
+    #[inline(always)]
+    fn workbench_repulsion_mask(&self) -> u8 {
+        self.action_hub.workbench_repulsion_mask()
+    }
+
+    #[inline(always)]
+    fn workbench_sandbox_mask(&self) -> u8 {
+        self.action_hub.workbench_sandbox_mask()
+    }
+
+    #[inline(always)]
+    fn workbench_pinned_mask(&self) -> u8 {
+        self.action_hub.workbench_pinned_mask()
+    }
+
     #[inline]
     fn workbench_lane_words_and_weight(
         &self,
@@ -1670,9 +1737,12 @@ impl AttractorField for RuntimeContext {
             .bloom_filter
             .insert_repulsive_pattern(&pattern);
         let anti_phase = branchless_q7_conjugate_64(&pattern);
-        self.set_slot_phase_profile(ATTRACTOR_SLOT_REPULSION, &anti_phase)?;
-        self.action_hub.slot_weights[usize::from(ATTRACTOR_SLOT_REPULSION)] =
-            branchless_relu_f32(gain);
+        let _lane = self
+            .action_hub
+            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_repulsion(
+                branchless_relu_f32(gain),
+                anti_phase,
+            ))?;
 
         self.attractor_space
             .system_field_mut()
@@ -1791,9 +1861,8 @@ impl MultiDomainAttractorSpace for RuntimeContext {
     #[inline]
     fn clear_all_domains(&mut self) -> Result<()> {
         self.attractor_space.clear_all_domains()?;
-        self.action_hub.slot_phase_bank = AlignedBuffer64::zeroed();
-        self.action_hub.slot_weights = DEFAULT_SLOT_WEIGHTS;
-        self.action_hub.slot_enabled_mask = 0xFF;
+        let _ = self.action_hub.release_all_workbench_lanes();
+        self.escalated_workbench_lane = None;
         Ok(())
     }
 }
@@ -1824,6 +1893,7 @@ impl PersonaPatcher for RuntimeContext {
                 *slot_p = branchless_q7_add_sat(*slot_p, delta);
             }
         }
+        self.action_hub.slot_enabled_mask |= 1u8 << ATTRACTOR_SLOT_PERSONA;
         Ok(())
     }
 }
@@ -2012,21 +2082,48 @@ mod tests {
     fn test_runtime_context_lifecycle_and_serialization() {
         let config = Config::new();
         let mut ctx = RuntimeContext::new(config).unwrap();
+        assert_eq!(ctx.slot_enabled_mask(), 0x00);
+        assert_eq!(ctx.slot_pinned_mask(), 0x00);
+        assert_eq!(ctx.slot_repulsion_mask(), 0x00);
+        assert_eq!(ctx.slot_sandbox_mask(), 0x00);
 
         assert!(ctx
             .set_system_prompt_anchor("System prompt anchor test", 1.5)
             .is_ok());
         assert_eq!(ctx.anchor_count(), 1);
-        assert!(ctx
-            .set_domain_weight(u32::from(ATTRACTOR_SLOT_PERSONA), 2.5)
-            .is_ok());
-        assert!(ctx
-            .set_domain_enabled(u32::from(ATTRACTOR_SLOT_CUSTOM_7), false)
-            .is_ok());
+        let pinned_lane = ctx
+            .action_hub_mut()
+            .allocate_workbench_lane(&WorkbenchSlotSpec::explicit(
+                usize::from(ATTRACTOR_SLOT_PERSONA) as u8,
+                true,
+                0,
+                2.5,
+                [12; MAX_ATTENTION_HEADS],
+            ))
+            .unwrap();
+        assert_eq!(pinned_lane, ATTRACTOR_SLOT_PERSONA);
+        let rep_lane = ctx
+            .action_hub_mut()
+            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_repulsion(
+                1.0,
+                [-8; MAX_ATTENTION_HEADS],
+            ))
+            .unwrap();
+        let sb_lane = ctx
+            .action_hub_mut()
+            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(
+                0.75,
+                [6; MAX_ATTENTION_HEADS],
+            ))
+            .unwrap();
         assert_eq!(
             ctx.find_dominant_domain().0,
             u32::from(ATTRACTOR_SLOT_PERSONA)
         );
+        let expected_enabled = (1u8 << pinned_lane) | (1u8 << rep_lane) | (1u8 << sb_lane);
+        let expected_pinned = 1u8 << pinned_lane;
+        let expected_rep = 1u8 << rep_lane;
+        let expected_sb = 1u8 << sb_lane;
 
         let mut trail = gcso_pointer_trail_t::default();
         assert!(ctx.step_token(42, None, None, Some(&mut trail)).is_ok());
@@ -2045,10 +2142,14 @@ mod tests {
         assert!(ctx.reset().is_ok());
         assert_eq!(ctx.step_counter(), 0);
         assert_eq!(ctx.anchor_count(), 0);
+        assert_eq!(ctx.slot_enabled_mask(), 0x00);
         assert!(ctx.deserialize_from_bytes(&buffer).is_ok());
         assert_eq!(ctx.step_counter(), 1);
         assert_eq!(ctx.anchor_count(), 1);
-        assert_eq!(ctx.slot_enabled_mask(), 0x7F);
+        assert_eq!(ctx.slot_enabled_mask(), expected_enabled);
+        assert_eq!(ctx.slot_pinned_mask(), expected_pinned);
+        assert_eq!(ctx.slot_repulsion_mask(), expected_rep);
+        assert_eq!(ctx.slot_sandbox_mask(), expected_sb);
         assert!((ctx.slot_weights()[usize::from(ATTRACTOR_SLOT_PERSONA)] - 2.5).abs() < 1e-5);
 
         // Verify IEEE 802.3 CRC32 payload tamper detection
@@ -2168,8 +2269,10 @@ mod tests {
         assert!(!esc1);
         assert_eq!(slot.invoked_count, 0);
         assert_eq!(ctx.active_horizon_slots_mask(), 0);
+        assert_eq!(ctx.escalated_workbench_lane(), None);
+        assert_eq!(ctx.slot_enabled_mask(), 0);
 
-        // 2. Destabilize via Layer 2 Ego trigger -> slot slides in & external escalator swaps lane 7.
+        // 2. Destabilize via Layer 2 Ego trigger -> slot slides in & external escalator leases an anonymous lane.
         ctx.core_layers_mut().ego_layer.last_intervened_mask = EGO_TRIGGER_BOUNDARY_CHATTER;
         let (f2, _r2, in2, out2, esc2) = ctx
             .pierce_and_orchestrate_step(
@@ -2186,6 +2289,8 @@ mod tests {
         assert!(esc2);
         assert_eq!(slot.invoked_count, 1);
         assert_eq!(escalator.calls, 1);
+        let leased_lane = ctx.escalated_workbench_lane().expect("leased lane");
+        assert_ne!(ctx.slot_enabled_mask() & (1 << leased_lane), 0);
         assert_eq!(f2.phase_deltas[0], 24);
         assert_ne!(
             ctx.orchestrator_status().liminal_aperture_mask & (1 << 7),
@@ -2193,7 +2298,7 @@ mod tests {
         );
         assert_eq!(ctx.active_horizon_slots_mask(), 1 << 3);
 
-        // 3. Stabilize -> slot automatically retracts (slides out) and lane 7 is disabled.
+        // 3. Stabilize -> slot automatically retracts (slides out) and leased lane returns to free pool.
         ctx.core_layers_mut().ego_layer.last_intervened_mask = 0;
         ctx.last_boundary_delta_mut().stationary_shortcut_ready = 1;
         let (_f3, _r3, in3, out3, esc3) = ctx
@@ -2210,7 +2315,8 @@ mod tests {
         assert_eq!(out3, 1 << 3);
         assert!(!esc3);
         assert_eq!(ctx.active_horizon_slots_mask(), 0);
-        assert_eq!(ctx.slot_enabled_mask() & (1 << ATTRACTOR_SLOT_CUSTOM_7), 0);
+        assert_eq!(ctx.escalated_workbench_lane(), None);
+        assert_eq!(ctx.slot_enabled_mask() & (1 << leased_lane), 0);
         assert!(ctx.horizon_dwell().quiescent_dwell_steps >= 1);
     }
 

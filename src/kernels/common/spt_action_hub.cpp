@@ -51,6 +51,10 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_create(
         hub->active_count = 0;
         hub->last_trail_ptr = 0;
         hub->is_active = true;
+        hub->slot_enabled_mask = 0U;
+        hub->slot_pinned_mask = 0U;
+        hub->slot_repulsion_mask = 0U;
+        hub->slot_sandbox_mask = 0U;
 
         *hub_out = hub;
         return GCSO_SUCCESS;

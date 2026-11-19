@@ -279,8 +279,8 @@ impl LatentHorizonSlot for CoherenceHorizonGuardSlot {
 }
 
 /// Cold-path [`HorizonEscalationProvider`] backed by a compiled [`TextAttractorCorpus`],
-/// swapping the strongest Guard (under conflict/repulsion) or Fact phase signature into
-/// `ATTRACTOR_SLOT_CUSTOM_7` only when Hot-Path triggers detect destabilization.
+/// swapping the strongest Guard (under conflict/repulsion) or Fact phase signature into an
+/// anonymous free workbench lane only when Hot-Path triggers detect destabilization.
 #[derive(Debug)]
 pub struct CorpusRecallEscalationProvider<'a> {
     corpus: &'a TextAttractorCorpus,
@@ -390,6 +390,7 @@ pub struct ModelSteeringAdapter {
     residual_spillover: Box<DefaultResidualSpilloverSlot>,
     escalation_boundary_dirty: bool,
     last_escalated_regime: u8,
+    escalated_workbench_lane: Option<u8>,
     active_workbench_preset: WorkbenchPreset,
 }
 
@@ -465,6 +466,7 @@ impl ModelSteeringAdapter {
             residual_spillover: Box::default(),
             escalation_boundary_dirty: true,
             last_escalated_regime: EpistemicRegime::KnownCoherent as u8,
+            escalated_workbench_lane: None,
             active_workbench_preset: WorkbenchPreset::BalancedDialog,
         })
     }
@@ -505,6 +507,8 @@ impl ModelSteeringAdapter {
         self.action_hub.last_anomaly_severity = 0.0;
         self.escalation_boundary_dirty = true;
         self.last_escalated_regime = EpistemicRegime::KnownCoherent as u8;
+        self.escalated_workbench_lane = None;
+        let _ = self.action_hub.release_all_workbench_lanes();
         self.active_workbench_preset = WorkbenchPreset::BalancedDialog;
         self.telemetry.set_policy(self.telemetry.policy());
         self.reset_action_hub_stats();
@@ -1015,55 +1019,9 @@ impl ModelSteeringAdapter {
             WorkbenchPreset::BalancedDialog
         };
 
-        let mut specs: Vec<WorkbenchSlotSpec> = Vec::with_capacity(5);
-        let mut populated_mask = 0u8;
-        if let Some(&(entry, score)) = recall.recalled_facts.first() {
-            if let Some(&phases) = entry.per_layer_q7.last() {
-                let lane = liminika_core::traits::primitives::ATTRACTOR_SLOT_KNOWLEDGE;
-                populated_mask |= 1u8 << lane;
-                specs.push(WorkbenchSlotSpec {
-                    lane,
-                    weight: (entry.energy * score.clamp(0.25, 1.0)).clamp(0.15, 1.0),
-                    phases,
-                });
-            }
-        }
-        if let Some(&(entry, score)) = recall.recalled_facts.get(1) {
-            if let Some(&phases) = entry.per_layer_q7.last() {
-                let lane = liminika_core::traits::primitives::ATTRACTOR_SLOT_CUSTOM_5;
-                populated_mask |= 1u8 << lane;
-                specs.push(WorkbenchSlotSpec {
-                    lane,
-                    weight: (entry.energy * score.clamp(0.20, 0.90)).clamp(0.10, 0.90),
-                    phases,
-                });
-            }
-        }
-        if let Some(&(entry, score)) = recall.recalled_facts.get(2) {
-            if let Some(&phases) = entry.per_layer_q7.last() {
-                let lane = liminika_core::traits::primitives::ATTRACTOR_SLOT_CUSTOM_6;
-                populated_mask |= 1u8 << lane;
-                specs.push(WorkbenchSlotSpec {
-                    lane,
-                    weight: (entry.energy * score.clamp(0.15, 0.80)).clamp(0.10, 0.80),
-                    phases,
-                });
-            }
-        }
-        if let Some(&(entry, score)) = recall.recalled_personas.first() {
-            if let Some(&phases) = entry.per_layer_q7.last() {
-                let lane = liminika_core::traits::primitives::ATTRACTOR_SLOT_PERSONA;
-                populated_mask |= 1u8 << lane;
-                specs.push(WorkbenchSlotSpec {
-                    lane,
-                    weight: (entry.energy * score.clamp(0.20, 1.0)).clamp(0.15, 1.0),
-                    phases,
-                });
-            }
-        }
-        if has_guard_conflict {
-            let lane = liminika_core::traits::primitives::ATTRACTOR_SLOT_REPULSION;
-            populated_mask |= 1u8 << lane;
+        let lane_budget = usize::from(preset.recommended_lane_budget());
+        let mut specs: Vec<WorkbenchSlotSpec> = Vec::with_capacity(lane_budget);
+        let repulsion_spec = has_guard_conflict.then(|| {
             let mut rep_phases = [0_i8; MAX_ATTENTION_HEADS];
             for (dst, &src) in rep_phases
                 .iter_mut()
@@ -1071,18 +1029,65 @@ impl ModelSteeringAdapter {
             {
                 *dst = src.saturating_neg();
             }
-            specs.push(WorkbenchSlotSpec {
-                lane,
-                weight: recall.guard_conflict_margin.clamp(0.35, 1.0),
-                phases: rep_phases,
-            });
+            WorkbenchSlotSpec::auto_repulsion(
+                recall.guard_conflict_margin.clamp(0.35, 1.0),
+                rep_phases,
+            )
+        });
+        if preset.prioritizes_repulsion() {
+            if let Some(spec) = repulsion_spec {
+                if specs.len() < lane_budget {
+                    specs.push(spec);
+                }
+            }
         }
-        let effective_mask = preset.recommended_lane_mask() & populated_mask;
-        let _ = self
-            .action_hub
-            .apply_workbench_preset_lanes(effective_mask, &specs);
+        for (fact_rank, &(entry, score)) in recall.recalled_facts.iter().take(3).enumerate() {
+            if specs.len() >= lane_budget {
+                break;
+            }
+            if let Some(&phases) = entry.per_layer_q7.last() {
+                let (min_s, max_s, min_w, max_w) = match fact_rank {
+                    0 => (0.25_f32, 1.0_f32, 0.15_f32, 1.0_f32),
+                    1 => (0.20_f32, 0.90_f32, 0.10_f32, 0.90_f32),
+                    _ => (0.15_f32, 0.80_f32, 0.10_f32, 0.80_f32),
+                };
+                specs.push(WorkbenchSlotSpec::auto_free(
+                    (entry.energy * score.clamp(min_s, max_s)).clamp(min_w, max_w),
+                    phases,
+                ));
+            }
+        }
+        if specs.len() < lane_budget {
+            if let Some(&(entry, score)) = recall.recalled_personas.first() {
+                if let Some(&phases) = entry.per_layer_q7.last() {
+                    specs.push(WorkbenchSlotSpec::auto_free(
+                        (entry.energy * score.clamp(0.20, 1.0)).clamp(0.15, 1.0),
+                        phases,
+                    ));
+                }
+            }
+        }
+        if !preset.prioritizes_repulsion() {
+            if let Some(spec) = repulsion_spec {
+                if specs.len() < lane_budget {
+                    specs.push(spec);
+                }
+            }
+        }
+        let _ = self.action_hub.apply_workbench_preset_lanes(&specs);
+        if let Some(esc_lane) = self.escalated_workbench_lane {
+            if (self.action_hub.slot_enabled_mask & (1u8 << esc_lane)) == 0 {
+                self.escalated_workbench_lane = None;
+            }
+        }
         self.active_workbench_preset = preset;
         (horizon, venn, ensemble_report)
+    }
+
+    /// Returns the anonymous workbench lane (`0..=7`) currently leased by cold-path escalation, if any.
+    #[must_use]
+    pub const fn escalated_workbench_lane(&self) -> Option<u8> {
+        self.escalated_workbench_lane
     }
 
     /// Returns the currently active [`WorkbenchPreset`] selected for the 8-lane working bank.
@@ -1091,12 +1096,13 @@ impl ModelSteeringAdapter {
         self.active_workbench_preset
     }
 
-    /// Switches the 8-lane working phase workbench to `preset` and atomically swaps `specs`
-    /// into [`ActionHubEngine`], returning the number of lanes updated.
+    /// Switches the 8-lane working phase workbench to `preset` and atomically loads `specs`
+    /// into [`ActionHubEngine`] (preserving pinned lanes), returning the number of lanes updated.
     ///
     /// # Errors
     ///
-    /// Returns an error if any `spec.lane >= 8`.
+    /// Returns an error if any `spec` has invalid weight, out-of-range explicit lane (`>= 8`), or
+    /// if an `AutoFree` allocation fails because all 8 lanes are pinned.
     pub fn switch_workbench_preset(
         &mut self,
         preset: WorkbenchPreset,
@@ -1104,8 +1110,13 @@ impl ModelSteeringAdapter {
     ) -> Result<u8, String> {
         let updated = self
             .action_hub
-            .apply_workbench_preset_lanes(preset.recommended_lane_mask(), specs)
+            .apply_workbench_preset_lanes(specs)
             .map_err(|e| format!("apply_workbench_preset_lanes error: {e}"))?;
+        if let Some(esc_lane) = self.escalated_workbench_lane {
+            if (self.action_hub.slot_enabled_mask & (1u8 << esc_lane)) == 0 {
+                self.escalated_workbench_lane = None;
+            }
+        }
         self.active_workbench_preset = preset;
         Ok(updated)
     }
@@ -1682,15 +1693,24 @@ impl ModelSteeringAdapter {
             };
             let num_layers_denom = this.geometry.num_layers.saturating_sub(1).max(1);
             let layer_scale_q7 = ((layer_idx * 127) / num_layers_denom).min(127) as u8;
+            let conflict_active = pre_trigger.epistemic_regime
+                == EpistemicRegime::InternalConflict as u8
+                || pre_trigger.repulsion_severity > 0.25;
             let esc_req = HorizonEscalationRequest {
                 trigger: pre_trigger,
-                target_slot: ATTRACTOR_SLOT_CUSTOM_7,
+                placement: WorkbenchLanePlacement::AutoFree,
+                lane_flags: if conflict_active {
+                    WORKBENCH_LANE_FLAG_REPULSION
+                } else {
+                    0
+                },
                 layer_scale_q7,
                 desired_aperture_mask: this.core_layers.liminal_layer.active_aperture_mask,
                 current_frame_energy: this.last_horizon.total_memory_support,
             };
-            let lane_bit = 1u8 << ATTRACTOR_SLOT_CUSTOM_7;
-            let lane_active = (this.action_hub.slot_enabled_mask & lane_bit) != 0;
+            let lane_active = this
+                .escalated_workbench_lane
+                .is_some_and(|l| l < 8 && (this.action_hub.slot_enabled_mask & (1u8 << l)) != 0);
             let should_check_escalation = this.escalation_boundary_dirty
                 || pre_trigger.epistemic_regime != this.last_escalated_regime
                 || (lane_active && pre_trigger.can_retract())
@@ -1698,7 +1718,11 @@ impl ModelSteeringAdapter {
             let escalated = if should_check_escalation {
                 let sw = this
                     .action_hub
-                    .apply_horizon_escalation(&esc_req, escalation_provider)
+                    .apply_horizon_escalation(
+                        &esc_req,
+                        &mut this.escalated_workbench_lane,
+                        escalation_provider,
+                    )
                     .map_err(|e| format!("apply_horizon_escalation error: {e}"))?;
                 this.escalation_boundary_dirty = false;
                 this.last_escalated_regime = pre_trigger.epistemic_regime;

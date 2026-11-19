@@ -229,5 +229,37 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
         Some(&mut q_buf.as_aligned_slice_mut()),
     );
     assert!(spillover.cache_hits >= 1);
+
+    // Verify Free-by-Default 8-lane workbench pool allocator + escalation remain strictly zero-alloc.
+    let mut wb_hub = liminika_core::ActionHubEngine::new();
+    for i in 0..8u8 {
+        let lane = wb_hub
+            .allocate_workbench_lane(&liminika_core::WorkbenchSlotSpec::auto_free(
+                0.2 + f32::from(i) * 0.1,
+                [i as i8 + 1; 64],
+            ))
+            .unwrap();
+        assert_eq!(lane, i);
+    }
+    wb_hub.pin_workbench_lane(0, true).unwrap();
+    let ev_lane = wb_hub
+        .allocate_workbench_lane(&liminika_core::WorkbenchSlotSpec::auto_sandbox(
+            0.9, [16; 64],
+        ))
+        .unwrap();
+    assert_eq!(ev_lane, 1);
+    assert!(wb_hub.promote_sandbox_lane(ev_lane).unwrap());
+    let _ = wb_hub.decay_and_reclaim_workbench_lanes(0.5, 0.25);
+    let _ = wb_hub.release_unpinned_lanes();
+    let mut esc_lane = None;
+    let esc_req = liminika_core::traits::HorizonEscalationRequest {
+        trigger: liminika_core::traits::HorizonTriggerInput {
+            repulsion_severity: 0.8,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut mock_esc = liminika_core::DefaultResidualSpilloverSlot::default();
+    let _ = wb_hub.apply_horizon_escalation(&esc_req, &mut esc_lane, &mut mock_esc);
     ENFORCE_ZERO_ALLOC.with(|flag| flag.set(false));
 }

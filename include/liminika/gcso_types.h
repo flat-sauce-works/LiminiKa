@@ -116,22 +116,24 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_TAG_ACTION_MODE_MASK 0x1FU
 #define GCSO_TAG_ATTRACTOR_SLOT_SHIFT 5U
 
-/* 3-Bit Attractor Working Lane Slot Identifiers (0..7, matching primitives.rs) */
+/* 3-Bit Semantic Attractor Provenance / Affinity Identifiers (0..7, matching primitives.rs; decoupled from physical workbench lanes 0..7) */
 #define GCSO_ATTRACTOR_SLOT_SYSTEM_BASELINE 0U
 #define GCSO_ATTRACTOR_SLOT_PERSONA 1U
 #define GCSO_ATTRACTOR_SLOT_KNOWLEDGE 2U
 #define GCSO_ATTRACTOR_SLOT_REPULSION 3U
 #define GCSO_ATTRACTOR_SLOT_USER_CONTEXT 4U
-#define GCSO_ATTRACTOR_SLOT_CUSTOM_5 5U
-#define GCSO_ATTRACTOR_SLOT_CUSTOM_6 6U
-#define GCSO_ATTRACTOR_SLOT_CUSTOM_7 7U
-/* Semantic aliases for custom working lanes 4..7 */
-#define GCSO_ATTRACTOR_SLOT_SPATIAL GCSO_ATTRACTOR_SLOT_USER_CONTEXT
-#define GCSO_ATTRACTOR_SLOT_TEMPORAL GCSO_ATTRACTOR_SLOT_CUSTOM_5
-#define GCSO_ATTRACTOR_SLOT_USER_INTENT GCSO_ATTRACTOR_SLOT_CUSTOM_6
-#define GCSO_ATTRACTOR_SLOT_CRYSTALLIZED GCSO_ATTRACTOR_SLOT_CUSTOM_7
+#define GCSO_ATTRACTOR_SLOT_TEMPORAL 5U
+#define GCSO_ATTRACTOR_SLOT_USER_INTENT 6U
+#define GCSO_ATTRACTOR_SLOT_CRYSTALLIZED 7U
 #define GCSO_ATTRACTOR_SLOT_ID_MASK 0x07U
 #define GCSO_DEFAULT_SLOT_COUPLING_MATRIX_8X8 0xFFFFFFFFFFFFFFFFULL
+
+/* Anonymous 8-Lane Workbench Pool Constants (matching primitives.rs) */
+#define GCSO_WORKBENCH_LANE_COUNT 8U
+#define GCSO_WORKBENCH_LANE_AUTO 0xFFU
+#define GCSO_WORKBENCH_LANE_FLAG_PINNED (1U << 0)
+#define GCSO_WORKBENCH_LANE_FLAG_REPULSION (1U << 1)
+#define GCSO_WORKBENCH_LANE_FLAG_SANDBOX (1U << 2)
 
 /* 5-Bit Action Mode Execution Flags (1:1 bit parity with primitives.rs) */
 #define GCSO_ACTION_MODE_DPSR_STEER (1U << 0)    /* 0x01U */

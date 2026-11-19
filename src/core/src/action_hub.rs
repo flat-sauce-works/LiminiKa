@@ -84,7 +84,8 @@ use core::mem::{align_of, offset_of, size_of};
 
 use crate::abi::{
     gcso_config_t, gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t,
-    gcso_subhead_config_t, gcso_tagged_ptr_t, GCSO_ERROR_INVALID_ARGUMENT,
+    gcso_subhead_config_t, gcso_tagged_ptr_t, GCSO_ERROR_ACTION_HUB_FULL,
+    GCSO_ERROR_INVALID_ARGUMENT,
 };
 use crate::phase_steering::{PhaseSteeringEngine, DEFAULT_DPSR_HEAD_DIM, DEFAULT_DPSR_NUM_HEADS};
 use crate::traits::aligned::{AlignedBuffer64, AlignedSlice16, AlignedSliceMut32};
@@ -113,12 +114,10 @@ use crate::traits::primitives::{
     pack_action_slot_tag, unpack_attractor_slot_from_tag, GcsoResult, Pod, ACTION_MODE_DPSR_STEER,
     ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE,
     ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_CUSTOM_5, ATTRACTOR_SLOT_CUSTOM_6,
-    ATTRACTOR_SLOT_CUSTOM_7, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_KNOWLEDGE,
-    ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE,
-    ATTRACTOR_SLOT_USER_CONTEXT, DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_RIPA_CLAMP_MAX_RAD,
-    DEFAULT_SLOT_COUPLING_MATRIX_8X8, FAST_PATH_SHORTCUT_SLOTS, LEDGER_HISTORY_LEN,
-    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION,
+    DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_RIPA_CLAMP_MAX_RAD, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+    FAST_PATH_SHORTCUT_SLOTS, LEDGER_HISTORY_LEN, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    WORKBENCH_LANE_FLAG_PINNED, WORKBENCH_LANE_FLAG_REPULSION, WORKBENCH_LANE_FLAG_SANDBOX,
 };
 use crate::traits::rope::{
     dispatch_fused_ripa_and_pspm_words_core, resolve_autonomous_swarm_rot_dim, ripa_upper_rot_dim,
@@ -166,10 +165,6 @@ pub const DEFAULT_STIGMERGIC_CONTRADICTION_THRESH: f32 = 0.25;
 
 /// Total Q7 phase elements across all 8 Attractor Working Lanes (`8 * 64 = 512` bytes).
 const HUB_SLOT_BANK_LEN: usize = MAX_ATTRACTOR_DOMAINS * MAX_ATTENTION_HEADS;
-
-/// Default initial weights for the 8 parallel Attractor Working Lanes (`0..=7`).
-const DEFAULT_HUB_SLOT_WEIGHTS: [f32; MAX_ATTRACTOR_DOMAINS] =
-    [1.0, 1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5];
 
 // ===================================================================
 // 1. Stigmergic Action Decision Enum & Threshold Ladder (`Pod`)
@@ -239,19 +234,19 @@ impl StigmergicActionDecision {
     }
 }
 
-/// Preset regime profile for configuring [`ActionHubEngine`]'s 8-lane phase workbench
-/// at prompt or epistemic regime boundaries.
+/// Preset regime profile guiding lane budgets and attribute policies for [`ActionHubEngine`]'s
+/// anonymous 8-lane working phase workbench at prompt or epistemic regime boundaries.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WorkbenchPreset {
-    /// Balanced dialogue profile enabling baseline, persona, fact, and user-context lanes (`0`).
+    /// Balanced dialogue profile balancing grounded memory and conversational persona (`0`).
     #[default]
     BalancedDialog = 0,
-    /// Factual grounding profile emphasizing knowledge, baseline, and custom specialist lanes (`1`).
+    /// Factual grounding profile prioritizing multiple objective knowledge attractors (`1`).
     FactualGrounding = 1,
-    /// Conflict/guard defense profile emphasizing repulsion, knowledge counter-anchor, and spare lane 7 (`2`).
+    /// Conflict/guard defense profile prioritizing repulsion escape lanes alongside counter-anchors (`2`).
     GuardDefense = 2,
-    /// Exploratory liminal profile emphasizing persona, context, and custom lanes 5..=7 (`3`).
+    /// Exploratory liminal profile permitting isolated sandbox hypothesis lanes (`3`).
     CreativeLiminal = 3,
 }
 
@@ -268,47 +263,80 @@ impl WorkbenchPreset {
         }
     }
 
-    /// Returns the 8-bit lane enable mask (`0..=7`) recommended for this preset.
+    /// Returns the recommended active lane budget (`1..=8`) for this regime profile.
     #[inline(always)]
     #[must_use]
-    pub const fn recommended_lane_mask(self) -> u8 {
+    pub const fn recommended_lane_budget(self) -> u8 {
         match self {
-            Self::BalancedDialog => {
-                (1u8 << ATTRACTOR_SLOT_SYSTEM_BASELINE)
-                    | (1u8 << ATTRACTOR_SLOT_PERSONA)
-                    | (1u8 << ATTRACTOR_SLOT_KNOWLEDGE)
-                    | (1u8 << ATTRACTOR_SLOT_USER_CONTEXT)
-            }
-            Self::FactualGrounding => {
-                (1u8 << ATTRACTOR_SLOT_SYSTEM_BASELINE)
-                    | (1u8 << ATTRACTOR_SLOT_KNOWLEDGE)
-                    | (1u8 << ATTRACTOR_SLOT_CUSTOM_5)
-                    | (1u8 << ATTRACTOR_SLOT_CUSTOM_6)
-            }
-            Self::GuardDefense => {
-                (1u8 << ATTRACTOR_SLOT_SYSTEM_BASELINE)
-                    | (1u8 << ATTRACTOR_SLOT_KNOWLEDGE)
-                    | (1u8 << ATTRACTOR_SLOT_REPULSION)
-                    | (1u8 << ATTRACTOR_SLOT_CUSTOM_7)
-            }
-            Self::CreativeLiminal => {
-                (1u8 << ATTRACTOR_SLOT_PERSONA)
-                    | (1u8 << ATTRACTOR_SLOT_USER_CONTEXT)
-                    | (1u8 << ATTRACTOR_SLOT_CUSTOM_5)
-                    | (1u8 << ATTRACTOR_SLOT_CUSTOM_6)
-                    | (1u8 << ATTRACTOR_SLOT_CUSTOM_7)
-            }
+            Self::BalancedDialog => 4,
+            Self::FactualGrounding | Self::GuardDefense => 5,
+            Self::CreativeLiminal => 6,
         }
+    }
+
+    /// Returns whether this preset permits isolated exterior-only sandbox hypothesis lanes.
+    #[inline(always)]
+    #[must_use]
+    pub const fn allows_sandbox_lanes(self) -> bool {
+        matches!(self, Self::CreativeLiminal)
+    }
+
+    /// Returns whether this preset prioritizes anti-phase repulsion lanes during recall loading.
+    #[inline(always)]
+    #[must_use]
+    pub const fn prioritizes_repulsion(self) -> bool {
+        matches!(self, Self::GuardDefense)
     }
 }
 
-/// Zero-alloc POD descriptor for swapping a single specialist lane (`0..=7`) on
-/// [`ActionHubEngine`]'s 8-lane working phase workbench.
-#[repr(C)]
+/// Placement policy specifying how a phase profile is assigned to one of the 8 anonymous
+/// physical lanes (`0..=7`) inside [`ActionHubEngine::slot_phase_bank`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkbenchLanePlacement {
+    /// Claims the lowest free unpinned lane (`(!enabled & !pinned).trailing_zeros()`), or evicts
+    /// the lowest-weight unpinned lane when all unpinned lanes are occupied.
+    #[default]
+    AutoFree,
+    /// Targets an explicit physical workbench lane (`0..=7`) and optionally pins it.
+    Explicit {
+        /// Physical workbench lane index (`0..=7`).
+        lane: u8,
+        /// When `true`, marks `lane` in `slot_pinned_mask` to prevent eviction or bulk unpinned release.
+        pin: bool,
+    },
+}
+
+impl WorkbenchLanePlacement {
+    /// Creates an automatic free-pool placement policy ([`Self::AutoFree`]).
+    #[inline(always)]
+    #[must_use]
+    pub const fn auto_free() -> Self {
+        Self::AutoFree
+    }
+
+    /// Creates an explicit physical lane placement policy (`0..=7`) with configurable pinning.
+    #[inline(always)]
+    #[must_use]
+    pub const fn explicit(lane: u8, pin: bool) -> Self {
+        Self::Explicit { lane, pin }
+    }
+
+    /// Creates a pinned explicit physical lane placement policy (`0..=7`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn pinned(lane: u8) -> Self {
+        Self::Explicit { lane, pin: true }
+    }
+}
+
+/// Zero-alloc descriptor for loading a phase profile onto [`ActionHubEngine`]'s anonymous 8-lane
+/// working phase workbench.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WorkbenchSlotSpec {
-    /// Target lane index (`0..=7`).
-    pub lane: u8,
+    /// Physical lane placement policy (`AutoFree` or `Explicit { lane, pin }`).
+    pub placement: WorkbenchLanePlacement,
+    /// Bitmask of `WORKBENCH_LANE_FLAG_*` behavior attributes (`PINNED`, `REPULSION`, `SANDBOX`).
+    pub flags: u8,
     /// Non-negative lane weight.
     pub weight: f32,
     /// 64-head Q0.7 phase profile loaded into the lane.
@@ -319,10 +347,96 @@ impl Default for WorkbenchSlotSpec {
     #[inline]
     fn default() -> Self {
         Self {
-            lane: 0,
+            placement: WorkbenchLanePlacement::AutoFree,
+            flags: 0,
             weight: 0.0,
             phases: [0; MAX_ATTENTION_HEADS],
         }
+    }
+}
+
+impl WorkbenchSlotSpec {
+    /// Constructs a standard unpinned [`WorkbenchSlotSpec`] allocated from the free pool.
+    #[inline(always)]
+    #[must_use]
+    pub const fn auto_free(weight: f32, phases: [gcso_q7_t; MAX_ATTENTION_HEADS]) -> Self {
+        Self {
+            placement: WorkbenchLanePlacement::AutoFree,
+            flags: 0,
+            weight,
+            phases,
+        }
+    }
+
+    /// Constructs a repulsion-flagged [`WorkbenchSlotSpec`] allocated from the free pool.
+    #[inline(always)]
+    #[must_use]
+    pub const fn auto_repulsion(weight: f32, phases: [gcso_q7_t; MAX_ATTENTION_HEADS]) -> Self {
+        Self {
+            placement: WorkbenchLanePlacement::AutoFree,
+            flags: WORKBENCH_LANE_FLAG_REPULSION,
+            weight,
+            phases,
+        }
+    }
+
+    /// Constructs an isolated exterior-only sandbox [`WorkbenchSlotSpec`] allocated from the free pool.
+    #[inline(always)]
+    #[must_use]
+    pub const fn auto_sandbox(weight: f32, phases: [gcso_q7_t; MAX_ATTENTION_HEADS]) -> Self {
+        Self {
+            placement: WorkbenchLanePlacement::AutoFree,
+            flags: WORKBENCH_LANE_FLAG_SANDBOX,
+            weight,
+            phases,
+        }
+    }
+
+    /// Constructs an explicitly targeted [`WorkbenchSlotSpec`] for physical lane `lane` (`0..=7`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn explicit(
+        lane: u8,
+        pin: bool,
+        flags: u8,
+        weight: f32,
+        phases: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> Self {
+        Self {
+            placement: WorkbenchLanePlacement::Explicit { lane, pin },
+            flags: if pin {
+                flags | WORKBENCH_LANE_FLAG_PINNED
+            } else {
+                flags
+            },
+            weight,
+            phases,
+        }
+    }
+
+    /// Returns `true` if this spec requests pinning in `slot_pinned_mask`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_pinned(&self) -> bool {
+        (self.flags & WORKBENCH_LANE_FLAG_PINNED) != 0
+            || matches!(
+                self.placement,
+                WorkbenchLanePlacement::Explicit { pin: true, .. }
+            )
+    }
+
+    /// Returns `true` if this spec marks the allocated lane as an anti-phase repulsion lane.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_repulsion(&self) -> bool {
+        (self.flags & WORKBENCH_LANE_FLAG_REPULSION) != 0
+    }
+
+    /// Returns `true` if this spec marks the allocated lane as an exterior-only sandbox lane.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_sandbox(&self) -> bool {
+        (self.flags & WORKBENCH_LANE_FLAG_SANDBOX) != 0
     }
 }
 
@@ -1039,12 +1153,18 @@ pub struct ActionHubEngine {
     pub repulsion_threshold: u8,
     /// Q7 unit scale (`0..=128`, where `128 == 1.0`) applied during phase-conjugate repulsion.
     pub repulsion_scale_u7: u8,
-    /// 8-bit bitmask of enabled Attractor Working Lanes (`0xFF` = all 8 lanes enabled).
+    /// 8-bit bitmask of enabled anonymous Workbench Lanes (`0x00` = all 8 lanes free by default).
     pub slot_enabled_mask: u8,
     /// Most recently selected [`StigmergicActionDecision`] discriminant (`0..=6`).
     pub last_decision: u8,
-    /// Explicit padding to guarantee exact 2,816-byte (`22 x 128B`) size and zero implicit padding.
-    pub reserved_align128: [u8; 4],
+    /// 8-bit bitmask of explicitly pinned Workbench Lanes exempt from automatic release or eviction.
+    pub slot_pinned_mask: u8,
+    /// 8-bit bitmask of Workbench Lanes carrying phase-conjugate anti-hallucination repulsion profiles.
+    pub slot_repulsion_mask: u8,
+    /// 8-bit bitmask of Workbench Lanes acting as isolated exterior-only hypothesis sandboxes.
+    pub slot_sandbox_mask: u8,
+    /// Explicit 1-byte padding preserving exact 2,816-byte (`22 x 128B`) `Pod` layout.
+    pub reserved_align128: u8,
 }
 
 // SAFETY: `ActionHubEngine` is a `#[repr(C, align(128))]` composition of `Pod` structs and primitive
@@ -1097,7 +1217,7 @@ impl ActionHubEngine {
             },
             bloom_filter: ContrastivePhaseBloomFilter::new(),
             thresholds: StigmergicThresholds::new(),
-            slot_weights: DEFAULT_HUB_SLOT_WEIGHTS,
+            slot_weights: [0.0; MAX_ATTRACTOR_DOMAINS],
             dpsr,
             coupling_matrix_8x8: DEFAULT_SLOT_COUPLING_MATRIX_8X8,
             step_counter: 0,
@@ -1109,9 +1229,12 @@ impl ActionHubEngine {
             last_anomaly_severity: 0.0,
             repulsion_threshold: 2,
             repulsion_scale_u7: 128,
-            slot_enabled_mask: 0xFF,
+            slot_enabled_mask: 0x00,
             last_decision: StigmergicActionDecision::PassiveSidecar as u8,
-            reserved_align128: [0; 4],
+            slot_pinned_mask: 0x00,
+            slot_repulsion_mask: 0x00,
+            slot_sandbox_mask: 0x00,
+            reserved_align128: 0,
         }
     }
 
@@ -1189,44 +1312,308 @@ impl ActionHubEngine {
         self.slot_phase_bank.relax_slice::<16>()
     }
 
-    /// Evaluates external cold-path escalation (`escalation_provider`) against `req.trigger` and
-    /// swaps phases into `ATTRACTOR_SLOT_CUSTOM_7`, or cleanly clears and retracts that spare lane
-    /// when `req.trigger.can_retract()` holds.
+    /// Allocates an anonymous physical workbench lane (`0..=7`) according to `spec.placement`,
+    /// populating `slot_phase_bank`, `slot_weights`, and the 4 lane attribute bitmasks in $\mathcal{O}(1)$
+    /// zero-alloc time.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `req.target_slot >= MAX_ATTRACTOR_DOMAINS` or
-    /// propagates any error returned by `escalation_provider`.
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `spec.weight` is non-finite or an explicit lane
+    /// index `>= MAX_ATTRACTOR_DOMAINS`, or [`GCSO_ERROR_ACTION_HUB_FULL`] if `AutoFree` is
+    /// requested while all 8 lanes are pinned.
+    #[inline]
+    pub fn allocate_workbench_lane(&mut self, spec: &WorkbenchSlotSpec) -> GcsoResult<u8> {
+        if !branchless_is_finite_f32(spec.weight) {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let lane = match spec.placement {
+            WorkbenchLanePlacement::AutoFree => {
+                let free_unpinned = !self.slot_enabled_mask & !self.slot_pinned_mask;
+                if free_unpinned != 0 {
+                    free_unpinned.trailing_zeros() as u8
+                } else {
+                    let evictable = self.slot_enabled_mask & !self.slot_pinned_mask;
+                    if evictable == 0 {
+                        return Err(GCSO_ERROR_ACTION_HUB_FULL);
+                    }
+                    let mut best_lane = evictable.trailing_zeros() as u8;
+                    let mut best_w = branchless_relu_f32(self.slot_weights[usize::from(best_lane)]);
+                    let mut rem = evictable & !(1u8 << best_lane);
+                    while rem != 0 {
+                        let cand = rem.trailing_zeros() as u8;
+                        rem &= rem - 1;
+                        let cand_w = branchless_relu_f32(self.slot_weights[usize::from(cand)]);
+                        if cand_w < best_w {
+                            best_lane = cand;
+                            best_w = cand_w;
+                        }
+                    }
+                    best_lane
+                }
+            }
+            WorkbenchLanePlacement::Explicit { lane, .. } => {
+                if usize::from(lane) >= MAX_ATTRACTOR_DOMAINS {
+                    return Err(GCSO_ERROR_INVALID_ARGUMENT);
+                }
+                lane
+            }
+        };
+
+        let lane_idx = usize::from(lane);
+        let lane_bit = 1u8 << lane;
+        let start = lane_idx * MAX_ATTENTION_HEADS;
+        let end = start + MAX_ATTENTION_HEADS;
+        self.slot_phase_bank.data[start..end].copy_from_slice(&spec.phases);
+        self.slot_weights[lane_idx] = branchless_relu_f32(spec.weight);
+        self.slot_enabled_mask |= lane_bit;
+
+        let pin_bit = u8::from(spec.is_pinned()).wrapping_neg() & lane_bit;
+        let rep_bit = u8::from(spec.is_repulsion()).wrapping_neg() & lane_bit;
+        let sb_bit = u8::from(spec.is_sandbox()).wrapping_neg() & lane_bit;
+        self.slot_pinned_mask = (self.slot_pinned_mask & !lane_bit) | pin_bit;
+        self.slot_repulsion_mask = (self.slot_repulsion_mask & !lane_bit) | rep_bit;
+        self.slot_sandbox_mask = (self.slot_sandbox_mask & !lane_bit) | sb_bit;
+        Ok(lane)
+    }
+
+    /// Releases physical workbench `lane` (`0..=7`), zeroing its phase row and clearing its bits
+    /// across `slot_enabled_mask`, `slot_pinned_mask`, `slot_repulsion_mask`, and `slot_sandbox_mask`.
+    ///
+    /// Returns `Ok(true)` if the lane had been enabled prior to release.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `lane >= MAX_ATTRACTOR_DOMAINS`.
+    #[inline]
+    pub fn release_workbench_lane(&mut self, lane: u8) -> GcsoResult<bool> {
+        let lane_idx = usize::from(lane);
+        if lane_idx >= MAX_ATTRACTOR_DOMAINS {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let lane_bit = 1u8 << lane;
+        let was_active = (self.slot_enabled_mask & lane_bit) != 0;
+        let start = lane_idx * MAX_ATTENTION_HEADS;
+        let end = start + MAX_ATTENTION_HEADS;
+        self.slot_phase_bank.data[start..end].fill(0);
+        self.slot_weights[lane_idx] = 0.0;
+        self.slot_enabled_mask &= !lane_bit;
+        self.slot_pinned_mask &= !lane_bit;
+        self.slot_repulsion_mask &= !lane_bit;
+        self.slot_sandbox_mask &= !lane_bit;
+        Ok(was_active)
+    }
+
+    /// Releases all unpinned active workbench lanes while leaving pinned lanes untouched, returning
+    /// the count of lanes cleared.
+    #[inline]
+    pub fn release_unpinned_lanes(&mut self) -> u8 {
+        let mut to_clear = self.slot_enabled_mask & !self.slot_pinned_mask;
+        let released = to_clear.count_ones() as u8;
+        while to_clear != 0 {
+            let lane_idx = to_clear.trailing_zeros() as usize;
+            to_clear &= to_clear - 1;
+            let start = lane_idx * MAX_ATTENTION_HEADS;
+            let end = start + MAX_ATTENTION_HEADS;
+            self.slot_phase_bank.data[start..end].fill(0);
+            self.slot_weights[lane_idx] = 0.0;
+        }
+        let keep = self.slot_pinned_mask;
+        self.slot_enabled_mask &= keep;
+        self.slot_repulsion_mask &= keep;
+        self.slot_sandbox_mask &= keep;
+        released
+    }
+
+    /// Releases every workbench lane (including pinned lanes), resetting all 8 lanes to the free
+    /// pool and returning the count of previously enabled lanes.
+    #[inline]
+    pub fn release_all_workbench_lanes(&mut self) -> u8 {
+        let released = self.slot_enabled_mask.count_ones() as u8;
+        self.slot_phase_bank.data.fill(0);
+        self.slot_weights = [0.0; MAX_ATTRACTOR_DOMAINS];
+        self.slot_enabled_mask = 0;
+        self.slot_pinned_mask = 0;
+        self.slot_repulsion_mask = 0;
+        self.slot_sandbox_mask = 0;
+        released
+    }
+
+    /// Decays unpinned active workbench lane weights by `retain_factor` (`[0.0, 1.0]`) and
+    /// automatically reclaims any lane whose decayed weight drops below `min_weight_floor` (or
+    /// reaches `0.0`). Pinned lanes remain untouched. Returns the number of reclaimed lanes.
+    #[inline]
+    pub fn decay_and_reclaim_workbench_lanes(
+        &mut self,
+        retain_factor: f32,
+        min_weight_floor: f32,
+    ) -> u8 {
+        let retain = if branchless_is_finite_f32(retain_factor) {
+            branchless_clamp_f32(retain_factor, 0.0, 1.0)
+        } else {
+            0.0
+        };
+        let floor = if branchless_is_finite_f32(min_weight_floor) {
+            branchless_relu_f32(min_weight_floor)
+        } else {
+            0.0
+        };
+        let mut active_unpinned = self.slot_enabled_mask & !self.slot_pinned_mask;
+        let mut reclaimed = 0u8;
+        while active_unpinned != 0 {
+            let lane = active_unpinned.trailing_zeros() as u8;
+            active_unpinned &= active_unpinned - 1;
+            let lane_idx = usize::from(lane);
+            let next_w = branchless_flush_subnormal_f32(
+                branchless_relu_f32(self.slot_weights[lane_idx]) * retain,
+            );
+            if next_w <= 0.0 || next_w < floor {
+                let lane_bit = 1u8 << lane;
+                let start = lane_idx * MAX_ATTENTION_HEADS;
+                let end = start + MAX_ATTENTION_HEADS;
+                self.slot_phase_bank.data[start..end].fill(0);
+                self.slot_weights[lane_idx] = 0.0;
+                self.slot_enabled_mask &= !lane_bit;
+                self.slot_repulsion_mask &= !lane_bit;
+                self.slot_sandbox_mask &= !lane_bit;
+                reclaimed = reclaimed.saturating_add(1);
+            } else {
+                self.slot_weights[lane_idx] = next_w;
+            }
+        }
+        reclaimed
+    }
+
+    /// Sets or clears the explicit pin bit (`slot_pinned_mask`) for physical `lane` (`0..=7`).
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `lane >= MAX_ATTRACTOR_DOMAINS`.
+    #[inline]
+    pub fn pin_workbench_lane(&mut self, lane: u8, pin: bool) -> GcsoResult<()> {
+        if usize::from(lane) >= MAX_ATTRACTOR_DOMAINS {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let lane_bit = 1u8 << lane;
+        let bit_val = u8::from(pin).wrapping_neg() & lane_bit;
+        self.slot_pinned_mask = (self.slot_pinned_mask & !lane_bit) | bit_val;
+        Ok(())
+    }
+
+    /// Promotes an active sandbox workbench lane (`slot_sandbox_mask`) to standard full-aperture
+    /// participation in-place without relocating its physical register slot.
+    ///
+    /// Returns `Ok(true)` if `lane` was an active sandbox lane and is now promoted.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `lane >= MAX_ATTRACTOR_DOMAINS`.
+    #[inline]
+    pub fn promote_sandbox_lane(&mut self, lane: u8) -> GcsoResult<bool> {
+        if usize::from(lane) >= MAX_ATTRACTOR_DOMAINS {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let lane_bit = 1u8 << lane;
+        let active_sandbox = ((self.slot_enabled_mask & self.slot_sandbox_mask) & lane_bit) != 0;
+        if active_sandbox {
+            self.slot_sandbox_mask &= !lane_bit;
+        }
+        Ok(active_sandbox)
+    }
+
+    /// Releases all unpinned active sandbox lanes (`slot_enabled_mask & slot_sandbox_mask & !slot_pinned_mask`),
+    /// returning the number of sandbox lanes reclaimed.
+    #[inline]
+    pub fn release_sandbox_lanes(&mut self) -> u8 {
+        let mut targets = self.slot_enabled_mask & self.slot_sandbox_mask & !self.slot_pinned_mask;
+        let mut released = 0u8;
+        while targets != 0 {
+            let lane = targets.trailing_zeros() as u8;
+            targets &= targets - 1;
+            let lane_idx = usize::from(lane);
+            let lane_bit = 1u8 << lane;
+            let start = lane_idx * MAX_ATTENTION_HEADS;
+            let end = start + MAX_ATTENTION_HEADS;
+            self.slot_phase_bank.data[start..end].fill(0);
+            self.slot_weights[lane_idx] = 0.0;
+            self.slot_enabled_mask &= !lane_bit;
+            self.slot_repulsion_mask &= !lane_bit;
+            self.slot_sandbox_mask &= !lane_bit;
+            released = released.saturating_add(1);
+        }
+        released
+    }
+
+    /// Evaluates external cold-path escalation (`escalation_provider`) against `req.trigger` and
+    /// swaps phases into an anonymous free (or explicitly requested) workbench lane tracked in
+    /// `active_lane_inout`, or cleanly releases that lane when `req.trigger.can_retract()` holds.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `req.placement` specifies an explicit lane
+    /// `>= MAX_ATTRACTOR_DOMAINS`, [`GCSO_ERROR_ACTION_HUB_FULL`] if all lanes are pinned during
+    /// `AutoFree` allocation, or propagates any error returned by `escalation_provider`.
     #[inline]
     pub fn apply_horizon_escalation<
         E: crate::traits::gateway::HorizonEscalationProvider + ?Sized,
     >(
         &mut self,
         req: &crate::traits::gateway::HorizonEscalationRequest,
+        active_lane_inout: &mut Option<u8>,
         escalation_provider: &mut E,
     ) -> GcsoResult<bool> {
-        if usize::from(req.target_slot) >= crate::traits::primitives::MAX_ATTRACTOR_DOMAINS {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        if let WorkbenchLanePlacement::Explicit { lane, .. } = req.placement {
+            if usize::from(lane) >= MAX_ATTRACTOR_DOMAINS {
+                return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            }
         }
-        let lane_idx = usize::from(req.target_slot);
-        let lane_bit = 1u8 << req.target_slot;
-        let start = lane_idx * crate::traits::primitives::MAX_ATTENTION_HEADS;
-        let end = start + crate::traits::primitives::MAX_ATTENTION_HEADS;
         if req.trigger.is_destabilized() {
-            let mut escalated_phases = [0i8; crate::traits::primitives::MAX_ATTENTION_HEADS];
+            let mut escalated_phases = [0i8; MAX_ATTENTION_HEADS];
             if let Some(weight) =
                 escalation_provider.try_escalate_horizon(req, &mut escalated_phases)?
             {
-                self.slot_phase_bank.data[start..end].copy_from_slice(&escalated_phases);
-                self.slot_weights[lane_idx] = branchless_relu_f32(weight);
-                self.slot_enabled_mask |= lane_bit;
+                let placement = match req.placement {
+                    WorkbenchLanePlacement::AutoFree => {
+                        if let Some(prev) = *active_lane_inout {
+                            if usize::from(prev) < MAX_ATTRACTOR_DOMAINS
+                                && ((self.slot_enabled_mask & !self.slot_pinned_mask)
+                                    & (1u8 << prev))
+                                    != 0
+                            {
+                                WorkbenchLanePlacement::Explicit {
+                                    lane: prev,
+                                    pin: (req.lane_flags & WORKBENCH_LANE_FLAG_PINNED) != 0,
+                                }
+                            } else {
+                                WorkbenchLanePlacement::AutoFree
+                            }
+                        } else {
+                            WorkbenchLanePlacement::AutoFree
+                        }
+                    }
+                    WorkbenchLanePlacement::Explicit { lane, pin } => {
+                        if let Some(prev) = *active_lane_inout {
+                            if prev != lane
+                                && usize::from(prev) < MAX_ATTRACTOR_DOMAINS
+                                && (self.slot_pinned_mask & (1u8 << prev)) == 0
+                            {
+                                let _ = self.release_workbench_lane(prev)?;
+                            }
+                        }
+                        WorkbenchLanePlacement::Explicit { lane, pin }
+                    }
+                };
+                let allocated = self.allocate_workbench_lane(&WorkbenchSlotSpec {
+                    placement,
+                    flags: req.lane_flags,
+                    weight,
+                    phases: escalated_phases,
+                })?;
+                *active_lane_inout = Some(allocated);
                 return Ok(true);
             }
         } else if req.trigger.can_retract() {
-            if (self.slot_enabled_mask & lane_bit) != 0 {
-                self.slot_phase_bank.data[start..end].fill(0);
+            if let Some(lane) = active_lane_inout.take() {
+                if usize::from(lane) < MAX_ATTRACTOR_DOMAINS {
+                    let _ = self.release_workbench_lane(lane)?;
+                }
+            } else if let WorkbenchLanePlacement::Explicit { lane, .. } = req.placement {
+                let _ = self.release_workbench_lane(lane)?;
             }
-            self.slot_enabled_mask &= !lane_bit;
-            self.slot_weights[lane_idx] = 0.0;
         }
         Ok(false)
     }
@@ -1238,34 +1625,90 @@ impl ActionHubEngine {
         self.slot_enabled_mask
     }
 
-    /// Atomically swaps a preset batch of specialist lanes into the 8-lane working phase bank
-    /// (`slot_phase_bank` + `slot_weights`) and updates `slot_enabled_mask` in zero-alloc
-    /// constant space, returning the count of updated lanes.
+    /// Returns the bitmask of explicitly pinned workbench lanes (`0..=7`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn workbench_pinned_mask(&self) -> u8 {
+        self.slot_pinned_mask
+    }
+
+    /// Returns the bitmask of anti-phase repulsion workbench lanes (`0..=7`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn workbench_repulsion_mask(&self) -> u8 {
+        self.slot_repulsion_mask
+    }
+
+    /// Returns the bitmask of isolated exterior-only sandbox workbench lanes (`0..=7`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn workbench_sandbox_mask(&self) -> u8 {
+        self.slot_sandbox_mask
+    }
+
+    /// Returns the bitmask of workbench lanes currently free for unpinned allocation (`0..=7`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn free_workbench_lane_mask(&self) -> u8 {
+        !self.slot_enabled_mask & !self.slot_pinned_mask
+    }
+
+    /// Returns the number of currently active workbench lanes (`0..=8`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn workbench_utilization_count(&self) -> u8 {
+        self.slot_enabled_mask.count_ones() as u8
+    }
+
+    /// Atomically refreshes unpinned lanes on the 8-lane working phase workbench with `specs`,
+    /// preserving any explicitly pinned lanes while allocating each [`WorkbenchSlotSpec`] via
+    /// [`Self::allocate_workbench_lane`]. Returns the count of lanes loaded.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any `spec.lane >= MAX_ATTRACTOR_DOMAINS`.
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any spec has non-finite weight or an explicit
+    /// lane `>= MAX_ATTRACTOR_DOMAINS`, or [`GCSO_ERROR_ACTION_HUB_FULL`] if an `AutoFree` spec
+    /// cannot be satisfied because all 8 lanes are pinned.
     #[inline]
-    pub fn apply_workbench_preset_lanes(
-        &mut self,
-        enable_mask: u8,
-        specs: &[WorkbenchSlotSpec],
-    ) -> GcsoResult<u8> {
-        let mut updated = 0u8;
+    pub fn apply_workbench_preset_lanes(&mut self, specs: &[WorkbenchSlotSpec]) -> GcsoResult<u8> {
+        let mut sim_pinned = self.slot_pinned_mask;
         let mut idx = 0usize;
         while idx < specs.len() {
             let spec = &specs[idx];
-            if usize::from(spec.lane) >= crate::traits::primitives::MAX_ATTRACTOR_DOMAINS {
+            if !branchless_is_finite_f32(spec.weight) {
                 return Err(GCSO_ERROR_INVALID_ARGUMENT);
             }
-            let lane_idx = usize::from(spec.lane);
-            let start = lane_idx * crate::traits::primitives::MAX_ATTENTION_HEADS;
-            let end = start + crate::traits::primitives::MAX_ATTENTION_HEADS;
-            self.slot_phase_bank.data[start..end].copy_from_slice(&spec.phases);
-            self.slot_weights[lane_idx] = branchless_relu_f32(spec.weight);
-            updated = updated.saturating_add(1);
+            match spec.placement {
+                WorkbenchLanePlacement::Explicit { lane, .. } => {
+                    if usize::from(lane) >= MAX_ATTRACTOR_DOMAINS {
+                        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+                    }
+                    let bit = 1u8 << lane;
+                    if spec.is_pinned() {
+                        sim_pinned |= bit;
+                    } else {
+                        sim_pinned &= !bit;
+                    }
+                }
+                WorkbenchLanePlacement::AutoFree => {
+                    if sim_pinned == 0xFF {
+                        return Err(GCSO_ERROR_ACTION_HUB_FULL);
+                    }
+                    if spec.is_pinned() {
+                        sim_pinned |= 1u8 << (!sim_pinned).trailing_zeros();
+                    }
+                }
+            }
             idx += 1;
         }
-        self.slot_enabled_mask = enable_mask;
+
+        let _ = self.release_unpinned_lanes();
+        let mut updated = 0u8;
+        let mut load_idx = 0usize;
+        while load_idx < specs.len() {
+            let _lane = self.allocate_workbench_lane(&specs[load_idx])?;
+            updated = updated.saturating_add(1);
+            load_idx += 1;
+        }
         Ok(updated)
     }
 
@@ -1588,9 +2031,12 @@ impl ActionHubEngine {
             | extra_flags;
         trail_inout.sync_flags_with_current_ptr();
 
-        // Fold coupled working-lane phase profile from `slot_phase_bank[target_slot]` if enabled and non-zero:
+        // Fold coupled working-lane phase profile from `slot_phase_bank[target_slot]` if enabled,
+        // non-sandboxed, and non-zero:
         let masked_target_slot = target_slot & ATTRACTOR_SLOT_ID_MASK;
-        if ((self.slot_enabled_mask >> masked_target_slot) & 1) != 0 {
+        if ((self.slot_enabled_mask >> masked_target_slot) & 1) != 0
+            && ((self.slot_sandbox_mask >> masked_target_slot) & 1) == 0
+        {
             // SAFETY: `self.slot_phase_bank` is 64B-aligned and `masked_target_slot < 8`.
             let slot_w = unsafe {
                 &*(self
@@ -2076,6 +2522,7 @@ impl PointerActionHub for ActionHubEngine {
         self.last_entropy_h_tilde = 0.0;
         self.last_anomaly_severity = 0.0;
         self.last_decision = StigmergicActionDecision::PassiveSidecar as u8;
+        let _ = self.release_unpinned_lanes();
         Ok(())
     }
 
@@ -2142,6 +2589,7 @@ impl PointerActionHub for ActionHubEngine {
                     as *mut [u64; NUM_STIGMERGIC_GRANULES])
             };
             swar_or_avx2_q7_add_sat_words_64(w, &[splat; NUM_STIGMERGIC_GRANULES]);
+            self.slot_enabled_mask |= 1u8 << slot_idx;
         }
         Ok(())
     }
@@ -2205,6 +2653,21 @@ impl PointerActionHub for ActionHubEngine {
     #[inline(always)]
     fn workbench_lane_mask(&self) -> u8 {
         self.slot_enabled_mask
+    }
+
+    #[inline(always)]
+    fn workbench_repulsion_mask(&self) -> u8 {
+        self.slot_repulsion_mask
+    }
+
+    #[inline(always)]
+    fn workbench_sandbox_mask(&self) -> u8 {
+        self.slot_sandbox_mask
+    }
+
+    #[inline(always)]
+    fn workbench_pinned_mask(&self) -> u8 {
+        self.slot_pinned_mask
     }
 
     #[inline]
@@ -2402,6 +2865,12 @@ const _: () = {
     assert!(offset_of!(ActionHubEngine, ledger_slot) == 2560);
     assert!(offset_of!(ActionHubEngine, bloom_filter) == 2624);
     assert!(offset_of!(ActionHubEngine, thresholds) == 2688);
+    assert!(offset_of!(ActionHubEngine, slot_enabled_mask) == 2810);
+    assert!(offset_of!(ActionHubEngine, last_decision) == 2811);
+    assert!(offset_of!(ActionHubEngine, slot_pinned_mask) == 2812);
+    assert!(offset_of!(ActionHubEngine, slot_repulsion_mask) == 2813);
+    assert!(offset_of!(ActionHubEngine, slot_sandbox_mask) == 2814);
+    assert!(offset_of!(ActionHubEngine, reserved_align128) == 2815);
 
     const fn assert_action_hub_bounds<
         T: ActionHub
@@ -2655,5 +3124,283 @@ mod tests {
         assert!(chain_coh > 0.95);
         assert_eq!(chain_rep.dominant_anchor_id, 777);
         assert!(hub.trails[1].stigmergic_density > 1.1);
+    }
+
+    #[test]
+    fn test_workbench_free_by_default_allocator_pin_evict_decay_and_sandbox() {
+        let mut hub = ActionHubEngine::new();
+        assert_eq!(hub.active_workbench_lane_mask(), 0x00);
+        assert_eq!(hub.workbench_pinned_mask(), 0x00);
+        assert_eq!(hub.workbench_repulsion_mask(), 0x00);
+        assert_eq!(hub.workbench_sandbox_mask(), 0x00);
+        assert_eq!(hub.free_workbench_lane_mask(), 0xFF);
+        assert_eq!(hub.workbench_utilization_count(), 0);
+        assert_eq!(hub.slot_weights, [0.0; MAX_ATTRACTOR_DOMAINS]);
+
+        // Deterministic AutoFree allocation fills physical lanes 0..=7 in ascending order.
+        let mut allocated = [0u8; MAX_ATTRACTOR_DOMAINS];
+        for (i, slot) in allocated.iter_mut().enumerate() {
+            let weight = 0.25 + (i as f32) * 0.25;
+            *slot = hub
+                .allocate_workbench_lane(&WorkbenchSlotSpec::auto_free(
+                    weight,
+                    [(i as i8) + 1; MAX_ATTENTION_HEADS],
+                ))
+                .unwrap();
+            assert_eq!(*slot, i as u8);
+        }
+        assert_eq!(hub.active_workbench_lane_mask(), 0xFF);
+        assert_eq!(hub.workbench_utilization_count(), 8);
+        assert_eq!(hub.free_workbench_lane_mask(), 0x00);
+
+        // Pin lowest-weight lane 0: overflow AutoFree skips pinned lane 0 and evicts lane 1 (0.50).
+        hub.pin_workbench_lane(0, true).unwrap();
+        assert_eq!(hub.workbench_pinned_mask(), 0x01);
+        let evicted_lane = hub
+            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_repulsion(
+                1.25,
+                [-12; MAX_ATTENTION_HEADS],
+            ))
+            .unwrap();
+        assert_eq!(evicted_lane, 1);
+        assert_eq!(hub.workbench_repulsion_mask(), 1 << 1);
+        assert_eq!(hub.slot_phase_bank.data[0], 1);
+        assert_eq!(hub.slot_phase_bank.data[MAX_ATTENTION_HEADS], -12);
+
+        // Pin all 8 lanes -> AutoFree returns GCSO_ERROR_ACTION_HUB_FULL without mutating.
+        for lane in 0..MAX_ATTRACTOR_DOMAINS as u8 {
+            hub.pin_workbench_lane(lane, true).unwrap();
+        }
+        assert_eq!(
+            hub.allocate_workbench_lane(&WorkbenchSlotSpec::auto_free(
+                1.0,
+                [4; MAX_ATTENTION_HEADS]
+            )),
+            Err(GCSO_ERROR_ACTION_HUB_FULL)
+        );
+
+        // Unpin lanes 1..=7, keep lane 0 pinned, then release_unpinned_lanes keeps only lane 0.
+        for lane in 1..MAX_ATTRACTOR_DOMAINS as u8 {
+            hub.pin_workbench_lane(lane, false).unwrap();
+        }
+        let released = hub.release_unpinned_lanes();
+        assert_eq!(released, 7);
+        assert_eq!(hub.active_workbench_lane_mask(), 0x01);
+        assert_eq!(hub.workbench_pinned_mask(), 0x01);
+        assert_eq!(hub.workbench_repulsion_mask(), 0x00);
+        assert_eq!(hub.slot_phase_bank.data[MAX_ATTENTION_HEADS], 0);
+
+        // Allocate sandbox & standard unpinned lanes, verify decay_and_reclaim preserves pinned lane 0.
+        let std_lane = hub
+            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_free(
+                0.80,
+                [16; MAX_ATTENTION_HEADS],
+            ))
+            .unwrap();
+        let sb_lane = hub
+            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(
+                0.20,
+                [32; MAX_ATTENTION_HEADS],
+            ))
+            .unwrap();
+        assert_eq!(std_lane, 1);
+        assert_eq!(sb_lane, 2);
+        assert_eq!(hub.workbench_sandbox_mask(), 1 << 2);
+
+        let reclaimed = hub.decay_and_reclaim_workbench_lanes(0.50, 0.25);
+        assert_eq!(reclaimed, 1);
+        assert_eq!(hub.active_workbench_lane_mask(), (1 << 0) | (1 << 1));
+        assert_eq!(hub.workbench_sandbox_mask(), 0);
+        assert!((hub.slot_weights[0] - 0.25).abs() < 1e-6);
+        assert!((hub.slot_weights[1] - 0.40).abs() < 1e-6);
+
+        // Allocate sandbox lane again -> promote_sandbox_lane clears sandbox bit in-place;
+        // release_sandbox_lanes prunes unpinned sandbox lanes.
+        let sb2 = hub
+            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(
+                0.60,
+                [24; MAX_ATTENTION_HEADS],
+            ))
+            .unwrap();
+        assert_eq!(sb2, 2);
+        assert!(hub.promote_sandbox_lane(sb2).unwrap());
+        assert_eq!(hub.workbench_sandbox_mask(), 0);
+        assert_ne!(hub.active_workbench_lane_mask() & (1 << sb2), 0);
+
+        let sb3 = hub
+            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(
+                0.60,
+                [28; MAX_ATTENTION_HEADS],
+            ))
+            .unwrap();
+        assert_eq!(sb3, 3);
+        assert_eq!(hub.release_sandbox_lanes(), 1);
+        assert_eq!(hub.active_workbench_lane_mask() & (1 << sb3), 0);
+    }
+
+    #[test]
+    fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
+        use crate::traits::gateway::{
+            AutonomousCoreLayerStack, CoreLayerEvalContext, EpistemicHorizonReading,
+            LiminalBoundaryDelta, StigmergicScaleGranularity, StigmergicVennSerendipityReport,
+        };
+        use crate::traits::primitives::{ACTION_MODE_DPSR_STEER, ACTION_MODE_PHASE_REPULSE};
+        use crate::traits::rope::{RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget};
+
+        struct Geom;
+        impl RopeSteeringTarget for Geom {
+            fn rope_geometry(&self) -> RopeGeometryDescriptor {
+                RopeGeometryDescriptor {
+                    head_dim: 8,
+                    num_heads: MAX_ATTENTION_HEADS,
+                    rotary_dim: 8,
+                    layout: RopePairLayout::Interleaved,
+                }
+            }
+        }
+
+        struct MockSignal {
+            flags: u8,
+        }
+        impl CausalProvenanceSignal for MockSignal {
+            fn causal_provenance_bits(&self) -> u32 {
+                CAUSAL_AXIS_OBJECTIVE_FACT
+            }
+        }
+        impl ManifoldGatewaySignal for MockSignal {
+            fn synthesize_gateway_frame(&self) -> GatewayFrame {
+                GatewayFrame {
+                    effective_energy: 1.0,
+                    ripa_clamp_rad: DEFAULT_RIPA_CLAMP_MAX_RAD,
+                    qdps_min_step_rad: 0.01,
+                    effective_inv_temp: 1.0,
+                    fact_persona_coherence: 1.0,
+                    active_head_count: MAX_ATTENTION_HEADS as u16,
+                    action_mode_flags: self.flags,
+                    ..GatewayFrame::default()
+                }
+            }
+        }
+
+        let mut hub = ActionHubEngine::with_dimensions_and_thresholds(
+            8,
+            MAX_ATTENTION_HEADS as u32,
+            16,
+            StigmergicThresholds::new(),
+        )
+        .unwrap();
+        // Physical lane 0 = standard, physical lane 1 = repulsion, physical lane 2 = sandbox.
+        assert_eq!(
+            hub.allocate_workbench_lane(&WorkbenchSlotSpec::auto_free(
+                1.0,
+                [20; MAX_ATTENTION_HEADS]
+            ))
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            hub.allocate_workbench_lane(&WorkbenchSlotSpec::auto_repulsion(
+                1.0,
+                [-40; MAX_ATTENTION_HEADS]
+            ))
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            hub.allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(
+                1.0,
+                [40; MAX_ATTENTION_HEADS]
+            ))
+            .unwrap(),
+            2
+        );
+
+        let stack = AutonomousCoreLayerStack::new();
+        let delta = LiminalBoundaryDelta::default();
+        let horizon = EpistemicHorizonReading::default();
+        let venn = StigmergicVennSerendipityReport {
+            venn_core_mask: 0x0F,
+            void_exterior_mask: 0xF0,
+            ..StigmergicVennSerendipityReport::default()
+        };
+        let core_ctx = Some(CoreLayerEvalContext {
+            stack: &stack,
+            delta: &delta,
+            horizon: &horizon,
+            venn: &venn,
+        });
+        let thresh = StigmergicThresholds::new();
+
+        // 1. Normal mode: lane 0 acts on granules 0..4 (+10), sandbox lane 2 acts ONLY on
+        //    void granules 4..8 (+20) without polluting venn_core_mask, repulsion lane 1 is idle.
+        let mut ledger = gcso_ledger_slot_t::default();
+        let mut trail = gcso_pointer_trail_t::default();
+        let _ = hub
+            .orchestrate_gateway_layer_with_scale_and_core_layers_safe(
+                &MockSignal {
+                    flags: ACTION_PRESET_EXPRESS_PHASE,
+                },
+                &Geom,
+                core_ctx,
+                &thresh,
+                StigmergicScaleGranularity::PointerBit,
+                0.30,
+                &mut ledger,
+                &mut trail,
+                128,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(trail.accumulated_phase_delta[0], 10);
+        assert_eq!(trail.accumulated_phase_delta[40], 20);
+
+        // 2. Repulsion mode: ONLY repulsion lane 1 acts on granules 0..4 (-20); lane 0 & sandbox 2 are idle.
+        let mut trail_rep = gcso_pointer_trail_t::default();
+        let _ = hub
+            .orchestrate_gateway_layer_with_scale_and_core_layers_safe(
+                &MockSignal {
+                    flags: ACTION_MODE_DPSR_STEER | ACTION_MODE_PHASE_REPULSE,
+                },
+                &Geom,
+                core_ctx,
+                &thresh,
+                StigmergicScaleGranularity::PointerBit,
+                0.30,
+                &mut ledger,
+                &mut trail_rep,
+                128,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(trail_rep.accumulated_phase_delta[0], -20);
+        assert_eq!(trail_rep.accumulated_phase_delta[40], 0);
+
+        // 3. Promote sandbox lane 2 -> now contributes into venn_core_mask granules 0..4 (+10 + +20 = +30).
+        assert!(hub.promote_sandbox_lane(2).unwrap());
+        let mut trail_prom = gcso_pointer_trail_t::default();
+        let _ = hub
+            .orchestrate_gateway_layer_with_scale_and_core_layers_safe(
+                &MockSignal {
+                    flags: ACTION_PRESET_EXPRESS_PHASE,
+                },
+                &Geom,
+                core_ctx,
+                &thresh,
+                StigmergicScaleGranularity::PointerBit,
+                0.30,
+                &mut ledger,
+                &mut trail_prom,
+                128,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(trail_prom.accumulated_phase_delta[0], 30);
+        assert_eq!(trail_prom.accumulated_phase_delta[40], 0);
     }
 }

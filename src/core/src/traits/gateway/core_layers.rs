@@ -22,7 +22,7 @@ use super::epistemic::{EpistemicHorizonReading, LiminalApertureField, RelativeAt
 use super::*;
 use crate::crystal::DissipativeOverflowReport;
 use crate::traits::primitives::{
-    ATTRACTOR_SLOT_CUSTOM_6, ATTRACTOR_SLOT_CUSTOM_7, ATTRACTOR_SLOT_USER_CONTEXT,
+    ATTRACTOR_SLOT_CRYSTALLIZED, ATTRACTOR_SLOT_USER_CONTEXT, ATTRACTOR_SLOT_USER_INTENT,
     MAX_ATTRACTOR_DOMAINS, TAG_ACTION_MODE_MASK, compute_crc32_ieee, swar_q7_avg_round_x8,
     swar_u8_mean_round_x8,
 };
@@ -571,7 +571,7 @@ pub struct EgoIntentAxes {
     pub synergy_q7: i8,
     /// Stagnation-breaking perturbation drive when boundaries freeze (`-127..=127`, `offset 7`).
     pub vitality_q7: i8,
-    /// Bitmask of favored attractor slots (`0..=7`, `offset 8`).
+    /// Bitmask of favored 3-bit semantic provenance labels (`0..=7`, `offset 8`).
     pub preferred_slot_mask: u8,
     /// 8-bit mask of SWAR granules prioritized by Ego (`offset 9`).
     pub active_granule_bias_mask: u8,
@@ -880,8 +880,8 @@ impl EgoIntentAxes {
         slot_mask |= branchless_select_u8(
             transgress_cues > 0,
             (1u8 << ATTRACTOR_SLOT_USER_CONTEXT)
-                | (1u8 << ATTRACTOR_SLOT_CUSTOM_6)
-                | (1u8 << ATTRACTOR_SLOT_CUSTOM_7),
+                | (1u8 << ATTRACTOR_SLOT_USER_INTENT)
+                | (1u8 << ATTRACTOR_SLOT_CRYSTALLIZED),
             0,
         );
         self.preferred_slot_mask = slot_mask;
@@ -916,7 +916,7 @@ pub struct LiminalEgoField {
     pub trait_floor_bias_q7: [i8; NUM_LIMINAL_APERTURE_CHANNELS],
     /// Signed per-channel bias applied to Layer 0 `aperture_gain_q7` during intervention (`offset 16..24`).
     pub trait_gain_bias_q7: [i8; NUM_LIMINAL_APERTURE_CHANNELS],
-    /// Signed per-slot affinity preference across the 8 attractor domains (`offset 24..32`).
+    /// Signed per-label affinity preference across the 8 semantic provenance slots (`0..=7`, `offset 24..32`).
     pub slot_affinity_bias_q7: [i8; MAX_ATTRACTOR_DOMAINS],
     /// Per-granule autonomy weight (`0..=127`) scaling orbital/sovereign intervention (`offset 32..40`).
     pub granule_autonomy_q7: [u8; NUM_STIGMERGIC_GRANULES],
@@ -1159,13 +1159,13 @@ impl LiminalEgoField {
             + ((trans_val.max(0) * 32) >> 7))
             .clamp(-32, 32) as i8;
 
-        // Per-slot affinity preferences
+        // Per-semantic-label affinity preferences
         let persona_idx = usize::from(ATTRACTOR_SLOT_PERSONA);
         let fact_idx = usize::from(ATTRACTOR_SLOT_KNOWLEDGE);
         let guard_idx = usize::from(ATTRACTOR_SLOT_REPULSION);
         let ctx_idx = usize::from(ATTRACTOR_SLOT_USER_CONTEXT);
-        let custom6_idx = usize::from(ATTRACTOR_SLOT_CUSTOM_6);
-        let custom7_idx = usize::from(ATTRACTOR_SLOT_CUSTOM_7);
+        let user_intent_idx = usize::from(ATTRACTOR_SLOT_USER_INTENT);
+        let crystallized_idx = usize::from(ATTRACTOR_SLOT_CRYSTALLIZED);
 
         self.slot_affinity_bias_q7[persona_idx] = (i32::from(self.slot_affinity_bias_q7[persona_idx])
             + ((dev_pos * 72 + aut_pos * 56) >> 7))
@@ -1179,12 +1179,14 @@ impl LiminalEgoField {
         self.slot_affinity_bias_q7[ctx_idx] = (i32::from(self.slot_affinity_bias_q7[ctx_idx])
             + ((trans_val.max(0) * 48) >> 7))
             .clamp(-120, 120) as i8;
-        self.slot_affinity_bias_q7[custom6_idx] = (i32::from(self.slot_affinity_bias_q7[custom6_idx])
-            + ((trans_val.max(0) * 64) >> 7))
-            .clamp(-120, 120) as i8;
-        self.slot_affinity_bias_q7[custom7_idx] = (i32::from(self.slot_affinity_bias_q7[custom7_idx])
-            + ((trans_val.max(0) * 72 + aut_pos * 32) >> 7))
-            .clamp(-120, 120) as i8;
+        self.slot_affinity_bias_q7[user_intent_idx] =
+            (i32::from(self.slot_affinity_bias_q7[user_intent_idx])
+                + ((trans_val.max(0) * 64) >> 7))
+                .clamp(-120, 120) as i8;
+        self.slot_affinity_bias_q7[crystallized_idx] =
+            (i32::from(self.slot_affinity_bias_q7[crystallized_idx])
+                + ((trans_val.max(0) * 72 + aut_pos * 32) >> 7))
+                .clamp(-120, 120) as i8;
 
         // Incorporate explicit preferred slot mask bias when supplied by DSL / custom axes.
         let mut s_idx = 0usize;

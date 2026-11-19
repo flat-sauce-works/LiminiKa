@@ -78,35 +78,66 @@ pub const LEDGER_HISTORY_LEN: usize = 8;
 pub const GCSO_SNAPSHOT_MAGIC_U32: u32 = 0x4F53_4347;
 
 // ===================================================================
-// 2. Attractor Slot IDs & 8x8 Cross-Slot Coupling Matrix Primitives
+// 2. Semantic Attractor Provenance IDs, Workbench Pool & 8x8 Coupling
 // ===================================================================
 
-/// Attractor Domain Slot 0: Primary System Baseline & Core Identity Anchor.
+/// Semantic Provenance Label 0: Primary System Baseline & Core Identity Anchor (`0`).
+///
+/// Decoupled from physical workbench register lane indices (`0..=7`).
 pub const ATTRACTOR_SLOT_SYSTEM_BASELINE: u8 = 0;
 
-/// Attractor Domain Slot 1: Character Persona & Emotional Style Attractor.
+/// Semantic Provenance Label 1: Character Persona & Emotional Style Attractor (`1`).
+///
+/// Decoupled from physical workbench register lane indices (`0..=7`).
 pub const ATTRACTOR_SLOT_PERSONA: u8 = 1;
 
-/// Attractor Domain Slot 2: Factual Knowledge & World Lore Anchor.
+/// Semantic Provenance Label 2: Factual Knowledge & World Lore Anchor (`2`).
+///
+/// Decoupled from physical workbench register lane indices (`0..=7`).
 pub const ATTRACTOR_SLOT_KNOWLEDGE: u8 = 2;
 
-/// Attractor Domain Slot 3: Phase-Conjugate Anti-Hallucination Repulsion Field ($-\boldsymbol{\Delta\theta}$).
+/// Semantic Provenance Label 3: Phase-Conjugate Anti-Hallucination Repulsion Field (`3`, $-\boldsymbol{\Delta\theta}$).
+///
+/// Decoupled from physical workbench register lane indices (`0..=7`).
 pub const ATTRACTOR_SLOT_REPULSION: u8 = 3;
 
-/// Attractor Domain Slot 4: Dynamic User Context & Episodic Dialogue Memory.
+/// Semantic Provenance Label 4: Dynamic User Context & Episodic Dialogue Memory (`4`).
+///
+/// Decoupled from physical workbench register lane indices (`0..=7`).
 pub const ATTRACTOR_SLOT_USER_CONTEXT: u8 = 4;
 
-/// Attractor Domain Slot 5: User-Defined Custom Attractor Slot 5 (e.g., Live Visual Co-Watching).
-pub const ATTRACTOR_SLOT_CUSTOM_5: u8 = 5;
+/// Semantic Provenance Label 5: Temporal / Visual Co-Watching Horizon Attractor (`5`).
+///
+/// Decoupled from physical workbench register lane indices (`0..=7`).
+pub const ATTRACTOR_SLOT_TEMPORAL: u8 = 5;
 
-/// Attractor Domain Slot 6: User-Defined Custom Attractor Slot 6 (e.g., Mood / Circadian Drift).
-pub const ATTRACTOR_SLOT_CUSTOM_6: u8 = 6;
+/// Semantic Provenance Label 6: User Intent / Circadian Drift Attractor (`6`).
+///
+/// Decoupled from physical workbench register lane indices (`0..=7`).
+pub const ATTRACTOR_SLOT_USER_INTENT: u8 = 6;
 
-/// Attractor Domain Slot 7: User-Defined Custom Attractor Slot 7 (e.g., Workshop Extension Trigger).
-pub const ATTRACTOR_SLOT_CUSTOM_7: u8 = 7;
+/// Semantic Provenance Label 7: Crystallized Macro-Basin / Dynamic Extension Provenance (`7`).
+///
+/// Decoupled from physical workbench register lane indices (`0..=7`).
+pub const ATTRACTOR_SLOT_CRYSTALLIZED: u8 = 7;
 
-/// Bitmask isolating a valid 3-bit Attractor Domain Slot ID (`0..=7`).
+/// Bitmask isolating a valid 3-bit Semantic Provenance / Attractor Slot ID (`0..=7`).
 pub const ATTRACTOR_SLOT_ID_MASK: u8 = 0x07;
+
+/// Number of anonymous physical lanes in the 8-lane working phase workbench (`8`).
+pub const WORKBENCH_LANE_COUNT: usize = MAX_ATTRACTOR_DOMAINS;
+
+/// Sentinel lane selector requesting deterministic automatic allocation from the free workbench pool (`0xFF`).
+pub const WORKBENCH_LANE_AUTO: u8 = 0xFF;
+
+/// Workbench lane attribute bit: lane is explicitly pinned and exempt from automatic release or eviction (`bit 0`).
+pub const WORKBENCH_LANE_FLAG_PINNED: u8 = 1 << 0;
+
+/// Workbench lane attribute bit: lane holds a phase-conjugate anti-hallucination repulsion profile (`bit 1`).
+pub const WORKBENCH_LANE_FLAG_REPULSION: u8 = 1 << 1;
+
+/// Workbench lane attribute bit: lane holds an isolated hypothesis acting only on exterior/serendipity granules (`bit 2`).
+pub const WORKBENCH_LANE_FLAG_SANDBOX: u8 = 1 << 2;
 
 // ===================================================================
 // 2b. Liminal Cognitive Aperture Masks (Type-Level Horizon Boundaries)
