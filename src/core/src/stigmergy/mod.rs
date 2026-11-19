@@ -54,7 +54,7 @@ pub const MAX_STIGMERGIC_DENSITY: f32 = 16.0;
 /// Maximum macro attractor pull force ceiling ($F_{\mathrm{pull},\max} = 64.0$).
 pub const MAX_ATTRACTOR_PULL_FORCE: f32 = 64.0;
 
-/// Trail flag bit (`0x01`): Inline DPSR phase steering is active on this trail.
+/// Trail flag bit (`0x01`): Inline phase steering is active on this trail.
 pub const TRAIL_FLAG_PHASE_STEER_ACTIVE: u32 = 1 << 0;
 /// Trail flag bit (`0x02`): Phase-Conjugate Attractor Repulsion ($-\boldsymbol{\Delta\theta}$) was triggered.
 pub const TRAIL_FLAG_REPULSION_ACTIVE: u32 = 1 << 1;
@@ -79,7 +79,7 @@ pub const TRAIL_FLAG_PHEROMONE_RISING: u32 = 1 << 16;
 
 /// FastPathLedger telemetry metric bit (`0x01`): Fast-path bypass shortcut hit in `gcso_ledger_slot_t`.
 pub const LEDGER_METRIC_FAST_PATH_HIT: u8 = 1 << 0;
-/// FastPathLedger telemetry metric bit (`0x02`): Inline DPSR/RIPA phase steering applied.
+/// FastPathLedger telemetry metric bit (`0x02`): Inline `PhaseSteering`/`PhaseClamp` phase steering applied.
 pub const LEDGER_METRIC_PHASE_STEERED: u8 = 1 << 1;
 /// FastPathLedger telemetry metric bit (`0x04`): Contrastive Phase Bloom Filter repulsion triggered.
 pub const LEDGER_METRIC_REPULSION_APPLIED: u8 = 1 << 2;

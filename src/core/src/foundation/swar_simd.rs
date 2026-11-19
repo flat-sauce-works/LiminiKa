@@ -294,7 +294,7 @@ pub(crate) const fn swar_q7_phase_step_filter_with_thresh_x8(
     packed & keep_mask & valid_step_mask
 }
 
-/// True bit-parallel SWAR 8-lane QDPS discrete phase step cutoff filter in strictly constant time (`0` branches).
+/// True bit-parallel SWAR 8-lane discrete phase-step cutoff filter (`PhaseStepFilter`) in strictly constant time (`0` branches).
 #[inline(always)]
 pub const fn swar_q7_phase_step_filter_x8(packed: u64, min_step_q7: u8) -> u64 {
     let thresh_x8 = ((min_step_q7 & 0x7F) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
@@ -302,7 +302,7 @@ pub const fn swar_q7_phase_step_filter_x8(packed: u64, min_step_q7: u8) -> u64 {
     swar_q7_phase_step_filter_with_thresh_x8(packed, thresh_x8, valid_step_mask)
 }
 
-/// Applies the 8-lane SWAR QDPS discrete phase step cutoff filter across 8 register-resident
+/// Applies the 8-lane SWAR discrete phase-step cutoff filter (`PhaseStepFilter`) across 8 register-resident
 /// `u64` SWAR words using a pre-evaluated word-uniformity flag (`w_is_uniform`), returning
 /// `(filtered_words, filtered_is_uniform)`.
 #[inline(always)]
@@ -351,7 +351,7 @@ pub const fn swar_q7_phase_step_filter_words_with_uniform_flag_64(
     (out, is_word_array_uniform_64(&out))
 }
 
-/// Applies the 8-lane SWAR QDPS discrete phase step cutoff filter across all 8 register-resident
+/// Applies the 8-lane SWAR discrete phase-step cutoff filter (`PhaseStepFilter`) across all 8 register-resident
 /// `u64` SWAR words (`64` attention heads) with hoisted `thresh_x8` and `valid_step_mask` in
 /// strictly constant time (`0` data-dependent branches).
 #[inline(always)]
@@ -642,7 +642,7 @@ pub const fn branchless_q7_scale_64(phases: &mut [gcso_q7_t; MAX_ATTENTION_HEADS
     );
 }
 
-/// Applies the 8-lane SWAR QDPS discrete phase step cutoff filter across all 64 attention heads
+/// Applies the 8-lane SWAR discrete phase-step cutoff filter (`PhaseStepFilter`) across all 64 attention heads
 /// in strictly constant time (`0` data-dependent branches) via [`swar_q7_phase_step_filter_words_64`].
 #[inline(always)]
 pub const fn branchless_q7_phase_step_filter_64(
@@ -661,7 +661,7 @@ pub const fn branchless_q7_phase_step_filter_64(
     store_q7_words_64(phases, &out_w);
 }
 
-/// Branchless QDPS discrete phase step filter in the Q7 integer domain (Section 2.3).
+/// Branchless discrete phase-step filter (`PhaseStepFilter`) in the Q7 integer domain (Section 2.3).
 #[inline(always)]
 pub const fn branchless_phase_step_filter_q7(delta: gcso_q7_t, min_step_q7: i32) -> gcso_q7_t {
     let val = delta as i32;
@@ -877,9 +877,9 @@ pub(crate) const fn eval_geodesic_phase_clamp_sincos_q7_fast(
 }
 
 /// Evaluates the $SO(2)$-composed $(\sin(\theta_{\mathrm{base}} + \theta_{\mathrm{pspm}}), \cos(\theta_{\mathrm{base}} + \theta_{\mathrm{pspm}}))$
-/// for a single attention head, using two 1-cycle LUT loads when both RIPA clamps equal
+/// for a single attention head, using two 1-cycle LUT loads when both `PhaseClamp` limits equal
 /// [`DEFAULT_PHASE_CLAMP_MAX_RAD`], or summing the two `tanh`-clamped radian angles and evaluating
-/// `sincos_phase_clamp_poly` **once** instead of twice when custom RIPA clamps are active.
+/// `sincos_phase_clamp_poly` **once** instead of twice when custom `PhaseClamp` limits are active.
 #[inline(always)]
 pub(crate) const fn eval_fused_phase_clamp_subhead_sincos_q7_fast(
     base_q7: gcso_q7_t,

@@ -1,7 +1,7 @@
 // name: src/core/src/foundation/branchless/simd_stats.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Scalar & AVX2 constant-time norm/sum, RIPA clamp, Chebyshev deg-3, Procrustes, and Hodge dual kernels.
+//! Scalar & AVX2 constant-time norm/sum, `PhaseClamp` limit, Chebyshev deg-3, Procrustes, and Hodge dual kernels.
 
 use super::*;
 

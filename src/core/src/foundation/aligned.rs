@@ -1591,9 +1591,9 @@ define_aligned_buffer!(
 // 5. Type Aliases & Standalone Alignment Inspection Functions
 // ===================================================================
 
-/// 16-byte aligned immutable slice wrapper for DPSR phase steering arrays.
+/// 16-byte aligned immutable slice wrapper for phase steering arrays.
 pub type AlignedSlice16<'a, T> = AlignedSlice<'a, T, 16>;
-/// 16-byte aligned mutable slice wrapper for DPSR phase steering arrays.
+/// 16-byte aligned mutable slice wrapper for phase steering arrays.
 pub type AlignedSliceMut16<'a, T> = AlignedSliceMut<'a, T, 16>;
 
 /// 32-byte aligned immutable slice wrapper for SIMD/AVX vectors and tensor buffers.

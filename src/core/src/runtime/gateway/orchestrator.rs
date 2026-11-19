@@ -346,7 +346,7 @@ pub(super) fn prepare_gateway_steering_state<
 /// any type implementing [`PhaseSteering`].
 pub trait GatewayPhaseSteeringExt: PhaseSteering {
     /// Synthesizes any [`ManifoldGatewaySignal`] into a 128-byte [`GatewayFrame`] and register-resident
-    /// phase words, updates `trail_inout`, and executes $SO(2)$-fused RIPA + sub-head router sub-head steering.
+    /// phase words, updates `trail_inout`, and executes $SO(2)$-fused `PhaseClamp` + sub-head router sub-head steering.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if head dimensions, radian clamps, or tensor slices

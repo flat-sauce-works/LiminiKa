@@ -6,7 +6,7 @@
 //! (word-uniform accelerated coherence & circular resultant, register-resident unified-field
 //! folding, Phase-Proximity Gravity manifold folding, zero-hyperparameter resonant pull,
 //! $S^1$ geodesic weighted folding, Online Toroidal $k$-Means M-step centroid updates,
-//! SWAR $S^1$ synergy fusion, Attention $\times$ DPSR phase-interference & Bayesian
+//! SWAR $S^1$ synergy fusion, Attention $\times$ phase-interference & Bayesian
 //! stigmergic score modulation, Limina transition log-probability, and AVX2 64-head
 //! embedding projection), and strictly constant-time subnormal-flushed lockstep AVX2 SIMD kernels.
 //! Base LUTs, IEEE 802.3 CRC32 tables, scalar selectors, and 8-lane SWAR primitives are

@@ -6,12 +6,12 @@
 use super::*;
 
 // ===================================================================
-// 1. Dynamic Phase-Shifted RoPE, RIPA, QDPS & Lazy Unwrapping (`PhaseSteering`)
+// 1. Dynamic Phase-Shifted RoPE, `PhaseClamp`, `PhaseStepFilter` & Lazy Unwrapping (`PhaseSteering`)
 // ===================================================================
 
-/// Core trait for Dynamic Phase-Shifted RoPE (DPSR), Rotational Invariant Phase Anchors (RIPA),
-/// Quantized Discrete Phase Stepping (QDPS), Seam-Free Circular $S^1$ Lazy Phase Unwrapping,
-/// Single-Manifold Unified-Field Phase Steering, Attention $\times$ DPSR Phase-Interference Score
+/// Core trait for dynamic phase-shifted RoPE (`PhaseSteering`), soft-bounded phase clamping (`PhaseClamp`),
+/// discrete phase-step filtering (`PhaseStepFilter`), Seam-Free Circular $S^1$ Lazy Phase Unwrapping,
+/// Single-Manifold Unified-Field Phase Steering, Attention $\times$ Phase-Interference Score
 /// Modulation, Bayesian Pointer-Trail Attention Modulation, and Closed-Form Orthogonal Procrustes
 /// Phase Estimation (**Nano / Micro Level**).
 pub trait PhaseSteering: BranchlessKernel {
@@ -40,7 +40,7 @@ pub trait PhaseSteering: BranchlessKernel {
         Ok((head_dim, num_heads, expected_len))
     }
 
-    /// Applies Dynamic Phase-Shifted RoPE (DPSR) in-place over an arbitrary hardware-aligned
+    /// Applies dynamic phase-shifted RoPE (`PhaseSteering`) in-place over an arbitrary hardware-aligned
     /// tensor slice (`ALIGN` $\ge 32$, power of two).
     ///
     /// # Errors
@@ -68,7 +68,7 @@ pub trait PhaseSteering: BranchlessKernel {
         Ok(())
     }
 
-    /// Applies Dynamic Phase-Shifted RoPE (DPSR) in-place to a single 32B-aligned Query or Key tensor.
+    /// Applies dynamic phase-shifted RoPE (`PhaseSteering`) in-place to a single 32B-aligned Query or Key tensor.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `tensor.len() < head_dim * num_heads` or `phase_deltas.len() < num_heads`.
@@ -112,7 +112,7 @@ pub trait PhaseSteering: BranchlessKernel {
         Ok(())
     }
 
-    /// Applies RIPA soft-bounded phase steering ($\Delta\theta_{\mathrm{safe}} = \theta_{\max} \cdot \tanh(\Delta\theta / \theta_{\max})$)
+    /// Applies soft-bounded (`PhaseClamp`) phase steering ($\Delta\theta_{\mathrm{safe}} = \theta_{\max} \cdot \tanh(\Delta\theta / \theta_{\max})$)
     /// to the upper low-frequency quarter (`rot_dim = ((head_dim >> 2) & !1).max(2)`) of an arbitrary
     /// hardware-aligned tensor (`ALIGN >= 32`, Section 2.2).
     ///
@@ -167,7 +167,7 @@ pub trait PhaseSteering: BranchlessKernel {
         )
     }
 
-    /// Applies RIPA soft-bounded phase steering to the upper $d_{\mathrm{head}}/4$ low-frequency
+    /// Applies soft-bounded (`PhaseClamp`) phase steering to the upper $d_{\mathrm{head}}/4$ low-frequency
     /// channels of a single 32B-aligned tensor (Section 2.2).
     ///
     /// # Errors
@@ -183,7 +183,7 @@ pub trait PhaseSteering: BranchlessKernel {
         self.apply_phase_steering_safe_aligned::<32>(tensor, phase_deltas, max_rad)
     }
 
-    /// Applies RIPA-bounded phase steering directly to a **HalfSplit (NeoX)** tensor
+    /// Applies soft-bounded (`PhaseClamp`) phase steering directly to a **HalfSplit (NeoX)** tensor
     /// (`(x[i], x[i + rotary_dim / 2])`) with optional partial-RoPE boundary `rotary_dim <= head_dim`,
     /// eliminating layout conversion copies on the hot path.
     ///
@@ -221,7 +221,7 @@ pub trait PhaseSteering: BranchlessKernel {
         Ok(())
     }
 
-    /// Applies **Seam-Free $S^1$ Geodesic-Folded RIPA Phase Steering** to the upper $d_{\mathrm{head}}/4$
+    /// Applies **Seam-Free $S^1$ Geodesic-Folded Soft-Bounded Phase Steering** to the upper $d_{\mathrm{head}}/4$
     /// low-frequency channels of a single 32B-aligned tensor.
     ///
     /// # Errors
@@ -252,7 +252,7 @@ pub trait PhaseSteering: BranchlessKernel {
         Ok(())
     }
 
-    /// Applies fused RIPA soft-bounded phase steering to the upper $d_{\mathrm{head}}/4$ low-frequency
+    /// Applies fused soft-bounded (`PhaseClamp`) phase steering to the upper $d_{\mathrm{head}}/4$ low-frequency
     /// channels of both Query and Key tensors simultaneously.
     ///
     /// # Errors
@@ -274,7 +274,7 @@ pub trait PhaseSteering: BranchlessKernel {
         )
     }
 
-    /// Applies fused RIPA soft-bounded phase steering to both Query and Key tensors over any alignment `ALIGN >= 32`.
+    /// Applies fused soft-bounded (`PhaseClamp`) phase steering to both Query and Key tensors over any alignment `ALIGN >= 32`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if `ALIGN < 32`, or [`GCSO_ERROR_INVALID_ARGUMENT`]
@@ -313,7 +313,7 @@ pub trait PhaseSteering: BranchlessKernel {
         Ok(())
     }
 
-    /// Applies RIPA soft-bounded phase steering gated by `tagged_ptr`'s `ACTION_MODE_PHASE_STEER` bit.
+    /// Applies soft-bounded (`PhaseClamp`) phase steering gated by `tagged_ptr`'s `ACTION_MODE_PHASE_STEER` bit.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `max_rad <= 0.0` or slice lengths are insufficient.
@@ -347,7 +347,7 @@ pub trait PhaseSteering: BranchlessKernel {
         Ok(true)
     }
 
-    /// Applies fused RIPA soft-bounded phase steering to both Query and Key tensors gated by `tagged_ptr`.
+    /// Applies fused soft-bounded (`PhaseClamp`) phase steering to both Query and Key tensors gated by `tagged_ptr`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `query_tensor` and `key_tensor` alias, `max_rad <= 0.0`,
@@ -695,7 +695,7 @@ impl RopeSteeringTarget for RopeGeometryDescriptor {
 /// Unifies `Interleaved` and `HalfSplit` (plus partial `rotary_dim`) dispatch behind a single
 /// zero-allocation trait interface shared by both Rust adapters and the C-ABI boundary.
 pub trait PhaseSteeringGeometryExt: PhaseSteering {
-    /// Applies RIPA soft-bounded phase steering according to `target.rope_geometry()`.
+    /// Applies soft-bounded (`PhaseClamp`) phase steering according to `target.rope_geometry()`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `target` geometry, `max_rad`, or slice lengths

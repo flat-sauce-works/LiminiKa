@@ -36,7 +36,7 @@ impl HorizonDwellState {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct HorizonTriggerInput {
-    /// Active EDBC branch mode (`0` = normal, `1` = bifurcation, `2` = repulsion).
+    /// Active `EntropyController` branch mode (`0` = normal, `1` = bifurcation, `2` = repulsion).
     pub entropy_gate_mode: u32,
     /// Latest moving Z-score normalized attention entropy ($\tilde{H}$).
     pub moving_z_entropy: f32,
@@ -386,7 +386,7 @@ impl Default for HorizonEscalationRequest {
 }
 
 /// Cold-path boundary trait allowing the orchestrator to pull external phases (e.g. from NVMe
-/// `.gcso` `ZiMMS` containers or `std` corpus recall) into an anonymous workbench lane when local
+/// `.gcso` `MappedStorage` containers or `std` corpus recall) into an anonymous workbench lane when local
 /// Hot-Path resources cannot resolve destabilization.
 pub trait HorizonEscalationProvider {
     /// Attempts to populate `slot_phase_out` with external phases matching `req`, returning

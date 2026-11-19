@@ -352,10 +352,10 @@ pub(crate) const fn branchless_q7_default_gravity_from_diff_u8(
 pub(crate) const Q7_FULL_COS_I16_REF: &[i16; 256] = &Q7_FULL_COS_I16_LUT.0;
 /// Promoted `.rodata` reference to the 64B-aligned 256-entry SWAR-packed biased Q14 `(sin, cos)` table.
 pub(crate) const Q7_FULL_SINCOS_BIASED_U64_REF: &[u64; 256] = &Q7_FULL_SINCOS_BIASED_U64_LUT.0;
-/// Promoted `.rodata` reference to the 64B-aligned 256-entry default RIPA `(sin, cos)` table.
+/// Promoted `.rodata` reference to the 64B-aligned 256-entry default `PhaseClamp` `(sin, cos)` table.
 pub(crate) const Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF: &[(f32, f32); 256] =
     &Q7_DEFAULT_PHASE_CLAMP_SINCOS_LUT_256.0;
-/// Promoted `.rodata` reference to the 64B-aligned 256-entry geodesic default RIPA `(sin, cos)` table.
+/// Promoted `.rodata` reference to the 64B-aligned 256-entry geodesic default `PhaseClamp` `(sin, cos)` table.
 pub(crate) const Q7_GEODESIC_DEFAULT_PHASE_CLAMP_SINCOS_REF: &[(f32, f32); 256] =
     &Q7_GEODESIC_DEFAULT_PHASE_CLAMP_SINCOS_LUT_256.0;
 

@@ -445,7 +445,7 @@ pub struct EgoLayerTelemetry {
     pub unaligned_intervention_count: u64,
 }
 
-/// Vertical `+ System` execution spine telemetry: cross-layer EDBC, QoS, mode switches, and Slow-Loop state.
+/// Vertical `+ System` execution spine telemetry: cross-layer `EntropyController`, QoS, mode switches, and Slow-Loop state.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SystemSpineTelemetry {
@@ -455,9 +455,9 @@ pub struct SystemSpineTelemetry {
     pub continuous_standard_steps: u64,
     /// Steps experiencing `System` QoS throttling.
     pub qos_throttle_events: u64,
-    /// Steps in EDBC bifurcation branch mode (`active_branch_mode == 1`).
+    /// Steps in `EntropyController` bifurcation branch mode (`active_branch_mode == 1`).
     pub entropy_gate_bifurcation_events: u64,
-    /// Steps in EDBC repulsion branch mode (`active_branch_mode >= 2`).
+    /// Steps in `EntropyController` repulsion branch mode (`active_branch_mode >= 2`).
     pub entropy_gate_repulsion_events: u64,
     /// Automatic or manual upward verbosity transitions.
     pub mode_promotions: u64,

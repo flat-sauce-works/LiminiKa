@@ -2042,7 +2042,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
 
 impl CognitiveTrajectoryLedger {
     /// Evaluates this trajectory circuit against `(frm_w, trail_w)` at `scale` and modulates
-    /// `frame`'s PSPM head allocation, sub-head gains, EDBC inverse-temperature scale, and
+    /// `frame`'s `SubheadRouter` head allocation, sub-head gains, `EntropyController` inverse-temperature scale, and
     /// anti-resonance guard severity in place without dataset-specific constants.
     ///
     /// When the trajectory ledger is empty (`trajectory_depth == 0`), `frame` is returned unmodified.

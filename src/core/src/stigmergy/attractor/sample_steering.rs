@@ -534,14 +534,14 @@ unsafe impl Pod for AttractorGrowthReport {}
 
 /// Blanket-implemented behavioral trait (`impl<T: EpisodicPhaseSample + ?Sized> EpisodicSampleSteering for T {}`)
 /// that automatically equips every [`EpisodicPhaseSample`] type with:
-/// 1. Direct conversion to SWAR-scaled, QDPS-filtered RoPE phase deltas (`[gcso_q7_t; 64]`),
-/// 2. Direct in-place RIPA RoPE steering of Query/Key tensors via [`PhaseSteering`],
+/// 1. Direct conversion to SWAR-scaled, `PhaseStepFilter`-filtered RoPE phase deltas (`[gcso_q7_t; 64]`),
+/// 2. Direct in-place `PhaseClamp` RoPE steering of Query/Key tensors via [`PhaseSteering`],
 /// 3. Constant-time $S^1$ geodesic resonance absorption into [`gcso_pointer_trail_t`], and
 /// 4. Direct crystallization into a [`Pod`] [`AttractorAnchor`].
 pub trait EpisodicSampleSteering: EpisodicPhaseSample {
     /// Projects `self` onto $SO(2)^{64}$, scales all 64 heads by its bounded mass $\times$ coherence
     /// prior using 8-lane SWAR (`branchless_q7_scale_64`), and filters sub-grid phase jitter via
-    /// 8-lane SWAR QDPS (`branchless_q7_phase_step_filter_64`) in strictly constant time (`0` branches).
+    /// 8-lane SWAR `PhaseStepFilter` (`branchless_q7_phase_step_filter_64`) in strictly constant time (`0` branches).
     #[inline]
     #[must_use]
     fn to_rope_phase_deltas(
@@ -594,7 +594,7 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
         phases
     }
 
-    /// Directly steers `query_tensor` (and optional `key_tensor`) in-place via RIPA soft-clamped
+    /// Directly steers `query_tensor` (and optional `key_tensor`) in-place via `PhaseClamp` soft-clamped
     /// RoPE phase rotation (`PhaseSteering`) using `self` as a behavioral phase sample, returning
     /// the applied 64-head Q7 phase delta vector.
     ///
@@ -845,7 +845,7 @@ pub trait AttractorGrowthCoordinator: AttractorField + PersonaPatcher {
     }
 
     /// End-to-end blanket step that absorbs an [`EpisodicPhaseSample`] into `trail_inout`,
-    /// evaluates unified-field gravitational force to produce a QDPS-filtered RoPE phase delta
+    /// evaluates unified-field gravitational force to produce a `PhaseStepFilter`-filtered RoPE phase delta
     /// vector (`rope_deltas_out: &mut [gcso_q7_t; 64]`), and returns `(growth_report, inv_temp_beta_eff)`.
     ///
     /// # Errors

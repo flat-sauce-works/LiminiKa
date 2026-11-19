@@ -1,12 +1,12 @@
 // name: src/core/src/foundation/rope/kernels.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Core SWAR/AVX2 RoPE rotation, RIPA, SLERP, Procrustes, and Bayesian attention helpers.
+//! Core SWAR/AVX2 RoPE rotation, `PhaseClamp`, SLERP, Procrustes, and Bayesian attention helpers.
 
 use super::*;
 use crate::foundation::branchless::atan2_to_q7_word_x8_simd;
 
-/// Computes the RIPA / sub-head router upper low-frequency rotation dimension
+/// Computes the `PhaseClamp` / sub-head router upper low-frequency rotation dimension
 /// `rot_dim = ((head_dim / 4) & !1).max(2)` (even integer in `2..=head_dim`).
 #[inline(always)]
 #[must_use]
@@ -26,14 +26,14 @@ pub const fn phase_clamp_upper_rot_dim(head_dim: usize) -> usize {
 ///   carries Objective Fact grounding (`CAUSAL_AXIS_OBJECTIVE_FACT`, bit `1`) without contradiction
 ///   or persona override, or when Toroidal $k$-Means concentration is ultra-sharp ($\kappa_c \ge 6.0$),
 ///   preserving high- and mid-frequency syntactic/lexical RoPE channels.
-/// - **Baseline RIPA Aperture ($\frac{1}{4}d_{\mathrm{head}}$)**: Standard upper-quarter rotation
+/// - **Baseline `PhaseClamp` Aperture ($\frac{1}{4}d_{\mathrm{head}}$)**: Standard upper-quarter rotation
 ///   (`phase_clamp_upper_rot_dim(head_dim)`).
 /// - **Expanded Persona / High-Quorum Aperture ($\frac{3}{8}d_{\mathrm{head}}$)**: Selected when
 ///   Subjective Persona grounding (`CAUSAL_AXIS_SUBJECTIVE_PERSONA`, bit `2`) resonates with high
 ///   Micro-Swarm quorum (`quorum_mask.count_ones() >= 6`) and moderate concentration, allowing
 ///   persona voice and cadence to steer mid-frequency syntactic phrasing.
 /// - **Wide Repulsion / Bifurcation Escape Aperture ($\frac{1}{2}d_{\mathrm{head}}$)**: Selected
-///   when Contradiction Guard repulsion (`CAUSAL_AXIS_CONTRADICTION_GUARD`, bit `3`) or an EDBC
+///   when Contradiction Guard repulsion (`CAUSAL_AXIS_CONTRADICTION_GUARD`, bit `3`) or an `EntropyController`
 ///   entropy surge ($\tilde{H} \ge 0.55$) occurs, rotating the upper half of RoPE frequencies to
 ///   escape spurious local minima ($H^1(K; \mathcal{F}) \neq 0$).
 #[inline(always)]
@@ -101,7 +101,7 @@ pub(crate) const fn ptr_has_action_mode(tagged_ptr: gcso_tagged_ptr_t, mode_mask
     (unpack_action_mode_from_tag(tagged_ptr.unpack_tag()) & mode_mask) == mode_mask
 }
 
-/// Resolves `(is_default_ripa_clamp, effective_max_rad, q7_to_norm_scale)` for RIPA steering.
+/// Resolves `(is_default_ripa_clamp, effective_max_rad, q7_to_norm_scale)` for `PhaseClamp` steering.
 #[inline(always)]
 #[must_use]
 pub(crate) const fn resolve_phase_clamp_norm_params(max_rad: f32) -> (bool, f32, f32) {
@@ -781,7 +781,7 @@ pub(crate) fn rotate_phase_clamp_upper_heads_uniform_sincos(
 }
 
 /// Rotates strictly the upper low-frequency quarter `rot_dim = ((head_dim >> 2) & !1).max(2)`
-/// (`[base + head_dim - rot_dim .. base + head_dim]`) of each head in `t_slice` with RIPA clamping,
+/// (`[base + head_dim - rot_dim .. base + head_dim]`) of each head in `t_slice` with `PhaseClamp` limiting,
 /// hoisting `rot_dim == 16 / 32 / 64` specialization outside the head loop and coalescing consecutive
 /// uniform 8-head SWAR cells.
 #[inline(never)]
@@ -941,7 +941,7 @@ pub(super) fn procrustes_q7_half_split_slice(
 }
 
 /// Rotates strictly the upper low-frequency quarter `rot_dim` of a single tensor `t_slice` across
-/// `num_heads` heads using a preselected default RIPA LUT (`Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF` or
+/// `num_heads` heads using a preselected default `PhaseClamp` LUT (`Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF` or
 /// `Q7_GEODESIC_DEFAULT_PHASE_CLAMP_SINCOS_REF`) when `p_slice` is already known to be non-uniform.
 /// Kept `#[inline(never)]` so single-tensor and fused-QK `head_dim == 128` callers share the exact
 /// same 512B Decoded ICache (DSB) loop without `for base_ptr in [q, k]` 2x loop-unroll code bloat.

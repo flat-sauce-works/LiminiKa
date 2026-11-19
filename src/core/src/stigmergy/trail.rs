@@ -2482,7 +2482,7 @@ pub trait ActionHub:
         Ok((bypass_hit, effective_ptr, density, repulsion_active, words))
     }
 
-    /// Filters `raw_words` via 8-lane SWAR QDPS and steers `query_tensor` / `key_tensor` using
+    /// Filters `raw_words` via 8-lane SWAR `PhaseStepFilter` and steers `query_tensor` / `key_tensor` using
     /// caller-validated `(head_dim, num_heads)`.
     #[inline(always)]
     fn steer_phase_step_words_prevalidated_core(
@@ -2551,8 +2551,8 @@ pub trait ActionHub:
     /// 1. Validates tensor dimensions, `GCSO_RESTRICT` disjointness, and radian thresholds.
     /// 2. Resolves `input_ptr` against `ledger_slot`'s $\mathcal{O}(1)$ shortcut table, steps the
     ///    pointer transition in `trail_out`, and applies [`ContrastivePhaseBloomFilter`] repulsion.
-    /// 3. Filters `trail_out.accumulated_phase_delta` via 8-lane SWAR QDPS and steers
-    ///    `query_tensor` and/or `key_tensor` with RIPA soft-clamping (`ripa_max_rad`).
+    /// 3. Filters `trail_out.accumulated_phase_delta` via 8-lane SWAR `PhaseStepFilter` and steers
+    ///    `query_tensor` and/or `key_tensor` with `PhaseClamp` soft-clamping (`ripa_max_rad`).
     /// 4. Pushes the combined telemetry metric code (`LEDGER_METRIC_*`) into `ledger_slot`.
     ///
     /// Returns the observed Bloom repulsion bucket density (`0..=255`).

@@ -6,7 +6,7 @@
 //! Geometric Cellular Sheaf Orchestrator (GCSO).
 //!
 //! # Key Optimizations & Architectural Guarantees
-//! - **RIPA Upper-Quarter ($d_{\mathrm{head}}/4$) Low-Frequency Slicing**: All RIPA soft-clamped
+//! - **`PhaseClamp` Upper-Quarter ($d_{\mathrm{head}}/4$) Low-Frequency Slicing**: All `PhaseClamp` soft-clamped
 //!   steering kernels (`apply_phase_steering_safe`, `apply_phase_steering_geodesic_safe`,
 //!   `steer_from_swar_words_core_safe`) rotate strictly the upper low-frequency quarter
 //!   `rot_dim = ((head_dim >> 2) & !1).max(2)` (`[base + head_dim - rot_dim .. base + head_dim]`),
@@ -26,11 +26,11 @@
 //!   and `rotate_fused_ripa_pspm_subgroup_words` select `Q7_GEODESIC_DEFAULT_PHASE_CLAMP_SINCOS_REF` or
 //!   `Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF` outside the head loop and index `lut[(slot_q7 as u8) as usize]`
 //!   directly with zero per-head integer folding/scaling arithmetic and zero cache-branch jitter.
-//! - **Single-Evaluation $SO(2)$ Group-Closure RIPA + Sub-Head Router Fusion**: Because both RIPA and sub-head router
+//! - **Single-Evaluation $SO(2)$ Group-Closure `PhaseClamp` + Sub-Head Router Fusion**: Because both `PhaseClamp` and sub-head router
 //!   operate on the upper low-frequency quarter `rot_dim`, `dispatch_fused_phase_clamp_words_and_subhead_profiles_core`
 //!   fuses $\mathbf{R}(\theta_{\mathrm{ripa}})\mathbf{R}(\theta_{\mathrm{pspm}}) = \mathbf{R}(\theta_{\mathrm{ripa}} + \theta_{\mathrm{pspm}})$
 //!   via `eval_fused_phase_clamp_subhead_sincos_q7_fast` (evaluating the trigonometric polynomial once per
-//!   head instead of twice on custom RIPA clamps) and caches consecutive head `(sin, cos)` pairs.
+//!   head instead of twice on custom `PhaseClamp` limits) and caches consecutive head `(sin, cos)` pairs.
 //! - **Zero-Jitter Micro-Swarm Quorum Pre-Pass & Constant-Time Damping**: `steer_from_swar_words_core_safe`
 //!   resolves `quorum_mask` and `unresolved_damping_u7` in a branchless 8-word SWAR pre-pass, and
 //!   [`PhaseSteering::apply_soft_phase_damping`] executes unconditional AVX2 subnormal-flushed scaling.

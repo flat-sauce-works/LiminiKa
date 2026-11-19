@@ -351,13 +351,13 @@ impl AutonomousCoreLayerStack {
 /// Convenient crate-level result type alias for GCSO operations.
 pub type Result<T> = GcsoResult<T>;
 
-/// Default EDBC hysteresis band width ($\delta_{\mathrm{hyst}}$).
+/// Default `EntropyController` hysteresis band width ($\delta_{\mathrm{hyst}}$).
 pub const DEFAULT_ENTROPY_GATE_HYSTERESIS_BAND: f32 = 0.15;
 
 /// Default sliding-window entropy rate flux threshold ($\tau_{\mathrm{flux}}$).
 pub const DEFAULT_ENTROPY_GATE_TAU_FLUX: f32 = 0.50;
 
-/// Default EDBC pitchfork bifurcation Z-score threshold ($\tau_{\mathrm{bifurcation}}$).
+/// Default `EntropyController` pitchfork bifurcation Z-score threshold ($\tau_{\mathrm{bifurcation}}$).
 pub const DEFAULT_ENTROPY_GATE_BIFURCATION_THRESHOLD: f32 = 1.50;
 
 /// Default Contrastive Phase Bloom Filter collision count threshold triggering anti-phase repulsion.
@@ -381,11 +381,11 @@ pub const DEFAULT_SLOT_WEIGHTS: [f32; MAX_ATTRACTOR_DOMAINS] = [0.0; MAX_ATTRACT
 pub struct Config {
     /// Inner raw C-ABI configuration structure (64 bytes, 16-byte aligned).
     pub raw: gcso_config_t,
-    /// Hysteresis band ($\delta_{\mathrm{hyst}}$) for EDBC branch control stabilization.
+    /// Hysteresis band ($\delta_{\mathrm{hyst}}$) for `EntropyController` branch control stabilization.
     pub hysteresis_band: f32,
     /// Tau flux threshold ($\tau_{\mathrm{flux}}$) for sliding-window entropy rate integration.
     pub tau_flux: f32,
-    /// Z-score threshold ($\tau_{\mathrm{bifurcation}}$) triggering EDBC pitchfork bifurcation.
+    /// Z-score threshold ($\tau_{\mathrm{bifurcation}}$) triggering `EntropyController` pitchfork bifurcation.
     pub bifurcation_threshold: f32,
     /// Minimum Bloom filter counter density (`1..=15`) required to trigger anti-phase repulsion.
     pub repulsion_threshold: u8,
@@ -482,7 +482,7 @@ impl Config {
         self
     }
 
-    /// Sets the RIPA soft-bounded phase clamp limit in radians ($\theta_{\max}$).
+    /// Sets the soft-bounded (`PhaseClamp`) limit in radians ($\theta_{\max}$).
     #[inline(always)]
     #[must_use]
     pub const fn with_phase_clamp_max_rad(mut self, ripa_clamp_max_rad: f32) -> Self {
@@ -490,7 +490,7 @@ impl Config {
         self
     }
 
-    /// Sets the QDPS quantization threshold angle in radians ($\Delta\theta_{\mathrm{min\_step}}$).
+    /// Sets the `PhaseStepFilter` quantization threshold angle in radians ($\Delta\theta_{\mathrm{min\_step}}$).
     #[inline(always)]
     #[must_use]
     pub const fn with_phase_step_min_rad(mut self, qdps_min_step_rad: f32) -> Self {
@@ -514,7 +514,7 @@ impl Config {
         self
     }
 
-    /// Sets the Action Hub (SPT) pointer table slot capacity.
+    /// Sets the `ActionHub` pointer table slot capacity.
     #[inline(always)]
     #[must_use]
     pub const fn with_action_hub_capacity(mut self, action_hub_capacity: u32) -> Self {
@@ -546,7 +546,7 @@ impl Config {
         self
     }
 
-    /// Sets the EDBC hysteresis band width ($\delta_{\mathrm{hyst}}$).
+    /// Sets the `EntropyController` hysteresis band width ($\delta_{\mathrm{hyst}}$).
     #[inline(always)]
     #[must_use]
     pub const fn with_hysteresis_band(mut self, hysteresis_band: f32) -> Self {
@@ -562,7 +562,7 @@ impl Config {
         self
     }
 
-    /// Sets the EDBC pitchfork bifurcation threshold ($\tau_{\mathrm{bifurcation}}$).
+    /// Sets the `EntropyController` pitchfork bifurcation threshold ($\tau_{\mathrm{bifurcation}}$).
     #[inline(always)]
     #[must_use]
     pub const fn with_bifurcation_threshold(mut self, bifurcation_threshold: f32) -> Self {
@@ -648,7 +648,7 @@ pub struct OrchestratorStatusSnapshot {
     pub step_counter: u64,
     /// Number of active trails registered in `ActionHubEngine`.
     pub active_trail_count: u32,
-    /// Active EDBC branch mode (`0` = normal, `1` = bifurcation, `2` = repulsion).
+    /// Active `EntropyController` branch mode (`0` = normal, `1` = bifurcation, `2` = repulsion).
     pub entropy_gate_mode: u32,
     /// Active anchor count in `MultiAttractorSpace`.
     pub attractor_anchor_count: u32,
@@ -1184,7 +1184,7 @@ impl RuntimeContext {
         self.action_hub.active_count
     }
 
-    /// Executes a per-token Hot Path step integrating DPSR phase steering, EDBC entropy evaluation,
+    /// Executes a per-token Hot Path step integrating phase steering, `EntropyController` entropy evaluation,
     /// `self.slot_phase_bank` directly in 8 register-resident `u64` SWAR words (`0` intermediate
     /// 64-byte stack buffers or store-reload round-trips).
     #[inline]

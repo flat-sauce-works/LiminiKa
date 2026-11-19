@@ -716,7 +716,7 @@ impl ContrastivePhaseBloomFilter {
 
     /// Applies Phase-Conjugate Attractor Repulsion ($-\boldsymbol{\Delta\theta}$) in-place across
     /// `candidate_phases` and returns `(density, repulsion_triggered, post_repulsion_words)` directly
-    /// in 8 `u64` SWAR registers (`0` stack reload for downstream QDPS/RIPA or unified-field kernels).
+    /// in 8 `u64` SWAR registers (`0` stack reload for downstream `PhaseStepFilter`/`PhaseClamp` or unified-field kernels).
     #[inline(always)]
     pub const fn apply_phase_conjugate_repulsion_to_words(
         &self,
@@ -968,7 +968,7 @@ pub trait FastPathLedger: BranchlessKernel {
         Ok(())
     }
 
-    /// Evaluates telemetry ledger to auto-tune sub-head router ratios, RIPA clamps, and EDBC thresholds.
+    /// Evaluates telemetry ledger to auto-tune sub-head router ratios, `PhaseClamp` limits, and `EntropyController` thresholds.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_STATE`] if `slot` is in an incompatible mode.

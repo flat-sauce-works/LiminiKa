@@ -31,7 +31,7 @@ use core::f32::consts::LN_2;
 use crate::foundation::{Pod, DEFAULT_MAX_VALID_Z_SCORE};
 use crate::liminal::DEFAULT_ENTROPY_EPS;
 
-/// Dynamic Entropy-Driven Decoding Branch Controller (EDBC) state structure (64 bytes, 32-byte aligned, Section 5.4.G).
+/// `EntropyController` state structure (64 bytes, 32-byte aligned, Section 5.4.G).
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct gcso_edbc_state_t {

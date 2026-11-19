@@ -174,7 +174,7 @@ fn test_avx2_sincos_x8_3d_txy_lockstep_qkv_and_subnormal_norm_rescue() {
     assert!((s_sq - 30.0).abs() < 1.0e-5);
     assert!((m_abs - 4.0).abs() < 1.0e-5);
 
-    // Verify single-evaluation fused RIPA + sub-head router angle helper
+    // Verify single-evaluation fused `PhaseClamp` + sub-head router angle helper
     let scale_018 = Q7_PHASE_SCALE_RAD * branchless_inv_pos_f32(0.18);
     let (s1, c1) = eval_phase_clamp_sincos_q7_fast(28, false, 0.18, scale_018);
     let (s2, c2) = eval_phase_clamp_sincos_q7_fast(12, false, 0.18, scale_018);

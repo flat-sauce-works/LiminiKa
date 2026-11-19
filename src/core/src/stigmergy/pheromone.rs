@@ -493,7 +493,7 @@ pub trait StigmergicReconstitutionOps: StigmergicTrailOps {
 
     /// Subdivides the Action Hub's target 64-head phase command into **8 parallel 8-head SWAR
     /// Micro-Swarm cells** gated by `active_cell_mask` in strictly constant time (`0` branches),
-    /// returning both `(StigmergicReconstitutionReport, resolved_swar_words)` so downstream RoPE/RIPA kernels
+    /// returning both `(StigmergicReconstitutionReport, resolved_swar_words)` so downstream RoPE/`PhaseClamp` kernels
     /// can steer directly from registers without re-loading `accumulated_phase_delta`.
     #[inline(always)]
     fn try_resolve_action_in_swarm_to_words(

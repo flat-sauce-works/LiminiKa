@@ -460,7 +460,7 @@ pub(crate) fn rank1_accum_outer_product_simd(
 
 /// Encodes a 64-byte [`KvMotionDeltaPacket`] (P-Frame Predictive Phase-Motion Delta) between
 /// `prev_phases` and `curr_phases` using 8-lane SWAR circular difference, $S^1$ geodesic folding,
-/// and QDPS step filtering.
+/// and step filtering (`PhaseStepFilter`).
 ///
 /// # Errors
 /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `phase_step_min_q7 > 127`.
@@ -532,7 +532,7 @@ pub fn apply_pframe_motion_step_words_64(
     (log_p, repulsed)
 }
 
-/// Applies $S^1$ geodesic folding and QDPS step filtering to an accumulated 64-head phase word array.
+/// Applies $S^1$ geodesic folding and step filtering (`PhaseStepFilter`) to an accumulated 64-head phase word array.
 #[inline(always)]
 #[must_use]
 pub fn finalize_pframe_chain_words_64(cur_w: &[u64; 8], phase_step_min_q7: u8) -> [u64; 8] {

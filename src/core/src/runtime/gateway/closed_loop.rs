@@ -114,7 +114,7 @@ pub(super) fn steer_gateway_signal_core_safe<
 pub trait PhaseSteeringClosedLoop: PhaseSteering {
     /// Synthesizes `signal` into a 128-byte [`GatewayFrame`] and [`CausalProvenanceReport`] via
     /// [`ManifoldGatewaySignal::synthesize_gateway_frame_with_words`], synchronizes `trail`,
-    /// executes $SO(2)$-fused RIPA + sub-head router steering on `query_tensor` (and optional
+    /// executes $SO(2)$-fused `PhaseClamp` + sub-head router steering on `query_tensor` (and optional
     /// `key_tensor`), and optionally scales `logits_opt` by `frame.effective_inv_temp`.
     ///
     /// # Errors
@@ -152,7 +152,7 @@ impl<T: PhaseSteering + ?Sized> PhaseSteeringClosedLoop for T {}
 pub trait EntropyClosedLoopCoordinator: DecodingGate {
     /// Evaluates Top-2 sparse surrogate entropy via the branchless `0-ln` Taylor-Horner
     /// polynomial, combines it with inter-layer cosine distance into Moving Z-Score Normalized
-    /// Attention Entropy $\tilde{H}$, and steps the EDBC controller via
+    /// Attention Entropy $\tilde{H}$, and steps the `EntropyController` via
     /// [`EntropyEvaluator::eval_stateful`].
     ///
     /// # Errors

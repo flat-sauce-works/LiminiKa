@@ -28,11 +28,11 @@ use crate::liminal::{
 };
 use crate::stigmergy::StigmergicActionPtrOps;
 
-/// Entropy-Driven Decoding Branch Controller (EDBC) stateful engine (128 bytes = 2 cachelines, 32B aligned).
+/// `EntropyController` stateful engine (128 bytes = 2 cachelines, 32B aligned).
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EntropyController {
-    /// Active C-ABI EDBC state descriptor (64 bytes, 32-byte aligned).
+    /// Active C-ABI `EntropyController` state descriptor (64 bytes, 32-byte aligned).
     pub state: gcso_edbc_state_t,
     /// Hysteresis deadband width ($\delta_{\mathrm{hyst}}$) preventing mode chattering near thresholds.
     pub hysteresis_band: f32,
@@ -215,7 +215,7 @@ impl EntropyController {
     }
 
     /// Evaluates KV-keyframe Variable GOP keyframe scheduling and Game-Coexistence QoS compute budgeting
-    /// in $\mathcal{O}(1)$ division-free (`0 fdiv`) branchless arithmetic from the current EDBC state.
+    /// in $\mathcal{O}(1)$ division-free (`0 fdiv`) branchless arithmetic from the current `EntropyController` state.
     #[inline(always)]
     pub const fn evaluate_adaptive_compute_and_gop_budget(
         &self,
@@ -568,7 +568,7 @@ impl EntropyController {
         (out_state, evolved_ptr)
     }
 
-    /// Executes a single-writeback stateful EDBC step coupled with $\mathcal{C}_{\mathrm{void}}$
+    /// Executes a single-writeback stateful `EntropyController` step coupled with $\mathcal{C}_{\mathrm{void}}$
     /// dual-branch routing (Section 3.3), dwell-step anti-chattering inertia across all downward
     /// transitions (`candidate_mode < prev_mode`), Eyring-Kramers temperature modulation, and
     /// $\mathcal{O}(1)$ [`gcso_tagged_ptr_t`] mode evolution.
@@ -655,7 +655,7 @@ impl EntropyController {
         branchless_select_u8(low_e, 0x0F, 0xFF)
     }
 
-    /// Returns `true` when the EDBC controller recommends inertial layer skipping (`ACTION_MODE_LAYER_SKIP`).
+    /// Returns `true` when the `EntropyController` recommends inertial layer skipping (`ACTION_MODE_LAYER_SKIP`).
     #[inline(always)]
     pub const fn requests_inertial_layer_skip(&self) -> bool {
         let h_cur = branchless_relu_f32(self.state.moving_z_entropy);

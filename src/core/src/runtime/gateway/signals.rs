@@ -203,7 +203,7 @@ impl<T: CausalProvenanceSignal + ?Sized> CausalProvenanceSignal for &T {
 // ===================================================================
 
 /// **Origin 1 Supertrait (`SystemConstraintSignal: CausalProvenanceSignal`)**:
-/// Hardware resource, game-coexistence QoS, and EDBC entropy constraints governing compute budgeting.
+/// Hardware resource, game-coexistence QoS, and `EntropyController` entropy constraints governing compute budgeting.
 pub trait SystemConstraintSignal: CausalProvenanceSignal {
     /// Static cognitive aperture bit isolating Origin 1 system & QoS telemetry (`1 << 0`).
     const SYSTEM_APERTURE_MASK: u32 = THRESHOLD_SYSTEM_CONSTRAINT;
@@ -242,7 +242,7 @@ pub trait SystemConstraintSignal: CausalProvenanceSignal {
         (overrun > 0.80) | (vram > 0.90)
     }
 
-    /// Recommended QDPS minimum phase step cutoff in radians ($\Delta\theta_{\mathrm{min\_step}}$).
+    /// Recommended `PhaseStepFilter` minimum phase step cutoff in radians ($\Delta\theta_{\mathrm{min\_step}}$).
     #[inline(always)]
     fn qdps_min_step_rad_override(&self) -> f32 {
         let pressure = branchless_max_f32(
@@ -286,7 +286,7 @@ pub struct SystemConstraint<T = ()> {
     pub vram_pressure: f32,
     /// Normalized GPU/CPU frame overrun in $[0.0, 1.0]$.
     pub gpu_frame_overrun: f32,
-    /// Explicit QDPS minimum step cutoff in radians.
+    /// Explicit `PhaseStepFilter` minimum step cutoff in radians.
     pub qdps_min_step_rad: f32,
     /// Active 8-cell Micro-Swarm bitmask (`0x00..=0xFF`).
     pub active_swarm_mask: u8,
@@ -451,7 +451,7 @@ pub struct ManifoldProbeBaseline {
     pub active_heads: u16,
     /// Number of transformer layers selected by `layer_rope_mask` (`>= 1`).
     pub steered_layers: u16,
-    /// Baseline normalized EDBC entropy observed on neutral calibration prompts ($\tilde{H}_0 \in [0, 1]$).
+    /// Baseline normalized `EntropyController` entropy observed on neutral calibration prompts ($\tilde{H}_0 \in [0, 1]$).
     pub baseline_entropy: f32,
     /// Mean positive inter-layer / intra-turn phase trajectory coherence measured during calibration ($\bar{c} \in [0, 1]$).
     pub baseline_inter_layer_coherence: f32,
@@ -965,7 +965,7 @@ impl<T: CognitiveGroundingSignal + ?Sized> CognitiveGroundingSignal for &T {
 }
 
 /// **Origin 2-A Subtrait (`ObjectiveFactSignal: CognitiveGroundingSignal`)**:
-/// External RAG chunks, database records, and objective conversation logs (`Slot 2`, narrow RIPA clamp `0.14 rad`).
+/// External RAG chunks, database records, and objective conversation logs (`Slot 2`, narrow `PhaseClamp` limit `0.14 rad`).
 pub trait ObjectiveFactSignal: CognitiveGroundingSignal {
     /// Narrow single-axis cognitive aperture for factual grounding (`1 << 1`).
     const FACT_APERTURE_MASK: u32 = THRESHOLD_OBJECTIVE_FACT;
@@ -973,7 +973,7 @@ pub trait ObjectiveFactSignal: CognitiveGroundingSignal {
     /// Complement bitmask treating non-factual axes as unknowable (`!THRESHOLD_OBJECTIVE_FACT`).
     const FACT_UNKNOWABLE_VOID_MASK: u32 = !Self::FACT_APERTURE_MASK;
 
-    /// RIPA phase clamp limit in radians for objective factual grounding (defaults to `0.14 rad`).
+    /// `PhaseClamp` limit in radians for objective factual grounding (defaults to `0.14 rad`).
     #[inline(always)]
     fn fact_ripa_clamp_rad(&self) -> f32 {
         DEFAULT_FACT_PHASE_CLAMP_RAD
@@ -998,7 +998,7 @@ impl<T: ObjectiveFactSignal + ?Sized> ObjectiveFactSignal for &T {
 }
 
 /// **Origin 2-B Subtrait (`SubjectivePersonaSignal: CognitiveGroundingSignal`)**:
-/// System prompts, character beliefs, stylistic tone, and subjective episodic memory (`Slot 1`, wide RIPA clamp `0.24 rad`).
+/// System prompts, character beliefs, stylistic tone, and subjective episodic memory (`Slot 1`, wide `PhaseClamp` limit `0.24 rad`).
 pub trait SubjectivePersonaSignal: CognitiveGroundingSignal {
     /// Narrow single-axis cognitive aperture for subjective persona tone (`1 << 2`).
     const PERSONA_APERTURE_MASK: u32 = THRESHOLD_SUBJECTIVE_PERSONA;
@@ -1006,7 +1006,7 @@ pub trait SubjectivePersonaSignal: CognitiveGroundingSignal {
     /// Complement bitmask treating non-persona axes as unknowable (`!THRESHOLD_SUBJECTIVE_PERSONA`).
     const PERSONA_UNKNOWABLE_VOID_MASK: u32 = !Self::PERSONA_APERTURE_MASK;
 
-    /// RIPA phase clamp limit in radians for subjective persona modulation (defaults to `0.24 rad`).
+    /// `PhaseClamp` limit in radians for subjective persona modulation (defaults to `0.24 rad`).
     #[inline(always)]
     fn persona_ripa_clamp_rad(&self) -> f32 {
         DEFAULT_PERSONA_PHASE_CLAMP_RAD
@@ -1101,7 +1101,7 @@ pub struct ObjectiveFact<T> {
     pub mapped_storage_offset48: u64,
     /// Full 32-bit macro anchor ID on the unified manifold.
     pub anchor_id: u32,
-    /// RIPA phase clamp limit in radians (defaults to [`DEFAULT_FACT_PHASE_CLAMP_RAD`]).
+    /// `PhaseClamp` limit in radians (defaults to [`DEFAULT_FACT_PHASE_CLAMP_RAD`]).
     pub ripa_clamp_rad: f32,
 }
 
@@ -1124,7 +1124,7 @@ impl<T> ObjectiveFact<T> {
         }
     }
 
-    /// Builder method overriding the RIPA clamp limit in radians.
+    /// Builder method overriding the `PhaseClamp` limit in radians.
     #[inline(always)]
     #[must_use]
     pub const fn with_ripa_clamp_rad(mut self, max_rad: f32) -> Self {
@@ -1189,7 +1189,7 @@ pub struct SubjectivePersona<T> {
     pub mapped_storage_offset48: u64,
     /// Full 32-bit macro anchor ID on the unified manifold.
     pub anchor_id: u32,
-    /// RIPA phase clamp limit in radians (defaults to [`DEFAULT_PERSONA_PHASE_CLAMP_RAD`]).
+    /// `PhaseClamp` limit in radians (defaults to [`DEFAULT_PERSONA_PHASE_CLAMP_RAD`]).
     pub ripa_clamp_rad: f32,
 }
 
@@ -1212,7 +1212,7 @@ impl<T> SubjectivePersona<T> {
         }
     }
 
-    /// Builder method overriding the RIPA clamp limit in radians.
+    /// Builder method overriding the `PhaseClamp` limit in radians.
     #[inline(always)]
     #[must_use]
     pub const fn with_ripa_clamp_rad(mut self, max_rad: f32) -> Self {

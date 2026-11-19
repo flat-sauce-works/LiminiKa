@@ -936,7 +936,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     ));
 
     // 4-tuple (SystemConstraint, ObjectiveFact, SubjectivePersona, GuardPhaseAnchor) composes guard severity,
-    // and CognitiveTrajectoryLedger::modulate_gateway_frame_at_scale routes PSPM/EDBC cleanly.
+    // and CognitiveTrajectoryLedger::modulate_gateway_frame_at_scale routes `SubheadRouter`/`EntropyController` cleanly.
     let guard = GuardPhaseAnchor::new([24i8; MAX_ATTENTION_HEADS], 0.85, 0.5);
     let guard_composite = (
         SystemConstraint::new((), 0.0, 0.0, 0xFF),

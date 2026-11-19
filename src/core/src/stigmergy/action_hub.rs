@@ -124,13 +124,13 @@ pub enum StigmergicActionDecision {
     /// Low-entropy laminar bypass or QoS throttle (`ACTION_PRESET_INERTIAL_SKIP = 0x03`):
     /// $\tilde{H} \le \tau_{\mathrm{skip}}$ with no repulsion active.
     InertialLayerSkip = 1,
-    /// Single-pass RIPA soft-clamped RoPE phase steering (`ACTION_PRESET_EXPRESS_PHASE = 0x01`):
+    /// Single-pass `PhaseClamp` soft-clamped RoPE phase steering (`ACTION_PRESET_EXPRESS_PHASE = 0x01`):
     /// $\tau_{\mathrm{steer}} \le \rho < \tau_{\mathrm{pspm}}$.
     ExpressPhaseSteer = 2,
-    /// $SO(2)$-fused RIPA + sub-head router (`Fact / Logic / Explore`) Sub-Head Pseudo-MoE routing (`0x09`):
+    /// $SO(2)$-fused `PhaseClamp` + sub-head router (`Fact / Logic / Explore`) Sub-Head Pseudo-MoE routing (`0x09`):
     /// $\tau_{\mathrm{pspm}} \le \rho < \tau_{\mathrm{srl}}$ or high bifurcation entropy.
     SubHeadRoute = 3,
-    /// Full $SO(2)$-fused RIPA + sub-head router + Dynamic Rank-1 Rank-1 residual residual injection
+    /// Full $SO(2)$-fused `PhaseClamp` + sub-head router + Dynamic Rank-1 residual injection
     /// (`ACTION_PRESET_FULL_ORCHESTRATION = 0x19`): $\tau_{\mathrm{srl}} \le \rho < \tau_{\mathrm{crystal}}$.
     FullOrchestration = 4,
     /// Super-saturated coherent basin promotion (`ACTION_PRESET_FULL_ORCHESTRATION` +
@@ -1048,7 +1048,7 @@ pub struct ActionHubEngine {
     pub thresholds: StigmergicThresholds,
     /// Active gravitational weights for the 8 Attractor Working Lanes (`0..=7`, 32 bytes).
     pub slot_weights: [f32; MAX_ATTRACTOR_DOMAINS],
-    /// Embedded 16-byte DPSR/RIPA kernel configuration (`head_dim`, `num_heads`, `ripa_clamp_max_rad`, `qdps_min_step_rad`).
+    /// Embedded 16-byte phase-steering kernel configuration (`head_dim`, `num_heads`, `ripa_clamp_max_rad`, `qdps_min_step_rad`).
     pub phase_steering: PhaseSteeringEngine,
     /// 64-bit ($8 \times 8$) cross-lane coupling bitmatrix.
     pub coupling_matrix_8x8: u64,
@@ -1062,7 +1062,7 @@ pub struct ActionHubEngine {
     pub write_cursor: u32,
     /// Most recently selected candidate trail ID (`0..ACTION_HUB_INLINE_TRAILS`).
     pub last_selected_trail_id: u32,
-    /// Most recently observed EDBC moving Z-score entropy $\tilde{H} \in [0, \ln 2]$.
+    /// Most recently observed `EntropyController` moving Z-score entropy $\tilde{H} \in [0, \ln 2]$.
     pub last_entropy_h_tilde: f32,
     /// Most recently observed causal anomaly severity $\in [0.0, 1.0]$.
     pub last_anomaly_severity: f32,

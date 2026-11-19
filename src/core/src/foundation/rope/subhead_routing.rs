@@ -422,7 +422,7 @@ pub(super) const fn byte_uniform_word_u8(w: &[u64; NUM_SWARM_CELLS]) -> Option<u
 }
 
 /// Evaluates the fused $SO(2)$ group-closure `(sin, cos)` for a single `(b_u8, s_u8)` Q7 pair,
-/// fast-pathing default RIPA clamps (`0.24 rad`) via `.rodata` LUTs.
+/// fast-pathing default `PhaseClamp` limits (`0.24 rad`) via `.rodata` LUTs.
 #[inline(always)]
 #[must_use]
 pub(super) fn eval_fused_phase_clamp_subhead_pair_u8(
@@ -1235,7 +1235,7 @@ pub(crate) fn dispatch_fused_phase_clamp_words_and_subhead_profiles_core(
     Ok(())
 }
 
-/// Fuses **RIPA Phase Steering** (`base_ripa_phases`, `base_ripa_max_rad`) and
+/// Fuses **soft-bounded (`PhaseClamp`) phase steering** (`base_ripa_phases`, `base_ripa_max_rad`) and
 /// **sub-head router Upper-Quarter ($d_{\mathrm{head}}/4$) Sub-Head Routing** into a **single memory pass**
 /// over `tensor` by loading `base_ripa_phases` into 8 `u64` SWAR registers and delegating to
 /// `dispatch_fused_phase_clamp_words_and_subhead_profiles_core`.
@@ -1306,7 +1306,7 @@ pub(super) fn dispatch_subhead_slot_ensemble_core(
 }
 
 // ===================================================================
-// Public Sub-Head Phase Modulation (PSPM) Routing Kernels
+// Public Sub-Head Routing Kernels (`SubheadRouter`)
 // ===================================================================
 
 /// Validates `config` sub-head counts (`Fact + Logic + Explore > 0`) and returns
@@ -1562,7 +1562,7 @@ pub fn dispatch_subhead_unified_anchors(
     )
 }
 
-/// Executes **Single-Pass $SO(2)$ Group-Closure Fused RIPA + Unified-Manifold Sub-Head
+/// Executes **Single-Pass $SO(2)$ Group-Closure Fused `PhaseClamp` + Unified-Manifold Sub-Head
 /// Routing**, rotating the shared upper $\frac{1}{4}d_{\mathrm{head}}$ low-frequency pairs by
 /// the composite angle $\theta_{\mathrm{ripa}} + \theta_{\mathrm{pspm}}$ in a single traversal.
 ///
@@ -1598,7 +1598,7 @@ pub fn dispatch_phase_clamp_and_subhead_unified_anchors_fused(
     )
 }
 
-/// Executes **Single-Pass $SO(2)$ Group-Closure Fused RIPA + 8-Slot Ensemble Sub-Head
+/// Executes **Single-Pass $SO(2)$ Group-Closure Fused `PhaseClamp` + 8-Slot Ensemble Sub-Head
 /// Routing**, rotating the shared upper $\frac{1}{4}d_{\mathrm{head}}$ low-frequency pairs by
 /// the composite angle $\theta_{\mathrm{ripa}} + \theta_{\mathrm{pspm}}$ in a single traversal.
 ///

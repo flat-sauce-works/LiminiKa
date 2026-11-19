@@ -141,7 +141,7 @@ pub struct CrystallizedAttractorRecord {
     pub von_mises_kappa: f32,
     /// Phase-Proximity Gravity mass $M_{\mathrm{grav}} = E_{\mathrm{base}} \cdot \bar{R}_c (1 + 0.1 \ln(1 + N))$ (`offset 36..40`).
     pub phase_gravity_mass: f32,
-    /// Effective RIPA clamp limit in radians ($\theta_{\max}$, `offset 40..44`).
+    /// Effective `PhaseClamp` limit in radians ($\theta_{\max}$, `offset 40..44`).
     pub ripa_clamp_rad: f32,
     /// Effective multiplicative inverse-temperature scale $\beta_{\mathrm{eff}}$ (`offset 44..48`).
     pub effective_inv_temp: f32,

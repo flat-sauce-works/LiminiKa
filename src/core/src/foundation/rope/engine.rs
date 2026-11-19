@@ -6,10 +6,10 @@
 use super::*;
 
 // ===================================================================
-// 2. Primary DPSR Phase-Steering & Sub-Head Routing Engine (`16B` Pod)
+// 2. Primary Phase-Steering & Sub-Head Routing Engine (`16B` Pod)
 // ===================================================================
 
-/// Primary Dynamic Phase-Shifted RoPE (DPSR), RIPA, and QDPS execution engine (`16B` aligned, [`Pod`]).
+/// Primary dynamic phase-shifted RoPE execution engine (`PhaseSteering`, `PhaseClamp`, `PhaseStepFilter`) (`16B` aligned, [`Pod`]).
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PhaseSteeringEngine {
@@ -17,9 +17,9 @@ pub struct PhaseSteeringEngine {
     pub(crate) head_dim: u32,
     /// Total number of attention heads ($H > 0$).
     pub(crate) num_heads: u32,
-    /// Default RIPA soft-bounded phase clamp limit in radians ($\theta_{\max}$).
+    /// Default soft-bounded (`PhaseClamp`) limit in radians ($\theta_{\max}$).
     pub(crate) phase_clamp_max_rad: f32,
-    /// Default QDPS minimum phase step cutoff in radians ($\Delta\theta_{\mathrm{min\_step}}$).
+    /// Default `PhaseStepFilter` minimum phase step cutoff in radians ($\Delta\theta_{\mathrm{min\_step}}$).
     pub(crate) phase_step_min_rad: f32,
 }
 
@@ -97,19 +97,19 @@ impl PhaseSteeringEngine {
         Ok(engine)
     }
 
-    /// Returns the configured RIPA soft-bounded phase clamp limit in radians ($\theta_{\max}$).
+    /// Returns the configured soft-bounded (`PhaseClamp`) limit in radians ($\theta_{\max}$).
     #[inline(always)]
     pub const fn phase_clamp_max_rad(&self) -> f32 {
         self.phase_clamp_max_rad
     }
 
-    /// Returns the configured QDPS minimum phase step cutoff in radians ($\Delta\theta_{\mathrm{min\_step}}$).
+    /// Returns the configured `PhaseStepFilter` minimum phase step cutoff in radians ($\Delta\theta_{\mathrm{min\_step}}$).
     #[inline(always)]
     pub const fn phase_step_min_rad(&self) -> f32 {
         self.phase_step_min_rad
     }
 
-    /// Returns a copy of `self` with an updated RIPA soft-clamping limit (`ripa_clamp_max_rad`).
+    /// Returns a copy of `self` with an updated `PhaseClamp` soft-clamping limit (`ripa_clamp_max_rad`).
     #[inline(always)]
     pub const fn with_phase_clamp_max_rad(mut self, max_rad: f32) -> Self {
         let valid = branchless_is_finite_f32(max_rad) & (max_rad > 0.0);
@@ -117,7 +117,7 @@ impl PhaseSteeringEngine {
         self
     }
 
-    /// Returns a copy of `self` with an updated QDPS step cutoff threshold (`qdps_min_step_rad`).
+    /// Returns a copy of `self` with an updated `PhaseStepFilter` step cutoff threshold (`qdps_min_step_rad`).
     #[inline(always)]
     pub const fn with_phase_step_min_rad(mut self, min_step_rad: f32) -> Self {
         let valid = branchless_is_finite_f32(min_step_rad) & (min_step_rad >= 0.0);

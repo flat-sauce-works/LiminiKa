@@ -288,7 +288,7 @@ pub trait EntropyEvaluator: BranchlessKernel + Send + Sync {
     }
 }
 
-/// Cold-path trait for stateful EDBC parameters and hysteresis management (**Macro Level**).
+/// Cold-path trait for stateful `EntropyController` parameters and hysteresis management (**Macro Level**).
 pub trait DecodingGate: EntropyEvaluator {
     /// Returns the currently active decoding branch mode (`0` = Normal, `1` = Pitchfork, `2` = Repulsion).
     fn active_branch_mode(&self) -> u32;
@@ -320,7 +320,7 @@ pub trait DecodingGate: EntropyEvaluator {
         self.active_branch_mode() == 2
     }
 
-    /// Branchlessly evaluates the next EDBC branch mode (`0`, `1`, `2`).
+    /// Branchlessly evaluates the next `EntropyController` branch mode (`0`, `1`, `2`).
     #[inline(always)]
     #[must_use]
     fn evaluate_branch_mode_transition(
@@ -347,7 +347,7 @@ pub trait DecodingGate: EntropyEvaluator {
         branchless_select_u32(active_non_normal, active_target, 0)
     }
 
-    /// Evaluates the next EDBC branch mode (`0`, `1`, `2`) and evolves `tagged_ptr` in $\mathcal{O}(1)$.
+    /// Evaluates the next `EntropyController` branch mode (`0`, `1`, `2`) and evolves `tagged_ptr` in $\mathcal{O}(1)$.
     #[inline(always)]
     #[must_use]
     fn evaluate_branch_and_evolve_pointer(

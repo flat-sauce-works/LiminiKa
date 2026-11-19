@@ -509,7 +509,7 @@ pub trait KvKeyframeCache: BranchlessKernel + Send + Sync {
     }
 
     /// Executes **Zero-Forward Latency Seek (Instantaneous Replay)** phase reconstruction (Section 4.3)
-    /// using 8-lane SWAR saturating addition and SWAR QDPS filtering without forward passes.
+    /// using 8-lane SWAR saturating addition and SWAR `PhaseStepFilter` filtering without forward passes.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `qdps_min_step_q7 > 127`.
@@ -534,7 +534,7 @@ pub trait KvKeyframeCache: BranchlessKernel + Send + Sync {
 
     /// Executes **Seam-Free $S^1$ Geodesic P-Frame Trajectory Replay** (Section 4.3):
     /// accumulates P-Frame motion deltas on the circle group $S^1 \cong \mathbb{Z}/256\mathbb{Z}$,
-    /// folds onto `[-64, +64]`, and applies 8-lane SWAR QDPS step filtering.
+    /// folds onto `[-64, +64]`, and applies 8-lane SWAR step filtering (`PhaseStepFilter`).
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `qdps_min_step_q7 > 127`.
@@ -703,7 +703,7 @@ pub trait KvKeyframeCache: BranchlessKernel + Send + Sync {
     /// $\boldsymbol{\Delta\theta}_t$, Section 4.3) between `prev_phases` ($\boldsymbol{\theta}_{t-1}$)
     /// and `curr_phases` ($\boldsymbol{\theta}_t$) using 8-lane SWAR circular difference
     /// (`swar_q7_circular_diff_x8`), $S^1$ geodesic folding (`swar_q7_fold_s1_geodesic_x8`), and
-    /// QDPS step filtering (`swar_q7_phase_step_filter_words_64`).
+    /// step filtering (`PhaseStepFilter`) (`swar_q7_phase_step_filter_words_64`).
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `qdps_min_step_q7 > 127`.

@@ -23,9 +23,9 @@ pub struct GatewayFrame {
     pub target_anchor_id: u32,
     /// Combined gravitational pull energy $E_{\mathrm{eff}} \ge 0$ (`offset 20..24`).
     pub effective_energy: f32,
-    /// Normalized RIPA soft-clamping limit in radians ($\theta_{\max}$, `offset 24..28`).
+    /// Normalized `PhaseClamp` soft-clamping limit in radians ($\theta_{\max}$, `offset 24..28`).
     pub ripa_clamp_rad: f32,
-    /// QDPS minimum step cutoff in radians ($\Delta\theta_{\mathrm{min\_step}}$, `offset 28..32`).
+    /// `PhaseStepFilter` minimum step cutoff in radians ($\Delta\theta_{\mathrm{min\_step}}$, `offset 28..32`).
     pub qdps_min_step_rad: f32,
     /// Multiplicative inverse-temperature logit scale $\beta_{\mathrm{eff}} \in [0.25, 4.0]$ (`offset 32..36`).
     pub effective_inv_temp: f32,
@@ -278,7 +278,7 @@ impl GatewayFrame {
         (branchless_clamp_f32(scaled, 32.0, 96.0) + 0.5) as u8
     }
 
-    /// Rotates a 32-float `(Q, K, V)` block triple in-place by the RIPA-clamped $SO(2)$ phase angle
+    /// Rotates a 32-float `(Q, K, V)` block triple in-place by the `PhaseClamp`-limited $SO(2)$ phase angle
     /// of `head_idx` (`0..64`).
     #[inline(always)]
     pub fn rotate_qkv_block32_in_place(
