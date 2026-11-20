@@ -58,24 +58,24 @@ use crate::foundation::{
     branchless_project_f32_slice_to_q7_64, branchless_q7_add_sat, branchless_q7_neg_sat,
     branchless_rad_to_phase_step_u8, branchless_relu_f32, branchless_splitmix64,
     branchless_sqrt_f32, dispatch_single_pass, eval_rank1, eval_rank1_fused, is_ptr_aligned_to,
-    load_q7_words_64, project_bytes_swar_to_words_64, project_f32_slice_to_q7_64,
-    project_f32_slice_to_words_64, project_lora, raw_byte_ranges_overlap,
-    steer_from_swar_words_core_safe, store_q7_words_64, sum_sq_f32_simd8,
-    swar_q7_phase_step_filter_words_64, swar_words_nonzero_64, AlignedSlice16, AlignedSlice32,
-    AlignedSliceMut16, AlignedSliceMut32, DisjointMutPair, DisjointRefMut, PhaseSteering,
-    PhaseSteeringEngine, PhaseSteeringGeometryExt, Pod, RawPhaseProjectable,
-    RopeGeometryDescriptor, RopePairLayout,
+    load_q7_words_64, pack_action_slot_tag, project_bytes_swar_to_words_64,
+    project_f32_slice_to_q7_64, project_f32_slice_to_words_64, project_lora,
+    raw_byte_ranges_overlap, steer_from_swar_words_core_safe, store_q7_words_64, sum_sq_f32_simd8,
+    swar_q7_phase_step_filter_words_64, swar_words_nonzero_64, unpack_action_mode_from_tag,
+    unpack_attractor_slot_from_tag, AlignedSlice16, AlignedSlice32, AlignedSliceMut16,
+    AlignedSliceMut32, DisjointMutPair, DisjointRefMut, PhaseSteering, PhaseSteeringEngine,
+    PhaseSteeringGeometryExt, Pod, RawPhaseProjectable, RopeGeometryDescriptor, RopePairLayout,
+    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
+    PAGED_BITMASK_BITS,
 };
 #[allow(unused_imports)]
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u8,
-    evaluate_epistemic_partition_branchless, pack_action_slot_tag, unpack_action_mode_from_tag,
-    unpack_attractor_slot_from_tag, EpistemicPartition, GcsoResult, LiminalBoundaryDelta,
-    LiminalThresholdField, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK,
-    ATTRACTOR_SLOT_REPULSION, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
-    DEFAULT_PHASE_CLAMP_MAX_RAD, GCSO_FOUR_SECTION_HEADER_BYTES, MAX_ATTENTION_HEADS,
-    PAGED_BITMASK_BITS,
+    evaluate_epistemic_partition_branchless, EpistemicPartition, GcsoResult, LiminalThresholdField,
+    MAX_ATTENTION_HEADS,
 };
+#[allow(unused_imports)]
+use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 #[allow(unused_imports)]
 use crate::runtime::context::{
     init_default_config, query_capability, validate_config_invariants, AutonomousCoreLayerStack,
@@ -94,7 +94,7 @@ use crate::runtime::horizon::{evaluate_epistemic_horizon_words_64, EpistemicHori
 use crate::runtime::storage::{
     finalize_snapshot_header_crc32, init_descriptor_header, init_snapshot_header,
     validate_descriptor_header, validate_snapshot_header, verify_snapshot_payload_crc32,
-    GcsoFourSectionView,
+    GcsoFourSectionView, GCSO_FOUR_SECTION_HEADER_BYTES,
 };
 #[allow(unused_imports)]
 use crate::runtime::telemetry::LiminalTopologyTelemetrySnapshot;
@@ -106,6 +106,7 @@ use crate::stigmergy::{
     StigmergicActionPtrOps, StigmergicFragmentEnsembleReport, StigmergicGranuleField,
     StigmergicOverlapSerendipityReport, StigmergicReconstitutionOps,
     StigmergicReconstitutionReport, StigmergicThresholds, StigmergicTrailOps,
+    ATTRACTOR_SLOT_REPULSION, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
     MAX_ATTRACTOR_PULL_FORCE, NUM_STIGMERGIC_GRANULES, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
     TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
     TRAIL_FLAG_SYNERGY_RESONANCE,
@@ -186,15 +187,16 @@ pub use storage::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::foundation::{AlignedBuffer128, AlignedBuffer16, AlignedBuffer32};
-    use crate::liminal::DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE;
-    use crate::liminal::{
-        ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP,
-        ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_KNOWLEDGE,
-        ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
+    use crate::foundation::{
+        AlignedBuffer128, AlignedBuffer16, AlignedBuffer32, ACTION_PRESET_EXPRESS_PHASE,
+        ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP,
+        ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
     };
-    use crate::stigmergy::StigmergicActionDecision;
-    use crate::stigmergy::{DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, DEFAULT_STIGMERGIC_TOLERANCE_Q7};
+    use crate::stigmergy::{
+        StigmergicActionDecision, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
+        ATTRACTOR_SLOT_REPULSION, DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
+        DEFAULT_STIGMERGIC_TOLERANCE_Q7, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
+    };
 
     #[test]
     fn test_version_status_and_config_defaults() {

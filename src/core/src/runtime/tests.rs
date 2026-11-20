@@ -16,9 +16,9 @@ use crate::drivers::{
     ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION,
 };
 use crate::foundation::{RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget};
-use crate::liminal::with_slot_pair_coupled_symmetric;
 use crate::prelude::*;
 use crate::stigmergy::action_hub::DEFAULT_DERIVATIVE_ALPHA_Q7;
+use crate::stigmergy::with_slot_pair_coupled_symmetric;
 
 #[test]
 fn test_two_origin_supertrait_synthesis_and_causal_provenance() {
@@ -3063,8 +3063,7 @@ fn test_entropy_controller_init_setters_and_reset() {
 #[test]
 fn test_stationary_skip_and_spine_bypass_do_not_misdiagnose_passive_saturation() {
     use crate::drivers::{LayerDistortionKind, LiminalEgoField};
-    use crate::liminal::LiminalBoundaryDelta;
-    use crate::runtime::EpistemicHorizonReading;
+    use crate::runtime::{EpistemicHorizonReading, LiminalBoundaryDelta};
     use crate::stigmergy::{
         StigmergicActionDecision, StigmergicOverlapSerendipityReport, StigmergicThresholds,
         DEFAULT_DERIVATIVE_ALPHA_Q7,

@@ -20,18 +20,17 @@ use crate::foundation::{
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 use crate::foundation::{swar_slerp_words_with_uniform_flag_64, swar_words_equal_64};
 use crate::liminal::{
-    branchless_select_u32, gcso_q7_t, GcsoResult, DEFAULT_ENTROPY_EPS,
-    DEFAULT_SLOT_COUPLING_MATRIX_8X8, GCSO_ERROR_ACTION_HUB_FULL, GCSO_ERROR_INVALID_ARGUMENT,
-    MAX_ANCHORS_PER_FIELD, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    branchless_select_u32, gcso_q7_t, GcsoResult, DEFAULT_ENTROPY_EPS, GCSO_ERROR_ACTION_HUB_FULL,
+    GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::stigmergy::attractor::traits::{AttractorField, PersonaPatcher};
 use crate::stigmergy::attractor::{
     gcso_anchor_type_t, project_f32_slice_to_q7_phases, AttractorAnchor, CrystallizedAnchorRecord,
     GCSO_ANCHOR_TYPE_CRYSTALLIZED, GCSO_ANCHOR_TYPE_EMBEDDING, GCSO_ANCHOR_TYPE_PHASE_REPULSE,
-    GCSO_ANCHOR_TYPE_SYSTEM_PROMPT,
+    GCSO_ANCHOR_TYPE_SYSTEM_PROMPT, MAX_ANCHORS_PER_FIELD,
 };
 use crate::stigmergy::trail::{gcso_pointer_trail_t, trail_phase_words_ref};
-use crate::stigmergy::MAX_ATTRACTOR_PULL_FORCE;
+use crate::stigmergy::{DEFAULT_SLOT_COUPLING_MATRIX_8X8, MAX_ATTRACTOR_PULL_FORCE};
 
 use super::*;
 

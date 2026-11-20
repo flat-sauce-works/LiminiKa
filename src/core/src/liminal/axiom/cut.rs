@@ -1,34 +1,30 @@
 // name: src/core/src/liminal/axiom/cut.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Fractal boundary composition axioms (`Refine<O, I>`, `BitCut8`, `BitCut32`), sealed scope
-//! trait algebra (`NonVoid`, `ActiveScope`, `GroundedOrigin`, `GroundedScope`), zero-overhead
-//! [`Scoped<B, T>`] coordinate wrapper, and non-generic closure markers (`Active`, `Grounded`).
+//! Pure unbounded boundary composition axioms (`Refine<O, I>`, `BitCut8`, `BitCut32`),
+//! two-axis sealed scope trait algebra (`Cuttable` x `Definite`, `ActiveScope`, `GroundedOrigin`,
+//! `GroundedScope`), zero-overhead [`Scoped<B, T>`] coordinate wrapper, and non-generic closure
+//! markers (`Active`, `Grounded`).
 //!
 //! # Two-Axis Coordinate Model
 //!
-//! Level 0 (`liminal`) separates boundary structure from payload semantics:
-//! - **Axis 1 (Boundary Generation)**: Zero-sized markers (`FromBoundary`, `FromDelta`,
-//!   `Interior`, `Shared`, `Exterior`, `Void`) composed recursively via [`Refine<O, I>`] (0 bytes),
-//!   plus branchless runtime bit-cuts ([`BitCut8`], [`BitCut32`]). Nesting order is non-commutative:
-//!   `Refine<FromBoundary, Exterior>` ([`BoundaryViolation`]) and `Refine<FromDelta, Exterior>`
-//!   ([`SpeculativeDiscovery`]) encode distinct epistemic origins at zero runtime cost.
-//! - **Axis 2 (Payload Binding)**: [`Scoped<B, T>`] (`#[repr(transparent)]`) binds an arbitrary
-//!   value `T` to boundary type `B`. Trait bounds select permitted operations at compile time.
-//!
-//! # `Void` vs. `null` Semantics
-//!
-//! [`Void`] and `Scoped<Void, T>` do not represent an invalid pointer, uninitialized memory, or
-//! runtime error (`null`). They axiomatically encode well-defined zero-aperture non-observation
-//! outside the system's cognitive scope: no steering force is applied and execution passes through
-//! safely.
+//! Level 0 (`liminal`) separates spatial boundary structure from force authorization:
+//! - **Axis 1 (`Cuttable` — Spatial Partitioning)**: Zero-sized markers (`FromBoundary`,
+//!   `FromDelta`, `Interior`, `Shared`, `Exterior`, `Unmarked`, `Bottom`) composed recursively
+//!   via [`Refine<O, I>`] (`0` bytes), plus branchless runtime bit-cuts ([`BitCut8`],
+//!   [`BitCut32`]). [`Unmarked`] permits further spatial cutting while withholding force;
+//!   [`Bottom`] and sealed closures ([`Active`], [`Grounded`]) terminate further cutting at
+//!   compile time.
+//! - **Axis 2 (`Definite` — Force Authorization)**: [`Scoped<B, T>`] (`#[repr(transparent)]`)
+//!   binds an arbitrary payload `T` to boundary type `B`. Trait bounds ([`ActiveScope`],
+//!   [`GroundedScope`]) exclude both [`Unmarked`] and [`Bottom`] at every nesting depth.
 //!
 //! # Closure & Monomorphization Control
 //!
 //! Arbitrary fractal nesting depths fold into flat canonical closure markers via
 //! [`Scoped::seal_active`] (`-> Scoped<Active, T>`) and [`Scoped::seal_grounded`]
-//! (`-> Scoped<Grounded, T>`), allowing downstream kernels to remain non-generic with zero L1I
-//! code duplication while preserving compile-time isolation of [`Void`] and unverified [`Exterior`].
+//! (`-> Scoped<Grounded, T>`), keeping downstream kernels non-generic with zero L1I code
+//! duplication while preventing re-cutting of sealed abstractions.
 
 #![forbid(unsafe_code)]
 
@@ -65,21 +61,29 @@ pub struct Shared;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Exterior;
 
-/// Region marker for well-defined zero-aperture non-observation outside cognitive scope
-/// ($\overline{S \cup O}$).
+/// Region marker for unmarked, zero-aperture space outside active cognitive scope.
 ///
-/// Unlike a `null` sentinel denoting system failure or undefined state, `Void` explicitly marks
-/// an unobserved domain with zero aperture and zero applied force.
+/// `Unmarked` remains spatially [`Cuttable`] so finer boundary cuts may still be drawn,
+/// but it does not implement [`Definite`], so no compute or persistence force can flow
+/// through it or through any [`Refine`] containing it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Void;
+pub struct Unmarked;
+
+/// Terminal failure/undefined boundary marker ($\bot$).
+///
+/// `Bottom` implements neither [`Cuttable`] nor [`Definite`]: once a scope enters `Bottom`
+/// (directly or inside any [`Refine`]), both further cutting and force propagation stop at
+/// compile time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Bottom;
 
 /// Closure marker sealing any [`ActiveScope`] refinement chain into a flat, non-generic compute
-/// permission token.
+/// permission token. Intentionally not [`Cuttable`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Active;
 
 /// Closure marker sealing any [`GroundedScope`] refinement chain into a flat, non-generic
-/// persistence / crystallization permission token.
+/// persistence / crystallization permission token. Intentionally not [`Cuttable`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Grounded;
 
@@ -93,47 +97,65 @@ impl sealed::Sealed for FromDelta {}
 impl sealed::Sealed for Interior {}
 impl sealed::Sealed for Shared {}
 impl sealed::Sealed for Exterior {}
-impl sealed::Sealed for Void {}
+impl sealed::Sealed for Unmarked {}
+impl sealed::Sealed for Bottom {}
 impl sealed::Sealed for Active {}
 impl sealed::Sealed for Grounded {}
 impl<O, I> sealed::Sealed for Refine<O, I> {}
 
 // ===================================================================
-// 2. Three-Tier Sealed Trait Algebra (Void & Exterior Absorption)
+// 2. Two-Axis Sealed Trait Algebra (`Cuttable` x `Definite`)
 // ===================================================================
 
-/// Sealed marker trait for scopes guaranteed free of [`Void`] at every nesting level.
+/// Sealed marker trait for spaces that still admit further boundary cutting.
 ///
-/// Because [`Void`] never implements `NonVoid`, any `Refine<O, I>` containing `Void` in either
-/// position fails to satisfy `NonVoid`, preventing void-to-active laundering.
-pub trait NonVoid: sealed::Sealed {}
+/// Intentionally not implemented for [`Bottom`] (terminal undefinedness) or for the sealed
+/// abstractions [`Active`] and [`Grounded`] (preventing re-cutting of closed tokens).
+pub trait Cuttable: sealed::Sealed {}
 
-impl NonVoid for FromBoundary {}
-impl NonVoid for FromDelta {}
-impl NonVoid for Interior {}
-impl NonVoid for Shared {}
-impl NonVoid for Exterior {}
-impl NonVoid for Active {}
-impl NonVoid for Grounded {}
-impl<O: NonVoid, I: NonVoid> NonVoid for Refine<O, I> {}
+impl Cuttable for FromBoundary {}
+impl Cuttable for FromDelta {}
+impl Cuttable for Interior {}
+impl Cuttable for Shared {}
+impl Cuttable for Exterior {}
+impl Cuttable for Unmarked {}
+impl<O: Cuttable, I: Cuttable> Cuttable for Refine<O, I> {}
+
+/// Sealed marker trait for definite scopes guaranteed free of [`Unmarked`] and [`Bottom`] at
+/// every nesting level.
+///
+/// Because neither [`Unmarked`] nor [`Bottom`] implements `Definite`, any `Refine<O, I>`
+/// containing either marker in either position fails to satisfy `Definite`, blocking
+/// force laundering.
+pub trait Definite: sealed::Sealed {}
+
+impl Definite for FromBoundary {}
+impl Definite for FromDelta {}
+impl Definite for Interior {}
+impl Definite for Shared {}
+impl Definite for Exterior {}
+impl Definite for Active {}
+impl Definite for Grounded {}
+impl<O: Definite, I: Definite> Definite for Refine<O, I> {}
 
 /// Sealed marker trait for scopes authorized to enter active compute kernels.
 ///
-/// Excludes [`Void`], any refinement containing [`Void`], and unclassified origin markers
-/// ([`FromBoundary`], [`FromDelta`]) prior to boundary cutting.
-pub trait ActiveScope: NonVoid {}
+/// Excludes [`Unmarked`], [`Bottom`], any refinement containing them, and unclassified origin
+/// markers ([`FromBoundary`], [`FromDelta`]) prior to boundary cutting.
+pub trait ActiveScope: Definite {}
 
 impl ActiveScope for Interior {}
 impl ActiveScope for Shared {}
 impl ActiveScope for Exterior {}
 impl ActiveScope for Active {}
 impl ActiveScope for Grounded {}
-impl<O: NonVoid, I: ActiveScope> ActiveScope for Refine<O, I> {}
+impl<O: Definite, I: ActiveScope> ActiveScope for Refine<O, I> {}
 
 /// Sealed marker trait for outer origins eligible to participate in grounded persistence.
 ///
-/// Excludes [`Void`], [`Exterior`], and the erased compute-only closure [`Active`].
-pub trait GroundedOrigin: NonVoid {}
+/// Excludes [`Unmarked`], [`Bottom`], [`Exterior`], and the erased compute-only closure
+/// [`Active`].
+pub trait GroundedOrigin: Definite {}
 
 impl GroundedOrigin for FromBoundary {}
 impl GroundedOrigin for FromDelta {}
@@ -168,8 +190,7 @@ pub type BoundaryViolation<T> = Scoped<Refine<FromBoundary, Exterior>, T>;
 
 /// Delta-originated exterior reading ($O \setminus S$) pending shared-bridge verification.
 ///
-/// Excluded from [`GroundedScope`] until verified through
-/// [`SpeculativeDiscovery::bridge_to_shared`].
+/// Excluded from [`GroundedScope`] until promoted via `bridge_to_shared` in `liminal::axiom`.
 pub type SpeculativeDiscovery<T> = Scoped<Refine<FromDelta, Exterior>, T>;
 
 /// Delta-originated discovery verified across at least one shared bridge granule ($S \cap O$).
@@ -214,10 +235,17 @@ impl<B, T> Scoped<B, T> {
         &self.value
     }
 
-    /// Safely discards any scoped payload into [`Void`] (zero-aperture non-observation).
+    /// Safely discards any scoped payload into [`Unmarked`] (zero-aperture non-observation).
     #[inline(always)]
     #[must_use]
-    pub fn discard_to_void(self) -> Scoped<Void, T> {
+    pub fn discard_to_unmarked(self) -> Scoped<Unmarked, T> {
+        Scoped::from_raw(self.value)
+    }
+
+    /// Terminally discards any scoped payload into [`Bottom`] (non-cuttable undefined state).
+    #[inline(always)]
+    #[must_use]
+    pub fn discard_to_bottom(self) -> Scoped<Bottom, T> {
         Scoped::from_raw(self.value)
     }
 }
@@ -238,11 +266,20 @@ impl<T> Scoped<Interior, T> {
     }
 }
 
-impl<T> Scoped<Void, T> {
-    /// Constructs a payload scoped to zero-aperture [`Void`] ($\overline{S \cup O}$).
+impl<T> Scoped<Unmarked, T> {
+    /// Constructs a payload scoped to zero-aperture [`Unmarked`] space.
     #[inline(always)]
     #[must_use]
-    pub const fn void(value: T) -> Self {
+    pub const fn unmarked(value: T) -> Self {
+        Self::from_raw(value)
+    }
+}
+
+impl<T> Scoped<Bottom, T> {
+    /// Constructs a payload scoped to terminal non-cuttable [`Bottom`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn bottom(value: T) -> Self {
         Self::from_raw(value)
     }
 }
@@ -299,22 +336,6 @@ impl<B: GroundedScope, T> Scoped<B, T> {
     }
 }
 
-impl<T> SpeculativeDiscovery<T> {
-    /// Attempts to promote a delta-originated exterior discovery into [`BridgedDiscovery`]
-    /// when supported by at least one shared bridge granule (`bridge_count >= 1`).
-    ///
-    /// # Errors
-    /// Returns `Err(self)` unchanged when `bridge_count == 0`.
-    #[inline(always)]
-    pub fn bridge_to_shared(self, bridge_count: u8) -> Result<BridgedDiscovery<T>, Self> {
-        if bridge_count >= 1 {
-            Ok(Scoped::from_raw(self.value))
-        } else {
-            Err(self)
-        }
-    }
-}
-
 // ===================================================================
 // 4. Branchless Runtime Atomic Bit-Cuts (`BitCut8` & `BitCut32`)
 // ===================================================================
@@ -351,6 +372,41 @@ impl BitCut8 {
             Self::split(self.outside, next_mask),
         )
     }
+
+    /// Returns the shared intersection of two cuts (`self.inside & other.inside`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn intersect(self, other: Self) -> u8 {
+        self.inside & other.inside
+    }
+
+    /// Returns the bits inside `self` that lie outside `other` (`self.inside & other.outside`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn excess_over(self, other: Self) -> u8 {
+        self.inside & other.outside
+    }
+
+    /// Returns the symmetric boundary difference (`self.inside ^ other.inside`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn symmetric_diff(self, other: Self) -> u8 {
+        self.inside ^ other.inside
+    }
+
+    /// Returns `true` when `self.inside` differs from `prev.inside` on at least one bit.
+    #[inline(always)]
+    #[must_use]
+    pub const fn has_novel_boundary(self, prev: Self) -> bool {
+        (self.inside ^ prev.inside) != 0
+    }
+
+    /// Returns the joint blindspot excluded by both cuts (`self.outside & other.outside`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn blindspot_mask(self, other: Self) -> u8 {
+        self.outside & other.outside
+    }
 }
 
 /// Branchless 32-bit atomic partition separating a bit-universe into disjoint `inside` and
@@ -385,6 +441,41 @@ impl BitCut32 {
             Self::split(self.outside, next_mask),
         )
     }
+
+    /// Returns the shared intersection of two cuts (`self.inside & other.inside`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn intersect(self, other: Self) -> u32 {
+        self.inside & other.inside
+    }
+
+    /// Returns the bits inside `self` that lie outside `other` (`self.inside & other.outside`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn excess_over(self, other: Self) -> u32 {
+        self.inside & other.outside
+    }
+
+    /// Returns the symmetric boundary difference (`self.inside ^ other.inside`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn symmetric_diff(self, other: Self) -> u32 {
+        self.inside ^ other.inside
+    }
+
+    /// Returns `true` when `self.inside` differs from `prev.inside` on at least one bit.
+    #[inline(always)]
+    #[must_use]
+    pub const fn has_novel_boundary(self, prev: Self) -> bool {
+        (self.inside ^ prev.inside) != 0
+    }
+
+    /// Returns the joint blindspot excluded by both cuts (`self.outside & other.outside`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn blindspot_mask(self, other: Self) -> u32 {
+        self.outside & other.outside
+    }
 }
 
 const _: () = {
@@ -393,13 +484,15 @@ const _: () = {
     assert!(size_of::<Interior>() == 0);
     assert!(size_of::<Shared>() == 0);
     assert!(size_of::<Exterior>() == 0);
-    assert!(size_of::<Void>() == 0);
+    assert!(size_of::<Unmarked>() == 0);
+    assert!(size_of::<Bottom>() == 0);
     assert!(size_of::<Active>() == 0);
     assert!(size_of::<Grounded>() == 0);
     assert!(size_of::<Refine<FromBoundary, Shared>>() == 0);
     assert!(size_of::<Refine<Refine<FromDelta, Shared>, Interior>>() == 0);
     assert!(size_of::<Scoped<Interior, u64>>() == size_of::<u64>());
-    assert!(size_of::<Scoped<Void, u64>>() == size_of::<u64>());
+    assert!(size_of::<Scoped<Unmarked, u64>>() == size_of::<u64>());
+    assert!(size_of::<Scoped<Bottom, u64>>() == size_of::<u64>());
     assert!(size_of::<Scoped<Active, u64>>() == size_of::<u64>());
     assert!(size_of::<Scoped<Grounded, u64>>() == size_of::<u64>());
     assert!(size_of::<VerifiedAligned<u64>>() == size_of::<u64>());
@@ -412,7 +505,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_scoped_closures_and_discard() {
+    fn test_scoped_closures_and_discards() {
         let interior = Scoped::interior(10u32);
         assert_eq!(*interior.active_ref(), 10);
         assert_eq!(*interior.grounded_ref(), 10);
@@ -423,30 +516,47 @@ mod tests {
         let sealed_grounded: Scoped<Grounded, u32> = Scoped::interior(42u32).seal_grounded();
         assert_eq!(*sealed_grounded.grounded_ref(), 42);
 
-        let voided: Scoped<Void, u32> = sealed_grounded.discard_to_void();
-        assert_eq!(*voided.as_ref(), 42);
-        assert_eq!(voided.into_inner(), 42);
+        let unmarked: Scoped<Unmarked, u32> = sealed_grounded.discard_to_unmarked();
+        assert_eq!(*unmarked.as_ref(), 42);
+        let bottom: Scoped<Bottom, u32> = unmarked.discard_to_bottom();
+        assert_eq!(*bottom.as_ref(), 42);
+        assert_eq!(bottom.into_inner(), 42);
     }
 
     #[test]
-    fn test_bit_cut8_and_bit_cut32_quadrant_disjointness() {
-        let (in_self, out_self) = BitCut8::split(0xFF, 0b0011_0101).refine(0b0101_0011);
-        assert_eq!(in_self.inside, 0b0001_0001);
-        assert_eq!(in_self.outside, 0b0010_0100);
-        assert_eq!(out_self.inside, 0b0100_0010);
-        assert_eq!(out_self.outside, 0b1000_1000);
+    fn test_bit_cut8_and_bit_cut32_quadrant_and_cross_ops() {
+        let cut_a = BitCut8::split(0xFF, 0b0011_0101);
+        let cut_b = BitCut8::split(0xFF, 0b0101_0011);
+
+        assert_eq!(cut_a.intersect(cut_b), 0b0001_0001);
+        assert_eq!(cut_a.excess_over(cut_b), 0b0010_0100);
+        assert_eq!(cut_b.excess_over(cut_a), 0b0100_0010);
+        assert_eq!(cut_a.blindspot_mask(cut_b), 0b1000_1000);
+        assert_eq!(cut_a.symmetric_diff(cut_b), 0b0110_0110);
+        assert!(cut_a.has_novel_boundary(cut_b));
+        assert!(!cut_a.has_novel_boundary(cut_a));
+
+        let (in_self, out_self) = cut_a.refine(0b0101_0011);
+        assert_eq!(in_self.inside, cut_a.intersect(cut_b));
+        assert_eq!(in_self.outside, cut_a.excess_over(cut_b));
+        assert_eq!(out_self.inside, cut_b.excess_over(cut_a));
+        assert_eq!(out_self.outside, cut_a.blindspot_mask(cut_b));
         assert_eq!(
             in_self.inside | in_self.outside | out_self.inside | out_self.outside,
             0xFF
         );
-        assert_eq!(in_self.inside & in_self.outside, 0);
-        assert_eq!(out_self.inside & out_self.outside, 0);
-        assert_eq!(
-            (in_self.inside | in_self.outside) & (out_self.inside | out_self.outside),
-            0
-        );
 
-        let (c_in, c_out) = BitCut32::split(0xFFFF_00FF, 0x0F0F_0F0F).refine(0x00FF_00FF);
+        let c32_a = BitCut32::split(0xFFFF_00FF, 0x0F0F_0F0F);
+        let c32_b = BitCut32::split(0xFFFF_00FF, 0x00FF_00FF);
+        assert_eq!(c32_a.intersect(c32_b), 0x000F_000F);
+        assert_eq!(c32_a.excess_over(c32_b), 0x0F00_0000);
+        assert_eq!(c32_b.excess_over(c32_a), 0x00F0_00F0);
+        assert_eq!(c32_a.blindspot_mask(c32_b), 0xF000_0000);
+        assert_eq!(c32_a.symmetric_diff(c32_b), 0x0FF0_00F0);
+        assert!(c32_a.has_novel_boundary(c32_b));
+        assert!(!c32_a.has_novel_boundary(c32_a));
+
+        let (c_in, c_out) = c32_a.refine(0x00FF_00FF);
         assert_eq!(
             c_in.inside | c_in.outside | c_out.inside | c_out.outside,
             0xFFFF_00FF

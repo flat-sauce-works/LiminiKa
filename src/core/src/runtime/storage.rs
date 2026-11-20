@@ -45,19 +45,18 @@ use crate::foundation::{
     crc32_slice16_indep_lo1_u32, crc32_step_block64_words, crc32_step_l16, crc32_step_l3,
     crc32_step_l32, crc32_step_l4, crc32_step_l8, encode_pframe_motion_delta_64,
     finalize_pframe_chain_words_64, gcso_tagged_ptr_t, is_aligned_to, load_q7_words_64,
-    seek_pframe_chain_words_64, store_q7_words_64, swar_q7_add_sat_x8, swar_q7_circular_add_x8,
-    swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8, swar_q7_phase_step_filter_words_64,
-    update_aligned64_blocks_crc32_raw, AlignedSlice, AlignedSlice16, AlignedSlice32,
-    AlignedSlice64, AlignedSliceMut64, BranchlessKernel, Pod, CRC32_MAPPED_STORAGE_DESC_BASE_SEED,
+    pack_action_slot_tag, seek_pframe_chain_words_64, store_q7_words_64, swar_q7_add_sat_x8,
+    swar_q7_circular_add_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8,
+    swar_q7_phase_step_filter_words_64, unpack_action_mode_from_tag,
+    unpack_attractor_slot_from_tag, update_aligned64_blocks_crc32_raw, AlignedSlice,
+    AlignedSlice16, AlignedSlice32, AlignedSlice64, AlignedSliceMut64, BranchlessKernel, Pod,
+    ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK, CRC32_MAPPED_STORAGE_DESC_BASE_SEED,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, gcso_config_t, gcso_q7_t, pack_action_slot_tag,
-    unpack_action_mode_from_tag, unpack_attractor_slot_from_tag, GcsoResult,
-    ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION,
+    branchless_select_f32, branchless_select_u32, gcso_config_t, gcso_q7_t, GcsoResult,
     DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_HEX, GCSO_ERROR_BUFFER_TOO_SMALL,
     GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE,
-    GCSO_ERROR_MISALIGNED_POINTER, GCSO_ERROR_VERSION_MISMATCH, GCSO_FOUR_SECTION_HEADER_BYTES,
-    GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET, GCSO_SNAPSHOT_MAGIC_U32, MAX_ATTENTION_HEADS,
+    GCSO_ERROR_MISALIGNED_POINTER, GCSO_ERROR_VERSION_MISMATCH, MAX_ATTENTION_HEADS,
     MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
 };
 use crate::runtime::abi::types::{
@@ -68,8 +67,15 @@ use crate::runtime::gateway::signals::CausalProvenanceReport;
 use crate::stigmergy::{
     gcso_ledger_slot_t, gcso_pointer_trail_t, trail_phase_words_mut, CognitiveTrajectoryLedger,
     ContrastivePhaseBloomFilter, CrystallizedAttractorRecord, StigmergicActionPtrOps,
-    LEDGER_FLAG_COGNITIVE_TRAJECTORY, MAX_ATTRACTOR_PULL_FORCE, TRAIL_FLAG_REPULSION_ACTIVE,
+    ATTRACTOR_SLOT_REPULSION, GCSO_SNAPSHOT_MAGIC_U32, LEDGER_FLAG_COGNITIVE_TRAJECTORY,
+    MAX_ATTRACTOR_PULL_FORCE, TRAIL_FLAG_REPULSION_ACTIVE,
 };
+
+/// Fixed byte length (`192` bytes = `128B` `gcso_snapshot_header_t` + `64B` `gcso_mapped_storage_descriptor_t`) of Section 0.
+pub const GCSO_FOUR_SECTION_HEADER_BYTES: usize = 192;
+
+/// Byte offset (`128`) within the 192-byte Section 0 preamble where `gcso_mapped_storage_descriptor_t` is stored.
+pub const GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET: usize = 128;
 
 /// Constructs a canonical `gcso_descriptor_header_t` for type `T` stamped with [`GCSO_ABI_VERSION_HEX`].
 #[inline(always)]
@@ -1790,9 +1796,8 @@ const _: () = {
 mod tests {
     use super::*;
     use crate::foundation::AlignedBuffer64;
-    use crate::liminal::{
-        ATTRACTOR_SLOT_PERSONA, CAUSAL_AXIS_SUBJECTIVE_PERSONA, MAX_ATTENTION_HEADS,
-    };
+    use crate::liminal::MAX_ATTENTION_HEADS;
+    use crate::stigmergy::{ATTRACTOR_SLOT_PERSONA, CAUSAL_AXIS_SUBJECTIVE_PERSONA};
 
     #[test]
     fn test_mapped_storage_engine_dnp_and_pprc_gop_video_stream_seek() {

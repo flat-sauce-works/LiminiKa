@@ -12,8 +12,9 @@ use liminika_core::abi::{
     gcso_dpsr_apply_phase_steering_fused_safe, gcso_pointer_trail_t, GcsoContextHandle,
     GCSO_SUCCESS,
 };
-use liminika_core::foundation::{AlignedBuffer16, AlignedBuffer32};
-use liminika_core::liminal::{DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD};
+use liminika_core::foundation::{
+    AlignedBuffer16, AlignedBuffer32, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD,
+};
 use liminika_core::stigmergy::StigmergicReconstitutionReport;
 
 struct ZeroAllocGuardAllocator;
@@ -135,8 +136,8 @@ fn test_context_step_token_zero_allocation_guarantee() {
 
 #[test]
 fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
+    use liminika_core::drivers::EGO_TRIGGER_BOUNDARY_CHATTER;
     use liminika_core::foundation::{RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget};
-    use liminika_core::liminal::EGO_TRIGGER_BOUNDARY_CHATTER;
     use liminika_core::runtime::{
         AutonomousCoreLayerStack, GatewayFrame, HorizonTriggerInput, LatentHorizonSlot,
         ObjectiveFact, SubjectivePersona, SystemConstraint,

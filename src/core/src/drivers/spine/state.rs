@@ -9,12 +9,12 @@
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
 
-use crate::foundation::Pod;
+use crate::foundation::{Pod, ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK};
 use crate::liminal::{
-    branchless_select_u8, AttributionTag, ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK,
-    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, THRESHOLD_CONTRADICTION_GUARD,
+    branchless_select_u8, AttributionTag, THRESHOLD_CONTRADICTION_GUARD,
     THRESHOLD_SYSTEM_CONSTRAINT,
 };
+use crate::stigmergy::{ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE};
 
 // 3. System Spine State & Physical `pinned` Isolation (32 B)
 // ===================================================================

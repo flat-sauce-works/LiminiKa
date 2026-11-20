@@ -68,8 +68,8 @@ fn adapter_steps_edbc_and_applies_srl_residual() {
 
 #[test]
 fn adapter_steers_via_gateway_trait_composition() {
-    use liminika_core::liminal::{CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA};
     use liminika_core::runtime::{ObjectiveFact, SubjectivePersona};
+    use liminika_core::stigmergy::{CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA};
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
@@ -2431,8 +2431,8 @@ fn adapter_residual_spillover_dimension_elevation_and_verified_cache() {
 
 #[test]
 fn adapter_distortion_feedback_wakes_and_cools_ego_and_renders_mermaid() {
+    use liminika_core::drivers::EGO_TRIGGER_LAYER_DISTORTION;
     use liminika_core::drivers::{LayerDistortionKind, LayerDistortionReport, LiminalEgoPreset};
-    use liminika_core::liminal::EGO_TRIGGER_LAYER_DISTORTION;
 
     let geom = RopeGeometry::phi4_mini();
     let mut adapter = ModelSteeringAdapter::new(geom).expect("valid adapter");
@@ -2583,7 +2583,7 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
         )
         .expect("ingest guard");
 
-    use liminika_core::liminal::{WORKBENCH_LANE_FLAG_PINNED, WORKBENCH_LANE_FLAG_SANDBOX};
+    use liminika_core::stigmergy::{WORKBENCH_LANE_FLAG_PINNED, WORKBENCH_LANE_FLAG_SANDBOX};
 
     // 1. Switch 8-lane workbench preset atomically using AutoFree + pinned explicit lanes.
     let specs = [

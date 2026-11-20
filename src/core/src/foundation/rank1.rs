@@ -135,15 +135,14 @@ const _: () = {
 mod tests {
     use super::*;
     use crate::foundation::aligned::{AlignedBuffer32, AlignedBuffer64};
+    use crate::foundation::pod::ACTION_PRESET_FULL_ORCHESTRATION;
     use crate::foundation::pod::{gcso_paged_bitmask_t, gcso_subhead_config_t, gcso_tagged_ptr_t};
     use crate::foundation::rope::{
         detect_frame_mse_bitmask, dispatch_phase_clamp_and_subhead_slot_ensemble_fused,
         eval_rank1_fused, eval_rank1_pointer_gated_fused, PhaseSteering,
     };
-    use crate::liminal::{
-        gcso_q7_t, ACTION_PRESET_FULL_ORCHESTRATION, ATTRACTOR_SLOT_KNOWLEDGE,
-        ATTRACTOR_SLOT_PERSONA, DEFAULT_PHASE_CLAMP_MAX_RAD,
-    };
+    use crate::foundation::scalar_math::DEFAULT_PHASE_CLAMP_MAX_RAD;
+    use crate::liminal::gcso_q7_t;
 
     struct DummyRopeEngine {
         head_dim: u32,
@@ -193,8 +192,8 @@ mod tests {
             DEFAULT_PHASE_CLAMP_MAX_RAD,
             &subhead_cfg,
             &bank.relax_slice::<16>(),
-            ATTRACTOR_SLOT_KNOWLEDGE,
-            ATTRACTOR_SLOT_PERSONA,
+            2,
+            1,
             2,
             DEFAULT_PHASE_CLAMP_MAX_RAD,
             8,
@@ -220,11 +219,7 @@ mod tests {
             flags: 0,
             reserved: [0; 24],
         };
-        let ptr = gcso_tagged_ptr_t::pack(
-            0x1000,
-            (ATTRACTOR_SLOT_PERSONA << 5) | ACTION_PRESET_FULL_ORCHESTRATION,
-            0,
-        );
+        let ptr = gcso_tagged_ptr_t::pack(0x1000, (1 << 5) | ACTION_PRESET_FULL_ORCHESTRATION, 0);
         let injected = eval_rank1_pointer_gated_fused(
             ptr,
             &mut y_srl.as_aligned_slice_mut(),

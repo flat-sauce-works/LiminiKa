@@ -80,7 +80,17 @@ pub const GCSO_ANCHOR_TYPE_CRYSTALLIZED: gcso_anchor_type_t = 4;
 
 // ===================================================================
 
-pub use crate::liminal::{MAX_ANCHORS_PER_FIELD, MAX_ATTRACTOR_DOMAINS};
+pub use crate::liminal::MAX_ATTRACTOR_DOMAINS;
+
+/// Fixed capacity of topological anchors per Macro Attractor Field accumulator (`64`).
+pub const MAX_ANCHORS_PER_FIELD: usize = 64;
+
+/// Binary magic constant for `.gcso` snapshot headers (`0x4F534347` = ASCII `"GCSO"`).
+pub const GCSO_SNAPSHOT_MAGIC_U32: u32 = 0x4F53_4347;
+
+const _: () = {
+    assert!(MAX_ANCHORS_PER_FIELD == 64);
+};
 
 /// Maximum dimension supported for embedding vectors in inline zero-alloc storage (`128`).
 pub const MAX_EMBEDDING_DIM: usize = 128;
@@ -121,11 +131,9 @@ mod tests {
     use super::*;
     use crate::foundation::{
         is_phase_profile_nonzero_64, AlignedBuffer32, AlignedBuffer64, PhaseSteering,
+        DEFAULT_PHASE_CLAMP_MAX_RAD,
     };
-    use crate::liminal::{
-        gcso_q7_t, DEFAULT_PHASE_CLAMP_MAX_RAD, GCSO_ERROR_ACTION_HUB_FULL,
-        GCSO_SNAPSHOT_MAGIC_U32, MAX_ATTENTION_HEADS,
-    };
+    use crate::liminal::{gcso_q7_t, GCSO_ERROR_ACTION_HUB_FULL, MAX_ATTENTION_HEADS};
     use crate::stigmergy::trail::gcso_pointer_trail_t;
     use core::mem::size_of;
 

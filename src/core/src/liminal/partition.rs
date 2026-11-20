@@ -145,10 +145,11 @@ pub fn evaluate_epistemic_partition_branchless(
         g += 1;
     }
 
-    let (in_self, out_self) = BitCut8::split(0xFF, self_mask).refine(other_mask);
-    let shared_core_mask = in_self.inside;
-    let self_exclusive_mask = in_self.outside;
-    let raw_ext_mask = out_self.inside;
+    let self_cut = BitCut8::split(0xFF, self_mask);
+    let other_cut = BitCut8::split(0xFF, other_mask);
+    let shared_core_mask = self_cut.intersect(other_cut);
+    let self_exclusive_mask = self_cut.excess_over(other_cut);
+    let raw_ext_mask = other_cut.excess_over(self_cut);
     let bridge_count = shared_core_mask.count_ones() as u8;
     let ext_cnt = raw_ext_mask.count_ones() as u8;
 
@@ -181,7 +182,8 @@ pub fn evaluate_epistemic_partition_branchless(
     let known_unknown_mask = branchless_select_u8(ext_valid, raw_ext_mask, 0);
     let known_unknown_density_q7 = branchless_select_u8(ext_valid, mean_ext_excess, 0);
 
-    let true_void_mask = !(shared_core_mask | self_exclusive_mask | known_unknown_mask);
+    let valid_other_cut = BitCut8::split(0xFF, shared_core_mask | known_unknown_mask);
+    let true_void_mask = self_cut.blindspot_mask(valid_other_cut);
 
     // 4p(1-p) in Q0.7 (`0 fdiv`): p_q7 = active_cnt * 16 in [0..=128], sensitivity = (p_q7 * (128 - p_q7)) >> 5
     let active_other_cnt = (shared_core_mask | known_unknown_mask).count_ones();

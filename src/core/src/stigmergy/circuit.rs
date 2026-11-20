@@ -31,10 +31,10 @@ use crate::foundation::{
     branchless_clamp_f32, swar_q7_abs_u8_x8, swar_q7_circular_diff_x8, words_to_q7_array_64, Pod,
     RawPhaseProjectable, SWAR_SPLAT_BYTE_64,
 };
-use crate::liminal::{gcso_q7_t, LEDGER_HISTORY_LEN, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
+use crate::liminal::{gcso_q7_t, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
 use crate::stigmergy::action_hub::StigmergicThresholds;
 use crate::stigmergy::ledger::gcso_ledger_slot_t;
-use crate::stigmergy::LEDGER_FLAG_COGNITIVE_TRAJECTORY;
+use crate::stigmergy::{LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_HISTORY_LEN};
 
 /// Multi-scale granularity tier within the self-similar GCSO hierarchy.
 #[repr(u8)]

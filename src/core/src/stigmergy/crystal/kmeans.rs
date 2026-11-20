@@ -10,16 +10,12 @@ use crate::foundation::{
     branchless_max_f32, branchless_min_f32,
     branchless_toroidal_centroid_step_words_with_coh_and_uni_64,
     coherence_above_floor_from_word_arrays_64, crc32_update_crystal_energy_and_mass_delta,
-    is_word_array_uniform_64,
+    is_word_array_uniform_64, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR,
 };
-use crate::liminal::{
-    ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR,
-    CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, DEFAULT_ENTROPY_EPS, GCSO_CRYSTAL_RECORD_MAGIC,
-    GCSO_CRYSTAL_RECORD_VERSION, NUM_STIGMERGIC_GRANULES,
-};
-use crate::stigmergy::MAX_ATTRACTOR_PULL_FORCE;
+use crate::liminal::{DEFAULT_ENTROPY_EPS, NUM_STIGMERGIC_GRANULES};
+use crate::stigmergy::{CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, MAX_ATTRACTOR_PULL_FORCE};
 
-use super::CrystallizedAttractorRecord;
+use super::{CrystallizedAttractorRecord, GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION};
 
 impl CrystallizedAttractorRecord {
     fn merge_other_centroid_words_in_place(

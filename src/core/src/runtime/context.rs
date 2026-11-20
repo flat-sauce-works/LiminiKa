@@ -44,26 +44,24 @@ use crate::foundation::{
     store_q7_words_64, swar_or_avx2_q7_add_sat_words_64, swar_slerp_words_with_uniform_flag_64,
     swar_words_equal_64, swar_words_nonzero_64, AlignedBuffer16, AlignedSlice16, AlignedSlice32,
     AlignedSliceMut16, AlignedSliceMut32, PhaseSteering, PhaseSteeringEngine,
-    PhaseSteeringGeometryExt, Pod, RopeSteeringTarget, SWAR_SPLAT_BYTE_64,
+    PhaseSteeringGeometryExt, Pod, RopeSteeringTarget, ACTION_MODE_LAYER_SKIP,
+    ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
+    DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u8, gcso_config_t, gcso_q7_t,
     AttributionTag, DriverKind, EpistemicPartition, EpistemicRegime, GcsoResult,
-    LiminalBoundaryDelta, LiminalThresholdField, SubstrateKind, ACTION_MODE_LAYER_SKIP,
-    ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_PERSONA,
-    ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_ENTROPY_EPS,
-    DEFAULT_PAGED_BLOCK_SIZE, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD,
-    DEFAULT_SLOT_COUPLING_MATRIX_8X8, GCSO_ABI_VERSION_MAJOR, GCSO_ABI_VERSION_MINOR,
-    GCSO_ABI_VERSION_PATCH, GCSO_ABI_VERSION_STRING, GCSO_ERROR_BUFFER_TOO_SMALL,
-    GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT, LEDGER_HISTORY_LEN,
-    MAX_ANCHORS_PER_FIELD, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
-    Q7_PHASE_SCALE_RAD, ROOT_CAUSE_SYSTEM_QOS_THROTTLE, WORKBENCH_LANE_FLAG_REPULSION,
+    LiminalThresholdField, SubstrateKind, DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_MAJOR,
+    GCSO_ABI_VERSION_MINOR, GCSO_ABI_VERSION_PATCH, GCSO_ABI_VERSION_STRING,
+    GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT,
+    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, Q7_PHASE_SCALE_RAD,
 };
 use crate::runtime::abi::types::{
     gcso_capability_flags_t, gcso_kv_keyframe_header_t, gcso_mapped_storage_descriptor_t,
     gcso_snapshot_header_t, GCSO_CAP_CPU_BASELINE, GCSO_CAP_CUDA_BACKEND, GCSO_CAP_METAL_BACKEND,
     GCSO_CAP_VULKAN_BACKEND,
 };
+use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::gateway::{
     ActionHubGatewayExt, CausalProvenanceReport, CausalProvenanceSignal,
     EntropyClosedLoopCoordinator, GatewayFrame, GatewayPhaseSteeringExt, ManifoldGatewaySignal,
@@ -73,6 +71,26 @@ use crate::runtime::horizon::{
     apply_latent_horizon_slots, EpistemicHorizonReading, HorizonDwellState,
     HorizonEscalationProvider, HorizonEscalationRequest, HorizonTriggerInput, LatentHorizonSlot,
 };
+use crate::stigmergy::{
+    ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_ACTION_HUB_CAPACITY,
+    DEFAULT_SLOT_COUPLING_MATRIX_8X8, LEDGER_HISTORY_LEN, MAX_ANCHORS_PER_FIELD,
+    ROOT_CAUSE_SYSTEM_QOS_THROTTLE, WORKBENCH_LANE_FLAG_REPULSION,
+};
+
+/// Default number of tokens per PagedAttention KV cache block (`32`).
+pub const DEFAULT_PAGED_BLOCK_SIZE: u32 = 32;
+
+/// Number of orthogonal self-tuning autonomous core layers (`Layer 0: Liminal`, `Layer 1: Stigmergic`, `Layer 2: Ego`).
+pub const NUM_CORE_AUTONOMOUS_LAYERS: usize = 3;
+
+/// Autonomous Core Layer 0 identifier: Epistemic Horizon & Trait Threshold (`LiminalThresholdField`).
+pub const CORE_LAYER_LIMINAL: usize = 0;
+
+/// Autonomous Core Layer 1 identifier: Stigmergic Granule Approximation, Overlap & Serendipity (`StigmergicGranuleField`).
+pub const CORE_LAYER_STIGMERGIC: usize = 1;
+
+/// Autonomous Core Layer 2 identifier: Wide-Threshold Subjective Ego & Top-Down Boundary Intervention (`LiminalEgoField`).
+pub const CORE_LAYER_EGO: usize = 2;
 use crate::runtime::storage::{
     finalize_snapshot_header_crc32, init_snapshot_header, verify_snapshot_payload_crc32,
     KvKeyframeCache, MappedStorage,
@@ -2643,8 +2661,8 @@ mod tests {
 
     #[test]
     fn test_runtime_context_vertical_piercing_and_dynamic_slide_in_out() {
+        use crate::drivers::EGO_TRIGGER_BOUNDARY_CHATTER;
         use crate::foundation::rope::{RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget};
-        use crate::liminal::EGO_TRIGGER_BOUNDARY_CHATTER;
         use crate::prelude::{AlignedBuffer32, ObjectiveFact, SubjectivePersona, SystemConstraint};
 
         struct MockGeom;
@@ -2911,8 +2929,8 @@ mod tests {
 
     #[test]
     fn test_residual_spillover_slot_cache_promotion_eviction_and_escalation() {
+        use crate::drivers::EGO_TRIGGER_INTERNAL_CONFLICT;
         use crate::foundation::rope::{RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget};
-        use crate::liminal::EGO_TRIGGER_INTERNAL_CONFLICT;
         use crate::prelude::{
             AlignedBuffer32, DefaultResidualSpilloverSlot, ObjectiveFact, SubjectivePersona,
             SystemConstraint,

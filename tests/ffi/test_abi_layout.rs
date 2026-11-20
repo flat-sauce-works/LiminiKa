@@ -279,7 +279,7 @@ fn test_gcso_types_abi_layout_invariants() {
         env!("CARGO_PKG_VERSION")
     );
     assert_eq!(
-        liminika_core::liminal::GCSO_CRYSTAL_RECORD_VERSION,
+        liminika_core::stigmergy::GCSO_CRYSTAL_RECORD_VERSION,
         liminika_core::abi::GCSO_ABI_VERSION_HEX
     );
     assert_eq!(
@@ -324,17 +324,20 @@ fn test_gcso_types_abi_layout_invariants() {
         offset_of!(liminika_core::ActionHubEngine, reserved_align128),
         2815
     );
-    assert_eq!(liminika_core::liminal::ATTRACTOR_SLOT_TEMPORAL, 5);
-    assert_eq!(liminika_core::liminal::ATTRACTOR_SLOT_USER_INTENT, 6);
-    assert_eq!(liminika_core::liminal::ATTRACTOR_SLOT_CRYSTALLIZED, 7);
-    assert_eq!(liminika_core::liminal::WORKBENCH_LANE_COUNT, 8);
-    assert_eq!(liminika_core::liminal::WORKBENCH_LANE_AUTO, 0xFF);
-    assert_eq!(liminika_core::liminal::WORKBENCH_LANE_FLAG_PINNED, 1 << 0);
+    assert_eq!(liminika_core::stigmergy::ATTRACTOR_SLOT_TEMPORAL, 5);
+    assert_eq!(liminika_core::stigmergy::ATTRACTOR_SLOT_USER_INTENT, 6);
+    assert_eq!(liminika_core::stigmergy::ATTRACTOR_SLOT_CRYSTALLIZED, 7);
+    assert_eq!(liminika_core::stigmergy::WORKBENCH_LANE_COUNT, 8);
+    assert_eq!(liminika_core::stigmergy::WORKBENCH_LANE_AUTO, 0xFF);
+    assert_eq!(liminika_core::stigmergy::WORKBENCH_LANE_FLAG_PINNED, 1 << 0);
     assert_eq!(
-        liminika_core::liminal::WORKBENCH_LANE_FLAG_REPULSION,
+        liminika_core::stigmergy::WORKBENCH_LANE_FLAG_REPULSION,
         1 << 1
     );
-    assert_eq!(liminika_core::liminal::WORKBENCH_LANE_FLAG_SANDBOX, 1 << 2);
+    assert_eq!(
+        liminika_core::stigmergy::WORKBENCH_LANE_FLAG_SANDBOX,
+        1 << 2
+    );
 
     // Unified v0.1.3 2 Primitives x 2 Drivers & Distortion ABI types
     assert_eq!(size_of::<liminika_core::abi::gcso_attribution_tag_t>(), 1);

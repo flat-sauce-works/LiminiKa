@@ -13,13 +13,14 @@ use crate::foundation::{
     coherence_above_floor_from_word_arrays_64,
     coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_len_f32,
     fast_inv_pos_normal_f32, fast_ln_1p_bounded_f32, gcso_tagged_ptr_t, is_word_array_uniform_64,
-    load_q7_words_64, store_q7_words_64, swar_q7_mean_i8_from_words_with_uniform_flag_64,
-    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, DEFAULT_PHASE_GRAVITY_EPS,
-    Q7_FULL_COS_REF, SWAR_SPLAT_BYTE_64,
+    load_q7_words_64, pack_action_slot_tag, store_q7_words_64,
+    swar_q7_mean_i8_from_words_with_uniform_flag_64, swar_slerp_words_with_uniform_flag_64,
+    swar_words_equal_64, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_GRAVITY_EPS, Q7_FULL_COS_REF,
+    SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, gcso_q7_t, pack_action_slot_tag,
-    DEFAULT_ENTROPY_EPS, DEFAULT_PHASE_CLAMP_MAX_RAD, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    branchless_select_f32, branchless_select_u32, gcso_q7_t, DEFAULT_ENTROPY_EPS,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::stigmergy::trail::{gcso_pointer_trail_t, trail_phase_words_mut, trail_phase_words_ref};
 use crate::stigmergy::{
@@ -493,7 +494,7 @@ impl CrystallizedAttractorRecord {
     /// **Top-2 Liminal Bifurcation Macro Routing ($\mathcal{O}(K)$ 64-Bit SWAR)**:
     /// Evaluates the Top-2 nearest macro centroids $(k_1^*, k_2^*)$ on $SO(2)^{64}$ in a single pass.
     /// When the secondary centroid's gravitational pull satisfies $G_2 \ge \tau_{\mathrm{limina}} G_1$
-    /// (e.g. [`crate::liminal::DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO`]), interpolates along the shortest $S^1$
+    /// (e.g. [`super::DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO`]), interpolates along the shortest $S^1$
     /// geodesic between both centroids (bridging the *Limina* inter-memory boundary) and stamps
     /// `TRAIL_FLAG_LIMINAL_BEAT_ACTIVE | TRAIL_FLAG_SYNERGY_RESONANCE`.
     ///

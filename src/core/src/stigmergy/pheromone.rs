@@ -33,13 +33,14 @@ use crate::foundation::{
     branchless_min_f32, branchless_relu_f32, gcso_tagged_ptr_t, is_word_array_uniform_64,
     load_q7_words_64, swar_q7_abs_u8_x8, swar_q7_add_sat_x8, swar_q7_avg_round_x8,
     swar_q7_circular_add_x8, swar_q7_circular_diff_x8, swar_q7_scale_le128_with_bias_x8,
-    swar_u8_mean_round_x8, swar_words_nonzero_64, Pod, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
+    swar_u8_mean_round_x8, swar_words_nonzero_64, Pod, ACTION_MODE_LAYER_SKIP,
+    ACTION_MODE_PHASE_STEER, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
+    ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK,
+    SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    gcso_q7_t, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_STEER, ACTION_PRESET_EXPRESS_PHASE,
-    ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_REPULSION_ESCAPE,
-    ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    gcso_q7_t, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::stigmergy::circuit::StigmergicScaleGranularity;
 use crate::stigmergy::ledger::ContrastivePhaseBloomFilter;
@@ -48,8 +49,9 @@ use crate::stigmergy::trail::{
     StigmergicTrailOps,
 };
 use crate::stigmergy::{
-    DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, DEFAULT_STIGMERGIC_TOLERANCE_Q7, MAX_STIGMERGIC_DENSITY,
-    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_PHASE_STEER_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
+    ATTRACTOR_SLOT_REPULSION, DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, DEFAULT_STIGMERGIC_TOLERANCE_Q7,
+    MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_PHASE_STEER_ACTIVE,
+    TRAIL_FLAG_REPULSION_ACTIVE,
 };
 // ===================================================================
 // 5. Shared Pheromone Density Laws (`PheromoneDensityOps`) & Pointer Trail

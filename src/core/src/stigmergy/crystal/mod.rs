@@ -50,17 +50,44 @@ use crate::foundation::{
     CRYSTAL_CRC32_RBAR_ONE_FINAL_CONTRIB, CRYSTAL_CRC32_W0_FINAL_CONTRIB, Q7_FULL_COS_REF,
     VON_MISES_KAPPA_AT_MAX_R_BITS,
 };
+use crate::foundation::{
+    ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR, ATTRACTOR_SLOT_ID_MASK,
+    DEFAULT_PHASE_CLAMP_MAX_RAD,
+};
 use crate::liminal::{
     branchless_select_f32, branchless_select_usize, gcso_q7_t, GcsoResult, Grounded, GroundedScope,
-    Scoped, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR, ATTRACTOR_SLOT_ID_MASK,
-    ATTRACTOR_SLOT_PERSONA, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, DEFAULT_ENTROPY_EPS,
-    DEFAULT_FACT_PHASE_CLAMP_RAD, DEFAULT_PERSONA_PHASE_CLAMP_RAD, DEFAULT_PHASE_CLAMP_MAX_RAD,
-    GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION, GCSO_ERROR_BUFFER_TOO_SMALL,
+    Scoped, DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_HEX, GCSO_ERROR_BUFFER_TOO_SMALL,
     GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER,
-    MAX_ATTENTION_HEADS, MAX_REGISTER_CACHED_CENTROIDS, NUM_STIGMERGIC_GRANULES,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+};
+use crate::stigmergy::{
+    ATTRACTOR_SLOT_PERSONA, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, MAX_ATTRACTOR_PULL_FORCE,
     ROOT_CAUSE_NOMINAL,
 };
-use crate::stigmergy::MAX_ATTRACTOR_PULL_FORCE;
+
+/// Narrow phase clamp authority (`0.14 rad`) for Objective Fact grounding (`Fact` sub-heads).
+pub const DEFAULT_FACT_PHASE_CLAMP_RAD: f32 = 0.14;
+
+/// Wide phase clamp authority (`0.24 rad`) for Subjective Persona modulation (`Explore/Logic` sub-heads).
+pub const DEFAULT_PERSONA_PHASE_CLAMP_RAD: f32 = 0.24;
+
+/// Default minimum cosine phase coherence threshold (`0.35`) for Online Toroidal DP-Means cluster splitting.
+pub const DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE: f32 = 0.35;
+
+/// Default cosine phase coherence threshold (`0.85`) for autonomous online consolidation of redundant macro centroids.
+pub const DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE: f32 = 0.85;
+
+/// Default secondary-to-primary gravity ratio threshold (`0.55`) triggering Top-2 Liminal Bifurcation Routing.
+pub const DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO: f32 = 0.55;
+
+/// Magic identifier (`0x4C545343` = ASCII `"CSTL"`) for `.gcso` `CrystallizedAttractorRecord` blocks.
+pub const GCSO_CRYSTAL_RECORD_MAGIC: u32 = 0x4C54_5343;
+
+/// Version constant for `CrystallizedAttractorRecord` binary serialization ([`GCSO_ABI_VERSION_HEX`]).
+pub const GCSO_CRYSTAL_RECORD_VERSION: u32 = GCSO_ABI_VERSION_HEX;
+
+#[allow(dead_code)]
+pub(crate) const MAX_REGISTER_CACHED_CENTROIDS: usize = 16;
 
 pub mod kmeans;
 pub mod routing;
@@ -781,8 +808,9 @@ impl CrystallizedAttractorRecord {
 
     /// Non-generic [`Grounded`] closure entry point for [`Self::absorb_sample_point_64`].
     ///
-    /// Statically excludes [`crate::liminal::Void`], [`crate::liminal::BoundaryViolation`], and
-    /// unbridged [`crate::liminal::SpeculativeDiscovery`] from crystallizing into persistent
+    /// Statically excludes [`crate::liminal::Unmarked`], [`crate::liminal::Bottom`],
+    /// [`crate::liminal::BoundaryViolation`], and unbridged
+    /// [`crate::liminal::SpeculativeDiscovery`] from crystallizing into persistent
     /// attractor memory without monomorphizing the absorption body.
     #[inline(always)]
     pub fn absorb_sample_point_grounded_64(

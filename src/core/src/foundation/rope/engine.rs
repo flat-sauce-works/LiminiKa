@@ -136,7 +136,8 @@ impl PhaseSteeringEngine {
     /// Non-generic [`Active`] closure entry point for [`PhaseSteering::apply_phase_steering`].
     ///
     /// Keeps the underlying AVX2/scalar RoPE kernel strictly non-generic (`0 B` L1I duplication)
-    /// while statically excluding [`crate::liminal::Void`] and unclassified origins at compile time.
+    /// while statically excluding [`crate::liminal::Unmarked`], [`crate::liminal::Bottom`], and
+    /// unclassified origins at compile time.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slice lengths are insufficient.

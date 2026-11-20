@@ -39,25 +39,20 @@ use crate::foundation::{
     circular_resultant_from_words_64, coherence_from_word_arrays_64,
     coherence_from_word_arrays_with_both_uniform_flags_64, encode_pframe_motion_delta_64,
     fast_mean_q7_tag_from_words_64, gcso_tagged_ptr_t, is_word_array_uniform_64, load_q7_words_64,
-    seek_pframe_chain_words_64, store_q7_words_64, swar_q7_abs_u8_x8, swar_q7_circular_add_x8,
-    swar_q7_circular_diff_x8, swar_q7_mean_i8_from_words_64, swar_q7_scale_le128_with_bias_x8,
-    swar_words_nonzero_64, words_to_q7_array_64, KvMotionDeltaPacket, RawPhaseProjectable,
-    SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
+    pack_action_slot_tag, seek_pframe_chain_words_64, store_q7_words_64, swar_q7_abs_u8_x8,
+    swar_q7_circular_add_x8, swar_q7_circular_diff_x8, swar_q7_mean_i8_from_words_64,
+    swar_q7_scale_le128_with_bias_x8, swar_words_nonzero_64, words_to_q7_array_64,
+    KvMotionDeltaPacket, RawPhaseProjectable, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_RANK1_INJECT,
+    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR,
+    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
+    DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
 };
 #[allow(unused_imports)]
 use crate::liminal::{
     branchless_select_f32, branchless_select_i8, branchless_select_u32, branchless_select_u64,
-    branchless_select_u8, gcso_q7_t, pack_action_slot_tag, EpistemicRegime, GcsoResult,
-    LiminalThresholdField, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_RANK1_INJECT,
-    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_KNOWLEDGE,
-    ATTRACTOR_SLOT_REPULSION, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
-    CAUSAL_CAUSE_COHOMOLOGY_REPULSION, CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, DEFAULT_ENTROPY_EPS,
-    DEFAULT_FACT_PHASE_CLAMP_RAD, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD,
-    GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
-    NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES, ROOT_CAUSE_COHOMOLOGY_REPULSION,
-    ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL, THRESHOLD_ACTION_HUB_WIDE,
-    WORKBENCH_LANE_FLAG_PINNED,
+    branchless_select_u8, gcso_q7_t, EpistemicRegime, GcsoResult, LiminalThresholdField,
+    DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES, THRESHOLD_ACTION_HUB_WIDE,
 };
 #[allow(unused_imports)]
 use crate::runtime::context::AutonomousCoreLayerStack;
@@ -76,6 +71,14 @@ use crate::stigmergy::{
     RelativeAttractorNode, StigmergicGranuleField, StigmergicOverlapSerendipityReport,
     StigmergicTrailOps, WorkbenchLanePlacement, WorkbenchSlotSpec, MAX_ATTRACTOR_PULL_FORCE,
     TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
+};
+#[allow(unused_imports)]
+use crate::stigmergy::{
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_REPULSION, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
+    CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, DEFAULT_FACT_PHASE_CLAMP_RAD,
+    ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL,
+    WORKBENCH_LANE_FLAG_PINNED,
 };
 
 pub mod epistemic;

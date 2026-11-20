@@ -11,16 +11,31 @@
 
 use crate::foundation::{
     compute_crc32_ieee, project_bytes_swar_to_words_64, swar_q7_mean_i8_from_words_64, Pod,
+    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_STEER, ACTION_MODE_SUBHEAD_ROUTE,
 };
 use crate::liminal::{
     branchless_select_i32, branchless_select_i8, branchless_select_u32, branchless_select_u8,
-    gcso_q7_t, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_STEER, ACTION_MODE_SUBHEAD_ROUTE,
+    gcso_q7_t, MAX_ATTRACTOR_DOMAINS, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
+};
+use crate::stigmergy::{
     ATTRACTOR_SLOT_CRYSTALLIZED, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
     ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_USER_CONTEXT, ATTRACTOR_SLOT_USER_INTENT,
-    EGO_TRIGGER_ALL_DEFAULT, EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER,
-    EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR,
-    MAX_ATTRACTOR_DOMAINS, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
 };
+
+/// Ego intervention trigger bit (`0x01`): Counter-basin orbital thrust when attractor pull threatens capture.
+pub const EGO_TRIGGER_BASIN_CAPTURE: u8 = 1 << 0;
+/// Ego intervention trigger bit (`0x02`): Defiant intervention under internal contradiction (`H^1 != 0`).
+pub const EGO_TRIGGER_INTERNAL_CONFLICT: u8 = 1 << 1;
+/// Ego intervention trigger bit (`0x04`): Transgressive step when standing at a `Liminal` horizon boundary.
+pub const EGO_TRIGGER_LIMINAL_EXTERIOR: u8 = 1 << 2;
+/// Ego intervention trigger bit (`0x08`): Boundary damping when temporal boundary velocity oscillates.
+pub const EGO_TRIGGER_BOUNDARY_CHATTER: u8 = 1 << 3;
+/// Ego intervention trigger bit (`0x10`): Self-initiated perturbation when boundaries stagnate completely.
+pub const EGO_TRIGGER_BOUNDARY_STAGNATION: u8 = 1 << 4;
+/// Ego intervention trigger bit (`0x20`): Corrective awakening when layer distortion or saturation is detected.
+pub const EGO_TRIGGER_LAYER_DISTORTION: u8 = 1 << 5;
+/// Default active bitmask enabling all 5 deterministic [`LiminalEgoField`] triggers (`0x1F`).
+pub const EGO_TRIGGER_ALL_DEFAULT: u8 = 0x1F;
 
 /// Intensity template preset for [`LiminalEgoField`].
 #[repr(u8)]

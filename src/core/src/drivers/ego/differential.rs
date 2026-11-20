@@ -21,11 +21,12 @@ use crate::foundation::{
 };
 use crate::liminal::{
     branchless_select_u32, branchless_select_u8, gcso_q7_t, EpistemicPartition, Scoped, ScopedCut,
-    ATTRACTOR_SLOT_SYSTEM_BASELINE, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
-    SCOPE_REGION_KNOWN_UNKNOWN, SCOPE_REGION_SELF_EXCLUSIVE, SCOPE_REGION_SHARED_CORE,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, SCOPE_REGION_KNOWN_UNKNOWN,
+    SCOPE_REGION_SELF_EXCLUSIVE, SCOPE_REGION_SHARED_CORE,
 };
 use crate::stigmergy::crystal::CrystallizedAttractorRecord;
 use crate::stigmergy::granule::StigmergicGranuleField;
+use crate::stigmergy::ATTRACTOR_SLOT_SYSTEM_BASELINE;
 
 /// Inline fixed-capacity (`8` nodes, `0` heap allocations) non-parametric P-Frame residual
 /// neural network evaluating directed [`DistortionDelta`] pointer chains (up to `max_hops`
@@ -229,7 +230,7 @@ impl EgoDifferentialNet {
                         .bridge_to_shared(bridge_count)
                         .ok()
                         .map(Scoped::seal_grounded),
-                    ScopedCut::Void(_) => None,
+                    ScopedCut::Unmarked(_) | ScopedCut::Bottom(_) => None,
                 };
                 if let Some(grounded) = grounded_profile {
                     let rec = CrystallizedAttractorRecord::from_grounded_delta_64(

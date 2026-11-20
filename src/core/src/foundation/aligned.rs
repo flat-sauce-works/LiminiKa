@@ -1656,9 +1656,7 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::liminal::{
-        gcso_q7_t, ATTRACTOR_SLOT_KNOWLEDGE, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
-    };
+    use crate::liminal::{gcso_q7_t, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS};
 
     #[test]
     fn test_infallible_aligned_buffers_range_indexing_and_upgrade() {
@@ -1738,7 +1736,7 @@ mod tests {
 
         {
             let k_slot = multi_slot_bank
-                .slot_exact_mut::<MAX_ATTENTION_HEADS>(usize::from(ATTRACTOR_SLOT_KNOWLEDGE))
+                .slot_exact_mut::<MAX_ATTENTION_HEADS>(2)
                 .unwrap();
             k_slot.fill(56);
         }
@@ -1747,12 +1745,10 @@ mod tests {
             .as_slot_bank::<MAX_ATTRACTOR_DOMAINS, MAX_ATTENTION_HEADS>()
             .unwrap();
         assert_eq!(bank_2d[0][0], 12);
-        assert_eq!(bank_2d[usize::from(ATTRACTOR_SLOT_KNOWLEDGE)][0], 56);
+        assert_eq!(bank_2d[2][0], 56);
 
         let imm_slice = multi_slot_bank.as_aligned_slice();
-        let k_ref = imm_slice
-            .slot_exact::<MAX_ATTENTION_HEADS>(usize::from(ATTRACTOR_SLOT_KNOWLEDGE))
-            .unwrap();
+        let k_ref = imm_slice.slot_exact::<MAX_ATTENTION_HEADS>(2).unwrap();
         assert_eq!(k_ref[0], 56);
     }
 }

@@ -36,25 +36,23 @@ use crate::foundation::{
     branchless_min_f32, branchless_rad_to_phase_step_u8, branchless_relu_f32,
     coherence_from_word_arrays_64, dispatch_fused_phase_clamp_and_subhead_words_core,
     fast_inv_len_f32, gcso_paged_bitmask_t, gcso_subhead_config_t, gcso_tagged_ptr_t,
-    load_q7_words_64, phase_clamp_upper_rot_dim, resolve_autonomous_swarm_rot_dim,
-    scale_f32_slice_unrolled8, steer_from_swar_words_core_safe, swar_or_avx2_q7_add_sat_words_64,
-    swar_q7_phase_step_filter_words_64, swar_words_nonzero_64, AlignedBuffer64, AlignedSlice16,
-    AlignedSliceMut32, PhaseSteering, PhaseSteeringEngine, Pod, DEFAULT_PHASE_STEER_HEAD_DIM,
+    load_q7_words_64, pack_action_slot_tag, phase_clamp_upper_rot_dim,
+    resolve_autonomous_swarm_rot_dim, scale_f32_slice_unrolled8, steer_from_swar_words_core_safe,
+    swar_or_avx2_q7_add_sat_words_64, swar_q7_phase_step_filter_words_64, swar_words_nonzero_64,
+    unpack_attractor_slot_from_tag, AlignedBuffer64, AlignedSlice16, AlignedSliceMut32,
+    PhaseSteering, PhaseSteeringEngine, Pod, ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT,
+    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
+    ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
+    ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEER_HEAD_DIM,
     DEFAULT_PHASE_STEER_NUM_HEADS, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    branchless_select_usize, gcso_config_t, gcso_q7_t, pack_action_slot_tag,
-    unpack_attractor_slot_from_tag, GcsoResult, ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT,
-    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
-    ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
-    ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION, DEFAULT_ACTION_HUB_CAPACITY,
-    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
-    DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE, GCSO_ERROR_ACTION_HUB_FULL,
-    GCSO_ERROR_INVALID_ARGUMENT, LEDGER_HISTORY_LEN, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
-    NUM_STIGMERGIC_GRANULES, WORKBENCH_LANE_FLAG_PINNED, WORKBENCH_LANE_FLAG_REPULSION,
-    WORKBENCH_LANE_FLAG_SANDBOX,
+    branchless_select_usize, gcso_config_t, gcso_q7_t, GcsoResult, GCSO_ERROR_ACTION_HUB_FULL,
+    GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    NUM_STIGMERGIC_GRANULES,
 };
+use crate::stigmergy::crystal::DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE;
 use crate::stigmergy::granule::StigmergicGranuleField;
 use crate::stigmergy::ledger::{gcso_ledger_slot_t, ContrastivePhaseBloomFilter, FastPathLedger};
 use crate::stigmergy::pheromone::PheromoneDensityOps;
@@ -62,6 +60,11 @@ use crate::stigmergy::trail::{
     gcso_pointer_trail_t, select_rewire_bridge_and_modulate_with_preloaded_words_64,
     trail_phase_words_mut, trail_phase_words_ref, ActionHub, PointerActionHub,
     StigmergicActionPtrOps, StigmergicChunkOps, StigmergicTrailOps,
+};
+use crate::stigmergy::{
+    ATTRACTOR_SLOT_REPULSION, DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+    LEDGER_HISTORY_LEN, WORKBENCH_LANE_FLAG_PINNED, WORKBENCH_LANE_FLAG_REPULSION,
+    WORKBENCH_LANE_FLAG_SANDBOX,
 };
 use crate::stigmergy::{
     LEDGER_METRIC_FAST_PATH_HIT, LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED,
@@ -2380,7 +2383,7 @@ const _: () = {
 mod tests {
     use super::*;
     use crate::foundation::AlignedBuffer32;
-    use crate::liminal::{ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA};
+    use crate::stigmergy::{ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA};
 
     #[test]
     fn test_stigmergic_thresholds_ladder_all_regimes() {

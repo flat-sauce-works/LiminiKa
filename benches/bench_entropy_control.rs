@@ -28,14 +28,13 @@ use liminika_core::drivers::spine::entropy::{
 use liminika_core::foundation::{
     compute_tikhonov_chebyshev_coeffs_deg3, eval_chebyshev_spectral_filter_deg3,
     evaluate_hodge_obstruction_and_dual_pairing, AlignedBuffer32, AlignedSlice32,
+    ACTION_PRESET_EXPRESS_PHASE,
 };
-use liminika_core::liminal::{
-    ACTION_PRESET_EXPRESS_PHASE, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
-    DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS,
-};
+use liminika_core::liminal::{DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS};
 use liminika_core::stigmergy::{
     eval_stigmergic_block_degrees, resolve_dyadic_qdpt_and_cascade_ptr,
-    ContrastivePhaseBloomFilter, StigmergicActionPtrOps,
+    ContrastivePhaseBloomFilter, StigmergicActionPtrOps, ATTRACTOR_SLOT_KNOWLEDGE,
+    ATTRACTOR_SLOT_PERSONA,
 };
 use std::hint::black_box;
 use std::time::Duration;

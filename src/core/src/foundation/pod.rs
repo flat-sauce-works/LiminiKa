@@ -13,9 +13,79 @@ use core::slice;
 use crate::foundation::scalar_math::{branchless_q7_add_sat, branchless_q7_neg_sat};
 use crate::liminal::{
     gcso_config_t, gcso_q7_t, gcso_status_t, AttributionTag, EpistemicPartition, GcsoResult,
-    LiminalBoundaryDelta, LiminalThresholdField, GCSO_ERROR_BUFFER_TOO_SMALL,
-    GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER, MAX_ATTENTION_HEADS,
+    LiminalThresholdField, GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_INVALID_ARGUMENT,
+    GCSO_ERROR_MISALIGNED_POINTER, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
 };
+
+/// Number of 64-bit words in a 256-bit [`gcso_paged_bitmask_t`] (`4`).
+pub const PAGED_BITMASK_WORDS: usize = 4;
+
+/// Total number of discrete bits in a [`gcso_paged_bitmask_t`] (`256`).
+pub const PAGED_BITMASK_BITS: u32 = 256;
+
+/// Bitmask isolating a valid 3-bit Semantic Provenance / Attractor Slot ID (`0..=7`).
+pub const ATTRACTOR_SLOT_ID_MASK: u8 = 0x07;
+
+/// Action Mode Bit 0 (`0x01`): Enable inline phase rotation on Query/Key registers.
+pub const ACTION_MODE_PHASE_STEER: u8 = 1 << 0;
+
+/// Action Mode Bit 1 (`0x02`): Enable intermediate layer skipping with SWAR phase compensation.
+pub const ACTION_MODE_LAYER_SKIP: u8 = 1 << 1;
+
+/// Action Mode Bit 2 (`0x04`): Enable Contrastive Phase Bloom Filter anti-phase repulsion ($-\boldsymbol{\Delta\theta}$).
+pub const ACTION_MODE_PHASE_REPULSE: u8 = 1 << 2;
+
+/// Action Mode Bit 3 (`0x08`): Enable single-pass sub-head group routing (Fact / Logic / Explore).
+pub const ACTION_MODE_SUBHEAD_ROUTE: u8 = 1 << 3;
+
+/// Action Mode Bit 4 (`0x10`): Enable Dynamic Rank-1 outer product residual injection ($\mathbf{u}\mathbf{v}^T$).
+pub const ACTION_MODE_RANK1_INJECT: u8 = 1 << 4;
+
+/// Composite Action Mode preset for passive sidecar observation (`0x00`).
+pub const ACTION_PRESET_PASSIVE_SIDECAR: u8 = 0x00;
+
+/// Composite Action Mode preset for lightweight express phase-steered sidecar execution (`0x01`).
+pub const ACTION_PRESET_EXPRESS_PHASE: u8 = ACTION_MODE_PHASE_STEER;
+
+/// Composite Action Mode preset for low-entropy inertial layer-skipping fast-forward (`0x03`).
+pub const ACTION_PRESET_INERTIAL_SKIP: u8 = ACTION_MODE_PHASE_STEER | ACTION_MODE_LAYER_SKIP;
+
+/// Composite Action Mode preset for anti-hallucination repulsion and sub-head exploration routing (`0x0D`).
+pub const ACTION_PRESET_REPULSION_ESCAPE: u8 =
+    ACTION_MODE_PHASE_STEER | ACTION_MODE_PHASE_REPULSE | ACTION_MODE_SUBHEAD_ROUTE;
+
+/// Composite Action Mode preset for full-stack deep persona & knowledge orchestration (`0x19`).
+pub const ACTION_PRESET_FULL_ORCHESTRATION: u8 =
+    ACTION_MODE_PHASE_STEER | ACTION_MODE_SUBHEAD_ROUTE | ACTION_MODE_RANK1_INJECT;
+
+/// Bitmask extracting the 5-bit Action Mode flags from an 8-bit [`gcso_tagged_ptr_t`] tag (`bits 0..=4`).
+pub const TAG_ACTION_MODE_MASK: u8 = 0x1F;
+
+/// Bit shift offset for encoding/extracting the 3-bit Target Attractor Slot ID (`0..=7`) in an 8-bit tag (`bits 5..=7`).
+pub const TAG_ATTRACTOR_SLOT_SHIFT: u32 = 5;
+
+/// Packs a 3-bit Target Attractor Slot ID (`0..=7`) and a 5-bit Action Mode mask (`0x00..=0x1F`)
+/// into a single 8-bit tag byte for [`gcso_tagged_ptr_t`].
+#[inline(always)]
+#[must_use]
+pub const fn pack_action_slot_tag(attractor_slot_id: u8, action_mode_flags: u8) -> u8 {
+    ((attractor_slot_id & ATTRACTOR_SLOT_ID_MASK) << TAG_ATTRACTOR_SLOT_SHIFT)
+        | (action_mode_flags & TAG_ACTION_MODE_MASK)
+}
+
+/// Extracts the 5-bit Action Mode bitmask (`ACTION_MODE_*`) from an 8-bit [`gcso_tagged_ptr_t`] tag byte.
+#[inline(always)]
+#[must_use]
+pub const fn unpack_action_mode_from_tag(tag: u8) -> u8 {
+    tag & TAG_ACTION_MODE_MASK
+}
+
+/// Extracts the 3-bit Target Attractor Slot ID (`0..=7`) from an 8-bit [`gcso_tagged_ptr_t`] tag byte.
+#[inline(always)]
+#[must_use]
+pub const fn unpack_attractor_slot_from_tag(tag: u8) -> u8 {
+    (tag >> TAG_ATTRACTOR_SLOT_SHIFT) & ATTRACTOR_SLOT_ID_MASK
+}
 
 /// Compile-time helper verifying that a requested alignment `ALIGN` is a non-zero power of two
 /// and at least `align_of::<T>()`.
@@ -583,7 +653,6 @@ impl_pod_for_primitives!(
     AttributionTag,
     EpistemicPartition,
     LiminalThresholdField,
-    LiminalBoundaryDelta,
     gcso_tagged_ptr_t,
     gcso_paged_bitmask_t,
     gcso_subhead_config_t,
@@ -593,3 +662,10 @@ impl_pod_for_primitives!(
 
 // SAFETY: Fixed-size arrays of `Pod` elements have contiguous layout with no extra padding traps.
 unsafe impl<T: Pod, const N: usize> Pod for [T; N] {}
+
+const _: () = {
+    assert!((ATTRACTOR_SLOT_ID_MASK as usize) == (MAX_ATTRACTOR_DOMAINS - 1));
+    assert!(pack_action_slot_tag(7, 0x1F) == 0xFF);
+    assert!(unpack_attractor_slot_from_tag(pack_action_slot_tag(5, 0x13)) == 5);
+    assert!(unpack_action_mode_from_tag(pack_action_slot_tag(5, 0x13)) == 0x13);
+};

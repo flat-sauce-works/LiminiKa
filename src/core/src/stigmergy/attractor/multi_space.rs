@@ -12,8 +12,7 @@ use crate::foundation::{
     swar_words_nonzero_64, AlignedSlice16, AlignedSlice32, Pod,
 };
 use crate::liminal::{
-    branchless_select_f32, gcso_q7_t, is_slot_pair_coupled, GcsoResult,
-    DEFAULT_SLOT_COUPLING_MATRIX_8X8, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
+    branchless_select_f32, gcso_q7_t, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
     MAX_ATTRACTOR_DOMAINS,
 };
 use crate::stigmergy::attractor::traits::{
@@ -26,7 +25,9 @@ use crate::stigmergy::attractor::{
     GCSO_ANCHOR_TYPE_EMBEDDING, GCSO_ANCHOR_TYPE_PHASE_REPULSE, GCSO_ANCHOR_TYPE_TOPOLOGICAL,
 };
 use crate::stigmergy::trail::{gcso_pointer_trail_t, trail_phase_words_ref};
-use crate::stigmergy::MAX_ATTRACTOR_PULL_FORCE;
+use crate::stigmergy::{
+    is_slot_pair_coupled, DEFAULT_SLOT_COUPLING_MATRIX_8X8, MAX_ATTRACTOR_PULL_FORCE,
+};
 
 use super::*;
 

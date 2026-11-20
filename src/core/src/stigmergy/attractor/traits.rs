@@ -14,18 +14,19 @@ use crate::foundation::{
     is_word_array_uniform_64, load_q7_words_64, store_q7_words_64, swar_q7_add_sat_x8,
     swar_q7_scale_le128_with_bias_x8, swar_q7_sub_sat_x8, AlignedBuffer16, AlignedSlice16,
     AlignedSlice32, AlignedSliceMut16, BranchlessKernel, ResidualAdapterEngine,
+    ATTRACTOR_SLOT_ID_MASK,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_q7, branchless_select_u32, branchless_select_u8,
-    gcso_q7_t, is_slot_pair_coupled, GcsoResult, ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION,
-    DEFAULT_SLOT_COUPLING_MATRIX_8X8, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
+    gcso_q7_t, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    NUM_STIGMERGIC_GRANULES,
 };
 use crate::stigmergy::attractor::gcso_anchor_type_t;
 use crate::stigmergy::trail::{
     gcso_pointer_trail_t, trail_phase_words_mut, trail_phase_words_ref, StigmergicTrailOps,
 };
 use crate::stigmergy::{
+    is_slot_pair_coupled, ATTRACTOR_SLOT_REPULSION, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
     MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE,
     TRAIL_FLAG_SYNERGY_RESONANCE,
 };

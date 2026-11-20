@@ -34,17 +34,20 @@ use crate::foundation::{
     is_word_array_uniform_64, load_q7_words_64, store_q7_words_64, swar_q7_add_sat_x8,
     swar_q7_neg_sat_x8, swar_q7_scale_le128_with_bias_x8, swar_u8_add_sat_x8,
     swar_u8_halve_decay_x8, swar_u8_max_x8, swar_u8_nonzero_count_x8, swar_u8_nonzero_msb_mask,
-    swar_u8_sub_sat_x8, swar_words_nonzero_64, BranchlessKernel, Pod, SWAR_EVEN_BYTES_64,
-    SWAR_LOW7_MASK_64, SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64,
+    swar_u8_sub_sat_x8, swar_words_nonzero_64, BranchlessKernel, Pod,
+    ACTION_PRESET_REPULSION_ESCAPE, PAGED_BITMASK_BITS, SWAR_EVEN_BYTES_64, SWAR_LOW7_MASK_64,
+    SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64,
 };
 use crate::liminal::{
     branchless_select_u32, branchless_select_u64, branchless_select_u8, gcso_config_t, gcso_q7_t,
-    GcsoResult, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_REPULSION, FAST_PATH_SHORTCUT_SLOTS,
-    GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE, LEDGER_HISTORY_LEN, MAX_ATTENTION_HEADS,
-    NUM_STIGMERGIC_GRANULES, PAGED_BITMASK_BITS,
+    GcsoResult, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE, MAX_ATTENTION_HEADS,
+    NUM_STIGMERGIC_GRANULES,
 };
 use crate::stigmergy::trail::StigmergicActionPtrOps;
-use crate::stigmergy::{DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS, DEFAULT_BLOOM_MAX_MASS_THRESHOLD};
+use crate::stigmergy::{
+    ATTRACTOR_SLOT_REPULSION, DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS, DEFAULT_BLOOM_MAX_MASS_THRESHOLD,
+    FAST_PATH_SHORTCUT_SLOTS, LEDGER_HISTORY_LEN,
+};
 
 /// Dynamic Adaptive Extension Scratchpad (FastPathLedger) slot layout (64 bytes, 1 cache line, Section 5.4.F).
 #[repr(C, align(64))]

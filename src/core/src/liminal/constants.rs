@@ -1,8 +1,8 @@
 // name: src/core/src/liminal/constants.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Layer 0 fundamental constants, C-ABI configuration/status primitives, causal provenance masks,
-//! 2-bit attribution tags, slot coupling bitmatrix helpers, and tagged-pointer codecs.
+//! Layer 0 fundamental constants, C-ABI configuration/status primitives, cognitive threshold
+//! masks, and 2-bit structural attribution tags.
 
 #![forbid(unsafe_code)]
 
@@ -388,16 +388,6 @@ pub const DEFAULT_ENTROPY_EPS: f32 = 1.0e-12;
 /// Upper bound of normalized 2-state surrogate attention entropy ($\ln 2 \approx 0.6931472$).
 pub const MAX_SURROGATE_ENTROPY_LN2: f32 = LN_2;
 
-/// Default soft-bounded phase clamp limit in radians ($5^\circ \approx 0.08726646\text{ rad}$).
-pub const DEFAULT_PHASE_CLAMP_MAX_RAD: f32 = 0.087_266_46;
-
-/// Canonical ratio `Q7_PHASE_SCALE_RAD / DEFAULT_PHASE_CLAMP_MAX_RAD` mapping Q7 phase deltas to normalized `tanh` units.
-pub const DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE: f32 =
-    Q7_PHASE_SCALE_RAD / DEFAULT_PHASE_CLAMP_MAX_RAD;
-
-/// Default minimum phase step cutoff in radians ($0.01\text{ rad}$).
-pub const DEFAULT_PHASE_STEP_MIN_RAD: f32 = 0.01;
-
 /// Maximum number of attention heads supported in fixed-capacity trail and phase arrays (`64`).
 pub const MAX_ATTENTION_HEADS: usize = 64;
 
@@ -407,136 +397,11 @@ pub const NUM_STIGMERGIC_GRANULES: usize = 8;
 /// Number of attention heads per SWAR Stigmergic Granule (`8` heads = 1 `u64` SWAR register).
 pub const HEADS_PER_STIGMERGIC_GRANULE: usize = MAX_ATTENTION_HEADS / NUM_STIGMERGIC_GRANULES;
 
-/// Default number of tokens per PagedAttention KV cache block (`32`).
-pub const DEFAULT_PAGED_BLOCK_SIZE: u32 = 32;
-
-/// Default slot capacity of the Action Hub pointer table (`256`).
-pub const DEFAULT_ACTION_HUB_CAPACITY: u32 = 256;
-
-/// Fixed capacity of topological anchors per Macro Attractor Field accumulator (`64`).
-pub const MAX_ANCHORS_PER_FIELD: usize = 64;
-
 /// Maximum number of parallel domain accumulator slots in a `MultiDomainAttractorSpace` (`8`).
 pub const MAX_ATTRACTOR_DOMAINS: usize = 8;
 
-/// Polynomial degree of the Cold-Path Chebyshev spectral filter (`3`).
-pub const CHEBYSHEV_FILTER_DEGREE: usize = 3;
-
-/// Number of expansion coefficients $[c_0, c_1, c_2, c_3]$ in a 3rd-order Chebyshev filter (`4`).
-pub const CHEBYSHEV_COEFF_LEN: usize = 4;
-
-/// Number of 64-bit words in a 256-bit `gcso_paged_bitmask_t` (`4`).
-pub const PAGED_BITMASK_WORDS: usize = 4;
-
-/// Total number of discrete bits in a `gcso_paged_bitmask_t` (`256`).
-pub const PAGED_BITMASK_BITS: u32 = 256;
-
-/// Number of fast-path shortcut slots in a `gcso_ledger_slot_t` (`4`).
-pub const FAST_PATH_SHORTCUT_SLOTS: usize = 4;
-
-/// Byte length of the circular mini telemetry ledger in a `gcso_ledger_slot_t` (`8`).
-pub const LEDGER_HISTORY_LEN: usize = 8;
-
-/// Binary magic constant for `.gcso` snapshot headers (`0x4F534347` = ASCII `"GCSO"`).
-pub const GCSO_SNAPSHOT_MAGIC_U32: u32 = 0x4F53_4347;
-
-/// Narrow phase clamp authority (`0.14 rad`) for Objective Fact grounding (`Fact` sub-heads).
-pub const DEFAULT_FACT_PHASE_CLAMP_RAD: f32 = 0.14;
-
-/// Wide phase clamp authority (`0.24 rad`) for Subjective Persona modulation (`Explore/Logic` sub-heads).
-pub const DEFAULT_PERSONA_PHASE_CLAMP_RAD: f32 = 0.24;
-
-/// Default destructive phase coherence threshold (`0.25`) detecting Persona-vs-Fact collision ($\mathcal{C}_{\mathrm{FP}} < -0.25$).
-pub const DEFAULT_PERSONA_FACT_COLLISION_THRESH: f32 = 0.25;
-
-/// Default minimum cosine phase coherence threshold (`0.35`) for Online Toroidal DP-Means cluster splitting.
-pub const DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE: f32 = 0.35;
-
-/// Default cosine phase coherence threshold (`0.85`) for autonomous online consolidation of redundant macro centroids.
-pub const DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE: f32 = 0.85;
-
-/// Default secondary-to-primary gravity ratio threshold (`0.55`) triggering Top-2 Liminal Bifurcation Routing.
-pub const DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO: f32 = 0.55;
-
-/// Magic identifier (`0x4C545343` = ASCII `"CSTL"`) for `.gcso` `CrystallizedAttractorRecord` blocks.
-pub const GCSO_CRYSTAL_RECORD_MAGIC: u32 = 0x4C54_5343;
-
-/// Version constant for `CrystallizedAttractorRecord` binary serialization ([`GCSO_ABI_VERSION_HEX`]).
-pub const GCSO_CRYSTAL_RECORD_VERSION: u32 = GCSO_ABI_VERSION_HEX;
-
-/// Fixed byte length (`192` bytes = `128B` `gcso_snapshot_header_t` + `64B` `gcso_mapped_storage_descriptor_t`) of Section 0.
-pub const GCSO_FOUR_SECTION_HEADER_BYTES: usize = 192;
-
-/// Byte offset (`128`) within the 192-byte Section 0 preamble where `gcso_mapped_storage_descriptor_t` is stored.
-pub const GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET: usize = 128;
-
-#[allow(dead_code)]
-pub(crate) const MAX_REGISTER_CACHED_CENTROIDS: usize = 16;
-
 // ===================================================================
-// 3. Semantic Attractor Provenance IDs, Workbench Pool & 8x8 Coupling
-// ===================================================================
-
-/// Semantic Provenance Label 0: Primary System Baseline & Core Identity Anchor (`0`).
-///
-/// Decoupled from physical workbench register lane indices (`0..=7`).
-pub const ATTRACTOR_SLOT_SYSTEM_BASELINE: u8 = 0;
-
-/// Semantic Provenance Label 1: Character Persona & Emotional Style Attractor (`1`).
-///
-/// Decoupled from physical workbench register lane indices (`0..=7`).
-pub const ATTRACTOR_SLOT_PERSONA: u8 = 1;
-
-/// Semantic Provenance Label 2: Factual Knowledge & World Lore Anchor (`2`).
-///
-/// Decoupled from physical workbench register lane indices (`0..=7`).
-pub const ATTRACTOR_SLOT_KNOWLEDGE: u8 = 2;
-
-/// Semantic Provenance Label 3: Phase-Conjugate Anti-Hallucination Repulsion Field (`3`, $-\boldsymbol{\Delta\theta}$).
-///
-/// Decoupled from physical workbench register lane indices (`0..=7`).
-pub const ATTRACTOR_SLOT_REPULSION: u8 = 3;
-
-/// Semantic Provenance Label 4: Dynamic User Context & Episodic Dialogue Memory (`4`).
-///
-/// Decoupled from physical workbench register lane indices (`0..=7`).
-pub const ATTRACTOR_SLOT_USER_CONTEXT: u8 = 4;
-
-/// Semantic Provenance Label 5: Temporal / Visual Co-Watching Horizon Attractor (`5`).
-///
-/// Decoupled from physical workbench register lane indices (`0..=7`).
-pub const ATTRACTOR_SLOT_TEMPORAL: u8 = 5;
-
-/// Semantic Provenance Label 6: User Intent / Circadian Drift Attractor (`6`).
-///
-/// Decoupled from physical workbench register lane indices (`0..=7`).
-pub const ATTRACTOR_SLOT_USER_INTENT: u8 = 6;
-
-/// Semantic Provenance Label 7: Crystallized Macro-Basin / Dynamic Extension Provenance (`7`).
-///
-/// Decoupled from physical workbench register lane indices (`0..=7`).
-pub const ATTRACTOR_SLOT_CRYSTALLIZED: u8 = 7;
-
-/// Bitmask isolating a valid 3-bit Semantic Provenance / Attractor Slot ID (`0..=7`).
-pub const ATTRACTOR_SLOT_ID_MASK: u8 = 0x07;
-
-/// Number of anonymous physical lanes in the 8-lane working phase workbench (`8`).
-pub const WORKBENCH_LANE_COUNT: usize = MAX_ATTRACTOR_DOMAINS;
-
-/// Sentinel lane selector requesting deterministic automatic allocation from the free workbench pool (`0xFF`).
-pub const WORKBENCH_LANE_AUTO: u8 = 0xFF;
-
-/// Workbench lane attribute bit: lane is explicitly pinned and exempt from automatic release or eviction (`bit 0`).
-pub const WORKBENCH_LANE_FLAG_PINNED: u8 = 1 << 0;
-
-/// Workbench lane attribute bit: lane holds a phase-conjugate anti-hallucination repulsion profile (`bit 1`).
-pub const WORKBENCH_LANE_FLAG_REPULSION: u8 = 1 << 1;
-
-/// Workbench lane attribute bit: lane holds an isolated hypothesis acting only on exterior/serendipity granules (`bit 2`).
-pub const WORKBENCH_LANE_FLAG_SANDBOX: u8 = 1 << 2;
-
-// ===================================================================
-// 4. Liminal Cognitive Threshold Masks & Causal Provenance Flags
+// 3. Liminal Cognitive Threshold Masks
 // ===================================================================
 
 /// Cognitive threshold bit for Origin 1: hardware & QoS resource constraints (`SystemConstraintSignal`).
@@ -599,66 +464,8 @@ pub const THRESHOLD_ACTION_HUB_WIDE: u32 = 0x0000_FFFF;
 /// Number of dynamic channel slots tracked by `LiminalThresholdField`.
 pub const NUM_LIMINAL_THRESHOLD_CHANNELS: usize = 8;
 
-/// Number of orthogonal self-tuning autonomous core layers (`Layer 0: Liminal`, `Layer 1: Stigmergic`, `Layer 2: Ego`).
-pub const NUM_CORE_AUTONOMOUS_LAYERS: usize = 3;
-
-/// Autonomous Core Layer 0 identifier: Epistemic Horizon & Trait Threshold (`LiminalThresholdField`).
-pub const CORE_LAYER_LIMINAL: usize = 0;
-
-/// Autonomous Core Layer 1 identifier: Stigmergic Granule Approximation, Overlap & Serendipity (`StigmergicGranuleField`).
-pub const CORE_LAYER_STIGMERGIC: usize = 1;
-
-/// Autonomous Core Layer 2 identifier: Wide-Threshold Subjective Ego & Top-Down Boundary Intervention (`LiminalEgoField`).
-pub const CORE_LAYER_EGO: usize = 2;
-
-/// Ego intervention trigger bit (`0x01`): Counter-basin orbital thrust when attractor pull threatens capture.
-pub const EGO_TRIGGER_BASIN_CAPTURE: u8 = 1 << 0;
-/// Ego intervention trigger bit (`0x02`): Defiant intervention under internal contradiction (`H^1 != 0`).
-pub const EGO_TRIGGER_INTERNAL_CONFLICT: u8 = 1 << 1;
-/// Ego intervention trigger bit (`0x04`): Transgressive step when standing at a `Liminal` horizon boundary.
-pub const EGO_TRIGGER_LIMINAL_EXTERIOR: u8 = 1 << 2;
-/// Ego intervention trigger bit (`0x08`): Boundary damping when temporal boundary velocity oscillates.
-pub const EGO_TRIGGER_BOUNDARY_CHATTER: u8 = 1 << 3;
-/// Ego intervention trigger bit (`0x10`): Self-initiated perturbation when boundaries stagnate completely.
-pub const EGO_TRIGGER_BOUNDARY_STAGNATION: u8 = 1 << 4;
-/// Ego intervention trigger bit (`0x20`): Corrective awakening when layer distortion or saturation is detected.
-pub const EGO_TRIGGER_LAYER_DISTORTION: u8 = 1 << 5;
-/// Default active bitmask enabling all 5 deterministic `LiminalEgoField` triggers (`0x1F`).
-pub const EGO_TRIGGER_ALL_DEFAULT: u8 = 0x1F;
-
-/// Provenance axis bit (`bit 0`): Origin 1 (`SystemConstraintSignal`) contributed to this frame.
-pub const CAUSAL_AXIS_SYSTEM_CONSTRAINT: u32 = 1 << 0;
-/// Provenance axis bit (`bit 1`): Origin 2-A (`ObjectiveFactSignal`) contributed to this frame.
-pub const CAUSAL_AXIS_OBJECTIVE_FACT: u32 = 1 << 1;
-/// Provenance axis bit (`bit 2`): Origin 2-B (`SubjectivePersonaSignal`) contributed to this frame.
-pub const CAUSAL_AXIS_SUBJECTIVE_PERSONA: u32 = 1 << 2;
-/// Provenance axis bit (`bit 3`): Origin 2-C (`ContradictionGuardSignal`) contributed to this frame.
-pub const CAUSAL_AXIS_CONTRADICTION_GUARD: u32 = 1 << 3;
-
-/// Provenance cause bit (`bit 8`): System QoS or low-entropy inertial throttle active.
-pub const CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE: u32 = 1 << 8;
-/// Provenance cause bit (`bit 9`): Objective fact retrieval energy was weak or absent.
-pub const CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK: u32 = 1 << 9;
-/// Provenance cause bit (`bit 10`): Subjective persona collided with objective fact ($\mathcal{C}_{\mathrm{FP}} < -\tau$).
-pub const CAUSAL_CAUSE_PERSONA_FACT_COLLISION: u32 = 1 << 10;
-/// Provenance cause bit (`bit 11`): Cohomological obstruction ($H^1 \neq 0$) or Bloom repulsion triggered.
-pub const CAUSAL_CAUSE_COHOMOLOGY_REPULSION: u32 = 1 << 11;
-/// Provenance cause bit (`bit 12`): Attractor sample count & coherence reached `.gcso` crystallization maturity.
-pub const CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED: u32 = 1 << 12;
-
-/// Root-cause diagnosis code `0`: Nominal synergistic orchestration across active origins.
-pub const ROOT_CAUSE_NOMINAL: u8 = 0;
-/// Root-cause diagnosis code `1`: System QoS / VRAM pressure / inertial layer-skip throttle.
-pub const ROOT_CAUSE_SYSTEM_QOS_THROTTLE: u8 = 1;
-/// Root-cause diagnosis code `2`: Objective fact retrieval miss or weak grounding energy.
-pub const ROOT_CAUSE_FACT_RETRIEVAL_MISS: u8 = 2;
-/// Root-cause diagnosis code `3`: Destructive phase collision between Persona and Objective Fact.
-pub const ROOT_CAUSE_PERSONA_FACT_COLLISION: u8 = 3;
-/// Root-cause diagnosis code `4`: Cohomological obstruction ($H^1 \neq 0$) or Bloom repetition escape.
-pub const ROOT_CAUSE_COHOMOLOGY_REPULSION: u8 = 4;
-
 // ===================================================================
-// 5. 2 Primitives x 2 Drivers Lightweight Attribution Tags
+// 4. 2 Primitives x 2 Drivers Lightweight Attribution Tags
 // ===================================================================
 
 /// Geometric substrate primitive classifier (`SubstrateKind`).
@@ -773,130 +580,4 @@ impl AttributionTag {
 #[must_use]
 pub const fn pack_attribution_tag(substrate: SubstrateKind, driver: DriverKind) -> u8 {
     AttributionTag::new(substrate, driver).raw()
-}
-
-// ===================================================================
-// 6. 8x8 Cross-Slot Coupling Matrix & Tagged Pointer Action Codecs
-// ===================================================================
-
-/// Default $8 \times 8$ Attractor Slot coupling bitmatrix (`u64`) enabling symmetric cross-slot
-/// synergy across all 8 parallel attractor domain slots.
-pub const DEFAULT_SLOT_COUPLING_MATRIX_8X8: u64 = 0xFFFF_FFFF_FFFF_FFFF;
-
-/// Computes the bit position (`0..=63`) in an $8 \times 8$ `u64` coupling bitmatrix for `(slot_a, slot_b)`.
-#[inline(always)]
-#[must_use]
-pub const fn slot_coupling_bit_index(slot_a: u32, slot_b: u32) -> u32 {
-    ((slot_a & 7) << 3) | (slot_b & 7)
-}
-
-/// Branchlessly tests whether `slot_a` and `slot_b` are coupled in `coupling_matrix_8x8`.
-#[inline(always)]
-#[must_use]
-pub const fn is_slot_pair_coupled(coupling_matrix_8x8: u64, slot_a: u32, slot_b: u32) -> bool {
-    ((coupling_matrix_8x8 >> slot_coupling_bit_index(slot_a, slot_b)) & 1) != 0
-}
-
-/// Extracts the 8-bit row mask (`bits 0..=7`) representing all target slots coupled with `slot_a`
-/// in $\mathcal{O}(1)$ via a single register shift.
-#[inline(always)]
-#[must_use]
-pub const fn coupled_slot_row_mask(coupling_matrix_8x8: u64, slot_a: u32) -> u8 {
-    ((coupling_matrix_8x8 >> ((slot_a & 7) << 3)) & 0xFF) as u8
-}
-
-/// Returns the number of target slots (`0..=8`) coupled with `slot_a` in `coupling_matrix_8x8`.
-#[inline(always)]
-#[must_use]
-pub const fn coupled_slot_count(coupling_matrix_8x8: u64, slot_a: u32) -> u32 {
-    coupled_slot_row_mask(coupling_matrix_8x8, slot_a).count_ones()
-}
-
-/// Branchlessly sets or clears the directed coupling bit `(slot_a, slot_b)` in `coupling_matrix_8x8`.
-#[inline(always)]
-#[must_use]
-pub const fn with_slot_pair_coupled(
-    coupling_matrix_8x8: u64,
-    slot_a: u32,
-    slot_b: u32,
-    enabled: bool,
-) -> u64 {
-    let bit_mask = 1u64 << slot_coupling_bit_index(slot_a, slot_b);
-    let enable_mask = (enabled as u64).wrapping_neg();
-    (coupling_matrix_8x8 & !bit_mask) | (bit_mask & enable_mask)
-}
-
-/// Branchlessly sets or clears symmetric bidirectional coupling between `slot_a` and `slot_b`
-/// (`(slot_a, slot_b)` and `(slot_b, slot_a)`) in `coupling_matrix_8x8`.
-#[inline(always)]
-#[must_use]
-pub const fn with_slot_pair_coupled_symmetric(
-    coupling_matrix_8x8: u64,
-    slot_a: u32,
-    slot_b: u32,
-    enabled: bool,
-) -> u64 {
-    let m1 = with_slot_pair_coupled(coupling_matrix_8x8, slot_a, slot_b, enabled);
-    with_slot_pair_coupled(m1, slot_b, slot_a, enabled)
-}
-
-/// Action Mode Bit 0 (`0x01`): Enable inline phase rotation on Query/Key registers.
-pub const ACTION_MODE_PHASE_STEER: u8 = 1 << 0;
-
-/// Action Mode Bit 1 (`0x02`): Enable intermediate layer skipping with SWAR phase compensation.
-pub const ACTION_MODE_LAYER_SKIP: u8 = 1 << 1;
-
-/// Action Mode Bit 2 (`0x04`): Enable Contrastive Phase Bloom Filter anti-phase repulsion ($-\boldsymbol{\Delta\theta}$).
-pub const ACTION_MODE_PHASE_REPULSE: u8 = 1 << 2;
-
-/// Action Mode Bit 3 (`0x08`): Enable single-pass sub-head group routing (Fact / Logic / Explore).
-pub const ACTION_MODE_SUBHEAD_ROUTE: u8 = 1 << 3;
-
-/// Action Mode Bit 4 (`0x10`): Enable Dynamic Rank-1 outer product residual injection ($\mathbf{u}\mathbf{v}^T$).
-pub const ACTION_MODE_RANK1_INJECT: u8 = 1 << 4;
-
-/// Composite Action Mode preset for passive sidecar observation (`0x00`).
-pub const ACTION_PRESET_PASSIVE_SIDECAR: u8 = 0x00;
-
-/// Composite Action Mode preset for lightweight express phase-steered sidecar execution (`0x01`).
-pub const ACTION_PRESET_EXPRESS_PHASE: u8 = ACTION_MODE_PHASE_STEER;
-
-/// Composite Action Mode preset for low-entropy inertial layer-skipping fast-forward (`0x03`).
-pub const ACTION_PRESET_INERTIAL_SKIP: u8 = ACTION_MODE_PHASE_STEER | ACTION_MODE_LAYER_SKIP;
-
-/// Composite Action Mode preset for anti-hallucination repulsion and sub-head exploration routing (`0x0D`).
-pub const ACTION_PRESET_REPULSION_ESCAPE: u8 =
-    ACTION_MODE_PHASE_STEER | ACTION_MODE_PHASE_REPULSE | ACTION_MODE_SUBHEAD_ROUTE;
-
-/// Composite Action Mode preset for full-stack deep persona & knowledge orchestration (`0x19`).
-pub const ACTION_PRESET_FULL_ORCHESTRATION: u8 =
-    ACTION_MODE_PHASE_STEER | ACTION_MODE_SUBHEAD_ROUTE | ACTION_MODE_RANK1_INJECT;
-
-/// Bitmask extracting the 5-bit Action Mode flags from an 8-bit `gcso_tagged_ptr_t` tag (`bits 0..=4`).
-pub const TAG_ACTION_MODE_MASK: u8 = 0x1F;
-
-/// Bit shift offset for encoding/extracting the 3-bit Target Attractor Slot ID (`0..=7`) in an 8-bit tag (`bits 5..=7`).
-pub const TAG_ATTRACTOR_SLOT_SHIFT: u32 = 5;
-
-/// Packs a 3-bit Target Attractor Slot ID (`0..=7`) and a 5-bit Action Mode mask (`0x00..=0x1F`)
-/// into a single 8-bit tag byte for `gcso_tagged_ptr_t`.
-#[inline(always)]
-#[must_use]
-pub const fn pack_action_slot_tag(attractor_slot_id: u8, action_mode_flags: u8) -> u8 {
-    ((attractor_slot_id & ATTRACTOR_SLOT_ID_MASK) << TAG_ATTRACTOR_SLOT_SHIFT)
-        | (action_mode_flags & TAG_ACTION_MODE_MASK)
-}
-
-/// Extracts the 5-bit Action Mode bitmask (`ACTION_MODE_*`) from an 8-bit `gcso_tagged_ptr_t` tag byte.
-#[inline(always)]
-#[must_use]
-pub const fn unpack_action_mode_from_tag(tag: u8) -> u8 {
-    tag & TAG_ACTION_MODE_MASK
-}
-
-/// Extracts the 3-bit Target Attractor Slot ID (`0..=7`) from an 8-bit `gcso_tagged_ptr_t` tag byte.
-#[inline(always)]
-#[must_use]
-pub const fn unpack_attractor_slot_from_tag(tag: u8) -> u8 {
-    (tag >> TAG_ATTRACTOR_SLOT_SHIFT) & ATTRACTOR_SLOT_ID_MASK
 }

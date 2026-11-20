@@ -7,12 +7,47 @@ use super::*;
 use crate::foundation::{
     compute_tikhonov_chebyshev_coeffs_deg3, eval_chebyshev_spectral_filter_deg3,
     eval_gershgorin_lambda_max, evaluate_hodge_obstruction_and_dual_pairing, load_q7_words_64,
-    AlignedBuffer32,
+    AlignedBuffer32, ACTION_PRESET_EXPRESS_PHASE,
 };
-use crate::liminal::{
-    gcso_config_t, GcsoResult, ACTION_PRESET_EXPRESS_PHASE, ATTRACTOR_SLOT_PERSONA,
-    ATTRACTOR_SLOT_REPULSION,
-};
+use crate::liminal::{gcso_config_t, GcsoResult};
+
+#[test]
+fn test_slot_coupling_matrix_primitives() {
+    let mut matrix = 0u64;
+    assert!(!is_slot_pair_coupled(
+        matrix,
+        u32::from(ATTRACTOR_SLOT_PERSONA),
+        u32::from(ATTRACTOR_SLOT_KNOWLEDGE)
+    ));
+
+    matrix = with_slot_pair_coupled_symmetric(
+        matrix,
+        u32::from(ATTRACTOR_SLOT_PERSONA),
+        u32::from(ATTRACTOR_SLOT_KNOWLEDGE),
+        true,
+    );
+    assert!(is_slot_pair_coupled(
+        matrix,
+        u32::from(ATTRACTOR_SLOT_PERSONA),
+        u32::from(ATTRACTOR_SLOT_KNOWLEDGE)
+    ));
+    assert_eq!(
+        coupled_slot_row_mask(matrix, u32::from(ATTRACTOR_SLOT_PERSONA)),
+        1 << ATTRACTOR_SLOT_KNOWLEDGE
+    );
+    assert_eq!(
+        coupled_slot_count(matrix, u32::from(ATTRACTOR_SLOT_PERSONA)),
+        1
+    );
+
+    matrix = with_slot_pair_coupled_symmetric(
+        matrix,
+        u32::from(ATTRACTOR_SLOT_PERSONA),
+        u32::from(ATTRACTOR_SLOT_KNOWLEDGE),
+        false,
+    );
+    assert_eq!(matrix, 0);
+}
 
 struct DummyLedger;
 impl FastPathLedger for DummyLedger {

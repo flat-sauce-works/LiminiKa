@@ -29,15 +29,18 @@
 
 use crate::drivers::{
     DistortionTension, LayerDistortionKind, LayerDistortionReport, LiminalEgoField,
+    EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
+    EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR,
 };
 use crate::foundation::{branchless_clamp_f32, branchless_is_finite_f32, Pod};
 use crate::liminal::{
-    EpistemicPartition, EpistemicRegime, LiminalBoundaryDelta, LiminalThresholdField,
-    EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
-    EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR, GCSO_LIMINAL_HORIZON_TOPOLOGY,
-    NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES, THRESHOLD_ACTION_HUB_WIDE,
-    THRESHOLD_MANIFOLD_GATEWAY, THRESHOLD_STIGMERGIC_CONSENSUS,
+    EpistemicPartition, EpistemicRegime, LiminalThresholdField, NUM_LIMINAL_THRESHOLD_CHANNELS,
+    NUM_STIGMERGIC_GRANULES, THRESHOLD_ACTION_HUB_WIDE, THRESHOLD_COGNITIVE_CIRCUIT,
+    THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_KV_PHASE_CACHE, THRESHOLD_MANIFOLD_GATEWAY,
+    THRESHOLD_OBJECTIVE_FACT, THRESHOLD_RELATIVE_COUPLING, THRESHOLD_STIGMERGIC_CONSENSUS,
+    THRESHOLD_SUBJECTIVE_PERSONA, THRESHOLD_SYSTEM_CONSTRAINT,
 };
+use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::context::AutonomousCoreLayerStack;
 use crate::runtime::gateway::signals::ManifoldProbeBaseline;
 use crate::runtime::horizon::EpistemicHorizonReading;
@@ -45,6 +48,83 @@ use crate::stigmergy::{
     StigmergicActionDecision, StigmergicGranuleField, StigmergicOverlapSerendipityReport,
     StigmergicThresholds,
 };
+
+/// Static compile-time descriptor binding a trait horizon node to its static cognitive threshold
+/// and unknowable exterior complement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiminalHorizonNodeDescriptor {
+    /// Mermaid graph node identifier (`"N0"`..`"N7"`).
+    pub node_id: &'static str,
+    /// Human-readable Rust trait name refining [`crate::liminal::Liminal`].
+    pub trait_name: &'static str,
+    /// Channel index (`0..8`) inside [`LiminalThresholdField`].
+    pub channel_idx: usize,
+    /// Static cognitive threshold mask owned by this trait node.
+    pub static_aperture_mask: u32,
+    /// Type-level unknowable exterior complement (`!static_aperture_mask`).
+    pub unknowable_void_mask: u32,
+}
+
+/// Canonical 8-channel trait topology table derived from type-level [`crate::liminal::Liminal`] refinements.
+pub const GCSO_LIMINAL_HORIZON_TOPOLOGY: [LiminalHorizonNodeDescriptor;
+    NUM_LIMINAL_THRESHOLD_CHANNELS] = [
+    LiminalHorizonNodeDescriptor {
+        node_id: "N0",
+        trait_name: "SystemConstraintSignal",
+        channel_idx: 0,
+        static_aperture_mask: THRESHOLD_SYSTEM_CONSTRAINT,
+        unknowable_void_mask: !THRESHOLD_SYSTEM_CONSTRAINT,
+    },
+    LiminalHorizonNodeDescriptor {
+        node_id: "N1",
+        trait_name: "ObjectiveFactSignal",
+        channel_idx: 1,
+        static_aperture_mask: THRESHOLD_OBJECTIVE_FACT,
+        unknowable_void_mask: !THRESHOLD_OBJECTIVE_FACT,
+    },
+    LiminalHorizonNodeDescriptor {
+        node_id: "N2",
+        trait_name: "SubjectivePersonaSignal",
+        channel_idx: 2,
+        static_aperture_mask: THRESHOLD_SUBJECTIVE_PERSONA,
+        unknowable_void_mask: !THRESHOLD_SUBJECTIVE_PERSONA,
+    },
+    LiminalHorizonNodeDescriptor {
+        node_id: "N3",
+        trait_name: "ContradictionGuardSignal",
+        channel_idx: 3,
+        static_aperture_mask: THRESHOLD_CONTRADICTION_GUARD,
+        unknowable_void_mask: !THRESHOLD_CONTRADICTION_GUARD,
+    },
+    LiminalHorizonNodeDescriptor {
+        node_id: "N4",
+        trait_name: "CognitiveTrajectoryLedger",
+        channel_idx: 4,
+        static_aperture_mask: THRESHOLD_COGNITIVE_CIRCUIT,
+        unknowable_void_mask: !THRESHOLD_COGNITIVE_CIRCUIT,
+    },
+    LiminalHorizonNodeDescriptor {
+        node_id: "N5",
+        trait_name: "RamPhaseKvCacheOps",
+        channel_idx: 5,
+        static_aperture_mask: THRESHOLD_KV_PHASE_CACHE,
+        unknowable_void_mask: !THRESHOLD_KV_PHASE_CACHE,
+    },
+    LiminalHorizonNodeDescriptor {
+        node_id: "N6",
+        trait_name: "RelativeCouplingMatrix",
+        channel_idx: 6,
+        static_aperture_mask: THRESHOLD_RELATIVE_COUPLING,
+        unknowable_void_mask: !THRESHOLD_RELATIVE_COUPLING,
+    },
+    LiminalHorizonNodeDescriptor {
+        node_id: "N7",
+        trait_name: "ActionHub",
+        channel_idx: 7,
+        static_aperture_mask: THRESHOLD_ACTION_HUB_WIDE,
+        unknowable_void_mask: !THRESHOLD_ACTION_HUB_WIDE,
+    },
+];
 
 /// Compact `32`-byte (`#[repr(C, align(16))]`) self-introspecting telemetry snapshot capturing
 /// live [`LiminalThresholdField`] boundaries, active epistemic regime, and crystal population counts.

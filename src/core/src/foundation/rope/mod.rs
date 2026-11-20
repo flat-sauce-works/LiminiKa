@@ -82,12 +82,19 @@ use crate::foundation::pod::{
     gcso_paged_bitmask_t, gcso_rank1_residual_descriptor_t, gcso_subhead_config_t,
     gcso_tagged_ptr_t, Pod,
 };
+use crate::foundation::pod::{
+    unpack_action_mode_from_tag, ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT,
+    ACTION_MODE_SUBHEAD_ROUTE, PAGED_BITMASK_BITS,
+};
 use crate::foundation::scalar_math::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_inv_pos_f32,
     branchless_is_finite_f32, branchless_min_f32, branchless_q7_add_sat,
     branchless_q7_fold_s1_geodesic, branchless_q7_scale_u7, branchless_rad_to_phase_step_u8,
     branchless_sincos_f32, branchless_sincos_half_pi_f32, branchless_sincos_q7,
     branchless_sincos_q7_phase_clamp_preinv, fast_inv_len_f32, fast_inv_pos_normal_f32,
+};
+use crate::foundation::scalar_math::{
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE, DEFAULT_PHASE_STEP_MIN_RAD,
 };
 use crate::foundation::swar_simd::{
     eval_fused_phase_clamp_subhead_sincos_q7_fast, eval_geodesic_phase_clamp_sincos_q7_fast,
@@ -97,12 +104,10 @@ use crate::foundation::swar_simd::{
     swar_q7_scale_u7_x8, swar_u8_sum_x8,
 };
 use crate::liminal::{
-    branchless_select_f32, gcso_config_t, gcso_q7_t, unpack_action_mode_from_tag, GcsoResult,
-    ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE,
-    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE, DEFAULT_PHASE_STEP_MIN_RAD,
-    GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER,
-    GCSO_ERROR_NULL_POINTER, HEADS_PER_STIGMERGIC_GRANULE, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, PAGED_BITMASK_BITS, Q7_PHASE_SCALE_RAD,
+    branchless_select_f32, gcso_config_t, gcso_q7_t, GcsoResult, GCSO_ERROR_EDBC_SINGULARITY,
+    GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER, GCSO_ERROR_NULL_POINTER,
+    HEADS_PER_STIGMERGIC_GRANULE, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    NUM_STIGMERGIC_GRANULES, Q7_PHASE_SCALE_RAD,
 };
 use core::f32::consts::FRAC_PI_2;
 use core::mem::{align_of, offset_of, size_of};

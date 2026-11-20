@@ -10,18 +10,16 @@
 //! bounded by [`ReflectionPolicy::max_retries`].
 
 use crate::{DynamicAttractorRecall, RecallPolicy, VoidBoundaryState};
-use liminika_core::drivers::LiminalEgoField;
-use liminika_core::liminal::{
-    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, EGO_TRIGGER_LIMINAL_EXTERIOR,
-    MAX_ATTENTION_HEADS,
-};
+use liminika_core::drivers::{LiminalEgoField, EGO_TRIGGER_LIMINAL_EXTERIOR};
+use liminika_core::liminal::MAX_ATTENTION_HEADS;
 use liminika_core::runtime::{
     AdaptiveThresholdPolicy, CausalProvenanceSignal, CognitiveCircuitThresholdPolicy, GatewayFrame,
     GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact, SystemConstraint,
 };
 use liminika_core::stigmergy::{
     CognitiveCircuitActivation, CognitiveCircuitPlasticity, CognitiveOpKind, CognitiveStepOp,
-    CognitiveTrajectoryLedger, StigmergicActionDecision,
+    CognitiveTrajectoryLedger, StigmergicActionDecision, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    CAUSAL_AXIS_OBJECTIVE_FACT,
 };
 
 /// Policy governing bounded, event-triggered closed-loop reflection retries.

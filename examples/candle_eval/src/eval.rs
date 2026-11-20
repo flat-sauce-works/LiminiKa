@@ -18,7 +18,7 @@ use liminika_core::drivers::{
     SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_PINNED_LOCK,
     SPINE_BYPASS_VETO_REPULSION_ACTIVE,
 };
-use liminika_core::liminal::ACTION_MODE_PHASE_REPULSE;
+use liminika_core::foundation::ACTION_MODE_PHASE_REPULSE;
 use liminika_core::runtime::{CoreTelemetryBank, CoreTelemetrySnapshot, RamPhaseKvStepOutcome};
 use liminika_core::stigmergy::{
     CognitiveCircuitPlasticity, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,

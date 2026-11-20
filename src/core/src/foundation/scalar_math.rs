@@ -16,10 +16,18 @@ use crate::foundation::lut_crc32::{
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_i32, branchless_select_u8, branchless_select_usize,
-    gcso_q7_t, DEFAULT_ENTROPY_EPS, DEFAULT_PHASE_CLAMP_MAX_RAD,
-    DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE, Q7_MAX, Q7_MIN, Q7_PHASE_INV_SCALE_RAD,
-    Q7_PHASE_SCALE_RAD,
+    gcso_q7_t, DEFAULT_ENTROPY_EPS, Q7_MAX, Q7_MIN, Q7_PHASE_INV_SCALE_RAD, Q7_PHASE_SCALE_RAD,
 };
+
+/// Default soft-bounded phase clamp limit in radians ($5^\circ \approx 0.08726646\text{ rad}$).
+pub const DEFAULT_PHASE_CLAMP_MAX_RAD: f32 = 0.087_266_46;
+
+/// Canonical ratio `Q7_PHASE_SCALE_RAD / DEFAULT_PHASE_CLAMP_MAX_RAD` mapping Q7 phase deltas to normalized `tanh` units.
+pub const DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE: f32 =
+    Q7_PHASE_SCALE_RAD / DEFAULT_PHASE_CLAMP_MAX_RAD;
+
+/// Default minimum phase step cutoff in radians ($0.01\text{ rad}$).
+pub const DEFAULT_PHASE_STEP_MIN_RAD: f32 = 0.01;
 
 /// Fast positive normal reciprocal $1.0 / x$ for $x \ge \text{F32\_MIN\_POSITIVE\_NORMAL}$
 /// using IEEE-754 magic bit seed and 3 Newton-Raphson iterations (`0` subnormal/validity branches).

@@ -46,24 +46,22 @@ use crate::foundation::{
     coherence_from_uniform_diff_word_x8, coherence_from_word_arrays_64,
     coherence_from_word_arrays_with_both_uniform_flags_64, evaluate_cohomological_obstruction,
     fast_inv_len_f32, fast_ln_1p_bounded_f32, is_word_array_uniform_64, load_q7_words_64,
-    steer_from_swar_words_core_safe, swar_or_avx2_q7_add_sat_words_64, swar_q7_add_sat_x8,
-    swar_q7_circular_add_x8, swar_q7_circular_diff_x8, swar_q7_neg_sat_x8,
+    pack_action_slot_tag, steer_from_swar_words_core_safe, swar_or_avx2_q7_add_sat_words_64,
+    swar_q7_add_sat_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8, swar_q7_neg_sat_x8,
     swar_q7_phase_step_filter_words_64, swar_q7_scale_le128_with_bias_x8,
     swar_slerp_words_with_bias_64, swar_slerp_words_with_uniform_flag_64, swar_words_nonzero_64,
-    AlignedSlice32, AlignedSliceMut32, BranchlessKernel, PhaseSteering, Pod, RawPhaseProjectable,
+    unpack_action_mode_from_tag, unpack_attractor_slot_from_tag, AlignedSlice32, AlignedSliceMut32,
+    BranchlessKernel, PhaseSteering, Pod, RawPhaseProjectable, ACTION_MODE_LAYER_SKIP,
+    ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT,
+    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK,
     DEFAULT_PHASE_GRAVITY_EPS, MAX_BAYESIAN_STIGMERGIC_DENSITY, POPCOUNT_RSQRT_LUT_257_REF,
     SWAR_SPLAT_BYTE_64,
 };
 pub use crate::foundation::{gcso_paged_bitmask_t, gcso_tagged_ptr_t};
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    coupled_slot_row_mask, gcso_q7_t, is_slot_pair_coupled, pack_action_slot_tag,
-    unpack_action_mode_from_tag, unpack_attractor_slot_from_tag, GcsoResult, Liminal,
-    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PHASE_STEER,
-    ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_REPULSION_ESCAPE,
-    ATTRACTOR_SLOT_ID_MASK, ATTRACTOR_SLOT_REPULSION, DEFAULT_ENTROPY_EPS,
-    GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
-    NUM_STIGMERGIC_GRANULES, THRESHOLD_ACTION_HUB_WIDE,
+    gcso_q7_t, GcsoResult, Liminal, DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT,
+    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, THRESHOLD_ACTION_HUB_WIDE,
 };
 pub use crate::stigmergy::ledger::gcso_ledger_slot_t;
 use crate::stigmergy::ledger::{
@@ -71,6 +69,7 @@ use crate::stigmergy::ledger::{
 };
 use crate::stigmergy::pheromone::PheromoneDensityOps;
 use crate::stigmergy::{
+    coupled_slot_row_mask, is_slot_pair_coupled, ATTRACTOR_SLOT_REPULSION,
     LEDGER_METRIC_FAST_PATH_HIT, LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_REPULSION_APPLIED,
     MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_PHASE_STEER_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,

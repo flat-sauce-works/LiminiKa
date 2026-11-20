@@ -9,7 +9,9 @@ use crate::foundation::branchless::{
     chebyshev_deg3_filter_slice_simd8, diff_norm_sq_f32_unrolled4,
     hodge_obstruction_and_dual_pairing_f32, max_pos_f32_unrolled4,
 };
-use crate::foundation::pod::gcso_tagged_ptr_t;
+use crate::foundation::pod::{
+    gcso_tagged_ptr_t, pack_action_slot_tag, unpack_action_mode_from_tag,
+};
 use crate::foundation::scalar_math::{
     branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
     branchless_inv_pos_f32, branchless_is_finite_f32, branchless_q7_add_sat, branchless_rsqrt_f32,
@@ -17,9 +19,15 @@ use crate::foundation::scalar_math::{
 };
 use crate::foundation::swar_simd::branchless_hysteresis_quantize_depth;
 use crate::liminal::{
-    branchless_select_f32, gcso_q7_t, pack_action_slot_tag, unpack_action_mode_from_tag,
-    GcsoResult, CHEBYSHEV_COEFF_LEN, GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT,
+    branchless_select_f32, gcso_q7_t, GcsoResult, GCSO_ERROR_EDBC_SINGULARITY,
+    GCSO_ERROR_INVALID_ARGUMENT,
 };
+
+/// Polynomial degree of the Cold-Path Chebyshev spectral filter (`3`).
+pub const CHEBYSHEV_FILTER_DEGREE: usize = 3;
+
+/// Number of expansion coefficients $[c_0, c_1, c_2, c_3]$ in a 3rd-order Chebyshev filter (`4`).
+pub const CHEBYSHEV_COEFF_LEN: usize = 4;
 
 /// Evaluates the Gershgorin upper bound $\hat{\lambda}_{\max} = 2 \cdot \max_i D_{ii}$ in $\mathcal{O}(\vert V \vert)$ time (Section 1.2).
 ///

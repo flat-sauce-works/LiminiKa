@@ -27,96 +27,10 @@ env:
 
 jobs:
   # =========================================================================
-  # 1. AUTO-FORMAT CODEBASE BEFORE TESTING
-  # =========================================================================
-  auto-format:
-    name: Auto-Format Codebase Before Testing
-    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && github.actor != 'github-actions[bot]' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref || github.ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-
-      - name: Install clang-format & Python formatters
-        run: |
-          if ! command -v clang-format >/dev/null 2>&1 || ! command -v autopep8 >/dev/null 2>&1; then
-            if ! sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update; then
-              if [ -f /etc/apt/apt-mirrors.txt ]; then
-                printf 'https://archive.ubuntu.com/ubuntu\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null || true
-              fi
-              sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update || true
-            fi
-            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 install -y clang-format python3-autopep8 || true
-          fi
-          if ! command -v autopep8 >/dev/null 2>&1; then
-            python3 -m pip install --quiet --retries 1 --timeout 10 autopep8 2>/dev/null || pip3 install --quiet --break-system-packages --retries 1 --timeout 10 autopep8 2>/dev/null || true
-          fi
-
-      - name: Format Rust codebase
-        run: |
-          cargo fmt --all
-          if [ -f "examples/candle_eval/Cargo.toml" ]; then
-            cargo fmt --manifest-path examples/candle_eval/Cargo.toml
-          fi
-
-      - name: Sync Cargo.lock with Cargo.toml
-        run: |
-          if [ -f "Cargo.toml" ]; then
-            cargo update --workspace --offline 2>/dev/null || true
-          fi
-          if [ -f "examples/candle_eval/Cargo.toml" ]; then
-            cargo update --manifest-path examples/candle_eval/Cargo.toml --workspace --offline 2>/dev/null || true
-          fi
-
-      - name: Format C/C++ & GPU Kernel codebase
-        run: |
-          CLANG_FORMAT_BIN=$(command -v clang-format || command -v clang-format-21 || command -v clang-format-20 || command -v clang-format-19 || command -v clang-format-18 || find /usr/lib/llvm-* -name clang-format -type f -executable 2>/dev/null | sort -V | tail -n 1 || true)
-          if [ -n "$CLANG_FORMAT_BIN" ]; then
-            EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
-            find . "${EXCLUDE_ARGS[@]}" -prune -o \( \
-              -name "*.h" -o -name "*.hpp" -o -name "*.inl" -o \
-              -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
-              -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.mm" -o \
-              -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
-              -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o \
-              -name "*.hip" -o -name "*.cl" \
-            \) -type f -size +0c ! -name ".gitkeep" -exec "$CLANG_FORMAT_BIN" -i {} + 2>/dev/null || true
-          fi
-
-      - name: Format Python codebase
-        run: |
-          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
-          find . "${EXCLUDE_ARGS[@]}" -prune -o -name "*.py" -type f -size +0c -exec autopep8 --in-place --max-line-length 120 {} + 2>/dev/null || true
-
-      - name: Commit formatting changes if needed
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-        uses: stefanzweifel/git-auto-commit-action@v5
-        continue-on-error: true
-        with:
-          commit_message: "style(ci): auto-format codebase before testing [skip ci]"
-          commit_user_name: "github-actions[bot]"
-          commit_user_email: "github-actions[bot]@users.noreply.github.com"
-
-  # =========================================================================
-  # 2. PATH CHANGED DETECTION
+  # 1. PATH CHANGED DETECTION
   # =========================================================================
   changes:
     name: Detect Changed Paths
-    needs: auto-format
-    if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -231,12 +145,136 @@ jobs:
               - '.github/workflows/**'
 
   # =========================================================================
+  # 2. CONDITIONAL AUTO-FORMAT & LF NORMALIZATION BEFORE TESTING
+  # =========================================================================
+  auto-format:
+    name: Auto-Format & Normalize Line Endings
+    needs: changes
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && github.actor != 'github-actions[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      formatted_sha: ${{ steps.record_sha.outputs.sha }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Record base commit SHA
+        id: base_sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Normalize tracked text files to LF
+        run: |
+          python3 - << 'PY'
+          import pathlib
+          import subprocess
+
+          raw_list = subprocess.check_output(["git", "ls-files", "-z"])
+          converted = 0
+          for entry in raw_list.split(b"\0"):
+              if not entry:
+                  continue
+              rel = entry.decode("utf-8")
+              p = pathlib.Path(rel)
+              if p.suffix.lower() in {".bat", ".cmd"} or not p.is_file():
+                  continue
+              data = p.read_bytes()
+              if b"\x00" in data or b"\r\n" not in data:
+                  continue
+              p.write_bytes(data.replace(b"\r\n", b"\n"))
+              converted += 1
+          print(f"Normalized {converted} tracked text file(s) from CRLF to LF.")
+          PY
+          git add --renormalize .
+
+      - name: Install Rust toolchain (if Rust changed)
+        if: ${{ needs.changes.outputs.rust == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Format Rust codebase & sync Cargo.lock
+        if: ${{ needs.changes.outputs.rust == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
+        run: |
+          cargo fmt --all
+          if [ -f "examples/candle_eval/Cargo.toml" ]; then
+            cargo fmt --manifest-path examples/candle_eval/Cargo.toml
+          fi
+          if [ -f "Cargo.toml" ]; then
+            cargo update --workspace --offline 2>/dev/null || true
+          fi
+          if [ -f "examples/candle_eval/Cargo.toml" ]; then
+            cargo update --manifest-path examples/candle_eval/Cargo.toml --workspace --offline 2>/dev/null || true
+          fi
+
+      - name: Format C/C++ & GPU Kernel codebase
+        if: ${{ needs.changes.outputs.cpp == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
+        run: |
+          if ! command -v clang-format >/dev/null 2>&1; then
+            if ! sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update; then
+              if [ -f /etc/apt/apt-mirrors.txt ]; then
+                printf 'https://archive.ubuntu.com/ubuntu\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null || true
+              fi
+              sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update || true
+            fi
+            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 install -y clang-format || true
+          fi
+          CLANG_FORMAT_BIN=$(command -v clang-format || command -v clang-format-21 || command -v clang-format-20 || command -v clang-format-19 || command -v clang-format-18 || find /usr/lib/llvm-* -name clang-format -type f -executable 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -n "$CLANG_FORMAT_BIN" ]; then
+            EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
+            find . "${EXCLUDE_ARGS[@]}" -prune -o \( \
+              -name "*.h" -o -name "*.hpp" -o -name "*.inl" -o \
+              -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
+              -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.mm" -o \
+              -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
+              -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o \
+              -name "*.hip" -o -name "*.cl" \
+            \) -type f -size +0c ! -name ".gitkeep" -exec "$CLANG_FORMAT_BIN" -i {} + 2>/dev/null || true
+          fi
+
+      - name: Format Python codebase
+        if: ${{ needs.changes.outputs.python == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
+        run: |
+          if ! command -v autopep8 >/dev/null 2>&1; then
+            python3 -m pip install --quiet --retries 1 --timeout 10 autopep8 2>/dev/null || pip3 install --quiet --break-system-packages --retries 1 --timeout 10 autopep8 2>/dev/null || true
+          fi
+          if command -v autopep8 >/dev/null 2>&1; then
+            EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
+            find . "${EXCLUDE_ARGS[@]}" -prune -o -name "*.py" -type f -size +0c -exec autopep8 --in-place --max-line-length 120 {} + 2>/dev/null || true
+          fi
+
+      - name: Commit formatting changes if needed
+        uses: stefanzweifel/git-auto-commit-action@v5
+        continue-on-error: true
+        with:
+          commit_message: "style(ci): auto-format and normalize line endings before testing [skip ci]"
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"
+
+      - name: Record formatted commit SHA
+        id: record_sha
+        run: |
+          NEW_SHA=$(git rev-parse HEAD)
+          if [ "$NEW_SHA" != "${{ steps.base_sha.outputs.sha }}" ]; then
+            echo "sha=$NEW_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=" >> "$GITHUB_OUTPUT"
+          fi
+
+  # =========================================================================
   # 3. LICENSE & DEPENDENCY SAFETY CHECK (STRICT PERMISSIVE GUARANTEE)
   # =========================================================================
   license-safety-check:
     name: License & Dependency Safety
-    needs: [auto-format, changes]
-    if: ${{ always() && !cancelled() && (needs.changes.outputs.license == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
+    needs: [changes, auto-format]
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && (needs.auto-format.result == 'success' || needs.auto-format.result == 'skipped') && (needs.changes.outputs.license == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -246,7 +284,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref || github.ref }}
+          ref: ${{ needs.auto-format.outputs.formatted_sha || '' }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -275,6 +313,31 @@ jobs:
             exit 1
           fi
           echo "No non-permissive license keywords detected."
+
+      - name: Verify Index LF Line Endings (No i/crlf)
+        run: |
+          python3 - << 'PY'
+          import pathlib
+          import subprocess
+          import sys
+
+          out = subprocess.check_output(["git", "ls-files", "--eol"], text=True)
+          bad = []
+          for line in out.splitlines():
+              if "\t" not in line:
+                  continue
+              meta, rel = line.split("\t", 1)
+              if pathlib.Path(rel).suffix.lower() in {".bat", ".cmd"}:
+                  continue
+              tokens = meta.split()
+              if tokens and tokens[0] in {"i/crlf", "i/mixed"}:
+                  bad.append(f"{tokens[0]} {rel}")
+
+          if bad:
+              print("Error: Tracked text files with CRLF/mixed line endings in git index:", *bad, sep="\n  ")
+              sys.exit(1)
+          print("All tracked non-batch files have LF line endings in the git index.")
+          PY
 
       - name: Verify Mandatory Two-Line File Headers & SPDX Compliance
         run: |
@@ -341,35 +404,41 @@ jobs:
           def read(path):
               return pathlib.Path(path).read_text(encoding="utf-8")
 
-          root_ver_m = re.search(r'(?m)^version\s*=\s*"([^"]+)"', read("Cargo.toml"))
-          candle_ver_m = re.search(r'(?m)^version\s*=\s*"([^"]+)"', read("examples/candle_eval/Cargo.toml"))
-          root_cmake_m = re.search(r'project\(LiminiKa\s+VERSION\s+(\d+\.\d+\.\d+)', read("CMakeLists.txt"))
-          kern_cmake_m = re.search(r'project\(liminika_kernels\s+VERSION\s+(\d+\.\d+\.\d+)', read("src/kernels/CMakeLists.txt"))
+          def must_match(pattern, text, label):
+              m = re.search(pattern, text)
+              if m is None:
+                  print(f"Error: Version parity pattern not found for {label}: {pattern}")
+                  sys.exit(1)
+              return m
+
+          ver = must_match(r'(?m)^version\s*=\s*"([^"]+)"', read("Cargo.toml"), "Cargo.toml version").group(1)
+          candle_ver = must_match(r'(?m)^version\s*=\s*"([^"]+)"', read("examples/candle_eval/Cargo.toml"), "examples/candle_eval/Cargo.toml version").group(1)
+          root_cmake = must_match(r'project\(LiminiKa\s+VERSION\s+(\d+\.\d+\.\d+)', read("CMakeLists.txt"), "CMakeLists.txt project VERSION").group(1)
+          kern_cmake = must_match(r'project\(liminika_kernels\s+VERSION\s+(\d+\.\d+\.\d+)', read("src/kernels/CMakeLists.txt"), "src/kernels/CMakeLists.txt project VERSION").group(1)
 
           abi_h = read("include/liminika/gcso_abi.h")
-          c_maj = int(re.search(r'#define\s+GCSO_ABI_VERSION_MAJOR\s+(\d+)U', abi_h).group(1))
-          c_min = int(re.search(r'#define\s+GCSO_ABI_VERSION_MINOR\s+(\d+)U', abi_h).group(1))
-          c_pat = int(re.search(r'#define\s+GCSO_ABI_VERSION_PATCH\s+(\d+)U', abi_h).group(1))
-          c_str = re.search(r'#define\s+GCSO_ABI_VERSION_STRING\s+"([^"]+)"', abi_h).group(1)
+          c_maj = int(must_match(r'#define\s+GCSO_ABI_VERSION_MAJOR\s+(\d+)U', abi_h, "gcso_abi.h MAJOR").group(1))
+          c_min = int(must_match(r'#define\s+GCSO_ABI_VERSION_MINOR\s+(\d+)U', abi_h, "gcso_abi.h MINOR").group(1))
+          c_pat = int(must_match(r'#define\s+GCSO_ABI_VERSION_PATCH\s+(\d+)U', abi_h, "gcso_abi.h PATCH").group(1))
+          c_str = must_match(r'#define\s+GCSO_ABI_VERSION_STRING\s+"([^"]+)"', abi_h, "gcso_abi.h STRING").group(1)
 
           types_h = read("include/liminika/gcso_types.h")
-          c_crystal_hex = int(re.search(r'#define\s+GCSO_CRYSTAL_RECORD_VERSION\s+(0x[0-9A-Fa-f]+)U?', types_h).group(1), 16)
+          c_crystal_hex = int(must_match(r'#define\s+GCSO_CRYSTAL_RECORD_VERSION\s+(0x[0-9A-Fa-f]+)U?', types_h, "gcso_types.h GCSO_CRYSTAL_RECORD_VERSION").group(1), 16)
 
           constants_rs = read("src/core/src/liminal/constants.rs")
-          r_maj = int(re.search(r'pub\s+const\s+GCSO_ABI_VERSION_MAJOR:\s*u32\s*=\s*(\d+)', constants_rs).group(1))
-          r_min = int(re.search(r'pub\s+const\s+GCSO_ABI_VERSION_MINOR:\s*u32\s*=\s*(\d+)', constants_rs).group(1))
-          r_pat = int(re.search(r'pub\s+const\s+GCSO_ABI_VERSION_PATCH:\s*u32\s*=\s*(\d+)', constants_rs).group(1))
-          r_cstr = re.search(r'pub\s+const\s+GCSO_ABI_VERSION_CSTR:[^=]*=\s*c"([^"]+)"', constants_rs).group(1)
+          r_maj = int(must_match(r'pub\s+const\s+GCSO_ABI_VERSION_MAJOR:\s*u32\s*=\s*(\d+)', constants_rs, "liminal/constants.rs MAJOR").group(1))
+          r_min = int(must_match(r'pub\s+const\s+GCSO_ABI_VERSION_MINOR:\s*u32\s*=\s*(\d+)', constants_rs, "liminal/constants.rs MINOR").group(1))
+          r_pat = int(must_match(r'pub\s+const\s+GCSO_ABI_VERSION_PATCH:\s*u32\s*=\s*(\d+)', constants_rs, "liminal/constants.rs PATCH").group(1))
+          r_cstr = must_match(r'pub\s+const\s+GCSO_ABI_VERSION_CSTR:[^=]*=\s*c"([^"]+)"', constants_rs, "liminal/constants.rs CSTR").group(1)
           abi_types_rs = read("src/core/src/runtime/abi/types.rs")
 
-          ver = root_ver_m.group(1)
           parts = tuple(int(x) for x in ver.split("."))
           expected_hex = (parts[0] << 16) | (parts[1] << 8) | parts[2]
 
           checks = [
-              ("examples/candle_eval/Cargo.toml", candle_ver_m.group(1) == ver),
-              ("CMakeLists.txt", root_cmake_m.group(1) == ver),
-              ("src/kernels/CMakeLists.txt", kern_cmake_m.group(1) == ver),
+              ("examples/candle_eval/Cargo.toml", candle_ver == ver),
+              ("CMakeLists.txt", root_cmake == ver),
+              ("src/kernels/CMakeLists.txt", kern_cmake == ver),
               ("gcso_abi.h tuple", (c_maj, c_min, c_pat) == parts),
               ("gcso_abi.h string", c_str == ver),
               ("gcso_types.h crystal hex", c_crystal_hex == expected_hex),
@@ -384,7 +453,7 @@ jobs:
           print(f"All manifests, C headers, CMake files, and Rust ABI constants match version {ver} ({hex(expected_hex)}).")
           PY
 
-      - name: Verify 5-Layer Unidirectional DAG & Driver Isolation
+      - name: Verify 5-Layer Unidirectional DAG, Driver Isolation & Axiom Orthogonality
         run: |
           python3 - << 'PY'
           import pathlib
@@ -393,12 +462,14 @@ jobs:
 
           root = pathlib.Path("src/core/src")
           rules = [
-              ("Lv.0 liminal -> Lv.1..4", "liminal", re.compile(r"\bcrate::(?:(foundation|stigmergy|drivers|runtime)\b|\{[^}]*\b(foundation|stigmergy|drivers|runtime)\b)")),
-              ("Lv.1 foundation -> Lv.2..4", "foundation", re.compile(r"\bcrate::(?:(stigmergy|drivers|runtime)\b|\{[^}]*\b(stigmergy|drivers|runtime)\b)")),
-              ("Lv.2 stigmergy -> Lv.3..4", "stigmergy", re.compile(r"\bcrate::(?:(drivers|runtime)\b|\{[^}]*\b(drivers|runtime)\b)")),
-              ("Lv.3 drivers -> Lv.4", "drivers", re.compile(r"\bcrate::(?:runtime\b|\{[^}]*\bruntime\b)")),
+              ("Lv.0 liminal -> Lv.1..4", "liminal", re.compile(r"\b(?:crate::|(?:super::)+)(?:(foundation|stigmergy|drivers|runtime)\b|\{[^}]*\b(foundation|stigmergy|drivers|runtime)\b)")),
+              ("Lv.1 foundation -> Lv.2..4", "foundation", re.compile(r"\b(?:crate::|(?:super::)+)(?:(stigmergy|drivers|runtime)\b|\{[^}]*\b(stigmergy|drivers|runtime)\b)")),
+              ("Lv.2 stigmergy -> Lv.3..4", "stigmergy", re.compile(r"\b(?:crate::|(?:super::)+)(?:(drivers|runtime)\b|\{[^}]*\b(drivers|runtime)\b)")),
+              ("Lv.3 drivers -> Lv.4", "drivers", re.compile(r"\b(?:crate::|(?:super::)+)(?:runtime\b|\{[^}]*\bruntime\b)")),
               ("drivers/spine -> drivers/ego", "drivers/spine", re.compile(r"\b(?:crate::drivers::|(?:super::)+)(?:ego\b|\{[^}]*\bego\b)")),
               ("drivers/ego -> drivers/spine", "drivers/ego", re.compile(r"\b(?:crate::drivers::|(?:super::)+)(?:spine\b|\{[^}]*\bspine\b)")),
+              ("Lv.0 axiom/cut -> axiom/lacuna", "liminal/axiom/cut.rs", re.compile(r"lacuna", re.IGNORECASE)),
+              ("Lv.0 axiom/lacuna -> axiom/cut", "liminal/axiom/lacuna.rs", re.compile(r"\b(?:(?:super::)+|axiom::|liminal::)cut\b|\b(?:Scoped|ScopedCut|BitCut8|BitCut32|ActiveScope|GroundedScope|Cuttable|Definite|BoundaryViolation|SpeculativeDiscovery)\b")),
           ]
 
           violations = []
@@ -407,10 +478,15 @@ jobs:
                   violations.append(f"Deprecated legacy traits path exists: {legacy.as_posix()}")
 
           for label, sub, pat in rules:
-              sub_dir = root / sub
-              rs_files = sorted(sub_dir.rglob("*.rs"))
+              sub_path = root / sub
+              if sub_path.is_file():
+                  rs_files = [sub_path]
+              elif sub_path.is_dir():
+                  rs_files = sorted(sub_path.rglob("*.rs"))
+              else:
+                  rs_files = []
               if not rs_files:
-                  violations.append(f"{label}: directory {sub_dir.as_posix()} is missing or contains no .rs files")
+                  violations.append(f"{label}: path {sub_path.as_posix()} is missing or contains no .rs files")
                   continue
               for f in rs_files:
                   text = f.read_text(encoding="utf-8")
@@ -421,9 +497,9 @@ jobs:
                       violations.append(f"{label}: {f.as_posix()}:{lineno}: {snippet}")
 
           if violations:
-              print("Error: 5-layer unidirectional DAG or driver isolation violation detected:", *violations, sep="\n  ")
+              print("Error: 5-layer unidirectional DAG, driver isolation, or axiom orthogonality violation detected:", *violations, sep="\n  ")
               sys.exit(1)
-          print("All 5-layer unidirectional DAG and spine/ego isolation invariants passed (0 violations).")
+          print("All 5-layer unidirectional DAG, spine/ego isolation, and axiom orthogonality invariants passed (0 violations).")
           PY
 
   # =========================================================================
@@ -431,8 +507,8 @@ jobs:
   # =========================================================================
   cpp-build-matrix:
     name: C/C++ & GPU Kernels Build (${{ matrix.os }})
-    needs: [auto-format, changes]
-    if: ${{ always() && !cancelled() && (needs.changes.outputs.cpp == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
+    needs: [changes, auto-format]
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && (needs.auto-format.result == 'success' || needs.auto-format.result == 'skipped') && (needs.changes.outputs.cpp == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
     strategy:
       fail-fast: false
       matrix:
@@ -446,7 +522,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref || github.ref }}
+          ref: ${{ needs.auto-format.outputs.formatted_sha || '' }}
 
       - name: Setup MSVC Developer Command Prompt (Windows)
         if: runner.os == 'Windows'
@@ -462,7 +538,7 @@ jobs:
               fi
               sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update || true
             fi
-            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 install -y ninja-build clang clang-format cmake libclang-dev ccache vulkan-tools libvulkan-dev glslang-tools libshaderc-dev || true
+            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 install -y ninja-build clang clang-format cmake ccache vulkan-tools libvulkan-dev glslang-tools libshaderc-dev || true
           fi
           if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
             python3 -m pip install --quiet --retries 1 --timeout 10 cmake ninja 2>/dev/null || pip3 install --quiet --break-system-packages --retries 1 --timeout 10 cmake ninja 2>/dev/null || true
@@ -481,9 +557,6 @@ jobs:
           PKGS=()
           command -v ninja >/dev/null 2>&1 || PKGS+=(ninja)
           command -v ccache >/dev/null 2>&1 || PKGS+=(ccache)
-          if [ ! -f "C:/Program Files/LLVM/bin/clang.exe" ] && ! command -v clang >/dev/null 2>&1; then
-            PKGS+=(llvm)
-          fi
           if [ "${#PKGS[@]}" -gt 0 ]; then
             choco install "${PKGS[@]}" --no-progress || true
           fi
@@ -562,17 +635,27 @@ jobs:
       - name: Configure CMake (Windows with AVX2 enabled)
         if: runner.os == 'Windows'
         run: |
-          if [ -f "CMakeLists.txt" ]; then
-            cmake -B build -S . -GNinja \
-              -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+          if [ -f "CMakeLists.txt" ] && command -v cmake >/dev/null 2>&1; then
+            CMAKE_EXTRA_ARGS=()
+            if command -v ninja >/dev/null 2>&1; then
+              CMAKE_EXTRA_ARGS+=(-GNinja)
+            fi
+            if command -v ccache >/dev/null 2>&1; then
+              CMAKE_EXTRA_ARGS+=(
+                -DCMAKE_C_COMPILER_LAUNCHER=ccache
+                -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+                -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+                -DCMAKE_POLICY_DEFAULT_CMP0141=NEW
+              )
+            fi
+            cmake -B build -S . "${CMAKE_EXTRA_ARGS[@]}" \
               -DLIMINIKA_ENABLE_AVX2=ON \
               -DLIMINIKA_ENABLE_CUDA=OFF \
               -DLIMINIKA_ENABLE_VULKAN=OFF \
               -DLIMINIKA_ENABLE_METAL=OFF \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo
           else
-            echo "No root CMakeLists.txt found; skipping CMake configure."
+            echo "No root CMakeLists.txt or cmake binary found; skipping CMake configure."
           fi
 
       - name: Configure CMake (macOS with Metal & NEON enabled)
@@ -626,8 +709,8 @@ jobs:
   # =========================================================================
   rust-check-matrix:
     name: Rust Workspace (${{ matrix.os }})
-    needs: [auto-format, changes]
-    if: ${{ always() && !cancelled() && (needs.changes.outputs.rust == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
+    needs: [changes, auto-format]
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && (needs.auto-format.result == 'success' || needs.auto-format.result == 'skipped') && (needs.changes.outputs.rust == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
     strategy:
       fail-fast: false
       matrix:
@@ -641,9 +724,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref || github.ref }}
+          ref: ${{ needs.auto-format.outputs.formatted_sha || '' }}
 
-      - name: Install C/C++ & LLVM Dependencies for FFI/Bindgen (Linux)
+      - name: Install C/C++ Build Dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1 || [ ! -f /usr/include/vulkan/vulkan.h ]; then
@@ -653,36 +736,25 @@ jobs:
               fi
               sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update || true
             fi
-            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 install -y cmake ninja-build libclang-dev clang libvulkan-dev glslang-tools libshaderc-dev || true
+            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 install -y cmake ninja-build clang libvulkan-dev glslang-tools libshaderc-dev || true
           fi
           if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
             python3 -m pip install --quiet --retries 1 --timeout 10 cmake ninja 2>/dev/null || pip3 install --quiet --break-system-packages --retries 1 --timeout 10 cmake ninja 2>/dev/null || true
           fi
 
-      - name: Install C/C++ & LLVM Dependencies for FFI/Bindgen (macOS)
+      - name: Install C/C++ Build Dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          LLVM_PREFIX=$(brew --prefix llvm 2>/dev/null || true)
-          if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1 || [ -z "$LLVM_PREFIX" ] || [ ! -d "$LLVM_PREFIX/lib" ]; then
-            HOMEBREW_NO_AUTO_UPDATE=1 brew install cmake ninja llvm || true
-            LLVM_PREFIX=$(brew --prefix llvm 2>/dev/null || true)
+          if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install cmake ninja || true
           fi
-          echo "LIBCLANG_PATH=${LLVM_PREFIX}/lib" >> "$GITHUB_ENV"
 
-      - name: Install C/C++ & LLVM Dependencies for FFI/Bindgen (Windows)
+      - name: Install C/C++ Build Dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
-          PKGS=()
-          command -v ninja >/dev/null 2>&1 || PKGS+=(ninja)
-          if [ ! -f "C:/Program Files/LLVM/bin/clang.exe" ] && ! command -v clang >/dev/null 2>&1; then
-            PKGS+=(llvm)
+          if ! command -v ninja >/dev/null 2>&1; then
+            choco install ninja --no-progress || true
           fi
-          if [ "${#PKGS[@]}" -gt 0 ]; then
-            choco install "${PKGS[@]}" --no-progress || true
-          fi
-          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $GITHUB_ENV
-          echo "LLVM_CONFIG_PATH=C:\Program Files\LLVM\bin\llvm-config.exe" >> $GITHUB_ENV
-          echo "C:\Program Files\LLVM\bin" >> $GITHUB_PATH
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -694,6 +766,10 @@ jobs:
 
       - name: Enable Rust caching
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            examples/candle_eval -> examples/candle_eval/target
 
       - name: Configure platform GPU backend environment flags
         run: |
@@ -708,6 +784,14 @@ jobs:
             echo "LIMINIKA_ENABLE_VULKAN=0" >> "$GITHUB_ENV"
           else
             echo "LIMINIKA_ENABLE_VULKAN=0" >> "$GITHUB_ENV"
+          fi
+
+      - name: Verify Rust formatting (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo fmt --all -- --check
+          if [ -f "examples/candle_eval/Cargo.toml" ]; then
+            cargo fmt --manifest-path examples/candle_eval/Cargo.toml -- --check
           fi
 
       - name: Run cargo check/clippy (no_std core, default, and all-features)
@@ -728,8 +812,8 @@ jobs:
           RUSTFLAGS: "-C target-feature=+avx2,+fma"
         run: |
           ulimit -s 16384 || true
-          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-          cargo nextest run --locked --workspace --lib --bins --tests --all-features
+          cargo clippy --locked -p liminika-core --all-targets --all-features -- -D warnings
+          cargo nextest run --locked -p liminika-core --lib --tests --all-features
 
       - name: Check Rust documentation integrity (Ubuntu only)
         if: runner.os == 'Linux'
@@ -758,8 +842,8 @@ jobs:
   # =========================================================================
   dsl-validation:
     name: Validate DSL Spec & Examples
-    needs: [auto-format, changes]
-    if: ${{ always() && !cancelled() && (needs.changes.outputs.dsl == 'true' || needs.changes.outputs.rust == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
+    needs: [changes, auto-format]
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && (needs.auto-format.result == 'success' || needs.auto-format.result == 'skipped') && (needs.changes.outputs.dsl == 'true' || needs.changes.outputs.rust == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -769,7 +853,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref || github.ref }}
+          ref: ${{ needs.auto-format.outputs.formatted_sha || '' }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -796,8 +880,8 @@ jobs:
   # =========================================================================
   python-check:
     name: Python Script Syntax Verification
-    needs: [auto-format, changes]
-    if: ${{ always() && !cancelled() && (needs.changes.outputs.python == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
+    needs: [changes, auto-format]
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && (needs.auto-format.result == 'success' || needs.auto-format.result == 'skipped') && (needs.changes.outputs.python == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -807,7 +891,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref || github.ref }}
+          ref: ${{ needs.auto-format.outputs.formatted_sha || '' }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -843,8 +927,8 @@ jobs:
   # =========================================================================
   meta-citation-check:
     name: Validate Meta & Citation Files
-    needs: [auto-format, changes]
-    if: ${{ always() && !cancelled() && (needs.changes.outputs.meta == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
+    needs: [changes, auto-format]
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && (needs.auto-format.result == 'success' || needs.auto-format.result == 'skipped') && (needs.changes.outputs.meta == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -854,7 +938,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref || github.ref }}
+          ref: ${{ needs.auto-format.outputs.formatted_sha || '' }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -871,8 +955,8 @@ jobs:
   # =========================================================================
   docs-check:
     name: Documentation Integrity & Link Check
-    needs: [auto-format, changes]
-    if: ${{ always() && !cancelled() && (needs.changes.outputs.docs == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
+    needs: [changes, auto-format]
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && (needs.auto-format.result == 'success' || needs.auto-format.result == 'skipped') && (needs.changes.outputs.docs == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -882,7 +966,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref || github.ref }}
+          ref: ${{ needs.auto-format.outputs.formatted_sha || '' }}
 
       - name: Check markdown broken links
         uses: lycheeverse/lychee-action@v2

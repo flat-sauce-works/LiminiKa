@@ -20,11 +20,11 @@ use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
     branchless_max_f32, branchless_min_f32, branchless_relu_f32, branchless_sanitize_z_score_f32,
     fast_inv_len_f32, fast_inv_pos_normal_f32, gcso_tagged_ptr_t, sum_sq_f32_simd8, AlignedSlice32,
-    Pod, F32_MIN_POSITIVE_NORMAL,
+    Pod, ATTRACTOR_SLOT_ID_MASK, F32_MIN_POSITIVE_NORMAL,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u8, GcsoResult,
-    ATTRACTOR_SLOT_ID_MASK, GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT,
+    GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT,
 };
 use crate::stigmergy::StigmergicActionPtrOps;
 

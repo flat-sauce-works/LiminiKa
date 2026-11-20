@@ -9,11 +9,12 @@ use crate::foundation::aligned::is_aligned_to;
 use crate::foundation::scalar_math::{
     branchless_flush_subnormal_f32, branchless_max_f32, branchless_q7_abs_u8,
     branchless_q7_fold_s1_geodesic, branchless_relu_f32, branchless_rsqrt_f32,
-    fast_inv_pos_normal_f32, VON_MISES_KAPPA_AT_MAX_R,
+    fast_inv_pos_normal_f32, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE,
+    VON_MISES_KAPPA_AT_MAX_R,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u8, branchless_select_usize, gcso_q7_t,
-    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE, Q7_PHASE_SCALE_RAD,
+    Q7_PHASE_SCALE_RAD,
 };
 
 // ===================================================================

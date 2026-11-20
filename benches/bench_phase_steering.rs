@@ -30,13 +30,13 @@ use liminika_core::foundation::{
     dispatch_subhead_slot_ensemble_geodesic, steer_visual_grid_2d_bitmask_gated,
     steer_visual_grid_3d_bitmask_gated, AlignedBuffer16, AlignedBuffer32, AlignedBuffer64,
     AlignedSlice16, AlignedSlice32, AlignedSliceMut16, PhaseSteering, PhaseSteeringEngine,
-};
-use liminika_core::liminal::{
-    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE,
     DEFAULT_PHASE_CLAMP_MAX_RAD,
 };
 use liminika_core::runtime::PhaseSteeringClosedLoop;
-use liminika_core::stigmergy::CrystallizedAttractorRecord;
+use liminika_core::stigmergy::{
+    CrystallizedAttractorRecord, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
+    ATTRACTOR_SLOT_SYSTEM_BASELINE,
+};
 use std::hint::black_box;
 use std::time::Duration;
 
