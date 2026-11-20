@@ -295,7 +295,7 @@ impl GatewayFrame {
             // SAFETY: `target_feature = "avx2"` is enabled and `q_block32`, `k_block32`, `v_block32` are disjoint 32-float arrays.
             unsafe {
                 use core::arch::x86_64::_mm256_set1_ps;
-                crate::foundation::branchless::avx2_rotate_so2_triple_block32(
+                crate::foundation::simd_stats::avx2_rotate_so2_triple_block32(
                     q_block32.as_mut_ptr(),
                     k_block32.as_mut_ptr(),
                     v_block32.as_mut_ptr(),
@@ -1890,7 +1890,7 @@ where
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     if !blended_uni && avx_precomputed_tag.is_none() {
         // SAFETY: `target_feature = "avx2"` is enabled at compile time.
-        let (v0, v1) = unsafe { crate::foundation::branchless::avx2_words64_to_vec64(&blended_w) };
+        let (v0, v1) = unsafe { crate::foundation::phase_field::avx2_words64_to_vec64(&blended_w) };
         avx_precomputed_tag =
             Some(unsafe { crate::foundation::avx2_q7_mean_i8_from_vec64(v0, v1) });
     }
@@ -1957,7 +1957,7 @@ where
 // 7. Blanket `ManifoldGatewaySignal` Implementations for Wrappers, Tuples & Ensembles
 // ===================================================================
 
-impl<T: BranchlessKernel> ManifoldGatewaySignal for SystemConstraint<T> {
+impl<T: Liminal> ManifoldGatewaySignal for SystemConstraint<T> {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(
         &self,
@@ -2047,7 +2047,7 @@ impl<T: RawPhaseProjectable> ManifoldGatewaySignal for SubjectivePersona<T> {
     }
 }
 
-impl<B: BranchlessKernel> ManifoldGatewaySignal for ContradictionGuard<B>
+impl<B: Liminal> ManifoldGatewaySignal for ContradictionGuard<B>
 where
     Self: ContradictionGuardSignal,
 {

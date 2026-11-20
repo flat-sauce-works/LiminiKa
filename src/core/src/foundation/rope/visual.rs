@@ -1,233 +1,253 @@
-// name: src/core/src/foundation/rope/adapters.rs
+// name: src/core/src/foundation/rope/visual.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Synchronous Rank-1 Residual Adapter and 2D/3D Visual Attention Steering pure kernels.
+//! 2D/3D spatiotemporal visual RoPE attention steering and frame-delta bitmask detection kernels.
 
-use super::*;
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+use core::arch::x86_64::*;
+
+use crate::foundation::aligned::{AlignedSlice32, AlignedSliceMut32};
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+use crate::foundation::phase_field::avx2_hsum_ps;
+use crate::foundation::pod::{gcso_paged_bitmask_t, PAGED_BITMASK_BITS};
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+use crate::foundation::scalar_math::branchless_rotate_so2_pair;
+use crate::foundation::scalar_math::{
+    branchless_is_finite_f32, branchless_sincos_q7, fast_inv_len_f32,
+};
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+use crate::foundation::simd_stats::avx2_rotate_so2_block32;
+use crate::liminal::{gcso_q7_t, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT};
 
 // ===================================================================
-// 5. Synchronous Rank-1 Residual Adapter Kernels
+// 1. AVX2 / Scalar SIMD Kernels for 2D/3D Visual RoPE
 // ===================================================================
 
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
-pub(super) fn validate_and_unpack_rank1_descriptor<'a>(
-    desc: &'a gcso_rank1_residual_descriptor_t,
-    d_in: usize,
-    d_out: usize,
-) -> GcsoResult<(
-    AlignedSlice32<'a, f32>,
-    AlignedSlice32<'a, f32>,
-    Option<AlignedSlice32<'a, f32>>,
-)> {
-    if desc.u_vector_ptr == 0 || desc.v_vector_ptr == 0 {
-        return Err(GCSO_ERROR_NULL_POINTER);
+pub(crate) unsafe fn avx2_build_so2_2d_xy_vecs(
+    sin_x: f32,
+    cos_x: f32,
+    sin_y: f32,
+    cos_y: f32,
+) -> (core::arch::x86_64::__m256, core::arch::x86_64::__m256) {
+    // SAFETY: Caller guarantees `target_feature = "avx2"`. Builds `[cos_x, cos_x, cos_y, cos_y]^2`
+    // and `[sin_x, sin_x, sin_y, sin_y]^2` in 3 shuffle/insert instructions without stack spills.
+    unsafe {
+        let c_xy = _mm_unpacklo_ps(_mm_set_ss(cos_x), _mm_set_ss(cos_y));
+        let c_128 = _mm_unpacklo_ps(c_xy, c_xy);
+        let s_xy = _mm_unpacklo_ps(_mm_set_ss(sin_x), _mm_set_ss(sin_y));
+        let s_128 = _mm_unpacklo_ps(s_xy, s_xy);
+        (
+            _mm256_insertf128_ps::<1>(_mm256_castps128_ps256(c_128), c_128),
+            _mm256_insertf128_ps::<1>(_mm256_castps128_ps256(s_128), s_128),
+        )
     }
-    if desc.rank != 1 || d_in == 0 || d_out == 0 || !branchless_is_finite_f32(desc.scale_factor) {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
-    }
-    let u_ptr = desc.u_vector_ptr as *const f32;
-    let v_ptr = desc.v_vector_ptr as *const f32;
-    if (u_ptr as usize) & 31 != 0 || (v_ptr as usize) & 31 != 0 {
-        return Err(GCSO_ERROR_MISALIGNED_POINTER);
-    }
-    let g_slice_opt = if desc.gain_scalar_ptr != 0 {
-        let g_ptr = desc.gain_scalar_ptr as *const f32;
-        if (g_ptr as usize) & 31 != 0 {
-            return Err(GCSO_ERROR_MISALIGNED_POINTER);
-        }
-        // SAFETY: `g_ptr` is non-null, 32-byte aligned, and sized to `d_out` elements per C-ABI contract.
-        Some(unsafe { AlignedSlice32::new_unchecked(slice::from_raw_parts(g_ptr, d_out)) })
-    } else {
-        None
-    };
-    // SAFETY: `u_ptr` and `v_ptr` are non-null, 32-byte aligned, and sized to `d_out` and `d_in`.
-    let u_slice = unsafe { AlignedSlice32::new_unchecked(slice::from_raw_parts(u_ptr, d_out)) };
-    // SAFETY: `v_ptr` is non-null, 32-byte aligned, and sized to `d_in`.
-    let v_slice = unsafe { AlignedSlice32::new_unchecked(slice::from_raw_parts(v_ptr, d_in)) };
-    Ok((u_slice, v_slice, g_slice_opt))
 }
 
-/// Evaluates the standalone Rank-1 outer product $\mathbf{y} = s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
-/// into `y_out` from safe hardware-aligned slices using AVX2 (`dot_f32_unrolled4`, `rank1_write_outer_product_simd`).
-///
-/// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `y_out`, `x_in`, `u_vec`, or `v_vec` is empty,
-/// `x_in.len() != v_vec.len()`, `y_out.len() != u_vec.len()`, or `scale_factor` is non-finite.
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+#[inline(always)]
+pub(crate) unsafe fn avx2_rotate_so2_2d_xy_slice_with_vecs(
+    buf: &mut [f32],
+    v_cos: core::arch::x86_64::__m256,
+    v_sin: core::arch::x86_64::__m256,
+) {
+    let len = buf.len();
+    let ptr = buf.as_mut_ptr();
+    // SAFETY: Caller guarantees `target_feature = "avx2"`, and all offsets are bounds-checked against `len`.
+    // Delegates 32-float blocks to `avx2_rotate_so2_block32` (`2x` paired-YMM ILP across opposite 32B L1D banks).
+    unsafe {
+        let mut b = 0usize;
+        while b + 32 <= len {
+            avx2_rotate_so2_block32(ptr.add(b), v_cos, v_sin);
+            b += 32;
+        }
+        let rem = len - b;
+        if (rem & 16) != 0 {
+            let p0 = ptr.add(b);
+            let p1 = ptr.add(b + 8);
+            let v0 = _mm256_loadu_ps(p0);
+            let v1 = _mm256_loadu_ps(p1);
+            _mm256_storeu_ps(
+                p0,
+                _mm256_addsub_ps(
+                    _mm256_mul_ps(v0, v_cos),
+                    _mm256_mul_ps(_mm256_permute_ps::<0xB1>(v0), v_sin),
+                ),
+            );
+            _mm256_storeu_ps(
+                p1,
+                _mm256_addsub_ps(
+                    _mm256_mul_ps(v1, v_cos),
+                    _mm256_mul_ps(_mm256_permute_ps::<0xB1>(v1), v_sin),
+                ),
+            );
+            b += 16;
+        }
+        if (rem & 8) != 0 {
+            let p = ptr.add(b);
+            let v = _mm256_loadu_ps(p);
+            _mm256_storeu_ps(
+                p,
+                _mm256_addsub_ps(
+                    _mm256_mul_ps(v, v_cos),
+                    _mm256_mul_ps(_mm256_permute_ps::<0xB1>(v), v_sin),
+                ),
+            );
+            b += 8;
+        }
+        if (rem & 4) != 0 {
+            let p = ptr.add(b);
+            let v = _mm_loadu_ps(p);
+            let c_lo = _mm256_castps256_ps128(v_cos);
+            let s_lo = _mm256_castps256_ps128(v_sin);
+            _mm_storeu_ps(
+                p,
+                _mm_addsub_ps(
+                    _mm_mul_ps(v, c_lo),
+                    _mm_mul_ps(_mm_permute_ps::<0xB1>(v), s_lo),
+                ),
+            );
+        }
+    }
+}
+
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+#[inline(always)]
+pub(crate) fn rotate_so2_2d_xy_slice_simd(
+    buf: &mut [f32],
+    sin_x: f32,
+    cos_x: f32,
+    sin_y: f32,
+    cos_y: f32,
+) {
+    for quad in buf.chunks_exact_mut(4) {
+        (quad[0], quad[1]) = branchless_rotate_so2_pair(quad[0], quad[1], sin_x, cos_x);
+        (quad[2], quad[3]) = branchless_rotate_so2_pair(quad[2], quad[3], sin_y, cos_y);
+    }
+}
+
+/// Executes 3D spatiotemporal $(\Delta\theta_t, \Delta\theta_x, \Delta\theta_y)$ rotation across `buf`
+/// using a 24-float (3-YMM = 4-hexagon) unrolled AVX2 kernel with 12-float (`1 YMM + 1 XMM`) and
+/// 6-float (`1 XMM + 1 pair`) vector tail handling.
 #[inline]
-pub fn eval_rank1_slices(
-    y_out: &mut AlignedSliceMut32<'_, f32>,
-    x_in: &AlignedSlice32<'_, f32>,
-    u_vec: &AlignedSlice32<'_, f32>,
-    v_vec: &AlignedSlice32<'_, f32>,
-    gain_vec: Option<&AlignedSlice32<'_, f32>>,
-    scale_factor: f32,
-) -> GcsoResult<()> {
-    let d_in = x_in.len();
-    let d_out = y_out.len();
-    if d_in == 0
-        || d_out == 0
-        || v_vec.len() < d_in
-        || u_vec.len() < d_out
-        || !branchless_is_finite_f32(scale_factor)
+pub(crate) fn rotate_so2_3d_txy_slice_simd(
+    buf: &mut [f32],
+    sin_t: f32,
+    cos_t: f32,
+    sin_x: f32,
+    cos_x: f32,
+    sin_y: f32,
+    cos_y: f32,
+) {
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
-    }
-    if let Some(g) = gain_vec {
-        if g.len() < d_out {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        use crate::foundation::scalar_math::branchless_rotate_so2_pair;
+
+        let hex_len = (buf.len() / 6) * 6;
+        let ptr = buf.as_mut_ptr();
+        let mut b = 0usize;
+        // SAFETY: `target_feature = "avx2"` is enabled, and `b + 24 / 12 / 6 <= hex_len` are bounds-checked.
+        unsafe {
+            let c0 = _mm256_setr_ps(cos_t, cos_t, cos_x, cos_x, cos_y, cos_y, cos_t, cos_t);
+            let s0 = _mm256_setr_ps(sin_t, sin_t, sin_x, sin_x, sin_y, sin_y, sin_t, sin_t);
+            let c1 = _mm256_setr_ps(cos_x, cos_x, cos_y, cos_y, cos_t, cos_t, cos_x, cos_x);
+            let s1 = _mm256_setr_ps(sin_x, sin_x, sin_y, sin_y, sin_t, sin_t, sin_x, sin_x);
+            let c2 = _mm256_setr_ps(cos_y, cos_y, cos_t, cos_t, cos_x, cos_x, cos_y, cos_y);
+            let s2 = _mm256_setr_ps(sin_y, sin_y, sin_t, sin_t, sin_x, sin_x, sin_y, sin_y);
+
+            while b + 24 <= hex_len {
+                let p0 = ptr.add(b);
+                let p1 = ptr.add(b + 8);
+                let p2 = ptr.add(b + 16);
+                let v0 = _mm256_loadu_ps(p0);
+                let v1 = _mm256_loadu_ps(p1);
+                let v2 = _mm256_loadu_ps(p2);
+                _mm256_storeu_ps(
+                    p0,
+                    _mm256_addsub_ps(
+                        _mm256_mul_ps(v0, c0),
+                        _mm256_mul_ps(_mm256_permute_ps::<0xB1>(v0), s0),
+                    ),
+                );
+                _mm256_storeu_ps(
+                    p1,
+                    _mm256_addsub_ps(
+                        _mm256_mul_ps(v1, c1),
+                        _mm256_mul_ps(_mm256_permute_ps::<0xB1>(v1), s1),
+                    ),
+                );
+                _mm256_storeu_ps(
+                    p2,
+                    _mm256_addsub_ps(
+                        _mm256_mul_ps(v2, c2),
+                        _mm256_mul_ps(_mm256_permute_ps::<0xB1>(v2), s2),
+                    ),
+                );
+                b += 24;
+            }
+            if b + 12 <= hex_len {
+                let p0 = ptr.add(b);
+                let p1 = ptr.add(b + 8);
+                let v0 = _mm256_loadu_ps(p0);
+                let v1_lo = _mm_loadu_ps(p1);
+                let c1_lo = _mm256_castps256_ps128(c1);
+                let s1_lo = _mm256_castps256_ps128(s1);
+                _mm256_storeu_ps(
+                    p0,
+                    _mm256_addsub_ps(
+                        _mm256_mul_ps(v0, c0),
+                        _mm256_mul_ps(_mm256_permute_ps::<0xB1>(v0), s0),
+                    ),
+                );
+                _mm_storeu_ps(
+                    p1,
+                    _mm_addsub_ps(
+                        _mm_mul_ps(v1_lo, c1_lo),
+                        _mm_mul_ps(_mm_permute_ps::<0xB1>(v1_lo), s1_lo),
+                    ),
+                );
+                b += 12;
+            }
+            if b + 6 <= hex_len {
+                let p0 = ptr.add(b);
+                let v0_lo = _mm_loadu_ps(p0);
+                let c0_lo = _mm256_castps256_ps128(c0);
+                let s0_lo = _mm256_castps256_ps128(s0);
+                _mm_storeu_ps(
+                    p0,
+                    _mm_addsub_ps(
+                        _mm_mul_ps(v0_lo, c0_lo),
+                        _mm_mul_ps(_mm_permute_ps::<0xB1>(v0_lo), s0_lo),
+                    ),
+                );
+                let (ry0, ry1) =
+                    branchless_rotate_so2_pair(*ptr.add(b + 4), *ptr.add(b + 5), sin_y, cos_y);
+                *ptr.add(b + 4) = ry0;
+                *ptr.add(b + 5) = ry1;
+            }
         }
     }
-
-    let dot_vx = dot_f32_unrolled4(v_vec.as_slice(), x_in.as_slice(), d_in);
-    if !branchless_is_finite_f32(dot_vx) {
-        return Err(GCSO_ERROR_EDBC_SINGULARITY);
-    }
-    let eff_scale = branchless_flush_subnormal_f32(scale_factor * dot_vx);
-    let g_slice_opt = gain_vec.map(|g| &g.as_slice()[..d_out]);
-    rank1_write_outer_product_simd(
-        &mut y_out.as_mut_slice()[..d_out],
-        &u_vec.as_slice()[..d_out],
-        g_slice_opt,
-        eff_scale,
-    );
-    Ok(())
-}
-
-/// Accumulates the fused Rank-1 outer product residual $\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
-/// in-place into `y_inout` from safe hardware-aligned slices using AVX2 (`rank1_accum_outer_product_simd`).
-///
-/// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any slice is empty, lengths mismatch, or `scale_factor` is non-finite.
-#[inline]
-pub fn eval_rank1_slices_fused(
-    y_inout: &mut AlignedSliceMut32<'_, f32>,
-    x_in: &AlignedSlice32<'_, f32>,
-    u_vec: &AlignedSlice32<'_, f32>,
-    v_vec: &AlignedSlice32<'_, f32>,
-    gain_vec: Option<&AlignedSlice32<'_, f32>>,
-    scale_factor: f32,
-) -> GcsoResult<()> {
-    let d_in = x_in.len();
-    let d_out = y_inout.len();
-    if d_in == 0
-        || d_out == 0
-        || v_vec.len() < d_in
-        || u_vec.len() < d_out
-        || !branchless_is_finite_f32(scale_factor)
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
-    }
-    if let Some(g) = gain_vec {
-        if g.len() < d_out {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        for hex in buf.chunks_exact_mut(6) {
+            (hex[0], hex[1]) = branchless_rotate_so2_pair(hex[0], hex[1], sin_t, cos_t);
+            (hex[2], hex[3]) = branchless_rotate_so2_pair(hex[2], hex[3], sin_x, cos_x);
+            (hex[4], hex[5]) = branchless_rotate_so2_pair(hex[4], hex[5], sin_y, cos_y);
         }
     }
-
-    let dot_vx = dot_f32_unrolled4(v_vec.as_slice(), x_in.as_slice(), d_in);
-    if !branchless_is_finite_f32(dot_vx) {
-        return Err(GCSO_ERROR_EDBC_SINGULARITY);
-    }
-    let eff_scale = branchless_flush_subnormal_f32(scale_factor * dot_vx);
-    let g_slice_opt = gain_vec.map(|g| &g.as_slice()[..d_out]);
-    rank1_accum_outer_product_simd(
-        &mut y_inout.as_mut_slice()[..d_out],
-        &u_vec.as_slice()[..d_out],
-        g_slice_opt,
-        eff_scale,
-    );
-    Ok(())
-}
-
-/// Evaluates the standalone Rank-1 outer product $\mathbf{y} = s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
-/// from a C-ABI [`gcso_rank1_residual_descriptor_t`] (including optional 32B-aligned `gain_scalar_ptr`).
-///
-/// # Errors
-/// Returns [`GCSO_ERROR_NULL_POINTER`] if `u_vector_ptr == 0` or `v_vector_ptr == 0`,
-/// [`GCSO_ERROR_MISALIGNED_POINTER`] if pointers are not 32B-aligned, or
-/// [`GCSO_ERROR_INVALID_ARGUMENT`] if `desc.rank != 1`, `desc.scale_factor` is non-finite, or slices are empty.
-#[inline]
-pub fn eval_rank1(
-    y_out: &mut AlignedSliceMut32<'_, f32>,
-    x_in: &AlignedSlice32<'_, f32>,
-    desc: &gcso_rank1_residual_descriptor_t,
-) -> GcsoResult<()> {
-    let (u_slice, v_slice, g_slice_opt) =
-        validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_out.len())?;
-    eval_rank1_slices(
-        y_out,
-        x_in,
-        &u_slice,
-        &v_slice,
-        g_slice_opt.as_ref(),
-        desc.scale_factor,
-    )
-}
-
-/// Accumulates the fused Rank-1 outer product residual $\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
-/// in-place into `y_inout` from a C-ABI [`gcso_rank1_residual_descriptor_t`] (including optional 32B-aligned `gain_scalar_ptr`).
-///
-/// # Errors
-/// Returns [`GCSO_ERROR_NULL_POINTER`] if `u_vector_ptr == 0` or `v_vector_ptr == 0`,
-/// [`GCSO_ERROR_MISALIGNED_POINTER`] if pointers are not 32B-aligned, or
-/// [`GCSO_ERROR_INVALID_ARGUMENT`] if `desc.rank != 1`, `desc.scale_factor` is non-finite, or slices are empty.
-#[inline]
-pub fn eval_rank1_fused(
-    y_inout: &mut AlignedSliceMut32<'_, f32>,
-    x_in: &AlignedSlice32<'_, f32>,
-    desc: &gcso_rank1_residual_descriptor_t,
-) -> GcsoResult<()> {
-    let (u_slice, v_slice, g_slice_opt) =
-        validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_inout.len())?;
-    eval_rank1_slices_fused(
-        y_inout,
-        x_in,
-        &u_slice,
-        &v_slice,
-        g_slice_opt.as_ref(),
-        desc.scale_factor,
-    )
-}
-
-/// Accumulates the fused Rank-1 outer product residual gated by `tagged_ptr`'s `ACTION_MODE_RANK1_INJECT` bit (`0x10`).
-///
-/// # Errors
-/// Propagates any pointer/slice validation error from [`eval_rank1_fused`].
-#[inline]
-pub fn eval_rank1_pointer_gated_fused(
-    tagged_ptr: gcso_tagged_ptr_t,
-    y_inout: &mut AlignedSliceMut32<'_, f32>,
-    x_in: &AlignedSlice32<'_, f32>,
-    desc: &gcso_rank1_residual_descriptor_t,
-) -> GcsoResult<bool> {
-    let (u_slice, v_slice, g_slice_opt) =
-        validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_inout.len())?;
-    if !ptr_has_action_mode(tagged_ptr, ACTION_MODE_RANK1_INJECT) {
-        return Ok(false);
-    }
-    eval_rank1_slices_fused(
-        y_inout,
-        x_in,
-        &u_slice,
-        &v_slice,
-        g_slice_opt.as_ref(),
-        desc.scale_factor,
-    )?;
-    Ok(true)
 }
 
 // ===================================================================
-// 6. 2D/3D Spatiotemporal Visual Attention Steering (`VisualAttentionSteering`)
+// 2. 2D/3D Spatiotemporal Visual Attention Steering & Bitmask Detection
 // ===================================================================
 
 #[inline(always)]
 #[must_use]
-pub(super) fn patch_diff_sum_sq_unrolled4(cur_patch: &[f32], prv_patch: &[f32]) -> f32 {
+fn patch_diff_sum_sq_unrolled4(cur_patch: &[f32], prv_patch: &[f32]) -> f32 {
     let n = cur_patch.len().min(prv_patch.len());
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
-        use core::arch::x86_64::{
-            _mm256_add_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_setzero_ps, _mm256_sub_ps,
-        };
         let pc = cur_patch.as_ptr();
         let pp = prv_patch.as_ptr();
         // SAFETY: `target_feature = "avx2"` is enabled, and pointer offsets are bounds-checked against `n`.
@@ -302,7 +322,7 @@ pub(super) fn patch_diff_sum_sq_unrolled4(cur_patch: &[f32], prv_patch: &[f32]) 
 }
 
 #[inline(always)]
-pub(super) fn steer_visual_grid_bitmask_core<F>(
+fn steer_visual_grid_bitmask_core<F>(
     grid_tensor: &mut AlignedSliceMut32<'_, f32>,
     active_patch_mask: &gcso_paged_bitmask_t,
     patch_stride_elems: usize,
@@ -358,79 +378,6 @@ where
         }
     }
     Ok(steered_count)
-}
-
-// ===================================================================
-// 6. 2D/3D Spatiotemporal Visual Attention Steering Kernels
-// ===================================================================
-
-/// Applies 2D spatial RoPE phase steering $(\Delta\theta_x, \Delta\theta_y)$ across a visual
-/// patch tensor (`head_dim` must be a positive multiple of `4`) using AVX2 (`rotate_so2_2d_xy_slice_simd`).
-///
-/// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim == 0`, `(head_dim & 3) != 0`, `num_heads == 0`,
-/// or `patch_tensor.len() < head_dim * num_heads`.
-#[inline]
-pub fn steer_visual_patch_2d(
-    patch_tensor: &mut AlignedSliceMut32<'_, f32>,
-    phase_x_q7: gcso_q7_t,
-    phase_y_q7: gcso_q7_t,
-    head_dim: usize,
-    num_heads: usize,
-) -> GcsoResult<()> {
-    let expected_len = head_dim
-        .checked_mul(num_heads)
-        .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
-    if head_dim == 0 || (head_dim & 3) != 0 || num_heads == 0 || patch_tensor.len() < expected_len {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
-    }
-    let (sin_x, cos_x) = branchless_sincos_q7(phase_x_q7);
-    let (sin_y, cos_y) = branchless_sincos_q7(phase_y_q7);
-    rotate_so2_2d_xy_slice_simd(
-        &mut patch_tensor.as_mut_slice()[..expected_len],
-        sin_x,
-        cos_x,
-        sin_y,
-        cos_y,
-    );
-    Ok(())
-}
-
-/// Applies 3D spatiotemporal RoPE phase steering $(\Delta\theta_t, \Delta\theta_x, \Delta\theta_y)$
-/// across a video/3D patch tensor (`head_dim` must be a positive multiple of `6`) using AVX2
-/// (`rotate_so2_3d_txy_slice_simd`).
-///
-/// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim == 0`, `(head_dim % 6) != 0`, `num_heads == 0`,
-/// or `patch_tensor.len() < head_dim * num_heads`.
-#[inline]
-pub fn steer_visual_patch_3d(
-    patch_tensor: &mut AlignedSliceMut32<'_, f32>,
-    phase_t_q7: gcso_q7_t,
-    phase_x_q7: gcso_q7_t,
-    phase_y_q7: gcso_q7_t,
-    head_dim: usize,
-    num_heads: usize,
-) -> GcsoResult<()> {
-    let expected_len = head_dim
-        .checked_mul(num_heads)
-        .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
-    if head_dim == 0 || (head_dim % 6) != 0 || num_heads == 0 || patch_tensor.len() < expected_len {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
-    }
-    let (sin_t, cos_t) = branchless_sincos_q7(phase_t_q7);
-    let (sin_x, cos_x) = branchless_sincos_q7(phase_x_q7);
-    let (sin_y, cos_y) = branchless_sincos_q7(phase_y_q7);
-    rotate_so2_3d_txy_slice_simd(
-        &mut patch_tensor.as_mut_slice()[..expected_len],
-        sin_t,
-        cos_t,
-        sin_x,
-        cos_x,
-        sin_y,
-        cos_y,
-    );
-    Ok(())
 }
 
 /// Computes the 256-bit frame delta bitmask (`prev_mask ^ curr_mask`) and active changed patch

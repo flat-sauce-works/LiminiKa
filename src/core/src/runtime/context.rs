@@ -43,10 +43,9 @@ use crate::foundation::{
     gcso_tagged_ptr_t, is_phase_profile_nonzero_64, is_word_array_uniform_64, load_q7_words_64,
     store_q7_words_64, swar_or_avx2_q7_add_sat_words_64, swar_slerp_words_with_uniform_flag_64,
     swar_words_equal_64, swar_words_nonzero_64, AlignedBuffer16, AlignedSlice16, AlignedSlice32,
-    AlignedSliceMut16, AlignedSliceMut32, PhaseSteering, PhaseSteeringEngine,
-    PhaseSteeringGeometryExt, Pod, RopeSteeringTarget, ACTION_MODE_LAYER_SKIP,
-    ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
-    DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64,
+    AlignedSliceMut16, AlignedSliceMut32, PhaseSteering, PhaseSteeringGeometryExt, Pod,
+    RopeSteeringTarget, ACTION_MODE_LAYER_SKIP, ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_ID_MASK,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u8, gcso_config_t, gcso_q7_t,
@@ -72,9 +71,9 @@ use crate::runtime::horizon::{
     HorizonEscalationProvider, HorizonEscalationRequest, HorizonTriggerInput, LatentHorizonSlot,
 };
 use crate::stigmergy::{
-    ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_ACTION_HUB_CAPACITY,
-    DEFAULT_SLOT_COUPLING_MATRIX_8X8, LEDGER_HISTORY_LEN, MAX_ANCHORS_PER_FIELD,
-    ROOT_CAUSE_SYSTEM_QOS_THROTTLE, WORKBENCH_LANE_FLAG_REPULSION,
+    PhaseSteeringEngine, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE,
+    DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_SLOT_COUPLING_MATRIX_8X8, LEDGER_HISTORY_LEN,
+    MAX_ANCHORS_PER_FIELD, ROOT_CAUSE_SYSTEM_QOS_THROTTLE, WORKBENCH_LANE_FLAG_REPULSION,
 };
 
 /// Default number of tokens per PagedAttention KV cache block (`32`).

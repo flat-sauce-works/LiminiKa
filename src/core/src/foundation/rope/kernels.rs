@@ -4,7 +4,7 @@
 //! Core SWAR/AVX2 RoPE rotation, `PhaseClamp`, SLERP, Procrustes, and Bayesian attention helpers.
 
 use super::*;
-use crate::foundation::branchless::atan2_to_q7_word_x8_simd;
+use crate::foundation::simd_stats::atan2_to_q7_word_x8_simd;
 
 /// Computes the `PhaseClamp` / sub-head router upper low-frequency rotation dimension
 /// `rot_dim = ((head_dim / 4) & !1).max(2)` (even integer in `2..=head_dim`).

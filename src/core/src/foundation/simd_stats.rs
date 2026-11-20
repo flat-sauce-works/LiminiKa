@@ -1,9 +1,31 @@
-// name: src/core/src/foundation/branchless/simd_stats.rs
+// name: src/core/src/foundation/simd_stats.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Scalar & AVX2 constant-time norm/sum, `PhaseClamp` limit, Chebyshev deg-3, Procrustes, and Hodge dual kernels.
 
-use super::*;
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+use core::arch::x86_64::*;
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+use core::f32::consts::FRAC_PI_2;
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+use core::f32::consts::PI;
+
+use crate::foundation::lut_crc32::{F32_MIN_POSITIVE_NORMAL, SUBNORMAL_SQ_RISK_FLOOR};
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+use crate::foundation::phase_field::{avx2_hsum2_ps, avx2_hsum_ps};
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+use crate::foundation::scalar_math::branchless_atan2_to_q7_fast;
+use crate::foundation::scalar_math::{
+    branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
+    branchless_is_finite_f32, branchless_max_f32, branchless_relu_f32, branchless_rotate_so2_pair,
+    branchless_sincos_f32, branchless_sqrt_f32,
+};
+use crate::foundation::swar_simd::{
+    sanitize_inplace_gain_f32, store_q7_words_64, store_q7_x8_slice,
+};
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+use crate::liminal::branchless_select_f32;
+use crate::liminal::{branchless_select_u32, gcso_q7_t, DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS};
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]

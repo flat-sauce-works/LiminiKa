@@ -464,6 +464,7 @@ jobs:
           rules = [
               ("Lv.0 liminal -> Lv.1..4", "liminal", re.compile(r"\b(?:crate::|(?:super::)+)(?:(foundation|stigmergy|drivers|runtime)\b|\{[^}]*\b(foundation|stigmergy|drivers|runtime)\b)")),
               ("Lv.1 foundation -> Lv.2..4", "foundation", re.compile(r"\b(?:crate::|(?:super::)+)(?:(stigmergy|drivers|runtime)\b|\{[^}]*\b(stigmergy|drivers|runtime)\b)")),
+              ("Lv.1 foundation -> liminal::axiom / Scoped", "foundation", re.compile(r"\b(?:liminal::axiom\b|Scoped\s*<|Scoped::|ScopedCut\b|ActiveScope\b|GroundedScope\b|GroundedOrigin\b|SpeculativeDiscovery\b|BoundaryViolation\b|VerifiedAligned\b|BridgedDiscovery\b)")),
               ("Lv.2 stigmergy -> Lv.3..4", "stigmergy", re.compile(r"\b(?:crate::|(?:super::)+)(?:(drivers|runtime)\b|\{[^}]*\b(drivers|runtime)\b)")),
               ("Lv.3 drivers -> Lv.4", "drivers", re.compile(r"\b(?:crate::|(?:super::)+)(?:runtime\b|\{[^}]*\bruntime\b)")),
               ("drivers/spine -> drivers/ego", "drivers/spine", re.compile(r"\b(?:crate::drivers::|(?:super::)+)(?:ego\b|\{[^}]*\bego\b)")),

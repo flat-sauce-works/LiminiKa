@@ -40,7 +40,7 @@ use crate::foundation::{
     resolve_autonomous_swarm_rot_dim, scale_f32_slice_unrolled8, steer_from_swar_words_core_safe,
     swar_or_avx2_q7_add_sat_words_64, swar_q7_phase_step_filter_words_64, swar_words_nonzero_64,
     unpack_attractor_slot_from_tag, AlignedBuffer64, AlignedSlice16, AlignedSliceMut32,
-    PhaseSteering, PhaseSteeringEngine, Pod, ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT,
+    PhaseSteering, Pod, ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT,
     ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
     ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
     ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEER_HEAD_DIM,
@@ -53,6 +53,7 @@ use crate::liminal::{
     NUM_STIGMERGIC_GRANULES,
 };
 use crate::stigmergy::crystal::DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE;
+use crate::stigmergy::gate::PhaseSteeringEngine;
 use crate::stigmergy::granule::StigmergicGranuleField;
 use crate::stigmergy::ledger::{gcso_ledger_slot_t, ContrastivePhaseBloomFilter, FastPathLedger};
 use crate::stigmergy::pheromone::PheromoneDensityOps;

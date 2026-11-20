@@ -663,6 +663,20 @@ impl_pod_for_primitives!(
 // SAFETY: Fixed-size arrays of `Pod` elements have contiguous layout with no extra padding traps.
 unsafe impl<T: Pod, const N: usize> Pod for [T; N] {}
 
+/// Executes an $\mathcal{O}(1)$ cascade pointer lookup combining parent and child phase deltas.
+#[inline(always)]
+#[must_use]
+pub fn cascade_tagged_ptr(
+    parent_ptr: gcso_tagged_ptr_t,
+    child_addr_offset: u64,
+    child_phase_delta: gcso_q7_t,
+) -> gcso_tagged_ptr_t {
+    let new_addr =
+        parent_ptr.unpack_addr().wrapping_add(child_addr_offset) & gcso_tagged_ptr_t::ADDR_MASK;
+    let combined_phase = branchless_q7_add_sat(parent_ptr.unpack_phase(), child_phase_delta);
+    gcso_tagged_ptr_t::pack(new_addr, parent_ptr.unpack_tag(), combined_phase)
+}
+
 const _: () = {
     assert!((ATTRACTOR_SLOT_ID_MASK as usize) == (MAX_ATTRACTOR_DOMAINS - 1));
     assert!(pack_action_slot_tag(7, 0x1F) == 0xFF);

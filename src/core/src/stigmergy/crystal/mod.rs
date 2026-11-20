@@ -31,24 +31,26 @@
 
 use core::mem::{align_of, offset_of, size_of};
 
+use self::crc32_delta::{
+    crc32_crystal_be24_final_u32, crc32_crystal_gm36_final_u32, crc32_crystal_zoff16_final_u32,
+    crc32_update_crystal_absorption_delta, crc32_update_crystal_stationary_fields_delta,
+    CRC32_CRYSTAL_ACTION_BYTE57_REF, CRC32_CRYSTAL_AID_BYTE0_REF, CRC32_CRYSTAL_AID_BYTE1_REF,
+    CRC32_CRYSTAL_PROV_BYTE0_REF, CRC32_CRYSTAL_PROV_BYTE1_REF, CRC32_CRYSTAL_SC_BYTE0_REF,
+    CRC32_CRYSTAL_SLOT_BYTE56_LUT_8, CRC32_CRYSTAL_ZOFF_BYTE1_REF, CRC32_CRYSTAL_ZOFF_BYTE2_REF,
+    CRC32_CRYSTAL_ZOFF_BYTE3_REF, CRYSTAL_CRC32_DEFAULT_W5_FINAL_CONTRIB,
+    CRYSTAL_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB, CRYSTAL_CRC32_KAPPA_MAX_FINAL_CONTRIB,
+    CRYSTAL_CRC32_RBAR_ONE_FINAL_CONTRIB, CRYSTAL_CRC32_W0_FINAL_CONTRIB,
+};
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_maturity_scale_u32,
     branchless_min_f32, branchless_relu_f32,
     branchless_toroidal_centroid_step_words_with_coh_uni_and_changed_64,
     coherence_above_floor_from_word_arrays_64, coherence_from_uniform_words_x8,
-    crc32_crystal_be24_final_u32, crc32_crystal_gm36_final_u32, crc32_crystal_zoff16_final_u32,
     crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32, crc32_slice16_indep_hi1_u32,
     crc32_slice16_indep_lo1_u32, crc32_slice16_step_u64x2, crc32_step_block64_words, crc32_step_l3,
-    crc32_step_l4, crc32_step_l5, crc32_step_l6, crc32_update_crystal_absorption_delta,
-    crc32_update_crystal_stationary_fields_delta, gcso_tagged_ptr_t, is_aligned_to,
-    is_word_array_uniform_64, load_q7_words_64, Pod, RawPhaseProjectable,
-    CRC32_CRYSTAL_ACTION_BYTE57_REF, CRC32_CRYSTAL_AID_BYTE0_REF, CRC32_CRYSTAL_AID_BYTE1_REF,
-    CRC32_CRYSTAL_PROV_BYTE0_REF, CRC32_CRYSTAL_PROV_BYTE1_REF, CRC32_CRYSTAL_SC_BYTE0_REF,
-    CRC32_CRYSTAL_SLOT_BYTE56_LUT_8, CRC32_CRYSTAL_ZOFF_BYTE1_REF, CRC32_CRYSTAL_ZOFF_BYTE2_REF,
-    CRC32_CRYSTAL_ZOFF_BYTE3_REF, CRC32_IEEE_SLICE16_REF, CRYSTAL_CRC32_DEFAULT_W5_FINAL_CONTRIB,
-    CRYSTAL_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB, CRYSTAL_CRC32_KAPPA_MAX_FINAL_CONTRIB,
-    CRYSTAL_CRC32_RBAR_ONE_FINAL_CONTRIB, CRYSTAL_CRC32_W0_FINAL_CONTRIB, Q7_FULL_COS_REF,
-    VON_MISES_KAPPA_AT_MAX_R_BITS,
+    crc32_step_l4, crc32_step_l5, crc32_step_l6, gcso_tagged_ptr_t, is_aligned_to,
+    is_word_array_uniform_64, load_q7_words_64, Pod, RawPhaseProjectable, CRC32_IEEE_SLICE16_REF,
+    Q7_FULL_COS_REF, VON_MISES_KAPPA_AT_MAX_R_BITS,
 };
 use crate::foundation::{
     ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR, ATTRACTOR_SLOT_ID_MASK,
@@ -89,9 +91,14 @@ pub const GCSO_CRYSTAL_RECORD_VERSION: u32 = GCSO_ABI_VERSION_HEX;
 #[allow(dead_code)]
 pub(crate) const MAX_REGISTER_CACHED_CENTROIDS: usize = 16;
 
+pub(crate) mod crc32_delta;
 pub mod kmeans;
 pub mod routing;
 pub mod trail_ext;
+
+pub(crate) use self::crc32_delta::{
+    crc32_crystal_stamp_contrib_128b, crc32_fold_stamped_crystal_128b,
+};
 pub use self::trail_ext::*;
 
 /// Outcome emitted by branchless dissipative overflow, residual scatter, and autonomous

@@ -9,12 +9,13 @@ use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_maturity_scale_u32,
     branchless_max_f32, branchless_min_f32,
     branchless_toroidal_centroid_step_words_with_coh_and_uni_64,
-    coherence_above_floor_from_word_arrays_64, crc32_update_crystal_energy_and_mass_delta,
-    is_word_array_uniform_64, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR,
+    coherence_above_floor_from_word_arrays_64, is_word_array_uniform_64,
+    ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR,
 };
 use crate::liminal::{DEFAULT_ENTROPY_EPS, NUM_STIGMERGIC_GRANULES};
 use crate::stigmergy::{CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, MAX_ATTRACTOR_PULL_FORCE};
 
+use super::crc32_delta::crc32_update_crystal_energy_and_mass_delta;
 use super::{CrystallizedAttractorRecord, GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION};
 
 impl CrystallizedAttractorRecord {

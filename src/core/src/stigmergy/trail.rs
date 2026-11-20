@@ -51,11 +51,10 @@ use crate::foundation::{
     swar_q7_phase_step_filter_words_64, swar_q7_scale_le128_with_bias_x8,
     swar_slerp_words_with_bias_64, swar_slerp_words_with_uniform_flag_64, swar_words_nonzero_64,
     unpack_action_mode_from_tag, unpack_attractor_slot_from_tag, AlignedSlice32, AlignedSliceMut32,
-    BranchlessKernel, PhaseSteering, Pod, RawPhaseProjectable, ACTION_MODE_LAYER_SKIP,
-    ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT,
-    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK,
-    DEFAULT_PHASE_GRAVITY_EPS, MAX_BAYESIAN_STIGMERGIC_DENSITY, POPCOUNT_RSQRT_LUT_257_REF,
-    SWAR_SPLAT_BYTE_64,
+    PhaseSteering, Pod, RawPhaseProjectable, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE,
+    ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE,
+    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_GRAVITY_EPS,
+    MAX_BAYESIAN_STIGMERGIC_DENSITY, POPCOUNT_RSQRT_LUT_257_REF, SWAR_SPLAT_BYTE_64,
 };
 pub use crate::foundation::{gcso_paged_bitmask_t, gcso_tagged_ptr_t};
 use crate::liminal::{
@@ -2262,8 +2261,8 @@ pub fn resolve_dyadic_qdpt_and_cascade_ptr(
 
 /// Hot-path capability trait for $\mathcal{O}(1)$ tagged pointer transitions and trail updates.
 ///
-/// Requires [`BranchlessKernel`] to enforce constant-time execution at the type level.
-pub trait PointerActionHub: BranchlessKernel + Send + Sync {
+/// Requires [`Liminal`] to enforce epistemic horizon and constant-time execution at the type level.
+pub trait PointerActionHub: Liminal + Send + Sync {
     /// Resets transient pointer trails and slot counters without freeing pre-allocated tables.
     ///
     /// # Errors
@@ -2354,8 +2353,8 @@ pub trait PointerActionHub: BranchlessKernel + Send + Sync {
 
 /// Mezzo-path trait for cellular swarm cell chunk step processing across PagedBlocks (**Mezzo Level**).
 ///
-/// Requires [`BranchlessKernel`] to enforce constant-time execution at the type level.
-pub trait StigmergicChunkOps: BranchlessKernel + Send + Sync {
+/// Requires [`Liminal`] to enforce epistemic horizon and constant-time execution at the type level.
+pub trait StigmergicChunkOps: Liminal + Send + Sync {
     /// Updates local cellular swarm cell state across PagedBlock token chunk boundaries.
     ///
     /// # Errors
@@ -2399,9 +2398,7 @@ pub(crate) fn validate_optional_qk_tensors(
 ///
 /// The Liminal Supertrait Blanket Extensions (`ActionHubGatewayExt`) observe this
 /// composite directly.
-pub trait ActionHub:
-    BranchlessKernel + Liminal + PhaseSteering + PointerActionHub + FastPathLedger
-{
+pub trait ActionHub: Liminal + PhaseSteering + PointerActionHub + FastPathLedger {
     /// Broadest cognitive aperture spanned across all gateway, steering, swarm, cohomology, and
     /// mapped-storage capabilities (`0x0000_FFFF`).
     const HUB_APERTURE_MASK: u32 = THRESHOLD_ACTION_HUB_WIDE;
@@ -2606,7 +2603,5 @@ pub trait ActionHub:
     }
 }
 
-impl<T> ActionHub for T where
-    T: BranchlessKernel + PhaseSteering + PointerActionHub + FastPathLedger + ?Sized
-{
-}
+impl<T> ActionHub for T where T: Liminal + PhaseSteering + PointerActionHub + FastPathLedger + ?Sized
+{}

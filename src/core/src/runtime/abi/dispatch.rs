@@ -120,8 +120,8 @@ impl RawPhaseProjectable for AbiF32EmbeddingRef<'_> {
 /// Private zero-copy borrowed [`ContrastivePhaseBloomFilter`] guard wrapper inside `abi::dispatch`
 /// implementing [`CausalProvenanceSignal`], [`CognitiveGroundingSignal`], and
 /// [`ContradictionGuardSignal`] without colliding with blanket implementations on
-/// [`ContradictionGuard`] in `gateway.rs`. Note: `BranchlessKernel` is automatically
-/// provided via the universal blanket `impl<T: ?Sized> BranchlessKernel for T {}` in `branchless.rs`.
+/// [`ContradictionGuard`] in `gateway.rs`. Note: `Liminal` is automatically
+/// provided via the universal blanket `impl<T: ?Sized> Liminal for T {}` in `liminal/mod.rs`.
 #[derive(Clone, Copy)]
 pub(super) struct AbiBorrowedBloomGuard<'a> {
     bloom: &'a ContrastivePhaseBloomFilter,

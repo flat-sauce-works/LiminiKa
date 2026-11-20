@@ -63,7 +63,7 @@ impl CausalProvenanceReport {
 
 /// Root causal signal supertrait refining [`Liminal`] into a finite 4-axis causal window
 /// for all signals entering the GCSO Manifold Gateway.
-pub trait CausalProvenanceSignal: Liminal + BranchlessKernel {
+pub trait CausalProvenanceSignal: Liminal {
     /// Static causal provenance cognitive aperture across system and grounding origins (`0x0000_000F`).
     const CAUSAL_APERTURE_MASK: u32 = THRESHOLD_CAUSAL_PROVENANCE;
 
@@ -339,7 +339,7 @@ impl<T> SystemConstraint<T> {
     }
 }
 
-impl<T: BranchlessKernel> CausalProvenanceSignal for SystemConstraint<T> {
+impl<T: Liminal> CausalProvenanceSignal for SystemConstraint<T> {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
         let throttle = self.force_layer_skip
@@ -355,7 +355,7 @@ impl<T: BranchlessKernel> CausalProvenanceSignal for SystemConstraint<T> {
     }
 }
 
-impl<T: BranchlessKernel> SystemConstraintSignal for SystemConstraint<T> {
+impl<T: Liminal> SystemConstraintSignal for SystemConstraint<T> {
     #[inline(always)]
     fn system_vram_pressure(&self) -> f32 {
         self.vram_pressure
@@ -1304,7 +1304,7 @@ impl<B> ContradictionGuard<B> {
     }
 }
 
-impl<B: BranchlessKernel> CausalProvenanceSignal for ContradictionGuard<B> {
+impl<B: Liminal> CausalProvenanceSignal for ContradictionGuard<B> {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
         let obstructed = self.cohomology_obstruction > self.obstruction_threshold;
@@ -1328,7 +1328,7 @@ impl<B: BranchlessKernel> CausalProvenanceSignal for ContradictionGuard<B> {
     }
 }
 
-impl<B: BranchlessKernel> CognitiveGroundingSignal for ContradictionGuard<B> {
+impl<B: Liminal> CognitiveGroundingSignal for ContradictionGuard<B> {
     #[inline(always)]
     fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
         [0i8; MAX_ATTENTION_HEADS]

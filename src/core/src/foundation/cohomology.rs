@@ -1,26 +1,22 @@
 // name: src/core/src/foundation/cohomology.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Pure matrix-free sheaf cohomology, Chebyshev spectral filtering, pseudo-ultrametric depth
-//! quantization, and tagged-pointer cascade primitives.
+//! Pure matrix-free sheaf cohomology, Chebyshev spectral filtering, and pseudo-ultrametric depth
+//! quantization primitives.
 
 use crate::foundation::aligned::{AlignedSlice32, AlignedSliceMut32};
-use crate::foundation::branchless::{
+use crate::foundation::scalar_math::{
+    branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
+    branchless_inv_pos_f32, branchless_is_finite_f32, branchless_rsqrt_f32, branchless_tanh_f32,
+    fast_inv_len_f32,
+};
+use crate::foundation::simd_stats::{
     chebyshev_deg3_filter_slice_simd8, diff_norm_sq_f32_unrolled4,
     hodge_obstruction_and_dual_pairing_f32, max_pos_f32_unrolled4,
 };
-use crate::foundation::pod::{
-    gcso_tagged_ptr_t, pack_action_slot_tag, unpack_action_mode_from_tag,
-};
-use crate::foundation::scalar_math::{
-    branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
-    branchless_inv_pos_f32, branchless_is_finite_f32, branchless_q7_add_sat, branchless_rsqrt_f32,
-    branchless_tanh_f32, fast_inv_len_f32,
-};
 use crate::foundation::swar_simd::branchless_hysteresis_quantize_depth;
 use crate::liminal::{
-    branchless_select_f32, gcso_q7_t, GcsoResult, GCSO_ERROR_EDBC_SINGULARITY,
-    GCSO_ERROR_INVALID_ARGUMENT,
+    branchless_select_f32, GcsoResult, GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT,
 };
 
 /// Polynomial degree of the Cold-Path Chebyshev spectral filter (`3`).
@@ -226,38 +222,4 @@ pub fn quantize_depth_hysteresis(
 ) -> u32 {
     let scaled = branchless_clamp_f32(d_v_distance, 0.0, 1.0) * (max_level as f32);
     branchless_hysteresis_quantize_depth(scaled, current_level, hysteresis_band, max_level)
-}
-
-/// Executes an $\mathcal{O}(1)$ cascade pointer lookup combining parent and child phase deltas.
-#[inline(always)]
-#[must_use]
-pub fn cascade_tagged_ptr(
-    parent_ptr: gcso_tagged_ptr_t,
-    child_addr_offset: u64,
-    child_phase_delta: gcso_q7_t,
-) -> gcso_tagged_ptr_t {
-    let new_addr =
-        parent_ptr.unpack_addr().wrapping_add(child_addr_offset) & gcso_tagged_ptr_t::ADDR_MASK;
-    let combined_phase = branchless_q7_add_sat(parent_ptr.unpack_phase(), child_phase_delta);
-    gcso_tagged_ptr_t::pack(new_addr, parent_ptr.unpack_tag(), combined_phase)
-}
-
-/// Executes an $\mathcal{O}(1)$ cascade pointer transition merging `child_action_mode_or_mask`
-/// and binding to `child_attractor_slot` (`0..=7`).
-#[inline(always)]
-#[must_use]
-pub fn cascade_action_slot_ptr(
-    parent_ptr: gcso_tagged_ptr_t,
-    child_addr_offset: u64,
-    child_attractor_slot: u8,
-    child_action_mode_or_mask: u8,
-    child_phase_delta: gcso_q7_t,
-) -> gcso_tagged_ptr_t {
-    let new_addr =
-        parent_ptr.unpack_addr().wrapping_add(child_addr_offset) & gcso_tagged_ptr_t::ADDR_MASK;
-    let merged_mode =
-        unpack_action_mode_from_tag(parent_ptr.unpack_tag()) | child_action_mode_or_mask;
-    let tag = pack_action_slot_tag(child_attractor_slot, merged_mode);
-    let combined_phase = branchless_q7_add_sat(parent_ptr.unpack_phase(), child_phase_delta);
-    gcso_tagged_ptr_t::pack(new_addr, tag, combined_phase)
 }

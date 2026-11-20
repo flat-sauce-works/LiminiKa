@@ -41,19 +41,18 @@ use crate::foundation::{
     branchless_sqrt_f32, branchless_von_mises_kappa, circular_r_bar_from_words_64,
     circular_resultant_from_words_64, coherence_from_diff_words_64,
     compute_aligned64_payload_crc32_ieee, compute_crc32_ieee, crc32_block64_zero_seed_words,
-    crc32_crystal_stamp_contrib_128b, crc32_fold_stamped_crystal_128b, crc32_slice16_indep_hi1_u32,
-    crc32_slice16_indep_lo1_u32, crc32_step_block64_words, crc32_step_l16, crc32_step_l3,
-    crc32_step_l32, crc32_step_l4, crc32_step_l8, encode_pframe_motion_delta_64,
-    finalize_pframe_chain_words_64, gcso_tagged_ptr_t, is_aligned_to, load_q7_words_64,
-    pack_action_slot_tag, seek_pframe_chain_words_64, store_q7_words_64, swar_q7_add_sat_x8,
-    swar_q7_circular_add_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8,
-    swar_q7_phase_step_filter_words_64, unpack_action_mode_from_tag,
-    unpack_attractor_slot_from_tag, update_aligned64_blocks_crc32_raw, AlignedSlice,
-    AlignedSlice16, AlignedSlice32, AlignedSlice64, AlignedSliceMut64, BranchlessKernel, Pod,
-    ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK, CRC32_MAPPED_STORAGE_DESC_BASE_SEED,
+    crc32_slice16_indep_hi1_u32, crc32_slice16_indep_lo1_u32, crc32_slice16_indep_u64x2,
+    crc32_step_block64_words, crc32_step_l16, crc32_step_l2, crc32_step_l3, crc32_step_l32,
+    crc32_step_l4, crc32_step_l8, encode_pframe_motion_delta_64, finalize_pframe_chain_words_64,
+    gcso_tagged_ptr_t, is_aligned_to, load_q7_words_64, pack_action_slot_tag,
+    seek_pframe_chain_words_64, store_q7_words_64, swar_q7_add_sat_x8, swar_q7_circular_add_x8,
+    swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8, swar_q7_phase_step_filter_words_64,
+    unpack_action_mode_from_tag, unpack_attractor_slot_from_tag, update_aligned64_blocks_crc32_raw,
+    AlignedSlice, AlignedSlice16, AlignedSlice32, AlignedSlice64, AlignedSliceMut64, Pod,
+    ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, gcso_config_t, gcso_q7_t, GcsoResult,
+    branchless_select_f32, branchless_select_u32, gcso_config_t, gcso_q7_t, GcsoResult, Liminal,
     DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_HEX, GCSO_ERROR_BUFFER_TOO_SMALL,
     GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE,
     GCSO_ERROR_MISALIGNED_POINTER, GCSO_ERROR_VERSION_MISMATCH, MAX_ATTENTION_HEADS,
@@ -64,12 +63,24 @@ use crate::runtime::abi::types::{
     gcso_snapshot_header_t,
 };
 use crate::runtime::gateway::signals::CausalProvenanceReport;
+use crate::stigmergy::crystal::{
+    crc32_crystal_stamp_contrib_128b, crc32_fold_stamped_crystal_128b,
+};
 use crate::stigmergy::{
     gcso_ledger_slot_t, gcso_pointer_trail_t, trail_phase_words_mut, CognitiveTrajectoryLedger,
     ContrastivePhaseBloomFilter, CrystallizedAttractorRecord, StigmergicActionPtrOps,
     ATTRACTOR_SLOT_REPULSION, GCSO_SNAPSHOT_MAGIC_U32, LEDGER_FLAG_COGNITIVE_TRAJECTORY,
     MAX_ATTRACTOR_PULL_FORCE, TRAIL_FLAG_REPULSION_ACTIVE,
 };
+
+/// Precomputed 64-byte GF(2) shift $L^4(\text{0xFFFF\_FFFF})$ of the initial IEEE 802.3 CRC32 seed.
+const CRC32_L4_INITIAL_SEED: u32 = crc32_step_l4(0xFFFF_FFFFu32);
+
+/// Precomputed 64-byte IEEE 802.3 CRC32 accumulator state over the invariant fields of a default
+/// 4-section `.gcso` `gcso_mapped_storage_descriptor_t` (`mapped_address = 0`, `file_size_bytes = 0`,
+/// `dma_buffer_handle = 0`, `flags = 4`, `fd_handle = -1`, `reserved = [0; 32]`).
+const CRC32_MAPPED_STORAGE_DESC_BASE_SEED: u32 =
+    CRC32_L4_INITIAL_SEED ^ crc32_step_l2(crc32_slice16_indep_u64x2(0, 0xFFFF_FFFF_0000_0004u64));
 
 /// Fixed byte length (`192` bytes = `128B` `gcso_snapshot_header_t` + `64B` `gcso_mapped_storage_descriptor_t`) of Section 0.
 pub const GCSO_FOUR_SECTION_HEADER_BYTES: usize = 192;
@@ -379,7 +390,7 @@ impl KvKeyframePacket {
 }
 
 /// Mezzo/Cold-path trait for Predictive Phase-Motion & Residual Compensation (KV-keyframe) (**Mezzo / Storage Level**).
-pub trait KvKeyframeCache: BranchlessKernel + Send + Sync {
+pub trait KvKeyframeCache: Liminal + Send + Sync {
     /// Seeks to `token_index` in the KV-keyframe keyframe cache and populates `header_out`.
     ///
     /// # Errors
@@ -1094,7 +1105,7 @@ pub fn decode_and_apply_dnp_packet_to_trail(
 }
 
 /// Cold-path trait for Zero-Overhead In-Memory Mapped Storage (mapped-storage) (**Storage / Persistence Level**).
-pub trait MappedStorage: BranchlessKernel + Send + Sync {
+pub trait MappedStorage: Liminal + Send + Sync {
     /// Serializes active runtime state into a `.gcso` binary snapshot buffer.
     ///
     /// # Errors

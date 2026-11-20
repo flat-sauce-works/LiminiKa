@@ -13,15 +13,15 @@ use crate::foundation::{
     circular_r_bar_from_words_64, coherence_from_word_arrays_with_uniform_flag_64,
     is_word_array_uniform_64, load_q7_words_64, store_q7_words_64, swar_q7_add_sat_x8,
     swar_q7_scale_le128_with_bias_x8, swar_q7_sub_sat_x8, AlignedBuffer16, AlignedSlice16,
-    AlignedSlice32, AlignedSliceMut16, BranchlessKernel, ResidualAdapterEngine,
-    ATTRACTOR_SLOT_ID_MASK,
+    AlignedSlice32, AlignedSliceMut16, ATTRACTOR_SLOT_ID_MASK,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_q7, branchless_select_u32, branchless_select_u8,
-    gcso_q7_t, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
-    NUM_STIGMERGIC_GRANULES,
+    gcso_q7_t, GcsoResult, Liminal, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
+    MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::stigmergy::attractor::gcso_anchor_type_t;
+use crate::stigmergy::gate::ResidualAdapterEngine;
 use crate::stigmergy::trail::{
     gcso_pointer_trail_t, trail_phase_words_mut, trail_phase_words_ref, StigmergicTrailOps,
 };
@@ -38,7 +38,7 @@ use crate::stigmergy::{
 /// Cold-path trait for macro attractor field steering, zero-hyperparameter phase-proximity gravity,
 /// and repulsion control on a **Single Unified Phase Manifold ($SO(2)^{d_{\mathrm{head}}/2}$)**
 /// without an architectural 8-slot domain restriction (**Macro Level**).
-pub trait AttractorField: BranchlessKernel + Send + Sync {
+pub trait AttractorField: Liminal + Send + Sync {
     /// Returns the total number of registered topological anchors (`<= MAX_ANCHORS_PER_FIELD`).
     fn anchor_count(&self) -> u32;
 
@@ -359,7 +359,7 @@ pub trait AttractorField: BranchlessKernel + Send + Sync {
 /// (`MAX_ATTRACTOR_DOMAINS = 8`)** projected from the unified attractor manifold with
 /// Zero-Hyperparameter Autonomous Weight Rebalancing, Cross-Lane Synergy, Liminal Beat
 /// Perturbation, and Mutual Inhibition (**Macro Space Level**).
-pub trait MultiDomainAttractorSpace: BranchlessKernel + Send + Sync {
+pub trait MultiDomainAttractorSpace: Liminal + Send + Sync {
     /// Advances global step counters across all working lanes and applies evaporative pressure decay.
     fn advance_step(&mut self);
 
@@ -823,7 +823,7 @@ pub trait MultiDomainAttractorSpace: BranchlessKernel + Send + Sync {
 }
 
 /// Cold-path trait for dynamic persona phase modulation patches without altering base weights (**Macro Level**).
-pub trait PersonaPatcher: BranchlessKernel + Send + Sync {
+pub trait PersonaPatcher: Liminal + Send + Sync {
     /// Applies a binary persona phase modulation patch to the runtime context.
     ///
     /// # Errors

@@ -34,14 +34,13 @@ use crate::foundation::{
     is_word_array_uniform_64, load_q7_words_64, store_q7_words_64, swar_q7_add_sat_x8,
     swar_q7_neg_sat_x8, swar_q7_scale_le128_with_bias_x8, swar_u8_add_sat_x8,
     swar_u8_halve_decay_x8, swar_u8_max_x8, swar_u8_nonzero_count_x8, swar_u8_nonzero_msb_mask,
-    swar_u8_sub_sat_x8, swar_words_nonzero_64, BranchlessKernel, Pod,
-    ACTION_PRESET_REPULSION_ESCAPE, PAGED_BITMASK_BITS, SWAR_EVEN_BYTES_64, SWAR_LOW7_MASK_64,
-    SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64,
+    swar_u8_sub_sat_x8, swar_words_nonzero_64, Pod, ACTION_PRESET_REPULSION_ESCAPE,
+    PAGED_BITMASK_BITS, SWAR_EVEN_BYTES_64, SWAR_LOW7_MASK_64, SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64,
 };
 use crate::liminal::{
     branchless_select_u32, branchless_select_u64, branchless_select_u8, gcso_config_t, gcso_q7_t,
-    GcsoResult, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE, MAX_ATTENTION_HEADS,
-    NUM_STIGMERGIC_GRANULES,
+    GcsoResult, Liminal, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::stigmergy::trail::StigmergicActionPtrOps;
 use crate::stigmergy::{
@@ -863,7 +862,7 @@ unsafe impl Pod for ContrastivePhaseBloomFilter {}
 /// Lv.1 Capability Trait for the 64-byte Dynamic Adaptive Extension Scratchpad (FastPathLedger):
 /// $\mathcal{O}(1)$ fast-path tagged pointer shortcuts, 8-byte circular telemetry mini-ledger,
 /// and dynamic parameter auto-tuning.
-pub trait FastPathLedger: BranchlessKernel {
+pub trait FastPathLedger: Liminal {
     /// Resets active telemetry mini ledger and cache counters in-place.
     ///
     /// # Errors

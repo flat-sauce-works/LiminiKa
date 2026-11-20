@@ -4,12 +4,12 @@
 //! Training-free LoRA-to-Phase SVD projection (`project_lora`, `project_lora_with_block_scales`).
 
 use crate::foundation::aligned::{AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32};
-use crate::foundation::branchless::{
-    atan2_interleaved_pairs_to_q7_word_x8_simd, atan2_to_q7_word_x8_simd, sum_sq_f32_simd8,
-};
 use crate::foundation::pod::gcso_rank1_residual_descriptor_t;
 use crate::foundation::scalar_math::{
     branchless_atan2_to_q7_fast, branchless_flush_subnormal_f32, branchless_sqrt_f32,
+};
+use crate::foundation::simd_stats::{
+    atan2_interleaved_pairs_to_q7_word_x8_simd, atan2_to_q7_word_x8_simd, sum_sq_f32_simd8,
 };
 use crate::liminal::{branchless_select_f32, gcso_q7_t, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT};
 

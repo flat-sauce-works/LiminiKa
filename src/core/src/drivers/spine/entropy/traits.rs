@@ -14,17 +14,17 @@ use crate::foundation::{
     branchless_splitmix64, branchless_sqrt_f32, branchless_tanh_f32, dot_and_norms_f32_unrolled4,
     fast_inv_len_f32, fast_inv_pos_normal_f32, gcso_tagged_ptr_t, load_q7_word_at,
     store_q7_word_at, sum_abs_and_sq_f32_simd8, swar_q7_add_sat_x8, AlignedSlice32,
-    BranchlessKernel, DEFAULT_MAX_VALID_Z_SCORE,
+    DEFAULT_MAX_VALID_Z_SCORE,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_q7, branchless_select_u32, gcso_q7_t, GcsoResult,
-    DEFAULT_ENTROPY_EPS, GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT,
+    Liminal, DEFAULT_ENTROPY_EPS, GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT,
     MAX_ATTENTION_HEADS,
 };
 use crate::stigmergy::trail::StigmergicActionPtrOps;
 
 /// Cold-path trait for entropy-driven branch evaluation and bifurcation tracking (**Macro Level**).
-pub trait EntropyEvaluator: BranchlessKernel + Send + Sync {
+pub trait EntropyEvaluator: Liminal + Send + Sync {
     /// Evaluates token Z-score activation entropy and updates dynamic branch mode in `state_out`.
     ///
     /// # Errors
