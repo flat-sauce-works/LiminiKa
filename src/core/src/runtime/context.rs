@@ -97,14 +97,13 @@ use crate::runtime::storage::{
 use crate::runtime::telemetry::{CoreTelemetryBank, CoreTelemetrySnapshot, TelemetryCapturePolicy};
 use crate::stigmergy::{
     gcso_anchor_type_t, gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
-    trail_phase_words_mut, trail_phase_words_ref, ActionHub, ActionHubEngine, AttractorField,
-    CognitiveSubstrate, CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter,
-    DissipativeOverflowReport, FastPathLedger, MultiAttractorSpace, MultiDomainAttractorSpace,
-    PersonaPatcher, PointerActionHub, StigmergicActionDecision, StigmergicActionPtrOps,
-    StigmergicChunkOps, StigmergicGranuleField, StigmergicOverlapSerendipityReport,
-    StigmergicTrailOps, WorkbenchLanePlacement, WorkbenchSlotSpec, ACTION_HUB_INLINE_TRAILS,
-    LEDGER_METRIC_FAST_PATH_HIT, LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_REPULSION_APPLIED,
-    MAX_ATTRACTOR_PULL_FORCE, TRAIL_FLAG_REPULSION_ACTIVE,
+    trail_phase_words_mut, trail_phase_words_ref, ActionHub, ActionHubEngine, CognitiveSubstrate,
+    CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, DissipativeOverflowReport,
+    FastPathLedger, MultiAttractorSpace, PointerActionHub, StigmergicActionDecision,
+    StigmergicGranuleField, StigmergicOverlapSerendipityReport, WorkbenchLanePlacement,
+    WorkbenchSlotSpec, ACTION_HUB_INLINE_TRAILS, LEDGER_METRIC_FAST_PATH_HIT,
+    LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_REPULSION_APPLIED, MAX_ATTRACTOR_PULL_FORCE,
+    TRAIL_FLAG_REPULSION_ACTIVE,
 };
 
 /// Returns the active semantic ABI version tuple `(major, minor, patch)`.
@@ -1230,11 +1229,9 @@ impl RuntimeContext {
             .slot_phase_bank
             .as_slot_bank::<MAX_ATTRACTOR_DOMAINS, MAX_ATTENTION_HEADS>()
         {
-            let enabled_mask = self.action_hub.slot_enabled_mask;
-            let rep_mask = self.action_hub.slot_repulsion_mask;
-            let sandbox_mask = self.action_hub.slot_sandbox_mask;
+            let (rep_cut, attract_cut) = self.action_hub.workbench_role_quadrants();
             let weights = &self.action_hub.slot_weights;
-            let mut standard_bits = enabled_mask & !(rep_mask | sandbox_mask);
+            let mut standard_bits = attract_cut.outside;
             while standard_bits != 0 {
                 let idx = standard_bits.trailing_zeros() as usize;
                 standard_bits &= standard_bits - 1;
@@ -1286,7 +1283,7 @@ impl RuntimeContext {
                 }
             }
 
-            let mut rep_bits = enabled_mask & rep_mask;
+            let mut rep_bits = rep_cut.outside;
             while rep_bits != 0 {
                 let rep_idx = rep_bits.trailing_zeros() as usize;
                 rep_bits &= rep_bits - 1;
@@ -2115,9 +2112,13 @@ impl FastPathLedger for RuntimeContext {
     }
 }
 
-impl StigmergicChunkOps for RuntimeContext {
+impl RuntimeContext {
+    /// Updates local cellular swarm cell state across PagedBlock token chunk boundaries.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `chunk_len == 0`.
     #[inline]
-    fn step_chunk(&mut self, _mask: &gcso_paged_bitmask_t, chunk_len: u32) -> Result<()> {
+    pub fn step_chunk(&mut self, _mask: &gcso_paged_bitmask_t, chunk_len: u32) -> Result<()> {
         if chunk_len == 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -2129,38 +2130,50 @@ impl StigmergicChunkOps for RuntimeContext {
     }
 }
 
-impl AttractorField for RuntimeContext {
+impl RuntimeContext {
+    /// Returns the number of active anchors in the System Baseline field.
     #[inline]
-    fn anchor_count(&self) -> u32 {
+    #[must_use]
+    pub fn anchor_count(&self) -> u32 {
         self.attractor_space.system_field().active_count()
     }
 
+    /// Applies evaporative decay to the System Baseline field.
     #[inline]
-    fn apply_evaporative_decay(&mut self) {
+    pub fn apply_evaporative_decay(&mut self) {
         self.attractor_space
             .system_field_mut()
             .apply_evaporative_decay();
     }
 
+    /// Returns total potential energy of the System Baseline field.
     #[inline]
-    fn total_potential_energy(&self) -> f32 {
+    #[must_use]
+    pub fn total_potential_energy(&self) -> f32 {
         self.attractor_space.system_field().total_potential_energy()
     }
 
+    /// Returns occupancy pressure ratio of the System Baseline field.
     #[inline]
-    fn pressure_ratio(&self) -> f32 {
+    #[must_use]
+    pub fn pressure_ratio(&self) -> f32 {
         self.attractor_space.system_field().pressure_ratio()
     }
 
+    /// Evicts the weakest displaceable anchor from the System Baseline field.
     #[inline]
-    fn evaporate_weakest_anchor(&mut self) -> Option<u32> {
+    pub fn evaporate_weakest_anchor(&mut self) -> Option<u32> {
         self.attractor_space
             .system_field_mut()
             .evaporate_weakest_anchor()
     }
 
+    /// Adds a system prompt anchor to the System Baseline field and updates its workbench weight.
+    ///
+    /// # Errors
+    /// Propagates any error from [`crate::stigmergy::AttractorFieldEngine::add_system_prompt_anchor`].
     #[inline]
-    fn add_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> Result<u32> {
+    pub fn add_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> Result<u32> {
         let id = self
             .attractor_space
             .system_field_mut()
@@ -2170,8 +2183,12 @@ impl AttractorField for RuntimeContext {
         Ok(id)
     }
 
+    /// Adds an embedding anchor to the System Baseline field.
+    ///
+    /// # Errors
+    /// Propagates any error from [`crate::stigmergy::AttractorFieldEngine::add_embedding_anchor`].
     #[inline]
-    fn add_embedding_anchor(
+    pub fn add_embedding_anchor(
         &mut self,
         embedding: &AlignedSlice32<'_, f32>,
         anchor_type: gcso_anchor_type_t,
@@ -2182,8 +2199,12 @@ impl AttractorField for RuntimeContext {
             .add_embedding_anchor(embedding, anchor_type, weight)
     }
 
+    /// Adds a unit-weight embedding anchor to the System Baseline field.
+    ///
+    /// # Errors
+    /// Propagates any error from [`crate::stigmergy::AttractorFieldEngine::add_anchor`].
     #[inline]
-    fn add_anchor(
+    pub fn add_anchor(
         &mut self,
         anchor_type: gcso_anchor_type_t,
         vec: &AlignedSlice32<'_, f32>,
@@ -2194,8 +2215,12 @@ impl AttractorField for RuntimeContext {
             .add_anchor(anchor_type, vec, dim)
     }
 
+    /// Injects a phase-conjugate repulsion pattern into the Bloom filter, workbench lane, and baseline field.
+    ///
+    /// # Errors
+    /// Propagates any error from workbench lane allocation or [`crate::stigmergy::AttractorFieldEngine::inject_phase_repulsion`].
     #[inline]
-    fn inject_phase_repulsion(
+    pub fn inject_phase_repulsion(
         &mut self,
         repulsion_deltas: &AlignedSlice16<'_, gcso_q7_t>,
         gain: f32,
@@ -2221,27 +2246,38 @@ impl AttractorField for RuntimeContext {
             .inject_phase_repulsion(repulsion_deltas, gain)
     }
 
+    /// Aggregates and crystallizes high-density anchors bottom-up in the System Baseline field.
+    ///
+    /// # Errors
+    /// Propagates any error from [`crate::stigmergy::AttractorFieldEngine::aggregate_bottom_up`].
     #[inline]
-    fn aggregate_bottom_up(&mut self) -> Result<u32> {
+    pub fn aggregate_bottom_up(&mut self) -> Result<u32> {
         self.attractor_space
             .system_field_mut()
             .aggregate_bottom_up()
     }
 
+    /// Clears all anchors in the System Baseline field.
+    ///
+    /// # Errors
+    /// Propagates any error from [`crate::stigmergy::AttractorFieldEngine::clear_anchors`].
     #[inline]
-    fn clear_anchors(&mut self) -> Result<()> {
+    pub fn clear_anchors(&mut self) -> Result<()> {
         self.attractor_space.system_field_mut().clear_anchors()
     }
-}
 
-impl MultiDomainAttractorSpace for RuntimeContext {
+    /// Advances global evaporative decay across the multi-domain attractor space.
     #[inline]
-    fn advance_step(&mut self) {
+    pub fn advance_step(&mut self) {
         self.attractor_space.advance_step();
     }
 
+    /// Sets the relative weight of workbench domain lane `domain_id`.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `domain_id >= MAX_ATTRACTOR_DOMAINS` or `weight` is negative/non-finite.
     #[inline]
-    fn set_domain_weight(&mut self, domain_id: u32, weight: f32) -> Result<()> {
+    pub fn set_domain_weight(&mut self, domain_id: u32, weight: f32) -> Result<()> {
         let idx = domain_id as usize;
         if idx >= MAX_ATTRACTOR_DOMAINS || !branchless_is_finite_f32(weight) || weight < 0.0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
@@ -2250,8 +2286,12 @@ impl MultiDomainAttractorSpace for RuntimeContext {
         Ok(())
     }
 
+    /// Enables or disables workbench domain lane `domain_id`.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `domain_id >= MAX_ATTRACTOR_DOMAINS`.
     #[inline]
-    fn set_domain_enabled(&mut self, domain_id: u32, enabled: bool) -> Result<()> {
+    pub fn set_domain_enabled(&mut self, domain_id: u32, enabled: bool) -> Result<()> {
         let idx = domain_id as usize;
         if idx >= MAX_ATTRACTOR_DOMAINS {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
@@ -2263,8 +2303,10 @@ impl MultiDomainAttractorSpace for RuntimeContext {
         Ok(())
     }
 
+    /// Finds the highest-weighted enabled workbench lane and returns `(lane_id, weight)`.
     #[inline]
-    fn find_dominant_domain(&self) -> (u32, f32) {
+    #[must_use]
+    pub fn find_dominant_domain(&self) -> (u32, f32) {
         let mut best_id = 0u32;
         let mut best_score = -1.0_f32;
         let mask = self.action_hub.slot_enabled_mask;
@@ -2284,13 +2326,12 @@ impl MultiDomainAttractorSpace for RuntimeContext {
         (best_id, branchless_relu_f32(best_score))
     }
 
-    #[inline(always)]
-    fn slot_coupling_matrix(&self) -> u64 {
-        self.action_hub.coupling_matrix_8x8
-    }
-
+    /// Evaluates the phase vector and pull force for a single workbench domain lane.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `domain_id >= MAX_ATTRACTOR_DOMAINS`.
     #[inline]
-    fn evaluate_slot_force(
+    pub fn evaluate_slot_force(
         &self,
         domain_id: u32,
         trail: &gcso_pointer_trail_t,
@@ -2319,8 +2360,9 @@ impl MultiDomainAttractorSpace for RuntimeContext {
         Ok(self.action_hub.slot_weights[idx].max(base_pull))
     }
 
+    /// Evaluates unified multi-domain superposition across active workbench lanes.
     #[inline]
-    fn evaluate_multi_domain_superposition(
+    pub fn evaluate_multi_domain_superposition(
         &self,
         trail: &gcso_pointer_trail_t,
         composite_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
@@ -2330,18 +2372,24 @@ impl MultiDomainAttractorSpace for RuntimeContext {
         pull
     }
 
+    /// Clears all attractor domains and releases all workbench lanes.
+    ///
+    /// # Errors
+    /// Propagates any error from [`MultiAttractorSpace::clear_all_domains`].
     #[inline]
-    fn clear_all_domains(&mut self) -> Result<()> {
+    pub fn clear_all_domains(&mut self) -> Result<()> {
         self.attractor_space.clear_all_domains()?;
         let _ = self.action_hub.release_all_workbench_lanes();
         self.escalated_workbench_lane = None;
         Ok(())
     }
-}
 
-impl PersonaPatcher for RuntimeContext {
+    /// Applies a binary persona phase modulation patch into the Persona workbench lane.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `patch_data` is empty.
     #[inline]
-    fn apply_patch(&mut self, patch_data: &[u8]) -> Result<()> {
+    pub fn apply_patch(&mut self, patch_data: &[u8]) -> Result<()> {
         if patch_data.is_empty() {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }

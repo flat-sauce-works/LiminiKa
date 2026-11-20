@@ -33,8 +33,7 @@ use liminika_core::foundation::{
 use liminika_core::liminal::{DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS};
 use liminika_core::stigmergy::{
     eval_stigmergic_block_degrees, resolve_dyadic_qdpt_and_cascade_ptr,
-    ContrastivePhaseBloomFilter, StigmergicActionPtrOps, ATTRACTOR_SLOT_KNOWLEDGE,
-    ATTRACTOR_SLOT_PERSONA,
+    ContrastivePhaseBloomFilter, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
 };
 use std::hint::black_box;
 use std::time::Duration;

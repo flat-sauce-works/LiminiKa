@@ -94,12 +94,10 @@ pub(crate) const MAX_REGISTER_CACHED_CENTROIDS: usize = 16;
 pub(crate) mod crc32_delta;
 pub mod kmeans;
 pub mod routing;
-pub mod trail_ext;
 
 pub(crate) use self::crc32_delta::{
     crc32_crystal_stamp_contrib_128b, crc32_fold_stamped_crystal_128b,
 };
-pub use self::trail_ext::*;
 
 /// Outcome emitted by branchless dissipative overflow, residual scatter, and autonomous
 /// daughter-attractor birth (`CrystallizedAttractorRecord::step_dissipative_overflow_scatter_or_spawn_64`).
@@ -764,12 +762,18 @@ impl CrystallizedAttractorRecord {
         }
     }
 
-    /// Absorbs a 64-head sample point (`sample_phases`, `sample_energy`) into this centroid on
-    /// $SO(2)^{64}$, updates $(\bar{R}_c, \kappa_c, M_{\mathrm{grav}})$, and stamps `checksum_crc32`.
+    /// Absorbs a [`Grounded`] 64-head sample point (`sample_phases`, `sample_energy`) into this
+    /// centroid on $SO(2)^{64}$, updates $(\bar{R}_c, \kappa_c, M_{\mathrm{grav}})$, and stamps
+    /// `checksum_crc32`.
+    ///
+    /// Statically excludes [`crate::liminal::Unmarked`], [`crate::liminal::Bottom`],
+    /// [`crate::liminal::BoundaryViolation`], and unbridged
+    /// [`crate::liminal::SpeculativeDiscovery`] from crystallizing into persistent
+    /// attractor memory without monomorphizing the absorption body.
     #[inline]
     pub fn absorb_sample_point_64(
         &mut self,
-        sample_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        sample_phases: Scoped<Grounded, &[gcso_q7_t; MAX_ATTENTION_HEADS]>,
         sample_energy: f32,
     ) -> f32 {
         let prev_crc = self.checksum_crc32;
@@ -783,7 +787,7 @@ impl CrystallizedAttractorRecord {
         let prev_prov = self.provenance_bits;
         let prev_w7_lo = self.pack_w7_lo();
         let cur_w = *self.phase_words_ref();
-        let sample_w = load_q7_words_64(sample_phases);
+        let sample_w = load_q7_words_64(sample_phases.grounded_ref());
         let (next_w, mass, words_changed) = self
             .absorb_sample_words_with_cur_coh_and_uni_unstamped(
                 &cur_w,
@@ -813,30 +817,15 @@ impl CrystallizedAttractorRecord {
         mass
     }
 
-    /// Non-generic [`Grounded`] closure entry point for [`Self::absorb_sample_point_64`].
-    ///
-    /// Statically excludes [`crate::liminal::Unmarked`], [`crate::liminal::Bottom`],
-    /// [`crate::liminal::BoundaryViolation`], and unbridged
-    /// [`crate::liminal::SpeculativeDiscovery`] from crystallizing into persistent
-    /// attractor memory without monomorphizing the absorption body.
-    #[inline(always)]
-    pub fn absorb_sample_point_grounded_64(
-        &mut self,
-        sample_phases: Scoped<Grounded, &[gcso_q7_t; MAX_ATTENTION_HEADS]>,
-        sample_energy: f32,
-    ) -> f32 {
-        self.absorb_sample_point_64(sample_phases.grounded_ref(), sample_energy)
-    }
-
     /// Zero-cost closure shell folding any [`GroundedScope`] refinement into [`Grounded`] and
-    /// delegating to [`Self::absorb_sample_point_grounded_64`].
+    /// delegating to [`Self::absorb_sample_point_64`].
     #[inline(always)]
     pub fn absorb_sample_point_scoped_64<B: GroundedScope>(
         &mut self,
         sample_phases: Scoped<B, &[gcso_q7_t; MAX_ATTENTION_HEADS]>,
         sample_energy: f32,
     ) -> f32 {
-        self.absorb_sample_point_grounded_64(sample_phases.seal_grounded(), sample_energy)
+        self.absorb_sample_point_64(sample_phases.seal_grounded(), sample_energy)
     }
 
     /// Non-generic [`Grounded`] closure constructor crystallizing a verified phase profile into a
@@ -1223,7 +1212,8 @@ mod grounded_gate_tests {
         let phases = [18_i8; MAX_ATTENTION_HEADS];
 
         let mut direct = CrystallizedAttractorRecord::new_empty(7, ATTRACTOR_SLOT_PERSONA, 0);
-        let direct_mass = direct.absorb_sample_point_64(&phases, 1.5);
+        let direct_mass =
+            direct.absorb_sample_point_64(Scoped::interior(&phases).seal_grounded(), 1.5);
 
         let mut aligned_rec = CrystallizedAttractorRecord::new_empty(7, ATTRACTOR_SLOT_PERSONA, 0);
         let verified: VerifiedAligned<&[gcso_q7_t; MAX_ATTENTION_HEADS]> =

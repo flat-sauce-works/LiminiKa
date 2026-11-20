@@ -610,8 +610,11 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 } else {
                     2.5f32 + (i as f32) * 0.2
                 };
-                let _ = rec
-                    .absorb_sample_point_64(&make_heterogeneous_q7_phases_with_offset(shift), mass);
+                let sample = make_heterogeneous_q7_phases_with_offset(shift);
+                let _ = rec.absorb_sample_point_64(
+                    liminika_core::Scoped::interior(&sample).seal_grounded(),
+                    mass,
+                );
                 rec
             });
 
@@ -829,8 +832,9 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
                     ATTRACTOR_SLOT_KNOWLEDGE,
                     0x0018_0000 + ((i as u64) << 12),
                 );
+                let sample = make_heterogeneous_q7_phases_with_offset(22 + (i as i8) * 3);
                 let _ = rec.absorb_sample_point_64(
-                    &make_heterogeneous_q7_phases_with_offset(22 + (i as i8) * 3),
+                    liminika_core::Scoped::interior(&sample).seal_grounded(),
                     2.5 + (i as f32) * 0.5,
                 );
                 rec

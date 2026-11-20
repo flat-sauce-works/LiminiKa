@@ -23,14 +23,15 @@ use crate::liminal::{
     branchless_select_u32, gcso_q7_t, GcsoResult, DEFAULT_ENTROPY_EPS, GCSO_ERROR_ACTION_HUB_FULL,
     GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
-use crate::stigmergy::attractor::traits::{AttractorField, PersonaPatcher};
 use crate::stigmergy::attractor::{
     gcso_anchor_type_t, project_f32_slice_to_q7_phases, AttractorAnchor, CrystallizedAnchorRecord,
     GCSO_ANCHOR_TYPE_CRYSTALLIZED, GCSO_ANCHOR_TYPE_EMBEDDING, GCSO_ANCHOR_TYPE_PHASE_REPULSE,
     GCSO_ANCHOR_TYPE_SYSTEM_PROMPT, MAX_ANCHORS_PER_FIELD,
 };
 use crate::stigmergy::trail::{gcso_pointer_trail_t, trail_phase_words_ref};
-use crate::stigmergy::{DEFAULT_SLOT_COUPLING_MATRIX_8X8, MAX_ATTRACTOR_PULL_FORCE};
+use crate::stigmergy::{
+    ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_SLOT_COUPLING_MATRIX_8X8, MAX_ATTRACTOR_PULL_FORCE,
+};
 
 use super::*;
 
@@ -83,7 +84,10 @@ unsafe impl Pod for AttractorFieldEngine {}
 impl Default for AttractorFieldEngine {
     #[inline(always)]
     fn default() -> Self {
-        Self::new(DOMAIN_SYSTEM_BASELINE, MAX_ANCHORS_PER_FIELD as u32)
+        Self::new(
+            u32::from(ATTRACTOR_SLOT_SYSTEM_BASELINE),
+            MAX_ANCHORS_PER_FIELD as u32,
+        )
     }
 }
 
@@ -915,29 +919,17 @@ impl AttractorFieldEngine {
     }
 }
 
-impl AttractorField for AttractorFieldEngine {
+impl AttractorFieldEngine {
+    /// Returns the number of currently active anchors in this field.
     #[inline(always)]
-    fn anchor_count(&self) -> u32 {
+    #[must_use]
+    pub fn anchor_count(&self) -> u32 {
         self.active_count
     }
 
-    #[inline(always)]
-    fn apply_evaporative_decay(&mut self) {
-        Self::apply_evaporative_decay(self);
-    }
-
-    #[inline(always)]
-    fn total_potential_energy(&self) -> f32 {
-        Self::total_potential_energy(self)
-    }
-
-    #[inline(always)]
-    fn pressure_ratio(&self) -> f32 {
-        Self::pressure_ratio(self)
-    }
-
+    /// Evicts the weakest displaceable anchor slot and returns its ID, if any.
     #[inline]
-    fn evaporate_weakest_anchor(&mut self) -> Option<u32> {
+    pub fn evaporate_weakest_anchor(&mut self) -> Option<u32> {
         let slot_idx = self.displace_weakest_anchor_slot()?;
         let anchor = &self.anchors[slot_idx];
         if anchor.is_active != 0 {
@@ -952,8 +944,12 @@ impl AttractorField for AttractorFieldEngine {
         }
     }
 
+    /// Hashes a system prompt string into Q7 phases and inserts it as a permanent anchor.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `prompt` is empty or `weight` is invalid.
     #[inline]
-    fn add_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> GcsoResult<u32> {
+    pub fn add_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> GcsoResult<u32> {
         if prompt.is_empty() {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -967,8 +963,12 @@ impl AttractorField for AttractorFieldEngine {
         )
     }
 
+    /// Inserts a dense embedding anchor with explicit `anchor_type` and `weight`.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `embedding` is empty or `weight` is invalid.
     #[inline]
-    fn add_embedding_anchor(
+    pub fn add_embedding_anchor(
         &mut self,
         embedding: &AlignedSlice32<'_, f32>,
         anchor_type: gcso_anchor_type_t,
@@ -980,8 +980,12 @@ impl AttractorField for AttractorFieldEngine {
         self.insert_anchor_internal(anchor_type, weight, Some(embedding), None, false)
     }
 
+    /// Inserts an embedding anchor with unit weight (`1.0`).
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `dim == 0` or `vec.len() < dim`.
     #[inline]
-    fn add_anchor(
+    pub fn add_anchor(
         &mut self,
         anchor_type: gcso_anchor_type_t,
         vec: &AlignedSlice32<'_, f32>,
@@ -993,8 +997,12 @@ impl AttractorField for AttractorFieldEngine {
         self.insert_anchor_internal(anchor_type, 1.0, Some(vec), None, false)
     }
 
+    /// Injects a phase-conjugate repulsion vector and positive gain into this field.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `repulsion_deltas` is empty or `gain` is non-positive/non-finite.
     #[inline]
-    fn inject_phase_repulsion(
+    pub fn inject_phase_repulsion(
         &mut self,
         repulsion_deltas: &AlignedSlice16<'_, gcso_q7_t>,
         gain: f32,
@@ -1009,8 +1017,12 @@ impl AttractorField for AttractorFieldEngine {
         Ok(())
     }
 
+    /// Evaluates composite gravitational force and writes the 64-head phase vector into `composite_phase_out`.
+    ///
+    /// # Errors
+    /// Returns `Ok(pull_force)` for all valid inputs.
     #[inline]
-    fn evaluate_field_force(
+    pub fn evaluate_field_force(
         &self,
         trail: &gcso_pointer_trail_t,
         composite_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
@@ -1018,8 +1030,13 @@ impl AttractorField for AttractorFieldEngine {
         Ok(self.evaluate_composite_attractor_force(trail, composite_phase_out))
     }
 
+    /// Crystallizes high-density active anchors (`stigmergic_density > 2.0`) bottom-up and returns
+    /// the number of newly crystallized anchors.
+    ///
+    /// # Errors
+    /// Returns `Ok(crystallized_count)` for all valid states.
     #[inline]
-    fn aggregate_bottom_up(&mut self) -> GcsoResult<u32> {
+    pub fn aggregate_bottom_up(&mut self) -> GcsoResult<u32> {
         let mut remaining = self.active_count;
         if remaining == 0 {
             return Ok(0);
@@ -1044,8 +1061,12 @@ impl AttractorField for AttractorFieldEngine {
         Ok(crystallized_count)
     }
 
+    /// Deactivates all anchors and resets repulsion state in this field.
+    ///
+    /// # Errors
+    /// Returns `Ok(())`.
     #[inline]
-    fn clear_anchors(&mut self) -> GcsoResult<()> {
+    pub fn clear_anchors(&mut self) -> GcsoResult<()> {
         let mut remaining = self.active_count;
         if remaining > 0 {
             let cap = self.anchors.len();
@@ -1066,11 +1087,13 @@ impl AttractorField for AttractorFieldEngine {
         self.repulsion_phase_deltas = [0; MAX_ATTENTION_HEADS];
         Ok(())
     }
-}
 
-impl PersonaPatcher for AttractorFieldEngine {
+    /// Applies a binary persona phase modulation patch to this attractor field.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `patch_data` is empty.
     #[inline]
-    fn apply_patch(&mut self, patch_data: &[u8]) -> GcsoResult<()> {
+    pub fn apply_patch(&mut self, patch_data: &[u8]) -> GcsoResult<()> {
         if patch_data.is_empty() {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }

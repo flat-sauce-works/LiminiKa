@@ -12,8 +12,9 @@ use crate::foundation::lut_crc32::{
     SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64,
 };
 use crate::foundation::scalar_math::{
-    branchless_abs_f32, branchless_is_finite_f32, branchless_q7_fold_s1_geodesic,
-    branchless_relu_f32, branchless_sincos_q7_geodesic_phase_clamp_default_lut,
+    branchless_abs_f32, branchless_is_finite_f32, branchless_is_nan_f32,
+    branchless_q7_fold_s1_geodesic, branchless_relu_f32,
+    branchless_sincos_q7_geodesic_phase_clamp_default_lut,
     branchless_sincos_q7_phase_clamp_default_lut, branchless_sincos_q7_phase_clamp_preinv,
     eval_phase_clamp_theta_rad_preinv, sincos_reduced_pi,
 };
@@ -957,6 +958,52 @@ pub(crate) const fn words_to_q7_array_64(
             *words,
         )
     }
+}
+
+/// Selects the smaller cardinality side of an 8-bit partition (`inside` vs `outside`) branchlessly.
+///
+/// Given a `universe_mask` and a `cut_mask`, this evaluates `inside = universe_mask & cut_mask`
+/// and `outside = universe_mask & !cut_mask` and returns `(smaller_mask, smaller_count, inside_is_smaller_or_tie)`.
+/// When both sides have equal population count, `inside` is selected (`inside_is_smaller_or_tie = true`).
+///
+/// Complement polarity here is strictly minimal-representation / cardinality-selection arithmetic
+/// and carries no authority or semantic judgment over either side of the partition.
+#[inline(always)]
+#[must_use]
+pub const fn branchless_mask8_min_delta(universe_mask: u8, cut_mask: u8) -> (u8, u8, bool) {
+    let inside = universe_mask & cut_mask;
+    let outside = universe_mask & !cut_mask;
+    let in_cnt = inside.count_ones() as u8;
+    let out_cnt = outside.count_ones() as u8;
+    let inside_is_smaller_or_tie = in_cnt <= out_cnt;
+    let smaller_mask = branchless_select_u8(inside_is_smaller_or_tie, inside, outside);
+    let smaller_count = branchless_select_u8(inside_is_smaller_or_tie, in_cnt, out_cnt);
+    (smaller_mask, smaller_count, inside_is_smaller_or_tie)
+}
+
+/// Finds the lowest-index minimum value among masked `f32` lanes in constant time (`0` data-dependent branches).
+///
+/// Evaluates all 8 lanes in a fixed `const fn` loop. A lane `i` is selectable iff bit `i` of
+/// `eligible_mask` is set and `values[i]` is not `NaN`. Finite values and `+infinity` are all
+/// selectable (lowest index wins ties). Returns `(0xFF, f32::INFINITY)` only when `eligible_mask == 0`
+/// or every eligible lane is `NaN`.
+#[inline(always)]
+#[must_use]
+pub const fn branchless_argmin_f32_x8_masked(values: &[f32; 8], eligible_mask: u8) -> (u8, f32) {
+    let mut best_lane: u8 = 0xFF;
+    let mut best_val: f32 = f32::INFINITY;
+    let mut has_valid: bool = false;
+    let mut lane: u8 = 0;
+    while lane < 8 {
+        let v = values[lane as usize];
+        let selectable = (((eligible_mask >> lane) & 1) != 0) & (!branchless_is_nan_f32(v));
+        let take = selectable & ((!has_valid) | (v < best_val));
+        best_lane = branchless_select_u8(take, lane, best_lane);
+        best_val = branchless_select_f32(take, v, best_val);
+        has_valid |= selectable;
+        lane += 1;
+    }
+    (best_lane, best_val)
 }
 
 #[inline(always)]

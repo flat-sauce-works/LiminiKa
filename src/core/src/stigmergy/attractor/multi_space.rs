@@ -6,27 +6,28 @@
 use core::mem::{align_of, offset_of, size_of};
 
 use crate::foundation::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_inv_pos_f32,
-    branchless_is_finite_f32, branchless_min_f32, branchless_q7_inhibit_words_64,
-    branchless_q7_synergy_fuse_words_64, branchless_relu_f32, fast_inv_len_f32, store_q7_words_64,
-    swar_words_nonzero_64, AlignedSlice16, AlignedSlice32, Pod,
+    branchless_argmin_f32_x8_masked, branchless_clamp_f32, branchless_flush_subnormal_f32,
+    branchless_inv_pos_f32, branchless_is_finite_f32, branchless_max_f32, branchless_min_f32,
+    branchless_phase_coherence_inv_temp_scale, branchless_q7_inhibit_words_64,
+    branchless_q7_synergy_fuse_words_64, branchless_rad_to_phase_step_u8, branchless_relu_f32,
+    coherence_from_word_arrays_64, fast_inv_len_f32, load_q7_words_64, store_q7_words_64,
+    swar_q7_phase_step_filter_words_64, swar_words_nonzero_64, AlignedBuffer16, AlignedBuffer32,
+    AlignedSlice16, AlignedSlice32, AlignedSliceMut16, Pod,
 };
 use crate::liminal::{
     branchless_select_f32, gcso_q7_t, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS,
-};
-use crate::stigmergy::attractor::traits::{
-    AttractorField, MultiDomainAttractorSpace, PersonaPatcher,
+    MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::stigmergy::attractor::{
     gcso_anchor_type_t, AttractorAnchor, AttractorFieldEngine, CrystallizedAnchorRecord,
-    DOMAIN_CRYSTALLIZED, DOMAIN_KNOWLEDGE, DOMAIN_PERSONA, DOMAIN_PHASE_REPULSION,
-    DOMAIN_SYSTEM_BASELINE, DOMAIN_TEMPORAL, DOMAIN_USER_INTENT, DOMAIN_USER_INTERACTION,
     GCSO_ANCHOR_TYPE_EMBEDDING, GCSO_ANCHOR_TYPE_PHASE_REPULSE, GCSO_ANCHOR_TYPE_TOPOLOGICAL,
 };
 use crate::stigmergy::trail::{gcso_pointer_trail_t, trail_phase_words_ref};
 use crate::stigmergy::{
-    is_slot_pair_coupled, DEFAULT_SLOT_COUPLING_MATRIX_8X8, MAX_ATTRACTOR_PULL_FORCE,
+    is_slot_pair_coupled, ATTRACTOR_SLOT_CRYSTALLIZED, ATTRACTOR_SLOT_KNOWLEDGE,
+    ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE,
+    ATTRACTOR_SLOT_TEMPORAL, ATTRACTOR_SLOT_USER_CONTEXT, ATTRACTOR_SLOT_USER_INTENT,
+    DEFAULT_SLOT_COUPLING_MATRIX_8X8, MAX_ATTRACTOR_PULL_FORCE, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
 };
 
 use super::*;
@@ -75,14 +76,14 @@ impl MultiAttractorSpace {
         let cap = MAX_ANCHORS_PER_FIELD as u32;
         Self {
             fields: [
-                AttractorFieldEngine::new(DOMAIN_SYSTEM_BASELINE, cap),
-                AttractorFieldEngine::new(DOMAIN_PERSONA, cap),
-                AttractorFieldEngine::new(DOMAIN_KNOWLEDGE, cap),
-                AttractorFieldEngine::new(DOMAIN_PHASE_REPULSION, cap),
-                AttractorFieldEngine::new(DOMAIN_USER_INTERACTION, cap),
-                AttractorFieldEngine::new(DOMAIN_TEMPORAL, cap),
-                AttractorFieldEngine::new(DOMAIN_USER_INTENT, cap),
-                AttractorFieldEngine::new(DOMAIN_CRYSTALLIZED, cap),
+                AttractorFieldEngine::new(ATTRACTOR_SLOT_SYSTEM_BASELINE as u32, cap),
+                AttractorFieldEngine::new(ATTRACTOR_SLOT_PERSONA as u32, cap),
+                AttractorFieldEngine::new(ATTRACTOR_SLOT_KNOWLEDGE as u32, cap),
+                AttractorFieldEngine::new(ATTRACTOR_SLOT_REPULSION as u32, cap),
+                AttractorFieldEngine::new(ATTRACTOR_SLOT_USER_CONTEXT as u32, cap),
+                AttractorFieldEngine::new(ATTRACTOR_SLOT_TEMPORAL as u32, cap),
+                AttractorFieldEngine::new(ATTRACTOR_SLOT_USER_INTENT as u32, cap),
+                AttractorFieldEngine::new(ATTRACTOR_SLOT_CRYSTALLIZED as u32, cap),
             ],
             domain_weights: [1.0_f32; MAX_ATTRACTOR_DOMAINS],
             active_domains_mask: 0xFF,
@@ -135,65 +136,65 @@ impl MultiAttractorSpace {
     #[inline(always)]
     #[must_use]
     pub const fn system_field(&self) -> &AttractorFieldEngine {
-        &self.fields[DOMAIN_SYSTEM_BASELINE as usize]
+        &self.fields[ATTRACTOR_SLOT_SYSTEM_BASELINE as usize]
     }
 
     /// Returns a mutable reference to the System Baseline working lane (Lane 0).
     #[inline(always)]
     pub fn system_field_mut(&mut self) -> &mut AttractorFieldEngine {
-        &mut self.fields[DOMAIN_SYSTEM_BASELINE as usize]
+        &mut self.fields[ATTRACTOR_SLOT_SYSTEM_BASELINE as usize]
     }
 
     /// Returns a reference to the Persona working lane (Lane 1).
     #[inline(always)]
     #[must_use]
     pub const fn persona_field(&self) -> &AttractorFieldEngine {
-        &self.fields[DOMAIN_PERSONA as usize]
+        &self.fields[ATTRACTOR_SLOT_PERSONA as usize]
     }
 
     /// Returns a mutable reference to the Persona working lane (Lane 1).
     #[inline(always)]
     pub fn persona_field_mut(&mut self) -> &mut AttractorFieldEngine {
-        &mut self.fields[DOMAIN_PERSONA as usize]
+        &mut self.fields[ATTRACTOR_SLOT_PERSONA as usize]
     }
 
     /// Returns a reference to the Knowledge working lane (Lane 2).
     #[inline(always)]
     #[must_use]
     pub const fn knowledge_field(&self) -> &AttractorFieldEngine {
-        &self.fields[DOMAIN_KNOWLEDGE as usize]
+        &self.fields[ATTRACTOR_SLOT_KNOWLEDGE as usize]
     }
 
     /// Returns a mutable reference to the Knowledge working lane (Lane 2).
     #[inline(always)]
     pub fn knowledge_field_mut(&mut self) -> &mut AttractorFieldEngine {
-        &mut self.fields[DOMAIN_KNOWLEDGE as usize]
+        &mut self.fields[ATTRACTOR_SLOT_KNOWLEDGE as usize]
     }
 
     /// Returns a reference to the Phase Repulsion working lane (Lane 3).
     #[inline(always)]
     #[must_use]
     pub const fn repulsion_field(&self) -> &AttractorFieldEngine {
-        &self.fields[DOMAIN_PHASE_REPULSION as usize]
+        &self.fields[ATTRACTOR_SLOT_REPULSION as usize]
     }
 
     /// Returns a mutable reference to the Phase Repulsion working lane (Lane 3).
     #[inline(always)]
     pub fn repulsion_field_mut(&mut self) -> &mut AttractorFieldEngine {
-        &mut self.fields[DOMAIN_PHASE_REPULSION as usize]
+        &mut self.fields[ATTRACTOR_SLOT_REPULSION as usize]
     }
 
     /// Returns a reference to the User Interaction working lane (Lane 4).
     #[inline(always)]
     #[must_use]
     pub const fn user_field(&self) -> &AttractorFieldEngine {
-        &self.fields[DOMAIN_USER_INTERACTION as usize]
+        &self.fields[ATTRACTOR_SLOT_USER_CONTEXT as usize]
     }
 
     /// Returns a mutable reference to the User Interaction working lane (Lane 4).
     #[inline(always)]
     pub fn user_field_mut(&mut self) -> &mut AttractorFieldEngine {
-        &mut self.fields[DOMAIN_USER_INTERACTION as usize]
+        &mut self.fields[ATTRACTOR_SLOT_USER_CONTEXT as usize]
     }
 
     /// Returns the total number of active anchors across the entire 512-anchor unified field.
@@ -217,20 +218,22 @@ impl MultiAttractorSpace {
         if !self.fields[pref].is_saturated() {
             return pref;
         }
-        let mut best_lane = pref;
-        let mut lowest_pressure = f32::MAX;
-        for (idx, field) in self.fields.iter().enumerate() {
-            if idx == (DOMAIN_PHASE_REPULSION as usize) && pref != (DOMAIN_PHASE_REPULSION as usize)
-            {
-                continue;
-            }
-            let score = field.pressure_ratio() + field.min_displaceable_energy();
-            if score < lowest_pressure {
-                lowest_pressure = score;
-                best_lane = idx;
-            }
+        let mut scores = [f32::INFINITY; MAX_ATTRACTOR_DOMAINS];
+        for (score_slot, field) in scores.iter_mut().zip(self.fields.iter()) {
+            *score_slot = field.pressure_ratio() + field.min_displaceable_energy();
         }
-        best_lane
+        let rep_bit = 1u8 << ATTRACTOR_SLOT_REPULSION;
+        let eligible_mask = if pref == usize::from(ATTRACTOR_SLOT_REPULSION) {
+            0xFF
+        } else {
+            !rep_bit
+        };
+        let (best_lane, _) = branchless_argmin_f32_x8_masked(&scores, eligible_mask);
+        if usize::from(best_lane) < MAX_ATTRACTOR_DOMAINS {
+            usize::from(best_lane)
+        } else {
+            pref
+        }
     }
 
     /// Inserts an anchor into the unified 512-anchor phase field, automatically spilling over into
@@ -320,8 +323,9 @@ impl MultiAttractorSpace {
         let init_w = trail_phase_words_ref(trail);
         let init_nonzero = (init_w[0] != 0) || swar_words_nonzero_64(init_w);
 
-        let rep_field = &self.fields[DOMAIN_PHASE_REPULSION as usize];
-        let rep_w_gain = branchless_relu_f32(self.domain_weights[DOMAIN_PHASE_REPULSION as usize]);
+        let rep_field = &self.fields[ATTRACTOR_SLOT_REPULSION as usize];
+        let rep_w_gain =
+            branchless_relu_f32(self.domain_weights[ATTRACTOR_SLOT_REPULSION as usize]);
         let (rep_words, rep_pull) = if ((rep_field.active_count > 0)
             | (rep_field.repulsion_gain > 0.0))
             & (rep_w_gain > 0.0)
@@ -343,7 +347,7 @@ impl MultiAttractorSpace {
             let (mut slot_w, raw_pull) =
                 field.evaluate_composite_attractor_force_words(init_w, init_nonzero);
             let mut pull = raw_pull * w;
-            if (idx != (DOMAIN_PHASE_REPULSION as usize)) & (rep_pull > 1.0e-6) {
+            if (idx != (ATTRACTOR_SLOT_REPULSION as usize)) & (rep_pull > 1.0e-6) {
                 pull = branchless_q7_inhibit_words_64(&mut slot_w, pull, &rep_words, 0.5);
             }
             store_q7_words_64(&mut bank_out[idx], &slot_w);
@@ -462,7 +466,7 @@ impl MultiAttractorSpace {
     #[must_use]
     pub fn find_dominant_domain(&self) -> (u32, f32) {
         let mut max_energy = -1.0_f32;
-        let mut dominant_id = DOMAIN_SYSTEM_BASELINE;
+        let mut dominant_id = u32::from(ATTRACTOR_SLOT_SYSTEM_BASELINE);
 
         for (idx, field) in self.fields.iter().enumerate() {
             if ((self.active_domains_mask & (1 << idx)) == 0) | (field.active_count == 0) {
@@ -479,7 +483,7 @@ impl MultiAttractorSpace {
             }
         }
         if max_energy < 0.0 {
-            (DOMAIN_SYSTEM_BASELINE, 0.0)
+            (u32::from(ATTRACTOR_SLOT_SYSTEM_BASELINE), 0.0)
         } else {
             (dominant_id, max_energy)
         }
@@ -494,8 +498,9 @@ impl MultiAttractorSpace {
         init_w: &[u64; 8],
         init_nonzero: bool,
     ) -> ([u64; 8], f32) {
-        let rep_field = &self.fields[DOMAIN_PHASE_REPULSION as usize];
-        let rep_w_gain = branchless_relu_f32(self.domain_weights[DOMAIN_PHASE_REPULSION as usize]);
+        let rep_field = &self.fields[ATTRACTOR_SLOT_REPULSION as usize];
+        let rep_w_gain =
+            branchless_relu_f32(self.domain_weights[ATTRACTOR_SLOT_REPULSION as usize]);
         let (rep_words, rep_pull) = if ((rep_field.active_count > 0)
             | (rep_field.repulsion_gain > 0.0))
             & (rep_w_gain > 0.0)
@@ -511,7 +516,7 @@ impl MultiAttractorSpace {
         let mut primary_slot = 0u32;
 
         for (idx, field) in self.fields.iter().enumerate() {
-            if idx == (DOMAIN_PHASE_REPULSION as usize) {
+            if idx == (ATTRACTOR_SLOT_REPULSION as usize) {
                 continue;
             }
             let enabled = (self.active_domains_mask & (1 << idx)) != 0;
@@ -587,7 +592,7 @@ impl MultiAttractorSpace {
         let init_w = trail_phase_words_ref(reference_trail);
         let init_nonzero = (init_w[0] != 0) || swar_words_nonzero_64(init_w);
         let (run_w, _pull) = self.evaluate_multi_domain_superposition_words(init_w, init_nonzero);
-        let rep_field = &self.fields[DOMAIN_PHASE_REPULSION as usize];
+        let rep_field = &self.fields[ATTRACTOR_SLOT_REPULSION as usize];
         let prev_clear_end = snapshot_out.init_header_and_persona_from_words(
             self.global_step_counter,
             self.coupling_matrix_8x8,
@@ -662,8 +667,8 @@ impl MultiAttractorSpace {
         for field in &mut self.fields {
             field.step_counter = snapshot.global_step_counter;
         }
-        self.fields[DOMAIN_PHASE_REPULSION as usize].repulsion_gain = snapshot.repulsion_gain;
-        self.fields[DOMAIN_PHASE_REPULSION as usize].repulsion_phase_deltas =
+        self.fields[ATTRACTOR_SLOT_REPULSION as usize].repulsion_gain = snapshot.repulsion_gain;
+        self.fields[ATTRACTOR_SLOT_REPULSION as usize].repulsion_phase_deltas =
             snapshot.repulsion_phase_deltas;
 
         let count = (snapshot.active_anchor_count as usize).min(MAX_ANCHORS_PER_FIELD);
@@ -793,7 +798,7 @@ impl MultiAttractorSpace {
         source_weight: f32,
     ) -> GcsoResult<u32> {
         self.add_embedding_to_domain(
-            DOMAIN_KNOWLEDGE,
+            u32::from(ATTRACTOR_SLOT_KNOWLEDGE),
             embedding,
             GCSO_ANCHOR_TYPE_TOPOLOGICAL,
             source_weight,
@@ -811,7 +816,7 @@ impl MultiAttractorSpace {
         persona_weight: f32,
     ) -> GcsoResult<u32> {
         self.add_embedding_to_domain(
-            DOMAIN_PERSONA,
+            u32::from(ATTRACTOR_SLOT_PERSONA),
             persona_vector,
             GCSO_ANCHOR_TYPE_EMBEDDING,
             persona_weight,
@@ -829,7 +834,7 @@ impl MultiAttractorSpace {
         context_weight: f32,
     ) -> GcsoResult<u32> {
         self.add_embedding_to_domain(
-            DOMAIN_USER_INTERACTION,
+            u32::from(ATTRACTOR_SLOT_USER_CONTEXT),
             context_vector,
             GCSO_ANCHOR_TYPE_EMBEDDING,
             context_weight,
@@ -849,19 +854,24 @@ impl MultiAttractorSpace {
     }
 }
 
-impl AttractorField for MultiAttractorSpace {
+impl MultiAttractorSpace {
+    /// Returns the total active anchor count across all 8 lanes.
     #[inline(always)]
-    fn anchor_count(&self) -> u32 {
+    #[must_use]
+    pub fn anchor_count(&self) -> u32 {
         self.total_unified_anchor_count()
     }
 
+    /// Advances global evaporative decay across all 8 working lanes.
     #[inline(always)]
-    fn apply_evaporative_decay(&mut self) {
+    pub fn apply_evaporative_decay(&mut self) {
         self.advance_step();
     }
 
+    /// Computes total weighted potential energy across all enabled working lanes.
     #[inline]
-    fn total_potential_energy(&self) -> f32 {
+    #[must_use]
+    pub fn total_potential_energy(&self) -> f32 {
         let mut total = 0.0_f32;
         for (idx, field) in self.fields.iter().enumerate() {
             if (self.active_domains_mask & (1 << idx)) != 0 {
@@ -872,55 +882,72 @@ impl AttractorField for MultiAttractorSpace {
         branchless_flush_subnormal_f32(total)
     }
 
+    /// Returns the global occupancy pressure ratio across the 512-anchor unified space.
     #[inline]
-    fn pressure_ratio(&self) -> f32 {
+    #[must_use]
+    pub fn pressure_ratio(&self) -> f32 {
         let total_cap = MAX_ATTRACTOR_DOMAINS * MAX_ANCHORS_PER_FIELD;
         branchless_flush_subnormal_f32(
             (self.total_unified_anchor_count() as f32) * fast_inv_len_f32(total_cap),
         )
     }
 
+    /// Evicts the weakest displaceable anchor across all populated lanes and returns its ID.
     #[inline]
-    fn evaporate_weakest_anchor(&mut self) -> Option<u32> {
-        let mut weakest_lane = None;
-        let mut lowest_e = f32::MAX;
-        for (idx, field) in self.fields.iter().enumerate() {
+    pub fn evaporate_weakest_anchor(&mut self) -> Option<u32> {
+        let mut energies = [f32::INFINITY; MAX_ATTRACTOR_DOMAINS];
+        let mut eligible_mask = 0u8;
+        for (idx, (e_slot, field)) in energies.iter_mut().zip(self.fields.iter()).enumerate() {
             if field.active_count > 0 {
-                let e = field.min_displaceable_energy();
-                if e < lowest_e {
-                    lowest_e = e;
-                    weakest_lane = Some(idx);
-                }
+                *e_slot = field.min_displaceable_energy();
+                eligible_mask |= 1u8 << idx;
             }
         }
-        self.fields[weakest_lane?].evaporate_weakest_anchor()
+        let (weakest_lane, _) = branchless_argmin_f32_x8_masked(&energies, eligible_mask);
+        if usize::from(weakest_lane) < MAX_ATTRACTOR_DOMAINS {
+            self.fields[usize::from(weakest_lane)].evaporate_weakest_anchor()
+        } else {
+            None
+        }
     }
 
+    /// Adds a system prompt anchor into the Persona lane (with automatic spillover).
+    ///
+    /// # Errors
+    /// Propagates any error from [`Self::add_system_prompt_to_domain`].
     #[inline]
-    fn add_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> GcsoResult<u32> {
-        self.add_system_prompt_to_domain(DOMAIN_PERSONA, prompt, weight)
+    pub fn add_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> GcsoResult<u32> {
+        self.add_system_prompt_to_domain(u32::from(ATTRACTOR_SLOT_PERSONA), prompt, weight)
     }
 
+    /// Inserts an embedding anchor into the preferred lane for `anchor_type` (with spillover).
+    ///
+    /// # Errors
+    /// Propagates any error from [`Self::insert_unified_anchor`].
     #[inline]
-    fn add_embedding_anchor(
+    pub fn add_embedding_anchor(
         &mut self,
         embedding: &AlignedSlice32<'_, f32>,
         anchor_type: gcso_anchor_type_t,
         weight: f32,
     ) -> GcsoResult<u32> {
         let pref = if anchor_type == GCSO_ANCHOR_TYPE_PHASE_REPULSE {
-            DOMAIN_PHASE_REPULSION
+            u32::from(ATTRACTOR_SLOT_REPULSION)
         } else if anchor_type == GCSO_ANCHOR_TYPE_TOPOLOGICAL {
-            DOMAIN_KNOWLEDGE
+            u32::from(ATTRACTOR_SLOT_KNOWLEDGE)
         } else {
-            DOMAIN_PERSONA
+            u32::from(ATTRACTOR_SLOT_PERSONA)
         };
         let (_lane, id) = self.insert_unified_anchor(pref, anchor_type, weight, Some(embedding))?;
         Ok(id)
     }
 
+    /// Inserts an embedding anchor with unit weight (`1.0`).
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `dim == 0` or `vec.len() < dim`.
     #[inline]
-    fn add_anchor(
+    pub fn add_anchor(
         &mut self,
         anchor_type: gcso_anchor_type_t,
         vec: &AlignedSlice32<'_, f32>,
@@ -932,17 +959,26 @@ impl AttractorField for MultiAttractorSpace {
         self.add_embedding_anchor(vec, anchor_type, 1.0)
     }
 
+    /// Injects a phase-conjugate repulsion vector into the repulsion lane.
+    ///
+    /// # Errors
+    /// Propagates any error from [`AttractorFieldEngine::inject_phase_repulsion`].
     #[inline]
-    fn inject_phase_repulsion(
+    pub fn inject_phase_repulsion(
         &mut self,
         repulsion_deltas: &AlignedSlice16<'_, gcso_q7_t>,
         gain: f32,
     ) -> GcsoResult<()> {
-        self.fields[DOMAIN_PHASE_REPULSION as usize].inject_phase_repulsion(repulsion_deltas, gain)
+        self.fields[ATTRACTOR_SLOT_REPULSION as usize]
+            .inject_phase_repulsion(repulsion_deltas, gain)
     }
 
+    /// Evaluates unified multi-domain field force into `composite_phase_out`.
+    ///
+    /// # Errors
+    /// Returns `Ok(pull_force)` for all valid states.
     #[inline]
-    fn evaluate_field_force(
+    pub fn evaluate_field_force(
         &self,
         trail: &gcso_pointer_trail_t,
         composite_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
@@ -950,8 +986,12 @@ impl AttractorField for MultiAttractorSpace {
         Ok(self.evaluate_multi_domain_superposition(trail, composite_phase_out))
     }
 
+    /// Aggregates and crystallizes high-density anchors across all 8 lanes bottom-up.
+    ///
+    /// # Errors
+    /// Propagates any error from [`AttractorFieldEngine::aggregate_bottom_up`].
     #[inline]
-    fn aggregate_bottom_up(&mut self) -> GcsoResult<u32> {
+    pub fn aggregate_bottom_up(&mut self) -> GcsoResult<u32> {
         let mut total = 0u32;
         for field in &mut self.fields {
             total = total.wrapping_add(field.aggregate_bottom_up()?);
@@ -959,54 +999,28 @@ impl AttractorField for MultiAttractorSpace {
         Ok(total)
     }
 
+    /// Clears all anchors across all 8 lanes.
+    ///
+    /// # Errors
+    /// Propagates any error from [`Self::clear_all_domains`].
     #[inline]
-    fn clear_anchors(&mut self) -> GcsoResult<()> {
+    pub fn clear_anchors(&mut self) -> GcsoResult<()> {
         self.clear_all_domains()
     }
-}
 
-impl MultiDomainAttractorSpace for MultiAttractorSpace {
+    /// Returns the 8x8 inter-lane topological coupling matrix (`u64`).
     #[inline(always)]
-    fn advance_step(&mut self) {
-        Self::advance_step(self);
-    }
-
-    #[inline(always)]
-    fn set_domain_weight(&mut self, domain_id: u32, weight: f32) -> GcsoResult<()> {
-        Self::set_domain_weight(self, domain_id, weight)
-    }
-
-    #[inline(always)]
-    fn set_domain_enabled(&mut self, domain_id: u32, enabled: bool) -> GcsoResult<()> {
-        Self::set_domain_enabled(self, domain_id, enabled)
-    }
-
-    #[inline(always)]
-    fn find_dominant_domain(&self) -> (u32, f32) {
-        Self::find_dominant_domain(self)
-    }
-
-    #[inline(always)]
-    fn evaluate_multi_domain_superposition(
-        &self,
-        trail: &gcso_pointer_trail_t,
-        composite_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-    ) -> f32 {
-        Self::evaluate_multi_domain_superposition(self, trail, composite_phase_out)
-    }
-
-    #[inline(always)]
-    fn clear_all_domains(&mut self) -> GcsoResult<()> {
-        Self::clear_all_domains(self)
-    }
-
-    #[inline(always)]
-    fn slot_coupling_matrix(&self) -> u64 {
+    #[must_use]
+    pub const fn slot_coupling_matrix(&self) -> u64 {
         self.coupling_matrix_8x8
     }
 
+    /// Evaluates the phase vector and weighted pull force of a single working lane (`0..=7`).
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `domain_id >= MAX_ATTRACTOR_DOMAINS`.
     #[inline]
-    fn evaluate_slot_force(
+    pub fn evaluate_slot_force(
         &self,
         domain_id: u32,
         trail: &gcso_pointer_trail_t,
@@ -1023,11 +1037,95 @@ impl MultiDomainAttractorSpace for MultiAttractorSpace {
         let pull = self.fields[idx].evaluate_composite_attractor_force(trail, slot_phase_out);
         Ok(pull * branchless_relu_f32(self.domain_weights[idx]))
     }
-}
 
-impl PersonaPatcher for MultiAttractorSpace {
+    /// Projects all 8 working lanes into a flat 512-byte phase bank and per-lane pull array.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `slot_bank_out.len() < MAX_ATTRACTOR_DOMAINS * MAX_ATTENTION_HEADS`.
     #[inline]
-    fn apply_patch(&mut self, patch_data: &[u8]) -> GcsoResult<()> {
+    pub fn project_slot_phase_bank(
+        &self,
+        reference_trail: &gcso_pointer_trail_t,
+        slot_bank_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
+        slot_pulls_out: &mut [f32; MAX_ATTRACTOR_DOMAINS],
+    ) -> GcsoResult<()> {
+        if slot_bank_out.len() < MAX_ATTRACTOR_DOMAINS * MAX_ATTENTION_HEADS {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
+        let bank_2d = slot_bank_out
+            .as_mut_slice()
+            .as_chunks_mut::<MAX_ATTENTION_HEADS>()
+            .0;
+        for (slot_id, pull_slot) in slot_pulls_out
+            .iter_mut()
+            .enumerate()
+            .take(MAX_ATTRACTOR_DOMAINS)
+        {
+            *pull_slot =
+                self.evaluate_slot_force(slot_id as u32, reference_trail, &mut bank_2d[slot_id])?;
+        }
+        Ok(())
+    }
+
+    /// Projects all 8 working lanes and steers `trail` across its coupled neighborhood, returning
+    /// `(final_pull, mean_coherence, neighbor_count, final_words)`.
+    ///
+    /// # Errors
+    /// Propagates any error from [`Self::project_slot_phase_bank`].
+    #[inline]
+    pub fn steer_trail_by_coupled_neighborhood_to_words(
+        &self,
+        synergy_blend_scale: f32,
+        inhibition_scale: f32,
+        trail: &mut gcso_pointer_trail_t,
+    ) -> GcsoResult<(f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES])> {
+        let mut bank = AlignedBuffer16::new([0i8; MAX_ATTRACTOR_DOMAINS * MAX_ATTENTION_HEADS]);
+        let mut weights = [0.0f32; MAX_ATTRACTOR_DOMAINS];
+        self.project_slot_phase_bank(trail, &mut bank.as_aligned_slice_mut(), &mut weights)?;
+        let bank_2d: &[[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS] =
+            // SAFETY: `bank.data` has exact length `8 * 64 = 512` `i8` elements.
+            unsafe {
+                &*bank
+                    .data
+                    .as_ptr()
+                    .cast::<[[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS]>()
+            };
+        let (pull, coh, neighbors, words) = trail.apply_neighborhood_synergy_from_bank_to_words(
+            bank_2d,
+            &weights,
+            self.slot_coupling_matrix(),
+            synergy_blend_scale,
+            inhibition_scale,
+        );
+        Ok((pull, coh, neighbors, words))
+    }
+
+    /// Projects all 8 working lanes and steers `trail` across its coupled neighborhood, returning
+    /// `(final_pull, mean_coherence, neighbor_count)`.
+    ///
+    /// # Errors
+    /// Propagates any error from [`Self::steer_trail_by_coupled_neighborhood_to_words`].
+    #[inline]
+    pub fn steer_trail_by_coupled_neighborhood(
+        &self,
+        synergy_blend_scale: f32,
+        inhibition_scale: f32,
+        trail: &mut gcso_pointer_trail_t,
+    ) -> GcsoResult<(f32, f32, u32)> {
+        let (pull, coh, neighbors, _words) = self.steer_trail_by_coupled_neighborhood_to_words(
+            synergy_blend_scale,
+            inhibition_scale,
+            trail,
+        )?;
+        Ok((pull, coh, neighbors))
+    }
+
+    /// Applies a binary persona phase modulation patch to this unified attractor space.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `patch_data` is empty.
+    #[inline]
+    pub fn apply_patch(&mut self, patch_data: &[u8]) -> GcsoResult<()> {
         if patch_data.is_empty() {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -1046,7 +1144,7 @@ impl PersonaPatcher for MultiAttractorSpace {
                 *slot = patch_data[h % len] as gcso_q7_t;
             }
         }
-        let lane = self.select_spillover_lane(DOMAIN_PERSONA);
+        let lane = self.select_spillover_lane(u32::from(ATTRACTOR_SLOT_PERSONA));
         self.active_domains_mask |= 1 << lane;
         let _ = self.fields[lane].insert_anchor_internal(
             GCSO_ANCHOR_TYPE_EMBEDDING,
@@ -1056,6 +1154,149 @@ impl PersonaPatcher for MultiAttractorSpace {
             false,
         )?;
         Ok(())
+    }
+
+    /// Absorbs a single [`EpisodicPhaseSample`] point onto the unified phase manifold and
+    /// crystallizes a permanent anchor when `trail_inout` crosses the density and coherence thresholds.
+    ///
+    /// # Errors
+    /// Propagates any error from [`Self::add_embedding_anchor`] or [`Self::aggregate_bottom_up`].
+    #[inline]
+    pub fn absorb_episodic_sample<S: EpisodicPhaseSample + ?Sized>(
+        &mut self,
+        sample: &S,
+        domain_salt: u32,
+        crystallize_density_thresh: f32,
+        crystallize_r_bar_thresh: f32,
+        trail_inout: &mut gcso_pointer_trail_t,
+    ) -> GcsoResult<AttractorGrowthReport> {
+        let mut report = sample.resonate_into_trail(
+            domain_salt,
+            crystallize_density_thresh,
+            crystallize_r_bar_thresh,
+            trail_inout,
+        );
+        if report.resonant_pull_force <= 0.0 {
+            return Ok(report);
+        }
+
+        let should_crystallize = (trail_inout.flags & TRAIL_FLAG_CRYSTALLIZED_CANDIDATE) != 0;
+        if should_crystallize {
+            let emb16 = AlignedBuffer32::new(q7_phases_to_embedding16(
+                &trail_inout.accumulated_phase_delta,
+            ));
+            let mass = branchless_max_f32(
+                branchless_flush_subnormal_f32(branchless_relu_f32(sample.sample_mass())),
+                1.0,
+            );
+            if let Ok(new_id) = self.add_embedding_anchor(
+                &emb16.as_aligned_slice(),
+                sample.sample_anchor_type(),
+                mass,
+            ) {
+                report.crystallized_anchor_id = new_id;
+                trail_inout.target_anchor_id = new_id;
+                trail_inout.cluster_id = new_id;
+            }
+            let _ = self.aggregate_bottom_up()?;
+        }
+
+        Ok(report)
+    }
+
+    /// Absorbs a batch of [`EpisodicPhaseSample`] points and quantizes the resulting persistent
+    /// topological persona profile into `persona_profile_out`.
+    ///
+    /// # Errors
+    /// Propagates any error from [`Self::absorb_episodic_sample`] or [`quantize_persistent_topological_mode`].
+    #[inline]
+    pub fn absorb_episodic_sample_batch<S: EpisodicPhaseSample>(
+        &mut self,
+        samples: &[S],
+        domain_salt: u32,
+        crystallize_density_thresh: f32,
+        crystallize_r_bar_thresh: f32,
+        trail_inout: &mut gcso_pointer_trail_t,
+        persona_profile_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> GcsoResult<(AttractorGrowthReport, u32)> {
+        let mut last_report = AttractorGrowthReport::default();
+        let mut crystallized_total = 0u32;
+
+        for (idx, sample) in samples.iter().enumerate() {
+            let step_salt = domain_salt.wrapping_add(idx as u32);
+            let rep = self.absorb_episodic_sample(
+                sample,
+                step_salt,
+                crystallize_density_thresh,
+                crystallize_r_bar_thresh,
+                trail_inout,
+            )?;
+            if rep.crystallized_anchor_id != 0 {
+                crystallized_total = crystallized_total.wrapping_add(1);
+            }
+            last_report = rep;
+        }
+
+        let trails = [*trail_inout];
+        let (r_bar, kappa) = quantize_persistent_topological_mode(
+            &trails,
+            branchless_clamp_f32(crystallize_r_bar_thresh, 0.0, 1.0),
+            persona_profile_out,
+        )?;
+        last_report.resultant_r_bar = r_bar;
+        last_report.von_mises_kappa = kappa;
+        Ok((last_report, crystallized_total))
+    }
+
+    /// Evaluates precision-guided inverse-temperature scale $\beta_{\mathrm{eff}} \in [0.25, 4.0]$
+    /// from a growth report's concentration $\kappa_c$ and phase coherence.
+    #[inline(always)]
+    #[must_use]
+    pub fn eval_growth_precision_inv_temp(
+        &self,
+        growth_report: &AttractorGrowthReport,
+        phase_coherence: f32,
+        base_gain: f32,
+    ) -> f32 {
+        let kappa_norm = branchless_clamp_f32(growth_report.von_mises_kappa * 0.10, 0.25, 2.0);
+        let eff_gain = branchless_relu_f32(base_gain) * kappa_norm;
+        branchless_phase_coherence_inv_temp_scale(phase_coherence, eff_gain)
+    }
+
+    /// Absorbs an [`EpisodicPhaseSample`] into `trail_inout`, evaluates unified-field gravitational
+    /// force into `rope_deltas_out`, and returns `(growth_report, inv_temp_beta_eff)`.
+    ///
+    /// # Errors
+    /// Propagates any error from [`Self::absorb_episodic_sample`] or [`Self::evaluate_field_force`].
+    #[inline]
+    pub fn absorb_and_steer_rope_step<S: EpisodicPhaseSample + ?Sized>(
+        &mut self,
+        sample: &S,
+        domain_salt: u32,
+        crystallize_density_thresh: f32,
+        crystallize_r_bar_thresh: f32,
+        qdps_min_step_rad: f32,
+        inv_temp_base_gain: f32,
+        trail_inout: &mut gcso_pointer_trail_t,
+        rope_deltas_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+    ) -> GcsoResult<(AttractorGrowthReport, f32)> {
+        let report = self.absorb_episodic_sample(
+            sample,
+            domain_salt,
+            crystallize_density_thresh,
+            crystallize_r_bar_thresh,
+            trail_inout,
+        )?;
+        let _field_pull = self.evaluate_field_force(trail_inout, rope_deltas_out)?;
+        let step_u8 = branchless_rad_to_phase_step_u8(qdps_min_step_rad);
+        let mut rope_w = load_q7_words_64(rope_deltas_out);
+        if step_u8 > 1 {
+            rope_w = swar_q7_phase_step_filter_words_64(&rope_w, step_u8);
+            store_q7_words_64(rope_deltas_out, &rope_w);
+        }
+        let coh = coherence_from_word_arrays_64(trail_phase_words_ref(trail_inout), &rope_w);
+        let beta_eff = self.eval_growth_precision_inv_temp(&report, coh, inv_temp_base_gain);
+        Ok((report, beta_eff))
     }
 }
 

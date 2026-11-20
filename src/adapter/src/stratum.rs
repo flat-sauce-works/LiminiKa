@@ -24,8 +24,8 @@ use liminika_core::runtime::{
 use liminika_core::stigmergy::{
     ActionHubEngine, ActionOrchestrationReport, CognitiveCircuitActivation, CognitiveOpKind,
     CognitiveStepOp, CognitiveTrajectoryLedger, StigmergicActionDecision,
-    StigmergicReconstitutionOps, StigmergicReconstitutionReport, StigmergicScaleGranularity,
-    StigmergicThresholds, ACTION_HUB_INLINE_TRAILS,
+    StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicThresholds,
+    ACTION_HUB_INLINE_TRAILS,
 };
 
 /// Uncollapsed per-query-token resonance observation deposited into stigmergic swarm trails.

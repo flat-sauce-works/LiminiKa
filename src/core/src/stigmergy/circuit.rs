@@ -823,28 +823,11 @@ impl CognitiveTrajectoryLedger {
     }
 }
 
-/// Trait governing domain-agnostic long-term plasticity and compositional blending over
-/// register-resident stigmergic cognitive circuits.
-///
-/// Updates are driven strictly by geometric convergence and circuit activation invariants so
-/// learned reasoning habits remain invariant across datasets and domains.
-pub trait CognitiveCircuitPlasticity: Sized {
+impl CognitiveTrajectoryLedger {
     /// Updates the circuit from a completed [`CognitiveCircuitActivation`] and convergence flag
     /// using bounded homeostatic plasticity (LTP on coherent convergence, LTD/shift on drift).
-    fn reinforce_from_activation(
-        &mut self,
-        activation: &CognitiveCircuitActivation,
-        converged: bool,
-    );
-
-    /// Blends `self` (base persona circuit) with `overlay` (adapted session circuit) according to
-    /// `blend_q7` (`0..=128`), preserving active scale transitions from both circuits.
-    fn compose_persona_circuit(&self, overlay: &Self, blend_q7: u8) -> Self;
-}
-
-impl CognitiveCircuitPlasticity for CognitiveTrajectoryLedger {
     #[inline]
-    fn reinforce_from_activation(
+    pub fn reinforce_from_activation(
         &mut self,
         activation: &CognitiveCircuitActivation,
         converged: bool,
@@ -877,8 +860,11 @@ impl CognitiveCircuitPlasticity for CognitiveTrajectoryLedger {
         }
     }
 
+    /// Blends `self` (base persona circuit) with `overlay` (adapted session circuit) according to
+    /// `blend_q7` (`0..=128`), preserving active scale transitions from both circuits.
     #[inline]
-    fn compose_persona_circuit(&self, overlay: &Self, blend_q7: u8) -> Self {
+    #[must_use]
+    pub fn compose_persona_circuit(&self, overlay: &Self, blend_q7: u8) -> Self {
         let w_overlay = u16::from(blend_q7.min(128));
         if w_overlay == 0 {
             return *self;

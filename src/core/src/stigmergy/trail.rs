@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Canonical Layer 2 [`gcso_pointer_trail_t`] POD descriptor, word accessors,
-//! [`StigmergicActionPtrOps`], [`StigmergicTrailOps`], Bayesian trail attention modulation,
-//! trail chain cohomology, [`PointerActionHub`], [`StigmergicChunkOps`], and [`ActionHub`].
+//! tagged-pointer action mode orchestration, pointer-trail operations, Bayesian trail attention modulation,
+//! trail chain cohomology, [`PointerActionHub`], and [`ActionHub`].
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -64,16 +64,16 @@ use crate::liminal::{
 };
 pub use crate::stigmergy::ledger::gcso_ledger_slot_t;
 use crate::stigmergy::ledger::{
-    eval_bitmask_dyadic_ultrametric, ContrastivePhaseBloomFilter, FastPathLedger, PagedBitmaskOps,
+    eval_bitmask_dyadic_ultrametric, ContrastivePhaseBloomFilter, FastPathLedger,
 };
 use crate::stigmergy::pheromone::PheromoneDensityOps;
 use crate::stigmergy::{
     coupled_slot_row_mask, is_slot_pair_coupled, ATTRACTOR_SLOT_REPULSION,
     LEDGER_METRIC_FAST_PATH_HIT, LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_REPULSION_APPLIED,
-    MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
-    TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_PHASE_STEER_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
-    TRAIL_FLAG_SWARM_ESCALATED, TRAIL_FLAG_SWARM_RESOLVED, TRAIL_FLAG_SYNERGY_RESONANCE,
-    TRAIL_SWARM_QUORUM_MASK, TRAIL_SWARM_QUORUM_SHIFT,
+    MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
+    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_PHASE_STEER_ACTIVE,
+    TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SWARM_ESCALATED, TRAIL_FLAG_SWARM_RESOLVED,
+    TRAIL_FLAG_SYNERGY_RESONANCE, TRAIL_SWARM_QUORUM_MASK, TRAIL_SWARM_QUORUM_SHIFT,
 };
 /// Stigmergic pointer trail structure aligned to 128 bytes (2 cache lines, Section 5.4.C).
 #[repr(C, align(128))]
@@ -434,49 +434,14 @@ unsafe fn eval_candidate_trail_avx2_with_macro_fast(
 }
 
 // ===================================================================
-// 3. Pointer-Driven Action Mode Orchestration (`StigmergicActionPtrOps`)
+// 3. Pointer-Driven Action Mode Orchestration (`gcso_tagged_ptr_t`)
 // ===================================================================
 
-/// Branchless helper trait extending [`gcso_tagged_ptr_t`] into a self-contained
-/// orchestrator micro-instruction word (48-bit Address + 5-bit Action Mode + 3-bit Working Lane ID + 8-bit Q7 Phase).
-pub trait StigmergicActionPtrOps: Copy {
+impl gcso_tagged_ptr_t {
     /// Packs a 48-bit address, 3-bit target working lane (`0..=7`), 5-bit action mode mask, and Q7 phase.
-    #[must_use]
-    fn pack_action(
-        raw_addr: u64,
-        attractor_slot_id: u8,
-        action_mode_flags: u8,
-        phase_q7: gcso_q7_t,
-    ) -> Self;
-    /// Extracts the 5-bit Action Mode execution bitmask (`ACTION_MODE_*`).
-    #[must_use]
-    fn action_mode_flags(self) -> u8;
-    /// Extracts the 3-bit Target Attractor Working Lane ID (`0..=7`).
-    #[must_use]
-    fn target_attractor_slot(self) -> u8;
-    /// Returns `true` if all specified `mode_mask` bits are enabled in the pointer's Action Mode.
-    #[must_use]
-    fn has_action_mode(self, mode_mask: u8) -> bool;
-    /// Returns a new tagged pointer with updated Target Attractor Working Lane ID and Action Mode flags.
-    #[must_use]
-    fn with_action_and_slot(self, attractor_slot_id: u8, action_mode_flags: u8) -> Self;
-    /// Branchlessly mutates the pointer's Action Mode flags, Target Working Lane ID, and embedded
-    /// Q7 phase based on bottom-up stigmergic environmental traces.
-    #[must_use]
-    fn evolve_mode_stigmergically(
-        self,
-        trail_density: f32,
-        entropy_h_tilde: f32,
-        repulsion_triggered: bool,
-        dominant_attractor_slot: u8,
-        low_entropy_skip_thresh: f32,
-        high_density_rank1_thresh: f32,
-    ) -> Self;
-}
-
-impl StigmergicActionPtrOps for gcso_tagged_ptr_t {
     #[inline(always)]
-    fn pack_action(
+    #[must_use]
+    pub fn pack_action(
         raw_addr: u64,
         attractor_slot_id: u8,
         action_mode_flags: u8,
@@ -489,28 +454,39 @@ impl StigmergicActionPtrOps for gcso_tagged_ptr_t {
         )
     }
 
+    /// Extracts the 5-bit Action Mode execution bitmask (`ACTION_MODE_*`).
     #[inline(always)]
-    fn action_mode_flags(self) -> u8 {
+    #[must_use]
+    pub fn action_mode_flags(self) -> u8 {
         unpack_action_mode_from_tag(self.unpack_tag())
     }
 
+    /// Extracts the 3-bit Target Attractor Working Lane ID (`0..=7`).
     #[inline(always)]
-    fn target_attractor_slot(self) -> u8 {
+    #[must_use]
+    pub fn target_attractor_slot(self) -> u8 {
         unpack_attractor_slot_from_tag(self.unpack_tag())
     }
 
+    /// Returns `true` if all specified `mode_mask` bits are enabled in the pointer's Action Mode.
     #[inline(always)]
-    fn has_action_mode(self, mode_mask: u8) -> bool {
+    #[must_use]
+    pub fn has_action_mode(self, mode_mask: u8) -> bool {
         (self.action_mode_flags() & mode_mask) == mode_mask
     }
 
+    /// Returns a new tagged pointer with updated Target Attractor Working Lane ID and Action Mode flags.
     #[inline(always)]
-    fn with_action_and_slot(self, attractor_slot_id: u8, action_mode_flags: u8) -> Self {
+    #[must_use]
+    pub fn with_action_and_slot(self, attractor_slot_id: u8, action_mode_flags: u8) -> Self {
         self.with_tag(pack_action_slot_tag(attractor_slot_id, action_mode_flags))
     }
 
+    /// Branchlessly mutates the pointer's Action Mode flags, Target Working Lane ID, and embedded
+    /// Q7 phase based on bottom-up stigmergic environmental traces.
     #[inline(always)]
-    fn evolve_mode_stigmergically(
+    #[must_use]
+    pub fn evolve_mode_stigmergically(
         self,
         trail_density: f32,
         entropy_h_tilde: f32,
@@ -549,197 +525,6 @@ impl StigmergicActionPtrOps for gcso_tagged_ptr_t {
             updated.raw(),
         ))
     }
-}
-
-/// Branchless $\mathcal{O}(1)$ stigmergic trail, pointer-mode orchestration, inter-memory Limina
-/// bridging, Bayesian pointer-trail transition scoring & rewiring, single-manifold unified-field
-/// anchor resonance (preserving 32-bit `target_anchor_id`), and 8-lane working neighborhood
-/// synergy operations on 128-byte aligned [`gcso_pointer_trail_t`].
-pub trait StigmergicTrailOps {
-    /// Records an $\mathcal{O}(1)$ tagged pointer transition and reinforces stigmergic trail density.
-    fn record_pointer_transition(&mut self, next_ptr: u64, edge_cost: i32, density_boost: f32);
-    /// Accumulates a 64-head Q7 phase delta vector into the trail's phase state using branchless saturation.
-    fn accumulate_phase_vector(&mut self, delta_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]);
-    /// Accumulates a uniform Q7 phase delta across all 64 heads in-place using 8-lane SWAR saturation.
-    fn accumulate_uniform_phase(&mut self, delta_q7: gcso_q7_t);
-    /// Smoothly blends the trail's 64-head phase trajectory toward `target_phases` along $S^1$.
-    fn geodesic_blend_phase_with(
-        &mut self,
-        target_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        t_u7: u8,
-    );
-    /// Stamps a phase-conjugate repulsion marker ($-\boldsymbol{\Delta\theta}$) onto the pointer trail.
-    fn stamp_phase_conjugate_repulsion(&mut self);
-    /// Applies subnormal-safe temporal evaporative decay (`decay_factor` $\in [0, 1]$) to trail density.
-    fn apply_trail_evaporation(&mut self, decay_factor: f32);
-    /// Evaluates whether the trail's stigmergic density exceeds `crystal_threshold`.
-    fn should_crystallize_branchless(&self, crystal_threshold: f32) -> bool;
-    /// Returns `current_ptr` wrapped as a strongly-typed [`gcso_tagged_ptr_t`].
-    fn current_tagged_ptr(&self) -> gcso_tagged_ptr_t;
-    /// Returns `prev_ptr` wrapped as a strongly-typed [`gcso_tagged_ptr_t`].
-    fn prev_tagged_ptr(&self) -> gcso_tagged_ptr_t;
-    /// Extracts the active 5-bit Action Mode bitmask (`ACTION_MODE_*`) embedded in `current_ptr`.
-    fn active_action_mode(&self) -> u8;
-    /// Extracts the 3-bit Target Attractor Working Lane ID (`0..=7`) embedded in `current_ptr`.
-    fn target_attractor_slot(&self) -> u8;
-    /// Extracts the 8-bit Micro-Swarm Quorum bitmask (`bits 8..=15`) embedded in `self.flags`.
-    fn swarm_quorum_mask(&self) -> u8;
-    /// Updates the 8-bit Micro-Swarm Quorum bitmask (`bits 8..=15`) and resolution/escalation flags.
-    fn set_swarm_quorum_state(&mut self, quorum_mask: u8, hot_path_resolved: bool);
-    /// Packs `(next_addr, attractor_slot_id, action_mode_flags, phase_q7)` and advances the trail.
-    fn record_action_transition(
-        &mut self,
-        next_addr: u64,
-        attractor_slot_id: u8,
-        action_mode_flags: u8,
-        phase_q7: gcso_q7_t,
-        edge_cost: i32,
-        density_boost: f32,
-    );
-    /// Evolves the trail's `current_ptr` Action Mode flags and Target Working Lane ID bottom-up,
-    /// preserving 32-bit `target_anchor_id` in `cluster_id` when `target_anchor_id != 0` and
-    /// `!repulsion_triggered`.
-    fn evolve_trail_mode_stigmergically(
-        &mut self,
-        entropy_h_tilde: f32,
-        repulsion_triggered: bool,
-        dominant_attractor_slot: u8,
-        low_entropy_skip_thresh: f32,
-        high_density_rank1_thresh: f32,
-    ) -> gcso_tagged_ptr_t;
-    /// Evaluates circular phase coherence $\mathcal{C}_{\mathrm{phase}} \in [-1.0, 1.0]$ with `slot_phases`.
-    fn phase_coherence_with(&self, slot_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> f32;
-    /// Evaluates the trail's 64-head circular resultant statistics $(\bar{R}_c, \bar{\theta}_{\mathrm{Q7}}, \kappa_c)$
-    /// alongside its Phase-Proximity Gravity mass $M_{\mathrm{grav}} = \rho_{\mathrm{stigmergy}} / (1 - \bar{R}_c + \epsilon)$
-    /// in $\mathcal{O}(1)$ division-free (`0 fdiv`) mode.
-    fn evaluate_trail_circular_stats_and_gravity(&self) -> (f32, gcso_q7_t, f32, f32);
-    /// Applies **Zero-Hyperparameter Phase-Proximity Resonance** from a single anchor on the
-    /// unified phase manifold (`anchor_phases`, `anchor_base_energy`) in strictly constant time (`0` branches).
-    fn apply_unified_field_anchor_resonance(
-        &mut self,
-        anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        anchor_base_energy: f32,
-    ) -> (f32, f32);
-    /// Applies **Order-Invariant (Commutative) Unified-Field Multi-Anchor Resonance** across an
-    /// arbitrary slice of anchors (`anchor_phases`, `anchor_base_energies`) and optional repulsive
-    /// phase inhibitor (`repulsion_phases_and_strength`) on a **single unified phase manifold**
-    /// using register-resident 8-word SWAR accumulators (`0` branches, `0 fdiv`).
-    /// Folds an arbitrary slice of anchors (`anchor_phases`, `anchor_base_energies`) and optional
-    /// repulsive phase inhibitor (`repulsion_phases_and_strength`) starting from pre-loaded 8-word
-    /// SWAR registers `init_w` (`0` entry reload) and returning `(final_pull_force, mean_coherence, active_anchor_count, post_words)`.
-    fn apply_unified_field_anchor_slice_resonance_from_words(
-        &mut self,
-        init_w: [u64; NUM_STIGMERGIC_GRANULES],
-        anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
-        anchor_base_energies: &[f32],
-        repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
-    ) -> (f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES]);
-
-    /// Folds an arbitrary slice of anchors (`anchor_phases`, `anchor_base_energies`) on the single
-    /// unified phase manifold and returns `(final_pull_force, mean_coherence, active_anchor_count, post_words)`
-    /// directly in 8 `u64` SWAR registers (`0` exit reload).
-    fn apply_unified_field_anchor_slice_resonance_to_words(
-        &mut self,
-        anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
-        anchor_base_energies: &[f32],
-        repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
-    ) -> (f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES]);
-
-    /// Folds an arbitrary slice of anchors (`anchor_phases`, `anchor_base_energies`) and optional
-    /// repulsive phase inhibitor (`repulsion_phases_and_strength`) on a **single unified phase manifold**
-    /// using register-resident 8-word SWAR accumulators (`0` branches, `0 fdiv`).
-    fn apply_unified_field_anchor_slice_resonance(
-        &mut self,
-        anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
-        anchor_base_energies: &[f32],
-        repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
-    ) -> (f32, f32, u32);
-    /// Bridges the "unwritten space between the lines" (**Limina / Inter-Memory Hallucination**)
-    /// from `prev_memory_trail` ($M_{t-1}$) to `self` ($M_t$) in a **single fused 8-word SWAR pass**
-    /// (`0` branches, zero temporary array stack spills).
-    fn bridge_liminal_hallucinated_trail(
-        &mut self,
-        prev_memory_trail: &gcso_pointer_trail_t,
-        interpolation_u7: u8,
-        contradiction_threshold: f32,
-    ) -> (f32, f32, bool);
-    /// Links `self` ($M_{t-1}$) to `next_trail` ($M_t$, identified by `next_trail_id`) by setting
-    /// `self.linked_trail_id = next_trail_id` and bridging their inter-memory **Limina** gap.
-    fn link_with_next_hallucinated_trail(
-        &mut self,
-        next_trail_id: u32,
-        next_trail: &mut gcso_pointer_trail_t,
-        interpolation_u7: u8,
-        contradiction_threshold: f32,
-    ) -> (f32, f32, bool);
-    /// Evaluates the **Bayes-Attention Stigmergic Transition Score** from `self` ($M_t$) to a
-    /// candidate memory trail `candidate_trail` ($M_j$, identified by `candidate_trail_id`) in
-    /// strictly constant time (`0` branches, `0 fdiv`).
-    fn evaluate_bayesian_transition_score_with(
-        &self,
-        candidate_trail_id: u32,
-        candidate_trail: &gcso_pointer_trail_t,
-        head_dim: u32,
-        phase_interference_gain: f32,
-        stigmergic_prior_gain: f32,
-        pointer_link_bonus: f32,
-        contradiction_threshold: f32,
-    ) -> (f32, f32, bool);
-    /// Synchronizes `self.flags` (`TRAIL_FLAG_PHASE_STEER_ACTIVE` and `TRAIL_FLAG_INERTIAL_SKIP_ACTIVE`)
-    /// with the 5-bit `ACTION_MODE_*` flags embedded in `self.current_ptr` in branchless constant time.
-    fn sync_flags_with_current_ptr(&mut self);
-    /// Evaluates non-linear cross-slot synergy and liminal beat interference between two working lanes.
-    fn apply_cross_slot_synergy(
-        &mut self,
-        slot_a: u32,
-        phases_a: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        weight_a: f32,
-        slot_b: u32,
-        phases_b: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        weight_b: f32,
-        coupling_matrix_8x8: u64,
-        synergy_gain: f32,
-    ) -> (f32, f32);
-    /// Applies branchless mutual inhibition gating to the trail's accumulated phase vector and pull force.
-    fn apply_mutual_slot_inhibition(
-        &mut self,
-        inhibitor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        inhibition_strength: f32,
-    ) -> f32;
-    /// Register-resident evaluator for **8-Lane Coupled Neighborhood Synergy & Mutual Inhibition**
-    /// starting from pre-loaded 8-word SWAR registers `acc_w` and returning
-    /// `(damped_pull_force, mean_coherence, active_neighbor_count, post_words)`.
-    fn apply_neighborhood_synergy_from_bank_from_words(
-        &mut self,
-        acc_w: [u64; NUM_STIGMERGIC_GRANULES],
-        slot_phase_bank: &[[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS],
-        slot_weights: &[f32; MAX_ATTRACTOR_DOMAINS],
-        coupling_matrix_8x8: u64,
-        synergy_gain: f32,
-        inhibition_strength: f32,
-    ) -> (f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES]);
-
-    /// Evaluates **8-Lane Coupled Neighborhood Synergy & Mutual Inhibition** and returns both
-    /// `(damped_pull_force, mean_coherence, active_neighbor_count, post_words)` in registers (`0` exit reload).
-    fn apply_neighborhood_synergy_from_bank_to_words(
-        &mut self,
-        slot_phase_bank: &[[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS],
-        slot_weights: &[f32; MAX_ATTRACTOR_DOMAINS],
-        coupling_matrix_8x8: u64,
-        synergy_gain: f32,
-        inhibition_strength: f32,
-    ) -> (f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES]);
-
-    /// Unified single-source-of-truth evaluator for **8-Lane Coupled Neighborhood Synergy & Mutual Inhibition**
-    /// across `slot_phase_bank` (`[[gcso_q7_t; 64]; 8]`) and `slot_weights` (`[f32; 8]`).
-    fn apply_neighborhood_synergy_from_bank(
-        &mut self,
-        slot_phase_bank: &[[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS],
-        slot_weights: &[f32; MAX_ATTRACTOR_DOMAINS],
-        coupling_matrix_8x8: u64,
-        synergy_gain: f32,
-        inhibition_strength: f32,
-    ) -> (f32, f32, u32);
 }
 
 /// Register-resident Coarse-to-Fine Bayesian candidate trail selector, rewirer, Limina geodesic
@@ -1035,9 +820,10 @@ impl gcso_pointer_trail_t {
     }
 }
 
-impl StigmergicTrailOps for gcso_pointer_trail_t {
+impl gcso_pointer_trail_t {
+    /// Records an $\mathcal{O}(1)$ tagged pointer transition and reinforces stigmergic trail density.
     #[inline(always)]
-    fn record_pointer_transition(&mut self, next_ptr: u64, edge_cost: i32, density_boost: f32) {
+    pub fn record_pointer_transition(&mut self, next_ptr: u64, edge_cost: i32, density_boost: f32) {
         self.prev_ptr = self.current_ptr;
         self.current_ptr = next_ptr;
         self.transition_cost = self.transition_cost.saturating_add(edge_cost);
@@ -1047,15 +833,17 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         self.stigmergic_density = branchless_min_f32(raw_rho, MAX_STIGMERGIC_DENSITY);
     }
 
+    /// Accumulates a 64-head Q7 phase delta vector into the trail's phase state using branchless saturation.
     #[inline(always)]
-    fn accumulate_phase_vector(&mut self, delta_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) {
+    pub fn accumulate_phase_vector(&mut self, delta_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) {
         let d = load_q7_words_64(delta_phases);
         let w = trail_phase_words_mut(self);
         swar_or_avx2_q7_add_sat_words_64(w, &d);
     }
 
+    /// Accumulates a uniform Q7 phase delta across all 64 heads in-place using 8-lane SWAR saturation.
     #[inline(always)]
-    fn accumulate_uniform_phase(&mut self, delta_q7: gcso_q7_t) {
+    pub fn accumulate_uniform_phase(&mut self, delta_q7: gcso_q7_t) {
         let splat_u64 = ((delta_q7 as u8) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
         let w = trail_phase_words_mut(self);
         w[0] = swar_q7_add_sat_x8(w[0], splat_u64);
@@ -1068,8 +856,9 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         w[7] = swar_q7_add_sat_x8(w[7], splat_u64);
     }
 
+    /// Smoothly blends the trail's 64-head phase trajectory toward `target_phases` along $S^1$.
     #[inline(always)]
-    fn geodesic_blend_phase_with(
+    pub fn geodesic_blend_phase_with(
         &mut self,
         target_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         t_u7: u8,
@@ -1088,8 +877,9 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         *trail_phase_words_mut(self) = swar_slerp_words_with_bias_64(&a, &b, s, bias_restore);
     }
 
+    /// Stamps a phase-conjugate repulsion marker ($-\boldsymbol{\Delta\theta}$) onto the pointer trail.
     #[inline(always)]
-    fn stamp_phase_conjugate_repulsion(&mut self) {
+    pub fn stamp_phase_conjugate_repulsion(&mut self) {
         let w = trail_phase_words_mut(self);
         w[0] = swar_q7_neg_sat_x8(w[0]);
         w[1] = swar_q7_neg_sat_x8(w[1]);
@@ -1103,39 +893,47 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         self.flags |= TRAIL_FLAG_REPULSION_ACTIVE;
     }
 
+    /// Applies subnormal-safe temporal evaporative decay (`decay_factor` $\in [0, 1]$) to trail density.
     #[inline(always)]
-    fn apply_trail_evaporation(&mut self, decay_factor: f32) {
+    pub fn apply_trail_evaporation(&mut self, decay_factor: f32) {
         let _ = self.evaporate_pheromone(decay_factor);
     }
 
+    /// Evaluates whether the trail's stigmergic density exceeds `crystal_threshold`.
     #[inline(always)]
-    fn should_crystallize_branchless(&self, crystal_threshold: f32) -> bool {
+    pub fn should_crystallize_branchless(&self, crystal_threshold: f32) -> bool {
         (self.stigmergic_density >= crystal_threshold) & (crystal_threshold > 0.0)
     }
 
+    /// Returns `current_ptr` wrapped as a strongly-typed [`gcso_tagged_ptr_t`].
     #[inline(always)]
-    fn current_tagged_ptr(&self) -> gcso_tagged_ptr_t {
+    pub fn current_tagged_ptr(&self) -> gcso_tagged_ptr_t {
         gcso_tagged_ptr_t(self.current_ptr)
     }
+    /// Returns `prev_ptr` wrapped as a strongly-typed [`gcso_tagged_ptr_t`].
     #[inline(always)]
-    fn prev_tagged_ptr(&self) -> gcso_tagged_ptr_t {
+    pub fn prev_tagged_ptr(&self) -> gcso_tagged_ptr_t {
         gcso_tagged_ptr_t(self.prev_ptr)
     }
+    /// Extracts the active 5-bit Action Mode bitmask (`ACTION_MODE_*`) embedded in `current_ptr`.
     #[inline(always)]
-    fn active_action_mode(&self) -> u8 {
+    pub fn active_action_mode(&self) -> u8 {
         gcso_tagged_ptr_t(self.current_ptr).action_mode_flags()
     }
+    /// Extracts the 3-bit Target Attractor Working Lane ID (`0..=7`) embedded in `current_ptr`.
     #[inline(always)]
-    fn target_attractor_slot(&self) -> u8 {
+    pub fn target_attractor_slot(&self) -> u8 {
         gcso_tagged_ptr_t(self.current_ptr).target_attractor_slot()
     }
+    /// Extracts the 8-bit Micro-Swarm Quorum bitmask (`bits 8..=15`) embedded in `self.flags`.
     #[inline(always)]
-    fn swarm_quorum_mask(&self) -> u8 {
+    pub fn swarm_quorum_mask(&self) -> u8 {
         ((self.flags & TRAIL_SWARM_QUORUM_MASK) >> TRAIL_SWARM_QUORUM_SHIFT) as u8
     }
 
+    /// Updates the 8-bit Micro-Swarm Quorum bitmask (`bits 8..=15`) and resolution/escalation flags.
     #[inline(always)]
-    fn set_swarm_quorum_state(&mut self, quorum_mask: u8, hot_path_resolved: bool) {
+    pub fn set_swarm_quorum_state(&mut self, quorum_mask: u8, hot_path_resolved: bool) {
         let cleared = self.flags
             & !(TRAIL_SWARM_QUORUM_MASK | TRAIL_FLAG_SWARM_RESOLVED | TRAIL_FLAG_SWARM_ESCALATED);
         let status_bit = branchless_select_u32(
@@ -1146,8 +944,9 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         self.flags = cleared | (u32::from(quorum_mask) << TRAIL_SWARM_QUORUM_SHIFT) | status_bit;
     }
 
+    /// Packs `(next_addr, attractor_slot_id, action_mode_flags, phase_q7)` and advances the trail.
     #[inline(always)]
-    fn record_action_transition(
+    pub fn record_action_transition(
         &mut self,
         next_addr: u64,
         attractor_slot_id: u8,
@@ -1170,8 +969,11 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
             | branchless_select_u32(skip_on, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, 0);
     }
 
+    /// Evolves the trail's `current_ptr` Action Mode flags and Target Working Lane ID bottom-up,
+    /// preserving 32-bit `target_anchor_id` in `cluster_id` when `target_anchor_id != 0` and
+    /// `!repulsion_triggered`.
     #[inline(always)]
-    fn evolve_trail_mode_stigmergically(
+    pub fn evolve_trail_mode_stigmergically(
         &mut self,
         entropy_h_tilde: f32,
         repulsion_triggered: bool,
@@ -1205,13 +1007,17 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         evolved
     }
 
+    /// Evaluates circular phase coherence $\mathcal{C}_{\mathrm{phase}} \in [-1.0, 1.0]$ with `slot_phases`.
     #[inline(always)]
-    fn phase_coherence_with(&self, slot_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> f32 {
+    pub fn phase_coherence_with(&self, slot_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> f32 {
         coherence_from_word_arrays_64(trail_phase_words_ref(self), &load_q7_words_64(slot_phases))
     }
 
+    /// Evaluates the trail's 64-head circular resultant statistics $(\bar{R}_c, \bar{\theta}_{\mathrm{Q7}}, \kappa_c)$
+    /// alongside its Phase-Proximity Gravity mass $M_{\mathrm{grav}} = \rho_{\mathrm{stigmergy}} / (1 - \bar{R}_c + \epsilon)$
+    /// in $\mathcal{O}(1)$ division-free (`0 fdiv`) mode.
     #[inline(always)]
-    fn evaluate_trail_circular_stats_and_gravity(&self) -> (f32, gcso_q7_t, f32, f32) {
+    pub fn evaluate_trail_circular_stats_and_gravity(&self) -> (f32, gcso_q7_t, f32, f32) {
         let (r_bar, mean_q7, kappa) = circular_resultant_from_words_64(trail_phase_words_ref(self));
         let gravity = branchless_phase_proximity_gravity_f32(
             self.stigmergic_density,
@@ -1221,8 +1027,10 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         (r_bar, mean_q7, kappa, gravity)
     }
 
+    /// Applies **Zero-Hyperparameter Phase-Proximity Resonance** from a single anchor on the
+    /// unified phase manifold (`anchor_phases`, `anchor_base_energy`) in strictly constant time (`0` branches).
     #[inline]
-    fn apply_unified_field_anchor_resonance(
+    pub fn apply_unified_field_anchor_resonance(
         &mut self,
         anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         anchor_base_energy: f32,
@@ -1291,8 +1099,15 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         (resonant_pull, coherence)
     }
 
+    /// Applies **Order-Invariant (Commutative) Unified-Field Multi-Anchor Resonance** across an
+    /// arbitrary slice of anchors (`anchor_phases`, `anchor_base_energies`) and optional repulsive
+    /// phase inhibitor (`repulsion_phases_and_strength`) on a **single unified phase manifold**
+    /// using register-resident 8-word SWAR accumulators (`0` branches, `0 fdiv`).
+    /// Folds an arbitrary slice of anchors (`anchor_phases`, `anchor_base_energies`) and optional
+    /// repulsive phase inhibitor (`repulsion_phases_and_strength`) starting from pre-loaded 8-word
+    /// SWAR registers `init_w` (`0` entry reload) and returning `(final_pull_force, mean_coherence, active_anchor_count, post_words)`.
     #[inline]
-    fn apply_unified_field_anchor_slice_resonance_from_words(
+    pub fn apply_unified_field_anchor_slice_resonance_from_words(
         &mut self,
         init_w: [u64; NUM_STIGMERGIC_GRANULES],
         anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
@@ -1348,8 +1163,11 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         (final_pull, mean_coh, active_anchors, run_w)
     }
 
+    /// Folds an arbitrary slice of anchors (`anchor_phases`, `anchor_base_energies`) on the single
+    /// unified phase manifold and returns `(final_pull_force, mean_coherence, active_anchor_count, post_words)`
+    /// directly in 8 `u64` SWAR registers (`0` exit reload).
     #[inline(always)]
-    fn apply_unified_field_anchor_slice_resonance_to_words(
+    pub fn apply_unified_field_anchor_slice_resonance_to_words(
         &mut self,
         anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
@@ -1364,8 +1182,11 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         )
     }
 
+    /// Folds an arbitrary slice of anchors (`anchor_phases`, `anchor_base_energies`) and optional
+    /// repulsive phase inhibitor (`repulsion_phases_and_strength`) on a **single unified phase manifold**
+    /// using register-resident 8-word SWAR accumulators (`0` branches, `0 fdiv`).
     #[inline(always)]
-    fn apply_unified_field_anchor_slice_resonance(
+    pub fn apply_unified_field_anchor_slice_resonance(
         &mut self,
         anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
@@ -1380,8 +1201,11 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         (final_pull, mean_coh, active_anchors)
     }
 
+    /// Bridges the "unwritten space between the lines" (**Limina / Inter-Memory Hallucination**)
+    /// from `prev_memory_trail` ($M_{t-1}$) to `self` ($M_t$) in a **single fused 8-word SWAR pass**
+    /// (`0` branches, zero temporary array stack spills).
     #[inline]
-    fn bridge_liminal_hallucinated_trail(
+    pub fn bridge_liminal_hallucinated_trail(
         &mut self,
         prev_memory_trail: &gcso_pointer_trail_t,
         interpolation_u7: u8,
@@ -1606,8 +1430,10 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         (coh, log_prob, contradiction)
     }
 
+    /// Links `self` ($M_{t-1}$) to `next_trail` ($M_t$, identified by `next_trail_id`) by setting
+    /// `self.linked_trail_id = next_trail_id` and bridging their inter-memory **Limina** gap.
     #[inline(always)]
-    fn link_with_next_hallucinated_trail(
+    pub fn link_with_next_hallucinated_trail(
         &mut self,
         next_trail_id: u32,
         next_trail: &mut gcso_pointer_trail_t,
@@ -1622,8 +1448,11 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         )
     }
 
+    /// Evaluates the **Bayes-Attention Stigmergic Transition Score** from `self` ($M_t$) to a
+    /// candidate memory trail `candidate_trail` ($M_j$, identified by `candidate_trail_id`) in
+    /// strictly constant time (`0` branches, `0 fdiv`).
     #[inline(always)]
-    fn evaluate_bayesian_transition_score_with(
+    pub fn evaluate_bayesian_transition_score_with(
         &self,
         candidate_trail_id: u32,
         candidate_trail: &gcso_pointer_trail_t,
@@ -1660,8 +1489,10 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         (total_score, coh, is_coherent)
     }
 
+    /// Synchronizes `self.flags` (`TRAIL_FLAG_PHASE_STEER_ACTIVE` and `TRAIL_FLAG_INERTIAL_SKIP_ACTIVE`)
+    /// with the 5-bit `ACTION_MODE_*` flags embedded in `self.current_ptr` in branchless constant time.
     #[inline(always)]
-    fn sync_flags_with_current_ptr(&mut self) {
+    pub fn sync_flags_with_current_ptr(&mut self) {
         let mode = unpack_action_mode_from_tag(gcso_tagged_ptr_t(self.current_ptr).unpack_tag());
         let dpsr_on = (mode & ACTION_MODE_PHASE_STEER) != 0;
         let skip_on = (mode & ACTION_MODE_LAYER_SKIP) != 0;
@@ -1672,8 +1503,9 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
             | branchless_select_u32(skip_on, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, 0);
     }
 
+    /// Evaluates non-linear cross-slot synergy and liminal beat interference between two working lanes.
     #[inline]
-    fn apply_cross_slot_synergy(
+    pub fn apply_cross_slot_synergy(
         &mut self,
         slot_a: u32,
         phases_a: &[gcso_q7_t; MAX_ATTENTION_HEADS],
@@ -1716,8 +1548,9 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         (synergy_pull, coherence)
     }
 
+    /// Applies branchless mutual inhibition gating to the trail's accumulated phase vector and pull force.
     #[inline]
-    fn apply_mutual_slot_inhibition(
+    pub fn apply_mutual_slot_inhibition(
         &mut self,
         inhibitor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
         inhibition_strength: f32,
@@ -1738,8 +1571,11 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         damped_pull
     }
 
+    /// Register-resident evaluator for **8-Lane Coupled Neighborhood Synergy & Mutual Inhibition**
+    /// starting from pre-loaded 8-word SWAR registers `acc_w` and returning
+    /// `(damped_pull_force, mean_coherence, active_neighbor_count, post_words)`.
     #[inline]
-    fn apply_neighborhood_synergy_from_bank_from_words(
+    pub fn apply_neighborhood_synergy_from_bank_from_words(
         &mut self,
         mut acc_w: [u64; NUM_STIGMERGIC_GRANULES],
         slot_phase_bank: &[[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS],
@@ -1827,8 +1663,10 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         (total_pull, mean_coh, active_neighbors, acc_w)
     }
 
+    /// Evaluates **8-Lane Coupled Neighborhood Synergy & Mutual Inhibition** and returns both
+    /// `(damped_pull_force, mean_coherence, active_neighbor_count, post_words)` in registers (`0` exit reload).
     #[inline(always)]
-    fn apply_neighborhood_synergy_from_bank_to_words(
+    pub fn apply_neighborhood_synergy_from_bank_to_words(
         &mut self,
         slot_phase_bank: &[[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS],
         slot_weights: &[f32; MAX_ATTRACTOR_DOMAINS],
@@ -1847,8 +1685,10 @@ impl StigmergicTrailOps for gcso_pointer_trail_t {
         )
     }
 
+    /// Unified single-source-of-truth evaluator for **8-Lane Coupled Neighborhood Synergy & Mutual Inhibition**
+    /// across `slot_phase_bank` (`[[gcso_q7_t; 64]; 8]`) and `slot_weights` (`[f32; 8]`).
     #[inline(always)]
-    fn apply_neighborhood_synergy_from_bank(
+    pub fn apply_neighborhood_synergy_from_bank(
         &mut self,
         slot_phase_bank: &[[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS],
         slot_weights: &[f32; MAX_ATTRACTOR_DOMAINS],
@@ -2182,7 +2022,7 @@ pub fn evaluate_trail_chain_cohomology_and_joint_log_prob(
 }
 
 /// Bridges all consecutive inter-memory gaps (**Limina**) across `trail_chain` via
-/// [`StigmergicTrailOps::bridge_liminal_hallucinated_trail`], recording any self-contradictory
+/// [`gcso_pointer_trail_t::bridge_liminal_hallucinated_trail`], recording any self-contradictory
 /// transitions ($H^1(K; \mathcal{F}) \neq 0$) into `bloom_filter`.
 ///
 /// Returns `(total_joint_log_prob, repulsed_transition_count)`.
@@ -2345,21 +2185,6 @@ pub trait PointerActionHub: Liminal + Send + Sync {
     ) -> Option<([u64; NUM_STIGMERGIC_GRANULES], f32)> {
         None
     }
-}
-
-// ===================================================================
-// 2. Mezzo Swarm Cell Chunk Operations
-// ===================================================================
-
-/// Mezzo-path trait for cellular swarm cell chunk step processing across PagedBlocks (**Mezzo Level**).
-///
-/// Requires [`Liminal`] to enforce epistemic horizon and constant-time execution at the type level.
-pub trait StigmergicChunkOps: Liminal + Send + Sync {
-    /// Updates local cellular swarm cell state across PagedBlock token chunk boundaries.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `chunk_len == 0`.
-    fn step_chunk(&mut self, mask: &gcso_paged_bitmask_t, chunk_len: u32) -> GcsoResult<()>;
 }
 
 /// Validates optional Query/Key tensor slice lengths and `GCSO_RESTRICT` pairwise disjointness.
@@ -2605,3 +2430,28 @@ pub trait ActionHub: Liminal + PhaseSteering + PointerActionHub + FastPathLedger
 
 impl<T> ActionHub for T where T: Liminal + PhaseSteering + PointerActionHub + FastPathLedger + ?Sized
 {}
+
+impl gcso_pointer_trail_t {
+    /// Branchlessly evaluates whether a pointer trail qualifies for bottom-up macro
+    /// crystallization (`stigmergic_density >= density_thresh && r_bar_t >= coherence_thresh && !repulsion_active`)
+    /// and stamps or clears [`TRAIL_FLAG_CRYSTALLIZED_CANDIDATE`] on `self.flags` in $\mathcal{O}(1)$.
+    #[inline(always)]
+    pub fn evaluate_crystallization_candidacy(
+        &mut self,
+        density_crystallization_thresh: f32,
+        coherence_crystallization_thresh: f32,
+        r_bar_t: f32,
+    ) -> bool {
+        let density_ok = self.should_crystallize_branchless(density_crystallization_thresh)
+            & branchless_is_finite_f32(density_crystallization_thresh);
+        let coherence_ok = (r_bar_t >= coherence_crystallization_thresh)
+            & (coherence_crystallization_thresh >= 0.0)
+            & branchless_is_finite_f32(coherence_crystallization_thresh)
+            & branchless_is_finite_f32(r_bar_t);
+        let not_repulsed = (self.flags & TRAIL_FLAG_REPULSION_ACTIVE) == 0;
+        let is_candidate = density_ok & coherence_ok & not_repulsed;
+        self.flags = (self.flags & !TRAIL_FLAG_CRYSTALLIZED_CANDIDATE)
+            | branchless_select_u32(is_candidate, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, 0);
+        is_candidate
+    }
+}

@@ -527,7 +527,18 @@ impl ActionHubEngine {
             || matches!(distortion.kind, LayerDistortionKind::ActiveOverdrive)
         {
             let released = self.release_sandbox_lanes();
-            *active_sandbox_lane = None;
+            if let Some(lane) = *active_sandbox_lane {
+                let lane_bit = if usize::from(lane) < MAX_ATTRACTOR_DOMAINS {
+                    1u8 << lane
+                } else {
+                    0
+                };
+                let still_sandbox = lane_bit != 0
+                    && ((self.slot_enabled_mask & self.slot_sandbox_mask) & lane_bit) != 0;
+                if !still_sandbox {
+                    *active_sandbox_lane = None;
+                }
+            }
             telemetry.reset_assimilation_dwell();
             telemetry.reset_sandbox_improve_dwell();
             return if released > 0 {

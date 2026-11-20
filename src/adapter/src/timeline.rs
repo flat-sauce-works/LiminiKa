@@ -316,7 +316,7 @@ impl GcsoDualTrackTimeline {
     }
 
     /// Composes this container's persona circuit (`self`) with `overlay` using the core
-    /// [`CognitiveCircuitPlasticity::compose_persona_circuit`] trait (`blend_q7` in `0..=128`).
+    /// [`liminika_core::CognitiveTrajectoryLedger::compose_persona_circuit`] (`blend_q7` in `0..=128`).
     #[must_use]
     pub fn compose_persona_circuits(
         &self,

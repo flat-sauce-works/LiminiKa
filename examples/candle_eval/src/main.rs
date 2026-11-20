@@ -24,8 +24,7 @@ use liminika_core::runtime::{
     ObjectiveFact, RamPhaseKvCacheOps, StandardPhaseKvGopCache, SubjectivePersona,
 };
 use liminika_core::stigmergy::{
-    CognitiveCircuitBankOps, CognitiveCircuitPlasticity, StandardCognitiveBank,
-    StigmergicActionDecision,
+    CognitiveCircuitBankOps, StandardCognitiveBank, StigmergicActionDecision,
 };
 use tokenizers::Tokenizer;
 

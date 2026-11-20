@@ -21,7 +21,6 @@ use crate::liminal::{
     Liminal, DEFAULT_ENTROPY_EPS, GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT,
     MAX_ATTENTION_HEADS,
 };
-use crate::stigmergy::trail::StigmergicActionPtrOps;
 
 /// Cold-path trait for entropy-driven branch evaluation and bifurcation tracking (**Macro Level**).
 pub trait EntropyEvaluator: Liminal + Send + Sync {

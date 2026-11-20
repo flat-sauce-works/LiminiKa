@@ -1,37 +1,31 @@
 // name: src/core/src/stigmergy/attractor/sample_steering.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Coherence-safe [`EpisodicPhaseSample`], blanket [`EpisodicSampleSteering`], and
-//! [`AttractorGrowthCoordinator`].
+//! Coherence-safe [`EpisodicPhaseSample`] and blanket [`EpisodicSampleSteering`].
 
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_max_f32, branchless_min_f32,
-    branchless_phase_coherence_inv_temp_scale, branchless_q7_conjugate_64,
-    branchless_rad_to_phase_step_u8, branchless_relu_f32, branchless_splitmix64,
-    branchless_von_mises_kappa, circular_r_bar_from_words_64, coherence_from_word_arrays_64,
+    branchless_q7_conjugate_64, branchless_rad_to_phase_step_u8, branchless_relu_f32,
+    branchless_splitmix64, branchless_von_mises_kappa, circular_r_bar_from_words_64,
     is_phase_profile_nonzero_64, is_word_array_uniform_64, load_q7_words_64, store_q7_word_at,
     store_q7_words_64, swar_q7_phase_step_filter_words_64, swar_q7_phase_step_filter_x8,
-    swar_q7_scale_le128_with_bias_x8, swar_words_nonzero_64, AlignedBuffer16, AlignedBuffer32,
-    AlignedSlice, AlignedSliceMut32, PhaseSteering, Pod, SWAR_LOW7_MASK_64, SWAR_SIGN_MASK_64,
+    swar_q7_scale_le128_with_bias_x8, swar_words_nonzero_64, AlignedBuffer16, AlignedSlice,
+    AlignedSliceMut32, PhaseSteering, Pod, SWAR_LOW7_MASK_64, SWAR_SIGN_MASK_64,
     SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_i32, gcso_q7_t, GcsoResult, MAX_ATTENTION_HEADS,
     MAX_ATTRACTOR_DOMAINS,
 };
-use crate::stigmergy::attractor::traits::{AttractorField, PersonaPatcher};
 use crate::stigmergy::attractor::{
     gcso_anchor_type_t, GCSO_ANCHOR_TYPE_CRYSTALLIZED, GCSO_ANCHOR_TYPE_EMBEDDING,
     GCSO_ANCHOR_TYPE_SYSTEM_PROMPT, GCSO_ANCHOR_TYPE_TOPOLOGICAL, MAX_EMBEDDING_DIM,
 };
-use crate::stigmergy::crystal::{ColdPathTrailCrystalExt, CrystallizedAttractorRecord};
-use crate::stigmergy::trail::{
-    gcso_pointer_trail_t, gcso_tagged_ptr_t, trail_phase_words_ref, StigmergicActionPtrOps,
-    StigmergicTrailOps,
-};
+use crate::stigmergy::crystal::CrystallizedAttractorRecord;
+use crate::stigmergy::trail::{gcso_pointer_trail_t, gcso_tagged_ptr_t, trail_phase_words_ref};
 use crate::stigmergy::{
-    MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
-    TRAIL_FLAG_REPULSION_ACTIVE,
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, MAX_ATTRACTOR_PULL_FORCE,
+    MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_REPULSION_ACTIVE,
 };
 
 use super::*;
@@ -129,7 +123,7 @@ pub const fn project_f32_slice_to_q7_phases(embedding: &[f32]) -> [gcso_q7_t; MA
 }
 
 /// Synthesizes a 16-element normalized `f32` embedding preview from a 64-head Q7 phase array
-/// so that absorbed phase samples can be registered via [`AttractorField::add_embedding_anchor`].
+/// so that absorbed phase samples can be registered via [`crate::stigmergy::AttractorFieldEngine::add_embedding_anchor`].
 #[inline(always)]
 #[must_use]
 pub(crate) const fn q7_phases_to_embedding16(
@@ -178,7 +172,7 @@ pub trait EpisodicPhaseSample {
     /// Returns the preferred working lane (`0..=7`) for this sample point.
     #[inline(always)]
     fn preferred_working_lane(&self) -> u32 {
-        DOMAIN_PERSONA
+        u32::from(ATTRACTOR_SLOT_PERSONA)
     }
 
     /// Returns the C-ABI anchor classification type when this sample crystallizes into a permanent anchor.
@@ -235,7 +229,7 @@ macro_rules! impl_episodic_f32_seq {
             }
             #[inline(always)]
             fn preferred_working_lane(&self) -> u32 {
-                DOMAIN_KNOWLEDGE
+                u32::from(ATTRACTOR_SLOT_KNOWLEDGE)
             }
             #[inline(always)]
             fn sample_anchor_type(&self) -> gcso_anchor_type_t {
@@ -624,7 +618,7 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
 
     /// Absorbs `self` directly into an ActionHub pointer trail (`trail_inout`) via $S^1$ geodesic
     /// phase-proximity resonance, updates `stigmergic_density`, evaluates circular statistics
-    /// $(\bar{R}_c, \kappa_c)$, and stamps [`TRAIL_FLAG_CRYSTALLIZED_CANDIDATE`]
+    /// $(\bar{R}_c, \kappa_c)$, and stamps [`crate::stigmergy::TRAIL_FLAG_CRYSTALLIZED_CANDIDATE`]
     /// in constant time (`0` data-dependent branches, `0 fdiv`).
     #[inline]
     fn resonate_into_trail(
@@ -720,166 +714,3 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
 }
 
 impl<T: EpisodicPhaseSample + ?Sized> EpisodicSampleSteering for T {}
-
-/// Blanket-implemented coordinator trait (`impl<T: AttractorField + PersonaPatcher + ?Sized> AttractorGrowthCoordinator for T {}`)
-/// that enables any attractor field or macro orchestrator to absorb arbitrary [`EpisodicPhaseSample`]
-/// inputs as points on the $SO(2)^{64}$ manifold, strengthen gravitational precision ($\kappa_c$),
-/// steer RoPE phase deltas + inverse temperature $\beta_{\mathrm{eff}}$, and crystallize persistent
-/// persona modes ready for `.gcso` serialization.
-pub trait AttractorGrowthCoordinator: AttractorField + PersonaPatcher {
-    /// Absorbs a single [`EpisodicPhaseSample`] point onto the unified phase manifold:
-    /// 1. Resonates `sample` into `trail_inout` via [`EpisodicSampleSteering::resonate_into_trail`].
-    /// 2. Evaluates the updated 64-head circular resultant length $\bar{R}_c$ and von Mises
-    ///    concentration $\kappa_c$.
-    /// 3. If `trail_inout` crosses `(crystallize_density_thresh, crystallize_r_bar_thresh)`,
-    ///    registers a new permanent anchor into `self` and triggers [`AttractorField::aggregate_bottom_up`].
-    ///
-    /// # Errors
-    /// Propagates any error from [`AttractorField::add_embedding_anchor`] or [`AttractorField::aggregate_bottom_up`].
-    #[inline]
-    fn absorb_episodic_sample<S: EpisodicPhaseSample + ?Sized>(
-        &mut self,
-        sample: &S,
-        domain_salt: u32,
-        crystallize_density_thresh: f32,
-        crystallize_r_bar_thresh: f32,
-        trail_inout: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<AttractorGrowthReport> {
-        let mut report = sample.resonate_into_trail(
-            domain_salt,
-            crystallize_density_thresh,
-            crystallize_r_bar_thresh,
-            trail_inout,
-        );
-        if report.resonant_pull_force <= 0.0 {
-            return Ok(report);
-        }
-
-        let should_crystallize = (trail_inout.flags & TRAIL_FLAG_CRYSTALLIZED_CANDIDATE) != 0;
-        if should_crystallize {
-            let emb16 = AlignedBuffer32::new(q7_phases_to_embedding16(
-                &trail_inout.accumulated_phase_delta,
-            ));
-            let mass = branchless_max_f32(
-                branchless_flush_subnormal_f32(branchless_relu_f32(sample.sample_mass())),
-                1.0,
-            );
-            if let Ok(new_id) = self.add_embedding_anchor(
-                &emb16.as_aligned_slice(),
-                sample.sample_anchor_type(),
-                mass,
-            ) {
-                report.crystallized_anchor_id = new_id;
-                trail_inout.target_anchor_id = new_id;
-                trail_inout.cluster_id = new_id;
-            }
-            let _ = self.aggregate_bottom_up()?;
-        }
-
-        Ok(report)
-    }
-
-    /// Absorbs a sequence of [`EpisodicPhaseSample`] points across a conversation horizon,
-    /// accumulating gravitational pull and sharpening persona concentration $\kappa_c$, and
-    /// quantizes the resulting persistent topological persona profile into `persona_profile_out`.
-    ///
-    /// Returns `(final_growth_report, crystallized_anchor_count)`.
-    ///
-    /// # Errors
-    /// Propagates any error from [`Self::absorb_episodic_sample`] or
-    /// [`PersonaPatcher::quantize_persistent_topological_mode`].
-    #[inline]
-    fn absorb_episodic_sample_batch<S: EpisodicPhaseSample>(
-        &mut self,
-        samples: &[S],
-        domain_salt: u32,
-        crystallize_density_thresh: f32,
-        crystallize_r_bar_thresh: f32,
-        trail_inout: &mut gcso_pointer_trail_t,
-        persona_profile_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-    ) -> GcsoResult<(AttractorGrowthReport, u32)> {
-        let mut last_report = AttractorGrowthReport::default();
-        let mut crystallized_total = 0u32;
-
-        for (idx, sample) in samples.iter().enumerate() {
-            let step_salt = domain_salt.wrapping_add(idx as u32);
-            let rep = self.absorb_episodic_sample(
-                sample,
-                step_salt,
-                crystallize_density_thresh,
-                crystallize_r_bar_thresh,
-                trail_inout,
-            )?;
-            if rep.crystallized_anchor_id != 0 {
-                crystallized_total = crystallized_total.wrapping_add(1);
-            }
-            last_report = rep;
-        }
-
-        let trails = [*trail_inout];
-        let (r_bar, kappa) = self.quantize_persistent_topological_mode(
-            &trails,
-            branchless_clamp_f32(crystallize_r_bar_thresh, 0.0, 1.0),
-            persona_profile_out,
-        )?;
-        last_report.resultant_r_bar = r_bar;
-        last_report.von_mises_kappa = kappa;
-        Ok((last_report, crystallized_total))
-    }
-
-    /// Evaluates the precision-guided inverse-temperature scale $\beta_{\mathrm{eff}} \in [0.25, 4.0]$
-    /// directly from a growth report's concentration $\kappa_c$ and phase coherence, allowing
-    /// well-grown attractors (large sample count $\to$ high $\kappa_c$) to steer RoPE/Attention
-    /// with higher precision than sparse initial attractors.
-    #[inline(always)]
-    #[must_use]
-    fn eval_growth_precision_inv_temp(
-        &self,
-        growth_report: &AttractorGrowthReport,
-        phase_coherence: f32,
-        base_gain: f32,
-    ) -> f32 {
-        let kappa_norm = branchless_clamp_f32(growth_report.von_mises_kappa * 0.10, 0.25, 2.0);
-        let eff_gain = branchless_relu_f32(base_gain) * kappa_norm;
-        branchless_phase_coherence_inv_temp_scale(phase_coherence, eff_gain)
-    }
-
-    /// End-to-end blanket step that absorbs an [`EpisodicPhaseSample`] into `trail_inout`,
-    /// evaluates unified-field gravitational force to produce a `PhaseStepFilter`-filtered RoPE phase delta
-    /// vector (`rope_deltas_out: &mut [gcso_q7_t; 64]`), and returns `(growth_report, inv_temp_beta_eff)`.
-    ///
-    /// # Errors
-    /// Propagates any error from [`Self::absorb_episodic_sample`] or [`AttractorField::evaluate_field_force`].
-    #[inline]
-    fn absorb_and_steer_rope_step<S: EpisodicPhaseSample + ?Sized>(
-        &mut self,
-        sample: &S,
-        domain_salt: u32,
-        crystallize_density_thresh: f32,
-        crystallize_r_bar_thresh: f32,
-        qdps_min_step_rad: f32,
-        inv_temp_base_gain: f32,
-        trail_inout: &mut gcso_pointer_trail_t,
-        rope_deltas_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-    ) -> GcsoResult<(AttractorGrowthReport, f32)> {
-        let report = self.absorb_episodic_sample(
-            sample,
-            domain_salt,
-            crystallize_density_thresh,
-            crystallize_r_bar_thresh,
-            trail_inout,
-        )?;
-        let _field_pull = self.evaluate_field_force(trail_inout, rope_deltas_out)?;
-        let step_u8 = branchless_rad_to_phase_step_u8(qdps_min_step_rad);
-        let mut rope_w = load_q7_words_64(rope_deltas_out);
-        if step_u8 > 1 {
-            rope_w = swar_q7_phase_step_filter_words_64(&rope_w, step_u8);
-            store_q7_words_64(rope_deltas_out, &rope_w);
-        }
-        let coh = coherence_from_word_arrays_64(trail_phase_words_ref(trail_inout), &rope_w);
-        let beta_eff = self.eval_growth_precision_inv_temp(&report, coh, inv_temp_base_gain);
-        Ok((report, beta_eff))
-    }
-}
-
-impl<T: AttractorField + PersonaPatcher + ?Sized> AttractorGrowthCoordinator for T {}

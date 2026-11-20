@@ -137,7 +137,11 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
 
     // Populate slot 2 with a near-duplicate of slot 0 and verify online consolidation
     centroids[2] = CrystallizedAttractorRecord::new_empty(303, ATTRACTOR_SLOT_KNOWLEDGE, 0);
-    let _ = centroids[2].absorb_sample_point_64(&[29i8; MAX_ATTENTION_HEADS], 1.2);
+    let sample_c2 = [29i8; MAX_ATTENTION_HEADS];
+    let _ = centroids[2].absorb_sample_point_64(
+        crate::liminal::Scoped::interior(&sample_c2).seal_grounded(),
+        1.2,
+    );
     let (merged_cnt, pruned_cnt) = CrystallizedAttractorRecord::merge_and_prune_centroids_64(
         &mut centroids,
         DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
@@ -233,8 +237,16 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
         CrystallizedAttractorRecord::new_empty(101, ATTRACTOR_SLOT_KNOWLEDGE, 0x0010_0000),
         CrystallizedAttractorRecord::new_empty(202, ATTRACTOR_SLOT_PERSONA, 0x0024_0000),
     ];
-    let _ = lim_centroids[0].absorb_sample_point_64(&[16i8; MAX_ATTENTION_HEADS], 2.5);
-    let _ = lim_centroids[1].absorb_sample_point_64(&[48i8; MAX_ATTENTION_HEADS], 2.5);
+    let lim_p0 = [16i8; MAX_ATTENTION_HEADS];
+    let lim_p1 = [48i8; MAX_ATTENTION_HEADS];
+    let _ = lim_centroids[0].absorb_sample_point_64(
+        crate::liminal::Scoped::interior(&lim_p0).seal_grounded(),
+        2.5,
+    );
+    let _ = lim_centroids[1].absorb_sample_point_64(
+        crate::liminal::Scoped::interior(&lim_p1).seal_grounded(),
+        2.5,
+    );
     let mut lim_trail = gcso_pointer_trail_t {
         accumulated_phase_delta: [32i8; MAX_ATTENTION_HEADS],
         stigmergic_density: 1.0,
@@ -1983,7 +1995,6 @@ struct MockActionHubComposite {
     num_heads: u32,
     default_phase: gcso_q7_t,
     branch_mode: u32,
-    crystallized_count: u32,
 }
 
 impl PhaseSteering for MockActionHubComposite {
@@ -2077,98 +2088,6 @@ impl DecodingGate for MockActionHubComposite {
     fn set_tau_flux(&mut self, _tau_flux: f32) {}
 }
 
-impl PersonaPatcher for MockActionHubComposite {
-    fn apply_patch(&mut self, _patch_data: &[u8]) -> GcsoResult<()> {
-        Ok(())
-    }
-}
-
-impl AttractorField for MockActionHubComposite {
-    fn anchor_count(&self) -> u32 {
-        self.crystallized_count
-    }
-
-    fn apply_evaporative_decay(&mut self) {}
-    fn total_potential_energy(&self) -> f32 {
-        1.0
-    }
-    fn pressure_ratio(&self) -> f32 {
-        0.25
-    }
-    fn evaporate_weakest_anchor(&mut self) -> Option<u32> {
-        None
-    }
-
-    fn add_system_prompt_anchor(&mut self, _prompt: &str, _weight: f32) -> GcsoResult<u32> {
-        Ok(1)
-    }
-
-    fn add_embedding_anchor(
-        &mut self,
-        _embedding: &AlignedSlice32<'_, f32>,
-        _anchor_type: gcso_anchor_type_t,
-        _weight: f32,
-    ) -> GcsoResult<u32> {
-        Ok(1)
-    }
-
-    fn add_anchor(
-        &mut self,
-        _anchor_type: gcso_anchor_type_t,
-        _vec: &AlignedSlice32<'_, f32>,
-        _dim: usize,
-    ) -> GcsoResult<u32> {
-        Ok(1)
-    }
-
-    fn inject_phase_repulsion(
-        &mut self,
-        _repulsion_deltas: &AlignedSlice16<'_, gcso_q7_t>,
-        _gain: f32,
-    ) -> GcsoResult<()> {
-        Ok(())
-    }
-
-    fn aggregate_bottom_up(&mut self) -> GcsoResult<u32> {
-        self.crystallized_count += 1;
-        Ok(1)
-    }
-
-    fn clear_anchors(&mut self) -> GcsoResult<()> {
-        self.crystallized_count = 0;
-        Ok(())
-    }
-}
-
-impl MultiDomainAttractorSpace for MockActionHubComposite {
-    fn advance_step(&mut self) {}
-
-    fn set_domain_weight(&mut self, _domain_id: u32, _weight: f32) -> GcsoResult<()> {
-        Ok(())
-    }
-
-    fn set_domain_enabled(&mut self, _domain_id: u32, _enabled: bool) -> GcsoResult<()> {
-        Ok(())
-    }
-
-    fn find_dominant_domain(&self) -> (u32, f32) {
-        (1, 2.0)
-    }
-
-    fn evaluate_multi_domain_superposition(
-        &self,
-        trail: &gcso_pointer_trail_t,
-        composite_phase_out: &mut [gcso_q7_t; 64],
-    ) -> f32 {
-        *composite_phase_out = trail.accumulated_phase_delta;
-        1.0
-    }
-
-    fn clear_all_domains(&mut self) -> GcsoResult<()> {
-        Ok(())
-    }
-}
-
 #[test]
 fn test_canonical_modules_and_action_hub_composite() {
     fn assert_action_hub<T: ActionHub + ActionHubGatewayExt>(hub: &T) -> (u32, u32) {
@@ -2183,15 +2102,12 @@ fn test_canonical_modules_and_action_hub_composite() {
         num_heads: 2,
         default_phase: 24,
         branch_mode: 0,
-        crystallized_count: 0,
     };
     assert_eq!(assert_action_hub(&hub), (8, 2));
 
     let mut mask = gcso_paged_bitmask_t::default();
-    <gcso_paged_bitmask_t as crate::stigmergy::PagedBitmaskOps>::set_bit_branchless(&mut mask, 7);
-    assert!(
-        <gcso_paged_bitmask_t as crate::stigmergy::PagedBitmaskOps>::test_bit_branchless(&mask, 7)
-    );
+    mask.set_bit_branchless(7);
+    assert!(mask.test_bit_branchless(7));
 
     let deg = AlignedBuffer32::new([1.0f32, 3.0, 2.0, 0.5]);
     let lmax = eval_gershgorin_lambda_max(&deg.as_aligned_slice()).unwrap();
@@ -2269,11 +2185,6 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
             Ok(())
         }
     }
-    impl PersonaPatcher for MockColdSystem {
-        fn apply_patch(&mut self, _patch_data: &[u8]) -> GcsoResult<()> {
-            Ok(())
-        }
-    }
     impl EntropyEvaluator for MockColdSystem {
         fn eval_stateful(
             &mut self,
@@ -2292,125 +2203,8 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
         fn set_hysteresis_band(&mut self, _band: f32) {}
         fn set_tau_flux(&mut self, _tau_flux: f32) {}
     }
-    impl AttractorField for MockColdSystem {
-        fn anchor_count(&self) -> u32 {
-            1
-        }
-        fn apply_evaporative_decay(&mut self) {}
-        fn total_potential_energy(&self) -> f32 {
-            2.0
-        }
-        fn pressure_ratio(&self) -> f32 {
-            0.1
-        }
-        fn evaporate_weakest_anchor(&mut self) -> Option<u32> {
-            None
-        }
-        fn add_system_prompt_anchor(&mut self, _prompt: &str, _weight: f32) -> GcsoResult<u32> {
-            Ok(1)
-        }
-        fn add_embedding_anchor(
-            &mut self,
-            _embedding: &AlignedSlice32<'_, f32>,
-            _anchor_type: gcso_anchor_type_t,
-            _weight: f32,
-        ) -> GcsoResult<u32> {
-            Ok(1)
-        }
-        fn add_anchor(
-            &mut self,
-            _anchor_type: gcso_anchor_type_t,
-            _vec: &AlignedSlice32<'_, f32>,
-            _dim: usize,
-        ) -> GcsoResult<u32> {
-            Ok(1)
-        }
-        fn inject_phase_repulsion(
-            &mut self,
-            _repulsion_deltas: &AlignedSlice16<'_, gcso_q7_t>,
-            _gain: f32,
-        ) -> GcsoResult<()> {
-            Ok(())
-        }
-        fn aggregate_bottom_up(&mut self) -> GcsoResult<u32> {
-            Ok(1)
-        }
-        fn clear_anchors(&mut self) -> GcsoResult<()> {
-            Ok(())
-        }
-    }
-    impl MultiDomainAttractorSpace for MockColdSystem {
-        fn advance_step(&mut self) {}
-        fn set_domain_weight(&mut self, domain_id: u32, _weight: f32) -> GcsoResult<()> {
-            if (domain_id as usize) >= MAX_ATTRACTOR_DOMAINS {
-                return Err(GCSO_ERROR_INVALID_ARGUMENT);
-            }
-            Ok(())
-        }
-        fn set_domain_enabled(&mut self, domain_id: u32, _enabled: bool) -> GcsoResult<()> {
-            if (domain_id as usize) >= MAX_ATTRACTOR_DOMAINS {
-                return Err(GCSO_ERROR_INVALID_ARGUMENT);
-            }
-            Ok(())
-        }
-        fn find_dominant_domain(&self) -> (u32, f32) {
-            (u32::from(ATTRACTOR_SLOT_PERSONA), 2.0)
-        }
-        fn slot_coupling_matrix(&self) -> u64 {
-            let m = with_slot_pair_coupled_symmetric(
-                0,
-                u32::from(ATTRACTOR_SLOT_PERSONA),
-                u32::from(ATTRACTOR_SLOT_KNOWLEDGE),
-                true,
-            );
-            with_slot_pair_coupled_symmetric(
-                m,
-                u32::from(ATTRACTOR_SLOT_PERSONA),
-                u32::from(ATTRACTOR_SLOT_USER_CONTEXT),
-                true,
-            )
-        }
-        fn evaluate_slot_force(
-            &self,
-            domain_id: u32,
-            _trail: &gcso_pointer_trail_t,
-            slot_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-        ) -> GcsoResult<f32> {
-            match domain_id {
-                1 | 2 | 4 => {
-                    *slot_phase_out = [32i8; MAX_ATTENTION_HEADS];
-                    Ok(2.0)
-                }
-                3 => {
-                    *slot_phase_out = [-96i8; MAX_ATTENTION_HEADS];
-                    Ok(1.5)
-                }
-                0..=7 => {
-                    *slot_phase_out = [0i8; MAX_ATTENTION_HEADS];
-                    Ok(0.0)
-                }
-                _ => Err(GCSO_ERROR_INVALID_ARGUMENT),
-            }
-        }
-        fn evaluate_multi_domain_superposition(
-            &self,
-            trail: &gcso_pointer_trail_t,
-            composite_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-        ) -> f32 {
-            self.evaluate_unified_superposition_from_working_bank(
-                trail,
-                0.35,
-                0.50,
-                composite_phase_out,
-            )
-            .unwrap_or(0.0)
-        }
-        fn clear_all_domains(&mut self) -> GcsoResult<()> {
-            Ok(())
-        }
-    }
 
-    let mut sys = MockColdSystem;
+    let sys = MockColdSystem;
     let mut cfg = gcso_config_t::default();
     init_default_config(&mut cfg).unwrap();
     assert_eq!(validate_config_invariants(&cfg), Ok(()));
@@ -2423,7 +2217,7 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
         )
     );
 
-    let hashed_p = sys.hash_prompt_to_phase_profile("LiminiKa Persona Anchor", 1);
+    let hashed_p = crate::stigmergy::hash_prompt_to_q7_phases("LiminiKa Persona Anchor", 1);
     assert!(hashed_p.iter().any(|&x| x != 0));
 
     let lora_a = AlignedBuffer32::new([1.0f32; 16]);
@@ -2516,14 +2310,26 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
         ..Default::default()
     };
 
-    let rebalanced = sys
-        .rebalance_working_lane_weights_from_trail(&trail)
-        .unwrap();
-    assert!(rebalanced[usize::from(ATTRACTOR_SLOT_PERSONA)] >= 1.0);
-
-    let (final_pull, mean_coh, neighbors) = sys
-        .steer_trail_by_coupled_neighborhood(0.5, 0.5, &mut trail)
-        .unwrap();
+    let mut bank = [[0i8; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS];
+    bank[usize::from(ATTRACTOR_SLOT_PERSONA)] = [32i8; MAX_ATTENTION_HEADS];
+    bank[usize::from(ATTRACTOR_SLOT_KNOWLEDGE)] = [32i8; MAX_ATTENTION_HEADS];
+    bank[usize::from(ATTRACTOR_SLOT_REPULSION)] = [-96i8; MAX_ATTENTION_HEADS];
+    bank[usize::from(ATTRACTOR_SLOT_USER_CONTEXT)] = [32i8; MAX_ATTENTION_HEADS];
+    let weights = [0.0, 2.0, 2.0, 1.5, 2.0, 0.0, 0.0, 0.0];
+    let m = with_slot_pair_coupled_symmetric(
+        0,
+        u32::from(ATTRACTOR_SLOT_PERSONA),
+        u32::from(ATTRACTOR_SLOT_KNOWLEDGE),
+        true,
+    );
+    let coupling = with_slot_pair_coupled_symmetric(
+        m,
+        u32::from(ATTRACTOR_SLOT_PERSONA),
+        u32::from(ATTRACTOR_SLOT_USER_CONTEXT),
+        true,
+    );
+    let (final_pull, mean_coh, neighbors) =
+        trail.apply_neighborhood_synergy_from_bank(&bank, &weights, coupling, 0.5, 0.5);
     assert_eq!(neighbors, 2);
     assert!((mean_coh - 1.0).abs() < 1e-4);
     assert!((final_pull - 6.0).abs() < 0.2);
@@ -3125,4 +2931,75 @@ fn test_stationary_skip_and_spine_bypass_do_not_misdiagnose_passive_saturation()
     let stagnant_report = stagnant_bank.compute_distortion_report();
     assert_eq!(stagnant_report.kind, LayerDistortionKind::PassiveSaturation);
     assert!(stagnant_report.ego_wakeup_recommended);
+}
+
+#[test]
+fn test_workbench_pinned_sandbox_handle_preservation_and_repulsion_sandbox_isolation() {
+    // Bug 1: PINNED | SANDBOX lane must retain its `active_sandbox_lane` handle after RepulsionEscape.
+    let mut hub = ActionHubEngine::new();
+    let pinned_sb = hub
+        .allocate_workbench_lane(&WorkbenchSlotSpec {
+            placement: WorkbenchLanePlacement::Explicit { lane: 5, pin: true },
+            weight: 0.75,
+            flags: WORKBENCH_LANE_FLAG_PINNED | WORKBENCH_LANE_FLAG_SANDBOX,
+            phases: [24; MAX_ATTENTION_HEADS],
+        })
+        .unwrap();
+    assert_eq!(pinned_sb, 5);
+    let mut active_handle = Some(pinned_sb);
+    let mut telemetry = CoreTelemetryBank::default();
+    let cand_words = [0u64; NUM_STIGMERGIC_GRANULES];
+    let ev = hub.step_sandbox_hypothesis_lifecycle(
+        &mut telemetry,
+        &mut active_handle,
+        StigmergicActionDecision::RepulsionEscape,
+        true,
+        0x00,
+        &cand_words,
+        0.5,
+        2,
+        2,
+    );
+    assert_eq!(ev, SandboxLifecycleEvent::Idle);
+    assert_eq!(active_handle, Some(pinned_sb));
+    assert_ne!(
+        (hub.slot_enabled_mask & hub.slot_sandbox_mask) & (1u8 << pinned_sb),
+        0
+    );
+
+    // Bug 2: REPULSION | SANDBOX lane must NOT leak global inhibition into `RuntimeContext` superposition.
+    let mut ctx_base = RuntimeContext::new(Config::default()).unwrap();
+    let mut ctx_sb_rep = RuntimeContext::new(Config::default()).unwrap();
+    let std_spec = WorkbenchSlotSpec::explicit(0, false, 0, 1.0, [32; MAX_ATTENTION_HEADS]);
+    let _ = ctx_base
+        .action_hub_mut()
+        .allocate_workbench_lane(&std_spec)
+        .unwrap();
+    let _ = ctx_sb_rep
+        .action_hub_mut()
+        .allocate_workbench_lane(&std_spec)
+        .unwrap();
+    let _ = ctx_sb_rep
+        .action_hub_mut()
+        .allocate_workbench_lane(&WorkbenchSlotSpec {
+            placement: WorkbenchLanePlacement::Explicit {
+                lane: 6,
+                pin: false,
+            },
+            weight: 1.0,
+            flags: WORKBENCH_LANE_FLAG_REPULSION | WORKBENCH_LANE_FLAG_SANDBOX,
+            phases: [32; MAX_ATTENTION_HEADS],
+        })
+        .unwrap();
+
+    let trail = gcso_pointer_trail_t {
+        accumulated_phase_delta: [32; MAX_ATTENTION_HEADS],
+        ..Default::default()
+    };
+    let mut out_base = [0i8; MAX_ATTENTION_HEADS];
+    let mut out_sb_rep = [0i8; MAX_ATTENTION_HEADS];
+    let pull_base = ctx_base.evaluate_multi_domain_superposition(&trail, &mut out_base);
+    let pull_sb_rep = ctx_sb_rep.evaluate_multi_domain_superposition(&trail, &mut out_sb_rep);
+    assert_eq!(out_base, out_sb_rep);
+    assert!((pull_base - pull_sb_rep).abs() < 1.0e-6);
 }

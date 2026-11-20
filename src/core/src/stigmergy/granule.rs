@@ -32,24 +32,23 @@
 use core::mem::{align_of, offset_of, size_of};
 
 use crate::foundation::{
-    atan2_to_q7_word_x8_simd, branchless_max_f32, branchless_relu_f32, branchless_sincos_q7,
-    coherence_from_uniform_words_x8, is_word_array_uniform_64, load_q7_words_64, store_q7_words_64,
-    swar_q7_abs_u8_x8, swar_q7_circular_diff_x8, swar_u8_mean_round_x8, Pod,
+    atan2_to_q7_word_x8_simd, branchless_mask8_min_delta, branchless_max_f32, branchless_relu_f32,
+    branchless_sincos_q7, coherence_from_uniform_words_x8, is_word_array_uniform_64,
+    load_q7_words_64, store_q7_words_64, swar_q7_abs_u8_x8, swar_q7_circular_diff_x8,
+    swar_u8_mean_round_x8, Pod,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_i32, branchless_select_i8, branchless_select_u32,
     branchless_select_u64, branchless_select_u8, branchless_select_usize, gcso_q7_t, GcsoResult,
-    Liminal, DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
-    NUM_STIGMERGIC_GRANULES, THRESHOLD_RELATIVE_COUPLING,
+    Liminal, LiminalThresholdField, DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, THRESHOLD_RELATIVE_COUPLING,
 };
 use crate::stigmergy::attractor::{AttractorAnchor, CrystallizedAnchorRecord};
 use crate::stigmergy::circuit::{CognitiveOpKind, CognitiveTrajectoryLedger};
 use crate::stigmergy::crystal::{CrystallizedAttractorRecord, DissipativeOverflowReport};
-use crate::stigmergy::ledger::PagedBitmaskOps;
-use crate::stigmergy::pheromone::{StigmergicReconstitutionOps, StigmergicReconstitutionReport};
+use crate::stigmergy::pheromone::StigmergicReconstitutionReport;
 use crate::stigmergy::trail::{
     gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_tagged_ptr_t, trail_phase_words_ref,
-    StigmergicChunkOps,
 };
 use crate::stigmergy::DEFAULT_STIGMERGIC_QUORUM_THRESHOLD;
 
@@ -116,7 +115,7 @@ impl StigmergicGranuleEngine {
     }
 
     /// Fragments, stigmergically drifts, and reconstitutes `trail` against this engine's 8 myopic
-    /// granules via [`StigmergicReconstitutionOps::reconstitute_from_stigmergy_words`], keeping
+    /// granules via [`gcso_pointer_trail_t::reconstitute_from_stigmergy_words`], keeping
     /// `self.cell_phases` synchronized with the reconstituted SWAR words in $\mathcal{O}(1)$.
     #[inline(always)]
     pub fn reconstitute_trail_stigmergically(
@@ -167,9 +166,13 @@ impl StigmergicGranuleEngine {
     }
 }
 
-impl StigmergicChunkOps for StigmergicGranuleEngine {
+impl StigmergicGranuleEngine {
+    /// Updates local cellular swarm cell state across PagedBlock token chunk boundaries.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `chunk_len == 0`.
     #[inline(always)]
-    fn step_chunk(&mut self, mask: &gcso_paged_bitmask_t, chunk_len: u32) -> GcsoResult<()> {
+    pub fn step_chunk(&mut self, mask: &gcso_paged_bitmask_t, chunk_len: u32) -> GcsoResult<()> {
         if chunk_len == 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -458,12 +461,15 @@ impl StigmergicGranuleField {
             g += 1;
         }
 
-        let core_cnt = venn_report.venn_core_mask.count_ones() as u8;
+        let (_min_mask, min_cnt, core_le_noncore) =
+            branchless_mask8_min_delta(0xFF, venn_report.venn_core_mask);
+        let core_cnt = branchless_select_u8(core_le_noncore, min_cnt, 8 - min_cnt);
+        let core_ge_half = (!core_le_noncore) | (min_cnt == 4);
         self.quorum_threshold = branchless_select_u8(
             in_conflict,
             self.quorum_threshold.saturating_add(1).min(7),
             branchless_select_u8(
-                core_cnt >= 4,
+                core_ge_half,
                 self.quorum_threshold.saturating_sub(1).max(4),
                 self.quorum_threshold,
             ),
@@ -900,6 +906,33 @@ pub(crate) fn fold_sincos64_to_words(
     }
     words
 }
+
+/// Unified single-cacheline (`64 B`, `#[repr(C, align(64))]`) cognitive substrate pairing the two
+/// foundational geometric primitives: [`LiminalThresholdField`] (`0..32`) and
+/// [`StigmergicGranuleField`] (`32..64`).
+#[repr(C, align(64))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CognitiveSubstrate {
+    /// Boundary apertures, cognitive window floors, and domain gates (`offset 0..32`).
+    pub liminal: LiminalThresholdField,
+    /// 8-granule stigmergic step gains, noise tolerances, and volatile pheromones (`offset 32..64`).
+    pub stigmergy: StigmergicGranuleField,
+}
+
+impl CognitiveSubstrate {
+    /// Constructs a neutral 64-byte [`CognitiveSubstrate`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            liminal: LiminalThresholdField::new(),
+            stigmergy: StigmergicGranuleField::new(),
+        }
+    }
+}
+
+// SAFETY: `CognitiveSubstrate` is `#[repr(C, align(64))]`, exact size 64 bytes with zero padding.
+unsafe impl Pod for CognitiveSubstrate {}
 
 // SAFETY: `StigmergicOverlapSerendipityReport` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
 unsafe impl Pod for StigmergicOverlapSerendipityReport {}

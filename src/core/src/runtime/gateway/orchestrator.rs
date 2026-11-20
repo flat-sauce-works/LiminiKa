@@ -709,12 +709,17 @@ pub trait ActionHubGatewayExt: ActionHub {
         let (mut frame, mut frm_w) = synthesize_signal_with_optional_core_layers(signal, core_ctx);
         let lane_mask = self.workbench_lane_mask();
         if lane_mask != 0 {
-            let rep_mask = self.workbench_repulsion_mask();
-            let sandbox_mask = self.workbench_sandbox_mask();
+            let (rep_cut, attract_cut) =
+                crate::liminal::BitCut8::split(lane_mask, self.workbench_repulsion_mask())
+                    .refine(self.workbench_sandbox_mask());
             let is_pre_repulsed = ((frame.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0)
                 || frame.to_causal_report().is_cohomology_repulsion();
-            let mut eligible_lanes =
-                branchless_select_u8(is_pre_repulsed, lane_mask & rep_mask, lane_mask & !rep_mask);
+            let active_cut = if is_pre_repulsed {
+                rep_cut
+            } else {
+                attract_cut
+            };
+            let mut eligible_lanes = active_cut.outside | active_cut.inside;
             if eligible_lanes != 0 {
                 let standard_granule_mask = core_ctx.map_or(0xFF_u8, |c| {
                     c.venn.venn_core_mask | c.venn.venn_penumbra_mask
@@ -726,7 +731,7 @@ pub trait ActionHubGatewayExt: ActionHub {
                 while eligible_lanes != 0 {
                     let lane = eligible_lanes.trailing_zeros() as u8;
                     eligible_lanes &= eligible_lanes - 1;
-                    let is_sandbox = ((sandbox_mask >> lane) & 1) != 0;
+                    let is_sandbox = ((active_cut.inside >> lane) & 1) != 0;
                     let granule_mask = branchless_select_u8(
                         is_sandbox,
                         sandbox_granule_mask,
@@ -1030,7 +1035,7 @@ pub trait ActionHubGatewayExt: ActionHub {
 
 impl<T: ActionHub + ?Sized> ActionHubGatewayExt for T {}
 
-/// [`CognitiveTrajectoryLedger`], and [`StigmergicLayeredSwarmExt`] in zero-allocation mode.
+/// [`CognitiveTrajectoryLedger`], and scale-aware swarm resolution in zero-allocation mode.
 pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
     /// Projects `layer` across `input_words`, resolves the active pointer trail in the Micro-Swarm
     /// at the activated granularity tier, and records the emitted [`CognitiveStepOp`] into

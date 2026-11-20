@@ -31,9 +31,9 @@
 use core::mem::{align_of, offset_of, size_of};
 
 use crate::foundation::{
-    branchless_abs_f32, branchless_clamp_f32, branchless_fast_transition_log_prob,
-    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_max_f32,
-    branchless_min_f32, branchless_rad_to_phase_step_u8, branchless_relu_f32,
+    branchless_abs_f32, branchless_argmin_f32_x8_masked, branchless_clamp_f32,
+    branchless_fast_transition_log_prob, branchless_flush_subnormal_f32, branchless_is_finite_f32,
+    branchless_max_f32, branchless_min_f32, branchless_rad_to_phase_step_u8, branchless_relu_f32,
     coherence_from_word_arrays_64, dispatch_fused_phase_clamp_and_subhead_words_core,
     fast_inv_len_f32, gcso_paged_bitmask_t, gcso_subhead_config_t, gcso_tagged_ptr_t,
     load_q7_words_64, pack_action_slot_tag, phase_clamp_upper_rot_dim,
@@ -48,9 +48,9 @@ use crate::foundation::{
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    branchless_select_usize, gcso_config_t, gcso_q7_t, GcsoResult, GCSO_ERROR_ACTION_HUB_FULL,
-    GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
-    NUM_STIGMERGIC_GRANULES,
+    branchless_select_usize, gcso_config_t, gcso_q7_t, BitCut8, GcsoResult,
+    GCSO_ERROR_ACTION_HUB_FULL, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
+    MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::stigmergy::crystal::DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE;
 use crate::stigmergy::gate::PhaseSteeringEngine;
@@ -60,7 +60,6 @@ use crate::stigmergy::pheromone::PheromoneDensityOps;
 use crate::stigmergy::trail::{
     gcso_pointer_trail_t, select_rewire_bridge_and_modulate_with_preloaded_words_64,
     trail_phase_words_mut, trail_phase_words_ref, ActionHub, PointerActionHub,
-    StigmergicActionPtrOps, StigmergicChunkOps, StigmergicTrailOps,
 };
 use crate::stigmergy::{
     ATTRACTOR_SLOT_REPULSION, DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
@@ -1251,25 +1250,21 @@ impl ActionHubEngine {
         }
         let lane = match spec.placement {
             WorkbenchLanePlacement::AutoFree => {
-                let free_unpinned = !self.slot_enabled_mask & !self.slot_pinned_mask;
-                if free_unpinned != 0 {
-                    free_unpinned.trailing_zeros() as u8
+                let (active_cut, free_cut) = self.workbench_lifecycle_quadrants();
+                if free_cut.outside != 0 {
+                    free_cut.outside.trailing_zeros() as u8
                 } else {
-                    let evictable = self.slot_enabled_mask & !self.slot_pinned_mask;
+                    let evictable = active_cut.outside;
                     if evictable == 0 {
                         return Err(GCSO_ERROR_ACTION_HUB_FULL);
                     }
-                    let mut best_lane = evictable.trailing_zeros() as u8;
-                    let mut best_w = branchless_relu_f32(self.slot_weights[usize::from(best_lane)]);
-                    let mut rem = evictable & !(1u8 << best_lane);
-                    while rem != 0 {
-                        let cand = rem.trailing_zeros() as u8;
-                        rem &= rem - 1;
-                        let cand_w = branchless_relu_f32(self.slot_weights[usize::from(cand)]);
-                        if cand_w < best_w {
-                            best_lane = cand;
-                            best_w = cand_w;
-                        }
+                    let mut clean_weights = [0.0_f32; MAX_ATTRACTOR_DOMAINS];
+                    for (dst, &w) in clean_weights.iter_mut().zip(self.slot_weights.iter()) {
+                        *dst = branchless_relu_f32(w);
+                    }
+                    let (best_lane, _) = branchless_argmin_f32_x8_masked(&clean_weights, evictable);
+                    if usize::from(best_lane) >= MAX_ATTRACTOR_DOMAINS {
+                        return Err(GCSO_ERROR_ACTION_HUB_FULL);
                     }
                     best_lane
                 }
@@ -1489,6 +1484,29 @@ impl ActionHubEngine {
     #[must_use]
     pub const fn workbench_sandbox_mask(&self) -> u8 {
         self.slot_sandbox_mask
+    }
+
+    /// Returns the 4-quadrant lifecycle partition `(active_cut, free_cut)` over all 8 workbench lanes:
+    /// - `active_cut.inside`: enabled & pinned
+    /// - `active_cut.outside`: enabled & evictable
+    /// - `free_cut.inside`: disabled & pinned (reserved)
+    /// - `free_cut.outside`: disabled & unpinned (allocatable free)
+    #[inline(always)]
+    #[must_use]
+    pub const fn workbench_lifecycle_quadrants(&self) -> (BitCut8, BitCut8) {
+        BitCut8::split(0xFF, self.slot_enabled_mask).refine(self.slot_pinned_mask)
+    }
+
+    /// Returns the 4-quadrant role partition `(rep_cut, attract_cut)` over enabled workbench lanes:
+    /// - `rep_cut.outside`: global repulsion (`enabled & repulsion & !sandbox`)
+    /// - `rep_cut.inside`: sandbox-scoped exterior repulsion (`enabled & repulsion & sandbox`)
+    /// - `attract_cut.outside`: standard attractive (`enabled & !repulsion & !sandbox`)
+    /// - `attract_cut.inside`: pure sandbox hypothesis (`enabled & !repulsion & sandbox`)
+    #[inline(always)]
+    #[must_use]
+    pub const fn workbench_role_quadrants(&self) -> (BitCut8, BitCut8) {
+        BitCut8::split(self.slot_enabled_mask, self.slot_repulsion_mask)
+            .refine(self.slot_sandbox_mask)
     }
 
     /// Returns the bitmask of workbench lanes currently free for unpinned allocation (`0..=7`).
@@ -1876,12 +1894,14 @@ impl ActionHubEngine {
             | extra_flags;
         trail_inout.sync_flags_with_current_ptr();
 
-        // Fold coupled working-lane phase profile from `slot_phase_bank[target_slot]` if enabled,
-        // non-sandboxed, and non-zero:
+        // Fold coupled working-lane phase profile from `slot_phase_bank[target_slot]` strictly
+        // through the 4-quadrant role partition (global repulsion on contradiction, standard
+        // attractive otherwise; sandboxed and sandbox-repulsion lanes never leak here):
         let masked_target_slot = target_slot & ATTRACTOR_SLOT_ID_MASK;
-        if ((self.slot_enabled_mask >> masked_target_slot) & 1) != 0
-            && ((self.slot_sandbox_mask >> masked_target_slot) & 1) == 0
-        {
+        let (rep_cut, attract_cut) = self.workbench_role_quadrants();
+        let allowed_mask =
+            branchless_select_u8(contradiction_repulsed, rep_cut.outside, attract_cut.outside);
+        if ((allowed_mask >> masked_target_slot) & 1) != 0 {
             // SAFETY: `self.slot_phase_bank` is 64B-aligned and `masked_target_slot < 8`.
             let slot_w = unsafe {
                 &*(self
@@ -2333,9 +2353,13 @@ impl PointerActionHub for ActionHubEngine {
     }
 }
 
-impl StigmergicChunkOps for ActionHubEngine {
+impl ActionHubEngine {
+    /// Updates local cellular swarm cell state across PagedBlock token chunk boundaries.
+    ///
+    /// # Errors
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `chunk_len == 0`.
     #[inline]
-    fn step_chunk(&mut self, _mask: &gcso_paged_bitmask_t, chunk_len: u32) -> GcsoResult<()> {
+    pub fn step_chunk(&mut self, _mask: &gcso_paged_bitmask_t, chunk_len: u32) -> GcsoResult<()> {
         if chunk_len == 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -2684,5 +2708,74 @@ mod tests {
             StigmergicThresholds::compute_effective_density_calculus(2.00, 2.00, 0.90, 64, 4, true);
         assert!(!rising_sat);
         assert!(eff_sat < 1.10);
+    }
+
+    #[test]
+    fn test_action_hub_bitcut8_quadrants_layout_and_eviction() {
+        assert_eq!(size_of::<ActionHubEngine>(), 2816);
+        assert_eq!(align_of::<ActionHubEngine>(), 128);
+
+        let mut hub = ActionHubEngine::new();
+        // Lane 0: standard attractive (unpinned)
+        let l0 = hub
+            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_free(
+                1.0,
+                [12; MAX_ATTENTION_HEADS],
+            ))
+            .unwrap();
+        // Lane 1: pinned attractive
+        let l1 = hub
+            .allocate_workbench_lane(&WorkbenchSlotSpec::explicit(
+                1,
+                true,
+                0,
+                1.5,
+                [24; MAX_ATTENTION_HEADS],
+            ))
+            .unwrap();
+        // Lane 2: global repulsion
+        let l2 = hub
+            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_repulsion(
+                0.8,
+                [-16; MAX_ATTENTION_HEADS],
+            ))
+            .unwrap();
+        // Lane 3: pure sandbox hypothesis
+        let l3 = hub
+            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(
+                0.6,
+                [32; MAX_ATTENTION_HEADS],
+            ))
+            .unwrap();
+        // Lane 4: REPULSION | SANDBOX | PINNED
+        let l4 = hub
+            .allocate_workbench_lane(&WorkbenchSlotSpec {
+                placement: WorkbenchLanePlacement::Explicit { lane: 4, pin: true },
+                weight: 0.9,
+                flags: WORKBENCH_LANE_FLAG_PINNED
+                    | WORKBENCH_LANE_FLAG_REPULSION
+                    | WORKBENCH_LANE_FLAG_SANDBOX,
+                phases: [-32; MAX_ATTENTION_HEADS],
+            })
+            .unwrap();
+
+        let (active_cut, free_cut) = hub.workbench_lifecycle_quadrants();
+        assert_eq!(active_cut.inside, (1 << l1) | (1 << l4));
+        assert_eq!(active_cut.outside, (1 << l0) | (1 << l2) | (1 << l3));
+        assert_eq!(free_cut.inside, 0);
+        assert_eq!(
+            active_cut.inside | active_cut.outside | free_cut.inside | free_cut.outside,
+            0xFF
+        );
+
+        let (rep_cut, attract_cut) = hub.workbench_role_quadrants();
+        assert_eq!(rep_cut.outside, 1 << l2);
+        assert_eq!(rep_cut.inside, 1 << l4);
+        assert_eq!(attract_cut.outside, (1 << l0) | (1 << l1));
+        assert_eq!(attract_cut.inside, 1 << l3);
+        assert_eq!(
+            rep_cut.outside | rep_cut.inside | attract_cut.outside | attract_cut.inside,
+            hub.active_workbench_lane_mask()
+        );
     }
 }

@@ -26,7 +26,6 @@ use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u8, GcsoResult,
     GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT,
 };
-use crate::stigmergy::StigmergicActionPtrOps;
 
 /// `EntropyController` stateful engine (128 bytes = 2 cachelines, 32B aligned).
 #[repr(C, align(32))]

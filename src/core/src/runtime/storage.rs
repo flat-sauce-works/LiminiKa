@@ -68,9 +68,9 @@ use crate::stigmergy::crystal::{
 };
 use crate::stigmergy::{
     gcso_ledger_slot_t, gcso_pointer_trail_t, trail_phase_words_mut, CognitiveTrajectoryLedger,
-    ContrastivePhaseBloomFilter, CrystallizedAttractorRecord, StigmergicActionPtrOps,
-    ATTRACTOR_SLOT_REPULSION, GCSO_SNAPSHOT_MAGIC_U32, LEDGER_FLAG_COGNITIVE_TRAJECTORY,
-    MAX_ATTRACTOR_PULL_FORCE, TRAIL_FLAG_REPULSION_ACTIVE,
+    ContrastivePhaseBloomFilter, CrystallizedAttractorRecord, ATTRACTOR_SLOT_REPULSION,
+    GCSO_SNAPSHOT_MAGIC_U32, LEDGER_FLAG_COGNITIVE_TRAJECTORY, MAX_ATTRACTOR_PULL_FORCE,
+    TRAIL_FLAG_REPULSION_ACTIVE,
 };
 
 /// Precomputed 64-byte GF(2) shift $L^4(\text{0xFFFF\_FFFF})$ of the initial IEEE 802.3 CRC32 seed.

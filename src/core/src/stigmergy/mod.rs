@@ -265,7 +265,6 @@ pub mod gate;
 pub mod granule;
 pub mod ledger;
 pub mod pheromone;
-pub mod substrate;
 pub mod trail;
 
 pub use self::action_hub::*;
@@ -276,7 +275,6 @@ pub use self::gate::*;
 pub use self::granule::*;
 pub use self::ledger::*;
 pub use self::pheromone::*;
-pub use self::substrate::*;
 pub use self::trail::*;
 
 const _: () = {

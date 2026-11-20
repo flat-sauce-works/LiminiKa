@@ -235,3 +235,81 @@ fn test_avx2_sincos_x8_3d_txy_lockstep_qkv_and_subnormal_norm_rescue() {
         branchless_crc32_ieee(&raw_blk1)
     );
 }
+
+#[test]
+fn test_branchless_mask8_min_delta_and_argmin_f32_x8_masked() {
+    // Empty universe -> (0, 0, true) on tie
+    assert_eq!(branchless_mask8_min_delta(0x00, 0xFF), (0x00, 0, true));
+    assert_eq!(branchless_mask8_min_delta(0x00, 0x00), (0x00, 0, true));
+
+    // Tie-breaking: inside wins when popcount(inside) == popcount(outside)
+    assert_eq!(branchless_mask8_min_delta(0xFF, 0x0F), (0x0F, 4, true));
+    assert_eq!(branchless_mask8_min_delta(0x33, 0x0F), (0x03, 2, true));
+
+    // Inside strictly smaller
+    assert_eq!(branchless_mask8_min_delta(0xFF, 0x05), (0x05, 2, true));
+    // Outside strictly smaller
+    assert_eq!(branchless_mask8_min_delta(0xFF, 0xFE), (0x01, 1, false));
+    // Single-bit universe
+    assert_eq!(branchless_mask8_min_delta(0x10, 0x10), (0x00, 0, false));
+    assert_eq!(branchless_mask8_min_delta(0x10, 0x00), (0x00, 0, true));
+
+    // Argmin: empty eligible mask -> (0xFF, +inf)
+    let vals = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    let (lane, val) = branchless_argmin_f32_x8_masked(&vals, 0x00);
+    assert_eq!(lane, 0xFF);
+    assert!(val.is_infinite() && val.is_sign_positive());
+
+    // Argmin: all NaN -> (0xFF, +inf)
+    let all_nan = [f32::NAN; 8];
+    let (lane, val) = branchless_argmin_f32_x8_masked(&all_nan, 0xFF);
+    assert_eq!(lane, 0xFF);
+    assert!(val.is_infinite() && val.is_sign_positive());
+
+    // Argmin: all +inf -> must select lowest eligible lane, NOT 0xFF
+    let all_inf = [f32::INFINITY; 8];
+    let (lane, val) = branchless_argmin_f32_x8_masked(&all_inf, 0b0101_0000);
+    assert_eq!(lane, 4);
+    assert!(val.is_infinite() && val.is_sign_positive());
+
+    // Argmin: single-bit mask
+    let (lane, val) = branchless_argmin_f32_x8_masked(&vals, 1 << 5);
+    assert_eq!(lane, 5);
+    assert_eq!(val, 6.0);
+
+    // Argmin: tie-breaking chooses lowest eligible index
+    let tied = [3.0, 1.5, 1.5, 2.0, 1.5, 4.0, 0.5, 0.5];
+    assert_eq!(
+        branchless_argmin_f32_x8_masked(&tied, 0b0011_1111),
+        (1, 1.5)
+    );
+    assert_eq!(branchless_argmin_f32_x8_masked(&tied, 0xFF), (6, 0.5));
+
+    // Argmin: negative values and -inf
+    let negs = [-1.0, -5.5, -2.0, -5.5, f32::NEG_INFINITY, 0.0, 1.0, -10.0];
+    assert_eq!(
+        branchless_argmin_f32_x8_masked(&negs, 0b0000_1111),
+        (1, -5.5)
+    );
+    assert_eq!(
+        branchless_argmin_f32_x8_masked(&negs, 0xFF),
+        (4, f32::NEG_INFINITY)
+    );
+
+    // Argmin: mixed NaN resilience
+    let mixed = [
+        f32::NAN,
+        f32::INFINITY,
+        -0.25,
+        f32::NAN,
+        -0.25,
+        2.0,
+        f32::NAN,
+        0.0,
+    ];
+    assert_eq!(
+        branchless_argmin_f32_x8_masked(&mixed, 0b0000_0011),
+        (1, f32::INFINITY)
+    );
+    assert_eq!(branchless_argmin_f32_x8_masked(&mixed, 0xFF), (2, -0.25));
+}

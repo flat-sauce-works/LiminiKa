@@ -30,9 +30,6 @@
 #![allow(clippy::ifs_same_cond)]
 #![allow(clippy::field_reassign_with_default)]
 
-mod traits;
-pub use self::traits::*;
-
 /// Classification types for topological attractor field anchors (Section 5.3).
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -94,23 +91,6 @@ const _: () = {
 
 /// Maximum dimension supported for embedding vectors in inline zero-alloc storage (`128`).
 pub const MAX_EMBEDDING_DIM: usize = 128;
-
-/// Default attractor lane identifier for System Baseline Constraints (`0`).
-pub const DOMAIN_SYSTEM_BASELINE: u32 = 0;
-/// Default attractor lane identifier for Persona Patches (`1`).
-pub const DOMAIN_PERSONA: u32 = 1;
-/// Default attractor lane identifier for Generalized Knowledge Sources (`2`).
-pub const DOMAIN_KNOWLEDGE: u32 = 2;
-/// Default attractor lane identifier for Anti-Hallucination Phase Repulsion (`3`).
-pub const DOMAIN_PHASE_REPULSION: u32 = 3;
-/// Default attractor lane identifier for User Interaction Context (`4`).
-pub const DOMAIN_USER_INTERACTION: u32 = 4;
-/// Semantic domain identifier for Temporal / Visual Co-Watching Horizons (`5`).
-pub const DOMAIN_TEMPORAL: u32 = 5;
-/// Semantic domain identifier for User Intent / Circadian Drift (`6`).
-pub const DOMAIN_USER_INTENT: u32 = 6;
-/// Semantic domain identifier for Crystallized Macro-Basin Overflow (`7`).
-pub const DOMAIN_CRYSTALLIZED: u32 = 7;
 
 pub(super) const SNAPSHOT_HEADER_BYTES: usize = 64;
 
@@ -240,10 +220,13 @@ mod tests {
         let mut lane_pulls = [0.0f32; MAX_ATTRACTOR_DOMAINS];
         let total_pull = space.project_active_field_bank_8(&trail, &mut bank, &mut lane_pulls);
         assert!(total_pull > 0.0);
-        assert_eq!(bank[DOMAIN_PERSONA as usize][0], 32);
+        assert_eq!(
+            bank[usize::from(crate::stigmergy::ATTRACTOR_SLOT_PERSONA)][0],
+            32
+        );
 
         let weights = space.rebalance_weights_from_trail(&trail);
-        assert!(weights[DOMAIN_PERSONA as usize] >= 1.0);
+        assert!(weights[usize::from(crate::stigmergy::ATTRACTOR_SLOT_PERSONA)] >= 1.0);
 
         let (syn_pull, _coh, neighbors) = space
             .steer_trail_by_coupled_neighborhood(0.5, 0.2, &mut trail)

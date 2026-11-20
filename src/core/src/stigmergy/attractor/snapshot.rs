@@ -7,26 +7,29 @@
 use core::mem::size_of;
 
 use crate::foundation::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_max_f32, branchless_min_f32,
-    branchless_q7_resonant_pull_64, branchless_relu_f32, branchless_von_mises_kappa,
-    circular_r_bar_from_words_64, crc32_block64_zero_seed_words, crc32_step_block64_words,
-    crc32_step_l16, crc32_step_l32, crc32_step_l8, fast_inv_pos_normal_f32, store_q7_words_64, Pod,
+    atan2_to_q7_word_x8_simd, branchless_atan2_to_q7_fast, branchless_clamp_f32,
+    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_max_f32,
+    branchless_min_f32, branchless_q7_resonant_pull_64, branchless_relu_f32, branchless_sincos_q7,
+    branchless_von_mises_kappa, circular_r_bar_from_words_64, crc32_block64_zero_seed_words,
+    crc32_step_block64_words, crc32_step_l16, crc32_step_l32, crc32_step_l8,
+    fast_inv_pos_normal_f32, is_word_array_uniform_64, store_q7_words_64, Pod,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u8, gcso_q7_t, GcsoResult,
-    GCSO_ABI_VERSION_HEX, GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_VERSION_MISMATCH,
-    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
+    branchless_select_f32, branchless_select_q7, branchless_select_u32, branchless_select_u8,
+    gcso_q7_t, GcsoResult, GCSO_ABI_VERSION_HEX, GCSO_ERROR_CONTAINER_CORRUPTED,
+    GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_VERSION_MISMATCH, MAX_ATTENTION_HEADS,
+    MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::stigmergy::attractor::{
     gcso_anchor_type_t, EpisodicPhaseSample, GCSO_ANCHOR_TYPE_CRYSTALLIZED,
     GCSO_SNAPSHOT_MAGIC_U32, MAX_ANCHORS_PER_FIELD, MAX_EMBEDDING_DIM, SNAPSHOT_HEADER_BYTES,
 };
 use crate::stigmergy::crystal::CrystallizedAttractorRecord;
-use crate::stigmergy::trail::gcso_pointer_trail_t;
+use crate::stigmergy::trail::{gcso_pointer_trail_t, trail_phase_words_ref};
 use crate::stigmergy::{
-    CAUSAL_AXIS_SUBJECTIVE_PERSONA, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
-    DEFAULT_SLOT_COUPLING_MATRIX_8X8, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY,
-    ROOT_CAUSE_NOMINAL,
+    ATTRACTOR_SLOT_SYSTEM_BASELINE, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
+    CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+    MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, ROOT_CAUSE_NOMINAL,
 };
 
 use super::*;
@@ -145,7 +148,7 @@ impl CrystallizedAnchorRecord {
         phase_deltas: [0; MAX_ATTENTION_HEADS],
         id: 0,
         anchor_type: GCSO_ANCHOR_TYPE_SYSTEM_PROMPT,
-        domain_id: DOMAIN_SYSTEM_BASELINE,
+        domain_id: ATTRACTOR_SLOT_SYSTEM_BASELINE as u32,
         half_life_steps: 0,
         weight: 0.0,
         pull_force: 0.0,
@@ -773,7 +776,7 @@ impl Default for AttractorAnchor {
             stigmergic_density: 1.0,
             half_life_steps: 1000,
             last_active_step: 0,
-            domain_id: DOMAIN_SYSTEM_BASELINE,
+            domain_id: ATTRACTOR_SLOT_SYSTEM_BASELINE as u32,
             vector_dim: 0,
             is_active: 0,
             is_crystallized: 0,
@@ -908,4 +911,156 @@ impl AttractorAnchor {
             MAX_STIGMERGIC_DENSITY,
         );
     }
+}
+
+/// Executes **Persistent Topological Mode Quantization** in row-major order,
+/// returning `Ok((0.0, 0.0))` with zeroed `profile_out` if total trail weight is zero.
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `coherent_trails` is empty or `min_coherence_r_bar` is non-finite.
+#[inline]
+pub fn quantize_persistent_topological_mode(
+    coherent_trails: &[gcso_pointer_trail_t],
+    min_coherence_r_bar: f32,
+    profile_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+) -> GcsoResult<(f32, f32)> {
+    if coherent_trails.is_empty() || !branchless_is_finite_f32(min_coherence_r_bar) {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    }
+
+    let mut candidate = [0i8; MAX_ATTENTION_HEADS];
+    let candidate_words: [u64; 8];
+    if coherent_trails.len() == 1 {
+        let trail = &coherent_trails[0];
+        let d_bounded = branchless_clamp_f32(trail.stigmergic_density, 0.0, MAX_STIGMERGIC_DENSITY);
+        let f_bounded =
+            branchless_clamp_f32(trail.attractor_pull_force, 1.0, MAX_ATTRACTOR_PULL_FORCE);
+        let w = branchless_flush_subnormal_f32(d_bounded * f_bounded);
+        if w <= 1.0e-10 {
+            *profile_out = [0i8; MAX_ATTENTION_HEADS];
+            return Ok((0.0, 0.0));
+        }
+        candidate = trail.accumulated_phase_delta;
+        candidate_words = *trail_phase_words_ref(trail);
+    } else {
+        let mut sum_s = [[0.0_f32; 8]; 8];
+        let mut sum_c = [[0.0_f32; 8]; 8];
+        let mut word_s = [0.0_f32; 8];
+        let mut word_c = [0.0_f32; 8];
+        let mut total_w = 0.0_f32;
+        let mut all_byte_uniform = true;
+        let mut all_word_uniform = true;
+        let mut uniform_s = 0.0_f32;
+        let mut uniform_c = 0.0_f32;
+
+        for trail in coherent_trails {
+            let d_bounded =
+                branchless_clamp_f32(trail.stigmergic_density, 0.0, MAX_STIGMERGIC_DENSITY);
+            let f_bounded =
+                branchless_clamp_f32(trail.attractor_pull_force, 1.0, MAX_ATTRACTOR_PULL_FORCE);
+            let w = branchless_flush_subnormal_f32(d_bounded * f_bounded);
+            if w > 0.0 {
+                total_w += w;
+                let tw = *trail_phase_words_ref(trail);
+                let w0 = tw[0];
+                if is_word_array_uniform_64(&tw) {
+                    if w0 == w0.rotate_right(8) {
+                        let (s, c) = branchless_sincos_q7(w0 as gcso_q7_t);
+                        uniform_s += w * s;
+                        uniform_c += w * c;
+                    } else {
+                        all_byte_uniform = false;
+                        let b = w0.to_le_bytes();
+                        let mut lane = 0usize;
+                        while lane < 8 {
+                            let (s, c) = branchless_sincos_q7(b[lane] as gcso_q7_t);
+                            word_s[lane] += w * s;
+                            word_c[lane] += w * c;
+                            lane += 1;
+                        }
+                    }
+                } else {
+                    all_byte_uniform = false;
+                    all_word_uniform = false;
+                    let mut cell = 0usize;
+                    while cell < 8 {
+                        let b = tw[cell].to_le_bytes();
+                        let mut lane = 0usize;
+                        while lane < 8 {
+                            let (s, c) = branchless_sincos_q7(b[lane] as gcso_q7_t);
+                            sum_s[cell][lane] += w * s;
+                            sum_c[cell][lane] += w * c;
+                            lane += 1;
+                        }
+                        cell += 1;
+                    }
+                }
+            }
+        }
+        if total_w <= 1.0e-10 {
+            *profile_out = [0i8; MAX_ATTENTION_HEADS];
+            return Ok((0.0, 0.0));
+        }
+        if all_byte_uniform {
+            let mag_sq = uniform_s * uniform_s + uniform_c * uniform_c;
+            let has_mag = mag_sq > 1.0e-20;
+            let q7 = branchless_select_q7(
+                has_mag,
+                branchless_atan2_to_q7_fast(uniform_s, uniform_c),
+                0,
+            );
+            let r_bar = branchless_select_f32(has_mag, 1.0, 0.0);
+            let kappa_c = branchless_von_mises_kappa(r_bar);
+            let keep = r_bar >= branchless_clamp_f32(min_coherence_r_bar, 0.0, 1.0);
+            *profile_out = [branchless_select_q7(keep, q7, 0); MAX_ATTENTION_HEADS];
+            return Ok((r_bar, kappa_c));
+        } else if all_word_uniform {
+            let mut s_cell = [0.0_f32; 8];
+            let mut c_cell = [0.0_f32; 8];
+            let mut lane = 0usize;
+            while lane < 8 {
+                s_cell[lane] = word_s[lane] + uniform_s;
+                c_cell[lane] = word_c[lane] + uniform_c;
+                lane += 1;
+            }
+            let word0 = atan2_to_q7_word_x8_simd(&s_cell, &c_cell);
+            candidate_words = [word0; 8];
+            store_q7_words_64(&mut candidate, &candidate_words);
+        } else {
+            let has_word_or_uni = (uniform_s != 0.0)
+                | (uniform_c != 0.0)
+                | (word_s != [0.0_f32; 8])
+                | (word_c != [0.0_f32; 8]);
+            if has_word_or_uni {
+                let mut cell = 0usize;
+                while cell < 8 {
+                    let mut lane = 0usize;
+                    while lane < 8 {
+                        sum_s[cell][lane] += word_s[lane] + uniform_s;
+                        sum_c[cell][lane] += word_c[lane] + uniform_c;
+                        lane += 1;
+                    }
+                    cell += 1;
+                }
+            }
+            let mut cw = [0u64; 8];
+            let mut cell = 0usize;
+            while cell < 8 {
+                cw[cell] = atan2_to_q7_word_x8_simd(&sum_s[cell], &sum_c[cell]);
+                cell += 1;
+            }
+            candidate_words = cw;
+            store_q7_words_64(&mut candidate, &candidate_words);
+        }
+    }
+
+    let r_bar = circular_r_bar_from_words_64(&candidate_words);
+    let kappa_c = branchless_von_mises_kappa(r_bar);
+    let keep = r_bar >= branchless_clamp_f32(min_coherence_r_bar, 0.0, 1.0);
+    if keep {
+        *profile_out = candidate;
+    } else {
+        *profile_out = [0i8; MAX_ATTENTION_HEADS];
+    }
+    Ok((r_bar, kappa_c))
 }

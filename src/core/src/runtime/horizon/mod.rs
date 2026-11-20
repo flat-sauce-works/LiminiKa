@@ -66,10 +66,10 @@ use crate::runtime::storage::KvKeyframePacket;
 #[allow(unused_imports)]
 use crate::stigmergy::{
     evaluate_stigmergic_overlap_and_serendipity_words_64, fold_fractal_nodes_words_64,
-    fold_sincos64_to_words, swar_mean_u8_le128_x8, ActionHubEngine, CognitiveCircuitPlasticity,
-    CognitiveOpKind, CognitiveTrajectoryLedger, DissipativeOverflowReport, PheromoneDensityOps,
+    fold_sincos64_to_words, swar_mean_u8_le128_x8, ActionHubEngine, CognitiveOpKind,
+    CognitiveTrajectoryLedger, DissipativeOverflowReport, PheromoneDensityOps,
     RelativeAttractorNode, StigmergicGranuleField, StigmergicOverlapSerendipityReport,
-    StigmergicTrailOps, WorkbenchLanePlacement, WorkbenchSlotSpec, MAX_ATTRACTOR_PULL_FORCE,
+    WorkbenchLanePlacement, WorkbenchSlotSpec, MAX_ATTRACTOR_PULL_FORCE,
     TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
 };
 #[allow(unused_imports)]

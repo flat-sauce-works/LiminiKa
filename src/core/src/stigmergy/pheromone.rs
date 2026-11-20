@@ -44,10 +44,7 @@ use crate::liminal::{
 };
 use crate::stigmergy::circuit::StigmergicScaleGranularity;
 use crate::stigmergy::ledger::ContrastivePhaseBloomFilter;
-use crate::stigmergy::trail::{
-    gcso_pointer_trail_t, trail_phase_words_mut, trail_phase_words_ref, StigmergicActionPtrOps,
-    StigmergicTrailOps,
-};
+use crate::stigmergy::trail::{gcso_pointer_trail_t, trail_phase_words_mut, trail_phase_words_ref};
 use crate::stigmergy::{
     ATTRACTOR_SLOT_REPULSION, DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, DEFAULT_STIGMERGIC_TOLERANCE_Q7,
     MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_PHASE_STEER_ACTIVE,
@@ -462,43 +459,13 @@ pub const fn swar_subswarm_resolve_x8(
 
 /// Approximation-first trait framing the 3-stage stigmergic compute pipeline:
 /// 1. **Fragmentation (Granulate)**: decompose a 64-head phase trajectory into 8 myopic `u64` SWAR granules.
-/// 2. **Stigmergic Drift**: steer each granule along local terrain pheromone trails without global planning.
-/// 3. **Reconstitution**: reassemble converged granules via quorum consensus into an approximate state transition.
-pub trait StigmergicReconstitutionOps: StigmergicTrailOps {
-    /// Extracts the 8-head Q7 phase word (`u64`) belonging to Micro-Swarm cell `cell_idx` (`0..=7`).
-    #[must_use]
-    fn extract_subswarm_word(&self, cell_idx: usize) -> u64;
-    /// Writes an 8-head Q7 phase word (`u64`) into Micro-Swarm cell `cell_idx` (`0..=7`).
-    fn write_subswarm_word(&mut self, cell_idx: usize, word: u64);
-
-    /// Resolves an Action Hub command across all 8 SWAR Micro-Swarm cells directly from
-    /// pre-loaded target SWAR words (`target_words`), avoiding any 64-byte stack reload when
-    /// chained after `ManifoldGatewaySignal::synthesize_gateway_frame_with_words`.
-    fn try_resolve_action_in_swarm_from_words(
-        &mut self,
-        action_ptr: gcso_tagged_ptr_t,
-        target_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        active_cell_mask: u8,
-        step_gain_u7: u8,
-        qdps_min_step_q7: u8,
-        tolerance_q7: u8,
-        quorum_threshold: u8,
-        entropy_h_tilde: f32,
-        low_entropy_skip_thresh: f32,
-        bloom_filter: Option<&ContrastivePhaseBloomFilter>,
-        repulsion_threshold: u8,
-        repulsion_scale_u7: u8,
-    ) -> (
-        StigmergicReconstitutionReport,
-        [u64; NUM_STIGMERGIC_GRANULES],
-    );
-
+impl gcso_pointer_trail_t {
     /// Subdivides the Action Hub's target 64-head phase command into **8 parallel 8-head SWAR
     /// Micro-Swarm cells** gated by `active_cell_mask` in strictly constant time (`0` branches),
     /// returning both `(StigmergicReconstitutionReport, resolved_swar_words)` so downstream RoPE/`PhaseClamp` kernels
     /// can steer directly from registers without re-loading `accumulated_phase_delta`.
     #[inline(always)]
-    fn try_resolve_action_in_swarm_to_words(
+    pub fn try_resolve_action_in_swarm_to_words(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,
         target_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
@@ -536,7 +503,7 @@ pub trait StigmergicReconstitutionOps: StigmergicTrailOps {
     /// Subdivides the Action Hub's target 64-head phase command into **8 parallel 8-head SWAR
     /// Micro-Swarm cells** gated by `active_cell_mask` in strictly constant time (`0` branches).
     #[inline(always)]
-    fn try_resolve_action_in_swarm_masked(
+    pub fn try_resolve_action_in_swarm_masked(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,
         target_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
@@ -570,7 +537,7 @@ pub trait StigmergicReconstitutionOps: StigmergicTrailOps {
 
     /// Subdivides the Action Hub's target 64-head phase command across all 8 Micro-Swarm cells (`0xFF`).
     #[inline(always)]
-    fn try_resolve_action_in_swarm(
+    pub fn try_resolve_action_in_swarm(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,
         target_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
@@ -600,19 +567,11 @@ pub trait StigmergicReconstitutionOps: StigmergicTrailOps {
         )
     }
 
-    /// Fuses resolved 8-head Micro-Swarm cells from a peer pointer trail (`peer_trail`) into `self`
-    /// in 8 branchless SWAR register operations.
-    fn fuse_with_peer_swarm_trail(
-        &mut self,
-        peer_trail: &gcso_pointer_trail_t,
-        quorum_threshold: u8,
-    ) -> u8;
-
     /// Fragments the trail across 8 myopic granules, drifts each along `target_words` gated by
     /// `active_granule_mask`, and reconstitutes the resulting state transition into
     /// `(StigmergicReconstitutionReport, reconstituted_words)` in branchless constant time.
     #[inline(always)]
-    fn reconstitute_from_stigmergy_words(
+    pub fn reconstitute_from_stigmergy_words(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,
         target_words: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -645,9 +604,7 @@ pub trait StigmergicReconstitutionOps: StigmergicTrailOps {
             repulsion_scale_u7,
         )
     }
-}
 
-impl gcso_pointer_trail_t {
     #[inline]
     pub(crate) fn try_resolve_action_in_swarm_with_cur_words(
         &mut self,
@@ -866,21 +823,27 @@ impl gcso_pointer_trail_t {
     }
 }
 
-impl StigmergicReconstitutionOps for gcso_pointer_trail_t {
+impl gcso_pointer_trail_t {
+    /// Extracts the 8-head Q7 phase word (`u64`) belonging to Micro-Swarm cell `cell_idx` (`0..=7`).
     #[inline(always)]
-    fn extract_subswarm_word(&self, cell_idx: usize) -> u64 {
+    #[must_use]
+    pub fn extract_subswarm_word(&self, cell_idx: usize) -> u64 {
         let safe_cell = cell_idx & (NUM_STIGMERGIC_GRANULES - 1);
         trail_phase_words_ref(self)[safe_cell]
     }
 
+    /// Writes an 8-head Q7 phase word (`u64`) into Micro-Swarm cell `cell_idx` (`0..=7`).
     #[inline(always)]
-    fn write_subswarm_word(&mut self, cell_idx: usize, word: u64) {
+    pub fn write_subswarm_word(&mut self, cell_idx: usize, word: u64) {
         let safe_cell = cell_idx & (NUM_STIGMERGIC_GRANULES - 1);
         trail_phase_words_mut(self)[safe_cell] = word;
     }
 
+    /// Resolves an Action Hub command across all 8 SWAR Micro-Swarm cells directly from
+    /// pre-loaded target SWAR words (`target_words`), avoiding any 64-byte stack reload when
+    /// chained after `ManifoldGatewaySignal::synthesize_gateway_frame_with_words`.
     #[inline(always)]
-    fn try_resolve_action_in_swarm_from_words(
+    pub fn try_resolve_action_in_swarm_from_words(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,
         target_words: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -917,8 +880,10 @@ impl StigmergicReconstitutionOps for gcso_pointer_trail_t {
         )
     }
 
+    /// Fuses resolved 8-head Micro-Swarm cells from a peer pointer trail (`peer_trail`) into `self`
+    /// in 8 branchless SWAR register operations.
     #[inline]
-    fn fuse_with_peer_swarm_trail(
+    pub fn fuse_with_peer_swarm_trail(
         &mut self,
         peer_trail: &gcso_pointer_trail_t,
         quorum_threshold: u8,
@@ -962,16 +927,11 @@ impl StigmergicReconstitutionOps for gcso_pointer_trail_t {
         );
         combined_quorum
     }
-}
 
-/// Blanket-implemented bridge coupling [`StigmergicReconstitutionOps`] with `StigmergicScaleLayer`
-/// so Micro-Swarm quorum thresholds, tolerances, and active cell masks adapt automatically
-/// to the active granularity tier and layer depth `(layer_index, total_layers)`.
-pub trait StigmergicLayeredSwarmExt: StigmergicReconstitutionOps {
     /// Resolves `target_words` inside the 8-cell SWAR Micro-Swarm using parameters derived
     /// structurally from `(granularity, layer_index, total_layers)` and optional Bloom guards.
     #[inline(always)]
-    fn resolve_swarm_with_scale_layer(
+    pub fn resolve_swarm_with_scale_layer(
         &mut self,
         action_ptr: gcso_tagged_ptr_t,
         target_words: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -1008,5 +968,3 @@ pub trait StigmergicLayeredSwarmExt: StigmergicReconstitutionOps {
         )
     }
 }
-
-impl<T: StigmergicReconstitutionOps + ?Sized> StigmergicLayeredSwarmExt for T {}

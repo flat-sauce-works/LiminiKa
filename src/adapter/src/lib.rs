@@ -35,9 +35,9 @@ use liminika_core::runtime::{
 };
 use liminika_core::stigmergy::{
     evaluate_stigmergic_overlap_and_serendipity_words_64, ActionHubEngine,
-    CognitiveCircuitActivation, CognitiveCircuitBankOps, CognitiveCircuitPlasticity,
-    CognitiveTrajectoryLedger, CrystallizedAttractorRecord, DissipativeOverflowReport,
-    PhaseSteeringEngine, RelativeAttractorNode, ResidualAdapterEngine, StigmergicActionDecision,
+    CognitiveCircuitActivation, CognitiveCircuitBankOps, CognitiveTrajectoryLedger,
+    CrystallizedAttractorRecord, DissipativeOverflowReport, PhaseSteeringEngine,
+    RelativeAttractorNode, ResidualAdapterEngine, StigmergicActionDecision,
     StigmergicFragmentEnsembleReport, StigmergicGranuleField, StigmergicOverlapSerendipityReport,
     StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicThresholds,
     ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,

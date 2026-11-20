@@ -17,9 +17,8 @@ use liminika_core::runtime::{
     GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact, SystemConstraint,
 };
 use liminika_core::stigmergy::{
-    CognitiveCircuitActivation, CognitiveCircuitPlasticity, CognitiveOpKind, CognitiveStepOp,
-    CognitiveTrajectoryLedger, StigmergicActionDecision, CAUSAL_AXIS_CONTRADICTION_GUARD,
-    CAUSAL_AXIS_OBJECTIVE_FACT,
+    CognitiveCircuitActivation, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
+    StigmergicActionDecision, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
 };
 
 /// Policy governing bounded, event-triggered closed-loop reflection retries.
@@ -349,7 +348,7 @@ pub trait AttractorTrajectoryEvaluator {
     }
 
     /// Updates a persistent [`CognitiveTrajectoryLedger`] (persona reasoning circuit) using the
-    /// core [`CognitiveCircuitPlasticity`] trait from the outcome of `critique`.
+    /// core [`CognitiveTrajectoryLedger`] plasticity methods from the outcome of `critique`.
     fn update_persona_circuit(
         &self,
         circuit: &mut CognitiveTrajectoryLedger,

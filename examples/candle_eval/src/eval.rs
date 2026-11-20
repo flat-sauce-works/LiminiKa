@@ -21,8 +21,8 @@ use liminika_core::drivers::{
 use liminika_core::foundation::ACTION_MODE_PHASE_REPULSE;
 use liminika_core::runtime::{CoreTelemetryBank, CoreTelemetrySnapshot, RamPhaseKvStepOutcome};
 use liminika_core::stigmergy::{
-    CognitiveCircuitPlasticity, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
-    StigmergicScaleGranularity, TRAIL_FLAG_REPULSION_ACTIVE,
+    CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, StigmergicScaleGranularity,
+    TRAIL_FLAG_REPULSION_ACTIVE,
 };
 use tokenizers::Tokenizer;
 
