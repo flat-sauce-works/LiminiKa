@@ -385,7 +385,7 @@ impl GcsoDualTrackTimeline {
         }
     }
 
-    fn build_zimms_snapshot(
+    fn build_mapped_storage_snapshot(
         corpus: &TextAttractorCorpus,
         timestamp_epoch_sec: u64,
         persona_circuit: Option<&CognitiveTrajectoryLedger>,
@@ -819,7 +819,7 @@ impl AttractorContainerCodec for GcsoDualTrackTimeline {
             self.model_fingerprint = fp;
         }
         if emit_i {
-            let zimms_4section = Self::build_zimms_snapshot(
+            let zimms_4section = Self::build_mapped_storage_snapshot(
                 ctx.corpus,
                 source.timestamp_epoch_sec,
                 self.persona_circuit.as_ref(),

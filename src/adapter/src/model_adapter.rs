@@ -2382,7 +2382,7 @@ impl ModelSteeringAdapter {
         )
     }
 
-    fn modulate_srl_circuit_frame(
+    fn modulate_rank1_circuit_frame(
         circuit: Option<CognitiveTrajectoryLedger>,
         mut frame: GatewayFrame,
         frm_w: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -2398,7 +2398,7 @@ impl ModelSteeringAdapter {
         frame
     }
 
-    fn apply_srl_frame_internal(
+    fn apply_rank1_frame_internal(
         &self,
         frame: &GatewayFrame,
         hidden_inout: &mut [f32],
@@ -2483,14 +2483,15 @@ impl ModelSteeringAdapter {
             );
             let cand = if hops > 0 { p_frame } else { ego_base };
             let cand_w = *cand.phase_words_ref();
-            let modulated = Self::modulate_srl_circuit_frame(self.active_circuit(), cand, &cand_w);
+            let modulated =
+                Self::modulate_rank1_circuit_frame(self.active_circuit(), cand, &cand_w);
             self.system_spine
                 .enforce_pinned_isolation_branchless(&sys_baseline, modulated)
         } else {
             let (raw_frame, frm_w) = signal.synthesize_gateway_frame_with_words();
-            Self::modulate_srl_circuit_frame(self.active_circuit(), raw_frame, &frm_w)
+            Self::modulate_rank1_circuit_frame(self.active_circuit(), raw_frame, &frm_w)
         };
-        let gain = self.apply_srl_frame_internal(&frame, hidden_inout, u_vec, v_vec)?;
+        let gain = self.apply_rank1_frame_internal(&frame, hidden_inout, u_vec, v_vec)?;
         Ok((frame, gain))
     }
 
@@ -2542,14 +2543,14 @@ impl ModelSteeringAdapter {
                 ego_frame
             };
             let cand_w = *cand.phase_words_ref();
-            let modulated = Self::modulate_srl_circuit_frame(circuit, cand, &cand_w);
+            let modulated = Self::modulate_rank1_circuit_frame(circuit, cand, &cand_w);
             self.system_spine
                 .enforce_pinned_isolation_branchless(&sys_baseline, modulated)
         } else {
             let (raw_frame, frm_w) = signal.synthesize_gateway_frame_with_words();
-            Self::modulate_srl_circuit_frame(circuit, raw_frame, &frm_w)
+            Self::modulate_rank1_circuit_frame(circuit, raw_frame, &frm_w)
         };
-        let gain = self.apply_srl_frame_internal(&frame, hidden_inout, u_vec, v_vec)?;
+        let gain = self.apply_rank1_frame_internal(&frame, hidden_inout, u_vec, v_vec)?;
         Ok((frame, gain))
     }
 

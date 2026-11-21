@@ -368,13 +368,13 @@ pub(crate) const fn build_q7_fused_self_phase_clamp_sincos_lut(
     let mut i = 0usize;
     while i < 256 {
         let (sin_base, cos_base) = Q7_DEFAULT_PHASE_CLAMP_SINCOS_LUT_256.0[i];
-        let (sin_pspm, cos_pspm) = if fold_geodesic {
+        let (sin_subhead, cos_subhead) = if fold_geodesic {
             Q7_GEODESIC_DEFAULT_PHASE_CLAMP_SINCOS_LUT_256.0[i]
         } else {
             Q7_DEFAULT_PHASE_CLAMP_SINCOS_LUT_256.0[i]
         };
-        let sin_comb = sin_base * cos_pspm + cos_base * sin_pspm;
-        let cos_comb = cos_base * cos_pspm - sin_base * sin_pspm;
+        let sin_comb = sin_base * cos_subhead + cos_base * sin_subhead;
+        let cos_comb = cos_base * cos_subhead - sin_base * sin_subhead;
         table[i] = (sin_comb, cos_comb);
         i += 1;
     }
@@ -382,12 +382,12 @@ pub(crate) const fn build_q7_fused_self_phase_clamp_sincos_lut(
 }
 
 /// Precomputed 64-byte-aligned 2KB LUT of fused $SO(2)$ double-rotation `(sin(2*theta), cos(2*theta))`
-/// when `base_ripa_q7 == pspm_slot_q7` under `DEFAULT_PHASE_CLAMP_MAX_RAD` (non-geodesic sub-head router).
+/// when `base_clamp_q7 == subhead_slot_q7` under `DEFAULT_PHASE_CLAMP_MAX_RAD` (non-geodesic sub-head router).
 pub(crate) const Q7_FUSED_SELF_DEFAULT_PHASE_CLAMP_SINCOS_LUT_256: AlignedLut256<(f32, f32)> =
     build_q7_fused_self_phase_clamp_sincos_lut(false);
 
 /// Precomputed 64-byte-aligned 2KB LUT of fused $SO(2)$ double-rotation `(sin(theta_b + theta_p), cos(theta_b + theta_p))`
-/// when `base_ripa_q7 == pspm_slot_q7` under `DEFAULT_PHASE_CLAMP_MAX_RAD` (geodesic sub-head router).
+/// when `base_clamp_q7 == subhead_slot_q7` under `DEFAULT_PHASE_CLAMP_MAX_RAD` (geodesic sub-head router).
 pub(crate) const Q7_FUSED_SELF_GEODESIC_PHASE_CLAMP_SINCOS_LUT_256: AlignedLut256<(f32, f32)> =
     build_q7_fused_self_phase_clamp_sincos_lut(true);
 

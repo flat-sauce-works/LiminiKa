@@ -79,10 +79,10 @@ fn test_subhead_routing_and_visual_mse_bitmask() {
         explore_phase_gain: 1.2,
         ..Default::default()
     };
-    let mut q_pspm = AlignedBuffer32::new([1.0_f32; 96]);
+    let mut q_subhead = AlignedBuffer32::new([1.0_f32; 96]);
     let bank = AlignedBuffer64::<gcso_q7_t, 512>::splat(24);
     dispatch_phase_clamp_and_subhead_slot_ensemble_fused(
-        &mut q_pspm.as_aligned_slice_mut(),
+        &mut q_subhead.as_aligned_slice_mut(),
         &[16i8; 64],
         DEFAULT_PHASE_CLAMP_MAX_RAD,
         &subhead_cfg,
@@ -96,8 +96,8 @@ fn test_subhead_routing_and_visual_mse_bitmask() {
         true,
     )
     .unwrap();
-    assert_eq!(&q_pspm.data[0..10], &[1.0_f32; 10]);
-    assert!((q_pspm.data[10] - 1.0).abs() > 1.0e-3);
+    assert_eq!(&q_subhead.data[0..10], &[1.0_f32; 10]);
+    assert!((q_subhead.data[10] - 1.0).abs() > 1.0e-3);
 
     let mut frame_cur = AlignedBuffer32::new([1.0_f32; 48]);
     let frame_prv = AlignedBuffer32::new([1.0_f32; 48]);

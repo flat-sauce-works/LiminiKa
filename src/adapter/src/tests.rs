@@ -186,7 +186,7 @@ fn substrate_orchestrator_gates_rope_and_srl_by_stigmergic_density() {
     let u = vec![1.0, 0.0, 0.0, 0.0];
     let v = vec![1.0, 0.0, 0.0, 0.0];
 
-    // First step from zero density crosses express_steer (0.35) but not srl_inject (1.50).
+    // First step from zero density crosses express_steer (0.35) but not rank1_inject (1.50).
     let mut q_rot1: Vec<f32> = (0..len).map(|i| ((i % 7) as f32) * 0.1 - 0.25).collect();
     let orig1 = q_rot1.clone();
     let (_, _, d1) = adapter
@@ -231,10 +231,10 @@ fn substrate_orchestrator_gates_rope_and_srl_by_stigmergic_density() {
         StigmergicActionDecision::FullOrchestration
             | StigmergicActionDecision::CrystallizeMacroBasin
     ));
-    let srl_res = adapter
+    let rank1_res = adapter
         .orchestrate_layer_srl_with_substrate(&resonant, &mut hidden, &u, &v)
         .expect("srl gate");
-    assert!(srl_res.is_some());
+    assert!(rank1_res.is_some());
     assert!(hidden[0] > 10.0);
 }
 
@@ -260,10 +260,10 @@ fn cold_path_probe_calibrates_thresholds_and_rebinds_geometry() {
     assert_eq!(baseline.steered_layers, 16);
     assert!(baseline.baseline_entropy > 0.40);
 
-    let low_load_srl = adapter.substrate().thresholds.rank1_inject_density_thresh;
+    let low_load_rank1 = adapter.substrate().thresholds.rank1_inject_density_thresh;
     adapter.update_environment_telemetry(0.85, 0.70, 0x0F);
-    let high_load_srl = adapter.substrate().thresholds.rank1_inject_density_thresh;
-    assert!(high_load_srl > low_load_srl);
+    let high_load_rank1 = adapter.substrate().thresholds.rank1_inject_density_thresh;
+    assert!(high_load_rank1 > low_load_rank1);
 
     let mut alt_geom = RopeGeometry::phi4_mini();
     alt_geom.num_q_heads = 32;
@@ -2133,10 +2133,10 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
             )
             .expect("substrate rope");
     }
-    let srl_res = ego_adapter
+    let rank1_res = ego_adapter
         .orchestrate_layer_srl_with_substrate(&fact, &mut hidden, &u, &v)
         .expect("substrate srl");
-    assert!(srl_res.is_some());
+    assert!(rank1_res.is_some());
     assert!(ego_adapter.ego_state().intervention_epochs > epochs_before_rope);
 
     // 3. sync_core_layers_from_recall connects corpus recall into Layer 0/1/2 + ensemble.

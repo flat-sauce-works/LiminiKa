@@ -1,12 +1,12 @@
 // name: src/core/src/foundation/rope/subhead_routing.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Parallel Sub-Head Phase Modulation (SubHeadRouter) trait and dispatch helpers.
+//! Parallel sub-head phase modulation (`SubheadRouter`) dispatch helpers and kernels.
 
 use super::*;
 
 // ===================================================================
-// 4. Parallel Sub-Head Phase Modulation (`SubHeadRouter`)
+// 4. Parallel Sub-Head Phase Modulation (`SubheadRouter`)
 // ===================================================================
 
 #[inline(always)]
@@ -404,9 +404,6 @@ pub(super) fn build_subhead_eff_words_from_profiles_64(
     out
 }
 
-/// Rotates `t_slice` across `0..total_heads` by the fused $SO(2)$ group-closure angle
-/// $\theta_{\mathrm{ripa}} + \theta_{\mathrm{pspm}}$ directly from register-resident `base_ripa_words`
-/// and pre-transformed `pspm_eff_words` in a single flat loop (`0` subgroup or cell loop exits).
 /// Returns `Some(b)` if all 64 bytes in `w` equal `b`, short-circuiting on `w[0]` in 3 integer
 /// instructions when `w[0]` is not byte-uniform.
 #[inline(always)]
@@ -431,14 +428,14 @@ pub(super) fn eval_fused_phase_clamp_subhead_pair_u8(
     base_is_def: bool,
     base_eff_max: f32,
     base_scale: f32,
-    pspm_is_def: bool,
-    pspm_eff_max: f32,
-    pspm_scale: f32,
+    subhead_is_def: bool,
+    subhead_eff_max: f32,
+    subhead_scale: f32,
 ) -> (f32, f32) {
     if (b_u8 | s_u8) == 0 {
         return (0.0, 1.0);
     }
-    if base_is_def & pspm_is_def {
+    if base_is_def & subhead_is_def {
         if b_u8 == s_u8 {
             return Q7_FUSED_SELF_DEFAULT_PHASE_CLAMP_SINCOS_REF[b_u8 as usize];
         }
@@ -455,13 +452,13 @@ pub(super) fn eval_fused_phase_clamp_subhead_pair_u8(
         base_scale,
         s_u8 as gcso_q7_t,
         false,
-        pspm_is_def,
-        pspm_eff_max,
-        pspm_scale,
+        subhead_is_def,
+        subhead_eff_max,
+        subhead_scale,
     )
 }
 
-/// Rotates `t_slice` across `0..total_heads` when `base_ripa_words` is byte-uniform (`b_u8`) and
+/// Rotates `t_slice` across `0..total_heads` when `base_clamp_words` is byte-uniform (`b_u8`) and
 /// the 3 sub-head router subgroups (`0..fact_h`, `fact_h..logic_end`, `logic_end..total_heads`) each have
 /// constant effective Q7 bytes `(f_u8, l_u8, e_u8)`, coalescing adjacent subgroups when their
 /// effective bytes match (`1..=3` calls to `rotate_phase_clamp_upper_heads_uniform_sincos`).
@@ -480,9 +477,9 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_uniform_subgroups(
     base_is_def: bool,
     base_eff_max: f32,
     base_scale: f32,
-    pspm_is_def: bool,
-    pspm_eff_max: f32,
-    pspm_scale: f32,
+    subhead_is_def: bool,
+    subhead_eff_max: f32,
+    subhead_scale: f32,
 ) {
     let limit = total_heads.min(MAX_ATTENTION_HEADS);
     if limit == 0 {
@@ -508,9 +505,9 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_uniform_subgroups(
                 base_is_def,
                 base_eff_max,
                 base_scale,
-                pspm_is_def,
-                pspm_eff_max,
-                pspm_scale,
+                subhead_is_def,
+                subhead_eff_max,
+                subhead_scale,
             );
             rotate_phase_clamp_upper_heads_uniform_sincos(
                 t_slice, 0, limit, head_dim, rot_dim, sin_c, cos_c,
@@ -526,9 +523,9 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_uniform_subgroups(
                 base_is_def,
                 base_eff_max,
                 base_scale,
-                pspm_is_def,
-                pspm_eff_max,
-                pspm_scale,
+                subhead_is_def,
+                subhead_eff_max,
+                subhead_scale,
             );
             rotate_phase_clamp_upper_heads_uniform_sincos(
                 t_slice, 0, le, head_dim, rot_dim, sin_fl, cos_fl,
@@ -541,9 +538,9 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_uniform_subgroups(
                 base_is_def,
                 base_eff_max,
                 base_scale,
-                pspm_is_def,
-                pspm_eff_max,
-                pspm_scale,
+                subhead_is_def,
+                subhead_eff_max,
+                subhead_scale,
             );
             rotate_phase_clamp_upper_heads_uniform_sincos(
                 t_slice, le, limit, head_dim, rot_dim, sin_e, cos_e,
@@ -559,9 +556,9 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_uniform_subgroups(
                 base_is_def,
                 base_eff_max,
                 base_scale,
-                pspm_is_def,
-                pspm_eff_max,
-                pspm_scale,
+                subhead_is_def,
+                subhead_eff_max,
+                subhead_scale,
             );
             rotate_phase_clamp_upper_heads_uniform_sincos(
                 t_slice, 0, fh, head_dim, rot_dim, sin_f, cos_f,
@@ -574,9 +571,9 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_uniform_subgroups(
                 base_is_def,
                 base_eff_max,
                 base_scale,
-                pspm_is_def,
-                pspm_eff_max,
-                pspm_scale,
+                subhead_is_def,
+                subhead_eff_max,
+                subhead_scale,
             );
             rotate_phase_clamp_upper_heads_uniform_sincos(
                 t_slice, fh, limit, head_dim, rot_dim, sin_le, cos_le,
@@ -591,9 +588,9 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_uniform_subgroups(
             base_is_def,
             base_eff_max,
             base_scale,
-            pspm_is_def,
-            pspm_eff_max,
-            pspm_scale,
+            subhead_is_def,
+            subhead_eff_max,
+            subhead_scale,
         );
         rotate_phase_clamp_upper_heads_uniform_sincos(
             t_slice, 0, fh, head_dim, rot_dim, sin_f, cos_f,
@@ -606,9 +603,9 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_uniform_subgroups(
             base_is_def,
             base_eff_max,
             base_scale,
-            pspm_is_def,
-            pspm_eff_max,
-            pspm_scale,
+            subhead_is_def,
+            subhead_eff_max,
+            subhead_scale,
         );
         rotate_phase_clamp_upper_heads_uniform_sincos(
             t_slice, fh, le, head_dim, rot_dim, sin_l, cos_l,
@@ -621,9 +618,9 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_uniform_subgroups(
             base_is_def,
             base_eff_max,
             base_scale,
-            pspm_is_def,
-            pspm_eff_max,
-            pspm_scale,
+            subhead_is_def,
+            subhead_eff_max,
+            subhead_scale,
         );
         rotate_phase_clamp_upper_heads_uniform_sincos(
             t_slice, le, limit, head_dim, rot_dim, sin_e, cos_e,
@@ -716,7 +713,7 @@ pub(super) fn rotate_phase_clamp_lut_words_slice_nonuniform(
 
 pub(crate) fn rotate_fused_self_phase_clamp_and_subhead_default_words(
     t_slice: &mut [f32],
-    base_ripa_words: &[u64; NUM_SWARM_CELLS],
+    base_clamp_words: &[u64; NUM_SWARM_CELLS],
     total_heads: usize,
     head_dim: usize,
     rot_dim: usize,
@@ -731,7 +728,7 @@ pub(crate) fn rotate_fused_self_phase_clamp_and_subhead_default_words(
     } else {
         Q7_FUSED_SELF_DEFAULT_PHASE_CLAMP_SINCOS_REF
     };
-    if let Some(b_u8) = byte_uniform_word_u8(base_ripa_words) {
+    if let Some(b_u8) = byte_uniform_word_u8(base_clamp_words) {
         if b_u8 != 0 {
             let (sin_comb, cos_comb) = self_lut[b_u8 as usize];
             rotate_phase_clamp_upper_heads_uniform_sincos(
@@ -742,7 +739,7 @@ pub(crate) fn rotate_fused_self_phase_clamp_and_subhead_default_words(
     }
     rotate_phase_clamp_lut_words_slice_nonuniform(
         t_slice,
-        base_ripa_words,
+        base_clamp_words,
         limit,
         head_dim,
         rot_dim,
@@ -750,15 +747,15 @@ pub(crate) fn rotate_fused_self_phase_clamp_and_subhead_default_words(
     );
 }
 
-/// Rotates `q_slice` via `Q7_FUSED_SELF_GEODESIC_PHASE_CLAMP_SINCOS_REF` ($\theta_{\mathrm{ripa}} + \theta_{\mathrm{pspm}}$)
-/// and `k_slice` via `Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF` ($\theta_{\mathrm{ripa}}$), checking SWAR phase
+/// Rotates `q_slice` via `Q7_FUSED_SELF_GEODESIC_PHASE_CLAMP_SINCOS_REF` ($\theta_{\mathrm{clamp}} + \theta_{\mathrm{subhead}}$)
+/// and `k_slice` via `Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF` ($\theta_{\mathrm{clamp}}$), checking SWAR phase
 /// uniformity once and streaming `q_slice` then `k_slice` in 4-head-unrolled passes to eliminate
 /// 2-stream 4KB page-offset Load-Store Queue aliasing on 32KB (`128x64`) tensors.
 #[inline(always)]
 pub(crate) fn rotate_fused_self_phase_clamp_subhead_q_and_clamp_k_default_words(
     q_slice: &mut [f32],
     k_slice: &mut [f32],
-    base_ripa_words: &[u64; NUM_SWARM_CELLS],
+    base_clamp_words: &[u64; NUM_SWARM_CELLS],
     total_heads: usize,
     head_dim: usize,
     rot_dim: usize,
@@ -769,7 +766,7 @@ pub(crate) fn rotate_fused_self_phase_clamp_subhead_q_and_clamp_k_default_words(
     }
     let q_lut = Q7_FUSED_SELF_GEODESIC_PHASE_CLAMP_SINCOS_REF;
     let k_lut = Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF;
-    if let Some(b_u8) = byte_uniform_word_u8(base_ripa_words) {
+    if let Some(b_u8) = byte_uniform_word_u8(base_clamp_words) {
         if b_u8 != 0 {
             let (sin_q, cos_q) = q_lut[b_u8 as usize];
             let (sin_k, cos_k) = k_lut[b_u8 as usize];
@@ -784,7 +781,7 @@ pub(crate) fn rotate_fused_self_phase_clamp_subhead_q_and_clamp_k_default_words(
     }
     rotate_phase_clamp_lut_words_slice_nonuniform(
         q_slice,
-        base_ripa_words,
+        base_clamp_words,
         limit,
         head_dim,
         rot_dim,
@@ -792,7 +789,7 @@ pub(crate) fn rotate_fused_self_phase_clamp_subhead_q_and_clamp_k_default_words(
     );
     rotate_phase_clamp_lut_words_slice_nonuniform(
         k_slice,
-        base_ripa_words,
+        base_clamp_words,
         limit,
         head_dim,
         rot_dim,
@@ -800,27 +797,31 @@ pub(crate) fn rotate_fused_self_phase_clamp_subhead_q_and_clamp_k_default_words(
     );
 }
 
+/// Rotates `t_slice` across `0..total_heads` by the fused $SO(2)$ group-closure angle
+/// $\theta_{\mathrm{clamp}} + \theta_{\mathrm{subhead}}$ directly from register-resident
+/// `base_clamp_words` and pre-transformed `subhead_eff_words` in a single flat loop
+/// (`0` subgroup or cell loop exits).
 #[inline]
 pub(super) fn rotate_fused_phase_clamp_and_subhead_eff_words_core(
     t_slice: &mut [f32],
-    base_ripa_words: &[u64; NUM_SWARM_CELLS],
-    pspm_eff_words: &[u64; NUM_SWARM_CELLS],
+    base_clamp_words: &[u64; NUM_SWARM_CELLS],
+    subhead_eff_words: &[u64; NUM_SWARM_CELLS],
     total_heads: usize,
     head_dim: usize,
     rot_dim: usize,
     base_is_def: bool,
     base_eff_max: f32,
     base_scale: f32,
-    pspm_is_def: bool,
-    pspm_eff_max: f32,
-    pspm_scale: f32,
+    subhead_is_def: bool,
+    subhead_eff_max: f32,
+    subhead_scale: f32,
 ) {
     let limit = total_heads.min(MAX_ATTENTION_HEADS);
     if limit == 0 {
         return;
     }
-    if let Some(b_u8) = byte_uniform_word_u8(base_ripa_words) {
-        if let Some(s_u8) = byte_uniform_word_u8(pspm_eff_words) {
+    if let Some(b_u8) = byte_uniform_word_u8(base_clamp_words) {
+        if let Some(s_u8) = byte_uniform_word_u8(subhead_eff_words) {
             if (b_u8 | s_u8) != 0 {
                 let (sin_comb, cos_comb) = eval_fused_phase_clamp_subhead_pair_u8(
                     b_u8,
@@ -828,9 +829,9 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_eff_words_core(
                     base_is_def,
                     base_eff_max,
                     base_scale,
-                    pspm_is_def,
-                    pspm_eff_max,
-                    pspm_scale,
+                    subhead_is_def,
+                    subhead_eff_max,
+                    subhead_scale,
                 );
                 rotate_phase_clamp_upper_heads_uniform_sincos(
                     t_slice, 0, limit, head_dim, rot_dim, sin_comb, cos_comb,
@@ -840,7 +841,7 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_eff_words_core(
         }
     }
     let upper_off = head_dim - rot_dim;
-    if base_is_def & pspm_is_def {
+    if base_is_def & subhead_is_def {
         let lut = Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF;
         let self_lut = Q7_FUSED_SELF_DEFAULT_PHASE_CLAMP_SINCOS_REF;
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
@@ -856,8 +857,8 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_eff_words_core(
                 while h + 4 <= limit {
                     let cell = h >> 3;
                     let half_shift = (h & 4) << 3;
-                    let wb32 = (base_ripa_words[cell] >> half_shift) as u32;
-                    let ws32 = (pspm_eff_words[cell] >> half_shift) as u32;
+                    let wb32 = (base_clamp_words[cell] >> half_shift) as u32;
+                    let ws32 = (subhead_eff_words[cell] >> half_shift) as u32;
                     if (wb32 | ws32) != 0 {
                         if wb32 == ws32 {
                             let b0 = (wb32 & 0xFF) as usize;
@@ -921,8 +922,8 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_eff_words_core(
                 while h < limit {
                     let cell = h >> 3;
                     let shift = (h & 7) << 3;
-                    let b_u8 = ((base_ripa_words[cell] >> shift) & 0xFF) as usize;
-                    let s_u8 = ((pspm_eff_words[cell] >> shift) & 0xFF) as usize;
+                    let b_u8 = ((base_clamp_words[cell] >> shift) & 0xFF) as usize;
+                    let s_u8 = ((subhead_eff_words[cell] >> shift) & 0xFF) as usize;
                     if (b_u8 | s_u8) != 0 {
                         let (sin_comb, cos_comb) = if b_u8 == s_u8 {
                             self_lut[b_u8]
@@ -947,8 +948,8 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_eff_words_core(
         while h < limit {
             let cell = h >> 3;
             let shift = (h & 7) << 3;
-            let b_u8 = ((base_ripa_words[cell] >> shift) & 0xFF) as u8;
-            let s_u8 = ((pspm_eff_words[cell] >> shift) & 0xFF) as u8;
+            let b_u8 = ((base_clamp_words[cell] >> shift) & 0xFF) as u8;
+            let s_u8 = ((subhead_eff_words[cell] >> shift) & 0xFF) as u8;
             if (b_u8 | s_u8) != 0 {
                 let (sin_comb, cos_comb) = if b_u8 == s_u8 {
                     self_lut[b_u8 as usize]
@@ -975,8 +976,8 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_eff_words_core(
     while h < limit {
         let cell = h >> 3;
         let shift = (h & 7) << 3;
-        let b_u8 = ((base_ripa_words[cell] >> shift) & 0xFF) as u8;
-        let s_u8 = ((pspm_eff_words[cell] >> shift) & 0xFF) as u8;
+        let b_u8 = ((base_clamp_words[cell] >> shift) & 0xFF) as u8;
+        let s_u8 = ((subhead_eff_words[cell] >> shift) & 0xFF) as u8;
         if (b_u8 | s_u8) != 0 {
             let pair_key = (u16::from(b_u8) << 8) | u16::from(s_u8);
             let (sin_comb, cos_comb) = if pair_key == cached_pair {
@@ -988,9 +989,9 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_eff_words_core(
                     base_is_def,
                     base_eff_max,
                     base_scale,
-                    pspm_is_def,
-                    pspm_eff_max,
-                    pspm_scale,
+                    subhead_is_def,
+                    subhead_eff_max,
+                    subhead_scale,
                 );
                 cached_pair = pair_key;
                 cached_sc = sc;
@@ -1006,23 +1007,23 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_eff_words_core(
 #[inline]
 pub(crate) fn dispatch_fused_phase_clamp_and_subhead_words_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
-    base_ripa_words: &[u64; NUM_SWARM_CELLS],
-    base_ripa_max_rad: f32,
+    base_clamp_words: &[u64; NUM_SWARM_CELLS],
+    base_clamp_max_rad: f32,
     config: &gcso_subhead_config_t,
     fact_words: &[u64; NUM_SWARM_CELLS],
     logic_words: &[u64; NUM_SWARM_CELLS],
     explore_words: &[u64; NUM_SWARM_CELLS],
-    pspm_max_rad: f32,
+    subhead_max_rad: f32,
     explore_pulse_q7: gcso_q7_t,
     head_dim: usize,
     fold_geodesic: bool,
 ) -> GcsoResult<()> {
     if head_dim == 0
         || (head_dim & 1) != 0
-        || base_ripa_max_rad <= 0.0
-        || !branchless_is_finite_f32(base_ripa_max_rad)
-        || pspm_max_rad <= 0.0
-        || !branchless_is_finite_f32(pspm_max_rad)
+        || base_clamp_max_rad <= 0.0
+        || !branchless_is_finite_f32(base_clamp_max_rad)
+        || subhead_max_rad <= 0.0
+        || !branchless_is_finite_f32(subhead_max_rad)
     {
         return Err(GCSO_ERROR_INVALID_ARGUMENT);
     }
@@ -1041,8 +1042,9 @@ pub(crate) fn dispatch_fused_phase_clamp_and_subhead_words_core(
     }
 
     let (base_is_def, base_eff_max, base_scale) =
-        resolve_phase_clamp_norm_params(base_ripa_max_rad);
-    let (pspm_is_def, pspm_eff_max, pspm_scale) = resolve_phase_clamp_norm_params(pspm_max_rad);
+        resolve_phase_clamp_norm_params(base_clamp_max_rad);
+    let (subhead_is_def, subhead_eff_max, subhead_scale) =
+        resolve_phase_clamp_norm_params(subhead_max_rad);
 
     let rot_dim = phase_clamp_upper_rot_dim(head_dim);
     let t_slice = tensor.as_mut_slice();
@@ -1052,17 +1054,17 @@ pub(crate) fn dispatch_fused_phase_clamp_and_subhead_words_core(
     let logic_end = fact_h + logic_h;
 
     let fact_is_self = (fact_gain_u7 == 128)
-        && (core::ptr::eq(fact_words, base_ripa_words) || fact_words == base_ripa_words);
+        && (core::ptr::eq(fact_words, base_clamp_words) || fact_words == base_clamp_words);
     let logic_is_self = (logic_gain_u7 == 128)
-        && (core::ptr::eq(logic_words, base_ripa_words) || logic_words == base_ripa_words);
+        && (core::ptr::eq(logic_words, base_clamp_words) || logic_words == base_clamp_words);
     let explore_is_self = (explore_gain_u7 == 128)
         && (explore_pulse_q7 == 0)
-        && (core::ptr::eq(explore_words, base_ripa_words) || explore_words == base_ripa_words);
+        && (core::ptr::eq(explore_words, base_clamp_words) || explore_words == base_clamp_words);
 
-    if base_is_def && pspm_is_def && fact_is_self && logic_is_self && explore_is_self {
+    if base_is_def && subhead_is_def && fact_is_self && logic_is_self && explore_is_self {
         rotate_fused_self_phase_clamp_and_subhead_default_words(
             t_slice,
-            base_ripa_words,
+            base_clamp_words,
             total_heads,
             head_dim,
             rot_dim,
@@ -1071,24 +1073,24 @@ pub(crate) fn dispatch_fused_phase_clamp_and_subhead_words_core(
         return Ok(());
     }
 
-    if let Some(b_u8) = byte_uniform_word_u8(base_ripa_words) {
+    if let Some(b_u8) = byte_uniform_word_u8(base_clamp_words) {
         let f_uni = if fact_h == 0 {
             Some(0u8)
-        } else if core::ptr::eq(fact_words, base_ripa_words) {
+        } else if core::ptr::eq(fact_words, base_clamp_words) {
             Some(b_u8)
         } else {
             byte_uniform_word_u8(fact_words)
         };
         let l_uni = if logic_h == 0 || (core::ptr::eq(logic_words, fact_words) && fact_h > 0) {
             f_uni
-        } else if core::ptr::eq(logic_words, base_ripa_words) {
+        } else if core::ptr::eq(logic_words, base_clamp_words) {
             Some(b_u8)
         } else {
             byte_uniform_word_u8(logic_words)
         };
         let e_uni = if explore_h == 0 {
             Some(0u8)
-        } else if core::ptr::eq(explore_words, base_ripa_words) {
+        } else if core::ptr::eq(explore_words, base_clamp_words) {
             Some(b_u8)
         } else if core::ptr::eq(explore_words, logic_words) && logic_h > 0 {
             l_uni
@@ -1122,15 +1124,15 @@ pub(crate) fn dispatch_fused_phase_clamp_and_subhead_words_core(
                 base_is_def,
                 base_eff_max,
                 base_scale,
-                pspm_is_def,
-                pspm_eff_max,
-                pspm_scale,
+                subhead_is_def,
+                subhead_eff_max,
+                subhead_scale,
             );
             return Ok(());
         }
     }
 
-    let pspm_eff_words = build_subhead_eff_words_64(
+    let subhead_eff_words = build_subhead_eff_words_64(
         fact_words,
         fact_h,
         fact_gain_u7,
@@ -1145,40 +1147,40 @@ pub(crate) fn dispatch_fused_phase_clamp_and_subhead_words_core(
     );
     rotate_fused_phase_clamp_and_subhead_eff_words_core(
         t_slice,
-        base_ripa_words,
-        &pspm_eff_words,
+        base_clamp_words,
+        &subhead_eff_words,
         total_heads,
         head_dim,
         rot_dim,
         base_is_def,
         base_eff_max,
         base_scale,
-        pspm_is_def,
-        pspm_eff_max,
-        pspm_scale,
+        subhead_is_def,
+        subhead_eff_max,
+        subhead_scale,
     );
     Ok(())
 }
 
 pub(crate) fn dispatch_fused_phase_clamp_words_and_subhead_profiles_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
-    base_ripa_words: &[u64; NUM_SWARM_CELLS],
-    base_ripa_max_rad: f32,
+    base_clamp_words: &[u64; NUM_SWARM_CELLS],
+    base_clamp_max_rad: f32,
     config: &gcso_subhead_config_t,
     fact_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     logic_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     explore_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    pspm_max_rad: f32,
+    subhead_max_rad: f32,
     explore_pulse_q7: gcso_q7_t,
     head_dim: usize,
     fold_geodesic: bool,
 ) -> GcsoResult<()> {
     if head_dim == 0
         || (head_dim & 1) != 0
-        || base_ripa_max_rad <= 0.0
-        || !branchless_is_finite_f32(base_ripa_max_rad)
-        || pspm_max_rad <= 0.0
-        || !branchless_is_finite_f32(pspm_max_rad)
+        || base_clamp_max_rad <= 0.0
+        || !branchless_is_finite_f32(base_clamp_max_rad)
+        || subhead_max_rad <= 0.0
+        || !branchless_is_finite_f32(subhead_max_rad)
     {
         return Err(GCSO_ERROR_INVALID_ARGUMENT);
     }
@@ -1197,15 +1199,16 @@ pub(crate) fn dispatch_fused_phase_clamp_words_and_subhead_profiles_core(
     }
 
     let (base_is_def, base_eff_max, base_scale) =
-        resolve_phase_clamp_norm_params(base_ripa_max_rad);
-    let (pspm_is_def, pspm_eff_max, pspm_scale) = resolve_phase_clamp_norm_params(pspm_max_rad);
+        resolve_phase_clamp_norm_params(base_clamp_max_rad);
+    let (subhead_is_def, subhead_eff_max, subhead_scale) =
+        resolve_phase_clamp_norm_params(subhead_max_rad);
     let rot_dim = phase_clamp_upper_rot_dim(head_dim);
     let fact_gain_u7 = sanitize_subhead_gain_to_u7(config.fact_phase_gain);
     let logic_gain_u7 = sanitize_subhead_gain_to_u7(config.logic_phase_gain);
     let explore_gain_u7 = sanitize_subhead_gain_to_u7(config.explore_phase_gain);
     let logic_end = fact_h + logic_h;
 
-    let pspm_eff_words = build_subhead_eff_words_from_profiles_64(
+    let subhead_eff_words = build_subhead_eff_words_from_profiles_64(
         fact_phases,
         fact_h,
         fact_gain_u7,
@@ -1220,49 +1223,49 @@ pub(crate) fn dispatch_fused_phase_clamp_words_and_subhead_profiles_core(
     );
     rotate_fused_phase_clamp_and_subhead_eff_words_core(
         tensor.as_mut_slice(),
-        base_ripa_words,
-        &pspm_eff_words,
+        base_clamp_words,
+        &subhead_eff_words,
         total_heads,
         head_dim,
         rot_dim,
         base_is_def,
         base_eff_max,
         base_scale,
-        pspm_is_def,
-        pspm_eff_max,
-        pspm_scale,
+        subhead_is_def,
+        subhead_eff_max,
+        subhead_scale,
     );
     Ok(())
 }
 
-/// Fuses **soft-bounded (`PhaseClamp`) phase steering** (`base_ripa_phases`, `base_ripa_max_rad`) and
+/// Fuses **soft-bounded (`PhaseClamp`) phase steering** (`base_clamp_phases`, `base_clamp_max_rad`) and
 /// **sub-head router Upper-Quarter ($d_{\mathrm{head}}/4$) Sub-Head Routing** into a **single memory pass**
-/// over `tensor` by loading `base_ripa_phases` into 8 `u64` SWAR registers and delegating to
+/// over `tensor` by loading `base_clamp_phases` into 8 `u64` SWAR registers and delegating to
 /// `dispatch_fused_phase_clamp_words_and_subhead_profiles_core`.
 #[inline(always)]
 pub(crate) fn dispatch_fused_phase_clamp_and_subhead_profiles_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
-    base_ripa_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    base_ripa_max_rad: f32,
+    base_clamp_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    base_clamp_max_rad: f32,
     config: &gcso_subhead_config_t,
     fact_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     logic_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
     explore_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    pspm_max_rad: f32,
+    subhead_max_rad: f32,
     explore_pulse_q7: gcso_q7_t,
     head_dim: usize,
     fold_geodesic: bool,
 ) -> GcsoResult<()> {
-    let base_words = load_q7_words_64(base_ripa_phases);
+    let base_words = load_q7_words_64(base_clamp_phases);
     dispatch_fused_phase_clamp_words_and_subhead_profiles_core(
         tensor,
         &base_words,
-        base_ripa_max_rad,
+        base_clamp_max_rad,
         config,
         fact_phases,
         logic_phases,
         explore_phases,
-        pspm_max_rad,
+        subhead_max_rad,
         explore_pulse_q7,
         head_dim,
         fold_geodesic,
@@ -1414,22 +1417,22 @@ pub fn dispatch_single_pass(
 
 /// Executes **Single-Pass $SO(2)$ Group-Closure Fused `PhaseClamp` + 8-Slot Ensemble Sub-Head
 /// Routing**, rotating the shared upper $\frac{1}{4}d_{\mathrm{head}}$ low-frequency pairs by
-/// the composite angle $\theta_{\mathrm{ripa}} + \theta_{\mathrm{pspm}}$ in a single traversal.
+/// the composite angle $\theta_{\mathrm{clamp}} + \theta_{\mathrm{subhead}}$ in a single traversal.
 ///
 /// # Errors
 /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slot IDs `>= 8`, `slot_phase_bank.len() < 512`,
-/// `head_dim` is invalid, `base_ripa_max_rad <= 0.0`, `pspm_max_rad <= 0.0`, or `tensor` is too small.
+/// `head_dim` is invalid, `base_clamp_max_rad <= 0.0`, `subhead_max_rad <= 0.0`, or `tensor` is too small.
 #[inline]
 pub fn dispatch_phase_clamp_and_subhead_slot_ensemble_fused(
     tensor: &mut AlignedSliceMut32<'_, f32>,
-    base_ripa_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    base_ripa_max_rad: f32,
+    base_clamp_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    base_clamp_max_rad: f32,
     config: &gcso_subhead_config_t,
     slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
     fact_slot_id: u8,
     logic_slot_id: u8,
     explore_slot_id: u8,
-    pspm_max_rad: f32,
+    subhead_max_rad: f32,
     explore_pulse_q7: gcso_q7_t,
     head_dim: usize,
     fold_geodesic: bool,
@@ -1446,13 +1449,13 @@ pub fn dispatch_phase_clamp_and_subhead_slot_ensemble_fused(
     let bank_2d = slot_phase_bank.as_slot_bank::<MAX_ATTRACTOR_DOMAINS, MAX_ATTENTION_HEADS>()?;
     dispatch_fused_phase_clamp_and_subhead_profiles_core(
         tensor,
-        base_ripa_phases,
-        base_ripa_max_rad,
+        base_clamp_phases,
+        base_clamp_max_rad,
         config,
         &bank_2d[f_id],
         &bank_2d[l_id],
         &bank_2d[e_id],
-        pspm_max_rad,
+        subhead_max_rad,
         explore_pulse_q7,
         head_dim,
         fold_geodesic,

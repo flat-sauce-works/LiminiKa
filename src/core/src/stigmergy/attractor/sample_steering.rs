@@ -140,7 +140,7 @@ pub(crate) const fn q7_phases_to_embedding16(
 }
 
 // ===================================================================
-// 1. Pillar 1: Coherence-Safe Base Signal Trait (`EpisodicPhaseSample`)
+// 1. Coherence-Safe Base Signal Trait (`EpisodicPhaseSample`)
 // ===================================================================
 
 /// Base signal trait representing any unknown input, prompt fragment, episodic memory turn,
@@ -506,7 +506,7 @@ impl<S: EpisodicPhaseSample> EpisodicPhaseSample for (S, f32, u32) {
 }
 
 // ===================================================================
-// 2. Pillar 2: Blanket RoPE Direct Steering & Attractor Growth
+// 2. Blanket RoPE Direct Steering & Attractor Growth
 // ===================================================================
 
 /// 16-byte [`Pod`] telemetry report summarizing the personality growth and precision gain achieved

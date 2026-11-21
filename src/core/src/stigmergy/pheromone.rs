@@ -783,11 +783,11 @@ impl gcso_pointer_trail_t {
             self.target_anchor_id,
             u32::from(next_slot),
         );
-        let dpsr_on = (next_mode & ACTION_MODE_PHASE_STEER) != 0;
+        let phase_steer_on = (next_mode & ACTION_MODE_PHASE_STEER) != 0;
         let skip_on = (next_mode & ACTION_MODE_LAYER_SKIP) != 0;
         self.flags = (self.flags
             & !(TRAIL_FLAG_PHASE_STEER_ACTIVE | TRAIL_FLAG_INERTIAL_SKIP_ACTIVE))
-            | branchless_select_u32(dpsr_on, TRAIL_FLAG_PHASE_STEER_ACTIVE, 0)
+            | branchless_select_u32(phase_steer_on, TRAIL_FLAG_PHASE_STEER_ACTIVE, 0)
             | branchless_select_u32(skip_on, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, 0);
 
         (

@@ -26,7 +26,7 @@ impl CrystallizedAttractorRecord {
         coh: f32,
         b_anchor_id: u32,
         b_sample_count: u32,
-        b_zimms_offset48: u64,
+        b_mapped_offset48: u64,
         b_base_energy: f32,
         b_resultant_r_bar: f32,
         b_von_mises_kappa: f32,
@@ -59,8 +59,8 @@ impl CrystallizedAttractorRecord {
             self.ripa_clamp_rad = b_ripa_clamp_rad;
             self.effective_inv_temp = b_effective_inv_temp;
             self.dominant_cause_code = b_dominant_cause_code;
-            if b_zimms_offset48 != 0 {
-                self.mapped_section_offset48 = b_zimms_offset48;
+            if b_mapped_offset48 != 0 {
+                self.mapped_section_offset48 = b_mapped_offset48;
             }
             (
                 w_b,
@@ -78,7 +78,7 @@ impl CrystallizedAttractorRecord {
             )
         } else {
             if self.mapped_section_offset48 == 0 {
-                self.mapped_section_offset48 = b_zimms_offset48;
+                self.mapped_section_offset48 = b_mapped_offset48;
             }
             (
                 w_a,

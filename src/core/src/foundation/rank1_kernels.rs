@@ -467,16 +467,16 @@ mod tests {
 
     #[test]
     fn test_eval_rank1_pointer_gated_and_gain_fused() {
-        let mut y_srl = AlignedBuffer32::new([1.0_f32; 8]);
-        let x_srl = AlignedBuffer32::new([1.0_f32; 8]);
-        let u_srl = AlignedBuffer32::new([0.5_f32; 8]);
-        let v_srl = AlignedBuffer32::new([0.25_f32; 8]);
-        let g_srl = AlignedBuffer32::new([2.0_f32; 8]);
+        let mut y_rank1 = AlignedBuffer32::new([1.0_f32; 8]);
+        let x_rank1 = AlignedBuffer32::new([1.0_f32; 8]);
+        let u_rank1 = AlignedBuffer32::new([0.5_f32; 8]);
+        let v_rank1 = AlignedBuffer32::new([0.25_f32; 8]);
+        let g_rank1 = AlignedBuffer32::new([2.0_f32; 8]);
         let desc = gcso_rank1_residual_descriptor_t {
             layer_idx: 0,
             rank: 1,
-            u_vector_ptr: u_srl.as_aligned_slice().as_ptr() as u64,
-            v_vector_ptr: v_srl.as_aligned_slice().as_ptr() as u64,
+            u_vector_ptr: u_rank1.as_aligned_slice().as_ptr() as u64,
+            v_vector_ptr: v_rank1.as_aligned_slice().as_ptr() as u64,
             gain_scalar_ptr: 0,
             scale_factor: 1.0,
             flags: 0,
@@ -485,24 +485,24 @@ mod tests {
         let ptr = gcso_tagged_ptr_t::pack(0x1000, (1 << 5) | ACTION_PRESET_FULL_ORCHESTRATION, 0);
         let injected = eval_rank1_pointer_gated_fused(
             ptr,
-            &mut y_srl.as_aligned_slice_mut(),
-            &x_srl.as_aligned_slice(),
+            &mut y_rank1.as_aligned_slice_mut(),
+            &x_rank1.as_aligned_slice(),
             &desc,
         )
         .unwrap();
         assert!(injected);
-        assert!((y_srl.data[0] - 2.0).abs() < 1.0e-5);
+        assert!((y_rank1.data[0] - 2.0).abs() < 1.0e-5);
 
         let desc_with_gain = gcso_rank1_residual_descriptor_t {
-            gain_scalar_ptr: g_srl.as_aligned_slice().as_ptr() as u64,
+            gain_scalar_ptr: g_rank1.as_aligned_slice().as_ptr() as u64,
             ..desc
         };
         eval_rank1_fused(
-            &mut y_srl.as_aligned_slice_mut(),
-            &x_srl.as_aligned_slice(),
+            &mut y_rank1.as_aligned_slice_mut(),
+            &x_rank1.as_aligned_slice(),
             &desc_with_gain,
         )
         .unwrap();
-        assert!((y_srl.data[0] - 4.0).abs() < 1.0e-5);
+        assert!((y_rank1.data[0] - 4.0).abs() < 1.0e-5);
     }
 }

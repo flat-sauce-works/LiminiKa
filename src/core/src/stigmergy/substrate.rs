@@ -78,10 +78,10 @@ pub const DEFAULT_STIGMERGIC_INERTIAL_SKIP_ENTROPY: f32 = 0.15;
 /// Default stigmergic trail density threshold ($\tau_{\mathrm{steer}} = 0.35$) triggering [`StigmergicActionDecision::ExpressPhaseSteer`].
 pub const DEFAULT_STIGMERGIC_EXPRESS_STEER_THRESH: f32 = 0.35;
 
-/// Default stigmergic trail density threshold ($\tau_{\mathrm{pspm}} = 0.85$) triggering [`StigmergicActionDecision::SubHeadRoute`].
+/// Default stigmergic trail density threshold ($\tau_{\mathrm{subhead}} = 0.85$) triggering [`StigmergicActionDecision::SubHeadRoute`].
 pub const DEFAULT_STIGMERGIC_SUBHEAD_ROUTE_THRESH: f32 = 0.85;
 
-/// Default stigmergic trail density threshold ($\tau_{\mathrm{srl}} = 1.50$) triggering [`StigmergicActionDecision::FullOrchestration`].
+/// Default stigmergic trail density threshold ($\tau_{\mathrm{rank1}} = 1.50$) triggering [`StigmergicActionDecision::FullOrchestration`].
 pub const DEFAULT_STIGMERGIC_RANK1_INJECT_THRESH: f32 = 1.50;
 
 /// Default stigmergic trail density threshold ($\tau_{\mathrm{crystal}} = 2.20$) triggering [`StigmergicActionDecision::CrystallizeMacroBasin`].
@@ -110,13 +110,13 @@ pub enum StigmergicActionDecision {
     /// $\tilde{H} \le \tau_{\mathrm{skip}}$ with no repulsion active.
     InertialLayerSkip = 1,
     /// Single-pass `PhaseClamp` soft-clamped RoPE phase steering (`ACTION_PRESET_EXPRESS_PHASE = 0x01`):
-    /// $\tau_{\mathrm{steer}} \le \rho < \tau_{\mathrm{pspm}}$.
+    /// $\tau_{\mathrm{steer}} \le \rho < \tau_{\mathrm{subhead}}$.
     ExpressPhaseSteer = 2,
     /// $SO(2)$-fused `PhaseClamp` + sub-head router (`Fact / Logic / Explore`) Sub-Head Pseudo-MoE routing (`0x09`):
-    /// $\tau_{\mathrm{pspm}} \le \rho < \tau_{\mathrm{srl}}$ or high bifurcation entropy.
+    /// $\tau_{\mathrm{subhead}} \le \rho < \tau_{\mathrm{rank1}}$ or high bifurcation entropy.
     SubHeadRoute = 3,
     /// Full $SO(2)$-fused `PhaseClamp` + sub-head router + Dynamic Rank-1 residual injection
-    /// (`ACTION_PRESET_FULL_ORCHESTRATION = 0x19`): $\tau_{\mathrm{srl}} \le \rho < \tau_{\mathrm{crystal}}$.
+    /// (`ACTION_PRESET_FULL_ORCHESTRATION = 0x19`): $\tau_{\mathrm{rank1}} \le \rho < \tau_{\mathrm{crystal}}$.
     FullOrchestration = 4,
     /// Super-saturated coherent basin promotion (`ACTION_PRESET_FULL_ORCHESTRATION` +
     /// `TRAIL_FLAG_CRYSTALLIZED_CANDIDATE`): $\rho \ge \tau_{\mathrm{crystal}}$ and
@@ -393,9 +393,9 @@ pub struct StigmergicThresholds {
     pub inertial_skip_entropy_thresh: f32,
     /// Minimum stigmergic density $\tau_{\mathrm{steer}}$ triggering [`StigmergicActionDecision::ExpressPhaseSteer`] (default `0.35`).
     pub express_steer_density_thresh: f32,
-    /// Minimum stigmergic density $\tau_{\mathrm{pspm}}$ triggering [`StigmergicActionDecision::SubHeadRoute`] (default `0.85`).
+    /// Minimum stigmergic density $\tau_{\mathrm{subhead}}$ triggering [`StigmergicActionDecision::SubHeadRoute`] (default `0.85`).
     pub subhead_route_density_thresh: f32,
-    /// Minimum stigmergic density $\tau_{\mathrm{srl}}$ triggering [`StigmergicActionDecision::FullOrchestration`] (default `1.50`).
+    /// Minimum stigmergic density $\tau_{\mathrm{rank1}}$ triggering [`StigmergicActionDecision::FullOrchestration`] (default `1.50`).
     pub rank1_inject_density_thresh: f32,
     /// Minimum stigmergic density $\tau_{\mathrm{crystal}}$ triggering [`StigmergicActionDecision::CrystallizeMacroBasin`] (default `2.20`).
     pub crystallize_density_thresh: f32,
@@ -677,8 +677,8 @@ impl StigmergicThresholds {
     fn execute_decision_steering_and_logit_scaling(
         decision: StigmergicActionDecision,
         steer_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        qdps_min_rad: f32,
-        ripa_clamp: f32,
+        phase_step_min_rad: f32,
+        phase_clamp_max: f32,
         head_dim: usize,
         num_heads: usize,
         best_coh: f32,
@@ -689,7 +689,7 @@ impl StigmergicThresholds {
         let mut steered = false;
         let mut subhead_routed = false;
         let mut skip_compensated = false;
-        let min_step_q7 = branchless_rad_to_phase_step_u8(qdps_min_rad);
+        let min_step_q7 = branchless_rad_to_phase_step_u8(phase_step_min_rad);
 
         match decision {
             StigmergicActionDecision::PassiveSidecar => {}
@@ -706,13 +706,28 @@ impl StigmergicThresholds {
                 if swar_words_nonzero_64(&swar_w) {
                     if let Some(q) = query_tensor {
                         steer_from_swar_words_core_safe(
-                            &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, q,
+                            &swar_w,
+                            0xFF,
+                            128,
+                            head_dim,
+                            num_heads,
+                            false,
+                            phase_clamp_max,
+                            q,
                             key_tensor,
                         );
                         steered = true;
                     } else if let Some(k) = key_tensor {
                         steer_from_swar_words_core_safe(
-                            &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, k, None,
+                            &swar_w,
+                            0xFF,
+                            128,
+                            head_dim,
+                            num_heads,
+                            false,
+                            phase_clamp_max,
+                            k,
+                            None,
                         );
                         steered = true;
                     }
@@ -728,11 +743,11 @@ impl StigmergicThresholds {
                 };
                 if swar_words_nonzero_64(&swar_w) {
                     if let Some(q) = query_tensor {
-                        let is_default_ripa = (ripa_clamp.to_bits()
+                        let is_default_clamp = (phase_clamp_max.to_bits()
                             == DEFAULT_PHASE_CLAMP_MAX_RAD.to_bits())
                             & (num_heads > 0)
                             & (num_heads <= MAX_ATTENTION_HEADS);
-                        if is_default_ripa {
+                        if is_default_clamp {
                             let rot_dim = phase_clamp_upper_rot_dim(head_dim);
                             if let Some(k) = key_tensor {
                                 crate::foundation::rope::rotate_fused_self_phase_clamp_subhead_q_and_clamp_k_default_words(
@@ -770,19 +785,26 @@ impl StigmergicThresholds {
                             dispatch_fused_phase_clamp_and_subhead_words_core(
                                 q,
                                 &swar_w,
-                                ripa_clamp,
+                                phase_clamp_max,
                                 &subhead_cfg,
                                 &swar_w,
                                 &swar_w,
                                 &swar_w,
-                                ripa_clamp,
+                                phase_clamp_max,
                                 0,
                                 head_dim,
                                 true,
                             )?;
                             if let Some(k) = key_tensor {
                                 steer_from_swar_words_core_safe(
-                                    &swar_w, 0xFF, 128, head_dim, num_heads, false, ripa_clamp, k,
+                                    &swar_w,
+                                    0xFF,
+                                    128,
+                                    head_dim,
+                                    num_heads,
+                                    false,
+                                    phase_clamp_max,
+                                    k,
                                     None,
                                 );
                             }
@@ -826,8 +848,8 @@ impl StigmergicThresholds {
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<SubstrateStepReport> {
-        let qdps_min_rad = phase_steering.phase_step_min_rad();
-        let ripa_clamp = phase_steering.phase_clamp_max_rad();
+        let phase_step_min_rad = phase_steering.phase_step_min_rad();
+        let phase_clamp_max = phase_steering.phase_clamp_max_rad();
         let head_dim = phase_steering.head_dim() as usize;
         let num_heads = phase_steering.num_heads() as usize;
         let expected_len = head_dim
@@ -837,10 +859,10 @@ impl StigmergicThresholds {
             || (head_dim & 1) != 0
             || num_heads == 0
             || num_heads > MAX_ATTENTION_HEADS
-            || qdps_min_rad < 0.0
-            || !branchless_is_finite_f32(qdps_min_rad)
-            || ripa_clamp <= 0.0
-            || !branchless_is_finite_f32(ripa_clamp)
+            || phase_step_min_rad < 0.0
+            || !branchless_is_finite_f32(phase_step_min_rad)
+            || phase_clamp_max <= 0.0
+            || !branchless_is_finite_f32(phase_clamp_max)
         {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -922,8 +944,8 @@ impl StigmergicThresholds {
         let _ = Self::execute_decision_steering_and_logit_scaling(
             decision,
             &steer_words,
-            qdps_min_rad,
-            ripa_clamp,
+            phase_step_min_rad,
+            phase_clamp_max,
             head_dim,
             num_heads,
             best_coh,
@@ -1747,11 +1769,11 @@ impl StigmergicSubstrate {
         accumulate_ptr_phase: bool,
         macro_centroid_words: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
     ) -> GcsoResult<SubstrateStepReport> {
-        let qdps_min_rad = self.phase_steering.phase_step_min_rad();
-        let ripa_clamp = self.phase_steering.phase_clamp_max_rad();
+        let phase_step_min_rad = self.phase_steering.phase_step_min_rad();
+        let phase_clamp_max = self.phase_steering.phase_clamp_max_rad();
         let (head_dim, num_heads, _expected_len) = self.validate_substrate_cascade_params(
-            qdps_min_rad,
-            ripa_clamp,
+            phase_step_min_rad,
+            phase_clamp_max,
             query_tensor.as_deref(),
             key_tensor.as_deref(),
         )?;
@@ -1912,8 +1934,8 @@ impl StigmergicSubstrate {
             StigmergicThresholds::execute_decision_steering_and_logit_scaling(
                 decision,
                 &steer_words,
-                qdps_min_rad,
-                ripa_clamp,
+                phase_step_min_rad,
+                phase_clamp_max,
                 head_dim,
                 num_heads,
                 best_coh,
@@ -2138,13 +2160,13 @@ impl FastPathLedger for StigmergicSubstrate {
     ) -> GcsoResult<()> {
         let word = u64::from_le_bytes(slot.telemetry_mini_ledger);
         let spike_count = (word & 0x8080_8080_8080_8080).count_ones();
-        let ripa_max = self.phase_steering.phase_clamp_max_rad();
-        let base_ripa =
-            branchless_select_f32(ripa_max > 0.0, ripa_max, DEFAULT_PHASE_CLAMP_MAX_RAD);
+        let clamp_max = self.phase_steering.phase_clamp_max_rad();
+        let base_clamp =
+            branchless_select_f32(clamp_max > 0.0, clamp_max, DEFAULT_PHASE_CLAMP_MAX_RAD);
         let damping = 1.0 - 0.025 * (spike_count as f32);
         config_out.head_dim = self.phase_steering.head_dim();
         config_out.num_heads = self.phase_steering.num_heads();
-        config_out.ripa_clamp_max_rad = branchless_clamp_f32(base_ripa * damping, 0.01, 0.25);
+        config_out.ripa_clamp_max_rad = branchless_clamp_f32(base_clamp * damping, 0.01, 0.25);
         config_out.qdps_min_step_rad = self.phase_steering.phase_step_min_rad();
         config_out.action_hub_capacity = self.capacity;
         config_out.ledger_mode = (slot.mode & 0xFF) as u8;

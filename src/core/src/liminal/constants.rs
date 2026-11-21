@@ -443,7 +443,7 @@ pub const THRESHOLD_MANIFOLD_GATEWAY: u32 = 0x0000_00FF;
 /// Cognitive threshold bit for $SO(2)$ phase steering (`PhaseSteering`).
 pub const THRESHOLD_PHASE_STEERING: u32 = 1 << 8;
 
-/// Cognitive threshold bit for Fact/Logic/Explore sub-head routing (`SubHeadRouter`).
+/// Cognitive threshold bit for Fact/Logic/Explore sub-head routing (`SubheadRouter`).
 pub const THRESHOLD_SUBHEAD_ROUTING: u32 = 1 << 9;
 
 /// Cognitive threshold bit for Rank-1 hidden residual injection (`ResidualAdapterEngine`).

@@ -877,7 +877,7 @@ pub(crate) const fn eval_geodesic_phase_clamp_sincos_q7_fast(
     }
 }
 
-/// Evaluates the $SO(2)$-composed $(\sin(\theta_{\mathrm{base}} + \theta_{\mathrm{pspm}}), \cos(\theta_{\mathrm{base}} + \theta_{\mathrm{pspm}}))$
+/// Evaluates the $SO(2)$-composed $(\sin(\theta_{\mathrm{base}} + \theta_{\mathrm{subhead}}), \cos(\theta_{\mathrm{base}} + \theta_{\mathrm{subhead}}))$
 /// for a single attention head, using two 1-cycle LUT loads when both `PhaseClamp` limits equal
 /// [`DEFAULT_PHASE_CLAMP_MAX_RAD`], or summing the two `tanh`-clamped radian angles and evaluating
 /// `sincos_phase_clamp_poly` **once** instead of twice when custom `PhaseClamp` limits are active.
@@ -888,27 +888,27 @@ pub(crate) const fn eval_fused_phase_clamp_subhead_sincos_q7_fast(
     is_default_base: bool,
     eff_base_max: f32,
     base_norm_scale: f32,
-    pspm_q7: gcso_q7_t,
-    geodesic_pspm: bool,
-    is_default_pspm: bool,
-    eff_pspm_max: f32,
-    pspm_norm_scale: f32,
+    subhead_q7: gcso_q7_t,
+    geodesic_subhead: bool,
+    is_default_subhead: bool,
+    eff_subhead_max: f32,
+    subhead_norm_scale: f32,
 ) -> (f32, f32) {
     let b_q7 = if geodesic_base {
         branchless_q7_fold_s1_geodesic(base_q7)
     } else {
         base_q7
     };
-    let p_q7 = if geodesic_pspm {
-        branchless_q7_fold_s1_geodesic(pspm_q7)
+    let p_q7 = if geodesic_subhead {
+        branchless_q7_fold_s1_geodesic(subhead_q7)
     } else {
-        pspm_q7
+        subhead_q7
     };
-    if is_default_base & is_default_pspm {
+    if is_default_base & is_default_subhead {
         if b_q7 == p_q7 {
             return Q7_FUSED_SELF_DEFAULT_PHASE_CLAMP_SINCOS_REF[(b_q7 as u8) as usize];
         }
-        if (base_q7 == pspm_q7) & (!geodesic_base) & geodesic_pspm {
+        if (base_q7 == subhead_q7) & (!geodesic_base) & geodesic_subhead {
             return Q7_FUSED_SELF_GEODESIC_PHASE_CLAMP_SINCOS_REF[(base_q7 as u8) as usize];
         }
         let lut = Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF;
@@ -916,7 +916,7 @@ pub(crate) const fn eval_fused_phase_clamp_subhead_sincos_q7_fast(
         let (s_p, c_p) = lut[(p_q7 as u8) as usize];
         return (s_b * c_p + c_b * s_p, c_b * c_p - s_b * s_p);
     }
-    if (b_q7 == p_q7) & (eff_base_max.to_bits() == eff_pspm_max.to_bits()) {
+    if (b_q7 == p_q7) & (eff_base_max.to_bits() == eff_subhead_max.to_bits()) {
         if b_q7 == 0 {
             return (0.0, 1.0);
         }
@@ -937,7 +937,7 @@ pub(crate) const fn eval_fused_phase_clamp_subhead_sincos_q7_fast(
     let theta_p = if p_q7 == 0 {
         0.0
     } else {
-        eval_phase_clamp_theta_rad_preinv(p_q7, eff_pspm_max, pspm_norm_scale)
+        eval_phase_clamp_theta_rad_preinv(p_q7, eff_subhead_max, subhead_norm_scale)
     };
     let theta_comb = theta_b + theta_p;
     let abs_comb = branchless_abs_f32(theta_comb);

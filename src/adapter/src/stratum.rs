@@ -721,10 +721,10 @@ impl SocietyStratum for SubstrateBoundaryStratum<'_> {
                 .max(frame.effective_energy * 1.5);
             (boost, 0.40_f32)
         } else {
-            let srl_rho = thresholds
+            let rank1_rho = thresholds
                 .rank1_inject_density_thresh
                 .max(frame.effective_energy.min(2.0));
-            (srl_rho, 0.40_f32)
+            (rank1_rho, 0.40_f32)
         };
 
         let (action_decision, mode_flags, target_slot, _) = thresholds.select_action_decision(

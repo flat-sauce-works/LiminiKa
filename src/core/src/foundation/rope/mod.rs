@@ -22,13 +22,15 @@
 //!   and (4) sequential 32-float unrolled `Q`/`K` rotation (`apply_phase_steering_slice_with_sincos`) when
 //!   `q_run.len() >= 128` (`512B`) to eliminate 2-stream 4KB page-offset Load-Store Queue aliasing.
 //! - **Zero-Arithmetic Direct 256-Entry LUT Fast Path in Sub-Head Routing**: When
-//!   `is_default_ripa && gain_u7 == 128 && pulse_q7 == 0`, `rotate_pspm_subgroup_with_slot_phases`
-//!   and `rotate_fused_ripa_pspm_subgroup_words` select `Q7_GEODESIC_DEFAULT_PHASE_CLAMP_SINCOS_REF` or
-//!   `Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF` outside the head loop and index `lut[(slot_q7 as u8) as usize]`
-//!   directly with zero per-head integer folding/scaling arithmetic and zero cache-branch jitter.
+//!   `is_default && gain_u7 == 128 && pulse_q7 == 0`, `steer_single_slice_from_eff_words_core`,
+//!   `rotate_fused_self_phase_clamp_and_subhead_default_words`, and
+//!   `rotate_fused_phase_clamp_and_subhead_eff_words_core` select
+//!   `Q7_GEODESIC_DEFAULT_PHASE_CLAMP_SINCOS_REF` or `Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF` outside
+//!   the head loop and index `lut[(slot_q7 as u8) as usize]` directly with zero per-head integer
+//!   folding/scaling arithmetic and zero cache-branch jitter.
 //! - **Single-Evaluation $SO(2)$ Group-Closure `PhaseClamp` + Sub-Head Router Fusion**: Because both `PhaseClamp` and sub-head router
 //!   operate on the upper low-frequency quarter `rot_dim`, `dispatch_fused_phase_clamp_words_and_subhead_profiles_core`
-//!   fuses $\mathbf{R}(\theta_{\mathrm{ripa}})\mathbf{R}(\theta_{\mathrm{pspm}}) = \mathbf{R}(\theta_{\mathrm{ripa}} + \theta_{\mathrm{pspm}})$
+//!   fuses $\mathbf{R}(\theta_{\mathrm{clamp}})\mathbf{R}(\theta_{\mathrm{subhead}}) = \mathbf{R}(\theta_{\mathrm{clamp}} + \theta_{\mathrm{subhead}})$
 //!   via `eval_fused_phase_clamp_subhead_sincos_q7_fast` (evaluating the trigonometric polynomial once per
 //!   head instead of twice on custom `PhaseClamp` limits) and caches consecutive head `(sin, cos)` pairs.
 //! - **Zero-Jitter Micro-Swarm Quorum Pre-Pass & Constant-Time Damping**: `steer_from_swar_words_core_safe`

@@ -483,17 +483,18 @@ impl gcso_tagged_ptr_t {
         let clean_rho = branchless_relu_f32(trail_density);
 
         let active_signal = (!self.is_null()) | (self.unpack_phase() != 0) | (clean_rho > 0.0);
-        let m_dpsr = branchless_select_u8(active_signal, ACTION_MODE_PHASE_STEER, 0);
+        let m_phase_steer = branchless_select_u8(active_signal, ACTION_MODE_PHASE_STEER, 0);
         let can_skip =
             active_signal & (clean_h <= low_entropy_skip_thresh) & (!repulsion_triggered);
         let m_skip = branchless_select_u8(can_skip, ACTION_MODE_LAYER_SKIP, 0);
         let m_rep = branchless_select_u8(repulsion_triggered, ACTION_MODE_PHASE_REPULSE, 0);
-        let need_pspm = (clean_h > low_entropy_skip_thresh) | repulsion_triggered;
-        let m_pspm = branchless_select_u8(need_pspm, ACTION_MODE_SUBHEAD_ROUTE, 0);
-        let need_srl = (clean_rho >= high_density_rank1_thresh) & (high_density_rank1_thresh > 0.0);
-        let m_srl = branchless_select_u8(need_srl, ACTION_MODE_RANK1_INJECT, 0);
+        let need_subhead = (clean_h > low_entropy_skip_thresh) | repulsion_triggered;
+        let m_subhead = branchless_select_u8(need_subhead, ACTION_MODE_SUBHEAD_ROUTE, 0);
+        let need_rank1 =
+            (clean_rho >= high_density_rank1_thresh) & (high_density_rank1_thresh > 0.0);
+        let m_rank1 = branchless_select_u8(need_rank1, ACTION_MODE_RANK1_INJECT, 0);
 
-        let next_mode = m_dpsr | m_skip | m_rep | m_pspm | m_srl;
+        let next_mode = m_phase_steer | m_skip | m_rep | m_subhead | m_rank1;
         let next_slot = branchless_select_u8(
             repulsion_triggered,
             ATTRACTOR_SLOT_REPULSION,
@@ -948,9 +949,9 @@ impl gcso_pointer_trail_t {
         );
         self.record_pointer_transition(packed.raw(), edge_cost, density_boost);
         self.cluster_id = u32::from(attractor_slot_id & ATTRACTOR_SLOT_ID_MASK);
-        let dpsr_on = (action_mode_flags & ACTION_MODE_PHASE_STEER) != 0;
+        let phase_steer_on = (action_mode_flags & ACTION_MODE_PHASE_STEER) != 0;
         let skip_on = (action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0;
-        self.flags |= branchless_select_u32(dpsr_on, TRAIL_FLAG_PHASE_STEER_ACTIVE, 0)
+        self.flags |= branchless_select_u32(phase_steer_on, TRAIL_FLAG_PHASE_STEER_ACTIVE, 0)
             | branchless_select_u32(skip_on, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, 0);
     }
 
@@ -982,11 +983,11 @@ impl gcso_pointer_trail_t {
             u32::from(evolved.target_attractor_slot()),
         );
 
-        let dpsr_active = (evolved.action_mode_flags() & ACTION_MODE_PHASE_STEER) != 0;
+        let phase_steer_active = (evolved.action_mode_flags() & ACTION_MODE_PHASE_STEER) != 0;
         let skip_active = (evolved.action_mode_flags() & ACTION_MODE_LAYER_SKIP) != 0;
         self.flags = (self.flags
             & !(TRAIL_FLAG_PHASE_STEER_ACTIVE | TRAIL_FLAG_INERTIAL_SKIP_ACTIVE))
-            | branchless_select_u32(dpsr_active, TRAIL_FLAG_PHASE_STEER_ACTIVE, 0)
+            | branchless_select_u32(phase_steer_active, TRAIL_FLAG_PHASE_STEER_ACTIVE, 0)
             | branchless_select_u32(skip_active, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, 0)
             | branchless_select_u32(repulsion_triggered, TRAIL_FLAG_REPULSION_ACTIVE, 0);
         evolved
@@ -1479,12 +1480,12 @@ impl gcso_pointer_trail_t {
     #[inline(always)]
     pub fn sync_flags_with_current_ptr(&mut self) {
         let mode = unpack_action_mode_from_tag(gcso_tagged_ptr_t(self.current_ptr).unpack_tag());
-        let dpsr_on = (mode & ACTION_MODE_PHASE_STEER) != 0;
+        let phase_steer_on = (mode & ACTION_MODE_PHASE_STEER) != 0;
         let skip_on = (mode & ACTION_MODE_LAYER_SKIP) != 0;
         let cleared =
             self.flags & !(TRAIL_FLAG_PHASE_STEER_ACTIVE | TRAIL_FLAG_INERTIAL_SKIP_ACTIVE);
         self.flags = cleared
-            | branchless_select_u32(dpsr_on, TRAIL_FLAG_PHASE_STEER_ACTIVE, 0)
+            | branchless_select_u32(phase_steer_on, TRAIL_FLAG_PHASE_STEER_ACTIVE, 0)
             | branchless_select_u32(skip_on, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, 0);
     }
 

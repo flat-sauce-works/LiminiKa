@@ -35,7 +35,7 @@ use crate::stigmergy::{
 use super::*;
 
 // ===================================================================
-// 3. Pillar 3: Compact `.gcso` Pod Snapshot Structures (`8.25 KB`)
+// 3. Compact `.gcso` Pod Snapshot Structures (`8.25 KB`)
 // ===================================================================
 
 /// Compact 128-byte (2-cacheline) [`Pod`] record storing a single crystallized or active sample
