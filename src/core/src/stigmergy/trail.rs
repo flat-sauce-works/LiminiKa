@@ -3,7 +3,7 @@
 
 //! Canonical Layer 2 [`gcso_pointer_trail_t`] POD descriptor, word accessors,
 //! tagged-pointer action mode orchestration, pointer-trail operations, Bayesian trail attention modulation,
-//! trail chain cohomology, [`PointerActionHub`], and [`ActionHub`].
+//! trail chain cohomology, [`PointerSubstrate`], and [`StigmergicSubstrateOps`].
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -59,8 +59,8 @@ use crate::foundation::{
 pub use crate::foundation::{gcso_paged_bitmask_t, gcso_tagged_ptr_t};
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    gcso_q7_t, GcsoResult, Liminal, DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT,
-    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, THRESHOLD_ACTION_HUB_WIDE,
+    gcso_q7_t, BitCut8, GcsoResult, Liminal, DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT,
+    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, THRESHOLD_STIGMERGY_WIDE,
 };
 pub use crate::stigmergy::ledger::gcso_ledger_slot_t;
 use crate::stigmergy::ledger::{
@@ -573,6 +573,7 @@ pub(crate) fn select_rewire_bridge_and_modulate_with_preloaded_words_64(
     let self_is_uniform = is_word_array_uniform_64(&self_w);
     let self_b0 = (self_w[0] & 0xFF) as u8;
     let self_is_byte_uniform = self_is_uniform & (self_w[0] == self_w[0].rotate_right(8));
+    // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`, and `self_w` has 8 `u64` words.
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     let (self_v0, self_v1) =
         unsafe { crate::foundation::avx2_words64_to_vec64_with_uniform(&self_w, self_is_uniform) };
@@ -598,6 +599,7 @@ pub(crate) fn select_rewire_bridge_and_modulate_with_preloaded_words_64(
     while idx < cand_len {
         let cand = &candidate_trails[idx];
         let cand_id = idx as u32;
+        // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`, and all trail arguments are valid references.
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
         let (bayes_delta, coh, is_coherent, cand_is_uniform, cand_vec_opt) = unsafe {
             eval_candidate_trail_avx2_with_macro_fast(
@@ -1591,8 +1593,11 @@ impl gcso_pointer_trail_t {
         let primary_pull = branchless_flush_subnormal_f32(branchless_relu_f32(slot_weights[p_idx]));
 
         let exclude_mask = (1u8 << p_idx) | (1u8 << ATTRACTOR_SLOT_REPULSION);
-        let mut neighbor_mask =
-            coupled_slot_row_mask(coupling_matrix_8x8, primary_slot) & !exclude_mask;
+        let mut neighbor_mask = BitCut8::split(
+            coupled_slot_row_mask(coupling_matrix_8x8, primary_slot),
+            exclude_mask,
+        )
+        .outside;
 
         // Keep `acc_w` and `cur_w` in 8 64-bit registers across all coupled neighbors (`0` intermediate stack arrays)
         let mut cur_w = primary_w;
@@ -1741,6 +1746,7 @@ pub fn modulate_attention_scores_by_bayesian_trails_64(
         if q_is_uniform {
             None
         } else {
+            // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`, and `q` has 8 `u64` words.
             Some(unsafe { avx2_words64_to_vec64_with_uniform(&q, false) })
         };
     let safe_dim = branchless_select_u32(head_dim > 0, head_dim, 128);
@@ -1776,6 +1782,7 @@ pub fn modulate_attention_scores_by_bayesian_trails_64(
                         coherence_from_word_arrays_with_both_uniform_flags_64(&q, true, &kw, true)
                     }
                 } else {
+                    // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`, and `key_anchor_phases[idx]` is a 64-byte slice (`_mm256_loadu_si256` allows unaligned loads).
                     unsafe {
                         use core::arch::x86_64::{
                             __m256i, _mm256_loadu_si256, _mm256_set1_epi64x, _mm256_sub_epi8,
@@ -1799,6 +1806,7 @@ pub fn modulate_attention_scores_by_bayesian_trails_64(
                     }
                 }
             } else {
+                // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`, and `key_anchor_phases[idx]` is 64 bytes (`2 * __m256i`).
                 unsafe {
                     use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
                     let (vq0, vq1) =
@@ -2102,11 +2110,11 @@ pub fn resolve_dyadic_qdpt_and_cascade_ptr(
 /// Hot-path capability trait for $\mathcal{O}(1)$ tagged pointer transitions and trail updates.
 ///
 /// Requires [`Liminal`] to enforce epistemic horizon and constant-time execution at the type level.
-pub trait PointerActionHub: Liminal + Send + Sync {
+pub trait PointerSubstrate: Liminal + Send + Sync {
     /// Resets transient pointer trails and slot counters without freeing pre-allocated tables.
     ///
     /// # Errors
-    /// Returns [`crate::liminal::GCSO_ERROR_INVALID_STATE`] if the Action Hub is locked or uninitialized.
+    /// Returns [`crate::liminal::GCSO_ERROR_INVALID_STATE`] if the substrate is locked or uninitialized.
     fn reset(&mut self) -> GcsoResult<()>;
 
     /// Advances a 64-bit tagged pointer transition in zero-allocation $\mathcal{O}(1)$ mode.
@@ -2122,7 +2130,7 @@ pub trait PointerActionHub: Liminal + Send + Sync {
     /// Updates cellular state for a trail directly with a Q7 phase delta in fast-path express mode.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `trail_id` exceeds Action Hub capacity.
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `trail_id` exceeds substrate capacity.
     fn update_cellular_state_express(
         &mut self,
         trail_id: u32,
@@ -2146,43 +2154,40 @@ pub trait PointerActionHub: Liminal + Send + Sync {
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if either trail ID is out of bounds.
     fn link_hallucinated_trails(&mut self, src_trail_id: u32, dst_trail_id: u32) -> GcsoResult<()>;
 
-    /// Returns the maximum slot capacity of the Action Hub table.
+    /// Returns the maximum slot capacity of the substrate table.
     fn capacity(&self) -> u32;
 
     /// Returns the active pointer trail count currently registered.
     fn active_count(&self) -> u32;
 
-    /// Returns the active 8-bit lane enable mask (`0..=7`) on the working phase workbench (`0` = none).
+    /// Returns the active 8-bit lane enable mask (`0..=7`) on the working phase bank (`0` = none).
     #[inline(always)]
-    fn workbench_lane_mask(&self) -> u8 {
+    fn lane_mask(&self) -> u8 {
         0
     }
 
-    /// Returns the 8-bit bitmask of workbench lanes (`0..=7`) tagged with anti-phase repulsion behavior.
+    /// Returns the 8-bit bitmask of lanes (`0..=7`) tagged with anti-phase repulsion behavior.
     #[inline(always)]
-    fn workbench_repulsion_mask(&self) -> u8 {
+    fn repulsion_lane_mask(&self) -> u8 {
         0
     }
 
-    /// Returns the 8-bit bitmask of workbench lanes (`0..=7`) tagged as isolated exterior-only sandbox hypotheses.
+    /// Returns the 8-bit bitmask of lanes (`0..=7`) tagged as isolated exterior-only sandbox hypotheses.
     #[inline(always)]
-    fn workbench_sandbox_mask(&self) -> u8 {
+    fn sandbox_lane_mask(&self) -> u8 {
         0
     }
 
-    /// Returns the 8-bit bitmask of workbench lanes (`0..=7`) explicitly pinned against auto-eviction or release.
+    /// Returns the 8-bit bitmask of lanes (`0..=7`) explicitly pinned against auto-eviction or release.
     #[inline(always)]
-    fn workbench_pinned_mask(&self) -> u8 {
+    fn pinned_lane_mask(&self) -> u8 {
         0
     }
 
     /// Returns the 64-head SWAR words and non-negative lane weight for working-bank `lane` (`0..=7`)
     /// when enabled and non-zero.
     #[inline(always)]
-    fn workbench_lane_words_and_weight(
-        &self,
-        _lane: u8,
-    ) -> Option<([u64; NUM_STIGMERGIC_GRANULES], f32)> {
+    fn lane_words_and_weight(&self, _lane: u8) -> Option<([u64; NUM_STIGMERGIC_GRANULES], f32)> {
         None
     }
 }
@@ -2221,14 +2226,16 @@ pub(crate) fn validate_optional_qk_tensors(
 /// foundation, RoPE steering kernels, $\mathcal{O}(1)$ pointer-trail transitions, and FastPathLedger
 /// telemetry under static dispatch.
 ///
-/// The Liminal Supertrait Blanket Extensions (`ActionHubGatewayExt`) observe this
+/// The Liminal Supertrait Blanket Extensions (`SubstrateGatewayExt`) observe this
 /// composite directly.
-pub trait ActionHub: Liminal + PhaseSteering + PointerActionHub + FastPathLedger {
+pub trait StigmergicSubstrateOps:
+    Liminal + PhaseSteering + PointerSubstrate + FastPathLedger
+{
     /// Broadest cognitive aperture spanned across all gateway, steering, swarm, cohomology, and
     /// mapped-storage capabilities (`0x0000_FFFF`).
-    const HUB_APERTURE_MASK: u32 = THRESHOLD_ACTION_HUB_WIDE;
+    const HUB_APERTURE_MASK: u32 = THRESHOLD_STIGMERGY_WIDE;
 
-    /// Type-level complement identifying signals outside `ActionHub`'s horizon as unknowable (`!0xFFFF`).
+    /// Type-level complement identifying signals outside `StigmergicSubstrateOps`'s horizon as unknowable (`!0xFFFF`).
     const HUB_UNKNOWABLE_VOID_MASK: u32 = !Self::HUB_APERTURE_MASK;
 
     /// Branchlessly partitions `signal_bits` into `(cognized_bits, unknowable_void_bits)` for
@@ -2273,7 +2280,7 @@ pub trait ActionHub: Liminal + PhaseSteering + PointerActionHub + FastPathLedger
     /// directly in 8 `u64` SWAR registers.
     ///
     /// # Errors
-    /// Propagates any error returned by [`PointerActionHub::step_pointer`].
+    /// Propagates any error returned by [`PointerSubstrate::step_pointer`].
     #[inline(always)]
     fn step_hub_with_bloom_repulsion_to_words(
         &mut self,
@@ -2368,7 +2375,7 @@ pub trait ActionHub: Liminal + PhaseSteering + PointerActionHub + FastPathLedger
         true
     }
 
-    /// Executes a constant-time per-token stigmergic cascade over [`ActionHub`]:
+    /// Executes a constant-time per-token stigmergic cascade over [`StigmergicSubstrateOps`]:
     /// 1. Validates tensor dimensions, `GCSO_RESTRICT` disjointness, and radian thresholds.
     /// 2. Resolves `input_ptr` against `ledger_slot`'s $\mathcal{O}(1)$ shortcut table, steps the
     ///    pointer transition in `trail_out`, and applies [`ContrastivePhaseBloomFilter`] repulsion.
@@ -2379,8 +2386,8 @@ pub trait ActionHub: Liminal + PhaseSteering + PointerActionHub + FastPathLedger
     /// Returns the observed Bloom repulsion bucket density (`0..=255`).
     ///
     /// # Errors
-    /// Propagates any error from [`ActionHub::validate_hub_cascade_params`],
-    /// [`ActionHub::step_hub_with_bloom_repulsion_to_words`], or
+    /// Propagates any error from [`StigmergicSubstrateOps::validate_hub_cascade_params`],
+    /// [`StigmergicSubstrateOps::step_hub_with_bloom_repulsion_to_words`], or
     /// [`FastPathLedger::telemetry_push`].
     #[inline]
     fn execute_stigmergic_token_cascade(
@@ -2428,8 +2435,10 @@ pub trait ActionHub: Liminal + PhaseSteering + PointerActionHub + FastPathLedger
     }
 }
 
-impl<T> ActionHub for T where T: Liminal + PhaseSteering + PointerActionHub + FastPathLedger + ?Sized
-{}
+impl<T> StigmergicSubstrateOps for T where
+    T: Liminal + PhaseSteering + PointerSubstrate + FastPathLedger + ?Sized
+{
+}
 
 impl gcso_pointer_trail_t {
     /// Branchlessly evaluates whether a pointer trail qualifies for bottom-up macro

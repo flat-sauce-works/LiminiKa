@@ -422,9 +422,9 @@ impl LlmBackend for DummyBackend {
                     .to_string(),
             );
         }
-        if lower.contains("actionhub") {
+        if lower.contains("micro-cells") && lower.contains("attention heads") {
             return Ok(
-                "ActionHub routes 64 heads in 8 micro-cells via a 128-byte GatewayFrame."
+                "The stigmergic substrate routes 64 heads in 8 micro-cells via a 128-byte GatewayFrame."
                     .to_string(),
             );
         }

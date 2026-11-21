@@ -142,7 +142,7 @@ fn adapter_resonates_arbitrary_slice_without_hardcoded_count() {
 }
 
 #[test]
-fn adapter_steers_via_action_hub_and_builds_stigmergic_density() {
+fn adapter_steers_via_substrate_and_builds_stigmergic_density() {
     use liminika_core::runtime::{ObjectiveFact, ResonantSignalSlice};
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
@@ -158,18 +158,18 @@ fn adapter_steers_via_action_hub_and_builds_stigmergic_density() {
     let resonant = ResonantSignalSlice::from_q7_probe(&signals, &probe);
 
     let (frame, _) = adapter
-        .steer_layer_with_action_hub(0, &resonant, &mut trail, 128, &mut q_rot, None)
-        .expect("action_hub steering should succeed")
+        .steer_layer_with_substrate(0, &resonant, &mut trail, 128, &mut q_rot, None)
+        .expect("substrate steering should succeed")
         .expect("layer 0 active");
 
     assert_eq!(frame.target_anchor_id, 77);
     assert_ne!(q_rot, orig);
-    assert_eq!(adapter.action_hub().step_counter, 1);
+    assert_eq!(adapter.substrate().step_counter, 1);
     assert!(trail.stigmergic_density > 0.0);
 }
 
 #[test]
-fn action_hub_orchestrator_gates_rope_and_srl_by_stigmergic_density() {
+fn substrate_orchestrator_gates_rope_and_srl_by_stigmergic_density() {
     use liminika_core::runtime::{ObjectiveFact, ResonantSignalSlice};
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
@@ -190,7 +190,7 @@ fn action_hub_orchestrator_gates_rope_and_srl_by_stigmergic_density() {
     let mut q_rot1: Vec<f32> = (0..len).map(|i| ((i % 7) as f32) * 0.1 - 0.25).collect();
     let orig1 = q_rot1.clone();
     let (_, _, d1) = adapter
-        .orchestrate_layer_rope_with_action_hub(
+        .orchestrate_layer_rope_with_substrate(
             0,
             &resonant,
             &mut trail,
@@ -204,7 +204,7 @@ fn action_hub_orchestrator_gates_rope_and_srl_by_stigmergic_density() {
     assert_eq!(d1, StigmergicActionDecision::ExpressPhaseSteer);
     assert_ne!(q_rot1, orig1);
     assert!(adapter
-        .orchestrate_layer_srl_with_action_hub(&resonant, &mut hidden, &u, &v)
+        .orchestrate_layer_srl_with_substrate(&resonant, &mut hidden, &u, &v)
         .expect("srl gate")
         .is_none());
 
@@ -213,7 +213,7 @@ fn action_hub_orchestrator_gates_rope_and_srl_by_stigmergic_density() {
     for _ in 0..8 {
         let mut q_rot_k: Vec<f32> = (0..len).map(|i| ((i % 7) as f32) * 0.1 - 0.25).collect();
         let (_, _, dk) = adapter
-            .orchestrate_layer_rope_with_action_hub(
+            .orchestrate_layer_rope_with_substrate(
                 0,
                 &resonant,
                 &mut trail,
@@ -232,7 +232,7 @@ fn action_hub_orchestrator_gates_rope_and_srl_by_stigmergic_density() {
             | StigmergicActionDecision::CrystallizeMacroBasin
     ));
     let srl_res = adapter
-        .orchestrate_layer_srl_with_action_hub(&resonant, &mut hidden, &u, &v)
+        .orchestrate_layer_srl_with_substrate(&resonant, &mut hidden, &u, &v)
         .expect("srl gate");
     assert!(srl_res.is_some());
     assert!(hidden[0] > 10.0);
@@ -260,9 +260,9 @@ fn cold_path_probe_calibrates_thresholds_and_rebinds_geometry() {
     assert_eq!(baseline.steered_layers, 16);
     assert!(baseline.baseline_entropy > 0.40);
 
-    let low_load_srl = adapter.action_hub().thresholds.rank1_inject_density_thresh;
+    let low_load_srl = adapter.substrate().thresholds.rank1_inject_density_thresh;
     adapter.update_environment_telemetry(0.85, 0.70, 0x0F);
-    let high_load_srl = adapter.action_hub().thresholds.rank1_inject_density_thresh;
+    let high_load_srl = adapter.substrate().thresholds.rank1_inject_density_thresh;
     assert!(high_load_srl > low_load_srl);
 
     let mut alt_geom = RopeGeometry::phi4_mini();
@@ -1041,7 +1041,7 @@ fn layer_angle_perspective_separates_specialized_late_layer_attractor() {
 }
 
 #[test]
-fn society_stratum_pipeline_supports_dynamic_add_remove_and_action_hub_arbitration() {
+fn society_stratum_pipeline_supports_dynamic_add_remove_and_substrate_arbitration() {
     let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let centroid = vec![0.0_f32; len];
@@ -1091,7 +1091,7 @@ fn society_stratum_pipeline_supports_dynamic_add_remove_and_action_hub_arbitrati
             "head_angle_worker",
             "local_token_resonance",
             "perspective_domino_liminal_void",
-            "action_hub_boundary",
+            "substrate_boundary",
         ]
     );
     let removed = pipeline.remove_stratum("perspective_domino_liminal_void");
@@ -1102,11 +1102,11 @@ fn society_stratum_pipeline_supports_dynamic_add_remove_and_action_hub_arbitrati
             "local_feature_worker",
             "head_angle_worker",
             "local_token_resonance",
-            "action_hub_boundary",
+            "substrate_boundary",
         ]
     );
 
-    // Even with the perspective stratum removed, ActionHub still arbitrates cleanly.
+    // Even with the perspective stratum removed, StigmergicSubstrate still arbitrates cleanly.
     let recall_fact = corpus
         .recall_for_query_with_strata(
             &adapter,
@@ -1471,7 +1471,7 @@ fn per_role_local_token_resonance_arbitrates_fact_despite_persona_hub() {
 }
 
 #[test]
-fn action_hub_compound_decomposition_links_disjoint_specialists_while_respecting_liminal_void() {
+fn substrate_compound_decomposition_links_disjoint_specialists_while_respecting_liminal_void() {
     let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
@@ -1963,7 +1963,7 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
     assert!(mermaid.contains("Core Layer 1: StigmergicGranuleField"));
     assert!(mermaid.contains("Core Layer 2: LiminalEgoField"));
     assert!(mermaid.contains("ManifoldGatewaySignal"));
-    assert!(mermaid.contains("ActionHub"));
+    assert!(mermaid.contains("L2_Substrate"));
     assert!(mermaid.contains("Crystals:5"));
     assert!(mermaid.contains("Daughters:2"));
 }
@@ -2115,14 +2115,14 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
         "per-layer read-only RoPE modulation must not accumulate intervention epochs"
     );
 
-    // 2. ActionHub RoPE + rank-1 residual orchestration wires Core Layers and persists Ego intervention on the residual path.
+    // 2. Substrate RoPE + rank-1 residual orchestration wires Core Layers and persists Ego intervention on the residual path.
     let mut hidden = vec![10.0, 0.0, 0.0, 0.0];
     let u = vec![1.0, 0.0, 0.0, 0.0];
     let v = vec![1.0, 0.0, 0.0, 0.0];
     for _ in 0..8 {
         let mut q_tmp = q_ego.clone();
         let _ = ego_adapter
-            .orchestrate_layer_rope_with_action_hub(
+            .orchestrate_layer_rope_with_substrate(
                 0,
                 &fact,
                 &mut trail_ego,
@@ -2131,11 +2131,11 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
                 &mut q_tmp,
                 None,
             )
-            .expect("action hub rope");
+            .expect("substrate rope");
     }
     let srl_res = ego_adapter
-        .orchestrate_layer_srl_with_action_hub(&fact, &mut hidden, &u, &v)
-        .expect("action hub srl");
+        .orchestrate_layer_srl_with_substrate(&fact, &mut hidden, &u, &v)
+        .expect("substrate srl");
     assert!(srl_res.is_some());
     assert!(ego_adapter.ego_field().intervention_epochs > epochs_before_rope);
 
@@ -2277,11 +2277,8 @@ fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
     let esc_lane = adapter
         .escalated_workbench_lane()
         .expect("leased escalation lane");
-    assert_ne!(adapter.action_hub().slot_enabled_mask & (1 << esc_lane), 0);
-    assert_ne!(
-        adapter.action_hub().slot_repulsion_mask & (1 << esc_lane),
-        0
-    );
+    assert_ne!(adapter.substrate().slot_enabled_mask & (1 << esc_lane), 0);
+    assert_ne!(adapter.substrate().slot_repulsion_mask & (1 << esc_lane), 0);
 
     // 3. Quiescent step 1 holds (slide_out_dwell == 2); quiescent step 2 retracts cleanly.
     adapter.adapt_core_layers(
@@ -2327,7 +2324,7 @@ fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
     assert_eq!(adapter.active_horizon_slots_mask(), 0);
     assert_eq!(custom_slot.retractions, 1);
     assert_eq!(adapter.escalated_workbench_lane(), None);
-    assert_eq!(adapter.action_hub().slot_enabled_mask & (1 << esc_lane), 0);
+    assert_eq!(adapter.substrate().slot_enabled_mask & (1 << esc_lane), 0);
 
     let snap = adapter.telemetry_snapshot();
     assert_eq!(snap.system.total_steps, 4);
@@ -2500,7 +2497,7 @@ fn test_slow_loop_updates_threshold_policy_without_exponential_drift() {
 
     for _ in 0..20 {
         let _ = adapter
-            .orchestrate_layer_rope_with_action_hub(
+            .orchestrate_layer_rope_with_substrate(
                 0,
                 &sig,
                 &mut trail,
@@ -2529,7 +2526,7 @@ fn test_slow_loop_updates_threshold_policy_without_exponential_drift() {
         adapter.probe_baseline().baseline_entropy,
     );
     assert!(
-        (adapter.action_hub().thresholds.rank1_inject_density_thresh
+        (adapter.substrate().thresholds.rank1_inject_density_thresh
             - expected_resolved.rank1_inject_density_thresh)
             .abs()
             < 1e-6
@@ -2604,11 +2601,8 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
         adapter.active_workbench_preset(),
         WorkbenchPreset::FactualGrounding
     );
-    assert_eq!(
-        adapter.action_hub().active_workbench_lane_mask(),
-        (1 << 0) | (1 << 5)
-    );
-    assert_eq!(adapter.action_hub().workbench_pinned_mask(), 1 << 5);
+    assert_eq!(adapter.substrate().active_lane_mask(), (1 << 0) | (1 << 5));
+    assert_eq!(adapter.substrate().pinned_lane_mask(), 1 << 5);
 
     // Switching presets again preserves the pinned lane 5 and refreshes unpinned lanes.
     let updated_2 = adapter
@@ -2621,16 +2615,13 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
         )
         .expect("switch preset preserving pinned lane");
     assert_eq!(updated_2, 1);
-    assert_eq!(
-        adapter.action_hub().active_workbench_lane_mask(),
-        (1 << 0) | (1 << 5)
-    );
-    assert_eq!(adapter.action_hub().workbench_pinned_mask(), 1 << 5);
+    assert_eq!(adapter.substrate().active_lane_mask(), (1 << 0) | (1 << 5));
+    assert_eq!(adapter.substrate().pinned_lane_mask(), 1 << 5);
 
     // 2. Within the same destabilized regime across 16 steered layers, escalation runs once at
     //    the regime boundary rather than repeating on every layer.
     adapter.reset_horizon_and_core_state();
-    assert_eq!(adapter.action_hub().active_workbench_lane_mask(), 0);
+    assert_eq!(adapter.substrate().active_lane_mask(), 0);
     adapter.adapt_core_layers(
         &liminika_core::runtime::EpistemicHorizonReading {
             total_memory_support: 0.4,
@@ -2674,7 +2665,7 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
             ],
         )
         .expect("preset switch");
-    assert_eq!(adapter.action_hub().workbench_sandbox_mask(), 1 << 6);
+    assert_eq!(adapter.substrate().sandbox_lane_mask(), 1 << 6);
     adapter.adapt_core_layers(
         &liminika_core::runtime::EpistemicHorizonReading::default(),
         &liminika_core::stigmergy::StigmergicOverlapSerendipityReport {
@@ -2686,19 +2677,19 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
     );
     let mut trail_venn = gcso_pointer_trail_t::default();
     let _ = adapter
-        .orchestrate_layer_rope_with_action_hub(16, &sig, &mut trail_venn, None, 128, &mut q, None)
+        .orchestrate_layer_rope_with_substrate(16, &sig, &mut trail_venn, None, 128, &mut q, None)
         .expect("venn layer step");
     assert!(trail_venn.accumulated_phase_delta[0] > 0);
     assert!(trail_venn.accumulated_phase_delta[40] > 0);
     // Verify sandbox lane 6 does not inflate venn_core_mask head 0 compared to standard-only pass.
     let core_head_with_sandbox = trail_venn.accumulated_phase_delta[0];
     let _ = adapter
-        .action_hub_mut()
-        .release_workbench_lane(6)
+        .substrate_mut()
+        .release_lane(6)
         .expect("release sandbox");
     let mut trail_no_sb = gcso_pointer_trail_t::default();
     let _ = adapter
-        .orchestrate_layer_rope_with_action_hub(16, &sig, &mut trail_no_sb, None, 128, &mut q, None)
+        .orchestrate_layer_rope_with_substrate(16, &sig, &mut trail_no_sb, None, 128, &mut q, None)
         .expect("no-sandbox layer step");
     assert_eq!(
         core_head_with_sandbox,
@@ -2735,4 +2726,62 @@ fn gcso_v2_logical_pframe_topology_roundtrip_and_cross_model_rebake() {
     );
     assert!(alt_adapter.ego_differential_net().nodes[0].is_baked_active());
     assert!(alt_adapter.ego_differential_net().nodes[2].is_baked_active());
+}
+
+#[test]
+fn hot_path_sandbox_promotion_increments_sandbox_promotions() {
+    use liminika_core::liminal::EpistemicRegime;
+    use liminika_core::runtime::{EpistemicHorizonReading, ObjectiveFact};
+    use liminika_core::stigmergy::StigmergicOverlapSerendipityReport;
+
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    adapter.configure_ego_from_preset(LiminalEgoPreset::Low);
+    adapter.adapt_core_layers(
+        &EpistemicHorizonReading {
+            total_memory_support: 1.0,
+            peak_positive_affinity: 1.0,
+            horizon_gate: 1.0,
+            conflict_severity: 0.0,
+            regime_code: EpistemicRegime::KnownCoherent as u8,
+            ..EpistemicHorizonReading::default()
+        },
+        &StigmergicOverlapSerendipityReport {
+            venn_core_mask: 0x0F,
+            void_exterior_mask: 0xF0,
+            ..StigmergicOverlapSerendipityReport::default()
+        },
+        None,
+    );
+    assert_eq!(adapter.sandbox_promotions(), 0);
+
+    let q_len = adapter.geometry().q_rot_len();
+    let mut q = vec![0.25_f32; q_len];
+    let mut trail = gcso_pointer_trail_t {
+        accumulated_phase_delta: [24_i8; MAX_ATTENTION_HEADS],
+        ..gcso_pointer_trail_t::default()
+    };
+    let sig = ObjectiveFact::new([24_i8; MAX_ATTENTION_HEADS], 2.0, 0, 7);
+
+    // Run Hot-Path orchestration steps under sustained entropy drift so telemetry crosses
+    // `continuous_standard_steps >= 16` + `assimilation_drift_dwell >= 3` to nucleate,
+    // and then crosses `sandbox_coherence_improve_dwell >= 3` to promote in-place.
+    for _ in 0..32 {
+        let _ = adapter
+            .orchestrate_layer_rope_with_substrate(
+                0,
+                &sig,
+                &mut trail,
+                Some(0.90),
+                128,
+                &mut q,
+                None,
+            )
+            .expect("hot-path step");
+    }
+
+    assert!(
+        adapter.sandbox_promotions() >= 1,
+        "expected Hot-Path SandboxLifecycleEvent::Promoted to increment sandbox_promotions, got {}",
+        adapter.sandbox_promotions()
+    );
 }

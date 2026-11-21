@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Advanced benchmarks for `PhaseSteeringEngine` hot-path kernels and
-//! `PhaseSteeringClosedLoop` blanket implementations, engineered for **zero input overfitting**
+//! `GatewayPhaseSteeringExt` blanket implementations, engineered for **zero input overfitting**
 //! and **clean separation of Provisional `.gcso` Storage Container workloads**:
 //! - Uses realistic heterogeneous 64-head phase profiles across all batch and sub-head ensembles
 //!   (never uniform `[8i8; 64]` arrays or unit-gain `1.0f32` fast-path bypasses).
@@ -31,9 +31,9 @@ use liminika_core::foundation::{
     steer_visual_grid_3d_bitmask_gated, AlignedBuffer16, AlignedBuffer32, AlignedBuffer64,
     AlignedSlice16, AlignedSlice32, AlignedSliceMut16, PhaseSteering, DEFAULT_PHASE_CLAMP_MAX_RAD,
 };
-use liminika_core::runtime::PhaseSteeringClosedLoop;
+use liminika_core::runtime::GatewayPhaseSteeringExt;
 use liminika_core::stigmergy::{
-    CrystallizedAttractorRecord, PhaseSteeringEngine, ATTRACTOR_SLOT_KNOWLEDGE,
+    CrystallizedAttractorRecord, PhaseProfileRef64, PhaseSteeringEngine, ATTRACTOR_SLOT_KNOWLEDGE,
     ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE,
 };
 use std::hint::black_box;
@@ -612,7 +612,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 };
                 let sample = make_heterogeneous_q7_phases_with_offset(shift);
                 let _ = rec.absorb_sample_point_64(
-                    liminika_core::Scoped::interior(&sample).into_grounded(),
+                    liminika_core::Scoped::interior(PhaseProfileRef64(&sample)).into_grounded(),
                     mass,
                 );
                 rec
@@ -834,7 +834,7 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
                 );
                 let sample = make_heterogeneous_q7_phases_with_offset(22 + (i as i8) * 3);
                 let _ = rec.absorb_sample_point_64(
-                    liminika_core::Scoped::interior(&sample).into_grounded(),
+                    liminika_core::Scoped::interior(PhaseProfileRef64(&sample)).into_grounded(),
                     2.5 + (i as f32) * 0.5,
                 );
                 rec

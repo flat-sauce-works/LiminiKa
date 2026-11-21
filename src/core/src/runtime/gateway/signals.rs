@@ -497,7 +497,7 @@ pub trait StigmergicThresholdPolicy {
         entropy_h_tilde: f32,
     ) -> StigmergicThresholds;
 
-    /// Resolves [`StigmergicThresholds`] and specializes `ActionHub` decision gates using an
+    /// Resolves [`StigmergicThresholds`] and specializes [`StigmergicSubstrate`] decision gates using an
     /// optional [`CognitiveTrajectoryLedger`] habit state at `scale`.
     ///
     /// Blanket default delegates to [`Self::resolve_thresholds`] followed by
@@ -678,7 +678,7 @@ pub trait CognitiveCircuitThresholdPolicy {
 impl CognitiveCircuitThresholdPolicy for AdaptiveThresholdPolicy {
     #[inline(always)]
     fn early_exit_fuse_floor_q7(&self) -> u8 {
-        let def_gain = crate::stigmergy::action_hub::DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN;
+        let def_gain = crate::stigmergy::substrate::DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN;
         let coh_shift = ((self.base.reinforcement_gain.clamp(0.10, 1.50) - def_gain) * 32.0) as i32;
         (96 + coh_shift).clamp(72, 120) as u8
     }
@@ -691,7 +691,7 @@ impl CognitiveCircuitThresholdPolicy for AdaptiveThresholdPolicy {
 
     #[inline(always)]
     fn peel_escalation_floor_q7(&self) -> u8 {
-        let def_evap = crate::stigmergy::action_hub::DEFAULT_STIGMERGIC_EVAPORATION_RETAIN;
+        let def_evap = crate::stigmergy::substrate::DEFAULT_STIGMERGIC_EVAPORATION_RETAIN;
         let margin_adj =
             ((self.base.evaporation_retain.clamp(0.50, 0.99) - def_evap) * 80.0) as i32;
         (84 + margin_adj).clamp(64, 112) as u8
@@ -709,7 +709,7 @@ impl CognitiveCircuitThresholdPolicy for AdaptiveThresholdPolicy {
         let y0 = f32::from_bits(0x5f37_5a86_u32.wrapping_sub(h.to_bits() >> 1));
         let y1 = y0 * (1.5_f32 - half * y0 * y0);
         let inv_sqrt_h = y1 * (1.5_f32 - half * y1 * y1);
-        let def_gain = crate::stigmergy::action_hub::DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN;
+        let def_gain = crate::stigmergy::substrate::DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN;
         let gain_shift =
             ((self.base.reinforcement_gain.clamp(0.10, 1.50) - def_gain) * 16.0) as i32;
         let cap = capacity.max(1) as f32;

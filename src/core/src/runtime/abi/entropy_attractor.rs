@@ -436,11 +436,11 @@ pub unsafe extern "C" fn gcso_action_hub_destroy(handle: GcsoActionHubHandle) ->
     }
     ffi_boundary!({
         if (handle as usize) >= 4096
-            && ((handle as usize) & (align_of::<ActionHubEngine>() - 1)) == 0
+            && ((handle as usize) & (align_of::<StigmergicSubstrate>() - 1)) == 0
         {
-            // SAFETY: `handle` was allocated via `Box::into_raw(Box::new(ActionHubEngine))` in `gcso_action_hub_create`.
+            // SAFETY: `handle` was allocated via `Box::into_raw(Box::new(StigmergicSubstrate))` in `gcso_action_hub_create`.
             unsafe {
-                let _ = Box::from_raw(handle.cast::<ActionHubEngine>());
+                let _ = Box::from_raw(handle.cast::<StigmergicSubstrate>());
             }
         }
         Ok(GCSO_SUCCESS)

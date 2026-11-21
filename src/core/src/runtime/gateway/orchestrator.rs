@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Gateway Orchestrator extensions (`CoreLayerEvalContext`, [`GatewayPhaseSteeringExt`],
-//! [`ActionHubGatewayExt`], [`ActionHubScaleOrchestrator`], [`HybridScaleCircuit`], and [`StigmergicScaleLayer`]).
+//! [`SubstrateGatewayExt`], [`ScaleLayerOrchestrator`], [`HybridScaleCircuit`], and [`StigmergicScaleLayer`]).
 
 use super::*;
 
@@ -228,7 +228,7 @@ pub(super) fn filter_and_damp_gateway_words(
 }
 
 /// Borrowed read-only core context (`2 Primitives x 2 Drivers`) passed into
-/// per-layer Hot-Path RoPE steering and ActionHub orchestration.
+/// per-layer Hot-Path RoPE steering and substrate orchestration.
 #[derive(Clone, Copy)]
 pub struct CoreLayerEvalContext<'a> {
     /// Unified 3-layer autonomous core stack (`128 B`).
@@ -562,15 +562,15 @@ pub fn apply_gateway_frame_rank1_hidden_fused(
     Ok(structural_gain)
 }
 
-/// Blanket-implemented extension trait equipping any [`ActionHub`] with single-call
+/// Blanket-implemented extension trait equipping any [`StigmergicSubstrateOps`] with single-call
 /// [`ManifoldGatewaySignal`] ingestion, Online Toroidal $k$-Means / DP-Means macro clustering,
 /// online basin consolidation, and `.gcso` crystallization.
-pub trait ActionHubGatewayExt: ActionHub {
+pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
     /// Synthesizes `signal` with dynamic trait cognitive apertures and optional 3-layer core
     /// modulation (`core_ctx`), then steers `query_tensor` and optional `logits_opt` for `geometry`.
     ///
     /// # Errors
-    /// Propagates any validation or execution error from [`ActionHub`] or [`PhaseSteeringGeometryExt`].
+    /// Propagates any validation or execution error from [`StigmergicSubstrateOps`] or [`PhaseSteeringGeometryExt`].
     #[inline]
     fn ingest_gateway_and_steer_with_core_layers_for_geometry_safe<
         S: ManifoldGatewaySignal + ?Sized,
@@ -672,11 +672,11 @@ pub trait ActionHubGatewayExt: ActionHub {
         Ok((frame, report))
     }
 
-    /// Orchestrates scale-aware `signal` synthesis, 3-layer core modulation, and [`ActionHub`]
+    /// Orchestrates scale-aware `signal` synthesis, 3-layer core modulation, and [`StigmergicSubstrateOps`]
     /// decision routing for `geometry`.
     ///
     /// # Errors
-    /// Propagates any validation or execution error from [`ActionHub`].
+    /// Propagates any validation or execution error from [`StigmergicSubstrateOps`].
     #[inline]
     fn orchestrate_gateway_layer_with_scale_and_core_layers_safe<
         S: ManifoldGatewaySignal + ?Sized,
@@ -707,11 +707,11 @@ pub trait ActionHubGatewayExt: ActionHub {
     )> {
         let geom = geometry.rope_geometry();
         let (mut frame, mut frm_w) = synthesize_signal_with_optional_core_layers(signal, core_ctx);
-        let lane_mask = self.workbench_lane_mask();
+        let lane_mask = self.lane_mask();
         if lane_mask != 0 {
             let (rep_cut, attract_cut) =
-                crate::liminal::BitCut8::split(lane_mask, self.workbench_repulsion_mask())
-                    .refine(self.workbench_sandbox_mask());
+                crate::liminal::BitCut8::split(lane_mask, self.repulsion_lane_mask())
+                    .refine(self.sandbox_lane_mask());
             let is_pre_repulsed = ((frame.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0)
                 || frame.to_causal_report().is_cohomology_repulsion();
             let active_cut = if is_pre_repulsed {
@@ -725,8 +725,11 @@ pub trait ActionHubGatewayExt: ActionHub {
                     c.venn.venn_core_mask | c.venn.venn_penumbra_mask
                 });
                 let sandbox_granule_mask = core_ctx.map_or(0x00_u8, |c| {
-                    (c.venn.void_exterior_mask | c.venn.serendipity_excursion_mask)
-                        & !c.venn.venn_core_mask
+                    crate::liminal::BitCut8::split(
+                        c.venn.void_exterior_mask | c.venn.serendipity_excursion_mask,
+                        c.venn.venn_core_mask,
+                    )
+                    .outside
                 });
                 while eligible_lanes != 0 {
                     let lane = eligible_lanes.trailing_zeros() as u8;
@@ -738,7 +741,7 @@ pub trait ActionHubGatewayExt: ActionHub {
                         standard_granule_mask,
                     );
                     if granule_mask != 0 {
-                        if let Some((slot_w, weight)) = self.workbench_lane_words_and_weight(lane) {
+                        if let Some((slot_w, weight)) = self.lane_words_and_weight(lane) {
                             if weight > 0.0 {
                                 let s = branchless_clamp_f32(weight * 64.0, 0.0, 64.0) as u64;
                                 if s != 0 {
@@ -970,7 +973,7 @@ pub trait ActionHubGatewayExt: ActionHub {
     /// Scale-, policy-, and core-layer-aware layer orchestrator allowing per-layer traversal across
     /// `MacroCoalition -> TypeGateway -> CellTrail -> PointerBit` while connecting dynamic trait
     /// cognitive apertures and the 3-layer core stack (`Liminal` + `Stigmergic` + `Ego`) directly into
-    /// per-layer ActionHub RoPE/Rank-1 orchestration.
+    /// per-layer substrate RoPE/Rank-1 orchestration.
     ///
     /// # Errors
     /// Propagates any error from [`Self::orchestrate_gateway_layer_with_scale_and_core_layers_safe`].
@@ -1033,16 +1036,16 @@ pub trait ActionHubGatewayExt: ActionHub {
     }
 }
 
-impl<T: ActionHub + ?Sized> ActionHubGatewayExt for T {}
+impl<T: StigmergicSubstrateOps + ?Sized> SubstrateGatewayExt for T {}
 
 /// [`CognitiveTrajectoryLedger`], and scale-aware swarm resolution in zero-allocation mode.
-pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
+pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
     /// Projects `layer` across `input_words`, resolves the active pointer trail in the Micro-Swarm
     /// at the activated granularity tier, and records the emitted [`CognitiveStepOp`] into
     /// `ledger_slot.telemetry_mini_ledger`.
     ///
     /// # Errors
-    /// Propagates any error from [`crate::stigmergy::PointerActionHub::step_pointer`] or
+    /// Propagates any error from [`crate::stigmergy::PointerSubstrate::step_pointer`] or
     /// [`FastPathLedger::telemetry_push`].
     #[inline]
     fn orchestrate_scale_layer(
@@ -1252,7 +1255,7 @@ pub trait ActionHubScaleOrchestrator: ActionHub + ActionHubGatewayExt {
     }
 }
 
-impl<T: ActionHub + ActionHubGatewayExt + ?Sized> ActionHubScaleOrchestrator for T {}
+impl<T: StigmergicSubstrateOps + SubstrateGatewayExt + ?Sized> ScaleLayerOrchestrator for T {}
 
 /// Hierarchical scale-specialized hybrid circuit pairing a micro-scale (`PointerBit`/`CellTrail`)
 /// [`CognitiveTrajectoryLedger`] with a macro-scale (`TypeGateway`/`MacroCoalition`) ledger.

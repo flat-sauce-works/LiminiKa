@@ -109,7 +109,7 @@ fn dispatch_rope_orchestration<S: ManifoldGatewaySignal + ?Sized>(
             )?;
         }
     } else {
-        adapter.orchestrate_layer_rope_with_action_hub(
+        adapter.orchestrate_layer_rope_with_substrate(
             layer_idx, signal, trail, None, 128, slice, None,
         )?;
     }
@@ -636,7 +636,7 @@ fn dispatch_srl_signal<S: ManifoldGatewaySignal + ?Sized>(
 ) -> CResult<()> {
     if rope_rad <= -1.5 {
         let _ = ad
-            .orchestrate_layer_srl_with_action_hub(signal, h_vec, u_vec, v_vec)
+            .orchestrate_layer_srl_with_substrate(signal, h_vec, u_vec, v_vec)
             .map_err(candle_core::Error::Msg)?;
     } else {
         let _ = ad

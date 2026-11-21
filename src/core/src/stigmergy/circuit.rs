@@ -32,8 +32,8 @@ use crate::foundation::{
     RawPhaseProjectable, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{gcso_q7_t, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
-use crate::stigmergy::action_hub::StigmergicThresholds;
 use crate::stigmergy::ledger::gcso_ledger_slot_t;
+use crate::stigmergy::substrate::StigmergicThresholds;
 use crate::stigmergy::{LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_HISTORY_LEN};
 
 /// Multi-scale granularity tier within the self-similar GCSO hierarchy.
@@ -726,7 +726,7 @@ impl CognitiveTrajectoryLedger {
     ///
     /// Keeps all regime thresholds strictly positive and monotonic
     /// (`express <= subhead <= rank1 <= crystallize`) while allowing identical runtime inputs
-    /// to fire different `ActionHub` regimes according to learned/preset cognitive habits.
+    /// to fire different [`crate::stigmergy::StigmergicSubstrate`] regimes according to learned/preset cognitive habits.
     #[inline]
     #[must_use]
     pub fn bias_stigmergic_thresholds(

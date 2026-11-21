@@ -589,12 +589,14 @@ impl AttractorFieldEngine {
                         idx += 1;
                         continue;
                     }
+                    // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`, and `anc_w` has 8 `u64` words.
                     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                     let (va0, va1) =
                         unsafe { avx2_words64_to_vec64_with_uniform(anc_w, anc_is_uniform) };
                     let eff_coh = if init_nonzero & anc_nonzero {
                         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
                         {
+                            // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`, and all vector inputs are 64-head Q7 `__m256i` pairs.
                             unsafe {
                                 use core::arch::x86_64::_mm256_sub_epi8;
                                 let (vi0, vi1) = match vi_vecs {
@@ -659,11 +661,15 @@ impl AttractorFieldEngine {
                             } else {
                                 let (mut vr0, mut vr1) = match vr_vecs {
                                     Some(v) if !run_is_uniform => v,
-                                    _ => unsafe {
-                                        let rz =
-                                            core::arch::x86_64::_mm256_set1_epi64x(run_w0 as i64);
-                                        (rz, rz)
-                                    },
+                                    _ => {
+                                        // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`.
+                                        unsafe {
+                                            let rz = core::arch::x86_64::_mm256_set1_epi64x(
+                                                run_w0 as i64,
+                                            );
+                                            (rz, rz)
+                                        }
+                                    }
                                 };
                                 run_is_uniform = false;
                                 let ratio_f32 = branchless_clamp_f32(
@@ -676,6 +682,7 @@ impl AttractorFieldEngine {
                                     vr0 = va0;
                                     vr1 = va1;
                                 } else if s > 0 {
+                                    // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`, and `vr0`/`vr1`/`va0`/`va1` are valid 256-bit Q7 vectors.
                                     unsafe {
                                         use core::arch::x86_64::{
                                             _mm256_or_si256, _mm256_sub_epi8, _mm256_testz_si256,
@@ -730,6 +737,7 @@ impl AttractorFieldEngine {
         } else if run_is_uniform {
             [run_w0; 8]
         } else if let Some((vr0, vr1)) = vr_vecs {
+            // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`.
             unsafe { avx2_vec64_to_words64(vr0, vr1) }
         } else {
             [run_w0; 8]

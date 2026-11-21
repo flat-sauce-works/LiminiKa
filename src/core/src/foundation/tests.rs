@@ -344,3 +344,61 @@ fn test_branchless_argmin_u8_x8_masked() {
     assert_eq!(branchless_argmin_u8_x8_masked(&tied, 0b0011_1111), (1, 15));
     assert_eq!(branchless_argmin_u8_x8_masked(&tied, 0xFF), (6, 5));
 }
+
+#[test]
+fn test_branchless_q7_weighted_ensemble_words_64() {
+    use crate::liminal::{gcso_q7_t, NUM_STIGMERGIC_GRANULES};
+    let base_zero = [0u64; NUM_STIGMERGIC_GRANULES];
+    let p0 = [64i8; MAX_ATTENTION_HEADS];
+    let p1 = [-64i8; MAX_ATTENTION_HEADS];
+    let p2 = [120i8; MAX_ATTENTION_HEADS];
+    let p3 = [-120i8; MAX_ATTENTION_HEADS];
+    let p_zero = [0i8; MAX_ATTENTION_HEADS];
+    let profiles: [&[gcso_q7_t; MAX_ATTENTION_HEADS]; 8] =
+        [&p0, &p1, &p2, &p3, &p_zero, &p_zero, &p_zero, &p_zero];
+    let weights = [128u8, 64, 96, 96, 0, 0, 0, 0];
+
+    // 1. Empty mask returns base unchanged
+    let (w_empty, d_empty, entry_empty) =
+        branchless_q7_weighted_ensemble_words_64(profiles, &weights, 0, &base_zero);
+    assert_eq!(w_empty, base_zero);
+    assert_eq!(d_empty, 0);
+    assert_eq!(entry_empty, 0);
+
+    // 2. Single lane: weight=128 reproduces exact profile, weight=96 scales by 3/4
+    let (w_full, d_full, entry_full) =
+        branchless_q7_weighted_ensemble_words_64(profiles, &weights, 0b0000_0001, &base_zero);
+    assert_eq!(entry_full, 0);
+    assert_eq!(d_full, 127);
+    assert_eq!(swar_q7_unpack_x8(w_full[0])[0], 64);
+
+    let (w_single, d_single, entry_single) =
+        branchless_q7_weighted_ensemble_words_64(profiles, &weights, 0b0000_0100, &base_zero);
+    assert_eq!(entry_single, 2);
+    assert_eq!(d_single, 96);
+    assert_eq!(swar_q7_unpack_x8(w_single[0])[0], 90);
+
+    // 3. Multi-lane symmetric rounding (positive and negative head contributions)
+    let mut mixed_pos = [0i8; MAX_ATTENTION_HEADS];
+    mixed_pos[0] = 65;
+    mixed_pos[1] = -65;
+    let profiles_mix: [&[gcso_q7_t; MAX_ATTENTION_HEADS]; 8] = [
+        &mixed_pos, &mixed_pos, &mixed_pos, &p_zero, &p_zero, &p_zero, &p_zero, &p_zero,
+    ];
+    let w_mix = [128u8; 8];
+    let (w_3, d_3, entry_3) =
+        branchless_q7_weighted_ensemble_words_64(profiles_mix, &w_mix, 0b0000_0111, &base_zero);
+    assert_eq!(entry_3, 0);
+    assert_eq!(d_3, 127);
+    let lanes_3 = swar_q7_unpack_x8(w_3[0]);
+    // 3 * 65 * 43 = 8385 -> (8385 + 64) / 128 = 66; negative -> -66
+    assert_eq!(lanes_3[0], 66);
+    assert_eq!(lanes_3[1], -66);
+
+    // 4. Circular SWAR wraparound onto non-zero base
+    let base_100 = load_q7_words_64(&[100i8; MAX_ATTENTION_HEADS]);
+    let (w_wrap, _, _) =
+        branchless_q7_weighted_ensemble_words_64(profiles, &weights, 0b0000_0001, &base_100);
+    // 100 + 64 = 164 wraps on S^1 Q7 to -92
+    assert_eq!(swar_q7_unpack_x8(w_wrap[0])[0], -92);
+}

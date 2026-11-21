@@ -115,7 +115,7 @@ pub struct TrajectoryManifoldSnapshot {
     pub recalled_fact_anchors: Vec<u32>,
     /// Ordered `(anchor_id, last_layer_q7)` pairs for all recalled Fact basins in this trajectory.
     pub recalled_fact_q7s: Vec<(u32, [i8; MAX_ATTENTION_HEADS])>,
-    /// Core `ActionHub` regime decision associated with this recall.
+    /// Core substrate regime decision associated with this recall.
     pub action_decision: StigmergicActionDecision,
     /// Synthesized 128-byte core `GatewayFrame`.
     pub gateway_frame: GatewayFrame,

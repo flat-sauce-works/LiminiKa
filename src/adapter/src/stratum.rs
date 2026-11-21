@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Hierarchical Society-of-Mind strata (`n - 1 <-> n <-> n + 1`) built over [`liminika_core`]
-//! `ActionHub` and role-scoped `Liminal` boundary geometry.
+//! `StigmergicSubstrate` and role-scoped `Liminal` boundary geometry.
 //!
 //! Each [`SocietyStratum`] operates only on signals exposed by adjacent layers, allowing dynamic
 //! insertion, removal, or replacement via [`StratumPipeline`] without coupling lower feature
@@ -17,15 +17,14 @@ use liminika_core::abi::{gcso_pointer_trail_t, gcso_tagged_ptr_t};
 use liminika_core::foundation::load_q7_words_64;
 use liminika_core::liminal::{GcsoResult, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
 use liminika_core::runtime::{
-    ActionHubScaleOrchestrator, AdaptiveThresholdPolicy, CausalProvenanceReport,
-    CognitiveCircuitThresholdPolicy, GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal,
-    ObjectiveFact, ScaleLayerNode, StigmergicActionReceptor, SubjectivePersona,
+    AdaptiveThresholdPolicy, CausalProvenanceReport, CognitiveCircuitThresholdPolicy, GatewayFrame,
+    GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact, ScaleLayerNode, ScaleLayerOrchestrator,
+    StigmergicReceptor, SubjectivePersona,
 };
 use liminika_core::stigmergy::{
-    ActionHubEngine, ActionOrchestrationReport, CognitiveCircuitActivation, CognitiveOpKind,
-    CognitiveStepOp, CognitiveTrajectoryLedger, StigmergicActionDecision,
-    StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicThresholds,
-    ACTION_HUB_INLINE_TRAILS,
+    CognitiveCircuitActivation, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
+    StigmergicActionDecision, StigmergicReconstitutionReport, StigmergicScaleGranularity,
+    StigmergicSubstrate, StigmergicThresholds, SubstrateStepReport, SUBSTRATE_INLINE_TRAILS,
 };
 
 /// Uncollapsed per-query-token resonance observation deposited into stigmergic swarm trails.
@@ -53,21 +52,21 @@ pub struct LocalChannelObservation {
     pub token_deposits: Vec<TokenResonanceDeposit>,
 }
 
-/// [`StigmergicActionReceptor`] tracking multi-trail pointer emergence when [`ActionHubEngine`]
+/// [`StigmergicReceptor`] tracking multi-trail pointer emergence when [`StigmergicSubstrate`]
 /// links disjoint factual sub-basins across residual unexplained query tokens.
 #[derive(Debug, Clone, Default)]
-pub struct ActionHubInterpretiveReceptor {
+pub struct TrailEmergenceReceptor {
     /// Ordered sequence of dominant anchor IDs observed during trail emergence.
     pub emerged_anchor_chain: Vec<u32>,
-    /// Last core [`ActionOrchestrationReport`] emitted upon stigmergic emergence.
-    pub last_report: Option<ActionOrchestrationReport>,
+    /// Last core [`SubstrateStepReport`] emitted upon stigmergic emergence.
+    pub last_report: Option<SubstrateStepReport>,
 }
 
-impl StigmergicActionReceptor for ActionHubInterpretiveReceptor {
-    fn on_stigmergic_action_emerged(
+impl StigmergicReceptor for TrailEmergenceReceptor {
+    fn on_stigmergic_emergence(
         &mut self,
         _frame: &GatewayFrame,
-        report: &ActionOrchestrationReport,
+        report: &SubstrateStepReport,
         trail: &gcso_pointer_trail_t,
     ) -> GcsoResult<()> {
         self.last_report = Some(*report);
@@ -88,7 +87,7 @@ impl StigmergicActionReceptor for ActionHubInterpretiveReceptor {
 }
 
 /// Per-query diagnostic telemetry bridging adapter stratum channels with [`liminika_core`]
-/// [`CausalProvenanceReport`] so `ActionHub` and evaluation harnesses observe channel agreement.
+/// [`CausalProvenanceReport`] so `StigmergicSubstrate` and evaluation harnesses observe channel agreement.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StratumProbeTelemetry {
     /// Winning anchor ID from the global pooled cosine channel before stratum modulation.
@@ -105,7 +104,7 @@ pub struct StratumProbeTelemetry {
     pub channel_disagreement: bool,
     /// Core 16-byte causal provenance report synthesized via [`GatewayFrame::to_causal_report`].
     pub provenance: CausalProvenanceReport,
-    /// Recorded 8-step multi-scale cognitive trajectory from `ActionHub` FastPathLedger mini ledger.
+    /// Recorded 8-step multi-scale cognitive trajectory from substrate FastPathLedger mini ledger.
     pub cognitive_trajectory: CognitiveTrajectoryLedger,
     /// Latest stigmergic cognitive circuit gating activation computed from trajectory history.
     pub layer_activation: CognitiveCircuitActivation,
@@ -115,7 +114,7 @@ pub struct StratumProbeTelemetry {
 ///
 /// Lower strata (`n - 1`) populate local features and stigmergic pointer weights without needing
 /// global semantic awareness, while upper strata (`n + 1`) arbitrate `Liminal` boundaries, Guard
-/// conflicts, and `ActionHub` regimes.
+/// conflicts, and substrate regimes.
 #[derive(Debug, Clone)]
 pub struct StratumSignal {
     /// Per-attractor score (`-1.0..=1.0+`) updated by each stratum in the stack.
@@ -129,9 +128,9 @@ pub struct StratumSignal {
     pub d_to_q_scores: Vec<f32>,
     /// Uncollapsed per-query-token resonance deposits evaluated by the stigmergic swarm.
     pub token_deposits: Vec<TokenResonanceDeposit>,
-    /// Ordered multi-trail Fact decomposition `(entry_idx, score)` selected by [`ActionHubEngine`].
+    /// Ordered multi-trail Fact decomposition `(entry_idx, score)` selected by [`StigmergicSubstrate`].
     pub linked_fact_indices: Vec<(usize, f32)>,
-    /// True when [`ActionHubEngine`] interpretive decomposition linked disjoint Fact sub-basins.
+    /// True when [`StigmergicSubstrate`] interpretive decomposition linked disjoint Fact sub-basins.
     pub decomposition_triggered: bool,
     /// Per-attractor local `Liminal` gap depth (`0.0` = deep inside basin).
     pub local_void_depths: Vec<f32>,
@@ -141,7 +140,7 @@ pub struct StratumSignal {
     pub boundary_metrics: RecallBoundaryMetrics,
     /// Boundary gate decision (`InsideBasin`, `LiminalBoundary`, or `Liminal`).
     pub gate_decision: RecallGateDecision,
-    /// `ActionHub` regime chosen for top-down orchestration.
+    /// Substrate regime chosen for top-down orchestration.
     pub action_decision: StigmergicActionDecision,
     /// Synthesized 128-byte core [`GatewayFrame`] serving as the universal arbitration gate.
     pub gateway_frame: GatewayFrame,
@@ -598,15 +597,15 @@ impl SocietyStratum for PerspectiveDominoStratum<'_> {
 }
 
 /// Stratum 2 (`n = 2`): upper Society-of-Mind arbiter combining [`RecallBoundaryGate`] with
-/// `ActionHub` [`StigmergicActionDecision`] regime selection and top-down directives.
-pub struct ActionHubBoundaryStratum<'a> {
+/// substrate [`StigmergicActionDecision`] regime selection and top-down directives.
+pub struct SubstrateBoundaryStratum<'a> {
     /// Boundary gate classifying `void_state` and suppression.
     pub gate: &'a dyn RecallBoundaryGate,
 }
 
-impl SocietyStratum for ActionHubBoundaryStratum<'_> {
+impl SocietyStratum for SubstrateBoundaryStratum<'_> {
     fn name(&self) -> &'static str {
-        "action_hub_boundary"
+        "substrate_boundary"
     }
 
     fn infer_up(&self, ctx: &StratumContext<'_>, signal: &mut StratumSignal) -> Result<(), String> {
@@ -749,9 +748,9 @@ impl SocietyStratum for ActionHubBoundaryStratum<'_> {
         signal.telemetry.final_top1_anchor = final_top1_anchor;
         signal.telemetry.provenance = frame.to_causal_report();
 
-        // Execute cross-scale ActionHub orchestration so Gateway synthesis, Stigmergy, and
+        // Execute cross-scale substrate orchestration so Gateway synthesis, Stigmergy, and
         // recorded CognitiveTrajectoryLedger close into one unified FastPathLedger ledger.
-        let mut boundary_hub = ActionHubEngine::new();
+        let mut boundary_hub = StigmergicSubstrate::new();
         let mut ledger_slot = Default::default();
         signal
             .telemetry
@@ -936,7 +935,7 @@ impl<'a> StratumPipeline<'a> {
 }
 
 /// Trait abstracting multi-point stigmergic coalition decomposition over token resonance
-/// deposits and 8-cell Micro-Swarm phase consensus (`ActionHubEngine`).
+/// deposits and 8-cell Micro-Swarm phase consensus (`StigmergicSubstrate`).
 pub trait StigmergicCoalitionDecomposer: Send + Sync {
     /// Decomposes a multi-token query's residual resonance field into an ordered chain of
     /// complementary Fact attractors (`t0 -> t1 -> ...`) inside `hub`.
@@ -944,7 +943,7 @@ pub trait StigmergicCoalitionDecomposer: Send + Sync {
         &self,
         ctx: &StratumContext<'_>,
         signal: &mut StratumSignal,
-        hub: &mut ActionHubEngine,
+        hub: &mut StigmergicSubstrate,
         selected_indices: &[usize],
         trail_states: &[gcso_pointer_trail_t],
         last_layer: usize,
@@ -1056,16 +1055,16 @@ impl LocalTokenResonanceStratum {
         swarm_report
     }
 
-    /// Selects up to `ACTION_HUB_INLINE_TRAILS` (16) active attractor candidates covering global,
+    /// Selects up to `SUBSTRATE_INLINE_TRAILS` (16) active attractor candidates covering global,
     /// combined local, and single-token specialist peaks, then deposits uncollapsed token
-    /// observations through the 8-cell Micro-Swarm into an [`ActionHubEngine`].
+    /// observations through the 8-cell Micro-Swarm into a [`StigmergicSubstrate`].
     fn deposit_token_swarm_trails(
         entries: &[TextAttractorEntry],
         signal: &mut StratumSignal,
         last_layer: usize,
-    ) -> (ActionHubEngine, Vec<usize>, Vec<gcso_pointer_trail_t>) {
+    ) -> (StigmergicSubstrate, Vec<usize>, Vec<gcso_pointer_trail_t>) {
         let n_entries = entries.len();
-        let mut hub = ActionHubEngine::new();
+        let mut hub = StigmergicSubstrate::new();
         for entry in entries {
             if entry.role == AttractorRole::Guard {
                 let g_q7 = entry
@@ -1092,7 +1091,7 @@ impl LocalTokenResonanceStratum {
             })
             .collect();
         ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
-        ranked.truncate(ACTION_HUB_INLINE_TRAILS);
+        ranked.truncate(SUBSTRATE_INLINE_TRAILS);
 
         let selected_indices: Vec<usize> = ranked.iter().map(|&(i, _)| i).collect();
         let mut trail_states: Vec<gcso_pointer_trail_t> = selected_indices
@@ -1336,7 +1335,7 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
         &self,
         ctx: &StratumContext<'_>,
         signal: &mut StratumSignal,
-        hub: &mut ActionHubEngine,
+        hub: &mut StigmergicSubstrate,
         selected_indices: &[usize],
         trail_states: &[gcso_pointer_trail_t],
         last_layer: usize,
@@ -1455,7 +1454,7 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
         let mut coalition = vec![first_idx, second_idx];
         let hop_cap = self
             .max_coalition_hops
-            .min(ACTION_HUB_INLINE_TRAILS)
+            .min(SUBSTRATE_INLINE_TRAILS)
             .min(fact_idxs.len());
         if hop_cap >= 3 {
             let mut best_third: Option<(usize, f32)> = None;
@@ -1509,8 +1508,8 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
             }
         }
 
-        // Wire the decomposed coalition onto `ActionHubEngine` inline trails as a closed pointer
-        // ring and notify the `StigmergicActionReceptor`.
+        // Wire the decomposed coalition onto `StigmergicSubstrate` inline trails as a closed pointer
+        // ring and notify the `StigmergicReceptor`.
         let make_trail_for = |entry_idx: usize| -> gcso_pointer_trail_t {
             if let Some(pos) = selected_indices.iter().position(|&idx| idx == entry_idx) {
                 trail_states[pos]
@@ -1540,7 +1539,7 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
 
         let mut chain_trail = gcso_pointer_trail_t::default();
         chain_trail.copy_from_fast(&hub.trails[0]);
-        let mut receptor = ActionHubInterpretiveReceptor::default();
+        let mut receptor = TrailEmergenceReceptor::default();
         if let Ok((chain_report, _hops, _term_idx, _term_anchor, _mean_coh)) = hub
             .traverse_pointer_chain_and_orchestrate(
                 0,
@@ -1553,7 +1552,7 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
                 None,
             )
         {
-            let _ = receptor.on_stigmergic_action_emerged(
+            let _ = receptor.on_stigmergic_emergence(
                 &signal.gateway_frame,
                 &chain_report,
                 &chain_trail,
@@ -1610,7 +1609,7 @@ impl SocietyStratum for LocalTokenResonanceStratum {
             .first()
             .map(|e| e.per_layer_q7.len().saturating_sub(1))
             .unwrap_or(0);
-        // Deposit uncollapsed per-token observations onto 8-cell Micro-Swarm trails in ActionHub.
+        // Deposit uncollapsed per-token observations onto 8-cell Micro-Swarm trails in StigmergicSubstrate.
         let (mut hub, selected_indices, trail_states) =
             Self::deposit_token_swarm_trails(ctx.entries, signal, last_layer);
 
@@ -1675,7 +1674,7 @@ impl SocietyStratum for LocalTokenResonanceStratum {
         }
 
         // First test whether Fact tokens form a multi-basin compound coalition better solved via
-        // ActionHub linked trails than unimodal winner-take-all sharpening.
+        // StigmergicSubstrate linked trails than unimodal winner-take-all sharpening.
         self.decomposer.decompose_fact_coalition(
             ctx,
             signal,
@@ -1978,7 +1977,7 @@ impl Default for StratumPipeline<'static> {
         p.push_stratum(Box::new(PerspectiveDominoStratum {
             perspective: &DEFAULT_PERSPECTIVE,
         }));
-        p.push_stratum(Box::new(ActionHubBoundaryStratum {
+        p.push_stratum(Box::new(SubstrateBoundaryStratum {
             gate: &DEFAULT_GATE,
         }));
         p

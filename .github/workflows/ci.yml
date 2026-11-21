@@ -454,54 +454,7 @@ jobs:
           PY
 
       - name: Verify 5-Layer Unidirectional DAG, Driver Isolation & Axiom Orthogonality
-        run: |
-          python3 - << 'PY'
-          import pathlib
-          import re
-          import sys
-
-          root = pathlib.Path("src/core/src")
-          rules = [
-              ("Lv.0 liminal -> Lv.1..4", "liminal", re.compile(r"\b(?:crate::|(?:super::)+)(?:(foundation|stigmergy|drivers|runtime)\b|\{[^}]*\b(foundation|stigmergy|drivers|runtime)\b)")),
-              ("Lv.1 foundation -> Lv.2..4", "foundation", re.compile(r"\b(?:crate::|(?:super::)+)(?:(stigmergy|drivers|runtime)\b|\{[^}]*\b(stigmergy|drivers|runtime)\b)")),
-              ("Lv.1 foundation -> liminal::axiom / Scoped", "foundation", re.compile(r"\b(?:liminal::axiom\b|Scoped\s*<|Scoped::|ScopedCut\b|Indivisible\s*<|Indivisible::|Indivisible\b|IndivisiblePhase\b|Activatable\b|Groundable\b|ActiveScope\b|GroundedScope\b|GroundedOrigin\b|SpeculativeDiscovery\b|BoundaryViolation\b|VerifiedAligned\b|BridgedDiscovery\b)")),
-              ("Lv.2 stigmergy -> Lv.3..4", "stigmergy", re.compile(r"\b(?:crate::|(?:super::)+)(?:(drivers|runtime)\b|\{[^}]*\b(drivers|runtime)\b)")),
-              ("Lv.3 drivers -> Lv.4", "drivers", re.compile(r"\b(?:crate::|(?:super::)+)(?:runtime\b|\{[^}]*\bruntime\b)")),
-              ("drivers/spine -> drivers/ego", "drivers/spine", re.compile(r"\b(?:crate::drivers::|(?:super::)+)(?:ego\b|\{[^}]*\bego\b)")),
-              ("drivers/ego -> drivers/spine", "drivers/ego", re.compile(r"\b(?:crate::drivers::|(?:super::)+)(?:spine\b|\{[^}]*\bspine\b)")),
-              ("Lv.0 axiom/cut -> axiom/lacuna", "liminal/axiom/cut.rs", re.compile(r"lacuna", re.IGNORECASE)),
-              ("Lv.0 axiom/lacuna -> axiom/cut", "liminal/axiom/lacuna.rs", re.compile(r"\b(?:(?:super::)+|axiom::|liminal::)cut\b|\b(?:Scoped|ScopedCut|Indivisible|IndivisiblePhase|Activatable|Groundable|BitCut8|BitCut32|ActiveScope|GroundedScope|Cuttable|Definite|BoundaryViolation|SpeculativeDiscovery)\b")),
-          ]
-
-          violations = []
-          for legacy in (root / "traits", root / "traits.rs"):
-              if legacy.exists():
-                  violations.append(f"Deprecated legacy traits path exists: {legacy.as_posix()}")
-
-          for label, sub, pat in rules:
-              sub_path = root / sub
-              if sub_path.is_file():
-                  rs_files = [sub_path]
-              elif sub_path.is_dir():
-                  rs_files = sorted(sub_path.rglob("*.rs"))
-              else:
-                  rs_files = []
-              if not rs_files:
-                  violations.append(f"{label}: path {sub_path.as_posix()} is missing or contains no .rs files")
-                  continue
-              for f in rs_files:
-                  text = f.read_text(encoding="utf-8")
-                  lines = text.splitlines()
-                  for m in pat.finditer(text):
-                      lineno = text.count("\n", 0, m.start()) + 1
-                      snippet = lines[lineno - 1].strip() if 1 <= lineno <= len(lines) else m.group(0)
-                      violations.append(f"{label}: {f.as_posix()}:{lineno}: {snippet}")
-
-          if violations:
-              print("Error: 5-layer unidirectional DAG, driver isolation, or axiom orthogonality violation detected:", *violations, sep="\n  ")
-              sys.exit(1)
-          print("All 5-layer unidirectional DAG, spine/ego isolation, and axiom orthogonality invariants passed (0 violations).")
-          PY
+        run: python3 scripts/verify_architecture.py --check
 
   # =========================================================================
   # 4. C/C++ & GPU KERNELS BUILD MATRIX
@@ -914,6 +867,9 @@ jobs:
           fi
           if [ -f "scripts/run_benchmarks.py" ]; then
             python scripts/run_benchmarks.py --help >/dev/null
+          fi
+          if [ -f "scripts/verify_architecture.py" ]; then
+            python scripts/verify_architecture.py --help >/dev/null
           fi
 
           if [ -d "tests" ]; then

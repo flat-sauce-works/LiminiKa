@@ -27,7 +27,6 @@
 #![allow(clippy::if_same_then_else)]
 #![allow(clippy::ifs_same_cond)]
 #![allow(clippy::field_reassign_with_default)]
-#![allow(clippy::undocumented_unsafe_blocks)]
 #![allow(clippy::needless_return)]
 
 use crate::drivers::{
@@ -49,7 +48,7 @@ use crate::foundation::{
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u8, gcso_config_t, gcso_q7_t,
-    AttributionTag, DriverKind, EpistemicPartition, EpistemicRegime, GcsoResult,
+    AttributionTag, BitCut8, DriverKind, EpistemicPartition, EpistemicRegime, GcsoResult,
     LiminalThresholdField, SubstrateKind, DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_MAJOR,
     GCSO_ABI_VERSION_MINOR, GCSO_ABI_VERSION_PATCH, GCSO_ABI_VERSION_STRING,
     GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT,
@@ -62,9 +61,8 @@ use crate::runtime::abi::types::{
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::gateway::{
-    ActionHubGatewayExt, CausalProvenanceReport, CausalProvenanceSignal, GatewayFrame,
-    GatewayPhaseSteeringExt, ManifoldGatewaySignal, ManifoldProbeBaseline, PhaseSteeringClosedLoop,
-    SystemConstraintSignal,
+    CausalProvenanceReport, CausalProvenanceSignal, GatewayFrame, GatewayPhaseSteeringExt,
+    ManifoldGatewaySignal, ManifoldProbeBaseline, SubstrateGatewayExt, SystemConstraintSignal,
 };
 use crate::runtime::horizon::{
     apply_latent_horizon_slots, EpistemicHorizonReading, HorizonDwellState,
@@ -72,7 +70,7 @@ use crate::runtime::horizon::{
 };
 use crate::stigmergy::{
     PhaseSteeringEngine, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE,
-    DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_SLOT_COUPLING_MATRIX_8X8, LEDGER_HISTORY_LEN,
+    DEFAULT_SLOT_COUPLING_MATRIX_8X8, DEFAULT_SUBSTRATE_CAPACITY, LEDGER_HISTORY_LEN,
     MAX_ANCHORS_PER_FIELD, ROOT_CAUSE_SYSTEM_QOS_THROTTLE, WORKBENCH_LANE_FLAG_REPULSION,
 };
 
@@ -97,13 +95,13 @@ use crate::runtime::storage::{
 use crate::runtime::telemetry::{CoreTelemetryBank, CoreTelemetrySnapshot, TelemetryCapturePolicy};
 use crate::stigmergy::{
     gcso_anchor_type_t, gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
-    trail_phase_words_mut, trail_phase_words_ref, ActionHub, ActionHubEngine, CognitiveSubstrate,
-    CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, DissipativeOverflowReport,
-    FastPathLedger, MultiAttractorSpace, PointerActionHub, StigmergicActionDecision,
-    StigmergicGranuleField, StigmergicOverlapSerendipityReport, WorkbenchLanePlacement,
-    WorkbenchSlotSpec, ACTION_HUB_INLINE_TRAILS, LEDGER_METRIC_FAST_PATH_HIT,
+    trail_phase_words_mut, trail_phase_words_ref, CognitiveSubstrate, CognitiveTrajectoryLedger,
+    ContrastivePhaseBloomFilter, DissipativeOverflowReport, FastPathLedger, MultiAttractorSpace,
+    PointerSubstrate, SandboxLifecycleEvent, StigmergicActionDecision, StigmergicGranuleField,
+    StigmergicOverlapSerendipityReport, StigmergicSubstrate, StigmergicSubstrateOps,
+    WorkbenchLanePlacement, WorkbenchSlotSpec, LEDGER_METRIC_FAST_PATH_HIT,
     LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_REPULSION_APPLIED, MAX_ATTRACTOR_PULL_FORCE,
-    TRAIL_FLAG_REPULSION_ACTIVE,
+    SUBSTRATE_INLINE_TRAILS, TRAIL_FLAG_REPULSION_ACTIVE,
 };
 
 /// Returns the active semantic ABI version tuple `(major, minor, patch)`.
@@ -149,7 +147,7 @@ pub fn init_default_config(config: &mut gcso_config_t) -> GcsoResult<()> {
         qdps_min_step_rad: DEFAULT_PHASE_STEP_MIN_RAD,
         entropy_singularity_eps: DEFAULT_ENTROPY_EPS,
         max_prompt_anchors: MAX_ANCHORS_PER_FIELD as u32,
-        action_hub_capacity: DEFAULT_ACTION_HUB_CAPACITY,
+        action_hub_capacity: DEFAULT_SUBSTRATE_CAPACITY,
         enable_cuda_warp_shuffle: 1,
         enable_zero_alloc_strict: 1,
         ledger_mode: 0,
@@ -433,7 +431,7 @@ impl Config {
                 qdps_min_step_rad: DEFAULT_PHASE_STEP_MIN_RAD,
                 entropy_singularity_eps: DEFAULT_ENTROPY_EPS,
                 max_prompt_anchors: MAX_ANCHORS_PER_FIELD as u32,
-                action_hub_capacity: DEFAULT_ACTION_HUB_CAPACITY,
+                action_hub_capacity: DEFAULT_SUBSTRATE_CAPACITY,
                 enable_cuda_warp_shuffle: 1,
                 enable_zero_alloc_strict: 1,
                 ledger_mode: 0,
@@ -530,12 +528,19 @@ impl Config {
         self
     }
 
-    /// Sets the `ActionHub` pointer table slot capacity.
+    /// Sets the [`StigmergicSubstrate`] pointer table slot capacity.
     #[inline(always)]
     #[must_use]
-    pub const fn with_action_hub_capacity(mut self, action_hub_capacity: u32) -> Self {
-        self.raw.action_hub_capacity = action_hub_capacity;
+    pub const fn with_substrate_capacity(mut self, substrate_capacity: u32) -> Self {
+        self.raw.action_hub_capacity = substrate_capacity;
         self
+    }
+
+    /// Returns the configured [`StigmergicSubstrate`] pointer table slot capacity.
+    #[inline(always)]
+    #[must_use]
+    pub const fn substrate_capacity(&self) -> u32 {
+        self.raw.action_hub_capacity
     }
 
     /// Configures GPU warp shuffle instruction usage (`1` = enabled, `0` = disabled).
@@ -660,21 +665,21 @@ impl Config {
 /// autonomous core stack (`Liminal` + `Stigmergic` + `Ego`), and dynamically slid-in horizon slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct OrchestratorStatusSnapshot {
-    /// Total tokens/steps processed by `ActionHubEngine`.
+    /// Total tokens/steps processed by `StigmergicSubstrate`.
     pub step_counter: u64,
-    /// Number of active trails registered in `ActionHubEngine`.
+    /// Number of active trails registered in `StigmergicSubstrate`.
     pub active_trail_count: u32,
     /// Active `EntropyController` branch mode (`0` = normal, `1` = bifurcation, `2` = repulsion).
     pub entropy_gate_mode: u32,
     /// Active anchor count in `MultiAttractorSpace`.
     pub attractor_anchor_count: u32,
-    /// Bitmask of enabled working lanes (`0..=7`) in `ActionHubEngine`.
+    /// Bitmask of enabled working lanes (`0..=7`) in `StigmergicSubstrate`.
     pub slot_enabled_mask: u8,
-    /// Bitmask of explicitly pinned working lanes (`0..=7`) in `ActionHubEngine`.
+    /// Bitmask of explicitly pinned working lanes (`0..=7`) in `StigmergicSubstrate`.
     pub slot_pinned_mask: u8,
-    /// Bitmask of anti-phase repulsion working lanes (`0..=7`) in `ActionHubEngine`.
+    /// Bitmask of anti-phase repulsion working lanes (`0..=7`) in `StigmergicSubstrate`.
     pub slot_repulsion_mask: u8,
-    /// Bitmask of isolated exterior-only sandbox working lanes (`0..=7`) in `ActionHubEngine`.
+    /// Bitmask of isolated exterior-only sandbox working lanes (`0..=7`) in `StigmergicSubstrate`.
     pub slot_sandbox_mask: u8,
     /// Active Layer 0 `Liminal` channel aperture mask (`8` channels).
     pub liminal_threshold_mask: u32,
@@ -695,13 +700,13 @@ pub struct OrchestratorStatusSnapshot {
 }
 
 /// High-level safe Rust single orchestrator facade integrating concrete core engines
-/// ([`ActionHubEngine`], [`PhaseSteeringEngine`], [`EntropyController`], [`MultiAttractorSpace`]),
+/// ([`StigmergicSubstrate`], [`PhaseSteeringEngine`], [`EntropyController`], [`MultiAttractorSpace`]),
 /// the 128-byte 3-layer core stack ([`AutonomousCoreLayerStack`]: `Liminal` + `Stigmergic` + `Ego`),
 /// and dynamic slide-in/slide-out [`LatentHorizonSlot`] boundaries.
 #[derive(Debug)]
 pub struct RuntimeContext {
     config: Config,
-    action_hub: ActionHubEngine,
+    substrate: StigmergicSubstrate,
     phase_steering: PhaseSteeringEngine,
     entropy_controller: EntropyController,
     attractor_space: MultiAttractorSpace,
@@ -713,6 +718,8 @@ pub struct RuntimeContext {
     active_horizon_slots_mask: u32,
     escalated_workbench_lane: Option<u8>,
     sandbox_workbench_lane: Option<u8>,
+    last_sandbox_event: SandboxLifecycleEvent,
+    sandbox_promotions: u32,
     probe_baseline: ManifoldProbeBaseline,
     telemetry: CoreTelemetryBank,
     compute_pool: AnonymousComputePool,
@@ -732,10 +739,10 @@ impl RuntimeContext {
     pub fn new(config: Config) -> Result<Self> {
         config.validate()?;
         let phase_steering = PhaseSteeringEngine::new(config.raw.head_dim, config.raw.num_heads)?;
-        let mut action_hub = ActionHubEngine::from_config(&config.raw)?;
-        action_hub.repulsion_threshold = config.repulsion_threshold;
-        action_hub.repulsion_scale_u7 = config.repulsion_scale_u7;
-        action_hub.coupling_matrix_8x8 = config.slot_coupling_matrix;
+        let mut substrate = StigmergicSubstrate::from_config(&config.raw)?;
+        substrate.repulsion_threshold = config.repulsion_threshold;
+        substrate.repulsion_scale_u7 = config.repulsion_scale_u7;
+        substrate.coupling_matrix_8x8 = config.slot_coupling_matrix;
         let edbc_state = gcso_edbc_state_t {
             singularity_eps: config.raw.entropy_singularity_eps,
             bifurcation_threshold: config.bifurcation_threshold,
@@ -747,7 +754,7 @@ impl RuntimeContext {
 
         Ok(Self {
             config,
-            action_hub,
+            substrate,
             phase_steering,
             entropy_controller: edbc,
             attractor_space: MultiAttractorSpace::new(),
@@ -759,6 +766,8 @@ impl RuntimeContext {
             active_horizon_slots_mask: 0,
             escalated_workbench_lane: None,
             sandbox_workbench_lane: None,
+            last_sandbox_event: SandboxLifecycleEvent::Idle,
+            sandbox_promotions: 0,
             probe_baseline: ManifoldProbeBaseline::new(),
             telemetry: CoreTelemetryBank::default(),
             compute_pool: AnonymousComputePool::default(),
@@ -809,6 +818,20 @@ impl RuntimeContext {
     #[must_use]
     pub const fn sandbox_workbench_lane(&self) -> Option<u8> {
         self.sandbox_workbench_lane
+    }
+
+    /// Returns the most recent [`SandboxLifecycleEvent`] emitted by [`Self::pierce_and_orchestrate_step`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn last_sandbox_event(&self) -> SandboxLifecycleEvent {
+        self.last_sandbox_event
+    }
+
+    /// Returns the cumulative count of promoted sandbox hypothesis lanes recorded in this context.
+    #[inline(always)]
+    #[must_use]
+    pub const fn sandbox_promotions(&self) -> u32 {
+        self.sandbox_promotions
     }
 
     /// Returns a mutable reference to the latest Layer 0 [`LiminalBoundaryDelta`].
@@ -985,14 +1008,14 @@ impl RuntimeContext {
     #[must_use]
     pub fn orchestrator_status(&self) -> OrchestratorStatusSnapshot {
         OrchestratorStatusSnapshot {
-            step_counter: self.action_hub.step_counter,
-            active_trail_count: self.action_hub.active_count,
+            step_counter: self.substrate.step_counter,
+            active_trail_count: self.substrate.active_count,
             entropy_gate_mode: self.entropy_controller.state().active_branch_mode,
             attractor_anchor_count: self.attractor_space.system_field().active_count(),
-            slot_enabled_mask: self.action_hub.slot_enabled_mask,
-            slot_pinned_mask: self.action_hub.slot_pinned_mask,
-            slot_repulsion_mask: self.action_hub.slot_repulsion_mask,
-            slot_sandbox_mask: self.action_hub.slot_sandbox_mask,
+            slot_enabled_mask: self.substrate.slot_enabled_mask,
+            slot_pinned_mask: self.substrate.slot_pinned_mask,
+            slot_repulsion_mask: self.substrate.slot_repulsion_mask,
+            slot_sandbox_mask: self.substrate.slot_sandbox_mask,
             liminal_threshold_mask: self.core_layers.liminal_layer.active_aperture_mask,
             stigmergic_overlap_core_mask: self.core_layers.stigmergic_layer.venn_overlap_mask,
             ego_active: self.core_layers.ego_layer.is_active(),
@@ -1011,18 +1034,18 @@ impl RuntimeContext {
         &self.config
     }
 
-    /// Returns an immutable reference to the underlying [`ActionHubEngine`].
+    /// Returns an immutable reference to the underlying [`StigmergicSubstrate`].
     #[inline(always)]
     #[must_use]
-    pub const fn action_hub(&self) -> &ActionHubEngine {
-        &self.action_hub
+    pub const fn substrate(&self) -> &StigmergicSubstrate {
+        &self.substrate
     }
 
-    /// Returns a mutable reference to the underlying [`ActionHubEngine`].
+    /// Returns a mutable reference to the underlying [`StigmergicSubstrate`].
     #[inline(always)]
     #[must_use]
-    pub fn action_hub_mut(&mut self) -> &mut ActionHubEngine {
-        &mut self.action_hub
+    pub fn substrate_mut(&mut self) -> &mut StigmergicSubstrate {
+        &mut self.substrate
     }
 
     /// Returns an immutable reference to the underlying [`EntropyController`].
@@ -1057,42 +1080,42 @@ impl RuntimeContext {
     #[inline(always)]
     #[must_use]
     pub const fn bloom_filter(&self) -> &ContrastivePhaseBloomFilter {
-        &self.action_hub.bloom_filter
+        &self.substrate.bloom_filter
     }
 
     /// Returns a mutable reference to the 64-byte [`ContrastivePhaseBloomFilter`].
     #[inline(always)]
     #[must_use]
     pub fn bloom_filter_mut(&mut self) -> &mut ContrastivePhaseBloomFilter {
-        &mut self.action_hub.bloom_filter
+        &mut self.substrate.bloom_filter
     }
 
     /// Returns an immutable reference to the active [`gcso_ledger_slot_t`] scratchpad.
     #[inline(always)]
     #[must_use]
     pub const fn ledger_slot(&self) -> &gcso_ledger_slot_t {
-        &self.action_hub.ledger_slot
+        &self.substrate.ledger_slot
     }
 
     /// Returns a mutable reference to the active [`gcso_ledger_slot_t`] scratchpad.
     #[inline(always)]
     #[must_use]
     pub fn ledger_slot_mut(&mut self) -> &mut gcso_ledger_slot_t {
-        &mut self.action_hub.ledger_slot
+        &mut self.substrate.ledger_slot
     }
 
     /// Returns an immutable 16-byte aligned slice view over the 8-lane Q7 working phase bank (`512` bytes).
     #[inline(always)]
     #[must_use]
     pub const fn slot_phase_bank(&self) -> AlignedSlice16<'_, gcso_q7_t> {
-        self.action_hub.slot_phase_bank.relax_slice::<16>()
+        self.substrate.slot_phase_bank.relax_slice::<16>()
     }
 
     /// Returns a mutable 16-byte aligned slice view over the 8-lane Q7 working phase bank (`512` bytes).
     #[inline(always)]
     #[must_use]
     pub fn slot_phase_bank_mut(&mut self) -> AlignedSliceMut16<'_, gcso_q7_t> {
-        self.action_hub.slot_phase_bank.relax_slice_mut::<16>()
+        self.substrate.slot_phase_bank.relax_slice_mut::<16>()
     }
 
     /// Returns a mutable reference to the 64-byte (`8 x u64`) aligned word view of slot `slot_idx`.
@@ -1101,11 +1124,11 @@ impl RuntimeContext {
         if slot_idx >= MAX_ATTRACTOR_DOMAINS {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        // SAFETY: `self.action_hub.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
+        // SAFETY: `self.substrate.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
         // 64-byte slot at byte offset `slot_idx * 64` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
         Ok(unsafe {
             &mut *(self
-                .action_hub
+                .substrate
                 .slot_phase_bank
                 .as_mut_slice()
                 .as_mut_ptr()
@@ -1126,7 +1149,7 @@ impl RuntimeContext {
     ) -> Result<()> {
         let dst_w = self.slot_words_mut(usize::from(slot_id))?;
         *dst_w = load_q7_words_64(phases);
-        self.action_hub.slot_enabled_mask |= 1u8 << slot_id;
+        self.substrate.slot_enabled_mask |= 1u8 << slot_id;
         Ok(())
     }
 
@@ -1134,35 +1157,35 @@ impl RuntimeContext {
     #[inline(always)]
     #[must_use]
     pub const fn slot_weights(&self) -> &[f32; MAX_ATTRACTOR_DOMAINS] {
-        &self.action_hub.slot_weights
+        &self.substrate.slot_weights
     }
 
     /// Returns the 8-bit bitmask of enabled Workbench Lanes (`bit i == 1` means lane `i` is active).
     #[inline(always)]
     #[must_use]
     pub const fn slot_enabled_mask(&self) -> u8 {
-        self.action_hub.slot_enabled_mask
+        self.substrate.slot_enabled_mask
     }
 
     /// Returns the 8-bit bitmask of explicitly pinned Workbench Lanes (`0..=7`).
     #[inline(always)]
     #[must_use]
     pub const fn slot_pinned_mask(&self) -> u8 {
-        self.action_hub.slot_pinned_mask
+        self.substrate.slot_pinned_mask
     }
 
     /// Returns the 8-bit bitmask of anti-phase repulsion Workbench Lanes (`0..=7`).
     #[inline(always)]
     #[must_use]
     pub const fn slot_repulsion_mask(&self) -> u8 {
-        self.action_hub.slot_repulsion_mask
+        self.substrate.slot_repulsion_mask
     }
 
     /// Returns the 8-bit bitmask of isolated exterior-only sandbox Workbench Lanes (`0..=7`).
     #[inline(always)]
     #[must_use]
     pub const fn slot_sandbox_mask(&self) -> u8 {
-        self.action_hub.slot_sandbox_mask
+        self.substrate.slot_sandbox_mask
     }
 
     /// Returns the anonymous workbench lane (`0..=7`) currently leased by cold-path escalation, if any.
@@ -1176,13 +1199,13 @@ impl RuntimeContext {
     #[inline(always)]
     #[must_use]
     pub const fn slot_coupling_matrix(&self) -> u64 {
-        self.action_hub.coupling_matrix_8x8
+        self.substrate.coupling_matrix_8x8
     }
 
     /// Updates the active 64-bit ($8 \times 8$) Attractor Working Lane coupling bitmatrix.
     #[inline(always)]
     pub fn set_slot_coupling_matrix(&mut self, matrix: u64) {
-        self.action_hub.coupling_matrix_8x8 = matrix;
+        self.substrate.coupling_matrix_8x8 = matrix;
         self.config.slot_coupling_matrix = matrix;
     }
 
@@ -1190,14 +1213,14 @@ impl RuntimeContext {
     #[inline(always)]
     #[must_use]
     pub const fn step_counter(&self) -> u64 {
-        self.action_hub.step_counter
+        self.substrate.step_counter
     }
 
-    /// Returns the active pointer trail count in the Action Hub.
+    /// Returns the active pointer trail count in the substrate.
     #[inline(always)]
     #[must_use]
     pub const fn active_trail_count(&self) -> u32 {
-        self.action_hub.active_count
+        self.substrate.active_count
     }
 
     /// Executes a per-token Hot Path step integrating phase steering, `EntropyController` entropy evaluation,
@@ -1225,19 +1248,19 @@ impl RuntimeContext {
         let mut running_pull = branchless_flush_subnormal_f32(branchless_relu_f32(base_pull));
 
         if let Ok(bank_2d) = self
-            .action_hub
+            .substrate
             .slot_phase_bank
             .as_slot_bank::<MAX_ATTRACTOR_DOMAINS, MAX_ATTENTION_HEADS>()
         {
-            let (rep_cut, attract_cut) = self.action_hub.workbench_role_quadrants();
-            let weights = &self.action_hub.slot_weights;
+            let (rep_cut, attract_cut) = self.substrate.lane_role_quadrants();
+            let weights = &self.substrate.slot_weights;
             let mut standard_bits = attract_cut.outside;
             while standard_bits != 0 {
                 let idx = standard_bits.trailing_zeros() as usize;
                 standard_bits &= standard_bits - 1;
                 let base_e = branchless_flush_subnormal_f32(branchless_relu_f32(weights[idx]));
                 if base_e > DEFAULT_ENTROPY_EPS {
-                    // SAFETY: `self.action_hub.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
+                    // SAFETY: `self.substrate.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
                     // 64-byte row `bank_2d[idx]` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
                     let slot_w = unsafe {
                         &*(bank_2d[idx].as_ptr() as *const [u64; NUM_STIGMERGIC_GRANULES])
@@ -1340,33 +1363,33 @@ impl RuntimeContext {
 
         buffer[..total_required].fill(0);
 
-        let action_hub_off = header_size; // 128
-        let edbc_off = action_hub_off + context_data_size; // 192
+        let substrate_off = header_size; // 128
+        let edbc_off = substrate_off + context_data_size; // 192
         let daes_off = edbc_off + edbc_size; // 256
 
-        let ctx_buf = &mut buffer[action_hub_off..edbc_off];
-        ctx_buf[0..8].copy_from_slice(&self.action_hub.step_counter.to_le_bytes());
-        ctx_buf[8..12].copy_from_slice(&self.action_hub.active_count.to_le_bytes());
+        let ctx_buf = &mut buffer[substrate_off..edbc_off];
+        ctx_buf[0..8].copy_from_slice(&self.substrate.step_counter.to_le_bytes());
+        ctx_buf[8..12].copy_from_slice(&self.substrate.active_count.to_le_bytes());
         let sys_anchors = self.attractor_space.system_field().active_count();
         ctx_buf[12..16].copy_from_slice(&sys_anchors.to_le_bytes());
         let rep_gain = self.attractor_space.system_field().repulsion_gain;
         ctx_buf[16..20].copy_from_slice(&rep_gain.to_le_bytes());
-        ctx_buf[20] = self.action_hub.slot_enabled_mask;
-        ctx_buf[21] = self.action_hub.slot_pinned_mask;
-        ctx_buf[22] = self.action_hub.slot_repulsion_mask;
-        ctx_buf[23] = self.action_hub.slot_sandbox_mask;
-        ctx_buf[24..32].copy_from_slice(&self.action_hub.coupling_matrix_8x8.to_le_bytes());
-        f32::write_unaligned_slice_to(&self.action_hub.slot_weights, ctx_buf, 32)?;
+        ctx_buf[20] = self.substrate.slot_enabled_mask;
+        ctx_buf[21] = self.substrate.slot_pinned_mask;
+        ctx_buf[22] = self.substrate.slot_repulsion_mask;
+        ctx_buf[23] = self.substrate.slot_sandbox_mask;
+        ctx_buf[24..32].copy_from_slice(&self.substrate.coupling_matrix_8x8.to_le_bytes());
+        f32::write_unaligned_slice_to(&self.substrate.slot_weights, ctx_buf, 32)?;
 
         let edbc_state = self.entropy_controller.state();
         edbc_state.write_unaligned_to(buffer, edbc_off)?;
-        self.action_hub
+        self.substrate
             .ledger_slot
             .write_unaligned_to(buffer, daes_off)?;
 
         let mut header = init_snapshot_header(total_required as u64, 1_774_900_000);
-        header.action_hub_offset = action_hub_off as u64;
-        header.attractor_field_offset = action_hub_off as u64;
+        header.action_hub_offset = substrate_off as u64;
+        header.attractor_field_offset = substrate_off as u64;
         header.dpsr_state_offset = edbc_off as u64;
         header.rank1_state_offset = edbc_off as u64;
         header.edbc_state_offset = edbc_off as u64;
@@ -1398,38 +1421,38 @@ impl RuntimeContext {
 
         verify_snapshot_payload_crc32(&header, buffer)?;
 
-        let action_hub_off = header.action_hub_offset as usize;
+        let substrate_off = header.action_hub_offset as usize;
         let edbc_off = header.edbc_state_offset as usize;
         let daes_off = header.ledger_slot_offset as usize;
 
-        if action_hub_off < header_size || edbc_off < action_hub_off || daes_off < edbc_off {
+        if substrate_off < header_size || edbc_off < substrate_off || daes_off < edbc_off {
             return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
         }
 
-        if buffer.len() >= action_hub_off + 21 {
-            self.action_hub.step_counter = u64::read_unaligned_from(buffer, action_hub_off)?;
-            self.action_hub.active_count = u32::read_unaligned_from(buffer, action_hub_off + 8)?;
-            let sys_anchors = u32::read_unaligned_from(buffer, action_hub_off + 12)?;
-            let rep_gain = f32::read_unaligned_from(buffer, action_hub_off + 16)?;
-            self.action_hub.slot_enabled_mask = buffer[action_hub_off + 20];
-            if buffer.len() >= action_hub_off + 24 {
-                self.action_hub.slot_pinned_mask = buffer[action_hub_off + 21];
-                self.action_hub.slot_repulsion_mask = buffer[action_hub_off + 22];
-                self.action_hub.slot_sandbox_mask = buffer[action_hub_off + 23];
+        if buffer.len() >= substrate_off + 21 {
+            self.substrate.step_counter = u64::read_unaligned_from(buffer, substrate_off)?;
+            self.substrate.active_count = u32::read_unaligned_from(buffer, substrate_off + 8)?;
+            let sys_anchors = u32::read_unaligned_from(buffer, substrate_off + 12)?;
+            let rep_gain = f32::read_unaligned_from(buffer, substrate_off + 16)?;
+            self.substrate.slot_enabled_mask = buffer[substrate_off + 20];
+            if buffer.len() >= substrate_off + 24 {
+                self.substrate.slot_pinned_mask = buffer[substrate_off + 21];
+                self.substrate.slot_repulsion_mask = buffer[substrate_off + 22];
+                self.substrate.slot_sandbox_mask = buffer[substrate_off + 23];
             }
 
-            if buffer.len() >= action_hub_off + 32 {
-                let coupling = u64::read_unaligned_from(buffer, action_hub_off + 24)?;
+            if buffer.len() >= substrate_off + 32 {
+                let coupling = u64::read_unaligned_from(buffer, substrate_off + 24)?;
                 if coupling != 0 {
-                    self.action_hub.coupling_matrix_8x8 = coupling;
+                    self.substrate.coupling_matrix_8x8 = coupling;
                     self.config.slot_coupling_matrix = coupling;
                 }
             }
-            if buffer.len() >= action_hub_off + 64 {
+            if buffer.len() >= substrate_off + 64 {
                 f32::read_unaligned_slice_from(
                     buffer,
-                    action_hub_off + 32,
-                    &mut self.action_hub.slot_weights,
+                    substrate_off + 32,
+                    &mut self.substrate.slot_weights,
                 )?;
             }
 
@@ -1454,8 +1477,7 @@ impl RuntimeContext {
 
         let daes_size = core::mem::size_of::<gcso_ledger_slot_t>();
         if buffer.len() >= daes_off + daes_size {
-            self.action_hub.ledger_slot =
-                gcso_ledger_slot_t::read_unaligned_from(buffer, daes_off)?;
+            self.substrate.ledger_slot = gcso_ledger_slot_t::read_unaligned_from(buffer, daes_off)?;
         }
 
         Ok(())
@@ -1501,14 +1523,14 @@ impl RuntimeContext {
     /// Resets transient phase accumulators and step counters without freeing pre-allocated tables.
     ///
     /// # Errors
-    /// Propagates any reset error from [`ActionHubEngine::reset`] or [`RuntimeContext::clear_all_domains`].
+    /// Propagates any reset error from [`StigmergicSubstrate::reset`] or [`RuntimeContext::clear_all_domains`].
     #[inline]
     pub fn reset(&mut self) -> Result<()> {
         self.entropy_controller.reset();
-        self.action_hub.reset()?;
+        self.substrate.reset()?;
         self.clear_all_domains()?;
-        self.action_hub.bloom_filter.clear();
-        self.action_hub.ledger_slot = gcso_ledger_slot_t {
+        self.substrate.bloom_filter.clear();
+        self.substrate.ledger_slot = gcso_ledger_slot_t {
             mode: u32::from(self.config.raw.ledger_mode),
             ..Default::default()
         };
@@ -1517,6 +1539,9 @@ impl RuntimeContext {
         self.last_horizon = EpistemicHorizonReading::default();
         self.last_overlap_report = StigmergicOverlapSerendipityReport::default();
         self.active_horizon_slots_mask = 0;
+        self.sandbox_workbench_lane = None;
+        self.last_sandbox_event = SandboxLifecycleEvent::Idle;
+        self.sandbox_promotions = 0;
         self.system_spine = SystemSpineState::new();
         self.last_epistemic_partition = EpistemicPartition::default();
         self.distortion_tension = DistortionTension::new(false);
@@ -1533,7 +1558,7 @@ impl RuntimeContext {
         self.attractor_space
             .system_field_mut()
             .add_system_prompt_anchor(prompt, weight)?;
-        self.action_hub.slot_weights[usize::from(ATTRACTOR_SLOT_SYSTEM_BASELINE)] =
+        self.substrate.slot_weights[usize::from(ATTRACTOR_SLOT_SYSTEM_BASELINE)] =
             branchless_relu_f32(weight);
         Ok(())
     }
@@ -1557,12 +1582,12 @@ impl RuntimeContext {
         let mut state_out = gcso_edbc_state_t::default();
         self.entropy_controller.eval_stateful(0.0, &mut state_out)?;
 
-        let next_step = self.action_hub.step_counter.wrapping_add(1);
-        self.action_hub.step_counter = next_step;
+        let next_step = self.substrate.step_counter.wrapping_add(1);
+        self.substrate.step_counter = next_step;
         self.attractor_space.advance_step();
         let cap = self.config.raw.action_hub_capacity;
-        let cur_active = self.action_hub.active_count;
-        self.action_hub.active_count =
+        let cur_active = self.substrate.active_count;
+        self.substrate.active_count =
             branchless_select_u32(cur_active < cap, cur_active.wrapping_add(1), cur_active);
 
         let mut repulsion_active = false;
@@ -1580,7 +1605,7 @@ impl RuntimeContext {
                 self.evaluate_multi_domain_superposition_words(trail);
 
             let (_density, rep_trig) = self
-                .action_hub
+                .substrate
                 .bloom_filter
                 .apply_phase_conjugate_repulsion_words(
                     &mut phase_words,
@@ -1597,7 +1622,7 @@ impl RuntimeContext {
 
         let metric = LEDGER_METRIC_PHASE_STEERED
             | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0);
-        self.action_hub.ledger_slot.push_telemetry_metric(metric);
+        self.substrate.ledger_slot.push_telemetry_metric(metric);
         Ok(())
     }
 
@@ -1639,13 +1664,13 @@ impl RuntimeContext {
     /// (`Layer 0: Liminal` -> `Layer 1: Stigmergic` -> `Layer 2: Ego`), dynamically slides
     /// dormant [`LatentHorizonSlot`] boundaries in or out based on live stability/anomaly
     /// telemetry, optionally escalates unresolved excursion to an external
-    /// [`HorizonEscalationProvider`], updates `trail_out` / `ActionHubEngine`, and steers
+    /// [`HorizonEscalationProvider`], updates `trail_out` / `StigmergicSubstrate`, and steers
     /// `query_tensor` in strict zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
     ///
     /// Returns `(frame, report, slid_in_bits, slid_out_bits, escalated)`.
     ///
     /// # Errors
-    /// Propagates validation or steering errors from `geometry`, `query_tensor`, `ActionHubEngine`,
+    /// Propagates validation or steering errors from `geometry`, `query_tensor`, `StigmergicSubstrate`,
     /// or `escalation_provider`.
     #[inline]
     pub fn pierce_and_orchestrate_step<
@@ -1662,7 +1687,7 @@ impl RuntimeContext {
         trail_out: &mut gcso_pointer_trail_t,
         mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> Result<(GatewayFrame, CausalProvenanceReport, u32, u32, bool)> {
-        let (head_dim, num_heads, _expected_len) = self.action_hub.validate_hub_cascade_params(
+        let (head_dim, num_heads, _expected_len) = self.substrate.validate_hub_cascade_params(
             self.phase_steering.phase_step_min_rad(),
             self.phase_steering.phase_clamp_max_rad(),
             query_tensor.as_deref(),
@@ -1768,17 +1793,17 @@ impl RuntimeContext {
             desired_aperture_mask: self.core_layers.liminal_layer.active_aperture_mask,
             current_frame_energy: frame.effective_energy,
         };
-        let escalated = self.action_hub.apply_horizon_escalation(
+        let escalated = self.substrate.apply_horizon_escalation(
             &esc_req,
             &mut self.escalated_workbench_lane,
             escalation_provider,
         )?;
 
-        // 4. Step ActionHub pointer trail + Bloom filter + RoPE phase steering (zero-alloc).
-        let bloom_snapshot = self.action_hub.bloom_filter;
-        let mut ledger_slot = self.action_hub.ledger_slot;
+        // 4. Step substrate pointer trail + Bloom filter + RoPE phase steering (zero-alloc).
+        let bloom_snapshot = self.substrate.bloom_filter;
+        let mut ledger_slot = self.substrate.ledger_slot;
         let (bypass_hit, _eff_ptr, _density, repulsion_active, post_rep_words) =
-            self.action_hub.step_hub_with_bloom_repulsion_to_words(
+            self.substrate.step_hub_with_bloom_repulsion_to_words(
                 gcso_tagged_ptr_t(frame.tagged_ptr),
                 &mut ledger_slot,
                 &bloom_snapshot,
@@ -1819,7 +1844,7 @@ impl RuntimeContext {
             | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
             | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0);
         ledger_slot.push_telemetry_metric(metric);
-        self.action_hub.ledger_slot = ledger_slot;
+        self.substrate.ledger_slot = ledger_slot;
 
         let step_decision = if repulsion_active {
             StigmergicActionDecision::RepulsionEscape
@@ -1890,10 +1915,13 @@ impl RuntimeContext {
             &self.probe_baseline,
             0.15_f32,
         );
-        let exterior_granule_mask = (self.last_overlap_report.void_exterior_mask
-            | self.last_overlap_report.serendipity_excursion_mask)
-            & !self.last_overlap_report.venn_core_mask;
-        let _ = self.action_hub.step_sandbox_hypothesis_lifecycle(
+        let exterior_granule_mask = BitCut8::split(
+            self.last_overlap_report.void_exterior_mask
+                | self.last_overlap_report.serendipity_excursion_mask,
+            self.last_overlap_report.venn_core_mask,
+        )
+        .outside;
+        let sb_event = self.substrate.step_sandbox_hypothesis_lifecycle(
             &mut self.telemetry,
             &mut self.sandbox_workbench_lane,
             step_decision,
@@ -1904,6 +1932,10 @@ impl RuntimeContext {
             3,
             3,
         );
+        self.last_sandbox_event = sb_event;
+        if matches!(sb_event, SandboxLifecycleEvent::Promoted(_)) {
+            self.sandbox_promotions = self.sandbox_promotions.saturating_add(1);
+        }
 
         Ok((
             frame,
@@ -1931,10 +1963,10 @@ impl PhaseSteering for RuntimeContext {
     }
 }
 
-impl PointerActionHub for RuntimeContext {
+impl PointerSubstrate for RuntimeContext {
     #[inline]
     fn reset(&mut self) -> Result<()> {
-        self.action_hub.reset()
+        self.substrate.reset()
     }
 
     #[inline]
@@ -1944,10 +1976,10 @@ impl PointerActionHub for RuntimeContext {
         trail_out: &mut gcso_pointer_trail_t,
     ) -> Result<()> {
         let cap = self.config.raw.action_hub_capacity;
-        let cur_active = self.action_hub.active_count;
-        self.action_hub.active_count =
+        let cur_active = self.substrate.active_count;
+        self.substrate.active_count =
             branchless_select_u32(cur_active < cap, cur_active.wrapping_add(1), cur_active);
-        self.action_hub.step_counter = self.action_hub.step_counter.wrapping_add(1);
+        self.substrate.step_counter = self.substrate.step_counter.wrapping_add(1);
         trail_out.record_pointer_transition(current_ptr, 1, 1.0);
         let tp = gcso_tagged_ptr_t(current_ptr);
         let embedded_phase = tp.unpack_phase();
@@ -1960,10 +1992,13 @@ impl PointerActionHub for RuntimeContext {
             u32::from(tp.target_attractor_slot() & ATTRACTOR_SLOT_ID_MASK),
         );
         trail_out.sync_flags_with_current_ptr();
-        let slot_idx = (self.action_hub.write_cursor as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
-        ActionHubEngine::copy_trail_to_slot_fast(&mut self.action_hub.trails[slot_idx], trail_out);
-        self.action_hub.write_cursor =
-            self.action_hub.write_cursor.wrapping_add(1) & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
+        let slot_idx = (self.substrate.write_cursor as usize) & (SUBSTRATE_INLINE_TRAILS - 1);
+        StigmergicSubstrate::copy_trail_to_slot_fast(
+            &mut self.substrate.trails[slot_idx],
+            trail_out,
+        );
+        self.substrate.write_cursor =
+            self.substrate.write_cursor.wrapping_add(1) & ((SUBSTRATE_INLINE_TRAILS as u32) - 1);
         Ok(())
     }
 
@@ -1976,7 +2011,7 @@ impl PointerActionHub for RuntimeContext {
         if trail_id >= self.config.raw.action_hub_capacity {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        self.action_hub
+        self.substrate
             .update_cellular_state_express(trail_id, phase_delta)
     }
 
@@ -1990,12 +2025,12 @@ impl PointerActionHub for RuntimeContext {
         if !branchless_is_finite_f32(pull_force) {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        if trail_id < self.action_hub.capacity {
-            self.action_hub
+        if trail_id < self.substrate.capacity {
+            self.substrate
                 .pull_trail_to_attractor(trail_id, anchor_id, pull_force)?;
         } else {
             let slot_idx = (anchor_id as usize) & (MAX_ATTRACTOR_DOMAINS - 1);
-            self.action_hub.slot_weights[slot_idx] =
+            self.substrate.slot_weights[slot_idx] =
                 branchless_min_f32(branchless_relu_f32(pull_force), MAX_ATTRACTOR_PULL_FORCE);
         }
         Ok(())
@@ -2003,9 +2038,9 @@ impl PointerActionHub for RuntimeContext {
 
     #[inline]
     fn link_hallucinated_trails(&mut self, src_trail_id: u32, dst_trail_id: u32) -> Result<()> {
-        if src_trail_id < self.action_hub.capacity && dst_trail_id < self.action_hub.capacity {
+        if src_trail_id < self.substrate.capacity && dst_trail_id < self.substrate.capacity {
             let _ = self
-                .action_hub
+                .substrate
                 .link_hallucinated_trails(src_trail_id, dst_trail_id);
         }
         Ok(())
@@ -2018,35 +2053,35 @@ impl PointerActionHub for RuntimeContext {
 
     #[inline(always)]
     fn active_count(&self) -> u32 {
-        self.action_hub.active_count
+        self.substrate.active_count
     }
 
     #[inline(always)]
-    fn workbench_lane_mask(&self) -> u8 {
-        self.action_hub.workbench_lane_mask()
+    fn lane_mask(&self) -> u8 {
+        self.substrate.lane_mask()
     }
 
     #[inline(always)]
-    fn workbench_repulsion_mask(&self) -> u8 {
-        self.action_hub.workbench_repulsion_mask()
+    fn repulsion_lane_mask(&self) -> u8 {
+        self.substrate.repulsion_lane_mask()
     }
 
     #[inline(always)]
-    fn workbench_sandbox_mask(&self) -> u8 {
-        self.action_hub.workbench_sandbox_mask()
+    fn sandbox_lane_mask(&self) -> u8 {
+        self.substrate.sandbox_lane_mask()
     }
 
     #[inline(always)]
-    fn workbench_pinned_mask(&self) -> u8 {
-        self.action_hub.workbench_pinned_mask()
+    fn pinned_lane_mask(&self) -> u8 {
+        self.substrate.pinned_lane_mask()
     }
 
     #[inline]
-    fn workbench_lane_words_and_weight(
+    fn lane_words_and_weight(
         &self,
         lane: u8,
     ) -> Option<([u64; crate::NUM_STIGMERGIC_GRANULES], f32)> {
-        self.action_hub.workbench_lane_words_and_weight(lane)
+        self.substrate.lane_words_and_weight(lane)
     }
 }
 
@@ -2085,8 +2120,8 @@ impl RuntimeContext {
         if chunk_len == 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        self.action_hub.step_counter = self
-            .action_hub
+        self.substrate.step_counter = self
+            .substrate
             .step_counter
             .wrapping_add(u64::from(chunk_len));
         Ok(())
@@ -2141,7 +2176,7 @@ impl RuntimeContext {
             .attractor_space
             .system_field_mut()
             .add_system_prompt_anchor(prompt, weight)?;
-        self.action_hub.slot_weights[usize::from(ATTRACTOR_SLOT_SYSTEM_BASELINE)] =
+        self.substrate.slot_weights[usize::from(ATTRACTOR_SLOT_SYSTEM_BASELINE)] =
             branchless_relu_f32(weight);
         Ok(id)
     }
@@ -2193,13 +2228,13 @@ impl RuntimeContext {
         let mut pattern = [0i8; MAX_ATTENTION_HEADS];
         pattern[..limit].copy_from_slice(&raw[..limit]);
 
-        self.action_hub
+        self.substrate
             .bloom_filter
             .insert_repulsive_pattern(&pattern);
         let anti_phase = branchless_q7_conjugate_64(&pattern);
         let _lane = self
-            .action_hub
-            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_repulsion(
+            .substrate
+            .allocate_lane(&WorkbenchSlotSpec::auto_repulsion(
                 branchless_relu_f32(gain),
                 anti_phase,
             ))?;
@@ -2245,7 +2280,7 @@ impl RuntimeContext {
         if idx >= MAX_ATTRACTOR_DOMAINS || !branchless_is_finite_f32(weight) || weight < 0.0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        self.action_hub.slot_weights[idx] = weight;
+        self.substrate.slot_weights[idx] = weight;
         Ok(())
     }
 
@@ -2261,8 +2296,8 @@ impl RuntimeContext {
         }
         let bit = 1u8 << (domain_id as u8);
         let enable_mask = (enabled as u8).wrapping_neg();
-        self.action_hub.slot_enabled_mask =
-            (self.action_hub.slot_enabled_mask & !bit) | (bit & enable_mask);
+        self.substrate.slot_enabled_mask =
+            (self.substrate.slot_enabled_mask & !bit) | (bit & enable_mask);
         Ok(())
     }
 
@@ -2272,8 +2307,8 @@ impl RuntimeContext {
     pub fn find_dominant_domain(&self) -> (u32, f32) {
         let mut best_id = 0u32;
         let mut best_score = -1.0_f32;
-        let mask = self.action_hub.slot_enabled_mask;
-        let weights = &self.action_hub.slot_weights;
+        let mask = self.substrate.slot_enabled_mask;
+        let weights = &self.substrate.slot_weights;
 
         let mut i = 0usize;
         while i < MAX_ATTRACTOR_DOMAINS {
@@ -2304,23 +2339,23 @@ impl RuntimeContext {
         if idx >= MAX_ATTRACTOR_DOMAINS {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        let enabled = ((self.action_hub.slot_enabled_mask >> idx) & 1) != 0;
+        let enabled = ((self.substrate.slot_enabled_mask >> idx) & 1) != 0;
         if !enabled {
             *slot_phase_out = [0i8; MAX_ATTENTION_HEADS];
             return Ok(0.0);
         }
 
-        let bank_slice = self.action_hub.slot_phase_bank.as_aligned_slice();
+        let bank_slice = self.substrate.slot_phase_bank.as_aligned_slice();
         let bank_slot = bank_slice.slot_exact::<MAX_ATTENTION_HEADS>(idx)?;
         if is_phase_profile_nonzero_64(bank_slot) {
             *slot_phase_out = *bank_slot;
-            return Ok(self.action_hub.slot_weights[idx]);
+            return Ok(self.substrate.slot_weights[idx]);
         }
 
         let base_pull = self
             .attractor_space
             .evaluate_multi_domain_superposition(trail, slot_phase_out);
-        Ok(self.action_hub.slot_weights[idx].max(base_pull))
+        Ok(self.substrate.slot_weights[idx].max(base_pull))
     }
 
     /// Evaluates unified multi-domain superposition across active workbench lanes.
@@ -2342,7 +2377,7 @@ impl RuntimeContext {
     #[inline]
     pub fn clear_all_domains(&mut self) -> Result<()> {
         self.attractor_space.clear_all_domains()?;
-        let _ = self.action_hub.release_all_workbench_lanes();
+        let _ = self.substrate.release_all_lanes();
         self.escalated_workbench_lane = None;
         Ok(())
     }
@@ -2368,7 +2403,7 @@ impl RuntimeContext {
             let sw = self.slot_words_mut(usize::from(ATTRACTOR_SLOT_PERSONA))?;
             swar_or_avx2_q7_add_sat_words_64(sw, &pw);
         } else {
-            let mut bank_mut = self.action_hub.slot_phase_bank.as_aligned_slice_mut();
+            let mut bank_mut = self.substrate.slot_phase_bank.as_aligned_slice_mut();
             let persona_slot = bank_mut
                 .slot_exact_mut::<MAX_ATTENTION_HEADS>(usize::from(ATTRACTOR_SLOT_PERSONA))?;
             for (h, slot_p) in persona_slot.iter_mut().enumerate() {
@@ -2376,7 +2411,7 @@ impl RuntimeContext {
                 *slot_p = branchless_q7_add_sat(*slot_p, delta);
             }
         }
-        self.action_hub.slot_enabled_mask |= 1u8 << ATTRACTOR_SLOT_PERSONA;
+        self.substrate.slot_enabled_mask |= 1u8 << ATTRACTOR_SLOT_PERSONA;
         Ok(())
     }
 }
@@ -2498,8 +2533,8 @@ impl ManifoldGatewaySignal for RuntimeContext {
     fn synthesize_gateway_frame_with_words(
         &self,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
-        if self.action_hub.active_count > 0 {
-            let (mut frame, words) = self.action_hub.synthesize_gateway_frame_with_words();
+        if self.substrate.active_count > 0 {
+            let (mut frame, words) = self.substrate.synthesize_gateway_frame_with_words();
             frame.provenance_bits |= self.causal_provenance_bits();
             frame.active_swarm_cell_mask &= self.active_swarm_cells_mask();
             frame.qdps_min_step_rad = self.qdps_min_step_rad_override();
@@ -2520,14 +2555,13 @@ impl ManifoldGatewaySignal for RuntimeContext {
     }
 }
 
-// Compile-time verification that `RuntimeContext` satisfies `ActionHub` and
+// Compile-time verification that `RuntimeContext` satisfies `StigmergicSubstrateOps` and
 // Gateway / Coordinator trait bounds.
 const _: () = {
     const fn assert_full_stack_bounds<
-        T: ActionHub
-            + ActionHubGatewayExt
+        T: StigmergicSubstrateOps
+            + SubstrateGatewayExt
             + GatewayPhaseSteeringExt
-            + PhaseSteeringClosedLoop
             + CausalProvenanceSignal
             + SystemConstraintSignal
             + ManifoldGatewaySignal,
@@ -2574,8 +2608,8 @@ mod tests {
             .is_ok());
         assert_eq!(ctx.anchor_count(), 1);
         let pinned_lane = ctx
-            .action_hub_mut()
-            .allocate_workbench_lane(&WorkbenchSlotSpec::explicit(
+            .substrate_mut()
+            .allocate_lane(&WorkbenchSlotSpec::explicit(
                 usize::from(ATTRACTOR_SLOT_PERSONA) as u8,
                 true,
                 0,
@@ -2585,15 +2619,15 @@ mod tests {
             .unwrap();
         assert_eq!(pinned_lane, ATTRACTOR_SLOT_PERSONA);
         let rep_lane = ctx
-            .action_hub_mut()
-            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_repulsion(
+            .substrate_mut()
+            .allocate_lane(&WorkbenchSlotSpec::auto_repulsion(
                 1.0,
                 [-8; MAX_ATTENTION_HEADS],
             ))
             .unwrap();
         let sb_lane = ctx
-            .action_hub_mut()
-            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(
+            .substrate_mut()
+            .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(
                 0.75,
                 [6; MAX_ATTENTION_HEADS],
             ))

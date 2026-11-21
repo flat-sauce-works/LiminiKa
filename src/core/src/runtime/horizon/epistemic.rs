@@ -669,7 +669,7 @@ impl LiminalThresholdField {
             branchless_select_i8(scattered | spawned, blended_shift, self.phase_shift_q7[6]);
 
         // Recompute active_aperture_mask branchlessly from channel floor saturation (< 96).
-        let mut mask = THRESHOLD_ACTION_HUB_WIDE & !0x0000_00FF;
+        let mut mask = THRESHOLD_STIGMERGY_WIDE & !0x0000_00FF;
         let mut ch = 0usize;
         while ch < NUM_LIMINAL_THRESHOLD_CHANNELS {
             let is_open = (self.void_floor_q7[ch] < 96) & (!void_active | (ch == 0) | (ch == 7));

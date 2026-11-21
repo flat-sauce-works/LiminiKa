@@ -570,9 +570,9 @@ pub(crate) enum FairBenchCondition {
     VanillaFullRag,
     /// Condition B: Vanilla + Minimal RAG (Fact text only, Steer OFF).
     VanillaMinRag,
-    /// Condition C: LiminiKa Hybrid (Fact text only + RoPE/Rank-1/ActionHub Steer ON).
+    /// Condition C: LiminiKa Hybrid (Fact text only + RoPE/Rank-1/Substrate Steer ON).
     LiminiKaHybrid,
-    /// Condition D: LiminiKa Zero-Context (No text injection + RoPE/Rank-1/ActionHub Steer ON).
+    /// Condition D: LiminiKa Zero-Context (No text injection + RoPE/Rank-1/Substrate Steer ON).
     LiminiKaZeroContext,
 }
 
@@ -815,7 +815,7 @@ pub(crate) fn generate_steered_reply_with_offset(
     let t_dec = Instant::now();
     steer.adapter.compute_pool_mut().whole_token_calm_dwell = 0;
     steer.adapter.compute_pool_mut().re_bypass_cooldown = 0;
-    steer.adapter.action_hub_mut().last_entropy_h_tilde = 0.0;
+    steer.adapter.substrate_mut().last_entropy_h_tilde = 0.0;
     let mut prefill_dispatch = steer.adapter.step_compute_dispatch_with_spine(
         SystemPressureReading {
             frame_time_pressure_q15: 8192,
@@ -879,7 +879,7 @@ pub(crate) fn generate_steered_reply_with_offset(
         entropy_sum += logit_entropy;
         entropy_count += 1;
         if tok_was_whole_bypass {
-            steer.adapter.action_hub_mut().last_entropy_h_tilde = logit_entropy;
+            steer.adapter.substrate_mut().last_entropy_h_tilde = logit_entropy;
         }
         let exit_entropy_q7 = ((logit_entropy - 0.15).max(0.0) * 127.0).clamp(0.0, 127.0) as u8;
         let repulsion_active = ((steer.trail.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0)
@@ -942,7 +942,7 @@ pub(crate) fn generate_steered_reply_with_offset(
         logits = next_logits;
     }
     if entropy_count > 0 {
-        steer.adapter.action_hub_mut().last_entropy_h_tilde = entropy_sum / entropy_count as f32;
+        steer.adapter.substrate_mut().last_entropy_h_tilde = entropy_sum / entropy_count as f32;
     }
     cfg.steer_bypass_hits += steer.steer_bypass_hits;
     cfg.steer_eligible_layers += steer.steer_eligible_layers;

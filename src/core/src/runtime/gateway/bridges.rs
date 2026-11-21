@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Distributed `impl` blocks integrating Lv.1-Lv.3 types (`ResidualAdapterEngine`,
-//! `SystemSpineState`, `EgoDifferentialNet`, `LiminalEgoField`, `ActionHubEngine`,
+//! `SystemSpineState`, `EgoDifferentialNet`, `LiminalEgoField`, `StigmergicSubstrate`,
 //! `CrystallizedAttractorRecord`, `CognitiveTrajectoryLedger`, `CognitiveCircuitBank`,
 //! `gcso_pointer_trail_t`, `CrystallizedAnchorRecord`, `AttractorAnchor`, and
 //! `EntropyController`) with Lv.4 Gateway/Signal contracts.
@@ -392,58 +392,58 @@ impl LiminalEgoField {
     }
 }
 
-/// Composable receptor trait invoked by [`ActionHubEngine`] when Swarm consensus and mapped-storage
+/// Composable receptor trait invoked by [`StigmergicSubstrate`] when Swarm consensus and mapped-storage
 /// attractor pull elevate a pointer trail's stigmergic pheromone density across an action regime.
 ///
 /// Instead of writing ad-hoc `if/else` semantic branches (e.g., `if needs_web_search { ... }`),
 /// external or Cold-Path capabilities (such as asynchronous retrieval, mapped-storage RAG prefetch, or
-/// macro-basin consolidation) implement [`StigmergicActionReceptor`] and are composed into tuples
+/// macro-basin consolidation) implement [`StigmergicReceptor`] and are composed into tuples
 /// `(ReceptorA, ReceptorB)` that react when `report.target_slot`, `report.dominant_anchor_id`, and
 /// `report.action_decision()` cross the physical stigmergic threshold.
-pub trait StigmergicActionReceptor {
-    /// Invoked when an [`ActionOrchestrationReport`] emerges from [`ActionHubEngine`] with a
+pub trait StigmergicReceptor {
+    /// Invoked when a [`SubstrateStepReport`] emerges from [`StigmergicSubstrate`] with a
     /// non-passive [`StigmergicActionDecision`].
     ///
     /// # Errors
     /// Returns a [`GcsoResult`] if the downstream receptor encounters an execution or capacity error.
-    fn on_stigmergic_action_emerged(
+    fn on_stigmergic_emergence(
         &mut self,
         frame: &GatewayFrame,
-        report: &ActionOrchestrationReport,
+        report: &SubstrateStepReport,
         trail: &gcso_pointer_trail_t,
     ) -> GcsoResult<()>;
 }
 
-impl StigmergicActionReceptor for () {
+impl StigmergicReceptor for () {
     #[inline(always)]
-    fn on_stigmergic_action_emerged(
+    fn on_stigmergic_emergence(
         &mut self,
         _frame: &GatewayFrame,
-        _report: &ActionOrchestrationReport,
+        _report: &SubstrateStepReport,
         _trail: &gcso_pointer_trail_t,
     ) -> GcsoResult<()> {
         Ok(())
     }
 }
 
-impl<A: StigmergicActionReceptor, B: StigmergicActionReceptor> StigmergicActionReceptor for (A, B) {
+impl<A: StigmergicReceptor, B: StigmergicReceptor> StigmergicReceptor for (A, B) {
     #[inline(always)]
-    fn on_stigmergic_action_emerged(
+    fn on_stigmergic_emergence(
         &mut self,
         frame: &GatewayFrame,
-        report: &ActionOrchestrationReport,
+        report: &SubstrateStepReport,
         trail: &gcso_pointer_trail_t,
     ) -> GcsoResult<()> {
-        self.0.on_stigmergic_action_emerged(frame, report, trail)?;
-        self.1.on_stigmergic_action_emerged(frame, report, trail)
+        self.0.on_stigmergic_emergence(frame, report, trail)?;
+        self.1.on_stigmergic_emergence(frame, report, trail)
     }
 }
 
 // ===================================================================
-// 2. `ActionHubEngine` -- 2,816-Byte L1D-Resident Sidecar Pointer Table
+// 2. `StigmergicSubstrate` -- 2,816-Byte L1D-Resident Micro Passive Carrier
 // ===================================================================
 
-impl ActionHubEngine {
+impl StigmergicSubstrate {
     /// Drives the isolated sandbox hypothesis lifecycle in zero-alloc mode:
     /// 1. Immediately releases unpinned sandbox lanes on [`StigmergicActionDecision::RepulsionEscape`]
     ///    or [`LayerDistortionKind::ActiveOverdrive`].
@@ -535,7 +535,7 @@ impl ActionHubEngine {
                 let weight =
                     branchless_clamp_f32(branchless_relu_f32(candidate_weight), 0.125, 1.0);
                 if let Ok(lane) =
-                    self.allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(weight, phases))
+                    self.allocate_lane(&WorkbenchSlotSpec::auto_sandbox(weight, phases))
                 {
                     *active_sandbox_lane = Some(lane);
                     telemetry.reset_sandbox_improve_dwell();
@@ -551,7 +551,7 @@ impl ActionHubEngine {
     /// Threshold Action Selection $\to$ Online Toroidal $k$-Means / DP-Means Macro Clustering**
     /// step in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
     ///
-    /// Returns `(GatewayFrame, ActionOrchestrationReport, assigned_centroid_idx, assigned_anchor_id, assigned_coherence, spawned_new_cluster)`.
+    /// Returns `(GatewayFrame, SubstrateStepReport, assigned_centroid_idx, assigned_anchor_id, assigned_coherence, spawned_new_cluster)`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `centroids` is empty, `split_coherence_thresh`
@@ -570,7 +570,7 @@ impl ActionHubEngine {
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(ActionOrchestrationReport, usize, u32, f32, bool)> {
+    ) -> GcsoResult<(SubstrateStepReport, usize, u32, f32, bool)> {
         if frame.target_anchor_id != 0 {
             trail_inout.target_anchor_id = frame.target_anchor_id;
         }
@@ -629,14 +629,7 @@ impl ActionHubEngine {
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(
-        GatewayFrame,
-        ActionOrchestrationReport,
-        usize,
-        u32,
-        f32,
-        bool,
-    )> {
+    ) -> GcsoResult<(GatewayFrame, SubstrateStepReport, usize, u32, f32, bool)> {
         if centroids.is_empty() || !branchless_is_finite_f32(split_coherence_thresh) {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -677,7 +670,7 @@ impl ActionHubEngine {
     ///    autonomous physical parameters derived directly from the [`GatewayFrame`].
     /// 3. Steps the mapped-storage Online Toroidal $k$-Means / DP-Means attractor basins (`centroids`) and
     ///    evolves `trail_inout`'s stigmergic pheromone density (`orchestrate_next_action_step_core`).
-    /// 4. Dispatches `receptor.on_stigmergic_action_emerged(&frame, &report, trail_inout)` whenever
+    /// 4. Dispatches `receptor.on_stigmergic_emergence(&frame, &report, trail_inout)` whenever
     ///    a non-passive [`StigmergicActionDecision`] emerges from the trail's accumulated density.
     ///
     /// # Errors
@@ -694,17 +687,10 @@ impl ActionHubEngine {
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(
-        GatewayFrame,
-        ActionOrchestrationReport,
-        usize,
-        u32,
-        f32,
-        bool,
-    )>
+    ) -> GcsoResult<(GatewayFrame, SubstrateStepReport, usize, u32, f32, bool)>
     where
         S: ManifoldGatewaySignal + ?Sized,
-        R: StigmergicActionReceptor + ?Sized,
+        R: StigmergicReceptor + ?Sized,
     {
         if centroids.is_empty() {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
@@ -739,7 +725,7 @@ impl ActionHubEngine {
             )?;
 
         if report.action_decision() != StigmergicActionDecision::PassiveSidecar {
-            receptor.on_stigmergic_action_emerged(&frame, &report, trail_inout)?;
+            receptor.on_stigmergic_emergence(&frame, &report, trail_inout)?;
         }
 
         Ok((
@@ -753,7 +739,7 @@ impl ActionHubEngine {
     }
 }
 
-impl CausalProvenanceSignal for ActionHubEngine {
+impl CausalProvenanceSignal for StigmergicSubstrate {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
         let dec = StigmergicActionDecision::from_u8(self.last_decision);
@@ -781,7 +767,7 @@ impl CausalProvenanceSignal for ActionHubEngine {
     }
 }
 
-impl SystemConstraintSignal for ActionHubEngine {
+impl SystemConstraintSignal for StigmergicSubstrate {
     #[inline(always)]
     fn system_vram_pressure(&self) -> f32 {
         0.0
@@ -808,14 +794,14 @@ impl SystemConstraintSignal for ActionHubEngine {
     }
 }
 
-impl ManifoldGatewaySignal for ActionHubEngine {
+impl ManifoldGatewaySignal for StigmergicSubstrate {
     #[inline]
     fn synthesize_gateway_frame_with_words(
         &self,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
-        let sel_idx = (self.last_selected_trail_id as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
+        let sel_idx = (self.last_selected_trail_id as usize) & (SUBSTRATE_INLINE_TRAILS - 1);
         let latest_idx =
-            (self.write_cursor.wrapping_sub(1) as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
+            (self.write_cursor.wrapping_sub(1) as usize) & (SUBSTRATE_INLINE_TRAILS - 1);
         let idx = if (self.active_count > 0) & (self.trails[sel_idx].current_ptr == 0) {
             latest_idx
         } else {
@@ -889,18 +875,17 @@ impl ManifoldGatewaySignal for ActionHubEngine {
 }
 
 const _: () = {
-    const fn assert_action_hub_bounds<
-        T: ActionHub
-            + ActionHubGatewayExt
+    const fn assert_substrate_bounds<
+        T: StigmergicSubstrateOps
+            + SubstrateGatewayExt
             + GatewayPhaseSteeringExt
-            + PhaseSteeringClosedLoop
             + CausalProvenanceSignal
             + SystemConstraintSignal
             + ManifoldGatewaySignal
             + Pod,
     >() {
     }
-    assert_action_hub_bounds::<ActionHubEngine>();
+    assert_substrate_bounds::<StigmergicSubstrate>();
 };
 
 impl CrystallizedAttractorRecord {

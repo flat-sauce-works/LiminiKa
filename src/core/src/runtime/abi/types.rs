@@ -58,8 +58,8 @@ pub type gcso_crystallized_attractor_record_t = CrystallizedAttractorRecord;
 pub type gcso_contrastive_bloom_filter_t = ContrastivePhaseBloomFilter;
 /// C-ABI type alias for the 32-byte Stigmergic Thresholds configuration (`StigmergicThresholds`).
 pub type gcso_stigmergic_thresholds_t = StigmergicThresholds;
-/// C-ABI type alias for the 32-byte Action Orchestration Report (`ActionOrchestrationReport`).
-pub type gcso_action_orchestration_report_t = ActionOrchestrationReport;
+/// C-ABI type alias for the 32-byte Substrate Step Report (`SubstrateStepReport`).
+pub type gcso_action_orchestration_report_t = SubstrateStepReport;
 /// C-ABI type alias for the 8-bit Stigmergic Action Decision discriminant (`StigmergicActionDecision`).
 pub type gcso_stigmergic_action_decision_t = u8;
 /// C-ABI type alias for the 16-byte Stigmergic Reconstitution Report (`StigmergicReconstitutionReport`).
@@ -487,10 +487,13 @@ const _: () = {
     assert!(offset_of!(gcso_distortion_tension_t, slow_excitation_events) == 12);
 };
 
-// SAFETY: Lv.4 C-ABI POD structures are `#[repr(C)]` with primitives only and zero padding traps.
+// SAFETY: `gcso_descriptor_header_t` is `#[repr(C)]` with primitives only and zero padding traps.
 unsafe impl Pod for gcso_descriptor_header_t {}
+// SAFETY: `gcso_mapped_storage_descriptor_t` is `#[repr(C)]` with primitives only and zero padding traps.
 unsafe impl Pod for gcso_mapped_storage_descriptor_t {}
+// SAFETY: `gcso_snapshot_header_t` is `#[repr(C)]` with primitives only and zero padding traps.
 unsafe impl Pod for gcso_snapshot_header_t {}
+// SAFETY: `gcso_kv_keyframe_header_t` is `#[repr(C)]` with primitives only and zero padding traps.
 unsafe impl Pod for gcso_kv_keyframe_header_t {}
 
 const _: () = {

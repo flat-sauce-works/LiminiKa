@@ -57,10 +57,44 @@ use crate::foundation::{
     DEFAULT_PHASE_CLAMP_MAX_RAD,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_usize, gcso_q7_t, GcsoResult, Groundable, Grounded,
-    Indivisible, Scoped, DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_HEX, GCSO_ERROR_BUFFER_TOO_SMALL,
+    branchless_select_f32, branchless_select_usize, gcso_q7_t, AbstractDomain, GcsoResult,
+    Grounded, Indivisible, DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_HEX, GCSO_ERROR_BUFFER_TOO_SMALL,
     GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER,
     MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+};
+
+/// Zero-byte domain-tagged 64-head Q7 phase profile for grounded crystallization (`Grounded` phase).
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PhaseProfile64(pub [gcso_q7_t; MAX_ATTENTION_HEADS]);
+
+impl AbstractDomain for PhaseProfile64 {
+    const DOMAIN_ID: &'static str = "stigmergy.phase_profile_64";
+}
+
+/// Zero-byte domain-tagged borrowed 64-head Q7 phase profile for grounded sample absorption (`Grounded` phase).
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy)]
+pub struct PhaseProfileRef64<'a>(pub &'a [gcso_q7_t; MAX_ATTENTION_HEADS]);
+
+impl AbstractDomain for PhaseProfileRef64<'_> {
+    const DOMAIN_ID: &'static str = "stigmergy.phase_profile_ref_64";
+}
+
+const _: () = {
+    assert!(size_of::<Indivisible<Grounded, PhaseProfile64>>() == MAX_ATTENTION_HEADS);
+    assert!(
+        align_of::<Indivisible<Grounded, PhaseProfile64>>()
+            == align_of::<[gcso_q7_t; MAX_ATTENTION_HEADS]>()
+    );
+    assert!(
+        size_of::<Indivisible<Grounded, PhaseProfileRef64<'static>>>()
+            == size_of::<&[gcso_q7_t; MAX_ATTENTION_HEADS]>()
+    );
+    assert!(
+        align_of::<Indivisible<Grounded, PhaseProfileRef64<'static>>>()
+            == align_of::<&[gcso_q7_t; MAX_ATTENTION_HEADS]>()
+    );
 };
 use crate::stigmergy::{
     ATTRACTOR_SLOT_PERSONA, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, MAX_ATTRACTOR_PULL_FORCE,
@@ -773,7 +807,7 @@ impl CrystallizedAttractorRecord {
     #[inline]
     pub fn absorb_sample_point_64(
         &mut self,
-        sample_phases: Indivisible<Grounded, &[gcso_q7_t; MAX_ATTENTION_HEADS]>,
+        sample_phases: Indivisible<Grounded, PhaseProfileRef64<'_>>,
         sample_energy: f32,
     ) -> f32 {
         let prev_crc = self.checksum_crc32;
@@ -787,7 +821,7 @@ impl CrystallizedAttractorRecord {
         let prev_prov = self.provenance_bits;
         let prev_w7_lo = self.pack_w7_lo();
         let cur_w = *self.phase_words_ref();
-        let sample_w = load_q7_words_64(sample_phases.as_ref());
+        let sample_w = load_q7_words_64(sample_phases.as_ref().0);
         let (next_w, mass, words_changed) = self
             .absorb_sample_words_with_cur_coh_and_uni_unstamped(
                 &cur_w,
@@ -817,17 +851,6 @@ impl CrystallizedAttractorRecord {
         mass
     }
 
-    /// Zero-cost convergence shell folding any [`Groundable`] refinement into
-    /// [`Indivisible<Grounded, _>`] and delegating to [`Self::absorb_sample_point_64`].
-    #[inline(always)]
-    pub fn absorb_sample_point_scoped_64<O: Groundable>(
-        &mut self,
-        sample_phases: Scoped<O, &[gcso_q7_t; MAX_ATTENTION_HEADS]>,
-        sample_energy: f32,
-    ) -> f32 {
-        self.absorb_sample_point_64(sample_phases.into_grounded(), sample_energy)
-    }
-
     /// Non-generic [`Indivisible<Grounded, _>`] closure constructor crystallizing a verified phase
     /// profile into a CRC32-stamped I-Frame [`CrystallizedAttractorRecord`].
     #[inline(always)]
@@ -837,34 +860,14 @@ impl CrystallizedAttractorRecord {
         dominant_slot: u8,
         sample_count: u32,
         base_energy: f32,
-        phase_profile: Indivisible<Grounded, [gcso_q7_t; MAX_ATTENTION_HEADS]>,
+        phase_profile: Indivisible<Grounded, PhaseProfile64>,
     ) -> Self {
         let mut rec = Self::new_empty(anchor_id, dominant_slot, 0);
-        rec.phase_profile = phase_profile.into_inner();
+        rec.phase_profile = phase_profile.into_inner().0;
         rec.base_energy = base_energy;
         rec.sample_count = sample_count;
         rec.stamp_crc32();
         rec
-    }
-
-    /// Zero-cost convergence shell folding any [`Groundable`] phase profile into
-    /// [`Indivisible<Grounded, _>`] and delegating to [`Self::from_grounded_delta_64`].
-    #[inline(always)]
-    #[must_use]
-    pub fn from_scoped_delta_64<O: Groundable>(
-        anchor_id: u32,
-        dominant_slot: u8,
-        sample_count: u32,
-        base_energy: f32,
-        phase_profile: Scoped<O, [gcso_q7_t; MAX_ATTENTION_HEADS]>,
-    ) -> Self {
-        Self::from_grounded_delta_64(
-            anchor_id,
-            dominant_slot,
-            sample_count,
-            base_energy,
-            phase_profile.into_grounded(),
-        )
     }
 
     #[inline]
@@ -1112,6 +1115,7 @@ impl CrystallizedAttractorRecord {
             let mut idx = 0usize;
             while idx < records.len() {
                 let r = &records[idx];
+                // SAFETY: `CrystallizedAttractorRecord` is a 128-byte `Pod` with `align >= 8`, so reading as `[u64; 16]` is valid.
                 let src_w = unsafe { &*core::ptr::from_ref(r).cast::<[u64; 16]>() };
                 let mut w0 = src_w[0];
                 let mut w6 = src_w[6];
@@ -1128,6 +1132,7 @@ impl CrystallizedAttractorRecord {
                     };
                     w6 = (w6 & 0xFFFF_FFFFu64) | ((crc as u64) << 32);
                 }
+                // SAFETY: `dst_bytes` is 8-byte aligned with `dst_bytes.len() >= records.len() * 128` (`idx < records.len()`).
                 let out_w = unsafe { &mut *dst_ptr.add(idx * 16).cast::<[u64; 16]>() };
                 out_w[0] = w0;
                 out_w[1] = src_w[1];
@@ -1205,37 +1210,42 @@ impl RawPhaseProjectable for CrystallizedAttractorRecord {
 #[cfg(test)]
 mod grounded_gate_tests {
     use super::*;
-    use crate::liminal::{BridgedDiscovery, ScopedCut, SpeculativeDiscovery, VerifiedAligned};
+    use crate::liminal::{
+        BridgedDiscovery, Scoped, ScopedCut, SpeculativeDiscovery, VerifiedAligned,
+    };
 
     #[test]
     fn test_grounded_closure_gate_allows_verified_and_bridged_blocks_unbridged() {
         let phases = [18_i8; MAX_ATTENTION_HEADS];
 
         let mut direct = CrystallizedAttractorRecord::new_empty(7, ATTRACTOR_SLOT_PERSONA, 0);
-        let direct_mass =
-            direct.absorb_sample_point_64(Scoped::interior(&phases).into_grounded(), 1.5);
+        let direct_grounded = Scoped::interior(PhaseProfileRef64(&phases)).into_grounded();
+        assert_eq!(
+            direct_grounded.domain_id(),
+            "stigmergy.phase_profile_ref_64"
+        );
+        let direct_mass = direct.absorb_sample_point_64(direct_grounded, 1.5);
 
         let mut aligned_rec = CrystallizedAttractorRecord::new_empty(7, ATTRACTOR_SLOT_PERSONA, 0);
-        let verified: VerifiedAligned<&[gcso_q7_t; MAX_ATTENTION_HEADS]> =
-            match Scoped::from_boundary(&phases).cut_by_lacuna_q7(true, 1, 4) {
+        let verified: VerifiedAligned<PhaseProfileRef64<'_>> =
+            match Scoped::from_boundary(PhaseProfileRef64(&phases)).cut_by_lacuna_q7(true, 1, 4) {
                 ScopedCut::SelfRef(s) => s,
                 _ => panic!("expected verified aligned cut"),
             };
-        let aligned_mass = aligned_rec.absorb_sample_point_scoped_64(verified, 1.5);
+        let aligned_mass = aligned_rec.absorb_sample_point_64(verified.into_grounded(), 1.5);
         assert_eq!(aligned_mass.to_bits(), direct_mass.to_bits());
         assert_eq!(aligned_rec, direct);
 
-        let spec: SpeculativeDiscovery<&[gcso_q7_t; MAX_ATTENTION_HEADS]> =
-            match Scoped::from_delta(&phases).cut_by_lacuna_q7(true, 24, 4) {
+        let spec: SpeculativeDiscovery<PhaseProfileRef64<'_>> =
+            match Scoped::from_delta(PhaseProfileRef64(&phases)).cut_by_lacuna_q7(true, 24, 4) {
                 ScopedCut::Exterior(e) => e,
                 _ => panic!("expected speculative discovery cut"),
             };
         let blocked = spec.bridge_to_shared(0).unwrap_err();
-        let bridged: BridgedDiscovery<&[gcso_q7_t; MAX_ATTENTION_HEADS]> =
-            blocked.bridge_to_shared(1).unwrap();
+        let bridged: BridgedDiscovery<PhaseProfileRef64<'_>> = blocked.bridge_to_shared(1).unwrap();
 
         let mut bridged_rec = CrystallizedAttractorRecord::new_empty(7, ATTRACTOR_SLOT_PERSONA, 0);
-        let bridged_mass = bridged_rec.absorb_sample_point_scoped_64(bridged, 1.5);
+        let bridged_mass = bridged_rec.absorb_sample_point_64(bridged.into_grounded(), 1.5);
         assert_eq!(bridged_mass.to_bits(), direct_mass.to_bits());
         assert_eq!(bridged_rec, direct);
     }

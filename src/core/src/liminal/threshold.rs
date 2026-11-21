@@ -7,7 +7,7 @@
 #![forbid(unsafe_code)]
 
 use crate::liminal::axiom::BitCut32;
-use crate::liminal::constants::{NUM_LIMINAL_THRESHOLD_CHANNELS, THRESHOLD_ACTION_HUB_WIDE};
+use crate::liminal::constants::{NUM_LIMINAL_THRESHOLD_CHANNELS, THRESHOLD_STIGMERGY_WIDE};
 
 /// Root epistemic supertrait representing the boundary separating cognizable state from the
 /// unknowable exterior.
@@ -74,7 +74,7 @@ pub fn sensitivity_4p1mp_f32(p: f32) -> f32 {
 /// - `4`: `CognitiveTrajectoryLedger` (`Circuit`)
 /// - `5`: `RamPhaseKvCacheOps` (`KvCache`)
 /// - `6`: `RelativeCouplingMatrix` (`RelativeCoupling`)
-/// - `7`: `ActionHub` (Wide Execution Threshold)
+/// - `7`: `StigmergicSubstrateOps` (Wide Execution Threshold)
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LiminalThresholdField {
@@ -107,7 +107,7 @@ impl LiminalThresholdField {
             void_floor_q7: [20, 28, 32, 24, 24, 24, 24, 16],
             aperture_gain_q7: [96; NUM_LIMINAL_THRESHOLD_CHANNELS],
             phase_shift_q7: [0; NUM_LIMINAL_THRESHOLD_CHANNELS],
-            active_aperture_mask: THRESHOLD_ACTION_HUB_WIDE,
+            active_aperture_mask: THRESHOLD_STIGMERGY_WIDE,
             adaptation_epochs: 0,
         }
     }

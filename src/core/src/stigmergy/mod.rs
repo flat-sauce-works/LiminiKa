@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Level 2 (`Stigmergy`): 8-granule SWAR stigmergic trails, pheromone density laws,
-//! 256-bit paged bitmasks, contrastive Bloom filters, fast-path ledgers, 8-lane [`ActionHubEngine`],
-//! multi-scale cognitive circuits, `.gcso` crystallization, and macro attractor fields.
+//! 256-bit paged bitmasks, contrastive Bloom filters, fast-path ledgers, 8-lane
+//! [`StigmergicSubstrate`], multi-scale cognitive circuits, `.gcso` crystallization, and macro
+//! attractor fields.
 //!
 //! Depends strictly on `core`, [`crate::liminal`], and [`crate::foundation`].
 
@@ -40,8 +41,8 @@ pub use crate::liminal::{HEADS_PER_STIGMERGIC_GRANULE, NUM_STIGMERGIC_GRANULES};
 // 1. Semantic Attractor Provenance IDs, Workbench Pool & 8x8 Coupling
 // ===================================================================
 
-/// Default slot capacity of the Action Hub pointer table (`256`).
-pub const DEFAULT_ACTION_HUB_CAPACITY: u32 = 256;
+/// Default logical trail slot capacity of [`StigmergicSubstrate`] (`256`).
+pub const DEFAULT_SUBSTRATE_CAPACITY: u32 = 256;
 
 /// Number of fast-path shortcut slots in a `gcso_ledger_slot_t` (`4`).
 pub const FAST_PATH_SHORTCUT_SLOTS: usize = 4;
@@ -257,7 +258,6 @@ pub const LEDGER_METRIC_SLOT_SYNERGY_ACTIVE: u8 = 1 << 7;
 /// [`CognitiveStepOp`] records (`[Scale | Op | Intensity]`) rather than legacy metric masks.
 pub const LEDGER_FLAG_COGNITIVE_TRAJECTORY: u32 = 1 << 0;
 
-pub mod action_hub;
 pub mod attractor;
 pub mod circuit;
 pub mod crystal;
@@ -265,9 +265,9 @@ pub mod gate;
 pub mod granule;
 pub mod ledger;
 pub mod pheromone;
+pub mod substrate;
 pub mod trail;
 
-pub use self::action_hub::*;
 pub use self::attractor::*;
 pub use self::circuit::*;
 pub use self::crystal::*;
@@ -275,6 +275,7 @@ pub use self::gate::*;
 pub use self::granule::*;
 pub use self::ledger::*;
 pub use self::pheromone::*;
+pub use self::substrate::*;
 pub use self::trail::*;
 
 const _: () = {

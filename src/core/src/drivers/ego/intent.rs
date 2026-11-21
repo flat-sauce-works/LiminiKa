@@ -506,7 +506,7 @@ impl EgoIntentAxes {
 // ===================================================================
 
 /// Wide-aperture 64-byte (`#[repr(C, align(64))]`, 1 cache line) subjective Ego controller
-/// (Core Layer 2) operating alongside `ActionHub` across trait apertures,
+/// (Core Layer 2) operating alongside [`crate::stigmergy::StigmergicSubstrate`] across trait apertures,
 /// attractor slots, and 8 SWAR granules.
 ///
 /// Unlike passive attractor basins that pull queries inward toward fixed habits, `LiminalEgoField`
@@ -516,7 +516,7 @@ impl EgoIntentAxes {
 ///   exceeds `basin_escape_floor_q7`, preventing collapse into static imitation;
 /// - cross or fortify `Liminal` horizons (`transgression_bias_q7`);
 /// - induce structured, non-greedy choice deviations (`irrational_defiance_q7`) and
-///   override ActionHub execution presets under `trigger_mask`.
+///   override substrate execution presets under `trigger_mask`.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LiminalEgoField {

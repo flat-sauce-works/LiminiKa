@@ -897,6 +897,7 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
 
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
+        // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`, and `t` is a 64-byte (`8 * u64`) stack array.
         return unsafe {
             use core::arch::x86_64::{
                 __m256i, _mm256_loadu_si256, _mm256_or_si256, _mm256_set1_epi64x, _mm256_sub_epi8,

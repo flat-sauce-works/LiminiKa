@@ -19,31 +19,31 @@ use liminika_core::foundation::{
     RopeSteeringTarget, ACTION_MODE_PHASE_REPULSE, SWAR_SPLAT_BYTE_64,
 };
 use liminika_core::liminal::{
-    EpistemicRegime, GcsoResult, LiminalThresholdField, MAX_ATTENTION_HEADS,
+    BitCut8, EpistemicRegime, GcsoResult, LiminalThresholdField, MAX_ATTENTION_HEADS,
     NUM_STIGMERGIC_GRANULES,
 };
 use liminika_core::runtime::{
-    apply_latent_horizon_slots, ActionHubGatewayExt, AdaptiveThresholdPolicy,
-    AutonomousCoreLayerStack, CausalProvenanceReport, CausalProvenanceSignal, CoreLayerEvalContext,
-    CoreTelemetryBank, CoreTelemetrySnapshot, DefaultResidualSpilloverSlot,
-    EpistemicHorizonReading, GatewayFrame, GatewayPhaseSteeringExt, GcsoFourSectionView,
-    GuardPhaseAnchor, HorizonDwellState, HorizonEscalationProvider, HorizonEscalationRequest,
-    HorizonTriggerInput, LatentHorizonSlot, LayerDistortionReport, LiminalBoundaryDelta,
-    LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact,
-    SlowLoopTelemetryAdjustment, StigmergicThresholdPolicy, SubjectivePersona, SystemConstraint,
+    apply_latent_horizon_slots, AdaptiveThresholdPolicy, AutonomousCoreLayerStack,
+    CausalProvenanceReport, CausalProvenanceSignal, CoreLayerEvalContext, CoreTelemetryBank,
+    CoreTelemetrySnapshot, DefaultResidualSpilloverSlot, EpistemicHorizonReading, GatewayFrame,
+    GatewayPhaseSteeringExt, GcsoFourSectionView, GuardPhaseAnchor, HorizonDwellState,
+    HorizonEscalationProvider, HorizonEscalationRequest, HorizonTriggerInput, LatentHorizonSlot,
+    LayerDistortionReport, LiminalBoundaryDelta, LiminalTopologyTelemetrySnapshot,
+    ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact, SlowLoopTelemetryAdjustment,
+    StigmergicThresholdPolicy, SubjectivePersona, SubstrateGatewayExt, SystemConstraint,
     TelemetryCapturePolicy,
 };
 use liminika_core::stigmergy::{
-    evaluate_stigmergic_overlap_and_serendipity_words_64, ActionHubEngine,
-    CognitiveCircuitActivation, CognitiveCircuitBankOps, CognitiveTrajectoryLedger,
-    CrystallizedAttractorRecord, DissipativeOverflowReport, PhaseSteeringEngine,
-    RelativeAttractorNode, ResidualAdapterEngine, StigmergicActionDecision,
+    evaluate_stigmergic_overlap_and_serendipity_words_64, CognitiveCircuitActivation,
+    CognitiveCircuitBankOps, CognitiveTrajectoryLedger, CrystallizedAttractorRecord,
+    DissipativeOverflowReport, PhaseDeltaSlice, PhaseSteeringEngine, RelativeAttractorNode,
+    ResidualAdapterEngine, ResidualScale, SandboxLifecycleEvent, StigmergicActionDecision,
     StigmergicFragmentEnsembleReport, StigmergicGranuleField, StigmergicOverlapSerendipityReport,
-    StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicThresholds,
-    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
-    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
-    LEDGER_FLAG_COGNITIVE_TRAJECTORY, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
-    WORKBENCH_LANE_FLAG_REPULSION,
+    StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicSubstrate,
+    StigmergicThresholds, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
+    ATTRACTOR_SLOT_REPULSION, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
+    CAUSAL_AXIS_SUBJECTIVE_PERSONA, LEDGER_FLAG_COGNITIVE_TRAJECTORY, ROOT_CAUSE_NOMINAL,
+    ROOT_CAUSE_SYSTEM_QOS_THROTTLE, WORKBENCH_LANE_FLAG_REPULSION,
 };
 
 pub mod pooling;

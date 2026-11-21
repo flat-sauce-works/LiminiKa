@@ -21,7 +21,7 @@ pub unsafe extern "C" fn gcso_action_hub_create(
     ffi_boundary!({
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and alignment.
         let mut out_handle = unsafe { FfiHandleMut::from_raw(hub_out)? };
-        let hub = ActionHubEngine::with_capacity(capacity)?;
+        let hub = StigmergicSubstrate::with_capacity(capacity)?;
         *out_handle = Box::into_raw(Box::new(hub)).cast::<GcsoActionHubOpaque>();
         Ok(GCSO_SUCCESS)
     })
@@ -93,7 +93,7 @@ pub unsafe extern "C" fn gcso_action_hub_evaluate_stigmergic_thresholds(
 }
 
 /// Executes a full **Stigmergic Threshold Action-Selecting Orchestration Step** across the C-ABI
-/// boundary via [`ActionHubEngine::orchestrate_next_action_step`] ($C_{\mathrm{alloc}} = 0$).
+/// boundary via [`StigmergicSubstrate::orchestrate_next_action_step`] ($C_{\mathrm{alloc}} = 0$).
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `GCSO_RESTRICT` invariants.
@@ -167,10 +167,10 @@ pub unsafe extern "C" fn gcso_action_hub_orchestrate_stigmergic_step_safe(
 
         let report = if !hub_opt.is_null()
             && (hub_opt as usize) >= 4096
-            && ((hub_opt as usize) & (align_of::<ActionHubEngine>() - 1)) == 0
+            && ((hub_opt as usize) & (align_of::<StigmergicSubstrate>() - 1)) == 0
         {
             // SAFETY: `hub_opt` is non-null and 128-byte aligned.
-            let hub_ref = unsafe { &mut *hub_opt.cast::<ActionHubEngine>() };
+            let hub_ref = unsafe { &mut *hub_opt.cast::<StigmergicSubstrate>() };
             hub_ref.phase_steering = dpsr;
             if let Some(ref th) = th_ref_opt {
                 th.validate()?;

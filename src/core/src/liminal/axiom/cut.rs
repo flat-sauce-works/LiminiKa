@@ -413,6 +413,25 @@ impl<T> Indivisible<Grounded, T> {
     }
 }
 
+/// Open compile-time zero-byte domain metadata for payloads carried inside
+/// [`Indivisible<C, T>`].
+///
+/// Downstream crates and adapters may implement this trait for domain-specific payload newtypes
+/// without modifying [`Indivisible`] or adding any runtime storage fields.
+pub trait AbstractDomain {
+    /// Concise, stable domain identifier (zero runtime storage overhead).
+    const DOMAIN_ID: &'static str;
+}
+
+impl<C: IndivisiblePhase, T: AbstractDomain> Indivisible<C, T> {
+    /// Returns the compile-time domain identifier for `T` with zero runtime storage overhead.
+    #[inline(always)]
+    #[must_use]
+    pub const fn domain_id(&self) -> &'static str {
+        T::DOMAIN_ID
+    }
+}
+
 // ===================================================================
 // 4. Branchless Runtime Atomic Bit-Cuts (`BitCut8` & `BitCut32`)
 // ===================================================================
@@ -484,6 +503,17 @@ impl BitCut8 {
     pub const fn blindspot_mask(self, other: Self) -> u8 {
         self.outside & other.outside
     }
+
+    /// Composes two same-origin prohibition cuts via De Morgan duality
+    /// (`inside = self.inside | other.inside`, `outside = self.outside & other.outside`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn union_prohibited(self, other: Self) -> Self {
+        Self {
+            inside: self.inside | other.inside,
+            outside: self.outside & other.outside,
+        }
+    }
 }
 
 /// Branchless 32-bit atomic partition separating a bit-universe into disjoint `inside` and
@@ -552,6 +582,17 @@ impl BitCut32 {
     #[must_use]
     pub const fn blindspot_mask(self, other: Self) -> u32 {
         self.outside & other.outside
+    }
+
+    /// Composes two same-origin prohibition cuts via De Morgan duality
+    /// (`inside = self.inside | other.inside`, `outside = self.outside & other.outside`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn union_prohibited(self, other: Self) -> Self {
+        Self {
+            inside: self.inside | other.inside,
+            outside: self.outside & other.outside,
+        }
     }
 }
 
@@ -644,5 +685,32 @@ mod tests {
         );
         assert_eq!(c_in.inside & c_in.outside, 0);
         assert_eq!(c_out.inside & c_out.outside, 0);
+
+        let composed8 = cut_a.union_prohibited(cut_b);
+        assert_eq!(composed8.inside, 0b0111_0111);
+        assert_eq!(composed8.outside, 0b1000_1000);
+
+        let composed32 = c32_a.union_prohibited(c32_b);
+        assert_eq!(composed32.inside, 0x0FFF_00FF);
+        assert_eq!(composed32.outside, 0xF000_0000);
+    }
+
+    #[test]
+    fn test_open_abstract_domain_metadata_is_zero_cost() {
+        #[repr(transparent)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        struct TestDomainScalar(u64);
+
+        impl AbstractDomain for TestDomainScalar {
+            const DOMAIN_ID: &'static str = "test.domain_scalar";
+        }
+
+        let active = Scoped::interior(TestDomainScalar(99)).into_active();
+        assert_eq!(active.domain_id(), "test.domain_scalar");
+        assert_eq!(active.as_ref().0, 99);
+        assert_eq!(
+            size_of::<Indivisible<Active, TestDomainScalar>>(),
+            size_of::<u64>()
+        );
     }
 }

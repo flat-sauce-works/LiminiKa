@@ -52,7 +52,7 @@ use crate::liminal::{
     branchless_select_f32, branchless_select_i8, branchless_select_u32, branchless_select_u64,
     branchless_select_u8, gcso_q7_t, EpistemicRegime, GcsoResult, LiminalThresholdField,
     DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
-    NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES, THRESHOLD_ACTION_HUB_WIDE,
+    NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES, THRESHOLD_STIGMERGY_WIDE,
 };
 #[allow(unused_imports)]
 use crate::runtime::context::AutonomousCoreLayerStack;
@@ -66,11 +66,11 @@ use crate::runtime::storage::KvKeyframePacket;
 #[allow(unused_imports)]
 use crate::stigmergy::{
     evaluate_stigmergic_overlap_and_serendipity_words_64, fold_fractal_nodes_words_64,
-    fold_sincos64_to_words, swar_mean_u8_le128_x8, ActionHubEngine, CognitiveOpKind,
-    CognitiveTrajectoryLedger, DissipativeOverflowReport, PheromoneDensityOps,
-    RelativeAttractorNode, StigmergicGranuleField, StigmergicOverlapSerendipityReport,
-    WorkbenchLanePlacement, WorkbenchSlotSpec, MAX_ATTRACTOR_PULL_FORCE,
-    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
+    fold_sincos64_to_words, swar_mean_u8_le128_x8, CognitiveOpKind, CognitiveTrajectoryLedger,
+    DissipativeOverflowReport, PheromoneDensityOps, RelativeAttractorNode, StigmergicGranuleField,
+    StigmergicOverlapSerendipityReport, StigmergicSubstrate, WorkbenchLanePlacement,
+    WorkbenchSlotSpec, MAX_ATTRACTOR_PULL_FORCE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
+    TRAIL_FLAG_REPULSION_ACTIVE,
 };
 #[allow(unused_imports)]
 use crate::stigmergy::{

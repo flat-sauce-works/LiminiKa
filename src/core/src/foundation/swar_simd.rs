@@ -1030,6 +1030,66 @@ pub const fn branchless_argmin_u8_x8_masked(values: &[u8; 8], eligible_mask: u8)
     (best_lane, best_val)
 }
 
+/// Integer Q0.7 reciprocal lookup table (`round(128 / k)`) for `0..=8` active parallel lanes.
+pub const INV_PARALLEL_COUNT_Q7: [i32; 9] = [0, 128, 64, 43, 32, 26, 21, 18, 16];
+
+/// Synthesizes a masked 8-lane weighted parallel ensemble over 64-head Q7 profiles and adds it
+/// circularly onto `base_words` (`0` allocations, `0` floating-point divisions).
+///
+/// For each lane `i` whose bit is set in `eligible_mask`, accumulates `(profiles[i][h] * weights_q7[i]) >> 7`
+/// across all 64 heads, divides by the active lane count via [`INV_PARALLEL_COUNT_Q7`] with symmetric
+/// half-up rounding, clamps to `[-127, 127]`, and adds onto `base_words` with circular Q7 wraparound.
+/// Returns `(out_words, avg_delta_norm_q7, lowest_active_lane_idx)`.
+#[inline]
+#[must_use]
+pub fn branchless_q7_weighted_ensemble_words_64(
+    profiles: [&[gcso_q7_t; MAX_ATTENTION_HEADS]; 8],
+    weights_q7: &[u8; 8],
+    eligible_mask: u8,
+    base_words: &[u64; NUM_STIGMERGIC_GRANULES],
+) -> ([u64; NUM_STIGMERGIC_GRANULES], u8, u8) {
+    if eligible_mask == 0 {
+        return (*base_words, 0, 0);
+    }
+
+    let mut accum_norm_sum = 0u32;
+    let mut head_sum = [0i32; MAX_ATTENTION_HEADS];
+    let mut lane = 0usize;
+    while lane < 8 {
+        if ((eligible_mask >> lane) & 1) != 0 {
+            let w_u32 = u32::from(weights_q7[lane]);
+            let w_i32 = w_u32 as i32;
+            for (acc, &d_q7) in head_sum.iter_mut().zip(profiles[lane].iter()) {
+                *acc += (i32::from(d_q7) * w_i32) >> 7;
+            }
+            accum_norm_sum = accum_norm_sum.saturating_add(w_u32);
+        }
+        lane += 1;
+    }
+
+    let inv = INV_PARALLEL_COUNT_Q7[(eligible_mask.count_ones() as usize).min(8)];
+    let mut ensemble_q7 = [0 as gcso_q7_t; MAX_ATTENTION_HEADS];
+    for (out, &sum) in ensemble_q7.iter_mut().zip(head_sum.iter()) {
+        let prod = sum * inv;
+        let bias = if prod >= 0 { 64 } else { -64 };
+        *out = ((prod + bias) / 128).clamp(-127, 127) as gcso_q7_t;
+    }
+
+    let ensemble_words = load_q7_words_64(&ensemble_q7);
+    let mut out_words = *base_words;
+    for (acc_w, &ew) in out_words
+        .iter_mut()
+        .zip(ensemble_words.iter())
+        .take(NUM_STIGMERGIC_GRANULES)
+    {
+        *acc_w = swar_q7_circular_add_x8(*acc_w, ew);
+    }
+
+    let avg_delta = (((accum_norm_sum as i32) * inv + 64) / 128).clamp(0, 127) as u8;
+    let entry_idx = eligible_mask.trailing_zeros() as u8;
+    (out_words, avg_delta, entry_idx)
+}
+
 #[inline(always)]
 #[must_use]
 pub(crate) const fn fast_mean_q7_tag_from_words_64(

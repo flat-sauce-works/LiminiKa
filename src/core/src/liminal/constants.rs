@@ -52,6 +52,9 @@ pub const fn validate_abi_version(version_hex: u32) -> Result<(), GcsoStatus> {
 }
 
 /// Standardized 32-bit signed status code returned across the C-ABI FFI boundary.
+///
+/// Intentionally retained under the `0.1.3` C-ABI firewall; scheduled for plain-English
+/// renaming (`lmnk_*`) at `v0.2.0`.
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
 pub struct GcsoStatus(
@@ -187,7 +190,7 @@ define_status_codes!(
         -10,
         b"GCSO_ERROR_ACTION_HUB_FULL\0",
         "GCSO_ERROR_ACTION_HUB_FULL",
-        "Action Hub pointer table slot capacity fully saturated."
+        "Frozen `0.1.3` C-ABI compatibility status code: substrate pointer table capacity saturated."
     ),
     (
         GCSO_ERROR_NOT_IMPLEMENTED,
@@ -315,6 +318,9 @@ impl From<Result<(), GcsoStatus>> for GcsoStatus {
 pub type gcso_status_t = GcsoStatus;
 
 /// Type alias for GCSO core result responses mapping to [`GcsoStatus`].
+///
+/// Intentionally retained under the `0.1.3` C-ABI firewall; scheduled for plain-English
+/// renaming (`lmnk_*`) at `v0.2.0`.
 pub type GcsoResult<T> = Result<T, GcsoStatus>;
 
 /// Quantized 7-bit signed fixed-point integer (phase scale $\beta_{\mathrm{Q7}} = \pi / 128$).
@@ -443,7 +449,7 @@ pub const THRESHOLD_SUBHEAD_ROUTING: u32 = 1 << 9;
 /// Cognitive threshold bit for Rank-1 hidden residual injection (`ResidualAdapterEngine`).
 pub const THRESHOLD_RANK1_RESIDUAL: u32 = 1 << 10;
 
-/// Cognitive threshold bit for tagged pointer transitions & trails (`PointerActionHub`).
+/// Cognitive threshold bit for tagged pointer transitions & trails (`PointerSubstrate`).
 pub const THRESHOLD_POINTER_TRAIL: u32 = 1 << 11;
 
 /// Cognitive threshold bit for fast-path L1 ledger shortcuts (`FastPathLedger`).
@@ -458,8 +464,8 @@ pub const THRESHOLD_COHOMOLOGY_ENTROPY: u32 = 1 << 14;
 /// Cognitive threshold bit for zero-copy `.gcso` mapped storage I/O.
 pub const THRESHOLD_MAPPED_STORAGE: u32 = 1 << 15;
 
-/// Broadest operational cognitive threshold spanned by `ActionHub` (`0x0000_FFFF`).
-pub const THRESHOLD_ACTION_HUB_WIDE: u32 = 0x0000_FFFF;
+/// Broadest operational cognitive threshold spanned by `StigmergicSubstrateOps` (`0x0000_FFFF`).
+pub const THRESHOLD_STIGMERGY_WIDE: u32 = 0x0000_FFFF;
 
 /// Number of dynamic channel slots tracked by `LiminalThresholdField`.
 pub const NUM_LIMINAL_THRESHOLD_CHANNELS: usize = 8;

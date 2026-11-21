@@ -616,7 +616,7 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
         Ok(phases)
     }
 
-    /// Absorbs `self` directly into an ActionHub pointer trail (`trail_inout`) via $S^1$ geodesic
+    /// Absorbs `self` directly into a substrate pointer trail (`trail_inout`) via $S^1$ geodesic
     /// phase-proximity resonance, updates `stigmergic_density`, evaluates circular statistics
     /// $(\bar{R}_c, \kappa_c)$, and stamps [`crate::stigmergy::TRAIL_FLAG_CRYSTALLIZED_CANDIDATE`]
     /// in constant time (`0` data-dependent branches, `0 fdiv`).

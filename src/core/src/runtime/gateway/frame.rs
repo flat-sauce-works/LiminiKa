@@ -351,7 +351,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
 
     /// Synthesizes `self` into both a 128-byte [`GatewayFrame`] and its register-resident 8 `u64`
     /// SWAR phase words (`[u64; 8]`), eliminating stack store-to-load forwarding stalls across
-    /// downstream ensemble folding, `ActionHub` steering, and Online Toroidal $k$-Means steps.
+    /// downstream ensemble folding, [`StigmergicSubstrate`] steering, and Online Toroidal $k$-Means steps.
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(
         &self,
@@ -1891,6 +1891,7 @@ where
     if !blended_uni && avx_precomputed_tag.is_none() {
         // SAFETY: `target_feature = "avx2"` is enabled at compile time.
         let (v0, v1) = unsafe { crate::foundation::phase_field::avx2_words64_to_vec64(&blended_w) };
+        // SAFETY: `target_feature = "avx2"` is enabled at compile time.
         avx_precomputed_tag =
             Some(unsafe { crate::foundation::avx2_q7_mean_i8_from_vec64(v0, v1) });
     }

@@ -17,7 +17,7 @@ use crate::drivers::{
 };
 use crate::foundation::{RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget};
 use crate::prelude::*;
-use crate::stigmergy::action_hub::DEFAULT_DERIVATIVE_ALPHA_Q7;
+use crate::stigmergy::substrate::DEFAULT_DERIVATIVE_ALPHA_Q7;
 use crate::stigmergy::with_slot_pair_coupled_symmetric;
 
 #[test]
@@ -139,7 +139,7 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     centroids[2] = CrystallizedAttractorRecord::new_empty(303, ATTRACTOR_SLOT_KNOWLEDGE, 0);
     let sample_c2 = [29i8; MAX_ATTENTION_HEADS];
     let _ = centroids[2].absorb_sample_point_64(
-        crate::liminal::Scoped::interior(&sample_c2).into_grounded(),
+        crate::liminal::Scoped::interior(PhaseProfileRef64(&sample_c2)).into_grounded(),
         1.2,
     );
     let (merged_cnt, pruned_cnt) = CrystallizedAttractorRecord::merge_and_prune_centroids_64(
@@ -240,11 +240,11 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     let lim_p0 = [16i8; MAX_ATTENTION_HEADS];
     let lim_p1 = [48i8; MAX_ATTENTION_HEADS];
     let _ = lim_centroids[0].absorb_sample_point_64(
-        crate::liminal::Scoped::interior(&lim_p0).into_grounded(),
+        crate::liminal::Scoped::interior(PhaseProfileRef64(&lim_p0)).into_grounded(),
         2.5,
     );
     let _ = lim_centroids[1].absorb_sample_point_64(
-        crate::liminal::Scoped::interior(&lim_p1).into_grounded(),
+        crate::liminal::Scoped::interior(PhaseProfileRef64(&lim_p1)).into_grounded(),
         2.5,
     );
     let mut lim_trail = gcso_pointer_trail_t {
@@ -437,8 +437,8 @@ fn test_multi_scale_layer_cascade_and_cognitive_trajectory_circuit() {
     assert_ne!(proj_1.residual_words, input_words);
     assert_ne!(proj_3.residual_words, proj_1.residual_words);
 
-    // 3. Verify ActionHubScaleOrchestrator executes zero-alloc elastic depth-N cascades and persists trajectory.
-    let mut hub = crate::stigmergy::action_hub::ActionHubEngine::new();
+    // 3. Verify ScaleLayerOrchestrator executes zero-alloc elastic depth-N cascades and persists trajectory.
+    let mut hub = crate::stigmergy::substrate::StigmergicSubstrate::new();
     let mut ledger = gcso_ledger_slot_t::default();
     let mut trail = gcso_pointer_trail_t {
         accumulated_phase_delta: [24i8; MAX_ATTENTION_HEADS],
@@ -531,7 +531,7 @@ fn test_synaptic_transitions_cross_trajectory_and_adaptive_cascade() {
 
     // 3. Adaptive early-exit skips redundant deeper layers when residual energy is low and
     //    fuse_gate_q7 is already saturated.
-    let mut hub = crate::stigmergy::action_hub::ActionHubEngine::new();
+    let mut hub = crate::stigmergy::substrate::StigmergicSubstrate::new();
     let mut early_slot = gcso_ledger_slot_t::default();
     let mut early_ledger = CognitiveTrajectoryLedger::new();
     early_ledger.push_step(CognitiveStepOp::pack(
@@ -707,7 +707,7 @@ fn test_hybrid_scale_circuit_and_adaptive_threshold_policy() {
     assert!(strict_policy.early_exit_fuse_floor_q7() > relaxed_policy.early_exit_fuse_floor_q7());
     assert!(strict_policy.peel_escalation_floor_q7() < relaxed_policy.peel_escalation_floor_q7());
 
-    let mut hub = crate::stigmergy::action_hub::ActionHubEngine::new();
+    let mut hub = crate::stigmergy::substrate::StigmergicSubstrate::new();
     let mut slot = gcso_ledger_slot_t::default();
     let mut trail = gcso_pointer_trail_t::default();
     let layers = [hybrid];
@@ -1006,11 +1006,11 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     ));
     let mut fuse_slot = gcso_ledger_slot_t::default();
     fuse_ledger.write_to_ledger_slot(&mut fuse_slot);
-    let mut hub = crate::stigmergy::action_hub::ActionHubEngine::with_dimensions_and_thresholds(
+    let mut hub = crate::stigmergy::substrate::StigmergicSubstrate::with_dimensions_and_thresholds(
         64,
         64,
         16,
-        crate::stigmergy::action_hub::StigmergicThresholds::default(),
+        crate::stigmergy::substrate::StigmergicThresholds::default(),
     )
     .unwrap();
     let mut trail = gcso_pointer_trail_t::default();
@@ -1343,15 +1343,15 @@ fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
         !THRESHOLD_MANIFOLD_GATEWAY
     );
     assert_eq!(
-        <crate::stigmergy::action_hub::ActionHubEngine as ActionHub>::HUB_APERTURE_MASK,
-        THRESHOLD_ACTION_HUB_WIDE
+        <crate::stigmergy::substrate::StigmergicSubstrate as StigmergicSubstrateOps>::HUB_APERTURE_MASK,
+        THRESHOLD_STIGMERGY_WIDE
     );
     assert_eq!(
-        <crate::stigmergy::action_hub::ActionHubEngine as ActionHub>::HUB_UNKNOWABLE_VOID_MASK,
-        !THRESHOLD_ACTION_HUB_WIDE
+        <crate::stigmergy::substrate::StigmergicSubstrate as StigmergicSubstrateOps>::HUB_UNKNOWABLE_VOID_MASK,
+        !THRESHOLD_STIGMERGY_WIDE
     );
 
-    let hub = crate::stigmergy::action_hub::ActionHubEngine::default();
+    let hub = crate::stigmergy::substrate::StigmergicSubstrate::default();
     let (cog_bits, ext_bits) = hub.inspect_hub_horizon_partition(0x8000_0003);
     assert_eq!(cog_bits, 0x0000_0003);
     assert_eq!(ext_bits, 0x8000_0000);
@@ -1448,7 +1448,7 @@ fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
     assert!(diagram.starts_with("flowchart TD\n"));
     assert!(diagram.contains("Liminal"));
     assert!(diagram.contains("ManifoldGatewaySignal"));
-    assert!(diagram.contains("ActionHub"));
+    assert!(diagram.contains("L2_Substrate"));
     assert!(diagram.contains("Crystals:4"));
     assert!(diagram.contains("Daughters:1"));
 }
@@ -1990,13 +1990,13 @@ fn dynamic_trait_aperture_routing_and_fragmented_micro_ensemble() {
     assert_ne!(ego_w[6], 0);
 }
 
-struct MockActionHubComposite {
+struct MockSubstrateComposite {
     head_dim: u32,
     num_heads: u32,
     default_phase: gcso_q7_t,
 }
 
-impl PhaseSteering for MockActionHubComposite {
+impl PhaseSteering for MockSubstrateComposite {
     fn head_dim(&self) -> u32 {
         self.head_dim
     }
@@ -2006,7 +2006,7 @@ impl PhaseSteering for MockActionHubComposite {
     }
 }
 
-impl PointerActionHub for MockActionHubComposite {
+impl PointerSubstrate for MockSubstrateComposite {
     fn reset(&mut self) -> GcsoResult<()> {
         Ok(())
     }
@@ -2055,7 +2055,7 @@ impl PointerActionHub for MockActionHubComposite {
     }
 }
 
-impl FastPathLedger for MockActionHubComposite {
+impl FastPathLedger for MockSubstrateComposite {
     fn evaluate_auto_tune(
         &self,
         _slot: &gcso_ledger_slot_t,
@@ -2066,20 +2066,20 @@ impl FastPathLedger for MockActionHubComposite {
 }
 
 #[test]
-fn test_canonical_modules_and_action_hub_composite() {
-    fn assert_action_hub<T: ActionHub + ActionHubGatewayExt>(hub: &T) -> (u32, u32) {
+fn test_canonical_modules_and_substrate_composite() {
+    fn assert_substrate<T: StigmergicSubstrateOps + SubstrateGatewayExt>(hub: &T) -> (u32, u32) {
         (
             <T as crate::foundation::PhaseSteering>::head_dim(hub),
             <T as crate::foundation::PhaseSteering>::num_heads(hub),
         )
     }
 
-    let mut hub = MockActionHubComposite {
+    let mut hub = MockSubstrateComposite {
         head_dim: 8,
         num_heads: 2,
         default_phase: 24,
     };
-    assert_eq!(assert_action_hub(&hub), (8, 2));
+    assert_eq!(assert_substrate(&hub), (8, 2));
 
     let mut mask = gcso_paged_bitmask_t::default();
     mask.set_bit_branchless(7);
@@ -2133,7 +2133,7 @@ fn test_phase_steering_closed_loop_gateway_signal() {
     }
     let mut q_gw = AlignedBuffer32::new(q_data);
     let mut trail_gw = gcso_pointer_trail_t::default();
-    let (frame, report) = PhaseSteeringClosedLoop::steer_gateway_signal_safe(
+    let (frame, report) = GatewayPhaseSteeringExt::steer_gateway_signal_safe(
         &engine_gw,
         &(sys, fact, persona),
         &mut trail_gw,
@@ -2294,9 +2294,9 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
 }
 
 #[test]
-fn test_action_hub_engine_gateway_kmeans_and_swarm_step_closed_loop() {
+fn test_substrate_gateway_kmeans_and_swarm_step_closed_loop() {
     let mut hub =
-        ActionHubEngine::with_dimensions_and_thresholds(8, 2, 16, StigmergicThresholds::new())
+        StigmergicSubstrate::with_dimensions_and_thresholds(8, 2, 16, StigmergicThresholds::new())
             .unwrap();
     let mut q_buf = AlignedBuffer32::new([1.0f32; 16]);
     let mut k_buf = AlignedBuffer32::new([1.0f32; 16]);
@@ -2347,11 +2347,11 @@ fn test_action_hub_engine_gateway_kmeans_and_swarm_step_closed_loop() {
         last_anchor_id: u32,
         last_slot: u8,
     }
-    impl StigmergicActionReceptor for MockExternalSearchReceptor {
-        fn on_stigmergic_action_emerged(
+    impl StigmergicReceptor for MockExternalSearchReceptor {
+        fn on_stigmergic_emergence(
             &mut self,
             _frame: &GatewayFrame,
-            report: &ActionOrchestrationReport,
+            report: &SubstrateStepReport,
             _trail: &gcso_pointer_trail_t,
         ) -> GcsoResult<()> {
             if report.is_action_emergent(1.0) {
@@ -2423,7 +2423,7 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
         }
     }
 
-    let mut hub = ActionHubEngine::with_dimensions_and_thresholds(
+    let mut hub = StigmergicSubstrate::with_dimensions_and_thresholds(
         8,
         MAX_ATTENTION_HEADS as u32,
         16,
@@ -2432,7 +2432,7 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
     .unwrap();
     // Physical lane 0 = standard, physical lane 1 = repulsion, physical lane 2 = sandbox.
     assert_eq!(
-        hub.allocate_workbench_lane(&WorkbenchSlotSpec::auto_free(
+        hub.allocate_lane(&WorkbenchSlotSpec::auto_free(
             1.0,
             [20; MAX_ATTENTION_HEADS]
         ))
@@ -2440,7 +2440,7 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
         0
     );
     assert_eq!(
-        hub.allocate_workbench_lane(&WorkbenchSlotSpec::auto_repulsion(
+        hub.allocate_lane(&WorkbenchSlotSpec::auto_repulsion(
             1.0,
             [-40; MAX_ATTENTION_HEADS]
         ))
@@ -2448,7 +2448,7 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
         1
     );
     assert_eq!(
-        hub.allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(
+        hub.allocate_lane(&WorkbenchSlotSpec::auto_sandbox(
             1.0,
             [40; MAX_ATTENTION_HEADS]
         ))
@@ -2558,7 +2558,7 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
         baseline_guard_noise_floor: 0.25,
         ..ManifoldProbeBaseline::new()
     };
-    let mut hub = ActionHubEngine::new();
+    let mut hub = StigmergicSubstrate::new();
     let mut bank = CoreTelemetryBank::with_mode(TelemetryVerbosityMode::Standard);
     let mut active_sandbox: Option<u8> = None;
     let horizon = EpistemicHorizonReading {
@@ -2694,7 +2694,7 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
         let _ = bank.update_assimilation_ema(0.85, 0.15, 0.75, &baseline, 0.15);
     }
     let lane3 = hub
-        .allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(
+        .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(
             0.5,
             [1; MAX_ATTENTION_HEADS],
         ))
@@ -2895,11 +2895,11 @@ fn test_stationary_skip_and_spine_bypass_do_not_misdiagnose_passive_saturation()
 }
 
 #[test]
-fn test_workbench_pinned_sandbox_handle_preservation_and_repulsion_sandbox_isolation() {
+fn test_pinned_sandbox_handle_preservation_and_repulsion_sandbox_isolation() {
     // Bug 1: PINNED | SANDBOX lane must retain its `active_sandbox_lane` handle after RepulsionEscape.
-    let mut hub = ActionHubEngine::new();
+    let mut hub = StigmergicSubstrate::new();
     let pinned_sb = hub
-        .allocate_workbench_lane(&WorkbenchSlotSpec {
+        .allocate_lane(&WorkbenchSlotSpec {
             placement: WorkbenchLanePlacement::Explicit { lane: 5, pin: true },
             weight: 0.75,
             flags: WORKBENCH_LANE_FLAG_PINNED | WORKBENCH_LANE_FLAG_SANDBOX,
@@ -2932,17 +2932,11 @@ fn test_workbench_pinned_sandbox_handle_preservation_and_repulsion_sandbox_isola
     let mut ctx_base = RuntimeContext::new(Config::default()).unwrap();
     let mut ctx_sb_rep = RuntimeContext::new(Config::default()).unwrap();
     let std_spec = WorkbenchSlotSpec::explicit(0, false, 0, 1.0, [32; MAX_ATTENTION_HEADS]);
-    let _ = ctx_base
-        .action_hub_mut()
-        .allocate_workbench_lane(&std_spec)
-        .unwrap();
+    let _ = ctx_base.substrate_mut().allocate_lane(&std_spec).unwrap();
+    let _ = ctx_sb_rep.substrate_mut().allocate_lane(&std_spec).unwrap();
     let _ = ctx_sb_rep
-        .action_hub_mut()
-        .allocate_workbench_lane(&std_spec)
-        .unwrap();
-    let _ = ctx_sb_rep
-        .action_hub_mut()
-        .allocate_workbench_lane(&WorkbenchSlotSpec {
+        .substrate_mut()
+        .allocate_lane(&WorkbenchSlotSpec {
             placement: WorkbenchLanePlacement::Explicit {
                 lane: 6,
                 pin: false,

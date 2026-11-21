@@ -1621,6 +1621,7 @@ impl<'a> GcsoFourSectionView<'a> {
         let num_trails = trails_byte_len / size_of::<gcso_pointer_trail_t>();
         let trails = gcso_pointer_trail_t::slice_from_bytes_at(bytes, off_trails, num_trails)?;
 
+        // SAFETY: `gcso_snapshot_header_t` is 128-byte aligned (`>= 8`) `#[repr(C)]` POD of 16 `u64` words; offset 9*8 = 72 is in-bounds.
         #[cfg(target_endian = "little")]
         let pad_w0 = unsafe { *core::ptr::from_ref(header).cast::<u64>().add(9) };
         #[cfg(target_endian = "little")]
@@ -1742,12 +1743,16 @@ impl<'a> GcsoFourSectionView<'a> {
                     let w6_off1 = w6_off0 + size_of::<CrystallizedAttractorRecord>();
                     let w6_off2 = w6_off1 + size_of::<CrystallizedAttractorRecord>();
                     let w6_off3 = w6_off2 + size_of::<CrystallizedAttractorRecord>();
+                    // SAFETY: `buf` is >= 8-byte aligned and `w6_off0 + 8 <= total_len`.
                     let rec_crc0 =
                         (unsafe { *buf.as_ptr().add(w6_off0).cast::<u64>() } >> 32) as u32;
+                    // SAFETY: `buf` is >= 8-byte aligned and `w6_off1 + 8 <= total_len`.
                     let rec_crc1 =
                         (unsafe { *buf.as_ptr().add(w6_off1).cast::<u64>() } >> 32) as u32;
+                    // SAFETY: `buf` is >= 8-byte aligned and `w6_off2 + 8 <= total_len`.
                     let rec_crc2 =
                         (unsafe { *buf.as_ptr().add(w6_off2).cast::<u64>() } >> 32) as u32;
+                    // SAFETY: `buf` is >= 8-byte aligned and `w6_off3 + 8 <= total_len`.
                     let rec_crc3 =
                         (unsafe { *buf.as_ptr().add(w6_off3).cast::<u64>() } >> 32) as u32;
                     let s0 = crc32_crystal_stamp_contrib_128b(rec_crc0);
@@ -1763,8 +1768,10 @@ impl<'a> GcsoFourSectionView<'a> {
                     let w6_off0 =
                         off_crystals + idx * size_of::<CrystallizedAttractorRecord>() + 48;
                     let w6_off1 = w6_off0 + size_of::<CrystallizedAttractorRecord>();
+                    // SAFETY: `buf` is >= 8-byte aligned and `w6_off0 + 8 <= total_len`.
                     let rec_crc0 =
                         (unsafe { *buf.as_ptr().add(w6_off0).cast::<u64>() } >> 32) as u32;
+                    // SAFETY: `buf` is >= 8-byte aligned and `w6_off1 + 8 <= total_len`.
                     let rec_crc1 =
                         (unsafe { *buf.as_ptr().add(w6_off1).cast::<u64>() } >> 32) as u32;
                     let s0 = crc32_crystal_stamp_contrib_128b(rec_crc0);
@@ -1774,6 +1781,7 @@ impl<'a> GcsoFourSectionView<'a> {
                 }
                 if idx < num_crystals {
                     let w6_off = off_crystals + idx * size_of::<CrystallizedAttractorRecord>() + 48;
+                    // SAFETY: `buf` is >= 8-byte aligned and `w6_off + 8 <= total_len`.
                     let rec_crc = (unsafe { *buf.as_ptr().add(w6_off).cast::<u64>() } >> 32) as u32;
                     crc = crc32_fold_stamped_crystal_128b(crc, rec_crc);
                 }

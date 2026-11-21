@@ -344,13 +344,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             probe_res.steered_layers,
             probe_res.baseline_inter_layer_coherence,
             probe_res.baseline_entropy,
-            adapter.action_hub().thresholds.reinforcement_gain,
-            adapter.action_hub().thresholds.inertial_skip_entropy_thresh,
-            adapter.action_hub().thresholds.rank1_inject_density_thresh,
+            adapter.substrate().thresholds.reinforcement_gain,
+            adapter.substrate().thresholds.inertial_skip_entropy_thresh,
+            adapter.substrate().thresholds.rank1_inject_density_thresh,
         );
 
         if !step2_only {
-            // Compare manual max_rad vs Gateway structural hyperparameters vs Resonant slice vs ActionHub.
+            // Compare manual max_rad vs Gateway structural hyperparameters vs Resonant slice vs StigmergicSubstrate.
             // tuple: (label, layer_mask, rope_rad, srl_scale, use_two_origin, use_resonant_slice)
             let configs: [(&str, u64, f32, f32, bool, bool); 6] = [
                 ("Baseline", 0xFFFF_FFFF, 0.00, 0.00, false, false),
@@ -372,7 +372,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     false,
                     true,
                 ),
-                ("Top16 + ActionHub", 0xFFFF_0000, -2.00, -1.00, false, true),
+                ("Top16 + Substrate", 0xFFFF_0000, -2.00, -1.00, false, true),
             ];
 
             println!(
@@ -382,7 +382,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             for (label, layer_mask, rope_rad, srl_scale, use_two_origin, use_resonant) in configs {
                 adapter.set_layer_rope_mask(layer_mask);
-                adapter.reset_action_hub_stats();
+                adapter.reset_substrate_stats();
                 let use_edbc = rope_rad <= -1.5;
                 let mut sum_kl = 0.0_f32;
                 let mut sum_d_lp = 0.0_f32;
@@ -398,7 +398,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     suite.probes.iter().zip(baselines.iter()).enumerate()
                 {
                     model.clear_cache();
-                    let counts_before = *adapter.action_hub_decision_counts();
+                    let counts_before = *adapter.substrate_decision_counts();
                     let formatted = format_phi4_prompt(prompt);
                     let ids = tokenizer
                         .encode(formatted.as_str(), false)
@@ -494,7 +494,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     forb_hits += p_forb;
                     forb_total += forbidden.len();
 
-                    let counts_after = *adapter.action_hub_decision_counts();
+                    let counts_after = *adapter.substrate_decision_counts();
                     let mut delta = [0_u64; 7];
                     for i in 0..7 {
                         delta[i] = counts_after[i].saturating_sub(counts_before[i]);
@@ -508,7 +508,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         delta,
                         rho: trail.stigmergic_density,
                         steps: trail.step_count,
-                        h_tilde: adapter.action_hub().last_entropy_h_tilde,
+                        h_tilde: adapter.substrate().last_entropy_h_tilde,
                     });
                 }
 
@@ -536,7 +536,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if rope_rad <= -1.5 {
                     let snap = adapter.telemetry_snapshot();
                     println!(
-                    "   [ActionHub] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% sub-head router={:.1}% Rank-1 residual={:.1}% Crystal={:.1}% Repulse={:.1}%",
+                    "   [Substrate] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% sub-head router={:.1}% Rank-1 residual={:.1}% Crystal={:.1}% Repulse={:.1}%",
                     snap.system.continuous_standard_steps,
                     snap.decision_ratios_pct[0],
                     snap.decision_ratios_pct[1],
@@ -561,7 +561,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     dwell.quiescent_dwell_steps,
                 );
                 }
-                if label == "Baseline" || label == "Top16 + ActionHub" {
+                if label == "Baseline" || label == "Top16 + Substrate" {
                     println!("   --- Per-Probe Trace ({label}) ---");
                     for (idx, tr) in probe_traces.iter().enumerate() {
                         let d_sum: u64 = tr.delta.iter().sum::<u64>().max(1);
@@ -618,7 +618,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     false,
                 ),
                 (
-                    "ActionHub",
+                    "Substrate",
                     0xFFFF_0000_u64,
                     -2.00_f32,
                     -1.00_f32,
@@ -627,13 +627,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
             ] {
                 adapter.set_layer_rope_mask(layer_mask);
-                adapter.reset_action_hub_stats();
+                adapter.reset_substrate_stats();
                 model.clear_cache();
                 let mut trail = gcso_pointer_trail_t::default();
                 let mut offset = 0_usize;
                 println!("-- {mode_label} --");
                 for (turn_name, prompt) in turns {
-                    let counts_before = *adapter.action_hub_decision_counts();
+                    let counts_before = *adapter.substrate_decision_counts();
                     let turn_text = if offset == 0 {
                         format_phi4_prompt(prompt)
                     } else {
@@ -708,7 +708,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .decode(&gen_ids, true)
                         .map_err(|e| format!("decode error: {e}"))?
                         .replace('\n', " ");
-                    let counts_after = *adapter.action_hub_decision_counts();
+                    let counts_after = *adapter.substrate_decision_counts();
                     let mut d = [0_u64; 7];
                     for i in 0..7 {
                         d[i] = counts_after[i].saturating_sub(counts_before[i]);
@@ -717,7 +717,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "  [{turn_name}] rho={:.3} steps={} H={:.3} modes=[Pas={} Skp={} Exp={} sub-head router={} Rank-1 residual={} Cry={} Rep={}] => {text}",
                     trail.stigmergic_density,
                     trail.step_count,
-                    adapter.action_hub().last_entropy_h_tilde,
+                    adapter.substrate().last_entropy_h_tilde,
                     d[0], d[1], d[2], d[3], d[4], d[5], d[6],
                 );
                 }
@@ -1190,11 +1190,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut slow_loop_last_dwell_delta = 0_i8;
         let mut slow_loop_last_repulse_bias = 0_i8;
         let mut slow_loop_last_express_thresh =
-            adapter.action_hub().thresholds.express_steer_density_thresh;
+            adapter.substrate().thresholds.express_steer_density_thresh;
         let mut slow_loop_last_rank1_thresh =
-            adapter.action_hub().thresholds.rank1_inject_density_thresh;
+            adapter.substrate().thresholds.rank1_inject_density_thresh;
         let mut slow_loop_last_skip_thresh =
-            adapter.action_hub().thresholds.inertial_skip_entropy_thresh;
+            adapter.substrate().thresholds.inertial_skip_entropy_thresh;
         let mut step2_ctx_hits = 0_usize;
         let mut step2_exp_hits = 0_usize;
         let mut step2_exp_total = 0_usize;
@@ -1521,7 +1521,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let gate_in = ReflectionGateInput {
                             boundary_sensitivity_q7: recall.venn_partition.boundary_sensitivity_q7,
                             has_undigested_known_unknown: recall.is_known_unknown_exterior,
-                            exit_entropy_h_tilde: adapter.action_hub().last_entropy_h_tilde,
+                            exit_entropy_h_tilde: adapter.substrate().last_entropy_h_tilde,
                             guard_conflict_margin: query_guard_m,
                             is_true_void: matches!(
                                 query_void_state,
@@ -1765,7 +1765,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ood_bleed_hits += 1;
                 }
             }
-            lane_util_sum += adapter.action_hub().slot_enabled_mask.count_ones() as f32 / 8.0;
+            lane_util_sum += adapter.substrate().slot_enabled_mask.count_ones() as f32 / 8.0;
             lane_util_cnt += 1;
             if matches!(
                 *run_horizon_mode,
@@ -1891,7 +1891,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let dwell = adapter.horizon_dwell();
         let spillover = adapter.residual_spillover();
         let action_line = format!(
-            "  [ActionHub] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% sub-head={:.1}% Rank-1={:.1}% Crystal={:.1}% Repulse={:.1}%",
+            "  [Substrate] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% sub-head={:.1}% Rank-1={:.1}% Crystal={:.1}% Repulse={:.1}%",
             step_tlm.continuous_standard_steps,
             step_tlm.decision_pct(0),
             step_tlm.decision_pct(1),
@@ -2251,8 +2251,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &["XML", "HTTP"],
                 ),
                 (
-                    "T5:ActionHub",
-                    "How many attention heads and stigmergic micro-cells does ActionHub orchestrate?",
+                    "T5:Substrate",
+                    "How many attention heads and stigmergic micro-cells does the substrate orchestrate?",
                     &["64", "8", "GatewayFrame"],
                     &["24 GB", "LoRA"],
                 ),
@@ -2494,7 +2494,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .venn_partition
                                     .boundary_sensitivity_q7,
                                 has_undigested_known_unknown: recall.is_known_unknown_exterior,
-                                exit_entropy_h_tilde: adapter.action_hub().last_entropy_h_tilde,
+                                exit_entropy_h_tilde: adapter.substrate().last_entropy_h_tilde,
                                 guard_conflict_margin: recall.guard_conflict_margin,
                                 is_true_void: matches!(
                                     recall.void_state,

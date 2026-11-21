@@ -297,31 +297,31 @@ fn test_gcso_types_abi_layout_invariants() {
         56
     );
 
-    // Verify ActionHubEngine 2,816 B Pod layout and anonymous workbench bitmasks
-    assert_eq!(size_of::<liminika_core::ActionHubEngine>(), 2816);
-    assert_eq!(align_of::<liminika_core::ActionHubEngine>(), 128);
+    // Verify StigmergicSubstrate 2,816 B Pod layout and anonymous lane bitmasks
+    assert_eq!(size_of::<liminika_core::StigmergicSubstrate>(), 2816);
+    assert_eq!(align_of::<liminika_core::StigmergicSubstrate>(), 128);
     assert_eq!(
-        offset_of!(liminika_core::ActionHubEngine, slot_enabled_mask),
+        offset_of!(liminika_core::StigmergicSubstrate, slot_enabled_mask),
         2810
     );
     assert_eq!(
-        offset_of!(liminika_core::ActionHubEngine, last_decision),
+        offset_of!(liminika_core::StigmergicSubstrate, last_decision),
         2811
     );
     assert_eq!(
-        offset_of!(liminika_core::ActionHubEngine, slot_pinned_mask),
+        offset_of!(liminika_core::StigmergicSubstrate, slot_pinned_mask),
         2812
     );
     assert_eq!(
-        offset_of!(liminika_core::ActionHubEngine, slot_repulsion_mask),
+        offset_of!(liminika_core::StigmergicSubstrate, slot_repulsion_mask),
         2813
     );
     assert_eq!(
-        offset_of!(liminika_core::ActionHubEngine, slot_sandbox_mask),
+        offset_of!(liminika_core::StigmergicSubstrate, slot_sandbox_mask),
         2814
     );
     assert_eq!(
-        offset_of!(liminika_core::ActionHubEngine, reserved_align128),
+        offset_of!(liminika_core::StigmergicSubstrate, reserved_align128),
         2815
     );
     assert_eq!(liminika_core::stigmergy::ATTRACTOR_SLOT_TEMPORAL, 5);

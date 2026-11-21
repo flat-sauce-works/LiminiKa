@@ -1,8 +1,8 @@
 // name: src/core/src/runtime/gateway/mod.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Level 4 Gateway (`signals`, `frame`, `orchestrator`, `closed_loop`, and distributed
-//! `bridges` implementing Gateway/Signal integration over Lv.1-Lv.3 types).
+//! Level 4 Gateway (`signals`, `frame`, `orchestrator`, and distributed `bridges`
+//! implementing Gateway/Signal integration over Lv.1-Lv.3 types).
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -93,12 +93,12 @@ use crate::liminal::{
     DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_HEX, GCSO_ERROR_ACTION_HUB_FULL,
     GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
     NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES, SCOPE_REGION_KNOWN_UNKNOWN,
-    SCOPE_REGION_SELF_EXCLUSIVE, SCOPE_REGION_SHARED_CORE, THRESHOLD_ACTION_HUB_WIDE,
-    THRESHOLD_CAUSAL_PROVENANCE, THRESHOLD_COGNITIVE_CIRCUIT, THRESHOLD_COHOMOLOGY_ENTROPY,
-    THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_DISSIPATIVE_CRYSTAL, THRESHOLD_FAST_PATH_LEDGER,
-    THRESHOLD_KV_PHASE_CACHE, THRESHOLD_MANIFOLD_GATEWAY, THRESHOLD_MAPPED_STORAGE,
-    THRESHOLD_OBJECTIVE_FACT, THRESHOLD_PHASE_STEERING, THRESHOLD_POINTER_TRAIL,
-    THRESHOLD_RANK1_RESIDUAL, THRESHOLD_RELATIVE_COUPLING, THRESHOLD_STIGMERGIC_CONSENSUS,
+    SCOPE_REGION_SELF_EXCLUSIVE, SCOPE_REGION_SHARED_CORE, THRESHOLD_CAUSAL_PROVENANCE,
+    THRESHOLD_COGNITIVE_CIRCUIT, THRESHOLD_COHOMOLOGY_ENTROPY, THRESHOLD_CONTRADICTION_GUARD,
+    THRESHOLD_DISSIPATIVE_CRYSTAL, THRESHOLD_FAST_PATH_LEDGER, THRESHOLD_KV_PHASE_CACHE,
+    THRESHOLD_MANIFOLD_GATEWAY, THRESHOLD_MAPPED_STORAGE, THRESHOLD_OBJECTIVE_FACT,
+    THRESHOLD_PHASE_STEERING, THRESHOLD_POINTER_TRAIL, THRESHOLD_RANK1_RESIDUAL,
+    THRESHOLD_RELATIVE_COUPLING, THRESHOLD_STIGMERGIC_CONSENSUS, THRESHOLD_STIGMERGY_WIDE,
     THRESHOLD_SUBHEAD_ROUTING, THRESHOLD_SUBJECTIVE_PERSONA, THRESHOLD_SYSTEM_CONSTRAINT,
 };
 #[allow(unused_imports)]
@@ -117,9 +117,9 @@ use crate::runtime::telemetry::LayerDistortionKind;
 #[allow(unused_imports)]
 use crate::stigmergy::{
     ATTRACTOR_SLOT_CRYSTALLIZED, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
-    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_ACTION_HUB_CAPACITY,
-    DEFAULT_FACT_PHASE_CLAMP_RAD, DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO,
-    DEFAULT_PERSONA_PHASE_CLAMP_RAD, DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
+    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_FACT_PHASE_CLAMP_RAD,
+    DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO, DEFAULT_PERSONA_PHASE_CLAMP_RAD,
+    DEFAULT_SUBSTRATE_CAPACITY, DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
     DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, GCSO_CRYSTAL_RECORD_MAGIC,
     GCSO_CRYSTAL_RECORD_VERSION, LEDGER_HISTORY_LEN,
 };
@@ -143,32 +143,30 @@ use crate::stigmergy::attractor::hash_prompt_to_q7_phases;
 #[allow(unused_imports)]
 use crate::stigmergy::{
     gcso_anchor_type_t, gcso_ledger_slot_t, gcso_pointer_trail_t, swar_mean_u8_le128_x8,
-    trail_phase_words_mut, trail_phase_words_ref, validate_optional_qk_tensors, ActionHub,
-    ActionHubEngine, ActionOrchestrationReport, AttractorAnchor, AttractorGrowthReport,
-    CognitiveCircuitActivation, CognitiveCircuitBank, CognitiveCircuitBankOps, CognitiveOpKind,
-    CognitiveStepOp, CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter,
-    CrystallizedAnchorRecord, CrystallizedAttractorRecord, DissipativeOverflowReport,
-    EpisodicPhaseSample, FastPathLedger, PhaseSteeringEngine, RelativeAttractorNode,
-    ResidualAdapterEngine, SandboxLifecycleEvent, StigmergicActionDecision,
+    trail_phase_words_mut, trail_phase_words_ref, validate_optional_qk_tensors, AttractorAnchor,
+    AttractorGrowthReport, CognitiveCircuitActivation, CognitiveCircuitBank,
+    CognitiveCircuitBankOps, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
+    ContrastivePhaseBloomFilter, CrystallizedAnchorRecord, CrystallizedAttractorRecord,
+    DissipativeOverflowReport, EpisodicPhaseSample, FastPathLedger, PhaseSteeringEngine,
+    RelativeAttractorNode, ResidualAdapterEngine, SandboxLifecycleEvent, StigmergicActionDecision,
     StigmergicFragmentEnsembleReport, StigmergicGranuleField, StigmergicOverlapSerendipityReport,
-    StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicThresholds,
-    WorkbenchSlotSpec, ACTION_HUB_INLINE_TRAILS, DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
-    DEFAULT_STIGMERGIC_TOLERANCE_Q7, GCSO_ANCHOR_TYPE_CRYSTALLIZED,
-    LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
+    StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicSubstrate,
+    StigmergicSubstrateOps, StigmergicThresholds, SubstrateStepReport, WorkbenchSlotSpec,
+    DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, DEFAULT_STIGMERGIC_TOLERANCE_Q7,
+    GCSO_ANCHOR_TYPE_CRYSTALLIZED, LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
     LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED,
     LEDGER_METRIC_RANK1_INJECTED, LEDGER_METRIC_REPULSION_APPLIED,
     LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY,
-    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
+    SUBSTRATE_INLINE_TRAILS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_PHASE_STEER_ACTIVE, TRAIL_FLAG_PHEROMONE_RISING,
     TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE, TRAIL_SWARM_QUORUM_MASK,
     TRAIL_SWARM_QUORUM_SHIFT,
 };
 
 pub mod bridges;
-pub mod closed_loop;
 pub mod frame;
 pub mod orchestrator;
 pub mod signals;
 
 pub(crate) use self::frame::tangent_cosine_active_heads_64;
-pub use self::{bridges::*, closed_loop::*, frame::*, orchestrator::*, signals::*};
+pub use self::{bridges::*, frame::*, orchestrator::*, signals::*};

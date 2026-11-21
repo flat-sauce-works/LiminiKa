@@ -110,7 +110,7 @@ pub struct DynamicAttractorRecall<'a> {
     pub min_local_void_depth: f32,
     /// Highest Guard resonance minus highest Fact/Persona resonance (`> 0` indicates guard-dominant conflict).
     pub guard_conflict_margin: f32,
-    /// `ActionHub` regime selected by the upper boundary stratum (`PassiveSidecar`, `InertialLayerSkip`,
+    /// Substrate regime selected by the upper boundary stratum (`PassiveSidecar`, `InertialLayerSkip`,
     /// `ExpressPhaseSteer`, `SubHeadRoute`, `FullOrchestration`, `CrystallizeMacroBasin`, or `RepulsionEscape`).
     pub action_decision: StigmergicActionDecision,
     /// Authoritative 128-byte core [`GatewayFrame`] synthesized and arbitrated by the pipeline.
@@ -789,7 +789,7 @@ impl TextAttractorCorpus {
         pipeline.push_stratum(Box::new(PerspectiveDominoStratum {
             perspective: &perspective,
         }));
-        pipeline.push_stratum(Box::new(ActionHubBoundaryStratum {
+        pipeline.push_stratum(Box::new(SubstrateBoundaryStratum {
             gate: &CoherenceGuardGate,
         }));
         self.recall_for_query_with_strata(
@@ -857,7 +857,7 @@ impl TextAttractorCorpus {
 
     /// Scores a query's per-layer Q activations through a [`StratumPipeline`] while preserving an
     /// uncollapsed [`LocalChannelObservation`] (bidirectional Chamfer scores + per-token swarm
-    /// deposits) for [`liminika_core::stigmergy::ActionHubEngine`] trail decomposition.
+    /// deposits) for [`liminika_core::stigmergy::StigmergicSubstrate`] trail decomposition.
     ///
     /// # Errors
     ///

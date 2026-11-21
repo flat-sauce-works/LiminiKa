@@ -34,9 +34,9 @@ use crate::drivers::{
 use crate::foundation::{branchless_clamp_f32, branchless_is_finite_f32, Pod};
 use crate::liminal::{
     EpistemicPartition, EpistemicRegime, LiminalThresholdField, NUM_LIMINAL_THRESHOLD_CHANNELS,
-    NUM_STIGMERGIC_GRANULES, THRESHOLD_ACTION_HUB_WIDE, THRESHOLD_COGNITIVE_CIRCUIT,
-    THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_KV_PHASE_CACHE, THRESHOLD_MANIFOLD_GATEWAY,
-    THRESHOLD_OBJECTIVE_FACT, THRESHOLD_RELATIVE_COUPLING, THRESHOLD_STIGMERGIC_CONSENSUS,
+    NUM_STIGMERGIC_GRANULES, THRESHOLD_COGNITIVE_CIRCUIT, THRESHOLD_CONTRADICTION_GUARD,
+    THRESHOLD_KV_PHASE_CACHE, THRESHOLD_MANIFOLD_GATEWAY, THRESHOLD_OBJECTIVE_FACT,
+    THRESHOLD_RELATIVE_COUPLING, THRESHOLD_STIGMERGIC_CONSENSUS, THRESHOLD_STIGMERGY_WIDE,
     THRESHOLD_SUBJECTIVE_PERSONA, THRESHOLD_SYSTEM_CONSTRAINT,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
@@ -52,7 +52,7 @@ use crate::stigmergy::{
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LayerDistortionKind {
-    /// Core layers and ActionHub remain balanced and aligned (`0`).
+    /// Core layers and `StigmergicSubstrate` remain balanced and aligned (`0`).
     #[default]
     Aligned = 0,
     /// Passive saturation or drift without sufficient Ego corrective intervention (`1`).
@@ -66,7 +66,7 @@ pub enum LayerDistortionKind {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct LayerDistortionReport {
-    /// Largest decision share among the 7 `ActionHub` regimes (`0.0..=1.0`).
+    /// Largest decision share among the 7 `StigmergicSubstrate` regimes (`0.0..=1.0`).
     pub action_saturation_ratio: f32,
     /// Passive distortion score combining unguided stalls and single-mode saturation (`0.0..=1.0`).
     pub passive_distortion_ratio: f32,
@@ -152,10 +152,10 @@ pub const GCSO_LIMINAL_HORIZON_TOPOLOGY: [LiminalHorizonNodeDescriptor;
     },
     LiminalHorizonNodeDescriptor {
         node_id: "N7",
-        trait_name: "ActionHub",
+        trait_name: "StigmergicSubstrateOps",
         channel_idx: 7,
-        static_aperture_mask: THRESHOLD_ACTION_HUB_WIDE,
-        unknowable_void_mask: !THRESHOLD_ACTION_HUB_WIDE,
+        static_aperture_mask: THRESHOLD_STIGMERGY_WIDE,
+        unknowable_void_mask: !THRESHOLD_STIGMERGY_WIDE,
     },
 ];
 
@@ -367,8 +367,8 @@ impl LiminalTopologyTelemetrySnapshot {
         cur.write_u8_dec(self.conflict_severity_q7);
         cur.write_str("/127\"]\n");
 
-        cur.write_str("    HUB[\"ActionHub | Apt:");
-        cur.write_hex_u16(THRESHOLD_ACTION_HUB_WIDE);
+        cur.write_str("    HUB[\"L2_Substrate | Apt:");
+        cur.write_hex_u16(THRESHOLD_STIGMERGY_WIDE);
         cur.write_str(" | VoidFloor:");
         cur.write_u8_dec(self.void_floor_q7[7]);
         cur.write_str("/127 | Crystals:");
@@ -532,7 +532,7 @@ pub struct LiminalLayerTelemetry {
     pub passive_stall_events: u64,
 }
 
-/// Layer 1 (`Stigmergic`) telemetry domain: 7-regime `ActionHub` decisions, Venn overlap, and quorums.
+/// Layer 1 (`Stigmergic`) telemetry domain: 7-regime `StigmergicSubstrate` decisions, Venn overlap, and quorums.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct StigmergicLayerTelemetry {
@@ -789,7 +789,7 @@ impl CoreTelemetryBank {
             assimilation_drift_q15: 0,
             assimilation_drift_dwell: 0,
             sandbox_coherence_improve_dwell: 0,
-            derivative_alpha_q7: crate::stigmergy::action_hub::DEFAULT_DERIVATIVE_ALPHA_Q7,
+            derivative_alpha_q7: crate::stigmergy::substrate::DEFAULT_DERIVATIVE_ALPHA_Q7,
             attribution_counts: [0; 4],
             whole_token_bypass_events: 0,
             immediate_tension_damps: 0,
@@ -866,7 +866,7 @@ impl CoreTelemetryBank {
         self.assimilation_drift_q15 = 0;
         self.assimilation_drift_dwell = 0;
         self.sandbox_coherence_improve_dwell = 0;
-        self.derivative_alpha_q7 = crate::stigmergy::action_hub::DEFAULT_DERIVATIVE_ALPHA_Q7;
+        self.derivative_alpha_q7 = crate::stigmergy::substrate::DEFAULT_DERIVATIVE_ALPHA_Q7;
         self.attribution_counts = [0; 4];
         self.whole_token_bypass_events = 0;
         self.immediate_tension_damps = 0;
@@ -1639,13 +1639,13 @@ impl CoreTelemetryBank {
             LayerDistortionKind::PassiveSaturation => self
                 .derivative_alpha_q7
                 .saturating_add(12)
-                .min(crate::stigmergy::action_hub::MAX_DERIVATIVE_ALPHA_Q7),
+                .min(crate::stigmergy::substrate::MAX_DERIVATIVE_ALPHA_Q7),
             LayerDistortionKind::ActiveOverdrive => self
                 .derivative_alpha_q7
                 .saturating_sub(12)
-                .max(crate::stigmergy::action_hub::MIN_DERIVATIVE_ALPHA_Q7),
+                .max(crate::stigmergy::substrate::MIN_DERIVATIVE_ALPHA_Q7),
             LayerDistortionKind::Aligned => {
-                let nominal = crate::stigmergy::action_hub::DEFAULT_DERIVATIVE_ALPHA_Q7;
+                let nominal = crate::stigmergy::substrate::DEFAULT_DERIVATIVE_ALPHA_Q7;
                 if self.derivative_alpha_q7 > nominal {
                     self.derivative_alpha_q7.saturating_sub(2).max(nominal)
                 } else {

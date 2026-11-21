@@ -13,7 +13,7 @@ use liminika_adapter::{
 };
 use liminika_core::abi::gcso_q7_t;
 use liminika_core::runtime::{GuardPhaseAnchor, ObjectiveFact, SubjectivePersona};
-use liminika_core::stigmergy::ActionHubEngine;
+use liminika_core::stigmergy::StigmergicSubstrate;
 use tokenizers::Tokenizer;
 
 use crate::model::{Phi3Config, Phi3Model};
@@ -201,7 +201,7 @@ pub(crate) fn print_runtime_profile(
 ) {
     let geom = adapter.geometry();
     let (params, weights_mb, kv_2048_mb) = estimate_phi3_footprint(cfg, dtype, quant);
-    let hub_bytes = std::mem::size_of::<ActionHubEngine>();
+    let hub_bytes = std::mem::size_of::<StigmergicSubstrate>();
     println!(
         "[System] os={} arch={} simd={} device={:?} dtype={:?} quant={:?} load={:.2?}",
         std::env::consts::OS,

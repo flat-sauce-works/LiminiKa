@@ -369,7 +369,7 @@ impl HorizonEscalationProvider for CorpusRecallEscalationProvider<'_> {
 pub struct ModelSteeringAdapter {
     geometry: RopeGeometry,
     phase_engine: PhaseSteeringEngine,
-    action_hub: Box<ActionHubEngine>,
+    substrate: Box<StigmergicSubstrate>,
     ledger_slot: gcso_ledger_slot_t,
     telemetry: CoreTelemetryBank,
     entropy_controller: EntropyController,
@@ -428,16 +428,18 @@ impl ModelSteeringAdapter {
         let phase_engine =
             PhaseSteeringEngine::new(geometry.rotary_dim as u32, geometry.num_q_heads as u32)
                 .map_err(|e| format!("PhaseSteeringEngine::new failed: {e}"))?;
-        let mut action_hub = Box::new(
-            ActionHubEngine::with_dimensions_and_thresholds(
+        let mut substrate = Box::new(
+            StigmergicSubstrate::with_dimensions_and_thresholds(
                 geometry.rotary_dim as u32,
                 geometry.num_q_heads as u32,
                 16,
                 StigmergicThresholds::default(),
             )
-            .map_err(|e| format!("ActionHubEngine::with_dimensions_and_thresholds failed: {e}"))?,
+            .map_err(|e| {
+                format!("StigmergicSubstrate::with_dimensions_and_thresholds failed: {e}")
+            })?,
         );
-        action_hub.last_entropy_h_tilde = 0.35;
+        substrate.last_entropy_h_tilde = 0.35;
         let ledger_slot = gcso_ledger_slot_t::default();
         let entropy_controller = EntropyController::new(gcso_edbc_state_t::default());
         let residual_adapter = ResidualAdapterEngine::new(1.0, 0, 1);
@@ -468,7 +470,7 @@ impl ModelSteeringAdapter {
         Ok(Self {
             geometry,
             phase_engine,
-            action_hub,
+            substrate,
             ledger_slot,
             telemetry: CoreTelemetryBank::default(),
             entropy_controller,
@@ -515,15 +517,15 @@ impl ModelSteeringAdapter {
     /// Returns the per-regime [`StigmergicActionDecision`] invocation counts (`0..=6`) from
     /// Core Layer 1 (`StigmergicLayerTelemetry`).
     #[must_use]
-    pub const fn action_hub_decision_counts(&self) -> &[u64; 7] {
+    pub const fn substrate_decision_counts(&self) -> &[u64; 7] {
         &self.telemetry.layer1.decision_counts
     }
 
     /// Resets the `2 Primitives x 2 Drivers` telemetry bank and restores initial neutral entropy (`0.35`)
     /// for a fresh evaluation pass.
-    pub fn reset_action_hub_stats(&mut self) {
+    pub fn reset_substrate_stats(&mut self) {
         self.telemetry.reset();
-        self.action_hub.last_entropy_h_tilde = 0.35;
+        self.substrate.last_entropy_h_tilde = 0.35;
     }
 
     /// Resets core layers, horizon dwell/slots, spillover cache, thresholds, and `2 Primitives x 2 Drivers`
@@ -544,14 +546,14 @@ impl ModelSteeringAdapter {
         self.coherence_guard_slot = CoherenceHorizonGuardSlot::default();
         *self.residual_spillover = DefaultResidualSpilloverSlot::default();
         self.threshold_policy.base = self.calibrated_base_thresholds;
-        self.action_hub.thresholds = self.calibrated_base_thresholds;
-        self.action_hub.last_decision = 0;
-        self.action_hub.last_anomaly_severity = 0.0;
+        self.substrate.thresholds = self.calibrated_base_thresholds;
+        self.substrate.last_decision = 0;
+        self.substrate.last_anomaly_severity = 0.0;
         self.escalation_boundary_dirty = true;
         self.last_escalated_regime = EpistemicRegime::KnownCoherent as u8;
         self.escalated_workbench_lane = None;
         self.sandbox_workbench_lane = None;
-        let _ = self.action_hub.release_all_workbench_lanes();
+        let _ = self.substrate.release_all_lanes();
         self.active_workbench_preset = WorkbenchPreset::BalancedDialog;
         self.system_spine = SystemSpineState::new();
         self.last_venn_partition = EpistemicPartition::default();
@@ -564,7 +566,7 @@ impl ModelSteeringAdapter {
         self.turn_guard_active = false;
         self.passive_saturation_probe_steps = 0;
         self.telemetry.set_policy(self.telemetry.policy());
-        self.reset_action_hub_stats();
+        self.reset_substrate_stats();
     }
 
     /// Returns a shared reference to the `2 Primitives x 2 Drivers` [`CoreTelemetryBank`].
@@ -647,7 +649,7 @@ impl ModelSteeringAdapter {
 
     /// Resolves step/turn-local effective `(guard_active, repulsion_active)` signals for
     /// `SystemSpineState` bypass veto gating without latching onto session-persistent
-    /// `ActionHubEngine::slot_repulsion_mask`.
+    /// `StigmergicSubstrate::slot_repulsion_mask`.
     #[must_use]
     pub fn effective_spine_guard_and_repulsion(&self, obs_repulsion: bool) -> (bool, bool) {
         let guard_slot_slid_in = (self.coherence_guard_slot.activations
@@ -656,7 +658,7 @@ impl ModelSteeringAdapter {
         let guard_active =
             self.turn_guard_active || guard_slot_slid_in || self.passive_saturation_probe_steps > 0;
         let action_repulse = liminika_core::stigmergy::StigmergicActionDecision::from_u8(
-            self.action_hub.last_decision,
+            self.substrate.last_decision,
         )
             == liminika_core::stigmergy::StigmergicActionDecision::RepulsionEscape;
         let entropy_repulse = self.entropy_controller.is_repulsion_mode();
@@ -853,7 +855,7 @@ impl ModelSteeringAdapter {
     }
 
     /// Evaluates bounded Slow-Loop epoch adjustments and applies them to [`AdaptiveThresholdPolicy`],
-    /// [`ActionHubEngine`] thresholds, [`DistortionTension`], and [`EgoDifferentialNet`] GOP
+    /// [`StigmergicSubstrate`] thresholds, [`DistortionTension`], and [`EgoDifferentialNet`] GOP
     /// maintenance when `applied == true`.
     pub fn apply_slow_loop_telemetry_epoch(
         &mut self,
@@ -863,7 +865,7 @@ impl ModelSteeringAdapter {
         if adj.applied {
             self.threshold_policy.base = adj.tuned_thresholds;
             let neutral_trail = gcso_pointer_trail_t::default();
-            self.action_hub.thresholds = self.threshold_policy.resolve_thresholds(
+            self.substrate.thresholds = self.threshold_policy.resolve_thresholds(
                 &self.system_constraint,
                 &self.probe_baseline,
                 &neutral_trail,
@@ -924,15 +926,15 @@ impl ModelSteeringAdapter {
         }
     }
 
-    /// Returns a shared reference to the embedded [`ActionHubEngine`].
+    /// Returns a shared reference to the embedded [`StigmergicSubstrate`].
     #[must_use]
-    pub fn action_hub(&self) -> &ActionHubEngine {
-        &self.action_hub
+    pub fn substrate(&self) -> &StigmergicSubstrate {
+        &self.substrate
     }
 
-    /// Returns a mutable reference to the embedded [`ActionHubEngine`].
-    pub fn action_hub_mut(&mut self) -> &mut ActionHubEngine {
-        &mut self.action_hub
+    /// Returns a mutable reference to the embedded [`StigmergicSubstrate`].
+    pub fn substrate_mut(&mut self) -> &mut StigmergicSubstrate {
+        &mut self.substrate
     }
 
     /// Returns the validated [`RopeGeometry`].
@@ -960,7 +962,7 @@ impl ModelSteeringAdapter {
     }
 
     /// Writes `circuit` into the embedded [`gcso_ledger_slot_t`] so every subsequent
-    /// [`ActionHubEngine`] and the rank-1 residual step modulates [`GatewayFrame`] dynamically from this circuit.
+    /// [`StigmergicSubstrate`] and the rank-1 residual step modulates [`GatewayFrame`] dynamically from this circuit.
     pub fn set_active_circuit(&mut self, circuit: CognitiveTrajectoryLedger) {
         circuit.write_to_ledger_slot(&mut self.ledger_slot);
     }
@@ -1426,7 +1428,7 @@ impl ModelSteeringAdapter {
             }
         }
         let prev_was_sandbox = self.sandbox_workbench_lane.is_some();
-        let _ = self.action_hub.apply_workbench_preset_lanes(&specs);
+        let _ = self.substrate.apply_preset_lanes(&specs);
         self.sandbox_workbench_lane = None;
         let assim_drift = self.telemetry.assimilation_drift();
         if prev_was_sandbox || recall.is_known_unknown_exterior {
@@ -1446,15 +1448,13 @@ impl ModelSteeringAdapter {
                 if let Some(&ext_phases) = ext_entry.per_layer_q7.last() {
                     let ext_weight =
                         (ext_entry.energy * ext_score.clamp(0.20, 0.90)).clamp(0.15, 0.95);
-                    if let Ok(lane) =
-                        self.action_hub
-                            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(
-                                ext_weight, ext_phases,
-                            ))
+                    if let Ok(lane) = self
+                        .substrate
+                        .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(ext_weight, ext_phases))
                     {
                         self.sandbox_workbench_lane = Some(lane);
                         if self.sandbox_promotion_streak >= 2
-                            && self.action_hub.promote_sandbox_lane(lane).unwrap_or(false)
+                            && self.substrate.promote_sandbox_lane(lane).unwrap_or(false)
                         {
                             self.sandbox_promotions = self.sandbox_promotions.saturating_add(1);
                             self.sandbox_workbench_lane = None;
@@ -1465,7 +1465,7 @@ impl ModelSteeringAdapter {
             }
         }
         if let Some(esc_lane) = self.escalated_workbench_lane {
-            if (self.action_hub.slot_enabled_mask & (1u8 << esc_lane)) == 0 {
+            if (self.substrate.slot_enabled_mask & (1u8 << esc_lane)) == 0 {
                 self.escalated_workbench_lane = None;
             }
         }
@@ -1504,7 +1504,7 @@ impl ModelSteeringAdapter {
     }
 
     /// Switches the 8-lane working phase workbench to `preset` and atomically loads `specs`
-    /// into [`ActionHubEngine`] (preserving pinned lanes), returning the number of lanes updated.
+    /// into [`StigmergicSubstrate`] (preserving pinned lanes), returning the number of lanes updated.
     ///
     /// # Errors
     ///
@@ -1516,11 +1516,11 @@ impl ModelSteeringAdapter {
         specs: &[WorkbenchSlotSpec],
     ) -> Result<u8, String> {
         let updated = self
-            .action_hub
-            .apply_workbench_preset_lanes(specs)
-            .map_err(|e| format!("apply_workbench_preset_lanes error: {e}"))?;
+            .substrate
+            .apply_preset_lanes(specs)
+            .map_err(|e| format!("apply_preset_lanes error: {e}"))?;
         if let Some(esc_lane) = self.escalated_workbench_lane {
-            if (self.action_hub.slot_enabled_mask & (1u8 << esc_lane)) == 0 {
+            if (self.substrate.slot_enabled_mask & (1u8 << esc_lane)) == 0 {
                 self.escalated_workbench_lane = None;
             }
         }
@@ -1587,7 +1587,7 @@ impl ModelSteeringAdapter {
         self.system_constraint =
             SystemConstraint::new((), vram_pressure, gpu_frame_overrun, active_swarm_mask);
         let neutral_trail = gcso_pointer_trail_t::default();
-        self.action_hub.thresholds = self.threshold_policy.resolve_thresholds(
+        self.substrate.thresholds = self.threshold_policy.resolve_thresholds(
             &self.system_constraint,
             &self.probe_baseline,
             &neutral_trail,
@@ -1665,7 +1665,7 @@ impl ModelSteeringAdapter {
         self.probe_baseline.probe_epoch = self.probe_baseline.probe_epoch.saturating_add(1);
 
         let neutral_trail = gcso_pointer_trail_t::default();
-        self.action_hub.thresholds = self.threshold_policy.resolve_thresholds(
+        self.substrate.thresholds = self.threshold_policy.resolve_thresholds(
             &self.system_constraint,
             &self.probe_baseline,
             &neutral_trail,
@@ -1675,7 +1675,7 @@ impl ModelSteeringAdapter {
     }
 
     /// Safely re-allocates and re-initializes the Cold-Path engines (`PhaseSteeringEngine`,
-    /// `ActionHubEngine`, and `ledger_slot`) when the underlying LLM or RoPE geometry changes
+    /// `StigmergicSubstrate`, and `ledger_slot`) when the underlying LLM or RoPE geometry changes
     /// during a periodic environment probe, returning the new `probe_epoch`.
     ///
     /// # Errors
@@ -1700,20 +1700,22 @@ impl ModelSteeringAdapter {
             &neutral_trail,
             next_probe.baseline_entropy,
         );
-        let mut new_action_hub = Box::new(
-            ActionHubEngine::with_dimensions_and_thresholds(
+        let mut new_substrate = Box::new(
+            StigmergicSubstrate::with_dimensions_and_thresholds(
                 new_geometry.rotary_dim as u32,
                 new_geometry.num_q_heads as u32,
                 16,
                 calibrated,
             )
-            .map_err(|e| format!("ActionHubEngine::with_dimensions_and_thresholds failed: {e}"))?,
+            .map_err(|e| {
+                format!("StigmergicSubstrate::with_dimensions_and_thresholds failed: {e}")
+            })?,
         );
-        new_action_hub.last_entropy_h_tilde = next_probe.baseline_entropy;
+        new_substrate.last_entropy_h_tilde = next_probe.baseline_entropy;
 
         self.geometry = new_geometry;
         self.phase_engine = new_phase_engine;
-        self.action_hub = new_action_hub;
+        self.substrate = new_substrate;
         self.ledger_slot = gcso_ledger_slot_t::default();
         self.sandbox_workbench_lane = None;
         self.telemetry.reset();
@@ -1819,9 +1821,10 @@ impl ModelSteeringAdapter {
         let q7_buf = AlignedQ7Buffer16::from_slice(q7_deltas);
         let q7_aligned = AlignedSlice16::new(q7_buf.as_slice())
             .map_err(|e| format!("AlignedSlice16 error: {e}"))?;
-        let Some(active_q7) = liminika_core::liminal::Scoped::from_boundary(&q7_aligned)
-            .cut_by_lacuna(max_rad.is_finite() && max_rad > 0.0, max_rad, 0.0)
-            .into_active()
+        let Some(active_q7) =
+            liminika_core::liminal::Scoped::from_boundary(PhaseDeltaSlice(q7_aligned))
+                .cut_by_lacuna(max_rad.is_finite() && max_rad > 0.0, max_rad, 0.0)
+                .into_active()
         else {
             return Ok(());
         };
@@ -1986,15 +1989,15 @@ impl ModelSteeringAdapter {
         })
     }
 
-    /// Routes [`ManifoldGatewaySignal`] through the embedded [`ActionHubEngine`] via
-    /// [`ActionHubGatewayExt::ingest_gateway_and_steer_with_core_layers_for_geometry_safe`],
-    /// allowing the hub's stigmergic trail density, FastPathLedger fast-path state, and live
+    /// Routes [`ManifoldGatewaySignal`] through the embedded [`StigmergicSubstrate`] via
+    /// [`SubstrateGatewayExt::ingest_gateway_and_steer_with_core_layers_for_geometry_safe`],
+    /// allowing the substrate's stigmergic trail density, FastPathLedger fast-path state, and live
     /// `2 Primitives x 2 Drivers` stack (`Liminal`/`Stigmergy` x `System`/`Ego`) to autonomously modulate steering.
     ///
     /// # Errors
     ///
     /// Returns an error if `q_rot_inout` length mismatches or `liminika-core` rejects the inputs.
-    pub fn steer_layer_with_action_hub<S: ManifoldGatewaySignal + ?Sized>(
+    pub fn steer_layer_with_substrate<S: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         layer_idx: usize,
         signal: &S,
@@ -2015,7 +2018,7 @@ impl ModelSteeringAdapter {
                 &this.ego_differential_net,
                 &this.distortion_tension,
             );
-            this.action_hub
+            this.substrate
                 .ingest_gateway_and_steer_with_core_layers_for_geometry_safe(
                     signal,
                     &this.geometry,
@@ -2034,7 +2037,7 @@ impl ModelSteeringAdapter {
         })
     }
 
-    /// Orchestrates a layer's RoPE steering via [`ActionHubEngine`] using stigmergic
+    /// Orchestrates a layer's RoPE steering via [`StigmergicSubstrate`] using stigmergic
     /// evaporation + resonance-weighted reinforcement, the live 3-layer core stack, and the
     /// built-in dormant-until-destabilized [`CoherenceHorizonGuardSlot`].
     ///
@@ -2042,7 +2045,7 @@ impl ModelSteeringAdapter {
     ///
     /// Returns an error if `q_rot_inout` length mismatches or `liminika-core` rejects the inputs.
     #[allow(clippy::too_many_arguments)]
-    pub fn orchestrate_layer_rope_with_action_hub<S: ManifoldGatewaySignal + ?Sized>(
+    pub fn orchestrate_layer_rope_with_substrate<S: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         layer_idx: usize,
         signal: &S,
@@ -2076,7 +2079,7 @@ impl ModelSteeringAdapter {
         res
     }
 
-    /// Extended layer-wise orchestration pass pairing [`ActionHubEngine`] + 3-layer core stack
+    /// Extended layer-wise orchestration pass pairing [`StigmergicSubstrate`] + 3-layer core stack
     /// piercing with caller-supplied [`LatentHorizonSlot`] boundaries (dynamic slide-in/out with
     /// dwell hysteresis) and an optional cold-path [`HorizonEscalationProvider`].
     ///
@@ -2110,7 +2113,7 @@ impl ModelSteeringAdapter {
     > {
         self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
             let entropy_h_tilde =
-                entropy_h_tilde_opt.unwrap_or(this.action_hub.last_entropy_h_tilde);
+                entropy_h_tilde_opt.unwrap_or(this.substrate.last_entropy_h_tilde);
             let scale = StigmergicScaleGranularity::from_layer_ratio(
                 layer_idx,
                 this.geometry.num_layers.max(1),
@@ -2143,14 +2146,14 @@ impl ModelSteeringAdapter {
             };
             let lane_active = this
                 .escalated_workbench_lane
-                .is_some_and(|l| l < 8 && (this.action_hub.slot_enabled_mask & (1u8 << l)) != 0);
+                .is_some_and(|l| l < 8 && (this.substrate.slot_enabled_mask & (1u8 << l)) != 0);
             let should_check_escalation = this.escalation_boundary_dirty
                 || pre_trigger.epistemic_regime != this.last_escalated_regime
                 || (lane_active && pre_trigger.can_retract())
                 || (!lane_active && pre_trigger.is_destabilized());
             let escalated = if should_check_escalation {
                 let sw = this
-                    .action_hub
+                    .substrate
                     .apply_horizon_escalation(
                         &esc_req,
                         &mut this.escalated_workbench_lane,
@@ -2176,7 +2179,7 @@ impl ModelSteeringAdapter {
                 &this.distortion_tension,
             );
             let (mut frame, report, decision) = this
-                .action_hub
+                .substrate
                 .orchestrate_gateway_layer_with_core_layers_safe(
                     signal,
                     &this.geometry,
@@ -2244,10 +2247,13 @@ impl ModelSteeringAdapter {
                 &this.probe_baseline,
                 0.15_f32,
             );
-            let exterior_granule_mask = (this.last_venn_report.void_exterior_mask
-                | this.last_venn_report.serendipity_excursion_mask)
-                & !this.last_venn_report.venn_core_mask;
-            let _ = this.action_hub.step_sandbox_hypothesis_lifecycle(
+            let exterior_granule_mask = BitCut8::split(
+                this.last_venn_report.void_exterior_mask
+                    | this.last_venn_report.serendipity_excursion_mask,
+                this.last_venn_report.venn_core_mask,
+            )
+            .outside;
+            let sb_event = this.substrate.step_sandbox_hypothesis_lifecycle(
                 &mut this.telemetry,
                 &mut this.sandbox_workbench_lane,
                 decision,
@@ -2258,7 +2264,17 @@ impl ModelSteeringAdapter {
                 3,
                 3,
             );
-            this.action_hub.last_decision = decision as u8;
+            match sb_event {
+                SandboxLifecycleEvent::Promoted(_) => {
+                    this.sandbox_promotions = this.sandbox_promotions.saturating_add(1);
+                    this.sandbox_promotion_streak = 0;
+                }
+                SandboxLifecycleEvent::Released(_) => {
+                    this.sandbox_promotion_streak = 0;
+                }
+                SandboxLifecycleEvent::Idle | SandboxLifecycleEvent::Nucleated(_) => {}
+            }
+            this.substrate.last_decision = decision as u8;
             Ok((frame, report, decision))
         })
     }
@@ -2319,22 +2335,22 @@ impl ModelSteeringAdapter {
         res
     }
 
-    /// Executes norm-adaptive Rank-1 residual injection only when [`ActionHubEngine`]'s latest
+    /// Executes norm-adaptive Rank-1 residual injection only when [`StigmergicSubstrate`]'s latest
     /// [`StigmergicActionDecision`] authorizes full orchestration (`FullOrchestration` or
     /// `CrystallizeMacroBasin`), persisting Core Layer 0/1/2 Ego interventions onto `self.core_layers`.
-    /// Returns `Ok(None)` when bypassed by ActionHub.
+    /// Returns `Ok(None)` when bypassed by the substrate.
     ///
     /// # Errors
     ///
     /// Returns an error if slice lengths mismatch or `liminika-core` rejects the inputs.
-    pub fn orchestrate_layer_srl_with_action_hub<S: ManifoldGatewaySignal + ?Sized>(
+    pub fn orchestrate_layer_srl_with_substrate<S: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         signal: &S,
         hidden_inout: &mut [f32],
         u_vec: &[f32],
         v_vec: &[f32],
     ) -> Result<Option<(GatewayFrame, f32)>, String> {
-        let decision = StigmergicActionDecision::from_u8(self.action_hub.last_decision);
+        let decision = StigmergicActionDecision::from_u8(self.substrate.last_decision);
         if matches!(
             decision,
             StigmergicActionDecision::FullOrchestration
@@ -2538,7 +2554,7 @@ impl ModelSteeringAdapter {
     }
 
     /// Evaluates Top-2 sparse surrogate entropy via [`EntropyController::eval_surrogate_and_step`]
-    /// and updates `action_hub.last_entropy_h_tilde` without rescaling `logits`.
+    /// and updates `substrate.last_entropy_h_tilde` without rescaling `logits`.
     ///
     /// # Errors
     ///
@@ -2574,7 +2590,7 @@ impl ModelSteeringAdapter {
             .entropy_controller
             .eval_surrogate_and_step(p_max, p_2nd, 0.0, 0.0, 1.0, 0.1, 0.1, &mut state_out)
             .map_err(|e| format!("eval_surrogate_and_step error: {e}"))?;
-        self.action_hub.last_entropy_h_tilde = state_out.moving_z_entropy;
+        self.substrate.last_entropy_h_tilde = state_out.moving_z_entropy;
         Ok(state_out)
     }
 
@@ -2609,20 +2625,21 @@ impl ModelSteeringAdapter {
         v_vec: &[f32],
         scale_factor: f32,
     ) -> Result<(), String> {
-        let active_scale = match liminika_core::liminal::Scoped::from_boundary(scale_factor)
-            .cut_by_lacuna(scale_factor != 0.0, scale_factor, 0.0)
-        {
-            liminika_core::liminal::ScopedCut::Bottom(_) => {
-                return Err(format!(
-                    "eval_rank1_slices_fused_active error: {}",
-                    liminika_core::liminal::GCSO_ERROR_INVALID_ARGUMENT
-                ));
-            }
-            cut => match cut.into_active() {
-                Some(active) => active,
-                None => return Ok(()),
-            },
-        };
+        let active_scale =
+            match liminika_core::liminal::Scoped::from_boundary(ResidualScale(scale_factor))
+                .cut_by_lacuna(scale_factor != 0.0, scale_factor, 0.0)
+            {
+                liminika_core::liminal::ScopedCut::Bottom(_) => {
+                    return Err(format!(
+                        "eval_rank1_slices_fused_active error: {}",
+                        liminika_core::liminal::GCSO_ERROR_INVALID_ARGUMENT
+                    ));
+                }
+                cut => match cut.into_active() {
+                    Some(active) => active,
+                    None => return Ok(()),
+                },
+            };
         let d = hidden_inout.len();
         if d == 0 || u_vec.len() != d || v_vec.len() != d {
             return Err(format!(

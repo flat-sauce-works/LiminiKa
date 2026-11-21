@@ -1,7 +1,7 @@
-// name: src/core/src/stigmergy/action_hub.rs
+// name: src/core/src/stigmergy/substrate.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Stigmergic Threshold Action-Selecting Orchestrator (`ActionHubEngine`) and Sidecar
+//! Stigmergic Threshold Action-Selecting Orchestrator (`StigmergicSubstrate`) and Sidecar
 //! Pointer Table implementation.
 
 #![deny(missing_docs)]
@@ -59,10 +59,10 @@ use crate::stigmergy::ledger::{gcso_ledger_slot_t, ContrastivePhaseBloomFilter, 
 use crate::stigmergy::pheromone::PheromoneDensityOps;
 use crate::stigmergy::trail::{
     gcso_pointer_trail_t, select_rewire_bridge_and_modulate_with_preloaded_words_64,
-    trail_phase_words_mut, trail_phase_words_ref, ActionHub, PointerActionHub,
+    trail_phase_words_mut, trail_phase_words_ref, PointerSubstrate, StigmergicSubstrateOps,
 };
 use crate::stigmergy::{
-    ATTRACTOR_SLOT_REPULSION, DEFAULT_ACTION_HUB_CAPACITY, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+    ATTRACTOR_SLOT_REPULSION, DEFAULT_SLOT_COUPLING_MATRIX_8X8, DEFAULT_SUBSTRATE_CAPACITY,
     LEDGER_HISTORY_LEN, WORKBENCH_LANE_FLAG_PINNED, WORKBENCH_LANE_FLAG_REPULSION,
     WORKBENCH_LANE_FLAG_SANDBOX,
 };
@@ -75,8 +75,8 @@ use crate::stigmergy::{
     TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
-/// Number of inline 128-byte [`gcso_pointer_trail_t`] cells stored inside [`ActionHubEngine`] (`16` = 2,048 bytes).
-pub const ACTION_HUB_INLINE_TRAILS: usize = 16;
+/// Number of inline 128-byte [`gcso_pointer_trail_t`] cells stored inside [`StigmergicSubstrate`] (`16` = 2,048 bytes).
+pub const SUBSTRATE_INLINE_TRAILS: usize = 16;
 
 /// Default per-step pheromone retention factor ($\lambda_{\mathrm{retain}} = 0.95$).
 pub const DEFAULT_STIGMERGIC_EVAPORATION_RETAIN: f32 = 0.95;
@@ -116,7 +116,7 @@ const HUB_SLOT_BANK_LEN: usize = MAX_ATTRACTOR_DOMAINS * MAX_ATTENTION_HEADS;
 // ===================================================================
 
 /// Discrete next-action execution regime selected branchlessly by [`StigmergicThresholds`]
-/// inside [`ActionHubEngine`].
+/// inside [`StigmergicSubstrate`].
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum StigmergicActionDecision {
@@ -179,7 +179,7 @@ impl StigmergicActionDecision {
     }
 }
 
-/// Preset regime profile guiding lane budgets and attribute policies for [`ActionHubEngine`]'s
+/// Preset regime profile guiding lane budgets and attribute policies for [`StigmergicSubstrate`]'s
 /// anonymous 8-lane working phase workbench at prompt or epistemic regime boundaries.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -235,7 +235,7 @@ impl WorkbenchPreset {
 }
 
 /// Placement policy specifying how a phase profile is assigned to one of the 8 anonymous
-/// physical lanes (`0..=7`) inside [`ActionHubEngine::slot_phase_bank`].
+/// physical lanes (`0..=7`) inside [`StigmergicSubstrate::slot_phase_bank`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WorkbenchLanePlacement {
     /// Claims the lowest free unpinned lane (`(!enabled & !pinned).trailing_zeros()`), or evicts
@@ -274,7 +274,7 @@ impl WorkbenchLanePlacement {
     }
 }
 
-/// Zero-alloc descriptor for loading a phase profile onto [`ActionHubEngine`]'s anonymous 8-lane
+/// Zero-alloc descriptor for loading a phase profile onto [`StigmergicSubstrate`]'s anonymous 8-lane
 /// working phase workbench.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WorkbenchSlotSpec {
@@ -385,7 +385,7 @@ impl WorkbenchSlotSpec {
     }
 }
 
-/// Outcome emitted by `ActionHubEngine::step_sandbox_hypothesis_lifecycle`.
+/// Outcome emitted by `StigmergicSubstrate::step_sandbox_hypothesis_lifecycle`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxLifecycleEvent {
     /// No sandbox state transition occurred on this step.
@@ -629,8 +629,8 @@ impl StigmergicThresholds {
     }
 
     /// Evaluates the 7-regime stigmergic threshold ladder on `trail` and returns the 32-byte
-    /// [`ActionOrchestrationReport`] directly from this 32-byte [`StigmergicThresholds`] descriptor
-    /// (`0` bytes of [`ActionHubEngine`] stack allocation).
+    /// [`SubstrateStepReport`] directly from this 32-byte [`StigmergicThresholds`] descriptor
+    /// (`0` bytes of [`StigmergicSubstrate`] stack allocation).
     #[inline(always)]
     #[must_use]
     pub const fn evaluate_report_on_trail(
@@ -643,7 +643,7 @@ impl StigmergicThresholds {
         selected_trail_id: u32,
         bloom_repulsion_density: u8,
         dominant_slot: u8,
-    ) -> ActionOrchestrationReport {
+    ) -> SubstrateStepReport {
         let repulsion_triggered = ((bloom_repulsion_density >= repulsion_threshold)
             & (bloom_repulsion_density > 0))
             | ((trail.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0);
@@ -672,7 +672,7 @@ impl StigmergicThresholds {
             base_evolved.raw(),
         );
 
-        ActionOrchestrationReport {
+        SubstrateStepReport {
             evolved_ptr,
             updated_density: trail.stigmergic_density,
             phase_coherence,
@@ -822,7 +822,7 @@ impl StigmergicThresholds {
     }
 
     /// Executes a stateless one-shot stigmergic orchestration step directly from `self` and
-    /// `phase_steering` without allocating a 2,816-byte [`ActionHubEngine`] on the stack
+    /// `phase_steering` without allocating a 2,816-byte [`StigmergicSubstrate`] on the stack
     /// (`0` stack table zero-init).
     ///
     /// # Errors
@@ -839,7 +839,7 @@ impl StigmergicThresholds {
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<ActionOrchestrationReport> {
+    ) -> GcsoResult<SubstrateStepReport> {
         let qdps_min_rad = phase_steering.phase_step_min_rad();
         let ripa_clamp = phase_steering.phase_clamp_max_rad();
         let head_dim = phase_steering.head_dim() as usize;
@@ -946,7 +946,7 @@ impl StigmergicThresholds {
             logits_opt,
         )?;
 
-        Ok(ActionOrchestrationReport {
+        Ok(SubstrateStepReport {
             evolved_ptr: evolved_ptr.raw(),
             updated_density: updated_rho,
             phase_coherence: best_coh,
@@ -962,10 +962,10 @@ impl StigmergicThresholds {
 }
 
 /// 32-byte (`#[repr(C, align(32))]`) [`Pod`] report summarizing the outcome of a single
-/// stigmergic threshold action-selection step in [`ActionHubEngine`].
+/// stigmergic threshold action-selection step in [`StigmergicSubstrate`].
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct ActionOrchestrationReport {
+pub struct SubstrateStepReport {
     /// Evolved 64-bit tagged pointer (`gcso_tagged_ptr_t::raw()`) carrying the selected Action Mode and Target Slot.
     pub evolved_ptr: u64,
     /// Updated local trail pheromone density $\rho_{\mathrm{stigmergy}}$ after evaporation & reinforcement.
@@ -988,10 +988,10 @@ pub struct ActionOrchestrationReport {
     pub bloom_repulsion_density: u8,
 }
 
-// SAFETY: `ActionOrchestrationReport` is a 32-byte `#[repr(C, align(32))]` struct of primitive fields with zero implicit padding.
-unsafe impl Pod for ActionOrchestrationReport {}
+// SAFETY: `SubstrateStepReport` is a 32-byte `#[repr(C, align(32))]` struct of primitive fields with zero implicit padding.
+unsafe impl Pod for SubstrateStepReport {}
 
-impl ActionOrchestrationReport {
+impl SubstrateStepReport {
     /// Returns the typed [`StigmergicActionDecision`] enum for `self.decision`.
     #[inline(always)]
     #[must_use]
@@ -1026,8 +1026,9 @@ impl ActionOrchestrationReport {
     }
 }
 
-/// Concrete zero-allocation (`#[repr(C, align(128))]`, 2,816-byte [`Pod`]) Sidecar Pointer Table
-/// and **Stigmergic Threshold Action-Selecting Orchestrator** implementing [`ActionHub`].
+/// Concrete zero-allocation (`#[repr(C, align(128))]`, 2,816-byte [`Pod`]) micro passive carrier
+/// implementing [`StigmergicSubstrateOps`]. Accumulates pointer trails, pheromones, and rejection
+/// traces whose grounded clusters cross the `liminal` boundary to crystallize into `AttractorField`.
 ///
 /// # Memory Layout (2,816 Bytes = `22 x 128B` Cache-Line Pairs, Zero Implicit Padding)
 /// - `0..2048` (`2048B`): `trails: [gcso_pointer_trail_t; 16]` (16 inline 128B pointer trails)
@@ -1038,9 +1039,9 @@ impl ActionOrchestrationReport {
 ///   control & telemetry registers (`48B`).
 #[repr(C, align(128))]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ActionHubEngine {
+pub struct StigmergicSubstrate {
     /// Inline L1D-resident Sidecar Pointer Table (`16 x 128B = 2,048` bytes).
-    pub trails: [gcso_pointer_trail_t; ACTION_HUB_INLINE_TRAILS],
+    pub trails: [gcso_pointer_trail_t; SUBSTRATE_INLINE_TRAILS],
     /// 8-lane working phase cache window (`8 x 64B = 512` bytes, 64-byte aligned).
     pub slot_phase_bank: AlignedBuffer64<gcso_q7_t, HUB_SLOT_BANK_LEN>,
     /// Dynamic Adaptive Extension Scratchpad (64 bytes, 64-byte aligned).
@@ -1055,15 +1056,15 @@ pub struct ActionHubEngine {
     pub phase_steering: PhaseSteeringEngine,
     /// 64-bit ($8 \times 8$) cross-lane coupling bitmatrix.
     pub coupling_matrix_8x8: u64,
-    /// Total pointer transitions executed by this Action Hub.
+    /// Total pointer transitions executed on this substrate.
     pub step_counter: u64,
     /// Configured logical trail slot capacity (`>= 1`).
     pub capacity: u32,
     /// Number of active trail slots currently populated (`0..=capacity`).
     pub active_count: u32,
-    /// Circular write cursor (`0..ACTION_HUB_INLINE_TRAILS`) into `self.trails`.
+    /// Circular write cursor (`0..SUBSTRATE_INLINE_TRAILS`) into `self.trails`.
     pub write_cursor: u32,
-    /// Most recently selected candidate trail ID (`0..ACTION_HUB_INLINE_TRAILS`).
+    /// Most recently selected candidate trail ID (`0..SUBSTRATE_INLINE_TRAILS`).
     pub last_selected_trail_id: u32,
     /// Most recently observed `EntropyController` moving Z-score entropy $\tilde{H} \in [0, \ln 2]$.
     pub last_entropy_h_tilde: f32,
@@ -1087,20 +1088,20 @@ pub struct ActionHubEngine {
     pub reserved_align128: u8,
 }
 
-// SAFETY: `ActionHubEngine` is a `#[repr(C, align(128))]` composition of `Pod` structs and primitive
+// SAFETY: `StigmergicSubstrate` is a `#[repr(C, align(128))]` composition of `Pod` structs and primitive
 // arrays totaling exactly 2,816 bytes with zero implicit padding.
-unsafe impl Pod for ActionHubEngine {}
+unsafe impl Pod for StigmergicSubstrate {}
 
-impl Default for ActionHubEngine {
+impl Default for StigmergicSubstrate {
     #[inline(always)]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ActionHubEngine {
-    /// Creates a new default [`ActionHubEngine`] with `head_dim = 128`, `num_heads = 32`,
-    /// `capacity = DEFAULT_ACTION_HUB_CAPACITY`, and canonical [`StigmergicThresholds`].
+impl StigmergicSubstrate {
+    /// Creates a new default [`StigmergicSubstrate`] with `head_dim = 128`, `num_heads = 32`,
+    /// `capacity = DEFAULT_SUBSTRATE_CAPACITY`, and canonical [`StigmergicThresholds`].
     #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
@@ -1126,7 +1127,7 @@ impl ActionHubEngine {
                 flags: 0,
                 accumulated_phase_delta: [0; MAX_ATTENTION_HEADS],
                 reserved_padding: [0; 8],
-            }; ACTION_HUB_INLINE_TRAILS],
+            }; SUBSTRATE_INLINE_TRAILS],
             slot_phase_bank: AlignedBuffer64::new([0; HUB_SLOT_BANK_LEN]),
             ledger_slot: gcso_ledger_slot_t {
                 mode: 0,
@@ -1144,7 +1145,7 @@ impl ActionHubEngine {
             phase_steering,
             coupling_matrix_8x8: DEFAULT_SLOT_COUPLING_MATRIX_8X8,
             step_counter: 0,
-            capacity: DEFAULT_ACTION_HUB_CAPACITY,
+            capacity: DEFAULT_SUBSTRATE_CAPACITY,
             active_count: 0,
             write_cursor: 0,
             last_selected_trail_id: 0,
@@ -1161,7 +1162,7 @@ impl ActionHubEngine {
         }
     }
 
-    /// Creates a new [`ActionHubEngine`] configured with the specified logical `capacity`.
+    /// Creates a new [`StigmergicSubstrate`] configured with the specified logical `capacity`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `capacity == 0`.
@@ -1175,7 +1176,7 @@ impl ActionHubEngine {
         Ok(hub)
     }
 
-    /// Creates a new [`ActionHubEngine`] configured with `(head_dim, num_heads, capacity)` and
+    /// Creates a new [`StigmergicSubstrate`] configured with `(head_dim, num_heads, capacity)` and
     /// custom [`StigmergicThresholds`].
     ///
     /// # Errors
@@ -1200,7 +1201,7 @@ impl ActionHubEngine {
         Ok(hub)
     }
 
-    /// Creates a new [`ActionHubEngine`] initialized from a raw [`gcso_config_t`] descriptor.
+    /// Creates a new [`StigmergicSubstrate`] initialized from a raw [`gcso_config_t`] descriptor.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `config` dimensions or capacities are invalid.
@@ -1217,14 +1218,14 @@ impl ActionHubEngine {
         Ok(hub)
     }
 
-    /// Returns the number of populated inline trails in `self.trails` (`0..=ACTION_HUB_INLINE_TRAILS`).
+    /// Returns the number of populated inline trails in `self.trails` (`0..=SUBSTRATE_INLINE_TRAILS`).
     #[inline(always)]
     #[must_use]
     pub const fn inline_active_len(&self) -> usize {
         branchless_select_usize(
-            (self.active_count as usize) < ACTION_HUB_INLINE_TRAILS,
+            (self.active_count as usize) < SUBSTRATE_INLINE_TRAILS,
             self.active_count as usize,
-            ACTION_HUB_INLINE_TRAILS,
+            SUBSTRATE_INLINE_TRAILS,
         )
     }
 
@@ -1244,13 +1245,13 @@ impl ActionHubEngine {
     /// index `>= MAX_ATTRACTOR_DOMAINS`, or [`GCSO_ERROR_ACTION_HUB_FULL`] if `AutoFree` is
     /// requested while all 8 lanes are pinned.
     #[inline]
-    pub fn allocate_workbench_lane(&mut self, spec: &WorkbenchSlotSpec) -> GcsoResult<u8> {
+    pub fn allocate_lane(&mut self, spec: &WorkbenchSlotSpec) -> GcsoResult<u8> {
         if !branchless_is_finite_f32(spec.weight) {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
         let lane = match spec.placement {
             WorkbenchLanePlacement::AutoFree => {
-                let (active_cut, free_cut) = self.workbench_lifecycle_quadrants();
+                let (active_cut, free_cut) = self.lane_lifecycle_quadrants();
                 if free_cut.outside != 0 {
                     free_cut.outside.trailing_zeros() as u8
                 } else {
@@ -1302,7 +1303,7 @@ impl ActionHubEngine {
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `lane >= MAX_ATTRACTOR_DOMAINS`.
     #[inline]
-    pub fn release_workbench_lane(&mut self, lane: u8) -> GcsoResult<bool> {
+    pub fn release_lane(&mut self, lane: u8) -> GcsoResult<bool> {
         let lane_idx = usize::from(lane);
         if lane_idx >= MAX_ATTRACTOR_DOMAINS {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
@@ -1324,7 +1325,8 @@ impl ActionHubEngine {
     /// the count of lanes cleared.
     #[inline]
     pub fn release_unpinned_lanes(&mut self) -> u8 {
-        let mut to_clear = self.slot_enabled_mask & !self.slot_pinned_mask;
+        let (active_cut, _) = self.lane_lifecycle_quadrants();
+        let mut to_clear = active_cut.outside;
         let released = to_clear.count_ones() as u8;
         while to_clear != 0 {
             let lane_idx = to_clear.trailing_zeros() as usize;
@@ -1344,7 +1346,7 @@ impl ActionHubEngine {
     /// Releases every workbench lane (including pinned lanes), resetting all 8 lanes to the free
     /// pool and returning the count of previously enabled lanes.
     #[inline]
-    pub fn release_all_workbench_lanes(&mut self) -> u8 {
+    pub fn release_all_lanes(&mut self) -> u8 {
         let released = self.slot_enabled_mask.count_ones() as u8;
         self.slot_phase_bank.data.fill(0);
         self.slot_weights = [0.0; MAX_ATTRACTOR_DOMAINS];
@@ -1359,11 +1361,7 @@ impl ActionHubEngine {
     /// automatically reclaims any lane whose decayed weight drops below `min_weight_floor` (or
     /// reaches `0.0`). Pinned lanes remain untouched. Returns the number of reclaimed lanes.
     #[inline]
-    pub fn decay_and_reclaim_workbench_lanes(
-        &mut self,
-        retain_factor: f32,
-        min_weight_floor: f32,
-    ) -> u8 {
+    pub fn decay_and_reclaim_lanes(&mut self, retain_factor: f32, min_weight_floor: f32) -> u8 {
         let retain = if branchless_is_finite_f32(retain_factor) {
             branchless_clamp_f32(retain_factor, 0.0, 1.0)
         } else {
@@ -1374,7 +1372,8 @@ impl ActionHubEngine {
         } else {
             0.0
         };
-        let mut active_unpinned = self.slot_enabled_mask & !self.slot_pinned_mask;
+        let (active_cut, _) = self.lane_lifecycle_quadrants();
+        let mut active_unpinned = active_cut.outside;
         let mut reclaimed = 0u8;
         while active_unpinned != 0 {
             let lane = active_unpinned.trailing_zeros() as u8;
@@ -1405,7 +1404,7 @@ impl ActionHubEngine {
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `lane >= MAX_ATTRACTOR_DOMAINS`.
     #[inline]
-    pub fn pin_workbench_lane(&mut self, lane: u8, pin: bool) -> GcsoResult<()> {
+    pub fn pin_lane(&mut self, lane: u8, pin: bool) -> GcsoResult<()> {
         if usize::from(lane) >= MAX_ATTRACTOR_DOMAINS {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -1439,7 +1438,8 @@ impl ActionHubEngine {
     /// returning the number of sandbox lanes reclaimed.
     #[inline]
     pub fn release_sandbox_lanes(&mut self) -> u8 {
-        let mut targets = self.slot_enabled_mask & self.slot_sandbox_mask & !self.slot_pinned_mask;
+        let (active_cut, _) = self.lane_lifecycle_quadrants();
+        let mut targets = BitCut8::split(active_cut.outside, self.slot_sandbox_mask).inside;
         let mut released = 0u8;
         while targets != 0 {
             let lane = targets.trailing_zeros() as u8;
@@ -1461,28 +1461,28 @@ impl ActionHubEngine {
     /// Returns the bitmask of currently enabled lanes (`0..=7`) on the 8-lane working phase bank.
     #[inline(always)]
     #[must_use]
-    pub const fn active_workbench_lane_mask(&self) -> u8 {
+    pub const fn active_lane_mask(&self) -> u8 {
         self.slot_enabled_mask
     }
 
     /// Returns the bitmask of explicitly pinned workbench lanes (`0..=7`).
     #[inline(always)]
     #[must_use]
-    pub const fn workbench_pinned_mask(&self) -> u8 {
+    pub const fn pinned_lane_mask(&self) -> u8 {
         self.slot_pinned_mask
     }
 
     /// Returns the bitmask of anti-phase repulsion workbench lanes (`0..=7`).
     #[inline(always)]
     #[must_use]
-    pub const fn workbench_repulsion_mask(&self) -> u8 {
+    pub const fn repulsion_lane_mask(&self) -> u8 {
         self.slot_repulsion_mask
     }
 
     /// Returns the bitmask of isolated exterior-only sandbox workbench lanes (`0..=7`).
     #[inline(always)]
     #[must_use]
-    pub const fn workbench_sandbox_mask(&self) -> u8 {
+    pub const fn sandbox_lane_mask(&self) -> u8 {
         self.slot_sandbox_mask
     }
 
@@ -1493,7 +1493,7 @@ impl ActionHubEngine {
     /// - `free_cut.outside`: disabled & unpinned (allocatable free)
     #[inline(always)]
     #[must_use]
-    pub const fn workbench_lifecycle_quadrants(&self) -> (BitCut8, BitCut8) {
+    pub const fn lane_lifecycle_quadrants(&self) -> (BitCut8, BitCut8) {
         BitCut8::split(0xFF, self.slot_enabled_mask).refine(self.slot_pinned_mask)
     }
 
@@ -1504,7 +1504,7 @@ impl ActionHubEngine {
     /// - `attract_cut.inside`: pure sandbox hypothesis (`enabled & !repulsion & sandbox`)
     #[inline(always)]
     #[must_use]
-    pub const fn workbench_role_quadrants(&self) -> (BitCut8, BitCut8) {
+    pub const fn lane_role_quadrants(&self) -> (BitCut8, BitCut8) {
         BitCut8::split(self.slot_enabled_mask, self.slot_repulsion_mask)
             .refine(self.slot_sandbox_mask)
     }
@@ -1512,27 +1512,27 @@ impl ActionHubEngine {
     /// Returns the bitmask of workbench lanes currently free for unpinned allocation (`0..=7`).
     #[inline(always)]
     #[must_use]
-    pub const fn free_workbench_lane_mask(&self) -> u8 {
-        !self.slot_enabled_mask & !self.slot_pinned_mask
+    pub const fn free_lane_mask(&self) -> u8 {
+        self.lane_lifecycle_quadrants().1.outside
     }
 
     /// Returns the number of currently active workbench lanes (`0..=8`).
     #[inline(always)]
     #[must_use]
-    pub const fn workbench_utilization_count(&self) -> u8 {
+    pub const fn lane_utilization_count(&self) -> u8 {
         self.slot_enabled_mask.count_ones() as u8
     }
 
     /// Atomically refreshes unpinned lanes on the 8-lane working phase workbench with `specs`,
     /// preserving any explicitly pinned lanes while allocating each [`WorkbenchSlotSpec`] via
-    /// [`Self::allocate_workbench_lane`]. Returns the count of lanes loaded.
+    /// [`Self::allocate_lane`]. Returns the count of lanes loaded.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any spec has non-finite weight or an explicit
     /// lane `>= MAX_ATTRACTOR_DOMAINS`, or [`GCSO_ERROR_ACTION_HUB_FULL`] if an `AutoFree` spec
     /// cannot be satisfied because all 8 lanes are pinned.
     #[inline]
-    pub fn apply_workbench_preset_lanes(&mut self, specs: &[WorkbenchSlotSpec]) -> GcsoResult<u8> {
+    pub fn apply_preset_lanes(&mut self, specs: &[WorkbenchSlotSpec]) -> GcsoResult<u8> {
         let mut sim_pinned = self.slot_pinned_mask;
         let mut idx = 0usize;
         while idx < specs.len() {
@@ -1568,7 +1568,7 @@ impl ActionHubEngine {
         let mut updated = 0u8;
         let mut load_idx = 0usize;
         while load_idx < specs.len() {
-            let _lane = self.allocate_workbench_lane(&specs[load_idx])?;
+            let _lane = self.allocate_lane(&specs[load_idx])?;
             updated = updated.saturating_add(1);
             load_idx += 1;
         }
@@ -1608,10 +1608,10 @@ impl ActionHubEngine {
             contradiction_repulsed,
         );
 
-        let slot_idx = self.write_cursor & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
+        let slot_idx = self.write_cursor & ((SUBSTRATE_INLINE_TRAILS as u32) - 1);
         Self::copy_trail_to_slot_fast(&mut self.trails[slot_idx as usize], trail_inout);
         self.write_cursor =
-            self.write_cursor.wrapping_add(1) & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
+            self.write_cursor.wrapping_add(1) & ((SUBSTRATE_INLINE_TRAILS as u32) - 1);
         let cap = self.capacity;
         self.active_count = branchless_select_u32(
             self.active_count < cap,
@@ -1664,7 +1664,7 @@ impl ActionHubEngine {
             0.0,
             1.0,
         );
-        let slot_idx = self.write_cursor & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
+        let slot_idx = self.write_cursor & ((SUBSTRATE_INLINE_TRAILS as u32) - 1);
         let slot_usize = slot_idx as usize;
         let active_len = self.inline_active_len();
         if retain < 1.0 - 1.0e-7 {
@@ -1691,7 +1691,7 @@ impl ActionHubEngine {
         trail_inout.stigmergic_density = next_rho;
 
         self.write_cursor =
-            self.write_cursor.wrapping_add(1) & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
+            self.write_cursor.wrapping_add(1) & ((SUBSTRATE_INLINE_TRAILS as u32) - 1);
         let cap = self.capacity;
         self.active_count = branchless_select_u32(
             self.active_count < cap,
@@ -1732,7 +1732,7 @@ impl ActionHubEngine {
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<ActionOrchestrationReport> {
+    ) -> GcsoResult<SubstrateStepReport> {
         self.orchestrate_next_action_step_core(
             input_ptr,
             entropy_h_tilde,
@@ -1760,7 +1760,7 @@ impl ActionHubEngine {
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
         accumulate_ptr_phase: bool,
         macro_centroid_words: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
-    ) -> GcsoResult<ActionOrchestrationReport> {
+    ) -> GcsoResult<SubstrateStepReport> {
         let qdps_min_rad = self.phase_steering.phase_step_min_rad();
         let ripa_clamp = self.phase_steering.phase_clamp_max_rad();
         let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
@@ -1898,7 +1898,7 @@ impl ActionHubEngine {
         // through the 4-quadrant role partition (global repulsion on contradiction, standard
         // attractive otherwise; sandboxed and sandbox-repulsion lanes never leak here):
         let masked_target_slot = target_slot & ATTRACTOR_SLOT_ID_MASK;
-        let (rep_cut, attract_cut) = self.workbench_role_quadrants();
+        let (rep_cut, attract_cut) = self.lane_role_quadrants();
         let allowed_mask =
             branchless_select_u8(contradiction_repulsed, rep_cut.outside, attract_cut.outside);
         if ((allowed_mask >> masked_target_slot) & 1) != 0 {
@@ -1959,7 +1959,7 @@ impl ActionHubEngine {
         );
         self.last_decision = decision as u8;
 
-        Ok(ActionOrchestrationReport {
+        Ok(SubstrateStepReport {
             evolved_ptr: evolved_ptr.raw(),
             updated_density: updated_rho,
             phase_coherence: best_coh,
@@ -1998,12 +1998,12 @@ impl ActionHubEngine {
     /// stigmergic threshold action selection & RoPE steering from the terminal memo.
     ///
     /// Starting from a single entry memo index (`start_trail_idx`), the CPU follows up to
-    /// `max_hops` (`1..=ACTION_HUB_INLINE_TRAILS`) linked memos using a 16-bit visited bitmask
+    /// `max_hops` (`1..=SUBSTRATE_INLINE_TRAILS`) linked memos using a 16-bit visited bitmask
     /// for $\mathcal{O}(1)$ zero-allocation cycle prevention. Each coherent hop ($\mathcal{C}_{\mathrm{hop}} > 0$)
     /// contributes its phase delta to `trail_inout` and receives Hebbian/stigmergic pheromone
     /// reinforcement along the traversed pathway.
     ///
-    /// Returns `(ActionOrchestrationReport, hops_traversed, terminal_trail_idx, terminal_anchor_id, mean_chain_coherence)`.
+    /// Returns `(SubstrateStepReport, hops_traversed, terminal_trail_idx, terminal_anchor_id, mean_chain_coherence)`.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `start_trail_idx >= self.inline_active_len()` or
@@ -2019,14 +2019,14 @@ impl ActionHubEngine {
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(ActionOrchestrationReport, u32, usize, u32, f32)> {
+    ) -> GcsoResult<(SubstrateStepReport, u32, usize, u32, f32)> {
         let active_len = self.inline_active_len();
         if start_trail_idx >= active_len || max_hops == 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
         let bounded_hops = branchless_select_usize(
-            max_hops > ACTION_HUB_INLINE_TRAILS,
-            ACTION_HUB_INLINE_TRAILS,
+            max_hops > SUBSTRATE_INLINE_TRAILS,
+            SUBSTRATE_INLINE_TRAILS,
             max_hops,
         );
 
@@ -2043,7 +2043,7 @@ impl ActionHubEngine {
 
         let mut step = 0usize;
         while step < bounded_hops {
-            let bit = 1u16 << (cur_idx & (ACTION_HUB_INLINE_TRAILS - 1));
+            let bit = 1u16 << (cur_idx & (SUBSTRATE_INLINE_TRAILS - 1));
             if (visited_mask & bit) != 0 {
                 break;
             }
@@ -2128,10 +2128,10 @@ impl ActionHubEngine {
 }
 
 // ===================================================================
-// 3. Trait Implementations for `ActionHubEngine`
+// 3. Trait Implementations for `StigmergicSubstrate`
 // ===================================================================
 
-impl PhaseSteering for ActionHubEngine {
+impl PhaseSteering for StigmergicSubstrate {
     #[inline(always)]
     fn head_dim(&self) -> u32 {
         self.phase_steering.head_dim()
@@ -2143,7 +2143,7 @@ impl PhaseSteering for ActionHubEngine {
     }
 }
 
-impl FastPathLedger for ActionHubEngine {
+impl FastPathLedger for StigmergicSubstrate {
     #[inline]
     fn evaluate_auto_tune(
         &self,
@@ -2167,7 +2167,7 @@ impl FastPathLedger for ActionHubEngine {
     }
 }
 
-impl PointerActionHub for ActionHubEngine {
+impl PointerSubstrate for StigmergicSubstrate {
     #[inline]
     fn reset(&mut self) -> GcsoResult<()> {
         let active_len = self.inline_active_len();
@@ -2207,10 +2207,10 @@ impl PointerActionHub for ActionHubEngine {
         );
         trail_out.sync_flags_with_current_ptr();
 
-        let slot_idx = (self.write_cursor as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
+        let slot_idx = (self.write_cursor as usize) & (SUBSTRATE_INLINE_TRAILS - 1);
         Self::copy_trail_to_slot_fast(&mut self.trails[slot_idx], trail_out);
         self.write_cursor =
-            self.write_cursor.wrapping_add(1) & ((ACTION_HUB_INLINE_TRAILS as u32) - 1);
+            self.write_cursor.wrapping_add(1) & ((SUBSTRATE_INLINE_TRAILS as u32) - 1);
         let cap = self.capacity;
         self.active_count = branchless_select_u32(
             self.active_count < cap,
@@ -2229,7 +2229,7 @@ impl PointerActionHub for ActionHubEngine {
         if trail_id >= self.capacity {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        let inline_idx = (trail_id as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
+        let inline_idx = (trail_id as usize) & (SUBSTRATE_INLINE_TRAILS - 1);
         let min_active = ((inline_idx as u32) + 1).min(self.capacity);
         self.active_count = branchless_select_u32(
             self.active_count < min_active,
@@ -2267,7 +2267,7 @@ impl PointerActionHub for ActionHubEngine {
         }
         let clean_pull =
             branchless_min_f32(branchless_relu_f32(pull_force), MAX_ATTRACTOR_PULL_FORCE);
-        let inline_idx = (trail_id as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
+        let inline_idx = (trail_id as usize) & (SUBSTRATE_INLINE_TRAILS - 1);
         let min_active = ((inline_idx as u32) + 1).min(self.capacity);
         self.active_count = branchless_select_u32(
             self.active_count < min_active,
@@ -2288,8 +2288,8 @@ impl PointerActionHub for ActionHubEngine {
         if src_trail_id >= self.capacity || dst_trail_id >= self.capacity {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        let src_idx = (src_trail_id as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
-        let dst_idx = (dst_trail_id as usize) & (ACTION_HUB_INLINE_TRAILS - 1);
+        let src_idx = (src_trail_id as usize) & (SUBSTRATE_INLINE_TRAILS - 1);
+        let dst_idx = (dst_trail_id as usize) & (SUBSTRATE_INLINE_TRAILS - 1);
         let min_active = ((src_idx.max(dst_idx) as u32) + 1).min(self.capacity);
         self.active_count = branchless_select_u32(
             self.active_count < min_active,
@@ -2312,30 +2312,27 @@ impl PointerActionHub for ActionHubEngine {
     }
 
     #[inline(always)]
-    fn workbench_lane_mask(&self) -> u8 {
+    fn lane_mask(&self) -> u8 {
         self.slot_enabled_mask
     }
 
     #[inline(always)]
-    fn workbench_repulsion_mask(&self) -> u8 {
+    fn repulsion_lane_mask(&self) -> u8 {
         self.slot_repulsion_mask
     }
 
     #[inline(always)]
-    fn workbench_sandbox_mask(&self) -> u8 {
+    fn sandbox_lane_mask(&self) -> u8 {
         self.slot_sandbox_mask
     }
 
     #[inline(always)]
-    fn workbench_pinned_mask(&self) -> u8 {
+    fn pinned_lane_mask(&self) -> u8 {
         self.slot_pinned_mask
     }
 
     #[inline]
-    fn workbench_lane_words_and_weight(
-        &self,
-        lane: u8,
-    ) -> Option<([u64; NUM_STIGMERGIC_GRANULES], f32)> {
+    fn lane_words_and_weight(&self, lane: u8) -> Option<([u64; NUM_STIGMERGIC_GRANULES], f32)> {
         let idx = usize::from(lane);
         if idx >= MAX_ATTRACTOR_DOMAINS || ((self.slot_enabled_mask >> idx) & 1) == 0 {
             return None;
@@ -2353,7 +2350,7 @@ impl PointerActionHub for ActionHubEngine {
     }
 }
 
-impl ActionHubEngine {
+impl StigmergicSubstrate {
     /// Updates local cellular swarm cell state across PagedBlock token chunk boundaries.
     ///
     /// # Errors
@@ -2375,33 +2372,30 @@ impl ActionHubEngine {
 const _: () = {
     assert!(size_of::<StigmergicActionDecision>() == 1);
     assert!(size_of::<StigmergicThresholds>() == 32 && align_of::<StigmergicThresholds>() == 32);
-    assert!(
-        size_of::<ActionOrchestrationReport>() == 32
-            && align_of::<ActionOrchestrationReport>() == 32
-    );
-    assert!(offset_of!(ActionOrchestrationReport, evolved_ptr) == 0);
-    assert!(offset_of!(ActionOrchestrationReport, updated_density) == 8);
-    assert!(offset_of!(ActionOrchestrationReport, phase_coherence) == 12);
-    assert!(offset_of!(ActionOrchestrationReport, transition_log_prob) == 16);
-    assert!(offset_of!(ActionOrchestrationReport, selected_trail_id) == 20);
-    assert!(offset_of!(ActionOrchestrationReport, dominant_anchor_id) == 24);
-    assert!(offset_of!(ActionOrchestrationReport, decision) == 28);
-    assert!(offset_of!(ActionOrchestrationReport, action_mode_flags) == 29);
-    assert!(offset_of!(ActionOrchestrationReport, target_slot) == 30);
-    assert!(offset_of!(ActionOrchestrationReport, bloom_repulsion_density) == 31);
+    assert!(size_of::<SubstrateStepReport>() == 32 && align_of::<SubstrateStepReport>() == 32);
+    assert!(offset_of!(SubstrateStepReport, evolved_ptr) == 0);
+    assert!(offset_of!(SubstrateStepReport, updated_density) == 8);
+    assert!(offset_of!(SubstrateStepReport, phase_coherence) == 12);
+    assert!(offset_of!(SubstrateStepReport, transition_log_prob) == 16);
+    assert!(offset_of!(SubstrateStepReport, selected_trail_id) == 20);
+    assert!(offset_of!(SubstrateStepReport, dominant_anchor_id) == 24);
+    assert!(offset_of!(SubstrateStepReport, decision) == 28);
+    assert!(offset_of!(SubstrateStepReport, action_mode_flags) == 29);
+    assert!(offset_of!(SubstrateStepReport, target_slot) == 30);
+    assert!(offset_of!(SubstrateStepReport, bloom_repulsion_density) == 31);
 
-    assert!(size_of::<ActionHubEngine>() == 2816 && align_of::<ActionHubEngine>() == 128);
-    assert!(offset_of!(ActionHubEngine, trails) == 0);
-    assert!(offset_of!(ActionHubEngine, slot_phase_bank) == 2048);
-    assert!(offset_of!(ActionHubEngine, ledger_slot) == 2560);
-    assert!(offset_of!(ActionHubEngine, bloom_filter) == 2624);
-    assert!(offset_of!(ActionHubEngine, thresholds) == 2688);
-    assert!(offset_of!(ActionHubEngine, slot_enabled_mask) == 2810);
-    assert!(offset_of!(ActionHubEngine, last_decision) == 2811);
-    assert!(offset_of!(ActionHubEngine, slot_pinned_mask) == 2812);
-    assert!(offset_of!(ActionHubEngine, slot_repulsion_mask) == 2813);
-    assert!(offset_of!(ActionHubEngine, slot_sandbox_mask) == 2814);
-    assert!(offset_of!(ActionHubEngine, reserved_align128) == 2815);
+    assert!(size_of::<StigmergicSubstrate>() == 2816 && align_of::<StigmergicSubstrate>() == 128);
+    assert!(offset_of!(StigmergicSubstrate, trails) == 0);
+    assert!(offset_of!(StigmergicSubstrate, slot_phase_bank) == 2048);
+    assert!(offset_of!(StigmergicSubstrate, ledger_slot) == 2560);
+    assert!(offset_of!(StigmergicSubstrate, bloom_filter) == 2624);
+    assert!(offset_of!(StigmergicSubstrate, thresholds) == 2688);
+    assert!(offset_of!(StigmergicSubstrate, slot_enabled_mask) == 2810);
+    assert!(offset_of!(StigmergicSubstrate, last_decision) == 2811);
+    assert!(offset_of!(StigmergicSubstrate, slot_pinned_mask) == 2812);
+    assert!(offset_of!(StigmergicSubstrate, slot_repulsion_mask) == 2813);
+    assert!(offset_of!(StigmergicSubstrate, slot_sandbox_mask) == 2814);
+    assert!(offset_of!(StigmergicSubstrate, reserved_align128) == 2815);
 };
 
 #[cfg(test)]
@@ -2472,10 +2466,14 @@ mod tests {
     }
 
     #[test]
-    fn test_action_hub_engine_stigmergic_orchestration_and_gateway_kmeans() {
-        let mut hub =
-            ActionHubEngine::with_dimensions_and_thresholds(8, 2, 16, StigmergicThresholds::new())
-                .unwrap();
+    fn test_substrate_engine_stigmergic_orchestration_and_gateway_kmeans() {
+        let mut hub = StigmergicSubstrate::with_dimensions_and_thresholds(
+            8,
+            2,
+            16,
+            StigmergicThresholds::new(),
+        )
+        .unwrap();
 
         // Populate an inline candidate trail
         let mut t0 = gcso_pointer_trail_t {
@@ -2566,13 +2564,13 @@ mod tests {
 
     #[test]
     fn test_workbench_free_by_default_allocator_pin_evict_decay_and_sandbox() {
-        let mut hub = ActionHubEngine::new();
-        assert_eq!(hub.active_workbench_lane_mask(), 0x00);
-        assert_eq!(hub.workbench_pinned_mask(), 0x00);
-        assert_eq!(hub.workbench_repulsion_mask(), 0x00);
-        assert_eq!(hub.workbench_sandbox_mask(), 0x00);
-        assert_eq!(hub.free_workbench_lane_mask(), 0xFF);
-        assert_eq!(hub.workbench_utilization_count(), 0);
+        let mut hub = StigmergicSubstrate::new();
+        assert_eq!(hub.active_lane_mask(), 0x00);
+        assert_eq!(hub.pinned_lane_mask(), 0x00);
+        assert_eq!(hub.repulsion_lane_mask(), 0x00);
+        assert_eq!(hub.sandbox_lane_mask(), 0x00);
+        assert_eq!(hub.free_lane_mask(), 0xFF);
+        assert_eq!(hub.lane_utilization_count(), 0);
         assert_eq!(hub.slot_weights, [0.0; MAX_ATTRACTOR_DOMAINS]);
 
         // Deterministic AutoFree allocation fills physical lanes 0..=7 in ascending order.
@@ -2580,100 +2578,97 @@ mod tests {
         for (i, slot) in allocated.iter_mut().enumerate() {
             let weight = 0.25 + (i as f32) * 0.25;
             *slot = hub
-                .allocate_workbench_lane(&WorkbenchSlotSpec::auto_free(
+                .allocate_lane(&WorkbenchSlotSpec::auto_free(
                     weight,
                     [(i as i8) + 1; MAX_ATTENTION_HEADS],
                 ))
                 .unwrap();
             assert_eq!(*slot, i as u8);
         }
-        assert_eq!(hub.active_workbench_lane_mask(), 0xFF);
-        assert_eq!(hub.workbench_utilization_count(), 8);
-        assert_eq!(hub.free_workbench_lane_mask(), 0x00);
+        assert_eq!(hub.active_lane_mask(), 0xFF);
+        assert_eq!(hub.lane_utilization_count(), 8);
+        assert_eq!(hub.free_lane_mask(), 0x00);
 
         // Pin lowest-weight lane 0: overflow AutoFree skips pinned lane 0 and evicts lane 1 (0.50).
-        hub.pin_workbench_lane(0, true).unwrap();
-        assert_eq!(hub.workbench_pinned_mask(), 0x01);
+        hub.pin_lane(0, true).unwrap();
+        assert_eq!(hub.pinned_lane_mask(), 0x01);
         let evicted_lane = hub
-            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_repulsion(
+            .allocate_lane(&WorkbenchSlotSpec::auto_repulsion(
                 1.25,
                 [-12; MAX_ATTENTION_HEADS],
             ))
             .unwrap();
         assert_eq!(evicted_lane, 1);
-        assert_eq!(hub.workbench_repulsion_mask(), 1 << 1);
+        assert_eq!(hub.repulsion_lane_mask(), 1 << 1);
         assert_eq!(hub.slot_phase_bank.data[0], 1);
         assert_eq!(hub.slot_phase_bank.data[MAX_ATTENTION_HEADS], -12);
 
         // Pin all 8 lanes -> AutoFree returns GCSO_ERROR_ACTION_HUB_FULL without mutating.
         for lane in 0..MAX_ATTRACTOR_DOMAINS as u8 {
-            hub.pin_workbench_lane(lane, true).unwrap();
+            hub.pin_lane(lane, true).unwrap();
         }
         assert_eq!(
-            hub.allocate_workbench_lane(&WorkbenchSlotSpec::auto_free(
-                1.0,
-                [4; MAX_ATTENTION_HEADS]
-            )),
+            hub.allocate_lane(&WorkbenchSlotSpec::auto_free(1.0, [4; MAX_ATTENTION_HEADS])),
             Err(GCSO_ERROR_ACTION_HUB_FULL)
         );
 
         // Unpin lanes 1..=7, keep lane 0 pinned, then release_unpinned_lanes keeps only lane 0.
         for lane in 1..MAX_ATTRACTOR_DOMAINS as u8 {
-            hub.pin_workbench_lane(lane, false).unwrap();
+            hub.pin_lane(lane, false).unwrap();
         }
         let released = hub.release_unpinned_lanes();
         assert_eq!(released, 7);
-        assert_eq!(hub.active_workbench_lane_mask(), 0x01);
-        assert_eq!(hub.workbench_pinned_mask(), 0x01);
-        assert_eq!(hub.workbench_repulsion_mask(), 0x00);
+        assert_eq!(hub.active_lane_mask(), 0x01);
+        assert_eq!(hub.pinned_lane_mask(), 0x01);
+        assert_eq!(hub.repulsion_lane_mask(), 0x00);
         assert_eq!(hub.slot_phase_bank.data[MAX_ATTENTION_HEADS], 0);
 
         // Allocate sandbox & standard unpinned lanes, verify decay_and_reclaim preserves pinned lane 0.
         let std_lane = hub
-            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_free(
+            .allocate_lane(&WorkbenchSlotSpec::auto_free(
                 0.80,
                 [16; MAX_ATTENTION_HEADS],
             ))
             .unwrap();
         let sb_lane = hub
-            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(
+            .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(
                 0.20,
                 [32; MAX_ATTENTION_HEADS],
             ))
             .unwrap();
         assert_eq!(std_lane, 1);
         assert_eq!(sb_lane, 2);
-        assert_eq!(hub.workbench_sandbox_mask(), 1 << 2);
+        assert_eq!(hub.sandbox_lane_mask(), 1 << 2);
 
-        let reclaimed = hub.decay_and_reclaim_workbench_lanes(0.50, 0.25);
+        let reclaimed = hub.decay_and_reclaim_lanes(0.50, 0.25);
         assert_eq!(reclaimed, 1);
-        assert_eq!(hub.active_workbench_lane_mask(), (1 << 0) | (1 << 1));
-        assert_eq!(hub.workbench_sandbox_mask(), 0);
+        assert_eq!(hub.active_lane_mask(), (1 << 0) | (1 << 1));
+        assert_eq!(hub.sandbox_lane_mask(), 0);
         assert!((hub.slot_weights[0] - 0.25).abs() < 1e-6);
         assert!((hub.slot_weights[1] - 0.40).abs() < 1e-6);
 
         // Allocate sandbox lane again -> promote_sandbox_lane clears sandbox bit in-place;
         // release_sandbox_lanes prunes unpinned sandbox lanes.
         let sb2 = hub
-            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(
+            .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(
                 0.60,
                 [24; MAX_ATTENTION_HEADS],
             ))
             .unwrap();
         assert_eq!(sb2, 2);
         assert!(hub.promote_sandbox_lane(sb2).unwrap());
-        assert_eq!(hub.workbench_sandbox_mask(), 0);
-        assert_ne!(hub.active_workbench_lane_mask() & (1 << sb2), 0);
+        assert_eq!(hub.sandbox_lane_mask(), 0);
+        assert_ne!(hub.active_lane_mask() & (1 << sb2), 0);
 
         let sb3 = hub
-            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(
+            .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(
                 0.60,
                 [28; MAX_ATTENTION_HEADS],
             ))
             .unwrap();
         assert_eq!(sb3, 3);
         assert_eq!(hub.release_sandbox_lanes(), 1);
-        assert_eq!(hub.active_workbench_lane_mask() & (1 << sb3), 0);
+        assert_eq!(hub.active_lane_mask() & (1 << sb3), 0);
     }
 
     #[test]
@@ -2711,21 +2706,21 @@ mod tests {
     }
 
     #[test]
-    fn test_action_hub_bitcut8_quadrants_layout_and_eviction() {
-        assert_eq!(size_of::<ActionHubEngine>(), 2816);
-        assert_eq!(align_of::<ActionHubEngine>(), 128);
+    fn test_substrate_bitcut8_quadrants_layout_and_eviction() {
+        assert_eq!(size_of::<StigmergicSubstrate>(), 2816);
+        assert_eq!(align_of::<StigmergicSubstrate>(), 128);
 
-        let mut hub = ActionHubEngine::new();
+        let mut hub = StigmergicSubstrate::new();
         // Lane 0: standard attractive (unpinned)
         let l0 = hub
-            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_free(
+            .allocate_lane(&WorkbenchSlotSpec::auto_free(
                 1.0,
                 [12; MAX_ATTENTION_HEADS],
             ))
             .unwrap();
         // Lane 1: pinned attractive
         let l1 = hub
-            .allocate_workbench_lane(&WorkbenchSlotSpec::explicit(
+            .allocate_lane(&WorkbenchSlotSpec::explicit(
                 1,
                 true,
                 0,
@@ -2735,21 +2730,21 @@ mod tests {
             .unwrap();
         // Lane 2: global repulsion
         let l2 = hub
-            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_repulsion(
+            .allocate_lane(&WorkbenchSlotSpec::auto_repulsion(
                 0.8,
                 [-16; MAX_ATTENTION_HEADS],
             ))
             .unwrap();
         // Lane 3: pure sandbox hypothesis
         let l3 = hub
-            .allocate_workbench_lane(&WorkbenchSlotSpec::auto_sandbox(
+            .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(
                 0.6,
                 [32; MAX_ATTENTION_HEADS],
             ))
             .unwrap();
         // Lane 4: REPULSION | SANDBOX | PINNED
         let l4 = hub
-            .allocate_workbench_lane(&WorkbenchSlotSpec {
+            .allocate_lane(&WorkbenchSlotSpec {
                 placement: WorkbenchLanePlacement::Explicit { lane: 4, pin: true },
                 weight: 0.9,
                 flags: WORKBENCH_LANE_FLAG_PINNED
@@ -2759,7 +2754,7 @@ mod tests {
             })
             .unwrap();
 
-        let (active_cut, free_cut) = hub.workbench_lifecycle_quadrants();
+        let (active_cut, free_cut) = hub.lane_lifecycle_quadrants();
         assert_eq!(active_cut.inside, (1 << l1) | (1 << l4));
         assert_eq!(active_cut.outside, (1 << l0) | (1 << l2) | (1 << l3));
         assert_eq!(free_cut.inside, 0);
@@ -2768,14 +2763,14 @@ mod tests {
             0xFF
         );
 
-        let (rep_cut, attract_cut) = hub.workbench_role_quadrants();
+        let (rep_cut, attract_cut) = hub.lane_role_quadrants();
         assert_eq!(rep_cut.outside, 1 << l2);
         assert_eq!(rep_cut.inside, 1 << l4);
         assert_eq!(attract_cut.outside, (1 << l0) | (1 << l1));
         assert_eq!(attract_cut.inside, 1 << l3);
         assert_eq!(
             rep_cut.outside | rep_cut.inside | attract_cut.outside | attract_cut.inside,
-            hub.active_workbench_lane_mask()
+            hub.active_lane_mask()
         );
     }
 }

@@ -101,13 +101,14 @@ use crate::runtime::telemetry::LiminalTopologyTelemetrySnapshot;
 #[allow(unused_imports)]
 use crate::stigmergy::{
     evaluate_stigmergic_overlap_and_serendipity_words_64, trail_phase_words_mut,
-    trail_phase_words_ref, ActionHubEngine, ActionOrchestrationReport, CognitiveTrajectoryLedger,
-    ContrastivePhaseBloomFilter, CrystallizedAttractorRecord, FastPathLedger, PhaseSteeringEngine,
+    trail_phase_words_ref, CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter,
+    CrystallizedAttractorRecord, FastPathLedger, PhaseSteeringEngine,
     StigmergicFragmentEnsembleReport, StigmergicGranuleField, StigmergicOverlapSerendipityReport,
-    StigmergicReconstitutionReport, StigmergicThresholds, ATTRACTOR_SLOT_REPULSION,
-    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_CAUSE_COHOMOLOGY_REPULSION, MAX_ATTRACTOR_PULL_FORCE,
-    NUM_STIGMERGIC_GRANULES, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
-    TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
+    StigmergicReconstitutionReport, StigmergicSubstrate, StigmergicThresholds, SubstrateStepReport,
+    ATTRACTOR_SLOT_REPULSION, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
+    MAX_ATTRACTOR_PULL_FORCE, NUM_STIGMERGIC_GRANULES, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
+    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
+    TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
 /// Helper macro to catch unwinding panics and safely bridge execution into C-ABI error status codes.

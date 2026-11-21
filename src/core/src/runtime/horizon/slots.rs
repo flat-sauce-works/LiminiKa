@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Dynamic slide-in/slide-out [`LatentHorizonSlot`] boundary contracts,
-//! [`HorizonEscalationProvider`], dwell anti-chattering state, and `ActionHubEngine` escalation.
+//! [`HorizonEscalationProvider`], dwell anti-chattering state, and [`StigmergicSubstrate`] escalation.
 
 use super::*;
 
@@ -412,7 +412,7 @@ impl HorizonEscalationProvider for () {
     }
 }
 
-impl ActionHubEngine {
+impl StigmergicSubstrate {
     /// Evaluates external cold-path escalation (`escalation_provider`) against `req.trigger` and
     /// swaps phases into an anonymous free (or explicitly requested) workbench lane tracked in
     /// `active_lane_inout`, or cleanly releases that lane when `req.trigger.can_retract()` holds.
@@ -442,9 +442,7 @@ impl ActionHubEngine {
                     WorkbenchLanePlacement::AutoFree => {
                         if let Some(prev) = *active_lane_inout {
                             if usize::from(prev) < MAX_ATTRACTOR_DOMAINS
-                                && ((self.slot_enabled_mask & !self.slot_pinned_mask)
-                                    & (1u8 << prev))
-                                    != 0
+                                && (self.lane_lifecycle_quadrants().0.outside & (1u8 << prev)) != 0
                             {
                                 WorkbenchLanePlacement::Explicit {
                                     lane: prev,
@@ -463,13 +461,13 @@ impl ActionHubEngine {
                                 && usize::from(prev) < MAX_ATTRACTOR_DOMAINS
                                 && (self.slot_pinned_mask & (1u8 << prev)) == 0
                             {
-                                let _ = self.release_workbench_lane(prev)?;
+                                let _ = self.release_lane(prev)?;
                             }
                         }
                         WorkbenchLanePlacement::Explicit { lane, pin }
                     }
                 };
-                let allocated = self.allocate_workbench_lane(&WorkbenchSlotSpec {
+                let allocated = self.allocate_lane(&WorkbenchSlotSpec {
                     placement,
                     flags: req.lane_flags,
                     weight,
@@ -481,10 +479,10 @@ impl ActionHubEngine {
         } else if req.trigger.can_retract() {
             if let Some(lane) = active_lane_inout.take() {
                 if usize::from(lane) < MAX_ATTRACTOR_DOMAINS {
-                    let _ = self.release_workbench_lane(lane)?;
+                    let _ = self.release_lane(lane)?;
                 }
             } else if let WorkbenchLanePlacement::Explicit { lane, .. } = req.placement {
-                let _ = self.release_workbench_lane(lane)?;
+                let _ = self.release_lane(lane)?;
             }
         }
         Ok(false)

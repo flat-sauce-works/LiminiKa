@@ -12,15 +12,15 @@
 
 use crate::drivers::ego::intent::{EgoIntentAxes, LiminalEgoField};
 use crate::foundation::{
-    load_q7_words_64, swar_q7_circular_add_x8, swar_q7_scale_le128_with_bias_x8, Pod,
-    SWAR_SPLAT_BYTE_64,
+    branchless_q7_weighted_ensemble_words_64, load_q7_words_64, swar_q7_circular_add_x8,
+    swar_q7_scale_le128_with_bias_x8, Pod, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
     branchless_select_u32, branchless_select_u8, gcso_q7_t, AttributionTag, BitCut8,
     EpistemicPartition, Scoped, ScopedCut, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
     SCOPE_REGION_KNOWN_UNKNOWN, SCOPE_REGION_SELF_EXCLUSIVE, SCOPE_REGION_SHARED_CORE,
 };
-use crate::stigmergy::crystal::CrystallizedAttractorRecord;
+use crate::stigmergy::crystal::{CrystallizedAttractorRecord, PhaseProfile64};
 use crate::stigmergy::granule::StigmergicGranuleField;
 use crate::stigmergy::ATTRACTOR_SLOT_SYSTEM_BASELINE;
 
@@ -347,7 +347,7 @@ impl EgoDifferentialNet {
                 && (node.flags & DISTORTION_DELTA_FLAG_CONSOLIDATED_IFRAME) == 0
             {
                 let bridge_count = node.reinforce_count.min(u32::from(u8::MAX)) as u8;
-                let grounded_profile = match Scoped::from_delta(node.delta_phase_q7)
+                let grounded_profile = match Scoped::from_delta(PhaseProfile64(node.delta_phase_q7))
                     .cut_by_lacuna_q7(true, node.gain_q7.max(1), 0)
                 {
                     ScopedCut::SelfRef(aligned) => Some(aligned.into_grounded()),
@@ -443,10 +443,8 @@ impl EgoDifferentialNet {
         let mean_stig_ph = (ph_sum >> 3).clamp(24, 127);
 
         if self.max_hops <= 1 {
-            const INV_COUNT_Q7: [i32; 9] = [0, 128, 64, 43, 32, 26, 21, 18, 16];
             let mut matched_mask = 0u8;
-            let mut accum_norm_sum = 0u32;
-            let mut head_sum = [0i32; MAX_ATTENTION_HEADS];
+            let mut weights_q7 = [0u8; MAX_EGO_PFRAME_NODES];
 
             for (i, node) in self.nodes.iter().enumerate().take(MAX_EGO_PFRAME_NODES) {
                 let active = ((self.active_node_mask >> i) & 1) != 0 && node.is_baked_active();
@@ -457,12 +455,8 @@ impl EgoDifferentialNet {
                     let hop_weight_q7 =
                         (((u32::from(node.gain_q7) * eff_scale) >> 7) * sens_boost_q7) >> 7;
                     let ph_blend_q7 = (u32::from(node.pheromone_q7) + mean_stig_ph) >> 1;
-                    let dens_weight_q7 = ((hop_weight_q7 * ph_blend_q7) >> 7).clamp(8, 127);
-                    let w_i32 = dens_weight_q7 as i32;
-                    for (acc, &d_q7) in head_sum.iter_mut().zip(node.delta_phase_q7.iter()) {
-                        *acc += (i32::from(d_q7) * w_i32) >> 7;
-                    }
-                    accum_norm_sum = accum_norm_sum.saturating_add(dens_weight_q7);
+                    let dens_weight_q7 = ((hop_weight_q7 * ph_blend_q7) >> 7).clamp(8, 127) as u8;
+                    weights_q7[i] = dens_weight_q7;
                 }
             }
 
@@ -470,24 +464,14 @@ impl EgoDifferentialNet {
                 return (*base_words, 0, 0, 0, 0);
             }
 
-            let inv = INV_COUNT_Q7[(matched_mask.count_ones() as usize).min(8)];
-            let mut ensemble_q7 = [0 as gcso_q7_t; MAX_ATTENTION_HEADS];
-            for (out, &sum) in ensemble_q7.iter_mut().zip(head_sum.iter()) {
-                let prod = sum * inv;
-                let bias = if prod >= 0 { 64 } else { -64 };
-                *out = ((prod + bias) / 128).clamp(-127, 127) as gcso_q7_t;
-            }
-            let ensemble_words = load_q7_words_64(&ensemble_q7);
-            let mut out_words = *base_words;
-            for (acc_w, &ew) in out_words
-                .iter_mut()
-                .zip(ensemble_words.iter())
-                .take(NUM_STIGMERGIC_GRANULES)
-            {
-                *acc_w = swar_q7_circular_add_x8(*acc_w, ew);
-            }
-            let avg_delta = (((accum_norm_sum as i32) * inv + 64) / 128).clamp(0, 127) as u8;
-            let entry_idx = matched_mask.trailing_zeros() as u8;
+            let profiles: [&[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_EGO_PFRAME_NODES] =
+                core::array::from_fn(|i| &self.nodes[i].delta_phase_q7);
+            let (out_words, avg_delta, entry_idx) = branchless_q7_weighted_ensemble_words_64(
+                profiles,
+                &weights_q7,
+                matched_mask,
+                base_words,
+            );
             return (out_words, avg_delta, 1, entry_idx, matched_mask);
         }
 
