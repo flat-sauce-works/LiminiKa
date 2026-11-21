@@ -1925,7 +1925,7 @@ where
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     if !blended_uni && avx_precomputed_tag.is_none() {
         // SAFETY: `target_feature = "avx2"` is enabled at compile time.
-        let (v0, v1) = unsafe { crate::foundation::phase_field::avx2_words64_to_vec64(&blended_w) };
+        let (v0, v1) = unsafe { crate::foundation::phase_ops::avx2_words64_to_vec64(&blended_w) };
         // SAFETY: `target_feature = "avx2"` is enabled at compile time.
         avx_precomputed_tag =
             Some(unsafe { crate::foundation::avx2_q7_mean_i8_from_vec64(v0, v1) });

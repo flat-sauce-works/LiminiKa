@@ -140,7 +140,7 @@ pub const fn validate_snapshot_header(
     }
     let min_hdr = size_of::<gcso_snapshot_header_t>() as u64;
     let total = header.total_size;
-    let daes_off = header.ledger_slot_offset as u64;
+    let ledger_off = header.ledger_slot_offset as u64;
     let offsets_in_bounds = (total >= min_hdr)
         & ((available_bytes as u64) >= total)
         & (header.action_hub_offset >= min_hdr)
@@ -153,8 +153,8 @@ pub const fn validate_snapshot_header(
         & (header.rank1_state_offset <= total)
         & (header.edbc_state_offset >= min_hdr)
         & (header.edbc_state_offset <= total)
-        & (daes_off >= min_hdr)
-        & (daes_off <= total);
+        & (ledger_off >= min_hdr)
+        & (ledger_off <= total);
     if offsets_in_bounds {
         Ok(())
     } else {
@@ -1561,14 +1561,14 @@ impl<'a> GcsoFourSectionView<'a> {
         let end_crystals = header.dpsr_state_offset as usize;
         let off_trails = header.action_hub_offset as usize;
         let off_bloom = header.edbc_state_offset as usize;
-        let off_daes = header.ledger_slot_offset as usize;
+        let off_ledger = header.ledger_slot_offset as usize;
 
         if off_crystals < GCSO_FOUR_SECTION_HEADER_BYTES
             || off_crystals > end_crystals
             || end_crystals > off_trails
             || off_trails > off_bloom
-            || off_bloom > off_daes
-            || off_daes > total_len
+            || off_bloom > off_ledger
+            || off_ledger > total_len
         {
             return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
         }
@@ -1607,13 +1607,13 @@ impl<'a> GcsoFourSectionView<'a> {
         #[cfg(target_endian = "little")]
         let pad_w0 = unsafe { *core::ptr::from_ref(header).cast::<u64>().add(9) };
         #[cfg(target_endian = "little")]
-        let (has_bloom_flag, has_daes_flag, num_reports) = (
+        let (has_bloom_flag, has_ledger_flag, num_reports) = (
             (pad_w0 & 0xFF) != 0,
             ((pad_w0 >> 8) & 0xFF) != 0,
             (pad_w0 >> 32) as usize,
         );
         #[cfg(not(target_endian = "little"))]
-        let (has_bloom_flag, has_daes_flag, num_reports) = (
+        let (has_bloom_flag, has_ledger_flag, num_reports) = (
             header.reserved_padding[0] != 0,
             header.reserved_padding[1] != 0,
             u32::from_le_bytes([
@@ -1625,7 +1625,7 @@ impl<'a> GcsoFourSectionView<'a> {
         );
 
         let has_bloom =
-            has_bloom_flag & ((off_daes - off_bloom) >= size_of::<ContrastivePhaseBloomFilter>());
+            has_bloom_flag & ((off_ledger - off_bloom) >= size_of::<ContrastivePhaseBloomFilter>());
         let bloom = if has_bloom {
             Some(ContrastivePhaseBloomFilter::from_bytes_at(
                 bytes, off_bloom,
@@ -1634,14 +1634,15 @@ impl<'a> GcsoFourSectionView<'a> {
             None
         };
 
-        let has_daes = has_daes_flag & ((total_len - off_daes) >= size_of::<gcso_ledger_slot_t>());
-        let ledger = if has_daes {
-            Some(gcso_ledger_slot_t::from_bytes_at(bytes, off_daes)?)
+        let has_ledger =
+            has_ledger_flag & ((total_len - off_ledger) >= size_of::<gcso_ledger_slot_t>());
+        let ledger = if has_ledger {
+            Some(gcso_ledger_slot_t::from_bytes_at(bytes, off_ledger)?)
         } else {
             None
         };
-        let off_reports = off_daes
-            + if has_daes {
+        let off_reports = off_ledger
+            + if has_ledger {
                 size_of::<gcso_ledger_slot_t>()
             } else {
                 0

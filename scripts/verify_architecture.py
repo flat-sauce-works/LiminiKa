@@ -75,11 +75,28 @@ DAG_AND_AXIOM_RULES: list[tuple[str, str, re.Pattern[str]]] = [
 RETIRED_LEGACY_PATHS: tuple[str, ...] = (
     "traits",
     "traits.rs",
+    "foundation/phase_field.rs",
     "stigmergy/action_hub.rs",
     "runtime/gateway/closed_loop.rs",
 )
 
-REQUIRED_CANONICAL_PATHS: tuple[str, ...] = ("stigmergy/substrate.rs",)
+REQUIRED_CANONICAL_PATHS: tuple[str, ...] = (
+    "foundation/phase_ops/mod.rs",
+    "stigmergy/substrate.rs",
+)
+
+PUB_TYPE_OR_TRAIT_RE = re.compile(
+    r"\bpub(?:\s*\([^)]*\))?\s+(?:(?:unsafe|auto)\s+)*"
+    r"(?:struct|enum|trait|type)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
+)
+
+ALLOWED_SUBSTRATE_DECLS: dict[str, tuple[str, ...]] = {
+    "StigmergicSubstrate": ("stigmergy/substrate.rs",),
+    "SubstrateStepReport": ("stigmergy/substrate.rs",),
+    "PointerSubstrate": ("stigmergy/trail.rs",),
+    "StigmergicSubstrateOps": ("stigmergy/trail.rs",),
+    "SubstrateGatewayExt": ("runtime/gateway/orchestrator.rs",),
+}
 
 SCOPED_BOUNDARY_TYPE_RE = re.compile(
     r"\b(?:Scoped\s*<|ScopedCut\b|VerifiedAligned\s*<|BoundaryViolation\s*<|SpeculativeDiscovery\s*<|BridgedDiscovery\s*<)"
@@ -356,6 +373,74 @@ def scan_scoped_boundary_violations_in_source(source: str, source_label: str = "
     return violations
 
 
+def strip_literals_preserve_lines(clean_text: str) -> str:
+    """Replace string and char literals with spaces while preserving line numbers."""
+    out: list[str] = []
+    n = len(clean_text)
+    i = 0
+    while i < n:
+        next_i = advance_past_literal(clean_text, i)
+        if next_i is not None:
+            nl_count = clean_text.count("\n", i, next_i)
+            out.append("\n" * nl_count if nl_count else " ")
+            i = next_i
+            continue
+        out.append(clean_text[i])
+        i += 1
+    return "".join(out)
+
+
+def scan_vocabulary_ownership_in_source(source: str, rel_path: str) -> list[str]:
+    """Verify public `*Field*` (attractor-only) and `*Substrate*` (stigmergy-only) ownership."""
+    norm_rel = rel_path.replace("\\", "/").lstrip("/")
+    if norm_rel.startswith("src/core/src/"):
+        norm_rel = norm_rel[len("src/core/src/"):]
+    if (
+        norm_rel.startswith("runtime/abi/")
+        or norm_rel.endswith("tests.rs")
+        or "/tests/" in f"/{norm_rel}"
+    ):
+        return []
+
+    violations: list[str] = []
+    non_test_lines = strip_cfg_test_tail(source.splitlines())
+    truncated = "\n".join(line for _lineno, line in non_test_lines)
+    clean_text = strip_comments_preserve_lines(truncated)
+    code_only = strip_literals_preserve_lines(clean_text)
+
+    for match in PUB_TYPE_OR_TRAIT_RE.finditer(code_only):
+        name = match.group("name")
+        lineno = code_only.count("\n", 0, match.start()) + 1
+        if "Field" in name:
+            if not (norm_rel.startswith("stigmergy/attractor/") and "AttractorField" in name):
+                violations.append(
+                    f"Vocabulary ownership (Field=attractor-only): {norm_rel}:{lineno}: "
+                    f"disallowed public declaration `{name}`"
+                )
+        if "Substrate" in name:
+            allowed_paths = ALLOWED_SUBSTRATE_DECLS.get(name, ())
+            if norm_rel not in allowed_paths:
+                violations.append(
+                    f"Vocabulary ownership (Substrate=stigmergy-only): {norm_rel}:{lineno}: "
+                    f"disallowed public declaration `{name}`"
+                )
+    return violations
+
+
+def check_vocabulary_ownership(core_src: pathlib.Path) -> list[str]:
+    """Verify symmetric Field (attractor-only) and Substrate (stigmergy-only) ownership."""
+    violations: list[str] = []
+    for rs_file in sorted(core_src.rglob("*.rs")):
+        if rs_file.name == "tests.rs" or "tests" in rs_file.parts:
+            continue
+        rel_path = rs_file.relative_to(core_src).as_posix()
+        if rel_path.startswith("runtime/abi/"):
+            continue
+        source = rs_file.read_text(encoding="utf-8")
+        violations.extend(scan_vocabulary_ownership_in_source(source, rel_path))
+    return violations
+
+
 def check_cross_observer_scoped_boundaries(core_src: pathlib.Path) -> list[str]:
     """Verify Lv.2..Lv.4 public cross-observer APIs do not leak `Scoped<` or retired `*_scoped*` forwarders."""
     violations: list[str] = []
@@ -408,6 +493,7 @@ def run_checks(core_src: pathlib.Path) -> list[str]:
 
     violations.extend(check_abstract_domain_invariant(core_src))
     violations.extend(check_cross_observer_scoped_boundaries(core_src))
+    violations.extend(check_vocabulary_ownership(core_src))
     return violations
 
 
@@ -563,7 +649,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Verify all DAG, isolation, axiom orthogonality, AbstractDomain, and Scoped boundary rules.",
+        help=(
+            "Verify DAG, isolation, axiom orthogonality, AbstractDomain, "
+            "Scoped boundary, and Field/Substrate ownership rules."
+        ),
     )
     parser.add_argument(
         "--mermaid",
@@ -596,14 +685,16 @@ def main(argv: list[str] | None = None) -> int:
         violations = run_checks(CORE_SRC)
         if violations:
             print(
-                "Error: 5-layer unidirectional DAG, driver isolation, axiom orthogonality, or boundary violation detected:",
+                "Error: architecture, DAG, axiom orthogonality, boundary, "
+                "or vocabulary ownership violation detected:",
                 *violations,
                 sep="\n  ",
             )
             exit_code = 1
         else:
             print(
-                "All 5-layer unidirectional DAG, spine/ego isolation, axiom orthogonality, AbstractDomain, and Scoped boundary invariants passed (0 violations)."
+                "All 5-layer DAG, spine/ego isolation, axiom orthogonality, "
+                "AbstractDomain, Scoped boundary, and Field/Substrate ownership invariants passed (0 violations)."
             )
 
     if args.hotspots:

@@ -213,7 +213,7 @@ pub(crate) fn print_runtime_profile(
         load_elapsed,
     );
     println!(
-        "[Model ] params={:.2}M weights_est={:.1}MiB kv2048_est={:.1}MiB layers={} heads={}/{} head_dim={} rotary_dim={} sidecar_hub={}B",
+        "[Model ] params={:.2}M weights_est={:.1}MiB kv2048_est={:.1}MiB layers={} heads={}/{} head_dim={} rotary_dim={} sidecar_substrate={}B",
         params as f64 / 1_000_000.0,
         weights_mb,
         kv_2048_mb,

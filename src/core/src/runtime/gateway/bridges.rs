@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Distributed `impl` blocks integrating Lv.1-Lv.3 types (`ResidualAdapterEngine`,
-//! `SystemSpineState`, `EgoDifferentialNet`, `LiminalEgoField`, `StigmergicSubstrate`,
+//! `SystemSpineState`, `EgoDifferentialNet`, `LiminalEgoState`, `StigmergicSubstrate`,
 //! `CrystallizedAttractorRecord`, `CognitiveTrajectoryLedger`, `CognitiveCircuitBank`,
 //! `gcso_pointer_trail_t`, `CrystallizedAnchorRecord`, `AttractorAnchor`, and
 //! `EntropyController`) with Lv.4 Gateway/Signal contracts.
 
 use super::*;
 use crate::drivers::{
-    DistortionTension, EgoDifferentialNet, EntropyController, LiminalEgoField, SystemSpineState,
+    DistortionTension, EgoDifferentialNet, EntropyController, LiminalEgoState, SystemSpineState,
     EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
     EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LAYER_DISTORTION, EGO_TRIGGER_LIMINAL_EXTERIOR,
     ENTROPY_GATE_MODE_NORMAL_ENTROPY, ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION,
@@ -32,7 +32,7 @@ use crate::foundation::{
 use crate::liminal::{
     branchless_select_f32, branchless_select_i32, branchless_select_i8, branchless_select_u32,
     branchless_select_u64, branchless_select_u8, branchless_select_usize, gcso_q7_t,
-    EpistemicPartition, GcsoResult, LiminalThresholdField, DEFAULT_ENTROPY_EPS,
+    EpistemicPartition, GcsoResult, LiminalThresholdState, DEFAULT_ENTROPY_EPS,
     GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
     NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
 };
@@ -46,7 +46,7 @@ use crate::stigmergy::{
     CognitiveOpKind, CognitiveTrajectoryLedger, CrystallizedAnchorRecord,
     CrystallizedAttractorRecord, DissipativeOverflowReport, EpisodicPhaseSample,
     RelativeAttractorNode, ResidualAdapterEngine, SandboxLifecycleEvent, StigmergicActionDecision,
-    StigmergicGranuleField, StigmergicOverlapSerendipityReport, StigmergicScaleGranularity,
+    StigmergicGranuleState, StigmergicOverlapSerendipityReport, StigmergicScaleGranularity,
     StigmergicSubstrate, StigmergicSubstrateOps, SubstrateStepReport, WorkbenchSlotSpec,
     ATTRACTOR_SLOT_CRYSTALLIZED, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
     ATTRACTOR_SLOT_REPULSION, DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
@@ -125,10 +125,10 @@ impl EgoDifferentialNet {
     #[must_use]
     pub fn evaluate_pframe_chain_branchless(
         &self,
-        ego: &LiminalEgoField,
+        ego: &LiminalEgoState,
         spine: &SystemSpineState,
         venn: &EpistemicPartition,
-        stigmergy: &StigmergicGranuleField,
+        stigmergy: &StigmergicGranuleState,
         tension: &DistortionTension,
         base_frame: GatewayFrame,
     ) -> (GatewayFrame, u8, u8) {
@@ -144,10 +144,10 @@ impl EgoDifferentialNet {
     #[must_use]
     pub fn evaluate_pframe_chain_with_entry_branchless(
         &self,
-        ego: &LiminalEgoField,
+        ego: &LiminalEgoState,
         spine: &SystemSpineState,
         venn: &EpistemicPartition,
-        stigmergy: &StigmergicGranuleField,
+        stigmergy: &StigmergicGranuleState,
         tension: &DistortionTension,
         base_frame: GatewayFrame,
     ) -> (GatewayFrame, u8, u8, u8) {
@@ -179,10 +179,10 @@ impl EgoDifferentialNet {
     #[must_use]
     pub fn evaluate_pframe_chain_with_mask_branchless(
         &self,
-        ego: &LiminalEgoField,
+        ego: &LiminalEgoState,
         spine: &SystemSpineState,
         venn: &EpistemicPartition,
-        stigmergy: &StigmergicGranuleField,
+        stigmergy: &StigmergicGranuleState,
         tension: &DistortionTension,
         base_frame: GatewayFrame,
     ) -> (GatewayFrame, u8, u8, u8) {
@@ -208,7 +208,7 @@ impl EgoDifferentialNet {
     }
 }
 
-impl LiminalEgoField {
+impl LiminalEgoState {
     /// Purely computes the Ego trigger mask (`fired_mask`) and modulated [`GatewayFrame`] without
     /// mutating `self`, `liminal_layer`, or `stigmergic_layer`. Used directly by read-only per-layer
     /// Hot-Path RoPE modulation so multi-layer passes never accumulate repeated sub-layer shifts.
@@ -216,8 +216,8 @@ impl LiminalEgoField {
     #[must_use]
     pub fn modulate_frame_pure(
         &self,
-        liminal_layer: &LiminalThresholdField,
-        stigmergic_layer: &StigmergicGranuleField,
+        liminal_layer: &LiminalThresholdState,
+        stigmergic_layer: &StigmergicGranuleState,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
         venn: &StigmergicOverlapSerendipityReport,
@@ -352,8 +352,8 @@ impl LiminalEgoField {
     #[must_use]
     pub fn intervene_on_sublayers_and_frame_branchless(
         &mut self,
-        liminal_layer: &mut LiminalThresholdField,
-        stigmergic_layer: &mut StigmergicGranuleField,
+        liminal_layer: &mut LiminalThresholdState,
+        stigmergic_layer: &mut StigmergicGranuleState,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
         venn: &StigmergicOverlapSerendipityReport,
@@ -365,25 +365,26 @@ impl LiminalEgoField {
         let t_liminal = (fired_mask & EGO_TRIGGER_LIMINAL_EXTERIOR) != 0;
         let t_chatter = (fired_mask & EGO_TRIGGER_BOUNDARY_CHATTER) != 0;
 
-        // 1. Shift Layer 0 (LiminalThresholdField) channel horizons & gains branchlessly
+        // 1. Shift Layer 0 (LiminalThresholdState) channel horizons & gains branchlessly
         let mut ch = 0usize;
         while ch < NUM_LIMINAL_THRESHOLD_CHANNELS {
             let nudge_f = i32::from(self.trait_floor_bias_q7[ch]) / 2;
             let nudge_g = i32::from(self.trait_gain_bias_q7[ch]) / 2;
             let ch_chatter = t_chatter & (((delta.chattering_channel_mask >> ch) & 1) != 0);
             let chatter_stabilize = branchless_select_i32(ch_chatter, 4, 0);
-            let new_f = (i32::from(liminal_layer.void_floor_q7[ch]) + nudge_f + chatter_stabilize)
-                .clamp(8, 120) as u8;
+            let new_f =
+                (i32::from(liminal_layer.threshold_floor_q7[ch]) + nudge_f + chatter_stabilize)
+                    .clamp(8, 120) as u8;
             let new_g =
                 (i32::from(liminal_layer.aperture_gain_q7[ch]) + nudge_g).clamp(16, 127) as u8;
-            liminal_layer.void_floor_q7[ch] =
-                branchless_select_u8(any_fired, new_f, liminal_layer.void_floor_q7[ch]);
+            liminal_layer.threshold_floor_q7[ch] =
+                branchless_select_u8(any_fired, new_f, liminal_layer.threshold_floor_q7[ch]);
             liminal_layer.aperture_gain_q7[ch] =
                 branchless_select_u8(any_fired, new_g, liminal_layer.aperture_gain_q7[ch]);
             ch += 1;
         }
 
-        // 2. Shift Layer 1 (StigmergicGranuleField) autonomy & serendipity threshold
+        // 2. Shift Layer 1 (StigmergicGranuleState) autonomy & serendipity threshold
         let mut g = 0usize;
         while g < NUM_STIGMERGIC_GRANULES {
             let boost = self.granule_autonomy_q7[g] >> 4;

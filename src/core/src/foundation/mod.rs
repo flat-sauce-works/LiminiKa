@@ -18,7 +18,7 @@ pub mod aligned;
 pub mod cohomology;
 pub mod lora;
 pub mod lut_crc32;
-pub mod phase_field;
+pub mod phase_ops;
 pub mod pod;
 pub mod projection;
 pub mod rank1_kernels;
@@ -40,16 +40,15 @@ pub(crate) use self::lut_crc32::{
     update_aligned64_blocks_crc32_raw, CRC32_IEEE_SLICE16_REF, MAX_BAYESIAN_STIGMERGIC_DENSITY,
     POPCOUNT_RSQRT_LUT_257_REF, Q7_FULL_COS_REF, VON_MISES_KAPPA_AT_MAX_R_BITS,
 };
-pub use self::phase_field::*;
+pub use self::phase_ops::*;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-pub(crate) use self::phase_field::{
+pub(crate) use self::phase_ops::{
     avx2_coherence_from_diff_vec64, avx2_slerp_from_diff_vec64, avx2_vec64_to_words64,
     avx2_words64_to_vec64, avx2_words64_to_vec64_with_uniform,
 };
-pub(crate) use self::phase_field::{
-    branchless_q7_unified_field_fold_words_with_flags_64,
-    branchless_toroidal_centroid_step_words_with_coh_uni_and_changed_64,
-    coherence_from_uniform_words_x8,
+pub(crate) use self::phase_ops::{
+    branchless_q7_unified_field_fold_words_with_flags_64, coherence_from_uniform_words_x8,
+    step_toroidal_centroid_words_cached_64,
 };
 pub use self::pod::*;
 pub use self::projection::*;

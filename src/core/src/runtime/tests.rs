@@ -435,7 +435,7 @@ fn test_multi_scale_layer_cascade_and_cognitive_trajectory_circuit() {
     assert_ne!(proj_3.residual_words, proj_1.residual_words);
 
     // 3. Verify ScaleLayerOrchestrator executes zero-alloc elastic depth-N cascades and persists trajectory.
-    let mut hub = crate::stigmergy::substrate::StigmergicSubstrate::new();
+    let mut substrate = crate::stigmergy::substrate::StigmergicSubstrate::new();
     let mut ledger = gcso_ledger_slot_t::default();
     let mut trail = gcso_pointer_trail_t {
         accumulated_phase_delta: [24i8; MAX_ATTENTION_HEADS],
@@ -456,7 +456,7 @@ fn test_multi_scale_layer_cascade_and_cognitive_trajectory_circuit() {
             StigmergicScaleGranularity::PointerBit,
         ),
     ];
-    let (orch_proj, updated_ledger, swarm_rep) = hub
+    let (orch_proj, updated_ledger, swarm_rep) = substrate
         .orchestrate_adaptive_depth_n(
             &layer_array,
             3,
@@ -528,7 +528,7 @@ fn test_synaptic_transitions_cross_trajectory_and_adaptive_cascade() {
 
     // 3. Adaptive early-exit skips redundant deeper layers when residual energy is low and
     //    fuse_gate_q7 is already saturated.
-    let mut hub = crate::stigmergy::substrate::StigmergicSubstrate::new();
+    let mut substrate = crate::stigmergy::substrate::StigmergicSubstrate::new();
     let mut early_slot = gcso_ledger_slot_t::default();
     let mut early_ledger = CognitiveTrajectoryLedger::new();
     early_ledger.push_step(CognitiveStepOp::pack(
@@ -557,7 +557,7 @@ fn test_synaptic_transitions_cross_trajectory_and_adaptive_cascade() {
         ScaleLayerNode::new(aligned_frame, StigmergicScaleGranularity::PointerBit),
     ];
     let mut early_trail = gcso_pointer_trail_t::default();
-    let (_, out_early, _) = hub
+    let (_, out_early, _) = substrate
         .orchestrate_adaptive_depth_n(
             &early_layers,
             3,
@@ -704,11 +704,11 @@ fn test_hybrid_scale_circuit_and_adaptive_threshold_policy() {
     assert!(strict_policy.early_exit_fuse_floor_q7() > relaxed_policy.early_exit_fuse_floor_q7());
     assert!(strict_policy.peel_escalation_floor_q7() < relaxed_policy.peel_escalation_floor_q7());
 
-    let mut hub = crate::stigmergy::substrate::StigmergicSubstrate::new();
+    let mut substrate = crate::stigmergy::substrate::StigmergicSubstrate::new();
     let mut slot = gcso_ledger_slot_t::default();
     let mut trail = gcso_pointer_trail_t::default();
     let layers = [hybrid];
-    let (proj, out_ledger, _) = hub
+    let (proj, out_ledger, _) = substrate
         .orchestrate_adaptive_depth_n_with_policy(
             &layers,
             1,
@@ -1003,13 +1003,14 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     ));
     let mut fuse_slot = gcso_ledger_slot_t::default();
     fuse_ledger.write_to_ledger_slot(&mut fuse_slot);
-    let mut hub = crate::stigmergy::substrate::StigmergicSubstrate::with_dimensions_and_thresholds(
-        64,
-        64,
-        16,
-        crate::stigmergy::substrate::StigmergicThresholds::default(),
-    )
-    .unwrap();
+    let mut substrate =
+        crate::stigmergy::substrate::StigmergicSubstrate::with_dimensions_and_thresholds(
+            64,
+            64,
+            16,
+            crate::stigmergy::substrate::StigmergicThresholds::default(),
+        )
+        .unwrap();
     let mut trail = gcso_pointer_trail_t::default();
     let policy = AdaptiveThresholdPolicy::default();
     let sys = SystemConstraint::new((), 0.0, 0.0, 0xFF);
@@ -1024,7 +1025,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
         ObjectiveFact::new([18i8; MAX_ATTENTION_HEADS], 2.0, 0, 1),
         SubjectivePersona::new([18i8; MAX_ATTENTION_HEADS], 1.5, 0, 2),
     );
-    let (mod_frame, _, _) = hub
+    let (mod_frame, _, _) = substrate
         .orchestrate_gateway_layer_with_core_layers_safe(
             &sig,
             &geom,
@@ -1066,7 +1067,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     let mut peel_hub_slot = gcso_ledger_slot_t::default();
     peel_ledger.write_to_ledger_slot(&mut peel_hub_slot);
     let mut peel_trail = fixed_trail;
-    let (_, _, dec_peel) = hub
+    let (_, _, dec_peel) = substrate
         .orchestrate_gateway_layer_with_core_layers_safe(
             &sig,
             &geom,
@@ -1088,7 +1089,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     let mut fuse_hub_slot = gcso_ledger_slot_t::default();
     fuse_ledger.write_to_ledger_slot(&mut fuse_hub_slot);
     let mut fuse_trail = fixed_trail;
-    let (_, _, dec_fuse) = hub
+    let (_, _, dec_fuse) = substrate
         .orchestrate_gateway_layer_with_core_layers_safe(
             &sig,
             &geom,
@@ -1348,17 +1349,17 @@ fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
         !THRESHOLD_STIGMERGY_WIDE
     );
 
-    let hub = crate::stigmergy::substrate::StigmergicSubstrate::default();
-    let (cog_bits, ext_bits) = hub.inspect_hub_horizon_partition(0x8000_0003);
+    let substrate = crate::stigmergy::substrate::StigmergicSubstrate::default();
+    let (cog_bits, ext_bits) = substrate.inspect_substrate_horizon_partition(0x8000_0003);
     assert_eq!(cog_bits, 0x0000_0003);
     assert_eq!(ext_bits, 0x8000_0000);
 
-    // 2. Verify LiminalThresholdField shifts Persona toward Liminal under DecomposePeel + InternalConflict
+    // 2. Verify LiminalThresholdState shifts Persona toward Liminal under DecomposePeel + InternalConflict
     //    while widening ObjectiveFact and ContradictionGuard.
-    let mut field = LiminalThresholdField::new();
-    let init_f1 = field.void_floor_q7[1];
-    let init_p2 = field.void_floor_q7[2];
-    let init_g3 = field.void_floor_q7[3];
+    let mut field = LiminalThresholdState::new();
+    let init_f1 = field.threshold_floor_q7[1];
+    let init_p2 = field.threshold_floor_q7[2];
+    let init_g3 = field.threshold_floor_q7[3];
     let init_gain_f1 = field.aperture_gain_q7[1];
     let init_gain_g3 = field.aperture_gain_q7[3];
 
@@ -1382,15 +1383,15 @@ fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
         reserved_align: [0; 3],
     };
     field.adapt_from_circuit_and_overflow_branchless(&peel_ledger, &conflict_horizon, None);
-    assert!(field.void_floor_q7[2] > init_p2);
-    assert!(field.void_floor_q7[1] < init_f1);
-    assert!(field.void_floor_q7[3] < init_g3);
+    assert!(field.threshold_floor_q7[2] > init_p2);
+    assert!(field.threshold_floor_q7[1] < init_f1);
+    assert!(field.threshold_floor_q7[3] < init_g3);
     assert!(field.aperture_gain_q7[1] > init_gain_f1);
     assert!(field.aperture_gain_q7[3] > init_gain_g3);
     assert_eq!(field.adaptation_epochs, 1);
 
     // 3. Verify SynthesizeFuse + scattered overflow widens RelativeCoupling & shifts focal phase.
-    let init_rel6 = field.void_floor_q7[6];
+    let init_rel6 = field.threshold_floor_q7[6];
     let mut fuse_ledger = CognitiveTrajectoryLedger::default();
     for _ in 0..4 {
         fuse_ledger.push_step(CognitiveStepOp::pack(
@@ -1430,7 +1431,7 @@ fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
         &coherent_horizon,
         Some(&scatter_report),
     );
-    assert!(field.void_floor_q7[6] < init_rel6);
+    assert!(field.threshold_floor_q7[6] < init_rel6);
     assert!(field.phase_shift_q7[6] > 0);
     assert_eq!(field.adaptation_epochs, 2);
 
@@ -1571,7 +1572,7 @@ fn stigmergic_venn_overlap_serendipity_and_core_layer_stack_feedback() {
 
     // Autonomous Core Layer Stack co-adaptation: Layer 1 noise discovery widens Layer 0 Fact aperture
     let mut stack = AutonomousCoreLayerStack::new();
-    let init_void_floor_fact = stack.liminal_layer.void_floor_q7[1];
+    let init_threshold_floor_fact = stack.liminal_layer.threshold_floor_q7[1];
     let init_tol_g0 = stack.stigmergic_layer.granule_noise_tolerance_q7[0];
     let ledger = CognitiveTrajectoryLedger::default();
     let horizon = EpistemicHorizonReading {
@@ -1586,7 +1587,7 @@ fn stigmergic_venn_overlap_serendipity_and_core_layer_stack_feedback() {
         reserved_align: [0; 3],
     };
     stack.adapt_layers_branchless(&ledger, &horizon, &venn, None);
-    assert!(stack.liminal_layer.void_floor_q7[1] < init_void_floor_fact);
+    assert!(stack.liminal_layer.threshold_floor_q7[1] < init_threshold_floor_fact);
     assert!(stack.stigmergic_layer.granule_noise_tolerance_q7[0] > init_tol_g0);
     assert_eq!(
         stack.stigmergic_layer.venn_overlap_mask,
@@ -1625,14 +1626,14 @@ fn stigmergic_venn_overlap_serendipity_and_core_layer_stack_feedback() {
     let len = snap.format_three_core_layers_mermaid(&stack, &venn, &mut mermaid_buf);
     let txt = core::str::from_utf8(&mermaid_buf[..len]).expect("valid utf8 mermaid");
     assert!(txt.contains("Core Layer 0: Liminal"));
-    assert!(txt.contains("Core Layer 1: StigmergicGranuleField"));
+    assert!(txt.contains("Core Layer 1: StigmergicGranuleState"));
     assert!(txt.contains("Cross-Layer Feedback"));
 }
 
 #[test]
-fn liminal_boundary_delta_and_ego_field_interventions() {
+fn liminal_boundary_delta_and_ego_state_interventions() {
     // 1. Temporal boundary velocity, stationary fast-skip, outward expansion, and chatter detection
-    let mut prev_l0 = LiminalThresholdField::new();
+    let mut prev_l0 = LiminalThresholdState::new();
     let cur_same = prev_l0;
     let delta0 = LiminalBoundaryDelta::compute_branchless(
         &prev_l0,
@@ -1646,8 +1647,8 @@ fn liminal_boundary_delta_and_ego_field_interventions() {
     assert_eq!(delta0.chattering_channel_mask, 0);
 
     let mut cur_expand = prev_l0;
-    cur_expand.void_floor_q7[2] = cur_expand.void_floor_q7[2].saturating_sub(6);
-    cur_expand.void_floor_q7[6] = cur_expand.void_floor_q7[6].saturating_sub(6);
+    cur_expand.threshold_floor_q7[2] = cur_expand.threshold_floor_q7[2].saturating_sub(6);
+    cur_expand.threshold_floor_q7[6] = cur_expand.threshold_floor_q7[6].saturating_sub(6);
     let delta1 = LiminalBoundaryDelta::compute_branchless(
         &prev_l0,
         &cur_expand,
@@ -1662,7 +1663,7 @@ fn liminal_boundary_delta_and_ego_field_interventions() {
 
     // Reverse sign on channel 2 -> chattering bit (1 << 2)
     prev_l0 = cur_expand;
-    cur_expand.void_floor_q7[2] = cur_expand.void_floor_q7[2].saturating_add(5);
+    cur_expand.threshold_floor_q7[2] = cur_expand.threshold_floor_q7[2].saturating_add(5);
     let delta2 = LiminalBoundaryDelta::compute_branchless(
         &prev_l0,
         &cur_expand,
@@ -1682,7 +1683,8 @@ fn liminal_boundary_delta_and_ego_field_interventions() {
         let mut next_osc = prev_osc;
         let sign = if step % 2 == 0 { -6i8 } else { 6i8 };
         for ch in 0..4 {
-            next_osc.void_floor_q7[ch] = next_osc.void_floor_q7[ch].saturating_add_signed(sign);
+            next_osc.threshold_floor_q7[ch] =
+                next_osc.threshold_floor_q7[ch].saturating_add_signed(sign);
         }
         d_osc = LiminalBoundaryDelta::compute_branchless(
             &prev_osc,
@@ -1708,29 +1710,40 @@ fn liminal_boundary_delta_and_ego_field_interventions() {
     assert_eq!(d_reset.phase_transition_pulse, 0);
     assert_eq!(d_reset.chatter_potential_u8, 0);
 
-    // 2. Ego presets & deterministic #![no_std] description derivation & overlay
-    let ego_low = LiminalEgoField::from_preset(LiminalEgoPreset::Low);
-    let ego_med = LiminalEgoField::from_preset(LiminalEgoPreset::Medium);
-    let ego_high = LiminalEgoField::from_preset(LiminalEgoPreset::High);
+    // 2. Ego presets & deterministic #![no_std] seed / intent axes derivation & overlay
+    let ego_low = LiminalEgoState::from_preset(LiminalEgoPreset::Low);
+    let ego_med = LiminalEgoState::from_preset(LiminalEgoPreset::Medium);
+    let ego_high = LiminalEgoState::from_preset(LiminalEgoPreset::High);
     assert!(ego_low.counter_basin_thrust_q7 < ego_med.counter_basin_thrust_q7);
     assert!(ego_med.counter_basin_thrust_q7 < ego_high.counter_basin_thrust_q7);
     assert!(ego_low.basin_escape_floor_q7 > ego_high.basin_escape_floor_q7);
 
-    assert!(!LiminalEgoField::from_natural_language("   ").is_active());
+    assert!(!EgoIntentAxes::from_seed_bytes(b"   ").is_active());
 
-    let mut ego_rebel = LiminalEgoField::from_natural_language(
-        "Strong-willed stubborn explorer who defies constraints and steps beyond the boundary",
+    let rebel_axes = EgoIntentAxes::new()
+        .with_autonomy_q7(96)
+        .with_transgression_q7(80)
+        .with_defiance_q7(72);
+    let calm_axes = EgoIntentAxes::new().with_logic_q7(84).with_caution_q7(76);
+    let mut ego_rebel = LiminalEgoState::from_intent_axes_with_seed(
+        &rebel_axes,
+        b"Strong-willed stubborn explorer who defies constraints",
     );
-    let ego_calm = LiminalEgoField::from_natural_language("Calm logical cautious observer");
-    let ego_overlay = LiminalEgoField::from_preset(LiminalEgoPreset::Medium)
-        .with_natural_language_overlay("Passionate creative explorer who transcends the unknown");
-    let ego_symbolic = LiminalEgoField::from_natural_language("@persona_profile_01");
+    let ego_calm =
+        LiminalEgoState::from_intent_axes_with_seed(&calm_axes, b"Calm logical cautious observer");
+    let overlay_axes = EgoIntentAxes::new()
+        .with_transgression_q7(84)
+        .with_devotion_q7(72);
+    let ego_overlay = LiminalEgoState::from_preset(LiminalEgoPreset::Medium)
+        .with_intent_axes_overlay_with_seed(&overlay_axes, b"creative explorer");
+    let sym_axes = EgoIntentAxes::from_seed_bytes(b"@persona_profile_01");
+    let ego_symbolic =
+        LiminalEgoState::from_intent_axes_with_seed(&sym_axes, b"@persona_profile_01");
     assert!(ego_rebel.is_active());
     assert!(ego_rebel.counter_basin_thrust_q7 > ego_calm.counter_basin_thrust_q7);
     assert!(ego_rebel.transgression_bias_q7 > ego_calm.transgression_bias_q7);
     assert!(ego_overlay.is_active());
     assert!(ego_overlay.transgression_bias_q7 > ego_med.transgression_bias_q7);
-    assert!(ego_overlay.counter_basin_thrust_q7 > ego_med.counter_basin_thrust_q7);
     assert!(ego_symbolic.is_active());
     assert_ne!(ego_symbolic.ego_signature_hash, 0);
     assert!(ego_symbolic.counter_basin_thrust_q7 >= 24);
@@ -1756,7 +1769,7 @@ fn liminal_boundary_delta_and_ego_field_interventions() {
     };
     *basin_frame.phase_words_mut() = [0x2424_2424_2424_2424u64; NUM_STIGMERGIC_GRANULES];
 
-    let before_floor2 = stack.liminal_layer.void_floor_q7[2];
+    let before_floor2 = stack.liminal_layer.threshold_floor_q7[2];
     let out_orbit = ego_rebel.intervene_on_layers_and_frame_branchless(
         &mut stack,
         &delta1,
@@ -1769,10 +1782,10 @@ fn liminal_boundary_delta_and_ego_field_interventions() {
         0
     );
     assert_ne!(out_orbit.phase_words_ref(), basin_frame.phase_words_ref());
-    assert!(stack.liminal_layer.void_floor_q7[2] <= before_floor2);
+    assert!(stack.liminal_layer.threshold_floor_q7[2] <= before_floor2);
 
     // Zero-gated Liminal exterior -> transgressive rebel dares step beyond rather than silence
-    let mut liminal_ego = LiminalEgoField::from_preset(LiminalEgoPreset::High);
+    let mut liminal_ego = LiminalEgoState::from_preset(LiminalEgoPreset::High);
     let zeroed_horizon = EpistemicHorizonReading {
         horizon_gate: 0.0,
         regime_code: EpistemicRegime::Liminal as u8,
@@ -1822,7 +1835,7 @@ fn ego_intent_axes_blending_and_three_layer_core_stack() {
     assert_eq!(full_overlay.autonomy_q7, bold_axes.autonomy_q7);
     assert_eq!(full_overlay.active_granule_bias_mask, 0xF0);
 
-    let ego_from_axes = LiminalEgoField::from_intent_axes(&bold_axes);
+    let ego_from_axes = LiminalEgoState::from_intent_axes(&bold_axes);
     assert!(ego_from_axes.is_active());
     assert!(ego_from_axes.counter_basin_thrust_q7 >= 60);
     assert!(ego_from_axes.transgression_bias_q7 > 0);
@@ -1863,16 +1876,16 @@ fn ego_intent_axes_blending_and_three_layer_core_stack() {
     let len = snap.format_three_core_layers_mermaid(&stack, &venn, &mut buf);
     let txt = core::str::from_utf8(&buf[..len]).expect("valid utf8 mermaid");
     assert!(txt.contains("Core Layer 0: Liminal"));
-    assert!(txt.contains("Core Layer 1: StigmergicGranuleField"));
-    assert!(txt.contains("Core Layer 2: LiminalEgoField"));
+    assert!(txt.contains("Core Layer 1: StigmergicGranuleState"));
+    assert!(txt.contains("Core Layer 2: LiminalEgoState"));
     assert!(txt.contains("Top-Down Intervention"));
 }
 
 #[test]
 fn dynamic_trait_aperture_routing_and_fragmented_micro_ensemble() {
     let mut stack = AutonomousCoreLayerStack::new();
-    stack.liminal_layer.void_floor_q7[1] = 20;
-    stack.liminal_layer.void_floor_q7[2] = 96;
+    stack.liminal_layer.threshold_floor_q7[1] = 20;
+    stack.liminal_layer.threshold_floor_q7[2] = 96;
     stack.stigmergic_layer.granule_pheromone_q7 = [56, 56, 56, 56, 12, 12, 12, 12];
 
     let fact = ObjectiveFact::new([24i8; MAX_ATTENTION_HEADS], 2.5, 0, 10);
@@ -1884,7 +1897,7 @@ fn dynamic_trait_aperture_routing_and_fragmented_micro_ensemble() {
     assert_eq!(pers_mask_narrow, 0x0F);
 
     // Ego widens Persona's dynamic cognitive aperture across all 8 granules.
-    stack.ego_layer = LiminalEgoField::from_intent_axes(
+    stack.ego_layer = LiminalEgoState::from_intent_axes(
         &EgoIntentAxes::new()
             .with_autonomy_q7(90)
             .with_transgression_q7(80)
@@ -1896,10 +1909,10 @@ fn dynamic_trait_aperture_routing_and_fragmented_micro_ensemble() {
 
     // Partitioned routing: Fact owns upper 4 granules (`0xF0`), Persona owns lower 4 (`0x0F`).
     let mut split_stack = AutonomousCoreLayerStack::new();
-    split_stack.liminal_layer.void_floor_q7[1] = 96; // requires >= 48
-    split_stack.liminal_layer.void_floor_q7[2] = 96; // requires >= 48
+    split_stack.liminal_layer.threshold_floor_q7[1] = 96; // requires >= 48
+    split_stack.liminal_layer.threshold_floor_q7[2] = 96; // requires >= 48
     split_stack.stigmergic_layer.granule_pheromone_q7 = [12, 12, 12, 12, 56, 56, 56, 56];
-    split_stack.ego_layer = LiminalEgoField::from_intent_axes(
+    split_stack.ego_layer = LiminalEgoState::from_intent_axes(
         &EgoIntentAxes::new()
             .with_transgression_q7(60)
             .with_active_granule_bias_mask(0x0F),
@@ -1972,7 +1985,7 @@ fn dynamic_trait_aperture_routing_and_fragmented_micro_ensemble() {
 
     // With active Ego, contested granules 6..8 are tie-broken by Ego sovereign headings.
     let mut ego_stack = AutonomousCoreLayerStack::new();
-    ego_stack.ego_layer = LiminalEgoField::from_preset(LiminalEgoPreset::Medium);
+    ego_stack.ego_layer = LiminalEgoState::from_preset(LiminalEgoPreset::Medium);
     ego_stack.ego_layer.sovereign_granule_phase_q7[6] = 48;
     ego_stack.ego_layer.sovereign_granule_phase_q7[7] = -48;
     let (_, ego_w, ego_rep) = ObjectiveFact::synthesize_fragment_ensemble_with_core_layers(
@@ -2064,19 +2077,21 @@ impl FastPathLedger for MockSubstrateComposite {
 
 #[test]
 fn test_canonical_modules_and_substrate_composite() {
-    fn assert_substrate<T: StigmergicSubstrateOps + SubstrateGatewayExt>(hub: &T) -> (u32, u32) {
+    fn assert_substrate<T: StigmergicSubstrateOps + SubstrateGatewayExt>(
+        substrate: &T,
+    ) -> (u32, u32) {
         (
-            <T as crate::foundation::PhaseSteering>::head_dim(hub),
-            <T as crate::foundation::PhaseSteering>::num_heads(hub),
+            <T as crate::foundation::PhaseSteering>::head_dim(substrate),
+            <T as crate::foundation::PhaseSteering>::num_heads(substrate),
         )
     }
 
-    let mut hub = MockSubstrateComposite {
+    let mut substrate = MockSubstrateComposite {
         head_dim: 8,
         num_heads: 2,
         default_phase: 24,
     };
-    assert_eq!(assert_substrate(&hub), (8, 2));
+    assert_eq!(assert_substrate(&substrate), (8, 2));
 
     let mut mask = gcso_paged_bitmask_t::default();
     mask.set_bit_branchless(7);
@@ -2097,7 +2112,7 @@ fn test_canonical_modules_and_substrate_composite() {
         12,
     );
 
-    let density = hub
+    let density = substrate
         .execute_stigmergic_token_cascade(
             input_ptr.raw(),
             &mut ledger,
@@ -2225,14 +2240,14 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
     assert_eq!(replayed[0], 32);
     assert!(gop_lp > -0.05 && (gop_r - 1.0).abs() < 1e-4 && gop_k > 10.0);
 
-    let daes_net = gcso_ledger_slot_t {
+    let ledger_slot = gcso_ledger_slot_t {
         mode: 1,
         ..Default::default()
     };
     let src_phases = [28i8; MAX_ATTENTION_HEADS];
     let mut pkt_buf = AlignedBuffer64::<u8, 64>::zeroed();
     let crc_tag = encode_dnp_phase_packet(
-        &daes_net,
+        &ledger_slot,
         ATTRACTOR_SLOT_PERSONA,
         ACTION_PRESET_FULL_ORCHESTRATION,
         &src_phases,
@@ -2241,7 +2256,7 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
     .unwrap();
     let mut decoded_phases = [0i8; MAX_ATTENTION_HEADS];
     let recovered_tag = decode_and_verify_dnp_packet(
-        &daes_net,
+        &ledger_slot,
         &pkt_buf.as_aligned_slice(),
         crc_tag,
         &mut decoded_phases,
@@ -2292,7 +2307,7 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
 
 #[test]
 fn test_substrate_gateway_kmeans_and_swarm_step_closed_loop() {
-    let mut hub =
+    let mut substrate =
         StigmergicSubstrate::with_dimensions_and_thresholds(8, 2, 16, StigmergicThresholds::new())
             .unwrap();
     let mut q_buf = AlignedBuffer32::new([1.0f32; 16]);
@@ -2316,7 +2331,7 @@ fn test_substrate_gateway_kmeans_and_swarm_step_closed_loop() {
     let composite = (sys, fact, persona);
     let mut centroids = [CrystallizedAttractorRecord::default(); 2];
 
-    let (gw_frame, gw_rep, c_idx, c_aid, c_coh, _spawned) = hub
+    let (gw_frame, gw_rep, c_idx, c_aid, c_coh, _spawned) = substrate
         .orchestrate_gateway_kmeans_and_select_action(
             &composite,
             0.30,
@@ -2335,7 +2350,7 @@ fn test_substrate_gateway_kmeans_and_swarm_step_closed_loop() {
     assert!(c_coh > 0.90);
     assert_eq!(gw_frame.target_anchor_id, 42);
     assert_eq!(gw_frame.resolve_autonomous_rot_dim(16, 0.20, 1.5), 4);
-    assert_eq!(hub.resolve_autonomous_rot_dim(0x04, 0xFF, 1.5), 2);
+    assert_eq!(substrate.resolve_autonomous_rot_dim(0x04, 0xFF, 1.5), 2);
     assert!(gw_rep.updated_density >= 1.8);
     assert!(centroids[0].verify_integrity());
 
@@ -2365,7 +2380,7 @@ fn test_substrate_gateway_kmeans_and_swarm_step_closed_loop() {
         last_anchor_id: 0,
         last_slot: 0,
     };
-    let (_f2, rep2, _idx2, aid2, _coh2, _sp2) = hub
+    let (_f2, rep2, _idx2, aid2, _coh2, _sp2) = substrate
         .orchestrate_gateway_attractor_swarm_step(
             &composite,
             0.30,
@@ -2420,7 +2435,7 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
         }
     }
 
-    let mut hub = StigmergicSubstrate::with_dimensions_and_thresholds(
+    let mut substrate = StigmergicSubstrate::with_dimensions_and_thresholds(
         8,
         MAX_ATTENTION_HEADS as u32,
         16,
@@ -2429,27 +2444,30 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
     .unwrap();
     // Physical lane 0 = standard, physical lane 1 = repulsion, physical lane 2 = sandbox.
     assert_eq!(
-        hub.allocate_lane(&WorkbenchSlotSpec::auto_free(
-            1.0,
-            [20; MAX_ATTENTION_HEADS]
-        ))
-        .unwrap(),
+        substrate
+            .allocate_lane(&WorkbenchSlotSpec::auto_free(
+                1.0,
+                [20; MAX_ATTENTION_HEADS]
+            ))
+            .unwrap(),
         0
     );
     assert_eq!(
-        hub.allocate_lane(&WorkbenchSlotSpec::auto_repulsion(
-            1.0,
-            [-40; MAX_ATTENTION_HEADS]
-        ))
-        .unwrap(),
+        substrate
+            .allocate_lane(&WorkbenchSlotSpec::auto_repulsion(
+                1.0,
+                [-40; MAX_ATTENTION_HEADS]
+            ))
+            .unwrap(),
         1
     );
     assert_eq!(
-        hub.allocate_lane(&WorkbenchSlotSpec::auto_sandbox(
-            1.0,
-            [40; MAX_ATTENTION_HEADS]
-        ))
-        .unwrap(),
+        substrate
+            .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(
+                1.0,
+                [40; MAX_ATTENTION_HEADS]
+            ))
+            .unwrap(),
         2
     );
 
@@ -2478,7 +2496,7 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
     //    void granules 4..8 (+20) without polluting venn_core_mask, repulsion lane 1 is idle.
     let mut ledger = gcso_ledger_slot_t::default();
     let mut trail = gcso_pointer_trail_t::default();
-    let _ = hub
+    let _ = substrate
         .orchestrate_gateway_layer_with_scale_and_core_layers_safe(
             &MockSignal {
                 flags: ACTION_PRESET_EXPRESS_PHASE,
@@ -2501,7 +2519,7 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
 
     // 2. Repulsion mode: ONLY repulsion lane 1 acts on granules 0..4 (-20); lane 0 & sandbox 2 are idle.
     let mut trail_rep = gcso_pointer_trail_t::default();
-    let _ = hub
+    let _ = substrate
         .orchestrate_gateway_layer_with_scale_and_core_layers_safe(
             &MockSignal {
                 flags: ACTION_MODE_PHASE_STEER | ACTION_MODE_PHASE_REPULSE,
@@ -2523,9 +2541,9 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
     assert_eq!(trail_rep.accumulated_phase_delta[40], 0);
 
     // 3. Promote sandbox lane 2 -> now contributes into venn_core_mask granules 0..4 (+10 + +20 = +30).
-    assert!(hub.promote_sandbox_lane(2).unwrap());
+    assert!(substrate.promote_sandbox_lane(2).unwrap());
     let mut trail_prom = gcso_pointer_trail_t::default();
-    let _ = hub
+    let _ = substrate
         .orchestrate_gateway_layer_with_scale_and_core_layers_safe(
             &MockSignal {
                 flags: ACTION_PRESET_EXPRESS_PHASE,
@@ -2555,7 +2573,7 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
         baseline_guard_noise_floor: 0.25,
         ..ManifoldProbeBaseline::new()
     };
-    let mut hub = StigmergicSubstrate::new();
+    let mut substrate = StigmergicSubstrate::new();
     let mut bank = CoreTelemetryBank::with_mode(TelemetryVerbosityMode::Standard);
     let mut active_sandbox: Option<u8> = None;
     let horizon = EpistemicHorizonReading {
@@ -2564,7 +2582,7 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
     };
     let delta = LiminalBoundaryDelta::default();
     let venn = StigmergicOverlapSerendipityReport::default();
-    let ego = LiminalEgoField::new();
+    let ego = LiminalEgoState::new();
     let candidate_words = [0x0A0A_0A0A_0A0A_0A0A_u64; NUM_STIGMERGIC_GRANULES];
 
     for _ in 0..20 {
@@ -2584,7 +2602,7 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
     }
 
     // 1. Ego=off must never nucleate a sandbox lane.
-    let ev_off = hub.step_sandbox_hypothesis_lifecycle(
+    let ev_off = substrate.step_sandbox_hypothesis_lifecycle(
         &mut bank,
         &mut active_sandbox,
         StigmergicActionDecision::ExpressPhaseSteer,
@@ -2597,10 +2615,10 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
     );
     assert_eq!(ev_off, SandboxLifecycleEvent::Idle);
     assert_eq!(active_sandbox, None);
-    assert_eq!(hub.slot_sandbox_mask, 0);
+    assert_eq!(substrate.slot_sandbox_mask, 0);
 
     // 2. Ego=active + exterior granules -> nucleates one sandbox lane masked strictly to 0xF0.
-    let ev_nuc = hub.step_sandbox_hypothesis_lifecycle(
+    let ev_nuc = substrate.step_sandbox_hypothesis_lifecycle(
         &mut bank,
         &mut active_sandbox,
         StigmergicActionDecision::ExpressPhaseSteer,
@@ -2616,16 +2634,16 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
         other => panic!("expected Nucleated, got {other:?}"),
     };
     assert_eq!(active_sandbox, Some(lane));
-    assert_ne!(hub.slot_sandbox_mask & (1u8 << lane), 0);
+    assert_ne!(substrate.slot_sandbox_mask & (1u8 << lane), 0);
     let row_start = usize::from(lane) * MAX_ATTENTION_HEADS;
-    assert_eq!(hub.slot_phase_bank.data[row_start], 0);
-    assert_eq!(hub.slot_phase_bank.data[row_start + 32], 10);
+    assert_eq!(substrate.slot_phase_bank.data[row_start], 0);
+    assert_eq!(substrate.slot_phase_bank.data[row_start + 32], 10);
 
     // 3. Consecutive coherence improvement promotes sandbox lane in-place.
     for _ in 0..3 {
         let _ = bank.update_assimilation_ema(0.25, 0.90, 0.20, &baseline, 0.15);
     }
-    let ev_prom = hub.step_sandbox_hypothesis_lifecycle(
+    let ev_prom = substrate.step_sandbox_hypothesis_lifecycle(
         &mut bank,
         &mut active_sandbox,
         StigmergicActionDecision::ExpressPhaseSteer,
@@ -2638,14 +2656,14 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
     );
     assert_eq!(ev_prom, SandboxLifecycleEvent::Promoted(lane));
     assert_eq!(active_sandbox, None);
-    assert_eq!(hub.slot_sandbox_mask & (1u8 << lane), 0);
-    assert_ne!(hub.slot_enabled_mask & (1u8 << lane), 0);
+    assert_eq!(substrate.slot_sandbox_mask & (1u8 << lane), 0);
+    assert_ne!(substrate.slot_enabled_mask & (1u8 << lane), 0);
 
     // 4. Re-nucleate then verify RepulsionEscape releases sandbox immediately.
     for _ in 0..40 {
         let _ = bank.update_assimilation_ema(0.85, 0.15, 0.75, &baseline, 0.15);
     }
-    let ev_nuc2 = hub.step_sandbox_hypothesis_lifecycle(
+    let ev_nuc2 = substrate.step_sandbox_hypothesis_lifecycle(
         &mut bank,
         &mut active_sandbox,
         StigmergicActionDecision::ExpressPhaseSteer,
@@ -2657,7 +2675,7 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
         3,
     );
     assert!(matches!(ev_nuc2, SandboxLifecycleEvent::Nucleated(_)));
-    let ev_rel = hub.step_sandbox_hypothesis_lifecycle(
+    let ev_rel = substrate.step_sandbox_hypothesis_lifecycle(
         &mut bank,
         &mut active_sandbox,
         StigmergicActionDecision::RepulsionEscape,
@@ -2670,10 +2688,10 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
     );
     assert_eq!(ev_rel, SandboxLifecycleEvent::Released(1));
     assert_eq!(active_sandbox, None);
-    assert_eq!(hub.slot_sandbox_mask, 0);
+    assert_eq!(substrate.slot_sandbox_mask, 0);
 
     // 5. ActiveOverdrive distortion also releases any active sandbox lane immediately.
-    let mut active_ego = LiminalEgoField::from_preset(LiminalEgoPreset::High);
+    let mut active_ego = LiminalEgoState::from_preset(LiminalEgoPreset::High);
     active_ego.last_intervened_mask = EGO_TRIGGER_BASIN_CAPTURE;
     for _ in 0..40 {
         bank.record_step(
@@ -2690,14 +2708,14 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
         );
         let _ = bank.update_assimilation_ema(0.85, 0.15, 0.75, &baseline, 0.15);
     }
-    let lane3 = hub
+    let lane3 = substrate
         .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(
             0.5,
             [1; MAX_ATTENTION_HEADS],
         ))
         .unwrap();
     active_sandbox = Some(lane3);
-    let ev_od = hub.step_sandbox_hypothesis_lifecycle(
+    let ev_od = substrate.step_sandbox_hypothesis_lifecycle(
         &mut bank,
         &mut active_sandbox,
         StigmergicActionDecision::ExpressPhaseSteer,
@@ -2710,7 +2728,7 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
     );
     assert_eq!(ev_od, SandboxLifecycleEvent::Released(1));
     assert_eq!(active_sandbox, None);
-    assert_eq!(hub.slot_sandbox_mask, 0);
+    assert_eq!(substrate.slot_sandbox_mask, 0);
 }
 
 #[test]
@@ -2738,14 +2756,14 @@ fn test_system_spine_physical_pinned_isolation() {
 
 #[test]
 fn test_ego_differential_net_hops_consolidation_and_evaporation() {
-    let ego = LiminalEgoField::from_preset(LiminalEgoPreset::Medium);
+    let ego = LiminalEgoState::from_preset(LiminalEgoPreset::Medium);
     let axes = EgoIntentAxes::new()
         .with_autonomy_q7(72)
         .with_transgression_q7(48);
-    let mut net_1 = EgoDifferentialNet::from_ego_field_and_axes(&ego, &axes, 1);
-    let mut net_3 = EgoDifferentialNet::from_ego_field_and_axes(&ego, &axes, 3);
+    let mut net_1 = EgoDifferentialNet::from_ego_state_and_axes(&ego, &axes, 1);
+    let mut net_3 = EgoDifferentialNet::from_ego_state_and_axes(&ego, &axes, 3);
     let spine = SystemSpineState::new();
-    let stig = StigmergicGranuleField::new();
+    let stig = StigmergicGranuleState::new();
     let tension = DistortionTension::new(true);
     let venn = EpistemicPartition {
         shared_core_mask: 0x0F,
@@ -2826,7 +2844,7 @@ fn test_entropy_controller_init_setters_and_reset() {
 
 #[test]
 fn test_stationary_skip_and_spine_bypass_do_not_misdiagnose_passive_saturation() {
-    use crate::drivers::LiminalEgoField;
+    use crate::drivers::LiminalEgoState;
     use crate::runtime::{EpistemicHorizonReading, LayerDistortionKind, LiminalBoundaryDelta};
     use crate::stigmergy::{
         StigmergicActionDecision, StigmergicOverlapSerendipityReport, StigmergicThresholds,
@@ -2840,7 +2858,7 @@ fn test_stationary_skip_and_spine_bypass_do_not_misdiagnose_passive_saturation()
         ..LiminalBoundaryDelta::default()
     };
     let venn = StigmergicOverlapSerendipityReport::default();
-    let ego_off = LiminalEgoField::default();
+    let ego_off = LiminalEgoState::default();
 
     // Simulate `byp=on` profile: high InertialLayerSkip (~72%) + modest PassiveSidecar (~19%)
     // + active ExpressPhaseSteer (~9%) + Spine whole-token bypass events.
@@ -2894,8 +2912,8 @@ fn test_stationary_skip_and_spine_bypass_do_not_misdiagnose_passive_saturation()
 #[test]
 fn test_pinned_sandbox_handle_preservation_and_repulsion_sandbox_isolation() {
     // Bug 1: PINNED | SANDBOX lane must retain its `active_sandbox_lane` handle after RepulsionEscape.
-    let mut hub = StigmergicSubstrate::new();
-    let pinned_sb = hub
+    let mut substrate = StigmergicSubstrate::new();
+    let pinned_sb = substrate
         .allocate_lane(&WorkbenchSlotSpec {
             placement: WorkbenchLanePlacement::Explicit { lane: 5, pin: true },
             weight: 0.75,
@@ -2907,7 +2925,7 @@ fn test_pinned_sandbox_handle_preservation_and_repulsion_sandbox_isolation() {
     let mut active_handle = Some(pinned_sb);
     let mut telemetry = CoreTelemetryBank::default();
     let cand_words = [0u64; NUM_STIGMERGIC_GRANULES];
-    let ev = hub.step_sandbox_hypothesis_lifecycle(
+    let ev = substrate.step_sandbox_hypothesis_lifecycle(
         &mut telemetry,
         &mut active_handle,
         StigmergicActionDecision::RepulsionEscape,
@@ -2921,7 +2939,7 @@ fn test_pinned_sandbox_handle_preservation_and_repulsion_sandbox_isolation() {
     assert_eq!(ev, SandboxLifecycleEvent::Idle);
     assert_eq!(active_handle, Some(pinned_sb));
     assert_ne!(
-        (hub.slot_enabled_mask & hub.slot_sandbox_mask) & (1u8 << pinned_sb),
+        (substrate.slot_enabled_mask & substrate.slot_sandbox_mask) & (1u8 << pinned_sb),
         0
     );
 

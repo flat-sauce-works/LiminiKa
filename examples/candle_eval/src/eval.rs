@@ -886,7 +886,7 @@ pub(crate) fn generate_steered_reply_with_offset(
             || ((((steer.trail.current_ptr >> 48) as u8) & ACTION_MODE_PHASE_REPULSE) != 0);
         let sens_q7 = steer.adapter.last_venn_partition().boundary_sensitivity_q7;
         let guard_prox_q7 = if repulsion_active { 88 } else { sens_q7 >> 2 };
-        let active_overdrive = repulsion_active && steer.adapter.ego_field().is_active();
+        let active_overdrive = repulsion_active && steer.adapter.ego_state().is_active();
         steer.adapter.step_distortion_tension_hot_path(
             exit_entropy_q7,
             guard_prox_q7,
@@ -908,7 +908,7 @@ pub(crate) fn generate_steered_reply_with_offset(
             repulsion_active,
         );
         if cfg.use_steer && cfg.enable_pre_bypass {
-            let ego_active_boundary = steer.adapter.ego_field().is_active() && sens_q7 >= 80;
+            let ego_active_boundary = steer.adapter.ego_state().is_active() && sens_q7 >= 80;
             let obs = TokenBypassObservation {
                 irreversible_step: 0,
                 liminal_stationary: u8::from(logit_entropy < 0.78 && sens_q7 < 80),
@@ -1006,7 +1006,7 @@ pub(crate) fn critique_generated_draft(
             &draft_snap,
             &compiled.recall_policy,
             reflection_policy,
-            adapter.ego_field(),
+            adapter.ego_state(),
         ),
     ))
 }

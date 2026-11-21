@@ -2224,7 +2224,7 @@ pub trait StigmergicSubstrateOps:
     /// Branchlessly partitions `signal_bits` into `(cognized_bits, unknowable_void_bits)` for
     /// [`Self::HUB_APERTURE_MASK`].
     #[inline(always)]
-    fn inspect_hub_horizon_partition(&self, signal_bits: u32) -> (u32, u32) {
+    fn inspect_substrate_horizon_partition(&self, signal_bits: u32) -> (u32, u32) {
         self.partition_cognitive_and_unknowable_bits(Self::HUB_APERTURE_MASK, signal_bits)
     }
 
@@ -2237,7 +2237,7 @@ pub trait StigmergicSubstrateOps:
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any dimension, radian threshold, or tensor slice
     /// invariant is violated.
     #[inline(always)]
-    fn validate_hub_cascade_params(
+    fn validate_substrate_cascade_params(
         &self,
         qdps_min_step_rad: f32,
         ripa_max_rad: f32,
@@ -2265,7 +2265,7 @@ pub trait StigmergicSubstrateOps:
     /// # Errors
     /// Propagates any error returned by [`PointerSubstrate::step_pointer`].
     #[inline(always)]
-    fn step_hub_with_bloom_repulsion_to_words(
+    fn step_substrate_with_bloom_repulsion_to_words(
         &mut self,
         input_ptr: gcso_tagged_ptr_t,
         ledger_slot: &mut gcso_ledger_slot_t,
@@ -2369,8 +2369,8 @@ pub trait StigmergicSubstrateOps:
     /// Returns the observed Bloom repulsion bucket density (`0..=255`).
     ///
     /// # Errors
-    /// Propagates any error from [`StigmergicSubstrateOps::validate_hub_cascade_params`],
-    /// [`StigmergicSubstrateOps::step_hub_with_bloom_repulsion_to_words`], or
+    /// Propagates any error from [`StigmergicSubstrateOps::validate_substrate_cascade_params`],
+    /// [`StigmergicSubstrateOps::step_substrate_with_bloom_repulsion_to_words`], or
     /// [`FastPathLedger::telemetry_push`].
     #[inline]
     fn execute_stigmergic_token_cascade(
@@ -2386,14 +2386,14 @@ pub trait StigmergicSubstrateOps:
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         trail_out: &mut gcso_pointer_trail_t,
     ) -> GcsoResult<u8> {
-        let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
+        let (head_dim, num_heads, _expected_len) = self.validate_substrate_cascade_params(
             qdps_min_step_rad,
             ripa_max_rad,
             query_tensor.as_deref(),
             key_tensor.as_deref(),
         )?;
         let (bypass_hit, _eff_ptr, density, repulsion_active, post_rep_words) = self
-            .step_hub_with_bloom_repulsion_to_words(
+            .step_substrate_with_bloom_repulsion_to_words(
                 gcso_tagged_ptr_t(input_ptr),
                 ledger_slot,
                 bloom_filter,

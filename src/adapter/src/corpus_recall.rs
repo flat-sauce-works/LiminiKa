@@ -1104,7 +1104,7 @@ impl TextAttractorCorpus {
             }
         }
         let substrate_tol = adapter
-            .cognitive_substrate()
+            .core_primitive_state()
             .stigmergy
             .granule_noise_tolerance_q7;
         let venn_partition = evaluate_epistemic_partition_branchless(

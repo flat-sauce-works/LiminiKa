@@ -280,19 +280,19 @@ impl<T> SpeculativeDiscovery<T> {
 /// Splits all 8 granules into `(observed, unobserved)` via [`BitCut8`].
 #[inline(always)]
 #[must_use]
-pub const fn cut_observed_granules(field: &PackedLacunaField) -> BitCut8 {
-    BitCut8::split(0xFF, field.observed_mask)
+pub const fn cut_observed_granules(reading: &PackedLacuna8) -> BitCut8 {
+    BitCut8::split(0xFF, reading.observed_mask)
 }
 
 /// Refines the observed granule cut into `((self_ref, exterior), (0, unobserved))` via [`BitCut8`].
 #[inline]
 #[must_use]
 pub const fn cut_self_vs_exterior_granules(
-    field: &PackedLacunaField,
+    reading: &PackedLacuna8,
     eps_self_q7: u8,
 ) -> (BitCut8, BitCut8) {
-    let (_unobs_mask, self_ref_mask, _ext_mask) = field.measure_masks(eps_self_q7);
-    cut_observed_granules(field).refine(self_ref_mask)
+    let (_unobs_mask, self_ref_mask, _ext_mask) = reading.measure_masks(eps_self_q7);
+    cut_observed_granules(reading).refine(self_ref_mask)
 }
 
 #[cfg(test)]
@@ -357,12 +357,12 @@ mod tests {
 
     #[test]
     fn test_packed_lacuna_bitcut_helpers() {
-        let field = PackedLacunaField::new(0b0011_0101, [2, 10, 4, 80, 3, 20, 0, 12]);
-        let obs_cut = cut_observed_granules(&field);
+        let reading = PackedLacuna8::new(0b0011_0101, [2, 10, 4, 80, 3, 20, 0, 12]);
+        let obs_cut = cut_observed_granules(&reading);
         assert_eq!(obs_cut.inside, 0b0011_0101);
         assert_eq!(obs_cut.outside, 0b1100_1010);
 
-        let (in_obs, out_obs) = cut_self_vs_exterior_granules(&field, 4);
+        let (in_obs, out_obs) = cut_self_vs_exterior_granules(&reading, 4);
         assert_eq!(in_obs.inside, 0b0001_0101);
         assert_eq!(in_obs.outside, 0b0010_0000);
         assert_eq!(out_obs.inside, 0);

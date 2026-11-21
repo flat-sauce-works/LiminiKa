@@ -36,7 +36,7 @@ use crate::liminal::{
 };
 use crate::stigmergy::crystal::DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE;
 use crate::stigmergy::gate::PhaseSteeringEngine;
-use crate::stigmergy::granule::StigmergicGranuleField;
+use crate::stigmergy::granule::StigmergicGranuleState;
 use crate::stigmergy::ledger::{gcso_ledger_slot_t, ContrastivePhaseBloomFilter, FastPathLedger};
 use crate::stigmergy::pheromone::PheromoneDensityOps;
 use crate::stigmergy::trail::{
@@ -91,7 +91,7 @@ pub const DEFAULT_STIGMERGIC_CRYSTALLIZE_THRESH: f32 = 2.20;
 pub const DEFAULT_STIGMERGIC_CONTRADICTION_THRESH: f32 = 0.25;
 
 /// Total Q7 phase elements across all 8 Attractor Working Lanes (`8 * 64 = 512` bytes).
-const HUB_SLOT_BANK_LEN: usize = MAX_ATTRACTOR_DOMAINS * MAX_ATTENTION_HEADS;
+const SUBSTRATE_SLOT_BANK_LEN: usize = MAX_ATTRACTOR_DOMAINS * MAX_ATTENTION_HEADS;
 
 // ===================================================================
 // 1. Stigmergic Action Decision Enum & Threshold Ladder (`Pod`)
@@ -494,7 +494,7 @@ impl StigmergicThresholds {
 
         let p_norm = branchless_clamp_f32(i_rho * 0.25_f32 + e_gate * 0.5_f32, 0.0, 1.0);
         let p_q7 = (p_norm * 127.0_f32) as u8;
-        let gate_q7 = StigmergicGranuleField::boundary_sensitivity_gate_q7(p_q7);
+        let gate_q7 = StigmergicGranuleState::boundary_sensitivity_gate_q7(p_q7);
         let gate_f = (gate_q7 as f32) * (1.0_f32 / 128.0_f32);
 
         let net_delta = branchless_relu_f32(raw_delta - deadband);
@@ -1025,7 +1025,7 @@ pub struct StigmergicSubstrate {
     /// Inline L1D-resident Sidecar Pointer Table (`16 x 128B = 2,048` bytes).
     pub trails: [gcso_pointer_trail_t; SUBSTRATE_INLINE_TRAILS],
     /// 8-lane working phase cache window (`8 x 64B = 512` bytes, 64-byte aligned).
-    pub slot_phase_bank: AlignedBuffer64<gcso_q7_t, HUB_SLOT_BANK_LEN>,
+    pub slot_phase_bank: AlignedBuffer64<gcso_q7_t, SUBSTRATE_SLOT_BANK_LEN>,
     /// Dynamic Adaptive Extension Scratchpad (64 bytes, 64-byte aligned).
     pub ledger_slot: gcso_ledger_slot_t,
     /// Contrastive Phase Bloom Filter for $\mathcal{O}(1)$ anti-phase repulsion (64 bytes, 64-byte aligned).
@@ -1110,7 +1110,7 @@ impl StigmergicSubstrate {
                 accumulated_phase_delta: [0; MAX_ATTENTION_HEADS],
                 reserved_padding: [0; 8],
             }; SUBSTRATE_INLINE_TRAILS],
-            slot_phase_bank: AlignedBuffer64::new([0; HUB_SLOT_BANK_LEN]),
+            slot_phase_bank: AlignedBuffer64::new([0; SUBSTRATE_SLOT_BANK_LEN]),
             ledger_slot: gcso_ledger_slot_t {
                 mode: 0,
                 telemetry_ring_head: 0,
@@ -1153,9 +1153,9 @@ impl StigmergicSubstrate {
         if capacity == 0 {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
-        let mut hub = Self::new();
-        hub.capacity = capacity;
-        Ok(hub)
+        let mut substrate = Self::new();
+        substrate.capacity = capacity;
+        Ok(substrate)
     }
 
     /// Creates a new [`StigmergicSubstrate`] configured with `(head_dim, num_heads, capacity)` and
@@ -1176,11 +1176,11 @@ impl StigmergicSubstrate {
         }
         thresholds.validate()?;
         let phase_steering = PhaseSteeringEngine::new(head_dim, num_heads)?;
-        let mut hub = Self::new();
-        hub.phase_steering = phase_steering;
-        hub.capacity = capacity;
-        hub.thresholds = thresholds;
-        Ok(hub)
+        let mut substrate = Self::new();
+        substrate.phase_steering = phase_steering;
+        substrate.capacity = capacity;
+        substrate.thresholds = thresholds;
+        Ok(substrate)
     }
 
     /// Creates a new [`StigmergicSubstrate`] initialized from a raw [`gcso_config_t`] descriptor.
@@ -1193,11 +1193,11 @@ impl StigmergicSubstrate {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
         let phase_steering = PhaseSteeringEngine::from_config(config)?;
-        let mut hub = Self::new();
-        hub.phase_steering = phase_steering;
-        hub.capacity = config.action_hub_capacity;
-        hub.ledger_slot.mode = u32::from(config.ledger_mode);
-        Ok(hub)
+        let mut substrate = Self::new();
+        substrate.phase_steering = phase_steering;
+        substrate.capacity = config.action_hub_capacity;
+        substrate.ledger_slot.mode = u32::from(config.ledger_mode);
+        Ok(substrate)
     }
 
     /// Returns the number of populated inline trails in `self.trails` (`0..=SUBSTRATE_INLINE_TRAILS`).
@@ -1745,7 +1745,7 @@ impl StigmergicSubstrate {
     ) -> GcsoResult<SubstrateStepReport> {
         let qdps_min_rad = self.phase_steering.phase_step_min_rad();
         let ripa_clamp = self.phase_steering.phase_clamp_max_rad();
-        let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
+        let (head_dim, num_heads, _expected_len) = self.validate_substrate_cascade_params(
             qdps_min_rad,
             ripa_clamp,
             query_tensor.as_deref(),
@@ -2449,7 +2449,7 @@ mod tests {
 
     #[test]
     fn test_substrate_engine_stigmergic_orchestration_and_gateway_kmeans() {
-        let mut hub = StigmergicSubstrate::with_dimensions_and_thresholds(
+        let mut substrate = StigmergicSubstrate::with_dimensions_and_thresholds(
             8,
             2,
             16,
@@ -2470,8 +2470,8 @@ mod tests {
             ACTION_PRESET_EXPRESS_PHASE,
             24,
         );
-        hub.step_pointer(ptr0.raw(), &mut t0).unwrap();
-        assert_eq!(hub.active_count(), 1);
+        substrate.step_pointer(ptr0.raw(), &mut t0).unwrap();
+        assert_eq!(substrate.active_count(), 1);
 
         let mut q_buf = AlignedBuffer32::new([1.0f32; 16]);
         let mut k_buf = AlignedBuffer32::new([1.0f32; 16]);
@@ -2483,7 +2483,7 @@ mod tests {
             ..Default::default()
         };
 
-        let report = hub
+        let report = substrate
             .orchestrate_next_action_step(
                 ptr0,
                 0.35,
@@ -2505,26 +2505,26 @@ mod tests {
 
         // Multi-hop chain test:
         // Verify multi-hop pointer-chain traversal (trail[0] -> trail[1] -> trail[2])
-        hub.trails[0].linked_trail_id = 1;
-        hub.trails[0].stigmergic_density = 0.8;
-        hub.trails[0].accumulated_phase_delta = [8i8; MAX_ATTENTION_HEADS];
-        hub.trails[1].linked_trail_id = 2;
-        hub.trails[1].stigmergic_density = 1.1;
-        hub.trails[1].accumulated_phase_delta = [10i8; MAX_ATTENTION_HEADS];
-        hub.trails[2].linked_trail_id = 2; // terminal self-link stops traversal cleanly
-        hub.trails[2].stigmergic_density = 1.6;
-        hub.trails[2].target_anchor_id = 777;
-        hub.trails[2].current_ptr = gcso_tagged_ptr_t::pack(
+        substrate.trails[0].linked_trail_id = 1;
+        substrate.trails[0].stigmergic_density = 0.8;
+        substrate.trails[0].accumulated_phase_delta = [8i8; MAX_ATTENTION_HEADS];
+        substrate.trails[1].linked_trail_id = 2;
+        substrate.trails[1].stigmergic_density = 1.1;
+        substrate.trails[1].accumulated_phase_delta = [10i8; MAX_ATTENTION_HEADS];
+        substrate.trails[2].linked_trail_id = 2; // terminal self-link stops traversal cleanly
+        substrate.trails[2].stigmergic_density = 1.6;
+        substrate.trails[2].target_anchor_id = 777;
+        substrate.trails[2].current_ptr = gcso_tagged_ptr_t::pack(
             0x2000,
             pack_action_slot_tag(ATTRACTOR_SLOT_PERSONA, ACTION_PRESET_FULL_ORCHESTRATION),
             12,
         )
         .raw();
-        hub.trails[2].accumulated_phase_delta = [12i8; MAX_ATTENTION_HEADS];
-        hub.active_count = 3;
+        substrate.trails[2].accumulated_phase_delta = [12i8; MAX_ATTENTION_HEADS];
+        substrate.active_count = 3;
 
         let mut chain_trail = gcso_pointer_trail_t::default();
-        let (chain_rep, hops, term_idx, term_aid, chain_coh) = hub
+        let (chain_rep, hops, term_idx, term_aid, chain_coh) = substrate
             .traverse_pointer_chain_and_orchestrate(
                 0,
                 8,
@@ -2541,25 +2541,25 @@ mod tests {
         assert_eq!(term_aid, 777);
         assert!(chain_coh > 0.95);
         assert_eq!(chain_rep.dominant_anchor_id, 777);
-        assert!(hub.trails[1].stigmergic_density > 1.1);
+        assert!(substrate.trails[1].stigmergic_density > 1.1);
     }
 
     #[test]
     fn test_workbench_free_by_default_allocator_pin_evict_decay_and_sandbox() {
-        let mut hub = StigmergicSubstrate::new();
-        assert_eq!(hub.active_lane_mask(), 0x00);
-        assert_eq!(hub.pinned_lane_mask(), 0x00);
-        assert_eq!(hub.repulsion_lane_mask(), 0x00);
-        assert_eq!(hub.sandbox_lane_mask(), 0x00);
-        assert_eq!(hub.free_lane_mask(), 0xFF);
-        assert_eq!(hub.lane_utilization_count(), 0);
-        assert_eq!(hub.slot_weights, [0.0; MAX_ATTRACTOR_DOMAINS]);
+        let mut substrate = StigmergicSubstrate::new();
+        assert_eq!(substrate.active_lane_mask(), 0x00);
+        assert_eq!(substrate.pinned_lane_mask(), 0x00);
+        assert_eq!(substrate.repulsion_lane_mask(), 0x00);
+        assert_eq!(substrate.sandbox_lane_mask(), 0x00);
+        assert_eq!(substrate.free_lane_mask(), 0xFF);
+        assert_eq!(substrate.lane_utilization_count(), 0);
+        assert_eq!(substrate.slot_weights, [0.0; MAX_ATTRACTOR_DOMAINS]);
 
         // Deterministic AutoFree allocation fills physical lanes 0..=7 in ascending order.
         let mut allocated = [0u8; MAX_ATTRACTOR_DOMAINS];
         for (i, slot) in allocated.iter_mut().enumerate() {
             let weight = 0.25 + (i as f32) * 0.25;
-            *slot = hub
+            *slot = substrate
                 .allocate_lane(&WorkbenchSlotSpec::auto_free(
                     weight,
                     [(i as i8) + 1; MAX_ATTENTION_HEADS],
@@ -2567,52 +2567,52 @@ mod tests {
                 .unwrap();
             assert_eq!(*slot, i as u8);
         }
-        assert_eq!(hub.active_lane_mask(), 0xFF);
-        assert_eq!(hub.lane_utilization_count(), 8);
-        assert_eq!(hub.free_lane_mask(), 0x00);
+        assert_eq!(substrate.active_lane_mask(), 0xFF);
+        assert_eq!(substrate.lane_utilization_count(), 8);
+        assert_eq!(substrate.free_lane_mask(), 0x00);
 
         // Pin lowest-weight lane 0: overflow AutoFree skips pinned lane 0 and evicts lane 1 (0.50).
-        hub.pin_lane(0, true).unwrap();
-        assert_eq!(hub.pinned_lane_mask(), 0x01);
-        let evicted_lane = hub
+        substrate.pin_lane(0, true).unwrap();
+        assert_eq!(substrate.pinned_lane_mask(), 0x01);
+        let evicted_lane = substrate
             .allocate_lane(&WorkbenchSlotSpec::auto_repulsion(
                 1.25,
                 [-12; MAX_ATTENTION_HEADS],
             ))
             .unwrap();
         assert_eq!(evicted_lane, 1);
-        assert_eq!(hub.repulsion_lane_mask(), 1 << 1);
-        assert_eq!(hub.slot_phase_bank.data[0], 1);
-        assert_eq!(hub.slot_phase_bank.data[MAX_ATTENTION_HEADS], -12);
+        assert_eq!(substrate.repulsion_lane_mask(), 1 << 1);
+        assert_eq!(substrate.slot_phase_bank.data[0], 1);
+        assert_eq!(substrate.slot_phase_bank.data[MAX_ATTENTION_HEADS], -12);
 
         // Pin all 8 lanes -> AutoFree returns GCSO_ERROR_ACTION_HUB_FULL without mutating.
         for lane in 0..MAX_ATTRACTOR_DOMAINS as u8 {
-            hub.pin_lane(lane, true).unwrap();
+            substrate.pin_lane(lane, true).unwrap();
         }
         assert_eq!(
-            hub.allocate_lane(&WorkbenchSlotSpec::auto_free(1.0, [4; MAX_ATTENTION_HEADS])),
+            substrate.allocate_lane(&WorkbenchSlotSpec::auto_free(1.0, [4; MAX_ATTENTION_HEADS])),
             Err(GCSO_ERROR_ACTION_HUB_FULL)
         );
 
         // Unpin lanes 1..=7, keep lane 0 pinned, then release_unpinned_lanes keeps only lane 0.
         for lane in 1..MAX_ATTRACTOR_DOMAINS as u8 {
-            hub.pin_lane(lane, false).unwrap();
+            substrate.pin_lane(lane, false).unwrap();
         }
-        let released = hub.release_unpinned_lanes();
+        let released = substrate.release_unpinned_lanes();
         assert_eq!(released, 7);
-        assert_eq!(hub.active_lane_mask(), 0x01);
-        assert_eq!(hub.pinned_lane_mask(), 0x01);
-        assert_eq!(hub.repulsion_lane_mask(), 0x00);
-        assert_eq!(hub.slot_phase_bank.data[MAX_ATTENTION_HEADS], 0);
+        assert_eq!(substrate.active_lane_mask(), 0x01);
+        assert_eq!(substrate.pinned_lane_mask(), 0x01);
+        assert_eq!(substrate.repulsion_lane_mask(), 0x00);
+        assert_eq!(substrate.slot_phase_bank.data[MAX_ATTENTION_HEADS], 0);
 
         // Allocate sandbox & standard unpinned lanes, verify decay_and_reclaim preserves pinned lane 0.
-        let std_lane = hub
+        let std_lane = substrate
             .allocate_lane(&WorkbenchSlotSpec::auto_free(
                 0.80,
                 [16; MAX_ATTENTION_HEADS],
             ))
             .unwrap();
-        let sb_lane = hub
+        let sb_lane = substrate
             .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(
                 0.20,
                 [32; MAX_ATTENTION_HEADS],
@@ -2620,47 +2620,47 @@ mod tests {
             .unwrap();
         assert_eq!(std_lane, 1);
         assert_eq!(sb_lane, 2);
-        assert_eq!(hub.sandbox_lane_mask(), 1 << 2);
+        assert_eq!(substrate.sandbox_lane_mask(), 1 << 2);
 
-        let reclaimed = hub.decay_and_reclaim_lanes(0.50, 0.25);
+        let reclaimed = substrate.decay_and_reclaim_lanes(0.50, 0.25);
         assert_eq!(reclaimed, 1);
-        assert_eq!(hub.active_lane_mask(), (1 << 0) | (1 << 1));
-        assert_eq!(hub.sandbox_lane_mask(), 0);
-        assert!((hub.slot_weights[0] - 0.25).abs() < 1e-6);
-        assert!((hub.slot_weights[1] - 0.40).abs() < 1e-6);
+        assert_eq!(substrate.active_lane_mask(), (1 << 0) | (1 << 1));
+        assert_eq!(substrate.sandbox_lane_mask(), 0);
+        assert!((substrate.slot_weights[0] - 0.25).abs() < 1e-6);
+        assert!((substrate.slot_weights[1] - 0.40).abs() < 1e-6);
 
         // Allocate sandbox lane again -> promote_sandbox_lane clears sandbox bit in-place;
         // release_sandbox_lanes prunes unpinned sandbox lanes.
-        let sb2 = hub
+        let sb2 = substrate
             .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(
                 0.60,
                 [24; MAX_ATTENTION_HEADS],
             ))
             .unwrap();
         assert_eq!(sb2, 2);
-        assert!(hub.promote_sandbox_lane(sb2).unwrap());
-        assert_eq!(hub.sandbox_lane_mask(), 0);
-        assert_ne!(hub.active_lane_mask() & (1 << sb2), 0);
+        assert!(substrate.promote_sandbox_lane(sb2).unwrap());
+        assert_eq!(substrate.sandbox_lane_mask(), 0);
+        assert_ne!(substrate.active_lane_mask() & (1 << sb2), 0);
 
-        let sb3 = hub
+        let sb3 = substrate
             .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(
                 0.60,
                 [28; MAX_ATTENTION_HEADS],
             ))
             .unwrap();
         assert_eq!(sb3, 3);
-        assert_eq!(hub.release_sandbox_lanes(), 1);
-        assert_eq!(hub.active_lane_mask() & (1 << sb3), 0);
+        assert_eq!(substrate.release_sandbox_lanes(), 1);
+        assert_eq!(substrate.active_lane_mask() & (1 << sb3), 0);
     }
 
     #[test]
     fn test_stigmergic_calculus_convex_combination_and_boundary_gate() {
-        use StigmergicGranuleField;
+        use StigmergicGranuleState;
 
         // 1. 4p(1-p) boundary sensitivity gate vanishes at ignorance (0) and saturation (127), peaks at 64.
-        assert_eq!(StigmergicGranuleField::boundary_sensitivity_gate_q7(0), 0);
-        assert_eq!(StigmergicGranuleField::boundary_sensitivity_gate_q7(127), 0);
-        assert!(StigmergicGranuleField::boundary_sensitivity_gate_q7(64) >= 120);
+        assert_eq!(StigmergicGranuleState::boundary_sensitivity_gate_q7(0), 0);
+        assert_eq!(StigmergicGranuleState::boundary_sensitivity_gate_q7(127), 0);
+        assert!(StigmergicGranuleState::boundary_sensitivity_gate_q7(64) >= 120);
 
         // 2. alpha = 0 reduces identically to pure integral density.
         let (eff_zero, _) =
@@ -2692,16 +2692,16 @@ mod tests {
         assert_eq!(size_of::<StigmergicSubstrate>(), 2816);
         assert_eq!(align_of::<StigmergicSubstrate>(), 128);
 
-        let mut hub = StigmergicSubstrate::new();
+        let mut substrate = StigmergicSubstrate::new();
         // Lane 0: standard attractive (unpinned)
-        let l0 = hub
+        let l0 = substrate
             .allocate_lane(&WorkbenchSlotSpec::auto_free(
                 1.0,
                 [12; MAX_ATTENTION_HEADS],
             ))
             .unwrap();
         // Lane 1: pinned attractive
-        let l1 = hub
+        let l1 = substrate
             .allocate_lane(&WorkbenchSlotSpec::explicit(
                 1,
                 true,
@@ -2711,21 +2711,21 @@ mod tests {
             ))
             .unwrap();
         // Lane 2: global repulsion
-        let l2 = hub
+        let l2 = substrate
             .allocate_lane(&WorkbenchSlotSpec::auto_repulsion(
                 0.8,
                 [-16; MAX_ATTENTION_HEADS],
             ))
             .unwrap();
         // Lane 3: pure sandbox hypothesis
-        let l3 = hub
+        let l3 = substrate
             .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(
                 0.6,
                 [32; MAX_ATTENTION_HEADS],
             ))
             .unwrap();
         // Lane 4: REPULSION | SANDBOX | PINNED
-        let l4 = hub
+        let l4 = substrate
             .allocate_lane(&WorkbenchSlotSpec {
                 placement: WorkbenchLanePlacement::Explicit { lane: 4, pin: true },
                 weight: 0.9,
@@ -2736,7 +2736,7 @@ mod tests {
             })
             .unwrap();
 
-        let (active_cut, free_cut) = hub.lane_lifecycle_quadrants();
+        let (active_cut, free_cut) = substrate.lane_lifecycle_quadrants();
         assert_eq!(active_cut.inside, (1 << l1) | (1 << l4));
         assert_eq!(active_cut.outside, (1 << l0) | (1 << l2) | (1 << l3));
         assert_eq!(free_cut.inside, 0);
@@ -2745,14 +2745,14 @@ mod tests {
             0xFF
         );
 
-        let (rep_cut, attract_cut) = hub.lane_role_quadrants();
+        let (rep_cut, attract_cut) = substrate.lane_role_quadrants();
         assert_eq!(rep_cut.outside, 1 << l2);
         assert_eq!(rep_cut.inside, 1 << l4);
         assert_eq!(attract_cut.outside, (1 << l0) | (1 << l1));
         assert_eq!(attract_cut.inside, 1 << l3);
         assert_eq!(
             rep_cut.outside | rep_cut.inside | attract_cut.outside | attract_cut.inside,
-            hub.active_lane_mask()
+            substrate.active_lane_mask()
         );
     }
 }

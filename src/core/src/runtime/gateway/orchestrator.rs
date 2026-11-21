@@ -292,7 +292,7 @@ fn synthesize_signal_with_optional_core_layers<S: ManifoldGatewaySignal + ?Sized
 ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
     if let Some(ctx) = core_ctx {
         if ctx.stack.liminal_layer.adaptation_epochs > 0 || ctx.stack.ego_layer.is_active() {
-            // Compute the pure `SystemSpine` I-Frame baseline BEFORE `LiminalEgoField` and
+            // Compute the pure `SystemSpine` I-Frame baseline BEFORE `LiminalEgoState` and
             // `EgoDifferentialNet` mutate the frame so `pinned` isolation always anchors to
             // pre-Ego state.
             let raw_frame = signal.synthesize_gateway_with_aperture_from_stack(ctx.stack);
@@ -623,7 +623,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
         let geom = geometry.rope_geometry();
         let (frame, frm_w) = synthesize_signal_with_optional_core_layers(signal, core_ctx);
         let report = frame.to_causal_report();
-        let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
+        let (head_dim, num_heads, _expected_len) = self.validate_substrate_cascade_params(
             frame.qdps_min_step_rad,
             frame.ripa_clamp_rad,
             query_tensor.as_deref(),
@@ -811,7 +811,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
             let _ = circuit.modulate_gateway_frame_at_scale(&mut frame, &frm_w, ref_w, scale);
         }
         let report = frame.to_causal_report();
-        let (head_dim, num_heads, _expected_len) = self.validate_hub_cascade_params(
+        let (head_dim, num_heads, _expected_len) = self.validate_substrate_cascade_params(
             frame.qdps_min_step_rad,
             frame.ripa_clamp_rad,
             query_tensor.as_deref(),

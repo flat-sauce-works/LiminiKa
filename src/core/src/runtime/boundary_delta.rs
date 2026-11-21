@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Temporal boundary velocity and chattering analyzer ([`LiminalBoundaryDelta`], 16 B)
-//! comparing consecutive Core Layer 0 [`LiminalThresholdField`] epochs.
+//! comparing consecutive Core Layer 0 [`LiminalThresholdState`] epochs.
 
 use crate::foundation::Pod;
-use crate::liminal::{branchless_select_u8, LiminalThresholdField, NUM_LIMINAL_THRESHOLD_CHANNELS};
+use crate::liminal::{branchless_select_u8, LiminalThresholdState, NUM_LIMINAL_THRESHOLD_CHANNELS};
 
 /// Threshold for leaky integrate-and-fire phase transition pulse on [`LiminalBoundaryDelta`].
 pub const CHATTER_FIRE_THRESHOLD_U8: u8 = 64;
@@ -14,11 +14,11 @@ pub const CHATTER_FIRE_THRESHOLD_U8: u8 = 64;
 /// velocity (`channel_floor_velocity_q7`), granule transition churn (`granule_transition_mask`),
 /// chattering oscillation (`chattering_channel_mask`), leaky integrate-and-fire phase-transition
 /// pulses (`chatter_potential_u8`, `phase_transition_pulse`), and stationary fast-skip readiness
-/// between consecutive [`LiminalThresholdField`] epochs.
+/// between consecutive [`LiminalThresholdState`] epochs.
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LiminalBoundaryDelta {
-    /// Signed per-channel boundary velocity (`cur.void_floor_q7 - prev.void_floor_q7`, `offset 0..8`).
+    /// Signed per-channel boundary velocity (`cur.threshold_floor_q7 - prev.threshold_floor_q7`, `offset 0..8`).
     /// Negative velocity indicates outward threshold expansion; positive indicates contraction.
     pub channel_floor_velocity_q7: [i8; NUM_LIMINAL_THRESHOLD_CHANNELS],
     /// Bitmask of SWAR granules whose overlap-core membership flipped since the previous step (`offset 8`).
@@ -46,8 +46,8 @@ impl LiminalBoundaryDelta {
     #[inline]
     #[must_use]
     pub fn compute_branchless(
-        prev_layer0: &LiminalThresholdField,
-        cur_layer0: &LiminalThresholdField,
+        prev_layer0: &LiminalThresholdState,
+        cur_layer0: &LiminalThresholdState,
         prev_overlap_mask: u8,
         cur_overlap_mask: u8,
         prev_delta: &Self,
@@ -59,8 +59,8 @@ impl LiminalBoundaryDelta {
 
         let mut ch = 0usize;
         while ch < NUM_LIMINAL_THRESHOLD_CHANNELS {
-            let cur_f = i32::from(cur_layer0.void_floor_q7[ch]);
-            let prev_f = i32::from(prev_layer0.void_floor_q7[ch]);
+            let cur_f = i32::from(cur_layer0.threshold_floor_q7[ch]);
+            let prev_f = i32::from(prev_layer0.threshold_floor_q7[ch]);
             let vel = (cur_f - prev_f).clamp(-127, 127) as i8;
             channel_floor_velocity_q7[ch] = vel;
 

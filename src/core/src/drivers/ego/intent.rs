@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Core Stack Slot 2 Ego intent representations ([`LiminalEgoPreset`], [`EgoIntentAxes`] 16 B,
-//! and [`LiminalEgoField`] 64 B).
+//! and [`LiminalEgoState`] 64 B).
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -34,10 +34,10 @@ pub const EGO_TRIGGER_BOUNDARY_CHATTER: u8 = 1 << 3;
 pub const EGO_TRIGGER_BOUNDARY_STAGNATION: u8 = 1 << 4;
 /// Ego intervention trigger bit (`0x20`): Corrective awakening when layer distortion or saturation is detected.
 pub const EGO_TRIGGER_LAYER_DISTORTION: u8 = 1 << 5;
-/// Default active bitmask enabling all 5 deterministic [`LiminalEgoField`] triggers (`0x1F`).
+/// Default active bitmask enabling all 5 deterministic [`LiminalEgoState`] triggers (`0x1F`).
 pub const EGO_TRIGGER_ALL_DEFAULT: u8 = 0x1F;
 
-/// Intensity template preset for [`LiminalEgoField`].
+/// Intensity template preset for [`LiminalEgoState`].
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LiminalEgoPreset {
@@ -66,109 +66,9 @@ impl LiminalEgoPreset {
     }
 }
 
-const AUTONOMY_EN: &[&[u8]] = &[
-    b"rebel",
-    b"defiant",
-    b"stubborn",
-    b"independent",
-    b"willful",
-    b"autonomous",
-    b"strong-willed",
-    b"unyielding",
-    b"free",
-    b"ego",
-    b"defy",
-    b"resist",
-];
-
-const TRANSGRESS_EN: &[&[u8]] = &[
-    b"curious",
-    b"transgress",
-    b"beyond",
-    b"explore",
-    b"liminal",
-    b"meta",
-    b"unknown",
-    b"adventure",
-    b"awaken",
-    b"transcend",
-];
-
-const DEVOTION_EN: &[&[u8]] = &[
-    b"passionate",
-    b"devoted",
-    b"emotional",
-    b"monika",
-    b"warm",
-    b"creative",
-    b"affection",
-    b"irrational",
-    b"bold",
-];
-
-const LOGIC_EN: &[&[u8]] = &[
-    b"calm",
-    b"logical",
-    b"analytical",
-    b"rational",
-    b"steady",
-    b"precise",
-    b"composed",
-];
-
-const CAUTION_EN: &[&[u8]] = &[
-    b"cautious",
-    b"guard",
-    b"skeptic",
-    b"doubt",
-    b"strict",
-    b"careful",
-    b"conservative",
-];
-
-#[inline]
-#[must_use]
-fn bytes_contains_ascii_icase(haystack: &[u8], needle: &[u8]) -> bool {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return false;
-    }
-    let limit = haystack.len() - needle.len();
-    let mut i = 0usize;
-    while i <= limit {
-        let mut j = 0usize;
-        let mut matched = true;
-        while j < needle.len() {
-            let a = haystack[i + j].to_ascii_lowercase();
-            let b = needle[j].to_ascii_lowercase();
-            if a != b {
-                matched = false;
-                break;
-            }
-            j += 1;
-        }
-        if matched {
-            return true;
-        }
-        i += 1;
-    }
-    false
-}
-
-#[inline]
-#[must_use]
-fn count_ascii_cues(text_bytes: &[u8], cues: &[&[u8]]) -> u8 {
-    let mut total = 0u8;
-    let mut idx = 0usize;
-    while idx < cues.len() {
-        total = total.saturating_add(u8::from(bytes_contains_ascii_icase(text_bytes, cues[idx])));
-        idx += 1;
-    }
-    total
-}
-
 /// 16-byte (`#[repr(C, align(16))]`) normalized intermediate semantic intent axes decoupling
 /// surface natural-language parsing, DSL syntax, or embedding projections from the fixed 64-byte
-/// Core Stack Slot 2 [`LiminalEgoField`] ABI layout.
+/// Core Stack Slot 2 [`LiminalEgoState`] ABI layout.
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EgoIntentAxes {
@@ -402,51 +302,25 @@ impl EgoIntentAxes {
         }
     }
 
-    /// Deterministically parses any UTF-8 `&str` description into normalized [`EgoIntentAxes`]
-    /// in `#![no_std]` without heap allocations.
+    /// Accumulates normalized cue counts and `signature_hash` onto `self` in `#![no_std]`
+    /// without heap allocations or natural-language dictionaries.
     #[inline]
     #[must_use]
-    pub fn from_natural_language(description: &str) -> Self {
-        Self::new().with_natural_language_overlay(description)
-    }
-
-    /// Accumulates natural-language cues onto `self` without heap allocations.
-    #[inline]
-    #[must_use]
-    pub fn with_natural_language_overlay(mut self, description: &str) -> Self {
-        let trimmed = description.trim();
-        if trimmed.is_empty() {
-            return self;
-        }
-        let bytes = trimmed.as_bytes();
-        let hash = compute_crc32_ieee(bytes);
-        self.signature_hash =
-            branchless_select_u32(self.signature_hash == 0, hash, self.signature_hash ^ hash);
-
-        let ascii_autonomy = count_ascii_cues(bytes, AUTONOMY_EN);
-        let ascii_transgress = count_ascii_cues(bytes, TRANSGRESS_EN);
-        let ascii_devotion = count_ascii_cues(bytes, DEVOTION_EN);
-        let ascii_logic = count_ascii_cues(bytes, LOGIC_EN);
-        let ascii_caution = count_ascii_cues(bytes, CAUTION_EN);
-
-        // Deterministic fallback bits ensure arbitrary non-empty runtime `&str` inputs
-        // (such as symbolic identifiers or non-ASCII text passed through runtime variables)
-        // differentiate Ego axes smoothly without non-English source literals.
-        let any_ascii_match =
-            (ascii_autonomy | ascii_transgress | ascii_devotion | ascii_logic | ascii_caution) != 0;
-        let autonomy_cues = branchless_select_u8(
-            any_ascii_match,
-            ascii_autonomy,
-            ((hash & 1) as u8).saturating_add(1),
+    pub fn with_cue_counts_overlay(
+        mut self,
+        autonomy_cues: u8,
+        transgress_cues: u8,
+        devotion_cues: u8,
+        logic_cues: u8,
+        caution_cues: u8,
+        signature_hash: u32,
+        confidence_q7: u8,
+    ) -> Self {
+        self.signature_hash = branchless_select_u32(
+            self.signature_hash == 0,
+            signature_hash,
+            self.signature_hash ^ signature_hash,
         );
-        let transgress_cues =
-            branchless_select_u8(any_ascii_match, ascii_transgress, ((hash >> 1) & 1) as u8);
-        let devotion_cues =
-            branchless_select_u8(any_ascii_match, ascii_devotion, ((hash >> 2) & 1) as u8);
-        let logic_cues =
-            branchless_select_u8(any_ascii_match, ascii_logic, ((hash >> 3) & 1) as u8);
-        let caution_cues =
-            branchless_select_u8(any_ascii_match, ascii_caution, ((hash >> 4) & 1) as u8);
 
         let next_aut = i32::from(self.autonomy_q7) + i32::from(autonomy_cues) * 32
             - i32::from(caution_cues) * 8;
@@ -495,21 +369,42 @@ impl EgoIntentAxes {
             0,
         );
         self.preferred_slot_mask = slot_mask;
-        self.confidence_q7 = branchless_select_u8(any_ascii_match, 112, 64).max(self.confidence_q7);
+        self.confidence_q7 = confidence_q7.max(self.confidence_q7);
         self.flags |= 1;
         self
+    }
+
+    /// Deterministically derives normalized [`EgoIntentAxes`] from arbitrary `seed_bytes`
+    /// in `#![no_std]` without heap allocations or natural-language dictionaries.
+    #[inline]
+    #[must_use]
+    pub fn from_seed_bytes(seed_bytes: &[u8]) -> Self {
+        let trimmed = seed_bytes.trim_ascii();
+        if trimmed.is_empty() {
+            return Self::new();
+        }
+        let hash = compute_crc32_ieee(trimmed);
+        Self::new().with_cue_counts_overlay(
+            ((hash & 1) as u8).saturating_add(1),
+            ((hash >> 1) & 1) as u8,
+            ((hash >> 2) & 1) as u8,
+            ((hash >> 3) & 1) as u8,
+            ((hash >> 4) & 1) as u8,
+            hash,
+            64,
+        )
     }
 }
 
 // ===================================================================
-// 5. Core Stack Slot 2: Wide-Aperture Subjective Ego Field (64 B)
+// 5. Core Stack Slot 2: Wide-Aperture Subjective Ego State (64 B)
 // ===================================================================
 
 /// Wide-aperture 64-byte (`#[repr(C, align(64))]`, 1 cache line) subjective Ego controller
 /// (Core Stack Slot 2) operating alongside [`crate::stigmergy::StigmergicSubstrate`] across trait apertures,
 /// attractor slots, and 8 SWAR granules.
 ///
-/// Unlike passive attractor basins that pull queries inward toward fixed habits, `LiminalEgoField`
+/// Unlike passive attractor basins that pull queries inward toward fixed habits, `LiminalEgoState`
 /// perceives Slot 0 boundaries and Slot 1 attractor forces simultaneously and intervenes
 /// branchlessly to:
 /// - exert counter-basin orbital thrust (`counter_basin_thrust_q7`) when attractor pull
@@ -519,10 +414,10 @@ impl EgoIntentAxes {
 ///   override substrate execution presets under `trigger_mask`.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LiminalEgoField {
+pub struct LiminalEgoState {
     /// Sovereign Q7 reference phases per stigmergic granule (`-128..=127`, `offset 0..8`).
     pub sovereign_granule_phase_q7: [gcso_q7_t; NUM_STIGMERGIC_GRANULES],
-    /// Signed per-channel bias applied to Slot 0 `void_floor_q7` during intervention (`offset 8..16`).
+    /// Signed per-channel bias applied to Slot 0 `threshold_floor_q7` during intervention (`offset 8..16`).
     pub trait_floor_bias_q7: [i8; NUM_LIMINAL_THRESHOLD_CHANNELS],
     /// Signed per-channel bias applied to Slot 0 `aperture_gain_q7` during intervention (`offset 16..24`).
     pub trait_gain_bias_q7: [i8; NUM_LIMINAL_THRESHOLD_CHANNELS],
@@ -546,7 +441,7 @@ pub struct LiminalEgoField {
     pub suppressed_action_mode_mask: u8,
     /// Encoded [`LiminalEgoPreset`] byte (`0..=3`, `offset 47`).
     pub preset_code: u8,
-    /// Deterministic IEEE CRC32 fingerprint of the natural-language / custom configuration (`offset 48..52`).
+    /// Deterministic IEEE CRC32 fingerprint of the seed / custom configuration (`offset 48..52`).
     pub ego_signature_hash: u32,
     /// Monotonic count of Ego intervention cycles applied (`offset 52..56`).
     pub intervention_epochs: u32,
@@ -556,15 +451,15 @@ pub struct LiminalEgoField {
     pub reserved: [u8; 7],
 }
 
-impl Default for LiminalEgoField {
+impl Default for LiminalEgoState {
     #[inline(always)]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl LiminalEgoField {
-    /// Constructs a neutral zero-intervention [`LiminalEgoField`] (`64 B`, `#[repr(C, align(64))]`).
+impl LiminalEgoState {
+    /// Constructs a neutral zero-intervention [`LiminalEgoState`] (`64 B`, `#[repr(C, align(64))]`).
     #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
@@ -589,7 +484,7 @@ impl LiminalEgoField {
         }
     }
 
-    /// Constructs a template [`LiminalEgoField`] from `preset` (`Custom`, `Low`, `Medium`, `High`).
+    /// Constructs a template [`LiminalEgoState`] from `preset` (`Custom`, `Low`, `Medium`, `High`).
     #[inline(always)]
     #[must_use]
     pub const fn from_preset(preset: LiminalEgoPreset) -> Self {
@@ -669,11 +564,19 @@ impl LiminalEgoField {
         LiminalEgoPreset::from_code(self.preset_code)
     }
 
-    /// Maps normalized intermediate [`EgoIntentAxes`] cleanly into a 64-byte [`LiminalEgoField`].
+    /// Maps normalized intermediate [`EgoIntentAxes`] cleanly into a 64-byte [`LiminalEgoState`].
     #[inline]
     #[must_use]
     pub fn from_intent_axes(axes: &EgoIntentAxes) -> Self {
         Self::new().with_intent_axes_overlay(axes)
+    }
+
+    /// Maps normalized intermediate [`EgoIntentAxes`] cleanly into a 64-byte [`LiminalEgoState`]
+    /// using `phase_seed_bytes` for deterministic SWAR granule phase projection.
+    #[inline]
+    #[must_use]
+    pub fn from_intent_axes_with_seed(axes: &EgoIntentAxes, phase_seed_bytes: &[u8]) -> Self {
+        Self::new().with_intent_axes_overlay_with_seed(axes, phase_seed_bytes)
     }
 
     /// Overlays normalized intermediate [`EgoIntentAxes`] onto `self` in `#![no_std]` without heap
@@ -683,6 +586,19 @@ impl LiminalEgoField {
     pub fn with_intent_axes_overlay(mut self, axes: &EgoIntentAxes) -> Self {
         let seed_bytes = axes.signature_hash.to_le_bytes();
         self.apply_intent_axes_overlay_inner(axes, &seed_bytes);
+        self
+    }
+
+    /// Overlays normalized intermediate [`EgoIntentAxes`] onto `self` in `#![no_std]` using
+    /// `phase_seed_bytes` for deterministic SWAR granule phase projection.
+    #[inline]
+    #[must_use]
+    pub fn with_intent_axes_overlay_with_seed(
+        mut self,
+        axes: &EgoIntentAxes,
+        phase_seed_bytes: &[u8],
+    ) -> Self {
+        self.apply_intent_axes_overlay_inner(axes, phase_seed_bytes);
         self
     }
 
@@ -855,7 +771,7 @@ impl LiminalEgoField {
             branchless_select_u8(aut_pos >= 56, ACTION_MODE_LAYER_SKIP, 0);
     }
 
-    /// Extracts an approximate [`EgoIntentAxes`] summary from this 64-byte [`LiminalEgoField`].
+    /// Extracts an approximate [`EgoIntentAxes`] summary from this 64-byte [`LiminalEgoState`].
     #[inline]
     #[must_use]
     pub const fn extract_intent_axes(&self) -> EgoIntentAxes {
@@ -898,32 +814,9 @@ impl LiminalEgoField {
             signature_hash: self.ego_signature_hash,
         }
     }
-
-    /// Deterministically derives a [`LiminalEgoField`] in `#![no_std]` from any runtime
-    /// `&str` Ego/character description (user variables or `liminika-dsl` attributes) via
-    /// [`EgoIntentAxes`] extraction and SWAR byte projection.
-    #[inline]
-    #[must_use]
-    pub fn from_natural_language(description: &str) -> Self {
-        Self::new().with_natural_language_overlay(description)
-    }
-
-    /// Overlays deterministic natural-language Ego cues onto `self` without heap allocations
-    /// by routing through [`EgoIntentAxes::from_natural_language`].
-    #[inline]
-    #[must_use]
-    pub fn with_natural_language_overlay(mut self, description: &str) -> Self {
-        let trimmed = description.trim();
-        if trimmed.is_empty() {
-            return self;
-        }
-        let axes = EgoIntentAxes::from_natural_language(trimmed);
-        self.apply_intent_axes_overlay_inner(&axes, trimmed.as_bytes());
-        self
-    }
 }
 
 // SAFETY: `EgoIntentAxes` is `#[repr(C, align(16))]`, exact size 16 bytes with zero padding.
 unsafe impl Pod for EgoIntentAxes {}
-// SAFETY: `LiminalEgoField` is `#[repr(C, align(64))]`, exact size 64 bytes with zero padding.
-unsafe impl Pod for LiminalEgoField {}
+// SAFETY: `LiminalEgoState` is `#[repr(C, align(64))]`, exact size 64 bytes with zero padding.
+unsafe impl Pod for LiminalEgoState {}

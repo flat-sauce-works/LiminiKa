@@ -119,7 +119,7 @@ pub trait CausalProvenanceSignal: Liminal {
         let mut ch = 0usize;
         while ch < 4 {
             let axis_on = ((bits >> ch) & 1) != 0;
-            let base_floor = i32::from(stack.liminal_layer.void_floor_q7[ch]);
+            let base_floor = i32::from(stack.liminal_layer.threshold_floor_q7[ch]);
             let base_gain = i32::from(stack.liminal_layer.aperture_gain_q7[ch]);
             let ego_floor_bias = branchless_select_i32(
                 ego_active,

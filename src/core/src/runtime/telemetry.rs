@@ -11,12 +11,12 @@
 #![allow(clippy::must_use_candidate)]
 
 use crate::drivers::{
-    DistortionTension, LiminalEgoField, EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER,
+    DistortionTension, LiminalEgoState, EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER,
     EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR,
 };
 use crate::foundation::{branchless_clamp_f32, branchless_is_finite_f32, Pod};
 use crate::liminal::{
-    EpistemicPartition, EpistemicRegime, LiminalThresholdField, NUM_LIMINAL_THRESHOLD_CHANNELS,
+    EpistemicPartition, EpistemicRegime, LiminalThresholdState, NUM_LIMINAL_THRESHOLD_CHANNELS,
     NUM_STIGMERGIC_GRANULES, THRESHOLD_COGNITIVE_CIRCUIT, THRESHOLD_CONTRADICTION_GUARD,
     THRESHOLD_KV_PHASE_CACHE, THRESHOLD_MANIFOLD_GATEWAY, THRESHOLD_OBJECTIVE_FACT,
     THRESHOLD_RELATIVE_COUPLING, THRESHOLD_STIGMERGIC_CONSENSUS, THRESHOLD_STIGMERGY_WIDE,
@@ -27,7 +27,7 @@ use crate::runtime::context::AutonomousCoreLayerStack;
 use crate::runtime::gateway::signals::ManifoldProbeBaseline;
 use crate::runtime::horizon::EpistemicHorizonReading;
 use crate::stigmergy::{
-    StigmergicActionDecision, StigmergicGranuleField, StigmergicOverlapSerendipityReport,
+    StigmergicActionDecision, StigmergicGranuleState, StigmergicOverlapSerendipityReport,
     StigmergicThresholds,
 };
 
@@ -73,7 +73,7 @@ pub struct LiminalHorizonNodeDescriptor {
     pub node_id: &'static str,
     /// Canonical capability or domain label associated with this threshold channel.
     pub trait_name: &'static str,
-    /// Channel index (`0..8`) inside [`LiminalThresholdField`].
+    /// Channel index (`0..8`) inside [`LiminalThresholdState`].
     pub channel_idx: usize,
     /// Static cognitive threshold mask owned by this channel node.
     pub static_aperture_mask: u32,
@@ -143,12 +143,12 @@ pub const GCSO_LIMINAL_HORIZON_TOPOLOGY: [LiminalHorizonNodeDescriptor;
 ];
 
 /// Compact `32`-byte (`#[repr(C, align(16))]`) self-introspecting telemetry snapshot capturing
-/// live [`LiminalThresholdField`] boundaries, active epistemic regime, and crystal population counts.
+/// live [`LiminalThresholdState`] boundaries, active epistemic regime, and crystal population counts.
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LiminalTopologyTelemetrySnapshot {
     /// Per-channel `Liminal` floor values in Q0.7 (`0..=127`).
-    pub void_floor_q7: [u8; NUM_LIMINAL_THRESHOLD_CHANNELS],
+    pub threshold_floor_q7: [u8; NUM_LIMINAL_THRESHOLD_CHANNELS],
     /// Per-channel cognitive aperture gain values in Q0.7 (`0..=127`).
     pub aperture_gain_q7: [u8; NUM_LIMINAL_THRESHOLD_CHANNELS],
     /// Per-channel signed focal phase shifts in Q7 (`-128..=127`).
@@ -252,14 +252,14 @@ impl LiminalTopologyTelemetrySnapshot {
     #[inline]
     #[must_use]
     pub fn capture(
-        field: &LiminalThresholdField,
+        field: &LiminalThresholdState,
         horizon: &EpistemicHorizonReading,
         active_crystals: u8,
         spawned_daughters: u8,
     ) -> Self {
         let sev = (branchless_clamp_f32(horizon.conflict_severity, 0.0, 1.0) * 127.0 + 0.5) as u8;
         Self {
-            void_floor_q7: field.void_floor_q7,
+            threshold_floor_q7: field.threshold_floor_q7,
             aperture_gain_q7: field.aperture_gain_q7,
             phase_shift_q7: field.phase_shift_q7,
             active_aperture_mask: field.active_aperture_mask,
@@ -273,8 +273,8 @@ impl LiminalTopologyTelemetrySnapshot {
     #[inline]
     fn format_mermaid_flowchart_core(
         &self,
-        layer1_opt: Option<(&StigmergicGranuleField, &StigmergicOverlapSerendipityReport)>,
-        layer2_opt: Option<&LiminalEgoField>,
+        layer1_opt: Option<(&StigmergicGranuleState, &StigmergicOverlapSerendipityReport)>,
+        layer2_opt: Option<&LiminalEgoState>,
         buf: &mut [u8],
     ) -> usize {
         let mut cur = BufCursor { buf, pos: 0 };
@@ -288,7 +288,7 @@ impl LiminalTopologyTelemetrySnapshot {
 
         match layer1_opt {
             Some((layer1, venn)) => {
-                cur.write_str("    STIG[\"Core Layer 1: StigmergicGranuleField | VennCore:");
+                cur.write_str("    STIG[\"Core Layer 1: StigmergicGranuleState | VennCore:");
                 cur.write_hex_u8(venn.venn_core_mask);
                 cur.write_str(" | Serendipity:");
                 cur.write_hex_u8(venn.serendipity_excursion_mask);
@@ -306,7 +306,7 @@ impl LiminalTopologyTelemetrySnapshot {
         }
 
         if let Some(ego) = layer2_opt {
-            cur.write_str("    EGO[\"Core Layer 2: LiminalEgoField | Thrust:");
+            cur.write_str("    EGO[\"Core Layer 2: LiminalEgoState | Thrust:");
             cur.write_u8_dec(ego.counter_basin_thrust_q7);
             cur.write_str("/127 | Transgress:");
             cur.write_i8_dec(ego.transgression_bias_q7);
@@ -329,7 +329,7 @@ impl LiminalTopologyTelemetrySnapshot {
             cur.write_str(" | Apt:");
             cur.write_hex_u16(desc.static_aperture_mask);
             cur.write_str(" | VoidFloor:");
-            cur.write_u8_dec(self.void_floor_q7[ch]);
+            cur.write_u8_dec(self.threshold_floor_q7[ch]);
             cur.write_str("/127 | Gain:");
             cur.write_u8_dec(self.aperture_gain_q7[ch]);
             cur.write_str("/127 | Shift:");
@@ -353,7 +353,7 @@ impl LiminalTopologyTelemetrySnapshot {
         cur.write_str("    HUB[\"L2_Substrate | Apt:");
         cur.write_hex_u16(THRESHOLD_STIGMERGY_WIDE);
         cur.write_str(" | VoidFloor:");
-        cur.write_u8_dec(self.void_floor_q7[7]);
+        cur.write_u8_dec(self.threshold_floor_q7[7]);
         cur.write_str("/127 | Crystals:");
         cur.write_u8_dec(self.active_crystals);
         cur.write_str(" | Daughters:");
@@ -372,8 +372,8 @@ impl LiminalTopologyTelemetrySnapshot {
         cur.pos
     }
 
-    /// Renders all three autonomous core layers (`Liminal` Layer 0, `StigmergicGranuleField`
-    /// Layer 1, and `LiminalEgoField` Layer 2) alongside Venn overlap & serendipity telemetry as a
+    /// Renders all three autonomous core layers (`Liminal` Layer 0, `StigmergicGranuleState`
+    /// Layer 1, and `LiminalEgoState` Layer 2) alongside Venn overlap & serendipity telemetry as a
     /// `#![no_std]` zero-allocation Mermaid `flowchart TD` diagram directly into `buf`.
     #[inline]
     pub fn format_three_core_layers_mermaid(
@@ -1050,7 +1050,7 @@ impl CoreTelemetryBank {
         horizon: &EpistemicHorizonReading,
         delta: &LiminalBoundaryDelta,
         venn: &StigmergicOverlapSerendipityReport,
-        ego: &LiminalEgoField,
+        ego: &LiminalEgoState,
         entropy_gate_mode: u32,
         slid_in_bits: u32,
         slid_out_bits: u32,
@@ -1148,7 +1148,7 @@ impl CoreTelemetryBank {
         &mut self,
         delta: &LiminalBoundaryDelta,
         venn: &StigmergicOverlapSerendipityReport,
-        ego: &LiminalEgoField,
+        ego: &LiminalEgoState,
     ) {
         self.detailed.detailed_captured_steps =
             self.detailed.detailed_captured_steps.saturating_add(1);

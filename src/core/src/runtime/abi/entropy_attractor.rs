@@ -620,8 +620,8 @@ pub unsafe extern "C" fn gcso_stigmergic_evaluate_venn_and_serendipity(
     })
 }
 
-/// Initializes a 128-byte [`gcso_autonomous_core_layer_stack_t`] (Core Layer 0: `LiminalThresholdField`,
-/// Core Layer 1: `StigmergicGranuleField`, Core Layer 2: `LiminalEgoField`) with canonical defaults.
+/// Initializes a 128-byte [`gcso_autonomous_core_layer_stack_t`] (Core Layer 0: `LiminalThresholdState`,
+/// Core Layer 1: `StigmergicGranuleState`, Core Layer 2: `LiminalEgoState`) with canonical defaults.
 ///
 /// # Safety
 /// `stack_out` must be non-null and 64-byte aligned.
@@ -689,8 +689,8 @@ pub unsafe extern "C" fn gcso_core_layer_stack_adapt(
     })
 }
 
-/// Formats the live 3-layer Core Topology (`Liminal` Layer 0, `StigmergicGranuleField` Layer 1,
-/// `LiminalEgoField` Layer 2, and the trait aperture table) as a `#![no_std]` zero-allocation
+/// Formats the live 3-layer Core Topology (`Liminal` Layer 0, `StigmergicGranuleState` Layer 1,
+/// `LiminalEgoState` Layer 2, and the trait aperture table) as a `#![no_std]` zero-allocation
 /// Mermaid `flowchart TD` diagram into `out_buf[0..buf_cap]`. Pass `out_buf = NULL` to query the
 /// required byte length in `bytes_written_out`.
 ///
@@ -780,12 +780,12 @@ pub unsafe extern "C" fn gcso_ego_field_init_preset(
     ffi_boundary!({
         // SAFETY: Validates non-nullness and 64-byte natural alignment.
         let mut out_ref = unsafe { FfiHandleMut::from_raw(ego_out)? };
-        *out_ref = LiminalEgoField::from_preset(LiminalEgoPreset::from_code(preset_code));
+        *out_ref = LiminalEgoState::from_preset(LiminalEgoPreset::from_code(preset_code));
         Ok(GCSO_SUCCESS)
     })
 }
 
-/// Deterministically derives a 64-byte [`gcso_liminal_ego_field_t`] from UTF-8 natural-language
+/// Deterministically derives a 64-byte [`gcso_liminal_ego_field_t`] from UTF-8 seed
 /// text (`utf8_ptr[0..utf8_len]`) with zero heap allocations.
 ///
 /// # Safety
@@ -801,7 +801,7 @@ pub unsafe extern "C" fn gcso_ego_field_derive_from_text(
         // SAFETY: Validates non-nullness and 64-byte natural alignment.
         let mut out_ref = unsafe { FfiHandleMut::from_raw(ego_out)? };
         if utf8_len == 0 {
-            *out_ref = LiminalEgoField::new();
+            *out_ref = LiminalEgoState::new();
             return Ok(GCSO_SUCCESS);
         }
         validate_ptr(utf8_ptr)?;
@@ -809,14 +809,20 @@ pub unsafe extern "C" fn gcso_ego_field_derive_from_text(
             utf8_ptr as usize,
             utf8_len,
             ego_out as usize,
-            size_of::<LiminalEgoField>(),
+            size_of::<LiminalEgoState>(),
         ) {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
         // SAFETY: Validated non-null, readable length `utf8_len`, and disjoint from `ego_out`.
         let bytes = unsafe { slice::from_raw_parts(utf8_ptr, utf8_len) };
         let text = core::str::from_utf8(bytes).map_err(|_| GCSO_ERROR_INVALID_ARGUMENT)?;
-        *out_ref = LiminalEgoField::from_natural_language(text);
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            *out_ref = LiminalEgoState::new();
+            return Ok(GCSO_SUCCESS);
+        }
+        let axes = EgoIntentAxes::from_seed_bytes(trimmed.as_bytes());
+        *out_ref = LiminalEgoState::from_intent_axes_with_seed(&axes, trimmed.as_bytes());
         Ok(GCSO_SUCCESS)
     })
 }
@@ -845,7 +851,7 @@ pub unsafe extern "C" fn gcso_ego_field_intervene_frame(
         validate_ptr(horizon)?;
         validate_ptr(frame_inout)?;
 
-        let ego_bytes = size_of::<LiminalEgoField>();
+        let ego_bytes = size_of::<LiminalEgoState>();
         let stack_bytes = size_of::<AutonomousCoreLayerStack>();
         let delta_bytes = size_of::<LiminalBoundaryDelta>();
         let hor_bytes = size_of::<EpistemicHorizonReading>();

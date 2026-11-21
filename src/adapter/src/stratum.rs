@@ -750,7 +750,7 @@ impl SocietyStratum for SubstrateBoundaryStratum<'_> {
 
         // Execute cross-scale substrate orchestration so Gateway synthesis, Stigmergy, and
         // recorded CognitiveTrajectoryLedger close into one unified FastPathLedger ledger.
-        let mut boundary_hub = StigmergicSubstrate::new();
+        let mut boundary_substrate = StigmergicSubstrate::new();
         let mut ledger_slot = Default::default();
         signal
             .telemetry
@@ -769,7 +769,7 @@ impl SocietyStratum for SubstrateBoundaryStratum<'_> {
                 StigmergicScaleGranularity::MacroCoalition,
             ),
         ];
-        if let Ok((proj, mut ledger, _rep)) = boundary_hub.orchestrate_adaptive_depth_n(
+        if let Ok((proj, mut ledger, _rep)) = boundary_substrate.orchestrate_adaptive_depth_n(
             &scale_stack,
             scale_stack.len(),
             gcso_tagged_ptr_t(frame.tagged_ptr),
@@ -801,7 +801,7 @@ impl SocietyStratum for SubstrateBoundaryStratum<'_> {
                 final_op,
                 intensity,
             ));
-            ledger.write_to_ledger_slot(&mut boundary_hub.ledger_slot);
+            ledger.write_to_ledger_slot(&mut boundary_substrate.ledger_slot);
             signal.telemetry.cognitive_trajectory = ledger;
             signal.telemetry.layer_activation = proj.activation;
         }
@@ -938,12 +938,12 @@ impl<'a> StratumPipeline<'a> {
 /// deposits and 8-cell Micro-Swarm phase consensus (`StigmergicSubstrate`).
 pub trait StigmergicCoalitionDecomposer: Send + Sync {
     /// Decomposes a multi-token query's residual resonance field into an ordered chain of
-    /// complementary Fact attractors (`t0 -> t1 -> ...`) inside `hub`.
+    /// complementary Fact attractors (`t0 -> t1 -> ...`) inside `substrate`.
     fn decompose_fact_coalition(
         &self,
         ctx: &StratumContext<'_>,
         signal: &mut StratumSignal,
-        hub: &mut StigmergicSubstrate,
+        substrate: &mut StigmergicSubstrate,
         selected_indices: &[usize],
         trail_states: &[gcso_pointer_trail_t],
         last_layer: usize,
@@ -1064,7 +1064,7 @@ impl LocalTokenResonanceStratum {
         last_layer: usize,
     ) -> (StigmergicSubstrate, Vec<usize>, Vec<gcso_pointer_trail_t>) {
         let n_entries = entries.len();
-        let mut hub = StigmergicSubstrate::new();
+        let mut substrate = StigmergicSubstrate::new();
         for entry in entries {
             if entry.role == AttractorRole::Guard {
                 let g_q7 = entry
@@ -1073,7 +1073,8 @@ impl LocalTokenResonanceStratum {
                     .copied()
                     .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
                 let g_words = load_q7_words_64(&g_q7);
-                hub.bloom_filter
+                substrate
+                    .bloom_filter
                     .insert_repulsive_pattern_words_weighted(&g_words, 2);
             }
         }
@@ -1119,7 +1120,7 @@ impl LocalTokenResonanceStratum {
             .collect();
 
         if signal.token_deposits.is_empty() {
-            return (hub, selected_indices, trail_states);
+            return (substrate, selected_indices, trail_states);
         }
 
         let mut bloom_repulsions = vec![0_u32; selected_indices.len()];
@@ -1150,7 +1151,7 @@ impl LocalTokenResonanceStratum {
                     4,
                     0.45,
                     0.15,
-                    Some(&hub.bloom_filter),
+                    Some(&substrate.bloom_filter),
                     3,
                     96,
                 );
@@ -1160,7 +1161,7 @@ impl LocalTokenResonanceStratum {
                     bloom_repulsions[slot] += 1;
                 }
                 let weighted_coh = (tok_coh * (0.5 + 0.5 * consensus)).clamp(0.0, 1.0);
-                hub.evaporate_and_deposit_pheromone(
+                substrate.evaporate_and_deposit_pheromone(
                     &mut trail_states[slot],
                     weighted_coh,
                     bloom_repulsed,
@@ -1181,7 +1182,7 @@ impl LocalTokenResonanceStratum {
             }
         }
 
-        (hub, selected_indices, trail_states)
+        (substrate, selected_indices, trail_states)
     }
 }
 
@@ -1335,7 +1336,7 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
         &self,
         ctx: &StratumContext<'_>,
         signal: &mut StratumSignal,
-        hub: &mut StigmergicSubstrate,
+        substrate: &mut StigmergicSubstrate,
         selected_indices: &[usize],
         trail_states: &[gcso_pointer_trail_t],
         last_layer: usize,
@@ -1533,14 +1534,14 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
             t.linked_trail_id = ((m + 1) % chain_len) as u32;
             let min_rho = (0.65 - 0.05 * (m as f32)).max(0.50);
             t.stigmergic_density = t.stigmergic_density.max(min_rho);
-            hub.trails[m] = t;
+            substrate.trails[m] = t;
         }
-        hub.active_count = hub.active_count.max(chain_len as u32);
+        substrate.active_count = substrate.active_count.max(chain_len as u32);
 
         let mut chain_trail = gcso_pointer_trail_t::default();
-        chain_trail.copy_from_fast(&hub.trails[0]);
+        chain_trail.copy_from_fast(&substrate.trails[0]);
         let mut receptor = TrailEmergenceReceptor::default();
-        if let Ok((chain_report, _hops, _term_idx, _term_anchor, _mean_coh)) = hub
+        if let Ok((chain_report, _hops, _term_idx, _term_anchor, _mean_coh)) = substrate
             .traverse_pointer_chain_and_orchestrate(
                 0,
                 chain_len,
@@ -1610,7 +1611,7 @@ impl SocietyStratum for LocalTokenResonanceStratum {
             .map(|e| e.per_layer_q7.len().saturating_sub(1))
             .unwrap_or(0);
         // Deposit uncollapsed per-token observations onto 8-cell Micro-Swarm trails in StigmergicSubstrate.
-        let (mut hub, selected_indices, trail_states) =
+        let (mut substrate, selected_indices, trail_states) =
             Self::deposit_token_swarm_trails(ctx.entries, signal, last_layer);
 
         let mut ledger = if signal
@@ -1621,7 +1622,7 @@ impl SocietyStratum for LocalTokenResonanceStratum {
         {
             signal.telemetry.cognitive_trajectory
         } else {
-            CognitiveTrajectoryLedger::from_ledger_slot(&hub.ledger_slot)
+            CognitiveTrajectoryLedger::from_ledger_slot(&substrate.ledger_slot)
         };
         if !signal.token_deposits.is_empty() {
             ledger.push_step(CognitiveStepOp::pack(
@@ -1661,7 +1662,7 @@ impl SocietyStratum for LocalTokenResonanceStratum {
             },
             signal.swarm_report.resolved_cell_count.min(7),
         ));
-        ledger.write_to_ledger_slot(&mut hub.ledger_slot);
+        ledger.write_to_ledger_slot(&mut substrate.ledger_slot);
         signal.telemetry.layer_activation = cell_activation;
 
         let global_local_sharper = g_idx != l_idx && l_score > 0.0 && l_sharp > g_sharp * 1.15;
@@ -1678,7 +1679,7 @@ impl SocietyStratum for LocalTokenResonanceStratum {
         self.decomposer.decompose_fact_coalition(
             ctx,
             signal,
-            &mut hub,
+            &mut substrate,
             &selected_indices,
             &trail_states,
             last_layer,
@@ -1689,7 +1690,7 @@ impl SocietyStratum for LocalTokenResonanceStratum {
                 CognitiveOpKind::DecomposePeel,
                 (signal.linked_fact_indices.len().min(7)) as u8,
             ));
-            ledger.write_to_ledger_slot(&mut hub.ledger_slot);
+            ledger.write_to_ledger_slot(&mut substrate.ledger_slot);
         }
         signal.telemetry.cognitive_trajectory = ledger;
 

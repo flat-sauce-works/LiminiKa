@@ -13,7 +13,7 @@ use core::slice;
 use crate::foundation::scalar_math::{branchless_q7_add_sat, branchless_q7_neg_sat};
 use crate::liminal::{
     gcso_config_t, gcso_q7_t, gcso_status_t, AttributionTag, EpistemicPartition, GcsoResult,
-    LiminalThresholdField, GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_INVALID_ARGUMENT,
+    LiminalThresholdState, GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_INVALID_ARGUMENT,
     GCSO_ERROR_MISALIGNED_POINTER, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
 };
 
@@ -652,7 +652,7 @@ impl_pod_for_primitives!(
     gcso_config_t,
     AttributionTag,
     EpistemicPartition,
-    LiminalThresholdField,
+    LiminalThresholdState,
     gcso_tagged_ptr_t,
     gcso_paged_bitmask_t,
     gcso_subhead_config_t,

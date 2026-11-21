@@ -379,7 +379,7 @@ pub struct ModelSteeringAdapter {
     threshold_policy: AdaptiveThresholdPolicy,
     calibrated_base_thresholds: StigmergicThresholds,
     core_layers: AutonomousCoreLayerStack,
-    configured_ego: LiminalEgoField,
+    configured_ego: LiminalEgoState,
     last_boundary_delta: LiminalBoundaryDelta,
     last_horizon: EpistemicHorizonReading,
     last_venn_report: StigmergicOverlapSerendipityReport,
@@ -480,7 +480,7 @@ impl ModelSteeringAdapter {
             threshold_policy,
             calibrated_base_thresholds,
             core_layers: AutonomousCoreLayerStack::new(),
-            configured_ego: LiminalEgoField::new(),
+            configured_ego: LiminalEgoState::new(),
             last_boundary_delta: LiminalBoundaryDelta::default(),
             last_horizon: EpistemicHorizonReading {
                 total_memory_support: 1.0,
@@ -533,7 +533,7 @@ impl ModelSteeringAdapter {
     pub fn reset_horizon_and_core_state(&mut self) {
         let saved_hops = self.ego_differential_net.max_hops;
         self.core_layers = AutonomousCoreLayerStack::new();
-        self.configured_ego = LiminalEgoField::new();
+        self.configured_ego = LiminalEgoState::new();
         self.last_boundary_delta = LiminalBoundaryDelta::default();
         self.last_horizon = EpistemicHorizonReading {
             regime_code: EpistemicRegime::KnownCoherent as u8,
@@ -587,10 +587,10 @@ impl ModelSteeringAdapter {
         &mut self.compute_pool
     }
 
-    /// Returns the 64-byte unified [`CognitiveSubstrate`] (`Liminal` + `Stigmergy`).
+    /// Returns the 64-byte unified [`CorePrimitiveState`] (`Liminal` + `Stigmergy`).
     #[must_use]
-    pub const fn cognitive_substrate(&self) -> CognitiveSubstrate {
-        self.core_layers.substrate()
+    pub const fn core_primitive_state(&self) -> CorePrimitiveState {
+        self.core_layers.core_primitive_state()
     }
 
     /// Returns a shared reference to the mechanical [`SystemSpineState`] (`pinned` isolation barrier).
@@ -736,7 +736,7 @@ impl ModelSteeringAdapter {
             .enumerate()
         {
             let local_ego = if desc.intent_delta.is_active() {
-                LiminalEgoField::from_intent_axes(&desc.intent_delta)
+                LiminalEgoState::from_intent_axes(&desc.intent_delta)
             } else {
                 self.configured_ego
             };
@@ -786,7 +786,7 @@ impl ModelSteeringAdapter {
         let axes = self.configured_ego.extract_intent_axes();
         let max_hops = self.ego_differential_net.max_hops;
         self.ego_differential_net =
-            EgoDifferentialNet::from_ego_field_and_axes(&self.configured_ego, &axes, max_hops);
+            EgoDifferentialNet::from_ego_state_and_axes(&self.configured_ego, &axes, max_hops);
         self.distortion_tension = DistortionTension::new(self.configured_ego.is_active());
     }
 
@@ -1007,21 +1007,21 @@ impl ModelSteeringAdapter {
         act
     }
 
-    /// Returns a shared reference to the live Core Layer 0 [`LiminalThresholdField`] governing
+    /// Returns a shared reference to the live Core Layer 0 [`LiminalThresholdState`] governing
     /// dynamic `Liminal` channel thresholds and cognitive window gains.
     #[must_use]
-    pub const fn aperture_field(&self) -> &LiminalThresholdField {
+    pub const fn threshold_state(&self) -> &LiminalThresholdState {
         &self.core_layers.liminal_layer
     }
 
-    /// Returns a mutable reference to the live Core Layer 0 [`LiminalThresholdField`].
-    pub fn aperture_field_mut(&mut self) -> &mut LiminalThresholdField {
+    /// Returns a mutable reference to the live Core Layer 0 [`LiminalThresholdState`].
+    pub fn threshold_state_mut(&mut self) -> &mut LiminalThresholdState {
         &mut self.core_layers.liminal_layer
     }
 
-    /// Returns a shared reference to the live Core Layer 1 [`StigmergicGranuleField`].
+    /// Returns a shared reference to the live Core Layer 1 [`StigmergicGranuleState`].
     #[must_use]
-    pub const fn stigmergic_granule_field(&self) -> &StigmergicGranuleField {
+    pub const fn stigmergic_granule_state(&self) -> &StigmergicGranuleState {
         &self.core_layers.stigmergic_layer
     }
 
@@ -1048,35 +1048,35 @@ impl ModelSteeringAdapter {
         &self.last_venn_report
     }
 
-    /// Returns a shared reference to the live 64-byte Core Layer 2 [`LiminalEgoField`].
+    /// Returns a shared reference to the live 64-byte Core Layer 2 [`LiminalEgoState`].
     #[must_use]
-    pub const fn ego_field(&self) -> &LiminalEgoField {
+    pub const fn ego_state(&self) -> &LiminalEgoState {
         &self.core_layers.ego_layer
     }
 
-    /// Returns a mutable reference to the live 64-byte Core Layer 2 [`LiminalEgoField`].
-    pub fn ego_field_mut(&mut self) -> &mut LiminalEgoField {
+    /// Returns a mutable reference to the live 64-byte Core Layer 2 [`LiminalEgoState`].
+    pub fn ego_state_mut(&mut self) -> &mut LiminalEgoState {
         &mut self.core_layers.ego_layer
     }
 
-    /// Replaces the adapter's active Core Layer 2 [`LiminalEgoField`].
-    pub fn set_ego_field(&mut self, ego: LiminalEgoField) {
+    /// Replaces the adapter's active Core Layer 2 [`LiminalEgoState`].
+    pub fn set_ego_state(&mut self, ego: LiminalEgoState) {
         self.core_layers.ego_layer = ego;
         self.configured_ego = ego;
         self.sync_ego_differential_net_from_configured();
     }
 
-    /// Configures Core Layer 2 [`LiminalEgoField`] from a coarse [`LiminalEgoPreset`] (`Custom`, `Low`, `Medium`, `High`).
+    /// Configures Core Layer 2 [`LiminalEgoState`] from a coarse [`LiminalEgoPreset`] (`Custom`, `Low`, `Medium`, `High`).
     pub fn configure_ego_from_preset(&mut self, preset: LiminalEgoPreset) {
-        let ego = LiminalEgoField::from_preset(preset);
+        let ego = LiminalEgoState::from_preset(preset);
         self.core_layers.ego_layer = ego;
         self.configured_ego = ego;
         self.sync_ego_differential_net_from_configured();
     }
 
-    /// Configures Core Layer 2 [`LiminalEgoField`] from intermediate normalized [`EgoIntentAxes`].
+    /// Configures Core Layer 2 [`LiminalEgoState`] from intermediate normalized [`EgoIntentAxes`].
     pub fn configure_ego_from_intent_axes(&mut self, axes: &EgoIntentAxes) {
-        let ego = LiminalEgoField::from_intent_axes(axes);
+        let ego = LiminalEgoState::from_intent_axes(axes);
         self.core_layers.ego_layer = ego;
         self.configured_ego = ego;
         self.sync_ego_differential_net_from_configured();
@@ -1086,26 +1086,26 @@ impl ModelSteeringAdapter {
     pub fn blend_ego_intent_axes(&mut self, overlay: &EgoIntentAxes, weight_q7: u8) {
         let base_axes = self.core_layers.ego_layer.extract_intent_axes();
         let blended = base_axes.blend_lerp_q7(overlay, weight_q7);
-        let ego = LiminalEgoField::from_intent_axes(&blended);
+        let ego = LiminalEgoState::from_intent_axes(&blended);
         self.core_layers.ego_layer = ego;
         self.configured_ego = ego;
         self.sync_ego_differential_net_from_configured();
     }
 
-    /// Derives Core Layer 2 [`LiminalEgoField`] deterministically from a natural-language Ego description.
+    /// Derives Core Layer 2 [`LiminalEgoState`] deterministically from a natural-language Ego description.
     pub fn configure_ego_from_natural_language(&mut self, description: &str) {
-        let ego = LiminalEgoField::from_natural_language(description);
+        let ego = crate::ego_intent::ego_state_from_natural_language(description);
         self.core_layers.ego_layer = ego;
         self.configured_ego = ego;
         self.sync_ego_differential_net_from_configured();
     }
 
-    /// Overlays natural-language Ego cues onto the existing Core Layer 2 [`LiminalEgoField`].
+    /// Overlays natural-language Ego cues onto the existing Core Layer 2 [`LiminalEgoState`].
     pub fn overlay_ego_from_natural_language(&mut self, description: &str) {
-        let ego = self
-            .core_layers
-            .ego_layer
-            .with_natural_language_overlay(description);
+        let ego = crate::ego_intent::overlay_ego_state_from_natural_language(
+            self.core_layers.ego_layer,
+            description,
+        );
         self.core_layers.ego_layer = ego;
         self.configured_ego = ego;
         self.sync_ego_differential_net_from_configured();
@@ -1330,7 +1330,7 @@ impl ModelSteeringAdapter {
         }
 
         let aperture_floor =
-            f32::from(self.core_layers.liminal_layer.void_floor_q7[1]) * (1.0 / 127.0);
+            f32::from(self.core_layers.liminal_layer.threshold_floor_q7[1]) * (1.0 / 127.0);
         let venn = evaluate_stigmergic_overlap_and_serendipity_words_64(
             &fact_fragments,
             &q_words,
@@ -1530,7 +1530,7 @@ impl ModelSteeringAdapter {
 
     /// Captures the live [`LiminalTopologyTelemetrySnapshot`] and renders a self-introspecting
     /// 3-layer Mermaid `flowchart TD` diagram covering Core Layer 0 (`Liminal`), Core Layer 1
-    /// (`StigmergicGranuleField`), Core Layer 2 (`LiminalEgoField`), cognitive aperture masks,
+    /// (`StigmergicGranuleState`), Core Layer 2 (`LiminalEgoState`), cognitive aperture masks,
     /// and crystal populations.
     #[must_use]
     pub fn render_liminal_topology_mermaid(

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Pure finite observation gap classification (`Unobserved`, `SelfRef`, `Exterior`, `Undefined`)
-//! and Hot-Path register-packed 8-granule reading ([`PackedLacunaField`]).
+//! and Hot-Path register-packed 8-granule reading ([`PackedLacuna8`]).
 //!
 //! This module depends strictly on `core` and Layer 0 constants/selectors; it carries no
 //! dependency on boundary typestate markers or bit-partition wrappers.
@@ -112,15 +112,15 @@ pub const fn classify_lacuna_code_q7(observed: bool, delta_q7: u8, eps_self_q7: 
 /// Hot-Path register-friendly packed representation of 8 granule [`Lacuna`] readings.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct PackedLacunaField {
+pub struct PackedLacuna8 {
     /// Bitmask of observed granules (`bit g == 1` means granule `g` was observed).
     pub observed_mask: u8,
     /// Per-granule unsigned distance from gauge origin in Q0.7 (`0..=127`).
     pub delta_q7: [u8; NUM_STIGMERGIC_GRANULES],
 }
 
-impl PackedLacunaField {
-    /// Constructs a new packed 8-granule lacuna field.
+impl PackedLacuna8 {
+    /// Constructs a new packed 8-granule lacuna reading.
     #[inline(always)]
     #[must_use]
     pub const fn new(observed_mask: u8, delta_q7: [u8; NUM_STIGMERGIC_GRANULES]) -> Self {
@@ -205,13 +205,13 @@ mod tests {
     }
 
     #[test]
-    fn test_packed_lacuna_field_masks() {
-        let field = PackedLacunaField::new(0b0011_0101, [2, 10, 4, 80, 3, 20, 0, 12]);
-        assert_eq!(field.classify_granule(0, 4), Lacuna::SelfRef);
-        assert_eq!(field.classify_granule(1, 4), Lacuna::Unobserved);
-        assert_eq!(field.classify_granule(5, 4), Lacuna::Exterior);
+    fn test_packed_lacuna8_masks() {
+        let reading = PackedLacuna8::new(0b0011_0101, [2, 10, 4, 80, 3, 20, 0, 12]);
+        assert_eq!(reading.classify_granule(0, 4), Lacuna::SelfRef);
+        assert_eq!(reading.classify_granule(1, 4), Lacuna::Unobserved);
+        assert_eq!(reading.classify_granule(5, 4), Lacuna::Exterior);
 
-        let (unobs_m, self_m, ext_m) = field.measure_masks(4);
+        let (unobs_m, self_m, ext_m) = reading.measure_masks(4);
         assert_eq!(unobs_m, 0b1100_1010);
         assert_eq!(self_m, 0b0001_0101);
         assert_eq!(ext_m, 0b0010_0000);

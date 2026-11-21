@@ -25,13 +25,12 @@ use self::crc32_delta::{
 };
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_maturity_scale_u32,
-    branchless_min_f32, branchless_relu_f32,
-    branchless_toroidal_centroid_step_words_with_coh_uni_and_changed_64,
-    coherence_above_floor_from_word_arrays_64, coherence_from_uniform_words_x8,
-    crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32, crc32_slice16_indep_hi1_u32,
-    crc32_slice16_indep_lo1_u32, crc32_slice16_step_u64x2, crc32_step_block64_words, crc32_step_l3,
-    crc32_step_l4, crc32_step_l5, crc32_step_l6, gcso_tagged_ptr_t, is_aligned_to,
-    is_word_array_uniform_64, load_q7_words_64, Pod, RawPhaseProjectable, CRC32_IEEE_SLICE16_REF,
+    branchless_min_f32, branchless_relu_f32, coherence_above_floor_from_word_arrays_64,
+    coherence_from_uniform_words_x8, crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32,
+    crc32_slice16_indep_hi1_u32, crc32_slice16_indep_lo1_u32, crc32_slice16_step_u64x2,
+    crc32_step_block64_words, crc32_step_l3, crc32_step_l4, crc32_step_l5, crc32_step_l6,
+    gcso_tagged_ptr_t, is_aligned_to, is_word_array_uniform_64, load_q7_words_64,
+    step_toroidal_centroid_words_cached_64, Pod, RawPhaseProjectable, CRC32_IEEE_SLICE16_REF,
     Q7_FULL_COS_REF, VON_MISES_KAPPA_AT_MAX_R_BITS,
 };
 use crate::foundation::{
@@ -665,7 +664,7 @@ impl CrystallizedAttractorRecord {
             ),
         };
         let (next_w, raw_next_e, r_bar, kappa, words_changed) =
-            branchless_toroidal_centroid_step_words_with_coh_uni_and_changed_64(
+            step_toroidal_centroid_words_cached_64(
                 cur_w,
                 prev_count,
                 self.base_energy,

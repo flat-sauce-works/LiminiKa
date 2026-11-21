@@ -9,7 +9,7 @@
 //!
 //! # Architecture: `2 Primitives x 2 Drivers` over the 5-Layer DAG
 //! - **Level 0 — `liminal` ([`crate::liminal`])**: Boundary axiom (`liminal::axiom`),
-//!   4-state `Lacuna` measurement, `LiminalThresholdField`, and root [`crate::liminal::Liminal`]
+//!   4-state `Lacuna` measurement, `LiminalThresholdState`, and root [`crate::liminal::Liminal`]
 //!   trait gating out-of-horizon steering cleanly to zero without data-dependent branches.
 //! - **Level 1 — `foundation` ([`crate::foundation`])**: Zero-allocation pure geometry, POD,
 //!   aligned-slice, SWAR/AVX2 SIMD, CRC32/trig lookup tables, RoPE phase steering, Rank-1
@@ -19,7 +19,7 @@
 //!   concrete `PhaseSteeringEngine`/`ResidualAdapterEngine`, and [`crate::stigmergy::StigmergicSubstrateOps`]
 //!   operating across the widest threshold mask (`THRESHOLD_STIGMERGY_WIDE`).
 //! - **Level 3 — `drivers` ([`crate::drivers`])**: Orthogonal `spine` (`SystemSpineState`,
-//!   `EntropyController`, `AnonymousComputePool`) and `ego` (`EgoDifferentialNet`, `LiminalEgoField`)
+//!   `EntropyController`, `AnonymousComputePool`) and `ego` (`EgoDifferentialNet`, `LiminalEgoState`)
 //!   forces isolated behind dual `DistortionTension` / `DistortionDelta`.
 //! - **Level 4 — `runtime` ([`crate::runtime`])**: Single orchestrator facade (`RuntimeContext`),
 //!   Manifold Gateway (`ManifoldGatewaySignal`, `GatewayFrame`), Latent Horizon (`LatentHorizonSlot`),
@@ -37,10 +37,10 @@
 //!    $SO(2)^{64}$ resultant folding (`fold_fractal_nodes_words_64`), dissipative overflow scatter /
 //!    autonomous daughter crystallization (`DissipativeOverflowReport`), and perspective-flipped signed
 //!    coupling (`RelativeCouplingMatrix`).
-//! 3. **`Liminal`, Dynamic `LiminalThresholdField`, & Epistemic Horizon Routing**:
+//! 3. **`Liminal`, Dynamic `LiminalThresholdState`, & Epistemic Horizon Routing**:
 //!    Queries inside carved memory horizons separate coherent grounding ($H^0$) from internal
 //!    opposition ($H^1 \neq 0$), while out-of-horizon queries enter `EpistemicRegime::Liminal`.
-//!    [`crate::liminal::LiminalThresholdField`] shifts per-channel thresholds branchlessly and
+//!    [`crate::liminal::LiminalThresholdState`] shifts per-channel thresholds branchlessly and
 //!    exposes live topology introspection via [`crate::runtime::LiminalTopologyTelemetrySnapshot`].
 //! 4. **Single Unified Attractor Manifold**:
 //!    All anchors coexist on a single unified phase manifold ($SO(2)^{d_{\mathrm{head}}/2}$)
@@ -118,8 +118,8 @@ pub use crate::liminal::{
     AttributionTag, BitCut32, BitCut8, Bottom, BoundaryViolation, BridgedDiscovery, Cuttable,
     Definite, DriverKind, EpistemicPartition, EpistemicRegime, Exterior, FromBoundary, FromDelta,
     GcsoResult, GcsoStatus, Groundable, Grounded, GroundedOrigin, Indivisible, IndivisiblePhase,
-    Interior, Lacuna, Liminal, LiminalThresholdField, PackedLacunaField, Refine, Scoped, ScopedCut,
-    Shared, SpeculativeDiscovery, SubstrateKind, Unmarked, VerifiedAligned, DEFAULT_ENTROPY_EPS,
+    Interior, Lacuna, Liminal, LiminalThresholdState, PackedLacuna8, PrimitiveKind, Refine, Scoped,
+    ScopedCut, Shared, SpeculativeDiscovery, Unmarked, VerifiedAligned, DEFAULT_ENTROPY_EPS,
     GCSO_SUCCESS, HEADS_PER_STIGMERGIC_GRANULE, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
     MAX_SURROGATE_ENTROPY_LN2, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
     Q7_PHASE_INV_SCALE_RAD, Q7_PHASE_SCALE_RAD, SCOPE_REGION_KNOWN_UNKNOWN,
@@ -217,15 +217,15 @@ pub use crate::stigmergy::{
     trail_phase_words_mut, trail_phase_words_ref, with_slot_pair_coupled,
     with_slot_pair_coupled_symmetric, AttractorAnchor, AttractorFieldEngine, AttractorGrowthReport,
     AttractorGrowthSnapshot, CognitiveCircuitActivation, CognitiveCircuitBank,
-    CognitiveCircuitBankOps, CognitiveOpKind, CognitiveStepOp, CognitiveSubstrate,
-    CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, CrystallizedAnchorRecord,
+    CognitiveCircuitBankOps, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
+    ContrastivePhaseBloomFilter, CorePrimitiveState, CrystallizedAnchorRecord,
     CrystallizedAttractorRecord, DissipativeOverflowReport, DomainAccumulatorSummary,
     EpisodicPhaseSample, EpisodicSampleSteering, FastPathLedger, HighCapCognitiveBank,
     LowSpecCognitiveBank, MultiAttractorSpace, PhaseDeltaSlice, PhaseProfile64, PhaseProfileRef64,
     PhaseSteeringEngine, PheromoneDensityOps, PointerSubstrate, RelativeAttractorNode,
     RelativeCouplingMatrix, ResidualAdapterEngine, ResidualScale, StandardCognitiveBank,
     StigmergicActionDecision, StigmergicFragmentEnsembleReport, StigmergicGranuleEngine,
-    StigmergicGranuleField, StigmergicOverlapSerendipityReport, StigmergicReconstitutionReport,
+    StigmergicGranuleState, StigmergicOverlapSerendipityReport, StigmergicReconstitutionReport,
     StigmergicScaleGranularity, StigmergicSubstrate, StigmergicSubstrateOps, StigmergicThresholds,
     SubstrateStepReport, WorkbenchLanePlacement, WorkbenchPreset, WorkbenchSlotSpec,
     ATTRACTOR_SLOT_CRYSTALLIZED, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
@@ -257,7 +257,7 @@ pub use crate::stigmergy::{
 pub use crate::drivers::{
     AnonymousComputePool, ComputeDispatchMask, ComputePoolConfig, ComputePressureRegime,
     DistortionDelta, DistortionTension, DistortionTensionStateCode, EgoDifferentialNet,
-    EgoIntentAxes, EntropyController, LiminalEgoField, LiminalEgoPreset, SystemPressureReading,
+    EgoIntentAxes, EntropyController, LiminalEgoPreset, LiminalEgoState, SystemPressureReading,
     SystemSpineState, TokenBypassObservation, EGO_TRIGGER_ALL_DEFAULT, EGO_TRIGGER_BASIN_CAPTURE,
     EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT,
     EGO_TRIGGER_LAYER_DISTORTION, EGO_TRIGGER_LIMINAL_EXTERIOR, SPINE_BYPASS_VETO_GUARD_ACTIVE,

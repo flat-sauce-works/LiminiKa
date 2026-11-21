@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Root [`Liminal`] boundary supertrait, $4p(1-p)$ threshold sensitivity functions, and
-//! [`LiminalThresholdField`] (32 B).
+//! [`LiminalThresholdState`] (32 B).
 
 #![forbid(unsafe_code)]
 
@@ -65,7 +65,7 @@ pub fn sensitivity_4p1mp_f32(p: f32) -> f32 {
     (4.0 * pc * (1.0 - pc)).clamp(0.0, 1.0)
 }
 
-/// Dynamic 32-byte (`#[repr(C, align(16))]`) boundary threshold field governing per-channel
+/// Dynamic 32-byte (`#[repr(C, align(16))]`) boundary threshold state governing per-channel
 /// cognitive thresholds across Core Stack Slot 0 (`Liminal`):
 /// - `0`: `SystemConstraintSignal` (`System`)
 /// - `1`: `ObjectiveFactSignal` (`Fact`)
@@ -77,10 +77,10 @@ pub fn sensitivity_4p1mp_f32(p: f32) -> f32 {
 /// - `7`: `StigmergicSubstrateOps` (Wide Execution Threshold)
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LiminalThresholdField {
+pub struct LiminalThresholdState {
     /// Per-channel `Liminal` threshold floor in Q0.7 (`[8..=120]`): higher values expand the
     /// unknowable exterior for that channel, filtering low-support signals cleanly to `0`.
-    pub void_floor_q7: [u8; NUM_LIMINAL_THRESHOLD_CHANNELS],
+    pub threshold_floor_q7: [u8; NUM_LIMINAL_THRESHOLD_CHANNELS],
     /// Per-channel cognitive window opening gain in Q0.7 (`[16..=127]`).
     pub aperture_gain_q7: [u8; NUM_LIMINAL_THRESHOLD_CHANNELS],
     /// Per-channel signed Q7 focal phase offset (`[-127..=127]`).
@@ -91,20 +91,20 @@ pub struct LiminalThresholdField {
     pub adaptation_epochs: u32,
 }
 
-impl Default for LiminalThresholdField {
+impl Default for LiminalThresholdState {
     #[inline(always)]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl LiminalThresholdField {
+impl LiminalThresholdState {
     /// Neutral baseline cognitive threshold configuration (`32 B`, `#[repr(C, align(16))]`).
     #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            void_floor_q7: [20, 28, 32, 24, 24, 24, 24, 16],
+            threshold_floor_q7: [20, 28, 32, 24, 24, 24, 24, 16],
             aperture_gain_q7: [96; NUM_LIMINAL_THRESHOLD_CHANNELS],
             phase_shift_q7: [0; NUM_LIMINAL_THRESHOLD_CHANNELS],
             active_aperture_mask: THRESHOLD_STIGMERGY_WIDE,
@@ -115,8 +115,8 @@ impl LiminalThresholdField {
     /// Returns channel `ch`'s normalized `Liminal` threshold floor in `[0.0, 1.0]`.
     #[inline(always)]
     #[must_use]
-    pub const fn channel_void_floor_f32(&self, ch: usize) -> f32 {
-        (self.void_floor_q7[ch & (NUM_LIMINAL_THRESHOLD_CHANNELS - 1)] as f32) * (1.0 / 127.0)
+    pub const fn channel_threshold_floor_f32(&self, ch: usize) -> f32 {
+        (self.threshold_floor_q7[ch & (NUM_LIMINAL_THRESHOLD_CHANNELS - 1)] as f32) * (1.0 / 127.0)
     }
 
     /// Returns channel `ch`'s normalized cognitive opening gain in `[0.0, 1.0]`.

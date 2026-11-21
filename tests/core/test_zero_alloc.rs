@@ -232,9 +232,9 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
     assert!(spillover.cache_hits >= 1);
 
     // Verify Free-by-Default 8-lane pool allocator + escalation remain strictly zero-alloc.
-    let mut wb_hub = liminika_core::StigmergicSubstrate::new();
+    let mut wb_substrate = liminika_core::StigmergicSubstrate::new();
     for i in 0..8u8 {
-        let lane = wb_hub
+        let lane = wb_substrate
             .allocate_lane(&liminika_core::WorkbenchSlotSpec::auto_free(
                 0.2 + f32::from(i) * 0.1,
                 [i as i8 + 1; 64],
@@ -242,16 +242,16 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
             .unwrap();
         assert_eq!(lane, i);
     }
-    wb_hub.pin_lane(0, true).unwrap();
-    let ev_lane = wb_hub
+    wb_substrate.pin_lane(0, true).unwrap();
+    let ev_lane = wb_substrate
         .allocate_lane(&liminika_core::WorkbenchSlotSpec::auto_sandbox(
             0.9, [16; 64],
         ))
         .unwrap();
     assert_eq!(ev_lane, 1);
-    assert!(wb_hub.promote_sandbox_lane(ev_lane).unwrap());
-    let _ = wb_hub.decay_and_reclaim_lanes(0.5, 0.25);
-    let _ = wb_hub.release_unpinned_lanes();
+    assert!(wb_substrate.promote_sandbox_lane(ev_lane).unwrap());
+    let _ = wb_substrate.decay_and_reclaim_lanes(0.5, 0.25);
+    let _ = wb_substrate.release_unpinned_lanes();
     let mut esc_lane = None;
     let esc_req = liminika_core::runtime::HorizonEscalationRequest {
         trigger: liminika_core::runtime::HorizonTriggerInput {
@@ -261,7 +261,7 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
         ..Default::default()
     };
     let mut mock_esc = liminika_core::DefaultResidualSpilloverSlot::default();
-    let _ = wb_hub.apply_horizon_escalation(&esc_req, &mut esc_lane, &mut mock_esc);
+    let _ = wb_substrate.apply_horizon_escalation(&esc_req, &mut esc_lane, &mut mock_esc);
 
     // Verify label-free AnonymousComputePool dispatch, whole-token bypass, Venn partition,
     // SystemSpine isolation, DistortionDelta P-Frame chain, and DistortionTension remain zero-alloc.
@@ -299,13 +299,13 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
     let mut tension = liminika_core::DistortionTension::new(true);
     tension.step_hot_path_branchless(40, part.boundary_sensitivity_q7, 32, 16, false);
     let spine = liminika_core::SystemSpineState::new();
-    let ego = liminika_core::LiminalEgoField::from_preset(liminika_core::LiminalEgoPreset::Medium);
-    let net = liminika_core::EgoDifferentialNet::from_ego_field_and_axes(
+    let ego = liminika_core::LiminalEgoState::from_preset(liminika_core::LiminalEgoPreset::Medium);
+    let net = liminika_core::EgoDifferentialNet::from_ego_state_and_axes(
         &ego,
         &ego.extract_intent_axes(),
         3,
     );
-    let stig = liminika_core::StigmergicGranuleField::new();
+    let stig = liminika_core::StigmergicGranuleState::new();
     let _ = net.evaluate_pframe_chain_branchless(
         &ego,
         &spine,

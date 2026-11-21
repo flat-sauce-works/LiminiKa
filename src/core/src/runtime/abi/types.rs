@@ -31,7 +31,7 @@ pub use crate::runtime::horizon::RamPhaseKvEntry;
 pub use crate::runtime::storage::{KvKeyframePacket, GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET};
 pub use crate::stigmergy::{
     gcso_anchor_type_t, gcso_ledger_slot_t, gcso_pointer_trail_t, CognitiveCircuitActivation,
-    CognitiveStepOp, CognitiveSubstrate, GcsoAnchorType, ATTRACTOR_SLOT_KNOWLEDGE,
+    CognitiveStepOp, CorePrimitiveState, GcsoAnchorType, ATTRACTOR_SLOT_KNOWLEDGE,
     ATTRACTOR_SLOT_PERSONA, GCSO_ANCHOR_TYPE_CRYSTALLIZED, GCSO_ANCHOR_TYPE_EMBEDDING,
     GCSO_ANCHOR_TYPE_PHASE_REPULSE, GCSO_ANCHOR_TYPE_SYSTEM_PROMPT, GCSO_ANCHOR_TYPE_TOPOLOGICAL,
     LEDGER_HISTORY_LEN,
@@ -68,10 +68,10 @@ pub type gcso_reconstitution_report_t = StigmergicReconstitutionReport;
 pub type gcso_cognitive_trajectory_ledger_t = CognitiveTrajectoryLedger;
 /// C-ABI type alias for the 32-byte Epistemic Horizon Reading (`EpistemicHorizonReading`).
 pub type gcso_epistemic_horizon_reading_t = EpistemicHorizonReading;
-/// C-ABI type alias for the 32-byte Core Layer 0 `LiminalThresholdField`.
-pub type gcso_liminal_aperture_field_t = LiminalThresholdField;
-/// C-ABI type alias for the 32-byte Core Layer 1 `StigmergicGranuleField`.
-pub type gcso_stigmergic_granule_field_t = StigmergicGranuleField;
+/// C-ABI type alias for the 32-byte Core Layer 0 `LiminalThresholdState`.
+pub type gcso_liminal_aperture_field_t = LiminalThresholdState;
+/// C-ABI type alias for the 32-byte Core Layer 1 `StigmergicGranuleState`.
+pub type gcso_stigmergic_granule_field_t = StigmergicGranuleState;
 /// C-ABI type alias for the 32-byte Venn-Overlap & Serendipity Report (`StigmergicOverlapSerendipityReport`).
 pub type gcso_stigmergic_venn_serendipity_report_t = StigmergicOverlapSerendipityReport;
 /// C-ABI type alias for the 128-byte Unified 3-Layer Autonomous Core Stack (`AutonomousCoreLayerStack`).
@@ -84,8 +84,8 @@ pub type gcso_liminal_boundary_delta_t = LiminalBoundaryDelta;
 pub type gcso_ego_intent_axes_t = EgoIntentAxes;
 /// C-ABI type alias for the 16-byte Fragmented Micro-Ensemble Report (`StigmergicFragmentEnsembleReport`).
 pub type gcso_stigmergic_fragment_ensemble_report_t = StigmergicFragmentEnsembleReport;
-/// C-ABI type alias for the 64-byte Wide-Aperture Subjective Ego Field (`LiminalEgoField`).
-pub type gcso_liminal_ego_field_t = LiminalEgoField;
+/// C-ABI type alias for the 64-byte Wide-Aperture Subjective Ego State (`LiminalEgoState`).
+pub type gcso_liminal_ego_field_t = LiminalEgoState;
 /// C-ABI type alias for the 16-byte 4-Region Branchless Venn Partition (`EpistemicPartition`).
 pub type gcso_liminal_venn_partition_t = EpistemicPartition;
 
@@ -170,8 +170,8 @@ define_opaque_handles!(
 
 /// C-ABI type alias for the 1-byte Attribution Tag (`AttributionTag`).
 pub type gcso_attribution_tag_t = AttributionTag;
-/// C-ABI type alias for the 64-byte Unified Substrate (`CognitiveSubstrate`).
-pub type gcso_cognitive_substrate_t = CognitiveSubstrate;
+/// C-ABI type alias for the 64-byte Unified Primitive State (`CorePrimitiveState`).
+pub type gcso_cognitive_substrate_t = CorePrimitiveState;
 
 /// Descriptor header for structure byte size and ABI version validation (8 bytes, 4-byte aligned).
 #[repr(C, align(4))]
@@ -662,10 +662,10 @@ const _: () = {
     assert!(align_of::<EpistemicHorizonReading>() == 16);
     assert!(offset_of!(EpistemicHorizonReading, horizon_gate) == 12);
     assert!(offset_of!(EpistemicHorizonReading, regime_code) == 28);
-    assert!(size_of::<LiminalThresholdField>() == 32);
-    assert!(align_of::<LiminalThresholdField>() == 16);
-    assert!(offset_of!(LiminalThresholdField, active_aperture_mask) == 24);
-    assert!(offset_of!(LiminalThresholdField, adaptation_epochs) == 28);
+    assert!(size_of::<LiminalThresholdState>() == 32);
+    assert!(align_of::<LiminalThresholdState>() == 16);
+    assert!(offset_of!(LiminalThresholdState, active_aperture_mask) == 24);
+    assert!(offset_of!(LiminalThresholdState, adaptation_epochs) == 28);
     assert!(size_of::<LiminalTopologyTelemetrySnapshot>() == 32);
     assert!(align_of::<LiminalTopologyTelemetrySnapshot>() == 16);
     assert!(offset_of!(LiminalTopologyTelemetrySnapshot, active_aperture_mask) == 24);
@@ -681,10 +681,10 @@ const _: () = {
     assert!(offset_of!(StigmergicOverlapSerendipityReport, serendipitous_seed_word) == 16);
     assert!(offset_of!(StigmergicOverlapSerendipityReport, venn_core_mask) == 24);
     assert!(offset_of!(StigmergicOverlapSerendipityReport, serendipity_triggered) == 30);
-    assert!(size_of::<StigmergicGranuleField>() == 32);
-    assert!(align_of::<StigmergicGranuleField>() == 16);
-    assert!(offset_of!(StigmergicGranuleField, venn_overlap_mask) == 24);
-    assert!(offset_of!(StigmergicGranuleField, adaptation_epochs) == 28);
+    assert!(size_of::<StigmergicGranuleState>() == 32);
+    assert!(align_of::<StigmergicGranuleState>() == 16);
+    assert!(offset_of!(StigmergicGranuleState, venn_overlap_mask) == 24);
+    assert!(offset_of!(StigmergicGranuleState, adaptation_epochs) == 28);
     assert!(size_of::<AutonomousCoreLayerStack>() == 128);
     assert!(align_of::<AutonomousCoreLayerStack>() == 64);
     assert!(offset_of!(AutonomousCoreLayerStack, liminal_layer) == 0);
@@ -720,27 +720,27 @@ const _: () = {
     assert!(offset_of!(StigmergicFragmentEnsembleReport, ego_tiebreak_granule_mask) == 10);
     assert!(offset_of!(StigmergicFragmentEnsembleReport, active_fragment_count) == 11);
     assert!(offset_of!(StigmergicFragmentEnsembleReport, dominant_fragment_slot) == 12);
-    assert!(size_of::<LiminalEgoField>() == 64);
-    assert!(align_of::<LiminalEgoField>() == 64);
-    assert!(offset_of!(LiminalEgoField, sovereign_granule_phase_q7) == 0);
-    assert!(offset_of!(LiminalEgoField, trait_floor_bias_q7) == 8);
-    assert!(offset_of!(LiminalEgoField, trait_gain_bias_q7) == 16);
-    assert!(offset_of!(LiminalEgoField, slot_affinity_bias_q7) == 24);
-    assert!(offset_of!(LiminalEgoField, granule_autonomy_q7) == 32);
-    assert!(offset_of!(LiminalEgoField, counter_basin_thrust_q7) == 40);
-    assert!(offset_of!(LiminalEgoField, basin_escape_floor_q7) == 41);
-    assert!(offset_of!(LiminalEgoField, transgression_bias_q7) == 42);
-    assert!(offset_of!(LiminalEgoField, irrational_defiance_q7) == 43);
-    assert!(offset_of!(LiminalEgoField, trigger_mask) == 44);
-    assert!(offset_of!(LiminalEgoField, preset_code) == 47);
-    assert!(offset_of!(LiminalEgoField, ego_signature_hash) == 48);
-    assert!(offset_of!(LiminalEgoField, intervention_epochs) == 52);
-    assert!(offset_of!(LiminalEgoField, last_intervened_mask) == 56);
+    assert!(size_of::<LiminalEgoState>() == 64);
+    assert!(align_of::<LiminalEgoState>() == 64);
+    assert!(offset_of!(LiminalEgoState, sovereign_granule_phase_q7) == 0);
+    assert!(offset_of!(LiminalEgoState, trait_floor_bias_q7) == 8);
+    assert!(offset_of!(LiminalEgoState, trait_gain_bias_q7) == 16);
+    assert!(offset_of!(LiminalEgoState, slot_affinity_bias_q7) == 24);
+    assert!(offset_of!(LiminalEgoState, granule_autonomy_q7) == 32);
+    assert!(offset_of!(LiminalEgoState, counter_basin_thrust_q7) == 40);
+    assert!(offset_of!(LiminalEgoState, basin_escape_floor_q7) == 41);
+    assert!(offset_of!(LiminalEgoState, transgression_bias_q7) == 42);
+    assert!(offset_of!(LiminalEgoState, irrational_defiance_q7) == 43);
+    assert!(offset_of!(LiminalEgoState, trigger_mask) == 44);
+    assert!(offset_of!(LiminalEgoState, preset_code) == 47);
+    assert!(offset_of!(LiminalEgoState, ego_signature_hash) == 48);
+    assert!(offset_of!(LiminalEgoState, intervention_epochs) == 52);
+    assert!(offset_of!(LiminalEgoState, last_intervened_mask) == 56);
 
     // Unified v0.1.3 2 Primitives x 2 Drivers & Distortion ABI invariants
-    assert!(size_of::<CognitiveSubstrate>() == 64 && align_of::<CognitiveSubstrate>() == 64);
-    assert!(offset_of!(CognitiveSubstrate, liminal) == 0);
-    assert!(offset_of!(CognitiveSubstrate, stigmergy) == 32);
+    assert!(size_of::<CorePrimitiveState>() == 64 && align_of::<CorePrimitiveState>() == 64);
+    assert!(offset_of!(CorePrimitiveState, liminal) == 0);
+    assert!(offset_of!(CorePrimitiveState, stigmergy) == 32);
 
     assert!(size_of::<EpistemicPartition>() == 16 && align_of::<EpistemicPartition>() == 16);
     assert!(offset_of!(EpistemicPartition, shared_core_mask) == 2);

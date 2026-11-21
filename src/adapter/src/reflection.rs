@@ -10,7 +10,7 @@
 //! bounded by [`ReflectionPolicy::max_retries`].
 
 use crate::{DynamicAttractorRecall, RecallPolicy, VoidBoundaryState};
-use liminika_core::drivers::{LiminalEgoField, EGO_TRIGGER_LIMINAL_EXTERIOR};
+use liminika_core::drivers::{LiminalEgoState, EGO_TRIGGER_LIMINAL_EXTERIOR};
 use liminika_core::liminal::MAX_ATTENTION_HEADS;
 use liminika_core::runtime::{
     AdaptiveThresholdPolicy, CausalProvenanceSignal, CognitiveCircuitThresholdPolicy, GatewayFrame,
@@ -268,7 +268,7 @@ pub trait AttractorTrajectoryEvaluator {
     ) -> ReflectionCritique;
 
     /// Evaluates `draft` relative to `query` while respecting active Core Layer 2 Ego
-    /// boundary-transgression intent (`LiminalEgoField`).
+    /// boundary-transgression intent (`LiminalEgoState`).
     ///
     /// When `ego` is actively exploring beyond `Liminal` horizons (`transgression_bias_q7 >= 24` or
     /// `EGO_TRIGGER_LIMINAL_EXTERIOR` fired) and the draft introduces no Guard conflict, controlled
@@ -281,7 +281,7 @@ pub trait AttractorTrajectoryEvaluator {
         draft: &TrajectoryManifoldSnapshot,
         recall_policy: &RecallPolicy,
         policy: &ReflectionPolicy,
-        ego: &LiminalEgoField,
+        ego: &LiminalEgoState,
     ) -> ReflectionCritique {
         let mut critique = self.assess_trajectory(query, draft, recall_policy, policy);
         let ego_exploring = ego.is_active()
@@ -1060,7 +1060,7 @@ mod tests {
         let recall_policy = RecallPolicy::default();
         let policy = ReflectionPolicy::default();
 
-        let ego = LiminalEgoField::from_intent_axes(
+        let ego = LiminalEgoState::from_intent_axes(
             &EgoIntentAxes::new()
                 .with_autonomy_q7(80)
                 .with_transgression_q7(72),

@@ -12,7 +12,7 @@ use core::f32::consts::PI;
 
 use crate::foundation::lut_crc32::{F32_MIN_POSITIVE_NORMAL, SUBNORMAL_SQ_RISK_FLOOR};
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-use crate::foundation::phase_field::{avx2_hsum2_ps, avx2_hsum_ps};
+use crate::foundation::phase_ops::{avx2_hsum2_ps, avx2_hsum_ps};
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 use crate::foundation::scalar_math::branchless_atan2_to_q7_fast;
 use crate::foundation::scalar_math::{

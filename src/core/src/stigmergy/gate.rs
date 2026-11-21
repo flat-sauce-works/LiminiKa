@@ -8,7 +8,7 @@
 use core::mem::{align_of, offset_of, size_of};
 
 use crate::foundation::aligned::{AlignedSlice16, AlignedSlice32, AlignedSliceMut32};
-use crate::foundation::phase_field::circular_r_bar_from_words_64;
+use crate::foundation::phase_ops::circular_r_bar_from_words_64;
 use crate::foundation::pod::{gcso_rank1_residual_descriptor_t, Pod};
 use crate::foundation::projection::project_bytes_swar_to_words_64;
 use crate::foundation::rank1_kernels::eval_rank1_slices_fused;

@@ -12,7 +12,7 @@
 
 use crate::drivers::{
     gcso_edbc_state_t, AnonymousComputePool, ComputeDispatchMask, DistortionTension,
-    EgoDifferentialNet, EntropyController, LiminalEgoField, SystemPressureReading,
+    EgoDifferentialNet, EntropyController, LiminalEgoState, SystemPressureReading,
     SystemSpineState,
 };
 use crate::foundation::{
@@ -30,7 +30,7 @@ use crate::foundation::{
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u8, gcso_config_t, gcso_q7_t,
     AttributionTag, BitCut8, DriverKind, EpistemicPartition, EpistemicRegime, GcsoResult,
-    LiminalThresholdField, SubstrateKind, DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_MAJOR,
+    LiminalThresholdState, PrimitiveKind, DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_MAJOR,
     GCSO_ABI_VERSION_MINOR, GCSO_ABI_VERSION_PATCH, GCSO_ABI_VERSION_STRING,
     GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT,
     MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, Q7_PHASE_SCALE_RAD,
@@ -62,13 +62,13 @@ pub const DEFAULT_PAGED_BLOCK_SIZE: u32 = 32;
 /// (`Slot 0: Liminal`, `Slot 1: Stigmergic`, `Slot 2: Ego`).
 pub const NUM_CORE_AUTONOMOUS_LAYERS: usize = 3;
 
-/// Autonomous Core Stack Slot 0 identifier: Epistemic Horizon & Trait Threshold (`LiminalThresholdField`).
+/// Autonomous Core Stack Slot 0 identifier: Epistemic Horizon & Trait Threshold (`LiminalThresholdState`).
 pub const CORE_LAYER_LIMINAL: usize = 0;
 
-/// Autonomous Core Stack Slot 1 identifier: Stigmergic Granule Approximation, Overlap & Serendipity (`StigmergicGranuleField`).
+/// Autonomous Core Stack Slot 1 identifier: Stigmergic Granule Approximation, Overlap & Serendipity (`StigmergicGranuleState`).
 pub const CORE_LAYER_STIGMERGIC: usize = 1;
 
-/// Autonomous Core Stack Slot 2 identifier: Wide-Threshold Subjective Ego & Top-Down Boundary Intervention (`LiminalEgoField`).
+/// Autonomous Core Stack Slot 2 identifier: Wide-Threshold Subjective Ego & Top-Down Boundary Intervention (`LiminalEgoState`).
 pub const CORE_LAYER_EGO: usize = 2;
 use crate::runtime::storage::{
     finalize_snapshot_header_crc32, init_snapshot_header, verify_snapshot_payload_crc32,
@@ -77,11 +77,11 @@ use crate::runtime::storage::{
 use crate::runtime::telemetry::{CoreTelemetryBank, CoreTelemetrySnapshot, TelemetryCapturePolicy};
 use crate::stigmergy::{
     gcso_anchor_type_t, gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
-    trail_phase_words_mut, trail_phase_words_ref, CognitiveSubstrate, CognitiveTrajectoryLedger,
-    ContrastivePhaseBloomFilter, DissipativeOverflowReport, FastPathLedger, MultiAttractorSpace,
-    PointerSubstrate, SandboxLifecycleEvent, StigmergicActionDecision, StigmergicGranuleField,
-    StigmergicOverlapSerendipityReport, StigmergicSubstrate, StigmergicSubstrateOps,
-    WorkbenchLanePlacement, WorkbenchSlotSpec, LEDGER_METRIC_FAST_PATH_HIT,
+    trail_phase_words_mut, trail_phase_words_ref, CognitiveTrajectoryLedger,
+    ContrastivePhaseBloomFilter, CorePrimitiveState, DissipativeOverflowReport, FastPathLedger,
+    MultiAttractorSpace, PointerSubstrate, SandboxLifecycleEvent, StigmergicActionDecision,
+    StigmergicGranuleState, StigmergicOverlapSerendipityReport, StigmergicSubstrate,
+    StigmergicSubstrateOps, WorkbenchLanePlacement, WorkbenchSlotSpec, LEDGER_METRIC_FAST_PATH_HIT,
     LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_REPULSION_APPLIED, MAX_ATTRACTOR_PULL_FORCE,
     SUBSTRATE_INLINE_TRAILS, TRAIL_FLAG_REPULSION_ACTIVE,
 };
@@ -176,18 +176,18 @@ pub fn validate_config_invariants(config: &gcso_config_t) -> GcsoResult<()> {
 // ===================================================================
 
 /// Unified 128-byte (2 cache lines, `#[repr(C, align(64))]`) 3-slot autonomous core stack pairing:
-/// - **Slot 0 ([`LiminalThresholdField`], 32 B)**: Epistemic Horizon & Trait Cognitive Apertures
-/// - **Slot 1 ([`StigmergicGranuleField`], 32 B)**: Stigmergic Granule Approximation, Venn Overlap & Serendipity
-/// - **Slot 2 ([`LiminalEgoField`], 64 B)**: Top-Down Subjective Ego Boundary & Phase Intervention
+/// - **Slot 0 ([`LiminalThresholdState`], 32 B)**: Epistemic Horizon & Trait Cognitive Apertures
+/// - **Slot 1 ([`StigmergicGranuleState`], 32 B)**: Stigmergic Granule Approximation, Venn Overlap & Serendipity
+/// - **Slot 2 ([`LiminalEgoState`], 64 B)**: Top-Down Subjective Ego Boundary & Phase Intervention
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AutonomousCoreLayerStack {
     /// Core Stack Slot 0: Epistemic Horizon & Trait Cognitive Aperture Controller (`offset 0..32`).
-    pub liminal_layer: LiminalThresholdField,
+    pub liminal_layer: LiminalThresholdState,
     /// Core Stack Slot 1: Stigmergic Granule Approximation & Serendipity Controller (`offset 32..64`).
-    pub stigmergic_layer: StigmergicGranuleField,
+    pub stigmergic_layer: StigmergicGranuleState,
     /// Core Stack Slot 2: Wide-Aperture Subjective Ego Controller (`offset 64..128`).
-    pub ego_layer: LiminalEgoField,
+    pub ego_layer: LiminalEgoState,
 }
 
 impl AutonomousCoreLayerStack {
@@ -196,31 +196,31 @@ impl AutonomousCoreLayerStack {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            liminal_layer: LiminalThresholdField::new(),
-            stigmergic_layer: StigmergicGranuleField::new(),
-            ego_layer: LiminalEgoField::new(),
+            liminal_layer: LiminalThresholdState::new(),
+            stigmergic_layer: StigmergicGranuleState::new(),
+            ego_layer: LiminalEgoState::new(),
         }
     }
 
-    /// Returns a 64-byte [`CognitiveSubstrate`] view uniting the two foundational primitives
-    /// (`LiminalThresholdField` + `StigmergicGranuleField`).
+    /// Returns a 64-byte [`CorePrimitiveState`] view uniting the two foundational primitives
+    /// (`LiminalThresholdState` + `StigmergicGranuleState`).
     #[inline(always)]
     #[must_use]
-    pub const fn substrate(&self) -> CognitiveSubstrate {
-        CognitiveSubstrate {
+    pub const fn core_primitive_state(&self) -> CorePrimitiveState {
+        CorePrimitiveState {
             liminal: self.liminal_layer,
             stigmergy: self.stigmergic_layer,
         }
     }
 
-    /// Replaces the `Liminal` + `Stigmergy` halves from `substrate`.
+    /// Replaces the `Liminal` + `Stigmergy` halves from `primitives`.
     #[inline(always)]
-    pub const fn set_substrate(&mut self, substrate: CognitiveSubstrate) {
-        self.liminal_layer = substrate.liminal;
-        self.stigmergic_layer = substrate.stigmergy;
+    pub const fn set_core_primitive_state(&mut self, primitives: CorePrimitiveState) {
+        self.liminal_layer = primitives.liminal;
+        self.stigmergic_layer = primitives.stigmergy;
     }
 
-    /// Branchlessly co-adapts Slot 0 (`LiminalThresholdField`) and Slot 1 (`StigmergicGranuleField`)
+    /// Branchlessly co-adapts Slot 0 (`LiminalThresholdState`) and Slot 1 (`StigmergicGranuleState`)
     /// with cross-slot feedback (serendipitous discovery in Slot 1 widens Slot 0's horizon).
     #[inline]
     pub fn adapt_layers_branchless(
@@ -233,15 +233,19 @@ impl AutonomousCoreLayerStack {
         self.liminal_layer
             .adapt_from_circuit_and_overflow_branchless(ledger, horizon, overflow_opt);
         let discovered = venn_report.serendipity_triggered != 0;
-        self.liminal_layer.void_floor_q7[1] = branchless_select_u8(
+        self.liminal_layer.threshold_floor_q7[1] = branchless_select_u8(
             discovered,
-            self.liminal_layer.void_floor_q7[1].saturating_sub(4).max(8),
-            self.liminal_layer.void_floor_q7[1],
+            self.liminal_layer.threshold_floor_q7[1]
+                .saturating_sub(4)
+                .max(8),
+            self.liminal_layer.threshold_floor_q7[1],
         );
-        self.liminal_layer.void_floor_q7[6] = branchless_select_u8(
+        self.liminal_layer.threshold_floor_q7[6] = branchless_select_u8(
             discovered,
-            self.liminal_layer.void_floor_q7[6].saturating_sub(4).max(8),
-            self.liminal_layer.void_floor_q7[6],
+            self.liminal_layer.threshold_floor_q7[6]
+                .saturating_sub(4)
+                .max(8),
+            self.liminal_layer.threshold_floor_q7[6],
         );
         self.liminal_layer.aperture_gain_q7[6] = branchless_select_u8(
             discovered,
@@ -273,7 +277,7 @@ impl AutonomousCoreLayerStack {
         let has_venn = (venn_report.venn_core_mask | venn_report.venn_penumbra_mask) != 0;
         let coop_boost = branchless_clamp_f32(1.0 + 0.05 * core_cnt, 1.0, 1.40);
         let void_gated = horizon.is_liminal()
-            | (horizon.total_memory_support < self.liminal_layer.channel_void_floor_f32(1));
+            | (horizon.total_memory_support < self.liminal_layer.channel_threshold_floor_f32(1));
         out.effective_energy = branchless_select_f32(
             !void_gated & (venn_report.venn_core_mask != 0),
             out.effective_energy * coop_boost,
@@ -667,7 +671,7 @@ pub struct OrchestratorStatusSnapshot {
     pub liminal_threshold_mask: u32,
     /// Active Core Stack Slot 1 `Stigmergic` Venn-core granule mask.
     pub stigmergic_overlap_core_mask: u8,
-    /// Whether Core Stack Slot 2 `LiminalEgoField` intervention is active.
+    /// Whether Core Stack Slot 2 `LiminalEgoState` intervention is active.
     pub ego_active: bool,
     /// Monotonic count of Core Stack Slot 2 Ego interventions applied.
     pub ego_intervention_epochs: u32,
@@ -1330,9 +1334,9 @@ impl RuntimeContext {
         let header_size = core::mem::size_of::<gcso_snapshot_header_t>(); // 128 bytes
         let context_data_size = 64usize; // 64-byte aligned context & attractor metadata block
         let edbc_size = core::mem::size_of::<gcso_edbc_state_t>(); // 64 bytes
-        let daes_size = core::mem::size_of::<gcso_ledger_slot_t>(); // 64 bytes
+        let ledger_size = core::mem::size_of::<gcso_ledger_slot_t>(); // 64 bytes
 
-        let total_required = header_size + context_data_size + edbc_size + daes_size; // 320 bytes
+        let total_required = header_size + context_data_size + edbc_size + ledger_size; // 320 bytes
 
         if buffer.is_empty() {
             *required_size = total_required;
@@ -1347,7 +1351,7 @@ impl RuntimeContext {
 
         let substrate_off = header_size; // 128
         let edbc_off = substrate_off + context_data_size; // 192
-        let daes_off = edbc_off + edbc_size; // 256
+        let ledger_off = edbc_off + edbc_size; // 256
 
         let ctx_buf = &mut buffer[substrate_off..edbc_off];
         ctx_buf[0..8].copy_from_slice(&self.substrate.step_counter.to_le_bytes());
@@ -1367,7 +1371,7 @@ impl RuntimeContext {
         edbc_state.write_unaligned_to(buffer, edbc_off)?;
         self.substrate
             .ledger_slot
-            .write_unaligned_to(buffer, daes_off)?;
+            .write_unaligned_to(buffer, ledger_off)?;
 
         let mut header = init_snapshot_header(total_required as u64, 1_774_900_000);
         header.action_hub_offset = substrate_off as u64;
@@ -1375,7 +1379,7 @@ impl RuntimeContext {
         header.dpsr_state_offset = edbc_off as u64;
         header.rank1_state_offset = edbc_off as u64;
         header.edbc_state_offset = edbc_off as u64;
-        header.ledger_slot_offset = daes_off as u32;
+        header.ledger_slot_offset = ledger_off as u32;
         finalize_snapshot_header_crc32(&mut header, &buffer[..total_required])?;
 
         header.write_unaligned_to(buffer, 0)?;
@@ -1405,9 +1409,9 @@ impl RuntimeContext {
 
         let substrate_off = header.action_hub_offset as usize;
         let edbc_off = header.edbc_state_offset as usize;
-        let daes_off = header.ledger_slot_offset as usize;
+        let ledger_off = header.ledger_slot_offset as usize;
 
-        if substrate_off < header_size || edbc_off < substrate_off || daes_off < edbc_off {
+        if substrate_off < header_size || edbc_off < substrate_off || ledger_off < edbc_off {
             return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
         }
 
@@ -1457,9 +1461,10 @@ impl RuntimeContext {
             self.entropy_controller.set_tau_flux(self.config.tau_flux);
         }
 
-        let daes_size = core::mem::size_of::<gcso_ledger_slot_t>();
-        if buffer.len() >= daes_off + daes_size {
-            self.substrate.ledger_slot = gcso_ledger_slot_t::read_unaligned_from(buffer, daes_off)?;
+        let ledger_size = core::mem::size_of::<gcso_ledger_slot_t>();
+        if buffer.len() >= ledger_off + ledger_size {
+            self.substrate.ledger_slot =
+                gcso_ledger_slot_t::read_unaligned_from(buffer, ledger_off)?;
         }
 
         Ok(())
@@ -1669,12 +1674,13 @@ impl RuntimeContext {
         trail_out: &mut gcso_pointer_trail_t,
         mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> Result<(GatewayFrame, CausalProvenanceReport, u32, u32, bool)> {
-        let (head_dim, num_heads, _expected_len) = self.substrate.validate_hub_cascade_params(
-            self.phase_steering.phase_step_min_rad(),
-            self.phase_steering.phase_clamp_max_rad(),
-            query_tensor.as_deref(),
-            None,
-        )?;
+        let (head_dim, num_heads, _expected_len) =
+            self.substrate.validate_substrate_cascade_params(
+                self.phase_steering.phase_step_min_rad(),
+                self.phase_steering.phase_clamp_max_rad(),
+                query_tensor.as_deref(),
+                None,
+            )?;
         let geom = geometry.rope_geometry();
         if geom.head_dim != head_dim || geom.num_heads != num_heads {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
@@ -1784,8 +1790,9 @@ impl RuntimeContext {
         // 4. Step substrate pointer trail + Bloom filter + RoPE phase steering (zero-alloc).
         let bloom_snapshot = self.substrate.bloom_filter;
         let mut ledger_slot = self.substrate.ledger_slot;
-        let (bypass_hit, _eff_ptr, _density, repulsion_active, post_rep_words) =
-            self.substrate.step_hub_with_bloom_repulsion_to_words(
+        let (bypass_hit, _eff_ptr, _density, repulsion_active, post_rep_words) = self
+            .substrate
+            .step_substrate_with_bloom_repulsion_to_words(
                 gcso_tagged_ptr_t(frame.tagged_ptr),
                 &mut ledger_slot,
                 &bloom_snapshot,
@@ -1861,9 +1868,9 @@ impl RuntimeContext {
             if self.last_epistemic_partition.sandbox_eligible != 0
                 || self.core_layers.stigmergic_layer.venn_overlap_mask != 0
             {
-                SubstrateKind::Stigmergy
+                PrimitiveKind::Stigmergy
             } else {
-                SubstrateKind::Liminal
+                PrimitiveKind::Liminal
             },
             if pframe_hops > 0 || self.core_layers.ego_layer.last_intervened_mask != 0 {
                 DriverKind::Ego

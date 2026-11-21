@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! 8-granule stigmergic approximation-and-reconstitution engine, overlap/serendipity
-//! field analysis, adaptive [`StigmergicGranuleField`], fragmented micro-ensemble summary,
+//! field analysis, adaptive [`StigmergicGranuleState`], fragmented micro-ensemble summary,
 //! and relative attractor graph coupling ([`RelativeAttractorNode`], [`RelativeCouplingMatrix`]).
 
 #![deny(missing_docs)]
@@ -22,7 +22,7 @@ use crate::foundation::{
 use crate::liminal::{
     branchless_select_f32, branchless_select_i32, branchless_select_i8, branchless_select_u32,
     branchless_select_u64, branchless_select_u8, branchless_select_usize, gcso_q7_t, GcsoResult,
-    Liminal, LiminalThresholdField, DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT,
+    Liminal, LiminalThresholdState, DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT,
     MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, THRESHOLD_RELATIVE_COUPLING,
 };
 use crate::stigmergy::attractor::{AttractorAnchor, CrystallizedAnchorRecord};
@@ -343,14 +343,14 @@ pub fn evaluate_stigmergic_overlap_and_serendipity_words_64<Node: RelativeAttrac
 }
 
 // ===================================================================
-// 2. Core Layer 1: Stigmergic Granule Field (32 B)
+// 2. Core Layer 1: Stigmergic Granule State (32 B)
 // ===================================================================
 
 /// Autonomous Core Layer 1 controller (`#[repr(C, align(16))]`, 32 B) governing per-granule
 /// stigmergic approximation parameters, Venn-overlap reinforcement, and serendipitous noise discovery.
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StigmergicGranuleField {
+pub struct StigmergicGranuleState {
     /// Per-granule pheromone step gain in Q0.7 (`[32..=127]`, `offset 0..8`).
     pub granule_step_gain_q7: [u8; NUM_STIGMERGIC_GRANULES],
     /// Per-granule tolerated phase approximation residual in Q7 (`[2..=32]`, `offset 8..16`).
@@ -369,15 +369,15 @@ pub struct StigmergicGranuleField {
     pub adaptation_epochs: u32,
 }
 
-impl Default for StigmergicGranuleField {
+impl Default for StigmergicGranuleState {
     #[inline(always)]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl StigmergicGranuleField {
-    /// Constructs a neutral 32-byte [`StigmergicGranuleField`] baseline.
+impl StigmergicGranuleState {
+    /// Constructs a neutral 32-byte [`StigmergicGranuleState`] baseline.
     #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
@@ -889,36 +889,36 @@ pub(crate) fn fold_sincos64_to_words(
     words
 }
 
-/// Unified single-cacheline (`64 B`, `#[repr(C, align(64))]`) cognitive substrate pairing the two
-/// foundational geometric primitives: [`LiminalThresholdField`] (`0..32`) and
-/// [`StigmergicGranuleField`] (`32..64`).
+/// Unified single-cacheline (`64 B`, `#[repr(C, align(64))]`) primitive state pairing the two
+/// foundational geometric primitives: [`LiminalThresholdState`] (`0..32`) and
+/// [`StigmergicGranuleState`] (`32..64`).
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct CognitiveSubstrate {
+pub struct CorePrimitiveState {
     /// Boundary apertures, cognitive window floors, and domain gates (`offset 0..32`).
-    pub liminal: LiminalThresholdField,
+    pub liminal: LiminalThresholdState,
     /// 8-granule stigmergic step gains, noise tolerances, and volatile pheromones (`offset 32..64`).
-    pub stigmergy: StigmergicGranuleField,
+    pub stigmergy: StigmergicGranuleState,
 }
 
-impl CognitiveSubstrate {
-    /// Constructs a neutral 64-byte [`CognitiveSubstrate`].
+impl CorePrimitiveState {
+    /// Constructs a neutral 64-byte [`CorePrimitiveState`].
     #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            liminal: LiminalThresholdField::new(),
-            stigmergy: StigmergicGranuleField::new(),
+            liminal: LiminalThresholdState::new(),
+            stigmergy: StigmergicGranuleState::new(),
         }
     }
 }
 
-// SAFETY: `CognitiveSubstrate` is `#[repr(C, align(64))]`, exact size 64 bytes with zero padding.
-unsafe impl Pod for CognitiveSubstrate {}
+// SAFETY: `CorePrimitiveState` is `#[repr(C, align(64))]`, exact size 64 bytes with zero padding.
+unsafe impl Pod for CorePrimitiveState {}
 
 // SAFETY: `StigmergicOverlapSerendipityReport` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
 unsafe impl Pod for StigmergicOverlapSerendipityReport {}
-// SAFETY: `StigmergicGranuleField` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
-unsafe impl Pod for StigmergicGranuleField {}
+// SAFETY: `StigmergicGranuleState` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
+unsafe impl Pod for StigmergicGranuleState {}
 // SAFETY: `StigmergicFragmentEnsembleReport` is `#[repr(C, align(16))]`, exact size 16 bytes with zero padding.
 unsafe impl Pod for StigmergicFragmentEnsembleReport {}

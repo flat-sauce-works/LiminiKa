@@ -195,12 +195,10 @@ unsafe fn avx2_subswarm_resolve_words_64(
             _mm_unpackhi_epi64,
         };
         let _ = core::mem::size_of::<__m256i>();
-        let (vc0, vc1) = crate::foundation::phase_field::avx2_words64_to_vec64_with_uniform(
-            cur_w,
-            cur_is_uniform,
-        );
+        let (vc0, vc1) =
+            crate::foundation::phase_ops::avx2_words64_to_vec64_with_uniform(cur_w, cur_is_uniform);
         let (vt0, vt1) = if use_explicit_tgt {
-            crate::foundation::phase_field::avx2_words64_to_vec64_with_uniform(
+            crate::foundation::phase_ops::avx2_words64_to_vec64_with_uniform(
                 tgt_base_w,
                 tgt_is_uniform,
             )
@@ -265,7 +263,7 @@ unsafe fn avx2_subswarm_resolve_words_64(
         let ok1 = _mm256_cmpgt_epi64(v_tol_plus1, res1_vec);
         let raw_quorum = (_mm256_movemask_pd(_mm256_castsi256_pd(ok0)) as u8)
             | ((_mm256_movemask_pd(_mm256_castsi256_pd(ok1)) as u8) << 4);
-        let mut next_words = crate::foundation::phase_field::avx2_vec64_to_words64(vn0, vn1);
+        let mut next_words = crate::foundation::phase_ops::avx2_vec64_to_words64(vn0, vn1);
 
         if active_cell_mask == 0xFF {
             let r_sum4 = _mm256_add_epi64(res0_vec, res1_vec);
@@ -278,7 +276,7 @@ unsafe fn avx2_subswarm_resolve_words_64(
             return (next_words, raw_quorum, residual_sum);
         }
 
-        let res_arr = crate::foundation::phase_field::avx2_vec64_to_words64(res0_vec, res1_vec);
+        let res_arr = crate::foundation::phase_ops::avx2_vec64_to_words64(res0_vec, res1_vec);
         let mut residual_sum = 0u32;
         let mut cell = 0usize;
         while cell < NUM_STIGMERGIC_GRANULES {

@@ -222,15 +222,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         || ablate_dual_axis;
     adapter.set_ego_max_hops(ego_max_hops);
     apply_ego_mode(&mut adapter, &ego_mode);
-    if adapter.ego_field().is_active() {
+    if adapter.ego_state().is_active() {
         println!(
             "[Ego   ] active: thrust={} escape_floor={} transgress={} defiance={} trigger=0x{:02X} hash=0x{:08X}",
-            adapter.ego_field().counter_basin_thrust_q7,
-            adapter.ego_field().basin_escape_floor_q7,
-            adapter.ego_field().transgression_bias_q7,
-            adapter.ego_field().irrational_defiance_q7,
-            adapter.ego_field().trigger_mask,
-            adapter.ego_field().ego_signature_hash,
+            adapter.ego_state().counter_basin_thrust_q7,
+            adapter.ego_state().basin_escape_floor_q7,
+            adapter.ego_state().transgression_bias_q7,
+            adapter.ego_state().irrational_defiance_q7,
+            adapter.ego_state().trigger_mask,
+            adapter.ego_state().ego_signature_hash,
         );
     }
 
@@ -1366,9 +1366,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let core_note = format!(
                 "reg={:?} l0={} l1={} ego={} sc={} venn=0x{:02X} ens={}",
                 core_hor.regime(),
-                adapter.aperture_field().adaptation_epochs,
-                adapter.stigmergic_granule_field().adaptation_epochs,
-                adapter.ego_field().intervention_epochs,
+                adapter.threshold_state().adaptation_epochs,
+                adapter.stigmergic_granule_state().adaptation_epochs,
+                adapter.ego_state().intervention_epochs,
                 adapter.last_boundary_delta().stationary_shortcut_ready,
                 core_venn.venn_core_mask,
                 ens_opt.map_or(0, |r| r.active_fragment_count),
@@ -1874,11 +1874,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         reflect_gate_skipped,
         ext_rescue_hits,
         adapter.sandbox_promotions(),
-        adapter.aperture_field().adaptation_epochs,
-        adapter.stigmergic_granule_field().adaptation_epochs,
-        adapter.ego_field().intervention_epochs,
+        adapter.threshold_state().adaptation_epochs,
+        adapter.stigmergic_granule_state().adaptation_epochs,
+        adapter.ego_state().intervention_epochs,
         adapter.ego_differential_net().max_hops,
-        adapter.ego_field().last_intervened_mask,
+        adapter.ego_state().last_intervened_mask,
         compile_ms,
         mean_recall_ms,
         decode_tps,
@@ -2048,7 +2048,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             sandbox_promos: adapter.sandbox_promotions(),
             replies: pass_replies,
         });
-        if adapter.ego_field().is_active() {
+        if adapter.ego_state().is_active() {
             println!(
                 "[CoreTopology]\n{}",
                 adapter.render_liminal_topology_mermaid_with_distortion(

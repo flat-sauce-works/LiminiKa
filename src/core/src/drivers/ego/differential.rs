@@ -10,7 +10,7 @@
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
 
-use crate::drivers::ego::intent::{EgoIntentAxes, LiminalEgoField};
+use crate::drivers::ego::intent::{EgoIntentAxes, LiminalEgoState};
 use crate::foundation::{
     branchless_q7_weighted_ensemble_words_64, load_q7_words_64, swar_q7_circular_add_x8,
     swar_q7_scale_le128_with_bias_x8, Pod, SWAR_SPLAT_BYTE_64,
@@ -21,7 +21,7 @@ use crate::liminal::{
     SCOPE_REGION_KNOWN_UNKNOWN, SCOPE_REGION_SELF_EXCLUSIVE, SCOPE_REGION_SHARED_CORE,
 };
 use crate::stigmergy::crystal::{CrystallizedAttractorRecord, PhaseProfile64};
-use crate::stigmergy::granule::StigmergicGranuleField;
+use crate::stigmergy::granule::StigmergicGranuleState;
 use crate::stigmergy::ATTRACTOR_SLOT_SYSTEM_BASELINE;
 
 /// Maximum number of inline P-Frame [`DistortionDelta`] nodes hosted by [`EgoDifferentialNet`].
@@ -187,7 +187,7 @@ impl EgoDifferentialNet {
         }
     }
 
-    /// Deterministically initializes the 3-node P-Frame net from [`LiminalEgoField`] and
+    /// Deterministically initializes the 3-node P-Frame net from [`LiminalEgoState`] and
     /// [`EgoIntentAxes`], evaluated as a 1-hop parallel perspective ensemble when `max_hops == 1`
     /// or as a sequential multi-hop chain when `max_hops >= 2`:
     /// - Node 0 (`S & O`): persona heading alignment delta
@@ -195,8 +195,8 @@ impl EgoDifferentialNet {
     /// - Node 2 (`O \ S`): transgressive exterior bridge delta
     #[inline]
     #[must_use]
-    pub fn from_ego_field_and_axes(
-        ego: &LiminalEgoField,
+    pub fn from_ego_state_and_axes(
+        ego: &LiminalEgoState,
         axes: &EgoIntentAxes,
         max_hops: u8,
     ) -> Self {
@@ -400,9 +400,9 @@ impl EgoDifferentialNet {
     #[must_use]
     pub fn evaluate_pframe_words_branchless(
         &self,
-        ego: &LiminalEgoField,
+        ego: &LiminalEgoState,
         epistemic: &EpistemicPartition,
-        stigmergy: &StigmergicGranuleField,
+        stigmergy: &StigmergicGranuleState,
         effective_ego_scale_q7: u8,
         base_words: &[u64; NUM_STIGMERGIC_GRANULES],
     ) -> ([u64; NUM_STIGMERGIC_GRANULES], u8, u8, u8, u8) {
@@ -557,12 +557,12 @@ mod tests {
 
     #[test]
     fn test_one_hop_parallel_perspective_ensemble_and_reinforcement() {
-        let ego = LiminalEgoField::from_preset(LiminalEgoPreset::High);
+        let ego = LiminalEgoState::from_preset(LiminalEgoPreset::High);
         let axes = EgoIntentAxes::new()
             .with_autonomy_q7(72)
             .with_transgression_q7(48);
-        let mut net_1 = EgoDifferentialNet::from_ego_field_and_axes(&ego, &axes, 1);
-        let net_3 = EgoDifferentialNet::from_ego_field_and_axes(&ego, &axes, 3);
+        let mut net_1 = EgoDifferentialNet::from_ego_state_and_axes(&ego, &axes, 1);
+        let net_3 = EgoDifferentialNet::from_ego_state_and_axes(&ego, &axes, 3);
         let epistemic = EpistemicPartition {
             shared_core_mask: 0x0F,
             self_exclusive_mask: 0x30,
@@ -571,7 +571,7 @@ mod tests {
             boundary_sensitivity_q7: 96,
             ..EpistemicPartition::default()
         };
-        let stig = StigmergicGranuleField::new();
+        let stig = StigmergicGranuleState::new();
         let base_words = [0u64; NUM_STIGMERGIC_GRANULES];
 
         let (w1, norm1, hops1, entry1, mask1) =

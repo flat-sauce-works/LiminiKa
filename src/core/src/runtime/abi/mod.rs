@@ -48,7 +48,7 @@ use core::slice;
 #[allow(unused_imports)]
 use crate::drivers::{
     eval_barrier_pitchfork, DistortionDelta, DistortionTension, EgoDifferentialNet, EgoIntentAxes,
-    EntropyController, LiminalEgoField, LiminalEgoPreset, SystemSpineState,
+    EntropyController, LiminalEgoPreset, LiminalEgoState, SystemSpineState,
     MAX_DISTORTION_CHAIN_HOPS, MAX_EGO_PFRAME_NODES,
 };
 #[allow(unused_imports)]
@@ -71,7 +71,7 @@ use crate::foundation::{
 #[allow(unused_imports)]
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u8,
-    evaluate_epistemic_partition_branchless, EpistemicPartition, GcsoResult, LiminalThresholdField,
+    evaluate_epistemic_partition_branchless, EpistemicPartition, GcsoResult, LiminalThresholdState,
     MAX_ATTENTION_HEADS,
 };
 #[allow(unused_imports)]
@@ -103,7 +103,7 @@ use crate::stigmergy::{
     evaluate_stigmergic_overlap_and_serendipity_words_64, trail_phase_words_mut,
     trail_phase_words_ref, CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter,
     CrystallizedAttractorRecord, FastPathLedger, PhaseSteeringEngine,
-    StigmergicFragmentEnsembleReport, StigmergicGranuleField, StigmergicOverlapSerendipityReport,
+    StigmergicFragmentEnsembleReport, StigmergicGranuleState, StigmergicOverlapSerendipityReport,
     StigmergicReconstitutionReport, StigmergicSubstrate, StigmergicThresholds, SubstrateStepReport,
     ATTRACTOR_SLOT_REPULSION, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
     MAX_ATTRACTOR_PULL_FORCE, NUM_STIGMERGIC_GRANULES, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
@@ -986,8 +986,8 @@ mod tests {
         }
         let s = core::str::from_utf8(&mermaid_buf[..written]).expect("valid utf8");
         assert!(s.contains("Core Layer 0: Liminal"));
-        assert!(s.contains("Core Layer 1: StigmergicGranuleField"));
-        assert!(s.contains("Core Layer 2: LiminalEgoField"));
+        assert!(s.contains("Core Layer 1: StigmergicGranuleState"));
+        assert!(s.contains("Core Layer 2: LiminalEgoState"));
 
         let mut ego_preset = gcso_liminal_ego_field_t::default();
         let mut ego_text = gcso_liminal_ego_field_t::default();
@@ -1008,7 +1008,8 @@ mod tests {
                 gcso_ego_field_derive_from_text(desc.as_ptr(), desc.len(), &mut ego_text),
                 GCSO_SUCCESS
             );
-            assert!(ego_text.transgression_bias_q7 > 0);
+            assert!(ego_text.is_active());
+            assert_ne!(ego_text.ego_signature_hash, 0);
             assert_eq!(
                 gcso_ego_field_intervene_frame(
                     &mut ego_text,

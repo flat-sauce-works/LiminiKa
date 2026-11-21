@@ -8,7 +8,7 @@ use core::arch::x86_64::*;
 
 use crate::foundation::aligned::{AlignedSlice32, AlignedSliceMut32};
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-use crate::foundation::phase_field::avx2_hsum_ps;
+use crate::foundation::phase_ops::avx2_hsum_ps;
 use crate::foundation::pod::{gcso_paged_bitmask_t, PAGED_BITMASK_BITS};
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 use crate::foundation::scalar_math::branchless_rotate_so2_pair;

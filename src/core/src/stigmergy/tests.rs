@@ -134,18 +134,18 @@ fn test_paged_bitmask_bloom_trail_swarm_and_ledger_constant_time() {
     assert_eq!(trail.cluster_id, 42);
     assert_eq!(report.evolved_ptr.target_attractor_slot(), 42 & 7);
 
-    let mut daes_ctrl = DummyLedger;
+    let mut ledger_ctrl = DummyLedger;
     let mut ledger_slot = gcso_ledger_slot_t::default();
-    daes_ctrl.register_fast_path_shortcut(&mut ledger_slot, init_ptr.raw(), 0x9999);
-    let (hit, resolved_ptr) = daes_ctrl.resolve_or_pass_tagged_ptr(&mut ledger_slot, init_ptr);
+    ledger_ctrl.register_fast_path_shortcut(&mut ledger_slot, init_ptr.raw(), 0x9999);
+    let (hit, resolved_ptr) = ledger_ctrl.resolve_or_pass_tagged_ptr(&mut ledger_slot, init_ptr);
     assert!(hit && resolved_ptr.raw() == 0x9999);
-    daes_ctrl
+    ledger_ctrl
         .telemetry_push(
             &mut ledger_slot,
             LEDGER_METRIC_FAST_PATH_HIT | LEDGER_METRIC_PHASE_STEERED,
         )
         .unwrap();
-    let (mask, count) = daes_ctrl.telemetry_snapshot_metrics(&ledger_slot);
+    let (mask, count) = ledger_ctrl.telemetry_snapshot_metrics(&ledger_slot);
     assert_eq!(
         (mask, count),
         (LEDGER_METRIC_FAST_PATH_HIT | LEDGER_METRIC_PHASE_STEERED, 1)

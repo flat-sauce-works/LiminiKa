@@ -467,26 +467,26 @@ pub const THRESHOLD_MAPPED_STORAGE: u32 = 1 << 15;
 /// Broadest operational cognitive threshold spanned by `StigmergicSubstrateOps` (`0x0000_FFFF`).
 pub const THRESHOLD_STIGMERGY_WIDE: u32 = 0x0000_FFFF;
 
-/// Number of dynamic channel slots tracked by `LiminalThresholdField`.
+/// Number of dynamic channel slots tracked by `LiminalThresholdState`.
 pub const NUM_LIMINAL_THRESHOLD_CHANNELS: usize = 8;
 
 // ===================================================================
 // 4. 2 Primitives x 2 Drivers Lightweight Attribution Tags
 // ===================================================================
 
-/// Geometric substrate primitive classifier (`SubstrateKind`).
+/// Geometric primitive classifier (`PrimitiveKind`).
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SubstrateKind {
+pub enum PrimitiveKind {
     /// Boundary, cognitive threshold, and 4-region epistemic partition domain (`0`).
     #[default]
     Liminal = 0,
-    /// Local 8-granule quorum, noise deadband, and volatile trace field (`1`).
+    /// Local 8-granule quorum, noise deadband, and volatile trace carrier (`1`).
     Stigmergy = 1,
 }
 
-impl SubstrateKind {
-    /// Decodes a [`SubstrateKind`] branchlessly from bit 0 of a raw tag byte.
+impl PrimitiveKind {
+    /// Decodes a [`PrimitiveKind`] branchlessly from bit 0 of a raw tag byte.
     #[inline(always)]
     #[must_use]
     pub const fn from_bit(bit: u8) -> Self {
@@ -522,28 +522,28 @@ impl DriverKind {
     }
 }
 
-/// Packed 2-bit structural attribution tag (`[Driver(1b) | Substrate(1b)]`) inside a 1-byte
+/// Packed 2-bit structural attribution tag (`[Driver(1b) | Primitive(1b)]`) inside a 1-byte
 /// `Pod` wrapper for zero-cost telemetry and bypass provenance without marker-trait bloat.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AttributionTag(pub u8);
 
 impl AttributionTag {
-    /// Packs `(substrate, driver)` into a 2-bit attribution tag byte.
+    /// Packs `(primitive, driver)` into a 2-bit attribution tag byte.
     #[inline(always)]
     #[must_use]
-    pub const fn new(substrate: SubstrateKind, driver: DriverKind) -> Self {
-        Self((substrate as u8) | ((driver as u8) << 1))
+    pub const fn new(primitive: PrimitiveKind, driver: DriverKind) -> Self {
+        Self((primitive as u8) | ((driver as u8) << 1))
     }
 
     /// Attribution tag for (`Liminal`, `System`).
-    pub const LIMINAL_SYSTEM: Self = Self::new(SubstrateKind::Liminal, DriverKind::System);
+    pub const LIMINAL_SYSTEM: Self = Self::new(PrimitiveKind::Liminal, DriverKind::System);
     /// Attribution tag for (`Liminal`, `Ego`).
-    pub const LIMINAL_EGO: Self = Self::new(SubstrateKind::Liminal, DriverKind::Ego);
+    pub const LIMINAL_EGO: Self = Self::new(PrimitiveKind::Liminal, DriverKind::Ego);
     /// Attribution tag for (`Stigmergy`, `System`).
-    pub const STIGMERGY_SYSTEM: Self = Self::new(SubstrateKind::Stigmergy, DriverKind::System);
+    pub const STIGMERGY_SYSTEM: Self = Self::new(PrimitiveKind::Stigmergy, DriverKind::System);
     /// Attribution tag for (`Stigmergy`, `Ego`).
-    pub const STIGMERGY_EGO: Self = Self::new(SubstrateKind::Stigmergy, DriverKind::Ego);
+    pub const STIGMERGY_EGO: Self = Self::new(PrimitiveKind::Stigmergy, DriverKind::Ego);
 
     /// Returns the raw byte representation (`bits 0..=1`).
     #[inline(always)]
@@ -552,11 +552,11 @@ impl AttributionTag {
         self.0 & 0x03
     }
 
-    /// Extracts the [`SubstrateKind`] primitive axis (`bit 0`).
+    /// Extracts the [`PrimitiveKind`] primitive axis (`bit 0`).
     #[inline(always)]
     #[must_use]
-    pub const fn substrate(self) -> SubstrateKind {
-        SubstrateKind::from_bit(self.0)
+    pub const fn primitive(self) -> PrimitiveKind {
+        PrimitiveKind::from_bit(self.0)
     }
 
     /// Extracts the [`DriverKind`] orthogonal driver axis (`bit 1`).
@@ -584,6 +584,6 @@ impl AttributionTag {
 /// Branchless constructor helper mirroring `AttributionTag::new`.
 #[inline(always)]
 #[must_use]
-pub const fn pack_attribution_tag(substrate: SubstrateKind, driver: DriverKind) -> u8 {
-    AttributionTag::new(substrate, driver).raw()
+pub const fn pack_attribution_tag(primitive: PrimitiveKind, driver: DriverKind) -> u8 {
+    AttributionTag::new(primitive, driver).raw()
 }

@@ -9,7 +9,7 @@
 
 use liminika_core::abi::{gcso_edbc_state_t, gcso_ledger_slot_t, gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::drivers::{
-    EntropyController, LiminalEgoField, LiminalEgoPreset, DISTORTION_DELTA_FLAG_ACTIVE,
+    EntropyController, LiminalEgoPreset, LiminalEgoState, DISTORTION_DELTA_FLAG_ACTIVE,
     DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID, EGO_TRIGGER_BASIN_CAPTURE,
     EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LAYER_DISTORTION,
 };
@@ -19,7 +19,7 @@ use liminika_core::foundation::{
     RopeSteeringTarget, ACTION_MODE_PHASE_REPULSE, SWAR_SPLAT_BYTE_64,
 };
 use liminika_core::liminal::{
-    BitCut8, EpistemicRegime, GcsoResult, LiminalThresholdField, MAX_ATTENTION_HEADS,
+    BitCut8, EpistemicRegime, GcsoResult, LiminalThresholdState, MAX_ATTENTION_HEADS,
     NUM_STIGMERGIC_GRANULES,
 };
 use liminika_core::runtime::{
@@ -38,7 +38,7 @@ use liminika_core::stigmergy::{
     CognitiveCircuitBankOps, CognitiveTrajectoryLedger, CrystallizedAttractorRecord,
     DissipativeOverflowReport, PhaseDeltaSlice, PhaseSteeringEngine, RelativeAttractorNode,
     ResidualAdapterEngine, ResidualScale, SandboxLifecycleEvent, StigmergicActionDecision,
-    StigmergicFragmentEnsembleReport, StigmergicGranuleField, StigmergicOverlapSerendipityReport,
+    StigmergicFragmentEnsembleReport, StigmergicGranuleState, StigmergicOverlapSerendipityReport,
     StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicSubstrate,
     StigmergicThresholds, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
     ATTRACTOR_SLOT_REPULSION, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
@@ -59,21 +59,23 @@ pub use liminika_core::drivers::{
 };
 pub use liminika_core::liminal::{
     evaluate_epistemic_partition_branchless, AttributionTag, DriverKind, EpistemicPartition,
-    SubstrateKind, SCOPE_REGION_KNOWN_UNKNOWN, SCOPE_REGION_SELF_EXCLUSIVE,
+    PrimitiveKind, SCOPE_REGION_KNOWN_UNKNOWN, SCOPE_REGION_SELF_EXCLUSIVE,
     SCOPE_REGION_SHARED_CORE,
 };
 pub use liminika_core::stigmergy::{
-    CognitiveSubstrate, WorkbenchLanePlacement, WorkbenchPreset, WorkbenchSlotSpec,
+    CorePrimitiveState, WorkbenchLanePlacement, WorkbenchPreset, WorkbenchSlotSpec,
 };
 pub use pooling::*;
 pub use reflection::*;
 pub use stratum::*;
 
 pub mod corpus_recall;
+pub mod ego_intent;
 pub mod model_adapter;
 pub mod timeline;
 
 pub use corpus_recall::*;
+pub use ego_intent::*;
 pub use model_adapter::*;
 pub use timeline::*;
 

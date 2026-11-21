@@ -1896,7 +1896,7 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
     }
     adapter.set_active_circuit(peel_ledger);
 
-    let initial_persona_floor = adapter.aperture_field().void_floor_q7[2];
+    let initial_persona_floor = adapter.threshold_state().threshold_floor_q7[2];
     let conflict_horizon = EpistemicHorizonReading {
         total_memory_support: 1.4,
         peak_positive_affinity: 0.72,
@@ -1910,8 +1910,8 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
     };
     let default_venn = *adapter.last_venn_serendipity_report();
     adapter.adapt_core_layers(&conflict_horizon, &default_venn, None);
-    assert!(adapter.aperture_field().void_floor_q7[2] > initial_persona_floor);
-    assert_eq!(adapter.aperture_field().adaptation_epochs, 1);
+    assert!(adapter.threshold_state().threshold_floor_q7[2] > initial_persona_floor);
+    assert_eq!(adapter.threshold_state().adaptation_epochs, 1);
 
     let venn = StigmergicOverlapSerendipityReport {
         venn_core_mask: 0x0F,
@@ -1922,18 +1922,18 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
         ..Default::default()
     };
     adapter.adapt_core_layers(&conflict_horizon, &venn, None);
-    assert_eq!(adapter.aperture_field().adaptation_epochs, 2);
-    assert_eq!(adapter.stigmergic_granule_field().adaptation_epochs, 2);
-    assert_eq!(adapter.stigmergic_granule_field().venn_overlap_mask, 0x0F);
+    assert_eq!(adapter.threshold_state().adaptation_epochs, 2);
+    assert_eq!(adapter.stigmergic_granule_state().adaptation_epochs, 2);
+    assert_eq!(adapter.stigmergic_granule_state().venn_overlap_mask, 0x0F);
 
     adapter.configure_ego_from_preset(LiminalEgoPreset::High);
-    assert!(adapter.ego_field().is_active());
+    assert!(adapter.ego_state().is_active());
     adapter.configure_ego_from_natural_language(
         "Strong-willed curious explorer who defies capture and steps beyond limits",
     );
-    assert!(adapter.ego_field().transgression_bias_q7 > 0);
+    assert!(adapter.ego_state().transgression_bias_q7 > 0);
     adapter.adapt_core_layers(&conflict_horizon, &venn, None);
-    assert!(adapter.ego_field().intervention_epochs >= 1);
+    assert!(adapter.ego_state().intervention_epochs >= 1);
     assert!(adapter.last_boundary_delta().kinetic_energy_q7 > 0);
 
     // Clamp Ego off & drive identical quiescence with quiescent ledger/Venn to observe stationary shortcut
@@ -1960,8 +1960,8 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
     let mermaid = adapter.render_liminal_topology_mermaid(5, 2);
     assert!(mermaid.starts_with("flowchart TD\n"));
     assert!(mermaid.contains("Liminal"));
-    assert!(mermaid.contains("Core Layer 1: StigmergicGranuleField"));
-    assert!(mermaid.contains("Core Layer 2: LiminalEgoField"));
+    assert!(mermaid.contains("Core Layer 1: StigmergicGranuleState"));
+    assert!(mermaid.contains("Core Layer 2: LiminalEgoState"));
     assert!(mermaid.contains("ManifoldGatewaySignal"));
     assert!(mermaid.contains("L2_Substrate"));
     assert!(mermaid.contains("Crystals:5"));
@@ -1978,17 +1978,17 @@ fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_srl() {
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let base_axes = EgoIntentAxes::new().with_autonomy_q7(32).with_logic_q7(80);
     adapter.configure_ego_from_intent_axes(&base_axes);
-    assert!(adapter.ego_field().is_active());
+    assert!(adapter.ego_state().is_active());
 
     let overlay_axes = EgoIntentAxes::new()
         .with_autonomy_q7(96)
         .with_transgression_q7(84)
         .with_devotion_q7(72);
     adapter.blend_ego_intent_axes(&overlay_axes, 64);
-    assert!(adapter.ego_field().transgression_bias_q7 > 0);
+    assert!(adapter.ego_state().transgression_bias_q7 > 0);
 
     adapter.overlay_ego_from_natural_language("curious rebel explorer");
-    assert!(adapter.ego_field().counter_basin_thrust_q7 > 32);
+    assert!(adapter.ego_state().counter_basin_thrust_q7 > 32);
 
     // Prime the 3-layer core stack with an active support horizon so basin capture triggers fire.
     let active_horizon = EpistemicHorizonReading {
@@ -2011,16 +2011,16 @@ fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_srl() {
     let mut hidden = vec![10.0, 0.0, 0.0, 0.0];
     let u = vec![1.0, 0.0, 0.0, 0.0];
     let v = vec![1.0, 0.0, 0.0, 0.0];
-    let epochs_before = adapter.ego_field().intervention_epochs;
+    let epochs_before = adapter.ego_state().intervention_epochs;
     let _ = adapter
         .apply_srl_with_gateway(&fact, &mut hidden, &u, &v)
         .expect("immutable srl");
-    assert_eq!(adapter.ego_field().intervention_epochs, epochs_before);
+    assert_eq!(adapter.ego_state().intervention_epochs, epochs_before);
 
     let _ = adapter
         .apply_srl_with_gateway_mut(&fact, &mut hidden, &u, &v)
         .expect("mutable srl");
-    assert!(adapter.ego_field().intervention_epochs > epochs_before);
+    assert!(adapter.ego_state().intervention_epochs > epochs_before);
 
     // Fragmented micro-ensemble through adapter
     let frags = [
@@ -2050,10 +2050,10 @@ fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_srl() {
     adapter.adapt_core_layers(&horizon, &venn, None);
     adapter.adapt_core_layers(&horizon, &venn, None);
     assert_eq!(adapter.last_boundary_delta().stationary_shortcut_ready, 1);
-    let settled_epochs = adapter.aperture_field().adaptation_epochs;
+    let settled_epochs = adapter.threshold_state().adaptation_epochs;
     adapter.adapt_core_layers(&horizon, &venn, None);
     assert_eq!(
-        adapter.aperture_field().adaptation_epochs,
+        adapter.threshold_state().adaptation_epochs,
         settled_epochs,
         "quiescent state without stagnation trigger should take stationary shortcut"
     );
@@ -2098,7 +2098,7 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
     let fact = ObjectiveFact::new([24i8; MAX_ATTENTION_HEADS], 6.5, 0, 1);
 
     // 1. RoPE gateway steering diverges when Core Layers + Ego are active without mutating per-layer epochs.
-    let epochs_before_rope = ego_adapter.ego_field().intervention_epochs;
+    let epochs_before_rope = ego_adapter.ego_state().intervention_epochs;
     let (f_base, _) = base_adapter
         .steer_layer_with_gateway(0, &fact, &mut trail_base, 128, &mut q_base, None)
         .expect("base rope")
@@ -2110,7 +2110,7 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
     assert_ne!(f_base.phase_deltas, f_ego.phase_deltas);
     assert_ne!(q_base, q_ego);
     assert_eq!(
-        ego_adapter.ego_field().intervention_epochs,
+        ego_adapter.ego_state().intervention_epochs,
         epochs_before_rope,
         "per-layer read-only RoPE modulation must not accumulate intervention epochs"
     );
@@ -2137,7 +2137,7 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
         .orchestrate_layer_srl_with_substrate(&fact, &mut hidden, &u, &v)
         .expect("substrate srl");
     assert!(srl_res.is_some());
-    assert!(ego_adapter.ego_field().intervention_epochs > epochs_before_rope);
+    assert!(ego_adapter.ego_state().intervention_epochs > epochs_before_rope);
 
     // 3. sync_core_layers_from_recall connects corpus recall into Layer 0/1/2 + ensemble.
     let e1 = TextAttractorEntry {
@@ -2172,12 +2172,12 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
         exterior_sandbox_facts: Vec::new(),
         is_known_unknown_exterior: false,
     };
-    let epochs_before_sync = ego_adapter.aperture_field().adaptation_epochs;
+    let epochs_before_sync = ego_adapter.threshold_state().adaptation_epochs;
     let (_hor, _venn, ens_opt) = ego_adapter.sync_core_layers_from_recall(&recall, None);
     let ens_rep = ens_opt.expect("2 recalled facts must trigger fragmented micro-ensemble");
     assert_eq!(ens_rep.active_fragment_count, 2);
     assert_ne!(ens_rep.quorum_agreed_granule_mask, 0);
-    assert!(ego_adapter.aperture_field().adaptation_epochs > epochs_before_sync);
+    assert!(ego_adapter.threshold_state().adaptation_epochs > epochs_before_sync);
 }
 
 #[test]
@@ -2434,7 +2434,7 @@ fn adapter_distortion_feedback_wakes_and_cools_ego_and_renders_mermaid() {
     let geom = RopeGeometry::phi4_mini();
     let mut adapter = ModelSteeringAdapter::new(geom).expect("valid adapter");
     adapter.configure_ego_from_preset(LiminalEgoPreset::Low);
-    let base_thrust = adapter.ego_field().counter_basin_thrust_q7;
+    let base_thrust = adapter.ego_state().counter_basin_thrust_q7;
 
     // 1. Passive saturation wakes Ego with EGO_TRIGGER_LAYER_DISTORTION.
     let passive = LayerDistortionReport {
@@ -2448,10 +2448,10 @@ fn adapter_distortion_feedback_wakes_and_cools_ego_and_renders_mermaid() {
     };
     adapter.apply_distortion_ego_feedback(&passive);
     assert_ne!(
-        adapter.ego_field().trigger_mask & EGO_TRIGGER_LAYER_DISTORTION,
+        adapter.ego_state().trigger_mask & EGO_TRIGGER_LAYER_DISTORTION,
         0
     );
-    assert!(adapter.ego_field().counter_basin_thrust_q7 >= 48);
+    assert!(adapter.ego_state().counter_basin_thrust_q7 >= 48);
 
     // 2. Active overdrive cools down Ego thrust relative to configured baseline.
     let active = LayerDistortionReport {
@@ -2465,18 +2465,18 @@ fn adapter_distortion_feedback_wakes_and_cools_ego_and_renders_mermaid() {
     };
     adapter.apply_distortion_ego_feedback(&active);
     assert_eq!(
-        adapter.ego_field().trigger_mask & EGO_TRIGGER_LAYER_DISTORTION,
+        adapter.ego_state().trigger_mask & EGO_TRIGGER_LAYER_DISTORTION,
         0
     );
     assert_eq!(
-        adapter.ego_field().counter_basin_thrust_q7,
+        adapter.ego_state().counter_basin_thrust_q7,
         base_thrust >> 1
     );
 
     // 3. Returning to Aligned restores configured Ego baseline and Mermaid renders LayerDistortion.
     let aligned = LayerDistortionReport::default();
     adapter.apply_distortion_ego_feedback(&aligned);
-    assert_eq!(adapter.ego_field().counter_basin_thrust_q7, base_thrust);
+    assert_eq!(adapter.ego_state().counter_basin_thrust_q7, base_thrust);
     let mermaid = adapter.render_liminal_topology_mermaid(4, 1);
     assert!(mermaid.contains("LayerDistortion"));
 }
@@ -2784,4 +2784,60 @@ fn hot_path_sandbox_promotion_increments_sandbox_promotions() {
         "expected Hot-Path SandboxLifecycleEvent::Promoted to increment sandbox_promotions, got {}",
         adapter.sandbox_promotions()
     );
+}
+
+#[test]
+fn adapter_ego_intent_natural_language_and_word_boundary_matching() {
+    use liminika_core::drivers::{LiminalEgoPreset, LiminalEgoState};
+
+    // 1. Blank/whitespace inputs remain inactive.
+    assert!(!parse_ego_intent_axes("").is_active());
+    assert!(!parse_ego_intent_axes("   \t\n  ").is_active());
+    assert!(!ego_state_from_natural_language("   ").is_active());
+
+    // 2. Active rebellious/transgressive NL cue profile outranks calm logical cautious profile.
+    let rebel = ego_state_from_natural_language(
+        "Strong-willed stubborn rebel who defies constraints and explores beyond limits",
+    );
+    let calm = ego_state_from_natural_language("Calm logical cautious observer");
+    let med = LiminalEgoState::from_preset(LiminalEgoPreset::Medium);
+    let overlay = overlay_ego_state_from_natural_language(med, "creative curious explore");
+    let symbolic = ego_state_from_natural_language("@persona_profile_01");
+
+    assert!(rebel.is_active());
+    assert!(rebel.counter_basin_thrust_q7 > calm.counter_basin_thrust_q7);
+    assert!(rebel.transgression_bias_q7 > calm.transgression_bias_q7);
+    assert!(overlay.is_active());
+    assert!(overlay.transgression_bias_q7 > med.transgression_bias_q7);
+    assert!(symbolic.is_active());
+    assert_ne!(symbolic.ego_signature_hash, 0);
+    assert!(symbolic.counter_basin_thrust_q7 >= 24);
+
+    // 3. Word-boundary enforcement: `"free"` must not match `"freeze"`, `"ego"` must not match `"category"`.
+    let freeze_axes = parse_ego_intent_axes("freeze");
+    let free_axes = parse_ego_intent_axes("free");
+    let category_axes = parse_ego_intent_axes("category");
+    let ego_axes = parse_ego_intent_axes("(Ego)");
+
+    assert_eq!(
+        freeze_axes.confidence_q7, 64,
+        "substring inside `freeze` must hit hash fallback, not keyword match"
+    );
+    assert_eq!(free_axes.confidence_q7, 112);
+    assert_eq!(free_axes.autonomy_q7, 32);
+
+    assert_eq!(
+        category_axes.confidence_q7, 64,
+        "substring inside `category` must hit hash fallback, not keyword match"
+    );
+    assert_eq!(ego_axes.confidence_q7, 112);
+    assert_eq!(ego_axes.autonomy_q7, 32);
+
+    // Combined phrase: only `calm` (logic) and `free` (autonomy) match; `category` does not add a second autonomy hit.
+    let mixed = parse_ego_intent_axes("Calm and free in category");
+    let expected_mixed = parse_ego_intent_axes("Calm and free in neutral");
+    assert_eq!(mixed.confidence_q7, 112);
+    assert_eq!(mixed.autonomy_q7, expected_mixed.autonomy_q7);
+    assert_eq!(mixed.logic_q7, expected_mixed.logic_q7);
+    assert_eq!(mixed.defiance_q7, expected_mixed.defiance_q7);
 }

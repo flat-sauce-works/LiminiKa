@@ -16,7 +16,7 @@ use crate::foundation::{
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_i8, branchless_select_u32, branchless_select_u64,
-    branchless_select_u8, EpistemicRegime, LiminalThresholdField, DEFAULT_ENTROPY_EPS,
+    branchless_select_u8, EpistemicRegime, LiminalThresholdState, DEFAULT_ENTROPY_EPS,
     MAX_ATTENTION_HEADS, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
     THRESHOLD_STIGMERGY_WIDE,
 };
@@ -24,7 +24,7 @@ use crate::runtime::gateway::{CausalProvenanceSignal, GatewayFrame, ManifoldGate
 use crate::stigmergy::{
     evaluate_stigmergic_overlap_and_serendipity_words_64, fold_fractal_nodes_words_64,
     fold_sincos64_to_words, CognitiveOpKind, CognitiveTrajectoryLedger, DissipativeOverflowReport,
-    RelativeAttractorNode, StigmergicGranuleField, StigmergicOverlapSerendipityReport,
+    RelativeAttractorNode, StigmergicGranuleState, StigmergicOverlapSerendipityReport,
     ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_REPULSION, CAUSAL_AXIS_CONTRADICTION_GUARD,
     CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
     CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, DEFAULT_FACT_PHASE_CLAMP_RAD, MAX_ATTRACTOR_PULL_FORCE,
@@ -563,7 +563,7 @@ pub trait EpistemicManifoldOps: RelativeAttractorNode {
 
 impl<T: RelativeAttractorNode + ?Sized> EpistemicManifoldOps for T {}
 
-impl LiminalThresholdField {
+impl LiminalThresholdState {
     /// Branchlessly adapts each channel's dynamic `Liminal` boundary from `ledger`, `horizon`,
     /// and optional `overflow_opt` without heap allocation or data-dependent branches.
     #[inline]
@@ -600,10 +600,10 @@ impl LiminalThresholdField {
         // Channel 1 (ObjectiveFact) & Channel 3 (ContradictionGuard): narrow void under peel/conflict.
         let next_f1 = branchless_select_u8(
             peel_dom,
-            self.void_floor_q7[1].saturating_sub(4).max(8),
-            self.void_floor_q7[1],
+            self.threshold_floor_q7[1].saturating_sub(4).max(8),
+            self.threshold_floor_q7[1],
         );
-        self.void_floor_q7[1] =
+        self.threshold_floor_q7[1] =
             branchless_select_u8(void_active, next_f1.saturating_add(4).min(120), next_f1);
         self.aperture_gain_q7[1] = branchless_select_u8(
             peel_dom,
@@ -617,10 +617,10 @@ impl LiminalThresholdField {
 
         let next_f3 = branchless_select_u8(
             peel_dom,
-            self.void_floor_q7[3].saturating_sub(4).max(8),
-            self.void_floor_q7[3],
+            self.threshold_floor_q7[3].saturating_sub(4).max(8),
+            self.threshold_floor_q7[3],
         );
-        self.void_floor_q7[3] =
+        self.threshold_floor_q7[3] =
             branchless_select_u8(void_active, next_f3.saturating_add(4).min(120), next_f3);
         self.aperture_gain_q7[3] = branchless_select_u8(
             peel_dom,
@@ -635,15 +635,15 @@ impl LiminalThresholdField {
         // Channel 2 (SubjectivePersona): push into Liminal during peel/conflict; open under fuse.
         let p2_floor_peel = branchless_select_u8(
             peel_dom,
-            self.void_floor_q7[2].saturating_add(8).min(120),
-            self.void_floor_q7[2],
+            self.threshold_floor_q7[2].saturating_add(8).min(120),
+            self.threshold_floor_q7[2],
         );
         let p2_floor_fuse = branchless_select_u8(
             only_fuse,
             p2_floor_peel.saturating_sub(6).max(8),
             p2_floor_peel,
         );
-        self.void_floor_q7[2] = branchless_select_u8(
+        self.threshold_floor_q7[2] = branchless_select_u8(
             void_active,
             p2_floor_fuse.saturating_add(4).min(120),
             p2_floor_fuse,
@@ -665,10 +665,10 @@ impl LiminalThresholdField {
         );
 
         // Channel 5 (KvCache): open under integrative fuse or scatter transitions.
-        self.void_floor_q7[5] = branchless_select_u8(
+        self.threshold_floor_q7[5] = branchless_select_u8(
             fuse_dom,
-            self.void_floor_q7[5].saturating_sub(6).max(8),
-            self.void_floor_q7[5],
+            self.threshold_floor_q7[5].saturating_sub(6).max(8),
+            self.threshold_floor_q7[5],
         );
         self.aperture_gain_q7[5] = branchless_select_u8(
             fuse_dom,
@@ -678,10 +678,10 @@ impl LiminalThresholdField {
 
         // Channel 6 (RelativeCoupling): open under fuse/scatter/birth and track scattered phase shift.
         let widen_rel = only_fuse | scattered | spawned;
-        self.void_floor_q7[6] = branchless_select_u8(
+        self.threshold_floor_q7[6] = branchless_select_u8(
             widen_rel,
-            self.void_floor_q7[6].saturating_sub(6).max(8),
-            self.void_floor_q7[6],
+            self.threshold_floor_q7[6].saturating_sub(6).max(8),
+            self.threshold_floor_q7[6],
         );
         self.aperture_gain_q7[6] = branchless_select_u8(
             widen_rel,
@@ -697,7 +697,8 @@ impl LiminalThresholdField {
         let mut mask = THRESHOLD_STIGMERGY_WIDE & !0x0000_00FF;
         let mut ch = 0usize;
         while ch < NUM_LIMINAL_THRESHOLD_CHANNELS {
-            let is_open = (self.void_floor_q7[ch] < 96) & (!void_active | (ch == 0) | (ch == 7));
+            let is_open =
+                (self.threshold_floor_q7[ch] < 96) & (!void_active | (ch == 0) | (ch == 7));
             mask |= branchless_select_u32(is_open, 1u32 << ch, 0);
             ch += 1;
         }
@@ -705,7 +706,7 @@ impl LiminalThresholdField {
         self.adaptation_epochs = self.adaptation_epochs.wrapping_add(1);
     }
 
-    /// Branchlessly modulates `frame` with this [`LiminalThresholdField`] and `horizon`:
+    /// Branchlessly modulates `frame` with this [`LiminalThresholdState`] and `horizon`:
     /// enforces the dynamic Fact `Liminal` floor, scales Fact/Logic/Explore sub-head gains,
     /// and applies channel `7`'s focal phase shift when inside the horizon.
     #[inline(always)]
@@ -716,7 +717,7 @@ impl LiminalThresholdField {
         horizon: &EpistemicHorizonReading,
     ) -> GatewayFrame {
         let mut out = horizon.apply_to_frame_branchless(frame);
-        let below_fact_floor = horizon.total_memory_support < self.channel_void_floor_f32(1);
+        let below_fact_floor = horizon.total_memory_support < self.channel_threshold_floor_f32(1);
         let is_void = horizon.is_liminal() | below_fact_floor;
 
         out.effective_energy = branchless_select_f32(is_void, 0.0, out.effective_energy);
@@ -753,7 +754,7 @@ impl LiminalThresholdField {
     }
 }
 
-impl StigmergicGranuleField {
+impl StigmergicGranuleState {
     /// Branchlessly adapts per-granule pheromone gains, tolerated approximation noise, and
     /// serendipity discovery floors from `horizon`, `overlap_report`, and `ledger`.
     #[inline]
