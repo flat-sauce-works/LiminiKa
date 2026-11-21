@@ -2431,8 +2431,8 @@ fn adapter_residual_spillover_dimension_elevation_and_verified_cache() {
 
 #[test]
 fn adapter_distortion_feedback_wakes_and_cools_ego_and_renders_mermaid() {
-    use liminika_core::drivers::EGO_TRIGGER_LAYER_DISTORTION;
-    use liminika_core::drivers::{LayerDistortionKind, LayerDistortionReport, LiminalEgoPreset};
+    use liminika_core::drivers::{LiminalEgoPreset, EGO_TRIGGER_LAYER_DISTORTION};
+    use liminika_core::runtime::{LayerDistortionKind, LayerDistortionReport};
 
     let geom = RopeGeometry::phi4_mini();
     let mut adapter = ModelSteeringAdapter::new(geom).expect("valid adapter");
@@ -2486,7 +2486,7 @@ fn adapter_distortion_feedback_wakes_and_cools_ego_and_renders_mermaid() {
 
 #[test]
 fn test_slow_loop_updates_threshold_policy_without_exponential_drift() {
-    use liminika_core::drivers::{LayerDistortionKind, LayerDistortionReport};
+    use liminika_core::runtime::{LayerDistortionKind, LayerDistortionReport};
     use liminika_core::stigmergy::StigmergicThresholds;
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).unwrap();

@@ -464,13 +464,13 @@ jobs:
           rules = [
               ("Lv.0 liminal -> Lv.1..4", "liminal", re.compile(r"\b(?:crate::|(?:super::)+)(?:(foundation|stigmergy|drivers|runtime)\b|\{[^}]*\b(foundation|stigmergy|drivers|runtime)\b)")),
               ("Lv.1 foundation -> Lv.2..4", "foundation", re.compile(r"\b(?:crate::|(?:super::)+)(?:(stigmergy|drivers|runtime)\b|\{[^}]*\b(stigmergy|drivers|runtime)\b)")),
-              ("Lv.1 foundation -> liminal::axiom / Scoped", "foundation", re.compile(r"\b(?:liminal::axiom\b|Scoped\s*<|Scoped::|ScopedCut\b|ActiveScope\b|GroundedScope\b|GroundedOrigin\b|SpeculativeDiscovery\b|BoundaryViolation\b|VerifiedAligned\b|BridgedDiscovery\b)")),
+              ("Lv.1 foundation -> liminal::axiom / Scoped", "foundation", re.compile(r"\b(?:liminal::axiom\b|Scoped\s*<|Scoped::|ScopedCut\b|Indivisible\s*<|Indivisible::|Indivisible\b|IndivisiblePhase\b|Activatable\b|Groundable\b|ActiveScope\b|GroundedScope\b|GroundedOrigin\b|SpeculativeDiscovery\b|BoundaryViolation\b|VerifiedAligned\b|BridgedDiscovery\b)")),
               ("Lv.2 stigmergy -> Lv.3..4", "stigmergy", re.compile(r"\b(?:crate::|(?:super::)+)(?:(drivers|runtime)\b|\{[^}]*\b(drivers|runtime)\b)")),
               ("Lv.3 drivers -> Lv.4", "drivers", re.compile(r"\b(?:crate::|(?:super::)+)(?:runtime\b|\{[^}]*\bruntime\b)")),
               ("drivers/spine -> drivers/ego", "drivers/spine", re.compile(r"\b(?:crate::drivers::|(?:super::)+)(?:ego\b|\{[^}]*\bego\b)")),
               ("drivers/ego -> drivers/spine", "drivers/ego", re.compile(r"\b(?:crate::drivers::|(?:super::)+)(?:spine\b|\{[^}]*\bspine\b)")),
               ("Lv.0 axiom/cut -> axiom/lacuna", "liminal/axiom/cut.rs", re.compile(r"lacuna", re.IGNORECASE)),
-              ("Lv.0 axiom/lacuna -> axiom/cut", "liminal/axiom/lacuna.rs", re.compile(r"\b(?:(?:super::)+|axiom::|liminal::)cut\b|\b(?:Scoped|ScopedCut|BitCut8|BitCut32|ActiveScope|GroundedScope|Cuttable|Definite|BoundaryViolation|SpeculativeDiscovery)\b")),
+              ("Lv.0 axiom/lacuna -> axiom/cut", "liminal/axiom/lacuna.rs", re.compile(r"\b(?:(?:super::)+|axiom::|liminal::)cut\b|\b(?:Scoped|ScopedCut|Indivisible|IndivisiblePhase|Activatable|Groundable|BitCut8|BitCut32|ActiveScope|GroundedScope|Cuttable|Definite|BoundaryViolation|SpeculativeDiscovery)\b")),
           ]
 
           violations = []

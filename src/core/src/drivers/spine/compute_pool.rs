@@ -20,8 +20,8 @@
 //!    bypassed or migrated, and bypassed slots are excluded from `stationary_evidence_mask`.
 
 use crate::drivers::spine::state::{SystemSpineState, SPINE_BYPASS_VETO_NONE};
-use crate::foundation::Pod;
-use crate::liminal::{branchless_select_u16, branchless_select_u64, branchless_select_u8};
+use crate::foundation::{branchless_argmin_u8_x8_masked, Pod};
+use crate::liminal::{branchless_select_u16, branchless_select_u64, branchless_select_u8, BitCut8};
 
 /// Maximum number of anonymous compute slots tracked via `u64` bitmasks.
 pub const MAX_ANONYMOUS_COMPUTE_SLOTS: usize = 64;
@@ -648,19 +648,20 @@ impl AnonymousComputePool {
 
     #[inline]
     fn select_fallback_lane(&self) -> u8 {
-        let other_lanes = self.lane_enabled_mask & !(1_u8 << (self.primary_lane & 7));
-        if other_lanes == 0 {
-            return self.primary_lane;
-        }
-        let mut best_lane = other_lanes.trailing_zeros() as u8;
-        let mut best_cap = 0_u8;
-        for (lane_idx, &cap) in self.lane_capacity_q7.iter().enumerate() {
-            let bit = 1_u8 << lane_idx;
-            let eligible = (other_lanes & bit) != 0 && cap >= best_cap;
-            best_lane = branchless_select_u8(eligible, lane_idx as u8, best_lane);
-            best_cap = branchless_select_u8(eligible, cap, best_cap);
-        }
-        best_lane
+        let other_lanes =
+            BitCut8::split(self.lane_enabled_mask, 1_u8 << (self.primary_lane & 7)).outside;
+        let inverted_headroom = [
+            !self.lane_capacity_q7[0],
+            !self.lane_capacity_q7[1],
+            !self.lane_capacity_q7[2],
+            !self.lane_capacity_q7[3],
+            !self.lane_capacity_q7[4],
+            !self.lane_capacity_q7[5],
+            !self.lane_capacity_q7[6],
+            !self.lane_capacity_q7[7],
+        ];
+        let (best_lane, _) = branchless_argmin_u8_x8_masked(&inverted_headroom, other_lanes);
+        branchless_select_u8(other_lanes == 0, self.primary_lane, best_lane)
     }
 }
 
@@ -924,5 +925,29 @@ mod tests {
         }
         assert!(resumed);
         assert_eq!(spine3.whole_token_bypass_active, 1);
+    }
+
+    #[test]
+    fn select_fallback_lane_breaks_ties_to_lowest_index_and_handles_empty() {
+        let mut pool = AnonymousComputePool::new(ComputePoolConfig::default());
+        // Only primary lane enabled -> falls back to primary_lane.
+        pool.set_lanes(0b0000_0001, 0b0000_0001, [127, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(pool.select_fallback_lane(), 0);
+
+        // Tied max headroom on lanes 2 and 5 -> lowest eligible index (2) wins.
+        pool.set_lanes(
+            0b0010_1101,
+            0b0000_0001,
+            [127, 127, 96, 64, 127, 96, 127, 127],
+        );
+        assert_eq!(pool.select_fallback_lane(), 2);
+
+        // Higher headroom on lane 5 beats lane 2.
+        pool.set_lanes(
+            0b0010_1101,
+            0b0000_0001,
+            [127, 127, 96, 64, 127, 110, 127, 127],
+        );
+        assert_eq!(pool.select_fallback_lane(), 5);
     }
 }

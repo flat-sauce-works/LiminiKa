@@ -11,7 +11,7 @@
 
 use crate::foundation::{Pod, ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK};
 use crate::liminal::{
-    branchless_select_u8, AttributionTag, THRESHOLD_CONTRADICTION_GUARD,
+    branchless_select_u8, AttributionTag, BitCut32, BitCut8, THRESHOLD_CONTRADICTION_GUARD,
     THRESHOLD_SYSTEM_CONSTRAINT,
 };
 use crate::stigmergy::{ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE};
@@ -102,8 +102,9 @@ impl SystemSpineState {
         prev_aperture_mask: u32,
         next_aperture_mask: u32,
     ) -> u32 {
-        (next_aperture_mask & !self.pinned_aperture_mask)
-            | (prev_aperture_mask & self.pinned_aperture_mask)
+        let prev_cut = BitCut32::split(prev_aperture_mask, self.pinned_aperture_mask);
+        let next_cut = BitCut32::split(next_aperture_mask, self.pinned_aperture_mask);
+        next_cut.outside | prev_cut.inside
     }
 
     /// Primitive `pinned` isolation helper returning `(full_lock, effective_slot, effective_modes)`
@@ -118,9 +119,9 @@ impl SystemSpineState {
         ego_modes: u8,
     ) -> (bool, u8, u8) {
         let masked_base = base_slot & ATTRACTOR_SLOT_ID_MASK;
-        let slot_is_pinned = (self.pinned_slot_mask & (1u8 << masked_base)) != 0;
+        let slot_is_pinned = BitCut8::split(self.pinned_slot_mask, 1u8 << masked_base).inside != 0;
         let eff_slot = branchless_select_u8(slot_is_pinned, base_slot, ego_slot);
-        let preserved_modes = base_modes & self.pinned_action_mode_mask;
+        let preserved_modes = BitCut8::split(base_modes, self.pinned_action_mode_mask).inside;
         let eff_modes = ego_modes | preserved_modes;
         let full_lock = (self.ood_void_locked != 0) | (self.irreversible_step_lock != 0);
         (full_lock, eff_slot, eff_modes)

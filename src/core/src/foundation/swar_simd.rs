@@ -1006,6 +1006,30 @@ pub const fn branchless_argmin_f32_x8_masked(values: &[f32; 8], eligible_mask: u
     (best_lane, best_val)
 }
 
+/// Finds the lowest-index minimum value among masked `u8` lanes in constant time (`0` data-dependent branches).
+///
+/// Evaluates all 8 lanes in a fixed `const fn` loop. A lane `i` is selectable iff bit `i` of
+/// `eligible_mask` is set (lowest index wins ties). Returns `(0xFF, u8::MAX)` when
+/// `eligible_mask == 0`.
+#[inline(always)]
+#[must_use]
+pub const fn branchless_argmin_u8_x8_masked(values: &[u8; 8], eligible_mask: u8) -> (u8, u8) {
+    let mut best_lane: u8 = 0xFF;
+    let mut best_val: u8 = u8::MAX;
+    let mut has_valid: bool = false;
+    let mut lane: u8 = 0;
+    while lane < 8 {
+        let v = values[lane as usize];
+        let selectable = ((eligible_mask >> lane) & 1) != 0;
+        let take = selectable & ((!has_valid) | (v < best_val));
+        best_lane = branchless_select_u8(take, lane, best_lane);
+        best_val = branchless_select_u8(take, v, best_val);
+        has_valid |= selectable;
+        lane += 1;
+    }
+    (best_lane, best_val)
+}
+
 #[inline(always)]
 #[must_use]
 pub(crate) const fn fast_mean_q7_tag_from_words_64(

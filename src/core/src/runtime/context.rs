@@ -31,9 +31,9 @@
 #![allow(clippy::needless_return)]
 
 use crate::drivers::{
-    gcso_edbc_state_t, AnonymousComputePool, ComputeDispatchMask, DecodingGate, DistortionTension,
-    EgoDifferentialNet, EntropyController, EntropyEvaluator, LiminalEgoField,
-    SystemPressureReading, SystemSpineState,
+    gcso_edbc_state_t, AnonymousComputePool, ComputeDispatchMask, DistortionTension,
+    EgoDifferentialNet, EntropyController, LiminalEgoField, SystemPressureReading,
+    SystemSpineState,
 };
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
@@ -62,9 +62,9 @@ use crate::runtime::abi::types::{
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::gateway::{
-    ActionHubGatewayExt, CausalProvenanceReport, CausalProvenanceSignal,
-    EntropyClosedLoopCoordinator, GatewayFrame, GatewayPhaseSteeringExt, ManifoldGatewaySignal,
-    ManifoldProbeBaseline, PhaseSteeringClosedLoop, SystemConstraintSignal,
+    ActionHubGatewayExt, CausalProvenanceReport, CausalProvenanceSignal, GatewayFrame,
+    GatewayPhaseSteeringExt, ManifoldGatewaySignal, ManifoldProbeBaseline, PhaseSteeringClosedLoop,
+    SystemConstraintSignal,
 };
 use crate::runtime::horizon::{
     apply_latent_horizon_slots, EpistemicHorizonReading, HorizonDwellState,
@@ -1694,9 +1694,9 @@ impl RuntimeContext {
                 prev_layer0.active_aperture_mask,
                 self.core_layers.liminal_layer.active_aperture_mask,
             );
-        let (pframe_frame, pframe_delta_q7, pframe_hops, pframe_entry) = self
+        let (pframe_frame, pframe_delta_q7, pframe_hops, pframe_matched_mask) = self
             .ego_differential_net
-            .evaluate_pframe_chain_with_entry_branchless(
+            .evaluate_pframe_chain_with_mask_branchless(
                 &self.core_layers.ego_layer,
                 &self.system_spine,
                 &self.last_epistemic_partition,
@@ -1706,7 +1706,7 @@ impl RuntimeContext {
             );
         let candidate_frame = if pframe_hops > 0 {
             self.ego_differential_net
-                .record_chain_activation(usize::from(pframe_entry), pframe_hops);
+                .record_matched_activations(pframe_matched_mask);
             pframe_frame
         } else {
             ego_frame
@@ -1928,43 +1928,6 @@ impl PhaseSteering for RuntimeContext {
     #[inline(always)]
     fn num_heads(&self) -> u32 {
         self.phase_steering.num_heads()
-    }
-}
-
-impl EntropyEvaluator for RuntimeContext {
-    #[inline]
-    fn eval_stateful(
-        &mut self,
-        token_z_score: f32,
-        state_out: &mut gcso_edbc_state_t,
-    ) -> Result<()> {
-        self.entropy_controller
-            .eval_stateful(token_z_score, state_out)
-    }
-}
-
-impl DecodingGate for RuntimeContext {
-    #[inline(always)]
-    fn active_branch_mode(&self) -> u32 {
-        self.entropy_controller.state().active_branch_mode
-    }
-
-    #[inline]
-    fn set_bifurcation_threshold(&mut self, threshold: f32) {
-        self.entropy_controller.set_bifurcation_threshold(threshold);
-        self.config.bifurcation_threshold = self.entropy_controller.state().bifurcation_threshold;
-    }
-
-    #[inline]
-    fn set_hysteresis_band(&mut self, band: f32) {
-        self.entropy_controller.set_hysteresis_band(band);
-        self.config.hysteresis_band = self.entropy_controller.hysteresis_band;
-    }
-
-    #[inline]
-    fn set_tau_flux(&mut self, tau_flux: f32) {
-        self.entropy_controller.set_tau_flux(tau_flux);
-        self.config.tau_flux = self.entropy_controller.tau_flux;
     }
 }
 
@@ -2565,7 +2528,6 @@ const _: () = {
             + ActionHubGatewayExt
             + GatewayPhaseSteeringExt
             + PhaseSteeringClosedLoop
-            + EntropyClosedLoopCoordinator
             + CausalProvenanceSignal
             + SystemConstraintSignal
             + ManifoldGatewaySignal,

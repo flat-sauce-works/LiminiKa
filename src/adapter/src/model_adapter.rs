@@ -875,7 +875,7 @@ impl ModelSteeringAdapter {
             let passive_sat = adj.distortion.ego_wakeup_recommended
                 || matches!(
                     adj.distortion.kind,
-                    liminika_core::drivers::LayerDistortionKind::PassiveSaturation
+                    liminika_core::runtime::LayerDistortionKind::PassiveSaturation
                 );
             if passive_sat {
                 self.passive_saturation_probe_steps = self.passive_saturation_probe_steps.max(2);
@@ -1470,9 +1470,9 @@ impl ModelSteeringAdapter {
             }
         }
         if self.core_layers.ego_layer.is_active() {
-            let (_p_frame, d_norm, hops, entry) = self
+            let (_p_frame, d_norm, hops, matched_mask) = self
                 .ego_differential_net
-                .evaluate_pframe_chain_with_entry_branchless(
+                .evaluate_pframe_chain_with_mask_branchless(
                     &self.core_layers.ego_layer,
                     &self.system_spine,
                     &self.last_venn_partition,
@@ -1484,7 +1484,7 @@ impl ModelSteeringAdapter {
             self.ego_differential_net.last_hops_traversed = hops;
             if hops > 0 {
                 self.ego_differential_net
-                    .record_chain_activation(usize::from(entry), hops);
+                    .record_matched_activations(matched_mask);
             }
         }
         self.active_workbench_preset = preset;
@@ -2507,9 +2507,9 @@ impl ModelSteeringAdapter {
                 &self.last_horizon,
                 &self.last_venn_report,
             );
-            let (p_frame, d_norm, hops, entry) = self
+            let (p_frame, d_norm, hops, matched_mask) = self
                 .ego_differential_net
-                .evaluate_pframe_chain_with_entry_branchless(
+                .evaluate_pframe_chain_with_mask_branchless(
                     &self.core_layers.ego_layer,
                     &self.system_spine,
                     &self.last_venn_partition,
@@ -2520,7 +2520,7 @@ impl ModelSteeringAdapter {
             self.ego_differential_net.last_delta_norm_q7 = d_norm;
             let cand = if hops > 0 {
                 self.ego_differential_net
-                    .record_chain_activation(usize::from(entry), hops);
+                    .record_matched_activations(matched_mask);
                 p_frame
             } else {
                 ego_frame
@@ -2597,7 +2597,7 @@ impl ModelSteeringAdapter {
     }
 
     /// Applies Rank-1 residual injection (`y <- y + s * u * (v^T * y)`) to a hidden-state
-    /// vector via [`ResidualAdapterEngine::eval_rank1_slices_fused`].
+    /// vector via [`ResidualAdapterEngine::eval_rank1_slices_fused_active`].
     ///
     /// # Errors
     ///
@@ -2609,9 +2609,20 @@ impl ModelSteeringAdapter {
         v_vec: &[f32],
         scale_factor: f32,
     ) -> Result<(), String> {
-        if scale_factor == 0.0 {
-            return Ok(());
-        }
+        let active_scale = match liminika_core::liminal::Scoped::from_boundary(scale_factor)
+            .cut_by_lacuna(scale_factor != 0.0, scale_factor, 0.0)
+        {
+            liminika_core::liminal::ScopedCut::Bottom(_) => {
+                return Err(format!(
+                    "eval_rank1_slices_fused_active error: {}",
+                    liminika_core::liminal::GCSO_ERROR_INVALID_ARGUMENT
+                ));
+            }
+            cut => match cut.into_active() {
+                Some(active) => active,
+                None => return Ok(()),
+            },
+        };
         let d = hidden_inout.len();
         if d == 0 || u_vec.len() != d || v_vec.len() != d {
             return Err(format!(
@@ -2641,15 +2652,15 @@ impl ModelSteeringAdapter {
             .map_err(|e| format!("AlignedSlice32 v error: {e}"))?;
 
         self.residual_adapter
-            .eval_rank1_slices_fused(
+            .eval_rank1_slices_fused_active(
                 &mut y_mut,
                 &x_aligned,
                 &u_aligned,
                 &v_aligned,
                 None,
-                scale_factor,
+                active_scale,
             )
-            .map_err(|e| format!("eval_rank1_slices_fused error: {e}"))?;
+            .map_err(|e| format!("eval_rank1_slices_fused_active error: {e}"))?;
 
         hidden_inout.copy_from_slice(y_buf.as_slice());
         Ok(())

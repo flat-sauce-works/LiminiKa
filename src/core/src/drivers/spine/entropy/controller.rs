@@ -1,7 +1,8 @@
 // name: src/core/src/drivers/spine/entropy/controller.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Stateful 128B [`Pod`] [`EntropyController`] implementing [`EntropyEvaluator`] and [`DecodingGate`].
+//! Stateful 128B [`Pod`] [`EntropyController`] with inherent entropy evaluation and
+//! decoding-branch gating methods.
 
 use core::mem::{align_of, offset_of, size_of};
 
@@ -9,12 +10,12 @@ use crate::drivers::spine::entropy::kernels::{
     compute_moving_z_score_entropy, compute_sparse_surrogate_entropy, eval_temperature_for_mode,
 };
 use crate::drivers::spine::entropy::{
-    gcso_edbc_state_t, DecodingGate, EntropyEvaluator, DEFAULT_BIFURCATION_THRESHOLD,
-    DEFAULT_HYSTERESIS_BAND, DEFAULT_SAMPLE_TEMPERATURE, DEFAULT_SINGULARITY_EPS, DEFAULT_TAU_FLUX,
-    EMA_ALPHA_ENTROPY, ENTROPY_GATE_MODE_NORMAL_ENTROPY,
-    ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION, ENTROPY_GATE_MODE_PITCHFORK_BIFURCATION,
-    ENTROPY_GATE_SLIDING_WINDOW_HORIZON, ENTROPY_GATE_WINDOW_RING_CAPACITY, INV_LN_2,
-    LUT_REPULSION_GAIN, LUT_SAMPLE_TEMPERATURE, MAX_BARRIER_CEILING, MAX_VALID_TOKEN_Z_SCORE,
+    gcso_edbc_state_t, DEFAULT_BIFURCATION_THRESHOLD, DEFAULT_HYSTERESIS_BAND,
+    DEFAULT_SAMPLE_TEMPERATURE, DEFAULT_SINGULARITY_EPS, DEFAULT_TAU_FLUX, EMA_ALPHA_ENTROPY,
+    ENTROPY_GATE_MODE_NORMAL_ENTROPY, ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION,
+    ENTROPY_GATE_MODE_PITCHFORK_BIFURCATION, ENTROPY_GATE_SLIDING_WINDOW_HORIZON,
+    ENTROPY_GATE_WINDOW_RING_CAPACITY, INV_LN_2, LUT_REPULSION_GAIN, LUT_SAMPLE_TEMPERATURE,
+    MAX_BARRIER_CEILING, MAX_VALID_TOKEN_Z_SCORE,
 };
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
@@ -666,14 +667,14 @@ impl EntropyController {
 
 // ===================================================================
 
-impl EntropyEvaluator for EntropyController {
+impl EntropyController {
     /// Evaluates token Z-score activation entropy and updates dynamic pitchfork branch mode
     /// in a single register-pipelined pass with a 3-`cmov` state machine and zero Store-to-Load stalls.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score` is `NaN` or `Inf`.
     #[inline(always)]
-    fn eval_stateful(
+    pub fn eval_stateful(
         &mut self,
         token_z_score: f32,
         state_out: &mut gcso_edbc_state_t,
@@ -692,7 +693,7 @@ impl EntropyEvaluator for EntropyController {
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `key_vector` is empty.
     /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if the accumulated sum-of-squares is `NaN` or `Inf`.
     #[inline(always)]
-    fn eval_liminal_void_dyadic128(
+    pub fn eval_liminal_void_dyadic128(
         &self,
         key_vector: &AlignedSlice32<'_, f32>,
         void_score_out: &mut f32,
@@ -718,7 +719,7 @@ impl EntropyEvaluator for EntropyController {
     /// # Errors
     /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if inputs are non-finite or `tau_eff <= 0.0`.
     #[inline(always)]
-    fn eval_barrier(&self, void_score: f32, tau_eff: f32) -> GcsoResult<f32> {
+    pub fn eval_barrier(&self, void_score: f32, tau_eff: f32) -> GcsoResult<f32> {
         let valid = branchless_is_finite_f32(void_score)
             & branchless_is_finite_f32(tau_eff)
             & (tau_eff > 0.0);
@@ -745,31 +746,38 @@ impl EntropyEvaluator for EntropyController {
             MAX_BARRIER_CEILING,
         )))
     }
-}
 
-impl DecodingGate for EntropyController {
+    /// Branchlessly evaluates the next `EntropyController` branch mode (`0`, `1`, `2`).
     #[inline(always)]
-    fn active_branch_mode(&self) -> u32 {
-        self.state.active_branch_mode
+    #[must_use]
+    pub fn evaluate_branch_mode_transition(
+        &self,
+        current_mode: u32,
+        moving_z_entropy: f32,
+        sliding_flux: f32,
+        void_score: f32,
+        bifurcation_threshold: f32,
+        tau_flux: f32,
+        hysteresis_band: f32,
+    ) -> u32 {
+        let hyst = branchless_relu_f32(hysteresis_band);
+        let upper_thresh = bifurcation_threshold + hyst;
+        let lower_thresh = branchless_relu_f32(bifurcation_threshold - hyst);
+
+        let surge_triggered = (moving_z_entropy > upper_thresh)
+            | (sliding_flux > (tau_flux + hyst))
+            | ((moving_z_entropy > bifurcation_threshold) & (void_score >= upper_thresh));
+        let stay_active = (current_mode != 0) & (moving_z_entropy > lower_thresh);
+        let active_non_normal = surge_triggered | stay_active;
+
+        let active_target = branchless_select_u32(void_score >= bifurcation_threshold, 1, 2);
+        branchless_select_u32(active_non_normal, active_target, 0)
     }
 
+    /// Evaluates the energy-guided dynamic sampling temperature modifier (`sample_temperature`).
     #[inline(always)]
-    fn set_bifurcation_threshold(&mut self, threshold: f32) {
-        Self::set_bifurcation_threshold(self, threshold);
-    }
-
-    #[inline(always)]
-    fn set_hysteresis_band(&mut self, band: f32) {
-        Self::set_hysteresis_band(self, band);
-    }
-
-    #[inline(always)]
-    fn set_tau_flux(&mut self, tau_flux: f32) {
-        Self::set_tau_flux(self, tau_flux);
-    }
-
-    #[inline(always)]
-    fn eval_energy_guided_temperature(
+    #[must_use]
+    pub fn eval_energy_guided_temperature(
         &self,
         base_temperature: f32,
         moving_z_entropy: f32,

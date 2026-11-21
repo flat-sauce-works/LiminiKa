@@ -612,7 +612,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 };
                 let sample = make_heterogeneous_q7_phases_with_offset(shift);
                 let _ = rec.absorb_sample_point_64(
-                    liminika_core::Scoped::interior(&sample).seal_grounded(),
+                    liminika_core::Scoped::interior(&sample).into_grounded(),
                     mass,
                 );
                 rec
@@ -834,7 +834,7 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
                 );
                 let sample = make_heterogeneous_q7_phases_with_offset(22 + (i as i8) * 3);
                 let _ = rec.absorb_sample_point_64(
-                    liminika_core::Scoped::interior(&sample).seal_grounded(),
+                    liminika_core::Scoped::interior(&sample).into_grounded(),
                     2.5 + (i as f32) * 0.5,
                 );
                 rec

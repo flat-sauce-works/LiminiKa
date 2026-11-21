@@ -33,11 +33,10 @@ use core::mem::{align_of, offset_of, size_of};
 
 #[allow(unused_imports)]
 use crate::drivers::{
-    gcso_edbc_state_t, DecodingGate, DistortionDelta, DistortionTension, EgoDifferentialNet,
-    EgoIntentAxes, EntropyController, EntropyEvaluator, LayerDistortionKind, LiminalEgoField,
-    LiminalEgoPreset, SystemSpineState, ENTROPY_GATE_MODE_NORMAL_ENTROPY,
-    ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION, ENTROPY_GATE_MODE_PITCHFORK_BIFURCATION,
-    MAX_DISTORTION_CHAIN_HOPS, MAX_EGO_PFRAME_NODES,
+    gcso_edbc_state_t, DistortionDelta, DistortionTension, EgoDifferentialNet, EgoIntentAxes,
+    EntropyController, LiminalEgoField, LiminalEgoPreset, SystemSpineState,
+    ENTROPY_GATE_MODE_NORMAL_ENTROPY, ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION,
+    ENTROPY_GATE_MODE_PITCHFORK_BIFURCATION, MAX_DISTORTION_CHAIN_HOPS, MAX_EGO_PFRAME_NODES,
 };
 #[allow(unused_imports)]
 use crate::drivers::{
@@ -113,6 +112,8 @@ use crate::runtime::context::{
 use crate::runtime::storage::{
     GCSO_FOUR_SECTION_HEADER_BYTES, GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET,
 };
+#[allow(unused_imports)]
+use crate::runtime::telemetry::LayerDistortionKind;
 #[allow(unused_imports)]
 use crate::stigmergy::{
     ATTRACTOR_SLOT_CRYSTALLIZED, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,

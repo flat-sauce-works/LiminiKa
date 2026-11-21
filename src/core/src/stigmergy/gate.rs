@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Layer 2 (`Stigmergy`) scoped execution gates ([`PhaseSteeringEngine`] and
-//! [`ResidualAdapterEngine`]) bridging `liminal::axiom` (`Scoped<Active, _>`) with pure
+//! [`ResidualAdapterEngine`]) bridging `liminal::axiom` (`Indivisible<Active, _>`) with pure
 //! `foundation` RoPE and Rank-1 residual kernels.
 
 use core::mem::{align_of, offset_of, size_of};
@@ -21,8 +21,8 @@ use crate::foundation::scalar_math::{
     DEFAULT_PHASE_STEP_MIN_RAD,
 };
 use crate::liminal::{
-    branchless_select_f32, gcso_config_t, gcso_q7_t, Active, ActiveScope, GcsoResult, Scoped,
-    GCSO_ERROR_INVALID_ARGUMENT, HEADS_PER_STIGMERGIC_GRANULE, MAX_ATTENTION_HEADS,
+    branchless_select_f32, gcso_config_t, gcso_q7_t, Activatable, Active, GcsoResult, Indivisible,
+    Scoped, GCSO_ERROR_INVALID_ARGUMENT, HEADS_PER_STIGMERGIC_GRANULE, MAX_ATTENTION_HEADS,
     NUM_STIGMERGIC_GRANULES,
 };
 
@@ -165,26 +165,26 @@ impl PhaseSteeringEngine {
     pub fn apply_phase_steering_active(
         &self,
         tensor: &mut AlignedSliceMut32<'_, f32>,
-        phase_deltas: Scoped<Active, &AlignedSlice16<'_, gcso_q7_t>>,
+        phase_deltas: Indivisible<Active, &AlignedSlice16<'_, gcso_q7_t>>,
     ) -> GcsoResult<()> {
-        self.apply_phase_steering(tensor, phase_deltas.active_ref())
+        self.apply_phase_steering(tensor, phase_deltas.as_ref())
     }
 
-    /// Zero-cost closure shell folding any [`ActiveScope`] refinement into [`Active`] and
-    /// delegating to [`Self::apply_phase_steering_active`].
+    /// Zero-cost convergence shell folding any [`Activatable`] refinement into
+    /// [`Indivisible<Active, _>`] and delegating to [`Self::apply_phase_steering_active`].
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slice lengths are insufficient.
     #[inline(always)]
-    pub fn apply_phase_steering_scoped<B: ActiveScope>(
+    pub fn apply_phase_steering_scoped<O: Activatable>(
         &self,
         tensor: &mut AlignedSliceMut32<'_, f32>,
-        phase_deltas: Scoped<B, &AlignedSlice16<'_, gcso_q7_t>>,
+        phase_deltas: Scoped<O, &AlignedSlice16<'_, gcso_q7_t>>,
     ) -> GcsoResult<()> {
-        self.apply_phase_steering_active(tensor, phase_deltas.seal_active())
+        self.apply_phase_steering_active(tensor, phase_deltas.into_active())
     }
 
-    /// Non-generic [`Active`] closure entry point for
+    /// Non-generic [`Indivisible<Active, _>`] closure entry point for
     /// [`PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe`].
     ///
     /// # Errors
@@ -194,37 +194,38 @@ impl PhaseSteeringEngine {
         &self,
         geometry: &G,
         tensor: &mut AlignedSliceMut32<'_, f32>,
-        phase_deltas: Scoped<Active, &AlignedSlice16<'_, gcso_q7_t>>,
+        phase_deltas: Indivisible<Active, &AlignedSlice16<'_, gcso_q7_t>>,
         max_rad: f32,
     ) -> GcsoResult<()> {
         self.apply_phase_steering_for_geometry_safe(
             geometry,
             tensor,
-            phase_deltas.active_ref(),
+            phase_deltas.as_ref(),
             max_rad,
         )
     }
 
-    /// Zero-cost closure shell folding any [`ActiveScope`] refinement into [`Active`] and
-    /// delegating to [`Self::apply_phase_steering_for_geometry_safe_active`].
+    /// Zero-cost convergence shell folding any [`Activatable`] refinement into
+    /// [`Indivisible<Active, _>`] and delegating to
+    /// [`Self::apply_phase_steering_for_geometry_safe_active`].
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if geometry or slice lengths are invalid.
     #[inline(always)]
     pub fn apply_phase_steering_for_geometry_safe_scoped<
-        B: ActiveScope,
+        O: Activatable,
         G: RopeSteeringTarget + ?Sized,
     >(
         &self,
         geometry: &G,
         tensor: &mut AlignedSliceMut32<'_, f32>,
-        phase_deltas: Scoped<B, &AlignedSlice16<'_, gcso_q7_t>>,
+        phase_deltas: Scoped<O, &AlignedSlice16<'_, gcso_q7_t>>,
         max_rad: f32,
     ) -> GcsoResult<()> {
         self.apply_phase_steering_for_geometry_safe_active(
             geometry,
             tensor,
-            phase_deltas.seal_active(),
+            phase_deltas.into_active(),
             max_rad,
         )
     }
@@ -317,7 +318,8 @@ impl ResidualAdapterEngine {
         eval_rank1_slices_fused(y_inout, x_in, u_vec, v_vec, gain_vec, scale_factor)
     }
 
-    /// Non-generic [`Active`] closure entry point for [`Self::eval_rank1_slices_fused`].
+    /// Non-generic [`Indivisible<Active, _>`] closure entry point for
+    /// [`Self::eval_rank1_slices_fused`].
     ///
     /// Statically excludes [`crate::liminal::Unmarked`], [`crate::liminal::Bottom`], and
     /// unclassified origins from injecting Rank-1 hidden-state residuals while keeping the
@@ -333,7 +335,7 @@ impl ResidualAdapterEngine {
         u_vec: &AlignedSlice32<'_, f32>,
         v_vec: &AlignedSlice32<'_, f32>,
         gain_vec: Option<&AlignedSlice32<'_, f32>>,
-        scale_factor: Scoped<Active, f32>,
+        scale_factor: Indivisible<Active, f32>,
     ) -> GcsoResult<()> {
         eval_rank1_slices_fused(
             y_inout,
@@ -341,24 +343,24 @@ impl ResidualAdapterEngine {
             u_vec,
             v_vec,
             gain_vec,
-            *scale_factor.active_ref(),
+            *scale_factor.as_ref(),
         )
     }
 
-    /// Zero-cost closure shell folding any [`ActiveScope`] scale factor into [`Active`] and
-    /// delegating to [`Self::eval_rank1_slices_fused_active`].
+    /// Zero-cost convergence shell folding any [`Activatable`] scale factor into
+    /// [`Indivisible<Active, _>`] and delegating to [`Self::eval_rank1_slices_fused_active`].
     ///
     /// # Errors
     /// Propagates any validation or numerical singularity error from [`eval_rank1_slices_fused`].
     #[inline(always)]
-    pub fn eval_rank1_slices_fused_scoped<B: ActiveScope>(
+    pub fn eval_rank1_slices_fused_scoped<O: Activatable>(
         &self,
         y_inout: &mut AlignedSliceMut32<'_, f32>,
         x_in: &AlignedSlice32<'_, f32>,
         u_vec: &AlignedSlice32<'_, f32>,
         v_vec: &AlignedSlice32<'_, f32>,
         gain_vec: Option<&AlignedSlice32<'_, f32>>,
-        scale_factor: Scoped<B, f32>,
+        scale_factor: Scoped<O, f32>,
     ) -> GcsoResult<()> {
         self.eval_rank1_slices_fused_active(
             y_inout,
@@ -366,7 +368,7 @@ impl ResidualAdapterEngine {
             u_vec,
             v_vec,
             gain_vec,
-            scale_factor.seal_active(),
+            scale_factor.into_active(),
         )
     }
 

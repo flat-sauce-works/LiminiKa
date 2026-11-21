@@ -28,9 +28,8 @@
 #![allow(clippy::ifs_same_cond)]
 
 use crate::drivers::{
-    DistortionTension, LayerDistortionKind, LayerDistortionReport, LiminalEgoField,
-    EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
-    EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR,
+    DistortionTension, LiminalEgoField, EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER,
+    EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR,
 };
 use crate::foundation::{branchless_clamp_f32, branchless_is_finite_f32, Pod};
 use crate::liminal::{
@@ -48,6 +47,40 @@ use crate::stigmergy::{
     StigmergicActionDecision, StigmergicGranuleField, StigmergicOverlapSerendipityReport,
     StigmergicThresholds,
 };
+
+/// Classification of cross-layer geometric/control distortion relative to Layer 2 Ego alignment.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LayerDistortionKind {
+    /// Core layers and ActionHub remain balanced and aligned (`0`).
+    #[default]
+    Aligned = 0,
+    /// Passive saturation or drift without sufficient Ego corrective intervention (`1`).
+    PassiveSaturation = 1,
+    /// Excessive or unaligned Ego overdrive causing saturation or conflict mismatch (`2`).
+    ActiveOverdrive = 2,
+}
+
+/// Lazy-computed diagnostic summary of cross-layer distortion (`Distortion`) used to trigger
+/// corrective Ego awakening on passive stalls or Ego cooldown on active overdrive.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct LayerDistortionReport {
+    /// Largest decision share among the 7 `ActionHub` regimes (`0.0..=1.0`).
+    pub action_saturation_ratio: f32,
+    /// Passive distortion score combining unguided stalls and single-mode saturation (`0.0..=1.0`).
+    pub passive_distortion_ratio: f32,
+    /// Active overdrive distortion score combining unaligned Ego steps and saturated Ego bias (`0.0..=1.0`).
+    pub active_distortion_ratio: f32,
+    /// Overall cross-layer mismatch rate (`0.0..=1.0`).
+    pub mismatch_ratio: f32,
+    /// Dominant distortion state.
+    pub kind: LayerDistortionKind,
+    /// `true` when passive distortion warrants waking/boosting Layer 2 Ego.
+    pub ego_wakeup_recommended: bool,
+    /// `true` when active distortion warrants cooling down Layer 2 Ego thrust/defiance.
+    pub ego_cooldown_recommended: bool,
+}
 
 /// Static compile-time descriptor binding a trait horizon node to its static cognitive threshold
 /// and unknowable exterior complement.

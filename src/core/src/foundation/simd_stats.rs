@@ -1888,6 +1888,7 @@ pub(crate) fn diff_norm_sq_f32_unrolled4(a: &[f32], b: &[f32]) -> f32 {
 /// while keeping peak live YMM usage `<= 5` (`0` Windows x64 `xmm6..xmm15` stack saves/restores).
 #[inline(always)]
 #[must_use]
+#[allow(dead_code)]
 pub(crate) fn dot_and_norms_f32_unrolled4(a: &[f32], b: &[f32]) -> (f32, f32, f32) {
     let len = a.len().min(b.len());
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]

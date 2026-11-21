@@ -14,12 +14,13 @@ use liminika_adapter::{
 };
 use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::drivers::{
-    LayerDistortionReport, LiminalEgoPreset, TokenBypassObservation,
-    SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_PINNED_LOCK,
-    SPINE_BYPASS_VETO_REPULSION_ACTIVE,
+    LiminalEgoPreset, TokenBypassObservation, SPINE_BYPASS_VETO_GUARD_ACTIVE,
+    SPINE_BYPASS_VETO_PINNED_LOCK, SPINE_BYPASS_VETO_REPULSION_ACTIVE,
 };
 use liminika_core::foundation::ACTION_MODE_PHASE_REPULSE;
-use liminika_core::runtime::{CoreTelemetryBank, CoreTelemetrySnapshot, RamPhaseKvStepOutcome};
+use liminika_core::runtime::{
+    CoreTelemetryBank, CoreTelemetrySnapshot, LayerDistortionReport, RamPhaseKvStepOutcome,
+};
 use liminika_core::stigmergy::{
     CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, StigmergicScaleGranularity,
     TRAIL_FLAG_REPULSION_ACTIVE,

@@ -41,21 +41,18 @@ impl SystemSpineState {
         baseline_frame: &GatewayFrame,
         mut ego_frame: GatewayFrame,
     ) -> GatewayFrame {
-        let base_slot = baseline_frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK;
-        let slot_is_pinned = (self.pinned_slot_mask & (1u8 << base_slot)) != 0;
-        ego_frame.dominant_slot = branchless_select_u8(
-            slot_is_pinned,
+        let (full_lock, eff_slot, eff_modes) = self.isolate_slot_and_modes_branchless(
             baseline_frame.dominant_slot,
+            baseline_frame.action_mode_flags,
             ego_frame.dominant_slot,
+            ego_frame.action_mode_flags,
         );
-
-        let preserved_modes = baseline_frame.action_mode_flags & self.pinned_action_mode_mask;
-        ego_frame.action_mode_flags |= preserved_modes;
-
-        let full_lock = (self.ood_void_locked != 0) | (self.irreversible_step_lock != 0);
         if full_lock {
             return *baseline_frame;
         }
+
+        ego_frame.dominant_slot = eff_slot;
+        ego_frame.action_mode_flags = eff_modes;
 
         let ptr_tag = pack_action_slot_tag(
             ego_frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
@@ -73,9 +70,9 @@ impl SystemSpineState {
 }
 
 impl EgoDifferentialNet {
-    /// Evaluates the fixed-length [`DistortionDelta`] chain (unrolled up to 4 hops, masked by
-    /// `self.max_hops`, `0` heap alloc, `0 fdiv`, `0` data-dependent inner branches) and returns
-    /// `(modulated_frame, delta_norm_q7, hops_traversed)`.
+    /// Evaluates the fixed-length [`DistortionDelta`] network (1-hop parallel perspective ensemble
+    /// when `max_hops == 1`, or sequential chain up to 4 hops when `max_hops >= 2`; `0` heap alloc,
+    /// `0 fdiv`) and returns `(modulated_frame, delta_norm_q7, hops_traversed)`.
     ///
     /// When Ego is inactive, tension scale is 0, or `spine` enforces `ood_void_locked` /
     /// `irreversible_step_lock`, returns `(base_frame, 0, 0)` (zero-cost unobservable bypass).
@@ -90,13 +87,13 @@ impl EgoDifferentialNet {
         tension: &DistortionTension,
         base_frame: GatewayFrame,
     ) -> (GatewayFrame, u8, u8) {
-        let (frame, norm, hops, _entry) = self.evaluate_pframe_chain_with_entry_branchless(
+        let (frame, norm, hops, _mask) = self.evaluate_pframe_chain_with_mask_branchless(
             ego, spine, venn, stigmergy, tension, base_frame,
         );
         (frame, norm, hops)
     }
 
-    /// Evaluates the fixed-length [`DistortionDelta`] chain and additionally returns the selected
+    /// Evaluates the fixed-length [`DistortionDelta`] network and additionally returns the selected
     /// entry node index `entry_idx` (`0..8`) for reinforcement telemetry tracking.
     #[inline]
     #[must_use]
@@ -109,113 +106,60 @@ impl EgoDifferentialNet {
         tension: &DistortionTension,
         base_frame: GatewayFrame,
     ) -> (GatewayFrame, u8, u8, u8) {
-        if !ego.is_active()
-            || tension.effective_ego_scale_q7 == 0
-            || spine.ood_void_locked != 0
-            || spine.irreversible_step_lock != 0
-            || self.active_node_mask == 0
-        {
+        if spine.ood_void_locked != 0 || spine.irreversible_step_lock != 0 {
             return (base_frame, 0, 0, 0);
         }
-
-        let region_bits =
-            branchless_select_u8(venn.shared_core_mask != 0, SCOPE_REGION_SHARED_CORE, 0)
-                | branchless_select_u8(
-                    venn.self_exclusive_mask != 0,
-                    SCOPE_REGION_SELF_EXCLUSIVE,
-                    0,
-                )
-                | branchless_select_u8(venn.known_unknown_mask != 0, SCOPE_REGION_KNOWN_UNKNOWN, 0);
-        let region_fallback = branchless_select_u8(
-            region_bits != 0,
-            region_bits,
-            SCOPE_REGION_SHARED_CORE | SCOPE_REGION_SELF_EXCLUSIVE,
-        );
-        let combined_support =
-            venn.shared_core_mask | venn.self_exclusive_mask | venn.known_unknown_mask;
-        let support_mask = branchless_select_u8(combined_support != 0, combined_support, 0xFF);
-
-        // Select strongest matching entry node across the 8 fixed slots branchlessly.
-        let mut best_entry_idx = 0usize;
-        let mut best_entry_score = 0u32;
-        let mut i = 0usize;
-        while i < MAX_EGO_PFRAME_NODES {
-            let n = &self.nodes[i];
-            let active = ((self.active_node_mask >> i) & 1) != 0 && n.is_baked_active();
-            let reg_ok = (n.venn_region_selector & region_fallback) != 0;
-            let trig_overlap = (n.venn_trigger_mask & support_mask).count_ones();
-            let score = if active && reg_ok && trig_overlap > 0 {
-                u32::from(n.pheromone_q7).saturating_mul(trig_overlap)
-            } else {
-                0
-            };
-            let take = score > best_entry_score;
-            best_entry_score = branchless_select_u32(take, score, best_entry_score);
-            best_entry_idx = if take { i } else { best_entry_idx };
-            i += 1;
-        }
-        if best_entry_score == 0 {
+        let (acc_words, avg_delta, hops_traversed, entry_idx, matched_mask) = self
+            .evaluate_pframe_words_branchless(
+                ego,
+                venn,
+                stigmergy,
+                tension.effective_ego_scale_q7,
+                base_frame.phase_words_ref(),
+            );
+        if matched_mask == 0 {
             return (base_frame, 0, 0, 0);
         }
-
-        // Fixed 4-hop unrolled P-Frame accumulation bounded by `self.max_hops`.
-        let hop_cap = self.max_hops.min(MAX_DISTORTION_CHAIN_HOPS);
-        let sens_boost_q7 = u32::from(venn.boundary_sensitivity_q7).max(48);
-        let eff_scale = u32::from(tension.effective_ego_scale_q7);
-        let mean_stig_ph = {
-            let mut s = 0u32;
-            let mut g = 0usize;
-            while g < NUM_STIGMERGIC_GRANULES {
-                s += u32::from(stigmergy.granule_pheromone_q7[g]);
-                g += 1;
-            }
-            (s >> 3).clamp(24, 127)
-        };
-
-        let mut acc_words = *base_frame.phase_words_ref();
-        let mut accum_norm_sum = 0u32;
-        let mut hops_traversed = 0u8;
-        let mut cur_idx = best_entry_idx as u16;
-        let mut hop = 0u8;
-
-        while hop < MAX_DISTORTION_CHAIN_HOPS {
-            let in_bounds = (hop < hop_cap)
-                && (usize::from(cur_idx) < MAX_EGO_PFRAME_NODES)
-                && (((self.active_node_mask >> (cur_idx & 7)) & 1) != 0);
-            if !in_bounds {
-                break;
-            }
-            let node = &self.nodes[usize::from(cur_idx)];
-            if !node.is_baked_active() {
-                break;
-            }
-            let hop_weight_q7 = (((u32::from(node.gain_q7) * eff_scale) >> 7) * sens_boost_q7) >> 7;
-            let dens_weight_q7 = ((hop_weight_q7 * mean_stig_ph) >> 7).clamp(8, 127) as u64;
-            let bias_restore =
-                (128u64.wrapping_sub(dens_weight_q7)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-            let node_words = load_q7_words_64(&node.delta_phase_q7);
-            let mut c = 0usize;
-            while c < NUM_STIGMERGIC_GRANULES {
-                let d_w =
-                    swar_q7_scale_le128_with_bias_x8(node_words[c], dens_weight_q7, bias_restore);
-                acc_words[c] = swar_q7_circular_add_x8(acc_words[c], d_w);
-                c += 1;
-            }
-            accum_norm_sum = accum_norm_sum.saturating_add(dens_weight_q7 as u32);
-            hops_traversed = hops_traversed.saturating_add(1);
-            cur_idx = node.next_hop_idx;
-            hop = hop.saturating_add(1);
-        }
-
         let mut ego_frame = base_frame;
         *ego_frame.phase_words_mut() = acc_words;
         ego_frame.mean_phase_tag_q7 = swar_q7_mean_i8_from_words_64(&acc_words);
-
         let isolated = spine.enforce_pinned_isolation_branchless(&base_frame, ego_frame);
-        const INV_HOPS_Q7: [u32; 5] = [0, 128, 64, 43, 32];
-        let avg_delta = ((accum_norm_sum * INV_HOPS_Q7[usize::from(hops_traversed.min(4))]) >> 7)
-            .min(127) as u8;
-        (isolated, avg_delta, hops_traversed, best_entry_idx as u8)
+        (isolated, avg_delta, hops_traversed, entry_idx)
+    }
+
+    /// Evaluates the fixed-length [`DistortionDelta`] network and additionally returns the bitmask
+    /// of every matched/traversed node (`matched_mask`) for parallel perspective reinforcement via
+    /// [`Self::record_matched_activations`].
+    #[inline]
+    #[must_use]
+    pub fn evaluate_pframe_chain_with_mask_branchless(
+        &self,
+        ego: &LiminalEgoField,
+        spine: &SystemSpineState,
+        venn: &EpistemicPartition,
+        stigmergy: &StigmergicGranuleField,
+        tension: &DistortionTension,
+        base_frame: GatewayFrame,
+    ) -> (GatewayFrame, u8, u8, u8) {
+        if spine.ood_void_locked != 0 || spine.irreversible_step_lock != 0 {
+            return (base_frame, 0, 0, 0);
+        }
+        let (acc_words, avg_delta, hops_traversed, _entry_idx, matched_mask) = self
+            .evaluate_pframe_words_branchless(
+                ego,
+                venn,
+                stigmergy,
+                tension.effective_ego_scale_q7,
+                base_frame.phase_words_ref(),
+            );
+        if matched_mask == 0 {
+            return (base_frame, 0, 0, 0);
+        }
+        let mut ego_frame = base_frame;
+        *ego_frame.phase_words_mut() = acc_words;
+        ego_frame.mean_phase_tag_q7 = swar_q7_mean_i8_from_words_64(&acc_words);
+        let isolated = spine.enforce_pinned_isolation_branchless(&base_frame, ego_frame);
+        (isolated, avg_delta, hops_traversed, matched_mask)
     }
 }
 

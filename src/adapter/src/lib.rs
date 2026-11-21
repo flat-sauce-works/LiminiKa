@@ -9,10 +9,9 @@
 
 use liminika_core::abi::{gcso_edbc_state_t, gcso_ledger_slot_t, gcso_pointer_trail_t, gcso_q7_t};
 use liminika_core::drivers::{
-    EntropyController, LayerDistortionReport, LiminalEgoField, LiminalEgoPreset,
-    DISTORTION_DELTA_FLAG_ACTIVE, DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID,
-    EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT,
-    EGO_TRIGGER_LAYER_DISTORTION,
+    EntropyController, LiminalEgoField, LiminalEgoPreset, DISTORTION_DELTA_FLAG_ACTIVE,
+    DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID, EGO_TRIGGER_BASIN_CAPTURE,
+    EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LAYER_DISTORTION,
 };
 use liminika_core::foundation::{
     load_q7_words_64, swar_q7_circular_add_x8, AlignedSlice16, AlignedSlice32, AlignedSliceMut16,
@@ -29,9 +28,10 @@ use liminika_core::runtime::{
     CoreTelemetryBank, CoreTelemetrySnapshot, DefaultResidualSpilloverSlot,
     EpistemicHorizonReading, GatewayFrame, GatewayPhaseSteeringExt, GcsoFourSectionView,
     GuardPhaseAnchor, HorizonDwellState, HorizonEscalationProvider, HorizonEscalationRequest,
-    HorizonTriggerInput, LatentHorizonSlot, LiminalBoundaryDelta, LiminalTopologyTelemetrySnapshot,
-    ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact, SlowLoopTelemetryAdjustment,
-    StigmergicThresholdPolicy, SubjectivePersona, SystemConstraint, TelemetryCapturePolicy,
+    HorizonTriggerInput, LatentHorizonSlot, LayerDistortionReport, LiminalBoundaryDelta,
+    LiminalTopologyTelemetrySnapshot, ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact,
+    SlowLoopTelemetryAdjustment, StigmergicThresholdPolicy, SubjectivePersona, SystemConstraint,
+    TelemetryCapturePolicy,
 };
 use liminika_core::stigmergy::{
     evaluate_stigmergic_overlap_and_serendipity_words_64, ActionHubEngine,

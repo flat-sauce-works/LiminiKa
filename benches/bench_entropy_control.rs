@@ -1,9 +1,8 @@
 // name: benches/bench_entropy_control.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Comprehensive benchmarks for `EntropyController` kernels and
-//! `EntropyClosedLoopCoordinator` blanket implementations, engineered for **zero input overfitting**
-//! and **clean separation of Provisional `.gcso` Storage Container workloads**:
+//! Comprehensive benchmarks for `EntropyController` kernels, engineered for **zero input
+//! overfitting** and **clean separation of Provisional `.gcso` Storage Container workloads**:
 //! - Evaluates Coarse-to-Fine and Top-2 Liminal routing across 8 candidate trails (2 candidates
 //!   per macro cluster across 4 centroids) so the Fine step genuinely resolves intra-cluster
 //!   candidate competition.
@@ -23,7 +22,7 @@ use criterion::{
 use liminika_core::abi::{gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_q7_t, gcso_tagged_ptr_t};
 use liminika_core::drivers::spine::entropy::{
     compute_moving_z_score_entropy, compute_sparse_surrogate_entropy, eval_barrier_pitchfork,
-    EntropyController, EntropyEvaluator,
+    EntropyController,
 };
 use liminika_core::foundation::{
     compute_tikhonov_chebyshev_coeffs_deg3, eval_chebyshev_spectral_filter_deg3,

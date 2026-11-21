@@ -1,7 +1,7 @@
 // name: src/core/src/drivers/spine/entropy/mod.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Entropy-Driven Decoding Branch Controller (`EntropyController`) and [`DecodingGate`].
+//! Entropy-Driven Decoding Branch Controller (`EntropyController`) and stateless entropy kernels.
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -116,9 +116,8 @@ pub(crate) const LUT_REPULSION_GAIN: [f32; 3] = [0.0, 0.5, 1.0];
 
 pub mod controller;
 pub mod kernels;
-mod traits;
 
-pub use self::{controller::*, kernels::*, traits::*};
+pub use self::{controller::*, kernels::*};
 
 #[cfg(test)]
 mod tests;

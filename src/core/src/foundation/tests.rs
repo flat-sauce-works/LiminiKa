@@ -313,3 +313,34 @@ fn test_branchless_mask8_min_delta_and_argmin_f32_x8_masked() {
     );
     assert_eq!(branchless_argmin_f32_x8_masked(&mixed, 0xFF), (2, -0.25));
 }
+
+#[test]
+fn test_branchless_argmin_u8_x8_masked() {
+    let vals = [10u8, 20, 30, 40, 50, 60, 70, 80];
+    // Empty eligible mask -> (0xFF, u8::MAX)
+    assert_eq!(branchless_argmin_u8_x8_masked(&vals, 0x00), (0xFF, u8::MAX));
+
+    // Single eligible lane
+    assert_eq!(branchless_argmin_u8_x8_masked(&vals, 1 << 5), (5, 60));
+
+    // All lanes eligible
+    assert_eq!(branchless_argmin_u8_x8_masked(&vals, 0xFF), (0, 10));
+
+    // Extreme bounds 0 and 255 (all u8::MAX must pick lowest eligible lane, not 0xFF)
+    let all_max = [u8::MAX; 8];
+    assert_eq!(
+        branchless_argmin_u8_x8_masked(&all_max, 0b0101_0000),
+        (4, u8::MAX)
+    );
+    let with_zero = [255u8, 128, 0, 0, 255, 1, 0, 255];
+    assert_eq!(branchless_argmin_u8_x8_masked(&with_zero, 0xFF), (2, 0));
+    assert_eq!(
+        branchless_argmin_u8_x8_masked(&with_zero, 0b1111_0000),
+        (6, 0)
+    );
+
+    // Lowest-index tie-breaking
+    let tied = [40u8, 15, 15, 20, 15, 99, 5, 5];
+    assert_eq!(branchless_argmin_u8_x8_masked(&tied, 0b0011_1111), (1, 15));
+    assert_eq!(branchless_argmin_u8_x8_masked(&tied, 0xFF), (6, 5));
+}

@@ -47,9 +47,9 @@ use core::slice;
 
 #[allow(unused_imports)]
 use crate::drivers::{
-    eval_barrier_pitchfork, DecodingGate, DistortionDelta, DistortionTension, EgoDifferentialNet,
-    EgoIntentAxes, EntropyController, EntropyEvaluator, LiminalEgoField, LiminalEgoPreset,
-    SystemSpineState, MAX_DISTORTION_CHAIN_HOPS, MAX_EGO_PFRAME_NODES,
+    eval_barrier_pitchfork, DistortionDelta, DistortionTension, EgoDifferentialNet, EgoIntentAxes,
+    EntropyController, LiminalEgoField, LiminalEgoPreset, SystemSpineState,
+    MAX_DISTORTION_CHAIN_HOPS, MAX_EGO_PFRAME_NODES,
 };
 #[allow(unused_imports)]
 use crate::foundation::{

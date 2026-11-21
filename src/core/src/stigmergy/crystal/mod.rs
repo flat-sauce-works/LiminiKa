@@ -57,8 +57,8 @@ use crate::foundation::{
     DEFAULT_PHASE_CLAMP_MAX_RAD,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_usize, gcso_q7_t, GcsoResult, Grounded, GroundedScope,
-    Scoped, DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_HEX, GCSO_ERROR_BUFFER_TOO_SMALL,
+    branchless_select_f32, branchless_select_usize, gcso_q7_t, GcsoResult, Groundable, Grounded,
+    Indivisible, Scoped, DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_HEX, GCSO_ERROR_BUFFER_TOO_SMALL,
     GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER,
     MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
@@ -773,7 +773,7 @@ impl CrystallizedAttractorRecord {
     #[inline]
     pub fn absorb_sample_point_64(
         &mut self,
-        sample_phases: Scoped<Grounded, &[gcso_q7_t; MAX_ATTENTION_HEADS]>,
+        sample_phases: Indivisible<Grounded, &[gcso_q7_t; MAX_ATTENTION_HEADS]>,
         sample_energy: f32,
     ) -> f32 {
         let prev_crc = self.checksum_crc32;
@@ -787,7 +787,7 @@ impl CrystallizedAttractorRecord {
         let prev_prov = self.provenance_bits;
         let prev_w7_lo = self.pack_w7_lo();
         let cur_w = *self.phase_words_ref();
-        let sample_w = load_q7_words_64(sample_phases.grounded_ref());
+        let sample_w = load_q7_words_64(sample_phases.as_ref());
         let (next_w, mass, words_changed) = self
             .absorb_sample_words_with_cur_coh_and_uni_unstamped(
                 &cur_w,
@@ -817,19 +817,19 @@ impl CrystallizedAttractorRecord {
         mass
     }
 
-    /// Zero-cost closure shell folding any [`GroundedScope`] refinement into [`Grounded`] and
-    /// delegating to [`Self::absorb_sample_point_64`].
+    /// Zero-cost convergence shell folding any [`Groundable`] refinement into
+    /// [`Indivisible<Grounded, _>`] and delegating to [`Self::absorb_sample_point_64`].
     #[inline(always)]
-    pub fn absorb_sample_point_scoped_64<B: GroundedScope>(
+    pub fn absorb_sample_point_scoped_64<O: Groundable>(
         &mut self,
-        sample_phases: Scoped<B, &[gcso_q7_t; MAX_ATTENTION_HEADS]>,
+        sample_phases: Scoped<O, &[gcso_q7_t; MAX_ATTENTION_HEADS]>,
         sample_energy: f32,
     ) -> f32 {
-        self.absorb_sample_point_64(sample_phases.seal_grounded(), sample_energy)
+        self.absorb_sample_point_64(sample_phases.into_grounded(), sample_energy)
     }
 
-    /// Non-generic [`Grounded`] closure constructor crystallizing a verified phase profile into a
-    /// CRC32-stamped I-Frame [`CrystallizedAttractorRecord`].
+    /// Non-generic [`Indivisible<Grounded, _>`] closure constructor crystallizing a verified phase
+    /// profile into a CRC32-stamped I-Frame [`CrystallizedAttractorRecord`].
     #[inline(always)]
     #[must_use]
     pub fn from_grounded_delta_64(
@@ -837,7 +837,7 @@ impl CrystallizedAttractorRecord {
         dominant_slot: u8,
         sample_count: u32,
         base_energy: f32,
-        phase_profile: Scoped<Grounded, [gcso_q7_t; MAX_ATTENTION_HEADS]>,
+        phase_profile: Indivisible<Grounded, [gcso_q7_t; MAX_ATTENTION_HEADS]>,
     ) -> Self {
         let mut rec = Self::new_empty(anchor_id, dominant_slot, 0);
         rec.phase_profile = phase_profile.into_inner();
@@ -847,23 +847,23 @@ impl CrystallizedAttractorRecord {
         rec
     }
 
-    /// Zero-cost closure shell folding any [`GroundedScope`] phase profile into [`Grounded`] and
-    /// delegating to [`Self::from_grounded_delta_64`].
+    /// Zero-cost convergence shell folding any [`Groundable`] phase profile into
+    /// [`Indivisible<Grounded, _>`] and delegating to [`Self::from_grounded_delta_64`].
     #[inline(always)]
     #[must_use]
-    pub fn from_scoped_delta_64<B: GroundedScope>(
+    pub fn from_scoped_delta_64<O: Groundable>(
         anchor_id: u32,
         dominant_slot: u8,
         sample_count: u32,
         base_energy: f32,
-        phase_profile: Scoped<B, [gcso_q7_t; MAX_ATTENTION_HEADS]>,
+        phase_profile: Scoped<O, [gcso_q7_t; MAX_ATTENTION_HEADS]>,
     ) -> Self {
         Self::from_grounded_delta_64(
             anchor_id,
             dominant_slot,
             sample_count,
             base_energy,
-            phase_profile.seal_grounded(),
+            phase_profile.into_grounded(),
         )
     }
 
@@ -1213,7 +1213,7 @@ mod grounded_gate_tests {
 
         let mut direct = CrystallizedAttractorRecord::new_empty(7, ATTRACTOR_SLOT_PERSONA, 0);
         let direct_mass =
-            direct.absorb_sample_point_64(Scoped::interior(&phases).seal_grounded(), 1.5);
+            direct.absorb_sample_point_64(Scoped::interior(&phases).into_grounded(), 1.5);
 
         let mut aligned_rec = CrystallizedAttractorRecord::new_empty(7, ATTRACTOR_SLOT_PERSONA, 0);
         let verified: VerifiedAligned<&[gcso_q7_t; MAX_ATTENTION_HEADS]> =

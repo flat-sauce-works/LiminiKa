@@ -81,9 +81,7 @@ pub(crate) use self::scalar_math::{
     fast_ln_1p_bounded_f32,
 };
 pub use self::simd_stats::*;
-pub(crate) use self::simd_stats::{
-    atan2_to_q7_word_x8_simd, dot_and_norms_f32_unrolled4, scale_f32_slice_unrolled8,
-};
+pub(crate) use self::simd_stats::{atan2_to_q7_word_x8_simd, scale_f32_slice_unrolled8};
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 pub(crate) use self::swar_simd::avx2_q7_mean_i8_from_vec64;
 pub use self::swar_simd::*;

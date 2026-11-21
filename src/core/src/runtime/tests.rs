@@ -139,7 +139,7 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     centroids[2] = CrystallizedAttractorRecord::new_empty(303, ATTRACTOR_SLOT_KNOWLEDGE, 0);
     let sample_c2 = [29i8; MAX_ATTENTION_HEADS];
     let _ = centroids[2].absorb_sample_point_64(
-        crate::liminal::Scoped::interior(&sample_c2).seal_grounded(),
+        crate::liminal::Scoped::interior(&sample_c2).into_grounded(),
         1.2,
     );
     let (merged_cnt, pruned_cnt) = CrystallizedAttractorRecord::merge_and_prune_centroids_64(
@@ -240,11 +240,11 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     let lim_p0 = [16i8; MAX_ATTENTION_HEADS];
     let lim_p1 = [48i8; MAX_ATTENTION_HEADS];
     let _ = lim_centroids[0].absorb_sample_point_64(
-        crate::liminal::Scoped::interior(&lim_p0).seal_grounded(),
+        crate::liminal::Scoped::interior(&lim_p0).into_grounded(),
         2.5,
     );
     let _ = lim_centroids[1].absorb_sample_point_64(
-        crate::liminal::Scoped::interior(&lim_p1).seal_grounded(),
+        crate::liminal::Scoped::interior(&lim_p1).into_grounded(),
         2.5,
     );
     let mut lim_trail = gcso_pointer_trail_t {
@@ -1994,7 +1994,6 @@ struct MockActionHubComposite {
     head_dim: u32,
     num_heads: u32,
     default_phase: gcso_q7_t,
-    branch_mode: u32,
 }
 
 impl PhaseSteering for MockActionHubComposite {
@@ -2066,28 +2065,6 @@ impl FastPathLedger for MockActionHubComposite {
     }
 }
 
-impl EntropyEvaluator for MockActionHubComposite {
-    fn eval_stateful(
-        &mut self,
-        token_z_score: f32,
-        state_out: &mut gcso_edbc_state_t,
-    ) -> GcsoResult<()> {
-        state_out.moving_z_entropy = token_z_score;
-        state_out.active_branch_mode = self.branch_mode;
-        Ok(())
-    }
-}
-
-impl DecodingGate for MockActionHubComposite {
-    fn active_branch_mode(&self) -> u32 {
-        self.branch_mode
-    }
-
-    fn set_bifurcation_threshold(&mut self, _threshold: f32) {}
-    fn set_hysteresis_band(&mut self, _band: f32) {}
-    fn set_tau_flux(&mut self, _tau_flux: f32) {}
-}
-
 #[test]
 fn test_canonical_modules_and_action_hub_composite() {
     fn assert_action_hub<T: ActionHub + ActionHubGatewayExt>(hub: &T) -> (u32, u32) {
@@ -2101,7 +2078,6 @@ fn test_canonical_modules_and_action_hub_composite() {
         head_dim: 8,
         num_heads: 2,
         default_phase: 24,
-        branch_mode: 0,
     };
     assert_eq!(assert_action_hub(&hub), (8, 2));
 
@@ -2185,25 +2161,6 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
             Ok(())
         }
     }
-    impl EntropyEvaluator for MockColdSystem {
-        fn eval_stateful(
-            &mut self,
-            token_z_score: f32,
-            state_out: &mut gcso_edbc_state_t,
-        ) -> GcsoResult<()> {
-            state_out.moving_z_entropy = token_z_score;
-            Ok(())
-        }
-    }
-    impl DecodingGate for MockColdSystem {
-        fn active_branch_mode(&self) -> u32 {
-            1
-        }
-        fn set_bifurcation_threshold(&mut self, _threshold: f32) {}
-        fn set_hysteresis_band(&mut self, _band: f32) {}
-        fn set_tau_flux(&mut self, _tau_flux: f32) {}
-    }
-
     let sys = MockColdSystem;
     let mut cfg = gcso_config_t::default();
     init_default_config(&mut cfg).unwrap();
@@ -2788,7 +2745,7 @@ fn test_ego_differential_net_hops_consolidation_and_evaporation() {
     let axes = EgoIntentAxes::new()
         .with_autonomy_q7(72)
         .with_transgression_q7(48);
-    let net_1 = EgoDifferentialNet::from_ego_field_and_axes(&ego, &axes, 1);
+    let mut net_1 = EgoDifferentialNet::from_ego_field_and_axes(&ego, &axes, 1);
     let mut net_3 = EgoDifferentialNet::from_ego_field_and_axes(&ego, &axes, 3);
     let spine = SystemSpineState::new();
     let stig = StigmergicGranuleField::new();
@@ -2801,13 +2758,26 @@ fn test_ego_differential_net_hops_consolidation_and_evaporation() {
     };
     let base = GatewayFrame::default();
 
-    let (f1, _n1, h1) =
-        net_1.evaluate_pframe_chain_branchless(&ego, &spine, &venn, &stig, &tension, base);
+    let (f1, _n1, h1, mask1) = net_1
+        .evaluate_pframe_chain_with_mask_branchless(&ego, &spine, &venn, &stig, &tension, base);
     let (f3, _n3, h3, entry) = net_3
         .evaluate_pframe_chain_with_entry_branchless(&ego, &spine, &venn, &stig, &tension, base);
     assert_eq!(h1, 1);
+    assert!(
+        mask1.count_ones() >= 2,
+        "1-hop parallel ensemble should fire multiple perspectives, got mask={mask1:#010b}"
+    );
     assert_eq!(h3, 3);
     assert_ne!(f1.phase_deltas, f3.phase_deltas);
+
+    net_1.epoch = 1;
+    net_1.record_matched_activations(mask1);
+    for idx in 0..3 {
+        if ((mask1 >> idx) & 1) != 0 {
+            assert_eq!(net_1.nodes[idx].reinforce_count, 1);
+            assert_eq!(net_1.nodes[idx].last_active_epoch, 1);
+        }
+    }
 
     for ep in 1..=5 {
         net_3.epoch = ep;
@@ -2851,25 +2821,16 @@ fn test_entropy_controller_init_setters_and_reset() {
     assert!(engine.is_normal_mode());
 
     let mut out_state = gcso_edbc_state_t::default();
-    let h = EntropyClosedLoopCoordinator::eval_surrogate_and_step(
-        &mut engine,
-        0.5,
-        0.5,
-        0.8,
-        0.2,
-        0.1,
-        1.0,
-        0.5,
-        &mut out_state,
-    )
-    .unwrap();
+    let h = engine
+        .eval_surrogate_and_step(0.5, 0.5, 0.8, 0.2, 0.1, 1.0, 0.5, &mut out_state)
+        .unwrap();
     assert!(h > 0.0 && out_state.moving_z_entropy == h);
 }
 
 #[test]
 fn test_stationary_skip_and_spine_bypass_do_not_misdiagnose_passive_saturation() {
-    use crate::drivers::{LayerDistortionKind, LiminalEgoField};
-    use crate::runtime::{EpistemicHorizonReading, LiminalBoundaryDelta};
+    use crate::drivers::LiminalEgoField;
+    use crate::runtime::{EpistemicHorizonReading, LayerDistortionKind, LiminalBoundaryDelta};
     use crate::stigmergy::{
         StigmergicActionDecision, StigmergicOverlapSerendipityReport, StigmergicThresholds,
         DEFAULT_DERIVATIVE_ALPHA_Q7,
