@@ -12,7 +12,8 @@
  * C-ABI symbol prefixes (`dpsr`, `edbc`, `srl`, `zimms`) map to the Rust core modules:
  * - `dpsr`  -> `PhaseSteering` / `PhaseSteeringEngine` (`foundation::rope`, `stigmergy::gate`)
  * - `edbc`  -> `EntropyController` (`drivers::spine::entropy`)
- * - `srl`   -> `Rank1Residual` / `ResidualAdapterEngine` (`foundation::rank1_kernels`, `stigmergy::gate`)
+ * - `srl`   -> `Rank1Residual` / `ResidualAdapterEngine` (`foundation::rank1_kernels`,
+ * `stigmergy::gate`)
  * - `zimms` -> `MappedStorageEngine` (`runtime::storage`)
  */
 
@@ -990,7 +991,8 @@ GCSO_STATIC_ASSERT(sizeof(gcso_distortion_delta_t) == 128, "gcso_distortion_delt
 GCSO_STATIC_ASSERT(sizeof(gcso_distortion_tension_t) == 32,
                    "gcso_distortion_tension_t size mismatch");
 
-/* Static Assertions for Alignment Invariants Matching src/core/src/runtime/abi/ & core layer PODs */
+/* Static Assertions for Alignment Invariants Matching src/core/src/runtime/abi/ & core layer PODs
+ */
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_raw_buffer_t) == 16, "gcso_raw_buffer_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_paged_bitmask_t) == 32,
                    "gcso_paged_bitmask_t alignment mismatch");
