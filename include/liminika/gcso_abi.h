@@ -9,9 +9,11 @@
  * This header defines the C11/C++20 FFI surface implemented by `src/core/src/runtime/abi/`.
  * Function prefixes (`gcso_dpsr_*`, `gcso_edbc_*`, `gcso_srl_*`, `gcso_zimms_*`) map to the
  * Rust core modules as follows:
- * - `gcso_dpsr_*`  -> `liminika_core::foundation::rope` (`PhaseSteering`) / `stigmergy::gate` (`PhaseSteeringEngine`)
+ * - `gcso_dpsr_*`  -> `liminika_core::foundation::rope` (`PhaseSteering`) / `stigmergy::gate`
+ * (`PhaseSteeringEngine`)
  * - `gcso_edbc_*`  -> `liminika_core::drivers::spine::entropy` (`EntropyController`)
- * - `gcso_srl_*`   -> `liminika_core::foundation::rank1_kernels` / `stigmergy::gate` (`ResidualAdapterEngine`)
+ * - `gcso_srl_*`   -> `liminika_core::foundation::rank1_kernels` / `stigmergy::gate`
+ * (`ResidualAdapterEngine`)
  * - `gcso_zimms_*` -> `liminika_core::runtime::storage` (`MappedStorageEngine`)
  */
 
@@ -213,7 +215,8 @@ GCSO_API gcso_status_t GCSO_CALL gcso_container_close(gcso_container_handle_t ha
 
 /**
  * @brief Allocates an Action Hub (Sidecar Pointer Table) instance.
- * Corresponds to `PointerSubstrate` (`stigmergy::trail`) and `StigmergicSubstrate` (`stigmergy::substrate`).
+ * Corresponds to `PointerSubstrate` (`stigmergy::trail`) and `StigmergicSubstrate`
+ * (`stigmergy::substrate`).
  * @param capacity Slot capacity count for tagged pointers.
  * @param hub_out Pointer to receive allocated action hub handle.
  * @return GCSO_SUCCESS or error code.
@@ -624,7 +627,8 @@ gcso_rank1_residual_create(const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT
 
 /**
  * @brief Evaluates Rank-1 residual Dynamic Rank-1 outer product: y = alpha * s (*) (u * (v^T * x)).
- * Corresponds to `foundation::rank1_kernels::eval_rank1` (`ResidualAdapterEngine` gate in `stigmergy`).
+ * Corresponds to `foundation::rank1_kernels::eval_rank1` (`ResidualAdapterEngine` gate in
+ * `stigmergy`).
  * @param y_out Output vector buffer to write into (32-byte aligned).
  * @param x_in Input vector buffer (32-byte aligned).
  * @param rank1_desc Rank-1 residual descriptor structure pointer (32-byte aligned).
@@ -827,7 +831,8 @@ gcso_persona_apply_patch(gcso_context_handle_t context, const uint8_t* GCSO_REST
 
 /**
  * @brief Zero-Overhead In-Memory Mapped Storage: Maps .gcso container payload using zero-copy mmap.
- * Corresponds to `MappedStorage::open_mmap` in `liminika_core::runtime::storage` and `attractor_edbc.cpp`.
+ * Corresponds to `MappedStorage::open_mmap` in `liminika_core::runtime::storage` and
+ * `attractor_edbc.cpp`.
  * @param file_path Null-terminated path string to target .gcso file.
  * @param storage_out Descriptor structure pointer to populate (32-byte aligned).
  * @return GCSO_SUCCESS or GCSO_ERROR_MAPPED_STORAGE_FAILED.
