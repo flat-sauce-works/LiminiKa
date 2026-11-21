@@ -34,7 +34,7 @@ use crate::foundation::{
     ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, gcso_config_t, gcso_q7_t, GcsoResult, Liminal,
+    branchless_select_f32, branchless_select_u32, gcso_config_t, gcso_q7_t, GcsoResult,
     DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_HEX, GCSO_ERROR_BUFFER_TOO_SMALL,
     GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE,
     GCSO_ERROR_MISALIGNED_POINTER, GCSO_ERROR_VERSION_MISMATCH, MAX_ATTENTION_HEADS,
@@ -372,7 +372,7 @@ impl KvKeyframePacket {
 }
 
 /// Mezzo/Cold-path trait for Predictive Phase-Motion & Residual Compensation (KV-keyframe) (**Mezzo / Storage Level**).
-pub trait KvKeyframeCache: Liminal + Send + Sync {
+pub trait KvKeyframeCache: Send + Sync {
     /// Seeks to `token_index` in the KV-keyframe keyframe cache and populates `header_out`.
     ///
     /// # Errors
@@ -1087,7 +1087,7 @@ pub fn decode_and_apply_dnp_packet_to_trail(
 }
 
 /// Cold-path trait for Zero-Overhead In-Memory Mapped Storage (mapped-storage) (**Storage / Persistence Level**).
-pub trait MappedStorage: Liminal + Send + Sync {
+pub trait MappedStorage: Send + Sync {
     /// Serializes active runtime state into a `.gcso` binary snapshot buffer.
     ///
     /// # Errors
@@ -1462,13 +1462,13 @@ impl<'a> GcsoFourSectionView<'a> {
         let off_trails = (after_crystals + 127) & !127usize;
         let trails_bytes = core::mem::size_of_val(trails);
         let off_bloom = off_trails + trails_bytes;
-        let off_daes = off_bloom
+        let off_ledger = off_bloom
             + if bloom_opt.is_some() {
                 size_of::<ContrastivePhaseBloomFilter>()
             } else {
                 0
             };
-        let off_reports = off_daes
+        let off_reports = off_ledger
             + if ledger_opt.is_some() {
                 size_of::<gcso_ledger_slot_t>()
             } else {
@@ -1485,7 +1485,7 @@ impl<'a> GcsoFourSectionView<'a> {
             bloom.write_unaligned_to(buf, off_bloom)?;
         }
         if let Some(ledger) = ledger_opt {
-            ledger.write_unaligned_to(buf, off_daes)?;
+            ledger.write_unaligned_to(buf, off_ledger)?;
         }
         CausalProvenanceReport::write_unaligned_slice_to(provenance_reports, buf, off_reports)?;
         if total_len > end_reports {
@@ -1514,7 +1514,7 @@ impl<'a> GcsoFourSectionView<'a> {
         header.dpsr_state_offset = after_crystals as u64;
         header.edbc_state_offset = off_bloom as u64;
         header.action_hub_offset = off_trails as u64;
-        header.ledger_slot_offset = off_daes as u32;
+        header.ledger_slot_offset = off_ledger as u32;
         header.checksum_crc32 = checksum_crc32;
         header.reserved_padding[0] = u8::from(bloom_opt.is_some());
         header.reserved_padding[1] = u8::from(ledger_opt.is_some());

@@ -543,12 +543,12 @@ impl StigmergicThresholds {
         let is_repulsed = repulsion_triggered | (coh < -contradict_thresh);
 
         let is_low_entropy_skip = (!is_repulsed) & (h_tilde <= self.inertial_skip_entropy_thresh);
-        let srl_entropy_min = self.inertial_skip_entropy_thresh * 1.6_f32;
-        let pspm_entropy_fallback = self.inertial_skip_entropy_thresh * 3.6_f32;
+        let rank1_entropy_min = self.inertial_skip_entropy_thresh * 1.6_f32;
+        let subhead_entropy_fallback = self.inertial_skip_entropy_thresh * 3.6_f32;
         let ge_steer = rho >= self.express_steer_density_thresh;
-        let ge_pspm = (rho >= self.subhead_route_density_thresh)
-            | (ge_steer & (h_tilde >= pspm_entropy_fallback));
-        let ge_srl = (rho >= self.rank1_inject_density_thresh) & (h_tilde > srl_entropy_min);
+        let ge_subhead = (rho >= self.subhead_route_density_thresh)
+            | (ge_steer & (h_tilde >= subhead_entropy_fallback));
+        let ge_rank1 = (rho >= self.rank1_inject_density_thresh) & (h_tilde > rank1_entropy_min);
         let ge_crystal = (rho >= self.crystallize_density_thresh)
             & (coh >= DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE);
 
@@ -559,9 +559,13 @@ impl StigmergicThresholds {
             StigmergicActionDecision::ExpressPhaseSteer as u8,
             disc,
         );
-        disc = branchless_select_u8(ge_pspm, StigmergicActionDecision::SubHeadRoute as u8, disc);
         disc = branchless_select_u8(
-            ge_srl,
+            ge_subhead,
+            StigmergicActionDecision::SubHeadRoute as u8,
+            disc,
+        );
+        disc = branchless_select_u8(
+            ge_rank1,
             StigmergicActionDecision::FullOrchestration as u8,
             disc,
         );
@@ -1918,11 +1922,11 @@ impl StigmergicSubstrate {
                 logits_opt,
             )?;
 
-        let srl_flag = (mode_flags & ACTION_MODE_RANK1_INJECT) != 0;
+        let rank1_flag = (mode_flags & ACTION_MODE_RANK1_INJECT) != 0;
         let metric = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
             | branchless_select_u8(steered, LEDGER_METRIC_PHASE_STEERED, 0)
             | branchless_select_u8(subhead_routed, LEDGER_METRIC_SUBHEAD_ROUTED, 0)
-            | branchless_select_u8(srl_flag, LEDGER_METRIC_RANK1_INJECTED, 0)
+            | branchless_select_u8(rank1_flag, LEDGER_METRIC_RANK1_INJECTED, 0)
             | branchless_select_u8(skip_compensated, LEDGER_METRIC_LAYER_SKIP_COMPENSATED, 0)
             | branchless_select_u8(contradiction_repulsed, LEDGER_METRIC_REPULSION_APPLIED, 0)
             | branchless_select_u8(found_coherent, LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, 0);

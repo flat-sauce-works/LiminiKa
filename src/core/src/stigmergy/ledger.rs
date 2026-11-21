@@ -22,8 +22,8 @@ use crate::foundation::{
 };
 use crate::liminal::{
     branchless_select_u32, branchless_select_u64, branchless_select_u8, gcso_config_t, gcso_q7_t,
-    GcsoResult, Liminal, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE,
-    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    GcsoResult, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE, MAX_ATTENTION_HEADS,
+    NUM_STIGMERGIC_GRANULES,
 };
 use crate::stigmergy::{
     ATTRACTOR_SLOT_REPULSION, DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS, DEFAULT_BLOOM_MAX_MASS_THRESHOLD,
@@ -818,7 +818,7 @@ unsafe impl Pod for ContrastivePhaseBloomFilter {}
 /// Lv.1 Capability Trait for the 64-byte Dynamic Adaptive Extension Scratchpad (FastPathLedger):
 /// $\mathcal{O}(1)$ fast-path tagged pointer shortcuts, 8-byte circular telemetry mini-ledger,
 /// and dynamic parameter auto-tuning.
-pub trait FastPathLedger: Liminal {
+pub trait FastPathLedger {
     /// Resets active telemetry mini ledger and cache counters in-place.
     ///
     /// # Errors

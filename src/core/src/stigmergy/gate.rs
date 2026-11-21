@@ -223,6 +223,73 @@ impl PhaseSteeringEngine {
     }
 }
 
+/// Blanket extension trait adding [`Indivisible<Active, PhaseDeltaSlice<'_>>`] gated RoPE
+/// steering entry points to any [`PhaseSteeringGeometryExt`] implementor without altering pure
+/// Level 1 traits.
+pub trait PhaseSteeringActiveExt: PhaseSteeringGeometryExt {
+    /// Applies [`PhaseSteering::apply_phase_steering_safe`] only after `phase_deltas` carries an
+    /// [`Indivisible<Active, _>`] promotion certificate.
+    ///
+    /// # Errors
+    /// Propagates any validation or alignment error from
+    /// [`PhaseSteering::apply_phase_steering_safe`].
+    #[inline(always)]
+    fn apply_phase_steering_safe_active(
+        &self,
+        query_tensor: &mut AlignedSliceMut32<'_, f32>,
+        phase_deltas: Indivisible<Active, PhaseDeltaSlice<'_>>,
+        max_rad: f32,
+    ) -> GcsoResult<()> {
+        self.apply_phase_steering_safe(query_tensor, &phase_deltas.as_ref().0, max_rad)
+    }
+
+    /// Applies [`PhaseSteering::apply_phase_steering_fused_safe`] only after `phase_deltas`
+    /// carries an [`Indivisible<Active, _>`] promotion certificate.
+    ///
+    /// # Errors
+    /// Propagates any validation, aliasing, or alignment error from
+    /// [`PhaseSteering::apply_phase_steering_fused_safe`].
+    #[inline(always)]
+    fn apply_phase_steering_fused_safe_active(
+        &self,
+        query_tensor: &mut AlignedSliceMut32<'_, f32>,
+        key_tensor: &mut AlignedSliceMut32<'_, f32>,
+        phase_deltas: Indivisible<Active, PhaseDeltaSlice<'_>>,
+        max_rad: f32,
+    ) -> GcsoResult<()> {
+        self.apply_phase_steering_fused_safe(
+            query_tensor,
+            key_tensor,
+            &phase_deltas.as_ref().0,
+            max_rad,
+        )
+    }
+
+    /// Applies [`PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe`] only after
+    /// `phase_deltas` carries an [`Indivisible<Active, _>`] promotion certificate.
+    ///
+    /// # Errors
+    /// Propagates any validation, geometry, or alignment error from
+    /// [`PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe`].
+    #[inline(always)]
+    fn apply_phase_steering_for_geometry_safe_active<G: RopeSteeringTarget + ?Sized>(
+        &self,
+        geometry: &G,
+        query_tensor: &mut AlignedSliceMut32<'_, f32>,
+        phase_deltas: Indivisible<Active, PhaseDeltaSlice<'_>>,
+        max_rad: f32,
+    ) -> GcsoResult<()> {
+        self.apply_phase_steering_for_geometry_safe(
+            geometry,
+            query_tensor,
+            &phase_deltas.as_ref().0,
+            max_rad,
+        )
+    }
+}
+
+impl<T: PhaseSteeringGeometryExt + ?Sized> PhaseSteeringActiveExt for T {}
+
 impl PhaseSteering for PhaseSteeringEngine {
     #[inline(always)]
     fn head_dim(&self) -> u32 {
@@ -292,26 +359,8 @@ impl ResidualAdapterEngine {
         Ok(())
     }
 
-    /// Accumulates the fused Rank-1 outer product residual $\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
-    /// in-place into `y_inout` from hardware-aligned slices.
-    ///
-    /// # Errors
-    /// Propagates any validation or numerical singularity error from [`eval_rank1_slices_fused`].
-    #[inline]
-    pub fn eval_rank1_slices_fused(
-        &self,
-        y_inout: &mut AlignedSliceMut32<'_, f32>,
-        x_in: &AlignedSlice32<'_, f32>,
-        u_vec: &AlignedSlice32<'_, f32>,
-        v_vec: &AlignedSlice32<'_, f32>,
-        gain_vec: Option<&AlignedSlice32<'_, f32>>,
-        scale_factor: f32,
-    ) -> GcsoResult<()> {
-        eval_rank1_slices_fused(y_inout, x_in, u_vec, v_vec, gain_vec, scale_factor)
-    }
-
-    /// Non-generic [`Indivisible<Active, _>`] closure entry point for
-    /// [`Self::eval_rank1_slices_fused`].
+    /// Validated Rank-1 outer-product residual injection ($\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$)
+    /// gated by an [`Indivisible<Active, _>`] promotion certificate.
     ///
     /// Statically excludes [`crate::liminal::Unmarked`], [`crate::liminal::Bottom`], and
     /// unclassified origins from injecting Rank-1 hidden-state residuals while keeping the
@@ -541,20 +590,25 @@ mod tests {
         );
         assert!(engine.descriptor.scale_factor >= 0.25);
 
-        let mut y_raw = AlignedBuffer32::new([1.0_f32; 8]);
-        let mut y_active = AlignedBuffer32::new([1.0_f32; 8]);
+        let mut y_first = AlignedBuffer32::new([1.0_f32; 8]);
+        let mut y_second = AlignedBuffer32::new([1.0_f32; 8]);
         let x = AlignedBuffer32::new([1.0_f32; 8]);
         let u = AlignedBuffer32::new([0.5_f32; 8]);
         let v = AlignedBuffer32::new([0.25_f32; 8]);
 
+        let boundary_active =
+            match Scoped::from_boundary(ResidualScale(1.0_f32)).cut_by_lacuna(true, 1.0, 0.0) {
+                ScopedCut::Exterior(ext) => ext.into_active(),
+                _ => panic!("expected exterior boundary active cut"),
+            };
         engine
-            .eval_rank1_slices_fused(
-                &mut y_raw.as_aligned_slice_mut(),
+            .eval_rank1_slices_fused_active(
+                &mut y_first.as_aligned_slice_mut(),
                 &x.as_aligned_slice(),
                 &u.as_aligned_slice(),
                 &v.as_aligned_slice(),
                 None,
-                1.0,
+                boundary_active,
             )
             .unwrap();
         let active_scale =
@@ -565,7 +619,7 @@ mod tests {
         assert_eq!(active_scale.domain_id(), "stigmergy.residual_scale");
         engine
             .eval_rank1_slices_fused_active(
-                &mut y_active.as_aligned_slice_mut(),
+                &mut y_second.as_aligned_slice_mut(),
                 &x.as_aligned_slice(),
                 &u.as_aligned_slice(),
                 &v.as_aligned_slice(),
@@ -573,7 +627,7 @@ mod tests {
                 active_scale,
             )
             .unwrap();
-        for (lhs, rhs) in y_raw.data.iter().zip(y_active.data.iter()) {
+        for (lhs, rhs) in y_first.data.iter().zip(y_second.data.iter()) {
             assert_eq!(lhs.to_bits(), rhs.to_bits());
         }
     }

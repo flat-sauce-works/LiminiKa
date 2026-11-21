@@ -14,8 +14,8 @@ use crate::foundation::{
     KvMotionDeltaPacket, RawPhaseProjectable, ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE,
 };
 use crate::liminal::{
-    branchless_select_f32, gcso_q7_t, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
-    NUM_STIGMERGIC_GRANULES,
+    branchless_select_f32, gcso_q7_t, BitCut32, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::runtime::context::AutonomousCoreLayerStack;
 use crate::runtime::gateway::{
@@ -1231,7 +1231,7 @@ impl<const N: usize> LatentHorizonSlot for ResidualSpilloverHorizonSlot<N> {
         stack: &mut AutonomousCoreLayerStack,
         _trigger: &HorizonTriggerInput,
     ) {
-        let added = (1 << 6) & !self.saved_aperture_mask;
+        let added = BitCut32::split(1 << 6, self.saved_aperture_mask).outside;
         stack.liminal_layer.active_aperture_mask &= !added;
         self.engaged = false;
         self.last_hit_slot = None;

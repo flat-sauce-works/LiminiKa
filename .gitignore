@@ -171,6 +171,8 @@ nul
 /logs/
 /tmp/
 /temp/
+# Local untracked scratchpad for interim benchmark reports and experimental logs
+/.scratch/
 
 # -----------------------------------------------------------------------------
 # OS & Editor / IDE Specific Files

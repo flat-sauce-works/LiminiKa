@@ -22,8 +22,8 @@ use crate::foundation::{
 use crate::liminal::{
     branchless_select_f32, branchless_select_i32, branchless_select_i8, branchless_select_u32,
     branchless_select_u64, branchless_select_u8, branchless_select_usize, gcso_q7_t, GcsoResult,
-    Liminal, LiminalThresholdState, DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT,
-    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, THRESHOLD_RELATIVE_COUPLING,
+    LiminalThresholdState, DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
+    NUM_STIGMERGIC_GRANULES, THRESHOLD_RELATIVE_COUPLING,
 };
 use crate::stigmergy::attractor::{AttractorAnchor, CrystallizedAnchorRecord};
 use crate::stigmergy::circuit::{CognitiveOpKind, CognitiveTrajectoryLedger};
@@ -171,7 +171,7 @@ const _: () = {
 
 /// Branchless 32-byte (`#[repr(C, align(16))]`) report capturing Venn-diagram overlap across the
 /// 8 SWAR granules (`venn_core_mask`, `venn_penumbra_mask`) and serendipitous approximation-noise
-/// excursions into [`crate::liminal::Liminal`] (`serendipity_excursion_mask`, `serendipity_triggered`).
+/// excursions into `Liminal` (`serendipity_excursion_mask`, `serendipity_triggered`).
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct StigmergicOverlapSerendipityReport {
@@ -204,7 +204,7 @@ pub struct StigmergicOverlapSerendipityReport {
 }
 
 /// Evaluates Venn-diagram multi-attractor cognitive aperture overlap and noise-driven serendipity
-/// in [`crate::liminal::Liminal`] across the 8 SWAR granules (`0` allocations, `0` data-dependent branches).
+/// in `Liminal` across the 8 SWAR granules (`0` allocations, `0` data-dependent branches).
 #[inline]
 #[must_use]
 pub fn evaluate_stigmergic_overlap_and_serendipity_words_64<Node: RelativeAttractorNode>(
@@ -492,14 +492,7 @@ impl StigmergicGranuleState {
     #[inline(always)]
     #[must_use]
     pub const fn boundary_sensitivity_gate_q7(p_q7: u8) -> u8 {
-        let p = if p_q7 > 127 { 127 } else { p_q7 };
-        let prod = (p as u32) * ((127 - p) as u32);
-        let scaled = prod >> 5;
-        if scaled > 127 {
-            127
-        } else {
-            scaled as u8
-        }
+        crate::liminal::sensitivity_4p1mp_q7(p_q7)
     }
 }
 
@@ -527,9 +520,8 @@ pub struct StigmergicFragmentEnsembleReport {
 }
 
 /// Uniform node abstraction enabling relative signed coupling and epistemic horizon evaluation
-/// across any attractor representation (`CrystallizedAttractorRecord`, `GatewayFrame`, `ObjectiveFact`, etc.)
-/// atop [`Liminal`].
-pub trait RelativeAttractorNode: Liminal {
+/// across any attractor representation (`CrystallizedAttractorRecord`, `GatewayFrame`, `ObjectiveFact`, etc.).
+pub trait RelativeAttractorNode {
     /// Static cognitive aperture mask for relative attractor participation.
     const RELATIVE_APERTURE_MASK: u32 = THRESHOLD_RELATIVE_COUPLING;
     /// Returns the node's 64-head Q7 phase profile packed into 8 register-resident `u64` words.

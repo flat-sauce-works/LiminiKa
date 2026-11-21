@@ -21,7 +21,9 @@
 
 use crate::drivers::spine::state::{SystemSpineState, SPINE_BYPASS_VETO_NONE};
 use crate::foundation::{branchless_argmin_u8_x8_masked, Pod};
-use crate::liminal::{branchless_select_u16, branchless_select_u64, branchless_select_u8, BitCut8};
+use crate::liminal::{
+    branchless_select_u16, branchless_select_u64, branchless_select_u8, BitCut64, BitCut8,
+};
 
 /// Maximum number of anonymous compute slots tracked via `u64` bitmasks.
 pub const MAX_ANONYMOUS_COMPUTE_SLOTS: usize = 64;
@@ -307,10 +309,11 @@ impl AnonymousComputePool {
             spine.should_bypass_whole_token_branchless(candidate, guard_active, repulsion_active);
         dispatch.whole_token_steering_bypass = u8::from(allow);
         let masked_bypass = spine.mask_layer_bypass_with_pinned(dispatch.bypass_mask, veto_mask);
-        let restored_slots = dispatch.bypass_mask & !masked_bypass;
+        let restored_slots = BitCut64::split(dispatch.bypass_mask, masked_bypass).outside;
         dispatch.bypass_mask = masked_bypass;
         dispatch.execute_mask |= restored_slots | spine.pinned_compute_mask;
-        dispatch.stationary_evidence_mask = dispatch.execute_mask & !dispatch.bypass_mask;
+        dispatch.stationary_evidence_mask =
+            BitCut64::split(dispatch.execute_mask, dispatch.bypass_mask).outside;
         spine.whole_token_bypass_active = dispatch.whole_token_steering_bypass;
         spine.bypass_dwell_steps = self.whole_token_calm_dwell;
         spine.bypass_cooldown_steps = self.re_bypass_cooldown;
@@ -386,9 +389,10 @@ impl AnonymousComputePool {
         reversible_mask: u64,
     ) {
         self.active_mask = active_mask;
-        self.pinned_mask = pinned_mask & active_mask;
-        self.repulsion_mask = repulsion_mask & active_mask & !self.pinned_mask;
-        self.reversible_mask = reversible_mask & active_mask & !self.pinned_mask;
+        let active_cut = BitCut64::split(active_mask, pinned_mask);
+        self.pinned_mask = active_cut.inside;
+        self.repulsion_mask = BitCut64::split(active_cut.outside, repulsion_mask).inside;
+        self.reversible_mask = BitCut64::split(active_cut.outside, reversible_mask).inside;
     }
 
     /// Configures available anonymous execution lanes (`0..8`) and their Q0.7 headroom.
@@ -474,7 +478,7 @@ impl AnonymousComputePool {
         let effective_reversible = branchless_select_u64(
             reading.irreversible_step != 0 || in_instability_cooldown,
             0,
-            self.reversible_mask & !self.pinned_mask,
+            BitCut64::split(self.reversible_mask, self.pinned_mask).outside,
         );
 
         let mut low_pheromone_mask = 0_u64;
@@ -493,11 +497,12 @@ impl AnonymousComputePool {
             &self.slot_pheromone_q7,
             max_bypass_slots,
         );
-        let eligible_exec = self.active_mask & !self.repulsion_mask;
-        let execute_mask = (eligible_exec & !bypass_mask) | self.pinned_mask;
-        let throttle_mask = effective_reversible & throttle_candidate_mask & !bypass_mask;
+        let eligible_exec = BitCut64::split(self.active_mask, self.repulsion_mask).outside;
+        let execute_mask = BitCut64::split(eligible_exec, bypass_mask).outside | self.pinned_mask;
+        let throttle_mask =
+            BitCut64::split(effective_reversible & throttle_candidate_mask, bypass_mask).outside;
         // Anti-paralysis guardrail: bypassed slots never count as Layer 0 stationary evidence.
-        let stationary_evidence_mask = execute_mask & !bypass_mask;
+        let stationary_evidence_mask = BitCut64::split(execute_mask, bypass_mask).outside;
 
         let fallback_lane = self.select_fallback_lane();
 
@@ -536,10 +541,11 @@ impl AnonymousComputePool {
         }
         let mut dispatch = self.step_dispatch(reading);
         let masked_bypass = spine.mask_layer_bypass_with_pinned(dispatch.bypass_mask, veto_mask);
-        let restored_slots = dispatch.bypass_mask & !masked_bypass;
+        let restored_slots = BitCut64::split(dispatch.bypass_mask, masked_bypass).outside;
         dispatch.bypass_mask = masked_bypass;
         dispatch.execute_mask |= restored_slots | spine.pinned_compute_mask;
-        dispatch.stationary_evidence_mask = dispatch.execute_mask & !dispatch.bypass_mask;
+        dispatch.stationary_evidence_mask =
+            BitCut64::split(dispatch.execute_mask, dispatch.bypass_mask).outside;
         dispatch
     }
 
@@ -578,7 +584,7 @@ impl AnonymousComputePool {
         {
             return false;
         }
-        let movable = migrate_mask & self.active_mask & !self.pinned_mask;
+        let movable = BitCut64::split(migrate_mask & self.active_mask, self.pinned_mask).outside;
         if movable == 0 {
             return false;
         }
@@ -776,7 +782,7 @@ mod tests {
         // 32-layer model: head 0..4 and tail 28..32 pinned, middle 4..28 reversible.
         let active = (1_u64 << 32) - 1;
         let pinned = 0x0000_000F_u64 | (0x0000_000F_u64 << 28);
-        let rev = active & !pinned;
+        let rev = BitCut64::split(active, pinned).outside;
         pool.set_slot_masks(active, pinned, 0, rev);
 
         let surge = SystemPressureReading {
@@ -818,7 +824,7 @@ mod tests {
 
         let active = (1_u64 << 32) - 1;
         let pinned_base = 0x0000_000F_u64 | (0x0000_000F_u64 << 28);
-        let rev = active & !pinned_base;
+        let rev = BitCut64::split(active, pinned_base).outside;
         let surge = SystemPressureReading {
             frame_time_pressure_q15: 30000,
             bandwidth_pressure_q15: 30000,

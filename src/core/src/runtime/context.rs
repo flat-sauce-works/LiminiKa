@@ -23,14 +23,14 @@ use crate::foundation::{
     gcso_tagged_ptr_t, is_phase_profile_nonzero_64, is_word_array_uniform_64, load_q7_words_64,
     store_q7_words_64, swar_or_avx2_q7_add_sat_words_64, swar_slerp_words_with_uniform_flag_64,
     swar_words_equal_64, swar_words_nonzero_64, AlignedBuffer16, AlignedSlice16, AlignedSlice32,
-    AlignedSliceMut16, AlignedSliceMut32, PhaseSteering, PhaseSteeringGeometryExt, Pod,
-    RopeSteeringTarget, ACTION_MODE_LAYER_SKIP, ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_ID_MASK,
+    AlignedSliceMut16, AlignedSliceMut32, PhaseSteering, Pod, RopeSteeringTarget,
+    ACTION_MODE_LAYER_SKIP, ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_ID_MASK,
     DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u8, gcso_config_t, gcso_q7_t,
     AttributionTag, BitCut8, DriverKind, EpistemicPartition, EpistemicRegime, GcsoResult,
-    LiminalThresholdState, PrimitiveKind, DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_MAJOR,
+    LiminalThresholdState, PrimitiveKind, Scoped, DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_MAJOR,
     GCSO_ABI_VERSION_MINOR, GCSO_ABI_VERSION_PATCH, GCSO_ABI_VERSION_STRING,
     GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT,
     MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, Q7_PHASE_SCALE_RAD,
@@ -50,7 +50,7 @@ use crate::runtime::horizon::{
     HorizonEscalationProvider, HorizonEscalationRequest, HorizonTriggerInput, LatentHorizonSlot,
 };
 use crate::stigmergy::{
-    PhaseSteeringEngine, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE,
+    PhaseDeltaSlice, PhaseSteeringEngine, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE,
     DEFAULT_SLOT_COUPLING_MATRIX_8X8, DEFAULT_SUBSTRATE_CAPACITY, LEDGER_HISTORY_LEN,
     MAX_ANCHORS_PER_FIELD, ROOT_CAUSE_SYSTEM_QOS_THROTTLE, WORKBENCH_LANE_FLAG_REPULSION,
 };
@@ -625,7 +625,7 @@ impl Config {
             & branchless_is_finite_f32(self.raw.entropy_singularity_eps)
             & (self.raw.entropy_singularity_eps > 0.0);
 
-        let valid_edbc_and_caps = (self.raw.max_prompt_anchors != 0)
+        let valid_entropy_and_caps = (self.raw.max_prompt_anchors != 0)
             & (self.raw.action_hub_capacity != 0)
             & (self.raw.ledger_mode <= 2)
             & branchless_is_finite_f32(self.hysteresis_band)
@@ -635,7 +635,7 @@ impl Config {
             & branchless_is_finite_f32(self.bifurcation_threshold)
             & (self.bifurcation_threshold > 0.0);
 
-        if valid_dims & valid_scales & valid_edbc_and_caps {
+        if valid_dims & valid_scales & valid_entropy_and_caps {
             Ok(())
         } else {
             Err(GCSO_ERROR_INVALID_ARGUMENT)
@@ -729,20 +729,20 @@ impl RuntimeContext {
         substrate.repulsion_threshold = config.repulsion_threshold;
         substrate.repulsion_scale_u7 = config.repulsion_scale_u7;
         substrate.coupling_matrix_8x8 = config.slot_coupling_matrix;
-        let edbc_state = gcso_edbc_state_t {
+        let entropy_state = gcso_edbc_state_t {
             singularity_eps: config.raw.entropy_singularity_eps,
             bifurcation_threshold: config.bifurcation_threshold,
             ..Default::default()
         };
-        let mut edbc = EntropyController::new(edbc_state);
-        edbc.set_hysteresis_band(config.hysteresis_band);
-        edbc.set_tau_flux(config.tau_flux);
+        let mut entropy_ctrl = EntropyController::new(entropy_state);
+        entropy_ctrl.set_hysteresis_band(config.hysteresis_band);
+        entropy_ctrl.set_tau_flux(config.tau_flux);
 
         Ok(Self {
             config,
             substrate,
             phase_steering,
-            entropy_controller: edbc,
+            entropy_controller: entropy_ctrl,
             attractor_space: MultiAttractorSpace::new(),
             core_layers: AutonomousCoreLayerStack::new(),
             last_boundary_delta: LiminalBoundaryDelta::default(),
@@ -1209,9 +1209,9 @@ impl RuntimeContext {
         self.substrate.active_count
     }
 
-    /// Executes a per-token Hot Path step integrating phase steering, `EntropyController` entropy evaluation,
-    /// `self.slot_phase_bank` directly in 8 register-resident `u64` SWAR words (`0` intermediate
-    /// 64-byte stack buffers or store-reload round-trips).
+    /// Evaluates the multi-domain attractor superposition plus `self.substrate.slot_phase_bank`
+    /// directly in 8 register-resident `u64` SWAR words (`0` intermediate 64-byte stack buffers
+    /// or store-reload round-trips).
     #[inline]
     #[must_use]
     pub(crate) fn evaluate_multi_domain_superposition_words(
@@ -1333,10 +1333,10 @@ impl RuntimeContext {
     pub fn serialize_to_bytes(&self, buffer: &mut [u8], required_size: &mut usize) -> Result<()> {
         let header_size = core::mem::size_of::<gcso_snapshot_header_t>(); // 128 bytes
         let context_data_size = 64usize; // 64-byte aligned context & attractor metadata block
-        let edbc_size = core::mem::size_of::<gcso_edbc_state_t>(); // 64 bytes
+        let entropy_size = core::mem::size_of::<gcso_edbc_state_t>(); // 64 bytes
         let ledger_size = core::mem::size_of::<gcso_ledger_slot_t>(); // 64 bytes
 
-        let total_required = header_size + context_data_size + edbc_size + ledger_size; // 320 bytes
+        let total_required = header_size + context_data_size + entropy_size + ledger_size; // 320 bytes
 
         if buffer.is_empty() {
             *required_size = total_required;
@@ -1350,10 +1350,10 @@ impl RuntimeContext {
         buffer[..total_required].fill(0);
 
         let substrate_off = header_size; // 128
-        let edbc_off = substrate_off + context_data_size; // 192
-        let ledger_off = edbc_off + edbc_size; // 256
+        let entropy_off = substrate_off + context_data_size; // 192
+        let ledger_off = entropy_off + entropy_size; // 256
 
-        let ctx_buf = &mut buffer[substrate_off..edbc_off];
+        let ctx_buf = &mut buffer[substrate_off..entropy_off];
         ctx_buf[0..8].copy_from_slice(&self.substrate.step_counter.to_le_bytes());
         ctx_buf[8..12].copy_from_slice(&self.substrate.active_count.to_le_bytes());
         let sys_anchors = self.attractor_space.system_field().active_count();
@@ -1367,8 +1367,8 @@ impl RuntimeContext {
         ctx_buf[24..32].copy_from_slice(&self.substrate.coupling_matrix_8x8.to_le_bytes());
         f32::write_unaligned_slice_to(&self.substrate.slot_weights, ctx_buf, 32)?;
 
-        let edbc_state = self.entropy_controller.state();
-        edbc_state.write_unaligned_to(buffer, edbc_off)?;
+        let entropy_state = self.entropy_controller.state();
+        entropy_state.write_unaligned_to(buffer, entropy_off)?;
         self.substrate
             .ledger_slot
             .write_unaligned_to(buffer, ledger_off)?;
@@ -1376,9 +1376,9 @@ impl RuntimeContext {
         let mut header = init_snapshot_header(total_required as u64, 1_774_900_000);
         header.action_hub_offset = substrate_off as u64;
         header.attractor_field_offset = substrate_off as u64;
-        header.dpsr_state_offset = edbc_off as u64;
-        header.rank1_state_offset = edbc_off as u64;
-        header.edbc_state_offset = edbc_off as u64;
+        header.dpsr_state_offset = entropy_off as u64;
+        header.rank1_state_offset = entropy_off as u64;
+        header.edbc_state_offset = entropy_off as u64;
         header.ledger_slot_offset = ledger_off as u32;
         finalize_snapshot_header_crc32(&mut header, &buffer[..total_required])?;
 
@@ -1408,10 +1408,10 @@ impl RuntimeContext {
         verify_snapshot_payload_crc32(&header, buffer)?;
 
         let substrate_off = header.action_hub_offset as usize;
-        let edbc_off = header.edbc_state_offset as usize;
+        let entropy_off = header.edbc_state_offset as usize;
         let ledger_off = header.ledger_slot_offset as usize;
 
-        if substrate_off < header_size || edbc_off < substrate_off || ledger_off < edbc_off {
+        if substrate_off < header_size || entropy_off < substrate_off || ledger_off < entropy_off {
             return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
         }
 
@@ -1452,10 +1452,10 @@ impl RuntimeContext {
             }
         }
 
-        let edbc_size = core::mem::size_of::<gcso_edbc_state_t>();
-        if buffer.len() >= edbc_off + edbc_size {
-            let edbc_st = gcso_edbc_state_t::read_unaligned_from(buffer, edbc_off)?;
-            self.entropy_controller = EntropyController::new(edbc_st);
+        let entropy_size = core::mem::size_of::<gcso_edbc_state_t>();
+        if buffer.len() >= entropy_off + entropy_size {
+            let entropy_st = gcso_edbc_state_t::read_unaligned_from(buffer, entropy_off)?;
+            self.entropy_controller = EntropyController::new(entropy_st);
             self.entropy_controller
                 .set_hysteresis_band(self.config.hysteresis_band);
             self.entropy_controller.set_tau_flux(self.config.tau_flux);
@@ -1737,10 +1737,10 @@ impl RuntimeContext {
         );
 
         // 2. Evaluate stability / anomaly trigger with dwell hysteresis and slide slots in/out.
-        let edbc_st = self.entropy_controller.state();
+        let entropy_st = self.entropy_controller.state();
         let mut trigger = HorizonTriggerInput {
-            entropy_gate_mode: edbc_st.active_branch_mode,
-            moving_z_entropy: edbc_st.moving_z_entropy,
+            entropy_gate_mode: entropy_st.active_branch_mode,
+            moving_z_entropy: entropy_st.moving_z_entropy,
             repulsion_severity: frame.repulsion_severity,
             causal_root_cause: frame.dominant_cause_code,
             epistemic_regime: self.last_horizon.regime_code,
@@ -1818,13 +1818,19 @@ impl RuntimeContext {
                     let mut q7_stack = AlignedBuffer16::new([0i8; MAX_ATTENTION_HEADS]);
                     store_q7_words_64(&mut q7_stack.data, &final_w);
                     let p_aligned = AlignedSlice16::new(&q7_stack.data[..num_heads])?;
-                    self.phase_steering.apply_phase_steering_for_geometry_safe(
-                        geometry,
-                        q,
-                        &p_aligned,
-                        frame.ripa_clamp_rad,
-                    )?;
-                    steered = true;
+                    if let Some(active_deltas) = Scoped::from_boundary(PhaseDeltaSlice(p_aligned))
+                        .cut_by_lacuna(frame.ripa_clamp_rad > 0.0, frame.ripa_clamp_rad, 0.0)
+                        .into_active()
+                    {
+                        self.phase_steering
+                            .apply_phase_steering_for_geometry_safe_active(
+                                geometry,
+                                q,
+                                active_deltas,
+                                frame.ripa_clamp_rad,
+                            )?;
+                        steered = true;
+                    }
                 }
             }
         }
@@ -1852,7 +1858,8 @@ impl RuntimeContext {
             quiescent_dwell,
             qos_throttled,
         );
-        let exit_ent_q7 = (branchless_clamp_f32(edbc_st.moving_z_entropy, 0.0, 1.0) * 127.0) as u8;
+        let exit_ent_q7 =
+            (branchless_clamp_f32(entropy_st.moving_z_entropy, 0.0, 1.0) * 127.0) as u8;
         let guard_prox_q7 =
             (branchless_clamp_f32(frame.repulsion_severity, 0.0, 1.0) * 127.0) as u8;
         let active_overdrive = matches!(step_decision, StigmergicActionDecision::RepulsionEscape)
@@ -1891,14 +1898,14 @@ impl RuntimeContext {
             &self.last_boundary_delta,
             &self.last_overlap_report,
             &self.core_layers.ego_layer,
-            edbc_st.active_branch_mode,
+            entropy_st.active_branch_mode,
             slid_in,
             slid_out,
             escalated,
             qos_throttled,
         );
         let _ = self.telemetry.update_assimilation_ema(
-            edbc_st.moving_z_entropy,
+            entropy_st.moving_z_entropy,
             frame.fact_persona_coherence,
             frame.repulsion_severity,
             &self.probe_baseline,

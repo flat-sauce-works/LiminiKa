@@ -1,15 +1,13 @@
 // name: src/core/src/liminal/axiom/lacuna.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Pure finite observation gap classification (`Unobserved`, `SelfRef`, `Exterior`, `Undefined`)
-//! and Hot-Path register-packed 8-granule reading ([`PackedLacuna8`]).
+//! Pure finite observation gap classification (`Unobserved`, `SelfRef`, `Exterior`, `Undefined`).
 //!
-//! This module depends strictly on `core` and Layer 0 constants/selectors; it carries no
+//! This module depends strictly on `core` and Layer 0 selectors; it carries no
 //! dependency on boundary typestate markers or bit-partition wrappers.
 
 #![forbid(unsafe_code)]
 
-use crate::liminal::constants::NUM_STIGMERGIC_GRANULES;
 use crate::liminal::select::branchless_select_u8;
 
 /// Structured 4-state finite observation reading distinguishing normal non-observation
@@ -109,64 +107,6 @@ pub const fn classify_lacuna_code_q7(observed: bool, delta_q7: u8, eps_self_q7: 
     branchless_select_u8(observed, active_code, Lacuna::Unobserved as u8)
 }
 
-/// Hot-Path register-friendly packed representation of 8 granule [`Lacuna`] readings.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct PackedLacuna8 {
-    /// Bitmask of observed granules (`bit g == 1` means granule `g` was observed).
-    pub observed_mask: u8,
-    /// Per-granule unsigned distance from gauge origin in Q0.7 (`0..=127`).
-    pub delta_q7: [u8; NUM_STIGMERGIC_GRANULES],
-}
-
-impl PackedLacuna8 {
-    /// Constructs a new packed 8-granule lacuna reading.
-    #[inline(always)]
-    #[must_use]
-    pub const fn new(observed_mask: u8, delta_q7: [u8; NUM_STIGMERGIC_GRANULES]) -> Self {
-        Self {
-            observed_mask,
-            delta_q7,
-        }
-    }
-
-    /// Returns `true` when granule `granule_idx` (`0..8`) is marked as observed.
-    #[inline(always)]
-    #[must_use]
-    pub const fn is_observed(&self, granule_idx: usize) -> bool {
-        let bit = 1u8 << (granule_idx & (NUM_STIGMERGIC_GRANULES - 1));
-        (self.observed_mask & bit) != 0
-    }
-
-    /// Classifies granule `granule_idx` (`0..8`) against Q0.7 self-reference deadband `eps_self_q7`.
-    #[inline(always)]
-    #[must_use]
-    pub const fn classify_granule(&self, granule_idx: usize, eps_self_q7: u8) -> Lacuna {
-        let idx = granule_idx & (NUM_STIGMERGIC_GRANULES - 1);
-        Lacuna::from_q7(self.is_observed(idx), self.delta_q7[idx], eps_self_q7)
-    }
-
-    /// Branchlessly partitions all 8 granules into `(unobserved_mask, self_ref_mask, exterior_mask)`.
-    #[inline]
-    #[must_use]
-    pub const fn measure_masks(&self, eps_self_q7: u8) -> (u8, u8, u8) {
-        let mut self_ref_mask = 0u8;
-        let mut exterior_mask = 0u8;
-        let mut g = 0usize;
-        while g < NUM_STIGMERGIC_GRANULES {
-            let bit = 1u8 << g;
-            let obs = (self.observed_mask & bit) != 0;
-            let is_self = obs & (self.delta_q7[g] <= eps_self_q7);
-            let is_ext = obs & (self.delta_q7[g] > eps_self_q7);
-            self_ref_mask |= branchless_select_u8(is_self, bit, 0);
-            exterior_mask |= branchless_select_u8(is_ext, bit, 0);
-            g += 1;
-        }
-        let unobserved_mask = !self.observed_mask;
-        (unobserved_mask, self_ref_mask, exterior_mask)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,22 +142,5 @@ mod tests {
         assert_eq!(Lacuna::from_code(2), Lacuna::Exterior);
         assert_eq!(Lacuna::from_code(3), Lacuna::Undefined);
         assert_eq!(Lacuna::from_code(255), Lacuna::Undefined);
-    }
-
-    #[test]
-    fn test_packed_lacuna8_masks() {
-        let reading = PackedLacuna8::new(0b0011_0101, [2, 10, 4, 80, 3, 20, 0, 12]);
-        assert_eq!(reading.classify_granule(0, 4), Lacuna::SelfRef);
-        assert_eq!(reading.classify_granule(1, 4), Lacuna::Unobserved);
-        assert_eq!(reading.classify_granule(5, 4), Lacuna::Exterior);
-
-        let (unobs_m, self_m, ext_m) = reading.measure_masks(4);
-        assert_eq!(unobs_m, 0b1100_1010);
-        assert_eq!(self_m, 0b0001_0101);
-        assert_eq!(ext_m, 0b0010_0000);
-        assert_eq!(unobs_m | self_m | ext_m, 0xFF);
-        assert_eq!(unobs_m & self_m, 0);
-        assert_eq!(self_m & ext_m, 0);
-        assert_eq!(unobs_m & ext_m, 0);
     }
 }

@@ -11,12 +11,14 @@
 #![deny(missing_docs)]
 
 pub mod axiom;
+pub mod bitcut;
 pub mod constants;
 pub mod partition;
 pub mod select;
 pub mod threshold;
 
 pub use self::axiom::*;
+pub use self::bitcut::{BitCut, BitCut32, BitCut64, BitCut8};
 pub use self::constants::*;
 pub use self::partition::*;
 pub use self::select::*;

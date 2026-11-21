@@ -120,8 +120,7 @@ impl RawPhaseProjectable for AbiF32EmbeddingRef<'_> {
 /// Private zero-copy borrowed [`ContrastivePhaseBloomFilter`] guard wrapper inside `abi::dispatch`
 /// implementing [`CausalProvenanceSignal`], [`CognitiveGroundingSignal`], and
 /// [`ContradictionGuardSignal`] without colliding with blanket implementations on
-/// [`ContradictionGuard`] in `gateway.rs`. Note: `Liminal` is automatically
-/// provided via the universal blanket `impl<T: ?Sized> Liminal for T {}` in `liminal/mod.rs`.
+/// [`ContradictionGuard`].
 #[derive(Clone, Copy)]
 pub(super) struct AbiBorrowedBloomGuard<'a> {
     bloom: &'a ContrastivePhaseBloomFilter,
@@ -856,7 +855,7 @@ pub(super) unsafe fn mut_phase64_from_raw<'a>(
 
 /// Validates a `PhaseSteeringEngine` configuration from `(head_dim, num_heads)` and returns `(engine, total_elements)`.
 #[inline(always)]
-pub(super) fn init_dpsr_engine(
+pub(super) fn init_phase_engine(
     head_dim: usize,
     num_heads: usize,
 ) -> GcsoResult<(PhaseSteeringEngine, usize)> {
@@ -899,7 +898,7 @@ pub(super) unsafe fn bind_qk_32<'a>(
     Option<AlignedSliceMut32<'a, f32>>,
 )> {
     validate_ptr_aligned(query_tensor, 32)?;
-    let (engine, total_len) = init_dpsr_engine(head_dim, num_heads)?;
+    let (engine, total_len) = init_phase_engine(head_dim, num_heads)?;
     // SAFETY: `AlignedSliceMut32` validates non-nullness and 32-byte alignment.
     let (q_aligned, k_opt) = unsafe {
         (

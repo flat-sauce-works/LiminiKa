@@ -33,8 +33,13 @@ DAG_AND_AXIOM_RULES: list[tuple[str, str, re.Pattern[str]]] = [
         "Lv.1 foundation -> liminal::axiom / Scoped",
         "foundation",
         re.compile(
-            r"\b(?:liminal::axiom\b|Scoped\s*<|Scoped::|ScopedCut\b|Indivisible\s*<|Indivisible::|Indivisible\b|IndivisiblePhase\b|\bAbstractDomain\b|Activatable\b|Groundable\b|ActiveScope\b|GroundedScope\b|GroundedOrigin\b|SpeculativeDiscovery\b|BoundaryViolation\b|VerifiedAligned\b|BridgedDiscovery\b)"
+            r"\b(?:liminal::axiom\b|liminal::bitcut\b|BitCut(?:8|32|64)?\b|Scoped\s*<|Scoped::|ScopedCut\b|Indivisible\s*<|Indivisible::|Indivisible\b|IndivisiblePhase\b|\bAbstractDomain\b|Activatable\b|Groundable\b|ActiveScope\b|GroundedScope\b|GroundedOrigin\b|SpeculativeDiscovery\b|BoundaryViolation\b|VerifiedAligned\b|BridgedDiscovery\b)"
         ),
+    ),
+    (
+        "Lv.0 liminal/axiom -> bitcut",
+        "liminal/axiom",
+        re.compile(r"\b(?:bitcut|BitCut(?:8|32|64)?)\b"),
     ),
     (
         "Lv.2 stigmergy -> Lv.3..4",
@@ -67,7 +72,7 @@ DAG_AND_AXIOM_RULES: list[tuple[str, str, re.Pattern[str]]] = [
         "Lv.0 axiom/lacuna -> axiom/cut",
         "liminal/axiom/lacuna.rs",
         re.compile(
-            r"\b(?:(?:super::)+|axiom::|liminal::)cut\b|\b(?:Scoped|ScopedCut|Indivisible|IndivisiblePhase|Activatable|Groundable|BitCut8|BitCut32|ActiveScope|GroundedScope|Cuttable|Definite|BoundaryViolation|SpeculativeDiscovery)\b"
+            r"\b(?:(?:super::)+|axiom::|liminal::)cut\b|\b(?:Scoped|ScopedCut|Indivisible|IndivisiblePhase|Activatable|Groundable|ActiveScope|GroundedScope|Cuttable|Definite|BoundaryViolation|SpeculativeDiscovery)\b"
         ),
     ),
 ]

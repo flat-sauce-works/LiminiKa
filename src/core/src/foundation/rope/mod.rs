@@ -75,7 +75,7 @@ use crate::foundation::swar_simd::{
     swar_q7_scale_u7_x8, swar_u8_sum_x8,
 };
 use crate::liminal::{
-    branchless_select_f32, gcso_q7_t, GcsoResult, Liminal, GCSO_ERROR_EDBC_SINGULARITY,
+    branchless_select_f32, gcso_q7_t, GcsoResult, GCSO_ERROR_EDBC_SINGULARITY,
     GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER, MAX_ATTENTION_HEADS,
     MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
 };

@@ -6,7 +6,7 @@
 
 #![forbid(unsafe_code)]
 
-use crate::liminal::axiom::BitCut8;
+use crate::liminal::bitcut::BitCut8;
 use crate::liminal::constants::{AttributionTag, NUM_STIGMERGIC_GRANULES};
 use crate::liminal::select::branchless_select_u8;
 

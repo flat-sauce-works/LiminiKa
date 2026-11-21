@@ -1,7 +1,7 @@
 // name: src/core/src/liminal/axiom/cut.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Pure unbounded boundary composition axioms (`Refine<O, I>`, `BitCut8`, `BitCut32`),
+//! Pure unbounded boundary composition axioms (`Refine<O, I>`),
 //! two-axis sealed scope trait algebra (`Cuttable` x `Definite`, `Activatable`, `GroundedOrigin`,
 //! `Groundable`, `IndivisiblePhase`), zero-overhead [`Scoped<O, T>`] coordinate wrapper, and
 //! non-cuttable [`Indivisible<C, T>`] closure wrapper (`Active`, `Grounded`).
@@ -12,8 +12,7 @@
 //! distinguishes cuttable entity phase from non-cuttable converged phase:
 //! - **Axis 1 (`Cuttable` — Spatial Partitioning)**: Zero-sized markers (`FromBoundary`,
 //!   `FromDelta`, `Interior`, `Shared`, `Exterior`, `Unmarked`) composed recursively
-//!   via [`Refine<O, I>`] (`0` bytes), plus branchless runtime bit-cuts ([`BitCut8`],
-//!   [`BitCut32`]). [`Unmarked`] permits further spatial cutting while withholding force;
+//!   via [`Refine<O, I>`] (`0` bytes). [`Unmarked`] permits further spatial cutting while withholding force;
 //!   [`Bottom`] and sealed closures ([`Active`], [`Grounded`]) are not [`Cuttable`] and cannot
 //!   inhabit [`Scoped<O, T>`].
 //! - **Axis 2 (`Definite` — Force Authorization)**: [`Scoped<O, T>`] (`#[repr(transparent)]`,
@@ -432,170 +431,6 @@ impl<C: IndivisiblePhase, T: AbstractDomain> Indivisible<C, T> {
     }
 }
 
-// ===================================================================
-// 4. Branchless Runtime Atomic Bit-Cuts (`BitCut8` & `BitCut32`)
-// ===================================================================
-
-/// Branchless 8-bit atomic partition separating a bit-universe into disjoint `inside` and
-/// `outside` subsets (`2` bitwise instructions, `0` allocations).
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct BitCut8 {
-    /// Subset retained inside the cut (`universe & mask`).
-    pub inside: u8,
-    /// Complement excluded outside the cut (`universe & !mask`).
-    pub outside: u8,
-}
-
-impl BitCut8 {
-    /// Splits `universe` branchlessly along `mask` into `(universe & mask, universe & !mask)`.
-    #[inline(always)]
-    #[must_use]
-    pub const fn split(universe: u8, mask: u8) -> Self {
-        Self {
-            inside: universe & mask,
-            outside: universe & !mask,
-        }
-    }
-
-    /// Recursively refines both `inside` and `outside` halves by `next_mask`, yielding four
-    /// mutually disjoint quadrants.
-    #[inline(always)]
-    #[must_use]
-    pub const fn refine(self, next_mask: u8) -> (Self, Self) {
-        (
-            Self::split(self.inside, next_mask),
-            Self::split(self.outside, next_mask),
-        )
-    }
-
-    /// Returns the shared intersection of two cuts (`self.inside & other.inside`).
-    #[inline(always)]
-    #[must_use]
-    pub const fn intersect(self, other: Self) -> u8 {
-        self.inside & other.inside
-    }
-
-    /// Returns the bits inside `self` that lie outside `other` (`self.inside & other.outside`).
-    #[inline(always)]
-    #[must_use]
-    pub const fn excess_over(self, other: Self) -> u8 {
-        self.inside & other.outside
-    }
-
-    /// Returns the symmetric boundary difference (`self.inside ^ other.inside`).
-    #[inline(always)]
-    #[must_use]
-    pub const fn symmetric_diff(self, other: Self) -> u8 {
-        self.inside ^ other.inside
-    }
-
-    /// Returns `true` when `self.inside` differs from `prev.inside` on at least one bit.
-    #[inline(always)]
-    #[must_use]
-    pub const fn has_novel_boundary(self, prev: Self) -> bool {
-        (self.inside ^ prev.inside) != 0
-    }
-
-    /// Returns the joint blindspot excluded by both cuts (`self.outside & other.outside`).
-    #[inline(always)]
-    #[must_use]
-    pub const fn blindspot_mask(self, other: Self) -> u8 {
-        self.outside & other.outside
-    }
-
-    /// Composes two same-origin prohibition cuts via De Morgan duality
-    /// (`inside = self.inside | other.inside`, `outside = self.outside & other.outside`).
-    #[inline(always)]
-    #[must_use]
-    pub const fn union_prohibited(self, other: Self) -> Self {
-        Self {
-            inside: self.inside | other.inside,
-            outside: self.outside & other.outside,
-        }
-    }
-}
-
-/// Branchless 32-bit atomic partition separating a bit-universe into disjoint `inside` and
-/// `outside` subsets (`2` bitwise instructions, `0` allocations).
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct BitCut32 {
-    /// Subset retained inside the cut (`universe & mask`).
-    pub inside: u32,
-    /// Complement excluded outside the cut (`universe & !mask`).
-    pub outside: u32,
-}
-
-impl BitCut32 {
-    /// Splits `universe` branchlessly along `mask` into `(universe & mask, universe & !mask)`.
-    #[inline(always)]
-    #[must_use]
-    pub const fn split(universe: u32, mask: u32) -> Self {
-        Self {
-            inside: universe & mask,
-            outside: universe & !mask,
-        }
-    }
-
-    /// Recursively refines both `inside` and `outside` halves by `next_mask`, yielding four
-    /// mutually disjoint quadrants.
-    #[inline(always)]
-    #[must_use]
-    pub const fn refine(self, next_mask: u32) -> (Self, Self) {
-        (
-            Self::split(self.inside, next_mask),
-            Self::split(self.outside, next_mask),
-        )
-    }
-
-    /// Returns the shared intersection of two cuts (`self.inside & other.inside`).
-    #[inline(always)]
-    #[must_use]
-    pub const fn intersect(self, other: Self) -> u32 {
-        self.inside & other.inside
-    }
-
-    /// Returns the bits inside `self` that lie outside `other` (`self.inside & other.outside`).
-    #[inline(always)]
-    #[must_use]
-    pub const fn excess_over(self, other: Self) -> u32 {
-        self.inside & other.outside
-    }
-
-    /// Returns the symmetric boundary difference (`self.inside ^ other.inside`).
-    #[inline(always)]
-    #[must_use]
-    pub const fn symmetric_diff(self, other: Self) -> u32 {
-        self.inside ^ other.inside
-    }
-
-    /// Returns `true` when `self.inside` differs from `prev.inside` on at least one bit.
-    #[inline(always)]
-    #[must_use]
-    pub const fn has_novel_boundary(self, prev: Self) -> bool {
-        (self.inside ^ prev.inside) != 0
-    }
-
-    /// Returns the joint blindspot excluded by both cuts (`self.outside & other.outside`).
-    #[inline(always)]
-    #[must_use]
-    pub const fn blindspot_mask(self, other: Self) -> u32 {
-        self.outside & other.outside
-    }
-
-    /// Composes two same-origin prohibition cuts via De Morgan duality
-    /// (`inside = self.inside | other.inside`, `outside = self.outside & other.outside`).
-    #[inline(always)]
-    #[must_use]
-    pub const fn union_prohibited(self, other: Self) -> Self {
-        Self {
-            inside: self.inside | other.inside,
-            outside: self.outside & other.outside,
-        }
-    }
-}
-
 const _: () = {
     assert!(size_of::<FromBoundary>() == 0);
     assert!(size_of::<FromDelta>() == 0);
@@ -613,8 +448,6 @@ const _: () = {
     assert!(size_of::<Indivisible<Active, u64>>() == size_of::<u64>());
     assert!(size_of::<Indivisible<Grounded, u64>>() == size_of::<u64>());
     assert!(size_of::<VerifiedAligned<u64>>() == size_of::<u64>());
-    assert!(size_of::<BitCut8>() == 2);
-    assert!(size_of::<BitCut32>() == 8);
 };
 
 #[cfg(test)]
@@ -643,56 +476,6 @@ mod tests {
         assert_eq!(*unmarked.as_ref(), 42);
         assert_eq!(unmarked.into_inner(), 42);
         assert_eq!(relaxed.into_inner(), 42);
-    }
-
-    #[test]
-    fn test_bit_cut8_and_bit_cut32_quadrant_and_cross_ops() {
-        let cut_a = BitCut8::split(0xFF, 0b0011_0101);
-        let cut_b = BitCut8::split(0xFF, 0b0101_0011);
-
-        assert_eq!(cut_a.intersect(cut_b), 0b0001_0001);
-        assert_eq!(cut_a.excess_over(cut_b), 0b0010_0100);
-        assert_eq!(cut_b.excess_over(cut_a), 0b0100_0010);
-        assert_eq!(cut_a.blindspot_mask(cut_b), 0b1000_1000);
-        assert_eq!(cut_a.symmetric_diff(cut_b), 0b0110_0110);
-        assert!(cut_a.has_novel_boundary(cut_b));
-        assert!(!cut_a.has_novel_boundary(cut_a));
-
-        let (in_self, out_self) = cut_a.refine(0b0101_0011);
-        assert_eq!(in_self.inside, cut_a.intersect(cut_b));
-        assert_eq!(in_self.outside, cut_a.excess_over(cut_b));
-        assert_eq!(out_self.inside, cut_b.excess_over(cut_a));
-        assert_eq!(out_self.outside, cut_a.blindspot_mask(cut_b));
-        assert_eq!(
-            in_self.inside | in_self.outside | out_self.inside | out_self.outside,
-            0xFF
-        );
-
-        let c32_a = BitCut32::split(0xFFFF_00FF, 0x0F0F_0F0F);
-        let c32_b = BitCut32::split(0xFFFF_00FF, 0x00FF_00FF);
-        assert_eq!(c32_a.intersect(c32_b), 0x000F_000F);
-        assert_eq!(c32_a.excess_over(c32_b), 0x0F00_0000);
-        assert_eq!(c32_b.excess_over(c32_a), 0x00F0_00F0);
-        assert_eq!(c32_a.blindspot_mask(c32_b), 0xF000_0000);
-        assert_eq!(c32_a.symmetric_diff(c32_b), 0x0FF0_00F0);
-        assert!(c32_a.has_novel_boundary(c32_b));
-        assert!(!c32_a.has_novel_boundary(c32_a));
-
-        let (c_in, c_out) = c32_a.refine(0x00FF_00FF);
-        assert_eq!(
-            c_in.inside | c_in.outside | c_out.inside | c_out.outside,
-            0xFFFF_00FF
-        );
-        assert_eq!(c_in.inside & c_in.outside, 0);
-        assert_eq!(c_out.inside & c_out.outside, 0);
-
-        let composed8 = cut_a.union_prohibited(cut_b);
-        assert_eq!(composed8.inside, 0b0111_0111);
-        assert_eq!(composed8.outside, 0b1000_1000);
-
-        let composed32 = c32_a.union_prohibited(c32_b);
-        assert_eq!(composed32.inside, 0x0FFF_00FF);
-        assert_eq!(composed32.outside, 0xF000_0000);
     }
 
     #[test]

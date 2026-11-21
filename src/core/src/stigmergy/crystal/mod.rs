@@ -39,9 +39,9 @@ use crate::foundation::{
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_usize, gcso_q7_t, AbstractDomain, GcsoResult,
-    Grounded, Indivisible, DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_HEX, GCSO_ERROR_BUFFER_TOO_SMALL,
-    GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER,
-    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    Grounded, Indivisible, Scoped, DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_HEX,
+    GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT,
+    GCSO_ERROR_MISALIGNED_POINTER, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
 
 /// Zero-byte domain-tagged 64-head Q7 phase profile for grounded crystallization (`Grounded` phase).
@@ -62,6 +62,15 @@ impl AbstractDomain for PhaseProfileRef64<'_> {
     const DOMAIN_ID: &'static str = "stigmergy.phase_profile_ref_64";
 }
 
+/// Zero-byte domain-tagged borrowed 8-granule SWAR phase-word array for register-resident grounded absorption (`Grounded` phase).
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PhaseWordsRef64<'a>(pub &'a [u64; NUM_STIGMERGIC_GRANULES]);
+
+impl AbstractDomain for PhaseWordsRef64<'_> {
+    const DOMAIN_ID: &'static str = "stigmergy.phase_words_ref_64";
+}
+
 const _: () = {
     assert!(size_of::<Indivisible<Grounded, PhaseProfile64>>() == MAX_ATTENTION_HEADS);
     assert!(
@@ -75,6 +84,14 @@ const _: () = {
     assert!(
         align_of::<Indivisible<Grounded, PhaseProfileRef64<'static>>>()
             == align_of::<&[gcso_q7_t; MAX_ATTENTION_HEADS]>()
+    );
+    assert!(
+        size_of::<Indivisible<Grounded, PhaseWordsRef64<'static>>>()
+            == size_of::<&[u64; NUM_STIGMERGIC_GRANULES]>()
+    );
+    assert!(
+        align_of::<Indivisible<Grounded, PhaseWordsRef64<'static>>>()
+            == align_of::<&[u64; NUM_STIGMERGIC_GRANULES]>()
     );
 };
 use crate::stigmergy::{
@@ -642,12 +659,13 @@ impl CrystallizedAttractorRecord {
     pub(crate) fn absorb_sample_words_with_cur_coh_and_uni_unstamped(
         &mut self,
         cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
-        sample_w: &[u64; NUM_STIGMERGIC_GRANULES],
+        sample_w: Indivisible<Grounded, PhaseWordsRef64<'_>>,
         precomputed_coh_opt: Option<f32>,
         uni_flags_opt: Option<(bool, bool)>,
         sample_energy: f32,
         add_count: u32,
     ) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, bool) {
+        let sample_w = sample_w.into_inner().0;
         let clean_e = branchless_flush_subnormal_f32(branchless_relu_f32(sample_energy));
         if clean_e <= DEFAULT_ENTROPY_EPS || add_count == 0 {
             return (*cur_w, self.phase_gravity_mass, false);
@@ -803,10 +821,11 @@ impl CrystallizedAttractorRecord {
         let prev_w7_lo = self.pack_w7_lo();
         let cur_w = *self.phase_words_ref();
         let sample_w = load_q7_words_64(sample_phases.as_ref().0);
+        let grounded_w = Scoped::interior(PhaseWordsRef64(&sample_w)).into_grounded();
         let (next_w, mass, words_changed) = self
             .absorb_sample_words_with_cur_coh_and_uni_unstamped(
                 &cur_w,
-                &sample_w,
+                grounded_w,
                 None,
                 None,
                 sample_energy,

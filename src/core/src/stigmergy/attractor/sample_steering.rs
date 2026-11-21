@@ -14,14 +14,15 @@ use crate::foundation::{
     SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_i32, gcso_q7_t, GcsoResult, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS,
+    branchless_select_f32, branchless_select_i32, gcso_q7_t, GcsoResult, Scoped,
+    GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
 };
 use crate::stigmergy::attractor::{
     gcso_anchor_type_t, GCSO_ANCHOR_TYPE_CRYSTALLIZED, GCSO_ANCHOR_TYPE_EMBEDDING,
     GCSO_ANCHOR_TYPE_SYSTEM_PROMPT, GCSO_ANCHOR_TYPE_TOPOLOGICAL, MAX_EMBEDDING_DIM,
 };
 use crate::stigmergy::crystal::CrystallizedAttractorRecord;
+use crate::stigmergy::gate::{PhaseDeltaSlice, PhaseSteeringActiveExt};
 use crate::stigmergy::trail::{gcso_pointer_trail_t, gcso_tagged_ptr_t, trail_phase_words_ref};
 use crate::stigmergy::{
     ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, MAX_ATTRACTOR_PULL_FORCE,
@@ -593,8 +594,9 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
     /// the applied 64-head Q7 phase delta vector.
     ///
     /// # Errors
-    /// Propagates any error from [`PhaseSteering::apply_phase_steering_safe`] or
-    /// [`PhaseSteering::apply_phase_steering_fused_safe`].
+    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `ripa_max_rad` is non-finite or `<= 0.0`, or
+    /// propagates any error from [`PhaseSteeringActiveExt::apply_phase_steering_safe_active`] or
+    /// [`PhaseSteeringActiveExt::apply_phase_steering_fused_safe_active`].
     #[inline]
     fn steer_rope_tensors_direct<P: PhaseSteering + ?Sized>(
         &self,
@@ -605,13 +607,30 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> GcsoResult<[gcso_q7_t; MAX_ATTENTION_HEADS]> {
+        if !ripa_max_rad.is_finite() || ripa_max_rad <= 0.0 {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
         let phases = self.to_rope_phase_deltas(domain_salt, qdps_min_step_rad);
         let aligned_phases = AlignedBuffer16::new(phases);
         let phase_slice = aligned_phases.as_aligned_slice();
-        if let Some(k) = key_tensor {
-            engine.apply_phase_steering_fused_safe(query_tensor, k, &phase_slice, ripa_max_rad)?;
-        } else {
-            engine.apply_phase_steering_safe(query_tensor, &phase_slice, ripa_max_rad)?;
+        if let Some(active_deltas) = Scoped::from_boundary(PhaseDeltaSlice(phase_slice))
+            .cut_by_lacuna(true, ripa_max_rad, 0.0)
+            .into_active()
+        {
+            if let Some(k) = key_tensor {
+                engine.apply_phase_steering_fused_safe_active(
+                    query_tensor,
+                    k,
+                    active_deltas,
+                    ripa_max_rad,
+                )?;
+            } else {
+                engine.apply_phase_steering_safe_active(
+                    query_tensor,
+                    active_deltas,
+                    ripa_max_rad,
+                )?;
+            }
         }
         Ok(phases)
     }

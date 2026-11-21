@@ -1,41 +1,11 @@
 // name: src/core/src/liminal/threshold.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Root [`Liminal`] boundary supertrait, $4p(1-p)$ threshold sensitivity functions, and
-//! [`LiminalThresholdState`] (32 B).
+//! Threshold sensitivity functions ($4p(1-p)$) and [`LiminalThresholdState`] (32 B).
 
 #![forbid(unsafe_code)]
 
-use crate::liminal::axiom::BitCut32;
 use crate::liminal::constants::{NUM_LIMINAL_THRESHOLD_CHANNELS, THRESHOLD_STIGMERGY_WIDE};
-
-/// Root epistemic supertrait representing the boundary separating cognizable state from the
-/// unknowable exterior.
-///
-/// Every capability and signal trait in LiminiKa refines a specific cognitive threshold mask out of
-/// `Liminal`. Any axis outside a trait's active threshold (`!threshold_mask`) belongs strictly to the
-/// unknowable exterior.
-pub trait Liminal {
-    /// Splits `world_bits` branchlessly along `threshold_mask` via [`BitCut32::split`].
-    #[inline(always)]
-    fn cut_bits(&self, world_bits: u32, threshold_mask: u32) -> BitCut32 {
-        BitCut32::split(world_bits, threshold_mask)
-    }
-
-    /// Partitions `world_bits` into `(cognized_bits, unknowable_void_bits)` strictly branchlessly
-    /// for a trait's declared `threshold_mask` via [`Self::cut_bits`].
-    #[inline(always)]
-    fn partition_cognitive_and_unknowable_bits(
-        &self,
-        threshold_mask: u32,
-        world_bits: u32,
-    ) -> (u32, u32) {
-        let cut = self.cut_bits(world_bits, threshold_mask);
-        (cut.inside, cut.outside)
-    }
-}
-
-impl<T: ?Sized> Liminal for T {}
 
 /// Evaluates the branchless self-differentiable boundary sensitivity gate $4p(1-p)$ in Q0.7 (`0 fdiv`).
 ///

@@ -11,8 +11,8 @@
 
 use crate::foundation::{Pod, ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK};
 use crate::liminal::{
-    branchless_select_u8, AttributionTag, BitCut32, BitCut8, THRESHOLD_CONTRADICTION_GUARD,
-    THRESHOLD_SYSTEM_CONSTRAINT,
+    branchless_select_u8, AttributionTag, BitCut32, BitCut64, BitCut8,
+    THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_SYSTEM_CONSTRAINT,
 };
 use crate::stigmergy::{ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE};
 
@@ -183,7 +183,7 @@ impl SystemSpineState {
     #[must_use]
     pub const fn mask_layer_bypass_with_pinned(&self, raw_bypass_mask: u64, veto_mask: u8) -> u64 {
         let allow_mask = ((veto_mask == SPINE_BYPASS_VETO_NONE) as u64).wrapping_neg();
-        (raw_bypass_mask & !self.pinned_compute_mask) & allow_mask
+        BitCut64::split(raw_bypass_mask, self.pinned_compute_mask).outside & allow_mask
     }
 }
 

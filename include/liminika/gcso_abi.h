@@ -6,13 +6,13 @@
  * @brief Public C-ABI declarations for the LiminiKa Geometric Cellular Sheaf Orchestrator
  * (GCSO).
  *
- * This header defines the C11/C++20 FFI surface implemented by `src/core/src/abi/`.
+ * This header defines the C11/C++20 FFI surface implemented by `src/core/src/runtime/abi/`.
  * Function prefixes (`gcso_dpsr_*`, `gcso_edbc_*`, `gcso_srl_*`, `gcso_zimms_*`) map to the
  * Rust core modules as follows:
- * - `gcso_dpsr_*`  -> `liminika_core::phase_steering` (`PhaseSteeringEngine`)
- * - `gcso_edbc_*`  -> `liminika_core::entropy_control` (`EntropyController`)
- * - `gcso_srl_*`   -> `liminika_core::residual_adapter` (`ResidualAdapterEngine`)
- * - `gcso_zimms_*` -> `liminika_core::storage` (`MappedStorageEngine`)
+ * - `gcso_dpsr_*`  -> `liminika_core::foundation::rope` (`PhaseSteering`) / `stigmergy::gate` (`PhaseSteeringEngine`)
+ * - `gcso_edbc_*`  -> `liminika_core::drivers::spine::entropy` (`EntropyController`)
+ * - `gcso_srl_*`   -> `liminika_core::foundation::rank1_kernels` / `stigmergy::gate` (`ResidualAdapterEngine`)
+ * - `gcso_zimms_*` -> `liminika_core::runtime::storage` (`MappedStorageEngine`)
  */
 
 #ifndef LIMINIKA_GCSO_ABI_H
@@ -40,7 +40,7 @@ GCSO_EXTERN_C_BEGIN
 
 /**
  * @brief Retrieves the numeric version identifiers for the active GCSO C-ABI.
- * Corresponds to SystemCapabilityQuery trait in liminika_core::traits.
+ * Corresponds to `liminika_core::{abi_version, abi_version_hex}` (`runtime::abi`).
  * @param major Pointer to store the major version number (aligned to uint32_t).
  * @param minor Pointer to store the minor version number (aligned to uint32_t).
  * @param patch Pointer to store the patch version number (aligned to uint32_t).
@@ -52,7 +52,7 @@ gcso_abi_get_version(uint32_t* GCSO_RESTRICT major, uint32_t* GCSO_RESTRICT mino
 
 /**
  * @brief Returns the static semantic version string literal for the GCSO kernel engine.
- * Corresponds to SystemCapabilityQuery trait in liminika_core::traits.
+ * Corresponds to `liminika_core::runtime::abi_version_string`.
  * @return Const pointer to null-terminated static version string (`GCSO_ABI_VERSION_STRING`).
  */
 GCSO_NODISCARD GCSO_API const char* GCSO_CALL gcso_abi_get_version_string(void) GCSO_NOEXCEPT;
@@ -67,7 +67,7 @@ GCSO_NODISCARD GCSO_API const char* GCSO_CALL gcso_status_to_string(gcso_status_
 
 /**
  * @brief Queries current execution hardware capabilities and available compute backends.
- * Corresponds to SystemCapabilityQuery trait in liminika_core::traits.
+ * Corresponds to `liminika_core::runtime::query_capability`.
  * @param flags Pointer to store 64-bit bitmask capability flags.
  * @return GCSO_SUCCESS or error status code.
  */
@@ -76,7 +76,7 @@ gcso_abi_query_capability(gcso_capability_flags_t* GCSO_RESTRICT flags) GCSO_NOE
 
 /**
  * @brief Initializes a gcso_config_t structure with standard hardware and model defaults.
- * Corresponds to SystemCapabilityQuery trait in liminika_core::traits.
+ * Corresponds to `liminika_core::runtime::init_default_config`.
  * @param config Pointer to the user-allocated configuration descriptor to populate (16-byte
  * aligned).
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER / GCSO_ERROR_MISALIGNED_POINTER.
@@ -102,7 +102,7 @@ GCSO_API void GCSO_CALL gcso_free_string(const char* str_ptr) GCSO_NOEXCEPT;
 
 /**
  * @brief Allocates and initializes a new GCSO execution context facade instance.
- * Corresponds to GcsoRuntimeContext trait in liminika_core::traits.
+ * Corresponds to `RuntimeContext::new` in `liminika_core::runtime::context`.
  * @param config Pointer to initialized runtime configuration structure (16-byte aligned).
  * @param context_out Pointer to receive the strongly-typed runtime context handle.
  * @return GCSO_SUCCESS or error code.
@@ -113,7 +113,7 @@ gcso_context_create(const gcso_config_t* GCSO_RESTRICT config,
 
 /**
  * @brief Resets transient state variables and phase accumulators without freeing allocated tables.
- * Corresponds to GcsoRuntimeContext::reset in liminika_core::traits.
+ * Corresponds to `RuntimeContext::reset` in `liminika_core::runtime::context`.
  * @param context Handle to the active runtime context (safe no-op if NULL).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
@@ -122,7 +122,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_context_reset(gcso_context_
 
 /**
  * @brief Primary Baseline Endpoint: Projects natural language system prompt text as an Anchor
- * Attractor. Corresponds to GcsoRuntimeContext::set_system_prompt_anchor in liminika_core::traits.
+ * Attractor. Corresponds to `RuntimeContext::set_system_prompt_anchor` in `runtime::context`.
  * @param context Active context handle.
  * @param prompt_text Null-terminated UTF-8 system prompt string.
  * @param weight Attractor pull force scale.
@@ -135,7 +135,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_context_set_system_prompt_a
 /**
  * @brief Executes per-token Hot Path inference step in zero-allocation mode.
  * Applies DPSR phase steering, QDPS step filtering, and updates pointer trails in O(1) time.
- * Corresponds to GcsoRuntimeContext::step_token in liminika_core::traits.
+ * Corresponds to `RuntimeContext::step_token` in `liminika_core::runtime::context`.
  * @param context Active runtime context handle.
  * @param token_id Input token sequence ID.
  * @param query_tensor 32-byte aligned query tensor buffer to modulate in-place (size: head_dim *
@@ -150,7 +150,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_context_step_token(
 
 /**
  * @brief Serializes runtime state into a binary .gcso snapshot format.
- * Corresponds to GcsoRuntimeContext::serialize in liminika_core::traits.
+ * Corresponds to `RuntimeContext::serialize_to_bytes` in `liminika_core::runtime::context`.
  * @param context Active runtime context handle.
  * @param buffer Target byte buffer (pass NULL to query required size).
  * @param buffer_size Pointer to buffer size variable (in/out).
@@ -162,7 +162,7 @@ gcso_context_serialize(gcso_context_handle_t context, uint8_t* GCSO_RESTRICT buf
 
 /**
  * @brief Deserializes a binary .gcso snapshot to restore context runtime state.
- * Corresponds to GcsoRuntimeContext::deserialize in liminika_core::traits.
+ * Corresponds to `RuntimeContext::deserialize_from_bytes` in `liminika_core::runtime::context`.
  * @param buffer Memory-mapped or allocated input snapshot buffer.
  * @param buffer_size Byte size of input snapshot buffer.
  * @param context_out Pointer to receive restored context handle.
@@ -174,7 +174,7 @@ gcso_context_deserialize(const uint8_t* GCSO_RESTRICT buffer, size_t buffer_size
 
 /**
  * @brief Seeks to a specific token index in the KV-keyframe keyframe KV cache.
- * Corresponds to KvKeyframeCache / GcsoRuntimeContext::seek_to_token in liminika_core::traits.
+ * Corresponds to `KvKeyframeCache::seek_to_token` in `liminika_core::runtime::storage`.
  * @param context Active context handle.
  * @param token_index Target token index to seek to.
  * @param keyframe_header_out Pointer to receive resulting keyframe header structure (32-byte
@@ -213,7 +213,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_container_close(gcso_container_handle_t ha
 
 /**
  * @brief Allocates an Action Hub (Sidecar Pointer Table) instance.
- * Corresponds to PointerActionHub trait in liminika_core::traits.
+ * Corresponds to `PointerSubstrate` (`stigmergy::trail`) and `StigmergicSubstrate` (`stigmergy::substrate`).
  * @param capacity Slot capacity count for tagged pointers.
  * @param hub_out Pointer to receive allocated action hub handle.
  * @return GCSO_SUCCESS or error code.
@@ -252,7 +252,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_orchestrate_stig
 
 /**
  * @brief Advances a 64-bit tagged pointer transition in O(1) time within the Action Hub.
- * Corresponds to PointerActionHub::step_pointer in liminika_core::traits.
+ * Corresponds to `PointerSubstrate::step_pointer` in `liminika_core::stigmergy::trail`.
  * @param context Active runtime context handle.
  * @param current_ptr Encoded 64-bit tagged pointer address.
  * @param trail_out Pointer to receive updated pointer trail structure (128-byte aligned).
@@ -274,7 +274,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_resolve_trail_in
 
 /**
  * @brief Computes direct 256-slot hash index for 64-bit pointer trail caching using SplitMix64.
- * Corresponds to PointerActionHub::hash_slot256_index in liminika_core::traits.
+ * Corresponds to `PointerSubstrate::hash_slot256_index` in `liminika_core::stigmergy::trail`.
  * @param ptr Raw 64-bit pointer address.
  * @return 8-bit hash index (0 to 255).
  */
@@ -283,7 +283,7 @@ GCSO_NODISCARD GCSO_API uint32_t GCSO_CALL gcso_action_hub_hash_slot256_index(ui
 
 /**
  * @brief Updates local cellular swarm cell state across PagedBlock token chunk boundaries.
- * Corresponds to SwarmCellChunk trait in liminika_core::traits.
+ * Corresponds to `stigmergy::trail::update_swarm_cell_chunk` in `liminika_core`.
  * @param context Active context handle.
  * @param mask Paged bitmask structure pointer (32-byte aligned).
  * @param chunk_len Sequence length of target chunk.
@@ -295,7 +295,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_swarm_cell_chunk_step(
 
 /**
  * @brief Applies attractor pull force F_pull to steer active pointer chains toward target anchor.
- * Corresponds to PointerActionHub::pull_trail_to_attractor in liminika_core::traits.
+ * Corresponds to `PointerSubstrate::pull_trail_to_attractor` in `liminika_core::stigmergy::trail`.
  * @param context Active runtime context handle.
  * @param trail_id Source pointer trail index.
  * @param anchor_id Target anchor identifier.
@@ -308,7 +308,7 @@ gcso_action_hub_pull_trail_to_attractor(gcso_context_handle_t context, uint32_t 
 
 /**
  * @brief Links adjacent cellular hallucinated trails into contiguous stigmergic trace graphs.
- * Corresponds to PointerActionHub::link_hallucinated_trails in liminika_core::traits.
+ * Corresponds to `PointerSubstrate::link_hallucinated_trails` in `liminika_core::stigmergy::trail`.
  * @param context Active context handle.
  * @param src_trail_id Source trail identifier.
  * @param dst_trail_id Destination trail identifier.
@@ -319,7 +319,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_link_hallucinate
 
 /**
  * @brief Performs hierarchical bit-tree reduction across paged block bitmasks.
- * Corresponds to PointerActionHub::reduce_bit_tree in liminika_core::traits.
+ * Corresponds to `PointerSubstrate::reduce_bit_tree` in `liminika_core::stigmergy::trail`.
  * @param bitmasks Array of input paged bitmasks (32-byte aligned).
  * @param num_masks Number of masks in input array.
  * @param reduced_out Pointer to receive reduced bitmask result (32-byte aligned).
@@ -331,7 +331,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_reduce_bit_tree(
 
 /**
  * @brief Evaluates SIMD/Warp bitmask reduction over PagedBlock KV caches.
- * Corresponds to PointerActionHub::paged_block_warp_bitmask in liminika_core::traits.
+ * Corresponds to `PointerSubstrate::paged_block_warp_bitmask` in `liminika_core::stigmergy::trail`.
  * @param kv_bits Raw uint64_t array of block key-value bit patterns.
  * @param num_blocks Total number of KV blocks to process.
  * @param mask_out Pointer to store generated paged bitmask (32-byte aligned).
@@ -351,7 +351,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_action_hub_destroy(gcso_action_hub_handle_
 
 /**
  * @brief Allocates and initializes a ledger slot.
- * Corresponds to FastPathLedger trait in liminika_core::traits.
+ * Corresponds to `FastPathLedger` trait in `liminika_core::stigmergy::ledger`.
  * @param slot_out Pointer to receive allocated ledger slot handle.
  * @return GCSO_SUCCESS or error status code.
  */
@@ -360,7 +360,7 @@ gcso_ledger_slot_create(gcso_ledger_slot_handle_t* GCSO_RESTRICT slot_out) GCSO_
 
 /**
  * @brief Resets active FastPathLedger telemetry mini ledger and cache hit counters in-place.
- * Corresponds to FastPathLedger::reset_telemetry in liminika_core::traits.
+ * Corresponds to `FastPathLedger::reset_telemetry` in `liminika_core::stigmergy::ledger`.
  * @param slot Target ledger slot structure pointer to reset (64-byte aligned).
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER.
  */
@@ -369,7 +369,7 @@ gcso_ledger_reset_telemetry(gcso_ledger_slot_t* GCSO_RESTRICT slot) GCSO_NOEXCEP
 
 /**
  * @brief Executes O(1) fast-path shortcut lookup in FastPathLedger.
- * Corresponds to FastPathLedger::fast_path_lookup in liminika_core::traits.
+ * Corresponds to `FastPathLedger::fast_path_lookup` in `liminika_core::stigmergy::ledger`.
  * @param slot Pointer to ledger slot structure (64-byte aligned).
  * @param input_key Raw key address to look up.
  * @param shortcut_out Pointer to store bypassed address result.
@@ -381,7 +381,7 @@ gcso_ledger_fast_path_lookup(const gcso_ledger_slot_t* GCSO_RESTRICT slot, uint6
 
 /**
  * @brief Pushes profiling metric bytes to the FastPathLedger telemetry ring ledger in
- * zero-allocation mode. Corresponds to FastPathLedger::telemetry_push in liminika_core::traits.
+ * zero-allocation mode. Corresponds to `FastPathLedger::telemetry_push` in `stigmergy::ledger`.
  * @param slot Target ledger slot structure pointer (64-byte aligned).
  * @param metric_code Metric identifier byte code.
  * @return GCSO_SUCCESS or GCSO_ERROR_NULL_POINTER.
@@ -391,7 +391,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_ledger_telemetry_push(
 
 /**
  * @brief Sets the ledger slot operating mode (0 = Scratchpad, 1 = Plugin, 2 = Shared IPC Buffer).
- * Corresponds to FastPathLedger::set_mode in liminika_core::traits.
+ * Corresponds to `FastPathLedger::set_mode` in `liminika_core::stigmergy::ledger`.
  * @param slot Pointer to ledger slot structure (64-byte aligned).
  * @param mode Desired mode index (0, 1, or 2).
  * @return GCSO_SUCCESS or GCSO_ERROR_INVALID_ARGUMENT.
@@ -401,7 +401,7 @@ gcso_ledger_set_mode(gcso_ledger_slot_t* GCSO_RESTRICT slot, uint32_t mode) GCSO
 
 /**
  * @brief Evaluates telemetry ledger to auto-tune sub-head router routing ratios, RIPA bounds & EDBC
- * thresholds. Corresponds to FastPathLedger::evaluate_auto_tune in liminika_core::traits.
+ * thresholds. Corresponds to `FastPathLedger::evaluate_auto_tune` in `stigmergy::ledger`.
  * @param slot Const ledger slot structure pointer (64-byte aligned).
  * @param config_out Pointer to receive updated auto-tuned configuration structure (16-byte
  * aligned).
@@ -425,7 +425,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_ledger_slot_destroy(gcso_ledger_slot_handl
 
 /**
  * @brief Creates a DPSR phase steering kernel instance.
- * Corresponds to PhaseSteering trait in liminika_core::traits.
+ * Corresponds to `PhaseSteeringEngine::new` in `liminika_core::stigmergy::gate`.
  * @param head_dim Attention head dimension (must be even).
  * @param num_heads Total number of attention heads.
  * @param kernel_out Pointer to receive created kernel handle.
@@ -438,7 +438,7 @@ gcso_dpsr_kernel_create(uint32_t head_dim, uint32_t num_heads,
 /**
  * @brief Applies inline DPSR phase rotation to Query tensor registers.
  * Lie Group Invariant: Commutative with standard RoPE in SO(2)^(d_head / 2).
- * Corresponds to PhaseSteering::apply_phase_steering in liminika_core::traits.
+ * Corresponds to `PhaseSteering::apply_phase_steering` in `liminika_core::foundation::rope`.
  * @param query_tensor 32-byte aligned query tensor buffer.
  * @param phase_deltas Q7 quantized phase delta array per head (Aligned 16-byte).
  * @param head_dim Head dimension size (must be even).
@@ -451,7 +451,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_apply_phase_steering(
 
 /**
  * @brief Applies RIPA soft-bounded tanh clamping on low-frequency channels (upper d_head / 4
- * dimensions). Corresponds to PhaseSteering::apply_phase_steering_safe in liminika_core::traits.
+ * dimensions). Corresponds to `PhaseSteering::apply_phase_steering_safe` in `foundation::rope`.
  * @param query_tensor 32-byte aligned query tensor buffer.
  * @param phase_deltas Q7 quantized phase delta array (Aligned 16-byte).
  * @param head_dim Head dimension size (must be even).
@@ -512,7 +512,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_compute_procrustes_pha
 
 /**
  * @brief QDPS discrete filter: cuts off phase rotation steps falling below min_step_rad.
- * Corresponds to PhaseSteering::qdps_filter_step in liminika_core::traits.
+ * Corresponds to `PhaseSteering::phase_step_filter` in `liminika_core::foundation::rope`.
  * @param phase_deltas Q7 phase array to filter in-place (Aligned 16-byte).
  * @param len Array element count.
  * @param min_step_rad Minimum step threshold angle in radians.
@@ -523,7 +523,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_qdps_filter_step(
 
 /**
  * @brief Lazy Phase Unwrapping: Applies relative phase shift against context accumulator on Query
- * side. Corresponds to PhaseSteering::lazy_unwrap_override in liminika_core::traits.
+ * side. Corresponds to `PhaseSteering::lazy_unwrap_override` in `liminika_core::foundation::rope`.
  * @param query_tensor 32-byte aligned target query tensor.
  * @param context_accum Cumulative context phase vector (32-byte aligned).
  * @param head_dim Head dimension (must be even).
@@ -536,7 +536,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_lazy_unwrap_override(
 
 /**
  * @brief Executes norm-guarded Slerp phase stabilization on state vectors.
- * Corresponds to PhaseSteering::slerp_norm_guard_stable in liminika_core::traits.
+ * Corresponds to `PhaseSteering::slerp_norm_guard_stable` in `liminika_core::foundation::rope`.
  * @param tensor Vector tensor buffer to normalize in-place (32-byte aligned).
  * @param dim Total vector length.
  * @param norm_lower Minimum allowed L2 norm bound.
@@ -548,7 +548,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_slerp_norm_guard_stabl
 
 /**
  * @brief Fused inline logit phase shift prior to LM Head Softmax.
- * Corresponds to PhaseSteering::fused_logit_shift in liminika_core::traits.
+ * Corresponds to `PhaseSteering::fused_logit_shift` in `liminika_core::foundation::rope`.
  * @param logits Logit score vector buffer (32-byte aligned).
  * @param vocab_size Vocabulary dimension.
  * @param phase_deltas Q7 phase deltas (Aligned 16-byte).
@@ -561,7 +561,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_fused_logit_shift(
 
 /**
  * @brief Computes Procrustes phase delta alignment between source and target state representations.
- * Corresponds to PhaseSteering::compute_procrustes_phase_delta in liminika_core::traits.
+ * Corresponds to `PhaseSteering::compute_procrustes_phase_delta` in `foundation::rope`.
  * @param source 32-byte aligned source feature vector.
  * @param target 32-byte aligned target feature vector.
  * @param dim Total vector dimension size.
@@ -582,7 +582,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_dpsr_kernel_destroy(gcso_dpsr_kernel_handl
 
 /**
  * @brief Allocates a sub-head router router instance.
- * Corresponds to SubHeadRouter trait in liminika_core::traits.
+ * Corresponds to `gcso_subhead_config_t` / `foundation::rope::subhead_routing`.
  * @param config sub-head router router configuration pointer (16-byte aligned).
  * @param router_out Pointer to receive allocated router handle.
  * @return GCSO_SUCCESS or error status code.
@@ -593,7 +593,7 @@ gcso_subhead_router_create(const gcso_subhead_config_t* GCSO_RESTRICT config,
 
 /**
  * @brief Dispatches sub-head router head-group phase profiles (Fact, Logic, Explore) in a single
- * pass. Corresponds to SubHeadRouter::dispatch_single_pass in liminika_core::traits.
+ * pass. Corresponds to `foundation::rope::dispatch_single_pass` in `liminika_core`.
  * @param query_tensor 32-byte aligned query tensor buffer.
  * @param subhead_cfg sub-head router routing configuration (16-byte aligned).
  * @param head_dim Head dimension (must be even).
@@ -613,7 +613,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_subhead_router_destroy(gcso_subhead_router
 
 /**
  * @brief Creates a Sparse Residual Adapter Layer (Rank-1 residual) instance.
- * Corresponds to Rank1ResidualAdapter trait in liminika_core::traits.
+ * Corresponds to `ResidualAdapterEngine::new` in `liminika_core::stigmergy::gate`.
  * @param descriptor Pointer to Rank-1 residual descriptor (32-byte aligned).
  * @param adapter_out Pointer to receive allocated adapter handle.
  * @return GCSO_SUCCESS or error status code.
@@ -624,7 +624,7 @@ gcso_rank1_residual_create(const gcso_rank1_residual_descriptor_t* GCSO_RESTRICT
 
 /**
  * @brief Evaluates Rank-1 residual Dynamic Rank-1 outer product: y = alpha * s (*) (u * (v^T * x)).
- * Corresponds to Rank1ResidualAdapter::eval_rank1 in liminika_core::traits.
+ * Corresponds to `foundation::rank1_kernels::eval_rank1` (`ResidualAdapterEngine` gate in `stigmergy`).
  * @param y_out Output vector buffer to write into (32-byte aligned).
  * @param x_in Input vector buffer (32-byte aligned).
  * @param rank1_desc Rank-1 residual descriptor structure pointer (32-byte aligned).
@@ -639,7 +639,7 @@ gcso_rank1_eval(float* GCSO_RESTRICT y_out, const float* GCSO_RESTRICT x_in,
 
 /**
  * @brief L2P-SVD: Projects fine-tuned LoRA matrices via SVD into phase profiles and Rank-1 residual
- * vectors. Corresponds to L2pSvdProjector trait in liminika_core::traits.
+ * vectors. Corresponds to `foundation::lora::project_lora` in `liminika_core`.
  * @param lora_a Pointer to LoRA A matrix buffer (32-byte aligned).
  * @param lora_b Pointer to LoRA B matrix buffer (32-byte aligned).
  * @param rank Rank size of input LoRA.
@@ -668,7 +668,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_rank1_residual_destroy(gcso_rank1_residual
 
 /**
  * @brief Allocates an Attractor Field instance.
- * Corresponds to AttractorField trait in liminika_core::traits.
+ * Corresponds to `AttractorFieldEngine` in `liminika_core::stigmergy::attractor::field_engine`.
  * @param field_out Pointer to receive allocated field handle.
  * @return GCSO_SUCCESS or error status code.
  */
@@ -677,7 +677,7 @@ gcso_attractor_field_create(gcso_attractor_field_handle_t* GCSO_RESTRICT field_o
 
 /**
  * @brief Registers a topological anchor point in the attractor field.
- * Corresponds to AttractorField::add_anchor in liminika_core::traits.
+ * Corresponds to `AttractorFieldEngine::add_anchor` in `stigmergy::attractor::field_engine`.
  * @param context Active context handle.
  * @param anchor_type Anchor classification enum type.
  * @param vec 32-byte aligned feature vector.
@@ -691,7 +691,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_anchor(
 
 /**
  * @brief Maps natural language system prompt text as primary Anchor Attractor.
- * Corresponds to AttractorField::add_system_prompt_anchor in liminika_core::traits.
+ * Corresponds to `AttractorFieldEngine::add_system_prompt_anchor` in `stigmergy::attractor`.
  * @param context Active runtime context handle.
  * @param prompt_text Null-terminated UTF-8 system prompt string.
  * @param weight Attractor weight parameter.
@@ -704,7 +704,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_system_
 
 /**
  * @brief Maps dense feature embedding vector as continuous attractor anchor.
- * Corresponds to AttractorField::add_embedding_anchor in liminika_core::traits.
+ * Corresponds to `AttractorFieldEngine::add_embedding_anchor` in `stigmergy::attractor`.
  * @param context Active runtime context handle.
  * @param embedding 32-byte aligned embedding array.
  * @param dim Vector dimension.
@@ -718,7 +718,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_add_embeddi
 
 /**
  * @brief Injects phase-conjugate repulsion vector (-dTheta) to flip spurious local minima into
- * repulsive peaks. Corresponds to AttractorField::inject_phase_repulsion in liminika_core::traits.
+ * repulsive peaks. Corresponds to `AttractorFieldEngine::inject_phase_repulsion` in `stigmergy`.
  * @param context Active runtime context handle.
  * @param repulsion_deltas Q7 anti-phase array (Aligned 16-byte).
  * @param num_heads Total head count.
@@ -731,7 +731,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_inject_phas
 
 /**
  * @brief Aggregates high-density pointer trails bottom-up to macro-crystallize new dynamic anchors.
- * Corresponds to AttractorField::aggregate_bottom_up in liminika_core::traits.
+ * Corresponds to `AttractorFieldEngine::aggregate_bottom_up` in `stigmergy::attractor`.
  * @param context Active context handle.
  * @param new_anchor_count_out Pointer to receive updated total anchor count.
  * @return GCSO_SUCCESS or error status code.
@@ -749,7 +749,7 @@ GCSO_API gcso_status_t GCSO_CALL gcso_attractor_field_destroy(gcso_attractor_fie
 
 /**
  * @brief Allocates an EDBC (Entropy-Driven Decoding Branch Controller) instance.
- * Corresponds to EntropyEvaluator trait in liminika_core::traits.
+ * Corresponds to `EntropyController` in `liminika_core::drivers::spine::entropy`.
  * @param initial_state Pointer to initial state configuration structure (32-byte aligned).
  * @param controller_out Pointer to receive allocated controller handle.
  * @return GCSO_SUCCESS or error status code.
@@ -760,7 +760,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_edbc_controller_create(
 
 /**
  * @brief Evaluates Moving Z-Score Normalized Attention Entropy H~ and pitchfork bifurcation mode.
- * Corresponds to EntropyEvaluator::eval_stateful in liminika_core::traits.
+ * Corresponds to `EntropyController::eval_stateful` in `liminika_core::drivers::spine::entropy`.
  * @param controller Controller handle.
  * @param token_z_score Floating-point activation Z-score.
  * @param state_out Output state structure pointer (32-byte aligned).
@@ -772,7 +772,7 @@ gcso_edbc_eval_stateful(gcso_edbc_controller_handle_t controller, float token_z_
 
 /**
  * @brief Computes LiminalVoid Vector Alignment Metric for Out-of-Distribution Latent Space.
- * Corresponds to EntropyEvaluator::eval_liminal_void_dyadic128 in liminika_core::traits.
+ * Corresponds to `EntropyController::eval_liminal_void_dyadic128` in `drivers::spine::entropy`.
  * @param key_vector 32-byte aligned key tensor vector.
  * @param dim Vector dimension.
  * @param void_score_out Pointer to receive computed void score result.
@@ -784,7 +784,7 @@ gcso_liminal_void_eval_dyadic128(const float* GCSO_RESTRICT key_vector, size_t d
 
 /**
  * @brief Evaluates Eyring-Kramers potential barrier height value with singularity check.
- * Corresponds to EntropyEvaluator::eval_barrier in liminika_core::traits.
+ * Corresponds to `EntropyController::eval_barrier` in `liminika_core::drivers::spine::entropy`.
  * @param void_score Raw void score.
  * @param tau_eff Effective threshold temperature.
  * @param barrier_out Pointer to receive computed barrier height.
@@ -815,7 +815,7 @@ gcso_edbc_controller_destroy(gcso_edbc_controller_handle_t controller) GCSO_NOEX
 
 /**
  * @brief Dynamic application of persona phase modulation patches without altering base weights.
- * Corresponds to PersonaPatcher trait in liminika_core::traits.
+ * Corresponds to `ResidualAdapterEngine::apply_patch` in `liminika_core::stigmergy::gate`.
  * @param context Active runtime context handle.
  * @param patch_data Pointer to binary patch buffer.
  * @param patch_size Size of binary patch in bytes.
@@ -827,7 +827,7 @@ gcso_persona_apply_patch(gcso_context_handle_t context, const uint8_t* GCSO_REST
 
 /**
  * @brief Zero-Overhead In-Memory Mapped Storage: Maps .gcso container payload using zero-copy mmap.
- * Corresponds to MappedStorage::open_mmap in liminika_core::traits and attractor_edbc.cpp.
+ * Corresponds to `MappedStorage::open_mmap` in `liminika_core::runtime::storage` and `attractor_edbc.cpp`.
  * @param file_path Null-terminated path string to target .gcso file.
  * @param storage_out Descriptor structure pointer to populate (32-byte aligned).
  * @return GCSO_SUCCESS or GCSO_ERROR_MAPPED_STORAGE_FAILED.
@@ -838,7 +838,7 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_mapped_storage_open_mmap(
 
 /**
  * @brief Unmaps zero-copy mapped-storage memory handle and releases Direct DMA resources.
- * Corresponds to MappedStorage::close_mmap in liminika_core::traits.
+ * Corresponds to `MappedStorage::close_mmap` in `liminika_core::runtime::storage`.
  * @param storage_desc Descriptor structure pointer to clear (32-byte aligned).
  * @return GCSO_SUCCESS or GCSO_ERROR_MISALIGNED_POINTER.
  */
@@ -1227,8 +1227,8 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_core_layer_stack_init_defau
     gcso_autonomous_core_layer_stack_t* GCSO_RESTRICT stack_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Branchlessly co-adapts Core Layer 0 (LiminalApertureField) and Core Layer 1
- * (StigmergicGranuleField) inside the 128-byte stack with cross-layer Venn/Serendipity feedback.
+ * @brief Branchlessly co-adapts Core Layer 0 (`LiminalThresholdState`) and Core Layer 1
+ * (`StigmergicGranuleState`) inside the 128-byte stack with cross-layer Venn/Serendipity feedback.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_core_layer_stack_adapt(
     gcso_autonomous_core_layer_stack_t* GCSO_RESTRICT stack_inout,
@@ -1248,14 +1248,14 @@ GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_liminal_topology_format_mer
     size_t buf_cap, size_t* GCSO_RESTRICT bytes_written_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Initializes a 64-byte LiminalEgoField from a preset code (0=Custom, 1=Low, 2=Medium,
+ * @brief Initializes a 64-byte `LiminalEgoState` from a preset code (0=Custom, 1=Low, 2=Medium,
  * 3=High).
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL gcso_ego_field_init_preset(
     uint8_t preset_code, gcso_liminal_ego_field_t* GCSO_RESTRICT ego_out) GCSO_NOEXCEPT;
 
 /**
- * @brief Deterministically derives a 64-byte LiminalEgoField from UTF-8 natural-language text.
+ * @brief Deterministically derives a 64-byte `LiminalEgoState` from UTF-8 natural-language text.
  */
 GCSO_NODISCARD GCSO_API gcso_status_t GCSO_CALL
 gcso_ego_field_derive_from_text(const uint8_t* GCSO_RESTRICT utf8_ptr, size_t utf8_len,

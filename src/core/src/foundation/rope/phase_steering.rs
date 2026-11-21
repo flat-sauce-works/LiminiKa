@@ -14,7 +14,7 @@ use super::*;
 /// Single-Manifold Unified-Field Phase Steering, Attention $\times$ Phase-Interference Score
 /// Modulation, Bayesian Pointer-Trail Attention Modulation, and Closed-Form Orthogonal Procrustes
 /// Phase Estimation (**Nano / Micro Level**).
-pub trait PhaseSteering: Liminal {
+pub trait PhaseSteering {
     /// Returns the configured attention head dimension ($d_{\mathrm{head}}$, positive even integer).
     fn head_dim(&self) -> u32;
 

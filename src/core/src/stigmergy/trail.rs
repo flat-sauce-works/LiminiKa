@@ -42,7 +42,7 @@ use crate::foundation::{
 pub use crate::foundation::{gcso_paged_bitmask_t, gcso_tagged_ptr_t};
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    gcso_q7_t, BitCut8, GcsoResult, Liminal, DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT,
+    gcso_q7_t, BitCut32, BitCut8, GcsoResult, DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT,
     MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, THRESHOLD_STIGMERGY_WIDE,
 };
 pub use crate::stigmergy::ledger::gcso_ledger_slot_t;
@@ -2091,9 +2091,7 @@ pub fn resolve_dyadic_qdpt_and_cascade_ptr(
 }
 
 /// Hot-path capability trait for $\mathcal{O}(1)$ tagged pointer transitions and trail updates.
-///
-/// Requires [`Liminal`] to enforce epistemic horizon and constant-time execution at the type level.
-pub trait PointerSubstrate: Liminal + Send + Sync {
+pub trait PointerSubstrate: Send + Sync {
     /// Resets transient pointer trails and slot counters without freeing pre-allocated tables.
     ///
     /// # Errors
@@ -2209,11 +2207,8 @@ pub(crate) fn validate_optional_qk_tensors(
 /// foundation, RoPE steering kernels, $\mathcal{O}(1)$ pointer-trail transitions, and FastPathLedger
 /// telemetry under static dispatch.
 ///
-/// The Liminal Supertrait Blanket Extensions (`SubstrateGatewayExt`) observe this
-/// composite directly.
-pub trait StigmergicSubstrateOps:
-    Liminal + PhaseSteering + PointerSubstrate + FastPathLedger
-{
+/// Blanket extensions (`SubstrateGatewayExt`) observe this composite directly.
+pub trait StigmergicSubstrateOps: PhaseSteering + PointerSubstrate + FastPathLedger {
     /// Broadest cognitive aperture spanned across all gateway, steering, swarm, cohomology, and
     /// mapped-storage capabilities (`0x0000_FFFF`).
     const HUB_APERTURE_MASK: u32 = THRESHOLD_STIGMERGY_WIDE;
@@ -2225,7 +2220,8 @@ pub trait StigmergicSubstrateOps:
     /// [`Self::HUB_APERTURE_MASK`].
     #[inline(always)]
     fn inspect_substrate_horizon_partition(&self, signal_bits: u32) -> (u32, u32) {
-        self.partition_cognitive_and_unknowable_bits(Self::HUB_APERTURE_MASK, signal_bits)
+        let cut = BitCut32::split(signal_bits, Self::HUB_APERTURE_MASK);
+        (cut.inside, cut.outside)
     }
 
     /// Validates `head_dim`, `num_heads <= MAX_ATTENTION_HEADS`, `qdps_min_step_rad >= 0.0`,
@@ -2419,7 +2415,7 @@ pub trait StigmergicSubstrateOps:
 }
 
 impl<T> StigmergicSubstrateOps for T where
-    T: Liminal + PhaseSteering + PointerSubstrate + FastPathLedger + ?Sized
+    T: PhaseSteering + PointerSubstrate + FastPathLedger + ?Sized
 {
 }
 

@@ -171,15 +171,15 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     );
     assert!(routed_coh > 0.95 && routed_grav > 1.0);
 
-    let mut zimms_buf = AlignedBuffer64::<u8, 384>::new([0u8; 384]);
+    let mut storage_buf = AlignedBuffer64::<u8, 384>::new([0u8; 384]);
     let written = CrystallizedAttractorRecord::write_records_to_container_bytes(
         &centroids,
-        &mut zimms_buf.data,
+        &mut storage_buf.data,
     )
     .unwrap();
     assert_eq!(written, 384);
     let restored =
-        CrystallizedAttractorRecord::slice_from_container_bytes_zero_copy(&zimms_buf.data, 3)
+        CrystallizedAttractorRecord::slice_from_container_bytes_zero_copy(&storage_buf.data, 3)
             .unwrap();
     assert_eq!(restored[0].anchor_id, 101);
     assert_eq!(restored[1].anchor_id, 202);

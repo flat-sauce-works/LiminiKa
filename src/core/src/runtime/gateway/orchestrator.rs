@@ -9,19 +9,19 @@ use crate::drivers::{DistortionTension, EgoDifferentialNet, SystemSpineState};
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
     branchless_max_f32, branchless_min_f32, branchless_relu_f32,
-    dispatch_fused_phase_clamp_and_subhead_words_core, eval_rank1_slices_fused, gcso_tagged_ptr_t,
+    dispatch_fused_phase_clamp_and_subhead_words_core, gcso_tagged_ptr_t,
     rotate_fused_self_phase_clamp_and_subhead_default_words,
     rotate_fused_self_phase_clamp_subhead_q_and_clamp_k_default_words, scale_f32_slice_unrolled8,
     steer_from_swar_words_core_safe, store_q7_words_64, swar_or_avx2_q7_add_sat_words_64,
     swar_q7_abs_u8_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
     swar_q7_phase_step_filter_words_64, swar_q7_scale_le128_with_bias_x8, swar_words_nonzero_64,
     AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut32, PhaseSteering,
-    PhaseSteeringGeometryExt, RawPhaseProjectable, RopePairLayout, RopeSteeringTarget,
-    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_SUBHEAD_ROUTE,
-    ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD, SWAR_SPLAT_BYTE_64,
+    RawPhaseProjectable, RopePairLayout, RopeSteeringTarget, ACTION_MODE_LAYER_SKIP,
+    ACTION_MODE_PHASE_REPULSE, ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_ID_MASK,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
-    branchless_select_u32, branchless_select_u8, gcso_q7_t, EpistemicPartition, GcsoResult,
+    branchless_select_u32, branchless_select_u8, gcso_q7_t, EpistemicPartition, GcsoResult, Scoped,
     GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
@@ -31,7 +31,8 @@ use crate::stigmergy::{
     gcso_ledger_slot_t, gcso_pointer_trail_t, swar_mean_u8_le128_x8, trail_phase_words_mut,
     trail_phase_words_ref, validate_optional_qk_tensors, CognitiveCircuitActivation,
     CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter,
-    CrystallizedAttractorRecord, StigmergicActionDecision, StigmergicOverlapSerendipityReport,
+    CrystallizedAttractorRecord, PhaseDeltaSlice, PhaseSteeringActiveExt, ResidualAdapterEngine,
+    ResidualScale, StigmergicActionDecision, StigmergicOverlapSerendipityReport,
     StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicSubstrateOps,
     StigmergicThresholds, LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
     LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED,
@@ -527,21 +528,26 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering {
                 let mut q7_stack = AlignedBuffer16::new([0i8; MAX_ATTENTION_HEADS]);
                 store_q7_words_64(&mut q7_stack.data, &swar_words);
                 let p_aligned = AlignedSlice16::new(&q7_stack.data[..num_heads])?;
-                PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe(
-                    self,
-                    geometry,
-                    query_tensor,
-                    &p_aligned,
-                    frame.ripa_clamp_rad,
-                )?;
-                if let Some(k) = key_tensor {
-                    PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe(
+                if let Some(active_deltas) = Scoped::from_boundary(PhaseDeltaSlice(p_aligned))
+                    .cut_by_lacuna(frame.ripa_clamp_rad > 0.0, frame.ripa_clamp_rad, 0.0)
+                    .into_active()
+                {
+                    PhaseSteeringActiveExt::apply_phase_steering_for_geometry_safe_active(
                         self,
                         geometry,
-                        k,
-                        &p_aligned,
+                        query_tensor,
+                        active_deltas,
                         frame.ripa_clamp_rad,
                     )?;
+                    if let Some(k) = key_tensor {
+                        PhaseSteeringActiveExt::apply_phase_steering_for_geometry_safe_active(
+                            self,
+                            geometry,
+                            k,
+                            active_deltas,
+                            frame.ripa_clamp_rad,
+                        )?;
+                    }
                 }
             }
         }
@@ -590,8 +596,18 @@ pub fn apply_gateway_frame_rank1_hidden_fused(
         0.0,
         0.05,
     ));
-    if structural_gain > 0.0 {
-        eval_rank1_slices_fused(y_out, x_in, u_vec, v_vec, None, structural_gain)?;
+    if let Some(active_scale) = Scoped::from_boundary(ResidualScale(structural_gain))
+        .cut_by_lacuna(structural_gain > 0.0, structural_gain, 0.0)
+        .into_active()
+    {
+        ResidualAdapterEngine::default().eval_rank1_slices_fused_active(
+            y_out,
+            x_in,
+            u_vec,
+            v_vec,
+            None,
+            active_scale,
+        )?;
     }
     Ok(structural_gain)
 }
@@ -604,7 +620,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
     /// modulation (`core_ctx`), then steers `query_tensor` and optional `logits_opt` for `geometry`.
     ///
     /// # Errors
-    /// Propagates any validation or execution error from [`StigmergicSubstrateOps`] or [`PhaseSteeringGeometryExt`].
+    /// Propagates any validation or execution error from [`StigmergicSubstrateOps`] or [`PhaseSteeringActiveExt`].
     #[inline]
     fn ingest_gateway_and_steer_with_core_layers_for_geometry_safe<
         S: ManifoldGatewaySignal + ?Sized,
@@ -685,14 +701,19 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
                 let mut q7_stack = AlignedBuffer16::new([0i8; MAX_ATTENTION_HEADS]);
                 store_q7_words_64(&mut q7_stack.data, &swar_words);
                 let p_aligned = AlignedSlice16::new(&q7_stack.data[..num_heads])?;
-                PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe(
-                    self,
-                    geometry,
-                    q,
-                    &p_aligned,
-                    frame.ripa_clamp_rad,
-                )?;
-                metrics |= LEDGER_METRIC_PHASE_STEERED;
+                if let Some(active_deltas) = Scoped::from_boundary(PhaseDeltaSlice(p_aligned))
+                    .cut_by_lacuna(frame.ripa_clamp_rad > 0.0, frame.ripa_clamp_rad, 0.0)
+                    .into_active()
+                {
+                    PhaseSteeringActiveExt::apply_phase_steering_for_geometry_safe_active(
+                        self,
+                        geometry,
+                        q,
+                        active_deltas,
+                        frame.ripa_clamp_rad,
+                    )?;
+                    metrics |= LEDGER_METRIC_PHASE_STEERED;
+                }
             }
         }
 
@@ -727,7 +748,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
         trail_out: &mut gcso_pointer_trail_t,
         unresolved_damping_u7: u8,
         mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        srl_hidden: Option<(
+        rank1_hidden: Option<(
             &mut AlignedSliceMut32<'_, f32>,
             &AlignedSlice32<'_, f32>,
             &AlignedSlice32<'_, f32>,
@@ -842,7 +863,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
             0.50_f32 + 0.50_f32 * branchless_relu_f32(trail_coh)
         };
         let should_step_trail =
-            query_tensor.is_some() || srl_hidden.is_none() || (trail_out.step_count == 0);
+            query_tensor.is_some() || rank1_hidden.is_none() || (trail_out.step_count == 0);
         let next_rho = if should_step_trail {
             let base_retain =
                 branchless_clamp_f32(branchless_relu_f32(thresholds.evaporation_retain), 0.0, 1.0);
@@ -970,14 +991,19 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
                     let mut q7_stack = AlignedBuffer16::new([0i8; MAX_ATTENTION_HEADS]);
                     store_q7_words_64(&mut q7_stack.data, &swar_words);
                     let p_aligned = AlignedSlice16::new(&q7_stack.data[..num_heads])?;
-                    PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe(
-                        self,
-                        geometry,
-                        q,
-                        &p_aligned,
-                        frame.ripa_clamp_rad,
-                    )?;
-                    metrics |= LEDGER_METRIC_PHASE_STEERED;
+                    if let Some(active_deltas) = Scoped::from_boundary(PhaseDeltaSlice(p_aligned))
+                        .cut_by_lacuna(frame.ripa_clamp_rad > 0.0, frame.ripa_clamp_rad, 0.0)
+                        .into_active()
+                    {
+                        PhaseSteeringActiveExt::apply_phase_steering_for_geometry_safe_active(
+                            self,
+                            geometry,
+                            q,
+                            active_deltas,
+                            frame.ripa_clamp_rad,
+                        )?;
+                        metrics |= LEDGER_METRIC_PHASE_STEERED;
+                    }
                 }
             }
 
@@ -986,7 +1012,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
                 StigmergicActionDecision::FullOrchestration
                     | StigmergicActionDecision::CrystallizeMacroBasin
             ) {
-                if let Some((y_mut, x_in, u_vec, v_vec)) = srl_hidden {
+                if let Some((y_mut, x_in, u_vec, v_vec)) = rank1_hidden {
                     let _ =
                         apply_gateway_frame_rank1_hidden_fused(&frame, y_mut, x_in, u_vec, v_vec)?;
                     metrics |= LEDGER_METRIC_RANK1_INJECTED;
@@ -1031,7 +1057,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
         trail_out: &mut gcso_pointer_trail_t,
         unresolved_damping_u7: u8,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        srl_hidden: Option<(
+        rank1_hidden: Option<(
             &mut AlignedSliceMut32<'_, f32>,
             &AlignedSlice32<'_, f32>,
             &AlignedSlice32<'_, f32>,
@@ -1064,7 +1090,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
             trail_out,
             unresolved_damping_u7,
             query_tensor,
-            srl_hidden,
+            rank1_hidden,
             logits_opt,
         )
     }
@@ -1072,6 +1098,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
 
 impl<T: StigmergicSubstrateOps + ?Sized> SubstrateGatewayExt for T {}
 
+/// Blanket-implemented extension trait orchestrating [`StigmergicScaleLayer`] projection,
 /// [`CognitiveTrajectoryLedger`], and scale-aware swarm resolution in zero-allocation mode.
 pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
     /// Projects `layer` across `input_words`, resolves the active pointer trail in the Micro-Swarm

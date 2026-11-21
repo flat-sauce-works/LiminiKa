@@ -16,7 +16,7 @@ use crate::foundation::{
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_i8, branchless_select_u32, branchless_select_u64,
-    branchless_select_u8, EpistemicRegime, LiminalThresholdState, DEFAULT_ENTROPY_EPS,
+    branchless_select_u8, BitCut32, EpistemicRegime, LiminalThresholdState, DEFAULT_ENTROPY_EPS,
     MAX_ATTENTION_HEADS, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
     THRESHOLD_STIGMERGY_WIDE,
 };
@@ -119,7 +119,7 @@ impl EpistemicHorizonReading {
         );
         frame.provenance_bits = branchless_select_u32(
             is_void,
-            (frame.provenance_bits & !CAUSAL_CAUSE_COHOMOLOGY_REPULSION)
+            BitCut32::split(frame.provenance_bits, CAUSAL_CAUSE_COHOMOLOGY_REPULSION).outside
                 | CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK,
             branchless_select_u32(
                 high_repulse,
@@ -539,7 +539,7 @@ pub trait EpistemicManifoldOps: RelativeAttractorNode {
     }
 
     /// Evaluates Venn-diagram multi-attractor aperture overlap and noise-driven serendipity in
-    /// [`crate::liminal::Liminal`] across a slice of `Self` (`0` allocations, `0` branches).
+    /// `Liminal` across a slice of `Self` (`0` allocations, `0` branches).
     #[inline(always)]
     fn evaluate_slice_venn_and_serendipity(
         slice: &[Self],
@@ -694,7 +694,7 @@ impl LiminalThresholdState {
             branchless_select_i8(scattered | spawned, blended_shift, self.phase_shift_q7[6]);
 
         // Recompute active_aperture_mask branchlessly from channel floor saturation (< 96).
-        let mut mask = THRESHOLD_STIGMERGY_WIDE & !0x0000_00FF;
+        let mut mask = BitCut32::split(THRESHOLD_STIGMERGY_WIDE, 0x0000_00FF).outside;
         let mut ch = 0usize;
         while ch < NUM_LIMINAL_THRESHOLD_CHANNELS {
             let is_open =

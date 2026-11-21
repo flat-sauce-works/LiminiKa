@@ -6,14 +6,14 @@
  * @brief C-ABI POD types, bitmasks, status codes, and compile-time layout assertions.
  *
  * All struct sizes, alignments, and field offsets in this header are verified at compile time
- * via `GCSO_STATIC_ASSERT` to maintain 1:1 ABI parity with `src/core/src/abi/` and
- * `src/core/src/traits/`.
+ * via `GCSO_STATIC_ASSERT` to maintain 1:1 ABI parity with `src/core/src/runtime/abi/` and
+ * core layer POD modules (`liminal/`, `foundation/`, `stigmergy/`, `drivers/`, `runtime/`).
  *
  * C-ABI symbol prefixes (`dpsr`, `edbc`, `srl`, `zimms`) map to the Rust core modules:
- * - `dpsr`  -> `phase_steering` (`PhaseSteeringEngine`)
- * - `edbc`  -> `entropy_control` (`EntropyController`)
- * - `srl`   -> `residual_adapter` (`ResidualAdapterEngine`)
- * - `zimms` -> `storage` (`MappedStorageEngine`)
+ * - `dpsr`  -> `PhaseSteering` / `PhaseSteeringEngine` (`foundation::rope`, `stigmergy::gate`)
+ * - `edbc`  -> `EntropyController` (`drivers::spine::entropy`)
+ * - `srl`   -> `Rank1Residual` / `ResidualAdapterEngine` (`foundation::rank1_kernels`, `stigmergy::gate`)
+ * - `zimms` -> `MappedStorageEngine` (`runtime::storage`)
  */
 
 #ifndef LIMINIKA_GCSO_TYPES_H
@@ -57,7 +57,7 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_CORE_LAYER_STIGMERGIC 1U
 #define GCSO_CORE_LAYER_EGO 2U
 
-/* 2 Primitives x 2 Drivers Structural Attribution Identifiers (1:1 with constants_pod.rs) */
+/* 2 Primitives x 2 Drivers Structural Attribution Identifiers (1:1 with liminal/constants.rs) */
 #define GCSO_SUBSTRATE_LIMINAL 0U
 #define GCSO_SUBSTRATE_STIGMERGY 1U
 #define GCSO_DRIVER_SYSTEM 0U
@@ -74,7 +74,7 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_VENN_REGION_SELF_EXCLUSIVE (1U << 1)
 #define GCSO_VENN_REGION_KNOWN_UNKNOWN (1U << 2)
 
-/* Liminal Cognitive Aperture Bitmasks (1:1 with primitives/constants_pod.rs) */
+/* Liminal Cognitive Aperture Bitmasks (1:1 with liminal/constants.rs) */
 #define GCSO_APERTURE_SYSTEM_CONSTRAINT (1U << 0)
 #define GCSO_APERTURE_OBJECTIVE_FACT (1U << 1)
 #define GCSO_APERTURE_SUBJECTIVE_PERSONA (1U << 2)
@@ -95,7 +95,7 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_APERTURE_MAPPED_STORAGE (1U << 15)
 #define GCSO_APERTURE_ACTION_HUB_WIDE 0x0000FFFFU
 
-/* LiminalEgoField Trigger Bitmasks (1:1 with primitives/constants_pod.rs) */
+/* LiminalEgoState Trigger Bitmasks (1:1 with drivers/ego/intent.rs) */
 #define GCSO_EGO_TRIGGER_BASIN_CAPTURE (1U << 0)
 #define GCSO_EGO_TRIGGER_INTERNAL_CONFLICT (1U << 1)
 #define GCSO_EGO_TRIGGER_LIMINAL_EXTERIOR (1U << 2)
@@ -133,7 +133,7 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_TAG_ACTION_MODE_MASK 0x1FU
 #define GCSO_TAG_ATTRACTOR_SLOT_SHIFT 5U
 
-/* 3-Bit Semantic Attractor Provenance / Affinity Identifiers (0..7, matching primitives.rs;
+/* 3-Bit Semantic Attractor Provenance / Affinity Identifiers (0..7, matching stigmergy/mod.rs;
  * decoupled from physical workbench lanes 0..7) */
 #define GCSO_ATTRACTOR_SLOT_SYSTEM_BASELINE 0U
 #define GCSO_ATTRACTOR_SLOT_PERSONA 1U
@@ -146,14 +146,14 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_ATTRACTOR_SLOT_ID_MASK 0x07U
 #define GCSO_DEFAULT_SLOT_COUPLING_MATRIX_8X8 0xFFFFFFFFFFFFFFFFULL
 
-/* Anonymous 8-Lane Workbench Pool Constants (matching primitives.rs) */
+/* Anonymous 8-Lane Workbench Pool Constants (matching stigmergy/mod.rs) */
 #define GCSO_WORKBENCH_LANE_COUNT 8U
 #define GCSO_WORKBENCH_LANE_AUTO 0xFFU
 #define GCSO_WORKBENCH_LANE_FLAG_PINNED (1U << 0)
 #define GCSO_WORKBENCH_LANE_FLAG_REPULSION (1U << 1)
 #define GCSO_WORKBENCH_LANE_FLAG_SANDBOX (1U << 2)
 
-/* 5-Bit Action Mode Execution Flags (1:1 bit parity with primitives.rs) */
+/* 5-Bit Action Mode Execution Flags (1:1 bit parity with foundation/pod.rs) */
 #define GCSO_ACTION_MODE_DPSR_STEER (1U << 0)    /* 0x01U */
 #define GCSO_ACTION_MODE_LAYER_SKIP (1U << 1)    /* 0x02U */
 #define GCSO_ACTION_MODE_PHASE_REPULSE (1U << 2) /* 0x04U */
@@ -161,7 +161,7 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_ACTION_MODE_RANK1_INJECT (1U << 4)  /* 0x10U */
 #define GCSO_ACTION_MODE_ALL_MASK 0x1FU
 
-/* Canonical Action Mode Presets (1:1 parity with primitives.rs) */
+/* Canonical Action Mode Presets (1:1 parity with foundation/pod.rs) */
 #define GCSO_ACTION_PRESET_PASSIVE_SIDECAR 0x00U
 #define GCSO_ACTION_PRESET_EXPRESS_PHASE (GCSO_ACTION_MODE_DPSR_STEER)
 #define GCSO_ACTION_PRESET_INERTIAL_SKIP (GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_LAYER_SKIP)
@@ -170,7 +170,7 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_ACTION_PRESET_FULL_ORCHESTRATION \
     (GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_SUBHEAD_ROUTE | GCSO_ACTION_MODE_RANK1_INJECT)
 
-/* Pointer Trail Status Flags (1:1 bit parity with telemetry.rs) */
+/* Pointer Trail Status Flags (1:1 bit parity with stigmergy/mod.rs) */
 #define GCSO_TRAIL_FLAG_DPSR_ACTIVE (1U << 0)            /* 0x00000001U */
 #define GCSO_TRAIL_FLAG_REPULSION_ACTIVE (1U << 1)       /* 0x00000002U */
 #define GCSO_TRAIL_FLAG_CRYSTALLIZED_CANDIDATE (1U << 2) /* 0x00000004U */
@@ -182,7 +182,7 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_TRAIL_SWARM_QUORUM_SHIFT 8U
 #define GCSO_TRAIL_SWARM_QUORUM_MASK 0x0000FF00U
 
-/* FastPathLedger Telemetry Ring Ledger Metric Bitflags (1:1 bit parity with telemetry.rs) */
+/* FastPathLedger Telemetry Ring Ledger Metric Bitflags (1:1 bit parity with stigmergy/mod.rs) */
 #define GCSO_LEDGER_METRIC_FAST_PATH_HIT (1U << 0)
 #define GCSO_LEDGER_METRIC_PHASE_STEERED (1U << 1)
 #define GCSO_LEDGER_METRIC_REPULSION_APPLIED (1U << 2)
@@ -193,7 +193,7 @@ typedef uint8_t gcso_stigmergic_action_decision_t;
 #define GCSO_LEDGER_METRIC_SLOT_SYNERGY_ACTIVE (1U << 7)
 #define GCSO_LEDGER_FLAG_COGNITIVE_TRAJECTORY (1U << 0)
 
-/* 4-Axis Causal Provenance Bitflags & Root Cause Codes (1:1 parity with gateway.rs) */
+/* 4-Axis Causal Provenance Bitflags & Root Cause Codes (1:1 parity with stigmergy/mod.rs) */
 #define GCSO_CAUSAL_AXIS_SYSTEM_CONSTRAINT (1U << 0)
 #define GCSO_CAUSAL_AXIS_OBJECTIVE_FACT (1U << 1)
 #define GCSO_CAUSAL_AXIS_SUBJECTIVE_PERSONA (1U << 2)
@@ -918,7 +918,7 @@ typedef struct gcso_subhead_router_opaque* gcso_subhead_router_handle_t;
 struct gcso_rank1_residual_opaque;
 typedef struct gcso_rank1_residual_opaque* gcso_rank1_residual_handle_t;
 
-/* Static Assertions for Size Invariants Matching src/core/src/abi/ & traits/ */
+/* Static Assertions for Size Invariants Matching src/core/src/runtime/abi/ & core layer PODs */
 GCSO_STATIC_ASSERT(sizeof(gcso_status_t) == 4, "gcso_status_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_anchor_type_t) == 4, "gcso_anchor_type_t size mismatch");
 GCSO_STATIC_ASSERT(sizeof(gcso_q7_t) == 1, "gcso_q7_t size mismatch");
@@ -990,7 +990,7 @@ GCSO_STATIC_ASSERT(sizeof(gcso_distortion_delta_t) == 128, "gcso_distortion_delt
 GCSO_STATIC_ASSERT(sizeof(gcso_distortion_tension_t) == 32,
                    "gcso_distortion_tension_t size mismatch");
 
-/* Static Assertions for Alignment Invariants Matching src/core/src/abi/ & traits/ */
+/* Static Assertions for Alignment Invariants Matching src/core/src/runtime/abi/ & core layer PODs */
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_raw_buffer_t) == 16, "gcso_raw_buffer_t alignment mismatch");
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_paged_bitmask_t) == 32,
                    "gcso_paged_bitmask_t alignment mismatch");
@@ -1060,7 +1060,7 @@ GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_distortion_delta_t) == 64,
 GCSO_STATIC_ASSERT(GCSO_ALIGNOF(gcso_distortion_tension_t) == 16,
                    "gcso_distortion_tension_t alignment mismatch");
 
-/* Static Assertions for Exact Field Offsets Matching Rust abi/ & traits/ */
+/* Static Assertions for Exact Field Offsets Matching Rust runtime/abi/ & core layer PODs */
 GCSO_STATIC_ASSERT(offsetof(gcso_descriptor_header_t, struct_size) == 0,
                    "gcso_descriptor_header_t::struct_size offset mismatch");
 GCSO_STATIC_ASSERT(offsetof(gcso_descriptor_header_t, abi_version) == 4,

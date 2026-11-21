@@ -5,7 +5,9 @@
 //! comparing consecutive Core Layer 0 [`LiminalThresholdState`] epochs.
 
 use crate::foundation::Pod;
-use crate::liminal::{branchless_select_u8, LiminalThresholdState, NUM_LIMINAL_THRESHOLD_CHANNELS};
+use crate::liminal::{
+    branchless_select_u8, BitCut8, LiminalThresholdState, NUM_LIMINAL_THRESHOLD_CHANNELS,
+};
 
 /// Threshold for leaky integrate-and-fire phase transition pulse on [`LiminalBoundaryDelta`].
 pub const CHATTER_FIRE_THRESHOLD_U8: u8 = 64;
@@ -95,7 +97,7 @@ impl LiminalBoundaryDelta {
                 & (chattering_channel_mask == 0)
                 & (phase_transition_pulse == 0),
         );
-        let expanded_overlap = (cur_overlap_mask & !prev_overlap_mask) != 0;
+        let expanded_overlap = BitCut8::split(cur_overlap_mask, prev_overlap_mask).outside != 0;
         let expansion_dominant =
             u8::from((signed_sum < 0) | ((signed_sum == 0) & expanded_overlap));
 

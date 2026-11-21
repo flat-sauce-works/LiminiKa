@@ -12,7 +12,7 @@ use crate::foundation::simd_stats::{
 };
 use crate::foundation::swar_simd::{branchless_splitmix64, load_q7_words_64, words_to_q7_array_64};
 use crate::liminal::{
-    branchless_select_usize, gcso_q7_t, Liminal, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    branchless_select_usize, gcso_q7_t, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
 
 #[inline(always)]
@@ -178,7 +178,7 @@ pub fn project_f32_slice_to_q7_64(values: &[f32]) -> [gcso_q7_t; MAX_ATTENTION_H
 }
 
 /// Trait for raw payloads that can be projected onto the 64-head $SO(2)^{64}$ Q7 phase manifold.
-pub trait RawPhaseProjectable: Liminal {
+pub trait RawPhaseProjectable {
     /// Projects `self` onto a 64-head Q7 phase array (`[gcso_q7_t; 64]`).
     fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS];
 

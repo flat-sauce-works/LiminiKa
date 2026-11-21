@@ -117,7 +117,7 @@ pub unsafe extern "C" fn gcso_action_hub_orchestrate_stigmergic_step_safe(
 ) -> GcsoStatus {
     ffi_boundary!({
         validate_ptr(trail_inout)?;
-        let (dpsr, total_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let (phase_engine, total_len) = init_phase_engine(head_dim, num_heads)?;
         // SAFETY: Validated for non-nullness and alignment.
         let ((th_ref_opt, mut trail), mut rep_out) = unsafe {
             (
@@ -171,7 +171,7 @@ pub unsafe extern "C" fn gcso_action_hub_orchestrate_stigmergic_step_safe(
         {
             // SAFETY: `hub_opt` is non-null and 128-byte aligned.
             let hub_ref = unsafe { &mut *hub_opt.cast::<StigmergicSubstrate>() };
-            hub_ref.phase_steering = dpsr;
+            hub_ref.phase_steering = phase_engine;
             if let Some(ref th) = th_ref_opt {
                 th.validate()?;
                 hub_ref.thresholds = **th;
@@ -195,7 +195,7 @@ pub unsafe extern "C" fn gcso_action_hub_orchestrate_stigmergic_step_safe(
                 None => StigmergicThresholds::new(),
             };
             th.orchestrate_stateless_action_step(
-                &dpsr,
+                &phase_engine,
                 gcso_tagged_ptr_t(input_ptr),
                 entropy_h_tilde,
                 dominant_slot,

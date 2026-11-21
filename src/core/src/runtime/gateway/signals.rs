@@ -14,7 +14,7 @@ use crate::foundation::{
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_i32, branchless_select_u32, branchless_select_u8,
-    gcso_config_t, gcso_q7_t, Liminal, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    gcso_config_t, gcso_q7_t, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
     THRESHOLD_CAUSAL_PROVENANCE, THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_OBJECTIVE_FACT,
     THRESHOLD_SUBJECTIVE_PERSONA, THRESHOLD_SYSTEM_CONSTRAINT,
 };
@@ -79,9 +79,9 @@ impl CausalProvenanceReport {
     }
 }
 
-/// Root causal signal supertrait refining [`Liminal`] into a finite 4-axis causal window
+/// Root causal signal supertrait defining a finite 4-axis causal window
 /// for all signals entering the GCSO Manifold Gateway.
-pub trait CausalProvenanceSignal: Liminal {
+pub trait CausalProvenanceSignal {
     /// Static causal provenance cognitive aperture across system and grounding origins (`0x0000_000F`).
     const CAUSAL_APERTURE_MASK: u32 = THRESHOLD_CAUSAL_PROVENANCE;
 
@@ -357,7 +357,7 @@ impl<T> SystemConstraint<T> {
     }
 }
 
-impl<T: Liminal> CausalProvenanceSignal for SystemConstraint<T> {
+impl<T> CausalProvenanceSignal for SystemConstraint<T> {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
         let throttle = self.force_layer_skip
@@ -373,7 +373,7 @@ impl<T: Liminal> CausalProvenanceSignal for SystemConstraint<T> {
     }
 }
 
-impl<T: Liminal> SystemConstraintSignal for SystemConstraint<T> {
+impl<T> SystemConstraintSignal for SystemConstraint<T> {
     #[inline(always)]
     fn system_vram_pressure(&self) -> f32 {
         self.vram_pressure
@@ -838,9 +838,9 @@ impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
         );
         let express_thresh =
             self.base.express_steer_density_thresh * eq_scale * (1.0_f32 + 0.35_f32 * pressure);
-        let pspm_thresh =
+        let subhead_thresh =
             self.base.subhead_route_density_thresh * eq_scale * (1.0_f32 + 0.30_f32 * pressure);
-        let srl_thresh =
+        let rank1_thresh =
             self.base.rank1_inject_density_thresh * eq_scale * (1.0_f32 + 0.50_f32 * pressure);
         let crystal_thresh = self.base.crystallize_density_thresh
             * eq_scale
@@ -868,8 +868,8 @@ impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
             reinforcement_gain: dyn_gain,
             inertial_skip_entropy_thresh: skip_thresh,
             express_steer_density_thresh: express_thresh,
-            subhead_route_density_thresh: pspm_thresh,
-            rank1_inject_density_thresh: srl_thresh,
+            subhead_route_density_thresh: subhead_thresh,
+            rank1_inject_density_thresh: rank1_thresh,
             crystallize_density_thresh: crystal_thresh,
             contradiction_coherence_thresh: contradict_thresh,
         }
@@ -1322,7 +1322,7 @@ impl<B> ContradictionGuard<B> {
     }
 }
 
-impl<B: Liminal> CausalProvenanceSignal for ContradictionGuard<B> {
+impl<B> CausalProvenanceSignal for ContradictionGuard<B> {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
         let obstructed = self.cohomology_obstruction > self.obstruction_threshold;
@@ -1346,7 +1346,7 @@ impl<B: Liminal> CausalProvenanceSignal for ContradictionGuard<B> {
     }
 }
 
-impl<B: Liminal> CognitiveGroundingSignal for ContradictionGuard<B> {
+impl<B> CognitiveGroundingSignal for ContradictionGuard<B> {
     #[inline(always)]
     fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
         [0i8; MAX_ATTENTION_HEADS]

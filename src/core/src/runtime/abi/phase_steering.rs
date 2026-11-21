@@ -43,7 +43,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering(
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr(phase_deltas)?;
-        let (engine, total_q_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let (engine, total_q_len) = init_phase_engine(head_dim, num_heads)?;
 
         // SAFETY: Validated for non-nullness, alignment, and bounds.
         let mut q_aligned =
@@ -72,7 +72,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_fused(
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr_aligned(key_tensor, 32)?;
         validate_ptr(phase_deltas)?;
-        let (engine, total_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let (engine, total_len) = init_phase_engine(head_dim, num_heads)?;
 
         // SAFETY: Validated for non-nullness, alignment, bounds, and disjointness.
         let mut qk_pair = unsafe {
@@ -102,7 +102,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_safe(
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr(phase_deltas)?;
-        let (engine, total_q_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let (engine, total_q_len) = init_phase_engine(head_dim, num_heads)?;
 
         // SAFETY: Validated for non-nullness, alignment, and bounds.
         let mut q_aligned =
@@ -140,7 +140,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_with_config_safe(
             cfg.rotary_dim as usize
         };
         let layout = RopePairLayout::from_u8(cfg.rope_layout)?;
-        let (engine, total_q_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let (engine, total_q_len) = init_phase_engine(head_dim, num_heads)?;
         let geom = RopeGeometryDescriptor {
             layout,
             head_dim,
@@ -199,7 +199,7 @@ pub unsafe extern "C" fn gcso_dpsr_steer_with_gateway_and_config_safe(
             cfg.rotary_dim as usize
         };
         let layout = RopePairLayout::from_u8(cfg.rope_layout)?;
-        let (engine, total_q_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let (engine, total_q_len) = init_phase_engine(head_dim, num_heads)?;
         let geom = RopeGeometryDescriptor {
             layout,
             head_dim,
@@ -257,7 +257,7 @@ pub unsafe extern "C" fn gcso_dpsr_compute_procrustes_phase_delta_half_split(
         validate_ptr_aligned(q_before, 32)?;
         validate_ptr_aligned(q_after, 32)?;
         validate_ptr(q7_phase_out)?;
-        let (engine, total_q_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let (engine, total_q_len) = init_phase_engine(head_dim, num_heads)?;
         let geom = RopeGeometryDescriptor {
             layout: RopePairLayout::HalfSplit,
             head_dim,
@@ -301,7 +301,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_fused_safe(
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr_aligned(key_tensor, 32)?;
         validate_ptr(phase_deltas)?;
-        let (engine, total_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let (engine, total_len) = init_phase_engine(head_dim, num_heads)?;
 
         // SAFETY: Validated for non-nullness, alignment, bounds, and disjointness.
         let mut qk_pair = unsafe {
@@ -336,7 +336,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_geodesic_safe(
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr(phase_deltas)?;
-        let (engine, total_q_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let (engine, total_q_len) = init_phase_engine(head_dim, num_heads)?;
 
         // SAFETY: Validated for non-nullness, alignment, and bounds.
         let mut q_aligned =
@@ -366,7 +366,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_pointer_gated_phase_steering_safe(
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr(phase_deltas)?;
-        let (engine, total_q_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let (engine, total_q_len) = init_phase_engine(head_dim, num_heads)?;
 
         // SAFETY: Validated for non-nullness, alignment, and bounds.
         let mut q_aligned =
@@ -403,7 +403,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_pointer_gated_phase_steering_fused_safe
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr_aligned(key_tensor, 32)?;
         validate_ptr(phase_deltas)?;
-        let (engine, total_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let (engine, total_len) = init_phase_engine(head_dim, num_heads)?;
 
         // SAFETY: Validated for non-nullness, alignment, bounds, and disjointness.
         let mut qk_pair = unsafe {
@@ -813,7 +813,7 @@ pub unsafe extern "C" fn gcso_dpsr_apply_soft_phase_damping(
 ) -> GcsoStatus {
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
-        let (engine, total_q_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let (engine, total_q_len) = init_phase_engine(head_dim, num_heads)?;
 
         // SAFETY: Validated for non-nullness, alignment, and bounds.
         let mut q_aligned =
@@ -835,7 +835,7 @@ pub unsafe extern "C" fn gcso_qdps_filter_step(
 ) -> GcsoStatus {
     ffi_boundary!({
         validate_ptr(phase_deltas)?;
-        let (engine, _) = init_dpsr_engine(128, len)?;
+        let (engine, _) = init_phase_engine(128, len)?;
         // SAFETY: Validated for non-nullness, 16B alignment, and bounds.
         let mut p_aligned = unsafe { AlignedSliceMut16::from_raw_parts_mut(phase_deltas, len)? };
 
@@ -858,7 +858,7 @@ pub unsafe extern "C" fn gcso_dpsr_lazy_unwrap_override(
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr_aligned(context_accum, 32)?;
-        let (engine, total_q_len) = init_dpsr_engine(head_dim, num_heads)?;
+        let (engine, total_q_len) = init_phase_engine(head_dim, num_heads)?;
 
         // SAFETY: Validated for non-nullness, 32B alignment, bounds, and disjointness.
         let mut pair = unsafe {
@@ -912,7 +912,7 @@ pub unsafe extern "C" fn gcso_dpsr_fused_logit_shift(
     ffi_boundary!({
         validate_ptr_aligned(logits, 32)?;
         validate_ptr(phase_deltas)?;
-        let (engine, _) = init_dpsr_engine(128, num_heads)?;
+        let (engine, _) = init_phase_engine(128, num_heads)?;
         // SAFETY: Validated for non-nullness, alignment, and bounds.
         let (mut l_aligned, p_aligned) = unsafe {
             (

@@ -28,7 +28,7 @@ use crate::foundation::{
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    gcso_config_t, gcso_q7_t, Liminal, DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS,
+    gcso_config_t, gcso_q7_t, BitCut32, DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS,
     MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, THRESHOLD_MANIFOLD_GATEWAY,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
@@ -374,10 +374,8 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
     /// `(cognized_bits, unknowable_void_bits)` for [`Self::GATEWAY_APERTURE_MASK`].
     #[inline(always)]
     fn partition_gateway_horizon(&self) -> (u32, u32) {
-        self.partition_cognitive_and_unknowable_bits(
-            Self::GATEWAY_APERTURE_MASK,
-            self.causal_provenance_bits(),
-        )
+        let cut = BitCut32::split(self.causal_provenance_bits(), Self::GATEWAY_APERTURE_MASK);
+        (cut.inside, cut.outside)
     }
 
     /// Synthesizes all constituent blanket signals into a 128-byte [`GatewayFrame`] in
@@ -1031,9 +1029,9 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
     let mut action_flags = ACTION_PRESET_EXPRESS_PHASE;
     let mut swarm_mask = 0xFFu8;
     let mut qdps_step_q7 = branchless_rad_to_phase_step_u8(DEFAULT_PHASE_STEP_MIN_RAD);
-    let mut pspm_fact = 24u8;
-    let mut pspm_logic = 24u8;
-    let mut pspm_explore = 16u8;
+    let mut subhead_fact = 24u8;
+    let mut subhead_logic = 24u8;
+    let mut subhead_explore = 16u8;
     let mut fact_gain_q7 = 128u8;
     let mut logic_gain_q7 = 128u8;
     let mut explore_gain_q7 = 128u8;
@@ -1085,9 +1083,9 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
                 action_flags = f.action_mode_flags;
                 swarm_mask = f.active_swarm_cell_mask;
                 qdps_step_q7 = f.qdps_min_step_q7;
-                pspm_fact = f.subhead_fact_heads;
-                pspm_logic = f.subhead_logic_heads;
-                pspm_explore = f.subhead_explore_heads;
+                subhead_fact = f.subhead_fact_heads;
+                subhead_logic = f.subhead_logic_heads;
+                subhead_explore = f.subhead_explore_heads;
                 fact_gain_q7 = f.subhead_fact_gain_q7;
                 logic_gain_q7 = f.subhead_logic_gain_q7;
                 explore_gain_q7 = f.subhead_explore_gain_q7;
@@ -1132,10 +1130,12 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
                         storage_addr,
                     );
                     dom_slot = branchless_select_u8(take_dom, f.dominant_slot, dom_slot);
-                    pspm_fact = branchless_select_u8(take_dom, f.subhead_fact_heads, pspm_fact);
-                    pspm_logic = branchless_select_u8(take_dom, f.subhead_logic_heads, pspm_logic);
-                    pspm_explore =
-                        branchless_select_u8(take_dom, f.subhead_explore_heads, pspm_explore);
+                    subhead_fact =
+                        branchless_select_u8(take_dom, f.subhead_fact_heads, subhead_fact);
+                    subhead_logic =
+                        branchless_select_u8(take_dom, f.subhead_logic_heads, subhead_logic);
+                    subhead_explore =
+                        branchless_select_u8(take_dom, f.subhead_explore_heads, subhead_explore);
                     fact_gain_q7 =
                         branchless_select_u8(take_dom, f.subhead_fact_gain_q7, fact_gain_q7);
                     logic_gain_q7 =
@@ -1186,9 +1186,9 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
             action_mode_flags: action_flags,
             active_swarm_cell_mask: swarm_mask,
             qdps_min_step_q7: qdps_step_q7,
-            subhead_fact_heads: pspm_fact,
-            subhead_logic_heads: pspm_logic,
-            subhead_explore_heads: pspm_explore,
+            subhead_fact_heads: subhead_fact,
+            subhead_logic_heads: subhead_logic,
+            subhead_explore_heads: subhead_explore,
             subhead_fact_gain_q7: fact_gain_q7,
             subhead_logic_gain_q7: logic_gain_q7,
             subhead_explore_gain_q7: explore_gain_q7,
@@ -1681,9 +1681,9 @@ where
     let mut dom_slot = ATTRACTOR_SLOT_SYSTEM_BASELINE;
     let mut dom_anchor_id = 0u32;
     let mut storage_addr = 0u64;
-    let mut pspm_fact = 24u8;
-    let mut pspm_logic = 24u8;
-    let mut pspm_explore = 16u8;
+    let mut subhead_fact = 24u8;
+    let mut subhead_logic = 24u8;
+    let mut subhead_explore = 16u8;
 
     if has_fact & has_persona {
         let fact_uni = is_word_array_uniform_64(&fact_w);
@@ -1783,9 +1783,9 @@ where
             fact_addr,
             branchless_select_u64(pers_addr != 0, pers_addr, 0),
         );
-        pspm_fact = branchless_select_u8(fact_dom, 32, 20);
-        pspm_logic = 24;
-        pspm_explore = branchless_select_u8(fact_dom, 8, 20);
+        subhead_fact = branchless_select_u8(fact_dom, 32, 20);
+        subhead_logic = 24;
+        subhead_explore = branchless_select_u8(fact_dom, 8, 20);
     } else if has_fact {
         blended_w = fact_w;
         blended_uni = is_word_array_uniform_64(&fact_w);
@@ -1794,9 +1794,9 @@ where
         dom_slot = ATTRACTOR_SLOT_KNOWLEDGE;
         dom_anchor_id = fact_id;
         storage_addr = fact_addr;
-        pspm_fact = 36;
-        pspm_logic = 20;
-        pspm_explore = 8;
+        subhead_fact = 36;
+        subhead_logic = 20;
+        subhead_explore = 8;
     } else if has_persona {
         blended_w = pers_w;
         blended_uni = is_word_array_uniform_64(&pers_w);
@@ -1805,9 +1805,9 @@ where
         dom_slot = ATTRACTOR_SLOT_PERSONA;
         dom_anchor_id = pers_id;
         storage_addr = pers_addr;
-        pspm_fact = 16;
-        pspm_logic = 24;
-        pspm_explore = 24;
+        subhead_fact = 16;
+        subhead_logic = 24;
+        subhead_explore = 24;
     }
 
     let norm_ripa_clamp = {
@@ -1955,9 +1955,9 @@ where
             action_mode_flags: action_flags,
             active_swarm_cell_mask: active_swarm_mask,
             qdps_min_step_q7: qdps_step_u8,
-            subhead_fact_heads: pspm_fact,
-            subhead_logic_heads: pspm_logic,
-            subhead_explore_heads: pspm_explore,
+            subhead_fact_heads: subhead_fact,
+            subhead_logic_heads: subhead_logic,
+            subhead_explore_heads: subhead_explore,
             subhead_fact_gain_q7: fact_gain_q7,
             subhead_logic_gain_q7: logic_gain_q7,
             subhead_explore_gain_q7: pers_gain_q7,
@@ -1993,7 +1993,7 @@ where
 // 7. Blanket `ManifoldGatewaySignal` Implementations for Wrappers, Tuples & Ensembles
 // ===================================================================
 
-impl<T: Liminal> ManifoldGatewaySignal for SystemConstraint<T> {
+impl<T> ManifoldGatewaySignal for SystemConstraint<T> {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(
         &self,
@@ -2083,7 +2083,7 @@ impl<T: RawPhaseProjectable> ManifoldGatewaySignal for SubjectivePersona<T> {
     }
 }
 
-impl<B: Liminal> ManifoldGatewaySignal for ContradictionGuard<B>
+impl<B> ManifoldGatewaySignal for ContradictionGuard<B>
 where
     Self: ContradictionGuardSignal,
 {

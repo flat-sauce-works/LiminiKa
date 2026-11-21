@@ -15,8 +15,8 @@ use crate::foundation::{
     AlignedSlice16, AlignedSlice32, AlignedSliceMut16, Pod,
 };
 use crate::liminal::{
-    branchless_select_f32, gcso_q7_t, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
+    branchless_select_f32, gcso_q7_t, BitCut8, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT,
+    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::stigmergy::attractor::{
     gcso_anchor_type_t, AttractorAnchor, AttractorFieldEngine, CrystallizedAnchorRecord,
@@ -226,7 +226,7 @@ impl MultiAttractorSpace {
         let eligible_mask = if pref == usize::from(ATTRACTOR_SLOT_REPULSION) {
             0xFF
         } else {
-            !rep_bit
+            BitCut8::split(0xFF, rep_bit).outside
         };
         let (best_lane, _) = branchless_argmin_f32_x8_masked(&scores, eligible_mask);
         if usize::from(best_lane) < MAX_ATTRACTOR_DOMAINS {

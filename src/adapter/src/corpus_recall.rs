@@ -766,7 +766,6 @@ impl TextAttractorCorpus {
         Ok(id)
     }
 
-    /// Re-bakes or scores a query's per-layer Q activations against the corpus purely via
     /// Scores a query's per-layer Q activations against the corpus using the default
     /// 3-stratum Society-of-Mind pipeline, [`AsymmetricDominoVoidPerspective`], and
     /// [`CoherenceGuardGate`] to classify [`VoidBoundaryState`].

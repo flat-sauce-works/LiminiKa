@@ -81,7 +81,7 @@ pub struct LiminalHorizonNodeDescriptor {
     pub unknowable_void_mask: u32,
 }
 
-/// Canonical 8-channel capability/domain topology table derived from [`crate::liminal::Liminal`] threshold channels.
+/// Canonical 8-channel capability/domain topology table derived from `liminal::threshold` channels.
 pub const GCSO_LIMINAL_HORIZON_TOPOLOGY: [LiminalHorizonNodeDescriptor;
     NUM_LIMINAL_THRESHOLD_CHANNELS] = [
     LiminalHorizonNodeDescriptor {
