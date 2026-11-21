@@ -251,6 +251,7 @@ jobs:
           fi
 
       - name: Commit formatting changes if needed
+        id: auto_commit
         uses: stefanzweifel/git-auto-commit-action@v5
         continue-on-error: true
         with:
@@ -262,7 +263,7 @@ jobs:
         id: record_sha
         run: |
           NEW_SHA=$(git rev-parse HEAD)
-          if [ "$NEW_SHA" != "${{ steps.base_sha.outputs.sha }}" ]; then
+          if [ "${{ steps.auto_commit.outcome }}" = "success" ] && [ "$NEW_SHA" != "${{ steps.base_sha.outputs.sha }}" ]; then
             echo "sha=$NEW_SHA" >> "$GITHUB_OUTPUT"
           else
             echo "sha=" >> "$GITHUB_OUTPUT"
@@ -867,6 +868,7 @@ jobs:
           fi
           if [ -f "scripts/run_benchmarks.py" ]; then
             python scripts/run_benchmarks.py --help >/dev/null
+            python scripts/run_benchmarks.py --dry-run >/dev/null
           fi
           if [ -f "scripts/verify_architecture.py" ]; then
             python scripts/verify_architecture.py --help >/dev/null

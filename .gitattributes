@@ -12,6 +12,8 @@
 *.gcso binary
 *.gcsopack binary
 *.gcsocore binary
+*.lmnkc binary
+*.lmnkp binary
 *.safetensors binary
 *.gguf binary
 *.bin binary

@@ -140,6 +140,8 @@ datasets/*
 *.gcso
 *.gcsopack
 *.gcsocore
+*.lmnkc
+*.lmnkp
 *.sta
 
 containers/*
