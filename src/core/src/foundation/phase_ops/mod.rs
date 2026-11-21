@@ -11,9 +11,8 @@ pub(crate) use self::coherence::coherence_from_uniform_words_x8;
 pub use self::coherence::*;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 pub(crate) use self::coherence::{
-    avx2_coherence_from_diff_vec64, avx2_coherence_from_diff_vec64_with_floor, avx2_hsum2_ps,
-    avx2_hsum_ps, avx2_scale_vec64, avx2_slerp_from_diff_vec64, avx2_slerp_vec64,
-    avx2_u64x8_to_vec64, avx2_vec64_to_words64, avx2_words64_to_vec64,
+    avx2_coherence_from_diff_vec64, avx2_hsum2_ps, avx2_hsum_ps, avx2_slerp_from_diff_vec64,
+    avx2_slerp_vec64, avx2_vec64_to_words64, avx2_words64_to_vec64,
     avx2_words64_to_vec64_with_uniform,
 };
 pub(crate) use self::gravity_fold::branchless_q7_unified_field_fold_words_with_flags_64;

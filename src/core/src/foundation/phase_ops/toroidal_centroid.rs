@@ -13,7 +13,7 @@ use super::coherence::swar_slerp_word_unchecked_x8;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use super::coherence::{
     avx2_coherence_from_diff_vec64, avx2_mean_sincos_from_vec64, avx2_scale_vec64,
-    avx2_slerp_from_diff_vec64, avx2_u64x8_to_vec64, avx2_vec64_to_words64, avx2_words64_to_vec64,
+    avx2_u64x8_to_vec64, avx2_vec64_to_words64, avx2_words64_to_vec64,
     avx2_words64_to_vec64_with_uniform, sum_sincos_biased_u64_from_word,
 };
 use super::coherence::{
@@ -30,6 +30,8 @@ use crate::foundation::scalar_math::{
     branchless_is_finite_f32, branchless_rad_to_q7, branchless_relu_f32,
     branchless_von_mises_kappa, fast_inv_pos_normal_f32,
 };
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+use crate::foundation::scalar_math::{fast_sqrt_unit_f32, VON_MISES_KAPPA_AT_MAX_R};
 use crate::foundation::swar_simd::{
     is_word_array_uniform_64, load_q7_words_64, store_q7_words_64, swar_q7_circular_add_x8,
     swar_q7_circular_diff_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8,
