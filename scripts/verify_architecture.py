@@ -33,7 +33,7 @@ DAG_AND_AXIOM_RULES: list[tuple[str, str, re.Pattern[str]]] = [
         "Lv.1 foundation -> liminal::axiom / Scoped",
         "foundation",
         re.compile(
-            r"\b(?:liminal::axiom\b|Scoped\s*<|Scoped::|ScopedCut\b|Indivisible\s*<|Indivisible::|Indivisible\b|IndivisiblePhase\b|Activatable\b|Groundable\b|ActiveScope\b|GroundedScope\b|GroundedOrigin\b|SpeculativeDiscovery\b|BoundaryViolation\b|VerifiedAligned\b|BridgedDiscovery\b)"
+            r"\b(?:liminal::axiom\b|Scoped\s*<|Scoped::|ScopedCut\b|Indivisible\s*<|Indivisible::|Indivisible\b|IndivisiblePhase\b|\bAbstractDomain\b|Activatable\b|Groundable\b|ActiveScope\b|GroundedScope\b|GroundedOrigin\b|SpeculativeDiscovery\b|BoundaryViolation\b|VerifiedAligned\b|BridgedDiscovery\b)"
         ),
     ),
     (
@@ -84,7 +84,14 @@ REQUIRED_CANONICAL_PATHS: tuple[str, ...] = ("stigmergy/substrate.rs",)
 SCOPED_BOUNDARY_TYPE_RE = re.compile(
     r"\b(?:Scoped\s*<|ScopedCut\b|VerifiedAligned\s*<|BoundaryViolation\s*<|SpeculativeDiscovery\s*<|BridgedDiscovery\s*<)"
 )
-FN_SIG_START_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:unsafe\s+)?fn\s+([A-Za-z0-9_]+)")
+PUB_TRAIT_START_RE = re.compile(
+    r"pub(?:\s*\([^)]*\))?\s+(?:(?:unsafe|auto)\s+)*trait\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
+)
+FN_START_RE = re.compile(
+    r"(?P<vis>pub(?:\s*\([^)]*\))?\s+)?"
+    r"(?:(?:default|const|async|unsafe|extern(?:\s+r*#*\".*?\"#*)?)\s+)*"
+    r"fn\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
+)
 CRATE_DEP_RE = re.compile(r"\bcrate::(liminal|foundation|stigmergy|drivers(?:::(?:spine|ego))?|runtime)\b")
 
 
@@ -92,10 +99,164 @@ def strip_cfg_test_tail(lines: list[str]) -> list[tuple[int, str]]:
     """Return `(1-based lineno, line)` pairs excluding `#[cfg(test)]` module tails."""
     kept: list[tuple[int, str]] = []
     for idx, line in enumerate(lines, 1):
-        if line.strip() == "#[cfg(test)]":
+        if line.split("//", 1)[0].strip() == "#[cfg(test)]":
             break
         kept.append((idx, line))
     return kept
+
+
+def advance_past_literal(text: str, idx: int) -> int | None:
+    """If `text[idx]` starts a string, raw string, or char literal, return the index after it."""
+    n = len(text)
+    if idx >= n:
+        return None
+
+    prev_is_ident = idx > 0 and (text[idx - 1].isalnum() or text[idx - 1] == "_")
+    ch = text[idx]
+
+    # 1. Raw string literal: r"...", r#"..."#, br"...", br#"..."#, cr"...", cr#"..."#
+    if not prev_is_ident:
+        r_idx = -1
+        if ch == "r":
+            r_idx = idx
+        elif ch in ("b", "c") and idx + 1 < n and text[idx + 1] == "r":
+            r_idx = idx + 1
+        if r_idx != -1:
+            j = r_idx + 1
+            hashes = 0
+            while j < n and text[j] == "#":
+                hashes += 1
+                j += 1
+            if j < n and text[j] == '"':
+                closing = '"' + ("#" * hashes)
+                end = text.find(closing, j + 1)
+                return n if end == -1 else end + len(closing)
+
+    # 2. Standard, byte, or C string literal: "...", b"...", c"..."
+    str_quote_idx = -1
+    if ch == '"':
+        str_quote_idx = idx
+    elif not prev_is_ident and ch in ("b", "c") and idx + 1 < n and text[idx + 1] == '"':
+        str_quote_idx = idx + 1
+    if str_quote_idx != -1:
+        j = str_quote_idx + 1
+        while j < n:
+            if text[j] == "\\":
+                j += 2
+            elif text[j] == '"':
+                return j + 1
+            else:
+                j += 1
+        return n
+
+    # 3. Char or byte-char literal ('x', '\n', '\x7f', '\u{...}', b'x') vs. lifetime ('a, 'static, '_)
+    char_quote_idx = -1
+    if ch == "'" and not prev_is_ident:
+        char_quote_idx = idx
+    elif not prev_is_ident and ch == "b" and idx + 1 < n and text[idx + 1] == "'":
+        char_quote_idx = idx + 1
+    if char_quote_idx != -1:
+        q = char_quote_idx
+        if q + 1 < n and text[q + 1] == "\\":
+            j = q + 2
+            while j < n:
+                if text[j] == "\\":
+                    j += 2
+                elif text[j] == "'":
+                    return j + 1
+                elif text[j] == "\n":
+                    break
+                else:
+                    j += 1
+        elif q + 2 < n and text[q + 1] not in ("'", "\\", "\n", "\r") and text[q + 2] == "'":
+            return q + 3
+
+    return None
+
+
+def strip_comments_preserve_lines(text: str) -> str:
+    """Replace `//` line comments and nested `/* ... */` block comments with spaces, preserving `\n`."""
+    n = len(text)
+    out: list[str] = []
+    i = 0
+    while i < n:
+        if text[i:i + 2] == "//":
+            j = text.find("\n", i + 2)
+            if j == -1:
+                out.append(" " * (n - i))
+                break
+            out.append(" " * (j - i))
+            i = j
+            continue
+
+        if text[i:i + 2] == "/*":
+            depth = 1
+            out.append("  ")
+            i += 2
+            while i < n and depth > 0:
+                if text[i:i + 2] == "/*":
+                    depth += 1
+                    out.append("  ")
+                    i += 2
+                elif text[i:i + 2] == "*/":
+                    depth -= 1
+                    out.append("  ")
+                    i += 2
+                else:
+                    out.append("\n" if text[i] == "\n" else " ")
+                    i += 1
+            continue
+
+        next_i = advance_past_literal(text, i)
+        if next_i is not None:
+            out.append(text[i:next_i])
+            i = next_i
+            continue
+
+        out.append(text[i])
+        i += 1
+
+    return "".join(out)
+
+
+def scan_until_top_level_terminator(text: str, start_idx: int) -> tuple[int, str]:
+    """Scan from `start_idx` until `{` or `;` at `paren_depth == 0 and bracket_depth == 0 and angle_depth == 0`."""
+    n = len(text)
+    paren_depth = 0
+    bracket_depth = 0
+    angle_depth = 0
+    j = start_idx
+
+    while j < n:
+        next_j = advance_past_literal(text, j)
+        if next_j is not None:
+            j = next_j
+            continue
+
+        two = text[j:j + 2]
+        if two in ("->", "=>"):
+            j += 2
+            continue
+
+        ch = text[j]
+        if ch == "(":
+            paren_depth += 1
+        elif ch == ")":
+            paren_depth = max(0, paren_depth - 1)
+        elif ch == "[":
+            bracket_depth += 1
+        elif ch == "]":
+            bracket_depth = max(0, bracket_depth - 1)
+        elif ch == "<":
+            angle_depth += 1
+        elif ch == ">":
+            angle_depth = max(0, angle_depth - 1)
+        elif ch in ("{", ";") and paren_depth == 0 and bracket_depth == 0 and angle_depth == 0:
+            return j, ch
+
+        j += 1
+
+    return n, ""
 
 
 def check_abstract_domain_invariant(core_src: pathlib.Path) -> list[str]:
@@ -121,8 +282,82 @@ def check_abstract_domain_invariant(core_src: pathlib.Path) -> list[str]:
     return violations
 
 
+def scan_scoped_boundary_violations_in_source(source: str, source_label: str = "<memory>") -> list[str]:
+    """Scan non-test Rust source text for public cross-observer `Scoped<` or `*_scoped*` signatures."""
+    violations: list[str] = []
+    non_test_lines = strip_cfg_test_tail(source.splitlines())
+    truncated_source = "\n".join(line for _lineno, line in non_test_lines)
+    clean_text = strip_comments_preserve_lines(truncated_source)
+
+    n = len(clean_text)
+    brace_depth = 0
+    pub_trait_depths: list[int] = []
+    i = 0
+
+    while i < n:
+        next_i = advance_past_literal(clean_text, i)
+        if next_i is not None:
+            i = next_i
+            continue
+
+        ch = clean_text[i]
+        if ch == "{":
+            brace_depth += 1
+            i += 1
+            continue
+        if ch == "}":
+            brace_depth = max(0, brace_depth - 1)
+            while pub_trait_depths and pub_trait_depths[-1] > brace_depth:
+                pub_trait_depths.pop()
+            i += 1
+            continue
+
+        prev_is_ident = i > 0 and (clean_text[i - 1].isalnum() or clean_text[i - 1] == "_")
+        if not prev_is_ident and (ch.isalpha() or ch == "_"):
+            trait_match = PUB_TRAIT_START_RE.match(clean_text, i)
+            if trait_match is not None:
+                term_idx, term_ch = scan_until_top_level_terminator(clean_text, trait_match.end())
+                if term_ch == "{":
+                    brace_depth += 1
+                    pub_trait_depths.append(brace_depth)
+                i = term_idx + 1
+                continue
+
+            fn_match = FN_START_RE.match(clean_text, i)
+            if fn_match is not None:
+                sig_name = fn_match.group("name")
+                has_pub_vis = fn_match.group("vis") is not None
+                in_pub_trait = bool(pub_trait_depths) and brace_depth == pub_trait_depths[-1]
+                is_public_sig = has_pub_vis or in_pub_trait
+
+                term_idx, term_ch = scan_until_top_level_terminator(clean_text, fn_match.end())
+                if is_public_sig:
+                    sig_start_line = clean_text.count("\n", 0, fn_match.start()) + 1
+                    header = " ".join(clean_text[fn_match.start():term_idx].split())
+                    if "_scoped" in sig_name:
+                        violations.append(
+                            f"Retired `*_scoped*` signature: {source_label}:{sig_start_line}: fn {sig_name}"
+                        )
+                    if SCOPED_BOUNDARY_TYPE_RE.search(header):
+                        violations.append(
+                            f"Cross-observer `Scoped<` signature leak: {source_label}:{sig_start_line}: {header}"
+                        )
+                if term_ch == "{":
+                    brace_depth += 1
+                i = term_idx + 1
+                continue
+
+            while i < n and (clean_text[i].isalnum() or clean_text[i] == "_"):
+                i += 1
+            continue
+
+        i += 1
+
+    return violations
+
+
 def check_cross_observer_scoped_boundaries(core_src: pathlib.Path) -> list[str]:
-    """Verify Lv.2..Lv.4 cross-observer APIs do not leak `Scoped<` or retired `*_scoped*` forwarders."""
+    """Verify Lv.2..Lv.4 public cross-observer APIs do not leak `Scoped<` or retired `*_scoped*` forwarders."""
     violations: list[str] = []
     for layer in ("stigmergy", "drivers", "runtime"):
         layer_dir = core_src / layer
@@ -131,38 +366,8 @@ def check_cross_observer_scoped_boundaries(core_src: pathlib.Path) -> list[str]:
         for rs_file in sorted(layer_dir.rglob("*.rs")):
             if rs_file.name == "tests.rs" or "tests" in rs_file.parts:
                 continue
-            lines = rs_file.read_text(encoding="utf-8").splitlines()
-            non_test_lines = strip_cfg_test_tail(lines)
-
-            sig_buf: list[str] = []
-            sig_start_line = 0
-            sig_name = ""
-            for lineno, raw_line in non_test_lines:
-                code = raw_line.split("//", 1)[0]
-                if not sig_buf:
-                    m = FN_SIG_START_RE.match(code)
-                    if m:
-                        sig_name = m.group(1)
-                        sig_start_line = lineno
-                        sig_buf = [code]
-                else:
-                    sig_buf.append(code)
-
-                if sig_buf:
-                    joined = " ".join(part.strip() for part in sig_buf)
-                    # Signature ends at body `{` or trait declaration `;`.
-                    if "{" in code or ";" in code:
-                        header = re.split(r"[{;]", joined, maxsplit=1)[0]
-                        if "_scoped" in sig_name:
-                            violations.append(
-                                f"Retired `*_scoped*` signature: {rs_file.as_posix()}:{sig_start_line}: fn {sig_name}"
-                            )
-                        if SCOPED_BOUNDARY_TYPE_RE.search(header):
-                            violations.append(
-                                f"Cross-observer `Scoped<` signature leak: {rs_file.as_posix()}:{sig_start_line}: {header.strip()}"
-                            )
-                        sig_buf = []
-                        sig_name = ""
+            source = rs_file.read_text(encoding="utf-8")
+            violations.extend(scan_scoped_boundary_violations_in_source(source, rs_file.as_posix()))
     return violations
 
 
