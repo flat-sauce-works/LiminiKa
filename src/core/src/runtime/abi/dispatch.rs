@@ -306,7 +306,9 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_ptrs_with_words(
             persona_anchor_id,
         ))
     };
-    // SAFETY: Validated above.
+    // SAFETY: `fact_phases` and `persona_phases` were validated non-null and bound to 64-element
+    // arrays above; `bloom_filter_opt` is validated non-null and aligned via
+    // `FfiHandleRef::from_raw_opt` inside `synthesize_multi_origin_generic_with_words`.
     unsafe {
         synthesize_multi_origin_generic_with_words(
             vram_pressure,
@@ -383,7 +385,9 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_bytes_with_words(
             persona_anchor_id,
         ))
     };
-    // SAFETY: Validated above.
+    // SAFETY: `fact_bytes` and `persona_bytes` were verified non-null for non-zero byte lengths
+    // and sliced within bounds above; `bloom_filter_opt` is validated non-null and aligned via
+    // `FfiHandleRef::from_raw_opt` inside `synthesize_multi_origin_generic_with_words`.
     unsafe {
         synthesize_multi_origin_generic_with_words(
             vram_pressure,
@@ -476,7 +480,9 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_f32_with_words(
             persona_anchor_id,
         ))
     };
-    // SAFETY: Validated above.
+    // SAFETY: `fact_values` and `persona_values` were verified non-null, `f32`-aligned, and
+    // sliced within bounds above; `bloom_filter_opt` is validated non-null and aligned via
+    // `FfiHandleRef::from_raw_opt` inside `synthesize_multi_origin_generic_with_words`.
     unsafe {
         synthesize_multi_origin_generic_with_words(
             vram_pressure,

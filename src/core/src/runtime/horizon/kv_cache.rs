@@ -6,7 +6,28 @@
 
 use super::slots::{HorizonEscalationProvider, HorizonEscalationRequest, LatentHorizonSlot};
 use super::*;
-use crate::stigmergy::CognitiveCircuitActivation;
+use crate::foundation::{
+    branchless_clamp_f32, branchless_splitmix64, circular_resultant_from_words_64,
+    encode_pframe_motion_delta_64, load_q7_words_64, seek_pframe_chain_words_64, store_q7_words_64,
+    swar_q7_abs_u8_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
+    swar_q7_scale_le128_with_bias_x8, swar_words_nonzero_64, words_to_q7_array_64,
+    KvMotionDeltaPacket, RawPhaseProjectable, ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE,
+};
+use crate::liminal::{
+    branchless_select_f32, gcso_q7_t, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
+    NUM_STIGMERGIC_GRANULES,
+};
+use crate::runtime::context::AutonomousCoreLayerStack;
+use crate::runtime::gateway::{
+    tangent_cosine_active_heads_64, CausalProvenanceSignal, CognitiveCircuitThresholdPolicy,
+    CognitiveGroundingSignal, GatewayFrame, ManifoldGatewaySignal, ObjectiveFactSignal,
+};
+use crate::runtime::storage::KvKeyframePacket;
+use crate::stigmergy::{
+    swar_mean_u8_le128_x8, CognitiveCircuitActivation, CognitiveTrajectoryLedger,
+    DissipativeOverflowReport, PheromoneDensityOps, ATTRACTOR_SLOT_KNOWLEDGE,
+    CAUSAL_AXIS_OBJECTIVE_FACT,
+};
 
 /// 192-byte (`#[repr(C, align(64))]`) host-RAM entry pairing a compressed 128-byte
 /// [`KvKeyframePacket`] (64-head Q7 KV-phase anchor) with an 8-byte [`CognitiveTrajectoryLedger`]

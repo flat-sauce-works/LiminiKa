@@ -28,7 +28,7 @@ fn validate_non_null_aligned_ptr<T>(raw_ptr: *mut T, align_mask: usize) -> GcsoR
     if ((raw_ptr as usize) & align_mask) != 0 {
         return Err(GCSO_ERROR_MISALIGNED_POINTER);
     }
-    // SAFETY: Nullness checked above.
+    // SAFETY: `raw_ptr` was verified non-null and aligned to `align_mask` immediately above.
     Ok(unsafe { NonNull::new_unchecked(raw_ptr) })
 }
 
@@ -321,9 +321,11 @@ impl<'a, T> FfiHandleMut<'a, T> {
     ) -> GcsoResult<(Self, FfiHandleMut<'a, U>, FfiHandleMut<'a, V>)> {
         // SAFETY: Validated for non-nullness, alignment, and pairwise disjointness before returning.
         let handle_a = unsafe { Self::from_raw(ptr_a)? };
-        // SAFETY: Checked for disjointness below.
+        // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and `align_of::<U>()` alignment;
+        // pairwise non-aliasing with `handle_a` and `handle_c` is enforced via `ensure_disjoint` before returning.
         let handle_b = unsafe { FfiHandleMut::<U>::from_raw(ptr_b)? };
-        // SAFETY: Checked for disjointness below.
+        // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and `align_of::<V>()` alignment;
+        // pairwise non-aliasing with `handle_a` and `handle_b` is enforced via `ensure_disjoint` before returning.
         let handle_c = unsafe { FfiHandleMut::<V>::from_raw(ptr_c)? };
         handle_a.ensure_disjoint(&handle_b)?;
         handle_a.ensure_disjoint(&handle_c)?;

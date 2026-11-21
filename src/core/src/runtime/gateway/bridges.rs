@@ -8,7 +8,52 @@
 //! `EntropyController`) with Lv.4 Gateway/Signal contracts.
 
 use super::*;
+use crate::drivers::{
+    DistortionTension, EgoDifferentialNet, EntropyController, LiminalEgoField, SystemSpineState,
+    EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
+    EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LAYER_DISTORTION, EGO_TRIGGER_LIMINAL_EXTERIOR,
+    ENTROPY_GATE_MODE_NORMAL_ENTROPY, ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION,
+};
+use crate::foundation::{
+    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
+    branchless_lerp_f32, branchless_max_f32, branchless_min_f32, branchless_rad_to_phase_step_u8,
+    branchless_relu_f32, coherence_from_word_arrays_with_both_uniform_flags_64,
+    fast_inv_pos_normal_f32, fast_ln_1p_bounded_f32, fast_mean_q7_tag_from_words_64,
+    gcso_tagged_ptr_t, is_word_array_uniform_64, load_q7_words_64, pack_action_slot_tag,
+    store_q7_words_64, swar_q7_avg_round_x8, swar_q7_circular_diff_x8,
+    swar_q7_mean_i8_from_words_64, swar_q7_mean_i8_from_words_with_uniform_flag_64,
+    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64,
+    words_to_q7_array_64, AlignedSlice32, AlignedSliceMut32, PhaseSteering, Pod,
+    RawPhaseProjectable, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PHASE_STEER,
+    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR,
+    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
+    DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, TAG_ACTION_MODE_MASK,
+};
+use crate::liminal::{
+    branchless_select_f32, branchless_select_i32, branchless_select_i8, branchless_select_u32,
+    branchless_select_u64, branchless_select_u8, branchless_select_usize, gcso_q7_t,
+    EpistemicPartition, GcsoResult, LiminalThresholdField, DEFAULT_ENTROPY_EPS,
+    GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
+};
+use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::context::AutonomousCoreLayerStack;
+use crate::runtime::horizon::EpistemicHorizonReading;
+use crate::runtime::telemetry::{CoreTelemetryBank, LayerDistortionKind};
+use crate::stigmergy::{
+    gcso_anchor_type_t, gcso_pointer_trail_t, trail_phase_words_mut, trail_phase_words_ref,
+    AttractorAnchor, CognitiveCircuitActivation, CognitiveCircuitBank, CognitiveCircuitBankOps,
+    CognitiveOpKind, CognitiveTrajectoryLedger, CrystallizedAnchorRecord,
+    CrystallizedAttractorRecord, DissipativeOverflowReport, EpisodicPhaseSample,
+    RelativeAttractorNode, ResidualAdapterEngine, SandboxLifecycleEvent, StigmergicActionDecision,
+    StigmergicGranuleField, StigmergicOverlapSerendipityReport, StigmergicScaleGranularity,
+    StigmergicSubstrate, StigmergicSubstrateOps, SubstrateStepReport, WorkbenchSlotSpec,
+    ATTRACTOR_SLOT_CRYSTALLIZED, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
+    ATTRACTOR_SLOT_REPULSION, DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
+    GCSO_ANCHOR_TYPE_CRYSTALLIZED, MAX_ATTRACTOR_PULL_FORCE, SUBSTRATE_INLINE_TRAILS,
+    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_SWARM_QUORUM_MASK,
+    TRAIL_SWARM_QUORUM_SHIFT,
+};
 
 impl ResidualAdapterEngine {
     /// Applies norm-adaptive fused Rank-1 residual injection driven by `frame`.
@@ -70,7 +115,7 @@ impl SystemSpineState {
 }
 
 impl EgoDifferentialNet {
-    /// Evaluates the fixed-length [`DistortionDelta`] network (1-hop parallel perspective ensemble
+    /// Evaluates the fixed-length [`crate::drivers::DistortionDelta`] network (1-hop parallel perspective ensemble
     /// when `max_hops == 1`, or sequential chain up to 4 hops when `max_hops >= 2`; `0` heap alloc,
     /// `0 fdiv`) and returns `(modulated_frame, delta_norm_q7, hops_traversed)`.
     ///
@@ -93,7 +138,7 @@ impl EgoDifferentialNet {
         (frame, norm, hops)
     }
 
-    /// Evaluates the fixed-length [`DistortionDelta`] network and additionally returns the selected
+    /// Evaluates the fixed-length [`crate::drivers::DistortionDelta`] network and additionally returns the selected
     /// entry node index `entry_idx` (`0..8`) for reinforcement telemetry tracking.
     #[inline]
     #[must_use]
@@ -127,7 +172,7 @@ impl EgoDifferentialNet {
         (isolated, avg_delta, hops_traversed, entry_idx)
     }
 
-    /// Evaluates the fixed-length [`DistortionDelta`] network and additionally returns the bitmask
+    /// Evaluates the fixed-length [`crate::drivers::DistortionDelta`] network and additionally returns the bitmask
     /// of every matched/traversed node (`matched_mask`) for parallel perspective reinforcement via
     /// [`Self::record_matched_activations`].
     #[inline]
@@ -1411,7 +1456,7 @@ impl CrystallizedAttractorRecord {
 
     /// Autonomously nucleates a new attractor inside `centroids` when approximation noise in
     /// [`StigmergicOverlapSerendipityReport`] pushes a fragmented granule outside all existing
-    /// attractors' Venn apertures into [`Liminal`] (`serendipity_triggered != 0`).
+    /// attractors' Venn apertures into [`crate::liminal::Liminal`] (`serendipity_triggered != 0`).
     ///
     /// Returns `(spawned_slot_idx, spawned_anchor_id, did_nucleate)` in branchless constant time
     /// relative to centroid slot contents.

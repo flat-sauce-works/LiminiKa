@@ -3,48 +3,49 @@
 
 //! Core execution engine library for the Geometric Cellular Sheaf Orchestrator (GCSO).
 //!
-//! This crate serves as the primary low-level runtime engine for `LiminiKa`, implementing the
-//! Geometric Cellular Sheaf Orchestrator (GCSO) architecture targeting 2-4 GB VRAM environments.
+//! This crate serves as the primary `#![no_std]` runtime engine for `LiminiKa`, implementing
+//! non-invasive LLM steering and low-VRAM (2-4 GB) orchestration across a Y-shaped 5-layer
+//! unidirectional DAG (`liminal` || `foundation` -> `stigmergy` -> `drivers/{spine,ego}` -> `runtime`).
 //!
-//! # Architecture: Two-Layer Hybrid Trait Topology (`Liminal` + `StigmergicSubstrateOps` + Gateway)
-//! - **`Liminal` ([`crate::liminal::Liminal`])**: Root epistemic supertrait defining the
-//!   unknowable exterior beyond any trait's cognitive aperture (`!APERTURE_MASK`), gating
-//!   out-of-horizon steering cleanly to zero without data-dependent branches.
-//! - **`StigmergicSubstrateOps` (Core Sidecar State & Capability Ledger, [`crate::stigmergy::StigmergicSubstrateOps`])**: The
-//!   widest-aperture composite ledger (`HUB_APERTURE_MASK = 0x0000_FFFF`) combining
-//!   `Liminal + PhaseSteering + PointerSubstrate + FastPathLedger`, completely agnostic
-//!   to Hot vs. Cold Path execution.
-//! - **Concrete Core Kernels**: Deterministic constant-time $\mathcal{O}(1)$ execution (`PhaseSteeringEngine`,
-//!   `StigmergicSubstrate`, `EntropyController`, `MultiAttractorSpace`, `MappedStorageEngine`, plus pure
-//!   sub-head routing, Rank-1 residual, visual steering, sheaf cohomology, L2P-SVD, and DNP functions)
-//!   with zero dynamic allocations ($C_{\mathrm{alloc}} = 0$).
-//! - **Latent Horizon Traits (`ManifoldGatewaySignal`, `StigmergicReceptor`)**: Thin boundary
-//!   contracts uniting `SystemConstraintSignal`, `ObjectiveFactSignal`, `SubjectivePersonaSignal`,
-//!   `ContradictionGuardSignal`, and external action/storage slots around the 3-layer core stack.
+//! # Architecture: `2 Primitives x 2 Drivers` over the 5-Layer DAG
+//! - **Level 0 — `liminal` ([`crate::liminal`])**: Boundary axiom (`liminal::axiom`),
+//!   4-state `Lacuna` measurement, `LiminalThresholdField`, and root [`crate::liminal::Liminal`]
+//!   trait gating out-of-horizon steering cleanly to zero without data-dependent branches.
+//! - **Level 1 — `foundation` ([`crate::foundation`])**: Zero-allocation pure geometry, POD,
+//!   aligned-slice, SWAR/AVX2 SIMD, CRC32/trig lookup tables, RoPE phase steering, Rank-1
+//!   residual injection, LoRA phase projection, and matrix-free sheaf cohomology kernels.
+//! - **Level 2 — `stigmergy` ([`crate::stigmergy`])**: Passive carrier medium (`StigmergicSubstrate`)
+//!   with 8-lane working bank, 8-granule quorum, contrastive Bloom filters, `.gcso` crystallization,
+//!   concrete `PhaseSteeringEngine`/`ResidualAdapterEngine`, and [`crate::stigmergy::StigmergicSubstrateOps`]
+//!   operating across the widest threshold mask (`THRESHOLD_STIGMERGY_WIDE`).
+//! - **Level 3 — `drivers` ([`crate::drivers`])**: Orthogonal `spine` (`SystemSpineState`,
+//!   `EntropyController`, `AnonymousComputePool`) and `ego` (`EgoDifferentialNet`, `LiminalEgoField`)
+//!   forces isolated behind dual `DistortionTension` / `DistortionDelta`.
+//! - **Level 4 — `runtime` ([`crate::runtime`])**: Single orchestrator facade (`RuntimeContext`),
+//!   Manifold Gateway (`ManifoldGatewaySignal`, `GatewayFrame`), Latent Horizon (`LatentHorizonSlot`),
+//!   `.gcso` storage, telemetry, and the C-ABI `v0.1.3` boundary (`abi`).
 //!
 //! # Core Mathematical & Systems Design Principles
-//! 1. **Sequential Conditional Transition Probability $\times$ Attention Phase Interference**:
+//! 1. **Sequential Conditional Transition Probability x Attention Phase Interference**:
 //!    Long-horizon persona and context consistency $P(M_1, \dots, M_T) = \prod_{t=1}^T P(M_t \mid M_{<t})$
 //!    is factored into local conditional transitions modulated in $\mathcal{O}(1)$ via RoPE phase
 //!    steering without modifying host model weights $W_Q, W_K$.
 //! 2. **Fractal Self-Similarity & Indirect Pointer-Chain Routing on `StigmergicSubstrate`**:
 //!    From 128-byte pointer trails (`gcso_pointer_trail_t`), 128-byte `GatewayFrame` /
 //!    `CrystallizedAttractorRecord` basins, up to nested composites `[Node; K]` and `(A, B)`,
-//!    every layer implements [`crate::stigmergy::RelativeAttractorNode`] (`Liminal`) with recursive
+//!    every node implements [`crate::stigmergy::RelativeAttractorNode`] with recursive
 //!    $SO(2)^{64}$ resultant folding (`fold_fractal_nodes_words_64`), dissipative overflow scatter /
 //!    autonomous daughter crystallization (`DissipativeOverflowReport`), and perspective-flipped signed
 //!    coupling (`RelativeCouplingMatrix`).
-//! 3. **`Liminal`, Dynamic `LiminalThresholdField`, & Liminal Bifurcation Routing**:
+//! 3. **`Liminal`, Dynamic `LiminalThresholdField`, & Epistemic Horizon Routing**:
 //!    Queries inside carved memory horizons separate coherent grounding ($H^0$) from internal
 //!    opposition ($H^1 \neq 0$), while out-of-horizon queries enter `EpistemicRegime::Liminal`.
-//!    [`crate::liminal::LiminalThresholdField`] shifts per-channel cognitive horizons branchlessly in
-//!    response to cognitive trajectory habits and dissipative overflow, exposing live Mermaid topology
-//!    self-introspection via [`crate::runtime::LiminalTopologyTelemetrySnapshot`].
+//!    [`crate::liminal::LiminalThresholdField`] shifts per-channel thresholds branchlessly and
+//!    exposes live topology introspection via [`crate::runtime::LiminalTopologyTelemetrySnapshot`].
 //! 4. **Single Unified Attractor Manifold**:
 //!    All anchors coexist on a single unified phase manifold ($SO(2)^{d_{\mathrm{head}}/2}$)
-//!    governed by zero-hyperparameter phase-proximity gravity (`branchless_q7_resonant_pull_64`),
-//!    with an optional 8-lane hardware working cache window (`slot_phase_bank`) for $\mathcal{O}(1)$
-//!    tagged-pointer addressing.
+//!    governed by phase-proximity gravity (`branchless_q7_resonant_pull_64`), with an optional
+//!    8-lane working cache (`slot_phase_bank`) for $\mathcal{O}(1)$ tagged-pointer addressing.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(missing_docs)]

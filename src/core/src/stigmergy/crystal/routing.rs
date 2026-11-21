@@ -4,8 +4,6 @@
 //! Coarse-to-fine hierarchical routing, Top-2 liminal bifurcation routing, and ensemble
 //! folding for [`CrystallizedAttractorRecord`].
 
-#![allow(clippy::too_many_arguments)]
-
 use crate::foundation::{
     branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_min_f32,
     branchless_phase_proximity_gravity_f32, branchless_popcount_rsqrt_u32,

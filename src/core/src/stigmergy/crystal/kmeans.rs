@@ -3,8 +3,6 @@
 
 //! Toroidal centroid merging and evaporative pruning for [`CrystallizedAttractorRecord`].
 
-#![allow(clippy::too_many_arguments)]
-
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_maturity_scale_u32,
     branchless_max_f32, branchless_min_f32,
@@ -131,8 +129,7 @@ impl CrystallizedAttractorRecord {
         next_w
     }
 
-    /// **Autonomous Online Toroidal Centroid Consolidation & Evaporative Pruning ($\mathcal{O}(K^2)$ SWAR)**:
-    /// **Online Basin Consolidation (Centroid Merging & Evaporation Pruning on $SO(2)^{64}$)**:
+    /// **Online Basin Consolidation (Centroid Merging & Evaporation Pruning on $SO(2)^{64}$, $\mathcal{O}(K^2)$ SWAR)**:
     /// Applies `retention_decay`, prunes centroids below `min_gravity_mass`, and merges centroids
     /// whose pairwise phase coherence $\mathcal{C}_{\mathrm{phase}}(a, b) \ge \text{merge\_coherence\_thresh}$.
     #[inline]

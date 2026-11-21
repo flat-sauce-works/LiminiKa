@@ -7,161 +7,139 @@ mod eval_runner;
 mod eval_samples;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("LiminiKa GCSO Core Engine v{}", env!("CARGO_PKG_VERSION"));
-
-    // 1. Obtain version string from dynamic C-ABI
-    // SAFETY: `gcso_abi_get_version_string` returns a static NUL-terminated C string literal.
-    let version_str = unsafe {
-        let ptr = liminika_core::abi::gcso_abi_get_version_string();
-        std::ffi::CStr::from_ptr(ptr).to_str()?
-    };
-    println!("Loaded C-ABI Engine Version: {}", version_str);
-
-    // 2. Initialize runtime base configuration via C-ABI
-    let mut config = liminika_core::abi::gcso_config_t::default();
-    // SAFETY: `&mut config` points to a valid, uniquely borrowed `gcso_config_t`.
-    let status = unsafe { liminika_core::abi::gcso_config_init_default(&mut config) };
-    assert_eq!(status, liminika_core::abi::GCSO_SUCCESS);
-
-    // 3. Allocate context instance handle
-    let mut ctx_handle: liminika_core::abi::GcsoContextHandle = std::ptr::null_mut();
-    // SAFETY: `&config` and `&mut ctx_handle` are valid, aligned stack references.
-    let status = unsafe { liminika_core::abi::gcso_context_create(&config, &mut ctx_handle) };
-    assert_eq!(status, liminika_core::abi::GCSO_SUCCESS);
-
-    println!("Context initialized successfully. Ready for token stepping.");
-
-    // 4. Optional subcommand: `eval-check [fixture_path]`
     let mut args = std::env::args().skip(1);
-    if let Some(cmd) = args.next() {
-        if cmd == "check" {
-            let path = args.next().ok_or("usage: liminika check <file.lmnk>")?;
-            let raw = std::fs::read_to_string(&path)?;
-            let program = liminika_dsl::parse_and_validate_lmnk(&raw)
-                .map_err(|e| format!("failed to validate {path}: {e}"))?;
-            println!(
-                "Validated '{}': {} persona(s), {} session(s), {} target(s).",
-                path,
-                program.personas.len(),
-                program.sessions.len(),
-                program.targets.len()
-            );
-        } else if cmd == "eval-check" {
-            let path = args
-                .next()
-                .unwrap_or_else(|| "tests/fixtures/gcso_eval_samples.txt".to_string());
-            let raw = std::fs::read_to_string(&path)?;
-            let suite = eval_samples::EvalSampleSuite::parse(&raw)
-                .map_err(|e| format!("failed to parse {}: {}", path, e))?;
-            println!(
-                "Loaded eval fixture '{}': {} facts, {} persona samples, {} guards, {} probes.",
-                path,
-                suite.facts.len(),
-                suite.persona.len(),
-                suite.guards.len(),
-                suite.probes.len()
-            );
-            for (i, probe) in suite.probes.iter().enumerate() {
-                println!(
-                    "  [Probe {} | {:?}] {} (expect: {}, forbid: {})",
-                    i + 1,
-                    probe.slot,
-                    probe.prompt,
-                    probe.expected_keywords.join(", "),
-                    probe.forbidden_keywords.join(", ")
-                );
-            }
-        } else if cmd == "eval-dry-run" {
-            let path = args
-                .next()
-                .unwrap_or_else(|| "tests/fixtures/gcso_eval_samples.txt".to_string());
-            let raw = std::fs::read_to_string(&path)?;
-            let suite = eval_samples::EvalSampleSuite::parse(&raw)
-                .map_err(|e| format!("failed to parse {}: {}", path, e))?;
+    let Some(cmd) = args.next() else {
+        return run_default_c_abi_smoke();
+    };
 
-            let geom = eval_runner::RopeGeometry {
-                layout: eval_runner::RopeLayout::HalfSplit,
-                head_dim: 128,
-                rotary_dim: 64,
-                num_q_heads: 24,
-                num_kv_heads: 8,
-                num_layers: 32,
-                layer_rope_mask: 0xFFFF_FFFF,
-            };
-            let mut backend = eval_runner::DummyBackend::new(geom);
-            let profile = eval_runner::bake_in_memory_profile(&mut backend, &suite)
-                .map_err(|e| format!("bake failed: {}", e))?;
-            let angles = [0.0_f32, 0.05, 0.10, 0.15, 0.25];
-            let rows = eval_runner::run_angle_sweep(&mut backend, &suite, &profile, &angles, 48)
-                .map_err(|e| format!("sweep failed: {}", e))?;
-
+    if cmd == "check" {
+        let path = args.next().ok_or("usage: liminika check <file.lmnk>")?;
+        let raw = std::fs::read_to_string(&path)?;
+        let program = liminika_dsl::parse_and_validate_lmnk(&raw)
+            .map_err(|e| format!("failed to validate {path}: {e}"))?;
+        println!(
+            "Validated '{}': {} persona(s), {} session(s), {} target(s).",
+            path,
+            program.personas.len(),
+            program.sessions.len(),
+            program.targets.len()
+        );
+    } else if cmd == "eval-check" {
+        let path = args
+            .next()
+            .unwrap_or_else(|| "tests/fixtures/gcso_eval_samples.txt".to_string());
+        let raw = std::fs::read_to_string(&path)?;
+        let suite = eval_samples::EvalSampleSuite::parse(&raw)
+            .map_err(|e| format!("failed to parse {}: {}", path, e))?;
+        println!(
+            "Loaded eval fixture '{}': {} facts, {} persona samples, {} guards, {} probes.",
+            path,
+            suite.facts.len(),
+            suite.persona.len(),
+            suite.guards.len(),
+            suite.probes.len()
+        );
+        for (i, probe) in suite.probes.iter().enumerate() {
             println!(
-                "Dry-run sweep on '{}' (active RoPE layers: {}):",
-                path, profile.active_rope_layers
+                "  [Probe {} | {:?}] {} (expect: {}, forbid: {})",
+                i + 1,
+                probe.slot,
+                probe.prompt,
+                probe.expected_keywords.join(", "),
+                probe.forbidden_keywords.join(", ")
             );
+        }
+    } else if cmd == "eval-dry-run" {
+        let path = args
+            .next()
+            .unwrap_or_else(|| "tests/fixtures/gcso_eval_samples.txt".to_string());
+        let raw = std::fs::read_to_string(&path)?;
+        let suite = eval_samples::EvalSampleSuite::parse(&raw)
+            .map_err(|e| format!("failed to parse {}: {}", path, e))?;
+
+        let geom = eval_runner::RopeGeometry {
+            layout: eval_runner::RopeLayout::HalfSplit,
+            head_dim: 128,
+            rotary_dim: 64,
+            num_q_heads: 24,
+            num_kv_heads: 8,
+            num_layers: 32,
+            layer_rope_mask: 0xFFFF_FFFF,
+        };
+        let mut backend = eval_runner::DummyBackend::new(geom);
+        let profile = eval_runner::bake_in_memory_profile(&mut backend, &suite)
+            .map_err(|e| format!("bake failed: {}", e))?;
+        let angles = [0.0_f32, 0.05, 0.10, 0.15, 0.25];
+        let rows = eval_runner::run_angle_sweep(&mut backend, &suite, &profile, &angles, 48)
+            .map_err(|e| format!("sweep failed: {}", e))?;
+
+        println!(
+            "Dry-run sweep on '{}' (active RoPE layers: {}):",
+            path, profile.active_rope_layers
+        );
+        println!(
+            "{:>8} | {:>10} | {:>12} | {:>11} | {:>11}",
+            "max_rad", "mean_KL", "d_logprob", "expect_hit", "forbid_hit"
+        );
+        for r in rows {
             println!(
-                "{:>8} | {:>10} | {:>12} | {:>11} | {:>11}",
-                "max_rad", "mean_KL", "d_logprob", "expect_hit", "forbid_hit"
+                "{:>8.2} | {:>10.4} | {:>+12.4} | {:>10.1}% | {:>10.1}%",
+                r.max_rad,
+                r.mean_kl_div,
+                r.mean_target_logprob_delta,
+                r.expected_hit_rate * 100.0,
+                r.forbidden_hit_rate * 100.0
             );
-            for r in rows {
-                println!(
-                    "{:>8.2} | {:>10.4} | {:>+12.4} | {:>10.1}% | {:>10.1}%",
-                    r.max_rad,
-                    r.mean_kl_div,
-                    r.mean_target_logprob_delta,
-                    r.expected_hit_rate * 100.0,
-                    r.forbidden_hit_rate * 100.0
-                );
-            }
-        } else if cmd == "gcso-list" {
-            use liminika_adapter::GcsoDualTrackTimeline;
+        }
+    } else if cmd == "gcso-list" {
+        use liminika_adapter::GcsoDualTrackTimeline;
 
-            let dir = args.next().unwrap_or_else(|| "containers".to_string());
-            let entries = collect_gcso_paths_creating_dir(std::path::Path::new(&dir))?;
+        let dir = args.next().unwrap_or_else(|| "containers".to_string());
+        let entries = collect_gcso_paths_creating_dir(std::path::Path::new(&dir))?;
 
-            if entries.is_empty() {
-                println!("No .gcso containers found in '{}'.", dir);
-            } else {
-                println!("Found {} .gcso container(s) in '{}':", entries.len(), dir);
-                for path in entries {
-                    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                    match GcsoDualTrackTimeline::load_from_path(&path) {
-                        Ok(tl) => println!(
-                            "  {} | {} bytes | fp=0x{:016x} | frames={} | keyframes={:?}",
-                            path.display(),
-                            size,
-                            tl.model_fingerprint(),
-                            tl.frames().len(),
-                            tl.keyframe_positions()
-                        ),
-                        Err(e) => println!("  {} | invalid ({})", path.display(), e),
-                    }
+        if entries.is_empty() {
+            println!("No .gcso containers found in '{}'.", dir);
+        } else {
+            println!("Found {} .gcso container(s) in '{}':", entries.len(), dir);
+            for path in entries {
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                match GcsoDualTrackTimeline::load_from_path(&path) {
+                    Ok(tl) => println!(
+                        "  {} | {} bytes | fp=0x{:016x} | frames={} | keyframes={:?}",
+                        path.display(),
+                        size,
+                        tl.model_fingerprint(),
+                        tl.frames().len(),
+                        tl.keyframe_positions()
+                    ),
+                    Err(e) => println!("  {} | invalid ({})", path.display(), e),
                 }
             }
-        } else if cmd == "gcso-inspect" {
-            use liminika_adapter::{AttractorContainerCodec, GcsoDualTrackTimeline};
+        }
+    } else if cmd == "gcso-inspect" {
+        use liminika_adapter::{AttractorContainerCodec, GcsoDualTrackTimeline};
 
-            let path = args
-                .next()
-                .ok_or("usage: liminika gcso-inspect <file.gcso> [seek_frame]")?;
-            let seek_frame: Option<u64> = args.next().map(|s| s.parse::<u64>()).transpose()?;
-            let timeline = GcsoDualTrackTimeline::load_from_path(&path)?;
+        let path = args
+            .next()
+            .ok_or("usage: liminika gcso-inspect <file.gcso> [seek_frame]")?;
+        let seek_frame: Option<u64> = args.next().map(|s| s.parse::<u64>()).transpose()?;
+        let timeline = GcsoDualTrackTimeline::load_from_path(&path)?;
+        println!(
+            "Loaded .gcso '{}': fingerprint=0x{:016x} frames={} keyframes={:?}",
+            path,
+            timeline.model_fingerprint(),
+            timeline.frames().len(),
+            timeline.keyframe_positions()
+        );
+        for rec in timeline.export_subtitle_track(None) {
             println!(
-                "Loaded .gcso '{}': fingerprint=0x{:016x} frames={} keyframes={:?}",
-                path,
-                timeline.model_fingerprint(),
-                timeline.frames().len(),
-                timeline.keyframe_positions()
+                "  [Frame {} | {:?} | E={:.2}] {}",
+                rec.frame_index, rec.role, rec.energy, rec.text
             );
-            for rec in timeline.export_subtitle_track(None) {
-                println!(
-                    "  [Frame {} | {:?} | E={:.2}] {}",
-                    rec.frame_index, rec.role, rec.energy, rec.text
-                );
-            }
-            if let Some(target) = seek_frame {
-                let state = timeline.seek_zero_forward(target)?;
-                println!(
+        }
+        if let Some(target) = seek_frame {
+            let state = timeline.seek_zero_forward(target)?;
+            println!(
                     "Zero-Forward Seek(frame={}): keyframe={} p_frames={} total_energy={:.2} anchors={}",
                     state.target_frame_index,
                     state.keyframe_index,
@@ -169,82 +147,82 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     state.total_energy,
                     state.anchor_ids.len()
                 );
-            }
-        } else if cmd == "gcso-bake" {
-            let fixture_path = args
-                .next()
-                .unwrap_or_else(|| "tests/fixtures/gcso_eval_samples.txt".to_string());
-            let dst_path = args
-                .next()
-                .unwrap_or_else(|| "containers/fixture_baked.gcso".to_string());
-            let profile = args.next().unwrap_or_else(|| "phi4-mini".to_string());
-            let (timeline, written_bytes) = bake_fixture_to_gcso_file(
-                std::path::Path::new(&fixture_path),
-                std::path::Path::new(&dst_path),
-                &profile,
-            )?;
-            println!(
-                "Baked '{}' -> '{}' ({} bytes) | profile={} fp=0x{:016x} frames={} keyframes={:?}",
-                fixture_path,
-                dst_path,
-                written_bytes,
-                profile,
-                timeline.model_fingerprint(),
-                timeline.frames().len(),
-                timeline.keyframe_positions()
-            );
-        } else if cmd == "gcso-rebake" {
-            use liminika_adapter::{
-                AdaptiveGopCutDetector, GcsoDualTrackTimeline, ModelSteeringAdapter, RebakeContext,
-                RecallPolicy, TimelineResumeOutcome,
-            };
+        }
+    } else if cmd == "gcso-bake" {
+        let fixture_path = args
+            .next()
+            .unwrap_or_else(|| "tests/fixtures/gcso_eval_samples.txt".to_string());
+        let dst_path = args
+            .next()
+            .unwrap_or_else(|| "containers/fixture_baked.gcso".to_string());
+        let profile = args.next().unwrap_or_else(|| "phi4-mini".to_string());
+        let (timeline, written_bytes) = bake_fixture_to_gcso_file(
+            std::path::Path::new(&fixture_path),
+            std::path::Path::new(&dst_path),
+            &profile,
+        )?;
+        println!(
+            "Baked '{}' -> '{}' ({} bytes) | profile={} fp=0x{:016x} frames={} keyframes={:?}",
+            fixture_path,
+            dst_path,
+            written_bytes,
+            profile,
+            timeline.model_fingerprint(),
+            timeline.frames().len(),
+            timeline.keyframe_positions()
+        );
+    } else if cmd == "gcso-rebake" {
+        use liminika_adapter::{
+            AdaptiveGopCutDetector, GcsoDualTrackTimeline, ModelSteeringAdapter, RebakeContext,
+            RecallPolicy, TimelineResumeOutcome,
+        };
 
-            let src_path = args
-                .next()
-                .ok_or("usage: liminika gcso-rebake <src.gcso> <dst.gcso> [phi4-mini|alt-128]")?;
-            let dst_path = args
-                .next()
-                .ok_or("usage: liminika gcso-rebake <src.gcso> <dst.gcso> [phi4-mini|alt-128]")?;
-            let profile = args.next().unwrap_or_else(|| "alt-128".to_string());
+        let src_path = args
+            .next()
+            .ok_or("usage: liminika gcso-rebake <src.gcso> <dst.gcso> [phi4-mini|alt-128]")?;
+        let dst_path = args
+            .next()
+            .ok_or("usage: liminika gcso-rebake <src.gcso> <dst.gcso> [phi4-mini|alt-128]")?;
+        let profile = args.next().unwrap_or_else(|| "alt-128".to_string());
 
-            let target_geom = resolve_cli_rope_geometry(&profile)?;
-            let src_tl = GcsoDualTrackTimeline::load_from_path(&src_path)?;
-            let target_adapter = ModelSteeringAdapter::new(target_geom)?;
-            let policy = RecallPolicy::default();
-            let detector = AdaptiveGopCutDetector::default();
-            let mut encoder = CliProjectionEncoder {
-                num_layers: target_adapter.geometry().num_layers,
-                rotary_dim: target_adapter.geometry().q_rot_len(),
-            };
-            let ctx = RebakeContext {
-                adapter: &target_adapter,
-                policy: &policy,
-                detector: &detector,
-                centroid_layers: &[],
-                up_to_frame: None,
-            };
-            let target_frame = src_tl.frames().last().map_or(0, |f| f.frame_index);
-            match src_tl.resume_or_rebake(&ctx, &mut encoder, target_frame)? {
-                TimelineResumeOutcome::FastResumed { seek_state } => {
-                    let bytes = src_tl.save_to_path(&dst_path)?;
-                    println!(
+        let target_geom = resolve_cli_rope_geometry(&profile)?;
+        let src_tl = GcsoDualTrackTimeline::load_from_path(&src_path)?;
+        let target_adapter = ModelSteeringAdapter::new(target_geom)?;
+        let policy = RecallPolicy::default();
+        let detector = AdaptiveGopCutDetector::default();
+        let mut encoder = CliProjectionEncoder {
+            num_layers: target_adapter.geometry().num_layers,
+            rotary_dim: target_adapter.geometry().q_rot_len(),
+        };
+        let ctx = RebakeContext {
+            adapter: &target_adapter,
+            policy: &policy,
+            detector: &detector,
+            centroid_layers: &[],
+            up_to_frame: None,
+        };
+        let target_frame = src_tl.frames().last().map_or(0, |f| f.frame_index);
+        match src_tl.resume_or_rebake(&ctx, &mut encoder, target_frame)? {
+            TimelineResumeOutcome::FastResumed { seek_state } => {
+                let bytes = src_tl.save_to_path(&dst_path)?;
+                println!(
                         "EnvProbe matched (fp=0x{:016x}); FastResumed frame={} and copied '{}' ({} bytes).",
                         src_tl.model_fingerprint(),
                         seek_state.target_frame_index,
                         dst_path,
                         bytes
                     );
-                }
-                TimelineResumeOutcome::Rebaked {
-                    timeline,
-                    seek_state,
-                    source_fingerprint,
-                    target_fingerprint,
-                    rebaked_frames,
-                    ..
-                } => {
-                    let bytes = timeline.save_to_path(&dst_path)?;
-                    println!(
+            }
+            TimelineResumeOutcome::Rebaked {
+                timeline,
+                seek_state,
+                source_fingerprint,
+                target_fingerprint,
+                rebaked_frames,
+                ..
+            } => {
+                let bytes = timeline.save_to_path(&dst_path)?;
+                println!(
                         "Rebaked {} frames: 0x{:016x} -> 0x{:016x} | saved '{}' ({} bytes) | seek_frame={} anchors={}",
                         rebaked_frames,
                         source_fingerprint,
@@ -254,22 +232,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         seek_state.target_frame_index,
                         seek_state.anchor_ids.len()
                     );
-                }
             }
-        } else {
-            eprintln!("Unknown command '{}'. Available subcommands:", cmd);
-            eprintln!("  check <file.lmnk>");
-            eprintln!("  eval-check [fixture_path]");
-            eprintln!("  eval-dry-run [fixture_path]");
-            eprintln!("  gcso-list [containers_dir]");
-            eprintln!("  gcso-inspect <file.gcso> [seek_frame]");
-            eprintln!("  gcso-bake [fixture_path] [dst.gcso] [phi4-mini|alt-128]");
-            eprintln!("  gcso-rebake <src.gcso> <dst.gcso> [phi4-mini|alt-128]");
-            return Err(format!("unknown subcommand '{cmd}'").into());
         }
+    } else {
+        eprintln!("Unknown command '{}'. Available subcommands:", cmd);
+        eprintln!("  check <file.lmnk>");
+        eprintln!("  eval-check [fixture_path]");
+        eprintln!("  eval-dry-run [fixture_path]");
+        eprintln!("  gcso-list [containers_dir]");
+        eprintln!("  gcso-inspect <file.gcso> [seek_frame]");
+        eprintln!("  gcso-bake [fixture_path] [dst.gcso] [phi4-mini|alt-128]");
+        eprintln!("  gcso-rebake <src.gcso> <dst.gcso> [phi4-mini|alt-128]");
+        return Err(format!("unknown subcommand '{cmd}'").into());
     }
 
-    // 5. Clean up allocated context resources
+    Ok(())
+}
+
+fn run_default_c_abi_smoke() -> Result<(), Box<dyn std::error::Error>> {
+    println!("LiminiKa GCSO Core Engine v{}", env!("CARGO_PKG_VERSION"));
+
+    // SAFETY: `gcso_abi_get_version_string` returns a static NUL-terminated C string literal.
+    let version_str = unsafe {
+        let ptr = liminika_core::abi::gcso_abi_get_version_string();
+        std::ffi::CStr::from_ptr(ptr).to_str()?
+    };
+    println!("Loaded C-ABI Engine Version: {}", version_str);
+
+    let mut config = liminika_core::abi::gcso_config_t::default();
+    // SAFETY: `&mut config` points to a valid, uniquely borrowed `gcso_config_t`.
+    let status = unsafe { liminika_core::abi::gcso_config_init_default(&mut config) };
+    assert_eq!(status, liminika_core::abi::GCSO_SUCCESS);
+
+    let mut ctx_handle: liminika_core::abi::GcsoContextHandle = std::ptr::null_mut();
+    // SAFETY: `&config` and `&mut ctx_handle` are valid, aligned stack references.
+    let status = unsafe { liminika_core::abi::gcso_context_create(&config, &mut ctx_handle) };
+    assert_eq!(status, liminika_core::abi::GCSO_SUCCESS);
+
+    println!("Context initialized successfully. Ready for token stepping.");
+
     // SAFETY: `ctx_handle` was initialized by `gcso_context_create` and is destroyed once.
     unsafe { liminika_core::abi::gcso_context_destroy(ctx_handle) };
     Ok(())

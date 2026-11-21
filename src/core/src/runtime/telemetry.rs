@@ -8,24 +8,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::module_name_repetitions)]
 #![allow(clippy::must_use_candidate)]
-#![allow(clippy::inline_always)]
-#![allow(clippy::too_many_arguments)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::incompatible_msrv)]
-#![allow(clippy::type_complexity)]
-#![allow(clippy::needless_option_as_deref)]
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::manual_range_contains)]
-#![allow(clippy::manual_slice_size_calculation)]
-#![allow(clippy::unnecessary_cast)]
-#![allow(clippy::excessive_precision)]
-#![allow(clippy::approx_constant)]
-#![allow(clippy::if_same_then_else)]
-#![allow(clippy::ifs_same_cond)]
 
 use crate::drivers::{
     DistortionTension, LiminalEgoField, EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER,
@@ -82,23 +65,23 @@ pub struct LayerDistortionReport {
     pub ego_cooldown_recommended: bool,
 }
 
-/// Static compile-time descriptor binding a trait horizon node to its static cognitive threshold
-/// and unknowable exterior complement.
+/// Static compile-time descriptor binding a threshold channel node to its static cognitive
+/// threshold and unknowable exterior complement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LiminalHorizonNodeDescriptor {
     /// Mermaid graph node identifier (`"N0"`..`"N7"`).
     pub node_id: &'static str,
-    /// Human-readable Rust trait name refining [`crate::liminal::Liminal`].
+    /// Canonical capability or domain label associated with this threshold channel.
     pub trait_name: &'static str,
     /// Channel index (`0..8`) inside [`LiminalThresholdField`].
     pub channel_idx: usize,
-    /// Static cognitive threshold mask owned by this trait node.
+    /// Static cognitive threshold mask owned by this channel node.
     pub static_aperture_mask: u32,
     /// Type-level unknowable exterior complement (`!static_aperture_mask`).
     pub unknowable_void_mask: u32,
 }
 
-/// Canonical 8-channel trait topology table derived from type-level [`crate::liminal::Liminal`] refinements.
+/// Canonical 8-channel capability/domain topology table derived from [`crate::liminal::Liminal`] threshold channels.
 pub const GCSO_LIMINAL_HORIZON_TOPOLOGY: [LiminalHorizonNodeDescriptor;
     NUM_LIMINAL_THRESHOLD_CHANNELS] = [
     LiminalHorizonNodeDescriptor {

@@ -5,6 +5,41 @@
 //! multi-origin synthesis, and ensemble folding.
 
 use super::*;
+use crate::drivers::gcso_edbc_state_t;
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+use crate::foundation::branchless_rotate_so2_pair;
+use crate::foundation::{
+    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
+    branchless_lerp_f32, branchless_max_f32, branchless_min_f32,
+    branchless_phase_coherence_inv_temp_scale, branchless_rad_to_phase_step_u8,
+    branchless_relu_f32, branchless_sincos_q7_phase_clamp, coherence_from_uniform_words_x8,
+    coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_pos_normal_f32,
+    gcso_subhead_config_t, gcso_tagged_ptr_t, is_word_array_uniform_64, load_q7_words_64,
+    pack_action_slot_tag, resolve_autonomous_swarm_rot_dim, swar_q7_avg_round_x8,
+    swar_q7_circular_add_x8, swar_q7_circular_diff_x8, swar_q7_mean_i8_from_words_64,
+    swar_q7_mean_i8_from_words_with_uniform_flag_64, swar_q7_neg_sat_x8,
+    swar_q7_phase_step_filter_words_with_uniform_flag_64, swar_q7_scale_le128_with_bias_x8,
+    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64,
+    words_to_q7_array_64, Pod, RawPhaseProjectable, ACTION_MODE_LAYER_SKIP,
+    ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT,
+    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_INERTIAL_SKIP,
+    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
+    DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64, TAG_ACTION_MODE_MASK,
+};
+use crate::liminal::{
+    branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
+    gcso_config_t, gcso_q7_t, Liminal, DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS,
+    MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, THRESHOLD_MANIFOLD_GATEWAY,
+};
+use crate::runtime::boundary_delta::LiminalBoundaryDelta;
+use crate::runtime::context::AutonomousCoreLayerStack;
+use crate::runtime::horizon::EpistemicHorizonReading;
+use crate::stigmergy::{
+    gcso_pointer_trail_t, trail_phase_words_ref, StigmergicFragmentEnsembleReport,
+    StigmergicOverlapSerendipityReport, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
+    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_FACT_PHASE_CLAMP_RAD,
+    DEFAULT_PERSONA_PHASE_CLAMP_RAD, MAX_ATTRACTOR_PULL_FORCE,
+};
 
 // ===================================================================
 // 6. Single Composite Gateway Frame (`GatewayFrame` 128B Pod) & Trait
@@ -130,7 +165,7 @@ impl GatewayFrame {
     }
 
     /// Returns `true` when this [`GatewayFrame`] carries an active cohomology or Bloom repulsion guard
-    /// that must be rejected before mutating a [`CrystallizedAttractorRecord`] centroid.
+    /// that must be rejected before mutating a [`crate::stigmergy::CrystallizedAttractorRecord`] centroid.
     #[inline(always)]
     #[must_use]
     pub const fn is_repulsed(&self) -> bool {
@@ -351,7 +386,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
 
     /// Synthesizes `self` into both a 128-byte [`GatewayFrame`] and its register-resident 8 `u64`
     /// SWAR phase words (`[u64; 8]`), eliminating stack store-to-load forwarding stalls across
-    /// downstream ensemble folding, [`StigmergicSubstrate`] steering, and Online Toroidal $k$-Means steps.
+    /// downstream ensemble folding, [`crate::stigmergy::StigmergicSubstrate`] steering, and Online Toroidal $k$-Means steps.
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(
         &self,

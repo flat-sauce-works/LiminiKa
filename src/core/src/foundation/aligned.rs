@@ -10,10 +10,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::module_name_repetitions)]
 #![allow(clippy::must_use_candidate)]
-#![allow(clippy::inline_always)]
-#![allow(clippy::manual_slice_size_calculation)]
 
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of};

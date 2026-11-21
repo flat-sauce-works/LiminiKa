@@ -66,7 +66,7 @@ pub fn sensitivity_4p1mp_f32(p: f32) -> f32 {
 }
 
 /// Dynamic 32-byte (`#[repr(C, align(16))]`) boundary threshold field governing per-channel
-/// cognitive thresholds across Core Layer 0 (`Liminal`):
+/// cognitive thresholds across Core Stack Slot 0 (`Liminal`):
 /// - `0`: `SystemConstraintSignal` (`System`)
 /// - `1`: `ObjectiveFactSignal` (`Fact`)
 /// - `2`: `SubjectivePersonaSignal` (`Persona`)

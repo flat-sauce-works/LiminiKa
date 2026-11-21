@@ -8,26 +8,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::module_name_repetitions)]
 #![allow(clippy::must_use_candidate)]
-#![allow(clippy::inline_always)]
-#![allow(clippy::too_many_arguments)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::incompatible_msrv)]
-#![allow(clippy::type_complexity)]
-#![allow(clippy::needless_option_as_deref)]
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::manual_range_contains)]
-#![allow(clippy::manual_slice_size_calculation)]
-#![allow(clippy::unnecessary_cast)]
-#![allow(clippy::excessive_precision)]
-#![allow(clippy::approx_constant)]
-#![allow(clippy::if_same_then_else)]
-#![allow(clippy::ifs_same_cond)]
-#![allow(clippy::field_reassign_with_default)]
-#![allow(clippy::needless_return)]
 
 use crate::drivers::{
     gcso_edbc_state_t, AnonymousComputePool, ComputeDispatchMask, DistortionTension,
@@ -77,16 +58,17 @@ use crate::stigmergy::{
 /// Default number of tokens per PagedAttention KV cache block (`32`).
 pub const DEFAULT_PAGED_BLOCK_SIZE: u32 = 32;
 
-/// Number of orthogonal self-tuning autonomous core layers (`Layer 0: Liminal`, `Layer 1: Stigmergic`, `Layer 2: Ego`).
+/// Number of orthogonal self-tuning slots in the autonomous core stack
+/// (`Slot 0: Liminal`, `Slot 1: Stigmergic`, `Slot 2: Ego`).
 pub const NUM_CORE_AUTONOMOUS_LAYERS: usize = 3;
 
-/// Autonomous Core Layer 0 identifier: Epistemic Horizon & Trait Threshold (`LiminalThresholdField`).
+/// Autonomous Core Stack Slot 0 identifier: Epistemic Horizon & Trait Threshold (`LiminalThresholdField`).
 pub const CORE_LAYER_LIMINAL: usize = 0;
 
-/// Autonomous Core Layer 1 identifier: Stigmergic Granule Approximation, Overlap & Serendipity (`StigmergicGranuleField`).
+/// Autonomous Core Stack Slot 1 identifier: Stigmergic Granule Approximation, Overlap & Serendipity (`StigmergicGranuleField`).
 pub const CORE_LAYER_STIGMERGIC: usize = 1;
 
-/// Autonomous Core Layer 2 identifier: Wide-Threshold Subjective Ego & Top-Down Boundary Intervention (`LiminalEgoField`).
+/// Autonomous Core Stack Slot 2 identifier: Wide-Threshold Subjective Ego & Top-Down Boundary Intervention (`LiminalEgoField`).
 pub const CORE_LAYER_EGO: usize = 2;
 use crate::runtime::storage::{
     finalize_snapshot_header_crc32, init_snapshot_header, verify_snapshot_payload_crc32,
@@ -190,26 +172,26 @@ pub fn validate_config_invariants(config: &gcso_config_t) -> GcsoResult<()> {
 }
 
 // ===================================================================
-// 7. Unified 3-Layer Autonomous Core Stack (128 B = 2 Cache Lines)
+// 7. Unified 3-Slot Autonomous Core Stack (128 B = 2 Cache Lines)
 // ===================================================================
 
-/// Unified 128-byte (2 cache lines, `#[repr(C, align(64))]`) 3-layer autonomous core stack pairing:
-/// - **Layer 0 ([`LiminalThresholdField`], 32 B)**: Epistemic Horizon & Trait Cognitive Apertures
-/// - **Layer 1 ([`StigmergicGranuleField`], 32 B)**: Stigmergic Granule Approximation, Venn Overlap & Serendipity
-/// - **Layer 2 ([`LiminalEgoField`], 64 B)**: Top-Down Subjective Ego Boundary & Phase Intervention
+/// Unified 128-byte (2 cache lines, `#[repr(C, align(64))]`) 3-slot autonomous core stack pairing:
+/// - **Slot 0 ([`LiminalThresholdField`], 32 B)**: Epistemic Horizon & Trait Cognitive Apertures
+/// - **Slot 1 ([`StigmergicGranuleField`], 32 B)**: Stigmergic Granule Approximation, Venn Overlap & Serendipity
+/// - **Slot 2 ([`LiminalEgoField`], 64 B)**: Top-Down Subjective Ego Boundary & Phase Intervention
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AutonomousCoreLayerStack {
-    /// Core Layer 0: Epistemic Horizon & Trait Cognitive Aperture Controller (`offset 0..32`).
+    /// Core Stack Slot 0: Epistemic Horizon & Trait Cognitive Aperture Controller (`offset 0..32`).
     pub liminal_layer: LiminalThresholdField,
-    /// Core Layer 1: Stigmergic Granule Approximation & Serendipity Controller (`offset 32..64`).
+    /// Core Stack Slot 1: Stigmergic Granule Approximation & Serendipity Controller (`offset 32..64`).
     pub stigmergic_layer: StigmergicGranuleField,
-    /// Core Layer 2: Wide-Aperture Subjective Ego Controller (`offset 64..128`).
+    /// Core Stack Slot 2: Wide-Aperture Subjective Ego Controller (`offset 64..128`).
     pub ego_layer: LiminalEgoField,
 }
 
 impl AutonomousCoreLayerStack {
-    /// Constructs a neutral 128-byte [`AutonomousCoreLayerStack`] with all 3 core layers initialized.
+    /// Constructs a neutral 128-byte [`AutonomousCoreLayerStack`] with all 3 core slots initialized.
     #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
@@ -238,8 +220,8 @@ impl AutonomousCoreLayerStack {
         self.stigmergic_layer = substrate.stigmergy;
     }
 
-    /// Branchlessly co-adapts Layer 0 (`LiminalThresholdField`) and Layer 1 (`StigmergicGranuleField`)
-    /// with cross-layer feedback (serendipitous discovery in Layer 1 widens Layer 0's horizon).
+    /// Branchlessly co-adapts Slot 0 (`LiminalThresholdField`) and Slot 1 (`StigmergicGranuleField`)
+    /// with cross-slot feedback (serendipitous discovery in Slot 1 widens Slot 0's horizon).
     #[inline]
     pub fn adapt_layers_branchless(
         &mut self,
@@ -275,7 +257,7 @@ impl AutonomousCoreLayerStack {
             .adapt_from_horizon_and_overlap_branchless(horizon, venn_report, ledger);
     }
 
-    /// Branchlessly modulates `frame` across Layer 0 (`Liminal`) and Layer 1 (`Stigmergic`).
+    /// Branchlessly modulates `frame` across Core Stack Slot 0 (`Liminal`) and Slot 1 (`Stigmergic`).
     #[inline(always)]
     #[must_use]
     pub fn modulate_gateway_frame_branchless(
@@ -305,8 +287,8 @@ impl AutonomousCoreLayerStack {
         out
     }
 
-    /// Branchlessly modulates `frame` across Layer 0 (`Liminal`), Layer 1 (`Stigmergic`), and
-    /// Layer 2 (`Ego`) **without mutating** sub-layer state or `intervention_epochs` (for read-only
+    /// Branchlessly modulates `frame` across Core Stack Slot 0 (`Liminal`), Slot 1 (`Stigmergic`), and
+    /// Slot 2 (`Ego`) **without mutating** sub-slot state or `intervention_epochs` (for read-only
     /// per-layer Hot-Path RoPE modulation across all transformer layers).
     #[inline]
     #[must_use]
@@ -334,9 +316,9 @@ impl AutonomousCoreLayerStack {
         }
     }
 
-    /// Branchlessly modulates `frame` across Layer 0 (`Liminal`) and Layer 1 (`Stigmergic`) and,
-    /// when Core Layer 2 (`ego_layer`) is active, performs in-place Ego intervention across all
-    /// three layers and `frame`.
+    /// Branchlessly modulates `frame` across Core Stack Slot 0 (`Liminal`) and Slot 1 (`Stigmergic`) and,
+    /// when Core Stack Slot 2 (`ego_layer`) is active, performs in-place Ego intervention across all
+    /// three slots and `frame`.
     #[inline]
     #[must_use]
     pub fn intervene_ego_and_modulate_frame_branchless(
@@ -681,15 +663,15 @@ pub struct OrchestratorStatusSnapshot {
     pub slot_repulsion_mask: u8,
     /// Bitmask of isolated exterior-only sandbox working lanes (`0..=7`) in `StigmergicSubstrate`.
     pub slot_sandbox_mask: u8,
-    /// Active Layer 0 `Liminal` channel aperture mask (`8` channels).
+    /// Active Core Stack Slot 0 `Liminal` channel aperture mask (`8` channels).
     pub liminal_threshold_mask: u32,
-    /// Active Layer 1 `Stigmergic` Venn-core granule mask.
+    /// Active Core Stack Slot 1 `Stigmergic` Venn-core granule mask.
     pub stigmergic_overlap_core_mask: u8,
-    /// Whether Layer 2 `LiminalEgoField` intervention is active.
+    /// Whether Core Stack Slot 2 `LiminalEgoField` intervention is active.
     pub ego_active: bool,
-    /// Monotonic count of Layer 2 Ego interventions applied.
+    /// Monotonic count of Core Stack Slot 2 Ego interventions applied.
     pub ego_intervention_epochs: u32,
-    /// Whether Layer 0 boundaries are quiescent (`stationary_shortcut_ready != 0`).
+    /// Whether Core Stack Slot 0 boundaries are quiescent (`stationary_shortcut_ready != 0`).
     pub stationary_shortcut_ready: bool,
     /// Bitmask of external [`LatentHorizonSlot`] traits currently slid into the cognitive window.
     pub active_horizon_slots_mask: u32,
@@ -701,7 +683,7 @@ pub struct OrchestratorStatusSnapshot {
 
 /// High-level safe Rust single orchestrator facade integrating concrete core engines
 /// ([`StigmergicSubstrate`], [`PhaseSteeringEngine`], [`EntropyController`], [`MultiAttractorSpace`]),
-/// the 128-byte 3-layer core stack ([`AutonomousCoreLayerStack`]: `Liminal` + `Stigmergic` + `Ego`),
+/// the 128-byte 3-slot core stack ([`AutonomousCoreLayerStack`]: `Liminal` + `Stigmergic` + `Ego`),
 /// and dynamic slide-in/slide-out [`LatentHorizonSlot`] boundaries.
 #[derive(Debug)]
 pub struct RuntimeContext {
@@ -778,22 +760,22 @@ impl RuntimeContext {
         })
     }
 
-    /// Returns an immutable reference to the 128-byte 3-layer [`AutonomousCoreLayerStack`]
-    /// (`Layer 0: Liminal`, `Layer 1: Stigmergic`, `Layer 2: Ego`).
+    /// Returns an immutable reference to the 128-byte 3-slot [`AutonomousCoreLayerStack`]
+    /// (`Slot 0: Liminal`, `Slot 1: Stigmergic`, `Slot 2: Ego`).
     #[inline(always)]
     #[must_use]
     pub const fn core_layers(&self) -> &AutonomousCoreLayerStack {
         &self.core_layers
     }
 
-    /// Returns a mutable reference to the 128-byte 3-layer [`AutonomousCoreLayerStack`].
+    /// Returns a mutable reference to the 128-byte 3-slot [`AutonomousCoreLayerStack`].
     #[inline(always)]
     #[must_use]
     pub fn core_layers_mut(&mut self) -> &mut AutonomousCoreLayerStack {
         &mut self.core_layers
     }
 
-    /// Returns an immutable reference to the latest Layer 0 [`LiminalBoundaryDelta`].
+    /// Returns an immutable reference to the latest Core Stack Slot 0 [`LiminalBoundaryDelta`].
     #[inline(always)]
     #[must_use]
     pub const fn last_boundary_delta(&self) -> &LiminalBoundaryDelta {
@@ -834,7 +816,7 @@ impl RuntimeContext {
         self.sandbox_promotions
     }
 
-    /// Returns a mutable reference to the latest Layer 0 [`LiminalBoundaryDelta`].
+    /// Returns a mutable reference to the latest Core Stack Slot 0 [`LiminalBoundaryDelta`].
     #[inline(always)]
     #[must_use]
     pub fn last_boundary_delta_mut(&mut self) -> &mut LiminalBoundaryDelta {
@@ -989,7 +971,7 @@ impl RuntimeContext {
     }
 
     /// Computes a Lazy-Pull [`CoreTelemetrySnapshot`] combining `3 + System` counters, derived
-    /// ratios, and live Layer 0 topological state.
+    /// ratios, and live Core Stack Slot 0 topological state.
     #[inline]
     #[must_use]
     pub fn telemetry_snapshot(&self) -> CoreTelemetrySnapshot {
@@ -1003,7 +985,7 @@ impl RuntimeContext {
     }
 
     /// Returns a single-glance [`OrchestratorStatusSnapshot`] summarizing concrete core engines,
-    /// 3-layer core stack state, and dynamically active horizon slots.
+    /// 3-slot core stack state, and dynamically active horizon slots.
     #[inline(always)]
     #[must_use]
     pub fn orchestrator_status(&self) -> OrchestratorStatusSnapshot {
@@ -1660,8 +1642,8 @@ impl RuntimeContext {
         Ok(())
     }
 
-    /// Executes a unified vertical orchestration pass that pierces all 3 core layers
-    /// (`Layer 0: Liminal` -> `Layer 1: Stigmergic` -> `Layer 2: Ego`), dynamically slides
+    /// Executes a unified vertical orchestration pass that pierces all 3 core stack slots
+    /// (`Slot 0: Liminal` -> `Slot 1: Stigmergic` -> `Slot 2: Ego`), dynamically slides
     /// dormant [`LatentHorizonSlot`] boundaries in or out based on live stability/anomaly
     /// telemetry, optionally escalates unresolved excursion to an external
     /// [`HorizonEscalationProvider`], updates `trail_out` / `StigmergicSubstrate`, and steers
@@ -2785,7 +2767,7 @@ mod tests {
         assert_eq!(ctx.escalated_workbench_lane(), None);
         assert_eq!(ctx.slot_enabled_mask(), 0);
 
-        // 2. Destabilize via Layer 2 Ego trigger -> slot slides in & external escalator leases an anonymous lane.
+        // 2. Destabilize via Core Stack Slot 2 Ego trigger -> slot slides in & external escalator leases an anonymous lane.
         ctx.core_layers_mut().ego_layer.last_intervened_mask = EGO_TRIGGER_BOUNDARY_CHATTER;
         let (f2, _r2, in2, out2, esc2) = ctx
             .pierce_and_orchestrate_step(

@@ -4,7 +4,15 @@
 //! Dynamic slide-in/slide-out [`LatentHorizonSlot`] boundary contracts,
 //! [`HorizonEscalationProvider`], dwell anti-chattering state, and [`StigmergicSubstrate`] escalation.
 
-use super::*;
+use crate::liminal::{
+    gcso_q7_t, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+};
+use crate::runtime::context::AutonomousCoreLayerStack;
+use crate::runtime::gateway::GatewayFrame;
+use crate::stigmergy::{
+    StigmergicSubstrate, WorkbenchLanePlacement, WorkbenchSlotSpec, ROOT_CAUSE_NOMINAL,
+    WORKBENCH_LANE_FLAG_PINNED,
+};
 
 /// Consecutive-step hysteresis tracker for dynamic [`LatentHorizonSlot`] slide-in / slide-out.
 #[repr(C)]
@@ -44,7 +52,7 @@ pub struct HorizonTriggerInput {
     pub repulsion_severity: f32,
     /// Dominant causal root-cause code (`ROOT_CAUSE_*`).
     pub causal_root_cause: u8,
-    /// Active [`EpistemicRegime`] byte (`0` = Coherent, `1` = InternalConflict, `2` = Liminal).
+    /// Active [`crate::liminal::EpistemicRegime`] byte (`0` = Coherent, `1` = InternalConflict, `2` = Liminal).
     pub epistemic_regime: u8,
     /// `true` when Layer 0 boundaries are quiescent without chattering (`stationary_shortcut_ready != 0`).
     pub stationary_shortcut_ready: bool,

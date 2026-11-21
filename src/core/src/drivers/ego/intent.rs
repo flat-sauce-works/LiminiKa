@@ -1,7 +1,7 @@
 // name: src/core/src/drivers/ego/intent.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Core Layer 2 Ego intent representations ([`LiminalEgoPreset`], [`EgoIntentAxes`] 16 B,
+//! Core Stack Slot 2 Ego intent representations ([`LiminalEgoPreset`], [`EgoIntentAxes`] 16 B,
 //! and [`LiminalEgoField`] 64 B).
 
 #![deny(missing_docs)]
@@ -168,7 +168,7 @@ fn count_ascii_cues(text_bytes: &[u8], cues: &[&[u8]]) -> u8 {
 
 /// 16-byte (`#[repr(C, align(16))]`) normalized intermediate semantic intent axes decoupling
 /// surface natural-language parsing, DSL syntax, or embedding projections from the fixed 64-byte
-/// Core Layer 2 [`LiminalEgoField`] ABI layout.
+/// Core Stack Slot 2 [`LiminalEgoField`] ABI layout.
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EgoIntentAxes {
@@ -502,15 +502,15 @@ impl EgoIntentAxes {
 }
 
 // ===================================================================
-// 5. Core Layer 2: Wide-Aperture Subjective Ego Field (64 B)
+// 5. Core Stack Slot 2: Wide-Aperture Subjective Ego Field (64 B)
 // ===================================================================
 
 /// Wide-aperture 64-byte (`#[repr(C, align(64))]`, 1 cache line) subjective Ego controller
-/// (Core Layer 2) operating alongside [`crate::stigmergy::StigmergicSubstrate`] across trait apertures,
+/// (Core Stack Slot 2) operating alongside [`crate::stigmergy::StigmergicSubstrate`] across trait apertures,
 /// attractor slots, and 8 SWAR granules.
 ///
 /// Unlike passive attractor basins that pull queries inward toward fixed habits, `LiminalEgoField`
-/// perceives Layer 0 boundaries and Layer 1 attractor forces simultaneously and intervenes
+/// perceives Slot 0 boundaries and Slot 1 attractor forces simultaneously and intervenes
 /// branchlessly to:
 /// - exert counter-basin orbital thrust (`counter_basin_thrust_q7`) when attractor pull
 ///   exceeds `basin_escape_floor_q7`, preventing collapse into static imitation;
@@ -522,9 +522,9 @@ impl EgoIntentAxes {
 pub struct LiminalEgoField {
     /// Sovereign Q7 reference phases per stigmergic granule (`-128..=127`, `offset 0..8`).
     pub sovereign_granule_phase_q7: [gcso_q7_t; NUM_STIGMERGIC_GRANULES],
-    /// Signed per-channel bias applied to Layer 0 `void_floor_q7` during intervention (`offset 8..16`).
+    /// Signed per-channel bias applied to Slot 0 `void_floor_q7` during intervention (`offset 8..16`).
     pub trait_floor_bias_q7: [i8; NUM_LIMINAL_THRESHOLD_CHANNELS],
-    /// Signed per-channel bias applied to Layer 0 `aperture_gain_q7` during intervention (`offset 16..24`).
+    /// Signed per-channel bias applied to Slot 0 `aperture_gain_q7` during intervention (`offset 16..24`).
     pub trait_gain_bias_q7: [i8; NUM_LIMINAL_THRESHOLD_CHANNELS],
     /// Signed per-label affinity preference across the 8 semantic provenance slots (`0..=7`, `offset 24..32`).
     pub slot_affinity_bias_q7: [i8; MAX_ATTRACTOR_DOMAINS],

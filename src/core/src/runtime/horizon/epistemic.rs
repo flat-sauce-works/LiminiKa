@@ -4,7 +4,32 @@
 //! Epistemic Horizon separation (`KnownCoherent` / `InternalConflict` / `Liminal`),
 //! relative perspective Gateway synthesis, and dynamic threshold/granule horizon bridges.
 
-use super::*;
+use crate::foundation::{
+    branchless_clamp_f32, branchless_inv_pos_f32, branchless_max_f32, branchless_min_f32,
+    branchless_q7_inhibit_words_64, branchless_rad_to_phase_step_u8, branchless_relu_f32,
+    branchless_sincos_q7, coherence_from_word_arrays_with_both_uniform_flags_64,
+    fast_mean_q7_tag_from_words_64, gcso_tagged_ptr_t, is_word_array_uniform_64,
+    pack_action_slot_tag, swar_q7_circular_add_x8, swar_q7_mean_i8_from_words_64,
+    ACTION_MODE_PHASE_REPULSE, ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK,
+    DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
+};
+use crate::liminal::{
+    branchless_select_f32, branchless_select_i8, branchless_select_u32, branchless_select_u64,
+    branchless_select_u8, EpistemicRegime, LiminalThresholdField, DEFAULT_ENTROPY_EPS,
+    MAX_ATTENTION_HEADS, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
+    THRESHOLD_STIGMERGY_WIDE,
+};
+use crate::runtime::gateway::{CausalProvenanceSignal, GatewayFrame, ManifoldGatewaySignal};
+use crate::stigmergy::{
+    evaluate_stigmergic_overlap_and_serendipity_words_64, fold_fractal_nodes_words_64,
+    fold_sincos64_to_words, CognitiveOpKind, CognitiveTrajectoryLedger, DissipativeOverflowReport,
+    RelativeAttractorNode, StigmergicGranuleField, StigmergicOverlapSerendipityReport,
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_REPULSION, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
+    CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, DEFAULT_FACT_PHASE_CLAMP_RAD, MAX_ATTRACTOR_PULL_FORCE,
+    ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL,
+};
 
 /// Branchless epistemic horizon measurement over a finite local memory manifold (`16`-byte aligned).
 #[repr(C, align(16))]

@@ -187,7 +187,9 @@ impl EgoDifferentialNet {
         }
     }
 
-    /// Deterministically initializes a 3-hop P-Frame chain from [`LiminalEgoField`] and [`EgoIntentAxes`]:
+    /// Deterministically initializes the 3-node P-Frame net from [`LiminalEgoField`] and
+    /// [`EgoIntentAxes`], evaluated as a 1-hop parallel perspective ensemble when `max_hops == 1`
+    /// or as a sequential multi-hop chain when `max_hops >= 2`:
     /// - Node 0 (`S & O`): persona heading alignment delta
     /// - Node 1 (`S \ O`): sovereign counter-basin stylistic delta
     /// - Node 2 (`O \ S`): transgressive exterior bridge delta

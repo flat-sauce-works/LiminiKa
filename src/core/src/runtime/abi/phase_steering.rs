@@ -444,7 +444,8 @@ pub unsafe extern "C" fn gcso_gateway_project_bytes_to_q7_64(
             // SAFETY: Validated non-null for `byte_len > 0`.
             unsafe { slice::from_raw_parts(bytes, byte_len) }
         };
-        // SAFETY: Validated non-null.
+        // SAFETY: `phases_out` was validated non-null above, and `mut_phase64_from_raw` rechecks
+        // nullness and constructs an exclusive `&mut [gcso_q7_t; 64]` (alignment 1).
         let out_ref = unsafe { mut_phase64_from_raw(phases_out)? };
         let projected_w = project_bytes_swar_to_words_64(in_slice);
         store_q7_words_64(out_ref, &projected_w);
@@ -478,7 +479,8 @@ pub unsafe extern "C" fn gcso_gateway_project_f32_to_q7_64(
             // SAFETY: Validated non-null and 4B aligned.
             unsafe { slice::from_raw_parts(values, num_values) }
         };
-        // SAFETY: Validated non-null.
+        // SAFETY: `phases_out` was validated non-null above, and `mut_phase64_from_raw` rechecks
+        // nullness and constructs an exclusive `&mut [gcso_q7_t; 64]` (alignment 1).
         let out_ref = unsafe { mut_phase64_from_raw(phases_out)? };
         if gain > 0.0 {
             *out_ref = branchless_project_f32_slice_to_q7_64(in_slice, gain);
@@ -1161,14 +1163,16 @@ pub unsafe extern "C" fn gcso_l2p_svd_project_lora(
             && ((dim_out & 1) == 0)
         {
             let num_heads = (dim_out / 128).clamp(1, MAX_ATTENTION_HEADS);
-            // SAFETY: Checked 32B/16B alignment above.
+            // SAFETY: `lora_a` and `lora_b` are non-null, verified 32-byte aligned, and
+            // `a_len`/`b_len` were computed with checked multiplication above.
             let (a_aligned, b_aligned) = unsafe {
                 (
                     AlignedSlice32::from_raw_parts(lora_a, a_len)?,
                     AlignedSlice32::from_raw_parts(lora_b, b_len)?,
                 )
             };
-            // SAFETY: Checked 16B alignment above.
+            // SAFETY: `phase_profile_out` is non-null, verified 16-byte aligned above, and
+            // `num_heads` is clamped to `1..=MAX_ATTENTION_HEADS`.
             let mut p_aligned =
                 unsafe { AlignedSliceMut16::from_raw_parts_mut(phase_profile_out, num_heads)? };
 

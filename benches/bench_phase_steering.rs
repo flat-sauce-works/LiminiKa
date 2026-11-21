@@ -1,16 +1,17 @@
 // name: benches/bench_phase_steering.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Advanced benchmarks for `PhaseSteeringEngine` hot-path kernels and
-//! `GatewayPhaseSteeringExt` blanket implementations, engineered for **zero input overfitting**
+//! Benchmarks for `PhaseSteeringEngine`, sub-head routing, visual co-watching,
+//! and toroidal centroid consolidation kernels, engineered for **zero input overfitting**
 //! and **clean separation of Provisional `.gcso` Storage Container workloads**:
-//! - Uses realistic heterogeneous 64-head phase profiles across all batch and sub-head ensembles
-//!   (never uniform `[8i8; 64]` arrays or unit-gain `1.0f32` fast-path bypasses).
-//! - Evaluates Coarse-to-Fine and Top-2 Liminal routing across 8 candidate trails (2 candidates
-//!   per macro cluster across 4 centroids) so the Fine step genuinely resolves intra-cluster
-//!   candidate competition.
-//! - Isolates provisional pre-v1.0 `.gcso` container crystallization and zero-copy
-//!   mapping workloads into the dedicated `PhaseSteering_Provisional_GCSO_Container` Criterion group.
+//! - Evaluates aligned (`32B`/`128B`/`256B`/`512B`) query steering, RIPA soft-bounded phase
+//!   clamping, soft phase damping, cumulative phase unwrapping, Procrustes alignment,
+//!   logit phase shifting, and QDPS step filtering across realistic heterogeneous 64-head profiles.
+//! - Evaluates 8-slot sub-head pseudo-MoE / geodesic ensembles, online toroidal centroid
+//!   merge-and-prune consolidation, 2D/3D bitmask-gated visual patch steering, and edge cases
+//!   (head-dim aspect ratios, Q7 boundary saturation/zero, subnormals, and extreme spikes).
+//! - Isolates provisional pre-v1.0 `.gcso` zero-copy container steering into the dedicated
+//!   `PhaseSteering_Provisional_GCSO_Container` Criterion group.
 
 #![allow(missing_docs)]
 #![allow(clippy::too_many_arguments)]
@@ -234,7 +235,7 @@ fn bench_phase_steering_operations(c: &mut Criterion) {
             total_elements,
         );
 
-        // 3. RIPA Soft-Bounded Phase Clamping (O(1) Direct LUT + Upper d_head/4 Channels)
+        // 2. RIPA Soft-Bounded Phase Clamping (O(1) Direct LUT + Upper d_head/4 Channels)
         group.throughput(Throughput::Bytes(single_tensor_bytes as u64));
         group.bench_with_input(
             BenchmarkId::new(
@@ -273,7 +274,7 @@ fn bench_phase_steering_operations(c: &mut Criterion) {
             },
         );
 
-        // 4. Soft Phase Damping (Stationary Constant-Time AVX2 Gain Scaling with non-unit gain)
+        // 3. Soft Phase Damping (Stationary Constant-Time AVX2 Gain Scaling with non-unit gain)
         group.throughput(Throughput::Bytes(single_tensor_bytes as u64));
         group.bench_with_input(
             BenchmarkId::new(
@@ -358,7 +359,7 @@ fn bench_phase_steering_long_context_and_procrustes(c: &mut Criterion) {
         });
     });
 
-    // 4A. Orthogonal Procrustes Phase Delta Extraction (2x Tensor Bytes)
+    // 2. Orthogonal Procrustes Phase Delta Extraction (2x Tensor Bytes)
     group.throughput(Throughput::Bytes((single_tensor_bytes * 2) as u64));
     group.bench_function("compute_procrustes_phase_delta_alignment", |b| {
         init_non_collinear_procrustes_tensors(
@@ -394,9 +395,7 @@ fn bench_phase_steering_long_context_and_procrustes(c: &mut Criterion) {
         });
     });
 
-    // 4B. Closed-Loop Procrustes Trail Feedback + SWAR Circular Accum + Geodesic RIPA Steering
-    group.throughput(Throughput::Bytes((single_tensor_bytes * 2) as u64));
-    // 5. Fused Logit Phase Shift (Vocab Size = 32,768, 128 KB L2-Resident Buffer)
+    // 3. Fused Logit Phase Shift (Vocab Size = 32,768, 128 KB L2-Resident Buffer)
     let vocab_size = 32768usize;
     group.throughput(Throughput::Bytes(
         (vocab_size * std::mem::size_of::<f32>()) as u64,
@@ -422,7 +421,7 @@ fn bench_phase_steering_long_context_and_procrustes(c: &mut Criterion) {
         });
     });
 
-    // 6. Quantization-Discretized Phase Steering (32-Head AVX2/SWAR QDPS Step Filter)
+    // 4. Quantization-Discretized Phase Steering (32-Head AVX2/SWAR QDPS Step Filter)
     group.throughput(Throughput::Elements(u64::from(num_heads)));
     group.bench_function("qdps_quantization_step_filter_high_frequency", |b| {
         let seed_buf = AlignedBuffer16::new([
@@ -467,9 +466,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
     let mut shared_q_arena =
         AlignedHeapBuffer::<f32, 512>::new_with_phase_offset(total_elements, 1.0f32, 0);
 
-    group.throughput(Throughput::Bytes(tensor_bytes as u64));
-
-    // 5A. Swarm-Fragmented Pseudo-MoE (8-Slot Sub-Head Ensemble — Non-Unit Gains)
+    // 1. 8-Slot Sub-Head Pseudo-MoE Ensemble (Non-Unit Gains)
     group.throughput(Throughput::Bytes(tensor_bytes as u64));
     group.bench_function("subhead_8slot_pseudo_moe_ensemble", |b| {
         let mut q_slice = shared_q_arena
@@ -525,7 +522,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
         });
     });
 
-    // 5B. Geodesic-Folded 8-Slot Sub-Head Ensemble (Non-Unit Gains to exercise full scaling path)
+    // 2. Geodesic-Folded 8-Slot Sub-Head Ensemble (Non-Unit Gains to exercise full scaling path)
     group.bench_function("subhead_8slot_geodesic_moe_ensemble", |b| {
         let mut q_slice = shared_q_arena
             .as_aligned_prefix_mut(total_elements)
@@ -580,11 +577,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
         });
     });
 
-    // 5C. Single-Manifold Unified-Field + Sub-Head Pseudo-MoE (Non-Unit Gains) + Inverse-Temperature Logit Sharpening
-    // 5D. Classical Online Toroidal k-Means / DP-Means E+M Closed-Loop Gateway Steering (K = 4 Centroids)
-    // 5E. Coarse-to-Fine Macro-to-Micro Routing (O(K=4) Centroids -> O(M_local=2) Intra-Cluster Candidates out of 8 Total) + RIPA Steering
-    // 5F. Top-2 Liminal Macro-to-Micro Bifurcation Routing (O(K=4) Top-2 Centroids -> Dual-Cluster Fine Selection across 8 Candidates) + RIPA Steering
-    // 5G. Online Toroidal k-Means Centroid Basin Consolidation (Merge & Prune 8 Centroids on SO(2)^64)
+    // 3. Online Toroidal k-Means Centroid Basin Consolidation (Merge & Prune 8 Centroids on SO(2)^64)
     group.throughput(Throughput::Elements(8));
     group.bench_function(
         "online_toroidal_centroid_merge_and_prune_8centroids_64h",
@@ -668,7 +661,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
         },
     );
 
-    // 6A. Real-Time Screen/Video Co-Watching: 16x16 = 256 Patch Bitmask-Gated 2D Phase Steering
+    // 4. Real-Time Screen/Video Co-Watching: 16x16 = 256 Patch Bitmask-Gated 2D Phase Steering
     let num_patches = 256usize;
     let patch_dim = 64usize;
     let grid_elems = num_patches * patch_dim;
@@ -725,7 +718,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
         });
     });
 
-    // 6B. 3D Spatiotemporal (t, x, y) Bitmask-Gated Video/Voxel Patch Steering
+    // 5. 3D Spatiotemporal (t, x, y) Bitmask-Gated Video/Voxel Patch Steering
     let patch_dim_3d = 72usize;
     let grid_elems_3d = num_patches * patch_dim_3d;
     group.throughput(Throughput::Bytes(
@@ -812,9 +805,7 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
 
     group.throughput(Throughput::Bytes(tensor_bytes as u64));
 
-    // 1. Provisional 2-Origin Composite Manifold Gateway + SO(2)-Fused RIPA/sub-head router Steering + `.gcso` Crystallization
-    // 2. Provisional End-to-End 2-Origin Gateway -> 8-Cell Swarm -> Bayesian Trail Rewire -> Subhead -> `.gcso` Crystallization
-    // 3. Provisional `.gcso` (MappedStorage) Zero-Copy Deserialization + Phase-Proximity Gravity Ensemble Gateway Steering
+    // 1. Provisional `.gcso` (MappedStorage) Zero-Copy Deserialization + Phase-Proximity Gravity Ensemble Gateway Steering
     let engine = PhaseSteeringEngine::new(head_dim, num_heads)
         .expect("Failed 64-head PhaseSteeringEngine init");
     group.bench_function(
@@ -900,8 +891,6 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
         },
     );
 
-    // 4. Provisional Register-Resident Zero-Copy Crystallized Ensemble Steering
-    // 5. Provisional 4-Section `.gcso` (MappedStorage) Zero-Copy Container Map + Register-Resident Ensemble Steering
     group.finish();
 }
 
@@ -910,8 +899,6 @@ fn bench_phase_steering_extreme_and_edge_cases(c: &mut Criterion) {
     let mut group = c.benchmark_group("PhaseSteering_Extreme_And_Edge_Cases");
     group.noise_threshold(configured_noise_threshold());
 
-    // 1. Stress Test: Ultra-Large Sequence Scaling (4096..32768 Prefill Context)
-    group.sampling_mode(SamplingMode::Flat);
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
     group.warm_up_time(Duration::from_millis(450));
@@ -926,7 +913,7 @@ fn bench_phase_steering_extreme_and_edge_cases(c: &mut Criterion) {
 
     let mut shared_extreme_arena = AlignedHeapBuffer::<f32, 64>::new(stride, 1.5f32);
 
-    // 2. Constant-Total-Element (1,024 floats = 4 KB) Head Dimension Aspect-Ratio Sweep
+    // 1. Constant-Total-Element (1,024 floats = 4 KB) Head Dimension Aspect-Ratio Sweep
     let extreme_head_configs = [
         (16u32, 64u32),
         (32u32, 32u32),
@@ -969,7 +956,7 @@ fn bench_phase_steering_extreme_and_edge_cases(c: &mut Criterion) {
         );
     }
 
-    // 3. Boundary Phase Values: Maximum Q7 Saturation (-128 / +127) vs All-Zero Pass
+    // 2. Boundary Phase Values: Maximum Q7 Saturation (-128 / +127) vs All-Zero Pass
     group.throughput(Throughput::Bytes(single_tok_bytes as u64));
     group.bench_function("q7_boundary_saturation_extreme", |b| {
         let _ftz = ScopedFtzdazGuard::new();
@@ -1011,7 +998,7 @@ fn bench_phase_steering_extreme_and_edge_cases(c: &mut Criterion) {
         });
     });
 
-    // 4. Extreme Phase Spike Noise & Geodesic RIPA Branchless Clamp (Heterogeneous Extreme Spikes)
+    // 3. Extreme Phase Spike Noise & Geodesic RIPA Branchless Clamp (Heterogeneous Extreme Spikes)
     group.bench_function("ripa_extreme_phase_spike_clamp_branchless", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         let mut q_slice = shared_extreme_arena
@@ -1055,7 +1042,7 @@ fn bench_phase_steering_extreme_and_edge_cases(c: &mut Criterion) {
         });
     });
 
-    // 5. True Subnormal Square Rescue (|x| = 1e-22 -> x^2 = 1e-44 < F32_MIN_POSITIVE_NORMAL)
+    // 4. True Subnormal Square Rescue (|x| = 1e-22 -> x^2 = 1e-44 < F32_MIN_POSITIVE_NORMAL)
     group.bench_function("slerp_norm_guard_near_zero_underflow", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         let elem_val = 1.0e-22f32;
@@ -1082,7 +1069,7 @@ fn bench_phase_steering_extreme_and_edge_cases(c: &mut Criterion) {
         });
     });
 
-    // 6. Long-Horizon Subnormal Flush & Near-Identity Gain Guard (Stationary Execution Path)
+    // 5. Long-Horizon Subnormal Flush & Near-Identity Gain Guard (Stationary Execution Path)
     group.bench_function("long_horizon_subnormal_damping_guard", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         let mut q_slice = shared_extreme_arena

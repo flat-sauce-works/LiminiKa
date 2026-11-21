@@ -1,13 +1,12 @@
 // name: benches/bench_entropy_control.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Comprehensive benchmarks for `EntropyController` kernels, engineered for **zero input
-//! overfitting** and **clean separation of Provisional `.gcso` Storage Container workloads**:
-//! - Evaluates Coarse-to-Fine and Top-2 Liminal routing across 8 candidate trails (2 candidates
-//!   per macro cluster across 4 centroids) so the Fine step genuinely resolves intra-cluster
-//!   candidate competition.
-//! - Isolates provisional pre-v1.0 `.gcso` container crystallization and zero-copy
-//!   deserialization workloads into the dedicated `EntropyControl_Provisional_GCSO_Container` Criterion group.
+//! Benchmarks for `EntropyController` and cohomology/QDPT kernels, engineered for **zero
+//! input overfitting**:
+//! - Covers stateful entropy mode transitions, sparse surrogate Taylor-Horner paths,
+//!   dyadic vector evaluation, continuous and long-dialogue stream simulations,
+//!   contrastive Bloom filter self-normalization, Chebyshev spectral filtering,
+//!   Hodge obstruction pairing, and non-finite / odd-remainder boundary cases.
 
 #![allow(missing_docs)]
 #![allow(clippy::too_many_arguments)]
@@ -38,9 +37,7 @@ use std::hint::black_box;
 use std::time::Duration;
 
 mod common;
-use common::{
-    configured_noise_threshold, should_run_provisional_gcso, AlignedHeapBuffer, ScopedFtzdazGuard,
-};
+use common::{configured_noise_threshold, AlignedHeapBuffer, ScopedFtzdazGuard};
 
 /// Generates a deterministic 64-supernode f32 field with non-zero spatial coboundary gradients
 /// across adjacent supernodes so Sheaf Cohomology and Hodge Obstruction kernels evaluate genuine
@@ -554,25 +551,7 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         },
     );
 
-    // 3A. Blanket Coordinator: Single Unified Attractor Manifold Folding + EntropyControl Pointer Evolution
-    group.throughput(Throughput::Elements(1));
-    // 3B. Blanket Coordinator: 4-Hop Limina Trail-Chain Cohomology & Joint Probability Chain Rule Guard
-    group.throughput(Throughput::Elements(4));
-    // 3C. Blanket Coordinator: Pitchfork Metastable Tunneling + Bayesian Pointer-Trail Selection & Limina Rewiring
-    group.throughput(Throughput::Elements(1));
-    // 3D. Blanket Coordinator: Zero-Copy Candidate-Trail Bayes-Attention Score Modulation with EntropyControl Temperature
-    group.throughput(Throughput::Elements(8));
-    // 3E. Online Toroidal k-Means / DP-Means E+M Step + EntropyControl Gateway Coordinator (4 Centroids)
-    group.throughput(Throughput::Elements(4));
-    // 3F. Coarse-to-Fine Macro Centroid Route (O(K=4) -> O(M_local=2) out of 8 Candidates) + Pitchfork Metastable Tunneling + Bayesian Trail Rewire
-    group.throughput(Throughput::Elements(8));
-    // 3G. Top-2 Liminal Macro Centroid Bifurcation Route (8 Candidates across 4 Centroids) + Pitchfork Metastable Tunneling + Bayesian Trail Rewire
-    group.throughput(Throughput::Elements(8));
-    // 4. Closed-Loop Sheaf Cohomology + Dual Homology Pairing + Repulsive Bloom Filter Guard
-    group.throughput(Throughput::Bytes(
-        (64 * 3 * core::mem::size_of::<f32>()) as u64,
-    ));
-    // 5. Matrix-Free Stigmergic Block Degrees & 3rd-Order Chebyshev Filter
+    // 2. Matrix-Free Stigmergic Block Degrees & 3rd-Order Chebyshev Filter
     group.throughput(Throughput::Elements(16));
     group.bench_function(
         "matrix_free_stigmergic_block_degrees_and_chebyshev_deg3",
@@ -614,7 +593,7 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         },
     );
 
-    // 6. Hodge Obstruction Residual & Dual Cellular Sheaf Homology Pairing (64 Supernodes)
+    // 3. Hodge Obstruction Residual & Dual Cellular Sheaf Homology Pairing (64 Supernodes)
     group.throughput(Throughput::Bytes(
         (64 * 3 * core::mem::size_of::<f32>()) as u64,
     ));
@@ -638,7 +617,7 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         });
     });
 
-    // 7A. 256-Bit Dyadic Pseudo-Ultrametric QDPT Resolution & Pointer Cascading
+    // 4. 256-Bit Dyadic Pseudo-Ultrametric QDPT Resolution & Pointer Cascading
     group.throughput(Throughput::Elements(1));
     group.bench_function("resolve_dyadic_qdpt_and_cascade_tagged_ptr", |b| {
         let parent_ptr = gcso_tagged_ptr_t::pack_action(
@@ -672,38 +651,6 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         });
     });
 
-    // 7B. Blanket Coordinator: 256-Bit Dyadic Tree QDPT Resolution + Coupled EntropyControl Step
-    group.throughput(Throughput::Elements(1));
-    group.finish();
-}
-
-/// Provisional `.gcso` / MappedStorage 4-Section Container Benchmarks (Isolated from Core EntropyControl Suite).
-///
-/// Evaluates pre-v1.0 `.gcso` record crystallization, 4-axis provenance records, and 4-section
-/// zero-copy byte container verification. Skipped by default under `run_benchmarks.py --profile standard`
-/// so Core `PhaseSteering`/`EntropyControl` evaluations remain decoupled from the provisional container layout.
-fn bench_entropy_control_provisional_gcso_container(c: &mut Criterion) {
-    if !should_run_provisional_gcso() {
-        return;
-    }
-    let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("EntropyControl_Provisional_GCSO_Container");
-    group.noise_threshold(configured_noise_threshold());
-    group.sampling_mode(SamplingMode::Flat);
-    group.sample_size(100);
-    group.warm_up_time(Duration::from_millis(450));
-    group.measurement_time(Duration::from_millis(1350));
-
-    // 1. Provisional 2-Origin Composite Manifold Gateway + `.gcso` Crystallization Step
-    group.throughput(Throughput::Elements(1));
-    // 2. Provisional Full 4-Axis (EntropyController Origin-1 x Fact x Persona x ContradictionGuard) Causal Provenance Step
-    group.throughput(Throughput::Elements(1));
-    // 3. Provisional `.gcso` CrystallizedAttractorRecord Ensemble Gravity Folding + EntropyControl Step
-    group.throughput(Throughput::Elements(4));
-    // 4. Provisional `.gcso` (MappedStorage) Zero-Copy Deserialization + Crystallized Ensemble Gravity Folding EntropyControl Step
-    group.throughput(Throughput::Elements(4));
-    // 5. Provisional 4-Section `.gcso` Container Zero-Copy Write, CRC32 Verify & Crystallized Ensemble Step
-    group.throughput(Throughput::Elements(4));
     group.finish();
 }
 
@@ -887,7 +834,6 @@ criterion_group!(
     bench_entropy_control_stream_simulation,
     bench_entropy_control_long_dialogue_reliability,
     bench_entropy_control_pointer_tunneling_and_cohomology,
-    bench_entropy_control_extreme_and_edge_cases,
-    bench_entropy_control_provisional_gcso_container
+    bench_entropy_control_extreme_and_edge_cases
 );
 criterion_main!(benches);

@@ -4,9 +4,6 @@
 //! Integration unit tests for Layer 4 (`runtime`: Gateway, Horizon, ABI, and relocated
 //! cross-layer integration tests).
 
-#![allow(clippy::excessive_precision)]
-#![allow(clippy::field_reassign_with_default)]
-
 use core::f32::consts::PI;
 use core::mem::size_of;
 

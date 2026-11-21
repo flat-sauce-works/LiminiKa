@@ -6,6 +6,24 @@
 //! [`SubjectivePersonaSignal`], [`ContradictionGuardSignal`]) and [`CausalProvenanceReport`].
 
 use super::*;
+use crate::drivers::gcso_edbc_state_t;
+use crate::foundation::{
+    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_inv_pos_f32,
+    branchless_is_finite_f32, branchless_max_f32, branchless_relu_f32, fast_inv_pos_normal_f32,
+    gcso_tagged_ptr_t, load_q7_words_64, Pod, RawPhaseProjectable, DEFAULT_PHASE_STEP_MIN_RAD,
+};
+use crate::liminal::{
+    branchless_select_f32, branchless_select_i32, branchless_select_u32, branchless_select_u8,
+    gcso_config_t, gcso_q7_t, Liminal, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    THRESHOLD_CAUSAL_PROVENANCE, THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_OBJECTIVE_FACT,
+    THRESHOLD_SUBJECTIVE_PERSONA, THRESHOLD_SYSTEM_CONSTRAINT,
+};
+use crate::runtime::context::AutonomousCoreLayerStack;
+use crate::stigmergy::{
+    gcso_pointer_trail_t, CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter,
+    StigmergicScaleGranularity, StigmergicThresholds, DEFAULT_FACT_PHASE_CLAMP_RAD,
+    DEFAULT_PERSONA_PHASE_CLAMP_RAD,
+};
 
 pub(super) const INV_FACT_RIPA_CLAMP_RAD: f32 = 1.0 / DEFAULT_FACT_PHASE_CLAMP_RAD;
 
@@ -497,7 +515,7 @@ pub trait StigmergicThresholdPolicy {
         entropy_h_tilde: f32,
     ) -> StigmergicThresholds;
 
-    /// Resolves [`StigmergicThresholds`] and specializes [`StigmergicSubstrate`] decision gates using an
+    /// Resolves [`StigmergicThresholds`] and specializes [`crate::stigmergy::StigmergicSubstrate`] decision gates using an
     /// optional [`CognitiveTrajectoryLedger`] habit state at `scale`.
     ///
     /// Blanket default delegates to [`Self::resolve_thresholds`] followed by

@@ -10,26 +10,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::module_name_repetitions)]
 #![allow(clippy::must_use_candidate)]
-#![allow(clippy::inline_always)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_sign_loss)]
 #![allow(clippy::cast_lossless)]
-#![allow(clippy::incompatible_msrv)]
-#![allow(clippy::type_complexity)]
-#![allow(clippy::needless_option_as_deref)]
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::manual_range_contains)]
-#![allow(clippy::manual_slice_size_calculation)]
-#![allow(clippy::unnecessary_cast)]
-#![allow(clippy::excessive_precision)]
-#![allow(clippy::approx_constant)]
-#![allow(clippy::if_same_then_else)]
-#![allow(clippy::ifs_same_cond)]
 #![allow(clippy::manual_unwrap_or)]
-#![allow(clippy::too_many_arguments)]
 
 pub mod aligned;
 pub mod cohomology;
@@ -86,7 +69,7 @@ pub(crate) use self::simd_stats::{atan2_to_q7_word_x8_simd, scale_f32_slice_unro
 pub(crate) use self::swar_simd::avx2_q7_mean_i8_from_vec64;
 pub use self::swar_simd::*;
 pub(crate) use self::swar_simd::{
-    load_q7_word_at, store_q7_word_at, swar_or_avx2_q7_add_sat_words_64, swar_u8_nonzero_msb_mask,
+    store_q7_word_at, swar_or_avx2_q7_add_sat_words_64, swar_u8_nonzero_msb_mask,
     words_to_q7_array_64,
 };
 

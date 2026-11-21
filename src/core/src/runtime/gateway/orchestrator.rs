@@ -5,6 +5,40 @@
 //! [`SubstrateGatewayExt`], [`ScaleLayerOrchestrator`], [`HybridScaleCircuit`], and [`StigmergicScaleLayer`]).
 
 use super::*;
+use crate::drivers::{DistortionTension, EgoDifferentialNet, SystemSpineState};
+use crate::foundation::{
+    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
+    branchless_max_f32, branchless_min_f32, branchless_relu_f32,
+    dispatch_fused_phase_clamp_and_subhead_words_core, eval_rank1_slices_fused, gcso_tagged_ptr_t,
+    rotate_fused_self_phase_clamp_and_subhead_default_words,
+    rotate_fused_self_phase_clamp_subhead_q_and_clamp_k_default_words, scale_f32_slice_unrolled8,
+    steer_from_swar_words_core_safe, store_q7_words_64, swar_or_avx2_q7_add_sat_words_64,
+    swar_q7_abs_u8_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
+    swar_q7_phase_step_filter_words_64, swar_q7_scale_le128_with_bias_x8, swar_words_nonzero_64,
+    AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut32, PhaseSteering,
+    PhaseSteeringGeometryExt, RawPhaseProjectable, RopePairLayout, RopeSteeringTarget,
+    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_SUBHEAD_ROUTE,
+    ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD, SWAR_SPLAT_BYTE_64,
+};
+use crate::liminal::{
+    branchless_select_u32, branchless_select_u8, gcso_q7_t, EpistemicPartition, GcsoResult,
+    GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+};
+use crate::runtime::boundary_delta::LiminalBoundaryDelta;
+use crate::runtime::context::AutonomousCoreLayerStack;
+use crate::runtime::horizon::EpistemicHorizonReading;
+use crate::stigmergy::{
+    gcso_ledger_slot_t, gcso_pointer_trail_t, swar_mean_u8_le128_x8, trail_phase_words_mut,
+    trail_phase_words_ref, validate_optional_qk_tensors, CognitiveCircuitActivation,
+    CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter,
+    CrystallizedAttractorRecord, StigmergicActionDecision, StigmergicOverlapSerendipityReport,
+    StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicSubstrateOps,
+    StigmergicThresholds, LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
+    LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED,
+    LEDGER_METRIC_RANK1_INJECTED, LEDGER_METRIC_REPULSION_APPLIED,
+    LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY,
+    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_PHEROMONE_RISING, TRAIL_FLAG_REPULSION_ACTIVE,
+};
 
 #[inline]
 pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
@@ -1046,7 +1080,7 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
     ///
     /// # Errors
     /// Propagates any error from [`crate::stigmergy::PointerSubstrate::step_pointer`] or
-    /// [`FastPathLedger::telemetry_push`].
+    /// [`crate::stigmergy::FastPathLedger::telemetry_push`].
     #[inline]
     fn orchestrate_scale_layer(
         &mut self,
