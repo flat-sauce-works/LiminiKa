@@ -28,12 +28,13 @@ use crate::foundation::{
     DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u8, gcso_config_t, gcso_q7_t,
-    AttributionTag, BitCut8, DriverKind, EpistemicPartition, EpistemicRegime, GcsoResult,
-    LiminalThresholdState, PrimitiveKind, Scoped, DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_MAJOR,
-    GCSO_ABI_VERSION_MINOR, GCSO_ABI_VERSION_PATCH, GCSO_ABI_VERSION_STRING,
-    GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT,
-    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, Q7_PHASE_SCALE_RAD,
+    branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
+    gcso_config_t, gcso_q7_t, AttributionTag, BitCut8, DriverKind, EpistemicPartition,
+    EpistemicRegime, GcsoResult, LiminalThresholdState, PrimitiveKind, Scoped, DEFAULT_ENTROPY_EPS,
+    GCSO_ABI_VERSION_MAJOR, GCSO_ABI_VERSION_MINOR, GCSO_ABI_VERSION_PATCH,
+    GCSO_ABI_VERSION_STRING, GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_CONTAINER_CORRUPTED,
+    GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    NUM_STIGMERGIC_GRANULES, Q7_PHASE_SCALE_RAD,
 };
 use crate::runtime::abi::types::{
     gcso_capability_flags_t, gcso_kv_keyframe_header_t, gcso_mapped_storage_descriptor_t,
@@ -1336,7 +1337,11 @@ impl RuntimeContext {
         ctx_buf[24..32].copy_from_slice(&self.substrate.coupling_matrix_8x8.to_le_bytes());
         f32::write_unaligned_slice_to(&self.substrate.slot_weights, ctx_buf, 32)?;
 
-        let entropy_state = self.entropy_controller.state();
+        let mut entropy_state = self.entropy_controller.state();
+        entropy_state.reserved[0..4]
+            .copy_from_slice(&self.substrate.last_selected_trail_id.to_le_bytes());
+        entropy_state.reserved[4..8].copy_from_slice(&self.config.raw.head_dim.to_le_bytes());
+        entropy_state.reserved[8..12].copy_from_slice(&self.config.raw.num_heads.to_le_bytes());
         entropy_state.write_unaligned_to(buffer, entropy_off)?;
         self.substrate
             .ledger_slot
@@ -1419,7 +1424,37 @@ impl RuntimeContext {
 
         let entropy_size = core::mem::size_of::<gcso_edbc_state_t>();
         if buffer.len() >= entropy_off + entropy_size {
-            let entropy_st = gcso_edbc_state_t::read_unaligned_from(buffer, entropy_off)?;
+            let mut entropy_st = gcso_edbc_state_t::read_unaligned_from(buffer, entropy_off)?;
+            self.substrate.last_selected_trail_id = u32::from_le_bytes([
+                entropy_st.reserved[0],
+                entropy_st.reserved[1],
+                entropy_st.reserved[2],
+                entropy_st.reserved[3],
+            ]);
+            let saved_head_dim = u32::from_le_bytes([
+                entropy_st.reserved[4],
+                entropy_st.reserved[5],
+                entropy_st.reserved[6],
+                entropy_st.reserved[7],
+            ]);
+            let saved_num_heads = u32::from_le_bytes([
+                entropy_st.reserved[8],
+                entropy_st.reserved[9],
+                entropy_st.reserved[10],
+                entropy_st.reserved[11],
+            ]);
+            if saved_head_dim != 0
+                && (saved_head_dim & 1) == 0
+                && saved_num_heads != 0
+                && (saved_num_heads as usize) <= MAX_ATTENTION_HEADS
+            {
+                self.config.raw.head_dim = saved_head_dim;
+                self.config.raw.num_heads = saved_num_heads;
+                let restored_engine = PhaseSteeringEngine::new(saved_head_dim, saved_num_heads)?;
+                self.phase_steering = restored_engine;
+                self.substrate.phase_steering = restored_engine;
+            }
+            entropy_st.reserved = [0u8; 36];
             self.entropy_controller = EntropyController::new(entropy_st);
             self.entropy_controller
                 .set_hysteresis_band(self.config.hysteresis_band);
@@ -1529,7 +1564,11 @@ impl RuntimeContext {
 
         let mut repulsion_active = false;
         if let Some(trail) = trail_out {
-            trail.prev_ptr = trail.current_ptr;
+            trail.prev_ptr = branchless_select_u64(
+                trail.current_ptr != 0,
+                trail.current_ptr,
+                u64::from(self.substrate.last_selected_trail_id),
+            );
             trail.current_ptr = u64::from(token_id);
             trail.step_count = next_step as u32;
             trail.stigmergic_density = branchless_select_f32(
@@ -1556,6 +1595,7 @@ impl RuntimeContext {
             trail.flags = state_out.active_branch_mode
                 | branchless_select_u32(repulsion_active, TRAIL_FLAG_REPULSION_ACTIVE, 0);
         }
+        self.substrate.last_selected_trail_id = token_id;
 
         let metric = LEDGER_METRIC_PHASE_STEERED
             | branchless_select_u8(repulsion_active, LEDGER_METRIC_REPULSION_APPLIED, 0);

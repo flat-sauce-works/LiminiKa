@@ -36,9 +36,6 @@ cuda = []
 metal = []
 vulkan = []
 
-[build-dependencies]
-cmake = "0.1"
-
 [dev-dependencies]
 criterion = { workspace = true }
 

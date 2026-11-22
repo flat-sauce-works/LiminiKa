@@ -4,14 +4,14 @@
 cmake_minimum_required(VERSION 3.18)
 project(LiminiKa VERSION 0.1.3 LANGUAGES C CXX)
 
-# Enforce C11 and C++20 specifications for GCSO C-ABI and Kernel execution
+# Enforce C11 and C++20 specifications for GCSO C-ABI compilation
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Enable Position Independent Code (PIC) globally for Rust FFI dynamic/static linking
+# Enable Position Independent Code (PIC) globally for Rust FFI static linking
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Default to RelWithDebInfo if no build type is specified
@@ -19,34 +19,16 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Choose the type of build." FORCE)
 endif()
 
-# Optional GPU backend compilation switches
-option(LIMINIKA_ENABLE_CUDA "Enable CUDA kernel integration" OFF)
-option(LIMINIKA_ENABLE_VULKAN "Enable Vulkan compute kernel integration" OFF)
-option(LIMINIKA_ENABLE_METAL "Enable Metal compute kernel integration" OFF)
-
-# Optional CPU SIMD vector extension switches (synchronized with src/core/build.rs & CI)
+# Optional CPU SIMD vector extension switches (synchronized with C-ABI headers & CI)
 option(LIMINIKA_ENABLE_AVX2 "Enable AVX2 SIMD instructions" OFF)
 option(LIMINIKA_ENABLE_AVX512 "Enable AVX-512 SIMD instructions" OFF)
 option(LIMINIKA_ENABLE_NEON "Enable ARM Neon SIMD instructions" OFF)
 option(LIMINIKA_ENABLE_SVE "Enable ARM SVE SIMD instructions" OFF)
 option(LIMINIKA_ENABLE_RVV "Enable RISC-V Vector SIMD instructions" OFF)
 
-if(LIMINIKA_ENABLE_METAL AND NOT APPLE)
-    message(STATUS "Metal backend is restricted to Apple platforms. Disabling LIMINIKA_ENABLE_METAL.")
-    set(LIMINIKA_ENABLE_METAL OFF CACHE BOOL "Enable Metal compute kernel integration" FORCE)
-endif()
-
-if(LIMINIKA_ENABLE_CUDA)
-    enable_language(CUDA OPTIONAL)
-    if(CMAKE_CUDA_COMPILER_LOADED)
-        set(CMAKE_CUDA_STANDARD 20)
-        set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-        set(CMAKE_CUDA_EXTENSIONS OFF)
-    endif()
-endif()
-
 # Enforce strict compiler warnings, 16MiB main-thread stack size, and SIMD flags
 if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W4 /WX /utf-8 /Zc:preprocessor /Zc:inline /wd4324")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4 /WX /utf-8 /permissive- /EHsc /Zc:preprocessor /Zc:inline /wd4324")
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /O2")
@@ -112,12 +94,46 @@ if(NOT TARGET liminika_headers)
     endif()
 endif()
 
-# Enable CTest (tests are registered in tests/CMakeLists.txt)
+# Enable CTest (tests are registered in examples/c_api/CMakeLists.txt and tests/CMakeLists.txt)
 enable_testing()
 
-# Include kernels subdirectory if CMakeLists.txt exists
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/CMakeLists.txt")
-    add_subdirectory(src/kernels)
+# Locate the Rust-built liminika_core static library (staticlib preferred so CTest runs standalone)
+find_library(LIMINIKA_CORE_LIB
+    NAMES libliminika_core.a liminika_core.lib liminika_core
+    PATHS "${CMAKE_SOURCE_DIR}/target/release"
+          "${CMAKE_SOURCE_DIR}/target/debug"
+    NO_DEFAULT_PATH
+)
+
+if(NOT LIMINIKA_CORE_LIB)
+    message(FATAL_ERROR
+        "Rust static library `liminika_core` was not found in "
+        "`${CMAKE_SOURCE_DIR}/target/release` or `${CMAKE_SOURCE_DIR}/target/debug`. "
+        "Run `cargo build --release -p liminika-core` before configuring CMake, "
+        "or pass `-DLIMINIKA_CORE_LIB=/path/to/libliminika_core.a`."
+    )
+endif()
+
+add_library(liminika_core_ffi INTERFACE)
+target_link_libraries(liminika_core_ffi INTERFACE
+    liminika_headers
+    "${LIMINIKA_CORE_LIB}"
+)
+if(WIN32)
+    target_link_libraries(liminika_core_ffi INTERFACE
+        ws2_32
+        userenv
+        bcrypt
+        ntdll
+        advapi32
+        synchronization
+    )
+elseif(UNIX)
+    target_link_libraries(liminika_core_ffi INTERFACE
+        m
+        pthread
+        dl
+    )
 endif()
 
 # Include examples subdirectory if CMakeLists.txt exists
@@ -139,17 +155,6 @@ if(CLANG_FORMAT_BIN)
         "${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/include/*.inl"
         "${CMAKE_CURRENT_SOURCE_DIR}/include/*.c"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cxx"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cu"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.cuh"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.metal"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.inl"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/*.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/examples/c_api/*.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/examples/c_api/*.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/examples/c_api/*.cc"

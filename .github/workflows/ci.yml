@@ -56,11 +56,12 @@ jobs:
           filters: |
             cpp:
               - 'include/**'
-              - 'src/kernels/**'
+              - 'src/core/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
               - 'examples/c_api/**'
               - 'examples/CMakeLists.txt'
-              - 'tests/ffi/**'
-              - 'tests/CMakeLists.txt'
+              - 'tests/**'
               - 'cmake/**'
               - 'CMakeLists.txt'
               - '**/CMakeLists.txt'
@@ -72,19 +73,6 @@ jobs:
               - '**/*.cpp'
               - '**/*.cc'
               - '**/*.cxx'
-              - '**/*.cu'
-              - '**/*.cuh'
-              - '**/*.metal'
-              - '**/*.mm'
-              - '**/*.comp'
-              - '**/*.vert'
-              - '**/*.frag'
-              - '**/*.glsl'
-              - '**/*.hlsl'
-              - '**/*.wgsl'
-              - '**/*.slang'
-              - '**/*.hip'
-              - '**/*.cl'
               - '.clang-format'
               - '.github/workflows/**'
             rust:
@@ -214,7 +202,7 @@ jobs:
             cargo update --manifest-path examples/candle_eval/Cargo.toml --workspace --offline 2>/dev/null || true
           fi
 
-      - name: Format C/C++ & GPU Kernel codebase
+      - name: Format C/C++ codebase
         if: ${{ needs.changes.outputs.cpp == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
         run: |
           if ! command -v clang-format >/dev/null 2>&1; then
@@ -231,11 +219,7 @@ jobs:
             EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
             find . "${EXCLUDE_ARGS[@]}" -prune -o \( \
               -name "*.h" -o -name "*.hpp" -o -name "*.inl" -o \
-              -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" -o \
-              -name "*.cu" -o -name "*.cuh" -o -name "*.metal" -o -name "*.mm" -o \
-              -name "*.comp" -o -name "*.vert" -o -name "*.frag" -o \
-              -name "*.glsl" -o -name "*.hlsl" -o -name "*.wgsl" -o -name "*.slang" -o \
-              -name "*.hip" -o -name "*.cl" \
+              -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" \
             \) -type f -size +0c ! -name ".gitkeep" -exec "$CLANG_FORMAT_BIN" -i {} + 2>/dev/null || true
           fi
 
@@ -415,7 +399,6 @@ jobs:
           ver = must_match(r'(?m)^version\s*=\s*"([^"]+)"', read("Cargo.toml"), "Cargo.toml version").group(1)
           candle_ver = must_match(r'(?m)^version\s*=\s*"([^"]+)"', read("examples/candle_eval/Cargo.toml"), "examples/candle_eval/Cargo.toml version").group(1)
           root_cmake = must_match(r'project\(LiminiKa\s+VERSION\s+(\d+\.\d+\.\d+)', read("CMakeLists.txt"), "CMakeLists.txt project VERSION").group(1)
-          kern_cmake = must_match(r'project\(liminika_kernels\s+VERSION\s+(\d+\.\d+\.\d+)', read("src/kernels/CMakeLists.txt"), "src/kernels/CMakeLists.txt project VERSION").group(1)
 
           abi_h = read("include/liminika/gcso_abi.h")
           c_maj = int(must_match(r'#define\s+GCSO_ABI_VERSION_MAJOR\s+(\d+)U', abi_h, "gcso_abi.h MAJOR").group(1))
@@ -439,7 +422,6 @@ jobs:
           checks = [
               ("examples/candle_eval/Cargo.toml", candle_ver == ver),
               ("CMakeLists.txt", root_cmake == ver),
-              ("src/kernels/CMakeLists.txt", kern_cmake == ver),
               ("gcso_abi.h tuple", (c_maj, c_min, c_pat) == parts),
               ("gcso_abi.h string", c_str == ver),
               ("gcso_types.h crystal hex", c_crystal_hex == expected_hex),
@@ -458,10 +440,10 @@ jobs:
         run: python3 scripts/verify_architecture.py --check
 
   # =========================================================================
-  # 4. C/C++ & GPU KERNELS BUILD MATRIX
+  # 4. C/C++ FFI & CTEST BUILD MATRIX
   # =========================================================================
   cpp-build-matrix:
-    name: C/C++ & GPU Kernels Build (${{ matrix.os }})
+    name: C/C++ FFI & CTest Matrix (${{ matrix.os }})
     needs: [changes, auto-format]
     if: ${{ always() && !cancelled() && needs.changes.result == 'success' && (needs.auto-format.result == 'success' || needs.auto-format.result == 'skipped') && (needs.changes.outputs.cpp == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
     strategy:
@@ -486,14 +468,14 @@ jobs:
       - name: Install Build Dependencies & Cache Tools (Linux)
         if: runner.os == 'Linux'
         run: |
-          if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1 || ! command -v ccache >/dev/null 2>&1 || [ ! -f /usr/include/vulkan/vulkan.h ]; then
+          if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1 || ! command -v ccache >/dev/null 2>&1; then
             if ! sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update; then
               if [ -f /etc/apt/apt-mirrors.txt ]; then
                 printf 'https://archive.ubuntu.com/ubuntu\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null || true
               fi
               sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update || true
             fi
-            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 install -y ninja-build clang clang-format cmake ccache vulkan-tools libvulkan-dev glslang-tools libshaderc-dev || true
+            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 install -y ninja-build clang clang-format cmake ccache || true
           fi
           if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
             python3 -m pip install --quiet --retries 1 --timeout 10 cmake ninja 2>/dev/null || pip3 install --quiet --break-system-packages --retries 1 --timeout 10 cmake ninja 2>/dev/null || true
@@ -523,6 +505,17 @@ jobs:
         with:
           key: ${{ runner.os }}-cpp-${{ github.sha }}
           restore-keys: ${{ runner.os }}-cpp-
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Enable Rust caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: cpp-ffi-${{ runner.os }}
+
+      - name: Build Rust liminika-core staticlib
+        run: cargo build --locked --release -p liminika-core
 
       - name: Verify C-ABI Header Self-Containment & Layout Static Assertions (Unix C11 & C++20)
         if: runner.os != 'Windows'
@@ -562,7 +555,7 @@ jobs:
             MSYS2_ARG_CONV_EXCL='*' cl.exe /nologo /Zs /std:c++20 /TP /W4 /WX /wd4324 /permissive- /utf-8 /Zc:preprocessor /Iinclude "$header"
           done
 
-      - name: Configure CMake (Linux with Vulkan & AVX2 enabled)
+      - name: Configure CMake (Linux with AVX2 enabled)
         if: runner.os == 'Linux'
         run: |
           if [ -f "CMakeLists.txt" ] && command -v cmake >/dev/null 2>&1; then
@@ -573,15 +566,8 @@ jobs:
             if command -v ccache >/dev/null 2>&1; then
               CMAKE_EXTRA_ARGS+=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
             fi
-            VULKAN_FLAG="OFF"
-            if [ -f "/usr/include/vulkan/vulkan.h" ] || [ -f "/usr/local/include/vulkan/vulkan.h" ] || [ -n "${VULKAN_SDK:-}" ]; then
-              VULKAN_FLAG="ON"
-            fi
             cmake -B build -S . "${CMAKE_EXTRA_ARGS[@]}" \
-              -DLIMINIKA_ENABLE_VULKAN="${VULKAN_FLAG}" \
               -DLIMINIKA_ENABLE_AVX2=ON \
-              -DLIMINIKA_ENABLE_CUDA=OFF \
-              -DLIMINIKA_ENABLE_METAL=OFF \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo
           else
             echo "No root CMakeLists.txt or cmake binary found; skipping CMake configure."
@@ -605,25 +591,19 @@ jobs:
             fi
             cmake -B build -S . "${CMAKE_EXTRA_ARGS[@]}" \
               -DLIMINIKA_ENABLE_AVX2=ON \
-              -DLIMINIKA_ENABLE_CUDA=OFF \
-              -DLIMINIKA_ENABLE_VULKAN=OFF \
-              -DLIMINIKA_ENABLE_METAL=OFF \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo
           else
             echo "No root CMakeLists.txt or cmake binary found; skipping CMake configure."
           fi
 
-      - name: Configure CMake (macOS with Metal & NEON enabled)
+      - name: Configure CMake (macOS with NEON enabled)
         if: runner.os == 'macOS'
         run: |
           if [ -f "CMakeLists.txt" ]; then
             cmake -B build -S . -GNinja \
               -DCMAKE_C_COMPILER_LAUNCHER=ccache \
               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-              -DLIMINIKA_ENABLE_METAL=ON \
               -DLIMINIKA_ENABLE_NEON=ON \
-              -DLIMINIKA_ENABLE_CUDA=OFF \
-              -DLIMINIKA_ENABLE_VULKAN=OFF \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo
           else
             echo "No root CMakeLists.txt found; skipping CMake configure."
@@ -649,15 +629,12 @@ jobs:
         run: |
           cmake -B build-asan -S . -GNinja \
             -DLIMINIKA_ENABLE_AVX2=ON \
-            -DLIMINIKA_ENABLE_CUDA=OFF \
-            -DLIMINIKA_ENABLE_VULKAN=OFF \
-            -DLIMINIKA_ENABLE_METAL=OFF \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
             -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
-          cmake --build build-asan --target liminika_c_abi_smoke_test --parallel
+          cmake --build build-asan --parallel
           ulimit -s 16384 || true
-          ctest --test-dir build-asan --output-on-failure --no-tests=error -R liminika_c_abi_smoke_test
+          ctest --test-dir build-asan --output-on-failure --no-tests=error
 
   # =========================================================================
   # 5. RUST WORKSPACE CHECK & TEST MATRIX
@@ -684,31 +661,17 @@ jobs:
       - name: Install C/C++ Build Dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
-          if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1 || [ ! -f /usr/include/vulkan/vulkan.h ]; then
+          if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
             if ! sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update; then
               if [ -f /etc/apt/apt-mirrors.txt ]; then
                 printf 'https://archive.ubuntu.com/ubuntu\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null || true
               fi
               sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update || true
             fi
-            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 install -y cmake ninja-build clang libvulkan-dev glslang-tools libshaderc-dev || true
+            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 install -y cmake ninja-build || true
           fi
           if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
             python3 -m pip install --quiet --retries 1 --timeout 10 cmake ninja 2>/dev/null || pip3 install --quiet --break-system-packages --retries 1 --timeout 10 cmake ninja 2>/dev/null || true
-          fi
-
-      - name: Install C/C++ Build Dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
-            HOMEBREW_NO_AUTO_UPDATE=1 brew install cmake ninja || true
-          fi
-
-      - name: Install C/C++ Build Dependencies (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          if ! command -v ninja >/dev/null 2>&1; then
-            choco install ninja --no-progress || true
           fi
 
       - name: Install Rust toolchain
@@ -725,21 +688,6 @@ jobs:
           workspaces: |
             . -> target
             examples/candle_eval -> examples/candle_eval/target
-
-      - name: Configure platform GPU backend environment flags
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            if [ -f "/usr/include/vulkan/vulkan.h" ] || [ -f "/usr/local/include/vulkan/vulkan.h" ] || [ -n "${VULKAN_SDK:-}" ]; then
-              echo "LIMINIKA_ENABLE_VULKAN=1" >> "$GITHUB_ENV"
-            else
-              echo "LIMINIKA_ENABLE_VULKAN=0" >> "$GITHUB_ENV"
-            fi
-          elif [ "$RUNNER_OS" = "macOS" ]; then
-            echo "LIMINIKA_ENABLE_METAL=1" >> "$GITHUB_ENV"
-            echo "LIMINIKA_ENABLE_VULKAN=0" >> "$GITHUB_ENV"
-          else
-            echo "LIMINIKA_ENABLE_VULKAN=0" >> "$GITHUB_ENV"
-          fi
 
       - name: Verify Rust formatting (Linux)
         if: runner.os == 'Linux'
@@ -790,7 +738,7 @@ jobs:
           cargo build --locked -p liminika-core
           cmake -B build-capi -S . -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo
           cmake --build build-capi --target gcso_phi4_gguf_hook_example --parallel
-          LD_LIBRARY_PATH="$PWD/target/debug:${LD_LIBRARY_PATH:-}" ./build-capi/examples/c_api/gcso_phi4_gguf_hook_example
+          ./build-capi/examples/c_api/gcso_phi4_gguf_hook_example
 
   # =========================================================================
   # 6. DSL SPEC & EXAMPLES VALIDATION

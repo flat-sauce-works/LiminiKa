@@ -79,6 +79,7 @@ use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 #[allow(unused_imports)]
 use crate::runtime::context::{
     init_default_config, query_capability, validate_config_invariants, AutonomousCoreLayerStack,
+    Config, RuntimeContext,
 };
 #[allow(unused_imports)]
 use crate::runtime::gateway::{
@@ -775,13 +776,17 @@ mod tests {
         let mut q_passive = AlignedBuffer32::new([1.0f32, 0.0, 1.0, 0.0]);
         let mut q_active = AlignedBuffer32::new([1.0f32, 0.0, 1.0, 0.0]);
 
-        let dummy_ctx = core::ptr::NonNull::<GcsoContextOpaque>::dangling().as_ptr();
+        let mut ctx_cfg = gcso_config_t::default();
+        let mut ctx: GcsoContextHandle = ptr::null_mut();
         let mut req_size = 0usize;
         let mut buf = [0u8; 320];
         let mut restored_ctx: GcsoContextHandle = ptr::null_mut();
 
         // SAFETY: Local stack buffers satisfy alignment and bounds invariants.
         unsafe {
+            assert_eq!(gcso_config_init_default(&mut ctx_cfg), GCSO_SUCCESS);
+            assert_eq!(gcso_context_create(&ctx_cfg, &mut ctx), GCSO_SUCCESS);
+            assert!(!ctx.is_null());
             assert_eq!(
                 gcso_dpsr_apply_pointer_gated_phase_steering_safe(
                     passive_ptr,
@@ -805,22 +810,27 @@ mod tests {
                 GCSO_SUCCESS
             );
             assert_eq!(
-                gcso_context_serialize(dummy_ctx, buf.as_mut_ptr(), &mut req_size),
+                gcso_context_serialize(ctx, buf.as_mut_ptr(), &mut req_size),
                 GCSO_ERROR_BUFFER_TOO_SMALL
             );
             assert_eq!(
-                gcso_context_serialize(dummy_ctx, buf.as_mut_ptr(), &mut req_size),
+                gcso_context_serialize(ctx, buf.as_mut_ptr(), &mut req_size),
                 GCSO_SUCCESS
             );
             assert_eq!(
                 gcso_context_deserialize(buf.as_ptr(), buf.len(), &mut restored_ctx),
                 GCSO_SUCCESS
             );
+            assert!(!restored_ctx.is_null());
+            assert_eq!(gcso_context_destroy(restored_ctx), GCSO_SUCCESS);
             buf[200] ^= 0xFF;
+            let mut failed_restore: GcsoContextHandle = ptr::null_mut();
             assert_eq!(
-                gcso_context_deserialize(buf.as_ptr(), buf.len(), &mut restored_ctx),
+                gcso_context_deserialize(buf.as_ptr(), buf.len(), &mut failed_restore),
                 GCSO_ERROR_CONTAINER_CORRUPTED
             );
+            assert!(failed_restore.is_null());
+            assert_eq!(gcso_context_destroy(ctx), GCSO_SUCCESS);
         }
         assert_eq!(q_passive.data, [1.0f32, 0.0, 1.0, 0.0]);
         assert!(q_active.data[3] > 0.0);

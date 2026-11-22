@@ -218,15 +218,32 @@ pub unsafe extern "C" fn gcso_context_create(
             )
         };
 
-        if cfg.head_dim == 0
-            || (cfg.head_dim & 1) != 0
-            || cfg.num_heads == 0
-            || (cfg.num_heads as usize) > MAX_ATTENTION_HEADS
-        {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
+        let ctx = RuntimeContext::new(Config::from_raw(*cfg))?;
+        *out_handle = Box::into_raw(Box::new(ctx)).cast::<GcsoContextOpaque>();
+        Ok(GCSO_SUCCESS)
+    })
+}
 
-        *out_handle = core::ptr::NonNull::dangling().as_ptr();
+/// Destroys a GCSO runtime context instance and releases its heap allocation.
+///
+/// # Safety
+/// `context` must be `NULL` or a handle returned by [`gcso_context_create`] or
+/// [`gcso_context_deserialize`]. `NULL` safely returns `GCSO_SUCCESS`.
+#[no_mangle]
+pub unsafe extern "C" fn gcso_context_destroy(context: GcsoContextHandle) -> GcsoStatus {
+    if context.is_null() {
+        return GCSO_SUCCESS;
+    }
+    let typed = context.cast::<RuntimeContext>();
+    if !is_aligned(typed) {
+        return GCSO_ERROR_MISALIGNED_POINTER;
+    }
+    ffi_boundary!({
+        // SAFETY: `context` is non-null, satisfies `align_of::<RuntimeContext>()`, and was
+        // allocated via `Box::into_raw(Box::new(RuntimeContext))`.
+        unsafe {
+            drop(Box::from_raw(typed));
+        }
         Ok(GCSO_SUCCESS)
     })
 }
@@ -240,10 +257,12 @@ pub unsafe extern "C" fn gcso_context_reset(context: GcsoContextHandle) -> GcsoS
     if context.is_null() {
         return GCSO_SUCCESS;
     }
-    if !is_aligned(context) {
-        return GCSO_ERROR_MISALIGNED_POINTER;
-    }
-    ffi_boundary!(Ok(GCSO_SUCCESS))
+    ffi_boundary!({
+        // SAFETY: Validated for non-nullness and concrete `RuntimeContext` alignment.
+        let mut ctx = unsafe { FfiHandleMut::from_raw(context.cast::<RuntimeContext>())? };
+        ctx.reset()?;
+        Ok(GCSO_SUCCESS)
+    })
 }
 
 /// Projects natural language system prompt text into phase space as the primary Anchor Attractor.
@@ -257,7 +276,8 @@ pub unsafe extern "C" fn gcso_context_set_system_prompt_anchor(
     weight: f32,
 ) -> GcsoStatus {
     ffi_boundary!({
-        validate_ptr(context)?;
+        // SAFETY: Validated for non-nullness and concrete `RuntimeContext` alignment.
+        let _ctx = unsafe { FfiHandleRef::from_raw(context.cast::<RuntimeContext>())? };
         if !branchless_is_finite_f32(weight) {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -280,23 +300,28 @@ pub unsafe extern "C" fn gcso_context_step_token(
     trail_out: *mut gcso_pointer_trail_t,
 ) -> GcsoStatus {
     ffi_boundary!({
-        validate_ptr(context)?;
+        // SAFETY: Validated for non-nullness and concrete `RuntimeContext` alignment.
+        let mut ctx = unsafe { FfiHandleMut::from_raw(context.cast::<RuntimeContext>())? };
+        let tensor_len = ctx.head_dim() as usize;
+        if tensor_len == 0 {
+            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        }
         // SAFETY: `AlignedSliceMut32::from_raw_parts_mut_opt` validates alignment when non-null.
-        let (q_opt, k_opt) = unsafe {
+        let (mut q_opt, mut k_opt) = unsafe {
             (
-                AlignedSliceMut32::from_raw_parts_mut_opt(query_tensor, 128)?,
-                AlignedSliceMut32::from_raw_parts_mut_opt(key_tensor, 128)?,
+                AlignedSliceMut32::from_raw_parts_mut_opt(query_tensor, tensor_len)?,
+                AlignedSliceMut32::from_raw_parts_mut_opt(key_tensor, tensor_len)?,
             )
         };
-
-        if let (Some(ref q), Some(ref k)) = (&q_opt, &k_opt) {
-            q.ensure_disjoint_mut(k)?;
-        }
-
         // SAFETY: Validated for non-nullness and 128B alignment when non-null.
-        if let Some(mut trail) = unsafe { FfiHandleMut::from_raw_opt(trail_out)? } {
-            trail.record_pointer_transition(u64::from(token_id), 1, 1.0);
-        }
+        let mut trail_opt = unsafe { FfiHandleMut::from_raw_opt(trail_out)? };
+
+        ctx.step_token(
+            token_id,
+            q_opt.as_mut(),
+            k_opt.as_mut(),
+            trail_opt.as_deref_mut(),
+        )?;
         Ok(GCSO_SUCCESS)
     })
 }
@@ -313,10 +338,12 @@ pub unsafe extern "C" fn gcso_context_serialize(
     buffer_size: *mut usize,
 ) -> GcsoStatus {
     ffi_boundary!({
-        validate_ptr(context)?;
+        // SAFETY: Validated for non-nullness and concrete `RuntimeContext` alignment.
+        let ctx = unsafe { FfiHandleRef::from_raw(context.cast::<RuntimeContext>())? };
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and alignment.
         let mut size_io = unsafe { FfiHandleMut::from_raw(buffer_size)? };
-        let required = 320usize;
+        let mut required = 0usize;
+        ctx.serialize_to_bytes(&mut [], &mut required)?;
 
         if buffer.is_null() {
             *size_io = required;
@@ -330,20 +357,7 @@ pub unsafe extern "C" fn gcso_context_serialize(
 
         // SAFETY: `buffer` is non-null and `*size_io >= required`.
         let out_bytes = unsafe { slice::from_raw_parts_mut(buffer, required) };
-        out_bytes.fill(0);
-
-        let mut header = init_snapshot_header(required as u64, 1_774_900_000);
-        header.action_hub_offset = 128;
-        header.attractor_field_offset = 128;
-        header.dpsr_state_offset = 192;
-        header.rank1_state_offset = 192;
-        header.edbc_state_offset = 192;
-        const ZERO_PAYLOAD_192_CRC32: u32 = branchless_crc32_ieee(&[0u8; 192]);
-        header.ledger_slot_offset = 256;
-        header.checksum_crc32 = ZERO_PAYLOAD_192_CRC32;
-
-        header.write_unaligned_to(out_bytes, 0)?;
-        *size_io = required;
+        ctx.serialize_to_bytes(out_bytes, &mut size_io)?;
         Ok(GCSO_SUCCESS)
     })
 }
@@ -371,19 +385,10 @@ pub unsafe extern "C" fn gcso_context_deserialize(
 
         // SAFETY: `buffer` is non-null and `buffer_size >= 128`.
         let in_bytes = unsafe { slice::from_raw_parts(buffer, buffer_size) };
-        let header = gcso_snapshot_header_t::read_unaligned_from(in_bytes, 0)
-            .map_err(|_| GCSO_ERROR_CONTAINER_CORRUPTED)?;
+        let mut ctx = RuntimeContext::new(Config::new())?;
+        ctx.deserialize_from_bytes(in_bytes)?;
 
-        validate_snapshot_header(&header, in_bytes.len())?;
-        if header.checksum_crc32 != 0 {
-            let hdr_size = size_of::<gcso_snapshot_header_t>();
-            let computed = branchless_crc32_ieee(&in_bytes[hdr_size..(header.total_size as usize)]);
-            if computed != header.checksum_crc32 {
-                return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
-            }
-        }
-
-        *out_handle = core::ptr::NonNull::dangling().as_ptr();
+        *out_handle = Box::into_raw(Box::new(ctx)).cast::<GcsoContextOpaque>();
         Ok(GCSO_SUCCESS)
     })
 }
@@ -701,13 +706,11 @@ pub unsafe extern "C" fn gcso_kv_keyframe_seek_to_token(
     keyframe_header_out: *mut gcso_kv_keyframe_header_t,
 ) -> GcsoStatus {
     ffi_boundary!({
-        validate_ptr(context)?;
+        // SAFETY: Validated for non-nullness and concrete `RuntimeContext` alignment.
+        let mut ctx = unsafe { FfiHandleMut::from_raw(context.cast::<RuntimeContext>())? };
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and alignment.
         let mut header_out = unsafe { FfiHandleMut::from_raw(keyframe_header_out)? };
-        *header_out = gcso_kv_keyframe_header_t {
-            token_index,
-            ..Default::default()
-        };
+        ctx.seek_to_token(token_index, &mut header_out)?;
         Ok(GCSO_SUCCESS)
     })
 }

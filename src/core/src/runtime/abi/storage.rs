@@ -79,10 +79,10 @@ pub unsafe extern "C" fn gcso_mapped_storage_close_mmap(
 
 impl_stateless_handle_destroy!(
     (
-        gcso_context_destroy,
-        GcsoContextHandle,
-        "Destroys a GCSO runtime context instance and releases all associated child resources.",
-        "`handle` must be `NULL` or a valid context handle. `NULL` safely returns `GCSO_SUCCESS`."
+        gcso_container_destroy,
+        GcsoContainerHandle,
+        "Destroys an open `.gcso` binary container handle and releases mapped storage resources.",
+        "`handle` must be `NULL` or a valid container handle. `NULL` safely returns `GCSO_SUCCESS`."
     ),
     (
         gcso_container_close,
