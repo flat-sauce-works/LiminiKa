@@ -143,6 +143,7 @@ def split_ident_tokens(ident: str) -> set[str]:
         tokens.add("action_hub")
     return tokens
 
+
 ALLOWED_SUBSTRATE_DECLS: dict[str, tuple[str, ...]] = {
     "StigmergicSubstrate": ("stigmergy/substrate.rs",),
     "SubstrateStepReport": ("stigmergy/substrate.rs",),

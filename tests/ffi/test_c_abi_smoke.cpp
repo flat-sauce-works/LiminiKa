@@ -1,9 +1,9 @@
 // name: tests/ffi/test_c_abi_smoke.cpp
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-#include "liminika/lmnk_abi.h"
 #include "liminika/lmnk_config.h"
 #include "liminika/lmnk_types.h"
+#include "liminika/lmnk_abi.h"
 
 #include <cstdint>
 #include <cstdio>
