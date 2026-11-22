@@ -34,11 +34,10 @@ pub use self::lut_crc32::*;
 pub(crate) use self::lut_crc32::{
     branchless_popcount_rsqrt_u32, branchless_q7_default_gravity_from_diff_u8,
     compute_aligned64_payload_crc32_ieee, crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32,
-    crc32_slice16_indep_hi1_u32, crc32_slice16_indep_lo1_u32, crc32_slice16_indep_u64x2,
-    crc32_slice16_step_u64x2, crc32_step_block64_words, crc32_step_l16, crc32_step_l2,
-    crc32_step_l3, crc32_step_l32, crc32_step_l4, crc32_step_l5, crc32_step_l6, crc32_step_l8,
-    update_aligned64_blocks_crc32_raw, CRC32_IEEE_SLICE16_REF, MAX_BAYESIAN_STIGMERGIC_DENSITY,
-    POPCOUNT_RSQRT_LUT_257_REF, Q7_FULL_COS_REF, VON_MISES_KAPPA_AT_MAX_R_BITS,
+    crc32_slice16_indep_hi1_u32, crc32_slice16_indep_lo1_u32, crc32_slice16_step_u64x2,
+    crc32_step_block64_words, crc32_step_l3, crc32_step_l4, crc32_step_l5, crc32_step_l6,
+    CRC32_IEEE_SLICE16_REF, MAX_BAYESIAN_STIGMERGIC_DENSITY, POPCOUNT_RSQRT_LUT_257_REF,
+    Q7_FULL_COS_REF, VON_MISES_KAPPA_AT_MAX_R_BITS,
 };
 pub use self::phase_ops::*;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]

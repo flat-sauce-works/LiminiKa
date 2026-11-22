@@ -123,9 +123,9 @@ pub struct SourceTextRecord {
 /// Video-codec-inspired GOP frame payload stored in the `.gcso` KV-keyframe Track.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GopFrameKind {
-    /// Full I-Frame snapshot containing a validated 4-section mapped-storage `.gcso` container and active policy.
+    /// Full I-Frame snapshot containing a validated unified mapped-storage `.lmnk` container and active policy.
     KeyframeI {
-        /// Serialized 4-section mapped-storage container bytes (`LmnkFourSectionView`).
+        /// Serialized unified mapped-storage container bytes (`LmnkContainerView`).
         zimms_4section: Vec<u8>,
         /// Calibrated recall policy at this keyframe.
         recall_policy: RecallPolicy,
@@ -385,15 +385,7 @@ impl GcsoDualTrackTimeline {
         if snapshot.is_empty() {
             return None;
         }
-        if (snapshot.as_ptr() as usize).is_multiple_of(128) {
-            return LmnkFourSectionView::from_container_bytes_zero_copy(snapshot)
-                .ok()
-                .and_then(|v| v.cognitive_trajectory_ledger());
-        }
-        let mut aligned = vec![0_u8; snapshot.len() + 128];
-        let off = aligned.as_ptr().align_offset(128);
-        aligned[off..off + snapshot.len()].copy_from_slice(snapshot);
-        LmnkFourSectionView::from_container_bytes_zero_copy(&aligned[off..off + snapshot.len()])
+        LmnkContainerView::parse(snapshot)
             .ok()
             .and_then(|v| v.cognitive_trajectory_ledger())
     }
@@ -460,27 +452,28 @@ impl GcsoDualTrackTimeline {
         let trail = lmnk_pointer_trail_t::default();
         let trails = [trail];
         let ledger_slot = persona_circuit.map(CognitiveTrajectoryLedger::to_persona_ledger_slot);
-        let req_len = LmnkFourSectionView::required_byte_len_with_reports(
+        let req_len = LmnkContainerView::required_standard_byte_len(
             crystals.len(),
             trails.len(),
             false,
             ledger_slot.is_some(),
             0,
         )
-        .map_err(|e| format!("required_byte_len error: {e}"))?;
-        let mut aligned = vec![0_u8; req_len + 128];
-        let off = aligned.as_ptr().align_offset(128);
-        let written = LmnkFourSectionView::write_four_section_with_reports_to_bytes(
+        .map_err(|e| format!("required_standard_byte_len error: {e}"))?;
+        let mut out = vec![0_u8; req_len];
+        let written = LmnkContainerView::write_standard_sections_to_bytes(
+            LMNK_CONTAINER_FLAG_COMPILED_CACHE,
             &crystals,
             &trails,
             None,
             ledger_slot.as_ref(),
             &[],
             timestamp_epoch_sec,
-            &mut aligned[off..off + req_len],
+            &mut out,
         )
-        .map_err(|e| format!("write_four_section error: {e}"))?;
-        Ok(aligned[off..off + written].to_vec())
+        .map_err(|e| format!("write_standard_sections_to_bytes error: {e}"))?;
+        out.truncate(written);
+        Ok(out)
     }
 
     fn latest_phase_q7(&self) -> [lmnk_q7_t; MAX_ATTENTION_HEADS] {
@@ -931,20 +924,23 @@ impl AttractorContainerCodec for GcsoDualTrackTimeline {
             }
         };
 
-        let mut aligned = vec![0_u8; container_bytes.len() + 128];
-        let off = aligned.as_ptr().align_offset(128);
-        aligned[off..off + container_bytes.len()].copy_from_slice(container_bytes);
-        let view = LmnkFourSectionView::from_container_bytes_zero_copy(
-            &aligned[off..off + container_bytes.len()],
-        )
-        .map_err(|e| format!("mapped-storage zero-copy view validation failed: {e}"))?;
-
-        let mut active_phase_q7 = view
-            .crystals
-            .last()
-            .map_or([0_i8; MAX_ATTENTION_HEADS], |c| c.phase_profile);
-        let mut total_energy: f32 = view.crystals.iter().map(|c| c.base_energy).sum();
-        let anchor_ids: Vec<u32> = view.crystals.iter().map(|c| c.anchor_id).collect();
+        let view = LmnkContainerView::parse(container_bytes)
+            .map_err(|e| format!("mapped-storage container validation failed: {e}"))?;
+        let anchor_count = view.phase_anchor_count();
+        let mut active_phase_q7 = if anchor_count > 0 {
+            view.read_phase_anchor(anchor_count - 1)
+                .map_or([0_i8; MAX_ATTENTION_HEADS], |c| c.phase_profile)
+        } else {
+            [0_i8; MAX_ATTENTION_HEADS]
+        };
+        let mut total_energy: f32 = (0..anchor_count)
+            .filter_map(|i| view.read_phase_anchor(i))
+            .map(|c| c.base_energy)
+            .sum();
+        let anchor_ids: Vec<u32> = (0..anchor_count)
+            .filter_map(|i| view.read_phase_anchor(i))
+            .map(|c| c.anchor_id)
+            .collect();
 
         let mut p_frames_applied = 0_usize;
         for f in &self.frames[(key_pos + 1)..=target_pos] {

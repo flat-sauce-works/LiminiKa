@@ -17,6 +17,7 @@ pub mod gateway;
 pub mod horizon;
 pub mod storage;
 pub mod telemetry;
+pub mod topology;
 
 pub use self::boundary_delta::{LiminalBoundaryDelta, CHATTER_FIRE_THRESHOLD_U8};
 pub use self::context::*;
@@ -24,6 +25,7 @@ pub use self::gateway::*;
 pub use self::horizon::*;
 pub use self::storage::*;
 pub use self::telemetry::*;
+pub use self::topology::*;
 
 #[cfg(test)]
 mod tests;

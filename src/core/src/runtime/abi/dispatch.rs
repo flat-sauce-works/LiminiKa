@@ -754,7 +754,7 @@ pub(super) fn steer_routed_trail_words_qk_safe(
 }
 
 /// Shared register-resident crystallized ensemble folding + optional Bloom repulsion + PhaseStepFilter/PhaseClamp
-/// steering helper for [`lmnk_container_map_and_steer_four_section_zero_copy_safe`].
+/// steering helper for [`lmnk_container_map_and_steer_zero_copy_safe`].
 #[inline]
 pub(super) fn steer_crystallized_records_with_optional_bloom_safe(
     records: &[PhaseAnchorRecord],

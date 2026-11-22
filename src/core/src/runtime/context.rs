@@ -56,8 +56,9 @@ use crate::stigmergy::{
 pub const DEFAULT_PAGED_BLOCK_SIZE: u32 = 32;
 
 use crate::runtime::storage::{
-    finalize_snapshot_header_crc32, init_snapshot_header, verify_snapshot_payload_crc32,
-    KvKeyframeCache, KvKeyframeHeader, LmnkSnapshotHeader, MappedStorage,
+    write_container_sections_to_bytes, KvKeyframeCache, KvKeyframeHeader, LmnkContainerView,
+    LmnkSectionInput, MappedStorage, LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT,
+    LMNK_CONTAINER_HEADER_BYTES, LMNK_SECTION_RUNTIME_SNAPSHOT,
 };
 use crate::runtime::telemetry::{CoreTelemetryBank, CoreTelemetrySnapshot, TelemetryCapturePolicy};
 use crate::stigmergy::{
@@ -660,6 +661,54 @@ pub(crate) const CTX_ALLOC_UNINIT: u8 = 0;
 pub(crate) const CTX_ALLOC_HEAP_BOXED: u8 = 1;
 /// Allocation provenance tag for [`RuntimeContext::allocation_mode`]: caller-owned `in_place` memory.
 pub(crate) const CTX_ALLOC_IN_PLACE: u8 = 2;
+
+/// Exact payload byte size (`384` bytes) of a serialized `RuntimeSnapshot` section.
+pub const LMNK_RUNTIME_SNAPSHOT_PAYLOAD_BYTES: usize = 384;
+
+/// Exact total byte size (`512` bytes) of a serialized single-section `RuntimeContext` container.
+pub const LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES: usize = 512;
+
+/// Deterministically scrubs `size_of::<T>()` bytes at `dst` to zero using volatile stores
+/// followed by a `SeqCst` compiler fence to prevent dead-store elimination.
+///
+/// # Safety
+/// Caller must ensure `dst` is non-null, writable for `size_of::<T>()` bytes, and not aliased.
+#[inline(never)]
+pub(crate) unsafe fn zeroize_volatile<T>(dst: *mut T) {
+    let byte_len = core::mem::size_of::<T>();
+    if dst.is_null() || byte_len == 0 {
+        return;
+    }
+    let word_bytes = core::mem::size_of::<usize>();
+    let mut ptr_u8 = dst.cast::<u8>();
+    let mut rem = byte_len;
+
+    if ((ptr_u8 as usize) & (core::mem::align_of::<usize>() - 1)) == 0 {
+        let word_count = rem / word_bytes;
+        let mut ptr_word = ptr_u8.cast::<usize>();
+        let mut w = 0usize;
+        while w < word_count {
+            // SAFETY: `ptr_u8` is naturally `usize`-aligned and within `byte_len`.
+            unsafe {
+                core::ptr::write_volatile(ptr_word, 0usize);
+                ptr_word = ptr_word.add(1);
+            }
+            w += 1;
+        }
+        ptr_u8 = ptr_word.cast::<u8>();
+        rem %= word_bytes;
+    }
+
+    let mut b = 0usize;
+    while b < rem {
+        // SAFETY: `ptr_u8.add(b)` stays within the writable `size_of::<T>()` allocation.
+        unsafe {
+            core::ptr::write_volatile(ptr_u8.add(b), 0u8);
+        }
+        b += 1;
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+}
 
 /// High-level safe Rust single orchestrator facade integrating concrete core engines
 /// ([`StigmergicSubstrate`], [`PhaseSteeringEngine`], [`EntropyController`]),
@@ -1430,181 +1479,184 @@ impl RuntimeContext {
         (run_w, clamped_pull)
     }
 
-    /// Serializes active runtime context state into a `.lmnk` binary snapshot conforming to
-    /// [`crate::liminal::LMNK_ABI_VERSION_HEX`], stamping an IEEE 802.3 CRC32 checksum over the payload.
+    /// Serializes active runtime context state into a unified `.lmnk` binary snapshot container
+    /// conforming to [`crate::liminal::LMNK_ABI_VERSION_HEX`] (`512` bytes total).
     ///
-    /// Supports two-pass sizing: passing an empty `buffer` writes the required byte size (`320` bytes)
-    /// into `*required_size` and returns `Ok(())`.
+    /// Supports two-pass sizing: passing an empty `buffer` writes the required byte size
+    /// ([`LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES`] = `512` bytes) into `*required_size` and returns `Ok(())`.
     ///
     /// # Errors
-    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `buffer` is non-empty and smaller
-    /// than `320` bytes.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `buffer` is non-empty and smaller than `512` bytes.
     #[inline]
     pub fn serialize_to_bytes(&self, buffer: &mut [u8], required_size: &mut usize) -> Result<()> {
-        let header_size = core::mem::size_of::<LmnkSnapshotHeader>(); // 128 bytes
-        let context_data_size = 64usize; // 64-byte context & attractor metadata block
-        let entropy_size = core::mem::size_of::<EntropyState>(); // 32 bytes
-        let context_meta_size = 32usize; // 32-byte saved dimension & geometry block
-        let ledger_size = core::mem::size_of::<LedgerSlot>(); // 64 bytes
-
-        let total_required =
-            header_size + context_data_size + entropy_size + context_meta_size + ledger_size; // 320 bytes
-
+        let total_required = LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES;
+        *required_size = total_required;
         if buffer.is_empty() {
-            *required_size = total_required;
             return Ok(());
         }
         if buffer.len() < total_required {
-            *required_size = total_required;
             return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
 
-        buffer[..total_required].fill(0);
-
-        let substrate_off = header_size; // 128
-        let entropy_off = substrate_off + context_data_size; // 192
-        let meta_off = entropy_off + entropy_size; // 224
-        let ledger_off = meta_off + context_meta_size; // 256
-
-        let ctx_buf = &mut buffer[substrate_off..entropy_off];
-        ctx_buf[0..8].copy_from_slice(&self.substrate.step_counter.to_le_bytes());
-        ctx_buf[8..12].copy_from_slice(&self.substrate.active_count.to_le_bytes());
-        ctx_buf[12..16]
+        let mut payload = [0u8; LMNK_RUNTIME_SNAPSHOT_PAYLOAD_BYTES];
+        payload[0..8].copy_from_slice(&self.substrate.step_counter.to_le_bytes());
+        payload[8..12].copy_from_slice(&self.substrate.active_count.to_le_bytes());
+        payload[12..16]
             .copy_from_slice(&u32::from(self.substrate.repulsion_threshold).to_le_bytes());
-        ctx_buf[16..20].copy_from_slice(&self.substrate.last_entropy_h_tilde.to_le_bytes());
-        ctx_buf[20] = self.substrate.slot_enabled_mask;
-        ctx_buf[21] = self.substrate.slot_pinned_mask;
-        ctx_buf[22] = self.substrate.slot_repulsion_mask;
-        ctx_buf[23] = self.substrate.slot_sandbox_mask;
-        ctx_buf[24..32].copy_from_slice(&self.substrate.coupling_matrix_8x8.to_le_bytes());
-        f32::write_unaligned_slice_to(&self.substrate.slot_weights, ctx_buf, 32)?;
+        payload[16..20].copy_from_slice(&self.substrate.last_entropy_h_tilde.to_le_bytes());
+        payload[20] = self.substrate.slot_enabled_mask;
+        payload[21] = self.substrate.slot_pinned_mask;
+        payload[22] = self.substrate.slot_repulsion_mask;
+        payload[23] = self.substrate.slot_sandbox_mask;
+        payload[24..32].copy_from_slice(&self.substrate.coupling_matrix_8x8.to_le_bytes());
+        for (idx, &w) in self.substrate.slot_weights.iter().enumerate() {
+            let off = 32 + idx * 4;
+            payload[off..off + 4].copy_from_slice(&w.to_le_bytes());
+        }
 
-        let entropy_state = self.entropy_controller.state();
-        entropy_state.write_unaligned_to(buffer, entropy_off)?;
+        self.entropy_controller
+            .state()
+            .write_unaligned_to(&mut payload, 64)?;
 
-        let meta_buf = &mut buffer[meta_off..ledger_off];
-        meta_buf[0..4].copy_from_slice(&self.substrate.last_selected_trail_id.to_le_bytes());
-        meta_buf[4..8].copy_from_slice(&self.config.raw.head_dim.to_le_bytes());
-        meta_buf[8..12].copy_from_slice(&self.config.raw.num_heads.to_le_bytes());
-        meta_buf[12..16].copy_from_slice(&self.config.raw.rotary_dim.to_le_bytes());
-        meta_buf[16] = self.config.raw.rope_layout;
+        payload[96..100].copy_from_slice(&self.substrate.last_selected_trail_id.to_le_bytes());
+        payload[100..104].copy_from_slice(&self.config.raw.head_dim.to_le_bytes());
+        payload[104..108].copy_from_slice(&self.config.raw.num_heads.to_le_bytes());
+        payload[108..112].copy_from_slice(&self.config.raw.rotary_dim.to_le_bytes());
+        payload[112] = self.config.raw.rope_layout;
 
         self.substrate
             .ledger_slot
-            .write_unaligned_to(buffer, ledger_off)?;
+            .write_unaligned_to(&mut payload, 128)?;
+        self.core_layers.write_unaligned_to(&mut payload, 192)?;
+        self.system_spine.write_unaligned_to(&mut payload, 320)?;
 
-        let mut header = init_snapshot_header(total_required as u64, 1_774_900_000);
-        header.substrate_offset = substrate_off as u64;
-        header.anchor_offset = substrate_off as u64;
-        header.phase_steering_offset = entropy_off as u64;
-        header.rank1_offset = entropy_off as u64;
-        header.entropy_offset = entropy_off as u64;
-        header.ledger_slot_offset = ledger_off as u32;
-        finalize_snapshot_header_crc32(&mut header, &buffer[..total_required])?;
-
-        header.write_unaligned_to(buffer, 0)?;
-        *required_size = total_required;
+        let sections = [LmnkSectionInput {
+            kind: LMNK_SECTION_RUNTIME_SNAPSHOT,
+            flags: 0,
+            payload: &payload,
+        }];
+        let written = write_container_sections_to_bytes(
+            LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT,
+            1_774_900_000,
+            &sections,
+            buffer,
+        )?;
+        *required_size = written;
         Ok(())
     }
 
-    /// Deserializes a `.lmnk` binary snapshot buffer to restore context state in-place with
-    /// ABI header validation and IEEE 802.3 CRC32 payload integrity verification.
+    /// Enforces a minimum host-pinned compute mask floor that external containers cannot clear.
+    #[inline(always)]
+    pub const fn apply_host_spine_pin_floor(&mut self, required_pinned_mask: u64) {
+        self.system_spine.pin_compute_slots(required_pinned_mask);
+    }
+
+    /// Deserializes a unified `.lmnk` binary snapshot container to restore context state in-place
+    /// with full header, topology, and IEEE 802.3 CRC32 verification while preserving host-locked
+    /// `SystemSpineState` privilege floors.
     ///
     /// # Errors
-    /// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if the header magic, section
-    /// offsets, buffer bounds, or payload CRC32 checksum are invalid.
-    /// Returns [`crate::liminal::LMNK_ERR_VERSION_MISMATCH`] if the snapshot ABI version does not
-    /// match [`crate::liminal::LMNK_ABI_VERSION_HEX`].
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `buffer` is shorter than `64` bytes,
+    /// [`LMNK_ERR_CONTAINER_CORRUPTED`] if container structure or CRC32 checks fail,
+    /// [`crate::liminal::LMNK_ERR_VERSION_MISMATCH`] if the ABI version mismatches, or
+    /// [`crate::liminal::LMNK_ERR_TOPOLOGY_MISMATCH`] if the topology CRC32 mismatches.
     #[inline]
     pub fn deserialize_from_bytes(&mut self, buffer: &[u8]) -> Result<()> {
-        let header_size = core::mem::size_of::<LmnkSnapshotHeader>();
-        if buffer.len() < header_size {
+        let view = LmnkContainerView::parse(buffer)?;
+        if (view.header().container_flags & LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT) == 0 {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        }
+        let payload = view
+            .section_bytes(LMNK_SECTION_RUNTIME_SNAPSHOT)
+            .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+        if payload.len() < 352 {
             return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
 
-        let header = LmnkSnapshotHeader::read_unaligned_from(buffer, 0)
-            .map_err(|_| LMNK_ERR_CONTAINER_CORRUPTED)?;
+        let read_u32 = |off: usize| -> Result<u32> {
+            let s = payload
+                .get(off..off + 4)
+                .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+            let arr = <[u8; 4]>::try_from(s).map_err(|_| LMNK_ERR_CONTAINER_CORRUPTED)?;
+            Ok(u32::from_le_bytes(arr))
+        };
+        let read_u64 = |off: usize| -> Result<u64> {
+            let s = payload
+                .get(off..off + 8)
+                .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+            let arr = <[u8; 8]>::try_from(s).map_err(|_| LMNK_ERR_CONTAINER_CORRUPTED)?;
+            Ok(u64::from_le_bytes(arr))
+        };
+        let read_u8 = |off: usize| -> Result<u8> {
+            payload
+                .get(off)
+                .copied()
+                .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)
+        };
 
-        verify_snapshot_payload_crc32(&header, buffer)?;
+        let host_compute_pin_floor = self.system_spine.pinned_compute_mask;
+        let host_aperture_pin_floor = self.system_spine.pinned_aperture_mask;
+        let host_slot_pin_floor = self.system_spine.pinned_slot_mask;
+        let host_mode_pin_floor = self.system_spine.pinned_action_mode_mask;
 
-        let substrate_off = header.substrate_offset as usize;
-        let entropy_off = header.entropy_offset as usize;
-        let ledger_off = header.ledger_slot_offset as usize;
-
-        if substrate_off < header_size || entropy_off < substrate_off || ledger_off < entropy_off {
-            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        let saved_head_dim = read_u32(100)?;
+        let saved_num_heads = read_u32(104)?;
+        let saved_rotary_dim = read_u32(108)?;
+        let saved_rope_layout = read_u8(112)?;
+        if saved_head_dim != 0
+            && (saved_head_dim & 1) == 0
+            && saved_num_heads != 0
+            && (saved_num_heads as usize) <= MAX_ATTENTION_HEADS
+            && saved_head_dim <= u16::MAX as u32
+            && saved_num_heads <= u16::MAX as u32
+        {
+            self.config.raw.head_dim = saved_head_dim;
+            self.config.raw.num_heads = saved_num_heads;
+            self.config.raw.rotary_dim = saved_rotary_dim;
+            self.config.raw.rope_layout = saved_rope_layout;
+            self.phase_steering = PhaseSteeringEngine::new(saved_head_dim, saved_num_heads)?;
+            self.substrate.head_dim = saved_head_dim as u16;
+            self.substrate.num_heads = saved_num_heads as u16;
         }
 
-        if buffer.len() >= substrate_off + 21 {
-            self.substrate.step_counter = u64::read_unaligned_from(buffer, substrate_off)?;
-            self.substrate.active_count = u32::read_unaligned_from(buffer, substrate_off + 8)?;
-            self.substrate.repulsion_threshold =
-                u32::read_unaligned_from(buffer, substrate_off + 12)?.min(u32::from(u8::MAX)) as u8;
-            let restored_entropy = f32::read_unaligned_from(buffer, substrate_off + 16)?;
-            self.substrate.slot_enabled_mask = buffer[substrate_off + 20];
-            if buffer.len() >= substrate_off + 24 {
-                self.substrate.slot_pinned_mask = buffer[substrate_off + 21];
-                self.substrate.slot_repulsion_mask = buffer[substrate_off + 22];
-                self.substrate.slot_sandbox_mask = buffer[substrate_off + 23];
-            }
+        self.substrate.step_counter = read_u64(0)?;
+        self.substrate.active_count = read_u32(8)?;
+        self.substrate.repulsion_threshold = read_u32(12)?.min(u32::from(u8::MAX)) as u8;
+        let restored_entropy = f32::from_bits(read_u32(16)?);
+        if branchless_is_finite_f32(restored_entropy) {
+            self.substrate.last_entropy_h_tilde = restored_entropy;
+        }
+        self.substrate.slot_enabled_mask = read_u8(20)?;
+        self.substrate.slot_pinned_mask = read_u8(21)?;
+        self.substrate.slot_repulsion_mask = read_u8(22)?;
+        self.substrate.slot_sandbox_mask = read_u8(23)?;
 
-            if buffer.len() >= substrate_off + 32 {
-                let coupling = u64::read_unaligned_from(buffer, substrate_off + 24)?;
-                if coupling != 0 {
-                    self.substrate.coupling_matrix_8x8 = coupling;
-                    self.config.slot_coupling_matrix = coupling;
-                }
-            }
-            if buffer.len() >= substrate_off + 64 {
-                f32::read_unaligned_slice_from(
-                    buffer,
-                    substrate_off + 32,
-                    &mut self.substrate.slot_weights,
-                )?;
-            }
-
-            if branchless_is_finite_f32(restored_entropy) {
-                self.substrate.last_entropy_h_tilde = restored_entropy;
-            }
+        let coupling = read_u64(24)?;
+        if coupling != 0 {
+            self.substrate.coupling_matrix_8x8 = coupling;
+            self.config.slot_coupling_matrix = coupling;
+        }
+        for (idx, dst) in self.substrate.slot_weights.iter_mut().enumerate() {
+            *dst = f32::from_bits(read_u32(32 + idx * 4)?);
         }
 
-        let entropy_size = core::mem::size_of::<EntropyState>();
-        if buffer.len() >= entropy_off + entropy_size {
-            let entropy_st = EntropyState::read_unaligned_from(buffer, entropy_off)?;
-            let meta_off = entropy_off + entropy_size;
-            if meta_off + 32 <= ledger_off && buffer.len() >= meta_off + 32 {
-                self.substrate.last_selected_trail_id = u32::read_unaligned_from(buffer, meta_off)?;
-                let saved_head_dim = u32::read_unaligned_from(buffer, meta_off + 4)?;
-                let saved_num_heads = u32::read_unaligned_from(buffer, meta_off + 8)?;
-                let saved_rotary_dim = u32::read_unaligned_from(buffer, meta_off + 12)?;
-                let saved_rope_layout = buffer[meta_off + 16];
-                if saved_head_dim != 0
-                    && (saved_head_dim & 1) == 0
-                    && saved_num_heads != 0
-                    && (saved_num_heads as usize) <= MAX_ATTENTION_HEADS
-                    && saved_head_dim <= u16::MAX as u32
-                    && saved_num_heads <= u16::MAX as u32
-                {
-                    self.config.raw.head_dim = saved_head_dim;
-                    self.config.raw.num_heads = saved_num_heads;
-                    self.config.raw.rotary_dim = saved_rotary_dim;
-                    self.config.raw.rope_layout = saved_rope_layout;
-                    self.phase_steering =
-                        PhaseSteeringEngine::new(saved_head_dim, saved_num_heads)?;
-                    self.substrate.head_dim = saved_head_dim as u16;
-                    self.substrate.num_heads = saved_num_heads as u16;
-                }
-            }
-            self.entropy_controller = EntropyController::new(entropy_st);
-            self.entropy_controller
-                .set_hysteresis_band(self.config.hysteresis_band);
-            self.entropy_controller.set_tau_flux(self.config.tau_flux);
-        }
+        let entropy_st = EntropyState::read_unaligned_from(payload, 64)?;
+        self.entropy_controller = EntropyController::new(entropy_st);
+        self.entropy_controller
+            .set_hysteresis_band(self.config.hysteresis_band);
+        self.entropy_controller.set_tau_flux(self.config.tau_flux);
 
-        let ledger_size = core::mem::size_of::<LedgerSlot>();
-        if buffer.len() >= ledger_off + ledger_size {
-            self.substrate.ledger_slot = LedgerSlot::read_unaligned_from(buffer, ledger_off)?;
-        }
+        self.substrate.last_selected_trail_id = read_u32(96)?;
+        self.substrate.ledger_slot = LedgerSlot::read_unaligned_from(payload, 128)?;
+        self.core_layers = CoreStateStack::read_unaligned_from(payload, 192)?;
+
+        let restored_spine = SystemSpineState::read_unaligned_from(payload, 320)?;
+        self.system_spine = restored_spine;
+        // Host-locked Spine privilege invariants cannot be stripped by untrusted snapshot data.
+        self.system_spine.pinned_compute_mask |= host_compute_pin_floor;
+        self.system_spine.pinned_aperture_mask |= host_aperture_pin_floor;
+        self.system_spine.pinned_slot_mask |= host_slot_pin_floor;
+        self.system_spine.pinned_action_mode_mask |= host_mode_pin_floor;
 
         Ok(())
     }
@@ -2450,7 +2502,7 @@ impl MappedStorage for RuntimeContext {
 
     #[inline]
     fn get_track_offset(&self, track_id: u32) -> Result<u64> {
-        let header_size = core::mem::size_of::<LmnkSnapshotHeader>() as u64;
+        let header_size = LMNK_CONTAINER_HEADER_BYTES as u64;
         match track_id {
             0 => Ok(header_size),
             1 => Ok(header_size + 1024),
@@ -2622,16 +2674,19 @@ mod tests {
 
         let mut required_size = 0usize;
         assert_eq!(ctx.serialize_to_bytes(&mut [], &mut required_size), Ok(()));
-        assert_eq!(required_size, 320);
+        assert_eq!(required_size, LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES);
 
         let mut buffer = alloc::vec![0u8; required_size];
         assert!(ctx
             .serialize_to_bytes(&mut buffer, &mut required_size)
             .is_ok());
 
+        // Host-pinned Spine bits must survive untrusted snapshot deserialization intact.
+        ctx.apply_host_spine_pin_floor(0b0101_0000);
         assert!(ctx.reset().is_ok());
         assert_eq!(ctx.step_counter(), 0);
         assert_eq!(ctx.slot_enabled_mask(), 0x00);
+        ctx.apply_host_spine_pin_floor(0b0101_0000);
         assert!(ctx.deserialize_from_bytes(&buffer).is_ok());
         assert_eq!(ctx.step_counter(), 1);
         assert_eq!(ctx.substrate().repulsion_threshold, 3);
@@ -2640,6 +2695,10 @@ mod tests {
         assert_eq!(ctx.slot_repulsion_mask(), expected_rep);
         assert_eq!(ctx.slot_sandbox_mask(), expected_sb);
         assert!((ctx.slot_weights()[usize::from(ATTRACTOR_SLOT_PERSONA)] - 2.5).abs() < 1e-5);
+        assert_eq!(
+            ctx.system_spine().pinned_compute_mask & 0b0101_0000,
+            0b0101_0000
+        );
 
         // Verify IEEE 802.3 CRC32 payload tamper detection
         buffer[200] ^= 0xFF;
@@ -2668,7 +2727,7 @@ mod tests {
 
         assert_eq!(
             ctx.get_track_offset(0).unwrap(),
-            core::mem::size_of::<LmnkSnapshotHeader>() as u64
+            core::mem::size_of::<LmnkContainerHeader>() as u64
         );
     }
 

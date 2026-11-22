@@ -5,10 +5,12 @@
 //! [`HorizonEscalationProvider`], dwell anti-chattering state, and [`StigmergicSubstrate`] escalation.
 
 use crate::liminal::{
-    LmnkResult, PhaseQ7, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    BitCut8, LmnkResult, PhaseQ7, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
+    MAX_ATTRACTOR_DOMAINS,
 };
 use crate::runtime::context::CoreStateStack;
 use crate::runtime::gateway::{GatewayFrame, ROOT_CAUSE_NOMINAL};
+use crate::runtime::topology::CORE_TOPOLOGY;
 use crate::stigmergy::{
     StigmergicSubstrate, WorkbenchLanePlacement, WorkbenchSlotSpec, WORKBENCH_LANE_FLAG_PINNED,
 };
@@ -120,6 +122,12 @@ pub trait LatentHorizonSlot {
     /// Unique bitmask (`1 << k`) identifying this slot inside `active_horizon_slots_mask`.
     fn horizon_slot_mask(&self) -> u32;
 
+    /// Returns the 8-bit `BitCut8` admission token evaluated against [`crate::runtime::CORE_TOPOLOGY`].
+    #[inline(always)]
+    fn horizon_admission_cut(&self) -> BitCut8 {
+        BitCut8::split((self.horizon_slot_mask() & 0xFF) as u8, 0xFF)
+    }
+
     /// Minimum consecutive destabilized steps required before sliding this slot in (default `1`).
     #[inline(always)]
     fn min_slide_in_dwell(&self) -> u16 {
@@ -177,6 +185,17 @@ pub trait LatentHorizonSlot {
             return (0, 0);
         }
         let was_active = (*active_mask & slot_bit) == slot_bit;
+        let channel_idx = slot_bit.trailing_zeros() as usize;
+        let admitted = (slot_bit <= 0xFF)
+            & CORE_TOPOLOGY.admits_channel_branchless(channel_idx, self.horizon_admission_cut());
+        if !admitted {
+            if was_active {
+                *active_mask &= !slot_bit;
+                self.on_slide_out(frame, stack, trigger);
+                return (0, slot_bit);
+            }
+            return (0, 0);
+        }
         let enter_ready = self.should_slide_in(trigger)
             && trigger.effective_unstable_dwell() >= self.min_slide_in_dwell();
         if enter_ready {
@@ -206,6 +225,11 @@ impl<T: LatentHorizonSlot + ?Sized> LatentHorizonSlot for &mut T {
     #[inline(always)]
     fn horizon_slot_mask(&self) -> u32 {
         (**self).horizon_slot_mask()
+    }
+
+    #[inline(always)]
+    fn horizon_admission_cut(&self) -> BitCut8 {
+        (**self).horizon_admission_cut()
     }
 
     #[inline(always)]
@@ -493,5 +517,116 @@ impl StigmergicSubstrate {
             }
         }
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct CustomCutSlot {
+        mask: u32,
+        cut: BitCut8,
+        modulated: u32,
+    }
+
+    impl LatentHorizonSlot for CustomCutSlot {
+        fn horizon_slot_mask(&self) -> u32 {
+            self.mask
+        }
+
+        fn horizon_admission_cut(&self) -> BitCut8 {
+            self.cut
+        }
+
+        fn on_slide_in_modulate(
+            &mut self,
+            _frame: &mut GatewayFrame,
+            _stack: &mut CoreStateStack,
+            _trigger: &HorizonTriggerInput,
+        ) {
+            self.modulated += 1;
+        }
+    }
+
+    #[test]
+    fn test_horizon_slot_bitcut8_admission_control() {
+        let mut frame = GatewayFrame::default();
+        let mut stack = CoreStateStack::new();
+        let trigger = HorizonTriggerInput {
+            repulsion_severity: 0.8,
+            ..Default::default()
+        };
+
+        // 1. Authorized slot slides in cleanly.
+        let mut ok_slot = CustomCutSlot {
+            mask: 1 << 2,
+            cut: BitCut8::split(1 << 2, 0xFF),
+            modulated: 0,
+        };
+        let mut active = 0u32;
+        let (in_b, out_b) =
+            ok_slot.apply_horizon_slot(&mut active, &trigger, &mut frame, &mut stack);
+        assert_eq!((in_b, out_b), (1 << 2, 0));
+        assert_eq!(active, 1 << 2);
+        assert_eq!(ok_slot.modulated, 1);
+
+        // 2. Out-of-bounds channel (>= 8) is rejected branchlessly.
+        let mut oob_slot = CustomCutSlot {
+            mask: 1 << 8,
+            cut: BitCut8::split(0xFF, 0xFF),
+            modulated: 0,
+        };
+        let mut oob_active = 0u32;
+        assert_eq!(
+            oob_slot.apply_horizon_slot(&mut oob_active, &trigger, &mut frame, &mut stack),
+            (0, 0)
+        );
+        assert_eq!(oob_active, 0);
+        assert_eq!(oob_slot.modulated, 0);
+
+        // 3. Empty BitCut8 cut is rejected.
+        let mut empty_cut_slot = CustomCutSlot {
+            mask: 1 << 1,
+            cut: BitCut8::split(0, 0xFF),
+            modulated: 0,
+        };
+        let mut empty_active = 0u32;
+        assert_eq!(
+            empty_cut_slot.apply_horizon_slot(&mut empty_active, &trigger, &mut frame, &mut stack),
+            (0, 0)
+        );
+        assert_eq!(empty_cut_slot.modulated, 0);
+
+        // 4. Unauthorized pinned-channel cut is rejected.
+        let mut pinned_bad_slot = CustomCutSlot {
+            mask: 1 << 0,
+            cut: BitCut8::split(0x02, 0xFF),
+            modulated: 0,
+        };
+        let mut pinned_active = 0u32;
+        assert_eq!(
+            pinned_bad_slot.apply_horizon_slot(
+                &mut pinned_active,
+                &trigger,
+                &mut frame,
+                &mut stack
+            ),
+            (0, 0)
+        );
+        assert_eq!(pinned_bad_slot.modulated, 0);
+
+        // 5. Pinned-only cut on sandbox channel 7 is rejected.
+        let mut sandbox_bad_slot = CustomCutSlot {
+            mask: 1 << 7,
+            cut: BitCut8::split(0x09, 0xFF),
+            modulated: 0,
+        };
+        let mut sb_active = 0u32;
+        assert_eq!(
+            sandbox_bad_slot.apply_horizon_slot(&mut sb_active, &trigger, &mut frame, &mut stack),
+            (0, 0)
+        );
+        assert_eq!(sandbox_bad_slot.modulated, 0);
     }
 }

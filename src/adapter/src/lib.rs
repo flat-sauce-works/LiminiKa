@@ -30,11 +30,12 @@ use liminika_core::runtime::{
     CoreTelemetrySnapshot, DefaultResidualSpilloverSlot, EpistemicHorizonReading, GatewayFrame,
     GatewayPhaseSteeringExt, GuardPhaseAnchor, HorizonDwellState, HorizonEscalationProvider,
     HorizonEscalationRequest, HorizonTriggerInput, LatentHorizonSlot, LayerDistortionReport,
-    LiminalBoundaryDelta, LiminalTopologyTelemetrySnapshot, LmnkFourSectionView,
+    LiminalBoundaryDelta, LiminalTopologyTelemetrySnapshot, LmnkContainerView,
     ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact, SlowLoopTelemetryAdjustment,
     StigmergicThresholdPolicy, SubjectivePersona, SubstrateGatewayExt, SystemConstraint,
     TelemetryCapturePolicy, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
-    CAUSAL_AXIS_SUBJECTIVE_PERSONA, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
+    CAUSAL_AXIS_SUBJECTIVE_PERSONA, LMNK_CONTAINER_FLAG_COMPILED_CACHE, ROOT_CAUSE_NOMINAL,
+    ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
 };
 use liminika_core::stigmergy::{
     evaluate_stigmergic_overlap_and_discovery_words_64, CognitiveCircuitActivation,

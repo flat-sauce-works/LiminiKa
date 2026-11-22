@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Tagged-pointer bit-packing, version/capability queries, heap & caller-buffered `in_place`
-//! context lifecycle, and 4-section `.lmnk` zero-copy snapshot container FFI.
+//! context lifecycle, and unified `.lmnk` zero-copy container FFI.
 
 use super::*;
-use crate::runtime::storage::LmnkFourSectionView;
+use crate::runtime::context::zeroize_volatile;
+use crate::runtime::storage::{LmnkContainerView, LMNK_CONTAINER_FLAG_COMPILED_CACHE};
 
 // ===================================================================
 // 0. Tagged Pointer Bit-Packing & Mode Evolution C-ABI
@@ -265,9 +266,10 @@ pub unsafe extern "C" fn lmnk_context_deinit_in_place(context: LmnkContextHandle
             return Err(LMNK_ERR_INVALID_STATE);
         }
         ctx_ref.deinit_hot_state();
-        // SAFETY: `RuntimeContext` has zero drop glue; scrub caller buffer completely.
+        // SAFETY: `RuntimeContext` has zero drop glue; scrub caller buffer via volatile zeroization
+        // so dead-store elimination cannot leave runtime state resident in RAM.
         unsafe {
-            ptr::write_bytes(typed, 0u8, 1);
+            zeroize_volatile(typed);
         }
         Ok(LMNK_OK)
     })
@@ -321,10 +323,12 @@ pub unsafe extern "C" fn lmnk_context_destroy(context: LmnkContextHandle) -> Lmn
         if unsafe { (&*typed).allocation_mode() } != CTX_ALLOC_HEAP_BOXED {
             return Err(LMNK_ERR_INVALID_STATE);
         }
-        // SAFETY: `context` was verified `CTX_ALLOC_HEAP_BOXED` and naturally aligned.
+        // SAFETY: `context` was verified `CTX_ALLOC_HEAP_BOXED` and naturally aligned;
+        // unwrap into `Box<MaybeUninit<RuntimeContext>>` so volatile scrubbing preserves drop validity.
         unsafe {
-            let mut boxed = Box::from_raw(typed);
-            boxed.deinit_hot_state();
+            let mut boxed = Box::from_raw(typed.cast::<core::mem::MaybeUninit<RuntimeContext>>());
+            boxed.assume_init_mut().deinit_hot_state();
+            zeroize_volatile(boxed.as_mut_ptr());
             drop(boxed);
         }
         Ok(LMNK_OK)
@@ -440,11 +444,11 @@ pub unsafe extern "C" fn lmnk_context_deserialize(
         }
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and alignment.
         let mut out_handle = unsafe { FfiHandleMut::from_raw(context_out)? };
-        if buffer_size < size_of::<lmnk_snapshot_header_t>() {
-            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        if buffer_size < LMNK_CONTAINER_HEADER_BYTES {
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
 
-        // SAFETY: `buffer` is non-null and `buffer_size >= 128`.
+        // SAFETY: `buffer` is non-null and `buffer_size >= 64`.
         let in_bytes = unsafe { slice::from_raw_parts(buffer, buffer_size) };
         let mut ctx = RuntimeContext::new(Config::new())?;
         ctx.deserialize_from_bytes(in_bytes)?;
@@ -455,13 +459,14 @@ pub unsafe extern "C" fn lmnk_context_deserialize(
     })
 }
 
-/// Serializes a 4-section `.lmnk` zero-copy container ([`LmnkFourSectionView`]) including
+/// Serializes a unified 64B-aligned `.lmnk` zero-copy container ([`LmnkContainerView`]) including
 /// [`CausalProvenanceReport`] diagnostic history entries.
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[no_mangle]
-pub unsafe extern "C" fn lmnk_container_write_four_section_with_reports_zero_copy(
+pub unsafe extern "C" fn lmnk_container_write_with_reports_zero_copy(
+    container_flags: u32,
     anchors: *const lmnk_phase_anchor_record_t,
     num_anchors: usize,
     trails: *const lmnk_pointer_trail_t,
@@ -478,7 +483,7 @@ pub unsafe extern "C" fn lmnk_container_write_four_section_with_reports_zero_cop
         // SAFETY: Validated for non-nullness and alignment.
         let mut size_io = unsafe { FfiHandleMut::from_raw(buffer_size_inout)? };
 
-        let required = LmnkFourSectionView::required_byte_len_with_reports(
+        let required = LmnkContainerView::required_standard_byte_len(
             num_anchors,
             num_trails,
             !bloom_opt.is_null(),
@@ -527,7 +532,8 @@ pub unsafe extern "C" fn lmnk_container_write_four_section_with_reports_zero_cop
             )
         };
 
-        let written = LmnkFourSectionView::write_four_section_with_reports_to_bytes(
+        let written = LmnkContainerView::write_standard_sections_to_bytes(
+            container_flags,
             anchors_slice,
             trails_slice,
             bloom_ref.as_deref(),
@@ -541,12 +547,12 @@ pub unsafe extern "C" fn lmnk_container_write_four_section_with_reports_zero_cop
     })
 }
 
-/// Serializes a 4-section `.lmnk` zero-copy container ([`LmnkFourSectionView`]).
+/// Serializes a compiled-cache `.lmnk` zero-copy container ([`LmnkContainerView`]).
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[no_mangle]
-pub unsafe extern "C" fn lmnk_container_write_four_section_zero_copy(
+pub unsafe extern "C" fn lmnk_container_write_zero_copy(
     anchors: *const lmnk_phase_anchor_record_t,
     num_anchors: usize,
     trails: *const lmnk_pointer_trail_t,
@@ -557,9 +563,10 @@ pub unsafe extern "C" fn lmnk_container_write_four_section_zero_copy(
     out_bytes: *mut u8,
     buffer_size_inout: *mut usize,
 ) -> LmnkStatus {
-    // SAFETY: Delegates directly to `lmnk_container_write_four_section_with_reports_zero_copy` with 0 reports.
+    // SAFETY: Delegates directly to `lmnk_container_write_with_reports_zero_copy` with compiled-cache flag and 0 reports.
     unsafe {
-        lmnk_container_write_four_section_with_reports_zero_copy(
+        lmnk_container_write_with_reports_zero_copy(
+            LMNK_CONTAINER_FLAG_COMPILED_CACHE,
             anchors,
             num_anchors,
             trails,
@@ -575,13 +582,13 @@ pub unsafe extern "C" fn lmnk_container_write_four_section_zero_copy(
     }
 }
 
-/// Validates and maps a 128B-aligned 4-section `.lmnk` container in-place ($C_{\mathrm{alloc}} = 0$)
-/// via [`LmnkFourSectionView::from_container_bytes_zero_copy`], exposing Section 1–3 zero-copy pointers.
+/// Validates and maps a 64B-aligned unified `.lmnk` container in-place ($C_{\mathrm{alloc}} = 0$)
+/// via [`LmnkContainerView::parse`], exposing typed zero-copy section pointers.
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[no_mangle]
-pub unsafe extern "C" fn lmnk_container_verify_four_section_with_reports_zero_copy(
+pub unsafe extern "C" fn lmnk_container_verify_with_reports_zero_copy(
     container_bytes: *const u8,
     byte_len: usize,
     num_anchors_out: *mut usize,
@@ -597,68 +604,77 @@ pub unsafe extern "C" fn lmnk_container_verify_four_section_with_reports_zero_co
         if container_bytes.is_null() {
             return Err(LMNK_ERR_NULL_POINTER);
         }
-        if byte_len < LMNK_FOUR_SECTION_HEADER_BYTES {
+        if byte_len < LMNK_CONTAINER_HEADER_BYTES {
             return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
-        // SAFETY: `container_bytes` is non-null and `byte_len >= 192`.
+        // SAFETY: `container_bytes` is non-null and `byte_len >= 64`.
         let bytes = unsafe { slice::from_raw_parts(container_bytes, byte_len) };
-        let view = LmnkFourSectionView::from_container_bytes_zero_copy(bytes)?;
+        let view = LmnkContainerView::parse(bytes)?;
+        if ((container_bytes as usize) & 63) != 0 {
+            return Err(LMNK_ERR_ALIGNMENT);
+        }
+
+        let anchors = view.phase_anchors_zero_copy()?;
+        let trails = view.pointer_trails_zero_copy()?;
+        let bloom = view.bloom_filter_zero_copy()?;
+        let ledger = view.ledger_slot_zero_copy()?;
+        let reports = view.causal_provenance_zero_copy()?;
 
         // SAFETY: `write_opt_out` validates optional output pointers.
         unsafe {
-            write_opt_out(num_anchors_out, view.crystals.len())?;
-            write_opt_out(num_trails_out, view.trails.len())?;
-            write_opt_out(num_reports_out, view.provenance_reports.len())?;
+            write_opt_out(num_anchors_out, anchors.len())?;
+            write_opt_out(num_trails_out, trails.len())?;
+            write_opt_out(num_reports_out, reports.len())?;
         }
         // SAFETY: `FfiHandleMut::from_raw_opt` validates optional output pointers.
         if let Some(mut ap_out) = unsafe { FfiHandleMut::from_raw_opt(anchors_ptr_out)? } {
-            *ap_out = if view.crystals.is_empty() {
+            *ap_out = if anchors.is_empty() {
                 ptr::null()
             } else {
-                view.crystals.as_ptr()
+                anchors.as_ptr()
             };
         }
         // SAFETY: `FfiHandleMut::from_raw_opt` validates optional output pointers.
         if let Some(mut tp_out) = unsafe { FfiHandleMut::from_raw_opt(trails_ptr_out)? } {
-            *tp_out = if view.trails.is_empty() {
+            *tp_out = if trails.is_empty() {
                 ptr::null()
             } else {
-                view.trails.as_ptr()
+                trails.as_ptr()
             };
         }
         // SAFETY: `FfiHandleMut::from_raw_opt` validates optional output pointers.
         if let Some(mut bp_out) = unsafe { FfiHandleMut::from_raw_opt(bloom_ptr_out)? } {
-            *bp_out = match view.bloom {
+            *bp_out = match bloom {
                 Some(b_ref) => b_ref as *const lmnk_bloom_filter_t,
                 None => ptr::null(),
             };
         }
         // SAFETY: `FfiHandleMut::from_raw_opt` validates optional output pointers.
         if let Some(mut dp_out) = unsafe { FfiHandleMut::from_raw_opt(ledger_ptr_out)? } {
-            *dp_out = match view.ledger {
+            *dp_out = match ledger {
                 Some(d_ref) => d_ref as *const lmnk_ledger_slot_t,
                 None => ptr::null(),
             };
         }
         // SAFETY: `FfiHandleMut::from_raw_opt` validates optional output pointers.
         if let Some(mut rp_out) = unsafe { FfiHandleMut::from_raw_opt(reports_ptr_out)? } {
-            *rp_out = if view.provenance_reports.is_empty() {
+            *rp_out = if reports.is_empty() {
                 ptr::null()
             } else {
-                view.provenance_reports.as_ptr()
+                reports.as_ptr()
             };
         }
         Ok(LMNK_OK)
     })
 }
 
-/// Validates and maps a 128B-aligned 4-section `.lmnk` container in-place ($C_{\mathrm{alloc}} = 0$)
-/// via [`LmnkFourSectionView::from_container_bytes_zero_copy`].
+/// Validates and maps a 64B-aligned unified `.lmnk` container in-place ($C_{\mathrm{alloc}} = 0$)
+/// via [`LmnkContainerView::parse`].
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[no_mangle]
-pub unsafe extern "C" fn lmnk_container_verify_four_section_zero_copy(
+pub unsafe extern "C" fn lmnk_container_verify_zero_copy(
     container_bytes: *const u8,
     byte_len: usize,
     num_anchors_out: *mut usize,
@@ -666,9 +682,9 @@ pub unsafe extern "C" fn lmnk_container_verify_four_section_zero_copy(
     anchors_ptr_out: *mut *const lmnk_phase_anchor_record_t,
     trails_ptr_out: *mut *const lmnk_pointer_trail_t,
 ) -> LmnkStatus {
-    // SAFETY: Delegates to `lmnk_container_verify_four_section_with_reports_zero_copy`.
+    // SAFETY: Delegates to `lmnk_container_verify_with_reports_zero_copy`.
     unsafe {
-        lmnk_container_verify_four_section_with_reports_zero_copy(
+        lmnk_container_verify_with_reports_zero_copy(
             container_bytes,
             byte_len,
             num_anchors_out,
@@ -683,15 +699,15 @@ pub unsafe extern "C" fn lmnk_container_verify_four_section_zero_copy(
     }
 }
 
-/// Validates and maps a 128B-aligned 4-section `.lmnk` container in-place ($C_{\mathrm{alloc}} = 0$),
-/// folds Section 1 [`PhaseAnchorRecord`]s onto `trail_inout` by **Phase-Proximity Gravity**,
-/// applies Section 3a `view.bloom` contrastive Phase-Conjugate Repulsion ($-\boldsymbol{\Delta\theta}$)
+/// Validates and maps a 64B-aligned unified `.lmnk` container in-place ($C_{\mathrm{alloc}} = 0$),
+/// folds `PhaseAnchors` [`PhaseAnchorRecord`]s onto `trail_inout` by **Phase-Proximity Gravity**,
+/// applies `BloomFilter` contrastive Phase-Conjugate Repulsion ($-\boldsymbol{\Delta\theta}$)
 /// if active, and steers `query_tensor` (and optional `key_tensor`) in a single register-resident FFI call.
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[no_mangle]
-pub unsafe extern "C" fn lmnk_container_map_and_steer_four_section_zero_copy_safe(
+pub unsafe extern "C" fn lmnk_container_map_and_steer_zero_copy_safe(
     container_bytes: *const u8,
     byte_len: usize,
     trail_inout: *mut lmnk_pointer_trail_t,
@@ -709,7 +725,7 @@ pub unsafe extern "C" fn lmnk_container_map_and_steer_four_section_zero_copy_saf
         if container_bytes.is_null() {
             return Err(LMNK_ERR_NULL_POINTER);
         }
-        if byte_len < LMNK_FOUR_SECTION_HEADER_BYTES {
+        if byte_len < LMNK_CONTAINER_HEADER_BYTES {
             return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         validate_ptr(trail_inout)?;
@@ -725,15 +741,20 @@ pub unsafe extern "C" fn lmnk_container_map_and_steer_four_section_zero_copy_saf
         // SAFETY: `bind_qk_32` validates `query_tensor` and `key_tensor` alignment and disjointness.
         let (_engine, mut q_aligned, mut k_opt) =
             unsafe { bind_qk_32(query_tensor, key_tensor, head_dim, num_heads)? };
-        // SAFETY: `container_bytes` is non-null and `byte_len >= 192`.
+        // SAFETY: `container_bytes` is non-null and `byte_len >= 64`.
         let bytes = unsafe { slice::from_raw_parts(container_bytes, byte_len) };
-        let view = LmnkFourSectionView::from_container_bytes_zero_copy(bytes)?;
+        let view = LmnkContainerView::parse(bytes)?;
+        if ((container_bytes as usize) & 63) != 0 {
+            return Err(LMNK_ERR_ALIGNMENT);
+        }
+        let anchors = view.phase_anchors_zero_copy()?;
+        let bloom = view.bloom_filter_zero_copy()?;
         // SAFETY: `trail_inout` is validated above.
         let mut trail = unsafe { FfiHandleMut::from_raw(trail_inout)? };
 
         let (tot_pull, dom_id, eff_clamp) = steer_crystallized_records_with_optional_bloom_safe(
-            view.crystals,
-            view.bloom,
+            anchors,
+            bloom,
             &mut trail,
             min_step_rad,
             head_dim,
@@ -744,7 +765,7 @@ pub unsafe extern "C" fn lmnk_container_map_and_steer_four_section_zero_copy_saf
 
         // SAFETY: `write_opt_out` validates optional output pointers.
         unsafe {
-            write_opt_out(num_anchors_out, view.crystals.len())?;
+            write_opt_out(num_anchors_out, anchors.len())?;
             write_opt_out(total_pull_out, tot_pull)?;
             write_opt_out(dominant_anchor_id_out, dom_id)?;
             write_opt_out(effective_phase_clamp_rad_out, eff_clamp)?;

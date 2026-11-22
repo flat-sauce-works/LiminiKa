@@ -95,6 +95,9 @@ macro_rules! define_status_codes {
                 self.0 != 0
             }
 
+            /// Alias for [`LMNK_ERR_TOPOLOGY_MISMATCH`].
+            pub const TOPOLOGY_MISMATCH: Self = LMNK_ERR_TOPOLOGY_MISMATCH;
+
             /// Returns the raw signed 32-bit integer status code.
             #[inline(always)]
             #[must_use]
@@ -251,6 +254,13 @@ define_status_codes!(
         b"LMNK_ERR_STORAGE_MAP_FAILED\0",
         "LMNK_ERR_STORAGE_MAP_FAILED",
         "Zero-copy memory mapping or storage buffer mapping failed."
+    ),
+    (
+        LMNK_ERR_TOPOLOGY_MISMATCH,
+        -52,
+        b"LMNK_ERR_TOPOLOGY_MISMATCH\0",
+        "LMNK_ERR_TOPOLOGY_MISMATCH",
+        "Container topology CRC32 does not match the active core topology matrix."
     ),
     (
         LMNK_ERR_SUBHEAD_ROUTING_FAILED,

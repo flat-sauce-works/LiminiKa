@@ -16,6 +16,7 @@ use super::{LMNK_PHASE_ANCHOR_MAGIC, LMNK_PHASE_ANCHOR_VERSION};
 
 /// 64B-aligned 4KB GF(2) affine operator table fusing $L^4(L_{12}(\text{record\_crc32})) \oplus (\neg\text{record\_crc32}) \oplus L^8(\text{0xFFFF\_FFFF})$
 /// into a single 4-lookup stage (`0` branches, `1` lookup stage instead of `2` serial stages).
+#[allow(dead_code)]
 pub(crate) const CRC32_IEEE_ANCHOR_STAMP_LUT: AlignedLut4x256<u32> = {
     const L8_ONES: u32 = crc32_step_l8(0xFFFF_FFFFu32);
     let mut lut = [[0u32; 256]; 4];
@@ -38,6 +39,7 @@ pub(crate) const CRC32_IEEE_ANCHOR_STAMP_LUT: AlignedLut4x256<u32> = {
 };
 
 /// Promoted `.rodata` reference to the 4KB 1-stage anchor stamp CRC32 folding table.
+#[allow(dead_code)]
 pub(crate) const CRC32_IEEE_ANCHOR_STAMP_REF: &[[u32; 256]; 4] = &CRC32_IEEE_ANCHOR_STAMP_LUT.0;
 
 /// 64B-aligned 1KB GF(2) differential CRC32 table for low-byte `sample_count` increments
@@ -291,6 +293,7 @@ pub(crate) const fn crc32_anchor_tm44_final_u32(tm_bits: u32) -> u32 {
 /// Evaluates the accumulator-independent 128-byte stamped anchor contribution
 /// $L^4(L_{12}(\text{record\_crc32})) \oplus (\neg\text{record\_crc32}) \oplus L^8(\text{0xFFFF\_FFFF})$
 /// in 4 parallel table lookups (`0` branches).
+#[allow(dead_code)]
 #[inline(always)]
 pub(crate) const fn crc32_anchor_stamp_contrib_128b(record_crc32: u32) -> u32 {
     let lut = CRC32_IEEE_ANCHOR_STAMP_REF;
@@ -301,6 +304,7 @@ pub(crate) const fn crc32_anchor_stamp_contrib_128b(record_crc32: u32) -> u32 {
 /// Advances an uninverted IEEE 802.3 CRC32 accumulator (`crc`) across an entire 128-byte stamped
 /// `PhaseAnchorRecord` using GF(2) linearity ($L^8(\text{crc}) \oplus \text{stamp}(\text{record\_crc32})$)
 /// in a single 4-lookup stage (`0` branches).
+#[allow(dead_code)]
 #[inline(always)]
 pub(crate) const fn crc32_fold_stamped_anchor_128b(crc: u32, record_crc32: u32) -> u32 {
     crc32_step_l8(crc) ^ crc32_anchor_stamp_contrib_128b(record_crc32)

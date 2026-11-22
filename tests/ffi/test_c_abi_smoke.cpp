@@ -50,6 +50,15 @@ void test_static_invariants() {
     static_assert(sizeof(lmnk_phase_anchor_record_t) == 128U);
     static_assert(alignof(lmnk_phase_anchor_record_t) == 64U);
     static_assert(LMNK_ATTRIBUTION_TAG(LMNK_PRIMITIVE_STIGMERGY, LMNK_DRIVER_EGO) == 3U);
+    static_assert(LMNK_ATTRIBUTION_TAG(LMNK_PRIMITIVE_STIGMERGY, LMNK_DRIVER_SYSTEM) == 1U);
+    static_assert(LMNK_ATTRIBUTION_TAG(LMNK_PRIMITIVE_LIMINAL, LMNK_DRIVER_EGO) == 2U);
+    static_assert(sizeof(lmnk_container_header_t) == 64U);
+    static_assert(alignof(lmnk_container_header_t) == 64U);
+    static_assert(sizeof(lmnk_section_entry_t) == 16U);
+    static_assert(alignof(lmnk_section_entry_t) == 16U);
+    static_assert(sizeof(lmnk_topology_matrix_t) == 64U);
+    static_assert(alignof(lmnk_topology_matrix_t) == 64U);
+    static_assert(LMNK_ERR_TOPOLOGY_MISMATCH == -52);
     static_assert(offsetof(lmnk_liminal_ego_state_t, counter_basin_thrust_q7) == 40U);
     static_assert(offsetof(lmnk_liminal_ego_state_t, basin_escape_floor_q7) == 41U);
     static_assert(LMNK_ATTRACTOR_SLOT_TEMPORAL == 5U);
@@ -104,6 +113,18 @@ void test_version_capabilities_and_tagged_ptr() {
     LMNK_TEST_CHECK(lmnk_tagged_ptr_unpack_phase(repulsed) == -24);
 }
 
+uint32_t test_crc32_ieee(const uint8_t* data, size_t len) {
+    uint32_t crc = 0xFFFFFFFFU;
+    for (size_t i = 0; i < len; ++i) {
+        crc ^= static_cast<uint32_t>(data[i]);
+        for (int b = 0; b < 8; ++b) {
+            const uint32_t mask = static_cast<uint32_t>(-static_cast<int32_t>(crc & 1U));
+            crc = (crc >> 1) ^ (0xEDB88320U & mask);
+        }
+    }
+    return ~crc;
+}
+
 void test_context_boxed_and_in_place_lifecycle() {
     lmnk_config_t cfg{};
     LMNK_TEST_CHECK(lmnk_config_init_default(&cfg) == LMNK_OK);
@@ -133,14 +154,14 @@ void test_context_boxed_and_in_place_lifecycle() {
 
     size_t required_bytes = 0;
     LMNK_TEST_CHECK(lmnk_context_serialize(ctx, nullptr, &required_bytes) == LMNK_OK);
-    LMNK_TEST_CHECK(required_bytes > sizeof(lmnk_snapshot_header_t));
+    LMNK_TEST_CHECK(required_bytes > sizeof(lmnk_container_header_t));
 
-    const size_t raw_cap = required_bytes + alignof(lmnk_snapshot_header_t);
+    const size_t raw_cap = required_bytes + alignof(lmnk_container_header_t);
     auto raw_storage = std::make_unique<uint8_t[]>(raw_cap);
     void* aligned_ptr = raw_storage.get();
     size_t space = raw_cap;
-    LMNK_TEST_CHECK(
-        std::align(alignof(lmnk_snapshot_header_t), required_bytes, aligned_ptr, space) != nullptr);
+    LMNK_TEST_CHECK(std::align(alignof(lmnk_container_header_t), required_bytes, aligned_ptr,
+                               space) != nullptr);
     auto* raw_ptr = static_cast<uint8_t*>(aligned_ptr);
     size_t cap = required_bytes;
     LMNK_TEST_CHECK(lmnk_context_serialize(ctx, raw_ptr, &cap) == LMNK_OK);
@@ -154,10 +175,22 @@ void test_context_boxed_and_in_place_lifecycle() {
     LMNK_TEST_CHECK(restored_trail.step_count == 2U);
     LMNK_TEST_CHECK(restored_trail.prev_ptr == 42U);
 
+    // Mutate topology_crc32 and re-stamp header_crc32 to trigger LMNK_ERR_TOPOLOGY_MISMATCH
+    raw_ptr[8] ^= 0x01U;
+    const uint32_t restamped_crc = test_crc32_ieee(raw_ptr, 60U);
+    raw_ptr[60] = static_cast<uint8_t>(restamped_crc & 0xFFU);
+    raw_ptr[61] = static_cast<uint8_t>((restamped_crc >> 8U) & 0xFFU);
+    raw_ptr[62] = static_cast<uint8_t>((restamped_crc >> 16U) & 0xFFU);
+    raw_ptr[63] = static_cast<uint8_t>((restamped_crc >> 24U) & 0xFFU);
+    lmnk_context_handle_t mismatch_ctx = nullptr;
+    LMNK_TEST_CHECK(lmnk_context_deserialize(raw_ptr, cap, &mismatch_ctx) ==
+                    LMNK_ERR_TOPOLOGY_MISMATCH);
+    LMNK_TEST_CHECK(mismatch_ctx == nullptr);
+
     LMNK_TEST_CHECK(lmnk_context_destroy(restored) == LMNK_OK);
     LMNK_TEST_CHECK(lmnk_context_destroy(ctx) == LMNK_OK);
 
-    // 2. Zero-heap caller-owned in-place lifecycle + cross-guard check
+    // 2. Zero-heap caller-owned in-place lifecycle + zero-scrub + cross-guard check
     const size_t inplace_cap = ctx_size + ctx_align;
     auto backing = std::make_unique<uint8_t[]>(inplace_cap);
     void* ctx_aligned = backing.get();
@@ -181,6 +214,10 @@ void test_context_boxed_and_in_place_lifecycle() {
     LMNK_TEST_CHECK(inplace_trail.step_count == 1U);
     LMNK_TEST_CHECK(lmnk_context_reset(in_place_ctx) == LMNK_OK);
     LMNK_TEST_CHECK(lmnk_context_deinit_in_place(in_place_ctx) == LMNK_OK);
+    for (size_t i = 0; i < ctx_size; ++i) {
+        LMNK_TEST_CHECK(ctx_bytes[i] == 0U);
+    }
+    LMNK_TEST_CHECK(lmnk_context_deinit_in_place(in_place_ctx) == LMNK_ERR_INVALID_STATE);
 }
 
 void test_entropy_lacuna_anchor_and_mermaid() {
@@ -270,6 +307,38 @@ void test_entropy_lacuna_anchor_and_mermaid() {
     const char* mermaid_str = reinterpret_cast<const char*>(mermaid_buf.get());
     LMNK_TEST_CHECK(std::strncmp(mermaid_str, "flowchart TD\n", 13) == 0);
     LMNK_TEST_CHECK(std::strstr(mermaid_str, "Anchors:3") != nullptr);
+
+    // Topology matrix & unified zero-copy container write/verify/alignment rejection
+    alignas(64) lmnk_topology_matrix_t topo{};
+    LMNK_TEST_CHECK(lmnk_topology_get_matrix(&topo) == LMNK_OK);
+    LMNK_TEST_CHECK(topo.magic == LMNK_TOPOLOGY_MAGIC);
+    LMNK_TEST_CHECK(topo.layer_count == LMNK_TOPOLOGY_LAYER_COUNT);
+    LMNK_TEST_CHECK(topo.channel_count == LMNK_TOPOLOGY_CHANNEL_COUNT);
+    LMNK_TEST_CHECK(topo.pinned_channel_mask == LMNK_TOPOLOGY_PINNED_CHANNEL_MASK);
+    LMNK_TEST_CHECK(topo.topology_crc32 != 0U);
+
+    alignas(64) uint8_t container_buf[512]{};
+    size_t cont_len = sizeof(container_buf);
+    LMNK_TEST_CHECK(lmnk_container_write_zero_copy(&centroid, 1U, nullptr, 0U, nullptr, nullptr,
+                                                  1774900000ULL, container_buf,
+                                                  &cont_len) == LMNK_OK);
+    LMNK_TEST_CHECK(cont_len >= LMNK_CONTAINER_HEADER_BYTES + 128U);
+
+    size_t num_anchors = 0U;
+    size_t num_trails = 0U;
+    const lmnk_phase_anchor_record_t* anchors_ptr = nullptr;
+    const lmnk_pointer_trail_t* trails_ptr = nullptr;
+    LMNK_TEST_CHECK(lmnk_container_verify_zero_copy(container_buf, cont_len, &num_anchors,
+                                                   &num_trails, &anchors_ptr,
+                                                   &trails_ptr) == LMNK_OK);
+    LMNK_TEST_CHECK(num_anchors == 1U && anchors_ptr != nullptr);
+    LMNK_TEST_CHECK(num_trails == 0U && trails_ptr == nullptr);
+
+    alignas(64) uint8_t misalign_backing[512 + 8]{};
+    std::memcpy(misalign_backing + 1, container_buf, cont_len);
+    LMNK_TEST_CHECK(lmnk_container_verify_zero_copy(misalign_backing + 1, cont_len, &num_anchors,
+                                                   &num_trails, &anchors_ptr,
+                                                   &trails_ptr) == LMNK_ERR_ALIGNMENT);
 }
 
 } // namespace

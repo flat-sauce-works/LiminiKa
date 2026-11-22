@@ -97,6 +97,7 @@ REQUIRED_CANONICAL_PATHS: tuple[str, ...] = (
     "foundation/phase_ops/mod.rs",
     "stigmergy/substrate.rs",
     "stigmergy/anchor/mod.rs",
+    "runtime/topology.rs",
 )
 
 PUB_TYPE_OR_TRAIT_RE = re.compile(
@@ -513,6 +514,59 @@ def check_cross_observer_scoped_boundaries(core_src: pathlib.Path) -> list[str]:
     return violations
 
 
+def check_topology_matrix_parity(core_src: pathlib.Path) -> list[str]:
+    """Verify `CORE_TOPOLOGY` constants in `runtime/topology.rs` match the enforced 5-layer DAG."""
+    topo_rs = core_src / "runtime" / "topology.rs"
+    if not topo_rs.is_file():
+        return [f"Topology parity check: missing {topo_rs.as_posix()}"]
+
+    text = topo_rs.read_text(encoding="utf-8")
+    violations: list[str] = []
+
+    layer_m = re.search(
+        r"pub\s+const\s+LMNK_TOPOLOGY_LAYER_COUNT:\s*u8\s*=\s*(\d+)\s*;",
+        text,
+    )
+    if layer_m is None or int(layer_m.group(1)) != 5:
+        got = layer_m.group(1) if layer_m else "missing"
+        violations.append(
+            f"Topology parity: LMNK_TOPOLOGY_LAYER_COUNT expected 5, got {got} ({topo_rs.as_posix()})"
+        )
+
+    chan_m = re.search(
+        r"pub\s+const\s+LMNK_TOPOLOGY_CHANNEL_COUNT:\s*u8\s*=\s*(\d+)\s*;",
+        text,
+    )
+    if chan_m is None or int(chan_m.group(1)) != 8:
+        got = chan_m.group(1) if chan_m else "missing"
+        violations.append(
+            f"Topology parity: LMNK_TOPOLOGY_CHANNEL_COUNT expected 8, got {got} ({topo_rs.as_posix()})"
+        )
+
+    mat_m = re.search(
+        r"pub\s+const\s+LMNK_TOPOLOGY_DAG_EDGE_MATRIX:\s*\[u8;\s*8\]\s*=\s*\[([^\]]+)\]\s*;",
+        text,
+        re.DOTALL,
+    )
+    expected_edges = [0b00000, 0b00001, 0b00011, 0b00111, 0b01111, 0, 0, 0]
+    if mat_m is None:
+        violations.append(
+            f"Topology parity: missing LMNK_TOPOLOGY_DAG_EDGE_MATRIX ({topo_rs.as_posix()})"
+        )
+    else:
+        raw_items = [tok.strip().replace("_", "") for tok in mat_m.group(1).split(",") if tok.strip()]
+        try:
+            parsed_edges = [int(tok, 0) for tok in raw_items]
+        except ValueError:
+            parsed_edges = []
+        if parsed_edges != expected_edges:
+            violations.append(
+                f"Topology parity: LMNK_TOPOLOGY_DAG_EDGE_MATRIX expected {expected_edges}, got {parsed_edges} ({topo_rs.as_posix()})"
+            )
+
+    return violations
+
+
 def run_checks(core_src: pathlib.Path) -> list[str]:
     """Run all architecture invariants and return a list of violation descriptions."""
     violations: list[str] = []
@@ -551,6 +605,7 @@ def run_checks(core_src: pathlib.Path) -> list[str]:
     violations.extend(check_abstract_domain_invariant(core_src))
     violations.extend(check_cross_observer_scoped_boundaries(core_src))
     violations.extend(check_vocabulary_ownership(core_src))
+    violations.extend(check_topology_matrix_parity(core_src))
     return violations
 
 

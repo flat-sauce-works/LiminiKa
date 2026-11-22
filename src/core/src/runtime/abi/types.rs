@@ -35,18 +35,31 @@ pub use crate::liminal::{
     LMNK_ERR_LEDGER_FULL, LMNK_ERR_NOT_IMPLEMENTED, LMNK_ERR_NULL_POINTER,
     LMNK_ERR_OBSTRUCTION_UNRESOLVED, LMNK_ERR_OUT_OF_MEMORY, LMNK_ERR_PANIC_CAUGHT,
     LMNK_ERR_PHASE_OVERFLOW, LMNK_ERR_PHASE_STEP_UNDERFLOW, LMNK_ERR_STORAGE_MAP_FAILED,
-    LMNK_ERR_SUBHEAD_ROUTING_FAILED, LMNK_ERR_SUBSTRATE_FULL, LMNK_ERR_UNKNOWN,
-    LMNK_ERR_VERSION_MISMATCH, LMNK_OK,
+    LMNK_ERR_SUBHEAD_ROUTING_FAILED, LMNK_ERR_SUBSTRATE_FULL, LMNK_ERR_TOPOLOGY_MISMATCH,
+    LMNK_ERR_UNKNOWN, LMNK_ERR_VERSION_MISMATCH, LMNK_OK,
 };
 pub use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 pub use crate::runtime::context::CoreStateStack;
 pub use crate::runtime::gateway::{CausalProvenanceReport, GatewayFrame};
 pub use crate::runtime::horizon::{EpistemicHorizonReading, RamPhaseKvEntry};
 pub use crate::runtime::storage::{
-    DescriptorHeader, KvKeyframeHeader, KvKeyframePacket, LmnkSnapshotHeader,
-    LMNK_FOUR_SECTION_HEADER_BYTES, LMNK_SNAPSHOT_MAGIC_U32, LMNK_STORAGE_PREAMBLE_OFFSET,
+    DescriptorHeader, KvKeyframeHeader, KvKeyframePacket, LmnkContainerHeader, LmnkSectionEntry,
+    LmnkSectionInput, LmnkSectionKind, LMNK_CONTAINER_FLAG_COMPILED_CACHE,
+    LMNK_CONTAINER_FLAG_PORTABLE_PACKAGE, LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT,
+    LMNK_CONTAINER_HEADER_BYTES, LMNK_CONTAINER_MAGIC, LMNK_MAX_CONTAINER_BYTES,
+    LMNK_MAX_CONTAINER_SECTIONS, LMNK_SECTION_BLOOM_FILTER, LMNK_SECTION_CAUSAL_PROVENANCE,
+    LMNK_SECTION_CONTENT_HASH, LMNK_SECTION_ENTRY_BYTES, LMNK_SECTION_LEDGER_SLOT,
+    LMNK_SECTION_LOGICAL_PFRAMES, LMNK_SECTION_PHASE_ANCHORS, LMNK_SECTION_POINTER_TRAILS,
+    LMNK_SECTION_RECALL_METADATA, LMNK_SECTION_RUNTIME_SNAPSHOT, LMNK_SECTION_SIGNATURE,
 };
 pub use crate::runtime::telemetry::LiminalTopologyTelemetrySnapshot;
+pub use crate::runtime::topology::{
+    LiminalTopologyMatrix, CORE_TOPOLOGY, LMNK_DAG_FLAG_AXIOM_CUT_LACUNA_ORTHOGONAL,
+    LMNK_DAG_FLAG_NO_STD_CORE, LMNK_DAG_FLAG_SPINE_EGO_ISOLATED,
+    LMNK_DAG_FLAG_Y_SHAPED_PARALLEL_ROOTS, LMNK_TOPOLOGY_CHANNEL_COUNT,
+    LMNK_TOPOLOGY_DAG_EDGE_MATRIX, LMNK_TOPOLOGY_DAG_FLAGS_CANONICAL, LMNK_TOPOLOGY_LAYER_COUNT,
+    LMNK_TOPOLOGY_MAGIC, LMNK_TOPOLOGY_PINNED_CHANNEL_MASK, LMNK_TOPOLOGY_SANDBOX_CHANNEL_MASK,
+};
 pub use crate::stigmergy::{
     CognitiveCircuitActivation, CognitiveStepOp, CognitiveTrajectoryLedger,
     ContrastivePhaseBloomFilter, CorePrimitiveState, LedgerSlot, OverlapDiscoveryReport,
@@ -68,8 +81,12 @@ pub type lmnk_tagged_ptr_t = TaggedPtr;
 pub type lmnk_config_t = RuntimeConfig;
 /// 8-byte C-ABI structure descriptor header (`DescriptorHeader`).
 pub type lmnk_descriptor_header_t = DescriptorHeader;
-/// 128-byte `.lmnk` snapshot container header (`LmnkSnapshotHeader`).
-pub type lmnk_snapshot_header_t = LmnkSnapshotHeader;
+/// 64-byte `.lmnk` unified container header (`LmnkContainerHeader`).
+pub type lmnk_container_header_t = LmnkContainerHeader;
+/// 16-byte `.lmnk` section directory entry (`LmnkSectionEntry`).
+pub type lmnk_section_entry_t = LmnkSectionEntry;
+/// 64-byte static architectural topology matrix (`LiminalTopologyMatrix`).
+pub type lmnk_topology_matrix_t = LiminalTopologyMatrix;
 /// 64-byte KV-keyframe header (`KvKeyframeHeader`).
 pub type lmnk_kv_keyframe_header_t = KvKeyframeHeader;
 /// 32-byte 256-bit PagedBlock bitmask (`PagedBitmask`).
@@ -139,7 +156,8 @@ pub type lmnk_spine_state_t = SystemSpineState;
 // and 1:1 C11/C++20 header parity for v0.2.0 (`0x0000_0200`).
 const _: () = {
     assert!(LMNK_ABI_VERSION_HEX == 0x0000_0200);
-    assert!(LMNK_SNAPSHOT_MAGIC_U32 == 0x4B4E_4D4C);
+    assert!(LMNK_CONTAINER_MAGIC == 0x4B4E_4D4C);
+    assert!(LMNK_TOPOLOGY_MAGIC == 0x504F_544C);
     assert!(LMNK_PHASE_ANCHOR_MAGIC == 0x524B_4E4C);
     assert!(LMNK_PHASE_ANCHOR_VERSION == 0x0000_0200);
 
@@ -191,12 +209,38 @@ const _: () = {
     assert!(offset_of!(lmnk_entropy_state_t, flags) == 28);
 
     assert!(
-        size_of::<lmnk_snapshot_header_t>() == 128 && align_of::<lmnk_snapshot_header_t>() == 64
+        size_of::<lmnk_container_header_t>() == 64 && align_of::<lmnk_container_header_t>() == 64
     );
-    assert!(offset_of!(lmnk_snapshot_header_t, magic) == 0);
-    assert!(offset_of!(lmnk_snapshot_header_t, version) == 4);
-    assert!(offset_of!(lmnk_snapshot_header_t, checksum_crc32) == 56);
-    assert!(offset_of!(lmnk_snapshot_header_t, timestamp_epoch_sec) == 64);
+    assert!(offset_of!(lmnk_container_header_t, magic) == 0);
+    assert!(offset_of!(lmnk_container_header_t, version) == 4);
+    assert!(offset_of!(lmnk_container_header_t, topology_crc32) == 8);
+    assert!(offset_of!(lmnk_container_header_t, container_flags) == 12);
+    assert!(offset_of!(lmnk_container_header_t, total_size) == 16);
+    assert!(offset_of!(lmnk_container_header_t, timestamp_epoch_sec) == 24);
+    assert!(offset_of!(lmnk_container_header_t, section_table_offset) == 32);
+    assert!(offset_of!(lmnk_container_header_t, section_count) == 36);
+    assert!(offset_of!(lmnk_container_header_t, header_size) == 38);
+    assert!(offset_of!(lmnk_container_header_t, header_crc32) == 60);
+
+    assert!(size_of::<lmnk_section_entry_t>() == 16 && align_of::<lmnk_section_entry_t>() == 16);
+    assert!(offset_of!(lmnk_section_entry_t, kind) == 0);
+    assert!(offset_of!(lmnk_section_entry_t, flags) == 2);
+    assert!(offset_of!(lmnk_section_entry_t, offset) == 4);
+    assert!(offset_of!(lmnk_section_entry_t, length) == 8);
+    assert!(offset_of!(lmnk_section_entry_t, payload_crc32) == 12);
+
+    assert!(
+        size_of::<lmnk_topology_matrix_t>() == 64 && align_of::<lmnk_topology_matrix_t>() == 64
+    );
+    assert!(offset_of!(lmnk_topology_matrix_t, magic) == 0);
+    assert!(offset_of!(lmnk_topology_matrix_t, version) == 4);
+    assert!(offset_of!(lmnk_topology_matrix_t, dag_edge_matrix) == 12);
+    assert!(offset_of!(lmnk_topology_matrix_t, channel_admission_mask) == 20);
+    assert!(offset_of!(lmnk_topology_matrix_t, pinned_channel_mask) == 28);
+    assert!(offset_of!(lmnk_topology_matrix_t, sandbox_channel_mask) == 29);
+    assert!(offset_of!(lmnk_topology_matrix_t, channel_aperture_q7) == 32);
+    assert!(offset_of!(lmnk_topology_matrix_t, topology_crc32) == 60);
+    assert!(CORE_TOPOLOGY.verify_crc32());
 
     assert!(
         size_of::<lmnk_kv_keyframe_header_t>() == 64
@@ -262,8 +306,8 @@ const _: () = {
     assert!(offset_of!(lmnk_phase_anchor_record_t, attribution_tag) == 59);
     assert!(offset_of!(lmnk_phase_anchor_record_t, reserved_align64) == 60);
     assert!(offset_of!(lmnk_phase_anchor_record_t, phase_profile) == 64);
-    assert!(LMNK_FOUR_SECTION_HEADER_BYTES == 192);
-    assert!(LMNK_STORAGE_PREAMBLE_OFFSET == 128);
+    assert!(LMNK_CONTAINER_HEADER_BYTES == 64);
+    assert!(LMNK_SECTION_ENTRY_BYTES == 16);
     assert!(PhaseAnchorRecord::new_empty(0, ATTRACTOR_SLOT_PERSONA, 0).verify_integrity());
     assert!(PhaseAnchorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0).verify_integrity());
 
@@ -276,9 +320,15 @@ const _: () = {
         size_of::<lmnk_cognitive_ledger_t>() == LEDGER_HISTORY_LEN
             && align_of::<lmnk_cognitive_ledger_t>() == 8
     );
-    assert!(size_of::<RamPhaseKvEntry>() == 192 && align_of::<RamPhaseKvEntry>() == 64);
-    assert!(offset_of!(RamPhaseKvEntry, keyframe) == 0);
-    assert!(offset_of!(RamPhaseKvEntry, circuit) == 128);
+    assert!(size_of::<RamPhaseKvEntry>() == 128 && align_of::<RamPhaseKvEntry>() == 64);
+    assert!(offset_of!(RamPhaseKvEntry, context_hash) == 0);
+    assert!(offset_of!(RamPhaseKvEntry, circuit) == 8);
+    assert!(offset_of!(RamPhaseKvEntry, sparse_scalar_residual) == 32);
+    assert!(offset_of!(RamPhaseKvEntry, crc32) == 48);
+    assert!(offset_of!(RamPhaseKvEntry, lineage_flags) == 52);
+    assert!(offset_of!(RamPhaseKvEntry, pframe_count) == 62);
+    assert!(offset_of!(RamPhaseKvEntry, pframe_head) == 63);
+    assert!(offset_of!(RamPhaseKvEntry, anchor_phases) == 64);
 
     assert!(
         size_of::<lmnk_epistemic_horizon_t>() == 32 && align_of::<lmnk_epistemic_horizon_t>() == 16

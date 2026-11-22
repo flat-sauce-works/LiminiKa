@@ -59,7 +59,7 @@ fn test_two_origin_supertrait_synthesis_and_causal_provenance() {
 }
 
 #[test]
-fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
+fn test_online_toroidal_kmeans_dp_means_consolidation_and_unified_container_view() {
     let mut centroids = [
         PhaseAnchorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0),
         PhaseAnchorRecord::new_empty(0, ATTRACTOR_SLOT_PERSONA, 0),
@@ -179,7 +179,8 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     let reports_arr = [f1.to_causal_report(), f2.to_causal_report()];
     let trails_arr = [query_trail];
     let mut container_buf = AlignedBuffer128::<u8, 1024>::new([0u8; 1024]);
-    let no_rep_len = LmnkFourSectionView::write_four_section_with_reports_to_bytes(
+    let no_rep_len = LmnkContainerView::write_standard_sections_to_bytes(
+        LMNK_CONTAINER_FLAG_COMPILED_CACHE,
         &centroids[..2],
         &trails_arr,
         Some(&bloom),
@@ -189,12 +190,11 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
         &mut container_buf.data,
     )
     .unwrap();
-    let no_rep_view =
-        LmnkFourSectionView::from_container_bytes_zero_copy(&container_buf.data[..no_rep_len])
-            .unwrap();
-    assert_eq!(no_rep_view.crystals.len(), 2);
+    let no_rep_view = LmnkContainerView::parse(&container_buf.data[..no_rep_len]).unwrap();
+    assert_eq!(no_rep_view.phase_anchor_count(), 2);
 
-    let total_len = LmnkFourSectionView::write_four_section_with_reports_to_bytes(
+    let total_len = LmnkContainerView::write_standard_sections_to_bytes(
+        LMNK_CONTAINER_FLAG_COMPILED_CACHE,
         &centroids,
         &trails_arr,
         Some(&bloom),
@@ -205,19 +205,19 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     )
     .unwrap();
 
-    let view =
-        LmnkFourSectionView::from_container_bytes_zero_copy(&container_buf.data[..total_len])
-            .unwrap();
-    assert_eq!(view.header.anchor_offset, 192);
+    let view = LmnkContainerView::parse(&container_buf.data[..total_len]).unwrap();
+    assert_eq!(view.header().total_size, total_len as u64);
     assert_eq!(
-        view.mapped_storage_descriptor.file_size_bytes,
-        total_len as u64
+        view.header().container_flags,
+        LMNK_CONTAINER_FLAG_COMPILED_CACHE
     );
-    assert_eq!(view.mapped_storage_descriptor.flags, 4);
-    assert_eq!(view.crystals.len(), 3);
-    assert_eq!(view.trails.len(), 1);
-    assert_eq!(view.provenance_reports.len(), 2);
-    assert!(view.bloom.is_some() && view.ledger.is_some());
+    assert_eq!(view.phase_anchors_zero_copy().unwrap().len(), 3);
+    assert_eq!(view.pointer_trails_zero_copy().unwrap().len(), 1);
+    assert_eq!(view.causal_provenance_zero_copy().unwrap().len(), 2);
+    assert!(
+        view.bloom_filter_zero_copy().unwrap().is_some()
+            && view.ledger_slot_zero_copy().unwrap().is_some()
+    );
 
     // Verify Top-2 Liminal Bifurcation Routing between two balanced attractors
     let mut lim_centroids = [
@@ -563,7 +563,7 @@ fn test_synaptic_transitions_cross_trajectory_and_adaptive_cascade() {
 }
 
 #[test]
-fn test_cognitive_circuit_plasticity_composition_and_four_section_roundtrip() {
+fn test_cognitive_circuit_plasticity_composition_and_unified_container_roundtrip() {
     let mut circuit = CognitiveTrajectoryLedger::new();
     let act_fuse = CognitiveCircuitActivation {
         peel_gate_q7: 30,
@@ -612,21 +612,17 @@ fn test_cognitive_circuit_plasticity_composition_and_four_section_roundtrip() {
     assert_ne!(blended, circuit);
     assert!(blended.op_counts().1 >= 2);
 
-    // Zero-copy 4-section .lmnk roundtrip via to_persona_ledger_slot & cognitive_trajectory_ledger.
+    // Zero-copy unified .lmnk roundtrip via to_persona_ledger_slot & cognitive_trajectory_ledger.
     let slot = blended.to_persona_ledger_slot();
     let crystals = [PhaseAnchorRecord::new_empty(1, ATTRACTOR_SLOT_PERSONA, 0)];
     let trails = [PointerTrail::default()];
-    let req_len = LmnkFourSectionView::required_byte_len_with_reports(
-        crystals.len(),
-        trails.len(),
-        false,
-        true,
-        0,
-    )
-    .unwrap();
+    let req_len =
+        LmnkContainerView::required_standard_byte_len(crystals.len(), trails.len(), false, true, 0)
+            .unwrap();
     let mut buf = [0u8; 1024];
     let off = buf.as_ptr().align_offset(128);
-    let written = LmnkFourSectionView::write_four_section_with_reports_to_bytes(
+    let written = LmnkContainerView::write_standard_sections_to_bytes(
+        LMNK_CONTAINER_FLAG_COMPILED_CACHE,
         &crystals,
         &trails,
         None,
@@ -636,8 +632,7 @@ fn test_cognitive_circuit_plasticity_composition_and_four_section_roundtrip() {
         &mut buf[off..off + req_len],
     )
     .unwrap();
-    let view =
-        LmnkFourSectionView::from_container_bytes_zero_copy(&buf[off..off + written]).unwrap();
+    let view = LmnkContainerView::parse(&buf[off..off + written]).unwrap();
     assert_eq!(view.cognitive_trajectory_ledger(), Some(blended));
 }
 
@@ -759,7 +754,7 @@ fn test_scalable_ram_cognitive_circuit_bank_and_folding() {
 #[test]
 fn test_ram_phase_kv_cache_exact_hit_resonance_lru_and_gateway_synthesis() {
     let mut cache: LowSpecPhaseKvCache = RamPhaseKvCache::new();
-    assert_eq!(size_of::<LowSpecPhaseKvCache>(), 16 * 192);
+    assert_eq!(size_of::<LowSpecPhaseKvCache>(), 16 * 128);
 
     let mut circuit_a = CognitiveTrajectoryLedger::new();
     circuit_a.push_step(CognitiveStepOp::pack(
@@ -785,7 +780,7 @@ fn test_ram_phase_kv_cache_exact_hit_resonance_lru_and_gateway_synthesis() {
     assert!(exact);
     assert_eq!(res, 127);
     assert_eq!(cache.slots[0].reuse_count, 1);
-    assert!(cache.slots[0].keyframe.verify_integrity().is_ok());
+    assert!(cache.slots[0].verify_integrity().is_ok());
 
     // 2. Unknown hash still resonates associatively when query phases align with stored keyframe.
     let q_words_near = load_q7_words_64(&[22i8; MAX_ATTENTION_HEADS]);
@@ -982,7 +977,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
             ..
         }
     ));
-    assert_eq!(auto_cache.base.entries()[0].keyframe.anchor_phases[2], 20);
+    assert_eq!(auto_cache.base.entries()[0].anchor_phases[2], 20);
 
     // Guard/repulsion seek triggers immediate re-anchoring before P=4 expires.
     let mut opp_arr = [-120i8; MAX_ATTENTION_HEADS];

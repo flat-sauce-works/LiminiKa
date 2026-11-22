@@ -875,7 +875,7 @@ pub(crate) const fn eval_geodesic_phase_clamp_sincos_q7_fast(
 
 /// Evaluates the $SO(2)$-composed $(\sin(\theta_{\mathrm{base}} + \theta_{\mathrm{subhead}}), \cos(\theta_{\mathrm{base}} + \theta_{\mathrm{subhead}}))$
 /// for a single attention head, using two 1-cycle LUT loads when both `PhaseClamp` limits equal
-/// [`DEFAULT_PHASE_CLAMP_MAX_RAD`], or summing the two `tanh`-clamped radian angles and evaluating
+/// [`crate::foundation::scalar_math::DEFAULT_PHASE_CLAMP_MAX_RAD`], or summing the two `tanh`-clamped radian angles and evaluating
 /// `sincos_phase_clamp_poly` **once** instead of twice when custom `PhaseClamp` limits are active.
 #[inline(always)]
 pub(crate) const fn eval_fused_phase_clamp_subhead_sincos_q7_fast(

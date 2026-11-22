@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Zero-Copy In-Memory Mapped Storage (`MappedStorageEngine` 64B `Pod`,
-//! [`LmnkFourSectionView`] 4-section `.lmnk` container zero-copy persistence & evolution,
-//! [`KvKeyframeCache`], [`MappedStorage`], phase packet codecs, and [`KvKeyframePacket`]).
+//! [`LmnkContainerHeader`] 64B + [`LmnkSectionEntry`] 16B unified `.lmnk` container zero-copy
+//! persistence & evolution ([`LmnkContainerView`]), [`KvKeyframeCache`], [`MappedStorage`],
+//! phase packet codecs, and [`KvKeyframePacket`]).
 
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -23,32 +24,126 @@ use crate::foundation::{
     branchless_sqrt_f32, branchless_von_mises_kappa, circular_r_bar_from_words_64,
     circular_resultant_from_words_64, coherence_from_diff_words_64,
     compute_aligned64_payload_crc32_ieee, compute_crc32_ieee, crc32_block64_zero_seed_words,
-    crc32_slice16_indep_hi1_u32, crc32_slice16_indep_lo1_u32, crc32_slice16_indep_u64x2,
-    crc32_step_block64_words, crc32_step_l16, crc32_step_l2, crc32_step_l3, crc32_step_l32,
-    crc32_step_l4, crc32_step_l8, encode_pframe_motion_delta_64, finalize_pframe_chain_words_64,
-    is_aligned_to, load_q7_words_64, pack_action_slot_tag, seek_pframe_chain_words_64,
-    store_q7_words_64, swar_q7_add_sat_x8, swar_q7_circular_add_x8, swar_q7_fold_s1_geodesic_x8,
-    swar_q7_neg_sat_x8, swar_q7_phase_step_filter_words_64, unpack_action_mode_from_tag,
-    unpack_attractor_slot_from_tag, update_aligned64_blocks_crc32_raw, AlignedSlice,
-    AlignedSlice16, AlignedSlice32, AlignedSlice64, AlignedSliceMut64, Pod, TaggedPtr,
-    ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK,
+    encode_pframe_motion_delta_64, finalize_pframe_chain_words_64, load_q7_words_64,
+    pack_action_slot_tag, seek_pframe_chain_words_64, store_q7_words_64, swar_q7_add_sat_x8,
+    swar_q7_circular_add_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8,
+    swar_q7_phase_step_filter_words_64, unpack_action_mode_from_tag,
+    unpack_attractor_slot_from_tag, AlignedSlice, AlignedSlice16, AlignedSlice32, AlignedSlice64,
+    AlignedSliceMut64, Pod, TaggedPtr, ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, LmnkResult, PhaseQ7, RuntimeConfig,
-    DEFAULT_ENTROPY_EPS, LMNK_ABI_VERSION_HEX, LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL,
+    DEFAULT_ENTROPY_EPS, LMNK_ABI_VERSION_HEX, LMNK_ERR_BUFFER_TOO_SMALL,
     LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_INVALID_STATE,
-    LMNK_ERR_VERSION_MISMATCH, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
+    LMNK_ERR_TOPOLOGY_MISMATCH, LMNK_ERR_VERSION_MISMATCH, MAX_ATTENTION_HEADS,
+    MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
 };
 use crate::runtime::gateway::signals::CausalProvenanceReport;
-use crate::stigmergy::anchor::{crc32_anchor_stamp_contrib_128b, crc32_fold_stamped_anchor_128b};
+use crate::runtime::topology::CORE_TOPOLOGY;
 use crate::stigmergy::{
     trail_phase_words_mut, CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, LedgerSlot,
     PhaseAnchorRecord, PointerTrail, ATTRACTOR_SLOT_REPULSION, LEDGER_FLAG_COGNITIVE_TRAJECTORY,
     MAX_ATTRACTOR_PULL_FORCE, TRAIL_FLAG_REPULSION_ACTIVE,
 };
 
-/// Binary magic constant for `.lmnk` snapshot headers (`0x4B4E4D4C` = ASCII `"LMNK"`).
-pub const LMNK_SNAPSHOT_MAGIC_U32: u32 = 0x4B4E_4D4C;
+/// Binary magic constant for `.lmnk` unified containers (`0x4B4E4D4C` = ASCII `"LMNK"`).
+pub const LMNK_CONTAINER_MAGIC: u32 = 0x4B4E_4D4C;
+
+/// Fixed byte length (`64` bytes) of [`LmnkContainerHeader`].
+pub const LMNK_CONTAINER_HEADER_BYTES: usize = 64;
+
+/// Fixed byte length (`16` bytes) of each [`LmnkSectionEntry`].
+pub const LMNK_SECTION_ENTRY_BYTES: usize = 16;
+
+/// Maximum number of sections permitted in a single `.lmnk` container (`32`).
+pub const LMNK_MAX_CONTAINER_SECTIONS: u16 = 32;
+
+/// Hard upper byte limit (`64 MiB`) enforced by [`LmnkContainerView::parse`].
+pub const LMNK_MAX_CONTAINER_BYTES: usize = 64 * 1024 * 1024;
+
+/// Container flag bit `0`: serialized [`crate::runtime::RuntimeContext`] snapshot.
+pub const LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT: u32 = 1 << 0;
+
+/// Container flag bit `1`: compiled topology-dependent cache container (`.lmnkc`).
+pub const LMNK_CONTAINER_FLAG_COMPILED_CACHE: u32 = 1 << 1;
+
+/// Container flag bit `2`: portable container package (`.lmnkp`).
+pub const LMNK_CONTAINER_FLAG_PORTABLE_PACKAGE: u32 = 1 << 2;
+
+/// Section kind ID for runtime context state snapshots (`1`).
+pub const LMNK_SECTION_RUNTIME_SNAPSHOT: u16 = 1;
+/// Section kind ID for crystallized `PhaseAnchorRecord` arrays (`2`).
+pub const LMNK_SECTION_PHASE_ANCHORS: u16 = 2;
+/// Section kind ID for `PointerTrail` arrays (`3`).
+pub const LMNK_SECTION_POINTER_TRAILS: u16 = 3;
+/// Section kind ID for `ContrastivePhaseBloomFilter` (`4`).
+pub const LMNK_SECTION_BLOOM_FILTER: u16 = 4;
+/// Section kind ID for `LedgerSlot` (`5`).
+pub const LMNK_SECTION_LEDGER_SLOT: u16 = 5;
+/// Section kind ID for `CausalProvenanceReport` arrays (`6`).
+pub const LMNK_SECTION_CAUSAL_PROVENANCE: u16 = 6;
+/// Section kind ID for logical P-Frame descriptors (`7`).
+pub const LMNK_SECTION_LOGICAL_PFRAMES: u16 = 7;
+/// Section kind ID for recall policy and metadata (`8`).
+pub const LMNK_SECTION_RECALL_METADATA: u16 = 8;
+/// Reserved section kind ID for cryptographic content digests (`0xFF01`).
+pub const LMNK_SECTION_CONTENT_HASH: u16 = 0xFF01;
+/// Reserved section kind ID for detached container signatures (`0xFF02`).
+pub const LMNK_SECTION_SIGNATURE: u16 = 0xFF02;
+
+/// Canonical `.lmnk` section classification identifiers (`u16`).
+#[repr(u16)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LmnkSectionKind {
+    /// Serialized `RuntimeContext` snapshot payload (`1`).
+    RuntimeSnapshot = LMNK_SECTION_RUNTIME_SNAPSHOT,
+    /// Array of 128 B `PhaseAnchorRecord` entries (`2`).
+    PhaseAnchors = LMNK_SECTION_PHASE_ANCHORS,
+    /// Array of 128 B `PointerTrail` entries (`3`).
+    PointerTrails = LMNK_SECTION_POINTER_TRAILS,
+    /// 64 B `ContrastivePhaseBloomFilter` (`4`).
+    BloomFilter = LMNK_SECTION_BLOOM_FILTER,
+    /// 64 B `LedgerSlot` (`5`).
+    LedgerSlot = LMNK_SECTION_LEDGER_SLOT,
+    /// Array of 16 B `CausalProvenanceReport` entries (`6`).
+    CausalProvenance = LMNK_SECTION_CAUSAL_PROVENANCE,
+    /// Logical P-Frame trajectory descriptor stream (`7`).
+    LogicalPFrames = LMNK_SECTION_LOGICAL_PFRAMES,
+    /// Corpus recall policy / metadata payload (`8`).
+    RecallMetadata = LMNK_SECTION_RECALL_METADATA,
+    /// Reserved content digest section (`0xFF01`).
+    ContentHash = LMNK_SECTION_CONTENT_HASH,
+    /// Reserved detached signature section (`0xFF02`).
+    Signature = LMNK_SECTION_SIGNATURE,
+}
+
+impl LmnkSectionKind {
+    /// Returns the raw `u16` section identifier.
+    #[inline(always)]
+    #[must_use]
+    pub const fn as_u16(self) -> u16 {
+        self as u16
+    }
+
+    /// Attempts to decode a known [`LmnkSectionKind`] from a raw `u16` tag.
+    #[inline(always)]
+    #[must_use]
+    pub const fn from_u16(raw: u16) -> Option<Self> {
+        match raw {
+            LMNK_SECTION_RUNTIME_SNAPSHOT => Some(Self::RuntimeSnapshot),
+            LMNK_SECTION_PHASE_ANCHORS => Some(Self::PhaseAnchors),
+            LMNK_SECTION_POINTER_TRAILS => Some(Self::PointerTrails),
+            LMNK_SECTION_BLOOM_FILTER => Some(Self::BloomFilter),
+            LMNK_SECTION_LEDGER_SLOT => Some(Self::LedgerSlot),
+            LMNK_SECTION_CAUSAL_PROVENANCE => Some(Self::CausalProvenance),
+            LMNK_SECTION_LOGICAL_PFRAMES => Some(Self::LogicalPFrames),
+            LMNK_SECTION_RECALL_METADATA => Some(Self::RecallMetadata),
+            LMNK_SECTION_CONTENT_HASH => Some(Self::ContentHash),
+            LMNK_SECTION_SIGNATURE => Some(Self::Signature),
+            _ => None,
+        }
+    }
+}
 
 /// Descriptor header for structure byte size and ABI version validation (8 bytes, 4-byte aligned).
 #[repr(C, align(4))]
@@ -63,88 +158,74 @@ pub struct DescriptorHeader {
 // SAFETY: `DescriptorHeader` is `#[repr(C, align(4))]` of exact size 8 bytes with zero padding.
 unsafe impl Pod for DescriptorHeader {}
 
-/// Internal 64-byte preamble (`#[repr(C, align(32))]`) stored in Section 0b (`offset 128..192`)
-/// of 4-section `.lmnk` container views. Kept crate-private outside the public C-ABI surface.
-#[repr(C, align(32))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct MappedStoragePreamble {
-    pub(crate) mapped_address: u64,
-    pub(crate) file_size_bytes: u64,
-    pub(crate) dma_buffer_handle: u64,
-    pub(crate) flags: u32,
-    pub(crate) fd_handle: i32,
-    pub(crate) reserved: [u8; 32],
-}
-
-impl Default for MappedStoragePreamble {
-    #[inline(always)]
-    fn default() -> Self {
-        Self {
-            mapped_address: 0,
-            file_size_bytes: 0,
-            dma_buffer_handle: 0,
-            flags: 0,
-            fd_handle: -1,
-            reserved: [0; 32],
-        }
-    }
-}
-
-// SAFETY: `MappedStoragePreamble` is `#[repr(C, align(32))]` of exact size 64 bytes with zero padding.
-unsafe impl Pod for MappedStoragePreamble {}
-
-/// Unified `.lmnk` binary snapshot container header structure (128 bytes, 64-byte aligned).
+/// Unified `.lmnk` binary container header (64 bytes, `#[repr(C, align(64))]`, Canonical Little-Endian).
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LmnkSnapshotHeader {
-    /// Format identifier magic constant (`0x4B4E4D4C` = ASCII `"LMNK"`).
+pub struct LmnkContainerHeader {
+    /// Format identifier magic constant ([`LMNK_CONTAINER_MAGIC`] = ASCII `"LMNK"`, `offset 0..4`).
     pub magic: u32,
-    /// Snapshot ABI version matching [`LMNK_ABI_VERSION_HEX`].
+    /// Container ABI version matching [`LMNK_ABI_VERSION_HEX`] (`offset 4..8`).
     pub version: u32,
-    /// Total binary size of container payload in bytes.
+    /// Topology CRC32 matching [`CORE_TOPOLOGY`] (`offset 8..12`).
+    pub topology_crc32: u32,
+    /// Container classification bitflags (`LMNK_CONTAINER_FLAG_*`, `offset 12..16`).
+    pub container_flags: u32,
+    /// Total container size in bytes including header, section table, padding, and payloads (`offset 16..24`).
     pub total_size: u64,
-    /// Byte offset to substrate section.
-    pub substrate_offset: u64,
-    /// Byte offset to anchor section.
-    pub anchor_offset: u64,
-    /// Byte offset to phase-steering section.
-    pub phase_steering_offset: u64,
-    /// Byte offset to Rank-1 residual adapter section.
-    pub rank1_offset: u64,
-    /// Byte offset to entropy controller section.
-    pub entropy_offset: u64,
-    /// IEEE 802.3 CRC32 integrity checksum over snapshot payload.
-    pub checksum_crc32: u32,
-    /// Byte offset to fast-path ledger slot section.
-    pub ledger_slot_offset: u32,
-    /// Epoch timestamp of snapshot serialization (seconds).
+    /// Unix epoch timestamp in seconds (`offset 24..32`).
     pub timestamp_epoch_sec: u64,
-    /// Explicit padding to enforce exact 128-byte size and 64-byte cacheline alignment (56 bytes).
-    pub reserved_padding: [u8; 56],
+    /// Byte offset to the [`LmnkSectionEntry`] table (`64`, `offset 32..36`).
+    pub section_table_offset: u32,
+    /// Number of section entries (`<= LMNK_MAX_CONTAINER_SECTIONS`, `offset 36..38`).
+    pub section_count: u16,
+    /// Header byte size (`64`, `offset 38..40`).
+    pub header_size: u16,
+    /// Zero-filled reserved bytes for forward ABI extensions (`offset 40..60`).
+    pub reserved_future: [u8; 20],
+    /// IEEE 802.3 CRC32 checksum over Canonical Little-Endian bytes `0..60` (`offset 60..64`).
+    pub header_crc32: u32,
 }
 
-impl Default for LmnkSnapshotHeader {
+impl Default for LmnkContainerHeader {
     #[inline(always)]
     fn default() -> Self {
         Self {
-            magic: 0,
+            magic: LMNK_CONTAINER_MAGIC,
             version: LMNK_ABI_VERSION_HEX,
-            total_size: 0,
-            substrate_offset: 0,
-            anchor_offset: 0,
-            phase_steering_offset: 0,
-            rank1_offset: 0,
-            entropy_offset: 0,
-            checksum_crc32: 0,
-            ledger_slot_offset: 0,
+            topology_crc32: CORE_TOPOLOGY.topology_crc32,
+            container_flags: 0,
+            total_size: LMNK_CONTAINER_HEADER_BYTES as u64,
             timestamp_epoch_sec: 0,
-            reserved_padding: [0; 56],
+            section_table_offset: LMNK_CONTAINER_HEADER_BYTES as u32,
+            section_count: 0,
+            header_size: LMNK_CONTAINER_HEADER_BYTES as u16,
+            reserved_future: [0; 20],
+            header_crc32: 0,
         }
     }
 }
 
-// SAFETY: `LmnkSnapshotHeader` is `#[repr(C, align(64))]` of exact size 128 bytes with zero padding.
-unsafe impl Pod for LmnkSnapshotHeader {}
+// SAFETY: `LmnkContainerHeader` is `#[repr(C, align(64))]` of exact size 64 bytes with zero implicit padding.
+unsafe impl Pod for LmnkContainerHeader {}
+
+/// Unified `.lmnk` section directory entry (16 bytes, `#[repr(C, align(16))]`, 4 entries per 64B CL).
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LmnkSectionEntry {
+    /// Section classification identifier (`LmnkSectionKind`, `offset 0..2`).
+    pub kind: u16,
+    /// Per-section flags (`offset 2..4`).
+    pub flags: u16,
+    /// 64-byte aligned byte offset from container start (`offset 4..8`).
+    pub offset: u32,
+    /// Payload byte length (`> 0` for active sections, `offset 8..12`).
+    pub length: u32,
+    /// IEEE 802.3 CRC32 checksum over payload bytes (`offset 12..16`).
+    pub payload_crc32: u32,
+}
+
+// SAFETY: `LmnkSectionEntry` is `#[repr(C, align(16))]` of exact size 16 bytes with zero implicit padding.
+unsafe impl Pod for LmnkSectionEntry {}
 
 /// KV-keyframe index header structure (64 bytes, 32-byte aligned).
 #[repr(C, align(32))]
@@ -175,37 +256,204 @@ unsafe impl Pod for KvKeyframeHeader {}
 
 const _: () = {
     assert!(size_of::<DescriptorHeader>() == 8 && align_of::<DescriptorHeader>() == 4);
-    assert!(size_of::<MappedStoragePreamble>() == 64 && align_of::<MappedStoragePreamble>() == 32);
-    assert!(size_of::<LmnkSnapshotHeader>() == 128 && align_of::<LmnkSnapshotHeader>() == 64);
-    assert!(offset_of!(LmnkSnapshotHeader, magic) == 0);
-    assert!(offset_of!(LmnkSnapshotHeader, version) == 4);
-    assert!(offset_of!(LmnkSnapshotHeader, total_size) == 8);
-    assert!(offset_of!(LmnkSnapshotHeader, substrate_offset) == 16);
-    assert!(offset_of!(LmnkSnapshotHeader, anchor_offset) == 24);
-    assert!(offset_of!(LmnkSnapshotHeader, phase_steering_offset) == 32);
-    assert!(offset_of!(LmnkSnapshotHeader, rank1_offset) == 40);
-    assert!(offset_of!(LmnkSnapshotHeader, entropy_offset) == 48);
-    assert!(offset_of!(LmnkSnapshotHeader, checksum_crc32) == 56);
-    assert!(offset_of!(LmnkSnapshotHeader, ledger_slot_offset) == 60);
-    assert!(offset_of!(LmnkSnapshotHeader, timestamp_epoch_sec) == 64);
-    assert!(offset_of!(LmnkSnapshotHeader, reserved_padding) == 72);
+    assert!(size_of::<LmnkContainerHeader>() == 64 && align_of::<LmnkContainerHeader>() == 64);
+    assert!(offset_of!(LmnkContainerHeader, magic) == 0);
+    assert!(offset_of!(LmnkContainerHeader, version) == 4);
+    assert!(offset_of!(LmnkContainerHeader, topology_crc32) == 8);
+    assert!(offset_of!(LmnkContainerHeader, container_flags) == 12);
+    assert!(offset_of!(LmnkContainerHeader, total_size) == 16);
+    assert!(offset_of!(LmnkContainerHeader, timestamp_epoch_sec) == 24);
+    assert!(offset_of!(LmnkContainerHeader, section_table_offset) == 32);
+    assert!(offset_of!(LmnkContainerHeader, section_count) == 36);
+    assert!(offset_of!(LmnkContainerHeader, header_size) == 38);
+    assert!(offset_of!(LmnkContainerHeader, reserved_future) == 40);
+    assert!(offset_of!(LmnkContainerHeader, header_crc32) == 60);
+    assert!(size_of::<LmnkSectionEntry>() == 16 && align_of::<LmnkSectionEntry>() == 16);
+    assert!(offset_of!(LmnkSectionEntry, kind) == 0);
+    assert!(offset_of!(LmnkSectionEntry, flags) == 2);
+    assert!(offset_of!(LmnkSectionEntry, offset) == 4);
+    assert!(offset_of!(LmnkSectionEntry, length) == 8);
+    assert!(offset_of!(LmnkSectionEntry, payload_crc32) == 12);
     assert!(size_of::<KvKeyframeHeader>() == 64 && align_of::<KvKeyframeHeader>() == 32);
 };
 
-/// Precomputed 64-byte GF(2) shift $L^4(\text{0xFFFF\_FFFF})$ of the initial IEEE 802.3 CRC32 seed.
-const CRC32_L4_INITIAL_SEED: u32 = crc32_step_l4(0xFFFF_FFFFu32);
+#[inline(always)]
+fn read_le_bytes_exact<const N: usize>(src: &[u8], off: usize) -> LmnkResult<[u8; N]> {
+    let end = off.checked_add(N).ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
+    let slice = src.get(off..end).ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
+    <[u8; N]>::try_from(slice).map_err(|_| LMNK_ERR_BUFFER_TOO_SMALL)
+}
 
-/// Precomputed 64-byte IEEE 802.3 CRC32 accumulator state over the invariant fields of a default
-/// 4-section `.lmnk` `MappedStoragePreamble` (`mapped_address = 0`, `file_size_bytes = 0`,
-/// `dma_buffer_handle = 0`, `flags = 4`, `fd_handle = -1`, `reserved = [0; 32]`).
-const CRC32_MAPPED_STORAGE_DESC_BASE_SEED: u32 =
-    CRC32_L4_INITIAL_SEED ^ crc32_step_l2(crc32_slice16_indep_u64x2(0, 0xFFFF_FFFF_0000_0004u64));
+impl LmnkContainerHeader {
+    /// Serializes the protected header prefix (`bytes 0..60`) in Canonical Little-Endian order.
+    #[inline(always)]
+    #[must_use]
+    pub const fn to_prefix_le_bytes(&self) -> [u8; 60] {
+        let m = self.magic.to_le_bytes();
+        let v = self.version.to_le_bytes();
+        let tc = self.topology_crc32.to_le_bytes();
+        let cf = self.container_flags.to_le_bytes();
+        let ts = self.total_size.to_le_bytes();
+        let ep = self.timestamp_epoch_sec.to_le_bytes();
+        let sto = self.section_table_offset.to_le_bytes();
+        let sc = self.section_count.to_le_bytes();
+        let hs = self.header_size.to_le_bytes();
+        [
+            m[0],
+            m[1],
+            m[2],
+            m[3],
+            v[0],
+            v[1],
+            v[2],
+            v[3],
+            tc[0],
+            tc[1],
+            tc[2],
+            tc[3],
+            cf[0],
+            cf[1],
+            cf[2],
+            cf[3],
+            ts[0],
+            ts[1],
+            ts[2],
+            ts[3],
+            ts[4],
+            ts[5],
+            ts[6],
+            ts[7],
+            ep[0],
+            ep[1],
+            ep[2],
+            ep[3],
+            ep[4],
+            ep[5],
+            ep[6],
+            ep[7],
+            sto[0],
+            sto[1],
+            sto[2],
+            sto[3],
+            sc[0],
+            sc[1],
+            hs[0],
+            hs[1],
+            self.reserved_future[0],
+            self.reserved_future[1],
+            self.reserved_future[2],
+            self.reserved_future[3],
+            self.reserved_future[4],
+            self.reserved_future[5],
+            self.reserved_future[6],
+            self.reserved_future[7],
+            self.reserved_future[8],
+            self.reserved_future[9],
+            self.reserved_future[10],
+            self.reserved_future[11],
+            self.reserved_future[12],
+            self.reserved_future[13],
+            self.reserved_future[14],
+            self.reserved_future[15],
+            self.reserved_future[16],
+            self.reserved_future[17],
+            self.reserved_future[18],
+            self.reserved_future[19],
+        ]
+    }
 
-/// Fixed byte length (`192` bytes = `128B` `LmnkSnapshotHeader` + `64B` `MappedStoragePreamble`) of Section 0.
-pub const LMNK_FOUR_SECTION_HEADER_BYTES: usize = 192;
+    /// Serializes the full 64-byte [`LmnkContainerHeader`] into Canonical Little-Endian bytes.
+    #[inline(always)]
+    #[must_use]
+    pub const fn to_le_bytes(&self) -> [u8; 64] {
+        let p = self.to_prefix_le_bytes();
+        let c = self.header_crc32.to_le_bytes();
+        [
+            p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], p[11], p[12], p[13],
+            p[14], p[15], p[16], p[17], p[18], p[19], p[20], p[21], p[22], p[23], p[24], p[25],
+            p[26], p[27], p[28], p[29], p[30], p[31], p[32], p[33], p[34], p[35], p[36], p[37],
+            p[38], p[39], p[40], p[41], p[42], p[43], p[44], p[45], p[46], p[47], p[48], p[49],
+            p[50], p[51], p[52], p[53], p[54], p[55], p[56], p[57], p[58], p[59], c[0], c[1], c[2],
+            c[3],
+        ]
+    }
 
-/// Byte offset (`128`) within the 192-byte Section 0 preamble where `MappedStoragePreamble` is stored.
-pub const LMNK_STORAGE_PREAMBLE_OFFSET: usize = 128;
+    /// Decodes a 64-byte [`LmnkContainerHeader`] from Canonical Little-Endian bytes without
+    /// assuming base-pointer alignment.
+    ///
+    /// # Errors
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `src.len() < 64`.
+    #[inline]
+    pub fn from_le_bytes(src: &[u8]) -> LmnkResult<Self> {
+        if src.len() < LMNK_CONTAINER_HEADER_BYTES {
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
+        }
+        Ok(Self {
+            magic: u32::from_le_bytes(read_le_bytes_exact(src, 0)?),
+            version: u32::from_le_bytes(read_le_bytes_exact(src, 4)?),
+            topology_crc32: u32::from_le_bytes(read_le_bytes_exact(src, 8)?),
+            container_flags: u32::from_le_bytes(read_le_bytes_exact(src, 12)?),
+            total_size: u64::from_le_bytes(read_le_bytes_exact(src, 16)?),
+            timestamp_epoch_sec: u64::from_le_bytes(read_le_bytes_exact(src, 24)?),
+            section_table_offset: u32::from_le_bytes(read_le_bytes_exact(src, 32)?),
+            section_count: u16::from_le_bytes(read_le_bytes_exact(src, 36)?),
+            header_size: u16::from_le_bytes(read_le_bytes_exact(src, 38)?),
+            reserved_future: read_le_bytes_exact(src, 40)?,
+            header_crc32: u32::from_le_bytes(read_le_bytes_exact(src, 60)?),
+        })
+    }
+
+    /// Computes the IEEE 802.3 CRC32 checksum over bytes `0..60`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn compute_header_crc32(&self) -> u32 {
+        compute_crc32_ieee(&self.to_prefix_le_bytes())
+    }
+
+    /// Stamps `self.header_crc32` and returns the finalized checksum.
+    #[inline(always)]
+    pub const fn finalize_crc32(&mut self) -> u32 {
+        let crc = self.compute_header_crc32();
+        self.header_crc32 = crc;
+        crc
+    }
+}
+
+impl LmnkSectionEntry {
+    /// Serializes a 16-byte [`LmnkSectionEntry`] into Canonical Little-Endian bytes.
+    #[inline(always)]
+    #[must_use]
+    pub const fn to_le_bytes(&self) -> [u8; 16] {
+        let k = self.kind.to_le_bytes();
+        let f = self.flags.to_le_bytes();
+        let o = self.offset.to_le_bytes();
+        let l = self.length.to_le_bytes();
+        let c = self.payload_crc32.to_le_bytes();
+        [
+            k[0], k[1], f[0], f[1], o[0], o[1], o[2], o[3], l[0], l[1], l[2], l[3], c[0], c[1],
+            c[2], c[3],
+        ]
+    }
+
+    /// Decodes a 16-byte [`LmnkSectionEntry`] from Canonical Little-Endian bytes without
+    /// assuming base-pointer alignment.
+    ///
+    /// # Errors
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `src.len() < 16`.
+    #[inline]
+    pub fn from_le_bytes(src: &[u8]) -> LmnkResult<Self> {
+        if src.len() < LMNK_SECTION_ENTRY_BYTES {
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
+        }
+        Ok(Self {
+            kind: u16::from_le_bytes(read_le_bytes_exact(src, 0)?),
+            flags: u16::from_le_bytes(read_le_bytes_exact(src, 2)?),
+            offset: u32::from_le_bytes(read_le_bytes_exact(src, 4)?),
+            length: u32::from_le_bytes(read_le_bytes_exact(src, 8)?),
+            payload_crc32: u32::from_le_bytes(read_le_bytes_exact(src, 12)?),
+        })
+    }
+}
 
 /// Constructs a canonical `DescriptorHeader` for type `T` stamped with [`LMNK_ABI_VERSION_HEX`].
 #[inline(always)]
@@ -232,109 +480,31 @@ pub const fn validate_descriptor_header<T>(header: &DescriptorHeader) -> LmnkRes
     }
 }
 
-/// Constructs a canonical `LmnkSnapshotHeader` initialized with magic `"LMNK"` (`0x4B4E_4D4C`),
-/// [`LMNK_ABI_VERSION_HEX`], and `total_size`.
+/// Constructs a canonical [`LmnkContainerHeader`] initialized with magic `"LMNK"`,
+/// [`LMNK_ABI_VERSION_HEX`], [`CORE_TOPOLOGY`], `container_flags`, `total_size`, and `section_count`.
 #[inline(always)]
 #[must_use]
-pub const fn init_snapshot_header(total_size: u64, timestamp_epoch_sec: u64) -> LmnkSnapshotHeader {
-    let hdr_size = size_of::<LmnkSnapshotHeader>() as u64;
-    LmnkSnapshotHeader {
-        magic: LMNK_SNAPSHOT_MAGIC_U32,
+pub const fn init_container_header(
+    container_flags: u32,
+    total_size: u64,
+    timestamp_epoch_sec: u64,
+    section_count: u16,
+) -> LmnkContainerHeader {
+    let mut hdr = LmnkContainerHeader {
+        magic: LMNK_CONTAINER_MAGIC,
         version: LMNK_ABI_VERSION_HEX,
+        topology_crc32: CORE_TOPOLOGY.topology_crc32,
+        container_flags,
         total_size,
-        substrate_offset: hdr_size,
-        anchor_offset: hdr_size,
-        phase_steering_offset: hdr_size,
-        rank1_offset: hdr_size,
-        entropy_offset: hdr_size,
-        checksum_crc32: 0,
-        ledger_slot_offset: hdr_size as u32,
         timestamp_epoch_sec,
-        reserved_padding: [0; 56],
-    }
-}
-
-/// Validates a `LmnkSnapshotHeader` against the `.lmnk` container magic (`0x4B4E4D4C`),
-/// [`LMNK_ABI_VERSION_HEX`], and payload buffer bounds.
-///
-/// # Errors
-/// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if `magic` is invalid, `total_size` is smaller than
-/// `size_of::<LmnkSnapshotHeader>()`, `available_bytes < total_size`, or any track offset exceeds `total_size`.
-/// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `version != LMNK_ABI_VERSION_HEX`.
-#[inline]
-pub const fn validate_snapshot_header(
-    header: &LmnkSnapshotHeader,
-    available_bytes: usize,
-) -> LmnkResult<()> {
-    if header.magic != LMNK_SNAPSHOT_MAGIC_U32 {
-        return Err(LMNK_ERR_CONTAINER_CORRUPTED);
-    }
-    if header.version != LMNK_ABI_VERSION_HEX {
-        return Err(LMNK_ERR_VERSION_MISMATCH);
-    }
-    let min_hdr = size_of::<LmnkSnapshotHeader>() as u64;
-    let total = header.total_size;
-    let ledger_off = header.ledger_slot_offset as u64;
-    let offsets_in_bounds = (total >= min_hdr)
-        & ((available_bytes as u64) >= total)
-        & (header.substrate_offset >= min_hdr)
-        & (header.substrate_offset <= total)
-        & (header.anchor_offset >= min_hdr)
-        & (header.anchor_offset <= total)
-        & (header.phase_steering_offset >= min_hdr)
-        & (header.phase_steering_offset <= total)
-        & (header.rank1_offset >= min_hdr)
-        & (header.rank1_offset <= total)
-        & (header.entropy_offset >= min_hdr)
-        & (header.entropy_offset <= total)
-        & (ledger_off >= min_hdr)
-        & (ledger_off <= total);
-    if offsets_in_bounds {
-        Ok(())
-    } else {
-        Err(LMNK_ERR_CONTAINER_CORRUPTED)
-    }
-}
-
-/// Validates a `.lmnk` snapshot header, computes the IEEE 802.3 CRC32 checksum over the payload
-/// bytes following the 128-byte header (`container_bytes[128..total_size]`), and stamps
-/// `header.checksum_crc32` in-place.
-///
-/// # Errors
-/// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if header offsets or payload bounds are invalid.
-/// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `header.version != LMNK_ABI_VERSION_HEX`.
-#[inline]
-pub fn finalize_snapshot_header_crc32(
-    header: &mut LmnkSnapshotHeader,
-    container_bytes: &[u8],
-) -> LmnkResult<u32> {
-    validate_snapshot_header(header, container_bytes.len())?;
-    let hdr_size = size_of::<LmnkSnapshotHeader>();
-    let crc = compute_crc32_ieee(&container_bytes[hdr_size..(header.total_size as usize)]);
-    header.checksum_crc32 = crc;
-    Ok(crc)
-}
-
-/// Validates a `.lmnk` snapshot header and verifies the IEEE 802.3 CRC32 checksum over the payload
-/// bytes following the 128-byte header (`container_bytes[128..total_size]`).
-///
-/// # Errors
-/// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if header bounds or CRC32 verification fail.
-/// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `header.version != LMNK_ABI_VERSION_HEX`.
-#[inline]
-pub fn verify_snapshot_payload_crc32(
-    header: &LmnkSnapshotHeader,
-    container_bytes: &[u8],
-) -> LmnkResult<()> {
-    validate_snapshot_header(header, container_bytes.len())?;
-    if header.checksum_crc32 != 0 {
-        let hdr_size = size_of::<LmnkSnapshotHeader>();
-        let computed = compute_crc32_ieee(&container_bytes[hdr_size..(header.total_size as usize)]);
-        if computed != header.checksum_crc32 {
-            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
-        }
-    }
-    Ok(())
+        section_table_offset: LMNK_CONTAINER_HEADER_BYTES as u32,
+        section_count,
+        header_size: LMNK_CONTAINER_HEADER_BYTES as u16,
+        reserved_future: [0; 20],
+        header_crc32: 0,
+    };
+    let _ = hdr.finalize_crc32();
+    hdr
 }
 
 /// 128-byte cacheline-aligned Plain Old Data (`Pod`) **KV-keyframe Keyframe (I-Frame) Packet** (Section 4.3).
@@ -1244,7 +1414,7 @@ pub trait MappedStorage: Send + Sync {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `track_id > 3`.
     #[inline(always)]
     fn get_track_offset(&self, track_id: u32) -> LmnkResult<u64> {
-        let header_size = core::mem::size_of::<LmnkSnapshotHeader>() as u64;
+        let header_size = LMNK_CONTAINER_HEADER_BYTES as u64;
         match track_id {
             0 => Ok(header_size),
             1 => Ok(header_size + 1024),
@@ -1254,39 +1424,53 @@ pub trait MappedStorage: Send + Sync {
         }
     }
 
-    /// Reads and validates a `.lmnk` container's 128-byte [`LmnkSnapshotHeader`] via [`verify_snapshot_payload_crc32`].
+    /// Reads and validates a `.lmnk` container's 64-byte [`LmnkContainerHeader`] via [`LmnkContainerView::parse`].
     ///
     /// # Errors
-    /// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if `container_bytes` is truncated, magic/offsets
-    /// are invalid, or CRC32 verification fails.
-    /// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `version != LMNK_ABI_VERSION_HEX`.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`], [`LMNK_ERR_CONTAINER_CORRUPTED`],
+    /// [`LMNK_ERR_VERSION_MISMATCH`], or [`LMNK_ERR_TOPOLOGY_MISMATCH`] if validation fails.
     #[inline]
     fn inspect_and_verify_container(
         &self,
         container_bytes: &[u8],
-    ) -> LmnkResult<LmnkSnapshotHeader> {
-        let header = LmnkSnapshotHeader::read_unaligned_from(container_bytes, 0)
-            .map_err(|_| LMNK_ERR_CONTAINER_CORRUPTED)?;
-        verify_snapshot_payload_crc32(&header, container_bytes)?;
-        Ok(header)
+    ) -> LmnkResult<LmnkContainerHeader> {
+        let view = LmnkContainerView::parse(container_bytes)?;
+        Ok(*view.header())
     }
 
-    /// Finalizes the IEEE 802.3 CRC32 payload checksum on `header` and writes the 128-byte header
+    /// Stamps `header_crc32` (and `topology_crc32`) on `header` and writes the 64-byte header
     /// into the beginning of `container_bytes`.
     ///
     /// # Errors
-    /// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] or [`LMNK_ERR_VERSION_MISMATCH`]
-    /// if `header` or `container_bytes` bounds are invalid.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `container_bytes.len() < 64`, or
+    /// [`LMNK_ERR_CONTAINER_CORRUPTED`] / [`LMNK_ERR_VERSION_MISMATCH`] if header invariants fail.
     #[inline]
-    fn stamp_and_write_snapshot_header(
+    fn stamp_and_write_container_header(
         &self,
-        header: &mut LmnkSnapshotHeader,
+        header: &mut LmnkContainerHeader,
         container_bytes: &mut [u8],
     ) -> LmnkResult<u32> {
-        let crc = finalize_snapshot_header_crc32(header, container_bytes)?;
-        header
-            .write_unaligned_to(container_bytes, 0)
-            .map_err(|_| LMNK_ERR_CONTAINER_CORRUPTED)?;
+        if container_bytes.len() < LMNK_CONTAINER_HEADER_BYTES {
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
+        }
+        if header.magic != LMNK_CONTAINER_MAGIC {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        }
+        if header.version != LMNK_ABI_VERSION_HEX {
+            return Err(LMNK_ERR_VERSION_MISMATCH);
+        }
+        if (container_bytes.len() as u64) < header.total_size {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        }
+        header.topology_crc32 = CORE_TOPOLOGY.topology_crc32;
+        header.header_size = LMNK_CONTAINER_HEADER_BYTES as u16;
+        header.section_table_offset = LMNK_CONTAINER_HEADER_BYTES as u32;
+        let crc = header.finalize_crc32();
+        let le = header.to_le_bytes();
+        let dst = container_bytes
+            .get_mut(..LMNK_CONTAINER_HEADER_BYTES)
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
+        dst.copy_from_slice(&le);
         Ok(crc)
     }
 
@@ -1307,19 +1491,18 @@ pub trait MappedStorage: Send + Sync {
         let end = start
             .checked_add(track_len)
             .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
-        if container_bytes.len() < end {
-            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
-        }
-        Ok(&container_bytes[start..end])
+        container_bytes
+            .get(start..end)
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)
     }
 
     /// Extracts a hardware-aligned zero-copy [`AlignedSlice`] (`AlignedSlice<'a, T, ALIGN>`) of `elem_count` elements
-    /// for `track_id` (`0..=3`) directly from a mapped-storage memory-mapped `.lmnk` container buffer.
+    /// for `track_id` (`0..=3`) directly from a mapped-storage `.lmnk` container buffer.
     ///
     /// # Errors
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `track_id > 3` or `T` is zero-sized.
     /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `container_bytes` is too small.
-    /// Returns [`LMNK_ERR_ALIGNMENT`] if the track start address violates `ALIGN`.
+    /// Returns [`crate::liminal::LMNK_ERR_ALIGNMENT`] if the track start address violates `ALIGN`.
     #[inline]
     fn extract_aligned_track_slice<'a, T: Pod, const ALIGN: usize>(
         &self,
@@ -1335,16 +1518,22 @@ pub trait MappedStorage: Send + Sync {
 }
 
 /// 64-byte cacheline-aligned Plain Old Data (`Pod`) descriptor and execution engine for
-/// Zero-Copy In-Memory Mapped Storage (mapped-storage `.lmnk` containers), KV-keyframe keyframe/delta video-stream
+/// Zero-Copy In-Memory Mapped Storage (`.lmnk` containers), KV-keyframe keyframe/delta video-stream
 /// memory & persona reproduction, and 64-byte phase motion-delta packet dispatch.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MappedStorageEngine {
-    /// Embedded 64-byte C-ABI mapped-storage memory-map & track descriptor (`offset 0..64`).
-    pub(crate) descriptor: MappedStoragePreamble,
+    /// Expected container size in bytes (`offset 0..8`).
+    pub file_size_bytes: u64,
+    /// Vendor-neutral storage policy bitflags (`offset 8..12`).
+    pub flags: u32,
+    /// Bound topology CRC32 (`offset 12..16`).
+    pub topology_crc32: u32,
+    /// Explicit zero padding (`offset 16..64`).
+    pub reserved: [u8; 48],
 }
 
-// SAFETY: `MappedStorageEngine` is a `#[repr(C, align(64))]` wrapper around the 64-byte `Pod` `MappedStoragePreamble`.
+// SAFETY: `MappedStorageEngine` is a `#[repr(C, align(64))]` `Pod` of exact size 64 bytes with zero padding.
 unsafe impl Pod for MappedStorageEngine {}
 
 impl Default for MappedStorageEngine {
@@ -1360,24 +1549,20 @@ impl MappedStorageEngine {
     #[must_use]
     pub const fn new(file_size_bytes: u64, flags: u32) -> Self {
         Self {
-            descriptor: MappedStoragePreamble {
-                mapped_address: 0,
-                file_size_bytes,
-                dma_buffer_handle: 0,
-                flags,
-                fd_handle: -1,
-                reserved: [0; 32],
-            },
+            file_size_bytes,
+            flags,
+            topology_crc32: CORE_TOPOLOGY.topology_crc32,
+            reserved: [0; 48],
         }
     }
 
-    /// Validates the embedded `MappedStoragePreamble` fields.
+    /// Validates the embedded [`MappedStorageEngine`] fields.
     ///
     /// # Errors
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `flags == 0` when `file_size_bytes == 0`.
     #[inline(always)]
     pub const fn validate(&self) -> LmnkResult<()> {
-        if self.descriptor.file_size_bytes == 0 && self.descriptor.flags == 0 {
+        if self.file_size_bytes == 0 && self.flags == 0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         Ok(())
@@ -1401,13 +1586,12 @@ impl KvKeyframeCache for MappedStorageEngine {
 impl MappedStorage for MappedStorageEngine {
     #[inline]
     fn serialize_snapshot(&self, buffer: &mut [u8], required_size: &mut usize) -> LmnkResult<()> {
-        let hdr_len = size_of::<LmnkSnapshotHeader>();
-        *required_size = hdr_len;
-        if buffer.len() < hdr_len {
+        *required_size = LMNK_CONTAINER_HEADER_BYTES;
+        if buffer.len() < LMNK_CONTAINER_HEADER_BYTES {
             return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
-        let mut hdr = init_snapshot_header(hdr_len as u64, 0);
-        let _ = self.stamp_and_write_snapshot_header(&mut hdr, &mut buffer[..hdr_len])?;
+        let mut hdr = init_container_header(self.flags, LMNK_CONTAINER_HEADER_BYTES as u64, 0, 0);
+        let _ = self.stamp_and_write_container_header(&mut hdr, buffer)?;
         Ok(())
     }
 
@@ -1417,114 +1601,607 @@ impl MappedStorage for MappedStorageEngine {
         buffer: &[u8],
         _config_out: &mut RuntimeConfig,
     ) -> LmnkResult<()> {
-        let header = LmnkSnapshotHeader::read_unaligned_from(buffer, 0)?;
-        verify_snapshot_payload_crc32(&header, buffer)?;
-        self.descriptor.file_size_bytes = header.total_size;
+        let view = LmnkContainerView::parse(buffer)?;
+        self.file_size_bytes = view.header().total_size;
+        self.topology_crc32 = view.header().topology_crc32;
         Ok(())
     }
 }
 
 // ===================================================================
-// 8.5. 4-Section `.lmnk` Zero-Copy Container View (`LmnkFourSectionView`)
+// 8.5. Unified `.lmnk` Container Writer & Alignment-Safe Zero-Panic View
 // ===================================================================
 
-/// Zero-copy view over a 128B-aligned 4-section `.lmnk` memory-mapped container.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct LmnkFourSectionView<'a> {
-    /// Section 0a: Validated 128-byte `.lmnk` snapshot header (`offset 0..128`).
-    pub header: &'a LmnkSnapshotHeader,
-    /// Section 0b: Crate-private 64-byte section preamble (`offset 128..192`).
-    pub(crate) mapped_storage_descriptor: &'a MappedStoragePreamble,
-    /// Section 1: Zero-copy slice of crystallized macro attractor centroids (`128B` each).
-    pub crystals: &'a [PhaseAnchorRecord],
-    /// Section 2: Zero-copy slice of stigmergic pointer trails (`128B` each).
-    pub trails: &'a [PointerTrail],
-    /// Section 3a: Optional zero-copy reference to the 64-byte Contrastive Phase Bloom Filter.
-    pub bloom: Option<&'a ContrastivePhaseBloomFilter>,
-    /// Section 3b: Optional zero-copy reference to the 64-byte FastPathLedger telemetry & shortcut slot.
-    pub ledger: Option<&'a LedgerSlot>,
-    /// Section 3c: Zero-copy slice of 16-byte [`CausalProvenanceReport`] diagnostic history entries.
-    pub provenance_reports: &'a [CausalProvenanceReport],
+/// Borrowed section descriptor consumed by [`required_container_byte_len`] and
+/// [`write_container_sections_to_bytes`].
+#[derive(Debug, Clone, Copy)]
+pub struct LmnkSectionInput<'a> {
+    /// Section kind ID ([`LmnkSectionKind`] or custom `u16`).
+    pub kind: u16,
+    /// Per-section flags.
+    pub flags: u16,
+    /// Raw section payload bytes (must be non-empty).
+    pub payload: &'a [u8],
 }
 
-impl<'a> LmnkFourSectionView<'a> {
-    /// Computes the exact 128-byte-aligned container byte length required for the 4 sections (`num_reports = 0`).
-    ///
-    /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] on arithmetic overflow.
-    #[inline]
-    pub const fn required_byte_len(
-        num_crystals: usize,
-        num_trails: usize,
-        has_bloom: bool,
-        has_ledger: bool,
-    ) -> LmnkResult<usize> {
-        Self::required_byte_len_with_reports(num_crystals, num_trails, has_bloom, has_ledger, 0)
+#[inline(always)]
+const fn align_up_64_checked(value: usize) -> Option<usize> {
+    match value.checked_add(63) {
+        Some(v) => Some(v & !63usize),
+        None => None,
+    }
+}
+
+/// Computes the exact 64B-aligned container byte size required for `sections`.
+///
+/// # Errors
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `sections.len() > LMNK_MAX_CONTAINER_SECTIONS`,
+/// any section payload is empty, duplicate section kinds exist, or arithmetic overflows `LMNK_MAX_CONTAINER_BYTES`.
+#[inline]
+pub fn required_container_byte_len(sections: &[LmnkSectionInput<'_>]) -> LmnkResult<usize> {
+    if sections.len() > usize::from(LMNK_MAX_CONTAINER_SECTIONS) {
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
+    }
+    let table_bytes = sections
+        .len()
+        .checked_mul(LMNK_SECTION_ENTRY_BYTES)
+        .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+    let table_end = LMNK_CONTAINER_HEADER_BYTES
+        .checked_add(table_bytes)
+        .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+    let mut cursor = align_up_64_checked(table_end).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+
+    let mut i = 0usize;
+    while i < sections.len() {
+        let sec = sections.get(i).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+        if sec.payload.is_empty() {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
+        let mut prev = 0usize;
+        while prev < i {
+            let other = sections.get(prev).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+            if other.kind == sec.kind {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            }
+            prev += 1;
+        }
+        let off = align_up_64_checked(cursor).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+        let end = off
+            .checked_add(sec.payload.len())
+            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+        cursor = align_up_64_checked(end).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+        i += 1;
+    }
+    if cursor > LMNK_MAX_CONTAINER_BYTES {
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
+    }
+    Ok(cursor)
+}
+
+/// Serializes arbitrary non-empty `sections` into a unified 64B-aligned `.lmnk` container buffer.
+///
+/// # Errors
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `sections` violates uniqueness/bounds/non-empty rules,
+/// or [`LMNK_ERR_BUFFER_TOO_SMALL`] if `dst_bytes` is smaller than the required container size.
+#[inline]
+pub fn write_container_sections_to_bytes(
+    container_flags: u32,
+    timestamp_epoch_sec: u64,
+    sections: &[LmnkSectionInput<'_>],
+    dst_bytes: &mut [u8],
+) -> LmnkResult<usize> {
+    let total_len = required_container_byte_len(sections)?;
+    if dst_bytes.len() < total_len {
+        return Err(LMNK_ERR_BUFFER_TOO_SMALL);
+    }
+    let buf = dst_bytes
+        .get_mut(..total_len)
+        .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
+    buf.fill(0);
+
+    let table_end = LMNK_CONTAINER_HEADER_BYTES + sections.len() * LMNK_SECTION_ENTRY_BYTES;
+    let mut cursor = align_up_64_checked(table_end).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+
+    let mut i = 0usize;
+    while i < sections.len() {
+        let sec = sections.get(i).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+        let off = align_up_64_checked(cursor).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+        let len = sec.payload.len();
+        let end = off.checked_add(len).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+
+        let payload_dst = buf.get_mut(off..end).ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
+        payload_dst.copy_from_slice(sec.payload);
+        let payload_crc32 = compute_aligned64_payload_crc32_ieee(payload_dst);
+
+        let entry = LmnkSectionEntry {
+            kind: sec.kind,
+            flags: sec.flags,
+            offset: u32::try_from(off).map_err(|_| LMNK_ERR_INVALID_ARGUMENT)?,
+            length: u32::try_from(len).map_err(|_| LMNK_ERR_INVALID_ARGUMENT)?,
+            payload_crc32,
+        };
+        let entry_off = LMNK_CONTAINER_HEADER_BYTES + i * LMNK_SECTION_ENTRY_BYTES;
+        let entry_dst = buf
+            .get_mut(entry_off..entry_off + LMNK_SECTION_ENTRY_BYTES)
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
+        entry_dst.copy_from_slice(&entry.to_le_bytes());
+
+        cursor = align_up_64_checked(end).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+        i += 1;
     }
 
-    /// Computes the exact 128-byte-aligned container byte length required for the 4 sections including `num_reports`.
+    let hdr = init_container_header(
+        container_flags,
+        total_len as u64,
+        timestamp_epoch_sec,
+        sections.len() as u16,
+    );
+    let hdr_dst = buf
+        .get_mut(..LMNK_CONTAINER_HEADER_BYTES)
+        .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
+    hdr_dst.copy_from_slice(&hdr.to_le_bytes());
+    Ok(total_len)
+}
+
+/// Alignment-safe, zero-panic validated view over a unified `.lmnk` binary container.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LmnkContainerView<'a> {
+    raw: &'a [u8],
+    header: LmnkContainerHeader,
+    sections: [LmnkSectionEntry; LMNK_MAX_CONTAINER_SECTIONS as usize],
+}
+
+impl<'a> LmnkContainerView<'a> {
+    /// Parses and validates an untrusted `.lmnk` container byte slice without panics or
+    /// base-pointer alignment assumptions.
+    ///
+    /// Validation sequence:
+    /// 1. Length bounds (`64 <= bytes.len() <= 64 MiB`) and `header.total_size == bytes.len()`.
+    /// 2. Magic (`"LMNK"`), ABI version (`0x0000_0200`), header geometry (`header_size == 64`,
+    ///    `section_table_offset == 64`, `section_count <= 32`).
+    /// 3. Header IEEE 802.3 CRC32 verification (`bytes[0..60]`).
+    /// 4. Topology CRC32 verification against [`CORE_TOPOLOGY`] ([`LMNK_ERR_TOPOLOGY_MISMATCH`]).
+    /// 5. Monotonic 64B-aligned non-overlapping section table parsing, unique `kind` enforcement,
+    ///    per-section IEEE 802.3 CRC32 verification, and POD record structural checks.
+    ///
+    /// # Errors
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`], [`LMNK_ERR_VERSION_MISMATCH`],
+    /// [`LMNK_ERR_TOPOLOGY_MISMATCH`], or [`LMNK_ERR_CONTAINER_CORRUPTED`].
+    #[inline]
+    pub fn parse(bytes: &'a [u8]) -> LmnkResult<Self> {
+        if bytes.len() < LMNK_CONTAINER_HEADER_BYTES {
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
+        }
+        if bytes.len() > LMNK_MAX_CONTAINER_BYTES {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        }
+
+        let hdr_bytes = bytes
+            .get(0..LMNK_CONTAINER_HEADER_BYTES)
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
+        let header = LmnkContainerHeader::from_le_bytes(hdr_bytes)?;
+
+        if header.magic != LMNK_CONTAINER_MAGIC {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        }
+        if header.version != LMNK_ABI_VERSION_HEX {
+            return Err(LMNK_ERR_VERSION_MISMATCH);
+        }
+        if header.header_size != LMNK_CONTAINER_HEADER_BYTES as u16
+            || header.section_table_offset != LMNK_CONTAINER_HEADER_BYTES as u32
+            || header.section_count > LMNK_MAX_CONTAINER_SECTIONS
+            || header.total_size != bytes.len() as u64
+        {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        }
+
+        let hdr_prefix = bytes.get(0..60).ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+        if compute_crc32_ieee(hdr_prefix) != header.header_crc32 {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        }
+
+        if header.topology_crc32 != CORE_TOPOLOGY.topology_crc32 {
+            return Err(LMNK_ERR_TOPOLOGY_MISMATCH);
+        }
+
+        let sec_count = usize::from(header.section_count);
+        let table_bytes = sec_count
+            .checked_mul(LMNK_SECTION_ENTRY_BYTES)
+            .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+        let table_end = LMNK_CONTAINER_HEADER_BYTES
+            .checked_add(table_bytes)
+            .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+        if bytes.len() < table_end {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        }
+
+        let mut prev_end = align_up_64_checked(table_end).ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+        let mut sections = [LmnkSectionEntry::default(); LMNK_MAX_CONTAINER_SECTIONS as usize];
+
+        let mut i = 0usize;
+        while i < sec_count {
+            let entry_off = LMNK_CONTAINER_HEADER_BYTES
+                .checked_add(
+                    i.checked_mul(LMNK_SECTION_ENTRY_BYTES)
+                        .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?,
+                )
+                .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+            let entry_end = entry_off
+                .checked_add(LMNK_SECTION_ENTRY_BYTES)
+                .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+            let entry_slice = bytes
+                .get(entry_off..entry_end)
+                .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+            let entry = LmnkSectionEntry::from_le_bytes(entry_slice)?;
+
+            if entry.length == 0 {
+                return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+            }
+            let mut prev_idx = 0usize;
+            while prev_idx < i {
+                let existing = sections.get(prev_idx).ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+                if existing.kind == entry.kind {
+                    return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+                }
+                prev_idx += 1;
+            }
+
+            let sec_off =
+                usize::try_from(entry.offset).map_err(|_| LMNK_ERR_CONTAINER_CORRUPTED)?;
+            let sec_len =
+                usize::try_from(entry.length).map_err(|_| LMNK_ERR_CONTAINER_CORRUPTED)?;
+            if (sec_off & 63) != 0 || sec_off < prev_end {
+                return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+            }
+            let sec_end = sec_off
+                .checked_add(sec_len)
+                .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+            let payload = bytes
+                .get(sec_off..sec_end)
+                .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+
+            if compute_aligned64_payload_crc32_ieee(payload) != entry.payload_crc32 {
+                return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+            }
+
+            match entry.kind {
+                LMNK_SECTION_PHASE_ANCHORS => {
+                    let rec_sz = size_of::<PhaseAnchorRecord>();
+                    if (sec_len & (rec_sz - 1)) != 0 {
+                        return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+                    }
+                    let mut off = 0usize;
+                    while off < sec_len {
+                        let rec = PhaseAnchorRecord::read_unaligned_from(payload, off)
+                            .map_err(|_| LMNK_ERR_CONTAINER_CORRUPTED)?;
+                        if !rec.verify_integrity() {
+                            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+                        }
+                        off += rec_sz;
+                    }
+                }
+                LMNK_SECTION_POINTER_TRAILS => {
+                    if (sec_len & (size_of::<PointerTrail>() - 1)) != 0 {
+                        return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+                    }
+                }
+                LMNK_SECTION_BLOOM_FILTER => {
+                    if sec_len != size_of::<ContrastivePhaseBloomFilter>() {
+                        return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+                    }
+                }
+                LMNK_SECTION_LEDGER_SLOT => {
+                    if sec_len != size_of::<LedgerSlot>() {
+                        return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+                    }
+                }
+                LMNK_SECTION_CAUSAL_PROVENANCE
+                    if (sec_len & (size_of::<CausalProvenanceReport>() - 1)) != 0 =>
+                {
+                    return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+                }
+                _ => {}
+            }
+
+            let dst_entry = sections.get_mut(i).ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+            *dst_entry = entry;
+            prev_end = align_up_64_checked(sec_end).ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+            i += 1;
+        }
+
+        Ok(Self {
+            raw: bytes,
+            header,
+            sections,
+        })
+    }
+
+    /// Returns the validated 64-byte [`LmnkContainerHeader`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn header(&self) -> &LmnkContainerHeader {
+        &self.header
+    }
+
+    /// Returns the active slice of validated [`LmnkSectionEntry`] descriptors.
+    #[inline(always)]
+    #[must_use]
+    pub fn sections(&self) -> &[LmnkSectionEntry] {
+        let count = usize::from(self.header.section_count);
+        self.sections.get(..count).unwrap_or(&[])
+    }
+
+    /// Finds the [`LmnkSectionEntry`] matching `kind`, if present.
+    #[inline]
+    #[must_use]
+    pub fn find_section(&self, kind: u16) -> Option<LmnkSectionEntry> {
+        let mut idx = 0usize;
+        let count = usize::from(self.header.section_count);
+        while idx < count {
+            if let Some(&entry) = self.sections.get(idx) {
+                if entry.kind == kind {
+                    return Some(entry);
+                }
+            }
+            idx += 1;
+        }
+        None
+    }
+
+    /// Returns an alignment-independent immutable byte slice for section `kind`, if present.
+    #[inline]
+    #[must_use]
+    pub fn section_bytes(&self, kind: u16) -> Option<&'a [u8]> {
+        let entry = self.find_section(kind)?;
+        let off = usize::try_from(entry.offset).ok()?;
+        let len = usize::try_from(entry.length).ok()?;
+        let end = off.checked_add(len)?;
+        self.raw.get(off..end)
+    }
+
+    /// Returns the number of [`PhaseAnchorRecord`] elements stored in the container.
+    #[inline]
+    #[must_use]
+    pub fn phase_anchor_count(&self) -> usize {
+        self.section_bytes(LMNK_SECTION_PHASE_ANCHORS)
+            .map_or(0, |b| b.len() / size_of::<PhaseAnchorRecord>())
+    }
+
+    /// Safely copies and returns the `idx`-th [`PhaseAnchorRecord`] independent of base-pointer alignment.
+    #[inline]
+    #[must_use]
+    pub fn read_phase_anchor(&self, idx: usize) -> Option<PhaseAnchorRecord> {
+        let bytes = self.section_bytes(LMNK_SECTION_PHASE_ANCHORS)?;
+        let off = idx.checked_mul(size_of::<PhaseAnchorRecord>())?;
+        PhaseAnchorRecord::read_unaligned_from(bytes, off).ok()
+    }
+
+    /// Returns a zero-copy [`PhaseAnchorRecord`] slice when the underlying section buffer satisfies
+    /// 64-byte alignment; returns [`crate::liminal::LMNK_ERR_ALIGNMENT`] otherwise.
+    ///
+    /// # Errors
+    /// Returns [`crate::liminal::LMNK_ERR_ALIGNMENT`] if the section payload address violates 64-byte alignment.
+    #[inline]
+    pub fn phase_anchors_zero_copy(&self) -> LmnkResult<&'a [PhaseAnchorRecord]> {
+        match self.section_bytes(LMNK_SECTION_PHASE_ANCHORS) {
+            None => Ok(&[]),
+            Some(bytes) => {
+                let count = bytes.len() / size_of::<PhaseAnchorRecord>();
+                PhaseAnchorRecord::slice_from_bytes_at(bytes, 0, count)
+            }
+        }
+    }
+
+    /// Returns the number of [`PointerTrail`] elements stored in the container.
+    #[inline]
+    #[must_use]
+    pub fn pointer_trail_count(&self) -> usize {
+        self.section_bytes(LMNK_SECTION_POINTER_TRAILS)
+            .map_or(0, |b| b.len() / size_of::<PointerTrail>())
+    }
+
+    /// Safely copies and returns the `idx`-th [`PointerTrail`] independent of base-pointer alignment.
+    #[inline]
+    #[must_use]
+    pub fn read_pointer_trail(&self, idx: usize) -> Option<PointerTrail> {
+        let bytes = self.section_bytes(LMNK_SECTION_POINTER_TRAILS)?;
+        let off = idx.checked_mul(size_of::<PointerTrail>())?;
+        PointerTrail::read_unaligned_from(bytes, off).ok()
+    }
+
+    /// Returns a zero-copy [`PointerTrail`] slice when aligned to 64 bytes.
+    ///
+    /// # Errors
+    /// Returns [`crate::liminal::LMNK_ERR_ALIGNMENT`] if the section payload address violates 64-byte alignment.
+    #[inline]
+    pub fn pointer_trails_zero_copy(&self) -> LmnkResult<&'a [PointerTrail]> {
+        match self.section_bytes(LMNK_SECTION_POINTER_TRAILS) {
+            None => Ok(&[]),
+            Some(bytes) => {
+                let count = bytes.len() / size_of::<PointerTrail>();
+                PointerTrail::slice_from_bytes_at(bytes, 0, count)
+            }
+        }
+    }
+
+    /// Safely copies the [`ContrastivePhaseBloomFilter`] section if present.
+    #[inline]
+    #[must_use]
+    pub fn read_bloom_filter(&self) -> Option<ContrastivePhaseBloomFilter> {
+        let bytes = self.section_bytes(LMNK_SECTION_BLOOM_FILTER)?;
+        ContrastivePhaseBloomFilter::read_unaligned_from(bytes, 0).ok()
+    }
+
+    /// Returns a zero-copy reference to [`ContrastivePhaseBloomFilter`] when aligned to 64 bytes.
+    ///
+    /// # Errors
+    /// Returns [`crate::liminal::LMNK_ERR_ALIGNMENT`] if the section payload address violates 64-byte alignment.
+    #[inline]
+    pub fn bloom_filter_zero_copy(&self) -> LmnkResult<Option<&'a ContrastivePhaseBloomFilter>> {
+        match self.section_bytes(LMNK_SECTION_BLOOM_FILTER) {
+            None => Ok(None),
+            Some(bytes) => ContrastivePhaseBloomFilter::from_bytes_at(bytes, 0).map(Some),
+        }
+    }
+
+    /// Safely copies the [`LedgerSlot`] section if present.
+    #[inline]
+    #[must_use]
+    pub fn read_ledger_slot(&self) -> Option<LedgerSlot> {
+        let bytes = self.section_bytes(LMNK_SECTION_LEDGER_SLOT)?;
+        LedgerSlot::read_unaligned_from(bytes, 0).ok()
+    }
+
+    /// Returns a zero-copy reference to [`LedgerSlot`] when aligned to 64 bytes.
+    ///
+    /// # Errors
+    /// Returns [`crate::liminal::LMNK_ERR_ALIGNMENT`] if the section payload address violates 64-byte alignment.
+    #[inline]
+    pub fn ledger_slot_zero_copy(&self) -> LmnkResult<Option<&'a LedgerSlot>> {
+        match self.section_bytes(LMNK_SECTION_LEDGER_SLOT) {
+            None => Ok(None),
+            Some(bytes) => LedgerSlot::from_bytes_at(bytes, 0).map(Some),
+        }
+    }
+
+    /// Returns the number of [`CausalProvenanceReport`] elements stored in the container.
+    #[inline]
+    #[must_use]
+    pub fn causal_provenance_count(&self) -> usize {
+        self.section_bytes(LMNK_SECTION_CAUSAL_PROVENANCE)
+            .map_or(0, |b| b.len() / size_of::<CausalProvenanceReport>())
+    }
+
+    /// Safely copies and returns the `idx`-th [`CausalProvenanceReport`] independent of base alignment.
+    #[inline]
+    #[must_use]
+    pub fn read_causal_provenance(&self, idx: usize) -> Option<CausalProvenanceReport> {
+        let bytes = self.section_bytes(LMNK_SECTION_CAUSAL_PROVENANCE)?;
+        let off = idx.checked_mul(size_of::<CausalProvenanceReport>())?;
+        CausalProvenanceReport::read_unaligned_from(bytes, off).ok()
+    }
+
+    /// Returns a zero-copy [`CausalProvenanceReport`] slice when aligned to 16 bytes.
+    ///
+    /// # Errors
+    /// Returns [`crate::liminal::LMNK_ERR_ALIGNMENT`] if the section payload address violates 16-byte alignment.
+    #[inline]
+    pub fn causal_provenance_zero_copy(&self) -> LmnkResult<&'a [CausalProvenanceReport]> {
+        match self.section_bytes(LMNK_SECTION_CAUSAL_PROVENANCE) {
+            None => Ok(&[]),
+            Some(bytes) => {
+                let count = bytes.len() / size_of::<CausalProvenanceReport>();
+                CausalProvenanceReport::slice_from_bytes_at(bytes, 0, count)
+            }
+        }
+    }
+
+    /// Alignment-safe extraction of the persisted [`CognitiveTrajectoryLedger`] from
+    /// [`LMNK_SECTION_LEDGER_SLOT`] when [`LEDGER_FLAG_COGNITIVE_TRAJECTORY`] is active.
+    #[inline]
+    #[must_use]
+    pub fn cognitive_trajectory_ledger(&self) -> Option<CognitiveTrajectoryLedger> {
+        match self.read_ledger_slot() {
+            Some(slot) if (slot.auto_tune_flags & LEDGER_FLAG_COGNITIVE_TRAJECTORY) != 0 => {
+                Some(CognitiveTrajectoryLedger::from_ledger_slot(&slot))
+            }
+            _ => None,
+        }
+    }
+
+    /// Computes the exact 64B-aligned byte length required to write the standard active sections
+    /// (`PhaseAnchors`, `PointerTrails`, optional `BloomFilter`, optional `LedgerSlot`, `CausalProvenance`).
     ///
     /// # Errors
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] on arithmetic overflow.
     #[inline]
-    pub const fn required_byte_len_with_reports(
+    pub const fn required_standard_byte_len(
         num_crystals: usize,
         num_trails: usize,
         has_bloom: bool,
         has_ledger: bool,
         num_reports: usize,
     ) -> LmnkResult<usize> {
-        let off_crystals = LMNK_FOUR_SECTION_HEADER_BYTES;
-        let Some(crystals_bytes) = num_crystals.checked_mul(size_of::<PhaseAnchorRecord>()) else {
+        let sec_count = (num_crystals > 0) as usize
+            + (num_trails > 0) as usize
+            + (has_bloom as usize)
+            + (has_ledger as usize)
+            + (num_reports > 0) as usize;
+        let table_end = LMNK_CONTAINER_HEADER_BYTES + sec_count * LMNK_SECTION_ENTRY_BYTES;
+        let Some(mut cursor) = align_up_64_checked(table_end) else {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         };
-        let Some(after_crystals) = off_crystals.checked_add(crystals_bytes) else {
+
+        if num_crystals > 0 {
+            let Some(bytes) = num_crystals.checked_mul(size_of::<PhaseAnchorRecord>()) else {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            };
+            let Some(end) = cursor.checked_add(bytes) else {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            };
+            let Some(next) = align_up_64_checked(end) else {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            };
+            cursor = next;
+        }
+        if num_trails > 0 {
+            let Some(bytes) = num_trails.checked_mul(size_of::<PointerTrail>()) else {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            };
+            let Some(end) = cursor.checked_add(bytes) else {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            };
+            let Some(next) = align_up_64_checked(end) else {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            };
+            cursor = next;
+        }
+        if has_bloom {
+            let Some(end) = cursor.checked_add(size_of::<ContrastivePhaseBloomFilter>()) else {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            };
+            let Some(next) = align_up_64_checked(end) else {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            };
+            cursor = next;
+        }
+        if has_ledger {
+            let Some(end) = cursor.checked_add(size_of::<LedgerSlot>()) else {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            };
+            let Some(next) = align_up_64_checked(end) else {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            };
+            cursor = next;
+        }
+        if num_reports > 0 {
+            let Some(bytes) = num_reports.checked_mul(size_of::<CausalProvenanceReport>()) else {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            };
+            let Some(end) = cursor.checked_add(bytes) else {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            };
+            let Some(next) = align_up_64_checked(end) else {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            };
+            cursor = next;
+        }
+        if cursor > LMNK_MAX_CONTAINER_BYTES {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
-        };
-        let off_trails = (after_crystals + 127) & !127usize;
-        let Some(trails_bytes) = num_trails.checked_mul(size_of::<PointerTrail>()) else {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        };
-        let Some(off_bloom) = off_trails.checked_add(trails_bytes) else {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        };
-        let bloom_bytes = if has_bloom {
-            size_of::<ContrastivePhaseBloomFilter>()
-        } else {
-            0
-        };
-        let Some(off_ledger) = off_bloom.checked_add(bloom_bytes) else {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        };
-        let ledger_bytes = if has_ledger {
-            size_of::<LedgerSlot>()
-        } else {
-            0
-        };
-        let Some(off_reports) = off_ledger.checked_add(ledger_bytes) else {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        };
-        let Some(reports_bytes) = num_reports.checked_mul(size_of::<CausalProvenanceReport>())
-        else {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        };
-        let Some(raw_end) = off_reports.checked_add(reports_bytes) else {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        };
-        let min_end = if raw_end < LMNK_FOUR_SECTION_HEADER_BYTES {
-            LMNK_FOUR_SECTION_HEADER_BYTES
-        } else {
-            raw_end
-        };
-        Ok((min_end + 127) & !127usize)
+        }
+        Ok(cursor)
     }
 
-    /// Serializes `crystals`, `trails`, `bloom_opt`, `ledger_opt`, and `provenance_reports` into `dst_bytes`.
+    /// Serializes standard runtime/compiled sections into a unified 64B-aligned `.lmnk` container,
+    /// stamping any unstamped [`PhaseAnchorRecord`] CRC32s and per-section `payload_crc32` values.
     ///
     /// # Errors
-    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `dst_bytes.len() < required_byte_len_with_reports(...)`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] on size overflow or [`LMNK_ERR_BUFFER_TOO_SMALL`] if
+    /// `dst_bytes` is smaller than [`Self::required_standard_byte_len`].
     #[inline]
-    pub fn write_four_section_with_reports_to_bytes(
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_standard_sections_to_bytes(
+        container_flags: u32,
         crystals: &[PhaseAnchorRecord],
         trails: &[PointerTrail],
         bloom_opt: Option<&ContrastivePhaseBloomFilter>,
@@ -1533,7 +2210,7 @@ impl<'a> LmnkFourSectionView<'a> {
         timestamp_epoch_sec: u64,
         dst_bytes: &mut [u8],
     ) -> LmnkResult<usize> {
-        let total_len = Self::required_byte_len_with_reports(
+        let total_len = Self::required_standard_byte_len(
             crystals.len(),
             trails.len(),
             bloom_opt.is_some(),
@@ -1543,351 +2220,362 @@ impl<'a> LmnkFourSectionView<'a> {
         if dst_bytes.len() < total_len {
             return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
+        let buf = dst_bytes
+            .get_mut(..total_len)
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
+        buf.fill(0);
 
-        let buf = &mut dst_bytes[..total_len];
-        let off_crystals = LMNK_FOUR_SECTION_HEADER_BYTES;
-        let crystals_bytes = PhaseAnchorRecord::write_records_to_container_bytes(
-            crystals,
-            &mut buf[off_crystals..],
-        )?;
-        let after_crystals = off_crystals + crystals_bytes;
-        let off_trails = (after_crystals + 127) & !127usize;
-        let trails_bytes = core::mem::size_of_val(trails);
-        let off_bloom = off_trails + trails_bytes;
-        let off_ledger = off_bloom
-            + if bloom_opt.is_some() {
-                size_of::<ContrastivePhaseBloomFilter>()
-            } else {
-                0
+        let sec_count = usize::from(!crystals.is_empty())
+            + usize::from(!trails.is_empty())
+            + usize::from(bloom_opt.is_some())
+            + usize::from(ledger_opt.is_some())
+            + usize::from(!provenance_reports.is_empty());
+        let table_end = LMNK_CONTAINER_HEADER_BYTES + sec_count * LMNK_SECTION_ENTRY_BYTES;
+        let mut cursor = align_up_64_checked(table_end).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+        let mut sec_idx = 0usize;
+
+        if !crystals.is_empty() {
+            let off = cursor;
+            let len = crystals.len() * size_of::<PhaseAnchorRecord>();
+            let end = off + len;
+            let payload_slice = buf.get_mut(off..end).ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
+            let _ = PhaseAnchorRecord::write_records_to_container_bytes(crystals, payload_slice)?;
+            let crc = compute_aligned64_payload_crc32_ieee(payload_slice);
+            let entry = LmnkSectionEntry {
+                kind: LMNK_SECTION_PHASE_ANCHORS,
+                flags: 0,
+                offset: off as u32,
+                length: len as u32,
+                payload_crc32: crc,
             };
-        let off_reports = off_ledger
-            + if ledger_opt.is_some() {
-                size_of::<LedgerSlot>()
-            } else {
-                0
-            };
-        let reports_bytes = core::mem::size_of_val(provenance_reports);
-        let end_reports = off_reports + reports_bytes;
-
-        if off_trails > after_crystals {
-            buf[after_crystals..off_trails].fill(0);
-        }
-        PointerTrail::write_unaligned_slice_to(trails, buf, off_trails)?;
-        if let Some(bloom) = bloom_opt {
-            bloom.write_unaligned_to(buf, off_bloom)?;
-        }
-        if let Some(ledger) = ledger_opt {
-            ledger.write_unaligned_to(buf, off_ledger)?;
-        }
-        CausalProvenanceReport::write_unaligned_slice_to(provenance_reports, buf, off_reports)?;
-        if total_len > end_reports {
-            buf[end_reports..total_len].fill(0);
-        }
-        let storage_desc = MappedStoragePreamble {
-            mapped_address: 0,
-            file_size_bytes: total_len as u64,
-            dma_buffer_handle: 0,
-            flags: 4,
-            fd_handle: -1,
-            reserved: [0; 32],
-        };
-        storage_desc.write_unaligned_to(buf, LMNK_STORAGE_PREAMBLE_OFFSET)?;
-
-        let checksum_crc32 = Self::compute_container_crc32_with_stamped_crystals(
-            buf,
-            size_of::<LmnkSnapshotHeader>(),
-            off_crystals,
-            crystals.len(),
-            after_crystals,
-            total_len,
-        );
-        let mut header = init_snapshot_header(total_len as u64, timestamp_epoch_sec);
-        header.anchor_offset = off_crystals as u64;
-        header.phase_steering_offset = after_crystals as u64;
-        header.entropy_offset = off_bloom as u64;
-        header.substrate_offset = off_trails as u64;
-        header.ledger_slot_offset = off_ledger as u32;
-        header.checksum_crc32 = checksum_crc32;
-        header.reserved_padding[0] = u8::from(bloom_opt.is_some());
-        header.reserved_padding[1] = u8::from(ledger_opt.is_some());
-        let rep_cnt = (provenance_reports.len().min(u32::MAX as usize) as u32).to_le_bytes();
-        header.reserved_padding[4] = rep_cnt[0];
-        header.reserved_padding[5] = rep_cnt[1];
-        header.reserved_padding[6] = rep_cnt[2];
-        header.reserved_padding[7] = rep_cnt[3];
-        header.write_unaligned_to(buf, 0)?;
-        Ok(total_len)
-    }
-
-    /// Validates and maps a 128-byte aligned 4-section `.lmnk` (mapped-storage) container byte slice
-    /// into a zero-copy [`LmnkFourSectionView`] ($C_{\mathrm{alloc}} = 0$).
-    ///
-    /// # Errors
-    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`], [`LMNK_ERR_ALIGNMENT`],
-    /// [`LMNK_ERR_CONTAINER_CORRUPTED`], or [`LMNK_ERR_VERSION_MISMATCH`]
-    /// if the container header, alignment, section offsets, or IEEE 802.3 CRC32 checksums are invalid.
-    #[inline]
-    pub fn from_container_bytes_zero_copy(bytes: &'a [u8]) -> LmnkResult<Self> {
-        if bytes.len() < LMNK_FOUR_SECTION_HEADER_BYTES {
-            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
-        }
-        if !is_aligned_to(bytes, 128) {
-            return Err(LMNK_ERR_ALIGNMENT);
+            let entry_off = LMNK_CONTAINER_HEADER_BYTES + sec_idx * LMNK_SECTION_ENTRY_BYTES;
+            buf.get_mut(entry_off..entry_off + LMNK_SECTION_ENTRY_BYTES)
+                .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?
+                .copy_from_slice(&entry.to_le_bytes());
+            sec_idx += 1;
+            cursor = align_up_64_checked(end).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         }
 
-        let header = LmnkSnapshotHeader::from_bytes_at(bytes, 0)?;
-        validate_snapshot_header(header, bytes.len())?;
-        let mapped_storage_descriptor =
-            MappedStoragePreamble::from_bytes_at(bytes, LMNK_STORAGE_PREAMBLE_OFFSET)?;
-        if mapped_storage_descriptor.file_size_bytes != 0
-            && mapped_storage_descriptor.file_size_bytes != header.total_size
-        {
-            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
-        }
-
-        let total_len = header.total_size as usize;
-        let hdr_size = size_of::<LmnkSnapshotHeader>();
-        let off_crystals = header.anchor_offset as usize;
-        let end_crystals = header.phase_steering_offset as usize;
-        let off_trails = header.substrate_offset as usize;
-        let off_bloom = header.entropy_offset as usize;
-        let off_ledger = header.ledger_slot_offset as usize;
-
-        if off_crystals < LMNK_FOUR_SECTION_HEADER_BYTES
-            || off_crystals > end_crystals
-            || end_crystals > off_trails
-            || off_trails > off_bloom
-            || off_bloom > off_ledger
-            || off_ledger > total_len
-        {
-            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
-        }
-
-        let crystals_byte_len = end_crystals - off_crystals;
-        if (crystals_byte_len % size_of::<PhaseAnchorRecord>()) != 0 {
-            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
-        }
-        let num_crystals = crystals_byte_len / size_of::<PhaseAnchorRecord>();
-        let crystals = PhaseAnchorRecord::slice_from_container_bytes_zero_copy(
-            &bytes[off_crystals..end_crystals],
-            num_crystals,
-        )?;
-        if header.checksum_crc32 != 0 {
-            let computed = Self::compute_container_crc32_with_stamped_crystals(
-                bytes,
-                hdr_size,
-                off_crystals,
-                num_crystals,
-                end_crystals,
-                total_len,
+        if !trails.is_empty() {
+            let off = cursor;
+            let len = core::mem::size_of_val(trails);
+            let end = off + len;
+            PointerTrail::write_unaligned_slice_to(trails, buf, off)?;
+            let crc = compute_aligned64_payload_crc32_ieee(
+                buf.get(off..end).ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?,
             );
-            if computed != header.checksum_crc32 {
-                return Err(LMNK_ERR_CONTAINER_CORRUPTED);
-            }
-        }
-
-        let trails_byte_len = off_bloom - off_trails;
-        if (trails_byte_len % size_of::<PointerTrail>()) != 0 {
-            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
-        }
-        let num_trails = trails_byte_len / size_of::<PointerTrail>();
-        let trails = PointerTrail::slice_from_bytes_at(bytes, off_trails, num_trails)?;
-
-        // SAFETY: `LmnkSnapshotHeader` is 128-byte aligned (`>= 8`) `#[repr(C)]` POD of 16 `u64` words; offset 9*8 = 72 is in-bounds.
-        #[cfg(target_endian = "little")]
-        let pad_w0 = unsafe { *core::ptr::from_ref(header).cast::<u64>().add(9) };
-        #[cfg(target_endian = "little")]
-        let (has_bloom_flag, has_ledger_flag, num_reports) = (
-            (pad_w0 & 0xFF) != 0,
-            ((pad_w0 >> 8) & 0xFF) != 0,
-            (pad_w0 >> 32) as usize,
-        );
-        #[cfg(not(target_endian = "little"))]
-        let (has_bloom_flag, has_ledger_flag, num_reports) = (
-            header.reserved_padding[0] != 0,
-            header.reserved_padding[1] != 0,
-            u32::from_le_bytes([
-                header.reserved_padding[4],
-                header.reserved_padding[5],
-                header.reserved_padding[6],
-                header.reserved_padding[7],
-            ]) as usize,
-        );
-
-        let has_bloom =
-            has_bloom_flag & ((off_ledger - off_bloom) >= size_of::<ContrastivePhaseBloomFilter>());
-        let bloom = if has_bloom {
-            Some(ContrastivePhaseBloomFilter::from_bytes_at(
-                bytes, off_bloom,
-            )?)
-        } else {
-            None
-        };
-
-        let has_ledger = has_ledger_flag & ((total_len - off_ledger) >= size_of::<LedgerSlot>());
-        let ledger = if has_ledger {
-            Some(LedgerSlot::from_bytes_at(bytes, off_ledger)?)
-        } else {
-            None
-        };
-        let off_reports = off_ledger
-            + if has_ledger {
-                size_of::<LedgerSlot>()
-            } else {
-                0
+            let entry = LmnkSectionEntry {
+                kind: LMNK_SECTION_POINTER_TRAILS,
+                flags: 0,
+                offset: off as u32,
+                length: len as u32,
+                payload_crc32: crc,
             };
-        let provenance_reports = if num_reports > 0 {
-            CausalProvenanceReport::slice_from_bytes_at(bytes, off_reports, num_reports)?
-        } else {
-            &[]
-        };
-
-        Ok(Self {
-            header,
-            mapped_storage_descriptor,
-            crystals,
-            trails,
-            bloom,
-            ledger,
-            provenance_reports,
-        })
-    }
-
-    /// Zero-copy extraction of the persisted [`CognitiveTrajectoryLedger`] from `self.ledger`,
-    /// returning `Some` when [`LEDGER_FLAG_COGNITIVE_TRAJECTORY`] is active.
-    #[inline(always)]
-    #[must_use]
-    pub const fn cognitive_trajectory_ledger(&self) -> Option<CognitiveTrajectoryLedger> {
-        match self.ledger {
-            Some(slot) if (slot.auto_tune_flags & LEDGER_FLAG_COGNITIVE_TRAJECTORY) != 0 => {
-                Some(CognitiveTrajectoryLedger::from_ledger_slot(slot))
-            }
-            _ => None,
+            let entry_off = LMNK_CONTAINER_HEADER_BYTES + sec_idx * LMNK_SECTION_ENTRY_BYTES;
+            buf.get_mut(entry_off..entry_off + LMNK_SECTION_ENTRY_BYTES)
+                .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?
+                .copy_from_slice(&entry.to_le_bytes());
+            sec_idx += 1;
+            cursor = align_up_64_checked(end).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         }
-    }
 
-    #[inline]
-    #[must_use]
-    fn compute_container_crc32_with_stamped_crystals(
-        buf: &[u8],
-        hdr_size: usize,
-        off_crystals: usize,
-        num_crystals: usize,
-        after_crystals: usize,
-        total_len: usize,
-    ) -> u32 {
-        #[cfg(target_endian = "little")]
-        {
-            if is_aligned_to(buf, align_of::<u64>())
-                && ((off_crystals - hdr_size) & 63) == 0
-                && ((total_len - after_crystals) & 63) == 0
-            {
-                let mut crc = if (off_crystals - hdr_size) == 64 {
-                    // SAFETY: `buf` is 8-byte aligned and `hdr_size..off_crystals` is 64 bytes.
-                    let w = unsafe { &*buf.as_ptr().add(hdr_size).cast::<[u64; 8]>() };
-                    if ((w[0] | w[2]) == 0)
-                        & (w[3] == 0xFFFF_FFFF_0000_0004u64)
-                        & (((w[4] | w[5]) | (w[6] | w[7])) == 0)
-                    {
-                        let fs_lo = w[1] as u32;
-                        let fs_hi = (w[1] >> 32) as u32;
-                        let fs_c = (if fs_lo == 0 {
-                            0
-                        } else {
-                            crc32_slice16_indep_lo1_u32(fs_lo)
-                        }) ^ (if fs_hi == 0 {
-                            0
-                        } else {
-                            crc32_slice16_indep_hi1_u32(fs_hi)
-                        });
-                        CRC32_MAPPED_STORAGE_DESC_BASE_SEED
-                            ^ (if fs_c == 0 { 0 } else { crc32_step_l3(fs_c) })
-                    } else {
-                        crc32_step_block64_words(0xFFFF_FFFFu32, w)
-                    }
-                } else {
-                    update_aligned64_blocks_crc32_raw(0xFFFF_FFFFu32, &buf[hdr_size..off_crystals])
-                };
-                let mut idx = 0usize;
-                while idx + 4 <= num_crystals {
-                    let w6_off0 = off_crystals + idx * size_of::<PhaseAnchorRecord>() + 48;
-                    let w6_off1 = w6_off0 + size_of::<PhaseAnchorRecord>();
-                    let w6_off2 = w6_off1 + size_of::<PhaseAnchorRecord>();
-                    let w6_off3 = w6_off2 + size_of::<PhaseAnchorRecord>();
-                    // SAFETY: `buf` is >= 8-byte aligned and `w6_off0 + 8 <= total_len`.
-                    let rec_crc0 =
-                        (unsafe { *buf.as_ptr().add(w6_off0).cast::<u64>() } >> 32) as u32;
-                    // SAFETY: `buf` is >= 8-byte aligned and `w6_off1 + 8 <= total_len`.
-                    let rec_crc1 =
-                        (unsafe { *buf.as_ptr().add(w6_off1).cast::<u64>() } >> 32) as u32;
-                    // SAFETY: `buf` is >= 8-byte aligned and `w6_off2 + 8 <= total_len`.
-                    let rec_crc2 =
-                        (unsafe { *buf.as_ptr().add(w6_off2).cast::<u64>() } >> 32) as u32;
-                    // SAFETY: `buf` is >= 8-byte aligned and `w6_off3 + 8 <= total_len`.
-                    let rec_crc3 =
-                        (unsafe { *buf.as_ptr().add(w6_off3).cast::<u64>() } >> 32) as u32;
-                    let s0 = crc32_anchor_stamp_contrib_128b(rec_crc0);
-                    let s1 = crc32_anchor_stamp_contrib_128b(rec_crc1);
-                    let s2 = crc32_anchor_stamp_contrib_128b(rec_crc2);
-                    let s3 = crc32_anchor_stamp_contrib_128b(rec_crc3);
-                    let p01 = crc32_step_l8(s0) ^ s1;
-                    let p23 = crc32_step_l8(s2) ^ s3;
-                    crc = crc32_step_l32(crc) ^ crc32_step_l16(p01) ^ p23;
-                    idx += 4;
-                }
-                while idx + 2 <= num_crystals {
-                    let w6_off0 = off_crystals + idx * size_of::<PhaseAnchorRecord>() + 48;
-                    let w6_off1 = w6_off0 + size_of::<PhaseAnchorRecord>();
-                    // SAFETY: `buf` is >= 8-byte aligned and `w6_off0 + 8 <= total_len`.
-                    let rec_crc0 =
-                        (unsafe { *buf.as_ptr().add(w6_off0).cast::<u64>() } >> 32) as u32;
-                    // SAFETY: `buf` is >= 8-byte aligned and `w6_off1 + 8 <= total_len`.
-                    let rec_crc1 =
-                        (unsafe { *buf.as_ptr().add(w6_off1).cast::<u64>() } >> 32) as u32;
-                    let s0 = crc32_anchor_stamp_contrib_128b(rec_crc0);
-                    let s1 = crc32_anchor_stamp_contrib_128b(rec_crc1);
-                    crc = crc32_step_l16(crc) ^ crc32_step_l8(s0) ^ s1;
-                    idx += 2;
-                }
-                if idx < num_crystals {
-                    let w6_off = off_crystals + idx * size_of::<PhaseAnchorRecord>() + 48;
-                    // SAFETY: `buf` is >= 8-byte aligned and `w6_off + 8 <= total_len`.
-                    let rec_crc = (unsafe { *buf.as_ptr().add(w6_off).cast::<u64>() } >> 32) as u32;
-                    crc = crc32_fold_stamped_anchor_128b(crc, rec_crc);
-                }
-                let mut rem_off = after_crystals;
-                if rem_off + 64 <= total_len {
-                    // SAFETY: `buf` is 8-byte aligned and `rem_off + 64 <= total_len`.
-                    let w_pad = unsafe { &*buf.as_ptr().add(rem_off).cast::<[u64; 8]>() };
-                    if (((w_pad[0] | w_pad[1]) | (w_pad[2] | w_pad[3]))
-                        | ((w_pad[4] | w_pad[5]) | (w_pad[6] | w_pad[7])))
-                        == 0
-                    {
-                        crc = crc32_step_l4(crc);
-                        rem_off += 64;
-                    }
-                }
-                crc = update_aligned64_blocks_crc32_raw(crc, &buf[rem_off..total_len]);
-                return !crc;
-            }
+        if let Some(bloom) = bloom_opt {
+            let off = cursor;
+            let len = size_of::<ContrastivePhaseBloomFilter>();
+            let end = off + len;
+            bloom.write_unaligned_to(buf, off)?;
+            let crc = compute_aligned64_payload_crc32_ieee(
+                buf.get(off..end).ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?,
+            );
+            let entry = LmnkSectionEntry {
+                kind: LMNK_SECTION_BLOOM_FILTER,
+                flags: 0,
+                offset: off as u32,
+                length: len as u32,
+                payload_crc32: crc,
+            };
+            let entry_off = LMNK_CONTAINER_HEADER_BYTES + sec_idx * LMNK_SECTION_ENTRY_BYTES;
+            buf.get_mut(entry_off..entry_off + LMNK_SECTION_ENTRY_BYTES)
+                .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?
+                .copy_from_slice(&entry.to_le_bytes());
+            sec_idx += 1;
+            cursor = align_up_64_checked(end).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         }
-        compute_aligned64_payload_crc32_ieee(&buf[hdr_size..total_len])
+
+        if let Some(ledger) = ledger_opt {
+            let off = cursor;
+            let len = size_of::<LedgerSlot>();
+            let end = off + len;
+            ledger.write_unaligned_to(buf, off)?;
+            let crc = compute_aligned64_payload_crc32_ieee(
+                buf.get(off..end).ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?,
+            );
+            let entry = LmnkSectionEntry {
+                kind: LMNK_SECTION_LEDGER_SLOT,
+                flags: 0,
+                offset: off as u32,
+                length: len as u32,
+                payload_crc32: crc,
+            };
+            let entry_off = LMNK_CONTAINER_HEADER_BYTES + sec_idx * LMNK_SECTION_ENTRY_BYTES;
+            buf.get_mut(entry_off..entry_off + LMNK_SECTION_ENTRY_BYTES)
+                .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?
+                .copy_from_slice(&entry.to_le_bytes());
+            sec_idx += 1;
+            cursor = align_up_64_checked(end).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+        }
+
+        if !provenance_reports.is_empty() {
+            let off = cursor;
+            let len = core::mem::size_of_val(provenance_reports);
+            let end = off + len;
+            CausalProvenanceReport::write_unaligned_slice_to(provenance_reports, buf, off)?;
+            let crc = compute_aligned64_payload_crc32_ieee(
+                buf.get(off..end).ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?,
+            );
+            let entry = LmnkSectionEntry {
+                kind: LMNK_SECTION_CAUSAL_PROVENANCE,
+                flags: 0,
+                offset: off as u32,
+                length: len as u32,
+                payload_crc32: crc,
+            };
+            let entry_off = LMNK_CONTAINER_HEADER_BYTES + sec_idx * LMNK_SECTION_ENTRY_BYTES;
+            buf.get_mut(entry_off..entry_off + LMNK_SECTION_ENTRY_BYTES)
+                .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?
+                .copy_from_slice(&entry.to_le_bytes());
+        }
+
+        let hdr = init_container_header(
+            container_flags,
+            total_len as u64,
+            timestamp_epoch_sec,
+            sec_count as u16,
+        );
+        buf.get_mut(..LMNK_CONTAINER_HEADER_BYTES)
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?
+            .copy_from_slice(&hdr.to_le_bytes());
+        Ok(total_len)
     }
 }
 
 const _: () = {
     assert!(size_of::<MappedStorageEngine>() == 64);
     assert!(align_of::<MappedStorageEngine>() == 64);
-    assert!(offset_of!(MappedStorageEngine, descriptor) == 0);
+    assert!(offset_of!(MappedStorageEngine, file_size_bytes) == 0);
+    assert!(offset_of!(MappedStorageEngine, flags) == 8);
+    assert!(offset_of!(MappedStorageEngine, topology_crc32) == 12);
+    assert!(offset_of!(MappedStorageEngine, reserved) == 16);
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::foundation::AlignedBuffer64;
-    use crate::liminal::MAX_ATTENTION_HEADS;
+    use crate::foundation::{AlignedBuffer128, AlignedBuffer64};
+    use crate::liminal::{LMNK_ERR_ALIGNMENT, MAX_ATTENTION_HEADS};
     use crate::runtime::gateway::CAUSAL_AXIS_SUBJECTIVE_PERSONA;
     use crate::stigmergy::ATTRACTOR_SLOT_PERSONA;
+
+    fn restamp_container_header_crc(buf: &mut [u8]) {
+        let crc = compute_crc32_ieee(&buf[0..60]);
+        buf[60..64].copy_from_slice(&crc.to_le_bytes());
+    }
+
+    #[test]
+    fn test_container_view_hardened_parsing_alignment_and_reserved_sections() {
+        let anchors = [
+            PhaseAnchorRecord::new_empty(11, ATTRACTOR_SLOT_PERSONA, 0x1000),
+            PhaseAnchorRecord::new_empty(22, ATTRACTOR_SLOT_PERSONA, 0x2000),
+        ];
+        let trails = [PointerTrail::default()];
+        let bloom = ContrastivePhaseBloomFilter::new();
+        let ledger = LedgerSlot::default();
+        let reports = [CausalProvenanceReport::default()];
+
+        let req_len = LmnkContainerView::required_standard_byte_len(
+            anchors.len(),
+            trails.len(),
+            true,
+            true,
+            reports.len(),
+        )
+        .unwrap();
+        let mut aligned = AlignedBuffer128::<u8, 2048>::new([0u8; 2048]);
+        let written = LmnkContainerView::write_standard_sections_to_bytes(
+            LMNK_CONTAINER_FLAG_COMPILED_CACHE,
+            &anchors,
+            &trails,
+            Some(&bloom),
+            Some(&ledger),
+            &reports,
+            1_774_900_000,
+            &mut aligned.data[..req_len],
+        )
+        .unwrap();
+        assert_eq!(written, req_len);
+
+        // Aligned zero-copy parse succeeds and yields typed slices.
+        let valid_view = LmnkContainerView::parse(&aligned.data[..written]).unwrap();
+        assert_eq!(
+            valid_view.header().topology_crc32,
+            CORE_TOPOLOGY.topology_crc32
+        );
+        assert_eq!(valid_view.sections().len(), 5);
+        assert_eq!(valid_view.phase_anchors_zero_copy().unwrap().len(), 2);
+        assert_eq!(valid_view.pointer_trails_zero_copy().unwrap().len(), 1);
+        assert!(valid_view.bloom_filter_zero_copy().unwrap().is_some());
+        assert!(valid_view.ledger_slot_zero_copy().unwrap().is_some());
+        assert_eq!(valid_view.causal_provenance_zero_copy().unwrap().len(), 1);
+
+        // Intentionally 1-byte-misaligned slice: parse succeeds, zero-copy typed slice returns LMNK_ERR_ALIGNMENT,
+        // while section_bytes() and read_phase_anchor() succeed cleanly!
+        let mut unaligned_backing = alloc::vec![0u8; written + 2];
+        unaligned_backing[1..1 + written].copy_from_slice(&aligned.data[..written]);
+        let misaligned = &unaligned_backing[1..1 + written];
+        let mis_view = LmnkContainerView::parse(misaligned).unwrap();
+        assert_eq!(mis_view.phase_anchors_zero_copy(), Err(LMNK_ERR_ALIGNMENT));
+        assert_eq!(mis_view.pointer_trails_zero_copy(), Err(LMNK_ERR_ALIGNMENT));
+        assert_eq!(mis_view.bloom_filter_zero_copy(), Err(LMNK_ERR_ALIGNMENT));
+        assert_eq!(mis_view.ledger_slot_zero_copy(), Err(LMNK_ERR_ALIGNMENT));
+        assert_eq!(
+            mis_view
+                .section_bytes(LMNK_SECTION_PHASE_ANCHORS)
+                .unwrap()
+                .len(),
+            256
+        );
+        assert_eq!(mis_view.read_phase_anchor(0).unwrap().anchor_id, 11);
+        assert_eq!(mis_view.read_phase_anchor(1).unwrap().anchor_id, 22);
+
+        // Reserved ContentHash (0xFF01) & Signature (0xFF02) sections accepted cleanly.
+        let digest = [0xABu8; 32];
+        let sig = [0xCDu8; 64];
+        let sec_inputs = [
+            LmnkSectionInput {
+                kind: LMNK_SECTION_CONTENT_HASH,
+                flags: 0,
+                payload: &digest,
+            },
+            LmnkSectionInput {
+                kind: LMNK_SECTION_SIGNATURE,
+                flags: 0,
+                payload: &sig,
+            },
+        ];
+        let sec_len = required_container_byte_len(&sec_inputs).unwrap();
+        let mut sec_buf = alloc::vec![0u8; sec_len];
+        write_container_sections_to_bytes(
+            LMNK_CONTAINER_FLAG_PORTABLE_PACKAGE,
+            1_774_900_000,
+            &sec_inputs,
+            &mut sec_buf,
+        )
+        .unwrap();
+        let sec_view = LmnkContainerView::parse(&sec_buf).unwrap();
+        assert_eq!(
+            sec_view.section_bytes(LMNK_SECTION_CONTENT_HASH),
+            Some(&digest[..])
+        );
+        assert_eq!(
+            sec_view.section_bytes(LMNK_SECTION_SIGNATURE),
+            Some(&sig[..])
+        );
+
+        // Fault injection suite (zero panics):
+        // 1. Truncated buffer
+        assert_eq!(
+            LmnkContainerView::parse(&aligned.data[..63]),
+            Err(LMNK_ERR_BUFFER_TOO_SMALL)
+        );
+        // 2. total_size mismatch
+        let mut bad = aligned.data[..written].to_vec();
+        bad[16..24].copy_from_slice(&((written as u64) + 64).to_le_bytes());
+        restamp_container_header_crc(&mut bad);
+        assert_eq!(
+            LmnkContainerView::parse(&bad),
+            Err(LMNK_ERR_CONTAINER_CORRUPTED)
+        );
+        // 3. Bad magic
+        let mut bad = aligned.data[..written].to_vec();
+        bad[0] ^= 0xFF;
+        assert_eq!(
+            LmnkContainerView::parse(&bad),
+            Err(LMNK_ERR_CONTAINER_CORRUPTED)
+        );
+        // 4. Bad version
+        let mut bad = aligned.data[..written].to_vec();
+        bad[4..8].copy_from_slice(&0x0000_0103u32.to_le_bytes());
+        assert_eq!(
+            LmnkContainerView::parse(&bad),
+            Err(LMNK_ERR_VERSION_MISMATCH)
+        );
+        // 5. Corrupt header CRC32
+        let mut bad = aligned.data[..written].to_vec();
+        bad[60] ^= 0xFF;
+        assert_eq!(
+            LmnkContainerView::parse(&bad),
+            Err(LMNK_ERR_CONTAINER_CORRUPTED)
+        );
+        // 6. Mismatched topology_crc32 (with valid header_crc32) -> LMNK_ERR_TOPOLOGY_MISMATCH
+        let mut bad = aligned.data[..written].to_vec();
+        bad[8..12].copy_from_slice(&(CORE_TOPOLOGY.topology_crc32 ^ 0x1234_5678).to_le_bytes());
+        restamp_container_header_crc(&mut bad);
+        assert_eq!(
+            LmnkContainerView::parse(&bad),
+            Err(LMNK_ERR_TOPOLOGY_MISMATCH)
+        );
+        // 7. section_count > 32
+        let mut bad = aligned.data[..written].to_vec();
+        bad[36..38].copy_from_slice(&33u16.to_le_bytes());
+        restamp_container_header_crc(&mut bad);
+        assert_eq!(
+            LmnkContainerView::parse(&bad),
+            Err(LMNK_ERR_CONTAINER_CORRUPTED)
+        );
+        // 8. length == 0
+        let mut bad = aligned.data[..written].to_vec();
+        bad[64 + 8..64 + 12].copy_from_slice(&0u32.to_le_bytes());
+        assert_eq!(
+            LmnkContainerView::parse(&bad),
+            Err(LMNK_ERR_CONTAINER_CORRUPTED)
+        );
+        // 9. Duplicate section kind
+        let mut bad = aligned.data[..written].to_vec();
+        bad[64 + 16..64 + 18].copy_from_slice(&LMNK_SECTION_PHASE_ANCHORS.to_le_bytes());
+        assert_eq!(
+            LmnkContainerView::parse(&bad),
+            Err(LMNK_ERR_CONTAINER_CORRUPTED)
+        );
+        // 10. Unaligned section offset (offset % 64 != 0)
+        let mut bad = aligned.data[..written].to_vec();
+        let orig_off = u32::from_le_bytes([bad[64 + 4], bad[64 + 5], bad[64 + 6], bad[64 + 7]]);
+        bad[64 + 4..64 + 8].copy_from_slice(&(orig_off + 8).to_le_bytes());
+        assert_eq!(
+            LmnkContainerView::parse(&bad),
+            Err(LMNK_ERR_CONTAINER_CORRUPTED)
+        );
+        // 11. Overlapping / out-of-order sections (second section offset == first section offset)
+        let mut bad = aligned.data[..written].to_vec();
+        bad[64 + 16 + 4..64 + 16 + 8].copy_from_slice(&orig_off.to_le_bytes());
+        assert_eq!(
+            LmnkContainerView::parse(&bad),
+            Err(LMNK_ERR_CONTAINER_CORRUPTED)
+        );
+        // 12. Integer-overflowing offset + length
+        let mut bad = aligned.data[..written].to_vec();
+        bad[64 + 8..64 + 12].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(
+            LmnkContainerView::parse(&bad),
+            Err(LMNK_ERR_CONTAINER_CORRUPTED)
+        );
+        // 13. Corrupt payload CRC32
+        let mut bad = aligned.data[..written].to_vec();
+        bad[orig_off as usize] ^= 0x01;
+        assert_eq!(
+            LmnkContainerView::parse(&bad),
+            Err(LMNK_ERR_CONTAINER_CORRUPTED)
+        );
+    }
 
     #[test]
     fn test_mapped_storage_engine_phase_packet_and_gop_seek() {

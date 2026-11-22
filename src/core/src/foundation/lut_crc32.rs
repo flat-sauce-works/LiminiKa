@@ -315,7 +315,7 @@ pub(crate) const Q7_FULL_SIN_REF: &[f32; 256] = &Q7_FULL_SIN_LUT.0;
 /// Promoted `.rodata` reference to the 64B-aligned 256-entry `cos` Q7 table.
 pub(crate) const Q7_FULL_COS_REF: &[f32; 256] = &Q7_FULL_COS_LUT.0;
 
-/// 64B-aligned 2KB precomputed `(align_gain, inv_denom)` table for [`branchless_phase_proximity_gravity_f32`]
+/// 64B-aligned 2KB precomputed `(align_gain, inv_denom)` table for [`crate::foundation::scalar_math::branchless_phase_proximity_gravity_f32`]
 /// under `DEFAULT_PHASE_GRAVITY_EPS` (`0.25`) across all 256 Q7 circular difference bytes `0..=255`,
 /// enabling 0-ULP bit-exact gravity evaluation in 1 LUT load + 2 `vmulss` (`0` Newton-Raphson iterations).
 pub(crate) const Q7_DEFAULT_GRAVITY_PAIR_LUT_256: AlignedLut256<(f32, f32)> = {
@@ -572,6 +572,7 @@ pub(crate) const CRC32_IEEE_L16_LUT: AlignedLut4x256<u32> = {
 };
 
 /// 64B-aligned 4KB GF(2) operator table for $L^{32}(x) = L^{16}(L^{16}(x))$ (`512`-byte / 4-record zero-shift).
+#[allow(dead_code)]
 pub(crate) const CRC32_IEEE_L32_LUT: AlignedLut4x256<u32> = {
     let mut lut = [[0u32; 256]; 4];
     let mut byte_pos = 0usize;
@@ -592,6 +593,7 @@ pub(crate) const CRC32_IEEE_L8_REF: &[[u32; 256]; 4] = &CRC32_IEEE_L8_LUT.0;
 /// Promoted `.rodata` reference to the 4KB $L^{16}(x)$ 256-byte shift table.
 pub(crate) const CRC32_IEEE_L16_REF: &[[u32; 256]; 4] = &CRC32_IEEE_L16_LUT.0;
 /// Promoted `.rodata` reference to the 4KB $L^{32}(x)$ 512-byte shift table.
+#[allow(dead_code)]
 pub(crate) const CRC32_IEEE_L32_REF: &[[u32; 256]; 4] = &CRC32_IEEE_L32_LUT.0;
 
 #[inline(always)]
@@ -643,6 +645,7 @@ pub(crate) const fn crc32_step_l16(x: u32) -> u32 {
         ^ (lut[2][((x >> 16) & 0xFF) as usize] ^ lut[3][(x >> 24) as usize])
 }
 
+#[allow(dead_code)]
 #[inline(always)]
 pub(crate) const fn crc32_step_l32(x: u32) -> u32 {
     let lut = CRC32_IEEE_L32_REF;

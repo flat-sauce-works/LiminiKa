@@ -4,6 +4,8 @@
 //! RAM-resident Q7 phase KV keyframe cache ([`RamPhaseKvCache`]), entropy-driven GOP cache
 //! ([`RamPhaseKvGopCache`]), and spillover horizon slot ([`ResidualSpilloverHorizonSlot`]).
 
+use core::mem::{align_of, offset_of, size_of};
+
 use super::slots::{HorizonEscalationProvider, HorizonEscalationRequest, LatentHorizonSlot};
 use super::*;
 use crate::drivers::{
@@ -16,10 +18,11 @@ use crate::foundation::{
     swar_q7_abs_u8_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
     swar_q7_scale_le128_with_bias_x8, swar_words_nonzero_64, words_to_q7_array_64,
     KvMotionDeltaPacket, RawPhaseProjectable, ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE,
+    ATTRACTOR_SLOT_ID_MASK,
 };
 use crate::liminal::{
-    branchless_select_f32, BitCut32, Lacuna, LmnkResult, PhaseQ7, LMNK_ERR_INVALID_ARGUMENT,
-    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    branchless_select_f32, BitCut32, Lacuna, LmnkResult, PhaseQ7, LMNK_ERR_CONTAINER_CORRUPTED,
+    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::runtime::context::CoreStateStack;
 use crate::runtime::gateway::{
@@ -33,43 +36,67 @@ use crate::stigmergy::{
     DissipativeOverflowReport, PheromoneDensityOps, ATTRACTOR_SLOT_KNOWLEDGE,
 };
 
-/// 192-byte (`#[repr(C, align(64))]`) host-RAM entry pairing a compressed 128-byte
-/// [`KvKeyframePacket`] (64-head Q7 KV-phase anchor) with an 8-byte [`CognitiveTrajectoryLedger`]
-/// and [`CognitiveCircuitActivation`], acting as a zero-VRAM associative context KV cache slot.
+/// 128-byte (2 cache lines, `#[repr(C, align(64))]`, zero implicit padding) host-RAM entry
+/// pairing full associative/circular metadata, [`CognitiveTrajectoryLedger`], and
+/// [`CognitiveCircuitActivation`] in CL0 (`0..64`) with a 64-head Q7 phase anchor profile in
+/// CL1 (`64..128`), acting as a zero-VRAM associative context KV cache slot.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RamPhaseKvEntry {
-    /// Compressed 128-byte I-Frame KV-phase anchor (`offset 0..128`).
-    pub keyframe: KvKeyframePacket,
-    /// Cognitive trajectory active when this context chunk was crystallized (`offset 128..136`).
-    pub circuit: CognitiveTrajectoryLedger,
-    /// Stigmergic cognitive circuit activation recorded at storage time (`offset 136..144`).
-    pub last_activation: CognitiveCircuitActivation,
-    /// Deterministic 64-bit context chunk key (`0` indicates an empty slot, `offset 144..152`).
+    /// Deterministic 64-bit context chunk key (`0` indicates an empty slot, `offset 0..8`).
     pub context_hash: u64,
-    /// Number of cache hits / associative recalls (`offset 152..156`).
-    pub reuse_count: u32,
-    /// Monotonic logical epoch of the most recent store or hit (`offset 156..160`).
-    pub last_used_epoch: u32,
-    /// Shared pheromone density updated via [`PheromoneDensityOps`] (`offset 160..164`).
+    /// Cognitive trajectory active when this context chunk was crystallized (`offset 8..16`).
+    pub circuit: CognitiveTrajectoryLedger,
+    /// Stigmergic cognitive circuit activation recorded at storage time (`offset 16..24`).
+    pub last_activation: CognitiveCircuitActivation,
+    /// Mean resultant vector length $\bar{R}_c \in [0, 1]$ (`offset 24..28`).
+    pub composite_vector_length: f32,
+    /// Concentration parameter $\kappa_c$ for von Mises phase distribution (`offset 28..32`).
+    pub von_mises_kappa: f32,
+    /// Scalar residual magnitude / resultant phase angle $\bar{\theta}_c$ (`offset 32..36`).
+    pub sparse_scalar_residual: f32,
+    /// Shared pheromone density updated via [`PheromoneDensityOps`] (`offset 36..40`).
     pub pheromone_density: f32,
-    /// Reserved zero padding aligning the entry to 3 cachelines (`192` bytes, `offset 164..192`).
-    pub reserved_pad: [u8; 28],
+    /// Absolute token position index in sequence (`offset 40..44`).
+    pub token_index: u32,
+    /// Monotonic logical epoch of the most recent store or hit (`offset 44..48`).
+    pub last_used_epoch: u32,
+    /// IEEE 802.3 CRC32 checksum of `anchor_phases` (`offset 48..52`).
+    pub crc32: u32,
+    /// Causal provenance flags (`offset 52..56`).
+    pub lineage_flags: u32,
+    /// Saturating count of cache hits / associative recalls (`offset 56..58`).
+    pub reuse_count: u16,
+    /// Macro Toroidal $k$-Means `cluster_id` (`offset 58..60`).
+    pub cluster_id: u16,
+    /// Dynamic entropy-driven GOP length between keyframes (`offset 60`).
+    pub gop_length: u8,
+    /// Packed `frame_type` (low 4 bits) and working-lane `slot_id` (high 4 bits) (`offset 61`).
+    pub frame_and_slot: u8,
+    /// Number of valid P-Frames stored in this slot's GOP ring (`offset 62`).
+    pub pframe_count: u8,
+    /// Next write index in this slot's GOP P-Frame ring (`offset 63`).
+    pub pframe_head: u8,
+    /// 64-head Q7 KV-phase anchor profile on $SO(2)^{64}$ (`offset 64..128`).
+    pub anchor_phases: [PhaseQ7; MAX_ATTENTION_HEADS],
 }
+
+const _: () = {
+    assert!(size_of::<RamPhaseKvEntry>() == 128);
+    assert!(align_of::<RamPhaseKvEntry>() == 64);
+    assert!(offset_of!(RamPhaseKvEntry, context_hash) == 0);
+    assert!(offset_of!(RamPhaseKvEntry, sparse_scalar_residual) == 32);
+    assert!(offset_of!(RamPhaseKvEntry, crc32) == 48);
+    assert!(offset_of!(RamPhaseKvEntry, lineage_flags) == 52);
+    assert!(offset_of!(RamPhaseKvEntry, pframe_count) == 62);
+    assert!(offset_of!(RamPhaseKvEntry, pframe_head) == 63);
+    assert!(offset_of!(RamPhaseKvEntry, anchor_phases) == 64);
+};
 
 impl Default for RamPhaseKvEntry {
     #[inline(always)]
     fn default() -> Self {
-        Self {
-            keyframe: KvKeyframePacket::default(),
-            circuit: CognitiveTrajectoryLedger::new(),
-            last_activation: CognitiveCircuitActivation::default(),
-            context_hash: 0,
-            reuse_count: 0,
-            last_used_epoch: 0,
-            pheromone_density: 0.0,
-            reserved_pad: [0u8; 28],
-        }
+        Self::new_empty()
     }
 }
 
@@ -86,6 +113,161 @@ impl PheromoneDensityOps for RamPhaseKvEntry {
 }
 
 impl RamPhaseKvEntry {
+    /// Constructs a zero-initialized [`RamPhaseKvEntry`] with default `gop_length = 1`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn new_empty() -> Self {
+        Self {
+            context_hash: 0,
+            circuit: CognitiveTrajectoryLedger::new(),
+            last_activation: CognitiveCircuitActivation {
+                peel_gate_q7: 0,
+                fuse_gate_q7: 0,
+                repulse_sensitivity_q7: 0,
+                selected_op: 0,
+                preferred_next_scale: 0,
+                intensity_q7: 0,
+                circuit_resonance_q7: 0,
+                trajectory_depth: 0,
+            },
+            composite_vector_length: 0.0,
+            von_mises_kappa: 0.0,
+            sparse_scalar_residual: 0.0,
+            pheromone_density: 0.0,
+            token_index: 0,
+            last_used_epoch: 0,
+            crc32: 0,
+            lineage_flags: 0,
+            reuse_count: 0,
+            cluster_id: 0,
+            gop_length: 1,
+            frame_and_slot: 0,
+            pframe_count: 0,
+            pframe_head: 0,
+            anchor_phases: [0; MAX_ATTENTION_HEADS],
+        }
+    }
+
+    /// Packs `frame_type` (`0..=15`) into the low nibble and `slot_id` (`0..=15`) into the high nibble.
+    #[inline(always)]
+    #[must_use]
+    pub const fn pack_frame_and_slot(frame_type: u8, slot_id: u8) -> u8 {
+        (frame_type & 0x0F) | ((slot_id & 0x0F) << 4)
+    }
+
+    /// Extracts the 4-bit frame classification (`0` = I-Frame, `1` = P-Frame).
+    #[inline(always)]
+    #[must_use]
+    pub const fn frame_type(&self) -> u8 {
+        self.frame_and_slot & 0x0F
+    }
+
+    /// Extracts the 3-bit working-lane `slot_id` (`0..=7`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn slot_id(&self) -> u8 {
+        (self.frame_and_slot >> 4) & ATTRACTOR_SLOT_ID_MASK
+    }
+
+    /// Updates `frame_and_slot` from `frame_type` and `slot_id`.
+    #[inline(always)]
+    pub const fn set_frame_and_slot(&mut self, frame_type: u8, slot_id: u8) {
+        self.frame_and_slot = Self::pack_frame_and_slot(frame_type, slot_id);
+    }
+
+    /// Verifies that `frame_type() == 0` (I-Frame) and that `crc32` matches `anchor_phases`
+    /// when non-zero.
+    ///
+    /// # Errors
+    /// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if integrity verification fails.
+    #[inline(always)]
+    pub const fn verify_integrity(&self) -> LmnkResult<()> {
+        if self.frame_type() != 0 {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        }
+        if self.crc32 != 0
+            && KvKeyframePacket::compute_anchor_crc32(&self.anchor_phases) != self.crc32
+        {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        }
+        Ok(())
+    }
+
+    /// Exports this compact 128 B slot to an external 128 B [`KvKeyframePacket`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn to_keyframe_packet(&self) -> KvKeyframePacket {
+        KvKeyframePacket::new(
+            self.token_index,
+            self.gop_length as u32,
+            self.composite_vector_length,
+            self.von_mises_kappa,
+            self.sparse_scalar_residual,
+            self.lineage_flags,
+            self.cluster_id as u32,
+            self.slot_id(),
+            self.anchor_phases,
+        )
+    }
+
+    /// Constructs a compact 128 B [`RamPhaseKvEntry`] from a verified [`KvKeyframePacket`].
+    ///
+    /// # Errors
+    /// Propagates [`KvKeyframePacket::verify_integrity`] errors.
+    #[inline]
+    pub const fn from_keyframe_packet(
+        packet: &KvKeyframePacket,
+        context_hash: u64,
+        circuit: CognitiveTrajectoryLedger,
+        last_activation: CognitiveCircuitActivation,
+        epoch: u32,
+    ) -> LmnkResult<Self> {
+        if let Err(err) = packet.verify_integrity() {
+            return Err(err);
+        }
+        let gop_u8 = if packet.header.gop_length == 0 {
+            1
+        } else if packet.header.gop_length > u8::MAX as u32 {
+            u8::MAX
+        } else {
+            packet.header.gop_length as u8
+        };
+        let cid = packet.cluster_id();
+        let cluster_u16 = if cid > u16::MAX as u32 {
+            u16::MAX
+        } else {
+            cid as u16
+        };
+        let crc = packet.payload_crc32();
+        Ok(Self {
+            context_hash,
+            circuit,
+            last_activation,
+            composite_vector_length: packet.header.composite_vector_length,
+            von_mises_kappa: packet.header.von_mises_kappa,
+            sparse_scalar_residual: packet.header.sparse_scalar_residual,
+            pheromone_density: 1.0,
+            token_index: packet.header.token_index,
+            last_used_epoch: epoch,
+            crc32: if crc != 0 {
+                crc
+            } else {
+                KvKeyframePacket::compute_anchor_crc32(&packet.anchor_phases)
+            },
+            lineage_flags: packet.lineage_flags(),
+            reuse_count: 0,
+            cluster_id: cluster_u16,
+            gop_length: gop_u8,
+            frame_and_slot: Self::pack_frame_and_slot(
+                packet.header.frame_type as u8,
+                packet.slot_id(),
+            ),
+            pframe_count: 0,
+            pframe_head: 0,
+            anchor_phases: packet.anchor_phases,
+        })
+    }
+
     /// Returns `true` when this slot holds a populated context keyframe (`context_hash != 0`).
     #[inline(always)]
     #[must_use]
@@ -104,17 +286,12 @@ impl RamPhaseKvEntry {
         r_bar: f32,
     ) -> Self {
         Self {
-            keyframe: KvKeyframePacket::new(
-                self.keyframe.header.token_index.wrapping_add(token_shift),
-                self.keyframe.header.gop_length,
-                r_bar,
-                1.0 + r_bar * 4.0,
-                0.0,
-                self.keyframe.lineage_flags(),
-                self.keyframe.cluster_id(),
-                self.keyframe.slot_id(),
-                restored_phases,
-            ),
+            token_index: self.token_index.wrapping_add(token_shift),
+            composite_vector_length: r_bar,
+            von_mises_kappa: 1.0 + r_bar * 4.0,
+            sparse_scalar_residual: 0.0,
+            crc32: KvKeyframePacket::compute_anchor_crc32(&restored_phases),
+            anchor_phases: restored_phases,
             ..*self
         }
     }
@@ -123,36 +300,36 @@ impl RamPhaseKvEntry {
 impl RawPhaseProjectable for RamPhaseKvEntry {
     #[inline(always)]
     fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
-        self.keyframe.anchor_phases
+        self.anchor_phases
     }
 
     #[inline(always)]
     fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
-        load_q7_words_64(&self.keyframe.anchor_phases)
+        load_q7_words_64(&self.anchor_phases)
     }
 }
 
 impl CausalProvenanceSignal for RamPhaseKvEntry {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
-        self.keyframe.lineage_flags() | self.circuit.causal_provenance_bits()
+        self.lineage_flags | self.circuit.causal_provenance_bits()
     }
 }
 
 impl CognitiveGroundingSignal for RamPhaseKvEntry {
     #[inline(always)]
     fn project_grounding_phases_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
-        self.keyframe.anchor_phases
+        self.anchor_phases
     }
 
     #[inline(always)]
     fn grounding_base_energy(&self) -> f32 {
-        (1.0 + self.keyframe.header.composite_vector_length).clamp(0.5, 4.0)
+        (1.0 + self.composite_vector_length).clamp(0.5, 4.0)
     }
 
     #[inline(always)]
     fn grounding_anchor_id(&self) -> u32 {
-        self.keyframe.cluster_id()
+        u32::from(self.cluster_id)
     }
 }
 
@@ -165,7 +342,7 @@ impl ManifoldGatewaySignal for RamPhaseKvEntry {
     }
 }
 
-/// Trait governing host-RAM-resident compressed KV-phase caching (`KvKeyframePacket` +
+/// Trait governing host-RAM-resident compressed KV-phase caching (`128 B` [`RamPhaseKvEntry`] +
 /// `CognitiveTrajectoryLedger`), allowing CPU/RAM capacity to absorb long-context memory
 /// without expanding GPU VRAM or triggering disk I/O.
 pub trait RamPhaseKvCacheOps {
@@ -203,17 +380,9 @@ pub trait RamPhaseKvCacheOps {
             c += 1;
         }
         let r_bar_approx = ((norm_approx as f32) / (8.0 * 127.0)).clamp(0.0, 1.0);
-        let keyframe = KvKeyframePacket::new(
-            token_index,
-            1,
-            r_bar_approx,
-            1.0 + r_bar_approx * 4.0,
-            0.0,
-            CAUSAL_AXIS_OBJECTIVE_FACT | circuit.causal_provenance_bits(),
-            anchor_id,
-            ATTRACTOR_SLOT_KNOWLEDGE,
-            *phases,
-        );
+        let crc32 = KvKeyframePacket::compute_anchor_crc32(phases);
+        let lineage_flags = CAUSAL_AXIS_OBJECTIVE_FACT | circuit.causal_provenance_bits();
+        let cluster_id = anchor_id.min(u32::from(u16::MAX)) as u16;
 
         let mut target_idx = 0usize;
         let mut oldest_epoch = u32::MAX;
@@ -243,14 +412,24 @@ pub trait RamPhaseKvCacheOps {
             0
         };
         entries[target_idx] = RamPhaseKvEntry {
-            keyframe,
+            context_hash,
             circuit,
             last_activation: activation,
-            context_hash,
-            reuse_count: prev_reuse,
-            last_used_epoch: epoch,
+            composite_vector_length: r_bar_approx,
+            von_mises_kappa: 1.0 + r_bar_approx * 4.0,
+            sparse_scalar_residual: 0.0,
             pheromone_density: 1.0,
-            reserved_pad: [0u8; 28],
+            token_index,
+            last_used_epoch: epoch,
+            crc32,
+            lineage_flags,
+            reuse_count: prev_reuse,
+            cluster_id,
+            gop_length: 1,
+            frame_and_slot: RamPhaseKvEntry::pack_frame_and_slot(0, ATTRACTOR_SLOT_KNOWLEDGE),
+            pframe_count: 0,
+            pframe_head: 0,
+            anchor_phases: *phases,
         };
     }
 
@@ -346,7 +525,7 @@ pub trait RamPhaseKvCacheOps {
                 return Some((i, true, 127));
             }
             if query_nonzero {
-                let e_words = load_q7_words_64(&entries[i].keyframe.anchor_phases);
+                let e_words = load_q7_words_64(&entries[i].anchor_phases);
                 let res_q7 = if swar_words_nonzero_64(&e_words) {
                     let cos = tangent_cosine_active_heads_64(
                         query_words,
@@ -411,22 +590,18 @@ pub trait RamPhaseKvCacheOps {
         if !entry.is_occupied() {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        entry.keyframe.verify_integrity()?;
-        encode_pframe_motion_delta_64(
-            &entry.keyframe.anchor_phases,
-            curr_phases,
-            phase_step_min_q7,
-        )
+        entry.verify_integrity()?;
+        encode_pframe_motion_delta_64(&entry.anchor_phases, curr_phases, phase_step_min_q7)
     }
 
     /// Executes Zero-Forward Seek on `slot_idx` by replaying `pframes[..seek_steps]` onto the
-    /// slot's verified I-Frame [`KvKeyframePacket`], updating LRU metadata and returning
+    /// slot's verified I-Frame [`RamPhaseKvEntry`], updating LRU metadata and returning
     /// `(restored_phases, joint_log_prob, r_bar, repulsed_count)`.
     ///
     /// # Errors
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `slot_idx` is out of bounds / unoccupied,
     /// `seek_steps > pframes.len()`, `phase_step_min_q7 > 127`, or `contradiction_threshold` is
-    /// non-finite; propagates [`KvKeyframePacket::verify_integrity`] errors on corrupted frames.
+    /// non-finite; propagates [`RamPhaseKvEntry::verify_integrity`] errors on corrupted frames.
     #[inline]
     fn seek_slot_with_pframes(
         &mut self,
@@ -442,9 +617,9 @@ pub trait RamPhaseKvCacheOps {
         if !entry.is_occupied() {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        entry.keyframe.verify_integrity()?;
+        entry.verify_integrity()?;
         let (filt_w, clean_lp, repulsed_count) = seek_pframe_chain_words_64(
-            &entry.keyframe.anchor_phases,
+            &entry.anchor_phases,
             pframes,
             seek_steps,
             phase_step_min_q7,
@@ -501,11 +676,11 @@ impl RamPhaseKvCacheOps for [RamPhaseKvEntry] {
     }
 }
 
-/// Fixed-capacity, cacheline-aligned host-RAM compressed KV-phase cache (`192 * N` bytes).
+/// Fixed-capacity, cacheline-aligned host-RAM compressed KV-phase cache (`128 * N` bytes).
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RamPhaseKvCache<const N: usize> {
-    /// Contiguous array of 192-byte compressed KV-phase + cognitive circuit slots.
+    /// Contiguous array of 128-byte compressed KV-phase + cognitive circuit slots.
     pub slots: [RamPhaseKvEntry; N],
 }
 
@@ -517,43 +692,12 @@ impl<const N: usize> Default for RamPhaseKvCache<N> {
 }
 
 impl<const N: usize> RamPhaseKvCache<N> {
-    /// Creates an empty [`RamPhaseKvCache`] of `N` slots (`192 * N` bytes).
+    /// Creates an empty [`RamPhaseKvCache`] of `N` slots (`128 * N` bytes).
     #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            slots: [RamPhaseKvEntry {
-                keyframe: KvKeyframePacket {
-                    header: crate::runtime::storage::KvKeyframeHeader {
-                        frame_type: 0,
-                        token_index: 0,
-                        gop_length: 1,
-                        composite_vector_length: 0.0,
-                        von_mises_kappa: 0.0,
-                        sparse_scalar_residual: 0.0,
-                        icache_payload_offset: 0,
-                        pcache_payload_offset: 0,
-                        reserved: [0; 24],
-                    },
-                    anchor_phases: [0; MAX_ATTENTION_HEADS],
-                },
-                circuit: CognitiveTrajectoryLedger::new(),
-                last_activation: CognitiveCircuitActivation {
-                    peel_gate_q7: 0,
-                    fuse_gate_q7: 0,
-                    repulse_sensitivity_q7: 0,
-                    selected_op: 0,
-                    preferred_next_scale: 0,
-                    intensity_q7: 0,
-                    circuit_resonance_q7: 0,
-                    trajectory_depth: 0,
-                },
-                context_hash: 0,
-                reuse_count: 0,
-                last_used_epoch: 0,
-                pheromone_density: 0.0,
-                reserved_pad: [0u8; 28],
-            }; N],
+            slots: [RamPhaseKvEntry::new_empty(); N],
         }
     }
 }
@@ -570,16 +714,16 @@ impl<const N: usize> RamPhaseKvCacheOps for RamPhaseKvCache<N> {
     }
 }
 
-/// Low-spec PC preset: 16 slots = 3,072 bytes (~3 KB, fits inside L1D alongside LUTs).
+/// Low-spec PC preset: 16 slots = 2,048 bytes (2 KB, fits inside L1D alongside LUTs).
 pub type LowSpecPhaseKvCache = RamPhaseKvCache<16>;
 
-/// Standard PC preset: 64 slots = 12,288 bytes (12 KB, comfortably inside L1D/L2).
+/// Standard PC preset: 64 slots = 8,192 bytes (8 KB, comfortably inside L1D/L2).
 pub type StandardPhaseKvCache = RamPhaseKvCache<64>;
 
-/// High-capacity RAM / Zen 4 L2 preset: 256 slots = 49,152 bytes (48 KB, inside L2 1 MB).
+/// High-capacity RAM / Zen 4 L2 preset: 256 slots = 32,768 bytes (32 KB, inside L2 1 MB).
 pub type HighCapPhaseKvCache = RamPhaseKvCache<256>;
 
-/// Host-RAM compressed KV-phase GOP cache pairing `N` 192-byte I-Frame slots
+/// Host-RAM compressed KV-phase GOP cache pairing `N` 128-byte I-Frame slots
 /// ([`RamPhaseKvCache<N>`]) with per-slot fixed-capacity rings of `P` 64-byte P-Frame motion
 /// delta packets ([`KvMotionDeltaPacket`]), enabling Zero-Forward Seek context replay across
 /// extended multi-turn histories with zero heap allocation.
@@ -592,10 +736,6 @@ pub struct RamPhaseKvGopCache<const N: usize, const P: usize> {
     pub pframes: [[KvMotionDeltaPacket; P]; N],
     /// Last reconstructed/stored 64-head phase per slot (used to encode incremental P-Frame steps).
     pub last_phases: [[PhaseQ7; MAX_ATTENTION_HEADS]; N],
-    /// Number of valid P-Frames currently stored in each slot's ring (`<= P`).
-    pub pframe_counts: [u8; N],
-    /// Next write index in each slot's P-Frame ring (`< P`).
-    pub pframe_heads: [u8; N],
 }
 
 impl<const N: usize, const P: usize> Default for RamPhaseKvGopCache<N, P> {
@@ -616,8 +756,6 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
                 motion_deltas: [0; MAX_ATTENTION_HEADS],
             }; P]; N],
             last_phases: [[0; MAX_ATTENTION_HEADS]; N],
-            pframe_counts: [0; N],
-            pframe_heads: [0; N],
         }
     }
 
@@ -650,8 +788,8 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
         while idx < N {
             if self.base.slots[idx].context_hash == context_hash {
                 self.last_phases[idx] = *phases;
-                self.pframe_counts[idx] = 0;
-                self.pframe_heads[idx] = 0;
+                self.base.slots[idx].pframe_count = 0;
+                self.base.slots[idx].pframe_head = 0;
                 return Some(idx);
             }
             idx += 1;
@@ -681,12 +819,12 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
             curr_phases,
             phase_step_min_q7,
         )?;
-        let head = usize::from(self.pframe_heads[slot_idx]) % P;
+        let head = usize::from(self.base.slots[slot_idx].pframe_head) % P;
         self.pframes[slot_idx][head] = delta;
-        self.pframe_heads[slot_idx] = ((head + 1) % P) as u8;
-        let count = usize::from(self.pframe_counts[slot_idx]);
-        if count < P {
-            self.pframe_counts[slot_idx] = (count + 1) as u8;
+        self.base.slots[slot_idx].pframe_head = ((head + 1) % P) as u8;
+        let count = usize::from(self.base.slots[slot_idx].pframe_count);
+        if count < P && count < usize::from(u8::MAX) {
+            self.base.slots[slot_idx].pframe_count = (count + 1) as u8;
         }
         self.last_phases[slot_idx] = *curr_phases;
         self.base.slots[slot_idx].last_used_epoch = epoch;
@@ -700,7 +838,7 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
         if slot_idx >= N {
             0
         } else {
-            usize::from(self.pframe_counts[slot_idx])
+            usize::from(self.base.slots[slot_idx].pframe_count)
         }
     }
 
@@ -712,7 +850,7 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
         let mut i = 0usize;
         while i < N {
             if self.base.slots[i].is_occupied() {
-                total += usize::from(self.pframe_counts[i]);
+                total += usize::from(self.base.slots[i].pframe_count);
             }
             i += 1;
         }
@@ -735,12 +873,12 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
         if slot_idx >= N || !self.base.slots[slot_idx].is_occupied() {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        let count = usize::from(self.pframe_counts[slot_idx]).min(P);
+        let count = usize::from(self.base.slots[slot_idx].pframe_count).min(P);
         let mut ordered = [KvMotionDeltaPacket {
             motion_deltas: [0; MAX_ATTENTION_HEADS],
         }; P];
         if count > 0 && P > 0 {
-            let head = usize::from(self.pframe_heads[slot_idx]) % P;
+            let head = usize::from(self.base.slots[slot_idx].pframe_head) % P;
             let start = (head + P - count) % P;
             let mut k = 0usize;
             while k < count {
@@ -1005,7 +1143,7 @@ pub type HighCapPhaseKvGopCache = RamPhaseKvGopCache<256, 8>;
 /// resolved residual patterns only after post-step coherence recovery is confirmed.
 #[derive(Debug, Clone)]
 pub struct ResidualSpilloverHorizonSlot<const N: usize> {
-    /// Fixed-capacity Tier-1 host-RAM experience cache (`192 * N` bytes).
+    /// Fixed-capacity Tier-1 host-RAM experience cache (`128 * N` bytes).
     pub cache: RamPhaseKvCache<N>,
     /// Unique bitmask (`1 << k`) claimed inside `active_horizon_slots_mask` (default `1 << 1`).
     pub slot_bit: u32,
@@ -1223,7 +1361,7 @@ impl<const N: usize> LatentHorizonSlot for ResidualSpilloverHorizonSlot<N> {
             .cache
             .lookup_context_or_resonate(ctx_hash, &frame_w, 32, self.epoch)
         {
-            let cached_phases = self.cache.entries()[slot_idx].keyframe.anchor_phases;
+            let cached_phases = self.cache.entries()[slot_idx].anchor_phases;
             self.active_spillover_residual_q7 = cached_phases;
             let cached_w = load_q7_words_64(&cached_phases);
             for (dst, &cw) in frame_w.iter_mut().zip(cached_w.iter()) {
@@ -1293,7 +1431,7 @@ impl<const N: usize> HorizonEscalationProvider for ResidualSpilloverHorizonSlot<
                 .lookup_context_or_resonate(self.last_context_hash, &query_w, 32, self.epoch)
         {
             let entry = &self.cache.entries()[slot_idx];
-            *slot_phase_out = entry.keyframe.anchor_phases;
+            *slot_phase_out = entry.anchor_phases;
             let weight = branchless_clamp_f32(entry.pheromone_density(), 0.4, 2.0);
             return Ok(Some(weight));
         }

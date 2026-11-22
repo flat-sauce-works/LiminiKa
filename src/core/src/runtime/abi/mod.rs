@@ -75,7 +75,7 @@ use crate::liminal::{
 #[allow(unused_imports)]
 use crate::runtime::context::{
     init_default_config, query_capability, validate_config_invariants, Config, RuntimeContext,
-    CTX_ALLOC_HEAP_BOXED, CTX_ALLOC_IN_PLACE,
+    CTX_ALLOC_HEAP_BOXED, CTX_ALLOC_IN_PLACE, LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES,
 };
 #[allow(unused_imports)]
 use crate::runtime::gateway::{
@@ -89,8 +89,8 @@ use crate::runtime::gateway::{
 use crate::runtime::horizon::evaluate_epistemic_horizon_words_64;
 #[allow(unused_imports)]
 use crate::runtime::storage::{
-    finalize_snapshot_header_crc32, init_descriptor_header, init_snapshot_header,
-    validate_descriptor_header, validate_snapshot_header, verify_snapshot_payload_crc32,
+    init_container_header, init_descriptor_header, validate_descriptor_header,
+    write_container_sections_to_bytes, LmnkContainerView,
 };
 #[allow(unused_imports)]
 use crate::stigmergy::{
@@ -366,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn test_gateway_toroidal_kmeans_and_four_section_container_abi() {
+    fn test_gateway_toroidal_kmeans_and_unified_container_abi() {
         let mut fact_phases = [0i8; MAX_ATTENTION_HEADS];
         let mut persona_phases = [0i8; MAX_ATTENTION_HEADS];
         let emb_vals = [1.0f32, 0.5, -0.25, 0.75, 0.125, -0.5, 0.25, 0.875];
@@ -512,7 +512,7 @@ mod tests {
         ];
         let ledger = lmnk_ledger_slot_t::default();
 
-        // Verify 4-section `.lmnk` zero-copy serialization and verification C-ABI
+        // Verify unified `.lmnk` zero-copy serialization and verification C-ABI
         let reports_arr = [report];
         let mut container_buf = AlignedBuffer128::<u8, 768>::new([0u8; 768]);
         let mut req_len = 0usize;
@@ -528,7 +528,8 @@ mod tests {
         // SAFETY: Local stack buffers satisfy 128B alignment and disjointness invariants.
         unsafe {
             assert_eq!(
-                lmnk_container_write_four_section_with_reports_zero_copy(
+                lmnk_container_write_with_reports_zero_copy(
+                    LMNK_CONTAINER_FLAG_COMPILED_CACHE,
                     centroids.as_ptr(),
                     1,
                     cand_trails.as_ptr(),
@@ -545,7 +546,8 @@ mod tests {
             );
             assert!(req_len <= container_buf.data.len());
             assert_eq!(
-                lmnk_container_write_four_section_with_reports_zero_copy(
+                lmnk_container_write_with_reports_zero_copy(
+                    LMNK_CONTAINER_FLAG_COMPILED_CACHE,
                     centroids.as_ptr(),
                     1,
                     cand_trails.as_ptr(),
@@ -561,7 +563,7 @@ mod tests {
                 LMNK_OK
             );
             assert_eq!(
-                lmnk_container_verify_four_section_with_reports_zero_copy(
+                lmnk_container_verify_with_reports_zero_copy(
                     container_buf.data.as_ptr(),
                     req_len,
                     &mut nc_out,
@@ -589,7 +591,7 @@ mod tests {
             let mut zc_dom_id = 0u32;
             let mut zc_clamp_rad = 0.0f32;
             assert_eq!(
-                lmnk_container_map_and_steer_four_section_zero_copy_safe(
+                lmnk_container_map_and_steer_zero_copy_safe(
                     container_buf.data.as_ptr(),
                     req_len,
                     &mut zc_map_trail,
@@ -735,7 +737,7 @@ mod tests {
         let mut ctx_cfg = lmnk_config_t::default();
         let mut ctx: LmnkContextHandle = ptr::null_mut();
         let mut req_size = 0usize;
-        let mut buf = [0u8; 320];
+        let mut buf = [0u8; LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES];
         let mut restored_ctx: LmnkContextHandle = ptr::null_mut();
 
         // SAFETY: Local stack buffers satisfy alignment and bounds invariants.
@@ -769,6 +771,7 @@ mod tests {
                 lmnk_context_serialize(ctx, buf.as_mut_ptr(), &mut req_size),
                 LMNK_ERR_BUFFER_TOO_SMALL
             );
+            assert_eq!(req_size, LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES);
             assert_eq!(
                 lmnk_context_serialize(ctx, buf.as_mut_ptr(), &mut req_size),
                 LMNK_OK
@@ -779,6 +782,22 @@ mod tests {
             );
             assert!(!restored_ctx.is_null());
             assert_eq!(lmnk_context_destroy(restored_ctx), LMNK_OK);
+
+            let mut mismatch_buf = buf;
+            mismatch_buf[8] ^= 0x01;
+            let mismatch_hdr_crc = crate::foundation::compute_crc32_ieee(&mismatch_buf[..60]);
+            mismatch_buf[60..64].copy_from_slice(&mismatch_hdr_crc.to_le_bytes());
+            let mut mismatch_ctx: LmnkContextHandle = ptr::null_mut();
+            assert_eq!(
+                lmnk_context_deserialize(
+                    mismatch_buf.as_ptr(),
+                    mismatch_buf.len(),
+                    &mut mismatch_ctx
+                ),
+                LMNK_ERR_TOPOLOGY_MISMATCH
+            );
+            assert!(mismatch_ctx.is_null());
+
             buf[200] ^= 0xFF;
             let mut failed_restore: LmnkContextHandle = ptr::null_mut();
             assert_eq!(
@@ -787,6 +806,41 @@ mod tests {
             );
             assert!(failed_restore.is_null());
             assert_eq!(lmnk_context_destroy(ctx), LMNK_OK);
+
+            // Verify topology query and caller-managed in_place full zeroization + double-deinit guard.
+            let mut topo = lmnk_topology_matrix_t::default();
+            assert_eq!(lmnk_topology_get_matrix(&mut topo), LMNK_OK);
+            assert_eq!(topo.magic, LMNK_TOPOLOGY_MAGIC);
+            assert_eq!(topo, CORE_TOPOLOGY);
+            assert!(topo.verify_crc32());
+            assert_eq!(
+                lmnk_topology_get_matrix(ptr::null_mut()),
+                LMNK_ERR_NULL_POINTER
+            );
+
+            let needed_ctx_bytes = lmnk_context_size();
+            assert!(needed_ctx_bytes <= 8192);
+            let mut inplace_storage = AlignedBuffer128::<u8, 8192>::new([0xA5u8; 8192]);
+            assert_eq!(
+                lmnk_context_init_in_place(
+                    &ctx_cfg,
+                    inplace_storage.data.as_mut_ptr(),
+                    needed_ctx_bytes,
+                ),
+                LMNK_OK
+            );
+            let inplace_ctx = inplace_storage
+                .data
+                .as_mut_ptr()
+                .cast::<LmnkContextOpaque>();
+            assert_eq!(lmnk_context_deinit_in_place(inplace_ctx), LMNK_OK);
+            assert!(inplace_storage.data[..needed_ctx_bytes]
+                .iter()
+                .all(|&b| b == 0));
+            assert_eq!(
+                lmnk_context_deinit_in_place(inplace_ctx),
+                LMNK_ERR_INVALID_STATE
+            );
         }
         assert_eq!(q_passive.data, [1.0f32, 0.0, 1.0, 0.0]);
         assert!(q_active.data[3] > 0.0);
@@ -1129,17 +1183,42 @@ mod tests {
         let part2 = crate::foundation::update_crc32_ieee(part1, b"56789");
         assert_eq!(part2, full_crc);
 
+        let payload = *b"123456789";
+        let sections = [LmnkSectionInput {
+            kind: LMNK_SECTION_RUNTIME_SNAPSHOT,
+            flags: 0,
+            payload: &payload,
+        }];
         let mut container = [0u8; 256];
-        container[128..137].copy_from_slice(b"123456789");
-        let mut snap = init_snapshot_header(256, 1_774_900_000);
-        let stamped_crc = finalize_snapshot_header_crc32(&mut snap, &container).unwrap();
-        assert_eq!(stamped_crc, snap.checksum_crc32);
-        assert_eq!(verify_snapshot_payload_crc32(&snap, &container), Ok(()));
+        let written = write_container_sections_to_bytes(
+            LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT,
+            1_774_900_000,
+            &sections,
+            &mut container,
+        )
+        .unwrap();
+        let parsed = LmnkContainerView::parse(&container[..written]).unwrap();
+        assert_eq!(
+            parsed.section_bytes(LMNK_SECTION_RUNTIME_SNAPSHOT),
+            Some(&payload[..])
+        );
+
+        let mut hdr = init_container_header(
+            LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT,
+            written as u64,
+            1_774_900_000,
+            1,
+        );
+        let stamped_crc = hdr.finalize_crc32();
+        assert_eq!(hdr.header_crc32, hdr.compute_header_crc32());
+        assert_eq!(hdr.total_size, written as u64);
+        assert_eq!(hdr.section_count, 1);
+        assert_eq!(hdr.header_crc32, stamped_crc);
 
         container[128] ^= 0xFF;
         assert_eq!(
-            verify_snapshot_payload_crc32(&snap, &container),
-            Err(LMNK_ERR_CONTAINER_CORRUPTED)
+            LmnkContainerView::parse(&container[..written]).err(),
+            Some(LMNK_ERR_CONTAINER_CORRUPTED)
         );
     }
 }

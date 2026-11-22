@@ -146,10 +146,6 @@ pub mod sample_steering;
 
 pub use self::sample_steering::*;
 
-pub(crate) use self::crc32_delta::{
-    crc32_anchor_stamp_contrib_128b, crc32_fold_stamped_anchor_128b,
-};
-
 /// Outcome emitted by branchless dissipative overflow, residual scatter, and autonomous
 /// daughter-attractor birth (`PhaseAnchorRecord::step_dissipative_overflow_scatter_or_spawn_64`).
 #[repr(C, align(32))]

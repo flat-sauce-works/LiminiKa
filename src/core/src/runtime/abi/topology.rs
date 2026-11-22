@@ -4,6 +4,7 @@
 //! Unified Attractor Manifold, Online Toroidal k-Means, synergy, Entropy Control (Entropy), and Liminal FFI.
 
 use super::*;
+use crate::runtime::topology::CORE_TOPOLOGY;
 
 // ===================================================================
 // 5. Single Unified Attractor Manifold, Online Toroidal k-Means, Synergy, Entropy & Liminal Interface
@@ -944,6 +945,23 @@ pub unsafe extern "C" fn lmnk_distortion_delta_apply_chain(
             write_opt_out(delta_norm_out, d_norm)?;
             write_opt_out(hops_traversed_out, hops)?;
         }
+        Ok(LMNK_OK)
+    })
+}
+
+/// Copies the compile-time 64-byte [`lmnk_topology_matrix_t`] (`CORE_TOPOLOGY`) into `out_matrix`
+/// with zero heap allocation.
+///
+/// # Safety
+/// `out_matrix` must be non-null and 64-byte aligned.
+#[no_mangle]
+pub unsafe extern "C" fn lmnk_topology_get_matrix(
+    out_matrix: *mut lmnk_topology_matrix_t,
+) -> LmnkStatus {
+    ffi_boundary!({
+        // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and 64-byte alignment.
+        let mut out_ref = unsafe { FfiHandleMut::from_raw(out_matrix)? };
+        *out_ref = CORE_TOPOLOGY;
         Ok(LMNK_OK)
     })
 }

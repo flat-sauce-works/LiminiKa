@@ -176,6 +176,41 @@ fn test_zero_alloc_in_place_context_lifecycle() {
         assert_eq!(trail_out.step_count, 1);
         assert_eq!(lmnk_context_reset(ctx_handle), LMNK_OK);
         assert_eq!(lmnk_context_deinit_in_place(ctx_handle), LMNK_OK);
+        assert!(backing.0[..req_size].iter().all(|&b| b == 0));
+        assert_eq!(
+            lmnk_context_deinit_in_place(ctx_handle),
+            liminika_core::abi::LMNK_ERR_INVALID_STATE
+        );
+
+        let mut topo = liminika_core::abi::lmnk_topology_matrix_t::default();
+        assert_eq!(
+            liminika_core::abi::lmnk_topology_get_matrix(&mut topo),
+            LMNK_OK
+        );
+        assert!(topo.verify_crc32());
+
+        let anchor = liminika_core::PhaseAnchorRecord::new_empty(
+            7,
+            liminika_core::stigmergy::ATTRACTOR_SLOT_PERSONA,
+            0x1000,
+        );
+        #[repr(C, align(64))]
+        struct AlignedContainerBacking([u8; 512]);
+        let mut container_buf = AlignedContainerBacking([0u8; 512]);
+        let written = liminika_core::LmnkContainerView::write_standard_sections_to_bytes(
+            liminika_core::LMNK_CONTAINER_FLAG_COMPILED_CACHE,
+            &[anchor],
+            &[],
+            None,
+            None,
+            &[],
+            1_774_900_000,
+            &mut container_buf.0,
+        )
+        .expect("container write succeeds");
+        let parsed = liminika_core::LmnkContainerView::parse(&container_buf.0[..written])
+            .expect("zero-alloc parse succeeds");
+        assert_eq!(parsed.phase_anchor_count(), 1);
     }
 
     ENFORCE_ZERO_ALLOC.with(|flag| flag.set(false));

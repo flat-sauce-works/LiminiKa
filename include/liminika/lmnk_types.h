@@ -60,11 +60,38 @@ typedef uint8_t lmnk_action_decision_t;
 typedef uint8_t lmnk_attribution_tag_t;
 typedef int32_t lmnk_status_t;
 
-#define LMNK_SNAPSHOT_MAGIC 0x4B4E4D4CU     /* "LMNK" in Little-Endian ASCII */
+#define LMNK_CONTAINER_MAGIC 0x4B4E4D4CU /* "LMNK" in Little-Endian ASCII */
+#define LMNK_TOPOLOGY_MAGIC 0x504F544CU  /* "LTOP" in Little-Endian ASCII */
 #define LMNK_PHASE_ANCHOR_MAGIC 0x524B4E4CU /* "LNKR" in Little-Endian ASCII */
 #define LMNK_PHASE_ANCHOR_VERSION 0x00000200U
-#define LMNK_FOUR_SECTION_HEADER_BYTES 192U
-#define LMNK_STORAGE_PREAMBLE_OFFSET 128U
+#define LMNK_CONTAINER_HEADER_BYTES 64U
+#define LMNK_SECTION_ENTRY_BYTES 16U
+#define LMNK_MAX_CONTAINER_SECTIONS 32U
+#define LMNK_MAX_CONTAINER_BYTES (64U * 1024U * 1024U)
+
+#define LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT (1U << 0)
+#define LMNK_CONTAINER_FLAG_COMPILED_CACHE (1U << 1)
+#define LMNK_CONTAINER_FLAG_PORTABLE_PACKAGE (1U << 2)
+
+#define LMNK_SECTION_RUNTIME_SNAPSHOT 1U
+#define LMNK_SECTION_PHASE_ANCHORS 2U
+#define LMNK_SECTION_POINTER_TRAILS 3U
+#define LMNK_SECTION_BLOOM_FILTER 4U
+#define LMNK_SECTION_LEDGER_SLOT 5U
+#define LMNK_SECTION_CAUSAL_PROVENANCE 6U
+#define LMNK_SECTION_LOGICAL_PFRAMES 7U
+#define LMNK_SECTION_RECALL_METADATA 8U
+#define LMNK_SECTION_CONTENT_HASH 0xFF01U
+#define LMNK_SECTION_SIGNATURE 0xFF02U
+
+#define LMNK_TOPOLOGY_LAYER_COUNT 5U
+#define LMNK_TOPOLOGY_CHANNEL_COUNT 8U
+#define LMNK_DAG_FLAG_Y_SHAPED_PARALLEL_ROOTS (1U << 0)
+#define LMNK_DAG_FLAG_SPINE_EGO_ISOLATED (1U << 1)
+#define LMNK_DAG_FLAG_AXIOM_CUT_LACUNA_ORTHOGONAL (1U << 2)
+#define LMNK_DAG_FLAG_NO_STD_CORE (1U << 3)
+#define LMNK_TOPOLOGY_PINNED_CHANNEL_MASK ((uint8_t)((1U << 0) | (1U << 3)))
+#define LMNK_TOPOLOGY_SANDBOX_CHANNEL_MASK ((uint8_t)(1U << 7))
 
 #define LMNK_Q7_PHASE_ARRAY_LEN 64U
 #define LMNK_MAX_ATTENTION_HEADS 64U
@@ -102,6 +129,7 @@ typedef int32_t lmnk_status_t;
 #define LMNK_ERR_ENTROPY_SINGULARITY ((lmnk_status_t) - 40)
 #define LMNK_ERR_CONTAINER_CORRUPTED ((lmnk_status_t) - 50)
 #define LMNK_ERR_STORAGE_MAP_FAILED ((lmnk_status_t) - 51)
+#define LMNK_ERR_TOPOLOGY_MISMATCH ((lmnk_status_t) - 52)
 #define LMNK_ERR_SUBHEAD_ROUTING_FAILED ((lmnk_status_t) - 60)
 #define LMNK_ERR_KV_KEYFRAME_SEEK_FAILED ((lmnk_status_t) - 70)
 #define LMNK_ERR_OBSTRUCTION_UNRESOLVED ((lmnk_status_t) - 80)
@@ -120,7 +148,7 @@ typedef int32_t lmnk_status_t;
 #define LMNK_DRIVER_SYSTEM 0U
 #define LMNK_DRIVER_EGO 1U
 #define LMNK_ATTRIBUTION_TAG(primitive, driver) \
-    ((uint8_t)((((primitive) & 0x01U) << 1) | ((driver) & 0x01U)))
+    ((uint8_t)((((driver) & 0x01U) << 1) | ((primitive) & 0x01U)))
 
 #define LMNK_LACUNA_UNOBSERVED 0U
 #define LMNK_LACUNA_SELF_REF 1U
@@ -334,21 +362,46 @@ struct LMNK_ALIGN_PREFIX(32) lmnk_rank1_descriptor {
 } LMNK_ALIGN_SUFFIX(32);
 typedef struct lmnk_rank1_descriptor lmnk_rank1_descriptor_t;
 
-struct LMNK_ALIGN_PREFIX(64) lmnk_snapshot_header {
+struct LMNK_ALIGN_PREFIX(64) lmnk_container_header {
     uint32_t magic;
     uint32_t version;
+    uint32_t topology_crc32;
+    uint32_t container_flags;
     uint64_t total_size;
-    uint64_t substrate_offset;
-    uint64_t anchor_offset;
-    uint64_t phase_steering_offset;
-    uint64_t rank1_offset;
-    uint64_t entropy_offset;
-    uint32_t checksum_crc32;
-    uint32_t ledger_slot_offset;
     uint64_t timestamp_epoch_sec;
-    uint8_t reserved_padding[56];
+    uint32_t section_table_offset;
+    uint16_t section_count;
+    uint16_t header_size;
+    uint8_t reserved_future[20];
+    uint32_t header_crc32;
 } LMNK_ALIGN_SUFFIX(64);
-typedef struct lmnk_snapshot_header lmnk_snapshot_header_t;
+typedef struct lmnk_container_header lmnk_container_header_t;
+
+struct LMNK_ALIGN_PREFIX(16) lmnk_section_entry {
+    uint16_t kind;
+    uint16_t flags;
+    uint32_t offset;
+    uint32_t length;
+    uint32_t payload_crc32;
+} LMNK_ALIGN_SUFFIX(16);
+typedef struct lmnk_section_entry lmnk_section_entry_t;
+
+struct LMNK_ALIGN_PREFIX(64) lmnk_topology_matrix {
+    uint32_t magic;
+    uint32_t version;
+    uint8_t layer_count;
+    uint8_t channel_count;
+    uint16_t dag_flags;
+    uint8_t dag_edge_matrix[8];
+    uint8_t channel_admission_mask[8];
+    uint8_t pinned_channel_mask;
+    uint8_t sandbox_channel_mask;
+    uint8_t reserved_mid[2];
+    uint8_t channel_aperture_q7[8];
+    uint8_t reserved_tail[20];
+    uint32_t topology_crc32;
+} LMNK_ALIGN_SUFFIX(64);
+typedef struct lmnk_topology_matrix lmnk_topology_matrix_t;
 
 struct LMNK_ALIGN_PREFIX(32) lmnk_kv_keyframe_header {
     uint32_t frame_type;
@@ -756,12 +809,32 @@ LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_rank1_descriptor_t) == 32,
 LMNK_STATIC_ASSERT(offsetof(lmnk_rank1_descriptor_t, u_vector_ptr) == 8,
                    "lmnk_rank1_descriptor_t u_vector_ptr offset mismatch");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_snapshot_header_t) == 128,
-                   "lmnk_snapshot_header_t must be 128 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_snapshot_header_t) == 64,
-                   "lmnk_snapshot_header_t must be 64-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_snapshot_header_t, checksum_crc32) == 56,
-                   "lmnk_snapshot_header_t crc32 offset mismatch");
+LMNK_STATIC_ASSERT(sizeof(lmnk_container_header_t) == 64,
+                   "lmnk_container_header_t must be 64 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_container_header_t) == 64,
+                   "lmnk_container_header_t must be 64-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_container_header_t, topology_crc32) == 8,
+                   "lmnk_container_header_t topology_crc32 offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_container_header_t, header_crc32) == 60,
+                   "lmnk_container_header_t header_crc32 offset mismatch");
+
+LMNK_STATIC_ASSERT(sizeof(lmnk_section_entry_t) == 16,
+                   "lmnk_section_entry_t must be 16 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_section_entry_t) == 16,
+                   "lmnk_section_entry_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_section_entry_t, payload_crc32) == 12,
+                   "lmnk_section_entry_t payload_crc32 offset mismatch");
+
+LMNK_STATIC_ASSERT(sizeof(lmnk_topology_matrix_t) == 64,
+                   "lmnk_topology_matrix_t must be 64 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_topology_matrix_t) == 64,
+                   "lmnk_topology_matrix_t must be 64-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_topology_matrix_t, dag_edge_matrix) == 12,
+                   "lmnk_topology_matrix_t dag_edge_matrix offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_topology_matrix_t, pinned_channel_mask) == 28,
+                   "lmnk_topology_matrix_t pinned_channel_mask offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_topology_matrix_t, topology_crc32) == 60,
+                   "lmnk_topology_matrix_t topology_crc32 offset mismatch");
 
 LMNK_STATIC_ASSERT(sizeof(lmnk_kv_keyframe_header_t) == 64,
                    "lmnk_kv_keyframe_header_t must be 64 bytes");

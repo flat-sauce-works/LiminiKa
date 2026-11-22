@@ -56,3 +56,7 @@ path = "../../tests/core/test_zero_alloc.rs"
 [[test]]
 name = "test_abi_layout"
 path = "../../tests/ffi/test_abi_layout.rs"
+
+[[test]]
+name = "test_topology_parity"
+path = "../../tests/core/test_topology_parity.rs"

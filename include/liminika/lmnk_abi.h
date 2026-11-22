@@ -102,27 +102,25 @@ LMNK_NODISCARD LMNK_API uint64_t LMNK_CALL lmnk_tagged_ptr_evolve_mode(
     float high_density_rank1_thresh) LMNK_NOEXCEPT;
 
 /* -------------------------------------------------------------------------- */
-/* 4. Zero-Copy 4-Section Container Serialization, Verification & Steering    */
+/* 4. Unified Zero-Copy Container Serialization, Verification & Steering      */
 /* -------------------------------------------------------------------------- */
-LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
-lmnk_container_write_four_section_with_reports_zero_copy(
-    const lmnk_phase_anchor_record_t* LMNK_RESTRICT anchors, size_t num_anchors,
-    const lmnk_pointer_trail_t* LMNK_RESTRICT trails, size_t num_trails,
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_container_write_with_reports_zero_copy(
+    uint32_t container_flags, const lmnk_phase_anchor_record_t* LMNK_RESTRICT anchors,
+    size_t num_anchors, const lmnk_pointer_trail_t* LMNK_RESTRICT trails, size_t num_trails,
     const lmnk_bloom_filter_t* LMNK_RESTRICT bloom_opt,
     const lmnk_ledger_slot_t* LMNK_RESTRICT ledger_opt,
     const lmnk_causal_report_t* LMNK_RESTRICT reports, size_t num_reports,
     uint64_t timestamp_epoch_sec, uint8_t* LMNK_RESTRICT out_bytes,
     size_t* LMNK_RESTRICT buffer_size_inout) LMNK_NOEXCEPT;
 
-LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_container_write_four_section_zero_copy(
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_container_write_zero_copy(
     const lmnk_phase_anchor_record_t* LMNK_RESTRICT anchors, size_t num_anchors,
     const lmnk_pointer_trail_t* LMNK_RESTRICT trails, size_t num_trails,
     const lmnk_bloom_filter_t* LMNK_RESTRICT bloom_opt,
     const lmnk_ledger_slot_t* LMNK_RESTRICT ledger_opt, uint64_t timestamp_epoch_sec,
     uint8_t* LMNK_RESTRICT out_bytes, size_t* LMNK_RESTRICT buffer_size_inout) LMNK_NOEXCEPT;
 
-LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
-lmnk_container_verify_four_section_with_reports_zero_copy(
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_container_verify_with_reports_zero_copy(
     const uint8_t* LMNK_RESTRICT container_bytes, size_t byte_len,
     size_t* LMNK_RESTRICT num_anchors_out, size_t* LMNK_RESTRICT num_trails_out,
     size_t* LMNK_RESTRICT num_reports_out,
@@ -132,14 +130,13 @@ lmnk_container_verify_four_section_with_reports_zero_copy(
     const lmnk_ledger_slot_t** LMNK_RESTRICT ledger_ptr_out,
     const lmnk_causal_report_t** LMNK_RESTRICT reports_ptr_out) LMNK_NOEXCEPT;
 
-LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_container_verify_four_section_zero_copy(
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_container_verify_zero_copy(
     const uint8_t* LMNK_RESTRICT container_bytes, size_t byte_len,
     size_t* LMNK_RESTRICT num_anchors_out, size_t* LMNK_RESTRICT num_trails_out,
     const lmnk_phase_anchor_record_t** LMNK_RESTRICT anchors_ptr_out,
     const lmnk_pointer_trail_t** LMNK_RESTRICT trails_ptr_out) LMNK_NOEXCEPT;
 
-LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
-lmnk_container_map_and_steer_four_section_zero_copy_safe(
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_container_map_and_steer_zero_copy_safe(
     const uint8_t* LMNK_RESTRICT container_bytes, size_t byte_len,
     lmnk_pointer_trail_t* LMNK_RESTRICT trail_inout, float min_step_rad,
     float* LMNK_RESTRICT query_tensor, float* LMNK_RESTRICT key_tensor, size_t head_dim,
@@ -438,6 +435,9 @@ LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_core_stack_adapt(
     const lmnk_cognitive_ledger_t* LMNK_RESTRICT ledger,
     const lmnk_epistemic_horizon_t* LMNK_RESTRICT horizon,
     const lmnk_overlap_discovery_report_t* LMNK_RESTRICT overlap_report) LMNK_NOEXCEPT;
+
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
+lmnk_topology_get_matrix(lmnk_topology_matrix_t* LMNK_RESTRICT out_matrix) LMNK_NOEXCEPT;
 
 LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_topology_format_mermaid(
     const lmnk_core_state_stack_t* LMNK_RESTRICT stack,

@@ -36,6 +36,13 @@ macro_rules! impl_bitcut_uint {
                     }
                 }
 
+                /// Returns the raw subset bitmask retained inside this cut (`self.inside`).
+                #[inline(always)]
+                #[must_use]
+                pub const fn raw(self) -> $ty {
+                    self.inside
+                }
+
                 /// Recursively refines both `inside` and `outside` halves by `next_mask`, yielding
                 /// four mutually disjoint quadrants.
                 #[inline(always)]

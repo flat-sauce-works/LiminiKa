@@ -479,4 +479,67 @@ fn test_lmnk_types_abi_layout_invariants() {
         ),
         12
     );
+
+    // Unified 64B container header, 16B section entry, 64B topology matrix & 128B KV entry layouts
+    assert_eq!(
+        liminika_core::abi::LMNK_ERR_TOPOLOGY_MISMATCH,
+        liminika_core::LmnkStatus(-52)
+    );
+    assert_eq!(size_of::<liminika_core::abi::lmnk_container_header_t>(), 64);
+    assert_eq!(
+        align_of::<liminika_core::abi::lmnk_container_header_t>(),
+        64
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_container_header_t, topology_crc32),
+        8
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_container_header_t, header_crc32),
+        60
+    );
+    assert_eq!(size_of::<liminika_core::abi::lmnk_section_entry_t>(), 16);
+    assert_eq!(align_of::<liminika_core::abi::lmnk_section_entry_t>(), 16);
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_section_entry_t, payload_crc32),
+        12
+    );
+    assert_eq!(size_of::<liminika_core::abi::lmnk_topology_matrix_t>(), 64);
+    assert_eq!(align_of::<liminika_core::abi::lmnk_topology_matrix_t>(), 64);
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_topology_matrix_t, dag_edge_matrix),
+        12
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_topology_matrix_t,
+            pinned_channel_mask
+        ),
+        28
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_topology_matrix_t, topology_crc32),
+        60
+    );
+    assert_eq!(size_of::<liminika_core::runtime::RamPhaseKvEntry>(), 128);
+    assert_eq!(align_of::<liminika_core::runtime::RamPhaseKvEntry>(), 64);
+    assert_eq!(
+        offset_of!(
+            liminika_core::runtime::RamPhaseKvEntry,
+            sparse_scalar_residual
+        ),
+        32
+    );
+    assert_eq!(
+        offset_of!(liminika_core::runtime::RamPhaseKvEntry, pframe_count),
+        62
+    );
+    assert_eq!(
+        offset_of!(liminika_core::runtime::RamPhaseKvEntry, pframe_head),
+        63
+    );
+    assert_eq!(
+        offset_of!(liminika_core::runtime::RamPhaseKvEntry, anchor_phases),
+        64
+    );
 }
