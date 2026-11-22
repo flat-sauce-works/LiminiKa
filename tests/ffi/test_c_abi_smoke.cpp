@@ -1,9 +1,9 @@
 // name: tests/ffi/test_c_abi_smoke.cpp
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+#include "liminika/lmnk_abi.h"
 #include "liminika/lmnk_config.h"
 #include "liminika/lmnk_types.h"
-#include "liminika/lmnk_abi.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -13,13 +13,13 @@
 
 namespace {
 
-#define LMNK_TEST_CHECK(cond)                                                                 \
-    do {                                                                                      \
-        if (!(cond)) {                                                                        \
-            std::fprintf(stderr, "LMNK C-ABI smoke check failed at line %d: %s\n", __LINE__,  \
-                         #cond);                                                              \
-            std::abort();                                                                     \
-        }                                                                                     \
+#define LMNK_TEST_CHECK(cond)                                                                \
+    do {                                                                                     \
+        if (!(cond)) {                                                                       \
+            std::fprintf(stderr, "LMNK C-ABI smoke check failed at line %d: %s\n", __LINE__, \
+                         #cond);                                                             \
+            std::abort();                                                                    \
+        }                                                                                    \
     } while (0)
 
 void test_static_invariants() {
@@ -74,9 +74,9 @@ void test_version_capabilities_and_tagged_ptr() {
 
     lmnk_capability_flags_t caps = 0ULL;
     LMNK_TEST_CHECK(lmnk_abi_query_capability(&caps) == LMNK_OK);
-    const lmnk_capability_flags_t known_caps = LMNK_CAP_SWAR_BASELINE | LMNK_CAP_SIMD_AVX2 |
-        LMNK_CAP_SIMD_NEON | LMNK_CAP_SIMD_WASM128 | LMNK_CAP_ZERO_ALLOC_CORE |
-        LMNK_CAP_INPLACE_CONTEXT_INIT;
+    const lmnk_capability_flags_t known_caps =
+        LMNK_CAP_SWAR_BASELINE | LMNK_CAP_SIMD_AVX2 | LMNK_CAP_SIMD_NEON | LMNK_CAP_SIMD_WASM128 |
+        LMNK_CAP_ZERO_ALLOC_CORE | LMNK_CAP_INPLACE_CONTEXT_INIT;
     LMNK_TEST_CHECK((caps & LMNK_CAP_SWAR_BASELINE) != 0ULL);
     LMNK_TEST_CHECK((caps & LMNK_CAP_ZERO_ALLOC_CORE) != 0ULL);
     LMNK_TEST_CHECK((caps & LMNK_CAP_INPLACE_CONTEXT_INIT) != 0ULL);
@@ -139,8 +139,8 @@ void test_context_boxed_and_in_place_lifecycle() {
     auto raw_storage = std::make_unique<uint8_t[]>(raw_cap);
     void* aligned_ptr = raw_storage.get();
     size_t space = raw_cap;
-    LMNK_TEST_CHECK(std::align(alignof(lmnk_snapshot_header_t), required_bytes, aligned_ptr, space) !=
-                    nullptr);
+    LMNK_TEST_CHECK(
+        std::align(alignof(lmnk_snapshot_header_t), required_bytes, aligned_ptr, space) != nullptr);
     auto* raw_ptr = static_cast<uint8_t*>(aligned_ptr);
     size_t cap = required_bytes;
     LMNK_TEST_CHECK(lmnk_context_serialize(ctx, raw_ptr, &cap) == LMNK_OK);
@@ -150,8 +150,7 @@ void test_context_boxed_and_in_place_lifecycle() {
     LMNK_TEST_CHECK(restored != nullptr);
 
     alignas(64) lmnk_pointer_trail_t restored_trail{};
-    LMNK_TEST_CHECK(lmnk_context_step_token(restored, 43U, query, key, &restored_trail) ==
-                    LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_step_token(restored, 43U, query, key, &restored_trail) == LMNK_OK);
     LMNK_TEST_CHECK(restored_trail.step_count == 2U);
     LMNK_TEST_CHECK(restored_trail.prev_ptr == 42U);
 
@@ -245,8 +244,8 @@ void test_entropy_lacuna_anchor_and_mermaid() {
     float assigned_coh = 0.0F;
     float updated_mass = 0.0F;
     LMNK_TEST_CHECK(lmnk_anchor_step_online_toroidal_kmeans(
-                        &centroid, 1U, &frame, 0.35F, &kmeans_trail, &assigned_idx,
-                        &assigned_coh, &updated_mass) == LMNK_OK);
+                        &centroid, 1U, &frame, 0.35F, &kmeans_trail, &assigned_idx, &assigned_coh,
+                        &updated_mass) == LMNK_OK);
     LMNK_TEST_CHECK(assigned_idx == 0U);
     LMNK_TEST_CHECK(centroid.sample_count >= 1U);
 
@@ -273,7 +272,7 @@ void test_entropy_lacuna_anchor_and_mermaid() {
     LMNK_TEST_CHECK(std::strstr(mermaid_str, "Anchors:3") != nullptr);
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     test_static_invariants();

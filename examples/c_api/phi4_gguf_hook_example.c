@@ -89,8 +89,7 @@ int main(void) {
     if ((top16_layer_mask & (1u << example_layer_idx)) != 0u) {
         status = lmnk_phase_steering_apply_with_config_safe(q_after, phase_deltas, &cfg);
         if (status != LMNK_OK) {
-            fprintf(stderr, "lmnk_phase_steering_apply_with_config_safe failed: %d\n",
-                    (int)status);
+            fprintf(stderr, "lmnk_phase_steering_apply_with_config_safe failed: %d\n", (int)status);
             lmnk_free_aligned(q_before);
             lmnk_free_aligned(q_after);
             lmnk_free_aligned(phase_deltas);
@@ -114,8 +113,8 @@ int main(void) {
         }
     }
 
-    status = lmnk_phase_steering_compute_procrustes_half_split(
-        q_before, q_after, head_dim, rotary_dim, num_heads, recovered_q7);
+    status = lmnk_phase_steering_compute_procrustes_half_split(q_before, q_after, head_dim,
+                                                               rotary_dim, num_heads, recovered_q7);
     if (status != LMNK_OK) {
         fprintf(stderr, "lmnk_phase_steering_compute_procrustes_half_split failed: %d\n",
                 (int)status);
@@ -148,10 +147,11 @@ int main(void) {
         persona_deltas[h] = (lmnk_q7_t)(-8);
     }
 
-    status = lmnk_phase_steering_steer_with_gateway_and_config_safe(q_after, phase_deltas, 2.5f,
-                                                          persona_deltas, 1.8f, trail, &cfg);
+    status = lmnk_phase_steering_steer_with_gateway_and_config_safe(
+        q_after, phase_deltas, 2.5f, persona_deltas, 1.8f, trail, &cfg);
     if (status != LMNK_OK) {
-        fprintf(stderr, "lmnk_phase_steering_steer_with_gateway_and_config_safe failed: %d\n", (int)status);
+        fprintf(stderr, "lmnk_phase_steering_steer_with_gateway_and_config_safe failed: %d\n",
+                (int)status);
         lmnk_free_aligned(trail);
         lmnk_free_aligned(persona_deltas);
         lmnk_free_aligned(q_before);
