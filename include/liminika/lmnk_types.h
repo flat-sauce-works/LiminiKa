@@ -14,8 +14,8 @@
  *   arrays (`lmnk_q7_t[64]`) at 64-byte boundaries directly readable as `u32x16` / `u64x8`
  *   (compatible with WGSL, Vulkan `std430`, Metal, CUDA, x86_64 64B cachelines, and ARM64 128B CL).
  * - Host FFI Descriptor classification: `lmnk_rank1_descriptor_t` carries raw 64-bit host vector
- *   pointers (`u_vector_ptr`, `v_vector_ptr`, `gain_scalar_ptr`) and is scoped exclusively to CPU/FFI
- *   boundaries rather than cross-device shader buffers.
+ *   pointers (`u_vector_ptr`, `v_vector_ptr`, `gain_scalar_ptr`) and is scoped exclusively to
+ * CPU/FFI boundaries rather than cross-device shader buffers.
  *
  * Canonical 4-State Lacuna Classification:
  * - `0` (`Unobserved`): well-defined zero-aperture non-observation
@@ -60,8 +60,8 @@ typedef uint8_t lmnk_action_decision_t;
 typedef uint8_t lmnk_attribution_tag_t;
 typedef int32_t lmnk_status_t;
 
-#define LMNK_SNAPSHOT_MAGIC 0x4B4E4D4CU      /* "LMNK" in Little-Endian ASCII */
-#define LMNK_PHASE_ANCHOR_MAGIC 0x524B4E4CU  /* "LNKR" in Little-Endian ASCII */
+#define LMNK_SNAPSHOT_MAGIC 0x4B4E4D4CU     /* "LMNK" in Little-Endian ASCII */
+#define LMNK_PHASE_ANCHOR_MAGIC 0x524B4E4CU /* "LNKR" in Little-Endian ASCII */
 #define LMNK_PHASE_ANCHOR_VERSION 0x00000200U
 #define LMNK_FOUR_SECTION_HEADER_BYTES 192U
 #define LMNK_STORAGE_PREAMBLE_OFFSET 128U
@@ -85,29 +85,29 @@ typedef int32_t lmnk_status_t;
 /* Status codes                                                               */
 /* -------------------------------------------------------------------------- */
 #define LMNK_OK ((lmnk_status_t)0)
-#define LMNK_ERR_INVALID_ARGUMENT ((lmnk_status_t)-1)
-#define LMNK_ERR_OUT_OF_MEMORY ((lmnk_status_t)-2)
-#define LMNK_ERR_BUFFER_TOO_SMALL ((lmnk_status_t)-3)
-#define LMNK_ERR_PANIC_CAUGHT ((lmnk_status_t)-4)
-#define LMNK_ERR_NULL_POINTER ((lmnk_status_t)-5)
-#define LMNK_ERR_INVALID_STATE ((lmnk_status_t)-6)
-#define LMNK_ERR_VERSION_MISMATCH ((lmnk_status_t)-7)
-#define LMNK_ERR_ALIGNMENT ((lmnk_status_t)-8)
-#define LMNK_ERR_IO_FAILURE ((lmnk_status_t)-9)
-#define LMNK_ERR_SUBSTRATE_FULL ((lmnk_status_t)-10)
-#define LMNK_ERR_NOT_IMPLEMENTED ((lmnk_status_t)-11)
-#define LMNK_ERR_ANCHOR_NOT_FOUND ((lmnk_status_t)-20)
-#define LMNK_ERR_PHASE_OVERFLOW ((lmnk_status_t)-30)
-#define LMNK_ERR_PHASE_STEP_UNDERFLOW ((lmnk_status_t)-31)
-#define LMNK_ERR_ENTROPY_SINGULARITY ((lmnk_status_t)-40)
-#define LMNK_ERR_CONTAINER_CORRUPTED ((lmnk_status_t)-50)
-#define LMNK_ERR_STORAGE_MAP_FAILED ((lmnk_status_t)-51)
-#define LMNK_ERR_SUBHEAD_ROUTING_FAILED ((lmnk_status_t)-60)
-#define LMNK_ERR_KV_KEYFRAME_SEEK_FAILED ((lmnk_status_t)-70)
-#define LMNK_ERR_OBSTRUCTION_UNRESOLVED ((lmnk_status_t)-80)
-#define LMNK_ERR_EXTENSION_NOT_LOADED ((lmnk_status_t)-90)
-#define LMNK_ERR_LEDGER_FULL ((lmnk_status_t)-91)
-#define LMNK_ERR_UNKNOWN ((lmnk_status_t)-0x7FFFFFFF)
+#define LMNK_ERR_INVALID_ARGUMENT ((lmnk_status_t) - 1)
+#define LMNK_ERR_OUT_OF_MEMORY ((lmnk_status_t) - 2)
+#define LMNK_ERR_BUFFER_TOO_SMALL ((lmnk_status_t) - 3)
+#define LMNK_ERR_PANIC_CAUGHT ((lmnk_status_t) - 4)
+#define LMNK_ERR_NULL_POINTER ((lmnk_status_t) - 5)
+#define LMNK_ERR_INVALID_STATE ((lmnk_status_t) - 6)
+#define LMNK_ERR_VERSION_MISMATCH ((lmnk_status_t) - 7)
+#define LMNK_ERR_ALIGNMENT ((lmnk_status_t) - 8)
+#define LMNK_ERR_IO_FAILURE ((lmnk_status_t) - 9)
+#define LMNK_ERR_SUBSTRATE_FULL ((lmnk_status_t) - 10)
+#define LMNK_ERR_NOT_IMPLEMENTED ((lmnk_status_t) - 11)
+#define LMNK_ERR_ANCHOR_NOT_FOUND ((lmnk_status_t) - 20)
+#define LMNK_ERR_PHASE_OVERFLOW ((lmnk_status_t) - 30)
+#define LMNK_ERR_PHASE_STEP_UNDERFLOW ((lmnk_status_t) - 31)
+#define LMNK_ERR_ENTROPY_SINGULARITY ((lmnk_status_t) - 40)
+#define LMNK_ERR_CONTAINER_CORRUPTED ((lmnk_status_t) - 50)
+#define LMNK_ERR_STORAGE_MAP_FAILED ((lmnk_status_t) - 51)
+#define LMNK_ERR_SUBHEAD_ROUTING_FAILED ((lmnk_status_t) - 60)
+#define LMNK_ERR_KV_KEYFRAME_SEEK_FAILED ((lmnk_status_t) - 70)
+#define LMNK_ERR_OBSTRUCTION_UNRESOLVED ((lmnk_status_t) - 80)
+#define LMNK_ERR_EXTENSION_NOT_LOADED ((lmnk_status_t) - 90)
+#define LMNK_ERR_LEDGER_FULL ((lmnk_status_t) - 91)
+#define LMNK_ERR_UNKNOWN ((lmnk_status_t) - 0x7FFFFFFF)
 
 #define LMNK_SUCCEEDED(status) ((status) == LMNK_OK)
 #define LMNK_FAILED(status) ((status) != LMNK_OK)
@@ -711,136 +711,220 @@ typedef LmnkPhaseSteeringOpaque* LmnkPhaseSteeringHandle;
 /* Compile-time size, alignment, and field-offset invariants                  */
 /* -------------------------------------------------------------------------- */
 LMNK_STATIC_ASSERT(sizeof(lmnk_descriptor_header_t) == 8, "lmnk_descriptor_header_t size mismatch");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_descriptor_header_t) == 4, "lmnk_descriptor_header_t align mismatch");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_descriptor_header_t) == 4,
+                   "lmnk_descriptor_header_t align mismatch");
 LMNK_STATIC_ASSERT(sizeof(lmnk_paged_bitmask_t) == 32, "lmnk_paged_bitmask_t size mismatch");
 LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_paged_bitmask_t) == 32, "lmnk_paged_bitmask_t align mismatch");
 
 LMNK_STATIC_ASSERT(sizeof(lmnk_pointer_trail_t) == 128, "lmnk_pointer_trail_t must be 128 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_pointer_trail_t) == 64, "lmnk_pointer_trail_t must be 64-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_pointer_trail_t, reserved_header) == 56, "lmnk_pointer_trail_t reserved_header offset mismatch");
-LMNK_STATIC_ASSERT(offsetof(lmnk_pointer_trail_t, accumulated_phase_delta) == 64, "lmnk_pointer_trail_t phase array offset mismatch");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_pointer_trail_t) == 64,
+                   "lmnk_pointer_trail_t must be 64-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_pointer_trail_t, reserved_header) == 56,
+                   "lmnk_pointer_trail_t reserved_header offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_pointer_trail_t, accumulated_phase_delta) == 64,
+                   "lmnk_pointer_trail_t phase array offset mismatch");
 
 LMNK_STATIC_ASSERT(sizeof(lmnk_ledger_slot_t) == 64, "lmnk_ledger_slot_t must be 64 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_ledger_slot_t) == 64, "lmnk_ledger_slot_t must be 64-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_ledger_slot_t, fast_path_shortcuts) == 24, "lmnk_ledger_slot_t shortcuts offset mismatch");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_ledger_slot_t) == 64,
+                   "lmnk_ledger_slot_t must be 64-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_ledger_slot_t, fast_path_shortcuts) == 24,
+                   "lmnk_ledger_slot_t shortcuts offset mismatch");
 
 LMNK_STATIC_ASSERT(sizeof(lmnk_config_t) == 64, "lmnk_config_t must be 64 bytes");
 LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_config_t) == 64, "lmnk_config_t must be 64-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_config_t, execution_flags) == 40, "lmnk_config_t execution_flags offset mismatch");
-LMNK_STATIC_ASSERT(offsetof(lmnk_config_t, reserved) == 44, "lmnk_config_t reserved offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_config_t, execution_flags) == 40,
+                   "lmnk_config_t execution_flags offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_config_t, reserved) == 44,
+                   "lmnk_config_t reserved offset mismatch");
 
 LMNK_STATIC_ASSERT(sizeof(lmnk_entropy_state_t) == 32, "lmnk_entropy_state_t must be 32 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_entropy_state_t) == 32, "lmnk_entropy_state_t must be 32-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_entropy_state_t, active_branch_mode) == 24, "lmnk_entropy_state_t branch mode offset mismatch");
-LMNK_STATIC_ASSERT(offsetof(lmnk_entropy_state_t, flags) == 28, "lmnk_entropy_state_t flags offset mismatch");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_entropy_state_t) == 32,
+                   "lmnk_entropy_state_t must be 32-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_entropy_state_t, active_branch_mode) == 24,
+                   "lmnk_entropy_state_t branch mode offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_entropy_state_t, flags) == 28,
+                   "lmnk_entropy_state_t flags offset mismatch");
 
 LMNK_STATIC_ASSERT(sizeof(lmnk_subhead_config_t) == 32, "lmnk_subhead_config_t must be 32 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_subhead_config_t) == 16, "lmnk_subhead_config_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_subhead_config_t) == 16,
+                   "lmnk_subhead_config_t must be 16-byte aligned");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_rank1_descriptor_t) == 64, "lmnk_rank1_descriptor_t must be 64 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_rank1_descriptor_t) == 32, "lmnk_rank1_descriptor_t must be 32-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_rank1_descriptor_t, u_vector_ptr) == 8, "lmnk_rank1_descriptor_t u_vector_ptr offset mismatch");
+LMNK_STATIC_ASSERT(sizeof(lmnk_rank1_descriptor_t) == 64,
+                   "lmnk_rank1_descriptor_t must be 64 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_rank1_descriptor_t) == 32,
+                   "lmnk_rank1_descriptor_t must be 32-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_rank1_descriptor_t, u_vector_ptr) == 8,
+                   "lmnk_rank1_descriptor_t u_vector_ptr offset mismatch");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_snapshot_header_t) == 128, "lmnk_snapshot_header_t must be 128 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_snapshot_header_t) == 64, "lmnk_snapshot_header_t must be 64-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_snapshot_header_t, checksum_crc32) == 56, "lmnk_snapshot_header_t crc32 offset mismatch");
+LMNK_STATIC_ASSERT(sizeof(lmnk_snapshot_header_t) == 128,
+                   "lmnk_snapshot_header_t must be 128 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_snapshot_header_t) == 64,
+                   "lmnk_snapshot_header_t must be 64-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_snapshot_header_t, checksum_crc32) == 56,
+                   "lmnk_snapshot_header_t crc32 offset mismatch");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_kv_keyframe_header_t) == 64, "lmnk_kv_keyframe_header_t must be 64 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_kv_keyframe_header_t) == 32, "lmnk_kv_keyframe_header_t must be 32-byte aligned");
+LMNK_STATIC_ASSERT(sizeof(lmnk_kv_keyframe_header_t) == 64,
+                   "lmnk_kv_keyframe_header_t must be 64 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_kv_keyframe_header_t) == 32,
+                   "lmnk_kv_keyframe_header_t must be 32-byte aligned");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_stigmergic_thresholds_t) == 32, "lmnk_stigmergic_thresholds_t must be 32 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_stigmergic_thresholds_t) == 32, "lmnk_stigmergic_thresholds_t must be 32-byte aligned");
+LMNK_STATIC_ASSERT(sizeof(lmnk_stigmergic_thresholds_t) == 32,
+                   "lmnk_stigmergic_thresholds_t must be 32 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_stigmergic_thresholds_t) == 32,
+                   "lmnk_stigmergic_thresholds_t must be 32-byte aligned");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_substrate_step_report_t) == 32, "lmnk_substrate_step_report_t must be 32 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_substrate_step_report_t) == 32, "lmnk_substrate_step_report_t must be 32-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_substrate_step_report_t, dominant_anchor_id) == 24, "lmnk_substrate_step_report_t anchor offset mismatch");
-LMNK_STATIC_ASSERT(offsetof(lmnk_substrate_step_report_t, decision) == 28, "lmnk_substrate_step_report_t decision offset mismatch");
+LMNK_STATIC_ASSERT(sizeof(lmnk_substrate_step_report_t) == 32,
+                   "lmnk_substrate_step_report_t must be 32 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_substrate_step_report_t) == 32,
+                   "lmnk_substrate_step_report_t must be 32-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_substrate_step_report_t, dominant_anchor_id) == 24,
+                   "lmnk_substrate_step_report_t anchor offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_substrate_step_report_t, decision) == 28,
+                   "lmnk_substrate_step_report_t decision offset mismatch");
 
 LMNK_STATIC_ASSERT(sizeof(lmnk_gateway_frame_t) == 128, "lmnk_gateway_frame_t must be 128 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_gateway_frame_t) == 64, "lmnk_gateway_frame_t must be 64-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_gateway_frame_t, phase_deltas) == 64, "lmnk_gateway_frame_t phase_deltas offset mismatch");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_gateway_frame_t) == 64,
+                   "lmnk_gateway_frame_t must be 64-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_gateway_frame_t, phase_deltas) == 64,
+                   "lmnk_gateway_frame_t phase_deltas offset mismatch");
 
 LMNK_STATIC_ASSERT(sizeof(lmnk_causal_report_t) == 16, "lmnk_causal_report_t must be 16 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_causal_report_t) == 16, "lmnk_causal_report_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_causal_report_t) == 16,
+                   "lmnk_causal_report_t must be 16-byte aligned");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_phase_anchor_record_t) == 128, "lmnk_phase_anchor_record_t must be 128 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_phase_anchor_record_t) == 64, "lmnk_phase_anchor_record_t must be 64-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_phase_anchor_record_t, lineage_flags) == 48, "lmnk_phase_anchor_record_t lineage_flags offset mismatch");
-LMNK_STATIC_ASSERT(offsetof(lmnk_phase_anchor_record_t, checksum_crc32) == 52, "lmnk_phase_anchor_record_t checksum_crc32 offset mismatch");
-LMNK_STATIC_ASSERT(offsetof(lmnk_phase_anchor_record_t, dominant_slot) == 56, "lmnk_phase_anchor_record_t dominant_slot offset mismatch");
-LMNK_STATIC_ASSERT(offsetof(lmnk_phase_anchor_record_t, phase_profile) == 64, "lmnk_phase_anchor_record_t phase_profile offset mismatch");
+LMNK_STATIC_ASSERT(sizeof(lmnk_phase_anchor_record_t) == 128,
+                   "lmnk_phase_anchor_record_t must be 128 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_phase_anchor_record_t) == 64,
+                   "lmnk_phase_anchor_record_t must be 64-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_phase_anchor_record_t, lineage_flags) == 48,
+                   "lmnk_phase_anchor_record_t lineage_flags offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_phase_anchor_record_t, checksum_crc32) == 52,
+                   "lmnk_phase_anchor_record_t checksum_crc32 offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_phase_anchor_record_t, dominant_slot) == 56,
+                   "lmnk_phase_anchor_record_t dominant_slot offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_phase_anchor_record_t, phase_profile) == 64,
+                   "lmnk_phase_anchor_record_t phase_profile offset mismatch");
 
 LMNK_STATIC_ASSERT(sizeof(lmnk_bloom_filter_t) == 64, "lmnk_bloom_filter_t must be 64 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_bloom_filter_t) == 64, "lmnk_bloom_filter_t must be 64-byte aligned");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_bloom_filter_t) == 64,
+                   "lmnk_bloom_filter_t must be 64-byte aligned");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_reconstitution_report_t) == 16, "lmnk_reconstitution_report_t must be 16 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_reconstitution_report_t) == 16, "lmnk_reconstitution_report_t must be 16-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_reconstitution_report_t, evolved_ptr) == 0, "lmnk_reconstitution_report_t evolved_ptr offset mismatch");
+LMNK_STATIC_ASSERT(sizeof(lmnk_reconstitution_report_t) == 16,
+                   "lmnk_reconstitution_report_t must be 16 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_reconstitution_report_t) == 16,
+                   "lmnk_reconstitution_report_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_reconstitution_report_t, evolved_ptr) == 0,
+                   "lmnk_reconstitution_report_t evolved_ptr offset mismatch");
 
 LMNK_STATIC_ASSERT(sizeof(lmnk_cognitive_ledger_t) == 8, "lmnk_cognitive_ledger_t must be 8 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_cognitive_ledger_t) == 8, "lmnk_cognitive_ledger_t must be 8-byte aligned");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_cognitive_ledger_t) == 8,
+                   "lmnk_cognitive_ledger_t must be 8-byte aligned");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_epistemic_horizon_t) == 32, "lmnk_epistemic_horizon_t must be 32 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_epistemic_horizon_t) == 16, "lmnk_epistemic_horizon_t must be 16-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_epistemic_horizon_t, dominant_anchor_id) == 20, "lmnk_epistemic_horizon_t anchor offset mismatch");
-LMNK_STATIC_ASSERT(offsetof(lmnk_epistemic_horizon_t, regime_code) == 28, "lmnk_epistemic_horizon_t regime offset mismatch");
+LMNK_STATIC_ASSERT(sizeof(lmnk_epistemic_horizon_t) == 32,
+                   "lmnk_epistemic_horizon_t must be 32 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_epistemic_horizon_t) == 16,
+                   "lmnk_epistemic_horizon_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_epistemic_horizon_t, dominant_anchor_id) == 20,
+                   "lmnk_epistemic_horizon_t anchor offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_epistemic_horizon_t, regime_code) == 28,
+                   "lmnk_epistemic_horizon_t regime offset mismatch");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_liminal_threshold_state_t) == 32, "lmnk_liminal_threshold_state_t must be 32 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_liminal_threshold_state_t) == 16, "lmnk_liminal_threshold_state_t must be 16-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_liminal_threshold_state_t, active_aperture_mask) == 24, "lmnk_liminal_threshold_state_t aperture offset mismatch");
+LMNK_STATIC_ASSERT(sizeof(lmnk_liminal_threshold_state_t) == 32,
+                   "lmnk_liminal_threshold_state_t must be 32 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_liminal_threshold_state_t) == 16,
+                   "lmnk_liminal_threshold_state_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_liminal_threshold_state_t, active_aperture_mask) == 24,
+                   "lmnk_liminal_threshold_state_t aperture offset mismatch");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_stigmergic_granule_state_t) == 32, "lmnk_stigmergic_granule_state_t must be 32 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_stigmergic_granule_state_t) == 16, "lmnk_stigmergic_granule_state_t must be 16-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_stigmergic_granule_state_t, overlap_mask) == 24, "lmnk_stigmergic_granule_state_t overlap_mask offset mismatch");
-LMNK_STATIC_ASSERT(offsetof(lmnk_stigmergic_granule_state_t, adaptation_epochs) == 28, "lmnk_stigmergic_granule_state_t epochs offset mismatch");
+LMNK_STATIC_ASSERT(sizeof(lmnk_stigmergic_granule_state_t) == 32,
+                   "lmnk_stigmergic_granule_state_t must be 32 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_stigmergic_granule_state_t) == 16,
+                   "lmnk_stigmergic_granule_state_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_stigmergic_granule_state_t, overlap_mask) == 24,
+                   "lmnk_stigmergic_granule_state_t overlap_mask offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_stigmergic_granule_state_t, adaptation_epochs) == 28,
+                   "lmnk_stigmergic_granule_state_t epochs offset mismatch");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_overlap_discovery_report_t) == 32, "lmnk_overlap_discovery_report_t must be 32 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_overlap_discovery_report_t) == 16, "lmnk_overlap_discovery_report_t must be 16-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_overlap_discovery_report_t, overlap_core_mask) == 24, "lmnk_overlap_discovery_report_t core_mask offset mismatch");
-LMNK_STATIC_ASSERT(offsetof(lmnk_overlap_discovery_report_t, lacuna_exterior_mask) == 26, "lmnk_overlap_discovery_report_t exterior_mask offset mismatch");
+LMNK_STATIC_ASSERT(sizeof(lmnk_overlap_discovery_report_t) == 32,
+                   "lmnk_overlap_discovery_report_t must be 32 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_overlap_discovery_report_t) == 16,
+                   "lmnk_overlap_discovery_report_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_overlap_discovery_report_t, overlap_core_mask) == 24,
+                   "lmnk_overlap_discovery_report_t core_mask offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_overlap_discovery_report_t, lacuna_exterior_mask) == 26,
+                   "lmnk_overlap_discovery_report_t exterior_mask offset mismatch");
 
 LMNK_STATIC_ASSERT(sizeof(lmnk_ego_intent_axes_t) == 16, "lmnk_ego_intent_axes_t must be 16 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_ego_intent_axes_t) == 16, "lmnk_ego_intent_axes_t must be 16-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_ego_intent_axes_t, signature_hash) == 12, "lmnk_ego_intent_axes_t signature_hash offset mismatch");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_ego_intent_axes_t) == 16,
+                   "lmnk_ego_intent_axes_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_ego_intent_axes_t, signature_hash) == 12,
+                   "lmnk_ego_intent_axes_t signature_hash offset mismatch");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_liminal_ego_state_t) == 64, "lmnk_liminal_ego_state_t must be 64 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_liminal_ego_state_t) == 64, "lmnk_liminal_ego_state_t must be 64-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_liminal_ego_state_t, reserved) == 57, "lmnk_liminal_ego_state_t reserved offset mismatch");
+LMNK_STATIC_ASSERT(sizeof(lmnk_liminal_ego_state_t) == 64,
+                   "lmnk_liminal_ego_state_t must be 64 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_liminal_ego_state_t) == 64,
+                   "lmnk_liminal_ego_state_t must be 64-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_liminal_ego_state_t, reserved) == 57,
+                   "lmnk_liminal_ego_state_t reserved offset mismatch");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_fragment_ensemble_report_t) == 16, "lmnk_fragment_ensemble_report_t must be 16 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_fragment_ensemble_report_t) == 16, "lmnk_fragment_ensemble_report_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(sizeof(lmnk_fragment_ensemble_report_t) == 16,
+                   "lmnk_fragment_ensemble_report_t must be 16 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_fragment_ensemble_report_t) == 16,
+                   "lmnk_fragment_ensemble_report_t must be 16-byte aligned");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_core_state_stack_t) == 128, "lmnk_core_state_stack_t must be 128 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_core_state_stack_t) == 64, "lmnk_core_state_stack_t must be 64-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_core_state_stack_t, liminal) == 0, "lmnk_core_state_stack_t liminal offset mismatch");
-LMNK_STATIC_ASSERT(offsetof(lmnk_core_state_stack_t, stigmergy) == 32, "lmnk_core_state_stack_t stigmergy offset mismatch");
-LMNK_STATIC_ASSERT(offsetof(lmnk_core_state_stack_t, ego) == 64, "lmnk_core_state_stack_t ego offset mismatch");
+LMNK_STATIC_ASSERT(sizeof(lmnk_core_state_stack_t) == 128,
+                   "lmnk_core_state_stack_t must be 128 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_core_state_stack_t) == 64,
+                   "lmnk_core_state_stack_t must be 64-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_core_state_stack_t, liminal) == 0,
+                   "lmnk_core_state_stack_t liminal offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_core_state_stack_t, stigmergy) == 32,
+                   "lmnk_core_state_stack_t stigmergy offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_core_state_stack_t, ego) == 64,
+                   "lmnk_core_state_stack_t ego offset mismatch");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_topology_snapshot_t) == 32, "lmnk_topology_snapshot_t must be 32 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_topology_snapshot_t) == 16, "lmnk_topology_snapshot_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(sizeof(lmnk_topology_snapshot_t) == 32,
+                   "lmnk_topology_snapshot_t must be 32 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_topology_snapshot_t) == 16,
+                   "lmnk_topology_snapshot_t must be 16-byte aligned");
 
 LMNK_STATIC_ASSERT(sizeof(lmnk_boundary_delta_t) == 16, "lmnk_boundary_delta_t must be 16 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_boundary_delta_t) == 16, "lmnk_boundary_delta_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_boundary_delta_t) == 16,
+                   "lmnk_boundary_delta_t must be 16-byte aligned");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_core_primitive_state_t) == 64, "lmnk_core_primitive_state_t must be 64 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_core_primitive_state_t) == 64, "lmnk_core_primitive_state_t must be 64-byte aligned");
+LMNK_STATIC_ASSERT(sizeof(lmnk_core_primitive_state_t) == 64,
+                   "lmnk_core_primitive_state_t must be 64 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_core_primitive_state_t) == 64,
+                   "lmnk_core_primitive_state_t must be 64-byte aligned");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_lacuna_partition_t) == 16, "lmnk_lacuna_partition_t must be 16 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_lacuna_partition_t) == 16, "lmnk_lacuna_partition_t must be 16-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_lacuna_partition_t, packed_lacuna_u16) == 12, "lmnk_lacuna_partition_t packed offset mismatch");
+LMNK_STATIC_ASSERT(sizeof(lmnk_lacuna_partition_t) == 16,
+                   "lmnk_lacuna_partition_t must be 16 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_lacuna_partition_t) == 16,
+                   "lmnk_lacuna_partition_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_lacuna_partition_t, packed_lacuna_u16) == 12,
+                   "lmnk_lacuna_partition_t packed offset mismatch");
 
 LMNK_STATIC_ASSERT(sizeof(lmnk_spine_state_t) == 32, "lmnk_spine_state_t must be 32 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_spine_state_t) == 16, "lmnk_spine_state_t must be 16-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_spine_state_t, pinned_compute_mask) == 8, "lmnk_spine_state_t pinned_compute_mask offset mismatch");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_spine_state_t) == 16,
+                   "lmnk_spine_state_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_state_t, pinned_compute_mask) == 8,
+                   "lmnk_spine_state_t pinned_compute_mask offset mismatch");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_distortion_delta_t) == 128, "lmnk_distortion_delta_t must be 128 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_distortion_delta_t) == 64, "lmnk_distortion_delta_t must be 64-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_distortion_delta_t, intent_delta) == 16, "lmnk_distortion_delta_t intent_delta offset mismatch");
-LMNK_STATIC_ASSERT(offsetof(lmnk_distortion_delta_t, delta_phase_q7) == 64, "lmnk_distortion_delta_t delta_phase_q7 offset mismatch");
+LMNK_STATIC_ASSERT(sizeof(lmnk_distortion_delta_t) == 128,
+                   "lmnk_distortion_delta_t must be 128 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_distortion_delta_t) == 64,
+                   "lmnk_distortion_delta_t must be 64-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_distortion_delta_t, intent_delta) == 16,
+                   "lmnk_distortion_delta_t intent_delta offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_distortion_delta_t, delta_phase_q7) == 64,
+                   "lmnk_distortion_delta_t delta_phase_q7 offset mismatch");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_distortion_tension_t) == 32, "lmnk_distortion_tension_t must be 32 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_distortion_tension_t) == 16, "lmnk_distortion_tension_t must be 16-byte aligned");
-LMNK_STATIC_ASSERT(offsetof(lmnk_distortion_tension_t, immediate_damping_events) == 8, "lmnk_distortion_tension_t damping offset mismatch");
+LMNK_STATIC_ASSERT(sizeof(lmnk_distortion_tension_t) == 32,
+                   "lmnk_distortion_tension_t must be 32 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_distortion_tension_t) == 16,
+                   "lmnk_distortion_tension_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_distortion_tension_t, immediate_damping_events) == 8,
+                   "lmnk_distortion_tension_t damping offset mismatch");
 
 LMNK_EXTERN_C_END
 
