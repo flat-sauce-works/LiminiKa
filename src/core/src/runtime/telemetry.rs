@@ -142,7 +142,7 @@ pub const LMNK_LIMINAL_HORIZON_TOPOLOGY: [LiminalHorizonNodeDescriptor;
 ];
 
 /// Compact `32`-byte (`#[repr(C, align(16))]`) self-introspecting telemetry snapshot capturing
-/// live [`LiminalThresholdState`] boundaries, active epistemic regime, and crystal population counts.
+/// live [`LiminalThresholdState`] boundaries, active epistemic regime, and anchor population counts.
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LiminalTopologyTelemetrySnapshot {
@@ -716,6 +716,7 @@ pub struct CoreTelemetryBank {
 const _: () = {
     assert!(core::mem::size_of::<TelemetryCapturePolicy>() == 4);
     assert!(core::mem::align_of::<CoreTelemetryBank>() == 64);
+    assert!(core::mem::size_of::<CoreTelemetryBank>() == 576);
     assert!(core::mem::offset_of!(CoreTelemetryBank, spine) == 8);
     assert!(core::mem::offset_of!(CoreTelemetryBank, detailed) == 384);
 };

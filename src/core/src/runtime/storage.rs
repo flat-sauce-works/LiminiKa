@@ -40,7 +40,7 @@ use crate::liminal::{
     LMNK_ERR_VERSION_MISMATCH, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
 };
 use crate::runtime::gateway::signals::CausalProvenanceReport;
-use crate::stigmergy::anchor::{crc32_crystal_stamp_contrib_128b, crc32_fold_stamped_crystal_128b};
+use crate::stigmergy::anchor::{crc32_anchor_stamp_contrib_128b, crc32_fold_stamped_anchor_128b};
 use crate::stigmergy::{
     trail_phase_words_mut, CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, LedgerSlot,
     PhaseAnchorRecord, PointerTrail, ATTRACTOR_SLOT_REPULSION, LEDGER_FLAG_COGNITIVE_TRAJECTORY,
@@ -254,7 +254,7 @@ pub const fn init_snapshot_header(total_size: u64, timestamp_epoch_sec: u64) -> 
     }
 }
 
-/// Validates a `LmnkSnapshotHeader` against the `.lmnk` container magic (`0x4F534347`),
+/// Validates a `LmnkSnapshotHeader` against the `.lmnk` container magic (`0x4B4E4D4C`),
 /// [`LMNK_ABI_VERSION_HEX`], and payload buffer bounds.
 ///
 /// # Errors
@@ -1336,7 +1336,7 @@ pub trait MappedStorage: Send + Sync {
 
 /// 64-byte cacheline-aligned Plain Old Data (`Pod`) descriptor and execution engine for
 /// Zero-Copy In-Memory Mapped Storage (mapped-storage `.lmnk` containers), KV-keyframe keyframe/delta video-stream
-/// memory & persona reproduction, and DNP 64-byte phase packet dispatch.
+/// memory & persona reproduction, and 64-byte phase motion-delta packet dispatch.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MappedStorageEngine {
@@ -1826,10 +1826,10 @@ impl<'a> LmnkFourSectionView<'a> {
                     // SAFETY: `buf` is >= 8-byte aligned and `w6_off3 + 8 <= total_len`.
                     let rec_crc3 =
                         (unsafe { *buf.as_ptr().add(w6_off3).cast::<u64>() } >> 32) as u32;
-                    let s0 = crc32_crystal_stamp_contrib_128b(rec_crc0);
-                    let s1 = crc32_crystal_stamp_contrib_128b(rec_crc1);
-                    let s2 = crc32_crystal_stamp_contrib_128b(rec_crc2);
-                    let s3 = crc32_crystal_stamp_contrib_128b(rec_crc3);
+                    let s0 = crc32_anchor_stamp_contrib_128b(rec_crc0);
+                    let s1 = crc32_anchor_stamp_contrib_128b(rec_crc1);
+                    let s2 = crc32_anchor_stamp_contrib_128b(rec_crc2);
+                    let s3 = crc32_anchor_stamp_contrib_128b(rec_crc3);
                     let p01 = crc32_step_l8(s0) ^ s1;
                     let p23 = crc32_step_l8(s2) ^ s3;
                     crc = crc32_step_l32(crc) ^ crc32_step_l16(p01) ^ p23;
@@ -1844,8 +1844,8 @@ impl<'a> LmnkFourSectionView<'a> {
                     // SAFETY: `buf` is >= 8-byte aligned and `w6_off1 + 8 <= total_len`.
                     let rec_crc1 =
                         (unsafe { *buf.as_ptr().add(w6_off1).cast::<u64>() } >> 32) as u32;
-                    let s0 = crc32_crystal_stamp_contrib_128b(rec_crc0);
-                    let s1 = crc32_crystal_stamp_contrib_128b(rec_crc1);
+                    let s0 = crc32_anchor_stamp_contrib_128b(rec_crc0);
+                    let s1 = crc32_anchor_stamp_contrib_128b(rec_crc1);
                     crc = crc32_step_l16(crc) ^ crc32_step_l8(s0) ^ s1;
                     idx += 2;
                 }
@@ -1853,7 +1853,7 @@ impl<'a> LmnkFourSectionView<'a> {
                     let w6_off = off_crystals + idx * size_of::<PhaseAnchorRecord>() + 48;
                     // SAFETY: `buf` is >= 8-byte aligned and `w6_off + 8 <= total_len`.
                     let rec_crc = (unsafe { *buf.as_ptr().add(w6_off).cast::<u64>() } >> 32) as u32;
-                    crc = crc32_fold_stamped_crystal_128b(crc, rec_crc);
+                    crc = crc32_fold_stamped_anchor_128b(crc, rec_crc);
                 }
                 let mut rem_off = after_crystals;
                 if rem_off + 64 <= total_len {
@@ -1890,7 +1890,7 @@ mod tests {
     use crate::stigmergy::ATTRACTOR_SLOT_PERSONA;
 
     #[test]
-    fn test_mapped_storage_engine_dnp_and_pprc_gop_video_stream_seek() {
+    fn test_mapped_storage_engine_phase_packet_and_gop_seek() {
         let engine = MappedStorageEngine::new(4096, 1);
         assert_eq!(engine.validate(), Ok(()));
 

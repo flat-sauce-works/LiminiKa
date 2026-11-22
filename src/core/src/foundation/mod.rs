@@ -47,7 +47,7 @@ pub(crate) use self::phase_ops::{
     avx2_words64_to_vec64, avx2_words64_to_vec64_with_uniform,
 };
 pub(crate) use self::phase_ops::{
-    branchless_q7_unified_field_fold_words_with_flags_64, coherence_from_uniform_words_x8,
+    branchless_q7_unified_manifold_fold_words_with_flags_64, coherence_from_uniform_words_x8,
     step_toroidal_centroid_words_cached_64,
 };
 pub use self::pod::*;

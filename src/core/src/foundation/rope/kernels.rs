@@ -1423,7 +1423,7 @@ pub(crate) fn steer_single_slice_from_eff_words_core(
                 let packed = num_heads | (rot_dim << 16) | ((fold_geodesic as usize) << 31);
                 // SAFETY: `t_slice` has length `num_heads * head_dim`, `eff_words` has `8 * 8 = 64 >= num_heads`
                 // little-endian Q7 bytes, and AVX2 is enabled. Delegating to the shared frameless leaf
-                // `apply_phase_clamp_default_nonuniform_avx2_ptr` keeps all swarm/SLERP/unified-field callers
+                // `apply_phase_clamp_default_nonuniform_avx2_ptr` keeps all swarm/SLERP/unified-manifold callers
                 // 100% GPR-only (`0` Windows x64 `xmm6..xmm15` stack saves) and DSB-resident.
                 unsafe {
                     apply_phase_clamp_default_nonuniform_avx2_ptr(

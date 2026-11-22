@@ -103,6 +103,27 @@ fn test_lmnk_types_abi_layout_invariants() {
     assert_eq!(
         offset_of!(
             liminika_core::abi::lmnk_phase_anchor_record_t,
+            phase_clamp_rad
+        ),
+        40
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_phase_anchor_record_t,
+            lineage_flags
+        ),
+        48
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_phase_anchor_record_t,
+            attribution_tag
+        ),
+        59
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_phase_anchor_record_t,
             phase_profile
         ),
         64
@@ -317,6 +338,23 @@ fn test_lmnk_types_abi_layout_invariants() {
     assert_eq!(size_of::<liminika_core::StigmergicSubstrate>(), 2816);
     assert_eq!(align_of::<liminika_core::StigmergicSubstrate>(), 64);
     assert_eq!(
+        offset_of!(liminika_core::StigmergicSubstrate, coupling_matrix_8x8),
+        64
+    );
+    assert_eq!(
+        offset_of!(liminika_core::StigmergicSubstrate, step_counter),
+        72
+    );
+    assert_eq!(offset_of!(liminika_core::StigmergicSubstrate, capacity), 80);
+    assert_eq!(
+        offset_of!(liminika_core::StigmergicSubstrate, head_dim),
+        104
+    );
+    assert_eq!(
+        offset_of!(liminika_core::StigmergicSubstrate, num_heads),
+        106
+    );
+    assert_eq!(
         offset_of!(liminika_core::StigmergicSubstrate, slot_enabled_mask),
         110
     );
@@ -335,6 +373,10 @@ fn test_lmnk_types_abi_layout_invariants() {
     assert_eq!(
         offset_of!(liminika_core::StigmergicSubstrate, slot_sandbox_mask),
         114
+    );
+    assert_eq!(
+        offset_of!(liminika_core::StigmergicSubstrate, reserved_header),
+        115
     );
     assert_eq!(
         offset_of!(liminika_core::StigmergicSubstrate, ledger_slot),

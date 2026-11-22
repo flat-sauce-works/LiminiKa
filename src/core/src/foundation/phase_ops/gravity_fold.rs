@@ -1,7 +1,7 @@
 // name: src/core/src/foundation/phase_ops/gravity_fold.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! 64-head Unified-Field and phase-proximity gravity folding, conditional transition
+//! 64-head Unified-Manifold and phase-proximity gravity folding, conditional transition
 //! log-probabilities, and phase-interference inverse-temperature scaling kernels.
 
 use core::f32::consts::LN_2;
@@ -35,7 +35,7 @@ use crate::liminal::{
     DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS,
 };
 
-/// Register-resident Unified-Field folder returning `([u64; 8], total_pull, mean_coherence, dominant_idx, active_count)`.
+/// Register-resident Unified-Manifold folder returning `([u64; 8], total_pull, mean_coherence, dominant_idx, active_count)`.
 ///
 /// Includes a zero-division, zero-SLERP single-anchor fast path (`count == 1 && init_w <= 1.0e-12`)
 /// and guards 64-head Q14 cosine LUT lookups behind `trail_nonzero & anchor_nonzero`.
@@ -43,7 +43,7 @@ use crate::liminal::{
 /// (`anchor_phases`, `anchor_base_energies`) directly in 8 `u64` SWAR / AVX2 registers,
 /// returning `(folded_words, total_weight, mean_coherence, dominant_anchor_idx, active_anchor_count, any_resonant, any_liminal)`.
 #[inline]
-pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
+pub(crate) fn branchless_q7_unified_manifold_fold_words_with_flags_64(
     trail_words: &[u64; 8],
     trail_init_weight: f32,
     default_dominant_idx: u32,
@@ -450,19 +450,19 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
     }
 }
 
-/// Register-resident core for [`branchless_q7_unified_field_fold_with_init_weight_64`] that folds
+/// Register-resident core for [`branchless_q7_unified_manifold_fold_with_init_weight_64`] that folds
 /// `anchor_phases` directly in 8 `u64` SWAR registers (`trail_words`) without intermediate memory
 /// stores or reloads, returning `(folded_words_64, total_weight, mean_coherence, dominant_anchor_idx, active_anchor_count)`.
 #[inline(always)]
 #[must_use]
-pub fn branchless_q7_unified_field_fold_words_with_init_weight_64(
+pub fn branchless_q7_unified_manifold_fold_words_with_init_weight_64(
     trail_words: &[u64; 8],
     trail_init_weight: f32,
     anchor_phases: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
     anchor_base_energies: &[f32],
 ) -> ([u64; 8], f32, f32, u32, u32) {
     let (r, total_w, mean_coh, dom_idx, act_cnt, _any_resonant, _any_liminal) =
-        branchless_q7_unified_field_fold_words_with_flags_64(
+        branchless_q7_unified_manifold_fold_words_with_flags_64(
             trail_words,
             trail_init_weight,
             0,
@@ -477,7 +477,7 @@ pub fn branchless_q7_unified_field_fold_words_with_init_weight_64(
 /// ($SO(2)^{d_{\mathrm{head}}/2}$) into `folded_phases_out` starting from `trail_phases` with
 /// initial inertia weight `trail_init_weight`.
 #[inline]
-pub fn branchless_q7_unified_field_fold_with_init_weight_64(
+pub fn branchless_q7_unified_manifold_fold_with_init_weight_64(
     trail_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     trail_init_weight: f32,
     anchor_phases: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
@@ -486,7 +486,7 @@ pub fn branchless_q7_unified_field_fold_with_init_weight_64(
 ) -> (f32, f32, u32, u32) {
     let t = load_q7_words_64(trail_phases);
     let (r, total_pull, mean_coh, dom_idx, act_cnt) =
-        branchless_q7_unified_field_fold_words_with_init_weight_64(
+        branchless_q7_unified_manifold_fold_words_with_init_weight_64(
             &t,
             trail_init_weight,
             anchor_phases,
@@ -499,13 +499,13 @@ pub fn branchless_q7_unified_field_fold_with_init_weight_64(
 /// Folds an arbitrary slice of anchors (`anchor_phases`, `anchor_base_energies`) on the
 /// **Single Unified Attractor Phase Manifold** ($SO(2)^{d_{\mathrm{head}}/2}$) into `folded_phases_out`.
 #[inline(always)]
-pub fn branchless_q7_unified_field_fold_64(
+pub fn branchless_q7_unified_manifold_fold_64(
     trail_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     anchor_phases: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
     anchor_base_energies: &[f32],
     folded_phases_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
 ) -> (f32, f32, u32, u32) {
-    branchless_q7_unified_field_fold_with_init_weight_64(
+    branchless_q7_unified_manifold_fold_with_init_weight_64(
         trail_phases,
         0.0,
         anchor_phases,

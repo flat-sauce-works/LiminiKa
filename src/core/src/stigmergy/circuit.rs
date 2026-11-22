@@ -750,7 +750,7 @@ impl CognitiveTrajectoryLedger {
             branchless_clamp_f32(1.0_f32 - 0.22_f32 * peel_ratio * scale_micro, 0.55, 1.15);
         let macro_mul =
             branchless_clamp_f32(1.0_f32 - 0.22_f32 * fuse_ratio * scale_macro, 0.55, 1.15);
-        let crystal_peel_guard = 1.0_f32 + 0.15_f32 * peel_ratio;
+        let anchor_peel_guard = 1.0_f32 + 0.15_f32 * peel_ratio;
         let contradict_mul = branchless_clamp_f32(1.0_f32 - 0.30_f32 * repulse_ratio, 0.45, 1.10);
 
         let express = branchless_clamp_f32(base.express_steer_density_thresh, 0.05, 2.0);
@@ -765,7 +765,7 @@ impl CognitiveTrajectoryLedger {
             4.5,
         );
         let crystallize = branchless_clamp_f32(
-            base.crystallize_density_thresh * macro_mul * crystal_peel_guard,
+            base.crystallize_density_thresh * macro_mul * anchor_peel_guard,
             rank1 + 0.05,
             6.5,
         );

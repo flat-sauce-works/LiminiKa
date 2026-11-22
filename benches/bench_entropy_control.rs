@@ -45,7 +45,7 @@ use common::{configured_noise_threshold, AlignedHeapBuffer, ScopedFtzdazGuard};
 /// across adjacent supernodes so Sheaf Cohomology and Hodge Obstruction kernels evaluate genuine
 /// non-zero coboundary residuals rather than flat constant vectors.
 #[inline(always)]
-const fn make_heterogeneous_supernode_field_64(base_val: f32, spread: f32) -> [f32; 64] {
+const fn make_heterogeneous_supernode_profile_64(base_val: f32, spread: f32) -> [f32; 64] {
     let offsets: [f32; 8] = [-0.45, 0.30, -0.15, 0.50, -0.35, 0.25, -0.20, 0.40];
     let mut out = [0.0f32; 64];
     let mut i = 0usize;
@@ -235,7 +235,7 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
     });
 
     // 4. O(1) Branchless 2nd-Order Entropy Flux Acceleration & Adaptive KV-keyframe GOP Budget
-    group.bench_function("evaluate_adaptive_compute_and_pprc_gop_budget", |b| {
+    group.bench_function("evaluate_adaptive_compute_and_gop_budget", |b| {
         let mut engine = EntropyController::default();
         let mut state_out = lmnk_entropy_state_t::default();
         for z in [0.4f32, 0.7, 1.1, 1.8] {
@@ -257,9 +257,9 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_entropy_control_liminal_void_dyadic(c: &mut Criterion) {
+fn bench_entropy_control_lacuna_dyadic(c: &mut Criterion) {
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("EntropyControl_LiminalVoid_Dyadic_Vector_Alignment");
+    let mut group = c.benchmark_group("EntropyControl_Lacuna_Dyadic_Vector_Alignment");
     group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
@@ -267,7 +267,7 @@ fn bench_entropy_control_liminal_void_dyadic(c: &mut Criterion) {
     group.measurement_time(Duration::from_millis(1350));
 
     let vector_dims = [128usize, 512, 2048, 8192, 32768, 65536, 131072, 262144];
-    let shared_void_arena = AlignedHeapBuffer::<f32, 64>::new_heterogeneous_f32(262144, 0.65f32);
+    let shared_lacuna_arena = AlignedHeapBuffer::<f32, 64>::new_heterogeneous_f32(262144, 0.65f32);
 
     for dim in vector_dims {
         let total_bytes = dim * std::mem::size_of::<f32>();
@@ -278,12 +278,12 @@ fn bench_entropy_control_liminal_void_dyadic(c: &mut Criterion) {
             &dim,
             |b, &d| {
                 let _ftz = ScopedFtzdazGuard::new();
-                let slice_32 = AlignedSlice32::new(shared_void_arena.as_prefix(d)).unwrap();
+                let slice_32 = AlignedSlice32::new(shared_lacuna_arena.as_prefix(d)).unwrap();
                 let engine = EntropyController::default();
-                let mut void_score = 0.0f32;
+                let mut lacuna_score = 0.0f32;
                 for _ in 0..8 {
                     engine
-                        .eval_lacuna_energy_dyadic128(&slice_32, &mut void_score)
+                        .eval_lacuna_energy_dyadic128(&slice_32, &mut lacuna_score)
                         .unwrap();
                 }
 
@@ -291,10 +291,10 @@ fn bench_entropy_control_liminal_void_dyadic(c: &mut Criterion) {
                     engine
                         .eval_lacuna_energy_dyadic128(
                             black_box(&slice_32),
-                            black_box(&mut void_score),
+                            black_box(&mut lacuna_score),
                         )
                         .unwrap();
-                    black_box(void_score);
+                    black_box(lacuna_score);
                 });
             },
         );
@@ -597,9 +597,9 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
         (64 * 3 * core::mem::size_of::<f32>()) as u64,
     ));
     group.bench_function("hodge_obstruction_and_dual_homology_pairing_64", |b| {
-        let r_buf = AlignedBuffer32::new(make_heterogeneous_supernode_field_64(1.25f32, 0.35f32));
-        let p_buf = AlignedBuffer32::new(make_heterogeneous_supernode_field_64(0.45f32, 0.20f32));
-        let g_buf = AlignedBuffer32::new(make_heterogeneous_supernode_field_64(0.80f32, 0.28f32));
+        let r_buf = AlignedBuffer32::new(make_heterogeneous_supernode_profile_64(1.25f32, 0.35f32));
+        let p_buf = AlignedBuffer32::new(make_heterogeneous_supernode_profile_64(0.45f32, 0.20f32));
+        let g_buf = AlignedBuffer32::new(make_heterogeneous_supernode_profile_64(0.80f32, 0.28f32));
         let r_s = r_buf.as_aligned_slice();
         let p_s = p_buf.as_aligned_slice();
         let g_s = g_buf.as_aligned_slice();
@@ -772,24 +772,24 @@ fn bench_entropy_control_extreme_and_edge_cases(c: &mut Criterion) {
     for d in odd_dims {
         group.throughput(Throughput::Bytes((d * std::mem::size_of::<f32>()) as u64));
         group.bench_with_input(
-            BenchmarkId::new("liminal_void_dyadic_odd_remainder", format!("dim_{d}")),
+            BenchmarkId::new("lacuna_energy_dyadic_odd_remainder", format!("dim_{d}")),
             &d,
             |b, &dim_size| {
                 let slice_32 = AlignedSlice32::new(shared_odd_arena.as_prefix(dim_size)).unwrap();
                 let engine = EntropyController::default();
-                let mut void_score = 0.0f32;
+                let mut lacuna_score = 0.0f32;
                 engine
-                    .eval_lacuna_energy_dyadic128(&slice_32, &mut void_score)
+                    .eval_lacuna_energy_dyadic128(&slice_32, &mut lacuna_score)
                     .unwrap();
 
                 b.iter(|| {
                     engine
                         .eval_lacuna_energy_dyadic128(
                             black_box(&slice_32),
-                            black_box(&mut void_score),
+                            black_box(&mut lacuna_score),
                         )
                         .unwrap();
-                    black_box(void_score);
+                    black_box(lacuna_score);
                 });
             },
         );
@@ -829,7 +829,7 @@ fn bench_entropy_control_extreme_and_edge_cases(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_entropy_control_stateful_eval,
-    bench_entropy_control_liminal_void_dyadic,
+    bench_entropy_control_lacuna_dyadic,
     bench_entropy_control_stream_simulation,
     bench_entropy_control_long_dialogue_reliability,
     bench_entropy_control_pointer_tunneling_and_cohomology,

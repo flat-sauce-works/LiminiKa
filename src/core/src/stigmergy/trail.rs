@@ -23,7 +23,7 @@ use crate::foundation::{
     branchless_min_f32, branchless_phase_proximity_gravity_f32, branchless_popcount_rsqrt_u32,
     branchless_q7_conjugate_64, branchless_q7_inhibit_words_64,
     branchless_q7_synergy_fuse_words_64, branchless_q7_transition_log_prob_words_64,
-    branchless_q7_unified_field_fold_words_with_flags_64, branchless_rad_to_phase_step_u8,
+    branchless_q7_unified_manifold_fold_words_with_flags_64, branchless_rad_to_phase_step_u8,
     branchless_relu_f32, branchless_rsqrt_f32, circular_resultant_from_words_64,
     coherence_from_uniform_diff_word_x8, coherence_from_word_arrays_64,
     coherence_from_word_arrays_with_both_uniform_flags_64, evaluate_cohomological_obstruction,
@@ -891,10 +891,10 @@ impl PointerTrail {
         let _ = self.evaporate_pheromone(decay_factor);
     }
 
-    /// Evaluates whether the trail's stigmergic density exceeds `crystal_threshold`.
+    /// Evaluates whether the trail's stigmergic density exceeds `anchor_threshold`.
     #[inline(always)]
-    pub fn should_crystallize_branchless(&self, crystal_threshold: f32) -> bool {
-        (self.stigmergic_density >= crystal_threshold) & (crystal_threshold > 0.0)
+    pub fn should_crystallize_branchless(&self, anchor_threshold: f32) -> bool {
+        (self.stigmergic_density >= anchor_threshold) & (anchor_threshold > 0.0)
     }
 
     /// Returns `current_ptr` wrapped as a strongly-typed [`TaggedPtr`].
@@ -1018,7 +1018,7 @@ impl PointerTrail {
     /// Applies **Zero-Hyperparameter Phase-Proximity Resonance** from a single anchor on the
     /// unified phase manifold (`anchor_phases`, `anchor_base_energy`) in strictly constant time (`0` branches).
     #[inline]
-    pub fn apply_unified_field_anchor_resonance(
+    pub fn apply_unified_manifold_anchor_resonance(
         &mut self,
         anchor_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
         anchor_base_energy: f32,
@@ -1087,7 +1087,7 @@ impl PointerTrail {
         (resonant_pull, coherence)
     }
 
-    /// Applies **Order-Invariant (Commutative) Unified-Field Multi-Anchor Resonance** across an
+    /// Applies **Order-Invariant (Commutative) Unified-Manifold Multi-Anchor Resonance** across an
     /// arbitrary slice of anchors (`anchor_phases`, `anchor_base_energies`) and optional repulsive
     /// phase inhibitor (`repulsion_phases_and_strength`) on a **single unified phase manifold**
     /// using register-resident 8-word SWAR accumulators (`0` branches, `0 fdiv`).
@@ -1095,7 +1095,7 @@ impl PointerTrail {
     /// repulsive phase inhibitor (`repulsion_phases_and_strength`) starting from pre-loaded 8-word
     /// SWAR registers `init_w` (`0` entry reload) and returning `(final_pull_force, mean_coherence, active_anchor_count, post_words)`.
     #[inline]
-    pub fn apply_unified_field_anchor_slice_resonance_from_words(
+    pub fn apply_unified_manifold_anchor_slice_resonance_from_words(
         &mut self,
         init_w: [u64; NUM_STIGMERGIC_GRANULES],
         anchor_phases: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
@@ -1110,7 +1110,7 @@ impl PointerTrail {
             active_anchors,
             any_resonant,
             any_liminal,
-        ) = branchless_q7_unified_field_fold_words_with_flags_64(
+        ) = branchless_q7_unified_manifold_fold_words_with_flags_64(
             &init_w,
             self.attractor_pull_force,
             self.target_anchor_id,
@@ -1155,14 +1155,14 @@ impl PointerTrail {
     /// unified phase manifold and returns `(final_pull_force, mean_coherence, active_anchor_count, post_words)`
     /// directly in 8 `u64` SWAR registers (`0` exit reload).
     #[inline(always)]
-    pub fn apply_unified_field_anchor_slice_resonance_to_words(
+    pub fn apply_unified_manifold_anchor_slice_resonance_to_words(
         &mut self,
         anchor_phases: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
         repulsion_phases_and_strength: Option<(&[PhaseQ7; MAX_ATTENTION_HEADS], f32)>,
     ) -> (f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES]) {
         let init_w = *trail_phase_words_ref(self);
-        self.apply_unified_field_anchor_slice_resonance_from_words(
+        self.apply_unified_manifold_anchor_slice_resonance_from_words(
             init_w,
             anchor_phases,
             anchor_base_energies,
@@ -1174,14 +1174,14 @@ impl PointerTrail {
     /// repulsive phase inhibitor (`repulsion_phases_and_strength`) on a **single unified phase manifold**
     /// using register-resident 8-word SWAR accumulators (`0` branches, `0 fdiv`).
     #[inline(always)]
-    pub fn apply_unified_field_anchor_slice_resonance(
+    pub fn apply_unified_manifold_anchor_slice_resonance(
         &mut self,
         anchor_phases: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
         repulsion_phases_and_strength: Option<(&[PhaseQ7; MAX_ATTENTION_HEADS], f32)>,
     ) -> (f32, f32, u32) {
         let (final_pull, mean_coh, active_anchors, _words) = self
-            .apply_unified_field_anchor_slice_resonance_to_words(
+            .apply_unified_manifold_anchor_slice_resonance_to_words(
                 anchor_phases,
                 anchor_base_energies,
                 repulsion_phases_and_strength,

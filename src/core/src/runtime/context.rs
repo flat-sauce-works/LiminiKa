@@ -206,7 +206,7 @@ impl CoreStateStack {
     }
 
     /// Branchlessly co-adapts Slot 0 (`LiminalThresholdState`) and Slot 1 (`StigmergicGranuleState`)
-    /// with cross-slot feedback (serendipitous discovery in Slot 1 widens Slot 0's horizon).
+    /// with cross-slot feedback (exploratory discovery in Slot 1 widens Slot 0's horizon).
     #[inline]
     pub fn adapt_layers_branchless(
         &mut self,
@@ -700,8 +700,9 @@ pub struct RuntimeContext {
 }
 
 const _: () = {
+    assert!(core::mem::size_of::<RuntimeContext>() == 5120);
     assert!(core::mem::align_of::<RuntimeContext>() == 64);
-    assert!(core::mem::size_of::<RuntimeContext>() % 64 == 0);
+    assert!(core::mem::offset_of!(RuntimeContext, telemetry) == 4544);
     assert!(!core::mem::needs_drop::<RuntimeContext>());
 };
 
@@ -2220,13 +2221,13 @@ impl FastPathLedger for RuntimeContext {
         // Count high-intensity telemetry spike events (>= 0x80) across all 8 ring bytes via 1 SWAR op.
         let word = u64::from_le_bytes(slot.telemetry_mini_ledger);
         let spike_count = (word & 0x8080_8080_8080_8080).count_ones();
-        let base_ripa = branchless_select_f32(
+        let base_clamp_rad = branchless_select_f32(
             config_out.phase_clamp_max_rad > 0.0,
             config_out.phase_clamp_max_rad,
             DEFAULT_PHASE_CLAMP_MAX_RAD,
         );
         let damping = 1.0 - 0.025 * (spike_count as f32);
-        config_out.phase_clamp_max_rad = branchless_clamp_f32(base_ripa * damping, 0.01, 0.25);
+        config_out.phase_clamp_max_rad = branchless_clamp_f32(base_clamp_rad * damping, 0.01, 0.25);
         config_out.ledger_mode = (slot.mode & 0xFF) as u8;
         let _ = LEDGER_HISTORY_LEN;
         Ok(())

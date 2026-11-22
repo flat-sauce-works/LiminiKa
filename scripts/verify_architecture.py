@@ -104,6 +104,44 @@ PUB_TYPE_OR_TRAIT_RE = re.compile(
     r"(?:struct|enum|trait|type)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
 )
 
+PUB_ITEM_DECL_RE = re.compile(
+    r"\bpub(?:\s*\([^)]*\))?\s+(?:(?:unsafe|auto|const|async|extern(?:\s+r*#*\".*?\"#*)?)\s+)*"
+    r"(?:struct|enum|trait|type|fn|const|static)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
+)
+
+BANNED_LEGACY_DECL_TOKENS: frozenset[str] = frozenset(
+    {
+        "field",
+        "gcso",
+        "void",
+        "venn",
+        "serendipity",
+        "edbc",
+        "srl",
+        "pspm",
+        "pprc",
+        "zimms",
+        "daes",
+        "dpsr",
+        "ripa",
+        "qdps",
+        "action_hub",
+    }
+)
+
+
+def split_ident_tokens(ident: str) -> set[str]:
+    """Split a snake_case or CamelCase identifier into lowercase semantic tokens."""
+    tokens: set[str] = set()
+    for seg in ident.split("_"):
+        if not seg:
+            continue
+        sub = re.findall(r"[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+", seg)
+        tokens.update(s.lower() for s in sub)
+    if "action_hub" in ident.lower():
+        tokens.add("action_hub")
+    return tokens
+
 ALLOWED_SUBSTRATE_DECLS: dict[str, tuple[str, ...]] = {
     "StigmergicSubstrate": ("stigmergy/substrate.rs",),
     "SubstrateStepReport": ("stigmergy/substrate.rs",),
@@ -409,7 +447,7 @@ def strip_literals_preserve_lines(clean_text: str) -> str:
 
 
 def scan_vocabulary_ownership_in_source(source: str, rel_path: str) -> list[str]:
-    """Verify dissolved `*Field*` ban (0 non-ABI allowed) and `*Substrate*` (stigmergy-only) ownership."""
+    """Verify legacy declared-identifier bans and `*Substrate*` (`stigmergy`-only) ownership."""
     norm_rel = rel_path.replace("\\", "/").lstrip("/")
     if norm_rel.startswith("src/core/src/"):
         norm_rel = norm_rel[len("src/core/src/"):]
@@ -425,14 +463,19 @@ def scan_vocabulary_ownership_in_source(source: str, rel_path: str) -> list[str]
     clean_text = strip_comments_preserve_lines(truncated)
     code_only = strip_literals_preserve_lines(clean_text)
 
+    for match in PUB_ITEM_DECL_RE.finditer(code_only):
+        name = match.group("name")
+        lineno = code_only.count("\n", 0, match.start()) + 1
+        banned_hits = sorted(split_ident_tokens(name) & BANNED_LEGACY_DECL_TOKENS)
+        if banned_hits:
+            violations.append(
+                f"Vocabulary ownership (banned legacy token {', '.join(banned_hits)}): "
+                f"{norm_rel}:{lineno}: disallowed public declaration `{name}`"
+            )
+
     for match in PUB_TYPE_OR_TRAIT_RE.finditer(code_only):
         name = match.group("name")
         lineno = code_only.count("\n", 0, match.start()) + 1
-        if "Field" in name:
-            violations.append(
-                f"Vocabulary ownership (Field=dissolved): {norm_rel}:{lineno}: "
-                f"disallowed public declaration `{name}`"
-            )
         if "Substrate" in name:
             allowed_paths = ALLOWED_SUBSTRATE_DECLS.get(name, ())
             if norm_rel not in allowed_paths:
@@ -444,7 +487,7 @@ def scan_vocabulary_ownership_in_source(source: str, rel_path: str) -> list[str]
 
 
 def check_vocabulary_ownership(core_src: pathlib.Path) -> list[str]:
-    """Verify dissolved Field ban (0 non-ABI allowed) and Substrate (stigmergy-only) ownership."""
+    """Verify legacy declared-identifier bans and `Substrate` (`stigmergy`-only) ownership."""
     violations: list[str] = []
     for rs_file in sorted(core_src.rglob("*.rs")):
         if rs_file.name == "tests.rs" or "tests" in rs_file.parts:
@@ -665,7 +708,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Verify DAG, isolation, axiom orthogonality, AbstractDomain, "
-            "Scoped boundary, and Field/Substrate ownership rules."
+            "Scoped boundary, legacy declared-identifier bans, and Substrate ownership rules."
         ),
     )
     parser.add_argument(
@@ -708,7 +751,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(
                 "All 5-layer DAG, spine/ego isolation, axiom orthogonality, "
-                "AbstractDomain, Scoped boundary, and Field/Substrate ownership invariants passed (0 violations)."
+                "AbstractDomain, Scoped boundary, legacy declared-identifier bans, and Substrate ownership invariants passed (0 violations)."
             )
 
     if args.hotspots:

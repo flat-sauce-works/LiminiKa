@@ -235,7 +235,7 @@ pub(super) fn filter_and_damp_gateway_words(
     phase_step_min_q7: u8,
     unresolved_damping_u7: u8,
 ) -> [u64; NUM_STIGMERGIC_GRANULES] {
-    let qdps_words = if phase_step_min_q7 <= 1 {
+    let phase_step_words = if phase_step_min_q7 <= 1 {
         *next_w
     } else if phase_step_min_q7 > 127 {
         [0u64; NUM_STIGMERGIC_GRANULES]
@@ -245,19 +245,19 @@ pub(super) fn filter_and_damp_gateway_words(
     let clean_damping =
         branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
     if clean_damping >= 128 {
-        qdps_words
+        phase_step_words
     } else {
         let s_u64 = u64::from(clean_damping);
         let bias_restore = (128u64.wrapping_sub(s_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
         [
-            swar_q7_scale_le128_with_bias_x8(qdps_words[0], s_u64, bias_restore),
-            swar_q7_scale_le128_with_bias_x8(qdps_words[1], s_u64, bias_restore),
-            swar_q7_scale_le128_with_bias_x8(qdps_words[2], s_u64, bias_restore),
-            swar_q7_scale_le128_with_bias_x8(qdps_words[3], s_u64, bias_restore),
-            swar_q7_scale_le128_with_bias_x8(qdps_words[4], s_u64, bias_restore),
-            swar_q7_scale_le128_with_bias_x8(qdps_words[5], s_u64, bias_restore),
-            swar_q7_scale_le128_with_bias_x8(qdps_words[6], s_u64, bias_restore),
-            swar_q7_scale_le128_with_bias_x8(qdps_words[7], s_u64, bias_restore),
+            swar_q7_scale_le128_with_bias_x8(phase_step_words[0], s_u64, bias_restore),
+            swar_q7_scale_le128_with_bias_x8(phase_step_words[1], s_u64, bias_restore),
+            swar_q7_scale_le128_with_bias_x8(phase_step_words[2], s_u64, bias_restore),
+            swar_q7_scale_le128_with_bias_x8(phase_step_words[3], s_u64, bias_restore),
+            swar_q7_scale_le128_with_bias_x8(phase_step_words[4], s_u64, bias_restore),
+            swar_q7_scale_le128_with_bias_x8(phase_step_words[5], s_u64, bias_restore),
+            swar_q7_scale_le128_with_bias_x8(phase_step_words[6], s_u64, bias_restore),
+            swar_q7_scale_le128_with_bias_x8(phase_step_words[7], s_u64, bias_restore),
         ]
     }
 }
@@ -272,12 +272,12 @@ pub struct CoreLayerEvalContext<'a> {
     pub delta: &'a LiminalBoundaryDelta,
     /// Latest epistemic horizon reading (`KnownCoherent`, `InternalConflict`, or `Liminal`).
     pub horizon: &'a EpistemicHorizonReading,
-    /// Latest Venn overlap & serendipity telemetry report across the 8 SWAR granules.
-    pub venn: &'a OverlapDiscoveryReport,
+    /// Latest overlap and discovery telemetry report across the 8 SWAR granules.
+    pub overlap: &'a OverlapDiscoveryReport,
     /// Read-only Slow-Loop Q0.7 derivative weight $\alpha \in [0, 127]$ for convex pheromone synthesis.
     pub derivative_alpha_q7: u8,
     /// Optional 4-region branchless [`LacunaPartition8`].
-    pub venn_partition: Option<&'a LacunaPartition8>,
+    pub lacuna_partition: Option<&'a LacunaPartition8>,
     /// Optional [`SystemSpineState`] physical `pinned` isolation barrier.
     pub spine: Option<&'a SystemSpineState>,
     /// Optional P-Frame differential chain [`EgoDifferentialNet`].
@@ -302,16 +302,16 @@ fn synthesize_signal_with_optional_core_layers<S: ManifoldGatewaySignal + ?Sized
                 ctx.stack.modulate_gateway_frame_branchless(
                     &mut sys_baseline,
                     ctx.horizon,
-                    ctx.venn,
+                    ctx.overlap,
                 );
                 ctx.stack.modulate_gateway_frame_with_ego_readonly(
                     ctx.delta,
                     ctx.horizon,
-                    ctx.venn,
+                    ctx.overlap,
                     &mut frame,
                 );
                 if let (Some(spine), Some(vp), Some(net), Some(tension)) =
-                    (ctx.spine, ctx.venn_partition, ctx.ego_net, ctx.tension)
+                    (ctx.spine, ctx.lacuna_partition, ctx.ego_net, ctx.tension)
                 {
                     let _ = net.evaluate_pframe_chain_branchless(
                         &ctx.stack.ego,
@@ -334,7 +334,7 @@ fn synthesize_signal_with_optional_core_layers<S: ManifoldGatewaySignal + ?Sized
                 // Non-Ego fast path: modulate in-place without cloning `sys_baseline` or
                 // enforcing pinned isolation when `ego` is inactive.
                 ctx.stack
-                    .modulate_gateway_frame_branchless(&mut frame, ctx.horizon, ctx.venn);
+                    .modulate_gateway_frame_branchless(&mut frame, ctx.horizon, ctx.overlap);
             }
             let w = *frame.phase_words_ref();
             return (frame, w);
@@ -792,12 +792,12 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
             let mut eligible_lanes = active_cut.outside | active_cut.inside;
             if eligible_lanes != 0 {
                 let standard_granule_mask = core_ctx.map_or(0xFF_u8, |c| {
-                    c.venn.overlap_core_mask | c.venn.overlap_fringe_mask
+                    c.overlap.overlap_core_mask | c.overlap.overlap_fringe_mask
                 });
                 let sandbox_granule_mask = core_ctx.map_or(0x00_u8, |c| {
                     crate::liminal::BitCut8::split(
-                        c.venn.lacuna_exterior_mask | c.venn.discovery_excursion_mask,
-                        c.venn.overlap_core_mask,
+                        c.overlap.lacuna_exterior_mask | c.overlap.discovery_excursion_mask,
+                        c.overlap.overlap_core_mask,
                     )
                     .outside
                 });
@@ -861,7 +861,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
 
         // Evaporate stale pheromone and deposit new pheromone weighted by resonance energy and
         // active-head trajectory self-coherence (`prev_w` vs `frm_w`) so multi-layer traversal
-        // dynamically transitions across Express, sub-head router, Rank-1 residual, and Crystal instead of saturating.
+        // dynamically transitions across Express, sub-head router, Rank-1 residual, and Anchor instead of saturating.
         let prev_rho =
             branchless_flush_subnormal_f32(branchless_relu_f32(trail_out.stigmergic_density));
         let energy_gate = branchless_clamp_f32(frame.effective_energy, 0.0, 1.0);

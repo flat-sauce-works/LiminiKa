@@ -38,7 +38,7 @@ pub const MAX_DISTORTION_CHAIN_HOPS: u8 = 4;
 /// Flag bit `0`: [`DistortionDelta`] node is active and eligible for lacuna trigger matching.
 pub const DISTORTION_DELTA_FLAG_ACTIVE: u32 = 1 << 0;
 
-/// Flag bit `1`: [`DistortionDelta`] node was consolidated into an I-Frame crystal anchor.
+/// Flag bit `1`: [`DistortionDelta`] node was consolidated into an I-Frame phase anchor.
 pub const DISTORTION_DELTA_FLAG_CONSOLIDATED_IFRAME: u32 = 1 << 1;
 
 /// Flag bit `2`: [`DistortionDelta`] node carries valid model-baked 64-head Q7 phase deltas.
@@ -162,7 +162,7 @@ pub struct PFrameRoutingMeta {
 impl PFrameRoutingMeta {
     /// Bit `2`: node is active and eligible for lacuna trigger matching.
     pub const FLAG_ACTIVE_BIT: u8 = 1 << 2;
-    /// Bit `3`: node was consolidated into an I-Frame crystal anchor.
+    /// Bit `3`: node was consolidated into an I-Frame phase anchor.
     pub const FLAG_CONSOLIDATED_BIT: u8 = 1 << 3;
     /// Bit `4`: node carries valid model-baked 64-head Q7 phase deltas.
     pub const FLAG_BAKED_VALID_BIT: u8 = 1 << 4;
@@ -422,13 +422,7 @@ impl EgoDifferentialNet {
     /// for one `EgoDifferentialNet`.
     #[inline]
     pub unsafe fn init_in_place_on_zeroed(dst: *mut Self, max_hops: u8) {
-        let clamped_hops = if max_hops == 0 {
-            1
-        } else if max_hops > MAX_DISTORTION_CHAIN_HOPS {
-            MAX_DISTORTION_CHAIN_HOPS
-        } else {
-            max_hops
-        };
+        let clamped_hops = max_hops.clamp(1, MAX_DISTORTION_CHAIN_HOPS);
         // SAFETY: Caller guarantees `dst` is valid, writable, aligned, and zero-initialized.
         unsafe {
             let routing_ptr = core::ptr::addr_of_mut!((*dst).node_routing);

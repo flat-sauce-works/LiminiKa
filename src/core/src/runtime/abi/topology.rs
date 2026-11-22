@@ -358,7 +358,7 @@ pub unsafe extern "C" fn lmnk_epistemic_evaluate_horizon(
     })
 }
 
-/// Evaluates Set-overlap multi-attractor overlap and noise-driven serendipity in `Liminal`
+/// Evaluates set-overlap multi-attractor overlap and noise-driven discovery in `Liminal`
 /// across `centroids_inout[0..num_centroids]` (`query_phases` vs `drifted_phases`). When
 /// `nucleate_on_discovery != 0` and approximation noise triggers unknown attractor discovery,
 /// autonomously nucleates a new crystallized attractor into an empty or weaker centroid slot.
@@ -398,7 +398,7 @@ pub unsafe extern "C" fn lmnk_stigmergic_evaluate_overlap_and_discovery(
         let d_words = load_q7_words_64(d_ref);
 
         let mut did_nucleate = 0u8;
-        let venn = if num_centroids == 0 {
+        let overlap_report = if num_centroids == 0 {
             evaluate_stigmergic_overlap_and_discovery_words_64::<PhaseAnchorRecord>(
                 &[],
                 &q_words,
@@ -449,7 +449,7 @@ pub unsafe extern "C" fn lmnk_stigmergic_evaluate_overlap_and_discovery(
             report
         };
 
-        *rep_out = venn;
+        *rep_out = overlap_report;
         // SAFETY: `write_opt_out` validates optional alignment and non-nullness.
         unsafe {
             write_opt_out(did_nucleate_out, did_nucleate)?;
@@ -879,7 +879,7 @@ pub unsafe extern "C" fn lmnk_distortion_tension_step_hot_path(
 /// zero-allocation mode, enforcing [`lmnk_spine_state_t`] physical `pinned` isolation.
 ///
 /// # Safety
-/// All required struct pointers (`nodes`, `ego`, `spine`, `venn`, `stigmergy`, `tension`,
+/// All required struct pointers (`nodes`, `ego`, `spine`, `partition`, `stigmergy`, `tension`,
 /// `frame_inout`) must be non-null, naturally aligned, and `frame_inout` / optional outputs
 /// (`delta_norm_out`, `hops_traversed_out`) must not overlap inputs.
 #[no_mangle]

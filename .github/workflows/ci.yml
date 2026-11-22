@@ -83,7 +83,6 @@ jobs:
               - 'benches/**'
               - 'Cargo.toml'
               - '**/Cargo.toml'
-              - '**/build.rs'
               - 'Cargo.lock'
               - '**/Cargo.lock'
               - 'deny.toml'
@@ -117,7 +116,6 @@ jobs:
               - 'cmake/**'
               - 'CMakeLists.txt'
               - '**/CMakeLists.txt'
-              - '**/build.rs'
               - '.clang-format'
               - '.editorconfig'
               - '.gitignore'
@@ -216,7 +214,7 @@ jobs:
           fi
           CLANG_FORMAT_BIN=$(command -v clang-format || command -v clang-format-21 || command -v clang-format-20 || command -v clang-format-19 || command -v clang-format-18 || find /usr/lib/llvm-* -name clang-format -type f -executable 2>/dev/null | sort -V | tail -n 1 || true)
           if [ -n "$CLANG_FORMAT_BIN" ]; then
-            EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
+            EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name .scratch -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
             find . "${EXCLUDE_ARGS[@]}" -prune -o \( \
               -name "*.h" -o -name "*.hpp" -o -name "*.inl" -o \
               -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" \
@@ -230,7 +228,7 @@ jobs:
             python3 -m pip install --quiet --retries 1 --timeout 10 autopep8 2>/dev/null || pip3 install --quiet --break-system-packages --retries 1 --timeout 10 autopep8 2>/dev/null || true
           fi
           if command -v autopep8 >/dev/null 2>&1; then
-            EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
+            EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name .scratch -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
             find . "${EXCLUDE_ARGS[@]}" -prune -o -name "*.py" -type f -size +0c -exec autopep8 --in-place --max-line-length 120 {} + 2>/dev/null || true
           fi
 
@@ -288,7 +286,7 @@ jobs:
       - name: Scan Copyleft & Non-Permissive License Keywords
         run: |
           echo "Scanning codebase for strict permissive compliance (blocking Copyleft/Non-Commercial)..."
-          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
+          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name .scratch -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
           FORBIDDEN_PATTERNS="GPL-1.0|GPL-2.0|GPL-3.0|LGPL-2.1|LGPL-3.0|AGPL-3.0|SSPL-1.0|CC-BY-NC|MPL-1.1|MPL-2.0|EPL-1.0|EPL-2.0|CDDL-1.0|EUPL-1.1|EUPL-1.2|PolyForm|CPAL-1.0|Watcom-1.0"
           FOUND_VIOLATIONS=$(find . "${EXCLUDE_ARGS[@]}" -prune -o -type f -size +0c ! -name "deny.toml" ! -name "ci.yml" ! -name "*.md" -exec grep -E -H -n "$FORBIDDEN_PATTERNS" {} + 2>/dev/null || true)
 
@@ -332,7 +330,7 @@ jobs:
 
           exclude = {
               "target", "build", "cmake-build", "_build", ".git", ".cargo",
-              ".venv", "node_modules", "vendor", "third_party", "3rdparty",
+              ".venv", ".scratch", "node_modules", "vendor", "third_party", "3rdparty",
               "__pycache__", ".cache", "models", "containers",
               ".agent", ".agents", ".antigravity", ".gemini", ".idx", ".vscode", ".idea",
           }
@@ -521,7 +519,11 @@ jobs:
       - name: Build Rust liminika-core staticlib (Windows MSVC)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: cargo build --locked --release -p liminika-core
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo build --locked --release -p liminika-core
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify C-ABI Header Self-Containment & Layout Static Assertions (Unix C11 & C++20)
         if: runner.os != 'Windows'
@@ -545,21 +547,28 @@ jobs:
 
       - name: Verify C-ABI Header Self-Containment & Layout Static Assertions (Windows C11 & C++20)
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          echo "Checking C-ABI headers self-containment in include directory with MSVC..."
-          HEADERS=$(find include -type f \( -name "*.h" -o -name "*.hpp" \) -size +0c | sort)
-          if [ -z "$HEADERS" ]; then
-            echo "Error: No headers found under include/"
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Write-Host "Checking C-ABI headers self-containment in include directory with MSVC..."
+          $headers = Get-ChildItem -Path include -Recurse -File |
+            Where-Object { ($_.Extension -in @('.h', '.hpp')) -and $_.Length -gt 0 } |
+            Sort-Object FullName
+          if (-not $headers) {
+            Write-Error "Error: No headers found under include/"
             exit 1
-          fi
-          for header in $HEADERS; do
-            if [[ "$header" == *.h ]]; then
-              echo "Validating strict C11 inclusion for $header with cl.exe..."
-              MSYS2_ARG_CONV_EXCL='*' cl.exe /nologo /Zs /std:c11 /TC /W4 /WX /wd4324 /utf-8 /Zc:preprocessor /Iinclude "$header"
-            fi
-            echo "Validating strict C++20 inclusion for $header with cl.exe..."
-            MSYS2_ARG_CONV_EXCL='*' cl.exe /nologo /Zs /std:c++20 /TP /W4 /WX /wd4324 /permissive- /utf-8 /Zc:preprocessor /Iinclude "$header"
-          done
+          }
+          foreach ($header in $headers) {
+            if ($header.Extension -eq '.h') {
+              Write-Host "Validating strict C11 inclusion for $($header.FullName) with cl.exe..."
+              cl.exe /nologo /Zs /std:c11 /TC /W4 /WX /wd4324 /utf-8 /Zc:preprocessor /Iinclude "$($header.FullName)"
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+            Write-Host "Validating strict C++20 inclusion for $($header.FullName) with cl.exe..."
+            cl.exe /nologo /Zs /std:c++20 /TP /W4 /WX /wd4324 /permissive- /utf-8 /Zc:preprocessor /Iinclude "$($header.FullName)"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: Configure CMake (Linux with AVX2 enabled)
         if: runner.os == 'Linux'
@@ -581,6 +590,31 @@ jobs:
 
       - name: Configure CMake (Windows with AVX2 enabled)
         if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ((Test-Path "CMakeLists.txt") -and (Get-Command cmake -ErrorAction SilentlyContinue)) {
+            $cmakeArgs = @()
+            if (Get-Command ninja -ErrorAction SilentlyContinue) {
+              $cmakeArgs += "-GNinja"
+            }
+            if (Get-Command ccache -ErrorAction SilentlyContinue) {
+              $cmakeArgs += @(
+                "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+                "-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded",
+                "-DCMAKE_POLICY_DEFAULT_CMP0141=NEW"
+              )
+            }
+            cmake -B build -S . @cmakeArgs -DLIMINIKA_ENABLE_AVX2=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } else {
+            Write-Host "No root CMakeLists.txt or cmake binary found; skipping CMake configure."
+          }
+
+      - name: Configure CMake (macOS with NEON enabled)
+        if: runner.os == 'macOS'
         run: |
           if [ -f "CMakeLists.txt" ] && command -v cmake >/dev/null 2>&1; then
             CMAKE_EXTRA_ARGS=()
@@ -588,34 +622,17 @@ jobs:
               CMAKE_EXTRA_ARGS+=(-GNinja)
             fi
             if command -v ccache >/dev/null 2>&1; then
-              CMAKE_EXTRA_ARGS+=(
-                -DCMAKE_C_COMPILER_LAUNCHER=ccache
-                -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-                -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
-                -DCMAKE_POLICY_DEFAULT_CMP0141=NEW
-              )
+              CMAKE_EXTRA_ARGS+=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
             fi
             cmake -B build -S . "${CMAKE_EXTRA_ARGS[@]}" \
-              -DLIMINIKA_ENABLE_AVX2=ON \
+              -DLIMINIKA_ENABLE_NEON=ON \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo
           else
             echo "No root CMakeLists.txt or cmake binary found; skipping CMake configure."
           fi
 
-      - name: Configure CMake (macOS with NEON enabled)
-        if: runner.os == 'macOS'
-        run: |
-          if [ -f "CMakeLists.txt" ]; then
-            cmake -B build -S . -GNinja \
-              -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-              -DLIMINIKA_ENABLE_NEON=ON \
-              -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          else
-            echo "No root CMakeLists.txt found; skipping CMake configure."
-          fi
-
-      - name: Build C/C++ targets
+      - name: Build C/C++ targets (Unix)
+        if: runner.os != 'Windows'
         run: |
           if [ -d "build" ]; then
             cmake --build build --parallel
@@ -623,12 +640,33 @@ jobs:
             echo "Build directory does not exist; skipping build step."
           fi
 
-      - name: Run C/C++ unit tests
+      - name: Build C/C++ targets (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          if [ "$RUNNER_OS" != "Windows" ]; then
-            ulimit -s 16384 || true
-          fi
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if (Test-Path "build") {
+            cmake --build build --parallel
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } else {
+            Write-Host "Build directory does not exist; skipping build step."
+          }
+
+      - name: Run C/C++ unit tests (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          ulimit -s 16384 || true
           ctest --test-dir build --output-on-failure --no-tests=error
+
+      - name: Run C/C++ unit tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          ctest --test-dir build --output-on-failure --no-tests=error
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build & Run C/C++ Smoke Tests with ASan + UBSan (Linux)
         if: runner.os == 'Linux'
@@ -664,21 +702,9 @@ jobs:
         with:
           ref: ${{ needs.auto-format.outputs.formatted_sha || '' }}
 
-      - name: Install C/C++ Build Dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
-            if ! sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update; then
-              if [ -f /etc/apt/apt-mirrors.txt ]; then
-                printf 'https://archive.ubuntu.com/ubuntu\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null || true
-              fi
-              sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 update || true
-            fi
-            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 install -y cmake ninja-build || true
-          fi
-          if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
-            python3 -m pip install --quiet --retries 1 --timeout 10 cmake ninja 2>/dev/null || pip3 install --quiet --break-system-packages --retries 1 --timeout 10 cmake ninja 2>/dev/null || true
-          fi
+      - name: Setup MSVC Developer Command Prompt (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -703,17 +729,45 @@ jobs:
             cargo fmt --manifest-path examples/candle_eval/Cargo.toml -- --check
           fi
 
-      - name: Run cargo check/clippy (no_std core, default, and all-features)
+      - name: Run cargo check/clippy (no_std core, default, and all-features) (Unix)
+        if: runner.os != 'Windows'
         run: |
           cargo metadata --format-version 1 --locked >/dev/null
           cargo rustc --locked -p liminika-core --no-default-features --lib --crate-type rlib -- -D warnings
           cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
-      - name: Check & test standalone examples/candle_eval crate
+      - name: Run cargo check/clippy (no_std core, default, and all-features) (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo metadata --format-version 1 --locked > $null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo rustc --locked -p liminika-core --no-default-features --lib --crate-type rlib -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check & test standalone examples/candle_eval crate (Unix)
+        if: runner.os != 'Windows'
         run: |
           cargo clippy --locked --manifest-path examples/candle_eval/Cargo.toml --all-targets -- -D warnings
           cargo test --locked --manifest-path examples/candle_eval/Cargo.toml
+
+      - name: Check & test standalone examples/candle_eval crate (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo clippy --locked --manifest-path examples/candle_eval/Cargo.toml --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --manifest-path examples/candle_eval/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run cargo clippy & AVX2/FMA SIMD verification (x86_64 Linux)
         if: runner.os == 'Linux'
@@ -730,21 +784,23 @@ jobs:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --locked --workspace --no-deps --all-features
 
-      - name: Run Rust workspace unit, integration, & zero-alloc tests via nextest
+      - name: Run Rust workspace unit, integration, & zero-alloc tests via nextest (Unix)
+        if: runner.os != 'Windows'
         run: |
-          if [ "$RUNNER_OS" != "Windows" ]; then
-            ulimit -s 16384 || true
-          fi
+          ulimit -s 16384 || true
           cargo test --locked --workspace --doc --all-features
           cargo nextest run --locked --workspace --all-targets --all-features
 
-      - name: Link & Execute C11 FFI Hook Example against liminika_core (Linux)
-        if: runner.os == 'Linux'
+      - name: Run Rust workspace unit, integration, & zero-alloc tests via nextest (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          cargo build --locked -p liminika-core
-          cmake -B build-capi -S . -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          cmake --build build-capi --target lmnk_phi4_gguf_hook_example --parallel
-          ./build-capi/examples/c_api/lmnk_phi4_gguf_hook_example
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo test --locked --workspace --doc --all-features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo nextest run --locked --workspace --all-targets --all-features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   # =========================================================================
   # 6. DSL SPEC & EXAMPLES VALIDATION
@@ -773,7 +829,7 @@ jobs:
       - name: Test DSL crate & Validate Example DSL files
         run: |
           cargo test --locked -p liminika-dsl
-          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
+          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name .scratch -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
           DSL_FILES=$(find . "${EXCLUDE_ARGS[@]}" -prune -o -name "*.lmnk" -type f -print)
           if [ -z "$DSL_FILES" ]; then
             echo "Error: No .lmnk DSL files found to validate."
@@ -810,7 +866,7 @@ jobs:
       - name: Verify Python Syntax, CLI Smoke Checks & Unit Tests
         run: |
           echo "Verifying Python syntax..."
-          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
+          EXCLUDE_ARGS=( \( -name target -o -name "build*" -o -name "cmake-build*" -o -name _build -o -name .git -o -name .cargo -o -name .venv -o -name .scratch -o -name node_modules -o -name vendor -o -name third_party -o -name 3rdparty -o -name __pycache__ -o -name .cache -o -name models -o -name containers \) )
           PY_FILES=$(find . "${EXCLUDE_ARGS[@]}" -prune -o -name "*.py" -type f -print 2>/dev/null || true)
           if [ -n "$PY_FILES" ]; then
             echo "$PY_FILES" | xargs python -m py_compile

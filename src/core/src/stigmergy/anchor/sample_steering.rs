@@ -570,7 +570,7 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
         let gated_mass = branchless_select_f32(has_signal, effective_mass, 0.0);
 
         let (resonant_pull, coherence) = if has_signal {
-            trail_inout.apply_unified_field_anchor_resonance(&coords, gated_mass)
+            trail_inout.apply_unified_manifold_anchor_resonance(&coords, gated_mass)
         } else {
             (0.0, 0.0)
         };

@@ -38,7 +38,7 @@ pub enum DistortionTensionStateCode {
     ActiveImmediateDamping = 2,
 }
 
-/// Asymmetric homeostatic field tension (`32 B`, `#[repr(C, align(16))]`) mediating the tug-of-war
+/// Asymmetric homeostatic restoring tension (`32 B`, `#[repr(C, align(16))]`) mediating the tug-of-war
 /// between [`SystemSpineState`] convergence and [`EgoDifferentialNet`] deviation.
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

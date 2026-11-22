@@ -171,9 +171,9 @@ pub const MAX_ATTRACTOR_PULL_FORCE: f32 = 64.0;
 pub const TRAIL_FLAG_PHASE_STEER_ACTIVE: u32 = 1 << 0;
 /// Trail flag bit (`0x02`): Phase-Conjugate Attractor Repulsion ($-\boldsymbol{\Delta\theta}$) was triggered.
 pub const TRAIL_FLAG_REPULSION_ACTIVE: u32 = 1 << 1;
-/// Trail flag bit (`0x04`): Trail crossed the crystallization density threshold ($\rho_{\mathrm{stigmergy}} \ge \tau_{\mathrm{crystal}}$).
+/// Trail flag bit (`0x04`): Trail crossed the crystallization density threshold ($\rho_{\mathrm{stigmergy}} \ge \tau_{\mathrm{anchor}}$).
 pub const TRAIL_FLAG_CRYSTALLIZED_CANDIDATE: u32 = 1 << 2;
-/// Trail flag bit (`0x08`): Non-linear unified-field or cross-slot attractor resonance boosted the trail's phase trajectory.
+/// Trail flag bit (`0x08`): Non-linear unified-manifold or cross-slot attractor resonance boosted the trail's phase trajectory.
 pub const TRAIL_FLAG_SYNERGY_RESONANCE: u32 = 1 << 3;
 /// Trail flag bit (`0x10`): Liminal beat perturbation was injected across competing attractor boundaries.
 pub const TRAIL_FLAG_LIMINAL_BEAT_ACTIVE: u32 = 1 << 4;

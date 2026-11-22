@@ -700,7 +700,7 @@ pub(super) unsafe fn execute_gateway_frame_steer_and_optional_kmeans_ffi(
     }
 }
 
-/// Shared register-resident post-routing QDPS + PhaseClamp phase steering helper for Coarse-to-Fine
+/// Shared register-resident post-routing `PhaseStepFilter` + `PhaseClamp` phase steering helper for Coarse-to-Fine
 /// pointer-trail routing entry points (fast-pathing uniform and all-zero filtered words).
 #[inline]
 pub(super) fn steer_routed_trail_words_qk_safe(
@@ -715,7 +715,7 @@ pub(super) fn steer_routed_trail_words_qk_safe(
 ) {
     if (trail_flags & TRAIL_FLAG_INERTIAL_SKIP_ACTIVE) == 0 {
         let min_step_q7 = branchless_rad_to_phase_step_u8(min_step_rad);
-        let eff_ripa = branchless_select_f32(
+        let eff_clamp_rad = branchless_select_f32(
             branchless_is_finite_f32(win_clamp_rad) & (win_clamp_rad > 0.0),
             win_clamp_rad,
             DEFAULT_PHASE_CLAMP_MAX_RAD,
@@ -729,7 +729,7 @@ pub(super) fn steer_routed_trail_words_qk_safe(
                     head_dim,
                     num_heads,
                     false,
-                    eff_ripa,
+                    eff_clamp_rad,
                     q_aligned,
                     k_opt,
                 );
@@ -744,7 +744,7 @@ pub(super) fn steer_routed_trail_words_qk_safe(
                     head_dim,
                     num_heads,
                     false,
-                    eff_ripa,
+                    eff_clamp_rad,
                     q_aligned,
                     k_opt,
                 );
@@ -804,7 +804,7 @@ pub(super) fn steer_crystallized_records_with_optional_bloom_safe(
     }
     trail_inout.sync_flags_with_current_ptr();
 
-    let eff_ripa = branchless_select_f32(
+    let eff_clamp_rad = branchless_select_f32(
         branchless_is_finite_f32(dom_clamp) & (dom_clamp > 0.0),
         dom_clamp,
         DEFAULT_PHASE_CLAMP_MAX_RAD,
@@ -812,7 +812,7 @@ pub(super) fn steer_crystallized_records_with_optional_bloom_safe(
     steer_routed_trail_words_qk_safe(
         &folded_w,
         trail_inout.flags,
-        eff_ripa,
+        eff_clamp_rad,
         min_step_rad,
         head_dim,
         num_heads,
@@ -820,7 +820,7 @@ pub(super) fn steer_crystallized_records_with_optional_bloom_safe(
         k_opt,
     );
 
-    Ok((tot_pull, dom_id, eff_ripa))
+    Ok((tot_pull, dom_id, eff_clamp_rad))
 }
 
 /// Reinterprets a non-null raw `lmnk_q7_t` pointer as a zero-copy reference to a 64-head phase array.

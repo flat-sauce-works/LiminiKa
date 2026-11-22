@@ -11,7 +11,7 @@ use super::*;
 
 /// Core trait for dynamic phase-shifted RoPE (`PhaseSteering`), soft-bounded phase clamping (`PhaseClamp`),
 /// discrete phase-step filtering (`PhaseStepFilter`), Seam-Free Circular $S^1$ Lazy Phase Unwrapping,
-/// Single-Manifold Unified-Field Phase Steering, Attention $\times$ Phase-Interference Score
+/// Single-Manifold Unified-Manifold Phase Steering, Attention $\times$ Phase-Interference Score
 /// Modulation, Bayesian Pointer-Trail Attention Modulation, and Closed-Form Orthogonal Procrustes
 /// Phase Estimation (**Nano / Micro Level**).
 pub trait PhaseSteering {

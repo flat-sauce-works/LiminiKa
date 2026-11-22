@@ -255,8 +255,11 @@ const _: () = {
     assert!(offset_of!(lmnk_phase_anchor_record_t, anchor_id) == 8);
     assert!(offset_of!(lmnk_phase_anchor_record_t, sample_count) == 12);
     assert!(offset_of!(lmnk_phase_anchor_record_t, mapped_section_offset48) == 16);
+    assert!(offset_of!(lmnk_phase_anchor_record_t, phase_clamp_rad) == 40);
+    assert!(offset_of!(lmnk_phase_anchor_record_t, lineage_flags) == 48);
     assert!(offset_of!(lmnk_phase_anchor_record_t, checksum_crc32) == 52);
     assert!(offset_of!(lmnk_phase_anchor_record_t, dominant_slot) == 56);
+    assert!(offset_of!(lmnk_phase_anchor_record_t, attribution_tag) == 59);
     assert!(offset_of!(lmnk_phase_anchor_record_t, reserved_align64) == 60);
     assert!(offset_of!(lmnk_phase_anchor_record_t, phase_profile) == 64);
     assert!(LMNK_FOUR_SECTION_HEADER_BYTES == 192);

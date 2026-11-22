@@ -33,7 +33,7 @@ use crate::stigmergy::{
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LedgerSlot {
-    /// Active extension execution mode (`0` = Scratchpad, `1` = DNP Plugin, `2` = Shared IPC Buffer).
+    /// Active extension execution mode (`0` = Scratchpad, `1` = Dynamic Plugin, `2` = Shared IPC Buffer).
     pub mode: u32,
     /// Ring buffer head write index.
     pub telemetry_ring_head: u16,

@@ -587,7 +587,7 @@ mod tests {
             let mut zc_num_c = 0usize;
             let mut zc_pull = 0.0f32;
             let mut zc_dom_id = 0u32;
-            let mut zc_ripa = 0.0f32;
+            let mut zc_clamp_rad = 0.0f32;
             assert_eq!(
                 lmnk_container_map_and_steer_four_section_zero_copy_safe(
                     container_buf.data.as_ptr(),
@@ -601,13 +601,13 @@ mod tests {
                     &mut zc_num_c,
                     &mut zc_pull,
                     &mut zc_dom_id,
-                    &mut zc_ripa,
+                    &mut zc_clamp_rad,
                 ),
                 LMNK_OK
             );
             assert_eq!(zc_num_c, 1);
             assert_eq!(zc_dom_id, 55);
-            assert!(zc_pull > 0.0 && zc_ripa > 0.05);
+            assert!(zc_pull > 0.0 && zc_clamp_rad > 0.05);
             assert_eq!(zc_map_trail.cluster_id, 55);
 
             let mut raw_bytes_centroids = [PhaseAnchorRecord::default(); 2];

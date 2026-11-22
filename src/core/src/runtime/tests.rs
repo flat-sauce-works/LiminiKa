@@ -1515,7 +1515,7 @@ fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
 }
 
 #[test]
-fn fractal_relative_node_self_similarity_across_trail_crystal_and_nested_arrays() {
+fn fractal_relative_node_self_similarity_across_trail_anchor_and_nested_arrays() {
     let mut t0 = PointerTrail {
         target_anchor_id: 10,
         stigmergic_density: 1.5,
@@ -1628,16 +1628,16 @@ fn stigmergic_overlap_discovery_and_core_stack_feedback() {
     assert!(stack.stigmergy.granule_noise_tolerance_q7[0] > init_tol_g0);
     assert_eq!(stack.stigmergy.overlap_mask, overlap.overlap_core_mask);
 
-    // Serendipitous attractor birth annexes the exterior granule out of Liminal
+    // Exploratory attractor birth annexes the exterior granule out of Liminal
     let mut c0 = PhaseAnchorRecord::default();
     let _ = c0.absorb_gateway_frame(&nodes[0].synthesize_gateway_frame());
     let mut c1 = PhaseAnchorRecord::default();
     let _ = c1.absorb_gateway_frame(&nodes[1].synthesize_gateway_frame());
-    let mut crystals = [c0, c1, PhaseAnchorRecord::default()];
+    let mut anchors = [c0, c1, PhaseAnchorRecord::default()];
     let mut trail = PointerTrail::default();
     let (slot_idx, spawned_aid, did_nucleate) =
         PhaseAnchorRecord::nucleate_discovered_anchor_from_lacuna_64(
-            &mut crystals,
+            &mut anchors,
             &overlap,
             &drifted_w,
             901,
@@ -1646,12 +1646,12 @@ fn stigmergic_overlap_discovery_and_core_stack_feedback() {
     assert!(did_nucleate);
     assert_eq!(slot_idx, 2);
     assert_eq!(spawned_aid, 901);
-    assert!(crystals[2].verify_integrity());
+    assert!(anchors[2].verify_integrity());
 
     let post_overlap = evaluate_stigmergic_overlap_and_discovery_words_64(
-        &crystals, &query_w, &drifted_w, 0.70, 16,
+        &anchors, &query_w, &drifted_w, 0.70, 16,
     );
-    // Granule 6 is no longer in the unobserved exterior because Crystal 2 now covers it!
+    // Granule 6 is no longer in the unobserved exterior because Anchor 2 now covers it!
     assert_eq!(post_overlap.lacuna_exterior_mask & (1 << 6), 0);
 
     // Verify zero-alloc Core Layer 0 + Layer 1 + Layer 2 Mermaid output
@@ -2190,7 +2190,7 @@ fn test_phase_steering_closed_loop_gateway_signal() {
 }
 
 #[test]
-fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
+fn test_lora_phase_kv_cache_replay_unified_manifold_and_entropy_tunneling() {
     struct MockColdSystem;
     impl KvKeyframeCache for MockColdSystem {
         fn seek_to_token(
@@ -2512,9 +2512,9 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
         stack: &stack,
         delta: &delta,
         horizon: &horizon,
-        venn: &overlap,
+        overlap: &overlap,
         derivative_alpha_q7: DEFAULT_DERIVATIVE_ALPHA_Q7,
-        venn_partition: None,
+        lacuna_partition: None,
         spine: None,
         ego_net: None,
         tension: None,
@@ -2833,8 +2833,8 @@ fn test_ego_differential_net_hops_consolidation_and_evaporation() {
         net_3.record_chain_activation(usize::from(entry), h3);
     }
     assert!(net_3.node_cold[2].reinforce_count >= 4);
-    let crystal = net_3.consolidate_and_evaporate_cold_path(6);
-    assert!(crystal.is_some());
+    let anchor = net_3.consolidate_and_evaporate_cold_path(6);
+    assert!(anchor.is_some());
     assert_ne!(
         net_3.export_node(2).flags & DISTORTION_DELTA_FLAG_CONSOLIDATED_IFRAME,
         0

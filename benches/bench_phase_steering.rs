@@ -58,7 +58,7 @@ fn reset_trail_fast(dst: &mut lmnk_pointer_trail_t, src: &lmnk_pointer_trail_t) 
 /// Restores `dst` from `src` using [`PhaseAnchorRecord::copy_from_fast`] (64-bit GPR stores
 /// for `phase_profile`), avoiding 256-bit YMM-to-GPR Store-to-Load Forwarding (STLF) stalls.
 #[inline(always)]
-fn reset_crystal_fast(dst: &mut PhaseAnchorRecord, src: &PhaseAnchorRecord) {
+fn reset_anchor_fast(dst: &mut PhaseAnchorRecord, src: &PhaseAnchorRecord) {
     dst.copy_from_fast(src);
 }
 
@@ -235,7 +235,7 @@ fn bench_phase_steering_operations(c: &mut Criterion) {
             total_elements,
         );
 
-        // 2. RIPA Soft-Bounded Phase Clamping (O(1) Direct LUT + Upper d_head/4 Channels)
+        // 2. PhaseClamp Soft-Bounded Phase Clamping (O(1) Direct LUT + Upper d_head/4 Channels)
         group.throughput(Throughput::Bytes(single_tensor_bytes as u64));
         group.bench_with_input(
             BenchmarkId::new(
@@ -421,9 +421,9 @@ fn bench_phase_steering_long_context_and_procrustes(c: &mut Criterion) {
         });
     });
 
-    // 4. Quantization-Discretized Phase Steering (32-Head AVX2/SWAR QDPS Step Filter)
+    // 4. PhaseStepFilter (32-Head AVX2/SWAR Step Filter)
     group.throughput(Throughput::Elements(u64::from(num_heads)));
-    group.bench_function("qdps_quantization_step_filter_high_frequency", |b| {
+    group.bench_function("phase_step_filter_high_frequency", |b| {
         let seed_buf = AlignedBuffer16::new([
             3i8, 12, -2, 18, -4, 9, 1, -15, -5, 14, 4, -21, 6, -11, -3, 22, 2, -16, 5, 25, -6, 13,
             -1, -19, -4, 17, 3, -24, 5, -10, 2, 20,
@@ -613,10 +613,10 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
 
             let mut centroids = base_centroids;
             for _ in 0..8 {
-                reset_crystal_fast(&mut centroids[0], &base_centroids[0]);
-                reset_crystal_fast(&mut centroids[1], &base_centroids[1]);
-                reset_crystal_fast(&mut centroids[2], &base_centroids[2]);
-                reset_crystal_fast(&mut centroids[3], &base_centroids[3]);
+                reset_anchor_fast(&mut centroids[0], &base_centroids[0]);
+                reset_anchor_fast(&mut centroids[1], &base_centroids[1]);
+                reset_anchor_fast(&mut centroids[2], &base_centroids[2]);
+                reset_anchor_fast(&mut centroids[3], &base_centroids[3]);
                 centroids[4].base_energy = base_centroids[4].base_energy;
                 centroids[4].phase_gravity_mass = base_centroids[4].phase_gravity_mass;
                 centroids[4].checksum_crc32 = base_centroids[4].checksum_crc32;
@@ -626,7 +626,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 centroids[6].base_energy = base_centroids[6].base_energy;
                 centroids[6].phase_gravity_mass = base_centroids[6].phase_gravity_mass;
                 centroids[6].checksum_crc32 = base_centroids[6].checksum_crc32;
-                reset_crystal_fast(&mut centroids[7], &base_centroids[7]);
+                reset_anchor_fast(&mut centroids[7], &base_centroids[7]);
                 let _ = PhaseAnchorRecord::merge_and_prune_centroids_64(
                     &mut centroids,
                     0.85f32,
@@ -636,10 +636,10 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
             }
 
             b.iter(|| {
-                reset_crystal_fast(&mut centroids[0], &base_centroids[0]);
-                reset_crystal_fast(&mut centroids[1], &base_centroids[1]);
-                reset_crystal_fast(&mut centroids[2], &base_centroids[2]);
-                reset_crystal_fast(&mut centroids[3], &base_centroids[3]);
+                reset_anchor_fast(&mut centroids[0], &base_centroids[0]);
+                reset_anchor_fast(&mut centroids[1], &base_centroids[1]);
+                reset_anchor_fast(&mut centroids[2], &base_centroids[2]);
+                reset_anchor_fast(&mut centroids[3], &base_centroids[3]);
                 centroids[4].base_energy = base_centroids[4].base_energy;
                 centroids[4].phase_gravity_mass = base_centroids[4].phase_gravity_mass;
                 centroids[4].checksum_crc32 = base_centroids[4].checksum_crc32;
@@ -649,7 +649,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 centroids[6].base_energy = base_centroids[6].base_energy;
                 centroids[6].phase_gravity_mass = base_centroids[6].phase_gravity_mass;
                 centroids[6].checksum_crc32 = base_centroids[6].checksum_crc32;
-                reset_crystal_fast(&mut centroids[7], &base_centroids[7]);
+                reset_anchor_fast(&mut centroids[7], &base_centroids[7]);
                 let res = PhaseAnchorRecord::merge_and_prune_centroids_64(
                     black_box(&mut centroids),
                     black_box(0.85f32),
@@ -993,7 +993,7 @@ fn bench_phase_steering_extreme_and_edge_cases(c: &mut Criterion) {
         });
     });
 
-    // 3. Extreme Phase Spike Noise & Geodesic RIPA Branchless Clamp (Heterogeneous Extreme Spikes)
+    // 3. Extreme Phase Spike Noise & Geodesic PhaseClamp Branchless Clamp (Heterogeneous Extreme Spikes)
     group.bench_function("extreme_phase_spike_clamp_branchless", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         let mut q_slice = shared_extreme_arena

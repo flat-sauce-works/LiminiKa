@@ -13,7 +13,7 @@ use crate::foundation::{
 use crate::liminal::{DEFAULT_ENTROPY_EPS, NUM_STIGMERGIC_GRANULES};
 use crate::stigmergy::MAX_ATTRACTOR_PULL_FORCE;
 
-use super::crc32_delta::crc32_update_crystal_energy_and_mass_delta;
+use super::crc32_delta::crc32_update_anchor_energy_and_mass_delta;
 use super::{
     PhaseAnchorRecord, ANCHOR_LINEAGE_MATURE_BIT, LMNK_PHASE_ANCHOR_MAGIC,
     LMNK_PHASE_ANCHOR_VERSION,
@@ -172,7 +172,7 @@ impl PhaseAnchorRecord {
                         & (centroids[i].version == LMNK_PHASE_ANCHOR_VERSION)
                         & (centroids[i].checksum_crc32 != 0)
                     {
-                        centroids[i].checksum_crc32 = crc32_update_crystal_energy_and_mass_delta(
+                        centroids[i].checksum_crc32 = crc32_update_anchor_energy_and_mass_delta(
                             centroids[i].checksum_crc32,
                             prev_be_bits ^ next_be.to_bits(),
                             prev_gm_bits ^ next_gm.to_bits(),

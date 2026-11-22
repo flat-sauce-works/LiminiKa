@@ -26,18 +26,18 @@ PROFILES: dict[str, dict[str, str | None]] = {
     "quick": {
         "description": "Fast smoke subset across PhaseSteering and EntropyControl core kernels",
         "filter": (
-            "apply_phase_steering_32b|apply_phase_steering_safe_ripa|"
-            "eval_stateful_normal_mode|eval_liminal_void_dyadic128|"
+            "apply_phase_steering_32b|apply_phase_steering_safe_clamped|"
+            "eval_stateful_normal_mode|eval_lacuna_energy_dyadic128|"
             "subhead_8slot_pseudo_moe_ensemble|"
             "online_toroidal_centroid_merge_and_prune_8centroids_64h|"
-            "evaluate_adaptive_compute_and_pprc_gop_budget"
+            "evaluate_adaptive_compute_and_gop_budget"
         ),
         "skip": "Provisional_LMNK_Container",
     },
     "extreme": {
         "description": "Extreme stress, boundary saturation, subnormal rescue, and singularity cases",
         "filter": (
-            "Extreme_And_Edge_Cases|extreme_head_dim|q7_boundary_|ripa_extreme_|"
+            "Extreme_And_Edge_Cases|extreme_head_dim|q7_boundary_|extreme_phase_spike_clamp_branchless|"
             "slerp_norm_guard_|subnormal|1m|chattering_|spike_recovery|"
             "odd_remainder|pitchfork|singularity"
         ),

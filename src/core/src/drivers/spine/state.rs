@@ -508,4 +508,90 @@ mod tests {
             (FrameDirective::RejectUndefined, 0)
         );
     }
+
+    #[test]
+    fn test_spine_frame_transition_input_from_lacuna_partition() {
+        let mut spine = SystemSpineState::new();
+        spine.pinned_slot_mask = 0b0000_0100;
+        let expected_non_pinned = 0b0011_1100_u8 & !spine.pinned_slot_mask;
+
+        // 1. Unobserved (S \cup O complement): zero-aperture isolation -> Skip regardless of delta/GOP.
+        let unobserved_part = crate::liminal::LacunaPartition8 {
+            unobserved_mask: 0xFF,
+            ..Default::default()
+        };
+        let unobserved_in = SpineFrameTransitionInput::from_lacuna_partition(
+            &unobserved_part,
+            120,
+            16,
+            24,
+            16,
+            SPINE_TRANSITION_FLAG_NEW_BASIN_SPAWNED | SPINE_TRANSITION_FLAG_GUARD_REPULSION,
+        );
+        assert_eq!(unobserved_in.lacuna_code, Lacuna::Unobserved.code());
+        assert_eq!(unobserved_in.candidate_granule_mask, 0);
+        assert_eq!(
+            spine.evaluate_frame_transition_branchless(unobserved_in),
+            (FrameDirective::Skip, 0)
+        );
+
+        // 2. SelfRef stationary bypass vs nominal delta emission.
+        let self_ref_part = crate::liminal::LacunaPartition8 {
+            self_ref_mask: 0b0011_1100,
+            unobserved_mask: 0b1100_0011,
+            ..Default::default()
+        };
+        let self_ref_stationary = SpineFrameTransitionInput::from_lacuna_partition(
+            &self_ref_part,
+            2,
+            16,
+            1,
+            16,
+            SPINE_TRANSITION_FLAG_STATIONARY_BYPASS_READY,
+        );
+        assert_eq!(self_ref_stationary.lacuna_code, Lacuna::SelfRef.code());
+        assert_eq!(self_ref_stationary.candidate_granule_mask, 0b0011_1100);
+        assert_eq!(
+            spine.evaluate_frame_transition_branchless(self_ref_stationary),
+            (FrameDirective::Skip, 0)
+        );
+        let self_ref_delta =
+            SpineFrameTransitionInput::from_lacuna_partition(&self_ref_part, 2, 16, 1, 16, 0);
+        assert_eq!(
+            spine.evaluate_frame_transition_branchless(self_ref_delta),
+            (FrameDirective::EmitDelta, expected_non_pinned)
+        );
+
+        // 3. Exterior dominates SelfRef -> sandbox delta / ReAnchorKeyframe.
+        let exterior_part = crate::liminal::LacunaPartition8 {
+            self_ref_mask: 0b0000_1100,
+            exterior_mask: 0b0011_0000,
+            unobserved_mask: 0b1100_0011,
+            ..Default::default()
+        };
+        let exterior_in =
+            SpineFrameTransitionInput::from_lacuna_partition(&exterior_part, 2, 16, 1, 16, 0);
+        assert_eq!(exterior_in.lacuna_code, Lacuna::Exterior.code());
+        assert_eq!(exterior_in.candidate_granule_mask, 0b0011_1100);
+        assert_eq!(
+            spine.evaluate_frame_transition_branchless(exterior_in),
+            (FrameDirective::ReAnchorKeyframe, expected_non_pinned)
+        );
+
+        // 4. Undefined dominates all regimes -> RejectUndefined fault isolation.
+        let undefined_part = crate::liminal::LacunaPartition8 {
+            self_ref_mask: 0b0000_0100,
+            exterior_mask: 0b0000_1000,
+            undefined_mask: 0b0001_0000,
+            unobserved_mask: 0b1110_0011,
+            ..Default::default()
+        };
+        let undefined_in =
+            SpineFrameTransitionInput::from_lacuna_partition(&undefined_part, 2, 16, 1, 16, 0);
+        assert_eq!(undefined_in.lacuna_code, Lacuna::Undefined.code());
+        assert_eq!(
+            spine.evaluate_frame_transition_branchless(undefined_in),
+            (FrameDirective::RejectUndefined, 0)
+        );
+    }
 }

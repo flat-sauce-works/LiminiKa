@@ -170,22 +170,22 @@ pub trait CausalProvenanceSignal {
             while g < NUM_STIGMERGIC_GRANULES {
                 let bit = 1u8 << g;
                 let pher = stack.stigmergy.granule_pheromone_q7[g];
-                let in_venn_core = (stack.stigmergy.overlap_mask & bit) != 0;
-                let in_serendip = (stack.stigmergy.discovery_excursion_mask & bit) != 0;
+                let in_overlap_core = (stack.stigmergy.overlap_mask & bit) != 0;
+                let in_discovery = (stack.stigmergy.discovery_excursion_mask & bit) != 0;
                 let ego_auto = stack.ego.granule_autonomy_q7[g];
 
-                let venn_bonus = branchless_select_u8(in_venn_core, 24, 0);
+                let overlap_bonus = branchless_select_u8(in_overlap_core, 24, 0);
                 let ch_accepts_ego_transgress = (ch == 2) | (stack.ego.trait_floor_bias_q7[ch] < 0);
                 let ego_bonus = branchless_select_u8(
                     ego_trans_pos & ch_accepts_ego_transgress & (ego_auto >= 24),
                     ego_auto >> 1,
                     0,
                 );
-                let eff_density = pher.saturating_add(venn_bonus).saturating_add(ego_bonus);
+                let eff_density = pher.saturating_add(overlap_bonus).saturating_add(ego_bonus);
 
                 let req_floor = branchless_select_u8(
                     ch == 2,
-                    (eff_floor >> 1).saturating_sub(branchless_select_u8(in_serendip, 8, 0)),
+                    (eff_floor >> 1).saturating_sub(branchless_select_u8(in_discovery, 8, 0)),
                     eff_floor >> 1,
                 );
                 let g_open = ap_open & (eff_density >= req_floor);
@@ -867,7 +867,7 @@ impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
             self.base.subhead_route_density_thresh * eq_scale * (1.0_f32 + 0.30_f32 * pressure);
         let rank1_thresh =
             self.base.rank1_inject_density_thresh * eq_scale * (1.0_f32 + 0.50_f32 * pressure);
-        let crystal_thresh = self.base.crystallize_density_thresh
+        let anchor_thresh = self.base.crystallize_density_thresh
             * eq_scale
             * (1.0_f32 - 0.15_f32 * sustained_pull + 0.25_f32 * pressure);
 
@@ -895,7 +895,7 @@ impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
             express_steer_density_thresh: express_thresh,
             subhead_route_density_thresh: subhead_thresh,
             rank1_inject_density_thresh: rank1_thresh,
-            crystallize_density_thresh: crystal_thresh,
+            crystallize_density_thresh: anchor_thresh,
             contradiction_coherence_thresh: contradict_thresh,
         }
     }

@@ -153,7 +153,7 @@ fn test_paged_bitmask_bloom_trail_swarm_and_ledger_constant_time() {
 }
 
 #[test]
-fn test_liminal_bridge_order_invariant_unified_field_and_bayesian_pointer_rewire() {
+fn test_liminal_bridge_order_invariant_unified_manifold_and_bayesian_pointer_rewire() {
     let mut mem_a = PointerTrail {
         current_ptr: 0x1000,
         step_count: 5,
@@ -183,7 +183,7 @@ fn test_liminal_bridge_order_invariant_unified_field_and_bayesian_pointer_rewire
     assert_ne!(mem_b.flags & TRAIL_FLAG_SYNERGY_RESONANCE, 0);
 
     let anchor_phases = [40i8; MAX_ATTENTION_HEADS];
-    let (res_pull, res_coh) = mem_b.apply_unified_field_anchor_resonance(&anchor_phases, 1.5);
+    let (res_pull, res_coh) = mem_b.apply_unified_manifold_anchor_resonance(&anchor_phases, 1.5);
     assert!((res_coh - 1.0).abs() < 1e-4 && (res_pull - 3.0).abs() < 1e-4);
 
     let anchors_fwd = [
@@ -202,9 +202,9 @@ fn test_liminal_bridge_order_invariant_unified_field_and_bayesian_pointer_rewire
     let mut trail_fwd = mem_b;
     let mut trail_rev = mem_b;
     let (pull_f, coh_f, cnt_f) =
-        trail_fwd.apply_unified_field_anchor_slice_resonance(&anchors_fwd, &energies_fwd, None);
+        trail_fwd.apply_unified_manifold_anchor_slice_resonance(&anchors_fwd, &energies_fwd, None);
     let (pull_r, coh_r, cnt_r) =
-        trail_rev.apply_unified_field_anchor_slice_resonance(&anchors_rev, &energies_rev, None);
+        trail_rev.apply_unified_manifold_anchor_slice_resonance(&anchors_rev, &energies_rev, None);
     assert_eq!((cnt_f, cnt_r), (3, 3));
     assert!((pull_f - pull_r).abs() < 1e-5 && (coh_f - coh_r).abs() < 1e-5);
     assert_eq!(

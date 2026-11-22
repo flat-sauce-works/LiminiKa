@@ -83,7 +83,7 @@ pub const DEFAULT_STIGMERGIC_SUBHEAD_ROUTE_THRESH: f32 = 0.85;
 /// Default stigmergic trail density threshold ($\tau_{\mathrm{rank1}} = 1.50$) triggering [`StigmergicActionDecision::FullOrchestration`].
 pub const DEFAULT_STIGMERGIC_RANK1_INJECT_THRESH: f32 = 1.50;
 
-/// Default stigmergic trail density threshold ($\tau_{\mathrm{crystal}} = 2.20$) triggering [`StigmergicActionDecision::CrystallizeMacroBasin`].
+/// Default stigmergic trail density threshold ($\tau_{\mathrm{anchor}} = 2.20$) triggering [`StigmergicActionDecision::CrystallizeMacroBasin`].
 pub const DEFAULT_STIGMERGIC_CRYSTALLIZE_THRESH: f32 = 2.20;
 
 /// Default directional contradiction threshold ($\tau_{\mathrm{contradict}} = 0.25$) where $\mathcal{C}_{\mathrm{phase}} < -\tau_{\mathrm{contradict}}$ triggers [`StigmergicActionDecision::RepulsionEscape`].
@@ -115,10 +115,10 @@ pub enum StigmergicActionDecision {
     /// $\tau_{\mathrm{subhead}} \le \rho < \tau_{\mathrm{rank1}}$ or high bifurcation entropy.
     SubHeadRoute = 3,
     /// Full $SO(2)$-fused `PhaseClamp` + sub-head router + Dynamic Rank-1 residual injection
-    /// (`ACTION_PRESET_FULL_ORCHESTRATION = 0x19`): $\tau_{\mathrm{rank1}} \le \rho < \tau_{\mathrm{crystal}}$.
+    /// (`ACTION_PRESET_FULL_ORCHESTRATION = 0x19`): $\tau_{\mathrm{rank1}} \le \rho < \tau_{\mathrm{anchor}}$.
     FullOrchestration = 4,
     /// Super-saturated coherent basin promotion (`ACTION_PRESET_FULL_ORCHESTRATION` +
-    /// `TRAIL_FLAG_CRYSTALLIZED_CANDIDATE`): $\rho \ge \tau_{\mathrm{crystal}}$ and
+    /// `TRAIL_FLAG_CRYSTALLIZED_CANDIDATE`): $\rho \ge \tau_{\mathrm{anchor}}$ and
     /// $\mathcal{C}_{\mathrm{phase}} \ge \tau_{\mathrm{merge}}$.
     CrystallizeMacroBasin = 5,
     /// Phase-conjugate anti-phase repulsion escape (`ACTION_PRESET_REPULSION_ESCAPE = 0x0D` on
@@ -396,7 +396,7 @@ pub struct StigmergicThresholds {
     pub subhead_route_density_thresh: f32,
     /// Minimum stigmergic density $\tau_{\mathrm{rank1}}$ triggering [`StigmergicActionDecision::FullOrchestration`] (default `1.50`).
     pub rank1_inject_density_thresh: f32,
-    /// Minimum stigmergic density $\tau_{\mathrm{crystal}}$ triggering [`StigmergicActionDecision::CrystallizeMacroBasin`] (default `2.20`).
+    /// Minimum stigmergic density $\tau_{\mathrm{anchor}}$ triggering [`StigmergicActionDecision::CrystallizeMacroBasin`] (default `2.20`).
     pub crystallize_density_thresh: f32,
     /// Contradiction coherence threshold $\tau_{\mathrm{contradict}} \in [0.0, 1.0]$ where $\mathcal{C}_{\mathrm{phase}} < -\tau_{\mathrm{contradict}}$ triggers [`StigmergicActionDecision::RepulsionEscape`] (default `0.25`).
     pub contradiction_coherence_thresh: f32,
@@ -548,7 +548,7 @@ impl StigmergicThresholds {
         let ge_subhead = (rho >= self.subhead_route_density_thresh)
             | (ge_steer & (h_tilde >= subhead_entropy_fallback));
         let ge_rank1 = (rho >= self.rank1_inject_density_thresh) & (h_tilde > rank1_entropy_min);
-        let ge_crystal = (rho >= self.crystallize_density_thresh)
+        let ge_anchor = (rho >= self.crystallize_density_thresh)
             & (coh >= DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE);
 
         // Build decision discriminant bottom-up along the density ladder (`0..=6`):
@@ -569,13 +569,13 @@ impl StigmergicThresholds {
             disc,
         );
         disc = branchless_select_u8(
-            ge_crystal,
+            ge_anchor,
             StigmergicActionDecision::CrystallizeMacroBasin as u8,
             disc,
         );
         // Low-entropy laminar regime overrides active steering unless super-saturated crystallization is ready:
         disc = branchless_select_u8(
-            is_low_entropy_skip & (!ge_crystal),
+            is_low_entropy_skip & (!ge_anchor),
             StigmergicActionDecision::InertialLayerSkip as u8,
             disc,
         );
@@ -597,11 +597,11 @@ impl StigmergicThresholds {
             TRAIL_FLAG_PHASE_STEER_ACTIVE,
             0,
         ) | branchless_select_u32(
-            is_low_entropy_skip & (!ge_crystal),
+            is_low_entropy_skip & (!ge_anchor),
             TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
             0,
         ) | branchless_select_u32(
-            ge_crystal & (!is_repulsed),
+            ge_anchor & (!is_repulsed),
             TRAIL_FLAG_CRYSTALLIZED_CANDIDATE | TRAIL_FLAG_SYNERGY_RESONANCE,
             0,
         ) | branchless_select_u32(
@@ -1100,6 +1100,19 @@ pub struct StigmergicSubstrate {
 // SAFETY: `StigmergicSubstrate` is a `#[repr(C, align(64))]` composition of `Pod` structs and primitive
 // arrays totaling exactly 2,816 bytes with zero implicit padding.
 unsafe impl Pod for StigmergicSubstrate {}
+
+const _: () = {
+    assert!(core::mem::size_of::<StigmergicSubstrate>() == 2816);
+    assert!(core::mem::align_of::<StigmergicSubstrate>() == 64);
+    assert!(core::mem::offset_of!(StigmergicSubstrate, coupling_matrix_8x8) == 64);
+    assert!(core::mem::offset_of!(StigmergicSubstrate, step_counter) == 72);
+    assert!(core::mem::offset_of!(StigmergicSubstrate, capacity) == 80);
+    assert!(core::mem::offset_of!(StigmergicSubstrate, head_dim) == 104);
+    assert!(core::mem::offset_of!(StigmergicSubstrate, num_heads) == 106);
+    assert!(core::mem::offset_of!(StigmergicSubstrate, reserved_header) == 115);
+    assert!(core::mem::offset_of!(StigmergicSubstrate, ledger_slot) == 128);
+    assert!(core::mem::offset_of!(StigmergicSubstrate, trails) == 768);
+};
 
 impl Default for StigmergicSubstrate {
     #[inline(always)]

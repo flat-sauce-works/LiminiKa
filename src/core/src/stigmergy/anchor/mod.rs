@@ -14,14 +14,14 @@
 use core::mem::{align_of, offset_of, size_of};
 
 use self::crc32_delta::{
-    crc32_crystal_be24_final_u32, crc32_crystal_gm36_final_u32, crc32_crystal_zoff16_final_u32,
-    crc32_update_crystal_absorption_delta, crc32_update_crystal_stationary_fields_delta,
-    CRC32_CRYSTAL_ACTION_BYTE57_REF, CRC32_CRYSTAL_AID_BYTE0_REF, CRC32_CRYSTAL_AID_BYTE1_REF,
-    CRC32_CRYSTAL_PROV_BYTE0_REF, CRC32_CRYSTAL_PROV_BYTE1_REF, CRC32_CRYSTAL_SC_BYTE0_REF,
-    CRC32_CRYSTAL_SLOT_BYTE56_LUT_8, CRC32_CRYSTAL_ZOFF_BYTE1_REF, CRC32_CRYSTAL_ZOFF_BYTE2_REF,
-    CRC32_CRYSTAL_ZOFF_BYTE3_REF, CRYSTAL_CRC32_DEFAULT_W5_FINAL_CONTRIB,
-    CRYSTAL_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB, CRYSTAL_CRC32_KAPPA_MAX_FINAL_CONTRIB,
-    CRYSTAL_CRC32_RBAR_ONE_FINAL_CONTRIB, CRYSTAL_CRC32_W0_FINAL_CONTRIB,
+    crc32_anchor_be24_final_u32, crc32_anchor_gm36_final_u32, crc32_anchor_zoff16_final_u32,
+    crc32_update_anchor_absorption_delta, crc32_update_anchor_stationary_fields_delta,
+    ANCHOR_CRC32_DEFAULT_W5_FINAL_CONTRIB, ANCHOR_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB,
+    ANCHOR_CRC32_KAPPA_MAX_FINAL_CONTRIB, ANCHOR_CRC32_RBAR_ONE_FINAL_CONTRIB,
+    ANCHOR_CRC32_W0_FINAL_CONTRIB, CRC32_ANCHOR_ACTION_BYTE57_REF, CRC32_ANCHOR_AID_BYTE0_REF,
+    CRC32_ANCHOR_AID_BYTE1_REF, CRC32_ANCHOR_PROV_BYTE0_REF, CRC32_ANCHOR_PROV_BYTE1_REF,
+    CRC32_ANCHOR_SC_BYTE0_REF, CRC32_ANCHOR_SLOT_BYTE56_LUT_8, CRC32_ANCHOR_ZOFF_BYTE1_REF,
+    CRC32_ANCHOR_ZOFF_BYTE2_REF, CRC32_ANCHOR_ZOFF_BYTE3_REF,
 };
 use crate::foundation::{
     atan2_to_q7_word_x8_simd, branchless_atan2_to_q7_fast, branchless_clamp_f32,
@@ -147,7 +147,7 @@ pub mod sample_steering;
 pub use self::sample_steering::*;
 
 pub(crate) use self::crc32_delta::{
-    crc32_crystal_stamp_contrib_128b, crc32_fold_stamped_crystal_128b,
+    crc32_anchor_stamp_contrib_128b, crc32_fold_stamped_anchor_128b,
 };
 
 /// Outcome emitted by branchless dissipative overflow, residual scatter, and autonomous
@@ -367,11 +367,11 @@ impl PhaseAnchorRecord {
         let c0 = if (self.magic == LMNK_PHASE_ANCHOR_MAGIC)
             & (self.version == LMNK_PHASE_ANCHOR_VERSION)
         {
-            final_acc ^= CRYSTAL_CRC32_W0_FINAL_CONTRIB;
+            final_acc ^= ANCHOR_CRC32_W0_FINAL_CONTRIB;
             if ((self.anchor_id >> 16) == 0) & ((self.sample_count >> 8) == 0) {
-                final_acc ^= CRC32_CRYSTAL_AID_BYTE0_REF[(self.anchor_id & 0xFF) as usize]
-                    ^ CRC32_CRYSTAL_AID_BYTE1_REF[((self.anchor_id >> 8) & 0xFF) as usize]
-                    ^ CRC32_CRYSTAL_SC_BYTE0_REF[self.sample_count as usize];
+                final_acc ^= CRC32_ANCHOR_AID_BYTE0_REF[(self.anchor_id & 0xFF) as usize]
+                    ^ CRC32_ANCHOR_AID_BYTE1_REF[((self.anchor_id >> 8) & 0xFF) as usize]
+                    ^ CRC32_ANCHOR_SC_BYTE0_REF[self.sample_count as usize];
                 0
             } else {
                 let aid_c = if (self.anchor_id >> 8) == 0 {
@@ -393,10 +393,10 @@ impl PhaseAnchorRecord {
         };
 
         if be_bits != 0 {
-            final_acc ^= crc32_crystal_be24_final_u32(be_bits);
+            final_acc ^= crc32_anchor_be24_final_u32(be_bits);
         }
         if gm_bits != 0 {
-            final_acc ^= crc32_crystal_gm36_final_u32(gm_bits);
+            final_acc ^= crc32_anchor_gm36_final_u32(gm_bits);
         }
 
         let w2_lo = (w2 as u32) ^ c0;
@@ -404,9 +404,9 @@ impl PhaseAnchorRecord {
         let w2_c = if (w2_lo | w2_hi) == 0 {
             0
         } else if (c0 == 0) & (w2_hi == 0) & ((w2_lo & 0xFF) == 0) {
-            final_acc ^= CRC32_CRYSTAL_ZOFF_BYTE1_REF[((w2_lo >> 8) & 0xFF) as usize]
-                ^ CRC32_CRYSTAL_ZOFF_BYTE2_REF[((w2_lo >> 16) & 0xFF) as usize]
-                ^ CRC32_CRYSTAL_ZOFF_BYTE3_REF[(w2_lo >> 24) as usize];
+            final_acc ^= CRC32_ANCHOR_ZOFF_BYTE1_REF[((w2_lo >> 8) & 0xFF) as usize]
+                ^ CRC32_ANCHOR_ZOFF_BYTE2_REF[((w2_lo >> 16) & 0xFF) as usize]
+                ^ CRC32_ANCHOR_ZOFF_BYTE3_REF[(w2_lo >> 24) as usize];
             0
         } else if w2_hi == 0 {
             crc32_slice16_dep_lo0(w2_lo)
@@ -414,7 +414,7 @@ impl PhaseAnchorRecord {
             crc32_slice16_dep_lo0(w2_lo) ^ crc32_slice16_indep_hi0_u32(w2_hi)
         };
         let rb_c = if rb_bits == 0x3F80_0000u32 {
-            final_acc ^= CRYSTAL_CRC32_RBAR_ONE_FINAL_CONTRIB;
+            final_acc ^= ANCHOR_CRC32_RBAR_ONE_FINAL_CONTRIB;
             0
         } else if rb_bits == 0 {
             0
@@ -427,27 +427,27 @@ impl PhaseAnchorRecord {
         }
 
         let kp_c = if kp_bits == VON_MISES_KAPPA_AT_MAX_R_BITS {
-            final_acc ^= CRYSTAL_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB;
+            final_acc ^= ANCHOR_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB;
             0
         } else if kp_bits == 0x4248_0000u32 {
-            final_acc ^= CRYSTAL_CRC32_KAPPA_MAX_FINAL_CONTRIB;
+            final_acc ^= ANCHOR_CRC32_KAPPA_MAX_FINAL_CONTRIB;
             0
         } else if kp_bits == 0 {
             0
         } else {
             crc32_slice16_dep_lo0(kp_bits)
         };
-        const PERSONA_W5_FINAL_CONTRIB: u32 = CRYSTAL_CRC32_DEFAULT_W5_FINAL_CONTRIB
+        const PERSONA_W5_FINAL_CONTRIB: u32 = ANCHOR_CRC32_DEFAULT_W5_FINAL_CONTRIB
             ^ crc32_step_l5(crc32_slice16_indep_lo1_u32(
                 DEFAULT_PERSONA_PHASE_CLAMP_RAD.to_bits() ^ DEFAULT_PHASE_CLAMP_MAX_RAD.to_bits(),
             ));
-        const FACT_W5_FINAL_CONTRIB: u32 = CRYSTAL_CRC32_DEFAULT_W5_FINAL_CONTRIB
+        const FACT_W5_FINAL_CONTRIB: u32 = ANCHOR_CRC32_DEFAULT_W5_FINAL_CONTRIB
             ^ crc32_step_l5(crc32_slice16_indep_lo1_u32(
                 DEFAULT_FACT_PHASE_CLAMP_RAD.to_bits() ^ DEFAULT_PHASE_CLAMP_MAX_RAD.to_bits(),
             ));
         let w5_c = if tm_bits == 0x3F80_0000u32 {
             if cl_bits == DEFAULT_PHASE_CLAMP_MAX_RAD.to_bits() {
-                final_acc ^= CRYSTAL_CRC32_DEFAULT_W5_FINAL_CONTRIB;
+                final_acc ^= ANCHOR_CRC32_DEFAULT_W5_FINAL_CONTRIB;
                 0
             } else if cl_bits == DEFAULT_PERSONA_PHASE_CLAMP_RAD.to_bits() {
                 final_acc ^= PERSONA_W5_FINAL_CONTRIB;
@@ -467,8 +467,8 @@ impl PhaseAnchorRecord {
         }
 
         let prov_c = if (self.lineage_flags >> 16) == 0 {
-            final_acc ^= CRC32_CRYSTAL_PROV_BYTE0_REF[(self.lineage_flags & 0xFF) as usize]
-                ^ CRC32_CRYSTAL_PROV_BYTE1_REF[((self.lineage_flags >> 8) & 0xFF) as usize];
+            final_acc ^= CRC32_ANCHOR_PROV_BYTE0_REF[(self.lineage_flags & 0xFF) as usize]
+                ^ CRC32_ANCHOR_PROV_BYTE1_REF[((self.lineage_flags >> 8) & 0xFF) as usize];
             0
         } else {
             crc32_slice16_dep_lo0(self.lineage_flags)
@@ -481,8 +481,8 @@ impl PhaseAnchorRecord {
         let mask_cause_default =
             (self.active_swarm_mask == 0xFF) & (self.attribution_tag == ANCHOR_ATTRIBUTION_NOMINAL);
         let w7_c = if slot_fast & mask_cause_default {
-            final_acc ^= CRC32_CRYSTAL_SLOT_BYTE56_LUT_8[(self.dominant_slot & 7) as usize]
-                ^ CRC32_CRYSTAL_ACTION_BYTE57_REF[self.action_mode_flags as usize]
+            final_acc ^= CRC32_ANCHOR_SLOT_BYTE56_LUT_8[(self.dominant_slot & 7) as usize]
+                ^ CRC32_ANCHOR_ACTION_BYTE57_REF[self.action_mode_flags as usize]
                 ^ DEFAULT_W7_MASK_CAUSE_FINAL_CONTRIB;
             0
         } else {
@@ -504,7 +504,7 @@ impl PhaseAnchorRecord {
         !(final_acc ^ block1_crc)
     }
 
-    pub(crate) const EMPTY_CRYSTAL_CRC32_BY_SLOT: [u32; 8] = [
+    pub(crate) const EMPTY_ANCHOR_CRC32_BY_SLOT: [u32; 8] = [
         Self::new_unstamped(0, 0, 0)
             .compute_payload_crc32_with_words_raw(&[0u64; NUM_STIGMERGIC_GRANULES]),
         Self::new_unstamped(0, 1, 0)
@@ -534,16 +534,16 @@ impl PhaseAnchorRecord {
         let mut rec = Self::new_unstamped(anchor_id, dominant_slot, mapped_section_offset48);
         let zoff = rec.mapped_section_offset48;
         let base_crc =
-            Self::EMPTY_CRYSTAL_CRC32_BY_SLOT[(dominant_slot & ATTRACTOR_SLOT_ID_MASK) as usize];
+            Self::EMPTY_ANCHOR_CRC32_BY_SLOT[(dominant_slot & ATTRACTOR_SLOT_ID_MASK) as usize];
         if zoff == 0 {
             if anchor_id == 0 {
                 rec.checksum_crc32 = base_crc;
             } else if anchor_id < 256 {
-                rec.checksum_crc32 = base_crc ^ CRC32_CRYSTAL_AID_BYTE0_REF[anchor_id as usize];
+                rec.checksum_crc32 = base_crc ^ CRC32_ANCHOR_AID_BYTE0_REF[anchor_id as usize];
             } else if anchor_id < 65536 {
                 rec.checksum_crc32 = base_crc
-                    ^ CRC32_CRYSTAL_AID_BYTE0_REF[(anchor_id & 0xFF) as usize]
-                    ^ CRC32_CRYSTAL_AID_BYTE1_REF[((anchor_id >> 8) & 0xFF) as usize];
+                    ^ CRC32_ANCHOR_AID_BYTE0_REF[(anchor_id & 0xFF) as usize]
+                    ^ CRC32_ANCHOR_AID_BYTE1_REF[((anchor_id >> 8) & 0xFF) as usize];
             } else {
                 let c0 = crc32_slice16_indep_lo1_u32(anchor_id);
                 rec.checksum_crc32 = base_crc ^ crc32_step_l4(crc32_step_l3(c0));
@@ -551,18 +551,18 @@ impl PhaseAnchorRecord {
         } else if ((zoff >> 32) == 0) & ((anchor_id >> 16) == 0) {
             let z_lo = zoff as u32;
             let z_crc = if (z_lo & 0xFFFF) == 0 {
-                CRC32_CRYSTAL_ZOFF_BYTE2_REF[((z_lo >> 16) & 0xFF) as usize]
-                    ^ CRC32_CRYSTAL_ZOFF_BYTE3_REF[(z_lo >> 24) as usize]
+                CRC32_ANCHOR_ZOFF_BYTE2_REF[((z_lo >> 16) & 0xFF) as usize]
+                    ^ CRC32_ANCHOR_ZOFF_BYTE3_REF[(z_lo >> 24) as usize]
             } else if (z_lo & 0xFF) == 0 {
-                CRC32_CRYSTAL_ZOFF_BYTE1_REF[((z_lo >> 8) & 0xFF) as usize]
-                    ^ CRC32_CRYSTAL_ZOFF_BYTE2_REF[((z_lo >> 16) & 0xFF) as usize]
-                    ^ CRC32_CRYSTAL_ZOFF_BYTE3_REF[(z_lo >> 24) as usize]
+                CRC32_ANCHOR_ZOFF_BYTE1_REF[((z_lo >> 8) & 0xFF) as usize]
+                    ^ CRC32_ANCHOR_ZOFF_BYTE2_REF[((z_lo >> 16) & 0xFF) as usize]
+                    ^ CRC32_ANCHOR_ZOFF_BYTE3_REF[(z_lo >> 24) as usize]
             } else {
-                crc32_crystal_zoff16_final_u32(z_lo)
+                crc32_anchor_zoff16_final_u32(z_lo)
             };
             rec.checksum_crc32 = base_crc
-                ^ CRC32_CRYSTAL_AID_BYTE0_REF[(anchor_id & 0xFF) as usize]
-                ^ CRC32_CRYSTAL_AID_BYTE1_REF[((anchor_id >> 8) & 0xFF) as usize]
+                ^ CRC32_ANCHOR_AID_BYTE0_REF[(anchor_id & 0xFF) as usize]
+                ^ CRC32_ANCHOR_AID_BYTE1_REF[((anchor_id >> 8) & 0xFF) as usize]
                 ^ z_crc;
         } else {
             let c0 = if anchor_id == 0 {
@@ -673,7 +673,7 @@ impl PhaseAnchorRecord {
             && ((((pw[0] | pw[1]) | (pw[2] | pw[3])) | ((pw[4] | pw[5]) | (pw[6] | pw[7]))) == 0)
         {
             return self.checksum_crc32
-                == Self::EMPTY_CRYSTAL_CRC32_BY_SLOT[self.dominant_slot as usize];
+                == Self::EMPTY_ANCHOR_CRC32_BY_SLOT[self.dominant_slot as usize];
         }
         self.checksum_crc32 == self.compute_payload_crc32_with_words(pw)
     }
@@ -788,7 +788,7 @@ impl PhaseAnchorRecord {
                 & ((delta_rb | delta_kp) == 0)
                 & ((delta_w7 >> 16) == 0)
             {
-                self.checksum_crc32 = crc32_update_crystal_stationary_fields_delta(
+                self.checksum_crc32 = crc32_update_anchor_stationary_fields_delta(
                     prev_crc,
                     prev_count ^ self.sample_count,
                     prev_be_bits ^ self.base_energy.to_bits(),
@@ -799,7 +799,7 @@ impl PhaseAnchorRecord {
                     delta_w7,
                 );
             } else {
-                self.checksum_crc32 = crc32_update_crystal_absorption_delta(
+                self.checksum_crc32 = crc32_update_anchor_absorption_delta(
                     prev_crc,
                     delta_aid,
                     prev_count ^ self.sample_count,
@@ -1065,7 +1065,7 @@ impl PhaseAnchorRecord {
         self.phase_clamp_rad = DEFAULT_PHASE_CLAMP_MAX_RAD;
         self.effective_inv_temp = 1.0;
         self.lineage_flags = 0;
-        self.checksum_crc32 = Self::EMPTY_CRYSTAL_CRC32_BY_SLOT[slot as usize];
+        self.checksum_crc32 = Self::EMPTY_ANCHOR_CRC32_BY_SLOT[slot as usize];
         self.dominant_slot = slot;
         self.action_mode_flags = ACTION_PRESET_PASSIVE_SIDECAR;
         self.active_swarm_mask = 0xFF;

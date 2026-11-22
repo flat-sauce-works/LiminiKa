@@ -95,7 +95,7 @@ fn test_branchless_inv_pos_crc32_and_constant_time_swar() {
 }
 
 #[test]
-fn test_unified_field_fold_gravity_fold_toroidal_centroid_step_and_limina_log_prob() {
+fn test_unified_manifold_fold_gravity_fold_toroidal_centroid_step_and_limina_log_prob() {
     let trail = [32i8; MAX_ATTENTION_HEADS];
     let anchors = [
         [-96i8; MAX_ATTENTION_HEADS],
@@ -106,7 +106,7 @@ fn test_unified_field_fold_gravity_fold_toroidal_centroid_step_and_limina_log_pr
     let mut folded = [0i8; MAX_ATTENTION_HEADS];
 
     let (tot_pull, mean_coh, dom_idx, act_cnt) =
-        branchless_q7_unified_field_fold_64(&trail, &anchors, &energies, &mut folded);
+        branchless_q7_unified_manifold_fold_64(&trail, &anchors, &energies, &mut folded);
     assert_eq!(dom_idx, 1);
     assert_eq!(act_cnt, 3);
     assert!(tot_pull > 8.0 && mean_coh > 0.70);
