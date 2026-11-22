@@ -1210,7 +1210,7 @@ impl CompiledTokenCorpus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RopeGeometry, VoidBoundaryState};
+    use crate::{LacunaBoundaryState, RopeGeometry};
 
     #[test]
     fn novelty_sif_pooling_resists_attention_sink_norm_spike_and_boilerplate() {
@@ -1343,7 +1343,10 @@ mod tests {
         let recall_ood = compiled
             .recall_token_sequence(&adapter, &query_ood, 7)
             .expect("recall OOD");
-        assert_eq!(recall_ood.void_state, VoidBoundaryState::LiminalExterior);
+        assert_eq!(
+            recall_ood.lacuna_state,
+            LacunaBoundaryState::LiminalExterior
+        );
         assert!(recall_ood.recalled_facts.is_empty());
     }
 
@@ -1381,7 +1384,7 @@ mod tests {
             token_deposits: vec![],
             linked_fact_indices: vec![],
             decomposition_triggered: false,
-            local_void_depths: vec![0.0, 0.0],
+            local_lacuna_depths: vec![0.0, 0.0],
             stigmergic_weights: vec![1.2, 1.0],
             boundary_metrics: RecallBoundaryMetrics {
                 top1_fact_score: 0.45,
@@ -1391,7 +1394,7 @@ mod tests {
                 guard_conflict_margin: -0.65,
             },
             gate_decision: RecallGateDecision {
-                void_state: VoidBoundaryState::InsideBasin,
+                lacuna_state: LacunaBoundaryState::InsideBasin,
                 suppress_fact_injection: false,
             },
             action_decision: StigmergicActionDecision::CrystallizeMacroBasin,

@@ -3003,3 +3003,31 @@ fn test_pinned_sandbox_handle_preservation_and_repulsion_sandbox_isolation() {
     assert_eq!(out_base, out_sb_rep);
     assert!((pull_base - pull_sb_rep).abs() < 1.0e-6);
 }
+
+#[test]
+fn test_runtime_context_new_boxed_and_zeroize_in_place() {
+    assert_eq!(core::mem::size_of::<RuntimeContext>(), 5120);
+    assert_eq!(core::mem::align_of::<RuntimeContext>(), 64);
+    assert!(!core::mem::needs_drop::<RuntimeContext>());
+
+    let cfg = Config::new()
+        .with_head_dim(96)
+        .with_num_heads(24)
+        .with_substrate_capacity(16);
+    let mut boxed = RuntimeContext::new_boxed(cfg).expect("new_boxed");
+    boxed.apply_host_spine_pin_floor(0xF0F0);
+    boxed.substrate_mut().step_counter = 777;
+    boxed.core_layers_mut().liminal.adaptation_epochs = 9;
+    boxed.increment_sandbox_settlements();
+    assert_eq!(boxed.sandbox_settlements(), 1);
+    assert_eq!(boxed.system_spine().pinned_compute_mask, 0xF0F0);
+
+    boxed.zeroize_in_place();
+    assert_eq!(boxed.substrate().step_counter, 0);
+    assert_eq!(boxed.core_layers().liminal.adaptation_epochs, 0);
+    assert_eq!(boxed.sandbox_settlements(), 0);
+    assert_eq!(boxed.system_spine().pinned_compute_mask, 0);
+    assert_eq!(boxed.escalated_workbench_lane(), None);
+    assert_eq!(boxed.sandbox_workbench_lane(), None);
+    assert_eq!(boxed.last_sandbox_event(), SandboxLifecycleEvent::Idle);
+}

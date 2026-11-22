@@ -13,6 +13,7 @@
 use crate::drivers::{
     AnonymousComputePool, ComputeDispatchMask, DistortionTension, EgoDifferentialNet,
     EntropyController, EntropyState, LiminalEgoState, SystemPressureReading, SystemSpineState,
+    TokenBypassObservation,
 };
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
@@ -38,18 +39,18 @@ use crate::liminal::{
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::gateway::{
-    CausalProvenanceReport, CausalProvenanceSignal, GatewayFrame, GatewayPhaseSteeringExt,
-    ManifoldGatewaySignal, ManifoldProbeBaseline, SubstrateGatewayExt, SystemConstraintSignal,
-    ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
+    CausalProvenanceReport, CausalProvenanceSignal, CoreLayerEvalContext, GatewayFrame,
+    GatewayPhaseSteeringExt, ManifoldGatewaySignal, ManifoldProbeBaseline, SubstrateGatewayExt,
+    SystemConstraintSignal, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
 };
 use crate::runtime::horizon::{
     apply_latent_horizon_slots, EpistemicHorizonReading, HorizonDwellState,
     HorizonEscalationProvider, HorizonEscalationRequest, HorizonTriggerInput, LatentHorizonSlot,
 };
 use crate::stigmergy::{
-    PhaseDeltaSlice, PhaseSteeringEngine, ATTRACTOR_SLOT_PERSONA, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
-    DEFAULT_SUBSTRATE_CAPACITY, LEDGER_HISTORY_LEN, MAX_PHASE_ANCHORS,
-    WORKBENCH_LANE_FLAG_REPULSION,
+    PhaseDeltaSlice, PhaseSteeringEngine, StigmergicThresholds, ATTRACTOR_SLOT_PERSONA,
+    DEFAULT_SLOT_COUPLING_MATRIX_8X8, DEFAULT_SUBSTRATE_CAPACITY, LEDGER_HISTORY_LEN,
+    MAX_PHASE_ANCHORS, WORKBENCH_LANE_FLAG_REPULSION,
 };
 
 /// Default number of tokens per PagedAttention KV cache block (`32`).
@@ -921,6 +922,42 @@ impl RuntimeContext {
         Ok(())
     }
 
+    /// Allocates and initializes a [`RuntimeContext`] directly on the heap via `Box::new_uninit`
+    /// without staging the 5,120-byte structure on the caller's stack.
+    ///
+    /// # Errors
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `config` violates architectural invariants or
+    /// dimension limits.
+    pub fn new_boxed(config: Config) -> Result<alloc::boxed::Box<Self>> {
+        let mut uninit = alloc::boxed::Box::<Self>::new_uninit();
+        // SAFETY: `uninit.as_mut_ptr()` points to a valid, 64B-aligned, writable, non-aliased
+        // `RuntimeContext` heap allocation; `write_in_place` validates `config` before writing
+        // and initializes every field upon returning `Ok(())`.
+        unsafe {
+            Self::write_in_place(uninit.as_mut_ptr(), config)?;
+            let mut boxed = uninit.assume_init();
+            boxed.allocation_mode = CTX_ALLOC_HEAP_BOXED;
+            Ok(boxed)
+        }
+    }
+
+    /// Scrubs all 5,120 bytes of this [`RuntimeContext`] via volatile zeroization and restores valid
+    /// empty enum discriminants so the reference remains structurally valid without drop glue.
+    pub fn zeroize_in_place(&mut self) {
+        // SAFETY: `self` is a uniquely borrowed, valid 5,120-byte `RuntimeContext` with `!needs_drop`;
+        // volatile zeroization scrubs all fields and padding, and the three enum fields are
+        // immediately re-initialized to valid empty variants before returning.
+        unsafe {
+            zeroize_volatile(self as *mut Self);
+            core::ptr::write(core::ptr::addr_of_mut!(self.escalated_workbench_lane), None);
+            core::ptr::write(core::ptr::addr_of_mut!(self.sandbox_workbench_lane), None);
+            core::ptr::write(
+                core::ptr::addr_of_mut!(self.last_sandbox_event),
+                SandboxLifecycleEvent::Idle,
+            );
+        }
+    }
+
     /// Returns the internal allocation provenance tag (`CTX_ALLOC_*`).
     #[inline(always)]
     #[must_use]
@@ -977,11 +1014,39 @@ impl RuntimeContext {
         self.probe_baseline = baseline;
     }
 
+    /// Returns a mutable reference to the active [`ManifoldProbeBaseline`] gauge origin.
+    #[inline(always)]
+    #[must_use]
+    pub fn probe_baseline_mut(&mut self) -> &mut ManifoldProbeBaseline {
+        &mut self.probe_baseline
+    }
+
+    /// Returns an immutable reference to the embedded [`PhaseSteeringEngine`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn phase_steering(&self) -> &PhaseSteeringEngine {
+        &self.phase_steering
+    }
+
+    /// Returns a mutable reference to the embedded [`PhaseSteeringEngine`].
+    #[inline(always)]
+    #[must_use]
+    pub fn phase_steering_mut(&mut self) -> &mut PhaseSteeringEngine {
+        &mut self.phase_steering
+    }
+
     /// Returns the physical workbench lane currently leased for an isolated sandbox hypothesis.
     #[inline(always)]
     #[must_use]
     pub const fn sandbox_workbench_lane(&self) -> Option<u8> {
         self.sandbox_workbench_lane
+    }
+
+    /// Returns a mutable reference to the isolated sandbox hypothesis workbench lane lease.
+    #[inline(always)]
+    #[must_use]
+    pub fn sandbox_workbench_lane_mut(&mut self) -> &mut Option<u8> {
+        &mut self.sandbox_workbench_lane
     }
 
     /// Returns the most recent [`SandboxLifecycleEvent`] emitted by [`Self::pierce_and_orchestrate_step`].
@@ -996,6 +1061,18 @@ impl RuntimeContext {
     #[must_use]
     pub const fn sandbox_settlements(&self) -> u32 {
         self.sandbox_settlements
+    }
+
+    /// Sets the cumulative count of settled sandbox hypothesis lanes recorded in this context.
+    #[inline(always)]
+    pub const fn set_sandbox_settlements(&mut self, count: u32) {
+        self.sandbox_settlements = count;
+    }
+
+    /// Increments the cumulative count of settled sandbox hypothesis lanes using saturating arithmetic.
+    #[inline(always)]
+    pub const fn increment_sandbox_settlements(&mut self) {
+        self.sandbox_settlements = self.sandbox_settlements.saturating_add(1);
     }
 
     /// Returns a mutable reference to the latest Core Stack Slot 0 [`LiminalBoundaryDelta`].
@@ -1041,11 +1118,25 @@ impl RuntimeContext {
         self.active_horizon_slots_mask
     }
 
+    /// Returns a mutable reference to the active [`LatentHorizonSlot`] bitmask.
+    #[inline(always)]
+    #[must_use]
+    pub fn active_horizon_slots_mask_mut(&mut self) -> &mut u32 {
+        &mut self.active_horizon_slots_mask
+    }
+
     /// Returns the consecutive destabilization / quiescence dwell tracker [`HorizonDwellState`].
     #[inline(always)]
     #[must_use]
     pub const fn horizon_dwell(&self) -> HorizonDwellState {
         self.horizon_dwell
+    }
+
+    /// Returns a mutable reference to the consecutive destabilization / quiescence dwell tracker.
+    #[inline(always)]
+    #[must_use]
+    pub fn horizon_dwell_mut(&mut self) -> &mut HorizonDwellState {
+        &mut self.horizon_dwell
     }
 
     /// Returns a shared reference to the embedded `3 + System` [`CoreTelemetryBank`].
@@ -1095,6 +1186,13 @@ impl RuntimeContext {
     #[must_use]
     pub const fn last_lacuna_partition(&self) -> &LacunaPartition8 {
         &self.last_lacuna_partition
+    }
+
+    /// Returns a mutable reference to the most recent [`LacunaPartition8`].
+    #[inline(always)]
+    #[must_use]
+    pub fn last_lacuna_partition_mut(&mut self) -> &mut LacunaPartition8 {
+        &mut self.last_lacuna_partition
     }
 
     /// Returns a shared reference to the live [`DistortionTension`] homeostatic state.
@@ -1344,6 +1442,178 @@ impl RuntimeContext {
     #[must_use]
     pub const fn escalated_workbench_lane(&self) -> Option<u8> {
         self.escalated_workbench_lane
+    }
+
+    /// Returns a mutable reference to the cold-path escalated workbench lane lease.
+    #[inline(always)]
+    #[must_use]
+    pub fn escalated_workbench_lane_mut(&mut self) -> &mut Option<u8> {
+        &mut self.escalated_workbench_lane
+    }
+
+    /// Rebinds `phase_steering`, `substrate`, and geometry fields inside `config.raw` in-place
+    /// when host model geometry changes, avoiding a full 5 KB stack copy.
+    ///
+    /// # Errors
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `head_dim`, `num_heads`, `substrate_capacity`, or
+    /// `thresholds` fail architectural invariant validation.
+    pub fn rebind_phase_and_substrate(
+        &mut self,
+        head_dim: u32,
+        num_heads: u32,
+        rotary_dim: u32,
+        rope_layout: u8,
+        substrate_capacity: u32,
+        thresholds: StigmergicThresholds,
+        baseline_entropy: f32,
+    ) -> Result<()> {
+        if substrate_capacity == 0 || head_dim > u16::MAX as u32 || num_heads > u16::MAX as u32 {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
+        thresholds.validate()?;
+        let new_phase_steering = PhaseSteeringEngine::new(head_dim, num_heads)?;
+        self.config.raw.head_dim = head_dim;
+        self.config.raw.num_heads = num_heads;
+        self.config.raw.rotary_dim = rotary_dim;
+        self.config.raw.rope_layout = rope_layout;
+        self.config.raw.substrate_capacity = substrate_capacity;
+        let sub_ptr = core::ptr::addr_of_mut!(self.substrate);
+        // SAFETY: `sub_ptr` is a valid, 64B-aligned mutable pointer to `self.substrate` (`Pod`);
+        // zeroing followed immediately by `StigmergicSubstrate::init_in_place_on_zeroed`
+        // initializes all fields cleanly in-place without stack staging.
+        unsafe {
+            core::ptr::write_bytes(sub_ptr, 0u8, 1);
+            StigmergicSubstrate::init_in_place_on_zeroed(
+                sub_ptr,
+                &self.config.raw,
+                self.config.repulsion_threshold,
+                self.config.repulsion_scale_u7,
+                self.config.slot_coupling_matrix,
+            );
+        }
+        self.substrate.thresholds = thresholds;
+        self.substrate.last_entropy_h_tilde = baseline_entropy;
+        self.phase_steering = new_phase_steering;
+        Ok(())
+    }
+
+    /// Builds a read-only [`CoreLayerEvalContext`] when Core Stack Slot 0 or Slot 2 is active.
+    #[inline]
+    #[must_use]
+    pub fn build_core_layer_eval_context(&self) -> Option<CoreLayerEvalContext<'_>> {
+        (self.core_layers.liminal.adaptation_epochs > 0 || self.core_layers.ego.is_active())
+            .then_some(CoreLayerEvalContext {
+                stack: &self.core_layers,
+                delta: &self.last_boundary_delta,
+                horizon: &self.last_horizon,
+                overlap: &self.last_overlap_report,
+                derivative_alpha_q7: self.telemetry.derivative_alpha_q7(),
+                lacuna_partition: Some(&self.last_lacuna_partition),
+                spine: Some(&self.system_spine),
+                ego_net: Some(&self.ego_differential_net),
+                tension: Some(&self.distortion_tension),
+            })
+    }
+
+    /// Returns a field-disjoint split borrow pairing an optional read-only [`CoreLayerEvalContext`],
+    /// `&ManifoldProbeBaseline`, and `&mut StigmergicSubstrate` for gateway orchestration calls.
+    #[inline]
+    #[must_use]
+    pub fn split_for_substrate_gateway(
+        &mut self,
+    ) -> (
+        Option<CoreLayerEvalContext<'_>>,
+        &ManifoldProbeBaseline,
+        &mut StigmergicSubstrate,
+    ) {
+        let core_ctx = (self.core_layers.liminal.adaptation_epochs > 0
+            || self.core_layers.ego.is_active())
+        .then_some(CoreLayerEvalContext {
+            stack: &self.core_layers,
+            delta: &self.last_boundary_delta,
+            horizon: &self.last_horizon,
+            overlap: &self.last_overlap_report,
+            derivative_alpha_q7: self.telemetry.derivative_alpha_q7(),
+            lacuna_partition: Some(&self.last_lacuna_partition),
+            spine: Some(&self.system_spine),
+            ego_net: Some(&self.ego_differential_net),
+            tension: Some(&self.distortion_tension),
+        });
+        (core_ctx, &self.probe_baseline, &mut self.substrate)
+    }
+
+    /// Evaluates whole-token steering bypass jointly with [`SystemSpineState`] physical vetoes
+    /// and records telemetry when bypass activates.
+    #[inline]
+    pub fn evaluate_whole_token_bypass_with_spine(
+        &mut self,
+        obs: TokenBypassObservation,
+        guard_active: bool,
+        dispatch: &mut ComputeDispatchMask,
+    ) -> u8 {
+        let veto = self
+            .compute_pool
+            .evaluate_whole_token_steering_bypass_with_spine(
+                obs,
+                &mut self.system_spine,
+                guard_active,
+                dispatch,
+            );
+        if dispatch.whole_token_steering_bypass != 0 {
+            self.telemetry.record_whole_token_bypass();
+        }
+        veto
+    }
+
+    /// Evaluates the embedded [`EgoDifferentialNet`] P-Frame chain against current core state,
+    /// mutates `frame` in-place, and records matched activations.
+    #[inline]
+    pub fn evaluate_ego_pframe_chain_mut(&mut self, frame: &mut GatewayFrame) -> (u8, u8, u8) {
+        let (d_norm, hops, matched_mask) = self
+            .ego_differential_net
+            .evaluate_pframe_chain_with_mask_branchless(
+                &self.core_layers.ego,
+                &self.system_spine,
+                &self.last_lacuna_partition,
+                &self.core_layers.stigmergy,
+                &self.distortion_tension,
+                frame,
+            );
+        self.ego_differential_net.last_delta_norm_q7 = d_norm;
+        self.ego_differential_net.last_hops_traversed = hops;
+        if hops > 0 {
+            self.ego_differential_net
+                .record_matched_activations(matched_mask);
+        }
+        (d_norm, hops, matched_mask)
+    }
+
+    /// Advances the isolated exterior-only sandbox workbench lifecycle in [`StigmergicSubstrate`]
+    /// and updates `last_sandbox_event`.
+    #[inline]
+    pub fn step_sandbox_hypothesis_lifecycle(
+        &mut self,
+        decision: StigmergicActionDecision,
+        ego_active: bool,
+        exterior_granule_mask: u8,
+        trail_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        frame_energy: f32,
+        nucleate_dwell: u16,
+        settle_dwell: u16,
+    ) -> SandboxLifecycleEvent {
+        let ev = self.substrate.step_sandbox_hypothesis_lifecycle(
+            &mut self.telemetry,
+            &mut self.sandbox_workbench_lane,
+            decision,
+            ego_active,
+            exterior_granule_mask,
+            trail_words,
+            frame_energy,
+            nucleate_dwell,
+            settle_dwell,
+        );
+        self.last_sandbox_event = ev;
+        ev
     }
 
     /// Returns the active 64-bit ($8 \times 8$) Attractor Working Lane coupling bitmatrix.

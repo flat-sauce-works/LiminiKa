@@ -49,20 +49,20 @@ fn adapter_bakes_and_steers_half_split_and_interleaved() {
 }
 
 #[test]
-fn adapter_steps_edbc_and_applies_srl_residual() {
+fn adapter_steps_entropy_gate_and_applies_rank1_residual() {
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let mut logits = vec![4.0, 2.0, 1.0, 0.5];
     let state = adapter
-        .step_edbc_logits(&mut logits)
-        .expect("edbc step should succeed");
+        .step_entropy_logits(&mut logits)
+        .expect("entropy gate step should succeed");
     assert!(state.sample_temperature > 0.0);
 
     let mut hidden = vec![1.0, 0.5, -0.5, 0.25];
     let u = vec![0.5, 0.5, 0.5, 0.5];
     let v = vec![1.0, 0.0, 0.0, 0.0];
     adapter
-        .apply_srl_hidden_fused(&mut hidden, &u, &v, 0.5)
-        .expect("srl fused should succeed");
+        .apply_rank1_hidden_fused(&mut hidden, &u, &v, 0.5)
+        .expect("rank-1 fused should succeed");
     assert!((hidden[0] - 1.25).abs() < 1e-5);
 }
 
@@ -106,8 +106,8 @@ fn adapter_steers_via_gateway_trait_composition() {
     let u = vec![1.0, 0.0, 0.0, 0.0];
     let v = vec![1.0, 0.0, 0.0, 0.0];
     let (_, gain) = adapter
-        .apply_srl_with_gateway(&composite_signal, &mut hidden, &u, &v)
-        .expect("gateway srl should succeed");
+        .apply_rank1_with_gateway(&composite_signal, &mut hidden, &u, &v)
+        .expect("gateway rank-1 should succeed");
     assert!(gain > 0.0);
     assert!(hidden[0] > 10.0);
 }
@@ -171,7 +171,7 @@ fn adapter_steers_via_substrate_and_builds_stigmergic_density() {
 }
 
 #[test]
-fn substrate_orchestrator_gates_rope_and_srl_by_stigmergic_density() {
+fn substrate_orchestrator_gates_rope_and_rank1_by_stigmergic_density() {
     use liminika_core::runtime::{ObjectiveFact, ResonantSignalSlice};
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
@@ -206,8 +206,8 @@ fn substrate_orchestrator_gates_rope_and_srl_by_stigmergic_density() {
     assert_eq!(d1, StigmergicActionDecision::ExpressPhaseSteer);
     assert_ne!(q_rot1, orig1);
     assert!(adapter
-        .orchestrate_layer_srl_with_substrate(&resonant, &mut hidden, &u, &v)
-        .expect("srl gate")
+        .orchestrate_layer_rank1_with_substrate(&resonant, &mut hidden, &u, &v)
+        .expect("rank-1 gate")
         .is_none());
 
     // Repeated resonant steps accumulate density above rank1_inject_density_thresh (1.50).
@@ -234,8 +234,8 @@ fn substrate_orchestrator_gates_rope_and_srl_by_stigmergic_density() {
             | StigmergicActionDecision::CrystallizeMacroBasin
     ));
     let rank1_res = adapter
-        .orchestrate_layer_srl_with_substrate(&resonant, &mut hidden, &u, &v)
-        .expect("srl gate");
+        .orchestrate_layer_rank1_with_substrate(&resonant, &mut hidden, &u, &v)
+        .expect("rank-1 gate");
     assert!(rank1_res.is_some());
     assert!(hidden[0] > 10.0);
 }
@@ -345,14 +345,17 @@ fn text_attractor_corpus_recalls_basin_and_detects_liminal_void_boundary() {
     let recall_a = corpus
         .recall_for_query(&adapter, &qa_slices, &refs, &policy)
         .expect("recall A");
-    assert_eq!(recall_a.void_state, VoidBoundaryState::InsideBasin);
+    assert_eq!(recall_a.lacuna_state, LacunaBoundaryState::InsideBasin);
     assert_eq!(recall_a.recalled_facts[0].0.text, "Fact A");
 
-    let recall_void = corpus
+    let recall_lacuna = corpus
         .recall_for_query(&adapter, &qv_slices, &refs, &policy)
-        .expect("recall void");
-    assert_eq!(recall_void.void_state, VoidBoundaryState::LiminalExterior);
-    assert!(recall_void.recalled_facts.is_empty());
+        .expect("recall lacuna");
+    assert_eq!(
+        recall_lacuna.lacuna_state,
+        LacunaBoundaryState::LiminalExterior
+    );
+    assert!(recall_lacuna.recalled_facts.is_empty());
 }
 
 #[test]
@@ -395,9 +398,7 @@ fn dual_track_timeline_records_gop_seeks_zero_forward_and_roundtrips() {
 
     let detector = AdaptiveGopCutDetector::default();
     let policy = RecallPolicy::default();
-    let mut timeline = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
-        adapter.geometry(),
-    ));
+    let mut timeline = LmnkTimeline::new(LmnkTimeline::geometry_fingerprint(adapter.geometry()));
 
     // Frame 0: initial frame -> always emits I-Frame keyframe.
     let is_i0 = timeline
@@ -417,7 +418,7 @@ fn dual_track_timeline_records_gop_seeks_zero_forward_and_roundtrips() {
             },
             &FrameTransitionMetrics {
                 phase_l1_delta: 0.0,
-                void_state: VoidBoundaryState::InsideBasin,
+                lacuna_state: LacunaBoundaryState::InsideBasin,
                 frames_since_keyframe: 0,
                 new_cluster_spawned: false,
             },
@@ -453,7 +454,7 @@ fn dual_track_timeline_records_gop_seeks_zero_forward_and_roundtrips() {
             },
             &FrameTransitionMetrics {
                 phase_l1_delta: 0.08,
-                void_state: VoidBoundaryState::InsideBasin,
+                lacuna_state: LacunaBoundaryState::InsideBasin,
                 frames_since_keyframe: 1,
                 new_cluster_spawned: false,
             },
@@ -461,7 +462,7 @@ fn dual_track_timeline_records_gop_seeks_zero_forward_and_roundtrips() {
         .expect("frame 1");
     assert!(!is_i1);
 
-    // Frame 2: liminal_void scene cut -> automatically emits a new I-Frame keyframe.
+    // Frame 2: liminal_exterior scene cut -> automatically emits a new I-Frame keyframe.
     let is_i2 = timeline
         .record_step(
             &TimelineStepContext {
@@ -479,7 +480,7 @@ fn dual_track_timeline_records_gop_seeks_zero_forward_and_roundtrips() {
             },
             &FrameTransitionMetrics {
                 phase_l1_delta: 0.10,
-                void_state: VoidBoundaryState::LiminalExterior,
+                lacuna_state: LacunaBoundaryState::LiminalExterior,
                 frames_since_keyframe: 2,
                 new_cluster_spawned: true,
             },
@@ -496,7 +497,7 @@ fn dual_track_timeline_records_gop_seeks_zero_forward_and_roundtrips() {
 
     // Portable binary serialization roundtrip & subtitle track export.
     let bytes = timeline.to_bytes();
-    let decoded = GcsoDualTrackTimeline::from_bytes(&bytes).expect("decode dual-track");
+    let decoded = LmnkTimeline::from_bytes(&bytes).expect("decode dual-track");
     assert_eq!(decoded, timeline);
     let subtitles = decoded.export_subtitle_track(Some(1));
     assert_eq!(subtitles.len(), 2);
@@ -508,13 +509,13 @@ fn dual_track_timeline_records_gop_seeks_zero_forward_and_roundtrips() {
         .join("..")
         .join("..")
         .join("containers")
-        .join("dual_track_test.gcso");
+        .join("dual_track_test.lmnkc");
     let written = timeline
         .save_to_path(&repo_container)
-        .expect("save .gcso to repository containers/");
+        .expect("save .lmnkc to repository containers/");
     assert_eq!(written, bytes.len());
-    let loaded = GcsoDualTrackTimeline::load_from_path(&repo_container)
-        .expect("load .gcso from repository containers/");
+    let loaded = LmnkTimeline::load_from_path(&repo_container)
+        .expect("load .lmnkc from repository containers/");
     assert_eq!(loaded, timeline);
     let _ = std::fs::remove_file(&repo_container);
 
@@ -524,14 +525,14 @@ fn dual_track_timeline_records_gop_seeks_zero_forward_and_roundtrips() {
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&nested_base);
-    let nested_path = nested_base.join("containers").join("nested_test.gcso");
+    let nested_path = nested_base.join("containers").join("nested_test.lmnkc");
     assert!(!nested_base.exists());
     let nested_written = timeline
         .save_to_path(&nested_path)
-        .expect("save .gcso should auto-create missing parent directories");
+        .expect("save .lmnkc should auto-create missing parent directories");
     assert_eq!(nested_written, bytes.len());
     let nested_loaded =
-        GcsoDualTrackTimeline::load_from_path(&nested_path).expect("load auto-created .gcso");
+        LmnkTimeline::load_from_path(&nested_path).expect("load auto-created .lmnkc");
     assert_eq!(nested_loaded, timeline);
     let _ = std::fs::remove_dir_all(&nested_base);
 }
@@ -578,9 +579,7 @@ fn dual_track_timeline_persists_composes_and_updates_persona_circuit() {
         7,
     ));
 
-    let mut tl_base = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
-        adapter.geometry(),
-    ));
+    let mut tl_base = LmnkTimeline::new(LmnkTimeline::geometry_fingerprint(adapter.geometry()));
     tl_base.set_persona_circuit(base_circuit);
     tl_base
         .record_step(
@@ -599,7 +598,7 @@ fn dual_track_timeline_persists_composes_and_updates_persona_circuit() {
             },
             &FrameTransitionMetrics {
                 phase_l1_delta: 0.0,
-                void_state: VoidBoundaryState::InsideBasin,
+                lacuna_state: LacunaBoundaryState::InsideBasin,
                 frames_since_keyframe: 0,
                 new_cluster_spawned: true,
             },
@@ -607,7 +606,7 @@ fn dual_track_timeline_persists_composes_and_updates_persona_circuit() {
         .expect("record I-frame");
 
     let encoded = tl_base.to_bytes();
-    let decoded = GcsoDualTrackTimeline::from_bytes(&encoded).expect("decode .gcso");
+    let decoded = LmnkTimeline::from_bytes(&encoded).expect("decode .lmnkc");
     assert_eq!(decoded.persona_circuit(), Some(base_circuit));
 
     // Compose with a second timeline's overlay circuit and apply reflection plasticity.
@@ -617,7 +616,7 @@ fn dual_track_timeline_persists_composes_and_updates_persona_circuit() {
         CognitiveOpKind::RouteSubHead,
         5,
     ));
-    let mut tl_overlay = GcsoDualTrackTimeline::new(tl_base.model_fingerprint());
+    let mut tl_overlay = LmnkTimeline::new(tl_base.model_fingerprint());
     tl_overlay.set_persona_circuit(overlay_circuit);
 
     let mut composed = decoded
@@ -704,9 +703,8 @@ fn dual_track_timeline_fast_resumes_and_rebakes_across_models() {
 
     let detector = AdaptiveGopCutDetector::default();
     let policy = RecallPolicy::default();
-    let mut timeline = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
-        src_adapter.geometry(),
-    ));
+    let mut timeline =
+        LmnkTimeline::new(LmnkTimeline::geometry_fingerprint(src_adapter.geometry()));
     let step_ctx = TimelineStepContext {
         adapter: &src_adapter,
         corpus: &corpus,
@@ -725,7 +723,7 @@ fn dual_track_timeline_fast_resumes_and_rebakes_across_models() {
             },
             &FrameTransitionMetrics {
                 phase_l1_delta: 0.0,
-                void_state: VoidBoundaryState::InsideBasin,
+                lacuna_state: LacunaBoundaryState::InsideBasin,
                 frames_since_keyframe: 0,
                 new_cluster_spawned: false,
             },
@@ -743,7 +741,7 @@ fn dual_track_timeline_fast_resumes_and_rebakes_across_models() {
             },
             &FrameTransitionMetrics {
                 phase_l1_delta: 0.05,
-                void_state: VoidBoundaryState::InsideBasin,
+                lacuna_state: LacunaBoundaryState::InsideBasin,
                 frames_since_keyframe: 1,
                 new_cluster_spawned: false,
             },
@@ -836,11 +834,11 @@ fn coherence_guard_gate_flags_low_fact_coherence_as_liminal_void() {
         &policy,
     );
     assert!(decision.suppress_fact_injection);
-    assert_eq!(decision.void_state, VoidBoundaryState::LiminalExterior);
+    assert_eq!(decision.lacuna_state, LacunaBoundaryState::LiminalExterior);
 }
 
 #[test]
-fn coherence_guard_gate_detects_sharp_winner_liminal_without_weakening_ood_liminal_void() {
+fn coherence_guard_gate_detects_sharp_winner_liminal_without_weakening_ood_liminal_lacuna() {
     let gate = CoherenceGuardGate;
     let policy = RecallPolicy {
         min_coherence: 0.19,
@@ -861,7 +859,7 @@ fn coherence_guard_gate_detects_sharp_winner_liminal_without_weakening_ood_limin
         &policy,
     );
     assert!(!liminal.suppress_fact_injection);
-    assert_eq!(liminal.void_state, VoidBoundaryState::LiminalBoundary);
+    assert_eq!(liminal.lacuna_state, LacunaBoundaryState::LiminalBoundary);
 
     // Flat out-of-domain noise remains strictly Liminal.
     let flat_ood = gate.evaluate(
@@ -875,7 +873,7 @@ fn coherence_guard_gate_detects_sharp_winner_liminal_without_weakening_ood_limin
         &policy,
     );
     assert!(flat_ood.suppress_fact_injection);
-    assert_eq!(flat_ood.void_state, VoidBoundaryState::LiminalExterior);
+    assert_eq!(flat_ood.lacuna_state, LacunaBoundaryState::LiminalExterior);
 
     // Single-token OOD outlier noise below 0.85 * min_coherence must not bleed into LiminalBoundary.
     let ood_outlier = gate.evaluate(
@@ -889,11 +887,14 @@ fn coherence_guard_gate_detects_sharp_winner_liminal_without_weakening_ood_limin
         &policy,
     );
     assert!(ood_outlier.suppress_fact_injection);
-    assert_eq!(ood_outlier.void_state, VoidBoundaryState::LiminalExterior);
+    assert_eq!(
+        ood_outlier.lacuna_state,
+        LacunaBoundaryState::LiminalExterior
+    );
 }
 
 #[test]
-fn perspective_void_damps_dense_hub_and_preserves_peripheral_attractor() {
+fn perspective_hubness_damps_dense_hub_and_preserves_peripheral_attractor() {
     let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let centroid = vec![0.0_f32; len];
@@ -974,7 +975,7 @@ fn perspective_void_damps_dense_hub_and_preserves_peripheral_attractor() {
         .expect("recall");
     assert_ne!(id_hub, id_periph);
     assert_eq!(recall.recalled_facts[0].0.anchor_id, id_periph);
-    assert!(recall.min_local_void_depth < 0.05);
+    assert!(recall.min_local_lacuna_depth < 0.05);
 }
 
 #[test]
@@ -1092,11 +1093,11 @@ fn society_stratum_pipeline_supports_dynamic_add_remove_and_substrate_arbitratio
             "local_feature_worker",
             "head_angle_worker",
             "local_token_resonance",
-            "perspective_domino_liminal_void",
+            "perspective_hubness_liminal_lacuna",
             "substrate_boundary",
         ]
     );
-    let removed = pipeline.remove_stratum("perspective_domino_liminal_void");
+    let removed = pipeline.remove_stratum("perspective_hubness_liminal_lacuna");
     assert!(removed.is_some());
     assert_eq!(
         pipeline.stratum_names(),
@@ -1141,7 +1142,10 @@ fn society_stratum_pipeline_supports_dynamic_add_remove_and_substrate_arbitratio
         recall_guard.action_decision,
         StigmergicActionDecision::RepulsionEscape
     );
-    assert_eq!(recall_guard.void_state, VoidBoundaryState::LiminalExterior);
+    assert_eq!(
+        recall_guard.lacuna_state,
+        LacunaBoundaryState::LiminalExterior
+    );
 }
 
 #[test]
@@ -1355,7 +1359,7 @@ fn local_token_resonance_arbitrates_channel_disagreement_via_pspm_subhead_route(
 
 #[test]
 fn support_gated_perspective_prevents_phantom_boost_on_non_matching_outlier() {
-    let perspective = AsymmetricDominoVoidPerspective::default();
+    let perspective = AsymmetricHubnessPerspective::default();
     let entry = TextAttractorEntry {
         anchor_id: 99,
         role: AttractorRole::Guard,
@@ -1624,7 +1628,10 @@ fn substrate_compound_decomposition_links_disjoint_specialists_while_respecting_
             Some(weak_obs),
         )
         .expect("ood recall");
-    assert_eq!(ood_recall.void_state, VoidBoundaryState::LiminalExterior);
+    assert_eq!(
+        ood_recall.lacuna_state,
+        LacunaBoundaryState::LiminalExterior
+    );
     assert!(ood_recall.recalled_facts.is_empty());
     assert_eq!(
         ood_recall
@@ -1910,8 +1917,8 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
         regime_code: EpistemicRegime::InternalConflict as u8,
         reserved_align: [0; 3],
     };
-    let default_venn = *adapter.last_venn_serendipity_report();
-    adapter.adapt_core_layers(&conflict_horizon, &default_venn, None);
+    let default_overlap = *adapter.last_overlap_report();
+    adapter.adapt_core_layers(&conflict_horizon, &default_overlap, None);
     assert!(adapter.threshold_state().threshold_floor_q7[2] > initial_persona_floor);
     assert_eq!(adapter.threshold_state().adaptation_epochs, 1);
 
@@ -1971,7 +1978,7 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
 }
 
 #[test]
-fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_srl() {
+fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_rank1() {
     use liminika_core::drivers::EgoIntentAxes;
     use liminika_core::liminal::EpistemicRegime;
     use liminika_core::runtime::{EpistemicHorizonReading, ObjectiveFact};
@@ -2001,27 +2008,27 @@ fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_srl() {
         regime_code: EpistemicRegime::KnownCoherent as u8,
         ..Default::default()
     };
-    let active_venn = OverlapDiscoveryReport {
+    let active_overlap = OverlapDiscoveryReport {
         overlap_core_mask: 0x0F,
         lacuna_exterior_mask: 0xF0,
         ..Default::default()
     };
-    adapter.adapt_core_layers(&active_horizon, &active_venn, None);
+    adapter.adapt_core_layers(&active_horizon, &active_overlap, None);
 
-    // Verify persistent Ego intervention via `apply_srl_with_gateway_mut` vs snapshot `&self` path.
+    // Verify persistent Ego intervention via `apply_rank1_with_gateway_mut` vs snapshot `&self` path.
     let fact = ObjectiveFact::new([24i8; MAX_ATTENTION_HEADS], 6.5, 0, 1);
     let mut hidden = vec![10.0, 0.0, 0.0, 0.0];
     let u = vec![1.0, 0.0, 0.0, 0.0];
     let v = vec![1.0, 0.0, 0.0, 0.0];
     let epochs_before = adapter.ego_state().intervention_epochs;
     let _ = adapter
-        .apply_srl_with_gateway(&fact, &mut hidden, &u, &v)
-        .expect("immutable srl");
+        .apply_rank1_with_gateway(&fact, &mut hidden, &u, &v)
+        .expect("immutable rank-1");
     assert_eq!(adapter.ego_state().intervention_epochs, epochs_before);
 
     let _ = adapter
-        .apply_srl_with_gateway_mut(&fact, &mut hidden, &u, &v)
-        .expect("mutable srl");
+        .apply_rank1_with_gateway_mut(&fact, &mut hidden, &u, &v)
+        .expect("mutable rank-1");
     assert!(adapter.ego_state().intervention_epochs > epochs_before);
 
     // Fragmented micro-ensemble through adapter
@@ -2062,7 +2069,7 @@ fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_srl() {
 }
 
 #[test]
-fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
+fn adapter_rope_and_rank1_paths_actively_wire_core_layers_and_ego() {
     use liminika_core::drivers::EgoIntentAxes;
     use liminika_core::liminal::EpistemicRegime;
     use liminika_core::runtime::{EpistemicHorizonReading, ObjectiveFact};
@@ -2136,8 +2143,8 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
             .expect("substrate rope");
     }
     let rank1_res = ego_adapter
-        .orchestrate_layer_srl_with_substrate(&fact, &mut hidden, &u, &v)
-        .expect("substrate srl");
+        .orchestrate_layer_rank1_with_substrate(&fact, &mut hidden, &u, &v)
+        .expect("substrate rank-1");
     assert!(rank1_res.is_some());
     assert!(ego_adapter.ego_state().intervention_epochs > epochs_before_rope);
 
@@ -2159,18 +2166,18 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
         residual_sig: vec![0.9, 0.1],
     };
     let recall = DynamicAttractorRecall {
-        void_state: VoidBoundaryState::InsideBasin,
+        lacuna_state: LacunaBoundaryState::InsideBasin,
         top1_fact_score: 0.85,
         top2_fact_score: 0.72,
         top1_persona_score: 0.20,
-        min_local_void_depth: 0.0,
+        min_local_lacuna_depth: 0.0,
         guard_conflict_margin: -0.35,
         action_decision: StigmergicActionDecision::FullOrchestration,
         gateway_frame: f_ego,
         telemetry: StratumProbeTelemetry::default(),
         recalled_facts: vec![(&e1, 0.85), (&e2, 0.72)],
         recalled_personas: Vec::new(),
-        venn_partition: LacunaPartition8::default(),
+        lacuna_partition: LacunaPartition8::default(),
         exterior_sandbox_facts: Vec::new(),
         is_known_unknown_exterior: false,
     };
@@ -2701,20 +2708,18 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
 }
 
 #[test]
-fn gcso_v2_logical_pframe_topology_roundtrip_and_cross_model_rebake() {
+fn container_v2_logical_pframe_topology_roundtrip_and_cross_model_rebake() {
     let mut src_adapter =
         ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("src adapter");
     src_adapter.configure_ego_from_preset(LiminalEgoPreset::Medium);
     let topo = src_adapter.export_logical_pframe_topology();
     assert_eq!(topo.len(), 3);
 
-    let mut tl = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
-        src_adapter.geometry(),
-    ));
+    let mut tl = LmnkTimeline::new(LmnkTimeline::geometry_fingerprint(src_adapter.geometry()));
     tl.set_logical_pframe_topology(topo.clone());
 
     let encoded = tl.to_bytes();
-    let decoded = GcsoDualTrackTimeline::from_bytes(&encoded).expect("decode v2");
+    let decoded = LmnkTimeline::from_bytes(&encoded).expect("decode v2");
     assert_eq!(decoded.logical_pframe_topology(), topo.as_slice());
 
     let mut alt_geom = RopeGeometry::phi4_mini();
@@ -2864,18 +2869,18 @@ fn adapter_preserves_baseline_pins_and_allows_calm_whole_token_bypass() {
         residual_sig: vec![1.0, 0.0],
     };
     let calm_recall = DynamicAttractorRecall {
-        void_state: VoidBoundaryState::InsideBasin,
+        lacuna_state: LacunaBoundaryState::InsideBasin,
         top1_fact_score: 0.85,
         top2_fact_score: 0.40,
         top1_persona_score: 0.15,
-        min_local_void_depth: 0.0,
+        min_local_lacuna_depth: 0.0,
         guard_conflict_margin: -0.30,
         action_decision: StigmergicActionDecision::FullOrchestration,
         gateway_frame: GatewayFrame::default(),
         telemetry: StratumProbeTelemetry::default(),
         recalled_facts: vec![(&fact, 0.85)],
         recalled_personas: Vec::new(),
-        venn_partition: LacunaPartition8::default(),
+        lacuna_partition: LacunaPartition8::default(),
         exterior_sandbox_facts: Vec::new(),
         is_known_unknown_exterior: false,
     };
@@ -2948,4 +2953,43 @@ fn adapter_preserves_baseline_pins_and_allows_calm_whole_token_bypass() {
         .rebind_geometry_cold_path(small_geom)
         .expect("rebind");
     assert_eq!(adapter.system_spine().pinned_compute_mask, 0x81_u64);
+}
+
+#[test]
+fn adapter_embeds_boxed_runtime_context_with_drop_and_spine_pin_floor() {
+    use liminika_core::runtime::RuntimeContext;
+
+    assert_eq!(core::mem::size_of::<RuntimeContext>(), 5120);
+    assert_eq!(core::mem::align_of::<RuntimeContext>(), 64);
+    assert!(!core::mem::needs_drop::<RuntimeContext>());
+    assert!(core::mem::needs_drop::<ModelSteeringAdapter>());
+
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let baseline_pins = 0x0000_000F_u64 | (0x0000_000F_u64 << 28);
+
+    // Embedded `RuntimeContext` must mirror adapter initialization parity and pin floor.
+    assert_eq!(
+        adapter.runtime_context().system_spine().pinned_compute_mask,
+        baseline_pins
+    );
+    assert_eq!(
+        adapter.system_spine().pinned_compute_mask,
+        adapter.runtime_context().system_spine().pinned_compute_mask
+    );
+
+    // Verify `apply_host_spine_pin_floor` is enforced on the embedded context.
+    adapter
+        .runtime_context_mut()
+        .system_spine_mut()
+        .pinned_compute_mask = 0;
+    adapter
+        .runtime_context_mut()
+        .apply_host_spine_pin_floor(baseline_pins);
+    assert_eq!(
+        adapter.runtime_context().system_spine().pinned_compute_mask,
+        baseline_pins
+    );
+
+    // Verify explicit `drop` executes cleanly (scrubbing the embedded `RuntimeContext`).
+    drop(adapter);
 }

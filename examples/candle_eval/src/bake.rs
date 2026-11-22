@@ -302,8 +302,8 @@ pub(crate) struct BakedModelProfile {
     pub(crate) fact_anchors_per_layer: Vec<Vec<ObjectiveFact<[i8; 64]>>>,
     pub(crate) persona_anchors_per_layer: Vec<Vec<SubjectivePersona<[i8; 64]>>>,
     pub(crate) guard_anchors_per_layer: Vec<Vec<GuardPhaseAnchor>>,
-    pub(crate) srl_u: Vec<f32>,
-    pub(crate) srl_v: Vec<f32>,
+    pub(crate) rank1_u: Vec<f32>,
+    pub(crate) rank1_v: Vec<f32>,
 }
 
 pub(crate) fn normalize_unit(v: &mut [f32]) {
@@ -458,14 +458,14 @@ pub(crate) fn bake_via_adapter(
         guard_anchors_per_layer.push(layer_guards);
     }
 
-    let mut srl_u: Vec<f32> = pos_h
+    let mut rank1_u: Vec<f32> = pos_h
         .iter()
         .zip(neg_h.iter())
         .map(|(&p, &n)| p - n)
         .collect();
-    let mut srl_v = srl_u.clone();
-    normalize_unit(&mut srl_u);
-    normalize_unit(&mut srl_v);
+    let mut rank1_v = rank1_u.clone();
+    normalize_unit(&mut rank1_u);
+    normalize_unit(&mut rank1_v);
 
     Ok(BakedModelProfile {
         per_layer_q7,
@@ -476,8 +476,8 @@ pub(crate) fn bake_via_adapter(
         fact_anchors_per_layer,
         persona_anchors_per_layer,
         guard_anchors_per_layer,
-        srl_u,
-        srl_v,
+        rank1_u,
+        rank1_v,
     })
 }
 

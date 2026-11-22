@@ -19,7 +19,7 @@ pub enum AttractorRole {
 
 /// Geometric classification of a query's position relative to the compiled attractor manifold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VoidBoundaryState {
+pub enum LacunaBoundaryState {
     /// Query clearly resides inside a resonant attractor basin.
     InsideBasin,
     /// Query sits on the `Liminal` boundary between two competing attractors.
@@ -99,7 +99,7 @@ impl ManifoldGatewaySignal for TextAttractorEntry {
 #[derive(Debug, Clone)]
 pub struct DynamicAttractorRecall<'a> {
     /// Whether the query landed inside a basin, on a liminal boundary, or in `Liminal` empty space.
-    pub void_state: VoidBoundaryState,
+    pub lacuna_state: LacunaBoundaryState,
     /// Highest geometric resonance score among Fact attractors.
     pub top1_fact_score: f32,
     /// Second-highest geometric resonance score among Fact attractors.
@@ -107,7 +107,7 @@ pub struct DynamicAttractorRecall<'a> {
     /// Highest geometric resonance score among Persona attractors.
     pub top1_persona_score: f32,
     /// Smallest per-attractor local `Liminal` depth observed across all attractors (`0.0` = deep in a basin).
-    pub min_local_void_depth: f32,
+    pub min_local_lacuna_depth: f32,
     /// Highest Guard resonance minus highest Fact/Persona resonance (`> 0` indicates guard-dominant conflict).
     pub guard_conflict_margin: f32,
     /// Substrate regime selected by the upper boundary stratum (`PassiveSidecar`, `InertialLayerSkip`,
@@ -117,12 +117,12 @@ pub struct DynamicAttractorRecall<'a> {
     pub gateway_frame: GatewayFrame,
     /// Cross-channel probe telemetry and core [`CausalProvenanceReport`].
     pub telemetry: StratumProbeTelemetry,
-    /// Top-K recalled Fact entries (empty when `void_state == Liminal`).
+    /// Top-K recalled Fact entries (empty when `lacuna_state == LiminalExterior`).
     pub recalled_facts: Vec<(&'a TextAttractorEntry, f32)>,
     /// Top-K recalled Persona entries (suppressed only on Guard repulsion).
     pub recalled_personas: Vec<(&'a TextAttractorEntry, f32)>,
-    /// Branchless 4-region Venn partition (`S & O`, `S \ O`, `O \ S`, True Void) for this query.
-    pub venn_partition: LacunaPartition8,
+    /// Branchless 4-region lacuna partition (`S & O`, `S \ O`, `O \ S`, Unobserved) for this query.
+    pub lacuna_partition: LacunaPartition8,
     /// Non-copy exterior Known Unknown ($O \setminus S$) pointers routed strictly through sandbox staging.
     pub exterior_sandbox_facts: Vec<(&'a TextAttractorEntry, f32)>,
     /// True when a validated Known Unknown ($O \setminus S$) exterior pointer was staged via $S \cap O$ bridge.
@@ -209,7 +209,7 @@ impl<'a> DynamicAttractorRecall<'a> {
     /// returning `0` when the query lies in ungrounded `Liminal` or recalled text is empty.
     #[must_use]
     pub fn context_fingerprint_u64(&self) -> u64 {
-        if matches!(self.void_state, VoidBoundaryState::LiminalExterior)
+        if matches!(self.lacuna_state, LacunaBoundaryState::LiminalExterior)
             && !self.is_known_unknown_exterior
         {
             return 0;
@@ -278,9 +278,9 @@ pub struct RecallBoundaryMetrics {
 /// Decision produced by a [`RecallBoundaryGate`] for a query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecallGateDecision {
-    /// Classified boundary state (`InsideBasin`, `LiminalBoundary`, or `Liminal`).
-    pub void_state: VoidBoundaryState,
-    /// Whether forced Fact/Persona attractor injection should be suppressed (e.g., `Liminal` or Guard dominance).
+    /// Classified boundary state (`InsideBasin`, `LiminalBoundary`, or `LiminalExterior`).
+    pub lacuna_state: LacunaBoundaryState,
+    /// Whether forced Fact/Persona attractor injection should be suppressed (e.g., `LiminalExterior` or Guard dominance).
     pub suppress_fact_injection: bool,
 }
 
@@ -315,32 +315,32 @@ pub struct AttractorPerspectiveContext<'a> {
     pub query_std_cosine: f32,
 }
 
-/// Per-attractor measurement returned by [`AttractorVoidPerspective::measure_perspective`].
+/// Per-attractor measurement returned by [`AttractorBoundaryPerspective::measure_perspective`].
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PerspectiveVoidReading {
+pub struct PerspectiveBoundaryReading {
     /// Perspective-calibrated affinity score as viewed from this attractor's angle.
     pub perspective_affinity: f32,
     /// Non-negative local `Liminal` gap seen from this attractor (`0.0` = well inside basin).
-    pub local_void_depth: f32,
+    pub local_lacuna_depth: f32,
 }
 
-/// Trait computing perspective-dependent affinity and local `Liminal` void depth per attractor.
+/// Trait computing perspective-dependent affinity and local `Liminal` boundary depth per attractor.
 ///
 /// Rather than judging every attractor from a single isotropic origin, each attractor can have a
 /// distinct local density and boundary geometry so central hubs do not eclipse peripheral basins.
-pub trait AttractorVoidPerspective {
+pub trait AttractorBoundaryPerspective {
     /// Measures affinity and local `Liminal` depth from `ctx.entry`'s vantage point.
     fn measure_perspective(
         &self,
         ctx: &AttractorPerspectiveContext<'_>,
         min_coherence: f32,
-    ) -> PerspectiveVoidReading;
+    ) -> PerspectiveBoundaryReading;
 }
 
-/// Default [`AttractorVoidPerspective`] implementing bidirectional CSLS hubness normalization and
+/// Default [`AttractorBoundaryPerspective`] implementing bidirectional CSLS hubness normalization and
 /// asymmetric Z-score scaling across each attractor's local neighborhood.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AsymmetricDominoVoidPerspective {
+pub struct AsymmetricHubnessPerspective {
     /// Number of nearest corpus neighbors defining each attractor's local baseline.
     pub neighbor_k: usize,
     /// Damping weight applied to centered attractor hubness (`neighbor_mean - global_mean`).
@@ -349,7 +349,7 @@ pub struct AsymmetricDominoVoidPerspective {
     pub perspective_z_gain: f32,
 }
 
-impl Default for AsymmetricDominoVoidPerspective {
+impl Default for AsymmetricHubnessPerspective {
     fn default() -> Self {
         Self {
             neighbor_k: 4,
@@ -359,12 +359,12 @@ impl Default for AsymmetricDominoVoidPerspective {
     }
 }
 
-impl AttractorVoidPerspective for AsymmetricDominoVoidPerspective {
+impl AttractorBoundaryPerspective for AsymmetricHubnessPerspective {
     fn measure_perspective(
         &self,
         ctx: &AttractorPerspectiveContext<'_>,
         min_coherence: f32,
-    ) -> PerspectiveVoidReading {
+    ) -> PerspectiveBoundaryReading {
         let hub_shift = ctx.neighbor_mean_cosine - ctx.global_neighbor_mean;
         let z_from_attractor =
             (ctx.raw_cosine - ctx.neighbor_mean_cosine) / ctx.neighbor_std_cosine.max(0.05);
@@ -382,10 +382,10 @@ impl AttractorVoidPerspective for AsymmetricDominoVoidPerspective {
         };
         let perspective_affinity = ctx.raw_cosine - self.hubness_damping * damped_hub
             + self.perspective_z_gain * positive_support * rel_z;
-        let local_void_depth = (min_coherence - perspective_affinity).max(0.0);
-        PerspectiveVoidReading {
+        let local_lacuna_depth = (min_coherence - perspective_affinity).max(0.0);
+        PerspectiveBoundaryReading {
             perspective_affinity,
-            local_void_depth,
+            local_lacuna_depth,
         }
     }
 }
@@ -402,7 +402,7 @@ impl RecallBoundaryGate for CoherenceGuardGate {
     ) -> RecallGateDecision {
         if metrics.guard_conflict_margin > policy.guard_suppress_margin {
             return RecallGateDecision {
-                void_state: VoidBoundaryState::LiminalExterior,
+                lacuna_state: LacunaBoundaryState::LiminalExterior,
                 suppress_fact_injection: true,
             };
         }
@@ -414,19 +414,19 @@ impl RecallBoundaryGate for CoherenceGuardGate {
 
         if metrics.top1_fact_score < policy.min_coherence && !sharp_liminal_match {
             RecallGateDecision {
-                void_state: VoidBoundaryState::LiminalExterior,
+                lacuna_state: LacunaBoundaryState::LiminalExterior,
                 suppress_fact_injection: true,
             }
         } else if sharp_liminal_match && metrics.top1_fact_score < policy.min_coherence
             || margin < policy.boundary_margin
         {
             RecallGateDecision {
-                void_state: VoidBoundaryState::LiminalBoundary,
+                lacuna_state: LacunaBoundaryState::LiminalBoundary,
                 suppress_fact_injection: false,
             }
         } else {
             RecallGateDecision {
-                void_state: VoidBoundaryState::InsideBasin,
+                lacuna_state: LacunaBoundaryState::InsideBasin,
                 suppress_fact_injection: false,
             }
         }
@@ -767,8 +767,8 @@ impl TextAttractorCorpus {
     }
 
     /// Scores a query's per-layer Q activations against the corpus using the default
-    /// 3-stratum Society-of-Mind pipeline, [`AsymmetricDominoVoidPerspective`], and
-    /// [`CoherenceGuardGate`] to classify [`VoidBoundaryState`].
+    /// multi-stratum pipeline, [`AsymmetricHubnessPerspective`], and
+    /// [`CoherenceGuardGate`] to classify [`LacunaBoundaryState`].
     ///
     /// # Errors
     ///
@@ -780,12 +780,12 @@ impl TextAttractorCorpus {
         baseline_ref_per_layer: &[&[f32]],
         policy: &RecallPolicy,
     ) -> Result<DynamicAttractorRecall<'_>, String> {
-        let perspective = AsymmetricDominoVoidPerspective::default();
+        let perspective = AsymmetricHubnessPerspective::default();
         let mut pipeline = StratumPipeline::new();
         pipeline.push_stratum(Box::new(LocalFeatureWorkerStratum::default()));
         pipeline.push_stratum(Box::new(HeadAngleWorkerStratum::default()));
         pipeline.push_stratum(Box::new(LocalTokenResonanceStratum::default()));
-        pipeline.push_stratum(Box::new(PerspectiveDominoStratum {
+        pipeline.push_stratum(Box::new(PerspectiveHubnessStratum {
             perspective: &perspective,
         }));
         pipeline.push_stratum(Box::new(SubstrateBoundaryStratum {
@@ -960,7 +960,7 @@ impl TextAttractorCorpus {
             token_deposits,
             linked_fact_indices: Vec::new(),
             decomposition_triggered: false,
-            local_void_depths: raw_cosines
+            local_lacuna_depths: raw_cosines
                 .iter()
                 .map(|&s| (policy.min_coherence - s).max(0.0))
                 .collect(),
@@ -973,7 +973,7 @@ impl TextAttractorCorpus {
                 guard_conflict_margin: 0.0,
             },
             gate_decision: RecallGateDecision {
-                void_state: VoidBoundaryState::LiminalExterior,
+                lacuna_state: LacunaBoundaryState::LiminalExterior,
                 suppress_fact_injection: true,
             },
             action_decision: StigmergicActionDecision::PassiveSidecar,
@@ -1011,7 +1011,7 @@ impl TextAttractorCorpus {
         let top1_fact_candidate = fact_scores.first().copied();
         let top_any_entry = top1_fact_candidate.or_else(|| persona_scores.first().copied());
 
-        // Compute 8-granule 4-region Venn partition (`S & O`, `S \ O`, `O \ S`, True Void).
+        // Compute 8-granule 4-region lacuna partition (`S & O`, `S \ O`, `O \ S`, Unobserved).
         let self_mask = {
             let mut g_abs = [0u32; NUM_STIGMERGIC_GRANULES];
             let heads = geom.num_q_heads.max(1);
@@ -1106,7 +1106,7 @@ impl TextAttractorCorpus {
             .core_primitive_state()
             .stigmergy
             .granule_noise_tolerance_q7;
-        let venn_partition = evaluate_lacuna_partition_branchless(
+        let lacuna_partition = evaluate_lacuna_partition_branchless(
             self_mask,
             &other_granule_density_q7,
             &substrate_tol,
@@ -1154,8 +1154,8 @@ impl TextAttractorCorpus {
             && signal.boundary_metrics.guard_conflict_margin <= 0.0
             && !signal.telemetry.channel_disagreement
             && signal.boundary_metrics.top1_fact_score >= signal.boundary_metrics.top1_persona_score
-            && venn_partition.is_sandbox_eligible()
-            && venn_partition.bridge_count >= 2
+            && lacuna_partition.is_sandbox_eligible()
+            && lacuna_partition.bridge_count >= 2
         {
             if let Some((entry, score)) = top1_fact_candidate {
                 let meets_floor = signal.boundary_metrics.top1_fact_score
@@ -1180,18 +1180,18 @@ impl TextAttractorCorpus {
         };
 
         Ok(DynamicAttractorRecall {
-            void_state: signal.gate_decision.void_state,
+            lacuna_state: signal.gate_decision.lacuna_state,
             top1_fact_score: signal.boundary_metrics.top1_fact_score,
             top2_fact_score: signal.boundary_metrics.top2_fact_score,
             top1_persona_score: signal.boundary_metrics.top1_persona_score,
-            min_local_void_depth: directive.min_local_void_depth,
+            min_local_lacuna_depth: directive.min_local_lacuna_depth,
             guard_conflict_margin: signal.boundary_metrics.guard_conflict_margin,
             action_decision: signal.action_decision,
             gateway_frame: signal.gateway_frame,
             telemetry: signal.telemetry,
             recalled_facts,
             recalled_personas,
-            venn_partition,
+            lacuna_partition,
             exterior_sandbox_facts,
             is_known_unknown_exterior,
         })

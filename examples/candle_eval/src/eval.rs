@@ -9,7 +9,7 @@ use std::time::Instant;
 use candle_core::quantized::GgmlDType;
 use liminika_adapter::{
     AttractorTrajectoryEvaluator, CompiledTokenCorpus, CorpusRecallEscalationProvider,
-    GcsoDualTrackTimeline, ManifoldReflectionEvaluator, ModelSteeringAdapter, ReflectionCritique,
+    LmnkTimeline, ManifoldReflectionEvaluator, ModelSteeringAdapter, ReflectionCritique,
     ReflectionPolicy, SystemPressureReading, TrajectoryManifoldSnapshot,
 };
 use liminika_core::abi::{lmnk_pointer_trail_t, lmnk_q7_t};
@@ -553,7 +553,7 @@ pub(crate) fn resolve_persona_circuit(
     load_path: Option<&Path>,
 ) -> Option<CognitiveTrajectoryLedger> {
     let loaded = load_path
-        .and_then(|p| GcsoDualTrackTimeline::load_from_path(p).ok())
+        .and_then(|p| LmnkTimeline::load_from_path(p).ok())
         .and_then(|tl| tl.persona_circuit());
     let preset = build_preset_circuit(mode);
     match (loaded, preset) {
@@ -765,7 +765,7 @@ pub(crate) struct SteerDecodeConfig<'a, 'c, 'e> {
     pub(crate) persona_q7s: Option<&'a [Vec<lmnk_q7_t>]>,
     pub(crate) resonant_ctx: Option<ResonantAnchors<'a>>,
     pub(crate) rope_rad: f32,
-    pub(crate) srl: Option<(&'a [f32], &'a [f32], f32)>,
+    pub(crate) rank1: Option<(&'a [f32], &'a [f32], f32)>,
     pub(crate) use_steer: bool,
     pub(crate) horizon_mode: HorizonAblationMode,
     pub(crate) escalation_provider: Option<&'e mut CorpusRecallEscalationProvider<'c>>,
@@ -805,7 +805,7 @@ pub(crate) fn generate_steered_reply_with_offset(
         resonant_ctx: cfg.resonant_ctx,
         rope_rad: cfg.rope_rad,
         trail: &mut trail,
-        srl: cfg.srl,
+        rank1: cfg.rank1,
         horizon_mode: cfg.horizon_mode,
         escalation_provider: cfg.escalation_provider.as_deref_mut(),
         compute_dispatch: None,
@@ -884,7 +884,10 @@ pub(crate) fn generate_steered_reply_with_offset(
         let exit_entropy_q7 = ((logit_entropy - 0.15).max(0.0) * 127.0).clamp(0.0, 127.0) as u8;
         let repulsion_active = ((steer.trail.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0)
             || ((((steer.trail.current_ptr >> 48) as u8) & ACTION_MODE_PHASE_REPULSE) != 0);
-        let sens_q7 = steer.adapter.last_venn_partition().boundary_sensitivity_q7;
+        let sens_q7 = steer
+            .adapter
+            .last_lacuna_partition()
+            .boundary_sensitivity_q7;
         let guard_prox_q7 = if repulsion_active { 88 } else { sens_q7 >> 2 };
         let active_overdrive = repulsion_active && steer.adapter.ego_state().is_active();
         steer.adapter.step_distortion_tension_hot_path(

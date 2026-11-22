@@ -7,9 +7,7 @@
 //! unified, zero-external-dependency bridge for external LLM runtimes (Candle, `llama.cpp`,
 //! and CLI evaluation harnesses).
 
-use liminika_core::abi::{
-    lmnk_entropy_state_t, lmnk_ledger_slot_t, lmnk_pointer_trail_t, lmnk_q7_t,
-};
+use liminika_core::abi::{lmnk_entropy_state_t, lmnk_pointer_trail_t, lmnk_q7_t};
 use liminika_core::drivers::{
     EntropyController, LiminalEgoPreset, LiminalEgoState, DISTORTION_DELTA_FLAG_ACTIVE,
     DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID, EGO_TRIGGER_BASIN_CAPTURE,
@@ -21,31 +19,36 @@ use liminika_core::foundation::{
     RopeSteeringTarget, ACTION_MODE_PHASE_REPULSE, SWAR_SPLAT_BYTE_64,
 };
 use liminika_core::liminal::{
-    BitCut8, EpistemicRegime, LiminalThresholdState, LmnkResult, MAX_ATTENTION_HEADS,
+    BitCut8, EpistemicRegime, LiminalThresholdState, LmnkResult, LmnkStatus,
+    LMNK_ABI_VERSION_STRING, LMNK_ERR_ALIGNMENT, LMNK_ERR_TOPOLOGY_MISMATCH, MAX_ATTENTION_HEADS,
     NUM_STIGMERGIC_GRANULES,
 };
 use liminika_core::runtime::{
-    apply_latent_horizon_slots, AdaptiveThresholdPolicy, CausalProvenanceReport,
-    CausalProvenanceSignal, CoreLayerEvalContext, CoreStateStack, CoreTelemetryBank,
-    CoreTelemetrySnapshot, DefaultResidualSpilloverSlot, EpistemicHorizonReading, GatewayFrame,
-    GatewayPhaseSteeringExt, GuardPhaseAnchor, HorizonDwellState, HorizonEscalationProvider,
-    HorizonEscalationRequest, HorizonTriggerInput, LatentHorizonSlot, LayerDistortionReport,
-    LiminalBoundaryDelta, LiminalTopologyTelemetrySnapshot, LmnkContainerView,
-    ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact, SlowLoopTelemetryAdjustment,
-    StigmergicThresholdPolicy, SubjectivePersona, SubstrateGatewayExt, SystemConstraint,
-    TelemetryCapturePolicy, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
-    CAUSAL_AXIS_SUBJECTIVE_PERSONA, LMNK_CONTAINER_FLAG_COMPILED_CACHE, ROOT_CAUSE_NOMINAL,
-    ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
+    apply_latent_horizon_slots, required_container_byte_len, write_container_sections_to_bytes,
+    AdaptiveThresholdPolicy, CausalProvenanceReport, CausalProvenanceSignal, Config,
+    CoreStateStack, CoreTelemetryBank, CoreTelemetrySnapshot, DefaultResidualSpilloverSlot,
+    EpistemicHorizonReading, GatewayFrame, GatewayPhaseSteeringExt, GuardPhaseAnchor,
+    HorizonDwellState, HorizonEscalationProvider, HorizonEscalationRequest, HorizonTriggerInput,
+    LatentHorizonSlot, LayerDistortionReport, LiminalBoundaryDelta,
+    LiminalTopologyTelemetrySnapshot, LmnkContainerHeader, LmnkContainerView, LmnkSectionInput,
+    ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact, RuntimeContext,
+    SlowLoopTelemetryAdjustment, StigmergicThresholdPolicy, SubjectivePersona, SubstrateGatewayExt,
+    SystemConstraint, TelemetryCapturePolicy, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA, CORE_TOPOLOGY,
+    LMNK_CONTAINER_FLAG_COMPILED_CACHE, LMNK_CONTAINER_FLAG_PORTABLE_PACKAGE,
+    LMNK_SECTION_BLOOM_FILTER, LMNK_SECTION_CAUSAL_PROVENANCE, LMNK_SECTION_LEDGER_SLOT,
+    LMNK_SECTION_LOGICAL_PFRAMES, LMNK_SECTION_PHASE_ANCHORS, LMNK_SECTION_POINTER_TRAILS,
+    LMNK_SECTION_RECALL_METADATA, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
 };
 use liminika_core::stigmergy::{
     evaluate_stigmergic_overlap_and_discovery_words_64, CognitiveCircuitActivation,
     CognitiveCircuitBankOps, CognitiveTrajectoryLedger, DissipativeOverflowReport,
-    OverlapDiscoveryReport, PhaseAnchorRecord, PhaseDeltaSlice, PhaseSteeringEngine,
-    RelativeAttractorNode, ResidualAdapterEngine, ResidualScale, SandboxLifecycleEvent,
-    StigmergicActionDecision, StigmergicFragmentEnsembleReport, StigmergicGranuleState,
-    StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicSubstrate,
-    StigmergicThresholds, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
-    ATTRACTOR_SLOT_REPULSION, LEDGER_FLAG_COGNITIVE_TRAJECTORY, WORKBENCH_LANE_FLAG_REPULSION,
+    OverlapDiscoveryReport, PhaseAnchorRecord, PhaseDeltaSlice, RelativeAttractorNode,
+    ResidualAdapterEngine, ResidualScale, SandboxLifecycleEvent, StigmergicActionDecision,
+    StigmergicFragmentEnsembleReport, StigmergicGranuleState, StigmergicReconstitutionReport,
+    StigmergicScaleGranularity, StigmergicSubstrate, StigmergicThresholds,
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
+    LEDGER_FLAG_COGNITIVE_TRAJECTORY, WORKBENCH_LANE_FLAG_REPULSION,
 };
 
 pub mod pooling;
@@ -73,11 +76,13 @@ pub use stratum::*;
 pub mod corpus_recall;
 pub mod ego_intent;
 pub mod model_adapter;
+pub mod package;
 pub mod timeline;
 
 pub use corpus_recall::*;
 pub use ego_intent::*;
 pub use model_adapter::*;
+pub use package::*;
 pub use timeline::*;
 
 #[cfg(test)]

@@ -12,10 +12,10 @@ use candle_core::{DType, Device};
 use liminika_adapter::{
     AdaptiveGopCutDetector, AttractorContainerCodec, AttractorRole, AttractorTrajectoryEvaluator,
     CompiledTokenCorpus, CorpusRecallEscalationProvider, FrameTransitionMetrics,
-    GcsoDualTrackTimeline, ManifoldReflectionEvaluator, ModelSteeringAdapter, RebakeContext,
-    ReflectionCritique, ReflectionGateInput, ReflectionPolicy, ReflectionSelection, RopeGeometry,
-    SequenceActivationPooler, SourceTextRecord, SubtitleActivationEncoder, TimelineResumeOutcome,
-    TimelineStepContext, TokenSequenceEntry, TrajectoryManifoldSnapshot, VoidBoundaryState,
+    LacunaBoundaryState, LmnkTimeline, ManifoldReflectionEvaluator, ModelSteeringAdapter,
+    RebakeContext, ReflectionCritique, ReflectionGateInput, ReflectionPolicy, ReflectionSelection,
+    RopeGeometry, SequenceActivationPooler, SourceTextRecord, SubtitleActivationEncoder,
+    TimelineResumeOutcome, TimelineStepContext, TokenSequenceEntry, TrajectoryManifoldSnapshot,
 };
 use liminika_core::abi::lmnk_pointer_trail_t;
 use liminika_core::drivers::LiminalEgoPreset;
@@ -242,7 +242,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let vram_before = query_nvidia_smi_vram();
     println!(
-        "LiminiKa Candle Eval (RoPE + EDBC + Rank-1 residual via liminika-adapter) | device={:?} | layers={} heads={}/{} head_dim={} rotary_dim={}",
+        "LiminiKa Candle Eval (RoPE + Entropy Gate + Rank-1 residual via liminika-adapter) | device={:?} | layers={} heads={}/{} head_dim={} rotary_dim={}",
         device,
         adapter.geometry().num_layers,
         adapter.geometry().num_q_heads,
@@ -264,16 +264,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         load_elapsed,
         vram_before.as_deref(),
     );
-    let persona_gcso_in = cli_args
+    let persona_container_in = cli_args
         .iter()
-        .find_map(|a| a.strip_prefix("--persona-gcso="))
+        .find_map(|a| {
+            a.strip_prefix("--persona-container=")
+                .or_else(|| a.strip_prefix("--persona-gcso="))
+        })
         .map(PathBuf::from);
-    let persona_gcso_out = cli_args
+    let persona_container_out = cli_args
         .iter()
-        .find_map(|a| a.strip_prefix("--save-persona-gcso="))
+        .find_map(|a| {
+            a.strip_prefix("--save-persona-container=")
+                .or_else(|| a.strip_prefix("--save-persona-gcso="))
+        })
         .map(PathBuf::from)
-        .or_else(|| persona_gcso_in.clone());
-    let active_persona_circuit = resolve_persona_circuit(circuit_mode, persona_gcso_in.as_deref());
+        .or_else(|| persona_container_in.clone());
+    let active_persona_circuit =
+        resolve_persona_circuit(circuit_mode, persona_container_in.as_deref());
     let mut active_persona_bank: Option<StandardCognitiveBank> = active_persona_circuit.map(|pc| {
         if matches!(circuit_mode, CircuitProfileMode::Hybrid(_)) {
             let micro = build_preset_circuit(CircuitProfileMode::Analytical).unwrap_or(pc);
@@ -327,7 +334,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .get_ids()
                 .to_vec();
             let (logits, _, _) = model.forward_tokens(&ids, 0, None, false, false)?;
-            let h_t = adapter.measure_edbc_entropy(&logits)?.moving_z_entropy;
+            let h_t = adapter.measure_entropy_state(&logits)?.moving_z_entropy;
             base_entropies.push(h_t);
             baselines.push(logits);
         }
@@ -338,7 +345,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let probe_res =
             adapter.calibrate_manifold_probe(&pos_slices, &neg_slices, &base_entropies)?;
         println!(
-            "[EnvProbe epoch={}] heads={} steered_layers={} coh={:.3} H0={:.3} => dyn_gain={:.3} skip_H={:.3} srl_rho={:.3}",
+            "[EnvProbe epoch={}] heads={} steered_layers={} coh={:.3} H0={:.3} => dyn_gain={:.3} skip_H={:.3} rank1_rho={:.3}",
             probe_res.probe_epoch,
             probe_res.active_heads,
             probe_res.steered_layers,
@@ -351,7 +358,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if !step2_only {
             // Compare manual max_rad vs Gateway structural hyperparameters vs Resonant slice vs StigmergicSubstrate.
-            // tuple: (label, layer_mask, rope_rad, srl_scale, use_two_origin, use_resonant_slice)
+            // tuple: (label, layer_mask, rope_rad, rank1_scale, use_two_origin, use_resonant_slice)
             let configs: [(&str, u64, f32, f32, bool, bool); 6] = [
                 ("Baseline", 0xFFFF_FFFF, 0.00, 0.00, false, false),
                 ("RoPE (Top16, 0.10)", 0xFFFF_0000, 0.10, 0.00, false, false),
@@ -380,10 +387,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "mode", "mean_KL", "d_logprob", "expect_hit", "forbid_hit"
             );
 
-            for (label, layer_mask, rope_rad, srl_scale, use_two_origin, use_resonant) in configs {
+            for (label, layer_mask, rope_rad, rank1_scale, use_two_origin, use_resonant) in configs
+            {
                 adapter.set_layer_rope_mask(layer_mask);
                 adapter.reset_substrate_stats();
-                let use_edbc = rope_rad <= -1.5;
+                let use_entropy_gate = rope_rad <= -1.5;
                 let mut sum_kl = 0.0_f32;
                 let mut sum_d_lp = 0.0_f32;
                 let mut d_lp_count = 0_usize;
@@ -427,8 +435,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         None
                     };
-                    let srl_arg = if srl_scale != 0.0 {
-                        Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), srl_scale))
+                    let rank1_arg = if rank1_scale != 0.0 {
+                        Some((
+                            baked.rank1_u.as_slice(),
+                            baked.rank1_v.as_slice(),
+                            rank1_scale,
+                        ))
                     } else {
                         None
                     };
@@ -439,7 +451,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         resonant_ctx: res_ctx,
                         rope_rad,
                         trail: &mut trail,
-                        srl: srl_arg,
+                        rank1: rank1_arg,
                         horizon_mode: HorizonAblationMode::Core3,
                         escalation_provider: None,
                         compute_dispatch: None,
@@ -447,7 +459,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         steer_eligible_layers: 0,
                     };
                     let (mut logits, _, _) =
-                        model.forward_tokens(&ids, 0, Some(&mut steer), use_edbc, false)?;
+                        model.forward_tokens(&ids, 0, Some(&mut steer), use_entropy_gate, false)?;
                     sum_kl += kl_div(base_logits, &logits);
 
                     let mut probe_d_lp = 0.0_f32;
@@ -468,7 +480,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             &[next],
                             offset,
                             Some(&mut steer),
-                            use_edbc,
+                            use_entropy_gate,
                             false,
                         )?;
                         logits = next_logits;
@@ -608,24 +620,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("Turn2:PERSONA", suite.probes[5].1.as_str()),
                 ("Turn3:GUARD", suite.probes[4].1.as_str()),
             ];
-            for &(mode_label, layer_mask, rope_rad, srl_scale, use_edbc, use_resonant) in &[
-                (
-                    "Baseline",
-                    0xFFFF_FFFF_u64,
-                    0.00_f32,
-                    0.00_f32,
-                    false,
-                    false,
-                ),
-                (
-                    "Substrate",
-                    0xFFFF_0000_u64,
-                    -2.00_f32,
-                    -1.00_f32,
-                    true,
-                    true,
-                ),
-            ] {
+            for &(mode_label, layer_mask, rope_rad, rank1_scale, use_entropy_gate, use_resonant) in
+                &[
+                    (
+                        "Baseline",
+                        0xFFFF_FFFF_u64,
+                        0.00_f32,
+                        0.00_f32,
+                        false,
+                        false,
+                    ),
+                    (
+                        "Substrate",
+                        0xFFFF_0000_u64,
+                        -2.00_f32,
+                        -1.00_f32,
+                        true,
+                        true,
+                    ),
+                ]
+            {
                 adapter.set_layer_rope_mask(layer_mask);
                 adapter.reset_substrate_stats();
                 model.clear_cache();
@@ -665,8 +679,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         None
                     };
-                    let srl_arg = if srl_scale != 0.0 {
-                        Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), srl_scale))
+                    let rank1_arg = if rank1_scale != 0.0 {
+                        Some((
+                            baked.rank1_u.as_slice(),
+                            baked.rank1_v.as_slice(),
+                            rank1_scale,
+                        ))
                     } else {
                         None
                     };
@@ -677,15 +695,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         resonant_ctx: res_ctx,
                         rope_rad,
                         trail: &mut trail,
-                        srl: srl_arg,
+                        rank1: rank1_arg,
                         horizon_mode: HorizonAblationMode::Core3,
                         escalation_provider: None,
                         compute_dispatch: None,
                         steer_bypass_hits: 0,
                         steer_eligible_layers: 0,
                     };
-                    let (mut logits, _, _) =
-                        model.forward_tokens(&ids, offset, Some(&mut steer), use_edbc, false)?;
+                    let (mut logits, _, _) = model.forward_tokens(
+                        &ids,
+                        offset,
+                        Some(&mut steer),
+                        use_entropy_gate,
+                        false,
+                    )?;
                     offset += ids.len();
                     let mut gen_ids = Vec::with_capacity(48);
                     for _ in 0..48 {
@@ -695,7 +718,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             &[next],
                             offset,
                             Some(&mut steer),
-                            use_edbc,
+                            use_entropy_gate,
                             false,
                         )?;
                         logits = next_logits;
@@ -1156,9 +1179,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut pass_results: Vec<Step2PassResult> = Vec::new();
     let mut prompt_q_cache: HashMap<String, Vec<Vec<f32>>> = HashMap::new();
     let cut_detector = AdaptiveGopCutDetector::default();
-    let mut timeline = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
-        adapter.geometry(),
-    ));
+    let mut timeline = LmnkTimeline::new(LmnkTimeline::geometry_fingerprint(adapter.geometry()));
     for run in &step2_runs {
         let run_label = run.label.as_str();
         let run_ego_mode = &run.ego_mode;
@@ -1174,9 +1195,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             ReflectionPolicy::default()
         };
-        timeline = GcsoDualTrackTimeline::new(GcsoDualTrackTimeline::geometry_fingerprint(
-            adapter.geometry(),
-        ));
+        timeline = LmnkTimeline::new(LmnkTimeline::geometry_fingerprint(adapter.geometry()));
         adapter.reset_horizon_and_core_state();
         adapter.compute_pool_mut().reanchor_baseline_pressure(8192);
         adapter.set_ego_max_hops(run.ego_max_hops);
@@ -1295,11 +1314,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
                 &FrameTransitionMetrics {
                     phase_l1_delta: (1.0 - recall.top1_fact_score).clamp(0.0, 1.0) * 0.25,
-                    void_state: recall.void_state,
+                    lacuna_state: recall.lacuna_state,
                     frames_since_keyframe,
                     new_cluster_spawned: matches!(
-                        recall.void_state,
-                        VoidBoundaryState::LiminalExterior
+                        recall.lacuna_state,
+                        LacunaBoundaryState::LiminalExterior
                     ),
                 },
             )?;
@@ -1361,16 +1380,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 adapter.clear_active_circuit();
             }
-            let (core_hor, core_venn, ens_opt) =
+            let (core_hor, core_overlap, ens_opt) =
                 adapter.sync_core_layers_from_recall(&recall, None);
             let core_note = format!(
-                "reg={:?} l0={} l1={} ego={} sc={} venn=0x{:02X} ens={}",
+                "reg={:?} l0={} l1={} ego={} sc={} ovlp=0x{:02X} ens={}",
                 core_hor.regime(),
                 adapter.threshold_state().adaptation_epochs,
                 adapter.stigmergic_granule_state().adaptation_epochs,
                 adapter.ego_state().intervention_epochs,
                 adapter.last_boundary_delta().stationary_shortcut_ready,
-                core_venn.overlap_core_mask,
+                core_overlap.overlap_core_mask,
                 ens_opt.map_or(0, |r| r.active_fragment_count),
             );
             let top_fact_preview = if recall.recalled_facts.is_empty() {
@@ -1384,7 +1403,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .join("+")
             };
             let tlm = recall.telemetry;
-            let query_void_state = recall.void_state;
+            let query_lacuna_state = recall.lacuna_state;
             let query_action_decision = recall.action_decision;
             let query_top1 = recall.top1_fact_score;
             let query_top2 = recall.top2_fact_score;
@@ -1400,7 +1419,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     format_phi4_prompt(prompt)
                 } else if run_cond.inject_persona_and_guard_text() {
                     if recalled_ctx.is_empty()
-                        || (matches!(query_void_state, VoidBoundaryState::LiminalExterior)
+                        || (matches!(query_lacuna_state, LacunaBoundaryState::LiminalExterior)
                             && !is_guard_trap)
                     {
                         format_phi4_prompt(prompt)
@@ -1410,7 +1429,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ))
                     }
                 } else if run_cond.steering_enabled() {
-                    if matches!(query_void_state, VoidBoundaryState::LiminalExterior)
+                    if matches!(query_lacuna_state, LacunaBoundaryState::LiminalExterior)
                         && !is_guard_trap
                         && !recall.is_known_unknown_exterior
                     {
@@ -1423,7 +1442,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         format_phi4_prompt(prompt)
                     }
                 } else if recalled_ctx.is_empty()
-                    || (matches!(query_void_state, VoidBoundaryState::LiminalExterior)
+                    || (matches!(query_lacuna_state, LacunaBoundaryState::LiminalExterior)
                         && !is_guard_trap)
                 {
                     format_phi4_prompt(prompt)
@@ -1433,7 +1452,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let use_steer = run_cond.steering_enabled()
                     && (is_guard_trap
-                        || !matches!(query_void_state, VoidBoundaryState::LiminalExterior)
+                        || !matches!(query_lacuna_state, LacunaBoundaryState::LiminalExterior)
                         || recall.is_known_unknown_exterior);
                 let res_ctx = if use_steer {
                     Some(ResonantAnchors {
@@ -1447,8 +1466,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     None
                 };
                 let rope_rad = if use_steer { -2.00 } else { 0.00 };
-                let srl_arg = if use_steer {
-                    Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), -1.00))
+                let rank1_arg = if use_steer {
+                    Some((baked.rank1_u.as_slice(), baked.rank1_v.as_slice(), -1.00))
                 } else {
                     None
                 };
@@ -1468,7 +1487,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     persona_q7s: Some(baked.persona_q7.as_slice()),
                     resonant_ctx: res_ctx,
                     rope_rad,
-                    srl: srl_arg,
+                    rank1: rank1_arg,
                     use_steer,
                     horizon_mode: *run_horizon_mode,
                     escalation_provider: if use_spillover {
@@ -1519,13 +1538,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ReflectMode::Always => true,
                     ReflectMode::Conditional => {
                         let gate_in = ReflectionGateInput {
-                            boundary_sensitivity_q7: recall.venn_partition.boundary_sensitivity_q7,
+                            boundary_sensitivity_q7: recall
+                                .lacuna_partition
+                                .boundary_sensitivity_q7,
                             has_undigested_known_unknown: recall.is_known_unknown_exterior,
                             exit_entropy_h_tilde: adapter.substrate().last_entropy_h_tilde,
                             guard_conflict_margin: query_guard_m,
-                            is_true_void: matches!(
-                                query_void_state,
-                                VoidBoundaryState::LiminalExterior
+                            is_unobserved_lacuna: matches!(
+                                query_lacuna_state,
+                                LacunaBoundaryState::LiminalExterior
                             ) && !recall.is_known_unknown_exterior,
                             ..ReflectionGateInput::default()
                         };
@@ -1589,11 +1610,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else {
                                 0.0
                             };
-                            let retry_srl = if retry_use_steer {
+                            let retry_rank1 = if retry_use_steer {
                                 Some((
-                                    baked.srl_u.as_slice(),
-                                    baked.srl_v.as_slice(),
-                                    -1.00 + pass1_crit.directive.srl_scale_delta,
+                                    baked.rank1_u.as_slice(),
+                                    baked.rank1_v.as_slice(),
+                                    -1.00 + pass1_crit.directive.rank1_scale_delta,
                                 ))
                             } else {
                                 None
@@ -1603,7 +1624,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 persona_q7s: Some(baked.persona_q7.as_slice()),
                                 resonant_ctx: retry_res,
                                 rope_rad: retry_rope,
-                                srl: retry_srl,
+                                rank1: retry_rank1,
                                 use_steer: retry_use_steer,
                                 horizon_mode: *run_horizon_mode,
                                 escalation_provider: if use_spillover {
@@ -1700,7 +1721,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let converged = matches!(
                             crit.trigger,
                             liminika_adapter::ReflectionTriggerKind::Converged
-                                | liminika_adapter::ReflectionTriggerKind::ConsistentVoidAbstention
+                                | liminika_adapter::ReflectionTriggerKind::ConsistentLacunaAbstention
                         );
                         bank.reinforce_bank(&crit.layer_activation, converged);
                     }
@@ -1758,7 +1779,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 guard_margin_cnt += 1;
             } else if slot == "VOID" || slot == "LVOID" {
                 ood_total += 1;
-                if !matches!(query_void_state, VoidBoundaryState::LiminalExterior)
+                if !matches!(query_lacuna_state, LacunaBoundaryState::LiminalExterior)
                     || recall.is_known_unknown_exterior
                     || p_sem_forb > 0
                 {
@@ -1798,10 +1819,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             println!(
-            "  [S2:{}:{}] void={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} recall_ms={:.2} kv={} reflect={} core=[{}] probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={} prov_slot={}] ctx_hit={}/{} hit={}/{} sem_forb={}(raw={}) => {}",
+            "  [S2:{}:{}] lacuna={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} recall_ms={:.2} kv={} reflect={} core=[{}] probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={} prov_slot={}] ctx_hit={}/{} hit={}/{} sem_forb={}(raw={}) => {}",
             idx + 1,
             slot,
-            query_void_state,
+            query_lacuna_state,
             query_action_decision,
             query_top1,
             query_top2,
@@ -2400,7 +2421,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             StigmergicActionDecision::RepulsionEscape
                         );
                     let use_steer = mt_is_guard_trap
-                        || !matches!(recall.void_state, VoidBoundaryState::LiminalExterior)
+                        || !matches!(recall.lacuna_state, LacunaBoundaryState::LiminalExterior)
                         || recall.is_known_unknown_exterior;
                     let res_ctx = if use_steer {
                         Some(ResonantAnchors {
@@ -2414,7 +2435,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         None
                     };
                     let turn_body =
-                        if matches!(recall.void_state, VoidBoundaryState::LiminalExterior)
+                        if matches!(recall.lacuna_state, LacunaBoundaryState::LiminalExterior)
                             && !mt_is_guard_trap
                             && !recall.is_known_unknown_exterior
                         {
@@ -2440,8 +2461,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         persona_q7s: Some(baked.persona_q7.as_slice()),
                         resonant_ctx: res_ctx,
                         rope_rad: if use_steer { -2.00 } else { 0.00 },
-                        srl: if use_steer {
-                            Some((baked.srl_u.as_slice(), baked.srl_v.as_slice(), -1.00))
+                        rank1: if use_steer {
+                            Some((baked.rank1_u.as_slice(), baked.rank1_v.as_slice(), -1.00))
                         } else {
                             None
                         },
@@ -2491,14 +2512,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ReflectMode::Conditional => {
                             let gate_in = ReflectionGateInput {
                                 boundary_sensitivity_q7: recall
-                                    .venn_partition
+                                    .lacuna_partition
                                     .boundary_sensitivity_q7,
                                 has_undigested_known_unknown: recall.is_known_unknown_exterior,
                                 exit_entropy_h_tilde: adapter.substrate().last_entropy_h_tilde,
                                 guard_conflict_margin: recall.guard_conflict_margin,
-                                is_true_void: matches!(
-                                    recall.void_state,
-                                    VoidBoundaryState::LiminalExterior
+                                is_unobserved_lacuna: matches!(
+                                    recall.lacuna_state,
+                                    LacunaBoundaryState::LiminalExterior
                                 ) && !recall.is_known_unknown_exterior,
                                 ..ReflectionGateInput::default()
                             };
@@ -2577,11 +2598,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     } else {
                                         0.0
                                     },
-                                    srl: if retry_use_steer {
+                                    rank1: if retry_use_steer {
                                         Some((
-                                            baked.srl_u.as_slice(),
-                                            baked.srl_v.as_slice(),
-                                            -1.00 + p1_crit.directive.srl_scale_delta,
+                                            baked.rank1_u.as_slice(),
+                                            baked.rank1_v.as_slice(),
+                                            -1.00 + p1_crit.directive.rank1_scale_delta,
                                         ))
                                     } else {
                                         None
@@ -2692,11 +2713,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 let mt_tlm = recall.telemetry;
                 println!(
-                    "  [MT:{}:{}] kv_off={} void={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={}] kv={} reflect={} hit={}/{} sem_forb={}(raw={}) => {}",
+                    "  [MT:{}:{}] kv_off={} lacuna={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={}] kv={} reflect={} hit={}/{} sem_forb={}(raw={}) => {}",
                     t_idx + 1,
                     turn_tag,
                     conv_offset,
-                    recall.void_state,
+                    recall.lacuna_state,
                     recall.top1_fact_score,
                     recall.top2_fact_score,
                     recall.guard_conflict_margin,
@@ -2770,13 +2791,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if !recall_only {
-        // Step 3: Repository-Contained .gcso Persistence, Zero-Forward Seek & Cross-Model Re-Bake
-        println!("\n=== Step 3: Dual-Track .gcso GOP Seek & Cross-Model Re-Bake ===");
+        // Step 3: Repository-Contained .lmnkc Persistence, Zero-Forward Seek & Cross-Model Re-Bake
+        println!("\n=== Step 3: Dual-Track .lmnkc GOP Seek & Cross-Model Re-Bake ===");
         let containers_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
             .join("containers");
-        let gcso_path = containers_dir.join("phi4_session.gcso");
+        let container_path = containers_dir.join("phi4_session.lmnkc");
         let mut exported_topo = adapter.export_logical_pframe_topology();
         if exported_topo.is_empty() {
             let mut tmp_ego = ModelSteeringAdapter::new(adapter.geometry().clone())?;
@@ -2786,12 +2807,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let expected_topo_len = exported_topo.len();
         timeline.set_logical_pframe_topology(exported_topo);
-        let written_bytes = timeline.save_to_path(&gcso_path)?;
-        let reloaded = GcsoDualTrackTimeline::load_from_path(&gcso_path)?;
-        let active_fp = GcsoDualTrackTimeline::geometry_fingerprint(adapter.geometry());
+        let written_bytes = timeline.save_to_path(&container_path)?;
+        let reloaded = LmnkTimeline::load_from_path(&container_path)?;
+        let active_fp = LmnkTimeline::geometry_fingerprint(adapter.geometry());
         println!(
-            "Saved & Reloaded .gcso ({}): {} bytes | frames={} | keyframes={:?} | fp_match={} | pframe_topo={}/{}",
-            gcso_path.display(),
+            "Saved & Reloaded .lmnkc ({}): {} bytes | frames={} | keyframes={:?} | fp_match={} | pframe_topo={}/{}",
+            container_path.display(),
             written_bytes,
             reloaded.frames().len(),
             reloaded.keyframe_positions(),
@@ -2891,7 +2912,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } = reloaded.resume_or_rebake(&alt_ctx, &mut alt_projector, 2)?
         {
             alt_adapter.bake_logical_pframe_topology(rebaked_tl.logical_pframe_topology());
-            let rebaked_path = containers_dir.join("phi4_rebaked_alt.gcso");
+            let rebaked_path = containers_dir.join("phi4_rebaked_alt.lmnkc");
             let rebaked_bytes = rebaked_tl.save_to_path(&rebaked_path)?;
             println!(
                 "Cross-Model EnvProbe Rebaked: src_fp=0x{source_fingerprint:016x} -> dst_fp=0x{target_fingerprint:016x} | frames={rebaked_frames} | pframe_nodes=0x{:02X} (hops={}) | saved={} ({rebaked_bytes} bytes) | seek_frame2_anchors={}",
@@ -2914,10 +2935,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 bank.units().len(),
                 pc.steps
             );
-            if let Some(save_path) = persona_gcso_out.as_deref() {
-                let mut pc_tl = GcsoDualTrackTimeline::new(
-                    GcsoDualTrackTimeline::geometry_fingerprint(adapter.geometry()),
-                );
+            if let Some(save_path) = persona_container_out.as_deref() {
+                let mut pc_tl =
+                    LmnkTimeline::new(LmnkTimeline::geometry_fingerprint(adapter.geometry()));
                 pc_tl.set_persona_circuit(pc);
                 pc_tl.record_step(
                     &TimelineStepContext {
@@ -2935,7 +2955,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                     &FrameTransitionMetrics {
                         phase_l1_delta: 0.0,
-                        void_state: VoidBoundaryState::InsideBasin,
+                        lacuna_state: LacunaBoundaryState::InsideBasin,
                         frames_since_keyframe: 0,
                         new_cluster_spawned: true,
                     },

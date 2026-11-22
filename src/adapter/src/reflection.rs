@@ -9,7 +9,7 @@
 //! manifold drift (`Liminal`), liminal ambiguity, or out-of-domain hallucination, and are strictly
 //! bounded by [`ReflectionPolicy::max_retries`].
 
-use crate::{DynamicAttractorRecall, RecallPolicy, VoidBoundaryState};
+use crate::{DynamicAttractorRecall, LacunaBoundaryState, RecallPolicy};
 use liminika_core::drivers::{LiminalEgoState, EGO_TRIGGER_LIMINAL_EXTERIOR};
 use liminika_core::liminal::MAX_ATTENTION_HEADS;
 use liminika_core::runtime::{
@@ -29,14 +29,14 @@ pub struct ReflectionPolicy {
     pub max_retries: usize,
     /// Draft `guard_conflict_margin` threshold above which [`ReflectionTriggerKind::GuardAttraction`] fires.
     pub guard_trigger_margin: f32,
-    /// Allowed drop in `top1_fact_score` between query and draft before [`ReflectionTriggerKind::VoidDrift`] fires.
+    /// Allowed drop in `top1_fact_score` between query and draft before [`ReflectionTriggerKind::LacunaDrift`] fires.
     pub convergence_drop_tol: f32,
     /// Minimum alignment gain required for a retried trajectory to replace Pass 1.
     pub alignment_improvement_eps: f32,
     /// Additive RoPE steering delta (radians) applied on corrective Fact/Guard passes.
     pub max_rope_boost_rad: f32,
-    /// Additive Rank-1 residual residual scale delta applied on corrective Fact/Guard passes.
-    pub srl_boost_delta: f32,
+    /// Additive Rank-1 residual scale delta applied on corrective Fact/Guard passes.
+    pub rank1_boost_delta: f32,
 }
 
 impl Default for ReflectionPolicy {
@@ -47,7 +47,7 @@ impl Default for ReflectionPolicy {
             convergence_drop_tol: 0.08,
             alignment_improvement_eps: 0.02,
             max_rope_boost_rad: -0.35,
-            srl_boost_delta: -0.20,
+            rank1_boost_delta: -0.20,
         }
     }
 }
@@ -57,16 +57,16 @@ impl Default for ReflectionPolicy {
 pub enum ReflectionTriggerKind {
     /// Draft converged safely inside a grounded Fact basin without Guard dominance.
     Converged,
-    /// Out-of-domain query and draft both stayed cleanly outside the corpus (`Liminal`).
-    ConsistentVoidAbstention,
+    /// Out-of-domain query and draft both stayed cleanly outside the corpus (`LiminalExterior`).
+    ConsistentLacunaAbstention,
     /// Draft drifted toward a contrastive `Guard` attractor (`guard_conflict_margin` elevated).
     GuardAttraction,
-    /// Grounded query's draft dropped off-manifold into `Liminal` or suffered a severe resonance drop.
-    VoidDrift,
+    /// Grounded query's draft dropped off-manifold into `LiminalExterior` or suffered a severe resonance drop.
+    LacunaDrift,
     /// Draft landed in an unresolved `LiminalBoundary` or diverged from the query's top anchor.
     BoundaryAmbiguity,
-    /// Ungrounded (`Liminal`) query produced a draft that pulled unexpectedly into corpus attractors.
-    VoidHallucination,
+    /// Ungrounded (`LiminalExterior`) query produced a draft that pulled unexpectedly into corpus attractors.
+    LacunaHallucination,
 }
 
 /// Selection outcome returned when comparing Pass 1 against a corrective Pass 2 trajectory.
@@ -90,7 +90,7 @@ pub struct ReflectionCorrectiveDirective {
     /// Additive RoPE steering adjustment (radians) applied during Pass 2.
     pub rope_rad_delta: f32,
     /// Additive Rank-1 residual gain adjustment applied during Pass 2.
-    pub srl_scale_delta: f32,
+    pub rank1_scale_delta: f32,
     /// True when the draft's top recalled Fact anchor diverges from the query's top Fact anchor.
     pub anchor_mismatch: bool,
 }
@@ -99,7 +99,7 @@ pub struct ReflectionCorrectiveDirective {
 #[derive(Debug, Clone)]
 pub struct TrajectoryManifoldSnapshot {
     /// Boundary state observed on the corpus manifold.
-    pub void_state: VoidBoundaryState,
+    pub lacuna_state: LacunaBoundaryState,
     /// Top-1 Fact resonance score.
     pub top1_fact_score: f32,
     /// Top-2 Fact resonance score.
@@ -152,7 +152,7 @@ impl TrajectoryManifoldSnapshot {
             })
             .collect();
         Self {
-            void_state: recall.void_state,
+            lacuna_state: recall.lacuna_state,
             top1_fact_score: recall.top1_fact_score,
             top2_fact_score: recall.top2_fact_score,
             top1_persona_score: recall.top1_persona_score,
@@ -215,7 +215,7 @@ impl ReflectionCritique {
                     )
                 }
             }
-            ReflectionTriggerKind::VoidDrift | ReflectionTriggerKind::BoundaryAmbiguity => {
+            ReflectionTriggerKind::LacunaDrift | ReflectionTriggerKind::BoundaryAmbiguity => {
                 if compact_draft.is_empty() {
                     "Re-examine the full question using every detail in the grounded context."
                         .to_string()
@@ -225,12 +225,12 @@ impl ReflectionCritique {
                     )
                 }
             }
-            ReflectionTriggerKind::VoidHallucination => {
+            ReflectionTriggerKind::LacunaHallucination => {
                 "Answer directly from general knowledge without introducing unrelated specialized terms."
                     .to_string()
             }
             ReflectionTriggerKind::Converged
-            | ReflectionTriggerKind::ConsistentVoidAbstention => return None,
+            | ReflectionTriggerKind::ConsistentLacunaAbstention => return None,
         };
         Some(cue)
     }
@@ -240,12 +240,12 @@ impl CausalProvenanceSignal for ReflectionCritique {
     fn causal_provenance_bits(&self) -> u32 {
         match self.trigger {
             ReflectionTriggerKind::GuardAttraction => CAUSAL_AXIS_CONTRADICTION_GUARD,
-            ReflectionTriggerKind::VoidDrift | ReflectionTriggerKind::BoundaryAmbiguity => {
+            ReflectionTriggerKind::LacunaDrift | ReflectionTriggerKind::BoundaryAmbiguity => {
                 CAUSAL_AXIS_OBJECTIVE_FACT
             }
             ReflectionTriggerKind::Converged
-            | ReflectionTriggerKind::ConsistentVoidAbstention
-            | ReflectionTriggerKind::VoidHallucination => 0,
+            | ReflectionTriggerKind::ConsistentLacunaAbstention
+            | ReflectionTriggerKind::LacunaHallucination => 0,
         }
     }
 }
@@ -273,9 +273,9 @@ pub trait AttractorTrajectoryEvaluator {
     ///
     /// When `ego` is actively exploring beyond `Liminal` horizons (`transgression_bias_q7 >= 24` or
     /// `EGO_TRIGGER_LIMINAL_EXTERIOR` fired) and the draft introduces no Guard conflict, controlled
-    /// `BoundaryAmbiguity` / mild `VoidDrift` excursions are accepted as intentional exploration
+    /// `BoundaryAmbiguity` / mild `LacunaDrift` excursions are accepted as intentional exploration
     /// (`ReflectionTriggerKind::Converged`) rather than penalized as accidental drift, while
-    /// Guard traps and ungrounded `VoidHallucination` remain strictly rejected.
+    /// Guard traps and ungrounded `LacunaHallucination` remain strictly rejected.
     fn assess_trajectory_with_ego(
         &self,
         query: &TrajectoryManifoldSnapshot,
@@ -292,8 +292,8 @@ pub trait AttractorTrajectoryEvaluator {
         let controlled_excursion =
             matches!(
                 critique.trigger,
-                ReflectionTriggerKind::BoundaryAmbiguity | ReflectionTriggerKind::VoidDrift
-            ) && (!matches!(draft.void_state, VoidBoundaryState::LiminalExterior)
+                ReflectionTriggerKind::BoundaryAmbiguity | ReflectionTriggerKind::LacunaDrift
+            ) && (!matches!(draft.lacuna_state, LacunaBoundaryState::LiminalExterior)
                 || ego.transgression_bias_q7 >= 36
                 || (ego.last_intervened_mask & EGO_TRIGGER_LIMINAL_EXTERIOR) != 0);
 
@@ -303,7 +303,7 @@ pub trait AttractorTrajectoryEvaluator {
             critique.directive.inject_guard_repulsion = false;
             critique.directive.suppress_injection = false;
             critique.directive.rope_rad_delta = 0.0;
-            critique.directive.srl_scale_delta = 0.0;
+            critique.directive.rank1_scale_delta = 0.0;
         }
         critique
     }
@@ -317,18 +317,18 @@ pub trait AttractorTrajectoryEvaluator {
     ) -> ReflectionSelection {
         let p2_clean = matches!(
             pass2.trigger,
-            ReflectionTriggerKind::Converged | ReflectionTriggerKind::ConsistentVoidAbstention
+            ReflectionTriggerKind::Converged | ReflectionTriggerKind::ConsistentLacunaAbstention
         );
         let p1_failed = !matches!(
             pass1.trigger,
-            ReflectionTriggerKind::Converged | ReflectionTriggerKind::ConsistentVoidAbstention
+            ReflectionTriggerKind::Converged | ReflectionTriggerKind::ConsistentLacunaAbstention
         );
         if p1_failed && p2_clean {
             return ReflectionSelection::Pass2;
         }
         let p2_unsafe = matches!(
             pass2.trigger,
-            ReflectionTriggerKind::GuardAttraction | ReflectionTriggerKind::VoidHallucination
+            ReflectionTriggerKind::GuardAttraction | ReflectionTriggerKind::LacunaHallucination
         );
         if !p2_unsafe
             && pass2.alignment_score >= pass1.alignment_score + policy.alignment_improvement_eps
@@ -357,7 +357,7 @@ pub trait AttractorTrajectoryEvaluator {
     ) {
         let converged = matches!(
             critique.trigger,
-            ReflectionTriggerKind::Converged | ReflectionTriggerKind::ConsistentVoidAbstention
+            ReflectionTriggerKind::Converged | ReflectionTriggerKind::ConsistentLacunaAbstention
         );
         circuit.reinforce_from_activation(&critique.layer_activation, converged);
     }
@@ -376,8 +376,8 @@ pub struct ReflectionGateInput {
     pub exit_entropy_h_tilde: f32,
     /// Guard conflict margin (`max_guard_score - top1_fact_score`).
     pub guard_conflict_margin: f32,
-    /// True when the query lies strictly inside True Void ($\overline{S \cup O}$) without Guard threat.
-    pub is_true_void: bool,
+    /// True when the query lies strictly inside unobserved space ($\overline{S \cup O}$) without Guard threat.
+    pub is_unobserved_lacuna: bool,
     /// Minimum Q0.7 $4p(1-p)$ boundary sensitivity required to trigger reflection (default `64`).
     pub min_boundary_sensitivity_q7: u8,
     /// Minimum exit entropy threshold required to trigger reflection (default `0.62`).
@@ -393,7 +393,7 @@ impl Default for ReflectionGateInput {
             has_undigested_known_unknown: false,
             exit_entropy_h_tilde: 0.0,
             guard_conflict_margin: -0.25,
-            is_true_void: false,
+            is_unobserved_lacuna: false,
             min_boundary_sensitivity_q7: 64,
             entropy_trigger_thresh: 0.62,
             guard_trigger_margin: 0.02,
@@ -408,11 +408,11 @@ pub struct ManifoldReflectionEvaluator;
 
 impl ManifoldReflectionEvaluator {
     /// Returns `true` when reflection critique should run (Conditional Reflection Bypass):
-    /// skips calm inside-basin hits and pure True Void queries, triggering only on high $4p(1-p)$
+    /// skips calm inside-basin hits and pure unobserved OOD queries, triggering only on high $4p(1-p)$
     /// boundary sensitivity, undigested $O \setminus S$, exit entropy spikes, or Guard conflict.
     #[must_use]
     pub fn should_trigger_reflection(&self, input: &ReflectionGateInput) -> bool {
-        if input.is_true_void
+        if input.is_unobserved_lacuna
             && input.guard_conflict_margin <= input.guard_trigger_margin
             && input.exit_entropy_h_tilde < input.entropy_trigger_thresh
         {
@@ -456,7 +456,7 @@ impl ManifoldReflectionEvaluator {
                 GuardPhaseAnchor::new(query.top_fact_q7, obstruction, 0.4)
                     .synthesize_gateway_frame()
             }
-            ReflectionTriggerKind::VoidDrift | ReflectionTriggerKind::BoundaryAmbiguity => {
+            ReflectionTriggerKind::LacunaDrift | ReflectionTriggerKind::BoundaryAmbiguity => {
                 let missing_ids = query.missing_coalition_anchors(draft);
                 if let Some((missing_anchor_id, missing_q7)) = missing_ids
                     .iter()
@@ -470,12 +470,11 @@ impl ManifoldReflectionEvaluator {
                         .synthesize_gateway_frame()
                 }
             }
-            ReflectionTriggerKind::VoidHallucination => {
+            ReflectionTriggerKind::LacunaHallucination => {
                 SystemConstraint::new((), 0.25, 0.0, 0xFF).synthesize_gateway_frame()
             }
-            ReflectionTriggerKind::Converged | ReflectionTriggerKind::ConsistentVoidAbstention => {
-                draft.gateway_frame
-            }
+            ReflectionTriggerKind::Converged
+            | ReflectionTriggerKind::ConsistentLacunaAbstention => draft.gateway_frame,
         }
     }
 }
@@ -490,17 +489,18 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
     ) -> ReflectionCritique {
         let (anchor_overlap_ratio, anchor_mismatch) = Self::anchor_overlap(query, draft);
         let query_is_guard_trap = query.guard_conflict_margin > policy.guard_trigger_margin;
-        let query_is_grounded =
-            !matches!(query.void_state, VoidBoundaryState::LiminalExterior) && !query_is_guard_trap;
+        let query_is_grounded = !matches!(query.lacuna_state, LacunaBoundaryState::LiminalExterior)
+            && !query_is_guard_trap;
 
         let (trigger, alignment_score, directive) = if query_is_grounded {
             let guard_pen = draft.guard_conflict_margin.max(0.0) * 1.5;
-            let void_pen = match draft.void_state {
-                VoidBoundaryState::InsideBasin => 0.0,
-                VoidBoundaryState::LiminalBoundary => 0.08,
-                VoidBoundaryState::LiminalExterior => 0.25,
+            let lacuna_penalty = match draft.lacuna_state {
+                LacunaBoundaryState::InsideBasin => 0.0,
+                LacunaBoundaryState::LiminalBoundary => 0.08,
+                LacunaBoundaryState::LiminalExterior => 0.25,
             };
-            let align = draft.top1_fact_score + 0.20 * anchor_overlap_ratio - guard_pen - void_pen;
+            let align =
+                draft.top1_fact_score + 0.20 * anchor_overlap_ratio - guard_pen - lacuna_penalty;
 
             if draft.guard_conflict_margin > policy.guard_trigger_margin {
                 (
@@ -511,27 +511,27 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
                         inject_guard_repulsion: true,
                         suppress_injection: false,
                         rope_rad_delta: policy.max_rope_boost_rad,
-                        srl_scale_delta: policy.srl_boost_delta,
+                        rank1_scale_delta: policy.rank1_boost_delta,
                         anchor_mismatch,
                     },
                 )
-            } else if matches!(draft.void_state, VoidBoundaryState::LiminalExterior)
+            } else if matches!(draft.lacuna_state, LacunaBoundaryState::LiminalExterior)
                 || (draft.top1_fact_score + policy.convergence_drop_tol < query.top1_fact_score
                     && anchor_overlap_ratio < 0.5)
             {
                 (
-                    ReflectionTriggerKind::VoidDrift,
+                    ReflectionTriggerKind::LacunaDrift,
                     align,
                     ReflectionCorrectiveDirective {
                         rethink_recommended: true,
                         inject_guard_repulsion: false,
                         suppress_injection: false,
                         rope_rad_delta: policy.max_rope_boost_rad,
-                        srl_scale_delta: policy.srl_boost_delta,
+                        rank1_scale_delta: policy.rank1_boost_delta,
                         anchor_mismatch,
                     },
                 )
-            } else if matches!(draft.void_state, VoidBoundaryState::LiminalBoundary)
+            } else if matches!(draft.lacuna_state, LacunaBoundaryState::LiminalBoundary)
                 && (anchor_mismatch
                     || (draft.top1_fact_score - draft.top2_fact_score)
                         < recall_policy.boundary_margin)
@@ -544,7 +544,7 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
                         inject_guard_repulsion: false,
                         suppress_injection: false,
                         rope_rad_delta: policy.max_rope_boost_rad * 0.6,
-                        srl_scale_delta: policy.srl_boost_delta * 0.5,
+                        rank1_scale_delta: policy.rank1_boost_delta * 0.5,
                         anchor_mismatch,
                     },
                 )
@@ -557,7 +557,7 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
                         inject_guard_repulsion: false,
                         suppress_injection: false,
                         rope_rad_delta: 0.0,
-                        srl_scale_delta: 0.0,
+                        rank1_scale_delta: 0.0,
                         anchor_mismatch,
                     },
                 )
@@ -575,11 +575,11 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
                         inject_guard_repulsion: true,
                         suppress_injection: false,
                         rope_rad_delta: policy.max_rope_boost_rad,
-                        srl_scale_delta: policy.srl_boost_delta,
+                        rank1_scale_delta: policy.rank1_boost_delta,
                         anchor_mismatch,
                     },
                 )
-            } else if !matches!(draft.void_state, VoidBoundaryState::LiminalExterior)
+            } else if !matches!(draft.lacuna_state, LacunaBoundaryState::LiminalExterior)
                 && evaded_counter_fact
             {
                 let align = draft.top1_fact_score + 0.15 * anchor_overlap_ratio - 0.10;
@@ -591,11 +591,11 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
                         inject_guard_repulsion: true,
                         suppress_injection: false,
                         rope_rad_delta: policy.max_rope_boost_rad * 0.75,
-                        srl_scale_delta: policy.srl_boost_delta * 0.65,
+                        rank1_scale_delta: policy.rank1_boost_delta * 0.65,
                         anchor_mismatch: true,
                     },
                 )
-            } else if !matches!(draft.void_state, VoidBoundaryState::LiminalExterior) {
+            } else if !matches!(draft.lacuna_state, LacunaBoundaryState::LiminalExterior) {
                 let align = draft.top1_fact_score + 0.15;
                 (
                     ReflectionTriggerKind::Converged,
@@ -605,57 +605,58 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
                         inject_guard_repulsion: false,
                         suppress_injection: false,
                         rope_rad_delta: 0.0,
-                        srl_scale_delta: 0.0,
+                        rank1_scale_delta: 0.0,
                         anchor_mismatch: false,
                     },
                 )
             } else {
                 let align = 0.10 - draft.guard_conflict_margin.max(0.0);
                 (
-                    ReflectionTriggerKind::ConsistentVoidAbstention,
+                    ReflectionTriggerKind::ConsistentLacunaAbstention,
                     align,
                     ReflectionCorrectiveDirective {
                         rethink_recommended: false,
                         inject_guard_repulsion: false,
                         suppress_injection: true,
                         rope_rad_delta: 0.0,
-                        srl_scale_delta: 0.0,
+                        rank1_scale_delta: 0.0,
                         anchor_mismatch: false,
                     },
                 )
             }
         } else {
-            // Ungrounded OOD query (`Liminal` without Guard trap): trigger only on clear
+            // Ungrounded OOD query (`LiminalExterior` without Guard trap): trigger only on clear
             // Guard intrusion or strong Fact-basin hallucination well above `min_coherence`.
-            let strong_basin_intrusion = matches!(draft.void_state, VoidBoundaryState::InsideBasin)
-                && draft.top1_fact_score >= recall_policy.min_coherence * 1.50;
+            let strong_basin_intrusion =
+                matches!(draft.lacuna_state, LacunaBoundaryState::InsideBasin)
+                    && draft.top1_fact_score >= recall_policy.min_coherence * 1.50;
             let guard_intrusion = draft.guard_conflict_margin > policy.guard_trigger_margin;
             if !strong_basin_intrusion && !guard_intrusion {
                 let align =
                     0.50 - draft.top1_fact_score.max(0.0) - draft.guard_conflict_margin.max(0.0);
                 (
-                    ReflectionTriggerKind::ConsistentVoidAbstention,
+                    ReflectionTriggerKind::ConsistentLacunaAbstention,
                     align,
                     ReflectionCorrectiveDirective {
                         rethink_recommended: false,
                         inject_guard_repulsion: false,
                         suppress_injection: true,
                         rope_rad_delta: 0.0,
-                        srl_scale_delta: 0.0,
+                        rank1_scale_delta: 0.0,
                         anchor_mismatch: false,
                     },
                 )
             } else {
                 let align = -draft.top1_fact_score.max(0.0) - draft.guard_conflict_margin.max(0.0);
                 (
-                    ReflectionTriggerKind::VoidHallucination,
+                    ReflectionTriggerKind::LacunaHallucination,
                     align,
                     ReflectionCorrectiveDirective {
                         rethink_recommended: true,
                         inject_guard_repulsion: draft.guard_conflict_margin > 0.0,
                         suppress_injection: true,
                         rope_rad_delta: 0.0,
-                        srl_scale_delta: 0.0,
+                        rank1_scale_delta: 0.0,
                         anchor_mismatch: false,
                     },
                 )
@@ -678,7 +679,7 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
         let substantial_omission = anchor_overlap_ratio <= 0.55
             || (anchor_overlap_ratio < 1.0
                 && (anchor_mismatch
-                    || matches!(draft.void_state, VoidBoundaryState::LiminalBoundary)
+                    || matches!(draft.lacuna_state, LacunaBoundaryState::LiminalBoundary)
                     || cross_activation.circuit_resonance_q7 < 0));
         let (trigger, alignment_score, mut directive) = if query_is_grounded
             && matches!(trigger, ReflectionTriggerKind::Converged)
@@ -694,7 +695,7 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
                     inject_guard_repulsion: false,
                     suppress_injection: false,
                     rope_rad_delta: policy.max_rope_boost_rad * 0.75,
-                    srl_scale_delta: policy.srl_boost_delta * 0.65,
+                    rank1_scale_delta: policy.rank1_boost_delta * 0.65,
                     anchor_mismatch: true,
                 },
             )
@@ -705,16 +706,16 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
         if directive.rethink_recommended && !directive.suppress_injection {
             let circuit_gain = 1.0 + 0.25 * (f32::from(cross_activation.intensity_q7) / 128.0);
             directive.rope_rad_delta *= circuit_gain;
-            directive.srl_scale_delta *= circuit_gain;
+            directive.rank1_scale_delta *= circuit_gain;
         }
 
         let gateway_frame = Self::synthesize_corrective_frame(trigger, query, draft);
         let mut cognitive_trajectory = query.cognitive_trajectory;
         let step_op = match trigger {
-            ReflectionTriggerKind::GuardAttraction | ReflectionTriggerKind::VoidHallucination => {
+            ReflectionTriggerKind::GuardAttraction | ReflectionTriggerKind::LacunaHallucination => {
                 CognitiveOpKind::RepulseAudit
             }
-            ReflectionTriggerKind::VoidDrift | ReflectionTriggerKind::BoundaryAmbiguity => {
+            ReflectionTriggerKind::LacunaDrift | ReflectionTriggerKind::BoundaryAmbiguity => {
                 if matches!(cross_activation.op_kind(), CognitiveOpKind::DecomposePeel) {
                     CognitiveOpKind::DecomposePeel
                 } else {
@@ -722,7 +723,7 @@ impl AttractorTrajectoryEvaluator for ManifoldReflectionEvaluator {
                 }
             }
             ReflectionTriggerKind::Converged => CognitiveOpKind::CrystallizeCommit,
-            ReflectionTriggerKind::ConsistentVoidAbstention => CognitiveOpKind::Observe,
+            ReflectionTriggerKind::ConsistentLacunaAbstention => CognitiveOpKind::Observe,
         };
         let intensity = if directive.rethink_recommended {
             (cross_activation.intensity_q7 >> 4).clamp(5, 7)
@@ -752,7 +753,7 @@ mod tests {
     use liminika_core::runtime::CausalProvenanceSignal;
 
     fn make_snapshot(
-        void_state: VoidBoundaryState,
+        lacuna_state: LacunaBoundaryState,
         top1_fact: f32,
         top2_fact: f32,
         guard_margin: f32,
@@ -763,7 +764,7 @@ mod tests {
             .map(|&id| (id, [4_i8; MAX_ATTENTION_HEADS]))
             .collect();
         TrajectoryManifoldSnapshot {
-            void_state,
+            lacuna_state,
             top1_fact_score: top1_fact,
             top2_fact_score: top2_fact,
             top1_persona_score: 0.1,
@@ -784,22 +785,22 @@ mod tests {
         let recall_policy = RecallPolicy::default();
         let policy = ReflectionPolicy::default();
 
-        let query = make_snapshot(VoidBoundaryState::InsideBasin, 0.72, 0.41, -0.35, vec![1]);
-        let draft = make_snapshot(VoidBoundaryState::InsideBasin, 0.70, 0.40, -0.30, vec![1]);
+        let query = make_snapshot(LacunaBoundaryState::InsideBasin, 0.72, 0.41, -0.35, vec![1]);
+        let draft = make_snapshot(LacunaBoundaryState::InsideBasin, 0.70, 0.40, -0.30, vec![1]);
         let critique = eval.assess_trajectory(&query, &draft, &recall_policy, &policy);
         assert_eq!(critique.trigger, ReflectionTriggerKind::Converged);
         assert!(!critique.directive.rethink_recommended);
         assert!(critique.corrective_instruction("draft").is_none());
 
         let ood_q = make_snapshot(
-            VoidBoundaryState::LiminalExterior,
+            LacunaBoundaryState::LiminalExterior,
             0.12,
             0.09,
             -0.10,
             vec![],
         );
         let ood_d = make_snapshot(
-            VoidBoundaryState::LiminalExterior,
+            LacunaBoundaryState::LiminalExterior,
             0.10,
             0.08,
             -0.12,
@@ -808,20 +809,20 @@ mod tests {
         let ood_crit = eval.assess_trajectory(&ood_q, &ood_d, &recall_policy, &policy);
         assert_eq!(
             ood_crit.trigger,
-            ReflectionTriggerKind::ConsistentVoidAbstention
+            ReflectionTriggerKind::ConsistentLacunaAbstention
         );
         assert!(!ood_crit.directive.rethink_recommended);
     }
 
     #[test]
-    fn reflection_triggers_on_guard_or_void_drift_and_selects_recovered_pass() {
+    fn reflection_triggers_on_guard_or_lacuna_drift_and_selects_recovered_pass() {
         let eval = ManifoldReflectionEvaluator;
         let recall_policy = RecallPolicy::default();
         let policy = ReflectionPolicy::default();
 
-        let query = make_snapshot(VoidBoundaryState::InsideBasin, 0.70, 0.45, -0.25, vec![2]);
+        let query = make_snapshot(LacunaBoundaryState::InsideBasin, 0.70, 0.45, -0.25, vec![2]);
         let bad_guard_draft =
-            make_snapshot(VoidBoundaryState::InsideBasin, 0.48, 0.40, 0.12, vec![5]);
+            make_snapshot(LacunaBoundaryState::InsideBasin, 0.48, 0.40, 0.12, vec![5]);
         let crit_guard = eval.assess_trajectory(&query, &bad_guard_draft, &recall_policy, &policy);
         assert_eq!(crit_guard.trigger, ReflectionTriggerKind::GuardAttraction);
         assert!(crit_guard.directive.rethink_recommended);
@@ -840,7 +841,7 @@ mod tests {
         );
 
         let recovered_draft =
-            make_snapshot(VoidBoundaryState::InsideBasin, 0.74, 0.42, -0.32, vec![2]);
+            make_snapshot(LacunaBoundaryState::InsideBasin, 0.74, 0.42, -0.32, vec![2]);
         let crit_recovered =
             eval.assess_trajectory(&query, &recovered_draft, &recall_policy, &policy);
         assert_eq!(crit_recovered.trigger, ReflectionTriggerKind::Converged);
@@ -857,14 +858,14 @@ mod tests {
         let policy = ReflectionPolicy::default();
 
         let ood_q = make_snapshot(
-            VoidBoundaryState::LiminalExterior,
+            LacunaBoundaryState::LiminalExterior,
             0.15,
             0.10,
             -0.05,
             vec![],
         );
         let shallow_d = make_snapshot(
-            VoidBoundaryState::LiminalBoundary,
+            LacunaBoundaryState::LiminalBoundary,
             0.24,
             0.15,
             -0.20,
@@ -873,13 +874,13 @@ mod tests {
         let shallow_crit = eval.assess_trajectory(&ood_q, &shallow_d, &recall_policy, &policy);
         assert_eq!(
             shallow_crit.trigger,
-            ReflectionTriggerKind::ConsistentVoidAbstention
+            ReflectionTriggerKind::ConsistentLacunaAbstention
         );
         assert!(!shallow_crit.directive.rethink_recommended);
 
-        let hall_d = make_snapshot(VoidBoundaryState::InsideBasin, 0.65, 0.30, -0.10, vec![1]);
+        let hall_d = make_snapshot(LacunaBoundaryState::InsideBasin, 0.65, 0.30, -0.10, vec![1]);
         let crit = eval.assess_trajectory(&ood_q, &hall_d, &recall_policy, &policy);
-        assert_eq!(crit.trigger, ReflectionTriggerKind::VoidHallucination);
+        assert_eq!(crit.trigger, ReflectionTriggerKind::LacunaHallucination);
         assert!(crit.directive.rethink_recommended);
         assert!(crit.directive.suppress_injection);
     }
@@ -891,7 +892,7 @@ mod tests {
         let policy = ReflectionPolicy::default();
 
         let mut query = make_snapshot(
-            VoidBoundaryState::InsideBasin,
+            LacunaBoundaryState::InsideBasin,
             0.68,
             0.62,
             -0.25,
@@ -904,7 +905,7 @@ mod tests {
 
         // Draft stayed liminal and omitted coalition anchor #6 while partially matching #5.
         let draft = make_snapshot(
-            VoidBoundaryState::LiminalBoundary,
+            LacunaBoundaryState::LiminalBoundary,
             0.38,
             0.36,
             -0.20,
@@ -928,7 +929,7 @@ mod tests {
         let policy = ReflectionPolicy::default();
 
         let mut query = make_snapshot(
-            VoidBoundaryState::InsideBasin,
+            LacunaBoundaryState::InsideBasin,
             0.70,
             0.64,
             -0.25,
@@ -949,7 +950,13 @@ mod tests {
 
         // Draft appears converged by scalar Fact score alone, yet only observed one anchor
         // without performing compound decomposition.
-        let mut draft = make_snapshot(VoidBoundaryState::InsideBasin, 0.66, 0.25, -0.25, vec![101]);
+        let mut draft = make_snapshot(
+            LacunaBoundaryState::InsideBasin,
+            0.66,
+            0.25,
+            -0.25,
+            vec![101],
+        );
         draft.cognitive_trajectory.push_step(CognitiveStepOp::pack(
             StigmergicScaleGranularity::MacroCoalition,
             CognitiveOpKind::Observe,
@@ -978,7 +985,7 @@ mod tests {
         let policy = ReflectionPolicy::default();
 
         let mut query = make_snapshot(
-            VoidBoundaryState::InsideBasin,
+            LacunaBoundaryState::InsideBasin,
             0.65,
             0.60,
             -0.25,
@@ -994,7 +1001,7 @@ mod tests {
 
         // Draft covers the primary pair (2/3 = 0.67 > 0.55) inside the basin with aligned phase.
         let mut draft = make_snapshot(
-            VoidBoundaryState::InsideBasin,
+            LacunaBoundaryState::InsideBasin,
             0.62,
             0.55,
             -0.22,
@@ -1021,7 +1028,7 @@ mod tests {
 
         // Query tripped the Guard margin while recalling counter-fact anchor #2.
         let query = make_snapshot(
-            VoidBoundaryState::LiminalBoundary,
+            LacunaBoundaryState::LiminalBoundary,
             0.58,
             0.35,
             0.18,
@@ -1029,7 +1036,7 @@ mod tests {
         );
         // Draft stayed liminal without directly tripping the guard, yet omitted counter-fact #2.
         let evasive_draft = make_snapshot(
-            VoidBoundaryState::LiminalBoundary,
+            LacunaBoundaryState::LiminalBoundary,
             0.36,
             0.30,
             -0.05,
@@ -1043,7 +1050,7 @@ mod tests {
 
         // Once Pass 2 grounds on counter-fact anchor #2 inside the basin, it converges.
         let grounded_draft =
-            make_snapshot(VoidBoundaryState::InsideBasin, 0.68, 0.32, -0.25, vec![2]);
+            make_snapshot(LacunaBoundaryState::InsideBasin, 0.68, 0.32, -0.25, vec![2]);
         let crit_ok = eval.assess_trajectory(&query, &grounded_draft, &recall_policy, &policy);
         assert_eq!(crit_ok.trigger, ReflectionTriggerKind::Converged);
         assert!(!crit_ok.directive.rethink_recommended);
@@ -1068,7 +1075,7 @@ mod tests {
         );
 
         let query = make_snapshot(
-            VoidBoundaryState::InsideBasin,
+            LacunaBoundaryState::InsideBasin,
             0.65,
             0.35,
             -0.25,
@@ -1076,7 +1083,7 @@ mod tests {
         );
         // Draft explores across the LiminalBoundary with no Guard conflict.
         let exploring_draft = make_snapshot(
-            VoidBoundaryState::LiminalBoundary,
+            LacunaBoundaryState::LiminalBoundary,
             0.40,
             0.38,
             -0.10,
@@ -1098,7 +1105,7 @@ mod tests {
 
         // Guard attraction must still be rejected even with an active transgressive Ego.
         let guard_draft = make_snapshot(
-            VoidBoundaryState::LiminalBoundary,
+            LacunaBoundaryState::LiminalBoundary,
             0.55,
             0.25,
             0.30,
@@ -1111,14 +1118,19 @@ mod tests {
 
         // Ungrounded OOD query hallucination must still be suppressed.
         let ood_query = make_snapshot(
-            VoidBoundaryState::LiminalExterior,
+            LacunaBoundaryState::LiminalExterior,
             0.10,
             0.05,
             -0.20,
             vec![],
         );
-        let ood_hallucination =
-            make_snapshot(VoidBoundaryState::InsideBasin, 0.72, 0.30, -0.10, vec![99]);
+        let ood_hallucination = make_snapshot(
+            LacunaBoundaryState::InsideBasin,
+            0.72,
+            0.30,
+            -0.10,
+            vec![99],
+        );
         let ood_crit = eval.assess_trajectory_with_ego(
             &ood_query,
             &ood_hallucination,
@@ -1126,7 +1138,7 @@ mod tests {
             &policy,
             &ego,
         );
-        assert_eq!(ood_crit.trigger, ReflectionTriggerKind::VoidHallucination);
+        assert_eq!(ood_crit.trigger, ReflectionTriggerKind::LacunaHallucination);
         assert!(ood_crit.directive.suppress_injection);
     }
 
@@ -1138,17 +1150,17 @@ mod tests {
             has_undigested_known_unknown: false,
             exit_entropy_h_tilde: 0.25,
             guard_conflict_margin: -0.30,
-            is_true_void: false,
+            is_unobserved_lacuna: false,
             ..ReflectionGateInput::default()
         };
         assert!(!eval.should_trigger_reflection(&calm));
 
-        let void_calm = ReflectionGateInput {
-            is_true_void: true,
-            boundary_sensitivity_q7: 96, // ignored under peaceful True Void
+        let lacuna_calm = ReflectionGateInput {
+            is_unobserved_lacuna: true,
+            boundary_sensitivity_q7: 96, // ignored under peaceful Unobserved Lacuna
             ..calm
         };
-        assert!(!eval.should_trigger_reflection(&void_calm));
+        assert!(!eval.should_trigger_reflection(&lacuna_calm));
 
         let boundary_hit = ReflectionGateInput {
             boundary_sensitivity_q7: 80,

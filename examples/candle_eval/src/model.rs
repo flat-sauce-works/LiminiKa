@@ -70,7 +70,7 @@ pub(crate) struct ForwardSteer<'a, 'c, 'e> {
     pub(crate) resonant_ctx: Option<ResonantAnchors<'a>>,
     pub(crate) rope_rad: f32,
     pub(crate) trail: &'a mut lmnk_pointer_trail_t,
-    pub(crate) srl: Option<(&'a [f32], &'a [f32], f32)>,
+    pub(crate) rank1: Option<(&'a [f32], &'a [f32], f32)>,
     pub(crate) horizon_mode: HorizonAblationMode,
     pub(crate) escalation_provider: Option<&'e mut CorpusRecallEscalationProvider<'c>>,
     pub(crate) compute_dispatch: Option<liminika_adapter::ComputeDispatchMask>,
@@ -626,7 +626,7 @@ pub(crate) struct Phi3Model {
     device: Device,
 }
 
-fn dispatch_srl_signal<S: ManifoldGatewaySignal + ?Sized>(
+fn dispatch_rank1_signal<S: ManifoldGatewaySignal + ?Sized>(
     ad: &mut ModelSteeringAdapter,
     rope_rad: f32,
     signal: &S,
@@ -636,11 +636,11 @@ fn dispatch_srl_signal<S: ManifoldGatewaySignal + ?Sized>(
 ) -> CResult<()> {
     if rope_rad <= -1.5 {
         let _ = ad
-            .orchestrate_layer_srl_with_substrate(signal, h_vec, u_vec, v_vec)
+            .orchestrate_layer_rank1_with_substrate(signal, h_vec, u_vec, v_vec)
             .map_err(candle_core::Error::Msg)?;
     } else {
         let _ = ad
-            .apply_srl_with_gateway_mut(signal, h_vec, u_vec, v_vec)
+            .apply_rank1_with_gateway_mut(signal, h_vec, u_vec, v_vec)
             .map_err(candle_core::Error::Msg)?;
     }
     Ok(())
@@ -732,7 +732,7 @@ impl Phi3Model {
         tokens: &[u32],
         offset: usize,
         mut steer: Option<&mut ForwardSteer<'_, '_, '_>>,
-        use_edbc: bool,
+        use_entropy_gate: bool,
         collect_bake_data: bool,
     ) -> CResult<ForwardTokensOutput> {
         let mut h = if self.embed_on_cpu {
@@ -817,21 +817,21 @@ impl Phi3Model {
 
         if !whole_bypass {
             if let Some(st) = steer.as_deref_mut() {
-                if let Some((u_vec, v_vec, srl_scale)) = st.srl {
-                    if srl_scale != 0.0 {
+                if let Some((u_vec, v_vec, rank1_scale)) = st.rank1 {
+                    if rank1_scale != 0.0 {
                         let ad: &mut ModelSteeringAdapter = &mut *st.adapter;
                         let q7s = st.q7s;
                         let persona_q7s = st.persona_q7s;
                         let rope_rad = st.rope_rad;
                         let mut h_vec = last.squeeze(0)?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
-                        if srl_scale < 0.0 {
+                        if rank1_scale < 0.0 {
                             let last_layer_idx = self.layers.len().saturating_sub(1);
-                            let dyn_srl = st
+                            let dyn_rank1 = st
                                 .resonant_ctx
                                 .and_then(|rc| rc.layer_slices(last_layer_idx))
                                 .filter(|(fa, _, _, _, _)| !fa.is_empty());
                             if let Some((fact_anchors, persona_anchors, guard_anchors, _, _)) =
-                                dyn_srl
+                                dyn_rank1
                             {
                                 let fact_res =
                                     ResonantSignalSlice::from_trail(fact_anchors, st.trail);
@@ -842,18 +842,18 @@ impl Phi3Model {
                                         ResonantSignalSlice::from_trail(guard_anchors, st.trail);
                                     let sys_res = *ad.system_constraint();
                                     let composite = (sys_res, fact_res, persona_res, guard_res);
-                                    dispatch_srl_signal(
+                                    dispatch_rank1_signal(
                                         ad, rope_rad, &composite, &mut h_vec, u_vec, v_vec,
                                     )?;
                                 } else if !persona_anchors.is_empty() {
                                     let persona_res =
                                         ResonantSignalSlice::from_trail(persona_anchors, st.trail);
                                     let composite = (fact_res, persona_res);
-                                    dispatch_srl_signal(
+                                    dispatch_rank1_signal(
                                         ad, rope_rad, &composite, &mut h_vec, u_vec, v_vec,
                                     )?;
                                 } else {
-                                    dispatch_srl_signal(
+                                    dispatch_rank1_signal(
                                         ad, rope_rad, &fact_res, &mut h_vec, u_vec, v_vec,
                                     )?;
                                 }
@@ -870,17 +870,17 @@ impl Phi3Model {
                                     persona_arr[..pn].copy_from_slice(&last_p[..pn]);
                                     let persona = SubjectivePersona::new(persona_arr, 1.5, 0, 101);
                                     let composite = (fact, persona);
-                                    dispatch_srl_signal(
+                                    dispatch_rank1_signal(
                                         ad, rope_rad, &composite, &mut h_vec, u_vec, v_vec,
                                     )?;
                                 } else {
-                                    dispatch_srl_signal(
+                                    dispatch_rank1_signal(
                                         ad, rope_rad, &fact, &mut h_vec, u_vec, v_vec,
                                     )?;
                                 }
                             }
                         } else {
-                            ad.apply_srl_hidden_fused(&mut h_vec, u_vec, v_vec, srl_scale)
+                            ad.apply_rank1_hidden_fused(&mut h_vec, u_vec, v_vec, rank1_scale)
                                 .map_err(candle_core::Error::Msg)?;
                         }
                         let len = h_vec.len();
@@ -897,16 +897,16 @@ impl Phi3Model {
             .squeeze(0)?
             .to_dtype(DType::F32)?
             .to_vec1::<f32>()?;
-        if use_edbc && !whole_bypass {
+        if use_entropy_gate && !whole_bypass {
             if let Some(st) = steer {
                 let ad = &mut *st.adapter;
                 if st.rope_rad <= -1.5 {
                     let _ = ad
-                        .measure_edbc_entropy(&logits)
+                        .measure_entropy_state(&logits)
                         .map_err(candle_core::Error::Msg)?;
                 } else {
                     let _ = ad
-                        .step_edbc_logits(&mut logits)
+                        .step_entropy_logits(&mut logits)
                         .map_err(candle_core::Error::Msg)?;
                 }
             }

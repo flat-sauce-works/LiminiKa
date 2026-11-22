@@ -1,17 +1,18 @@
 // name: src/adapter/src/stratum.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Hierarchical Society-of-Mind strata (`n - 1 <-> n <-> n + 1`) built over [`liminika_core`]
+//! Hierarchical recall strata (`n - 1 <-> n <-> n + 1`) built over [`liminika_core`]
 //! `StigmergicSubstrate` and role-scoped `Liminal` boundary geometry.
 //!
-//! Each [`SocietyStratum`] operates only on signals exposed by adjacent layers, allowing dynamic
+//! Each [`RecallStratum`] operates only on signals exposed by adjacent layers, allowing dynamic
 //! insertion, removal, or replacement via [`StratumPipeline`] without coupling lower feature
 //! workers directly to global dialogue policy.
 
 use crate::{
-    AsymmetricDominoVoidPerspective, AttractorPerspectiveContext, AttractorRole,
-    AttractorVoidPerspective, CoherenceGuardGate, RecallBoundaryGate, RecallBoundaryMetrics,
-    RecallGateDecision, RecallPolicy, TextAttractorCorpus, TextAttractorEntry, VoidBoundaryState,
+    AsymmetricHubnessPerspective, AttractorBoundaryPerspective, AttractorPerspectiveContext,
+    AttractorRole, CoherenceGuardGate, LacunaBoundaryState, RecallBoundaryGate,
+    RecallBoundaryMetrics, RecallGateDecision, RecallPolicy, TextAttractorCorpus,
+    TextAttractorEntry,
 };
 use liminika_core::abi::{lmnk_pointer_trail_t, lmnk_tagged_ptr_t};
 use liminika_core::foundation::load_q7_words_64;
@@ -110,7 +111,7 @@ pub struct StratumProbeTelemetry {
     pub layer_activation: CognitiveCircuitActivation,
 }
 
-/// Bottom-up and top-down signal flowing across a Society-of-Mind [`StratumPipeline`].
+/// Bottom-up and top-down signal flowing across a hierarchical [`StratumPipeline`].
 ///
 /// Lower strata (`n - 1`) populate local features and stigmergic pointer weights without needing
 /// global semantic awareness, while upper strata (`n + 1`) arbitrate `Liminal` boundaries, Guard
@@ -133,12 +134,12 @@ pub struct StratumSignal {
     /// True when [`StigmergicSubstrate`] interpretive decomposition linked disjoint Fact sub-basins.
     pub decomposition_triggered: bool,
     /// Per-attractor local `Liminal` gap depth (`0.0` = deep inside basin).
-    pub local_void_depths: Vec<f32>,
+    pub local_lacuna_depths: Vec<f32>,
     /// Per-attractor stigmergic pointer trace / pheromone strength (`>= 0.0`).
     pub stigmergic_weights: Vec<f32>,
     /// Aggregated boundary metrics observed at the upper boundary stratum.
     pub boundary_metrics: RecallBoundaryMetrics,
-    /// Boundary gate decision (`InsideBasin`, `LiminalBoundary`, or `Liminal`).
+    /// Boundary gate decision (`InsideBasin`, `LiminalBoundary`, or `LiminalExterior`).
     pub gate_decision: RecallGateDecision,
     /// Substrate regime chosen for top-down orchestration.
     pub action_decision: StigmergicActionDecision,
@@ -155,14 +156,14 @@ pub struct StratumSignal {
 /// Top-down directive sent from stratum `n + 1` down to `n` and `n - 1` after upward inference.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StratumDirective {
-    /// Whether injection should be suppressed (`Liminal` or Guard repulsion).
+    /// Whether injection should be suppressed (`LiminalExterior` or Guard repulsion).
     pub suppress_injection: bool,
     /// Whether active Guard repulsion (`RepulsionEscape`) was triggered.
     pub repulse_guard: bool,
     /// Top-down gain multiplier (`0.0` when skipped/repulsed, `< 1.0` on liminal boundary, `>= 1.0` inside basin).
     pub top_down_gain: f32,
     /// Minimum local `Liminal` depth observed across the stack.
-    pub min_local_void_depth: f32,
+    pub min_local_lacuna_depth: f32,
 }
 
 impl Default for StratumDirective {
@@ -171,12 +172,12 @@ impl Default for StratumDirective {
             suppress_injection: false,
             repulse_guard: false,
             top_down_gain: 1.0,
-            min_local_void_depth: 1.0,
+            min_local_lacuna_depth: 1.0,
         }
     }
 }
 
-/// Read-only shared context passed to each [`SocietyStratum`] during upward and downward passes.
+/// Read-only shared context passed to each [`RecallStratum`] during upward and downward passes.
 pub struct StratumContext<'a> {
     /// Corpus entries aligned with `signal.candidate_scores`.
     pub entries: &'a [TextAttractorEntry],
@@ -196,11 +197,11 @@ pub struct StratumContext<'a> {
     pub policy: &'a RecallPolicy,
 }
 
-/// Pluggable hierarchical layer in a Society-of-Mind recall/steering stack (`n - 1 <-> n <-> n + 1`).
+/// Pluggable hierarchical layer in a multi-stratum recall/steering stack (`n - 1 <-> n <-> n + 1`).
 ///
 /// Strata can be dynamically added, inserted, or removed via [`StratumPipeline`] without altering
 /// neighboring layers.
-pub trait SocietyStratum {
+pub trait RecallStratum {
     /// Stable identifier for inspection and dynamic removal/insertion.
     fn name(&self) -> &'static str;
 
@@ -285,7 +286,7 @@ impl Default for LocalFeatureWorkerStratum {
     }
 }
 
-impl SocietyStratum for LocalFeatureWorkerStratum {
+impl RecallStratum for LocalFeatureWorkerStratum {
     fn name(&self) -> &'static str {
         "local_feature_worker"
     }
@@ -389,7 +390,7 @@ impl Default for HeadAngleWorkerStratum {
     }
 }
 
-impl SocietyStratum for HeadAngleWorkerStratum {
+impl RecallStratum for HeadAngleWorkerStratum {
     fn name(&self) -> &'static str {
         "head_angle_worker"
     }
@@ -494,15 +495,15 @@ impl SocietyStratum for HeadAngleWorkerStratum {
 }
 
 /// Stratum 1 (`n = 1`): evaluates role-scoped local neighborhood baselines and perspective-dependent
-/// `Liminal` depths via an [`AttractorVoidPerspective`] trait object.
-pub struct PerspectiveDominoStratum<'a> {
-    /// Perspective evaluator measuring `perspective_affinity` and `local_void_depth`.
-    pub perspective: &'a dyn AttractorVoidPerspective,
+/// `Liminal` depths via an [`AttractorBoundaryPerspective`] trait object.
+pub struct PerspectiveHubnessStratum<'a> {
+    /// Perspective evaluator measuring `perspective_affinity` and `local_lacuna_depth`.
+    pub perspective: &'a dyn AttractorBoundaryPerspective,
 }
 
-impl SocietyStratum for PerspectiveDominoStratum<'_> {
+impl RecallStratum for PerspectiveHubnessStratum<'_> {
     fn name(&self) -> &'static str {
-        "perspective_domino_liminal_void"
+        "perspective_hubness_liminal_lacuna"
     }
 
     fn infer_up(&self, ctx: &StratumContext<'_>, signal: &mut StratumSignal) -> Result<(), String> {
@@ -590,20 +591,20 @@ impl SocietyStratum for PerspectiveDominoStratum<'_> {
                 ctx.policy.min_coherence,
             );
             signal.candidate_scores[idx] = reading.perspective_affinity;
-            signal.local_void_depths[idx] = reading.local_void_depth;
+            signal.local_lacuna_depths[idx] = reading.local_lacuna_depth;
         }
         Ok(())
     }
 }
 
-/// Stratum 2 (`n = 2`): upper Society-of-Mind arbiter combining [`RecallBoundaryGate`] with
+/// Stratum 2 (`n = 2`): upper boundary arbiter combining [`RecallBoundaryGate`] with
 /// substrate [`StigmergicActionDecision`] regime selection and top-down directives.
 pub struct SubstrateBoundaryStratum<'a> {
-    /// Boundary gate classifying `void_state` and suppression.
+    /// Boundary gate classifying `lacuna_state` and suppression.
     pub gate: &'a dyn RecallBoundaryGate,
 }
 
-impl SocietyStratum for SubstrateBoundaryStratum<'_> {
+impl RecallStratum for SubstrateBoundaryStratum<'_> {
     fn name(&self) -> &'static str {
         "substrate_boundary"
     }
@@ -661,8 +662,8 @@ impl SocietyStratum for SubstrateBoundaryStratum<'_> {
 
         let repulsed = repulsed_by_guard || frame.is_repulsed();
         let has_active_persona = top1_persona_score >= persona_floor;
-        let is_total_liminal_void =
-            matches!(decision.void_state, VoidBoundaryState::LiminalExterior)
+        let is_unobserved_exterior =
+            matches!(decision.lacuna_state, LacunaBoundaryState::LiminalExterior)
                 && !has_active_persona
                 && !repulsed;
 
@@ -688,9 +689,9 @@ impl SocietyStratum for SubstrateBoundaryStratum<'_> {
 
         let (rho, h_tilde) = if repulsed {
             (frame.effective_energy, 0.75_f32)
-        } else if is_total_liminal_void {
+        } else if is_unobserved_exterior {
             (0.0_f32, 0.0_f32)
-        } else if matches!(decision.void_state, VoidBoundaryState::LiminalExterior)
+        } else if matches!(decision.lacuna_state, LacunaBoundaryState::LiminalExterior)
             && has_active_persona
         {
             // Persona-only active grounding outside factual basins uses lightweight ExpressPhaseSteer.
@@ -699,7 +700,7 @@ impl SocietyStratum for SubstrateBoundaryStratum<'_> {
             || signal.decomposition_triggered
             || (channel_disagreement && partial_swarm_consensus)
             || (circuit_peel_active
-                && !matches!(decision.void_state, VoidBoundaryState::LiminalExterior))
+                && !matches!(decision.lacuna_state, LacunaBoundaryState::LiminalExterior))
         {
             // Bifurcated, local-sharpened, or circuit-peel-biased channel triggers sub-head routing.
             (
@@ -713,7 +714,7 @@ impl SocietyStratum for SubstrateBoundaryStratum<'_> {
                 .crystallize_density_thresh
                 .max(frame.effective_energy * 1.5);
             (boost, 0.40_f32)
-        } else if matches!(decision.void_state, VoidBoundaryState::LiminalBoundary) {
+        } else if matches!(decision.lacuna_state, LacunaBoundaryState::LiminalBoundary) {
             (thresholds.express_steer_density_thresh.max(0.45), 0.35_f32)
         } else if margin_ratio >= 2.0 {
             let boost = thresholds
@@ -828,19 +829,23 @@ impl SocietyStratum for SubstrateBoundaryStratum<'_> {
             StigmergicActionDecision::FullOrchestration => 1.0,
             StigmergicActionDecision::CrystallizeMacroBasin => 1.15,
         };
-        let min_void = signal
-            .local_void_depths
+        let min_lacuna = signal
+            .local_lacuna_depths
             .iter()
             .copied()
             .fold(f32::INFINITY, f32::min);
-        directive.min_local_void_depth = if min_void.is_finite() { min_void } else { 1.0 };
+        directive.min_local_lacuna_depth = if min_lacuna.is_finite() {
+            min_lacuna
+        } else {
+            1.0
+        };
     }
 }
 
-/// Composable Society-of-Mind pipeline supporting dynamic insertion, removal, and finite
-/// bidirectional (`infer_up` then `adjust_down`) arbitration across [`SocietyStratum`] layers.
+/// Composable hierarchical recall pipeline supporting dynamic insertion, removal, and finite
+/// bidirectional (`infer_up` then `adjust_down`) arbitration across [`RecallStratum`] layers.
 pub struct StratumPipeline<'a> {
-    strata: Vec<Box<dyn SocietyStratum + 'a>>,
+    strata: Vec<Box<dyn RecallStratum + 'a>>,
 }
 
 impl<'a> StratumPipeline<'a> {
@@ -851,18 +856,18 @@ impl<'a> StratumPipeline<'a> {
     }
 
     /// Appends a stratum at the top (`n + 1`) of the pipeline.
-    pub fn push_stratum(&mut self, stratum: Box<dyn SocietyStratum + 'a>) {
+    pub fn push_stratum(&mut self, stratum: Box<dyn RecallStratum + 'a>) {
         self.strata.push(stratum);
     }
 
     /// Inserts a stratum at `index` (clamped to `self.strata.len()`).
-    pub fn insert_stratum(&mut self, index: usize, stratum: Box<dyn SocietyStratum + 'a>) {
+    pub fn insert_stratum(&mut self, index: usize, stratum: Box<dyn RecallStratum + 'a>) {
         let pos = index.min(self.strata.len());
         self.strata.insert(pos, stratum);
     }
 
     /// Removes and returns the first stratum matching `name`, if present.
-    pub fn remove_stratum(&mut self, name: &str) -> Option<Box<dyn SocietyStratum + 'a>> {
+    pub fn remove_stratum(&mut self, name: &str) -> Option<Box<dyn RecallStratum + 'a>> {
         self.strata
             .iter()
             .position(|s| s.name() == name)
@@ -1585,7 +1590,7 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
     }
 }
 
-impl SocietyStratum for LocalTokenResonanceStratum {
+impl RecallStratum for LocalTokenResonanceStratum {
     fn name(&self) -> &'static str {
         "local_token_resonance"
     }
@@ -1975,7 +1980,7 @@ impl Default for StratumPipeline<'static> {
         p.push_stratum(Box::new(LocalFeatureWorkerStratum::default()));
         p.push_stratum(Box::new(HeadAngleWorkerStratum::default()));
         p.push_stratum(Box::new(LocalTokenResonanceStratum::default()));
-        p.push_stratum(Box::new(PerspectiveDominoStratum {
+        p.push_stratum(Box::new(PerspectiveHubnessStratum {
             perspective: &DEFAULT_PERSPECTIVE,
         }));
         p.push_stratum(Box::new(SubstrateBoundaryStratum {
@@ -1985,7 +1990,7 @@ impl Default for StratumPipeline<'static> {
     }
 }
 
-static DEFAULT_PERSPECTIVE: AsymmetricDominoVoidPerspective = AsymmetricDominoVoidPerspective {
+static DEFAULT_PERSPECTIVE: AsymmetricHubnessPerspective = AsymmetricHubnessPerspective {
     neighbor_k: 4,
     hubness_damping: 0.50,
     perspective_z_gain: 0.025,

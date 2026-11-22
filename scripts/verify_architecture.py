@@ -130,6 +130,15 @@ BANNED_LEGACY_DECL_TOKENS: frozenset[str] = frozenset(
     }
 )
 
+DOWNSTREAM_BANNED_LEGACY_TOKENS: frozenset[str] = BANNED_LEGACY_DECL_TOKENS | frozenset(
+    {
+        "society",
+        "domino",
+    }
+)
+
+QUARANTINED_CLI_FILES: frozenset[str] = frozenset({"eval_samples.rs", "eval_runner.rs"})
+
 
 def split_ident_tokens(ident: str) -> set[str]:
     """Split a snake_case or CamelCase identifier into lowercase semantic tokens."""
@@ -448,32 +457,46 @@ def strip_literals_preserve_lines(clean_text: str) -> str:
     return "".join(out)
 
 
+def _extract_non_test_code(source: str) -> str:
+    """Strip `#[cfg(test)]` tails, comments, and string literals preserving line numbers."""
+    non_test_lines = strip_cfg_test_tail(source.splitlines())
+    truncated = "\n".join(line for _lineno, line in non_test_lines)
+    clean_text = strip_comments_preserve_lines(truncated)
+    return strip_literals_preserve_lines(clean_text)
+
+
+def _find_banned_public_decls(
+    code_only: str,
+    rel_path: str,
+    banned_tokens: frozenset[str],
+    label: str,
+) -> list[str]:
+    """Return violations for any public item declaration whose identifier hits `banned_tokens`."""
+    violations: list[str] = []
+    for match in PUB_ITEM_DECL_RE.finditer(code_only):
+        name = match.group("name")
+        lineno = code_only.count("\n", 0, match.start()) + 1
+        banned_hits = sorted(split_ident_tokens(name) & banned_tokens)
+        if banned_hits:
+            violations.append(
+                f"{label} (banned legacy token {', '.join(banned_hits)}): "
+                f"{rel_path}:{lineno}: disallowed public declaration `{name}`"
+            )
+    return violations
+
+
 def scan_vocabulary_ownership_in_source(source: str, rel_path: str) -> list[str]:
     """Verify legacy declared-identifier bans and `*Substrate*` (`stigmergy`-only) ownership."""
     norm_rel = rel_path.replace("\\", "/").lstrip("/")
     if norm_rel.startswith("src/core/src/"):
         norm_rel = norm_rel[len("src/core/src/"):]
-    if (
-        norm_rel.endswith("tests.rs")
-        or "/tests/" in f"/{norm_rel}"
-    ):
+    if norm_rel.endswith("tests.rs") or "/tests/" in f"/{norm_rel}":
         return []
 
-    violations: list[str] = []
-    non_test_lines = strip_cfg_test_tail(source.splitlines())
-    truncated = "\n".join(line for _lineno, line in non_test_lines)
-    clean_text = strip_comments_preserve_lines(truncated)
-    code_only = strip_literals_preserve_lines(clean_text)
-
-    for match in PUB_ITEM_DECL_RE.finditer(code_only):
-        name = match.group("name")
-        lineno = code_only.count("\n", 0, match.start()) + 1
-        banned_hits = sorted(split_ident_tokens(name) & BANNED_LEGACY_DECL_TOKENS)
-        if banned_hits:
-            violations.append(
-                f"Vocabulary ownership (banned legacy token {', '.join(banned_hits)}): "
-                f"{norm_rel}:{lineno}: disallowed public declaration `{name}`"
-            )
+    code_only = _extract_non_test_code(source)
+    violations = _find_banned_public_decls(
+        code_only, norm_rel, BANNED_LEGACY_DECL_TOKENS, "Vocabulary ownership"
+    )
 
     for match in PUB_TYPE_OR_TRAIT_RE.finditer(code_only):
         name = match.group("name")
@@ -497,6 +520,31 @@ def check_vocabulary_ownership(core_src: pathlib.Path) -> list[str]:
         rel_path = rs_file.relative_to(core_src).as_posix()
         source = rs_file.read_text(encoding="utf-8")
         violations.extend(scan_vocabulary_ownership_in_source(source, rel_path))
+    return violations
+
+
+def check_downstream_vocabulary(repo_root: pathlib.Path) -> list[str]:
+    """Verify legacy declared-identifier bans across `src/adapter/src/` and `src/cli/src/`."""
+    violations: list[str] = []
+    for crate in ("adapter", "cli"):
+        crate_src = repo_root / "src" / crate / "src"
+        if not crate_src.is_dir():
+            continue
+        for rs_file in sorted(crate_src.rglob("*.rs")):
+            if rs_file.name == "tests.rs" or "tests" in rs_file.parts:
+                continue
+            if crate == "cli" and rs_file.name in QUARANTINED_CLI_FILES:
+                continue
+            rel_path = rs_file.relative_to(repo_root).as_posix()
+            code_only = _extract_non_test_code(rs_file.read_text(encoding="utf-8"))
+            violations.extend(
+                _find_banned_public_decls(
+                    code_only,
+                    rel_path,
+                    DOWNSTREAM_BANNED_LEGACY_TOKENS,
+                    "Downstream vocabulary",
+                )
+            )
     return violations
 
 
@@ -606,6 +654,7 @@ def run_checks(core_src: pathlib.Path) -> list[str]:
     violations.extend(check_abstract_domain_invariant(core_src))
     violations.extend(check_cross_observer_scoped_boundaries(core_src))
     violations.extend(check_vocabulary_ownership(core_src))
+    violations.extend(check_downstream_vocabulary(core_src.parent.parent.parent))
     violations.extend(check_topology_matrix_parity(core_src))
     return violations
 

@@ -200,7 +200,7 @@ impl RopeSteeringTarget for RopeGeometry {
 
 /// Adapter-level [`LatentHorizonSlot`] that remains dormant during coherent nominal tokens
 /// and dynamically widens Core Layer 0 guard apertures + enables `ACTION_MODE_PHASE_REPULSE`
-/// when instability, epistemic conflict, or `Liminal` void excursion persists.
+/// when instability, epistemic conflict, or `Liminal` exterior excursion persists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CoherenceHorizonGuardSlot {
     /// Bitmask (`1 << k`) claimed inside `active_horizon_slots_mask` (default `1 << 0`).
@@ -363,48 +363,37 @@ impl HorizonEscalationProvider for CorpusRecallEscalationProvider<'_> {
 
 /// Unified model-connection and optimization adapter over [`liminika_core`].
 ///
-/// Bridges a target LLM's [`RopeGeometry`] to [`PhaseSteeringEngine`],
-/// [`EntropyController`], and [`ResidualAdapterEngine`] without polluting `liminika-core`
-/// with model-specific parsing or runtime dependencies.
+/// Embeds a heap-allocated [`RuntimeContext`] directly via `Box<RuntimeContext>` (zero
+/// duplicated core fields) and bridges a target LLM's [`RopeGeometry`] to
+/// [`liminika_core::stigmergy::PhaseSteeringEngine`], [`EntropyController`], and
+/// [`ResidualAdapterEngine`] without leaking model-specific parsing or runtime dependencies into
+/// `liminika-core`.
 pub struct ModelSteeringAdapter {
     geometry: RopeGeometry,
-    phase_engine: PhaseSteeringEngine,
-    substrate: Box<StigmergicSubstrate>,
-    ledger_slot: lmnk_ledger_slot_t,
-    telemetry: CoreTelemetryBank,
-    entropy_controller: EntropyController,
+    ctx: Box<RuntimeContext>,
     residual_adapter: ResidualAdapterEngine,
     system_constraint: SystemConstraint<()>,
-    probe_baseline: ManifoldProbeBaseline,
     threshold_policy: AdaptiveThresholdPolicy,
     calibrated_base_thresholds: StigmergicThresholds,
-    core_layers: CoreStateStack,
     configured_ego: LiminalEgoState,
-    last_boundary_delta: LiminalBoundaryDelta,
-    last_horizon: EpistemicHorizonReading,
-    last_venn_report: OverlapDiscoveryReport,
     last_ensemble_report: Option<StigmergicFragmentEnsembleReport>,
-    horizon_dwell: HorizonDwellState,
-    active_horizon_slots_mask: u32,
     coherence_guard_slot: CoherenceHorizonGuardSlot,
     residual_spillover: Box<DefaultResidualSpilloverSlot>,
     escalation_boundary_dirty: bool,
     last_escalated_regime: u8,
-    escalated_workbench_lane: Option<u8>,
-    sandbox_workbench_lane: Option<u8>,
     active_workbench_preset: WorkbenchPreset,
-    compute_pool: AnonymousComputePool,
-    system_spine: SystemSpineState,
     baseline_pinned_compute_mask: u64,
-    last_venn_partition: LacunaPartition8,
-    distortion_tension: DistortionTension,
-    ego_differential_net: EgoDifferentialNet,
     sandbox_settlement_streak: u8,
     prev_sandbox_coherence: f32,
     prev_sandbox_assim_drift: f32,
-    sandbox_settlements: u64,
     turn_guard_active: bool,
     passive_saturation_probe_steps: u8,
+}
+
+impl Drop for ModelSteeringAdapter {
+    fn drop(&mut self) {
+        self.ctx.zeroize_in_place();
+    }
 }
 
 impl ModelSteeringAdapter {
@@ -441,217 +430,216 @@ impl ModelSteeringAdapter {
     ///
     /// # Errors
     ///
-    /// Returns an error if `geometry.validate()` fails or [`PhaseSteeringEngine::new`]
+    /// Returns an error if `geometry.validate()` fails or [`RuntimeContext::new_boxed`]
     /// rejects the `(rotary_dim, num_q_heads)` pair.
     pub fn new(geometry: RopeGeometry) -> Result<Self, String> {
         geometry.validate()?;
-        let phase_engine =
-            PhaseSteeringEngine::new(geometry.rotary_dim as u32, geometry.num_q_heads as u32)
-                .map_err(|e| format!("PhaseSteeringEngine::new failed: {e}"))?;
-        let mut substrate = Box::new(
-            StigmergicSubstrate::with_dimensions_and_thresholds(
-                geometry.rotary_dim as u32,
-                geometry.num_q_heads as u32,
-                16,
-                StigmergicThresholds::default(),
-            )
-            .map_err(|e| {
-                format!("StigmergicSubstrate::with_dimensions_and_thresholds failed: {e}")
-            })?,
-        );
-        substrate.last_entropy_h_tilde = 0.35;
-        let ledger_slot = lmnk_ledger_slot_t::default();
-        let entropy_controller = EntropyController::new(lmnk_entropy_state_t::default());
-        let residual_adapter = ResidualAdapterEngine::new(1.0, 0, 1);
-        let system_constraint = SystemConstraint::new((), 0.0, 0.0, 0xFF);
-        let mut probe_baseline = ManifoldProbeBaseline::new();
-        probe_baseline.active_heads = geometry.num_q_heads.min(64) as u16;
-        probe_baseline.steered_layers = Self::compute_steered_layer_count(&geometry);
+        let mut cfg = Config::new()
+            .with_head_dim(geometry.rotary_dim as u32)
+            .with_num_heads(geometry.num_q_heads as u32)
+            .with_substrate_capacity(16);
+        cfg.raw.rotary_dim = geometry.rotary_dim as u32;
+        cfg.raw.rope_layout = match geometry.layout {
+            RopeLayout::Interleaved => 0,
+            RopeLayout::HalfSplit => 1,
+        };
+        let mut ctx = RuntimeContext::new_boxed(cfg)
+            .map_err(|e| format!("RuntimeContext::new_boxed failed: {e}"))?;
+
+        ctx.substrate_mut().last_entropy_h_tilde = 0.35;
         let threshold_policy = AdaptiveThresholdPolicy::default();
         let calibrated_base_thresholds = threshold_policy.base;
-        let mut compute_pool = AnonymousComputePool::default();
+        ctx.substrate_mut().thresholds = calibrated_base_thresholds;
+        *ctx.entropy_controller_mut() = EntropyController::new(lmnk_entropy_state_t::default());
+
+        let residual_adapter = ResidualAdapterEngine::new(1.0, 0, 1);
+        let system_constraint = SystemConstraint::new((), 0.0, 0.0, 0xFF);
+        ctx.probe_baseline_mut().active_heads = geometry.num_q_heads.min(64) as u16;
+        ctx.probe_baseline_mut().steered_layers = Self::compute_steered_layer_count(&geometry);
+
         let (active_slots, pinned_slots, reversible_slots) =
             Self::compute_slot_masks(geometry.num_layers);
-        compute_pool.set_slot_masks(active_slots, pinned_slots, 0, reversible_slots);
-        let mut system_spine = SystemSpineState::new();
-        system_spine.pinned_compute_mask = pinned_slots;
+        ctx.compute_pool_mut()
+            .set_slot_masks(active_slots, pinned_slots, 0, reversible_slots);
+        ctx.apply_host_spine_pin_floor(pinned_slots);
+
+        *ctx.last_horizon_mut() = EpistemicHorizonReading {
+            total_memory_support: 1.0,
+            peak_positive_affinity: 1.0,
+            horizon_gate: 1.0,
+            regime_code: EpistemicRegime::KnownCoherent as u8,
+            ..EpistemicHorizonReading::default()
+        };
 
         Ok(Self {
             geometry,
-            phase_engine,
-            substrate,
-            ledger_slot,
-            telemetry: CoreTelemetryBank::default(),
-            entropy_controller,
+            ctx,
             residual_adapter,
             system_constraint,
-            probe_baseline,
             threshold_policy,
             calibrated_base_thresholds,
-            core_layers: CoreStateStack::new(),
             configured_ego: LiminalEgoState::new(),
-            last_boundary_delta: LiminalBoundaryDelta::default(),
-            last_horizon: EpistemicHorizonReading {
-                total_memory_support: 1.0,
-                peak_positive_affinity: 1.0,
-                horizon_gate: 1.0,
-                regime_code: EpistemicRegime::KnownCoherent as u8,
-                ..EpistemicHorizonReading::default()
-            },
-            last_venn_report: OverlapDiscoveryReport::default(),
             last_ensemble_report: None,
-            horizon_dwell: HorizonDwellState::default(),
-            active_horizon_slots_mask: 0,
             coherence_guard_slot: CoherenceHorizonGuardSlot::default(),
             residual_spillover: Box::default(),
             escalation_boundary_dirty: true,
             last_escalated_regime: EpistemicRegime::KnownCoherent as u8,
-            escalated_workbench_lane: None,
-            sandbox_workbench_lane: None,
             active_workbench_preset: WorkbenchPreset::BalancedDialog,
-            compute_pool,
-            system_spine,
             baseline_pinned_compute_mask: pinned_slots,
-            last_venn_partition: LacunaPartition8::default(),
-            distortion_tension: DistortionTension::new(false),
-            ego_differential_net: EgoDifferentialNet::new_empty(1),
             sandbox_settlement_streak: 0,
             prev_sandbox_coherence: 0.0,
             prev_sandbox_assim_drift: 1.0,
-            sandbox_settlements: 0,
             turn_guard_active: false,
             passive_saturation_probe_steps: 0,
         })
     }
 
+    /// Returns a shared reference to the embedded 5,120-byte [`RuntimeContext`].
+    #[must_use]
+    pub fn runtime_context(&self) -> &RuntimeContext {
+        &self.ctx
+    }
+
+    /// Returns a mutable reference to the embedded 5,120-byte [`RuntimeContext`].
+    pub fn runtime_context_mut(&mut self) -> &mut RuntimeContext {
+        &mut self.ctx
+    }
+
     /// Returns the per-regime [`StigmergicActionDecision`] invocation counts (`0..=6`) from
     /// Core Layer 1 (`StigmergicLayerTelemetry`).
     #[must_use]
-    pub const fn substrate_decision_counts(&self) -> &[u64; 7] {
-        &self.telemetry.stigmergy.decision_counts
+    pub fn substrate_decision_counts(&self) -> &[u64; 7] {
+        &self.ctx.telemetry_bank().stigmergy.decision_counts
     }
 
     /// Resets the `2 Primitives x 2 Drivers` telemetry bank and restores initial neutral entropy (`0.35`)
     /// for a fresh evaluation pass.
     pub fn reset_substrate_stats(&mut self) {
-        self.telemetry.reset();
-        self.substrate.last_entropy_h_tilde = 0.35;
+        self.ctx.reset_telemetry();
+        self.ctx.substrate_mut().last_entropy_h_tilde = 0.35;
     }
 
     /// Resets core layers, horizon dwell/slots, spillover cache, thresholds, and `2 Primitives x 2 Drivers`
     /// telemetry back to clean defaults for fair ablation pass isolation.
     pub fn reset_horizon_and_core_state(&mut self) {
-        let saved_hops = self.ego_differential_net.max_hops;
-        self.core_layers = CoreStateStack::new();
+        let saved_hops = self.ctx.ego_differential_net().max_hops;
+        *self.ctx.core_layers_mut() = CoreStateStack::new();
         self.configured_ego = LiminalEgoState::new();
-        self.last_boundary_delta = LiminalBoundaryDelta::default();
-        self.last_horizon = EpistemicHorizonReading {
+        *self.ctx.last_boundary_delta_mut() = LiminalBoundaryDelta::default();
+        *self.ctx.last_horizon_mut() = EpistemicHorizonReading {
             regime_code: EpistemicRegime::KnownCoherent as u8,
             ..EpistemicHorizonReading::default()
         };
-        self.last_venn_report = OverlapDiscoveryReport::default();
+        *self.ctx.last_overlap_report_mut() = OverlapDiscoveryReport::default();
         self.last_ensemble_report = None;
-        self.horizon_dwell = HorizonDwellState::default();
-        self.active_horizon_slots_mask = 0;
+        *self.ctx.horizon_dwell_mut() = HorizonDwellState::default();
+        *self.ctx.active_horizon_slots_mask_mut() = 0;
         self.coherence_guard_slot = CoherenceHorizonGuardSlot::default();
         *self.residual_spillover = DefaultResidualSpilloverSlot::default();
         self.threshold_policy.base = self.calibrated_base_thresholds;
-        self.substrate.thresholds = self.calibrated_base_thresholds;
-        self.substrate.last_decision = 0;
-        self.substrate.last_anomaly_severity = 0.0;
+        {
+            let sub = self.ctx.substrate_mut();
+            sub.thresholds = self.calibrated_base_thresholds;
+            sub.last_decision = 0;
+            sub.last_anomaly_severity = 0.0;
+            let _ = sub.release_all_lanes();
+        }
         self.escalation_boundary_dirty = true;
         self.last_escalated_regime = EpistemicRegime::KnownCoherent as u8;
-        self.escalated_workbench_lane = None;
-        self.sandbox_workbench_lane = None;
-        let _ = self.substrate.release_all_lanes();
+        *self.ctx.escalated_workbench_lane_mut() = None;
+        *self.ctx.sandbox_workbench_lane_mut() = None;
         self.active_workbench_preset = WorkbenchPreset::BalancedDialog;
-        self.system_spine = SystemSpineState::new();
-        self.system_spine.pinned_compute_mask = self.baseline_pinned_compute_mask;
-        self.last_venn_partition = LacunaPartition8::default();
-        self.distortion_tension = DistortionTension::new(false);
-        self.ego_differential_net = EgoDifferentialNet::new_empty(saved_hops);
+        *self.ctx.system_spine_mut() = SystemSpineState::new();
+        self.ctx
+            .apply_host_spine_pin_floor(self.baseline_pinned_compute_mask);
+        *self.ctx.last_lacuna_partition_mut() = LacunaPartition8::default();
+        *self.ctx.distortion_tension_mut() = DistortionTension::new(false);
+        *self.ctx.ego_differential_net_mut() = EgoDifferentialNet::new_empty(saved_hops);
         self.sandbox_settlement_streak = 0;
         self.prev_sandbox_coherence = 0.0;
         self.prev_sandbox_assim_drift = 1.0;
-        self.sandbox_settlements = 0;
+        self.ctx.set_sandbox_settlements(0);
         self.turn_guard_active = false;
         self.passive_saturation_probe_steps = 0;
-        self.telemetry.set_policy(self.telemetry.policy());
+        let policy = self.ctx.telemetry_bank().policy();
+        self.ctx.set_telemetry_policy(policy);
         self.reset_substrate_stats();
     }
 
     /// Returns a shared reference to the `2 Primitives x 2 Drivers` [`CoreTelemetryBank`].
     #[must_use]
-    pub const fn telemetry_bank(&self) -> &CoreTelemetryBank {
-        &self.telemetry
+    pub fn telemetry_bank(&self) -> &CoreTelemetryBank {
+        self.ctx.telemetry_bank()
     }
 
     /// Returns a shared reference to the label-free [`AnonymousComputePool`].
     #[must_use]
-    pub const fn compute_pool(&self) -> &AnonymousComputePool {
-        &self.compute_pool
+    pub fn compute_pool(&self) -> &AnonymousComputePool {
+        self.ctx.compute_pool()
     }
 
     /// Returns a mutable reference to the label-free [`AnonymousComputePool`].
     #[must_use]
     pub fn compute_pool_mut(&mut self) -> &mut AnonymousComputePool {
-        &mut self.compute_pool
+        self.ctx.compute_pool_mut()
     }
 
     /// Returns the 64-byte unified [`CorePrimitiveState`] (`Liminal` + `Stigmergy`).
     #[must_use]
-    pub const fn core_primitive_state(&self) -> CorePrimitiveState {
-        self.core_layers.core_primitive_state()
+    pub fn core_primitive_state(&self) -> CorePrimitiveState {
+        self.ctx.core_layers().core_primitive_state()
     }
 
     /// Returns a shared reference to the mechanical [`SystemSpineState`] (`pinned` isolation barrier).
     #[must_use]
-    pub const fn system_spine(&self) -> &SystemSpineState {
-        &self.system_spine
+    pub fn system_spine(&self) -> &SystemSpineState {
+        self.ctx.system_spine()
     }
 
     /// Returns the most recent branchless 4-region [`LacunaPartition8`].
     #[must_use]
-    pub const fn last_venn_partition(&self) -> &LacunaPartition8 {
-        &self.last_venn_partition
+    pub fn last_lacuna_partition(&self) -> &LacunaPartition8 {
+        self.ctx.last_lacuna_partition()
     }
 
     /// Returns a shared reference to the asymmetric homeostatic [`DistortionTension`] controller.
     #[must_use]
-    pub const fn distortion_tension(&self) -> &DistortionTension {
-        &self.distortion_tension
+    pub fn distortion_tension(&self) -> &DistortionTension {
+        self.ctx.distortion_tension()
     }
 
     /// Returns a shared reference to the P-Frame differential chain [`EgoDifferentialNet`].
     #[must_use]
-    pub const fn ego_differential_net(&self) -> &EgoDifferentialNet {
-        &self.ego_differential_net
+    pub fn ego_differential_net(&self) -> &EgoDifferentialNet {
+        self.ctx.ego_differential_net()
     }
 
     /// Returns cumulative multi-turn Known Unknown ($O \setminus S$) sandbox settlements.
     #[must_use]
-    pub const fn sandbox_settlements(&self) -> u64 {
-        self.sandbox_settlements
+    pub fn sandbox_settlements(&self) -> u64 {
+        u64::from(self.ctx.sandbox_settlements())
     }
 
     /// Updates the maximum hop bound (`1..=4`) of [`EgoDifferentialNet`] and rebuilds active P-Frame nodes.
     pub fn set_ego_max_hops(&mut self, max_hops: u8) {
-        self.ego_differential_net.max_hops = max_hops.clamp(1, 4);
+        self.ctx.ego_differential_net_mut().max_hops = max_hops.clamp(1, 4);
         if self.configured_ego.is_active() {
             self.sync_ego_differential_net_from_configured();
         }
     }
 
-    /// Advances 1 Hot-Path [`DistortionTension`] step using the latest P-Frame delta norm and Venn sensitivity.
+    /// Advances 1 Hot-Path [`DistortionTension`] step using the latest P-Frame delta norm and boundary sensitivity.
     pub fn step_distortion_tension_hot_path(
         &mut self,
         exit_entropy_q7: u8,
         guard_proximity_q7: u8,
         active_overdrive: bool,
     ) {
-        self.distortion_tension.step_hot_path_branchless(
-            self.ego_differential_net.last_delta_norm_q7,
-            self.last_venn_partition.boundary_sensitivity_q7,
+        let delta_norm_q7 = self.ctx.ego_differential_net().last_delta_norm_q7;
+        let sens_q7 = self.ctx.last_lacuna_partition().boundary_sensitivity_q7;
+        self.ctx.distortion_tension_mut().step_hot_path_branchless(
+            delta_norm_q7,
+            sens_q7,
             exit_entropy_q7,
             guard_proximity_q7,
             active_overdrive,
@@ -665,14 +653,14 @@ impl ModelSteeringAdapter {
     pub fn effective_spine_guard_and_repulsion(&self, obs_repulsion: bool) -> (bool, bool) {
         let guard_slot_slid_in = (self.coherence_guard_slot.activations
             > self.coherence_guard_slot.retractions)
-            && (self.last_horizon.conflict_severity > 0.25);
+            && (self.ctx.last_horizon().conflict_severity > 0.25);
         let guard_active =
             self.turn_guard_active || guard_slot_slid_in || self.passive_saturation_probe_steps > 0;
         let action_repulse = liminika_core::stigmergy::StigmergicActionDecision::from_u8(
-            self.substrate.last_decision,
+            self.ctx.substrate().last_decision,
         )
             == liminika_core::stigmergy::StigmergicActionDecision::RepulsionEscape;
-        let entropy_repulse = self.entropy_controller.is_repulsion_mode();
+        let entropy_repulse = self.ctx.entropy_controller().is_repulsion_mode();
         let repulsion_active = obs_repulsion || action_repulse || entropy_repulse;
         (guard_active, repulsion_active)
     }
@@ -689,18 +677,8 @@ impl ModelSteeringAdapter {
             self.effective_spine_guard_and_repulsion(obs.repulsion_active != 0);
         obs.repulsion_active = u8::from(repulsion_active);
         self.passive_saturation_probe_steps = self.passive_saturation_probe_steps.saturating_sub(1);
-        let veto = self
-            .compute_pool
-            .evaluate_whole_token_steering_bypass_with_spine(
-                obs,
-                &mut self.system_spine,
-                guard_active,
-                dispatch,
-            );
-        if dispatch.whole_token_steering_bypass != 0 {
-            self.telemetry.record_whole_token_bypass();
-        }
-        veto
+        self.ctx
+            .evaluate_whole_token_bypass_with_spine(obs, guard_active, dispatch)
     }
 
     /// Evaluates token-level whole-steering bypass on `obs`, mutating `dispatch` and mirroring
@@ -715,26 +693,25 @@ impl ModelSteeringAdapter {
     }
 
     /// Exports active [`EgoDifferentialNet`] P-Frame nodes as model-agnostic
-    /// [`LogicalPFrameDescriptor`]s for `.gcso` v2 persistence.
+    /// [`LogicalPFrameDescriptor`]s for unified container persistence.
     #[must_use]
     pub fn export_logical_pframe_topology(&self) -> Vec<LogicalPFrameDescriptor> {
+        let net = self.ctx.ego_differential_net();
         let mut out = Vec::new();
-        for (idx, (routing, cold)) in self
-            .ego_differential_net
+        for (idx, (routing, cold)) in net
             .node_routing
             .iter()
-            .zip(self.ego_differential_net.node_cold.iter())
+            .zip(net.node_cold.iter())
             .enumerate()
         {
-            if ((self.ego_differential_net.active_node_mask >> idx) & 1) != 0 && routing.is_active()
-            {
+            if ((net.active_node_mask >> idx) & 1) != 0 && routing.is_active() {
                 out.push(LogicalPFrameDescriptor {
                     node_id: cold.node_id,
                     anchor_ref_id: cold.anchor_ref_id,
                     next_hop_idx: routing.next_hop_idx,
                     hop_depth: routing.hop_depth,
-                    venn_trigger_mask: routing.lacuna_trigger_mask,
-                    venn_region_selector: routing.scope_region_selector,
+                    lacuna_trigger_mask: routing.lacuna_trigger_mask,
+                    scope_region_selector: routing.scope_region_selector,
                     pheromone_q7: routing.pheromone_q7,
                     gain_q7: routing.gain_q7,
                     intent_delta: cold.intent_delta,
@@ -745,9 +722,9 @@ impl ModelSteeringAdapter {
     }
 
     /// Re-bakes persisted [`LogicalPFrameDescriptor`]s into this model's 64-head Q7
-    /// [`EgoDifferentialNet`] upon `.gcso` v2 load or cross-model transcoding.
+    /// [`EgoDifferentialNet`] upon unified container load or cross-model transcoding.
     pub fn bake_logical_pframe_topology(&mut self, descriptors: &[LogicalPFrameDescriptor]) {
-        let mut net = EgoDifferentialNet::new_empty(self.ego_differential_net.max_hops);
+        let mut net = EgoDifferentialNet::new_empty(self.ctx.ego_differential_net().max_hops);
         for (slot, desc) in descriptors
             .iter()
             .take(liminika_core::drivers::MAX_EGO_PFRAME_NODES)
@@ -787,8 +764,8 @@ impl ModelSteeringAdapter {
             let mut node = DistortionDelta::new_empty(desc.node_id, desc.anchor_ref_id);
             node.next_hop_idx = desc.next_hop_idx;
             node.hop_depth = desc.hop_depth;
-            node.lacuna_trigger_mask = desc.venn_trigger_mask;
-            node.scope_region_selector = desc.venn_region_selector;
+            node.lacuna_trigger_mask = desc.lacuna_trigger_mask;
+            node.scope_region_selector = desc.scope_region_selector;
             node.pheromone_q7 = desc.pheromone_q7;
             node.gain_q7 = desc.gain_q7;
             node.intent_delta = desc.intent_delta;
@@ -796,15 +773,16 @@ impl ModelSteeringAdapter {
             node.flags = DISTORTION_DELTA_FLAG_ACTIVE | DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID;
             net.set_node(slot, node);
         }
-        self.ego_differential_net = net;
+        *self.ctx.ego_differential_net_mut() = net;
     }
 
     fn sync_ego_differential_net_from_configured(&mut self) {
         let axes = self.configured_ego.extract_intent_axes();
-        let max_hops = self.ego_differential_net.max_hops;
-        self.ego_differential_net =
+        let max_hops = self.ctx.ego_differential_net().max_hops;
+        *self.ctx.ego_differential_net_mut() =
             EgoDifferentialNet::from_ego_state_and_axes(&self.configured_ego, &axes, max_hops);
-        self.distortion_tension = DistortionTension::new(self.configured_ego.is_active());
+        *self.ctx.distortion_tension_mut() =
+            DistortionTension::new(self.configured_ego.is_active());
     }
 
     /// Evaluates external `+ System` Gauge-Zero pressure jointly with [`SystemSpineState`]
@@ -817,9 +795,10 @@ impl ModelSteeringAdapter {
     ) -> ComputeDispatchMask {
         let (guard_active, eff_repulsion) =
             self.effective_spine_guard_and_repulsion(repulsion_active);
-        self.compute_pool.step_dispatch_with_spine(
+        let spine = *self.ctx.system_spine();
+        self.ctx.compute_pool_mut().step_dispatch_with_spine(
             reading,
-            &self.system_spine,
+            &spine,
             guard_active,
             eff_repulsion,
         )
@@ -834,31 +813,26 @@ impl ModelSteeringAdapter {
     /// Updates slot contribution pheromones strictly from an exit scalar reward (`0..=127`)
     /// without mid-layer D2H synchronization.
     pub fn commit_compute_exit_reward(&mut self, executed_mask: u64, reward_q7: u8) {
-        self.compute_pool
+        self.ctx
+            .compute_pool_mut()
             .commit_exit_reward(executed_mask, reward_q7);
     }
 
     /// Triggers immediate 1-step full-layer recovery in the anonymous compute pool with asymmetric
     /// re-bypass dwell hysteresis (called on exit entropy spike, `InternalConflict`, or `LiminalExterior`).
     pub fn signal_compute_instability(&mut self) {
-        self.compute_pool.signal_exit_instability();
+        self.ctx.compute_pool_mut().signal_exit_instability();
     }
 
     /// Updates the [`TelemetryCapturePolicy`] (`Pinned` vs `Auto` `Coarse`/`Standard`/`Detailed`).
     pub fn set_telemetry_policy(&mut self, policy: TelemetryCapturePolicy) {
-        self.telemetry.set_policy(policy);
+        self.ctx.set_telemetry_policy(policy);
     }
 
     /// Pulls a Lazy-Pull [`CoreTelemetrySnapshot`] computed inside `liminika-core`.
     #[must_use]
     pub fn telemetry_snapshot(&self) -> CoreTelemetrySnapshot {
-        self.telemetry.snapshot(
-            &self.core_layers,
-            &self.last_horizon,
-            0,
-            0,
-            self.active_horizon_slots_mask,
-        )
+        self.ctx.telemetry_snapshot()
     }
 
     /// Evaluates bounded Slow-Loop epoch threshold adjustments over continuous `Standard`/`Detailed`
@@ -868,7 +842,9 @@ impl ModelSteeringAdapter {
         min_samples: u64,
     ) -> SlowLoopTelemetryAdjustment {
         let base = self.calibrated_base_thresholds;
-        self.telemetry.evaluate_slow_loop_epoch(&base, min_samples)
+        self.ctx
+            .telemetry_bank_mut()
+            .evaluate_slow_loop_epoch(&base, min_samples)
     }
 
     /// Evaluates bounded Slow-Loop epoch adjustments and applies them to [`AdaptiveThresholdPolicy`],
@@ -882,12 +858,16 @@ impl ModelSteeringAdapter {
         if adj.applied {
             self.threshold_policy.base = adj.tuned_thresholds;
             let neutral_trail = lmnk_pointer_trail_t::default();
-            self.substrate.thresholds = self.threshold_policy.resolve_thresholds(
-                &self.system_constraint,
-                &self.probe_baseline,
-                &neutral_trail,
-                self.probe_baseline.baseline_entropy,
-            );
+            let resolved = {
+                let probe = *self.ctx.probe_baseline();
+                self.threshold_policy.resolve_thresholds(
+                    &self.system_constraint,
+                    &probe,
+                    &neutral_trail,
+                    probe.baseline_entropy,
+                )
+            };
+            self.ctx.substrate_mut().thresholds = resolved;
             let next_dwell = (2_i16 + i16::from(adj.suggested_slide_out_dwell_delta)).clamp(1, 8);
             self.coherence_guard_slot.slide_out_dwell = next_dwell as u16;
             self.apply_distortion_ego_feedback(&adj.distortion);
@@ -899,15 +879,22 @@ impl ModelSteeringAdapter {
             if passive_sat {
                 self.passive_saturation_probe_steps = self.passive_saturation_probe_steps.max(2);
             }
-            self.distortion_tension.step_slow_loop_excitation(
+            let chatter = self.ctx.last_boundary_delta().chatter_potential_u8;
+            let ego_active = self.configured_ego.is_active();
+            self.ctx.distortion_tension_mut().step_slow_loop_excitation(
                 passive_sat,
-                self.last_boundary_delta.chatter_potential_u8,
-                self.configured_ego.is_active(),
+                chatter,
+                ego_active,
             );
-            self.system_spine.slow_loop_epoch = self.system_spine.slow_loop_epoch.saturating_add(1);
+            let next_epoch = {
+                let spine = self.ctx.system_spine_mut();
+                spine.slow_loop_epoch = spine.slow_loop_epoch.saturating_add(1);
+                spine.slow_loop_epoch
+            };
             let _ = self
-                .ego_differential_net
-                .consolidate_and_evaporate_cold_path(self.system_spine.slow_loop_epoch);
+                .ctx
+                .ego_differential_net_mut()
+                .consolidate_and_evaporate_cold_path(next_epoch);
         }
         adj
     }
@@ -919,39 +906,35 @@ impl ModelSteeringAdapter {
         if !self.configured_ego.is_active() {
             return;
         }
+        let ego = &mut self.ctx.core_layers_mut().ego;
         if report.ego_wakeup_recommended {
-            self.core_layers.ego.trigger_mask |=
-                EGO_TRIGGER_LAYER_DISTORTION | EGO_TRIGGER_BASIN_CAPTURE;
-            self.core_layers.ego.counter_basin_thrust_q7 =
-                self.core_layers.ego.counter_basin_thrust_q7.max(48);
-            if self.core_layers.ego.transgression_bias_q7.abs() < 24 {
-                self.core_layers.ego.transgression_bias_q7 = 24;
+            ego.trigger_mask |= EGO_TRIGGER_LAYER_DISTORTION | EGO_TRIGGER_BASIN_CAPTURE;
+            ego.counter_basin_thrust_q7 = ego.counter_basin_thrust_q7.max(48);
+            if ego.transgression_bias_q7.abs() < 24 {
+                ego.transgression_bias_q7 = 24;
             }
         } else if report.ego_cooldown_recommended {
-            self.core_layers.ego.trigger_mask &=
-                !(EGO_TRIGGER_LAYER_DISTORTION | EGO_TRIGGER_INTERNAL_CONFLICT);
-            self.core_layers.ego.counter_basin_thrust_q7 =
-                self.configured_ego.counter_basin_thrust_q7 >> 1;
-            self.core_layers.ego.irrational_defiance_q7 =
-                self.configured_ego.irrational_defiance_q7 >> 1;
+            ego.trigger_mask &= !(EGO_TRIGGER_LAYER_DISTORTION | EGO_TRIGGER_INTERNAL_CONFLICT);
+            ego.counter_basin_thrust_q7 = self.configured_ego.counter_basin_thrust_q7 >> 1;
+            ego.irrational_defiance_q7 = self.configured_ego.irrational_defiance_q7 >> 1;
         } else {
-            let epochs = self.core_layers.ego.intervention_epochs;
-            let last_mask = self.core_layers.ego.last_intervened_mask;
-            self.core_layers.ego = self.configured_ego;
-            self.core_layers.ego.intervention_epochs = epochs;
-            self.core_layers.ego.last_intervened_mask = last_mask;
+            let epochs = ego.intervention_epochs;
+            let last_mask = ego.last_intervened_mask;
+            *ego = self.configured_ego;
+            ego.intervention_epochs = epochs;
+            ego.last_intervened_mask = last_mask;
         }
     }
 
     /// Returns a shared reference to the embedded [`StigmergicSubstrate`].
     #[must_use]
     pub fn substrate(&self) -> &StigmergicSubstrate {
-        &self.substrate
+        self.ctx.substrate()
     }
 
     /// Returns a mutable reference to the embedded [`StigmergicSubstrate`].
     pub fn substrate_mut(&mut self) -> &mut StigmergicSubstrate {
-        &mut self.substrate
+        self.ctx.substrate_mut()
     }
 
     /// Returns the validated [`RopeGeometry`].
@@ -963,13 +946,14 @@ impl ModelSteeringAdapter {
     /// Updates the active RoPE layer bitmask (`1` = steer, `0` = skip NoPE/disabled layer).
     pub fn set_layer_rope_mask(&mut self, mask: u64) {
         self.geometry.layer_rope_mask = mask;
-        self.probe_baseline.steered_layers = Self::compute_steered_layer_count(&self.geometry);
+        self.ctx.probe_baseline_mut().steered_layers =
+            Self::compute_steered_layer_count(&self.geometry);
     }
 
     /// Returns the latest Cold-Path [`ManifoldProbeBaseline`] calibrated for the active model.
     #[must_use]
-    pub const fn probe_baseline(&self) -> &ManifoldProbeBaseline {
-        &self.probe_baseline
+    pub fn probe_baseline(&self) -> &ManifoldProbeBaseline {
+        self.ctx.probe_baseline()
     }
 
     /// Returns the live [`SystemConstraint<()>`] telemetry snapshot.
@@ -978,25 +962,25 @@ impl ModelSteeringAdapter {
         &self.system_constraint
     }
 
-    /// Writes `circuit` into the embedded [`lmnk_ledger_slot_t`] so every subsequent
+    /// Writes `circuit` into the embedded [`liminika_core::abi::lmnk_ledger_slot_t`] so every subsequent
     /// [`StigmergicSubstrate`] and the rank-1 residual step modulates [`GatewayFrame`] dynamically from this circuit.
     pub fn set_active_circuit(&mut self, circuit: CognitiveTrajectoryLedger) {
-        circuit.write_to_ledger_slot(&mut self.ledger_slot);
+        circuit.write_to_ledger_slot(self.ctx.ledger_slot_mut());
     }
 
     /// Clears the active [`CognitiveTrajectoryLedger`] flag and trajectory register from the adapter.
     pub fn clear_active_circuit(&mut self) {
-        self.ledger_slot.telemetry_mini_ledger = [0u8; 8];
-        self.ledger_slot.auto_tune_flags &= !LEDGER_FLAG_COGNITIVE_TRAJECTORY;
+        let slot = self.ctx.ledger_slot_mut();
+        slot.telemetry_mini_ledger = [0u8; 8];
+        slot.auto_tune_flags &= !LEDGER_FLAG_COGNITIVE_TRAJECTORY;
     }
 
     /// Returns the currently active [`CognitiveTrajectoryLedger`] if attached to the adapter's ledger slot.
     #[must_use]
-    pub const fn active_circuit(&self) -> Option<CognitiveTrajectoryLedger> {
-        if (self.ledger_slot.auto_tune_flags & LEDGER_FLAG_COGNITIVE_TRAJECTORY) != 0 {
-            Some(CognitiveTrajectoryLedger::from_ledger_slot(
-                &self.ledger_slot,
-            ))
+    pub fn active_circuit(&self) -> Option<CognitiveTrajectoryLedger> {
+        let slot = self.ctx.ledger_slot();
+        if (slot.auto_tune_flags & LEDGER_FLAG_COGNITIVE_TRAJECTORY) != 0 {
+            Some(CognitiveTrajectoryLedger::from_ledger_slot(slot))
         } else {
             None
         }
@@ -1017,68 +1001,69 @@ impl ModelSteeringAdapter {
         bank.reinforce_bank(&act, converged);
         let ledger = bank.to_consolidated_ledger();
         self.set_active_circuit(ledger);
-        let horizon = self.last_horizon;
-        let venn = self.last_venn_report;
-        self.core_layers
-            .adapt_layers_branchless(&ledger, &horizon, &venn, None);
+        let horizon = *self.ctx.last_horizon();
+        let overlap = *self.ctx.last_overlap_report();
+        self.ctx
+            .core_layers_mut()
+            .adapt_layers_branchless(&ledger, &horizon, &overlap, None);
         act
     }
 
     /// Returns a shared reference to the live Core Layer 0 [`LiminalThresholdState`] governing
     /// dynamic `Liminal` channel thresholds and cognitive window gains.
     #[must_use]
-    pub const fn threshold_state(&self) -> &LiminalThresholdState {
-        &self.core_layers.liminal
+    pub fn threshold_state(&self) -> &LiminalThresholdState {
+        &self.ctx.core_layers().liminal
     }
 
     /// Returns a mutable reference to the live Core Layer 0 [`LiminalThresholdState`].
     pub fn threshold_state_mut(&mut self) -> &mut LiminalThresholdState {
-        &mut self.core_layers.liminal
+        &mut self.ctx.core_layers_mut().liminal
     }
 
     /// Returns a shared reference to the live Core Layer 1 [`StigmergicGranuleState`].
     #[must_use]
-    pub const fn stigmergic_granule_state(&self) -> &StigmergicGranuleState {
-        &self.core_layers.stigmergy
+    pub fn stigmergic_granule_state(&self) -> &StigmergicGranuleState {
+        &self.ctx.core_layers().stigmergy
     }
 
     /// Returns a shared reference to the unified 3-layer [`CoreStateStack`].
     #[must_use]
-    pub const fn core_layer_stack(&self) -> &CoreStateStack {
-        &self.core_layers
+    pub fn core_layer_stack(&self) -> &CoreStateStack {
+        self.ctx.core_layers()
     }
 
     /// Returns a mutable reference to the unified 3-layer [`CoreStateStack`].
     pub fn core_layer_stack_mut(&mut self) -> &mut CoreStateStack {
-        &mut self.core_layers
+        self.ctx.core_layers_mut()
     }
 
     /// Returns the most recently observed [`EpistemicHorizonReading`].
     #[must_use]
-    pub const fn last_horizon(&self) -> &EpistemicHorizonReading {
-        &self.last_horizon
+    pub fn last_horizon(&self) -> &EpistemicHorizonReading {
+        self.ctx.last_horizon()
     }
 
     /// Returns the most recently observed [`OverlapDiscoveryReport`].
     #[must_use]
-    pub const fn last_venn_serendipity_report(&self) -> &OverlapDiscoveryReport {
-        &self.last_venn_report
+    pub fn last_overlap_report(&self) -> &OverlapDiscoveryReport {
+        self.ctx.last_overlap_report()
     }
 
     /// Returns a shared reference to the live 64-byte Core Layer 2 [`LiminalEgoState`].
     #[must_use]
-    pub const fn ego_state(&self) -> &LiminalEgoState {
-        &self.core_layers.ego
+    pub fn ego_state(&self) -> &LiminalEgoState {
+        &self.ctx.core_layers().ego
     }
 
     /// Returns a mutable reference to the live 64-byte Core Layer 2 [`LiminalEgoState`].
     pub fn ego_state_mut(&mut self) -> &mut LiminalEgoState {
-        &mut self.core_layers.ego
+        &mut self.ctx.core_layers_mut().ego
     }
 
     /// Replaces the adapter's active Core Layer 2 [`LiminalEgoState`].
     pub fn set_ego_state(&mut self, ego: LiminalEgoState) {
-        self.core_layers.ego = ego;
+        self.ctx.core_layers_mut().ego = ego;
         self.configured_ego = ego;
         self.sync_ego_differential_net_from_configured();
     }
@@ -1086,7 +1071,7 @@ impl ModelSteeringAdapter {
     /// Configures Core Layer 2 [`LiminalEgoState`] from a coarse [`LiminalEgoPreset`] (`Custom`, `Low`, `Medium`, `High`).
     pub fn configure_ego_from_preset(&mut self, preset: LiminalEgoPreset) {
         let ego = LiminalEgoState::from_preset(preset);
-        self.core_layers.ego = ego;
+        self.ctx.core_layers_mut().ego = ego;
         self.configured_ego = ego;
         self.sync_ego_differential_net_from_configured();
     }
@@ -1094,17 +1079,17 @@ impl ModelSteeringAdapter {
     /// Configures Core Layer 2 [`LiminalEgoState`] from intermediate normalized [`EgoIntentAxes`].
     pub fn configure_ego_from_intent_axes(&mut self, axes: &EgoIntentAxes) {
         let ego = LiminalEgoState::from_intent_axes(axes);
-        self.core_layers.ego = ego;
+        self.ctx.core_layers_mut().ego = ego;
         self.configured_ego = ego;
         self.sync_ego_differential_net_from_configured();
     }
 
     /// Smoothly blends an [`EgoIntentAxes`] overlay onto the current Ego state (`weight_q7` in `0..=127`).
     pub fn blend_ego_intent_axes(&mut self, overlay: &EgoIntentAxes, weight_q7: u8) {
-        let base_axes = self.core_layers.ego.extract_intent_axes();
+        let base_axes = self.ctx.core_layers().ego.extract_intent_axes();
         let blended = base_axes.blend_lerp_q7(overlay, weight_q7);
         let ego = LiminalEgoState::from_intent_axes(&blended);
-        self.core_layers.ego = ego;
+        self.ctx.core_layers_mut().ego = ego;
         self.configured_ego = ego;
         self.sync_ego_differential_net_from_configured();
     }
@@ -1112,7 +1097,7 @@ impl ModelSteeringAdapter {
     /// Derives Core Layer 2 [`LiminalEgoState`] deterministically from a natural-language Ego description.
     pub fn configure_ego_from_natural_language(&mut self, description: &str) {
         let ego = crate::ego_intent::ego_state_from_natural_language(description);
-        self.core_layers.ego = ego;
+        self.ctx.core_layers_mut().ego = ego;
         self.configured_ego = ego;
         self.sync_ego_differential_net_from_configured();
     }
@@ -1120,18 +1105,18 @@ impl ModelSteeringAdapter {
     /// Overlays natural-language Ego cues onto the existing Core Layer 2 [`LiminalEgoState`].
     pub fn overlay_ego_from_natural_language(&mut self, description: &str) {
         let ego = crate::ego_intent::overlay_ego_state_from_natural_language(
-            self.core_layers.ego,
+            self.ctx.core_layers().ego,
             description,
         );
-        self.core_layers.ego = ego;
+        self.ctx.core_layers_mut().ego = ego;
         self.configured_ego = ego;
         self.sync_ego_differential_net_from_configured();
     }
 
     /// Returns the most recent temporal [`LiminalBoundaryDelta`] between aperture epochs.
     #[must_use]
-    pub const fn last_boundary_delta(&self) -> &LiminalBoundaryDelta {
-        &self.last_boundary_delta
+    pub fn last_boundary_delta(&self) -> &LiminalBoundaryDelta {
+        self.ctx.last_boundary_delta()
     }
 
     /// Returns the most recent [`StigmergicFragmentEnsembleReport`] computed during recall sync.
@@ -1143,14 +1128,14 @@ impl ModelSteeringAdapter {
     /// Returns the bitmask of external [`LatentHorizonSlot`] boundaries currently slid into the
     /// adapter's active cognitive window.
     #[must_use]
-    pub const fn active_horizon_slots_mask(&self) -> u32 {
-        self.active_horizon_slots_mask
+    pub fn active_horizon_slots_mask(&self) -> u32 {
+        self.ctx.active_horizon_slots_mask()
     }
 
     /// Returns the live consecutive destabilization / quiescence dwell tracker [`HorizonDwellState`].
     #[must_use]
-    pub const fn horizon_dwell(&self) -> HorizonDwellState {
-        self.horizon_dwell
+    pub fn horizon_dwell(&self) -> HorizonDwellState {
+        self.ctx.horizon_dwell()
     }
 
     /// Returns a shared reference to the built-in [`CoherenceHorizonGuardSlot`].
@@ -1189,7 +1174,7 @@ impl ModelSteeringAdapter {
             coherence,
             resolved,
         );
-        self.telemetry.sync_experience_metrics(
+        self.ctx.telemetry_bank_mut().sync_experience_metrics(
             self.residual_spillover.cache_hits,
             self.residual_spillover.cache_stores,
             self.residual_spillover.cache_evictions,
@@ -1203,46 +1188,54 @@ impl ModelSteeringAdapter {
     pub fn adapt_core_layers(
         &mut self,
         horizon: &EpistemicHorizonReading,
-        venn_report: &OverlapDiscoveryReport,
+        overlap_report: &OverlapDiscoveryReport,
         overflow_opt: Option<&DissipativeOverflowReport>,
     ) {
         let stagnation_drive =
-            (self.core_layers.ego.trigger_mask & EGO_TRIGGER_BOUNDARY_STAGNATION) != 0;
-        let can_shortcut = self.core_layers.liminal.adaptation_epochs > 0
-            && self.last_boundary_delta.stationary_shortcut_ready == 1
-            && self.last_horizon.regime_code == horizon.regime_code
-            && venn_report.discovery_triggered == 0
-            && self.last_venn_report.overlap_core_mask == venn_report.overlap_core_mask
+            (self.ctx.core_layers().ego.trigger_mask & EGO_TRIGGER_BOUNDARY_STAGNATION) != 0;
+        let can_shortcut = self.ctx.core_layers().liminal.adaptation_epochs > 0
+            && self.ctx.last_boundary_delta().stationary_shortcut_ready == 1
+            && self.ctx.last_horizon().regime_code == horizon.regime_code
+            && overlap_report.discovery_triggered == 0
+            && self.ctx.last_overlap_report().overlap_core_mask == overlap_report.overlap_core_mask
             && overflow_opt.is_none()
             && !stagnation_drive;
-        self.last_horizon = *horizon;
-        self.last_venn_report = *venn_report;
+        *self.ctx.last_horizon_mut() = *horizon;
+        *self.ctx.last_overlap_report_mut() = *overlap_report;
         if can_shortcut {
             return;
         }
 
-        let prev_layer0 = self.core_layers.liminal;
-        let prev_venn = self.core_layers.stigmergy.overlap_mask;
+        let prev_layer0 = self.ctx.core_layers().liminal;
+        let prev_overlap = self.ctx.core_layers().stigmergy.overlap_mask;
         let ledger = self.active_circuit().unwrap_or_default();
-        self.core_layers
-            .adapt_layers_branchless(&ledger, horizon, venn_report, overflow_opt);
-        self.last_boundary_delta = LiminalBoundaryDelta::compute_branchless(
-            &prev_layer0,
-            &self.core_layers.liminal,
-            prev_venn,
-            venn_report.overlap_core_mask,
-            &self.last_boundary_delta,
+        self.ctx.core_layers_mut().adapt_layers_branchless(
+            &ledger,
+            horizon,
+            overlap_report,
+            overflow_opt,
         );
-        if self.core_layers.ego.is_active() {
+        let next_layer0 = self.ctx.core_layers().liminal;
+        let prev_delta = *self.ctx.last_boundary_delta();
+        *self.ctx.last_boundary_delta_mut() = LiminalBoundaryDelta::compute_branchless(
+            &prev_layer0,
+            &next_layer0,
+            prev_overlap,
+            overlap_report.overlap_core_mask,
+            &prev_delta,
+        );
+        if self.ctx.core_layers().ego.is_active() {
+            let boundary_delta = *self.ctx.last_boundary_delta();
             let mut preview = GatewayFrame {
                 effective_energy: horizon.total_memory_support,
                 ..GatewayFrame::default()
             };
-            self.core_layers
+            self.ctx
+                .core_layers_mut()
                 .intervene_ego_and_modulate_frame_branchless(
-                    &self.last_boundary_delta,
+                    &boundary_delta,
                     horizon,
-                    venn_report,
+                    overlap_report,
                     &mut preview,
                 );
         }
@@ -1268,27 +1261,29 @@ impl ModelSteeringAdapter {
             );
         self.turn_guard_active = guard_turn;
         if guard_turn {
-            self.system_spine
-                .pin_compute_slots(self.compute_pool.active_mask);
+            let active_mask = self.ctx.compute_pool().active_mask;
+            self.ctx.apply_host_spine_pin_floor(active_mask);
         } else {
-            self.system_spine.pinned_compute_mask = self.baseline_pinned_compute_mask;
+            self.ctx.system_spine_mut().pinned_compute_mask = self.baseline_pinned_compute_mask;
         }
-        self.last_venn_partition = recall.venn_partition;
-        self.system_spine.unobserved_locked = u8::from(
-            matches!(recall.void_state, VoidBoundaryState::LiminalExterior)
+        self.ctx
+            .apply_host_spine_pin_floor(self.baseline_pinned_compute_mask);
+        *self.ctx.last_lacuna_partition_mut() = recall.lacuna_partition;
+        self.ctx.system_spine_mut().unobserved_locked = u8::from(
+            matches!(recall.lacuna_state, LacunaBoundaryState::LiminalExterior)
                 && !recall.is_known_unknown_exterior
                 && recall.guard_conflict_margin <= 0.05,
         );
         if !has_guard_conflict && self.configured_ego.is_active() {
-            self.distortion_tension.effective_ego_scale_q7 =
-                self.distortion_tension.effective_ego_scale_q7.max(48);
-            self.distortion_tension.suppression_cooldown_steps = 0;
+            let tension = self.ctx.distortion_tension_mut();
+            tension.effective_ego_scale_q7 = tension.effective_ego_scale_q7.max(48);
+            tension.suppression_cooldown_steps = 0;
         }
         let regime_code = if has_guard_conflict
-            || matches!(recall.void_state, VoidBoundaryState::LiminalBoundary)
+            || matches!(recall.lacuna_state, LacunaBoundaryState::LiminalBoundary)
         {
             EpistemicRegime::InternalConflict as u8
-        } else if matches!(recall.void_state, VoidBoundaryState::LiminalExterior) {
+        } else if matches!(recall.lacuna_state, LacunaBoundaryState::LiminalExterior) {
             EpistemicRegime::Liminal as u8
         } else {
             EpistemicRegime::KnownCoherent as u8
@@ -1328,7 +1323,7 @@ impl ModelSteeringAdapter {
             .unwrap_or(*recall.gateway_frame.phase_words_ref());
         let mut drifted_words = q_words;
         for (g, w) in drifted_words.iter_mut().enumerate() {
-            let tol = self.core_layers.stigmergy.granule_noise_tolerance_q7[g];
+            let tol = self.ctx.core_layers().stigmergy.granule_noise_tolerance_q7[g];
             let nudge = u64::from(tol.min(16)).wrapping_mul(SWAR_SPLAT_BYTE_64);
             *w = swar_q7_circular_add_x8(*w, nudge);
         }
@@ -1346,21 +1341,22 @@ impl ModelSteeringAdapter {
         }
 
         let aperture_floor =
-            f32::from(self.core_layers.liminal.threshold_floor_q7[1]) * (1.0 / 127.0);
-        let venn = evaluate_stigmergic_overlap_and_discovery_words_64(
+            f32::from(self.ctx.core_layers().liminal.threshold_floor_q7[1]) * (1.0 / 127.0);
+        let overlap_report = evaluate_stigmergic_overlap_and_discovery_words_64(
             &fact_fragments,
             &q_words,
             &drifted_words,
             aperture_floor,
-            self.core_layers.stigmergy.discovery_floor_q7,
+            self.ctx.core_layers().stigmergy.discovery_floor_q7,
         );
 
-        self.adapt_core_layers(&horizon, &venn, None);
+        self.adapt_core_layers(&horizon, &overlap_report, None);
         let ensemble_report = if fact_fragments.len() >= 2 {
             let (_frame, _words, rep) = self.synthesize_fragment_ensemble(&fact_fragments);
             let agreed_or_tie = rep.quorum_agreed_granule_mask | rep.ego_tiebreak_granule_mask;
             for (g, ph) in self
-                .core_layers
+                .ctx
+                .core_layers_mut()
                 .stigmergy
                 .granule_pheromone_q7
                 .iter_mut()
@@ -1443,10 +1439,10 @@ impl ModelSteeringAdapter {
                 }
             }
         }
-        let prev_was_sandbox = self.sandbox_workbench_lane.is_some();
-        let _ = self.substrate.apply_preset_lanes(&specs);
-        self.sandbox_workbench_lane = None;
-        let assim_drift = self.telemetry.assimilation_drift();
+        let prev_was_sandbox = self.ctx.sandbox_workbench_lane().is_some();
+        let _ = self.ctx.substrate_mut().apply_preset_lanes(&specs);
+        *self.ctx.sandbox_workbench_lane_mut() = None;
+        let assim_drift = self.ctx.telemetry_bank().assimilation_drift();
         if prev_was_sandbox || recall.is_known_unknown_exterior {
             let improved = prev_was_sandbox
                 && recall.top1_fact_score > self.prev_sandbox_coherence
@@ -1465,53 +1461,43 @@ impl ModelSteeringAdapter {
                     let ext_weight =
                         (ext_entry.energy * ext_score.clamp(0.20, 0.90)).clamp(0.15, 0.95);
                     if let Ok(lane) = self
-                        .substrate
+                        .ctx
+                        .substrate_mut()
                         .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(ext_weight, ext_phases))
                     {
-                        self.sandbox_workbench_lane = Some(lane);
+                        *self.ctx.sandbox_workbench_lane_mut() = Some(lane);
                         if self.sandbox_settlement_streak >= 2
-                            && self.substrate.settle_sandbox_lane(lane).unwrap_or(false)
+                            && self
+                                .ctx
+                                .substrate_mut()
+                                .settle_sandbox_lane(lane)
+                                .unwrap_or(false)
                         {
-                            self.sandbox_settlements = self.sandbox_settlements.saturating_add(1);
-                            self.sandbox_workbench_lane = None;
+                            self.ctx.increment_sandbox_settlements();
+                            *self.ctx.sandbox_workbench_lane_mut() = None;
                             self.sandbox_settlement_streak = 0;
                         }
                     }
                 }
             }
         }
-        if let Some(esc_lane) = self.escalated_workbench_lane {
-            if (self.substrate.slot_enabled_mask & (1u8 << esc_lane)) == 0 {
-                self.escalated_workbench_lane = None;
+        if let Some(esc_lane) = self.ctx.escalated_workbench_lane() {
+            if (self.ctx.substrate().slot_enabled_mask & (1u8 << esc_lane)) == 0 {
+                *self.ctx.escalated_workbench_lane_mut() = None;
             }
         }
-        if self.core_layers.ego.is_active() {
+        if self.ctx.core_layers().ego.is_active() {
             let mut p_frame = recall.gateway_frame;
-            let (d_norm, hops, matched_mask) = self
-                .ego_differential_net
-                .evaluate_pframe_chain_with_mask_branchless(
-                    &self.core_layers.ego,
-                    &self.system_spine,
-                    &self.last_venn_partition,
-                    &self.core_layers.stigmergy,
-                    &self.distortion_tension,
-                    &mut p_frame,
-                );
-            self.ego_differential_net.last_delta_norm_q7 = d_norm;
-            self.ego_differential_net.last_hops_traversed = hops;
-            if hops > 0 {
-                self.ego_differential_net
-                    .record_matched_activations(matched_mask);
-            }
+            let _ = self.ctx.evaluate_ego_pframe_chain_mut(&mut p_frame);
         }
         self.active_workbench_preset = preset;
-        (horizon, venn, ensemble_report)
+        (horizon, overlap_report, ensemble_report)
     }
 
     /// Returns the anonymous workbench lane (`0..=7`) currently leased by cold-path escalation, if any.
     #[must_use]
-    pub const fn escalated_workbench_lane(&self) -> Option<u8> {
-        self.escalated_workbench_lane
+    pub fn escalated_workbench_lane(&self) -> Option<u8> {
+        self.ctx.escalated_workbench_lane()
     }
 
     /// Returns the currently active [`WorkbenchPreset`] selected for the 8-lane working bank.
@@ -1533,12 +1519,13 @@ impl ModelSteeringAdapter {
         specs: &[WorkbenchSlotSpec],
     ) -> Result<u8, String> {
         let updated = self
-            .substrate
+            .ctx
+            .substrate_mut()
             .apply_preset_lanes(specs)
             .map_err(|e| format!("apply_preset_lanes error: {e}"))?;
-        if let Some(esc_lane) = self.escalated_workbench_lane {
-            if (self.substrate.slot_enabled_mask & (1u8 << esc_lane)) == 0 {
-                self.escalated_workbench_lane = None;
+        if let Some(esc_lane) = self.ctx.escalated_workbench_lane() {
+            if (self.ctx.substrate().slot_enabled_mask & (1u8 << esc_lane)) == 0 {
+                *self.ctx.escalated_workbench_lane_mut() = None;
             }
         }
         self.active_workbench_preset = preset;
@@ -1572,16 +1559,17 @@ impl ModelSteeringAdapter {
         spawned_daughters: u8,
         distortion: &LayerDistortionReport,
     ) -> String {
+        let core_layers = self.ctx.core_layers();
         let snap = LiminalTopologyTelemetrySnapshot::capture(
-            &self.core_layers.liminal,
-            &self.last_horizon,
+            &core_layers.liminal,
+            self.ctx.last_horizon(),
             active_crystals,
             spawned_daughters,
         );
         let mut buf = [0u8; 2048];
         let written = snap.format_core_topology_mermaid_with_distortion(
-            &self.core_layers,
-            &self.last_venn_report,
+            core_layers,
+            self.ctx.last_overlap_report(),
             Some(distortion),
             &mut buf,
         );
@@ -1604,11 +1592,12 @@ impl ModelSteeringAdapter {
         self.system_constraint =
             SystemConstraint::new((), vram_pressure, gpu_frame_overrun, active_swarm_mask);
         let neutral_trail = lmnk_pointer_trail_t::default();
-        self.substrate.thresholds = self.threshold_policy.resolve_thresholds(
+        let probe = *self.ctx.probe_baseline();
+        self.ctx.substrate_mut().thresholds = self.threshold_policy.resolve_thresholds(
             &self.system_constraint,
-            &self.probe_baseline,
+            &probe,
             &neutral_trail,
-            self.probe_baseline.baseline_entropy,
+            probe.baseline_entropy,
         );
     }
 
@@ -1662,50 +1651,51 @@ impl ModelSteeringAdapter {
             prev_q7 = Some(cur_q7);
         }
 
-        if coh_count > 0 {
-            self.probe_baseline.baseline_inter_layer_coherence =
-                (coh_sum / coh_count as f64).clamp(0.05, 1.0) as f32;
-        }
-        let mut ent_sum = 0.0_f64;
-        let mut ent_count = 0_usize;
-        for &h in observed_entropies {
-            if h.is_finite() && h >= 0.0 {
-                ent_sum += f64::from(h.clamp(0.0, 1.0));
-                ent_count += 1;
+        let active_heads = self.geometry.num_q_heads.min(64) as u16;
+        let steered_layers = Self::compute_steered_layer_count(&self.geometry);
+        {
+            let baseline = self.ctx.probe_baseline_mut();
+            if coh_count > 0 {
+                baseline.baseline_inter_layer_coherence =
+                    (coh_sum / coh_count as f64).clamp(0.05, 1.0) as f32;
             }
+            let mut ent_sum = 0.0_f64;
+            let mut ent_count = 0_usize;
+            for &h in observed_entropies {
+                if h.is_finite() && h >= 0.0 {
+                    ent_sum += f64::from(h.clamp(0.0, 1.0));
+                    ent_count += 1;
+                }
+            }
+            if ent_count > 0 {
+                baseline.baseline_entropy = (ent_sum / ent_count as f64) as f32;
+            }
+            baseline.active_heads = active_heads;
+            baseline.steered_layers = steered_layers;
+            baseline.probe_epoch = baseline.probe_epoch.saturating_add(1);
         }
-        if ent_count > 0 {
-            self.probe_baseline.baseline_entropy = (ent_sum / ent_count as f64) as f32;
-        }
-        self.probe_baseline.active_heads = self.geometry.num_q_heads.min(64) as u16;
-        self.probe_baseline.steered_layers = Self::compute_steered_layer_count(&self.geometry);
-        self.probe_baseline.probe_epoch = self.probe_baseline.probe_epoch.saturating_add(1);
 
+        let probe = *self.ctx.probe_baseline();
         let neutral_trail = lmnk_pointer_trail_t::default();
-        self.substrate.thresholds = self.threshold_policy.resolve_thresholds(
+        self.ctx.substrate_mut().thresholds = self.threshold_policy.resolve_thresholds(
             &self.system_constraint,
-            &self.probe_baseline,
+            &probe,
             &neutral_trail,
-            self.probe_baseline.baseline_entropy,
+            probe.baseline_entropy,
         );
-        Ok(self.probe_baseline)
+        Ok(probe)
     }
 
-    /// Safely re-allocates and re-initializes the Cold-Path engines (`PhaseSteeringEngine`,
-    /// `StigmergicSubstrate`, and `ledger_slot`) when the underlying LLM or RoPE geometry changes
-    /// during a periodic environment probe, returning the new `probe_epoch`.
+    /// Safely re-initializes the Cold-Path engines (`PhaseSteeringEngine`, `StigmergicSubstrate`,
+    /// and `ledger_slot`) in-place when the underlying LLM or RoPE geometry changes during a
+    /// periodic environment probe, returning the new `probe_epoch`.
     ///
     /// # Errors
     ///
     /// Returns an error if `new_geometry.validate()` fails or `liminika-core` rejects dimensions.
     pub fn rebind_geometry_cold_path(&mut self, new_geometry: RopeGeometry) -> Result<u32, String> {
         new_geometry.validate()?;
-        let new_phase_engine = PhaseSteeringEngine::new(
-            new_geometry.rotary_dim as u32,
-            new_geometry.num_q_heads as u32,
-        )
-        .map_err(|e| format!("PhaseSteeringEngine::new failed: {e}"))?;
-        let mut next_probe = self.probe_baseline;
+        let mut next_probe = *self.ctx.probe_baseline();
         next_probe.active_heads = new_geometry.num_q_heads.min(64) as u16;
         next_probe.steered_layers = Self::compute_steered_layer_count(&new_geometry);
         next_probe.probe_epoch = next_probe.probe_epoch.saturating_add(1);
@@ -1717,38 +1707,40 @@ impl ModelSteeringAdapter {
             &neutral_trail,
             next_probe.baseline_entropy,
         );
-        let mut new_substrate = Box::new(
-            StigmergicSubstrate::with_dimensions_and_thresholds(
+        let layout_byte = match new_geometry.layout {
+            RopeLayout::Interleaved => 0,
+            RopeLayout::HalfSplit => 1,
+        };
+        self.ctx
+            .rebind_phase_and_substrate(
                 new_geometry.rotary_dim as u32,
                 new_geometry.num_q_heads as u32,
+                new_geometry.rotary_dim as u32,
+                layout_byte,
                 16,
                 calibrated,
+                next_probe.baseline_entropy,
             )
-            .map_err(|e| {
-                format!("StigmergicSubstrate::with_dimensions_and_thresholds failed: {e}")
-            })?,
-        );
-        new_substrate.last_entropy_h_tilde = next_probe.baseline_entropy;
+            .map_err(|e| format!("rebind_phase_and_substrate failed: {e}"))?;
 
         let (active_slots, pinned_slots, reversible_slots) =
             Self::compute_slot_masks(new_geometry.num_layers);
         self.geometry = new_geometry;
-        self.phase_engine = new_phase_engine;
-        self.substrate = new_substrate;
-        self.ledger_slot = lmnk_ledger_slot_t::default();
-        self.sandbox_workbench_lane = None;
+        *self.ctx.sandbox_workbench_lane_mut() = None;
         self.baseline_pinned_compute_mask = pinned_slots;
-        self.compute_pool
+        self.ctx
+            .compute_pool_mut()
             .set_slot_masks(active_slots, pinned_slots, 0, reversible_slots);
-        self.system_spine.pinned_compute_mask = pinned_slots;
-        self.telemetry.reset();
-        self.probe_baseline = next_probe;
-        Ok(self.probe_baseline.probe_epoch)
+        self.ctx.system_spine_mut().pinned_compute_mask = pinned_slots;
+        self.ctx.apply_host_spine_pin_floor(pinned_slots);
+        self.ctx.reset_telemetry();
+        self.ctx.set_probe_baseline(next_probe);
+        Ok(next_probe.probe_epoch)
     }
 
     /// Returns a mutable reference to the embedded [`EntropyController`].
     pub fn entropy_controller_mut(&mut self) -> &mut EntropyController {
-        &mut self.entropy_controller
+        self.ctx.entropy_controller_mut()
     }
 
     /// Returns a mutable reference to the embedded [`ResidualAdapterEngine`] (Rank-1 residual).
@@ -1791,7 +1783,8 @@ impl ModelSteeringAdapter {
         {
             let mut q7_mut = AlignedSliceMut16::new(q7_buf.as_mut_slice())
                 .map_err(|e| format!("AlignedSliceMut16 error: {e}"))?;
-            self.phase_engine
+            self.ctx
+                .phase_steering()
                 .compute_procrustes_phase_delta_for_geometry(
                     &self.geometry,
                     &src_aligned,
@@ -1854,7 +1847,8 @@ impl ModelSteeringAdapter {
         {
             let mut tensor_mut = AlignedSliceMut32::new(work_buf.as_mut_slice())
                 .map_err(|e| format!("AlignedSliceMut32 error: {e}"))?;
-            self.phase_engine
+            self.ctx
+                .phase_steering()
                 .apply_phase_steering_for_geometry_safe_active(
                     &self.geometry,
                     &mut tensor_mut,
@@ -1926,47 +1920,8 @@ impl ModelSteeringAdapter {
     }
 
     /// Steers a single token's rotated query slice (`num_q_heads * rotary_dim`) using a
-    /// [`ManifoldGatewaySignal`] composite so structural hyperparameters (`ripa_clamp_rad`,
-    /// `qdps_min_step_rad`, `effective_inv_temp`) are derived autonomously from Gateway physics
-    /// rather than manual scalar tuning.
-    ///
-    /// Layers disabled in `geometry.layer_rope_mask` (NoPE layers) are skipped in O(1),
-    /// returning `Ok(None)`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `q_rot_inout` length mismatches or `liminika-core` rejects the inputs.
-    #[inline]
-    #[allow(clippy::too_many_arguments)]
-    fn build_core_layer_ctx<'a>(
-        core_layers: &'a CoreStateStack,
-        last_boundary_delta: &'a LiminalBoundaryDelta,
-        last_horizon: &'a EpistemicHorizonReading,
-        last_venn_report: &'a OverlapDiscoveryReport,
-        derivative_alpha_q7: u8,
-        last_venn_partition: &'a LacunaPartition8,
-        system_spine: &'a SystemSpineState,
-        ego_differential_net: &'a EgoDifferentialNet,
-        distortion_tension: &'a DistortionTension,
-    ) -> Option<CoreLayerEvalContext<'a>> {
-        (core_layers.liminal.adaptation_epochs > 0 || core_layers.ego.is_active()).then_some(
-            CoreLayerEvalContext {
-                stack: core_layers,
-                delta: last_boundary_delta,
-                horizon: last_horizon,
-                overlap: last_venn_report,
-                derivative_alpha_q7,
-                lacuna_partition: Some(last_venn_partition),
-                spine: Some(system_spine),
-                ego_net: Some(ego_differential_net),
-                tension: Some(distortion_tension),
-            },
-        )
-    }
-
-    /// Steers a single token's rotated query slice (`num_q_heads * rotary_dim`) using a
-    /// [`ManifoldGatewaySignal`] composite so structural hyperparameters (`ripa_clamp_rad`,
-    /// `qdps_min_step_rad`, `effective_inv_temp`) are derived autonomously from Gateway physics
+    /// [`ManifoldGatewaySignal`] composite so structural hyperparameters (`phase_clamp_rad`,
+    /// `phase_step_min_rad`, `effective_inv_temp`) are derived autonomously from Gateway physics
     /// rather than manual scalar tuning.
     ///
     /// Layers disabled in `geometry.layer_rope_mask` (NoPE layers) are skipped in O(1),
@@ -1985,18 +1940,9 @@ impl ModelSteeringAdapter {
         logits_opt: Option<&mut [f32]>,
     ) -> Result<Option<(GatewayFrame, CausalProvenanceReport)>, String> {
         self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
-            let core_ctx = Self::build_core_layer_ctx(
-                &this.core_layers,
-                &this.last_boundary_delta,
-                &this.last_horizon,
-                &this.last_venn_report,
-                this.telemetry.derivative_alpha_q7(),
-                &this.last_venn_partition,
-                &this.system_spine,
-                &this.ego_differential_net,
-                &this.distortion_tension,
-            );
-            this.phase_engine
+            let core_ctx = this.ctx.build_core_layer_eval_context();
+            this.ctx
+                .phase_steering()
                 .steer_gateway_signal_with_core_layers_for_geometry_safe(
                     signal,
                     &this.geometry,
@@ -2031,23 +1977,14 @@ impl ModelSteeringAdapter {
         logits_opt: Option<&mut [f32]>,
     ) -> Result<Option<(GatewayFrame, CausalProvenanceReport)>, String> {
         self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
-            let core_ctx = Self::build_core_layer_ctx(
-                &this.core_layers,
-                &this.last_boundary_delta,
-                &this.last_horizon,
-                &this.last_venn_report,
-                this.telemetry.derivative_alpha_q7(),
-                &this.last_venn_partition,
-                &this.system_spine,
-                &this.ego_differential_net,
-                &this.distortion_tension,
-            );
-            this.substrate
+            let (core_ctx, _probe, substrate) = this.ctx.split_for_substrate_gateway();
+            let mut ledger_slot = substrate.ledger_slot;
+            let res = substrate
                 .ingest_gateway_and_steer_with_core_layers_for_geometry_safe(
                     signal,
                     &this.geometry,
                     core_ctx,
-                    &mut this.ledger_slot,
+                    &mut ledger_slot,
                     trail_inout,
                     unresolved_damping_u7,
                     Some(q),
@@ -2057,7 +1994,9 @@ impl ModelSteeringAdapter {
                     format!(
                         "ingest_gateway_and_steer_with_core_layers_for_geometry_safe error: {e}"
                     )
-                })
+                });
+            substrate.ledger_slot = ledger_slot;
+            res
         })
     }
 
@@ -2137,21 +2076,22 @@ impl ModelSteeringAdapter {
     > {
         self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
             let entropy_h_tilde =
-                entropy_h_tilde_opt.unwrap_or(this.substrate.last_entropy_h_tilde);
+                entropy_h_tilde_opt.unwrap_or(this.ctx.substrate().last_entropy_h_tilde);
             let scale = StigmergicScaleGranularity::from_layer_ratio(
                 layer_idx,
                 this.geometry.num_layers.max(1),
             );
             let pre_trigger = HorizonTriggerInput {
-                entropy_gate_mode: this.entropy_controller.state().active_branch_mode,
+                entropy_gate_mode: this.ctx.entropy_controller().state().active_branch_mode,
                 moving_z_entropy: entropy_h_tilde,
-                repulsion_severity: this.last_horizon.conflict_severity,
+                repulsion_severity: this.ctx.last_horizon().conflict_severity,
                 causal_root_cause: ROOT_CAUSE_NOMINAL,
-                epistemic_regime: this.last_horizon.regime_code,
-                stationary_shortcut_ready: this.last_boundary_delta.stationary_shortcut_ready != 0,
-                ego_active_triggers: this.core_layers.ego.last_intervened_mask,
-                unstable_dwell_steps: this.horizon_dwell.unstable_dwell_steps,
-                quiescent_dwell_steps: this.horizon_dwell.quiescent_dwell_steps,
+                epistemic_regime: this.ctx.last_horizon().regime_code,
+                stationary_shortcut_ready: this.ctx.last_boundary_delta().stationary_shortcut_ready
+                    != 0,
+                ego_active_triggers: this.ctx.core_layers().ego.last_intervened_mask,
+                unstable_dwell_steps: this.ctx.horizon_dwell().unstable_dwell_steps,
+                quiescent_dwell_steps: this.ctx.horizon_dwell().quiescent_dwell_steps,
             };
             let num_layers_denom = this.geometry.num_layers.saturating_sub(1).max(1);
             let layer_scale_q7 = ((layer_idx * 127) / num_layers_denom).min(127) as u8;
@@ -2165,25 +2105,24 @@ impl ModelSteeringAdapter {
                     0
                 },
                 layer_scale_q7,
-                desired_aperture_mask: this.core_layers.liminal.active_aperture_mask,
-                current_frame_energy: this.last_horizon.total_memory_support,
+                desired_aperture_mask: this.ctx.core_layers().liminal.active_aperture_mask,
+                current_frame_energy: this.ctx.last_horizon().total_memory_support,
             };
-            let lane_active = this
-                .escalated_workbench_lane
-                .is_some_and(|l| l < 8 && (this.substrate.slot_enabled_mask & (1u8 << l)) != 0);
+            let lane_active = this.ctx.escalated_workbench_lane().is_some_and(|l| {
+                l < 8 && (this.ctx.substrate().slot_enabled_mask & (1u8 << l)) != 0
+            });
             let should_check_escalation = this.escalation_boundary_dirty
                 || pre_trigger.epistemic_regime != this.last_escalated_regime
                 || (lane_active && pre_trigger.can_retract())
                 || (!lane_active && pre_trigger.is_destabilized());
             let escalated = if should_check_escalation {
+                let mut esc_lane = this.ctx.escalated_workbench_lane();
                 let sw = this
-                    .substrate
-                    .apply_horizon_escalation(
-                        &esc_req,
-                        &mut this.escalated_workbench_lane,
-                        escalation_provider,
-                    )
+                    .ctx
+                    .substrate_mut()
+                    .apply_horizon_escalation(&esc_req, &mut esc_lane, escalation_provider)
                     .map_err(|e| format!("apply_horizon_escalation error: {e}"))?;
+                *this.ctx.escalated_workbench_lane_mut() = esc_lane;
                 this.escalation_boundary_dirty = false;
                 this.last_escalated_regime = pre_trigger.epistemic_regime;
                 sw
@@ -2191,95 +2130,101 @@ impl ModelSteeringAdapter {
                 false
             };
 
-            let core_ctx = Self::build_core_layer_ctx(
-                &this.core_layers,
-                &this.last_boundary_delta,
-                &this.last_horizon,
-                &this.last_venn_report,
-                this.telemetry.derivative_alpha_q7(),
-                &this.last_venn_partition,
-                &this.system_spine,
-                &this.ego_differential_net,
-                &this.distortion_tension,
-            );
-            let (mut frame, report, decision) = this
-                .substrate
-                .orchestrate_gateway_layer_with_core_layers_safe(
-                    signal,
-                    &this.geometry,
-                    core_ctx,
-                    &this.threshold_policy,
-                    &this.system_constraint,
-                    &this.probe_baseline,
-                    scale,
-                    entropy_h_tilde,
-                    &mut this.ledger_slot,
-                    trail_inout,
-                    unresolved_damping_u7,
-                    Some(q),
-                    None,
-                    logits,
-                )
-                .map_err(|e| {
-                    format!("orchestrate_gateway_layer_with_core_layers_safe error: {e}")
-                })?;
+            let (mut frame, report, decision) = {
+                let (core_ctx, probe_baseline, substrate) = this.ctx.split_for_substrate_gateway();
+                let mut ledger_slot = substrate.ledger_slot;
+                let res = substrate
+                    .orchestrate_gateway_layer_with_core_layers_safe(
+                        signal,
+                        &this.geometry,
+                        core_ctx,
+                        &this.threshold_policy,
+                        &this.system_constraint,
+                        probe_baseline,
+                        scale,
+                        entropy_h_tilde,
+                        &mut ledger_slot,
+                        trail_inout,
+                        unresolved_damping_u7,
+                        Some(q),
+                        None,
+                        logits,
+                    )
+                    .map_err(|e| {
+                        format!("orchestrate_gateway_layer_with_core_layers_safe error: {e}")
+                    });
+                substrate.ledger_slot = ledger_slot;
+                res?
+            };
 
             let mut trigger = HorizonTriggerInput {
-                entropy_gate_mode: this.entropy_controller.state().active_branch_mode,
+                entropy_gate_mode: this.ctx.entropy_controller().state().active_branch_mode,
                 moving_z_entropy: entropy_h_tilde,
                 repulsion_severity: frame.repulsion_severity,
                 causal_root_cause: frame.attribution_tag,
-                epistemic_regime: this.last_horizon.regime_code,
-                stationary_shortcut_ready: this.last_boundary_delta.stationary_shortcut_ready != 0,
-                ego_active_triggers: this.core_layers.ego.last_intervened_mask,
+                epistemic_regime: this.ctx.last_horizon().regime_code,
+                stationary_shortcut_ready: this.ctx.last_boundary_delta().stationary_shortcut_ready
+                    != 0,
+                ego_active_triggers: this.ctx.core_layers().ego.last_intervened_mask,
                 unstable_dwell_steps: 0,
                 quiescent_dwell_steps: 0,
             };
             let (u_dwell, q_dwell) = this
-                .horizon_dwell
+                .ctx
+                .horizon_dwell_mut()
                 .step_branchless(trigger.is_destabilized(), trigger.stationary_shortcut_ready);
             trigger.unstable_dwell_steps = u_dwell;
             trigger.quiescent_dwell_steps = q_dwell;
-            let (slid_in, slid_out) = apply_latent_horizon_slots(
-                horizon_slots,
-                &mut this.active_horizon_slots_mask,
-                &trigger,
-                &mut frame,
-                &mut this.core_layers,
-            );
+            let (slid_in, slid_out) = {
+                let mut active_mask = this.ctx.active_horizon_slots_mask();
+                let mut stack = *this.ctx.core_layers();
+                let res = apply_latent_horizon_slots(
+                    horizon_slots,
+                    &mut active_mask,
+                    &trigger,
+                    &mut frame,
+                    &mut stack,
+                );
+                *this.ctx.active_horizon_slots_mask_mut() = active_mask;
+                *this.ctx.core_layers_mut() = stack;
+                res
+            };
 
             let qos_throttled = frame.attribution_tag == ROOT_CAUSE_SYSTEM_QOS_THROTTLE;
-            let _ =
-                this.telemetry
-                    .evaluate_policy(trigger.is_destabilized(), q_dwell, qos_throttled);
-            this.telemetry.record_step(
-                decision,
-                &this.last_horizon,
-                &this.last_boundary_delta,
-                &this.last_venn_report,
-                &this.core_layers.ego,
-                trigger.entropy_gate_mode,
-                slid_in,
-                slid_out,
-                escalated,
-                qos_throttled,
-            );
-            let _ = this.telemetry.update_assimilation_ema(
-                entropy_h_tilde,
-                frame.fact_persona_coherence,
-                frame.repulsion_severity,
-                &this.probe_baseline,
-                0.15_f32,
-            );
+            let last_horizon = *this.ctx.last_horizon();
+            let last_delta = *this.ctx.last_boundary_delta();
+            let last_overlap = *this.ctx.last_overlap_report();
+            let ego_snapshot = this.ctx.core_layers().ego;
+            let probe_baseline = *this.ctx.probe_baseline();
+            {
+                let bank = this.ctx.telemetry_bank_mut();
+                let _ = bank.evaluate_policy(trigger.is_destabilized(), q_dwell, qos_throttled);
+                bank.record_step(
+                    decision,
+                    &last_horizon,
+                    &last_delta,
+                    &last_overlap,
+                    &ego_snapshot,
+                    trigger.entropy_gate_mode,
+                    slid_in,
+                    slid_out,
+                    escalated,
+                    qos_throttled,
+                );
+                let _ = bank.update_assimilation_ema(
+                    entropy_h_tilde,
+                    frame.fact_persona_coherence,
+                    frame.repulsion_severity,
+                    &probe_baseline,
+                    0.15_f32,
+                );
+            }
             let exterior_granule_mask = BitCut8::split(
-                this.last_venn_report.lacuna_exterior_mask
-                    | this.last_venn_report.discovery_excursion_mask,
-                this.last_venn_report.overlap_core_mask,
+                last_overlap.lacuna_exterior_mask | last_overlap.discovery_excursion_mask,
+                last_overlap.overlap_core_mask,
             )
             .outside;
-            let sb_event = this.substrate.step_sandbox_hypothesis_lifecycle(
-                &mut this.telemetry,
-                &mut this.sandbox_workbench_lane,
+            let sb_event = this.ctx.step_sandbox_hypothesis_lifecycle(
                 decision,
                 this.configured_ego.is_active(),
                 exterior_granule_mask,
@@ -2290,7 +2235,7 @@ impl ModelSteeringAdapter {
             );
             match sb_event {
                 SandboxLifecycleEvent::Settled(_) => {
-                    this.sandbox_settlements = this.sandbox_settlements.saturating_add(1);
+                    this.ctx.increment_sandbox_settlements();
                     this.sandbox_settlement_streak = 0;
                 }
                 SandboxLifecycleEvent::Released(_) => {
@@ -2298,7 +2243,7 @@ impl ModelSteeringAdapter {
                 }
                 SandboxLifecycleEvent::Idle | SandboxLifecycleEvent::Nucleated(_) => {}
             }
-            this.substrate.last_decision = decision as u8;
+            this.ctx.substrate_mut().last_decision = decision as u8;
             Ok((frame, report, decision))
         })
     }
@@ -2350,7 +2295,7 @@ impl ModelSteeringAdapter {
             )
         };
         self.coherence_guard_slot = guard_slot;
-        self.telemetry.sync_experience_metrics(
+        self.ctx.telemetry_bank_mut().sync_experience_metrics(
             spillover_box.cache_hits,
             spillover_box.cache_stores,
             spillover_box.cache_evictions,
@@ -2361,26 +2306,26 @@ impl ModelSteeringAdapter {
 
     /// Executes norm-adaptive Rank-1 residual injection only when [`StigmergicSubstrate`]'s latest
     /// [`StigmergicActionDecision`] authorizes full orchestration (`FullOrchestration` or
-    /// `CrystallizeMacroBasin`), persisting Core Layer 0/1/2 Ego interventions onto `self.core_layers`.
+    /// `CrystallizeMacroBasin`), persisting Core Layer 0/1/2 Ego interventions onto `self.ctx`.
     /// Returns `Ok(None)` when bypassed by the substrate.
     ///
     /// # Errors
     ///
     /// Returns an error if slice lengths mismatch or `liminika-core` rejects the inputs.
-    pub fn orchestrate_layer_srl_with_substrate<S: ManifoldGatewaySignal + ?Sized>(
+    pub fn orchestrate_layer_rank1_with_substrate<S: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         signal: &S,
         hidden_inout: &mut [f32],
         u_vec: &[f32],
         v_vec: &[f32],
     ) -> Result<Option<(GatewayFrame, f32)>, String> {
-        let decision = StigmergicActionDecision::from_u8(self.substrate.last_decision);
+        let decision = StigmergicActionDecision::from_u8(self.ctx.substrate().last_decision);
         if matches!(
             decision,
             StigmergicActionDecision::FullOrchestration
                 | StigmergicActionDecision::CrystallizeMacroBasin
         ) {
-            let res = self.apply_srl_with_gateway_mut(signal, hidden_inout, u_vec, v_vec)?;
+            let res = self.apply_rank1_with_gateway_mut(signal, hidden_inout, u_vec, v_vec)?;
             Ok(Some(res))
         } else {
             Ok(None)
@@ -2397,12 +2342,15 @@ impl ModelSteeringAdapter {
         [u64; NUM_STIGMERGIC_GRANULES],
         StigmergicFragmentEnsembleReport,
     ) {
+        let boundary_delta = *self.ctx.last_boundary_delta();
+        let last_horizon = *self.ctx.last_horizon();
+        let last_overlap = *self.ctx.last_overlap_report();
         S::synthesize_fragment_ensemble_with_core_layers(
             fragments,
-            &mut self.core_layers,
-            &self.last_boundary_delta,
-            &self.last_horizon,
-            &self.last_venn_report,
+            self.ctx.core_layers_mut(),
+            &boundary_delta,
+            &last_horizon,
+            &last_overlap,
         )
     }
 
@@ -2474,48 +2422,50 @@ impl ModelSteeringAdapter {
     /// # Errors
     ///
     /// Returns an error if slice lengths mismatch or `liminika-core` rejects the inputs.
-    pub fn apply_srl_with_gateway<S: ManifoldGatewaySignal + ?Sized>(
+    pub fn apply_rank1_with_gateway<S: ManifoldGatewaySignal + ?Sized>(
         &self,
         signal: &S,
         hidden_inout: &mut [f32],
         u_vec: &[f32],
         v_vec: &[f32],
     ) -> Result<(GatewayFrame, f32), String> {
-        let frame = if self.core_layers.ego.is_active() {
-            let mut sys_baseline =
-                signal.synthesize_gateway_with_aperture_from_stack(&self.core_layers);
+        let core_layers = self.ctx.core_layers();
+        let last_horizon = self.ctx.last_horizon();
+        let last_overlap = self.ctx.last_overlap_report();
+        let frame = if core_layers.ego.is_active() {
+            let mut sys_baseline = signal.synthesize_gateway_with_aperture_from_stack(core_layers);
             let mut frame = sys_baseline;
-            self.core_layers.modulate_gateway_frame_branchless(
+            core_layers.modulate_gateway_frame_branchless(
                 &mut sys_baseline,
-                &self.last_horizon,
-                &self.last_venn_report,
+                last_horizon,
+                last_overlap,
             );
-            self.core_layers.modulate_gateway_frame_with_ego_readonly(
-                &self.last_boundary_delta,
-                &self.last_horizon,
-                &self.last_venn_report,
+            core_layers.modulate_gateway_frame_with_ego_readonly(
+                self.ctx.last_boundary_delta(),
+                last_horizon,
+                last_overlap,
                 &mut frame,
             );
-            let _ = self.ego_differential_net.evaluate_pframe_chain_branchless(
-                &self.core_layers.ego,
-                &self.system_spine,
-                &self.last_venn_partition,
-                &self.core_layers.stigmergy,
-                &self.distortion_tension,
-                &mut frame,
-            );
+            let _ = self
+                .ctx
+                .ego_differential_net()
+                .evaluate_pframe_chain_branchless(
+                    &core_layers.ego,
+                    self.ctx.system_spine(),
+                    self.ctx.last_lacuna_partition(),
+                    &core_layers.stigmergy,
+                    self.ctx.distortion_tension(),
+                    &mut frame,
+                );
             let cand_w = *frame.phase_words_ref();
             Self::modulate_rank1_circuit_frame(self.active_circuit(), &mut frame, &cand_w);
-            self.system_spine
+            self.ctx
+                .system_spine()
                 .enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
             frame
-        } else if self.core_layers.liminal.adaptation_epochs > 0 {
-            let mut frame = signal.synthesize_gateway_with_aperture_from_stack(&self.core_layers);
-            self.core_layers.modulate_gateway_frame_branchless(
-                &mut frame,
-                &self.last_horizon,
-                &self.last_venn_report,
-            );
+        } else if core_layers.liminal.adaptation_epochs > 0 {
+            let mut frame = signal.synthesize_gateway_with_aperture_from_stack(core_layers);
+            core_layers.modulate_gateway_frame_branchless(&mut frame, last_horizon, last_overlap);
             let cand_w = *frame.phase_words_ref();
             Self::modulate_rank1_circuit_frame(self.active_circuit(), &mut frame, &cand_w);
             frame
@@ -2528,13 +2478,13 @@ impl ModelSteeringAdapter {
         Ok((frame, gain))
     }
 
-    /// Mutable counterpart to [`Self::apply_srl_with_gateway`] that evaluates dynamic cognitive
-    /// apertures and persists Core Layer 0/1/2 Ego interventions onto `self.core_layers`.
+    /// Mutable counterpart to [`Self::apply_rank1_with_gateway`] that evaluates dynamic cognitive
+    /// apertures and persists Core Layer 0/1/2 Ego interventions onto `self.ctx`.
     ///
     /// # Errors
     ///
     /// Returns an error if slice lengths mismatch or `liminika-core` rejects the inputs.
-    pub fn apply_srl_with_gateway_mut<S: ManifoldGatewaySignal + ?Sized>(
+    pub fn apply_rank1_with_gateway_mut<S: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         signal: &S,
         hidden_inout: &mut [f32],
@@ -2542,46 +2492,38 @@ impl ModelSteeringAdapter {
         v_vec: &[f32],
     ) -> Result<(GatewayFrame, f32), String> {
         let circuit = self.active_circuit();
-        let frame = if self.core_layers.ego.is_active() {
+        let ego_active = self.ctx.core_layers().ego.is_active();
+        let adapted = self.ctx.core_layers().liminal.adaptation_epochs > 0;
+        let last_boundary_delta = *self.ctx.last_boundary_delta();
+        let last_horizon = *self.ctx.last_horizon();
+        let last_overlap = *self.ctx.last_overlap_report();
+        let spine = *self.ctx.system_spine();
+        let frame = if ego_active {
             let mut sys_baseline =
-                signal.synthesize_gateway_with_aperture_from_stack(&self.core_layers);
-            self.core_layers.modulate_gateway_frame_branchless(
+                signal.synthesize_gateway_with_aperture_from_stack(self.ctx.core_layers());
+            self.ctx.core_layers().modulate_gateway_frame_branchless(
                 &mut sys_baseline,
-                &self.last_horizon,
-                &self.last_venn_report,
+                &last_horizon,
+                &last_overlap,
             );
             let (mut frame, _ego_w) = signal.synthesize_gateway_with_core_layers(
-                &mut self.core_layers,
-                &self.last_boundary_delta,
-                &self.last_horizon,
-                &self.last_venn_report,
+                self.ctx.core_layers_mut(),
+                &last_boundary_delta,
+                &last_horizon,
+                &last_overlap,
             );
-            let (d_norm, hops, matched_mask) = self
-                .ego_differential_net
-                .evaluate_pframe_chain_with_mask_branchless(
-                    &self.core_layers.ego,
-                    &self.system_spine,
-                    &self.last_venn_partition,
-                    &self.core_layers.stigmergy,
-                    &self.distortion_tension,
-                    &mut frame,
-                );
-            self.ego_differential_net.last_delta_norm_q7 = d_norm;
-            if hops > 0 {
-                self.ego_differential_net
-                    .record_matched_activations(matched_mask);
-            }
+            let _ = self.ctx.evaluate_ego_pframe_chain_mut(&mut frame);
             let cand_w = *frame.phase_words_ref();
             Self::modulate_rank1_circuit_frame(circuit, &mut frame, &cand_w);
-            self.system_spine
-                .enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
+            spine.enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
             frame
-        } else if self.core_layers.liminal.adaptation_epochs > 0 {
-            let mut frame = signal.synthesize_gateway_with_aperture_from_stack(&self.core_layers);
-            self.core_layers.modulate_gateway_frame_branchless(
+        } else if adapted {
+            let mut frame =
+                signal.synthesize_gateway_with_aperture_from_stack(self.ctx.core_layers());
+            self.ctx.core_layers().modulate_gateway_frame_branchless(
                 &mut frame,
-                &self.last_horizon,
-                &self.last_venn_report,
+                &last_horizon,
+                &last_overlap,
             );
             let cand_w = *frame.phase_words_ref();
             Self::modulate_rank1_circuit_frame(circuit, &mut frame, &cand_w);
@@ -2601,7 +2543,10 @@ impl ModelSteeringAdapter {
     /// # Errors
     ///
     /// Returns an error if `logits` is empty or `EntropyController` reports an error.
-    pub fn measure_edbc_entropy(&mut self, logits: &[f32]) -> Result<lmnk_entropy_state_t, String> {
+    pub fn measure_entropy_state(
+        &mut self,
+        logits: &[f32],
+    ) -> Result<lmnk_entropy_state_t, String> {
         if logits.is_empty() {
             return Err("logits slice must not be empty".to_string());
         }
@@ -2629,21 +2574,25 @@ impl ModelSteeringAdapter {
 
         let mut state_out = lmnk_entropy_state_t::default();
         let _temp = self
-            .entropy_controller
+            .ctx
+            .entropy_controller_mut()
             .eval_surrogate_and_step(p_max, p_2nd, 0.0, 0.0, 1.0, 0.1, 0.1, &mut state_out)
             .map_err(|e| format!("eval_surrogate_and_step error: {e}"))?;
-        self.substrate.last_entropy_h_tilde = state_out.moving_z_entropy;
+        self.ctx.substrate_mut().last_entropy_h_tilde = state_out.moving_z_entropy;
         Ok(state_out)
     }
 
-    /// Evaluates Top-2 sparse surrogate entropy via [`Self::measure_edbc_entropy`]
+    /// Evaluates Top-2 sparse surrogate entropy via [`Self::measure_entropy_state`]
     /// and scales `logits` by the resulting adaptive `sample_temperature`.
     ///
     /// # Errors
     ///
     /// Returns an error if `logits` is empty or `EntropyController` reports an error.
-    pub fn step_edbc_logits(&mut self, logits: &mut [f32]) -> Result<lmnk_entropy_state_t, String> {
-        let state_out = self.measure_edbc_entropy(logits)?;
+    pub fn step_entropy_logits(
+        &mut self,
+        logits: &mut [f32],
+    ) -> Result<lmnk_entropy_state_t, String> {
+        let state_out = self.measure_entropy_state(logits)?;
         let temp = state_out.sample_temperature;
         if temp.is_finite() && temp > 1e-4 && (temp - 1.0).abs() > 1e-4 {
             let inv_temp = 1.0 / temp;
@@ -2660,7 +2609,7 @@ impl ModelSteeringAdapter {
     /// # Errors
     ///
     /// Returns an error if slice lengths mismatch or `ResidualAdapterEngine` rejects inputs.
-    pub fn apply_srl_hidden_fused(
+    pub fn apply_rank1_hidden_fused(
         &self,
         hidden_inout: &mut [f32],
         u_vec: &[f32],
